@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bouncing Ball</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        body {
+            background: #000;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            cursor: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas to full window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Ball properties
+        const ball = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: 30,
+            dx: 5,
+            dy: 5,
+            color: '#00ff00'
+        };
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Handle touch/click to reverse direction
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            ball.dx = -ball.dx;
+            ball.dy = -ball.dy;
+            // Change color on tap
+            ball.color = `hsl(${Math.random() * 360}, 100%, 50%)`;
+        });
+        
+        canvas.addEventListener('click', (e) => {
+            ball.dx = -ball.dx;
+            ball.dy = -ball.dy;
+            ball.color = `hsl(${Math.random() * 360}, 100%, 50%)`;
+        });
+        
+        // Animation loop
+        function draw() {
+            // Clear canvas with slight transparency for trail effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw ball
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = ball.color;
+            ctx.fill();
+            ctx.closePath();
+            
+            // Update position
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+            
+            // Bounce off walls
+            if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
+                ball.dx = -ball.dx;
+            }
+            if (ball.y + ball.radius > canvas.height || ball.y - ball.radius < 0) {
+                ball.dy = -ball.dy;
+            }
+            
+            requestAnimationFrame(draw);
+        }
+        
+        // Start animation
+        draw();
+        
+        // Keep watchdog happy by periodically logging
+        // The browser process itself feeds the watchdog
+        setInterval(() => {
+            console.log('Bouncing ball active - watchdog fed via browser process');
+        }, 30000);
+    </script>
+</body>
+</html>
