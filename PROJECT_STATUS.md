@@ -179,11 +179,13 @@ The existing [`touch_test`](native_games/touch_test.c) tool provides visual feed
 - [`native_games/compile_for_roomwizard.sh`](native_games/compile_for_roomwizard.sh) - Build script
 
 ### Documentation
-- [`PERMANENT_GAME_MODE.md`](PERMANENT_GAME_MODE.md) - Installation guide
-- [`GAME_MODE_SETUP.md`](GAME_MODE_SETUP.md) - Detailed setup
-- [`native_games/HARDWARE_CONTROL.md`](native_games/HARDWARE_CONTROL.md) - Hardware control API docs (NEW) ✅
-- [`native_games/HARDWARE_QUICK_REF.md`](native_games/HARDWARE_QUICK_REF.md) - Quick reference guide (NEW) ✅
+- [`NATIVE_GAMES_GUIDE.md`](NATIVE_GAMES_GUIDE.md) - Complete native games guide (consolidated)
+- [`native_games/README.md`](native_games/README.md) - Native games API documentation
+- [`native_games/HARDWARE_CONTROL.md`](native_games/HARDWARE_CONTROL.md) - Hardware control API docs ✅
+- [`native_games/HARDWARE_QUICK_REF.md`](native_games/HARDWARE_QUICK_REF.md) - Quick reference guide ✅
 - This file - Project status
+
+**Note:** Original documentation has been consolidated. See [`README.md`](README.md) for navigation to all documentation.
 
 ## Next Steps - Game Polish & UX Improvements
 
