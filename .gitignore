@@ -485,3 +485,4 @@ $RECYCLE.BIN/
 partitions/*
 partitions.zip
 roomwizard.img
+native_games/build/*

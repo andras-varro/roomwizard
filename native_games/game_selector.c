@@ -322,6 +322,7 @@ int main(int argc, char *argv[]) {
     
     // Cleanup
     fb_clear(&selector.fb, COLOR_BLACK);
+    fb_swap(&selector.fb);  // Make sure the clear is visible
     touch_close(&selector.touch);
     fb_close(&selector.fb);
     

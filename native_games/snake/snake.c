@@ -22,6 +22,13 @@
 #define INITIAL_SPEED 150000  // microseconds per frame
 
 typedef enum {
+    SCREEN_WELCOME,
+    SCREEN_PLAYING,
+    SCREEN_PAUSED,
+    SCREEN_GAME_OVER
+} GameScreen;
+
+typedef enum {
     DIR_UP,
     DIR_DOWN,
     DIR_LEFT,
@@ -72,9 +79,15 @@ int cell_size;
 int grid_offset_x;
 int grid_offset_y;
 bool running = true;
+GameScreen current_screen = SCREEN_WELCOME;
 
 // UI Buttons
-Button menu_btn, exit_btn, restart_btn, resume_btn;
+Button menu_button;
+Button exit_button;
+Button start_button;
+Button restart_button;
+Button resume_button;
+Button exit_pause_button;
 
 // Function prototypes
 void init_game();
@@ -160,14 +173,23 @@ void init_game() {
     grid_offset_y = 80;
     
     // Initialize buttons
-    button_init(&menu_btn, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "||", 
+    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_btn, fb.width - BTN_EXIT_WIDTH - 10, 10, BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "X",
+    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
+                BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&restart_btn, fb.width / 2 - BTN_LARGE_WIDTH / 2, fb.height * 2 / 3, 
-                BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART", BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&resume_btn, fb.width / 2 - 75, fb.height / 2, 150, 50, "RESUME",
+    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
+                BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
+                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     
     // Initialize LED effect state
     led_effect.active = false;
@@ -241,6 +263,7 @@ void update_snake() {
         if (game.score > game.high_score) {
             game.high_score = game.score;
         }
+        current_screen = SCREEN_GAME_OVER;
         start_led_effect(3);  // Start death effect (non-blocking)
         return;
     }
@@ -252,6 +275,7 @@ void update_snake() {
             if (game.score > game.high_score) {
                 game.high_score = game.score;
             }
+            current_screen = SCREEN_GAME_OVER;
             start_led_effect(3);  // Start death effect (non-blocking)
             return;
         }
@@ -280,94 +304,134 @@ void update_snake() {
     }
 }
 
-void draw_button(int x, int y, int w, int h, const char *text, uint32_t color) {
-    fb_fill_rect(&fb, x, y, w, h, color);
-    fb_draw_rect(&fb, x, y, w, h, COLOR_WHITE);
-    
-    int text_len = strlen(text);
-    int text_x = x + (w - text_len * 6 * 2) / 2;
-    int text_y = y + (h - 7 * 2) / 2;
-    fb_draw_text(&fb, text_x, text_y, text, COLOR_WHITE, 2);
-}
-
-bool check_button(int x, int y, int bx, int by, int bw, int bh) {
-    return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
-}
-
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t current_time = get_time_ms();
     
-    if (state.pressed) {
-        int tx = state.x;
-        int ty = state.y;
-        
-        if (game.game_over) {
-            // Check restart button
-            if (button_is_touched(&restart_btn, tx, ty)) {
-                if (button_check_press(&restart_btn, true, current_time)) {
-                    reset_game();
-                }
-            }
-        } else if (game.paused) {
-            // Check resume button
-            if (button_is_touched(&resume_btn, tx, ty)) {
-                if (button_check_press(&resume_btn, true, current_time)) {
-                    game.paused = false;
-                }
-            }
-        } else {
-            // Check menu button
-            if (button_is_touched(&menu_btn, tx, ty)) {
-                if (button_check_press(&menu_btn, true, current_time)) {
-                    game.paused = true;
-                }
-            }
-            // Check exit button
-            else if (button_is_touched(&exit_btn, tx, ty)) {
-                if (button_check_press(&exit_btn, true, current_time)) {
-                    running = false;
-                    return;
-                }
-            } else {
-                // Touch controls for direction
-                Point head = snake.body[0];
-                int head_screen_x = grid_offset_x + head.x * cell_size + cell_size / 2;
-                int head_screen_y = grid_offset_y + head.y * cell_size + cell_size / 2;
-                
-                int dx = tx - head_screen_x;
-                int dy = ty - head_screen_y;
-                
-                if (abs(dx) > abs(dy)) {
-                    // Horizontal movement
-                    if (dx > 0 && snake.direction != DIR_LEFT) {
-                        snake.next_direction = DIR_RIGHT;
-                    } else if (dx < 0 && snake.direction != DIR_RIGHT) {
-                        snake.next_direction = DIR_LEFT;
-                    }
-                } else {
-                    // Vertical movement
-                    if (dy > 0 && snake.direction != DIR_UP) {
-                        snake.next_direction = DIR_DOWN;
-                    } else if (dy < 0 && snake.direction != DIR_DOWN) {
-                        snake.next_direction = DIR_UP;
-                    }
-                }
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&start_button, state.x, state.y);
+            if (button_check_press(&start_button, touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
             }
         }
-    } else {
-        // Reset button states when not pressed
-        button_check_press(&menu_btn, false, current_time);
-        button_check_press(&exit_btn, false, current_time);
-        button_check_press(&restart_btn, false, current_time);
-        button_check_press(&resume_btn, false, current_time);
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&restart_button, state.x, state.y);
+            if (button_check_press(&restart_button, touched, current_time)) {
+                reset_game();
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+            }
+        }
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        if (state.pressed) {
+            bool resume_touched = button_is_touched(&resume_button, state.x, state.y);
+            if (button_check_press(&resume_button, resume_touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
+                game.paused = false;
+                return;
+            }
+            
+            bool exit_touched = button_is_touched(&exit_pause_button, state.x, state.y);
+            if (button_check_press(&exit_pause_button, exit_touched, current_time)) {
+                // Fade out effect
+                fb_fade_out(&fb);
+                running = false;
+                return;
+            }
+        }
+        return;
+    }
+    
+    // Playing screen - check menu and exit buttons
+    if (state.pressed) {
+        // Check exit button (top-right)
+        bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
+        if (button_check_press(&exit_button, exit_touched, current_time)) {
+            // Fade out effect
+            fb_fade_out(&fb);
+            running = false;
+            return;
+        }
+        
+        // Check menu button (top-left)
+        bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
+        if (button_check_press(&menu_button, menu_touched, current_time)) {
+            current_screen = SCREEN_PAUSED;
+            game.paused = true;
+            return;
+        }
+        
+        // Touch controls for direction
+        Point head = snake.body[0];
+        int head_screen_x = grid_offset_x + head.x * cell_size + cell_size / 2;
+        int head_screen_y = grid_offset_y + head.y * cell_size + cell_size / 2;
+        
+        int dx = state.x - head_screen_x;
+        int dy = state.y - head_screen_y;
+        
+        if (abs(dx) > abs(dy)) {
+            // Horizontal movement
+            if (dx > 0 && snake.direction != DIR_LEFT) {
+                snake.next_direction = DIR_RIGHT;
+            } else if (dx < 0 && snake.direction != DIR_RIGHT) {
+                snake.next_direction = DIR_LEFT;
+            }
+        } else {
+            // Vertical movement
+            if (dy > 0 && snake.direction != DIR_UP) {
+                snake.next_direction = DIR_DOWN;
+            } else if (dy < 0 && snake.direction != DIR_DOWN) {
+                snake.next_direction = DIR_UP;
+            }
+        }
     }
 }
 
 void draw_game() {
     // Clear screen
     fb_clear(&fb, COLOR_BLACK);
+    
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        draw_welcome_screen(&fb, "SNAKE", 
+            "TAP DIRECTION TO MOVE\n"
+            "EAT FOOD TO GROW", &start_button);
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        const char *message = (game.score == game.high_score && game.score > 0) ? 
+                              "NEW HIGH SCORE!" : "GAME OVER";
+        draw_game_over_screen(&fb, message, game.score, &restart_button);
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        // Draw pause screen with both resume and exit buttons
+        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
     
     // Draw HUD
     char score_text[32];
@@ -379,25 +443,8 @@ void draw_game() {
     fb_draw_text(&fb, fb.width / 2 - 60, 45, high_text, COLOR_YELLOW, 2);
     
     // Draw menu and exit buttons
-    button_draw(&fb, &menu_btn);
-    button_draw(&fb, &exit_btn);
-    
-    if (game.game_over) {
-        // Draw game over screen using common framework
-        char msg[64];
-        if (game.score == game.high_score && game.score > 0) {
-            snprintf(msg, sizeof(msg), "GAME OVER - NEW HIGH SCORE!");
-        } else {
-            snprintf(msg, sizeof(msg), "GAME OVER");
-        }
-        draw_game_over_screen(&fb, msg, game.score, &restart_btn);
-        return;
-    }
-    
-    if (game.paused) {
-        draw_pause_screen(&fb, &resume_btn);
-        return;
-    }
+    draw_menu_button(&fb, &menu_button);
+    draw_exit_button(&fb, &exit_button);
     
     // Draw grid border
     fb_draw_rect(&fb, grid_offset_x - 2, grid_offset_y - 2, 
@@ -474,9 +521,6 @@ int main(int argc, char *argv[]) {
         
         usleep(game.speed);
     }
-    
-    // Fade out screen on exit
-    fb_fade_out(&fb);
     
     // Cleanup
     hw_leds_off();

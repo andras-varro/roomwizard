@@ -14,11 +14,20 @@
 #include <math.h>
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
+#include "../common/game_common.h"
+#include "../common/hardware.h"
 
 #define PADDLE_WIDTH 15
 #define PADDLE_HEIGHT 80
 #define BALL_SIZE 12
 #define WINNING_SCORE 11
+
+typedef enum {
+    SCREEN_WELCOME,
+    SCREEN_PLAYING,
+    SCREEN_PAUSED,
+    SCREEN_GAME_OVER
+} GameScreen;
 
 typedef struct {
     float x, y;
@@ -49,6 +58,13 @@ int play_area_width;
 int play_area_height;
 int offset_x;
 int offset_y;
+Button menu_button;
+Button exit_button;
+Button start_button;
+Button restart_button;
+Button resume_button;
+Button exit_pause_button;
+GameScreen current_screen = SCREEN_WELCOME;
 
 // Function prototypes
 void init_game();
@@ -58,8 +74,6 @@ void update_game();
 void update_ai();
 void draw_game();
 void handle_input();
-void draw_button(int x, int y, int w, int h, const char *text, uint32_t color);
-bool check_button(int x, int y, int bx, int by, int bw, int bh);
 void signal_handler(int sig);
 
 void signal_handler(int sig) {
@@ -73,6 +87,26 @@ void init_game() {
     offset_y = 80;
     
     game.difficulty = 2;  // Medium by default
+    
+    // Initialize buttons
+    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+                BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
+                BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
+                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
+                BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
+                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
+                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    
     reset_game();
 }
 
@@ -150,6 +184,11 @@ void update_game() {
         // Add spin based on where ball hits paddle
         float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
         game.ball.vy += (hit_pos - 0.5) * 3;
+        
+        // Green flash on player hit
+        hw_set_led(LED_GREEN, 100);
+        usleep(50000);  // 50ms
+        hw_leds_off();
     }
     
     // Ball collision with AI paddle (right)
@@ -162,22 +201,53 @@ void update_game() {
         
         float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
         game.ball.vy += (hit_pos - 0.5) * 3;
+        
+        // Red flash on AI hit
+        hw_set_led(LED_RED, 100);
+        usleep(50000);  // 50ms
+        hw_leds_off();
     }
     
     // Ball out of bounds - score
     if (game.ball.x < 0) {
         game.ai.score++;
+        // Red flash for AI scoring
+        hw_set_led(LED_RED, 100);
+        usleep(200000);  // 200ms
+        hw_leds_off();
+        
         if (game.ai.score >= WINNING_SCORE) {
             game.game_over = true;
             game.winner = 2;
+            current_screen = SCREEN_GAME_OVER;
+            // Red pulse for loss
+            for (int i = 0; i < 3; i++) {
+                hw_set_led(LED_RED, 100);
+                usleep(200000);
+                hw_leds_off();
+                usleep(200000);
+            }
         } else {
             reset_ball();
         }
     } else if (game.ball.x > play_area_width) {
         game.player.score++;
+        // Green flash for player scoring
+        hw_set_led(LED_GREEN, 100);
+        usleep(200000);  // 200ms
+        hw_leds_off();
+        
         if (game.player.score >= WINNING_SCORE) {
             game.game_over = true;
             game.winner = 1;
+            current_screen = SCREEN_GAME_OVER;
+            // Green pulse for win
+            for (int i = 0; i < 3; i++) {
+                hw_set_led(LED_GREEN, 100);
+                usleep(200000);
+                hw_leds_off();
+                usleep(200000);
+            }
         } else {
             reset_ball();
         }
@@ -187,63 +257,130 @@ void update_game() {
     update_ai();
 }
 
-void draw_button(int x, int y, int w, int h, const char *text, uint32_t color) {
-    fb_fill_rect(&fb, x, y, w, h, color);
-    fb_draw_rect(&fb, x, y, w, h, COLOR_WHITE);
-    
-    int text_len = strlen(text);
-    int text_x = x + (w - text_len * 6 * 2) / 2;
-    int text_y = y + (h - 7 * 2) / 2;
-    fb_draw_text(&fb, text_x, text_y, text, COLOR_WHITE, 2);
-}
-
-bool check_button(int x, int y, int bx, int by, int bw, int bh) {
-    return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
-}
-
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
+    uint32_t current_time = get_time_ms();
     
-    if (state.held || state.pressed) {
-        int tx = state.x;
-        int ty = state.y;
-        
-        if (game.game_over) {
-            int btn_w = 200, btn_h = 50;
-            int btn_x = fb.width / 2 - btn_w / 2;
-            int btn_y = fb.height * 2 / 3;
-            if (check_button(tx, ty, btn_x, btn_y, btn_w, btn_h)) {
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&start_button, state.x, state.y);
+            if (button_check_press(&start_button, touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+            }
+        }
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&restart_button, state.x, state.y);
+            if (button_check_press(&restart_button, touched, current_time)) {
                 reset_game();
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
             }
-        } else if (game.paused) {
-            int btn_w = 150, btn_h = 50;
-            int btn_x = fb.width / 2 - btn_w / 2;
-            int btn_y = fb.height / 2;
-            if (check_button(tx, ty, btn_x, btn_y, btn_w, btn_h)) {
+        }
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        if (state.pressed) {
+            bool resume_touched = button_is_touched(&resume_button, state.x, state.y);
+            if (button_check_press(&resume_button, resume_touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
                 game.paused = false;
+                return;
             }
-        } else {
-            // Check pause button
-            if (state.pressed && check_button(tx, ty, 10, 10, 60, 40)) {
-                game.paused = true;
-            } else {
-                // Move player paddle to touch Y position
-                int relative_y = ty - offset_y;
-                game.player.y = relative_y - PADDLE_HEIGHT / 2;
-                
-                // Keep paddle in bounds
-                if (game.player.y < 0) game.player.y = 0;
-                if (game.player.y > play_area_height - PADDLE_HEIGHT) {
-                    game.player.y = play_area_height - PADDLE_HEIGHT;
+            
+            bool exit_touched = button_is_touched(&exit_pause_button, state.x, state.y);
+            if (button_check_press(&exit_pause_button, exit_touched, current_time)) {
+                // Fade out effect
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_RED, 100);
+                    usleep(100000);  // 100ms
+                    hw_leds_off();
+                    usleep(100000);  // 100ms
                 }
+                running = false;
+                return;
             }
+        }
+        return;
+    }
+    
+    // Playing screen - check menu and exit buttons
+    if (state.pressed) {
+        // Check exit button (top-right)
+        bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
+        if (button_check_press(&exit_button, exit_touched, current_time)) {
+            // Fade out effect
+            for (int i = 0; i < 3; i++) {
+                hw_set_led(LED_RED, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+                usleep(100000);  // 100ms
+            }
+            running = false;
+            return;
+        }
+        
+        // Check menu button (top-left)
+        bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
+        if (button_check_press(&menu_button, menu_touched, current_time)) {
+            current_screen = SCREEN_PAUSED;
+            game.paused = true;
+            return;
+        }
+    }
+    
+    // Move player paddle to touch Y position
+    if ((state.held || state.pressed) && !game.game_over && !game.paused) {
+        int relative_y = state.y - offset_y;
+        game.player.y = relative_y - PADDLE_HEIGHT / 2;
+        
+        // Keep paddle in bounds
+        if (game.player.y < 0) game.player.y = 0;
+        if (game.player.y > play_area_height - PADDLE_HEIGHT) {
+            game.player.y = play_area_height - PADDLE_HEIGHT;
         }
     }
 }
 
 void draw_game() {
     fb_clear(&fb, COLOR_BLACK);
+    
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        draw_welcome_screen(&fb, "PONG", 
+            "TOUCH TO MOVE PADDLE\n"
+            "FIRST TO 11 WINS", &start_button);
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        const char *message = (game.winner == 1) ? "YOU WIN!" : "AI WINS!";
+        draw_game_over_screen(&fb, message, game.player.score, &restart_button);
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        // Draw pause screen with both resume and exit buttons
+        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
     
     // Draw HUD
     char player_score[16];
@@ -254,28 +391,9 @@ void draw_game() {
     snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
     fb_draw_text(&fb, fb.width * 2 / 3, 20, ai_score, COLOR_RED, 4);
     
-    // Draw pause button
-    draw_button(10, 10, 60, 40, "||", COLOR_ORANGE);
-    
-    if (game.game_over) {
-        const char *winner_text = (game.winner == 1) ? "YOU WIN!" : "AI WINS!";
-        uint32_t winner_color = (game.winner == 1) ? COLOR_GREEN : COLOR_RED;
-        
-        fb_draw_text(&fb, fb.width / 2 - 70, fb.height / 3, winner_text, winner_color, 3);
-        
-        char final_score[32];
-        snprintf(final_score, sizeof(final_score), "%d - %d", game.player.score, game.ai.score);
-        fb_draw_text(&fb, fb.width / 2 - 40, fb.height / 2 - 30, final_score, COLOR_WHITE, 3);
-        
-        draw_button(fb.width / 2 - 100, fb.height * 2 / 3, 200, 50, "RESTART", COLOR_GREEN);
-        return;
-    }
-    
-    if (game.paused) {
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        draw_button(fb.width / 2 - 75, fb.height / 2, 150, 50, "RESUME", COLOR_GREEN);
-        return;
-    }
+    // Draw menu and exit buttons
+    draw_menu_button(&fb, &menu_button);
+    draw_exit_button(&fb, &exit_button);
     
     // Draw play area border
     fb_draw_rect(&fb, offset_x - 2, offset_y - 2,
@@ -324,6 +442,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Initialize hardware control
+    hw_init();
+    
     srand(time(NULL));
     init_game();
     
@@ -340,6 +461,7 @@ int main(int argc, char *argv[]) {
     }
     
     touch_close(&touch);
+    hw_leds_off();
     fb_close(&fb);
     
     printf("Pong ended.\n");

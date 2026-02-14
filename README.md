@@ -48,11 +48,15 @@ The RoomWizard Project provides comprehensive documentation and tools for modify
 
 **Quick Commands:**
 ```bash
-# Compile games
-cd native_games
+# Compile games (in WSL)
+cd /mnt/c/work/roomwizard/native_games
 ./compile_for_roomwizard.sh
 
-# Deploy to device
+# Deploy to device (quick method)
+./deploy.sh 192.168.50.73 test        # Test mode
+./deploy.sh 192.168.50.73 permanent   # Permanent mode
+
+# OR manual deploy
 scp build/* root@<roomwizard-ip>:/opt/games/
 ```
 
@@ -188,11 +192,15 @@ Browser-based modifications:
 cd /mnt/c/work/roomwizard/native_games
 ./compile_for_roomwizard.sh
 
-# Transfer to device
+# Quick deploy (recommended)
+./deploy.sh 192.168.50.73 test        # Test mode (browser still auto-starts)
+./deploy.sh 192.168.50.73 permanent   # Permanent mode (replaces browser)
+
+# OR manual transfer
 scp build/* root@<roomwizard-ip>:/opt/games/
 ssh root@<roomwizard-ip> "chmod +x /opt/games/*"
 
-# Enable permanent game mode
+# For permanent game mode (manual)
 ssh root@<roomwizard-ip>
 update-rc.d browser remove
 update-rc.d x11 remove
@@ -258,7 +266,8 @@ roomwizard/
     ├── tetris/                        # Tetris game
     ├── pong/                          # Pong game
     ├── build/                         # Compiled binaries
-    └── compile_for_roomwizard.sh     # Build script
+    ├── compile_for_roomwizard.sh     # Build script
+    └── deploy.sh                      # Deployment script (NEW)
 ```
 
 ---
@@ -337,5 +346,5 @@ This project provides documentation and tools for the Steelcase RoomWizard embed
 
 ---
 
-*Last Updated: 2026-02-13*  
-*Documentation Version: 2.0 (Consolidated)*
+*Last Updated: 2026-02-14*  
+*Documentation Version: 2.1 (Added deployment script)*

@@ -14,6 +14,7 @@
 - Launches games and waits for exit
 - Excludes utility programs (watchdog_feeder, touch_test, touch_debug)
 - Double buffering for smooth rendering
+- Clears screen on exit ✅
 
 ### 3. **Watchdog Management**
 - Feeds `/dev/watchdog` every 30 seconds
@@ -169,27 +170,59 @@ The existing [`touch_test`](native_games/touch_test.c) tool provides visual feed
 
 ### Games (Modified)
 - [`native_games/snake/snake.c`](native_games/snake/snake.c) - Common framework, LED effects, fade-out ✅
-- [`native_games/tetris/tetris.c`](native_games/tetris/tetris.c) - Needs common framework integration
-- [`native_games/pong/pong.c`](native_games/pong/pong.c) - Needs common framework integration
+- [`native_games/tetris/tetris.c`](native_games/tetris/tetris.c) - Common framework, LED effects, welcome/pause/game-over screens ✅
+- [`native_games/pong/pong.c`](native_games/pong/pong.c) - Common framework, LED effects, welcome/pause/game-over screens ✅
 
 ### Utilities
 - [`native_games/touch_test.c`](native_games/touch_test.c) - Visual touch diagnostic
 - [`native_games/touch_debug.c`](native_games/touch_debug.c) - Raw event stream debugger
-- [`native_games/hardware_test.c`](native_games/hardware_test.c) - LED & backlight test tool (NEW) ✅
+- [`native_games/hardware_test.c`](native_games/hardware_test.c) - LED & backlight test tool (CLI) ✅
+- [`native_games/hardware_test_gui.c`](native_games/hardware_test_gui.c) - Hardware test GUI (NEW) ✅
 - [`native_games/compile_for_roomwizard.sh`](native_games/compile_for_roomwizard.sh) - Build script
+- [`native_games/deploy.sh`](native_games/deploy.sh) - Deployment script ✅
 
 ### Documentation
 - [`NATIVE_GAMES_GUIDE.md`](NATIVE_GAMES_GUIDE.md) - Complete native games guide (consolidated)
 - [`native_games/README.md`](native_games/README.md) - Native games API documentation
-- [`native_games/HARDWARE_CONTROL.md`](native_games/HARDWARE_CONTROL.md) - Hardware control API docs ✅
-- [`native_games/HARDWARE_QUICK_REF.md`](native_games/HARDWARE_QUICK_REF.md) - Quick reference guide ✅
+- [`BROWSER_MODIFICATIONS.md`](BROWSER_MODIFICATIONS.md) - Browser modifications guide (consolidated)
+- [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md) - System analysis documentation (consolidated)
+- [`SYSTEM_SETUP.md`](SYSTEM_SETUP.md) - System setup guide (consolidated)
 - This file - Project status
 
-**Note:** Original documentation has been consolidated. See [`README.md`](README.md) for navigation to all documentation.
+**Note:** Documentation has been consolidated. See [`README.md`](README.md) for navigation. Original files preserved in [`backup_docs/`](backup_docs/).
 
 ## Next Steps - Game Polish & UX Improvements
 
-### Priority 1: Common Game Framework (Refactoring)
+### Phase 1: Foundation (Week 1) - COMPLETED ✅
+All games now use the common framework with consistent UI/UX:
+- Welcome screens with instructions
+- Menu (hamburger) and exit (X) buttons
+- Pause screens with RESUME and EXIT buttons
+- Game over screens with RESTART button
+- LED feedback for game events
+- Touch debouncing (200ms)
+- Proper button sizing (220px wide for large buttons)
+
+### Phase 2: Diagnostic Suite (In Progress) 🔄
+**Goal:** Create a comprehensive hardware/software test suite
+
+**Completed:**
+- [x] Convert hardware_test to GUI app with touch controls
+- [x] Add test selector menu with 7 tests
+- [x] Visual progress bars and status displays
+- [x] Exit button to return to game selector
+- [x] Tests: Red LED, Green LED, Both LEDs, Backlight, Pulse, Blink, Color Cycle
+
+**Remaining Tasks:**
+1. [ ] Test on device and refine UX
+2. [ ] Add touch test GUI (currently CLI only)
+3. [ ] Implement screen color tests
+4. [ ] Add border drawing tests
+5. [ ] Create performance benchmarks
+6. [ ] Add system info screen (CPU, memory, uptime, etc.)
+7. [ ] Package as unified diagnostic tool
+
+### Phase 3: Tetris Portrait Mode (Future Enhancement)
 **Goal:** Create shared base functionality to eliminate code duplication
 
 **Tasks:**
@@ -288,15 +321,26 @@ The existing [`touch_test`](native_games/touch_test.c) tool provides visual feed
   - X exit button renderer
   - Welcome/GameOver/Pause screen templates
   - Common button colors and sizes
-- [x] Integrate into Snake with non-blocking LED effects ✅
+- [x] Integrate into Snake with LED effects ✅
   - Green flash on eating food (100ms)
   - Rainbow cycle when growing (150ms)
   - Red pulsing on death (3 pulses, 600ms)
   - Smooth fade-out on exit
   - Game continues smoothly during effects
-- [ ] Integrate into Tetris (next step)
-- [ ] Integrate into Pong
-- [ ] Test across all games
+- [x] Integrate into Tetris ✅
+  - Welcome screen with instructions
+  - Menu and exit buttons with hamburger/X icons
+  - LED effects for line clears (green flash, yellow for Tetris)
+  - Red pulse on game over
+  - Pause and game over screens
+- [x] Integrate into Pong ✅
+  - Welcome screen with instructions
+  - Menu and exit buttons with hamburger/X icons
+  - LED effects for paddle hits (green/red)
+  - LED effects for scoring (green/red)
+  - Win/loss LED feedback
+  - Pause and game over screens
+- [ ] Test across all games on device (next step)
 
 ### Phase 2: Welcome Screens (Week 1)
 - [ ] Design welcome screen template
@@ -380,15 +424,19 @@ void fb_draw_pixel_rotated(Framebuffer *fb, int x, int y, uint32_t color) {
 - ✅ Touch input (accurate, scaled correctly)
 - ✅ Double buffering (smooth rendering)
 - ✅ Game selector (scrolling, filtering)
-- ✅ All 3 games functional
+- ✅ All 3 games functional with common framework
+- ✅ Welcome screens for all games
+- ✅ Menu and exit buttons (hamburger/X icons)
+- ✅ Pause and game over screens
+- ✅ LED effects for game events
+- ✅ Touch debouncing (200ms)
 
-**Needs Improvement:**
-- ⚠️ Menu button appearance and reliability
-- ⚠️ Missing welcome screens
-- ⚠️ Exit button missing in Tetris
-- ⚠️ Touch reliability (debouncing needed)
-- ⚠️ Tetris needs portrait mode
-- ⚠️ Visual polish across all games
+**Ready for Deployment:**
+- ✅ All binaries compiled and verified (ARM 32-bit, Feb 13, 2026)
+- ✅ Common framework integrated across all games
+- ✅ LED feedback for game events
+- ✅ Consistent UI/UX across games
+- ✅ All utilities built (touch_debug updated Feb 14, 2026)
 
 ## Installation Quick Reference
 
@@ -418,12 +466,129 @@ The core system is **100% complete**! All major issues have been resolved:
 - ✅ Game selector functional
 - ✅ Touch input fixed - accurate coordinates on first touch
 
-The system is **ready for deployment**. The touch coordinate fix ensures reliable, accurate touch input throughout the game system.
+**Phase 1 Complete:** All three games now use the common framework with:
+- Professional welcome screens with instructions
+- Consistent menu (hamburger) and exit (X) buttons
+- Pause and game over screens with restart functionality
+- LED feedback for game events (scoring, hits, wins/losses)
+- Touch debouncing for reliable button presses
+- Smooth transitions between screens
 
-### What Changed in the Fix
+The system is **ready for deployment and testing on device**.
 
-The key insight was understanding Linux input event ordering:
-1. **Before:** Code waited for `BTN_TOUCH` press, then tried to read coordinates
-2. **After:** Code captures coordinates as they arrive, then uses them when press is detected
+### What Changed in Phase 1
 
-This simple reordering ensures we always use the coordinates from the same event frame as the touch press, eliminating the "stuck coordinates" problem.
+**Common Framework Integration:**
+1. **Snake:** Added welcome screen, menu/exit buttons, LED effects for eating/growing/death
+2. **Tetris:** Added welcome screen, menu/exit buttons, LED effects for line clears (green/yellow), game over pulse
+3. **Pong:** Added welcome screen, menu/exit buttons, LED effects for paddle hits and scoring, win/loss feedback
+
+**Key Improvements:**
+- Eliminated code duplication across games
+- Consistent UI/UX with hamburger menu and X exit icons
+- Visual feedback through LED indicators
+- Professional welcome screens with game instructions
+- Reliable touch handling with 200ms debouncing
+- Smooth screen transitions
+
+### Next Steps
+
+**Phase 2: Welcome Screens** - Already completed as part of Phase 1! ✅
+
+**Phase 3: Exit & Reliability** - Already completed as part of Phase 1! ✅
+- Exit buttons added to all games
+- Touch debouncing implemented
+- Visual feedback on button presses
+
+**Phase 4: Tetris Portrait Mode** - Future enhancement
+- Research framebuffer rotation options
+- Implement rotation solution
+- Redesign Tetris for portrait layout
+
+**Phase 5: Polish** - Future enhancements
+- Refine button styling (rounded corners, shadows)
+- Add animations and transitions
+- Game-specific visual improvements
+- Final testing and bug fixes
+
+---
+
+## Deployment Checklist
+
+### Pre-Deployment Verification ✅
+- [x] All games compiled successfully (snake, tetris, pong)
+- [x] Game selector compiled
+- [x] Utilities compiled (watchdog_feeder, touch_test, touch_debug, hardware_test)
+- [x] All binaries verified as ARM 32-bit executables
+- [x] Init script ready ([`roomwizard-games-init.sh`](native_games/roomwizard-games-init.sh))
+
+### Deployment Steps
+
+**Quick Deploy (Recommended):**
+```bash
+# From WSL in native_games directory
+cd /mnt/c/work/roomwizard/native_games
+
+# Test mode (browser still auto-starts on reboot)
+./deploy.sh 192.168.50.73 test
+
+# OR permanent mode (replaces browser)
+./deploy.sh 192.168.50.73 permanent
+```
+
+**Manual Deploy:**
+
+**1. Transfer Files to Device:**
+```bash
+# From WSL, transfer all binaries
+scp native_games/build/* root@192.168.50.73:/opt/games/
+
+# Transfer init script
+scp native_games/roomwizard-games-init.sh root@192.168.50.73:/etc/init.d/roomwizard-games
+```
+
+**2. Set Permissions on Device:**
+```bash
+ssh root@192.168.50.73 'chmod +x /opt/games/* /etc/init.d/roomwizard-games'
+```
+
+**3. Test Before Permanent Installation:**
+```bash
+# Start game mode temporarily (browser still auto-starts on reboot)
+ssh root@192.168.50.73 '/etc/init.d/roomwizard-games start'
+
+# If issues occur, stop and revert:
+ssh root@192.168.50.73 '/etc/init.d/roomwizard-games stop'
+```
+
+**4. Make Permanent (Optional):**
+```bash
+# Disable browser/X11, enable game mode
+ssh root@192.168.50.73 'update-rc.d -f browser remove && update-rc.d -f x11 remove'
+ssh root@192.168.50.73 'update-rc.d roomwizard-games defaults'
+ssh root@192.168.50.73 'reboot'
+```
+
+**5. Verify on Device:**
+- Touch screen should show game selector menu
+- Test each game (Snake, Tetris, Pong)
+- Verify touch input accuracy
+- Check LED effects during gameplay
+- Test menu/exit buttons
+- Verify watchdog prevents resets
+
+### Rollback Procedure
+
+If you need to restore browser mode:
+```bash
+ssh root@192.168.50.73 'update-rc.d -f roomwizard-games remove'
+ssh root@192.168.50.73 'update-rc.d browser defaults && update-rc.d x11 defaults'
+ssh root@192.168.50.73 'reboot'
+```
+
+### Current Build Status
+- **Last Build:** Feb 14, 2026
+- **Build Location:** `native_games/build/`
+- **Target Device:** RoomWizard (ARM 32-bit)
+- **Status:** Ready for deployment ✅
+- **New:** Hardware Test GUI added (Phase 2 started)

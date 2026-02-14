@@ -13,10 +13,19 @@
 #include <stdbool.h>
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
+#include "../common/game_common.h"
+#include "../common/hardware.h"
 
 #define BOARD_WIDTH 10
 #define BOARD_HEIGHT 20
 #define NUM_TETROMINOS 7
+
+typedef enum {
+    SCREEN_WELCOME,
+    SCREEN_PLAYING,
+    SCREEN_PAUSED,
+    SCREEN_GAME_OVER
+} GameScreen;
 
 typedef enum {
     PIECE_I, PIECE_O, PIECE_T, PIECE_S, PIECE_Z, PIECE_J, PIECE_L
@@ -115,6 +124,13 @@ int board_offset_y;
 bool running = true;
 int last_touch_x = -1;
 int last_touch_y = -1;
+Button menu_button;
+Button exit_button;
+Button start_button;
+Button restart_button;
+Button resume_button;
+Button exit_pause_button;
+GameScreen current_screen = SCREEN_WELCOME;
 
 // Function prototypes
 void init_game();
@@ -126,8 +142,6 @@ void clear_lines();
 void update_game();
 void draw_game();
 void handle_input();
-void draw_button(int x, int y, int w, int h, const char *text, uint32_t color);
-bool check_button(int x, int y, int bx, int by, int bw, int bh);
 void signal_handler(int sig);
 
 void signal_handler(int sig) {
@@ -144,6 +158,26 @@ void init_game() {
     board_offset_y = 80;
     
     game.high_score = 0;
+    
+    // Initialize buttons
+    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+                BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
+                BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
+                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
+                BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
+                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
+                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    
     reset_game();
 }
 
@@ -249,6 +283,24 @@ void clear_lines() {
         game.level = 1 + game.lines_cleared / 10;
         game.drop_speed = 60 - (game.level * 3);
         if (game.drop_speed < 10) game.drop_speed = 10;
+        
+        // LED effects for line clears
+        if (lines == 4) {
+            // Tetris! Rainbow cycle (yellow/orange effect)
+            hw_set_leds(HW_LED_COLOR_YELLOW);
+            usleep(200000);  // 200ms
+            hw_leds_off();
+        } else if (lines >= 2) {
+            // Multi-line clear - green flash
+            hw_set_led(LED_GREEN, 100);
+            usleep(150000);  // 150ms
+            hw_leds_off();
+        } else {
+            // Single line - brief green
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);  // 100ms
+            hw_leds_off();
+        }
     }
 }
 
@@ -265,76 +317,137 @@ void update_game() {
             lock_piece();
         }
     }
-}
-
-void draw_button(int x, int y, int w, int h, const char *text, uint32_t color) {
-    fb_fill_rect(&fb, x, y, w, h, color);
-    fb_draw_rect(&fb, x, y, w, h, COLOR_WHITE);
     
-    int text_len = strlen(text);
-    int text_x = x + (w - text_len * 6 * 2) / 2;
-    int text_y = y + (h - 7 * 2) / 2;
-    fb_draw_text(&fb, text_x, text_y, text, COLOR_WHITE, 2);
-}
-
-bool check_button(int x, int y, int bx, int by, int bw, int bh) {
-    return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+    // Check for game over
+    if (game.game_over) {
+        current_screen = SCREEN_GAME_OVER;
+        if (game.score > game.high_score) {
+            game.high_score = game.score;
+        }
+        // Red pulse on game over
+        for (int i = 0; i < 3; i++) {
+            hw_set_led(LED_RED, 100);
+            usleep(200000);  // 200ms
+            hw_leds_off();
+            usleep(200000);  // 200ms
+        }
+    }
 }
 
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
+    uint32_t current_time = get_time_ms();
     
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&start_button, state.x, state.y);
+            if (button_check_press(&start_button, touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+            }
+        }
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        if (state.pressed) {
+            bool touched = button_is_touched(&restart_button, state.x, state.y);
+            if (button_check_press(&restart_button, touched, current_time)) {
+                reset_game();
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+            }
+        }
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        if (state.pressed) {
+            bool resume_touched = button_is_touched(&resume_button, state.x, state.y);
+            if (button_check_press(&resume_button, resume_touched, current_time)) {
+                current_screen = SCREEN_PLAYING;
+                game.paused = false;
+                return;
+            }
+            
+            bool exit_touched = button_is_touched(&exit_pause_button, state.x, state.y);
+            if (button_check_press(&exit_pause_button, exit_touched, current_time)) {
+                // Fade out effect
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_RED, 100);
+                    usleep(100000);  // 100ms
+                    hw_leds_off();
+                    usleep(100000);  // 100ms
+                }
+                running = false;
+                return;
+            }
+        }
+        return;
+    }
+    
+    // Playing screen - check menu and exit buttons
     if (state.pressed) {
+        // Check exit button (top-right)
+        bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
+        if (button_check_press(&exit_button, exit_touched, current_time)) {
+            // Fade out effect
+            for (int i = 0; i < 3; i++) {
+                hw_set_led(LED_RED, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+                usleep(100000);  // 100ms
+            }
+            running = false;
+            return;
+        }
+        
+        // Check menu button (top-left)
+        bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
+        if (button_check_press(&menu_button, menu_touched, current_time)) {
+            current_screen = SCREEN_PAUSED;
+            game.paused = true;
+            return;
+        }
+    }
+    
+    if (state.pressed && !game.game_over && !game.paused) {
         int tx = state.x;
         int ty = state.y;
         
-        if (game.game_over) {
-            int btn_w = 200, btn_h = 50;
-            int btn_x = fb.width / 2 - btn_w / 2;
-            int btn_y = fb.height * 2 / 3;
-            if (check_button(tx, ty, btn_x, btn_y, btn_w, btn_h)) {
-                reset_game();
+        // Game controls
+        int board_right = board_offset_x + BOARD_WIDTH * cell_size;
+        
+        if (tx < board_offset_x - 10) {
+            // Left side - move left
+            if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
+                game.current.x--;
             }
-        } else if (game.paused) {
-            int btn_w = 150, btn_h = 50;
-            int btn_x = fb.width / 2 - btn_w / 2;
-            int btn_y = fb.height / 2;
-            if (check_button(tx, ty, btn_x, btn_y, btn_w, btn_h)) {
-                game.paused = false;
+        } else if (tx > board_right + 10) {
+            // Right side - move right
+            if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
+                game.current.x++;
             }
+        } else if (ty > fb.height - 80) {
+            // Bottom - hard drop
+            while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
+                game.current.y++;
+                game.score += 2;
+            }
+            lock_piece();
         } else {
-            // Check pause button
-            if (check_button(tx, ty, 10, 10, 60, 40)) {
-                game.paused = true;
-            } else {
-                // Game controls
-                int board_right = board_offset_x + BOARD_WIDTH * cell_size;
-                
-                if (tx < board_offset_x - 10) {
-                    // Left side - move left
-                    if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
-                        game.current.x--;
-                    }
-                } else if (tx > board_right + 10) {
-                    // Right side - move right
-                    if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
-                        game.current.x++;
-                    }
-                } else if (ty > fb.height - 80) {
-                    // Bottom - hard drop
-                    while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
-                        game.current.y++;
-                        game.score += 2;
-                    }
-                    lock_piece();
-                } else {
-                    // Center - rotate
-                    int new_rotation = (game.current.rotation + 1) % 4;
-                    if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                        game.current.rotation = new_rotation;
-                    }
-                }
+            // Center - rotate
+            int new_rotation = (game.current.rotation + 1) % 4;
+            if (!check_collision(&game.current, 0, 0, new_rotation)) {
+                game.current.rotation = new_rotation;
             }
         }
         
@@ -346,6 +459,30 @@ void handle_input() {
 void draw_game() {
     fb_clear(&fb, COLOR_BLACK);
     
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        draw_welcome_screen(&fb, "TETRIS", 
+            "TAP LEFT/RIGHT: MOVE\n"
+            "TAP CENTER: ROTATE\n"
+            "TAP BOTTOM: DROP", &start_button);
+        return;
+    }
+    
+    // Handle game over screen
+    if (current_screen == SCREEN_GAME_OVER) {
+        draw_game_over_screen(&fb, "GAME OVER", game.score, &restart_button);
+        return;
+    }
+    
+    // Handle pause screen
+    if (current_screen == SCREEN_PAUSED) {
+        // Draw pause screen with both resume and exit buttons
+        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
+    
     // Draw HUD
     char score_text[32];
     snprintf(score_text, sizeof(score_text), "SCORE:%d", game.score);
@@ -355,25 +492,9 @@ void draw_game() {
     snprintf(level_text, sizeof(level_text), "LVL:%d", game.level);
     fb_draw_text(&fb, fb.width / 2 - 40, 40, level_text, COLOR_CYAN, 2);
     
-    // Draw pause button
-    draw_button(10, 10, 60, 40, "||", COLOR_ORANGE);
-    
-    if (game.game_over) {
-        fb_draw_text(&fb, fb.width / 2 - 80, fb.height / 3, "GAME OVER", COLOR_RED, 3);
-        
-        char final_score[32];
-        snprintf(final_score, sizeof(final_score), "SCORE: %d", game.score);
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 2 - 30, final_score, COLOR_WHITE, 2);
-        
-        draw_button(fb.width / 2 - 100, fb.height * 2 / 3, 200, 50, "RESTART", COLOR_GREEN);
-        return;
-    }
-    
-    if (game.paused) {
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        draw_button(fb.width / 2 - 75, fb.height / 2, 150, 50, "RESUME", COLOR_GREEN);
-        return;
-    }
+    // Draw menu and exit buttons
+    draw_menu_button(&fb, &menu_button);
+    draw_exit_button(&fb, &exit_button);
     
     // Draw board border
     fb_draw_rect(&fb, board_offset_x - 2, board_offset_y - 2,
@@ -446,6 +567,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Initialize hardware control
+    hw_init();
+    
     srand(time(NULL));
     init_game();
     
@@ -462,6 +586,7 @@ int main(int argc, char *argv[]) {
     }
     
     touch_close(&touch);
+    hw_leds_off();
     fb_close(&fb);
     
     printf("Tetris ended. Final score: %d\n", game.score);

@@ -71,7 +71,7 @@ void draw_pause_screen(Framebuffer *fb, Button *resume_btn);
 #define BTN_MENU_HEIGHT 50
 #define BTN_EXIT_WIDTH  70
 #define BTN_EXIT_HEIGHT 50
-#define BTN_LARGE_WIDTH  200
+#define BTN_LARGE_WIDTH  220
 #define BTN_LARGE_HEIGHT 60
 
 // Debounce time in milliseconds

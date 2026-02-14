@@ -28,40 +28,43 @@ echo "Build directory: build/"
 echo ""
 
 # Compile common libraries
-echo "[1/11] Compiling framebuffer library..."
+echo "[1/12] Compiling framebuffer library..."
 $CC -O2 -static -c common/framebuffer.c -o build/framebuffer.o
 
-echo "[2/11] Compiling touch input library..."
+echo "[2/12] Compiling touch input library..."
 $CC -O2 -static -c common/touch_input.c -o build/touch_input.o
 
-echo "[3/11] Compiling hardware control library..."
+echo "[3/12] Compiling hardware control library..."
 $CC -O2 -static -c common/hardware.c -o build/hardware.o
 
-echo "[4/11] Compiling game common library..."
+echo "[4/12] Compiling game common library..."
 $CC -O2 -static -c common/game_common.c -o build/game_common.o
 
 # Compile games
-echo "[5/11] Compiling Snake..."
+echo "[5/12] Compiling Snake..."
 $CC -O2 -static snake/snake.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/snake -lm
 
-echo "[6/11] Compiling Tetris..."
+echo "[6/12] Compiling Tetris..."
 $CC -O2 -static tetris/tetris.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/tetris -lm
 
-echo "[7/11] Compiling Pong..."
+echo "[7/12] Compiling Pong..."
 $CC -O2 -static pong/pong.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/pong -lm
 
 # Compile utilities
-echo "[8/11] Compiling Game Selector..."
+echo "[8/12] Compiling Game Selector..."
 $CC -O2 -static game_selector.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/game_selector -lm
 
-echo "[9/11] Compiling Watchdog Feeder..."
+echo "[9/12] Compiling Watchdog Feeder..."
 $CC -O2 -static watchdog_feeder.c -o build/watchdog_feeder
 
-echo "[10/11] Compiling Touch Test..."
+echo "[10/12] Compiling Touch Test..."
 $CC -O2 -static touch_test.c build/framebuffer.o build/touch_input.o build/hardware.o -o build/touch_test -lm
 
-echo "[11/11] Compiling Hardware Test..."
-$CC -O2 -static hardware_test.c build/hardware.o -o build/hardware_test
+echo "[11/12] Compiling Hardware Test (CLI)..."
+$CC -O2 -static hardware_test.c build/hardware.o -o build/hardware_test_cli
+
+echo "[12/12] Compiling Hardware Test (GUI)..."
+$CC -O2 -static hardware_test_gui.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/hardware_test -lm
 
 echo ""
 echo "========================================"
