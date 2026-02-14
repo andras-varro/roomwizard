@@ -16,9 +16,6 @@
 ### 🎮 Native Games
 - **[Native Games README](native_games/README.md)** - Detailed native games documentation and API reference
 
-### 📋 Planning Documents
-- **[Plans Directory](plans/)** - Technical plans, workflows, and consolidation documentation
-
 ---
 
 ## Project Overview
@@ -254,21 +251,14 @@ roomwizard/
 │   ├── compile_servlet.bat           # Windows servlet compiler
 │   └── compile_servlet.sh            # Linux servlet compiler
 │
-├── native_games/                      # Native games source code
-│   ├── README.md                      # Comprehensive native games documentation
-│   ├── common/                        # Shared libraries (framebuffer, touch, hardware)
-│   ├── snake/                         # Snake game
-│   ├── tetris/                        # Tetris game
-│   ├── pong/                          # Pong game
-│   ├── build/                         # Compiled binaries
-│   └── compile_for_roomwizard.sh     # Build script
-│
-└── plans/                             # Planning documents
-    ├── brick-breaker-game-plan.md
-    ├── modification-workflow.md
-    ├── quick-reference-commands.md
-    ├── roomwizard-bouncing-ball-modification-plan.md
-    └── documentation-consolidation-plan.md
+└── native_games/                      # Native games source code
+    ├── README.md                      # Comprehensive native games documentation
+    ├── common/                        # Shared libraries (framebuffer, touch, hardware)
+    ├── snake/                         # Snake game
+    ├── tetris/                        # Tetris game
+    ├── pong/                          # Pong game
+    ├── build/                         # Compiled binaries
+    └── compile_for_roomwizard.sh     # Build script
 ```
 
 ---
@@ -304,7 +294,7 @@ The micro USB port is configured in **device/gadget mode only** and cannot host 
 
 ### Documentation
 - All consolidated documentation is in the root directory
-- Planning documents in [`plans/`](plans/)
+- Original documentation preserved in [`backup_docs/`](backup_docs/)
 
 ### Development
 - Native games source in [`native_games/`](native_games/)
@@ -313,8 +303,8 @@ The micro USB port is configured in **device/gadget mode only** and cannot host 
 
 ### Community
 - Check [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for current development status
-- Review planning documents for implementation details
 - Refer to troubleshooting sections in each guide
+- Review backup documentation if needed
 
 ---
 
