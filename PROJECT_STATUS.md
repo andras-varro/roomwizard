@@ -294,6 +294,17 @@ All games now use the common framework with consistent UI/UX:
 
 ## Future Programs & Games
 
+### ScummVM Integration ✨ **NEW IDEA**
+- [ ] **ScummVM Port** (Classic Adventure Games)
+  - Cross-compile ScummVM for ARM
+  - Configure for framebuffer rendering
+  - Map touch input to mouse cursor
+  - Add to game selector menu
+  - **Compatible Games:** Monkey Island, Day of the Tentacle, Sam & Max, etc.
+  - **Perfect Fit:** Point-and-click adventures work great with single-touch
+  - **Hardware:** ARMv7 234MB RAM, 508MB storage - sufficient for ScummVM + games
+  - **Display:** 800x480 is ideal for classic adventure game resolutions
+
 ### Utility Programs
 - [ ] **Drawing Program** (Finger Painting)
   - Freehand drawing with touch
@@ -344,7 +355,18 @@ All games now use the common framework with consistent UI/UX:
 1. **Tap** - Single point actions (shoot, select)
 2. **Swipe** - Directional input (Pac-Man movement)
 3. **Drag** - Continuous control (paddle, ship movement)
-4. **Multi-touch** - Advanced controls (if supported)
+4. **Multi-touch** - ❌ NOT SUPPORTED (resistive touchscreen, single-touch only)
+
+**Hardware Limitations:**
+- **Touchscreen Type:** Resistive (Panjit panjit_ts)
+- **Touch Points:** Single-touch only (no multi-touch slots)
+- **Supported Events:** `ABS_X`, `ABS_Y`, `ABS_PRESSURE`, `BTN_TOUCH`
+- **Resolution:** 12-bit (0-4095 raw coordinates)
+- **Pressure Sensitivity:** ⚠️ **Binary only** (255 = pressed, 0 = released)
+  - `ABS_PRESSURE` reports only on/off state, not variable pressure
+  - Pressure value is 255 on initial press, 0 on release
+  - During drag, pressure events are NOT reported (only coordinates update)
+  - **Not suitable for pressure-sensitive drawing or variable-force mechanics**
 
 **Performance Optimization:**
 - Sprite system for efficient rendering

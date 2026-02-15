@@ -26,8 +26,11 @@ int touch_init(TouchInput *touch, const char *device) {
     touch->fd = open(device, O_RDONLY | O_NONBLOCK);
     if (touch->fd == -1) {
         perror("Error opening touch device");
+        printf("ERROR: Failed to open %s, fd=%d\n", device, touch->fd);
         return -1;
     }
+    
+    printf("Touch device opened successfully: %s (fd=%d)\n", device, touch->fd);
     
     touch->state.x = 0;
     touch->state.y = 0;

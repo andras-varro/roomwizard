@@ -486,3 +486,8 @@ partitions/*
 partitions.zip
 roomwizard.img
 native_games/build/*
+*.raw
+*.png
+*.jpg
+.deps/
+*.o
