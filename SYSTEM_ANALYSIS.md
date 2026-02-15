@@ -94,19 +94,47 @@ graph TB
 
 ### Display
 
-- **Resolution:** 800x480 pixels
+- **Resolution:** 800x480 pixels (framebuffer)
+- **Visible Area:** ~720x420 pixels (bezel obscures ~30-40px on all edges)
 - **Technology:** TFT LCD with LED backlight
 - **Interface:** Framebuffer (`/dev/fb0`)
 - **Color Depth:** 32-bit RGB
 - **Backlight Control:** `/sys/class/leds/backlight/brightness` (0-100)
 
+**Screen Safe Area:**
+- Applications should keep interactive elements within the visible area
+- Use margins of at least 40px from framebuffer edges
+- See [`native_games/common/common.h`](native_games/common/common.h) for `LAYOUT_*` macros implementing safe area
+
 ### Input
 
-- **Touchscreen:** Resistive touch panel
+- **Touchscreen:** Resistive touch panel (Panjit panjit_ts)
 - **Device:** `/dev/input/touchscreen0` or `/dev/input/event0`
 - **Protocol:** Linux input events (evdev)
 - **Calibration:** `xinput_calibrator` with config at `/etc/pointercal.xinput`
 - **Resolution:** 12-bit coordinates (0-4095), scaled to screen resolution
+- **Touch Type:** Single-touch only (no multi-touch)
+- **Pressure:** Binary (255=pressed, 0=released), no variable pressure
+
+**Touch Coordinate Scaling:**
+```c
+// Raw to screen coordinates
+screen_x = (raw_x * 800) / 4095;
+screen_y = (raw_y * 480) / 4095;
+```
+
+**Touch Event Order (Critical):**
+1. `ABS_X` - X coordinate
+2. `ABS_Y` - Y coordinate
+3. `BTN_TOUCH` - Press/release event
+4. `SYN_REPORT` - Event synchronization
+
+**Important:** Coordinates must be captured BEFORE the press event. See [`native_games/common/touch_input.c`](native_games/common/touch_input.c) for reference implementation.
+
+**Touch Accuracy:**
+- Center: ~3px accuracy
+- Corners: ~14-27px error (resistive touchscreen characteristic)
+- Calibration can improve corner accuracy
 
 ### Indicators
 
@@ -698,10 +726,10 @@ The hardware interfaces (LEDs, touchscreen, framebuffer) are accessible via stan
 
 ## Related Documentation
 
-- [Native Games Guide](NATIVE_GAMES_GUIDE.md) - Native C games development
-- [Browser Modifications](BROWSER_MODIFICATIONS.md) - Browser-based modifications
+- [Native Games Guide](native_games/README.md) - Native C games development
+- [ScummVM Backend](scummvm-roomwizard/README.md) - Classic adventure games port
 - [System Setup](SYSTEM_SETUP.md) - SSH access and system configuration
-- [Project Status](PROJECT_STATUS.md) - Current development status
+- [Project Overview](README.md) - Project overview and status
 
 ---
 

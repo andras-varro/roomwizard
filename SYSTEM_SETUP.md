@@ -13,6 +13,17 @@
 
 ---
 
+## Current Device Configuration
+
+**Device IP:** 192.168.50.73
+**SSH Access:** Configured with key authentication
+**User:** root
+**Status:** Development device
+
+This IP is referenced throughout the project documentation. If your device has a different IP, update your deployment scripts accordingly.
+
+---
+
 ## Overview
 
 This guide covers two main system setup scenarios:
@@ -655,9 +666,9 @@ route add default gw 192.168.1.1
 ## Related Documentation
 
 - [System Analysis](SYSTEM_ANALYSIS.md) - Hardware and firmware analysis
-- [Native Games Guide](NATIVE_GAMES_GUIDE.md) - Native C games development
-- [Browser Modifications](BROWSER_MODIFICATIONS.md) - Browser-based modifications
-- [Project Status](PROJECT_STATUS.md) - Current development status
+- [Native Games Guide](native_games/README.md) - Native C games development
+- [ScummVM Backend](scummvm-roomwizard/README.md) - Classic adventure games port
+- [Project Status](README.md) - Project overview and status
 
 ---
 

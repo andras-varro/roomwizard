@@ -131,13 +131,13 @@ The LED control system allows the JavaScript game to control the RoomWizard's re
 
 ### Architecture
 
-```mermaid
-graph LR
-    A[JavaScript Game] -->|HTTP GET| B[Jetty Server]
-    B -->|Route /led| C[LEDControlServlet]
-    C -->|Write| D[/sys/class/leds/red_led/brightness]
-    C -->|Write| E[/sys/class/leds/green_led/brightness]
-    C -->|JSON Response| A
+```
+JavaScript Game → HTTP GET → Jetty Server → LEDControlServlet
+                                                ↓
+                                    /sys/class/leds/red_led/brightness
+                                    /sys/class/leds/green_led/brightness
+                                                ↓
+                                          JSON Response
 ```
 
 ### API Endpoint

@@ -55,16 +55,16 @@ $CC -O2 -static pong/pong.c build/framebuffer.o build/touch_input.o build/common
 
 # Compile utilities
 echo "[9/12] Compiling Game Selector..."
-$CC -O2 -static game_selector.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/game_selector -lm
+$CC -O2 -static game_selector/game_selector.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/game_selector -lm
 
 echo "[10/12] Compiling Watchdog Feeder..."
-$CC -O2 -static watchdog_feeder.c -o build/watchdog_feeder
+$CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder
 
 echo "[11/12] Compiling Hardware Test (GUI)..."
-$CC -O2 -static hardware_test_gui.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/hardware_test -lm
+$CC -O2 -static hardware_test/hardware_test_gui.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/hardware_test -lm
 
 echo "[12/12] Compiling Touch Inject (Test Utility)..."
-$CC -O2 -static touch_inject.c -o build/touch_inject
+$CC -O2 -static tests/touch_inject.c -o build/touch_inject
 
 echo ""
 echo "========================================"

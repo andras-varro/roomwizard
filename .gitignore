@@ -495,3 +495,4 @@ native_games/build/*
 # Ignore all tar.gz files except in scummvm-patches
 *.tar.gz
 !scummvm-patches/*.tar.gz
+build/*

@@ -5,7 +5,6 @@
 ## Quick Navigation
 
 ### 📊 Status & Setup
-- **[Project Status](PROJECT_STATUS.md)** - Current development status and progress
 - **[System Analysis](SYSTEM_ANALYSIS.md)** - Hardware and firmware analysis
 - **[System Setup](SYSTEM_SETUP.md)** - SSH access and configuration
 
@@ -24,12 +23,7 @@ Three main projects for the RoomWizard embedded device:
 2. **Browser Games** - HTML5 brick breaker with LED feedback
 3. **ScummVM** - Custom backend for classic point-and-click adventures
 
-## Hardware
-
-- **CPU:** ARM Cortex-A8 @ 300MHz
-- **RAM:** 256MB (184MB available)
-- **Display:** 800x480 touchscreen
-- **OS:** Embedded Linux 4.14.52
+For detailed hardware specifications, see **[Hardware Platform](SYSTEM_ANALYSIS.md#hardware-platform)** in the System Analysis document.
 
 ## Repository Structure
 

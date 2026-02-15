@@ -4,6 +4,8 @@
 
 This collection provides **native C games** optimized for the Steelcase RoomWizard device (300MHz ARM processor). These games run directly on the framebuffer without browser overhead, making them extremely efficient and responsive.
 
+**For developers:** See [`PROJECT.md`](PROJECT.md) for current development status, architecture details, and next steps.
+
 ## Why Native Games?
 
 - **No Browser Overhead**: Direct framebuffer rendering is 10-20x more efficient than HTML5/Canvas
@@ -106,8 +108,13 @@ gcc -O2 pong/pong.c framebuffer.o touch_input.o -o pong -lm
 
 ### Cross-Compilation for RoomWizard
 
-If building on a different machine:
+**Quick Method (Recommended):**
+```bash
+# Use the provided cross-compilation script
+./compile_for_roomwizard.sh
+```
 
+**Manual Method:**
 ```bash
 # Set cross-compiler
 export CC=arm-linux-gnueabihf-gcc
@@ -115,7 +122,7 @@ export CC=arm-linux-gnueabihf-gcc
 # Build with ARM optimizations
 export CFLAGS="-O2 -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=hard"
 
-# Then run make or build.sh
+# Then run make
 make
 ```
 
@@ -187,6 +194,8 @@ systemctl start snake-game
 
 ## Deployment to RoomWizard
 
+**Prerequisites:** Ensure SSH access is configured. See [`SYSTEM_SETUP.md`](../SYSTEM_SETUP.md) for SSH key setup and device configuration (IP: 192.168.50.73).
+
 ### Method 1: Direct Copy (SSH/SCP)
 
 ```bash
@@ -199,7 +208,37 @@ cd /opt/games
 ./snake
 ```
 
-### Method 2: Include in Firmware
+### Method 2: Permanent Game Mode (SysVinit)
+
+Use the included [`roomwizard-games-init.sh`](roomwizard-games-init.sh) script to replace the browser with native games:
+
+**What it does:**
+1. Stops browser/X11 services
+2. Starts watchdog feeder (prevents 60-second reset)
+3. Starts game selector (main menu)
+
+**Installation:**
+```bash
+# Copy to device
+scp roomwizard-games-init.sh root@192.168.50.73:/etc/init.d/roomwizard-games
+
+# Make executable
+ssh root@192.168.50.73 'chmod +x /etc/init.d/roomwizard-games'
+
+# Enable at boot (permanent mode)
+ssh root@192.168.50.73 'update-rc.d browser remove && update-rc.d x11 remove'
+ssh root@192.168.50.73 'update-rc.d roomwizard-games defaults'
+ssh root@192.168.50.73 'reboot'
+```
+
+**Manual control:**
+```bash
+/etc/init.d/roomwizard-games start    # Start game mode
+/etc/init.d/roomwizard-games stop     # Stop game mode
+/etc/init.d/roomwizard-games status   # Check status
+```
+
+### Method 3: Include in Firmware
 
 1. Copy `native_games/` directory to your RoomWizard firmware build
 2. Add to rootfs partition:
@@ -209,7 +248,7 @@ cd /opt/games
 3. Add compilation step to firmware build process
 4. Repack and flash firmware
 
-### Method 3: SD Card Installation
+### Method 4: SD Card Installation
 
 1. Build games on development machine
 2. Mount RoomWizard SD card
@@ -226,7 +265,7 @@ The games are already optimized with:
 - **Compiler Flags**: `-O2 -march=armv7-a -mtune=cortex-a8 -mfpu=neon`
 - **Fixed-Point Math**: Where possible (Pong uses float for smooth physics)
 - **Minimal Allocations**: Static memory allocation, no malloc in game loops
-- **Efficient Rendering**: Direct framebuffer writes, no double buffering overhead
+- **Efficient Rendering**: Direct framebuffer writes with double buffering for flicker-free display
 - **Frame Rate Control**: Games run at appropriate FPS (Snake: variable, Tetris/Pong: 60 FPS)
 
 ### Further Optimizations
@@ -288,6 +327,8 @@ reboot
 ```
 
 ## Technical Details
+
+For comprehensive hardware documentation, see [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform).
 
 ### Architecture
 
