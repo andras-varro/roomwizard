@@ -1,0 +1,19 @@
+diff --git a/configure b/configure
+index 480916a2..75831a2b 100755
+--- a/configure
++++ b/configure
+@@ -4117,6 +4117,14 @@ case $_backend in
+ 		append_var DEFINES "-DUSE_NULL_DRIVER"
+ 		_text_console=yes
+ 		;;
++	roomwizard)
++		_posix=yes
++		_backend="roomwizard"
++		append_var INCLUDES "-I\$(srcdir)/../native_games/common"
++		append_var OBJS "../native_games/common/framebuffer.o"
++		append_var OBJS "../native_games/common/touch_input.o"
++		append_var OBJS "../native_games/common/hardware.o"
++		;;
+ 	opendingux | miyoo | miyoomini)
+ 		_sdlconfig=sdl-config
+ 		_sdl=auto

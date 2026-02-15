@@ -491,3 +491,7 @@ native_games/build/*
 *.jpg
 .deps/
 *.o
+
+# Ignore all tar.gz files except in scummvm-patches
+*.tar.gz
+!scummvm-patches/*.tar.gz
