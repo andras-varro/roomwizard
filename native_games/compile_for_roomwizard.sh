@@ -37,34 +37,34 @@ $CC -O2 -static -c common/touch_input.c -o build/touch_input.o
 echo "[3/12] Compiling hardware control library..."
 $CC -O2 -static -c common/hardware.c -o build/hardware.o
 
-echo "[4/12] Compiling game common library..."
-$CC -O2 -static -c common/game_common.c -o build/game_common.o
+echo "[4/12] Compiling unified common library..."
+$CC -O2 -static -c common/common.c -o build/common.o
+
+echo "[5/12] Compiling UI layout library..."
+$CC -O2 -static -c common/ui_layout.c -o build/ui_layout.o
 
 # Compile games
-echo "[5/12] Compiling Snake..."
-$CC -O2 -static snake/snake.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/snake -lm
+echo "[6/12] Compiling Snake..."
+$CC -O2 -static snake/snake.c build/framebuffer.o build/touch_input.o build/common.o build/hardware.o -o build/snake -lm
 
-echo "[6/12] Compiling Tetris..."
-$CC -O2 -static tetris/tetris.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/tetris -lm
+echo "[7/12] Compiling Tetris..."
+$CC -O2 -static tetris/tetris.c build/framebuffer.o build/touch_input.o build/common.o build/hardware.o -o build/tetris -lm
 
-echo "[7/12] Compiling Pong..."
-$CC -O2 -static pong/pong.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/pong -lm
+echo "[8/12] Compiling Pong..."
+$CC -O2 -static pong/pong.c build/framebuffer.o build/touch_input.o build/common.o build/hardware.o -o build/pong -lm
 
 # Compile utilities
-echo "[8/12] Compiling Game Selector..."
-$CC -O2 -static game_selector.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/game_selector -lm
+echo "[9/12] Compiling Game Selector..."
+$CC -O2 -static game_selector.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/game_selector -lm
 
-echo "[9/12] Compiling Watchdog Feeder..."
+echo "[10/12] Compiling Watchdog Feeder..."
 $CC -O2 -static watchdog_feeder.c -o build/watchdog_feeder
 
-echo "[10/12] Compiling Touch Test..."
-$CC -O2 -static touch_test.c build/framebuffer.o build/touch_input.o build/hardware.o -o build/touch_test -lm
+echo "[11/12] Compiling Hardware Test (GUI)..."
+$CC -O2 -static hardware_test_gui.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/hardware_test -lm
 
-echo "[11/12] Compiling Hardware Test (CLI)..."
-$CC -O2 -static hardware_test.c build/hardware.o -o build/hardware_test_cli
-
-echo "[12/12] Compiling Hardware Test (GUI)..."
-$CC -O2 -static hardware_test_gui.c build/framebuffer.o build/touch_input.o build/game_common.o build/hardware.o -o build/hardware_test -lm
+echo "[12/12] Compiling Touch Inject (Test Utility)..."
+$CC -O2 -static touch_inject.c -o build/touch_inject
 
 echo ""
 echo "========================================"
@@ -74,11 +74,11 @@ echo ""
 
 # Verify binaries
 echo "Verifying ARM binaries:"
-file build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/touch_test build/hardware_test | sed 's/^/  /'
+file build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test | sed 's/^/  /'
 
 echo ""
 echo "File sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/touch_test build/hardware_test | awk '{print "  " $9 ": " $5}'
+ls -lh build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test | awk '{print "  " $9 ": " $5}'
 echo ""
 echo "========================================"
 echo "Next Steps:"

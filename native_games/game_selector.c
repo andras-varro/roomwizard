@@ -1,11 +1,12 @@
 /*
  * Game Selector for RoomWizard
  * Displays a menu of available games and launches selected game
- * Includes exit button to return to selector
+ * Uses centralized Button widget from common library
  */
 
 #include "common/framebuffer.h"
 #include "common/touch_input.h"
+#include "common/common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,8 @@ typedef struct {
 
 typedef struct {
     GameEntry games[MAX_GAMES];
+    Button game_buttons[MAX_GAMES];  // Button widgets for each game
+    Button exit_button;              // Exit button widget
     int game_count;
     int selected_game;
     int scroll_offset;  // For scrolling through games
@@ -70,44 +73,42 @@ int scan_games(GameSelector *selector) {
     return selector->game_count;
 }
 
-// Draw a button
-void draw_button(Framebuffer *fb, int x, int y, int w, int h, const char *text, 
-                 uint32_t bg_color, uint32_t text_color) {
-    // Draw button background
-    fb_fill_rect(fb, x, y, w, h, bg_color);
+// Initialize button positions for current scroll state
+void update_button_positions(GameSelector *selector) {
+    int start_y = SCREEN_SAFE_TOP + 80;  // Start below title
+    int button_width = SCREEN_SAFE_WIDTH - 2 * BUTTON_MARGIN;
+    int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
+    int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
     
-    // Draw button border
-    fb_draw_rect(fb, x, y, w, h, COLOR_WHITE);
-    fb_draw_rect(fb, x+1, y+1, w-2, h-2, COLOR_WHITE);
-    
-    // Convert text to uppercase for font compatibility
-    char upper_text[256];
-    int i = 0;
-    while (text[i] && i < 255) {
-        upper_text[i] = (text[i] >= 'a' && text[i] <= 'z') ? text[i] - 32 : text[i];
-        i++;
+    // Update game button positions
+    for (int i = 0; i < max_visible && (i + selector->scroll_offset) < selector->game_count; i++) {
+        int game_idx = i + selector->scroll_offset;
+        int y = start_y + i * (BUTTON_HEIGHT + BUTTON_MARGIN);
+        uint32_t bg_color = (game_idx == selector->selected_game) ? COLOR_BLUE : RGB(40, 40, 80);
+        
+        button_init_full(&selector->game_buttons[game_idx],
+                        SCREEN_SAFE_LEFT + BUTTON_MARGIN, y, button_width, BUTTON_HEIGHT,
+                        selector->games[game_idx].name,
+                        bg_color, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
     }
-    upper_text[i] = '\0';
     
-    // Draw text centered
-    int text_len = strlen(upper_text);
-    int text_width = text_len * 6 * 3;  // 6 pixels per char, scale 3
-    int text_x = x + (w - text_width) / 2;
-    int text_y = y + (h - 7 * 3) / 2;  // 7 pixels height, scale 3
-    
-    fb_draw_text(fb, text_x, text_y, upper_text, text_color, 3);
+    // Update exit button position (using safe area)
+    int exit_y = SCREEN_SAFE_BOTTOM - EXIT_BUTTON_HEIGHT - BUTTON_MARGIN;
+    button_init_full(&selector->exit_button,
+                    SCREEN_SAFE_LEFT + BUTTON_MARGIN, exit_y, button_width, EXIT_BUTTON_HEIGHT,
+                    "EXIT TO SYSTEM",
+                    RGB(80, 20, 20), COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
 }
 
 // Draw the game selector menu
 void draw_menu(GameSelector *selector) {
     fb_clear(&selector->fb, COLOR_BLACK);
     
-    // Draw title
-    fb_draw_text(&selector->fb, 20, 20, "ROOMWIZARD GAMES", COLOR_WHITE, 4);
+    // Draw title (using safe area)
+    text_draw_centered(&selector->fb, 400, LAYOUT_TITLE_Y, "ROOMWIZARD GAMES", COLOR_WHITE, 4);
     
-    int start_y = 100;
-    int button_width = selector->fb.width - 2 * BUTTON_MARGIN;
-    int available_height = selector->fb.height - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
+    int start_y = SCREEN_SAFE_TOP + 80;  // Start below title
+    int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
     int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
     
     // Calculate scroll limits
@@ -115,6 +116,9 @@ void draw_menu(GameSelector *selector) {
     if (max_scroll < 0) max_scroll = 0;
     if (selector->scroll_offset > max_scroll) selector->scroll_offset = max_scroll;
     if (selector->scroll_offset < 0) selector->scroll_offset = 0;
+    
+    // Update button positions for current scroll state
+    update_button_positions(selector);
     
     // Draw up arrow if scrolled down
     if (selector->scroll_offset > 0) {
@@ -124,14 +128,10 @@ void draw_menu(GameSelector *selector) {
         fb_draw_text(&selector->fb, arrow_x - 30, arrow_y + 5, "TAP TO SCROLL UP", COLOR_CYAN, 1);
     }
     
-    // Draw visible game buttons
+    // Draw visible game buttons using Button widget
     for (int i = 0; i < max_visible && (i + selector->scroll_offset) < selector->game_count; i++) {
         int game_idx = i + selector->scroll_offset;
-        int y = start_y + i * (BUTTON_HEIGHT + BUTTON_MARGIN);
-        uint32_t bg_color = (game_idx == selector->selected_game) ? COLOR_BLUE : RGB(40, 40, 80);
-        
-        draw_button(&selector->fb, BUTTON_MARGIN, y, button_width, BUTTON_HEIGHT,
-                   selector->games[game_idx].name, bg_color, COLOR_WHITE);
+        button_draw(&selector->fb, &selector->game_buttons[game_idx]);
     }
     
     // Draw down arrow if more games below
@@ -142,25 +142,16 @@ void draw_menu(GameSelector *selector) {
         fb_draw_text(&selector->fb, arrow_x - 40, arrow_y + 35, "TAP TO SCROLL DOWN", COLOR_CYAN, 1);
     }
     
-    // Draw exit button at bottom
-    int exit_y = selector->fb.height - EXIT_BUTTON_HEIGHT - BUTTON_MARGIN;
-    draw_button(&selector->fb, BUTTON_MARGIN, exit_y, button_width, EXIT_BUTTON_HEIGHT,
-               "EXIT TO SYSTEM", RGB(80, 20, 20), COLOR_WHITE);
+    // Draw exit button using Button widget
+    button_draw(&selector->fb, &selector->exit_button);
     
     // Swap buffers for double buffering
     fb_swap(&selector->fb);
 }
 
-// Check if touch is within button bounds
-int is_touch_in_button(int touch_x, int touch_y, int btn_x, int btn_y, int btn_w, int btn_h) {
-    return (touch_x >= btn_x && touch_x < btn_x + btn_w &&
-            touch_y >= btn_y && touch_y < btn_y + btn_h);
-}
-
 // Handle touch input
-int handle_touch(GameSelector *selector, int x, int y) {
+int handle_touch(GameSelector *selector, int x, int y, uint32_t current_time) {
     int start_y = 100;
-    int button_width = selector->fb.width - 2 * BUTTON_MARGIN;
     int available_height = selector->fb.height - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
     int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
     
@@ -175,11 +166,10 @@ int handle_touch(GameSelector *selector, int x, int y) {
         return -1;  // Redraw needed
     }
     
-    // Check game buttons (visible ones)
+    // Check game buttons (visible ones) using button_update()
     for (int i = 0; i < max_visible && (i + selector->scroll_offset) < selector->game_count; i++) {
-        int btn_y = start_y + i * (BUTTON_HEIGHT + BUTTON_MARGIN);
-        if (is_touch_in_button(x, y, BUTTON_MARGIN, btn_y, button_width, BUTTON_HEIGHT)) {
-            int game_idx = i + selector->scroll_offset;
+        int game_idx = i + selector->scroll_offset;
+        if (button_update(&selector->game_buttons[game_idx], x, y, true, current_time)) {
             printf("  -> HIT button %d (%s)!\n", game_idx, selector->games[game_idx].name);
             return game_idx;  // Return game index
         }
@@ -198,9 +188,9 @@ int handle_touch(GameSelector *selector, int x, int y) {
         return -1;  // Redraw needed
     }
     
-    // Check exit button
+    // Check exit button using button_update()
     printf("  Checking exit button: y between %d and %d\n", exit_y, exit_y + EXIT_BUTTON_HEIGHT);
-    if (is_touch_in_button(x, y, BUTTON_MARGIN, exit_y, button_width, EXIT_BUTTON_HEIGHT)) {
+    if (button_update(&selector->exit_button, x, y, true, current_time)) {
         printf("  -> HIT exit button!\n");
         return -2;  // Exit signal
     }
@@ -302,8 +292,9 @@ int main(int argc, char *argv[]) {
         // Wait for touch input (coordinates are now auto-scaled by touch library)
         int x, y;
         if (touch_wait_for_press(&selector.touch, &x, &y) == 0) {
+            uint32_t current_time = get_time_ms();
             printf("Touch at: (%d,%d)\n", x, y);
-            int result = handle_touch(&selector, x, y);
+            int result = handle_touch(&selector, x, y, current_time);
             printf("Result: %d\n", result);
             
             if (result >= 0) {

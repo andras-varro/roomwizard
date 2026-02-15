@@ -13,7 +13,7 @@
 #include <stdbool.h>
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
-#include "../common/game_common.h"
+#include "../common/common.h"
 #include "../common/hardware.h"
 
 #define BOARD_WIDTH 10

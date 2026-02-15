@@ -17,6 +17,21 @@ typedef struct {
     bool double_buffering;   // Enable/disable double buffering
 } Framebuffer;
 
+// Physical screen safe area constraints
+// The RoomWizard has a physical bezel that obscures the edges of the LCD
+// Framebuffer: 800x480, Visible area: ~720x420
+#define SCREEN_SAFE_MARGIN_LEFT   40
+#define SCREEN_SAFE_MARGIN_RIGHT  40
+#define SCREEN_SAFE_MARGIN_TOP    30
+#define SCREEN_SAFE_MARGIN_BOTTOM 30
+
+#define SCREEN_SAFE_LEFT   (SCREEN_SAFE_MARGIN_LEFT)
+#define SCREEN_SAFE_RIGHT  (800 - SCREEN_SAFE_MARGIN_RIGHT)
+#define SCREEN_SAFE_TOP    (SCREEN_SAFE_MARGIN_TOP)
+#define SCREEN_SAFE_BOTTOM (480 - SCREEN_SAFE_MARGIN_BOTTOM)
+#define SCREEN_SAFE_WIDTH  (SCREEN_SAFE_RIGHT - SCREEN_SAFE_LEFT)
+#define SCREEN_SAFE_HEIGHT (SCREEN_SAFE_BOTTOM - SCREEN_SAFE_TOP)
+
 // Initialize framebuffer
 int fb_init(Framebuffer *fb, const char *device);
 

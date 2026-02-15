@@ -14,7 +14,7 @@
 #include <math.h>
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
-#include "../common/game_common.h"
+#include "../common/common.h"
 #include "../common/hardware.h"
 
 #define PADDLE_WIDTH 15
