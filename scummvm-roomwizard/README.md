@@ -40,18 +40,56 @@ cd /opt/games
 
 ## Backend Files
 
-Located in `../scummvm/backends/platform/roomwizard/`:
+**Version-controlled** in [`backend-files/`](backend-files/):
 - `roomwizard.cpp/h` - Main backend
 - `roomwizard-graphics.cpp/h` - Graphics manager (framebuffer)
 - `roomwizard-events.cpp/h` - Event source (touch input)
 - `module.mk` - Build configuration
+- `configure.patch` - ScummVM configure modifications
+- `DEBUG_LOG.md` - Implementation debug notes
+- `IMPLEMENTATION_SUCCESS.md` - Implementation documentation
+
+These files are synced to/from `../scummvm/backends/platform/roomwizard/` using the management script.
+
+### Why Version Control?
+
+Backend files are now tracked individually (not tar.gz) for:
+- ✅ File-by-file git history and diffs
+- ✅ Easy code review and change tracking
+- ✅ Better merge conflict resolution
+- ✅ Simplified porting to new ScummVM versions
 
 ## Git Management
 
+**Common Commands:**
 ```bash
+./manage-scummvm-changes.sh sync     # Sync changes TO version control
+./manage-scummvm-changes.sh restore  # Restore changes FROM version control
+./manage-scummvm-changes.sh update   # Update from upstream (auto-syncs)
 ./manage-scummvm-changes.sh status   # Check configuration
-./manage-scummvm-changes.sh backup   # Create backup
-./manage-scummvm-changes.sh update   # Update from upstream
+```
+
+**Typical Workflow:**
+
+After making changes in ScummVM:
+```bash
+cd scummvm-roomwizard
+./manage-scummvm-changes.sh sync
+git add backend-files/
+git commit -m "Update backend implementation"
+```
+
+After fresh clone:
+```bash
+cd scummvm-roomwizard
+./manage-scummvm-changes.sh restore  # Copies backend-files/ to scummvm/
+```
+
+Updating ScummVM from upstream:
+```bash
+./manage-scummvm-changes.sh update  # Auto-syncs before and after
+git add backend-files/
+git commit -m "Sync after upstream update"
 ```
 
 ## Hardware

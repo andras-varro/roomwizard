@@ -1,6 +1,6 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING - Touch Input Needs Fixes
+## Status: ✅ WORKING - Button Clicks Fixed!
 
 **Binary:** 13 MB statically linked, runs on device  
 **Location:** `/opt/games/scummvm` on device  
@@ -45,23 +45,12 @@ Located in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/platfor
 
 ## Current Issues
 
-### 0. Screen Safe Area (CRITICAL) ⚠️
-**Problem:** Bezel obscures ~30-40px on all edges (visible: ~720x420 from 800x480)
-**Impact:** UI elements near edges may be hidden/unreachable
+### 0. Screen Safe Area ⚠️
+**Problem:** Bezel obscures ~30-40px on all edges
 **Fix Needed:** Add safe area margins to GUI rendering
-**Reference:** See [`SYSTEM_ANALYSIS.md#display`](../SYSTEM_ANALYSIS.md#display) for specifications and [`native_games/common/common.h`](../native_games/common/common.h) for `LAYOUT_*` macro implementation
 
-### 1. Button Clicks Not Working ❌
-**Problem:** LBUTTONDOWN/UP events not generated  
-**Root Cause:** Timing-based event generation unreliable  
-**Fix Needed:** Refactor to event queue with state machine
-
-### 2. Touch Drag Not Working ❌
-**Problem:** MOUSEMOVE during drag not sent  
-**Fix Needed:** Generate continuous MOUSEMOVE while touching
-
-### 3. Touch Calibration Needed ⚠️
-**Problem:** ~14-27px error in corners (resistive touchscreen)  
+### 1. Touch Calibration ⚠️
+**Problem:** ~14-27px error in corners (resistive touchscreen)
 **Fix Needed:** Add calibration offset
 
 ## What Works ✅
@@ -69,6 +58,8 @@ Located in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/platfor
 - ScummVM launches and runs
 - Framebuffer rendering (800x480)
 - Touch input device opens
+- **Button clicks (LBUTTONDOWN/UP)** ✅
+- **Touch drag (MOUSEMOVE during hold)** ✅
 - Cursor movement (GUI + game modes)
 - Dual-mode coordinate transformation
 - Static linking (no dependencies)
@@ -123,12 +114,23 @@ Local changes protected via:
 
 ## Next Steps
 
-1. **Fix button clicks** - Refactor event generation
-2. **Fix touch drag** - Continuous MOUSEMOVE during touch
-3. **Add calibration** - Corner accuracy improvement
-4. **Remove debug logs** - Clean up printf statements
-5. **Test with games** - Add game data, test gameplay
-6. **Integrate** - Add to game selector
+1. **Remove debug logs** - Clean up warning() statements
+2. **Add calibration** - Corner accuracy improvement (~14-27px error)
+3. **Test with games** - Add game data, test gameplay
+4. **Integrate** - Add to game selector
+
+## Fixes Applied (2026-02-15)
+
+### Button Click Fix ✅ VERIFIED
+**Root Cause:** `warpMouse()` calls `purgeMouseEvents()` which cleared the event queue
+**Solution:** Removed all `g_system->warpMouse()` calls from [`roomwizard-events.cpp`](../scummvm/backends/platform/roomwizard/roomwizard-events.cpp)
+**Result:** All touch events working - LBUTTONDOWN/UP, drag, cursor movement
+
+### Keymapper Bypass ✅
+Added `allowMapping() { return false; }` to [`roomwizard-events.h:44`](../scummvm/backends/platform/roomwizard/roomwizard-events.h:44) to bypass keymapper processing
+
+### Test Results
+Verified on device - user confirmed clicks working correctly. Cursor follows touch properly.
 
 ## Hardware Specs
 
