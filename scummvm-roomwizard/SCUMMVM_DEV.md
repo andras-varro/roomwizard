@@ -1,10 +1,10 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING - Full-screen scaling with bezel compensation verified on device
+## Status: ✅ WORKING - Virtual keyboard + gesture navigation implemented
 
-**Binary:** 13.9 MB statically linked, deployed to device  
+**Binary:** 14.6 MB statically linked, deployed to device  
 **Location:** `/opt/games/scummvm` on device  
-**Last build:** 2026-02-18 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9)  
+**Last build:** 2026-02-18 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ## Quick Build
@@ -13,13 +13,15 @@
 cd scummvm
 ./configure --host=arm-linux-gnueabihf --backend=roomwizard \
   --disable-all-engines --enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he \
+  --enable-engine=agi --enable-engine=sci --enable-engine=agos --enable-engine=sky --enable-engine=queen \
   --disable-alsa --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
-  --enable-release --enable-optimizations
+  --enable-release --enable-optimizations --enable-vkeybd
 make -j4 LDFLAGS='-static'
 arm-linux-gnueabihf-strip scummvm
 
 # Deploy to device (IP: 192.168.50.73)
 scp scummvm root@192.168.50.73:/opt/games/
+scp backends/vkeybd/packs/vkeybd_small.zip root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 ```
 
@@ -76,12 +78,31 @@ bezel_top bezel_bottom bezel_left bezel_right
 
 **Fallback:** if the file is absent, zero margins are used (old centred-letterbox behaviour).
 
+## Gesture Navigation
+
+Three-finger-free gesture detection built into `RoomWizardEventSource`. All gestures inject
+standard ScummVM key events — no custom UI required.
+
+| Gesture | Zone | Action |
+|---|---|---|
+| Triple-tap | Bottom-right corner (x>720, y>400) | **Global Main Menu** (Ctrl+F5) — save, load, options, quit |
+| Triple-tap | Bottom-left corner (x<80, y>400) | **Virtual Keyboard** — text input for save names etc. |
+
+**Triple-tap:** 3 taps within 1200 ms in the same corner zone (80px from edge).  
+**On gesture fire:** the triggering touch is consumed (no click generated).  
+**GMM:** works in any SCUMM/AGI/SCI game, gives access to save/load/quit without keyboard.  
+**VKB:** loads `vkeybd_small.zip` from the ScummVM data path on first use (`/opt/games/`).
+
+**Implementation:** `roomwizard-events.cpp` — `checkGestures()`, `pushKeyEvent()`, `pushEvent()`  
+**VKB host:** `roomwizard.cpp` — `OSystem_RoomWizard::showVirtualKeyboard()` lazily loads the pack.
+
 ## Next Steps
 
-1. **Remove debug log spam** - Many `warning()` calls still in place from development
-2. **Test with real game data** - Add game files, verify full gameplay on device
-3. **Watchdog integration** - Ensure watchdog is fed; run alongside `watchdog_feeder` or add internal feeding
-4. **Integrate with game selector** - Hook ScummVM into the native game selector menu
+1. **Test gestures on device** — verify triple-tap corners open GMM and VKB
+2. **Remove debug log spam** — many `warning()` calls still in place from development
+3. **Test with real game data** — add game files, verify full gameplay
+4. **Watchdog integration** — run alongside `watchdog_feeder` or add internal feeding
+5. **Integrate with game selector** — hook ScummVM into the native game selector menu
 
 ## What Works ✅
 
@@ -94,6 +115,10 @@ bezel_top bezel_bottom bezel_left bezel_right
 - Dual-mode coordinate transformation (overlay vs game)
 - **Full-screen bezel-aware scaling** ✅ verified on device (2026-02-18)
 - **Calibration file loading** ✅ verified on device (2026-02-18)
+- **Gesture navigation** ✅ built & deployed (2026-02-18) — test pending
+  - Triple-tap bottom-right → Global Main Menu (save/load/quit)
+  - Triple-tap bottom-left → Virtual Keyboard
+- **Virtual keyboard** ✅ built with `--enable-vkeybd`, `vkeybd_small.zip` deployed
 - Static linking (no dependencies)
 
 ## Touch Input Details

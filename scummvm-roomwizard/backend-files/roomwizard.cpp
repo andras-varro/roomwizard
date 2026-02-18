@@ -41,6 +41,9 @@
 #include "base/main.h"
 #include "common/scummsys.h"
 #include "common/config-manager.h"
+#ifdef ENABLE_VKEYBD
+#include "backends/vkeybd/virtual-keyboard.h"
+#endif
 
 #include <time.h>
 #include <sys/time.h>
@@ -49,11 +52,14 @@
 #include <stdlib.h>
 
 OSystem_RoomWizard::OSystem_RoomWizard()
-	: _eventSource(nullptr) {
-	
+	: _eventSource(nullptr)
+#ifdef ENABLE_VKEYBD
+	, _vkbd(nullptr)
+#endif
+{
 	// Set up filesystem factory
 	_fsFactory = new POSIXFilesystemFactory();
-	
+
 	// Initialize start time
 	gettimeofday(&_startTime, 0);
 }
@@ -128,6 +134,50 @@ void OSystem_RoomWizard::logMessage(LogMessageType::Type type, const char *messa
 
 void OSystem_RoomWizard::addSysArchivesToSearchSet(Common::SearchSet &s, int priority) {
 	// Add any system-specific archive paths here if needed
+}
+
+bool OSystem_RoomWizard::hasFeature(Feature f) {
+#ifdef ENABLE_VKEYBD
+	if (f == kFeatureVirtualKeyboard)
+		return true;
+#endif
+	return ModularGraphicsBackend::hasFeature(f);
+}
+
+void OSystem_RoomWizard::setFeatureState(Feature f, bool enable) {
+#ifdef ENABLE_VKEYBD
+	if (f == kFeatureVirtualKeyboard) {
+		if (enable)
+			showVirtualKeyboard();
+		return;
+	}
+#endif
+	ModularGraphicsBackend::setFeatureState(f, enable);
+}
+
+bool OSystem_RoomWizard::getFeatureState(Feature f) {
+#ifdef ENABLE_VKEYBD
+	if (f == kFeatureVirtualKeyboard)
+		return _vkbd && _vkbd->isLoaded();
+#endif
+	return ModularGraphicsBackend::getFeatureState(f);
+}
+
+void OSystem_RoomWizard::showVirtualKeyboard() {
+#ifdef ENABLE_VKEYBD
+	if (!_vkbd) {
+		_vkbd = new Common::VirtualKeyboard();
+		if (!_vkbd->loadKeyboardPack("vkeybd_small") &&
+		    !_vkbd->loadKeyboardPack("vkeybd_default")) {
+			warning("RoomWizard: failed to load vkeybd pack (deploy vkeybd_small.zip to /opt/games/)");
+			delete _vkbd;
+			_vkbd = nullptr;
+			return;
+		}
+	}
+	_vkbd->show();
+	warning("RoomWizard: virtual keyboard shown");
+#endif
 }
 
 // Factory function

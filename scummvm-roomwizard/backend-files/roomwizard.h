@@ -22,10 +22,13 @@
 #ifndef BACKENDS_PLATFORM_ROOMWIZARD_H
 #define BACKENDS_PLATFORM_ROOMWIZARD_H
 
+#include "common/scummsys.h"
 #include "backends/modular-backend.h"
 
+// Forward declarations
 class RoomWizardGraphicsManager;
 class RoomWizardEventSource;
+namespace Common { class VirtualKeyboard; }
 
 class OSystem_RoomWizard : public ModularMixerBackend, public ModularGraphicsBackend {
 public:
@@ -44,13 +47,22 @@ public:
 	virtual void logMessage(LogMessageType::Type type, const char *message) override;
 
 	virtual void addSysArchivesToSearchSet(Common::SearchSet &s, int priority) override;
-	
+
+	// Virtual keyboard support (requires build with --enable-vkeybd)
+	virtual bool hasFeature(Feature f) override;
+	virtual void setFeatureState(Feature f, bool enable) override;
+	virtual bool getFeatureState(Feature f) override;
+	void showVirtualKeyboard();
+
 	// Access to event source for bezel margin queries
 	RoomWizardEventSource *getEventSource() const { return _eventSource; }
 
 private:
 	RoomWizardEventSource *_eventSource;
 	timeval _startTime;
+#ifdef ENABLE_VKEYBD
+	Common::VirtualKeyboard *_vkbd;
+#endif
 };
 
 #endif

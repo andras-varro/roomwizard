@@ -37,8 +37,12 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _gameWidth(320),
 	  _gameHeight(200),
 	  _gameOffsetX(0),
-	  _gameOffsetY(0) {
-	
+	  _gameOffsetY(0),
+	  _pendingHead(0),
+	  _pendingCount(0) {
+
+	memset(_cornerTaps, 0, sizeof(_cornerTaps));
+	memset(_pending,    0, sizeof(_pending));
 	initTouch();
 }
 
@@ -86,6 +90,91 @@ void RoomWizardEventSource::closeTouch() {
 		free(_touchInput);
 		_touchInput = nullptr;
 		_touchInitialized = false;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Gesture detection
+// ---------------------------------------------------------------------------
+
+RoomWizardEventSource::Corner RoomWizardEventSource::cornerFor(int x, int y) const {
+	const int ZONE = 80; // px from edge
+	if (y > 480 - ZONE) {
+		if (x < ZONE)       return CORNER_BL;
+		if (x > 800 - ZONE) return CORNER_BR;
+	}
+	return CORNER_COUNT; // not in a corner
+}
+
+void RoomWizardEventSource::pushEvent(const Common::Event &e) {
+	if (_pendingCount >= MAX_PENDING)
+		return;
+	int slot = (_pendingHead + _pendingCount) % MAX_PENDING;
+	_pending[slot] = e;
+	_pendingCount++;
+}
+
+void RoomWizardEventSource::pushKeyEvent(Common::KeyCode kc, byte flags) {
+	Common::Event down, up;
+	down.type = Common::EVENT_KEYDOWN;
+	down.kbd.keycode = kc;
+	down.kbd.flags   = flags;
+	down.kbd.ascii   = 0;
+	up = down;
+	up.type = Common::EVENT_KEYUP;
+	pushEvent(down);
+	pushEvent(up);
+}
+
+void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
+	Corner c = cornerFor(touchX, touchY);
+	if (c == CORNER_COUNT)
+		return;
+
+	const uint32 WINDOW = 1200; // ms for triple-tap
+	CornerTaps &ct = _cornerTaps[c];
+
+	// Expire taps older than the window
+	while (ct.count > 0) {
+		uint32 oldest = ct.timestamps[(ct.count == 3) ? 0 : 0];
+		// find actual oldest in ring (simplified: count <= 3, just check first)
+		if (now - ct.timestamps[0] > WINDOW) {
+			// shift timestamps down
+			for (int i = 0; i < ct.count - 1; i++)
+				ct.timestamps[i] = ct.timestamps[i + 1];
+			ct.count--;
+		} else {
+			break;
+		}
+	}
+
+	// Record this tap
+	if (ct.count < 3)
+		ct.timestamps[ct.count] = now;
+	else {
+		// shift and overwrite last slot
+		ct.timestamps[0] = ct.timestamps[1];
+		ct.timestamps[1] = ct.timestamps[2];
+		ct.timestamps[2] = now;
+	}
+	ct.count = (ct.count < 3) ? ct.count + 1 : 3;
+
+	// Check for triple-tap within window
+	if (ct.count == 3 && (now - ct.timestamps[0]) <= WINDOW) {
+		ct.count = 0; // reset so it doesn't fire again immediately
+		warning("Gesture: triple-tap corner %d", (int)c);
+
+		if (c == CORNER_BR) {
+			// Bottom-right: open Global Main Menu (Ctrl+F5)
+			warning("Gesture: opening GMM via Ctrl+F5");
+			pushKeyEvent(Common::KEYCODE_F5, Common::KBD_CTRL);
+		} else if (c == CORNER_BL) {
+			// Bottom-left: show virtual keyboard
+			warning("Gesture: opening virtual keyboard");
+			OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+			if (system)
+				system->showVirtualKeyboard();
+		}
 	}
 }
 
@@ -155,6 +244,14 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 }
 
 bool RoomWizardEventSource::pollEvent(Common::Event &event) {
+	// Drain any synthetic events queued by gesture detection
+	if (_pendingCount > 0) {
+		event = _pending[_pendingHead];
+		_pendingHead = (_pendingHead + 1) % MAX_PENDING;
+		_pendingCount--;
+		return true;
+	}
+
 	if (!_touchInitialized || !_touchInput) {
 		return false;
 	}
@@ -190,6 +287,17 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				_touchStartTime = currentTime;
 				_touchPhase = TOUCH_PRESSED;
 				_buttonDownSent = false;
+
+				// Check for corner gesture (triple-tap) before processing as normal touch
+				checkGestures(state.x, state.y, currentTime);
+				if (_pendingCount > 0) {
+					// Gesture fired - drain first event now, return it
+					event = _pending[_pendingHead];
+					_pendingHead = (_pendingHead + 1) % MAX_PENDING;
+					_pendingCount--;
+					_touchPhase = TOUCH_NONE; // don't generate a click for the gesture tap
+					return true;
+				}
 				
 				warning("TOUCH_NONE -> TOUCH_PRESSED: sending MOUSEMOVE at (%d,%d)", state.x, state.y);
 				
