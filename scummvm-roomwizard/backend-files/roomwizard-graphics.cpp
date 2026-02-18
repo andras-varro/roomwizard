@@ -19,9 +19,21 @@
  *
  */
 
+// Forbidden symbol exceptions for file I/O used in loadBezelMargins()
+#define FORBIDDEN_SYMBOL_EXCEPTION_FILE
+#define FORBIDDEN_SYMBOL_EXCEPTION_fopen
+#define FORBIDDEN_SYMBOL_EXCEPTION_fclose
+#define FORBIDDEN_SYMBOL_EXCEPTION_fgets
+#define FORBIDDEN_SYMBOL_EXCEPTION_sscanf
+#define FORBIDDEN_SYMBOL_EXCEPTION_fprintf
+
 #include "backends/platform/roomwizard/roomwizard-graphics.h"
+#include "backends/platform/roomwizard/roomwizard.h"
+#include "backends/platform/roomwizard/roomwizard-events.h"
 #include "common/rect.h"
 #include "common/textconsole.h"
+#include "common/system.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -44,6 +56,10 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _overlayVisible(false),
 	  _shakeXOffset(0),
 	  _shakeYOffset(0),
+	  _bezelTop(0),
+	  _bezelBottom(0),
+	  _bezelLeft(0),
+	  _bezelRight(0),
 	  _touchPointIndex(0) {
 	
 	memset(_palette, 0, sizeof(_palette));
@@ -77,6 +93,9 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 
 	_fbInitialized = true;
 	warning("RoomWizard framebuffer initialized: %dx%d", _fb->width, _fb->height);
+	
+	// Load bezel calibration (best-effort; zero margins if not present)
+	loadBezelMargins();
 }
 
 void RoomWizardGraphicsManager::closeFramebuffer() {
@@ -86,6 +105,70 @@ void RoomWizardGraphicsManager::closeFramebuffer() {
 		_fb = nullptr;
 		_fbInitialized = false;
 	}
+}
+
+void RoomWizardGraphicsManager::loadBezelMargins() {
+	// Parse /etc/touch_calibration.conf for bezel margins.
+	// File format (lines starting with # are comments):
+	//   Line 1: tl_x tl_y tr_x tr_y bl_x bl_y br_x br_y   (touch offsets)
+	//   Line 2: bezel_top bezel_bottom bezel_left bezel_right
+	_bezelTop = _bezelBottom = _bezelLeft = _bezelRight = 0;
+
+	FILE *f = fopen("/etc/touch_calibration.conf", "r");
+	if (!f) {
+		warning("RoomWizard: no calibration file - using zero bezel margins");
+		return;
+	}
+
+	char line[256];
+	int dataLines = 0;
+	while (fgets(line, sizeof(line), f)) {
+		if (line[0] == '#' || line[0] == '\n')
+			continue;
+		dataLines++;
+		if (dataLines == 2) {
+			// Second data line contains bezel margins
+			int t, b, l, r;
+			if (sscanf(line, "%d %d %d %d", &t, &b, &l, &r) == 4) {
+				_bezelTop    = t;
+				_bezelBottom = b;
+				_bezelLeft   = l;
+				_bezelRight  = r;
+				warning("RoomWizard: bezel margins loaded T=%d B=%d L=%d R=%d",
+				        _bezelTop, _bezelBottom, _bezelLeft, _bezelRight);
+			}
+			break;
+		}
+	}
+	fclose(f);
+}
+
+void RoomWizardGraphicsManager::getScalingInfo(int &scaledWidth, int &scaledHeight,
+                                                int &offsetX, int &offsetY) const {
+	// The safe display area is the framebuffer minus bezel obstructions.
+	// We scale the game to fill this area preserving aspect ratio.
+	int safeW = 800 - _bezelLeft - _bezelRight;
+	int safeH = 480 - _bezelTop  - _bezelBottom;
+
+	if (_screenWidth == 0 || _screenHeight == 0) {
+		scaledWidth  = safeW;
+		scaledHeight = safeH;
+		offsetX = _bezelLeft;
+		offsetY = _bezelTop;
+		return;
+	}
+
+	// Scale to fill safe area, maintaining aspect ratio
+	int scaleX = safeW * 256 / _screenWidth;   // fixed-point *256
+	int scaleY = safeH * 256 / _screenHeight;
+	int scale  = (scaleX < scaleY) ? scaleX : scaleY;  // use smaller to fit
+
+	scaledWidth  = (_screenWidth  * scale) / 256;
+	scaledHeight = (_screenHeight * scale) / 256;
+
+	// Center within the safe area, then offset by bezel
+	offsetX = _bezelLeft + (safeW - scaledWidth)  / 2;
+	offsetY = _bezelTop  + (safeH - scaledHeight) / 2;
 }
 
 bool RoomWizardGraphicsManager::hasFeature(OSystem::Feature f) const {
@@ -135,6 +218,16 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 	// Allocate overlay surface (same size as framebuffer for GUI)
 	_overlaySurface.create(800, 480, Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
 	
+	// Notify event source of new game resolution (needed for coordinate transform)
+	{
+		int scaledW, scaledH, offX, offY;
+		getScalingInfo(scaledW, scaledH, offX, offY);
+		OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+		if (system && system->getEventSource()) {
+			system->getEventSource()->setGameScreenSize(width, height, offX, offY);
+		}
+	}
+
 	_screenDirty = true;
 }
 
@@ -315,9 +408,9 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	if (!_fbInitialized || !_fb || !_gameSurface.getPixels())
 		return;
 
-	// Calculate centering offsets
-	int offsetX = (800 - _screenWidth) / 2;
-	int offsetY = (480 - _screenHeight) / 2;
+	// Compute bezel-aware scaled region
+	int scaledW, scaledH, offsetX, offsetY;
+	getScalingInfo(scaledW, scaledH, offsetX, offsetY);
 
 	// Apply shake offset
 	offsetX += _shakeXOffset;
@@ -326,34 +419,41 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	// Clear framebuffer to black
 	fb_clear(_fb, 0x000000);
 
-	// Blit game surface to framebuffer
-	for (uint y = 0; y < _screenHeight; y++) {
-		int fbY = offsetY + y;
+	// Scale game surface → framebuffer using nearest-neighbour
+	for (int dy = 0; dy < scaledH; dy++) {
+		int fbY = offsetY + dy;
 		if (fbY < 0 || fbY >= 480)
 			continue;
 
-		for (uint x = 0; x < _screenWidth; x++) {
-			int fbX = offsetX + x;
+		// Map destination row back to source row
+		int srcY = (dy * (int)_screenHeight) / scaledH;
+		if (srcY >= (int)_screenHeight) srcY = _screenHeight - 1;
+
+		for (int dx = 0; dx < scaledW; dx++) {
+			int fbX = offsetX + dx;
 			if (fbX < 0 || fbX >= 800)
 				continue;
 
+			int srcX = (dx * (int)_screenWidth) / scaledW;
+			if (srcX >= (int)_screenWidth) srcX = _screenWidth - 1;
+
 			uint32 color;
 			if (_screenFormat.bytesPerPixel == 1) {
-				byte index = *(const byte *)_gameSurface.getBasePtr(x, y);
+				byte index = *(const byte *)_gameSurface.getBasePtr(srcX, srcY);
 				byte r = _palette[index * 3 + 0];
 				byte g = _palette[index * 3 + 1];
 				byte b = _palette[index * 3 + 2];
-				color = (r << 16) | (g << 8) | b;  // RGB format (no alpha)
+				color = (r << 16) | (g << 8) | b;
 			} else if (_screenFormat.bytesPerPixel == 2) {
-				uint16 pixel = *(const uint16 *)_gameSurface.getBasePtr(x, y);
+				uint16 pixel = *(const uint16 *)_gameSurface.getBasePtr(srcX, srcY);
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				color = (r << 16) | (g << 8) | b;  // RGB format (no alpha)
+				color = (r << 16) | (g << 8) | b;
 			} else {
-				uint32 pixel = *(const uint32 *)_gameSurface.getBasePtr(x, y);
+				uint32 pixel = *(const uint32 *)_gameSurface.getBasePtr(srcX, srcY);
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				color = (r << 16) | (g << 8) | b;  // RGB format (no alpha)
+				color = (r << 16) | (g << 8) | b;
 			}
 
 			_fb->back_buffer[fbY * 800 + fbX] = color;
@@ -376,9 +476,9 @@ void RoomWizardGraphicsManager::drawCursor() {
 	int offsetY = 0;
 	
 	if (!_overlayVisible) {
-		// Game mode - apply centering offset
-		offsetX = (800 - _screenWidth) / 2;
-		offsetY = (480 - _screenHeight) / 2;
+		// Game mode - apply bezel-aware scaled offset
+		int scaledW, scaledH;
+		getScalingInfo(scaledW, scaledH, offsetX, offsetY);
 	}
 	// Overlay mode - no offset, cursor coordinates are already in screen space
 

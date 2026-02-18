@@ -63,8 +63,14 @@ $CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder
 echo "[11/12] Compiling Hardware Test (GUI)..."
 $CC -O2 -static hardware_test/hardware_test_gui.c build/framebuffer.o build/touch_input.o build/common.o build/ui_layout.o build/hardware.o -o build/hardware_test -lm
 
-echo "[12/12] Compiling Touch Inject (Test Utility)..."
+echo "[12/14] Compiling Touch Inject (Test Utility)..."
 $CC -O2 -static tests/touch_inject.c -o build/touch_inject
+
+echo "[13/14] Compiling Touch Calibration Utility..."
+$CC -O2 -static tests/touch_calibrate.c build/framebuffer.o build/touch_input.o build/hardware.o -o build/touch_calibrate -lm
+
+echo "[14/14] Compiling Unified Calibration Utility..."
+$CC -O2 -static tests/unified_calibrate.c build/framebuffer.o build/touch_input.o build/hardware.o -o build/unified_calibrate -lm
 
 echo ""
 echo "========================================"
@@ -74,11 +80,11 @@ echo ""
 
 # Verify binaries
 echo "Verifying ARM binaries:"
-file build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test | sed 's/^/  /'
+file build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test build/touch_calibrate | sed 's/^/  /'
 
 echo ""
 echo "File sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test | awk '{print "  " $9 ": " $5}'
+ls -lh build/snake build/tetris build/pong build/game_selector build/watchdog_feeder build/hardware_test build/touch_calibrate | awk '{print "  " $9 ": " $5}'
 echo ""
 echo "========================================"
 echo "Next Steps:"

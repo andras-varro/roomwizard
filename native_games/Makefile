@@ -19,12 +19,15 @@ COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/watchdog_feeder
+TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate
 
-.PHONY: all clean install utils
+.PHONY: all clean install utils tests
 
 all: $(BUILD_DIR) $(GAMES) $(UTILS)
 
 utils: $(BUILD_DIR) $(UTILS)
+
+tests: $(BUILD_DIR) $(TESTS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -68,12 +71,27 @@ $(BUILD_DIR)/watchdog_feeder: watchdog_feeder.c
 	@echo "Built: watchdog_feeder"
 
 # Touch test tool
-$(BUILD_DIR)/touch_test: touch_test.c $(COMMON_OBJ)
+$(BUILD_DIR)/touch_test: tests/touch_test.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: touch_test"
 
+# Touch calibration tool
+$(BUILD_DIR)/touch_calibrate: tests/touch_calibrate.c $(COMMON_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: touch_calibrate"
+
+# Touch injection tool
+$(BUILD_DIR)/touch_inject: tests/touch_inject.c
+	$(CC) $(CFLAGS) $< -o $@
+	@echo "Built: touch_inject"
+
+# Unified calibration tool
+$(BUILD_DIR)/unified_calibrate: tests/unified_calibrate.c $(COMMON_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: unified_calibrate"
+
 # Hardware test tool
-$(BUILD_DIR)/hardware_test: hardware_test.c $(BUILD_DIR)/hardware.o
+$(BUILD_DIR)/hardware_test: hardware_test/hardware_test.c $(BUILD_DIR)/hardware.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: hardware_test"
 

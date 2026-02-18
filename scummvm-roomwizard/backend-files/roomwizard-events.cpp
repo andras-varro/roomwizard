@@ -65,7 +65,17 @@ void RoomWizardEventSource::initTouch() {
 
 	// Set screen size for coordinate scaling
 	touch_set_screen_size(_touchInput, 800, 480);
-	
+
+	// Load touch/bezel calibration if available
+	if (touch_load_calibration(_touchInput, "/etc/touch_calibration.conf") == 0) {
+		touch_enable_calibration(_touchInput, true);
+		warning("RoomWizard: touch calibration loaded (bezel T=%d B=%d L=%d R=%d)",
+		        _touchInput->calib.bezel_top, _touchInput->calib.bezel_bottom,
+		        _touchInput->calib.bezel_left, _touchInput->calib.bezel_right);
+	} else {
+		warning("RoomWizard: no calibration file, using defaults");
+	}
+
 	_touchInitialized = true;
 	warning("RoomWizard touch input initialized");
 }
@@ -76,6 +86,17 @@ void RoomWizardEventSource::closeTouch() {
 		free(_touchInput);
 		_touchInput = nullptr;
 		_touchInitialized = false;
+	}
+}
+
+void RoomWizardEventSource::getBezelMargins(int &top, int &bottom, int &left, int &right) const {
+	if (_touchInitialized && _touchInput) {
+		top    = _touchInput->calib.bezel_top;
+		bottom = _touchInput->calib.bezel_bottom;
+		left   = _touchInput->calib.bezel_left;
+		right  = _touchInput->calib.bezel_right;
+	} else {
+		top = bottom = left = right = 0;
 	}
 }
 
@@ -90,7 +111,6 @@ void RoomWizardEventSource::setGameScreenSize(int width, int height, int offsetX
 
 void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &gameX, int &gameY) {
 	// Check if overlay (GUI) is visible - if so, use full screen coordinates
-	// The overlay is 800x480 and used for the ScummVM GUI
 	OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
 	if (system && system->getGraphicsManager() && 
 	    ((RoomWizardGraphicsManager *)system->getGraphicsManager())->isOverlayVisible()) {
@@ -104,18 +124,32 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 		if (gameX >= 800) gameX = 799;
 		if (gameY >= 480) gameY = 479;
 	} else {
-		// Transform from framebuffer coordinates to game coordinates
-		// Account for centering offset
-		int fbOffsetX = (800 - _gameWidth) / 2;
-		int fbOffsetY = (480 - _gameHeight) / 2;
-		
-		gameX = touchX - fbOffsetX;
-		gameY = touchY - fbOffsetY;
-		
+		// Transform from framebuffer coordinates to game coordinates using bezel-aware scaling.
+		// Reverse the mapping applied in blitGameSurfaceToFramebuffer / getScalingInfo.
+		int scaledW = _gameWidth, scaledH = _gameHeight;
+		int fbOffsetX = 0, fbOffsetY = 0;
+
+		if (system && system->getGraphicsManager()) {
+			((RoomWizardGraphicsManager *)system->getGraphicsManager())
+				->getScalingInfo(scaledW, scaledH, fbOffsetX, fbOffsetY);
+		}
+
+		// Remove framebuffer offset then scale back to game coords
+		int relX = touchX - fbOffsetX;
+		int relY = touchY - fbOffsetY;
+
+		if (scaledW > 0 && scaledH > 0) {
+			gameX = relX * _gameWidth  / scaledW;
+			gameY = relY * _gameHeight / scaledH;
+		} else {
+			gameX = relX;
+			gameY = relY;
+		}
+
 		// Clamp to game bounds
 		if (gameX < 0) gameX = 0;
 		if (gameY < 0) gameY = 0;
-		if (gameX >= _gameWidth) gameX = _gameWidth - 1;
+		if (gameX >= _gameWidth)  gameX = _gameWidth  - 1;
 		if (gameY >= _gameHeight) gameY = _gameHeight - 1;
 	}
 }

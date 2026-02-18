@@ -99,6 +99,12 @@ private:
 	Graphics::PixelFormat _screenFormat;
 	Graphics::Surface _gameSurface;
 	bool _screenDirty;
+	
+	// Bezel obstruction margins (pixels from edge)
+	int _bezelTop;
+	int _bezelBottom;
+	int _bezelLeft;
+	int _bezelRight;
 
 	// Palette for CLUT8 mode
 	byte _palette[256 * 3];
@@ -141,10 +147,14 @@ private:
 	uint32 convertColor(uint32 color, const Graphics::PixelFormat &srcFormat);
 	void copyRectToSurface(Graphics::Surface &dst, const void *buf, int pitch,
 	                       int x, int y, int w, int h, const Graphics::PixelFormat &srcFormat);
+	void loadBezelMargins();
 
 public:
 	// Touch feedback API
 	void addTouchPoint(int x, int y);
+	
+	// Scaling info for coordinate transformation
+	void getScalingInfo(int &scaledWidth, int &scaledHeight, int &offsetX, int &offsetY) const;
 };
 
 #endif

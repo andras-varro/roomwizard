@@ -21,6 +21,15 @@ scp scummvm root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 ```
 
+### Touch & Bezel Calibration
+Run once on the device (needs `unified_calibrate` from `native_games/build/`):
+```bash
+ssh root@192.168.50.73 '/opt/games/unified_calibrate'
+```
+- **Phase 1:** Tap the 4 corner crosshairs to correct touch accuracy
+- **Phase 2:** Tap `+`/`-` zones to adjust bezel margins until the on-screen rectangle matches the visible area
+- Saves to `/etc/touch_calibration.conf` — ScummVM loads it automatically on next launch
+
 ### Run
 ```bash
 ssh root@192.168.50.73
@@ -30,8 +39,10 @@ cd /opt/games
 
 ## Status
 
-✅ **WORKING** - Backend functional, cursor movement working  
-🔧 **IN PROGRESS** - Button click events need fixing
+✅ **FULLY FUNCTIONAL** - Backend complete, verified on device  
+✅ **FULL-SCREEN SCALING** - Game upscaled to fill display, aspect-ratio-preserving  
+✅ **BEZEL COMPENSATION** - Loads `/etc/touch_calibration.conf`; scales to bezel-safe area  
+✅ **COORDINATE MAPPING** - Touch coords reverse-mapped through scaled game region  
 
 ## Documentation
 
@@ -101,10 +112,4 @@ For comprehensive hardware documentation, see [`SYSTEM_ANALYSIS.md`](../SYSTEM_A
 - **CPU:** ARMv7 @ 300MHz
 - **RAM:** 256MB total (184MB available)
 
-## Current Issues
-
-1. Button clicks not working (LBUTTONDOWN/UP not generated)
-2. Touch drag not working (MOUSEMOVE during drag)
-3. Touch calibration needed (~14-27px corner error)
-
-See [`SCUMMVM_DEV.md`](SCUMMVM_DEV.md) for details.
+See [`SCUMMVM_DEV.md`](SCUMMVM_DEV.md) for complete development documentation.

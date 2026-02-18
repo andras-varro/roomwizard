@@ -44,6 +44,9 @@ public:
 	virtual void logMessage(LogMessageType::Type type, const char *message) override;
 
 	virtual void addSysArchivesToSearchSet(Common::SearchSet &s, int priority) override;
+	
+	// Access to event source for bezel margin queries
+	RoomWizardEventSource *getEventSource() const { return _eventSource; }
 
 private:
 	RoomWizardEventSource *_eventSource;

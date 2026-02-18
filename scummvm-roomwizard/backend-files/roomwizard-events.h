@@ -45,6 +45,9 @@ public:
 
 	// Set game screen dimensions for coordinate transformation
 	void setGameScreenSize(int width, int height, int offsetX, int offsetY);
+	
+	// Get bezel margins from touch calibration
+	void getBezelMargins(int &top, int &bottom, int &left, int &right) const;
 
 private:
 	TouchInput *_touchInput;
