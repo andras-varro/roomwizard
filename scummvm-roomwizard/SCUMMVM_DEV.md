@@ -4,7 +4,8 @@
 
 **Binary:** 14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
-**Last build:** 2026-02-18 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
+**Last build:** 2026-02-19 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
+**Last source edit:** 2026-02-19 — all diagnostic output silenced; `logMessage()` suppresses `kDebug` unless `ROOMWIZARD_DEBUG=1`  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -78,6 +79,8 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Overlay-transition LBUTTONUP injection | OK - fixed 2026-02-18 |
 | Ctrl+F5 releases Ctrl modifier cleanly | OK - fixed 2026-02-18 |
 | Static linking | OK |
+| Debug touch-feedback circles (fading red) | OK - gated on `ROOMWIZARD_DEBUG=1` |
+| Verbose touch-state logging | OK - gated on `ROOMWIZARD_DEBUG=1` |
 
 ---
 
@@ -131,16 +134,31 @@ bezel: T=10 B=10 L=0 R=0
 
 ---
 
+## Debug Mode
+
+Set `ROOMWIZARD_DEBUG=1` before launching to enable runtime debug features:
+
+```bash
+ssh root@192.168.50.73 'ROOMWIZARD_DEBUG=1 /opt/games/scummvm'
+```
+
+| Feature | Off (default) | On |
+|---|---|---|
+| Touch feedback circles | disabled | Fading red circle on each touch |
+| TOUCH_NONE→PRESSED log | silent | `debug()` to stdout |
+
+The flag is read once at startup (`getenv`) and cached — no runtime overhead.  
+`logMessage()` suppresses all `kDebug` output when the flag is off, so any future `debug()` call is automatically silent without needing individual gating.
+
+---
+
 ## Next Steps
 
-1. **Remove debug warning spam** — strip `warning()` log calls from event/graphics code
-   (especially the `drawCursor` flood and touch state logging)
-
-2. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
+1. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
    `watchdog_feeder` alongside ScummVM or add internal `/dev/watchdog` writes every 30 s.
    See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#1-hardware-watchdog-timer).
 
-3. **Game selector integration** — hook ScummVM launch into native game selector menu
+2. **Game selector integration** — hook ScummVM launch into native game selector menu
 
 ---
 

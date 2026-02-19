@@ -28,6 +28,7 @@
 #define FORBIDDEN_SYMBOL_EXCEPTION_time_h
 #define FORBIDDEN_SYMBOL_EXCEPTION_unistd_h
 #define FORBIDDEN_SYMBOL_EXCEPTION_write
+#define FORBIDDEN_SYMBOL_EXCEPTION_getenv
 
 #include "backends/platform/roomwizard/roomwizard.h"
 #include "backends/platform/roomwizard/roomwizard-graphics.h"
@@ -52,6 +53,21 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// Debug mode: set ROOMWIZARD_DEBUG=1 on the device to enable visual touch
+// feedback and verbose touch-state logging.
+bool rwDebugMode() {
+	static bool checked = false;
+	static bool enabled = false;
+	if (!checked) {
+		checked = true;
+		const char *v = getenv("ROOMWIZARD_DEBUG");
+		enabled = (v && v[0] != '\0' && v[0] != '0');
+		if (enabled)
+			debug("RoomWizard: debug mode enabled (ROOMWIZARD_DEBUG=%s)", v);
+	}
+	return enabled;
+}
 
 OSystem_RoomWizard::OSystem_RoomWizard()
 	: _eventSource(nullptr)
@@ -140,6 +156,8 @@ void OSystem_RoomWizard::quit() {
 }
 
 void OSystem_RoomWizard::logMessage(LogMessageType::Type type, const char *message) {
+	if (type == LogMessageType::kDebug && !rwDebugMode())
+		return;
 	FILE *output = (type == LogMessageType::kInfo || type == LogMessageType::kDebug) ? stdout : stderr;
 	fputs(message, output);
 	fflush(output);
@@ -192,7 +210,7 @@ void OSystem_RoomWizard::showVirtualKeyboard() {
 		}
 	}
 	_vkbd->show();
-	warning("RoomWizard: virtual keyboard shown");
+	debug("RoomWizard: virtual keyboard shown");
 #endif
 }
 
@@ -205,13 +223,13 @@ OSystem *OSystem_RoomWizard_create() {
 int main(int argc, char *argv[]) {
 	// Early debug - write directly to avoid any C++ issues
 	const char *msg = "RoomWizard: main() started\n";
-	write(2, msg, 28);
+	(void)write(2, msg, 28);
 	
 	// Create the backend
 	g_system = OSystem_RoomWizard_create();
 	assert(g_system);
 	
-	write(2, "RoomWizard: backend created\n", 29);
+	(void)write(2, "RoomWizard: backend created\n", 29);
 	
 	// Invoke ScummVM main
 	int res = scummvm_main(argc, argv);

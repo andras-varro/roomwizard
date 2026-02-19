@@ -58,11 +58,17 @@ public:
 	RoomWizardEventSource *getEventSource() const { return _eventSource; }
 
 private:
+
 	RoomWizardEventSource *_eventSource;
 	timeval _startTime;
 #ifdef ENABLE_VKEYBD
 	Common::VirtualKeyboard *_vkbd;
 #endif
 };
+
+// Returns true when ROOMWIZARD_DEBUG env var is set (non-empty, non-"0").
+// Checked once at first call and cached. Enables: touch-feedback circles,
+// verbose touch-state logging.
+bool rwDebugMode();
 
 #endif

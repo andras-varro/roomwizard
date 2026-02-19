@@ -75,15 +75,15 @@ void RoomWizardEventSource::initTouch() {
 	// Load touch/bezel calibration if available
 	if (touch_load_calibration(_touchInput, "/etc/touch_calibration.conf") == 0) {
 		touch_enable_calibration(_touchInput, true);
-		warning("RoomWizard: touch calibration loaded (bezel T=%d B=%d L=%d R=%d)",
-		        _touchInput->calib.bezel_top, _touchInput->calib.bezel_bottom,
-		        _touchInput->calib.bezel_left, _touchInput->calib.bezel_right);
+		debug("RoomWizard: touch calibration loaded (bezel T=%d B=%d L=%d R=%d)",
+		      _touchInput->calib.bezel_top, _touchInput->calib.bezel_bottom,
+		      _touchInput->calib.bezel_left, _touchInput->calib.bezel_right);
 	} else {
-		warning("RoomWizard: no calibration file, using defaults");
+		debug("RoomWizard: no calibration file, using defaults");
 	}
 
 	_touchInitialized = true;
-	warning("RoomWizard touch input initialized");
+	debug("RoomWizard touch input initialized");
 }
 
 void RoomWizardEventSource::closeTouch() {
@@ -138,7 +138,6 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 
 	// Expire taps older than the window
 	while (ct.count > 0) {
-		uint32 oldest = ct.timestamps[(ct.count == 3) ? 0 : 0];
 		// find actual oldest in ring (simplified: count <= 3, just check first)
 		if (now - ct.timestamps[0] > WINDOW) {
 			// shift timestamps down
@@ -165,15 +164,11 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 	if (ct.count == 3 && (now - ct.timestamps[0]) <= WINDOW) {
 		ct.count = 0; // reset so it doesn't fire again immediately
 		_waitForRelease = true; // block touch input until finger lifts to avoid phantom clicks
-		warning("Gesture: triple-tap corner %d", (int)c);
+		debug("Gesture: triple-tap corner %d", (int)c);
 
 		if (c == CORNER_BR) {
 			// Bottom-right: open Global Main Menu (Ctrl+F5)
-			// Send: LCTRL down, F5 down, F5 up, LCTRL up
-			// Sending only F5+KBD_CTRL flag leaves Ctrl modifier stuck in
-			// DefaultEventManager because it tracks modifiers via explicit
-			// KEYDOWN/KEYUP on the modifier key itself.
-			warning("Gesture: opening GMM via Ctrl+F5");
+			debug("Gesture: opening GMM via Ctrl+F5");
 			Common::Event ctrlDown, f5Down, f5Up, ctrlUp;
 			ctrlDown.type        = Common::EVENT_KEYDOWN;
 			ctrlDown.kbd.keycode = Common::KEYCODE_LCTRL;
@@ -194,7 +189,7 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 			pushEvent(ctrlUp);
 		} else if (c == CORNER_BL) {
 			// Bottom-left: show virtual keyboard
-			warning("Gesture: opening virtual keyboard");
+			debug("Gesture: opening virtual keyboard");
 			OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
 			if (system)
 				system->showVirtualKeyboard();
@@ -284,7 +279,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 	}
 
 	// Poll touch input (non-blocking) - updates internal state
-	int poll_result = touch_poll(_touchInput);
+	touch_poll(_touchInput);
 	TouchState state = touch_get_state(_touchInput);
 
 	// After a gesture or context switch, wait for the finger to lift before
@@ -293,7 +288,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 		if (state.released || (!state.pressed && !state.held)) {
 			_waitForRelease = false;
 			_touchPhase = TOUCH_NONE;
-			warning("RoomWizard: touch lockout cleared, input re-enabled");
+			debug("RoomWizard: touch lockout cleared, input re-enabled");
 		}
 		return false;
 	}
@@ -309,7 +304,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 			((RoomWizardGraphicsManager *)sysChk->getGraphicsManager())->isOverlayVisible());
 		if (overlayNow != _prevOverlayVisible) {
 			_prevOverlayVisible = overlayNow;
-			warning("RoomWizard: overlay transition -> %s", overlayNow ? "shown" : "hidden");
+			debug("RoomWizard: overlay transition -> %s", overlayNow ? "shown" : "hidden");
 			if (_touchPhase == TOUCH_HELD) {
 				// Inject LBUTTONUP to cleanly close the in-flight touch
 				_touchPhase = TOUCH_NONE;
@@ -319,7 +314,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				event.type = Common::EVENT_LBUTTONUP;
 				event.mouse.x = gameX;
 				event.mouse.y = gameY;
-				warning("RoomWizard: overlay transition LBUTTONUP injected at (%d,%d)", gameX, gameY);
+				debug("RoomWizard: overlay transition LBUTTONUP injected at (%d,%d)", gameX, gameY);
 				return true;
 			} else if (_touchPhase == TOUCH_PRESSED) {
 				// MOUSEMOVE sent but no LBUTTONDOWN yet — reset cleanly
@@ -330,16 +325,18 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 	}
 	uint32 currentTime = g_system->getMillis();
 	
-	// Debug: Log touch state changes
-	static bool lastPressed = false;
-	static bool lastHeld = false;
-	static bool lastReleased = false;
-	if (state.pressed != lastPressed || state.held != lastHeld || state.released != lastReleased) {
-		warning("Touch state: pressed=%d held=%d released=%d phase=%d", 
-		        state.pressed, state.held, state.released, _touchPhase);
-		lastPressed = state.pressed;
-		lastHeld = state.held;
-		lastReleased = state.released;
+	// Log touch state changes only in debug mode
+	if (rwDebugMode()) {
+		static bool lastPressed = false;
+		static bool lastHeld = false;
+		static bool lastReleased = false;
+		if (state.pressed != lastPressed || state.held != lastHeld || state.released != lastReleased) {
+			debug("Touch state: pressed=%d held=%d released=%d phase=%d",
+			      state.pressed, state.held, state.released, _touchPhase);
+			lastPressed = state.pressed;
+			lastHeld = state.held;
+			lastReleased = state.released;
+		}
 	}
 	
 	// State machine: Process touch events in proper order
@@ -377,12 +374,12 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 					return false;
 				}
 				
-				warning("TOUCH_NONE -> TOUCH_PRESSED: sending MOUSEMOVE at (%d,%d)", state.x, state.y);
-				
-				// Add touch point for visual feedback
-				OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
-				if (system && system->getGraphicsManager()) {
-					((RoomWizardGraphicsManager *)system->getGraphicsManager())->addTouchPoint(state.x, state.y);
+				if (rwDebugMode()) {
+					debug("TOUCH_NONE -> TOUCH_PRESSED: sending MOUSEMOVE at (%d,%d)", state.x, state.y);
+					// Add touch point for visual feedback
+					OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+					if (system && system->getGraphicsManager())
+						((RoomWizardGraphicsManager *)system->getGraphicsManager())->addTouchPoint(state.x, state.y);
 				}
 				
 				// Send MOUSEMOVE first
@@ -406,7 +403,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				int gameX, gameY;
 				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
 				
-				warning("TOUCH_PRESSED -> TOUCH_HELD: sending LBUTTONDOWN at (%d,%d)", gameX, gameY);
+				debug("TOUCH_PRESSED -> TOUCH_HELD: sending LBUTTONDOWN at (%d,%d)", gameX, gameY);
 				
 				event.type = Common::EVENT_LBUTTONDOWN;
 				event.mouse.x = gameX;
@@ -422,7 +419,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				int gameX, gameY;
 				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
 				
-				warning("TOUCH_PRESSED: quick tap at (%d,%d) - sending LBUTTONDOWN+UP", gameX, gameY);
+				debug("TOUCH_PRESSED: quick tap at (%d,%d) - sending LBUTTONDOWN+UP", gameX, gameY);
 				
 				// Queue LBUTTONUP so it follows on the next pollEvent call
 				Common::Event upEvent;
@@ -447,7 +444,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				uint32 touchDuration = currentTime - _touchStartTime;
 				_touchPhase = TOUCH_NONE;
 				
-				warning("TOUCH_HELD -> TOUCH_NONE: sending LBUTTONUP (duration=%dms)", touchDuration);
+				debug("TOUCH_HELD -> TOUCH_NONE: sending LBUTTONUP (duration=%dms)", touchDuration);
 				
 				int gameX, gameY;
 				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);

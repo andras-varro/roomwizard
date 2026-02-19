@@ -92,7 +92,7 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 	}
 
 	_fbInitialized = true;
-	warning("RoomWizard framebuffer initialized: %dx%d", _fb->width, _fb->height);
+	debug("RoomWizard framebuffer initialized: %dx%d", _fb->width, _fb->height);
 	
 	// Load bezel calibration (best-effort; zero margins if not present)
 	loadBezelMargins();
@@ -116,7 +116,7 @@ void RoomWizardGraphicsManager::loadBezelMargins() {
 
 	FILE *f = fopen("/etc/touch_calibration.conf", "r");
 	if (!f) {
-		warning("RoomWizard: no calibration file - using zero bezel margins");
+		debug("RoomWizard: no calibration file - using zero bezel margins");
 		return;
 	}
 
@@ -134,8 +134,8 @@ void RoomWizardGraphicsManager::loadBezelMargins() {
 				_bezelBottom = b;
 				_bezelLeft   = l;
 				_bezelRight  = r;
-				warning("RoomWizard: bezel margins loaded T=%d B=%d L=%d R=%d",
-				        _bezelTop, _bezelBottom, _bezelLeft, _bezelRight);
+				debug("RoomWizard: bezel margins loaded T=%d B=%d L=%d R=%d",
+				      _bezelTop, _bezelBottom, _bezelLeft, _bezelRight);
 			}
 			break;
 		}
@@ -462,12 +462,6 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 }
 
 void RoomWizardGraphicsManager::drawCursor() {
-	static int draw_counter = 0;
-	if (++draw_counter % 30 == 0) {
-		warning("drawCursor called: visible=%d, hasPixels=%d, hasFB=%d, cursorPos=(%d,%d), overlayVisible=%d", 
-		        _cursorVisible, _cursorSurface.getPixels() != nullptr, _fb != nullptr, _cursorX, _cursorY, _overlayVisible);
-	}
-	
 	if (!_cursorVisible || !_cursorSurface.getPixels() || !_fb)
 		return;
 
@@ -550,8 +544,9 @@ void RoomWizardGraphicsManager::updateScreen() {
 		_screenDirty = false;
 	}
 
-	// Draw touch feedback
-	drawTouchFeedback();
+	// Draw touch feedback (debug mode only: set ROOMWIZARD_DEBUG=1)
+	if (rwDebugMode())
+		drawTouchFeedback();
 
 	// Draw cursor on top
 	drawCursor();
@@ -627,7 +622,6 @@ bool RoomWizardGraphicsManager::showMouse(bool visible) {
 void RoomWizardGraphicsManager::warpMouse(int x, int y) {
 	_cursorX = x;
 	_cursorY = y;
-	warning("warpMouse called: cursor moved to (%d, %d)", x, y);
 }
 
 void RoomWizardGraphicsManager::setMouseCursor(const void *buf, uint w, uint h, 
@@ -666,8 +660,6 @@ void RoomWizardGraphicsManager::addTouchPoint(int x, int y) {
 	_touchPoints[_touchPointIndex].active = true;
 	
 	_touchPointIndex = (_touchPointIndex + 1) % MAX_TOUCH_POINTS;
-	
-	warning("Touch point added at (%d, %d)", x, y);
 }
 
 void RoomWizardGraphicsManager::drawTouchFeedback() {
@@ -704,10 +696,7 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 					int py = cy + dy;
 					
 					if (px >= 0 && px < 800 && py >= 0 && py < 480) {
-						// Red circle with alpha
-						uint32 color = (alpha << 24) | (255 << 16) | (0 << 8) | 0;
-						
-						// Blend with existing pixel
+						// Blend red circle with existing pixel
 						uint32 existing = _fb->back_buffer[py * 800 + px];
 						byte er = (existing >> 16) & 0xFF;
 						byte eg = (existing >> 8) & 0xFF;
