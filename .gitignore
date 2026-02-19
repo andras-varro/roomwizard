@@ -3,6 +3,9 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# Upstream ScummVM asset used as input to make_vkeybd_scaled.py — not owned by this repo
+scummvm-roomwizard/vkeybd_small_source.zip
+
 # dotenv files
 .env
 
