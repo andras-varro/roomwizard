@@ -38,6 +38,8 @@
 #include "backends/mixer/null/null-mixer.h"
 #include "backends/mutex/null/null-mutex.h"
 #include "backends/fs/posix/posix-fs-factory.h"
+#include "common/archive.h"
+#include "common/fs.h"
 #include "base/main.h"
 #include "common/scummsys.h"
 #include "common/config-manager.h"
@@ -88,6 +90,17 @@ void OSystem_RoomWizard::initBackend() {
 	_mixerManager = new NullMixerManager();
 	_mixerManager->init();
 	
+	// Register /opt/games as extrapath so vkeybd_small.zip and other data
+	// files are discoverable via loadKeyboardPack (which checks extrapath
+	// before SearchMan). Also add to SearchMan as a fallback.
+	if (!ConfMan.hasKey("extrapath"))
+		ConfMan.set("extrapath", "/opt/games");
+	{
+		Common::FSNode dataDir("/opt/games");
+		if (dataDir.isDirectory())
+			SearchMan.addDirectory(dataDir.getPath(), dataDir);
+	}
+
 	// Call parent init
 	ModularGraphicsBackend::initBackend();
 	
