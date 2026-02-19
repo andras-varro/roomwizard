@@ -1,6 +1,6 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING — gesture nav + quick-tap fix deployed 2026-02-18
+## Status: ✅ WORKING — VKB overlay + scaled keyboard + Enter gesture deployed 2026-02-18
 
 **Binary:** 14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
@@ -23,8 +23,10 @@ arm-linux-gnueabihf-strip scummvm
 scp scummvm root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 
-# Only needed once:
-scp backends/vkeybd/packs/vkeybd_small.zip root@192.168.50.73:/opt/games/
+# Only needed once (deploy scaled keyboard pack):
+scp ../scummvm-roomwizard/vkeybd_roomwizard.zip root@192.168.50.73:/opt/games/
+# To regenerate vkeybd_roomwizard.zip from upstream source:
+# python3 ../scummvm-roomwizard/make_vkeybd_scaled.py vkeybd_small_source.zip ../scummvm-roomwizard/vkeybd_roomwizard.zip 2
 ```
 
 Sync backend source to version control after editing:
@@ -67,10 +69,14 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Long-press right-click (500 ms) | OK |
 | Quick-tap (press+release same poll cycle) | OK - fixed 2026-02-18 |
 | Triple-tap bottom-right -> Global Main Menu (Ctrl+F5) | OK - confirmed |
-| Triple-tap bottom-left -> Virtual Keyboard | Opens - layout hit-areas misaligned |
+| Triple-tap bottom-left -> Virtual Keyboard | OK - 2x scaled pack, overlay composited |
+| Triple-tap top-right -> Enter key | OK |
+| VKB renders over game (not replacing it) | OK - fixed 2026-02-18 |
+| VKB hit-areas match display size | OK - `vkeybd_roomwizard.zip` at 640x480 |
 | Post-gesture _waitForRelease lockout | OK |
 | Corner-zone tap suppression (taps 1+2 of triple-tap) | OK - fixed 2026-02-18 |
-| Overlay-transition LBUTTONUP injection | OK - fixed 2026-02-18 (needs test) |
+| Overlay-transition LBUTTONUP injection | OK - fixed 2026-02-18 |
+| Ctrl+F5 releases Ctrl modifier cleanly | OK - fixed 2026-02-18 |
 | Static linking | OK |
 
 ---
@@ -81,6 +87,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 |---|---|---|
 | Triple-tap | Bottom-right (x>720, y>400) | Global Main Menu (Ctrl+F5) |
 | Triple-tap | Bottom-left (x<80, y>400) | Virtual Keyboard |
+| Triple-tap | Top-right (x>720, y<80) | Enter key (dismiss "Press ENTER" prompts) |
 
 **Corner zones are gesture-only** — ALL taps in the 80px corner areas are suppressed from
 the game. Taps 1 and 2 of a triple-tap are silently consumed; tap 3 fires the gesture.
@@ -126,25 +133,14 @@ bezel: T=10 B=10 L=0 R=0
 
 ## Next Steps
 
-1. **Test overlay-transition fix in LSL5** (just deployed)
-   - Triple-tap bottom-right -> GMM opens -> dismiss GMM -> tap Larry
-   - Larry should walk normally; log should show "overlay transition" + "LBUTTONUP injected"
+1. **Remove debug warning spam** — strip `warning()` log calls from event/graphics code
+   (especially the `drawCursor` flood and touch state logging)
 
-2. **Test corner-tap suppression** — triple-tap should not move Larry to corner beforehand
-
-3. **Virtual keyboard layout fix** — `vkeybd_small` is a 320x240 pixel image. The overlay
-   runs at 800x480. The VKB GUI places hit-map coordinates at 1:1 overlay pixels, so the
-   hit areas occupy only the top-left ~40% of the rendered keyboard. Need either:
-   - A custom `vkeybd_roomwizard` pack at 800x460 resolution with matching XML hit-map, or
-   - Patch `VirtualKeyboardGUI` to scale hit coordinates by (overlayW/imageW, overlayH/imageH)
-
-3. **Remove debug warning spam** — strip `warning()` log calls from event/graphics code
-
-4. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
+2. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
    `watchdog_feeder` alongside ScummVM or add internal `/dev/watchdog` writes every 30 s.
    See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#1-hardware-watchdog-timer).
 
-5. **Game selector integration** — hook ScummVM launch into native game selector menu
+3. **Game selector integration** — hook ScummVM launch into native game selector menu
 
 ---
 
@@ -194,8 +190,8 @@ Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 
 - No audio (NullMixerManager)
 - Single-touch only; right-click = long-press 500 ms
-- VKB hit-areas misaligned at 800x480 overlay (see Next Steps #2)
 - Software rendering only
+- GMM overlay: true-black UI pixels show game bleed-through (negligible in practice)
 
 ## Supported Engines
 

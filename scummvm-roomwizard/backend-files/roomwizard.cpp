@@ -180,9 +180,12 @@ void OSystem_RoomWizard::showVirtualKeyboard() {
 #ifdef ENABLE_VKEYBD
 	if (!_vkbd) {
 		_vkbd = new Common::VirtualKeyboard();
-		if (!_vkbd->loadKeyboardPack("vkeybd_small") &&
+		// vkeybd_roomwizard is a 2x-scaled (640x480) version of vkeybd_small,
+		// sized for the RoomWizard 800x480 display.
+		if (!_vkbd->loadKeyboardPack("vkeybd_roomwizard") &&
+		    !_vkbd->loadKeyboardPack("vkeybd_small") &&
 		    !_vkbd->loadKeyboardPack("vkeybd_default")) {
-			warning("RoomWizard: failed to load vkeybd pack (deploy vkeybd_small.zip to /opt/games/)");
+			warning("RoomWizard: failed to load vkeybd pack (deploy vkeybd_roomwizard.zip to /opt/games/)");
 			delete _vkbd;
 			_vkbd = nullptr;
 			return;

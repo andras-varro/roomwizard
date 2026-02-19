@@ -526,14 +526,23 @@ void RoomWizardGraphicsManager::updateScreen() {
 		return;
 
 	if (_overlayVisible) {
-		// Blit overlay to framebuffer
+		// Always draw the game surface first as background so the overlay
+		// (e.g. virtual keyboard) appears on top of the game rather than
+		// replacing it.
+		blitGameSurfaceToFramebuffer();
+		_screenDirty = false;
+
+		// Composite overlay on top: treat 0x0000 (cleared/black) pixels as
+		// transparent so only the actual VKB bitmap is visible.
 		for (int y = 0; y < 480; y++) {
 			for (int x = 0; x < 800; x++) {
 				uint16 pixel = *(const uint16 *)_overlaySurface.getBasePtr(x, y);
+				if (pixel == 0)
+					continue; // transparent – keep game pixel underneath
 				byte r = ((pixel >> 11) & 0x1F) << 3;
 				byte g = ((pixel >> 5) & 0x3F) << 2;
 				byte b = (pixel & 0x1F) << 3;
-				_fb->back_buffer[y * 800 + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;  // Add alpha channel
+				_fb->back_buffer[y * 800 + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
 			}
 		}
 	} else if (_screenDirty) {
