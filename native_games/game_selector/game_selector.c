@@ -207,6 +207,16 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
     
     printf("Launching game: %s\n", selector->games[game_index].name);
     
+    // Check for a <name>.noargs marker: if present, launch without device paths.
+    // This allows non-native executables (e.g. ScummVM) that open devices
+    // themselves to be launched cleanly without unexpected arguments.
+    char noargs_path[600];
+    snprintf(noargs_path, sizeof(noargs_path), "%s/%s.noargs",
+             GAME_DIR, selector->games[game_index].name);
+    struct stat noargs_st;
+    int use_no_args = (stat(noargs_path, &noargs_st) == 0);
+    printf("  .noargs marker %s: %s\n", noargs_path, use_no_args ? "found" : "not found");
+    
     // Clear screen before launching
     fb_clear(&selector->fb, COLOR_BLACK);
     
@@ -215,9 +225,13 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
     
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process - execute game with device paths
-        execl(selector->games[game_index].path, selector->games[game_index].name,
-              fb_dev, touch_dev, NULL);
+        // Child process - execute game, optionally with device paths
+        if (use_no_args) {
+            execl(selector->games[game_index].path, selector->games[game_index].name, NULL);
+        } else {
+            execl(selector->games[game_index].path, selector->games[game_index].name,
+                  fb_dev, touch_dev, NULL);
+        }
         perror("Failed to execute game");
         exit(1);
     } else if (pid > 0) {

@@ -1,11 +1,11 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING — overlay transparency fix deployed 2026-02-19
+## Status: ✅ WORKING — game selector integration deployed 2026-02-19
 
 **Binary:** 14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-19 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-19 — overlay clear-key changed from `0x0000` (black) to `0xF81F` (magenta); fixes opaque GMM background and VKB text input field  
+**Last source edit:** 2026-02-19 — overlay clear-key `0xF81F`; game_selector `.noargs` support; scummvm.noargs deployed  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -28,6 +28,15 @@ ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 scp ../scummvm-roomwizard/vkeybd_roomwizard.zip root@192.168.50.73:/opt/games/
 # To regenerate vkeybd_roomwizard.zip from upstream source:
 # python3 ../scummvm-roomwizard/make_vkeybd_scaled.py vkeybd_small_source.zip ../scummvm-roomwizard/vkeybd_roomwizard.zip 2
+
+# Only needed once (or after game_selector changes) - run from native_games/:
+arm-linux-gnueabihf-gcc -O2 -static -I. common/framebuffer.c common/touch_input.c \
+  common/hardware.c common/common.c common/ui_layout.c game_selector/game_selector.c \
+  -o build/game_selector -lm
+scp build/game_selector root@192.168.50.73:/opt/games/
+ssh root@192.168.50.73 'chmod +x /opt/games/game_selector && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs'
+# scummvm.noargs = non-executable marker; game_selector detects it and launches scummvm
+# without the fb_dev/touch_dev args that native games expect.
 ```
 
 Sync backend source to version control after editing:
@@ -83,6 +92,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Verbose touch-state logging | OK - gated on `ROOMWIZARD_DEBUG=1` |
 | Ctrl+F5 GMM opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
 | VKB text input field opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
+| Game selector integration | OK - 2026-02-19; scummvm.noargs suppresses device args |
 
 ---
 
@@ -159,8 +169,6 @@ The flag is read once at startup (`getenv`) and cached — no runtime overhead.
 1. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
    `watchdog_feeder` alongside ScummVM or add internal `/dev/watchdog` writes every 30 s.
    See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#1-hardware-watchdog-timer).
-
-2. **Game selector integration** — hook ScummVM launch into native game selector menu
 
 ---
 
