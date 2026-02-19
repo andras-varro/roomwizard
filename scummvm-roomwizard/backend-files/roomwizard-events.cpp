@@ -31,6 +31,8 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _touchInitialized(false),
 	  _touchPhase(TOUCH_NONE),
 	  _buttonDownSent(false),
+	  _waitForRelease(false),
+	  _prevOverlayVisible(false),
 	  _lastTouchX(0),
 	  _lastTouchY(0),
 	  _touchStartTime(0),
@@ -162,12 +164,34 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 	// Check for triple-tap within window
 	if (ct.count == 3 && (now - ct.timestamps[0]) <= WINDOW) {
 		ct.count = 0; // reset so it doesn't fire again immediately
+		_waitForRelease = true; // block touch input until finger lifts to avoid phantom clicks
 		warning("Gesture: triple-tap corner %d", (int)c);
 
 		if (c == CORNER_BR) {
 			// Bottom-right: open Global Main Menu (Ctrl+F5)
+			// Send: LCTRL down, F5 down, F5 up, LCTRL up
+			// Sending only F5+KBD_CTRL flag leaves Ctrl modifier stuck in
+			// DefaultEventManager because it tracks modifiers via explicit
+			// KEYDOWN/KEYUP on the modifier key itself.
 			warning("Gesture: opening GMM via Ctrl+F5");
-			pushKeyEvent(Common::KEYCODE_F5, Common::KBD_CTRL);
+			Common::Event ctrlDown, f5Down, f5Up, ctrlUp;
+			ctrlDown.type        = Common::EVENT_KEYDOWN;
+			ctrlDown.kbd.keycode = Common::KEYCODE_LCTRL;
+			ctrlDown.kbd.flags   = Common::KBD_CTRL;
+			ctrlDown.kbd.ascii   = 0;
+			f5Down.type          = Common::EVENT_KEYDOWN;
+			f5Down.kbd.keycode   = Common::KEYCODE_F5;
+			f5Down.kbd.flags     = Common::KBD_CTRL;
+			f5Down.kbd.ascii     = 0;
+			f5Up = f5Down;
+			f5Up.type            = Common::EVENT_KEYUP;
+			ctrlUp = ctrlDown;
+			ctrlUp.type          = Common::EVENT_KEYUP;
+			ctrlUp.kbd.flags     = 0;
+			pushEvent(ctrlDown);
+			pushEvent(f5Down);
+			pushEvent(f5Up);
+			pushEvent(ctrlUp);
 		} else if (c == CORNER_BL) {
 			// Bottom-left: show virtual keyboard
 			warning("Gesture: opening virtual keyboard");
@@ -246,6 +270,9 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 	// Drain any synthetic events queued by gesture detection
 	if (_pendingCount > 0) {
+		// While draining, keep polling hardware so we can detect the release
+		if (_touchInitialized && _touchInput)
+			touch_poll(_touchInput);
 		event = _pending[_pendingHead];
 		_pendingHead = (_pendingHead + 1) % MAX_PENDING;
 		_pendingCount--;
@@ -259,6 +286,48 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 	// Poll touch input (non-blocking) - updates internal state
 	int poll_result = touch_poll(_touchInput);
 	TouchState state = touch_get_state(_touchInput);
+
+	// After a gesture or context switch, wait for the finger to lift before
+	// accepting new touches — prevents phantom clicks in the new context.
+	if (_waitForRelease) {
+		if (state.released || (!state.pressed && !state.held)) {
+			_waitForRelease = false;
+			_touchPhase = TOUCH_NONE;
+			warning("RoomWizard: touch lockout cleared, input re-enabled");
+		}
+		return false;
+	}
+
+	// Detect overlay visibility transition (GMM opens or closes).
+	// An in-flight touch that started in one context (overlay/game) must be
+	// terminated before the other context takes over, otherwise SCI receives
+	// LBUTTONDOWN in overlay coords and LBUTTONUP in game coords, leaving
+	// Larry in a permanent walking state with no LBUTTONUP to stop him.
+	{
+		OSystem_RoomWizard *sysChk = dynamic_cast<OSystem_RoomWizard *>(g_system);
+		bool overlayNow = (sysChk && sysChk->getGraphicsManager() &&
+			((RoomWizardGraphicsManager *)sysChk->getGraphicsManager())->isOverlayVisible());
+		if (overlayNow != _prevOverlayVisible) {
+			_prevOverlayVisible = overlayNow;
+			warning("RoomWizard: overlay transition -> %s", overlayNow ? "shown" : "hidden");
+			if (_touchPhase == TOUCH_HELD) {
+				// Inject LBUTTONUP to cleanly close the in-flight touch
+				_touchPhase = TOUCH_NONE;
+				_waitForRelease = true; // eat the finger still on screen
+				int gameX, gameY;
+				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
+				event.type = Common::EVENT_LBUTTONUP;
+				event.mouse.x = gameX;
+				event.mouse.y = gameY;
+				warning("RoomWizard: overlay transition LBUTTONUP injected at (%d,%d)", gameX, gameY);
+				return true;
+			} else if (_touchPhase == TOUCH_PRESSED) {
+				// MOUSEMOVE sent but no LBUTTONDOWN yet — reset cleanly
+				_touchPhase = TOUCH_NONE;
+				_waitForRelease = true;
+			}
+		}
+	}
 	uint32 currentTime = g_system->getMillis();
 	
 	// Debug: Log touch state changes
@@ -298,6 +367,15 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 					_touchPhase = TOUCH_NONE; // don't generate a click for the gesture tap
 					return true;
 				}
+
+				// Corner zones are gesture-only. Suppress ALL taps in them
+				// (not just the firing tap) so partial triple-taps don't move
+				// the character to the corner.
+				if (cornerFor(state.x, state.y) != CORNER_COUNT) {
+					_waitForRelease = true;
+					_touchPhase = TOUCH_NONE;
+					return false;
+				}
 				
 				warning("TOUCH_NONE -> TOUCH_PRESSED: sending MOUSEMOVE at (%d,%d)", state.x, state.y);
 				
@@ -336,10 +414,29 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				// NOTE: Do NOT call warpMouse() - it purges the event queue!
 				return true;
 			}
-			// If touch released before we sent button down, skip to NONE
-			if (state.released || !state.held) {
-				warning("TOUCH_PRESSED -> TOUCH_NONE: touch released too fast");
+			// Quick tap: press and release both landed in same touch_poll call.
+			// touch_poll resets pressed/released each call, so next poll shows
+			// held=false, released=false — we'd silently drop the tap.
+			// Fix: send LBUTTONDOWN now and queue LBUTTONUP so it is a full click.
+			if (!_buttonDownSent && (state.released || !state.held)) {
+				int gameX, gameY;
+				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
+				
+				warning("TOUCH_PRESSED: quick tap at (%d,%d) - sending LBUTTONDOWN+UP", gameX, gameY);
+				
+				// Queue LBUTTONUP so it follows on the next pollEvent call
+				Common::Event upEvent;
+				upEvent.type = Common::EVENT_LBUTTONUP;
+				upEvent.mouse.x = gameX;
+				upEvent.mouse.y = gameY;
+				pushEvent(upEvent);
+				
+				_buttonDownSent = true;
 				_touchPhase = TOUCH_NONE;
+				event.type = Common::EVENT_LBUTTONDOWN;
+				event.mouse.x = gameX;
+				event.mouse.y = gameY;
+				return true;
 			}
 			break;
 			

@@ -62,6 +62,8 @@ private:
 	
 	TouchPhase _touchPhase;
 	bool _buttonDownSent;
+	bool _waitForRelease;    // set after gesture or context switch; blocks input until finger lifts
+	bool _prevOverlayVisible; // tracks overlay state to detect GMM open/close transitions
 	int _lastTouchX;
 	int _lastTouchY;
 	uint32 _touchStartTime;
@@ -89,7 +91,7 @@ private:
 	CornerTaps _cornerTaps[CORNER_COUNT];
 
 	// Pending synthetic events queued by gesture detection
-	static const int MAX_PENDING = 4;
+	static const int MAX_PENDING = 8;
 	Common::Event _pending[MAX_PENDING];
 	int           _pendingHead;
 	int           _pendingCount;
