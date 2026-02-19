@@ -52,21 +52,31 @@ int scan_games(GameSelector *selector) {
     }
     
     while ((entry = readdir(dir)) != NULL && selector->game_count < MAX_GAMES) {
+        // Skip hidden-filesystem entries and the selector itself
         if (entry->d_name[0] == '.') continue;
         if (strcmp(entry->d_name, "game_selector") == 0) continue;
-        if (strcmp(entry->d_name, "watchdog_feeder") == 0) continue;
-        if (strcmp(entry->d_name, "touch_test") == 0) continue;
-        if (strcmp(entry->d_name, "touch_debug") == 0) continue;
-        
+
         char full_path[512];
         snprintf(full_path, sizeof(full_path), "%s/%s", GAME_DIR, entry->d_name);
-        
-        if (stat(full_path, &st) == 0 && (st.st_mode & S_IXUSR)) {
-            strncpy(selector->games[selector->game_count].name, entry->d_name, 255);
-            strncpy(selector->games[selector->game_count].path, full_path, 511);
-            printf("Added game: %s\n", entry->d_name);
-            selector->game_count++;
+
+        // Skip non-executables (covers .noargs, .hidden, data files, etc.)
+        if (stat(full_path, &st) != 0 || !(st.st_mode & S_IXUSR))
+            continue;
+
+        // Skip entries with a <name>.hidden marker file alongside the binary.
+        // Create the marker: touch /opt/games/<name>.hidden && chmod 644 /opt/games/<name>.hidden
+        char hidden_path[600];
+        snprintf(hidden_path, sizeof(hidden_path), "%s/%s.hidden", GAME_DIR, entry->d_name);
+        struct stat hidden_st;
+        if (stat(hidden_path, &hidden_st) == 0) {
+            printf("Skipping hidden entry: %s\n", entry->d_name);
+            continue;
         }
+
+        strncpy(selector->games[selector->game_count].name, entry->d_name, 255);
+        strncpy(selector->games[selector->game_count].path, full_path, 511);
+        printf("Added game: %s\n", entry->d_name);
+        selector->game_count++;
     }
     
     closedir(dir);

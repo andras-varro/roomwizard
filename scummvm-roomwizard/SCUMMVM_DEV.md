@@ -5,7 +5,7 @@
 **Binary:** 14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-19 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-19 — overlay clear-key `0xF81F`; game_selector `.noargs` support; scummvm.noargs deployed  
+**Last source edit:** 2026-02-19 — overlay clear-key `0xF81F`; game_selector `.noargs`/`.hidden` markers; dev tools hidden on device  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -35,8 +35,12 @@ arm-linux-gnueabihf-gcc -O2 -static -I. common/framebuffer.c common/touch_input.
   -o build/game_selector -lm
 scp build/game_selector root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/game_selector && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs'
-# scummvm.noargs = non-executable marker; game_selector detects it and launches scummvm
-# without the fb_dev/touch_dev args that native games expect.
+# Marker files control game_selector behaviour (non-executable so they are never listed):
+#   <name>.noargs  — launch without fb_dev/touch_dev args (ScummVM opens devices itself)
+#   <name>.hidden  — hide entirely from the games list (dev tools, utilities)
+# Hidden on device: watchdog_feeder touch_test touch_debug touch_inject
+#                   touch_calibrate unified_calibrate pressure_test
+# hardware_test is visible (useful diagnostics)
 ```
 
 Sync backend source to version control after editing:
@@ -71,28 +75,28 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Feature | Status |
 |---|---|
 | ScummVM launches, GUI renders | OK |
-| Framebuffer 800x480 @ 32bpp | OK |
-| Bezel-aware full-screen scaling | OK - verified on device |
-| Touch calibration file load | OK - /etc/touch_calibration.conf |
+| Framebuffer 800×480 @ 32bpp | OK |
+| Bezel-aware full-screen scaling | OK |
+| Touch calibration (`/etc/touch_calibration.conf`) | OK |
 | Button clicks (LBUTTONDOWN/UP) | OK |
 | Touch drag (MOUSEMOVE while held) | OK |
 | Long-press right-click (500 ms) | OK |
-| Quick-tap (press+release same poll cycle) | OK - fixed 2026-02-18 |
-| Triple-tap bottom-right -> Global Main Menu (Ctrl+F5) | OK - confirmed |
-| Triple-tap bottom-left -> Virtual Keyboard | OK - 2x scaled pack, overlay composited |
-| Triple-tap top-right -> Enter key | OK |
-| VKB renders over game (not replacing it) | OK - fixed 2026-02-18 |
-| VKB hit-areas match display size | OK - `vkeybd_roomwizard.zip` at 640x480 |
-| Post-gesture _waitForRelease lockout | OK |
-| Corner-zone tap suppression (taps 1+2 of triple-tap) | OK - fixed 2026-02-18 |
-| Overlay-transition LBUTTONUP injection | OK - fixed 2026-02-18 |
-| Ctrl+F5 releases Ctrl modifier cleanly | OK - fixed 2026-02-18 |
+| Quick-tap (press+release same poll cycle) | OK |
+| Triple-tap bottom-right → Global Main Menu (Ctrl+F5) | OK |
+| Triple-tap bottom-left → Virtual Keyboard | OK |
+| Triple-tap top-right → Enter key | OK |
+| VKB renders over game (overlay composite) | OK |
+| VKB hit-areas match display size (`vkeybd_roomwizard.zip`) | OK |
+| Overlay transparent clear-key 0xF81F (magenta) | OK |
+| GMM opaque background | OK |
+| VKB text input field opaque background | OK |
+| Corner-zone tap suppression (taps 1+2 of triple-tap) | OK |
+| Post-gesture `_waitForRelease` lockout | OK |
+| Overlay-transition LBUTTONUP injection | OK |
+| Ctrl+F5 releases Ctrl modifier cleanly | OK |
+| Game selector integration (`.noargs` + `.hidden` markers) | OK |
 | Static linking | OK |
-| Debug touch-feedback circles (fading red) | OK - gated on `ROOMWIZARD_DEBUG=1` |
-| Verbose touch-state logging | OK - gated on `ROOMWIZARD_DEBUG=1` |
-| Ctrl+F5 GMM opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
-| VKB text input field opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
-| Game selector integration | OK - 2026-02-19; scummvm.noargs suppresses device args |
+| Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
 
 ---
 

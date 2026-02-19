@@ -36,10 +36,27 @@
 
 **Programs:**
 - `snake/`, `tetris/`, `pong/` - Games
-- `game_selector/` - Menu with scrolling
+- `game_selector/` - Menu with scrolling; see [Game Selector Markers](#game-selector-markers) below
 - `watchdog_feeder/` - Prevents 60s reset
 - `hardware_test/` - Diagnostics (GUI + CLI)
 - `tests/` - Touch debug/inject, framebuffer capture
+
+## Game Selector Markers
+
+Two non-executable marker files alongside binaries in `/opt/games/` control `game_selector` without recompiling.
+
+| Marker | Effect |
+|---|---|
+| `<name>.noargs` | Launch without `fb_dev`/`touch_dev` args (apps that open devices themselves) |
+| `<name>.hidden` | Hide from the menu entirely |
+
+```bash
+# Hide:    touch /opt/games/<name>.hidden  && chmod 644 /opt/games/<name>.hidden
+# Un-hide: rm /opt/games/<name>.hidden
+# No-args: touch /opt/games/<name>.noargs  && chmod 644 /opt/games/<name>.noargs
+```
+
+Current on device: **Hidden:** `watchdog_feeder`, `touch_test`, `touch_debug`, `touch_inject`, `touch_calibrate`, `unified_calibrate`, `pressure_test` | **No-args:** `scummvm`
 
 ## Key Technical Details
 
@@ -67,34 +84,8 @@ See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs
 
 ## Next Development Ideas
 
-**Immediate:**
 - [ ] Tetris portrait mode (rotate 90°)
 - [ ] More games (Brick Breaker, Space Invaders)
-- [ ] Expand hardware test suite
+- [ ] Watchdog integration in ScummVM backend (see [SCUMMVM_DEV.md](../scummvm-roomwizard/SCUMMVM_DEV.md))
 
-**Future:**
-- [ ] Drawing program (finger painting)
-- [ ] Sprite/animation system
-- [ ] High score persistence
-- [ ] Sound effects (if audio hardware exists)
-
-## Known Issues
-
-None - system is fully functional!
-
-## Testing Tools
-
-- `touch_debug` - Raw event stream viewer
-- `touch_test` - Visual touch accuracy test
-- `touch_inject` - Synthetic event injection
-- `test_game_selector_scroll.py` - Automated UI testing
-- `fb_to_png.py` - Framebuffer screenshot capture
-
-**Note:** Touch input patterns from this project are used by the ScummVM backend - see [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md) for details.
-
-## Build Notes
-
-- Cross-compiler: `arm-linux-gnueabihf-gcc`
-- Static linking: `-static` flag
-- Optimization: `-O2`
-- All binaries: ARM 32-bit EABI5
+**Note:** Touch input patterns used by the ScummVM backend — see [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md).
