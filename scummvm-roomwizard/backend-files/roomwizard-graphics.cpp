@@ -217,6 +217,8 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 	
 	// Allocate overlay surface (same size as framebuffer for GUI)
 	_overlaySurface.create(800, 480, Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
+	// Pre-fill with transparent key so any stale pixels stay transparent
+	{ uint16 *p = (uint16 *)_overlaySurface.getPixels(); for (int i = 0; i < 800*480; i++) p[i] = 0xF81F; }
 	
 	// Notify event source of new game resolution (needed for coordinate transform)
 	{
@@ -526,13 +528,15 @@ void RoomWizardGraphicsManager::updateScreen() {
 		blitGameSurfaceToFramebuffer();
 		_screenDirty = false;
 
-		// Composite overlay on top: treat 0x0000 (cleared/black) pixels as
-		// transparent so only the actual VKB bitmap is visible.
+		// Composite overlay on top: treat 0xF81F (magenta, clear-key) pixels as
+		// transparent so only the actual overlay bitmap is visible.  Black and
+		// all other real colours are composited opaquely, which fixes the GMM
+		// background and the VKB text input field showing as transparent.
 		for (int y = 0; y < 480; y++) {
 			for (int x = 0; x < 800; x++) {
 				uint16 pixel = *(const uint16 *)_overlaySurface.getBasePtr(x, y);
-				if (pixel == 0)
-					continue; // transparent – keep game pixel underneath
+				if (pixel == 0xF81F)
+					continue; // transparent clear-key – keep game pixel underneath
 				byte r = ((pixel >> 11) & 0x1F) << 3;
 				byte g = ((pixel >> 5) & 0x3F) << 2;
 				byte b = (pixel & 0x1F) << 3;
@@ -589,7 +593,13 @@ Graphics::PixelFormat RoomWizardGraphicsManager::getOverlayFormat() const {
 
 void RoomWizardGraphicsManager::clearOverlay() {
 	if (_overlaySurface.getPixels()) {
-		memset(_overlaySurface.getPixels(), 0, _overlaySurface.pitch * _overlaySurface.h);
+		// Fill with the transparent clear-key (0xF81F, magenta) rather than
+		// zero/black.  This lets true black and dark-grey GUI backgrounds
+		// render opaquely while still allowing the game to show through any
+		// uncovered overlay area (e.g. around the VKB).
+		uint16 *p = (uint16 *)_overlaySurface.getPixels();
+		for (int i = 0; i < 800 * 480; i++)
+			p[i] = 0xF81F;
 	}
 }
 

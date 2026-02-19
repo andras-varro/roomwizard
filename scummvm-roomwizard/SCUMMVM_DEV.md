@@ -1,11 +1,11 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING — VKB overlay + scaled keyboard + Enter gesture deployed 2026-02-18
+## Status: ✅ WORKING — overlay transparency fix deployed 2026-02-19
 
 **Binary:** 14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-19 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-19 — all diagnostic output silenced; `logMessage()` suppresses `kDebug` unless `ROOMWIZARD_DEBUG=1`  
+**Last source edit:** 2026-02-19 — overlay clear-key changed from `0x0000` (black) to `0xF81F` (magenta); fixes opaque GMM background and VKB text input field  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -81,6 +81,8 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Static linking | OK |
 | Debug touch-feedback circles (fading red) | OK - gated on `ROOMWIZARD_DEBUG=1` |
 | Verbose touch-state logging | OK - gated on `ROOMWIZARD_DEBUG=1` |
+| Ctrl+F5 GMM opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
+| VKB text input field opaque background | OK - fixed 2026-02-19 (0xF81F clear-key) |
 
 ---
 
@@ -209,7 +211,6 @@ Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 - No audio (NullMixerManager)
 - Single-touch only; right-click = long-press 500 ms
 - Software rendering only
-- GMM overlay: true-black UI pixels show game bleed-through (negligible in practice)
 
 ## Supported Engines
 
