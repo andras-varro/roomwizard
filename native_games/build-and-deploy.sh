@@ -42,22 +42,23 @@ step "1/9"  "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/
 step "2/9"  "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
 step "3/9"  "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
 step "4/9"  "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step "5/9"  "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step "5/9"  "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step "6/9"  "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
 
-COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o"
+COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o"
 
 step "6/9"  "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
 step "7/9"  "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
 step "8/9"  "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
 step "9/9 (a)" "game_selector"
-$CC -O2 -static game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
+$CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
 step "9/9 (b)" "hardware_test"
-$CC -O2 -static hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
+$CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
 step "9/9 (c)" "unified_calibrate"
-$CC -O2 -static tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
+$CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
 step "9/9 (d)" "watchdog_feeder"
 $CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder

@@ -88,7 +88,7 @@ See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs
 
 ### Gameplay
 
-- [ ] **Persistent high scores** — save `high_score` to a flat file (e.g. `/home/root/data/scores`) on game exit; load on start. Snake and Tetris already track it in-memory.
+- [x] **Persistent high scores** ✅ — top-5 leaderboard per game (`snake.hig`, `tetris.hig` in `/home/root/data/`); touch-driven on-screen keyboard for name entry (10 chars, A-Z + space + DEL/CLEAR/OK); gold/silver/bronze ranking display; RESET SCORES button on game over screen; central component in `common/highscore.{h,c}`
 - [ ] **Portrait mode for Tetris** — rotate framebuffer 90° so the Tetris board is tall; requires coordinate transform in touch input and a rotated render path
 - [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
 - [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)

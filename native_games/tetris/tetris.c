@@ -15,6 +15,7 @@
 #include "../common/touch_input.h"
 #include "../common/common.h"
 #include "../common/hardware.h"
+#include "../common/highscore.h"
 
 #define BOARD_WIDTH 10
 #define BOARD_HEIGHT 20
@@ -131,6 +132,9 @@ Button restart_button;
 Button resume_button;
 Button exit_pause_button;
 GameScreen current_screen = SCREEN_WELCOME;
+HighScoreTable hs_table;
+bool hs_entry_pending = false;
+Button reset_score_button;
 
 // Function prototypes
 void init_game();
@@ -157,8 +161,10 @@ void init_game() {
     board_offset_x = 20;
     board_offset_y = 80;
     
-    game.high_score = 0;
-    
+    hs_init(&hs_table, "tetris");
+    hs_load(&hs_table);
+    game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+
     // Initialize buttons
     button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -168,9 +174,12 @@ void init_game() {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
-                fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
-                BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init_full(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
+                     326, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
+                     BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
+    button_init_full(&reset_score_button,
+                     fb.width / 2 - 130, 396, 260, 44, "RESET SCORES",
+                     RGB(40, 0, 0), COLOR_WHITE, RGB(150, 0, 0), 2);
     button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -243,8 +252,14 @@ void lock_piece() {
     
     if (check_collision(&game.current, 0, 0, game.current.rotation)) {
         game.game_over = true;
-        if (game.score > game.high_score) {
-            game.high_score = game.score;
+        current_screen = SCREEN_GAME_OVER;
+        hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+        // Red pulse
+        for (int i = 0; i < 3; i++) {
+            hw_set_led(LED_RED, 100);
+            usleep(200000);
+            hw_leds_off();
+            usleep(200000);
         }
     }
 }
@@ -318,20 +333,7 @@ void update_game() {
         }
     }
     
-    // Check for game over
-    if (game.game_over) {
-        current_screen = SCREEN_GAME_OVER;
-        if (game.score > game.high_score) {
-            game.high_score = game.score;
-        }
-        // Red pulse on game over
-        for (int i = 0; i < 3; i++) {
-            hw_set_led(LED_RED, 100);
-            usleep(200000);  // 200ms
-            hw_leds_off();
-            usleep(200000);  // 200ms
-        }
-    }
+    // Game over is handled in lock_piece(); nothing to do here once set.
 }
 
 void handle_input() {
@@ -355,14 +357,30 @@ void handle_input() {
     
     // Handle game over screen
     if (current_screen == SCREEN_GAME_OVER) {
+        // Name entry runs once, before buttons become active
+        if (hs_entry_pending) {
+            hs_entry_pending = false;
+            char hs_name[HS_NAME_LEN];
+            hs_enter_name(&fb, &touch, hs_name, game.score);
+            hs_insert(&hs_table, hs_name, game.score);
+            hs_save(&hs_table);
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            hs_drain_touches(&touch);
+            return;
+        }
         if (state.pressed) {
-            bool touched = button_is_touched(&restart_button, state.x, state.y);
-            if (button_check_press(&restart_button, touched, current_time)) {
+            bool restart_touched = button_is_touched(&restart_button, state.x, state.y);
+            if (button_check_press(&restart_button, restart_touched, current_time)) {
                 reset_game();
                 current_screen = SCREEN_PLAYING;
                 hw_set_led(LED_GREEN, 100);
                 usleep(100000);  // 100ms
                 hw_leds_off();
+            }
+            bool reset_touched = button_is_touched(&reset_score_button, state.x, state.y);
+            if (button_check_press(&reset_score_button, reset_touched, current_time)) {
+                hs_reset(&hs_table);
+                game.high_score = 0;
             }
         }
         return;
@@ -470,7 +488,22 @@ void draw_game() {
     
     // Handle game over screen
     if (current_screen == SCREEN_GAME_OVER) {
-        draw_game_over_screen(&fb, "GAME OVER", game.score, &restart_button);
+        int title_y = SCREEN_SAFE_TOP + 8;
+        const char *title = (hs_table.count > 0 &&
+                             hs_table.entries[0].score == game.score &&
+                             game.score > 0) ? "NEW HIGH SCORE!" : "GAME OVER";
+        int tw = text_measure_width(title, 3);
+        fb_draw_text(&fb, fb.width / 2 - tw / 2, title_y, title, COLOR_YELLOW, 3);
+
+        char score_str[32];
+        snprintf(score_str, sizeof(score_str), "SCORE: %d", game.score);
+        int sw = text_measure_width(score_str, 2);
+        fb_draw_text(&fb, fb.width / 2 - sw / 2, title_y + 42, score_str, COLOR_WHITE, 2);
+
+        hs_draw(&fb, &hs_table,
+                SCREEN_SAFE_LEFT + 10, title_y + 80, SCREEN_SAFE_WIDTH - 20);
+        button_draw(&fb, &restart_button);
+        button_draw(&fb, &reset_score_button);
         return;
     }
     
