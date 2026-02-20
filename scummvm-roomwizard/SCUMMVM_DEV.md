@@ -170,9 +170,7 @@ The flag is read once at startup (`getenv`) and cached — no runtime overhead.
 
 ## Next Steps
 
-1. **Watchdog integration** — 60 s hardware watchdog will reset device. Either launch
-   `watchdog_feeder` alongside ScummVM or add internal `/dev/watchdog` writes every 30 s.
-   See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#1-hardware-watchdog-timer).
+*No outstanding blockers.* The watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely without any extra steps.
 
 ---
 
@@ -212,7 +210,7 @@ gameY = (touchY - fbOffsetY) * gameHeight / scaledH;
 - **Display:** 800x480 framebuffer `/dev/fb0`
 - **Input:** `/dev/input/event0`
 - **OS:** Linux 4.14.52
-- **Watchdog:** 60 s hardware reset if not fed
+- **Watchdog:** 60 s hardware reset; fed by `/usr/sbin/watchdog` system daemon
 
 Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 
