@@ -109,23 +109,27 @@ ssh root@<device-ip>
 
 ## 5. Deploy Games and ScummVM
 
-Run from your dev machine (WSL or Linux). Binaries must be pre-built — see
-[native_games/README.md](native_games/README.md) and
-[scummvm-roomwizard/README.md](scummvm-roomwizard/README.md).
+Run from your dev machine (WSL or Linux). See [native_games/README.md](native_games/README.md)
+and [scummvm-roomwizard/README.md](scummvm-roomwizard/README.md) for build prerequisites.
+
+### Native games (build + deploy in one step)
 
 ```bash
-DEVICE=root@192.168.50.73
+cd native_games
+./build-and-deploy.sh <device-ip>            # build + deploy binaries + markers
+./build-and-deploy.sh <device-ip> permanent  # + install boot service + reboot
+```
 
-# Native games + tools
-scp native_games/build/{game_selector,snake,tetris,pong,hardware_test,unified_calibrate} $DEVICE:/opt/games/
+The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions,
+and creates `.noargs`/`.hidden` marker files automatically.
 
-# ScummVM + VKB keyboard pack
+### ScummVM (deploy separately — built from `scummvm/`)
+
+```bash
+DEVICE=root@<device-ip>
 scp scummvm/scummvm                          $DEVICE:/opt/games/
 scp scummvm-roomwizard/vkeybd_roomwizard.zip $DEVICE:/opt/games/
-
-# Set permissions
-ssh $DEVICE 'chmod +x /opt/games/game_selector /opt/games/snake /opt/games/tetris \
-  /opt/games/pong /opt/games/hardware_test /opt/games/unified_calibrate /opt/games/scummvm'
+ssh $DEVICE 'chmod +x /opt/games/scummvm && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs'
 ```
 
 ### Marker files

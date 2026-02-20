@@ -16,12 +16,16 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 | `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s; hidden from menu |
 | `unified_calibrate` | Tool | Touch + bezel calibration; hidden from menu |
 
-## Build (cross-compile from WSL)
+## Build & Deploy (cross-compile from WSL)
 
 ```bash
 cd native_games
-./compile_for_roomwizard.sh   # builds all to build/
+./build-and-deploy.sh                          # build only
+./build-and-deploy.sh 192.168.50.73            # build + deploy binaries
+./build-and-deploy.sh 192.168.50.73 permanent  # + install boot service + reboot
 ```
+
+The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
 
 Rebuilding just `game_selector` after changes:
 ```bash
@@ -31,23 +35,14 @@ arm-linux-gnueabihf-gcc -O2 -static -I. \
   game_selector/game_selector.c -o build/game_selector -lm
 ```
 
-## Deploy
-
-```bash
-scp build/* root@192.168.50.73:/opt/games/
-ssh root@192.168.50.73 'chmod +x /opt/games/game_selector /opt/games/snake /opt/games/tetris /opt/games/pong'
-```
-
 ## Permanent Game Mode (boot)
 
-Install the SysVinit script to replace the browser with the game selector on boot:
-
+Use the deploy script:
 ```bash
-scp roomwizard-games-init.sh root@192.168.50.73:/etc/init.d/roomwizard-games
-ssh root@192.168.50.73 'chmod +x /etc/init.d/roomwizard-games && update-rc.d browser remove && update-rc.d x11 remove && update-rc.d roomwizard-games defaults && reboot'
+./build-and-deploy.sh 192.168.50.73 permanent
 ```
 
-Manual: `/etc/init.d/roomwizard-games start|stop|status`
+Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-games start|stop|status'`
 
 ## Game Selector Markers
 
