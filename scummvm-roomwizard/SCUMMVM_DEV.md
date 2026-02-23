@@ -1,11 +1,11 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING — game selector integration deployed 2026-02-19
+## Status: ✅ WORKING — audio enabled 2026-02-23
 
-**Binary:** 14 MB statically linked  
+**Binary:** ~14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
-**Last build:** 2026-02-19 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-19 — overlay clear-key `0xF81F`; game_selector `.noargs`/`.hidden` markers; dev tools hidden on device  
+**Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
+**Last source edit:** 2026-02-23 — OssMixerManager via `/dev/dsp`; GPIO12 amp-enable at boot  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -17,9 +17,9 @@ cd scummvm
 ./configure --host=arm-linux-gnueabihf --backend=roomwizard \
   --disable-all-engines --enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he \
   --enable-engine=agi --enable-engine=sci --enable-engine=agos --enable-engine=sky --enable-engine=queen \
-  --disable-alsa --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
+  --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
   --enable-release --enable-optimizations --enable-vkeybd
-make -j4 LDFLAGS='-static'
+make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 arm-linux-gnueabihf-strip scummvm
 scp scummvm root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
@@ -45,10 +45,13 @@ ssh root@192.168.50.73 'chmod +x /opt/games/game_selector && touch /opt/games/sc
 
 Sync backend source to version control after editing:
 ```powershell
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.cpp  .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.h    .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.cpp   .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.h     .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.cpp .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp         .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp          .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\module.mk               .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.h                       .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.cpp                     .\backend-files\ -Force
 ```
 
 ---
@@ -59,7 +62,7 @@ Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp         .\backe
 ScummVM Core -> OSystem_RoomWizard
     +-- RoomWizardGraphicsManager -> framebuffer.c -> /dev/fb0
     +-- RoomWizardEventSource -> touch_input.c -> /dev/input/event0
-    +-- NullMixerManager (no audio)
+    +-- OssMixerManager -> /dev/dsp (OSS compat) -> TWL4030 codec -> SPKR1
     +-- Default managers (timer, events, saves, filesystem)
 ```
 
@@ -95,6 +98,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Overlay-transition LBUTTONUP injection | OK |
 | Ctrl+F5 releases Ctrl modifier cleanly | OK |
 | Game selector integration (`.noargs` + `.hidden` markers) | OK |
+| Audio via TWL4030 speaker (OssMixerManager, `/dev/dsp`) | OK |
 | Static linking | OK |
 | Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
 
@@ -168,6 +172,22 @@ The flag is read once at startup (`getenv`) and cached — no runtime overhead.
 
 ---
 
+## Audio Details
+
+**Hardware path:** TWL4030 HiFi codec (ALSA card `rw20`, `hw:0,0`) → HandsfreeL/R class-D amp → SPKR1  
+**Driver:** ALSA OSS compatibility shim (`/dev/dsp`, `/dev/audio`, `/dev/mixer`)  
+**Amp enable:** GPIO12 (sysfs) must be driven HIGH; done by `/etc/init.d/audio-enable` at boot  
+**Mixer path (must be configured at boot):**
+```
+DAC1 → HandsfreeL/R Mux (AudioL1/R1) → HandsfreeL/R Switch (on)
+```
+Boot script `/etc/rc5.d/S29audio-enable` → `/etc/init.d/audio-enable` sets GPIO12 and runs `amixer` to configure the path.  
+ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` via `alsactl store` and restored by `/etc/init.d/alsa-state`.
+
+**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp`, sets 44100 Hz stereo S16_LE, and runs a dedicated pthread that pulls `mixCallback()` → `write()`. The ALSA OSS shim performs SRC from 44100→48000 Hz in-kernel automatically.
+
+---
+
 ## Next Steps
 
 *No outstanding blockers.* The watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely without any extra steps.
@@ -209,6 +229,7 @@ gameY = (touchY - fbOffsetY) * gameHeight / scaledH;
 - **RAM:** 184 MB available
 - **Display:** 800x480 framebuffer `/dev/fb0`
 - **Input:** `/dev/input/event0`
+- **Audio:** TWL4030 HiFi codec → `/dev/dsp`; amp enable GPIO12; speaker SPKR1
 - **OS:** Linux 4.14.52
 - **Watchdog:** 60 s hardware reset; fed by `/usr/sbin/watchdog` system daemon
 
@@ -218,9 +239,9 @@ Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 
 ## Limitations
 
-- No audio (NullMixerManager)
 - Single-touch only; right-click = long-press 500 ms
 - Software rendering only
+- No MIDI (NullMidiDriver)
 
 ## Supported Engines
 
@@ -234,6 +255,7 @@ Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 - Binary: ~14 MB
 - Game surface: ~1.2 MB
 - Framebuffer: ~3 MB (double-buffered)
+- Audio mix buffer: ~8 KB
 - Total: ~18 MB of 184 MB available
 
 ---

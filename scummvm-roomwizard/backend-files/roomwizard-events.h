@@ -83,7 +83,7 @@ private:
 	// Corner zones (on 800x480 screen):
 	//   Bottom-left  (x<80, y>400) triple-tap  → Virtual Keyboard
 	//   Bottom-right (x>720, y>400) triple-tap → Global Main Menu (Ctrl+F5)
-	enum Corner { CORNER_BL = 0, CORNER_BR = 1, CORNER_COUNT = 2 };
+	enum Corner { CORNER_BL = 0, CORNER_BR = 1, CORNER_TR = 2, CORNER_COUNT = 3 };
 	struct CornerTaps {
 		uint32 timestamps[3]; // ring buffer of last 3 tap times
 		int    count;         // how many taps accumulated

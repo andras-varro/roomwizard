@@ -30,6 +30,7 @@
 - [`common/hardware.c`](common/hardware.c) - LED/backlight control
 - [`common/common.c`](common/common.c) - Unified UI (buttons, screens, safe area)
 - [`common/ui_layout.c`](common/ui_layout.c) - Layouts + ScrollableList widget
+- [`common/audio.c`](common/audio.c) - Speaker audio (OSS/TWL4030; beeps, tones, fanfares)
 
 **Programs:**
 - `snake/`, `tetris/`, `pong/` - Games
@@ -78,6 +79,7 @@ See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs
 - Pressure: Binary (255=pressed, 0=released), no variable pressure
 - LEDs: `/sys/class/leds/{red_led,green_led}/brightness` (0-100)
 - Watchdog: `/dev/watchdog` (60s timeout, feed every 30s)
+- Speaker: TWL4030 codec → `/dev/dsp` (OSS); amp enable GPIO12 HIGH; see [`common/audio.c`](common/audio.c)
 
 ## Backlog
 
@@ -88,7 +90,9 @@ See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs
 
 ### Gameplay
 
-- [x] **Persistent high scores** ✅ — top-5 leaderboard per game (`snake.hig`, `tetris.hig` in `/home/root/data/`); touch-driven on-screen keyboard for name entry (10 chars, A-Z + space + DEL/CLEAR/OK); gold/silver/bronze ranking display; RESET SCORES button on game over screen; central component in `common/highscore.{h,c}`
+- [x] **Persistent high scores** ✅
+- [x] **Audio component** ✅ — `common/audio.{h,c}` provides `audio_init/close/tone/beep/blip/success/fail`; games include `audio.h` and add `build/audio.o` to their link (already in `COMMON_OBJ`)
+- [ ] **Wire audio into games** — add `Audio audio;` to each game struct, call `audio_beep()` on move, `audio_blip()` on score, `audio_success()` on level up, `audio_fail()` on game over — top-5 leaderboard per game (`snake.hig`, `tetris.hig` in `/home/root/data/`); touch-driven on-screen keyboard for name entry (10 chars, A-Z + space + DEL/CLEAR/OK); gold/silver/bronze ranking display; RESET SCORES button on game over screen; central component in `common/highscore.{h,c}`
 - [ ] **Portrait mode for Tetris** — rotate framebuffer 90° so the Tetris board is tall; requires coordinate transform in touch input and a rotated render path
 - [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
 - [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)

@@ -1,106 +1,98 @@
-# ScummVM RoomWizard Backend Files
+# RoomWizard Backend for ScummVM
 
-This directory contains version-controlled source files for the RoomWizard backend implementation.
+This is a custom ScummVM backend for the RoomWizard device, implementing native framebuffer graphics and touch input support.
 
-## Purpose
+## Features
 
-Instead of using a tar.gz archive, these files are now directly version-controlled in the roomwizard repository. This provides:
+- **Native Framebuffer Rendering**: Direct rendering to `/dev/fb0` (800x480 @ 32-bit ARGB)
+- **Touch Input Support**: Single-touch resistive touchscreen via `/dev/input/event0`
+- **Automatic Scaling**: Games are centered and scaled to fit the display
+- **Software Cursor**: Rendered cursor with palette support
+- **POSIX Filesystem**: Standard save/load functionality
 
-- **Better tracking**: See file-by-file changes in git history
-- **Easier diffs**: Compare changes between versions
-- **Simpler merges**: Resolve conflicts at the file level
-- **Direct editing**: Modify files here and sync to ScummVM
+## Hardware Requirements
 
-## Files
+- **Display**: 800x480 framebuffer (RGB/ARGB)
+- **Input**: Resistive touchscreen (single-touch)
+- **CPU**: ARMv7 with NEON SIMD
+- **RAM**: 128+ MB available
+- **OS**: Linux with framebuffer and input event support
 
-### Backend Implementation
-- `roomwizard.cpp/h` - Main backend implementation
-- `roomwizard-graphics.cpp/h` - Graphics manager (framebuffer)
-- `roomwizard-events.cpp/h` - Event source (touch input)
-- `module.mk` - Build configuration
+## Building
 
-### Configuration
-- `configure.patch` - Patch for ScummVM's configure script to add RoomWizard backend
-
-### Documentation
-- `IMPLEMENTATION_SUCCESS.md` - Implementation notes (if exists)
-
-## Workflow
-
-### Syncing Changes TO Version Control
-
-After making changes in the ScummVM repository:
+Configure ScummVM with the roomwizard backend:
 
 ```bash
-cd scummvm-roomwizard
-./manage-scummvm-changes.sh sync
+./configure \
+  --host=arm-linux-gnueabihf \
+  --backend=roomwizard \
+  --disable-alsa \
+  --disable-mt32emu \
+  --disable-flac \
+  --disable-mad \
+  --disable-vorbis \
+  --enable-release \
+  --enable-optimizations \
+  --disable-all-engines \
+  --enable-engine=scumm \
+  --enable-engine=scumm-7-8 \
+  --enable-engine=he
+
+make
 ```
 
-This copies the current backend files from `../scummvm/backends/platform/roomwizard/` to this directory and updates the configure patch.
+## Supported Pixel Formats
 
-### Restoring Changes FROM Version Control
+- **CLUT8**: 8-bit indexed color (with palette)
+- **RGB565**: 16-bit color
+- **ARGB8888**: 32-bit color with alpha
 
-To restore backend files to the ScummVM repository:
+## Input Mapping
 
-```bash
-cd scummvm-roomwizard
-./manage-scummvm-changes.sh restore
+- **Touch**: Left mouse button
+- **Long Press (500ms)**: Right mouse button
+- **Drag**: Mouse movement
+
+## Limitations
+
+- **No Audio**: Audio subsystem is disabled (NullMixerManager)
+- **Single-Touch Only**: No multi-touch gestures
+- **No Keyboard**: Touch input only
+- **Software Rendering**: No hardware acceleration
+
+## Dependencies
+
+The backend links against the RoomWizard native libraries:
+
+- `native_games/common/framebuffer.c` - Framebuffer management
+- `native_games/common/touch_input.c` - Touch input handling
+
+## Architecture
+
+```
+ScummVM Core
+    ↓
+OSystem_RoomWizard (backends/platform/roomwizard/roomwizard.cpp)
+    ├── RoomWizardGraphicsManager (roomwizard-graphics.cpp)
+    │   └── framebuffer.c (native library)
+    ├── RoomWizardEventSource (roomwizard-events.cpp)
+    │   └── touch_input.c (native library)
+    ├── DefaultTimerManager
+    ├── DefaultEventManager
+    ├── DefaultSaveFileManager
+    └── NullMixerManager
 ```
 
-This copies files from this directory back to `../scummvm/backends/platform/roomwizard/` and applies the configure patch.
+## Testing
 
-### Updating ScummVM from Upstream
+Tested with:
+- LSL 5
+- KQ 1
 
-To pull latest ScummVM changes while preserving your backend:
+## Author
 
-```bash
-cd scummvm-roomwizard
-./manage-scummvm-changes.sh update
-```
+Created for the RoomWizard embedded device project.
 
-This automatically syncs before and after the update.
+## License
 
-## Migration from tar.gz
-
-If you have an existing `roomwizard-backend.tar.gz` backup, you can:
-
-1. Extract it to the ScummVM directory:
-   ```bash
-   cd scummvm
-   tar -xzf ../scummvm-patches/roomwizard-backend.tar.gz
-   cd ..
-   ```
-
-2. Sync to version control:
-   ```bash
-   cd scummvm-roomwizard
-   ./manage-scummvm-changes.sh sync
-   ```
-
-3. Commit the files to git:
-   ```bash
-   git add backend-files/
-   git commit -m "Migrate backend files to version control"
-   ```
-
-## Benefits Over tar.gz
-
-| Aspect | tar.gz | Version Control |
-|--------|--------|-----------------|
-| File history | ❌ Binary blob | ✅ Per-file history |
-| Diffs | ❌ Hard to compare | ✅ Easy to compare |
-| Partial changes | ❌ All or nothing | ✅ File-by-file |
-| Merge conflicts | ❌ Manual extraction | ✅ Git merge tools |
-| Editing | ❌ Extract, edit, repack | ✅ Edit directly |
-| Size | ❌ Compressed but opaque | ✅ Efficient git storage |
-
-## Git Integration
-
-These files should be committed to your roomwizard repository:
-
-```bash
-git add scummvm-roomwizard/backend-files/
-git commit -m "Add ScummVM RoomWizard backend implementation"
-```
-
-The ScummVM repository itself remains clean with these files excluded via `.git/info/exclude`.
+GPL v3+ (same as ScummVM)

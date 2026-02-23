@@ -142,6 +142,39 @@ screen_y = (raw_y * 480) / 4095;
 - **Green LED:** Status indicator (`/sys/class/leds/green_led/brightness`)
 - **Range:** 0-100 (percentage brightness)
 
+### Audio
+
+- **Codec:** Texas Instruments TWL4030 (OMAP companion chip), HiFi DAC
+- **ALSA Card:** `rw20`, card 0 device 0 (`hw:0,0`)
+- **OSS Compat:** `/dev/dsp`, `/dev/audio`, `/dev/mixer` (ALSA OSS shim)
+- **Speaker:** SPKR1 on PCB driven by TWL4030 HandsfreeL/R class-D amplifier
+- **Amp Enable:** GPIO12 (sysfs) — must be driven **HIGH** to unmute the speaker
+- **Native rate:** 48000 Hz (TWL4030 HiFi); OSS shim SRCs from 44100 Hz automatically
+- **Channels:** Stereo out (mono speaker physically; both channels drive the same SPKR1 via HandsfreeL/R bridge)
+
+**Working mixer signal path:**
+```
+DAC1 (44100 → 48000 SRC) → HandsfreeL Mux (AudioL1) → HandsfreeL Switch
+                          → HandsfreeR Mux (AudioR1) → HandsfreeR Switch
+                                                        → SPKR1
+```
+
+**Volume controls:**
+- `DAC1 Digital Fine Playback Volume` — 0..63, use 63
+- `DAC1 Digital Coarse Playback Volume` — 0..2, use 0 (0 dB)
+- `PreDriv Playback Volume` — 0..3 (0 mute, 3 = +6 dB)
+
+**Boot initialisation script:** `/etc/init.d/audio-enable` (→ `rc5.d/S29audio-enable`)
+```bash
+echo out > /sys/class/gpio/gpio12/direction
+echo 1 > /sys/class/gpio/gpio12/value
+amixer -c 0 cset name="HandsfreeL Mux" AudioL1
+amixer -c 0 cset name="HandsfreeR Mux" AudioR1
+amixer -c 0 cset name="HandsfreeL Switch" on
+amixer -c 0 cset name="HandsfreeR Switch" on
+```
+ALSA DAC volumes are persisted via `alsactl store` → `/var/lib/alsa/asound.state` and restored by `/etc/init.d/alsa-state` at boot.
+
 ### Connectivity
 
 - **Ethernet:** 10/100 Mbps RJ45

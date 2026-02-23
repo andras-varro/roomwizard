@@ -36,7 +36,7 @@
 #include "backends/saves/default/default-saves.h"
 #include "backends/timer/default/default-timer.h"
 #include "backends/events/default/default-events.h"
-#include "backends/mixer/null/null-mixer.h"
+#include "backends/mixer/oss/oss-mixer.h"
 #include "backends/mutex/null/null-mutex.h"
 #include "backends/fs/posix/posix-fs-factory.h"
 #include "common/archive.h"
@@ -102,8 +102,8 @@ void OSystem_RoomWizard::initBackend() {
 	// Create save file manager
 	_savefileManager = new DefaultSaveFileManager();
 	
-	// Create mixer manager (null - no audio for now)
-	_mixerManager = new NullMixerManager();
+	// OSS mixer — drives /dev/dsp (ALSA OSS compat, TWL4030 codec)
+	_mixerManager = new OssMixerManager();
 	_mixerManager->init();
 	
 	// Register /opt/games as extrapath so vkeybd_small.zip and other data
