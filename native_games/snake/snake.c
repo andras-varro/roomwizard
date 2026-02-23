@@ -339,6 +339,12 @@ void handle_input() {
             hs_save(&hs_table);
             game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
             hs_drain_touches(&touch);
+            /* Belt-and-suspenders: clear any stale press state so neither
+             * button can fire spuriously on the very next handle_input call. */
+            restart_button.was_pressed = false;
+            restart_button.last_press_time_ms = 0;
+            reset_score_button.was_pressed = false;
+            reset_score_button.last_press_time_ms = 0;
             return;
         }
         if (state.pressed) {

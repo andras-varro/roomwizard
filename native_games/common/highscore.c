@@ -160,11 +160,22 @@ static const char kb_letters[KB_ROWS][KB_COLS] = {
 };
 
 void hs_drain_touches(TouchInput *touch) {
-    /* Poll and discard for 200 ms to flush the residual tap from name entry */
+    /* Phase 1: Wait for the finger to physically lift (held → false).
+     * Cap at 2 s in case of hardware fault. */
     uint32_t start = get_time_ms();
-    while (get_time_ms() - start < 200) {
+    while (get_time_ms() - start < 2000) {
         touch_poll(touch);
-        usleep(10000);
+        TouchState s = touch_get_state(touch);
+        if (!s.held) break;
+        usleep(10000);   /* 10 ms */
+    }
+
+    /* Phase 2: 300 ms settling — absorb any bounce/drag events that follow
+     * the physical lift on a resistive screen. */
+    start = get_time_ms();
+    while (get_time_ms() - start < 300) {
+        touch_poll(touch);
+        usleep(10000);   /* 10 ms */
     }
 }
 

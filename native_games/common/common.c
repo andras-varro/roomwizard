@@ -251,26 +251,30 @@ bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint
 
 bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_time_ms) {
     // Legacy API for compatibility with existing games
-    // Update visual state
     if (currently_pressed) {
-        btn->visual_state = BTN_STATE_HIGHLIGHTED;
+        if (!btn->was_pressed) {
+            uint32_t time_since_last = current_time_ms - btn->last_press_time_ms;
+            if (time_since_last > btn->debounce_ms) {
+                // Leading edge — fire and highlight briefly this frame
+                btn->was_pressed = true;
+                btn->last_press_time_ms = current_time_ms;
+                btn->visual_state = BTN_STATE_HIGHLIGHTED;
+                return true;
+            }
+            // Still within debounce window from a previous bounce — look normal
+            btn->visual_state = BTN_STATE_NORMAL;
+        } else {
+            // Already fired; finger still down — show normal so button never
+            // appears stuck/yellow. Resets to was_pressed=false on release.
+            btn->visual_state = BTN_STATE_NORMAL;
+        }
     } else {
+        // Finger lifted — ready for next press
+        btn->was_pressed = false;
         btn->visual_state = BTN_STATE_NORMAL;
     }
-    
-    // Check for press with debouncing
-    if (currently_pressed && !btn->was_pressed) {
-        uint32_t time_since_last = current_time_ms - btn->last_press_time_ms;
-        if (time_since_last > btn->debounce_ms) {
-            btn->was_pressed = true;
-            btn->last_press_time_ms = current_time_ms;
-            return true;  // Button was pressed
-        }
-    } else if (!currently_pressed) {
-        btn->was_pressed = false;
-    }
-    
-    return false;  // Button not pressed or debounced
+
+    return false;
 }
 
 // ============================================================================
