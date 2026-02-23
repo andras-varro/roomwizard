@@ -38,30 +38,30 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step "1/10" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step "2/10" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step "3/10" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step "4/10" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step "5/10" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step "6/10" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step "7/10" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step "1/14" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step "2/14" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step "3/14" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step "4/14" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step "5/14" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step "6/14" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step "7/14" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o"
 
-step "8/10" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "9/10" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "10/10" "pong";        $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "8/14"  "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "9/14"  "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "10/14" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "10/10 (a)" "game_selector"
+step "11/14" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "10/10 (b)" "hardware_test"
+step "12/14" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "10/10 (c)" "unified_calibrate"
+step "13/14" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "10/10 (d)" "watchdog_feeder"
+step "14/14" "watchdog_feeder"
 $CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder
 
 echo ""
@@ -95,9 +95,11 @@ scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
     build/unified_calibrate build/watchdog_feeder \
     "$DEVICE:$GAMES_DIR/"
+ok "Binaries uploaded"
+
 # Deploy audio-enable boot script (installs once; harmless to repeat)
-    info "Deploying audio-enable boot script..."
-    ssh "$DEVICE" bash <<'AUDIO_REMOTE'
+info "Deploying audio-enable boot script..."
+ssh "$DEVICE" bash <<'AUDIO_REMOTE'
 cat > /etc/init.d/audio-enable << 'EOF'
 #!/bin/sh
 # Enable RoomWizard speaker amplifier (GPIO12) and configure TWL4030 HiFi path
@@ -112,7 +114,7 @@ chmod +x /etc/init.d/audio-enable
 ln -sf /etc/init.d/audio-enable /etc/rc5.d/S29audio-enable
 echo "AUDIO_ENABLE_OK"
 AUDIO_REMOTE
-    ok "Audio boot script deployed"ok "Binaries uploaded"
+ok "Audio boot script deployed"
 
 # Set execute permissions + create marker files
 info "Setting permissions and markers..."

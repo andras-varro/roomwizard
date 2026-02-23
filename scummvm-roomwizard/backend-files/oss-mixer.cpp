@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
 
@@ -51,7 +52,7 @@ OssMixerManager::OssMixerManager()
 	: MixerManager()
 	, _fd(-1)
 	, _outputRate(44100)
-	, _samples(1024)
+	, _samples(4096)
 	, _threadRunning(false) {
 }
 
@@ -67,7 +68,9 @@ OssMixerManager::~OssMixerManager() {
 }
 
 void OssMixerManager::init() {
-	_fd = open("/dev/dsp", O_WRONLY);
+	// Open non-blocking so write() returns EAGAIN instead of stalling for the
+	// TWL4030's ~506 ms ALSA hardware period (see SYSTEM_ANALYSIS.md).
+	_fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
 	if (_fd < 0) {
 		// No DSP device — fall back to silent mixer so ScummVM still works.
 		warning("OssMixerManager: cannot open /dev/dsp (%d), audio disabled", _fd);
@@ -75,6 +78,21 @@ void OssMixerManager::init() {
 		_mixer->setReady(true);
 		return;
 	}
+
+	// ---------------------------------------------------------------
+	// Fragment sizing MUST be the very first ioctl on this device.
+	// The ALSA OSS compat shim silently ignores SNDCTL_DSP_SETFRAGMENT
+	// once the stream is configured (which happens implicitly on the
+	// first format/rate ioctl).  Without this, the kernel ring defaults
+	// to ~64 KB and write() never blocks — causing a CPU-spinning audio
+	// thread that starves the main loop.
+	//
+	// _samples = 4096 frames * 4 bytes = 16384 bytes per mix buffer.
+	// 2 fragments * 2^14 bytes = 32768 bytes ring (2 x mix buffer).
+	// In steady state, every other write() blocks for ~93 ms, giving
+	// the audio thread a long sleep and leaving the CPU to the game.
+	int frag = (2 << 16) | 14;   // 2 fragments of 16384 bytes each
+	ioctl(_fd, SNDCTL_DSP_SETFRAGMENT, &frag);
 
 	// 16-bit signed little-endian
 	int fmt = AFMT_S16_LE;
@@ -105,16 +123,34 @@ void OssMixerManager::audioThread() {
 
 	while (_threadRunning) {
 		if (_audioSuspended) {
-			usleep(10000);
+			usleep(50000);
 			continue;
 		}
+
 		_mixer->mixCallback(buf, _samples);
 
+		// Non-blocking write loop: copy data to the OSS software ring a chunk
+		// at a time, sleeping 5 ms on EAGAIN (ring full).  This decouples our
+		// write cadence from the underlying ALSA HW period (~506 ms on the
+		// TWL4030), which would otherwise block write() for that duration and
+		// cause 321 ms gaps of silence between each 185 ms burst of audio.
+		// The OSS software ring drains continuously at the hardware sample rate
+		// regardless of the ALSA period size.
 		int written = 0;
-		while (written < bufBytes) {
+		while (written < bufBytes && _threadRunning) {
 			int r = (int)write(_fd, buf + written, bufBytes - written);
-			if (r <= 0) break;
-			written += r;
+			if (r > 0) {
+				written += r;
+			} else if (r < 0 && errno == EAGAIN) {
+				// Ring is full — sleep 5 ms and retry.  One 4096-frame
+				// fragment drains in ~93 ms, so we'll spin here at most
+				// ~18 times before space appears.
+				usleep(5000);
+			} else {
+				// Hard error — back off briefly to avoid a spin.
+				usleep(10000);
+				break;
+			}
 		}
 	}
 

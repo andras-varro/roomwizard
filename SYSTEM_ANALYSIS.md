@@ -151,6 +151,7 @@ screen_y = (raw_y * 480) / 4095;
 - **Amp Enable:** GPIO12 (sysfs) — must be driven **HIGH** to unmute the speaker
 - **Native rate:** 48000 Hz (TWL4030 HiFi); OSS shim SRCs from 44100 Hz automatically
 - **Channels:** Stereo out (mono speaker physically; both channels drive the same SPKR1 via HandsfreeL/R bridge)
+- **ALSA HW period:** ~22,317 frames / **~506 ms** at 44100 Hz — see OSS usage note below
 
 **Working mixer signal path:**
 ```
@@ -174,6 +175,10 @@ amixer -c 0 cset name="HandsfreeL Switch" on
 amixer -c 0 cset name="HandsfreeR Switch" on
 ```
 ALSA DAC volumes are persisted via `alsactl store` → `/var/lib/alsa/asound.state` and restored by `/etc/init.d/alsa-state` at boot.
+
+**⚠ Critical OSS usage note — ALSA HW period stall:**  
+The TWL4030 ALSA driver has a hardware period of ~22,317 frames (~506 ms). A blocking `write()` to `/dev/dsp` stalls for the full ALSA HW period after the OSS ring fills — not the OSS fragment duration (~93 ms). This causes 185 ms of audio followed by 321 ms of silence, repeating ("bru-bru-bru-KLICK" artifact). **Always open `/dev/dsp` with `O_NONBLOCK`** and handle `EAGAIN` with a short sleep (~5 ms). The OSS software ring drains at the hardware sample rate continuously regardless of the ALSA period size.  
+Diagnosed via `native_games/tests/oss_diag.c`.
 
 ### Connectivity
 

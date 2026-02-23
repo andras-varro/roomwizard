@@ -80,20 +80,3 @@ case "$1" in
 esac
 
 exit 0
-
-        ;;
-    restart|force-reload)
-        do_stop
-        sleep 2
-        do_start
-        ;;
-    status)
-        do_status
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
-esac
-
-exit 0

@@ -30,7 +30,6 @@ For detailed hardware specifications, see **[Hardware Platform](SYSTEM_ANALYSIS.
 ```
 roomwizard/
 ├── README.md                    # This file
-├── PROJECT_STATUS.md            # Development status
 ├── SYSTEM_ANALYSIS.md           # Hardware analysis
 ├── SYSTEM_SETUP.md              # SSH & system setup
 ├── native_games/                # C games (Snake, Tetris, Pong)
@@ -43,8 +42,9 @@ roomwizard/
 ### Native Games
 ```bash
 cd native_games
-./compile_for_roomwizard.sh
-./deploy.sh 192.168.50.73 test
+./build-and-deploy.sh                          # build only
+./build-and-deploy.sh 192.168.50.73            # build + deploy
+./build-and-deploy.sh 192.168.50.73 permanent  # + boot service + reboot
 ```
 
 ### Browser Games

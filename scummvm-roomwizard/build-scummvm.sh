@@ -101,9 +101,6 @@ configure_build() {
     
     cd "$SCUMMVM_DIR"
     
-    # Ensure clean state
-    rm -f "$NATIVE_GAMES_DIR/common/"*.o
-    
     # Configure with ARM cross-compiler
     # Explicitly set CC and CXX to ensure C files are compiled with ARM compiler
     CC=arm-linux-gnueabihf-gcc \
@@ -120,13 +117,13 @@ configure_build() {
         --enable-engine=agos \
         --enable-engine=sky \
         --enable-engine=queen \
-        --disable-alsa \
         --disable-mt32emu \
         --disable-flac \
         --disable-mad \
         --disable-vorbis \
         --enable-release \
-        --enable-optimizations
+        --enable-optimizations \
+        --enable-vkeybd
     
     # Verify CC and CXX are set correctly in config.mk
     CC_SET=$(grep "^CC " config.mk | head -1 || echo "")
@@ -164,7 +161,7 @@ build_scummvm() {
     
     # Build with static linking
     # Use -j4 for parallel compilation (adjust based on CPU cores)
-    make -j4 LDFLAGS='-static'
+    make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
     
     # Check if binary was created
     if [ -f "scummvm" ]; then
@@ -267,9 +264,11 @@ show_info() {
     echo "  - Static linking (no dependencies)"
     echo "  - Release build with optimizations"
     echo "  - Custom RoomWizard backend"
-    echo "  - Touch input support"
+    echo "  - Touch input support (resistive single-touch)"
     echo "  - Framebuffer rendering (800x480)"
     echo "  - Bezel-aware viewport scaling"
+    echo "  - Virtual keyboard (vkeybd_roomwizard.zip)"
+    echo "  - Audio via TWL4030 speaker (/dev/dsp OSS, O_NONBLOCK)"
     echo ""
 }
 

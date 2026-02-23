@@ -12,9 +12,9 @@ cd ../scummvm
   --enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he \
   --enable-engine=agi --enable-engine=sci --enable-engine=agos \
   --enable-engine=sky --enable-engine=queen \
-  --disable-alsa --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
+  --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
   --enable-release --enable-optimizations --enable-vkeybd
-make -j4 LDFLAGS='-static'
+make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 arm-linux-gnueabihf-strip scummvm
 ```
 
@@ -48,14 +48,15 @@ Version-controlled in [`backend-files/`](backend-files/), synced to/from `../scu
 | `roomwizard.cpp/h` | Main backend, VKB, feature flags |
 | `roomwizard-graphics.cpp/h` | 800×480 framebuffer, bezel-aware scaling, overlay compositing |
 | `roomwizard-events.cpp/h` | Touch input, state machine, corner gestures |
+| `oss-mixer.cpp/h` | OSS audio mixer (TWL4030 via `/dev/dsp`, O_NONBLOCK) |
 | `module.mk` | Build configuration |
 | `configure.patch` | ScummVM configure modifications |
 
 Sync after editing:
-```powershell
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.cpp  .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.cpp .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp         .\backend-files\ -Force
+```bash
+# From scummvm-roomwizard/
+bash manage-scummvm-changes.sh sync     # copy scummvm/ edits → backend-files/
+bash manage-scummvm-changes.sh restore  # copy backend-files/ → scummvm/
 ```
 
 ## Git Management
