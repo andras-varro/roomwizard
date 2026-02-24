@@ -71,4 +71,8 @@ private:
 // verbose touch-state logging.
 bool rwDebugMode();
 
+// Cached pointer to the single backend instance.
+// Set in OSystem_RoomWizard constructor, avoids repeated dynamic_cast on g_system.
+OSystem_RoomWizard *rwSystem();
+
 #endif

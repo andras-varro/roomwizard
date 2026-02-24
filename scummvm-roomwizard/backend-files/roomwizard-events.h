@@ -71,8 +71,6 @@ private:
 	// Game screen transformation
 	int _gameWidth;
 	int _gameHeight;
-	int _gameOffsetX;
-	int _gameOffsetY;
 
 	// Long press for right-click
 	static const uint32 LONG_PRESS_TIME = 500; // milliseconds
@@ -83,7 +81,7 @@ private:
 	// Corner zones (on 800x480 screen):
 	//   Bottom-left  (x<80, y>400) triple-tap  → Virtual Keyboard
 	//   Bottom-right (x>720, y>400) triple-tap → Global Main Menu (Ctrl+F5)
-	enum Corner { CORNER_BL = 0, CORNER_BR = 1, CORNER_TR = 2, CORNER_COUNT = 3 };
+	enum Corner { CORNER_BL = 0, CORNER_BR = 1, CORNER_COUNT = 2 };
 	struct CornerTaps {
 		uint32 timestamps[3]; // ring buffer of last 3 tap times
 		int    count;         // how many taps accumulated
@@ -99,7 +97,6 @@ private:
 	void   checkGestures(int touchX, int touchY, uint32 now);
 	Corner cornerFor(int x, int y) const; // returns CORNER_COUNT if not in any corner
 	void   pushEvent(const Common::Event &e);
-	void   pushKeyEvent(Common::KeyCode kc, byte flags);
 
 	// Helper methods
 	void initTouch();

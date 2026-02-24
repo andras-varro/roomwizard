@@ -39,8 +39,6 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _touchStartTime(0),
 	  _gameWidth(320),
 	  _gameHeight(200),
-	  _gameOffsetX(0),
-	  _gameOffsetY(0),
 	  _pendingHead(0),
 	  _pendingCount(0) {
 
@@ -117,18 +115,6 @@ void RoomWizardEventSource::pushEvent(const Common::Event &e) {
 	_pendingCount++;
 }
 
-void RoomWizardEventSource::pushKeyEvent(Common::KeyCode kc, byte flags) {
-	Common::Event down, up;
-	down.type = Common::EVENT_KEYDOWN;
-	down.kbd.keycode = kc;
-	down.kbd.flags   = flags;
-	down.kbd.ascii   = 0;
-	up = down;
-	up.type = Common::EVENT_KEYUP;
-	pushEvent(down);
-	pushEvent(up);
-}
-
 void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 	Corner c = cornerFor(touchX, touchY);
 	if (c == CORNER_COUNT)
@@ -191,9 +177,9 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 		} else if (c == CORNER_BL) {
 			// Bottom-left: show virtual keyboard
 			debug("Gesture: opening virtual keyboard");
-			OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
-			if (system)
-				system->showVirtualKeyboard();
+			OSystem_RoomWizard *sys = rwSystem();
+			if (sys)
+				sys->showVirtualKeyboard();
 		}
 	}
 }
@@ -212,15 +198,13 @@ void RoomWizardEventSource::getBezelMargins(int &top, int &bottom, int &left, in
 void RoomWizardEventSource::setGameScreenSize(int width, int height, int offsetX, int offsetY) {
 	_gameWidth = width;
 	_gameHeight = height;
-	_gameOffsetX = offsetX;
-	_gameOffsetY = offsetY;
 	
 	debug("Game screen size set to %dx%d at offset (%d, %d)", width, height, offsetX, offsetY);
 }
 
 void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &gameX, int &gameY) {
-	// Check if overlay (GUI) is visible - if so, use full screen coordinates
-	OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+	// (O4) Use cached pointer — avoids dynamic_cast on every call
+	OSystem_RoomWizard *system = rwSystem();
 	if (system && system->getGraphicsManager() && 
 	    ((RoomWizardGraphicsManager *)system->getGraphicsManager())->isOverlayVisible()) {
 		// Overlay uses full 800x480 resolution - no transformation needed
@@ -309,7 +293,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 	// LBUTTONDOWN in overlay coords and LBUTTONUP in game coords, leaving
 	// Larry in a permanent walking state with no LBUTTONUP to stop him.
 	{
-		OSystem_RoomWizard *sysChk = dynamic_cast<OSystem_RoomWizard *>(g_system);
+		OSystem_RoomWizard *sysChk = rwSystem();
 		bool overlayNow = (sysChk && sysChk->getGraphicsManager() &&
 			((RoomWizardGraphicsManager *)sysChk->getGraphicsManager())->isOverlayVisible());
 		if (overlayNow != _prevOverlayVisible) {

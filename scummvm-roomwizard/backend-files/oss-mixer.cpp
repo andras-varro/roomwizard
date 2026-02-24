@@ -32,7 +32,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <sched.h>
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>

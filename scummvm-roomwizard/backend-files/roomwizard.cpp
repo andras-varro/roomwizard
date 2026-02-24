@@ -58,7 +58,6 @@
 
 #include <time.h>
 #include <sys/time.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -77,12 +76,18 @@ bool rwDebugMode() {
 	return enabled;
 }
 
+// Cached pointer — avoids dynamic_cast<OSystem_RoomWizard*>(g_system) on every poll
+static OSystem_RoomWizard *s_rwSystem = nullptr;
+OSystem_RoomWizard *rwSystem() { return s_rwSystem; }
+
 OSystem_RoomWizard::OSystem_RoomWizard()
 	: _eventSource(nullptr)
 #ifdef ENABLE_VKEYBD
 	, _vkbd(nullptr)
 #endif
 {
+	s_rwSystem = this;
+
 	// Set up filesystem factory
 	_fsFactory = new POSIXFilesystemFactory();
 

@@ -108,6 +108,7 @@ private:
 
 	// Palette for CLUT8 mode
 	byte _palette[256 * 3];
+	uint32 _palette32[256]; // precomputed ARGB for fast blit (O1)
 	bool _paletteDirty;
 
 	// Cursor

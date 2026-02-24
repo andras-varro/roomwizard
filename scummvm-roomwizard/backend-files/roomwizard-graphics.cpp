@@ -66,6 +66,7 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _touchPointIndex(0) {
 	
 	memset(_palette, 0, sizeof(_palette));
+	memset(_palette32, 0, sizeof(_palette32));
 	memset(_cursorPalette, 0, sizeof(_cursorPalette));
 	memset(_touchPoints, 0, sizeof(_touchPoints));
 }
@@ -226,7 +227,7 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 	{
 		int scaledW, scaledH, offX, offY;
 		getScalingInfo(scaledW, scaledH, offX, offY);
-		OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+		OSystem_RoomWizard *system = rwSystem();
 		if (system && system->getEventSource()) {
 			system->getEventSource()->setGameScreenSize(width, height, offX, offY);
 		}
@@ -262,6 +263,13 @@ void RoomWizardGraphicsManager::setPalette(const byte *colors, uint start, uint 
 	}
 
 	memcpy(&_palette[start * 3], colors, num * 3);
+	// Rebuild precomputed ARGB LUT for fast blit (O1)
+	for (uint i = start; i < start + num; i++) {
+		_palette32[i] = (0xFFu << 24)
+		              | (_palette[i * 3 + 0] << 16)
+		              | (_palette[i * 3 + 1] << 8)
+		              |  _palette[i * 3 + 2];
+	}
 	_paletteDirty = true;
 	_screenDirty = true;
 }
@@ -420,8 +428,40 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	offsetX += _shakeXOffset;
 	offsetY += _shakeYOffset;
 
-	// Clear framebuffer to black
-	fb_clear(_fb, 0x000000);
+	// (O3) Clear only the border strips around the scaled area rather than
+	// the entire 800×480 framebuffer. Saves ~1.5 MB of memset per frame.
+	{
+		uint32 *buf = _fb->back_buffer;
+		// Top strip
+		int topRows = (offsetY > 0) ? offsetY : 0;
+		if (topRows > 0)
+			memset(buf, 0, topRows * 800 * 4);
+		// Bottom strip
+		int botStart = offsetY + scaledH;
+		if (botStart < 480)
+			memset(buf + botStart * 800, 0, (480 - botStart) * 800 * 4);
+		// Left strip (within scaled rows)
+		int leftCols = (offsetX > 0) ? offsetX : 0;
+		int rightStart = offsetX + scaledW;
+		int rightCols = (rightStart < 800) ? (800 - rightStart) : 0;
+		if (leftCols > 0 || rightCols > 0) {
+			for (int y = topRows; y < botStart && y < 480; y++) {
+				if (leftCols > 0)
+					memset(buf + y * 800, 0, leftCols * 4);
+				if (rightCols > 0)
+					memset(buf + y * 800 + rightStart, 0, rightCols * 4);
+			}
+		}
+	}
+
+	// (O2) Precompute X-coordinate lookup table to eliminate per-pixel division
+	int srcXtab[800];
+	for (int dx = 0; dx < scaledW && dx < 800; dx++) {
+		int sx = (dx * (int)_screenWidth) / scaledW;
+		srcXtab[dx] = (sx < (int)_screenWidth) ? sx : (int)_screenWidth - 1;
+	}
+
+	const int bpp = _screenFormat.bytesPerPixel;
 
 	// Scale game surface → framebuffer using nearest-neighbour
 	for (int dy = 0; dy < scaledH; dy++) {
@@ -433,34 +473,37 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 		int srcY = (dy * (int)_screenHeight) / scaledH;
 		if (srcY >= (int)_screenHeight) srcY = _screenHeight - 1;
 
-		for (int dx = 0; dx < scaledW; dx++) {
-			int fbX = offsetX + dx;
-			if (fbX < 0 || fbX >= 800)
-				continue;
+		uint32 *fbRow = _fb->back_buffer + fbY * 800;
 
-			int srcX = (dx * (int)_screenWidth) / scaledW;
-			if (srcX >= (int)_screenWidth) srcX = _screenWidth - 1;
-
-			uint32 color;
-			if (_screenFormat.bytesPerPixel == 1) {
-				byte index = *(const byte *)_gameSurface.getBasePtr(srcX, srcY);
-				byte r = _palette[index * 3 + 0];
-				byte g = _palette[index * 3 + 1];
-				byte b = _palette[index * 3 + 2];
-				color = (r << 16) | (g << 8) | b;
-			} else if (_screenFormat.bytesPerPixel == 2) {
-				uint16 pixel = *(const uint16 *)_gameSurface.getBasePtr(srcX, srcY);
-				byte r, g, b, a;
-				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				color = (r << 16) | (g << 8) | b;
-			} else {
-				uint32 pixel = *(const uint32 *)_gameSurface.getBasePtr(srcX, srcY);
-				byte r, g, b, a;
-				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				color = (r << 16) | (g << 8) | b;
+		// (O2) Lift row pointer once per source row
+		if (bpp == 1) {
+			// (O1) CLUT8 fast path: precomputed _palette32 LUT
+			const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
+			for (int dx = 0; dx < scaledW; dx++) {
+				int fbX = offsetX + dx;
+				if (fbX >= 0 && fbX < 800)
+					fbRow[fbX] = _palette32[srcRow[srcXtab[dx]]];
 			}
-
-			_fb->back_buffer[fbY * 800 + fbX] = color;
+		} else if (bpp == 2) {
+			const uint16 *srcRow = (const uint16 *)_gameSurface.getBasePtr(0, srcY);
+			for (int dx = 0; dx < scaledW; dx++) {
+				int fbX = offsetX + dx;
+				if (fbX < 0 || fbX >= 800) continue;
+				uint16 pixel = srcRow[srcXtab[dx]];
+				byte r, g, b, a;
+				_screenFormat.colorToARGB(pixel, a, r, g, b);
+				fbRow[fbX] = (r << 16) | (g << 8) | b;
+			}
+		} else {
+			const uint32 *srcRow = (const uint32 *)_gameSurface.getBasePtr(0, srcY);
+			for (int dx = 0; dx < scaledW; dx++) {
+				int fbX = offsetX + dx;
+				if (fbX < 0 || fbX >= 800) continue;
+				uint32 pixel = srcRow[srcXtab[dx]];
+				byte r, g, b, a;
+				_screenFormat.colorToARGB(pixel, a, r, g, b);
+				fbRow[fbX] = (r << 16) | (g << 8) | b;
+			}
 		}
 	}
 }

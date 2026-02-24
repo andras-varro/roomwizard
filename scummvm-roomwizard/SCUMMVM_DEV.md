@@ -52,7 +52,9 @@ Sync backend source to version control after editing:
 Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.cpp   .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.h     .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.cpp .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.h   .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp          .\backend-files\ -Force
+Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.h            .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\platform\roomwizard\module.mk               .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.h                       .\backend-files\ -Force
 Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.cpp                     .\backend-files\ -Force
@@ -325,10 +327,24 @@ Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 
 ---
 
-## Next Steps
+## Optimization Backlog
 
-1. Watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely.
-2. If more volume control is needed, the attenuation shift can be changed (>>2 = 25%, >>0 = 100%).
+**Baseline (pre-optimization):** CPU ~80%, RAM 5.5%  
+**Measurement:** `top -d2` on device via SSH during KQ3 intro (OPL music + animation)
+
+| # | Task | Est. | Status | CPU after | Notes |
+|---|---|---|---|---|---|
+| O1 | Precomputed `_palette32[256]` LUT | 15 min | **done** | — | Eliminate 7 ops/pixel → 1 indexed load in CLUT8 blit |
+| O2 | Precomputed `srcXtab[]` + row pointer lifting | 20 min | **done** | — | Remove per-pixel division + `getBasePtr()` call |
+| O3 | Replace `fb_clear()` with border-only clear | 10 min | **done** | — | Skip clearing pixels that get overwritten immediately |
+| O4 | Cached `rwSystem()` global, eliminate `dynamic_cast` | 10 min | **done** | — | Was 4× `dynamic_cast` per `pollEvent()` |
+| O5 | Remove dead code: `CORNER_TR`, `pushKeyEvent()`, `_gameOffset*`, dup includes, `sched.h` | 10 min | **done** | — | Hygiene |
+| | **O1–O5 combined** | | **done** | **58%** (menu: 35%), RAM 5.9% | **−22 pp** from baseline |
+| O6 | Fix right-click: send `LBUTTONUP`+`RBUTTONDOWN` at 500 ms mark | 20 min | not started | — | Correctness for non-SCUMM engines |
+| O7 | Skip `fb_swap` when frame unchanged | 10 min | not started | — | `_screenDirty` false + no overlay → skip |
+| O8 | Investigate 16bpp framebuffer (`fbset -depth 16`) | 1 hr | not started | — | Halve memory bandwidth |
+| O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | not started | — | Could eliminate CPU blit entirely |
+| O10 | NEON-accelerated palette blit | 1-2 hr | not started | — | 16 pixels per iteration |
 
 ---
 
