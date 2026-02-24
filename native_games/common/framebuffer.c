@@ -72,6 +72,22 @@ static const uint8_t font_5x7[][5] = {
     {0x61, 0x51, 0x49, 0x45, 0x43}, // Z
 };
 
+int fb_set_bpp(const char *device, int bpp) {
+    int fd = open(device, O_RDWR);
+    if (fd < 0) return -1;
+
+    struct fb_var_screeninfo vinfo;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &vinfo) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    vinfo.bits_per_pixel = bpp;
+    int ret = ioctl(fd, FBIOPUT_VSCREENINFO, &vinfo);
+    close(fd);
+    return ret;
+}
+
 int fb_init(Framebuffer *fb, const char *device) {
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;

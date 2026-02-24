@@ -86,6 +86,9 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 	if (_fbInitialized)
 		return;
 
+	// (O8) Switch to 16bpp RGB565 to halve memory bandwidth
+	fb_set_bpp("/dev/fb0", 16);
+
 	_fb = (Framebuffer *)malloc(sizeof(Framebuffer));
 	if (!_fb) {
 		warning("Failed to allocate framebuffer structure");
@@ -112,13 +115,16 @@ void RoomWizardGraphicsManager::closeFramebuffer() {
 		free(_fb);
 		_fb = nullptr;
 		_fbInitialized = false;
+		// (O8) Restore 32bpp for native games / game selector
+		fb_set_bpp("/dev/fb0", 32);
 	}
 }
 
 void RoomWizardGraphicsManager::blankScreen() {
 	if (!_fbInitialized || !_fb)
 		return;
-	fb_clear(_fb, 0x00000000);
+	// memset works at any bpp (fb_clear assumes uint32 per pixel)
+	memset(_fb->back_buffer, 0, _fb->screen_size);
 	fb_swap(_fb);
 }
 
@@ -281,6 +287,10 @@ void RoomWizardGraphicsManager::setPalette(const byte *colors, uint start, uint 
 		              | (_palette[i * 3 + 0] << 16)
 		              | (_palette[i * 3 + 1] << 8)
 		              |  _palette[i * 3 + 2];
+		// (O8) Also build RGB565 LUT for 16bpp framebuffer
+		_palette16[i] = ((_palette[i * 3 + 0] >> 3) << 11)
+		              | ((_palette[i * 3 + 1] >> 2) << 5)
+		              |  (_palette[i * 3 + 2] >> 3);
 	}
 	_paletteDirty = true;
 	_screenDirty = true;
@@ -440,18 +450,17 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	offsetX += _shakeXOffset;
 	offsetY += _shakeYOffset;
 
-	// (O3) Clear only the border strips around the scaled area rather than
-	// the entire 800×480 framebuffer. Saves ~1.5 MB of memset per frame.
+	// (O3+O8) Clear only the border strips — use uint16* for 16bpp fb
 	{
-		uint32 *buf = _fb->back_buffer;
+		uint16 *buf16 = (uint16 *)_fb->back_buffer;
 		// Top strip
 		int topRows = (offsetY > 0) ? offsetY : 0;
 		if (topRows > 0)
-			memset(buf, 0, topRows * 800 * 4);
+			memset(buf16, 0, topRows * 800 * 2);
 		// Bottom strip
 		int botStart = offsetY + scaledH;
 		if (botStart < 480)
-			memset(buf + botStart * 800, 0, (480 - botStart) * 800 * 4);
+			memset(buf16 + botStart * 800, 0, (480 - botStart) * 800 * 2);
 		// Left strip (within scaled rows)
 		int leftCols = (offsetX > 0) ? offsetX : 0;
 		int rightStart = offsetX + scaledW;
@@ -459,9 +468,9 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 		if (leftCols > 0 || rightCols > 0) {
 			for (int y = topRows; y < botStart && y < 480; y++) {
 				if (leftCols > 0)
-					memset(buf + y * 800, 0, leftCols * 4);
+					memset(buf16 + y * 800, 0, leftCols * 2);
 				if (rightCols > 0)
-					memset(buf + y * 800 + rightStart, 0, rightCols * 4);
+					memset(buf16 + y * 800 + rightStart, 0, rightCols * 2);
 			}
 		}
 	}
@@ -475,7 +484,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 
 	const int bpp = _screenFormat.bytesPerPixel;
 
-	// Scale game surface → framebuffer using nearest-neighbour
+	// Scale game surface → framebuffer using nearest-neighbour (O8: 16bpp output)
 	for (int dy = 0; dy < scaledH; dy++) {
 		int fbY = offsetY + dy;
 		if (fbY < 0 || fbY >= 480)
@@ -485,34 +494,38 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 		int srcY = (dy * (int)_screenHeight) / scaledH;
 		if (srcY >= (int)_screenHeight) srcY = _screenHeight - 1;
 
-		uint32 *fbRow = _fb->back_buffer + fbY * 800;
+		uint16 *fbRow = (uint16 *)_fb->back_buffer + fbY * 800;
 
 		// (O2) Lift row pointer once per source row
 		if (bpp == 1) {
-			// (O1+O10) CLUT8 fast path: precomputed _palette32 LUT
-			// Precompute valid dx range to eliminate per-pixel bounds check
+			// (O1+O8+O10) CLUT8 fast path: precomputed _palette16 LUT (RGB565)
 			const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
 			int dxStart = (offsetX < 0) ? -offsetX : 0;
 			int dxEnd   = (offsetX + scaledW > 800) ? (800 - offsetX) : scaledW;
-			uint32 *dst = fbRow + offsetX + dxStart;
+			uint16 *dst = fbRow + offsetX + dxStart;
 			int dx = dxStart;
 #ifdef __ARM_NEON
-			// (O10) NEON: write 4 pixels (16 bytes) per iteration
-			int dxStop4 = dxStart + ((dxEnd - dxStart) & ~3); // round down to multiple of 4
-			for (; dx < dxStop4; dx += 4) {
-				uint32x4_t px = vdupq_n_u32(0);
-				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 0]]], px, 0);
-				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 1]]], px, 1);
-				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 2]]], px, 2);
-				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 3]]], px, 3);
-				vst1q_u32(dst, px);
-				dst += 4;
+			// (O8+O10) NEON: write 8 pixels (16 bytes) per iteration at 16bpp
+			int dxStop8 = dxStart + ((dxEnd - dxStart) & ~7); // round down to multiple of 8
+			for (; dx < dxStop8; dx += 8) {
+				uint16x8_t px = vdupq_n_u16(0);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 0]]], px, 0);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 1]]], px, 1);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 2]]], px, 2);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 3]]], px, 3);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 4]]], px, 4);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 5]]], px, 5);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 6]]], px, 6);
+				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 7]]], px, 7);
+				vst1q_u16(dst, px);
+				dst += 8;
 			}
 #endif
 			// Scalar remainder (or full loop if no NEON)
 			for (; dx < dxEnd; dx++)
-				*dst++ = _palette32[srcRow[srcXtab[dx]]];
+				*dst++ = _palette16[srcRow[srcXtab[dx]]];
 		} else if (bpp == 2) {
+			// Source is already 16-bit — convert via colorToARGB then to RGB565
 			const uint16 *srcRow = (const uint16 *)_gameSurface.getBasePtr(0, srcY);
 			for (int dx = 0; dx < scaledW; dx++) {
 				int fbX = offsetX + dx;
@@ -520,9 +533,10 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 				uint16 pixel = srcRow[srcXtab[dx]];
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				fbRow[fbX] = (r << 16) | (g << 8) | b;
+				fbRow[fbX] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 			}
 		} else {
+			// 32bpp source → RGB565
 			const uint32 *srcRow = (const uint32 *)_gameSurface.getBasePtr(0, srcY);
 			for (int dx = 0; dx < scaledW; dx++) {
 				int fbX = offsetX + dx;
@@ -530,7 +544,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 				uint32 pixel = srcRow[srcXtab[dx]];
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
-				fbRow[fbX] = (r << 16) | (g << 8) | b;
+				fbRow[fbX] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 			}
 		}
 	}
@@ -554,6 +568,8 @@ void RoomWizardGraphicsManager::drawCursor() {
 	int cursorX = _cursorX + offsetX - _cursorHotspotX;
 	int cursorY = _cursorY + offsetY - _cursorHotspotY;
 
+	uint16 *buf16 = (uint16 *)_fb->back_buffer;
+
 	for (int y = 0; y < _cursorSurface.h; y++) {
 		int fbY = cursorY + y;
 		if (fbY < 0 || fbY >= 480)
@@ -564,28 +580,26 @@ void RoomWizardGraphicsManager::drawCursor() {
 			if (fbX < 0 || fbX >= 800)
 				continue;
 
-			uint32 pixel;
+			byte r, g, b;
 			if (_cursorSurface.format.bytesPerPixel == 1) {
 				byte index = *(const byte *)_cursorSurface.getBasePtr(x, y);
 				if (index == _cursorKeyColor)
 					continue;
 
 				byte *pal = _cursorPaletteEnabled ? _cursorPalette : _palette;
-				byte r = pal[index * 3 + 0];
-				byte g = pal[index * 3 + 1];
-				byte b = pal[index * 3 + 2];
-				pixel = (0xFF << 24) | (r << 16) | (g << 8) | b;  // Add alpha channel
+				r = pal[index * 3 + 0];
+				g = pal[index * 3 + 1];
+				b = pal[index * 3 + 2];
 			} else {
-				pixel = *(const uint32 *)_cursorSurface.getBasePtr(x, y);
+				uint32 pixel = *(const uint32 *)_cursorSurface.getBasePtr(x, y);
 				if (pixel == _cursorKeyColor)
 					continue;
 
-				byte r, g, b, a;
+				byte a;
 				_cursorSurface.format.colorToARGB(pixel, a, r, g, b);
-				pixel = (0xFF << 24) | (r << 16) | (g << 8) | b;  // Add alpha channel
 			}
 
-			_fb->back_buffer[fbY * 800 + fbX] = pixel;
+			buf16[fbY * 800 + fbX] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 		}
 	}
 }
@@ -632,15 +646,14 @@ void RoomWizardGraphicsManager::updateScreen() {
 		// transparent so only the actual overlay bitmap is visible.  Black and
 		// all other real colours are composited opaquely, which fixes the GMM
 		// background and the VKB text input field showing as transparent.
+		// (O8) Overlay is already RGB565 — write directly to 16bpp back buffer.
+		uint16 *obuf16 = (uint16 *)_fb->back_buffer;
 		for (int y = 0; y < 480; y++) {
 			for (int x = 0; x < 800; x++) {
 				uint16 pixel = *(const uint16 *)_overlaySurface.getBasePtr(x, y);
 				if (pixel == 0xF81F)
 					continue; // transparent clear-key – keep game pixel underneath
-				byte r = ((pixel >> 11) & 0x1F) << 3;
-				byte g = ((pixel >> 5) & 0x3F) << 2;
-				byte b = (pixel & 0x1F) << 3;
-				_fb->back_buffer[y * 800 + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+				obuf16[y * 800 + x] = pixel;
 			}
 		}
 	} else if (_screenDirty) {
@@ -779,6 +792,7 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 	if (!_fb)
 		return;
 	
+	uint16 *buf16 = (uint16 *)_fb->back_buffer;
 	uint32 currentTime = g_system->getMillis();
 	const uint32 FADE_TIME = 1000; // 1 second fade
 	
@@ -801,7 +815,7 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 		int cy = _touchPoints[i].y;
 		int radius = 20;
 		
-		// Draw filled circle
+		// Draw filled circle (O8: RGB565)
 		for (int dy = -radius; dy <= radius; dy++) {
 			for (int dx = -radius; dx <= radius; dx++) {
 				if (dx * dx + dy * dy <= radius * radius) {
@@ -809,17 +823,17 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 					int py = cy + dy;
 					
 					if (px >= 0 && px < 800 && py >= 0 && py < 480) {
-						// Blend red circle with existing pixel
-						uint32 existing = _fb->back_buffer[py * 800 + px];
-						byte er = (existing >> 16) & 0xFF;
-						byte eg = (existing >> 8) & 0xFF;
-						byte eb = existing & 0xFF;
+						// Blend red circle with existing RGB565 pixel
+						uint16 existing = buf16[py * 800 + px];
+						byte er = ((existing >> 11) & 0x1F) << 3;
+						byte eg = ((existing >> 5) & 0x3F) << 2;
+						byte eb = (existing & 0x1F) << 3;
 						
 						byte r = ((255 * alpha) + (er * (255 - alpha))) / 255;
 						byte g = ((0 * alpha) + (eg * (255 - alpha))) / 255;
 						byte b = ((0 * alpha) + (eb * (255 - alpha))) / 255;
 						
-						_fb->back_buffer[py * 800 + px] = (r << 16) | (g << 8) | b;
+						buf16[py * 800 + px] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 					}
 				}
 			}

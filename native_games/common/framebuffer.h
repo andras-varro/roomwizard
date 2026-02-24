@@ -69,6 +69,9 @@ void fb_fade_in(Framebuffer *fb);
 // RGB color helper
 #define RGB(r, g, b) (((r) << 16) | ((g) << 8) | (b))
 
+// Set framebuffer bits-per-pixel (e.g. 16 or 32). Must be called BEFORE fb_init.
+int fb_set_bpp(const char *device, int bpp);
+
 // Common colors
 #define COLOR_BLACK   RGB(0, 0, 0)
 #define COLOR_WHITE   RGB(255, 255, 255)
