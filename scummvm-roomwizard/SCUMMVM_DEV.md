@@ -5,7 +5,7 @@
 **Binary:** ~15 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-24 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
-**Last source edit:** 2026-02-24 — Performance optimizations O1–O7, O10 (CPU 80%→51%):  
+**Last source edit:** 2026-02-24 — Performance optimizations O1–O7, O10 (CPU 80%→51%) + screen blanking:  
 1. Precomputed `_palette32[256]` LUT — single indexed load replaces per-pixel palette decode  
 2. Precomputed `srcXtab[]` + row pointer lifting — eliminates per-pixel division  
 3. Border-only clear instead of full `fb_clear()` — skips overwritten pixels  
@@ -13,6 +13,7 @@
 5. NEON `vst1q_u32` 4-pixel writes + bounds-check elimination in CLUT8 blit  
 6. Skip `fb_swap` on unchanged frames (menu CPU 35%→15%)  
 7. Fixed right-click event sequence (`LBUTTONUP`→`RBUTTONDOWN`→`RBUTTONUP`)  
+8. Screen blanks to black on exit (`blankScreen()` in `quit()` + destructor)  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -111,6 +112,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | OPL / AdLib music (KQ3, LSL5, …) | OK (fixed: mixCallback byte-count bug) |
 | Static linking | OK |
 | Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
+| Screen blanks to black on exit | OK |
 
 ---
 

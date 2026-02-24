@@ -169,6 +169,9 @@ void OSystem_RoomWizard::getTimeAndDate(TimeDate &td, bool skipRecord) const {
 }
 
 void OSystem_RoomWizard::quit() {
+	// Blank the screen before exiting so the display doesn't show a stale frame
+	if (_graphicsManager)
+		((RoomWizardGraphicsManager *)_graphicsManager)->blankScreen();
 	exit(0);
 }
 

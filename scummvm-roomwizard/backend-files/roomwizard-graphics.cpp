@@ -107,11 +107,19 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 
 void RoomWizardGraphicsManager::closeFramebuffer() {
 	if (_fbInitialized && _fb) {
+		blankScreen();
 		fb_close(_fb);
 		free(_fb);
 		_fb = nullptr;
 		_fbInitialized = false;
 	}
+}
+
+void RoomWizardGraphicsManager::blankScreen() {
+	if (!_fbInitialized || !_fb)
+		return;
+	fb_clear(_fb, 0x00000000);
+	fb_swap(_fb);
 }
 
 void RoomWizardGraphicsManager::loadBezelMargins() {

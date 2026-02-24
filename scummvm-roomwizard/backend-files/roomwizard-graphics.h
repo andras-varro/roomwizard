@@ -156,6 +156,9 @@ public:
 	
 	// Scaling info for coordinate transformation
 	void getScalingInfo(int &scaledWidth, int &scaledHeight, int &offsetX, int &offsetY) const;
+
+	// Blank screen (used on exit)
+	void blankScreen();
 };
 
 #endif
