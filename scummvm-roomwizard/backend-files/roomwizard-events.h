@@ -62,6 +62,7 @@ private:
 	
 	TouchPhase _touchPhase;
 	bool _buttonDownSent;
+	bool _longPressFired;    // true after 500ms LBUTTONUP+RBUTTONDOWN sent
 	bool _waitForRelease;    // set after gesture or context switch; blocks input until finger lifts
 	bool _prevOverlayVisible; // tracks overlay state to detect GMM open/close transitions
 	int _lastTouchX;

@@ -10,3 +10,6 @@ MODULE_OBJS := \
 MODULE_OBJS := $(addprefix $(MODULE)/, $(MODULE_OBJS))
 OBJS := $(MODULE_OBJS) $(OBJS)
 MODULE_DIRS += $(sort $(dir $(MODULE_OBJS)))
+
+# (O10) Enable NEON SIMD for the graphics blit hot path
+$(MODULE)/roomwizard-graphics.o: CXXFLAGS += -mfpu=neon

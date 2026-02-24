@@ -40,6 +40,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+
 RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	: _fb(nullptr),
 	  _fbInitialized(false),
@@ -477,13 +481,29 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 
 		// (O2) Lift row pointer once per source row
 		if (bpp == 1) {
-			// (O1) CLUT8 fast path: precomputed _palette32 LUT
+			// (O1+O10) CLUT8 fast path: precomputed _palette32 LUT
+			// Precompute valid dx range to eliminate per-pixel bounds check
 			const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
-			for (int dx = 0; dx < scaledW; dx++) {
-				int fbX = offsetX + dx;
-				if (fbX >= 0 && fbX < 800)
-					fbRow[fbX] = _palette32[srcRow[srcXtab[dx]]];
+			int dxStart = (offsetX < 0) ? -offsetX : 0;
+			int dxEnd   = (offsetX + scaledW > 800) ? (800 - offsetX) : scaledW;
+			uint32 *dst = fbRow + offsetX + dxStart;
+			int dx = dxStart;
+#ifdef __ARM_NEON
+			// (O10) NEON: write 4 pixels (16 bytes) per iteration
+			int dxStop4 = dxStart + ((dxEnd - dxStart) & ~3); // round down to multiple of 4
+			for (; dx < dxStop4; dx += 4) {
+				uint32x4_t px = vdupq_n_u32(0);
+				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 0]]], px, 0);
+				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 1]]], px, 1);
+				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 2]]], px, 2);
+				px = vsetq_lane_u32(_palette32[srcRow[srcXtab[dx + 3]]], px, 3);
+				vst1q_u32(dst, px);
+				dst += 4;
 			}
+#endif
+			// Scalar remainder (or full loop if no NEON)
+			for (; dx < dxEnd; dx++)
+				*dst++ = _palette32[srcRow[srcXtab[dx]]];
 		} else if (bpp == 2) {
 			const uint16 *srcRow = (const uint16 *)_gameSurface.getBasePtr(0, srcY);
 			for (int dx = 0; dx < scaledW; dx++) {
@@ -618,6 +638,9 @@ void RoomWizardGraphicsManager::updateScreen() {
 	} else if (_screenDirty) {
 		blitGameSurfaceToFramebuffer();
 		_screenDirty = false;
+	} else {
+		// (O7) Nothing changed — skip cursor draw and fb_swap entirely
+		return;
 	}
 
 	// Draw touch feedback (debug mode only: set ROOMWIZARD_DEBUG=1)

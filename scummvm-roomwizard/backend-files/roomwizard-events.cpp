@@ -32,6 +32,7 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _touchInitialized(false),
 	  _touchPhase(TOUCH_NONE),
 	  _buttonDownSent(false),
+	  _longPressFired(false),
 	  _waitForRelease(false),
 	  _prevOverlayVisible(false),
 	  _lastTouchX(0),
@@ -347,6 +348,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				_touchStartTime = currentTime;
 				_touchPhase = TOUCH_PRESSED;
 				_buttonDownSent = false;
+				_longPressFired = false;
 
 				// Check for corner gesture (triple-tap) before processing as normal touch
 				checkGestures(state.x, state.y, currentTime);
@@ -371,7 +373,7 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 				if (rwDebugMode()) {
 					debug("TOUCH_NONE -> TOUCH_PRESSED: sending MOUSEMOVE at (%d,%d)", state.x, state.y);
 					// Add touch point for visual feedback
-					OSystem_RoomWizard *system = dynamic_cast<OSystem_RoomWizard *>(g_system);
+					OSystem_RoomWizard *system = rwSystem();
 					if (system && system->getGraphicsManager())
 						((RoomWizardGraphicsManager *)system->getGraphicsManager())->addTouchPoint(state.x, state.y);
 				}
@@ -434,22 +436,45 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 		case TOUCH_HELD:
 			// Touch is being held
 			if (state.released || !state.held) {
-				// Touch released - send button up immediately
-				uint32 touchDuration = currentTime - _touchStartTime;
+				// Touch released
 				_touchPhase = TOUCH_NONE;
-				
-				debug("TOUCH_HELD -> TOUCH_NONE: sending LBUTTONUP (duration=%dms)", touchDuration);
 				
 				int gameX, gameY;
 				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
 				
-				// Check for long press (right-click)
-				if (touchDuration >= LONG_PRESS_TIME) {
+				if (_longPressFired) {
+					// (O6) Long-press already sent LBUTTONUP+RBUTTONDOWN; now close with RBUTTONUP
+					debug("TOUCH_HELD -> TOUCH_NONE: sending RBUTTONUP (long-press release)");
 					event.type = Common::EVENT_RBUTTONUP;
 				} else {
+					debug("TOUCH_HELD -> TOUCH_NONE: sending LBUTTONUP (duration=%dms)",
+					      currentTime - _touchStartTime);
 					event.type = Common::EVENT_LBUTTONUP;
 				}
 				
+				event.mouse.x = gameX;
+				event.mouse.y = gameY;
+				return true;
+			}
+			
+			// (O6) Long-press threshold reached while still held:
+			// Send LBUTTONUP to cleanly close the left-click, then queue RBUTTONDOWN.
+			// On release, RBUTTONUP will be sent (see above).
+			if (!_longPressFired && (currentTime - _touchStartTime) >= LONG_PRESS_TIME) {
+				_longPressFired = true;
+				
+				int gameX, gameY;
+				transformCoordinates(_lastTouchX, _lastTouchY, gameX, gameY);
+				
+				debug("TOUCH_HELD: long-press at (%d,%d) - LBUTTONUP + queue RBUTTONDOWN", gameX, gameY);
+				
+				Common::Event rbDown;
+				rbDown.type = Common::EVENT_RBUTTONDOWN;
+				rbDown.mouse.x = gameX;
+				rbDown.mouse.y = gameY;
+				pushEvent(rbDown);
+				
+				event.type = Common::EVENT_LBUTTONUP;
 				event.mouse.x = gameX;
 				event.mouse.y = gameY;
 				return true;

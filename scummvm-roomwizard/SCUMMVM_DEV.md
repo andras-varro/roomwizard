@@ -4,12 +4,15 @@
 
 **Binary:** ~15 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
-**Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
-**Last source edit:** 2026-02-23 — Three audio/display fixes + volume attenuation:  
-1. Fixed `mixCallback` byte-count bug (was passing frame count → 75% unmixed buffer, OPL at 1/4 rate)  
-2. Removed SCHED_RR from audio thread (starved main thread on single-core ARM → black screen)  
-3. Fixed 32-bit `long` overflow in `updateScreen()` frame-rate cap (epoch-relative subtraction overflowed → every frame skipped)  
-4. Added 50% volume attenuation (−6 dB) to prevent small speaker distortion  
+**Last build:** 2026-02-24 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
+**Last source edit:** 2026-02-24 — Performance optimizations O1–O7, O10 (CPU 80%→51%):  
+1. Precomputed `_palette32[256]` LUT — single indexed load replaces per-pixel palette decode  
+2. Precomputed `srcXtab[]` + row pointer lifting — eliminates per-pixel division  
+3. Border-only clear instead of full `fb_clear()` — skips overwritten pixels  
+4. Cached `rwSystem()` global — eliminates `dynamic_cast` per poll  
+5. NEON `vst1q_u32` 4-pixel writes + bounds-check elimination in CLUT8 blit  
+6. Skip `fb_swap` on unchanged frames (menu CPU 35%→15%)  
+7. Fixed right-click event sequence (`LBUTTONUP`→`RBUTTONDOWN`→`RBUTTONUP`)  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -330,7 +333,7 @@ Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 ## Optimization Backlog
 
 **Baseline (pre-optimization):** CPU ~80%, RAM 5.5%  
-**Measurement:** `top -d2` on device via SSH during KQ3 intro (OPL music + animation)
+**Measurement:** `top -d2` on device via SSH during LSL5 gameplay (OPL music + animation)
 
 | # | Task | Est. | Status | CPU after | Notes |
 |---|---|---|---|---|---|
@@ -340,11 +343,11 @@ Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 | O4 | Cached `rwSystem()` global, eliminate `dynamic_cast` | 10 min | **done** | — | Was 4× `dynamic_cast` per `pollEvent()` |
 | O5 | Remove dead code: `CORNER_TR`, `pushKeyEvent()`, `_gameOffset*`, dup includes, `sched.h` | 10 min | **done** | — | Hygiene |
 | | **O1–O5 combined** | | **done** | **58%** (menu: 35%), RAM 5.9% | **−22 pp** from baseline |
-| O6 | Fix right-click: send `LBUTTONUP`+`RBUTTONDOWN` at 500 ms mark | 20 min | not started | — | Correctness for non-SCUMM engines |
-| O7 | Skip `fb_swap` when frame unchanged | 10 min | not started | — | `_screenDirty` false + no overlay → skip |
+| O6 | Fix right-click: `LBUTTONUP`+`RBUTTONDOWN` at 500 ms, `RBUTTONUP` on release | 20 min | **done** | 58% | Correctness fix, no CPU impact |
+| O7 | Skip `fb_swap` when frame unchanged | 10 min | **done** | 58% (menu: **16%**) | Engine sets `_screenDirty` every frame in-game; helps menu only |
 | O8 | Investigate 16bpp framebuffer (`fbset -depth 16`) | 1 hr | not started | — | Halve memory bandwidth |
 | O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | not started | — | Could eliminate CPU blit entirely |
-| O10 | NEON-accelerated palette blit | 1-2 hr | not started | — | 16 pixels per iteration |
+| O10 | NEON palette blit + bounds-check elimination | 1 hr | **done** | **51%** (menu: 15%) | 4-pixel `vst1q_u32` + precomputed dx range |
 
 ---
 
