@@ -5,7 +5,7 @@
 **Binary:** ~14 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-23 — OssMixerManager: `O_NONBLOCK` + EAGAIN retry fixes TWL4030 506 ms HW-period stall (root cause of bru-bru-bru audio corruption)  
+**Last source edit:** 2026-02-23 — OssMixerManager: drop `SNDCTL_DSP_SETFRAGMENT` + wall-clock deadline pacing (fixes fragment-boundary underruns on loaded 300 MHz ARM)  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -184,24 +184,24 @@ DAC1 → HandsfreeL/R Mux (AudioL1/R1) → HandsfreeL/R Switch (on)
 Boot script `/etc/rc5.d/S29audio-enable` → `/etc/init.d/audio-enable` sets GPIO12 and runs `amixer` to configure the path.  
 ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` via `alsactl store` and restored by `/etc/init.d/alsa-state`.
 
-**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp` **O_NONBLOCK**, sets 44100 Hz stereo S16_LE, constrains the OSS ring to 2×16384 bytes (`SNDCTL_DSP_SETFRAGMENT` — must be first ioctl), then runs a dedicated pthread pulling `mixCallback()` → `write()`. The ALSA OSS shim performs SRC from 44100→48000 Hz in-kernel automatically.
+**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp` **O_NONBLOCK**, sets 44100 Hz stereo S16_LE (no `SNDCTL_DSP_SETFRAGMENT`), then runs a dedicated pthread pulling `mixCallback()` → `write()` with wall-clock pacing. The ALSA OSS shim performs SRC from 44100→48000 Hz in-kernel automatically.
 
-**Why O_NONBLOCK is essential — the TWL4030 HW period problem:**  
-Diagnosis via `native_games/tests/oss_diag.c` showed that blocking `write()` stalls for ~**506 ms** after the OSS ring fills, not the expected 93 ms:
-```
-write[0]:  30 ms   ← fills fragment 0
-write[1]:   0 ms   ← fills fragment 1 (ring full, 32 KB = 185 ms)
-write[2]: 421 ms   ← blocked waiting for ALSA HW period  ← root cause
-write[3+]:506 ms   ← blocked for one full ALSA HW period every call
-```
-The TWL4030 ALSA driver has a hardware period of ~22,317 frames (~506 ms). The OSS shim's blocking `write()` waits for the ALSA HW period to complete before accepting more data — even though the OSS ring only holds 185 ms. Result: 185 ms audio → 321 ms silence → click → repeat ("bru-bru-bru-KLICK").
+**Root-cause history and final design:**
 
-**Fix:** Open with `O_WRONLY | O_NONBLOCK`. `write()` copies data into the OSS software ring immediately and returns `EAGAIN` when full. The audio thread retries with a 5 ms sleep on `EAGAIN`. The OSS ring drains continuously at the hardware sample rate regardless of the underlying ALSA period size — no silent gaps.
+| Attempt | Problem | Effect |
+|---|---|---|
+| Blocking write + no SETFRAGMENT | Ring ~500 ms; write() never blocks | Audio thread spins 100% CPU |
+| Blocking write + SETFRAGMENT(32KB) | ALSA HW period 506 ms >> OSS ring 185 ms | write() stalls 506 ms; 321 ms silence gaps ("bru-bru") |
+| O_NONBLOCK + SETFRAGMENT(32KB) + usleep(5ms) | Scheduling jitter stretches usleep; 18×20ms=360ms > 185ms ring | Fragment-boundary underruns ("Te-te-CLICK") |
+| **O_NONBLOCK + no SETFRAGMENT + wall-clock deadline** | ✅ | Large ring absorbs jitter; deadline sleep is precise |
 
-**Buffer layout:**
-- OSS ring: 2 fragments × 16384 bytes = 32768 bytes = 185 ms  
-- Mix buffer: 4096 frames = 16384 bytes = 93 ms  
-- Steady state: write fills fragment 0 instantly → sleeps ~18 × 5 ms on EAGAIN ≈ 90 ms until it drains → clean, continuous audio with ~185 ms latency
+**Final design:**
+- **O_NONBLOCK** — prevents the 506 ms ALSA HW-period stall on `write()`
+- **No `SNDCTL_DSP_SETFRAGMENT`** — keeps the default ~500 ms ring; provides a large jitter buffer
+- **Wall-clock deadline pacing** — after each `write()`, the thread sleeps until `now + usPerBuf`. This is the primary pacing mechanism; the thread is idle ~93/93 ms of the time. `EAGAIN` is only a safety valve for the rare ring-full case (e.g. after resume).
+- **4096-frame mix buffer** (93 ms) — one `mixCallback()` call per deadline period
+
+**Diagnosis tool:** `native_games/tests/oss_diag.c` — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
 
 ---
 

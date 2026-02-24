@@ -22,6 +22,7 @@
 #include "backends/platform/roomwizard/roomwizard-events.h"
 #include "backends/platform/roomwizard/roomwizard.h"
 #include "backends/platform/roomwizard/roomwizard-graphics.h"
+#include "backends/timer/default/default-timer.h"
 #include "common/system.h"
 #include "common/textconsole.h"
 #include <stdlib.h>
@@ -263,6 +264,15 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 }
 
 bool RoomWizardEventSource::pollEvent(Common::Event &event) {
+	// Pump timer callbacks (OPL sequencer, iMUSE, etc.) on every event poll.
+	// checkTimers is gated to fire at most every 10 ms, so calling it here
+	// (potentially hundreds of times/sec) is safe and low-overhead.
+	if (g_system) {
+		DefaultTimerManager *tm =
+		    static_cast<DefaultTimerManager *>(g_system->getTimerManager());
+		if (tm) tm->checkTimers(10);
+	}
+
 	// Drain any synthetic events queued by gesture detection
 	if (_pendingCount > 0) {
 		// While draining, keep polling hardware so we can detect the release

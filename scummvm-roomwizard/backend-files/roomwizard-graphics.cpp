@@ -22,12 +22,15 @@
 // Forbidden symbol exceptions for file I/O used in loadBezelMargins()
 #define FORBIDDEN_SYMBOL_EXCEPTION_FILE
 #define FORBIDDEN_SYMBOL_EXCEPTION_fopen
+// gettimeofday for frame-rate cap in updateScreen()
+#define FORBIDDEN_SYMBOL_EXCEPTION_time_h
 #define FORBIDDEN_SYMBOL_EXCEPTION_fclose
 #define FORBIDDEN_SYMBOL_EXCEPTION_fgets
 #define FORBIDDEN_SYMBOL_EXCEPTION_sscanf
 #define FORBIDDEN_SYMBOL_EXCEPTION_fprintf
 
 #include "backends/platform/roomwizard/roomwizard-graphics.h"
+#include <sys/time.h>
 #include "backends/platform/roomwizard/roomwizard.h"
 #include "backends/platform/roomwizard/roomwizard-events.h"
 #include "common/rect.h"
@@ -92,9 +95,8 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 	}
 
 	_fbInitialized = true;
-	debug("RoomWizard framebuffer initialized: %dx%d", _fb->width, _fb->height);
-	
-	// Load bezel calibration (best-effort; zero margins if not present)
+
+	// Load bezel calibration(best-effort; zero margins if not present)
 	loadBezelMargins();
 }
 
@@ -518,8 +520,24 @@ void RoomWizardGraphicsManager::drawCursor() {
 }
 
 void RoomWizardGraphicsManager::updateScreen() {
-	if (!_fbInitialized || !_fb)
+	if (!_fbInitialized || !_fb) {
+		static int _updateSkipCount = 0;
+		if (++_updateSkipCount == 100)
+			warning("RoomWizard: updateScreen called 100x but fb not initialized");
 		return;
+	}
+
+	// Cap at 30 fps (~33 ms) to avoid burning the 300 MHz ARM CPU.
+	// The game list GUI calls updateScreen() hundreds of times per second
+	// without this guard, saturating the single core.
+	static struct timeval _lastFrame = {0, 0};
+	struct timeval _now;
+	gettimeofday(&_now, nullptr);
+	long _elapsedUs = (_now.tv_sec - _lastFrame.tv_sec) * 1000000L
+	                + (_now.tv_usec - _lastFrame.tv_usec);
+	if (_elapsedUs < 33333L)
+		return;
+	_lastFrame = _now;
 
 	if (_overlayVisible) {
 		// Always draw the game surface first as background so the overlay

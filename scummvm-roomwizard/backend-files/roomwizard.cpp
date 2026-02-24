@@ -37,7 +37,6 @@
 #include "backends/timer/default/default-timer.h"
 #include "backends/events/default/default-events.h"
 #include "backends/mixer/oss/oss-mixer.h"
-#include "backends/mutex/null/null-mutex.h"
 #include "backends/fs/posix/posix-fs-factory.h"
 #include "common/archive.h"
 #include "common/fs.h"
@@ -47,6 +46,15 @@
 #ifdef ENABLE_VKEYBD
 #include "backends/vkeybd/virtual-keyboard.h"
 #endif
+
+#include "backends/mutex/null/null-mutex.h"
+#include <unistd.h>
+
+// Timer callbacks are pumped cooperatively from delayMillis() and pollEvent()
+// via DefaultTimerManager::checkTimers(10).  No background thread is used —
+// any real pthread + real mutex causes a deadlock with the SCHED_RR audio
+// thread on this single-core ARM during ScummVM init.  NullMutexInternal is
+// safe here because all timer callbacks run exclusively on the main thread.
 
 #include <time.h>
 #include <sys/time.h>
@@ -96,7 +104,7 @@ void OSystem_RoomWizard::initBackend() {
 	// Create event manager
 	_eventManager = new DefaultEventManager(_eventSource);
 	
-	// Create timer manager
+	// Create timer manager — pumped cooperatively from delayMillis/pollEvent.
 	_timerManager = new DefaultTimerManager();
 	
 	// Create save file manager
@@ -136,6 +144,10 @@ uint32 OSystem_RoomWizard::getMillis(bool skipRecord) {
 }
 
 void OSystem_RoomWizard::delayMillis(uint msecs) {
+	// Pump timer callbacks every 10 ms so OPL/MIDI sequencers advance
+	// without a background thread (which deadlocks on single-core ARM).
+	if (_timerManager)
+		static_cast<DefaultTimerManager *>(_timerManager)->checkTimers(10);
 	usleep(msecs * 1000);
 }
 
@@ -221,16 +233,10 @@ OSystem *OSystem_RoomWizard_create() {
 
 // Main entry point
 int main(int argc, char *argv[]) {
-	// Early debug - write directly to avoid any C++ issues
-	const char *msg = "RoomWizard: main() started\n";
-	(void)write(2, msg, 28);
-	
 	// Create the backend
 	g_system = OSystem_RoomWizard_create();
 	assert(g_system);
-	
-	(void)write(2, "RoomWizard: backend created\n", 29);
-	
+
 	// Invoke ScummVM main
 	int res = scummvm_main(argc, argv);
 	
