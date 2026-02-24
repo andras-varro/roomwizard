@@ -1,11 +1,11 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ WORKING — audio enabled 2026-02-23
+## Status: ✅ GUI + touch + audio (including OPL/MIDI music) working.
 
-**Binary:** ~14 MB statically linked  
+**Binary:** ~15 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
-**Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`) — clean, 0 warnings  
-**Last source edit:** 2026-02-23 — OssMixerManager: drop `SNDCTL_DSP_SETFRAGMENT` + wall-clock deadline pacing (fixes fragment-boundary underruns on loaded 300 MHz ARM)  
+**Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
+**Last source edit:** 2026-02-23 — Fixed mixCallback byte-count bug in OssMixerManager (was passing frame count instead of byte count, causing 75% of audio buffer to be unmixed and OPL callbacks to fire at 1/4 rate)  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -99,6 +99,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Ctrl+F5 releases Ctrl modifier cleanly | OK |
 | Game selector integration (`.noargs` + `.hidden` markers) | OK |
 | Audio via TWL4030 speaker (OssMixerManager, `/dev/dsp`) | OK |
+| OPL / AdLib music (KQ3, LSL5, …) | OK (fixed: mixCallback byte-count bug) |
 | Static linking | OK |
 | Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
 
@@ -199,15 +200,69 @@ ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` 
 - **O_NONBLOCK** — prevents the 506 ms ALSA HW-period stall on `write()`
 - **No `SNDCTL_DSP_SETFRAGMENT`** — keeps the default ~500 ms ring; provides a large jitter buffer
 - **Wall-clock deadline pacing** — after each `write()`, the thread sleeps until `now + usPerBuf`. This is the primary pacing mechanism; the thread is idle ~93/93 ms of the time. `EAGAIN` is only a safety valve for the rare ring-full case (e.g. after resume).
-- **4096-frame mix buffer** (93 ms) — one `mixCallback()` call per deadline period
+- **2048-frame mix buffer** (93 ms at 22050 Hz) — one `mixCallback()` call per deadline period
+- **SCHED_RR priority 10** — set on the audio thread after `pthread_create` in `OssMixerManager::init()`. Ensures audio thread preempts main thread on this loaded single-core ARM.
 
-**Diagnosis tool:** `native_games/tests/oss_diag.c` — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
+**Diagnosis tool:** [`native_games/tests/oss_diag.c`](../native_games/tests/oss_diag.c) — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
+
+---
+
+## OPL / AdLib Music — Fixed ✅
+
+### Previous symptom
+Games using OPL2 AdLib emulation (KQ3, LSL5, most SCI/AGI titles) played music as a **repeated noise fragment** — the OPL sequencer never advanced past the first note.
+
+### Root cause — `mixCallback` byte-count bug in `OssMixerManager`
+`MixerImpl::mixCallback(byte *samples, uint len)` expects `len` in **bytes** (documented in `mixer_intern.h`: *"Length of the provided buffer to fill (in bytes, should be divisible by 4)"*). The OSS mixer was passing `_samples` (frame count = 2048) instead of byte count (should be 8192 = `_samples * 4`):
+
+```cpp
+// BEFORE (broken):
+_mixer->mixCallback(buf, _samples);     // 2048, interpreted as bytes
+// Inside mixCallback: memset(buf,0,2048) then len>>=2 → 512 frames mixed
+
+// AFTER (fixed):
+_mixer->mixCallback(buf, bufBytes);     // 8192 (= _samples * 4)
+// Inside mixCallback: memset(buf,0,8192) then len>>=2 → 2048 frames mixed
+```
+
+**Effects of the bug:**
+1. Only 25% of each audio buffer was actually mixed; the rest was stale/uninitialized data
+2. `EmulatedOPL::readBuffer()` generated only 512 frames per 93 ms buffer — the OPL music
+   callback fired at ~22 Hz instead of ~100 Hz → sequencer barely advanced
+3. 75% of the buffer sent to `/dev/dsp` was garbage → "repeated noise fragment"
+
+**Key insight:** The previous diagnosis ("timer starvation via `TimerManager`") was wrong.
+ScummVM's OPL emulators (`DOSBox::OPL`, `MAME::OPL`, `NUKED::OPL`) are all `EmulatedOPL`
+subclasses. They do **not** use `TimerManager::installTimerProc()`. Instead, they fire
+callbacks internally via `readBuffer()` based on sample-counting. The `checkTimers()` calls
+in `delayMillis()`/`pollEvent()` are irrelevant for OPL music (but harmless and useful for
+any timer that does use `TimerManager`).
+
+**Comparison with other backends:**
+- Atari: `_mixer->mixCallback(_samplesBuf, _samples * _outputChannels * 2)` ✅
+- MaxMod: `mixer->mixCallback(dest, length * 4)` ✅
+- SDL: receives `len` from SDL callback ✅ (already bytes)
+
+Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp) (one line).
+
+### Threading / mutex notes (retained for reference)
+
+`NullMutexInternal` + `DefaultTimerManager` + cooperative `checkTimers(10)` in both
+`delayMillis()` and `pollEvent()` remain in place. This avoids priority-inversion deadlocks
+between the SCHED_RR audio thread and the main thread on single-core ARM. The OPL music
+fix does not depend on any of this — it was purely a `mixCallback` argument error.
+
+### Debugging tips
+- KQ3 `intro` sequence plays music immediately after start — quickest test.
+- Run with `> /tmp/scummvm.log 2>&1`; `WARNING:` lines go to stderr and appear immediately (stdout is block-buffered to file).
+- `top -H` — a `SCHED_RR` audio thread appears as priority `-11` or `rt` in the `PR` column.
 
 ---
 
 ## Next Steps
 
-*No outstanding blockers.* The watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely without any extra steps.
+1. **Deploy and verify** — `scp scummvm root@192.168.50.73:/opt/games/` then test KQ3 intro music.
+2. Watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely without extra steps.
 
 ---
 

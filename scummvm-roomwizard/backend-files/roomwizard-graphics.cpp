@@ -530,14 +530,25 @@ void RoomWizardGraphicsManager::updateScreen() {
 	// Cap at 30 fps (~33 ms) to avoid burning the 300 MHz ARM CPU.
 	// The game list GUI calls updateScreen() hundreds of times per second
 	// without this guard, saturating the single core.
+	// NOTE: _lastFrame is initialised on first call, NOT to {0,0}.  On
+	// 32-bit ARM `long` is 32 bits; subtracting epoch 0 from the current
+	// time and multiplying by 1 000 000 overflows to a negative value,
+	// which always passes the < 33333 gate — every frame is skipped.
 	static struct timeval _lastFrame = {0, 0};
+	static bool _firstFrame = true;
 	struct timeval _now;
 	gettimeofday(&_now, nullptr);
-	long _elapsedUs = (_now.tv_sec - _lastFrame.tv_sec) * 1000000L
-	                + (_now.tv_usec - _lastFrame.tv_usec);
-	if (_elapsedUs < 33333L)
-		return;
-	_lastFrame = _now;
+	if (_firstFrame) {
+		_firstFrame = false;
+		_lastFrame = _now;
+		// fall through to render the first frame immediately
+	} else {
+		long _elapsedUs = (_now.tv_sec - _lastFrame.tv_sec) * 1000000L
+		                + (_now.tv_usec - _lastFrame.tv_usec);
+		if (_elapsedUs > 0 && _elapsedUs < 33333L)
+			return;
+		_lastFrame = _now;
+	}
 
 	if (_overlayVisible) {
 		// Always draw the game surface first as background so the overlay

@@ -115,16 +115,14 @@ void OssMixerManager::init() {
 	_threadRunning = true;
 	pthread_create(&_thread, nullptr, ossAudioThreadShim, this);
 
-	// Elevate the audio thread to soft real-time so it preempts the main
-	// game thread the instant its usleep() expires.  Without this, on a
-	// loaded 300 MHz ARM the main thread (75% CPU) starves the audio thread
-	// for 20-40 ms past its wakeup deadline → ring underrun → sha-sha stutter.
-	// SCHED_RR at priority 10 is well below kernel IRQ handlers but above
-	// all SCHED_OTHER tasks.  Requires root (ScummVM runs as root here).
-	struct sched_param sp;
-	sp.sched_priority = 10;
-	if (pthread_setschedparam(_thread, SCHED_RR, &sp) != 0)
-		warning("OssMixerManager: could not set SCHED_RR (not running as root?)");
+	// NOTE: SCHED_RR was previously used here to prevent audio-thread
+	// starvation on the loaded 300 MHz ARM.  However, with the correct
+	// mixCallback byte count (bufBytes) the audio thread now does 4x more
+	// mixing work per cycle.  On single-core ARM, SCHED_RR causes the
+	// RT-priority audio thread to starve the main thread during init,
+	// producing a black screen.  The ~500 ms OSS ring buffer easily
+	// absorbs 20-40 ms of SCHED_OTHER scheduling jitter, so RT priority
+	// is unnecessary.
 
 	debug("OssMixerManager: /dev/dsp ready at %u Hz, %u frames/buf", _outputRate, _samples);
 }
@@ -151,7 +149,7 @@ void OssMixerManager::audioThread() {
 			continue;
 		}
 
-		_mixer->mixCallback(buf, _samples);
+		_mixer->mixCallback(buf, bufBytes);
 
 		// Write the buffer.  With O_NONBLOCK and the unconstrained ring
 		// (~500 ms), write() almost always succeeds in 1-2 calls.
