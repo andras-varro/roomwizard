@@ -171,7 +171,7 @@ Saves to `/etc/touch_calibration.conf`. Loaded automatically by games and ScummV
 ## 7. Permanent Game Mode
 
 Replaces the browser/X11 stack with the game selector on every boot.
-**Also installs the audio boot script** (`/etc/init.d/audio-enable`) that enables GPIO12 (speaker amp) and configures the TWL4030 mixer path — required for sound in ScummVM and native games.
+**Also installs the audio boot script** (`/etc/init.d/audio-enable`) that enables GPIO12 (speaker amp) and configures the TWL4030 mixer path — required for sound in ScummVM and native games. ScummVM applies 50% software volume attenuation to prevent speaker distortion.
 
 ```bash
 scp native_games/roomwizard-games-init.sh $DEVICE:/etc/init.d/roomwizard-games

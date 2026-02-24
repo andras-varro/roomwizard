@@ -5,7 +5,11 @@
 **Binary:** ~15 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-23 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
-**Last source edit:** 2026-02-23 — Fixed mixCallback byte-count bug in OssMixerManager (was passing frame count instead of byte count, causing 75% of audio buffer to be unmixed and OPL callbacks to fire at 1/4 rate)  
+**Last source edit:** 2026-02-23 — Three audio/display fixes + volume attenuation:  
+1. Fixed `mixCallback` byte-count bug (was passing frame count → 75% unmixed buffer, OPL at 1/4 rate)  
+2. Removed SCHED_RR from audio thread (starved main thread on single-core ARM → black screen)  
+3. Fixed 32-bit `long` overflow in `updateScreen()` frame-rate cap (epoch-relative subtraction overflowed → every frame skipped)  
+4. Added 50% volume attenuation (−6 dB) to prevent small speaker distortion  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -185,7 +189,7 @@ DAC1 → HandsfreeL/R Mux (AudioL1/R1) → HandsfreeL/R Switch (on)
 Boot script `/etc/rc5.d/S29audio-enable` → `/etc/init.d/audio-enable` sets GPIO12 and runs `amixer` to configure the path.  
 ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` via `alsactl store` and restored by `/etc/init.d/alsa-state`.
 
-**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp` **O_NONBLOCK**, sets 44100 Hz stereo S16_LE (no `SNDCTL_DSP_SETFRAGMENT`), then runs a dedicated pthread pulling `mixCallback()` → `write()` with wall-clock pacing. The ALSA OSS shim performs SRC from 44100→48000 Hz in-kernel automatically.
+**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp` **O_NONBLOCK**, sets **22050 Hz** stereo S16_LE (no `SNDCTL_DSP_SETFRAGMENT`), then runs a dedicated pthread pulling `mixCallback()` → volume attenuation (50% / −6 dB) → `write()` with wall-clock pacing. 22050 Hz halves OPL synthesis workload and avoids the expensive non-integer SRC from 44100→48000 in the ALSA OSS shim.
 
 **Root-cause history and final design:**
 
@@ -199,9 +203,10 @@ ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` 
 **Final design:**
 - **O_NONBLOCK** — prevents the 506 ms ALSA HW-period stall on `write()`
 - **No `SNDCTL_DSP_SETFRAGMENT`** — keeps the default ~500 ms ring; provides a large jitter buffer
-- **Wall-clock deadline pacing** — after each `write()`, the thread sleeps until `now + usPerBuf`. This is the primary pacing mechanism; the thread is idle ~93/93 ms of the time. `EAGAIN` is only a safety valve for the rare ring-full case (e.g. after resume).
+- **Wall-clock deadline pacing** — after each `write()`, the thread sleeps until `now + usPerBuf`. This is the primary pacing mechanism; the thread is idle ~90/93 ms of the time. `EAGAIN` is only a safety valve for the rare ring-full case (e.g. after resume).
 - **2048-frame mix buffer** (93 ms at 22050 Hz) — one `mixCallback()` call per deadline period
-- **SCHED_RR priority 10** — set on the audio thread after `pthread_create` in `OssMixerManager::init()`. Ensures audio thread preempts main thread on this loaded single-core ARM.
+- **SCHED_OTHER** (default priority) — SCHED_RR was removed because it starved the main thread on single-core ARM after the mixCallback fix increased audio CPU load 4×. The ~500 ms ring easily absorbs SCHED_OTHER jitter.
+- **50% volume attenuation** — arithmetic right-shift (>>1) on all int16 samples post-mix. The RoomWizard's small speaker distorts at full-scale output.
 
 **Diagnosis tool:** [`native_games/tests/oss_diag.c`](../native_games/tests/oss_diag.c) — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
 
@@ -243,7 +248,7 @@ any timer that does use `TimerManager`).
 - MaxMod: `mixer->mixCallback(dest, length * 4)` ✅
 - SDL: receives `len` from SDL callback ✅ (already bytes)
 
-Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp) (one line).
+Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 
 ### Threading / mutex notes (retained for reference)
 
@@ -259,10 +264,71 @@ fix does not depend on any of this — it was purely a `mixCallback` argument er
 
 ---
 
+---
+
+## SCHED_RR Removal — Fixed ✅
+
+### Previous symptom
+After the mixCallback byte-count fix, ScummVM displayed a **black screen** on startup. The GUI never appeared, though the process was running.
+
+### Root cause — audio thread CPU starvation
+The audio thread had `SCHED_RR` (real-time round-robin) priority 10. Before the mixCallback fix, it mixed only 512 frames (25% of the buffer) per 93 ms cycle — fast and light. After the fix, it correctly mixes 2048 frames — **4× more CPU work**. On a single-core 300 MHz ARM, the RT-priority audio thread now consumed enough CPU during init to starve the main thread, preventing any screen rendering.
+
+### Fix
+Removed the `SCHED_RR` block from `OssMixerManager::init()`. The ~500 ms OSS ring buffer absorbs 20–40 ms of SCHED_OTHER scheduling jitter easily. No audio glitches observed.
+
+Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
+
+---
+
+## Frame Rate Cap Overflow — Fixed ✅
+
+### Previous symptom
+Black screen persisted even after removing SCHED_RR. ScummVM was running (responsive to SSH kill), but never rendered anything to the framebuffer.
+
+### Root cause — 32-bit `long` overflow in `updateScreen()`
+The 30fps frame-rate cap in `updateScreen()` used:
+```cpp
+static struct timeval _lastFrame = {0, 0};
+// ...
+long _elapsedUs = (now.tv_sec - _lastFrame.tv_sec) * 1000000L
+                + (now.tv_usec - _lastFrame.tv_usec);
+if (_elapsedUs < 33333) return;  // skip frame
+```
+
+On 32-bit ARM, `long` is 32 bits (range ±2.1 billion). With `_lastFrame` initialized to epoch (1970), the delta is ~1.74 billion seconds. Multiplying by 1,000,000 produces `1,740,000,000 * 1,000,000 = 1.74×10¹⁵`, which **overflows** a 32-bit signed `long` to a **negative** value. Since a negative value is always `< 33333`, **every frame is skipped forever**.
+
+### Fix
+Changed to a first-call initialization pattern:
+```cpp
+static bool _firstFrame = true;
+static struct timeval _lastFrame;
+if (_firstFrame) {
+    gettimeofday(&_lastFrame, nullptr);
+    _firstFrame = false;
+}
+```
+Also added `_elapsedUs > 0` guard to handle rare `gettimeofday` jitter.
+
+### Lesson learned
+On 32-bit ARM (`sizeof(long) == 4`), **never** subtract epoch-relative `timeval` values that may be far apart. Always initialize timing variables to the current time on first use.
+
+Files changed: [`backend-files/roomwizard-graphics.cpp`](backend-files/roomwizard-graphics.cpp).
+
+---
+
+## Volume Attenuation — Applied ✅
+
+The RoomWizard's small PCB speaker distorts at full-scale DAC output. All int16 samples are attenuated by 50% (−6 dB) via arithmetic right-shift (`>>1`) immediately after `mixCallback()` returns and before writing to `/dev/dsp`. This is a zero-allocation, branch-free operation on every buffer (2048 frames × 2 channels = 4096 samples).
+
+Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
+
+---
+
 ## Next Steps
 
-1. **Deploy and verify** — `scp scummvm root@192.168.50.73:/opt/games/` then test KQ3 intro music.
-2. Watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely without extra steps.
+1. Watchdog is fed by `/usr/sbin/watchdog` system daemon — ScummVM runs indefinitely.
+2. If more volume control is needed, the attenuation shift can be changed (>>2 = 25%, >>0 = 100%).
 
 ---
 

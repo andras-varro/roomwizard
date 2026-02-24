@@ -21,7 +21,7 @@ Three main projects for the RoomWizard embedded device:
 
 1. **Native Games** - Direct framebuffer C games (Snake, Tetris, Pong)
 2. **Browser Games** - HTML5 brick breaker with LED feedback
-3. **ScummVM** - Custom backend for classic point-and-click adventures
+3. **ScummVM** - Custom backend for classic point-and-click adventures (with OPL/AdLib music, touch controls, virtual keyboard)
 
 For detailed hardware specifications, see **[Hardware Platform](SYSTEM_ANALYSIS.md#hardware-platform)** in the System Analysis document.
 

@@ -151,6 +151,16 @@ void OssMixerManager::audioThread() {
 
 		_mixer->mixCallback(buf, bufBytes);
 
+		// Attenuate to ~50% volume to avoid distorting the small
+		// RoomWizard speaker.  Arithmetic right-shift on signed int16
+		// is exact −6 dB with no clipping risk.
+		{
+			int16 *s = (int16 *)buf;
+			int n = bufBytes / 2;
+			for (int i = 0; i < n; ++i)
+				s[i] >>= 1;
+		}
+
 		// Write the buffer.  With O_NONBLOCK and the unconstrained ring
 		// (~500 ms), write() almost always succeeds in 1-2 calls.
 		// The EAGAIN path is a safety net for the rare case we somehow

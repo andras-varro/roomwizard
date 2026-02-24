@@ -37,7 +37,9 @@ ssh root@192.168.50.73 '/opt/games/unified_calibrate'
 
 ## Status
 
-✅ Fully functional — see [SCUMMVM_DEV.md](SCUMMVM_DEV.md) for details
+✅ Fully functional — GUI, touch, audio (OPL/AdLib music + SFX), virtual keyboard all working.
+Volume attenuated to 50% to prevent speaker distortion.
+See [SCUMMVM_DEV.md](SCUMMVM_DEV.md) for detailed architecture, bug history, and debugging tips.
 
 ## Backend Files
 

@@ -6,8 +6,10 @@ This is a custom ScummVM backend for the RoomWizard device, implementing native 
 
 - **Native Framebuffer Rendering**: Direct rendering to `/dev/fb0` (800x480 @ 32-bit ARGB)
 - **Touch Input Support**: Single-touch resistive touchscreen via `/dev/input/event0`
-- **Automatic Scaling**: Games are centered and scaled to fit the display
+- **Automatic Scaling**: Games are centered and scaled to fit the display, with bezel-aware margins
 - **Software Cursor**: Rendered cursor with palette support
+- **Audio via OSS**: OPL/AdLib music and SFX through TWL4030 speaker (`/dev/dsp`)
+- **Virtual Keyboard**: On-screen keyboard via triple-tap gesture
 - **POSIX Filesystem**: Standard save/load functionality
 
 ## Hardware Requirements
@@ -26,19 +28,24 @@ Configure ScummVM with the roomwizard backend:
 ./configure \
   --host=arm-linux-gnueabihf \
   --backend=roomwizard \
-  --disable-alsa \
+  --disable-all-engines \
+  --enable-engine=scumm \
+  --enable-engine=scumm-7-8 \
+  --enable-engine=he \
+  --enable-engine=agi \
+  --enable-engine=sci \
+  --enable-engine=agos \
+  --enable-engine=sky \
+  --enable-engine=queen \
   --disable-mt32emu \
   --disable-flac \
   --disable-mad \
   --disable-vorbis \
   --enable-release \
   --enable-optimizations \
-  --disable-all-engines \
-  --enable-engine=scumm \
-  --enable-engine=scumm-7-8 \
-  --enable-engine=he
+  --enable-vkeybd
 
-make
+make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 ```
 
 ## Supported Pixel Formats
@@ -52,13 +59,16 @@ make
 - **Touch**: Left mouse button
 - **Long Press (500ms)**: Right mouse button
 - **Drag**: Mouse movement
+- **Triple-tap bottom-right**: Global Main Menu (Ctrl+F5)
+- **Triple-tap bottom-left**: Virtual Keyboard
+- **Triple-tap top-right**: Enter key
 
 ## Limitations
 
-- **No Audio**: Audio subsystem is disabled (NullMixerManager)
-- **Single-Touch Only**: No multi-touch gestures
-- **No Keyboard**: Touch input only
+- **Single-Touch Only**: No multi-touch gestures; right-click = long-press 500 ms
+- **No MIDI**: NullMidiDriver (OPL emulation works for AdLib music)
 - **Software Rendering**: No hardware acceleration
+- **Volume**: Fixed 50% attenuation to prevent speaker distortion
 
 ## Dependencies
 
@@ -77,17 +87,26 @@ OSystem_RoomWizard (backends/platform/roomwizard/roomwizard.cpp)
     │   └── framebuffer.c (native library)
     ├── RoomWizardEventSource (roomwizard-events.cpp)
     │   └── touch_input.c (native library)
+    ├── OssMixerManager (oss-mixer.cpp)
+    │   └── /dev/dsp (TWL4030 via ALSA OSS shim)
     ├── DefaultTimerManager
     ├── DefaultEventManager
-    ├── DefaultSaveFileManager
-    └── NullMixerManager
+    └── DefaultSaveFileManager
+```
 ```
 
 ## Testing
 
 Tested with:
-- LSL 5
-- KQ 1
+- Monkey Island 1 & 2
+- Day of the Tentacle
+- King's Quest 1–6 (AGI/SCI)
+- Leisure Suit Larry 1–5
+- Space Quest 1–5
+- Simon the Sorcerer
+- Beneath a Steel Sky
+- Flight of the Amazon Queen
+- Putt-Putt, Freddi Fish, Pajama Sam (HE)
 
 ## Author
 

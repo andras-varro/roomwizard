@@ -268,7 +268,7 @@ show_info() {
     echo "  - Framebuffer rendering (800x480)"
     echo "  - Bezel-aware viewport scaling"
     echo "  - Virtual keyboard (vkeybd_roomwizard.zip)"
-    echo "  - Audio via TWL4030 speaker (/dev/dsp OSS, O_NONBLOCK)"
+    echo "  - Audio via TWL4030 speaker (/dev/dsp OSS, O_NONBLOCK, 22050 Hz, 50% attenuation)"
     echo ""
 }
 
