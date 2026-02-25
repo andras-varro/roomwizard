@@ -484,6 +484,19 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 
 	const int bpp = _screenFormat.bytesPerPixel;
 
+	// (O11) Row deduplication via cached temp row.
+	// When scaling 200→~460 rows (nearest-neighbour), ~57% of consecutive
+	// dest rows map to the same source row.  We render unique rows into a
+	// stack-resident temp buffer (L1-cache-hot), then memcpy to the
+	// framebuffer.  Duplicate rows just repeat the memcpy — skipping
+	// palette lookup + NEON entirely.  Using a cached temp buffer avoids
+	// reading from the framebuffer's write-combined memory (very slow on ARM).
+	uint16 tempRow[800];
+	int cpySrc = (offsetX < 0) ? 0 : offsetX;
+	int cpyEnd = ((offsetX + scaledW) > 800) ? 800 : (offsetX + scaledW);
+	int cpyBytes = (cpyEnd > cpySrc) ? (cpyEnd - cpySrc) * 2 : 0;
+	int prevSrcY = -1;
+
 	// Scale game surface → framebuffer using nearest-neighbour (O8: 16bpp output)
 	for (int dy = 0; dy < scaledH; dy++) {
 		int fbY = offsetY + dy;
@@ -498,32 +511,39 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 
 		// (O2) Lift row pointer once per source row
 		if (bpp == 1) {
-			// (O1+O8+O10) CLUT8 fast path: precomputed _palette16 LUT (RGB565)
-			const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
-			int dxStart = (offsetX < 0) ? -offsetX : 0;
-			int dxEnd   = (offsetX + scaledW > 800) ? (800 - offsetX) : scaledW;
-			uint16 *dst = fbRow + offsetX + dxStart;
-			int dx = dxStart;
+			// (O11) Only render unique source rows; duplicates reuse tempRow
+			if (srcY != prevSrcY) {
+				prevSrcY = srcY;
+				// (O1+O8+O10) CLUT8 fast path: render to cached tempRow
+				const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
+				int dxStart = (offsetX < 0) ? -offsetX : 0;
+				int dxEnd   = (offsetX + scaledW > 800) ? (800 - offsetX) : scaledW;
+				uint16 *dst = tempRow + offsetX + dxStart;
+				int dx = dxStart;
 #ifdef __ARM_NEON
-			// (O8+O10) NEON: write 8 pixels (16 bytes) per iteration at 16bpp
-			int dxStop8 = dxStart + ((dxEnd - dxStart) & ~7); // round down to multiple of 8
-			for (; dx < dxStop8; dx += 8) {
-				uint16x8_t px = vdupq_n_u16(0);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 0]]], px, 0);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 1]]], px, 1);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 2]]], px, 2);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 3]]], px, 3);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 4]]], px, 4);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 5]]], px, 5);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 6]]], px, 6);
-				px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 7]]], px, 7);
-				vst1q_u16(dst, px);
-				dst += 8;
-			}
+				// (O8+O10) NEON: write 8 pixels (16 bytes) per iteration at 16bpp
+				int dxStop8 = dxStart + ((dxEnd - dxStart) & ~7);
+				for (; dx < dxStop8; dx += 8) {
+					uint16x8_t px = vdupq_n_u16(0);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 0]]], px, 0);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 1]]], px, 1);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 2]]], px, 2);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 3]]], px, 3);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 4]]], px, 4);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 5]]], px, 5);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 6]]], px, 6);
+					px = vsetq_lane_u16(_palette16[srcRow[srcXtab[dx + 7]]], px, 7);
+					vst1q_u16(dst, px);
+					dst += 8;
+				}
 #endif
-			// Scalar remainder (or full loop if no NEON)
-			for (; dx < dxEnd; dx++)
-				*dst++ = _palette16[srcRow[srcXtab[dx]]];
+				// Scalar remainder (or full loop if no NEON)
+				for (; dx < dxEnd; dx++)
+					*dst++ = _palette16[srcRow[srcXtab[dx]]];
+			}
+			// Copy cached row to framebuffer (write-only, no fb read)
+			if (cpyBytes > 0)
+				memcpy(fbRow + cpySrc, tempRow + cpySrc, cpyBytes);
 		} else if (bpp == 2) {
 			// Source is already 16-bit — convert via colorToARGB then to RGB565
 			const uint16 *srcRow = (const uint16 *)_gameSurface.getBasePtr(0, srcY);

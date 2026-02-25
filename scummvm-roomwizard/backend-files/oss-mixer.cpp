@@ -98,9 +98,14 @@ void OssMixerManager::init() {
 	int fmt = AFMT_S16_LE;
 	ioctl(_fd, SNDCTL_DSP_SETFMT, &fmt);
 
-	// Stereo
-	int stereo = 1;
-	ioctl(_fd, SNDCTL_DSP_STEREO, &stereo);
+	// Stereo — use SNDCTL_DSP_CHANNELS (not deprecated SNDCTL_DSP_STEREO
+	// which the ALSA OSS emulation on this device silently ignores, leaving
+	// the device in mono; stereo data then plays at half speed).
+	int channels = 2;
+	ioctl(_fd, SNDCTL_DSP_CHANNELS, &channels);
+	if (channels != 2) {
+		warning("OssMixerManager: requested 2 channels, got %d — audio may be wrong", channels);
+	}
 
 	// 22050 Hz — avoids expensive non-integer SRC from 44100→48000 in the
 	// ALSA OSS shim, halves OPL synthesis workload, and suits SCUMM-era content.

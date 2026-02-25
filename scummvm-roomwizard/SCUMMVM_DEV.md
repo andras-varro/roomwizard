@@ -5,7 +5,7 @@
 **Binary:** ~15 MB statically linked  
 **Location:** `/opt/games/scummvm` on device (192.168.50.73)  
 **Last build:** 2026-02-24 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
-**Last source edit:** 2026-02-24 — Performance optimizations O1–O8, O10 (CPU 80%→38%) + screen blanking:  
+**Last source edit:** 2026-02-24 — Performance optimizations O1–O8, O10–O11 (CPU 80%→35%) + screen blanking + stereo fix:  
 1. Precomputed `_palette32[256]` LUT — single indexed load replaces per-pixel palette decode  
 2. Precomputed `srcXtab[]` + row pointer lifting — eliminates per-pixel division  
 3. Border-only clear instead of full `fb_clear()` — skips overwritten pixels  
@@ -15,6 +15,8 @@
 7. Fixed right-click event sequence (`LBUTTONUP`→`RBUTTONDOWN`→`RBUTTONUP`)  
 8. 16bpp RGB565 framebuffer — halves write bandwidth, overlay direct-copy (CPU 51%→38%)  
 9. Screen blanks to black on exit (`blankScreen()` in `quit()` + destructor)  
+10. Row deduplication via cached tempRow — 57% of scaled rows are duplicates, memcpy from L1-cache instead of re-rendering (CPU 38%→35%)  
+11. Fixed OPL half-speed: `SNDCTL_DSP_STEREO` silently ignored by ALSA OSS shim → replaced with `SNDCTL_DSP_CHANNELS`  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend
 
 ---
@@ -74,6 +76,7 @@ ScummVM Core -> OSystem_RoomWizard
     +-- RoomWizardGraphicsManager -> framebuffer.c -> /dev/fb0
     +-- RoomWizardEventSource -> touch_input.c -> /dev/input/event0
     +-- OssMixerManager -> /dev/dsp (OSS compat) -> TWL4030 codec -> SPKR1
+    NOTE: Must use SNDCTL_DSP_CHANNELS (not SNDCTL_DSP_STEREO) — see OSS Stereo Caveat below
     +-- Default managers (timer, events, saves, filesystem)
 ```
 
@@ -110,7 +113,7 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 | Ctrl+F5 releases Ctrl modifier cleanly | OK |
 | Game selector integration (`.noargs` + `.hidden` markers) | OK |
 | Audio via TWL4030 speaker (OssMixerManager, `/dev/dsp`) | OK |
-| OPL / AdLib music (KQ3, LSL5, …) | OK (fixed: mixCallback byte-count bug) |
+| OPL / AdLib music (KQ3, LSL5, …) | OK (fixed: mixCallback byte-count bug + stereo ioctl fix). Tempo still slightly slow — see open issues below |
 | Static linking | OK |
 | Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
 | Screen blanks to black on exit | OK |
@@ -217,6 +220,22 @@ ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` 
 - **50% volume attenuation** — arithmetic right-shift (>>1) on all int16 samples post-mix. The RoomWizard's small speaker distorts at full-scale output.
 
 **Diagnosis tool:** [`native_games/tests/oss_diag.c`](../native_games/tests/oss_diag.c) — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
+
+### OSS Stereo Caveat — SNDCTL_DSP_STEREO is broken
+
+The ALSA OSS compatibility layer on this device (Linux 4.14.52, TWL4030) **silently ignores** the deprecated `SNDCTL_DSP_STEREO` ioctl. It returns `rc=0, stereo=1` (success) but the device stays in mono. Verified with [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c):
+
+```
+SNDCTL_DSP_STEREO(1): rc=0 stereo=1    ← ioctl "succeeds"
+CHANNELS after STEREO: 1               ← but device is actually MONO!
+SNDCTL_DSP_CHANNELS(2): rc=0 ch=2      ← this one works correctly
+```
+
+**Impact:** When stereo interleaved L/R samples are played into a mono device, each L and R sample is consumed as a separate mono frame → playback runs at **exactly half speed**. This was the root cause of OPL music (Greensleeves in KQ II) playing at ~50% tempo.
+
+**Fix:** Replaced `SNDCTL_DSP_STEREO` with `SNDCTL_DSP_CHANNELS` in `oss-mixer.cpp`. After the fix, music tempo is much closer to correct but still ~10-15% slow (see Open Issues).
+
+**Rule:** On this device, always use `SNDCTL_DSP_CHANNELS` instead of `SNDCTL_DSP_STEREO`. The native games (`audio.c`) already use `SNDCTL_DSP_CHANNELS` and are unaffected.
 
 ---
 
@@ -351,6 +370,7 @@ Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 | O8 | 16bpp RGB565 framebuffer (`fb_set_bpp`) | 1 hr | **done** | **38%** (menu: 15%), RAM 5.5% | Halves write bandwidth; NEON now 8px/store; overlay direct-copy |
 | O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | **not viable** | — | `caps.ctrl=0` — no PLANE_SCALE/WINDOW_SCALE; `SETUP_PLANE` returns EINVAL. Kernel 4.14 omapfb has no scaling support. |
 | O10 | NEON palette blit + bounds-check elimination | 1 hr | **done** | **51%** (menu: 15%) | 4-pixel `vst1q_u32` + precomputed dx range (now 8-pixel `vst1q_u16` at 16bpp) |
+| O11 | Row deduplication via cached `tempRow` | 30 min | **done** | **35%** (menu: 15%), RAM 5.3% | ~57% of scaled rows are duplicates; render unique rows to stack buffer (L1-hot), memcpy to fb. Avoids reading write-combined fb memory. |
 
 ---
 
@@ -396,6 +416,10 @@ gameY = (touchY - fbOffsetY) * gameHeight / scaledH;
 Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
 
 ---
+
+## Open Issues
+
+- **OPL music tempo slightly slow (~10-15%):** Fixed the gross half-speed bug (stereo ioctl), but playback is still perceptibly slower than reference. Possible causes: (a) 300 MHz ARM can't keep up with OPL synthesis at 22050 Hz causing mixer underruns, (b) wall-clock pacing in `audioThread()` drifts slightly, (c) ALSA OSS shim resamples 22050→48000 introducing latency. Next steps: try 11025 Hz output rate to halve OPL workload, or profile mixer timing with `gettimeofday` instrumentation.
 
 ## Limitations
 
