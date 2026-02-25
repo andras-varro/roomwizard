@@ -76,22 +76,28 @@ Corner zones are gesture-only — all taps in 80px corners are suppressed from t
 - **No `SNDCTL_DSP_SETFRAGMENT`** — keeps default ~500 ms ring as jitter buffer
 - **Wall-clock deadline pacing** — sleep until `now + usPerBuf` after each write; `EAGAIN` is safety valve only
 - **Mono output** — single speaker; eliminates stereo/mono mismatch bugs; halves all audio-thread work
-- **22050 Hz** — halves OPL synthesis load vs 44100; avoids expensive non-integer SRC in ALSA shim
+- **22050 Hz** — halves OPL synthesis load vs 44100
 - **2048-frame buffer** — 93 ms at 22050 Hz; 4096 bytes mono
 - **SCHED_OTHER** — SCHED_RR starved main thread on single-core ARM; ~500 ms ring absorbs jitter
 - **50% volume attenuation** — `>>1` on int16 samples post-mix; prevents speaker distortion
+- **Read-back ioctls** — `SOUND_PCM_READ_RATE/BITS/CHANNELS` verify actual device state after setup; `_outputRate` uses read-back rate so OPL sample-counting matches real playback
+- **Ring pre-fill** — 3 silence buffers (~280 ms) written before pacing loop starts; prevents initial XRUN
+- **XRUN detection** — `SNDCTL_DSP_GETOSPACE` monitors ring fill level; emergency extra buffer if near-empty
+- **Diagnostic counters** — every ~10s logs: ring fill, EAGAIN count, write errors, deadline resets, XRUNs
 
 ### OSS Stereo Caveat (ALSA OSS shim)
 
-The ALSA OSS shim on this device (Linux 4.14.52, TWL4030) has **two stereo bugs**:
+The ALSA OSS shim on this device (Linux 4.14.52, TWL4030) has **known bugs**:
 1. `SNDCTL_DSP_STEREO` is silently ignored (returns success but stays mono)
-2. `SNDCTL_DSP_SPEED` may reset channel count after `SNDCTL_DSP_CHANNELS(2)`
+2. `SNDCTL_DSP_SPEED` may reset format and/or channels
+3. `SNDCTL_DSP_SETFMT` may reset speed
+4. Set-ioctl output values may NOT reflect the actual device state
 
-When stereo interleaved L/R samples hit a mono device, each sample is consumed as a separate frame → **half-speed playback**. This was the root cause of OPL music playing as a funeral march.
+When stereo interleaved L/R samples hit a mono device, each sample is consumed as a separate frame → **half-speed playback**. When `_outputRate` doesn't match the actual device rate, OPL generates music at the wrong tempo (half-speed if `_outputRate` is 2× real rate).
 
-**Fix:** Mono mixer — `MixerImpl(_outputRate, false, _samples)` + `SNDCTL_DSP_CHANNELS(1)`. ScummVM's mixer handles stereo→mono downmix for DualOPL2/OPL3/iMUSE sources automatically.
+**Fix:** (1) Mono mixer — `MixerImpl(_outputRate, false, _samples)` + `SNDCTL_DSP_CHANNELS(1)`. (2) Set SPEED first, then FMT, then CHANNELS (so FMT/CH survive any reset from SPEED). (3) Read back actual device params with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and use the read-back rate for `_outputRate`. ScummVM's mixer handles stereo→mono downmix for DualOPL2/OPL3/iMUSE sources automatically.
 
-**Diagnostic:** [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c) — verifies channel ioctl behavior including post-SPEED verification.
+**Diagnostic:** [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c) — verifies channel ioctl behavior. On-device log shows read-back values: `OssMixerManager: read-back: rate=N bits=N channels=N`.
 
 ---
 
@@ -121,6 +127,8 @@ Condensed log of issues found and fixed. Full debugging context is in git histor
 | Black screen (post-audio fix) | SCHED_RR audio thread starved main thread on single-core ARM | Removed SCHED_RR, use SCHED_OTHER | `oss-mixer.cpp` |
 | Black screen (persistent) | 32-bit `long` overflow in frame-rate cap (`timeval` delta from epoch) | Init timing baseline to current time, not epoch | `roomwizard-graphics.cpp` |
 | Audio "bru-bru" stuttering | Blocking `write()` stalls for 506 ms ALSA HW period | O_NONBLOCK + wall-clock pacing + no SETFRAGMENT | `oss-mixer.cpp` |
+| OPL still half-speed after mono fix | `_outputRate` may not match actual device rate (set-ioctl output unreliable) | Read back actual rate with `SOUND_PCM_READ_RATE`; use that for `_outputRate` | `oss-mixer.cpp` |
+| Audio breakup after extended play | Ring buffer draining below safe level (wall-clock pacing drift / XRUN) | Pre-fill ring with 3 silence buffers; GETOSPACE monitoring; emergency refill on near-empty | `oss-mixer.cpp` |
 
 **32-bit ARM lesson:** `sizeof(long) == 4` — never compute `(now.tv_sec - epoch_0) * 1000000L`. Always init timing baselines to current time.
 
@@ -128,7 +136,7 @@ Condensed log of issues found and fixed. Full debugging context is in git histor
 
 ## Optimization Backlog
 
-**Baseline:** CPU ~80% → **35%** after all optimizations (LSL5 gameplay, OPL music + animation)
+**Baseline:** CPU ~80% → **32%** after all optimizations (LSL5 gameplay, OPL music + animation)
 
 | # | Optimization | Status | Notes |
 |---|---|---|---|

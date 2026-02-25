@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
 #include <sys/time.h>
@@ -94,26 +95,63 @@ void OssMixerManager::init() {
 	// writes with a wall-clock deadline instead of relying on write()
 	// or EAGAIN blocking behaviour.
 
-	// 16-bit signed little-endian
-	int fmt = AFMT_S16_LE;
-	ioctl(_fd, SNDCTL_DSP_SETFMT, &fmt);
+	// ---------------------------------------------------------------
+	// ALSA OSS shim ioctl bugs (Linux 4.14.52, TWL4030):
+	//  - SNDCTL_DSP_STEREO is silently ignored
+	//  - SNDCTL_DSP_SPEED may reset format and/or channels
+	//  - SNDCTL_DSP_SETFMT may reset speed
+	//
+	// The ioctl output values (written back to the variable) may also
+	// not reflect the ACTUAL device state.  Trust only SOUND_PCM_READ_*
+	// read-back ioctls for the final configuration.
+	//
+	// Strategy: set all three params, then read back the actual state.
+	// Use the read-back rate for _outputRate so OPL sample-counting
+	// matches the real playback rate.
+	// ---------------------------------------------------------------
 
-	// Mono output — the RoomWizard has a single speaker, so stereo is
-	// wasted work.  Mono halves mixer/write/SRC workload AND sidesteps the
-	// ALSA OSS shim bug where SNDCTL_DSP_CHANNELS is silently reset to 1
-	// by SNDCTL_DSP_SPEED, causing stereo interleaved data to play at half
-	// speed (each L and R sample consumed as a separate mono frame).
-	int channels = 1;
-	ioctl(_fd, SNDCTL_DSP_CHANNELS, &channels);
-	if (channels != 1) {
-		warning("OssMixerManager: requested 1 channel, got %d", channels);
+	int val;
+
+	// Set speed FIRST (most likely to reset other params)
+	val = 22050;
+	ioctl(_fd, SNDCTL_DSP_SPEED, &val);
+
+	// Set format AFTER speed
+	val = AFMT_S16_LE;
+	ioctl(_fd, SNDCTL_DSP_SETFMT, &val);
+
+	// Set mono LAST
+	val = 1;
+	ioctl(_fd, SNDCTL_DSP_CHANNELS, &val);
+
+	// Read back the ACTUAL device state with read-only ioctls.
+	// These are more reliable than the set-ioctl output values.
+	int actualRate = 0, actualBits = 0, actualChannels = 0;
+	ioctl(_fd, SOUND_PCM_READ_RATE, &actualRate);
+	ioctl(_fd, SOUND_PCM_READ_BITS, &actualBits);
+	ioctl(_fd, SOUND_PCM_READ_CHANNELS, &actualChannels);
+
+	debug("OssMixerManager: read-back: rate=%d bits=%d channels=%d",
+	      actualRate, actualBits, actualChannels);
+
+	// Use the read-back rate if sane; fall back to requested rate.
+	// This is critical: if _outputRate doesn't match the real playback
+	// rate, OPL sample-counting produces music at the wrong tempo.
+	if (actualRate > 0 && actualRate <= 96000) {
+		_outputRate = (uint32)actualRate;
+	} else {
+		_outputRate = 22050;
+		debug("OssMixerManager: SOUND_PCM_READ_RATE returned %d, using 22050", actualRate);
 	}
 
-	// 22050 Hz — avoids expensive non-integer SRC from 44100→48000 in the
-	// ALSA OSS shim, halves OPL synthesis workload, and suits SCUMM-era content.
-	int rate = 22050;
-	ioctl(_fd, SNDCTL_DSP_SPEED, &rate);
-	_outputRate = (uint32)rate;
+	if (actualBits != 16) {
+		warning("OssMixerManager: device is %d-bit, expected 16-bit!", actualBits);
+	}
+	if (actualChannels != 1) {
+		warning("OssMixerManager: device has %d channels, expected 1!", actualChannels);
+	}
+
+	debug("OssMixerManager: using rate=%u Hz, mono S16LE", _outputRate);
 
 	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 	_mixer->setReady(true);
@@ -141,10 +179,48 @@ void OssMixerManager::audioThread() {
 
 	uint8 *buf = new uint8[bufBytes];
 
+	// ── Query ring-buffer capacity ──────────────────────────────
+	// SNDCTL_DSP_GETOSPACE tells us how much space the driver has.
+	// At init (ring empty) the total fragstotal*fragsize = ring capacity.
+	int ringBytes = 0;
+	{
+		audio_buf_info abi;
+		if (ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
+			ringBytes = abi.fragstotal * abi.fragsize;
+		debug("OssMixerManager: ring buffer: %d fragments x %d bytes = %d bytes (%.0f ms)",
+		      abi.fragstotal, abi.fragsize, ringBytes,
+		      1000.0 * ringBytes / (2.0 * _outputRate));
+		} else {
+			debug("OssMixerManager: GETOSPACE failed, cannot query ring size");
+		}
+	}
+
+	// ── Pre-fill the ring with silence ──────────────────────────
+	// Writing several silent buffers before starting the pacing loop
+	// gives the ring ~200+ ms of headroom.  Without this, the first
+	// scheduling hiccup can drain the ring to zero → ALSA XRUN →
+	// audible breakup.
+	{
+		memset(buf, 0, bufBytes);
+		int prefillBufs = 3; // 3 × 93 ms ≈ 280 ms of silence
+		for (int i = 0; i < prefillBufs; i++) {
+			int r = (int)write(_fd, buf, bufBytes);
+			if (r <= 0) break;
+		}
+		debug("OssMixerManager: pre-filled %d silence buffers (%d ms)",
+		      prefillBufs, (int)(prefillBufs * usPerBuf / 1000));
+	}
+
+	// ── Diagnostic counters ─────────────────────────────────────
+	uint32 totalBufs     = 0;
+	uint32 eagainCount   = 0;
+	uint32 writeErrCount = 0;
+	uint32 deadlineResets = 0;
+	uint32 xrunDetected  = 0;
+	struct timeval lastReport;
+	gettimeofday(&lastReport, nullptr);
+
 	// Wall-clock deadline: we advance this by usPerBuf after each write.
-	// The audio thread sleeps until the deadline, ensuring the hardware
-	// always has exactly one buffer worth of data queued regardless of
-	// how long mixCallback or write() took.
 	struct timeval deadline;
 	gettimeofday(&deadline, nullptr);
 
@@ -177,11 +253,69 @@ void OssMixerManager::audioThread() {
 			if (r > 0) {
 				written += r;
 			} else if (r < 0 && errno == EAGAIN) {
-				usleep(2000); // ring unexpectedly full — wait 2 ms & retry
+				eagainCount++;
+				usleep(2000); // ring full — wait 2 ms & retry
 			} else {
+				// write() returned 0 or a non-EAGAIN error.
+				// Log it — silent drops cause audio breakup.
+				writeErrCount++;
+				if (writeErrCount <= 10 || (writeErrCount % 100) == 0) {
+					warning("OssMixerManager: write() returned %d, errno=%d (%s), wrote %d/%d",
+					        r, errno, strerror(errno), written, bufBytes);
+				}
 				usleep(10000);
 				break;
 			}
+		}
+		totalBufs++;
+
+		// ── Check ring fill level & detect XRUN ─────────────────
+		// If the ring is completely empty after we just wrote, it means
+		// the hardware drained faster than we filled → XRUN territory.
+		{
+			audio_buf_info abi;
+			if (ringBytes > 0 && ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
+				int freeBytes = abi.fragments * abi.fragsize;
+				int filledBytes = ringBytes - freeBytes;
+				// If less than one buffer worth of audio is queued,
+				// we're dangerously close to underrun.
+				if (filledBytes < bufBytes) {
+					xrunDetected++;
+					if (xrunDetected <= 5 || (xrunDetected % 50) == 0) {
+						warning("OssMixerManager: ring near-empty! filled=%d/%d bytes (%.0f ms), xruns=%u",
+						        filledBytes, ringBytes,
+						        1000.0 * filledBytes / (2.0 * _outputRate),
+						        xrunDetected);
+					}
+					// Emergency: write an extra buffer to prevent XRUN
+					_mixer->mixCallback(buf, bufBytes);
+					{
+						int16 *s = (int16 *)buf;
+						int n = bufBytes / 2;
+						for (int i = 0; i < n; ++i)
+							s[i] >>= 1;
+					}
+					write(_fd, buf, bufBytes);
+				}
+			}
+		}
+
+		// ── Periodic diagnostic report (~10 seconds) ────────────
+		if ((totalBufs % 107) == 0) { // 107 × 93 ms ≈ 10 s
+			struct timeval now;
+			gettimeofday(&now, nullptr);
+			int elapsed = (int)(now.tv_sec - lastReport.tv_sec);
+
+			int filledBytes = 0;
+			audio_buf_info abi;
+			if (ringBytes > 0 && ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
+				filledBytes = ringBytes - (abi.fragments * abi.fragsize);
+			}
+
+			debug("OssMixerManager: [%ds] bufs=%u ring=%d/%d bytes eagain=%u err=%u reset=%u xrun=%u",
+			      elapsed, totalBufs, filledBytes, ringBytes,
+			      eagainCount, writeErrCount, deadlineResets, xrunDetected);
+			lastReport = now;
 		}
 
 		// Advance deadline by exactly one buffer period.
@@ -200,8 +334,8 @@ void OssMixerManager::audioThread() {
 		if (sleepUs > 500L && sleepUs < (usPerBuf * 4L)) {
 			usleep((useconds_t)sleepUs);
 		} else if (sleepUs <= 0L) {
-			// Fell behind schedule (CPU overloaded).
-			// Reset deadline to now so we don’t try to catch up.
+			// Fell behind schedule — reset deadline to now.
+			deadlineResets++;
 			gettimeofday(&deadline, nullptr);
 		}
 	}
