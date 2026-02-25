@@ -1,23 +1,10 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ GUI + touch + audio (including OPL/MIDI music) working.
+## Status: ✅ GUI + touch + audio (OPL/AdLib music + SFX) working
 
-**Binary:** ~15 MB statically linked  
-**Location:** `/opt/games/scummvm` on device (192.168.50.73)  
-**Last build:** 2026-02-24 (WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`)  
-**Last source edit:** 2026-02-24 — Performance optimizations O1–O8, O10–O11 (CPU 80%→35%) + screen blanking + stereo fix:  
-1. Precomputed `_palette32[256]` LUT — single indexed load replaces per-pixel palette decode  
-2. Precomputed `srcXtab[]` + row pointer lifting — eliminates per-pixel division  
-3. Border-only clear instead of full `fb_clear()` — skips overwritten pixels  
-4. Cached `rwSystem()` global — eliminates `dynamic_cast` per poll  
-5. NEON `vst1q_u16` 8-pixel writes + bounds-check elimination in CLUT8 blit  
-6. Skip `fb_swap` on unchanged frames (menu CPU 35%→15%)  
-7. Fixed right-click event sequence (`LBUTTONUP`→`RBUTTONDOWN`→`RBUTTONUP`)  
-8. 16bpp RGB565 framebuffer — halves write bandwidth, overlay direct-copy (CPU 51%→38%)  
-9. Screen blanks to black on exit (`blankScreen()` in `quit()` + destructor)  
-10. Row deduplication via cached tempRow — 57% of scaled rows are duplicates, memcpy from L1-cache instead of re-rendering (CPU 38%→35%)  
-11. Fixed OPL half-speed: `SNDCTL_DSP_STEREO` silently ignored by ALSA OSS shim → replaced with `SNDCTL_DSP_CHANNELS`  
-**Version:** ScummVM 2.8.1pre with custom RoomWizard backend
+**Binary:** ~15 MB statically linked → `/opt/games/scummvm` on device  
+**Version:** ScummVM 2.8.1pre with custom RoomWizard backend  
+**Build env:** WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`
 
 ---
 
@@ -34,37 +21,19 @@ make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 arm-linux-gnueabihf-strip scummvm
 scp scummvm root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
-
-# Only needed once (deploy scaled keyboard pack):
-scp ../scummvm-roomwizard/vkeybd_roomwizard.zip root@192.168.50.73:/opt/games/
-# To regenerate vkeybd_roomwizard.zip from upstream source:
-# python3 ../scummvm-roomwizard/make_vkeybd_scaled.py vkeybd_small_source.zip ../scummvm-roomwizard/vkeybd_roomwizard.zip 2
-
-# Only needed once (or after game_selector changes) - run from native_games/:
-arm-linux-gnueabihf-gcc -O2 -static -I. common/framebuffer.c common/touch_input.c \
-  common/hardware.c common/common.c common/ui_layout.c game_selector/game_selector.c \
-  -o build/game_selector -lm
-scp build/game_selector root@192.168.50.73:/opt/games/
-ssh root@192.168.50.73 'chmod +x /opt/games/game_selector && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs'
-# Marker files control game_selector behaviour (non-executable so they are never listed):
-#   <name>.noargs  — launch without fb_dev/touch_dev args (ScummVM opens devices itself)
-#   <name>.hidden  — hide entirely from the games list (dev tools, utilities)
-# Hidden on device: watchdog_feeder touch_test touch_debug touch_inject
-#                   touch_calibrate unified_calibrate pressure_test
-# hardware_test is visible (useful diagnostics)
 ```
 
-Sync backend source to version control after editing:
-```powershell
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.cpp   .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-events.h     .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.cpp .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard-graphics.h   .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.cpp          .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\roomwizard.h            .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\platform\roomwizard\module.mk               .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.h                       .\backend-files\ -Force
-Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.cpp                     .\backend-files\ -Force
+First-time extras:
+```bash
+# Scaled virtual keyboard pack
+scp ../scummvm-roomwizard/vkeybd_roomwizard.zip root@192.168.50.73:/opt/games/
+# To regenerate: python3 ../scummvm-roomwizard/make_vkeybd_scaled.py vkeybd_small_source.zip ../scummvm-roomwizard/vkeybd_roomwizard.zip 2
+```
+
+Sync backend source to version control — see [`README.md`](README.md#backend-files) or use:
+```bash
+bash manage-scummvm-changes.sh sync     # scummvm/ edits → backend-files/
+bash manage-scummvm-changes.sh restore  # backend-files/ → scummvm/
 ```
 
 ---
@@ -72,51 +41,15 @@ Copy-Item ..\scummvm\backends\mixer\oss\oss-mixer.cpp                     .\back
 ## Architecture
 
 ```
-ScummVM Core -> OSystem_RoomWizard
-    +-- RoomWizardGraphicsManager -> framebuffer.c -> /dev/fb0
-    +-- RoomWizardEventSource -> touch_input.c -> /dev/input/event0
-    +-- OssMixerManager -> /dev/dsp (OSS compat) -> TWL4030 codec -> SPKR1
-    NOTE: Must use SNDCTL_DSP_CHANNELS (not SNDCTL_DSP_STEREO) — see OSS Stereo Caveat below
-    +-- Default managers (timer, events, saves, filesystem)
+ScummVM Core → OSystem_RoomWizard
+  ├── RoomWizardGraphicsManager  → /dev/fb0 (800×480 RGB565, double-buffered)
+  ├── RoomWizardEventSource      → /dev/input/event0 (touch, gestures)
+  ├── OssMixerManager            → /dev/dsp (22050 Hz MONO, O_NONBLOCK) → TWL4030 → SPKR1
+  └── Default managers (timer, events, saves, filesystem)
 ```
 
-Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/platform/roomwizard/):
-- `roomwizard.cpp/h` — Main backend, `showVirtualKeyboard()`, feature flags
-- `roomwizard-graphics.cpp/h` — 800x480 framebuffer, bezel-aware scaling
-- `roomwizard-events.cpp/h` — Touch input, state machine, gesture detection
-
----
-
-## What Works
-
-| Feature | Status |
-|---|---|
-| ScummVM launches, GUI renders | OK |
-| Framebuffer 800×480 @ 32bpp | OK |
-| Bezel-aware full-screen scaling | OK |
-| Touch calibration (`/etc/touch_calibration.conf`) | OK |
-| Button clicks (LBUTTONDOWN/UP) | OK |
-| Touch drag (MOUSEMOVE while held) | OK |
-| Long-press right-click (500 ms) | OK |
-| Quick-tap (press+release same poll cycle) | OK |
-| Triple-tap bottom-right → Global Main Menu (Ctrl+F5) | OK |
-| Triple-tap bottom-left → Virtual Keyboard | OK |
-| Triple-tap top-right → Enter key | OK |
-| VKB renders over game (overlay composite) | OK |
-| VKB hit-areas match display size (`vkeybd_roomwizard.zip`) | OK |
-| Overlay transparent clear-key 0xF81F (magenta) | OK |
-| GMM opaque background | OK |
-| VKB text input field opaque background | OK |
-| Corner-zone tap suppression (taps 1+2 of triple-tap) | OK |
-| Post-gesture `_waitForRelease` lockout | OK |
-| Overlay-transition LBUTTONUP injection | OK |
-| Ctrl+F5 releases Ctrl modifier cleanly | OK |
-| Game selector integration (`.noargs` + `.hidden` markers) | OK |
-| Audio via TWL4030 speaker (OssMixerManager, `/dev/dsp`) | OK |
-| OPL / AdLib music (KQ3, LSL5, …) | OK (fixed: mixCallback byte-count bug + stereo ioctl fix). Tempo still slightly slow — see open issues below |
-| Static linking | OK |
-| Debug mode (`ROOMWIZARD_DEBUG=1`) | OK |
-| Screen blanks to black on exit | OK |
+Backend files: [`backends/platform/roomwizard/`](../scummvm/backends/platform/roomwizard/) — `roomwizard.cpp/h`, `roomwizard-graphics.cpp/h`, `roomwizard-events.cpp/h`  
+OSS mixer: [`backends/mixer/oss/oss-mixer.cpp/h`](../scummvm/backends/mixer/oss/oss-mixer.cpp)
 
 ---
 
@@ -126,328 +59,111 @@ Backend files in [`scummvm/backends/platform/roomwizard/`](../scummvm/backends/p
 |---|---|---|
 | Triple-tap | Bottom-right (x>720, y>400) | Global Main Menu (Ctrl+F5) |
 | Triple-tap | Bottom-left (x<80, y>400) | Virtual Keyboard |
-| Triple-tap | Top-right (x>720, y<80) | Enter key (dismiss "Press ENTER" prompts) |
+| Triple-tap | Top-right (x>720, y<80) | Enter key |
 
-**Corner zones are gesture-only** — ALL taps in the 80px corner areas are suppressed from
-the game. Taps 1 and 2 of a triple-tap are silently consumed; tap 3 fires the gesture.
-This prevents character movement to corners during gesture input.
-
-**Key implementation details (`roomwizard-events.cpp`):**
-- `checkGestures()` — records tap timestamps per corner, fires on 3rd tap within 1200 ms
-- `_waitForRelease` flag — set on gesture fire AND on every corner-zone tap; blocks all new
-  touch processing until hardware reports finger lifted (`held=false`)
-- `touch_poll()` resets `pressed`/`released` each call. Quick taps where press+release land
-  in the same poll are handled in `TOUCH_PRESSED`: emits LBUTTONDOWN + queues LBUTTONUP.
-- **Overlay-transition guard** — `_prevOverlayVisible` tracks overlay state each poll. When
-  overlay transitions (GMM opens/closes), any in-flight `TOUCH_HELD` is terminated with a
-  synthetic LBUTTONUP and `_waitForRelease` set. Prevents SCI "stuck walking" caused by
-  LBUTTONDOWN going to the overlay context and LBUTTONUP going to the game context.
+Corner zones are gesture-only — all taps in 80px corners are suppressed from the game. `_waitForRelease` blocks new touch until finger lifts. Overlay-transition guard emits synthetic LBUTTONUP when GMM opens/closes to prevent "stuck walking" in SCI games.
 
 ---
 
-## Screen Scaling & Calibration
+## Audio
 
-Run once on device:
-```bash
-ssh root@192.168.50.73 '/opt/games/unified_calibrate'
-# Phase 1: tap 4 corner crosshairs -> touch offset calibration
-# Phase 2: tap +/- zones -> bezel margin adjustment
-# Saves to /etc/touch_calibration.conf automatically
-```
+**Signal path:** OssMixerManager → `/dev/dsp` (O_NONBLOCK, 22050 Hz mono S16_LE) → ALSA OSS shim → TWL4030 DAC1 → HandsfreeL/R → SPKR1  
+**Amp enable:** GPIO12 HIGH (set by `/etc/init.d/audio-enable` at boot)  
+**Hardware audio details:** See [`SYSTEM_ANALYSIS.md#audio`](../SYSTEM_ANALYSIS.md#audio)
 
-**Current device calibration:**
-```
-TL(8,19) TR(-9,25) BL(8,-22) BR(-8,-27)
-bezel: T=10 B=10 L=0 R=0
-```
+**Design choices:**
+- **O_NONBLOCK** — prevents 506 ms ALSA HW-period stall
+- **No `SNDCTL_DSP_SETFRAGMENT`** — keeps default ~500 ms ring as jitter buffer
+- **Wall-clock deadline pacing** — sleep until `now + usPerBuf` after each write; `EAGAIN` is safety valve only
+- **Mono output** — single speaker; eliminates stereo/mono mismatch bugs; halves all audio-thread work
+- **22050 Hz** — halves OPL synthesis load vs 44100; avoids expensive non-integer SRC in ALSA shim
+- **2048-frame buffer** — 93 ms at 22050 Hz; 4096 bytes mono
+- **SCHED_OTHER** — SCHED_RR starved main thread on single-core ARM; ~500 ms ring absorbs jitter
+- **50% volume attenuation** — `>>1` on int16 samples post-mix; prevents speaker distortion
 
-**Data flow:**
-1. `initTouch()` -> `touch_load_calibration()` -> touch offset correction active
-2. `initFramebuffer()` -> `loadBezelMargins()` -> bezel T/B/L/R parsed
-3. `getScalingInfo()` -> scaled area = (800-L-R) x (480-T-B), aspect-clamped, centered
-4. `blitGameSurfaceToFramebuffer()` -> nearest-neighbour scale into region
-5. `transformCoordinates()` -> touch to game coords via reverse getScalingInfo()
+### OSS Stereo Caveat (ALSA OSS shim)
+
+The ALSA OSS shim on this device (Linux 4.14.52, TWL4030) has **two stereo bugs**:
+1. `SNDCTL_DSP_STEREO` is silently ignored (returns success but stays mono)
+2. `SNDCTL_DSP_SPEED` may reset channel count after `SNDCTL_DSP_CHANNELS(2)`
+
+When stereo interleaved L/R samples hit a mono device, each sample is consumed as a separate frame → **half-speed playback**. This was the root cause of OPL music playing as a funeral march.
+
+**Fix:** Mono mixer — `MixerImpl(_outputRate, false, _samples)` + `SNDCTL_DSP_CHANNELS(1)`. ScummVM's mixer handles stereo→mono downmix for DualOPL2/OPL3/iMUSE sources automatically.
+
+**Diagnostic:** [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c) — verifies channel ioctl behavior including post-SPEED verification.
 
 ---
 
 ## Debug Mode
 
-Set `ROOMWIZARD_DEBUG=1` before launching to enable runtime debug features:
-
 ```bash
 ssh root@192.168.50.73 'ROOMWIZARD_DEBUG=1 /opt/games/scummvm'
 ```
 
-| Feature | Off (default) | On |
-|---|---|---|
-| Touch feedback circles | disabled | Fading red circle on each touch |
-| TOUCH_NONE→PRESSED log | silent | `debug()` to stdout |
+Enables touch feedback circles and TOUCH_NONE→PRESSED debug logging. Read once at startup (`getenv`), cached — zero runtime overhead when off.
 
-The flag is read once at startup (`getenv`) and cached — no runtime overhead.  
-`logMessage()` suppresses all `kDebug` output when the flag is off, so any future `debug()` call is automatically silent without needing individual gating.
-
----
-
-## Audio Details
-
-**Hardware path:** TWL4030 HiFi codec (ALSA card `rw20`, `hw:0,0`) → HandsfreeL/R class-D amp → SPKR1  
-**Driver:** ALSA OSS compatibility shim (`/dev/dsp`, `/dev/audio`, `/dev/mixer`)  
-**Amp enable:** GPIO12 (sysfs) must be driven HIGH; done by `/etc/init.d/audio-enable` at boot  
-**Mixer path (must be configured at boot):**
-```
-DAC1 → HandsfreeL/R Mux (AudioL1/R1) → HandsfreeL/R Switch (on)
-```
-Boot script `/etc/rc5.d/S29audio-enable` → `/etc/init.d/audio-enable` sets GPIO12 and runs `amixer` to configure the path.  
-ALSA mixer state (DAC1 volumes, Predrive) saved to `/var/lib/alsa/asound.state` via `alsactl store` and restored by `/etc/init.d/alsa-state`.
-
-**ScummVM integration:** `OssMixerManager` (`backends/mixer/oss/oss-mixer.{h,cpp}`) opens `/dev/dsp` **O_NONBLOCK**, sets **22050 Hz** stereo S16_LE (no `SNDCTL_DSP_SETFRAGMENT`), then runs a dedicated pthread pulling `mixCallback()` → volume attenuation (50% / −6 dB) → `write()` with wall-clock pacing. 22050 Hz halves OPL synthesis workload and avoids the expensive non-integer SRC from 44100→48000 in the ALSA OSS shim.
-
-**Root-cause history and final design:**
-
-| Attempt | Problem | Effect |
-|---|---|---|
-| Blocking write + no SETFRAGMENT | Ring ~500 ms; write() never blocks | Audio thread spins 100% CPU |
-| Blocking write + SETFRAGMENT(32KB) | ALSA HW period 506 ms >> OSS ring 185 ms | write() stalls 506 ms; 321 ms silence gaps ("bru-bru") |
-| O_NONBLOCK + SETFRAGMENT(32KB) + usleep(5ms) | Scheduling jitter stretches usleep; 18×20ms=360ms > 185ms ring | Fragment-boundary underruns ("Te-te-CLICK") |
-| **O_NONBLOCK + no SETFRAGMENT + wall-clock deadline** | ✅ | Large ring absorbs jitter; deadline sleep is precise |
-
-**Final design:**
-- **O_NONBLOCK** — prevents the 506 ms ALSA HW-period stall on `write()`
-- **No `SNDCTL_DSP_SETFRAGMENT`** — keeps the default ~500 ms ring; provides a large jitter buffer
-- **Wall-clock deadline pacing** — after each `write()`, the thread sleeps until `now + usPerBuf`. This is the primary pacing mechanism; the thread is idle ~90/93 ms of the time. `EAGAIN` is only a safety valve for the rare ring-full case (e.g. after resume).
-- **2048-frame mix buffer** (93 ms at 22050 Hz) — one `mixCallback()` call per deadline period
-- **SCHED_OTHER** (default priority) — SCHED_RR was removed because it starved the main thread on single-core ARM after the mixCallback fix increased audio CPU load 4×. The ~500 ms ring easily absorbs SCHED_OTHER jitter.
-- **50% volume attenuation** — arithmetic right-shift (>>1) on all int16 samples post-mix. The RoomWizard's small speaker distorts at full-scale output.
-
-**Diagnosis tool:** [`native_games/tests/oss_diag.c`](../native_games/tests/oss_diag.c) — measures write() blocking, EAGAIN behaviour, and ring geometry on the device.
-
-### OSS Stereo Caveat — SNDCTL_DSP_STEREO is broken
-
-The ALSA OSS compatibility layer on this device (Linux 4.14.52, TWL4030) **silently ignores** the deprecated `SNDCTL_DSP_STEREO` ioctl. It returns `rc=0, stereo=1` (success) but the device stays in mono. Verified with [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c):
-
-```
-SNDCTL_DSP_STEREO(1): rc=0 stereo=1    ← ioctl "succeeds"
-CHANNELS after STEREO: 1               ← but device is actually MONO!
-SNDCTL_DSP_CHANNELS(2): rc=0 ch=2      ← this one works correctly
-```
-
-**Impact:** When stereo interleaved L/R samples are played into a mono device, each L and R sample is consumed as a separate mono frame → playback runs at **exactly half speed**. This was the root cause of OPL music (Greensleeves in KQ II) playing at ~50% tempo.
-
-**Fix:** Replaced `SNDCTL_DSP_STEREO` with `SNDCTL_DSP_CHANNELS` in `oss-mixer.cpp`. After the fix, music tempo is much closer to correct but still ~10-15% slow (see Open Issues).
-
-**Rule:** On this device, always use `SNDCTL_DSP_CHANNELS` instead of `SNDCTL_DSP_STEREO`. The native games (`audio.c`) already use `SNDCTL_DSP_CHANNELS` and are unaffected.
+**Debugging tips:**
+- KQ3 `intro` plays music immediately — quickest audio test
+- `> /tmp/scummvm.log 2>&1` — WARNING lines go to stderr immediately (stdout is block-buffered)
+- `top -H` shows per-thread CPU
 
 ---
 
-## OPL / AdLib Music — Fixed ✅
+## Bug Fix History
 
-### Previous symptom
-Games using OPL2 AdLib emulation (KQ3, LSL5, most SCI/AGI titles) played music as a **repeated noise fragment** — the OPL sequencer never advanced past the first note.
+Condensed log of issues found and fixed. Full debugging context is in git history.
 
-### Root cause — `mixCallback` byte-count bug in `OssMixerManager`
-`MixerImpl::mixCallback(byte *samples, uint len)` expects `len` in **bytes** (documented in `mixer_intern.h`: *"Length of the provided buffer to fill (in bytes, should be divisible by 4)"*). The OSS mixer was passing `_samples` (frame count = 2048) instead of byte count (should be 8192 = `_samples * 4`):
+| Bug | Root Cause | Fix | Files |
+|---|---|---|---|
+| OPL music = noise fragment | `mixCallback(buf, _samples)` passed frame count instead of byte count | Pass `bufBytes` = samples × bytes-per-frame | `oss-mixer.cpp` |
+| OPL music half-speed | ALSA OSS shim ignores stereo → L/R consumed as separate mono frames | Switched to mono mixer entirely | `oss-mixer.cpp` |
+| Black screen (post-audio fix) | SCHED_RR audio thread starved main thread on single-core ARM | Removed SCHED_RR, use SCHED_OTHER | `oss-mixer.cpp` |
+| Black screen (persistent) | 32-bit `long` overflow in frame-rate cap (`timeval` delta from epoch) | Init timing baseline to current time, not epoch | `roomwizard-graphics.cpp` |
+| Audio "bru-bru" stuttering | Blocking `write()` stalls for 506 ms ALSA HW period | O_NONBLOCK + wall-clock pacing + no SETFRAGMENT | `oss-mixer.cpp` |
 
-```cpp
-// BEFORE (broken):
-_mixer->mixCallback(buf, _samples);     // 2048, interpreted as bytes
-// Inside mixCallback: memset(buf,0,2048) then len>>=2 → 512 frames mixed
-
-// AFTER (fixed):
-_mixer->mixCallback(buf, bufBytes);     // 8192 (= _samples * 4)
-// Inside mixCallback: memset(buf,0,8192) then len>>=2 → 2048 frames mixed
-```
-
-**Effects of the bug:**
-1. Only 25% of each audio buffer was actually mixed; the rest was stale/uninitialized data
-2. `EmulatedOPL::readBuffer()` generated only 512 frames per 93 ms buffer — the OPL music
-   callback fired at ~22 Hz instead of ~100 Hz → sequencer barely advanced
-3. 75% of the buffer sent to `/dev/dsp` was garbage → "repeated noise fragment"
-
-**Key insight:** The previous diagnosis ("timer starvation via `TimerManager`") was wrong.
-ScummVM's OPL emulators (`DOSBox::OPL`, `MAME::OPL`, `NUKED::OPL`) are all `EmulatedOPL`
-subclasses. They do **not** use `TimerManager::installTimerProc()`. Instead, they fire
-callbacks internally via `readBuffer()` based on sample-counting. The `checkTimers()` calls
-in `delayMillis()`/`pollEvent()` are irrelevant for OPL music (but harmless and useful for
-any timer that does use `TimerManager`).
-
-**Comparison with other backends:**
-- Atari: `_mixer->mixCallback(_samplesBuf, _samples * _outputChannels * 2)` ✅
-- MaxMod: `mixer->mixCallback(dest, length * 4)` ✅
-- SDL: receives `len` from SDL callback ✅ (already bytes)
-
-Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
-
-### Threading / mutex notes (retained for reference)
-
-`NullMutexInternal` + `DefaultTimerManager` + cooperative `checkTimers(10)` in both
-`delayMillis()` and `pollEvent()` remain in place. This avoids priority-inversion deadlocks
-between the SCHED_RR audio thread and the main thread on single-core ARM. The OPL music
-fix does not depend on any of this — it was purely a `mixCallback` argument error.
-
-### Debugging tips
-- KQ3 `intro` sequence plays music immediately after start — quickest test.
-- Run with `> /tmp/scummvm.log 2>&1`; `WARNING:` lines go to stderr and appear immediately (stdout is block-buffered to file).
-- `top -H` — a `SCHED_RR` audio thread appears as priority `-11` or `rt` in the `PR` column.
-
----
-
----
-
-## SCHED_RR Removal — Fixed ✅
-
-### Previous symptom
-After the mixCallback byte-count fix, ScummVM displayed a **black screen** on startup. The GUI never appeared, though the process was running.
-
-### Root cause — audio thread CPU starvation
-The audio thread had `SCHED_RR` (real-time round-robin) priority 10. Before the mixCallback fix, it mixed only 512 frames (25% of the buffer) per 93 ms cycle — fast and light. After the fix, it correctly mixes 2048 frames — **4× more CPU work**. On a single-core 300 MHz ARM, the RT-priority audio thread now consumed enough CPU during init to starve the main thread, preventing any screen rendering.
-
-### Fix
-Removed the `SCHED_RR` block from `OssMixerManager::init()`. The ~500 ms OSS ring buffer absorbs 20–40 ms of SCHED_OTHER scheduling jitter easily. No audio glitches observed.
-
-Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
-
----
-
-## Frame Rate Cap Overflow — Fixed ✅
-
-### Previous symptom
-Black screen persisted even after removing SCHED_RR. ScummVM was running (responsive to SSH kill), but never rendered anything to the framebuffer.
-
-### Root cause — 32-bit `long` overflow in `updateScreen()`
-The 30fps frame-rate cap in `updateScreen()` used:
-```cpp
-static struct timeval _lastFrame = {0, 0};
-// ...
-long _elapsedUs = (now.tv_sec - _lastFrame.tv_sec) * 1000000L
-                + (now.tv_usec - _lastFrame.tv_usec);
-if (_elapsedUs < 33333) return;  // skip frame
-```
-
-On 32-bit ARM, `long` is 32 bits (range ±2.1 billion). With `_lastFrame` initialized to epoch (1970), the delta is ~1.74 billion seconds. Multiplying by 1,000,000 produces `1,740,000,000 * 1,000,000 = 1.74×10¹⁵`, which **overflows** a 32-bit signed `long` to a **negative** value. Since a negative value is always `< 33333`, **every frame is skipped forever**.
-
-### Fix
-Changed to a first-call initialization pattern:
-```cpp
-static bool _firstFrame = true;
-static struct timeval _lastFrame;
-if (_firstFrame) {
-    gettimeofday(&_lastFrame, nullptr);
-    _firstFrame = false;
-}
-```
-Also added `_elapsedUs > 0` guard to handle rare `gettimeofday` jitter.
-
-### Lesson learned
-On 32-bit ARM (`sizeof(long) == 4`), **never** subtract epoch-relative `timeval` values that may be far apart. Always initialize timing variables to the current time on first use.
-
-Files changed: [`backend-files/roomwizard-graphics.cpp`](backend-files/roomwizard-graphics.cpp).
-
----
-
-## Volume Attenuation — Applied ✅
-
-The RoomWizard's small PCB speaker distorts at full-scale DAC output. All int16 samples are attenuated by 50% (−6 dB) via arithmetic right-shift (`>>1`) immediately after `mixCallback()` returns and before writing to `/dev/dsp`. This is a zero-allocation, branch-free operation on every buffer (2048 frames × 2 channels = 4096 samples).
-
-Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
+**32-bit ARM lesson:** `sizeof(long) == 4` — never compute `(now.tv_sec - epoch_0) * 1000000L`. Always init timing baselines to current time.
 
 ---
 
 ## Optimization Backlog
 
-**Baseline (pre-optimization):** CPU ~80%, RAM 5.5%  
-**Measurement:** `top -d2` on device via SSH during LSL5 gameplay (OPL music + animation)
+**Baseline:** CPU ~80% → **35%** after all optimizations (LSL5 gameplay, OPL music + animation)
 
-| # | Task | Est. | Status | CPU after | Notes |
-|---|---|---|---|---|---|
-| O1 | Precomputed `_palette32[256]` LUT | 15 min | **done** | — | Eliminate 7 ops/pixel → 1 indexed load in CLUT8 blit |
-| O2 | Precomputed `srcXtab[]` + row pointer lifting | 20 min | **done** | — | Remove per-pixel division + `getBasePtr()` call |
-| O3 | Replace `fb_clear()` with border-only clear | 10 min | **done** | — | Skip clearing pixels that get overwritten immediately |
-| O4 | Cached `rwSystem()` global, eliminate `dynamic_cast` | 10 min | **done** | — | Was 4× `dynamic_cast` per `pollEvent()` |
-| O5 | Remove dead code: `CORNER_TR`, `pushKeyEvent()`, `_gameOffset*`, dup includes, `sched.h` | 10 min | **done** | — | Hygiene |
-| | **O1–O5 combined** | | **done** | **58%** (menu: 35%), RAM 5.9% | **−22 pp** from baseline |
-| O6 | Fix right-click: `LBUTTONUP`+`RBUTTONDOWN` at 500 ms, `RBUTTONUP` on release | 20 min | **done** | 58% | Correctness fix, no CPU impact |
-| O7 | Skip `fb_swap` when frame unchanged | 10 min | **done** | 58% (menu: **16%**) | Engine sets `_screenDirty` every frame in-game; helps menu only |
-| O8 | 16bpp RGB565 framebuffer (`fb_set_bpp`) | 1 hr | **done** | **38%** (menu: 15%), RAM 5.5% | Halves write bandwidth; NEON now 8px/store; overlay direct-copy |
-| O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | **not viable** | — | `caps.ctrl=0` — no PLANE_SCALE/WINDOW_SCALE; `SETUP_PLANE` returns EINVAL. Kernel 4.14 omapfb has no scaling support. |
-| O10 | NEON palette blit + bounds-check elimination | 1 hr | **done** | **51%** (menu: 15%) | 4-pixel `vst1q_u32` + precomputed dx range (now 8-pixel `vst1q_u16` at 16bpp) |
-| O11 | Row deduplication via cached `tempRow` | 30 min | **done** | **35%** (menu: 15%), RAM 5.3% | ~57% of scaled rows are duplicates; render unique rows to stack buffer (L1-hot), memcpy to fb. Avoids reading write-combined fb memory. |
-
----
-
-## Touch Input Details
-
-**Hardware:** Single-touch resistive, Panjit panjit_ts
-- 12-bit raw (0-4095) scaled to 800x480
-- Binary pressure; no multi-touch
-- Event order: ABS_X/Y -> BTN_TOUCH -> SYN_REPORT (coords arrive before press flag)
-- `touch_poll()` resets `pressed` and `released` to false each call; `held` is persistent
-
-**State machine:** TOUCH_NONE -> TOUCH_PRESSED -> TOUCH_HELD -> TOUCH_NONE
-
-**Coordinate transform (game mode):**
-```cpp
-getScalingInfo(scaledW, scaledH, fbOffsetX, fbOffsetY);
-gameX = (touchX - fbOffsetX) * gameWidth  / scaledW;
-gameY = (touchY - fbOffsetY) * gameHeight / scaledH;
-```
+| # | Optimization | Status | Notes |
+|---|---|---|---|
+| O1 | Precomputed `_palette32[256]` LUT | done | 1 indexed load replaces 7 ops/pixel |
+| O2 | Precomputed `srcXtab[]` + row pointer lifting | done | Eliminates per-pixel division |
+| O3 | Border-only clear (skip overwritten pixels) | done | |
+| O4 | Cached `rwSystem()` global | done | Eliminates `dynamic_cast` per poll |
+| O5 | Dead code removal | done | |
+| O6 | Right-click fix (LBUTTONUP→RBUTTONDOWN sequence) | done | Correctness, no CPU impact |
+| O7 | Skip `fb_swap` on unchanged frames | done | Menu CPU 35%→15% |
+| O8 | 16bpp RGB565 framebuffer | done | Halves write bandwidth |
+| O9 | OMAP3 DSS hardware scaler | not viable | `caps.ctrl=0`, no kernel support |
+| O10 | NEON `vst1q_u16` 8-pixel blit | done | |
+| O11 | Row deduplication (L1-cache tempRow) | done | 57% of scaled rows are dupes |
+| O12 | Mono mixer | done | Halves audio-thread work |
 
 ---
 
-## Graphics Details
+## Limitations & Open Issues
 
-**Framebuffer:** 800x480 @ 32-bit ARGB (double-buffered)
-**Game resolutions:** 320x200, 320x240, 640x480 — scaled to fill bezel-safe area
-**Scaling:** Nearest-neighbour, aspect-ratio-preserving
-**Pixel formats:** CLUT8 (palette), RGB565, ARGB8888 -> ARGB8888
-**Cursor:** Software cursor composited over game surface
-
----
-
-## Hardware Specs (quick ref)
-
-- **CPU:** ARMv7 with NEON SIMD
-- **RAM:** 184 MB available
-- **Display:** 800x480 framebuffer `/dev/fb0`
-- **Input:** `/dev/input/event0`
-- **Audio:** TWL4030 HiFi codec → `/dev/dsp`; amp enable GPIO12; speaker SPKR1
-- **OS:** Linux 4.14.52
-- **Watchdog:** 60 s hardware reset; fed by `/usr/sbin/watchdog` system daemon
-
-Full specs: [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#hardware-platform)
-
----
-
-## Open Issues
-
-- **OPL music tempo slightly slow (~10-15%):** Fixed the gross half-speed bug (stereo ioctl), but playback is still perceptibly slower than reference. Possible causes: (a) 300 MHz ARM can't keep up with OPL synthesis at 22050 Hz causing mixer underruns, (b) wall-clock pacing in `audioThread()` drifts slightly, (c) ALSA OSS shim resamples 22050→48000 introducing latency. Next steps: try 11025 Hz output rate to halve OPL workload, or profile mixer timing with `gettimeofday` instrumentation.
-
-## Limitations
-
-- Single-touch only; right-click = long-press 500 ms
-- Software rendering only
-- No MIDI (NullMidiDriver)
+- **Single-touch only** — right-click = long-press 500 ms
+- **Software rendering only** — no GPU, no DSS scaler
+- **No MIDI** — NullMidiDriver; future option: software synth (FluidSynth or similar)
+- **OPL tempo** — verify on device with KQ3 intro vs reference recording after mono mixer fix
 
 ## Supported Engines
 
-**SCUMM v0-v6:** Monkey Island 1-2, DOTT, Sam & Max, Indiana Jones, Loom
-**SCUMM v7-v8:** Full Throttle, The Dig, Curse of Monkey Island
-**HE71+:** Putt-Putt, Freddi Fish, Pajama Sam, Spy Fox
-**AGI/SCI:** King's Quest, Space Quest, Leisure Suit Larry series
+SCUMM v0–v8, HE71+, AGI, SCI, AGOS, Beneath a Steel Sky, Flight of the Amazon Queen
 
 ## Memory Budget
 
-- Binary: ~14 MB
-- Game surface: ~1.2 MB
-- Framebuffer: ~3 MB (double-buffered)
-- Audio mix buffer: ~8 KB
-- Total: ~18 MB of 184 MB available
-
----
-
-## Related Resources
-
-- **SSH / device setup:** [`SYSTEM_SETUP.md`](../SYSTEM_SETUP.md)
-- **Touch patterns:** [`native_games/PROJECT.md`](../native_games/PROJECT.md#touch-input)
-- **Calibration tool source:** [`native_games/tests/unified_calibrate.c`](../native_games/tests/unified_calibrate.c)
-- **Framebuffer reference:** [`native_games/common/framebuffer.c`](../native_games/common/framebuffer.c)
-- **Watchdog:** [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#1-hardware-watchdog-timer)
+| Component | Size |
+|---|---|
+| Binary | ~14 MB |
+| Game surface | ~1.2 MB |
+| Framebuffer (double-buffered) | ~3 MB |
+| Audio mix buffer (mono) | ~4 KB |
+| **Total** | **~18 MB** of 184 MB available |

@@ -38,8 +38,7 @@ ssh root@192.168.50.73 '/opt/games/unified_calibrate'
 ## Status
 
 ✅ Fully functional — GUI, touch, audio (OPL/AdLib music + SFX), virtual keyboard all working.
-Volume attenuated to 50% to prevent speaker distortion.
-See [SCUMMVM_DEV.md](SCUMMVM_DEV.md) for detailed architecture, bug history, and debugging tips.
+See [SCUMMVM_DEV.md](SCUMMVM_DEV.md) for architecture, audio design, and optimization history.
 
 ## Backend Files
 
@@ -56,15 +55,7 @@ Version-controlled in [`backend-files/`](backend-files/), synced to/from `../scu
 
 Sync after editing:
 ```bash
-# From scummvm-roomwizard/
-bash manage-scummvm-changes.sh sync     # copy scummvm/ edits → backend-files/
-bash manage-scummvm-changes.sh restore  # copy backend-files/ → scummvm/
-```
-
-## Git Management
-
-```bash
-./manage-scummvm-changes.sh sync     # Sync changes TO version control
-./manage-scummvm-changes.sh restore  # Restore changes FROM version control
-./manage-scummvm-changes.sh status   # Check configuration
+bash manage-scummvm-changes.sh sync     # scummvm/ edits → backend-files/
+bash manage-scummvm-changes.sh restore  # backend-files/ → scummvm/
+bash manage-scummvm-changes.sh status   # check configuration
 ```

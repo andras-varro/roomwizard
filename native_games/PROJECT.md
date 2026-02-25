@@ -41,45 +41,15 @@
 
 ## Game Selector Markers
 
-Two non-executable marker files alongside binaries in `/opt/games/` control `game_selector` without recompiling.
-
-| Marker | Effect |
-|---|---|
-| `<name>.noargs` | Launch without `fb_dev`/`touch_dev` args (apps that open devices themselves) |
-| `<name>.hidden` | Hide from the menu entirely |
-
-```bash
-# Hide:    touch /opt/games/<name>.hidden  && chmod 644 /opt/games/<name>.hidden
-# Un-hide: rm /opt/games/<name>.hidden
-# No-args: touch /opt/games/<name>.noargs  && chmod 644 /opt/games/<name>.noargs
-```
-
-Current on device: **Hidden:** `watchdog_feeder`, `touch_test`, `touch_debug`, `touch_inject`, `touch_calibrate`, `unified_calibrate`, `pressure_test` | **No-args:** `scummvm`
+See [`README.md`](README.md#game-selector-markers) for marker file reference.
 
 ## Key Technical Details
 
-### Touch Input
-
-See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs and coordinate scaling.
-
-**Implementation Notes:**
-- Event order: ABS_X/Y → BTN_TOUCH → SYN_REPORT
-- Capture coordinates BEFORE press event
-- Reference: [`common/touch_input.c`](common/touch_input.c)
-
-### Screen Safe Area
-
-- Framebuffer: 800x480
-- Visible: ~720x420 (bezel obscures ~30-40px on edges)
-- Use `LAYOUT_*` macros from common.h
-
-### Hardware
-
-- Touchscreen: Resistive, single-touch only (Panjit panjit_ts)
-- Pressure: Binary (255=pressed, 0=released), no variable pressure
-- LEDs: `/sys/class/leds/{red_led,green_led}/brightness` (0-100)
-- Watchdog: `/dev/watchdog` (60s timeout, feed every 30s)
-- Speaker: TWL4030 codec → `/dev/dsp` (OSS); amp enable GPIO12 HIGH; see [`common/audio.c`](common/audio.c)
+- **Touch:** Resistive single-touch, 12-bit raw → 800×480; event order ABS_X/Y → BTN_TOUCH → SYN_REPORT; capture coords before press. See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input)
+- **Screen safe area:** 800×480 fb, ~720×420 visible (bezel ~30-40px). Use `LAYOUT_*` macros from `common.h`
+- **Speaker:** TWL4030 → `/dev/dsp` (OSS); amp enable GPIO12 HIGH; apply 50% volume attenuation. See [`common/audio.c`](common/audio.c)
+- **Watchdog:** `/dev/watchdog` (60 s timeout); fed by system `/usr/sbin/watchdog`
+- **LEDs:** `/sys/class/leds/{red_led,green_led}/brightness` (0-100)
 
 ## Backlog
 
@@ -115,4 +85,4 @@ See [`SYSTEM_ANALYSIS.md#input`](../SYSTEM_ANALYSIS.md#input) for hardware specs
 
 ---
 
-**Note:** Touch input patterns used by the ScummVM backend — see [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md).
+**ScummVM touch patterns:** See [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md#gesture-navigation).

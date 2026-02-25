@@ -38,6 +38,49 @@ int main(void) {
     rate = 22050;
     ioctl(fd, SNDCTL_DSP_SPEED, &rate);
     printf("SPEED after CHANNELS: %d\n", rate);
+
+    /* Re-verify channels after SPEED — some ALSA OSS shims reset channels */
+    int ch_after_speed = 0;
+    ioctl(fd, SNDCTL_DSP_CHANNELS, &ch_after_speed);
+    printf("CHANNELS after SPEED: %d%s\n", ch_after_speed,
+           (ch_after_speed != ch2) ? " *** SPEED RESET CHANNELS!" : " (OK)");
+
+    close(fd);
+
+    /* Test 3: set SPEED first, then CHANNELS (safer order) */
+    fd = open("/dev/dsp", O_WRONLY);
+    fmt = AFMT_S16_LE;
+    ioctl(fd, SNDCTL_DSP_SETFMT, &fmt);
+    rate = 22050;
+    ioctl(fd, SNDCTL_DSP_SPEED, &rate);
+    printf("\nTest 3 (SPEED then CHANNELS):\n");
+    printf("  SPEED: %d\n", rate);
+    int ch3 = 2;
+    rc = ioctl(fd, SNDCTL_DSP_CHANNELS, &ch3);
+    printf("  CHANNELS(2): rc=%d ch=%d\n", rc, ch3);
+    /* Verify it stuck */
+    int ch3_verify = 0;
+    ioctl(fd, SNDCTL_DSP_CHANNELS, &ch3_verify);
+    printf("  CHANNELS verify: %d%s\n", ch3_verify,
+           (ch3_verify != 2) ? " *** STILL BROKEN" : " (OK)");
+
+    /* Test 4: mono (what ScummVM now uses) */
+    close(fd);
+    fd = open("/dev/dsp", O_WRONLY);
+    fmt = AFMT_S16_LE;
+    ioctl(fd, SNDCTL_DSP_SETFMT, &fmt);
+    int ch4 = 1;
+    rc = ioctl(fd, SNDCTL_DSP_CHANNELS, &ch4);
+    rate = 22050;
+    ioctl(fd, SNDCTL_DSP_SPEED, &rate);
+    int ch4_verify = 0;
+    ioctl(fd, SNDCTL_DSP_CHANNELS, &ch4_verify);
+    printf("\nTest 4 (mono, as ScummVM uses):\n");
+    printf("  CHANNELS(1): rc=%d ch=%d\n", rc, ch4);
+    printf("  SPEED: %d\n", rate);
+    printf("  CHANNELS after SPEED: %d%s\n", ch4_verify,
+           (ch4_verify == 1) ? " (OK)" : " *** UNEXPECTED");
+
     close(fd);
     return 0;
 }

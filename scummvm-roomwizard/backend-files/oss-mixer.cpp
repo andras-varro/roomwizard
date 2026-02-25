@@ -76,7 +76,7 @@ void OssMixerManager::init() {
 	if (_fd < 0) {
 		// No DSP device — fall back to silent mixer so ScummVM still works.
 		warning("OssMixerManager: cannot open /dev/dsp (%d), audio disabled", _fd);
-		_mixer = new Audio::MixerImpl(_outputRate, true, _samples);
+		_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 		_mixer->setReady(true);
 		return;
 	}
@@ -98,13 +98,15 @@ void OssMixerManager::init() {
 	int fmt = AFMT_S16_LE;
 	ioctl(_fd, SNDCTL_DSP_SETFMT, &fmt);
 
-	// Stereo — use SNDCTL_DSP_CHANNELS (not deprecated SNDCTL_DSP_STEREO
-	// which the ALSA OSS emulation on this device silently ignores, leaving
-	// the device in mono; stereo data then plays at half speed).
-	int channels = 2;
+	// Mono output — the RoomWizard has a single speaker, so stereo is
+	// wasted work.  Mono halves mixer/write/SRC workload AND sidesteps the
+	// ALSA OSS shim bug where SNDCTL_DSP_CHANNELS is silently reset to 1
+	// by SNDCTL_DSP_SPEED, causing stereo interleaved data to play at half
+	// speed (each L and R sample consumed as a separate mono frame).
+	int channels = 1;
 	ioctl(_fd, SNDCTL_DSP_CHANNELS, &channels);
-	if (channels != 2) {
-		warning("OssMixerManager: requested 2 channels, got %d — audio may be wrong", channels);
+	if (channels != 1) {
+		warning("OssMixerManager: requested 1 channel, got %d", channels);
 	}
 
 	// 22050 Hz — avoids expensive non-integer SRC from 44100→48000 in the
@@ -113,7 +115,7 @@ void OssMixerManager::init() {
 	ioctl(_fd, SNDCTL_DSP_SPEED, &rate);
 	_outputRate = (uint32)rate;
 
-	_mixer = new Audio::MixerImpl(_outputRate, true, _samples);
+	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 	_mixer->setReady(true);
 
 	_threadRunning = true;
@@ -128,12 +130,12 @@ void OssMixerManager::init() {
 	// absorbs 20-40 ms of SCHED_OTHER scheduling jitter, so RT priority
 	// is unnecessary.
 
-	debug("OssMixerManager: /dev/dsp ready at %u Hz, %u frames/buf", _outputRate, _samples);
+	debug("OssMixerManager: /dev/dsp ready at %u Hz mono, %u frames/buf", _outputRate, _samples);
 }
 
 void OssMixerManager::audioThread() {
-	// 2 channels * 2 bytes per sample
-	const int bufBytes = (int)(_samples * 4);
+	// 1 channel * 2 bytes per sample (mono)
+	const int bufBytes = (int)(_samples * 2);
 	// How long one mix buffer represents in microseconds.
 	const long usPerBuf = (long)(1000000LL * _samples / _outputRate); // ~93 ms
 

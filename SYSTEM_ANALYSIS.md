@@ -316,80 +316,7 @@ echo 100 > /sys/class/leds/green_led/brightness
 echo 0 > /sys/class/leds/backlight/brightness
 ```
 
-**Python LED Control:**
-```python
-#!/usr/bin/env python3
-import time
-
-class LEDController:
-    def __init__(self):
-        self.red_led = "/sys/class/leds/red_led/brightness"
-        self.green_led = "/sys/class/leds/green_led/brightness"
-        self.backlight = "/sys/class/leds/backlight/brightness"
-    
-    def set_led(self, led_path, brightness):
-        """Set LED brightness (0-100)"""
-        try:
-            with open(led_path, 'w') as f:
-                f.write(str(max(0, min(100, brightness))))
-        except IOError as e:
-            print(f"Error: {e}")
-    
-    def set_red(self, brightness):
-        self.set_led(self.red_led, brightness)
-    
-    def set_green(self, brightness):
-        self.set_led(self.green_led, brightness)
-    
-    def pulse_green(self, duration=2.0):
-        """Pulse green LED"""
-        for i in range(20):
-            self.set_green(int(100 * i / 20))
-            time.sleep(duration / 40)
-        for i in range(20, 0, -1):
-            self.set_green(int(100 * i / 20))
-            time.sleep(duration / 40)
-
-# Usage
-leds = LEDController()
-leds.set_green(50)
-leds.pulse_green()
-```
-
-**Java LED Control:**
-```java
-import java.io.FileWriter;
-import java.io.IOException;
-
-public class LEDController {
-    private static final String RED_LED = "/sys/class/leds/red_led/brightness";
-    private static final String GREEN_LED = "/sys/class/leds/green_led/brightness";
-    
-    public void setLED(String ledPath, int brightness) {
-        brightness = Math.max(0, Math.min(100, brightness));
-        try (FileWriter writer = new FileWriter(ledPath)) {
-            writer.write(String.valueOf(brightness));
-        } catch (IOException e) {
-            System.err.println("Error: " + e.getMessage());
-        }
-    }
-    
-    public void setGreen(int brightness) {
-        setLED(GREEN_LED, brightness);
-    }
-    
-    public void pulseGreen(int durationMs) throws InterruptedException {
-        for (int i = 0; i <= 100; i += 5) {
-            setGreen(i);
-            Thread.sleep(durationMs / 40);
-        }
-        for (int i = 100; i >= 0; i -= 5) {
-            setGreen(i);
-            Thread.sleep(durationMs / 40);
-        }
-    }
-}
-```
+See [`native_games/common/hardware.c`](native_games/common/hardware.c) for C implementation.
 
 ### Touchscreen Input
 
@@ -409,72 +336,7 @@ Hardware → Kernel evdev → libinput → X11/Xorg → WebKit browser
 - Config: `/etc/pointercal.xinput`
 - Auto-calibration: `/usr/bin/xinput_calibrator_once.sh`
 
-**Python Touchscreen Reader:**
-```python
-#!/usr/bin/env python3
-import struct
-import os
-
-class TouchscreenReader:
-    EVENT_FORMAT = 'llHHi'  # time, time_usec, type, code, value
-    EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
-    EV_ABS = 0x03
-    ABS_X = 0x00
-    ABS_Y = 0x01
-    
-    def __init__(self, device='/dev/input/touchscreen0'):
-        self.device = device
-        self.fd = None
-    
-    def open(self):
-        try:
-            self.fd = os.open(self.device, os.O_RDONLY)
-            return True
-        except OSError as e:
-            print(f"Error: {e}")
-            return False
-    
-    def read_event(self):
-        if not self.fd:
-            return None
-        try:
-            data = os.read(self.fd, self.EVENT_SIZE)
-            if len(data) < self.EVENT_SIZE:
-                return None
-            tv_sec, tv_usec, type, code, value = struct.unpack(
-                self.EVENT_FORMAT, data)
-            return {'type': type, 'code': code, 'value': value}
-        except OSError:
-            return None
-    
-    def read_touch(self):
-        """Read touch coordinates"""
-        x, y = None, None
-        while True:
-            event = self.read_event()
-            if not event:
-                break
-            if event['type'] == self.EV_ABS:
-                if event['code'] == self.ABS_X:
-                    x = event['value']
-                elif event['code'] == self.ABS_Y:
-                    y = event['value']
-                    if x is not None:
-                        return (x, y)
-        return None
-    
-    def close(self):
-        if self.fd:
-            os.close(self.fd)
-
-# Usage
-touch = TouchscreenReader()
-if touch.open():
-    while True:
-        coords = touch.read_touch()
-        if coords:
-            print(f"Touch at {coords}")
-```
+See [`native_games/common/touch_input.c`](native_games/common/touch_input.c) for C implementation.
 
 ### Display/Framebuffer
 
@@ -605,176 +467,34 @@ Since USB peripherals are not supported:
 
 ## Safe Modification Strategy
 
-### Why Modifications Fail
+Modifications fail when: MD5 checksums don't match, watchdog times out (60 s), control block tracker reaches ≥2 (failure mode), or service dependencies break.
 
-Based on forensic analysis, modifications typically fail due to:
-
-1. **MD5 Checksum Mismatch** - ANY file modification triggers verification failure
-2. **Watchdog Timer Reset** - Boot process exceeded 60-second timeout
-3. **Control Block Corruption** - Tracker incremented to failure mode (≥2)
-4. **Dependency Chain Breakage** - Modified files broke library/service dependencies
-
-### Step-by-Step Modification Process
-
-#### Step 1: Bypass MD5 Verification
-
-**Regenerate ALL checksums after modifications:**
-```bash
-cd /path/to/modified/images
-for file in *.img *.gz *.bin; do
-    md5sum "$file" > "${file}.md5"
-done
-```
-
-**Alternative:** Patch `nandupgrade.sh` to skip MD5 checks (not recommended)
-
-#### Step 2: Maintain Watchdog Feeding
-
-**Critical - Feed watchdog every 30 seconds:**
-```bash
-while true; do
-    echo 1 > /dev/watchdog
-    sleep 30
-done &
-```
-
-Or use the system daemon:
-```bash
-/usr/sbin/watchdog -c /etc/watchdog.conf
-```
-
-#### Step 3: Inject Custom Runtime
-
-**For Python (ARM binaries required):**
-```bash
-# 1. Add Python to rootfs
-mkdir -p /opt/python3
-# Copy ARM-compiled Python 3.x
-
-# 2. Create init script
-cat > /etc/init.d/custom_app << 'EOF'
-#!/bin/sh
-export PYTHONPATH=/opt/python3/lib/python3.x
-/opt/python3/bin/python3 /opt/custom/app.py &
-EOF
-
-# 3. Enable at boot
-chmod +x /etc/init.d/custom_app
-ln -s /etc/init.d/custom_app /etc/rc5.d/S99custom_app
-```
-
-**For Java (already present):**
-- Java 8 runtime exists at `/opt/openjre-8/`
-- Add custom JAR to Jetty webapps or create standalone service
-
-#### Step 4: Repack Modified Filesystem
-
-```bash
-# 1. Mount and modify rootfs
-mkdir -p /tmp/rootfs_mount
-mount -o loop sd_rootfs_part.img /tmp/rootfs_mount
-cp -r /path/to/custom/* /tmp/rootfs_mount/opt/custom/
-umount /tmp/rootfs_mount
-
-# 2. Regenerate MD5 (CRITICAL)
-md5sum sd_rootfs_part.img > sd_rootfs_part.img.md5
-
-# 3. Repack boot archive if modified
-cd boot_files/
-tar czf sd_boot_archive.tar.gz *
-md5sum sd_boot_archive.tar.gz > sd_boot_archive.tar.gz.md5
-
-# 4. Update upgrade.conf firmware version
-# Increment version to trigger upgrade recognition
-```
-
-#### Step 5: Preserve Critical Services
-
-**DO NOT DISABLE:**
-- `/etc/init.d/watchdog` - System will reset without it
-- `/etc/init.d/webserver` - Application depends on Jetty
-- `/etc/init.d/x11` - Display system required
-- `/etc/init.d/browser` - Main UI component
-
-**Safe to Augment:**
-- Add scripts to `/etc/rc5.d/S99*` (runs after all services)
-- Create new init scripts in `/etc/init.d/` with proper symlinks
+**Rules:**
+1. Regenerate all MD5 checksums after any file change: `for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done`
+2. Feed watchdog every 30 s — system daemon `/usr/sbin/watchdog` handles this
+3. Preserve critical services: `/etc/init.d/watchdog`, `webserver`, `x11`, `browser`
+4. Safe to add new init scripts at `/etc/rc5.d/S99*`
+5. Java 8 runtime exists at `/opt/openjre-8/`; Python requires ARM cross-compiled binaries
 
 ---
 
 ## Debugging & Rollback
 
-### Serial Console Access
-
-- **UART:** ttyO1 at 115200 baud
-- **Enabled in:** `/etc/inittab`
-- **Connection:** 3.3V TTL serial adapter required
-
-### Log Locations
-
-- `/var/log/` - System logs
-- `/home/root/log/` - Application logs
-- `/var/log/browser.out` - Browser stdout
-- `/var/log/browser.err` - Browser stderr
-- `/var/log/jettystart` - Jetty startup logs
-
-### Rollback Procedure
-
-**If boot_tracker ≥ 2:**
-1. System enters failure mode
-2. `/opt/sbin/fail.sh` executes recovery
-3. Can trigger factory reset or recovery mode
-4. Backup partition at `/home/root/backup` contains previous firmware
-
-**Manual Rollback:**
-```bash
-# Restore from backup SD card image
-dd if=original_backup.img of=/dev/sdX bs=4M status=progress
-sync
-```
+- **Serial console:** UART ttyO1, 115200 baud, 3.3V TTL adapter
+- **Logs:** `/var/log/` (system), `/home/root/log/` (app), `/var/log/browser.{out,err}`, `/var/log/jettystart`
+- **Rollback:** If boot_tracker ≥ 2 → failure mode → `/opt/sbin/fail.sh` runs recovery. Manual: `dd if=original_backup.img of=/dev/sdX bs=4M`
 
 ---
 
 ## Critical Warnings
 
-### ⚠️ DO NOT:
-
-- Modify `ctrlblock.bin` without understanding binary format
-- Skip MD5 regeneration after ANY modification
-- Disable watchdog without alternative feeding mechanism
-- Modify bootloader (`mlo`, `u-boot-sd.bin`) without JTAG recovery capability
-- Change partition sizes without updating `upgrade.conf`
-
-### ⚠️ ALWAYS:
-
-- Keep backup of original SD card image
-- Test in emulator/QEMU if possible
-- Maintain serial console access for debugging
-- Feed watchdog in any long-running custom code
-- Regenerate ALL MD5 checksums after modifications
-
----
-
-## Summary
-
-The Steelcase RoomWizard uses integrity-based protection (MD5 checksums, watchdog timer, state tracking) rather than cryptographic signing. Successful modification requires:
-
-1. **Regenerating all MD5 checksums** after file changes
-2. **Feeding the watchdog timer** to prevent resets
-3. **Maintaining the control block state** to avoid failure mode
-4. **Preserving critical services** (X11, Jetty, browser)
-5. **Using existing runtimes** (Java 8 present, Python needs ARM binaries)
-
-The hardware interfaces (LEDs, touchscreen, framebuffer) are accessible via standard Linux sysfs/device nodes, making custom code integration straightforward once the protection mechanisms are properly handled.
+- **Never** modify `ctrlblock.bin`, bootloader (`mlo`, `u-boot-sd.bin`), or partition sizes without JTAG recovery
+- **Always** regenerate MD5 checksums, feed watchdog, keep backup of original SD card image
 
 ---
 
 ## Related Documentation
 
-- [Native Games Guide](native_games/README.md) - Native C games development
-- [ScummVM Backend](scummvm-roomwizard/README.md) - Classic adventure games port
-- [System Setup](SYSTEM_SETUP.md) - SSH access and system configuration
-- [Project Overview](README.md) - Project overview and status
-
----
-
+- [Native Games](native_games/README.md)
+- [ScummVM Backend](scummvm-roomwizard/README.md)
+- [System Setup](SYSTEM_SETUP.md)
