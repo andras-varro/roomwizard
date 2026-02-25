@@ -349,7 +349,7 @@ Files changed: [`backend-files/oss-mixer.cpp`](backend-files/oss-mixer.cpp).
 | O6 | Fix right-click: `LBUTTONUP`+`RBUTTONDOWN` at 500 ms, `RBUTTONUP` on release | 20 min | **done** | 58% | Correctness fix, no CPU impact |
 | O7 | Skip `fb_swap` when frame unchanged | 10 min | **done** | 58% (menu: **16%**) | Engine sets `_screenDirty` every frame in-game; helps menu only |
 | O8 | 16bpp RGB565 framebuffer (`fb_set_bpp`) | 1 hr | **done** | **38%** (menu: 15%), RAM 5.5% | Halves write bandwidth; NEON now 8px/store; overlay direct-copy |
-| O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | not started | — | Could eliminate CPU blit entirely |
+| O9 | Investigate OMAP3 DSS hardware scaler | 2-4 hr | **not viable** | — | `caps.ctrl=0` — no PLANE_SCALE/WINDOW_SCALE; `SETUP_PLANE` returns EINVAL. Kernel 4.14 omapfb has no scaling support. |
 | O10 | NEON palette blit + bounds-check elimination | 1 hr | **done** | **51%** (menu: 15%) | 4-pixel `vst1q_u32` + precomputed dx range (now 8-pixel `vst1q_u16` at 16bpp) |
 
 ---
