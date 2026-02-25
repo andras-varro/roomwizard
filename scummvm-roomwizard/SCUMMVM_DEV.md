@@ -153,6 +153,9 @@ Condensed log of issues found and fixed. Full debugging context is in git histor
 - **Software rendering only** — no GPU, no DSS scaler
 - **No MIDI** — NullMidiDriver; future option: software synth (FluidSynth or similar)
 - **OPL tempo** — verify on device with KQ3 intro vs reference recording after mono mixer fix
+- **Cursor not moved by touch** — in-game cursor stays at its initial position; touch events fire clicks at the correct game coordinates but `MOUSEMOVE` is either not synthesised or not applied to the hardware cursor. ScummVM uses `warpMouse()` + `MOUSEMOVE` events to drive the cursor position; `RoomWizardGraphicsManager` may need to implement `showMouse()`/`warpMouse()` or the event source needs to emit `MOUSEMOVE` before each `LBUTTONDOWN`.
+- **Exit game returns to launcher on Ubuntu but exits ScummVM on RoomWizard** — the backend's `quit()` is being called when the engine exits instead of returning to the ScummVM launcher. Likely cause: `OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets the main loop drop back to the launcher. Compare with SDL backend's `_quit` flag + launcher loop.
+- **Wireframe green UI (missing theme data)** — ScummVM falls back to the built-in theme because `gui-icons.dat` and the `scummremastered` skin are not present on the device. These files ship in the ScummVM data package. Copy them to `/opt/games/` alongside the binary (or to a path ScummVM searches, e.g. the same dir as the binary). Files needed: `gui-icons.dat`, `scummremastered.zip` (or the `scummremastered/` directory from the ScummVM data tarball).
 
 ## Supported Engines
 
