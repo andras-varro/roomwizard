@@ -31,9 +31,21 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 
 ```bash
 cd native_games
-./build-and-deploy.sh                          # build only
-./build-and-deploy.sh 192.168.50.73            # build + deploy binaries
-./build-and-deploy.sh 192.168.50.73 permanent  # + install boot service + disable bloatware + reboot
+
+# Build only
+./build-and-deploy.sh
+
+# Build + deploy binaries
+./build-and-deploy.sh 192.168.50.73
+
+# Build + deploy + install boot service + cleanup + reboot
+./build-and-deploy.sh 192.168.50.73 permanent
+
+# Cleanup services only (no build/deploy)
+./build-and-deploy.sh 192.168.50.73 cleanup
+
+# Cleanup services + remove bloatware files
+./build-and-deploy.sh 192.168.50.73 cleanup --remove
 ```
 
 The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
@@ -43,16 +55,6 @@ The script cross-compiles all binaries, uploads them to `/opt/games/`, sets perm
 - Stops and disables unnecessary services (browser, X11, Jetty, HSQLDB, etc.)
 - Frees ~80 MB RAM
 - See [System Optimization](#system-optimization) below
-
-### Cleanup Existing Device
-
-If you already deployed without `permanent` mode, run the cleanup script:
-
-```bash
-bash cleanup-bloatware.sh 192.168.50.73
-```
-
-This disables watchdog checks and stops unnecessary services without rebooting.
 
 Rebuilding just `game_selector` after changes:
 ```bash
@@ -95,7 +97,7 @@ The RoomWizard firmware includes:
 ### Quick Service Cleanup
 
 ```bash
-bash cleanup-bloatware.sh 192.168.50.73
+./build-and-deploy.sh 192.168.50.73 cleanup
 ```
 
 **Result:** No reboots, 80 MB RAM freed, fully reversible
@@ -103,11 +105,8 @@ bash cleanup-bloatware.sh 192.168.50.73
 ### Full Cleanup with File Removal
 
 ```bash
-# Step 1: Analyze (safe)
-bash cleanup-bloatware-full.sh 192.168.50.73
-
-# Step 2: Remove files (requires confirmation)
-bash cleanup-bloatware-full.sh 192.168.50.73 --remove-files
+# Analyze + remove files (requires confirmation)
+./build-and-deploy.sh 192.168.50.73 cleanup --remove
 ```
 
 **Bloatware Removed:**
@@ -130,6 +129,10 @@ bash cleanup-bloatware-full.sh 192.168.50.73 --remove-files
 | webserver, browser, x11 | Web interface | Not needed in game mode |
 | jetty, hsqldb | Java backend | Not needed in game mode |
 | snmpd, vsftpd | Monitoring/FTP | Not needed |
+| nullmailer | Email sending | Not needed |
+| ntpd | Time synchronization | Not critical for games |
+| startautoupgrade | Auto-upgrade | Not needed |
+| psplash | Boot splash screen | Uses 6MB RAM after boot |
 
 ### Services Kept Running
 

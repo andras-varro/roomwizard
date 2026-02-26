@@ -694,7 +694,7 @@ When running in game mode (native games, not browser), disable unnecessary servi
 ```bash
 # Quick fix (existing deployment)
 cd native_games
-bash cleanup-bloatware.sh 192.168.50.73
+./build-and-deploy.sh 192.168.50.73 cleanup
 
 # Automatic (new deployment)
 ./build-and-deploy.sh 192.168.50.73 permanent
@@ -716,7 +716,7 @@ bash cleanup-bloatware.sh 192.168.50.73
 
 **Optional:** Remove bloatware files (~178 MB disk space, removes vulnerable Jetty/HSQLDB/Java):
 ```bash
-bash native_games/cleanup-bloatware-full.sh 192.168.50.73 --remove-files
+./build-and-deploy.sh 192.168.50.73 cleanup --remove
 ```
 
 See [`native_games/README.md#system-optimization`](native_games/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.

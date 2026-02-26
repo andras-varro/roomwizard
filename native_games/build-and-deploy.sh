@@ -2,23 +2,136 @@
 # Build all native games and optionally deploy to a RoomWizard device.
 #
 # Usage:
-#   ./build-and-deploy.sh                   # build only
-#   ./build-and-deploy.sh <ip>              # build + deploy binaries
-#   ./build-and-deploy.sh <ip> permanent    # build + deploy + install boot service + reboot
+#   ./build-and-deploy.sh                        # build only
+#   ./build-and-deploy.sh <ip>                   # build + deploy binaries
+#   ./build-and-deploy.sh <ip> permanent         # build + deploy + install boot service + cleanup + reboot
+#   ./build-and-deploy.sh <ip> cleanup           # cleanup services only (no build/deploy)
+#   ./build-and-deploy.sh <ip> cleanup --remove  # cleanup services + remove bloatware files
 
 set -e
 
 DEVICE_IP="${1:-}"
 MODE="${2:-}"
+REMOVE_FILES="${3:-}"
 DEVICE="root@${DEVICE_IP}"
 GAMES_DIR="/opt/games"
 INIT_SCRIPT="/etc/init.d/roomwizard-games"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
 info() { echo -e "${YELLOW}  → $*${NC}"; }
+warn() { echo -e "${BLUE}  ! $*${NC}"; }
 err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+
+# ── cleanup function ────────────────────────────────────────────────────────
+do_cleanup() {
+    local DEVICE="$1"
+    local REMOVE_FILES="$2"
+    
+    echo ""
+    echo "════════════════════════════════════════"
+    echo " System Cleanup"
+    echo "════════════════════════════════════════"
+    
+    # Analyze filesystem
+    if [[ "$REMOVE_FILES" == "--remove" ]]; then
+        info "Analyzing filesystem..."
+        ssh "$DEVICE" bash <<'REMOTE'
+echo ""
+echo "Bloatware analysis:"
+echo "  Jetty:    $(du -sh /opt/jetty-9-4-11 2>/dev/null | awk '{print $1}')"
+echo "  OpenJRE:  $(du -sh /opt/openjre-8 2>/dev/null | awk '{print $1}')"
+echo "  HSQLDB:   $(du -sh /opt/hsqldb 2>/dev/null | awk '{print $1}')"
+echo "  CJK Font: $(du -sh /usr/share/cjkfont 2>/dev/null | awk '{print $1}')"
+echo "  X11:      $(du -sh /usr/share/X11 2>/dev/null | awk '{print $1}')"
+echo "  SNMP:     $(du -sh /usr/share/snmp 2>/dev/null | awk '{print $1}')"
+echo "  Total: ~178 MB"
+REMOTE
+    fi
+    
+    # Disable watchdog test/repair
+    info "Disabling watchdog test and repair..."
+    ssh "$DEVICE" bash <<'REMOTE'
+if [ -f /etc/watchdog.conf ]; then
+    cp /etc/watchdog.conf /etc/watchdog.conf.backup 2>/dev/null || true
+    sed -i 's/^test-binary/#test-binary/' /etc/watchdog.conf
+    sed -i 's/^repair-binary/#repair-binary/' /etc/watchdog.conf
+    /etc/init.d/watchdog restart 2>/dev/null || true
+fi
+REMOTE
+    ok "Watchdog test/repair disabled"
+    
+    # Stop and disable services
+    info "Stopping and disabling unnecessary services..."
+    ssh "$DEVICE" bash <<'REMOTE'
+for svc in webserver browser x11 jetty hsqldb snmpd vsftpd nullmailer ntpd startautoupgrade; do
+    [ -f /etc/init.d/$svc ] && /etc/init.d/$svc stop 2>/dev/null || true
+    update-rc.d $svc remove 2>/dev/null || true
+done
+REMOTE
+    ok "Unnecessary services disabled"
+    
+    # Kill processes
+    info "Killing bloatware processes..."
+    ssh "$DEVICE" 'killall java Xorg browser epiphany webkit psplash nullmailer-send 2>/dev/null || true'
+    ok "Bloatware processes terminated"
+    
+    # Remove files if requested
+    if [[ "$REMOVE_FILES" == "--remove" ]]; then
+        echo ""
+        warn "File removal mode - this will delete bloatware files (PERMANENT)"
+        read -p "Continue? (yes/no): " confirm
+        
+        if [[ "$confirm" == "yes" ]]; then
+            info "Removing bloatware files..."
+            ssh "$DEVICE" bash <<'REMOTE'
+cat > /root/bloatware-removed.txt <<'EOF'
+Bloatware removed on $(date)
+- /opt/jetty-9-4-11 (43 MB)
+- /opt/openjre-8 (93 MB)
+- /opt/hsqldb (3.5 MB)
+- /usr/share/cjkfont (31 MB)
+- /usr/share/X11 (5.2 MB)
+- /usr/share/snmp (2.5 MB)
+Total freed: ~178 MB
+EOF
+rm -rf /opt/jetty-9-4-11 /opt/jetty /opt/openjre-8 /opt/java /opt/hsqldb
+rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
+REMOTE
+            ok "Bloatware files removed (~178 MB freed)"
+            warn "Backup list saved to /root/bloatware-removed.txt"
+        else
+            info "File removal cancelled"
+        fi
+    fi
+    
+    # Show status
+    info "System status..."
+    ssh "$DEVICE" bash <<'REMOTE'
+echo ""
+echo "Disk: $(df -h / | tail -1 | awk '{print $3 " used, " $4 " free (" $5 " used)"}')"
+echo "Memory: $(free -h | grep Mem | awk '{print $3 " used, " $7 " available"}')"
+echo "Watchdog: $(grep -q '^#test-binary' /etc/watchdog.conf 2>/dev/null && echo 'disabled ✓' || echo 'ENABLED')"
+echo "Bloatware processes: $(ps aux | grep -E 'java|Xorg|browser' | grep -v grep | wc -l)"
+REMOTE
+    
+    ok "Cleanup complete!"
+    echo ""
+}
+
+# ── cleanup-only mode ───────────────────────────────────────────────────────
+if [[ "$MODE" == "cleanup" ]]; then
+    [[ -z "$DEVICE_IP" ]] && err "Usage: $0 <ip> cleanup [--remove]"
+    
+    info "Testing SSH connection..."
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
+        || err "Cannot reach $DEVICE"
+    ok "SSH OK"
+    
+    do_cleanup "$DEVICE" "$REMOVE_FILES"
+    exit 0
+fi
 
 # ── 1. cross-compiler check ─────────────────────────────────────────────────
 echo ""
@@ -61,10 +174,7 @@ $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layou
 step "13/14" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "14/15" "watchdog_feeder"
-$CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder
-
-step "15/15" "audio_touch_test"
+step "14/14" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   common/audio.c common/touch_input.c common/framebuffer.c \
@@ -73,7 +183,7 @@ $CC -O2 -static -I. \
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/watchdog_feeder build/audio_touch_test \
+ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/audio_touch_test \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -83,6 +193,7 @@ if [[ -z "$DEVICE_IP" ]]; then
     echo "No IP supplied — build only. To deploy:"
     echo "  ./build-and-deploy.sh <ip>"
     echo "  ./build-and-deploy.sh <ip> permanent"
+    echo "  ./build-and-deploy.sh <ip> cleanup [--remove]"
     exit 0
 fi
 
@@ -100,12 +211,12 @@ ok "SSH OK"
 info "Uploading binaries → $GAMES_DIR/"
 scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
-    build/unified_calibrate build/watchdog_feeder \
+    build/unified_calibrate \
     build/audio_touch_test \
     "$DEVICE:$GAMES_DIR/"
 ok "Binaries uploaded"
 
-# Deploy audio-enable boot script (installs once; harmless to repeat)
+# Deploy audio-enable boot script
 info "Deploying audio-enable boot script..."
 ssh "$DEVICE" bash <<'AUDIO_REMOTE'
 cat > /etc/init.d/audio-enable << 'EOF'
@@ -120,28 +231,40 @@ amixer -c 0 cset name="HandsfreeR Switch" on    > /dev/null 2>&1
 EOF
 chmod +x /etc/init.d/audio-enable
 ln -sf /etc/init.d/audio-enable /etc/rc5.d/S29audio-enable
-echo "AUDIO_ENABLE_OK"
 AUDIO_REMOTE
 ok "Audio boot script deployed"
 
-# Set execute permissions + create marker files
+# Deploy time-sync boot script
+info "Deploying time-sync boot script..."
+ssh "$DEVICE" bash <<'TIMESYNC_REMOTE'
+cat > /etc/init.d/time-sync << 'EOF'
+#!/bin/sh
+# Simple time synchronization for RoomWizard
+# Syncs time with NTP server if network is available
+if ping -c 1 pool.ntp.org >/dev/null 2>&1; then
+    ntpdate -s pool.ntp.org && hwclock -w
+fi
+EOF
+chmod +x /etc/init.d/time-sync
+ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync
+TIMESYNC_REMOTE
+ok "Time sync boot script deployed"
+
+# Set permissions + markers
 info "Setting permissions and markers..."
 ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/game_selector /opt/games/hardware_test \
          /opt/games/unified_calibrate
 
-# .noargs marker for scummvm (if binary present)
+# .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
 
 # .hidden markers for dev tools
-for name in watchdog_feeder touch_test touch_debug touch_inject \
-            touch_calibrate pressure_test \
-            ; do
-    touch  /opt/games/$name.hidden
-    chmod 644 /opt/games/$name.hidden
+for name in touch_test touch_debug touch_inject touch_calibrate pressure_test unified_calibrate; do
+    touch  /opt/games/$name.hidden 2>/dev/null || true
+    chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
-echo "MARKERS_OK"
 REMOTE
 ok "Permissions and markers set"
 echo ""
@@ -156,38 +279,15 @@ if [[ "$MODE" == "permanent" ]]; then
     scp roomwizard-games-init.sh "$DEVICE:$INIT_SCRIPT"
     ok "Init script uploaded"
 
-    info "Disabling unnecessary services and watchdog checks..."
-    ssh "$DEVICE" bash <<'REMOTE'
-# Disable watchdog test binary (prevents reboot due to missing webserver)
-if [ -f /etc/watchdog.conf ]; then
-    sed -i 's/^test-binary/#test-binary/' /etc/watchdog.conf
-    sed -i 's/^repair-binary/#repair-binary/' /etc/watchdog.conf
-    echo "Watchdog test/repair disabled"
-fi
+    # Run cleanup
+    do_cleanup "$DEVICE" ""
 
-# Stop and disable unnecessary services
-for svc in webserver browser x11 jetty hsqldb snmpd vsftpd; do
-    /etc/init.d/$svc stop 2>/dev/null || true
-    update-rc.d $svc remove 2>/dev/null || true
-done
-
-# Kill any remaining bloatware processes
-killall java 2>/dev/null || true
-killall Xorg 2>/dev/null || true
-killall browser 2>/dev/null || true
-killall epiphany 2>/dev/null || true
-
-echo "CLEANUP_OK"
-REMOTE
-    ok "Unnecessary services disabled"
-
-    info "Registering game service and rebooting..."
+    info "Registering service and rebooting..."
     ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /etc/init.d/roomwizard-games
 update-rc.d browser remove  2>/dev/null || true
 update-rc.d x11    remove  2>/dev/null || true
 update-rc.d roomwizard-games defaults
-echo "SERVICE_REGISTERED"
 reboot
 REMOTE
     ok "Service installed — device is rebooting"
@@ -199,6 +299,12 @@ else
     echo ""
     echo "  To install as boot service:"
     echo "    ./build-and-deploy.sh $DEVICE_IP permanent"
+    echo ""
+    echo "  To cleanup services only:"
+    echo "    ./build-and-deploy.sh $DEVICE_IP cleanup"
+    echo ""
+    echo "  To cleanup + remove bloatware files:"
+    echo "    ./build-and-deploy.sh $DEVICE_IP cleanup --remove"
 fi
 
 echo ""
