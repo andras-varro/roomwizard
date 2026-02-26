@@ -39,7 +39,7 @@ cd native_games
 ./build-and-deploy.sh 192.168.50.73
 
 # Build + deploy + install boot service + cleanup + reboot
-./build-and-deploy.sh 192.168.50.73 permanent
+./build-and-deploy.sh 192.168.50.73 permanent --remove
 
 # Cleanup services only (no build/deploy)
 ./build-and-deploy.sh 192.168.50.73 cleanup

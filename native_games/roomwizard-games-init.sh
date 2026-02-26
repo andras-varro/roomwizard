@@ -1,7 +1,7 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          roomwizard-games
-# Required-Start:    $local_fs $remote_fs
+# Required-Start:    $local_fs $remote_fs $all
 # Required-Stop:     $local_fs $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
@@ -21,16 +21,60 @@ PIDFILE_SELECTOR=/var/run/game_selector.pid
 
 [ -f /etc/init.d/functions ] && . /etc/init.d/functions
 
+# Stop conflicting services properly using their init scripts
+stop_conflicting_services() {
+    echo "Stopping conflicting services..."
+    
+    # Stop services in reverse order of their startup priority
+    # browser (S35) -> webserver (S32) -> x11 (S30)
+    for svc in browser webserver x11; do
+        if [ -x "/etc/init.d/$svc" ]; then
+            echo "  Stopping $svc..."
+            /etc/init.d/$svc stop 2>/dev/null || true
+        fi
+    done
+    
+    # Give services time to stop gracefully
+    sleep 2
+    
+    # Force kill any remaining processes
+    killall -9 browser 2>/dev/null || true
+    killall -9 epiphany 2>/dev/null || true
+    killall -9 webkit 2>/dev/null || true
+    killall -9 Xorg 2>/dev/null || true
+    killall -9 java 2>/dev/null || true
+    
+    # Kill psplash if running (frees ~6MB RAM)
+    killall -9 psplash 2>/dev/null || true
+    
+    sleep 1
+    echo "Conflicting services stopped."
+}
+
+# Disable conflicting services from starting on boot
+disable_conflicting_services() {
+    echo "Disabling conflicting services from boot..."
+    
+    # Remove symlinks from all runlevels
+    for svc in browser webserver x11 jetty hsqldb; do
+        # Remove from rc5.d (main runlevel)
+        rm -f /etc/rc5.d/S*${svc} 2>/dev/null || true
+        rm -f /etc/rc5.d/K*${svc} 2>/dev/null || true
+        # Also try update-rc.d if available
+        update-rc.d -f $svc remove 2>/dev/null || true
+    done
+    
+    echo "Conflicting services disabled."
+}
+
 do_start() {
     echo "Starting $DESC..."
 
-    # Stop browser/X11 stack if still running
-    killall Xorg 2>/dev/null || true
-    killall browser 2>/dev/null || true
-    killall epiphany 2>/dev/null || true
-    killall webkit 2>/dev/null || true
-    killall java 2>/dev/null || true
-    sleep 2
+    # First, properly stop conflicting services using their init scripts
+    stop_conflicting_services
+    
+    # Disable them from starting on next boot
+    disable_conflicting_services
 
     # Start game selector
     if [ -x "$GAME_SELECTOR" ]; then

@@ -2,11 +2,12 @@
 # Build all native games and optionally deploy to a RoomWizard device.
 #
 # Usage:
-#   ./build-and-deploy.sh                        # build only
-#   ./build-and-deploy.sh <ip>                   # build + deploy binaries
-#   ./build-and-deploy.sh <ip> permanent         # build + deploy + install boot service + cleanup + reboot
-#   ./build-and-deploy.sh <ip> cleanup           # cleanup services only (no build/deploy)
-#   ./build-and-deploy.sh <ip> cleanup --remove  # cleanup services + remove bloatware files
+#   ./build-and-deploy.sh                          # build only
+#   ./build-and-deploy.sh <ip>                     # build + deploy binaries
+#   ./build-and-deploy.sh <ip> permanent           # build + deploy + install boot service + cleanup + reboot
+#   ./build-and-deploy.sh <ip> permanent --remove  # build + deploy + install boot service + cleanup + remove bloatware + reboot
+#   ./build-and-deploy.sh <ip> cleanup             # cleanup services only (no build/deploy)
+#   ./build-and-deploy.sh <ip> cleanup --remove    # cleanup services + remove bloatware files
 
 set -e
 
@@ -192,7 +193,7 @@ echo ""
 if [[ -z "$DEVICE_IP" ]]; then
     echo "No IP supplied — build only. To deploy:"
     echo "  ./build-and-deploy.sh <ip>"
-    echo "  ./build-and-deploy.sh <ip> permanent"
+    echo "  ./build-and-deploy.sh <ip> permanent [--remove]"
     echo "  ./build-and-deploy.sh <ip> cleanup [--remove]"
     exit 0
 fi
@@ -206,6 +207,11 @@ info "Testing SSH connection..."
 ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
     || err "Cannot reach $DEVICE — check IP and SSH key"
 ok "SSH OK"
+
+# Ensure target directory exists
+info "Ensuring target directory exists..."
+ssh "$DEVICE" "mkdir -p $GAMES_DIR"
+ok "Target directory ready"
 
 # Upload binaries
 info "Uploading binaries → $GAMES_DIR/"
@@ -280,14 +286,39 @@ if [[ "$MODE" == "permanent" ]]; then
     ok "Init script uploaded"
 
     # Run cleanup
-    do_cleanup "$DEVICE" ""
+    do_cleanup "$DEVICE" "$REMOVE_FILES"
 
     info "Registering service and rebooting..."
     ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /etc/init.d/roomwizard-games
-update-rc.d browser remove  2>/dev/null || true
-update-rc.d x11    remove  2>/dev/null || true
-update-rc.d roomwizard-games defaults
+
+# Remove conflicting service symlinks from all runlevels
+echo "Removing conflicting service symlinks..."
+for svc in browser webserver x11 jetty hsqldb; do
+    rm -f /etc/rc5.d/S*${svc} 2>/dev/null || true
+    rm -f /etc/rc5.d/K*${svc} 2>/dev/null || true
+    rm -f /etc/rc2.d/S*${svc} 2>/dev/null || true
+    rm -f /etc/rc3.d/S*${svc} 2>/dev/null || true
+    rm -f /etc/rc4.d/S*${svc} 2>/dev/null || true
+    update-rc.d -f $svc remove 2>/dev/null || true
+done
+
+# Remove old roomwizard-games symlinks if they exist (might have wrong priority)
+rm -f /etc/rc5.d/S*roomwizard-games 2>/dev/null || true
+rm -f /etc/rc2.d/S*roomwizard-games 2>/dev/null || true
+rm -f /etc/rc3.d/S*roomwizard-games 2>/dev/null || true
+rm -f /etc/rc4.d/S*roomwizard-games 2>/dev/null || true
+update-rc.d -f roomwizard-games remove 2>/dev/null || true
+
+# Install roomwizard-games with high priority (99) so it starts AFTER all other services
+# This ensures browser/x11/webserver have started before we stop them
+echo "Installing roomwizard-games service with priority 99..."
+ln -sf /etc/init.d/roomwizard-games /etc/rc5.d/S99roomwizard-games
+ln -sf /etc/init.d/roomwizard-games /etc/rc2.d/S99roomwizard-games
+ln -sf /etc/init.d/roomwizard-games /etc/rc3.d/S99roomwizard-games
+ln -sf /etc/init.d/roomwizard-games /etc/rc4.d/S99roomwizard-games
+
+echo "Service installed. Rebooting..."
 reboot
 REMOTE
     ok "Service installed — device is rebooting"
@@ -299,6 +330,9 @@ else
     echo ""
     echo "  To install as boot service:"
     echo "    ./build-and-deploy.sh $DEVICE_IP permanent"
+    echo ""
+    echo "  To install as boot service + remove bloatware:"
+    echo "    ./build-and-deploy.sh $DEVICE_IP permanent --remove"
     echo ""
     echo "  To cleanup services only:"
     echo "    ./build-and-deploy.sh $DEVICE_IP cleanup"

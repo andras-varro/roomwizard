@@ -83,8 +83,8 @@ Switch to DHCP so it works on any network:
 ```bash
 sudo nano $ROOTFS/etc/network/interfaces
 # eth0 section should read:
-#   auto eth0
-#   iface eth0 inet dhcp
+auto eth0
+iface eth0 inet dhcp
 ```
 
 ---
