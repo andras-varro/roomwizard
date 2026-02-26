@@ -16,6 +16,7 @@
 #include "../common/touch_input.h"
 #include "../common/common.h"
 #include "../common/hardware.h"
+#include "../common/audio.h"
 
 #define PADDLE_WIDTH 15
 #define PADDLE_HEIGHT 80
@@ -54,6 +55,7 @@ Framebuffer fb;
 TouchInput touch;
 GameState game;
 bool running = true;
+Audio audio;
 int play_area_width;
 int play_area_height;
 int offset_x;
@@ -171,6 +173,9 @@ void update_game() {
     if (game.ball.y <= 0 || game.ball.y >= play_area_height - BALL_SIZE) {
         game.ball.vy = -game.ball.vy;
         game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
+        // Short high ping on wall bounce
+        audio_interrupt(&audio);
+        audio_tone(&audio, 2000, 60);
     }
     
     // Ball collision with player paddle (left)
@@ -185,9 +190,10 @@ void update_game() {
         float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
         game.ball.vy += (hit_pos - 0.5) * 3;
         
-        // Green flash on player hit
+        // Green flash + pong on player hit
         hw_set_led(LED_GREEN, 100);
-        usleep(50000);  // 50ms
+        audio_interrupt(&audio);
+        audio_tone(&audio, 440, 90);  // Low resonant pong
         hw_leds_off();
     }
     
@@ -202,9 +208,10 @@ void update_game() {
         float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
         game.ball.vy += (hit_pos - 0.5) * 3;
         
-        // Red flash on AI hit
+        // Red flash + pong on AI hit
         hw_set_led(LED_RED, 100);
-        usleep(50000);  // 50ms
+        audio_interrupt(&audio);
+        audio_tone(&audio, 440, 90);  // Low resonant pong
         hw_leds_off();
     }
     
@@ -213,20 +220,21 @@ void update_game() {
         game.ai.score++;
         // Red flash for AI scoring
         hw_set_led(LED_RED, 100);
-        usleep(200000);  // 200ms
+        audio_blip(&audio);   // ~60ms — AI scored (bad)
         hw_leds_off();
         
         if (game.ai.score >= WINNING_SCORE) {
             game.game_over = true;
             game.winner = 2;
             current_screen = SCREEN_GAME_OVER;
-            // Red pulse for loss
+            // Red pulse + fail sound for loss
             for (int i = 0; i < 3; i++) {
                 hw_set_led(LED_RED, 100);
                 usleep(200000);
                 hw_leds_off();
                 usleep(200000);
             }
+            audio_fail(&audio);  // Descending game-over tone (~600ms)
         } else {
             reset_ball();
         }
@@ -234,20 +242,21 @@ void update_game() {
         game.player.score++;
         // Green flash for player scoring
         hw_set_led(LED_GREEN, 100);
-        usleep(200000);  // 200ms
+        audio_blip(&audio);   // ~60ms — player scored
         hw_leds_off();
         
         if (game.player.score >= WINNING_SCORE) {
             game.game_over = true;
             game.winner = 1;
             current_screen = SCREEN_GAME_OVER;
-            // Green pulse for win
+            // Green pulse + success fanfare for win
             for (int i = 0; i < 3; i++) {
                 hw_set_led(LED_GREEN, 100);
                 usleep(200000);
                 hw_leds_off();
                 usleep(200000);
             }
+            audio_success(&audio);  // Ascending fanfare (~440ms)
         } else {
             reset_ball();
         }
@@ -444,6 +453,7 @@ int main(int argc, char *argv[]) {
     
     // Initialize hardware control
     hw_init();
+    audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     
     srand(time(NULL));
     init_game();
@@ -462,6 +472,7 @@ int main(int argc, char *argv[]) {
     
     touch_close(&touch);
     hw_leds_off();
+    audio_close(&audio);
     fb_close(&fb);
     
     printf("Pong ended.\n");

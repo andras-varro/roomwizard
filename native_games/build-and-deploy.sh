@@ -61,12 +61,19 @@ $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layou
 step "13/14" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "14/14" "watchdog_feeder"
+step "14/15" "watchdog_feeder"
 $CC -O2 -static watchdog_feeder/watchdog_feeder.c -o build/watchdog_feeder
+
+step "15/15" "audio_touch_test"
+$CC -O2 -static -I. \
+  tests/audio_touch_test.c \
+  common/audio.c common/touch_input.c common/framebuffer.c \
+  common/hardware.c common/common.c \
+  -o build/audio_touch_test -lm
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/watchdog_feeder \
+ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/watchdog_feeder build/audio_touch_test \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -94,6 +101,7 @@ info "Uploading binaries → $GAMES_DIR/"
 scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
     build/unified_calibrate build/watchdog_feeder \
+    build/audio_touch_test \
     "$DEVICE:$GAMES_DIR/"
 ok "Binaries uploaded"
 
@@ -128,7 +136,8 @@ chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
 
 # .hidden markers for dev tools
 for name in watchdog_feeder touch_test touch_debug touch_inject \
-            touch_calibrate unified_calibrate pressure_test; do
+            touch_calibrate pressure_test \
+            ; do
     touch  /opt/games/$name.hidden
     chmod 644 /opt/games/$name.hidden
 done

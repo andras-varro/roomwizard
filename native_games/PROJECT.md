@@ -58,11 +58,16 @@ See [`README.md`](README.md#game-selector-markers) for marker file reference.
 - [x] **`build-and-deploy.sh`** ✅ — single script: cross-compile + `scp` all binaries + `chmod` in one step (takes IP as arg; replaces the separate `compile_for_roomwizard.sh` + manual scp)
 - [ ] **Fix `Makefile`** — currently targets plain `gcc`, not the ARM cross-compiler; either wire it to `arm-linux-gnueabihf-gcc` or remove it to avoid confusion
 
+### System Tools
+
+- [ ] **Configuration tool (`rw_config`)** ⬅ **NEXT** — CLI tool to configure persistent device settings: set LED brightness percentages (red_led, green_led, backlight separately, 0-100); disable/enable audio (writes `/opt/games/audio.disabled` flag, all programs check this before opening `/dev/dsp`); set portrait/landscape mode (writes `/opt/games/portrait.mode` flag, all GUI programs check and apply a 90° coordinate+render transform). Run with no args prints current settings. Examples: `rw_config --backlight 70 --green 0 --audio off`, `rw_config --portrait on`, `rw_config --status`. Settings are stored in `/opt/games/rw_config.conf` (key=value) so they survive across launches.
+- [ ] **Diagnostics tool (`rw_diag`)** — Standalone CLI/screen tool showing: free/used disk space for all mounted partitions (`/`, `/home/root/data`, `/home/root/log`, `/home/root/backup`); free/used RAM and swap from `/proc/meminfo`; current LED brightness values (`/sys/class/leds/{red_led,green_led,backlight}/brightness`); CPU model and clock from `/proc/cpuinfo`; kernel version and uptime (`/proc/version`, `/proc/uptime`); load average from `/proc/loadavg`; framebuffer mode (`/sys/class/graphics/fb0/`). Output to stdout (plain text columns); optionally draws to framebuffer when run on-device without a terminal.
+
 ### Gameplay
 
 - [x] **Persistent high scores** ✅
 - [x] **Audio component** ✅ — `common/audio.{h,c}` provides `audio_init/close/tone/beep/blip/success/fail`; games include `audio.h` and add `build/audio.o` to their link (already in `COMMON_OBJ`)
-- [ ] **Wire audio into games** — add `Audio audio;` to each game struct, call `audio_beep()` on move, `audio_blip()` on score, `audio_success()` on level up, `audio_fail()` on game over — top-5 leaderboard per game (`snake.hig`, `tetris.hig` in `/home/root/data/`); touch-driven on-screen keyboard for name entry (10 chars, A-Z + space + DEL/CLEAR/OK); gold/silver/bronze ranking display; RESET SCORES button on game over screen; central component in `common/highscore.{h,c}`
+- [x] **Wire audio into games** ✅ — `Audio audio;` global in each game; `audio_init/close` in `main()`; **snake:** `audio_beep` on direction change, `audio_blip` on food eaten, `audio_fail` on death; **tetris:** `audio_beep` on move/rotate, `audio_blip` on line clear, `audio_success` on Tetris (4 lines), `audio_fail` on game over; **pong:** `audio_beep` on paddle hit (replaces `usleep`), `audio_blip` on scoring a point, `audio_success` on player win, `audio_fail` on player loss
 - [ ] **Portrait mode for Tetris** — rotate framebuffer 90° so the Tetris board is tall; requires coordinate transform in touch input and a rotated render path
 - [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
 - [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)

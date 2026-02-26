@@ -29,12 +29,14 @@
  * in that state, so games work without audio hardware.
  */
 
+#include <stdint.h>
 #include <stdbool.h>
 
 typedef struct {
-    int  dsp_fd;       /**< /dev/dsp file descriptor (-1 = not open) */
-    int  sample_rate;  /**< Negotiated sample rate (typically 44100)  */
-    bool available;    /**< false if /dev/dsp could not be opened     */
+    int      dsp_fd;          /**< /dev/dsp file descriptor (-1 = not open)      */
+    int      sample_rate;     /**< Negotiated sample rate (typically 44100)        */
+    bool     available;       /**< false if /dev/dsp could not be opened           */
+    uint32_t sound_end_ms;    /**< Expected wall-clock end of current tone (ms)    */
 } Audio;
 
 /**
@@ -50,6 +52,18 @@ int  audio_init(Audio *audio);
  * Safe to call even if audio_init() failed.
  */
 void audio_close(Audio *audio);
+
+/**
+ * Flush any audio still queued in the kernel OSS ring buffer and
+ * prepare for immediate playback of the next tone.
+ *
+ * Call this before audio_tone() when triggering a new sound that should
+ * interrupt whatever is currently playing (e.g. rapid game events).
+ * The convenience functions (audio_beep, audio_blip, audio_success,
+ * audio_fail) call this internally — only needed for direct audio_tone()
+ * callers.
+ */
+void audio_interrupt(Audio *audio);
 
 /**
  * Play a blocking sine-wave tone through SPKR1.

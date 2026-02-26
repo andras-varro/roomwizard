@@ -17,6 +17,7 @@
 #include "../common/common.h"
 #include "../common/hardware.h"
 #include "../common/highscore.h"
+#include "../common/audio.h"
 
 #define GRID_SIZE 20
 #define MAX_SNAKE_LENGTH 400
@@ -84,6 +85,7 @@ GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
 bool hs_entry_pending = false;
 Button reset_score_button;
+Audio audio;
 
 // UI Buttons
 Button menu_button;
@@ -271,6 +273,7 @@ void update_snake() {
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
         hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+        audio_fail(&audio);   // Game-over sound (~600ms)
         start_led_effect(3);  // Start death effect
         return;
     }
@@ -281,6 +284,7 @@ void update_snake() {
             game.game_over = true;
             current_screen = SCREEN_GAME_OVER;
             hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+            audio_fail(&audio);   // Game-over sound (~600ms)
             start_led_effect(3);  // Start death effect
             return;
         }
@@ -295,6 +299,9 @@ void update_snake() {
     // Check food collision
     if (new_head.x == food.position.x && new_head.y == food.position.y) {
         game.score += 10;
+        audio_interrupt(&audio);
+        audio_tone(&audio, 1800, 60);  // ti-
+            audio_tone(&audio, 2400, 60);  // -ti
         start_led_effect(1);  // Start food effect (non-blocking)
         
         if (snake.length < MAX_SNAKE_LENGTH) {
@@ -412,7 +419,6 @@ void handle_input() {
         
         int dx = state.x - head_screen_x;
         int dy = state.y - head_screen_y;
-        
         if (abs(dx) > abs(dy)) {
             // Horizontal movement
             if (dx > 0 && snake.direction != DIR_LEFT) {
@@ -525,6 +531,7 @@ int main(int argc, char *argv[]) {
     // Initialize hardware control
     hw_init();
     hw_leds_off();  // Start with LEDs off
+    audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     
     // Initialize framebuffer
     if (fb_init(&fb, fb_device) < 0) {
@@ -564,6 +571,7 @@ int main(int argc, char *argv[]) {
     
     // Cleanup
     hw_leds_off();
+    audio_close(&audio);
     touch_close(&touch);
     fb_close(&fb);
     

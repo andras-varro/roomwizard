@@ -16,6 +16,7 @@
 #include "../common/common.h"
 #include "../common/hardware.h"
 #include "../common/highscore.h"
+#include "../common/audio.h"
 
 #define BOARD_WIDTH 10
 #define BOARD_HEIGHT 20
@@ -135,6 +136,7 @@ GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
 bool hs_entry_pending = false;
 Button reset_score_button;
+Audio audio;
 
 // Function prototypes
 void init_game();
@@ -254,13 +256,14 @@ void lock_piece() {
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
         hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
-        // Red pulse
+        // Red pulse + fail sound
         for (int i = 0; i < 3; i++) {
             hw_set_led(LED_RED, 100);
             usleep(200000);
             hw_leds_off();
             usleep(200000);
         }
+        audio_fail(&audio);  // Descending game-over tone (~600ms)
     }
 }
 
@@ -299,21 +302,21 @@ void clear_lines() {
         game.drop_speed = 60 - (game.level * 3);
         if (game.drop_speed < 10) game.drop_speed = 10;
         
-        // LED effects for line clears
+        // LED + audio effects for line clears
         if (lines == 4) {
-            // Tetris! Rainbow cycle (yellow/orange effect)
+            // Tetris! Fanfare + yellow flash
             hw_set_leds(HW_LED_COLOR_YELLOW);
-            usleep(200000);  // 200ms
+            audio_success(&audio);  // Ascending arpeggio (~440ms)
             hw_leds_off();
         } else if (lines >= 2) {
-            // Multi-line clear - green flash
+            // Multi-line clear
             hw_set_led(LED_GREEN, 100);
-            usleep(150000);  // 150ms
+            audio_blip(&audio);     // Short blip (~60ms)
             hw_leds_off();
         } else {
-            // Single line - brief green
+            // Single line
             hw_set_led(LED_GREEN, 100);
-            usleep(100000);  // 100ms
+            audio_blip(&audio);     // Short blip (~60ms)
             hw_leds_off();
         }
     }
@@ -454,21 +457,28 @@ void handle_input() {
             // Left side - move left
             if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
                 game.current.x--;
+                audio_interrupt(&audio);
+                audio_tone(&audio, 880, 60);  // Short move click
             }
         } else if (tx > board_right + 10) {
             // Right side - move right
             if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
                 game.current.x++;
+                audio_interrupt(&audio);
+                audio_tone(&audio, 880, 60);  // Short move click
             }
         } else if (ty > fb.height - 80) {
-            // Bottom - hard drop
+            // Bottom - hard drop: thud sound then lock
             while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
                 game.current.y++;
                 game.score += 2;
             }
+            audio_interrupt(&audio);
+            audio_tone(&audio, 500, 60);  // Drop thud (high part)
+            audio_tone(&audio, 250, 70);  // Drop thud (low part)
             lock_piece();
         } else {
-            // Center - rotate
+            // Center - rotate (no sound: happens frequently, would be noisy)
             int new_rotation = (game.current.rotation + 1) % 4;
             if (!check_collision(&game.current, 0, 0, new_rotation)) {
                 game.current.rotation = new_rotation;
@@ -608,6 +618,7 @@ int main(int argc, char *argv[]) {
     
     // Initialize hardware control
     hw_init();
+    audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     
     srand(time(NULL));
     init_game();
@@ -626,6 +637,7 @@ int main(int argc, char *argv[]) {
     
     touch_close(&touch);
     hw_leds_off();
+    audio_close(&audio);
     fb_close(&fb);
     
     printf("Tetris ended. Final score: %d\n", game.score);
