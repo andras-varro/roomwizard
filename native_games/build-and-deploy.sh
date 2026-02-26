@@ -156,7 +156,32 @@ if [[ "$MODE" == "permanent" ]]; then
     scp roomwizard-games-init.sh "$DEVICE:$INIT_SCRIPT"
     ok "Init script uploaded"
 
-    info "Registering service and rebooting..."
+    info "Disabling unnecessary services and watchdog checks..."
+    ssh "$DEVICE" bash <<'REMOTE'
+# Disable watchdog test binary (prevents reboot due to missing webserver)
+if [ -f /etc/watchdog.conf ]; then
+    sed -i 's/^test-binary/#test-binary/' /etc/watchdog.conf
+    sed -i 's/^repair-binary/#repair-binary/' /etc/watchdog.conf
+    echo "Watchdog test/repair disabled"
+fi
+
+# Stop and disable unnecessary services
+for svc in webserver browser x11 jetty hsqldb snmpd vsftpd; do
+    /etc/init.d/$svc stop 2>/dev/null || true
+    update-rc.d $svc remove 2>/dev/null || true
+done
+
+# Kill any remaining bloatware processes
+killall java 2>/dev/null || true
+killall Xorg 2>/dev/null || true
+killall browser 2>/dev/null || true
+killall epiphany 2>/dev/null || true
+
+echo "CLEANUP_OK"
+REMOTE
+    ok "Unnecessary services disabled"
+
+    info "Registering game service and rebooting..."
     ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /etc/init.d/roomwizard-games
 update-rc.d browser remove  2>/dev/null || true

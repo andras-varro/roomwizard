@@ -22,10 +22,26 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 cd native_games
 ./build-and-deploy.sh                          # build only
 ./build-and-deploy.sh 192.168.50.73            # build + deploy binaries
-./build-and-deploy.sh 192.168.50.73 permanent  # + install boot service + reboot
+./build-and-deploy.sh 192.168.50.73 permanent  # + install boot service + disable bloatware + reboot
 ```
 
 The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
+
+**Permanent mode** also:
+- Disables watchdog test/repair (prevents unwanted reboots)
+- Stops and disables unnecessary services (browser, X11, Jetty, HSQLDB, etc.)
+- Frees ~80 MB RAM
+- See [`BLOATWARE_CLEANUP.md`](BLOATWARE_CLEANUP.md) for details
+
+### Cleanup Existing Device
+
+If you already deployed without `permanent` mode, run the cleanup script:
+
+```bash
+bash cleanup-bloatware.sh 192.168.50.73
+```
+
+This disables watchdog checks and stops unnecessary services without rebooting.
 
 Rebuilding just `game_selector` after changes:
 ```bash
@@ -66,6 +82,7 @@ Current state on device:
 
 ## Resources
 
+- **Bloatware cleanup:** [BLOATWARE_CLEANUP_COMPLETE.md](BLOATWARE_CLEANUP_COMPLETE.md) - Complete guide: disable services + remove files
 - **Device / SSH setup:** [SYSTEM_SETUP.md](../SYSTEM_SETUP.md)
 - **Hardware specs:** [SYSTEM_ANALYSIS.md](../SYSTEM_ANALYSIS.md)
 - **ScummVM backend:** [scummvm-roomwizard/SCUMMVM_DEV.md](../scummvm-roomwizard/SCUMMVM_DEV.md)

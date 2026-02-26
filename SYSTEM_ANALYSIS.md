@@ -679,9 +679,47 @@ Modifications fail when: MD5 checksums don't match, watchdog times out (60 s), c
 **Rules:**
 1. Regenerate all MD5 checksums after any file change: `for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done`
 2. Feed watchdog every 30 s — system daemon `/usr/sbin/watchdog` handles this
-3. Preserve critical services: `/etc/init.d/watchdog`, `webserver`, `x11`, `browser`
+3. Preserve critical services: `/etc/init.d/watchdog`, `sshd`, `cron`, `dbus`
 4. Safe to add new init scripts at `/etc/rc5.d/S99*`
 5. Java 8 runtime exists at `/opt/openjre-8/`; Python requires ARM cross-compiled binaries
+
+### Game Mode Optimization
+
+When running in game mode (native games, not browser), disable unnecessary services to prevent watchdog-triggered reboots and free memory:
+
+**Problem:** The watchdog system monitors browser/webserver stack. In game mode, these services are disabled, causing watchdog to detect "failures" and trigger reboots every 3-4 hours.
+
+**Solution:** Disable watchdog test/repair and stop unnecessary services:
+
+```bash
+# Quick fix (existing deployment)
+cd native_games
+bash cleanup-bloatware.sh 192.168.50.73
+
+# Automatic (new deployment)
+./build-and-deploy.sh 192.168.50.73 permanent
+```
+
+**Services to Disable:**
+- webserver, browser, x11 (not needed - games use framebuffer)
+- jetty, hsqldb (not needed - no web interface)
+- snmpd, vsftpd (not needed - monitoring/FTP)
+
+**Services to Keep:**
+- watchdog (hardware watchdog feeder - critical)
+- sshd (remote access)
+- cron, dbus, ntpd (system services)
+- audio-enable (speaker amplifier)
+- roomwizard-games (game selector)
+
+**Result:** ~80 MB RAM freed, no unwanted reboots, stable game mode
+
+**Optional:** Remove bloatware files (~178 MB disk space, removes vulnerable Jetty/HSQLDB/Java):
+```bash
+bash native_games/cleanup-bloatware-full.sh 192.168.50.73 --remove-files
+```
+
+See [`native_games/BLOATWARE_CLEANUP_COMPLETE.md`](native_games/BLOATWARE_CLEANUP_COMPLETE.md) for complete guide including filesystem analysis and security considerations.
 
 ---
 
