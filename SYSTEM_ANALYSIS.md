@@ -719,7 +719,7 @@ bash cleanup-bloatware.sh 192.168.50.73
 bash native_games/cleanup-bloatware-full.sh 192.168.50.73 --remove-files
 ```
 
-See [`native_games/BLOATWARE_CLEANUP_COMPLETE.md`](native_games/BLOATWARE_CLEANUP_COMPLETE.md) for complete guide including filesystem analysis and security considerations.
+See [`native_games/README.md#system-optimization`](native_games/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.
 
 ---
 
