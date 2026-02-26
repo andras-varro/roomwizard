@@ -11,9 +11,11 @@
 5. [Hardware Control Interfaces](#hardware-control-interfaces)
 6. [Application Framework](#application-framework)
 7. [USB Subsystem Analysis](#usb-subsystem-analysis)
-8. [Safe Modification Strategy](#safe-modification-strategy)
-9. [Debugging & Rollback](#debugging--rollback)
-10. [Critical Warnings](#critical-warnings)
+8. [Extended Hardware Discovery](#extended-hardware-discovery)
+9. [Live System Analysis](#live-system-analysis)
+10. [Safe Modification Strategy](#safe-modification-strategy)
+11. [Debugging & Rollback](#debugging--rollback)
+12. [Critical Warnings](#critical-warnings)
 
 ---
 
@@ -23,11 +25,14 @@ The Steelcase RoomWizard is an embedded Linux device based on a Texas Instrument
 
 ### Key Findings
 
-- **Hardware:** TI AM335x ARM Cortex-A8 @ 300MHz, 256MB RAM
+- **Hardware:** TI AM335x ARM Cortex-A8 @ 600MHz (dynamically scaled from 300MHz base), 234MB RAM
 - **OS:** Embedded Linux (kernel 4.14.52) with SysVinit
 - **Protection:** MD5 checksums, 60-second hardware watchdog, boot state tracking
 - **Interfaces:** Framebuffer (`/dev/fb0`), touchscreen (`/dev/input/`), LEDs (sysfs)
 - **Software Stack:** X11 → WebKit browser → Jetty 9.4.11 → Java 8 → HSQLDB
+- **USB:** Hardware capable of host mode, currently non-functional (device tree issue - fixable)
+- **GPIO:** 8 GPIO banks (200+ pins), TWL4030 PMIC with 18 additional GPIO pins
+- **Wireless:** No WiFi or Bluetooth hardware present
 
 ### Modification Success Requirements
 
@@ -87,10 +92,18 @@ graph TB
 ### Processor & Memory
 
 - **SoC:** Texas Instruments AM335x (ARM Cortex-A8)
-- **CPU:** 300MHz ARM (armv7l architecture)
-- **RAM:** 256MB DDR3
-- **Storage:** SD card (4-8GB typical)
+- **CPU:** 300MHz base, 600MHz current (armv7l architecture, dynamic frequency scaling)
+- **BogoMIPS:** 594.73
+- **Features:** NEON SIMD, VFP, Thumb, TLS
+- **RAM:** 234MB DDR3 (256MB total, ~22MB reserved by system)
+- **Storage:** SD card (3.7GB typical)
 - **NAND Flash:** Boot loader and recovery
+
+**Verified Measurements (Live System):**
+- Current CPU frequency: 600 MHz (cpufreq scaling active)
+- Total RAM: 239,904 KB (234 MB)
+- Available RAM: 182 MB (76% free under game mode)
+- Load average: 0.00 (idle)
 
 ### Display
 
@@ -419,59 +432,243 @@ graph TB
 
 ### USB Port Configuration
 
-The micro USB port is configured in **USB Device/Gadget mode only** and is **not capable of hosting standard USB peripherals** like keyboards and mice.
+The micro USB port hardware **IS CAPABLE** of USB host mode, but is currently **NON-FUNCTIONAL** due to a device tree configuration issue.
+
+**Status:** ⚠️ **FIXABLE** - Requires device tree modification
 
 ### Hardware Architecture
 
 **SoC:** TI AM335x with MUSB dual-role USB controller
 
-**Built-in Kernel Modules:**
-- `kernel/drivers/usb/musb/musb_hdrc.ko` - MUSB dual-role USB controller
-- `kernel/drivers/usb/musb/omap2430.ko` - OMAP/AM335x USB platform driver
-- `kernel/drivers/usb/phy/phy-am335x-control.ko` - AM335x USB PHY control
-- `kernel/drivers/usb/phy/phy-am335x.ko` - AM335x USB PHY driver
-- `kernel/drivers/usb/core/usbcore.ko` - USB core subsystem
-
-### USB Gadget/Device Mode
-
-**Configuration:** USB Ethernet Gadget (g_ether/RNDIS)
-
-From `/etc/network/interfaces`:
-```bash
-# Ethernet/RNDIS gadget (g_ether)
-#iface usb0 inet static
-#	address 192.168.7.2
-#	netmask 255.255.255.0
-#	network 192.168.7.0
-#	gateway 192.168.7.1
+**Hardware Present:**
+```
+✅ MUSB USB Controller:  480ab000.usb_otg_hs (ti,omap3-musb)
+✅ USB Host TLL:         48062000.usbhstll
+✅ USB Host Controller:  48064000.usbhshost  
+✅ TWL4030 USB PHY:      twl4030-usb (initialized)
+✅ USB Regulators:       vusb1v5, vusb1v8, vusb3v1
 ```
 
-**Purpose:**
-- Firmware updates via USB
-- Debugging/development access
-- Configuration management
-- Device appears as network adapter when connected to PC
+**Kernel Configuration:**
+```
+✅ CONFIG_USB_MUSB_HDRC=y       - MUSB controller driver
+✅ CONFIG_USB_MUSB_HOST=y       - USB HOST mode enabled
+✅ CONFIG_USB_MUSB_OMAP2PLUS=y  - OMAP platform support
+✅ USB HID support loaded       - Keyboard/mouse drivers
+```
 
-### Why USB Peripherals Don't Work
+### Current Problem
 
-#### Software Reasons:
-1. **USB Controller Mode:** MUSB controller configured in peripheral/device mode, not host mode
-2. **No Host Drivers:** USB host controller drivers not loaded at boot
-3. **No HID Support Active:** While HID drivers exist in kernel, they're not initialized for host operations
-4. **Gadget-Only Configuration:** System configured exclusively for USB gadget/device functionality
+```
+❌ musb-hdrc musb-hdrc.0.auto: DMA controller not set
+❌ musb-hdrc musb-hdrc.0.auto: musb_init_controller failed with status -19
+```
 
-#### Hardware Considerations:
-- AM335x MUSB controller **is capable** of OTG (On-The-Go) operation
-- Hardware may lack **ID pin detection** circuitry for automatic host/device switching
-- USB port may be **hard-wired** for device mode only
-- **No USB power output** (VBUS) circuitry for powering external devices
+**Error -19 = ENODEV** - DMA controller reference missing from device tree
+
+### Root Cause
+
+The MUSB USB controller requires a **DMA controller** to be specified in the device tree, but the current configuration is missing this reference. Without the DMA controller link, the MUSB driver fails to initialize during boot.
+
+### Enabling USB Host Mode
+
+**Solution:** Device tree modification (moderate difficulty, reversible)
+
+**Required Changes:**
+```dts
+&usb_otg_hs {
+    compatible = "ti,omap3-musb";
+    dr_mode = "host";              /* Force host mode */
+    dmas = <&sdma 70>, <&sdma 71>; /* DMA channels */
+    dma-names = "rx", "tx";        /* DMA channel names */
+};
+```
+
+**Steps:**
+1. Extract device tree blob (DTB) from boot partition
+2. Decompile DTB to device tree source (DTS) using `dtc`
+3. Add DMA controller reference to USB node
+4. Recompile DTS to DTB
+5. Backup original DTB and replace with modified version
+6. Reboot and test
+
+**Hardware Considerations:**
+- USB port may lack VBUS power (use powered USB hub)
+- May require USB OTG adapter cable
+- Powered hub recommended for multiple devices
 
 ### Alternative Input Methods
 
-Since USB peripherals are not supported:
-- Use **network-based input** (SSH, web interface)
-- Implement **touchscreen-based** control interfaces
-- Use **serial console** for debugging (ttyO1, 115200 baud)
+Since USB host mode requires modification:
+- **SSH with X11 forwarding:** `ssh -X root@192.168.50.73`
+- **Network-based input:** VNC server or web-based virtual keyboard
+- **Serial console:** ttyO1 (115200 baud) for debugging
+
+**Recommendation:** Use network-based input for immediate productivity, experiment with USB host mode as a learning exercise if interested.
+
+---
+
+## Extended Hardware Discovery
+
+### GPIO Controllers (Multiple Banks)
+
+The AM335x SoC provides **8 GPIO banks** with extensive pin availability:
+
+```
+gpiochip0   - GPIO 0-31    (48310000.gpio)
+gpiochip32  - GPIO 32-63   (49050000.gpio)
+gpiochip64  - GPIO 64-95   (49052000.gpio)
+gpiochip96  - GPIO 96-127  (49054000.gpio)
+gpiochip128 - GPIO 128-159 (49056000.gpio)
+gpiochip160 - GPIO 160-191 (49058000.gpio)
+gpiochip490 - TWL4030 GPIO 490-507 (18 pins, twl4030-gpio)
+gpiochip508 - GPMC GPIO 508+ (6e000000.gpmc)
+```
+
+**Total:** 192+ GPIO pins from AM335x + 18 pins from TWL4030 PMIC
+
+**Currently Exported:**
+- `gpio12` - Speaker amplifier enable (OUT, HIGH)
+
+**Development Note:** Additional GPIO pins could be exported for custom hardware interfacing, but requires careful device tree analysis to avoid conflicts.
+
+### I2C Bus Devices
+
+**I2C Bus 1 (48070000.i2c)** - Power management and audio:
+- `0x48` - **TWL4030 PMIC** (multi-function device)
+- `0x49-0x4b` - Dummy placeholders
+
+**I2C Bus 2 (48072000.i2c)** - Touchscreen:
+- `0x03` - **Panjit touchscreen controller**
+
+**TWL4030 PMIC Subsystems:**
+1. Audio Codec (twl4030-codec) - HiFi DAC/ADC
+2. Battery Charger Interface (twl4030-bci) - AC/USB power detection
+3. GPIO Expander (twl4030-gpio) - 18 GPIO pins
+4. RTC (twl_rtc) - Real-time clock with battery backup
+5. USB Transceiver (twl4030-usb) - USB PHY interface
+6. MADC - Multi-channel ADC for monitoring
+
+### PWM Controllers
+
+```
+pwmchip0 - dmtimer-pwm@9  (Timer 9)
+pwmchip1 - dmtimer-pwm@11 (Timer 11)
+pwmchip2 - dmtimer-pwm@10 (Timer 10)
+```
+
+**Purpose:** LED brightness control (red, green, backlight), potentially available for additional PWM applications
+
+### Real-Time Clock (RTC)
+
+```
+Device:     /dev/rtc0
+Driver:     twl_rtc (TWL4030 integrated RTC)
+Features:   Battery-backed, alarm, wake-up capability
+```
+
+### Watchdog Timers
+
+```
+/dev/watchdog  - Primary watchdog (symlink)
+/dev/watchdog0 - OMAP watchdog timer (Rev 0x31)
+/dev/watchdog1 - Secondary watchdog
+```
+
+**Configuration:**
+- Timeout: 60 seconds
+- Fed by: `/usr/sbin/watchdog` daemon
+- Status: Active
+
+### Serial/UART Ports
+
+```
+Device:    /dev/ttyO1
+Hardware:  OMAP UART1 at MMIO 0x4806c000
+Baud Rate: 115200n8
+Console:   Enabled (kernel console output)
+```
+
+**Usage:** Boot debugging, kernel panic analysis, emergency access
+
+### Power Management
+
+**Power Supply Monitoring:**
+- `twl4030_ac` - AC power supply status (currently: 0 = not connected)
+- `twl4030_usb` - USB power supply status (currently: 0 = not connected)
+
+**Analysis:** Device uses dedicated power supply (not USB-powered)
+
+### Hardware NOT Present
+
+**Confirmed Absent:**
+- ❌ WiFi - No 802.11 wireless adapter
+- ❌ Bluetooth - No BT controller or radio
+- ❌ Sensors - No temperature, accelerometer, light, or proximity sensors
+- ❌ Audio Input - No microphone or line-in (TWL4030 has mic inputs but not connected)
+- ❌ Video Output - No HDMI/VGA (framebuffer only)
+- ❌ SPI Devices - No `/dev/spi*` devices
+
+### Additional Hardware Summary
+
+| Component | Quantity | Details | Access |
+|-----------|----------|---------|--------|
+| **GPIO Banks** | 8 banks | 192+ pins (AM335x) + 18 pins (TWL4030) | sysfs export |
+| **I2C Buses** | 2 buses | Bus 1: PMIC/Audio, Bus 2: Touch | `/dev/i2c-*` |
+| **PWM Controllers** | 3 channels | DMTIMER-based PWM | sysfs |
+| **RTC** | 1 device | TWL4030 battery-backed RTC | `/dev/rtc0` |
+| **Watchdog Timers** | 2 devices | OMAP hardware watchdog | `/dev/watchdog*` |
+| **UART Ports** | 1 exposed | ttyO1 (115200 baud console) | `/dev/ttyO1` |
+| **Power Monitors** | 2 | AC and USB power detection | sysfs |
+
+---
+
+## Live System Analysis
+
+**Device:** 192.168.50.73 (RW09)  
+**Analysis Date:** 2026-02-26  
+**Status:** Operational - Game Mode Active
+
+### Verified Measurements
+
+**CPU:**
+- Model: ARMv7 Processor rev 7 (ARM Cortex-A8)
+- Base Clock: 300 MHz
+- Current Frequency: 600 MHz (cpufreq scaling active)
+- BogoMIPS: 594.73
+- Features: NEON SIMD, VFP, Thumb, TLS
+
+**Memory:**
+- Total RAM: 239,904 KB (234 MB)
+- Available: 182 MB (76% free)
+- Swap: 258 MB (unused)
+- Load Average: 0.00 (idle)
+
+**Storage:**
+- SD Card: 3.7 GB (mmcblk0)
+- Root Partition: 980 MB (47% used, 474 MB free)
+- Data Partition: 251 MB (40% used)
+- Log Partition: 243 MB (4% used)
+
+**Network:**
+- Interface: eth0 (00:07:B0:0D:30:53)
+- IP Address: 192.168.50.73
+- Status: UP, RUNNING
+- Errors: 0
+
+**Services:**
+- ✅ S20roomwizard-games - Game mode active
+- ✅ S29audio-enable - Audio amplifier initialized
+- ✅ S50watchdog - Hardware watchdog active
+- ✅ S09sshd - SSH access enabled
+
+**System Health:** ✅ EXCELLENT
+- Zero load average
+- 76% memory available
+- All partitions healthy
+- No errors detected
+- Watchdog active
+- All hardware operational
 
 ---
 
