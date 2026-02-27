@@ -87,7 +87,7 @@ REMOTE
         if [[ "$confirm" == "yes" ]]; then
             info "Removing bloatware files..."
             ssh "$DEVICE" bash <<'REMOTE'
-cat > /root/bloatware-removed.txt <<'EOF'
+cat > /home/root/bloatware-removed.txt <<'EOF'
 Bloatware removed on $(date)
 - /opt/jetty-9-4-11 (43 MB)
 - /opt/openjre-8 (93 MB)
@@ -101,7 +101,7 @@ rm -rf /opt/jetty-9-4-11 /opt/jetty /opt/openjre-8 /opt/java /opt/hsqldb
 rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
 REMOTE
             ok "Bloatware files removed (~178 MB freed)"
-            warn "Backup list saved to /root/bloatware-removed.txt"
+            warn "Backup list saved to /home/root/bloatware-removed.txt"
         else
             info "File removal cancelled"
         fi
@@ -246,10 +246,22 @@ ssh "$DEVICE" bash <<'TIMESYNC_REMOTE'
 cat > /etc/init.d/time-sync << 'EOF'
 #!/bin/sh
 # Simple time synchronization for RoomWizard
-# Syncs time with NTP server if network is available
-if ping -c 1 pool.ntp.org >/dev/null 2>&1; then
-    ntpdate -s pool.ntp.org && hwclock -w
-fi
+# Syncs time with time server if network is available
+# Try multiple time servers in order using rdate (RFC 868 Time Protocol)
+
+# Wait a bit for network to be fully up
+sleep 2
+
+# Try multiple time servers using rdate
+for server in time.nist.gov time-a-g.nist.gov time-b-g.nist.gov time-c-g.nist.gov; do
+    if rdate -s "$server" >/dev/null 2>&1; then
+        hwclock -w
+        logger "time-sync: Successfully synced time with $server"
+        exit 0
+    fi
+done
+
+logger "time-sync: Failed to sync time with any time server"
 EOF
 chmod +x /etc/init.d/time-sync
 ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync
@@ -294,7 +306,7 @@ chmod +x /etc/init.d/roomwizard-games
 
 # Remove conflicting service symlinks from all runlevels
 echo "Removing conflicting service symlinks..."
-for svc in browser webserver x11 jetty hsqldb; do
+for svc in browser webserver x11 jetty hsqldb ntpd; do
     rm -f /etc/rc5.d/S*${svc} 2>/dev/null || true
     rm -f /etc/rc5.d/K*${svc} 2>/dev/null || true
     rm -f /etc/rc2.d/S*${svc} 2>/dev/null || true

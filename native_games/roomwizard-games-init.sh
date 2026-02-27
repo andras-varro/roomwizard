@@ -27,7 +27,7 @@ stop_conflicting_services() {
     
     # Stop services in reverse order of their startup priority
     # browser (S35) -> webserver (S32) -> x11 (S30)
-    for svc in browser webserver x11; do
+    for svc in browser webserver x11 ntpd; do
         if [ -x "/etc/init.d/$svc" ]; then
             echo "  Stopping $svc..."
             /etc/init.d/$svc stop 2>/dev/null || true
@@ -43,6 +43,7 @@ stop_conflicting_services() {
     killall -9 webkit 2>/dev/null || true
     killall -9 Xorg 2>/dev/null || true
     killall -9 java 2>/dev/null || true
+    killall -9 ntpd 2>/dev/null || true
     
     # Kill psplash if running (frees ~6MB RAM)
     killall -9 psplash 2>/dev/null || true
@@ -56,7 +57,7 @@ disable_conflicting_services() {
     echo "Disabling conflicting services from boot..."
     
     # Remove symlinks from all runlevels
-    for svc in browser webserver x11 jetty hsqldb; do
+    for svc in browser webserver x11 jetty hsqldb ntpd; do
         # Remove from rc5.d (main runlevel)
         rm -f /etc/rc5.d/S*${svc} 2>/dev/null || true
         rm -f /etc/rc5.d/K*${svc} 2>/dev/null || true
