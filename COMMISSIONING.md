@@ -57,7 +57,7 @@ Automatically finds the mounted rootfs partition (p6) using its UUID.
 - Creates a backup of the original config
 
 ### 4. Sets up SSH keys (optional)
-- Creates `/root/.ssh/` directory with proper permissions (700)
+- Creates `/home/root/.ssh/` directory with proper permissions (700)
 - Copies your public key to `authorized_keys`
 - Sets proper file permissions (600)
 
@@ -119,12 +119,12 @@ chmod +x commission-roomwizard.sh
 ### SSH key not working after setup
 Verify the key was copied correctly:
 ```bash
-sudo cat /path/to/rootfs/root/.ssh/authorized_keys
+sudo cat /path/to/rootfs/home/root/.ssh/authorized_keys
 ```
 
 Check permissions:
 ```bash
-ls -la /path/to/rootfs/root/.ssh/
+ls -la /path/to/rootfs/home/root/.ssh/
 # Should show: drwx------ for .ssh/ and -rw------- for authorized_keys
 ```
 

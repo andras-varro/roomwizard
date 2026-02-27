@@ -68,9 +68,9 @@ success "Found rootfs at: $ROOTFS"
 echo ""
 
 # Verify it looks like a valid rootfs
-if [ ! -d "$ROOTFS/etc" ] || [ ! -d "$ROOTFS/root" ]; then
+if [ ! -d "$ROOTFS/etc" ]; then
     error "The mounted partition at $ROOTFS doesn't look like a valid rootfs."
-    error "Expected to find /etc and /root directories."
+    error "Expected to find /etc directory."
     exit 1
 fi
 
@@ -201,13 +201,13 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
     else
         info "Setting up SSH key authentication..."
         
-        # Create .ssh directory
-        sudo mkdir -p "$ROOTFS/root/.ssh"
-        sudo chmod 700 "$ROOTFS/root/.ssh"
+        # Create .ssh directory (root home is at /home/root on this system)
+        sudo mkdir -p "$ROOTFS/home/root/.ssh"
+        sudo chmod 700 "$ROOTFS/home/root/.ssh"
         
         # Copy public key
-        cat "$SSH_KEY_PATH" | sudo tee "$ROOTFS/root/.ssh/authorized_keys" > /dev/null
-        sudo chmod 600 "$ROOTFS/root/.ssh/authorized_keys"
+        cat "$SSH_KEY_PATH" | sudo tee "$ROOTFS/home/root/.ssh/authorized_keys" > /dev/null
+        sudo chmod 600 "$ROOTFS/home/root/.ssh/authorized_keys"
         
         success "SSH key installed successfully."
         info "You will be able to SSH without a password using your key."
