@@ -87,9 +87,7 @@ cd vnc_client
 ### ScummVM
 ```bash
 cd scummvm-roomwizard
-./build-and-deploy.sh deploy              # build + deploy to /opt/games/
-# Then set as default:
-ssh root@<ip> 'echo /opt/games/scummvm > /opt/roomwizard/default-app'
+./build-and-deploy.sh <ip> set-default    # build + deploy + set as boot app
 ```
 
 After setting the default app, reboot: `ssh root@<ip> reboot`

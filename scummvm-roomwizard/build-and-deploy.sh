@@ -3,7 +3,13 @@
 # ScummVM Cross-Compilation Script for RoomWizard
 # Builds ScummVM with custom RoomWizard backend for ARM embedded device
 #
-# Usage: ./build-and-deploy.sh [clean|configure|build|strip|deploy|set-default|all] [ip]
+# Usage:
+#   ./build-and-deploy.sh                          # build only (= all)
+#   ./build-and-deploy.sh <ip>                     # build + deploy
+#   ./build-and-deploy.sh <ip> set-default         # build + deploy + set as boot app
+#   ./build-and-deploy.sh <ip> <command>            # run a specific build stage + deploy
+#
+# Commands: clean, configure, build, strip, deploy, set-default, all, info
 #
 # Requirements:
 #   - WSL Ubuntu 20.04 or later
@@ -16,8 +22,19 @@
 
 set -e  # Exit on error
 
+# ── Argument parsing ────────────────────────────────────────────────────────
+# Detect whether $1 is an IP address or a command.
+# If it looks like an IP, treat as: <ip> [command]
+# Otherwise treat as: [command]  (build-only, no deploy)
+if echo "${1:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    DEVICE_IP="$1"
+    CMD="${2:-deploy}"
+else
+    DEVICE_IP=""
+    CMD="${1:-all}"
+fi
+
 # Configuration
-DEVICE_IP="${2:-192.168.50.53}"
 DEVICE_USER="root"
 DEVICE_PATH="/opt/games"
 SCUMMVM_DIR="../scummvm"
@@ -233,6 +250,11 @@ strip_binary() {
 
 # Deploy to device
 deploy_to_device() {
+    if [ -z "$DEVICE_IP" ]; then
+        log_error "No IP supplied. Usage: $0 <ip> [deploy|set-default]"
+        exit 1
+    fi
+
     log_info "Deploying to device ($DEVICE_IP)..."
     
     cd "$SCUMMVM_DIR"
@@ -279,6 +301,11 @@ deploy_to_device() {
 
 # Set ScummVM as default boot app
 set_default_app() {
+    if [ -z "$DEVICE_IP" ]; then
+        log_error "No IP supplied. Usage: $0 <ip> set-default"
+        exit 1
+    fi
+
     log_info "Setting ScummVM as default app on $DEVICE_IP..."
     
     local DEVICE="$DEVICE_USER@$DEVICE_IP"
@@ -328,67 +355,66 @@ show_info() {
 }
 
 # Main script
-main() {
-    case "${1:-all}" in
-        clean)
-            check_prerequisites
-            clean_build
-            ;;
-        configure)
-            check_prerequisites
-            configure_build
-            ;;
-        build)
-            check_prerequisites
-            build_scummvm
-            ;;
-        strip)
-            check_prerequisites
-            strip_binary
-            ;;
-        deploy)
-            check_prerequisites
-            deploy_to_device
-            ;;
-        set-default)
-            deploy_to_device
-            set_default_app
-            ;;
-        all)
-            check_prerequisites
-            clean_build
-            configure_build
-            build_scummvm
-            strip_binary
-            log_success "Build complete! Binary ready at: $SCUMMVM_DIR/scummvm"
-            echo ""
-            log_info "To deploy: $0 deploy <ip>"
-            log_info "To deploy + set as boot app: $0 set-default <ip>"
-            ;;
-        info)
-            show_info
-            ;;
-        *)
-            echo "Usage: $0 [clean|configure|build|strip|deploy|set-default|all|info] [ip]"
-            echo ""
-            echo "Commands:"
-            echo "  clean        - Clean build artifacts"
-            echo "  configure    - Configure build system"
-            echo "  build        - Compile ScummVM"
-            echo "  strip        - Strip debug symbols"
-            echo "  deploy       - Deploy to device"
-            echo "  set-default  - Deploy + set as default boot app"
-            echo "  all          - Clean, configure, build, and strip (default)"
-            echo "  info         - Show build information"
-            echo ""
-            echo "Example workflow:"
-            echo "  $0 all                  # Build everything"
-            echo "  $0 deploy <ip>          # Deploy to device"
-            echo "  $0 set-default <ip>     # Deploy + set as boot app"
-            exit 1
-            ;;
-    esac
-}
-
-# Run main function
-main "$@"
+case "$CMD" in
+    clean)
+        check_prerequisites
+        clean_build
+        ;;
+    configure)
+        check_prerequisites
+        configure_build
+        ;;
+    build)
+        check_prerequisites
+        build_scummvm
+        ;;
+    strip)
+        check_prerequisites
+        strip_binary
+        ;;
+    deploy)
+        check_prerequisites
+        build_scummvm
+        strip_binary
+        deploy_to_device
+        ;;
+    set-default)
+        check_prerequisites
+        build_scummvm
+        strip_binary
+        deploy_to_device
+        set_default_app
+        ;;
+    all)
+        check_prerequisites
+        clean_build
+        configure_build
+        build_scummvm
+        strip_binary
+        log_success "Build complete! Binary ready at: $SCUMMVM_DIR/scummvm"
+        echo ""
+        log_info "To deploy: $0 <ip>"
+        log_info "To deploy + set as boot app: $0 <ip> set-default"
+        ;;
+    info)
+        show_info
+        ;;
+    *)
+        echo "Usage: $0 [ip] [command]"
+        echo ""
+        echo "  $0                          Build only (clean + configure + build + strip)"
+        echo "  $0 <ip>                     Build + deploy"
+        echo "  $0 <ip> set-default         Build + deploy + set as boot app"
+        echo ""
+        echo "Commands:"
+        echo "  all          - Clean, configure, build, and strip (default)"
+        echo "  clean        - Clean build artifacts"
+        echo "  configure    - Configure build system"
+        echo "  build        - Compile ScummVM"
+        echo "  strip        - Strip debug symbols"
+        echo "  deploy       - Build + strip + deploy to device"
+        echo "  set-default  - Build + strip + deploy + set as default boot app"
+        echo "  info         - Show build information"
+        exit 1
+        ;;
+esac
