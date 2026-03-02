@@ -27,7 +27,7 @@ The Steelcase RoomWizard is an embedded Linux device based on a Texas Instrument
 
 - **Hardware:** TI AM335x ARM Cortex-A8 @ 600MHz (dynamically scaled from 300MHz base), 234MB RAM
 - **OS:** Embedded Linux (kernel 4.14.52) with SysVinit
-- **Protection:** MD5 checksums, 60-second hardware watchdog, boot state tracking
+- **Protection:** MD5 checksums, 60-second hardware watchdog, Steelcase software watchdog (cron-based, must disable), boot state tracking
 - **Interfaces:** Framebuffer (`/dev/fb0`), touchscreen (`/dev/input/`), LEDs (sysfs)
 - **Software Stack:** X11 → WebKit browser → Jetty 9.4.11 → Java 8 → HSQLDB
 - **USB:** Hardware capable of host mode, currently non-functional (device tree issue - fixable)
@@ -37,10 +37,11 @@ The Steelcase RoomWizard is an embedded Linux device based on a Texas Instrument
 ### Modification Success Requirements
 
 1. Regenerate all MD5 checksums after file changes
-2. Feed the hardware watchdog timer (every 30 seconds)
-3. Maintain control block state to avoid failure mode
-4. Preserve critical services (X11, Jetty, browser, watchdog)
-5. Use existing runtimes (Java 8 available, Python requires ARM binaries)
+2. The hardware watchdog timer is fed by `/usr/sbin/watchdog` daemon (acceptable to keep)
+3. **Disable the Steelcase software watchdog** (cron-based `watchdog.sh` that reboots when Jetty/HSQLDB absent)
+4. Maintain control block state to avoid failure mode
+5. Disable non-essential Steelcase services and cron jobs (see [Game Mode Optimization](#game-mode-optimization))
+6. Use existing runtimes (Java 8 available, Python requires ARM binaries)
 
 ---
 
@@ -220,29 +221,55 @@ Diagnosed via `native_games/tests/oss_diag.c`.
 
 ## Protection Mechanisms
 
-### 1. Hardware Watchdog Timer
+### 1. Watchdog Systems (Hardware + Software)
 
-**Critical:** The system has a 60-second hardware watchdog that will reset the device if not fed regularly.
+The RoomWizard has **two independent watchdog systems** that must be understood:
 
-- **Device:** `/dev/watchdog`
+#### 1a. Hardware Watchdog (OMAP WDT)
+
+The AM335x SoC has a 60-second hardware watchdog timer.  Once opened, it **must** be fed continuously or the device hard-resets.
+
+- **Device:** `/dev/watchdog` (`/dev/watchdog0`, `/dev/watchdog1`)
 - **Timeout:** 60 seconds
-- **Configuration:** `/etc/watchdog.conf`
-- **Feed Interval:** 30 seconds (safe margin)
-- **Daemon:** `/usr/sbin/watchdog` or custom feeder
+- **Daemon:** `/usr/sbin/watchdog` (standard Linux watchdog daemon)
+- **Config:** `/etc/watchdog.conf` — only feeds the timer; `test-binary` and `repair-binary` are commented out
+- **Enable flag:** `/etc/default/watchdog` → `run_watchdog=1`
+- **Feed interval:** Every ~1 second (daemon default)
 
-**Feeding the Watchdog:**
-```bash
-# Simple watchdog feeder
-while true; do
-    echo 1 > /dev/watchdog
-    sleep 30
-done &
+The hardware watchdog is acceptable to keep running.  The daemon is low-overhead and prevents hard-resets.
+
+#### 1b. Steelcase Software Watchdog (cron-based) — **MUST DISABLE**
+
+Steelcase added a **separate** application-level watchdog that runs via cron **every 5 minutes**:
+
+```
+*/5 * * * * /opt/sbin/watchdog/watchdog.sh
 ```
 
-**Consequences of Not Feeding:**
-- System automatically resets after 60 seconds
-- All unsaved data lost
-- Boot tracker may increment (leading to failure mode)
+**How it works:**
+1. `watchdog.sh` calls `watchdog_test.sh`
+2. `watchdog_test.sh` checks: HSQLDB running? Jetty running? Browser running? Browser log fresh?
+3. If any check fails → exit code 100-112
+4. `watchdog.sh` calls `watchdog_repair.sh` with the error code
+5. If repair fails → **`/sbin/reboot`**
+
+**Grace period:** After the first failure, `watchdog_repair.sh` enters a grace period (~65 minutes of "repeat failure in grace period" messages).  After the grace period expires, it attempts a database restart.  When that fails, it reboots.
+
+**Bypass mechanism:** `watchdog_test.sh` has a built-in bypass:
+```bash
+if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
+    # Only perform application level checks when the state file is there
+```
+Creating `/var/watchdog_test` causes the test to skip all checks and exit 0.
+
+**Disabling (done by `build-and-deploy.sh cleanup`):**
+1. Creates `/var/watchdog_test` bypass file
+2. Comments out the cron job in root's crontab
+3. Original crontab backed up to `/var/crontab.steelcase.bak`
+
+**Consequences of NOT disabling:**
+- Device reboots every ~70 minutes when Steelcase services are absent (game mode)
+- Reboot cycle: test fails → grace period (~65 min) → repair fails → reboot
 
 ### 2. MD5 Integrity Verification (Triple-Layer)
 
@@ -575,10 +602,17 @@ Features:   Battery-backed, alarm, wake-up capability
 /dev/watchdog1 - Secondary watchdog
 ```
 
-**Configuration:**
+**Hardware watchdog:**
 - Timeout: 60 seconds
-- Fed by: `/usr/sbin/watchdog` daemon
-- Status: Active
+- Fed by: `/usr/sbin/watchdog` daemon (started via `/etc/init.d/watchdog`)
+- Status: Active — acceptable to keep
+
+**Steelcase software watchdog (cron-based):**
+- Script: `/opt/sbin/watchdog/watchdog.sh` (runs every 5 min via cron)
+- Checks: HSQLDB, Jetty, browser process, browser log freshness
+- Action: Reboots device when Steelcase services are absent
+- Status: **Must be disabled** for game mode (see [Protection Mechanisms](#1b-steelcase-software-watchdog-cron-based--must-disable))
+- Bypass: `touch /var/watchdog_test`
 
 ### Serial/UART Ports
 
@@ -679,17 +713,18 @@ Modifications fail when: MD5 checksums don't match, watchdog times out (60 s), c
 **Rules:**
 1. Regenerate all MD5 checksums after any file change: `for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done`
 2. Feed watchdog every 30 s — system daemon `/usr/sbin/watchdog` handles this
-3. Preserve critical services: `/etc/init.d/watchdog`, `sshd`, `cron`, `dbus`
-4. Safe to add new init scripts at `/etc/rc5.d/S99*`
-5. Java 8 runtime exists at `/opt/openjre-8/`; Python requires ARM cross-compiled binaries
+3. **Disable the Steelcase software watchdog** (cron job) — it reboots the device when Jetty/HSQLDB/browser are absent
+4. Preserve critical services: `/etc/init.d/watchdog`, `sshd`, `cron`, `dbus`
+5. Safe to add new init scripts at `/etc/rc5.d/S99*`
+6. Java 8 runtime exists at `/opt/openjre-8/`; Python requires ARM cross-compiled binaries
 
 ### Game Mode Optimization
 
 When running in game mode (native games, not browser), disable unnecessary services to prevent watchdog-triggered reboots and free memory:
 
-**Problem:** The watchdog system monitors browser/webserver stack. In game mode, these services are disabled, causing watchdog to detect "failures" and trigger reboots every 3-4 hours.
+**Problem:** Steelcase added a cron-based software watchdog (`/opt/sbin/watchdog/watchdog.sh`) that monitors the HSQLDB/Jetty/browser stack.  In game mode these services are absent, so the watchdog test fails with exit code 100.  After a ~65-minute grace period the repair script reboots the device.
 
-**Solution:** Disable watchdog test/repair and stop unnecessary services:
+**Solution:** Disable the software watchdog and stop unnecessary services:
 
 ```bash
 # Quick fix (existing deployment)
@@ -700,17 +735,56 @@ cd native_games
 ./build-and-deploy.sh 192.168.50.73 permanent
 ```
 
-**Services to Disable:**
-- webserver, browser, x11 (not needed - games use framebuffer)
-- jetty, hsqldb (not needed - no web interface)
-- snmpd, vsftpd (not needed - monitoring/FTP)
+**Init services to disable:**
 
-**Services to Keep:**
-- watchdog (hardware watchdog feeder - critical)
-- sshd (remote access)
-- cron, dbus, ntpd (system services)
-- audio-enable (speaker amplifier)
-- roomwizard-games (game selector)
+| Service | Why disable |
+|---------|-------------|
+| webserver | Jetty init wrapper — not needed |
+| browser | Epiphany/WebKit — games use framebuffer |
+| x11 | Xorg display server — games use framebuffer |
+| jetty | Java servlet container — not needed |
+| hsqldb | Room-booking database — not needed |
+| snmpd | SNMP monitoring — not needed |
+| vsftpd | FTP server — not needed, security risk |
+| nullmailer | Mail relay — not needed |
+| ntpd | NTP daemon — replaced by `time-sync` init script |
+| startautoupgrade | Steelcase OTA upgrades — not needed |
+
+**Cron jobs to disable:**
+
+| Cron job | Why disable |
+|----------|-------------|
+| `watchdog.sh` | **Root cause of reboots** — monitors absent Steelcase stack |
+| `get_time_from_server.sh` | Steelcase NTP — fails repeatedly, spams logs |
+| `sync_clocks.sh` | SW/HW clock sync — spams "time difference" log messages |
+| `rotatedbtables.sh` | HSQLDB table rotation — database removed |
+| `backup.sh` | Steelcase data backup — not needed |
+| `scheduledusagereport.sh` | Steelcase telemetry — not needed |
+| `gettimestamp.sh` | Steelcase timestamp — not needed |
+| `remove_older_sync_meetings.sh` | Meeting data cleanup — not needed |
+| `runfsck.sh` | Filesystem check at 03:10 — can stall system |
+| `checkformemoryusage.sh` | Java heap monitor — Java removed |
+
+| `adjustbklight.sh` | Backlight on/off schedule — turns screen off at 19:00 |
+
+**Cron jobs kept:**
+
+| Cron job | Purpose |
+|----------|--------|
+| `rotatelogfiles.sh` | Log rotation (every 4h) — prevents disk fill |
+| `cleanupfiles.sh` | Temp file cleanup (every 4h) |
+
+**Services to keep:**
+
+| Service | Purpose |
+|---------|--------|
+| watchdog | Hardware watchdog feeder (`/usr/sbin/watchdog`) — prevents hard-reset |
+| sshd | Remote access |
+| cron | Runs log rotation + backlight schedule |
+| dbus | System message bus |
+| audio-enable | Speaker amplifier GPIO + mixer setup |
+| time-sync | Simple rdate-based time sync at boot |
+| roomwizard-games | Game selector launcher |
 
 **Result:** ~80 MB RAM freed, no unwanted reboots, stable game mode
 

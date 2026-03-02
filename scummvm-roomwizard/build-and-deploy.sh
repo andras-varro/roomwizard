@@ -3,18 +3,21 @@
 # ScummVM Cross-Compilation Script for RoomWizard
 # Builds ScummVM with custom RoomWizard backend for ARM embedded device
 #
-# Usage: ./build-scummvm.sh [clean|configure|build|strip|deploy|all]
+# Usage: ./build-and-deploy.sh [clean|configure|build|strip|deploy|set-default|all] [ip]
 #
 # Requirements:
 #   - WSL Ubuntu 20.04 or later
 #   - ARM cross-compiler: sudo apt install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-#   - SSH access to device (192.168.50.73)
+#   - SSH access to device
+#
+# System setup (bloatware cleanup, init service, audio, time-sync) is handled
+# separately by setup-device.sh.  Run that once before deploying for the first time.
 #
 
 set -e  # Exit on error
 
 # Configuration
-DEVICE_IP="192.168.50.73"
+DEVICE_IP="${2:-192.168.50.53}"
 DEVICE_USER="root"
 DEVICE_PATH="/opt/games"
 SCUMMVM_DIR="../scummvm"
@@ -239,26 +242,57 @@ deploy_to_device() {
         exit 1
     fi
     
+    local DEVICE="$DEVICE_USER@$DEVICE_IP"
+    
     # Check if device is reachable
-    if ! ping -c 1 -W 2 "$DEVICE_IP" &> /dev/null; then
-        log_error "Device not reachable at $DEVICE_IP"
-        exit 1
+    log_info "Testing SSH connection..."
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
+        || { log_error "Cannot reach $DEVICE — check IP and SSH key"; exit 1; }
+    
+    # Verify system setup has been done
+    if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
+        log_warning "System setup not detected on device."
+        log_warning "Run setup-device.sh first:  ../setup-device.sh $DEVICE_IP"
+        echo ""
+        read -p "Continue deploying anyway? (y/n): " confirm
+        [[ "$confirm" != "y" ]] && exit 1
     fi
+    
+    # Ensure target directory exists
+    ssh "$DEVICE" "mkdir -p $DEVICE_PATH"
     
     # Copy binary to device
     log_info "Copying binary to device..."
-    scp scummvm "$DEVICE_USER@$DEVICE_IP:$DEVICE_PATH/"
+    scp scummvm "$DEVICE:$DEVICE_PATH/"
     
-    # Make executable
-    log_info "Setting executable permissions..."
-    ssh "$DEVICE_USER@$DEVICE_IP" "chmod +x $DEVICE_PATH/scummvm"
+    # Make executable + set markers
+    log_info "Setting permissions and markers..."
+    ssh "$DEVICE" "chmod +x $DEVICE_PATH/scummvm; touch $DEVICE_PATH/scummvm.noargs; chmod 644 $DEVICE_PATH/scummvm.noargs"
     
     # Verify deployment
     log_info "Verifying deployment..."
-    REMOTE_SIZE=$(ssh "$DEVICE_USER@$DEVICE_IP" "du -h $DEVICE_PATH/scummvm | cut -f1")
+    REMOTE_SIZE=$(ssh "$DEVICE" "du -h $DEVICE_PATH/scummvm | cut -f1")
     
     log_success "Deployment complete - Remote size: $REMOTE_SIZE"
-    log_info "Run on device: ssh $DEVICE_USER@$DEVICE_IP '$DEVICE_PATH/scummvm'"
+    log_info "Run on device: ssh $DEVICE '$DEVICE_PATH/scummvm'"
+}
+
+# Set ScummVM as default boot app
+set_default_app() {
+    log_info "Setting ScummVM as default app on $DEVICE_IP..."
+    
+    local DEVICE="$DEVICE_USER@$DEVICE_IP"
+    
+    # Check if device is reachable
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
+        || { log_error "Cannot reach $DEVICE — check IP and SSH key"; exit 1; }
+    
+    ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '$DEVICE_PATH/scummvm' > /opt/roomwizard/default-app"
+    
+    log_success "Default app → $DEVICE_PATH/scummvm"
+    echo ""
+    echo "  Reboot to start:  ssh $DEVICE reboot"
+    echo "  Or start now:     ssh $DEVICE '/etc/init.d/roomwizard-app restart'"
 }
 
 # Show build info
@@ -316,6 +350,10 @@ main() {
             check_prerequisites
             deploy_to_device
             ;;
+        set-default)
+            deploy_to_device
+            set_default_app
+            ;;
         all)
             check_prerequisites
             clean_build
@@ -324,26 +362,29 @@ main() {
             strip_binary
             log_success "Build complete! Binary ready at: $SCUMMVM_DIR/scummvm"
             echo ""
-            log_info "To deploy: $0 deploy"
+            log_info "To deploy: $0 deploy <ip>"
+            log_info "To deploy + set as boot app: $0 set-default <ip>"
             ;;
         info)
             show_info
             ;;
         *)
-            echo "Usage: $0 [clean|configure|build|strip|deploy|all|info]"
+            echo "Usage: $0 [clean|configure|build|strip|deploy|set-default|all|info] [ip]"
             echo ""
             echo "Commands:"
-            echo "  clean      - Clean build artifacts"
-            echo "  configure  - Configure build system"
-            echo "  build      - Compile ScummVM"
-            echo "  strip      - Strip debug symbols"
-            echo "  deploy     - Deploy to device"
-            echo "  all        - Clean, configure, build, and strip (default)"
-            echo "  info       - Show build information"
+            echo "  clean        - Clean build artifacts"
+            echo "  configure    - Configure build system"
+            echo "  build        - Compile ScummVM"
+            echo "  strip        - Strip debug symbols"
+            echo "  deploy       - Deploy to device"
+            echo "  set-default  - Deploy + set as default boot app"
+            echo "  all          - Clean, configure, build, and strip (default)"
+            echo "  info         - Show build information"
             echo ""
             echo "Example workflow:"
-            echo "  $0 all      # Build everything"
-            echo "  $0 deploy   # Deploy to device"
+            echo "  $0 all                  # Build everything"
+            echo "  $0 deploy <ip>          # Deploy to device"
+            echo "  $0 set-default <ip>     # Deploy + set as boot app"
             exit 1
             ;;
     esac

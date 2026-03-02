@@ -2,10 +2,14 @@
 # Build and deploy the VNC client to a RoomWizard device.
 #
 # Usage:
-#   ./build-and-deploy.sh                   # build only
-#   ./build-and-deploy.sh <ip>              # build + deploy
-#   ./build-and-deploy.sh <ip> run          # build + deploy + run
-#   ./build-and-deploy.sh <ip> run --kill   # kill running client, then build + deploy + run
+#   ./build-and-deploy.sh                        # build only
+#   ./build-and-deploy.sh <ip>                   # build + deploy
+#   ./build-and-deploy.sh <ip> run               # build + deploy + run
+#   ./build-and-deploy.sh <ip> run --kill        # kill running client, then build + deploy + run
+#   ./build-and-deploy.sh <ip> set-default       # build + deploy + set as default boot app
+#
+# System setup (bloatware cleanup, init service, audio, time-sync) is handled
+# separately by setup-device.sh.  Run that once before deploying for the first time.
 
 set -e
 
@@ -64,6 +68,7 @@ if [[ -z "$DEVICE_IP" ]]; then
     echo "  ./build-and-deploy.sh <ip>"
     echo "  ./build-and-deploy.sh <ip> run"
     echo "  ./build-and-deploy.sh <ip> run --kill"
+    echo "  ./build-and-deploy.sh <ip> set-default"
     exit 0
 fi
 
@@ -106,7 +111,7 @@ fi
 
 echo ""
 
-# ── 5. run? ───────────────────────────────────────────────────────────────────
+# ── 5. run / set-default? ─────────────────────────────────────────────────────
 if [[ "$MODE" == "run" ]]; then
     echo "════════════════════════════════════════"
     echo " Starting VNC Client"
@@ -115,8 +120,15 @@ if [[ "$MODE" == "run" ]]; then
     info "Launching on device (Ctrl+C to stop)..."
     echo ""
     ssh -t "$DEVICE" "$REMOTE_DIR/vnc_client 2>&1"
+elif [[ "$MODE" == "set-default" ]]; then
+    info "Setting VNC client as default app..."
+    ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '$REMOTE_DIR/vnc_client' > /opt/roomwizard/default-app"
+    ok "Default app → $REMOTE_DIR/vnc_client"
+    echo ""
+    echo "  Reboot to start:  ssh $DEVICE reboot"
+    echo "  Or start now:     ssh $DEVICE '/etc/init.d/roomwizard-app restart'"
 else
-    echo "  Deployed. To run:"
+    echo "  Deployed. To run interactively:"
     echo "    ssh $DEVICE '$REMOTE_DIR/vnc_client'"
     echo ""
     echo "  To build, deploy, and run in one step:"
@@ -124,6 +136,9 @@ else
     echo ""
     echo "  To kill a running client first:"
     echo "    ./build-and-deploy.sh $DEVICE_IP run --kill"
+    echo ""
+    echo "  To set as default boot app:"
+    echo "    ./build-and-deploy.sh $DEVICE_IP set-default"
 fi
 
 echo ""
