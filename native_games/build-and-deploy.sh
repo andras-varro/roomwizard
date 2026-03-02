@@ -152,39 +152,42 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step "1/14" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step "2/14" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step "3/14" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step "4/14" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step "5/14" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step "6/14" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step "7/14" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step "1/15" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step "2/15" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step "3/15" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step "4/15" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step "5/15" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step "6/15" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step "7/15" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o"
 
-step "8/14"  "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "9/14"  "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "10/14" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "8/15"  "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "9/15"  "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "10/15" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "11/14" "game_selector"
+step "11/15" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "12/14" "hardware_test"
+step "12/15" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "13/14" "unified_calibrate"
+step "13/15" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "14/14" "audio_touch_test"
+step "14/15" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   common/audio.c common/touch_input.c common/framebuffer.c \
   common/hardware.c common/common.c \
   -o build/audio_touch_test -lm
 
+step "15/15" "backlight"
+$CC -O2 -static -I. backlight/backlight.c build/hardware.o -o build/backlight
+
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/audio_touch_test \
+ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/audio_touch_test build/backlight \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -219,6 +222,7 @@ scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
     build/unified_calibrate \
     build/audio_touch_test \
+    build/backlight \
     "$DEVICE:$GAMES_DIR/"
 ok "Binaries uploaded"
 
@@ -273,13 +277,13 @@ info "Setting permissions and markers..."
 ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/game_selector /opt/games/hardware_test \
-         /opt/games/unified_calibrate
+         /opt/games/unified_calibrate /opt/games/backlight
 
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
 
 # .hidden markers for dev tools
-for name in touch_test touch_debug touch_inject touch_calibrate pressure_test unified_calibrate; do
+for name in touch_test touch_debug touch_inject touch_calibrate pressure_test unified_calibrate backlight; do
     touch  /opt/games/$name.hidden 2>/dev/null || true
     chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
