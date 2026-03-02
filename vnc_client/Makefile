@@ -91,8 +91,10 @@ deploy: $(TARGET)
 	@ssh root@$(DEVICE_IP) "mkdir -p /opt/vnc_client"
 	@scp $(TARGET_STRIPPED) root@$(DEVICE_IP):/opt/vnc_client/vnc_client
 	@ssh root@$(DEVICE_IP) "chmod +x /opt/vnc_client/vnc_client"
+	@echo "Deploying config file..."
+	@scp vnc_client.conf root@$(DEVICE_IP):/opt/vnc_client/vnc_client.conf
 	@echo "Deployed successfully"
-	@echo "Run with: ssh root@$(DEVICE_IP) '/opt/vnc_client/vnc_client <rpi_ip>'"
+	@echo "Run with: ssh root@$(DEVICE_IP) '/opt/vnc_client/vnc_client'"
 
 # Clean build artifacts
 clean:

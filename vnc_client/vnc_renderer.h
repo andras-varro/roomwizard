@@ -1,57 +1,115 @@
 #ifndef VNC_RENDERER_H
 #define VNC_RENDERER_H
 
+/*
+ * VNC Renderer - Phase 2 Optimized + Bilinear Interpolation
+ *
+ * Performance optimizations adopted from ScummVM RoomWizard backend:
+ *   O2:  Precomputed X-coordinate LUT (eliminates per-pixel division)
+ *   O3:  Border-only clearing (not full screen every frame)
+ *   O8:  16bpp RGB565 framebuffer (halves memory bandwidth)
+ *   O11: Row deduplication via cached temp row (skips ~57% of rows)
+ *
+ * Bilinear interpolation (new):
+ *   - 2×2 source pixel sampling with fixed-point weighted averaging
+ *   - Precomputed X LUT stores (x0, x1, frac_x) per dest column
+ *   - Dramatically improves text readability at 1920×1080 → 795×447
+ *   - ~10-15% CPU overhead (acceptable with 5% baseline)
+ *
+ * Key changes from v1.0:
+ *   - Direct uint16_t buffer writes (bypasses fb_draw_pixel entirely)
+ *   - Partial region updates (only re-render dirty VNC rectangles)
+ *   - No full-frame render on every VNC callback
+ *   - Frame rate capped at TARGET_FPS with gettimeofday
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
+#include <sys/time.h>
 #include "../native_games/common/framebuffer.h"
 #include "config.h"
 
-// VNC Renderer structure
+/* RGB565 helpers */
+#define RGB565(r, g, b) \
+    (((uint16_t)((r) >> 3) << 11) | ((uint16_t)((g) >> 2) << 5) | ((uint16_t)((b) >> 3)))
+#define RGB565_BLACK  0x0000
+#define RGB565_WHITE  0xFFFF
+#define RGB565_RED    0xF800
+#define RGB565_GREEN  0x07E0
+#define RGB565_BLUE   0x001F
+#define RGB565_YELLOW 0xFFE0
+
+/* Precomputed bilinear X-coordinate entry */
+typedef struct {
+    int x0;         /* left source pixel index */
+    int x1;         /* right source pixel index (clamped) */
+    uint8_t frac;   /* fractional part 0-255 (0 = fully x0, 255 = fully x1) */
+} BilinearXEntry;
+
 typedef struct VNCRenderer {
     Framebuffer *fb;
-    
-    // Remote display dimensions
+
+    /* Remote display dimensions */
     int remote_width;
     int remote_height;
-    
-    // Scaling parameters
+
+    /* Scaling parameters (integer arithmetic, no floats in hot path) */
     ScalingMode scaling_mode;
-    float scale;
-    float scale_factor;  // Alias for scale
     int offset_x;
     int offset_y;
     int scaled_width;
     int scaled_height;
-    
-    // Touch feedback
-    bool show_touch_feedback;
-    int touch_x;
-    int touch_y;
-    uint32_t touch_time;
-    
-    // Performance tracking
+
+    /* Precomputed bilinear X-coordinate lookup table (O2 + bilinear) */
+    BilinearXEntry src_x_lut[SCREEN_WIDTH];
+
+    /* Row deduplication temp buffer - stays L1-cache hot (O11) */
+    uint16_t temp_row[SCREEN_WIDTH];
+
+    /* State tracking */
+    bool needs_present;
+    bool borders_cleared;
+
+    /* Performance counters */
     uint32_t frame_count;
-    uint32_t last_fps_time;
-    int current_fps;
+    uint32_t update_count;
+    struct timeval last_fps_time;
+    float current_fps;
+
+    /* Frame rate cap */
+    struct timeval last_present_time;
 } VNCRenderer;
 
-// Initialize renderer
+/* Initialize renderer */
 int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb);
 
-// Set remote display size and calculate scaling
+/* Set remote display size and calculate scaling parameters.
+ * Also clears letterbox borders once. */
 void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height);
 
-// Render a frame from VNC framebuffer
-void vnc_renderer_render_frame(VNCRenderer *renderer, uint8_t *pixels, 
-                                int width, int height, int bytes_per_pixel);
+/* Render a dirty region from the VNC framebuffer into the local back buffer.
+ * Only converts and scales the pixels in (rx, ry, rw, rh).
+ * remote_fb: the complete VNC client framebuffer (client->frameBuffer) */
+void vnc_renderer_update_region(VNCRenderer *renderer, const uint8_t *remote_fb,
+                                int rx, int ry, int rw, int rh, int bytes_per_pixel);
 
-// Present the rendered frame (swap buffers)
-void vnc_renderer_present(VNCRenderer *renderer);
+/* Present the back buffer to the screen (fb_swap) with frame rate cap.
+ * Returns true if a frame was actually swapped. */
+bool vnc_renderer_present(VNCRenderer *renderer);
 
-// Draw touch feedback
-void vnc_renderer_draw_touch_feedback(VNCRenderer *renderer, int x, int y);
+/* Map screen (touch) coordinates → remote VNC coordinates.
+ * Returns false if the point falls in the letterbox border. */
+bool vnc_renderer_screen_to_remote(VNCRenderer *renderer, int screen_x, int screen_y,
+                                   int *remote_x, int *remote_y);
 
-// Cleanup renderer
+/* 16bpp utility: clear entire back buffer to black */
+void vnc_renderer_clear_screen(Framebuffer *fb);
+
+/* 16bpp utility: draw text using built-in 5×7 bitmap font */
+void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
+                            uint16_t color, int scale);
+
+/* Cleanup renderer (restores 32bpp on exit) */
 void vnc_renderer_cleanup(VNCRenderer *renderer);
 
-#endif // VNC_RENDERER_H
+#endif /* VNC_RENDERER_H */

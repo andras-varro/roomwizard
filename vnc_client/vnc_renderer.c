@@ -1,277 +1,459 @@
+/*
+ * VNC Renderer - Phase 2 Optimized + Bilinear Interpolation
+ *
+ * Renders VNC framebuffer updates to the RoomWizard's 800×480 display.
+ * All hot-path rendering uses direct uint16_t writes to the back buffer
+ * in RGB565 format — no fb_draw_pixel() calls, no per-pixel bounds checks.
+ *
+ * Key optimizations (see header for details):
+ *   - 16bpp RGB565 output (halved memory bandwidth)
+ *   - Precomputed X-coord bilinear LUT (no per-pixel division)
+ *   - Row deduplication via L1-cached temp row
+ *   - Partial region updates (only dirty VNC rectangles)
+ *   - Border-only clearing (once, not every frame)
+ *   - Frame-rate-capped present (30 fps)
+ *   - Bilinear interpolation for smooth downscaling
+ */
+
 #include "vnc_renderer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-#include <math.h>
 
-// Helper function to get current time in milliseconds
-static uint32_t get_time_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+/* ── Minimal 5×7 bitmap font (ASCII 32–90: space through Z) ────────── */
+static const uint8_t font_5x7[][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, /* Space */
+    {0x00, 0x00, 0x5F, 0x00, 0x00}, /* ! */
+    {0x00, 0x07, 0x00, 0x07, 0x00}, /* " */
+    {0x14, 0x7F, 0x14, 0x7F, 0x14}, /* # */
+    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, /* $ */
+    {0x23, 0x13, 0x08, 0x64, 0x62}, /* % */
+    {0x36, 0x49, 0x55, 0x22, 0x50}, /* & */
+    {0x00, 0x05, 0x03, 0x00, 0x00}, /* ' */
+    {0x00, 0x1C, 0x22, 0x41, 0x00}, /* ( */
+    {0x00, 0x41, 0x22, 0x1C, 0x00}, /* ) */
+    {0x14, 0x08, 0x3E, 0x08, 0x14}, /* * */
+    {0x08, 0x08, 0x3E, 0x08, 0x08}, /* + */
+    {0x00, 0x50, 0x30, 0x00, 0x00}, /* , */
+    {0x08, 0x08, 0x08, 0x08, 0x08}, /* - */
+    {0x00, 0x60, 0x60, 0x00, 0x00}, /* . */
+    {0x20, 0x10, 0x08, 0x04, 0x02}, /* / */
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, /* 0 */
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, /* 1 */
+    {0x42, 0x61, 0x51, 0x49, 0x46}, /* 2 */
+    {0x21, 0x41, 0x45, 0x4B, 0x31}, /* 3 */
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, /* 4 */
+    {0x27, 0x45, 0x45, 0x45, 0x39}, /* 5 */
+    {0x3C, 0x4A, 0x49, 0x49, 0x30}, /* 6 */
+    {0x01, 0x71, 0x09, 0x05, 0x03}, /* 7 */
+    {0x36, 0x49, 0x49, 0x49, 0x36}, /* 8 */
+    {0x06, 0x49, 0x49, 0x29, 0x1E}, /* 9 */
+    {0x00, 0x36, 0x36, 0x00, 0x00}, /* : */
+    {0x00, 0x56, 0x36, 0x00, 0x00}, /* ; */
+    {0x08, 0x14, 0x22, 0x41, 0x00}, /* < */
+    {0x14, 0x14, 0x14, 0x14, 0x14}, /* = */
+    {0x00, 0x41, 0x22, 0x14, 0x08}, /* > */
+    {0x02, 0x01, 0x51, 0x09, 0x06}, /* ? */
+    {0x32, 0x49, 0x79, 0x41, 0x3E}, /* @ */
+    {0x7E, 0x11, 0x11, 0x11, 0x7E}, /* A */
+    {0x7F, 0x49, 0x49, 0x49, 0x36}, /* B */
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, /* C */
+    {0x7F, 0x41, 0x41, 0x22, 0x1C}, /* D */
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, /* E */
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, /* F */
+    {0x3E, 0x41, 0x49, 0x49, 0x7A}, /* G */
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}, /* H */
+    {0x00, 0x41, 0x7F, 0x41, 0x00}, /* I */
+    {0x20, 0x40, 0x41, 0x3F, 0x01}, /* J */
+    {0x7F, 0x08, 0x14, 0x22, 0x41}, /* K */
+    {0x7F, 0x40, 0x40, 0x40, 0x40}, /* L */
+    {0x7F, 0x02, 0x0C, 0x02, 0x7F}, /* M */
+    {0x7F, 0x04, 0x08, 0x10, 0x7F}, /* N */
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, /* O */
+    {0x7F, 0x09, 0x09, 0x09, 0x06}, /* P */
+    {0x3E, 0x41, 0x51, 0x21, 0x5E}, /* Q */
+    {0x7F, 0x09, 0x19, 0x29, 0x46}, /* R */
+    {0x46, 0x49, 0x49, 0x49, 0x31}, /* S */
+    {0x01, 0x01, 0x7F, 0x01, 0x01}, /* T */
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, /* U */
+    {0x1F, 0x20, 0x40, 0x20, 0x1F}, /* V */
+    {0x3F, 0x40, 0x38, 0x40, 0x3F}, /* W */
+    {0x63, 0x14, 0x08, 0x14, 0x63}, /* X */
+    {0x07, 0x08, 0x70, 0x08, 0x07}, /* Y */
+    {0x61, 0x51, 0x49, 0x45, 0x43}, /* Z */
+};
+#define FONT_ENTRIES (sizeof(font_5x7) / sizeof(font_5x7[0]))
+
+/* ── Utilities ─────────────────────────────────────────────────────── */
+
+void vnc_renderer_clear_screen(Framebuffer *fb) {
+    if (!fb || !fb->back_buffer) return;
+    memset(fb->back_buffer, 0, fb->screen_size);
 }
 
-// Helper function to calculate min
-static inline float min_float(float a, float b) {
-    return (a < b) ? a : b;
+void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
+                            uint16_t color, int scale) {
+    if (!fb || !fb->back_buffer || !text) return;
+
+    uint16_t *buf = (uint16_t *)fb->back_buffer;
+    int pen_x = 0;
+
+    while (*text) {
+        char c = *text++;
+        int idx = -1;
+
+        if (c >= ' ' && c <= 'Z')
+            idx = c - ' ';
+        else if (c >= 'a' && c <= 'z')          /* map lowercase → uppercase */
+            idx = (c - 'a') + ('A' - ' ');
+
+        if (idx >= 0 && idx < (int)FONT_ENTRIES) {
+            for (int col = 0; col < 5; col++) {
+                uint8_t column = font_5x7[idx][col];
+                for (int row = 0; row < 7; row++) {
+                    if (column & (1 << row)) {
+                        for (int sy = 0; sy < scale; sy++) {
+                            for (int sx = 0; sx < scale; sx++) {
+                                int px = x + pen_x + col * scale + sx;
+                                int py = y + row * scale + sy;
+                                if (px >= 0 && px < SCREEN_WIDTH &&
+                                    py >= 0 && py < SCREEN_HEIGHT)
+                                    buf[py * SCREEN_WIDTH + px] = color;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pen_x += 6 * scale;
+    }
 }
+
+/* ── Renderer lifecycle ────────────────────────────────────────────── */
 
 int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb) {
-    if (!renderer || !fb) {
-        return -1;
-    }
-    
+    if (!renderer || !fb) return -1;
+
     memset(renderer, 0, sizeof(VNCRenderer));
     renderer->fb = fb;
     renderer->scaling_mode = DEFAULT_SCALING_MODE;
-    renderer->last_fps_time = get_time_ms();
-    
-    DEBUG_PRINT("Renderer initialized: %dx%d screen", SCREEN_WIDTH, SCREEN_HEIGHT);
+    renderer->needs_present = false;
+    renderer->borders_cleared = false;
+    gettimeofday(&renderer->last_fps_time, NULL);
+    gettimeofday(&renderer->last_present_time, NULL);
+
+    DEBUG_PRINT("Renderer initialized (16bpp direct-write mode)");
     return 0;
 }
 
 void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height) {
     if (!renderer) return;
-    
-    renderer->remote_width = width;
+
+    renderer->remote_width  = width;
     renderer->remote_height = height;
-    
-    // Calculate scaling based on mode
-    switch (renderer->scaling_mode) {
-        case SCALING_LETTERBOX: {
-            // Maintain aspect ratio, add black bars if needed
-            float scale_x = (float)SCREEN_WIDTH / width;
-            float scale_y = (float)SCREEN_HEIGHT / height;
-            renderer->scale_factor = min_float(scale_x, scale_y);
-            
-            renderer->scaled_width = (int)(width * renderer->scale_factor);
-            renderer->scaled_height = (int)(height * renderer->scale_factor);
-            renderer->offset_x = (SCREEN_WIDTH - renderer->scaled_width) / 2;
-            renderer->offset_y = (SCREEN_HEIGHT - renderer->scaled_height) / 2;
-            break;
+
+    /* Compute letterbox scaling with fixed-point ×256 to avoid floats */
+    int scale_x = (SCREEN_WIDTH  * 256) / width;
+    int scale_y = (SCREEN_HEIGHT * 256) / height;
+    int scale   = (scale_x < scale_y) ? scale_x : scale_y;
+
+    renderer->scaled_width  = (width  * scale) / 256;
+    renderer->scaled_height = (height * scale) / 256;
+
+    /* Clamp (shouldn't be needed but defensive) */
+    if (renderer->scaled_width  > SCREEN_WIDTH)  renderer->scaled_width  = SCREEN_WIDTH;
+    if (renderer->scaled_height > SCREEN_HEIGHT) renderer->scaled_height = SCREEN_HEIGHT;
+
+    renderer->offset_x = (SCREEN_WIDTH  - renderer->scaled_width)  / 2;
+    renderer->offset_y = (SCREEN_HEIGHT - renderer->scaled_height) / 2;
+
+    /* ── O2: Precompute bilinear X-coordinate lookup table ──────────── */
+    for (int dx = 0; dx < renderer->scaled_width && dx < SCREEN_WIDTH; dx++) {
+        /*
+         * Map dest X → fractional source X using fixed-point ×256.
+         * For downscaling 1920→795, each dest pixel spans ~2.4 source pixels.
+         * We compute the exact fractional position for bilinear blending.
+         */
+        int src_x_256 = (dx * width * 256) / renderer->scaled_width;
+        int x0 = src_x_256 >> 8;  /* integer part */
+        int frac = src_x_256 & 0xFF;  /* fractional part 0-255 */
+
+        if (x0 >= width - 1) {
+            x0 = width - 1;
+            frac = 0;
         }
-        
-        case SCALING_STRETCH: {
-            // Stretch to fill entire screen
-            renderer->scale_factor = 1.0f;  // Not used in stretch mode
-            renderer->scaled_width = SCREEN_WIDTH;
-            renderer->scaled_height = SCREEN_HEIGHT;
-            renderer->offset_x = 0;
-            renderer->offset_y = 0;
-            break;
-        }
-        
-        case SCALING_CROP: {
-            // Crop to fit (not implemented yet, fallback to letterbox)
-            float scale_x = (float)SCREEN_WIDTH / width;
-            float scale_y = (float)SCREEN_HEIGHT / height;
-            renderer->scale_factor = min_float(scale_x, scale_y);
-            
-            renderer->scaled_width = (int)(width * renderer->scale_factor);
-            renderer->scaled_height = (int)(height * renderer->scale_factor);
-            renderer->offset_x = (SCREEN_WIDTH - renderer->scaled_width) / 2;
-            renderer->offset_y = (SCREEN_HEIGHT - renderer->scaled_height) / 2;
-            break;
-        }
+
+        renderer->src_x_lut[dx].x0   = x0;
+        renderer->src_x_lut[dx].x1   = (x0 < width - 1) ? x0 + 1 : x0;
+        renderer->src_x_lut[dx].frac = (uint8_t)frac;
     }
-    
-    DEBUG_PRINT("Remote size: %dx%d, Scale: %.2f, Scaled: %dx%d, Offset: (%d,%d)",
-                width, height, renderer->scale_factor,
-                renderer->scaled_width, renderer->scaled_height,
+
+    /* ── O3: Clear only the letterbox border strips (once) ───────── */
+    uint16_t *buf = (uint16_t *)renderer->fb->back_buffer;
+
+    /* Top border */
+    if (renderer->offset_y > 0)
+        memset(buf, 0, renderer->offset_y * SCREEN_WIDTH * 2);
+
+    /* Bottom border */
+    int bot = renderer->offset_y + renderer->scaled_height;
+    if (bot < SCREEN_HEIGHT)
+        memset(buf + bot * SCREEN_WIDTH, 0,
+               (SCREEN_HEIGHT - bot) * SCREEN_WIDTH * 2);
+
+    /* Left/right borders */
+    int left_bytes  = renderer->offset_x * 2;
+    int right_start = renderer->offset_x + renderer->scaled_width;
+    int right_bytes = (SCREEN_WIDTH - right_start) * 2;
+
+    for (int y = renderer->offset_y; y < bot && y < SCREEN_HEIGHT; y++) {
+        if (left_bytes > 0)
+            memset(buf + y * SCREEN_WIDTH, 0, left_bytes);
+        if (right_bytes > 0)
+            memset(buf + y * SCREEN_WIDTH + right_start, 0, right_bytes);
+    }
+
+    renderer->borders_cleared = true;
+
+    DEBUG_PRINT("Remote: %dx%d -> Scaled: %dx%d, Offset: (%d,%d)",
+                width, height, renderer->scaled_width, renderer->scaled_height,
                 renderer->offset_x, renderer->offset_y);
 }
 
-void vnc_renderer_render_frame(VNCRenderer *renderer, uint8_t *pixels, 
-                               int width, int height, int bytes_per_pixel) {
-    if (!renderer || !renderer->fb || !pixels) return;
-    
-    // Clear screen with black (for letterbox bars)
-    fb_clear(renderer->fb, COLOR_BLACK);
-    
-    // Render based on scaling mode
-    if (renderer->scaling_mode == SCALING_STRETCH) {
-        // Direct stretch rendering
-        for (int y = 0; y < SCREEN_HEIGHT; y++) {
-            for (int x = 0; x < SCREEN_WIDTH; x++) {
-                // Map screen coordinates to remote coordinates
-                int remote_x = (x * width) / SCREEN_WIDTH;
-                int remote_y = (y * height) / SCREEN_HEIGHT;
-                
-                // Get pixel from remote buffer
-                int remote_idx = (remote_y * width + remote_x) * bytes_per_pixel;
-                uint32_t color;
-                
-                if (bytes_per_pixel == 4) {
-                    // RGBA or BGRA
-                    uint8_t r = pixels[remote_idx];
-                    uint8_t g = pixels[remote_idx + 1];
-                    uint8_t b = pixels[remote_idx + 2];
-                    color = RGB(r, g, b);
-                } else if (bytes_per_pixel == 3) {
-                    // RGB
-                    uint8_t r = pixels[remote_idx];
-                    uint8_t g = pixels[remote_idx + 1];
-                    uint8_t b = pixels[remote_idx + 2];
-                    color = RGB(r, g, b);
-                } else {
-                    color = COLOR_WHITE;  // Fallback
+/* ── Core rendering: partial region update with bilinear interpolation ── */
+
+/*
+ * Bilinear interpolation helper for a single 8-bit channel.
+ * Uses fixed-point 8-bit fractions (0-255).
+ *   p00──fx──p01
+ *    |        |
+ *   fy       fy
+ *    |        |
+ *   p10──fx──p11
+ *
+ * result = (1-fx)(1-fy)*p00 + fx*(1-fy)*p01 + (1-fx)*fy*p10 + fx*fy*p11
+ * All weights are 0-256, so the max product is 256*256*255 = 16,711,680 < 2^24
+ */
+static inline uint8_t bilerp8(uint8_t p00, uint8_t p01, uint8_t p10, uint8_t p11,
+                               unsigned fx, unsigned fy) {
+    unsigned ifx = 256 - fx;
+    unsigned ify = 256 - fy;
+    return (uint8_t)((ifx * ify * p00 + fx * ify * p01 +
+                       ifx * fy * p10 + fx * fy * p11 + 32768) >> 16);
+}
+
+void vnc_renderer_update_region(VNCRenderer *renderer, const uint8_t *remote_fb,
+                                int rx, int ry, int rw, int rh,
+                                int bytes_per_pixel) {
+    if (!renderer || !renderer->fb || !remote_fb) return;
+    if (!renderer->borders_cleared) return;     /* not yet configured */
+
+    const int rw_total = renderer->remote_width;
+    const int rh_total = renderer->remote_height;
+
+    /* Map remote dirty rect → screen coordinates (integer math) */
+    int sx1 = renderer->offset_x +
+              (rx * renderer->scaled_width) / rw_total;
+    int sy1 = renderer->offset_y +
+              (ry * renderer->scaled_height) / rh_total;
+    int sx2 = renderer->offset_x +
+              ((rx + rw) * renderer->scaled_width + rw_total - 1) / rw_total;
+    int sy2 = renderer->offset_y +
+              ((ry + rh) * renderer->scaled_height + rh_total - 1) / rh_total;
+
+    /* Clamp to the active display area */
+    const int left   = renderer->offset_x;
+    const int top    = renderer->offset_y;
+    const int right  = renderer->offset_x + renderer->scaled_width;
+    const int bottom = renderer->offset_y + renderer->scaled_height;
+
+    if (sx1 < left)   sx1 = left;
+    if (sy1 < top)    sy1 = top;
+    if (sx2 > right)  sx2 = right;
+    if (sy2 > bottom) sy2 = bottom;
+    if (sx1 >= sx2 || sy1 >= sy2) return;
+
+    uint16_t *buf = (uint16_t *)renderer->fb->back_buffer;
+    const int row_start  = sx1;
+    const int row_pixels = sx2 - sx1;
+
+    /*
+     * Track the previous (src_y0, src_y1, frac_y) triple.
+     * When consecutive dest rows map to the same source row pair with the
+     * same Y fraction, we can memcpy the previously computed temp_row
+     * instead of recomputing the bilinear blend (O11 row dedup).
+     */
+    int prev_src_y0 = -1;
+    int prev_src_y1 = -1;
+    unsigned prev_fy = 0;
+    (void)prev_fy; /* suppress warning — used in dedup comparison */
+
+    for (int dy = sy1; dy < sy2; dy++) {
+        /* Compute fractional source Y using fixed-point ×256 */
+        int src_y_256 = ((dy - top) * rh_total * 256) / renderer->scaled_height;
+        int src_y0 = src_y_256 >> 8;
+        unsigned fy = src_y_256 & 0xFF;
+
+        if (src_y0 >= rh_total - 1) {
+            src_y0 = rh_total - 1;
+            fy = 0;
+        }
+        int src_y1 = (src_y0 < rh_total - 1) ? src_y0 + 1 : src_y0;
+
+        if (src_y0 != prev_src_y0 || src_y1 != prev_src_y1 || fy != prev_fy) {
+            /* ── New source row pair: bilinear blend into temp_row ──── */
+            prev_src_y0 = src_y0;
+            prev_src_y1 = src_y1;
+            prev_fy = fy;
+
+            if (bytes_per_pixel == 4) {
+                /*
+                 * 32bpp BGR → bilinear → RGB565.
+                 * x11vnc sends pixels as 0x00BBGGRR on little-endian.
+                 *
+                 * For each dest pixel, read a 2×2 neighbourhood from
+                 * (src_y0, src_y1) × (x0, x1) and blend all 3 channels
+                 * before converting to RGB565.
+                 */
+                const uint32_t *row0 =
+                    (const uint32_t *)(remote_fb + (size_t)src_y0 * rw_total * 4);
+                const uint32_t *row1 =
+                    (const uint32_t *)(remote_fb + (size_t)src_y1 * rw_total * 4);
+                uint16_t *tmp = renderer->temp_row + row_start;
+
+                for (int dx = sx1; dx < sx2; dx++) {
+                    const BilinearXEntry *bx = &renderer->src_x_lut[dx - left];
+                    unsigned fx = bx->frac;
+
+                    uint32_t p00 = row0[bx->x0];
+                    uint32_t p01 = row0[bx->x1];
+                    uint32_t p10 = row1[bx->x0];
+                    uint32_t p11 = row1[bx->x1];
+
+                    /* BGR layout: byte 0=R, byte 1=G, byte 2=B */
+                    uint8_t r = bilerp8(p00 & 0xFF, p01 & 0xFF,
+                                        p10 & 0xFF, p11 & 0xFF, fx, fy);
+                    uint8_t g = bilerp8((p00 >> 8) & 0xFF, (p01 >> 8) & 0xFF,
+                                        (p10 >> 8) & 0xFF, (p11 >> 8) & 0xFF, fx, fy);
+                    uint8_t b = bilerp8((p00 >> 16) & 0xFF, (p01 >> 16) & 0xFF,
+                                        (p10 >> 16) & 0xFF, (p11 >> 16) & 0xFF, fx, fy);
+
+                    *tmp++ = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
                 }
-                
-                fb_draw_pixel(renderer->fb, x, y, color);
+            } else if (bytes_per_pixel == 3) {
+                /* 24bpp BGR → bilinear → RGB565 */
+                const uint8_t *base0 =
+                    remote_fb + (size_t)src_y0 * rw_total * 3;
+                const uint8_t *base1 =
+                    remote_fb + (size_t)src_y1 * rw_total * 3;
+                uint16_t *tmp = renderer->temp_row + row_start;
+
+                for (int dx = sx1; dx < sx2; dx++) {
+                    const BilinearXEntry *bx = &renderer->src_x_lut[dx - left];
+                    unsigned fx = bx->frac;
+
+                    const uint8_t *q00 = base0 + bx->x0 * 3;
+                    const uint8_t *q01 = base0 + bx->x1 * 3;
+                    const uint8_t *q10 = base1 + bx->x0 * 3;
+                    const uint8_t *q11 = base1 + bx->x1 * 3;
+
+                    uint8_t r = bilerp8(q00[0], q01[0], q10[0], q11[0], fx, fy);
+                    uint8_t g = bilerp8(q00[1], q01[1], q10[1], q11[1], fx, fy);
+                    uint8_t b = bilerp8(q00[2], q01[2], q10[2], q11[2], fx, fy);
+
+                    *tmp++ = ((b >> 3) << 11) | ((g >> 2) << 5) | (r >> 3);
+                }
             }
         }
-    } else {
-        // Letterbox rendering with scaling
-        for (int y = 0; y < renderer->scaled_height; y++) {
-            for (int x = 0; x < renderer->scaled_width; x++) {
-                // Map scaled coordinates to remote coordinates
-                int remote_x = (int)((float)x / renderer->scale_factor);
-                int remote_y = (int)((float)y / renderer->scale_factor);
-                
-                // Bounds check
-                if (remote_x >= width || remote_y >= height) continue;
-                
-                // Get pixel from remote buffer
-                int remote_idx = (remote_y * width + remote_x) * bytes_per_pixel;
-                uint32_t color;
-                
-                if (bytes_per_pixel == 4) {
-                    uint8_t r = pixels[remote_idx];
-                    uint8_t g = pixels[remote_idx + 1];
-                    uint8_t b = pixels[remote_idx + 2];
-                    color = RGB(r, g, b);
-                } else if (bytes_per_pixel == 3) {
-                    uint8_t r = pixels[remote_idx];
-                    uint8_t g = pixels[remote_idx + 1];
-                    uint8_t b = pixels[remote_idx + 2];
-                    color = RGB(r, g, b);
-                } else {
-                    color = COLOR_WHITE;
-                }
-                
-                // Draw to screen with offset
-                fb_draw_pixel(renderer->fb, 
-                            x + renderer->offset_x, 
-                            y + renderer->offset_y, 
-                            color);
-            }
-        }
+        /* ── Copy temp row → back buffer (single contiguous write) ── */
+        memcpy(buf + dy * SCREEN_WIDTH + row_start,
+               renderer->temp_row + row_start,
+               row_pixels * 2);
     }
-    
-    // Update frame counter
+
+    renderer->update_count++;
+    renderer->needs_present = true;
+}
+
+/* ── Frame presentation with rate cap ──────────────────────────────── */
+
+bool vnc_renderer_present(VNCRenderer *renderer) {
+    if (!renderer || !renderer->fb || !renderer->needs_present)
+        return false;
+
+    /* Cap frame rate (default ~30 fps) */
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    long elapsed_us = (now.tv_sec  - renderer->last_present_time.tv_sec)  * 1000000L
+                    + (now.tv_usec - renderer->last_present_time.tv_usec);
+
+    if (elapsed_us > 0 && elapsed_us < FRAME_INTERVAL_US)
+        return false;
+
+    /* Swap back buffer → display */
+    fb_swap(renderer->fb);
+    renderer->last_present_time = now;
+    renderer->needs_present = false;
     renderer->frame_count++;
-}
 
-void vnc_renderer_update(VNCRenderer *renderer, uint8_t *pixels, 
-                        int x, int y, int w, int h, int bytes_per_pixel) {
-    // For now, just do a full frame update
-    // TODO: Optimize to only update the specified region
-    vnc_renderer_render_frame(renderer, pixels, 
-                              renderer->remote_width, 
-                              renderer->remote_height, 
-                              bytes_per_pixel);
-}
+    /* Log FPS to stderr every 5 seconds */
+    long fps_us = (now.tv_sec  - renderer->last_fps_time.tv_sec)  * 1000000L
+                + (now.tv_usec - renderer->last_fps_time.tv_usec);
+    if (fps_us >= 5000000L) {
+        renderer->current_fps =
+            (float)renderer->frame_count * 1000000.0f / (float)fps_us;
+        fprintf(stderr, "[VNC] FPS: %.1f | VNC updates: %u\n",
+                renderer->current_fps, renderer->update_count);
+        renderer->frame_count  = 0;
+        renderer->update_count = 0;
+        renderer->last_fps_time = now;
+    }
 
-bool vnc_renderer_screen_to_remote(VNCRenderer *renderer, int screen_x, int screen_y,
-                                   int *remote_x, int *remote_y) {
-    if (!renderer || !remote_x || !remote_y) return false;
-    
-    // Check if touch is within scaled display area
-    int rel_x = screen_x - renderer->offset_x;
-    int rel_y = screen_y - renderer->offset_y;
-    
-    if (rel_x < 0 || rel_x >= renderer->scaled_width ||
-        rel_y < 0 || rel_y >= renderer->scaled_height) {
-        return false;  // Touch is in letterbox area
-    }
-    
-    // Convert to remote coordinates
-    if (renderer->scaling_mode == SCALING_STRETCH) {
-        *remote_x = (screen_x * renderer->remote_width) / SCREEN_WIDTH;
-        *remote_y = (screen_y * renderer->remote_height) / SCREEN_HEIGHT;
-    } else {
-        *remote_x = (int)((float)rel_x / renderer->scale_factor);
-        *remote_y = (int)((float)rel_y / renderer->scale_factor);
-    }
-    
-    // Bounds check
-    if (*remote_x < 0) *remote_x = 0;
-    if (*remote_y < 0) *remote_y = 0;
-    if (*remote_x >= renderer->remote_width) *remote_x = renderer->remote_width - 1;
-    if (*remote_y >= renderer->remote_height) *remote_y = renderer->remote_height - 1;
-    
     return true;
 }
 
-void vnc_renderer_show_touch(VNCRenderer *renderer, int x, int y) {
-    if (!renderer) return;
-    
-    renderer->touch_x = x;
-    renderer->touch_y = y;
-    renderer->touch_time = get_time_ms();
-    renderer->show_touch_feedback = true;
-}
+/* ── Coordinate mapping (screen → remote) ──────────────────────────── */
 
-void vnc_renderer_update_touch_feedback(VNCRenderer *renderer) {
-    if (!renderer || !renderer->show_touch_feedback) return;
-    
-    uint32_t current_time = get_time_ms();
-    if (current_time - renderer->touch_time > TOUCH_FEEDBACK_DURATION_MS) {
-        renderer->show_touch_feedback = false;
-        return;
+bool vnc_renderer_screen_to_remote(VNCRenderer *renderer,
+                                   int screen_x, int screen_y,
+                                   int *remote_x, int *remote_y) {
+    if (!renderer || !remote_x || !remote_y) return false;
+
+    int rel_x = screen_x - renderer->offset_x;
+    int rel_y = screen_y - renderer->offset_y;
+
+    if (rel_x < 0 || rel_x >= renderer->scaled_width ||
+        rel_y < 0 || rel_y >= renderer->scaled_height)
+        return false;   /* touch landed in letterbox border */
+
+    if (renderer->scaling_mode == SCALING_STRETCH) {
+        *remote_x = (screen_x * renderer->remote_width)  / SCREEN_WIDTH;
+        *remote_y = (screen_y * renderer->remote_height) / SCREEN_HEIGHT;
+    } else {
+        *remote_x = (rel_x * renderer->remote_width)  / renderer->scaled_width;
+        *remote_y = (rel_y * renderer->remote_height) / renderer->scaled_height;
     }
-    
-    // Draw touch feedback circle
-    fb_draw_circle(renderer->fb, renderer->touch_x, renderer->touch_y, 
-                   10, TOUCH_FEEDBACK_COLOR);
+
+    /* Clamp */
+    if (*remote_x < 0) *remote_x = 0;
+    if (*remote_y < 0) *remote_y = 0;
+    if (*remote_x >= renderer->remote_width)  *remote_x = renderer->remote_width  - 1;
+    if (*remote_y >= renderer->remote_height) *remote_y = renderer->remote_height - 1;
+
+    return true;
 }
 
-void vnc_renderer_draw_status(VNCRenderer *renderer, const char *status) {
-    if (!renderer || !renderer->fb || !status) return;
-    
-    #if SHOW_CONNECTION_STATUS
-    // Draw status text at top of screen
-    fb_draw_text(renderer->fb, 10, 10, status, COLOR_WHITE, 2);
-    #endif
-}
-
-void vnc_renderer_draw_fps(VNCRenderer *renderer) {
-    if (!renderer || !renderer->fb) return;
-    
-    #if SHOW_FPS_COUNTER
-    uint32_t current_time = get_time_ms();
-    uint32_t elapsed = current_time - renderer->last_fps_time;
-    
-    if (elapsed >= 1000) {  // Update FPS every second
-        renderer->current_fps = (float)renderer->frame_count / (elapsed / 1000.0f);
-        renderer->frame_count = 0;
-        renderer->last_fps_time = current_time;
-    }
-    
-    // Draw FPS counter at top right
-    char fps_text[32];
-    snprintf(fps_text, sizeof(fps_text), "FPS: %.1f", renderer->current_fps);
-    fb_draw_text(renderer->fb, SCREEN_WIDTH - 150, 10, fps_text, COLOR_GREEN, 2);
-    #endif
-}
-
-void vnc_renderer_present(VNCRenderer *renderer) {
-    if (!renderer || !renderer->fb) return;
-    
-    // Update touch feedback if active
-    vnc_renderer_update_touch_feedback(renderer);
-    
-    // Draw FPS counter
-    vnc_renderer_draw_fps(renderer);
-    
-    // Swap buffers to present to screen
-    fb_swap(renderer->fb);
-}
+/* ── Cleanup ───────────────────────────────────────────────────────── */
 
 void vnc_renderer_cleanup(VNCRenderer *renderer) {
     if (!renderer) return;
-    
+
     DEBUG_PRINT("Renderer cleanup");
-    // Nothing to free currently, but keep for future use
+
+#if USE_16BPP
+    /* Restore 32bpp for native_games / game_selector on exit */
+    fb_set_bpp(FB_DEVICE, 32);
+    DEBUG_PRINT("Restored 32bpp framebuffer");
+#endif
 }

@@ -1,10 +1,13 @@
 #ifndef VNC_CONFIG_H
 #define VNC_CONFIG_H
 
-// VNC Server Configuration
+// VNC Server Configuration (compile-time defaults, overridden by config file)
 #define VNC_DEFAULT_HOST "192.168.50.56"
-#define VNC_DEFAULT_PORT 5900
-#define VNC_PASSWORD ""
+#define VNC_DEFAULT_PORT 5901
+#define VNC_DEFAULT_PASSWORD ""
+
+// Runtime config file (key=value format, lines starting with # are comments)
+#define VNC_CONFIG_FILE "/opt/vnc_client/vnc_client.conf"
 
 // Device Paths
 #define FB_DEVICE "/dev/fb0"
@@ -49,5 +52,23 @@ typedef enum {
 // Display Settings
 #define SHOW_FPS_COUNTER 1
 #define SHOW_CONNECTION_STATUS 1
+
+// VNC Encoding - request compressed encodings (most preferred first)
+// This is the single biggest performance win: 10-100x bandwidth reduction
+#define VNC_ENCODINGS "tight zrle copyrect hextile zlib raw"
+#define VNC_COMPRESS_LEVEL 6    // 1-9 (higher = more compression, more server CPU)
+#define VNC_QUALITY_LEVEL 5     // 1-9 (JPEG quality for Tight encoding)
+
+// Framebuffer format - 16bpp RGB565 halves memory bandwidth
+// (Same approach as ScummVM RoomWizard backend)
+#define USE_16BPP 1
+
+// Frame interval derived from TARGET_FPS
+#define FRAME_INTERVAL_US (1000000 / TARGET_FPS)
+
+// Exit gesture: long-press in top-left corner
+// Zone size in screen pixels, hold duration in milliseconds
+#define EXIT_ZONE_SIZE 60
+#define EXIT_HOLD_MS 3000
 
 #endif // VNC_CONFIG_H

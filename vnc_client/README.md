@@ -1,23 +1,38 @@
 # VNC Client for RoomWizard
 
-A lightweight VNC client designed to run on the Steelcase RoomWizard embedded device, enabling remote desktop viewing and touch interaction with VNC servers (e.g., Raspberry Pi displays).
+A lightweight VNC client for the Steelcase RoomWizard embedded device.
+Displays a remote desktop (e.g. Raspberry Pi weather/clock display) on the
+RoomWizard's 800×480 screen with touch pass-through.
 
 ## Features
 
-- ✅ **Direct Framebuffer Rendering** - No X11 overhead
-- ✅ **Touch Input Support** - Map touchscreen to VNC mouse events
-- ✅ **Automatic Scaling** - Letterbox mode maintains aspect ratio
-- ✅ **Visual Touch Feedback** - See where you touched
-- ✅ **Watchdog Integration** - Prevents system reboot
-- ✅ **FPS Counter** - Monitor performance
-- ✅ **Connection Status** - Visual feedback
-- 🔄 **On-Screen Keyboard** - Coming in Phase 3
+- **Direct framebuffer rendering** — no X11, no compositor overhead
+- **Bilinear interpolation** — smooth downscaling (1920×1080 → 795×447)
+- **Tight/ZRLE encoding** — 10-100× bandwidth reduction vs raw
+- **16bpp RGB565** — halved memory bandwidth (same as ScummVM backend)
+- **Partial region updates** — only dirty rectangles are re-rendered
+- **Touch input** — resistive touchscreen mapped to VNC pointer events
+- **Runtime config file** — all settings in `/opt/vnc_client/vnc_client.conf`
+- **Exit gesture** — long-press top-left corner (3 s) to return to launcher
+- **Watchdog integration** — prevents system reboot during operation
+
+### Performance (v2.1)
+
+| Metric | v1.0 (MVP) | v2.1 (Current) |
+|--------|-----------|----------------|
+| CPU | 99% | ~5% |
+| Frame rate | <1 fps | 5-7 fps |
+| Bandwidth | ~120 Mbps | <5 Mbps |
+| Encoding | Raw | Tight |
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-On your build machine (Linux):
+Linux build machine with ARM cross-compiler (tested on WSL 2):
+
 ```bash
 sudo apt-get install build-essential cmake wget tar
 sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
@@ -25,135 +40,227 @@ sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
 
 ### Build
 
-1. **Build dependencies** (first time only):
 ```bash
 cd vnc_client
+
+# First time: build dependencies (~5 min)
 chmod +x build-deps.sh
 ./build-deps.sh
-```
 
-This will download and cross-compile:
-- LibVNCClient 0.9.14
-- zlib 1.3
-- libjpeg-turbo 3.0.1
-
-2. **Build VNC client**:
-```bash
+# Build client
 make
 ```
 
-This produces `vnc_client_stripped` (~200KB binary).
+Produces `vnc_client_stripped` (~870 KB statically linked binary).
 
-### Deploy to RoomWizard
+### Deploy
 
 ```bash
-# Create directory on device
-ssh root@192.168.50.73 'mkdir -p /opt/vnc_client'
-
-# Deploy binary
-make deploy DEVICE_IP=192.168.50.73
+make deploy DEVICE_IP=192.168.50.53
 ```
+
+This copies the binary and config file to `/opt/vnc_client/` on the device.
 
 ### Run
 
-On the RoomWizard device:
 ```bash
-ssh root@192.168.50.73
-/opt/vnc_client/vnc_client <raspberry_pi_ip>
+ssh root@192.168.50.53 '/opt/vnc_client/vnc_client'
 ```
 
-Example:
-```bash
-/opt/vnc_client/vnc_client 192.168.1.100
-```
+---
 
 ## Configuration
 
-Edit [`config.h`](config.h) to customize:
+Settings are loaded in this order (later overrides earlier):
 
-### VNC Server Settings
-```c
-#define VNC_DEFAULT_HOST "192.168.1.100"  // Your RPi IP
-#define VNC_DEFAULT_PORT 5900              // VNC port
-#define VNC_PASSWORD ""                    // Password if needed
+1. **Compile-time defaults** — `config.h`
+2. **Config file** — `/opt/vnc_client/vnc_client.conf`
+3. **Command-line arguments**
+
+### Config File
+
+```ini
+# /opt/vnc_client/vnc_client.conf
+host = 192.168.50.56
+port = 5901
+password = roomwizard
+encodings = tight zrle copyrect hextile zlib raw
+compress_level = 6
+quality_level = 5
 ```
 
-### Display Settings
-```c
-#define DEFAULT_SCALING_MODE SCALING_LETTERBOX  // or SCALING_STRETCH
-#define SHOW_REMOTE_CURSOR 1                    // Show cursor
-#define ENABLE_DOUBLE_BUFFER 1                  // Smooth rendering
+### Command-Line
+
+```
+vnc_client [OPTIONS] [host [port]]
+
+Options:
+  --config <path>   Config file (default: /opt/vnc_client/vnc_client.conf)
+  --host <ip>       VNC server host
+  --port <port>     VNC server port
+  --password <pw>   VNC password
+  --help, -h        Show help
 ```
 
-### Performance Settings
-```c
-#define TARGET_FPS 30                      // Frame rate limit
-#define SHOW_FPS_COUNTER 1                 // Display FPS
-#define DEBUG_ENABLED 1                    // Debug output
-```
+Legacy positional syntax still works: `vnc_client 192.168.50.56 5901`
+
+### Compile-Time Settings (config.h)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `TARGET_FPS` | 30 | Frame rate cap |
+| `USE_16BPP` | 1 | Enable 16bpp RGB565 framebuffer |
+| `EXIT_ZONE_SIZE` | 60 | Exit gesture corner size (pixels) |
+| `EXIT_HOLD_MS` | 3000 | Exit gesture hold duration (ms) |
+| `DEBUG_ENABLED` | 1 | Print debug info to stderr |
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ vnc_client.c (Main Application)                     │
-│  - Connection management                            │
-│  - Main event loop                                  │
-│  - Watchdog feeding                                 │
-└────────────┬────────────────────────────────────────┘
-             │
-             ├──> vnc_renderer.c (Display)
-             │     - Framebuffer rendering
-             │     - Scaling (letterbox/stretch)
-             │     - Touch feedback
-             │     - FPS counter
-             │
-             ├──> vnc_input.c (Input Handling)
-             │     - Touch event processing
-             │     - Coordinate mapping
-             │     - VNC pointer events
-             │
-             └──> LibVNCClient (VNC Protocol)
-                   - RFB protocol handling
-                   - Encoding/decoding
-                   - Network communication
+RPi3 VNC Server (192.168.50.56:5901)
+         │ RFB Protocol (Tight encoding)
+         ▼
+    LibVNCClient (decode)
+         │
+         ▼
+   vnc_renderer.c (bilinear scale + BGR→RGB565)
+         │
+         ▼
+    /dev/fb0 (800×480 16bpp)
+
+/dev/input/event0 (touch)
+         │
+         ▼
+   vnc_input.c (coordinate mapping + exit gesture)
+         │
+         ▼
+    VNC pointer events → RPi3
 ```
 
-## Project Structure
+### Source Files
 
-```
-vnc_client/
-├── config.h              # Configuration settings
-├── vnc_client.c          # Main application
-├── vnc_renderer.h/c      # Display rendering
-├── vnc_input.h/c         # Input handling
-├── Makefile              # Build system
-├── build-deps.sh         # Dependency builder
-├── README.md             # This file
-└── deps/                 # Built dependencies (created by build-deps.sh)
-    ├── lib/              # Static libraries
-    ├── include/          # Headers
-    ├── src/              # Downloaded sources
-    └── build/            # Build artifacts
-```
+| File | Purpose |
+|------|---------|
+| `vnc_client.c` | Main application, config parser, event loop |
+| `vnc_renderer.c/h` | Bilinear scaling, BGR→RGB565, partial updates |
+| `vnc_input.c/h` | Touch→VNC mapping, exit gesture detection |
+| `config.h` | Compile-time defaults and constants |
+| `vnc_client.conf` | Runtime configuration template |
+| `Makefile` | Cross-compilation and deployment |
+| `build-deps.sh` | Downloads and builds zlib, libjpeg-turbo, LibVNCClient |
+| `rpi_setup.py` | RPi VNC server setup script |
 
-## Usage Examples
+### Shared Libraries (from native_games)
 
-### Basic Connection
+- `framebuffer.c` — mmap'd double-buffered `/dev/fb0` access
+- `touch_input.c` — `/dev/input/event0` polling
+- `hardware.c` — LEDs, backlight control
+
+---
+
+## RPi VNC Server Setup
+
+The RoomWizard uses **x11vnc** on port 5901 (standard VncAuth) because
+RealVNC on port 5900 uses proprietary encryption incompatible with LibVNCClient.
+
 ```bash
-# Connect to VNC server at default port
-/opt/vnc_client/vnc_client 192.168.1.100
+# Requires: pip install paramiko
+python3 rpi_setup.py <rpi_host> <rpi_user> <rpi_password> [action]
 ```
 
-### Custom Port
-```bash
-# Connect to VNC server on custom port
-/opt/vnc_client/vnc_client 192.168.1.100 5901
-```
+| Action | Description |
+|--------|-------------|
+| `fix-and-install` | Fix Buster EOL repos + install x11vnc (default) |
+| `manual-install` | Direct .deb download if apt fails |
+| `verify` | Check x11vnc service status |
+| `inspect` | Inspect RPi display environment |
 
-### Auto-start on Boot
+This creates a systemd service (`x11vnc-roomwizard`) on port 5901 with
+password authentication. RealVNC on port 5900 is left untouched.
 
-Create init script `/etc/init.d/vnc-client`:
+---
+
+## Exit Gesture
+
+To return to the game launcher, **long-press the top-left corner** of the
+screen for 3 seconds. The client exits cleanly, restoring 32bpp for other
+applications.
+
+No touch events are sent to the VNC server while holding the exit zone.
+
+---
+
+## Optimizations
+
+Key techniques adopted from the ScummVM RoomWizard backend:
+
+| ID | Technique | Impact |
+|----|-----------|--------|
+| O1 | Tight/ZRLE encoding negotiation | 10-100× bandwidth reduction |
+| O2 | Precomputed bilinear X-LUT | No per-pixel division |
+| O3 | Border-only clearing | Avoids full-screen memset |
+| O8 | 16bpp RGB565 framebuffer | Halves fb_swap cost |
+| O11 | Row deduplication (temp row) | Skips ~57% of identical rows |
+| — | Bilinear interpolation | Smooth text at 2.4:1 downscale |
+| — | Partial region updates | Only dirty rectangles rendered |
+| — | Frame-rate-capped present | No unnecessary fb_swap calls |
+
+---
+
+## Hardware
+
+| Component | Specification |
+|-----------|--------------|
+| CPU | ARM Cortex-A8 @ 600 MHz |
+| RAM | 234 MB (182 MB available) |
+| Display | 800×480 framebuffer (`/dev/fb0`) |
+| Input | Resistive single-touch (`/dev/input/event0`) |
+| Network | 10/100 Mbps Ethernet |
+
+## Dependencies
+
+| Library | Version | License |
+|---------|---------|---------|
+| LibVNCClient | 0.9.14 | GPL v2 |
+| zlib | 1.2.13 | zlib |
+| libjpeg-turbo | 2.1.5.1 | BSD-style |
+
+Built as static libraries by `build-deps.sh` using the ARM cross-compiler.
+
+---
+
+## Troubleshooting
+
+### Connection Failed
+- Verify x11vnc is running: `ssh pi@<rpi> 'systemctl status x11vnc-roomwizard'`
+- Check port: `nmap -p 5901 <rpi_ip>`
+- Check password in `/opt/vnc_client/vnc_client.conf`
+
+### Colors Wrong (orange ↔ blue)
+- x11vnc sends BGR byte order; the renderer handles this automatically
+- If colors are swapped, check `vnc_renderer.c` BGR→RGB565 conversion
+
+### Touch Not Working
+- Verify device: `ls -l /dev/input/event0`
+- Check debug output for "Touch" messages
+
+### Poor Frame Rate
+- Lower `quality_level` in config (trades JPEG quality for speed)
+- Raise `compress_level` (more server CPU, less bandwidth)
+- Normal for this hardware is 5-7 fps with 1080p source
+
+### System Reboots
+- The watchdog thread feeds `/dev/watchdog` every 30 s
+- If the client crashes without cleanup, the system will reboot in ~60 s
+
+---
+
+## Auto-Start on Boot
+
+Create `/etc/init.d/vnc-client`:
+
 ```bash
 #!/bin/sh
 ### BEGIN INIT INFO
@@ -162,181 +269,36 @@ Create init script `/etc/init.d/vnc-client`:
 # Required-Stop:
 # Default-Start:     5
 # Default-Stop:      0 1 6
-# Short-Description: VNC Client
 ### END INIT INFO
-
-VNC_SERVER="192.168.1.100"
 
 case "$1" in
     start)
-        echo "Starting VNC client..."
-        /opt/vnc_client/vnc_client $VNC_SERVER &
+        /opt/vnc_client/vnc_client &
         ;;
     stop)
-        echo "Stopping VNC client..."
         killall vnc_client
-        ;;
-    *)
-        echo "Usage: $0 {start|stop}"
-        exit 1
         ;;
 esac
 ```
 
-Enable:
 ```bash
 chmod +x /etc/init.d/vnc-client
 ln -s /etc/init.d/vnc-client /etc/rc5.d/S99vnc-client
 ```
 
-## Troubleshooting
-
-### Connection Failed
-- Check VNC server is running: `nmap -p 5900 <rpi_ip>`
-- Verify network connectivity: `ping <rpi_ip>`
-- Check firewall settings on RPi
-
-### Black Screen
-- Verify VNC server is sending framebuffer updates
-- Check debug output: Look for "Framebuffer update" messages
-- Try different scaling mode in config.h
-
-### Touch Not Working
-- Check touch device: `ls -l /dev/input/event0`
-- Verify touch calibration
-- Check debug output for "Touch" messages
-
-### System Reboots
-- Watchdog thread may have failed
-- Check `/dev/watchdog` permissions
-- Verify watchdog daemon is not conflicting
-
-### Poor Performance
-- Reduce `TARGET_FPS` in config.h
-- Disable `SHOW_FPS_COUNTER`
-- Use `SCALING_STRETCH` instead of `SCALING_LETTERBOX`
-- Enable compression on VNC server
-
-## Performance
-
-### Expected Performance
-- **Frame Rate:** 15-30 fps (depends on content)
-- **CPU Usage:** 10-20% typical, 30-40% during updates
-- **Memory:** ~6MB (framebuffers + network buffers)
-- **Network:** <100 Kbps for static content, 1-5 Mbps for active updates
-- **Touch Latency:** <50ms on local network
-
-### Optimization Tips
-1. Use Tight or ZRLE encoding on VNC server
-2. Reduce color depth on VNC server (16-bit vs 24-bit)
-3. Lower frame rate if not needed
-4. Use SCALING_STRETCH for faster rendering
-5. Disable FPS counter in production
-
-## Development
-
-### Building for Development
-```bash
-# Build with debug symbols
-make CFLAGS="-g -O0"
-
-# Run with verbose output
-DEBUG_ENABLED=1 ./vnc_client <ip>
-```
-
-### Adding Features
-1. Edit source files
-2. Rebuild: `make clean && make`
-3. Test locally or deploy to device
-4. Update documentation
-
-### Code Style
-- Follow existing code style
-- Use DEBUG_PRINT() for debug output
-- Comment complex algorithms
-- Update README for new features
-
-## Known Limitations
-
-### Current Version (v1.0 - MVP)
-- ❌ No on-screen keyboard (planned for v1.1)
-- ❌ No auto-reconnect (planned for v1.1)
-- ❌ No configuration file (planned for v1.1)
-- ❌ Partial region updates not optimized
-- ❌ Only tested with Raw encoding
-
-### Hardware Limitations
-- Single-touch only (no multi-touch)
-- Resistive touchscreen (less accurate at edges)
-- 800x480 display (may need scaling for larger remotes)
-
-## Roadmap
-
-### Phase 1: MVP (Current)
-- [x] Basic VNC connection
-- [x] Framebuffer rendering
-- [x] Touch input
-- [x] Scaling support
-- [x] Watchdog integration
-
-### Phase 2: Optimization (Next)
-- [ ] Tight/ZRLE encoding support
-- [ ] Partial region updates
-- [ ] Auto-reconnect
-- [ ] Configuration file
-- [ ] Performance optimization
-
-### Phase 3: Advanced Features
-- [ ] On-screen keyboard
-- [ ] Connection settings UI
-- [ ] Multiple server profiles
-- [ ] Screenshot capture
-- [ ] Recording mode
-
-## Contributing
-
-This is a custom project for the RoomWizard device. If you have improvements:
-
-1. Test thoroughly on actual hardware
-2. Document changes
-3. Update this README
-4. Consider backward compatibility
-
-## License
-
-This project uses:
-- **LibVNCClient** - GPL v2 (https://github.com/LibVNC/libvncserver)
-- **zlib** - zlib License (https://zlib.net/)
-- **libjpeg-turbo** - BSD-style licenses (https://libjpeg-turbo.org/)
-
-Custom code (vnc_client.c, vnc_renderer.c, vnc_input.c) is provided as-is for use with the RoomWizard device.
-
-## Support
-
-For issues or questions:
-1. Check troubleshooting section above
-2. Review debug output
-3. Check system logs: `/var/log/messages`
-4. Verify hardware functionality with native_games
-
-## References
-
-- [LibVNCClient Documentation](https://libvnc.github.io/)
-- [RFB Protocol Specification](https://github.com/rfbproto/rfbproto)
-- [RoomWizard System Analysis](../SYSTEM_ANALYSIS.md)
-- [Native Games Project](../native_games/)
-- [Project Planning Documents](../plans/)
+---
 
 ## Version History
 
-### v1.0 (2026-02-27) - Initial Release
-- Basic VNC client functionality
-- Touch input support
-- Letterbox scaling
-- Watchdog integration
-- FPS counter
-- Connection status display
+| Version | Date | Changes |
+|---------|------|---------|
+| v1.0 | 2026-02-27 | MVP: raw encoding, 99% CPU, <1 fps |
+| v2.0 | 2026-03-01 | Tight encoding, 16bpp, partial updates, row dedup → 5% CPU, 5 fps |
+| v2.1 | 2026-03-01 | Bilinear scaling, runtime config file, exit gesture, merged docs |
 
 ---
 
-**Built for RoomWizard** | ARM Cortex-A8 @ 600MHz | 800x480 Display
+## License
+
+Custom code (`vnc_client.c`, `vnc_renderer.c`, `vnc_input.c`) is provided as-is
+for use with the RoomWizard device. Dependencies carry their own licenses (see above).
