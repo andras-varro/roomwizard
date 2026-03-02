@@ -63,6 +63,27 @@ check_prerequisites() {
     # Check ScummVM directory
     if [ ! -d "$SCUMMVM_DIR" ]; then
         log_error "ScummVM directory not found: $SCUMMVM_DIR"
+        echo ""
+        echo "You need to clone the ScummVM repository first:"
+        echo "  cd $(dirname $SCUMMVM_DIR)"
+        echo "  git clone https://github.com/scummvm/scummvm.git"
+        echo "  cd scummvm"
+        echo "  git checkout branch-2-8"
+        echo ""
+        echo "Then restore the RoomWizard backend files:"
+        echo "  cd ../scummvm-roomwizard"
+        echo "  bash manage-scummvm-changes.sh restore"
+        exit 1
+    fi
+    
+    # Check if backend files are synced
+    if [ ! -f "$SCUMMVM_DIR/backends/platform/roomwizard/roomwizard.cpp" ]; then
+        log_error "RoomWizard backend files not found in ScummVM directory!"
+        echo ""
+        echo "Run the following to restore backend files:"
+        echo "  bash manage-scummvm-changes.sh restore"
+        echo ""
+        echo "This will copy the backend files from backend-files/ to the ScummVM directory."
         exit 1
     fi
     
