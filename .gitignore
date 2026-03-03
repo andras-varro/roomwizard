@@ -498,26 +498,4 @@ native_games/build/*
 # Ignore all tar.gz files except in scummvm-patches
 *.tar.gz
 !scummvm-patches/*.tar.gz
-build/*
-native_apps/build/app_launcher
-native_apps/build/audio_test
-native_apps/build/audio_touch_test
-native_apps/build/backlight
-native_apps/build/dss_scale_test
-native_apps/build/game_selector
-native_apps/build/hardware_test
-native_apps/build/oss_diag
-native_apps/build/pong
-native_apps/build/snake
-native_apps/build/tetris
-native_apps/build/touch_calibrate
-native_apps/build/unified_calibrate
-native_apps/build/watchdog_feeder
-native_apps/build/icons/hardware_test_gui.c.ppm
-native_apps/build/icons/hardware_test.ppm
-native_apps/build/icons/pong.ppm
-native_apps/build/icons/snake.ppm
-native_apps/build/icons/tetris.ppm
-native_apps/build/icons/unified_calibrate.ppm
-native_apps/build/brick_breaker
-native_apps/build/icons/brick_breaker.ppm
+build
