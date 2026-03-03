@@ -33,6 +33,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <errno.h>
 
 /* ── Limits ─────────────────────────────────────────────────────────────── */
 
@@ -436,8 +437,11 @@ static void launch_app(Launcher *l, int index,
     /* Fade out launcher before switching to app */
     fb_fade_out(&l->fb);
 
-    /* Release touch device so child gets exclusive access */
+    /* Release BOTH framebuffer and touch so child gets exclusive access.
+     * This prevents the parent from accidentally drawing while blocked,
+     * and avoids two processes holding the fb mmap simultaneously.       */
     touch_close(&l->touch);
+    fb_close(&l->fb);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -460,22 +464,37 @@ static void launch_app(Launcher *l, int index,
         perror("execl failed");
         _exit(1);
     } else if (pid > 0) {
-        /* ── Parent: wait for app to finish ───────────────────────── */
+        /* ── Parent: wait for app to finish (EINTR-safe) ──────────── */
         int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status))
-            LOG_INFO(&l->logger, "%s exited (code %d)", app->name, WEXITSTATUS(status));
-        else if (WIFSIGNALED(status))
-            LOG_WARN(&l->logger, "%s killed by signal %d", app->name, WTERMSIG(status));
-        else
-            LOG_WARN(&l->logger, "%s exited (raw status %d)", app->name, status);
+        pid_t ret;
+        do {
+            ret = waitpid(pid, &status, 0);
+        } while (ret == -1 && errno == EINTR);
+
+        if (ret > 0) {
+            if (WIFEXITED(status))
+                LOG_INFO(&l->logger, "%s exited (code %d)", app->name, WEXITSTATUS(status));
+            else if (WIFSIGNALED(status))
+                LOG_WARN(&l->logger, "%s killed by signal %d", app->name, WTERMSIG(status));
+            else
+                LOG_WARN(&l->logger, "%s exited (raw status %d)", app->name, status);
+        } else {
+            LOG_WARN(&l->logger, "waitpid failed: %s", strerror(errno));
+        }
     } else {
         perror("fork failed");
     }
 
+    /* Re-acquire framebuffer (restore 32bpp in case child left 16bpp) */
+    fb_set_bpp(fb_dev, 32);
+    if (fb_init(&l->fb, fb_dev) != 0)
+        LOG_ERROR(&l->logger, "Failed to re-initialise framebuffer");
+
     /* Re-acquire touch */
-    if (touch_init(&l->touch, touch_dev) == 0)
+    if (touch_init(&l->touch, touch_dev) == 0) {
         touch_set_screen_size(&l->touch, l->fb.width, l->fb.height);
+        touch_drain_events(&l->touch);  /* Discard stale events from child */
+    }
 
     /* Re-scan manifests in case new apps were deployed while app ran */
     LOG_INFO(&l->logger, "Re-scanning apps...");
@@ -499,6 +518,13 @@ int main(int argc, char *argv[]) {
     printf("RoomWizard App Launcher\n");
     printf("=======================\n");
 
+    /* Singleton guard — exit immediately if another instance is running */
+    int lock_fd = acquire_instance_lock("app_launcher");
+    if (lock_fd < 0) {
+        fprintf(stderr, "app_launcher: another instance is already running\n");
+        return 1;
+    }
+
     signal(SIGTERM, on_sigterm);
     signal(SIGINT,  on_sigterm);
 
@@ -507,6 +533,9 @@ int main(int argc, char *argv[]) {
 
     /* Initialize logger */
     logger_init(&launcher.logger, "app_launcher", LOG_LEVEL_INFO, true);
+
+    /* Ensure 32bpp — a previous process (e.g. ScummVM) may have left 16bpp */
+    fb_set_bpp(fb_dev, 32);
 
     /* Framebuffer */
     if (fb_init(&launcher.fb, fb_dev) != 0) {

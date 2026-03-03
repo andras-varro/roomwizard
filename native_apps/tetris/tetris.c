@@ -602,6 +602,13 @@ int main(int argc, char *argv[]) {
     if (argc > 1) fb_device = argv[1];
     if (argc > 2) touch_device = argv[2];
     
+    // Singleton guard — prevent duplicate instances
+    int lock_fd = acquire_instance_lock("tetris");
+    if (lock_fd < 0) {
+        fprintf(stderr, "tetris: another instance is already running\n");
+        return 1;
+    }
+
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     

@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <errno.h>
 
 #define MAX_GAMES 10
 #define GAME_DIR "/opt/games"
@@ -229,9 +230,11 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
     
     // Clear screen before launching
     fb_clear(&selector->fb, COLOR_BLACK);
+    fb_swap(&selector->fb);
     
-    // Close our touch input so game has exclusive access
+    // Close both framebuffer and touch so game has exclusive access
     touch_close(&selector->touch);
+    fb_close(&selector->fb);
     
     pid_t pid = fork();
     if (pid == 0) {
@@ -245,14 +248,24 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
         perror("Failed to execute game");
         exit(1);
     } else if (pid > 0) {
-        // Parent process - wait for game to exit
+        // Parent process - wait for game to exit (EINTR-safe)
         int status;
-        waitpid(pid, &status, 0);
-        printf("Game exited with status: %d\n", WEXITSTATUS(status));
+        pid_t ret;
+        do {
+            ret = waitpid(pid, &status, 0);
+        } while (ret == -1 && errno == EINTR);
+        printf("Game exited with status: %d\n", (ret > 0) ? WEXITSTATUS(status) : -1);
+        
+        // Re-acquire framebuffer (restore 32bpp in case game left 16bpp)
+        fb_set_bpp(fb_dev, 32);
+        if (fb_init(&selector->fb, fb_dev) != 0) {
+            fprintf(stderr, "Failed to re-initialise framebuffer\n");
+        }
         
         // Reopen touch input after game exits
         if (touch_init(&selector->touch, touch_dev) == 0) {
             touch_set_screen_size(&selector->touch, selector->fb.width, selector->fb.height);
+            touch_drain_events(&selector->touch);  /* Discard stale events */
         }
         
         return 0;
@@ -273,6 +286,13 @@ int main(int argc, char *argv[]) {
     
     printf("RoomWizard Game Selector\n");
     printf("========================\n");
+
+    /* Singleton guard — exit immediately if another instance is running */
+    int lock_fd = acquire_instance_lock("game_selector");
+    if (lock_fd < 0) {
+        fprintf(stderr, "game_selector: another instance is already running\n");
+        return 1;
+    }
     
     // Initialize framebuffer
     if (fb_init(&selector.fb, fb_device) != 0) {

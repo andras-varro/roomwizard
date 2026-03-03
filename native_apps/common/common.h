@@ -243,4 +243,14 @@ uint32_t get_time_ms(void);
 #define LAYOUT_EXIT_BTN_Y       (SCREEN_SAFE_TOP + 10)
 #define LAYOUT_BOTTOM_BTN_Y     (SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 20)  // Bottom buttons
 
+// ============================================================================
+// SINGLETON INSTANCE LOCK
+// ============================================================================
+
+// Acquire an exclusive process lock via flock().  Returns a file descriptor
+// (keep it open for the lifetime of the process) or -1 if another instance
+// already holds the lock.  The lock is automatically released when the
+// process exits or the fd is closed.
+int acquire_instance_lock(const char *app_name);
+
 #endif // COMMON_H

@@ -200,9 +200,11 @@ void OSystem_RoomWizard::getTimeAndDate(TimeDate &td, bool skipRecord) const {
 }
 
 void OSystem_RoomWizard::quit() {
-	// Blank the screen before exiting so the display doesn't show a stale frame
+	// Restore framebuffer to 32bpp before exiting so the app launcher (or any
+	// respawned app) finds a clean 32bpp framebuffer.  closeFramebuffer() blanks
+	// the screen, unmaps the fb, and calls fb_set_bpp("/dev/fb0", 32).
 	if (_graphicsManager)
-		((RoomWizardGraphicsManager *)_graphicsManager)->blankScreen();
+		((RoomWizardGraphicsManager *)_graphicsManager)->closeFramebuffer();
 	exit(0);
 }
 

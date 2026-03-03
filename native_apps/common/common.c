@@ -6,6 +6,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/file.h>
 
 // ============================================================================
 // TIME UTILITIES
@@ -15,6 +18,37 @@ uint32_t get_time_ms(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+}
+
+// ============================================================================
+// SINGLETON INSTANCE LOCK
+// ============================================================================
+
+int acquire_instance_lock(const char *app_name) {
+    char lock_path[256];
+    snprintf(lock_path, sizeof(lock_path), "/tmp/.%s.lock", app_name);
+
+    int fd = open(lock_path, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) {
+        perror("acquire_instance_lock: open");
+        return -1;
+    }
+
+    if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+        /* Another instance holds the lock */
+        close(fd);
+        return -1;
+    }
+
+    /* Write our PID for diagnostics */
+    char pid_str[16];
+    int len = snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
+    if (ftruncate(fd, 0) == 0) {
+        ssize_t w = write(fd, pid_str, len);
+        (void)w;  /* Best-effort; failure is non-fatal */
+    }
+
+    return fd;  /* Caller must keep fd open — lock held until close/exit */
 }
 
 // ============================================================================

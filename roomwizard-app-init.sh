@@ -92,7 +92,15 @@ log() {
 
 cleanup() {
     log "Received TERM/INT signal, stopping child PID=$CHILD_PID"
-    [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null
+    if [ -n "$CHILD_PID" ]; then
+        kill "$CHILD_PID" 2>/dev/null
+        # Give the child up to 5 s to exit, then force-kill
+        for i in 1 2 3 4 5; do
+            kill -0 "$CHILD_PID" 2>/dev/null || break
+            sleep 1
+        done
+        kill -9 "$CHILD_PID" 2>/dev/null
+    fi
     log "Respawn wrapper exiting"
     exit 0
 }
@@ -108,11 +116,19 @@ while true; do
         "$APP" >> "$LOGDIR/app_stdout.log" 2>&1 &
         CHILD_PID=$!
         log "$APP running as PID $CHILD_PID"
-        wait $CHILD_PID
+        # Robust wait: keep waiting until the child truly exits.
+        # BusyBox ash 'wait' may return prematurely on some signals;
+        # the kill -0 guard prevents respawning while the app is alive.
+        while kill -0 "$CHILD_PID" 2>/dev/null; do
+            wait "$CHILD_PID" 2>/dev/null
+        done
+        wait "$CHILD_PID" 2>/dev/null
         EXIT_CODE=$?
-        CHILD_PID=
-        log "$APP exited (code $EXIT_CODE), restarting in 2s..."
+        log "$APP (PID $CHILD_PID) exited (code $EXIT_CODE), restarting in 2s..."
+        # Do NOT clear CHILD_PID until after sleep so cleanup() can
+        # still kill the child if TERM arrives during the delay.
         sleep 2
+        CHILD_PID=
     else
         log "No valid app configured ($APP), retrying in 10s..."
         sleep 10
@@ -141,7 +157,29 @@ do_stop() {
             kill "$PID" 2>/dev/null || true
         rm -f "$PIDFILE"
     fi
+
+    # Kill ALL respawn.sh instances (catches orphans from previous restarts)
+    if pidof -x respawn.sh >/dev/null 2>&1; then
+        echo "  Killing remaining respawn.sh processes..."
+        killall respawn.sh 2>/dev/null || true
+        sleep 1
+        killall -9 respawn.sh 2>/dev/null || true
+    fi
     rm -f "$RESPAWN_SCRIPT"
+
+    # Safety net: kill any orphaned child app that survived the wrapper.
+    # Read the configured binary name and killall by basename.
+    read_config
+    if [ -n "$APP_EXEC" ]; then
+        APP_BASE=$(basename "$APP_EXEC")
+        if pidof "$APP_BASE" >/dev/null 2>&1; then
+            echo "  Killing orphaned $APP_BASE..."
+            killall "$APP_BASE" 2>/dev/null || true
+            sleep 1
+            killall -9 "$APP_BASE" 2>/dev/null || true
+        fi
+    fi
+
     echo "$DESC stopped"
     return 0
 }

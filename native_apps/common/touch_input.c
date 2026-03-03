@@ -6,15 +6,21 @@
 #include <unistd.h>
 #include <linux/input.h>
 
-// Scale raw touch coordinates to screen coordinates with calibration
+// Scale raw touch coordinates to screen coordinates with calibration.
+// Uses the actual hardware-reported range (from EVIOCGABS) instead of
+// a hardcoded maximum, so the full screen is reachable even when the
+// resistive digitiser doesn't span the theoretical 0-4095 range.
 static void scale_coordinates(TouchInput *touch, int *x, int *y) {
-    // RoomWizard touch device reports 12-bit coordinates (0-4095)
-    // Scale to screen resolution (800x480)
-    const int TOUCH_MAX = 4095;
-    
-    // Linear scaling first
-    *x = (*x * touch->screen_width) / TOUCH_MAX;
-    *y = (*y * touch->screen_height) / TOUCH_MAX;
+    int range_x = touch->raw_max_x - touch->raw_min_x;
+    int range_y = touch->raw_max_y - touch->raw_min_y;
+
+    // Fallback to 0-4095 if hardware range was not obtained
+    if (range_x <= 0) { touch->raw_min_x = 0; range_x = 4095; }
+    if (range_y <= 0) { touch->raw_min_y = 0; range_y = 4095; }
+
+    // Map [raw_min .. raw_max] → [0 .. screen_size-1]
+    *x = ((*x - touch->raw_min_x) * touch->screen_width)  / range_x;
+    *y = ((*y - touch->raw_min_y) * touch->screen_height) / range_y;
     
     // Apply calibration if enabled
     if (touch->calib.enabled) {
@@ -68,11 +74,24 @@ int touch_init(TouchInput *touch, const char *device) {
     touch->last_y = 0;
     touch->touching = false;
     
-    // Initialize calibration
-    touch->raw_min_x = 0;
-    touch->raw_max_x = 0;
-    touch->raw_min_y = 0;
-    touch->raw_max_y = 0;
+    // Query actual hardware coordinate range via EVIOCGABS
+    struct input_absinfo abs_x, abs_y;
+    if (ioctl(touch->fd, EVIOCGABS(ABS_X), &abs_x) == 0 &&
+        ioctl(touch->fd, EVIOCGABS(ABS_Y), &abs_y) == 0) {
+        touch->raw_min_x = abs_x.minimum;
+        touch->raw_max_x = abs_x.maximum;
+        touch->raw_min_y = abs_y.minimum;
+        touch->raw_max_y = abs_y.maximum;
+        printf("Touch hardware range: X [%d..%d], Y [%d..%d]\n",
+               abs_x.minimum, abs_x.maximum, abs_y.minimum, abs_y.maximum);
+    } else {
+        // Fallback — assume 12-bit 0–4095
+        touch->raw_min_x = 0;
+        touch->raw_max_x = 4095;
+        touch->raw_min_y = 0;
+        touch->raw_max_y = 4095;
+        printf("Touch EVIOCGABS failed, using default 0-4095 range\n");
+    }
     touch->screen_width = 800;  // Default
     touch->screen_height = 480;  // Default
     touch->calibrated = false;
@@ -354,4 +373,33 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
     }
     
     return 0;
+}
+
+void touch_drain_events(TouchInput *touch) {
+    /* Read and discard all pending input events.
+     * Called after re-opening the touch device so that stale events
+     * (from before the close/reopen cycle) don't accidentally trigger
+     * button presses in a menu.                                       */
+    struct input_event ev;
+    int flags = fcntl(touch->fd, F_GETFL, 0);
+
+    /* Ensure non-blocking so we don't wait forever */
+    fcntl(touch->fd, F_SETFL, flags | O_NONBLOCK);
+
+    int drained = 0;
+    while (read(touch->fd, &ev, sizeof(ev)) == sizeof(ev))
+        drained++;
+
+    /* Restore the original fd flags */
+    fcntl(touch->fd, F_SETFL, flags);
+
+    /* Reset internal touch state so a held finger isn't mis-read as
+     * a new press.                                                    */
+    touch->touching = false;
+    touch->state.pressed  = false;
+    touch->state.released = false;
+    touch->state.held     = false;
+
+    if (drained > 0)
+        printf("touch_drain_events: discarded %d stale events\n", drained);
 }

@@ -524,6 +524,13 @@ int main(int argc, char *argv[]) {
     if (argc > 1) fb_device = argv[1];
     if (argc > 2) touch_device = argv[2];
     
+    // Singleton guard — prevent duplicate instances
+    int lock_fd = acquire_instance_lock("snake");
+    if (lock_fd < 0) {
+        fprintf(stderr, "snake: another instance is already running\n");
+        return 1;
+    }
+
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);

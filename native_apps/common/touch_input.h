@@ -76,4 +76,7 @@ int touch_save_calibration(TouchInput *touch, const char *filename);
 // Load calibration from file
 int touch_load_calibration(TouchInput *touch, const char *filename);
 
+// Drain all pending events from the touch device (call after reopen)
+void touch_drain_events(TouchInput *touch);
+
 #endif
