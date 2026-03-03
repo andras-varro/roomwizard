@@ -35,6 +35,29 @@ The [`commission-roomwizard.sh`](commission-roomwizard.sh) script configures the
 3. Follow the prompts for password / SSH key
 4. Unmount, re-insert into device, power on
 
+<!-- NEXT_STEPS_START -->
+
+  Remaining steps
+  ────────────────
+  1. Unmount SD card:       sync && sudo umount <mountpoint>
+
+  2. Reinsert SD card into device, connect Ethernet, power on
+
+  3. Wait ~30 s, find device IP from router DHCP leases
+
+  4. If SSH key was NOT installed during commissioning:
+       ssh-copy-id -i ~/.ssh/id_rsa.pub root@<ip>
+
+  5. One-time system setup (disables bloatware, installs app launcher):
+       ./setup-device.sh <ip>
+
+  6. Deploy all apps:
+       ./deploy-all.sh <ip>
+
+  Full guide: COMMISSIONING.md
+
+<!-- NEXT_STEPS_END -->
+
 ## Phase 2: System Setup (SSH)
 
 The [`setup-device.sh`](setup-device.sh) script is run once over SSH after the device first boots.
@@ -68,29 +91,25 @@ backlight schedule that turns the screen off at 19:00 on weekdays.
 `setup-device.sh` disables all of these non-essential mechanisms. See
 [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#game-mode-optimization) for the complete rationale.
 
-## Deploying a Project
+## Phase 3: Deploy Apps
 
-After both commissioning phases, deploy a project and set it as the default boot app:
+After both commissioning phases, deploy apps to the device.
 
-### Native Games
+### All at once (recommended)
 ```bash
-cd native_apps
-./build-and-deploy.sh <ip> set-default    # build + deploy + set as boot app
+./deploy-all.sh <ip>              # build + deploy all components
+./deploy-all.sh --list            # show discovered components
 ```
 
-### VNC Client
+### Individually
 ```bash
-cd vnc_client
-./build-and-deploy.sh <ip> set-default    # build + deploy + set as boot app
+cd native_apps       && ./build-and-deploy.sh <ip> set-default
+cd vnc_client        && ./build-and-deploy.sh <ip>
+cd scummvm-roomwizard && ./build-and-deploy.sh <ip>
 ```
 
-### ScummVM
-```bash
-cd scummvm-roomwizard
-./build-and-deploy.sh <ip> set-default    # build + deploy + set as boot app
-```
-
-After setting the default app, reboot: `ssh root@<ip> reboot`
+The `set-default` flag makes that app start on boot.
+After deploying, reboot: `ssh root@<ip> reboot`
 
 ### Switching Apps
 
@@ -111,12 +130,14 @@ Then reboot or restart the service: `ssh root@<ip> /etc/init.d/roomwizard-app re
 ## Architecture
 
 ```
-commission-roomwizard.sh         Phase 1: SD card (offline)
-setup-device.sh                  Phase 2: SSH one-time setup
-disable-steelcase.sh             Shared: disable bloatware (idempotent)
-roomwizard-app-init.sh           Generic init: starts /opt/roomwizard/default-app
-native_apps/build-and-deploy.sh  Build + deploy apps (no system setup)
-vnc_client/build-and-deploy.sh   Build + deploy VNC client (no system setup)
+commission-roomwizard.sh                Phase 1: SD card (offline)
+setup-device.sh                        Phase 2: SSH one-time setup
+deploy-all.sh                          Phase 3: build + deploy all components
+disable-steelcase.sh                   Shared: disable bloatware (idempotent)
+roomwizard-app-init.sh                 Generic init: starts /opt/roomwizard/default-app
+native_apps/build-and-deploy.sh        Build + deploy native apps
+vnc_client/build-and-deploy.sh         Build + deploy VNC client
+scummvm-roomwizard/build-and-deploy.sh Build + deploy ScummVM
 ```
 
 ### On-device layout
@@ -130,7 +151,7 @@ vnc_client/build-and-deploy.sh   Build + deploy VNC client (no system setup)
 ├── audio-enable                 Speaker amplifier setup (S29)
 └── time-sync                    NTP via rdate (S28)
 
-/opt/games/                      Native games binaries
+/opt/games/                      Native games + ScummVM binaries
 /opt/vnc_client/                 VNC client binary + config
 ```
 
@@ -172,6 +193,6 @@ Phase 2 backs up the original crontab:
 ## Related Documentation
 
 - [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) — Hardware specs, watchdog details, cron job tables
-- [SYSTEM_SETUP.md](SYSTEM_SETUP.md) — Manual setup guide (reference)
 - [native_apps/README.md](native_apps/README.md) — Native apps development docs
 - [vnc_client/README.md](vnc_client/README.md) — VNC client docs
+- [scummvm-roomwizard/README.md](scummvm-roomwizard/README.md) — ScummVM backend docs

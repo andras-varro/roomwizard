@@ -247,6 +247,6 @@ Current state on device:
 
 ## Resources
 
-- **Device / SSH setup:** [SYSTEM_SETUP.md](../SYSTEM_SETUP.md)
+- **Device / SSH setup:** [COMMISSIONING.md](../COMMISSIONING.md)
 - **Hardware specs:** [SYSTEM_ANALYSIS.md](../SYSTEM_ANALYSIS.md)
 - **ScummVM backend:** [scummvm-roomwizard/SCUMMVM_DEV.md](../scummvm-roomwizard/SCUMMVM_DEV.md)

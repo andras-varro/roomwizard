@@ -12,7 +12,7 @@
 - Watchdog: handled by system `/usr/sbin/watchdog` — no custom feeder needed
 
 **Device:** RoomWizard - See [`SYSTEM_ANALYSIS.md#hardware-platform`](../SYSTEM_ANALYSIS.md#hardware-platform) for full specs
-**IP:** 192.168.50.73 - See [`SYSTEM_SETUP.md`](../SYSTEM_SETUP.md) for SSH key auth setup
+**IP:** 192.168.50.73 - See [`COMMISSIONING.md`](../COMMISSIONING.md) for device setup
 
 ## Quick Commands
 

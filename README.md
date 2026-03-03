@@ -5,9 +5,8 @@
 ## Quick Navigation
 
 ### Setup & Commissioning
-- **[Commissioning Guide](COMMISSIONING.md)** — Two-phase device setup workflow
+- **[Commissioning Guide](COMMISSIONING.md)** — Complete setup workflow (SD card → system setup → deploy)
 - **[System Analysis](SYSTEM_ANALYSIS.md)** — Hardware specs and firmware analysis
-- **[System Setup](SYSTEM_SETUP.md)** — Manual setup reference
 
 ### Projects
 - **[Native Apps](native_apps/)** — High-performance C apps with direct framebuffer rendering
@@ -36,15 +35,16 @@
 
 ### 2. Deploy a project
 ```bash
-# Native Games
+# All at once (recommended)
+./deploy-all.sh <ip>
+
+# Or individually:
 cd native_apps
 ./build-and-deploy.sh <ip> set-default
 
-# VNC Client
 cd vnc_client
 ./build-and-deploy.sh <ip> set-default
 
-# ScummVM
 cd scummvm-roomwizard
 ./build-and-deploy.sh <ip> set-default
 ```
@@ -60,11 +60,11 @@ ssh root@<ip> reboot
 roomwizard/
 ├── commission-roomwizard.sh     # Phase 1: SD card commissioning (offline)
 ├── setup-device.sh              # Phase 2: SSH system setup (one-time)
+├── deploy-all.sh                # Phase 3: build + deploy all components
 ├── disable-steelcase.sh         # Bloatware cleanup (deployed to device)
 ├── roomwizard-app-init.sh       # Generic init script (deployed to device)
 ├── COMMISSIONING.md             # Commissioning workflow
 ├── SYSTEM_ANALYSIS.md           # Hardware analysis
-├── SYSTEM_SETUP.md              # Manual setup reference
 ├── native_apps/                # C apps (games, launcher, tools)
 ├── browser_games/               # HTML5 games + LED control
 ├── scummvm-roomwizard/          # ScummVM backend
@@ -77,6 +77,7 @@ roomwizard/
 |-------|--------|------|
 | **SD card setup** | `commission-roomwizard.sh` | Once (offline) |
 | **System setup** | `setup-device.sh` | Once (SSH) |
+| **Deploy all** | `deploy-all.sh` | After setup (builds + deploys everything) |
 | **Bloatware cleanup** | `disable-steelcase.sh` | On setup + every boot |
 | **App launcher** | `roomwizard-app-init.sh` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
 | **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy + app manifests) |

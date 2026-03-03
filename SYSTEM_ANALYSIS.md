@@ -816,4 +816,4 @@ See [`native_apps/README.md#system-optimization`](native_apps/README.md#system-o
 
 - [Native Apps](native_apps/README.md)
 - [ScummVM Backend](scummvm-roomwizard/README.md)
-- [System Setup](SYSTEM_SETUP.md)
+- [Commissioning](COMMISSIONING.md)

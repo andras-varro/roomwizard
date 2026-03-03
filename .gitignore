@@ -519,3 +519,5 @@ native_apps/build/icons/pong.ppm
 native_apps/build/icons/snake.ppm
 native_apps/build/icons/tetris.ppm
 native_apps/build/icons/unified_calibrate.ppm
+native_apps/build/brick_breaker
+native_apps/build/icons/brick_breaker.ppm

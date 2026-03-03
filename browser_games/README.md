@@ -593,7 +593,7 @@ If anything goes wrong:
 
 - [System Analysis](SYSTEM_ANALYSIS.md) - Hardware and firmware analysis
 - [Native Games Guide](NATIVE_GAMES_GUIDE.md) - Native C games development
-- [System Setup](SYSTEM_SETUP.md) - SSH access and system configuration
+- [Commissioning](COMMISSIONING.md) - Device setup and commissioning
 - [Project Status](PROJECT_STATUS.md) - Current development status
 
 ---
