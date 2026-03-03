@@ -10,6 +10,7 @@ COMMON_DIR = common
 SNAKE_DIR = snake
 TETRIS_DIR = tetris
 PONG_DIR = pong
+BRICK_DIR = brick_breaker
 BUILD_DIR = build
 
 # Common source files
@@ -17,7 +18,7 @@ COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DI
 COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o
 
 # Targets
-GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong
+GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate
 
@@ -65,6 +66,11 @@ $(BUILD_DIR)/tetris: $(TETRIS_DIR)/tetris.c $(COMMON_OBJ)
 $(BUILD_DIR)/pong: $(PONG_DIR)/pong.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: pong"
+
+# Brick Breaker game
+$(BUILD_DIR)/brick_breaker: $(BRICK_DIR)/brick_breaker.c $(COMMON_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: brick_breaker"
 
 # Game selector
 $(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ)
