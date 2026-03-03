@@ -312,6 +312,71 @@ void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t colo
     }
 }
 
+/* ── Line drawing (Bresenham) ─────────────────────────────────────────── */
+void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t color) {
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        fb_draw_pixel(fb, x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* ── Thick line ──────────────────────────────────────────────────────── */
+void fb_draw_thick_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                        int thickness, uint32_t color) {
+    int half = thickness / 2;
+    for (int d = -half; d <= half; d++) {
+        int dx = abs(x1 - x0), dy = abs(y1 - y0);
+        if (dx >= dy) {
+            fb_draw_line(fb, x0, y0 + d, x1, y1 + d, color);
+        } else {
+            fb_draw_line(fb, x0 + d, y0, x1 + d, y1, color);
+        }
+    }
+}
+
+/* ── Alpha-blended pixel ─────────────────────────────────────────────── */
+void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t alpha) {
+    if (x < 0 || x >= (int)fb->width || y < 0 || y >= (int)fb->height) return;
+    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+    uint32_t dst = target[y * fb->width + x];
+    uint32_t sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+    uint32_t dr = (dst   >> 16) & 0xFF, dg = (dst   >> 8) & 0xFF, db = dst   & 0xFF;
+    uint32_t a = alpha, ia = 255 - alpha;
+    uint32_t r = (sr * a + dr * ia) / 255;
+    uint32_t g = (sg * a + dg * ia) / 255;
+    uint32_t b = (sb * a + db * ia) / 255;
+    target[y * fb->width + x] = (r << 16) | (g << 8) | b;
+}
+
+/* ── Alpha-blended filled rect ───────────────────────────────────────── */
+void fb_fill_rect_alpha(Framebuffer *fb, int x, int y, int w, int h,
+                        uint32_t color, uint8_t alpha) {
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            fb_draw_pixel_alpha(fb, x + i, y + j, color, alpha);
+}
+
+/* ── Vertical gradient filled rect ───────────────────────────────────── */
+void fb_fill_rect_gradient(Framebuffer *fb, int x, int y, int w, int h,
+                           uint32_t top_color, uint32_t bottom_color) {
+    uint32_t tr = (top_color >> 16) & 0xFF, tg = (top_color >> 8) & 0xFF, tb = top_color & 0xFF;
+    uint32_t br = (bottom_color >> 16) & 0xFF, bg = (bottom_color >> 8) & 0xFF, bb = bottom_color & 0xFF;
+    for (int j = 0; j < h; j++) {
+        uint32_t r = tr + (br - tr) * j / (h > 1 ? h - 1 : 1);
+        uint32_t g = tg + (bg - tg) * j / (h > 1 ? h - 1 : 1);
+        uint32_t b = tb + (bb - tb) * j / (h > 1 ? h - 1 : 1);
+        uint32_t c = (r << 16) | (g << 8) | b;
+        for (int i = 0; i < w; i++)
+            fb_draw_pixel(fb, x + i, y + j, c);
+    }
+}
+
 void fb_fade_out(Framebuffer *fb) {
     // Fade out backlight smoothly, then clear screen
     #include "../common/hardware.h"

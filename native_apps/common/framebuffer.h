@@ -68,6 +68,24 @@ void fb_fill_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, ui
 // Draw rounded rectangle outline (r = corner radius)
 void fb_draw_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color);
 
+// Draw a line between two points (Bresenham's algorithm)
+void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t color);
+
+// Draw a filled rectangle with a vertical gradient (top_color → bottom_color)
+void fb_fill_rect_gradient(Framebuffer *fb, int x, int y, int w, int h,
+                           uint32_t top_color, uint32_t bottom_color);
+
+// Draw a pixel with alpha blending (alpha 0-255, 255 = opaque)
+void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t alpha);
+
+// Draw a filled rectangle with alpha blending
+void fb_fill_rect_alpha(Framebuffer *fb, int x, int y, int w, int h,
+                        uint32_t color, uint8_t alpha);
+
+// Draw a thick line (thickness in pixels)
+void fb_draw_thick_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
+                        int thickness, uint32_t color);
+
 // Screen transition effects
 void fb_fade_out(Framebuffer *fb);
 void fb_fade_in(Framebuffer *fb);
