@@ -97,7 +97,7 @@ When stereo interleaved L/R samples hit a mono device, each sample is consumed a
 
 **Fix:** (1) Mono mixer — `MixerImpl(_outputRate, false, _samples)` + `SNDCTL_DSP_CHANNELS(1)`. (2) Set SPEED first, then FMT, then CHANNELS (so FMT/CH survive any reset from SPEED). (3) Read back actual device params with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and use the read-back rate for `_outputRate`. ScummVM's mixer handles stereo→mono downmix for DualOPL2/OPL3/iMUSE sources automatically.
 
-**Diagnostic:** [`native_games/tests/ch_test.c`](../native_games/tests/ch_test.c) — verifies channel ioctl behavior. On-device log shows read-back values: `OssMixerManager: read-back: rate=N bits=N channels=N`.
+**Diagnostic:** [`native_apps/tests/ch_test.c`](../native_apps/tests/ch_test.c) — verifies channel ioctl behavior. On-device log shows read-back values: `OssMixerManager: read-back: rate=N bits=N channels=N`.
 
 ---
 

@@ -109,13 +109,13 @@ ssh root@<device-ip>
 
 ## 5. Deploy Games and ScummVM
 
-Run from your dev machine (WSL or Linux). See [native_games/README.md](native_games/README.md)
+Run from your dev machine (WSL or Linux). See [native_apps/README.md](native_apps/README.md)
 and [scummvm-roomwizard/README.md](scummvm-roomwizard/README.md) for build prerequisites.
 
-### Native games (build + deploy in one step)
+### Native apps (build + deploy in one step)
 
 ```bash
-cd native_games
+cd native_apps
 ./build-and-deploy.sh <device-ip>            # build + deploy binaries + markers
 ./build-and-deploy.sh <device-ip> permanent  # + install boot service + reboot
 ```
@@ -174,7 +174,7 @@ Replaces the browser/X11 stack with the game selector on every boot.
 **Also installs the audio boot script** (`/etc/init.d/audio-enable`) that enables GPIO12 (speaker amp) and configures the TWL4030 mixer path — required for sound in ScummVM and native games. ScummVM applies 50% software volume attenuation to prevent speaker distortion.
 
 ```bash
-scp native_games/roomwizard-games-init.sh $DEVICE:/etc/init.d/roomwizard-games
+scp native_apps/roomwizard-games-init.sh $DEVICE:/etc/init.d/roomwizard-games
 ssh $DEVICE '
   chmod +x /etc/init.d/roomwizard-games
   update-rc.d browser remove

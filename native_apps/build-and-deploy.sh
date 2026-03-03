@@ -41,42 +41,56 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step "1/15" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step "2/15" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step "3/15" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step "4/15" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step "5/15" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step "6/15" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step "7/15" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 1/17" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/17" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/17" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 4/17" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step " 5/17" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/17" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 7/17" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 8/17" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o"
 
-step "8/15"  "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "9/15"  "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "10/15" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step " 9/17" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "10/17" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "11/17" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "11/15" "game_selector"
+step "12/17" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "12/15" "hardware_test"
+step "13/17" "app_launcher"
+$CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o -o build/app_launcher -lm
+
+step "14/17" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "13/15" "unified_calibrate"
+step "15/17" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "14/15" "audio_touch_test"
+step "16/17" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   common/audio.c common/touch_input.c common/framebuffer.c \
   common/hardware.c common/common.c \
   -o build/audio_touch_test -lm
 
-step "15/15" "backlight"
+step "17/17" "backlight"
 $CC -O2 -static -I. backlight/backlight.c build/hardware.o -o build/backlight
+
+# Collect icon files from source dirs → build/icons/
+mkdir -p build/icons
+ICON_COUNT=0
+for ppm in *//*.ppm; do
+    [ -f "$ppm" ] || continue
+    cp "$ppm" build/icons/
+    ICON_COUNT=$((ICON_COUNT + 1))
+done
+[ $ICON_COUNT -gt 0 ] && echo "  Collected $ICON_COUNT icon(s) → build/icons/"
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/game_selector build/hardware_test build/unified_calibrate build/audio_touch_test build/backlight \
+ls -lh build/snake build/tetris build/pong build/game_selector build/app_launcher build/hardware_test build/unified_calibrate build/audio_touch_test build/backlight \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -108,27 +122,53 @@ if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; th
     [[ "$confirm" != "y" ]] && exit 1
 fi
 
+# Stop running launcher (avoids "Text file busy" on scp)
+info "Stopping running launcher (if any)..."
+ssh "$DEVICE" bash <<'STOP'
+# Kill respawn wrapper first, then the app itself
+killall -9 respawn.sh   2>/dev/null || true
+killall -9 app_launcher 2>/dev/null || true
+rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
+# Brief pause to ensure file handles are released
+sleep 1
+STOP
+ok "Launcher stopped"
+
 # Ensure target directory exists
 info "Ensuring target directory exists..."
 ssh "$DEVICE" "mkdir -p $GAMES_DIR"
 ok "Target directory ready"
 
-# Upload binaries
-info "Uploading binaries → $GAMES_DIR/"
+# Upload game binaries
+info "Uploading game binaries → $GAMES_DIR/"
 scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
     build/unified_calibrate \
     build/audio_touch_test \
     build/backlight \
     "$DEVICE:$GAMES_DIR/"
-ok "Binaries uploaded"
+ok "Game binaries uploaded"
+
+# Upload app launcher
+info "Uploading app launcher → /opt/roomwizard/"
+scp build/app_launcher "$DEVICE:/opt/roomwizard/"
+ok "App launcher uploaded"
+
+# Upload icons (if any)
+if ls build/icons/*.ppm &>/dev/null; then
+    info "Uploading icons → /opt/roomwizard/icons/"
+    ssh "$DEVICE" "mkdir -p /opt/roomwizard/icons"
+    scp build/icons/*.ppm "$DEVICE:/opt/roomwizard/icons/"
+    ok "Icons uploaded ($(ls build/icons/*.ppm | wc -l) file(s))"
+fi
 
 # Set permissions + markers
 info "Setting permissions and markers..."
 ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/game_selector /opt/games/hardware_test \
-         /opt/games/unified_calibrate /opt/games/backlight
+         /opt/games/unified_calibrate /opt/games/backlight \
+         /opt/roomwizard/app_launcher
 
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
@@ -140,22 +180,68 @@ for name in touch_test touch_debug touch_inject touch_calibrate pressure_test ba
 done
 REMOTE
 ok "Permissions and markers set"
+
+# Deploy app manifests
+info "Installing app manifests..."
+ssh "$DEVICE" bash <<'REMOTE'
+mkdir -p /opt/roomwizard/apps
+
+cat > /opt/roomwizard/apps/snake.app << 'APP'
+name=Snake
+exec=/opt/games/snake
+icon=/opt/roomwizard/icons/snake.ppm
+args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/tetris.app << 'APP'
+name=Tetris
+exec=/opt/games/tetris
+icon=/opt/roomwizard/icons/tetris.ppm
+args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/pong.app << 'APP'
+name=Pong
+exec=/opt/games/pong
+icon=/opt/roomwizard/icons/pong.ppm
+args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/hardware_test.app << 'APP'
+name=Hardware Test
+exec=/opt/games/hardware_test
+icon=/opt/roomwizard/icons/hardware_test.ppm
+args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/calibrate.app << 'APP'
+name=Calibrate
+exec=/opt/games/unified_calibrate
+icon=/opt/roomwizard/icons/unified_calibrate.ppm
+args=fb,touch
+APP
+REMOTE
+ok "App manifests installed"
 echo ""
 
 # ── 4. set-default mode? ────────────────────────────────────────────────────
 if [[ "$MODE" == "set-default" ]]; then
-    info "Setting native games as default app..."
-    ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '$GAMES_DIR/game_selector' > /opt/roomwizard/default-app"
-    ok "Default app → $GAMES_DIR/game_selector"
-    echo ""
-    echo "  Reboot to start:  ssh $DEVICE reboot"
-    echo "  Or start now:     ssh $DEVICE '/etc/init.d/roomwizard-app restart'"
+    info "Setting app launcher as default app..."
+    ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '/opt/roomwizard/app_launcher' > /opt/roomwizard/default-app"
+    ok "Default app → /opt/roomwizard/app_launcher"
+fi
+
+# ── 5. restart launcher ─────────────────────────────────────────────────────
+# If the init service is installed, restart it (re-creates respawn wrapper).
+# Otherwise just tell the user how to start manually.
+if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
+    info "Restarting app launcher..."
+    ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
+    ok "Launcher running"
 else
-    echo "  Binaries deployed. To set as default boot app:"
-    echo "    ./build-and-deploy.sh $DEVICE_IP set-default"
     echo ""
-    echo "  To start game selector now (without reboot):"
-    echo "    ssh $DEVICE '$GAMES_DIR/game_selector'"
+    echo "  To start app launcher:"
+    echo "    ssh $DEVICE '/opt/roomwizard/app_launcher'"
 fi
 
 echo ""

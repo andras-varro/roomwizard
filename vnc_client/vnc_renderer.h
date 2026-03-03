@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/time.h>
-#include "../native_games/common/framebuffer.h"
+#include "../native_apps/common/framebuffer.h"
 #include "config.h"
 
 /* RGB565 helpers */

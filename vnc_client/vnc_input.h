@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <sys/time.h>
 #include <rfb/rfbclient.h>
-#include "../native_games/common/touch_input.h"
+#include "../native_apps/common/touch_input.h"
 
 // Forward declaration
 typedef struct VNCRenderer VNCRenderer;

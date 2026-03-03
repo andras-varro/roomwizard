@@ -15,7 +15,7 @@
  * Run on device:
  *   /opt/games/audio_touch_test /dev/fb0 /dev/input/touchscreen0
  *
- * Build (from native_games/):
+ * Build (from native_apps/):
  *   arm-linux-gnueabihf-gcc -O2 -static -I. \
  *     tests/audio_touch_test.c \
  *     common/audio.c common/touch_input.c common/framebuffer.c \

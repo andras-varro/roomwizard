@@ -152,7 +152,7 @@ RPi3 VNC Server (192.168.50.56:5901)
 | `build-deps.sh` | Downloads and builds zlib, libjpeg-turbo, LibVNCClient |
 | `rpi_setup.py` | RPi VNC server setup script |
 
-### Shared Libraries (from native_games)
+### Shared Libraries (from native_apps)
 
 - `framebuffer.c` — mmap'd double-buffered `/dev/fb0` access
 - `touch_input.c` — `/dev/input/event0` polling

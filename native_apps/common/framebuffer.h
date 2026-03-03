@@ -59,8 +59,14 @@ void fb_draw_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color)
 // Draw filled circle
 void fb_fill_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color);
 
-// Draw text (simple bitmap font)
+// Draw text (simple bitmap font — lowercase mapped to uppercase automatically)
 void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t color, int scale);
+
+// Draw filled rounded rectangle (r = corner radius)
+void fb_fill_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color);
+
+// Draw rounded rectangle outline (r = corner radius)
+void fb_draw_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color);
 
 // Screen transition effects
 void fb_fade_out(Framebuffer *fb);

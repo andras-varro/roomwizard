@@ -13,17 +13,17 @@ PONG_DIR = pong
 BUILD_DIR = build
 
 # Common source files
-COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c
-COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o
+COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c
+COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o
 
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong
-UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/watchdog_feeder
+UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate
 
-.PHONY: all clean install utils tests
+.PHONY: all clean install utils tests icons
 
-all: $(BUILD_DIR) $(GAMES) $(UTILS)
+all: $(BUILD_DIR) $(GAMES) $(UTILS) icons
 
 utils: $(BUILD_DIR) $(UTILS)
 
@@ -45,6 +45,9 @@ $(BUILD_DIR)/hardware.o: $(COMMON_DIR)/hardware.c $(COMMON_DIR)/hardware.h
 $(BUILD_DIR)/common.o: $(COMMON_DIR)/common.c $(COMMON_DIR)/common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/ppm.o: $(COMMON_DIR)/ppm.c $(COMMON_DIR)/ppm.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Snake game
 $(BUILD_DIR)/snake: $(SNAKE_DIR)/snake.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
@@ -64,6 +67,11 @@ $(BUILD_DIR)/pong: $(PONG_DIR)/pong.c $(COMMON_OBJ)
 $(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: game_selector"
+
+# App launcher
+$(BUILD_DIR)/app_launcher: app_launcher/app_launcher.c $(COMMON_OBJ)
+	$(CC) $(CFLAGS) -I. $^ -o $@ $(LDFLAGS)
+	@echo "Built: app_launcher"
 
 # Watchdog feeder
 $(BUILD_DIR)/watchdog_feeder: watchdog_feeder.c
@@ -115,6 +123,11 @@ install: all
 	@echo ""
 	@echo "To start game mode now:"
 	@echo "  /etc/init.d/game-mode start"
+
+# Collect PPM icons from source dirs
+icons: $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)/icons
+	@for f in */*.ppm; do [ -f "$$f" ] && cp "$$f" $(BUILD_DIR)/icons/ && echo "  Icon: $$f"; done || true
 
 clean:
 	rm -rf $(BUILD_DIR)

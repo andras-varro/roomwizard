@@ -22,6 +22,9 @@
 
 set -e  # Exit on error
 
+# Capture script directory before any cd
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ── Argument parsing ────────────────────────────────────────────────────────
 # Detect whether $1 is an IP address or a command.
 # If it looks like an IP, treat as: <ip> [command]
@@ -38,7 +41,7 @@ fi
 DEVICE_USER="root"
 DEVICE_PATH="/opt/games"
 SCUMMVM_DIR="../scummvm"
-NATIVE_GAMES_DIR="../native_games"
+NATIVE_APPS_DIR="../native_apps"
 
 # Colors for output
 RED='\033[0;31m'
@@ -107,9 +110,9 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Check native_games directory (for common libraries)
-    if [ ! -d "$NATIVE_GAMES_DIR/common" ]; then
-        log_error "Native games common directory not found: $NATIVE_GAMES_DIR/common"
+    # Check native_apps directory (for common libraries)
+    if [ ! -d "$NATIVE_APPS_DIR/common" ]; then
+        log_error "Native apps common directory not found: $NATIVE_APPS_DIR/common"
         exit 1
     fi
     
@@ -127,8 +130,8 @@ clean_build() {
         make clean || true
     fi
     
-    # Remove object files from native_games/common
-    rm -f "$NATIVE_GAMES_DIR/common/"*.o
+    # Remove object files from native_apps/common
+    rm -f "$NATIVE_APPS_DIR/common/"*.o
     
     # Remove config files
     rm -f config.mk config.h
@@ -283,6 +286,16 @@ deploy_to_device() {
     # Ensure target directory exists
     ssh "$DEVICE" "mkdir -p $DEVICE_PATH"
     
+    # Stop running launcher/respawn (avoids "Text file busy")
+    log_info "Stopping running launcher (if any)..."
+    ssh "$DEVICE" bash <<'STOP'
+killall -9 respawn.sh   2>/dev/null || true
+killall -9 app_launcher 2>/dev/null || true
+killall -9 scummvm      2>/dev/null || true
+rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
+sleep 1
+STOP
+    
     # Copy binary to device
     log_info "Copying binary to device..."
     scp scummvm "$DEVICE:$DEVICE_PATH/"
@@ -296,7 +309,31 @@ deploy_to_device() {
     REMOTE_SIZE=$(ssh "$DEVICE" "du -h $DEVICE_PATH/scummvm | cut -f1")
     
     log_success "Deployment complete - Remote size: $REMOTE_SIZE"
+
+    # Install app manifest (for app launcher)
+    log_info "Installing app manifest and icon..."
+    ssh "$DEVICE" "mkdir -p /opt/roomwizard/apps /opt/roomwizard/icons"
+    # Upload icon from scummvm-roomwizard/ dir (not from the scummvm build dir)
+    if [ -f "$SCRIPT_DIR/scummvm.ppm" ]; then
+        scp "$SCRIPT_DIR/scummvm.ppm" "$DEVICE:/opt/roomwizard/icons/scummvm.ppm"
+    fi
+    ssh "$DEVICE" bash <<'REMOTE'
+cat > /opt/roomwizard/apps/scummvm.app << 'APP'
+name=ScummVM
+exec=/opt/games/scummvm
+icon=/opt/roomwizard/icons/scummvm.ppm
+args=none
+APP
+REMOTE
+    log_success "App manifest installed"
     log_info "Run on device: ssh $DEVICE '$DEVICE_PATH/scummvm'"
+
+    # Restart launcher (picks up updated manifest/icon)
+    if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
+        log_info "Restarting launcher..."
+        ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
+        log_success "Launcher running"
+    fi
 }
 
 # Set ScummVM as default boot app
@@ -318,8 +355,12 @@ set_default_app() {
     
     log_success "Default app → $DEVICE_PATH/scummvm"
     echo ""
-    echo "  Reboot to start:  ssh $DEVICE reboot"
-    echo "  Or start now:     ssh $DEVICE '/etc/init.d/roomwizard-app restart'"
+    # Restart launcher
+    if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
+        log_info "Restarting launcher..."
+        ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
+        log_success "Launcher running"
+    fi
 }
 
 # Show build info
@@ -330,7 +371,7 @@ show_info() {
     echo "  Device IP:      $DEVICE_IP"
     echo "  Device Path:    $DEVICE_PATH"
     echo "  ScummVM Dir:    $SCUMMVM_DIR"
-    echo "  Native Games:   $NATIVE_GAMES_DIR"
+    echo "  Native Apps:    $NATIVE_APPS_DIR"
     echo ""
     echo "Engines Enabled:"
     echo "  - SCUMM (v0-v6): Monkey Island, Day of the Tentacle, etc."

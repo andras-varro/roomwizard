@@ -5,7 +5,6 @@
 #   ./build-and-deploy.sh                        # build only
 #   ./build-and-deploy.sh <ip>                   # build + deploy
 #   ./build-and-deploy.sh <ip> run               # build + deploy + run
-#   ./build-and-deploy.sh <ip> run --kill        # kill running client, then build + deploy + run
 #   ./build-and-deploy.sh <ip> set-default       # build + deploy + set as default boot app
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
@@ -82,12 +81,16 @@ ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
     || err "Cannot reach $DEVICE — check IP and SSH key"
 ok "SSH OK"
 
-# Kill running client if requested or if deploying (binary will be busy)
-if [[ "$KILL_FIRST" == "--kill" ]] || [[ "$MODE" == "run" ]]; then
-    info "Stopping running VNC client (if any)..."
-    ssh "$DEVICE" 'killall vnc_client 2>/dev/null || true; sleep 1'
-    ok "Stopped"
-fi
+# Stop running launcher/respawn (avoids "Text file busy")
+info "Stopping running launcher and VNC client (if any)..."
+ssh "$DEVICE" bash <<'STOP'
+killall -9 respawn.sh   2>/dev/null || true
+killall -9 app_launcher 2>/dev/null || true
+killall -9 vnc_client   2>/dev/null || true
+rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
+sleep 1
+STOP
+ok "Stopped"
 
 # Ensure target directory exists
 info "Creating $REMOTE_DIR on device..."
@@ -109,9 +112,25 @@ else
     warn "To force-overwrite: scp vnc_client.conf $DEVICE:$REMOTE_DIR/vnc_client.conf"
 fi
 
+# Install app manifest (for app launcher)
+info "Installing app manifest and icon..."
+ssh "$DEVICE" "mkdir -p /opt/roomwizard/apps /opt/roomwizard/icons"
+if [ -f vnc_client.ppm ]; then
+    scp vnc_client.ppm "$DEVICE:/opt/roomwizard/icons/vnc_client.ppm"
+fi
+ssh "$DEVICE" bash <<'REMOTE'
+cat > /opt/roomwizard/apps/vnc_client.app << 'APP'
+name=VNC Client
+exec=/opt/vnc_client/vnc_client
+icon=/opt/roomwizard/icons/vnc_client.ppm
+args=none
+APP
+REMOTE
+ok "App manifest installed"
+
 echo ""
 
-# ── 5. run / set-default? ─────────────────────────────────────────────────────
+# ── 5. run / set-default / restart? ───────────────────────────────────────────
 if [[ "$MODE" == "run" ]]; then
     echo "════════════════════════════════════════"
     echo " Starting VNC Client"
@@ -124,21 +143,22 @@ elif [[ "$MODE" == "set-default" ]]; then
     info "Setting VNC client as default app..."
     ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '$REMOTE_DIR/vnc_client' > /opt/roomwizard/default-app"
     ok "Default app → $REMOTE_DIR/vnc_client"
-    echo ""
-    echo "  Reboot to start:  ssh $DEVICE reboot"
-    echo "  Or start now:     ssh $DEVICE '/etc/init.d/roomwizard-app restart'"
+    # Restart init service
+    if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
+        info "Restarting launcher..."
+        ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
+        ok "Launcher running"
+    fi
 else
-    echo "  Deployed. To run interactively:"
-    echo "    ssh $DEVICE '$REMOTE_DIR/vnc_client'"
-    echo ""
-    echo "  To build, deploy, and run in one step:"
-    echo "    ./build-and-deploy.sh $DEVICE_IP run"
-    echo ""
-    echo "  To kill a running client first:"
-    echo "    ./build-and-deploy.sh $DEVICE_IP run --kill"
-    echo ""
-    echo "  To set as default boot app:"
-    echo "    ./build-and-deploy.sh $DEVICE_IP set-default"
+    # Restart init service (launcher will pick up updated manifest)
+    if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
+        info "Restarting launcher..."
+        ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
+        ok "Launcher running"
+    else
+        echo "  Deployed. To run interactively:"
+        echo "    ssh $DEVICE '$REMOTE_DIR/vnc_client'"
+    fi
 fi
 
 echo ""

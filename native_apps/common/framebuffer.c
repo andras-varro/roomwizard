@@ -228,12 +228,64 @@ void fb_fill_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color)
     }
 }
 
+// Draw filled rounded rectangle
+void fb_fill_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color) {
+    if (r < 0) r = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    // Central rectangle
+    fb_fill_rect(fb, x + r, y, w - 2 * r, h, color);
+    // Left and right rectangles
+    fb_fill_rect(fb, x, y + r, r, h - 2 * r, color);
+    fb_fill_rect(fb, x + w - r, y + r, r, h - 2 * r, color);
+    // Four corner circles
+    fb_fill_circle(fb, x + r,     y + r,     r, color);
+    fb_fill_circle(fb, x + w - r - 1, y + r,     r, color);
+    fb_fill_circle(fb, x + r,     y + h - r - 1, r, color);
+    fb_fill_circle(fb, x + w - r - 1, y + h - r - 1, r, color);
+}
+
+// Draw rounded rectangle outline
+void fb_draw_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color) {
+    if (r < 0) r = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    // Top and bottom edges
+    for (int i = r; i < w - r; i++) {
+        fb_draw_pixel(fb, x + i, y, color);
+        fb_draw_pixel(fb, x + i, y + h - 1, color);
+    }
+    // Left and right edges
+    for (int i = r; i < h - r; i++) {
+        fb_draw_pixel(fb, x, y + i, color);
+        fb_draw_pixel(fb, x + w - 1, y + i, color);
+    }
+    // Four corner arcs (Bresenham circle)
+    int cx, cy, err;
+    cx = r; cy = 0; err = 0;
+    while (cx >= cy) {
+        fb_draw_pixel(fb, x + r - cx,     y + r - cy,     color); // TL
+        fb_draw_pixel(fb, x + r - cy,     y + r - cx,     color);
+        fb_draw_pixel(fb, x + w-1-r + cx, y + r - cy,     color); // TR
+        fb_draw_pixel(fb, x + w-1-r + cy, y + r - cx,     color);
+        fb_draw_pixel(fb, x + r - cx,     y + h-1-r + cy, color); // BL
+        fb_draw_pixel(fb, x + r - cy,     y + h-1-r + cx, color);
+        fb_draw_pixel(fb, x + w-1-r + cx, y + h-1-r + cy, color); // BR
+        fb_draw_pixel(fb, x + w-1-r + cy, y + h-1-r + cx, color);
+        if (err <= 0) { cy++; err += 2*cy + 1; }
+        if (err > 0)  { cx--; err -= 2*cx + 1; }
+    }
+}
+
 void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t color, int scale) {
     int offset_x = 0;
     
     while (*text) {
         char c = *text;
         int idx = -1;
+        
+        // Map lowercase to uppercase (font only has ' ' through 'Z')
+        if (c >= 'a' && c <= 'z') c -= 32;
         
         if (c >= ' ' && c <= 'Z') {
             idx = c - ' ';

@@ -452,7 +452,7 @@ void vnc_renderer_cleanup(VNCRenderer *renderer) {
     DEBUG_PRINT("Renderer cleanup");
 
 #if USE_16BPP
-    /* Restore 32bpp for native_games / game_selector on exit */
+    /* Restore 32bpp for native_apps / app_launcher on exit */
     fb_set_bpp(FB_DEVICE, 32);
     DEBUG_PRINT("Restored 32bpp framebuffer");
 #endif

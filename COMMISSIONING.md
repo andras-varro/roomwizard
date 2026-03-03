@@ -74,7 +74,7 @@ After both commissioning phases, deploy a project and set it as the default boot
 
 ### Native Games
 ```bash
-cd native_games
+cd native_apps
 ./build-and-deploy.sh <ip> set-default    # build + deploy + set as boot app
 ```
 
@@ -115,7 +115,7 @@ commission-roomwizard.sh         Phase 1: SD card (offline)
 setup-device.sh                  Phase 2: SSH one-time setup
 disable-steelcase.sh             Shared: disable bloatware (idempotent)
 roomwizard-app-init.sh           Generic init: starts /opt/roomwizard/default-app
-native_games/build-and-deploy.sh Build + deploy games (no system setup)
+native_apps/build-and-deploy.sh  Build + deploy apps (no system setup)
 vnc_client/build-and-deploy.sh   Build + deploy VNC client (no system setup)
 ```
 
@@ -173,5 +173,5 @@ Phase 2 backs up the original crontab:
 
 - [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) — Hardware specs, watchdog details, cron job tables
 - [SYSTEM_SETUP.md](SYSTEM_SETUP.md) — Manual setup guide (reference)
-- [native_games/README.md](native_games/README.md) — Game development docs
+- [native_apps/README.md](native_apps/README.md) — Native apps development docs
 - [vnc_client/README.md](vnc_client/README.md) — VNC client docs

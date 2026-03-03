@@ -10,7 +10,7 @@
 - **[System Setup](SYSTEM_SETUP.md)** — Manual setup reference
 
 ### Projects
-- **[Native Games](native_games/)** — High-performance C games with direct framebuffer rendering
+- **[Native Apps](native_apps/)** — High-performance C apps with direct framebuffer rendering
 - **[Browser Games](browser_games/)** — HTML5 games with LED control
 - **[ScummVM Backend](scummvm-roomwizard/)** — Classic adventure games port
 - **[VNC Client](vnc_client/)** — Remote desktop viewer for Raspberry Pi displays
@@ -37,7 +37,7 @@
 ### 2. Deploy a project
 ```bash
 # Native Games
-cd native_games
+cd native_apps
 ./build-and-deploy.sh <ip> set-default
 
 # VNC Client
@@ -65,7 +65,7 @@ roomwizard/
 ├── COMMISSIONING.md             # Commissioning workflow
 ├── SYSTEM_ANALYSIS.md           # Hardware analysis
 ├── SYSTEM_SETUP.md              # Manual setup reference
-├── native_games/                # C games (Snake, Tetris, Pong)
+├── native_apps/                # C apps (games, launcher, tools)
 ├── browser_games/               # HTML5 games + LED control
 ├── scummvm-roomwizard/          # ScummVM backend
 └── vnc_client/                  # VNC remote desktop viewer
@@ -78,17 +78,22 @@ roomwizard/
 | **SD card setup** | `commission-roomwizard.sh` | Once (offline) |
 | **System setup** | `setup-device.sh` | Once (SSH) |
 | **Bloatware cleanup** | `disable-steelcase.sh` | On setup + every boot |
-| **App launcher** | `roomwizard-app-init.sh` | Every boot (reads `/opt/roomwizard/default-app`) |
-| **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy only) |
+| **App launcher** | `roomwizard-app-init.sh` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
+| **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy + app manifests) |
 
-Each project's `build-and-deploy.sh` handles only building and deploying that project's binaries.
+Each project's `build-and-deploy.sh` handles building, deploying binaries, and installing
+`.app` manifests to `/opt/roomwizard/apps/` for the visual launcher.
 System setup is done once by `setup-device.sh` — no duplication across projects.
 
 ## Projects
 
-1. **Native Games** — Direct framebuffer C games (Snake, Tetris, Pong, Game Selector)
+1. **Native Apps** — Direct framebuffer C apps (Snake, Tetris, Pong, App Launcher, Hardware Test)
 2. **Browser Games** — HTML5 brick breaker with LED feedback
 3. **ScummVM** — Custom backend for classic point-and-click adventures (OPL/AdLib music, touch controls, virtual keyboard)
 4. **VNC Client** — Lightweight VNC viewer for Raspberry Pi remote desktop (weather/clock) with touch pass-through (~5% CPU, bilinear scaling)
+
+The **App Launcher** is a visual grid shell deployed by `native_apps/build-and-deploy.sh`.
+It scans manifest files from all projects and displays them as touch-friendly icon tiles.
+The init script respawns it automatically when an app exits.
 
 For hardware specs, see **[Hardware Platform](SYSTEM_ANALYSIS.md#hardware-platform)** in System Analysis.

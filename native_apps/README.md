@@ -1,52 +1,76 @@
-# Native Games for RoomWizard
+# Native Apps for RoomWizard
 
-Native C games and tools for the Steelcase RoomWizard (300MHz ARMv7, 800×480 framebuffer). Direct framebuffer rendering — no browser, no overhead.
+Native C apps and tools for the Steelcase RoomWizard (600MHz ARMv7, 800×480 framebuffer). Direct framebuffer rendering — no browser, no overhead.
 
 See [PROJECT.md](PROJECT.md) for architecture and development status.
 
 ## Table of Contents
 
-1. [Games & Tools](#games--tools)
+1. [Apps & Tools](#apps--tools)
 2. [Build & Deploy](#build--deploy-cross-compile-from-wsl)
-3. [System Optimization](#system-optimization)
-4. [Permanent Game Mode](#permanent-game-mode-boot)
-5. [Game Selector Markers](#game-selector-markers)
-6. [Resources](#resources)
+3. [App Launcher](#app-launcher)
+4. [App Manifests](#app-manifests)
+5. [System Optimization](#system-optimization)
+6. [Permanent App Mode](#permanent-app-mode-boot)
+7. [Resources](#resources)
 
 ---
 
-## Games & Tools
+## Apps & Tools
 
 | Binary | Type | Controls / Notes |
 |---|---|---|
 | `snake` | Game | Tap direction to steer |
 | `tetris` | Game | Tap left/right to move, center to rotate, bottom to drop |
 | `pong` | Game | Touch-drag to move paddle |
-| `hardware_test` | Tool | Diagnostics; visible in game selector |
-| `game_selector` | Launcher | Main menu — auto-starts on boot |
-| `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s; hidden from menu |
-| `unified_calibrate` | Tool | Touch + bezel calibration; hidden from menu |
+| `app_launcher` | Launcher | Visual grid launcher — auto-starts on boot, respawns |
+| `game_selector` | Launcher | Legacy text menu (superseded by app_launcher) |
+| `hardware_test` | Tool | Diagnostics |
+| `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s |
+| `unified_calibrate` | Tool | Touch + bezel calibration |
 
 ## Build & Deploy (cross-compile from WSL)
 
 ```bash
-cd native_games
+cd native_apps
 
 # Build only
 ./build-and-deploy.sh
 
-# Build + deploy binaries
-./build-and-deploy.sh 192.168.50.73
+# Build + deploy binaries + manifests
+./build-and-deploy.sh 192.168.50.53
 
-# Build + deploy + install boot service + cleanup + reboot
-./build-and-deploy.sh 192.168.50.73 permanent --remove
-
-# Cleanup services only (no build/deploy)
-./build-and-deploy.sh 192.168.50.73 cleanup
-
-# Cleanup services + remove bloatware files
-./build-and-deploy.sh 192.168.50.73 cleanup --remove
+# Build + deploy + set app launcher as default boot app
+./build-and-deploy.sh 192.168.50.53 set-default
 ```
+
+## App Launcher
+
+The `app_launcher` provides a visual grid interface for launching apps:
+
+- Scans `/opt/roomwizard/apps/*.app` manifest files
+- Displays apps as coloured icon tiles in a 3×2 grid
+- Supports PPM icons or auto-generated letter tiles
+- Touch tile to launch, edge touch for pagination
+- Re-scans manifests after each app exits (picks up new deployments)
+- Respawns automatically via the init script if it crashes
+
+## App Manifests
+
+Each app is registered via a `.app` manifest in `/opt/roomwizard/apps/`:
+
+```ini
+name=Snake
+exec=/opt/games/snake
+icon=/opt/roomwizard/icons/snake.ppm
+args=fb,touch
+```
+
+Fields:
+- `name` — Display name (required)
+- `exec` — Absolute path to executable (required)
+- `icon` — Path to PPM P6 icon file (optional, auto letter-tile if absent)
+- `args` — Argument mode: `fb,touch` (default), `fb`, `touch`, or `none`
 
 The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
 

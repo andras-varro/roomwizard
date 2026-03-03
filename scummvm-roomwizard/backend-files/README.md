@@ -74,8 +74,8 @@ make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 
 The backend links against the RoomWizard native libraries:
 
-- `native_games/common/framebuffer.c` - Framebuffer management
-- `native_games/common/touch_input.c` - Touch input handling
+- `native_apps/common/framebuffer.c` - Framebuffer management
+- `native_apps/common/touch_input.c` - Touch input handling
 
 ## Architecture
 

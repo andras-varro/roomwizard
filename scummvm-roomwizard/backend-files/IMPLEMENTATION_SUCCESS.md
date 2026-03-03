@@ -222,8 +222,8 @@ Features compiled in: SEQ TiMidity ENet
 
 ### Source Code
 - [`backends/platform/roomwizard/`](backends/platform/roomwizard/) - Backend implementation
-- [`native_games/common/framebuffer.c`](../native_games/common/framebuffer.c) - Framebuffer library
-- [`native_games/common/touch_input.c`](../native_games/common/touch_input.c) - Touch input library
+- [`native_apps/common/framebuffer.c`](../native_apps/common/framebuffer.c) - Framebuffer library
+- [`native_apps/common/touch_input.c`](../native_apps/common/touch_input.c) - Touch input library
 
 ### External Resources
 - [ScummVM Wiki - Porting](https://wiki.scummvm.org/index.php/Compiling_ScummVM/Porting)

@@ -25,9 +25,9 @@
 #include "config.h"
 #include "vnc_renderer.h"
 #include "vnc_input.h"
-#include "../native_games/common/framebuffer.h"
-#include "../native_games/common/touch_input.h"
-#include "../native_games/common/hardware.h"
+#include "../native_apps/common/framebuffer.h"
+#include "../native_apps/common/touch_input.h"
+#include "../native_apps/common/hardware.h"
 
 /* ── Runtime configuration ─────────────────────────────────────────── */
 

@@ -8,7 +8,7 @@ AR = $(CROSS_COMPILE)ar
 STRIP = $(CROSS_COMPILE)strip
 
 # Project directories
-COMMON_DIR = ../native_games/common
+COMMON_DIR = ../native_apps/common
 BUILD_DIR = build
 DEPS_DIR = deps
 

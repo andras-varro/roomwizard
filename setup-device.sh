@@ -26,7 +26,7 @@
 #   8. Reboots device
 #
 # After this, deploy a project and set it as the default app:
-#   cd native_games && ./build-and-deploy.sh <ip> set-default
+#   cd native_apps && ./build-and-deploy.sh <ip> set-default
 #   cd vnc_client   && ./build-and-deploy.sh <ip> set-default
 
 set -e
@@ -276,6 +276,6 @@ echo ""
 echo "  System setup complete! Wait ~30 s then: ssh root@$DEVICE_IP"
 echo ""
 echo "  Next steps — deploy a project and set it as the default app:"
-echo "    cd native_games && ./build-and-deploy.sh $DEVICE_IP set-default"
+echo "    cd native_apps && ./build-and-deploy.sh $DEVICE_IP set-default"
 echo "    cd vnc_client   && ./build-and-deploy.sh $DEVICE_IP set-default"
 echo ""

@@ -118,7 +118,7 @@ graph TB
 **Screen Safe Area:**
 - Applications should keep interactive elements within the visible area
 - Use margins of at least 40px from framebuffer edges
-- See [`native_games/common/common.h`](native_games/common/common.h) for `LAYOUT_*` macros implementing safe area
+- See [`native_apps/common/common.h`](native_apps/common/common.h) for `LAYOUT_*` macros implementing safe area
 
 ### Input
 
@@ -143,7 +143,7 @@ screen_y = (raw_y * 480) / 4095;
 3. `BTN_TOUCH` - Press/release event
 4. `SYN_REPORT` - Event synchronization
 
-**Important:** Coordinates must be captured BEFORE the press event. See [`native_games/common/touch_input.c`](native_games/common/touch_input.c) for reference implementation.
+**Important:** Coordinates must be captured BEFORE the press event. See [`native_apps/common/touch_input.c`](native_apps/common/touch_input.c) for reference implementation.
 
 **Touch Accuracy:**
 - Center: ~3px accuracy
@@ -166,7 +166,7 @@ screen_y = (raw_y * 480) / 4095;
 - **Native rate:** 48000 Hz (TWL4030 HiFi); OSS shim SRCs from app rate automatically
 - **App rates:** ScummVM uses 22050 Hz (halves OPL synthesis CPU load); native games use 44100 Hz
 - **Channels:** Stereo out (mono speaker physically; both channels drive the same SPKR1 via HandsfreeL/R bridge)
-- **Volume note:** The small PCB speaker distorts at full-scale DAC output. ScummVM applies 50% (−6 dB) software attenuation post-mix. Native games should do the same.
+- **Volume note:** The small PCB speaker distorts at full-scale DAC output. ScummVM applies 50% (−6 dB) software attenuation post-mix. Native apps should do the same.
 - **ALSA HW period:** ~22,317 frames / **~506 ms** at 44100 Hz — see OSS usage note below
 
 **Working mixer signal path:**
@@ -195,14 +195,14 @@ ALSA DAC volumes are persisted via `alsactl store` → `/var/lib/alsa/asound.sta
 **⚠ Critical OSS usage notes:**
 
 1. **ALSA HW period stall:** The TWL4030 ALSA driver has a hardware period of ~22,317 frames (~506 ms). A blocking `write()` to `/dev/dsp` stalls for the full ALSA HW period after the OSS ring fills — not the OSS fragment duration (~93 ms). This causes 185 ms of audio followed by 321 ms of silence, repeating ("bru-bru-bru-KLICK" artifact). **Always open `/dev/dsp` with `O_NONBLOCK`** and handle `EAGAIN` with a short sleep (~5 ms). The OSS software ring drains at the hardware sample rate continuously regardless of the ALSA period size.  
-Diagnosed via `native_games/tests/oss_diag.c`.
+Diagnosed via `native_apps/tests/oss_diag.c`.
 
 2. **Speaker distortion:** The small PCB speaker distorts at full DAC output. Apply software volume attenuation (e.g. 50% via `>>1` on int16 samples) before writing to `/dev/dsp`.
 
 3. **32-bit overflow with timeval:** On 32-bit ARM (`sizeof(long) == 4`), never compute `(now.tv_sec - epoch_0) * 1000000L` — the multiplication overflows. Always initialize timing baselines to the current time, not epoch zero.
 
 4. **ALSA OSS shim ioctl bugs (Linux 4.14.52, TWL4030):** The ALSA OSS compatibility layer has known bugs that silently corrupt audio configuration:
-   - **`SNDCTL_DSP_STEREO` silently ignored:** Returns `rc=0, stereo=1` (success) but the device stays mono. Verified with `native_games/tests/ch_test.c`.
+   - **`SNDCTL_DSP_STEREO` silently ignored:** Returns `rc=0, stereo=1` (success) but the device stays mono. Verified with `native_apps/tests/ch_test.c`.
    - **`SNDCTL_DSP_SPEED` may reset format and/or channels** after they've been set.
    - **`SNDCTL_DSP_SETFMT` may reset speed** after it's been set.
    - **Set-ioctl output values may be unreliable:** The value written back to the variable may not reflect the actual device state.
@@ -366,7 +366,7 @@ echo 100 > /sys/class/leds/green_led/brightness
 echo 0 > /sys/class/leds/backlight/brightness
 ```
 
-See [`native_games/common/hardware.c`](native_games/common/hardware.c) for C implementation.
+See [`native_apps/common/hardware.c`](native_apps/common/hardware.c) for C implementation.
 
 ### Touchscreen Input
 
@@ -386,7 +386,7 @@ Hardware → Kernel evdev → libinput → X11/Xorg → WebKit browser
 - Config: `/etc/pointercal.xinput`
 - Auto-calibration: `/usr/bin/xinput_calibrator_once.sh`
 
-See [`native_games/common/touch_input.c`](native_games/common/touch_input.c) for C implementation.
+See [`native_apps/common/touch_input.c`](native_apps/common/touch_input.c) for C implementation.
 
 ### Display/Framebuffer
 
@@ -728,7 +728,7 @@ When running in game mode (native games, not browser), disable unnecessary servi
 
 ```bash
 # Quick fix (existing deployment)
-cd native_games
+cd native_apps
 ./build-and-deploy.sh 192.168.50.73 cleanup
 
 # Automatic (new deployment)
@@ -793,7 +793,7 @@ cd native_games
 ./build-and-deploy.sh 192.168.50.73 cleanup --remove
 ```
 
-See [`native_games/README.md#system-optimization`](native_games/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.
+See [`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.
 
 ---
 
@@ -814,6 +814,6 @@ See [`native_games/README.md#system-optimization`](native_games/README.md#system
 
 ## Related Documentation
 
-- [Native Games](native_games/README.md)
+- [Native Apps](native_apps/README.md)
 - [ScummVM Backend](scummvm-roomwizard/README.md)
 - [System Setup](SYSTEM_SETUP.md)

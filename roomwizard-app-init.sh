@@ -25,6 +25,7 @@ NAME=roomwizard-app
 CONFIG=/opt/roomwizard/default-app
 DISABLE_SCRIPT=/opt/roomwizard/disable-steelcase.sh
 PIDFILE=/var/run/roomwizard-app.pid
+RESPAWN_SCRIPT=/opt/roomwizard/respawn.sh
 
 [ -f /etc/init.d/functions ] && . /etc/init.d/functions
 
@@ -62,11 +63,39 @@ do_start() {
         return 1
     fi
 
-    echo "  Launching: $APP_EXEC"
+    # Write respawn wrapper (re-reads config on each restart cycle, so
+    # changing /opt/roomwizard/default-app takes effect after the current
+    # app exits)
+    cat > "$RESPAWN_SCRIPT" << 'RESPAWN_EOF'
+#!/bin/sh
+CONFIG=/opt/roomwizard/default-app
+CHILD_PID=
+cleanup() { [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null; exit 0; }
+trap cleanup TERM INT
+
+while true; do
+    APP=$(head -1 "$CONFIG" 2>/dev/null | tr -d '[:space:]')
+    if [ -x "$APP" ]; then
+        echo "roomwizard-app: starting $APP"
+        "$APP" &
+        CHILD_PID=$!
+        wait $CHILD_PID
+        CHILD_PID=
+        echo "roomwizard-app: $APP exited ($?), restarting in 2s..."
+        sleep 2
+    else
+        echo "roomwizard-app: no valid app configured, retrying in 10s..."
+        sleep 10
+    fi
+done
+RESPAWN_EOF
+    chmod +x "$RESPAWN_SCRIPT"
+
+    echo "  Launching: $APP_EXEC (with respawn)"
     start-stop-daemon --start --background --make-pidfile \
-        --pidfile "$PIDFILE" --exec "$APP_EXEC" || {
+        --pidfile "$PIDFILE" --exec "$RESPAWN_SCRIPT" || {
         # Fallback if start-stop-daemon fails
-        "$APP_EXEC" &
+        "$RESPAWN_SCRIPT" &
         echo $! > "$PIDFILE"
     }
     echo "$DESC started ($APP_EXEC)"
@@ -76,10 +105,13 @@ do_start() {
 do_stop() {
     echo "Stopping $DESC..."
     if [ -f "$PIDFILE" ]; then
-        start-stop-daemon --stop --pidfile "$PIDFILE" --retry 5 || \
-            kill "$(cat "$PIDFILE")" 2>/dev/null || true
+        PID=$(cat "$PIDFILE")
+        # Send TERM to respawn wrapper (its trap forwards to child app)
+        start-stop-daemon --stop --pidfile "$PIDFILE" --retry 5 2>/dev/null || \
+            kill "$PID" 2>/dev/null || true
         rm -f "$PIDFILE"
     fi
+    rm -f "$RESPAWN_SCRIPT"
     echo "$DESC stopped"
     return 0
 }
