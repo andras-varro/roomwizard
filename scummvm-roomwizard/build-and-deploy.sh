@@ -284,7 +284,7 @@ deploy_to_device() {
     fi
     
     # Ensure target directory exists
-    ssh "$DEVICE" "mkdir -p $DEVICE_PATH"
+    ssh "$DEVICE" "mkdir -p $DEVICE_PATH /var/log/roomwizard"
     
     # Stop running launcher/respawn (avoids "Text file busy")
     log_info "Stopping running launcher (if any)..."

@@ -28,6 +28,9 @@
 #include "../native_apps/common/framebuffer.h"
 #include "../native_apps/common/touch_input.h"
 #include "../native_apps/common/hardware.h"
+#include "../native_apps/common/logger.h"
+
+static Logger g_logger;
 
 /* ── Runtime configuration ─────────────────────────────────────────── */
 
@@ -58,7 +61,7 @@ static char *str_trim(char *s) {
 static void load_config_file(VNCConfig *cfg, const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) {
-        DEBUG_PRINT("Config file not found: %s (using defaults)", path);
+        LOG_INFO(&g_logger, "Config file not found: %s (using defaults)", path);
         return;
     }
 
@@ -99,11 +102,11 @@ static void load_config_file(VNCConfig *cfg, const char *path) {
             cfg->quality_level = atoi(val);
             count++;
         } else {
-            fprintf(stderr, "Warning: unknown config key '%s'\n", key);
+            LOG_WARN(&g_logger, "Unknown config key '%s'", key);
         }
     }
     fclose(f);
-    printf("Loaded %d settings from %s\n", count, path);
+    LOG_INFO(&g_logger, "Loaded %d settings from %s", count, path);
 }
 
 /* ── Global state ──────────────────────────────────────────────────── */
@@ -120,7 +123,7 @@ static bool          g_touch_ok = false;
 /* ── Signal handler ────────────────────────────────────────────────── */
 
 static void signal_handler(int sig) {
-    printf("\nReceived signal %d, shutting down...\n", sig);
+    LOG_INFO(&g_logger, "Received signal %d, shutting down...", sig);
     g_running = false;
 }
 
@@ -130,16 +133,16 @@ static void *watchdog_thread_func(void *arg) {
     (void)arg;
     int wd_fd = open(WATCHDOG_DEVICE, O_WRONLY);
     if (wd_fd < 0) {
-        fprintf(stderr, "Warning: Could not open watchdog device\n");
+        LOG_WARN(&g_logger, "Could not open watchdog device");
         return NULL;
     }
-    DEBUG_PRINT("Watchdog thread started (interval %ds)", WATCHDOG_FEED_INTERVAL_SEC);
+    LOG_DEBUG(&g_logger, "Watchdog thread started (interval %ds)", WATCHDOG_FEED_INTERVAL_SEC);
     while (g_running) {
         write(wd_fd, "1", 1);
         sleep(WATCHDOG_FEED_INTERVAL_SEC);
     }
     close(wd_fd);
-    DEBUG_PRINT("Watchdog thread stopped");
+    LOG_DEBUG(&g_logger, "Watchdog thread stopped");
     return NULL;
 }
 
@@ -151,7 +154,7 @@ static void *watchdog_thread_func(void *arg) {
  */
 static char *vnc_get_password(rfbClient *client) {
     (void)client;
-    DEBUG_PRINT("VNC password requested, providing configured password");
+    LOG_DEBUG(&g_logger, "VNC password requested, providing configured password");
     return strdup(g_config.password);
 }
 
@@ -178,7 +181,7 @@ static rfbClient *vnc_client_init(const char *host, int port) {
     /* 8 bits/sample, 3 samples (RGB), 4 bytes/pixel → 32bpp from server */
     rfbClient *client = rfbGetClient(8, 3, 4);
     if (!client) {
-        fprintf(stderr, "Failed to create VNC client\n");
+        LOG_ERROR(&g_logger, "Failed to create VNC client");
         return NULL;
     }
 
@@ -206,15 +209,15 @@ static rfbClient *vnc_client_init(const char *host, int port) {
 
     /* Connect and negotiate */
     if (!rfbInitClient(client, NULL, NULL)) {
-        fprintf(stderr, "Failed to connect to VNC server at %s:%d\n", host, port);
+        LOG_ERROR(&g_logger, "Failed to connect to VNC server at %s:%d", host, port);
         return NULL;
     }
 
-    printf("  Remote desktop: %dx%d\n", client->width, client->height);
-    printf("  Pixel format: %d bpp, depth %d\n",
-           client->format.bitsPerPixel, client->format.depth);
-    DEBUG_PRINT("Encodings requested: %s", g_config.encodings);
-    DEBUG_PRINT("Compress=%d Quality=%d", g_config.compress_level, g_config.quality_level);
+    LOG_INFO(&g_logger, "Remote desktop: %dx%d, %d bpp depth %d",
+             client->width, client->height,
+             client->format.bitsPerPixel, client->format.depth);
+    LOG_DEBUG(&g_logger, "Encodings requested: %s", g_config.encodings);
+    LOG_DEBUG(&g_logger, "Compress=%d Quality=%d", g_config.compress_level, g_config.quality_level);
 
     return client;
 }
@@ -234,18 +237,18 @@ static int run_vnc_client(const char *host, int port) {
 
     /* Initialize framebuffer */
     if (fb_init(&g_fb, FB_DEVICE) < 0) {
-        fprintf(stderr, "Failed to initialize framebuffer\n");
+        LOG_ERROR(&g_logger, "Failed to initialize framebuffer");
         return -1;
     }
-    DEBUG_PRINT("Framebuffer: %ux%u, %u bpp, size=%zu",
-                g_fb.width, g_fb.height, g_fb.bytes_per_pixel * 8, g_fb.screen_size);
+    LOG_INFO(&g_logger, "Framebuffer: %ux%u, %u bpp, size=%zu",
+             g_fb.width, g_fb.height, g_fb.bytes_per_pixel * 8, g_fb.screen_size);
 
     /* Initialize touch input (non-fatal if absent) */
     if (touch_init(&g_touch, TOUCH_DEVICE) < 0) {
-        fprintf(stderr, "Warning: Touch input not available\n");
+        LOG_WARN(&g_logger, "Touch input not available");
     } else {
         g_touch_ok = true;
-        DEBUG_PRINT("Touch input initialized");
+        LOG_INFO(&g_logger, "Touch input initialized");
     }
 
     /* Hardware subsystem */
@@ -266,7 +269,7 @@ static int run_vnc_client(const char *host, int port) {
     fb_swap(&g_fb);
 
     /* ── Connect to VNC server ───────────────────────────────────── */
-    printf("Connecting to %s:%d ...\n", host, port);
+    LOG_INFO(&g_logger, "Connecting to %s:%d ...", host, port);
     g_vnc_client = vnc_client_init(host, port);
     if (!g_vnc_client) {
         vnc_renderer_clear_screen(&g_fb);
@@ -276,11 +279,11 @@ static int run_vnc_client(const char *host, int port) {
         sleep(3);
         goto cleanup;
     }
-    printf("Connected!\n\n");
+    LOG_INFO(&g_logger, "Connected to VNC server");
 
     /* ── Initialize renderer ─────────────────────────────────────── */
     if (vnc_renderer_init(&g_renderer, &g_fb) < 0) {
-        fprintf(stderr, "Failed to initialize renderer\n");
+        LOG_ERROR(&g_logger, "Failed to initialize renderer");
         goto cleanup;
     }
     vnc_renderer_set_remote_size(&g_renderer,
@@ -289,14 +292,14 @@ static int run_vnc_client(const char *host, int port) {
     /* ── Initialize input handler ────────────────────────────────── */
     if (g_touch_ok) {
         if (vnc_input_init(&g_input, &g_touch, &g_renderer, g_vnc_client) < 0) {
-            fprintf(stderr, "Warning: Input handler init failed\n");
+            LOG_WARN(&g_logger, "Input handler init failed");
             g_touch_ok = false;
         }
     }
 
     /* ── Start watchdog feeder ───────────────────────────────────── */
     if (pthread_create(&g_watchdog_thread, NULL, watchdog_thread_func, NULL) != 0) {
-        fprintf(stderr, "Warning: Failed to start watchdog thread\n");
+        LOG_WARN(&g_logger, "Failed to start watchdog thread");
     }
 
     /* Brief "Connected" splash */
@@ -310,7 +313,7 @@ static int run_vnc_client(const char *host, int port) {
     fb_swap(&g_fb);
 
     /* ── Main event loop ─────────────────────────────────────────── */
-    DEBUG_PRINT("Entering main loop (target %d fps)", TARGET_FPS);
+    LOG_DEBUG(&g_logger, "Entering main loop (target %d fps)", TARGET_FPS);
     hw_set_led(LED_GREEN, 100);     /* full green = connected */
 
     while (g_running) {
@@ -321,7 +324,7 @@ static int run_vnc_client(const char *host, int port) {
          */
         int result = WaitForMessage(g_vnc_client, 10000);
         if (result < 0) {
-            fprintf(stderr, "VNC connection lost\n");
+            LOG_ERROR(&g_logger, "VNC connection lost");
             break;
         }
 
@@ -336,7 +339,7 @@ static int run_vnc_client(const char *host, int port) {
              * incremental framebuffer update request for the next frame.
              */
             if (!HandleRFBServerMessage(g_vnc_client)) {
-                fprintf(stderr, "Error handling VNC message\n");
+                LOG_ERROR(&g_logger, "Error handling VNC message");
                 break;
             }
         }
@@ -347,7 +350,7 @@ static int run_vnc_client(const char *host, int port) {
 
             /* Check for exit gesture (long-press top-left corner) */
             if (vnc_input_exit_requested(&g_input)) {
-                printf("Exit gesture detected, shutting down...\n");
+                LOG_INFO(&g_logger, "Exit gesture detected, shutting down...");
                 break;
             }
 
@@ -379,7 +382,7 @@ static int run_vnc_client(const char *host, int port) {
     }
 
     ret = 0;
-    DEBUG_PRINT("Main loop exited cleanly");
+    LOG_INFO(&g_logger, "Main loop exited cleanly");
 
 cleanup:
     if (g_vnc_client) {
@@ -429,6 +432,9 @@ int main(int argc, char *argv[]) {
     printf("║  Phase 2: Optimized + Bilinear        ║\n");
     printf("╚═══════════════════════════════════════╝\n\n");
 
+    /* Initialize logger (file + stderr) */
+    logger_init(&g_logger, "vnc_client", LOG_LEVEL_INFO, true);
+
     /* 1. Compile-time defaults */
     strncpy(g_config.host, VNC_DEFAULT_HOST, sizeof(g_config.host) - 1);
     g_config.port = VNC_DEFAULT_PORT;
@@ -464,6 +470,10 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    LOG_INFO(&g_logger, "Config: %s  Target: %s:%d  Encodings: %s  Compress: %d  Quality: %d",
+             config_path, g_config.host, g_config.port,
+             g_config.encodings, g_config.compress_level, g_config.quality_level);
+
     printf("Config:    %s\n", config_path);
     printf("Target:    %s:%d\n", g_config.host, g_config.port);
     printf("Encodings: %s\n", g_config.encodings);
@@ -477,6 +487,8 @@ int main(int argc, char *argv[]) {
 
     int ret = run_vnc_client(g_config.host, g_config.port);
 
+    LOG_INFO(&g_logger, "VNC client exited (code %d)", ret);
+    logger_close(&g_logger);
     printf("\nVNC client exited (code %d)\n", ret);
     return ret;
 }

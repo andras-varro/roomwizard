@@ -29,6 +29,15 @@
 #define FORBIDDEN_SYMBOL_EXCEPTION_unistd_h
 #define FORBIDDEN_SYMBOL_EXCEPTION_write
 #define FORBIDDEN_SYMBOL_EXCEPTION_getenv
+#define FORBIDDEN_SYMBOL_EXCEPTION_fopen
+#define FORBIDDEN_SYMBOL_EXCEPTION_fclose
+#define FORBIDDEN_SYMBOL_EXCEPTION_fprintf
+#define FORBIDDEN_SYMBOL_EXCEPTION_fflush
+#define FORBIDDEN_SYMBOL_EXCEPTION_fseek
+#define FORBIDDEN_SYMBOL_EXCEPTION_ftell
+#define FORBIDDEN_SYMBOL_EXCEPTION_setvbuf
+#define FORBIDDEN_SYMBOL_EXCEPTION_mkdir
+#define FORBIDDEN_SYMBOL_EXCEPTION_rename
 
 #include "backends/platform/roomwizard/roomwizard.h"
 #include "backends/platform/roomwizard/roomwizard-graphics.h"
@@ -58,8 +67,13 @@
 
 #include <time.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// _logFile is void* in the header to avoid leaking <stdio.h>.
+// Cast helper for use in this file.
+#define LOG_FP  ((FILE *)_logFile)
 
 // Debug mode: set ROOMWIZARD_DEBUG=1 on the device to enable visual touch
 // feedback and verbose touch-state logging.
@@ -82,6 +96,8 @@ OSystem_RoomWizard *rwSystem() { return s_rwSystem; }
 
 OSystem_RoomWizard::OSystem_RoomWizard()
 	: _eventSource(nullptr)
+	, _logFile(nullptr)
+	, _logBytes(0)
 #ifdef ENABLE_VKEYBD
 	, _vkbd(nullptr)
 #endif
@@ -96,10 +112,25 @@ OSystem_RoomWizard::OSystem_RoomWizard()
 }
 
 OSystem_RoomWizard::~OSystem_RoomWizard() {
+	if (_logFile) {
+		fprintf(LOG_FP, "=== ScummVM shutting down (pid %d) ===\n", (int)getpid());
+		fclose(LOG_FP);
+		_logFile = nullptr;
+	}
 	delete _eventSource;
 }
 
 void OSystem_RoomWizard::initBackend() {
+	// Initialize file logger
+	mkdir("/var/log/roomwizard", 0755);
+	_logFile = fopen("/var/log/roomwizard/scummvm.log", "a");
+	if (_logFile) {
+		setvbuf(LOG_FP, nullptr, _IOLBF, 0);  // line-buffered for crash safety
+		fseek(LOG_FP, 0, SEEK_END);
+		_logBytes = ftell(LOG_FP);
+		fprintf(LOG_FP, "=== ScummVM started (pid %d) ===\n", (int)getpid());
+	}
+
 	// Create graphics manager
 	_graphicsManager = new RoomWizardGraphicsManager();
 	
@@ -175,9 +206,56 @@ void OSystem_RoomWizard::quit() {
 	exit(0);
 }
 
+static const char *logTypeTag(LogMessageType::Type type) {
+	switch (type) {
+	case LogMessageType::kInfo:    return "INFO ";
+	case LogMessageType::kDebug:   return "DEBUG";
+	case LogMessageType::kWarning: return "WARN ";
+	case LogMessageType::kError:   return "ERROR";
+	default:                       return "?????";
+	}
+}
+
+void OSystem_RoomWizard::logRotate() {
+	if (!_logFile || _logBytes < 256 * 1024)
+		return;
+	fclose(LOG_FP);
+	rename("/var/log/roomwizard/scummvm.log",
+	       "/var/log/roomwizard/scummvm.log.1");
+	_logFile = fopen("/var/log/roomwizard/scummvm.log", "a");
+	_logBytes = 0;
+	if (_logFile)
+		setvbuf(LOG_FP, nullptr, _IOLBF, 0);
+}
+
 void OSystem_RoomWizard::logMessage(LogMessageType::Type type, const char *message) {
 	if (type == LogMessageType::kDebug && !rwDebugMode())
 		return;
+
+	// Write to log file with timestamp
+	if (_logFile) {
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		struct tm tm;
+		localtime_r(&ts.tv_sec, &tm);
+		char timebuf[32];
+		strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &tm);
+
+		// Strip trailing newline from message (we add our own)
+		size_t len = strlen(message);
+		while (len > 0 && (message[len - 1] == '\n' || message[len - 1] == '\r'))
+			len--;
+
+		int n = fprintf(LOG_FP, "%s.%03ld [%s] scummvm        %.*s\n",
+		                timebuf, ts.tv_nsec / 1000000,
+		                logTypeTag(type),
+		                (int)len, message);
+		if (n > 0)
+			_logBytes += n;
+		logRotate();
+	}
+
+	// Also write to stderr/stdout for interactive use
 	FILE *output = (type == LogMessageType::kInfo || type == LogMessageType::kDebug) ? stdout : stderr;
 	fputs(message, output);
 	fflush(output);

@@ -24,6 +24,7 @@
 #include "common/touch_input.h"
 #include "common/common.h"
 #include "common/ppm.h"
+#include "common/logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -114,6 +115,7 @@ typedef struct {
     int         total_pages;
     Framebuffer fb;
     TouchInput  touch;
+    Logger      logger;
 } Launcher;
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -215,7 +217,7 @@ static int scan_apps(Launcher *l) {
 
     DIR *dir = opendir(APPS_DIR);
     if (!dir) {
-        printf("Cannot open %s\n", APPS_DIR);
+        LOG_WARN(&l->logger, "Cannot open %s", APPS_DIR);
         l->total_pages = 1;
         return 0;
     }
@@ -233,9 +235,9 @@ static int scan_apps(Launcher *l) {
         if (load_manifest(path, &app) == 0) {
             load_icon(&app);
             l->apps[l->app_count++] = app;
-            printf("  Loaded: %-16s → %s\n", app.name, app.exec_path);
+            LOG_INFO(&l->logger, "Loaded: %-16s -> %s", app.name, app.exec_path);
         } else {
-            printf("  Skipped: %s\n", path);
+            LOG_WARN(&l->logger, "Skipped: %s", path);
         }
     }
     closedir(dir);
@@ -429,7 +431,7 @@ static void launch_app(Launcher *l, int index,
                        const char *fb_dev, const char *touch_dev)
 {
     AppEntry *app = &l->apps[index];
-    printf("Launching: %s (%s)\n", app->name, app->exec_path);
+    LOG_INFO(&l->logger, "Launching: %s (%s)", app->name, app->exec_path);
 
     /* Fade out launcher before switching to app */
     fb_fade_out(&l->fb);
@@ -461,7 +463,12 @@ static void launch_app(Launcher *l, int index,
         /* ── Parent: wait for app to finish ───────────────────────── */
         int status;
         waitpid(pid, &status, 0);
-        printf("%s exited (status %d)\n", app->name, WEXITSTATUS(status));
+        if (WIFEXITED(status))
+            LOG_INFO(&l->logger, "%s exited (code %d)", app->name, WEXITSTATUS(status));
+        else if (WIFSIGNALED(status))
+            LOG_WARN(&l->logger, "%s killed by signal %d", app->name, WTERMSIG(status));
+        else
+            LOG_WARN(&l->logger, "%s exited (raw status %d)", app->name, status);
     } else {
         perror("fork failed");
     }
@@ -471,7 +478,7 @@ static void launch_app(Launcher *l, int index,
         touch_set_screen_size(&l->touch, l->fb.width, l->fb.height);
 
     /* Re-scan manifests in case new apps were deployed while app ran */
-    printf("Re-scanning apps...\n");
+    LOG_INFO(&l->logger, "Re-scanning apps...");
     scan_apps(l);
 }
 
@@ -498,16 +505,21 @@ int main(int argc, char *argv[]) {
     Launcher launcher;
     memset(&launcher, 0, sizeof(launcher));
 
+    /* Initialize logger */
+    logger_init(&launcher.logger, "app_launcher", LOG_LEVEL_INFO, true);
+
     /* Framebuffer */
     if (fb_init(&launcher.fb, fb_dev) != 0) {
-        fprintf(stderr, "Failed to initialise framebuffer\n");
+        LOG_ERROR(&launcher.logger, "Failed to initialise framebuffer");
+        logger_close(&launcher.logger);
         return 1;
     }
 
     /* Touch */
     if (touch_init(&launcher.touch, touch_dev) != 0) {
-        fprintf(stderr, "Failed to initialise touch input\n");
+        LOG_ERROR(&launcher.logger, "Failed to initialise touch input");
         fb_close(&launcher.fb);
+        logger_close(&launcher.logger);
         return 1;
     }
     touch_set_screen_size(&launcher.touch,
@@ -515,7 +527,7 @@ int main(int argc, char *argv[]) {
 
     /* Scan for installed apps */
     int count = scan_apps(&launcher);
-    printf("Found %d app(s)\n\n", count);
+    LOG_INFO(&launcher.logger, "Found %d app(s), %d page(s)", count, launcher.total_pages);
 
     /* ── Main loop ──────────────────────────────────────────────── */
     while (!quit_flag) {
@@ -524,7 +536,7 @@ int main(int argc, char *argv[]) {
         int x, y;
         if (touch_wait_for_press(&launcher.touch, &x, &y) == 0) {
             if (quit_flag) break;
-            printf("Touch: (%d, %d)\n", x, y);
+            LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", x, y);
             int result = handle_touch(&launcher, x, y);
             if (result >= 0)
                 launch_app(&launcher, result, fb_dev, touch_dev);
@@ -534,7 +546,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
-    printf("Shutting down launcher\n");
+    LOG_INFO(&launcher.logger, "Shutting down launcher");
+    logger_close(&launcher.logger);
     free_icons(&launcher);
     fb_clear(&launcher.fb, COLOR_BLACK);
     fb_swap(&launcher.fb);

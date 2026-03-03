@@ -69,22 +69,52 @@ do_start() {
     cat > "$RESPAWN_SCRIPT" << 'RESPAWN_EOF'
 #!/bin/sh
 CONFIG=/opt/roomwizard/default-app
+LOGDIR=/var/log/roomwizard
+LOGFILE=$LOGDIR/respawn.log
 CHILD_PID=
-cleanup() { [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null; exit 0; }
+
+# Ensure log directory exists
+mkdir -p "$LOGDIR"
+
+# Rotate log if over 256 KB
+rotate_log() {
+    if [ -f "$LOGFILE" ]; then
+        size=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+        if [ "$size" -gt 262144 ]; then
+            mv -f "$LOGFILE" "$LOGFILE.1"
+        fi
+    fi
+}
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [respawn] $*" >> "$LOGFILE"
+}
+
+cleanup() {
+    log "Received TERM/INT signal, stopping child PID=$CHILD_PID"
+    [ -n "$CHILD_PID" ] && kill "$CHILD_PID" 2>/dev/null
+    log "Respawn wrapper exiting"
+    exit 0
+}
 trap cleanup TERM INT
 
+log "=== Respawn wrapper started (pid $$) ==="
+
 while true; do
+    rotate_log
     APP=$(head -1 "$CONFIG" 2>/dev/null | tr -d '[:space:]')
     if [ -x "$APP" ]; then
-        echo "roomwizard-app: starting $APP"
-        "$APP" &
+        log "Starting $APP"
+        "$APP" >> "$LOGDIR/app_stdout.log" 2>&1 &
         CHILD_PID=$!
+        log "$APP running as PID $CHILD_PID"
         wait $CHILD_PID
+        EXIT_CODE=$?
         CHILD_PID=
-        echo "roomwizard-app: $APP exited ($?), restarting in 2s..."
+        log "$APP exited (code $EXIT_CODE), restarting in 2s..."
         sleep 2
     else
-        echo "roomwizard-app: no valid app configured, retrying in 10s..."
+        log "No valid app configured ($APP), retrying in 10s..."
         sleep 10
     fi
 done

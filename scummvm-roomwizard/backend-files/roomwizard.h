@@ -61,6 +61,14 @@ private:
 
 	RoomWizardEventSource *_eventSource;
 	timeval _startTime;
+
+	// File logger — writes to /var/log/roomwizard/scummvm.log
+	// Stored as void* to avoid leaking <stdio.h> into other translation units
+	// (which would conflict with ScummVM's FORBIDDEN_SYMBOL mechanism).
+	void *_logFile;
+	long  _logBytes;
+	void  logRotate();
+
 #ifdef ENABLE_VKEYBD
 	Common::VirtualKeyboard *_vkbd;
 #endif

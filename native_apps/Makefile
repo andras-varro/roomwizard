@@ -13,8 +13,8 @@ PONG_DIR = pong
 BUILD_DIR = build
 
 # Common source files
-COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c
-COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o
+COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c
+COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o
 
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong
@@ -46,6 +46,9 @@ $(BUILD_DIR)/common.o: $(COMMON_DIR)/common.c $(COMMON_DIR)/common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ppm.o: $(COMMON_DIR)/ppm.c $(COMMON_DIR)/ppm.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/logger.o: $(COMMON_DIR)/logger.c $(COMMON_DIR)/logger.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Snake game
