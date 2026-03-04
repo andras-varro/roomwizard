@@ -1,15 +1,18 @@
 /*
- * VNC Client for RoomWizard - v2.1 (Phase 2 Optimized + Config File)
+ * VNC Client for RoomWizard - v2.2 (Auto-Reconnect)
  *
- * Major changes from v1.0:
+ * v2.2 changes:
+ *   - Auto-reconnect with exponential backoff on connection drop
+ *   - On-screen reconnect UI with countdown, attempt counter, buttons
+ *   - Touch [Cancel] to return to launcher, [Connect Now] to skip wait
+ *
+ * v2.1 changes:
  *   - Encoding negotiation: requests Tight/ZRLE instead of Raw
  *   - 16bpp RGB565 framebuffer (halves swap bandwidth)
  *   - Partial region updates (only re-render dirty VNC rectangles)
  *   - Frame-rate-capped presentation (30 fps)
  *   - Runtime config file support (/opt/vnc_client/vnc_client.conf)
  *   - Bilinear interpolation for smooth downscaling
- *
- * Expected improvement: CPU 99% → 15-30%, frame rate <1 → 15-30 fps
  */
 
 #include <stdio.h>
@@ -177,7 +180,7 @@ static rfbBool vnc_cursor_pos(rfbClient *client, int x, int y) {
 
 /* ── VNC client initialization with encoding negotiation ───────────── */
 
-static rfbClient *vnc_client_init(const char *host, int port) {
+static rfbClient *vnc_client_init(const char *host, int port, unsigned int connect_timeout) {
     /* 8 bits/sample, 3 samples (RGB), 4 bytes/pixel → 32bpp from server */
     rfbClient *client = rfbGetClient(8, 3, 4);
     if (!client) {
@@ -207,6 +210,9 @@ static rfbClient *vnc_client_init(const char *host, int port) {
     client->appData.compressLevel   = g_config.compress_level;
     client->appData.qualityLevel    = g_config.quality_level;
 
+    /* Set connect timeout (default is 60s which freezes the UI) */
+    client->connectTimeout = connect_timeout;
+
     /* Connect and negotiate */
     if (!rfbInitClient(client, NULL, NULL)) {
         LOG_ERROR(&g_logger, "Failed to connect to VNC server at %s:%d", host, port);
@@ -222,15 +228,277 @@ static rfbClient *vnc_client_init(const char *host, int port) {
     return client;
 }
 
+/* ── Reconnect UI helpers ──────────────────────────────────────────── */
+
+/* Draw a centered text string at given Y position */
+static void draw_centered_text(Framebuffer *fb, int y, const char *text,
+                                uint16_t color, int scale) {
+    int tw = vnc_renderer_text_width(text, scale);
+    int x = (SCREEN_WIDTH - tw) / 2;
+    if (x < 0) x = 0;
+    vnc_renderer_draw_text(fb, x, y, text, color, scale);
+}
+
+/* Draw a button rectangle with centered label.
+ * Returns true if (tx,ty) falls inside the button. */
+static bool draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
+                         const char *label, uint16_t bg, uint16_t fg,
+                         int tx, int ty) {
+    vnc_renderer_fill_rect(fb, bx, by, bw, bh, bg);
+    /* 1-pixel border */
+    vnc_renderer_fill_rect(fb, bx, by, bw, 1, fg);
+    vnc_renderer_fill_rect(fb, bx, by + bh - 1, bw, 1, fg);
+    vnc_renderer_fill_rect(fb, bx, by, 1, bh, fg);
+    vnc_renderer_fill_rect(fb, bx + bw - 1, by, 1, bh, fg);
+    /* Centered label (scale 2 → 12px char height) */
+    int tw = vnc_renderer_text_width(label, 2);
+    int lx = bx + (bw - tw) / 2;
+    int ly = by + (bh - 14) / 2;
+    vnc_renderer_draw_text(fb, lx, ly, label, fg, 2);
+    /* Hit test */
+    return (tx >= bx && tx < bx + bw && ty >= by && ty < by + bh);
+}
+
+/*
+ * Show the reconnect UI screen and wait for countdown expiry, user
+ * pressing [CONNECT NOW], or user pressing [CANCEL].
+ *
+ * Returns:
+ *   1 = user pressed Connect Now (or countdown expired) → try reconnect
+ *   0 = user pressed Cancel → exit to launcher
+ *  -1 = g_running became false (signal)
+ */
+static int reconnect_ui(int attempt, int wait_seconds) {
+    LOG_INFO(&g_logger, "Reconnect UI: attempt %d, waiting %ds", attempt, wait_seconds);
+    hw_set_led(LED_RED, 50);
+    hw_set_led(LED_GREEN, 0);
+
+    struct timeval start;
+    gettimeofday(&start, NULL);
+
+    int remaining = wait_seconds;
+
+    while (g_running && remaining >= 0) {
+        /* ── Draw screen ──────────────────────────────────────── */
+        vnc_renderer_clear_screen(&g_fb);
+
+        draw_centered_text(&g_fb, 100, "CONNECTION LOST", RGB565_RED, 3);
+        draw_centered_text(&g_fb, 160, "RECONNECTING...", RGB565_WHITE, 2);
+
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "ATTEMPT: %d", attempt);
+            draw_centered_text(&g_fb, 220, buf, RGB565_YELLOW, 2);
+        }
+
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "WAITING %ds", remaining);
+            draw_centered_text(&g_fb, 270, buf, RGB565(160, 160, 160), 2);
+        }
+
+        /* Progress bar (full width = wait_seconds, shrinks as time passes) */
+        {
+            int bar_x = 100;
+            int bar_w_max = SCREEN_WIDTH - 200;
+            int bar_w = (remaining * bar_w_max) / (wait_seconds > 0 ? wait_seconds : 1);
+            if (bar_w < 0) bar_w = 0;
+            vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w_max, 8,
+                                   RGB565(40, 40, 40));
+            vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w, 8,
+                                   RGB565_GREEN);
+        }
+
+        /* Poll touch — trigger buttons on finger-up (release),
+         * not finger-down, to avoid accidental activations.        */
+        int tx = -1, ty = -1;
+        if (g_touch_ok) {
+            touch_poll(&g_touch);
+            TouchState ts = touch_get_state(&g_touch);
+            if (ts.released) {
+                tx = ts.x;
+                ty = ts.y;
+                LOG_DEBUG(&g_logger, "Touch released at (%d,%d)", tx, ty);
+            }
+        }
+
+        /* Draw buttons and check hits */
+        bool cancel_hit = draw_button(&g_fb,
+            RECONNECT_BTN_CANCEL_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_W, RECONNECT_BTN_H,
+            "CANCEL", RGB565(40, 40, 40), RGB565_WHITE, tx, ty);
+
+        bool connect_hit = draw_button(&g_fb,
+            RECONNECT_BTN_CONNECT_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_W, RECONNECT_BTN_H,
+            "CONNECT NOW", RGB565(0, 60, 0), RGB565_GREEN, tx, ty);
+
+        fb_swap(&g_fb);
+
+        if (cancel_hit) {
+            LOG_INFO(&g_logger, "Reconnect CANCEL hit at (%d,%d)", tx, ty);
+            return 0;
+        }
+        if (connect_hit) {
+            LOG_INFO(&g_logger, "Reconnect CONNECT NOW hit at (%d,%d)", tx, ty);
+            return 1;
+        }
+
+        /* Update countdown */
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        int elapsed = (int)(now.tv_sec - start.tv_sec);
+        remaining = wait_seconds - elapsed;
+
+        /* ~30 fps UI refresh */
+        usleep(33000);
+    }
+
+    if (!g_running) return -1;
+    return 1;   /* countdown expired → try connecting */
+}
+
+/* ── VNC session: connect, run main loop, cleanup connection ───────── */
+
+/* Returns:  0 = connection lost (eligible for reconnect)
+ *          -1 = connection failed (never connected)
+ *           1 = exit gesture (user wants to quit) */
+static int vnc_session(const char *host, int port, int attempt) {
+    /* ── Show "Connecting" splash ────────────────────────────── */
+    vnc_renderer_clear_screen(&g_fb);
+    if (attempt > 0) {
+        draw_centered_text(&g_fb, 140, "RECONNECTING...", RGB565_YELLOW, 3);
+        {
+            char att[64];
+            snprintf(att, sizeof(att), "ATTEMPT: %d", attempt);
+            draw_centered_text(&g_fb, 190, att, RGB565_WHITE, 2);
+        }
+        {
+            char addr[280];
+            snprintf(addr, sizeof(addr), "%s:%d", host, port);
+            draw_centered_text(&g_fb, 230, addr, RGB565_GREEN, 2);
+        }
+        draw_centered_text(&g_fb, 280, "WAITING FOR SERVER...", RGB565_GREY, 2);
+    } else {
+        draw_centered_text(&g_fb, 180, "CONNECTING TO VNC...", RGB565_WHITE, 3);
+        {
+            char addr[280];
+            snprintf(addr, sizeof(addr), "%s:%d", host, port);
+            draw_centered_text(&g_fb, 230, addr, RGB565_GREEN, 2);
+        }
+    }
+    fb_swap(&g_fb);
+
+    hw_set_led(LED_GREEN, 50);      /* dim green = connecting */
+
+    /* ── Connect to VNC server ───────────────────────────────── */
+    unsigned int ct = (attempt > 0) ? RECONNECT_CONNECT_TIMEOUT
+                                    : RECONNECT_INITIAL_CONNECT_TIMEOUT;
+    LOG_INFO(&g_logger, "Connecting to %s:%d (timeout %us) ...", host, port, ct);
+    g_vnc_client = vnc_client_init(host, port, ct);
+    if (!g_vnc_client) {
+        vnc_renderer_clear_screen(&g_fb);
+        draw_centered_text(&g_fb, 200, "CONNECTION FAILED!", RGB565_RED, 3);
+        fb_swap(&g_fb);
+        hw_set_led(LED_RED, 100);
+        sleep(attempt > 0 ? 1 : 2);   /* shorter flash during reconnect */
+        return -1;      /* never connected */
+    }
+    LOG_INFO(&g_logger, "Connected to VNC server");
+
+    /* ── Initialize renderer ─────────────────────────────────── */
+    if (vnc_renderer_init(&g_renderer, &g_fb) < 0) {
+        LOG_ERROR(&g_logger, "Failed to initialize renderer");
+        rfbClientCleanup(g_vnc_client);
+        g_vnc_client = NULL;
+        return -1;
+    }
+    vnc_renderer_set_remote_size(&g_renderer,
+                                 g_vnc_client->width, g_vnc_client->height);
+
+    /* ── Initialize input handler ────────────────────────────── */
+    if (g_touch_ok) {
+        if (vnc_input_init(&g_input, &g_touch, &g_renderer, g_vnc_client) < 0) {
+            LOG_WARN(&g_logger, "Input handler init failed");
+        }
+    }
+
+    /* Brief "Connected" splash */
+    vnc_renderer_clear_screen(&g_fb);
+    draw_centered_text(&g_fb, 200, "CONNECTED!", RGB565_GREEN, 3);
+    fb_swap(&g_fb);
+    usleep(500000);     /* 500 ms */
+
+    /* Clear buffer for VNC content */
+    vnc_renderer_clear_screen(&g_fb);
+    fb_swap(&g_fb);
+
+    /* ── Main event loop ─────────────────────────────────────── */
+    LOG_DEBUG(&g_logger, "Entering main loop (target %d fps)", TARGET_FPS);
+    hw_set_led(LED_GREEN, 100);     /* full green = connected */
+
+    int session_result = 0;         /* default: connection lost */
+
+    while (g_running) {
+        int result = WaitForMessage(g_vnc_client, 10000);
+        if (result < 0) {
+            LOG_ERROR(&g_logger, "VNC connection lost");
+            break;
+        }
+
+        if (result > 0) {
+            if (!HandleRFBServerMessage(g_vnc_client)) {
+                LOG_ERROR(&g_logger, "Error handling VNC message");
+                break;
+            }
+        }
+
+        /* Process touch input → VNC pointer events + exit gesture */
+        if (g_touch_ok) {
+            vnc_input_process(&g_input);
+
+            if (vnc_input_exit_requested(&g_input)) {
+                LOG_INFO(&g_logger, "Exit gesture detected, shutting down...");
+                session_result = 1;     /* user quit */
+                break;
+            }
+
+            /* Draw exit progress indicator while holding corner */
+            float prog = vnc_input_exit_progress(&g_input);
+            if (prog > 0.01f) {
+                uint16_t *buf = (uint16_t *)g_fb.back_buffer;
+                int bar_width = (int)(EXIT_ZONE_SIZE * prog);
+                uint16_t color = (prog < 0.7f) ? RGB565_YELLOW : RGB565_RED;
+                for (int y = 0; y < 3; y++)
+                    for (int x = 0; x < bar_width && x < SCREEN_WIDTH; x++)
+                        buf[y * SCREEN_WIDTH + x] = color;
+                g_renderer.needs_present = true;
+            }
+        }
+
+        vnc_renderer_present(&g_renderer);
+    }
+
+    LOG_INFO(&g_logger, "Session ended (result=%d)", session_result);
+
+    /* Cleanup VNC connection (but NOT framebuffer/touch/watchdog) */
+    if (g_vnc_client) {
+        rfbClientCleanup(g_vnc_client);
+        g_vnc_client = NULL;
+    }
+    vnc_input_cleanup(&g_input);
+    /* Note: renderer is NOT cleaned up here (no 32bpp restore).
+     * We stay in 16bpp for the reconnect UI. */
+
+    return session_result;
+}
+
 /* ── Main application ──────────────────────────────────────────────── */
 
 static int run_vnc_client(const char *host, int port) {
     int ret = -1;
 
 #if USE_16BPP
-    /* Switch framebuffer to 16bpp RGB565 BEFORE fb_init.
-     * Halves memcpy cost in fb_swap: 768 KB vs 1.5 MB per frame.
-     * (Same technique as the ScummVM RoomWizard backend) */
     fb_set_bpp(FB_DEVICE, 16);
     DEBUG_PRINT("Switched to 16bpp RGB565");
 #endif
@@ -243,6 +511,13 @@ static int run_vnc_client(const char *host, int port) {
     LOG_INFO(&g_logger, "Framebuffer: %ux%u, %u bpp, size=%zu",
              g_fb.width, g_fb.height, g_fb.bytes_per_pixel * 8, g_fb.screen_size);
 
+    /* Sanity-check: if the app_launcher (or another 32bpp app) ran before us,
+     * fb_set_bpp should have fixed it.  Warn if it didn't. */
+    if (g_fb.bytes_per_pixel != 2) {
+        LOG_WARN(&g_logger, "Framebuffer is %ubpp, expected 16bpp! "
+                 "Display may be corrupted.", g_fb.bytes_per_pixel * 8);
+    }
+
     /* Initialize touch input (non-fatal if absent) */
     if (touch_init(&g_touch, TOUCH_DEVICE) < 0) {
         LOG_WARN(&g_logger, "Touch input not available");
@@ -254,143 +529,83 @@ static int run_vnc_client(const char *host, int port) {
     /* Hardware subsystem */
     hw_init();
     hw_set_backlight(100);
-    hw_set_led(LED_GREEN, 50);      /* dim green = connecting */
 
-    /* ── Show "Connecting" splash (16bpp text) ───────────────────── */
-    vnc_renderer_clear_screen(&g_fb);
-    vnc_renderer_draw_text(&g_fb, 180, 180, "CONNECTING TO VNC...", RGB565_WHITE, 3);
-    {
-        char addr[280];
-        snprintf(addr, sizeof(addr), "%s:%d", host, port);
-        vnc_renderer_draw_text(&g_fb, 200, 230, addr, RGB565_GREEN, 2);
-    }
-    vnc_renderer_draw_text(&g_fb, 140, 300,
-        "ENCODINGS: ", RGB565(128, 128, 128), 1);
-    fb_swap(&g_fb);
-
-    /* ── Connect to VNC server ───────────────────────────────────── */
-    LOG_INFO(&g_logger, "Connecting to %s:%d ...", host, port);
-    g_vnc_client = vnc_client_init(host, port);
-    if (!g_vnc_client) {
-        vnc_renderer_clear_screen(&g_fb);
-        vnc_renderer_draw_text(&g_fb, 130, 200, "CONNECTION FAILED!", RGB565_RED, 3);
-        fb_swap(&g_fb);
-        hw_set_led(LED_RED, 100);
-        sleep(3);
-        goto cleanup;
-    }
-    LOG_INFO(&g_logger, "Connected to VNC server");
-
-    /* ── Initialize renderer ─────────────────────────────────────── */
-    if (vnc_renderer_init(&g_renderer, &g_fb) < 0) {
-        LOG_ERROR(&g_logger, "Failed to initialize renderer");
-        goto cleanup;
-    }
-    vnc_renderer_set_remote_size(&g_renderer,
-                                 g_vnc_client->width, g_vnc_client->height);
-
-    /* ── Initialize input handler ────────────────────────────────── */
-    if (g_touch_ok) {
-        if (vnc_input_init(&g_input, &g_touch, &g_renderer, g_vnc_client) < 0) {
-            LOG_WARN(&g_logger, "Input handler init failed");
-            g_touch_ok = false;
-        }
-    }
-
-    /* ── Start watchdog feeder ───────────────────────────────────── */
+    /* Start watchdog feeder (lives across reconnects) */
     if (pthread_create(&g_watchdog_thread, NULL, watchdog_thread_func, NULL) != 0) {
         LOG_WARN(&g_logger, "Failed to start watchdog thread");
     }
 
-    /* Brief "Connected" splash */
-    vnc_renderer_clear_screen(&g_fb);
-    vnc_renderer_draw_text(&g_fb, 250, 200, "CONNECTED!", RGB565_GREEN, 3);
-    fb_swap(&g_fb);
-    usleep(500000);     /* 500 ms */
-
-    /* Clear buffer for VNC content */
-    vnc_renderer_clear_screen(&g_fb);
-    fb_swap(&g_fb);
-
-    /* ── Main event loop ─────────────────────────────────────────── */
-    LOG_DEBUG(&g_logger, "Entering main loop (target %d fps)", TARGET_FPS);
-    hw_set_led(LED_GREEN, 100);     /* full green = connected */
+    /* ── Reconnect loop ──────────────────────────────────────────── */
+    static const int backoff_delays[] = RECONNECT_DELAYS;
+    int attempt = 0;
 
     while (g_running) {
-        /*
-         * WaitForMessage: block up to 10 ms for VNC data.
-         * Keeps touch polling at ~100 Hz while being kind to the CPU
-         * when there are no screen updates.
-         */
-        int result = WaitForMessage(g_vnc_client, 10000);
-        if (result < 0) {
-            LOG_ERROR(&g_logger, "VNC connection lost");
+        int result = vnc_session(host, port, attempt);
+
+        if (result == 1) {
+            /* User exit gesture — leave cleanly */
+            ret = 0;
             break;
         }
 
-        if (result > 0) {
-            /*
-             * Process the VNC message.  This calls vnc_fb_update() for each
-             * dirty rectangle, which converts + scales only the changed pixels
-             * into the back buffer.  With Tight encoding, updates are small
-             * and efficient.
-             *
-             * After processing, LibVNCClient automatically sends an
-             * incremental framebuffer update request for the next frame.
-             */
-            if (!HandleRFBServerMessage(g_vnc_client)) {
-                LOG_ERROR(&g_logger, "Error handling VNC message");
-                break;
-            }
+        if (!g_running) {
+            ret = 0;    /* clean exit via signal */
+            break;
         }
 
-        /* Process touch input → VNC pointer events + exit gesture */
-        if (g_touch_ok) {
-            vnc_input_process(&g_input);
+#if RECONNECT_ENABLED
+        /* Reset attempt counter after a successful session (connection
+         * was established then lost).  Failed connections (-1) keep
+         * incrementing so the backoff grows while the server is down. */
+        if (result == 0)
+            attempt = 0;
 
-            /* Check for exit gesture (long-press top-left corner) */
-            if (vnc_input_exit_requested(&g_input)) {
-                LOG_INFO(&g_logger, "Exit gesture detected, shutting down...");
-                break;
-            }
+        /* Connection lost or failed — enter reconnect loop */
+        attempt++;
+        LOG_INFO(&g_logger, "Connection lost/failed, reconnect attempt %d", attempt);
 
-            /* Draw exit progress indicator while holding corner */
-            float prog = vnc_input_exit_progress(&g_input);
-            if (prog > 0.01f) {
-                /*
-                 * Draw a small progress arc/bar in the top-left corner.
-                 * Just a thin horizontal bar that fills left-to-right.
-                 * It's drawn directly into the back buffer and will be
-                 * overwritten by the next VNC update, so non-persistent.
-                 */
-                uint16_t *buf = (uint16_t *)g_fb.back_buffer;
-                int bar_width = (int)(EXIT_ZONE_SIZE * prog);
-                uint16_t color = (prog < 0.7f) ? RGB565_YELLOW : RGB565_RED;
-                for (int y = 0; y < 3; y++)
-                    for (int x = 0; x < bar_width && x < SCREEN_WIDTH; x++)
-                        buf[y * SCREEN_WIDTH + x] = color;
-                g_renderer.needs_present = true;
-            }
+        if (RECONNECT_MAX_ATTEMPTS > 0 && attempt > RECONNECT_MAX_ATTEMPTS) {
+            LOG_INFO(&g_logger, "Max reconnect attempts (%d) reached, exiting",
+                     RECONNECT_MAX_ATTEMPTS);
+            ret = -1;
+            break;
         }
 
-        /*
-         * Present frame to screen (rate-capped, only if dirty).
-         * If no VNC updates arrived and no new data since last swap,
-         * this is a no-op — saves the entire fb_swap memcpy.
-         */
-        vnc_renderer_present(&g_renderer);
+        /* Pick backoff delay (cap at last entry) */
+        int delay_idx = attempt - 1;
+        if (delay_idx >= RECONNECT_DELAYS_COUNT)
+            delay_idx = RECONNECT_DELAYS_COUNT - 1;
+        int wait_sec = backoff_delays[delay_idx];
+
+        /* Drain any lingering touch events before showing UI */
+        if (g_touch_ok)
+            touch_drain_events(&g_touch);
+
+        int ui_result = reconnect_ui(attempt, wait_sec);
+        if (ui_result == 0) {
+            /* User cancelled */
+            LOG_INFO(&g_logger, "User cancelled reconnect");
+            ret = 0;
+            break;
+        }
+        if (ui_result < 0) {
+            /* Signal received */
+            break;
+        }
+        /* ui_result == 1 → try connecting again (top of loop) */
+
+        /* Drain touch events so a lingering press from "Connect Now"
+         * doesn't bleed into the next vnc_session. */
+        if (g_touch_ok)
+            touch_drain_events(&g_touch);
+#else
+        /* Reconnect disabled — exit on first disconnect */
+        ret = 0;
+        break;
+#endif
     }
 
-    ret = 0;
-    LOG_INFO(&g_logger, "Main loop exited cleanly");
-
-cleanup:
-    if (g_vnc_client) {
-        rfbClientCleanup(g_vnc_client);
-        g_vnc_client = NULL;
-    }
-
-    vnc_input_cleanup(&g_input);
+    /* ── Final cleanup ───────────────────────────────────────────── */
     vnc_renderer_cleanup(&g_renderer);
 
     hw_set_led(LED_GREEN, 0);
@@ -413,7 +628,7 @@ cleanup:
 int main(int argc, char *argv[]) {
     /* --help */
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        printf("RoomWizard VNC Client v2.1\n\n");
+        printf("RoomWizard VNC Client v2.2\n\n");
         printf("Usage: vnc_client [OPTIONS] [host [port]]\n\n");
         printf("Options:\n");
         printf("  --config <path>   Config file (default: %s)\n", VNC_CONFIG_FILE);
@@ -428,8 +643,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("╔═══════════════════════════════════════╗\n");
-    printf("║  RoomWizard VNC Client v2.1           ║\n");
-    printf("║  Phase 2: Optimized + Bilinear        ║\n");
+    printf("║  RoomWizard VNC Client v2.2           ║\n");
+    printf("║  Auto-Reconnect + Bilinear            ║\n");
     printf("╚═══════════════════════════════════════╝\n\n");
 
     /* Initialize logger (file + stderr) */

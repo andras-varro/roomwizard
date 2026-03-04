@@ -130,6 +130,24 @@ void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
     }
 }
 
+void vnc_renderer_fill_rect(Framebuffer *fb, int x, int y, int w, int h,
+                            uint16_t color) {
+    if (!fb || !fb->back_buffer) return;
+    uint16_t *buf = (uint16_t *)fb->back_buffer;
+    for (int row = y; row < y + h && row < SCREEN_HEIGHT; row++) {
+        if (row < 0) continue;
+        for (int col = x; col < x + w && col < SCREEN_WIDTH; col++) {
+            if (col < 0) continue;
+            buf[row * SCREEN_WIDTH + col] = color;
+        }
+    }
+}
+
+int vnc_renderer_text_width(const char *text, int scale) {
+    if (!text) return 0;
+    return (int)strlen(text) * 6 * scale;
+}
+
 /* ── Renderer lifecycle ────────────────────────────────────────────── */
 
 int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb) {

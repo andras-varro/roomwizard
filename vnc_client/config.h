@@ -71,4 +71,20 @@ typedef enum {
 #define EXIT_ZONE_SIZE 60
 #define EXIT_HOLD_MS 3000
 
+// Auto-reconnect on connection drop
+// Backoff: 2s, 5s, 10s, 30s, 60s (then stay at 60s)
+#define RECONNECT_ENABLED       1
+#define RECONNECT_MAX_ATTEMPTS  0       // 0 = unlimited
+#define RECONNECT_DELAYS        {2, 5, 10, 30, 60}
+#define RECONNECT_DELAYS_COUNT  5
+#define RECONNECT_INITIAL_CONNECT_TIMEOUT 10  // seconds before first-connect gives up
+#define RECONNECT_CONNECT_TIMEOUT    5   // seconds TCP connect timeout during reconnect
+
+// Reconnect UI button geometry (800×480 screen)
+#define RECONNECT_BTN_W         160
+#define RECONNECT_BTN_H         44
+#define RECONNECT_BTN_Y         380
+#define RECONNECT_BTN_CANCEL_X  160
+#define RECONNECT_BTN_CONNECT_X 480
+
 #endif // VNC_CONFIG_H

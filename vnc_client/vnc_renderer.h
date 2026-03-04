@@ -38,6 +38,7 @@
 #define RGB565_GREEN  0x07E0
 #define RGB565_BLUE   0x001F
 #define RGB565_YELLOW 0xFFE0
+#define RGB565_GREY   0x8410
 
 /* Precomputed bilinear X-coordinate entry */
 typedef struct {
@@ -108,6 +109,13 @@ void vnc_renderer_clear_screen(Framebuffer *fb);
 /* 16bpp utility: draw text using built-in 5×7 bitmap font */
 void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
                             uint16_t color, int scale);
+
+/* 16bpp utility: draw a filled rectangle */
+void vnc_renderer_fill_rect(Framebuffer *fb, int x, int y, int w, int h,
+                            uint16_t color);
+
+/* 16bpp utility: measure text width in pixels for a given scale */
+int vnc_renderer_text_width(const char *text, int scale);
 
 /* Cleanup renderer (restores 32bpp on exit) */
 void vnc_renderer_cleanup(VNCRenderer *renderer);
