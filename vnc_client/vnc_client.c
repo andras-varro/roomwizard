@@ -543,7 +543,16 @@ static int run_vnc_client(const char *host, int port) {
         int result = vnc_session(host, port, attempt);
 
         if (result == 1) {
-            /* User exit gesture — leave cleanly */
+            /* User exit gesture — switch back to app_launcher and exit.
+             * respawn.sh re-reads default-app each cycle, so it will
+             * start the launcher instead of restarting us. */
+            FILE *f = fopen(RESPAWN_CONFIG_FILE, "w");
+            if (f) {
+                fprintf(f, "%s\n", APP_LAUNCHER_PATH);
+                fclose(f);
+                LOG_INFO(&g_logger, "Wrote %s to %s",
+                         APP_LAUNCHER_PATH, RESPAWN_CONFIG_FILE);
+            }
             ret = 0;
             break;
         }

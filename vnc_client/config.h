@@ -80,6 +80,10 @@ typedef enum {
 #define RECONNECT_INITIAL_CONNECT_TIMEOUT 10  // seconds before first-connect gives up
 #define RECONNECT_CONNECT_TIMEOUT    5   // seconds TCP connect timeout during reconnect
 
+// Respawn integration: on exit gesture, switch default-app back to launcher
+#define RESPAWN_CONFIG_FILE    "/opt/roomwizard/default-app"
+#define APP_LAUNCHER_PATH     "/opt/roomwizard/app_launcher"
+
 // Reconnect UI button geometry (800×480 screen)
 #define RECONNECT_BTN_W         160
 #define RECONNECT_BTN_H         44
