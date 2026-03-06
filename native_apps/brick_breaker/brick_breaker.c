@@ -32,9 +32,9 @@
 
 /* Play area within the safe zone */
 #define AREA_X      SCREEN_SAFE_LEFT
-#define AREA_Y      (SCREEN_SAFE_TOP + 50)      /* leave room for HUD */
+#define AREA_Y      (SCREEN_SAFE_TOP + 65)      /* leave room for buttons (50px) + small gap */
 #define AREA_W      SCREEN_SAFE_WIDTH
-#define AREA_H      (SCREEN_SAFE_HEIGHT - 50)
+#define AREA_H      (SCREEN_SAFE_HEIGHT - 65)
 
 /* Paddle */
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)
@@ -47,8 +47,8 @@
 #define BALL_RADIUS     6
 #define MAX_BALLS       8
 #define BALL_BASE_SPEED 4.0f
-#define BALL_MAX_SPEED  9.0f
-#define BALL_SPEED_INC  0.15f
+#define BALL_MAX_SPEED  11.0f
+#define BALL_SPEED_INC  0.25f  /* Increased from 0.15f for faster progression */
 
 /* Bricks */
 #define BRICK_COLS      10
@@ -84,6 +84,13 @@ typedef enum {
 } GameScreen;
 
 typedef enum {
+    BRICK_NORMAL = 0,      /* Regular brick */
+    BRICK_INDESTRUCTIBLE,  /* Can only be destroyed with fireball */
+    BRICK_BONUS,           /* Gives bonus points (2x) */
+    BRICK_EXPLOSIVE        /* Destroys adjacent bricks when hit */
+} BrickType;
+
+typedef enum {
     PU_NONE = 0,
     PU_WIDE,        /* wider paddle */
     PU_NARROW,      /* narrower paddle (penalty) */
@@ -104,8 +111,9 @@ typedef struct {
 
 typedef struct {
     int  x, y, w, h;
-    int  health;     /* 0 = destroyed */
+    int  health;     /* 0 = destroyed, -1 = indestructible */
     int  max_health;
+    BrickType type;  /* brick special type */
     uint32_t color_top;
     uint32_t color_bot;
 } Brick;
@@ -179,10 +187,20 @@ static Button btn_next_level;
 /* Brick colour sets per health [top, bottom] */
 static const uint32_t brick_colors[][2] = {
     { RGB(80, 220, 80),   RGB(40, 140, 40)  },  /* health 1 — green */
-    { RGB(255, 255, 80),  RGB(180, 160, 30) },   /* health 2 — yellow */
-    { RGB(255, 160, 50),  RGB(180, 90, 20)  },   /* health 3 — orange */
-    { RGB(255, 60, 60),   RGB(160, 30, 30)  },   /* health 4 — red */
+    { RGB(255, 255, 80),  RGB(180, 160, 30) },  /* health 2 — yellow */
+    { RGB(255, 160, 50),  RGB(180, 90, 20)  },  /* health 3 — orange */
+    { RGB(255, 60, 60),   RGB(160, 30, 30)  },  /* health 4 — red */
+    { RGB(180, 100, 255), RGB(120, 50, 180) },  /* health 5 — purple */
+    { RGB(0, 200, 255),   RGB(0, 120, 180)  },  /* health 6 — cyan */
 };
+
+/* Special brick colors */
+#define BRICK_INDESTRUCTIBLE_TOP  RGB(80, 80, 80)
+#define BRICK_INDESTRUCTIBLE_BOT  RGB(50, 50, 50)
+#define BRICK_BONUS_TOP           RGB(255, 215, 0)
+#define BRICK_BONUS_BOT           RGB(200, 160, 0)
+#define BRICK_EXPLOSIVE_TOP       RGB(255, 100, 0)
+#define BRICK_EXPLOSIVE_BOT       RGB(180, 50, 0)
 
 /* Power-up visual config (color, letter) */
 static const struct { uint32_t color; char symbol; const char *name; } pu_info[] = {
@@ -318,6 +336,9 @@ static void create_bricks(void) {
     int brick_w = (AREA_W - BRICK_PAD * (BRICK_COLS + 1)) / BRICK_COLS;
     game.brick_count = 0;
     game.bricks_left = 0;
+    
+    /* Add larger vertical offset - creates space above bricks for ball bouncing */
+    int vertical_offset = 80;  /* pixels from top of play area - allows ball to go behind/above bricks */
 
     for (int r = 0; r < lv->rows && r < BRICK_ROWS; r++) {
         for (int c = 0; c < BRICK_COLS; c++) {
@@ -326,16 +347,42 @@ static void create_bricks(void) {
 
             Brick *b = &game.bricks[game.brick_count];
             b->x = AREA_X + BRICK_PAD + c * (brick_w + BRICK_PAD);
-            b->y = AREA_Y + BRICK_PAD + r * (BRICK_H + BRICK_PAD);
+            b->y = AREA_Y + BRICK_PAD + vertical_offset + r * (BRICK_H + BRICK_PAD);
             b->w = brick_w;
             b->h = BRICK_H;
             b->health = lv->health[r];
             b->max_health = b->health;
-            int ci = clampi(b->health - 1, 0, 3);
-            b->color_top = brick_colors[ci][0];
-            b->color_bot = brick_colors[ci][1];
+            
+            /* Determine brick type - 10% chance for special bricks on higher levels */
+            b->type = BRICK_NORMAL;
+            if (game.level >= 3 && (rand() % 100) < 10) {
+                int special_type = rand() % 3;
+                if (special_type == 0 && game.level >= 5) {
+                    b->type = BRICK_INDESTRUCTIBLE;
+                    b->health = -1;  /* Special marker for indestructible */
+                    b->color_top = BRICK_INDESTRUCTIBLE_TOP;
+                    b->color_bot = BRICK_INDESTRUCTIBLE_BOT;
+                } else if (special_type == 1) {
+                    b->type = BRICK_BONUS;
+                    b->color_top = BRICK_BONUS_TOP;
+                    b->color_bot = BRICK_BONUS_BOT;
+                } else {
+                    b->type = BRICK_EXPLOSIVE;
+                    b->color_top = BRICK_EXPLOSIVE_TOP;
+                    b->color_bot = BRICK_EXPLOSIVE_BOT;
+                }
+            } else {
+                /* Normal brick - use health-based colors */
+                int ci = clampi(b->health - 1, 0, 5);
+                b->color_top = brick_colors[ci][0];
+                b->color_bot = brick_colors[ci][1];
+            }
+            
             game.brick_count++;
-            game.bricks_left++;
+            /* Only count non-indestructible bricks for level completion */
+            if (b->type != BRICK_INDESTRUCTIBLE) {
+                game.bricks_left++;
+            }
         }
     }
 }
@@ -414,20 +461,23 @@ static void apply_powerup(PowerUpType type) {
         game.fx.wide_end = 0;
         break;
     case PU_MULTIBALL: {
-        /* Clone each active non-stuck ball into 2 new ones */
+        /* Spawn 2 new balls moving upward at different angles */
         int n = game.ball_count;
         for (int i = 0; i < n && game.ball_count < MAX_BALLS - 1; i++) {
             Ball *src = &game.balls[i];
             if (!src->active || src->stuck) continue;
-            float angle_off = 0.4f;
-            float cs = cosf(angle_off), sn = sinf(angle_off);
+            
+            /* Spawn balls moving upward at -60° and -120° (30° left/right of vertical) */
+            float angle1 = -M_PI / 2.0f - 0.5f;  /* -60° (upward-left) */
+            float angle2 = -M_PI / 2.0f + 0.5f;  /* -120° (upward-right) */
+            
             add_ball(src->x, src->y,
-                     src->dx * cs - src->dy * sn,
-                     src->dx * sn + src->dy * cs,
+                     cosf(angle1) * src->speed,
+                     sinf(angle1) * src->speed,
                      src->speed);
             add_ball(src->x, src->y,
-                     src->dx * cs + src->dy * sn,
-                    -src->dx * sn + src->dy * cs,
+                     cosf(angle2) * src->speed,
+                     sinf(angle2) * src->speed,
                      src->speed);
         }
         audio_blip(&audio);
@@ -592,20 +642,75 @@ static void update_balls(void) {
                 b->y + BALL_RADIUS <= br->y || b->y - BALL_RADIUS >= br->y + br->h)
                 continue;
 
-            /* Hit! */
-            if (b->fireball) {
+            /* Hit! Handle special brick types */
+            bool brick_destroyed = false;
+            
+            if (br->type == BRICK_INDESTRUCTIBLE) {
+                /* Indestructible bricks can only be destroyed by fireball */
+                if (b->fireball) {
+                    br->health = 0;
+                    brick_destroyed = true;
+                    game.score += 50 * game.level;  /* Bonus for destroying indestructible */
+                }
+                /* Otherwise just bounce off */
+            } else if (br->type == BRICK_BONUS) {
+                /* Bonus brick - double points */
                 br->health = 0;
+                brick_destroyed = true;
+                game.score += 20 * game.level;  /* 2x normal points */
+                audio_interrupt(&audio);
+                audio_tone(&audio, 1500, 30);  /* Higher pitch for bonus */
+            } else if (br->type == BRICK_EXPLOSIVE) {
+                /* Explosive brick - destroys adjacent bricks */
+                br->health = 0;
+                brick_destroyed = true;
+                game.score += 15 * game.level;
+                
+                /* Destroy adjacent bricks */
+                for (int k = 0; k < game.brick_count; k++) {
+                    if (k == j) continue;
+                    Brick *adj = &game.bricks[k];
+                    if (adj->health <= 0) continue;
+                    
+                    /* Check if adjacent (within 1.5 brick widths) */
+                    int dx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
+                    int dy = abs((adj->y + adj->h/2) - (br->y + br->h/2));
+                    if (dx < br->w * 1.5f && dy < br->h * 1.5f) {
+                        if (adj->type != BRICK_INDESTRUCTIBLE) {
+                            adj->health = 0;
+                            if (adj->type != BRICK_INDESTRUCTIBLE) {
+                                game.bricks_left--;
+                            }
+                            spawn_particles((float)(adj->x + adj->w / 2),
+                                          (float)(adj->y + adj->h / 2),
+                                          adj->color_top, 4);
+                        }
+                    }
+                }
+                audio_interrupt(&audio);
+                audio_tone(&audio, 1000, 40);  /* Explosion sound */
             } else {
-                br->health--;
-                /* Update colours for new health */
-                int ci = clampi(br->health - 1, 0, 3);
-                br->color_top = brick_colors[ci][0];
-                br->color_bot = brick_colors[ci][1];
+                /* Normal brick */
+                if (b->fireball) {
+                    br->health = 0;
+                    brick_destroyed = true;
+                } else {
+                    br->health--;
+                    /* Update colours for new health */
+                    int ci = clampi(br->health - 1, 0, 5);
+                    br->color_top = brick_colors[ci][0];
+                    br->color_bot = brick_colors[ci][1];
+                    if (br->health <= 0) {
+                        brick_destroyed = true;
+                    }
+                }
+                game.score += 10 * game.level;
             }
 
-            if (br->health <= 0) {
-                game.bricks_left--;
-                game.score += 10 * game.level;
+            if (brick_destroyed) {
+                if (br->type != BRICK_INDESTRUCTIBLE) {
+                    game.bricks_left--;
+                }
                 spawn_particles((float)(br->x + br->w / 2),
                                 (float)(br->y + br->h / 2),
                                 br->color_top, 6);
@@ -613,13 +718,13 @@ static void update_balls(void) {
                               (float)(br->y + br->h / 2));
                 audio_interrupt(&audio);
                 audio_tone(&audio, 1200, 25);
-            } else {
+            } else if (br->type != BRICK_INDESTRUCTIBLE) {
                 audio_interrupt(&audio);
                 audio_tone(&audio, 800, 20);
             }
 
-            /* Bounce (skip if fireball) */
-            if (!b->fireball) {
+            /* Bounce (skip if fireball or hit indestructible without fireball) */
+            if (!b->fireball || br->type == BRICK_INDESTRUCTIBLE) {
                 float overlap_l = (b->x + BALL_RADIUS) - br->x;
                 float overlap_r = (br->x + br->w) - (b->x - BALL_RADIUS);
                 float overlap_t = (b->y + BALL_RADIUS) - br->y;
@@ -732,26 +837,27 @@ static void update_game(void) {
 static void draw_hud(void) {
     char buf[64];
 
-    /* Level */
+    /* Level - positioned next to menu button */
     snprintf(buf, sizeof(buf), "LV %d", game.level);
-    fb_draw_text(&fb, AREA_X + 4, SCREEN_SAFE_TOP + 8, buf, HUD_COLOR, 2);
+    fb_draw_text(&fb, AREA_X + 90, SCREEN_SAFE_TOP + 22, buf, HUD_COLOR, 1);
 
-    /* Score (centred) */
+    /* Score (centred between buttons) */
     snprintf(buf, sizeof(buf), "%d", game.score);
     int sw = (int)strlen(buf) * 12;
-    fb_draw_text(&fb, AREA_X + AREA_W / 2 - sw / 2, SCREEN_SAFE_TOP + 8, buf, HUD_COLOR, 2);
+    fb_draw_text(&fb, AREA_X + AREA_W / 2 - sw / 2, SCREEN_SAFE_TOP + 20, buf, HUD_COLOR, 2);
 
-    /* Hearts for lives */
+    /* Hearts for lives - positioned before exit button, compact */
     for (int i = 0; i < game.lives && i < 9; i++) {
-        int hx = AREA_X + AREA_W - 20 - i * 20;
-        int hy = SCREEN_SAFE_TOP + 10;
-        fb_fill_circle(&fb, hx, hy + 3, 5, HEART_COLOR);
-        fb_fill_circle(&fb, hx + 7, hy + 3, 5, HEART_COLOR);
-        fb_fill_rect(&fb, hx - 4, hy + 3, 15, 7, HEART_COLOR);
+        int hx = AREA_X + AREA_W - 90 - i * 14;  /* smaller spacing */
+        int hy = SCREEN_SAFE_TOP + 22;
+        /* Smaller hearts */
+        fb_fill_circle(&fb, hx, hy + 2, 4, HEART_COLOR);
+        fb_fill_circle(&fb, hx + 5, hy + 2, 4, HEART_COLOR);
+        fb_fill_rect(&fb, hx - 3, hy + 2, 11, 5, HEART_COLOR);
     }
 
     /* Active effect indicators */
-    int ey = SCREEN_SAFE_TOP + 30;
+    int ey = AREA_Y + 5;  /* Position just inside the play area */
     if (game.fx.wide_end > frame_time_ms) {
         int secs = (game.fx.wide_end - frame_time_ms) / 1000 + 1;
         snprintf(buf, sizeof(buf), "WIDE %ds", secs);
@@ -794,8 +900,32 @@ static void draw_bricks(void) {
         fb_fill_rect_alpha(&fb, b->x + 1, b->y + b->h - 2, b->w - 2, 2,
                            COLOR_BLACK, 80);
 
+        /* Special brick indicators */
+        if (b->type == BRICK_INDESTRUCTIBLE) {
+            /* Diagonal stripes pattern for indestructible */
+            for (int s = 0; s < b->w + b->h; s += 6) {
+                int x1 = b->x + s;
+                int y1 = b->y;
+                int x2 = b->x;
+                int y2 = b->y + s;
+                if (x1 < b->x + b->w && y2 < b->y + b->h) {
+                    fb_draw_line(&fb, x1, y1, x2, y2, RGB(120, 120, 120));
+                }
+            }
+        } else if (b->type == BRICK_BONUS) {
+            /* Star/sparkle effect for bonus bricks */
+            int cx = b->x + b->w / 2;
+            int cy = b->y + b->h / 2;
+            fb_draw_line(&fb, cx - 4, cy, cx + 4, cy, COLOR_WHITE);
+            fb_draw_line(&fb, cx, cy - 4, cx, cy + 4, COLOR_WHITE);
+        } else if (b->type == BRICK_EXPLOSIVE) {
+            /* X pattern for explosive bricks */
+            fb_draw_line(&fb, b->x + 2, b->y + 2, b->x + b->w - 2, b->y + b->h - 2, RGB(255, 255, 0));
+            fb_draw_line(&fb, b->x + b->w - 2, b->y + 2, b->x + 2, b->y + b->h - 2, RGB(255, 255, 0));
+        }
+
         /* Health number for multi-hit bricks */
-        if (b->health > 1 && b->health < 100) {
+        if (b->health > 1 && b->health < 100 && b->type == BRICK_NORMAL) {
             char num[8];
             snprintf(num, sizeof(num), "%d", b->health);
             int tw = (int)strlen(num) * 6;
