@@ -4,7 +4,7 @@
  * Features:
  *   - Touch-controlled paddle (drag to move, tap to launch)
  *   - 10 levels with varied brick patterns and increasing difficulty
- *   - 6 power-ups: Wide, Narrow, Multi-Ball, Slow, Fireball, Extra Life
+ *   - 9 power-ups in opposing pairs with permanent stacking behavior
  *   - Gradient bricks, glowing ball, smooth 60 FPS rendering
  *   - High-score leaderboard, audio feedback, LED effects
  *
@@ -40,8 +40,14 @@
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)
 #define PADDLE_HEIGHT   14
 #define PADDLE_BASE_W   100
-#define PADDLE_MIN_W    50
-#define PADDLE_MAX_W    180
+
+/* Stepped paddle widths: index 0=narrow(-2), 1=small(-1), 2=normal(0), 3=large(+1), 4=larger(+2) */
+#define PADDLE_LEVELS 5
+static const int PADDLE_WIDTHS[PADDLE_LEVELS] = { 40, 70, 100, 140, 180 };
+
+/* Stepped ball speed multipliers: 0=very slow(-2), 1=slow(-1), 2=normal(0), 3=fast(+1), 4=very fast(+2) */
+#define SPEED_LEVELS 5
+static const float SPEED_MULTS[SPEED_LEVELS] = { 0.55f, 0.75f, 1.0f, 1.25f, 1.5f };
 
 /* Ball */
 #define BALL_RADIUS     6
@@ -51,25 +57,27 @@
 #define BALL_SPEED_INC  0.25f  /* Increased from 0.15f for faster progression */
 
 /* Bricks */
-#define BRICK_COLS      10
-#define BRICK_ROWS      6
+#define BRICK_COLS      12
+#define BRICK_ROWS      8
 #define BRICK_PAD       3
-#define BRICK_H         16
-#define MAX_BRICKS      (BRICK_COLS * BRICK_ROWS)
+#define BRICK_H         20
+#define MAX_BRICKS      96
 
 /* Power-ups */
 #define MAX_POWERUPS    8
 #define POWERUP_SIZE    18
 #define POWERUP_SPEED   2
 #define POWERUP_CHANCE  30      /* percent */
-#define POWERUP_DUR_MS  12000   /* timed power-up duration */
 
 /* Lives and levels */
 #define STARTING_LIVES  5
 #define MAX_LEVELS      10
 
 /* Particles */
-#define MAX_PARTICLES   40
+#define MAX_PARTICLES   150
+
+/* Fireball trail */
+#define TRAIL_LEN       6
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Types
@@ -91,13 +99,16 @@ typedef enum {
 } BrickType;
 
 typedef enum {
-    PU_NONE = 0,
-    PU_WIDE,        /* wider paddle */
-    PU_NARROW,      /* narrower paddle (penalty) */
-    PU_MULTIBALL,   /* spawn 2 extra balls */
-    PU_SLOW,        /* slow all balls down */
-    PU_FIREBALL,    /* ball smashes through bricks without bouncing */
-    PU_LIFE         /* +1 life */
+    PU_WIDEN,        /* W - make paddle wider (one step) */
+    PU_NARROW,       /* N - make paddle narrower (one step) */
+    PU_FIREBALL,     /* F - activate fireball mode */
+    PU_NORMALBALL,   /* B - deactivate fireball, return to normal */
+    PU_SPEED_UP,     /* > - speed up ball (one step) */
+    PU_SLOW_DOWN,    /* < - slow down ball (one step) */
+    PU_EXTRA_LIFE,   /* + - gain one life */
+    PU_LOSE_LIFE,    /* - - lose one life (but NOT if on last life!) */
+    PU_MULTIBALL,    /* M - spawn extra balls */
+    NUM_POWERUP_TYPES
 } PowerUpType;
 
 typedef struct {
@@ -107,6 +118,9 @@ typedef struct {
     bool  active;
     bool  stuck;     /* stuck on paddle until launched */
     bool  fireball;
+    /* Fireball visual trail (circular buffer of recent positions) */
+    float trail_x[TRAIL_LEN], trail_y[TRAIL_LEN];
+    int   trail_idx;  /* next write position in circular buffer */
 } Ball;
 
 typedef struct {
@@ -114,6 +128,7 @@ typedef struct {
     int  health;     /* 0 = destroyed, -1 = indestructible */
     int  max_health;
     BrickType type;  /* brick special type */
+    int  color_index; /* row index for colorful rendering */
     uint32_t color_top;
     uint32_t color_bot;
 } Brick;
@@ -132,11 +147,9 @@ typedef struct {
 } Particle;
 
 typedef struct {
-    /* Active power-up timers (0 = inactive) */
-    uint32_t wide_end;
-    uint32_t narrow_end;
-    uint32_t slow_end;
-    uint32_t fireball_end;
+    int paddle_level;    /* -2 to +2, starts at 0 (index into PADDLE_WIDTHS is paddle_level + 2) */
+    int speed_level;     /* -2 to +2, starts at 0 (index into SPEED_MULTS is speed_level + 2) */
+    int fireball;        /* 0 or 1 */
 } ActiveEffects;
 
 typedef struct {
@@ -155,6 +168,10 @@ typedef struct {
     ActiveEffects fx;
     GameScreen  screen;
     bool        ball_launched;
+    /* Screen shake */
+    float       shake_x, shake_y;       /* current offset to apply to rendering */
+    int         shake_frames;           /* frames remaining */
+    float       shake_intensity;        /* current max amplitude in pixels */
 } GameState;
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -172,7 +189,7 @@ static uint32_t     frame_time_ms;  /* updated each frame */
 /* UI buttons */
 static Button btn_menu, btn_exit;
 static Button btn_start, btn_restart;
-static Button btn_resume, btn_exit_pause;
+static Button btn_resume, btn_retire, btn_exit_pause;
 static Button btn_next_level;
 
 /* ── colour palette ──────────────────────────────────────────────────── */
@@ -194,6 +211,19 @@ static const uint32_t brick_colors[][2] = {
     { RGB(0, 200, 255),   RGB(0, 120, 180)  },  /* health 6 — cyan */
 };
 
+/* Row-based color palette for single-hit bricks (rainbow gradient) */
+static const uint32_t ROW_COLORS[][2] = {
+    { RGB(255, 60, 60),   RGB(180, 30, 30) },   /* 0: Red */
+    { RGB(255, 140, 40),  RGB(180, 80, 20) },   /* 1: Orange */
+    { RGB(255, 220, 40),  RGB(180, 160, 20) },  /* 2: Yellow */
+    { RGB(80, 220, 80),   RGB(40, 140, 40) },   /* 3: Green */
+    { RGB(40, 200, 200),  RGB(20, 130, 130) },  /* 4: Teal */
+    { RGB(60, 140, 255),  RGB(30, 80, 180) },   /* 5: Blue */
+    { RGB(160, 100, 255), RGB(100, 50, 180) },  /* 6: Purple */
+    { RGB(255, 100, 200), RGB(180, 50, 130) },  /* 7: Pink */
+};
+#define NUM_ROW_COLORS 8
+
 /* Special brick colors */
 #define BRICK_INDESTRUCTIBLE_TOP  RGB(80, 80, 80)
 #define BRICK_INDESTRUCTIBLE_BOT  RGB(50, 50, 50)
@@ -202,14 +232,17 @@ static const uint32_t brick_colors[][2] = {
 #define BRICK_EXPLOSIVE_TOP       RGB(255, 100, 0)
 #define BRICK_EXPLOSIVE_BOT       RGB(180, 50, 0)
 
-/* Power-up visual config (color, letter) */
+/* Power-up visual config (color, letter) per type */
 static const struct { uint32_t color; char symbol; const char *name; } pu_info[] = {
-    [PU_WIDE]     = { RGB(0, 255, 120),  'W', "WIDE"     },
-    [PU_NARROW]   = { RGB(255, 50, 50),  'N', "NARROW"   },
-    [PU_MULTIBALL]= { RGB(0, 150, 255),  'M', "MULTI"    },
-    [PU_SLOW]     = { RGB(255, 255, 60),  'S', "SLOW"    },
-    [PU_FIREBALL] = { RGB(255, 140, 0),  'F', "FIRE"     },
-    [PU_LIFE]     = { RGB(255, 80, 200), '+', "LIFE"     },
+    [PU_WIDEN]      = { RGB(80, 220, 80),   'W', "WIDEN"   },
+    [PU_NARROW]     = { RGB(255, 60, 60),   'N', "NARROW"  },
+    [PU_FIREBALL]   = { RGB(255, 140, 0),   'F', "FIRE"    },
+    [PU_NORMALBALL] = { RGB(200, 200, 200), 'B', "NORMAL"  },
+    [PU_SPEED_UP]   = { RGB(0, 200, 255),   '>', "SPD UP"  },
+    [PU_SLOW_DOWN]  = { RGB(255, 255, 80),  '<', "SPD DN"  },
+    [PU_EXTRA_LIFE] = { RGB(255, 100, 200), '+', "LIFE+"   },
+    [PU_LOSE_LIFE]  = { RGB(180, 60, 180),  '-', "LIFE-"   },
+    [PU_MULTIBALL]  = { RGB(60, 140, 255),  'M', "MULTI"   },
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -233,16 +266,16 @@ typedef struct {
 } LevelDef;
 
 static const LevelDef levels[MAX_LEVELS] = {
-    { 3, {1,1,1,0,0,0},       PAT_STANDARD,     1.0f },
-    { 4, {1,1,2,1,0,0},       PAT_STANDARD,     1.0f },
-    { 4, {2,1,2,1,0,0},       PAT_CHECKERBOARD, 1.05f },
-    { 5, {2,2,1,2,1,0},       PAT_PYRAMID,      1.1f },
-    { 5, {2,2,2,2,1,0},       PAT_DIAMOND,      1.15f },
-    { 5, {3,2,2,2,1,0},       PAT_BORDER,       1.2f },
-    { 6, {3,2,2,2,2,1},       PAT_STRIPES,      1.25f },
-    { 6, {3,3,2,2,2,1},       PAT_CHECKERBOARD, 1.3f },
-    { 6, {3,3,3,3,2,1},       PAT_PYRAMID,      1.35f },
-    { 6, {4,4,3,3,2,1},       PAT_DIAMOND,      1.4f },
+    { 5, {1,1,1,1,1,0,0,0},             PAT_STANDARD,     1.0f },
+    { 5, {1,1,2,1,1,0,0,0},             PAT_STANDARD,     1.0f },
+    { 6, {2,1,2,1,1,1,0,0},             PAT_CHECKERBOARD, 1.05f },
+    { 6, {2,2,1,2,1,1,0,0},             PAT_PYRAMID,      1.1f },
+    { 7, {2,2,2,2,1,1,1,0},             PAT_DIAMOND,      1.15f },
+    { 7, {3,2,2,2,1,1,1,0},             PAT_BORDER,       1.2f },
+    { 7, {3,2,2,2,2,1,1,0},             PAT_STRIPES,      1.25f },
+    { 8, {3,3,2,2,2,1,1,1},             PAT_CHECKERBOARD, 1.3f },
+    { 8, {3,3,3,3,2,2,1,1},             PAT_PYRAMID,      1.35f },
+    { 8, {4,4,3,3,2,2,1,1},             PAT_DIAMOND,      1.4f },
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -286,15 +319,17 @@ static void update_particles(void) {
     }
 }
 
-static void draw_particles(void) {
+static void draw_particles(int sx, int sy) {
     for (int i = 0; i < MAX_PARTICLES; i++) {
         Particle *p = &game.particles[i];
         if (p->life <= 0) continue;
+        int px = (int)p->x + sx;
+        int py = (int)p->y + sy;
         uint8_t alpha = (uint8_t)(255 * p->life / 22);
-        fb_draw_pixel_alpha(&fb, (int)p->x, (int)p->y, p->color, alpha);
-        fb_draw_pixel_alpha(&fb, (int)p->x + 1, (int)p->y, p->color, alpha);
-        fb_draw_pixel_alpha(&fb, (int)p->x, (int)p->y + 1, p->color, alpha);
-        fb_draw_pixel_alpha(&fb, (int)p->x + 1, (int)p->y + 1, p->color, alpha);
+        fb_draw_pixel_alpha(&fb, px, py, p->color, alpha);
+        fb_draw_pixel_alpha(&fb, px + 1, py, p->color, alpha);
+        fb_draw_pixel_alpha(&fb, px, py + 1, p->color, alpha);
+        fb_draw_pixel_alpha(&fb, px + 1, py + 1, p->color, alpha);
     }
 }
 
@@ -338,7 +373,7 @@ static void create_bricks(void) {
     game.bricks_left = 0;
     
     /* Add larger vertical offset - creates space above bricks for ball bouncing */
-    int vertical_offset = 80;  /* pixels from top of play area - allows ball to go behind/above bricks */
+    int vertical_offset = 40;  /* pixels from top of play area - allows ball to go behind/above bricks */
 
     for (int r = 0; r < lv->rows && r < BRICK_ROWS; r++) {
         for (int c = 0; c < BRICK_COLS; c++) {
@@ -352,21 +387,28 @@ static void create_bricks(void) {
             b->h = BRICK_H;
             b->health = lv->health[r];
             b->max_health = b->health;
+            b->color_index = r;
             
-            /* Determine brick type - 10% chance for special bricks on higher levels */
+            /* Determine brick type - special bricks on higher levels
+             * Level 3-6: 15% chance; Level 7+: 25% chance
+             * Among special bricks, explosive is weighted ~50% */
             b->type = BRICK_NORMAL;
-            if (game.level >= 3 && (rand() % 100) < 10) {
-                int special_type = rand() % 3;
-                if (special_type == 0 && game.level >= 5) {
+            int special_chance = (game.level >= 7) ? 25 : 15;
+            if (game.level >= 3 && (rand() % 100) < special_chance) {
+                int roll = rand() % 100;
+                if (roll < 15 && game.level >= 5) {
+                    /* 15% of specials: indestructible (level 5+) */
                     b->type = BRICK_INDESTRUCTIBLE;
                     b->health = -1;  /* Special marker for indestructible */
                     b->color_top = BRICK_INDESTRUCTIBLE_TOP;
                     b->color_bot = BRICK_INDESTRUCTIBLE_BOT;
-                } else if (special_type == 1) {
+                } else if (roll < 40) {
+                    /* 25% of specials: bonus */
                     b->type = BRICK_BONUS;
                     b->color_top = BRICK_BONUS_TOP;
                     b->color_bot = BRICK_BONUS_BOT;
                 } else {
+                    /* ~60% of specials: explosive */
                     b->type = BRICK_EXPLOSIVE;
                     b->color_top = BRICK_EXPLOSIVE_TOP;
                     b->color_bot = BRICK_EXPLOSIVE_BOT;
@@ -388,6 +430,48 @@ static void create_bricks(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ *  Effects helpers
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Reset all active effects to default (called on ball lost / level complete) */
+static void reset_effects(void) {
+    game.fx.paddle_level = 0;
+    game.fx.speed_level = 0;
+    game.fx.fireball = 0;
+}
+
+/* Apply paddle width from current effect level */
+static void apply_paddle_width(void) {
+    int idx = clampi(game.fx.paddle_level + 2, 0, PADDLE_LEVELS - 1);
+    game.paddle_w = PADDLE_WIDTHS[idx];
+}
+
+/* Get current speed multiplier from effect level */
+static float get_speed_mult(void) {
+    int idx = clampi(game.fx.speed_level + 2, 0, SPEED_LEVELS - 1);
+    return SPEED_MULTS[idx];
+}
+
+/* Normalize all active ball speeds to current base * level_mult * effect_mult */
+static void normalize_ball_speeds(void) {
+    const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
+    float effect_mult = get_speed_mult();
+    for (int i = 0; i < game.ball_count; i++) {
+        Ball *b = &game.balls[i];
+        if (!b->active || b->stuck) continue;
+        /* Recompute speed with new multiplier, preserving per-brick increments */
+        float base = b->speed / lv->speed_mult;  /* remove old level mult */
+        /* Re-apply with effect multiplier */
+        b->speed = base * lv->speed_mult * effect_mult;
+        float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
+        if (mag > 0.01f) {
+            b->dx = (b->dx / mag) * b->speed;
+            b->dy = (b->dy / mag) * b->speed;
+        }
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  *  Ball management
  * ══════════════════════════════════════════════════════════════════════════ */
 
@@ -399,17 +483,26 @@ static Ball *add_ball(float x, float y, float dx, float dy, float speed) {
     b->speed = speed;
     b->active = true;
     b->stuck = false;
-    b->fireball = (game.fx.fireball_end > frame_time_ms);
+    b->fireball = (game.fx.fireball != 0);
+    /* Initialize trail positions to starting position */
+    for (int t = 0; t < TRAIL_LEN; t++) {
+        b->trail_x[t] = x;
+        b->trail_y[t] = y;
+    }
+    b->trail_idx = 0;
     return b;
 }
 
 static void reset_ball_on_paddle(void) {
     game.ball_count = 0;
-    Ball *b = add_ball(game.paddle_x, PADDLE_Y - BALL_RADIUS - 1, 0, 0, 0);
+    float start_x = game.paddle_x;
+    float start_y = PADDLE_Y - BALL_RADIUS - 1;
+    Ball *b = add_ball(start_x, start_y, 0, 0, 0);
     if (b) {
         const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-        b->speed = BALL_BASE_SPEED * lv->speed_mult;
+        b->speed = BALL_BASE_SPEED * lv->speed_mult * get_speed_mult();
         b->stuck = true;
+        /* Re-initialize trail to paddle position (add_ball already did this) */
     }
     game.ball_launched = false;
 }
@@ -435,8 +528,36 @@ static void launch_ball(void) {
 static void spawn_powerup(float x, float y) {
     if ((rand() % 100) >= POWERUP_CHANCE) return;
 
-    /* Pick random type (1..6) */
-    PowerUpType type = (PowerUpType)(1 + rand() % 6);
+    /* Weighted random selection among 9 types.
+     * Positive (widen, fireball, slow_down, extra_life, multiball): ~13% each = 65%
+     * Negative (narrow, normalball, speed_up, lose_life): ~8-9% each = 35%
+     * Using weights summing to 100:
+     *   PU_WIDEN=13, PU_NARROW=9, PU_FIREBALL=13, PU_NORMALBALL=9,
+     *   PU_SPEED_UP=9, PU_SLOW_DOWN=13, PU_EXTRA_LIFE=13, PU_LOSE_LIFE=8, PU_MULTIBALL=13
+     */
+    static const struct { PowerUpType type; int weight; } pu_weights[] = {
+        { PU_WIDEN,      13 },
+        { PU_NARROW,      9 },
+        { PU_FIREBALL,   13 },
+        { PU_NORMALBALL,  9 },
+        { PU_SPEED_UP,    9 },
+        { PU_SLOW_DOWN,  13 },
+        { PU_EXTRA_LIFE, 13 },
+        { PU_LOSE_LIFE,   8 },
+        { PU_MULTIBALL,  13 },
+    };
+    static const int total_weight = 100;
+
+    int roll = rand() % total_weight;
+    PowerUpType type = PU_WIDEN;  /* fallback */
+    int cumulative = 0;
+    for (int i = 0; i < (int)(sizeof(pu_weights) / sizeof(pu_weights[0])); i++) {
+        cumulative += pu_weights[i].weight;
+        if (roll < cumulative) {
+            type = pu_weights[i].type;
+            break;
+        }
+    }
 
     for (int i = 0; i < MAX_POWERUPS; i++) {
         if (!game.powerups[i].active) {
@@ -450,15 +571,38 @@ static void apply_powerup(PowerUpType type) {
     hw_set_led(LED_GREEN, 100);
 
     switch (type) {
-    case PU_WIDE:
-        game.paddle_w = PADDLE_MAX_W;
-        game.fx.wide_end = frame_time_ms + POWERUP_DUR_MS;
-        game.fx.narrow_end = 0;  /* cancel any narrow */
+    case PU_WIDEN:
+        if (game.fx.paddle_level < 2) game.fx.paddle_level++;
+        apply_paddle_width();
         break;
     case PU_NARROW:
-        game.paddle_w = PADDLE_MIN_W;
-        game.fx.narrow_end = frame_time_ms + POWERUP_DUR_MS;
-        game.fx.wide_end = 0;
+        if (game.fx.paddle_level > -2) game.fx.paddle_level--;
+        apply_paddle_width();
+        break;
+    case PU_FIREBALL:
+        game.fx.fireball = 1;
+        for (int i = 0; i < game.ball_count; i++)
+            game.balls[i].fireball = true;
+        break;
+    case PU_NORMALBALL:
+        game.fx.fireball = 0;
+        for (int i = 0; i < game.ball_count; i++)
+            game.balls[i].fireball = false;
+        break;
+    case PU_SPEED_UP:
+        if (game.fx.speed_level < 2) game.fx.speed_level++;
+        normalize_ball_speeds();
+        break;
+    case PU_SLOW_DOWN:
+        if (game.fx.speed_level > -2) game.fx.speed_level--;
+        normalize_ball_speeds();
+        break;
+    case PU_EXTRA_LIFE:
+        game.lives++;
+        audio_blip(&audio);
+        break;
+    case PU_LOSE_LIFE:
+        if (game.lives > 1) game.lives--;
         break;
     case PU_MULTIBALL: {
         /* Spawn 2 new balls moving upward at different angles */
@@ -468,8 +612,8 @@ static void apply_powerup(PowerUpType type) {
             if (!src->active || src->stuck) continue;
             
             /* Spawn balls moving upward at -60° and -120° (30° left/right of vertical) */
-            float angle1 = -M_PI / 2.0f - 0.5f;  /* -60° (upward-left) */
-            float angle2 = -M_PI / 2.0f + 0.5f;  /* -120° (upward-right) */
+            float angle1 = -M_PI / 2.0f - 0.5f;  /* upward-left */
+            float angle2 = -M_PI / 2.0f + 0.5f;  /* upward-right */
             
             add_ball(src->x, src->y,
                      cosf(angle1) * src->speed,
@@ -483,68 +627,16 @@ static void apply_powerup(PowerUpType type) {
         audio_blip(&audio);
         break;
     }
-    case PU_SLOW:
-        game.fx.slow_end = frame_time_ms + POWERUP_DUR_MS;
-        for (int i = 0; i < game.ball_count; i++) {
-            Ball *b = &game.balls[i];
-            if (!b->active) continue;
-            b->speed *= 0.55f;
-            float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
-            if (mag > 0.01f) {
-                b->dx = (b->dx / mag) * b->speed;
-                b->dy = (b->dy / mag) * b->speed;
-            }
-        }
-        break;
-    case PU_FIREBALL:
-        game.fx.fireball_end = frame_time_ms + POWERUP_DUR_MS;
-        for (int i = 0; i < game.ball_count; i++)
-            game.balls[i].fireball = true;
-        break;
-    case PU_LIFE:
-        game.lives++;
-        audio_blip(&audio);
-        break;
     default:
         break;
     }
 
     /* Brief LED + beep */
-    if (type != PU_MULTIBALL && type != PU_LIFE)
+    if (type != PU_MULTIBALL && type != PU_EXTRA_LIFE)
         audio_beep(&audio);
 
     usleep(50000);
     hw_leds_off();
-}
-
-static void expire_effects(void) {
-    if (game.fx.wide_end && frame_time_ms >= game.fx.wide_end) {
-        game.paddle_w = PADDLE_BASE_W;
-        game.fx.wide_end = 0;
-    }
-    if (game.fx.narrow_end && frame_time_ms >= game.fx.narrow_end) {
-        game.paddle_w = PADDLE_BASE_W;
-        game.fx.narrow_end = 0;
-    }
-    if (game.fx.slow_end && frame_time_ms >= game.fx.slow_end) {
-        const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-        for (int i = 0; i < game.ball_count; i++) {
-            Ball *b = &game.balls[i];
-            if (!b->active) continue;
-            b->speed = BALL_BASE_SPEED * lv->speed_mult;
-            float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
-            if (mag > 0.01f) {
-                b->dx = (b->dx / mag) * b->speed;
-                b->dy = (b->dy / mag) * b->speed;
-            }
-        }
-        game.fx.slow_end = 0;
-    }
-    if (game.fx.fireball_end && frame_time_ms >= game.fx.fireball_end) {
-        for (int i = 0; i < game.ball_count; i++)
-            game.balls[i].fireball = false;
-        game.fx.fireball_end = 0;
-    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -552,11 +644,13 @@ static void expire_effects(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void init_level(void) {
-    /* Reset power-ups and effects */
+    /* Reset power-ups, effects, and screen shake */
     memset(game.powerups, 0, sizeof(game.powerups));
     memset(game.particles, 0, sizeof(game.particles));
-    memset(&game.fx, 0, sizeof(game.fx));
-    game.paddle_w = PADDLE_BASE_W;
+    game.shake_x = 0; game.shake_y = 0;
+    game.shake_frames = 0; game.shake_intensity = 0;
+    reset_effects();
+    apply_paddle_width();
     game.paddle_x = AREA_X + AREA_W / 2;
     game.ball_count = 0;
 
@@ -588,8 +682,18 @@ static void update_balls(void) {
         if (b->stuck) {
             b->x = game.paddle_x;
             b->y = PADDLE_Y - BALL_RADIUS - 1;
+            /* Update trail to paddle position while stuck */
+            for (int t = 0; t < TRAIL_LEN; t++) {
+                b->trail_x[t] = b->x;
+                b->trail_y[t] = b->y;
+            }
             continue;
         }
+
+        /* Push current position into trail buffer before moving */
+        b->trail_x[b->trail_idx] = b->x;
+        b->trail_y[b->trail_idx] = b->y;
+        b->trail_idx = (b->trail_idx + 1) % TRAIL_LEN;
 
         b->x += b->dx;
         b->y += b->dy;
@@ -661,32 +765,65 @@ static void update_balls(void) {
                 audio_interrupt(&audio);
                 audio_tone(&audio, 1500, 30);  /* Higher pitch for bonus */
             } else if (br->type == BRICK_EXPLOSIVE) {
-                /* Explosive brick - destroys adjacent bricks */
+                /* Explosive brick - cascading chain reaction */
                 br->health = 0;
                 brick_destroyed = true;
                 game.score += 15 * game.level;
                 
-                /* Destroy adjacent bricks */
-                for (int k = 0; k < game.brick_count; k++) {
-                    if (k == j) continue;
-                    Brick *adj = &game.bricks[k];
-                    if (adj->health <= 0) continue;
+                /* Queue-based cascading explosions */
+                int explode_queue[MAX_BRICKS];
+                int q_head = 0, q_tail = 0;
+                explode_queue[q_tail++] = j;
+                
+                /* Initial shake */
+                game.shake_frames = 8;
+                game.shake_intensity = 3.0f;
+                
+                while (q_head < q_tail) {
+                    int ei = explode_queue[q_head++];
+                    Brick *exp_br = &game.bricks[ei];
                     
-                    /* Check if adjacent (within 1.5 brick widths) */
-                    int dx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
-                    int dy = abs((adj->y + adj->h/2) - (br->y + br->h/2));
-                    if (dx < br->w * 1.5f && dy < br->h * 1.5f) {
-                        if (adj->type != BRICK_INDESTRUCTIBLE) {
-                            adj->health = 0;
+                    /* Extra explosion particles at detonation center */
+                    if (ei != j) {
+                        spawn_particles((float)(exp_br->x + exp_br->w / 2),
+                                       (float)(exp_br->y + exp_br->h / 2),
+                                       BRICK_EXPLOSIVE_TOP, 6);
+                    }
+                    
+                    /* Destroy adjacent bricks */
+                    for (int k = 0; k < game.brick_count; k++) {
+                        if (k == ei) continue;
+                        Brick *adj = &game.bricks[k];
+                        if (adj->health <= 0) continue;
+                        
+                        /* Check if adjacent (within 1.5 brick widths) */
+                        int adx = abs((adj->x + adj->w/2) - (exp_br->x + exp_br->w/2));
+                        int ady = abs((adj->y + adj->h/2) - (exp_br->y + exp_br->h/2));
+                        if (adx < exp_br->w * 1.5f && ady < exp_br->h * 1.5f) {
                             if (adj->type != BRICK_INDESTRUCTIBLE) {
+                                adj->health = 0;
                                 game.bricks_left--;
+                                game.score += 10 * game.level;
+                                spawn_particles((float)(adj->x + adj->w / 2),
+                                              (float)(adj->y + adj->h / 2),
+                                              adj->color_top, 4);
+                                spawn_powerup((float)(adj->x + adj->w / 2),
+                                             (float)(adj->y + adj->h / 2));
+                                
+                                /* Chain: if adjacent is also explosive, enqueue it */
+                                if (adj->type == BRICK_EXPLOSIVE && q_tail < MAX_BRICKS) {
+                                    explode_queue[q_tail++] = k;
+                                    /* Increase shake for cascade */
+                                    game.shake_frames += 4;
+                                    game.shake_intensity += 2.0f;
+                                    if (game.shake_intensity > 10.0f)
+                                        game.shake_intensity = 10.0f;
+                                }
                             }
-                            spawn_particles((float)(adj->x + adj->w / 2),
-                                          (float)(adj->y + adj->h / 2),
-                                          adj->color_top, 4);
                         }
                     }
                 }
+                
                 audio_interrupt(&audio);
                 audio_tone(&audio, 1000, 40);  /* Explosion sound */
             } else {
@@ -711,9 +848,26 @@ static void update_balls(void) {
                 if (br->type != BRICK_INDESTRUCTIBLE) {
                     game.bricks_left--;
                 }
-                spawn_particles((float)(br->x + br->w / 2),
-                                (float)(br->y + br->h / 2),
-                                br->color_top, 6);
+                /* Fireball destruction: fire-colored particles, more of them */
+                if (b->fireball) {
+                    /* Fire-colored particles for fireball destruction */
+                    uint32_t fc[] = {
+                        RGB(255, 80, 0),
+                        RGB(255, 200, 0),
+                        RGB(255, 140, 0),
+                        RGB(255, 50, 20)
+                    };
+                    for (int pi = 0; pi < 8; pi++) {
+                        uint32_t pc = fc[rand() % 4];
+                        spawn_particles((float)(br->x + br->w / 2),
+                                        (float)(br->y + br->h / 2),
+                                        pc, 1);
+                    }
+                } else {
+                    spawn_particles((float)(br->x + br->w / 2),
+                                    (float)(br->y + br->h / 2),
+                                    br->color_top, 6);
+                }
                 spawn_powerup((float)(br->x + br->w / 2),
                               (float)(br->y + br->h / 2));
                 audio_interrupt(&audio);
@@ -794,10 +948,26 @@ static void update_game(void) {
     if (game.screen != SCREEN_PLAYING) return;
 
     frame_time_ms = get_time_ms();
-    expire_effects();
+
+    /* Continuously apply paddle width from effect level */
+    apply_paddle_width();
+
     update_balls();
     update_powerups();
     update_particles();
+
+    /* Screen shake update */
+    if (game.shake_frames > 0) {
+        game.shake_frames--;
+        float t = game.shake_intensity * (game.shake_frames / 8.0f);
+        game.shake_x = ((rand() % 200) / 100.0f - 1.0f) * t;
+        game.shake_y = ((rand() % 200) / 100.0f - 1.0f) * t;
+        if (game.shake_frames <= 0) {
+            game.shake_x = 0;
+            game.shake_y = 0;
+            game.shake_intensity = 0;
+        }
+    }
 
     /* All balls lost? */
     if (game.ball_count == 0 && game.ball_launched) {
@@ -806,6 +976,10 @@ static void update_game(void) {
         audio_fail(&audio);
         usleep(300000);
         hw_leds_off();
+
+        /* Reset effects on ball lost */
+        reset_effects();
+        apply_paddle_width();
 
         if (game.lives <= 0) {
             game.screen = SCREEN_GAME_OVER;
@@ -823,6 +997,11 @@ static void update_game(void) {
     if (game.bricks_left <= 0) {
         game.screen = SCREEN_LEVEL_COMPLETE;
         game.score += game.lives * 50;  /* bonus */
+
+        /* Reset effects on level complete */
+        reset_effects();
+        apply_paddle_width();
+
         hw_set_led(LED_GREEN, 100);
         audio_success(&audio);
         usleep(200000);
@@ -856,72 +1035,75 @@ static void draw_hud(void) {
         fb_fill_rect(&fb, hx - 3, hy + 2, 11, 5, HEART_COLOR);
     }
 
-    /* Active effect indicators */
-    int ey = AREA_Y + 5;  /* Position just inside the play area */
-    if (game.fx.wide_end > frame_time_ms) {
-        int secs = (game.fx.wide_end - frame_time_ms) / 1000 + 1;
-        snprintf(buf, sizeof(buf), "WIDE %ds", secs);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, pu_info[PU_WIDE].color, 1);
+    /* Active effect indicators — compact status at top of play area */
+    int ey = AREA_Y + 5;
+    if (game.fx.paddle_level != 0) {
+        snprintf(buf, sizeof(buf), "PAD%+d", game.fx.paddle_level);
+        uint32_t color = game.fx.paddle_level > 0 ? RGB(80, 220, 80) : RGB(255, 60, 60);
+        fb_draw_text(&fb, AREA_X + 4, ey, buf, color, 1);
         ey += 12;
     }
-    if (game.fx.narrow_end > frame_time_ms) {
-        int secs = (game.fx.narrow_end - frame_time_ms) / 1000 + 1;
-        snprintf(buf, sizeof(buf), "NARROW %ds", secs);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, pu_info[PU_NARROW].color, 1);
+    if (game.fx.speed_level != 0) {
+        snprintf(buf, sizeof(buf), "SPD%+d", game.fx.speed_level);
+        uint32_t color = game.fx.speed_level < 0 ? RGB(255, 255, 80) : RGB(0, 200, 255);
+        fb_draw_text(&fb, AREA_X + 4, ey, buf, color, 1);
         ey += 12;
     }
-    if (game.fx.slow_end > frame_time_ms) {
-        int secs = (game.fx.slow_end - frame_time_ms) / 1000 + 1;
-        snprintf(buf, sizeof(buf), "SLOW %ds", secs);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, pu_info[PU_SLOW].color, 1);
-        ey += 12;
-    }
-    if (game.fx.fireball_end > frame_time_ms) {
-        int secs = (game.fx.fireball_end - frame_time_ms) / 1000 + 1;
-        snprintf(buf, sizeof(buf), "FIRE %ds", secs);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, pu_info[PU_FIREBALL].color, 1);
+    if (game.fx.fireball) {
+        fb_draw_text(&fb, AREA_X + 4, ey, "FIRE", RGB(255, 140, 0), 1);
     }
 }
 
-static void draw_bricks(void) {
+static void draw_bricks(int sx, int sy) {
     for (int i = 0; i < game.brick_count; i++) {
         Brick *b = &game.bricks[i];
         if (b->health <= 0) continue;
 
+        int bx = b->x + sx;
+        int by = b->y + sy;
+
+        /* Determine colors: use row-based rainbow for single-hit normal bricks */
+        uint32_t ctop = b->color_top;
+        uint32_t cbot = b->color_bot;
+        if (b->type == BRICK_NORMAL && b->max_health == 1) {
+            int ci = b->color_index % NUM_ROW_COLORS;
+            ctop = ROW_COLORS[ci][0];
+            cbot = ROW_COLORS[ci][1];
+        }
+
         /* Gradient fill */
-        fb_fill_rect_gradient(&fb, b->x, b->y, b->w, b->h,
-                              b->color_top, b->color_bot);
+        fb_fill_rect_gradient(&fb, bx, by, b->w, b->h, ctop, cbot);
 
         /* Subtle highlight on top edge */
-        fb_fill_rect_alpha(&fb, b->x + 1, b->y, b->w - 2, 2,
+        fb_fill_rect_alpha(&fb, bx + 1, by, b->w - 2, 2,
                            COLOR_WHITE, 60);
 
         /* Bottom shadow */
-        fb_fill_rect_alpha(&fb, b->x + 1, b->y + b->h - 2, b->w - 2, 2,
+        fb_fill_rect_alpha(&fb, bx + 1, by + b->h - 2, b->w - 2, 2,
                            COLOR_BLACK, 80);
 
         /* Special brick indicators */
         if (b->type == BRICK_INDESTRUCTIBLE) {
             /* Diagonal stripes pattern for indestructible */
             for (int s = 0; s < b->w + b->h; s += 6) {
-                int x1 = b->x + s;
-                int y1 = b->y;
-                int x2 = b->x;
-                int y2 = b->y + s;
-                if (x1 < b->x + b->w && y2 < b->y + b->h) {
+                int x1 = bx + s;
+                int y1 = by;
+                int x2 = bx;
+                int y2 = by + s;
+                if (x1 < bx + b->w && y2 < by + b->h) {
                     fb_draw_line(&fb, x1, y1, x2, y2, RGB(120, 120, 120));
                 }
             }
         } else if (b->type == BRICK_BONUS) {
             /* Star/sparkle effect for bonus bricks */
-            int cx = b->x + b->w / 2;
-            int cy = b->y + b->h / 2;
+            int cx = bx + b->w / 2;
+            int cy = by + b->h / 2;
             fb_draw_line(&fb, cx - 4, cy, cx + 4, cy, COLOR_WHITE);
             fb_draw_line(&fb, cx, cy - 4, cx, cy + 4, COLOR_WHITE);
         } else if (b->type == BRICK_EXPLOSIVE) {
             /* X pattern for explosive bricks */
-            fb_draw_line(&fb, b->x + 2, b->y + 2, b->x + b->w - 2, b->y + b->h - 2, RGB(255, 255, 0));
-            fb_draw_line(&fb, b->x + b->w - 2, b->y + 2, b->x + 2, b->y + b->h - 2, RGB(255, 255, 0));
+            fb_draw_line(&fb, bx + 2, by + 2, bx + b->w - 2, by + b->h - 2, RGB(255, 255, 0));
+            fb_draw_line(&fb, bx + b->w - 2, by + 2, bx + 2, by + b->h - 2, RGB(255, 255, 0));
         }
 
         /* Health number for multi-hit bricks */
@@ -929,54 +1111,91 @@ static void draw_bricks(void) {
             char num[8];
             snprintf(num, sizeof(num), "%d", b->health);
             int tw = (int)strlen(num) * 6;
-            fb_draw_text(&fb, b->x + b->w / 2 - tw / 2,
-                         b->y + b->h / 2 - 3, num, COLOR_WHITE, 1);
+            fb_draw_text(&fb, bx + b->w / 2 - tw / 2,
+                         by + b->h / 2 - 3, num, COLOR_WHITE, 1);
         }
     }
 }
 
-static void draw_paddle(void) {
-    int px = (int)game.paddle_x - game.paddle_w / 2;
+static void draw_paddle(int sx, int sy) {
+    int px = (int)game.paddle_x - game.paddle_w / 2 + sx;
+    int py = PADDLE_Y + sy;
 
     /* Glow under paddle */
-    fb_fill_rect_alpha(&fb, px + 4, PADDLE_Y + PADDLE_HEIGHT,
+    fb_fill_rect_alpha(&fb, px + 4, py + PADDLE_HEIGHT,
                        game.paddle_w - 8, 4, PADDLE_GLOW, 80);
 
     /* Main paddle body — gradient */
-    fb_fill_rect_gradient(&fb, px, PADDLE_Y, game.paddle_w, PADDLE_HEIGHT,
+    fb_fill_rect_gradient(&fb, px, py, game.paddle_w, PADDLE_HEIGHT,
                           PADDLE_COLOR, PADDLE_GLOW);
 
     /* Highlight on top */
-    fb_fill_rect_alpha(&fb, px + 2, PADDLE_Y, game.paddle_w - 4, 2,
+    fb_fill_rect_alpha(&fb, px + 2, py, game.paddle_w - 4, 2,
                        COLOR_WHITE, 100);
 }
 
-static void draw_balls(void) {
+static void draw_balls(int sx, int sy) {
     for (int i = 0; i < game.ball_count; i++) {
         Ball *b = &game.balls[i];
         if (!b->active) continue;
 
+        int bx = (int)b->x + sx;
+        int by = (int)b->y + sy;
         uint32_t col = b->fireball ? BALL_FIRE : BALL_COLOR;
 
+        /* Fiery trail for fireball balls (drawn BEFORE ball so ball is on top) */
+        if (b->fireball && !b->stuck) {
+            for (int t = 0; t < TRAIL_LEN; t++) {
+                /* Read from oldest to newest in circular buffer.
+                 * trail_idx points to next write = oldest entry.
+                 * So oldest is at trail_idx, newest is at trail_idx - 1. */
+                int idx = (b->trail_idx + t) % TRAIL_LEN;
+                float age = (float)t / (float)(TRAIL_LEN - 1);  /* 0=oldest, 1=newest */
+
+                /* Radius: oldest=1, newest=4, linearly interpolated */
+                int radius = 1 + (int)(age * 3.0f);
+
+                /* Color gradient: oldest=dark red, newest=bright yellow-orange */
+                uint8_t r, g, bb_c;
+                if (age < 0.5f) {
+                    /* Dark red (180,30,0) -> orange (255,100,0) */
+                    float f = age * 2.0f;
+                    r = (uint8_t)(180 + f * (255 - 180));
+                    g = (uint8_t)(30  + f * (100 - 30));
+                    bb_c = 0;
+                } else {
+                    /* Orange (255,100,0) -> bright yellow-orange (255,200,50) */
+                    float f = (age - 0.5f) * 2.0f;
+                    r = 255;
+                    g = (uint8_t)(100 + f * (200 - 100));
+                    bb_c = (uint8_t)(0 + f * 50);
+                }
+
+                int tx = (int)b->trail_x[idx] + sx;
+                int ty = (int)b->trail_y[idx] + sy;
+                fb_fill_circle(&fb, tx, ty, radius, RGB(r, g, bb_c));
+            }
+        }
+
         /* Glow behind ball */
-        fb_fill_circle(&fb, (int)b->x, (int)b->y, BALL_RADIUS + 3,
+        fb_fill_circle(&fb, bx, by, BALL_RADIUS + 3,
                        b->fireball ? RGB(80, 40, 0) : RGB(40, 40, 60));
 
         /* Ball body */
-        fb_fill_circle(&fb, (int)b->x, (int)b->y, BALL_RADIUS, col);
+        fb_fill_circle(&fb, bx, by, BALL_RADIUS, col);
 
         /* Specular highlight */
-        fb_fill_circle(&fb, (int)b->x - 2, (int)b->y - 2, 2, COLOR_WHITE);
+        fb_fill_circle(&fb, bx - 2, by - 2, 2, COLOR_WHITE);
     }
 }
 
-static void draw_powerups(void) {
+static void draw_powerups(int sx, int sy) {
     for (int i = 0; i < MAX_POWERUPS; i++) {
         PowerUp *pu = &game.powerups[i];
-        if (!pu->active || pu->type == PU_NONE) continue;
+        if (!pu->active) continue;
 
-        int px = (int)pu->x - POWERUP_SIZE / 2;
-        int py = (int)pu->y - POWERUP_SIZE / 2;
+        int px = (int)pu->x - POWERUP_SIZE / 2 + sx;
+        int py = (int)pu->y - POWERUP_SIZE / 2 + sy;
 
         /* Box with border */
         fb_fill_rounded_rect(&fb, px, py, POWERUP_SIZE, POWERUP_SIZE, 4,
@@ -991,22 +1210,26 @@ static void draw_powerups(void) {
     }
 }
 
-static void draw_play_area_border(void) {
+static void draw_play_area_border(int sx, int sy) {
     /* Subtle border around play area */
-    fb_draw_rect(&fb, AREA_X - 1, AREA_Y - 1, AREA_W + 2, AREA_H + 2,
+    fb_draw_rect(&fb, AREA_X - 1 + sx, AREA_Y - 1 + sy, AREA_W + 2, AREA_H + 2,
                  RGB(40, 50, 80));
 }
 
 static void draw_game_screen(void) {
     fb_clear(&fb, BG_COLOR);
 
-    draw_play_area_border();
-    draw_bricks();
-    draw_paddle();
-    draw_balls();
-    draw_powerups();
-    draw_particles();
-    draw_hud();
+    /* Screen shake offset — render-only, does not affect physics */
+    int sx = (int)game.shake_x;
+    int sy = (int)game.shake_y;
+
+    draw_play_area_border(sx, sy);
+    draw_bricks(sx, sy);
+    draw_paddle(sx, sy);
+    draw_balls(sx, sy);
+    draw_powerups(sx, sy);
+    draw_particles(sx, sy);
+    draw_hud();  /* HUD does NOT shake */
 
     button_draw_menu(&fb, &btn_menu);
     button_draw_exit(&fb, &btn_exit);
@@ -1053,9 +1276,10 @@ static void draw_welcome(void) {
 static void draw_paused(void) {
     draw_game_screen();  /* game as background */
     fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
-    text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 60,
+    text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 80,
                        "PAUSED", COLOR_CYAN, 4);
     button_draw(&fb, &btn_resume);
+    button_draw(&fb, &btn_retire);
     button_draw(&fb, &btn_exit_pause);
 }
 
@@ -1159,6 +1383,15 @@ static void handle_input(void) {
                 game.screen = SCREEN_PLAYING;
                 audio_beep(&audio);
             }
+            if (button_check_press(&btn_retire, button_is_touched(&btn_retire, st.x, st.y), now)) {
+                /* Save score to high-score table */
+                if (hs_qualifies(&hs, game.score) >= 0) {
+                    hs_insert(&hs, "PLAYER", game.score);
+                    hs_save(&hs);
+                }
+                game.screen = SCREEN_GAME_OVER;
+                audio_tone(&audio, 600, 100);
+            }
             if (button_check_press(&btn_exit_pause, button_is_touched(&btn_exit_pause, st.x, st.y), now)) {
                 running = false;
             }
@@ -1251,10 +1484,13 @@ int main(int argc, char *argv[]) {
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "PLAY AGAIN",
                 BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&btn_resume, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
+                fb.height / 2 - 10, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    button_init(&btn_retire, fb.width / 2 - BTN_LARGE_WIDTH / 2,
+                fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RETIRE",
+                RGB(200, 170, 40), COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&btn_exit_pause, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
+                fb.height / 2 + 130, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&btn_next_level, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "NEXT LEVEL",
