@@ -19,20 +19,29 @@ typedef struct {
     int draw_offset_y;      // Draw offset Y (for screen shake etc.)
 } Framebuffer;
 
-// Physical screen safe area constraints
-// The RoomWizard has a physical bezel that obscures the edges of the LCD
-// Framebuffer: 800x480, Visible area: ~720x420
-#define SCREEN_SAFE_MARGIN_LEFT   40
-#define SCREEN_SAFE_MARGIN_RIGHT  40
-#define SCREEN_SAFE_MARGIN_TOP    30
-#define SCREEN_SAFE_MARGIN_BOTTOM 30
+// Default safe area margins (used if config file is missing)
+#define SCREEN_SAFE_MARGIN_LEFT_DEFAULT   0
+#define SCREEN_SAFE_MARGIN_RIGHT_DEFAULT  0
+#define SCREEN_SAFE_MARGIN_TOP_DEFAULT    0
+#define SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT 0
 
-#define SCREEN_SAFE_LEFT   (SCREEN_SAFE_MARGIN_LEFT)
-#define SCREEN_SAFE_RIGHT  (800 - SCREEN_SAFE_MARGIN_RIGHT)
-#define SCREEN_SAFE_TOP    (SCREEN_SAFE_MARGIN_TOP)
-#define SCREEN_SAFE_BOTTOM (480 - SCREEN_SAFE_MARGIN_BOTTOM)
+// Runtime safe area margins (loaded from /etc/touch_calibration.conf)
+extern int screen_safe_margin_left;
+extern int screen_safe_margin_right;
+extern int screen_safe_margin_top;
+extern int screen_safe_margin_bottom;
+
+// Safe area bounds (now computed from runtime variables)
+#define SCREEN_SAFE_LEFT   (screen_safe_margin_left)
+#define SCREEN_SAFE_RIGHT  (800 - screen_safe_margin_right)
+#define SCREEN_SAFE_TOP    (screen_safe_margin_top)
+#define SCREEN_SAFE_BOTTOM (480 - screen_safe_margin_bottom)
 #define SCREEN_SAFE_WIDTH  (SCREEN_SAFE_RIGHT - SCREEN_SAFE_LEFT)
 #define SCREEN_SAFE_HEIGHT (SCREEN_SAFE_BOTTOM - SCREEN_SAFE_TOP)
+
+// Load safe area margins from calibration config file
+// Called automatically by fb_init()
+void fb_load_safe_area(void);
 
 // Initialize framebuffer
 int fb_init(Framebuffer *fb, const char *device);

@@ -9,6 +9,50 @@
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 
+// Runtime safe area margins
+int screen_safe_margin_left   = SCREEN_SAFE_MARGIN_LEFT_DEFAULT;
+int screen_safe_margin_right  = SCREEN_SAFE_MARGIN_RIGHT_DEFAULT;
+int screen_safe_margin_top    = SCREEN_SAFE_MARGIN_TOP_DEFAULT;
+int screen_safe_margin_bottom = SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT;
+
+void fb_load_safe_area(void) {
+    // Reset to defaults
+    screen_safe_margin_left   = SCREEN_SAFE_MARGIN_LEFT_DEFAULT;
+    screen_safe_margin_right  = SCREEN_SAFE_MARGIN_RIGHT_DEFAULT;
+    screen_safe_margin_top    = SCREEN_SAFE_MARGIN_TOP_DEFAULT;
+    screen_safe_margin_bottom = SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT;
+
+    FILE *f = fopen("/etc/touch_calibration.conf", "r");
+    if (!f) {
+        printf("Safe area: no calibration file — using defaults (%d,%d,%d,%d)\n",
+               screen_safe_margin_left, screen_safe_margin_top,
+               screen_safe_margin_right, screen_safe_margin_bottom);
+        return;
+    }
+
+    char line[256];
+    int data_lines = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        data_lines++;
+        if (data_lines == 2) {
+            int t, b, l, r;
+            if (sscanf(line, "%d %d %d %d", &t, &b, &l, &r) == 4) {
+                screen_safe_margin_top    = t;
+                screen_safe_margin_bottom = b;
+                screen_safe_margin_left   = l;
+                screen_safe_margin_right  = r;
+            }
+            break;
+        }
+    }
+    fclose(f);
+
+    printf("Safe area: loaded margins L=%d T=%d R=%d B=%d from /etc/touch_calibration.conf\n",
+           screen_safe_margin_left, screen_safe_margin_top,
+           screen_safe_margin_right, screen_safe_margin_bottom);
+}
+
 // Simple 5x7 bitmap font
 static const uint8_t font_5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, // Space
@@ -91,7 +135,10 @@ int fb_set_bpp(const char *device, int bpp) {
 int fb_init(Framebuffer *fb, const char *device) {
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
-    
+
+    // Load bezel/safe-area margins from calibration config
+    fb_load_safe_area();
+
     fb->fd = open(device, O_RDWR);
     if (fb->fd == -1) {
         perror("Error opening framebuffer device");
