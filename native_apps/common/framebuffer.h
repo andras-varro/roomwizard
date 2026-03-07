@@ -15,6 +15,8 @@ typedef struct {
     uint32_t bytes_per_pixel;
     size_t screen_size;
     bool double_buffering;   // Enable/disable double buffering
+    int draw_offset_x;      // Draw offset X (for screen shake etc.)
+    int draw_offset_y;      // Draw offset Y (for screen shake etc.)
 } Framebuffer;
 
 // Physical screen safe area constraints
@@ -43,6 +45,12 @@ void fb_swap(Framebuffer *fb);
 
 // Clear screen with color
 void fb_clear(Framebuffer *fb, uint32_t color);
+
+// Set draw offset — applied automatically to all drawing primitives
+void fb_set_draw_offset(Framebuffer *fb, int dx, int dy);
+
+// Clear draw offset (reset to 0,0)
+void fb_clear_draw_offset(Framebuffer *fb);
 
 // Draw pixel
 void fb_draw_pixel(Framebuffer *fb, int x, int y, uint32_t color);

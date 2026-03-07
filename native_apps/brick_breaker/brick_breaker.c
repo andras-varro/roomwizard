@@ -172,6 +172,14 @@ typedef struct {
     float       shake_x, shake_y;       /* current offset to apply to rendering */
     int         shake_frames;           /* frames remaining */
     float       shake_intensity;        /* current max amplitude in pixels */
+
+    /* Level clear animation cooldown */
+    int         clear_cooldown;         /* frames remaining before LEVEL_COMPLETE transition */
+
+    /* Deferred explosion chain */
+    int         pending_exp[MAX_BRICKS]; /* brick indices waiting to detonate */
+    int         pending_exp_timer[MAX_BRICKS]; /* frames until each detonation */
+    int         pending_exp_count;
 } GameState;
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -185,12 +193,14 @@ static GameState    game;
 static HighScoreTable hs;
 static bool         running = true;
 static uint32_t     frame_time_ms;  /* updated each frame */
+static bool test_mode = false;     /* --test: special test levels */
 
 /* UI buttons */
 static Button btn_menu, btn_exit;
 static Button btn_start, btn_restart;
 static Button btn_resume, btn_retire, btn_exit_pause;
 static Button btn_next_level;
+static ToggleSwitch toggle_test;
 
 /* ── colour palette ──────────────────────────────────────────────────── */
 #define BG_COLOR        RGB(8, 12, 30)
@@ -319,12 +329,12 @@ static void update_particles(void) {
     }
 }
 
-static void draw_particles(int sx, int sy) {
+static void draw_particles(void) {
     for (int i = 0; i < MAX_PARTICLES; i++) {
         Particle *p = &game.particles[i];
         if (p->life <= 0) continue;
-        int px = (int)p->x + sx;
-        int py = (int)p->y + sy;
+        int px = (int)p->x;
+        int py = (int)p->y;
         uint8_t alpha = (uint8_t)(255 * p->life / 22);
         fb_draw_pixel_alpha(&fb, px, py, p->color, alpha);
         fb_draw_pixel_alpha(&fb, px + 1, py, p->color, alpha);
@@ -419,7 +429,22 @@ static void create_bricks(void) {
                 b->color_top = brick_colors[ci][0];
                 b->color_bot = brick_colors[ci][1];
             }
-            
+
+            /* ── Test mode level overrides ────────────────────── */
+            if (test_mode) {
+                if (game.level == 1) {
+                    /* Test level 1: ALL bricks are explosive */
+                    b->type = BRICK_EXPLOSIVE;
+                    b->health = 1;
+                    b->max_health = 1;
+                    b->color_top = BRICK_EXPLOSIVE_TOP;
+                    b->color_bot = BRICK_EXPLOSIVE_BOT;
+                } else if (game.level == 2) {
+                    /* Test level 2: normal bricks, but power-ups guaranteed (handled in spawn_powerup) */
+                    /* Keep normal brick type */
+                }
+            }
+
             game.brick_count++;
             /* Only count non-indestructible bricks for level completion */
             if (b->type != BRICK_INDESTRUCTIBLE) {
@@ -526,7 +551,10 @@ static void launch_ball(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void spawn_powerup(float x, float y) {
-    if ((rand() % 100) >= POWERUP_CHANCE) return;
+    /* In test mode level 2+: every brick drops a power-up */
+    if (!test_mode || game.level < 2) {
+        if ((rand() % 100) >= POWERUP_CHANCE) return;
+    }
 
     /* Weighted random selection among 9 types.
      * Positive (widen, fireball, slow_down, extra_life, multiball): ~13% each = 65%
@@ -649,6 +677,8 @@ static void init_level(void) {
     memset(game.particles, 0, sizeof(game.particles));
     game.shake_x = 0; game.shake_y = 0;
     game.shake_frames = 0; game.shake_intensity = 0;
+    game.clear_cooldown = 0;
+    game.pending_exp_count = 0;
     reset_effects();
     apply_paddle_width();
     game.paddle_x = AREA_X + AREA_W / 2;
@@ -669,6 +699,80 @@ static void reset_game(void) {
 /* ══════════════════════════════════════════════════════════════════════════
  *  Physics / update
  * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Queue a brick for deferred detonation (chain explosion with delay) */
+static void queue_deferred_explosion(int brick_idx, int delay_frames) {
+    if (game.pending_exp_count >= MAX_BRICKS) return;
+    /* Don't queue if already pending */
+    for (int i = 0; i < game.pending_exp_count; i++) {
+        if (game.pending_exp[i] == brick_idx) return;
+    }
+    game.pending_exp[game.pending_exp_count] = brick_idx;
+    game.pending_exp_timer[game.pending_exp_count] = delay_frames;
+    game.pending_exp_count++;
+}
+
+/* Process one deferred detonation: destroy the brick and its non-explosive neighbors,
+ * queue any adjacent explosive bricks for further chain reaction */
+static void detonate_brick(int brick_idx) {
+    Brick *br = &game.bricks[brick_idx];
+    if (br->health <= 0) return;  /* Already destroyed (e.g., by ball in the meantime) */
+
+    br->health = 0;
+    if (br->type != BRICK_INDESTRUCTIBLE) {
+        game.bricks_left--;
+    }
+    game.score += 15 * game.level;
+
+    /* Explosion particles */
+    spawn_particles((float)(br->x + br->w / 2),
+                    (float)(br->y + br->h / 2),
+                    BRICK_EXPLOSIVE_TOP, 6);
+    spawn_powerup((float)(br->x + br->w / 2),
+                  (float)(br->y + br->h / 2));
+
+    /* Shake — logarithmic accumulation */
+    if (game.shake_frames < 3) {
+        game.shake_frames = 10;
+        game.shake_intensity = 3.0f;
+    } else {
+        game.shake_frames += 3;
+        float headroom = 8.0f - game.shake_intensity;
+        if (headroom > 0.2f)
+            game.shake_intensity += headroom * 0.3f;
+        if (game.shake_frames > 30)
+            game.shake_frames = 30;
+    }
+
+    /* Destroy adjacent bricks */
+    for (int k = 0; k < game.brick_count; k++) {
+        Brick *adj = &game.bricks[k];
+        if (adj->health <= 0) continue;
+        if (k == brick_idx) continue;
+
+        int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
+        int ady = abs((adj->y + adj->h/2) - (br->y + br->h/2));
+        if (adx < br->w * 1.5f && ady < br->h * 1.5f) {
+            if (adj->type == BRICK_INDESTRUCTIBLE) continue;
+
+            if (adj->type == BRICK_EXPLOSIVE) {
+                /* Chain: queue with delay for visual ripple */
+                queue_deferred_explosion(k, 5);
+            } else {
+                /* Non-explosive neighbor: destroy immediately */
+                adj->health = 0;
+                game.bricks_left--;
+                game.score += 10 * game.level;
+                spawn_particles((float)(adj->x + adj->w / 2),
+                               (float)(adj->y + adj->h / 2),
+                               adj->color_top, 4);
+                spawn_powerup((float)(adj->x + adj->w / 2),
+                              (float)(adj->y + adj->h / 2));
+            }
+        }
+    }
+
+}
 
 static void update_balls(void) {
     int paddle_left  = (int)game.paddle_x - game.paddle_w / 2;
@@ -765,67 +869,46 @@ static void update_balls(void) {
                 audio_interrupt(&audio);
                 audio_tone(&audio, 1500, 30);  /* Higher pitch for bonus */
             } else if (br->type == BRICK_EXPLOSIVE) {
-                /* Explosive brick - cascading chain reaction */
+                /* Explosive brick — immediate detonation + deferred chain */
                 br->health = 0;
                 brick_destroyed = true;
                 game.score += 15 * game.level;
                 
-                /* Queue-based cascading explosions */
-                int explode_queue[MAX_BRICKS];
-                int q_head = 0, q_tail = 0;
-                explode_queue[q_tail++] = j;
-                
                 /* Initial shake */
-                game.shake_frames = 8;
+                game.shake_frames = 10;
                 game.shake_intensity = 3.0f;
                 
-                while (q_head < q_tail) {
-                    int ei = explode_queue[q_head++];
-                    Brick *exp_br = &game.bricks[ei];
+                /* Destroy adjacent non-explosive bricks immediately,
+                 * queue adjacent explosive bricks for deferred chain reaction */
+                for (int k = 0; k < game.brick_count; k++) {
+                    if (k == j) continue;
+                    Brick *adj = &game.bricks[k];
+                    if (adj->health <= 0) continue;
                     
-                    /* Extra explosion particles at detonation center */
-                    if (ei != j) {
-                        spawn_particles((float)(exp_br->x + exp_br->w / 2),
-                                       (float)(exp_br->y + exp_br->h / 2),
-                                       BRICK_EXPLOSIVE_TOP, 6);
-                    }
-                    
-                    /* Destroy adjacent bricks */
-                    for (int k = 0; k < game.brick_count; k++) {
-                        if (k == ei) continue;
-                        Brick *adj = &game.bricks[k];
-                        if (adj->health <= 0) continue;
+                    int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
+                    int ady = abs((adj->y + adj->h/2) - (br->y + br->h/2));
+                    if (adx < br->w * 1.5f && ady < br->h * 1.5f) {
+                        if (adj->type == BRICK_INDESTRUCTIBLE) continue;
                         
-                        /* Check if adjacent (within 1.5 brick widths) */
-                        int adx = abs((adj->x + adj->w/2) - (exp_br->x + exp_br->w/2));
-                        int ady = abs((adj->y + adj->h/2) - (exp_br->y + exp_br->h/2));
-                        if (adx < exp_br->w * 1.5f && ady < exp_br->h * 1.5f) {
-                            if (adj->type != BRICK_INDESTRUCTIBLE) {
-                                adj->health = 0;
-                                game.bricks_left--;
-                                game.score += 10 * game.level;
-                                spawn_particles((float)(adj->x + adj->w / 2),
-                                              (float)(adj->y + adj->h / 2),
-                                              adj->color_top, 4);
-                                spawn_powerup((float)(adj->x + adj->w / 2),
-                                             (float)(adj->y + adj->h / 2));
-                                
-                                /* Chain: if adjacent is also explosive, enqueue it */
-                                if (adj->type == BRICK_EXPLOSIVE && q_tail < MAX_BRICKS) {
-                                    explode_queue[q_tail++] = k;
-                                    /* Increase shake for cascade */
-                                    game.shake_frames += 4;
-                                    game.shake_intensity += 2.0f;
-                                    if (game.shake_intensity > 10.0f)
-                                        game.shake_intensity = 10.0f;
-                                }
-                            }
+                        if (adj->type == BRICK_EXPLOSIVE) {
+                            /* Defer chain reaction — explodes 5 frames later */
+                            queue_deferred_explosion(k, 5);
+                        } else {
+                            /* Non-explosive neighbor: destroy now */
+                            adj->health = 0;
+                            game.bricks_left--;
+                            game.score += 10 * game.level;
+                            spawn_particles((float)(adj->x + adj->w / 2),
+                                          (float)(adj->y + adj->h / 2),
+                                          adj->color_top, 4);
+                            spawn_powerup((float)(adj->x + adj->w / 2),
+                                         (float)(adj->y + adj->h / 2));
                         }
                     }
                 }
                 
                 audio_interrupt(&audio);
-                audio_tone(&audio, 1000, 40);  /* Explosion sound */
+                audio_tone(&audio, 1000, 40);
             } else {
                 /* Normal brick */
                 if (b->fireball) {
@@ -956,10 +1039,27 @@ static void update_game(void) {
     update_powerups();
     update_particles();
 
+    /* Process deferred explosions (chain reaction with visual delay) */
+    for (int i = 0; i < game.pending_exp_count; ) {
+        game.pending_exp_timer[i]--;
+        if (game.pending_exp_timer[i] <= 0) {
+            int brick_idx = game.pending_exp[i];
+            /* Remove from queue (swap with last) */
+            game.pending_exp[i] = game.pending_exp[game.pending_exp_count - 1];
+            game.pending_exp_timer[i] = game.pending_exp_timer[game.pending_exp_count - 1];
+            game.pending_exp_count--;
+            /* Detonate */
+            detonate_brick(brick_idx);
+            /* Don't increment i — swapped element needs checking */
+        } else {
+            i++;
+        }
+    }
+
     /* Screen shake update */
     if (game.shake_frames > 0) {
         game.shake_frames--;
-        float t = game.shake_intensity * (game.shake_frames / 8.0f);
+        float t = game.shake_intensity * ((float)game.shake_frames / 30.0f);
         game.shake_x = ((rand() % 200) / 100.0f - 1.0f) * t;
         game.shake_y = ((rand() % 200) / 100.0f - 1.0f) * t;
         if (game.shake_frames <= 0) {
@@ -969,8 +1069,8 @@ static void update_game(void) {
         }
     }
 
-    /* All balls lost? */
-    if (game.ball_count == 0 && game.ball_launched) {
+    /* All balls lost? (skip during level clear cooldown) */
+    if (game.ball_count == 0 && game.ball_launched && game.clear_cooldown == 0) {
         game.lives--;
         hw_set_led(LED_RED, 100);
         audio_fail(&audio);
@@ -993,19 +1093,23 @@ static void update_game(void) {
         }
     }
 
-    /* Level clear? */
-    if (game.bricks_left <= 0) {
-        game.screen = SCREEN_LEVEL_COMPLETE;
-        game.score += game.lives * 50;  /* bonus */
-
-        /* Reset effects on level complete */
-        reset_effects();
-        apply_paddle_width();
-
-        hw_set_led(LED_GREEN, 100);
+    /* Level clear? — Start cooldown to let explosions/particles play out */
+    if (game.bricks_left <= 0 && game.clear_cooldown == 0 && game.screen == SCREEN_PLAYING && game.pending_exp_count == 0) {
+        game.clear_cooldown = 90;  /* ~1.5 seconds at 60 FPS */
         audio_success(&audio);
-        usleep(200000);
-        hw_leds_off();
+        hw_set_led(LED_GREEN, 100);
+    }
+
+    /* Level clear cooldown — keep rendering particles/shake, then transition */
+    if (game.clear_cooldown > 0) {
+        game.clear_cooldown--;
+        if (game.clear_cooldown <= 0) {
+            game.screen = SCREEN_LEVEL_COMPLETE;
+            game.score += game.lives * 50;  /* bonus */
+            reset_effects();
+            apply_paddle_width();
+            hw_leds_off();
+        }
     }
 }
 
@@ -1019,6 +1123,9 @@ static void draw_hud(void) {
     /* Level - positioned next to menu button */
     snprintf(buf, sizeof(buf), "LV %d", game.level);
     fb_draw_text(&fb, AREA_X + 90, SCREEN_SAFE_TOP + 22, buf, HUD_COLOR, 1);
+    if (test_mode) {
+        fb_draw_text(&fb, AREA_X + 90, SCREEN_SAFE_TOP + 12, "TEST", RGB(255, 255, 0), 1);
+    }
 
     /* Score (centred between buttons) */
     snprintf(buf, sizeof(buf), "%d", game.score);
@@ -1054,13 +1161,13 @@ static void draw_hud(void) {
     }
 }
 
-static void draw_bricks(int sx, int sy) {
+static void draw_bricks(void) {
     for (int i = 0; i < game.brick_count; i++) {
         Brick *b = &game.bricks[i];
         if (b->health <= 0) continue;
 
-        int bx = b->x + sx;
-        int by = b->y + sy;
+        int bx = b->x;
+        int by = b->y;
 
         /* Determine colors: use row-based rainbow for single-hit normal bricks */
         uint32_t ctop = b->color_top;
@@ -1117,9 +1224,9 @@ static void draw_bricks(int sx, int sy) {
     }
 }
 
-static void draw_paddle(int sx, int sy) {
-    int px = (int)game.paddle_x - game.paddle_w / 2 + sx;
-    int py = PADDLE_Y + sy;
+static void draw_paddle(void) {
+    int px = (int)game.paddle_x - game.paddle_w / 2;
+    int py = PADDLE_Y;
 
     /* Glow under paddle */
     fb_fill_rect_alpha(&fb, px + 4, py + PADDLE_HEIGHT,
@@ -1134,13 +1241,13 @@ static void draw_paddle(int sx, int sy) {
                        COLOR_WHITE, 100);
 }
 
-static void draw_balls(int sx, int sy) {
+static void draw_balls(void) {
     for (int i = 0; i < game.ball_count; i++) {
         Ball *b = &game.balls[i];
         if (!b->active) continue;
 
-        int bx = (int)b->x + sx;
-        int by = (int)b->y + sy;
+        int bx = (int)b->x;
+        int by = (int)b->y;
         uint32_t col = b->fireball ? BALL_FIRE : BALL_COLOR;
 
         /* Fiery trail for fireball balls (drawn BEFORE ball so ball is on top) */
@@ -1171,8 +1278,8 @@ static void draw_balls(int sx, int sy) {
                     bb_c = (uint8_t)(0 + f * 50);
                 }
 
-                int tx = (int)b->trail_x[idx] + sx;
-                int ty = (int)b->trail_y[idx] + sy;
+                int tx = (int)b->trail_x[idx];
+                int ty = (int)b->trail_y[idx];
                 fb_fill_circle(&fb, tx, ty, radius, RGB(r, g, bb_c));
             }
         }
@@ -1189,13 +1296,13 @@ static void draw_balls(int sx, int sy) {
     }
 }
 
-static void draw_powerups(int sx, int sy) {
+static void draw_powerups(void) {
     for (int i = 0; i < MAX_POWERUPS; i++) {
         PowerUp *pu = &game.powerups[i];
         if (!pu->active) continue;
 
-        int px = (int)pu->x - POWERUP_SIZE / 2 + sx;
-        int py = (int)pu->y - POWERUP_SIZE / 2 + sy;
+        int px = (int)pu->x - POWERUP_SIZE / 2;
+        int py = (int)pu->y - POWERUP_SIZE / 2;
 
         /* Box with border */
         fb_fill_rounded_rect(&fb, px, py, POWERUP_SIZE, POWERUP_SIZE, 4,
@@ -1210,25 +1317,24 @@ static void draw_powerups(int sx, int sy) {
     }
 }
 
-static void draw_play_area_border(int sx, int sy) {
+static void draw_play_area_border(void) {
     /* Subtle border around play area */
-    fb_draw_rect(&fb, AREA_X - 1 + sx, AREA_Y - 1 + sy, AREA_W + 2, AREA_H + 2,
+    fb_draw_rect(&fb, AREA_X - 1, AREA_Y - 1, AREA_W + 2, AREA_H + 2,
                  RGB(40, 50, 80));
 }
 
 static void draw_game_screen(void) {
     fb_clear(&fb, BG_COLOR);
 
-    /* Screen shake offset — render-only, does not affect physics */
-    int sx = (int)game.shake_x;
-    int sy = (int)game.shake_y;
-
-    draw_play_area_border(sx, sy);
-    draw_bricks(sx, sy);
-    draw_paddle(sx, sy);
-    draw_balls(sx, sy);
-    draw_powerups(sx, sy);
-    draw_particles(sx, sy);
+    /* Screen shake offset — applied via framebuffer draw offset */
+    fb_set_draw_offset(&fb, (int)game.shake_x, (int)game.shake_y);
+    draw_play_area_border();
+    draw_bricks();
+    draw_paddle();
+    draw_balls();
+    draw_powerups();
+    draw_particles();
+    fb_clear_draw_offset(&fb);
     draw_hud();  /* HUD does NOT shake */
 
     button_draw_menu(&fb, &btn_menu);
@@ -1281,6 +1387,7 @@ static void draw_paused(void) {
     button_draw(&fb, &btn_resume);
     button_draw(&fb, &btn_retire);
     button_draw(&fb, &btn_exit_pause);
+    toggle_draw(&fb, &toggle_test);
 }
 
 static void draw_level_complete(void) {
@@ -1378,6 +1485,11 @@ static void handle_input(void) {
         break;
 
     case SCREEN_PAUSED:
+        /* Test mode toggle */
+        if (toggle_check_press(&toggle_test, st.x, st.y, st.pressed, now)) {
+            test_mode = toggle_test.state;
+            audio_beep(&audio);
+        }
         if (st.pressed) {
             if (button_check_press(&btn_resume, button_is_touched(&btn_resume, st.x, st.y), now)) {
                 game.screen = SCREEN_PLAYING;
@@ -1437,6 +1549,14 @@ int main(int argc, char *argv[]) {
     const char *fb_device = "/dev/fb0";
     const char *touch_device = "/dev/input/touchscreen0";
 
+    /* Check for --test flag */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--test") == 0) {
+            test_mode = true;
+            printf("TEST MODE ENABLED\n");
+        }
+    }
+
     if (argc > 1) fb_device = argv[1];
     if (argc > 2) touch_device = argv[2];
 
@@ -1495,6 +1615,10 @@ int main(int argc, char *argv[]) {
     button_init(&btn_next_level, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "NEXT LEVEL",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+
+    /* Test mode toggle switch — positioned at bottom-left of pause overlay */
+    toggle_init(&toggle_test, SCREEN_SAFE_LEFT + 20, SCREEN_SAFE_BOTTOM - 40,
+                50, 26, "TEST MODE", test_mode);
 
     game.screen = SCREEN_WELCOME;
     frame_time_ms = get_time_ms();

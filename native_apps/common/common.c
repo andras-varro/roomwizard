@@ -440,3 +440,85 @@ void screen_draw_pause(Framebuffer *fb, Button *resume_btn, Button *exit_btn) {
     button_draw(fb, resume_btn);
     button_draw(fb, exit_btn);
 }
+
+// ============================================================================
+// TOGGLE SWITCH CONTROL
+// ============================================================================
+
+void toggle_init(ToggleSwitch *sw, int x, int y, int track_w, int track_h,
+                 const char *label, bool initial_state) {
+    sw->x = x;
+    sw->y = y;
+    sw->track_w = track_w;
+    sw->track_h = track_h;
+    sw->state = initial_state;
+    text_to_uppercase(sw->label, label, sizeof(sw->label));
+
+    // Default colors
+    sw->on_color = RGB(0, 180, 60);
+    sw->off_color = RGB(100, 100, 100);
+    sw->knob_color = COLOR_WHITE;
+    sw->label_color = RGB(200, 200, 200);
+
+    sw->was_pressed = false;
+    sw->last_press_time_ms = 0;
+    sw->debounce_ms = 300;
+}
+
+void toggle_set_colors(ToggleSwitch *sw, uint32_t on_color, uint32_t off_color,
+                       uint32_t knob_color, uint32_t label_color) {
+    sw->on_color = on_color;
+    sw->off_color = off_color;
+    sw->knob_color = knob_color;
+    sw->label_color = label_color;
+}
+
+bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
+                        bool is_pressed, uint32_t current_time_ms) {
+    // Generous hit area: track + label area + some padding
+    int hit_w = sw->track_w + text_measure_width(sw->label, 1) + 20;
+    int hit_h = sw->track_h + 10;
+    int hit_x = sw->x - 5;
+    int hit_y = sw->y - 5;
+
+    bool in_bounds = (touch_x >= hit_x && touch_x < hit_x + hit_w &&
+                      touch_y >= hit_y && touch_y < hit_y + hit_h);
+
+    if (is_pressed && in_bounds) {
+        if (!sw->was_pressed &&
+            (current_time_ms - sw->last_press_time_ms > sw->debounce_ms)) {
+            sw->was_pressed = true;
+            sw->last_press_time_ms = current_time_ms;
+            sw->state = !sw->state;
+            return true;  // State changed
+        }
+    } else if (!is_pressed) {
+        sw->was_pressed = false;
+    }
+
+    return false;
+}
+
+void toggle_draw(Framebuffer *fb, ToggleSwitch *sw) {
+    uint32_t track_color = sw->state ? sw->on_color : sw->off_color;
+    int r = sw->track_h / 2;  // Corner radius = half height for pill shape
+
+    // Draw track (pill shape)
+    fb_fill_rounded_rect(fb, sw->x, sw->y, sw->track_w, sw->track_h, r, track_color);
+
+    // Draw knob
+    int knob_r = r - 2;
+    int knob_cx, knob_cy;
+    knob_cy = sw->y + sw->track_h / 2;
+    if (sw->state) {
+        knob_cx = sw->x + sw->track_w - r;  // Right side
+    } else {
+        knob_cx = sw->x + r;                 // Left side
+    }
+    fb_fill_circle(fb, knob_cx, knob_cy, knob_r, sw->knob_color);
+
+    // Draw label to the right of the track
+    int label_x = sw->x + sw->track_w + 8;
+    int label_y = sw->y + (sw->track_h - 7) / 2;  // Vertically center (7px font height)
+    fb_draw_text(fb, label_x, label_y, sw->label, sw->label_color, 1);
+}

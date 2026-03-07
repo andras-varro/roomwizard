@@ -133,7 +133,10 @@ int fb_init(Framebuffer *fb, const char *device) {
     }
     fb->double_buffering = true;
     
-    printf("Framebuffer initialized: %dx%d, %d bpp (double buffering enabled)\n", 
+    fb->draw_offset_x = 0;
+    fb->draw_offset_y = 0;
+
+    printf("Framebuffer initialized: %dx%d, %d bpp (double buffering enabled)\n",
            fb->width, fb->height, vinfo.bits_per_pixel);
     return 0;
 }
@@ -165,6 +168,16 @@ void fb_clear(Framebuffer *fb, uint32_t color) {
     }
 }
 
+void fb_set_draw_offset(Framebuffer *fb, int dx, int dy) {
+    fb->draw_offset_x = dx;
+    fb->draw_offset_y = dy;
+}
+
+void fb_clear_draw_offset(Framebuffer *fb) {
+    fb->draw_offset_x = 0;
+    fb->draw_offset_y = 0;
+}
+
 void fb_draw_pixel(Framebuffer *fb, int x, int y, uint32_t color) {
     if (x >= 0 && x < (int)fb->width && y >= 0 && y < (int)fb->height) {
         // Draw to back buffer if double buffering is enabled
@@ -174,6 +187,8 @@ void fb_draw_pixel(Framebuffer *fb, int x, int y, uint32_t color) {
 }
 
 void fb_draw_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t color) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     for (int i = 0; i < w; i++) {
         fb_draw_pixel(fb, x + i, y, color);
         fb_draw_pixel(fb, x + i, y + h - 1, color);
@@ -185,6 +200,8 @@ void fb_draw_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t color) {
 }
 
 void fb_fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t color) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
             fb_draw_pixel(fb, x + i, y + j, color);
@@ -193,6 +210,8 @@ void fb_fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t color) {
 }
 
 void fb_draw_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color) {
+    cx += fb->draw_offset_x;
+    cy += fb->draw_offset_y;
     int x = radius;
     int y = 0;
     int err = 0;
@@ -219,6 +238,8 @@ void fb_draw_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color)
 }
 
 void fb_fill_circle(Framebuffer *fb, int cx, int cy, int radius, uint32_t color) {
+    cx += fb->draw_offset_x;
+    cy += fb->draw_offset_y;
     for (int y = -radius; y <= radius; y++) {
         for (int x = -radius; x <= radius; x++) {
             if (x*x + y*y <= radius*radius) {
@@ -247,6 +268,8 @@ void fb_fill_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, ui
 
 // Draw rounded rectangle outline
 void fb_draw_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, uint32_t color) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     if (r < 0) r = 0;
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
@@ -278,6 +301,8 @@ void fb_draw_rounded_rect(Framebuffer *fb, int x, int y, int w, int h, int r, ui
 }
 
 void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t color, int scale) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     int offset_x = 0;
     
     while (*text) {
@@ -314,6 +339,8 @@ void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t colo
 
 /* ── Line drawing (Bresenham) ─────────────────────────────────────────── */
 void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t color) {
+    x0 += fb->draw_offset_x; y0 += fb->draw_offset_y;
+    x1 += fb->draw_offset_x; y1 += fb->draw_offset_y;
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
@@ -342,6 +369,8 @@ void fb_draw_thick_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
 
 /* ── Alpha-blended pixel ─────────────────────────────────────────────── */
 void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t alpha) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     if (x < 0 || x >= (int)fb->width || y < 0 || y >= (int)fb->height) return;
     uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
     uint32_t dst = target[y * fb->width + x];
@@ -365,6 +394,8 @@ void fb_fill_rect_alpha(Framebuffer *fb, int x, int y, int w, int h,
 /* ── Vertical gradient filled rect ───────────────────────────────────── */
 void fb_fill_rect_gradient(Framebuffer *fb, int x, int y, int w, int h,
                            uint32_t top_color, uint32_t bottom_color) {
+    x += fb->draw_offset_x;
+    y += fb->draw_offset_y;
     uint32_t tr = (top_color >> 16) & 0xFF, tg = (top_color >> 8) & 0xFF, tb = top_color & 0xFF;
     uint32_t br = (bottom_color >> 16) & 0xFF, bg = (bottom_color >> 8) & 0xFF, bb = bottom_color & 0xFF;
     for (int j = 0; j < h; j++) {

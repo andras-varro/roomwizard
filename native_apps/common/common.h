@@ -253,4 +253,41 @@ uint32_t get_time_ms(void);
 // process exits or the fd is closed.
 int acquire_instance_lock(const char *app_name);
 
+// ============================================================================
+// TOGGLE SWITCH CONTROL
+// ============================================================================
+
+typedef struct {
+    int x, y;               // Position (top-left of track)
+    int track_w, track_h;   // Track dimensions
+    bool state;             // true = ON, false = OFF
+    char label[64];         // Label text drawn to the right
+
+    // Colors
+    uint32_t on_color;      // Track color when ON
+    uint32_t off_color;     // Track color when OFF
+    uint32_t knob_color;    // Knob color
+    uint32_t label_color;   // Label text color
+
+    // State management
+    bool was_pressed;
+    uint32_t last_press_time_ms;
+    uint32_t debounce_ms;
+} ToggleSwitch;
+
+// Initialize toggle switch with position, size, and label
+void toggle_init(ToggleSwitch *sw, int x, int y, int track_w, int track_h,
+                 const char *label, bool initial_state);
+
+// Set colors (defaults: green ON, grey OFF, white knob, white label)
+void toggle_set_colors(ToggleSwitch *sw, uint32_t on_color, uint32_t off_color,
+                       uint32_t knob_color, uint32_t label_color);
+
+// Check touch and toggle state. Returns true if state CHANGED this frame.
+bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
+                        bool is_pressed, uint32_t current_time_ms);
+
+// Draw the toggle switch
+void toggle_draw(Framebuffer *fb, ToggleSwitch *sw);
+
 #endif // COMMON_H

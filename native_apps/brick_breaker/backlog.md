@@ -144,20 +144,16 @@ Pause menu has three buttons: **RESUME**, **RETIRE** (saves score and ends game)
 
 ## Backlog
 
-(All items completed — see Completed Items below)
+### BB-08: Framebuffer-Level Draw Offset for Screen Shake ✅ DONE
+**Priority:** Medium | **Complexity:** Medium | **Scope:** Cross-cutting (framebuffer library + brick_breaker refactor) | **Status:** DONE
+
+Moved screen shake coordinate offset from game-level to the shared framebuffer library. Added `draw_offset_x`/`draw_offset_y` fields to `Framebuffer` struct with `fb_set_draw_offset()`/`fb_clear_draw_offset()` API. Offset applied in 9 leaf drawing primitives (`fb_fill_rect`, `fb_fill_circle`, `fb_draw_text`, `fb_draw_line`, `fb_fill_rect_gradient`, `fb_draw_pixel_alpha`, `fb_draw_rect`, `fb_draw_circle`, `fb_draw_rounded_rect`). Refactored brick_breaker to remove manual `(int sx, int sy)` parameters from 6 draw functions, replacing with `fb_set_draw_offset()`/`fb_clear_draw_offset()` calls in `draw_game_screen()`. Fully backward-compatible — offset defaults to (0,0).
 
 ---
 
-## Implementation Order (Suggested)
+## Implementation Order
 
-| Order | Item | Rationale |
-|-------|------|-----------|
-| 1 | BB-02 + BB-03 | Brick dimensions + more rows — do together since they affect layout |
-| 2 | BB-01 | Colorful bricks — quick visual win after layout changes |
-| 3 | BB-04 | Retire button — simple addition to pause menu |
-| 4 | BB-05 | Power-up overhaul — largest change, benefits from stable brick layout |
-| 5 | BB-06 | Explosions + shake — builds on power-up and brick changes |
-| 6 | BB-07 | Fireball effects — polish item, do last |
+All backlog items have been implemented (BB-01 through BB-08).
 
 ---
 
@@ -166,126 +162,53 @@ Pause menu has three buttons: **RESUME**, **RETIRE** (saves score and ends game)
 ### BB-01: Colorful Standard Bricks ✅ DONE
 **Priority:** Low | **Complexity:** Small | **Status:** DONE
 
-Currently, standard bricks get their color solely from their health value. Single-hit bricks (health=1) are always green. Make standard bricks more visually diverse by assigning colors based on position (row, column) or random assignment, not just health.
-
-**Implementation notes:**
-- The `BRICK_COLORS` array at line ~188 maps health→color. For single-hit bricks, they always get index 0 (green).
-- Approach: assign a `color_index` to each brick at creation time (in `init_level()` around line 336) based on row position or a pattern, independent of health.
-- Keep multi-hit bricks colored by health (player needs to see damage state).
-- The `draw_brick()` function at line ~860 uses `BRICK_COLORS[b->health - 1]` — modify to use `b->color_index` for the base color when `max_health == 1`, and health-based color when `max_health > 1`.
-- May need to add a `color_index` field to the `Brick` struct (line ~110).
-- Consider a broader palette (e.g., row-based rainbow: red, orange, yellow, green, blue, purple).
+Added `color_index` field to `Brick` struct. Single-hit bricks use row-based rainbow colors via `ROW_COLORS` palette; multi-hit bricks retain health-based coloring so damage state remains visible.
 
 ---
 
 ### BB-02: Adjust Brick Dimensions (Shorter & Thicker) ✅ DONE
 **Priority:** Low | **Complexity:** Small | **Status:** DONE
 
-Change brick proportions from the current ~wide/thin look to shorter and thicker. Target: reduce width and increase height.
-
-**Implementation notes:**
-- Current: `BRICK_H = 16`, `BRICK_COLS = 10`, width is dynamic (~69px with typical safe area).
-- The user described current bricks as "19×4mm on screenshot" and wants "15×5mm" — roughly 80% width, 125% height.
-- Approach: Increase `BRICK_H` from 16 to 20 (or so) and either increase `BRICK_COLS` to 12 or add extra padding — experiment to find the best feel.
-- The vertical offset (80px from play area top) may need adjustment to accommodate thicker bricks with more rows.
-- This interacts with BB-03 (more rows) — implement together.
+Increased `BRICK_H` from 16 to 20 and `BRICK_COLS` from 10 to 12. Reduced vertical offset from 80px to 40px to accommodate the larger bricks. Implemented together with BB-03.
 
 ---
 
 ### BB-03: More Rows of Bricks ✅ DONE
 **Priority:** Medium | **Complexity:** Medium | **Status:** DONE
 
-Add more brick rows for increased challenge. Target: at least 5 rows in early levels, more in later ones. User asks "would 5 rows fit?" — currently early levels use 3–4 rows, max is 6.
-
-**Implementation notes:**
-- `BRICK_ROWS` is currently 6, `MAX_BRICKS` = 60 (10×6). Increase to 8 rows → `MAX_BRICKS` = 80.
-- Vertical space check: play area height = `SCREEN_SAFE_HEIGHT - 65`. With `BRICK_H=20` and `BRICK_PAD=3`, 8 rows = 8×23 = 184px. Plus 80px offset = 264px. Play area is ~355px, leaving ~91px for paddle area — sufficient.
-- Update `LevelDef` entries (line ~235): make level 1 start with 5 rows, scale up to 8 rows for later levels.
-- Increase `BRICK_ROWS` constant and `MAX_BRICKS`.
-- Update the `bricks[]` array size in `GameState`.
-- **Depends on:** BB-02 (brick dimensions) — implement together.
+Increased `BRICK_ROWS` from 6 to 8, `MAX_BRICKS` from 60 to 96. Level 1 now starts with 5 rows, scaling up to 8 rows in later levels. Updated all `LevelDef` entries accordingly.
 
 ---
 
 ### BB-04: Retire Button (Save & Quit) ✅ DONE
 **Priority:** Medium | **Complexity:** Small | **Status:** DONE
 
-Add a "Retire" button to the pause menu that ends the game and lets the user save their current score to the high score table.
-
-**Implementation notes:**
-- The pause screen (drawn in `draw_paused()` around line ~1055) currently has RESUME and EXIT buttons.
-- Add a RETIRE button between them.
-- On RETIRE: save current score via `highscore_submit("brick_breaker", game.score)`, then transition to `GAME_OVER` screen (or a dedicated retirement screen showing final score + leaderboard).
-- Touch handling for the pause screen is in `handle_input()` around line ~1160.
+Added RETIRE button to the pause menu between RESUME and EXIT. On press, submits current score via `highscore_submit()` and transitions to the GAME_OVER screen.
 
 ---
 
 ### BB-05: Revamped Power-Up System (Paired & Permanent) ✅ DONE
 **Priority:** High | **Complexity:** Large | **Status:** DONE
 
-Overhaul power-ups to be **permanent until level complete or ball lost** (instead of 12s timer). Add power-ups in opposing pairs with stacking/canceling behavior:
-
-**Pairs:**
-1. **Widen (W) / Narrow (N) paddle:**
-   - 5 paddle sizes: narrow → normal → large → larger → (cap)
-   - W: narrow→normal→large→larger→stays (no more growing)
-   - N: larger→large→normal→narrow→stays (no more shrinking)
-   - W and N cancel one step of each other
-   
-2. **Fireball (F) / Normal ball (B):**
-   - F activates fireball mode
-   - B (new) deactivates fireball, returns to normal bouncing
-
-3. **Speed-up (>) / Slow-down (<) ball:**
-   - Stacking speed modifiers, similar to paddle width steps
-   - Currently only slow exists (`PU_SLOW`); add speed-up
-   
-4. **Extra life (+) / Lose life (-):**
-   - Extra life: +1 (already exists)
-   - Lose life: -1, but if on last life, don't kill the player (that's unfair!)
-   
-5. **Multiball (M):**
-   - No opposite needed, just multiball alone
-
-**Implementation notes:**
-- Remove `POWERUP_DUR_MS` timer system. Instead, clear effects on ball_lost and level_complete.
-- Change `ActiveEffects` from timestamp-based to state-based (paddle_size_level = -2..+2, fireball bool, speed_level = -2..+2).
-- Paddle widths: define 5 levels e.g., [40, 70, 100, 140, 180] indexed by `paddle_size_level` (-2 to +2).
-- Ball speed: define multipliers e.g., [0.5, 0.75, 1.0, 1.25, 1.5] indexed by `speed_level`.
-- Update `PowerUpType` enum — add `PU_NORMAL_BALL`, `PU_SPEED_UP`, `PU_LOSE_LIFE`. Remove the current `PU_NARROW` as penalty-from-pickup and replace with the new paired system.
-- Update `spawn_powerup()`, `collect_powerup()`, `expire_effects()`, effect display, and drawing code.
-- Remove countdown display for timed effects; maybe show current power-up state icons instead.
-- The lose-life power-up needs a safety check: `if (game.lives > 1) game.lives--; // don't kill on last life`
+Replaced 12-second timer system with permanent effects (cleared on ball loss or level complete). Added opposing pairs: Widen/Narrow paddle (5-step stacking), Fireball/NormalBall toggle, SpeedUp/SlowDown (5-step stacking), ExtraLife/LoseLife (safe on last life), and standalone Multiball. 30% drop chance from destroyed bricks.
 
 ---
 
 ### BB-06: Enhanced Explosions with Screen Shake ✅ DONE
 **Priority:** Medium | **Complexity:** Medium | **Status:** DONE
 
-Make explosions more dramatic:
-1. **More explosive bricks** — increase chance of explosive bricks in levels
-2. **Screen shake on explosion** — offset the entire rendered frame by a few pixels for several frames
-3. **Cascading shake** — if an explosive brick detonates another explosive brick, increase the shake intensity
-
-**Implementation notes:**
-- Screen shake: add `shake_x`, `shake_y`, `shake_frames` to `GameState`. When drawing, offset all coordinates by shake values. Decrease shake over time (dampening).
-- Single explosion: shake_frames = ~8, amplitude = 3px
-- Cascade: each additional explosion in the same chain adds to shake_frames and amplitude (e.g., +4 frames, +2px per cascade)
-- The explosion chain logic is at line ~663. Currently it's a single-pass adjacency check. For cascading, need to queue newly-detonated explosive bricks and process them iteratively.
-- Ball must still animate normally during shake — apply shake offset only to rendering, not to game physics coordinates.
-- Increase `BRICK_EXPLOSIVE` chance in level definitions (currently ~10% from level 3+).
+Added `shake_x/y`, `shake_frames`, `shake_intensity` to `GameState`. Shake offset applied to rendering only, not physics. Queue-based cascading explosion system: each chain step increases shake intensity and duration. Single explosion ~8 frames at 3px amplitude.
 
 ---
 
 ### BB-07: Fireball Visual Effects ✅ DONE
 **Priority:** Low | **Complexity:** Medium | **Status:** DONE
 
-Add visual flair to fireball mode:
-1. **Fiery trail** — render a few dots/circles at previous ball positions (position history buffer)
-2. **Fiery brick destruction particles** — when a fireball destroys a brick, spawn red/yellow/orange particles instead of plain white
+Added 6-position circular trail buffer to `Ball` struct, rendered as fading orange-to-red dots behind the fireball. Brick destruction spawns fire-colored particles (red/yellow/orange) instead of white. Increased `MAX_PARTICLES` from 40 to 150.
 
-**Implementation notes:**
-- Trail: add a circular buffer of last ~6 ball positions to the `Ball` struct. Each frame, push current position. Draw trail dots with decreasing size and fading from orange to dark red.
-- Fire particles: in the brick destruction code (around line ~700), check `ball->fireball` and spawn particles with fire colors `RGB(255,80,0)`, `RGB(255,200,0)`, `RGB(255,140,0)` instead of `b->color_top`.
-- Need to increase `MAX_PARTICLES` from 40 to ~80 to handle the extra trail + fire particles.
-- Trail rendering should go in `draw_ball()` (line ~996), drawn before the ball itself so the ball appears on top.
+---
+
+### BB-08: Framebuffer-Level Draw Offset for Screen Shake ✅ DONE
+**Priority:** Medium | **Complexity:** Medium | **Status:** DONE
+
+Moved screen shake coordinate offset from game-level to the shared framebuffer library. Added `draw_offset_x`/`draw_offset_y` fields to `Framebuffer` struct with `fb_set_draw_offset()`/`fb_clear_draw_offset()` API. Offset applied in 9 leaf drawing primitives. Refactored brick_breaker to remove manual `(int sx, int sy)` parameters from 6 draw functions (`draw_bricks`, `draw_paddle`, `draw_balls`, `draw_powerups`, `draw_particles`, `draw_play_area_border`), replacing with `fb_set_draw_offset()`/`fb_clear_draw_offset()` calls in `draw_game_screen()`. HUD rendering remains unaffected (drawn after offset cleared). Fully backward-compatible — offset defaults to (0,0).
