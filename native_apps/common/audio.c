@@ -25,6 +25,21 @@
 /** Peak amplitude for synthesised waveforms (0–32767). */
 #define AMPLITUDE         18000
 
+/** Streaming chunk size in milliseconds (~10 ms of audio per chunk) */
+#define STREAM_CHUNK_MS     10
+
+/** Peak amplitude for streaming (same as tone amplitude) */
+#define STREAM_AMPLITUDE    18000
+
+/** Frequency smoothing factor per sample (higher = faster response) */
+#define FREQ_SMOOTH         0.15
+
+/** Amplitude ramp speed per sample for fade-in/fade-out */
+#define AMP_RAMP_SPEED      0.0005
+
+/** Maximum chunk/fade frames to prevent VLA stack overflow (200ms at 44100 Hz) */
+#define MAX_CHUNK_FRAMES    8820
+
 /* ── Internal helpers ───────────────────────────────────────────────────── */
 
 /** Drive GPIO12 HIGH to enable the on-board speaker amplifier (SPKR1). */
@@ -122,6 +137,12 @@ int audio_init(Audio *audio)
     audio->available    = false;
     audio->sample_rate  = TARGET_RATE;
     audio->sound_end_ms = 0;
+    audio->phase        = 0.0;
+    audio->current_freq = 0.0;
+    audio->target_freq  = 0.0;
+    audio->amplitude    = 0.0;
+    audio->streaming    = false;
+    audio->logger       = NULL;
 
     enable_amp();
 
@@ -218,6 +239,215 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
     /* Record when this tone is expected to finish so audio_flush() can
      * wait before discarding it on the next interrupt call. */
     audio->sound_end_ms = time_now_ms() + (uint32_t)duration_ms;
+}
+
+/* ── Streaming (theremin) API ───────────────────────────────────────────── */
+
+void audio_stream_start(Audio *audio, int freq_hz)
+{
+    if (!audio->available || audio->dsp_fd < 0) return;
+
+    /* Reset DSP and configure with default OSS buffer.
+     * Note: SNDCTL_DSP_SETFRAGMENT is unreliable on the TWL4030 ALSA OSS
+     * shim (Linux 4.14.52) — it can leave the DSP in a bad state where
+     * writes silently fail.  We use the default ~500ms OSS buffer instead. */
+    if (ioctl(audio->dsp_fd, SNDCTL_DSP_RESET, 0) < 0) {
+        fprintf(stderr, "audio: SNDCTL_DSP_RESET failed in stream_start (errno=%d)\n", errno);
+        /* Continue anyway — configure_dsp will re-set params */
+    }
+    configure_dsp(audio);
+
+    /* Initialize streaming state */
+    audio->phase        = 0.0;
+    audio->current_freq = (double)freq_hz;
+    audio->target_freq  = (double)freq_hz;
+    audio->amplitude    = 0.0;   /* will fade in */
+    audio->streaming    = true;
+
+    /* Pre-fill ~200ms of audio in blocking mode to prime the OSS ring buffer
+     * past the TWL4030 DAC startup latency.  Without this, the first few
+     * streaming chunks may be silently discarded, causing an audible gap. */
+    {
+        int prefill_frames = audio->sample_rate * 200 / 1000;
+        int16_t *prefill = (int16_t *)malloc((size_t)prefill_frames * 2 * sizeof(int16_t));
+        if (prefill) {
+            for (int i = 0; i < prefill_frames; i++) {
+                audio->current_freq += (audio->target_freq - audio->current_freq) * FREQ_SMOOTH;
+                if (audio->amplitude < 1.0) {
+                    audio->amplitude += AMP_RAMP_SPEED;
+                    if (audio->amplitude > 1.0) audio->amplitude = 1.0;
+                }
+                double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
+                int16_t sample = (int16_t)(STREAM_AMPLITUDE * audio->amplitude * sin(audio->phase));
+                prefill[i * 2]     = sample;
+                prefill[i * 2 + 1] = sample;
+                audio->phase += phase_step;
+                if (audio->phase > 2.0 * M_PI) audio->phase -= 2.0 * M_PI;
+            }
+
+            /* Blocking write loop — retry on EAGAIN to ensure the full
+             * prefill reaches the driver before we return to the main loop. */
+            ssize_t total   = (ssize_t)prefill_frames * 4;
+            ssize_t written = 0;
+            const uint8_t *ptr = (const uint8_t *)prefill;
+            while (written < total) {
+                ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
+                if (r > 0) {
+                    written += r;
+                } else if (r < 0 && errno == EAGAIN) {
+                    usleep(1000);
+                } else {
+                    break;
+                }
+            }
+            free(prefill);
+        }
+    }
+
+    fprintf(stderr, "audio: stream start at %d Hz (rate=%d)\n", freq_hz, audio->sample_rate);
+}
+
+void audio_stream_set_freq(Audio *audio, int freq_hz)
+{
+    if (!audio->streaming) return;
+    audio->target_freq = (double)freq_hz;
+}
+
+void audio_stream_chunk(Audio *audio)
+{
+    if (!audio->available || !audio->streaming) return;
+
+    /* Query available space in the OSS ring buffer */
+    audio_buf_info info;
+    if (ioctl(audio->dsp_fd, SNDCTL_DSP_GETOSPACE, &info) < 0)
+        return;
+
+    int chunk_frames = audio->sample_rate * STREAM_CHUNK_MS / 1000;
+    int chunk_bytes  = chunk_frames * 2 * (int)sizeof(int16_t); /* stereo S16LE */
+
+    /* Write as many small chunks as fit in the available buffer space.
+     * Cap at some reasonable max to avoid spending too long here. */
+    int max_chunks = 8;  /* at most 80ms of audio per call */
+    int chunks_written = 0;
+
+    while (info.bytes >= chunk_bytes && chunks_written < max_chunks) {
+        int16_t buf[MAX_CHUNK_FRAMES * 2];
+
+        /* Generate one small chunk with current frequency */
+        for (int i = 0; i < chunk_frames; i++) {
+            /* Smooth frequency toward target */
+            audio->current_freq += (audio->target_freq - audio->current_freq) * FREQ_SMOOTH;
+
+            /* Ramp amplitude */
+            if (audio->amplitude < 1.0) {
+                audio->amplitude += AMP_RAMP_SPEED;
+                if (audio->amplitude > 1.0) audio->amplitude = 1.0;
+            }
+
+            double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
+            int16_t sample = (int16_t)(STREAM_AMPLITUDE * audio->amplitude * sin(audio->phase));
+            buf[i * 2]     = sample;
+            buf[i * 2 + 1] = sample;
+
+            audio->phase += phase_step;
+            if (audio->phase > 2.0 * M_PI)
+                audio->phase -= 2.0 * M_PI;
+        }
+
+        /* Blocking write for this small chunk — it fits, so it should succeed */
+        ssize_t total = (ssize_t)chunk_bytes;
+        ssize_t written = 0;
+        uint8_t *ptr = (uint8_t *)buf;
+        while (written < total) {
+            ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
+            if (r > 0) {
+                written += r;
+            } else if (r < 0 && (errno == EAGAIN || errno == EINTR)) {
+                break;  /* shouldn't happen since we checked space, but be safe */
+            } else {
+                break;  /* error */
+            }
+        }
+
+        if (written < total) {
+            /* Partial write — shouldn't happen with space check, but stop writing */
+            break;
+        }
+
+        info.bytes -= (int)written;
+        chunks_written++;
+    }
+}
+
+void audio_stream_stop(Audio *audio)
+{
+    if (!audio->available || !audio->streaming) return;
+
+    /* Write a short fade-out chunk to avoid click/pop */
+    int fade_frames = audio->sample_rate * 20 / 1000;  /* 20 ms fade-out */
+    /* Sanity clamp: prevent VLA stack overflow if sample_rate is corrupted */
+    if (fade_frames < 1) fade_frames = 1;
+    if (fade_frames > MAX_CHUNK_FRAMES) {
+        fprintf(stderr, "audio: fade_frames=%d exceeds max, clamping to %d (sample_rate=%d)\n",
+                fade_frames, MAX_CHUNK_FRAMES, audio->sample_rate);
+        fade_frames = MAX_CHUNK_FRAMES;
+    }
+    int16_t buf[fade_frames * 2];
+
+    for (int i = 0; i < fade_frames; i++) {
+        double env = 1.0 - (double)i / fade_frames;
+        double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
+        int16_t sample = (int16_t)(STREAM_AMPLITUDE * env * audio->amplitude * sin(audio->phase));
+        buf[i * 2]     = sample;
+        buf[i * 2 + 1] = sample;
+
+        audio->phase += phase_step;
+        if (audio->phase > 2.0 * M_PI) audio->phase -= 2.0 * M_PI;
+    }
+
+    /* Best-effort blocking write for fade-out — bail after max retries
+     * to prevent infinite hang if DSP stops accepting data */
+    ssize_t total   = (ssize_t)(fade_frames * 4);
+    ssize_t written = 0;
+    const uint8_t *ptr = (const uint8_t *)buf;
+    int retries = 0;
+    const int max_retries = 100;  /* 100 × 2ms = 200ms max */
+
+
+    while (written < total) {
+        ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
+        if (r > 0) {
+            written += r;
+            retries = 0;  /* reset on progress */
+        } else if (r == 0) {
+            fprintf(stderr, "audio: stream_stop write() returned 0, skipping fade-out\n");
+            break;
+        } else if (errno == EAGAIN) {
+            retries++;
+            if (retries >= max_retries) {
+                fprintf(stderr, "audio: stream_stop fade-out timed out after %d retries (%d/%d bytes written)\n",
+                        max_retries, (int)written, (int)total);
+                break;
+            }
+            usleep(2000);
+        } else {
+            fprintf(stderr, "audio: stream_stop write() error (errno=%d: %s), skipping fade-out\n",
+                    errno, strerror(errno));
+            break;
+        }
+    }
+
+    /* Reset DSP to flush remaining buffer */
+    if (ioctl(audio->dsp_fd, SNDCTL_DSP_RESET, 0) < 0) {
+        fprintf(stderr, "audio: SNDCTL_DSP_RESET failed in stream_stop (errno=%d)\n", errno);
+    }
+    configure_dsp(audio);
+
+    audio->streaming    = false;
+    audio->amplitude    = 0.0;
+    audio->sound_end_ms = 0;
+
+    fprintf(stderr, "audio: stream stop complete\n");
 }
 
 /* ── Convenience sounds ─────────────────────────────────────────────────── */

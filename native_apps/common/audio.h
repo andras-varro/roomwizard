@@ -37,6 +37,13 @@ typedef struct {
     int      sample_rate;     /**< Negotiated sample rate (typically 44100)        */
     bool     available;       /**< false if /dev/dsp could not be opened           */
     uint32_t sound_end_ms;    /**< Expected wall-clock end of current tone (ms)    */
+    /* ── streaming theremin state ── */
+    double   phase;           /**< Phase accumulator (persists across chunks)      */
+    double   current_freq;    /**< Current oscillator frequency (Hz)               */
+    double   target_freq;     /**< Target frequency to interpolate toward          */
+    double   amplitude;       /**< Current amplitude (0.0–1.0) for fade in/out     */
+    bool     streaming;       /**< true while streaming audio chunks               */
+    void    *logger;          /**< Optional Logger* for streaming diagnostics       */
 } Audio;
 
 /**
@@ -89,5 +96,36 @@ void audio_success(Audio *audio);
 
 /** G4→E4→C4 descending tone  (~600 ms)   — game over, error          */
 void audio_fail(Audio *audio);
+
+/* ── Streaming (theremin) API ──────────────────────────────────────────────
+ * For continuous pitch-gliding audio driven by a touch loop.
+ */
+
+/**
+ * Begin streaming mode — resets phase accumulator and configures
+ * DSP for low-latency small-fragment output.
+ * Call once when touch starts.
+ */
+void audio_stream_start(Audio *audio, int freq_hz);
+
+/**
+ * Write one small chunk (~10 ms) of audio at the current frequency,
+ * smoothly interpolating toward target_freq.
+ * Call this every frame while the user is touching.
+ * Non-blocking: returns immediately if OSS ring buffer is full.
+ */
+void audio_stream_chunk(Audio *audio);
+
+/**
+ * Update the target frequency for smooth glissando.
+ * Call whenever touch position changes.
+ */
+void audio_stream_set_freq(Audio *audio, int freq_hz);
+
+/**
+ * Stop streaming — writes a short fade-out, then resets DSP.
+ * Call when touch lifts.
+ */
+void audio_stream_stop(Audio *audio);
 
 #endif /* AUDIO_H */

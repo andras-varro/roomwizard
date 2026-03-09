@@ -1,16 +1,18 @@
 /*
- * audio_touch_test — Tap-a-Theremin
+ * audio_touch_test — Continuous Theremin
  *
- * Purpose: verify audio latency with a whimsical on-screen theremin.
+ * Purpose: verify streaming audio with a continuous-pitch theremin.
  *
  * Screen layout:
- *   The play area is a colour-coded grid — tap anywhere to play a tone.
- *   X axis (left→right): 200 Hz → 2000 Hz
- *   Y axis (top→bottom): short (60 ms) → medium (120 ms) → long (200 ms)
+ *   The play area is a colour-coded pad — touch and slide to play.
+ *   X axis (left→right): 200 Hz → 2000 Hz (continuous glissando)
  *
- *   Tap point shows an expanding ring animation.
- *   A frequency bar below the pad grows to show the last played pitch.
- *   Twinkling stars in the margins. Exit button top-right.
+ *   Touch down  → sound begins with fade-in
+ *   Touch held  → pitch follows finger X position smoothly
+ *   Touch up    → sound fades out and stops
+ *
+ *   A frequency bar below the pad shows the current pitch.
+ *   Twinkling stars in the margins.  Exit button top-right.
  *
  * Run on device:
  *   /opt/games/audio_touch_test /dev/fb0 /dev/input/touchscreen0
@@ -36,6 +38,9 @@
 #include "../common/framebuffer.h"
 #include "../common/hardware.h"
 #include "../common/common.h"
+#include "../common/logger.h"
+
+static Logger logger;
 
 /* ── layout ──────────────────────────────────────────────────────────────── */
 #define SCREEN_W   800
@@ -47,7 +52,7 @@
 #define PAD_W      (SCREEN_SAFE_WIDTH - 10)
 #define PAD_H      310
 
-/* Frequency / duration mapping */
+/* Frequency mapping */
 #define FREQ_MIN   200
 #define FREQ_MAX   2000
 
@@ -59,11 +64,9 @@ static volatile bool running = true;
 static void sig_handler(int s) { (void)s; running = false; }
 
 typedef struct {
-    int      x, y;       /* screen coords of last tap  */
-    int      freq;
-    int      dur_ms;
-    uint32_t time_ms;    /* when tap happened           */
-    bool     active;
+    int      x, y;       /* screen coords of current touch */
+    int      freq;       /* current frequency */
+    bool     active;     /* currently touching/playing */
 } TapState;
 
 /* ── colour helpers ──────────────────────────────────────────────────────── */
@@ -105,15 +108,6 @@ static int freq_from_x(int x)
     return FREQ_MIN + (rel * (FREQ_MAX - FREQ_MIN)) / PAD_W;
 }
 
-static int dur_from_y(int y)
-{
-    int rel = y - PAD_Y;
-    if (rel < 0) rel = 0;
-    if      (rel < PAD_H / 3)     return 60;
-    else if (rel < PAD_H * 2 / 3) return 120;
-    else                           return 200;
-}
-
 static bool in_pad(int x, int y)
 {
     return x >= PAD_X && x < PAD_X + PAD_W &&
@@ -140,7 +134,7 @@ static void draw_stars(Framebuffer *fb, uint32_t t)
 
 static void draw_header(Framebuffer *fb)
 {
-    const char *title = "TAP-A-THEREMIN";
+    const char *title = "THEREMIN";
     int tw = text_measure_width(title, 3);
     fb_draw_text(fb, SCREEN_W/2 - tw/2, SCREEN_SAFE_TOP + 8,
                  title, RGB(255, 200, 80), 3);
@@ -157,42 +151,41 @@ static void draw_header(Framebuffer *fb)
 
 static void draw_pad(Framebuffer *fb, const TapState *tap)
 {
-    /* Colour bands × 3 duration rows */
+    /* Colour bands with smooth vertical gradient */
     for (int c = 0; c < NUM_COLS; c++) {
         int bx  = PAD_X + (c * PAD_W) / NUM_COLS;
         int bx2 = PAD_X + ((c+1) * PAD_W) / NUM_COLS;
         uint32_t base = col_color(c);
-        for (int row = 0; row < 3; row++) {
-            int by = PAD_Y + (row * PAD_H) / 3;
-            int bh = PAD_H / 3;
-            fb_fill_rect(fb, bx, by, bx2-bx-1, bh-1,
-                         blend(base, COLOR_BLACK, row * 28));
+        int col_w = bx2 - bx - 1;
+        for (int row_y = 0; row_y < PAD_H; row_y++) {
+            int blend_factor = (row_y * 56) / PAD_H;
+            uint32_t colour = blend(base, COLOR_BLACK, blend_factor);
+            fb_fill_rect(fb, bx, PAD_Y + row_y, col_w, 1, colour);
         }
-    }
-
-    /* Duration row labels */
-    const char *labels[3] = { "SHORT  60ms", "MED  120ms", "LONG  200ms" };
-    for (int row = 0; row < 3; row++) {
-        int ly = PAD_Y + (row * PAD_H) / 3 + PAD_H/6 - 4;
-        int lw = text_measure_width(labels[row], 1);
-        fb_draw_text(fb, PAD_X + PAD_W/2 - lw/2, ly,
-                     labels[row], RGB(0, 0, 0), 1);
     }
 
     /* Pad border */
     fb_draw_rect(fb, PAD_X-2, PAD_Y-2, PAD_W+4, PAD_H+4, COLOR_WHITE);
 
-    /* Tap animation: dot + expanding ring */
+    /* While playing: vertical indicator line + dot at touch position */
     if (tap->active) {
-        uint32_t age = get_time_ms() - tap->time_ms;
-        if (age < 600) {
-            fb_fill_circle(fb, tap->x, tap->y, 10, COLOR_WHITE);
-            int ring_r  = 12 + (int)(age * 48 / 600);
-            int alpha   = 255 - (int)(age * 255 / 600);
-            uint32_t rc = blend(COLOR_WHITE, COLOR_BLACK, 255 - alpha);
-            fb_draw_circle(fb, tap->x, tap->y, ring_r,     rc);
-            fb_draw_circle(fb, tap->x, tap->y, ring_r + 1, rc);
+        /* Vertical indicator line spanning full pad height */
+        uint32_t line_col = RGB(255, 255, 255);
+        for (int ly = PAD_Y; ly < PAD_Y + PAD_H; ly++) {
+            /* Semi-transparent: blend with a dimmer shade away from touch Y */
+            int dist = abs(ly - tap->y);
+            int alpha = 255 - (dist * 200 / PAD_H);
+            if (alpha < 40) alpha = 40;
+            uint32_t c = blend(line_col, COLOR_BLACK, 255 - alpha);
+            fb_draw_pixel(fb, tap->x, ly, c);
+            fb_draw_pixel(fb, tap->x - 1, ly, blend(c, COLOR_BLACK, 80));
+            fb_draw_pixel(fb, tap->x + 1, ly, blend(c, COLOR_BLACK, 80));
         }
+
+        /* Dot at current touch position */
+        fb_fill_circle(fb, tap->x, tap->y, 12, COLOR_WHITE);
+        fb_draw_circle(fb, tap->x, tap->y, 14, RGB(200, 200, 255));
+        fb_draw_circle(fb, tap->x, tap->y, 15, RGB(150, 150, 200));
     }
 }
 
@@ -226,12 +219,12 @@ static void draw_info(Framebuffer *fb, const TapState *tap)
 {
     if (tap->active) {
         char info[64];
-        snprintf(info, sizeof(info), "LAST: %4d HZ  %3d MS", tap->freq, tap->dur_ms);
+        snprintf(info, sizeof(info), "FREQ: %4d HZ", tap->freq);
         int iw = text_measure_width(info, 2);
         fb_draw_text(fb, SCREEN_W/2 - iw/2, PAD_Y + PAD_H + 42,
                      info, COLOR_YELLOW, 2);
     } else {
-        const char *hint = "TAP ANYWHERE TO PLAY";
+        const char *hint = "TOUCH AND SLIDE TO PLAY";
         int hw = text_measure_width(hint, 2);
         fb_draw_text(fb, SCREEN_W/2 - hw/2, PAD_Y + PAD_H + 42,
                      hint, RGB(120, 120, 120), 2);
@@ -245,72 +238,99 @@ int main(int argc, char *argv[])
     const char *fb_dev    = (argc > 1) ? argv[1] : "/dev/fb0";
     const char *touch_dev = (argc > 2) ? argv[2] : "/dev/input/touchscreen0";
 
+    logger_init(&logger, "audio_touch_test", LOG_LEVEL_DEBUG, true);
+
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
 
     Framebuffer fb;
     if (fb_init(&fb, fb_dev) < 0) {
-        fprintf(stderr, "Cannot open framebuffer: %s\n", fb_dev); return 1;
+        LOG_ERROR(&logger, "Cannot open framebuffer: %s", fb_dev); return 1;
     }
 
     TouchInput touch;
     if (touch_init(&touch, touch_dev) < 0) {
-        fprintf(stderr, "Cannot open touch: %s\n", touch_dev);
+        LOG_ERROR(&logger, "Cannot open touch: %s", touch_dev);
         fb_close(&fb); return 1;
     }
     touch_set_screen_size(&touch, SCREEN_W, SCREEN_H);
 
     Audio audio;
     if (audio_init(&audio) != 0) {
-        fprintf(stderr, "Cannot open audio\n");
+        LOG_ERROR(&logger, "Cannot open audio");
         touch_close(&touch); fb_close(&fb); return 1;
     }
+    audio.logger = &logger;  /* wire up logger for streaming diagnostics */
 
     /* Exit button — top-right */
     Button exit_btn;
     button_init_full(&exit_btn,
-                     SCREEN_W - BTN_EXIT_WIDTH - SCREEN_SAFE_MARGIN_RIGHT,
+                     SCREEN_W - BTN_EXIT_WIDTH - screen_safe_margin_right,
                      SCREEN_SAFE_TOP + 5,
                      BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
                      "", BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 2);
 
-    TapState tap   = { 0 };
-    bool was_pressed = false;
+    TapState tap      = { 0 };
+    bool was_playing   = false;
+    int  last_log_freq = 0;         /* for throttled debug output */
 
-    printf("TAP-A-THEREMIN  fb=%s  touch=%s\n", fb_dev, touch_dev);
+    LOG_INFO(&logger, "THEREMIN  fb=%s  touch=%s", fb_dev, touch_dev);
 
     while (running) {
         touch_poll(&touch);
         TouchState s   = touch_get_state(&touch);
         uint32_t   now = get_time_ms();
 
+        /* ── exit button (always checked) ── */
         if (s.pressed) {
             bool exit_touched = button_is_touched(&exit_btn, s.x, s.y);
             if (button_check_press(&exit_btn, exit_touched, now))
                 running = false;
-
-            if (!was_pressed && in_pad(s.x, s.y)) {
-                tap.x       = s.x;
-                tap.y       = s.y;
-                tap.freq    = freq_from_x(s.x);
-                tap.dur_ms  = dur_from_y(s.y);
-                tap.time_ms = now;
-                tap.active  = true;
-
-                printf("TOUCH x=%-3d y=%-3d  freq=%-4dHz  dur=%dms\n",
-                       s.x, s.y, tap.freq, tap.dur_ms);
-                fflush(stdout);
-
-                audio_interrupt(&audio);
-                audio_tone(&audio, tap.freq, tap.dur_ms);
-            }
         }
-        was_pressed = s.pressed;
 
-        if (tap.active && (now - tap.time_ms) > 600)
+        /* ── theremin logic ── */
+        if (s.held && in_pad(s.x, s.y)) {
+            int freq = freq_from_x(s.x);
+
+            if (!was_playing) {
+                /* Touch just started */
+                audio_stream_start(&audio, freq);
+                was_playing = true;
+
+                LOG_INFO(&logger, "PLAY freq=%dHz", freq);
+                last_log_freq = freq;
+            } else {
+                /* Finger moved or held — update frequency */
+                audio_stream_set_freq(&audio, freq);
+
+                /* Throttled debug: only log when frequency changes >50 Hz */
+                if (abs(freq - last_log_freq) > 50) {
+                    LOG_DEBUG(&logger, "SLIDE freq=%dHz", freq);
+                    last_log_freq = freq;
+                }
+            }
+
+            /* Feed audio chunk every frame */
+            audio_stream_chunk(&audio);
+
+            /* Update visual state */
+            tap.x      = s.x;
+            tap.y      = s.y;
+            tap.freq   = freq;
+            tap.active = true;
+        } else {
+            if (was_playing) {
+                /* Touch released or moved outside pad */
+                LOG_DEBUG(&logger, "stopping stream...");
+                audio_stream_stop(&audio);
+                was_playing = false;
+
+                LOG_INFO(&logger, "STOP");
+            }
             tap.active = false;
+        }
 
-        /* render */
+        /* ── render ── */
         fb_clear(&fb, RGB(8, 8, 18));
         draw_stars(&fb, now);
         draw_header(&fb);
@@ -319,12 +339,25 @@ int main(int argc, char *argv[])
         draw_info(&fb, &tap);
         draw_exit_button(&fb, &exit_btn);
         fb_swap(&fb);
-        usleep(16000);
+
+        /* Frame pacing: streaming write provides some throttling,
+         * but add a small sleep to prevent busy-spinning.
+         * IMPORTANT: every path MUST sleep to yield CPU and prevent
+         * starving other processes or triggering the hardware watchdog. */
+        if (!was_playing)
+            usleep(16000);  /* 16 ms idle — ~60 fps */
+        else
+            usleep(1000);   /* 1 ms active — keep feeding audio */
     }
+
+    /* Clean shutdown */
+    if (was_playing)
+        audio_stream_stop(&audio);
 
     fb_fade_out(&fb);
     audio_close(&audio);
     touch_close(&touch);
     fb_close(&fb);
+    logger_close(&logger);
     return 0;
 }

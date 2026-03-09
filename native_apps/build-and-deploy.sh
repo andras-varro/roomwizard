@@ -76,7 +76,7 @@ step "18/19" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   common/audio.c common/touch_input.c common/framebuffer.c \
-  common/hardware.c common/common.c \
+  common/hardware.c common/common.c common/logger.c \
   -o build/audio_touch_test -lm
 
 step "19/19" "backlight"
