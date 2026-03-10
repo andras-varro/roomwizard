@@ -17,9 +17,15 @@ BUILD_DIR = build
 COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c
 COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o
 
+# Additional common objects for device_tools
+COMMON_AUDIO_OBJ = $(BUILD_DIR)/audio.o
+COMMON_CONFIG_OBJ = $(BUILD_DIR)/config.o
+COMMON_UILAYOUT_OBJ = $(BUILD_DIR)/ui_layout.o
+DEVICE_TOOLS_DEPS = $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ) $(COMMON_UILAYOUT_OBJ)
+
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker
-UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder
+UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate
 
 .PHONY: all clean install utils tests icons
@@ -50,6 +56,15 @@ $(BUILD_DIR)/ppm.o: $(COMMON_DIR)/ppm.c $(COMMON_DIR)/ppm.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/logger.o: $(COMMON_DIR)/logger.c $(COMMON_DIR)/logger.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/audio.o: $(COMMON_DIR)/audio.c $(COMMON_DIR)/audio.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/config.o: $(COMMON_DIR)/config.c $(COMMON_DIR)/config.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ui_layout.o: $(COMMON_DIR)/ui_layout.c $(COMMON_DIR)/ui_layout.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Snake game
@@ -112,6 +127,11 @@ $(BUILD_DIR)/hardware_test: hardware_test/hardware_test.c $(BUILD_DIR)/hardware.
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: hardware_test"
 
+# Device Tools (unified settings/diagnostics/tests/calibration)
+$(BUILD_DIR)/device_tools: device_tools/device_tools.c $(DEVICE_TOOLS_DEPS)
+	$(CC) $(CFLAGS) -I. $^ -o $@ $(LDFLAGS)
+	@echo "Built: device_tools"
+
 # Install to /opt/games (requires root)
 install: all
 	mkdir -p /opt/games
@@ -121,6 +141,7 @@ install: all
 	cp $(BUILD_DIR)/pong /opt/games/
 	cp $(BUILD_DIR)/game_selector /opt/games/
 	cp $(BUILD_DIR)/watchdog_feeder /opt/games/
+	cp $(BUILD_DIR)/device_tools /opt/games/
 	cp game-mode-init.sh /etc/init.d/game-mode
 	chmod +x /opt/games/*
 	chmod +x /etc/init.d/game-mode
