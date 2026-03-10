@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "config.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -143,6 +144,18 @@ int audio_init(Audio *audio)
     audio->amplitude    = 0.0;
     audio->streaming    = false;
     audio->logger       = NULL;
+
+    /* Check config — honour "audio_enabled" setting */
+    {
+        Config cfg;
+        config_init(&cfg);
+        config_load(&cfg);   /* silent if file missing */
+        if (!config_audio_enabled(&cfg)) {
+            printf("audio: disabled by config (%s)\n", CONFIG_FILE_PATH);
+            audio->available = false;
+            return 0;   /* success — games continue without sound */
+        }
+    }
 
     enable_amp();
 

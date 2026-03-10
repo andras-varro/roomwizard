@@ -625,6 +625,7 @@ int main(int argc, char *argv[]) {
     
     // Initialize hardware control
     hw_init();
+    hw_set_backlight(100);
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     
     srand(time(NULL));
@@ -644,6 +645,7 @@ int main(int argc, char *argv[]) {
     
     touch_close(&touch);
     hw_leds_off();
+    hw_set_backlight(100);
     audio_close(&audio);
     fb_close(&fb);
     

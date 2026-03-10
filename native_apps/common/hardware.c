@@ -1,4 +1,5 @@
 #include "hardware.h"
+#include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,38 @@
 #define RED_LED_PATH       "/sys/class/leds/red_led/brightness"
 #define GREEN_LED_PATH     "/sys/class/leds/green_led/brightness"
 #define BACKLIGHT_PATH     "/sys/class/leds/backlight/brightness"
+
+/* ── Config cache ───────────────────────────────────────────────────────── */
+
+static bool     hw_config_loaded = false;
+static bool     hw_led_enabled = true;
+static int      hw_led_brightness_pct = 100;
+static int      hw_backlight_brightness_pct = 100;
+
+static void hw_load_config(void) {
+    if (hw_config_loaded) return;
+    hw_config_loaded = true;
+
+    Config cfg;
+    config_init(&cfg);
+    if (config_load(&cfg) == 0) {
+        hw_led_enabled = config_led_enabled(&cfg);
+        hw_led_brightness_pct = config_led_brightness(&cfg);
+        hw_backlight_brightness_pct = config_backlight_brightness(&cfg);
+    }
+}
+
+void hw_reload_config(void) {
+    hw_config_loaded = false;
+    hw_load_config();
+}
+
+/** Scale a 0-100 brightness value by a percentage factor. */
+static uint8_t hw_scale_brightness(uint8_t brightness, int pct) {
+    if (pct >= 100) return brightness;
+    if (pct <= 0) return 0;
+    return (uint8_t)((int)brightness * pct / 100);
+}
 
 // Internal helper to write brightness value to sysfs
 static int write_brightness(const char *path, uint8_t brightness) {
@@ -102,6 +135,10 @@ int hw_init(void) {
 }
 
 int hw_set_led(LEDColor led, uint8_t brightness) {
+    hw_load_config();
+    if (!hw_led_enabled) return 0;  /* LEDs disabled by config */
+    brightness = hw_scale_brightness(brightness, hw_led_brightness_pct);
+
     const char *path = get_led_path(led);
     if (path == NULL) {
         fprintf(stderr, "Error: Invalid LED color\n");
@@ -122,18 +159,16 @@ int hw_get_led(LEDColor led) {
 }
 
 int hw_set_red_led(uint8_t brightness) {
-    return write_brightness(RED_LED_PATH, brightness);
+    return hw_set_led(LED_RED, brightness);
 }
 
 int hw_set_green_led(uint8_t brightness) {
-    return write_brightness(GREEN_LED_PATH, brightness);
+    return hw_set_led(LED_GREEN, brightness);
 }
 
 int hw_set_leds(uint8_t red, uint8_t green) {
-    int ret1 = hw_set_red_led(red);
-    int ret2 = hw_set_green_led(green);
-    
-    // Return error if either failed
+    int ret1 = hw_set_led(LED_RED, red);
+    int ret2 = hw_set_led(LED_GREEN, green);
     return (ret1 < 0 || ret2 < 0) ? -1 : 0;
 }
 
@@ -157,10 +192,16 @@ int hw_get_led_state(LEDState *state) {
 }
 
 int hw_leds_off(void) {
-    return hw_set_leds(0, 0);
+    /* Always write 0 — cleanup must work regardless of config */
+    int ret1 = write_brightness(RED_LED_PATH, 0);
+    int ret2 = write_brightness(GREEN_LED_PATH, 0);
+    return (ret1 < 0 || ret2 < 0) ? -1 : 0;
 }
 
 int hw_set_backlight(uint8_t brightness) {
+    hw_load_config();
+    brightness = hw_scale_brightness(brightness, hw_backlight_brightness_pct);
+
     return write_brightness(BACKLIGHT_PATH, brightness);
 }
 

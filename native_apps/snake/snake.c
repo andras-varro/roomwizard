@@ -537,6 +537,7 @@ int main(int argc, char *argv[]) {
     
     // Initialize hardware control
     hw_init();
+    hw_set_backlight(100);
     hw_leds_off();  // Start with LEDs off
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     

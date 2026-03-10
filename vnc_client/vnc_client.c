@@ -619,6 +619,7 @@ static int run_vnc_client(const char *host, int port) {
 
     hw_set_led(LED_GREEN, 0);
     hw_set_led(LED_RED, 0);
+    hw_set_backlight(100);
 
     if (g_touch_ok)
         touch_close(&g_touch);

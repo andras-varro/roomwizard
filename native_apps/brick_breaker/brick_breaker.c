@@ -1581,6 +1581,7 @@ int main(int argc, char *argv[]) {
     }
 
     hw_init();
+    hw_set_backlight(100);
     audio_init(&audio);
     srand(time(NULL));
 
@@ -1647,6 +1648,7 @@ int main(int argc, char *argv[]) {
     /* Clean up */
     touch_close(&touch);
     hw_leds_off();
+    hw_set_backlight(100);
     audio_close(&audio);
     fb_clear(&fb, COLOR_BLACK);
     fb_swap(&fb);

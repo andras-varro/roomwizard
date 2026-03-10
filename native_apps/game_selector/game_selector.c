@@ -7,6 +7,7 @@
 #include "common/framebuffer.h"
 #include "common/touch_input.h"
 #include "common/common.h"
+#include "common/hardware.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -267,6 +268,8 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
             touch_set_screen_size(&selector->touch, selector->fb.width, selector->fb.height);
             touch_drain_events(&selector->touch);  /* Discard stale events */
         }
+        hw_reload_config();  /* Re-read config in case child app changed it */
+        hw_set_backlight(100);  /* Restore configured backlight after game exits */
         
         return 0;
     } else {
@@ -356,6 +359,7 @@ int main(int argc, char *argv[]) {
     }
     
     // Cleanup
+    hw_set_backlight(100);
     fb_clear(&selector.fb, COLOR_BLACK);
     fb_swap(&selector.fb);  // Make sure the clear is visible
     touch_close(&selector.touch);

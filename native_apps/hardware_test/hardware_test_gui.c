@@ -690,6 +690,7 @@ int main(void) {
     if (hw_init() < 0) {
         fprintf(stderr, "Warning: Hardware initialization issues\n");
     }
+    hw_set_backlight(100);
     
     // Create UI layout – 5 columns to fit NUM_TESTS (10) items in 2 rows
     // Item size: 150x80, spacing: 6x20
@@ -761,6 +762,7 @@ int main(void) {
     }
     
     hw_leds_off();
+    hw_set_backlight(100);
     fb_clear(&fb, COLOR_BLACK);
     fb_swap(&fb);
     touch_close(&touch);

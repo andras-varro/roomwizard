@@ -33,6 +33,13 @@ typedef struct {
 int hw_init(void);
 
 /**
+ * Reload hardware configuration from disk.
+ * Call this after config may have changed (e.g., after a child process exits
+ * that may have modified the config file).
+ */
+void hw_reload_config(void);
+
+/**
  * Set individual LED brightness
  * @param led: LED_RED or LED_GREEN
  * @param brightness: 0-100 (0=off, 100=full brightness)

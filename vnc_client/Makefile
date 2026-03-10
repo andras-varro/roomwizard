@@ -23,6 +23,7 @@ SRCS = vnc_client.c \
        $(COMMON_DIR)/framebuffer.c \
        $(COMMON_DIR)/touch_input.c \
        $(COMMON_DIR)/hardware.c \
+       $(COMMON_DIR)/config.c \
        $(COMMON_DIR)/logger.c
 
 # Object files

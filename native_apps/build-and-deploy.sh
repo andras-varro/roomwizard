@@ -41,46 +41,50 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/19" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/19" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/19" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 4/19" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step " 5/19" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/19" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 7/19" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
-step " 8/19" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
-step " 9/19" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
+step " 1/21" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/21" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/21" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 4/21" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step " 5/21" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/21" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 7/21" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 8/21" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
+step " 9/21" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
+step "10/21" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
 
-COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o"
+COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
 
-step "10/19" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "11/19" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "12/19" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "11/21" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "12/21" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "13/21" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "13/19" "brick_breaker"
+step "14/21" "brick_breaker"
 $CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ -o build/brick_breaker -lm
 
-step "14/19" "game_selector"
+step "15/21" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "15/19" "app_launcher"
+step "16/21" "app_launcher"
 $CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "16/19" "hardware_test"
+step "17/21" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "17/19" "unified_calibrate"
+step "18/21" "hardware_config"
+$CC -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
+
+step "19/21" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "18/19" "audio_touch_test"
+step "20/21" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   common/audio.c common/touch_input.c common/framebuffer.c \
-  common/hardware.c common/common.c common/logger.c \
+  common/hardware.c common/common.c common/logger.c common/config.c \
   -o build/audio_touch_test -lm
 
-step "19/19" "backlight"
-$CC -O2 -static -I. backlight/backlight.c build/hardware.o -o build/backlight
+step "21/21" "backlight"
+$CC -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 # Collect icon files from source dirs → build/icons/
 mkdir -p build/icons
@@ -94,7 +98,7 @@ done
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/brick_breaker build/game_selector build/app_launcher build/hardware_test build/unified_calibrate build/audio_touch_test build/backlight \
+ls -lh build/snake build/tetris build/pong build/brick_breaker build/game_selector build/app_launcher build/hardware_test build/hardware_config build/unified_calibrate build/audio_touch_test build/backlight \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -148,6 +152,7 @@ info "Uploading game binaries → $GAMES_DIR/"
 scp build/snake build/tetris build/pong \
     build/brick_breaker \
     build/game_selector build/hardware_test \
+    build/hardware_config \
     build/unified_calibrate \
     build/audio_touch_test \
     build/backlight \
@@ -173,6 +178,7 @@ ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/brick_breaker \
          /opt/games/game_selector /opt/games/hardware_test \
+         /opt/games/hardware_config \
          /opt/games/unified_calibrate /opt/games/backlight \
          /opt/roomwizard/app_launcher
 
@@ -239,6 +245,13 @@ name=Calibrate
 exec=/opt/games/unified_calibrate
 icon=/opt/roomwizard/icons/unified_calibrate.ppm
 args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/hardware_config.app << 'APP'
+name=Settings
+exec=/opt/games/hardware_config
+icon=/opt/roomwizard/icons/hardware_config.ppm
+args=
 APP
 REMOTE
 ok "App manifests installed"
