@@ -205,8 +205,8 @@ int main(int argc, char *argv[]) {
 - [x] **App Launcher layout in portrait** — Dynamic `compute_grid_layout()` replaces hardcoded grid; all centering uses `fb.width / 2`. *(See [Fix #2](#fix-2-app-launcher-layout-broken-in-portrait--done))*
 - [x] **Brick Breaker row count in portrait** — `init_brick_layout()` dynamically computes cols/rows from screen dimensions. *(See [Fix #3](#fix-3-brick-breaker-row-count--done))*
 - [x] **Pong AI scoring during start screen** — Early-return guard in `update_game()` + `reset_game()` on transition. *(See [Fix #4](#fix-4-pong-ai-scoring-during-start-screen--done))*
-- [ ] **Tap-a-Theremin layout in portrait** — *(See [Testing Result #5](#5-tap-a-theremin-layout-broken-in-portrait))*
-- [ ] **Tetris UX polish in portrait** — *(See [Testing Result #6](#6-tetris-minor-ux-issues-in-portrait))*
+- [x] **Tap-a-Theremin layout in portrait** — *(See [Fix #5](#fix-5-tap-a-theremin-layout--done))*
+- [x] **Tetris UX polish in portrait** — *(See [Fix #6](#fix-6-tetris-ux--done))*
 
 ## Portrait Mode Testing Results (Phase 4)
 
@@ -251,14 +251,14 @@ int main(int argc, char *argv[]) {
 - Title "THEREMIN" is off-center (uses hardcoded `SCREEN_W=800` for centering)
 - Instruction text "TOUCH AND SLIDE TO PLAY" is off-center (same hardcoded centering)
 - Touch transformation is incorrect — marker position accelerates/jumps ahead during swipe
-- **Status:** NEEDS FIX
+- **Status:** ✅ FIXED (2026-03-11)
 
 #### 6. Tetris Minor UX Issues in Portrait
 - **File:** [`tetris/tetris.c`](tetris/tetris.c)
 - Rotation only works in a narrow center band; touching closer to edges triggers left/right move instead of rotate. Since there's ample screen space in portrait, touching the game area should rotate, and only areas close to/outside the board edges should move left/right
 - Next block preview overlaps with the exit button
 - Control hint text "L/R: MOVE, CENTER: ROTATE, BOTTOM: DROP" starts at left screen edge instead of being centered under the play area
-- **Status:** NEEDS FIX
+- **Status:** ✅ FIXED (2026-03-11)
 
 #### 7. VNC Client & ScummVM
 Not affected by orientation, no changes needed currently.
@@ -295,27 +295,63 @@ Not affected by orientation, no changes needed currently.
 - Added `reset_game()` call when transitioning from welcome to playing state
 - Prevents ball movement/scoring during start screen; scores guaranteed 0-0 on game start
 
-#### Fixes Remaining (Next Session)
-
-**Fix #5: Tap-a-Theremin Layout — NOT STARTED**
+**Fix #5: Tap-a-Theremin Layout — DONE**
 - **File:** [`tests/audio_touch_test.c`](tests/audio_touch_test.c)
-- Issues: Title "THEREMIN" off-center (hardcoded `SCREEN_W=800`), instruction text off-center, touch transformation incorrect (marker jumps ahead)
-- Plan: Replace `SCREEN_W`/`SCREEN_H` hardcoded constants with `fb.width`/`fb.height` runtime values; recalculate `PAD_X`, `PAD_Y`, `PAD_W`, `PAD_H` from safe area macros; fix star coordinate positions; fix touch-to-frequency mapping to use correct coordinate space
-- Hardcoded values to fix: `SCREEN_W=800`, `SCREEN_H=480`, `PAD_Y=70`, `PAD_H=310`, star positions at lines 122–123
+- Removed hardcoded `SCREEN_W=800`/`SCREEN_H=480` constants
+- Title and instruction text now center using `screen_base_width/2`
+- `PAD_Y` and `PAD_H` computed from safe area macros (adapts to portrait height)
+- Touch screen size set from runtime dimensions (fixes marker acceleration bug)
+- Star positions scale with `fb->width`/`fb->height`
 
-**Fix #6: Tetris UX Issues in Portrait — NOT STARTED**
+**Fix #6: Tetris UX — DONE**
 - **File:** [`tetris/tetris.c`](tetris/tetris.c)
-- **Issue A:** Rotation zone too narrow — touching near board edges triggers left/right move instead of rotate. Fix: Expand rotate zone to cover the entire game board area; only areas close to or beyond board edges should trigger movement
-- **Issue B:** Next block preview overlaps exit button. Fix: Reposition the next-block preview or the exit button so they don't overlap
-- **Issue C:** Control hint text "L/R: MOVE, CENTER: ROTATE, BOTTOM: DROP" starts at left screen edge. Fix: Center it under the play area using `board_offset_x + board_width_px / 2`
+- Rotation zone expanded from center 1/3 to center 60% of board; sides 20% each for movement
+- Next block preview repositioned left of exit button (no overlap)
+- Control hint text centered under play area using `text_measure_width()`
 
 #### Build Verification — Pending
 
-All 4 completed fixes need to be cross-compiled and tested on device:
+All 6 completed fixes need to be cross-compiled and tested on device:
 ```bash
 native_apps/build-and-deploy.sh                        # build only
 native_apps/build-and-deploy.sh 192.168.50.73          # build + deploy
 ```
+
+## Best Practices & Pitfalls for Portrait Mode Development
+
+### ✅ Best Practices
+
+1. **Never hardcode screen dimensions** — Use `fb.width`/`fb.height` or `screen_base_width`/`screen_base_height` instead of literal `800`/`480` values. Use `SCREEN_SAFE_*` macros for layout within safe areas. Every hardcoded pixel value is a portrait-mode bug waiting to happen.
+
+2. **Use `fb.width / 2` for horizontal centering** — Never hardcode `400` as center X. This was the #1 most common bug pattern found across app_launcher, theremin, and other apps. Use `fb.width / 2` or `screen_base_width / 2`.
+
+3. **Compute layout at init time, not compile time** — Replace `#define` constants for grid dimensions, tile sizes, and element counts with runtime variables computed in an `init_layout()` function called after `fb_init()`. See [`app_launcher.c`](app_launcher/app_launcher.c) `compute_grid_layout()` and [`brick_breaker.c`](brick_breaker/brick_breaker.c) `init_brick_layout()` as examples.
+
+4. **Scale game elements proportionally to screen dimensions** — For games with grids (brick rows, tile columns), calculate counts from available area: `count = available_space * ratio / (element_size + padding)`. Don't use fixed counts that only work for one orientation.
+
+5. **Touch coordinate space must match drawing coordinate space** — Call `touch_set_screen_size()` with the virtual screen dimensions (`screen_base_width`, `screen_base_height`), not hardcoded values. Mismatched coordinate spaces cause markers/cursors to track incorrectly (the "marker hurries forward" bug).
+
+6. **Calibration is auto-loaded now** — `touch_init()` automatically loads calibration from `/etc/touch_calibration.conf` and enables it. Apps no longer need to manually call `touch_load_calibration()` + `touch_enable_calibration()`. Don't disable calibration unless there's a specific reason.
+
+7. **Guard game state properly** — Ensure game logic (ball movement, AI, scoring) only runs in the PLAYING state, not during welcome/start screens. The Pong bug where AI scored during the start screen is a classic state-management pitfall.
+
+8. **Use `fb.portrait_mode` for orientation-specific branching** — When layout needs to be fundamentally different (e.g., 3×2 vs 2×3 grid), check `fb.portrait_mode` and branch. For simple scaling, let the runtime dimensions do the work automatically.
+
+### ⚠️ Common Pitfalls
+
+1. **Hardcoded pixel positions for decorative elements** — Stars, background patterns, and decorative positions often get hardcoded and forgotten. Scale them relative to `fb->width`/`fb->height`.
+
+2. **Touch zones using fixed pixel widths** — Touch zones for game controls (rotate/move) should be percentages of the board/play area, not fixed pixel widths. A zone that feels right at 800px is too narrow at 480px.
+
+3. **UI elements overlapping in portrait** — Elements positioned relative to screen edges (exit button, next-block preview) can collide when the screen is narrower. Always check that elements positioned relative to different edges don't overlap.
+
+4. **Forgetting to recompute layout after app returns** — If your app launches a child process and re-acquires the framebuffer, recompute layout variables. The framebuffer dimensions don't change, but variables derived from them need re-initialization.
+
+5. **Calibration pipeline order matters** — The correct pipeline is: raw → scale to physical (800×480) → bilinear calibration → bezel margins → rotate if portrait → clamp. Applying calibration in the wrong coordinate space produces incorrect offsets.
+
+6. **PPM splash images not rotated** — PPM images are loaded at their native orientation. Portrait mode rotation happens at the framebuffer level (`fb_swap()`), so PPM content displays correctly if drawn to the back buffer. However, images designed for 800×480 will have wrong aspect ratio in portrait — consider loading different images or scaling.
+
+7. **`#define` macros referencing runtime values** — Macros like `#define PAD_H 310` become stale constants. If a dimension depends on screen size, it should either be a macro that references a runtime variable (e.g., `#define PAD_H (SCREEN_SAFE_BOTTOM - PAD_Y - 100)`) or a plain variable.
 
 ## Backlog
 
@@ -347,3 +383,105 @@ native_apps/build-and-deploy.sh 192.168.50.73          # build + deploy
 ---
 
 **ScummVM touch patterns:** See [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md#gesture-navigation).
+
+## Phase 5: Portrait Mode Polish & UI Unification
+
+> **✅ All Phase 5 items verified deployed on device (2026-03-11).** Cross-compiled, deployed via `build-and-deploy.sh`, and confirmed working on hardware.
+
+### Reported Issues (2026-03-11)
+
+1. **Bezel compensation incorrect in portrait mode** — In portrait mode, the bezel compensation padding meant for the longer edges (top/bottom in landscape) is being applied to the shorter edges (top/bottom in portrait). Affects BrickBreaker, Theremin, Snake, Device Tools, and likely other apps. Root cause: `fb_load_safe_area()` reads margins as physical `top bottom left right` but doesn't rotate them when portrait mode is active. `[FIXED]`
+
+2. **BrickBreaker ball speed too slow** — The distance between paddle and blocks in portrait mode is too large. Ball takes 6-7 seconds to reach blocks from paddle. Initial ball speed should be calculated based on the distance the ball needs to cover (paddle-to-blocks distance). `[FIXED]`
+
+3. **BrickBreaker needs Game Over screen with highscore** — Currently inserts "PLAYER" as name without prompting. Should have proper name entry like Snake/Tetris. Create reusable game-over components from the Snake approach. `[FIXED]`
+
+4. **Game Over screen needs Exit option** — Add an Exit button to the Game Over screen (return to game selector/launcher). `[FIXED]`
+
+5. **Pong start screen text not centered** — "TOUCH TO MOVE PADDLE" and "FIRST TO 11 WINS" text on the start/welcome screen is not properly centered. `[FIXED]`
+
+6. **Pong game screen text not centered** — "TOUCH TO MOVE PADDLE" instruction text during gameplay is not properly centered. `[FIXED]`
+
+7. **Pong user point indicator positioning** — In portrait mode, the user (green) score at the bottom is drawn at the very edge of the game area. Either move user score to the top beside AI score, or leave sufficient space at the bottom. `[FIXED]`
+
+8. **Pong Game Over screen not unified** — Should match Snake/Tetris pattern with: transparent background overlay, highscore support (track last winners or user's score against AI), exit button. Since Pong always goes to 11, "high score" could track opponents beaten or the user's points when AI wins. `[FIXED]`
+
+9. **Snake and Tetris game logic runs during start screen** — The game starts processing in the background while the start/welcome screen is displayed. Game logic should only begin after the player dismisses the start screen. `[FIXED]`
+
+10. **Tetris start screen text not centered** — "TAP LEFT/RIGHT: MOVE..." instruction text on the start screen is not properly centered. `[FIXED]`
+
+11. **Pause menu transparency inconsistent** — BrickBreaker's pause menu has ~50% transparent overlay showing the game underneath. Pong, Snake, and Tetris pause menus clear to solid black. Make all pause menus consistent with ~50% transparency. `[FIXED]`
+
+12. **Tetris screen area underutilized** — Significant unused space to the right, left, and bottom of the Tetris play area. In portrait mode, the board is drawn from the top with ~1 inch gap at the bottom. Better utilize available screen real estate and center the play area vertically. `[FIXED]`
+
+13. **Device Tools portrait mode toggle text incorrect** — The portrait mode toggle switch label says "PORTRAIT MODE (REBOOT)" — reboot is not true or required; the change takes effect on next app launch. `[FIXED]`
+
+14. **Device Tools should apply changes immediately** — When saving settings for portrait mode and backlight, changes should be applied to the running device tools instance immediately, not require restart. `[FIXED]`
+
+15. **Device Tools tab overflow** — The tab bar shows only ~2.5 tabs (Settings, Diagnostics, Tes...) before the Exit X button overlaps with the "Tests" tab. The "Calibration" tab is not visible at all. Need tab scrolling or a more compact tab layout. `[FIXED]`
+
+### Implementation Plan
+
+> **Status**: All 15 issues implemented (2026-03-11). Pending cross-compile and deploy verification.
+
+#### Priority Order
+1. **Foundation fixes** — Bezel compensation rotation (affects all apps)
+2. **Reusable components** — Unified game-over screen with highscore, exit, transparent overlay
+3. **Game-specific fixes** — Ball speed, text centering, score positioning, screen area usage
+4. **Device Tools fixes** — Tab scrolling, label text, apply-on-save
+5. **Polish** — Pause menu transparency, prevent background game logic
+
+## Phase 6: Portrait Mode Testing & Fixes (Device Tools)
+
+**Status**: In Progress
+
+User tested portrait mode on hardware and identified the following issues:
+
+### Issue 1: Settings Tab — Text and Slider Overflow
+- **Symptom**: In portrait mode, the "SETTINGS" text in the tab bar overflows boundaries. The Backlight and LED Brightness controls (with + and - buttons and the progress bar) are too wide — the right side is not visible.
+- **Root Cause**: Tab label "SETTINGS" (8 chars) is too long for the narrow portrait tab width (~93px). `BAR_WIDTH` is hardcoded at 300px, and the +/- button positions computed from `CONTENT_LEFT + 190 + BAR_WIDTH + 70` = ~560px exceeds portrait content width of ~460px.
+- **Fix**: Rename "SETTINGS" short label to "SET" or "CONFIG" when tab width is narrow. Make `BAR_WIDTH` dynamic: `min(300, CONTENT_WIDTH - 200)` to fit within available horizontal space. Recompute +/- button positions based on dynamic bar width.
+- [x] Implemented
+- [x] Verified on device
+
+### Issue 2: Diagnostics Page 5/5 — Default App Value Overflow
+- **Symptom**: In portrait mode, on diagnostics config page (5/5), the "DEFAULT APP:" value text flows out of the screen boundary.
+- **Root Cause**: `draw_info_row()` places the value column at `CONTENT_LEFT + 270`, which in portrait leaves only ~190px for the value text. Long paths like `/opt/roomwizard/app_launcher` overflow.
+- **Fix**: Make the value column offset dynamic based on `CONTENT_WIDTH`. In portrait, either reduce the label column width or wrap/truncate the value text. Consider using `CONTENT_LEFT + min(270, CONTENT_WIDTH * 55/100)` for the value column position.
+- [x] Implemented
+- [x] Verified on device
+
+### Issue 3: Tests Page — Only 4 Tests Visible
+- **Symptom**: In portrait mode, only 4 tests are visible (RED LED, GREEN LED, BLINK, COLORS). The remaining 6 tests are not accessible.
+- **Root Cause**: Test grid is configured as 5 columns × 2 rows with `item_width=140`, totaling 732px which overflows 460px portrait content width. The `ui_layout_get_item_position()` bounds check rejects items where `x + width > screen_width - margin_right`, so items in columns 3-4 are rejected/not drawn.
+- **Fix**: Detect portrait mode and reduce grid columns (e.g., 3 columns × 4 rows or 2 columns × 5 rows). May also need to reduce `item_width` or add scrolling for the extra rows.
+- [x] Implemented
+- [x] Verified on device
+
+### Issue 4: Calibration Tool — Portrait Coordinate Mapping
+- **Symptom**: The calibration tool works in portrait, but produces swapped bezel compensation values. In landscape, correct values are T:10, B:10, L:0, R:0. In portrait, the calibration produces T:0, B:0, L:10, R:10. However, these values are applied in screen native (physical) coordinates, so the portrait calibration values are incorrect.
+- **Root Cause**: The calibration phase 2 (bezel margin adjustment) operates in virtual coordinates, but margins are saved and applied in physical coordinates. When calibrating in portrait, the user adjusts what they perceive as "top/bottom" (physical left/right), but the saved margins are labeled as virtual T/B/L/R without rotation mapping.
+- **Fix**: Two possible approaches:
+  1. **Force landscape calibration**: Temporarily disable portrait rotation during calibration, so the user always calibrates in native orientation. Document that calibration runs in landscape regardless of portrait mode setting.
+  2. **Rotate margins on save**: When saving calibration results in portrait mode, apply inverse rotation: virtual_top→physical_left, virtual_bottom→physical_right, virtual_left→physical_top, virtual_right→physical_bottom.
+- **Decision**: Deferred — calibration should be performed in landscape mode. The bezel compensation values (T:10, B:10, L:0, R:0) are applied in physical screen coordinates. When calibrating in portrait, the user perceives swapped axes (gets T:0, B:0, L:10, R:10 instead). Since calibration is a one-time setup operation, requiring landscape mode for calibration is the simplest and least error-prone approach. A future enhancement could add a warning in the calibration tab when portrait mode is active, suggesting the user switch to landscape first.
+- [ ] Implemented
+- [ ] Verified on device
+
+## Phase 7: Portrait Mode Testing & Fixes (Device Tools — Round 2)
+
+**Status**: In Progress
+
+User tested portrait mode on hardware (2026-03-11) and confirmed Phase 6 fixes:
+- ✅ Settings tab text and slider layout now fits in portrait
+- ✅ Safe area and alpha blending works correctly in portrait orientation
+- ✅ Backlight and LED brightness controls fit properly
+
+### Issues Found
+
+#### 1. Portrait Mode Toggle Overlaps Backlight Button
+- **Symptom**: In portrait mode, the portrait mode toggle switch partially overlaps with the backlight [-] button in the Settings tab
+- **Root Cause**: The Display section vertical spacing doesn't account for the additional portrait toggle element below the backlight slider. The backlight control row and the portrait toggle are placed too close together.
+- **Fix**: Increase vertical spacing between the backlight control row and the portrait mode toggle in the Settings tab portrait layout.
+- [x] Implemented
+- [ ] Verified on device

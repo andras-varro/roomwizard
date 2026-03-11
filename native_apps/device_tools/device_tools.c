@@ -229,23 +229,24 @@ static void draw_section_header(Framebuffer *fb, int y, const char *title) {
 }
 
 static void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
-                                 int min_val, int max_val) {
-    fb_fill_rect(fb, x, y, BAR_WIDTH, BAR_HEIGHT, COLOR_BAR_BG);
+                                 int min_val, int max_val, int bar_width) {
+    fb_fill_rect(fb, x, y, bar_width, BAR_HEIGHT, COLOR_BAR_BG);
     int range = max_val - min_val;
-    int fill_w = (range > 0) ? ((value - min_val) * BAR_WIDTH) / range : 0;
-    if (fill_w > BAR_WIDTH) fill_w = BAR_WIDTH;
+    int fill_w = (range > 0) ? ((value - min_val) * bar_width) / range : 0;
+    if (fill_w > bar_width) fill_w = bar_width;
     if (fill_w < 0) fill_w = 0;
     if (fill_w > 0)
         fb_fill_rect(fb, x, y, fill_w, BAR_HEIGHT, COLOR_BAR_FILL);
     char pct[8];
     snprintf(pct, sizeof(pct), "%d%%", value);
-    fb_draw_text(fb, x + BAR_WIDTH + 10, y + 2, pct, COLOR_WHITE, 2);
+    fb_draw_text(fb, x + bar_width + 10, y + 2, pct, COLOR_WHITE, 2);
 }
 
 static int draw_info_row(Framebuffer *fb, int y, const char *label,
                          const char *value, uint32_t value_color) {
+    int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
     fb_draw_text(fb, CONTENT_LEFT + 10, y, label, COLOR_LABEL, 2);
-    fb_draw_text(fb, CONTENT_LEFT + 270, y, value, value_color, 2);
+    fb_draw_text(fb, value_x, y, value, value_color, 2);
     return y + 28;
 }
 
@@ -280,10 +281,23 @@ static void draw_usage_bar(Framebuffer *fb, int x, int y, int width,
 
 static void create_tab_bar(void) {
     int tab_y = SCREEN_SAFE_TOP + 2;
+
+    /* Dynamic tab width: fit all tabs + exit button within safe area */
+    int exit_total = EXIT_BTN_W + 20;           /* exit button + margins */
+    int tab_area_w = SCREEN_SAFE_WIDTH - exit_total - 20; /* 10px left + 10px gap */
+    int num_tabs = TAB_COUNT;
+    int tab_w = (tab_area_w - (num_tabs - 1) * TAB_BTN_SPACING) / num_tabs;
+    if (tab_w > TAB_BTN_W) tab_w = TAB_BTN_W;  /* cap at original max */
+    if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
+
+    /* Use abbreviated labels when tabs are narrow */
+    static const char *short_labels[] = { "SET", "DIAG", "TESTS", "CALIB" };
+    const char **labels = (tab_w < 120) ? short_labels : tab_names;
+
     for (int i = 0; i < TAB_COUNT; i++) {
-        int tab_x = SCREEN_SAFE_LEFT + 10 + i * (TAB_BTN_W + TAB_BTN_SPACING);
+        int tab_x = SCREEN_SAFE_LEFT + 10 + i * (tab_w + TAB_BTN_SPACING);
         button_init_full(&tab_buttons[i], tab_x, tab_y,
-                         TAB_BTN_W, TAB_BTN_H, tab_names[i],
+                         tab_w, TAB_BTN_H, labels[i],
                          COLOR_TAB_INACTIVE, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 2);
     }
@@ -377,13 +391,12 @@ static void apply_backlight(int brightness_pct) {
 }
 
 static void create_settings_ui(AppState *state) {
+    int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = CONTENT_Y + 5;
     int sec_led_y   = CONTENT_Y + 75;
-    int sec_disp_y  = CONTENT_Y + 185;
-    int action_y    = CONTENT_Y + 320;
-    int led_bar_x   = CONTENT_LEFT + 190;
+    int sec_disp_y  = CONTENT_Y + (portrait ? 225 : 185);
+    int action_y    = CONTENT_Y + (portrait ? 390 : 320);
     int led_bar_y   = sec_led_y + 65;
-    int bl_bar_x    = CONTENT_LEFT + 190;
     int bl_bar_y    = sec_disp_y + 30;
 
     toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 30,
@@ -391,21 +404,45 @@ static void create_settings_ui(AppState *state) {
     toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 25,
                 60, 28, "LED EFFECTS", state->led_enabled);
 
-    button_init_full(&led_minus_btn, led_bar_x - 55, led_bar_y - 5,
-                     45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&led_plus_btn, led_bar_x + BAR_WIDTH + 70, led_bar_y - 5,
-                     45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&bl_minus_btn, bl_bar_x - 55, bl_bar_y - 5,
-                     45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&bl_plus_btn, bl_bar_x + BAR_WIDTH + 70, bl_bar_y - 5,
-                     45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
+    if (portrait) {
+        /* Portrait stacked layout: [-] [bar] [+] value on row below label */
+        int bar_w = CONTENT_WIDTH - 170;
+        if (bar_w < 80) bar_w = 80;
+        int led_ctrl_y = led_bar_y + 25;
+        int bl_ctrl_y  = bl_bar_y + 25;
 
-    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, sec_disp_y + 65,
-                60, 28, "PORTRAIT MODE (REBOOT)", state->portrait_mode);
+        button_init_full(&led_minus_btn, CONTENT_LEFT, led_ctrl_y - 5,
+                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&led_plus_btn, CONTENT_LEFT + 55 + bar_w + 10, led_ctrl_y - 5,
+                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&bl_minus_btn, CONTENT_LEFT, bl_ctrl_y - 5,
+                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&bl_plus_btn, CONTENT_LEFT + 55 + bar_w + 10, bl_ctrl_y - 5,
+                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+    } else {
+        /* Landscape layout: label + [-] [bar] [+] on same row */
+        int led_bar_x = CONTENT_LEFT + 190;
+        int bl_bar_x  = CONTENT_LEFT + 190;
+        button_init_full(&led_minus_btn, led_bar_x - 55, led_bar_y - 5,
+                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&led_plus_btn, led_bar_x + BAR_WIDTH + 70, led_bar_y - 5,
+                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&bl_minus_btn, bl_bar_x - 55, bl_bar_y - 5,
+                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+        button_init_full(&bl_plus_btn, bl_bar_x + BAR_WIDTH + 70, bl_bar_y - 5,
+                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+    }
+
+    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, sec_disp_y + (portrait ? 95 : 65),
+                60, 28, "PORTRAIT MODE", state->portrait_mode);
 
     button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 27,
                      90, 34, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
@@ -415,22 +452,31 @@ static void create_settings_ui(AppState *state) {
                      BTN_COLOR_HIGHLIGHT, 2);
 
     int center_x = CONTENT_LEFT + CONTENT_WIDTH / 2;
-    button_init_full(&save_btn, center_x - 230, action_y,
-                     160, 50, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 3);
-    button_init_full(&reset_btn, center_x + 30, action_y,
-                     220, 50, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
+    if (portrait) {
+        /* Portrait: stack buttons vertically, centered */
+        button_init_full(&save_btn, center_x - 80, action_y,
+                         160, 50, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 3);
+        button_init_full(&reset_btn, center_x - 110, action_y + 60,
+                         220, 50, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+    } else {
+        button_init_full(&save_btn, center_x - 230, action_y,
+                         160, 50, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 3);
+        button_init_full(&reset_btn, center_x + 30, action_y,
+                         220, 50, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
+                         BTN_COLOR_HIGHLIGHT, 2);
+    }
 }
 
 static void draw_settings(Framebuffer *fb, AppState *state) {
+    int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = CONTENT_Y + 5;
     int sec_led_y   = CONTENT_Y + 75;
-    int sec_disp_y  = CONTENT_Y + 185;
-    int action_y    = CONTENT_Y + 320;
-    int led_bar_x   = CONTENT_LEFT + 190;
+    int sec_disp_y  = CONTENT_Y + (portrait ? 225 : 185);
+    int action_y    = CONTENT_Y + (portrait ? 390 : 320);
     int led_bar_y   = sec_led_y + 65;
-    int bl_bar_x    = CONTENT_LEFT + 190;
     int bl_bar_y    = sec_disp_y + 30;
 
     draw_section_header(fb, sec_audio_y, "AUDIO");
@@ -444,21 +490,39 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     fb_draw_text(fb, CONTENT_LEFT + 5, led_bar_y + 2,
                  "LED BRIGHTNESS", COLOR_LABEL, 2);
     button_draw(fb, &led_minus_btn);
-    draw_brightness_bar(fb, led_bar_x, led_bar_y, state->led_brightness, 0, 100);
+    if (portrait) {
+        int bar_w = CONTENT_WIDTH - 170;
+        if (bar_w < 80) bar_w = 80;
+        int led_ctrl_y = led_bar_y + 25;
+        draw_brightness_bar(fb, CONTENT_LEFT + 55, led_ctrl_y,
+                            state->led_brightness, 0, 100, bar_w);
+    } else {
+        draw_brightness_bar(fb, CONTENT_LEFT + 190, led_bar_y,
+                            state->led_brightness, 0, 100, BAR_WIDTH);
+    }
     button_draw(fb, &led_plus_btn);
 
     draw_section_header(fb, sec_disp_y, "DISPLAY");
     fb_draw_text(fb, CONTENT_LEFT + 5, bl_bar_y + 2,
                  "BACKLIGHT", COLOR_LABEL, 2);
     button_draw(fb, &bl_minus_btn);
-    draw_brightness_bar(fb, bl_bar_x, bl_bar_y,
-                        state->backlight_brightness, 20, 100);
+    if (portrait) {
+        int bar_w = CONTENT_WIDTH - 170;
+        if (bar_w < 80) bar_w = 80;
+        int bl_ctrl_y = bl_bar_y + 25;
+        draw_brightness_bar(fb, CONTENT_LEFT + 55, bl_ctrl_y,
+                            state->backlight_brightness, 20, 100, bar_w);
+    } else {
+        draw_brightness_bar(fb, CONTENT_LEFT + 190, bl_bar_y,
+                            state->backlight_brightness, 20, 100, BAR_WIDTH);
+    }
     button_draw(fb, &bl_plus_btn);
 
     toggle_draw(fb, &portrait_toggle);
     if (portrait_toggle.state) {
-        fb_draw_text(fb, CONTENT_LEFT + 5, sec_disp_y + 98,
-                     "ACTIVE - RESTART APPS TO APPLY", RGB(255, 200, 80), 1);
+        int note_y = sec_disp_y + (portrait ? 108 : 98);
+        fb_draw_text(fb, CONTENT_LEFT + 5, note_y,
+                     "TAKES EFFECT ON NEXT APP LAUNCH", RGB(255, 200, 80), 1);
     }
 
     button_draw(fb, &save_btn);
@@ -467,8 +531,9 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     if (state->status_msg[0]) {
         uint32_t sc = COLOR_GREEN;
         if (strstr(state->status_msg, "DEFAULTS")) sc = COLOR_CYAN;
+        int status_y = portrait ? action_y + 120 : action_y + 65;
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           action_y + 65, state->status_msg, sc, 2);
+                           status_y, state->status_msg, sc, 2);
     }
 }
 
@@ -520,7 +585,16 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         } else {
             unlink(PORTRAIT_FLAG_FILE);
         }
-        snprintf(state->status_msg, sizeof(state->status_msg), "SAVED!");
+        /* Apply backlight immediately */
+        apply_backlight(state->backlight_brightness);
+        /* Build status feedback */
+        if (state->portrait_mode) {
+            snprintf(state->status_msg, sizeof(state->status_msg),
+                     "SAVED! PORTRAIT ON NEXT LAUNCH");
+        } else {
+            snprintf(state->status_msg, sizeof(state->status_msg),
+                     "SETTINGS SAVED AND APPLIED");
+        }
         state->status_time_ms = now;
     }
     if (button_update(&reset_btn, tx, ty, touching, now)) {
@@ -787,9 +861,20 @@ static void draw_diag_config(Framebuffer *fb) {
     y += 8; fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 10;
     fb_draw_text(fb, CONTENT_LEFT+10, y, "SYSTEM", COLOR_HEADER_TEXT, 2); y += 28;
     { char da[256];
-      if (read_file_line("/opt/roomwizard/default-app", da, sizeof(da)) == 0)
+      if (read_file_line("/opt/roomwizard/default-app", da, sizeof(da)) == 0) {
+          /* Truncate if value won't fit in portrait mode */
+          int val_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
+          int max_px = CONTENT_RIGHT - val_x - 10;
+          int scale = 2;
+          int max_chars = max_px / (6 * scale);
+          if (max_chars < 3) max_chars = 3;
+          if ((int)strlen(da) > max_chars) {
+              da[max_chars - 2] = '.';
+              da[max_chars - 1] = '.';
+              da[max_chars] = '\0';
+          }
           y = draw_info_row(fb, y, "DEFAULT APP:", da, COLOR_DATA);
-      else y = draw_info_row(fb, y, "DEFAULT APP:", "(NOT SET)", COLOR_LABEL); }
+      } else y = draw_info_row(fb, y, "DEFAULT APP:", "(NOT SET)", COLOR_LABEL); }
     { if (access(CALIB_FILE, 0) == 0) y = draw_info_row(fb, y, "CALIBRATED:", "YES", COLOR_GREEN);
       else y = draw_info_row(fb, y, "CALIBRATED:", "NO", COLOR_YELLOW); }
 }
@@ -835,11 +920,21 @@ static void handle_diag_input(AppState *state, int tx, int ty,
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 static void create_tests_ui(void) {
+    int test_cols, test_item_w;
+    if (CONTENT_WIDTH < 600) {
+        /* Portrait mode: 2 columns with items sized to fit */
+        test_cols = 2;
+        test_item_w = (CONTENT_WIDTH - 40 - 8) / 2;
+    } else {
+        /* Landscape mode: 5 columns */
+        test_cols = 5;
+        test_item_w = 140;
+    }
     ui_layout_init_grid(&test_layout, CONTENT_WIDTH, CONTENT_H,
-                        5, 140, 70, 8, 16, 10, 60, 10, 20);
+                        test_cols, test_item_w, 70, 8, 16, 10, 60, 10, 20);
     ui_layout_update(&test_layout, NUM_TESTS);
     for (int i = 0; i < NUM_TESTS; i++)
-        button_init_full(&test_buttons[i], 0, 0, 140, 70, test_names[i],
+        button_init_full(&test_buttons[i], 0, 0, test_item_w, 70, test_names[i],
                          RGB(34,34,34), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
 }
 
@@ -849,7 +944,8 @@ static void draw_test_screen(Framebuffer *fb, const char *title,
     text_draw_centered(fb, fb->width / 2, 50, title, COLOR_WHITE, 3);
     if (status) text_draw_centered(fb, fb->width / 2, 150, status, COLOR_CYAN, 2);
     if (progress >= 0) {
-        int bw = 600, bh = 40, bx = (fb->width - bw) / 2, by = 220;
+        int bw = (fb->width < 600) ? ((int)fb->width - 40) : 600;
+        int bh = 40, bx = (fb->width - bw) / 2, by = 220;
         fb_draw_rect(fb, bx, by, bw, bh, RGB(51,51,51));
         fb_draw_rect(fb, bx, by, (bw * progress) / 100, bh, COLOR_GREEN);
         char p[16]; snprintf(p, sizeof(p), "%d%%", progress);

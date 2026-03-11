@@ -522,3 +522,177 @@ void toggle_draw(Framebuffer *fb, ToggleSwitch *sw) {
     int label_y = sw->y + (sw->track_h - 7) / 2;  // Vertically center (7px font height)
     fb_draw_text(fb, label_x, label_y, sw->label, sw->label_color, 1);
 }
+
+// ============================================================================
+// UNIFIED GAME OVER SCREEN
+// ============================================================================
+
+void gameover_init(GameOverScreen *gos, Framebuffer *fb,
+                   int score, const char *title, const char *info_line,
+                   HighScoreTable *hs_table, TouchInput *touch) {
+    (void)fb;  // Reserved for future use (e.g., pre-render calculations)
+    memset(gos, 0, sizeof(*gos));
+    gos->state = GAMEOVER_STATE_CHECK;
+    gos->score = score;
+    gos->hs_table = hs_table;
+    gos->touch = touch;
+    gos->hs_qualifies = false;
+    gos->has_reset_scores = (hs_table != NULL);
+
+    // Store title (default to "GAME OVER" if NULL/empty)
+    if (title && title[0]) {
+        text_to_uppercase(gos->title, title, sizeof(gos->title));
+    } else {
+        snprintf(gos->title, sizeof(gos->title), "GAME OVER");
+    }
+
+    // Store optional info line
+    if (info_line && info_line[0]) {
+        text_to_uppercase(gos->info_line, info_line, sizeof(gos->info_line));
+    } else {
+        gos->info_line[0] = '\0';
+    }
+
+    // Calculate button layout — vertical stack in the lower portion of screen
+    int btn_x = LAYOUT_CENTER_X(BTN_LARGE_WIDTH);
+    int btn_gap = 15;  // Gap between buttons
+
+    if (gos->has_reset_scores) {
+        // 3 buttons: RESTART, RESET SCORES, EXIT
+        int total_height = 3 * BTN_LARGE_HEIGHT + 2 * btn_gap;
+        int start_y = SCREEN_SAFE_BOTTOM - total_height - 15;
+
+        button_init(&gos->restart_btn, btn_x, start_y,
+                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
+                    "RESTART", BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+
+        button_init(&gos->reset_scores_btn, btn_x, start_y + BTN_LARGE_HEIGHT + btn_gap,
+                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
+                    "RESET SCORES", BTN_COLOR_WARNING, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+
+        button_init(&gos->exit_btn, btn_x, start_y + 2 * (BTN_LARGE_HEIGHT + btn_gap),
+                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
+                    "EXIT", BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+    } else {
+        // 2 buttons: RESTART, EXIT
+        int total_height = 2 * BTN_LARGE_HEIGHT + btn_gap;
+        int start_y = SCREEN_SAFE_BOTTOM - total_height - 15;
+
+        button_init(&gos->restart_btn, btn_x, start_y,
+                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
+                    "RESTART", BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+
+        button_init(&gos->exit_btn, btn_x, start_y + BTN_LARGE_HEIGHT + btn_gap,
+                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
+                    "EXIT", BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+    }
+}
+
+GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
+                               int touch_x, int touch_y, bool touch_active) {
+    // ── CHECK state: determine if score qualifies for highscore ──
+    if (gos->state == GAMEOVER_STATE_CHECK) {
+        if (gos->hs_table != NULL) {
+            gos->hs_qualifies = (hs_qualifies(gos->hs_table, gos->score) >= 0);
+            if (gos->hs_qualifies) {
+                snprintf(gos->title, sizeof(gos->title), "NEW HIGH SCORE!");
+                gos->state = GAMEOVER_STATE_NAME_ENTRY;
+            } else {
+                gos->state = GAMEOVER_STATE_DISPLAY;
+            }
+        } else {
+            gos->state = GAMEOVER_STATE_DISPLAY;
+        }
+        return GAMEOVER_ACTION_NONE;
+    }
+
+    // ── NAME_ENTRY state: blocking keyboard for player name ──
+    if (gos->state == GAMEOVER_STATE_NAME_ENTRY) {
+        char hs_name[HS_NAME_LEN];
+        hs_enter_name(fb, gos->touch, hs_name, gos->score);
+        hs_insert(gos->hs_table, hs_name, gos->score);
+        hs_save(gos->hs_table);
+        hs_drain_touches(gos->touch);
+
+        // Clear button press state so no spurious fire on first frame
+        gos->restart_btn.was_pressed = false;
+        gos->restart_btn.last_press_time_ms = 0;
+        gos->exit_btn.was_pressed = false;
+        gos->exit_btn.last_press_time_ms = 0;
+        gos->reset_scores_btn.was_pressed = false;
+        gos->reset_scores_btn.last_press_time_ms = 0;
+
+        gos->state = GAMEOVER_STATE_DISPLAY;
+        return GAMEOVER_ACTION_NONE;
+    }
+
+    // ── DISPLAY state: draw screen and handle button presses ──
+    gameover_draw(gos, fb);
+
+    if (!touch_active)
+        return GAMEOVER_ACTION_NONE;
+
+    uint32_t now = get_time_ms();
+
+    // Check RESTART button
+    bool restart_touched = button_is_touched(&gos->restart_btn, touch_x, touch_y);
+    if (button_check_press(&gos->restart_btn, restart_touched, now)) {
+        return GAMEOVER_ACTION_RESTART;
+    }
+
+    // Check EXIT button
+    bool exit_touched = button_is_touched(&gos->exit_btn, touch_x, touch_y);
+    if (button_check_press(&gos->exit_btn, exit_touched, now)) {
+        return GAMEOVER_ACTION_EXIT;
+    }
+
+    // Check RESET SCORES button (only if highscore enabled)
+    if (gos->has_reset_scores) {
+        bool reset_touched = button_is_touched(&gos->reset_scores_btn, touch_x, touch_y);
+        if (button_check_press(&gos->reset_scores_btn, reset_touched, now)) {
+            hs_reset(gos->hs_table);
+            hs_save(gos->hs_table);
+            return GAMEOVER_ACTION_RESET_SCORES;
+        }
+    }
+
+    return GAMEOVER_ACTION_NONE;
+}
+
+void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {
+    // Semi-transparent black overlay
+    fb_fill_rect_alpha(fb, 0, 0, fb->width, fb->height, COLOR_BLACK, 160);
+
+    int center_x = fb->width / 2;
+
+    // Title — upper portion of screen
+    int title_y = SCREEN_SAFE_TOP + SCREEN_SAFE_HEIGHT / 5;
+    text_draw_centered(fb, center_x, title_y, gos->title, COLOR_YELLOW, 4);
+
+    // Score — below title
+    char score_buf[64];
+    snprintf(score_buf, sizeof(score_buf), "SCORE: %d", gos->score);
+    int score_y = title_y + text_measure_height(4) + 20;
+    text_draw_centered(fb, center_x, score_y, score_buf, COLOR_WHITE, 3);
+
+    // Optional info line — below score
+    int info_y = score_y + text_measure_height(3) + 12;
+    if (gos->info_line[0]) {
+        text_draw_centered(fb, center_x, info_y, gos->info_line, COLOR_CYAN, 2);
+        info_y += text_measure_height(2) + 12;
+    }
+
+    // Highscore leaderboard (if table exists and has entries)
+    if (gos->hs_table != NULL && gos->hs_table->count > 0) {
+        int hs_width = SCREEN_SAFE_WIDTH - 40;
+        int hs_x = LAYOUT_CENTER_X(hs_width);
+        hs_draw(fb, gos->hs_table, hs_x, info_y, hs_width);
+    }
+
+    // Buttons
+    button_draw(fb, &gos->restart_btn);
+    button_draw(fb, &gos->exit_btn);
+    if (gos->has_reset_scores) {
+        button_draw(fb, &gos->reset_scores_btn);
+    }
+}

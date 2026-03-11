@@ -63,11 +63,12 @@ int offset_y;
 Button menu_button;
 Button exit_button;
 Button start_button;
-Button restart_button;
 Button resume_button;
 Button exit_pause_button;
 GameScreen current_screen = SCREEN_WELCOME;
 bool portrait_mode = false;
+static HighScoreTable hs_table;
+static GameOverScreen gos;
 
 // Function prototypes
 void init_game();
@@ -78,6 +79,7 @@ void update_ai();
 void draw_game();
 void handle_input();
 void signal_handler(int sig);
+static void enter_game_over(void);
 
 void signal_handler(int sig) {
     running = false;
@@ -93,6 +95,10 @@ void init_game() {
     
     game.difficulty = 2;
     
+    // Initialize highscore
+    hs_init(&hs_table, "pong");
+    hs_load(&hs_table);
+    
     // Initialize buttons — positions use fb.width/fb.height so they auto-adapt
     button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -102,9 +108,6 @@ void init_game() {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
-                BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -151,6 +154,18 @@ void reset_ball() {
         game.ball.vx = cos(angle) * speed * direction;
         game.ball.vy = sin(angle) * speed;
     }
+}
+
+// Helper: initialize the unified game over screen when a match ends
+static void enter_game_over(void) {
+    char info[64];
+    bool player_won = (game.winner == 1);
+    if (player_won)
+        snprintf(info, sizeof(info), "YOU WIN! %d - %d", game.player.score, game.ai.score);
+    else
+        snprintf(info, sizeof(info), "AI WINS %d - %d", game.ai.score, game.player.score);
+    gameover_init(&gos, &fb, game.player.score,
+                  player_won ? "YOU WIN!" : "AI WINS!", info, &hs_table, &touch);
 }
 
 void update_ai() {
@@ -245,6 +260,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
+                enter_game_over();
                 for (int i = 0; i < 3; i++) {
                     hw_set_led(LED_GREEN, 100);
                     usleep(200000);
@@ -267,6 +283,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
+                enter_game_over();
                 for (int i = 0; i < 3; i++) {
                     hw_set_led(LED_RED, 100);
                     usleep(200000);
@@ -335,6 +352,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
+                enter_game_over();
                 for (int i = 0; i < 3; i++) {
                     hw_set_led(LED_RED, 100);
                     usleep(200000);
@@ -355,6 +373,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
+                enter_game_over();
                 for (int i = 0; i < 3; i++) {
                     hw_set_led(LED_GREEN, 100);
                     usleep(200000);
@@ -391,18 +410,8 @@ void handle_input() {
         return;
     }
     
-    // Handle game over screen
+    // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
-        if (state.pressed) {
-            bool touched = button_is_touched(&restart_button, state.x, state.y);
-            if (button_check_press(&restart_button, touched, current_time)) {
-                reset_game();
-                current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-            }
-        }
         return;
     }
     
@@ -481,52 +490,28 @@ void handle_input() {
     }
 }
 
-void draw_game() {
-    fb_clear(&fb, COLOR_BLACK);
-    
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "PONG", 
-            "TOUCH TO MOVE PADDLE\n"
-            "FIRST TO 11 WINS", &start_button);
-        return;
-    }
-    
-    // Handle game over screen
-    if (current_screen == SCREEN_GAME_OVER) {
-        const char *message = (game.winner == 1) ? "YOU WIN!" : "AI WINS!";
-        draw_game_over_screen(&fb, message, game.player.score, &restart_button);
-        return;
-    }
-    
-    // Handle pause screen
-    if (current_screen == SCREEN_PAUSED) {
-        // Draw pause screen with both resume and exit buttons
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
-        return;
-    }
-    
-    // Draw HUD
+// Draw the playing field (paddles, ball, scores, borders) — used as
+// background for PLAYING, PAUSED, and GAME_OVER screens.
+static void draw_playing_field(void) {
+    // Draw HUD scores — both at top with labels, using text_draw_centered
     if (portrait_mode) {
-        // Portrait: AI score at top, player score at bottom
+        // Portrait: AI score on left, Player score on right, both at top
         char ai_score[16];
-        snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
-        fb_draw_text(&fb, fb.width / 2 - 10, 20, ai_score, COLOR_RED, 4);
+        snprintf(ai_score, sizeof(ai_score), "AI: %d", game.ai.score);
+        text_draw_centered(&fb, fb.width / 3, 35, ai_score, COLOR_RED, 3);
         
         char player_score[16];
-        snprintf(player_score, sizeof(player_score), "%d", game.player.score);
-        fb_draw_text(&fb, fb.width / 2 - 10, fb.height - 50, player_score, COLOR_GREEN, 4);
+        snprintf(player_score, sizeof(player_score), "YOU: %d", game.player.score);
+        text_draw_centered(&fb, fb.width * 2 / 3, 35, player_score, COLOR_GREEN, 3);
     } else {
         // Landscape: player score left, AI score right
         char player_score[16];
-        snprintf(player_score, sizeof(player_score), "%d", game.player.score);
-        fb_draw_text(&fb, fb.width / 3, 20, player_score, COLOR_GREEN, 4);
+        snprintf(player_score, sizeof(player_score), "YOU: %d", game.player.score);
+        text_draw_centered(&fb, fb.width / 3, 35, player_score, COLOR_GREEN, 3);
         
         char ai_score[16];
-        snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
-        fb_draw_text(&fb, fb.width * 2 / 3, 20, ai_score, COLOR_RED, 4);
+        snprintf(ai_score, sizeof(ai_score), "AI: %d", game.ai.score);
+        text_draw_centered(&fb, fb.width * 2 / 3, 35, ai_score, COLOR_RED, 3);
     }
     
     // Draw menu and exit buttons
@@ -540,7 +525,7 @@ void draw_game() {
     if (portrait_mode) {
         // Portrait: horizontal center line
         for (int x = 0; x < play_area_width; x += 20) {
-            fb_fill_rect(&fb, offset_x + x, offset_y + play_area_height / 2 - 2, 10, 4, COLOR_GRAY);
+            fb_fill_rect(&fb, offset_x + x, offset_y + play_area_height / 2 - 2, 10, 4, RGB(128, 128, 128));
         }
         
         // Draw AI paddle (top, red) — horizontal paddle
@@ -552,12 +537,13 @@ void draw_game() {
                      offset_y + play_area_height - PADDLE_WIDTH - 5,
                      PADDLE_HEIGHT, PADDLE_WIDTH, COLOR_GREEN);
         
-        // Draw controls hint
-        fb_draw_text(&fb, 10, fb.height - 25, "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        // Draw controls hint (centered)
+        text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                          "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
     } else {
         // Landscape: vertical center line
         for (int y = 0; y < play_area_height; y += 20) {
-            fb_fill_rect(&fb, offset_x + play_area_width / 2 - 2, offset_y + y, 4, 10, COLOR_GRAY);
+            fb_fill_rect(&fb, offset_x + play_area_width / 2 - 2, offset_y + y, 4, 10, RGB(128, 128, 128));
         }
         
         // Draw player paddle (left, green)
@@ -568,14 +554,66 @@ void draw_game() {
         fb_fill_rect(&fb, offset_x + play_area_width - PADDLE_WIDTH - 5,
                      offset_y + (int)game.ai.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_RED);
         
-        // Draw controls hint
-        fb_draw_text(&fb, 10, fb.height - 25, "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        // Draw controls hint (centered)
+        text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                          "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
     }
     
     // Draw ball (same for both orientations)
     fb_fill_circle(&fb, offset_x + (int)game.ball.x + BALL_SIZE / 2,
                    offset_y + (int)game.ball.y + BALL_SIZE / 2,
                    BALL_SIZE / 2, COLOR_WHITE);
+}
+
+void draw_game() {
+    fb_clear(&fb, COLOR_BLACK);
+    
+    // Handle welcome screen — custom drawing for properly centered multi-line text
+    if (current_screen == SCREEN_WELCOME) {
+        text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 70, "PONG", COLOR_CYAN, 4);
+        text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 10,
+                          "TOUCH TO MOVE PADDLE", COLOR_WHITE, 1);
+        text_draw_centered(&fb, fb.width / 2, fb.height / 2 + 10,
+                          "FIRST TO 11 WINS", COLOR_WHITE, 1);
+        button_draw(&fb, &start_button);
+        return;
+    }
+    
+    // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
+    draw_playing_field();
+    
+    // Handle pause screen overlay
+    if (current_screen == SCREEN_PAUSED) {
+        // Semi-transparent dark overlay (~63% opacity, matches BrickBreaker)
+        fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
+        text_draw_centered(&fb, fb.width / 2, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
+    
+    // Handle game over screen overlay (unified GameOverScreen component)
+    if (current_screen == SCREEN_GAME_OVER) {
+        TouchState go_st = touch_get_state(&touch);
+        GameOverAction action = gameover_update(&gos, &fb,
+                                                go_st.x, go_st.y, go_st.pressed);
+        switch (action) {
+        case GAMEOVER_ACTION_RESTART:
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            break;
+        case GAMEOVER_ACTION_EXIT:
+            running = false;
+            break;
+        case GAMEOVER_ACTION_RESET_SCORES:
+            /* Handled internally by the component */
+            break;
+        case GAMEOVER_ACTION_NONE:
+        default:
+            break;
+        }
+        return;
+    }
 }
 
 int main(int argc, char *argv[]) {

@@ -201,6 +201,8 @@ static HighScoreTable hs;
 static bool         running = true;
 static uint32_t     frame_time_ms;  /* updated each frame */
 static bool test_mode = false;     /* --test: special test levels */
+static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
+static GameOverScreen gos;  /* unified game over screen */
 
 /* UI buttons */
 static Button btn_menu, btn_exit;
@@ -563,7 +565,7 @@ static void reset_ball_on_paddle(void) {
     Ball *b = add_ball(start_x, start_y, 0, 0, 0);
     if (b) {
         const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-        b->speed = BALL_BASE_SPEED * lv->speed_mult * get_speed_mult();
+        b->speed = ball_base_speed * lv->speed_mult * get_speed_mult();
         b->stuck = true;
         /* Re-initialize trail to paddle position (add_ball already did this) */
     }
@@ -1121,10 +1123,10 @@ static void update_game(void) {
 
         if (game.lives <= 0) {
             game.screen = SCREEN_GAME_OVER;
-            /* Check high score */
-            if (hs_qualifies(&hs, game.score) >= 0) {
-                hs_insert(&hs, "PLAYER", game.score);
-                hs_save(&hs);
+            {
+                char info[64];
+                snprintf(info, sizeof(info), "LEVEL %d", game.level);
+                gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
             }
         } else {
             reset_ball_on_paddle();
@@ -1443,38 +1445,7 @@ static void draw_level_complete(void) {
     button_draw(&fb, &btn_next_level);
 }
 
-static void draw_game_over(void) {
-    fb_clear(&fb, BG_COLOR);
-    fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 100);
-
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 60,
-                       "GAME OVER", COLOR_RED, 4);
-
-    char buf[64];
-    snprintf(buf, sizeof(buf), "FINAL SCORE: %d", game.score);
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 120,
-                       buf, COLOR_WHITE, 3);
-    snprintf(buf, sizeof(buf), "LEVEL REACHED: %d", game.level);
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 160,
-                       buf, HUD_COLOR, 2);
-
-    if (hs.count > 0 && game.score >= hs.entries[0].score) {
-        text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 195,
-                           "NEW HIGH SCORE!", COLOR_YELLOW, 2);
-    }
-
-    /* Leaderboard */
-    int ly = SCREEN_SAFE_TOP + 230;
-    text_draw_centered(&fb, fb.width / 2, ly, "TOP SCORES", RGB(180, 180, 200), 2);
-    ly += 22;
-    for (int i = 0; i < hs.count && i < 5; i++) {
-        snprintf(buf, sizeof(buf), "%d. %-10s %d", i + 1, hs.entries[i].name, hs.entries[i].score);
-        text_draw_centered(&fb, fb.width / 2, ly, buf, RGB(140, 140, 160), 1);
-        ly += 14;
-    }
-
-    button_draw(&fb, &btn_restart);
-}
+/* draw_game_over() — removed: replaced by unified GameOverScreen component */
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Input handling
@@ -1534,12 +1505,12 @@ static void handle_input(void) {
                 audio_beep(&audio);
             }
             if (button_check_press(&btn_retire, button_is_touched(&btn_retire, st.x, st.y), now)) {
-                /* Save score to high-score table */
-                if (hs_qualifies(&hs, game.score) >= 0) {
-                    hs_insert(&hs, "PLAYER", game.score);
-                    hs_save(&hs);
-                }
                 game.screen = SCREEN_GAME_OVER;
+                {
+                    char info[64];
+                    snprintf(info, sizeof(info), "LEVEL %d", game.level);
+                    gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
+                }
                 audio_tone(&audio, 600, 100);
             }
             if (button_check_press(&btn_exit_pause, button_is_touched(&btn_exit_pause, st.x, st.y), now)) {
@@ -1558,9 +1529,10 @@ static void handle_input(void) {
                 } else {
                     /* Beat all levels! */
                     game.screen = SCREEN_GAME_OVER;
-                    if (hs_qualifies(&hs, game.score) >= 0) {
-                        hs_insert(&hs, "PLAYER", game.score);
-                        hs_save(&hs);
+                    {
+                        char info[64];
+                        snprintf(info, sizeof(info), "ALL %d LEVELS COMPLETE!", MAX_LEVELS);
+                        gameover_init(&gos, &fb, game.score, "YOU WIN!", info, &hs, &touch);
                     }
                 }
                 audio_beep(&audio);
@@ -1569,12 +1541,7 @@ static void handle_input(void) {
         break;
 
     case SCREEN_GAME_OVER:
-        if (st.pressed) {
-            if (button_check_press(&btn_restart, button_is_touched(&btn_restart, st.x, st.y), now)) {
-                reset_game();
-                audio_beep(&audio);
-            }
-        }
+        /* Handled by gameover_update() in the draw phase */
         break;
     }
 }
@@ -1625,6 +1592,23 @@ int main(int argc, char *argv[]) {
 
     /* Compute brick grid dimensions based on screen orientation */
     init_brick_layout();
+
+    /* Calculate ball base speed based on paddle-to-brick distance.
+     * In landscape (~200px gap) the default 4.0 is fine.
+     * In portrait (~400px+ gap) we need a faster base so the ball
+     * reaches the bricks in ~2.5 seconds at 60fps (150 frames). */
+    {
+        int vertical_offset = 40;  /* must match create_bricks() */
+        int lowest_brick_y = AREA_Y + BRICK_PAD + vertical_offset
+                           + brick_rows * (BRICK_H + BRICK_PAD);
+        int paddle_y = PADDLE_Y;
+        int distance = paddle_y - lowest_brick_y;
+        if (distance < 50) distance = 50;  /* safety floor */
+        float speed = (float)distance / 150.0f;
+        ball_base_speed = clampf(speed, 4.0f, 8.0f);
+        printf("Ball base speed: %.2f (distance=%d, portrait=%d)\n",
+               ball_base_speed, distance, fb.portrait_mode);
+    }
 
     /* High score */
     hs_init(&hs, "brick_breaker");
@@ -1679,7 +1663,30 @@ int main(int argc, char *argv[]) {
         case SCREEN_PLAYING:        draw_game_screen();    break;
         case SCREEN_PAUSED:         draw_paused();         break;
         case SCREEN_LEVEL_COMPLETE: draw_level_complete(); break;
-        case SCREEN_GAME_OVER:      draw_game_over();      break;
+        case SCREEN_GAME_OVER: {
+            /* Draw game field as background (visible through semi-transparent overlay) */
+            draw_game_screen();
+            /* Update and draw the unified game over screen */
+            TouchState go_st = touch_get_state(&touch);
+            GameOverAction action = gameover_update(&gos, &fb,
+                                                     go_st.x, go_st.y, go_st.pressed);
+            switch (action) {
+            case GAMEOVER_ACTION_RESTART:
+                reset_game();
+                audio_beep(&audio);
+                break;
+            case GAMEOVER_ACTION_EXIT:
+                running = false;
+                break;
+            case GAMEOVER_ACTION_RESET_SCORES:
+                /* Handled internally by the component */
+                break;
+            case GAMEOVER_ACTION_NONE:
+            default:
+                break;
+            }
+            break;
+        }
         }
 
         fb_swap(&fb);

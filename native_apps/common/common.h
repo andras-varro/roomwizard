@@ -10,6 +10,7 @@
 
 #include "framebuffer.h"
 #include "touch_input.h"
+#include "highscore.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/time.h>
@@ -289,5 +290,52 @@ bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
 
 // Draw the toggle switch
 void toggle_draw(Framebuffer *fb, ToggleSwitch *sw);
+
+// ============================================================================
+// UNIFIED GAME OVER SCREEN
+// ============================================================================
+
+typedef enum {
+    GAMEOVER_STATE_CHECK,       // Initial: check if score qualifies for highscore
+    GAMEOVER_STATE_NAME_ENTRY,  // Blocking name entry in progress
+    GAMEOVER_STATE_DISPLAY,     // Show game over screen with scores/buttons
+} GameOverState;
+
+typedef enum {
+    GAMEOVER_ACTION_NONE,
+    GAMEOVER_ACTION_RESTART,
+    GAMEOVER_ACTION_EXIT,
+    GAMEOVER_ACTION_RESET_SCORES,
+} GameOverAction;
+
+typedef struct {
+    GameOverState state;
+    int score;
+    char title[64];           // Custom title or auto-set based on highscore
+    char info_line[64];       // Optional info (e.g., "LEVEL 5")
+    HighScoreTable *hs_table; // NULL if no highscore support
+    TouchInput *touch;        // Required for blocking hs_enter_name()
+    bool hs_qualifies;        // Set during CHECK state
+    Button restart_btn;
+    Button exit_btn;
+    Button reset_scores_btn;
+    bool has_reset_scores;    // Show reset scores button?
+} GameOverScreen;
+
+// Initialize the game over screen. Call once when entering game-over state.
+// hs_table can be NULL for games without highscore (like Pong simple mode).
+// touch is required when hs_table is non-NULL (used for blocking name entry).
+void gameover_init(GameOverScreen *gos, Framebuffer *fb,
+                   int score, const char *title, const char *info_line,
+                   HighScoreTable *hs_table, TouchInput *touch);
+
+// Process the game over screen (handles name entry flow, renders, checks buttons).
+// Returns the action taken (NONE if no button pressed yet).
+GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
+                               int touch_x, int touch_y, bool touch_active);
+
+// Draw the game over screen overlay (called each frame from gameover_update,
+// but may also be called directly if needed).
+void gameover_draw(GameOverScreen *gos, Framebuffer *fb);
 
 #endif // COMMON_H

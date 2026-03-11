@@ -43,14 +43,12 @@
 static Logger logger;
 
 /* ── layout ──────────────────────────────────────────────────────────────── */
-#define SCREEN_W   800
-#define SCREEN_H   480
 
-/* Play-area rectangle */
+/* Play-area rectangle (all values adapt to portrait / landscape via runtime globals) */
 #define PAD_X      (SCREEN_SAFE_LEFT + 5)
-#define PAD_Y      70
+#define PAD_Y      (SCREEN_SAFE_TOP + 70)
 #define PAD_W      (SCREEN_SAFE_WIDTH - 10)
-#define PAD_H      310
+#define PAD_H      (SCREEN_SAFE_BOTTOM - PAD_Y - 100)
 
 /* Frequency mapping */
 #define FREQ_MIN   200
@@ -118,9 +116,11 @@ static bool in_pad(int x, int y)
 
 static void draw_stars(Framebuffer *fb, uint32_t t)
 {
-    /* Twinkling dots in the side margins */
-    static const int sx[] = { 15, 750, 25, 770, 10, 780, 18, 760, 12, 775 };
-    static const int sy[] = { 50, 50, 150, 120, 260, 200, 380, 350, 440, 430 };
+    /* Twinkling dots in the side margins — positions scale with screen size */
+    int w = (int)fb->width, h = (int)fb->height;
+    int sx[] = { 15,    w-50, 25,    w-30, 10,    w-20, 18,    w-40, 12,    w-25 };
+    int sy[] = { h*50/480,  h*50/480,  h*150/480, h*120/480, h*260/480,
+                 h*200/480, h*380/480, h*350/480, h*440/480, h*430/480 };
     for (int i = 0; i < 10; i++) {
         uint32_t tt = t / 400 + i * 137;
         int bright = 80 + (int)(sinf((float)tt * 0.7f) * 60.0f);
@@ -136,7 +136,7 @@ static void draw_header(Framebuffer *fb)
 {
     const char *title = "THEREMIN";
     int tw = text_measure_width(title, 3);
-    fb_draw_text(fb, SCREEN_W/2 - tw/2, SCREEN_SAFE_TOP + 8,
+    fb_draw_text(fb, screen_base_width/2 - tw/2, SCREEN_SAFE_TOP + 8,
                  title, RGB(255, 200, 80), 3);
 
     fb_draw_text(fb, PAD_X,                  PAD_Y - 18,
@@ -221,12 +221,12 @@ static void draw_info(Framebuffer *fb, const TapState *tap)
         char info[64];
         snprintf(info, sizeof(info), "FREQ: %4d HZ", tap->freq);
         int iw = text_measure_width(info, 2);
-        fb_draw_text(fb, SCREEN_W/2 - iw/2, PAD_Y + PAD_H + 42,
+        fb_draw_text(fb, screen_base_width/2 - iw/2, PAD_Y + PAD_H + 42,
                      info, COLOR_YELLOW, 2);
     } else {
         const char *hint = "TOUCH AND SLIDE TO PLAY";
         int hw = text_measure_width(hint, 2);
-        fb_draw_text(fb, SCREEN_W/2 - hw/2, PAD_Y + PAD_H + 42,
+        fb_draw_text(fb, screen_base_width/2 - hw/2, PAD_Y + PAD_H + 42,
                      hint, RGB(120, 120, 120), 2);
     }
 }
@@ -253,7 +253,7 @@ int main(int argc, char *argv[])
         LOG_ERROR(&logger, "Cannot open touch: %s", touch_dev);
         fb_close(&fb); return 1;
     }
-    touch_set_screen_size(&touch, SCREEN_W, SCREEN_H);
+    touch_set_screen_size(&touch, screen_base_width, screen_base_height);
 
     Audio audio;
     if (audio_init(&audio) != 0) {
@@ -265,7 +265,7 @@ int main(int argc, char *argv[])
     /* Exit button — top-right */
     Button exit_btn;
     button_init_full(&exit_btn,
-                     SCREEN_W - BTN_EXIT_WIDTH - screen_safe_margin_right,
+                     screen_base_width - BTN_EXIT_WIDTH - screen_safe_margin_right,
                      SCREEN_SAFE_TOP + 5,
                      BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
                      "", BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 2);

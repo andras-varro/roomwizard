@@ -83,15 +83,13 @@ int grid_offset_y;
 bool running = true;
 GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
-bool hs_entry_pending = false;
-Button reset_score_button;
+static GameOverScreen gos;
 Audio audio;
 
 // UI Buttons
 Button menu_button;
 Button exit_button;
 Button start_button;
-Button restart_button;
 Button resume_button;
 Button exit_pause_button;
 
@@ -100,6 +98,7 @@ void init_game();
 void reset_game();
 void spawn_food();
 void update_snake();
+void draw_playing_field();
 void draw_game();
 void handle_input();
 void signal_handler(int sig);
@@ -187,13 +186,7 @@ void init_game() {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init_full(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                     fb.height * 68 / 100, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
-                     BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
-    button_init_full(&reset_score_button,
-                     fb.width / 2 - 130, restart_button.y + restart_button.height + 10, 260, 44, "RESET SCORES",
-                     RGB(40, 0, 0), COLOR_WHITE, RGB(150, 0, 0), 2);
-    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
@@ -272,7 +265,7 @@ void update_snake() {
         new_head.y < 0 || new_head.y >= GRID_SIZE) {
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
-        hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+        gameover_init(&gos, &fb, game.score, NULL, NULL, &hs_table, &touch);
         audio_fail(&audio);   // Game-over sound (~600ms)
         start_led_effect(3);  // Start death effect
         return;
@@ -283,7 +276,7 @@ void update_snake() {
         if (snake.body[i].x == new_head.x && snake.body[i].y == new_head.y) {
             game.game_over = true;
             current_screen = SCREEN_GAME_OVER;
-            hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+            gameover_init(&gos, &fb, game.score, NULL, NULL, &hs_table, &touch);
             audio_fail(&audio);   // Game-over sound (~600ms)
             start_led_effect(3);  // Start death effect
             return;
@@ -335,40 +328,8 @@ void handle_input() {
         return;
     }
     
-    // Handle game over screen
+    // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
-        // Name entry runs once, before buttons become active
-        if (hs_entry_pending) {
-            hs_entry_pending = false;
-            char hs_name[HS_NAME_LEN];
-            hs_enter_name(&fb, &touch, hs_name, game.score);
-            hs_insert(&hs_table, hs_name, game.score);
-            hs_save(&hs_table);
-            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
-            hs_drain_touches(&touch);
-            /* Belt-and-suspenders: clear any stale press state so neither
-             * button can fire spuriously on the very next handle_input call. */
-            restart_button.was_pressed = false;
-            restart_button.last_press_time_ms = 0;
-            reset_score_button.was_pressed = false;
-            reset_score_button.last_press_time_ms = 0;
-            return;
-        }
-        if (state.pressed) {
-            bool restart_touched = button_is_touched(&restart_button, state.x, state.y);
-            if (button_check_press(&restart_button, restart_touched, current_time)) {
-                reset_game();
-                current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-            }
-            bool reset_touched = button_is_touched(&reset_score_button, state.x, state.y);
-            if (button_check_press(&reset_score_button, reset_touched, current_time)) {
-                hs_reset(&hs_table);
-                game.high_score = 0;
-            }
-        }
         return;
     }
     
@@ -437,63 +398,22 @@ void handle_input() {
     }
 }
 
-void draw_game() {
-    // Clear screen
-    fb_clear(&fb, COLOR_BLACK);
-    
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "SNAKE", 
-            "TAP DIRECTION TO MOVE\n"
-            "EAT FOOD TO GROW", &start_button);
-        return;
-    }
-    
-    // Handle game over screen
-    if (current_screen == SCREEN_GAME_OVER) {
-        int title_y = SCREEN_SAFE_TOP + 8;
-        const char *title = (hs_table.count > 0 &&
-                             hs_table.entries[0].score == game.score &&
-                             game.score > 0) ? "NEW HIGH SCORE!" : "GAME OVER";
-        int tw = text_measure_width(title, 3);
-        fb_draw_text(&fb, fb.width / 2 - tw / 2, title_y, title, COLOR_YELLOW, 3);
-
-        char score_str[32];
-        snprintf(score_str, sizeof(score_str), "SCORE: %d", game.score);
-        int sw = text_measure_width(score_str, 2);
-        fb_draw_text(&fb, fb.width / 2 - sw / 2, title_y + 42, score_str, COLOR_WHITE, 2);
-
-        hs_draw(&fb, &hs_table,
-                SCREEN_SAFE_LEFT + 10, title_y + 80, SCREEN_SAFE_WIDTH - 20);
-        button_draw(&fb, &restart_button);
-        button_draw(&fb, &reset_score_button);
-        return;
-    }
-    
-    // Handle pause screen
-    if (current_screen == SCREEN_PAUSED) {
-        // Draw pause screen with both resume and exit buttons
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
-        return;
-    }
-    
+void draw_playing_field() {
     // Draw HUD
     char score_text[32];
     snprintf(score_text, sizeof(score_text), "SCORE: %d", game.score);
-    fb_draw_text(&fb, fb.width / 2 - 60, 20, score_text, COLOR_WHITE, 2);
+    text_draw_centered(&fb, fb.width / 2, 28, score_text, COLOR_WHITE, 2);
     
     char high_text[32];
     snprintf(high_text, sizeof(high_text), "HIGH: %d", game.high_score);
-    fb_draw_text(&fb, fb.width / 2 - 60, 45, high_text, COLOR_YELLOW, 2);
+    text_draw_centered(&fb, fb.width / 2, 53, high_text, COLOR_YELLOW, 2);
     
     // Draw menu and exit buttons
     draw_menu_button(&fb, &menu_button);
     draw_exit_button(&fb, &exit_button);
     
     // Draw grid border
-    fb_draw_rect(&fb, grid_offset_x - 2, grid_offset_y - 2, 
+    fb_draw_rect(&fb, grid_offset_x - 2, grid_offset_y - 2,
                  GRID_SIZE * cell_size + 4, GRID_SIZE * cell_size + 4, COLOR_WHITE);
     
     // Draw snake
@@ -514,6 +434,57 @@ void draw_game() {
     
     // Draw controls hint
     fb_draw_text(&fb, 10, fb.height - 25, "TAP DIRECTION TO MOVE", RGB(100, 100, 100), 1);
+}
+
+void draw_game() {
+    // Clear screen
+    fb_clear(&fb, COLOR_BLACK);
+    
+    // Handle welcome screen
+    if (current_screen == SCREEN_WELCOME) {
+        draw_welcome_screen(&fb, "SNAKE",
+            "TAP DIRECTION TO MOVE\n"
+            "EAT FOOD TO GROW", &start_button);
+        return;
+    }
+    
+    // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
+    draw_playing_field();
+    
+    // Handle pause screen overlay
+    if (current_screen == SCREEN_PAUSED) {
+        // Semi-transparent dark overlay (~63% opacity, matches BrickBreaker)
+        fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
+        text_draw_centered(&fb, fb.width / 2, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
+    
+    // Handle game over screen overlay (unified GameOverScreen component)
+    if (current_screen == SCREEN_GAME_OVER) {
+        TouchState go_st = touch_get_state(&touch);
+        GameOverAction action = gameover_update(&gos, &fb,
+                                                go_st.x, go_st.y, go_st.pressed);
+        switch (action) {
+        case GAMEOVER_ACTION_RESTART:
+            reset_game();
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            current_screen = SCREEN_PLAYING;
+            break;
+        case GAMEOVER_ACTION_EXIT:
+            running = false;
+            break;
+        case GAMEOVER_ACTION_RESET_SCORES:
+            /* Handled internally by the component */
+            game.high_score = 0;
+            break;
+        case GAMEOVER_ACTION_NONE:
+        default:
+            break;
+        }
+        return;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -569,7 +540,8 @@ int main(int argc, char *argv[]) {
     // Game loop
     while (running) {
         handle_input();
-        update_snake();
+        if (current_screen == SCREEN_PLAYING)
+            update_snake();
         update_led_effects();  // Update LED effects (non-blocking)
         draw_game();
         fb_swap(&fb);  // Present back buffer to screen

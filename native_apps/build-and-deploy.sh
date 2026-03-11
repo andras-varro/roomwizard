@@ -82,8 +82,7 @@ $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calib
 step "21/23" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
-  common/audio.c common/touch_input.c common/framebuffer.c \
-  common/hardware.c common/common.c common/logger.c common/config.c \
+  $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
 step "22/23" "backlight"

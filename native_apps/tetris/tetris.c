@@ -130,13 +130,11 @@ int last_touch_y = -1;
 Button menu_button;
 Button exit_button;
 Button start_button;
-Button restart_button;
 Button resume_button;
 Button exit_pause_button;
 GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
-bool hs_entry_pending = false;
-Button reset_score_button;
+static GameOverScreen gos;
 Audio audio;
 
 // Function prototypes
@@ -147,6 +145,7 @@ bool check_collision(Piece *piece, int dx, int dy, int new_rotation);
 void lock_piece();
 void clear_lines();
 void update_game();
+void draw_playing_field();
 void draw_game();
 void handle_input();
 void signal_handler(int sig);
@@ -158,20 +157,23 @@ void signal_handler(int sig) {
 void init_game() {
     portrait_mode = fb.portrait_mode;
     
-    // Calculate board dimensions
-    int usable_height = fb.height - 100;
-    cell_size = usable_height / BOARD_HEIGHT;
-    if (cell_size > 30) cell_size = 30;
+    // Calculate board dimensions using safe area bounds
+    int hud_height = 55;  // Space for score/level/next piece at top
+    int available_h = SCREEN_SAFE_HEIGHT - hud_height;
     
-    if (portrait_mode) {
-        // Center board horizontally in portrait mode
-        int board_width_px = BOARD_WIDTH * cell_size;
-        board_offset_x = (fb.width - board_width_px) / 2;
-        board_offset_y = SCREEN_SAFE_TOP + 60;
-    } else {
-        board_offset_x = 20;
-        board_offset_y = SCREEN_SAFE_TOP + 60;
-    }
+    cell_size = available_h / BOARD_HEIGHT;
+    
+    // In portrait mode, allow larger cells (up to what fits); in landscape cap at 30
+    if (!portrait_mode && cell_size > 30) cell_size = 30;
+    
+    int board_h = BOARD_HEIGHT * cell_size;
+    int board_w = BOARD_WIDTH * cell_size;
+    
+    // Center board horizontally in safe area
+    board_offset_x = SCREEN_SAFE_LEFT + (SCREEN_SAFE_WIDTH - board_w) / 2;
+    
+    // Center board vertically in available space below HUD
+    board_offset_y = SCREEN_SAFE_TOP + hud_height + (available_h - board_h) / 2;
     
     hs_init(&hs_table, "tetris");
     hs_load(&hs_table);
@@ -186,12 +188,6 @@ void init_game() {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init_full(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                     fb.height * 68 / 100, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
-                     BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
-    button_init_full(&reset_score_button,
-                     fb.width / 2 - 130, restart_button.y + restart_button.height + 10, 260, 44, "RESET SCORES",
-                     RGB(40, 0, 0), COLOR_WHITE, RGB(150, 0, 0), 2);
     button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -265,7 +261,10 @@ void lock_piece() {
     if (check_collision(&game.current, 0, 0, game.current.rotation)) {
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
-        hs_entry_pending = (hs_qualifies(&hs_table, game.score) >= 0);
+        // Initialize unified game over screen with level info
+        char info_line[64];
+        snprintf(info_line, sizeof(info_line), "LEVEL %d", game.level);
+        gameover_init(&gos, &fb, game.score, NULL, info_line, &hs_table, &touch);
         // Red pulse + fail sound
         for (int i = 0; i < 3; i++) {
             hw_set_led(LED_RED, 100);
@@ -333,6 +332,8 @@ void clear_lines() {
 }
 
 void update_game() {
+    // Only process game logic when actually playing (Issue #9)
+    if (current_screen != SCREEN_PLAYING) return;
     if (game.game_over || game.paused) return;
     
     game.drop_counter++;
@@ -345,8 +346,6 @@ void update_game() {
             lock_piece();
         }
     }
-    
-    // Game over is handled in lock_piece(); nothing to do here once set.
 }
 
 void handle_input() {
@@ -368,40 +367,8 @@ void handle_input() {
         return;
     }
     
-    // Handle game over screen
+    // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
-        // Name entry runs once, before buttons become active
-        if (hs_entry_pending) {
-            hs_entry_pending = false;
-            char hs_name[HS_NAME_LEN];
-            hs_enter_name(&fb, &touch, hs_name, game.score);
-            hs_insert(&hs_table, hs_name, game.score);
-            hs_save(&hs_table);
-            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
-            hs_drain_touches(&touch);
-            /* Belt-and-suspenders: clear any stale press state so neither
-             * button can fire spuriously on the very next handle_input call. */
-            restart_button.was_pressed = false;
-            restart_button.last_press_time_ms = 0;
-            reset_score_button.was_pressed = false;
-            reset_score_button.last_press_time_ms = 0;
-            return;
-        }
-        if (state.pressed) {
-            bool restart_touched = button_is_touched(&restart_button, state.x, state.y);
-            if (button_check_press(&restart_button, restart_touched, current_time)) {
-                reset_game();
-                current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-            }
-            bool reset_touched = button_is_touched(&reset_score_button, state.x, state.y);
-            if (button_check_press(&reset_score_button, reset_touched, current_time)) {
-                hs_reset(&hs_table);
-                game.high_score = 0;
-            }
-        }
         return;
     }
     
@@ -462,7 +429,6 @@ void handle_input() {
         
         // Game controls
         int board_right = board_offset_x + BOARD_WIDTH * cell_size;
-        int board_center_x = board_offset_x + (BOARD_WIDTH * cell_size) / 2;
         
         if (ty > fb.height - 80) {
             // Bottom — hard drop (check this FIRST for both modes)
@@ -475,25 +441,27 @@ void handle_input() {
             audio_tone(&audio, 250, 70);
             lock_piece();
         } else if (portrait_mode) {
-            // Portrait touch zones: use board halves for left/right, center strip for rotate
-            int rotate_zone_half = BOARD_WIDTH * cell_size / 6;  // ~50px each side of center
+            // Portrait touch zones: wide center (60%) for rotation, narrow edges (20%) + margins for movement
+            int board_width_px = BOARD_WIDTH * cell_size;
+            int left_zone_edge = board_offset_x + board_width_px / 5;       // 20% from left board edge
+            int right_zone_edge = board_offset_x + board_width_px * 4 / 5;  // 20% from right board edge
             
-            if (tx < board_center_x - rotate_zone_half) {
-                // Left of center — move left
+            if (tx < left_zone_edge) {
+                // Left 20% of board or outside left edge — move left
                 if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
                     game.current.x--;
                     audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
-            } else if (tx > board_center_x + rotate_zone_half) {
-                // Right of center — move right
+            } else if (tx > right_zone_edge) {
+                // Right 20% of board or outside right edge — move right
                 if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
                     game.current.x++;
                     audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
             } else {
-                // Center strip — rotate
+                // Center 60% of board — rotate
                 int new_rotation = (game.current.rotation + 1) % 4;
                 if (!check_collision(&game.current, 0, 0, new_rotation)) {
                     game.current.rotation = new_rotation;
@@ -529,56 +497,19 @@ void handle_input() {
     }
 }
 
-void draw_game() {
-    fb_clear(&fb, COLOR_BLACK);
+// Draw the playing field (board, falling piece, HUD) — used as background
+// for PLAYING, PAUSED, and GAME_OVER screens
+void draw_playing_field() {
+    // Draw HUD — centered text using text_draw_centered()
+    int center_x = fb.width / 2;
     
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "TETRIS", 
-            "TAP LEFT/RIGHT: MOVE\n"
-            "TAP CENTER: ROTATE\n"
-            "TAP BOTTOM: DROP", &start_button);
-        return;
-    }
-    
-    // Handle game over screen
-    if (current_screen == SCREEN_GAME_OVER) {
-        int title_y = SCREEN_SAFE_TOP + 8;
-        const char *title = (hs_table.count > 0 &&
-                             hs_table.entries[0].score == game.score &&
-                             game.score > 0) ? "NEW HIGH SCORE!" : "GAME OVER";
-        int tw = text_measure_width(title, 3);
-        fb_draw_text(&fb, fb.width / 2 - tw / 2, title_y, title, COLOR_YELLOW, 3);
-
-        char score_str[32];
-        snprintf(score_str, sizeof(score_str), "SCORE: %d", game.score);
-        int sw = text_measure_width(score_str, 2);
-        fb_draw_text(&fb, fb.width / 2 - sw / 2, title_y + 42, score_str, COLOR_WHITE, 2);
-
-        hs_draw(&fb, &hs_table,
-                SCREEN_SAFE_LEFT + 10, title_y + 80, SCREEN_SAFE_WIDTH - 20);
-        button_draw(&fb, &restart_button);
-        button_draw(&fb, &reset_score_button);
-        return;
-    }
-    
-    // Handle pause screen
-    if (current_screen == SCREEN_PAUSED) {
-        // Draw pause screen with both resume and exit buttons
-        fb_draw_text(&fb, fb.width / 2 - 60, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
-        return;
-    }
-    
-    // Draw HUD
     char score_text[32];
     snprintf(score_text, sizeof(score_text), "SCORE:%d", game.score);
-    fb_draw_text(&fb, fb.width / 2 - 60, 15, score_text, COLOR_WHITE, 2);
+    text_draw_centered(&fb, center_x, 15, score_text, COLOR_WHITE, 2);
     
     char level_text[32];
     snprintf(level_text, sizeof(level_text), "LVL:%d", game.level);
-    fb_draw_text(&fb, fb.width / 2 - 40, 40, level_text, COLOR_CYAN, 2);
+    text_draw_centered(&fb, center_x, 40, level_text, COLOR_CYAN, 2);
     
     // Draw menu and exit buttons
     draw_menu_button(&fb, &menu_button);
@@ -614,13 +545,15 @@ void draw_game() {
     
     // Draw next piece preview
     if (portrait_mode) {
-        // Portrait: draw NEXT preview to the right of the score in the HUD area
-        int next_x = fb.width - 90;
-        int next_y = 15;
-        fb_draw_text(&fb, next_x - 50, next_y, "NEXT:", COLOR_WHITE, 1);
-        
+        // Portrait: draw NEXT preview to the left of the exit button (avoids overlap)
         int preview_size = cell_size / 3;
         if (preview_size < 6) preview_size = 6;
+        int preview_block_w = 4 * preview_size;
+        int next_x = exit_button.x - preview_block_w - 8;
+        int next_y = exit_button.y + (BTN_EXIT_HEIGHT - 4 * preview_size) / 2;
+        int label_w = text_measure_width("NEXT:", 1);
+        fb_draw_text(&fb, next_x - label_w - 4, next_y, "NEXT:", COLOR_WHITE, 1);
+        
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
                 if (tetrominos[game.next.type][0][y][x]) {
@@ -632,9 +565,11 @@ void draw_game() {
             }
         }
         
-        // Draw controls hint below the board
+        // Draw controls hint below the board (centered on play area)
         int hint_y = board_offset_y + BOARD_HEIGHT * cell_size + 10;
-        fb_draw_text(&fb, 10, hint_y, "L/R: MOVE  CENTER: ROTATE  BOTTOM: DROP", RGB(100, 100, 100), 1);
+        text_draw_centered(&fb, board_offset_x + (BOARD_WIDTH * cell_size) / 2, hint_y,
+                          "L/R: MOVE  CENTER: ROTATE  BOTTOM: DROP",
+                          RGB(100, 100, 100), 1);
     } else {
         // Landscape: side panel to the right of the board
         int next_x = board_offset_x + BOARD_WIDTH * cell_size + 20;
@@ -656,6 +591,66 @@ void draw_game() {
         fb_draw_text(&fb, 10, fb.height - 60, "L/R: MOVE", RGB(100, 100, 100), 1);
         fb_draw_text(&fb, 10, fb.height - 45, "CENTER: ROTATE", RGB(100, 100, 100), 1);
         fb_draw_text(&fb, 10, fb.height - 30, "BOTTOM: DROP", RGB(100, 100, 100), 1);
+    }
+}
+
+void draw_game() {
+    fb_clear(&fb, COLOR_BLACK);
+    
+    // Handle welcome screen (Issue #10: draw each instruction line centered)
+    if (current_screen == SCREEN_WELCOME) {
+        // Title
+        int center_x = fb.width / 2;
+        text_draw_centered(&fb, center_x, SCREEN_SAFE_TOP + 50, "TETRIS", COLOR_CYAN, 4);
+        
+        // Instructions — each line individually centered
+        int line_height = text_measure_height(1);
+        int inst_y = LAYOUT_CENTER_Y(3 * line_height) + 20;
+        text_draw_centered(&fb, center_x, inst_y, "TAP LEFT/RIGHT: MOVE", COLOR_WHITE, 1);
+        text_draw_centered(&fb, center_x, inst_y + line_height + 4, "TAP CENTER: ROTATE", COLOR_WHITE, 1);
+        text_draw_centered(&fb, center_x, inst_y + 2 * (line_height + 4), "TAP BOTTOM: DROP", COLOR_WHITE, 1);
+        
+        // Start button
+        button_draw(&fb, &start_button);
+        return;
+    }
+    
+    // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
+    draw_playing_field();
+    
+    // Handle pause screen overlay (Issue #11: semi-transparent overlay)
+    if (current_screen == SCREEN_PAUSED) {
+        // Semi-transparent dark overlay (~63% opacity, matches BrickBreaker/Pong/Snake)
+        fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
+        text_draw_centered(&fb, fb.width / 2, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
+        button_draw(&fb, &resume_button);
+        button_draw(&fb, &exit_pause_button);
+        return;
+    }
+    
+    // Handle game over screen overlay (unified GameOverScreen component)
+    if (current_screen == SCREEN_GAME_OVER) {
+        TouchState go_st = touch_get_state(&touch);
+        GameOverAction action = gameover_update(&gos, &fb,
+                                                go_st.x, go_st.y, go_st.pressed);
+        switch (action) {
+        case GAMEOVER_ACTION_RESTART:
+            reset_game();
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            current_screen = SCREEN_PLAYING;
+            break;
+        case GAMEOVER_ACTION_EXIT:
+            running = false;
+            break;
+        case GAMEOVER_ACTION_RESET_SCORES:
+            /* Handled internally by the component */
+            game.high_score = 0;
+            break;
+        case GAMEOVER_ACTION_NONE:
+        default:
+            break;
+        }
+        return;
     }
 }
 

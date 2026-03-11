@@ -14,8 +14,8 @@ BRICK_DIR = brick_breaker
 BUILD_DIR = build
 
 # Common source files
-COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c
-COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o
+COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c $(COMMON_DIR)/highscore.c
+COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/highscore.o
 
 # Additional common objects for device_tools
 COMMON_AUDIO_OBJ = $(BUILD_DIR)/audio.o
@@ -26,7 +26,7 @@ DEVICE_TOOLS_DEPS = $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ) $(COM
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools
-TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate
+TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate $(BUILD_DIR)/audio_touch_test
 
 .PHONY: all clean install utils tests icons
 
@@ -49,7 +49,10 @@ $(BUILD_DIR)/touch_input.o: $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/touch_inpu
 $(BUILD_DIR)/hardware.o: $(COMMON_DIR)/hardware.c $(COMMON_DIR)/hardware.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/common.o: $(COMMON_DIR)/common.c $(COMMON_DIR)/common.h
+$(BUILD_DIR)/common.o: $(COMMON_DIR)/common.c $(COMMON_DIR)/common.h $(COMMON_DIR)/highscore.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/highscore.o: $(COMMON_DIR)/highscore.c $(COMMON_DIR)/highscore.h $(COMMON_DIR)/common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ppm.o: $(COMMON_DIR)/ppm.c $(COMMON_DIR)/ppm.h
@@ -121,6 +124,11 @@ $(BUILD_DIR)/touch_inject: tests/touch_inject.c
 $(BUILD_DIR)/unified_calibrate: tests/unified_calibrate.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: unified_calibrate"
+
+# Audio touch test (Tap-a-Theremin)
+$(BUILD_DIR)/audio_touch_test: tests/audio_touch_test.c $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ)
+	$(CC) $(CFLAGS) -I. $^ -o $@ $(LDFLAGS)
+	@echo "Built: audio_touch_test"
 
 # Hardware test tool
 $(BUILD_DIR)/hardware_test: hardware_test/hardware_test.c $(BUILD_DIR)/hardware.o

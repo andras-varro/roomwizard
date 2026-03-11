@@ -183,6 +183,26 @@ int fb_init(Framebuffer *fb, const char *device) {
     // Update global base dimensions so SCREEN_SAFE_* macros adapt
     screen_base_width  = fb->width;
     screen_base_height = fb->height;
+
+    if (fb->portrait_mode) {
+        // Rotate safe area margins to match virtual coordinate system (90° CCW)
+        // Physical left → virtual top, physical right → virtual bottom
+        // Physical top → virtual right, physical bottom → virtual left
+        int phys_top = screen_safe_margin_top;
+        int phys_bottom = screen_safe_margin_bottom;
+        int phys_left = screen_safe_margin_left;
+        int phys_right = screen_safe_margin_right;
+
+        screen_safe_margin_top = phys_left;
+        screen_safe_margin_bottom = phys_right;
+        screen_safe_margin_left = phys_bottom;
+        screen_safe_margin_right = phys_top;
+
+        printf("Portrait mode: rotated safe margins T=%d B=%d L=%d R=%d\n",
+               screen_safe_margin_top, screen_safe_margin_bottom,
+               screen_safe_margin_left, screen_safe_margin_right);
+    }
+
     fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
     fb->line_length = finfo.line_length;
     fb->screen_size = fb->line_length * fb->phys_height;  // Physical size for mmap
