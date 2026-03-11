@@ -31,11 +31,15 @@ extern int screen_safe_margin_right;
 extern int screen_safe_margin_top;
 extern int screen_safe_margin_bottom;
 
+// Runtime screen base dimensions (set by fb_init(), default 800x480)
+extern int screen_base_width;
+extern int screen_base_height;
+
 // Safe area bounds (now computed from runtime variables)
 #define SCREEN_SAFE_LEFT   (screen_safe_margin_left)
-#define SCREEN_SAFE_RIGHT  (800 - screen_safe_margin_right)
+#define SCREEN_SAFE_RIGHT  (screen_base_width - screen_safe_margin_right)
 #define SCREEN_SAFE_TOP    (screen_safe_margin_top)
-#define SCREEN_SAFE_BOTTOM (480 - screen_safe_margin_bottom)
+#define SCREEN_SAFE_BOTTOM (screen_base_height - screen_safe_margin_bottom)
 #define SCREEN_SAFE_WIDTH  (SCREEN_SAFE_RIGHT - SCREEN_SAFE_LEFT)
 #define SCREEN_SAFE_HEIGHT (SCREEN_SAFE_BOTTOM - SCREEN_SAFE_TOP)
 

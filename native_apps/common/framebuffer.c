@@ -15,6 +15,10 @@ int screen_safe_margin_right  = SCREEN_SAFE_MARGIN_RIGHT_DEFAULT;
 int screen_safe_margin_top    = SCREEN_SAFE_MARGIN_TOP_DEFAULT;
 int screen_safe_margin_bottom = SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT;
 
+// Runtime screen base dimensions (defaults safe for pre-fb_init usage)
+int screen_base_width  = 800;
+int screen_base_height = 480;
+
 void fb_load_safe_area(void) {
     // Reset to defaults
     screen_safe_margin_left   = SCREEN_SAFE_MARGIN_LEFT_DEFAULT;
@@ -159,6 +163,10 @@ int fb_init(Framebuffer *fb, const char *device) {
     
     fb->width = vinfo.xres;
     fb->height = vinfo.yres;
+
+    // Update global base dimensions so SCREEN_SAFE_* macros adapt
+    screen_base_width  = fb->width;
+    screen_base_height = fb->height;
     fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
     fb->line_length = finfo.line_length;
     fb->screen_size = fb->line_length * fb->height;

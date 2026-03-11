@@ -161,7 +161,7 @@ void init_game() {
     if (cell_size > 30) cell_size = 30;
     
     board_offset_x = 20;
-    board_offset_y = 80;
+    board_offset_y = SCREEN_SAFE_TOP + 60;
     
     hs_init(&hs_table, "tetris");
     hs_load(&hs_table);
@@ -177,10 +177,10 @@ void init_game() {
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init_full(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                     326, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
+                     fb.height * 68 / 100, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
                      BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
     button_init_full(&reset_score_button,
-                     fb.width / 2 - 130, 396, 260, 44, "RESET SCORES",
+                     fb.width / 2 - 130, restart_button.y + restart_button.height + 10, 260, 44, "RESET SCORES",
                      RGB(40, 0, 0), COLOR_WHITE, RGB(150, 0, 0), 2);
     button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",

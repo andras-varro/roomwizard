@@ -1,4 +1,5 @@
 #include "touch_input.h"
+#include "framebuffer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,8 +93,8 @@ int touch_init(TouchInput *touch, const char *device) {
         touch->raw_max_y = 4095;
         printf("Touch EVIOCGABS failed, using default 0-4095 range\n");
     }
-    touch->screen_width = 800;  // Default
-    touch->screen_height = 480;  // Default
+    touch->screen_width = screen_base_width;   // From framebuffer globals (800x480 default)
+    touch->screen_height = screen_base_height;  // Overridden by touch_set_screen_size() if needed
     touch->calibrated = false;
     
     // Initialize calibration offsets to zero (no correction)

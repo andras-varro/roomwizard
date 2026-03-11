@@ -57,7 +57,7 @@ void draw_test_menu(Framebuffer *fb, UILayout *layout, Button *buttons, Button *
     fb_clear(fb, COLOR_BLACK);
     
     // Title
-    text_draw_centered(fb, 400, 30, "HARDWARE TEST", COLOR_WHITE, 3);
+    text_draw_centered(fb, fb->width / 2, 30, "HARDWARE TEST", COLOR_WHITE, 3);
     
     // Draw exit button
     button_draw_exit(fb, exit_btn);
@@ -94,18 +94,18 @@ void draw_test_screen(Framebuffer *fb, const char *title, const char *status, in
     fb_clear(fb, COLOR_BLACK);
     
     // Title
-    text_draw_centered(fb, 400, 50, title, COLOR_WHITE, 3);
+    text_draw_centered(fb, fb->width / 2, 50, title, COLOR_WHITE, 3);
     
     // Status text
     if (status) {
-        text_draw_centered(fb, 400, 150, status, COLOR_CYAN, 2);
+        text_draw_centered(fb, fb->width / 2, 150, status, COLOR_CYAN, 2);
     }
     
     // Progress bar
     if (progress >= 0) {
         int bar_width = 600;
         int bar_height = 40;
-        int bar_x = (800 - bar_width) / 2;
+        int bar_x = (fb->width - bar_width) / 2;
         int bar_y = 220;
         
         // Background
@@ -118,11 +118,11 @@ void draw_test_screen(Framebuffer *fb, const char *title, const char *status, in
         // Percentage text
         char pct[16];
         snprintf(pct, sizeof(pct), "%d%%", progress);
-        text_draw_centered(fb, 400, bar_y + 20, pct, COLOR_WHITE, 2);
+        text_draw_centered(fb, fb->width / 2, bar_y + 20, pct, COLOR_WHITE, 2);
     }
     
     // Instructions
-    text_draw_centered(fb, 400, 400, "TOUCH TO RETURN", RGB(136, 136, 136), 2);
+    text_draw_centered(fb, fb->width / 2, fb->height - 80, "TOUCH TO RETURN", RGB(136, 136, 136), 2);
     
     fb_swap(fb);
 }
@@ -353,12 +353,14 @@ void test_colors(Framebuffer *fb, TouchInput *touch) {
 
 #define TZ_COLS 8
 #define TZ_ROWS 6
-#define TZ_CELL_W (800 / TZ_COLS)   /* 100 */
-#define TZ_CELL_H (480 / TZ_ROWS)   /* 80  */
 #define TZ_HEADER 36                 /* px reserved for info line at top */
 #define CALIB_FILE "/etc/touch_calibration.conf"
 
 static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
+    /* Cell dimensions derived from framebuffer size */
+    int tz_cell_w = fb->width / TZ_COLS;
+    int tz_cell_h = fb->height / TZ_ROWS;
+
     /* Track which cells have been touched */
     bool hit[TZ_ROWS][TZ_COLS];
     memset(hit, 0, sizeof(hit));
@@ -395,15 +397,15 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
         fb_draw_text(fb, 4, 14, val, COLOR_CYAN, 1);
 
         /* Exit hint */
-        fb_draw_text(fb, 640, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
+        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
 
         /* Grid cells */
         for (int r = 0; r < TZ_ROWS; r++) {
             for (int c = 0; c < TZ_COLS; c++) {
-                int cx = c * TZ_CELL_W;
-                int cy = TZ_HEADER + r * TZ_CELL_H;
-                int cw = TZ_CELL_W - 2;
-                int ch = TZ_CELL_H - 2;
+                int cx = c * tz_cell_w;
+                int cy = TZ_HEADER + r * tz_cell_h;
+                int cw = tz_cell_w - 2;
+                int ch = tz_cell_h - 2;
 
                 uint32_t bg;
                 if (hit[r][c])
@@ -428,8 +430,8 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
         }
 
         /* Completion bar */
-        int bar_w = (780 * hit_count) / total_cells;
-        fb_fill_rect(fb, 10, 480 - 10, bar_w, 6,
+        int bar_w = (fb->width - 20) * hit_count / total_cells;
+        fb_fill_rect(fb, 10, fb->height - 10, bar_w, 6,
                      (hit_count == total_cells) ? COLOR_GREEN : COLOR_CYAN);
 
         fb_swap(fb);
@@ -445,14 +447,14 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
             last_raw_y = touch->state.y;
 
             /* Exit zone: top-right 100×36 */
-            if (x > 700 && y < TZ_HEADER) {
+            if (x > fb->width - 100 && y < TZ_HEADER) {
                 running = false;
                 break;
             }
 
             /* Map calibrated coords to grid cell */
-            int gc = x / TZ_CELL_W;
-            int gr = (y - TZ_HEADER) / TZ_CELL_H;
+            int gc = x / tz_cell_w;
+            int gr = (y - TZ_HEADER) / tz_cell_h;
             if (gc >= 0 && gc < TZ_COLS && gr >= 0 && gr < TZ_ROWS) {
                 if (!hit[gr][gc]) {
                     hit[gr][gc] = true;
@@ -480,7 +482,7 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
 static void draw_display_page(Framebuffer *fb, const char *title,
                               const char *footer) {
     fb_draw_text(fb, 4, 2, title, COLOR_WHITE, 2);
-    fb_draw_text(fb, 260, 460, footer, RGB(140,140,140), 1);
+    fb_draw_text(fb, fb->width / 3, fb->height - 20, footer, RGB(140,140,140), 1);
 }
 
 static void test_display(Framebuffer *fb, TouchInput *touch) {
@@ -519,34 +521,34 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
         }
         case 1: { /* Solid colour bars */
             draw_display_page(fb, "COLOR BARS", "tap -> next");
-            int bw = 800 / 4;
-            fb_fill_rect(fb, 0*bw, 40, bw, 400, RGB(255,0,0));
-            fb_fill_rect(fb, 1*bw, 40, bw, 400, RGB(0,255,0));
-            fb_fill_rect(fb, 2*bw, 40, bw, 400, RGB(0,0,255));
-            fb_fill_rect(fb, 3*bw, 40, bw, 400, RGB(255,255,255));
+            int bw = fb->width / 4;
+            fb_fill_rect(fb, 0*bw, 40, bw, fb->height - 80, RGB(255,0,0));
+            fb_fill_rect(fb, 1*bw, 40, bw, fb->height - 80, RGB(0,255,0));
+            fb_fill_rect(fb, 2*bw, 40, bw, fb->height - 80, RGB(0,0,255));
+            fb_fill_rect(fb, 3*bw, 40, bw, fb->height - 80, RGB(255,255,255));
             break;
         }
         case 2: { /* Horizontal gradient */
             draw_display_page(fb, "GRADIENT", "tap -> next");
-            for (int col = 0; col < 800; col++) {
-                uint8_t v = (col * 255) / 799;
-                fb_fill_rect(fb, col, 50, 1, 380, RGB(v, v, v));
+            for (int col = 0; col < fb->width; col++) {
+                uint8_t v = (col * 255) / (fb->width - 1);
+                fb_fill_rect(fb, col, 50, 1, fb->height - 100, RGB(v, v, v));
             }
             break;
         }
         case 3: { /* 1-pixel grid */
             draw_display_page(fb, "PIXEL GRID", "tap -> next");
-            for (int gx = 0; gx < 800; gx += 2)
-                fb_fill_rect(fb, gx, 40, 1, 400, RGB(200,200,200));
-            for (int gy = 40; gy < 440; gy += 2)
-                fb_fill_rect(fb, 0, gy, 800, 1, RGB(200,200,200));
+            for (int gx = 0; gx < fb->width; gx += 2)
+                fb_fill_rect(fb, gx, 40, 1, fb->height - 80, RGB(200,200,200));
+            for (int gy = 40; gy < fb->height - 40; gy += 2)
+                fb_fill_rect(fb, 0, gy, fb->width, 1, RGB(200,200,200));
             break;
         }
         case 4: { /* Safe-area boundary */
             draw_display_page(fb, "SAFE AREA", "tap -> next");
             /* Outer edge = screen boundary (red) */
-            fb_draw_rect(fb, 0, 0, 800, 480, COLOR_RED);
-            fb_draw_rect(fb, 1, 1, 798, 478, COLOR_RED);
+            fb_draw_rect(fb, 0, 0, fb->width, fb->height, COLOR_RED);
+            fb_draw_rect(fb, 1, 1, fb->width - 2, fb->height - 2, COLOR_RED);
             /* Inner edge = safe area (green) */
             fb_draw_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
                          SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT, COLOR_GREEN);
@@ -580,7 +582,7 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
         while (1) {
             if (touch_wait_for_press(touch, &x, &y) == 0) {
                 /* Exit zone: top-right */
-                if (x > 700 && y < 40) { running = false; break; }
+                if (x > fb->width - 100 && y < 40) { running = false; break; }
                 page++;
                 if (page >= pages) running = false;
                 break;
@@ -609,7 +611,7 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
     while (running && played <= nfreqs) {
         fb_clear(fb, RGB(20, 20, 30));
         fb_draw_text(fb, 4, 2, "AUDIO DIAGNOSTIC", COLOR_WHITE, 3);
-        fb_draw_text(fb, 640, 4, "[EXIT]", RGB(180,80,80), 2);
+        fb_draw_text(fb, fb->width - 160, 4, "[EXIT]", RGB(180,80,80), 2);
 
         if (!audio_ok) {
             fb_draw_text(fb, 100, 120, "ERROR: /dev/dsp not available", COLOR_RED, 2);
@@ -655,7 +657,7 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
             for (int w = 0; w < 10; w++) {
                 usleep(30000);
                 if (check_touch(touch, &x, &y)) {
-                    if (x > 700 && y < 40) { running = false; break; }
+                    if (x > fb->width - 100 && y < 40) { running = false; break; }
                 }
             }
         } else {
@@ -696,7 +698,7 @@ int main(void) {
     // Item size: 150x80, spacing: 6x20
     // Width calc: 10 + (150*5) + (6*4) + 10 = 10 + 750 + 24 + 10 = 794 (fits in 800)
     UILayout layout;
-    ui_layout_init_grid(&layout, 800, 480, 5, 150, 80, 6, 20, 10, 80, 10, 20);
+    ui_layout_init_grid(&layout, fb.width, fb.height, 5, 150, 80, 6, 20, 10, 80, 10, 20);
     ui_layout_update(&layout, NUM_TESTS);
     
     // Create test buttons using unified Button type
@@ -708,7 +710,7 @@ int main(void) {
     
     // Create exit button
     Button exit_btn;
-    button_init_full(&exit_btn, 730, 10, 60, 50, "X",
+    button_init_full(&exit_btn, fb.width - 70, 10, 60, 50, "X",
                     BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 2);
     
     TestState state = TEST_MENU;
@@ -756,6 +758,9 @@ int main(void) {
             }
             state = TEST_MENU;
             hw_leds_off();
+            /* Drain lingering touch events so the release from the exit
+             * tap doesn't immediately re-select a test in the menu.    */
+            touch_drain_events(&touch);
             usleep(200000);
         }
         usleep(10000);

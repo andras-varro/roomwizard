@@ -11,6 +11,7 @@
 - LED effects: integrated
 - Audio effects: integrated (beeps, tones, fanfares)
 - Watchdog: handled by system `/usr/sbin/watchdog` — no custom feeder needed
+- Portrait mode: Phase 1 (foundation) + Phase 2 (app-level) complete ✅ — all hardcoded screen dimensions replaced with dynamic equivalents
 
 **Device:** RoomWizard - See [`SYSTEM_ANALYSIS.md#hardware-platform`](../SYSTEM_ANALYSIS.md#hardware-platform) for full specs
 **IP:** 192.168.50.73 - See [`COMMISSIONING.md`](../COMMISSIONING.md) for device setup
@@ -164,6 +165,31 @@ int main(int argc, char *argv[]) {
 - All apps link against common objects: `framebuffer.o`, `touch_input.o`, `hardware.o`, `common.o`, `config.o`, `ppm.o`, `logger.o`
 - The `build-and-deploy.sh` script handles cross-compilation — the `Makefile` targets plain `gcc` and is not currently wired to the ARM cross-compiler
 - VNC client has a separate `Makefile` in `vnc_client/` that references `../native_apps/common/` sources
+
+## Portrait Mode Support
+
+### Completed (Phase 1 — Foundation)
+
+- [x] **Make `SCREEN_SAFE_*` macros dynamic** — [`framebuffer.h`](common/framebuffer.h)/[`framebuffer.c`](common/framebuffer.c) now uses runtime globals (`screen_base_width`, `screen_base_height`) instead of hardcoded 800×480
+- [x] **Touch input defaults use runtime globals** — [`touch_input.c`](common/touch_input.c) references `screen_base_width`/`screen_base_height` instead of hardcoded 800/480
+- [x] **Verify `LAYOUT_*` macros auto-adapt** — all 8 macros in [`common.h`](common/common.h) and 3 screen template functions in [`common.c`](common/common.c) derive from `SCREEN_SAFE_*` with no hardcoded dimensions
+
+### Completed (Phase 2 — App-level hardcoded values)
+
+| File | Status | Changes |
+|------|--------|---------|
+| [`device_tools.c`](device_tools/device_tools.c) | ✅ | Removed `#define SCREEN_W 800` / `SCREEN_H 480`; converted `TZ_CELL_W`/`TZ_CELL_H` macros to local variables computed from `fb->width`/`fb->height`; replaced ~30 hardcoded 800/480/400 values with dynamic `fb->width`, `fb->height`, `fb->width / 2` throughout test functions (`draw_test_screen`, `test_touch_zone`, `test_display`, `test_audio_diag`, `run_calib_done`, `draw_display_page`) |
+| [`hardware_test_gui.c`](hardware_test/hardware_test_gui.c) | ✅ | Removed `TZ_CELL_W`/`TZ_CELL_H` macros (converted to local variables); replaced ~25 hardcoded values with dynamic equivalents throughout (`draw_test_menu`, `draw_test_screen`, `test_touch_zone`, `test_display`, `test_audio_diag`, main layout init and exit button) |
+| [`game_selector.c`](game_selector/game_selector.c) | ✅ | Replaced hardcoded `400` center X with `selector->fb.width / 2`; replaced `start_y = 100` with `SCREEN_SAFE_TOP + 80` for consistency with draw code |
+| [`snake.c`](snake/snake.c) | ✅ | Replaced hardcoded game-over button Y positions: `326` → `fb.height * 68 / 100`, `396` → `restart_button.y + restart_button.height + 10` |
+| [`tetris.c`](tetris/tetris.c) | ✅ | Replaced `board_offset_y = 80` with `SCREEN_SAFE_TOP + 60`; replaced game-over button Y positions: `326` → `fb.height * 68 / 100`, `396` → `restart_button.y + restart_button.height + 10` |
+| [`pong.c`](pong/pong.c) | ✅ | Already fully dynamic — no changes needed |
+
+### TODO (Phase 3 — Game layout redesigns for portrait)
+
+- [ ] **Pong** — design decision: rotate paddles to top/bottom in portrait, or accept cramped horizontal play
+- [ ] **Tetris** — portrait layout: move controls below board instead of beside it
+- [ ] **Snake** — verify grid centering works naturally (likely minimal changes needed)
 
 ## Backlog
 

@@ -117,7 +117,7 @@ void draw_menu(GameSelector *selector) {
     fb_clear(&selector->fb, COLOR_BLACK);
     
     // Draw title (using safe area)
-    text_draw_centered(&selector->fb, 400, LAYOUT_TITLE_Y, "ROOMWIZARD GAMES", COLOR_WHITE, 4);
+    text_draw_centered(&selector->fb, selector->fb.width / 2, LAYOUT_TITLE_Y, "ROOMWIZARD GAMES", COLOR_WHITE, 4);
     
     int start_y = SCREEN_SAFE_TOP + 80;  // Start below title
     int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
@@ -163,7 +163,7 @@ void draw_menu(GameSelector *selector) {
 
 // Handle touch input
 int handle_touch(GameSelector *selector, int x, int y, uint32_t current_time) {
-    int start_y = 100;
+    int start_y = SCREEN_SAFE_TOP + 80;
     int available_height = selector->fb.height - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
     int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
     
