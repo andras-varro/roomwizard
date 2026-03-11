@@ -56,12 +56,19 @@ static const float SPEED_MULTS[SPEED_LEVELS] = { 0.55f, 0.75f, 1.0f, 1.25f, 1.5f
 #define BALL_MAX_SPEED  11.0f
 #define BALL_SPEED_INC  0.25f  /* Increased from 0.15f for faster progression */
 
-/* Bricks */
-#define BRICK_COLS      12
-#define BRICK_ROWS      8
+/* Bricks -- compile-time maximums (for array sizing) and orientation presets */
+#define BRICK_COLS_LANDSCAPE  12
+#define BRICK_COLS_PORTRAIT   8    /* fewer cols in portrait for wider, more playable bricks */
+#define BRICK_ROWS_BASE       8    /* base max rows (landscape) -- level defs use this */
+#define BRICK_MAX_COLS        12
+#define BRICK_MAX_ROWS        16
 #define BRICK_PAD       3
 #define BRICK_H         20
-#define MAX_BRICKS      96
+#define MAX_BRICKS      (BRICK_MAX_COLS * BRICK_MAX_ROWS)  /* 192 */
+
+/* Runtime brick grid dimensions (set by init_brick_layout after fb_init) */
+static int brick_cols = BRICK_COLS_LANDSCAPE;
+static int brick_rows = BRICK_ROWS_BASE;
 
 /* Power-ups */
 #define MAX_POWERUPS    8
@@ -270,7 +277,7 @@ typedef enum {
 
 typedef struct {
     int         rows;
-    int         health[BRICK_ROWS];  /* per-row starting health */
+    int         health[BRICK_ROWS_BASE];  /* per-row starting health (base/landscape layout) */
     BrickPattern pattern;
     float       speed_mult;          /* ball speed multiplier */
 } LevelDef;
@@ -300,6 +307,25 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* ── Particles ───────────────────────────────────────────────────────── */
+
+/* Called after fb_init() to compute brick_cols and brick_rows from screen size.
+ * In landscape (800x480): brick_cols=12, brick_rows=8 (unchanged from original)
+ * In portrait  (480x800): brick_cols=8  (wider bricks), brick_rows=~14 (fill top 45%) */
+static void init_brick_layout(void) {
+    if (fb.portrait_mode) {
+        brick_cols = BRICK_COLS_PORTRAIT;
+        /* Calculate rows to fill ~45% of the play area height */
+        int available_brick_height = (int)(AREA_H * 0.45f);
+        brick_rows = available_brick_height / (BRICK_H + BRICK_PAD);
+        if (brick_rows < BRICK_ROWS_BASE) brick_rows = BRICK_ROWS_BASE;
+        if (brick_rows > BRICK_MAX_ROWS) brick_rows = BRICK_MAX_ROWS;
+    } else {
+        brick_cols = BRICK_COLS_LANDSCAPE;
+        brick_rows = BRICK_ROWS_BASE;
+    }
+    printf("Brick layout: %dx%d (portrait=%d, AREA_H=%d)\n",
+           brick_cols, brick_rows, fb.portrait_mode, AREA_H);
+}
 
 static void spawn_particles(float cx, float cy, uint32_t color, int count) {
     for (int i = 0; i < count; i++) {
@@ -378,24 +404,36 @@ static bool pattern_has_brick(BrickPattern pat, int row, int col, int rows, int 
 
 static void create_bricks(void) {
     const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-    int brick_w = (AREA_W - BRICK_PAD * (BRICK_COLS + 1)) / BRICK_COLS;
+    int brick_w = (AREA_W - BRICK_PAD * (brick_cols + 1)) / brick_cols;
     game.brick_count = 0;
     game.bricks_left = 0;
     
+    /* Scale the level's row count proportionally to the available brick_rows.
+     * In landscape: brick_rows == BRICK_ROWS_BASE (8), so scaled_rows == lv->rows (unchanged).
+     * In portrait:  brick_rows is larger (~14), so levels get proportionally more rows. */
+    int scaled_rows = lv->rows * brick_rows / BRICK_ROWS_BASE;
+    if (scaled_rows > brick_rows) scaled_rows = brick_rows;
+    if (scaled_rows < lv->rows) scaled_rows = lv->rows;  /* never fewer than base */
+
     /* Add larger vertical offset - creates space above bricks for ball bouncing */
     int vertical_offset = 40;  /* pixels from top of play area - allows ball to go behind/above bricks */
 
-    for (int r = 0; r < lv->rows && r < BRICK_ROWS; r++) {
-        for (int c = 0; c < BRICK_COLS; c++) {
-            if (!pattern_has_brick(lv->pattern, r, c, lv->rows, BRICK_COLS))
+    for (int r = 0; r < scaled_rows && r < brick_rows; r++) {
+        for (int c = 0; c < brick_cols; c++) {
+            if (!pattern_has_brick(lv->pattern, r, c, scaled_rows, brick_cols))
                 continue;
+
+            /* Map this row back to the base health pattern.
+             * Stretches the original health[] across the scaled row count. */
+            int base_r = r * lv->rows / scaled_rows;
+            if (base_r >= lv->rows) base_r = lv->rows - 1;
 
             Brick *b = &game.bricks[game.brick_count];
             b->x = AREA_X + BRICK_PAD + c * (brick_w + BRICK_PAD);
             b->y = AREA_Y + BRICK_PAD + vertical_offset + r * (BRICK_H + BRICK_PAD);
             b->w = brick_w;
             b->h = BRICK_H;
-            b->health = lv->health[r];
+            b->health = lv->health[base_r];
             b->max_health = b->health;
             b->color_index = r;
             
@@ -1584,6 +1622,9 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     audio_init(&audio);
     srand(time(NULL));
+
+    /* Compute brick grid dimensions based on screen orientation */
+    init_brick_layout();
 
     /* High score */
     hs_init(&hs, "brick_breaker");

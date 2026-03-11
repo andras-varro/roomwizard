@@ -84,6 +84,7 @@
 #define CALIB_MARGIN      40
 #define CALIB_MARGIN_STEP 5
 #define CALIB_FILE        "/etc/touch_calibration.conf"
+#define PORTRAIT_FLAG_FILE  "/opt/games/portrait.mode"
 
 #define TZ_COLS   8
 #define TZ_ROWS   6
@@ -162,6 +163,7 @@ typedef struct {
     bool          led_enabled;
     int           led_brightness;
     int           backlight_brightness;
+    bool          portrait_mode;
     char          status_msg[64];
     uint32_t      status_time_ms;
     DiagPage      diag_page;
@@ -199,6 +201,7 @@ static Button test_audio_btn, test_led_btn;
 static Button led_minus_btn, led_plus_btn;
 static Button bl_minus_btn, bl_plus_btn;
 static Button save_btn, reset_btn;
+static ToggleSwitch portrait_toggle;
 
 /* Diagnostics */
 static Button diag_prev_btn, diag_next_btn;
@@ -377,7 +380,7 @@ static void create_settings_ui(AppState *state) {
     int sec_audio_y = CONTENT_Y + 5;
     int sec_led_y   = CONTENT_Y + 75;
     int sec_disp_y  = CONTENT_Y + 185;
-    int action_y    = CONTENT_Y + 275;
+    int action_y    = CONTENT_Y + 320;
     int led_bar_x   = CONTENT_LEFT + 190;
     int led_bar_y   = sec_led_y + 65;
     int bl_bar_x    = CONTENT_LEFT + 190;
@@ -401,6 +404,9 @@ static void create_settings_ui(AppState *state) {
                      45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 
+    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, sec_disp_y + 65,
+                60, 28, "PORTRAIT MODE (REBOOT)", state->portrait_mode);
+
     button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 27,
                      90, 34, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
@@ -421,7 +427,7 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     int sec_audio_y = CONTENT_Y + 5;
     int sec_led_y   = CONTENT_Y + 75;
     int sec_disp_y  = CONTENT_Y + 185;
-    int action_y    = CONTENT_Y + 275;
+    int action_y    = CONTENT_Y + 320;
     int led_bar_x   = CONTENT_LEFT + 190;
     int led_bar_y   = sec_led_y + 65;
     int bl_bar_x    = CONTENT_LEFT + 190;
@@ -449,6 +455,12 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
                         state->backlight_brightness, 20, 100);
     button_draw(fb, &bl_plus_btn);
 
+    toggle_draw(fb, &portrait_toggle);
+    if (portrait_toggle.state) {
+        fb_draw_text(fb, CONTENT_LEFT + 5, sec_disp_y + 98,
+                     "ACTIVE - RESTART APPS TO APPLY", RGB(255, 200, 80), 1);
+    }
+
     button_draw(fb, &save_btn);
     button_draw(fb, &reset_btn);
 
@@ -466,6 +478,9 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         state->audio_enabled = audio_toggle.state;
     if (toggle_check_press(&led_toggle, tx, ty, touching, now))
         state->led_enabled = led_toggle.state;
+    if (toggle_check_press(&portrait_toggle, tx, ty, touching, now)) {
+        state->portrait_mode = portrait_toggle.state;
+    }
 
     if (button_update(&led_minus_btn, tx, ty, touching, now)) {
         state->led_brightness -= 10;
@@ -498,6 +513,13 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         config_set_int(&state->cfg, "led_brightness", state->led_brightness);
         config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
         config_save(&state->cfg);
+        /* Create or remove portrait mode flag file */
+        if (state->portrait_mode) {
+            FILE *pf = fopen(PORTRAIT_FLAG_FILE, "w");
+            if (pf) { fprintf(pf, "1\n"); fclose(pf); }
+        } else {
+            unlink(PORTRAIT_FLAG_FILE);
+        }
         snprintf(state->status_msg, sizeof(state->status_msg), "SAVED!");
         state->status_time_ms = now;
     }
@@ -510,6 +532,9 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         audio_toggle.state = state->audio_enabled;
         led_toggle.state = state->led_enabled;
         apply_backlight(state->backlight_brightness);
+        state->portrait_mode = false;
+        portrait_toggle.state = false;
+        unlink(PORTRAIT_FLAG_FILE);
         snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
         state->status_time_ms = now;
     }
@@ -1552,6 +1577,7 @@ int main(void) {
     if (state.led_brightness > 100) state.led_brightness = 100;
     if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
     if (state.backlight_brightness > 100) state.backlight_brightness = 100;
+    state.portrait_mode = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
     state.diag_page = DIAG_SYSTEM;
     state.diag_needs_refresh = true;
     state.test_sub = TEST_MENU_VIEW;

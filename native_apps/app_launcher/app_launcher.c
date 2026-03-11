@@ -17,7 +17,7 @@
  *   touch     — pass touch device path only
  *   none      — launch with no arguments
  *
- * Grid: 3 columns × 2 rows = 6 per page, with pagination via edge touch.
+ * Grid: dynamic layout — 3×2 in landscape, 2×3 in portrait, with pagination.
  */
 
 #include "common/framebuffer.h"
@@ -42,12 +42,6 @@
 
 /* ── Grid geometry ──────────────────────────────────────────────────────── */
 
-#define GRID_COLS       3
-#define GRID_ROWS       2
-#define APPS_PER_PAGE   (GRID_COLS * GRID_ROWS)
-
-#define TILE_W          200
-#define TILE_H          150
 #define TILE_GAP_X      20
 #define TILE_GAP_Y      20
 #define ICON_SIZE       96
@@ -56,13 +50,41 @@
 #define TITLE_H         50
 #define DOTS_H          30
 
-/* Derived: centre the 3×2 grid within the safe area */
-#define GRID_CONTENT_W  (GRID_COLS * TILE_W + (GRID_COLS - 1) * TILE_GAP_X)
-#define GRID_CONTENT_H  (GRID_ROWS * TILE_H + (GRID_ROWS - 1) * TILE_GAP_Y)
+#define MAX_TILE_W      200
+#define MAX_TILE_H      150
 
-#define GRID_LEFT       (SCREEN_SAFE_LEFT + (SCREEN_SAFE_WIDTH - GRID_CONTENT_W) / 2)
-#define GRID_TOP        (SCREEN_SAFE_TOP + TITLE_H + \
-                         (SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H - GRID_CONTENT_H) / 2)
+/* Dynamic grid variables — set by compute_grid_layout() */
+static int grid_cols, grid_rows, apps_per_page;
+static int tile_w, tile_h;
+static int grid_content_w, grid_content_h;
+static int grid_left, grid_top;
+
+static void compute_grid_layout(Framebuffer *fb) {
+    if (fb->portrait_mode) {
+        grid_cols = 2;
+        grid_rows = 3;
+    } else {
+        grid_cols = 3;
+        grid_rows = 2;
+    }
+    apps_per_page = grid_cols * grid_rows;
+
+    /* Calculate tile sizes to fit available space, capped at max */
+    int max_w = (SCREEN_SAFE_WIDTH  - (grid_cols - 1) * TILE_GAP_X) / grid_cols;
+    int avail_h = SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H;
+    int max_h = (avail_h - (grid_rows - 1) * TILE_GAP_Y) / grid_rows;
+
+    tile_w = (max_w < MAX_TILE_W) ? max_w : MAX_TILE_W;
+    tile_h = (max_h < MAX_TILE_H) ? max_h : MAX_TILE_H;
+
+    /* Derived: centre the grid within the safe area */
+    grid_content_w = grid_cols * tile_w + (grid_cols - 1) * TILE_GAP_X;
+    grid_content_h = grid_rows * tile_h + (grid_rows - 1) * TILE_GAP_Y;
+
+    grid_left = SCREEN_SAFE_LEFT + (SCREEN_SAFE_WIDTH - grid_content_w) / 2;
+    grid_top  = SCREEN_SAFE_TOP  + TITLE_H +
+                (SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H - grid_content_h) / 2;
+}
 
 /* ── Colours ────────────────────────────────────────────────────────────── */
 
@@ -252,7 +274,7 @@ static int scan_apps(Launcher *l) {
                 l->apps[j]  = tmp;
             }
 
-    l->total_pages = (l->app_count + APPS_PER_PAGE - 1) / APPS_PER_PAGE;
+    l->total_pages = (l->app_count + apps_per_page - 1) / apps_per_page;
     if (l->total_pages < 1) l->total_pages = 1;
     if (l->current_page >= l->total_pages) l->current_page = l->total_pages - 1;
 
@@ -264,10 +286,10 @@ static int scan_apps(Launcher *l) {
 /* ════════════════════════════════════════════════════════════════════════ */
 
 static void tile_xy(int idx_on_page, int *x, int *y) {
-    int col = idx_on_page % GRID_COLS;
-    int row = idx_on_page / GRID_COLS;
-    *x = GRID_LEFT + col * (TILE_W + TILE_GAP_X);
-    *y = GRID_TOP  + row * (TILE_H + TILE_GAP_Y);
+    int col = idx_on_page % grid_cols;
+    int row = idx_on_page / grid_cols;
+    *x = grid_left + col * (tile_w + TILE_GAP_X);
+    *y = grid_top  + row * (tile_h + TILE_GAP_Y);
 }
 
 static void draw_letter_icon(Framebuffer *fb, int x, int y,
@@ -298,12 +320,12 @@ static void draw_ppm_icon(Framebuffer *fb, int x, int y,
 static void draw_tile(Framebuffer *fb, AppEntry *app,
                       int tx, int ty, int highlight) {
     /* Tile background (rounded) */
-    fb_fill_rounded_rect(fb, tx, ty, TILE_W, TILE_H, TILE_RADIUS,
+    fb_fill_rounded_rect(fb, tx, ty, tile_w, tile_h, TILE_RADIUS,
                          highlight ? TILE_HL_BG : TILE_BG);
-    fb_draw_rounded_rect(fb, tx, ty, TILE_W, TILE_H, TILE_RADIUS, TILE_BORDER);
+    fb_draw_rounded_rect(fb, tx, ty, tile_w, tile_h, TILE_RADIUS, TILE_BORDER);
 
     /* Icon — centred horizontally, 8 px from top of tile */
-    int icon_x = tx + (TILE_W - ICON_SIZE) / 2;
+    int icon_x = tx + (tile_w - ICON_SIZE) / 2;
     int icon_y = ty + 8;
 
     if (app->icon_pixels) {
@@ -316,7 +338,7 @@ static void draw_tile(Framebuffer *fb, AppEntry *app,
 
     /* Label — centred below icon */
     int label_y = icon_y + ICON_SIZE + 10;
-    text_draw_centered(fb, tx + TILE_W / 2, label_y,
+    text_draw_centered(fb, tx + tile_w / 2, label_y,
                        app->name, LABEL_COLOR, LABEL_SCALE);
 }
 
@@ -326,7 +348,7 @@ static void draw_page_dots(Framebuffer *fb, int current, int total) {
     int dot_r   = 5;
     int dot_gap = 20;
     int total_w = total * dot_r * 2 + (total - 1) * (dot_gap - dot_r * 2);
-    int sx = 400 - total_w / 2;
+    int sx = fb->width / 2 - total_w / 2;
     int y  = SCREEN_SAFE_BOTTOM - 15;
 
     for (int i = 0; i < total; i++) {
@@ -340,13 +362,13 @@ static void draw_page_arrows(Framebuffer *fb, Launcher *l) {
     /* Left arrow: ◀ */
     if (l->current_page > 0) {
         int ax = SCREEN_SAFE_LEFT + 10;
-        int ay = GRID_TOP + GRID_CONTENT_H / 2 - 10;
+        int ay = grid_top + grid_content_h / 2 - 10;
         fb_draw_text(fb, ax, ay, "<", RGB(150, 150, 170), 3);
     }
     /* Right arrow: ▶ */
     if (l->current_page < l->total_pages - 1) {
         int ax = SCREEN_SAFE_RIGHT - 20;
-        int ay = GRID_TOP + GRID_CONTENT_H / 2 - 10;
+        int ay = grid_top + grid_content_h / 2 - 10;
         fb_draw_text(fb, ax, ay, ">", RGB(150, 150, 170), 3);
     }
 }
@@ -355,13 +377,13 @@ static void draw_launcher(Launcher *l) {
     fb_clear(&l->fb, BG_COLOR);
 
     /* Title */
-    text_draw_centered(&l->fb, 400, SCREEN_SAFE_TOP + 18,
+    text_draw_centered(&l->fb, l->fb.width / 2, SCREEN_SAFE_TOP + 18,
                        "ROOMWIZARD", TITLE_COLOR, 4);
 
     /* Tiles for current page */
-    int start = l->current_page * APPS_PER_PAGE;
+    int start = l->current_page * apps_per_page;
     int count = l->app_count - start;
-    if (count > APPS_PER_PAGE) count = APPS_PER_PAGE;
+    if (count > apps_per_page) count = apps_per_page;
 
     for (int i = 0; i < count; i++) {
         int tx, ty;
@@ -371,9 +393,9 @@ static void draw_launcher(Launcher *l) {
 
     /* Empty-state message */
     if (l->app_count == 0) {
-        text_draw_centered(&l->fb, 400, 220,
+        text_draw_centered(&l->fb, l->fb.width / 2, 220,
                            "No apps installed", RGB(150, 150, 150), 3);
-        text_draw_centered(&l->fb, 400, 260,
+        text_draw_centered(&l->fb, l->fb.width / 2, 260,
                            "Deploy apps with build-and-deploy.sh",
                            RGB(100, 100, 100), 2);
     }
@@ -393,15 +415,15 @@ static void draw_launcher(Launcher *l) {
  *            -1     nothing / page change (redraw)
  */
 static int handle_touch(Launcher *l, int x, int y) {
-    int start = l->current_page * APPS_PER_PAGE;
+    int start = l->current_page * apps_per_page;
     int count = l->app_count - start;
-    if (count > APPS_PER_PAGE) count = APPS_PER_PAGE;
+    if (count > apps_per_page) count = apps_per_page;
 
     /* Check each visible tile */
     for (int i = 0; i < count; i++) {
         int tx, ty;
         tile_xy(i, &tx, &ty);
-        if (x >= tx && x < tx + TILE_W && y >= ty && y < ty + TILE_H) {
+        if (x >= tx && x < tx + tile_w && y >= ty && y < ty + tile_h) {
             /* Visual feedback: highlight tile briefly */
             draw_tile(&l->fb, &l->apps[start + i], tx, ty, 1);
             fb_swap(&l->fb);
@@ -490,6 +512,9 @@ static void launch_app(Launcher *l, int index,
     if (fb_init(&l->fb, fb_dev) != 0)
         LOG_ERROR(&l->logger, "Failed to re-initialise framebuffer");
 
+    /* Recompute grid layout (screen dimensions may differ after child) */
+    compute_grid_layout(&l->fb);
+
     /* Re-acquire touch */
     if (touch_init(&l->touch, touch_dev) == 0) {
         touch_set_screen_size(&l->touch, l->fb.width, l->fb.height);
@@ -553,6 +578,9 @@ int main(int argc, char *argv[]) {
     }
     touch_set_screen_size(&launcher.touch,
                           launcher.fb.width, launcher.fb.height);
+
+    /* Compute grid layout based on screen dimensions */
+    compute_grid_layout(&launcher.fb);
 
     /* Scan for installed apps */
     int count = scan_apps(&launcher);

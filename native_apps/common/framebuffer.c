@@ -57,6 +57,10 @@ void fb_load_safe_area(void) {
            screen_safe_margin_right, screen_safe_margin_bottom);
 }
 
+bool fb_is_portrait_mode(void) {
+    return access("/opt/games/portrait.mode", F_OK) == 0;
+}
+
 // Simple 5x7 bitmap font
 static const uint8_t font_5x7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, // Space
@@ -161,15 +165,28 @@ int fb_init(Framebuffer *fb, const char *device) {
         return -1;
     }
     
-    fb->width = vinfo.xres;
-    fb->height = vinfo.yres;
+    fb->phys_width = vinfo.xres;
+    fb->phys_height = vinfo.yres;
+    fb->portrait_mode = fb_is_portrait_mode();
+
+    if (fb->portrait_mode) {
+        // Apps see swapped dimensions (e.g., 480×800 instead of 800×480)
+        fb->width = fb->phys_height;
+        fb->height = fb->phys_width;
+        printf("Portrait mode: physical %dx%d → virtual %dx%d\n",
+               fb->phys_width, fb->phys_height, fb->width, fb->height);
+    } else {
+        fb->width = fb->phys_width;
+        fb->height = fb->phys_height;
+    }
 
     // Update global base dimensions so SCREEN_SAFE_* macros adapt
     screen_base_width  = fb->width;
     screen_base_height = fb->height;
     fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
     fb->line_length = finfo.line_length;
-    fb->screen_size = fb->line_length * fb->height;
+    fb->screen_size = fb->line_length * fb->phys_height;  // Physical size for mmap
+    fb->back_buffer_size = fb->width * fb->height * fb->bytes_per_pixel;  // Virtual size for back buffer
     
     fb->buffer = (uint32_t *)mmap(0, fb->screen_size, PROT_READ | PROT_WRITE, MAP_SHARED, fb->fd, 0);
     if (fb->buffer == MAP_FAILED) {
@@ -179,7 +196,7 @@ int fb_init(Framebuffer *fb, const char *device) {
     }
     
     // Allocate back buffer for double buffering
-    fb->back_buffer = (uint32_t *)malloc(fb->screen_size);
+    fb->back_buffer = (uint32_t *)malloc(fb->back_buffer_size);
     if (fb->back_buffer == NULL) {
         perror("Error allocating back buffer");
         munmap(fb->buffer, fb->screen_size);
@@ -191,8 +208,9 @@ int fb_init(Framebuffer *fb, const char *device) {
     fb->draw_offset_x = 0;
     fb->draw_offset_y = 0;
 
-    printf("Framebuffer initialized: %dx%d, %d bpp (double buffering enabled)\n",
-           fb->width, fb->height, vinfo.bits_per_pixel);
+    printf("Framebuffer initialized: %dx%d%s, %d bpp (double buffering enabled)\n",
+           fb->width, fb->height, fb->portrait_mode ? " [portrait]" : "",
+           vinfo.bits_per_pixel);
     return 0;
 }
 
@@ -210,8 +228,26 @@ void fb_close(Framebuffer *fb) {
 
 void fb_swap(Framebuffer *fb) {
     if (fb->double_buffering && fb->back_buffer != NULL) {
-        // Copy back buffer to front buffer (screen)
-        memcpy(fb->buffer, fb->back_buffer, fb->screen_size);
+        if (fb->portrait_mode) {
+            // 90° CCW rotation: virtual (vx, vy) → physical (vy, phys_height-1-vx)
+            // Iterate back_buffer row-by-row for cache-friendly reads
+            uint32_t vw = fb->width;    // Virtual width (e.g., 480)
+            uint32_t vh = fb->height;   // Virtual height (e.g., 800)
+            uint32_t pw = fb->phys_width;  // Physical width (e.g., 800)
+            uint32_t ph_minus_1 = fb->phys_height - 1;  // e.g., 479
+
+            for (uint32_t vy = 0; vy < vh; vy++) {
+                uint32_t *src_row = fb->back_buffer + vy * vw;
+                uint32_t px = vy;  // Physical X = virtual Y
+                for (uint32_t vx = 0; vx < vw; vx++) {
+                    uint32_t py = ph_minus_1 - vx;  // Physical Y = phys_height-1-vx
+                    fb->buffer[py * pw + px] = src_row[vx];
+                }
+            }
+        } else {
+            // Normal landscape: straight copy
+            memcpy(fb->buffer, fb->back_buffer, fb->screen_size);
+        }
     }
 }
 

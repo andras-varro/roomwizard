@@ -124,6 +124,7 @@ int cell_size;
 int board_offset_x;
 int board_offset_y;
 bool running = true;
+bool portrait_mode = false;
 int last_touch_x = -1;
 int last_touch_y = -1;
 Button menu_button;
@@ -155,13 +156,22 @@ void signal_handler(int sig) {
 }
 
 void init_game() {
+    portrait_mode = fb.portrait_mode;
+    
     // Calculate board dimensions
     int usable_height = fb.height - 100;
     cell_size = usable_height / BOARD_HEIGHT;
     if (cell_size > 30) cell_size = 30;
     
-    board_offset_x = 20;
-    board_offset_y = SCREEN_SAFE_TOP + 60;
+    if (portrait_mode) {
+        // Center board horizontally in portrait mode
+        int board_width_px = BOARD_WIDTH * cell_size;
+        board_offset_x = (fb.width - board_width_px) / 2;
+        board_offset_y = SCREEN_SAFE_TOP + 60;
+    } else {
+        board_offset_x = 20;
+        board_offset_y = SCREEN_SAFE_TOP + 60;
+    }
     
     hs_init(&hs_table, "tetris");
     hs_load(&hs_table);
@@ -452,36 +462,65 @@ void handle_input() {
         
         // Game controls
         int board_right = board_offset_x + BOARD_WIDTH * cell_size;
+        int board_center_x = board_offset_x + (BOARD_WIDTH * cell_size) / 2;
         
-        if (tx < board_offset_x - 10) {
-            // Left side - move left
-            if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
-                game.current.x--;
-                audio_interrupt(&audio);
-                audio_tone(&audio, 880, 60);  // Short move click
-            }
-        } else if (tx > board_right + 10) {
-            // Right side - move right
-            if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
-                game.current.x++;
-                audio_interrupt(&audio);
-                audio_tone(&audio, 880, 60);  // Short move click
-            }
-        } else if (ty > fb.height - 80) {
-            // Bottom - hard drop: thud sound then lock
+        if (ty > fb.height - 80) {
+            // Bottom — hard drop (check this FIRST for both modes)
             while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
                 game.current.y++;
                 game.score += 2;
             }
             audio_interrupt(&audio);
-            audio_tone(&audio, 500, 60);  // Drop thud (high part)
-            audio_tone(&audio, 250, 70);  // Drop thud (low part)
+            audio_tone(&audio, 500, 60);
+            audio_tone(&audio, 250, 70);
             lock_piece();
+        } else if (portrait_mode) {
+            // Portrait touch zones: use board halves for left/right, center strip for rotate
+            int rotate_zone_half = BOARD_WIDTH * cell_size / 6;  // ~50px each side of center
+            
+            if (tx < board_center_x - rotate_zone_half) {
+                // Left of center — move left
+                if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
+                    game.current.x--;
+                    audio_interrupt(&audio);
+                    audio_tone(&audio, 880, 60);
+                }
+            } else if (tx > board_center_x + rotate_zone_half) {
+                // Right of center — move right
+                if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
+                    game.current.x++;
+                    audio_interrupt(&audio);
+                    audio_tone(&audio, 880, 60);
+                }
+            } else {
+                // Center strip — rotate
+                int new_rotation = (game.current.rotation + 1) % 4;
+                if (!check_collision(&game.current, 0, 0, new_rotation)) {
+                    game.current.rotation = new_rotation;
+                }
+            }
         } else {
-            // Center - rotate (no sound: happens frequently, would be noisy)
-            int new_rotation = (game.current.rotation + 1) % 4;
-            if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                game.current.rotation = new_rotation;
+            // Landscape touch zones (existing logic)
+            if (tx < board_offset_x - 10) {
+                // Left side — move left
+                if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
+                    game.current.x--;
+                    audio_interrupt(&audio);
+                    audio_tone(&audio, 880, 60);
+                }
+            } else if (tx > board_right + 10) {
+                // Right side — move right
+                if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
+                    game.current.x++;
+                    audio_interrupt(&audio);
+                    audio_tone(&audio, 880, 60);
+                }
+            } else {
+                // Center — rotate
+                int new_rotation = (game.current.rotation + 1) % 4;
+                if (!check_collision(&game.current, 0, 0, new_rotation)) {
+                    game.current.rotation = new_rotation;
+                }
             }
         }
         
@@ -574,25 +613,50 @@ void draw_game() {
     }
     
     // Draw next piece preview
-    int next_x = board_offset_x + BOARD_WIDTH * cell_size + 20;
-    int next_y = board_offset_y + 20;
-    fb_draw_text(&fb, next_x, next_y - 20, "NEXT:", COLOR_WHITE, 2);
-    
-    for (int y = 0; y < 4; y++) {
-        for (int x = 0; x < 4; x++) {
-            if (tetrominos[game.next.type][0][y][x]) {
-                int px = next_x + x * (cell_size / 2);
-                int py = next_y + y * (cell_size / 2);
-                uint32_t color = piece_colors[game.next.type];
-                fb_fill_rect(&fb, px, py, cell_size / 2 - 1, cell_size / 2 - 1, color);
+    if (portrait_mode) {
+        // Portrait: draw NEXT preview to the right of the score in the HUD area
+        int next_x = fb.width - 90;
+        int next_y = 15;
+        fb_draw_text(&fb, next_x - 50, next_y, "NEXT:", COLOR_WHITE, 1);
+        
+        int preview_size = cell_size / 3;
+        if (preview_size < 6) preview_size = 6;
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                if (tetrominos[game.next.type][0][y][x]) {
+                    int px = next_x + x * preview_size;
+                    int py = next_y + y * preview_size;
+                    uint32_t color = piece_colors[game.next.type];
+                    fb_fill_rect(&fb, px, py, preview_size - 1, preview_size - 1, color);
+                }
             }
         }
+        
+        // Draw controls hint below the board
+        int hint_y = board_offset_y + BOARD_HEIGHT * cell_size + 10;
+        fb_draw_text(&fb, 10, hint_y, "L/R: MOVE  CENTER: ROTATE  BOTTOM: DROP", RGB(100, 100, 100), 1);
+    } else {
+        // Landscape: side panel to the right of the board
+        int next_x = board_offset_x + BOARD_WIDTH * cell_size + 20;
+        int next_y = board_offset_y + 20;
+        fb_draw_text(&fb, next_x, next_y - 20, "NEXT:", COLOR_WHITE, 2);
+        
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                if (tetrominos[game.next.type][0][y][x]) {
+                    int px = next_x + x * (cell_size / 2);
+                    int py = next_y + y * (cell_size / 2);
+                    uint32_t color = piece_colors[game.next.type];
+                    fb_fill_rect(&fb, px, py, cell_size / 2 - 1, cell_size / 2 - 1, color);
+                }
+            }
+        }
+        
+        // Draw controls hint
+        fb_draw_text(&fb, 10, fb.height - 60, "L/R: MOVE", RGB(100, 100, 100), 1);
+        fb_draw_text(&fb, 10, fb.height - 45, "CENTER: ROTATE", RGB(100, 100, 100), 1);
+        fb_draw_text(&fb, 10, fb.height - 30, "BOTTOM: DROP", RGB(100, 100, 100), 1);
     }
-    
-    // Draw controls hint
-    fb_draw_text(&fb, 10, fb.height - 60, "L/R: MOVE", RGB(100, 100, 100), 1);
-    fb_draw_text(&fb, 10, fb.height - 45, "CENTER: ROTATE", RGB(100, 100, 100), 1);
-    fb_draw_text(&fb, 10, fb.height - 30, "BOTTOM: DROP", RGB(100, 100, 100), 1);
 }
 
 int main(int argc, char *argv[]) {

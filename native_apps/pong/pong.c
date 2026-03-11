@@ -67,6 +67,7 @@ Button restart_button;
 Button resume_button;
 Button exit_pause_button;
 GameScreen current_screen = SCREEN_WELCOME;
+bool portrait_mode = false;
 
 // Function prototypes
 void init_game();
@@ -83,29 +84,31 @@ void signal_handler(int sig) {
 }
 
 void init_game() {
+    portrait_mode = fb.portrait_mode;
+    
     play_area_width = fb.width - 40;
     play_area_height = fb.height - 120;
     offset_x = 20;
     offset_y = 80;
     
-    game.difficulty = 2;  // Medium by default
+    game.difficulty = 2;
     
-    // Initialize buttons
+    // Initialize buttons — positions use fb.width/fb.height so they auto-adapt
     button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
+    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&restart_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height * 2 / 3, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESTART",
                 BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
                 BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     
@@ -113,9 +116,15 @@ void init_game() {
 }
 
 void reset_game() {
-    game.player.y = play_area_height / 2 - PADDLE_HEIGHT / 2;
+    if (portrait_mode) {
+        // Paddles move horizontally in portrait — use .y field for X position
+        game.player.y = play_area_width / 2 - PADDLE_HEIGHT / 2;
+        game.ai.y = play_area_width / 2 - PADDLE_HEIGHT / 2;
+    } else {
+        game.player.y = play_area_height / 2 - PADDLE_HEIGHT / 2;
+        game.ai.y = play_area_height / 2 - PADDLE_HEIGHT / 2;
+    }
     game.player.score = 0;
-    game.ai.y = play_area_height / 2 - PADDLE_HEIGHT / 2;
     game.ai.score = 0;
     game.game_over = false;
     game.paused = false;
@@ -128,141 +137,237 @@ void reset_ball() {
     game.ball.x = play_area_width / 2;
     game.ball.y = play_area_height / 2;
     
-    // Random angle between -45 and 45 degrees
     float angle = ((rand() % 90) - 45) * M_PI / 180.0;
     float speed = 5.0;
     
-    // Random direction (left or right)
-    int direction = (rand() % 2) ? 1 : -1;
-    
-    game.ball.vx = cos(angle) * speed * direction;
-    game.ball.vy = sin(angle) * speed;
+    if (portrait_mode) {
+        // Ball moves primarily up/down in portrait
+        int direction = (rand() % 2) ? 1 : -1;
+        game.ball.vx = sin(angle) * speed;      // Small horizontal component
+        game.ball.vy = cos(angle) * speed * direction;  // Primary vertical movement
+    } else {
+        // Ball moves primarily left/right in landscape
+        int direction = (rand() % 2) ? 1 : -1;
+        game.ball.vx = cos(angle) * speed * direction;
+        game.ball.vy = sin(angle) * speed;
+    }
 }
 
 void update_ai() {
-    // AI difficulty affects reaction speed
     float ai_speed = 3.0 + game.difficulty;
-    float target_y = game.ball.y - PADDLE_HEIGHT / 2;
+    float target;
+    float max_pos;
     
-    // Add some randomness to make it beatable
-    if (game.difficulty < 3) {
-        target_y += (rand() % 20) - 10;
+    if (portrait_mode) {
+        // AI tracks ball X position (horizontal)
+        target = game.ball.x - PADDLE_HEIGHT / 2;
+        max_pos = play_area_width - PADDLE_HEIGHT;
+    } else {
+        // AI tracks ball Y position (vertical)
+        target = game.ball.y - PADDLE_HEIGHT / 2;
+        max_pos = play_area_height - PADDLE_HEIGHT;
     }
     
-    if (game.ai.y < target_y - 5) {
+    if (game.difficulty < 3) {
+        target += (rand() % 20) - 10;
+    }
+    
+    if (game.ai.y < target - 5) {
         game.ai.y += ai_speed;
-    } else if (game.ai.y > target_y + 5) {
+    } else if (game.ai.y > target + 5) {
         game.ai.y -= ai_speed;
     }
     
-    // Keep AI paddle in bounds
     if (game.ai.y < 0) game.ai.y = 0;
-    if (game.ai.y > play_area_height - PADDLE_HEIGHT) {
-        game.ai.y = play_area_height - PADDLE_HEIGHT;
-    }
+    if (game.ai.y > max_pos) game.ai.y = max_pos;
 }
 
 void update_game() {
+    if (current_screen != SCREEN_PLAYING) return;
     if (game.game_over || game.paused) return;
     
-    // Update ball position
     game.ball.x += game.ball.vx;
     game.ball.y += game.ball.vy;
     
-    // Ball collision with top/bottom walls
-    if (game.ball.y <= 0 || game.ball.y >= play_area_height - BALL_SIZE) {
-        game.ball.vy = -game.ball.vy;
-        game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
-        // Short high ping on wall bounce
-        audio_interrupt(&audio);
-        audio_tone(&audio, 2000, 60);
-    }
-    
-    // Ball collision with player paddle (left)
-    if (game.ball.x <= PADDLE_WIDTH && 
-        game.ball.y + BALL_SIZE >= game.player.y && 
-        game.ball.y <= game.player.y + PADDLE_HEIGHT) {
+    if (portrait_mode) {
+        // === PORTRAIT MODE COLLISIONS ===
         
-        game.ball.vx = -game.ball.vx * 1.05;  // Speed up slightly
-        game.ball.x = PADDLE_WIDTH;
-        
-        // Add spin based on where ball hits paddle
-        float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
-        game.ball.vy += (hit_pos - 0.5) * 3;
-        
-        // Green flash + pong on player hit
-        hw_set_led(LED_GREEN, 100);
-        audio_interrupt(&audio);
-        audio_tone(&audio, 440, 90);  // Low resonant pong
-        hw_leds_off();
-    }
-    
-    // Ball collision with AI paddle (right)
-    if (game.ball.x + BALL_SIZE >= play_area_width - PADDLE_WIDTH && 
-        game.ball.y + BALL_SIZE >= game.ai.y && 
-        game.ball.y <= game.ai.y + PADDLE_HEIGHT) {
-        
-        game.ball.vx = -game.ball.vx * 1.05;
-        game.ball.x = play_area_width - PADDLE_WIDTH - BALL_SIZE;
-        
-        float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
-        game.ball.vy += (hit_pos - 0.5) * 3;
-        
-        // Red flash + pong on AI hit
-        hw_set_led(LED_RED, 100);
-        audio_interrupt(&audio);
-        audio_tone(&audio, 440, 90);  // Low resonant pong
-        hw_leds_off();
-    }
-    
-    // Ball out of bounds - score
-    if (game.ball.x < 0) {
-        game.ai.score++;
-        // Red flash for AI scoring
-        hw_set_led(LED_RED, 100);
-        audio_blip(&audio);   // ~60ms — AI scored (bad)
-        hw_leds_off();
-        
-        if (game.ai.score >= WINNING_SCORE) {
-            game.game_over = true;
-            game.winner = 2;
-            current_screen = SCREEN_GAME_OVER;
-            // Red pulse + fail sound for loss
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_RED, 100);
-                usleep(200000);
-                hw_leds_off();
-                usleep(200000);
-            }
-            audio_fail(&audio);  // Descending game-over tone (~600ms)
-        } else {
-            reset_ball();
+        // Ball collision with left/right walls (bounce)
+        if (game.ball.x <= 0 || game.ball.x >= play_area_width - BALL_SIZE) {
+            game.ball.vx = -game.ball.vx;
+            game.ball.x = (game.ball.x <= 0) ? 0 : play_area_width - BALL_SIZE;
+            audio_interrupt(&audio);
+            audio_tone(&audio, 2000, 60);
         }
-    } else if (game.ball.x > play_area_width) {
-        game.player.score++;
-        // Green flash for player scoring
-        hw_set_led(LED_GREEN, 100);
-        audio_blip(&audio);   // ~60ms — player scored
-        hw_leds_off();
         
-        if (game.player.score >= WINNING_SCORE) {
-            game.game_over = true;
-            game.winner = 1;
-            current_screen = SCREEN_GAME_OVER;
-            // Green pulse + success fanfare for win
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_GREEN, 100);
-                usleep(200000);
-                hw_leds_off();
-                usleep(200000);
+        // Ball collision with player paddle (bottom)
+        if (game.ball.y + BALL_SIZE >= play_area_height - PADDLE_WIDTH &&
+            game.ball.x + BALL_SIZE >= game.player.y &&
+            game.ball.x <= game.player.y + PADDLE_HEIGHT) {
+            
+            game.ball.vy = -game.ball.vy * 1.05;
+            game.ball.y = play_area_height - PADDLE_WIDTH - BALL_SIZE;
+            
+            float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
+            game.ball.vx += (hit_pos - 0.5) * 3;
+            
+            hw_set_led(LED_GREEN, 100);
+            audio_interrupt(&audio);
+            audio_tone(&audio, 440, 90);
+            hw_leds_off();
+        }
+        
+        // Ball collision with AI paddle (top)
+        if (game.ball.y <= PADDLE_WIDTH &&
+            game.ball.x + BALL_SIZE >= game.ai.y &&
+            game.ball.x <= game.ai.y + PADDLE_HEIGHT) {
+            
+            game.ball.vy = -game.ball.vy * 1.05;
+            game.ball.y = PADDLE_WIDTH;
+            
+            float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
+            game.ball.vx += (hit_pos - 0.5) * 3;
+            
+            hw_set_led(LED_RED, 100);
+            audio_interrupt(&audio);
+            audio_tone(&audio, 440, 90);
+            hw_leds_off();
+        }
+        
+        // Ball out top = player scores
+        if (game.ball.y < 0) {
+            game.player.score++;
+            hw_set_led(LED_GREEN, 100);
+            audio_blip(&audio);
+            hw_leds_off();
+            
+            if (game.player.score >= WINNING_SCORE) {
+                game.game_over = true;
+                game.winner = 1;
+                current_screen = SCREEN_GAME_OVER;
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_GREEN, 100);
+                    usleep(200000);
+                    hw_leds_off();
+                    usleep(200000);
+                }
+                audio_success(&audio);
+            } else {
+                reset_ball();
             }
-            audio_success(&audio);  // Ascending fanfare (~440ms)
-        } else {
-            reset_ball();
+        }
+        // Ball out bottom = AI scores
+        else if (game.ball.y > play_area_height) {
+            game.ai.score++;
+            hw_set_led(LED_RED, 100);
+            audio_blip(&audio);
+            hw_leds_off();
+            
+            if (game.ai.score >= WINNING_SCORE) {
+                game.game_over = true;
+                game.winner = 2;
+                current_screen = SCREEN_GAME_OVER;
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_RED, 100);
+                    usleep(200000);
+                    hw_leds_off();
+                    usleep(200000);
+                }
+                audio_fail(&audio);
+            } else {
+                reset_ball();
+            }
+        }
+        
+    } else {
+        // === LANDSCAPE MODE COLLISIONS (existing code, unchanged) ===
+        
+        // Ball collision with top/bottom walls
+        if (game.ball.y <= 0 || game.ball.y >= play_area_height - BALL_SIZE) {
+            game.ball.vy = -game.ball.vy;
+            game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
+            audio_interrupt(&audio);
+            audio_tone(&audio, 2000, 60);
+        }
+        
+        // Ball collision with player paddle (left)
+        if (game.ball.x <= PADDLE_WIDTH &&
+            game.ball.y + BALL_SIZE >= game.player.y &&
+            game.ball.y <= game.player.y + PADDLE_HEIGHT) {
+            
+            game.ball.vx = -game.ball.vx * 1.05;
+            game.ball.x = PADDLE_WIDTH;
+            
+            float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
+            game.ball.vy += (hit_pos - 0.5) * 3;
+            
+            hw_set_led(LED_GREEN, 100);
+            audio_interrupt(&audio);
+            audio_tone(&audio, 440, 90);
+            hw_leds_off();
+        }
+        
+        // Ball collision with AI paddle (right)
+        if (game.ball.x + BALL_SIZE >= play_area_width - PADDLE_WIDTH &&
+            game.ball.y + BALL_SIZE >= game.ai.y &&
+            game.ball.y <= game.ai.y + PADDLE_HEIGHT) {
+            
+            game.ball.vx = -game.ball.vx * 1.05;
+            game.ball.x = play_area_width - PADDLE_WIDTH - BALL_SIZE;
+            
+            float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
+            game.ball.vy += (hit_pos - 0.5) * 3;
+            
+            hw_set_led(LED_RED, 100);
+            audio_interrupt(&audio);
+            audio_tone(&audio, 440, 90);
+            hw_leds_off();
+        }
+        
+        // Ball out of bounds - score
+        if (game.ball.x < 0) {
+            game.ai.score++;
+            hw_set_led(LED_RED, 100);
+            audio_blip(&audio);
+            hw_leds_off();
+            
+            if (game.ai.score >= WINNING_SCORE) {
+                game.game_over = true;
+                game.winner = 2;
+                current_screen = SCREEN_GAME_OVER;
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_RED, 100);
+                    usleep(200000);
+                    hw_leds_off();
+                    usleep(200000);
+                }
+                audio_fail(&audio);
+            } else {
+                reset_ball();
+            }
+        } else if (game.ball.x > play_area_width) {
+            game.player.score++;
+            hw_set_led(LED_GREEN, 100);
+            audio_blip(&audio);
+            hw_leds_off();
+            
+            if (game.player.score >= WINNING_SCORE) {
+                game.game_over = true;
+                game.winner = 1;
+                current_screen = SCREEN_GAME_OVER;
+                for (int i = 0; i < 3; i++) {
+                    hw_set_led(LED_GREEN, 100);
+                    usleep(200000);
+                    hw_leds_off();
+                    usleep(200000);
+                }
+                audio_success(&audio);
+            } else {
+                reset_ball();
+            }
         }
     }
     
-    // Update AI
     update_ai();
 }
 
@@ -276,6 +381,7 @@ void handle_input() {
         if (state.pressed) {
             bool touched = button_is_touched(&start_button, state.x, state.y);
             if (button_check_press(&start_button, touched, current_time)) {
+                reset_game();
                 current_screen = SCREEN_PLAYING;
                 hw_set_led(LED_GREEN, 100);
                 usleep(100000);  // 100ms
@@ -351,15 +457,26 @@ void handle_input() {
         }
     }
     
-    // Move player paddle to touch Y position
+    // Move player paddle to touch position
     if ((state.held || state.pressed) && !game.game_over && !game.paused) {
-        int relative_y = state.y - offset_y;
-        game.player.y = relative_y - PADDLE_HEIGHT / 2;
-        
-        // Keep paddle in bounds
-        if (game.player.y < 0) game.player.y = 0;
-        if (game.player.y > play_area_height - PADDLE_HEIGHT) {
-            game.player.y = play_area_height - PADDLE_HEIGHT;
+        if (portrait_mode) {
+            // Portrait: move paddle horizontally using touch X
+            int relative_x = state.x - offset_x;
+            game.player.y = relative_x - PADDLE_HEIGHT / 2;
+            
+            if (game.player.y < 0) game.player.y = 0;
+            if (game.player.y > play_area_width - PADDLE_HEIGHT) {
+                game.player.y = play_area_width - PADDLE_HEIGHT;
+            }
+        } else {
+            // Landscape: move paddle vertically using touch Y
+            int relative_y = state.y - offset_y;
+            game.player.y = relative_y - PADDLE_HEIGHT / 2;
+            
+            if (game.player.y < 0) game.player.y = 0;
+            if (game.player.y > play_area_height - PADDLE_HEIGHT) {
+                game.player.y = play_area_height - PADDLE_HEIGHT;
+            }
         }
     }
 }
@@ -392,13 +509,25 @@ void draw_game() {
     }
     
     // Draw HUD
-    char player_score[16];
-    snprintf(player_score, sizeof(player_score), "%d", game.player.score);
-    fb_draw_text(&fb, fb.width / 3, 20, player_score, COLOR_GREEN, 4);
-    
-    char ai_score[16];
-    snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
-    fb_draw_text(&fb, fb.width * 2 / 3, 20, ai_score, COLOR_RED, 4);
+    if (portrait_mode) {
+        // Portrait: AI score at top, player score at bottom
+        char ai_score[16];
+        snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
+        fb_draw_text(&fb, fb.width / 2 - 10, 20, ai_score, COLOR_RED, 4);
+        
+        char player_score[16];
+        snprintf(player_score, sizeof(player_score), "%d", game.player.score);
+        fb_draw_text(&fb, fb.width / 2 - 10, fb.height - 50, player_score, COLOR_GREEN, 4);
+    } else {
+        // Landscape: player score left, AI score right
+        char player_score[16];
+        snprintf(player_score, sizeof(player_score), "%d", game.player.score);
+        fb_draw_text(&fb, fb.width / 3, 20, player_score, COLOR_GREEN, 4);
+        
+        char ai_score[16];
+        snprintf(ai_score, sizeof(ai_score), "%d", game.ai.score);
+        fb_draw_text(&fb, fb.width * 2 / 3, 20, ai_score, COLOR_RED, 4);
+    }
     
     // Draw menu and exit buttons
     draw_menu_button(&fb, &menu_button);
@@ -408,26 +537,45 @@ void draw_game() {
     fb_draw_rect(&fb, offset_x - 2, offset_y - 2,
                  play_area_width + 4, play_area_height + 4, COLOR_WHITE);
     
-    // Draw center line
-    for (int y = 0; y < play_area_height; y += 20) {
-        fb_fill_rect(&fb, offset_x + play_area_width / 2 - 2, offset_y + y, 4, 10, COLOR_GRAY);
+    if (portrait_mode) {
+        // Portrait: horizontal center line
+        for (int x = 0; x < play_area_width; x += 20) {
+            fb_fill_rect(&fb, offset_x + x, offset_y + play_area_height / 2 - 2, 10, 4, COLOR_GRAY);
+        }
+        
+        // Draw AI paddle (top, red) — horizontal paddle
+        fb_fill_rect(&fb, offset_x + (int)game.ai.y, offset_y + 5,
+                     PADDLE_HEIGHT, PADDLE_WIDTH, COLOR_RED);
+        
+        // Draw player paddle (bottom, green) — horizontal paddle
+        fb_fill_rect(&fb, offset_x + (int)game.player.y,
+                     offset_y + play_area_height - PADDLE_WIDTH - 5,
+                     PADDLE_HEIGHT, PADDLE_WIDTH, COLOR_GREEN);
+        
+        // Draw controls hint
+        fb_draw_text(&fb, 10, fb.height - 25, "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+    } else {
+        // Landscape: vertical center line
+        for (int y = 0; y < play_area_height; y += 20) {
+            fb_fill_rect(&fb, offset_x + play_area_width / 2 - 2, offset_y + y, 4, 10, COLOR_GRAY);
+        }
+        
+        // Draw player paddle (left, green)
+        fb_fill_rect(&fb, offset_x + 5, offset_y + (int)game.player.y,
+                     PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_GREEN);
+        
+        // Draw AI paddle (right, red)
+        fb_fill_rect(&fb, offset_x + play_area_width - PADDLE_WIDTH - 5,
+                     offset_y + (int)game.ai.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_RED);
+        
+        // Draw controls hint
+        fb_draw_text(&fb, 10, fb.height - 25, "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
     }
     
-    // Draw player paddle (left, green)
-    fb_fill_rect(&fb, offset_x + 5, offset_y + (int)game.player.y, 
-                 PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_GREEN);
-    
-    // Draw AI paddle (right, red)
-    fb_fill_rect(&fb, offset_x + play_area_width - PADDLE_WIDTH - 5, 
-                 offset_y + (int)game.ai.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_RED);
-    
-    // Draw ball
-    fb_fill_circle(&fb, offset_x + (int)game.ball.x + BALL_SIZE / 2, 
-                   offset_y + (int)game.ball.y + BALL_SIZE / 2, 
+    // Draw ball (same for both orientations)
+    fb_fill_circle(&fb, offset_x + (int)game.ball.x + BALL_SIZE / 2,
+                   offset_y + (int)game.ball.y + BALL_SIZE / 2,
                    BALL_SIZE / 2, COLOR_WHITE);
-    
-    // Draw controls hint
-    fb_draw_text(&fb, 10, fb.height - 25, "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
 }
 
 int main(int argc, char *argv[]) {

@@ -7,10 +7,17 @@
 #include <unistd.h>
 #include <linux/input.h>
 
+// Default calibration file path
+#define TOUCH_CALIB_FILE "/etc/touch_calibration.conf"
+
 // Scale raw touch coordinates to screen coordinates with calibration.
 // Uses the actual hardware-reported range (from EVIOCGABS) instead of
 // a hardcoded maximum, so the full screen is reachable even when the
 // resistive digitiser doesn't span the theoretical 0-4095 range.
+//
+// Pipeline: raw → scale to physical (800×480) → apply calibration in
+//           physical space → apply bezel margins → rotate to virtual
+//           if portrait → clamp to virtual bounds
 static void scale_coordinates(TouchInput *touch, int *x, int *y) {
     int range_x = touch->raw_max_x - touch->raw_min_x;
     int range_y = touch->raw_max_y - touch->raw_min_y;
@@ -19,37 +26,71 @@ static void scale_coordinates(TouchInput *touch, int *x, int *y) {
     if (range_x <= 0) { touch->raw_min_x = 0; range_x = 4095; }
     if (range_y <= 0) { touch->raw_min_y = 0; range_y = 4095; }
 
-    // Map [raw_min .. raw_max] → [0 .. screen_size-1]
-    *x = ((*x - touch->raw_min_x) * touch->screen_width)  / range_x;
-    *y = ((*y - touch->raw_min_y) * touch->screen_height) / range_y;
+    // Always scale to physical screen dimensions first.
+    // In portrait mode, virtual dims are swapped (480×800) but
+    // physical hardware is always 800×480.
+    int phys_w, phys_h;
+    if (touch->portrait_mode) {
+        phys_w = touch->screen_height;  // Physical width = virtual height (800)
+        phys_h = touch->screen_width;   // Physical height = virtual width (480)
+    } else {
+        phys_w = touch->screen_width;
+        phys_h = touch->screen_height;
+    }
+
+    // Map [raw_min .. raw_max] → [0 .. phys_size-1]
+    *x = ((*x - touch->raw_min_x) * phys_w) / range_x;
+    *y = ((*y - touch->raw_min_y) * phys_h) / range_y;
     
-    // Apply calibration if enabled
+    // Apply calibration if enabled (always in physical coordinate space,
+    // regardless of portrait mode)
     if (touch->calib.enabled) {
-        // Bilinear interpolation of corner offsets
-        // Calculate normalized position (0.0 to 1.0)
-        float norm_x = (float)*x / touch->screen_width;
-        float norm_y = (float)*y / touch->screen_height;
+        float norm_x = (float)*x / phys_w;
+        float norm_y = (float)*y / phys_h;
         
-        // Interpolate X offset
-        float top_offset_x = touch->calib.top_left_x * (1.0f - norm_x) + 
+        // Bilinear interpolation of corner offsets
+        float top_offset_x = touch->calib.top_left_x * (1.0f - norm_x) +
                              touch->calib.top_right_x * norm_x;
-        float bottom_offset_x = touch->calib.bottom_left_x * (1.0f - norm_x) + 
+        float bottom_offset_x = touch->calib.bottom_left_x * (1.0f - norm_x) +
                                 touch->calib.bottom_right_x * norm_x;
         float offset_x = top_offset_x * (1.0f - norm_y) + bottom_offset_x * norm_y;
         
-        // Interpolate Y offset
-        float left_offset_y = touch->calib.top_left_y * (1.0f - norm_y) + 
+        float left_offset_y = touch->calib.top_left_y * (1.0f - norm_y) +
                               touch->calib.bottom_left_y * norm_y;
-        float right_offset_y = touch->calib.top_right_y * (1.0f - norm_y) + 
+        float right_offset_y = touch->calib.top_right_y * (1.0f - norm_y) +
                                touch->calib.bottom_right_y * norm_y;
         float offset_y = left_offset_y * (1.0f - norm_x) + right_offset_y * norm_x;
         
-        // Apply offsets
         *x += (int)offset_x;
         *y += (int)offset_y;
+
+        // Apply bezel margins in physical space (push coordinates inward
+        // from the physical screen edges where the bezel obstructs touches)
+        int bml = touch->calib.bezel_left;
+        int bmr = touch->calib.bezel_right;
+        int bmt = touch->calib.bezel_top;
+        int bmb = touch->calib.bezel_bottom;
+
+        if (bml || bmr || bmt || bmb) {
+            int usable_w = phys_w - bml - bmr;
+            int usable_h = phys_h - bmt - bmb;
+            if (usable_w > 0 && usable_h > 0) {
+                *x = bml + (*x * usable_w) / phys_w;
+                *y = bmt + (*y * usable_h) / phys_h;
+            }
+        }
     }
     
-    // Clamp to screen bounds
+    // Portrait mode: rotate physical coords → virtual coords
+    if (touch->portrait_mode) {
+        int px = *x;
+        int py = *y;
+        // 90° CCW rotation: virtual_x = phys_h - 1 - phys_y, virtual_y = phys_x
+        *x = phys_h - 1 - py;
+        *y = px;
+    }
+
+    // Clamp to virtual screen bounds
     if (*x < 0) *x = 0;
     if (*x >= touch->screen_width) *x = touch->screen_width - 1;
     if (*y < 0) *y = 0;
@@ -107,11 +148,21 @@ int touch_init(TouchInput *touch, const char *device) {
     touch->calib.bottom_right_x = 0;
     touch->calib.bottom_right_y = 0;
     touch->calib.enabled = false;
+    // Detect portrait mode
+    touch->portrait_mode = (access("/opt/games/portrait.mode", F_OK) == 0);
     // Initialize bezel margins to zero (no obstruction)
     touch->calib.bezel_top = 0;
     touch->calib.bezel_bottom = 0;
     touch->calib.bezel_left = 0;
     touch->calib.bezel_right = 0;
+    
+    // Auto-load calibration from default config file so that ALL apps
+    // (including portrait-mode apps that never explicitly load it) get
+    // calibrated touch coordinates.
+    if (touch_load_calibration(touch, TOUCH_CALIB_FILE) == 0) {
+        touch_enable_calibration(touch, true);
+        printf("Touch auto-loaded calibration from %s\n", TOUCH_CALIB_FILE);
+    }
     
     printf("Touch input initialized: %s\n", device);
     return 0;
@@ -372,6 +423,10 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
     if (!got_bezel_margins) {
         printf("  No bezel margins found (using defaults: 0)\n");
     }
+    
+    // Auto-enable calibration on successful load so callers don't need
+    // to separately call touch_enable_calibration()
+    touch->calib.enabled = true;
     
     return 0;
 }

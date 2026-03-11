@@ -40,6 +40,7 @@ typedef struct {
     int screen_width, screen_height;
     bool calibrated;
     TouchCalibration calib;
+    bool portrait_mode;      // Portrait mode active (coordinate rotation)
 } TouchInput;
 
 // Initialize touch input

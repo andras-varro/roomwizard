@@ -17,6 +17,10 @@ typedef struct {
     bool double_buffering;   // Enable/disable double buffering
     int draw_offset_x;      // Draw offset X (for screen shake etc.)
     int draw_offset_y;      // Draw offset Y (for screen shake etc.)
+    bool portrait_mode;      // Portrait mode active (90° rotation in fb_swap)
+    uint32_t phys_width;     // Physical framebuffer width (from hardware)
+    uint32_t phys_height;    // Physical framebuffer height (from hardware)
+    size_t back_buffer_size; // Back buffer size (may differ from screen_size in portrait)
 } Framebuffer;
 
 // Default safe area margins (used if config file is missing)
@@ -46,6 +50,9 @@ extern int screen_base_height;
 // Load safe area margins from calibration config file
 // Called automatically by fb_init()
 void fb_load_safe_area(void);
+
+// Check if portrait mode is enabled (flag file /opt/games/portrait.mode exists)
+bool fb_is_portrait_mode(void);
 
 // Initialize framebuffer
 int fb_init(Framebuffer *fb, const char *device);
