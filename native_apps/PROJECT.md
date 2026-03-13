@@ -3,7 +3,7 @@
 ## Current Status
 
 **System:** Fully functional ✅
-- 5 games: Snake, Tetris, Pong, Theremin, Brickbreaker
+- 6 games: Snake, Tetris, Pong, Theremin, Brickbreaker, SameGame
 - Graphical game selector with horizontal scrolling
 - Hardware test suite
 - Touch input: accurate with calibration
@@ -36,7 +36,7 @@
 - [`common/config.c`](common/config.c) - Persistent configuration (key=value file, `/opt/games/rw_config.conf`)
 
 **Programs:**
-- `snake/`, `tetris/`, `pong/` - Games
+- `snake/`, `tetris/`, `pong/`, `samegame/` - Games
 - `app_launcher/` - Menu with scrolling; see [Game Selector Markers](#game-selector-markers) below
 - `watchdog_feeder/` - Prevents 60s reset
 - `device_tools/` - **Unified hardware management app** (replaces `hardware_config`, `hardware_diag`, `hardware_test_gui`, `unified_calibrate`); see [Device Tools](#device-tools) below
@@ -185,10 +185,6 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - [x] **Device Tools portrait toggle** — [`device_tools.c`](device_tools/device_tools.c): Settings tab portrait mode toggle; Save creates/removes `/opt/games/portrait.mode`. (completed)
 - [x] **Design document** — [`PORTRAIT_MODE_DESIGN.md`](PORTRAIT_MODE_DESIGN.md): Full architecture spec. (completed)
 
-### Pending
-
-- [ ] **PPM splash screen rotation** — PPM images (`*.ppm`) loaded by `ppm_display()` are not rotated; they render in physical orientation. Either pre-rotate the images or add rotation to the PPM loader.
-
 ### Key Architectural Note: Touch Calibration Pipeline
 
 `touch_init()` auto-loads calibration from `/etc/touch_calibration.conf` and auto-enables it. The pipeline order is: **raw → scale to physical (800×480) → bilinear calibration → bezel margins → rotate if portrait → clamp**. Apps no longer need to manually call `touch_load_calibration()` + `touch_enable_calibration()`.
@@ -253,7 +249,7 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - [x] **Audio wired into all games** (completed) — `audio_init/close` in each game's `main()`; snake: `audio_beep` on direction change, `audio_blip` on food, `audio_fail` on death; tetris: `audio_beep` on move/rotate, `audio_blip` on line clear, `audio_success` on Tetris (4 lines), `audio_fail` on game over; pong: `audio_beep` on paddle hit, `audio_blip` on scoring, `audio_success`/`audio_fail` on win/loss
 - [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
 - [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)
-- [ ] Add Game: SameGame – Coding Specification
+- [x] Add Game: SameGame – Coding Specification (completed)
       Build a SameGame puzzle game with the following features:
       Board & Setup
       A grid of n columns × m rows filled with randomly placed colored blocks (n and m depends on screen size, e.g., n×m in landscape, m×n in portrait, calculate n and m based on user feedback, probably the size of a tetris block or slightly larger)
