@@ -429,16 +429,154 @@ void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
     button_draw(fb, restart_btn);
 }
 
-void screen_draw_pause(Framebuffer *fb, Button *resume_btn, Button *exit_btn) {
-    // Draw pause text (centered in safe area)
-    int pause_width = 6 * 8 * 3;  // "PAUSED" = 6 chars
-    int pause_x = LAYOUT_CENTER_X(pause_width);
-    int pause_y = SCREEN_SAFE_TOP + (SCREEN_SAFE_HEIGHT / 3);
-    fb_draw_text(fb, pause_x, pause_y, "PAUSED", COLOR_CYAN, 3);
-    
-    // Draw buttons
-    button_draw(fb, resume_btn);
-    button_draw(fb, exit_btn);
+// ============================================================================
+// MODAL DIALOG
+// ============================================================================
+
+void modal_dialog_init(ModalDialog *dlg, const char *title, const char *message,
+                       int button_count) {
+    memset(dlg, 0, sizeof(ModalDialog));
+    dlg->active = false;
+
+    if (title) snprintf(dlg->title, sizeof(dlg->title), "%s", title);
+    if (message) snprintf(dlg->message, sizeof(dlg->message), "%s", message);
+
+    /* Clamp button count */
+    if (button_count < 1) button_count = 1;
+    if (button_count > MODAL_MAX_BUTTONS) button_count = MODAL_MAX_BUTTONS;
+    dlg->button_count = button_count;
+
+    /* Default visual settings */
+    dlg->overlay_alpha = 180;
+    dlg->dialog_width = 420;
+    dlg->bg_color = RGB(30, 30, 45);
+    dlg->border_color = COLOR_WHITE;
+    dlg->title_color = COLOR_YELLOW;
+    dlg->message_color = RGB(180, 180, 180);
+
+    /* Auto-calculate dialog height based on button count */
+    if (button_count <= 2)
+        dlg->dialog_height = 200;
+    else if (button_count == 3)
+        dlg->dialog_height = 260;
+    else
+        dlg->dialog_height = 310;
+}
+
+void modal_dialog_set_button(ModalDialog *dlg, int index, const char *text,
+                             uint32_t bg_color, uint32_t text_color) {
+    if (index < 0 || index >= dlg->button_count) return;
+    button_init_full(&dlg->buttons[index], 0, 0, 150, 50,
+                     text ? text : "", bg_color, text_color,
+                     BTN_COLOR_HIGHLIGHT, 2);
+}
+
+void modal_dialog_init_confirm(ModalDialog *dlg, const char *title,
+                               const char *message,
+                               const char *confirm_text, uint32_t confirm_color,
+                               const char *cancel_text, uint32_t cancel_color) {
+    modal_dialog_init(dlg, title, message, 2);
+    modal_dialog_set_button(dlg, 0, confirm_text ? confirm_text : "CONFIRM",
+                            confirm_color, COLOR_WHITE);
+    modal_dialog_set_button(dlg, 1, cancel_text ? cancel_text : "CANCEL",
+                            cancel_color, COLOR_WHITE);
+}
+
+void modal_dialog_show(ModalDialog *dlg) {
+    dlg->active = true;
+}
+
+void modal_dialog_hide(ModalDialog *dlg) {
+    dlg->active = false;
+}
+
+bool modal_dialog_is_active(ModalDialog *dlg) {
+    return dlg->active;
+}
+
+void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb) {
+    if (!dlg->active) return;
+
+    int dw = dlg->dialog_width;
+    int dh = dlg->dialog_height;
+    int n  = dlg->button_count;
+
+    /* Semi-transparent overlay */
+    if (dlg->overlay_alpha > 0) {
+        fb_fill_rect_alpha(fb, 0, 0, fb->width, fb->height,
+                           COLOR_BLACK, dlg->overlay_alpha);
+    }
+
+    /* Centered dialog box */
+    int dx = (fb->width - dw) / 2;
+    int dy = (fb->height - dh) / 2;
+
+    fb_fill_rect(fb, dx, dy, dw, dh, dlg->bg_color);
+    fb_draw_rect(fb, dx, dy, dw, dh, dlg->border_color);
+
+    /* Title text — centered, scale 3 */
+    if (dlg->title[0]) {
+        text_draw_centered(fb, fb->width / 2, dy + 45, dlg->title,
+                           dlg->title_color, 3);
+    }
+
+    /* Message text — centered, scale 2 */
+    if (dlg->message[0]) {
+        text_draw_centered(fb, fb->width / 2, dy + 90, dlg->message,
+                           dlg->message_color, 2);
+    }
+
+    /* Position and draw buttons */
+    if (n == 2) {
+        /* Side-by-side layout (preserves original 2-button look) */
+        int btn_w = 150, btn_h = 50;
+        int btn_gap = 30;
+        int total_btn_w = btn_w * 2 + btn_gap;
+        int btn_x = (fb->width - total_btn_w) / 2;
+        int btn_y = dy + dh - btn_h - 25;
+
+        dlg->buttons[0].x = btn_x;
+        dlg->buttons[0].y = btn_y;
+        dlg->buttons[0].width = btn_w;
+        dlg->buttons[0].height = btn_h;
+
+        dlg->buttons[1].x = btn_x + btn_w + btn_gap;
+        dlg->buttons[1].y = btn_y;
+        dlg->buttons[1].width = btn_w;
+        dlg->buttons[1].height = btn_h;
+    } else {
+        /* Vertically stacked layout (1, 3, or 4 buttons) */
+        int btn_w = 200, btn_h = 44;
+        int btn_gap = 8;
+        int total_h = n * btn_h + (n - 1) * btn_gap;
+        int btn_x = (fb->width - btn_w) / 2;
+        int btn_y_start = dy + dh - total_h - 20;
+
+        for (int i = 0; i < n; i++) {
+            dlg->buttons[i].x = btn_x;
+            dlg->buttons[i].y = btn_y_start + i * (btn_h + btn_gap);
+            dlg->buttons[i].width = btn_w;
+            dlg->buttons[i].height = btn_h;
+        }
+    }
+
+    for (int i = 0; i < n; i++) {
+        button_draw(fb, &dlg->buttons[i]);
+    }
+}
+
+ModalDialogAction modal_dialog_update(ModalDialog *dlg, int touch_x, int touch_y,
+                                       bool touch_active, uint32_t now_ms) {
+    if (!dlg->active) return MODAL_ACTION_NONE;
+
+    for (int i = 0; i < dlg->button_count; i++) {
+        if (button_update(&dlg->buttons[i], touch_x, touch_y, touch_active, now_ms)) {
+            dlg->active = false;
+            return (ModalDialogAction)i;
+        }
+    }
+
+    return MODAL_ACTION_NONE;
 }
 
 // ============================================================================

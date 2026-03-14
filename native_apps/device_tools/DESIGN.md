@@ -6,7 +6,7 @@
 
 | Tab | Source App | Purpose |
 |-----|-----------|---------|
-| **Settings** | `hardware_config` | Audio, LED, backlight configuration |
+| **Settings** | `hardware_config` | Audio, LED, backlight configuration + shutdown/reboot |
 | **Diagnostics** | `hardware_diag` | Read-only system/memory/storage/hardware/config info |
 | **Tests** | `hardware_test_gui` | Interactive LED, display, audio, and touch tests |
 | **Calibration** | `unified_calibrate` | Touch calibration + bezel margin adjustment |
@@ -47,12 +47,13 @@ native_apps/
 /* ═══ Diagnostics Tab ═══ */
 /* ═══ Tests Tab ═══ */
 /* ═══ Calibration Tab ═══ */
+/* ═══ Confirmation Dialog ═══ */
 /* ═══ Main Loop ═══ */
 ```
 
 ### 2.3 State Machine
 
-The app uses a two-level state machine: **active tab** + **sub-state per tab**.
+The app uses a two-level state machine: **active tab** + **sub-state per tab**, plus a **global modal overlay** for confirmation dialogs.
 
 ```mermaid
 stateDiagram-v2
@@ -68,6 +69,22 @@ stateDiagram-v2
 
     state Settings {
         SettingsMain : Single screen with sections
+        SettingsMain --> ConfirmShutdown : SHUT DOWN tap
+        SettingsMain --> ConfirmReboot : REBOOT tap
+    }
+
+    state ConfirmShutdown {
+        [*] --> ShowDialog_SD
+        ShowDialog_SD --> SettingsMain : CANCEL
+        ShowDialog_SD --> ExecuteShutdown : CONFIRM
+        ExecuteShutdown --> [*] : system("shutdown -h now")
+    }
+
+    state ConfirmReboot {
+        [*] --> ShowDialog_RB
+        ShowDialog_RB --> SettingsMain : CANCEL
+        ShowDialog_RB --> ExecuteReboot : CONFIRM
+        ExecuteReboot --> [*] : system("reboot")
     }
 
     state Diagnostics {
@@ -89,6 +106,19 @@ stateDiagram-v2
         CalibDone --> CalibIdle : Auto
     }
 ```
+
+#### Confirmation State Machine
+
+The confirmation dialog is a **global modal** tracked by the `confirm_action` field in `AppState`. It operates independently from the tab system:
+
+```
+CONFIRM_NONE ──┬── SHUT DOWN button ──→ CONFIRM_SHUTDOWN ──┬── CANCEL ──→ CONFIRM_NONE
+               │                                            └── CONFIRM ──→ execute_system_action()
+               └── REBOOT button ────→ CONFIRM_REBOOT ─────┬── CANCEL ──→ CONFIRM_NONE
+                                                            └── CONFIRM ──→ execute_system_action()
+```
+
+When `confirm_action != CONFIRM_NONE`, the dialog acts as a modal barrier: all tab switching, settings changes, and other input is blocked.
 
 ### 2.4 Global State Structure
 
@@ -122,6 +152,12 @@ typedef enum {
     CALIB_DONE         /* Success/failure message, auto-return */
 } CalibSubState;
 
+typedef enum {
+    CONFIRM_NONE,      /* No dialog active — normal operation */
+    CONFIRM_SHUTDOWN,  /* "SHUT DOWN DEVICE?" dialog displayed */
+    CONFIRM_REBOOT     /* "REBOOT DEVICE?" dialog displayed */
+} ConfirmAction;
+
 typedef struct {
     /* Navigation */
     ActiveTab    active_tab;
@@ -148,6 +184,9 @@ typedef struct {
     int          calib_offsets_x[4];
     int          calib_offsets_y[4];
     int          bezel_top, bezel_bottom, bezel_left, bezel_right;
+
+    /* Confirmation dialog state */
+    ConfirmAction confirm_action;      /* CONFIRM_NONE when no dialog */
 } AppState;
 ```
 
@@ -228,7 +267,7 @@ All tab buttons use `Button` from [`common.h`](native_apps/common/common.h) with
 
 ### 4.1 Layout
 
-Identical to the current [`hardware_config.c`](native_apps/hardware_config/hardware_config.c) layout, shifted down to fit below the tab bar. All Y positions are relative to `CONTENT_Y`.
+Based on the current [`hardware_config.c`](native_apps/hardware_config/hardware_config.c) layout, shifted down to fit below the tab bar, with an additional SYSTEM section at the bottom. All Y positions are relative to `CONTENT_Y`.
 
 ```
 +-- Content Area ------------------------------------------------+
@@ -244,6 +283,9 @@ Identical to the current [`hardware_config.c`](native_apps/hardware_config/hardw
 |                                                                 |
 |  [    SAVE    ]              [  RESET DEFAULTS  ]              |
 |                    SAVED!                                       |
+|                                                                 |
+|  SYSTEM ─────────────────────────────────────────────────       |
+|  [  SHUT DOWN  ]              [  REBOOT  ]                     |
 +-----------------------------------------------------------------+
 ```
 
@@ -260,6 +302,8 @@ Identical to the current [`hardware_config.c`](native_apps/hardware_config/hardw
 | Backlight bar row | +210 |
 | SAVE / RESET buttons | +275 |
 | Status message | +340 |
+| SYSTEM section header | +365 |
+| SHUT DOWN / REBOOT buttons | +390 |
 
 ### 4.3 Controls
 
@@ -274,6 +318,8 @@ Identical to the current [`hardware_config.c`](native_apps/hardware_config/hardw
 | Brightness bars | Custom draw | 300×20 |
 | SAVE button | `Button` | 160×50 |
 | RESET DEFAULTS button | `Button` | 220×50 |
+| SHUT DOWN button | `Button` (static) | 160×45, `BTN_COLOR_DANGER` (red) |
+| REBOOT button | `Button` (static) | 160×45, `BTN_COLOR_WARNING` (orange) |
 
 ### 4.4 Behavior
 
@@ -285,6 +331,8 @@ Identical to the current [`hardware_config.c`](native_apps/hardware_config/hardw
 - **RESET DEFAULTS**: Calls [`config_clear()`](native_apps/common/config.h:65), resets all values to defaults, applies backlight live. Shows "DEFAULTS RESTORED" for 2 seconds.
 - **Test Audio**: Directly opens `/dev/dsp` and plays 880 Hz + 1320 Hz test beeps (bypasses config).
 - **Test LED**: Directly writes sysfs brightness, 500ms on then off (bypasses config).
+- **SHUT DOWN**: Sets `confirm_action = CONFIRM_SHUTDOWN`, triggering the modal confirmation dialog (see [Section 8](#8-confirmation-dialog)). Does **not** execute the shutdown directly.
+- **REBOOT**: Sets `confirm_action = CONFIRM_REBOOT`, triggering the modal confirmation dialog (see [Section 8](#8-confirmation-dialog)). Does **not** execute the reboot directly.
 
 ---
 
@@ -489,9 +537,131 @@ If save fails (permission denied):
 
 ---
 
-## 8. Main Loop Architecture
+## 8. Confirmation Dialog
 
-### 8.1 Loop Structure
+The confirmation dialog is a **modal overlay** using the common [`ModalDialog`](../common/common.h) component from `common.c`. It is used for destructive system actions (shutdown and reboot) that require explicit user confirmation before execution.
+
+> **Refactoring note:** The confirmation dialog was originally a bespoke implementation with app-local `draw_confirm_dialog()` and `handle_confirm_input()` functions plus `confirm_yes_btn`/`confirm_no_btn` static buttons. These were replaced by two `ModalDialog` instances (`shutdown_dialog` and `reboot_dialog`) that delegate rendering and input to the common `modal_dialog_draw()` and `modal_dialog_update()` APIs.
+
+### 8.1 When It Appears
+
+The dialog is triggered from the Settings tab's SYSTEM section:
+- Tapping **SHUT DOWN** sets `confirm_action = CONFIRM_SHUTDOWN` and calls `modal_dialog_show(&shutdown_dialog)`
+- Tapping **REBOOT** sets `confirm_action = CONFIRM_REBOOT` and calls `modal_dialog_show(&reboot_dialog)`
+
+While `confirm_action != CONFIRM_NONE`, the active dialog blocks **all other input** — tab switching, settings changes, and any other touch interaction outside the dialog buttons are ignored.
+
+### 8.2 Visual Layout
+
+The dialog renders as a semi-transparent overlay on top of the existing screen content (identical appearance to the previous bespoke implementation):
+
+```
++--[ 800 × 480 — full screen ]------------------------------------+
+|                                                                   |
+|  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  +──────────────────────────────+  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │                              │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │    SHUT DOWN DEVICE?         │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │                              │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │    The device will shut      │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │    down completely.          │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │                              │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │  [ SHUT DOWN ]  [ CANCEL ]   │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  │                              │  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░  +──────────────────────────────+  ░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  |
+|  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  |
++-------------------------------------------------------------------+
+```
+
+### 8.3 Overlay Specifications
+
+These values are the `ModalDialog` defaults from [`common.h`](../common/common.h):
+
+| Element | Value |
+|---------|-------|
+| Overlay | Full-screen `fb_fill_rect_alpha()` with alpha 180, dark tint |
+| Dialog box | 420×220 px, centered on screen |
+| Dialog background | Dark background (`COLOR_BG` or similar) |
+| Dialog border | 2px white border (`COLOR_WHITE`) |
+| Title text | Scale 3 (15×21px chars), `COLOR_YELLOW` |
+| Description text | Scale 2 (10×14px chars), `COLOR_LABEL` |
+| Confirm button | 140×45 px, action-colored (red for shutdown, orange for reboot) |
+| Cancel button | 140×45 px, gray (`RGB(80, 80, 80)`) |
+
+### 8.4 Dialog Content by Action
+
+| Action | ModalDialog instance | Title | Description | Confirm Button |
+|--------|---------------------|-------|-------------|----------------|
+| `CONFIRM_SHUTDOWN` | `shutdown_dialog` | "SHUT DOWN DEVICE?" | "The device will shut down completely." | Red "SHUT DOWN" |
+| `CONFIRM_REBOOT` | `reboot_dialog` | "REBOOT DEVICE?" | "The device will reboot." | Orange "REBOOT" |
+
+### 8.5 Rendering Integration
+
+The confirmation dialog is rendered **after** all tab content but **before** `fb_swap()` in the main loop using the common `modal_dialog_draw()` function. This ensures:
+1. The underlying Settings tab content is drawn first (visible through the semi-transparent overlay)
+2. The dialog overlay and box are composited on top
+3. The final composited frame is presented to the display
+
+```c
+/* In main loop draw section */
+if (state.confirm_action == CONFIRM_SHUTDOWN)
+    modal_dialog_draw(&shutdown_dialog, &fb);
+else if (state.confirm_action == CONFIRM_REBOOT)
+    modal_dialog_draw(&reboot_dialog, &fb);
+```
+
+### 8.6 Input Handling
+
+When the dialog is active (`confirm_action != CONFIRM_NONE`), the main loop routes input to `modal_dialog_update()` which returns a `ModalDialogAction`:
+
+```c
+/* In main loop input section */
+ModalDialog *active = (state.confirm_action == CONFIRM_SHUTDOWN) ? &shutdown_dialog : &reboot_dialog;
+ModalDialogAction result = modal_dialog_update(active, tx, ty, touching, now);
+if (result == MODAL_ACTION_CONFIRM)
+    execute_system_action(&fb, state.confirm_action);
+else if (result == MODAL_ACTION_CANCEL)
+    state.confirm_action = CONFIRM_NONE;
+```
+
+All other touch events are ignored while the dialog is active — the `continue` guard skips tab bar and tab-specific input.
+
+### 8.7 Action Execution
+
+When the user confirms, `execute_system_action()` performs the following sequence:
+
+1. **Hardware cleanup**: Turns off LEDs via `hw_leds_off()`
+2. **Status message**: Displays "Shutting down..." or "Rebooting..." on screen
+3. **Filesystem sync**: Calls `sync()` to flush pending writes
+4. **System command**: Executes `system("shutdown -h now")` or `system("reboot")`
+
+```c
+static void execute_system_action(Framebuffer *fb, ConfirmAction action);
+```
+
+This function is app-specific — it is **not** part of the `ModalDialog` component. The function does not return in normal operation — the OS shuts down or reboots the device.
+
+### 8.8 Static Instances
+
+Two `ModalDialog` instances and the `ConfirmAction` enum track dialog state:
+
+| Instance / Type | Purpose | Notes |
+|-----------------|---------|-------|
+| `shutdown_dialog` (`ModalDialog`) | Shutdown confirmation dialog | Initialized with red confirm button via `modal_dialog_init()` |
+| `reboot_dialog` (`ModalDialog`) | Reboot confirmation dialog | Initialized with orange confirm button via `modal_dialog_init()` |
+| `confirm_action` (`ConfirmAction` enum in `AppState`) | Tracks which action is pending | `CONFIRM_NONE` / `CONFIRM_SHUTDOWN` / `CONFIRM_REBOOT` |
+| `shutdown_btn` (`Button`) | "SHUT DOWN" in Settings SYSTEM section | 160×45, `BTN_COLOR_DANGER` (red) |
+| `reboot_btn` (`Button`) | "REBOOT" in Settings SYSTEM section | 160×45, `BTN_COLOR_WARNING` (orange) |
+
+> **Removed:** The previous `confirm_yes_btn` and `confirm_no_btn` static buttons, `draw_confirm_dialog()`, and `handle_confirm_input()` functions were replaced by the common `ModalDialog` API.
+
+---
+
+## 9. Main Loop Architecture
+
+### 9.1 Loop Structure
 
 ```c
 while (running) {
@@ -522,6 +692,12 @@ while (running) {
         case TAB_CALIBRATION:  draw_calibration(&fb, &state);  break;
     }
 
+    /* ── 3a. Draw confirmation dialog overlay (if active) ── */
+    if (state.confirm_action == CONFIRM_SHUTDOWN)
+        modal_dialog_draw(&shutdown_dialog, &fb);
+    else if (state.confirm_action == CONFIRM_REBOOT)
+        modal_dialog_draw(&reboot_dialog, &fb);
+
     fb_swap(&fb);
 
     /* ── 4. Input ── */
@@ -529,6 +705,19 @@ while (running) {
     TouchState ts = touch_get_state(&touch);
     int tx = ts.x, ty = ts.y;
     bool touching = ts.pressed || ts.held;
+
+    /* ── 4a. If confirmation dialog is active, route ALL input to it ── */
+    if (state.confirm_action != CONFIRM_NONE) {
+        ModalDialog *active = (state.confirm_action == CONFIRM_SHUTDOWN)
+                              ? &shutdown_dialog : &reboot_dialog;
+        ModalDialogAction result = modal_dialog_update(active, tx, ty, touching, now);
+        if (result == MODAL_ACTION_CONFIRM)
+            execute_system_action(&fb, state.confirm_action);
+        else if (result == MODAL_ACTION_CANCEL)
+            state.confirm_action = CONFIRM_NONE;
+        usleep(16000);
+        continue;   /* Skip tab bar and tab-specific input */
+    }
 
     /* Tab bar input */
     handle_tab_bar_input(&state, tx, ty, touching, now);
@@ -545,7 +734,9 @@ while (running) {
 }
 ```
 
-### 8.2 Full-Screen Mode Handling
+**Key change from the base loop**: Steps 3a and 4a are new. The confirmation dialog overlay renders after all tab content (step 3a), and when active it intercepts all input via a `continue` guard (step 4a) that prevents any tab bar or tab-specific input handling.
+
+### 9.2 Full-Screen Mode Handling
 
 Tests and calibration phases take over the entire screen. They run their own sub-loops:
 
@@ -568,7 +759,7 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch, AppS
 }
 ```
 
-### 8.3 Lifecycle
+### 9.3 Lifecycle
 
 ```c
 int main(void) {
@@ -620,11 +811,11 @@ int main(void) {
 
 ---
 
-## 9. Color Scheme
+## 10. Color Scheme
 
 A unified dark theme consistent across all tabs:
 
-### 9.1 Base Colors
+### 10.1 Base Colors
 
 | Name | Value | Usage |
 |------|-------|-------|
@@ -638,7 +829,7 @@ A unified dark theme consistent across all tabs:
 | `COLOR_HEADER_TEXT` | `COLOR_CYAN` | Section headers |
 | `COLOR_DATA` | `COLOR_WHITE` | Primary data values |
 
-### 9.2 Widget Colors
+### 10.2 Widget Colors
 
 | Name | Value | Usage |
 |------|-------|-------|
@@ -647,7 +838,7 @@ A unified dark theme consistent across all tabs:
 | `COLOR_BAR_WARN` | `COLOR_YELLOW` | Usage bar >70% |
 | `COLOR_BAR_CRIT` | `COLOR_RED` | Usage bar >90% |
 
-### 9.3 Button Colors
+### 10.3 Button Colors
 
 Reuse existing definitions from [`common.h`](native_apps/common/common.h:202):
 
@@ -655,16 +846,20 @@ Reuse existing definitions from [`common.h`](native_apps/common/common.h:202):
 |---------|---------------|
 | Save / Primary action | `BTN_COLOR_PRIMARY` — `RGB(0, 150, 0)` |
 | Reset / Danger action | `BTN_COLOR_DANGER` — `RGB(200, 0, 0)` |
+| Shut Down button | `BTN_COLOR_DANGER` — `RGB(200, 0, 0)` |
+| Reboot button | `BTN_COLOR_WARNING` — `RGB(200, 150, 0)` |
+| Confirm dialog cancel | `RGB(80, 80, 80)` |
 | Test buttons | `BTN_COLOR_INFO` — `RGB(0, 150, 200)` |
 | +/- adjustment buttons | `RGB(80, 80, 80)` |
 | Exit button | `BTN_EXIT_COLOR` — `RGB(200, 0, 0)` |
 | Highlight on press | `BTN_COLOR_HIGHLIGHT` — `RGB(255, 255, 100)` |
+| Confirm dialog title | `COLOR_YELLOW` |
 
 ---
 
-## 10. Build Integration
+## 11. Build Integration
 
-### 10.1 Makefile Additions
+### 11.1 Makefile Additions
 
 Add to the existing [`Makefile`](native_apps/Makefile):
 
@@ -696,7 +891,7 @@ $(BUILD_DIR)/device_tools: device_tools/device_tools.c $(DEVICE_TOOLS_DEPS)
 	@echo "Built: device_tools"
 ```
 
-### 10.2 Build Targets
+### 11.2 Build Targets
 
 Add `device_tools` to the `UTILS` variable:
 
@@ -704,7 +899,7 @@ Add `device_tools` to the `UTILS` variable:
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools
 ```
 
-### 10.3 Install Target
+### 11.3 Install Target
 
 Add to the install target:
 
@@ -712,7 +907,7 @@ Add to the install target:
 cp $(BUILD_DIR)/device_tools /opt/games/
 ```
 
-### 10.4 App Manifest
+### 11.4 App Manifest
 
 Create `/opt/roomwizard/apps/device_tools.app`:
 
@@ -724,9 +919,9 @@ args=none
 
 ---
 
-## 11. Tab Switching Behavior
+## 12. Tab Switching Behavior
 
-### 11.1 Rules
+### 12.1 Rules
 
 1. **Settings → any tab**: Always allowed. Unsaved changes are preserved in `AppState` (not lost until app exits). No confirmation dialog needed — the user can switch back.
 2. **Diagnostics → any tab**: Always allowed. No state to lose.
@@ -734,16 +929,17 @@ args=none
 4. **Tests running → any tab**: **Blocked** — tab bar is hidden during test execution. User must touch to return to menu first.
 5. **Calibration idle → any tab**: Always allowed.
 6. **Calibration in progress → any tab**: **Blocked** — tab bar is hidden during calibration. User must complete or the calibration is abandoned.
+7. **Confirmation dialog active → any tab**: **Blocked** — all input is routed exclusively to the dialog. User must confirm or cancel the action before interacting with any other UI element.
 
-### 11.2 Tab Switch Animation
+### 12.2 Tab Switch Animation
 
 None. Instant switch — keeps complexity low and performance high on the 300 MHz CPU.
 
 ---
 
-## 12. Interaction Summary
+## 13. Interaction Summary
 
-### 12.1 Touch Target Sizes
+### 13.1 Touch Target Sizes
 
 All interactive elements meet the 60×40 minimum for resistive touchscreens:
 
@@ -756,18 +952,21 @@ All interactive elements meet the 60×40 minimum for resistive touchscreens:
 | Test grid buttons | 140×70 | Very generous |
 | SAVE button | 160×50 | Large |
 | RESET button | 220×50 | Large |
+| SHUT DOWN button | 160×45 | Large, red danger color |
+| REBOOT button | 160×45 | Large, orange warning color |
+| Confirm dialog buttons | 140×45 | Comfortable, high-contrast colors |
 | PREV/NEXT nav buttons | 120×45 | Comfortable |
 | Calibration +/- zones | 80×80 | Very large |
 
-### 12.2 Debounce
+### 13.2 Debounce
 
 All buttons use the standard 200ms debounce from [`BTN_DEBOUNCE_MS`](native_apps/common/common.h:226). Toggle switches also use 200ms debounce. This prevents accidental double-taps on the resistive touchscreen.
 
 ---
 
-## 13. Migration Notes
+## 14. Migration Notes
 
-### 13.1 Code Reuse Strategy
+### 14.1 Code Reuse Strategy
 
 | Source App | Reuse Approach |
 |-----------|---------------|
@@ -776,14 +975,14 @@ All buttons use the standard 200ms debounce from [`BTN_DEBOUNCE_MS`](native_apps
 | [`hardware_test_gui.c`](native_apps/hardware_test/hardware_test_gui.c) | Copy all `test_*()` functions verbatim — they are self-contained with their own loops. Copy `draw_test_screen()` helper. Copy grid layout setup. |
 | [`unified_calibrate.c`](native_apps/tests/unified_calibrate.c) | Copy `calibrate_touch()` and `configure_bezel()` functions. Replace `draw_crosshair()`, `draw_rect()`, `draw_rect_outline()` with framebuffer library calls (`fb_draw_line()`, `fb_fill_rect()`, `fb_draw_rect()`). |
 
-### 13.2 Breaking Changes from Original Apps
+### 14.2 Breaking Changes from Original Apps
 
 1. **hardware_diag**: Navigation changes from "tap anywhere to advance" to explicit PREV/NEXT buttons. This is more intuitive in a tabbed interface.
 2. **unified_calibrate**: No longer a standalone flow — integrated into a tab with an explicit "Start Calibration" button instead of launching directly into Phase 1.
-3. **hardware_config**: Loses the standalone exit button (replaced by tab bar X button). The hardware_config exit button previously called `hw_reload_config()` — this now happens in the unified app's cleanup.
+3. **hardware_config**: Loses the standalone exit button (replaced by tab bar X button). The hardware_config exit button previously called `hw_reload_config()` — this now happens in the unified app's cleanup. Gains new SYSTEM section with shutdown/reboot functionality not present in the original app.
 4. **hardware_test_gui**: Test functions are unchanged, but the grid menu appearance is adapted to the content area dimensions instead of full-screen.
 
-### 13.3 Deprecation
+### 14.3 Deprecation
 
 Once `device_tools` is validated, the four original apps can be removed from the build:
 - `native_apps/hardware_config/hardware_config.c`

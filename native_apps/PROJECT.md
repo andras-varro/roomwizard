@@ -30,10 +30,57 @@
 - [`common/framebuffer.c`](common/framebuffer.c) - Double-buffered rendering
 - [`common/touch_input.c`](common/touch_input.c) - Touch events (12-bit → 800x480)
 - [`common/hardware.c`](common/hardware.c) - LED/backlight control
-- [`common/common.c`](common/common.c) - Unified UI (buttons, screens, safe area)
+- [`common/common.c`](common/common.c) - Unified UI (buttons, screens, safe area, modal dialogs)
 - [`common/ui_layout.c`](common/ui_layout.c) - Layouts + ScrollableList widget
 - [`common/audio.c`](common/audio.c) - Speaker audio (OSS/TWL4030; beeps, tones, fanfares)
 - [`common/config.c`](common/config.c) - Persistent configuration (key=value file, `/opt/games/rw_config.conf`)
+
+**ModalDialog System** ([`common/common.c`](common/common.c) / [`common/common.h`](common/common.h)):
+
+Reusable modal overlay component supporting 1–4 buttons with auto-layout. All 6 games use it for pause menus; `device_tools` uses it for shutdown/reboot confirmation dialogs. The former `screen_draw_pause()` helper was removed (it had zero callers — all games now use ModalDialog directly).
+
+| API | Description |
+|-----|-------------|
+| `ModalDialog` struct | Modal overlay with title, optional message, and 1–4 configurable buttons |
+| `modal_dialog_init(dlg, title, message, button_count)` | Initialize dialog with N buttons (1–4) |
+| `modal_dialog_set_button(dlg, index, text, bg_color, text_color)` | Configure individual button text and colors |
+| `modal_dialog_init_confirm(dlg, title, message, confirm_text, confirm_color, cancel_text, cancel_color)` | Convenience wrapper for 2-button confirm/cancel dialogs |
+| `modal_dialog_show()` / `modal_dialog_hide()` / `modal_dialog_is_active()` | State management |
+| `modal_dialog_draw()` | Renders semi-transparent overlay + centered dialog box + text + buttons |
+| `modal_dialog_update()` | Touch input handler; returns `ModalDialogAction` — button index (0–3) or -1 for no action |
+
+**Layout rules:** 2 buttons are placed side-by-side; 1, 3, or 4 buttons are vertically stacked. Dialog height is auto-calculated based on button count.
+
+**Unified pause menu pattern** — all 6 games follow this structure:
+
+```c
+static ModalDialog pause_dialog;
+
+// Init: 2 buttons (standard) or 4 buttons (brick breaker)
+modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
+modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
+modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
+
+// Draw: replaces inline overlay code
+modal_dialog_draw(&pause_dialog, &fb);
+
+// Input: returns button index
+ModalDialogAction action = modal_dialog_update(&pause_dialog, tx, ty, touching, now);
+```
+
+**Brick breaker special case:** uses 4 buttons (RESUME, TEST MODE: ON/OFF, RETIRE, EXIT). The test mode button is a stateful toggle that dynamically updates its text (`"TEST MODE: ON"` / `"TEST MODE: OFF"`) and background color via `modal_dialog_set_button()` each time the mode changes.
+
+**Apps using ModalDialog:**
+
+| App | Use Case | Buttons |
+|-----|----------|---------|
+| pong | Pause menu | 2: Resume, Exit |
+| snake | Pause menu | 2: Resume, Exit |
+| tetris | Pause menu | 2: Resume, Exit |
+| frogger | Pause menu | 2: Resume, Exit |
+| samegame | Pause menu | 2: Resume, Exit |
+| brick_breaker | Pause menu | 4: Resume, Test Mode, Retire, Exit |
+| device_tools | Confirmation dialogs | 2: Shut Down/Reboot + Cancel |
 
 **Programs:**
 - `snake/`, `tetris/`, `pong/`, `samegame/` - Games
@@ -180,10 +227,7 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 
 - [x] **Framebuffer rotation layer** — [`framebuffer.c`](common/framebuffer.c): `fb_is_portrait_mode()` checks `/opt/games/portrait.mode` flag; `fb_init()` swaps `width`↔`height` for virtual 480×800; `fb_swap()` performs cache-friendly 90° CCW rotated copy. (completed)
 - [x] **Touch coordinate transform** — [`touch_input.c`](common/touch_input.c): `scale_coordinates()` scales raw→physical, applies calibration, then rotates (virtual_x = phys_h−1−phys_y, virtual_y = phys_x). (completed)
-- [x] **Config detection** — Flag file `/opt/games/portrait.mode` checked by both `fb_is_portrait_mode()` and `touch_init()`. (completed)
 - [x] **Per-game adaptations** — Pong: horizontal paddles top/bottom; Tetris: centered board, compact NEXT preview, touch zones adapted; Snake & Brick Breaker: auto-adapt via `SCREEN_SAFE_*` macros; Game Selector & App Launcher: auto-adapt via `fb.width`/`fb.height`. (completed)
-- [x] **Device Tools portrait toggle** — [`device_tools.c`](device_tools/device_tools.c): Settings tab portrait mode toggle; Save creates/removes `/opt/games/portrait.mode`. (completed)
-- [x] **Design document** — [`PORTRAIT_MODE_DESIGN.md`](PORTRAIT_MODE_DESIGN.md): Full architecture spec. (completed)
 
 ### Key Architectural Note: Touch Calibration Pipeline
 
@@ -249,31 +293,7 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - [x] **Audio wired into all games** (completed) — `audio_init/close` in each game's `main()`; snake: `audio_beep` on direction change, `audio_blip` on food, `audio_fail` on death; tetris: `audio_beep` on move/rotate, `audio_blip` on line clear, `audio_success` on Tetris (4 lines), `audio_fail` on game over; pong: `audio_beep` on paddle hit, `audio_blip` on scoring, `audio_success`/`audio_fail` on win/loss
 - [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
 - [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)
-- [x] Add Game: SameGame – Coding Specification (completed)
-      Build a SameGame puzzle game with the following features:
-      Board & Setup
-      A grid of n columns × m rows filled with randomly placed colored blocks (n and m depends on screen size, e.g., n×m in landscape, m×n in portrait, calculate n and m based on user feedback, probably the size of a tetris block or slightly larger)
-      Use 5 distinct colors
-      The board should fill from the bottom up (empty space accumulates at the top)
-      Core Gameplay
-      When the player clicks a block, highlight all connected same-colored blocks touching it (horizontally and vertically, not diagonally)
-      If the connected group has 2 or more blocks, clicking removes the entire group
-      Single isolated blocks cannot be removed
-      After removal, blocks above the removed group fall down to fill the empty space (gravity)
-      If an entire column becomes empty, all columns to its right slide left to fill the gap
-      Scoring
-      Score is calculated per move as: (n - 1)² where n is the number of blocks removed
-      Display the current score prominently
-      Show a "blocks remaining" counter
-      Game End
-      Show game over dialog with highscore and leaderboard
-      UI & Visual Polish
-      Smooth animations for blocks falling and sliding
-      Hover effect to preview which blocks would be selected before clicking
-      Clear color distinction between the 5 colors (consider accessibility)
-      Display a "Perfect Clear" bonus message if the board is completely cleared
-      Add audio effects for block selection, removal, and game over
-      Add screen shake effect for large block removals (e.g., 3+ blocks) with increasing intensity for larger groups
+- [x] **Add Game: SameGame** (completed) — Puzzle game with colored block groups, gravity, column collapse, (n-1)² scoring, animations, screen shake, audio effects. See [`samegame/samegame.c`](samegame/samegame.c).
 
 ### Touch Calibration
 

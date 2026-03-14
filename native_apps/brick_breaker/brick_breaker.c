@@ -207,9 +207,8 @@ static GameOverScreen gos;  /* unified game over screen */
 /* UI buttons */
 static Button btn_menu, btn_exit;
 static Button btn_start, btn_restart;
-static Button btn_resume, btn_retire, btn_exit_pause;
 static Button btn_next_level;
-static ToggleSwitch toggle_test;
+static ModalDialog pause_dialog;
 
 /* ── colour palette ──────────────────────────────────────────────────── */
 #define BG_COLOR        RGB(8, 12, 30)
@@ -1421,13 +1420,7 @@ static void draw_welcome(void) {
 
 static void draw_paused(void) {
     draw_game_screen();  /* game as background */
-    fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
-    text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 80,
-                       "PAUSED", COLOR_CYAN, 4);
-    button_draw(&fb, &btn_resume);
-    button_draw(&fb, &btn_retire);
-    button_draw(&fb, &btn_exit_pause);
-    toggle_draw(&fb, &toggle_test);
+    modal_dialog_draw(&pause_dialog, &fb);
 }
 
 static void draw_level_complete(void) {
@@ -1476,6 +1469,7 @@ static void handle_input(void) {
             /* Menu → pause */
             if (button_check_press(&btn_menu, button_is_touched(&btn_menu, st.x, st.y), now)) {
                 game.screen = SCREEN_PAUSED;
+                modal_dialog_show(&pause_dialog);
                 return;
             }
         }
@@ -1493,31 +1487,39 @@ static void handle_input(void) {
         }
         break;
 
-    case SCREEN_PAUSED:
-        /* Test mode toggle */
-        if (toggle_check_press(&toggle_test, st.x, st.y, st.pressed, now)) {
-            test_mode = toggle_test.state;
+    case SCREEN_PAUSED: {
+        ModalDialogAction action = modal_dialog_update(&pause_dialog, st.x, st.y, st.pressed, now);
+        if (action == MODAL_ACTION_BTN0) {
+            /* Resume */
+            game.screen = SCREEN_PLAYING;
             audio_beep(&audio);
         }
-        if (st.pressed) {
-            if (button_check_press(&btn_resume, button_is_touched(&btn_resume, st.x, st.y), now)) {
-                game.screen = SCREEN_PLAYING;
-                audio_beep(&audio);
+        if (action == MODAL_ACTION_BTN1) {
+            /* Toggle test mode */
+            test_mode = !test_mode;
+            modal_dialog_set_button(&pause_dialog, 1,
+                test_mode ? "TEST MODE: ON" : "TEST MODE: OFF",
+                test_mode ? BTN_COLOR_PRIMARY : RGB(100, 100, 100),
+                COLOR_WHITE);
+            modal_dialog_show(&pause_dialog);  /* Re-show (auto-hidden by update) */
+            audio_beep(&audio);
+        }
+        if (action == MODAL_ACTION_BTN2) {
+            /* Retire — trigger game over */
+            game.screen = SCREEN_GAME_OVER;
+            {
+                char info[64];
+                snprintf(info, sizeof(info), "LEVEL %d", game.level);
+                gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
             }
-            if (button_check_press(&btn_retire, button_is_touched(&btn_retire, st.x, st.y), now)) {
-                game.screen = SCREEN_GAME_OVER;
-                {
-                    char info[64];
-                    snprintf(info, sizeof(info), "LEVEL %d", game.level);
-                    gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
-                }
-                audio_tone(&audio, 600, 100);
-            }
-            if (button_check_press(&btn_exit_pause, button_is_touched(&btn_exit_pause, st.x, st.y), now)) {
-                running = false;
-            }
+            audio_tone(&audio, 600, 100);
+        }
+        if (action == MODAL_ACTION_BTN3) {
+            /* Exit */
+            running = false;
         }
         break;
+    }
 
     case SCREEN_LEVEL_COMPLETE:
         if (st.pressed) {
@@ -1629,22 +1631,19 @@ int main(int argc, char *argv[]) {
                 SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 30,
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "PLAY AGAIN",
                 BTN_RESTART_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&btn_resume, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 - 10, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
-                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&btn_retire, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RETIRE",
-                RGB(200, 170, 40), COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&btn_exit_pause, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 130, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
-                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&btn_next_level, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "NEXT LEVEL",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 
-    /* Test mode toggle switch — positioned at bottom-left of pause overlay */
-    toggle_init(&toggle_test, SCREEN_SAFE_LEFT + 20, SCREEN_SAFE_BOTTOM - 40,
-                50, 26, "TEST MODE", test_mode);
+    /* Pause dialog — 4-button modal */
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 4);
+    modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 1,
+        test_mode ? "TEST MODE: ON" : "TEST MODE: OFF",
+        test_mode ? BTN_COLOR_PRIMARY : RGB(100, 100, 100),
+        COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 2, "RETIRE", BTN_COLOR_WARNING, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 3, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
 
     game.screen = SCREEN_WELCOME;
     frame_time_ms = get_time_ms();

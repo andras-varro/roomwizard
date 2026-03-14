@@ -41,57 +41,60 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/24" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/24" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/24" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 4/24" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step " 5/24" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/24" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 7/24" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
-step " 8/24" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
-step " 9/24" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
-step "10/24" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
+step " 1/25" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/25" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/25" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 4/25" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step " 5/25" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/25" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 7/25" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 8/25" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
+step " 9/25" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
+step "10/25" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
 
-step "11/24" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "12/24" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "13/24" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "11/25" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "12/25" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "13/25" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "14/24" "brick_breaker"
+step "14/25" "brick_breaker"
 $CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ -o build/brick_breaker -lm
 
-step "15/24" "samegame"
+step "15/25" "samegame"
 $CC -O2 -static samegame/samegame.c $COMMON_OBJ -o build/samegame -lm
 
-step "16/24" "game_selector"
+step "16/25" "frogger"
+$CC -O2 -static frogger/frogger.c $COMMON_OBJ -o build/frogger -lm
+
+step "17/25" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "17/24" "app_launcher"
+step "18/25" "app_launcher"
 $CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "18/24" "hardware_test"
+step "19/25" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "19/24" "hardware_config"
+step "20/25" "hardware_config"
 $CC -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
-step "20/24" "hardware_diag"
+step "21/25" "hardware_diag"
 $CC -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
 
-step "21/24" "unified_calibrate"
+step "22/25" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "22/24" "audio_touch_test"
+step "23/25" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
-step "23/24" "backlight"
+step "24/25" "backlight"
 $CC -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
-step "24/24" "device_tools"
+step "25/25" "device_tools"
 $CC -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Collect icon files from source dirs → build/icons/
@@ -106,7 +109,7 @@ done
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools \
+ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -160,6 +163,7 @@ info "Uploading game binaries → $GAMES_DIR/"
 scp build/snake build/tetris build/pong \
     build/brick_breaker \
     build/samegame \
+    build/frogger \
     build/game_selector build/hardware_test \
     build/hardware_config \
     build/hardware_diag \
@@ -189,6 +193,7 @@ ssh "$DEVICE" bash <<'REMOTE'
 chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/brick_breaker \
          /opt/games/samegame \
+         /opt/games/frogger \
          /opt/games/game_selector /opt/games/hardware_test \
          /opt/games/hardware_config \
          /opt/games/hardware_diag \
@@ -244,6 +249,13 @@ cat > /opt/roomwizard/apps/samegame.app << 'APP'
 name=SameGame
 exec=/opt/games/samegame
 icon=/opt/roomwizard/icons/samegame.ppm
+args=fb,touch
+APP
+
+cat > /opt/roomwizard/apps/frogger.app << 'APP'
+name=Frogger
+exec=/opt/games/frogger
+icon=/opt/roomwizard/icons/frogger.ppm
 args=fb,touch
 APP
 

@@ -159,8 +159,7 @@ static GameOverScreen gos;
 static Button menu_button;
 static Button exit_button;
 static Button start_button;
-static Button resume_button;
-static Button exit_pause_button;
+static ModalDialog pause_dialog;
 
 /* Color lookup tables */
 static const uint32_t block_colors[NUM_COLORS] = {
@@ -288,12 +287,9 @@ static void init_layout(void) {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
-                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
-                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
+    modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
 }
 
 /* ========================================================================== */
@@ -1185,10 +1181,7 @@ static void draw_game(void) {
 
     if (current_screen == SCREEN_PAUSED) {
         fb_clear_draw_offset(&fb);
-        fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
-        text_draw_centered(&fb, fb.width / 2, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
+        modal_dialog_draw(&pause_dialog, &fb);
         return;
     }
 
@@ -1249,19 +1242,16 @@ static void handle_input(void) {
 
     /* Pause screen */
     if (current_screen == SCREEN_PAUSED) {
-        if (state.pressed) {
-            bool resume_touched = button_is_touched(&resume_button, state.x, state.y);
-            if (button_check_press(&resume_button, resume_touched, now)) {
-                current_screen = SCREEN_PLAYING;
-                return;
-            }
-
-            bool exit_touched = button_is_touched(&exit_pause_button, state.x, state.y);
-            if (button_check_press(&exit_pause_button, exit_touched, now)) {
-                fb_fade_out(&fb);
-                running = false;
-                return;
-            }
+        ModalDialogAction action = modal_dialog_update(&pause_dialog,
+            state.x, state.y, state.pressed, now);
+        if (action == MODAL_ACTION_BTN0) {
+            current_screen = SCREEN_PLAYING;
+            return;
+        }
+        if (action == MODAL_ACTION_BTN1) {
+            fb_fade_out(&fb);
+            running = false;
+            return;
         }
         return;
     }
@@ -1280,6 +1270,7 @@ static void handle_input(void) {
         bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
         if (button_check_press(&menu_button, menu_touched, now)) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_show(&pause_dialog);
             return;
         }
 

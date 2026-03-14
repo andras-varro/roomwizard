@@ -121,7 +121,6 @@ void button_draw_exit(Framebuffer *fb, Button *btn);
 #define draw_exit_button button_draw_exit
 #define draw_welcome_screen screen_draw_welcome
 #define draw_game_over_screen screen_draw_game_over
-#define draw_pause_screen screen_draw_pause
 
 // ============================================================================
 // TEXT UTILITIES
@@ -165,8 +164,6 @@ void screen_draw_welcome(Framebuffer *fb, const char *game_title,
 void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
                           Button *restart_btn);
 
-// Draw pause screen with resume and exit buttons
-void screen_draw_pause(Framebuffer *fb, Button *resume_btn, Button *exit_btn);
 
 // ============================================================================
 // ICON DRAWING HELPERS
@@ -337,5 +334,64 @@ GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
 // Draw the game over screen overlay (called each frame from gameover_update,
 // but may also be called directly if needed).
 void gameover_draw(GameOverScreen *gos, Framebuffer *fb);
+
+// ============================================================================
+// MODAL DIALOG
+// Reusable modal overlay with title, message, and 1–4 configurable buttons.
+// Follows the GameOverScreen lifecycle pattern (init/update/draw).
+// ============================================================================
+
+#define MODAL_MAX_BUTTONS 4
+
+typedef enum {
+    MODAL_ACTION_NONE = -1,   /* No button pressed */
+    MODAL_ACTION_BTN0 = 0,    /* First button pressed */
+    MODAL_ACTION_BTN1 = 1,    /* Second button pressed */
+    MODAL_ACTION_BTN2 = 2,    /* Third button pressed */
+    MODAL_ACTION_BTN3 = 3     /* Fourth button pressed */
+} ModalDialogAction;
+
+typedef struct {
+    bool active;
+    char title[64];
+    char message[128];        /* Optional description line */
+    uint8_t overlay_alpha;    /* 0=no overlay, 160-180=typical */
+    int dialog_width;
+    int dialog_height;
+    uint32_t bg_color;        /* Dialog background */
+    uint32_t border_color;    /* Dialog border */
+    uint32_t title_color;     /* Title text color */
+    uint32_t message_color;   /* Message text color */
+    int button_count;         /* 1–4 */
+    Button buttons[MODAL_MAX_BUTTONS];
+} ModalDialog;
+
+// Initialize modal dialog with title, message, and button count (1–4).
+// After calling, configure each button with modal_dialog_set_button().
+void modal_dialog_init(ModalDialog *dlg, const char *title, const char *message,
+                       int button_count);
+
+// Configure an individual button (index 0..button_count-1).
+void modal_dialog_set_button(ModalDialog *dlg, int index, const char *text,
+                             uint32_t bg_color, uint32_t text_color);
+
+// Convenience: init a 2-button confirm/cancel dialog (wraps init + set_button).
+void modal_dialog_init_confirm(ModalDialog *dlg, const char *title,
+                               const char *message,
+                               const char *confirm_text, uint32_t confirm_color,
+                               const char *cancel_text, uint32_t cancel_color);
+
+// Show/hide the dialog
+void modal_dialog_show(ModalDialog *dlg);
+void modal_dialog_hide(ModalDialog *dlg);
+bool modal_dialog_is_active(ModalDialog *dlg);
+
+// Draw the dialog overlay and contents
+void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb);
+
+// Process touch input; returns MODAL_ACTION_NONE (-1) if no button pressed,
+// or the button index (0–3) if pressed.  Auto-hides the dialog on press.
+ModalDialogAction modal_dialog_update(ModalDialog *dlg, int touch_x, int touch_y,
+                                       bool touch_active, uint32_t now_ms);
 
 #endif // COMMON_H

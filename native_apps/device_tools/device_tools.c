@@ -135,6 +135,12 @@ typedef enum {
     CALIB_DONE
 } CalibSubState;
 
+typedef enum {
+    CONFIRM_NONE,
+    CONFIRM_SHUTDOWN,
+    CONFIRM_REBOOT
+} ConfirmAction;
+
 static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "CALIBRATION" };
 
 static const char *test_names[] = {
@@ -176,6 +182,7 @@ typedef struct {
     int           calib_offsets_y[4];
     int           bezel_top, bezel_bottom, bezel_left, bezel_right;
     Config        cfg;
+    ConfirmAction confirm_action;
 } AppState;
 
 /* â”€â”€ Globals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -202,6 +209,9 @@ static Button led_minus_btn, led_plus_btn;
 static Button bl_minus_btn, bl_plus_btn;
 static Button save_btn, reset_btn;
 static ToggleSwitch portrait_toggle;
+static Button shutdown_btn, reboot_btn;
+static ModalDialog shutdown_dialog;
+static ModalDialog reboot_dialog;
 
 /* Diagnostics */
 static Button diag_prev_btn, diag_next_btn;
@@ -390,18 +400,43 @@ static void apply_backlight(int brightness_pct) {
     if (f) { fputs(buf, f); fclose(f); }
 }
 
+/* ── System Action Functions ──────────────────────────────────────────── */
+
+static void execute_system_action(ConfirmAction action) {
+    /* Clean up hardware */
+    hw_leds_off();
+
+    /* Show status message on screen */
+    fb_clear(g_fb, COLOR_BLACK);
+    const char *msg = (action == CONFIRM_SHUTDOWN)
+                      ? "SHUTTING DOWN..." : "REBOOTING...";
+    text_draw_centered(g_fb, g_fb->width / 2, g_fb->height / 2, msg, COLOR_YELLOW, 3);
+    fb_swap(g_fb);
+
+    /* Flush filesystem and execute */
+    sync();
+    if (action == CONFIRM_SHUTDOWN)
+        system("shutdown -h now");
+    else
+        system("reboot");
+
+    /* Wait for system to act (in case system() returns immediately) */
+    sleep(30);
+    exit(0);
+}
+
 static void create_settings_ui(AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
-    int sec_audio_y = CONTENT_Y + 5;
-    int sec_led_y   = CONTENT_Y + 75;
-    int sec_disp_y  = CONTENT_Y + (portrait ? 225 : 185);
-    int action_y    = CONTENT_Y + (portrait ? 390 : 320);
-    int led_bar_y   = sec_led_y + 65;
-    int bl_bar_y    = sec_disp_y + 30;
+    int sec_audio_y = CONTENT_Y + 2;
+    int sec_led_y   = CONTENT_Y + 52;
+    int sec_disp_y  = CONTENT_Y + (portrait ? 175 : 135);
+    int action_y    = CONTENT_Y + (portrait ? 310 : 225);
+    int led_bar_y   = sec_led_y + 50;
+    int bl_bar_y    = sec_disp_y + 23;
 
-    toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 30,
+    toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 20,
                 60, 28, "AUDIO ENABLED", state->audio_enabled);
-    toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 25,
+    toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 20,
                 60, 28, "LED EFFECTS", state->led_enabled);
 
     if (portrait) {
@@ -441,43 +476,70 @@ static void create_settings_ui(AppState *state) {
                          BTN_COLOR_HIGHLIGHT, 2);
     }
 
-    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, sec_disp_y + (portrait ? 95 : 65),
+    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, sec_disp_y + (portrait ? 75 : 53),
                 60, 28, "PORTRAIT MODE", state->portrait_mode);
 
-    button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 27,
-                     90, 34, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
+    button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 18,
+                     90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&test_led_btn, CONTENT_RIGHT - 100, sec_led_y + 22,
-                     90, 34, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
+    button_init_full(&test_led_btn, CONTENT_RIGHT - 100, sec_led_y + 18,
+                     90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 
     int center_x = CONTENT_LEFT + CONTENT_WIDTH / 2;
     if (portrait) {
         /* Portrait: stack buttons vertically, centered */
-        button_init_full(&save_btn, center_x - 80, action_y,
-                         160, 50, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
+        button_init_full(&save_btn, center_x - 70, action_y,
+                         140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&reset_btn, center_x - 110, action_y + 60,
-                         220, 50, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
+        button_init_full(&reset_btn, center_x - 90, action_y + 50,
+                         180, 40, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 2);
     } else {
-        button_init_full(&save_btn, center_x - 230, action_y,
-                         160, 50, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
+        button_init_full(&save_btn, center_x - 200, action_y,
+                         140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&reset_btn, center_x + 30, action_y,
-                         220, 50, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
+        button_init_full(&reset_btn, center_x + 10, action_y,
+                         180, 40, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 2);
     }
+
+    /* SYSTEM section — Shut Down and Reboot buttons below status message */
+    int system_y = action_y + (portrait ? 130 : 70);
+    int sys_btn_w = 140, sys_btn_h = 38;
+    int sys_gap = 20;
+    int sys_total_w = sys_btn_w * 2 + sys_gap;
+    int sys_x_start = center_x - sys_total_w / 2;
+
+    button_init_full(&shutdown_btn, sys_x_start, system_y + 20,
+                     sys_btn_w, sys_btn_h, "SHUT DOWN",
+                     BTN_COLOR_DANGER, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 2);
+    button_init_full(&reboot_btn, sys_x_start + sys_btn_w + sys_gap, system_y + 20,
+                     sys_btn_w, sys_btn_h, "REBOOT",
+                     BTN_COLOR_WARNING, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 2);
+
+    /* Confirmation dialogs */
+    modal_dialog_init_confirm(&shutdown_dialog, "SHUT DOWN DEVICE?",
+                              "THE DEVICE WILL POWER OFF.",
+                              "SHUT DOWN", BTN_COLOR_DANGER,
+                              "CANCEL", RGB(100, 100, 100));
+
+    modal_dialog_init_confirm(&reboot_dialog, "REBOOT DEVICE?",
+                              "THE DEVICE WILL RESTART.",
+                              "REBOOT", BTN_COLOR_WARNING,
+                              "CANCEL", RGB(100, 100, 100));
 }
 
 static void draw_settings(Framebuffer *fb, AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
-    int sec_audio_y = CONTENT_Y + 5;
-    int sec_led_y   = CONTENT_Y + 75;
-    int sec_disp_y  = CONTENT_Y + (portrait ? 225 : 185);
-    int action_y    = CONTENT_Y + (portrait ? 390 : 320);
-    int led_bar_y   = sec_led_y + 65;
-    int bl_bar_y    = sec_disp_y + 30;
+    int sec_audio_y = CONTENT_Y + 2;
+    int sec_led_y   = CONTENT_Y + 52;
+    int sec_disp_y  = CONTENT_Y + (portrait ? 175 : 135);
+    int action_y    = CONTENT_Y + (portrait ? 310 : 225);
+    int led_bar_y   = sec_led_y + 50;
+    int bl_bar_y    = sec_disp_y + 23;
 
     draw_section_header(fb, sec_audio_y, "AUDIO");
     toggle_draw(fb, &audio_toggle);
@@ -520,7 +582,7 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
 
     toggle_draw(fb, &portrait_toggle);
     if (portrait_toggle.state) {
-        int note_y = sec_disp_y + (portrait ? 108 : 98);
+        int note_y = sec_disp_y + (portrait ? 88 : 80);
         fb_draw_text(fb, CONTENT_LEFT + 5, note_y,
                      "TAKES EFFECT ON NEXT APP LAUNCH", RGB(255, 200, 80), 1);
     }
@@ -531,10 +593,16 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     if (state->status_msg[0]) {
         uint32_t sc = COLOR_GREEN;
         if (strstr(state->status_msg, "DEFAULTS")) sc = COLOR_CYAN;
-        int status_y = portrait ? action_y + 120 : action_y + 65;
+        int status_y = portrait ? action_y + 100 : action_y + 50;
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
                            status_y, state->status_msg, sc, 2);
     }
+
+    /* SYSTEM section */
+    int system_y = action_y + (portrait ? 130 : 70);
+    draw_section_header(fb, system_y, "SYSTEM");
+    button_draw(fb, &shutdown_btn);
+    button_draw(fb, &reboot_btn);
 }
 
 static void handle_settings_input(AppState *state, int tx, int ty,
@@ -611,6 +679,16 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         unlink(PORTRAIT_FLAG_FILE);
         snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
         state->status_time_ms = now;
+    }
+
+    /* System action buttons */
+    if (button_update(&shutdown_btn, tx, ty, touching, now)) {
+        state->confirm_action = CONFIRM_SHUTDOWN;
+        modal_dialog_show(&shutdown_dialog);
+    }
+    if (button_update(&reboot_btn, tx, ty, touching, now)) {
+        state->confirm_action = CONFIRM_REBOOT;
+        modal_dialog_show(&reboot_dialog);
     }
 }
 
@@ -1711,6 +1789,13 @@ int main(void) {
             default: break;
         }
 
+        /* Draw confirmation dialog overlay on top of everything */
+        if (state.confirm_action == CONFIRM_SHUTDOWN) {
+            modal_dialog_draw(&shutdown_dialog, &fb);
+        } else if (state.confirm_action == CONFIRM_REBOOT) {
+            modal_dialog_draw(&reboot_dialog, &fb);
+        }
+
         fb_swap(&fb);
 
         touch_poll(&touch);
@@ -1718,14 +1803,26 @@ int main(void) {
         int tx = ts.x, ty = ts.y;
         bool touching = ts.pressed || ts.held;
 
-        handle_tab_bar_input(&state, tx, ty, touching, now);
+        /* When confirmation dialog is active, only handle dialog input */
+        if (state.confirm_action != CONFIRM_NONE) {
+            ModalDialog *active_dlg = (state.confirm_action == CONFIRM_SHUTDOWN)
+                                      ? &shutdown_dialog : &reboot_dialog;
+            ModalDialogAction action = modal_dialog_update(active_dlg, tx, ty, touching, now);
+            if (action == MODAL_ACTION_BTN0) {
+                execute_system_action(state.confirm_action);
+            } else if (action == MODAL_ACTION_BTN1) {
+                state.confirm_action = CONFIRM_NONE;
+            }
+        } else {
+            handle_tab_bar_input(&state, tx, ty, touching, now);
 
-        switch (state.active_tab) {
-            case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
-            case TAB_DIAGNOSTICS: handle_diag_input(&state, tx, ty, touching, now);     break;
-            case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
-            case TAB_CALIBRATION: handle_calib_input(&state, tx, ty, touching, now);    break;
-            default: break;
+            switch (state.active_tab) {
+                case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
+                case TAB_DIAGNOSTICS: handle_diag_input(&state, tx, ty, touching, now);     break;
+                case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
+                case TAB_CALIBRATION: handle_calib_input(&state, tx, ty, touching, now);    break;
+                default: break;
+            }
         }
 
         usleep(16000);

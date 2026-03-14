@@ -130,8 +130,7 @@ int last_touch_y = -1;
 Button menu_button;
 Button exit_button;
 Button start_button;
-Button resume_button;
-Button exit_pause_button;
+ModalDialog pause_dialog;
 GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
 static GameOverScreen gos;
@@ -188,12 +187,9 @@ void init_game() {
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&resume_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
-                fb.height / 2, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "RESUME",
-                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_pause_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
-                fb.height / 2 + 80, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "EXIT",
-                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
+    modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
     
     reset_game();
 }
@@ -374,26 +370,23 @@ void handle_input() {
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
-        if (state.pressed) {
-            bool resume_touched = button_is_touched(&resume_button, state.x, state.y);
-            if (button_check_press(&resume_button, resume_touched, current_time)) {
-                current_screen = SCREEN_PLAYING;
-                game.paused = false;
-                return;
+        ModalDialogAction action = modal_dialog_update(&pause_dialog,
+            state.x, state.y, state.pressed, current_time);
+        if (action == MODAL_ACTION_BTN0) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
+        if (action == MODAL_ACTION_BTN1) {
+            // Fade out effect
+            for (int i = 0; i < 3; i++) {
+                hw_set_led(LED_RED, 100);
+                usleep(100000);  // 100ms
+                hw_leds_off();
+                usleep(100000);  // 100ms
             }
-            
-            bool exit_touched = button_is_touched(&exit_pause_button, state.x, state.y);
-            if (button_check_press(&exit_pause_button, exit_touched, current_time)) {
-                // Fade out effect
-                for (int i = 0; i < 3; i++) {
-                    hw_set_led(LED_RED, 100);
-                    usleep(100000);  // 100ms
-                    hw_leds_off();
-                    usleep(100000);  // 100ms
-                }
-                running = false;
-                return;
-            }
+            running = false;
+            return;
         }
         return;
     }
@@ -419,6 +412,7 @@ void handle_input() {
         if (button_check_press(&menu_button, menu_touched, current_time)) {
             current_screen = SCREEN_PAUSED;
             game.paused = true;
+            modal_dialog_show(&pause_dialog);
             return;
         }
     }
@@ -620,11 +614,7 @@ void draw_game() {
     
     // Handle pause screen overlay (Issue #11: semi-transparent overlay)
     if (current_screen == SCREEN_PAUSED) {
-        // Semi-transparent dark overlay (~63% opacity, matches BrickBreaker/Pong/Snake)
-        fb_fill_rect_alpha(&fb, 0, 0, fb.width, fb.height, COLOR_BLACK, 160);
-        text_draw_centered(&fb, fb.width / 2, fb.height / 3, "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
+        modal_dialog_draw(&pause_dialog, &fb);
         return;
     }
     

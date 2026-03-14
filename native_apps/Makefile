@@ -12,6 +12,7 @@ TETRIS_DIR = tetris
 PONG_DIR = pong
 BRICK_DIR = brick_breaker
 SAMEGAME_DIR = samegame
+FROGGER_DIR = frogger
 BUILD_DIR = build
 
 # Common source files
@@ -25,7 +26,7 @@ COMMON_UILAYOUT_OBJ = $(BUILD_DIR)/ui_layout.o
 DEVICE_TOOLS_DEPS = $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ) $(COMMON_UILAYOUT_OBJ)
 
 # Targets
-GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker $(BUILD_DIR)/samegame
+GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker $(BUILD_DIR)/samegame $(BUILD_DIR)/frogger
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate $(BUILD_DIR)/audio_touch_test
 
@@ -96,6 +97,11 @@ $(BUILD_DIR)/samegame: $(SAMEGAME_DIR)/samegame.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: samegame"
 
+# Frogger game
+$(BUILD_DIR)/frogger: $(FROGGER_DIR)/frogger.c $(COMMON_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: frogger"
+
 # Game selector
 $(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
@@ -154,6 +160,7 @@ install: all
 	cp $(BUILD_DIR)/tetris /opt/games/
 	cp $(BUILD_DIR)/pong /opt/games/
 	cp $(BUILD_DIR)/samegame /opt/games/
+	cp $(BUILD_DIR)/frogger /opt/games/
 	cp $(BUILD_DIR)/game_selector /opt/games/
 	cp $(BUILD_DIR)/watchdog_feeder /opt/games/
 	cp $(BUILD_DIR)/device_tools /opt/games/

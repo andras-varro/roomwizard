@@ -197,8 +197,7 @@ static int goal_cols[NUM_GOALS];
 Button menu_button;
 Button exit_button;
 Button start_button;
-Button resume_button;
-Button exit_pause_button;
+ModalDialog pause_dialog;
 
 /* ─── Lane configuration table ──────────────────────────────────────────── */
 
@@ -411,18 +410,9 @@ static void init_buttons(void) {
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
                 "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&resume_button,
-                (int)fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                (int)fb.height / 2,
-                BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                "RESUME",
-                BTN_RESUME_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_pause_button,
-                (int)fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                (int)fb.height / 2 + 80,
-                BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                "EXIT",
-                BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
+    modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
 }
 
 static void reset_frog_position(void) {
@@ -742,19 +732,17 @@ static void handle_input(void) {
 
     /* ── Pause screen ────────────────────────────────────────────────── */
     if (current_screen == SCREEN_PAUSED) {
-        if (ts.pressed) {
-            if (button_is_touched(&resume_button, ts.x, ts.y) &&
-                button_check_press(&resume_button, true, now)) {
-                current_screen = SCREEN_PLAYING;
-                last_frame_ms  = get_time_ms();
-                return;
-            }
-            if (button_is_touched(&exit_pause_button, ts.x, ts.y) &&
-                button_check_press(&exit_pause_button, true, now)) {
-                fb_fade_out(&fb);
-                running = false;
-                return;
-            }
+        ModalDialogAction action = modal_dialog_update(&pause_dialog,
+            ts.x, ts.y, ts.pressed, now);
+        if (action == MODAL_ACTION_BTN0) {
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+            return;
+        }
+        if (action == MODAL_ACTION_BTN1) {
+            fb_fade_out(&fb);
+            running = false;
+            return;
         }
         return;
     }
@@ -772,6 +760,7 @@ static void handle_input(void) {
         if (button_is_touched(&menu_button, ts.x, ts.y) &&
             button_check_press(&menu_button, true, now)) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_show(&pause_dialog);
             return;
         }
         /* Direction input (only in play area, with cooldown) */
@@ -1253,12 +1242,7 @@ static void draw_all(void) {
 
     /* ── Pause overlay ───────────────────────────────────────────────── */
     if (current_screen == SCREEN_PAUSED) {
-        fb_fill_rect_alpha(&fb, 0, 0, (int)fb.width, (int)fb.height,
-                           COLOR_BLACK, 160);
-        text_draw_centered(&fb, (int)fb.width / 2, (int)fb.height / 3,
-                           "PAUSED", COLOR_CYAN, 3);
-        button_draw(&fb, &resume_button);
-        button_draw(&fb, &exit_pause_button);
+        modal_dialog_draw(&pause_dialog, &fb);
         return;
     }
 
