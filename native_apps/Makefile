@@ -14,6 +14,7 @@ BRICK_DIR = brick_breaker
 SAMEGAME_DIR = samegame
 FROGGER_DIR = frogger
 BUILD_DIR = build
+USB_TEST_DIR = usb_test
 
 # Common source files
 COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c $(COMMON_DIR)/highscore.c
@@ -27,7 +28,7 @@ DEVICE_TOOLS_DEPS = $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ) $(COM
 
 # Targets
 GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker $(BUILD_DIR)/samegame $(BUILD_DIR)/frogger
-UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools
+UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools $(BUILD_DIR)/usb_test
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate $(BUILD_DIR)/audio_touch_test
 
 .PHONY: all clean install utils tests icons
@@ -151,6 +152,11 @@ $(BUILD_DIR)/hardware_test: hardware_test/hardware_test.c $(BUILD_DIR)/hardware.
 $(BUILD_DIR)/device_tools: device_tools/device_tools.c $(DEVICE_TOOLS_DEPS)
 	$(CC) $(CFLAGS) -I. $^ -o $@ $(LDFLAGS)
 	@echo "Built: device_tools"
+
+# USB Test tool
+$(BUILD_DIR)/usb_test: $(USB_TEST_DIR)/usb_test.c $(COMMON_OBJ) $(COMMON_CONFIG_OBJ) $(COMMON_UILAYOUT_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: usb_test"
 
 # Install to /opt/games (requires root)
 install: all

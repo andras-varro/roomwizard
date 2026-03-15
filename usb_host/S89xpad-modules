@@ -1,0 +1,29 @@
+#!/bin/sh
+# Load Xbox controller kernel modules
+# Must run before S90usb-host
+
+case "$1" in
+  start)
+    echo "Loading Xbox controller modules..."
+    insmod /lib/modules/4.14.52/extra/ff-memless.ko 2>/dev/null
+    insmod /lib/modules/4.14.52/extra/joydev.ko 2>/dev/null
+    insmod /lib/modules/4.14.52/extra/xpad.ko 2>/dev/null
+    echo "Xbox controller modules loaded"
+    ;;
+  stop)
+    echo "Unloading Xbox controller modules..."
+    rmmod xpad 2>/dev/null
+    rmmod joydev 2>/dev/null
+    rmmod ff_memless 2>/dev/null
+    ;;
+  restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+exit 0

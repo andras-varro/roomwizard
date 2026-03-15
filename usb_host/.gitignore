@@ -1,0 +1,12 @@
+# Copyrighted device-specific files (extracted from device)
+*.dtb
+*.dts
+kernel-config-*
+devmem_write
+
+# Kernel source and built modules (cross-compilation artifacts)
+linux-4.14.52/
+modules/
+device_config
+device_config.gz
+*.ko

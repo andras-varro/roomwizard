@@ -26,6 +26,7 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 | `app_launcher` | Launcher | Visual grid launcher — auto-starts on boot, respawns |
 | `game_selector` | Launcher | Legacy text menu (superseded by app_launcher) |
 | `hardware_test` | Tool | Diagnostics |
+| `usb_test` | Tool | USB device tester — keyboard, mouse, gamepad visualization |
 | `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s |
 | `unified_calibrate` | Tool | Touch + bezel calibration |
 
@@ -243,7 +244,7 @@ Two non-executable marker files in `/opt/games/` control how `game_selector` han
 Current state on device:
 - **Hidden:** `watchdog_feeder`, `touch_test`, `touch_debug`, `touch_inject`, `touch_calibrate`, `unified_calibrate`, `pressure_test`
 - **No-args:** `scummvm`
-- **Visible:** `snake`, `tetris`, `pong`, `hardware_test`, `scummvm`
+- **Visible:** `snake`, `tetris`, `pong`, `hardware_test`, `usb_test`, `scummvm`
 
 ## Resources
 

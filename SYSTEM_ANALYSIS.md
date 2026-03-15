@@ -30,7 +30,7 @@ The Steelcase RoomWizard is an embedded Linux device based on a Texas Instrument
 - **Protection:** MD5 checksums, 60-second hardware watchdog, Steelcase software watchdog (cron-based, must disable), boot state tracking
 - **Interfaces:** Framebuffer (`/dev/fb0`), touchscreen (`/dev/input/`), LEDs (sysfs)
 - **Software Stack:** X11 → WebKit browser → Jetty 9.4.11 → Java 8 → HSQLDB
-- **USB:** Hardware capable of host mode, currently non-functional (device tree issue - fixable)
+- **USB:** Host mode enabled via runtime kernel patching; supports keyboards, mice, and game controllers (Xbox via cross-compiled xpad module)
 - **GPIO:** 8 GPIO banks (200+ pins), TWL4030 PMIC with 18 additional GPIO pins
 - **Wireless:** No WiFi or Bluetooth hardware present
 
@@ -150,6 +150,43 @@ screen_y = (raw_y * 480) / 4095;
 - Corners: ~14-27px error (resistive touchscreen characteristic)
 - Calibration can improve corner accuracy
 
+### USB Input Devices
+
+USB keyboards, mice, and game controllers are supported via the USB host mode subsystem. A Micro USB OTG adapter and powered USB hub are required.
+
+**Keyboard Support:**
+- Detected automatically by the built-in `usbhid` kernel driver (HID class `03`)
+- Appears as `/dev/input/eventX` with `EV_KEY` capabilities
+- The [`usb_test`](native_apps/usb_test/usb_test.c) app classifies devices with ≥20 letter keys (A-Z) as keyboards
+- Standard HID keyboards work out-of-the-box once USB host mode is enabled
+
+**Mouse/Touchpad Support:**
+- Detected automatically by the built-in `usbhid` kernel driver
+- Appears as `/dev/input/eventX` with `EV_REL` (relative X/Y) + `BTN_LEFT` capabilities
+- Touchpads with integrated keyboards (combo devices) create multiple event nodes — one for keyboard, one for mouse
+- The `usb_test` app classifies devices with `REL_X`/`REL_Y` + `BTN_LEFT` as mice
+
+**Game Controller Support:**
+- **Xbox 360 controllers** (`045e:028e`) require the `xpad` kernel module (cross-compiled and loaded separately)
+- The controller uses vendor-specific USB class (`ff`), NOT standard HID — the built-in `usbhid` driver cannot claim it
+- Three kernel modules must be loaded: `ff-memless.ko` → `joydev.ko` → `xpad.ko`
+- After loading, the controller appears as `/dev/input/eventX` with `EV_ABS` (sticks/triggers) + `EV_KEY` (buttons) + `EV_FF` (force feedback)
+- Also creates `/dev/input/jsX` (joystick interface)
+- The `usb_test` app classifies devices with `ABS_X`/`ABS_Y` + `BTN_GAMEPAD`/`BTN_SOUTH` as gamepads
+- Standard HID gamepads (non-Xbox) should work with the built-in `usbhid` driver without additional modules
+
+**USB Hub Support:**
+- External USB hubs are supported (tested with keyboard/touchpad combo that includes a built-in hub)
+- Devices connected through hubs enumerate normally
+- Multiple simultaneous USB devices are supported (keyboard + mouse + controller via hub)
+
+**Boot Persistence:**
+- USB host mode: `/etc/init.d/usb-host` (S90) — re-applies MUSB DMA patch
+- Controller modules: `/etc/init.d/S89xpad-modules` (S89) — loads kernel modules
+- Both run automatically on every boot
+
+**See:** [`usb_host/README.md`](usb_host/README.md) for complete technical details on USB host mode and controller support.
+
 ### Indicators
 
 - **Red LED:** Status indicator (`/sys/class/leds/red_led/brightness`)
@@ -214,7 +251,7 @@ Diagnosed via `native_apps/tests/oss_diag.c`.
 ### Connectivity
 
 - **Ethernet:** 10/100 Mbps RJ45
-- **USB:** Micro USB (device/gadget mode only - see [USB Subsystem](#usb-subsystem-analysis))
+- **USB:** Micro USB OTG (host mode enabled — keyboards, mice, game controllers supported; see [USB Subsystem](#usb-subsystem-analysis) and [`usb_host/README.md`](usb_host/README.md))
 - **Serial:** UART on ttyO1 (115200 baud) for debugging
 
 ---
@@ -457,81 +494,97 @@ graph TB
 
 ## USB Subsystem Analysis
 
-### USB Port Configuration
+### Status: ✅ ENABLED — USB Host Mode + Game Controller Support
 
-The micro USB port hardware **IS CAPABLE** of USB host mode, but is currently **NON-FUNCTIONAL** due to a device tree configuration issue.
+The micro USB port is functional in USB host mode with support for keyboards, mice, touchpads, and game controllers. A Micro USB OTG adapter + powered USB hub are required.
 
-**Status:** ⚠️ **FIXABLE** - Requires device tree modification
+**Deploy:** `cd usb_host && ./build-and-deploy.sh 192.168.50.73`
 
-### Hardware Architecture
+### Two Problems Solved
 
-**SoC:** TI AM335x with MUSB dual-role USB controller
+#### Problem 1: USB Host Mode Disabled (MUSB DMA Bug)
 
-**Hardware Present:**
+The OEM kernel 4.14.52 has `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` both disabled — making MUSB initialization always fail with "DMA controller not set" (-ENODEV). This is a build configuration defect.
+
+**Solution:** Runtime `/dev/mem` patching of the `omap2430_ops` struct in kernel memory. Noop stub function pointers are written into `dma_init`/`dma_exit` fields, forcing PIO (Programmed I/O) mode fallback. After patching, the MUSB driver rebinds successfully.
+
+#### Problem 2: Game Controllers Not Detected (Missing Joystick Subsystem)
+
+Even with USB host mode working, Xbox 360 controllers (`045e:028e`) appeared in `lsusb` but did NOT create `/dev/input/event*` nodes because:
+- `CONFIG_INPUT_JOYSTICK` is not set — entire joystick subsystem absent
+- `CONFIG_INPUT_JOYDEV` is not set — no `/dev/input/jsX` interface
+- `CONFIG_INPUT_FF_MEMLESS` is not set — force-feedback dependency missing
+- The Xbox controller uses vendor-specific USB class (`bInterfaceClass=ff`), not HID class `03` — the `usbhid` driver ignores it
+
+**Solution:** Cross-compiled three kernel modules from matching kernel source (4.14.52) and loaded them at boot:
+
+| Module | Size | Purpose |
+|--------|------|---------|
+| `ff-memless.ko` | 8.4 KB | Force-feedback memless support (xpad dependency) |
+| `joydev.ko` | 19.5 KB | Joystick device interface (`/dev/input/jsX`) |
+| `xpad.ko` | 36 KB | Xbox gamepad driver (360, One, etc.) |
+
+The kernel supports loadable modules (`CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`, `CONFIG_MODULE_SIG` not set).
+
+### Verified Working
+
 ```
-✅ MUSB USB Controller:  480ab000.usb_otg_hs (ti,omap3-musb)
-✅ USB Host TLL:         48062000.usbhstll
-✅ USB Host Controller:  48064000.usbhshost  
-✅ TWL4030 USB PHY:      twl4030-usb (initialized)
-✅ USB Regulators:       vusb1v5, vusb1v8, vusb3v1
-```
+# USB host mode
+musb-hdrc musb-hdrc.0.auto: MUSB HDRC host driver
+musb-hdrc musb-hdrc.0.auto: new USB bus registered, assigned bus number 1
+hub 1-0:1.0: USB hub found
 
-**Kernel Configuration:**
-```
-✅ CONFIG_USB_MUSB_HDRC=y       - MUSB controller driver
-✅ CONFIG_USB_MUSB_HOST=y       - USB HOST mode enabled
-✅ CONFIG_USB_MUSB_OMAP2PLUS=y  - OMAP platform support
-✅ USB HID support loaded       - Keyboard/mouse drivers
-```
+# Keyboard + touchpad combo (through hub)
+input: HID 04d9:a088 as .../input3  (USB HID v1.11 Keyboard)
+input: HID 04d9:a088 as .../input4  (USB HID v1.11 Mouse)
 
-### Current Problem
-
-```
-❌ musb-hdrc musb-hdrc.0.auto: DMA controller not set
-❌ musb-hdrc musb-hdrc.0.auto: musb_init_controller failed with status -19
-```
-
-**Error -19 = ENODEV** - DMA controller reference missing from device tree
-
-### Root Cause
-
-The MUSB USB controller requires a **DMA controller** to be specified in the device tree, but the current configuration is missing this reference. Without the DMA controller link, the MUSB driver fails to initialize during boot.
-
-### Enabling USB Host Mode
-
-**Solution:** Device tree modification (moderate difficulty, reversible)
-
-**Required Changes:**
-```dts
-&usb_otg_hs {
-    compatible = "ti,omap3-musb";
-    dr_mode = "host";              /* Force host mode */
-    dmas = <&sdma 70>, <&sdma 71>; /* DMA channels */
-    dma-names = "rx", "tx";        /* DMA channel names */
-};
+# Xbox 360 controller (through hub, via xpad driver)
+input: Microsoft X-Box 360 pad as .../input5
+usbcore: registered new interface driver xpad
 ```
 
-**Steps:**
-1. Extract device tree blob (DTB) from boot partition
-2. Decompile DTB to device tree source (DTS) using `dtc`
-3. Add DMA controller reference to USB node
-4. Recompile DTS to DTB
-5. Backup original DTB and replace with modified version
-6. Reboot and test
+### Supported USB Device Types
 
-**Hardware Considerations:**
-- USB port may lack VBUS power (use powered USB hub)
-- May require USB OTG adapter cable
-- Powered hub recommended for multiple devices
+| Device Type | Driver | Kernel Config | Works Out-of-Box |
+|-------------|--------|--------------|------------------|
+| USB Keyboard | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
+| USB Mouse | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
+| USB Touchpad | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
+| USB Hub | `hub` (built-in) | `CONFIG_USB=y` | ✅ Yes |
+| Xbox 360 Controller | `xpad` (module) | `CONFIG_JOYSTICK_XPAD=m` | ❌ Needs modules |
+| Xbox One Controller | `xpad` (module) | `CONFIG_JOYSTICK_XPAD=m` | ❌ Needs modules |
+| HID Gamepad (generic) | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes (if HID compliant) |
 
-### Alternative Input Methods
+### Hardware Required
 
-Since USB host mode requires modification:
-- **SSH with X11 forwarding:** `ssh -X root@192.168.50.73`
-- **Network-based input:** VNC server or web-based virtual keyboard
-- **Serial console:** ttyO1 (115200 baud) for debugging
+| Item | Purpose |
+|------|---------|
+| Micro USB OTG adapter | Micro-B male → USB-A female |
+| Powered USB hub | Port may not supply VBUS power |
 
-**Recommendation:** Use network-based input for immediate productivity, experiment with USB host mode as a learning exercise if interested.
+### Deployed Files (on device)
+
+| File | Purpose |
+|------|---------|
+| `/usr/local/bin/devmem_write` | mmap-based /dev/mem read/write tool |
+| `/usr/local/bin/enable-usb-host.sh` | MUSB memory patch + driver rebind |
+| `/etc/init.d/usb-host` | SysV init wrapper (S90) |
+| `/etc/rc5.d/S90usb-host` | Boot persistence symlink |
+| `/lib/modules/4.14.52/extra/ff-memless.ko` | Force-feedback module |
+| `/lib/modules/4.14.52/extra/joydev.ko` | Joystick device module |
+| `/lib/modules/4.14.52/extra/xpad.ko` | Xbox controller driver |
+| `/etc/init.d/S89xpad-modules` | Module loader init script (S89) |
+| `/etc/rc5.d/S89xpad-modules` | Boot persistence symlink |
+
+### Root Cause Details
+
+See [`usb_host/README.md`](usb_host/README.md) for complete technical details including:
+- Memory addresses for MUSB DMA patching
+- omap2430_ops struct layout
+- Why mmap() works but write() doesn't
+- Xbox controller USB descriptor analysis
+- Kernel module cross-compilation process
+- Failed approaches investigated
 
 ---
 
@@ -815,5 +868,6 @@ See [`native_apps/README.md#system-optimization`](native_apps/README.md#system-o
 ## Related Documentation
 
 - [Native Apps](native_apps/README.md)
+- [USB Host Mode](usb_host/README.md)
 - [ScummVM Backend](scummvm-roomwizard/README.md)
 - [Commissioning](COMMISSIONING.md)

@@ -499,3 +499,4 @@ native_games/build/*
 *.tar.gz
 !scummvm-patches/*.tar.gz
 build
+usb_host/linux-4.14.52.tar.xz

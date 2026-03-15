@@ -41,61 +41,64 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/25" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/25" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/25" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 4/25" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step " 5/25" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/25" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 7/25" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
-step " 8/25" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
-step " 9/25" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
-step "10/25" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
+step " 1/26" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/26" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/26" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 4/26" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
+step " 5/26" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/26" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 7/26" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 8/26" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
+step " 9/26" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
+step "10/26" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
 
-step "11/25" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "12/25" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "13/25" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "11/26" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
+step "12/26" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
+step "13/26" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
 
-step "14/25" "brick_breaker"
+step "14/26" "brick_breaker"
 $CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ -o build/brick_breaker -lm
 
-step "15/25" "samegame"
+step "15/26" "samegame"
 $CC -O2 -static samegame/samegame.c $COMMON_OBJ -o build/samegame -lm
 
-step "16/25" "frogger"
+step "16/26" "frogger"
 $CC -O2 -static frogger/frogger.c $COMMON_OBJ -o build/frogger -lm
 
-step "17/25" "game_selector"
+step "17/26" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
 
-step "18/25" "app_launcher"
+step "18/26" "app_launcher"
 $CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "19/25" "hardware_test"
+step "19/26" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "20/25" "hardware_config"
+step "20/26" "hardware_config"
 $CC -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
-step "21/25" "hardware_diag"
+step "21/26" "hardware_diag"
 $CC -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
 
-step "22/25" "unified_calibrate"
+step "22/26" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "23/25" "audio_touch_test"
+step "23/26" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
-step "24/25" "backlight"
+step "24/26" "backlight"
 $CC -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
-step "25/25" "device_tools"
+step "25/26" "device_tools"
 $CC -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
+
+step "26/26" "usb_test"
+$CC -O2 -static -I. usb_test/usb_test.c $COMMON_OBJ build/ui_layout.o -o build/usb_test -lm
 
 # Collect icon files from source dirs → build/icons/
 mkdir -p build/icons
@@ -109,7 +112,7 @@ done
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools \
+ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools build/usb_test \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete"
 echo ""
@@ -171,6 +174,7 @@ scp build/snake build/tetris build/pong \
     build/audio_touch_test \
     build/backlight \
     build/device_tools \
+    build/usb_test \
     "$DEVICE:$GAMES_DIR/"
 ok "Game binaries uploaded"
 
@@ -199,6 +203,7 @@ chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/hardware_diag \
          /opt/games/unified_calibrate /opt/games/backlight \
          /opt/games/device_tools \
+         /opt/games/usb_test \
          /opt/roomwizard/app_launcher
 
 # .noargs marker for scummvm (if present)
@@ -271,6 +276,13 @@ name=Device Tools
 exec=/opt/games/device_tools
 icon=/opt/roomwizard/icons/device_tools.ppm
 args=
+APP
+
+cat > /opt/roomwizard/apps/usb_test.app << 'APP'
+name=USB Test
+exec=/opt/games/usb_test
+icon=/opt/roomwizard/icons/usb_test.ppm
+args=fb,touch
 APP
 
 # Remove old tool manifests that are now consolidated into device_tools

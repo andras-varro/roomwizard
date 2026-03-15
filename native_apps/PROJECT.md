@@ -6,6 +6,7 @@
 - 6 games: Snake, Tetris, Pong, Theremin, Brickbreaker, SameGame
 - Graphical game selector with horizontal scrolling
 - Hardware test suite
+- USB device tester (keyboard, mouse, gamepad visualization)
 - Touch input: accurate with calibration
 - Double buffering: flicker-free rendering
 - LED effects: integrated
@@ -88,6 +89,7 @@ ModalDialogAction action = modal_dialog_update(&pause_dialog, tx, ty, touching, 
 - `watchdog_feeder/` - Prevents 60s reset
 - `device_tools/` - **Unified hardware management app** (replaces `hardware_config`, `hardware_diag`, `hardware_test_gui`, `unified_calibrate`); see [Device Tools](#device-tools) below
 - `hardware_test/` - CLI diagnostics (`hardware_test`, `pressure_test`); GUI version consolidated into `device_tools`
+- `usb_test/` - USB input device tester — keyboard layout, mouse tracking, gamepad visualization; see [`usb_test/usb_test.c`](usb_test/usb_test.c)
 - `hardware_config/` - *(consolidated into `device_tools`)* Device settings GUI
 - `hardware_diag/` - *(consolidated into `device_tools`)* System diagnostics GUI
 - `tests/` - Touch debug/inject, framebuffer capture; `unified_calibrate` consolidated into `device_tools`
