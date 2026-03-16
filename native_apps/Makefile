@@ -13,6 +13,7 @@ PONG_DIR = pong
 BRICK_DIR = brick_breaker
 SAMEGAME_DIR = samegame
 FROGGER_DIR = frogger
+PLATFORMER_DIR = platformer
 BUILD_DIR = build
 USB_TEST_DIR = usb_test
 
@@ -24,10 +25,11 @@ COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/
 COMMON_AUDIO_OBJ = $(BUILD_DIR)/audio.o
 COMMON_CONFIG_OBJ = $(BUILD_DIR)/config.o
 COMMON_UILAYOUT_OBJ = $(BUILD_DIR)/ui_layout.o
+COMMON_GAMEPAD_OBJ = $(BUILD_DIR)/gamepad.o
 DEVICE_TOOLS_DEPS = $(COMMON_OBJ) $(COMMON_AUDIO_OBJ) $(COMMON_CONFIG_OBJ) $(COMMON_UILAYOUT_OBJ)
 
 # Targets
-GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker $(BUILD_DIR)/samegame $(BUILD_DIR)/frogger
+GAMES = $(BUILD_DIR)/snake $(BUILD_DIR)/tetris $(BUILD_DIR)/pong $(BUILD_DIR)/brick_breaker $(BUILD_DIR)/samegame $(BUILD_DIR)/frogger $(BUILD_DIR)/platformer
 UTILS = $(BUILD_DIR)/game_selector $(BUILD_DIR)/app_launcher $(BUILD_DIR)/watchdog_feeder $(BUILD_DIR)/device_tools $(BUILD_DIR)/usb_test
 TESTS = $(BUILD_DIR)/touch_test $(BUILD_DIR)/touch_calibrate $(BUILD_DIR)/touch_inject $(BUILD_DIR)/unified_calibrate $(BUILD_DIR)/audio_touch_test
 
@@ -73,6 +75,9 @@ $(BUILD_DIR)/config.o: $(COMMON_DIR)/config.c $(COMMON_DIR)/config.h
 $(BUILD_DIR)/ui_layout.o: $(COMMON_DIR)/ui_layout.c $(COMMON_DIR)/ui_layout.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/gamepad.o: $(COMMON_DIR)/gamepad.c $(COMMON_DIR)/gamepad.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Snake game
 $(BUILD_DIR)/snake: $(SNAKE_DIR)/snake.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
@@ -102,6 +107,11 @@ $(BUILD_DIR)/samegame: $(SAMEGAME_DIR)/samegame.c $(COMMON_OBJ)
 $(BUILD_DIR)/frogger: $(FROGGER_DIR)/frogger.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: frogger"
+
+# Platformer game (Office Runner)
+$(BUILD_DIR)/platformer: $(PLATFORMER_DIR)/platformer.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	@echo "Built: platformer"
 
 # Game selector
 $(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ)
@@ -167,6 +177,7 @@ install: all
 	cp $(BUILD_DIR)/pong /opt/games/
 	cp $(BUILD_DIR)/samegame /opt/games/
 	cp $(BUILD_DIR)/frogger /opt/games/
+	cp $(BUILD_DIR)/platformer /opt/games/
 	cp $(BUILD_DIR)/game_selector /opt/games/
 	cp $(BUILD_DIR)/watchdog_feeder /opt/games/
 	cp $(BUILD_DIR)/device_tools /opt/games/
@@ -196,11 +207,12 @@ help:
 	@echo "Native Games Makefile"
 	@echo "====================="
 	@echo "Targets:"
-	@echo "  all      - Build all games (default)"
-	@echo "  snake    - Build snake game only"
-	@echo "  tetris   - Build tetris game only"
-	@echo "  pong     - Build pong game only"
-	@echo "  install  - Install games to /opt/games (requires root)"
+	@echo "  all        - Build all games (default)"
+	@echo "  snake      - Build snake game only"
+	@echo "  tetris     - Build tetris game only"
+	@echo "  pong       - Build pong game only"
+	@echo "  platformer - Build platformer game only"
+	@echo "  install    - Install games to /opt/games (requires root)"
 	@echo "  clean    - Remove build directory"
 	@echo "  help     - Show this help message"
 	@echo ""

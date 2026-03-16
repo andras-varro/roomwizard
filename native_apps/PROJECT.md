@@ -3,14 +3,15 @@
 ## Current Status
 
 **System:** Fully functional ✅
-- 6 games: Snake, Tetris, Pong, Theremin, Brickbreaker, SameGame
+- 7 games: Snake, Tetris, Pong, Theremin, Brickbreaker, SameGame, Office Runner (platformer)
 - Graphical game selector with horizontal scrolling
 - Hardware test suite
 - USB device tester (keyboard, mouse, gamepad visualization)
 - Touch input: accurate with calibration
-- Double buffering: flicker-free rendering
+- Double buffering: flicker-free rendering, sprite blit functions
 - LED effects: integrated
 - Audio effects: integrated (beeps, tones, fanfares)
+- Gamepad/keyboard input module
 - Watchdog: handled by system `/usr/sbin/watchdog` — no custom feeder needed
 - Portrait mode: Phase 1 (foundation) + Phase 2 (app-level) + Phase 3 (rotation/layout) complete ✅ — transparent 90° rotation layer, touch transform, per-game layout adaptations
 
@@ -35,6 +36,7 @@
 - [`common/ui_layout.c`](common/ui_layout.c) - Layouts + ScrollableList widget
 - [`common/audio.c`](common/audio.c) - Speaker audio (OSS/TWL4030; beeps, tones, fanfares)
 - [`common/config.c`](common/config.c) - Persistent configuration (key=value file, `/opt/games/rw_config.conf`)
+- [`common/gamepad.c`](common/gamepad.c) — Unified input abstraction: Xbox 360 gamepad (evdev), keyboard, touch; button edge detection (pressed/held/released); configurable touch regions
 
 **ModalDialog System** ([`common/common.c`](common/common.c) / [`common/common.h`](common/common.h)):
 
@@ -84,7 +86,8 @@ ModalDialogAction action = modal_dialog_update(&pause_dialog, tx, ty, touching, 
 | device_tools | Confirmation dialogs | 2: Shut Down/Reboot + Cancel |
 
 **Programs:**
-- `snake/`, `tetris/`, `pong/`, `samegame/` - Games
+- `snake/`, `tetris/`, `pong/`, `samegame/`, `frogger/` - Games
+- `platformer/` - **Office Runner** — Side-scrolling Mario-style platformer with tile maps, physics engine, 3 levels, enemy AI, procedural sprites. Input via gamepad D-pad + A/B or keyboard arrows + Space/Shift or touch virtual controls.
 - `app_launcher/` - Menu with scrolling; see [Game Selector Markers](#game-selector-markers) below
 - `watchdog_feeder/` - Prevents 60s reset
 - `device_tools/` - **Unified hardware management app** (replaces `hardware_config`, `hardware_diag`, `hardware_test_gui`, `unified_calibrate`); see [Device Tools](#device-tools) below
@@ -293,8 +296,7 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 ### Gameplay
 
 - [x] **Audio wired into all games** (completed) — `audio_init/close` in each game's `main()`; snake: `audio_beep` on direction change, `audio_blip` on food, `audio_fail` on death; tetris: `audio_beep` on move/rotate, `audio_blip` on line clear, `audio_success` on Tetris (4 lines), `audio_fail` on game over; pong: `audio_beep` on paddle hit, `audio_blip` on scoring, `audio_success`/`audio_fail` on win/loss
-- [ ] **Sprite-based game (e.g. Frogger)** — character crosses lanes of traffic; needs sprite blitting helpers in `framebuffer.c` (masked blit), game logic, and multi-lane scrolling
-- [ ] **More games** — Brick Breaker (ball + paddle + bricks), Space Invaders (scanline sprites, wave progression)
+- [ ] **More games** — Space Invaders (scanline sprites, wave progression)
 - [x] **Add Game: SameGame** (completed) — Puzzle game with colored block groups, gravity, column collapse, (n-1)² scoring, animations, screen shake, audio effects. See [`samegame/samegame.c`](samegame/samegame.c).
 
 ### Touch Calibration
@@ -315,3 +317,5 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - **Phase 6: Device Tools Portrait Fixes** (2026-03-11) — Settings tab text/slider overflow fixed (dynamic `BAR_WIDTH`), diagnostics value column overflow fixed (dynamic offset), tests page grid adapted for portrait (2-col layout).
 
 - **Phase 7: Device Tools Portrait Fixes Round 2** (2026-03-11) — Portrait mode toggle / backlight button overlap fixed (vertical spacing adjustment).
+
+- **Phase 8: Office Runner Platformer** — sprite-based side-scrolling platformer with gamepad/keyboard/touch input, tile map engine, physics, 3 levels, procedural sprites, high scores.

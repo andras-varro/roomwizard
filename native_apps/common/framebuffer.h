@@ -137,4 +137,28 @@ int fb_set_bpp(const char *device, int bpp);
 #define COLOR_PURPLE  RGB(128, 0, 128)
 #define COLOR_GRAY    RGB(128, 128, 128)
 
+// Sprite transparency color key (magenta)
+#define SPRITE_TRANSPARENT RGB(255, 0, 255)
+
+// Blit a rectangular region from a source pixel buffer to the framebuffer
+// src_pixels: source pixel array (uint32_t ARGB), src_w: total source image width
+// sx, sy: source rectangle top-left in source image
+// dx, dy: destination position on framebuffer
+// w, h: dimensions of the rectangle to copy
+// color_key: transparent color (pixels matching this are skipped), use 0xFFFFFFFF to disable
+void fb_blit_sprite(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                    int sx, int sy, int dx, int dy, int w, int h,
+                    uint32_t color_key);
+
+// Same as fb_blit_sprite but horizontally flipped
+void fb_blit_sprite_flipped(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                            int sx, int sy, int dx, int dy, int w, int h,
+                            uint32_t color_key);
+
+// Blit with scaling (nearest-neighbor) — for zoom effects or different tile sizes
+void fb_blit_sprite_scaled(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                           int sx, int sy, int sw, int sh,
+                           int dx, int dy, int dw, int dh,
+                           uint32_t color_key);
+
 #endif

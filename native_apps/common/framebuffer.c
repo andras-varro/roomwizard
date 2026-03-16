@@ -170,10 +170,10 @@ int fb_init(Framebuffer *fb, const char *device) {
     fb->portrait_mode = fb_is_portrait_mode();
 
     if (fb->portrait_mode) {
-        // Apps see swapped dimensions (e.g., 480×800 instead of 800×480)
+        // Apps see swapped dimensions (e.g., 480x800 instead of 800x480)
         fb->width = fb->phys_height;
         fb->height = fb->phys_width;
-        printf("Portrait mode: physical %dx%d → virtual %dx%d\n",
+        printf("Portrait mode: physical %dx%d -> virtual %dx%d\n",
                fb->phys_width, fb->phys_height, fb->width, fb->height);
     } else {
         fb->width = fb->phys_width;
@@ -185,9 +185,9 @@ int fb_init(Framebuffer *fb, const char *device) {
     screen_base_height = fb->height;
 
     if (fb->portrait_mode) {
-        // Rotate safe area margins to match virtual coordinate system (90° CCW)
-        // Physical left → virtual top, physical right → virtual bottom
-        // Physical top → virtual right, physical bottom → virtual left
+        // Rotate safe area margins to match virtual coordinate system (90 CCW)
+        // Physical left -> virtual top, physical right -> virtual bottom
+        // Physical top -> virtual right, physical bottom -> virtual left
         int phys_top = screen_safe_margin_top;
         int phys_bottom = screen_safe_margin_bottom;
         int phys_left = screen_safe_margin_left;
@@ -249,7 +249,7 @@ void fb_close(Framebuffer *fb) {
 void fb_swap(Framebuffer *fb) {
     if (fb->double_buffering && fb->back_buffer != NULL) {
         if (fb->portrait_mode) {
-            // 90° CCW rotation: virtual (vx, vy) → physical (vy, phys_height-1-vx)
+            // 90 CCW rotation: virtual (vx, vy) -> physical (vy, phys_height-1-vx)
             // Iterate back_buffer row-by-row for cache-friendly reads
             uint32_t vw = fb->width;    // Virtual width (e.g., 480)
             uint32_t vh = fb->height;   // Virtual height (e.g., 800)
@@ -448,7 +448,7 @@ void fb_draw_text(Framebuffer *fb, int x, int y, const char *text, uint32_t colo
     }
 }
 
-/* ── Line drawing (Bresenham) ─────────────────────────────────────────── */
+/* -- Line drawing (Bresenham) ------------------------------------------- */
 void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t color) {
     x0 += fb->draw_offset_x; y0 += fb->draw_offset_y;
     x1 += fb->draw_offset_x; y1 += fb->draw_offset_y;
@@ -464,7 +464,7 @@ void fb_draw_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t colo
     }
 }
 
-/* ── Thick line ──────────────────────────────────────────────────────── */
+/* -- Thick line --------------------------------------------------------- */
 void fb_draw_thick_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
                         int thickness, uint32_t color) {
     int half = thickness / 2;
@@ -478,7 +478,7 @@ void fb_draw_thick_line(Framebuffer *fb, int x0, int y0, int x1, int y1,
     }
 }
 
-/* ── Alpha-blended pixel ─────────────────────────────────────────────── */
+/* -- Alpha-blended pixel ------------------------------------------------ */
 void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t alpha) {
     x += fb->draw_offset_x;
     y += fb->draw_offset_y;
@@ -494,7 +494,7 @@ void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t 
     target[y * fb->width + x] = (r << 16) | (g << 8) | b;
 }
 
-/* ── Alpha-blended filled rect ───────────────────────────────────────── */
+/* -- Alpha-blended filled rect ------------------------------------------ */
 void fb_fill_rect_alpha(Framebuffer *fb, int x, int y, int w, int h,
                         uint32_t color, uint8_t alpha) {
     for (int j = 0; j < h; j++)
@@ -502,7 +502,7 @@ void fb_fill_rect_alpha(Framebuffer *fb, int x, int y, int w, int h,
             fb_draw_pixel_alpha(fb, x + i, y + j, color, alpha);
 }
 
-/* ── Vertical gradient filled rect ───────────────────────────────────── */
+/* -- Vertical gradient filled rect -------------------------------------- */
 void fb_fill_rect_gradient(Framebuffer *fb, int x, int y, int w, int h,
                            uint32_t top_color, uint32_t bottom_color) {
     x += fb->draw_offset_x;
@@ -547,5 +547,104 @@ void fb_fade_in(Framebuffer *fb) {
     for (int i = 0; i <= 100; i += 5) {
         hw_set_backlight(i);
         usleep(30000);  // 30ms per step = 600ms total
+    }
+}
+
+/* ======================================================================
+ * Sprite Blitting Functions
+ * ====================================================================== */
+
+void fb_blit_sprite(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                    int sx, int sy, int dx, int dy, int w, int h,
+                    uint32_t color_key) {
+    int off_x = fb->draw_offset_x;
+    int off_y = fb->draw_offset_y;
+    int fb_w  = (int)fb->width;
+    int fb_h  = (int)fb->height;
+    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+
+    for (int row = 0; row < h; row++) {
+        int dest_y = dy + off_y + row;
+        if (dest_y < 0) continue;
+        if (dest_y >= fb_h) break;
+
+        int src_row_offset = (sy + row) * src_w + sx;
+
+        for (int col = 0; col < w; col++) {
+            int dest_x = dx + off_x + col;
+            if (dest_x < 0) continue;
+            if (dest_x >= fb_w) break;
+
+            uint32_t pixel = src_pixels[src_row_offset + col];
+            if (pixel == color_key) continue;
+
+            target[dest_y * fb_w + dest_x] = pixel;
+        }
+    }
+}
+
+void fb_blit_sprite_flipped(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                            int sx, int sy, int dx, int dy, int w, int h,
+                            uint32_t color_key) {
+    int off_x = fb->draw_offset_x;
+    int off_y = fb->draw_offset_y;
+    int fb_w  = (int)fb->width;
+    int fb_h  = (int)fb->height;
+    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+
+    for (int row = 0; row < h; row++) {
+        int dest_y = dy + off_y + row;
+        if (dest_y < 0) continue;
+        if (dest_y >= fb_h) break;
+
+        int src_row_offset = (sy + row) * src_w;
+
+        for (int col = 0; col < w; col++) {
+            int dest_x = dx + off_x + col;
+            if (dest_x < 0) continue;
+            if (dest_x >= fb_w) break;
+
+            /* Read source pixels right-to-left (horizontal flip) */
+            uint32_t pixel = src_pixels[src_row_offset + (sx + w - 1 - col)];
+            if (pixel == color_key) continue;
+
+            target[dest_y * fb_w + dest_x] = pixel;
+        }
+    }
+}
+
+void fb_blit_sprite_scaled(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
+                           int sx, int sy, int sw, int sh,
+                           int dx, int dy, int dw, int dh,
+                           uint32_t color_key) {
+    if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+
+    int off_x = fb->draw_offset_x;
+    int off_y = fb->draw_offset_y;
+    int fb_w  = (int)fb->width;
+    int fb_h  = (int)fb->height;
+    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+
+    for (int j = 0; j < dh; j++) {
+        int dest_y = dy + off_y + j;
+        if (dest_y < 0) continue;
+        if (dest_y >= fb_h) break;
+
+        /* Nearest-neighbor: map dest row to source row */
+        int src_y = sy + (j * sh) / dh;
+
+        for (int i = 0; i < dw; i++) {
+            int dest_x = dx + off_x + i;
+            if (dest_x < 0) continue;
+            if (dest_x >= fb_w) break;
+
+            /* Nearest-neighbor: map dest col to source col */
+            int src_x = sx + (i * sw) / dw;
+
+            uint32_t pixel = src_pixels[src_y * src_w + src_x];
+            if (pixel == color_key) continue;
+
+            target[dest_y * fb_w + dest_x] = pixel;
+        }
     }
 }
