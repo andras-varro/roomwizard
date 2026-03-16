@@ -19,11 +19,18 @@
 #   1. Deploys disable-steelcase.sh → /opt/roomwizard/
 #   2. Runs disable-steelcase.sh (watchdog bypass, cron cleanup, service stop)
 #   3. Installs roomwizard-app-init.sh as /etc/init.d/roomwizard-app
-#   4. Registers the init service (priority S99)
-#   5. Deploys audio-enable boot script
-#   6. Deploys time-sync boot script
-#   7. Optionally removes bloatware files (--remove)
-#   8. Reboots device
+#      Registers the init service (priority S99)
+#      Deploys audio-enable + time-sync boot scripts
+#   4. Hardens SSH (PermitEmptyPasswords=no, brute-force limits)
+#   5. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
+#   6. Optionally removes bloatware files + Steelcase artifacts (--remove)
+#   7. Reboots device
+#
+# NOTE: No iptables firewall — the Steelcase firmware ships without iptables
+# userspace tools, the ip_tables.ko kernel module is not included in
+# /lib/modules/4.14.52, and there's no package manager to install them.
+# The kernel has CONFIG_NETFILTER=y but no ip_tables module was built.
+# Network security relies on: SSH hardening + sysctl + disabling services.
 #
 # After this, deploy a project and set it as the default app:
 #   cd native_apps && ./build-and-deploy.sh <ip> set-default
@@ -194,10 +201,91 @@ ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync
 TIMESYNC_REMOTE
 ok "Time sync boot script deployed"
 
-# ── 4. Analyze + optionally remove bloatware files ─────────────────────────
+# ── 4. SSH Hardening ──────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
-echo " 4. Bloatware Files"
+echo " 4. SSH Hardening"
+echo "════════════════════════════════════════"
+
+# NOTE: SSH keys must already be deployed (Phase 1 / commission-roomwizard.sh).
+# We do NOT disable PasswordAuthentication here — do that manually AFTER
+# confirming key-based login works:
+#   sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+#
+# PermitRootLogin stays "yes" because:
+#   - There is no other user account on the device (only root in /etc/passwd)
+#   - All deployment (scp, ssh) requires root@<ip>
+#   - The device has no adduser/useradd to create non-root accounts
+#   - Security is achieved via key-based auth + PermitEmptyPasswords=no
+info "Hardening SSH configuration..."
+ssh "$DEVICE" bash <<'SSH_HARDEN'
+    # Backup original if not already backed up
+    [ ! -f /etc/ssh/sshd_config.orig ] && cp /etc/ssh/sshd_config /etc/ssh/sshd_config.orig
+
+    # CRITICAL FIX: Disable empty password login (factory default allows it!)
+    sed -i 's/^PermitEmptyPasswords yes/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+
+    # PermitRootLogin stays "yes" — root is the only account on the device.
+    # Do NOT change to "prohibit-password" as it would lock us out if keys break.
+
+    # Add brute-force / session limits if not present
+    grep -q '^MaxAuthTries' /etc/ssh/sshd_config || echo 'MaxAuthTries 3' >> /etc/ssh/sshd_config
+    grep -q '^LoginGraceTime' /etc/ssh/sshd_config || echo 'LoginGraceTime 30' >> /etc/ssh/sshd_config
+    grep -q '^MaxSessions' /etc/ssh/sshd_config || echo 'MaxSessions 5' >> /etc/ssh/sshd_config
+
+    # Restart SSH to apply
+    /etc/init.d/sshd restart
+SSH_HARDEN
+ok "SSH hardened (PermitEmptyPasswords=no, MaxAuthTries=3, LoginGraceTime=30)"
+
+# ── 5. Kernel/sysctl hardening ───────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════"
+echo " 5. Kernel Security Settings"
+echo "════════════════════════════════════════"
+
+# NOTE on firewall: The RoomWizard firmware has no iptables binary, no
+# ip_tables.ko kernel module in /lib/modules/4.14.52, no busybox iptables
+# applet, no TCP wrappers (libwrap), and no package manager to install any
+# of these. The kernel has CONFIG_NETFILTER=y but the ip_tables module was
+# never compiled. Network security relies on:
+#   - Disabling all unnecessary services (FTP, SNMP, HTTP, Java)
+#   - SSH hardening (empty passwords blocked, brute-force limits)
+#   - sysctl network hardening (below)
+#   - Home network — device is not internet-facing
+info "Applying kernel security settings..."
+ssh "$DEVICE" bash <<'SYSCTL'
+    cat > /etc/sysctl.d/99-security.conf << 'EOF'
+# RoomWizard security hardening
+kernel.randomize_va_space = 2
+kernel.dmesg_restrict = 1
+kernel.core_pattern = |/bin/false
+kernel.sysrq = 0
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.tcp_syncookies = 1
+EOF
+    # Apply now
+    sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
+        # Fallback: apply individually if sysctl.d not supported
+        sysctl -w kernel.randomize_va_space=2 2>/dev/null
+        sysctl -w kernel.dmesg_restrict=1 2>/dev/null
+        sysctl -w kernel.sysrq=0 2>/dev/null
+    }
+SYSCTL
+ok "Kernel security settings applied"
+
+# ── 6. Analyze + optionally remove bloatware files ─────────────────────────
+echo ""
+echo "════════════════════════════════════════"
+echo " 6. Bloatware Files"
 echo "════════════════════════════════════════"
 
 info "Analyzing filesystem..."
@@ -232,8 +320,52 @@ Total freed: ~178 MB
 EOF
 rm -rf /opt/jetty-9-4-11 /opt/jetty /opt/openjre-8 /opt/java /opt/hsqldb
 rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
+
+# Additional Steelcase artifacts and data
+rm -rf /opt/pv02 2>/dev/null
+rm -rf /opt/sound 2>/dev/null
+rm -f /home/root/sqltool.rc 2>/dev/null
+rm -rf /home/root/data/websign 2>/dev/null
+rm -rf /home/root/data/rwdb 2>/dev/null
+rm -rf /home/root/data/conctest 2>/dev/null
+rm -rf /home/root/data/cron 2>/dev/null
+rm -rf /home/root/backup/websigns 2>/dev/null
+rm -f /var/crontab.steelcase.bak 2>/dev/null
+
+# Steelcase service configs
+rm -f /etc/vsftpd.conf 2>/dev/null
+rm -rf /etc/nullmailer 2>/dev/null
+rm -rf /etc/snmp 2>/dev/null
+rm -rf /var/lib/net-snmp 2>/dev/null
+rm -rf /var/lib/nullmailer 2>/dev/null
+rm -rf /var/lib/ntp 2>/dev/null
+
+# Stale logs from Steelcase services
+rm -f /var/log/browser.err 2>/dev/null
+rm -f /var/log/jettystart 2>/dev/null
+rm -rf /var/log/jetty_logs 2>/dev/null
+rm -f /var/log/hsqldbstart 2>/dev/null
+rm -f /var/log/snmp_daemon.log 2>/dev/null
+rm -f /var/log/networkmngr.err 2>/dev/null
+rm -f /home/root/log/Xorg.0.log 2>/dev/null
+rm -f /home/root/log/get_time_from_server.err 2>/dev/null
+rm -f /home/root/log/browser.err 2>/dev/null
+rm -f /home/root/log/jettystart 2>/dev/null
+rm -f /home/root/log/concurrent.log 2>/dev/null
+rm -f /home/root/log/snmp_daemon.log 2>/dev/null
+rm -f /home/root/log/networkmngr.err 2>/dev/null
+rm -rf /home/root/log/jetty_logs 2>/dev/null
+
+# Remove Steelcase management binaries (but keep /opt/sbin/cleanup/ for log rotation)
+rm -f /opt/sbin/RoomWizard-zbgatewayd 2>/dev/null
+rm -f /opt/sbin/wpantools_roomwizard 2>/dev/null
+
+# Dangerous init scripts - remove entirely (already disabled)
+for svc in vsftpd snmpd nullmailer ntpd webserver jetty browser startautoupgrade webmonitor x11 hsqldb mta.sh; do
+    rm -f "/etc/init.d/$svc" 2>/dev/null
+done
 REMOTE
-        ok "Bloatware files removed (~178 MB freed)"
+        ok "Bloatware files removed (extended cleanup)"
         warn "Backup list saved to /home/root/bloatware-removed.txt"
     else
         info "File removal cancelled"
@@ -242,7 +374,7 @@ else
     info "Bloatware files left in place (use --remove to delete)"
 fi
 
-# ── 5. Status summary ──────────────────────────────────────────────────────
+# ── Status summary ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
 echo " Status Summary"
@@ -262,7 +394,7 @@ echo "Active cron jobs:"
 crontab -l 2>/dev/null | grep -v '^#' | grep -v '^$' | sed 's/^/  /'
 REMOTE
 
-# ── 6. Reboot ──────────────────────────────────────────────────────────────
+# ── Reboot ──────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
 echo " Rebooting"
