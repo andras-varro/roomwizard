@@ -8,15 +8,17 @@
 #   - SSH key-based auth to root@<device_ip>
 #   - arm-linux-gnueabihf-gcc (install: sudo apt-get install gcc-arm-linux-gnueabihf)
 #   - bc, libssl-dev, bison, flex (for kernel module build)
+#   - python3 (for DTB patching)
 #
 # This script:
 #   1. Cross-compiles devmem_write.c for ARM
 #   2. Builds Xbox controller kernel modules (if not already built)
-#   3. Deploys everything to the device
-#   4. Enables USB host mode (runtime kernel patch)
-#   5. Loads Xbox controller modules
-#   6. Installs boot persistence for both
-#   7. Verifies everything is working
+#   3. Patches DTB USB power budget (100mA → 500mA) if needed
+#   4. Deploys everything to the device
+#   5. Enables USB host mode (runtime kernel patch)
+#   6. Loads Xbox controller modules
+#   7. Installs boot persistence for both
+#   8. Verifies everything is working
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +40,7 @@ echo "============================================"
 echo ""
 
 # --- Step 0: Check prerequisites ---
-echo "[0/8] Checking prerequisites..."
+echo "[0/9] Checking prerequisites..."
 
 if ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
     echo "ERROR: arm-linux-gnueabihf-gcc not found."
@@ -46,6 +48,12 @@ if ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
     exit 1
 fi
 echo "  ✓ arm-linux-gnueabihf-gcc found"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 not found (needed for DTB patching)."
+    exit 1
+fi
+echo "  ✓ python3 found"
 
 if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" "echo OK" >/dev/null 2>&1; then
     echo "ERROR: Cannot SSH to $DEVICE"
@@ -56,7 +64,7 @@ echo "  ✓ SSH to $DEVICE works"
 echo ""
 
 # --- Step 1: Cross-compile devmem_write ---
-echo "[1/8] Cross-compiling devmem_write for ARM..."
+echo "[1/9] Cross-compiling devmem_write for ARM..."
 
 if [ ! -f "$SCRIPT_DIR/devmem_write" ] || [ "$SCRIPT_DIR/devmem_write.c" -nt "$SCRIPT_DIR/devmem_write" ]; then
     arm-linux-gnueabihf-gcc -static -O2 -o "$SCRIPT_DIR/devmem_write" "$SCRIPT_DIR/devmem_write.c"
@@ -67,7 +75,7 @@ fi
 echo ""
 
 # --- Step 2: Build Xbox controller kernel modules ---
-echo "[2/8] Building Xbox controller kernel modules..."
+echo "[2/9] Building Xbox controller kernel modules..."
 
 MODULES_DIR="$SCRIPT_DIR/modules"
 MODULES_NEEDED=true
@@ -108,8 +116,56 @@ done
 echo "  ✓ All modules present: ff-memless.ko, joydev.ko, xpad.ko"
 echo ""
 
-# --- Step 3: Deploy USB host files ---
-echo "[3/8] Deploying USB host files to device..."
+# --- Step 3: Patch DTB USB power budget if needed ---
+echo "[3/9] Checking USB power budget in device tree..."
+
+DTB_NEEDS_REBOOT=false
+
+# Read the current power value from the live device tree
+POWER_HEX=$(ssh "$DEVICE" "hexdump -e '4/1 \"%02x\"' /proc/device-tree/ocp*/usb_otg_hs*/power 2>/dev/null" || echo "")
+
+if [ "$POWER_HEX" = "000000fa" ]; then
+    echo "  ✓ USB power budget already set to 250 (500mA) — no patch needed"
+elif [ "$POWER_HEX" = "00000032" ]; then
+    echo "  USB power budget is 50 (100mA) — patching to 250 (500mA)..."
+
+    # Mount boot partition on device
+    ssh "$DEVICE" "mkdir -p /tmp/bootpart && mount -t vfat /dev/mmcblk0p1 /tmp/bootpart 2>/dev/null || true"
+
+    # Copy uImage to workstation
+    UIMAGE_LOCAL="$SCRIPT_DIR/uImage-system"
+    echo "  Copying uImage-system from device..."
+    scp -q "$DEVICE:/tmp/bootpart/uImage-system" "$UIMAGE_LOCAL"
+
+    # Run patch_dtb.py
+    echo "  Running patch_dtb.py..."
+    python3 "$SCRIPT_DIR/patch_dtb.py"
+
+    if [ ! -f "$SCRIPT_DIR/uImage-system-patched" ]; then
+        echo "ERROR: patch_dtb.py did not produce uImage-system-patched"
+        exit 1
+    fi
+
+    # Backup original on device and deploy patched version
+    echo "  Backing up original uImage on device..."
+    ssh "$DEVICE" "cp /tmp/bootpart/uImage-system /tmp/bootpart/uImage-system.bak"
+
+    echo "  Deploying patched uImage..."
+    scp -q "$SCRIPT_DIR/uImage-system-patched" "$DEVICE:/tmp/bootpart/uImage-system"
+
+    # Sync and unmount
+    ssh "$DEVICE" "sync && umount /tmp/bootpart 2>/dev/null || true"
+    echo "  ✓ Patched uImage deployed (power: 50 → 250, 100mA → 500mA)"
+    echo "  NOTE: DTB change requires a reboot to take effect"
+    DTB_NEEDS_REBOOT=true
+else
+    echo "  WARNING: Unexpected power value '$POWER_HEX' — skipping DTB patch"
+    echo "  (Expected '00000032' for 100mA or '000000fa' for 500mA)"
+fi
+echo ""
+
+# --- Step 4: Deploy USB host files ---
+echo "[4/9] Deploying USB host files to device..."
 
 scp -q "$SCRIPT_DIR/devmem_write"      "$DEVICE:/usr/local/bin/devmem_write"
 echo "  ✓ devmem_write -> /usr/local/bin/devmem_write"
@@ -124,8 +180,8 @@ ssh "$DEVICE" "chmod +x /usr/local/bin/devmem_write /usr/local/bin/enable-usb-ho
 echo "  ✓ Permissions set"
 echo ""
 
-# --- Step 4: Deploy Xbox controller modules ---
-echo "[4/8] Deploying Xbox controller modules..."
+# --- Step 5: Deploy Xbox controller modules ---
+echo "[5/9] Deploying Xbox controller modules..."
 
 ssh "$DEVICE" "mkdir -p /lib/modules/${KERNEL_VERSION}/extra"
 scp -q "$MODULES_DIR/ff-memless.ko" "$MODULES_DIR/joydev.ko" "$MODULES_DIR/xpad.ko" \
@@ -140,8 +196,8 @@ ssh "$DEVICE" "depmod -a ${KERNEL_VERSION} 2>/dev/null || true"
 echo "  ✓ depmod complete"
 echo ""
 
-# --- Step 5: Load Xbox controller modules ---
-echo "[5/8] Loading Xbox controller modules..."
+# --- Step 6: Load Xbox controller modules ---
+echo "[6/9] Loading Xbox controller modules..."
 
 ssh "$DEVICE" bash -s <<'LOAD_SCRIPT'
 for mod in ff-memless joydev xpad; do
@@ -156,14 +212,14 @@ done
 LOAD_SCRIPT
 echo ""
 
-# --- Step 6: Enable USB host mode ---
-echo "[6/8] Enabling USB host mode (runtime kernel patch)..."
+# --- Step 7: Enable USB host mode ---
+echo "[7/9] Enabling USB host mode (runtime kernel patch)..."
 
 ssh "$DEVICE" "/usr/local/bin/enable-usb-host.sh"
 echo ""
 
-# --- Step 7: Install boot persistence ---
-echo "[7/8] Installing boot persistence..."
+# --- Step 8: Install boot persistence ---
+echo "[8/9] Installing boot persistence..."
 
 ssh "$DEVICE" "\
     ln -sf ../init.d/S89xpad-modules /etc/rc5.d/S89xpad-modules && \
@@ -172,8 +228,8 @@ ssh "$DEVICE" "\
     echo '  ✓ S90usb-host -> rc5.d (USB host mode at boot)'"
 echo ""
 
-# --- Step 8: Verify ---
-echo "[8/8] Verifying..."
+# --- Step 9: Verify ---
+echo "[9/9] Verifying..."
 echo ""
 
 ssh "$DEVICE" bash -s <<'VERIFY_SCRIPT'
@@ -182,6 +238,17 @@ if [ -d /sys/bus/usb/devices/usb1 ]; then
     echo "  USB host mode: ACTIVE"
 else
     echo "  USB host mode: FAILED"
+fi
+
+echo ""
+echo "--- USB Power Budget ---"
+POWER=$(hexdump -e '4/1 "%02x"' /proc/device-tree/ocp*/usb_otg_hs*/power 2>/dev/null)
+if [ "$POWER" = "000000fa" ]; then
+    echo "  USB power budget: 500mA (0xfa) ✓"
+elif [ "$POWER" = "00000032" ]; then
+    echo "  USB power budget: 100mA (0x32) — NEEDS REBOOT for DTB patch to take effect"
+else
+    echo "  USB power budget: unknown ($POWER)"
 fi
 
 echo ""
@@ -209,6 +276,14 @@ VERIFY_SCRIPT
 echo ""
 echo "============================================"
 echo "  Setup complete."
+if [ "$DTB_NEEDS_REBOOT" = true ]; then
+    echo ""
+    echo "  ⚠  DTB was patched — REBOOT REQUIRED!"
+    echo "  Run: ssh $DEVICE 'sync; reboot'"
+    echo "  Wait ~60s, then re-run this script to"
+    echo "  verify everything after reboot."
+fi
+echo ""
 echo "  Connect USB devices via OTG adapter."
 echo "  A powered USB hub is recommended."
 echo "============================================"

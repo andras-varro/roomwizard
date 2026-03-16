@@ -30,7 +30,7 @@ The Steelcase RoomWizard is an embedded Linux device based on a Texas Instrument
 - **Protection:** MD5 checksums, 60-second hardware watchdog, Steelcase software watchdog (cron-based, must disable), boot state tracking
 - **Interfaces:** Framebuffer (`/dev/fb0`), touchscreen (`/dev/input/`), LEDs (sysfs)
 - **Software Stack:** X11 → WebKit browser → Jetty 9.4.11 → Java 8 → HSQLDB
-- **USB:** Host mode enabled via runtime kernel patching; supports keyboards, mice, and game controllers (Xbox via cross-compiled xpad module)
+- **USB:** Host mode enabled via runtime kernel patching; supports keyboards, mice, and game controllers (Xbox via cross-compiled xpad module). DTB binary-patched to raise USB bus power budget from 100mA to 500mA for direct-connect devices.
 - **GPIO:** 8 GPIO banks (200+ pins), TWL4030 PMIC with 18 additional GPIO pins
 - **Wireless:** No WiFi or Bluetooth hardware present
 
@@ -500,7 +500,7 @@ The micro USB port is functional in USB host mode with support for keyboards, mi
 
 **Deploy:** `cd usb_host && ./build-and-deploy.sh 192.168.50.73`
 
-### Two Problems Solved
+### Three Problems Solved
 
 #### Problem 1: USB Host Mode Disabled (MUSB DMA Bug)
 
@@ -525,6 +525,16 @@ Even with USB host mode working, Xbox 360 controllers (`045e:028e`) appeared in 
 | `xpad.ko` | 36 KB | Xbox gamepad driver (360, One, etc.) |
 
 The kernel supports loadable modules (`CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`, `CONFIG_MODULE_SIG` not set).
+
+#### Problem 3: USB Bus Power Budget Too Low (DTB Patch)
+
+The DTB embedded in `uImage-system` set the MUSB controller's `power` property to `0x32` (100mA), causing devices requiring >100mA (e.g., Xbox 360 controller at 500mA) to be rejected with `"rejected 1 configuration due to insufficient available bus power"` when connected directly without a hub.
+
+**Solution:** Binary-patched the DTB inside `uImage-system`, changing `power` from `0x32` (50 = 100mA) to `0xfa` (250 = 500mA), then recalculated uImage CRC checksums and wrote the patched image back to the FAT32 boot partition (`/dev/mmcblk0p1`). This is a persistent, one-time fix per device image — after re-imaging, the patch must be re-applied.
+
+**Tools:** [`find_dtb.py`](usb_host/find_dtb.py) (locate/extract DTB from uImage), [`patch_dtb.py`](usb_host/patch_dtb.py) (binary-patch power property + recalculate CRCs), [`verify_patch.sh`](usb_host/verify_patch.sh) (verify patch on device).
+
+See [`usb_host/README.md`](usb_host/README.md) for complete DTB patching technical details.
 
 ### Verified Working
 

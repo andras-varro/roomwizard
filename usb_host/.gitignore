@@ -4,6 +4,11 @@
 kernel-config-*
 devmem_write
 
+# uImage files (large binaries from device boot partition)
+uImage-system
+uImage-system-patched
+dtb_info.txt
+
 # Kernel source and built modules (cross-compilation artifacts)
 linux-4.14.52/
 modules/

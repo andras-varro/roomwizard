@@ -10,15 +10,17 @@ One command to enable USB host mode with game controller support:
 
 This will:
 1. Cross-compile the `devmem_write` tool and Xbox controller kernel modules
-2. Deploy everything to the device
-3. Enable USB host mode (runtime kernel patch)
-4. Load game controller modules
-5. Install boot persistence for both
+2. Patch the device tree USB power budget (100mA → 500mA) if needed
+3. Deploy everything to the device
+4. Enable USB host mode (runtime kernel patch)
+5. Load game controller modules
+6. Install boot persistence for both
 
 ## Prerequisites
 
 - **Linux/WSL** with `arm-linux-gnueabihf-gcc` installed
 - **Additional packages**: `bc`, `libssl-dev`, `bison`, `flex` (for kernel module build)
+- **Python 3** (for DTB patching script)
 - **SSH root access** to the RoomWizard (key-based auth recommended)
 - **Micro USB OTG adapter** (Micro-B male → USB-A female)
 - **Powered USB hub** (recommended — the port may not supply VBUS)
@@ -85,6 +87,64 @@ After loading these modules, the controller appears as:
 - `/dev/input/jsX` — joystick interface
 - Name: `Microsoft X-Box 360 pad`
 - Capabilities: `EV_KEY` (buttons), `EV_ABS` (sticks/triggers), `EV_FF` (force feedback)
+
+### Problem 3: USB Bus Power Budget Too Low
+
+Even with USB host mode working and the xpad driver loaded, the Xbox 360 controller was
+sometimes rejected with `"rejected 1 configuration due to insufficient available bus power"`
+when connected **directly** (without a powered hub). The kernel's USB hub driver enforces
+a power budget based on the MUSB controller's device tree `power` property.
+
+**Root cause**: The device tree blob (DTB) embedded in `uImage-system` sets the MUSB
+controller's power budget to only **100mA**:
+
+```dts
+usb_otg_hs@480ab000 {
+    compatible = "ti,omap3-musb";
+    ...
+    power = <0x32>;   /* 50 × 2mA = 100mA — too low for Xbox 360 controller */
+};
+```
+
+The MUSB driver interprets this value as "units of 2mA", so `power = <0x32>` (50 decimal)
+means 100mA total bus power. The Xbox 360 controller requests 500mA via its USB
+configuration descriptor (`bMaxPower = 250`, also in 2mA units).
+
+### Solution 3: Binary DTB Patching in uImage
+
+The DTB is **not** a standalone `.dtb` file — it's appended to the zImage kernel inside the
+legacy uImage at offset `0x4eb788` (67,004 bytes). We binary-patch it in place:
+
+1. **Find the DTB** inside `uImage-system` by scanning for the DTB magic (`0xd00dfeed`)
+2. **Walk the DTB struct block** to locate the `power` property within the `usb_otg_hs` node
+3. **Change the 4-byte value** from `0x00000032` (50 = 100mA) to `0x000000fa` (250 = 500mA)
+4. **Recalculate uImage CRCs** (both data CRC and header CRC)
+5. **Deploy** the patched uImage back to the FAT32 boot partition (`/dev/mmcblk0p1`)
+
+The patch is:
+
+- **Persistent** — survives reboots (written to the boot partition)
+- **Reversible** — a backup (`uImage-system.bak`) is created before patching
+- **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
+
+#### DTB Location in uImage
+
+```
+uImage-system (5,225,796 bytes)
+├── uImage header (64 bytes)
+├── zImage kernel (5,158,728 bytes, uncompressed)
+└── Appended DTB at offset 0x4eb788 (67,004 bytes)
+    └── usb_otg_hs node
+        └── power property at DTB internal offset 0xeb44
+            → Absolute uImage offset: 0x4fa2cc
+```
+
+#### Power Budget Values
+
+| `power` value | Hex | Bus power | Result |
+|:---:|:---:|:---:|---|
+| 50 (original) | `0x32` | 100mA | Xbox 360 controller **rejected** |
+| 250 (patched) | `0xfa` | 500mA | Xbox 360 controller **accepted** |
 
 ---
 
@@ -282,12 +342,59 @@ Dumped from physical address `0x80851b10` (128 bytes):
 +0x78: "omap2430" (name string)
 ```
 
-### Why DTB Modification Alone Doesn't Work
+### Why DTB `dr_mode` Modification Alone Doesn't Fix USB Host
 
 DTB changes (e.g., setting `dr_mode = "host"`) were investigated but don't solve the
-problem. The root cause is in the kernel's compiled-in code path, not the device tree
+DMA problem. The root cause is in the kernel's compiled-in code path, not the device tree
 configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time because
 `CONFIG_USB_INVENTRA_DMA` is not set — no device tree change can populate it.
+
+However, the DTB `power` property **does** need to be patched (see Problem 3 above) to
+raise the USB bus power budget from 100mA to 500mA for direct controller connections.
+
+### DTB Patching Details
+
+#### Boot Partition Layout
+
+The RoomWizard boots from a FAT32 partition (`/dev/mmcblk0p1`) containing:
+
+| File | Size | Purpose |
+|------|------|---------|
+| `mlo` | 50 KB | First-stage bootloader (MLO/SPL) |
+| `u-boot.bin` | 468 KB | U-Boot bootloader |
+| `u-boot-sd.bin` | 468 KB | U-Boot for SD boot |
+| `uImage-system` | 5.0 MB | Kernel + appended DTB (legacy uImage) |
+| `uImage-bootstrap` | 5.1 MB | Bootstrap/recovery kernel |
+| `ramfilesys.gz` | 11.3 MB | Initial ramdisk |
+
+U-Boot loads `uImage-system` to `0x80008000`. The kernel self-extracts and finds the
+appended DTB using the `ARM_ATAG_DTB_COMPAT` mechanism (the DTB starts with magic
+`0xd00dfeed` immediately after the kernel image).
+
+#### DTB Binary Structure
+
+The DTB (Flattened Device Tree) is a binary format with three main sections:
+
+1. **Header** (40 bytes) — magic, sizes, offsets
+2. **Structure block** — tree of nodes and properties encoded as tokens
+3. **Strings block** — property name strings (deduplicated)
+
+Property lookup requires walking the structure block token-by-token:
+- `FDT_BEGIN_NODE` (0x01) — start of a node, followed by name
+- `FDT_PROP` (0x03) — property, followed by length + strings-block offset + data
+- `FDT_END_NODE` (0x02) — end of a node
+
+The `patch_dtb.py` script walks this structure to find the `power` property specifically
+within the `usb_otg_hs` node, avoiding false matches in other nodes.
+
+#### uImage CRC Recalculation
+
+After patching the DTB bytes, the uImage checksums must be recalculated:
+
+1. **Data CRC** (offset 24–27): CRC32 of all bytes after the 64-byte header
+2. **Header CRC** (offset 4–7): CRC32 of the 64-byte header with CRC field zeroed
+
+Without correct CRCs, U-Boot will refuse to boot the image.
 
 ---
 
@@ -297,6 +404,8 @@ configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time becau
 |------|---------|---------|
 | `build-and-deploy.sh` | Workstation (WSL/Linux) | End-to-end build and deploy automation |
 | `build-xpad-module.sh` | Workstation (WSL/Linux) | Cross-compile Xbox controller kernel modules |
+| `patch_dtb.py` | Workstation (Python 3) | Binary-patch MUSB power property in uImage DTB |
+| `find_dtb.py` | Workstation (Python 3) | Extract DTB from uImage for inspection |
 | `devmem_write.c` | Compiled for ARM | `/dev/mem` mmap-based read/write tool |
 | `enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
 | `usb-host-initd.sh` | Device | SysV init.d wrapper for USB host boot persistence |
@@ -315,6 +424,7 @@ configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time becau
 | `/lib/modules/4.14.52/extra/xpad.ko` | `modules/xpad.ko` | Xbox controller driver |
 | `/etc/init.d/S89xpad-modules` | `S89xpad-modules` | Boot persistence for modules |
 | `/etc/rc5.d/S89xpad-modules` | Symlink → `../init.d/S89xpad-modules` | Runlevel 5 boot hook |
+| `/dev/mmcblk0p1/uImage-system` | `uImage-system-patched` (via `patch_dtb.py`) | Kernel with patched DTB (500mA power) |
 
 ---
 
@@ -331,6 +441,8 @@ configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time becau
 | insmod fails "Invalid module format" | Version mismatch | Use `insmod -f` (force) — `MODULE_FORCE_LOAD=y` allows this |
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
+| "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
+| Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.bak uImage-system` |
 
 ---
 
@@ -341,9 +453,10 @@ configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time becau
 | Vanilla kernel cross-compilation | Bricked device — missing OEM patches (LCD, touch, boot) |
 | Binary patching of OEM zImage | Address relocation + inlining made patch point unfindable |
 | `/dev/mem` via `write()` syscall | `CONFIG_STRICT_KERNEL_RWX` blocks write to kernel pages |
-| DTB-only modification | Root cause is compiled-in code, not device tree config |
+| DTB `dr_mode` modification only | Root cause of DMA failure is compiled-in code, not device tree |
 | EHCI/OHCI alternative | `CONFIG_USB_EHCI_HCD` and `CONFIG_USB_OHCI_HCD` not compiled |
 | usbhid for Xbox controller | Controller uses vendor-specific class `ff`, not HID class `03` |
+| Runtime DTB power override via sysfs | MUSB power budget is read-only once driver initializes |
 
 ---
 
