@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-`device_tools` consolidates four standalone RoomWizard hardware utilities into a single tab-based GUI application:
+`device_tools` consolidates five hardware utilities into a single tab-based GUI application:
 
 | Tab | Source App | Purpose |
 |-----|-----------|---------|
@@ -10,6 +10,7 @@
 | **Diagnostics** | `hardware_diag` | Read-only system/memory/storage/hardware/config info |
 | **Tests** | `hardware_test_gui` | Interactive LED, display, audio, and touch tests |
 | **Calibration** | `unified_calibrate` | Touch calibration + bezel margin adjustment |
+| **USB** | `usb_test` | USB keyboard, mouse, gamepad detection & interactive testing |
 
 ### Platform Constraints
 - ARM Cortex-A8 @ 300 MHz, 800×480 resistive touchscreen
@@ -47,6 +48,7 @@ native_apps/
 /* ═══ Diagnostics Tab ═══ */
 /* ═══ Tests Tab ═══ */
 /* ═══ Calibration Tab ═══ */
+/* ═══ USB Tab ═══ */
 /* ═══ Confirmation Dialog ═══ */
 /* ═══ Main Loop ═══ */
 ```
@@ -537,7 +539,102 @@ If save fails (permission denied):
 
 ---
 
-## 8. Confirmation Dialog
+## 8. USB Tab
+
+### 8.1 Overview
+
+The USB tab provides interactive testing of USB input devices (keyboards, mice, gamepads) connected to the RoomWizard's USB port. It was ported from the standalone `usb_test.c` application.
+
+**Sub-screens** (fullscreen, like calibration):
+- `USB_SCR_MAIN` — device list within the tab content area
+- `USB_SCR_KEYBOARD` — fullscreen keyboard key-press visualizer
+- `USB_SCR_MOUSE` — fullscreen mouse cursor/button/scroll tester
+- `USB_SCR_GAMEPAD` — fullscreen gamepad stick/dpad/button/trigger tester
+
+### 8.2 State
+
+USB state fields in `AppState`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `usb_scr` | `USBScreen` | Current sub-screen |
+| `usb_devs[]` | `USBDev[8]` | Detected USB devices |
+| `usb_dev_cnt` | `int` | Number of detected devices |
+| `usb_kbd_idx` | `int` | Index of first keyboard (-1 = none) |
+| `usb_mou_idx` | `int` | Index of first mouse (-1 = none) |
+| `usb_pad_idx` | `int` | Index of first gamepad (-1 = none) |
+| `usb_fd` | `int` | Open evdev file descriptor (-1 = closed) |
+| `usb_kbd` | `KbdState` | Keyboard state (held keys, event log) |
+| `usb_mou` | `MouseSt` | Mouse state (cursor, buttons, scroll) |
+| `usb_pad` | `PadSt` | Gamepad state (sticks, dpad, buttons, triggers) |
+
+### 8.3 Main Screen Layout
+
+Shown inside the tab content area (tab bar visible):
+
+```
++-- Content Area ------------------------------------------------+
+|                                                                 |
+|  DETECTED USB DEVICES:                                          |
+|  ● KEYBOARD  Logitech USB Keyboard   /dev/input/event3         |
+|  ● MOUSE     USB Optical Mouse        /dev/input/event4         |
+|  ● GAMEPAD   Xbox Wireless Controller /dev/input/event5         |
+|                                                                 |
+|  [ RESCAN ] [ KBD TEST ] [ MOUSE TEST ] [ PAD TEST ]           |
++-----------------------------------------------------------------+
+```
+
+- Device detection scans `/dev/input/event0..15`, skipping the built-in Panjit touchscreen
+- Classification uses `EVIOCGBIT` ioctls to detect keyboard (≥20 letter keys), mouse (REL_X+REL_Y+BTN_LEFT), or gamepad (ABS_X+ABS_Y+BTN_GAMEPAD)
+- Test buttons are dimmed (disabled) when no device of that type is detected
+
+### 8.4 Keyboard Test (Fullscreen)
+
+When "KBD TEST" is tapped, opens the USB keyboard device and enters fullscreen:
+
+- Visual keyboard layout (5 rows × 28 half-unit columns)
+- Keys light up blue (`USB_COLOR_KEY_DN`) when pressed, dark when released
+- Last key name and code displayed
+- Scrolling event log at bottom (8 lines: PRESS/RELEASE/REPEAT events)
+- "< BACK" button returns to main USB screen
+
+### 8.5 Mouse Test (Fullscreen)
+
+- Large tracking area with crosshair cursor that follows mouse movement
+- Right panel shows: cursor position (X/Y), button states (L/M/R circles), scroll wheel value with activity indicator
+- Grid lines in tracking area for visual reference
+
+### 8.6 Gamepad Test (Fullscreen)
+
+- Two analog stick visualizers (LEFT/RIGHT) as circles with dot position
+- D-pad visualizer with directional highlighting
+- Button grid (up to 16 buttons) with press indicators
+- Trigger bars (LT/RT) with percentage fill
+- Raw axis values display
+
+### 8.7 Tab Switching
+
+- When switching away from the USB tab, `usb_close()` is called to release the evdev fd
+- The `usb_scr` returns to `USB_SCR_MAIN` when back button is pressed in any test screen
+- `button_update()` pattern used consistently (not `button_check_press()`)
+
+### 8.8 Key Functions
+
+| Function | Description |
+|----------|-------------|
+| `usb_classify()` | Classify an evdev fd as keyboard/mouse/gamepad/unknown |
+| `usb_scan_devices()` | Scan `/dev/input/event*` and populate `usb_devs[]` |
+| `usb_open()` / `usb_close()` | Open/close evdev device for reading |
+| `usb_proc_kbd()` / `usb_proc_mouse()` / `usb_proc_pad()` | Process input events |
+| `draw_usb()` | Draw device list in tab content area |
+| `draw_usb_kbd()` / `draw_usb_mou()` / `draw_usb_pad()` | Fullscreen draw functions |
+| `handle_usb_input()` | Handle touch input on main USB screen |
+| `run_usb_fullscreen()` | Fullscreen loop for kbd/mouse/gamepad tests |
+| `create_usb_ui()` | Initialize USB button widgets |
+
+---
+
+## 9. Confirmation Dialog
 
 The confirmation dialog is a **modal overlay** using the common [`ModalDialog`](../common/common.h) component from `common.c`. It is used for destructive system actions (shutdown and reboot) that require explicit user confirmation before execution.
 
@@ -659,7 +756,7 @@ Two `ModalDialog` instances and the `ConfirmAction` enum track dialog state:
 
 ---
 
-## 9. Main Loop Architecture
+## 10. Main Loop Architecture
 
 ### 9.1 Loop Structure
 
@@ -811,7 +908,7 @@ int main(void) {
 
 ---
 
-## 10. Color Scheme
+## 11. Color Scheme
 
 A unified dark theme consistent across all tabs:
 
@@ -857,7 +954,7 @@ Reuse existing definitions from [`common.h`](native_apps/common/common.h:202):
 
 ---
 
-## 11. Build Integration
+## 12. Build Integration
 
 ### 11.1 Makefile Additions
 
@@ -919,7 +1016,7 @@ args=none
 
 ---
 
-## 12. Tab Switching Behavior
+## 13. Tab Switching Behavior
 
 ### 12.1 Rules
 
@@ -937,7 +1034,7 @@ None. Instant switch — keeps complexity low and performance high on the 300 MH
 
 ---
 
-## 13. Interaction Summary
+## 14. Interaction Summary
 
 ### 13.1 Touch Target Sizes
 
@@ -964,7 +1061,7 @@ All buttons use the standard 200ms debounce from [`BTN_DEBOUNCE_MS`](native_apps
 
 ---
 
-## 14. Migration Notes
+## 15. Migration Notes
 
 ### 14.1 Code Reuse Strategy
 
