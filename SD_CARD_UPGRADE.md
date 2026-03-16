@@ -8,14 +8,15 @@ accommodate large ScummVM game data (Full Throttle, The Dig, Grim Fandango, etc.
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Prerequisites](#2-prerequisites)
-3. [Strategy — Recommended Approach](#3-strategy--recommended-approach)
-4. [Step-by-Step Procedure (Recommended: Expand rootfs)](#4-step-by-step-procedure-recommended-expand-rootfs)
-5. [Alternative: Add Separate Game Partition (p7)](#5-alternative-add-separate-game-partition-p7)
-6. [New Partition Layout (After Upgrade)](#6-new-partition-layout-after-upgrade)
-7. [Script Reference](#7-script-reference)
-8. [Troubleshooting](#8-troubleshooting)
-9. [ScummVM Game Storage](#9-scummvm-game-storage)
+2. [Current Partition Layout (Stock 4 GB Card)](#2-current-partition-layout-stock-4-gb-card)
+3. [Prerequisites](#3-prerequisites)
+4. [Strategy — Recommended Approach](#4-strategy--recommended-approach)
+5. [Step-by-Step Procedure (Recommended: Expand rootfs)](#5-step-by-step-procedure-recommended-expand-rootfs)
+6. [Alternative: Add Separate Game Partition (p8)](#6-alternative-add-separate-game-partition-p8)
+7. [New Partition Layout (After Upgrade)](#7-new-partition-layout-after-upgrade)
+8. [Script Reference](#8-script-reference)
+9. [Troubleshooting](#9-troubleshooting)
+10. [ScummVM Game Storage](#10-scummvm-game-storage)
 
 ---
 
@@ -24,7 +25,7 @@ accommodate large ScummVM game data (Full Throttle, The Dig, Grim Fandango, etc.
 ### Why Upgrade
 
 The stock RoomWizard SD card is a ~3.7 GB (nominal 4 GB) card. The root
-filesystem (p6) is only **1024 MB**, of which ~463 MB is used out of the box
+filesystem (p6) is only **~981 MB**, of which ~463 MB is used out of the box
 (~474 MB free). Even after removing ~178 MB of Steelcase bloatware with
 `setup-device.sh --remove`, only ~652 MB is free.
 
@@ -33,9 +34,6 @@ games require significant space:
 
 | Game | Approximate Size |
 |------|-----------------|
-| Day of the Tentacle Remastered | ~2.5 GB |
-| Full Throttle Remastered | ~5 GB |
-| Grim Fandango Remastered | ~5.6 GB |
 | The Dig | ~500 MB |
 | Sam & Max Hit the Road | ~300 MB |
 | Monkey Island SE | ~1.5 GB |
@@ -47,21 +45,46 @@ enough for a large library of both classic and remastered titles.
 ### What Changes
 
 - The **extended partition (p4)** is expanded to fill the entire 32 GB card.
-- The **rootfs partition (p6)** is expanded from 1024 MB to ~27.5 GB.
+- The **rootfs partition (p6)** is expanded from ~981 MB to ~27+ GB.
+- The **swap partition (p7)** is **dropped** — not needed for gaming, and
+  removing it lets p6 grow larger.
 - The ext3 filesystem on p6 is resized in-place (no reformat).
 
 ### What Stays the Same
 
-- **Boot partition (p1)** — FAT32, 64 MB, MLO / U-Boot / uImage / DTB — untouched.
-- **Data partition (p2)** — ext3, 256 MB — untouched.
-- **Log partition (p3)** — ext3, 250 MB — untouched.
-- **Backup partition (p5)** — ext3, 1500 MB — kept at original size for safety.
+- **Boot partition (p1)** — FAT32, ~70.6 MB, bootable, MLO / U-Boot / uImage / DTB — untouched.
+- **Data partition (p2)** — ext3, ~251 MB — untouched.
+- **Log partition (p3)** — ext3, ~243 MB — untouched.
+- **Backup partition (p5)** — ext3, ~1.40 GB — kept at original size for safety.
 - **Kernel, U-Boot, device tree** — unchanged.
 - **Commissioning workflow** — `commission-roomwizard.sh` → `setup-device.sh` → `deploy-all.sh` works identically because the rootfs UUID is preserved.
 
 ---
 
-## 2. Prerequisites
+## 2. Current Partition Layout (Stock 4 GB Card)
+
+The stock RoomWizard SD card has **7 partitions** (including an extended container
+and a swap partition). This layout was captured from a real device using `sfdisk -d`:
+
+| Partition | Type ID | Flags | Start Sector | Size (sectors) | Size (human) | Filesystem | Purpose |
+|-----------|---------|-------|-------------|---------------|-------------|------------|---------|
+| p1 | 0x0c | **bootable** | 63 | 144,522 | ~70.6 MB | FAT32 | Boot — MLO, U-Boot, uImage, DTB |
+| p2 | 0x83 | | 144,585 | 514,080 | ~251 MB | ext3 | Application data |
+| p3 | 0x83 | | 658,665 | 498,015 | ~243 MB | ext3 | System logs |
+| p4 | 0x05 | | 1,156,680 | 6,586,650 | ~3.14 GB | — | Extended container (holds p5–p7) |
+| p5 | 0x83 | | 1,156,743 | 2,939,832 | ~1.40 GB | ext3 | OEM backup |
+| p6 | 0x83 | | 4,096,638 | 2,008,062 | ~981 MB | ext3 | Root filesystem (/) |
+| p7 | 0x82 | | 6,104,763 | 530,082 | ~259 MB | swap | Swap space |
+
+**Notable characteristics:**
+- Partitions use **old CHS alignment** (starting at sector 63, not modern 2048-sector alignment)
+- Label ID is `0x00000000`
+- p1 has the **boot flag** set
+- p7 is **swap** (type 0x82) — this is dropped during the upgrade to maximize rootfs space
+
+---
+
+## 3. Prerequisites
 
 ### Hardware
 
@@ -108,17 +131,18 @@ Then in WSL the card appears as `/dev/sdX`. Verify with `lsblk`.
 
 ---
 
-## 3. Strategy — Recommended Approach
+## 4. Strategy — Recommended Approach
 
 The recommended procedure clones the entire original image and resizes in-place:
 
 1. **`dd`** the entire original 4 GB image onto the 32 GB card. The first
    ~3.7 GB are an exact clone; the rest is unallocated space.
 2. **Expand p4** (extended partition) to fill the disk.
-3. **Delete p5 and p6** (logical partitions inside the extended).
-4. **Recreate p5** at the same offset and size (1500 MB) — preserving device
+3. **Delete p5, p6, and p7** (logical partitions inside the extended).
+4. **Recreate p5** at the same offset and size (~1.40 GB) — preserving device
    numbering and the backup partition.
-5. **Recreate p6** using **all remaining space** (~27.5 GB).
+5. **Recreate p6** using **all remaining space** (~27+ GB) — dropping p7 (swap)
+   so p6 can fill the entire rest of the extended partition.
 6. **`e2fsck` then `resize2fs`** on p6 to grow the ext3 filesystem to fill the
    new, larger partition.
 7. **Proceed with normal commissioning** — the UUID is preserved.
@@ -135,6 +159,15 @@ UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
 The commissioning script `commission-roomwizard.sh` locates rootfs by this UUID
 (via `blkid -U`), so it continues to work without any modification.
 
+### Why We Drop p7 (Swap)
+
+The original layout includes a ~259 MB swap partition (p7). We drop it because:
+
+- The RoomWizard has limited RAM (256 MB) and swap to SD card is extremely slow
+- Gaming workloads benefit more from additional rootfs space than from swap
+- Removing p7 lets p6 expand to fill the entire extended partition
+- If swap is ever needed, a swap file can be created on the rootfs instead
+
 ### Why We Keep p5
 
 The kernel boot parameter (`root=` in U-Boot or the kernel command line) may
@@ -143,7 +176,7 @@ we deleted p5 and made rootfs the first logical partition, it would become
 `mmcblk0p5` instead of `mmcblk0p6`, and the device would fail to boot.
 
 By keeping p5 at its original size, rootfs remains `mmcblk0p6` and all device
-path references are preserved. The 1500 MB used by p5 is a small price for
+path references are preserved. The ~1.40 GB used by p5 is a small price for
 guaranteed compatibility.
 
 > **Before starting:** Check the kernel command line on a working device:
@@ -157,14 +190,13 @@ guaranteed compatibility.
 ### Alternative Approach (Safest)
 
 If you want to avoid modifying any existing partition at all, see
-[Section 5: Add Separate Game Partition (p7)](#5-alternative-add-separate-game-partition-p7).
-This creates a new logical partition in the unallocated space and mounts it
-separately. It requires adding an fstab entry but doesn't touch existing
-partitions.
+[Section 6: Add Separate Game Partition (p8)](#6-alternative-add-separate-game-partition-p8).
+This expands the extended container and adds a new logical partition for games,
+keeping all 7 original partitions untouched (including swap).
 
 ---
 
-## 4. Step-by-Step Procedure (Recommended: Expand rootfs)
+## 5. Step-by-Step Procedure (Recommended: Expand rootfs)
 
 > **⚠ WARNING:** Double-check every `/dev/sdX` reference. Writing to the wrong
 > device will destroy data. Use `lsblk` to confirm device identity before every
@@ -228,66 +260,61 @@ sudo sfdisk -d ${DEST} > partition-table-before.txt
 cat partition-table-before.txt
 ```
 
-Expected output (approximate sector values):
+Expected output (from a real RoomWizard device — your device name will differ):
 
 ```
 label: dos
-label-id: 0x...
-device: /dev/sdY
+label-id: 0x00000000
+device: /dev/sdX
 unit: sectors
+sector-size: 512
 
-/dev/sdY1 : start=       2048, size=     131072, type=c
-/dev/sdY2 : start=     133120, size=     524288, type=83
-/dev/sdY3 : start=     657408, size=     512000, type=83
-/dev/sdY4 : start=    1169408, size=    5949440, type=5
-/dev/sdY5 : start=    1171456, size=    3072000, type=83
-/dev/sdY6 : start=    4245504, size=    2097152, type=83
+/dev/sdX1 : start=          63, size=      144522, type=c, bootable
+/dev/sdX2 : start=      144585, size=      514080, type=83
+/dev/sdX3 : start=      658665, size=      498015, type=83
+/dev/sdX4 : start=     1156680, size=     6586650, type=5
+/dev/sdX5 : start=     1156743, size=     2939832, type=83
+/dev/sdX6 : start=     4096638, size=     2008062, type=83
+/dev/sdX7 : start=     6104763, size=      530082, type=82
 ```
 
-Record these values — especially the **start sector of p4** (`1169408` in this
-example), the **start sector of p5** (`1171456`), and the **size of p5**
-(`3072000`).
+> **Note:** The above is reference output from a real device. **Always verify
+> your own `sfdisk -d` output** — sector values should match, but the device
+> name will be whatever your system assigned (e.g., `/dev/sdb`, `/dev/sdc`).
 
-> **Note:** Your actual sector values may differ. Use the values from YOUR
-> `sfdisk -d` output in all subsequent commands.
+Key values to record:
 
-### Step 4: Repartition (Expand Extended + rootfs)
+| Value | Sector | Purpose |
+|-------|--------|---------|
+| p1 start | 63 | Boot partition start (CHS-aligned) |
+| p4 start | 1,156,680 | Extended container start |
+| p5 start | 1,156,743 | Backup partition start |
+| p5 size | 2,939,832 | Backup partition size (~1.40 GB) |
+| p6 start | 4,096,638 | Rootfs start |
+| p7 | 6,104,763 / 530,082 | Swap (will be dropped) |
+
+### Step 4: Repartition (Expand Extended + rootfs, Drop Swap)
 
 We will use `sfdisk` in script mode to:
-1. Delete logical partitions p5 and p6
-2. Delete extended partition p4
-3. Recreate p4 from the same start sector to the end of disk
-4. Recreate p5 at the same offset and size (preserving the backup partition)
-5. Recreate p6 using all remaining space
+1. Keep p1, p2, p3 exactly as they are
+2. Expand p4 (extended) from the same start sector to the end of disk
+3. Keep p5 at the same offset and size (preserving the backup partition)
+4. Expand p6 to fill all remaining space in the extended partition
+5. **Drop p7 (swap)** — not included in the new table, allowing p6 to grow larger
+
+> **Why drop swap?** The original ~259 MB swap partition is not needed for our
+> gaming use case. Removing it lets p6 expand to fill the entire rest of the
+> extended partition. If swap is ever needed, create a swap file instead:
+> `dd if=/dev/zero of=/swapfile bs=1M count=256 && mkswap /swapfile && swapon /swapfile`
 
 ```bash
 # Get total sectors on the 32 GB card
 TOTAL_SECTORS=$(sudo blockdev --getsz ${DEST})
 echo "Total sectors: ${TOTAL_SECTORS}"
-
-# Record values from your partition-table-before.txt:
-P4_START=1169408       # start sector of p4 (extended)
-P5_START=1171456       # start sector of p5 (backup)
-P5_SIZE=3072000        # size of p5 in sectors (1500 MB)
-
-# Calculate p6 start: after p5 ends, plus 2048-sector gap for alignment
-P6_START=$(( P5_START + P5_SIZE + 2048 ))
-echo "p6 will start at sector: ${P6_START}"
-
-# Extended partition size: from p4 start to end of disk
-P4_SIZE=$(( TOTAL_SECTORS - P4_START ))
-
-# p6 size: from p6 start to end of extended partition
-# (extended ends at P4_START + P4_SIZE, minus the 2-sector MBR overhead)
-P6_SIZE=$(( P4_START + P4_SIZE - P6_START ))
-
-echo "New layout:"
-echo "  p4 (extended): start=${P4_START}, size=${P4_SIZE}"
-echo "  p5 (backup):   start=${P5_START}, size=${P5_SIZE}"
-echo "  p6 (rootfs):   start=${P6_START}, size=${P6_SIZE}"
 ```
 
-Now apply the new partition table:
+Now apply the new partition table. The key trick: **omit the size for p4 and p6**
+so that `sfdisk` automatically fills them to the maximum available space.
 
 ```bash
 # IMPORTANT: This will modify the partition table. Verify DEST is correct!
@@ -295,15 +322,23 @@ echo "Writing to ${DEST} — confirm this is the 32 GB SD card!"
 lsblk ${DEST}
 
 # Apply the new layout using sfdisk
-sudo sfdisk ${DEST} << EOF
+# - p1-p3: exact copies from original
+# - p4: same start, size omitted → fills to end of disk
+# - p5: exact copy from original
+# - p6: same start, size omitted → fills remaining space in extended
+# - p7: DROPPED (was swap)
+sudo sfdisk ${DEST} << 'EOF'
 label: dos
+label-id: 0x00000000
+unit: sectors
+sector-size: 512
 
-/dev/${DEST##*/}1 : start=       2048, size=     131072, type=c
-/dev/${DEST##*/}2 : start=     133120, size=     524288, type=83
-/dev/${DEST##*/}3 : start=     657408, size=     512000, type=83
-/dev/${DEST##*/}4 : start=  ${P4_START}, size=  ${P4_SIZE}, type=5
-/dev/${DEST##*/}5 : start=  ${P5_START}, size=  ${P5_SIZE}, type=83
-/dev/${DEST##*/}6 : start=  ${P6_START}, size=  ${P6_SIZE}, type=83
+/dev/sdX1 : start=          63, size=      144522, type=c, bootable
+/dev/sdX2 : start=      144585, size=      514080, type=83
+/dev/sdX3 : start=      658665, size=      498015, type=83
+/dev/sdX4 : start=     1156680, type=5
+/dev/sdX5 : start=     1156743, size=     2939832, type=83
+/dev/sdX6 : start=     4096638, type=83
 EOF
 
 # Re-read partition table
@@ -313,9 +348,14 @@ sudo partprobe ${DEST}
 sudo sfdisk -l ${DEST}
 ```
 
+> **Important:** Replace `/dev/sdX` in the heredoc with your actual device name
+> (e.g., `/dev/sdb`). The `sfdisk` tool uses the device names in the input to
+> match partition entries. Alternatively, the automated script
+> [`clone-to-32gb.sh`](clone-to-32gb.sh) handles device naming automatically.
+
 > **Verify:** The output should show p1–p3 unchanged, p4 expanded to fill the
-> disk, p5 at the same location/size, and p6 taking all remaining space
-> (~27.5 GB).
+> disk, p5 at the same location/size, p6 taking all remaining space (~27+ GB),
+> and **no p7** (swap removed).
 
 ### Step 5: Verify and Resize Filesystem
 
@@ -408,66 +448,66 @@ Builds and deploys native\_apps, scummvm-roomwizard, usb\_host, vnc\_client.
 
 ---
 
-## 5. Alternative: Add Separate Game Partition (p7)
+## 6. Alternative: Add Separate Game Partition (p8)
 
 This approach is the **safest** because it does not modify any existing
-partition. All original partitions remain byte-for-byte identical.
+partition. All 7 original partitions remain byte-for-byte identical (including
+the swap partition p7).
 
 ### Concept
 
 After cloning the 4 GB image to the 32 GB card, the space beyond the original
-extended partition (p4) is unallocated. We create a **new primary partition**
-(p7 is not possible in MBR with 4 primary slots used — so instead we add a new
-**logical partition** inside the expanded extended).
-
-Actually, since all 4 primary partition slots are already used (p1, p2, p3, p4),
-any new partition must be a logical partition inside the extended (p4). So we
-expand p4 and add p7 as a new logical partition after p6.
+extended partition (p4) is unallocated. Since all 4 primary partition slots are
+already used (p1, p2, p3, p4), any new partition must be a logical partition
+inside the extended (p4). So we expand p4 and add **p8** as a new logical
+partition after p7.
 
 ### Procedure
 
 **Steps 1–3** are identical to the recommended approach above. Then:
 
-**Step 4: Expand only the extended partition**
+**Step 4: Expand only the extended partition, keep all 7 original partitions**
 
 ```bash
 TOTAL_SECTORS=$(sudo blockdev --getsz ${DEST})
-P4_START=1169408  # from your sfdisk dump
 
 # Read existing table
 sudo sfdisk -d ${DEST} > partition-table-before.txt
 
-# Modify only p4's size to fill the disk, keep everything else
-P4_SIZE=$(( TOTAL_SECTORS - P4_START ))
-
-sudo sfdisk ${DEST} << EOF
+# Rewrite with p4 expanded to fill disk, all others unchanged (including p7 swap)
+sudo sfdisk ${DEST} << 'EOF'
 label: dos
+label-id: 0x00000000
+unit: sectors
+sector-size: 512
 
-/dev/${DEST##*/}1 : start=       2048, size=     131072, type=c
-/dev/${DEST##*/}2 : start=     133120, size=     524288, type=83
-/dev/${DEST##*/}3 : start=     657408, size=     512000, type=83
-/dev/${DEST##*/}4 : start=  ${P4_START}, size=  ${P4_SIZE}, type=5
-/dev/${DEST##*/}5 : start=  1171456, size=  3072000, type=83
-/dev/${DEST##*/}6 : start=  4245504, size=  2097152, type=83
+/dev/sdX1 : start=          63, size=      144522, type=c, bootable
+/dev/sdX2 : start=      144585, size=      514080, type=83
+/dev/sdX3 : start=      658665, size=      498015, type=83
+/dev/sdX4 : start=     1156680, type=5
+/dev/sdX5 : start=     1156743, size=     2939832, type=83
+/dev/sdX6 : start=     4096638, size=     2008062, type=83
+/dev/sdX7 : start=     6104763, size=      530082, type=82
 EOF
 
 sudo partprobe ${DEST}
 ```
 
-**Step 5: Create the new p7 partition**
+> **Note:** Replace `/dev/sdX` with your actual device name.
+
+**Step 5: Create the new p8 partition**
 
 ```bash
-# p7 starts after p6 ends, with alignment gap
-P7_START=$(( 4245504 + 2097152 + 2048 ))
-P7_SIZE=$(( P4_START + P4_SIZE - P7_START ))
+# p8 starts after p7 ends, with alignment gap
+P8_START=$(( 6104763 + 530082 + 63 ))
 
-# Add p7 as a new logical partition
-echo "${P7_START} ${P7_SIZE} 83" | sudo sfdisk ${DEST} --append
+# Add p8 as a new logical partition
+echo "${P8_START} - 83" | sudo sfdisk ${DEST} --append
 
 sudo partprobe ${DEST}
 
 # Format the new partition
-sudo mkfs.ext3 -L games ${DEST}7
+sudo mkfs.ext3 -L games ${DEST}8
 ```
 
 **Step 6: Add fstab entry on the device**
@@ -483,7 +523,7 @@ sudo mount ${DEST}6 /mnt/rw
 sudo mkdir -p /mnt/rw/opt/roomwizard/games
 
 # Get UUID of the new partition
-GAMES_UUID=$(sudo blkid -s UUID -o value ${DEST}7)
+GAMES_UUID=$(sudo blkid -s UUID -o value ${DEST}8)
 
 # Add fstab entry
 echo "UUID=${GAMES_UUID}  /opt/roomwizard/games  ext3  defaults,noatime  0  2" \
@@ -494,58 +534,63 @@ sudo umount /mnt/rw
 
 ### Trade-offs
 
-| | Recommended (expand p6) | Alternative (add p7) |
+| | Recommended (expand p6, drop swap) | Alternative (add p8, keep swap) |
 |---|---|---|
-| **Safety** | Modifies p4 and p6 | Only adds new partition |
+| **Safety** | Modifies p4 and p6, drops p7 | Only expands p4 and adds new partition |
 | **Complexity** | Simple — one big rootfs | Requires fstab entry and separate mount |
 | **Game path** | `/opt/roomwizard/` (on rootfs) | `/opt/roomwizard/games/` (separate mount) |
-| **Space** | ~27.5 GB rootfs | ~1 GB rootfs + ~26 GB games partition |
+| **Space** | ~27+ GB rootfs | ~981 MB rootfs + ~25 GB games partition |
+| **Swap** | Removed (not needed for gaming) | Preserved (~259 MB) |
 | **UUID preserved** | ✓ Yes (resize, not reformat) | ✓ Yes (p6 untouched) |
 | **Deploy scripts** | No changes needed | ScummVM deploy must target `/opt/roomwizard/games/` |
 
 ---
 
-## 6. New Partition Layout (After Upgrade)
+## 7. New Partition Layout (After Upgrade)
 
-### Recommended Layout (Expanded rootfs)
+### Recommended Layout (Expanded rootfs, swap dropped)
 
 | Partition | Device | Type | Size | Mount | Purpose |
 |-----------|--------|------|------|-------|---------|
-| p1 | mmcblk0p1 | FAT32 | 64 MB | /var/volatile/boot | Boot — MLO, U-Boot, uImage, DTB (unchanged) |
-| p2 | mmcblk0p2 | ext3 | 256 MB | /home/root/data | Application data (unchanged) |
-| p3 | mmcblk0p3 | ext3 | 250 MB | /home/root/log | System logs (unchanged) |
+| p1 | mmcblk0p1 | FAT32 | ~70.6 MB | /var/volatile/boot | Boot — MLO, U-Boot, uImage, DTB (unchanged, bootable) |
+| p2 | mmcblk0p2 | ext3 | ~251 MB | /home/root/data | Application data (unchanged) |
+| p3 | mmcblk0p3 | ext3 | ~243 MB | /home/root/log | System logs (unchanged) |
 | p4 | — | extended | ~29 GB | — | Container for p5 + p6 (expanded) |
-| p5 | mmcblk0p5 | ext3 | 1500 MB | /home/root/backup | OEM backup (unchanged, preserved for device numbering) |
-| **p6** | **mmcblk0p6** | **ext3** | **~27.5 GB** | **/** | **Root filesystem (expanded from 1024 MB!)** |
+| p5 | mmcblk0p5 | ext3 | ~1.40 GB | /home/root/backup | OEM backup (unchanged, preserved for device numbering) |
+| **p6** | **mmcblk0p6** | **ext3** | **~27+ GB** | **/** | **Root filesystem (expanded from ~981 MB!)** |
+| ~~p7~~ | — | — | — | — | ~~Swap — removed to maximize rootfs space~~ |
 
-- Total usable space on rootfs: **~27.5 GB**
+- Total usable space on rootfs: **~27+ GB**
 - After OS + apps: **~27 GB free** for games
 - Device numbering: **preserved** — rootfs remains `mmcblk0p6`
 - Rootfs UUID: **preserved** — `108a1490-8feb-4d0c-b3db-995dc5fc066c`
+- Swap: **removed** — not needed for gaming workloads
 
-### Alternative Layout (Separate game partition)
+### Alternative Layout (Separate game partition, swap preserved)
 
 | Partition | Device | Type | Size | Mount | Purpose |
 |-----------|--------|------|------|-------|---------|
-| p1 | mmcblk0p1 | FAT32 | 64 MB | /var/volatile/boot | Boot (unchanged) |
-| p2 | mmcblk0p2 | ext3 | 256 MB | /home/root/data | Data (unchanged) |
-| p3 | mmcblk0p3 | ext3 | 250 MB | /home/root/log | Logs (unchanged) |
+| p1 | mmcblk0p1 | FAT32 | ~70.6 MB | /var/volatile/boot | Boot (unchanged, bootable) |
+| p2 | mmcblk0p2 | ext3 | ~251 MB | /home/root/data | Data (unchanged) |
+| p3 | mmcblk0p3 | ext3 | ~243 MB | /home/root/log | Logs (unchanged) |
 | p4 | — | extended | ~29 GB | — | Container (expanded) |
-| p5 | mmcblk0p5 | ext3 | 1500 MB | /home/root/backup | Backup (unchanged) |
-| p6 | mmcblk0p6 | ext3 | 1024 MB | / | Rootfs (unchanged) |
-| **p7** | **mmcblk0p7** | **ext3** | **~26 GB** | **/opt/roomwizard/games** | **Game data (new)** |
+| p5 | mmcblk0p5 | ext3 | ~1.40 GB | /home/root/backup | Backup (unchanged) |
+| p6 | mmcblk0p6 | ext3 | ~981 MB | / | Rootfs (unchanged) |
+| p7 | mmcblk0p7 | swap | ~259 MB | swap | Swap (unchanged) |
+| **p8** | **mmcblk0p8** | **ext3** | **~25 GB** | **/opt/roomwizard/games** | **Game data (new)** |
 
 ---
 
-## 7. Script Reference
+## 8. Script Reference
 
 The helper script [`clone-to-32gb.sh`](clone-to-32gb.sh) automates the
 recommended procedure (Steps 2–6). It:
 
 - Validates target device (block device, ≥16 GB, not `/dev/sda`, not mounted)
 - Clones the source image/device with `dd` (or skips with `--expand-only`)
-- Verifies the 6-partition layout and rootfs UUID
-- Repartitions with `sfdisk` (expands p4 + p6, preserves p5)
+- Verifies the 7-partition layout and rootfs UUID
+- Repartitions with `sfdisk` (expands p4 + p6, drops p7 swap, preserves p5)
+- Preserves `label-id: 0x00000000` and the boot flag on p1
 - Resizes the ext3 filesystem with `e2fsck` + `resize2fs`
 - Verifies UUID is preserved after expansion
 
@@ -579,7 +624,7 @@ the recommended approach where UUID is preserved).
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### UUID Changed
 
@@ -647,16 +692,18 @@ sudo e2fsck -f /dev/sdY6
 
 ### Partition Alignment
 
-Modern SD cards perform best with 4 KiB-aligned partitions (start sectors
-divisible by 8). The original RoomWizard layout uses 2048-sector alignment
-(1 MiB), which is optimal. The steps above preserve this alignment.
+The original RoomWizard layout uses **old CHS alignment** (partitions starting
+at sector 63), not modern 2048-sector (1 MiB) alignment. This is typical for
+older embedded Linux devices. Modern SD cards may perform slightly better with
+4 KiB-aligned writes, but the sector 63 alignment has been working fine on
+the RoomWizard hardware and we preserve it as-is.
 
-To verify:
+To verify alignment:
 
 ```bash
 sudo sfdisk -d /dev/sdY | grep start | while read line; do
     start=$(echo "$line" | grep -oP 'start=\s*\K[0-9]+')
-    echo "Start: ${start}, aligned: $(( start % 2048 == 0 ? 1 : 0 ))"
+    echo "Start: ${start}, 4K-aligned: $(( start % 8 == 0 ? 1 : 0 ))"
 done
 ```
 
@@ -669,6 +716,7 @@ If `sfdisk` refuses to write the new partition table:
 sudo wipefs -a /dev/sdY4
 sudo wipefs -a /dev/sdY5
 sudo wipefs -a /dev/sdY6
+sudo wipefs -a /dev/sdY7
 
 # Then retry the sfdisk command from Step 4
 ```
@@ -677,11 +725,12 @@ Or use `fdisk` interactively as a fallback:
 
 ```bash
 sudo fdisk /dev/sdY
+# d → 7 (delete p7 / swap)
 # d → 6 (delete p6)
 # d → 5 (delete p5)
 # d → 4 (delete p4)
-# n → e → 4 (new extended, partition 4, same start, full size)
-# n → l (new logical — becomes p5, same start/size as old p5)
+# n → e → 4 (new extended, partition 4, start=1156680, full remaining size)
+# n → l (new logical — becomes p5, start=1156743, size=+1435M)
 # n → l (new logical — becomes p6, use remaining space)
 # t → 5 → 83 (Linux)
 # t → 6 → 83 (Linux)
@@ -714,7 +763,7 @@ sync
 
 ---
 
-## 9. ScummVM Game Storage
+## 10. ScummVM Game Storage
 
 ### Game Location
 
@@ -742,10 +791,10 @@ Each game has its own subdirectory:
 
 | Scenario | rootfs Size | Used | Free for Games |
 |----------|-----------|------|----------------|
-| Stock 4 GB card | 1024 MB | ~463 MB | ~474 MB |
-| 4 GB + bloatware removed | 1024 MB | ~285 MB | ~652 MB |
-| **32 GB (recommended)** | **~27.5 GB** | **~285 MB** | **~27 GB** |
-| 32 GB (alternative p7) | 1024 MB + ~26 GB | ~285 MB | ~26 GB |
+| Stock 4 GB card | ~981 MB | ~463 MB | ~474 MB |
+| 4 GB + bloatware removed | ~981 MB | ~285 MB | ~652 MB |
+| **32 GB (recommended)** | **~27+ GB** | **~285 MB** | **~27 GB** |
+| 32 GB (alternative p8) | ~981 MB + ~25 GB | ~285 MB | ~25 GB |
 
 ### Example Game Sizes (Classic SCUMM)
 
@@ -823,26 +872,23 @@ sync && sudo partprobe ${DEST}
 # === STEP 3: Record partition table ===
 sudo sfdisk -d ${DEST} > partition-table-before.txt
 cat partition-table-before.txt
-# NOTE: Record P4_START, P5_START, P5_SIZE, P6_START from output
+# Should show 7 partitions (p1-p7) including swap on p7
 
-# === STEP 4: Repartition ===
-TOTAL_SECTORS=$(sudo blockdev --getsz ${DEST})
-P4_START=1169408       # ← from your sfdisk dump
-P5_START=1171456       # ← from your sfdisk dump
-P5_SIZE=3072000        # ← from your sfdisk dump
-P6_START=$(( P5_START + P5_SIZE + 2048 ))
-P4_SIZE=$(( TOTAL_SECTORS - P4_START ))
-P6_SIZE=$(( P4_START + P4_SIZE - P6_START ))
-
-sudo sfdisk ${DEST} << EOF
+# === STEP 4: Repartition (expand p4 + p6, drop p7 swap) ===
+# NOTE: Replace /dev/sdX below with your actual device (e.g., /dev/sdb)
+sudo sfdisk ${DEST} << 'PARTITION_EOF'
 label: dos
-${DEST}1 : start=       2048, size=     131072, type=c
-${DEST}2 : start=     133120, size=     524288, type=83
-${DEST}3 : start=     657408, size=     512000, type=83
-${DEST}4 : start=  ${P4_START}, size=  ${P4_SIZE}, type=5
-${DEST}5 : start=  ${P5_START}, size=  ${P5_SIZE}, type=83
-${DEST}6 : start=  ${P6_START}, size=  ${P6_SIZE}, type=83
-EOF
+label-id: 0x00000000
+unit: sectors
+sector-size: 512
+
+/dev/sdX1 : start=          63, size=      144522, type=c, bootable
+/dev/sdX2 : start=      144585, size=      514080, type=83
+/dev/sdX3 : start=      658665, size=      498015, type=83
+/dev/sdX4 : start=     1156680, type=5
+/dev/sdX5 : start=     1156743, size=     2939832, type=83
+/dev/sdX6 : start=     4096638, type=83
+PARTITION_EOF
 sudo partprobe ${DEST}
 
 # === STEP 5: Resize filesystem ===

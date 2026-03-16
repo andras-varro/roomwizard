@@ -9,15 +9,28 @@
 # (16-32GB) SD card and expands the root filesystem (p6) to use all available
 # space, while preserving partition numbering and filesystem UUID.
 #
+# The original RoomWizard partition table has 7 partitions:
+#   p1: FAT32, ~70.6 MB, bootable (MLO, U-Boot, uImage, DTB)
+#   p2: ext3, ~251 MB (application data)
+#   p3: ext3, ~243 MB (system logs)
+#   p4: extended container, ~3.14 GB (holds p5-p7)
+#   p5: ext3, ~1.40 GB (OEM backup)
+#   p6: ext3, ~981 MB (root filesystem)
+#   p7: swap, ~259 MB (swap space — dropped during upgrade)
+#
+# The upgrade drops p7 (swap) to maximize rootfs space. Swap is not needed
+# for our gaming use case, and removing it lets p6 expand further.
+#
 # For full background, partition layout details, and manual procedure, see:
 #   SD_CARD_UPGRADE.md
 #
 # Strategy:
 #   1. Clone the original 4GB image to the 32GB card with dd
 #   2. Use sfdisk to expand extended partition (p4) and rootfs (p6)
-#   3. Use e2fsck + resize2fs to grow the ext3 filesystem
-#   4. Preserve p5 (backup) at original size to maintain p6 device numbering
-#   5. UUID is preserved because we resize, not reformat
+#   3. Drop swap partition (p7) — not needed for gaming
+#   4. Use e2fsck + resize2fs to grow the ext3 filesystem
+#   5. Preserve p5 (backup) at original size to maintain p6 device numbering
+#   6. UUID is preserved because we resize, not reformat
 
 set -euo pipefail
 
@@ -26,7 +39,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 EXPECTED_ROOTFS_UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
 MIN_TARGET_SIZE_GB=16
-EXPECTED_PARTITION_COUNT=6
+EXPECTED_PARTITION_COUNT=7  # Original has 7 partitions (including swap on p7)
 SCRIPT_NAME="$(basename "$0")"
 
 # ---------------------------------------------------------------------------
@@ -123,11 +136,21 @@ usage() {
     echo ""
     echo -e "${BOLD}WHAT IT DOES${NC}"
     echo "  1. (Clone mode) dd the source image/device to the target"
-    echo "  2. Verify expected 6-partition layout and rootfs UUID"
+    echo "  2. Verify expected 7-partition layout (originally) and rootfs UUID"
     echo "  3. Expand extended partition (p4) and rootfs (p6) to fill the card"
-    echo "  4. Preserve backup partition (p5) at original size for device numbering"
-    echo "  5. Grow the ext3 filesystem on p6 with resize2fs"
-    echo "  6. Verify UUID is preserved"
+    echo "  4. Drop swap partition (p7) to maximize rootfs space"
+    echo "  5. Preserve backup partition (p5) at original size for device numbering"
+    echo "  6. Grow the ext3 filesystem on p6 with resize2fs"
+    echo "  7. Verify UUID is preserved"
+    echo ""
+    echo -e "${BOLD}PARTITION LAYOUT (original 7 partitions)${NC}"
+    echo "  p1: FAT32  ~70.6 MB  bootable  (boot: MLO, U-Boot, uImage, DTB)"
+    echo "  p2: ext3   ~251 MB             (application data)"
+    echo "  p3: ext3   ~243 MB             (system logs)"
+    echo "  p4: ext    ~3.14 GB            (extended container for p5-p7)"
+    echo "  p5: ext3   ~1.40 GB            (OEM backup)"
+    echo "  p6: ext3   ~981 MB             (root filesystem)"
+    echo "  p7: swap   ~259 MB             (swap — DROPPED during upgrade)"
     echo ""
     echo -e "${BOLD}SEE ALSO${NC}"
     echo "  SD_CARD_UPGRADE.md — Full documentation of the upgrade procedure"
@@ -356,13 +379,14 @@ do_verify() {
     info "Found ${part_count} partition(s) on ${DEVICE}"
 
     if [ "$part_count" -ne "$EXPECTED_PARTITION_COUNT" ]; then
-        error "Expected ${EXPECTED_PARTITION_COUNT} partitions, found ${part_count}"
+        error "Expected ${EXPECTED_PARTITION_COUNT} partitions (originally), found ${part_count}"
         echo ""
         lsblk "$DEVICE"
         error "The target device does not have the expected RoomWizard partition layout"
+        error "Expected 7 partitions: p1(FAT32,boot) p2(ext3) p3(ext3) p4(extended) p5(ext3) p6(ext3,rootfs) p7(swap)"
         exit 1
     fi
-    info "Partition count: ${part_count} — OK"
+    info "Partition count: ${part_count} (7 partitions including swap) — OK"
 
     # Show current partition table
     echo ""
@@ -400,7 +424,7 @@ do_verify() {
 # Phase 3: Repartition
 # ---------------------------------------------------------------------------
 do_repartition() {
-    step "Repartition — expand extended (p4) and rootfs (p6)"
+    step "Repartition — expand extended (p4) and rootfs (p6), drop swap (p7)"
 
     # Save current partition table
     local saved_table
@@ -411,13 +435,14 @@ do_repartition() {
     echo ""
 
     # Parse partition entries from sfdisk dump
-    # Format: /dev/sdb1 : start=     2048, size=   131072, type=c
-    local p1_start p1_size p1_type
+    # Format: /dev/sdb1 : start=        63, size=      144522, type=c, bootable
+    local p1_start p1_size p1_type p1_bootable
     local p2_start p2_size p2_type
     local p3_start p3_size p3_type
     local p4_start p4_size p4_type
     local p5_start p5_size p5_type
     local p6_start p6_size p6_type
+    local p7_start p7_size p7_type
 
     parse_partition() {
         local line="$1"
@@ -432,12 +457,16 @@ do_repartition() {
         echo "$line" | sed -E 's/.*type=\s*([0-9a-fA-F]+).*/\1/'
     }
 
-    # Extract header lines (label, label-id, device, unit)
+    # Extract header lines (label, label-id, device, unit, sector-size)
     local header
     header=$(echo "$saved_table" | grep -E '^(label|label-id|device|unit|sector-size):' || true)
 
+    # Extract label-id for preservation
+    local label_id
+    label_id=$(echo "$saved_table" | grep -oP 'label-id:\s*\K.*' || echo "0x00000000")
+
     # Extract each partition line
-    local p1_line p2_line p3_line p4_line p5_line p6_line
+    local p1_line p2_line p3_line p4_line p5_line p6_line p7_line
 
     p1_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 1) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 1)$" || true)
     p2_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 2) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 2)$" || true)
@@ -445,15 +474,22 @@ do_repartition() {
     p4_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 4) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 4)$" || true)
     p5_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 5) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 5)$" || true)
     p6_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 6) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 6)$" || true)
+    p7_line=$(echo "$saved_table" | grep "$(part_dev "$DEVICE" 7) " || echo "$saved_table" | grep "$(part_dev "$DEVICE" 7)$" || true)
 
-    # Verify we found all partitions
-    for pnum in 1 2 3 4 5 6; do
+    # Verify we found all 7 partitions
+    for pnum in 1 2 3 4 5 6 7; do
         local varname="p${pnum}_line"
         if [ -z "${!varname}" ]; then
             error "Could not parse partition ${pnum} from sfdisk dump"
             exit 1
         fi
     done
+
+    # Check if p1 has bootable flag
+    p1_bootable=""
+    if echo "$p1_line" | grep -q "bootable"; then
+        p1_bootable=", bootable"
+    fi
 
     # Parse values
     p1_start=$(parse_partition "$p1_line"); p1_size=$(parse_size "$p1_line"); p1_type=$(parse_type "$p1_line")
@@ -462,14 +498,16 @@ do_repartition() {
     p4_start=$(parse_partition "$p4_line"); p4_size=$(parse_size "$p4_line"); p4_type=$(parse_type "$p4_line")
     p5_start=$(parse_partition "$p5_line"); p5_size=$(parse_size "$p5_line"); p5_type=$(parse_type "$p5_line")
     p6_start=$(parse_partition "$p6_line"); p6_size=$(parse_size "$p6_line"); p6_type=$(parse_type "$p6_line")
+    p7_start=$(parse_partition "$p7_line"); p7_size=$(parse_size "$p7_line"); p7_type=$(parse_type "$p7_line")
 
-    info "Parsed current layout:"
-    info "  p1: start=${p1_start}, size=${p1_size}, type=${p1_type}"
-    info "  p2: start=${p2_start}, size=${p2_size}, type=${p2_type}"
-    info "  p3: start=${p3_start}, size=${p3_size}, type=${p3_type}"
-    info "  p4: start=${p4_start}, size=${p4_size}, type=${p4_type} (extended)"
-    info "  p5: start=${p5_start}, size=${p5_size}, type=${p5_type}"
-    info "  p6: start=${p6_start}, size=${p6_size}, type=${p6_type} (rootfs)"
+    info "Parsed current layout (7 partitions):"
+    info "  p1: start=${p1_start}, size=${p1_size}, type=${p1_type}${p1_bootable}  (~$(( p1_size * 512 / 1048576 )) MB, FAT32 boot)"
+    info "  p2: start=${p2_start}, size=${p2_size}, type=${p2_type}  (~$(( p2_size * 512 / 1048576 )) MB, data)"
+    info "  p3: start=${p3_start}, size=${p3_size}, type=${p3_type}  (~$(( p3_size * 512 / 1048576 )) MB, log)"
+    info "  p4: start=${p4_start}, size=${p4_size}, type=${p4_type}  (~$(( p4_size * 512 / 1048576 )) MB, extended)"
+    info "  p5: start=${p5_start}, size=${p5_size}, type=${p5_type}  (~$(( p5_size * 512 / 1048576 )) MB, backup)"
+    info "  p6: start=${p6_start}, size=${p6_size}, type=${p6_type}  (~$(( p6_size * 512 / 1048576 )) MB, rootfs)"
+    info "  p7: start=${p7_start}, size=${p7_size}, type=${p7_type}  (~$(( p7_size * 512 / 1048576 )) MB, swap — WILL BE DROPPED)"
 
     # Record old p6 size for summary
     OLD_P6_SIZE=$p6_size
@@ -480,34 +518,33 @@ do_repartition() {
     info "Total device sectors: ${total_sectors}"
 
     # New p4 (extended): same start, extends to end of disk
-    # Leave a small margin (2048 sectors = 1 MiB) at the end for safety
     local new_p4_size=$(( total_sectors - p4_start ))
 
     # p5 stays the same
-    # p6: same start, but remove explicit size — fill remaining space in extended
+    # p6: same start, expand to fill remaining space in extended (p7 swap is dropped)
     # Calculate p6 size: from p6 start to end of the extended partition
-    # The extended partition effectively ends at p4_start + new_p4_size
-    # But logical partitions have a 2-sector EBR overhead; sfdisk handles this
-    # We omit the size for p6 to let sfdisk fill the remaining space
     local new_p6_size=$(( p4_start + new_p4_size - p6_start ))
 
     local old_p6_mb=$(( p6_size * 512 / 1048576 ))
     local new_p6_mb=$(( new_p6_size * 512 / 1048576 ))
+    local p7_mb=$(( p7_size * 512 / 1048576 ))
 
     echo ""
-    info "New layout plan:"
-    info "  p1: start=${p1_start}, size=${p1_size}, type=${p1_type}  (unchanged)"
+    info "New layout plan (6 partitions — p7 swap dropped):"
+    info "  p1: start=${p1_start}, size=${p1_size}, type=${p1_type}${p1_bootable}  (unchanged)"
     info "  p2: start=${p2_start}, size=${p2_size}, type=${p2_type}  (unchanged)"
     info "  p3: start=${p3_start}, size=${p3_size}, type=${p3_type}  (unchanged)"
     info "  p4: start=${p4_start}, size=${new_p4_size}, type=${p4_type}  (EXPANDED)"
     info "  p5: start=${p5_start}, size=${p5_size}, type=${p5_type}  (unchanged)"
     info "  p6: start=${p6_start}, size=${new_p6_size}, type=${p6_type}  (EXPANDED: ${old_p6_mb} MB → ${new_p6_mb} MB)"
+    info "  p7: DROPPED (was swap, ${p7_mb} MB — not needed for gaming)"
     echo ""
 
     confirm "Apply new partition table to ${DEVICE}?"
 
     # Build the sfdisk input
     # We use the dump format that sfdisk understands
+    # Preserve label-id and bootable flag from the original table
     local p1_dev p2_dev p3_dev p4_dev p5_dev p6_dev
     p1_dev=$(part_dev "$DEVICE" 1)
     p2_dev=$(part_dev "$DEVICE" 2)
@@ -516,15 +553,21 @@ do_repartition() {
     p5_dev=$(part_dev "$DEVICE" 5)
     p6_dev=$(part_dev "$DEVICE" 6)
 
+    # Note: We omit size for p4 and p6 so sfdisk fills to max available space.
+    # We explicitly set label-id to preserve the original value (0x00000000).
+    # We include the bootable flag on p1 to match the original layout.
     local new_table
     new_table="label: dos
+label-id: ${label_id}
+unit: sectors
+sector-size: 512
 
-${p1_dev} : start=${p1_start}, size=${p1_size}, type=${p1_type}
+${p1_dev} : start=${p1_start}, size=${p1_size}, type=${p1_type}${p1_bootable}
 ${p2_dev} : start=${p2_start}, size=${p2_size}, type=${p2_type}
 ${p3_dev} : start=${p3_start}, size=${p3_size}, type=${p3_type}
-${p4_dev} : start=${p4_start}, size=${new_p4_size}, type=${p4_type}
+${p4_dev} : start=${p4_start}, type=${p4_type}
 ${p5_dev} : start=${p5_start}, size=${p5_size}, type=${p5_type}
-${p6_dev} : start=${p6_start}, size=${new_p6_size}, type=${p6_type}
+${p6_dev} : start=${p6_start}, type=${p6_type}
 "
 
     if $DRY_RUN; then
@@ -604,6 +647,7 @@ do_final_verify() {
         local new_mb=$(( NEW_P6_SIZE * 512 / 1048576 ))
         dry_run "  Old rootfs partition: ${old_mb} MB"
         dry_run "  New rootfs partition: ${new_mb} MB"
+        dry_run "  Swap partition (p7): DROPPED"
         return
     fi
 
@@ -659,8 +703,9 @@ do_final_verify() {
 
     echo -e "  Device:           ${BOLD}${DEVICE}${NC}"
     echo -e "  Rootfs partition: ${BOLD}${p6_dev}${NC}"
-    echo -e "  Old rootfs size:  ${old_mb} MB"
+    echo -e "  Old rootfs size:  ${old_mb} MB (~981 MB)"
     echo -e "  New rootfs size:  ${BOLD}${new_mb} MB${NC} ($(( new_mb / 1024 )) GB)"
+    echo -e "  Swap (p7):        ${BOLD}DROPPED${NC} (was ~259 MB — not needed for gaming)"
     echo -e "  UUID:             ${BOLD}${p6_uuid}${NC}"
     echo ""
 
