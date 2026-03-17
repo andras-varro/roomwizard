@@ -21,6 +21,12 @@
 
 set -e
 
+# ── 0. Clean shell profile references to deleted Steelcase configs ─────────
+# The factory /etc/profile sources wsplatform.conf which no longer exists
+# after bloatware removal, causing "-sh: ...wsplatform.conf: No such file"
+# on every login.
+sed -i '/wsplatform\.conf/d' /etc/profile 2>/dev/null
+
 # ── 1. Software watchdog bypass ────────────────────────────────────────────
 # The Steelcase watchdog_test.sh exits 0 immediately when this file exists.
 touch /var/watchdog_test

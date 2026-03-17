@@ -233,10 +233,10 @@ ssh "$DEVICE" bash <<'SSH_HARDEN'
     grep -q '^LoginGraceTime' /etc/ssh/sshd_config || echo 'LoginGraceTime 30' >> /etc/ssh/sshd_config
     grep -q '^MaxSessions' /etc/ssh/sshd_config || echo 'MaxSessions 5' >> /etc/ssh/sshd_config
 
-    # Restart SSH to apply
-    /etc/init.d/sshd restart
+    # NOTE: Don't restart sshd here — it would break subsequent SSH commands in this script.
+    # Changes take effect on next reboot (script requests reboot at the end).
 SSH_HARDEN
-ok "SSH hardened (PermitEmptyPasswords=no, MaxAuthTries=3, LoginGraceTime=30)"
+ok "SSH hardened (PermitEmptyPasswords=no, MaxAuthTries=3) — takes effect on reboot"
 
 # ── 5. Kernel/sysctl hardening ───────────────────────────────────────────
 echo ""
@@ -326,6 +326,10 @@ rm -rf /opt/pv02 2>/dev/null
 rm -rf /opt/sound 2>/dev/null
 rm -f /home/root/sqltool.rc 2>/dev/null
 rm -rf /home/root/data/websign 2>/dev/null
+
+# Clean shell profile references to deleted Steelcase configs
+# (wsplatform.conf sourced in /etc/profile causes login errors)
+sed -i '/wsplatform\.conf/d' /etc/profile 2>/dev/null
 rm -rf /home/root/data/rwdb 2>/dev/null
 rm -rf /home/root/data/conctest 2>/dev/null
 rm -rf /home/root/data/cron 2>/dev/null
