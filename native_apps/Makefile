@@ -77,32 +77,32 @@ $(BUILD_DIR)/gamepad.o: $(COMMON_DIR)/gamepad.c $(COMMON_DIR)/gamepad.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Snake game
-$(BUILD_DIR)/snake: $(SNAKE_DIR)/snake.c $(COMMON_OBJ)
+$(BUILD_DIR)/snake: $(SNAKE_DIR)/snake.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: snake"
 
 # Tetris game
-$(BUILD_DIR)/tetris: $(TETRIS_DIR)/tetris.c $(COMMON_OBJ)
+$(BUILD_DIR)/tetris: $(TETRIS_DIR)/tetris.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: tetris"
 
 # Pong game
-$(BUILD_DIR)/pong: $(PONG_DIR)/pong.c $(COMMON_OBJ)
+$(BUILD_DIR)/pong: $(PONG_DIR)/pong.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: pong"
 
 # Brick Breaker game
-$(BUILD_DIR)/brick_breaker: $(BRICK_DIR)/brick_breaker.c $(COMMON_OBJ)
+$(BUILD_DIR)/brick_breaker: $(BRICK_DIR)/brick_breaker.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: brick_breaker"
 
 # SameGame game
-$(BUILD_DIR)/samegame: $(SAMEGAME_DIR)/samegame.c $(COMMON_OBJ)
+$(BUILD_DIR)/samegame: $(SAMEGAME_DIR)/samegame.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: samegame"
 
 # Frogger game
-$(BUILD_DIR)/frogger: $(FROGGER_DIR)/frogger.c $(COMMON_OBJ)
+$(BUILD_DIR)/frogger: $(FROGGER_DIR)/frogger.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: frogger"
 
@@ -112,7 +112,7 @@ $(BUILD_DIR)/platformer: $(PLATFORMER_DIR)/platformer.c $(COMMON_OBJ) $(COMMON_G
 	@echo "Built: platformer"
 
 # Game selector
-$(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ)
+$(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 	@echo "Built: game_selector"
 

@@ -3,6 +3,7 @@
  * Optimized for 300MHz ARM with touchscreen
  * No browser overhead - direct framebuffer rendering
  * Features: LED effects, screen transitions
+ * Supports keyboard, gamepad, and touch input via unified gamepad module
  */
 
 #include <stdio.h>
@@ -18,6 +19,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/gamepad.h"
 
 #define GRID_SIZE 20
 #define MAX_SNAKE_LENGTH 400
@@ -73,6 +75,8 @@ typedef struct {
 // Global variables
 Framebuffer fb;
 TouchInput touch;
+GamepadManager gamepad;
+InputState input;
 Snake snake;
 Food food;
 GameState game;
@@ -85,6 +89,8 @@ GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 Audio audio;
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
 
 // UI Buttons
 Button menu_button;
@@ -179,10 +185,10 @@ void init_game() {
     // Initialize buttons
     button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
+    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
+    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
@@ -196,6 +202,24 @@ void init_game() {
     hs_init(&hs_table, "snake");
     hs_load(&hs_table);
     game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+
+    // Set up touch regions for gamepad module (4 directional zones + action buttons)
+    int grid_cx = grid_offset_x + (GRID_SIZE * cell_size) / 2;
+    int grid_cy = grid_offset_y + (GRID_SIZE * cell_size) / 2;
+    int half_w = (GRID_SIZE * cell_size) / 2;
+    int half_h = (GRID_SIZE * cell_size) / 2;
+    TouchRegion touch_regions[] = {
+        /* Up zone: top half of grid, center strip */
+        { grid_cx - half_w, grid_offset_y, half_w * 2, half_h, BTN_ID_UP },
+        /* Down zone: bottom half of grid, center strip */
+        { grid_cx - half_w, grid_cy, half_w * 2, half_h, BTN_ID_DOWN },
+        /* Left zone: left half of grid */
+        { grid_offset_x, grid_offset_y, half_w, half_h * 2, BTN_ID_LEFT },
+        /* Right zone: right half of grid */
+        { grid_cx, grid_offset_y, half_w, half_h * 2, BTN_ID_RIGHT },
+    };
+    gamepad_set_touch_regions(&gamepad, touch_regions, 4);
+
     reset_game();
 }
 
@@ -309,6 +333,22 @@ void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t current_time = get_time_ms();
+
+    // Poll gamepad/keyboard/touch through unified API
+    gamepad_poll(&gamepad, &input, state.x, state.y, state.pressed);
+
+    // Periodic device rescan for hotplug support
+    if (current_time - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = current_time;
+        gamepad_rescan(&gamepad);
+    }
+
+    // BTN_BACK always exits to launcher
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
     
     // Handle welcome screen
     if (current_screen == SCREEN_WELCOME) {
@@ -321,16 +361,45 @@ void handle_input() {
                 hw_leds_off();
             }
         }
+        // Gamepad/keyboard: start game with Jump, Action, or Pause
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed ||
+            input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);
+            hw_leds_off();
+        }
         return;
     }
     
     // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
+        // Allow gamepad restart
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            current_screen = SCREEN_PLAYING;
+        }
         return;
     }
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
+        // Gamepad: unpause with Pause button
+        if (input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
+        // Gamepad: resume with Jump/Action
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
         ModalDialogAction action = modal_dialog_update(&pause_dialog,
             state.x, state.y, state.pressed, current_time);
         if (action == MODAL_ACTION_BTN0) {
@@ -347,7 +416,15 @@ void handle_input() {
         return;
     }
     
-    // Playing screen - check menu and exit buttons
+    // Playing screen — gamepad/keyboard: pause
+    if (input.buttons[BTN_ID_PAUSE].pressed) {
+        current_screen = SCREEN_PAUSED;
+        game.paused = true;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
+    // Playing screen - check menu and exit buttons (touch)
     if (state.pressed) {
         // Check exit button (top-right)
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
@@ -367,7 +444,7 @@ void handle_input() {
             return;
         }
         
-        // Touch controls for direction
+        // Touch controls for direction (relative to snake head)
         Point head = snake.body[0];
         int head_screen_x = grid_offset_x + head.x * cell_size + cell_size / 2;
         int head_screen_y = grid_offset_y + head.y * cell_size + cell_size / 2;
@@ -389,6 +466,17 @@ void handle_input() {
                 snake.next_direction = DIR_UP;
             }
         }
+    }
+
+    // Gamepad/keyboard direction input (use pressed edge, not held, to prevent rapid turns)
+    if (input.buttons[BTN_ID_UP].pressed && snake.direction != DIR_DOWN) {
+        snake.next_direction = DIR_UP;
+    } else if (input.buttons[BTN_ID_DOWN].pressed && snake.direction != DIR_UP) {
+        snake.next_direction = DIR_DOWN;
+    } else if (input.buttons[BTN_ID_LEFT].pressed && snake.direction != DIR_RIGHT) {
+        snake.next_direction = DIR_LEFT;
+    } else if (input.buttons[BTN_ID_RIGHT].pressed && snake.direction != DIR_LEFT) {
+        snake.next_direction = DIR_RIGHT;
     }
 }
 
@@ -427,7 +515,10 @@ void draw_playing_field() {
     }
     
     // Draw controls hint
-    fb_draw_text(&fb, 10, fb.height - 25, "TAP DIRECTION TO MOVE", RGB(100, 100, 100), 1);
+    if (!input.gamepad_connected && !input.keyboard_connected)
+        fb_draw_text(&fb, 10, fb.height - 25, "TAP DIRECTION TO MOVE", RGB(100, 100, 100), 1);
+    else
+        fb_draw_text(&fb, 10, fb.height - 25, "ARROWS/D-PAD: MOVE  ESC: PAUSE", RGB(100, 100, 100), 1);
 }
 
 void draw_game() {
@@ -437,8 +528,9 @@ void draw_game() {
     // Handle welcome screen
     if (current_screen == SCREEN_WELCOME) {
         draw_welcome_screen(&fb, "SNAKE",
-            "TAP DIRECTION TO MOVE\n"
-            "EAT FOOD TO GROW", &start_button);
+            "D-PAD/ARROWS: MOVE\n"
+            "EAT FOOD TO GROW\n"
+            "PRESS START OR TAP TO BEGIN", &start_button);
         return;
     }
     
@@ -527,6 +619,9 @@ int main(int argc, char *argv[]) {
     printf("Snake game started! Touch screen to play.\n");
     printf("Press Ctrl+C to exit.\n");
     
+    // Gamepad init
+    gamepad_init(&gamepad);
+
     // Game loop
     while (running) {
         handle_input();
@@ -542,6 +637,7 @@ int main(int argc, char *argv[]) {
     // Cleanup
     hw_leds_off();
     audio_close(&audio);
+    gamepad_close(&gamepad);
     touch_close(&touch);
     fb_close(&fb);
     

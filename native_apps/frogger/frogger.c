@@ -3,6 +3,7 @@
  * Optimized for 300MHz ARM with touchscreen
  * No browser overhead - direct framebuffer rendering
  * Features: LED effects, screen transitions, high scores
+ * Supports keyboard, gamepad, and touch input via unified gamepad module
  */
 
 #include <stdio.h>
@@ -20,6 +21,7 @@
 #include "../common/highscore.h"
 #include "../common/audio.h"
 #include "../common/logger.h"
+#include "../common/gamepad.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Constants
@@ -167,11 +169,15 @@ typedef struct {
 
 Framebuffer fb;
 TouchInput touch;
+GamepadManager gamepad;
+InputState input;
 Audio audio;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 bool running = true;
 GameScreen current_screen = SCREEN_WELCOME;
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
 
 static Lane lanes[NUM_LANE_CONFIGS];
 static Frog frog;
@@ -452,6 +458,22 @@ static void init_game(void) {
     init_buttons();
     hs_init(&hs_table, "frogger");
     hs_load(&hs_table);
+
+    // Set up touch regions for gamepad module (4 directional zones around center)
+    int sw = (int)fb.width;
+    int sh = (int)fb.height;
+    TouchRegion touch_regions[] = {
+        /* Up: top band of play area */
+        { 0, grid_offset_y, sw, (sh - grid_offset_y) / 3, BTN_ID_UP },
+        /* Down: bottom band of play area */
+        { 0, grid_offset_y + (sh - grid_offset_y) * 2 / 3, sw, (sh - grid_offset_y) / 3, BTN_ID_DOWN },
+        /* Left: left third of screen */
+        { 0, grid_offset_y, sw / 3, sh - grid_offset_y, BTN_ID_LEFT },
+        /* Right: right third of screen */
+        { sw * 2 / 3, grid_offset_y, sw / 3, sh - grid_offset_y, BTN_ID_RIGHT },
+    };
+    gamepad_set_touch_regions(&gamepad, touch_regions, 4);
+
     reset_game();
 }
 
@@ -711,6 +733,22 @@ static void handle_input(void) {
     TouchState ts = touch_get_state(&touch);
     uint32_t now = get_time_ms();
 
+    // Poll gamepad/keyboard/touch through unified API
+    gamepad_poll(&gamepad, &input, ts.x, ts.y, ts.pressed);
+
+    // Periodic device rescan for hotplug support
+    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = now;
+        gamepad_rescan(&gamepad);
+    }
+
+    // BTN_BACK always exits to launcher
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
+
     /* ── Welcome screen ─────────────────────────────────────────────── */
     if (current_screen == SCREEN_WELCOME) {
         if (ts.pressed) {
@@ -723,15 +761,46 @@ static void handle_input(void) {
                 hw_leds_off();
             }
         }
+        // Gamepad/keyboard: start game
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed ||
+            input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);
+            hw_leds_off();
+        }
         return;
     }
 
     /* ── Game over screen (handled by gameover_update in draw) ────── */
-    if (current_screen == SCREEN_GAME_OVER)
+    if (current_screen == SCREEN_GAME_OVER) {
+        // Allow gamepad restart
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+        }
         return;
+    }
 
     /* ── Pause screen ────────────────────────────────────────────────── */
     if (current_screen == SCREEN_PAUSED) {
+        // Gamepad: unpause with Pause button
+        if (input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+            return;
+        }
+        // Gamepad: resume with Jump/Action
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+            return;
+        }
         ModalDialogAction action = modal_dialog_update(&pause_dialog,
             ts.x, ts.y, ts.pressed, now);
         if (action == MODAL_ACTION_BTN0) {
@@ -748,6 +817,15 @@ static void handle_input(void) {
     }
 
     /* ── Playing screen ──────────────────────────────────────────────── */
+
+    // Gamepad/keyboard: pause
+    if (input.buttons[BTN_ID_PAUSE].pressed) {
+        current_screen = SCREEN_PAUSED;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
+    // Touch: exit and menu buttons
     if (ts.pressed) {
         /* Exit button */
         if (button_is_touched(&exit_button, ts.x, ts.y) &&
@@ -763,7 +841,7 @@ static void handle_input(void) {
             modal_dialog_show(&pause_dialog);
             return;
         }
-        /* Direction input (only in play area, with cooldown) */
+        /* Direction input via touch (only in play area, with cooldown) */
         if (ts.y >= grid_offset_y && frog.alive && !death_anim_active) {
             if (now - last_hop_ms < HOP_COOLDOWN_MS) return;
             if (frog.hopping) return;
@@ -781,6 +859,21 @@ static void handle_input(void) {
                 hop_frog(0, dx > 0 ? +1 : -1);
             } else {
                 hop_frog(dy < 0 ? -1 : +1, 0);
+            }
+        }
+    }
+
+    // Gamepad/keyboard direction input (pressed edge, with hop cooldown)
+    if (frog.alive && !death_anim_active && !frog.hopping) {
+        if (now - last_hop_ms >= HOP_COOLDOWN_MS) {
+            if (input.buttons[BTN_ID_UP].pressed) {
+                hop_frog(-1, 0);
+            } else if (input.buttons[BTN_ID_DOWN].pressed) {
+                hop_frog(+1, 0);
+            } else if (input.buttons[BTN_ID_LEFT].pressed) {
+                hop_frog(0, -1);
+            } else if (input.buttons[BTN_ID_RIGHT].pressed) {
+                hop_frog(0, +1);
             }
         }
     }
@@ -1229,9 +1322,10 @@ static void draw_all(void) {
     /* ── Welcome screen ──────────────────────────────────────────────── */
     if (current_screen == SCREEN_WELCOME) {
         draw_welcome_screen(&fb, "FROGGER",
-            "TAP DIRECTION TO HOP\n"
+            "D-PAD/ARROWS: HOP\n"
             "CROSS ROAD AND RIVER\n"
-            "REACH THE LILY PADS",
+            "REACH THE LILY PADS\n"
+            "PRESS START OR TAP TO BEGIN",
             &start_button);
         return;
     }
@@ -1269,9 +1363,17 @@ static void draw_all(void) {
         return;
     }
 
+    /* Virtual touch controls overlay when no physical controller */
+    if (!input.gamepad_connected && !input.keyboard_connected)
+        gamepad_draw_touch_controls(&fb, &input);
+
     /* Hint text at bottom */
-    fb_draw_text(&fb, 10, (int)fb.height - 20,
-                 "TAP DIRECTION TO HOP", RGB(100, 100, 100), 1);
+    if (!input.gamepad_connected && !input.keyboard_connected)
+        fb_draw_text(&fb, 10, (int)fb.height - 20,
+                     "TAP DIRECTION TO HOP", RGB(100, 100, 100), 1);
+    else
+        fb_draw_text(&fb, 10, (int)fb.height - 20,
+                     "ARROWS/D-PAD: HOP  ESC: PAUSE", RGB(100, 100, 100), 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1317,6 +1419,9 @@ int main(int argc, char *argv[]) {
     }
     touch_set_screen_size(&touch, fb.width, fb.height);
 
+    /* Gamepad init */
+    gamepad_init(&gamepad);
+
     /* Seed RNG */
     srand(time(NULL));
 
@@ -1339,6 +1444,7 @@ int main(int argc, char *argv[]) {
     hw_leds_off();
     hw_set_backlight(100);
     audio_close(&audio);
+    gamepad_close(&gamepad);
     touch_close(&touch);
     fb_close(&fb);
 

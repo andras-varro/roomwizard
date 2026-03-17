@@ -55,24 +55,24 @@ step "11/27" "gamepad";      $CC -O2 -static -c common/gamepad.c         -o buil
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
 
-step "12/27" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ -o build/snake         -lm
-step "13/27" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ -o build/tetris        -lm
-step "14/27" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ -o build/pong          -lm
+step "12/27" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
+step "13/27" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
+step "14/27" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
 
 step "15/27" "brick_breaker"
-$CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ -o build/brick_breaker -lm
+$CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
 
 step "16/27" "samegame"
-$CC -O2 -static samegame/samegame.c $COMMON_OBJ -o build/samegame -lm
+$CC -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
 
 step "17/27" "frogger"
-$CC -O2 -static frogger/frogger.c $COMMON_OBJ -o build/frogger -lm
+$CC -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
 
 step "18/27" "platformer"
 $CC -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
 
 step "19/27" "game_selector"
-$CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/ui_layout.o -o build/game_selector -lm
+$CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
 step "20/27" "app_launcher"
 $CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o build/logger.o -o build/app_launcher -lm

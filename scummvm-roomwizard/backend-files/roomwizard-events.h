@@ -50,6 +50,9 @@ public:
 	void getBezelMargins(int &top, int &bottom, int &left, int &right) const;
 
 private:
+	// -------------------------------------------------------
+	// Touch input (existing)
+	// -------------------------------------------------------
 	TouchInput *_touchInput;
 	bool _touchInitialized;
 
@@ -89,8 +92,8 @@ private:
 	};
 	CornerTaps _cornerTaps[CORNER_COUNT];
 
-	// Pending synthetic events queued by gesture detection
-	static const int MAX_PENDING = 8;
+	// Pending synthetic events queued by gesture detection and multi-event input
+	static const int MAX_PENDING = 16;
 	Common::Event _pending[MAX_PENDING];
 	int           _pendingHead;
 	int           _pendingCount;
@@ -99,10 +102,110 @@ private:
 	Corner cornerFor(int x, int y) const; // returns CORNER_COUNT if not in any corner
 	void   pushEvent(const Common::Event &e);
 
-	// Helper methods
+	// Touch helper methods
 	void initTouch();
 	void closeTouch();
+	bool pollTouch(Common::Event &event);
+
+	// Coordinate transformation (shared by touch, mouse, gamepad)
 	void transformCoordinates(int touchX, int touchY, int &gameX, int &gameY);
+
+	// -------------------------------------------------------
+	// USB input device scanning and management
+	// -------------------------------------------------------
+	enum DeviceType {
+		DEV_UNKNOWN = 0,
+		DEV_KEYBOARD,
+		DEV_MOUSE,
+		DEV_GAMEPAD
+	};
+
+	int _keyboardFd;
+	int _mouseFd;
+	int _gamepadFd;
+
+	void scanInputDevices();         // Scan /dev/input/event* for USB devices
+	DeviceType classifyDevice(int fd); // Classify as keyboard/mouse/gamepad
+	void closeInputDevices();        // Close all USB device fds
+
+	// Periodic rescan timer
+	uint32 _lastDeviceScan;
+	static const uint32 DEVICE_SCAN_INTERVAL = 5000; // 5 seconds
+	static const int MAX_EVDEV_DEVICES = 16;
+
+	// -------------------------------------------------------
+	// USB Keyboard support
+	// -------------------------------------------------------
+	bool pollKeyboard(Common::Event &event);
+
+	// Keyboard modifier state tracking
+	byte _modifierFlags;  // Current modifier state (KBD_SHIFT, KBD_CTRL, KBD_ALT)
+
+	// Map Linux KEY_* scancode to ScummVM keycode + ascii
+	struct KeyMapping {
+		Common::KeyCode keycode;
+		uint16 ascii;           // unshifted ascii value (0 if not printable)
+		uint16 shiftAscii;      // shifted ascii value (0 if same or not printable)
+	};
+	static KeyMapping mapLinuxKey(int linuxKeyCode, byte modifiers);
+
+	// -------------------------------------------------------
+	// USB Mouse support
+	// -------------------------------------------------------
+	bool pollMouse(Common::Event &event);
+
+	// Mouse state
+	int _mouseX, _mouseY;           // Current cursor position in screen coords (0..799, 0..479)
+	int _prevMouseButtons;           // Previous button state for edge detection
+
+	// Mouse acceleration config (loaded from /etc/input_config.conf)
+	float _mouseSensitivity;         // default 1.5
+	float _mouseAcceleration;        // default 2.0
+	int   _mouseLowThreshold;        // default 3
+	int   _mouseHighThreshold;       // default 15
+
+	// -------------------------------------------------------
+	// USB Gamepad support
+	// -------------------------------------------------------
+	bool pollGamepad(Common::Event &event);
+
+	// Gamepad state
+	int _gamepadAxisX, _gamepadAxisY;       // Current analog stick values (raw)
+	int _gamepadHatX, _gamepadHatY;         // Current D-pad hat values (-1, 0, +1)
+	int _gamepadAxisMin, _gamepadAxisMax;    // Axis range from EVIOCGABS
+	int _gamepadAxisCenter;                  // Center calibration
+	int _prevGamepadButtons;                 // Previous button state for edge detection
+	uint32 _lastCursorMove;                  // For cursor movement rate limiting
+
+	// Gamepad cursor movement constants
+	static const int GAMEPAD_CURSOR_SPEED = 5;    // Max pixels per poll at full deflection
+	static const int GAMEPAD_DEADZONE_PCT = 20;    // Percentage of axis range
+	static const uint32 GAMEPAD_CURSOR_INTERVAL = 16; // ~60 Hz cursor movement
+
+	// Gamepad button mapping (configurable for clone controllers)
+	struct GamepadBtnMap {
+		int btnSouth;    // A — left click (default BTN_SOUTH / 304)
+		int btnEast;     // B — right click (default BTN_EAST / 305)
+		int btnWest;     // X — space/skip cutscene (default BTN_WEST / 308)
+		int btnNorth;    // Y — escape/skip dialog (default BTN_NORTH / 307)
+		int btnStart;    // Start — Ctrl+F5 GMM (default BTN_START / 315)
+		int btnSelect;   // Select — F5 save/load (default BTN_SELECT / 314)
+		int btnTL;       // Left bumper — period/skip text (default BTN_TL / 310)
+		int btnTR;       // Right bumper — escape (default BTN_TR / 311)
+		int hatXAxis;    // D-pad X axis (default ABS_HAT0X / 16)
+		int hatYAxis;    // D-pad Y axis (default ABS_HAT0Y / 17)
+		int stickXAxis;  // Left stick X (default ABS_X / 0)
+		int stickYAxis;  // Left stick Y (default ABS_Y / 1)
+	};
+	GamepadBtnMap _gamepadMap;
+
+	void initDefaultGamepadMap();
+	void loadGamepadAxisCalibration();
+
+	// -------------------------------------------------------
+	// Config file loading
+	// -------------------------------------------------------
+	void loadInputConfig();
 };
 
 #endif

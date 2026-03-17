@@ -3,6 +3,7 @@
  *
  * Features:
  *   - Touch-controlled paddle (drag to move, tap to launch)
+ *   - Keyboard, gamepad, and mouse support via unified gamepad module
  *   - 10 levels with varied brick patterns and increasing difficulty
  *   - 9 power-ups in opposing pairs with permanent stacking behavior
  *   - Gradient bricks, glowing ball, smooth 60 FPS rendering
@@ -25,6 +26,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/gamepad.h"
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Constants
@@ -40,6 +42,8 @@
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)
 #define PADDLE_HEIGHT   14
 #define PADDLE_BASE_W   100
+#define PADDLE_KB_SPEED 8       /* pixels per frame for keyboard/d-pad */
+#define PADDLE_MAX_ANALOG 10    /* max pixels per frame from analog stick */
 
 /* Stepped paddle widths: index 0=narrow(-2), 1=small(-1), 2=normal(0), 3=large(+1), 4=larger(+2) */
 #define PADDLE_LEVELS 5
@@ -195,6 +199,8 @@ typedef struct {
 
 static Framebuffer  fb;
 static TouchInput   touch;
+static GamepadManager gamepad_mgr;
+static InputState   gp_input;
 static Audio        audio;
 static GameState    game;
 static HighScoreTable hs;
@@ -203,6 +209,8 @@ static uint32_t     frame_time_ms;  /* updated each frame */
 static bool test_mode = false;     /* --test: special test levels */
 static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
 static GameOverScreen gos;  /* unified game over screen */
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
 
 /* UI buttons */
 static Button btn_menu, btn_exit;
@@ -1381,8 +1389,12 @@ static void draw_game_screen(void) {
 
     /* Launch hint */
     if (!game.ball_launched) {
-        text_draw_centered(&fb, AREA_X + AREA_W / 2, PADDLE_Y + 30,
-                           "TAP TO LAUNCH", RGB(120, 120, 160), 2);
+        if (!gp_input.gamepad_connected && !gp_input.keyboard_connected)
+            text_draw_centered(&fb, AREA_X + AREA_W / 2, PADDLE_Y + 30,
+                               "TAP TO LAUNCH", RGB(120, 120, 160), 2);
+        else
+            text_draw_centered(&fb, AREA_X + AREA_W / 2, PADDLE_Y + 30,
+                               "A/SPACE: LAUNCH  L/R: MOVE", RGB(120, 120, 160), 2);
     }
 }
 
@@ -1449,6 +1461,21 @@ static void handle_input(void) {
     TouchState st = touch_get_state(&touch);
     uint32_t now = get_time_ms();
 
+    /* Poll gamepad/keyboard/mouse through unified API */
+    gamepad_poll(&gamepad_mgr, &gp_input, st.x, st.y, st.pressed);
+
+    /* Periodic device rescan for hotplug support */
+    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = now;
+        gamepad_rescan(&gamepad_mgr);
+    }
+
+    /* BTN_BACK always exits to launcher */
+    if (gp_input.buttons[BTN_ID_BACK].pressed) {
+        running = false;
+        return;
+    }
+
     switch (game.screen) {
     case SCREEN_WELCOME:
         if (st.pressed) {
@@ -1457,10 +1484,24 @@ static void handle_input(void) {
                 audio_beep(&audio);
             }
         }
+        /* Gamepad/keyboard: start game with Jump, Action, or Pause */
+        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
+            gp_input.buttons[BTN_ID_ACTION].pressed ||
+            gp_input.buttons[BTN_ID_PAUSE].pressed) {
+            reset_game();
+            audio_beep(&audio);
+        }
         break;
 
     case SCREEN_PLAYING:
-        /* Exit */
+        /* Gamepad/keyboard: pause */
+        if (gp_input.buttons[BTN_ID_PAUSE].pressed) {
+            game.screen = SCREEN_PAUSED;
+            modal_dialog_show(&pause_dialog);
+            return;
+        }
+
+        /* Exit (touch) */
         if (st.pressed) {
             if (button_check_press(&btn_exit, button_is_touched(&btn_exit, st.x, st.y), now)) {
                 running = false;
@@ -1474,20 +1515,71 @@ static void handle_input(void) {
             }
         }
 
-        /* Move paddle with touch */
+        /* Move paddle with touch (existing behavior) */
         if (st.held || st.pressed) {
             game.paddle_x = clampf((float)st.x,
                                    AREA_X + game.paddle_w / 2.0f,
                                    AREA_X + AREA_W - game.paddle_w / 2.0f);
         }
 
-        /* Launch on tap */
+        /* Mouse: map mouse_x directly to paddle horizontal center */
+        if (gp_input.mouse_connected) {
+            game.paddle_x = clampf((float)gp_input.mouse_x,
+                                   AREA_X + game.paddle_w / 2.0f,
+                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+            /* Mouse click to launch ball */
+            if (gp_input.mouse_left_pressed && !game.ball_launched) {
+                launch_ball();
+            }
+        }
+
+        /* Gamepad analog stick: proportional paddle speed from axis_lx */
+        if (gp_input.axis_lx != 0) {
+            float speed = (gp_input.axis_lx / 1000.0f) * PADDLE_MAX_ANALOG;
+            game.paddle_x += speed;
+            game.paddle_x = clampf(game.paddle_x,
+                                   AREA_X + game.paddle_w / 2.0f,
+                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+        }
+
+        /* D-pad / keyboard: fixed speed movement (held for smooth continuous) */
+        if (gp_input.buttons[BTN_ID_LEFT].held) {
+            game.paddle_x -= PADDLE_KB_SPEED;
+            game.paddle_x = clampf(game.paddle_x,
+                                   AREA_X + game.paddle_w / 2.0f,
+                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+        }
+        if (gp_input.buttons[BTN_ID_RIGHT].held) {
+            game.paddle_x += PADDLE_KB_SPEED;
+            game.paddle_x = clampf(game.paddle_x,
+                                   AREA_X + game.paddle_w / 2.0f,
+                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+        }
+
+        /* Launch on tap or gamepad button */
         if (st.pressed && !game.ball_launched) {
+            launch_ball();
+        }
+        if ((gp_input.buttons[BTN_ID_JUMP].pressed ||
+             gp_input.buttons[BTN_ID_ACTION].pressed) && !game.ball_launched) {
             launch_ball();
         }
         break;
 
     case SCREEN_PAUSED: {
+        /* Gamepad: unpause with Pause button */
+        if (gp_input.buttons[BTN_ID_PAUSE].pressed) {
+            game.screen = SCREEN_PLAYING;
+            audio_beep(&audio);
+            break;
+        }
+        /* Gamepad: resume with Jump/Action */
+        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
+            gp_input.buttons[BTN_ID_ACTION].pressed) {
+            game.screen = SCREEN_PLAYING;
+            audio_beep(&audio);
+            break;
+        }
         ModalDialogAction action = modal_dialog_update(&pause_dialog, st.x, st.y, st.pressed, now);
         if (action == MODAL_ACTION_BTN0) {
             /* Resume */
@@ -1540,10 +1632,32 @@ static void handle_input(void) {
                 audio_beep(&audio);
             }
         }
+        /* Gamepad: advance to next level with Jump/Action */
+        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
+            gp_input.buttons[BTN_ID_ACTION].pressed) {
+            if (game.level < MAX_LEVELS) {
+                game.level++;
+                init_level();
+                game.screen = SCREEN_PLAYING;
+            } else {
+                game.screen = SCREEN_GAME_OVER;
+                {
+                    char info[64];
+                    snprintf(info, sizeof(info), "ALL %d LEVELS COMPLETE!", MAX_LEVELS);
+                    gameover_init(&gos, &fb, game.score, "YOU WIN!", info, &hs, &touch);
+                }
+            }
+            audio_beep(&audio);
+        }
         break;
 
     case SCREEN_GAME_OVER:
-        /* Handled by gameover_update() in the draw phase */
+        /* Allow gamepad restart */
+        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
+            gp_input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            audio_beep(&audio);
+        }
         break;
     }
 }
@@ -1591,6 +1705,10 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     audio_init(&audio);
     srand(time(NULL));
+
+    /* Gamepad init */
+    gamepad_init(&gamepad_mgr);
+    gamepad_set_mouse_bounds(&gamepad_mgr, fb.width, fb.height);
 
     /* Compute brick grid dimensions based on screen orientation */
     init_brick_layout();
@@ -1693,6 +1811,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Clean up */
+    gamepad_close(&gamepad_mgr);
     touch_close(&touch);
     hw_leds_off();
     hw_set_backlight(100);

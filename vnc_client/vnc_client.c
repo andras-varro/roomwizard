@@ -421,6 +421,8 @@ static int vnc_session(const char *host, int port, int attempt) {
         if (vnc_input_init(&g_input, &g_touch, &g_renderer, g_vnc_client) < 0) {
             LOG_WARN(&g_logger, "Input handler init failed");
         }
+        /* Pass remote desktop dimensions for USB mouse coordinate space */
+        vnc_input_set_remote_size(&g_input, g_vnc_client->width, g_vnc_client->height);
     }
 
     /* Brief "Connected" splash */

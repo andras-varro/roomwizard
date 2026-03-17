@@ -19,6 +19,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/gamepad.h"
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -148,12 +149,18 @@ typedef struct {
 static Framebuffer fb;
 static TouchInput touch;
 static Audio audio;
+static GamepadManager gamepad;
+static InputState input;
 static SameGameState game;
 static LEDEffect led_effect;
 static bool running = true;
 static GameScreen current_screen = SCREEN_WELCOME;
 static HighScoreTable hs_table;
 static GameOverScreen gos;
+
+/* Gamepad rescan timer */
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
 
 /* UI Buttons */
 static Button menu_button;
@@ -186,6 +193,8 @@ static void reset_game(void);
 static void handle_input(void);
 static void update_game(void);
 static void draw_game(void);
+static void draw_mouse_cursor(int mx, int my);
+static void draw_mouse_hover(int mx, int my);
 
 static void flood_fill(int col, int row, int color, bool map[MAX_COLS][MAX_ROWS], int *count);
 static void compute_highlight(int col, int row);
@@ -211,6 +220,9 @@ static void draw_hud(void);
 
 static uint32_t color_lerp(uint32_t a, uint32_t b, float t);
 
+/* Helper: convert pixel coordinates to grid col/row, returns true if valid */
+static bool pixel_to_grid(int px, int py, int *out_col, int *out_row);
+
 /* ========================================================================== */
 /* SIGNAL HANDLER                                                             */
 /* ========================================================================== */
@@ -233,6 +245,16 @@ static uint32_t color_lerp(uint32_t a, uint32_t b, float t) {
     int rg = ag + (int)((bg - ag) * t);
     int rb = ab + (int)((bb - ab) * t);
     return RGB(rr, rg, rb);
+}
+
+static bool pixel_to_grid(int px, int py, int *out_col, int *out_row) {
+    int col = (px - game.grid_x) / game.block_size;
+    int row = (py - game.grid_y) / game.block_size;
+    if (col < 0 || col >= game.cols || row < 0 || row >= game.rows)
+        return false;
+    *out_col = col;
+    *out_row = row;
+    return true;
 }
 
 /* ========================================================================== */
@@ -1161,6 +1183,62 @@ static void draw_playing_field(void) {
         if (text_y + 16 > (int)fb.height) text_y = (int)fb.height - 16;
         text_draw_centered(&fb, fb.width / 2, text_y, hl_text, COLOR_CYAN, 1);
     }
+
+    /* Mouse hover highlight — subtle indicator of cell under cursor */
+    if (input.mouse_connected && game.anim_state == ANIM_NONE) {
+        draw_mouse_hover(input.mouse_x, input.mouse_y);
+    }
+}
+
+/* ========================================================================== */
+/* MOUSE CURSOR & HOVER                                                       */
+/* ========================================================================== */
+
+/**
+ * Draw a small crosshair cursor at the given screen coordinates.
+ * White lines with a 1-pixel black outline for contrast.
+ * Size: 10x10 pixels, centered on (mx, my).
+ */
+static void draw_mouse_cursor(int mx, int my) {
+    int half = 5;  /* 10x10 crosshair, 5 pixels in each direction */
+
+    /* Black outline (drawn first, 1 pixel wider in each direction) */
+    fb_fill_rect(&fb, mx - half - 1, my, half * 2 + 3, 1, COLOR_BLACK);  /* horizontal outline */
+    fb_fill_rect(&fb, mx, my - half - 1, 1, half * 2 + 3, COLOR_BLACK);  /* vertical outline */
+    fb_fill_rect(&fb, mx - half - 1, my - 1, half * 2 + 3, 1, COLOR_BLACK);
+    fb_fill_rect(&fb, mx - half - 1, my + 1, half * 2 + 3, 1, COLOR_BLACK);
+    fb_fill_rect(&fb, mx - 1, my - half - 1, 1, half * 2 + 3, COLOR_BLACK);
+    fb_fill_rect(&fb, mx + 1, my - half - 1, 1, half * 2 + 3, COLOR_BLACK);
+
+    /* White crosshair lines */
+    fb_fill_rect(&fb, mx - half, my, half * 2 + 1, 1, COLOR_WHITE);  /* horizontal */
+    fb_fill_rect(&fb, mx, my - half, 1, half * 2 + 1, COLOR_WHITE);  /* vertical */
+}
+
+/**
+ * Draw a subtle hover highlight on the grid cell under the mouse cursor.
+ * Only drawn when not clicking/highlighting, to give visual feedback.
+ */
+static void draw_mouse_hover(int mx, int my) {
+    int col, row;
+    if (!pixel_to_grid(mx, my, &col, &row))
+        return;
+    if (game.grid[col][row] == BLOCK_EMPTY)
+        return;
+
+    /* Don't draw hover on already-highlighted blocks (they already pulse) */
+    if (game.highlight_active && game.highlight_map[col][row])
+        return;
+
+    int px = game.grid_x + col * game.block_size;
+    int py = game.grid_y + row * game.block_size;
+
+    /* Semi-transparent white overlay */
+    fb_fill_rect_alpha(&fb, px, py, game.block_size, game.block_size,
+                       COLOR_WHITE, 40);
+    /* Thin white border around hovered cell */
+    fb_draw_rect(&fb, px, py, game.block_size, game.block_size,
+                 RGB(200, 200, 200));
 }
 
 static void draw_game(void) {
@@ -1170,6 +1248,9 @@ static void draw_game(void) {
         draw_welcome_screen(&fb, "SAMEGAME",
             "TAP GROUPS OF 2+ SAME-COLORED BLOCKS\n"
             "TAP AGAIN TO REMOVE THEM", &start_button);
+        /* Draw mouse cursor on welcome screen too */
+        if (input.mouse_connected)
+            draw_mouse_cursor(input.mouse_x, input.mouse_y);
         return;
     }
 
@@ -1182,6 +1263,9 @@ static void draw_game(void) {
     if (current_screen == SCREEN_PAUSED) {
         fb_clear_draw_offset(&fb);
         modal_dialog_draw(&pause_dialog, &fb);
+        /* Draw mouse cursor over pause dialog */
+        if (input.mouse_connected)
+            draw_mouse_cursor(input.mouse_x, input.mouse_y);
         return;
     }
 
@@ -1205,24 +1289,97 @@ static void draw_game(void) {
         default:
             break;
         }
+        /* Draw mouse cursor over game-over screen */
+        if (input.mouse_connected)
+            draw_mouse_cursor(input.mouse_x, input.mouse_y);
         return;
     }
 
     /* Reset draw offset after drawing playing field with shake */
     fb_clear_draw_offset(&fb);
+
+    /* Draw mouse cursor last (on top of everything) */
+    if (input.mouse_connected)
+        draw_mouse_cursor(input.mouse_x, input.mouse_y);
 }
 
 /* ========================================================================== */
 /* INPUT HANDLING                                                             */
 /* ========================================================================== */
 
+/* Helper: process a grid click/tap at the given pixel coordinates.
+ * Implements the two-tap mechanic: first click highlights, second removes. */
+static void handle_grid_click(int px, int py) {
+    int col, row;
+
+    /* Ignore during animations */
+    if (game.anim_state != ANIM_NONE)
+        return;
+
+    if (!pixel_to_grid(px, py, &col, &row)) {
+        /* Clicked outside grid — clear highlight */
+        if (game.highlight_active) {
+            game.highlight_active = false;
+            memset(game.highlight_map, 0, sizeof(game.highlight_map));
+            game.highlight_count = 0;
+            game.highlight_color = 0;
+        }
+        return;
+    }
+
+    /* Clicked on empty cell */
+    if (game.grid[col][row] == BLOCK_EMPTY) {
+        if (game.highlight_active) {
+            game.highlight_active = false;
+            memset(game.highlight_map, 0, sizeof(game.highlight_map));
+            game.highlight_count = 0;
+            game.highlight_color = 0;
+        }
+        return;
+    }
+
+    /* Two-click mechanic */
+    if (game.highlight_active && game.highlight_map[col][row]) {
+        /* Second click on highlighted block — remove the group */
+        remove_highlighted();
+    } else {
+        /* First click or different block — compute new highlight */
+        compute_highlight(col, row);
+    }
+}
+
+/* Helper: clear highlight state */
+static void clear_highlight(void) {
+    game.highlight_active = false;
+    memset(game.highlight_map, 0, sizeof(game.highlight_map));
+    game.highlight_count = 0;
+    game.highlight_color = 0;
+}
+
 static void handle_input(void) {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t now = get_time_ms();
 
+    /* Poll gamepad/keyboard/mouse through unified API */
+    gamepad_poll(&gamepad, &input, state.x, state.y, state.pressed);
+
+    /* Periodic device rescan for hotplug support */
+    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = now;
+        gamepad_rescan(&gamepad);
+    }
+
+    /* BTN_BACK always exits to launcher */
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
+
     /* Welcome screen */
     if (current_screen == SCREEN_WELCOME) {
+        /* Touch: tap start button */
         if (state.pressed) {
             bool touched = button_is_touched(&start_button, state.x, state.y);
             if (button_check_press(&start_button, touched, now)) {
@@ -1232,16 +1389,52 @@ static void handle_input(void) {
                 hw_leds_off();
             }
         }
+        /* Mouse: click start button */
+        if (input.mouse_left_pressed) {
+            bool touched = button_is_touched(&start_button, input.mouse_x, input.mouse_y);
+            if (button_check_press(&start_button, touched, now)) {
+                current_screen = SCREEN_PLAYING;
+                hw_set_led(LED_GREEN, 100);
+                usleep(100000);
+                hw_leds_off();
+            }
+        }
+        /* Gamepad/keyboard: start game with Jump, Action, or Pause */
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed ||
+            input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);
+            hw_leds_off();
+        }
         return;
     }
 
-    /* Game over — handled in draw phase */
+    /* Game over — handled in draw phase; allow gamepad restart */
     if (current_screen == SCREEN_GAME_OVER) {
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+        }
         return;
     }
 
     /* Pause screen */
     if (current_screen == SCREEN_PAUSED) {
+        /* Gamepad: unpause with Pause button */
+        if (input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            return;
+        }
+        /* Gamepad: resume with Jump/Action */
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            current_screen = SCREEN_PLAYING;
+            return;
+        }
+        /* Touch: pause dialog buttons */
         ModalDialogAction action = modal_dialog_update(&pause_dialog,
             state.x, state.y, state.pressed, now);
         if (action == MODAL_ACTION_BTN0) {
@@ -1253,10 +1446,31 @@ static void handle_input(void) {
             running = false;
             return;
         }
+        /* Mouse: click pause dialog buttons */
+        if (input.mouse_left_pressed) {
+            action = modal_dialog_update(&pause_dialog,
+                input.mouse_x, input.mouse_y, true, now);
+            if (action == MODAL_ACTION_BTN0) {
+                current_screen = SCREEN_PLAYING;
+                return;
+            }
+            if (action == MODAL_ACTION_BTN1) {
+                fb_fade_out(&fb);
+                running = false;
+                return;
+            }
+        }
         return;
     }
 
-    /* Playing screen */
+    /* Playing screen — gamepad/keyboard: pause */
+    if (input.buttons[BTN_ID_PAUSE].pressed) {
+        current_screen = SCREEN_PAUSED;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
+    /* Playing screen — touch input for buttons and grid */
     if (state.pressed) {
         /* Check exit button */
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
@@ -1274,47 +1488,35 @@ static void handle_input(void) {
             return;
         }
 
-        /* Ignore grid touches during animations */
-        if (game.anim_state != ANIM_NONE)
-            return;
+        /* Grid click via touch */
+        handle_grid_click(state.x, state.y);
+    }
 
-        /* Convert touch position to grid coordinates */
-        int touch_col = (state.x - game.grid_x) / game.block_size;
-        int touch_row = (state.y - game.grid_y) / game.block_size;
-
-        /* Bounds check */
-        if (touch_col < 0 || touch_col >= game.cols ||
-            touch_row < 0 || touch_row >= game.rows) {
-            /* Tapped outside grid — clear highlight */
-            if (game.highlight_active) {
-                game.highlight_active = false;
-                memset(game.highlight_map, 0, sizeof(game.highlight_map));
-                game.highlight_count = 0;
-                game.highlight_color = 0;
-            }
+    /* Playing screen — mouse input for buttons and grid */
+    if (input.mouse_left_pressed) {
+        /* Check exit button */
+        bool exit_touched = button_is_touched(&exit_button, input.mouse_x, input.mouse_y);
+        if (button_check_press(&exit_button, exit_touched, now)) {
+            fb_fade_out(&fb);
+            running = false;
             return;
         }
 
-        /* Check if touched block is empty */
-        if (game.grid[touch_col][touch_row] == BLOCK_EMPTY) {
-            /* Clear highlight */
-            if (game.highlight_active) {
-                game.highlight_active = false;
-                memset(game.highlight_map, 0, sizeof(game.highlight_map));
-                game.highlight_count = 0;
-                game.highlight_color = 0;
-            }
+        /* Check menu button */
+        bool menu_touched = button_is_touched(&menu_button, input.mouse_x, input.mouse_y);
+        if (button_check_press(&menu_button, menu_touched, now)) {
+            current_screen = SCREEN_PAUSED;
+            modal_dialog_show(&pause_dialog);
             return;
         }
 
-        /* Two-click mechanic */
-        if (game.highlight_active && game.highlight_map[touch_col][touch_row]) {
-            /* Second tap on highlighted block — remove the group */
-            remove_highlighted();
-        } else {
-            /* First tap or tap on different block — compute new highlight */
-            compute_highlight(touch_col, touch_row);
-        }
+        /* Grid click via mouse */
+        handle_grid_click(input.mouse_x, input.mouse_y);
+    }
+
+    /* Mouse right-click clears highlight */
+    if (input.mouse_right_pressed && game.highlight_active) {
+        clear_highlight();
     }
 }
 
@@ -1375,13 +1577,17 @@ int main(int argc, char *argv[]) {
     }
     touch_set_screen_size(&touch, fb.width, fb.height);
 
+    /* Gamepad/keyboard/mouse init */
+    gamepad_init(&gamepad);
+    gamepad_set_mouse_bounds(&gamepad, fb.width, fb.height);
+
     /* Seed RNG */
     srand(time(NULL));
 
     /* Initialize game */
     init_game();
 
-    printf("SameGame started! Touch screen to play.\n");
+    printf("SameGame started! Touch screen or use mouse to play.\n");
     printf("Grid: %d x %d, block size: %d\n", game.cols, game.rows, game.block_size);
 
     /* Main game loop */
@@ -1397,6 +1603,7 @@ int main(int argc, char *argv[]) {
     hw_leds_off();
     hw_set_backlight(100);
     audio_close(&audio);
+    gamepad_close(&gamepad);
     touch_close(&touch);
     fb_clear(&fb, COLOR_BLACK);
     fb_swap(&fb);

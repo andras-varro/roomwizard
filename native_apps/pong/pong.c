@@ -1,7 +1,7 @@
 /*
  * Pong Game - Native C Implementation
  * Single player vs AI
- * Touch to move paddle
+ * Touch, keyboard, gamepad, and mouse input supported
  */
 
 #include <stdio.h>
@@ -17,11 +17,14 @@
 #include "../common/common.h"
 #include "../common/hardware.h"
 #include "../common/audio.h"
+#include "../common/gamepad.h"
 
 #define PADDLE_WIDTH 15
 #define PADDLE_HEIGHT 80
 #define BALL_SIZE 12
 #define WINNING_SCORE 11
+#define PADDLE_SPEED 6       /* pixels per frame for keyboard/d-pad */
+#define PADDLE_MAX_ANALOG 8  /* max pixels per frame from analog stick */
 
 typedef enum {
     SCREEN_WELCOME,
@@ -53,6 +56,8 @@ typedef struct {
 // Global variables
 Framebuffer fb;
 TouchInput touch;
+GamepadManager gamepad;
+InputState input;
 GameState game;
 bool running = true;
 Audio audio;
@@ -68,6 +73,8 @@ GameScreen current_screen = SCREEN_WELCOME;
 bool portrait_mode = false;
 static HighScoreTable hs_table;
 static GameOverScreen gos;
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
 
 // Function prototypes
 void init_game();
@@ -390,7 +397,23 @@ void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t current_time = get_time_ms();
-    
+
+    // Poll gamepad/keyboard/touch through unified API
+    gamepad_poll(&gamepad, &input, state.x, state.y, state.pressed);
+
+    // Periodic device rescan for hotplug support
+    if (current_time - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = current_time;
+        gamepad_rescan(&gamepad);
+    }
+
+    // BTN_BACK always exits to launcher
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
+
     // Handle welcome screen
     if (current_screen == SCREEN_WELCOME) {
         if (state.pressed) {
@@ -403,16 +426,45 @@ void handle_input() {
                 hw_leds_off();
             }
         }
+        // Gamepad/keyboard: start game with Jump, Action, or Pause
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed ||
+            input.buttons[BTN_ID_PAUSE].pressed) {
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);
+            hw_leds_off();
+        }
         return;
     }
     
     // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
+        // Allow gamepad restart
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+        }
         return;
     }
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
+        // Gamepad: unpause with Pause button
+        if (input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
+        // Gamepad: resume with Jump/Action
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
         ModalDialogAction action = modal_dialog_update(&pause_dialog,
             state.x, state.y, state.pressed, current_time);
         if (action == MODAL_ACTION_BTN0) {
@@ -434,7 +486,15 @@ void handle_input() {
         return;
     }
     
-    // Playing screen - check menu and exit buttons
+    // Playing screen — gamepad/keyboard: pause
+    if (input.buttons[BTN_ID_PAUSE].pressed) {
+        current_screen = SCREEN_PAUSED;
+        game.paused = true;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
+    // Playing screen - check menu and exit buttons (touch)
     if (state.pressed) {
         // Check exit button (top-right)
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
@@ -460,7 +520,7 @@ void handle_input() {
         }
     }
     
-    // Move player paddle to touch position
+    // Move player paddle to touch position (existing touch behavior)
     if ((state.held || state.pressed) && !game.game_over && !game.paused) {
         if (portrait_mode) {
             // Portrait: move paddle horizontally using touch X
@@ -481,6 +541,33 @@ void handle_input() {
                 game.player.y = play_area_height - PADDLE_HEIGHT;
             }
         }
+    }
+
+    // Gamepad/keyboard paddle movement (when not touching)
+    if (!game.game_over && !game.paused) {
+        float max_pos = portrait_mode ?
+            (float)(play_area_width - PADDLE_HEIGHT) :
+            (float)(play_area_height - PADDLE_HEIGHT);
+
+        // Analog stick: proportional speed from axis_ly (landscape) or axis_lx (portrait)
+        int axis_val = portrait_mode ? input.axis_lx : input.axis_ly;
+        if (axis_val != 0) {
+            float speed = (axis_val / 1000.0f) * PADDLE_MAX_ANALOG;
+            game.player.y += speed;
+        }
+
+        // D-pad / keyboard: fixed speed movement (uses held for smooth continuous movement)
+        if (portrait_mode) {
+            if (input.buttons[BTN_ID_LEFT].held)  game.player.y -= PADDLE_SPEED;
+            if (input.buttons[BTN_ID_RIGHT].held) game.player.y += PADDLE_SPEED;
+        } else {
+            if (input.buttons[BTN_ID_UP].held)    game.player.y -= PADDLE_SPEED;
+            if (input.buttons[BTN_ID_DOWN].held)  game.player.y += PADDLE_SPEED;
+        }
+
+        // Clamp paddle position
+        if (game.player.y < 0) game.player.y = 0;
+        if (game.player.y > max_pos) game.player.y = max_pos;
     }
 }
 
@@ -532,8 +619,12 @@ static void draw_playing_field(void) {
                      PADDLE_HEIGHT, PADDLE_WIDTH, COLOR_GREEN);
         
         // Draw controls hint (centered)
-        text_draw_centered(&fb, fb.width / 2, fb.height - 18,
-                          "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        if (!input.gamepad_connected && !input.keyboard_connected)
+            text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                              "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        else
+            text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                              "D-PAD/STICK: MOVE  ESC: PAUSE", RGB(100, 100, 100), 1);
     } else {
         // Landscape: vertical center line
         for (int y = 0; y < play_area_height; y += 20) {
@@ -549,8 +640,12 @@ static void draw_playing_field(void) {
                      offset_y + (int)game.ai.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_RED);
         
         // Draw controls hint (centered)
-        text_draw_centered(&fb, fb.width / 2, fb.height - 18,
-                          "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        if (!input.gamepad_connected && !input.keyboard_connected)
+            text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                              "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
+        else
+            text_draw_centered(&fb, fb.width / 2, fb.height - 18,
+                              "D-PAD/STICK: MOVE  ESC: PAUSE", RGB(100, 100, 100), 1);
     }
     
     // Draw ball (same for both orientations)
@@ -642,6 +737,10 @@ int main(int argc, char *argv[]) {
     srand(time(NULL));
     init_game();
     
+    // Gamepad init
+    gamepad_init(&gamepad);
+    gamepad_set_mouse_bounds(&gamepad, fb.width, fb.height);
+
     printf("Pong game started!\n");
     
     // Game loop (60 FPS)
@@ -654,6 +753,7 @@ int main(int argc, char *argv[]) {
         usleep(16667);  // ~60 FPS
     }
     
+    gamepad_close(&gamepad);
     touch_close(&touch);
     hw_leds_off();
     hw_set_backlight(100);

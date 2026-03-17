@@ -2,6 +2,8 @@
  * Tetris Game - Native C Implementation
  * Optimized for 300MHz ARM with touchscreen
  * Touch controls: Tap left/right to move, tap center to rotate, swipe down to drop
+ * Supports keyboard, gamepad, and touch input via unified gamepad module
+ * Keyboard/gamepad features DAS (Delayed Auto Shift) for left/right movement
  */
 
 #include <stdio.h>
@@ -17,6 +19,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/gamepad.h"
 
 #define BOARD_WIDTH 10
 #define BOARD_HEIGHT 20
@@ -116,9 +119,22 @@ const uint32_t piece_colors[NUM_TETROMINOS] = {
     RGB(255, 165, 0)    // L - Orange
 };
 
+/* DAS (Delayed Auto Shift) constants */
+#define DAS_INITIAL_DELAY_MS 200   /* ms before auto-repeat starts */
+#define DAS_REPEAT_INTERVAL_MS 50  /* ms between auto-repeat moves */
+
+/* DAS state for a single direction */
+typedef struct {
+    bool active;           /* Currently in DAS for this direction */
+    uint32_t hold_start;   /* Timestamp when key was first held */
+    uint32_t last_repeat;  /* Timestamp of last auto-repeat fire */
+} DASState;
+
 // Global variables
 Framebuffer fb;
 TouchInput touch;
+GamepadManager gamepad;
+InputState input;
 GameState game;
 int cell_size;
 int board_offset_x;
@@ -135,6 +151,11 @@ GameScreen current_screen = SCREEN_WELCOME;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 Audio audio;
+static uint32_t last_rescan_ms = 0;
+#define RESCAN_INTERVAL_MS 5000
+static DASState das_left  = {false, 0, 0};
+static DASState das_right = {false, 0, 0};
+static bool soft_drop_active = false;
 
 // Function prototypes
 void init_game();
@@ -333,22 +354,71 @@ void update_game() {
     if (game.game_over || game.paused) return;
     
     game.drop_counter++;
-    if (game.drop_counter >= game.drop_speed) {
+
+    // Soft drop: when BTN_DOWN is held, drop faster (every 3 frames instead of normal speed)
+    int effective_speed = soft_drop_active ? 3 : game.drop_speed;
+
+    if (game.drop_counter >= effective_speed) {
         game.drop_counter = 0;
         
         if (!check_collision(&game.current, 0, 1, game.current.rotation)) {
             game.current.y++;
+            if (soft_drop_active)
+                game.score += 1;  // Soft drop bonus
         } else {
             lock_piece();
         }
     }
 }
 
+/* Helper: process DAS for a direction. Returns true if a move should fire this frame. */
+static bool das_update(DASState *das, bool held, bool pressed, uint32_t now) {
+    if (pressed) {
+        /* First press — always fire, start DAS timer */
+        das->active = true;
+        das->hold_start = now;
+        das->last_repeat = now;
+        return true;
+    }
+    if (!held) {
+        /* Released — cancel DAS */
+        das->active = false;
+        return false;
+    }
+    /* Key is still held — check for auto-repeat */
+    if (!das->active) return false;
+    uint32_t hold_duration = now - das->hold_start;
+    if (hold_duration >= DAS_INITIAL_DELAY_MS) {
+        uint32_t since_repeat = now - das->last_repeat;
+        if (since_repeat >= DAS_REPEAT_INTERVAL_MS) {
+            das->last_repeat = now;
+            return true;
+        }
+    }
+    return false;
+}
+
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t current_time = get_time_ms();
-    
+
+    // Poll gamepad/keyboard/touch through unified API
+    gamepad_poll(&gamepad, &input, state.x, state.y, state.pressed);
+
+    // Periodic device rescan for hotplug support
+    if (current_time - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = current_time;
+        gamepad_rescan(&gamepad);
+    }
+
+    // BTN_BACK always exits to launcher
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
+
     // Handle welcome screen
     if (current_screen == SCREEN_WELCOME) {
         if (state.pressed) {
@@ -360,16 +430,45 @@ void handle_input() {
                 hw_leds_off();
             }
         }
+        // Gamepad/keyboard: start game
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed ||
+            input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            hw_set_led(LED_GREEN, 100);
+            usleep(100000);
+            hw_leds_off();
+        }
         return;
     }
     
     // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
+        // Allow gamepad restart
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            reset_game();
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            current_screen = SCREEN_PLAYING;
+        }
         return;
     }
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
+        // Gamepad: unpause with Pause button
+        if (input.buttons[BTN_ID_PAUSE].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
+        // Gamepad: resume with Jump/Action
+        if (input.buttons[BTN_ID_JUMP].pressed ||
+            input.buttons[BTN_ID_ACTION].pressed) {
+            current_screen = SCREEN_PLAYING;
+            game.paused = false;
+            return;
+        }
         ModalDialogAction action = modal_dialog_update(&pause_dialog,
             state.x, state.y, state.pressed, current_time);
         if (action == MODAL_ACTION_BTN0) {
@@ -390,8 +489,16 @@ void handle_input() {
         }
         return;
     }
-    
-    // Playing screen - check menu and exit buttons
+
+    // Playing screen — gamepad/keyboard: pause
+    if (input.buttons[BTN_ID_PAUSE].pressed) {
+        current_screen = SCREEN_PAUSED;
+        game.paused = true;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
+    // Playing screen - check menu and exit buttons (touch)
     if (state.pressed) {
         // Check exit button (top-right)
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
@@ -417,6 +524,7 @@ void handle_input() {
         }
     }
     
+    // Touch game controls
     if (state.pressed && !game.game_over && !game.paused) {
         int tx = state.x;
         int ty = state.y;
@@ -488,6 +596,59 @@ void handle_input() {
         
         last_touch_x = tx;
         last_touch_y = ty;
+    }
+
+    // Gamepad/keyboard controls (only while playing and not paused)
+    if (!game.game_over && !game.paused && current_screen == SCREEN_PLAYING) {
+        // Left/Right with DAS (Delayed Auto Shift)
+        if (das_update(&das_left, input.buttons[BTN_ID_LEFT].held,
+                       input.buttons[BTN_ID_LEFT].pressed, current_time)) {
+            if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
+                game.current.x--;
+                audio_interrupt(&audio);
+                audio_tone(&audio, 880, 60);
+            }
+        }
+        if (das_update(&das_right, input.buttons[BTN_ID_RIGHT].held,
+                       input.buttons[BTN_ID_RIGHT].pressed, current_time)) {
+            if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
+                game.current.x++;
+                audio_interrupt(&audio);
+                audio_tone(&audio, 880, 60);
+            }
+        }
+
+        // Rotate: BTN_UP or BTN_JUMP (pressed edge only)
+        if (input.buttons[BTN_ID_UP].pressed ||
+            input.buttons[BTN_ID_JUMP].pressed) {
+            int new_rotation = (game.current.rotation + 1) % 4;
+            if (!check_collision(&game.current, 0, 0, new_rotation)) {
+                game.current.rotation = new_rotation;
+            }
+        }
+
+        // Counter-clockwise rotate: BTN_RUN (optional)
+        if (input.buttons[BTN_ID_RUN].pressed) {
+            int new_rotation = (game.current.rotation + 3) % 4;
+            if (!check_collision(&game.current, 0, 0, new_rotation)) {
+                game.current.rotation = new_rotation;
+            }
+        }
+
+        // Soft drop: BTN_DOWN held accelerates drop
+        soft_drop_active = input.buttons[BTN_ID_DOWN].held;
+
+        // Hard drop: BTN_ACTION (pressed edge only)
+        if (input.buttons[BTN_ID_ACTION].pressed) {
+            while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
+                game.current.y++;
+                game.score += 2;
+            }
+            audio_interrupt(&audio);
+            audio_tone(&audio, 500, 60);
+            audio_tone(&audio, 250, 70);
+            lock_piece();
+        }
     }
 }
 
@@ -599,10 +760,11 @@ void draw_game() {
         
         // Instructions — each line individually centered
         int line_height = text_measure_height(1);
-        int inst_y = LAYOUT_CENTER_Y(3 * line_height) + 20;
-        text_draw_centered(&fb, center_x, inst_y, "TAP LEFT/RIGHT: MOVE", COLOR_WHITE, 1);
-        text_draw_centered(&fb, center_x, inst_y + line_height + 4, "TAP CENTER: ROTATE", COLOR_WHITE, 1);
-        text_draw_centered(&fb, center_x, inst_y + 2 * (line_height + 4), "TAP BOTTOM: DROP", COLOR_WHITE, 1);
+        int inst_y = LAYOUT_CENTER_Y(4 * line_height) + 20;
+        text_draw_centered(&fb, center_x, inst_y, "L/R: MOVE  UP/A: ROTATE", COLOR_WHITE, 1);
+        text_draw_centered(&fb, center_x, inst_y + line_height + 4, "DOWN: SOFT DROP  X: HARD DROP", COLOR_WHITE, 1);
+        text_draw_centered(&fb, center_x, inst_y + 2 * (line_height + 4), "TAP LEFT/RIGHT/CENTER/BOTTOM", COLOR_WHITE, 1);
+        text_draw_centered(&fb, center_x, inst_y + 3 * (line_height + 4), "PRESS START OR TAP TO BEGIN", COLOR_WHITE, 1);
         
         // Start button
         button_draw(&fb, &start_button);
@@ -676,6 +838,9 @@ int main(int argc, char *argv[]) {
     hw_init();
     hw_set_backlight(100);
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
+
+    // Gamepad init
+    gamepad_init(&gamepad);
     
     srand(time(NULL));
     init_game();
@@ -692,6 +857,7 @@ int main(int argc, char *argv[]) {
         usleep(16667);  // ~60 FPS
     }
     
+    gamepad_close(&gamepad);
     touch_close(&touch);
     hw_leds_off();
     hw_set_backlight(100);

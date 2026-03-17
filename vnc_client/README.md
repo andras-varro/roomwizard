@@ -12,6 +12,8 @@ RoomWizard's 800×480 screen with touch pass-through.
 - **16bpp RGB565** — halved memory bandwidth (same as ScummVM backend)
 - **Partial region updates** — only dirty rectangles are re-rendered
 - **Touch input** — resistive touchscreen mapped to VNC pointer events
+- **USB keyboard forwarding** — full key press/release forwarded as X11 keysyms
+- **USB mouse forwarding** — relative movements with 3-tier acceleration, all buttons + scroll
 - **Runtime config file** — all settings in `/opt/vnc_client/vnc_client.conf`
 - **Exit gesture** — long-press top-left corner (3 s) to return to launcher
 - **Watchdog integration** — prevents system reboot during operation
@@ -130,13 +132,10 @@ RPi3 VNC Server (192.168.50.56:5901)
          ▼
     /dev/fb0 (800×480 16bpp)
 
-/dev/input/event0 (touch)
-         │
-         ▼
-   vnc_input.c (coordinate mapping + exit gesture)
-         │
-         ▼
-    VNC pointer events → RPi3
+/dev/input/event0 (touch)         ─┐
+/dev/input/eventN (USB keyboard)  ─┼─→ vnc_input.c ─→ VNC key/pointer events → RPi3
+/dev/input/eventN (USB mouse)     ─┘    (coordinate mapping, acceleration,
+                                          exit gesture detection)
 ```
 
 ### Source Files
@@ -145,7 +144,7 @@ RPi3 VNC Server (192.168.50.56:5901)
 |------|---------|
 | `vnc_client.c` | Main application, config parser, event loop |
 | `vnc_renderer.c/h` | Bilinear scaling, BGR→RGB565, partial updates |
-| `vnc_input.c/h` | Touch→VNC mapping, exit gesture detection |
+| `vnc_input.c/h` | Touch/keyboard/mouse→VNC mapping, acceleration, exit gesture |
 | `config.h` | Compile-time defaults and constants |
 | `vnc_client.conf` | Runtime configuration template |
 | `Makefile` | Cross-compilation and deployment |
@@ -192,6 +191,55 @@ No touch events are sent to the VNC server while holding the exit zone.
 
 ---
 
+## USB Input Forwarding
+
+In addition to touch, the VNC client forwards USB keyboard and mouse events to the remote VNC server. Input handling is implemented in [`vnc_input.c`](vnc_input.c) / [`vnc_input.h`](vnc_input.h).
+
+### USB Keyboard
+
+Full forwarding of key press/release events to the VNC server as **X11 keysyms**:
+
+- All standard keys mapped — letters, numbers, F-keys (F1–F12), arrow keys, modifiers (Shift, Ctrl, Alt), punctuation, Enter, Backspace, Tab, Escape
+- Auto-repeat events from the kernel are forwarded as-is
+- Key press and key release are sent as separate VNC key events, preserving modifier state
+- Works identically to a keyboard connected directly to the remote machine
+
+### USB Mouse
+
+Relative mouse movements are accumulated with **3-tier acceleration** and forwarded as VNC absolute pointer events in remote desktop coordinate space:
+
+- **Slow** (< 3 px) — 1:1 mapping for precision
+- **Medium** (3–10 px) — 2× multiplier
+- **Fast** (> 10 px) — 4× multiplier
+
+Button support:
+- Left click, right click, middle click
+- Scroll wheel up/down (VNC button 4/5)
+
+> **Note:** The mouse operates in **remote desktop coordinates** (e.g. 1920×1080), not local 800×480 screen space. Cursor position is tracked internally and scaled to the remote resolution before sending pointer events.
+
+### Auto-Detection
+
+USB devices are auto-detected by scanning `/dev/input/event*` **every 5 seconds**. USB hotplug is fully supported — plug in a keyboard or mouse while the VNC client is running and it starts working immediately.
+
+### Touch Preserved
+
+Existing touch forwarding and the exit gesture (long-press top-left corner) are unchanged. All input methods work simultaneously — touch, keyboard, and mouse can be used interchangeably.
+
+### Configuration
+
+Mouse sensitivity is configurable via `/etc/input_config.conf` (shared with native apps):
+
+```ini
+# /etc/input_config.conf
+mouse_sensitivity=1.0
+mouse_acceleration=1
+```
+
+See [native_apps/README.md](../native_apps/README.md#input-configuration) for the full configuration reference.
+
+---
+
 ## Optimizations
 
 Key techniques adopted from the ScummVM RoomWizard backend:
@@ -216,7 +264,7 @@ Key techniques adopted from the ScummVM RoomWizard backend:
 | CPU | ARM Cortex-A8 @ 600 MHz |
 | RAM | 234 MB (182 MB available) |
 | Display | 800×480 framebuffer (`/dev/fb0`) |
-| Input | Resistive single-touch (`/dev/input/event0`) |
+| Input | Resistive single-touch (`/dev/input/event0`) + USB keyboard/mouse (`/dev/input/event*`) |
 | Network | 10/100 Mbps Ethernet |
 
 ## Dependencies

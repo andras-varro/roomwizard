@@ -7,12 +7,13 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 ## Table of Contents
 
 1. [Apps & Tools](#apps--tools)
-2. [Build & Deploy](#build--deploy-cross-compile-from-wsl)
-3. [App Launcher](#app-launcher)
-4. [App Manifests](#app-manifests)
-5. [System Optimization](#system-optimization)
-6. [Permanent App Mode](#permanent-app-mode-boot)
-7. [Resources](#resources)
+2. [Input Support](#input-support)
+3. [Build & Deploy](#build--deploy-cross-compile-from-wsl)
+4. [App Launcher](#app-launcher)
+5. [App Manifests](#app-manifests)
+6. [System Optimization](#system-optimization)
+7. [Permanent App Mode](#permanent-app-mode-boot)
+8. [Resources](#resources)
 
 ---
 
@@ -20,15 +21,126 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 
 | Binary | Type | Controls / Notes |
 |---|---|---|
-| `snake` | Game | Tap direction to steer |
-| `tetris` | Game | Tap left/right to move, center to rotate, bottom to drop |
-| `pong` | Game | Touch-drag to move paddle |
+| `snake` | Game | Tap / arrow keys / D-pad to steer |
+| `frogger` | Game | Tap / arrow keys / D-pad to hop |
+| `tetris` | Game | Tap / keys / D-pad to move, rotate, drop (DAS auto-repeat) |
+| `pong` | Game | Touch-drag / keys / analog stick for paddle |
+| `brick_breaker` | Game | Touch / mouse / keys / analog stick for paddle |
+| `samegame` | Game | Touch / mouse cursor + keyboard navigation |
+| `platformer` | Game | Touch / keys / gamepad — reference input implementation |
 | `app_launcher` | Launcher | Visual grid launcher — auto-starts on boot, respawns |
-| `game_selector` | Launcher | Legacy text menu (superseded by app_launcher) |
+| `game_selector` | Launcher | D-pad grid nav + Enter/A select, legacy text menu |
 | `hardware_test` | Tool | Diagnostics |
 | `usb_test` | Tool | USB device tester — keyboard, mouse, gamepad visualization |
 | `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s |
 | `unified_calibrate` | Tool | Touch + bezel calibration |
+
+---
+
+## Input Support
+
+All native apps share a unified input system built on [`gamepad.h`](common/gamepad.h) / [`gamepad.c`](common/gamepad.c). This library provides a single polling API that unifies four input sources — **touch**, **USB keyboard**, **USB mouse**, and **USB gamepad** — into a common abstract button model.
+
+### Abstract Button Model
+
+Every input device maps to the same set of abstract buttons, allowing games to be written against a single API:
+
+| Button ID | Purpose |
+|-----------|---------|
+| `BTN_ID_UP` | Direction up / navigate up |
+| `BTN_ID_DOWN` | Direction down / navigate down |
+| `BTN_ID_LEFT` | Direction left / navigate left |
+| `BTN_ID_RIGHT` | Direction right / navigate right |
+| `BTN_ID_JUMP` | Primary action (jump / select) |
+| `BTN_ID_RUN` | Secondary action (run / sprint) |
+| `BTN_ID_ACTION` | Tertiary action (interact / confirm) |
+| `BTN_ID_PAUSE` | Pause game |
+| `BTN_ID_BACK` | Back / exit to launcher |
+
+### Common Controls
+
+| Action | Keyboard | Gamepad | Purpose |
+|--------|----------|---------|---------|
+| Up | Arrow Up / W | D-pad Up / Left Stick | Direction / Navigate |
+| Down | Arrow Down / S | D-pad Down / Left Stick | Direction / Navigate |
+| Left | Arrow Left / A | D-pad Left / Left Stick | Direction / Navigate |
+| Right | Arrow Right / D | D-pad Right / Left Stick | Direction / Navigate |
+| Jump/Select | Space | A (South) | Primary action |
+| Run | Shift | B (East) | Secondary action |
+| Action | Enter | X (West) | Tertiary action |
+| Pause | Escape | Start | Pause game |
+| Back/Exit | Backspace | Select | Exit to launcher |
+
+### Mouse Support
+
+USB mice provide direct cursor control with **3-tier acceleration**:
+
+- **Slow** (< 3 px movement) — 1:1 pixel mapping for precision
+- **Medium** (3–10 px) — 2× multiplier
+- **Fast** (> 10 px) — 4× multiplier
+
+Mouse sensitivity is configurable via `/etc/input_config.conf`.
+
+### Gamepad Button Mapping
+
+Gamepad button mapping is configurable to support clone/third-party controllers that may report different button codes than standard Xbox/PlayStation layouts. Remap buttons in `/etc/input_config.conf` (see [Configuration](#input-configuration) below).
+
+### Per-App Input Matrix
+
+| App | Touch | Keyboard | Mouse | Gamepad | Notes |
+|-----|:-----:|:--------:|:-----:|:-------:|-------|
+| Snake | ✅ | ✅ | — | ✅ | Arrow keys / D-pad for direction |
+| Frogger | ✅ | ✅ | — | ✅ | Arrow keys / D-pad for hopping |
+| Tetris | ✅ | ✅ | — | ✅ | DAS auto-repeat, hard drop, rotate |
+| Pong | ✅ | ✅ | — | ✅ | Analog stick proportional paddle |
+| Brick Breaker | ✅ | ✅ | ✅ | ✅ | Mouse/analog for paddle, full control |
+| SameGame | ✅ | ✅ | ✅ | ✅ | Mouse cursor + hover highlight |
+| Platformer | ✅ | ✅ | — | ✅ | Reference implementation |
+| Game Selector | ✅ | ✅ | — | ✅ | D-pad grid navigation + Enter/A select |
+| USB Test | ✅ | ✅ | ✅ | ✅ | Device diagnostic visualizer |
+
+### USB Hotplug
+
+All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seconds**. Plugging in a keyboard, mouse, or gamepad while an app is running will be detected and usable within seconds — no restart needed.
+
+### Input Configuration
+
+All input settings are stored in `/etc/input_config.conf`, shared across all native apps and the ScummVM backend.
+
+```ini
+# /etc/input_config.conf — Unified input configuration
+# All values are optional; defaults are used if omitted.
+
+# Mouse sensitivity multiplier (float, default: 1.0)
+# Higher = faster cursor movement
+mouse_sensitivity=1.0
+
+# Mouse acceleration enable (0 = off, 1 = on, default: 1)
+mouse_acceleration=1
+
+# Gamepad analog stick dead zone (0–32767, default: 8000)
+# Movements below this threshold are ignored
+gamepad_deadzone=8000
+
+# Gamepad button remapping for clone controllers
+# Format: gamepad_btn_<abstract>=<linux_evdev_code>
+# Use evtest on device to find button codes for your controller
+gamepad_btn_a=304
+gamepad_btn_b=305
+gamepad_btn_x=307
+gamepad_btn_y=308
+gamepad_btn_start=315
+gamepad_btn_select=314
+gamepad_btn_l1=310
+gamepad_btn_r1=311
+
+# Analog stick axis mapping
+# Default: ABS_X=0, ABS_Y=1 (left stick)
+gamepad_axis_x=0
+gamepad_axis_y=1
+```
+
+---
 
 ## Build & Deploy (cross-compile from WSL)
 

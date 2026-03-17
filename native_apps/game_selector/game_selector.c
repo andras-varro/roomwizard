@@ -2,12 +2,14 @@
  * Game Selector for RoomWizard
  * Displays a menu of available games and launches selected game
  * Uses centralized Button widget from common library
+ * Supports keyboard, gamepad, and touch input via unified gamepad module
  */
 
 #include "common/framebuffer.h"
 #include "common/touch_input.h"
 #include "common/common.h"
 #include "common/hardware.h"
+#include "common/gamepad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +24,11 @@
 #define BUTTON_HEIGHT 80
 #define BUTTON_MARGIN 20
 #define EXIT_BUTTON_HEIGHT 60
+#define RESCAN_INTERVAL_MS 5000
+
+/* Selection highlight border */
+#define HIGHLIGHT_COLOR     RGB(0, 220, 255)
+#define HIGHLIGHT_BORDER    3
 
 typedef struct {
     char name[256];
@@ -33,10 +40,13 @@ typedef struct {
     Button game_buttons[MAX_GAMES];  // Button widgets for each game
     Button exit_button;              // Exit button widget
     int game_count;
-    int selected_game;
-    int scroll_offset;  // For scrolling through games
+    int selected_game;               // Currently highlighted game index (-1 = exit button)
+    int scroll_offset;               // For scrolling through games
     Framebuffer fb;
     TouchInput touch;
+    GamepadManager gamepad;
+    InputState input;
+    uint32_t last_rescan_ms;
 } GameSelector;
 
 // Scan directory for executable games
@@ -85,18 +95,24 @@ int scan_games(GameSelector *selector) {
     return selector->game_count;
 }
 
+// Compute max visible buttons given the current screen layout
+static int get_max_visible(GameSelector *selector) {
+    int start_y = SCREEN_SAFE_TOP + 80;
+    int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
+    return available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
+}
+
 // Initialize button positions for current scroll state
 void update_button_positions(GameSelector *selector) {
     int start_y = SCREEN_SAFE_TOP + 80;  // Start below title
     int button_width = SCREEN_SAFE_WIDTH - 2 * BUTTON_MARGIN;
-    int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
-    int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
+    int max_visible = get_max_visible(selector);
     
     // Update game button positions
     for (int i = 0; i < max_visible && (i + selector->scroll_offset) < selector->game_count; i++) {
         int game_idx = i + selector->scroll_offset;
         int y = start_y + i * (BUTTON_HEIGHT + BUTTON_MARGIN);
-        uint32_t bg_color = (game_idx == selector->selected_game) ? COLOR_BLUE : RGB(40, 40, 80);
+        uint32_t bg_color = RGB(40, 40, 80);
         
         button_init_full(&selector->game_buttons[game_idx],
                         SCREEN_SAFE_LEFT + BUTTON_MARGIN, y, button_width, BUTTON_HEIGHT,
@@ -112,6 +128,19 @@ void update_button_positions(GameSelector *selector) {
                     RGB(80, 20, 20), COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 3);
 }
 
+// Draw selection highlight border around a button
+static void draw_selection_highlight(GameSelector *selector, Button *btn) {
+    int x = btn->x - HIGHLIGHT_BORDER;
+    int y = btn->y - HIGHLIGHT_BORDER;
+    int w = btn->width + 2 * HIGHLIGHT_BORDER;
+    int h = btn->height + 2 * HIGHLIGHT_BORDER;
+    
+    // Draw multiple-pixel-thick border
+    for (int b = 0; b < HIGHLIGHT_BORDER; b++) {
+        fb_draw_rect(&selector->fb, x + b, y + b, w - 2 * b, h - 2 * b, HIGHLIGHT_COLOR);
+    }
+}
+
 // Draw the game selector menu
 void draw_menu(GameSelector *selector) {
     fb_clear(&selector->fb, COLOR_BLACK);
@@ -120,8 +149,7 @@ void draw_menu(GameSelector *selector) {
     text_draw_centered(&selector->fb, selector->fb.width / 2, LAYOUT_TITLE_Y, "ROOMWIZARD GAMES", COLOR_WHITE, 4);
     
     int start_y = SCREEN_SAFE_TOP + 80;  // Start below title
-    int available_height = SCREEN_SAFE_BOTTOM - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
-    int max_visible = available_height / (BUTTON_HEIGHT + BUTTON_MARGIN);
+    int max_visible = get_max_visible(selector);
     
     // Calculate scroll limits
     int max_scroll = selector->game_count - max_visible;
@@ -144,6 +172,11 @@ void draw_menu(GameSelector *selector) {
     for (int i = 0; i < max_visible && (i + selector->scroll_offset) < selector->game_count; i++) {
         int game_idx = i + selector->scroll_offset;
         button_draw(&selector->fb, &selector->game_buttons[game_idx]);
+        
+        // Draw selection highlight if this game is selected
+        if (game_idx == selector->selected_game) {
+            draw_selection_highlight(selector, &selector->game_buttons[game_idx]);
+        }
     }
     
     // Draw down arrow if more games below
@@ -157,11 +190,21 @@ void draw_menu(GameSelector *selector) {
     // Draw exit button using Button widget
     button_draw(&selector->fb, &selector->exit_button);
     
+    // Draw selection highlight on exit button if selected
+    if (selector->selected_game == -1) {
+        draw_selection_highlight(selector, &selector->exit_button);
+    }
+    
+    // Draw input hint at bottom
+    if (selector->input.gamepad_connected || selector->input.keyboard_connected)
+        fb_draw_text(&selector->fb, SCREEN_SAFE_LEFT + 10, selector->fb.height - 18,
+                     "D-PAD: NAVIGATE  A/ENTER: SELECT  BACK: EXIT", RGB(100, 100, 100), 1);
+    
     // Swap buffers for double buffering
     fb_swap(&selector->fb);
 }
 
-// Handle touch input
+// Handle touch input (returns game index, -1 for none/scroll, -2 for exit)
 int handle_touch(GameSelector *selector, int x, int y, uint32_t current_time) {
     int start_y = SCREEN_SAFE_TOP + 80;
     int available_height = selector->fb.height - start_y - EXIT_BUTTON_HEIGHT - 3 * BUTTON_MARGIN;
@@ -183,6 +226,7 @@ int handle_touch(GameSelector *selector, int x, int y, uint32_t current_time) {
         int game_idx = i + selector->scroll_offset;
         if (button_update(&selector->game_buttons[game_idx], x, y, true, current_time)) {
             printf("  -> HIT button %d (%s)!\n", game_idx, selector->games[game_idx].name);
+            selector->selected_game = game_idx;  // Update selection on touch
             return game_idx;  // Return game index
         }
     }
@@ -211,6 +255,73 @@ int handle_touch(GameSelector *selector, int x, int y, uint32_t current_time) {
     return -1;  // No button touched
 }
 
+// Ensure the selected game is visible (adjust scroll if needed)
+static void ensure_selection_visible(GameSelector *selector) {
+    int max_visible = get_max_visible(selector);
+    int max_scroll = selector->game_count - max_visible;
+    if (max_scroll < 0) max_scroll = 0;
+    
+    if (selector->selected_game >= 0) {
+        // Scroll down if selection is below visible range
+        if (selector->selected_game >= selector->scroll_offset + max_visible) {
+            selector->scroll_offset = selector->selected_game - max_visible + 1;
+        }
+        // Scroll up if selection is above visible range
+        if (selector->selected_game < selector->scroll_offset) {
+            selector->scroll_offset = selector->selected_game;
+        }
+    }
+    
+    // Clamp scroll
+    if (selector->scroll_offset > max_scroll) selector->scroll_offset = max_scroll;
+    if (selector->scroll_offset < 0) selector->scroll_offset = 0;
+}
+
+// Handle gamepad/keyboard navigation
+// Returns: game index to launch (>=0), -1 for nothing, -2 for exit
+static int handle_gamepad_input(GameSelector *selector) {
+    InputState *inp = &selector->input;
+    
+    // Navigate down
+    if (inp->buttons[BTN_ID_DOWN].pressed) {
+        if (selector->selected_game < selector->game_count - 1) {
+            selector->selected_game++;
+        } else {
+            // Wrap to exit button
+            selector->selected_game = -1;
+        }
+        ensure_selection_visible(selector);
+    }
+    
+    // Navigate up
+    if (inp->buttons[BTN_ID_UP].pressed) {
+        if (selector->selected_game == -1) {
+            // From exit button, go to last game
+            selector->selected_game = selector->game_count - 1;
+        } else if (selector->selected_game > 0) {
+            selector->selected_game--;
+        }
+        ensure_selection_visible(selector);
+    }
+    
+    // Select / launch
+    if (inp->buttons[BTN_ID_JUMP].pressed ||
+        inp->buttons[BTN_ID_ACTION].pressed) {
+        if (selector->selected_game >= 0 && selector->selected_game < selector->game_count) {
+            return selector->selected_game;
+        } else if (selector->selected_game == -1) {
+            return -2;  // Exit
+        }
+    }
+    
+    // Back button → exit
+    if (inp->buttons[BTN_ID_BACK].pressed) {
+        return -2;
+    }
+    
+    return -1;  // Nothing
+}
+
 // Launch a game and wait for it to exit
 int launch_game(GameSelector *selector, int game_index, const char *fb_dev, const char *touch_dev) {
     if (game_index < 0 || game_index >= selector->game_count) {
@@ -233,7 +344,8 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
     fb_clear(&selector->fb, COLOR_BLACK);
     fb_swap(&selector->fb);
     
-    // Close both framebuffer and touch so game has exclusive access
+    // Close gamepad, touch, and framebuffer so game has exclusive access
+    gamepad_close(&selector->gamepad);
     touch_close(&selector->touch);
     fb_close(&selector->fb);
     
@@ -268,6 +380,10 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
             touch_set_screen_size(&selector->touch, selector->fb.width, selector->fb.height);
             touch_drain_events(&selector->touch);  /* Discard stale events */
         }
+
+        // Re-init gamepad after game exits
+        gamepad_init(&selector->gamepad);
+
         hw_reload_config();  /* Re-read config in case child app changed it */
         hw_set_backlight(100);  /* Restore configured backlight after game exits */
         
@@ -312,12 +428,18 @@ int main(int argc, char *argv[]) {
     
     // Set screen size for coordinate scaling
     touch_set_screen_size(&selector.touch, selector.fb.width, selector.fb.height);
+
+    // Initialize gamepad (keyboard, gamepad, mouse)
+    gamepad_init(&selector.gamepad);
+    memset(&selector.input, 0, sizeof(selector.input));
+    selector.last_rescan_ms = 0;
     
     // Scan for available games
     if (scan_games(&selector) <= 0) {
         fprintf(stderr, "No games found in %s\n", GAME_DIR);
         fb_draw_text(&selector.fb, 50, 50, "No games found!", COLOR_RED, 3);
         sleep(3);
+        gamepad_close(&selector.gamepad);
         touch_close(&selector.touch);
         fb_close(&selector.fb);
         return 1;
@@ -331,37 +453,63 @@ int main(int argc, char *argv[]) {
     selector.selected_game = 0;
     selector.scroll_offset = 0;  // Initialize scroll position
     
-    // Main loop
+    // Main loop — polling-based (~60fps)
     int running = 1;
     while (running) {
-        draw_menu(&selector);
-        
-        // Wait for touch input (coordinates are now auto-scaled by touch library)
-        int x, y;
-        if (touch_wait_for_press(&selector.touch, &x, &y) == 0) {
-            uint32_t current_time = get_time_ms();
-            printf("Touch at: (%d,%d)\n", x, y);
-            int result = handle_touch(&selector, x, y, current_time);
+        // Poll touch input (non-blocking)
+        touch_poll(&selector.touch);
+        TouchState state = touch_get_state(&selector.touch);
+
+        // Poll gamepad/keyboard through unified API
+        gamepad_poll(&selector.gamepad, &selector.input,
+                     state.x, state.y, state.pressed);
+
+        // Periodic device rescan for hotplug support
+        uint32_t current_time = get_time_ms();
+        if (current_time - selector.last_rescan_ms > RESCAN_INTERVAL_MS) {
+            selector.last_rescan_ms = current_time;
+            gamepad_rescan(&selector.gamepad);
+        }
+
+        // Handle touch input
+        if (state.pressed) {
+            printf("Touch at: (%d,%d)\n", state.x, state.y);
+            int result = handle_touch(&selector, state.x, state.y, current_time);
             printf("Result: %d\n", result);
             
             if (result >= 0) {
                 // Launch game with device paths
                 launch_game(&selector, result, fb_device, touch_device);
-                // Game exited, redraw menu
+                // Game exited, continue loop to redraw menu
             } else if (result == -2) {
                 // Exit button pressed
                 printf("Exiting game selector\n");
                 running = 0;
             }
         }
+
+        // Handle gamepad/keyboard navigation
+        int gp_result = handle_gamepad_input(&selector);
+        if (gp_result >= 0) {
+            // Launch selected game
+            launch_game(&selector, gp_result, fb_device, touch_device);
+            // Game exited, continue loop to redraw menu
+        } else if (gp_result == -2) {
+            printf("Exiting game selector (gamepad)\n");
+            running = 0;
+        }
+
+        // Draw the menu
+        draw_menu(&selector);
         
-        usleep(50000);  // 50ms delay
+        usleep(16667);  // ~60 FPS
     }
     
     // Cleanup
     hw_set_backlight(100);
     fb_clear(&selector.fb, COLOR_BLACK);
     fb_swap(&selector.fb);  // Make sure the clear is visible
+    gamepad_close(&selector.gamepad);
     touch_close(&selector.touch);
     fb_close(&selector.fb);
     
