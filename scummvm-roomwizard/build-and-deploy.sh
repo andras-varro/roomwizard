@@ -197,15 +197,24 @@ build_scummvm() {
     
     cd "$SCUMMVM_DIR"
     
-    # Check if configured
+    # Auto-configure if not yet configured
     if [ ! -f "config.mk" ]; then
-        log_error "Not configured! Run: $0 configure"
-        exit 1
+        log_warning "Not configured yet — running configure automatically..."
+        configure_build
+        cd "$SCUMMVM_DIR"
     fi
+    
+    # Always clean stale .o files from native_apps/common/ before building.
+    # These are compiled by ScummVM's make (via configure.patch OBJS) and must
+    # match the cross-compiler.  A stale x86 .o here causes:
+    #   "file not recognized: file format not recognized"
+    log_info "Cleaning native_apps/common/*.o (avoid stale cross-compile artifacts)..."
+    rm -f "$NATIVE_APPS_DIR/common/"*.o
     
     # Build with static linking
     # Use -j4 for parallel compilation (adjust based on CPU cores)
-    make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
+    # Pass CC explicitly to ensure .c files use the ARM cross-compiler
+    make -j4 CC=arm-linux-gnueabihf-gcc LDFLAGS='-static' LIBS='-lpthread -lm'
     
     # Check if binary was created
     if [ -f "scummvm" ]; then
