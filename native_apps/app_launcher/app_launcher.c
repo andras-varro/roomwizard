@@ -25,6 +25,7 @@
 #include "common/common.h"
 #include "common/ppm.h"
 #include "common/logger.h"
+#include "common/gamepad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +40,14 @@
 
 #define MAX_APPS        24
 #define APPS_DIR        "/opt/roomwizard/apps"
+#define RESCAN_INTERVAL_MS 5000
+
+/* Post-launch cooldown: ignore ALL input (gamepad, touch, mouse) for this
+ * many milliseconds after returning from a child process.  This prevents
+ * auto-relaunch caused by stale/repeat key events, resistive touch noise,
+ * or race conditions in the drain loop.  500 ms is long enough for any
+ * held key to stop generating repeats, but short enough to feel instant. */
+#define LAUNCH_COOLDOWN_MS 500
 
 /* ── Grid geometry ──────────────────────────────────────────────────────── */
 
@@ -92,6 +101,7 @@ static void compute_grid_layout(Framebuffer *fb) {
 #define TILE_BG         RGB(45, 45, 60)
 #define TILE_BORDER     RGB(70, 70, 90)
 #define TILE_HL_BG      RGB(65, 65, 85)
+#define TILE_SEL_BORDER RGB(0, 220, 255)
 #define TITLE_COLOR     RGB(200, 200, 220)
 #define LABEL_COLOR     RGB(220, 220, 220)
 #define DOT_ACTIVE      RGB(200, 200, 220)
@@ -136,8 +146,13 @@ typedef struct {
     int         app_count;
     int         current_page;
     int         total_pages;
+    int         selected_app;       /* Absolute app index, or -1 for none */
     Framebuffer fb;
     TouchInput  touch;
+    GamepadManager gamepad;
+    InputState  input;
+    uint32_t    last_rescan_ms;
+    uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
 } Launcher;
 
@@ -373,6 +388,16 @@ static void draw_page_arrows(Framebuffer *fb, Launcher *l) {
     }
 }
 
+static void draw_selection_border(Framebuffer *fb, int tx, int ty) {
+    int bw = 3;
+    for (int b = 0; b < bw; b++) {
+        fb_draw_rounded_rect(fb,
+                             tx - bw + b, ty - bw + b,
+                             tile_w + 2 * (bw - b), tile_h + 2 * (bw - b),
+                             TILE_RADIUS + bw - b, TILE_SEL_BORDER);
+    }
+}
+
 static void draw_launcher(Launcher *l) {
     fb_clear(&l->fb, BG_COLOR);
 
@@ -388,7 +413,11 @@ static void draw_launcher(Launcher *l) {
     for (int i = 0; i < count; i++) {
         int tx, ty;
         tile_xy(i, &tx, &ty);
-        draw_tile(&l->fb, &l->apps[start + i], tx, ty, 0);
+        int abs_idx = start + i;
+        int hl = (abs_idx == l->selected_app) ? 1 : 0;
+        draw_tile(&l->fb, &l->apps[abs_idx], tx, ty, hl);
+        if (abs_idx == l->selected_app)
+            draw_selection_border(&l->fb, tx, ty);
     }
 
     /* Empty-state message */
@@ -403,6 +432,11 @@ static void draw_launcher(Launcher *l) {
     /* Page arrows and dots */
     draw_page_arrows(&l->fb, l);
     draw_page_dots(&l->fb, l->current_page, l->total_pages);
+
+    /* Input hint */
+    if (l->input.gamepad_connected || l->input.keyboard_connected)
+        fb_draw_text(&l->fb, SCREEN_SAFE_LEFT + 10, l->fb.height - 18,
+                     "D-PAD: NAVIGATE  A/ENTER: LAUNCH", RGB(100, 100, 100), 1);
 
     fb_swap(&l->fb);
 }
@@ -447,6 +481,81 @@ static int handle_touch(Launcher *l, int x, int y) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
+/*  Gamepad / keyboard navigation                                          */
+/* ════════════════════════════════════════════════════════════════════════ */
+
+/* Ensure selected_app is on the currently visible page; adjust page if not. */
+static void ensure_selection_visible(Launcher *l) {
+    if (l->selected_app < 0) return;
+    int page = l->selected_app / apps_per_page;
+    if (page != l->current_page)
+        l->current_page = page;
+}
+
+/*  Returns:  >= 0  app index to launch
+ *            -1    nothing (navigation only, or no input)
+ */
+static int handle_gamepad_input(Launcher *l) {
+    InputState *inp = &l->input;
+
+    /* If nothing is selected yet but a nav key is pressed, select first on page */
+    if (l->selected_app < 0) {
+        if (inp->buttons[BTN_ID_UP].pressed   || inp->buttons[BTN_ID_DOWN].pressed ||
+            inp->buttons[BTN_ID_LEFT].pressed  || inp->buttons[BTN_ID_RIGHT].pressed) {
+            l->selected_app = l->current_page * apps_per_page;
+            return -1;
+        }
+    }
+
+    int page_start = l->current_page * apps_per_page;
+    int page_count = l->app_count - page_start;
+    if (page_count > apps_per_page) page_count = apps_per_page;
+    int idx_on_page = l->selected_app - page_start;  /* 0-based index within page */
+
+    int col = idx_on_page % grid_cols;
+    int row = idx_on_page / grid_cols;
+
+    /* Navigate right */
+    if (inp->buttons[BTN_ID_RIGHT].pressed) {
+        if (l->selected_app + 1 < l->app_count) {
+            l->selected_app++;
+            ensure_selection_visible(l);
+        }
+    }
+    /* Navigate left */
+    if (inp->buttons[BTN_ID_LEFT].pressed) {
+        if (l->selected_app > 0) {
+            l->selected_app--;
+            ensure_selection_visible(l);
+        }
+    }
+    /* Navigate down */
+    if (inp->buttons[BTN_ID_DOWN].pressed) {
+        int target = l->selected_app + grid_cols;
+        if (target < l->app_count) {
+            l->selected_app = target;
+            ensure_selection_visible(l);
+        }
+    }
+    /* Navigate up */
+    if (inp->buttons[BTN_ID_UP].pressed) {
+        int target = l->selected_app - grid_cols;
+        if (target >= 0) {
+            l->selected_app = target;
+            ensure_selection_visible(l);
+        }
+    }
+
+    /* Select / launch */
+    if (inp->buttons[BTN_ID_JUMP].pressed || inp->buttons[BTN_ID_ACTION].pressed) {
+        if (l->selected_app >= 0 && l->selected_app < l->app_count)
+            return l->selected_app;
+    }
+
+    return -1;
+}
+
+/* ════════════════════════════════════════════════════════════════════════ */
 /*  App launching                                                          */
 /* ════════════════════════════════════════════════════════════════════════ */
 
@@ -459,9 +568,8 @@ static void launch_app(Launcher *l, int index,
     /* Fade out launcher before switching to app */
     fb_fade_out(&l->fb);
 
-    /* Release BOTH framebuffer and touch so child gets exclusive access.
-     * This prevents the parent from accidentally drawing while blocked,
-     * and avoids two processes holding the fb mmap simultaneously.       */
+    /* Release framebuffer, touch, and gamepad so child gets exclusive access */
+    gamepad_close(&l->gamepad);
     touch_close(&l->touch);
     fb_close(&l->fb);
 
@@ -521,6 +629,42 @@ static void launch_app(Launcher *l, int index,
         touch_drain_events(&l->touch);  /* Discard stale events from child */
     }
 
+    /* Re-init gamepad after child exits */
+    gamepad_init(&l->gamepad);
+
+    /* Wait-for-release drain: prevent auto-relaunch from held Enter/A.
+     *
+     * After gamepad_init(), prev_held[] is zeroed.  If the launch button
+     * (Enter or A) is still physically held, evdev key-repeat events keep
+     * arriving.  Simply doing two dummy polls with separate zeroed
+     * InputStates can leave prev_held in an inconsistent state: if the
+     * second dummy poll sees no new events its InputState stays held=false,
+     * flipping prev_held back to false — then the first REAL poll reads a
+     * repeat event and sees a false "pressed" edge, re-launching the app.
+     *
+     * Fix: use a single persistent InputState across a polling loop so
+     * that the held flag accurately tracks the physical key state (set by
+     * key-down/repeat, cleared only by key-up).  Loop until all launch
+     * buttons are released (or a 2-second safety timeout expires). */
+    {
+        InputState drain;
+        memset(&drain, 0, sizeof(drain));
+        int safety = 0;
+        do {
+            gamepad_poll(&l->gamepad, &drain, 0, 0, false);
+            usleep(16000);  /* ~60 fps */
+            safety++;
+        } while ((drain.buttons[BTN_ID_JUMP].held ||
+                  drain.buttons[BTN_ID_ACTION].held) && safety < 120);
+    }
+    /* Zero the main input state so no stale held flags carry over */
+    memset(&l->input, 0, sizeof(l->input));
+
+    /* Record return time — main loop will ignore ALL input for
+     * LAUNCH_COOLDOWN_MS after this, as defense-in-depth against
+     * stale events from any source (keyboard, touch, mouse). */
+    l->last_launch_return_ms = get_time_ms();
+
     /* Re-scan manifests in case new apps were deployed while app ran */
     LOG_INFO(&l->logger, "Re-scanning apps...");
     scan_apps(l);
@@ -579,6 +723,13 @@ int main(int argc, char *argv[]) {
     touch_set_screen_size(&launcher.touch,
                           launcher.fb.width, launcher.fb.height);
 
+    /* Gamepad / keyboard / mouse */
+    gamepad_init(&launcher.gamepad);
+    memset(&launcher.input, 0, sizeof(launcher.input));
+    launcher.last_rescan_ms = 0;
+    launcher.last_launch_return_ms = 0;
+    launcher.selected_app = -1;  /* No keyboard selection until user navigates */
+
     /* Compute grid layout based on screen dimensions */
     compute_grid_layout(&launcher.fb);
 
@@ -586,20 +737,67 @@ int main(int argc, char *argv[]) {
     int count = scan_apps(&launcher);
     LOG_INFO(&launcher.logger, "Found %d app(s), %d page(s)", count, launcher.total_pages);
 
-    /* ── Main loop ──────────────────────────────────────────────── */
+    /* ── Main loop — polling-based (~30 fps) ────────────────────── */
     while (!quit_flag) {
-        draw_launcher(&launcher);
+        /* Poll touch (non-blocking) */
+        touch_poll(&launcher.touch);
+        TouchState ts = touch_get_state(&launcher.touch);
 
-        int x, y;
-        if (touch_wait_for_press(&launcher.touch, &x, &y) == 0) {
-            if (quit_flag) break;
-            LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", x, y);
-            int result = handle_touch(&launcher, x, y);
+        /* Poll gamepad / keyboard / mouse */
+        gamepad_poll(&launcher.gamepad, &launcher.input,
+                     ts.x, ts.y, ts.pressed);
+
+        /* Periodic device rescan for hotplug */
+        uint32_t now = get_time_ms();
+        if (now - launcher.last_rescan_ms > RESCAN_INTERVAL_MS) {
+            launcher.last_rescan_ms = now;
+            gamepad_rescan(&launcher.gamepad);
+        }
+
+        /* ── Post-launch cooldown ──────────────────────────────────────
+         * After returning from a child process, ignore ALL input for
+         * LAUNCH_COOLDOWN_MS.  This is the primary defense against
+         * auto-relaunch caused by:
+         *   (a) Keyboard repeat events slipping through the drain loop
+         *   (b) Resistive touchscreen noise generating a false press
+         *   (c) Mouse button bounce after returning from child
+         * The drain loop in launch_app() is kept as additional safety. */
+        if (launcher.last_launch_return_ms &&
+            (now - launcher.last_launch_return_ms) < LAUNCH_COOLDOWN_MS) {
+            /* Still in cooldown — draw UI but skip all input handling */
+            draw_launcher(&launcher);
+            usleep(33333);
+            continue;
+        }
+
+        /* Handle touch press */
+        if (ts.pressed) {
+            LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
+            int result = handle_touch(&launcher, ts.x, ts.y);
             if (result >= 0)
                 launch_app(&launcher, result, fb_dev, touch_dev);
         }
 
-        usleep(50000);   /* 50 ms debounce */
+        /* Handle mouse click */
+        if (launcher.input.mouse_left_pressed) {
+            LOG_DEBUG(&launcher.logger, "Mouse click: (%d, %d)",
+                      launcher.input.mouse_x, launcher.input.mouse_y);
+            int result = handle_touch(&launcher,
+                                      launcher.input.mouse_x,
+                                      launcher.input.mouse_y);
+            if (result >= 0)
+                launch_app(&launcher, result, fb_dev, touch_dev);
+        }
+
+        /* Handle gamepad / keyboard navigation */
+        int gp_result = handle_gamepad_input(&launcher);
+        if (gp_result >= 0)
+            launch_app(&launcher, gp_result, fb_dev, touch_dev);
+
+        /* Draw */
+        draw_launcher(&launcher);
+
+        usleep(33333);   /* ~30 fps */
     }
 
     /* Cleanup */
@@ -608,6 +806,7 @@ int main(int argc, char *argv[]) {
     free_icons(&launcher);
     fb_clear(&launcher.fb, COLOR_BLACK);
     fb_swap(&launcher.fb);
+    gamepad_close(&launcher.gamepad);
     touch_close(&launcher.touch);
     fb_close(&launcher.fb);
     return 0;

@@ -75,7 +75,7 @@ step "19/27" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
 step "20/27" "app_launcher"
-$CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/ppm.o build/logger.o -o build/app_launcher -lm
+$CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
 step "21/27" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm

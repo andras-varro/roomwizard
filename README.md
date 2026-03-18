@@ -88,10 +88,10 @@ System setup is done once by `setup-device.sh` — no duplication across project
 
 ## Projects
 
-1. **Native Apps** — Direct framebuffer C apps (Snake, Tetris, Pong, App Launcher, Hardware Test)
+1. **Native Apps** — Direct framebuffer C apps (Snake, Tetris, Pong, App Launcher, Hardware Test). USB input fully supported: keyboard, mouse, and Xbox 360 controller via unified evdev polling.
 2. **Browser Games** — HTML5 brick breaker with LED feedback
-3. **ScummVM** — Custom backend for classic point-and-click adventures (OPL/AdLib music, touch controls, virtual keyboard)
-4. **VNC Client** — Lightweight VNC viewer for Raspberry Pi remote desktop (weather/clock) with touch pass-through (~5% CPU, bilinear scaling)
+3. **ScummVM** — Custom backend for classic point-and-click adventures (OPL/AdLib music, touch controls, virtual keyboard). Independent evdev input: keyboard, mouse, and gamepad.
+4. **VNC Client** — Lightweight VNC viewer for Raspberry Pi remote desktop (weather/clock) with keyboard/mouse forwarding (~5% CPU, bilinear scaling)
 
 The **App Launcher** is a visual grid shell deployed by `native_apps/build-and-deploy.sh`.
 It scans manifest files from all projects and displays them as touch-friendly icon tiles.

@@ -28,8 +28,8 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 | `brick_breaker` | Game | Touch / mouse / keys / analog stick for paddle |
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation |
-| `app_launcher` | Launcher | Visual grid launcher — auto-starts on boot, respawns |
-| `game_selector` | Launcher | D-pad grid nav + Enter/A select, legacy text menu |
+| `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
+| `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
 | `hardware_test` | Tool | Diagnostics |
 | `usb_test` | Tool | USB device tester — keyboard, mouse, gamepad visualization |
 | `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s |
@@ -96,7 +96,8 @@ Gamepad button mapping is configurable to support clone/third-party controllers 
 | Brick Breaker | ✅ | ✅ | ✅ | ✅ | Mouse/analog for paddle, full control |
 | SameGame | ✅ | ✅ | ✅ | ✅ | Mouse cursor + hover highlight |
 | Platformer | ✅ | ✅ | — | ✅ | Reference implementation |
-| Game Selector | ✅ | ✅ | — | ✅ | D-pad grid navigation + Enter/A select |
+| App Launcher | ✅ | ✅ | ✅ | ✅ | Grid nav + Enter/A select, 500ms post-launch cooldown |
+| Game Selector | ✅ | ✅ | ✅ | ✅ | D-pad grid nav + Enter/A select + mouse click, 500ms cooldown |
 | USB Test | ✅ | ✅ | ✅ | ✅ | Device diagnostic visualizer |
 
 ### USB Hotplug

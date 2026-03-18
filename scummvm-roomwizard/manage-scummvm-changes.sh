@@ -135,7 +135,19 @@ restore_from_vcs() {
     cp "$ABS_BACKEND_FILES"/*.mk        "$BACKEND_SRC_DIR/" 2>/dev/null || true
     cp "$ABS_BACKEND_FILES"/README.md   "$BACKEND_SRC_DIR/" 2>/dev/null || true
     echo -e "${GREEN}✓ Restored backend files to $BACKEND_SRC_DIR${NC}"
-    
+
+    # Touch all restored source files so their timestamps are strictly newer
+    # than any pre-existing .o files.  Without this, `make` sees the .o as
+    # up-to-date and skips recompilation — the root cause of stale-binary bugs.
+    touch "$BACKEND_SRC_DIR"/*.cpp "$BACKEND_SRC_DIR"/*.h \
+          "$OSS_MIXER_DIR"/*.cpp "$OSS_MIXER_DIR"/*.h 2>/dev/null || true
+    echo -e "${GREEN}✓ Touched source files to invalidate stale object cache${NC}"
+
+    # Delete stale .o files so make is forced to recompile even if timestamps
+    # are unreliable (e.g. on NTFS/WSL clock-skew).
+    rm -f "$BACKEND_SRC_DIR"/*.o "$OSS_MIXER_DIR"/*.o 2>/dev/null || true
+    echo -e "${GREEN}✓ Removed stale .o files from build tree${NC}"
+
     # Restore IMPLEMENTATION_SUCCESS.md if it exists
     if [ -f "$ABS_BACKEND_FILES/IMPLEMENTATION_SUCCESS.md" ]; then
         cp "$ABS_BACKEND_FILES/IMPLEMENTATION_SUCCESS.md" .

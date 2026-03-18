@@ -152,6 +152,12 @@ static void *watchdog_thread_func(void *arg) {
 /* ── LibVNCClient callbacks ────────────────────────────────────────── */
 
 /*
+ * BUG-INPUT-005 FIX: Expected bits-per-pixel.  We always negotiate 32bpp
+ * from the server so the renderer can rely on 4-byte pixels.
+ */
+static const int EXPECTED_BPP = 32;
+
+/*
  * Password callback for VNC authentication (type 2, VncAuth).
  * Returns a malloc'd string that LibVNCClient will free.
  */
@@ -168,9 +174,134 @@ static char *vnc_get_password(rfbClient *client) {
  */
 static void vnc_fb_update(rfbClient *client, int x, int y, int w, int h) {
     int bpp = client->format.bitsPerPixel / 8;
+
+    /*
+     * BUG-INPUT-005 FIX: Guard against processing framebuffer data that
+     * arrives in an unexpected pixel format.  After a server-initiated
+     * format change (e.g. 32→16 bpp when a window closes with Alt+F4),
+     * there may be a brief window where buffered updates still carry the
+     * old (wrong) format before our re-asserted SetPixelFormat takes
+     * effect.  Rendering such data would corrupt the display (quadrupled
+     * image, wrong colours).  Skip these stale updates — a full
+     * FramebufferUpdateRequest has already been sent by vnc_malloc_fb().
+     */
+    if (bpp != EXPECTED_BPP / 8) {
+        LOG_WARN(&g_logger, "BUG-INPUT-005 FIX: Skipping framebuffer update in "
+                 "%dbpp (expected %dbpp) — re-assertion pending",
+                 bpp * 8, EXPECTED_BPP);
+        return;
+    }
+
     vnc_renderer_update_region(&g_renderer,
                                (const uint8_t *)client->frameBuffer,
                                x, y, w, h, bpp);
+}
+
+/*
+ * BUG-INPUT-005 FIX: MallocFrameBuffer callback.
+ *
+ * LibVNCClient invokes this whenever:
+ *   1. The initial connection is established (normal).
+ *   2. The server sends a DesktopSize pseudo-encoding (desktop resize).
+ *   3. The server switches pixel format mid-session.
+ *
+ * Problem scenario:
+ *   When a remote application is closed with Alt+F4, some VNC servers
+ *   (x11vnc, TightVNC, RealVNC) redraw the root window and may drop
+ *   the colour depth to 16-bit.  Without this callback the default
+ *   LibVNCClient handler silently accepts the new format, but the
+ *   renderer still interprets every pixel as 32-bit — causing:
+ *     • Wrong colours (different R/G/B bit layout)
+ *     • Quadrupled image (half the bytes-per-pixel ⇒ stride mismatch)
+ *
+ * Fix:
+ *   1. Always allocate the framebuffer for our expected 32bpp format.
+ *   2. Detect when the server has changed the pixel format and re-send
+ *      SetPixelFormat + SetEncodings to force 32bpp.
+ *   3. If the desktop was resized, update the renderer's scaling LUT.
+ *   4. Request a full non-incremental framebuffer update so the server
+ *      redraws everything in the correct format.
+ */
+static rfbBool vnc_malloc_fb(rfbClient *client) {
+    int width  = client->width;
+    int height = client->height;
+    int bpp    = client->format.bitsPerPixel;
+
+    LOG_INFO(&g_logger, "BUG-INPUT-005 FIX: MallocFrameBuffer called — "
+             "%dx%d %dbpp (expected %dbpp)", width, height, bpp, EXPECTED_BPP);
+
+    /* ── Allocate framebuffer for 32bpp (4 bytes/pixel) regardless of
+     *    what the server announced.  This ensures the renderer always
+     *    has enough space for 32-bit pixel data. ─────────────────────── */
+    size_t fb_size = (size_t)width * height * (EXPECTED_BPP / 8);
+
+    if (client->frameBuffer)
+        free(client->frameBuffer);
+    client->frameBuffer = (uint8_t *)malloc(fb_size);
+    if (!client->frameBuffer) {
+        LOG_ERROR(&g_logger, "Failed to allocate VNC framebuffer (%zu bytes)", fb_size);
+        return FALSE;
+    }
+    memset(client->frameBuffer, 0, fb_size);
+
+    /* ── Detect pixel-format change and re-assert 32bpp ────────────── */
+    bool need_full_update = false;
+
+    if (bpp != EXPECTED_BPP) {
+        LOG_WARN(&g_logger, "BUG-INPUT-005 FIX: Server changed pixel format to "
+                 "%dbpp — forcing back to %dbpp", bpp, EXPECTED_BPP);
+
+        /* Restore our preferred 32bpp format:
+         *   Little-endian, true-colour, 8 bits per channel,
+         *   byte layout R-G-B-X (shifts 0/8/16). */
+        client->format.bitsPerPixel = 32;
+        client->format.depth        = 24;
+        client->format.bigEndian    = FALSE;
+        client->format.trueColour   = TRUE;
+        client->format.redMax       = 255;
+        client->format.greenMax     = 255;
+        client->format.blueMax      = 255;
+        client->format.redShift     = 0;
+        client->format.greenShift   = 8;
+        client->format.blueShift    = 16;
+
+        /* Re-send SetPixelFormat + SetEncodings to the server */
+        SetFormatAndEncodings(client);
+        need_full_update = true;
+    }
+
+    /* ── Handle desktop resize ─────────────────────────────────────── *
+     * BUG-INPUT-005 FIX: Only update renderer/input if they have been
+     * initialized.  The first MallocFrameBuffer call happens inside
+     * rfbInitClient(), before vnc_renderer_init() runs — so g_renderer.fb
+     * is still NULL.  The initial set_remote_size is done by vnc_session()
+     * after rfbInitClient returns.  Subsequent calls (mid-session format
+     * changes or resizes) arrive after init, so g_renderer.fb is valid.  */
+    if (g_renderer.fb != NULL &&
+        (g_renderer.remote_width  != width ||
+         g_renderer.remote_height != height)) {
+        LOG_INFO(&g_logger, "BUG-INPUT-005 FIX: Remote desktop resized from "
+                 "%dx%d to %dx%d — updating renderer",
+                 g_renderer.remote_width, g_renderer.remote_height,
+                 width, height);
+        vnc_renderer_set_remote_size(&g_renderer, width, height);
+
+        /* Update input handler's remote size for mouse clamping */
+        if (g_touch_ok)
+            vnc_input_set_remote_size(&g_input, width, height);
+
+        need_full_update = true;
+    }
+
+    /* ── Request a full (non-incremental) framebuffer update so the
+     *    server redraws everything in our pixel format. ────────────── */
+    if (need_full_update) {
+        LOG_INFO(&g_logger, "BUG-INPUT-005 FIX: Requesting full framebuffer "
+                 "update (%dx%d)", width, height);
+        SendFramebufferUpdateRequest(client, 0, 0, width, height, FALSE);
+    }
+
+    return TRUE;
 }
 
 static rfbBool vnc_cursor_pos(rfbClient *client, int x, int y) {
@@ -191,6 +322,14 @@ static rfbClient *vnc_client_init(const char *host, int port, unsigned int conne
     /* Callbacks */
     client->GotFrameBufferUpdate = vnc_fb_update;
     client->HandleCursorPos      = vnc_cursor_pos;
+
+    /*
+     * BUG-INPUT-005 FIX: Register MallocFrameBuffer callback to intercept
+     * server-initiated pixel format changes and desktop resizes.  Without
+     * this, the default handler silently accepts format changes (e.g.
+     * 32→16 bpp) which corrupts the display.
+     */
+    client->MallocFrameBuffer = vnc_malloc_fb;
 
     /* Password callback - always set, LibVNCClient calls it if server requires auth */
     client->GetPassword = vnc_get_password;

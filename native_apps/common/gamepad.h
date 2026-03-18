@@ -24,8 +24,9 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Maximum devices to scan */
-#define GAMEPAD_MAX_DEVICES 16
+/* Maximum devices to scan — bumped to 32 because USB keyboards/mice are
+   often assigned event numbers >= 16 when built-in devices occupy lower slots */
+#define GAMEPAD_MAX_DEVICES 32
 
 /* Axis dead zone (for analog sticks) — legacy default, now configurable */
 #define GAMEPAD_DEADZONE 200
@@ -50,7 +51,7 @@ extern "C" {
 #define GAMEPAD_MOUSE_HIGH_THRESHOLD_DEFAULT 15
 
 /* Default dead zone as percentage of axis range (0-100) */
-#define GAMEPAD_DEADZONE_PCT_DEFAULT 20
+#define GAMEPAD_DEADZONE_PCT_DEFAULT 25
 
 /* Maximum axes tracked for calibration */
 #define GAMEPAD_MAX_AXES 8

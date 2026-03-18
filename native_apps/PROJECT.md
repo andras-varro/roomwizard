@@ -319,3 +319,77 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - **Phase 7: Device Tools Portrait Fixes Round 2** (2026-03-11) — Portrait mode toggle / backlight button overlap fixed (vertical spacing adjustment).
 
 - **Phase 8: Office Runner Platformer** — sprite-based side-scrolling platformer with gamepad/keyboard/touch input, tile map engine, physics, 3 levels, procedural sprites, high scores.
+
+## Input Device Support Backlog
+
+Test results from the input device support implementation (USB keyboard, mouse, gamepad). All 5 bugs fixed and verified on device. Additional fixes:
+- Brick Breaker paddle redesigned to delta-based mouse input (eliminates center-snapping)
+- Both launchers (app_launcher, game_selector) have 500ms post-launch cooldown to prevent Enter key auto-restart
+
+### BUG-INPUT-001: App Launcher / Game Selector — No keyboard or mouse navigation
+- **Status:** ✅ FIXED
+- **Priority:** HIGH — this is the main launcher, affects all navigation
+- **Symptom:** No mouse or keyboard navigation works whatsoever in the app launcher.
+- **Root Cause Analysis:** The game_selector was refactored from blocking `touch_wait_for_press()` to polling with `gamepad_poll()`, but the keyboard/gamepad navigation may not be reaching the input handler, or the `GamepadManager` isn't finding devices. The blocking→polling refactor may have an issue with the polling loop or device scanning.
+- **Files Involved:** [`game_selector/game_selector.c`](game_selector/game_selector.c), [`app_launcher/app_launcher.c`](app_launcher/app_launcher.c)
+- **Fix Applied:** `game_selector/game_selector.c`: Added mouse click handling via `InputState.mouse_left_pressed` routed through existing `handle_touch()`. `app_launcher/app_launcher.c`: Major rewrite — converted from blocking `touch_wait_for_press()` to non-blocking polling loop at ~30fps; added full `GamepadManager` integration with `gamepad_init()`/`gamepad_poll()`/`gamepad_rescan()`; added keyboard/D-pad grid navigation with visual selection highlight; added mouse click support; touch still works.
+
+### BUG-INPUT-002: Brick Breaker — Paddle springs back to center
+- **Status:** ✅ FIXED
+- **Priority:** HIGH — game is unplayable with gamepad
+- **Symptom:** The paddle moves only a few pixels in either direction and then returns to the center as if held by a spring. Makes the game unplayable.
+- **Root Cause Analysis:** The analog stick input (`axis_lx`) is being used as a velocity/speed value each frame, but the paddle position is likely being reset or overridden by touch input (which defaults to center when no touch). The touch-based paddle positioning may conflict with the keyboard/gamepad velocity-based movement. The paddle may need separate position tracking when using gamepad vs touch.
+- **Files Involved:** [`brick_breaker/brick_breaker.c`](brick_breaker/brick_breaker.c)
+- **Fix Applied:** Mouse absolute positioning now only triggers when `mouse_x`/`mouse_y` has actually changed (tracked via static prev values). An idle mouse no longer overwrites gamepad-driven paddle movement. All four input methods (touch, mouse, analog stick, D-pad/keyboard) now coexist without conflict.
+
+### BUG-INPUT-003: Analog Stick "Gets Stuck" in Multiple Games
+- **Status:** ✅ FIXED
+- **Priority:** HIGH — affects all games with analog stick support
+- **Symptom:** The analog stick appears to get "stuck" in a direction — e.g., in Platformer (Office Runner) it becomes an "automated runner," in Pong the paddle drifts upward or downward constantly, in Tetris and Snake directions get stuck. Using the D-pad unsticks the analog.
+- **Root Cause Analysis:** The gamepad dead zone calibration or center detection in [`common/gamepad.c`](common/gamepad.c) is incorrect. The `AxisCalibration` center auto-detection (reading initial axis value via `EVIOCGABS`) may be reading a non-centered value, or the dead zone percentage (20%) may be too small for the specific controller. The `normalize_axis_calibrated()` function may not properly zero out values within the dead zone. Could also be a specific controller/hardware issue.
+- **Files Involved:** [`common/gamepad.c`](common/gamepad.c) — `normalize_axis_calibrated()`, `AxisCalibration`, dead zone handling; [`common/gamepad.h`](common/gamepad.h)
+- **Affected Games:** Platformer (Office Runner), Pong, Tetris, Snake
+- **Fix Applied:** `common/gamepad.c`: Fixed center calibration in `load_axis_calibration()` — now uses `(info.minimum + info.maximum) / 2` instead of trusting `info.value` from `EVIOCGABS`. Fixed dead zone consistency — stick→D-pad merge now uses `STICK_DPAD_THRESHOLD` (100 on ±1000 scale) on already-calibrated normalized values instead of the raw `GAMEPAD_DEADZONE` constant. `common/gamepad.h`: Increased default dead zone from 20% to 25%.
+
+### BUG-INPUT-004: ScummVM — Keyboard/mouse/gamepad input not working
+- **Status:** ✅ FIXED — Keyboard, mouse cursor, and in-game mouse all verified working on device (EcoQuest, Full Throttle). 12 sub-bugs identified and fixed across two rounds.
+- **Priority:** HIGH — keyboard/mouse is the highest-value feature for point-and-click adventure games
+- **Symptom:** Neither keyboard nor mouse input works in the ScummVM game selector or in games. Gamepad input also non-functional.
+- **Root Cause Analysis:** Multiple compounding bugs across the event source implementation. The most critical was `allowMapping()` returning `false`, which disabled the keymapper for all events — meaning keyboard and gamepad events never reached game engines. Additional bugs in `pollMouse()` and `pollGamepad()` caused accumulated input data to be silently discarded.
+- **Files Involved:** [`roomwizard-events.h`](../scummvm-roomwizard/backend-files/roomwizard-events.h), [`roomwizard-events.cpp`](../scummvm-roomwizard/backend-files/roomwizard-events.cpp), [`gamepad.h`](common/gamepad.h)
+- **Comprehensive Fix (6 sub-bugs + 1 config fix):**
+  - **Sub-bug A (CRITICAL): `allowMapping()` returned `false` for all events** — [`roomwizard-events.h`](../scummvm-roomwizard/backend-files/roomwizard-events.h):44: `RoomWizardEventSource::allowMapping()` returned `false`, telling ScummVM's `DefaultEventManager` to bypass the keymapper for ALL events from this source — including keyboard and gamepad events that engines rely on the keymapper to convert into actions. Fix: Changed to `return true`. Touch events (`MOUSEMOVE`, `LBUTTONDOWN`/`UP`) are not keymapped regardless, so this is safe.
+  - **Sub-bug B (CRITICAL): `pollMouse()` lost accumulated mouse movement when button events were present** — [`roomwizard-events.cpp`](../scummvm-roomwizard/backend-files/roomwizard-events.cpp) in `pollMouse()`: The function drained ALL pending evdev events, accumulating movement into local `accumDx`/`accumDy`. If a button also changed, it returned the button event immediately and the accumulated movement was lost forever (next call finds empty kernel buffer). Fix: Added `flushMouseMovement` lambda that pushes a `MOUSEMOVE` event via `pushEvent()` before returning any button event, ensuring movement is never discarded.
+  - **Sub-bug C (MODERATE): Middle-click handler discarded left/right button changes** — [`roomwizard-events.cpp`](../scummvm-roomwizard/backend-files/roomwizard-events.cpp) in `pollMouse()`: Middle-click handler set `_prevMouseButtons = buttonState` (full state overwrite), making simultaneous left/right changes invisible. Fix: Changed to per-bit update: `_prevMouseButtons |= (1 << 2)` / `_prevMouseButtons &= ~(1 << 2)`.
+  - **Sub-bug D (MODERATE): Left/right click handler also used full state overwrite** — Same file, same function. Fix: Changed to per-bit update for left/right buttons as well.
+  - **Sub-bug E (MODERATE): Gamepad multi-button processing lost subsequent changes** — [`roomwizard-events.cpp`](../scummvm-roomwizard/backend-files/roomwizard-events.cpp) in `pollGamepad()`: `_prevGamepadButtons = buttonState` overwrote full state, losing simultaneous button changes. Fix: Changed to per-bit update.
+  - **Sub-bug F (MODERATE): Device scan logging suppressed by default** — [`roomwizard-events.cpp`](../scummvm-roomwizard/backend-files/roomwizard-events.cpp) in `scanInputDevices()`: Device detection and scan summary used `debug()` requiring `ROOMWIZARD_DEBUG=1` env var. Fix: Changed to `warning()` for device detection and scan summary messages.
+  - **Native apps `GAMEPAD_MAX_DEVICES` bumped 16→32** — [`gamepad.h`](common/gamepad.h): Matched the ScummVM backend's `MAX_EVDEV_DEVICES=32` since USB devices on RoomWizard use event numbers ≥16.
+- **Round 2: Cursor Visibility and In-Game Mouse Fixes (5 sub-bugs):**
+  - **Sub-bug G (CRITICAL): `getScreenChangeID()` always returned 0** — [`roomwizard-graphics.cpp`](../scummvm-roomwizard/backend-files/roomwizard-graphics.cpp) and [`roomwizard-graphics.h`](../scummvm-roomwizard/backend-files/roomwizard-graphics.h): `getScreenChangeID()` returned constant 0. ScummVM's `DefaultEventManager` uses this to detect resolution transitions. After `initSize()`, if the ID doesn't change, ScummVM's internal logic discards mouse events — the primary cause of "mouse doesn't work in-game". Fix: Added `_screenChangeID` member, incremented in `initSize()`, returned by `getScreenChangeID()`.
+  - **Sub-bug H (CRITICAL): `updateScreen()` early-return skipped cursor drawing** — [`roomwizard-graphics.cpp`](../scummvm-roomwizard/backend-files/roomwizard-graphics.cpp): The "O7 optimization" returned before `drawCursor()` and `fb_swap()` when `_screenDirty==false`. The 30fps rate limiter also returned before any rendering. The cursor moves independently of game content. Fix: Added cursor-moved tracking (`_prevDrawnCursorX/Y/Visible`). Rate limiter now checks `needsRedraw` (screen dirty OR cursor moved). Removed the O7 early return — always falls through to `drawCursor()` + `fb_swap()`.
+  - **Sub-bug I (CRITICAL): Cursor position not scaled in game mode** — [`roomwizard-graphics.cpp`](../scummvm-roomwizard/backend-files/roomwizard-graphics.cpp) in `drawCursor()`: `_cursorX`/`_cursorY` contained game coordinates (e.g. 0–319 for 320-wide game) but were drawn at those pixel offsets on the 800×480 framebuffer without scaling. Fix: In game mode, cursor position now scaled: `cursorX = _cursorX * scaledW / _screenWidth + offsetX - _cursorHotspotX`.
+  - **Sub-bug J (MINOR): 16bpp cursor format not handled** — [`roomwizard-graphics.cpp`](../scummvm-roomwizard/backend-files/roomwizard-graphics.cpp) in `drawCursor()`: Pixel reading code only handled bytesPerPixel==1 (CLUT8) and assumed 4 bytes for everything else. 16bpp cursors read garbage. Fix: Added `bytesPerPixel == 2` branch with proper `uint16` reading and `colorToARGB()` conversion.
+  - **Sub-bug K (BUILD): `closeFramebuffer()` was private** — [`roomwizard-graphics.h`](../scummvm-roomwizard/backend-files/roomwizard-graphics.h): `closeFramebuffer()` declared private but called from `roomwizard.cpp::quit()`. Fix: Moved to public section alongside `blankScreen()`.
+- **Previously Applied Partial Fixes (still in place):**
+  - `MAX_EVDEV_DEVICES` 16→32
+  - Stale errno cleared before each read loop
+  - Analog stick center calibration uses computed midpoint
+  - Permission failure logging added
+  - Device scan summary logging added
+
+### BUG-INPUT-005: VNC Client — Color mode corruption after Alt+F4
+- **Status:** ✅ FIXED
+- **Priority:** MEDIUM — cosmetic/recovery issue, only happens on specific remote desktop events
+- **Symptom:** When closing a remote application with Alt+F4, the remote desktop redraws in 16-bit color mode. The screen shows quadrupled content (four quarters showing the same image) in wrong colors. Restarting the closed app does not fix the color mode.
+- **Root Cause Analysis:** The remote VNC server (x11vnc) may be switching pixel format/color depth when the window manager redraws after a window close. The VNC client's renderer expects a fixed pixel format (BGR 32-bit or similar) and doesn't handle server-initiated pixel format changes. The "quadrupled" effect suggests the server switched to 16-bit (half the bytes per pixel), causing the client to interpret the data with the wrong stride/format.
+- **Files Involved:** [`vnc_client.c`](../vnc_client/vnc_client.c)
+- **Fix Applied:** Added `vnc_malloc_fb()` callback registered as `client->MallocFrameBuffer` to intercept all framebuffer reallocation events. Always allocates 32bpp buffer and re-asserts pixel format via `SetFormatAndEncodings()` when server attempts to switch. Added bpp guard in `vnc_fb_update()` to discard stale updates in wrong format.
+
+### Completed Input Device Features
+The following input device features have been tested and verified working:
+- ✅ **Frogger** — Keyboard and gamepad (D-pad) feel great
+- ✅ **SameGame** — Mouse works great with highlight and crosshair cursor
+- ✅ **Tetris** — Keyboard works great, gamepad D-pad works great
+- ✅ **Snake** — Keyboard and D-pad feel great
+- ✅ **VNC Client** — Mouse and keyboard forwarding works

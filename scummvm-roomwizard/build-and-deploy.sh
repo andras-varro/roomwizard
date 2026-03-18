@@ -191,9 +191,23 @@ configure_build() {
     fi
 }
 
+# Restore backend source files from version control into the build tree.
+# This ensures the build tree always reflects our latest edits.
+# It also touches sources and removes stale .o files so make will recompile.
+restore_backend_files() {
+    log_info "Restoring backend files into build tree..."
+    bash "$SCRIPT_DIR/manage-scummvm-changes.sh" restore
+    log_success "Backend files restored and stale objects invalidated"
+}
+
 # Build ScummVM
 build_scummvm() {
     log_info "Building ScummVM..."
+    
+    # Always sync latest backend sources into the build tree before compiling.
+    # manage-scummvm-changes.sh restore also touches sources and removes stale
+    # .o files, so make will recompile any changed backend files.
+    restore_backend_files
     
     cd "$SCUMMVM_DIR"
     

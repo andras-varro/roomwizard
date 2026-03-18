@@ -37,11 +37,12 @@ public:
 	bool pollEvent(Common::Event &event) override;
 	
 	/**
-	 * Disable keymapper processing for touch events.
-	 * Touch input should pass through directly without remapping.
-	 * This ensures LBUTTONDOWN/UP events reach the GUI/engine.
+	 * Allow keymapper processing for events from this source.
+	 * ScummVM engines and GUI rely on the keymapper to convert keyboard
+	 * and gamepad events into actions.  Touch events (MOUSEMOVE,
+	 * LBUTTONDOWN/UP) are not keymapped anyway, so returning true is safe.
 	 */
-	bool allowMapping() const override { return false; }
+	bool allowMapping() const override { return true; }
 
 	// Set game screen dimensions for coordinate transformation
 	void setGameScreenSize(int width, int height, int offsetX, int offsetY);
@@ -131,7 +132,9 @@ private:
 	// Periodic rescan timer
 	uint32 _lastDeviceScan;
 	static const uint32 DEVICE_SCAN_INTERVAL = 5000; // 5 seconds
-	static const int MAX_EVDEV_DEVICES = 16;
+	// BUG-INPUT-004 FIX: Increased from 16 to 32 — USB keyboards/mice are often
+	// assigned event numbers >= 16 when built-in devices occupy the lower slots.
+	static const int MAX_EVDEV_DEVICES = 32;
 
 	// -------------------------------------------------------
 	// USB Keyboard support

@@ -219,7 +219,14 @@ void RoomWizardEventSource::scanInputDevices() {
 		snprintf(path, sizeof(path), "/dev/input/event%d", i);
 
 		int fd = open(path, O_RDONLY | O_NONBLOCK);
-		if (fd < 0) continue;
+		if (fd < 0) {
+			// BUG-INPUT-004 FIX: Log permission errors so we can diagnose
+			// "no input" issues caused by /dev/input/event* permissions.
+			if (errno == EACCES || errno == EPERM) {
+				warning("RoomWizard: cannot open %s — permission denied (run as root or add to 'input' group)", path);
+			}
+			continue;
+		}
 
 		name[0] = '\0';
 		ioctl(fd, EVIOCGNAME(sizeof(name)), name);
@@ -236,13 +243,13 @@ void RoomWizardEventSource::scanInputDevices() {
 		if (type == DEV_GAMEPAD && _gamepadFd < 0) {
 			_gamepadFd = fd;
 			loadGamepadAxisCalibration();
-			debug("RoomWizard: found gamepad '%s' at %s", name, path);
+			warning("RoomWizard: Detected gamepad '%s' at %s", name, path);
 		} else if (type == DEV_KEYBOARD && _keyboardFd < 0) {
 			_keyboardFd = fd;
-			debug("RoomWizard: found keyboard '%s' at %s", name, path);
+			warning("RoomWizard: Detected keyboard '%s' at %s", name, path);
 		} else if (type == DEV_MOUSE && _mouseFd < 0) {
 			_mouseFd = fd;
-			debug("RoomWizard: found mouse '%s' at %s", name, path);
+			warning("RoomWizard: Detected mouse '%s' at %s", name, path);
 		} else {
 			close(fd);
 		}
@@ -250,6 +257,13 @@ void RoomWizardEventSource::scanInputDevices() {
 		if (_gamepadFd >= 0 && _keyboardFd >= 0 && _mouseFd >= 0)
 			break;
 	}
+
+	// BUG-INPUT-004 FIX: Log a summary after scanning so we know what was
+	// found (or not found).  This is essential for diagnosing "no input" issues.
+	warning("RoomWizard: device scan complete — keyboard=%s mouse=%s gamepad=%s",
+	      (_keyboardFd >= 0 ? "YES" : "no"),
+	      (_mouseFd >= 0    ? "YES" : "no"),
+	      (_gamepadFd >= 0  ? "YES" : "no"));
 }
 
 void RoomWizardEventSource::closeInputDevices() {
@@ -265,8 +279,12 @@ void RoomWizardEventSource::loadGamepadAxisCalibration() {
 	if (ioctl(_gamepadFd, EVIOCGABS(_gamepadMap.stickXAxis), &info) == 0) {
 		_gamepadAxisMin = info.minimum;
 		_gamepadAxisMax = info.maximum;
-		_gamepadAxisCenter = info.value;
-		debug("RoomWizard: gamepad axis range [%d..%d], center=%d",
+		// BUG-INPUT-004 FIX: Use computed midpoint instead of info.value.
+		// info.value is the stick position at the moment of the ioctl call;
+		// if the stick is not perfectly centered the cursor will drift.
+		// Same fix pattern as BUG-INPUT-003 in native_apps gamepad.c.
+		_gamepadAxisCenter = (info.minimum + info.maximum) / 2;
+		debug("RoomWizard: gamepad axis range [%d..%d], center=%d (computed midpoint)",
 		      _gamepadAxisMin, _gamepadAxisMax, _gamepadAxisCenter);
 	}
 }
@@ -612,6 +630,10 @@ RoomWizardEventSource::KeyMapping RoomWizardEventSource::mapLinuxKey(int linuxKe
 bool RoomWizardEventSource::pollKeyboard(Common::Event &event) {
 	if (_keyboardFd < 0) return false;
 
+	// BUG-INPUT-004 FIX: Clear errno before the read loop so stale values
+	// (e.g. EAGAIN from a previous poll) don't trigger false disconnect detection.
+	errno = 0;
+
 	struct input_event ev;
 	while (read(_keyboardFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
 		if (ev.type != EV_KEY) continue;
@@ -665,6 +687,10 @@ bool RoomWizardEventSource::pollKeyboard(Common::Event &event) {
 bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 	if (_mouseFd < 0) return false;
 
+	// BUG-INPUT-004 FIX: Clear errno before read loop — stale errno from
+	// prior system calls could cause false disconnect detection below.
+	errno = 0;
+
 	struct input_event ev;
 	int accumDx = 0, accumDy = 0;
 	int buttonChanges = 0;
@@ -693,6 +719,39 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 		_mouseFd = -1;
 		return false;
 	}
+
+	// BUG-INPUT-004 FIX: Helper to flush accumulated mouse movement into the
+	// pending event queue before returning a button event.  Without this,
+	// movement accumulated during the same read batch as a button change would
+	// be lost because the local accumDx/accumDy variables are discarded on return.
+	auto flushMouseMovement = [&]() {
+		if (accumDx == 0 && accumDy == 0) return;
+		float speed = sqrtf((float)(accumDx * accumDx + accumDy * accumDy));
+		float multiplier;
+		if (speed < (float)_mouseLowThreshold)
+			multiplier = 1.0f;
+		else if (speed < (float)_mouseHighThreshold)
+			multiplier = _mouseSensitivity;
+		else
+			multiplier = _mouseSensitivity * _mouseAcceleration;
+		int mx = _mouseX + (int)(accumDx * multiplier);
+		int my = _mouseY + (int)(accumDy * multiplier);
+		if (mx < 0) mx = 0;
+		if (mx >= 800) mx = 799;
+		if (my < 0) my = 0;
+		if (my >= 480) my = 479;
+		_mouseX = mx;
+		_mouseY = my;
+		int gmx, gmy;
+		transformCoordinates(_mouseX, _mouseY, gmx, gmy);
+		Common::Event moveEv;
+		moveEv.type = Common::EVENT_MOUSEMOVE;
+		moveEv.mouse.x = gmx;
+		moveEv.mouse.y = gmy;
+		pushEvent(moveEv);
+		accumDx = 0;
+		accumDy = 0;
+	};
 
 	// Button changes have priority
 	for (int bit = 0; bit < 3; bit++) {
@@ -724,7 +783,10 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 				pushEvent(f5Up);
 				pushEvent(ctrlUp);
 			}
-			_prevMouseButtons = buttonState;
+			// BUG-INPUT-004 FIX: Only update bit 2 so other button changes
+			// in the same batch are not masked.
+			if (nowDown) _prevMouseButtons |= (1 << 2);
+			else         _prevMouseButtons &= ~(1 << 2);
 			continue;
 		}
 
@@ -738,7 +800,13 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 
 		event.mouse.x = gameX;
 		event.mouse.y = gameY;
-		_prevMouseButtons = buttonState;
+		// BUG-INPUT-004 FIX: Only update the specific bit so other button
+		// changes in the same batch are not masked.
+		if (nowDown) _prevMouseButtons |= (1 << bit);
+		else         _prevMouseButtons &= ~(1 << bit);
+		// BUG-INPUT-004 FIX: Flush any accumulated movement before returning
+		// the button event, so movement is not lost.
+		flushMouseMovement();
 		return true;
 	}
 	_prevMouseButtons = buttonState;
@@ -780,6 +848,10 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 
 bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 	if (_gamepadFd < 0) return false;
+
+	// BUG-INPUT-004 FIX: Clear errno before read loop — stale errno from
+	// prior system calls could cause false disconnect detection below.
+	errno = 0;
 
 	struct input_event ev;
 	int buttonChanges = 0;
@@ -826,7 +898,10 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		bool wasDown = (_prevGamepadButtons & (1 << bit)) != 0;
 		if (nowDown == wasDown) continue;
 
-		_prevGamepadButtons = buttonState;
+		// BUG-INPUT-004 FIX: Only update the specific bit so other button
+		// changes in the same batch are not masked.
+		if (nowDown) _prevGamepadButtons |= (1 << bit);
+		else         _prevGamepadButtons &= ~(1 << bit);
 
 		switch (bit) {
 		case 0: { // South (A) -> left click

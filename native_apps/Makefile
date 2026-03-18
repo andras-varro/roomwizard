@@ -117,7 +117,7 @@ $(BUILD_DIR)/game_selector: game_selector.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ)
 	@echo "Built: game_selector"
 
 # App launcher
-$(BUILD_DIR)/app_launcher: app_launcher/app_launcher.c $(COMMON_OBJ)
+$(BUILD_DIR)/app_launcher: app_launcher/app_launcher.c $(COMMON_OBJ) $(COMMON_GAMEPAD_OBJ) $(COMMON_CONFIG_OBJ)
 	$(CC) $(CFLAGS) -I. $^ -o $@ $(LDFLAGS)
 	@echo "Built: app_launcher"
 

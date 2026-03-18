@@ -146,8 +146,15 @@ static void load_axis_calibration(GamepadManager *gm) {
             gm->axis_max[i]  = info.maximum;
             gm->axis_flat[i] = info.flat;
 
-            /* Auto-calibrate center from initial reported value */
-            gm->axis_calib[i].center = info.value;
+            /* BUG-INPUT-003 FIX: Compute center as midpoint of the axis range
+             * instead of trusting info.value from EVIOCGABS.  The kernel reports
+             * info.value as the *current* axis position at device-open time —
+             * if the stick isn't perfectly centered (e.g. user is touching it,
+             * or cheap analog has drift), this reads a non-centered value as
+             * "center", causing permanent directional drift in all games.
+             * The axis range (minimum/maximum) is always correct, so the
+             * geometric midpoint is a far more reliable center reference. */
+            gm->axis_calib[i].center = (info.minimum + info.maximum) / 2;
         } else {
             gm->axis_min[i]  = 0;
             gm->axis_max[i]  = 0;
@@ -168,7 +175,7 @@ static int normalize_axis_calibrated(int value, int min_val, int max_val,
     int half_range = (max_val - min_val) / 2;
     if (half_range == 0) return 0;
 
-    /* Use calibrated center instead of simple midpoint */
+    /* Use calibrated center (midpoint of axis range — see load_axis_calibration) */
     int offset = value - center;
 
     /* Compute dead zone in raw axis units */
@@ -622,15 +629,31 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
         }
     }
 
-    /* Left stick → D-pad merging (use computed deadzone) */
-    if (state->axis_lx < -GAMEPAD_DEADZONE)
+    /* BUG-INPUT-003 FIX: Left stick → D-pad merging using normalized values.
+     *
+     * The normalized axis values from normalize_axis_calibrated() already have
+     * the calibrated dead zone applied — they return exactly 0 when the stick
+     * is within the dead zone.  The old code compared against the legacy
+     * GAMEPAD_DEADZONE (200) constant on the ±1000 normalized scale, which was
+     * inconsistent with the calibrated dead zone and could cause the stick to
+     * appear "stuck" in a direction (the calibrated normalizer thought the
+     * stick was deflected while the D-pad merge threshold disagreed, or vice
+     * versa).
+     *
+     * We now use a small threshold (100 on the ±1000 scale, i.e. 10%) on the
+     * already-dead-zoned normalized value.  This provides a consistent
+     * behaviour: any stick deflection that survives the calibrated dead zone
+     * and exceeds this small activation threshold triggers the D-pad button. */
+    #define STICK_DPAD_THRESHOLD 100  /* 10% of normalized ±1000 range */
+
+    if (state->axis_lx < -STICK_DPAD_THRESHOLD)
         state->buttons[BTN_ID_LEFT].held = true;
-    else if (state->axis_lx > GAMEPAD_DEADZONE)
+    else if (state->axis_lx > STICK_DPAD_THRESHOLD)
         state->buttons[BTN_ID_RIGHT].held = true;
 
-    if (state->axis_ly < -GAMEPAD_DEADZONE)
+    if (state->axis_ly < -STICK_DPAD_THRESHOLD)
         state->buttons[BTN_ID_UP].held = true;
-    else if (state->axis_ly > GAMEPAD_DEADZONE)
+    else if (state->axis_ly > STICK_DPAD_THRESHOLD)
         state->buttons[BTN_ID_DOWN].held = true;
 }
 

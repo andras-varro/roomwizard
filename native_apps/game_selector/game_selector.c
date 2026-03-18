@@ -26,6 +26,13 @@
 #define EXIT_BUTTON_HEIGHT 60
 #define RESCAN_INTERVAL_MS 5000
 
+/* Post-launch cooldown: ignore ALL input (gamepad, touch, mouse) for this
+ * many milliseconds after returning from a child process.  This prevents
+ * auto-relaunch caused by stale/repeat key events, resistive touch noise,
+ * or race conditions in the drain loop.  500 ms is long enough for any
+ * held key to stop generating repeats, but short enough to feel instant. */
+#define LAUNCH_COOLDOWN_MS 500
+
 /* Selection highlight border */
 #define HIGHLIGHT_COLOR     RGB(0, 220, 255)
 #define HIGHLIGHT_BORDER    3
@@ -47,6 +54,7 @@ typedef struct {
     GamepadManager gamepad;
     InputState input;
     uint32_t last_rescan_ms;
+    uint32_t last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
 } GameSelector;
 
 // Scan directory for executable games
@@ -384,8 +392,41 @@ int launch_game(GameSelector *selector, int game_index, const char *fb_dev, cons
         // Re-init gamepad after game exits
         gamepad_init(&selector->gamepad);
 
+        // Wait-for-release drain: prevent auto-relaunch from held Enter/A.
+        //
+        // After gamepad_init(), prev_held[] is zeroed.  If the launch button
+        // (Enter or A) is still physically held, evdev key-repeat events keep
+        // arriving.  Simply doing two dummy polls with separate zeroed
+        // InputStates can leave prev_held in an inconsistent state: if the
+        // second dummy poll sees no new events its InputState stays held=false,
+        // flipping prev_held back to false — then the first REAL poll reads a
+        // repeat event and sees a false "pressed" edge, re-launching the app.
+        //
+        // Fix: use a single persistent InputState across a polling loop so
+        // that the held flag accurately tracks the physical key state (set by
+        // key-down/repeat, cleared only by key-up).  Loop until all launch
+        // buttons are released (or a 2-second safety timeout expires).
+        {
+            InputState drain;
+            memset(&drain, 0, sizeof(drain));
+            int safety = 0;
+            do {
+                gamepad_poll(&selector->gamepad, &drain, 0, 0, false);
+                usleep(16000);  // ~60 fps
+                safety++;
+            } while ((drain.buttons[BTN_ID_JUMP].held ||
+                      drain.buttons[BTN_ID_ACTION].held) && safety < 120);
+        }
+        // Zero the main input state so no stale held flags carry over
+        memset(&selector->input, 0, sizeof(selector->input));
+
         hw_reload_config();  /* Re-read config in case child app changed it */
         hw_set_backlight(100);  /* Restore configured backlight after game exits */
+
+        /* Record return time — main loop will ignore ALL input for
+         * LAUNCH_COOLDOWN_MS after this, as defense-in-depth against
+         * stale events from any source (keyboard, touch, mouse). */
+        selector->last_launch_return_ms = get_time_ms();
         
         return 0;
     } else {
@@ -433,6 +474,7 @@ int main(int argc, char *argv[]) {
     gamepad_init(&selector.gamepad);
     memset(&selector.input, 0, sizeof(selector.input));
     selector.last_rescan_ms = 0;
+    selector.last_launch_return_ms = 0;
     
     // Scan for available games
     if (scan_games(&selector) <= 0) {
@@ -471,6 +513,22 @@ int main(int argc, char *argv[]) {
             gamepad_rescan(&selector.gamepad);
         }
 
+        /* ── Post-launch cooldown ──────────────────────────────────────
+         * After returning from a child process, ignore ALL input for
+         * LAUNCH_COOLDOWN_MS.  This is the primary defense against
+         * auto-relaunch caused by:
+         *   (a) Keyboard repeat events slipping through the drain loop
+         *   (b) Resistive touchscreen noise generating a false press
+         *   (c) Mouse button bounce after returning from child
+         * The drain loop above is kept as an additional safety layer. */
+        if (selector.last_launch_return_ms &&
+            (current_time - selector.last_launch_return_ms) < LAUNCH_COOLDOWN_MS) {
+            /* Still in cooldown — draw menu but skip all input handling */
+            draw_menu(&selector);
+            usleep(16667);
+            continue;
+        }
+
         // Handle touch input
         if (state.pressed) {
             printf("Touch at: (%d,%d)\n", state.x, state.y);
@@ -484,6 +542,20 @@ int main(int argc, char *argv[]) {
             } else if (result == -2) {
                 // Exit button pressed
                 printf("Exiting game selector\n");
+                running = 0;
+            }
+        }
+
+        // Handle mouse click (from USB mouse via gamepad module)
+        if (selector.input.mouse_left_pressed) {
+            printf("Mouse click at: (%d,%d)\n", selector.input.mouse_x, selector.input.mouse_y);
+            int result = handle_touch(&selector, selector.input.mouse_x, selector.input.mouse_y, current_time);
+            printf("Mouse result: %d\n", result);
+
+            if (result >= 0) {
+                launch_game(&selector, result, fb_device, touch_device);
+            } else if (result == -2) {
+                printf("Exiting game selector (mouse)\n");
                 running = 0;
             }
         }

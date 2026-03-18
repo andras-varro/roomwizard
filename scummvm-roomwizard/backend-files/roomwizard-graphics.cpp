@@ -47,6 +47,7 @@
 RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	: _fb(nullptr),
 	  _fbInitialized(false),
+	  _screenChangeID(0),
 	  _screenWidth(0),
 	  _screenHeight(0),
 	  _screenFormat(Graphics::PixelFormat::createFormatCLUT8()),
@@ -60,6 +61,9 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _cursorVisible(false),
 	  _cursorDontScale(false),
 	  _cursorPaletteEnabled(false),
+	  _prevDrawnCursorX(-1),
+	  _prevDrawnCursorY(-1),
+	  _prevDrawnCursorVisible(false),
 	  _overlayVisible(false),
 	  _shakeXOffset(0),
 	  _shakeYOffset(0),
@@ -68,7 +72,7 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _bezelLeft(0),
 	  _bezelRight(0),
 	  _touchPointIndex(0) {
-	
+
 	memset(_palette, 0, sizeof(_palette));
 	memset(_palette32, 0, sizeof(_palette32));
 	memset(_cursorPalette, 0, sizeof(_cursorPalette));
@@ -197,10 +201,13 @@ bool RoomWizardGraphicsManager::hasFeature(OSystem::Feature f) const {
 }
 
 void RoomWizardGraphicsManager::setFeatureState(OSystem::Feature f, bool enable) {
-	// No dynamic features to enable/disable
+	if (f == OSystem::kFeatureCursorPalette)
+		_cursorPaletteEnabled = enable;
 }
 
 bool RoomWizardGraphicsManager::getFeatureState(OSystem::Feature f) const {
+	if (f == OSystem::kFeatureCursorPalette)
+		return _cursorPaletteEnabled;
 	return false;
 }
 
@@ -221,12 +228,12 @@ Common::List<Graphics::PixelFormat> RoomWizardGraphicsManager::getSupportedForma
 
 void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics::PixelFormat *format) {
 	debug("initSize: %dx%d", width, height);
-	
+
 	initFramebuffer();
-	
+
 	_screenWidth = width;
 	_screenHeight = height;
-	
+
 	if (format) {
 		_screenFormat = *format;
 	} else {
@@ -235,12 +242,12 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 
 	// Allocate game surface
 	_gameSurface.create(width, height, _screenFormat);
-	
+
 	// Allocate overlay surface (same size as framebuffer for GUI)
 	_overlaySurface.create(800, 480, Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
 	// Pre-fill with transparent key so any stale pixels stay transparent
 	{ uint16 *p = (uint16 *)_overlaySurface.getPixels(); for (int i = 0; i < 800*480; i++) p[i] = 0xF81F; }
-	
+
 	// Notify event source of new game resolution (needed for coordinate transform)
 	{
 		int scaledW, scaledH, offX, offY;
@@ -251,11 +258,15 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 		}
 	}
 
+	// Fix 1: Increment screen change ID so ScummVM detects the mode transition.
+	// Without this, DefaultEventManager may discard mouse events after initSize().
+	_screenChangeID++;
+
 	_screenDirty = true;
 }
 
 int RoomWizardGraphicsManager::getScreenChangeID() const {
-	return 0;
+	return _screenChangeID;
 }
 
 void RoomWizardGraphicsManager::beginGFXTransaction() {
@@ -320,7 +331,7 @@ uint32 RoomWizardGraphicsManager::convertColor(uint32 color, const Graphics::Pix
 	}
 }
 
-void RoomWizardGraphicsManager::copyRectToSurface(Graphics::Surface &dst, const void *buf, 
+void RoomWizardGraphicsManager::copyRectToSurface(Graphics::Surface &dst, const void *buf,
                                                    int pitch, int x, int y, int w, int h,
                                                    const Graphics::PixelFormat &srcFormat) {
 	if (x < 0 || y < 0 || x + w > dst.w || y + h > dst.h) {
@@ -329,7 +340,7 @@ void RoomWizardGraphicsManager::copyRectToSurface(Graphics::Surface &dst, const 
 	}
 
 	const byte *src = (const byte *)buf;
-	
+
 	if (srcFormat == dst.format) {
 		// Direct copy
 		for (int row = 0; row < h; row++) {
@@ -347,16 +358,16 @@ void RoomWizardGraphicsManager::copyRectToSurface(Graphics::Surface &dst, const 
 				} else {
 					srcColor = *(const uint32 *)(src + row * pitch + col * 4);
 				}
-				
+
 				uint32 dstColor = convertColor(srcColor, srcFormat);
-				
+
 				if (dst.format.bytesPerPixel == 4) {
 					*(uint32 *)dst.getBasePtr(x + col, y + row) = dstColor;
 				} else if (dst.format.bytesPerPixel == 2) {
 					byte r = (dstColor >> 16) & 0xFF;
 					byte g = (dstColor >> 8) & 0xFF;
 					byte b = dstColor & 0xFF;
-					*(uint16 *)dst.getBasePtr(x + col, y + row) = 
+					*(uint16 *)dst.getBasePtr(x + col, y + row) =
 						((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 				}
 			}
@@ -387,7 +398,7 @@ void RoomWizardGraphicsManager::fillScreen(uint32 col) {
 		return;
 
 	uint32 color = convertColor(col, _screenFormat);
-	
+
 	if (_gameSurface.format.bytesPerPixel == 4) {
 		uint32 *pixels = (uint32 *)_gameSurface.getPixels();
 		for (int i = 0; i < _gameSurface.w * _gameSurface.h; i++) {
@@ -405,7 +416,7 @@ void RoomWizardGraphicsManager::fillScreen(uint32 col) {
 			pixels[i] = (byte)col;
 		}
 	}
-	
+
 	_screenDirty = true;
 }
 
@@ -414,7 +425,7 @@ void RoomWizardGraphicsManager::fillScreen(const Common::Rect &r, uint32 col) {
 		return;
 
 	uint32 color = convertColor(col, _screenFormat);
-	
+
 	for (int y = r.top; y < r.bottom; y++) {
 		if (_gameSurface.format.bytesPerPixel == 4) {
 			uint32 *row = (uint32 *)_gameSurface.getBasePtr(r.left, y);
@@ -434,7 +445,7 @@ void RoomWizardGraphicsManager::fillScreen(const Common::Rect &r, uint32 col) {
 			}
 		}
 	}
-	
+
 	_screenDirty = true;
 }
 
@@ -574,19 +585,21 @@ void RoomWizardGraphicsManager::drawCursor() {
 	if (!_cursorVisible || !_cursorSurface.getPixels() || !_fb)
 		return;
 
-	// Calculate centering offsets only if overlay is NOT visible
-	int offsetX = 0;
-	int offsetY = 0;
-	
-	if (!_overlayVisible) {
-		// Game mode - apply bezel-aware scaled offset
-		int scaledW, scaledH;
+	// Fix 3: Scale cursor position from game coordinates to framebuffer coordinates
+	// when in game mode. In overlay mode, cursor coords are already in screen space.
+	int cursorX, cursorY;
+	if (!_overlayVisible && _screenWidth > 0 && _screenHeight > 0) {
+		// Game mode: _cursorX/_cursorY are in game coords (e.g. 0-319 for 320-wide).
+		// We must scale them to the framebuffer's scaled region.
+		int scaledW, scaledH, offsetX, offsetY;
 		getScalingInfo(scaledW, scaledH, offsetX, offsetY);
+		cursorX = _cursorX * scaledW / (int)_screenWidth + offsetX - _cursorHotspotX;
+		cursorY = _cursorY * scaledH / (int)_screenHeight + offsetY - _cursorHotspotY;
+	} else {
+		// Overlay mode: cursor coordinates are already in screen space
+		cursorX = _cursorX - _cursorHotspotX;
+		cursorY = _cursorY - _cursorHotspotY;
 	}
-	// Overlay mode - no offset, cursor coordinates are already in screen space
-
-	int cursorX = _cursorX + offsetX - _cursorHotspotX;
-	int cursorY = _cursorY + offsetY - _cursorHotspotY;
 
 	uint16 *buf16 = (uint16 *)_fb->back_buffer;
 
@@ -610,6 +623,15 @@ void RoomWizardGraphicsManager::drawCursor() {
 				r = pal[index * 3 + 0];
 				g = pal[index * 3 + 1];
 				b = pal[index * 3 + 2];
+			} else if (_cursorSurface.format.bytesPerPixel == 2) {
+				// Fix 4: Handle 16bpp cursor format properly.
+				// Reading 4 bytes for a 2bpp cursor causes memory corruption.
+				uint16 pixel = *(const uint16 *)_cursorSurface.getBasePtr(x, y);
+				if ((uint32)pixel == _cursorKeyColor)
+					continue;
+
+				byte a;
+				_cursorSurface.format.colorToARGB(pixel, a, r, g, b);
 			} else {
 				uint32 pixel = *(const uint32 *)_cursorSurface.getBasePtr(x, y);
 				if (pixel == _cursorKeyColor)
@@ -632,6 +654,26 @@ void RoomWizardGraphicsManager::updateScreen() {
 		return;
 	}
 
+	// Fix 2: Restructured update loop.  The cursor moves independently of
+	// game content, so we must never skip drawCursor() or fb_swap().
+	// We still rate-limit to ~30 fps, but check whether the cursor moved
+	// to force a redraw even when the game surface is clean.
+
+	// FIRST: sync cursor position from event manager so cursorMoved
+	// detection below uses the CURRENT position, not the stale one.
+	if (g_system && g_system->getEventManager()) {
+		Common::Point mousePos = g_system->getEventManager()->getMousePos();
+		_cursorX = mousePos.x;
+		_cursorY = mousePos.y;
+	}
+
+	// Detect whether the cursor changed since the last drawn frame
+	bool cursorMoved = (_cursorX != _prevDrawnCursorX ||
+	                    _cursorY != _prevDrawnCursorY ||
+	                    _cursorVisible != _prevDrawnCursorVisible);
+
+	bool needsRedraw = _screenDirty || _overlayVisible || cursorMoved;
+
 	// Cap at 30 fps (~33 ms) to avoid burning the 300 MHz ARM CPU.
 	// The game list GUI calls updateScreen() hundreds of times per second
 	// without this guard, saturating the single core.
@@ -650,7 +692,7 @@ void RoomWizardGraphicsManager::updateScreen() {
 	} else {
 		long _elapsedUs = (_now.tv_sec - _lastFrame.tv_sec) * 1000000L
 		                + (_now.tv_usec - _lastFrame.tv_usec);
-		if (_elapsedUs > 0 && _elapsedUs < 33333L)
+		if (!needsRedraw && _elapsedUs > 0 && _elapsedUs < 33333L)
 			return;
 		_lastFrame = _now;
 	}
@@ -676,12 +718,12 @@ void RoomWizardGraphicsManager::updateScreen() {
 				obuf16[y * 800 + x] = pixel;
 			}
 		}
-	} else if (_screenDirty) {
+	} else {
+		// Always re-blit the game surface.  Even when _screenDirty is false
+		// we need to erase the previous cursor position before drawing the
+		// cursor at its new location.
 		blitGameSurfaceToFramebuffer();
 		_screenDirty = false;
-	} else {
-		// (O7) Nothing changed — skip cursor draw and fb_swap entirely
-		return;
 	}
 
 	// Draw touch feedback (debug mode only: set ROOMWIZARD_DEBUG=1)
@@ -690,6 +732,11 @@ void RoomWizardGraphicsManager::updateScreen() {
 
 	// Draw cursor on top
 	drawCursor();
+
+	// Update previous cursor state for next frame's dirty check
+	_prevDrawnCursorX = _cursorX;
+	_prevDrawnCursorY = _cursorY;
+	_prevDrawnCursorVisible = _cursorVisible;
 
 	// Swap buffers
 	fb_swap(_fb);
@@ -770,8 +817,8 @@ void RoomWizardGraphicsManager::warpMouse(int x, int y) {
 	_cursorY = y;
 }
 
-void RoomWizardGraphicsManager::setMouseCursor(const void *buf, uint w, uint h, 
-                                                int hotspotX, int hotspotY, 
+void RoomWizardGraphicsManager::setMouseCursor(const void *buf, uint w, uint h,
+                                                int hotspotX, int hotspotY,
                                                 uint32 keycolor, bool dontScale,
                                                 const Graphics::PixelFormat *format,
                                                 const byte *mask) {
@@ -781,7 +828,7 @@ void RoomWizardGraphicsManager::setMouseCursor(const void *buf, uint w, uint h,
 	_cursorDontScale = dontScale;
 
 	Graphics::PixelFormat cursorFormat = format ? *format : Graphics::PixelFormat::createFormatCLUT8();
-	
+
 	_cursorSurface.create(w, h, cursorFormat);
 	memcpy(_cursorSurface.getPixels(), buf, w * h * cursorFormat.bytesPerPixel);
 }
@@ -798,61 +845,61 @@ void RoomWizardGraphicsManager::setCursorPalette(const byte *colors, uint start,
 
 void RoomWizardGraphicsManager::addTouchPoint(int x, int y) {
 	uint32 currentTime = g_system->getMillis();
-	
+
 	// Add new touch point
 	_touchPoints[_touchPointIndex].x = x;
 	_touchPoints[_touchPointIndex].y = y;
 	_touchPoints[_touchPointIndex].timestamp = currentTime;
 	_touchPoints[_touchPointIndex].active = true;
-	
+
 	_touchPointIndex = (_touchPointIndex + 1) % MAX_TOUCH_POINTS;
 }
 
 void RoomWizardGraphicsManager::drawTouchFeedback() {
 	if (!_fb)
 		return;
-	
+
 	uint16 *buf16 = (uint16 *)_fb->back_buffer;
 	uint32 currentTime = g_system->getMillis();
 	const uint32 FADE_TIME = 1000; // 1 second fade
-	
+
 	// Draw circles for recent touch points
 	for (int i = 0; i < MAX_TOUCH_POINTS; i++) {
 		if (!_touchPoints[i].active)
 			continue;
-		
+
 		uint32 age = currentTime - _touchPoints[i].timestamp;
 		if (age > FADE_TIME) {
 			_touchPoints[i].active = false;
 			continue;
 		}
-		
+
 		// Calculate alpha based on age (fade out)
 		int alpha = 255 - (age * 255 / FADE_TIME);
-		
+
 		// Draw circle at touch point
 		int cx = _touchPoints[i].x;
 		int cy = _touchPoints[i].y;
 		int radius = 20;
-		
+
 		// Draw filled circle (O8: RGB565)
 		for (int dy = -radius; dy <= radius; dy++) {
 			for (int dx = -radius; dx <= radius; dx++) {
 				if (dx * dx + dy * dy <= radius * radius) {
 					int px = cx + dx;
 					int py = cy + dy;
-					
+
 					if (px >= 0 && px < 800 && py >= 0 && py < 480) {
 						// Blend red circle with existing RGB565 pixel
 						uint16 existing = buf16[py * 800 + px];
 						byte er = ((existing >> 11) & 0x1F) << 3;
 						byte eg = ((existing >> 5) & 0x3F) << 2;
 						byte eb = (existing & 0x1F) << 3;
-						
+
 						byte r = ((255 * alpha) + (er * (255 - alpha))) / 255;
 						byte g = ((0 * alpha) + (eg * (255 - alpha))) / 255;
 						byte b = ((0 * alpha) + (eb * (255 - alpha))) / 255;
-						
+
 						buf16[py * 800 + px] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 					}
 				}

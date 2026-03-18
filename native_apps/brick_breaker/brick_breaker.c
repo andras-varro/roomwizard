@@ -1515,25 +1515,57 @@ static void handle_input(void) {
             }
         }
 
-        /* Move paddle with touch (existing behavior) */
+        /* ── Paddle movement input handling ──────────────────────────────
+         * Multiple input methods coexist without fighting each other:
+         *
+         *   1. Touch:   absolute positioning — finger position = paddle pos
+         *   2. Mouse:   delta-based — mouse movement adds to paddle position
+         *   3. Analog:  velocity-based (axis_lx ±1000 → proportional speed)
+         *   4. D-pad:   velocity-based (fixed PADDLE_KB_SPEED per frame)
+         *
+         * Only touch sets the paddle position absolutely.  All other inputs
+         * (mouse, analog stick, d-pad/keyboard) add velocity/delta each
+         * frame, so they never fight each other or cause the paddle to
+         * snap to an unexpected position when switching input methods.
+         * ────────────────────────────────────────────────────────────── */
+
+        /* Touch: absolute positioning (only when actively touching the screen) */
         if (st.held || st.pressed) {
             game.paddle_x = clampf((float)st.x,
                                    AREA_X + game.paddle_w / 2.0f,
                                    AREA_X + AREA_W - game.paddle_w / 2.0f);
         }
 
-        /* Mouse: map mouse_x directly to paddle horizontal center */
-        if (gp_input.mouse_connected) {
-            game.paddle_x = clampf((float)gp_input.mouse_x,
-                                   AREA_X + game.paddle_w / 2.0f,
-                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+        /* Mouse: delta-based movement — track previous position and apply
+         * the difference as velocity.  This prevents the paddle from
+         * snapping to an absolute screen position when switching between
+         * mouse and gamepad.  On first connection (prev == -1), we just
+         * store the position without moving the paddle. */
+        {
+            static int prev_mouse_x = -1;
+            if (gp_input.mouse_connected) {
+                if (prev_mouse_x >= 0 && gp_input.mouse_x != prev_mouse_x) {
+                    int delta = gp_input.mouse_x - prev_mouse_x;
+                    game.paddle_x += (float)delta;
+                    game.paddle_x = clampf(game.paddle_x,
+                                           AREA_X + game.paddle_w / 2.0f,
+                                           AREA_X + AREA_W - game.paddle_w / 2.0f);
+                }
+                prev_mouse_x = gp_input.mouse_x;
+            } else {
+                prev_mouse_x = -1;  /* Reset when mouse disconnects */
+            }
             /* Mouse click to launch ball */
-            if (gp_input.mouse_left_pressed && !game.ball_launched) {
+            if (gp_input.mouse_connected &&
+                gp_input.mouse_left_pressed && !game.ball_launched) {
                 launch_ball();
             }
         }
 
-        /* Gamepad analog stick: proportional paddle speed from axis_lx */
+        /* Gamepad analog stick: velocity-based movement.
+         * axis_lx is normalized to ±1000 (0 when in dead zone).
+         * Scaled proportionally up to PADDLE_MAX_ANALOG pixels/frame.
+         * When the stick is centered (returns to 0), paddle stays put. */
         if (gp_input.axis_lx != 0) {
             float speed = (gp_input.axis_lx / 1000.0f) * PADDLE_MAX_ANALOG;
             game.paddle_x += speed;
@@ -1542,7 +1574,8 @@ static void handle_input(void) {
                                    AREA_X + AREA_W - game.paddle_w / 2.0f);
         }
 
-        /* D-pad / keyboard: fixed speed movement (held for smooth continuous) */
+        /* D-pad / keyboard: fixed speed velocity-based movement.
+         * Uses 'held' for smooth continuous movement while pressed. */
         if (gp_input.buttons[BTN_ID_LEFT].held) {
             game.paddle_x -= PADDLE_KB_SPEED;
             game.paddle_x = clampf(game.paddle_x,

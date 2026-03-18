@@ -53,18 +53,18 @@ public:
 
 	int16 getHeight() const override;
 	int16 getWidth() const override;
-	
+
 	void setPalette(const byte *colors, uint start, uint num) override;
 	void grabPalette(byte *colors, uint start, uint num) const override;
-	
+
 	void copyRectToScreen(const void *buf, int pitch, int x, int y, int w, int h) override;
 	Graphics::Surface *lockScreen() override;
 	void unlockScreen() override;
-	
+
 	void fillScreen(uint32 col) override;
 	void fillScreen(const Common::Rect &r, uint32 col) override;
 	void updateScreen() override;
-	
+
 	void setShakePos(int shakeXOffset, int shakeYOffset) override;
 	void setFocusRectangle(const Common::Rect& rect) override;
 	void clearFocusRectangle() override;
@@ -83,8 +83,8 @@ public:
 	// Mouse cursor
 	bool showMouse(bool visible) override;
 	void warpMouse(int x, int y) override;
-	void setMouseCursor(const void *buf, uint w, uint h, int hotspotX, int hotspotY, 
-	                    uint32 keycolor, bool dontScale = false, 
+	void setMouseCursor(const void *buf, uint w, uint h, int hotspotX, int hotspotY,
+	                    uint32 keycolor, bool dontScale = false,
 	                    const Graphics::PixelFormat *format = NULL, const byte *mask = NULL) override;
 	void setCursorPalette(const byte *colors, uint start, uint num) override;
 
@@ -93,13 +93,16 @@ private:
 	Framebuffer *_fb;
 	bool _fbInitialized;
 
+	// Screen change tracking (incremented on each initSize call)
+	int _screenChangeID;
+
 	// Screen properties
 	uint _screenWidth;
 	uint _screenHeight;
 	Graphics::PixelFormat _screenFormat;
 	Graphics::Surface _gameSurface;
 	bool _screenDirty;
-	
+
 	// Bezel obstruction margins (pixels from edge)
 	int _bezelTop;
 	int _bezelBottom;
@@ -122,6 +125,11 @@ private:
 	byte _cursorPalette[256 * 3];
 	bool _cursorPaletteEnabled;
 
+	// Previous cursor state for dirty tracking
+	int _prevDrawnCursorX;
+	int _prevDrawnCursorY;
+	bool _prevDrawnCursorVisible;
+
 	// Overlay
 	Graphics::Surface _overlaySurface;
 	bool _overlayVisible;
@@ -142,7 +150,6 @@ private:
 
 	// Helper methods
 	void initFramebuffer();
-	void closeFramebuffer();
 	void blitGameSurfaceToFramebuffer();
 	void drawCursor();
 	void drawTouchFeedback();
@@ -154,9 +161,12 @@ private:
 public:
 	// Touch feedback API
 	void addTouchPoint(int x, int y);
-	
+
 	// Scaling info for coordinate transformation
 	void getScalingInfo(int &scaledWidth, int &scaledHeight, int &offsetX, int &offsetY) const;
+
+	// Framebuffer teardown (used on exit from OSystem_RoomWizard::quit)
+	void closeFramebuffer();
 
 	// Blank screen (used on exit)
 	void blankScreen();

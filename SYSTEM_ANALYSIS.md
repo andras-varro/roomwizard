@@ -152,7 +152,9 @@ screen_y = (raw_y * 480) / 4095;
 
 ### USB Input Devices
 
-USB keyboards, mice, and game controllers are supported via the USB host mode subsystem. A Micro USB OTG adapter and powered USB hub are required.
+USB keyboards, mice, and game controllers are supported via the USB host mode subsystem. A Micro USB OTG adapter and powered USB hub are required. All input is handled via evdev (`/dev/input/event0`–`event31`). Native apps use [`gamepad.c`](native_apps/common/gamepad.c); ScummVM has an independent evdev implementation with the same fixes.
+
+**Analog stick calibration:** Center is computed as `(axis_min + axis_max) / 2` (not trusting the kernel-reported value). Default dead zone: 25%, configurable via `/etc/input_config.conf`.
 
 **Keyboard Support:**
 - Detected automatically by the built-in `usbhid` kernel driver (HID class `03`)
