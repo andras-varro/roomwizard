@@ -36,6 +36,10 @@
 #include <math.h>
 #include <errno.h>
 #include <linux/input.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* SCREEN_W / SCREEN_H removed — use screen_base_width / screen_base_height
    runtime globals (from framebuffer.h) or fb->width / fb->height instead. */
@@ -189,6 +193,7 @@ typedef enum {
     DIAG_STORAGE,
     DIAG_HARDWARE,
     DIAG_CONFIG,
+    DIAG_NETWORK,
     DIAG_PAGE_COUNT
 } DiagPage;
 
@@ -218,7 +223,7 @@ static const char *test_names[] = {
 };
 
 static const char *diag_page_titles[] = {
-    "SYSTEM INFO", "MEMORY", "STORAGE", "HARDWARE", "CONFIGURATION"
+    "SYSTEM INFO", "MEMORY", "STORAGE", "HARDWARE", "CONFIGURATION", "NETWORK"
 };
 
 typedef struct {
@@ -866,6 +871,100 @@ static void format_bytes(unsigned long kb, char *buf, size_t len) {
     else snprintf(buf, len, "%lu KB", kb);
 }
 
+// Read IP address for a given interface
+static void read_interface_ip(const char *ifname, char *ip_buf, size_t buf_size) {
+    struct ifaddrs *ifaddr, *ifa;
+    snprintf(ip_buf, buf_size, "N/A");
+
+    if (getifaddrs(&ifaddr) == -1) return;
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        if (strcmp(ifa->ifa_name, ifname) != 0) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+            inet_ntop(AF_INET, &addr->sin_addr, ip_buf, buf_size);
+            break;
+        }
+    }
+    freeifaddrs(ifaddr);
+}
+
+// Read MAC address for a given interface
+static void read_interface_mac(const char *ifname, char *mac_buf, size_t buf_size) {
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifname);
+    snprintf(mac_buf, buf_size, "N/A");
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    if (fgets(mac_buf, buf_size, f)) {
+        // Remove trailing newline
+        char *nl = strchr(mac_buf, '\n');
+        if (nl) *nl = '\0';
+    }
+    fclose(f);
+}
+
+// Read default gateway from /proc/net/route
+static void read_default_gateway(char *gw_buf, size_t buf_size) {
+    snprintf(gw_buf, buf_size, "N/A");
+
+    FILE *f = fopen("/proc/net/route", "r");
+    if (!f) return;
+
+    char line[256];
+    fgets(line, sizeof(line), f); // skip header
+    while (fgets(line, sizeof(line), f)) {
+        char iface[32];
+        unsigned long dest, gateway;
+        if (sscanf(line, "%31s %lx %lx", iface, &dest, &gateway) == 3) {
+            if (dest == 0) { // default route
+                struct in_addr addr;
+                addr.s_addr = (in_addr_t)gateway;
+                snprintf(gw_buf, buf_size, "%s (%s)", inet_ntoa(addr), iface);
+                break;
+            }
+        }
+    }
+    fclose(f);
+}
+
+// Read DNS server from /etc/resolv.conf
+static void read_dns_server(char *dns_buf, size_t buf_size) {
+    snprintf(dns_buf, buf_size, "N/A");
+
+    FILE *f = fopen("/etc/resolv.conf", "r");
+    if (!f) return;
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char ns[64];
+        if (sscanf(line, "nameserver %63s", ns) == 1) {
+            snprintf(dns_buf, buf_size, "%s", ns);
+            break;
+        }
+    }
+    fclose(f);
+}
+
+// Check if a network interface is up
+static bool is_interface_up(const char *ifname) {
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", ifname);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+
+    char state[32] = {0};
+    if (fgets(state, sizeof(state), f)) {
+        char *nl = strchr(state, '\n');
+        if (nl) *nl = '\0';
+    }
+    fclose(f);
+    return (strcmp(state, "up") == 0);
+}
+
 static void create_diagnostics_ui(void) {
     int nav_y = CONTENT_Y + CONTENT_H - 55;
     button_init_full(&diag_prev_btn, CONTENT_LEFT, nav_y,
@@ -1045,6 +1144,51 @@ static void draw_diag_config(Framebuffer *fb) {
       else y = draw_info_row(fb, y, "CALIBRATED:", "NO", COLOR_YELLOW); }
 }
 
+static void draw_diag_network(Framebuffer *fb) {
+    int y = CONTENT_Y + 30;
+    char buf[128];
+    char ip[64], mac[64];
+
+    // Check common interfaces: eth0, usb0, wlan0
+    const char *interfaces[] = { "eth0", "usb0", "wlan0", NULL };
+
+    for (int i = 0; interfaces[i] != NULL; i++) {
+        const char *ifname = interfaces[i];
+
+        // Check if interface exists
+        char path[128];
+        snprintf(path, sizeof(path), "/sys/class/net/%s", ifname);
+        if (access(path, F_OK) != 0) continue;
+
+        // Interface header with status
+        bool up = is_interface_up(ifname);
+        snprintf(buf, sizeof(buf), "%s [%s]", ifname, up ? "UP" : "DOWN");
+        y = draw_info_row(fb, y, "INTERFACE:", buf,
+                          up ? COLOR_GREEN : COLOR_RED);
+
+        // IP address
+        read_interface_ip(ifname, ip, sizeof(ip));
+        snprintf(buf, sizeof(buf), "%s", ip);
+        y = draw_info_row(fb, y, "  IP ADDR:", buf, COLOR_DATA);
+
+        // MAC address
+        read_interface_mac(ifname, mac, sizeof(mac));
+        y = draw_info_row(fb, y, "  MAC:", mac, COLOR_DATA);
+
+        y += 4;
+    }
+
+    // Default gateway
+    char gw[128];
+    read_default_gateway(gw, sizeof(gw));
+    y = draw_info_row(fb, y, "GATEWAY:", gw, COLOR_DATA);
+
+    // DNS server
+    char dns[64];
+    read_dns_server(dns, sizeof(dns));
+    y = draw_info_row(fb, y, "DNS:", dns, COLOR_DATA);
+}
+
 static void draw_diagnostics(Framebuffer *fb, AppState *state) {
     fb_draw_text(fb, CONTENT_LEFT+10, CONTENT_Y+5,
                  diag_page_titles[state->diag_page], COLOR_HEADER_TEXT, 2);
@@ -1057,6 +1201,7 @@ static void draw_diagnostics(Framebuffer *fb, AppState *state) {
         case DIAG_STORAGE: draw_diag_storage(fb);  break;
         case DIAG_HARDWARE:draw_diag_hardware(fb); break;
         case DIAG_CONFIG:  draw_diag_config(fb);   break;
+        case DIAG_NETWORK: draw_diag_network(fb);  break;
         default: break;
     }
     if (state->diag_page > 0) button_draw(fb, &diag_prev_btn);

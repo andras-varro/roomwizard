@@ -7,7 +7,7 @@
 | Tab | Source App | Purpose |
 |-----|-----------|---------|
 | **Settings** | `hardware_config` | Audio, LED, backlight configuration + shutdown/reboot |
-| **Diagnostics** | `hardware_diag` | Read-only system/memory/storage/hardware/config info |
+| **Diagnostics** | `hardware_diag` | Read-only system/memory/storage/hardware/config/network info |
 | **Tests** | `hardware_test_gui` | Interactive LED, display, audio, and touch tests |
 | **Calibration** | `unified_calibrate` | Touch calibration + bezel margin adjustment |
 | **USB** | `usb_test` | USB keyboard, mouse, gamepad detection & interactive testing |
@@ -94,6 +94,7 @@ stateDiagram-v2
         DiagMemory --> DiagStorage : Prev/Next
         DiagStorage --> DiagHardware : Prev/Next
         DiagHardware --> DiagConfig : Prev/Next
+        DiagConfig --> DiagNetwork : Prev/Next
     }
 
     state Tests {
@@ -139,7 +140,8 @@ typedef enum {
     DIAG_STORAGE,
     DIAG_HARDWARE,
     DIAG_CONFIG,
-    DIAG_PAGE_COUNT    /* = 5 */
+    DIAG_NETWORK,
+    DIAG_PAGE_COUNT    /* = 6 */
 } DiagPage;
 
 typedef enum {
@@ -342,11 +344,11 @@ Based on the current [`hardware_config.c`](native_apps/hardware_config/hardware_
 
 ### 5.1 Layout
 
-Five sub-pages with prev/next navigation buttons at the bottom of the content area. Data is read-only and refreshed each time the page is drawn.
+Six sub-pages with prev/next navigation buttons at the bottom of the content area. Data is read-only and refreshed each time the page is drawn.
 
 ```
 +-- Content Area ------------------------------------------------+
-|  SYSTEM INFO                                     PAGE 1/5      |
+|  SYSTEM INFO                                     PAGE 1/6      |
 |                                                                 |
 |  KERNEL:        Linux version 5.4.x                            |
 |  UPTIME:        2d 5h 32m 10s                                  |
@@ -369,6 +371,7 @@ Five sub-pages with prev/next navigation buttons at the bottom of the content ar
 | 3 | `DIAG_STORAGE` | 4 mount points with statvfs usage bars | `statvfs()` on `/`, `/home/root/data`, `/home/root/log`, `/home/root/backup` |
 | 4 | `DIAG_HARDWARE` | LED brightness readback, backlight readback, framebuffer info | sysfs reads, `Framebuffer` struct fields |
 | 5 | `DIAG_CONFIG` | Config file path, all keys with defaults, calibration status | [`Config`](native_apps/common/config.h:25) via `config_load()`, `/etc/touch_calibration.conf` existence check |
+| 6 | `DIAG_NETWORK` | Network | IP addresses (eth0/usb0/wlan0), MAC addresses, default gateway, DNS server, interface up/down status | `getifaddrs()`, `/sys/class/net/*/address`, `/sys/class/net/*/operstate`, `/proc/net/route`, `/etc/resolv.conf` |
 
 ### 5.3 Navigation Controls
 
@@ -376,9 +379,9 @@ Five sub-pages with prev/next navigation buttons at the bottom of the content ar
 |---------|----------|------|--------|
 | PREV button | Bottom-left of content area | 120×45 | `diag_page = (diag_page - 1 + DIAG_PAGE_COUNT) % DIAG_PAGE_COUNT` |
 | NEXT button | Bottom-right of content area | 120×45 | `diag_page = (diag_page + 1) % DIAG_PAGE_COUNT` |
-| Page indicator | Top-right of content area | Text "PAGE n/5" | Read-only display |
+| Page indicator | Top-right of content area | Text "PAGE n/6" | Read-only display |
 
-The PREV button is hidden (not drawn) on page 1. The NEXT button shows "DONE" on page 5 and wraps to page 1. This is an improvement over the original [`hardware_diag.c`](native_apps/hardware_diag/hardware_diag.c) which used "tap anywhere to advance".
+The PREV button is hidden (not drawn) on page 1. The NEXT button shows "DONE" on page 6 and wraps to page 1. This is an improvement over the original [`hardware_diag.c`](native_apps/hardware_diag/hardware_diag.c) which used "tap anywhere to advance".
 
 ### 5.4 Data Refresh
 
