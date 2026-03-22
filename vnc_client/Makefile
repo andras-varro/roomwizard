@@ -20,6 +20,7 @@ TARGET_STRIPPED = $(TARGET)_stripped
 SRCS = vnc_client.c \
        vnc_renderer.c \
        vnc_input.c \
+       vnc_settings.c \
        $(COMMON_DIR)/framebuffer.c \
        $(COMMON_DIR)/touch_input.c \
        $(COMMON_DIR)/hardware.c \

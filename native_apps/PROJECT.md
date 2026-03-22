@@ -37,6 +37,17 @@
 - [`common/audio.c`](common/audio.c) - Speaker audio (OSS/TWL4030; beeps, tones, fanfares)
 - [`common/config.c`](common/config.c) - Persistent configuration (key=value file, `/opt/games/rw_config.conf`)
 - [`common/gamepad.c`](common/gamepad.c) — Unified input abstraction: Xbox 360 gamepad (evdev), keyboard, touch; button edge detection (pressed/held/released); configurable touch regions
+- [`common/keyboard.c`](common/keyboard.c) — On-screen touch keyboard with four layouts (see below)
+
+### On-Screen Keyboard (`common/keyboard.c`)
+
+A generic touch-screen keyboard module with four layouts:
+- **ALPHA** — A-Z + space (used by high-score name entry)
+- **ALPHANUM** — A-Z, 0-9, symbols
+- **FULL** — A-Z/a-z with shift toggle, 0-9, symbols
+- **NUMERIC** — 0-9, dot, colon (for IP addresses/ports)
+
+Usage: `keyboard_enter(fb, touch, "Title", buf, max_len, KB_LAYOUT_ALPHA)`
 
 **ModalDialog System** ([`common/common.c`](common/common.c) / [`common/common.h`](common/common.h)):
 
@@ -106,7 +117,7 @@ ModalDialogAction action = modal_dialog_update(&pause_dialog, tx, ty, touching, 
 | Tab | Replaces | Description |
 |-----|----------|-------------|
 | **Settings** | `hardware_config` | Audio enable/disable, LED enable/disable + brightness slider, backlight brightness slider, portrait mode toggle, save/reset config. Test buttons bypass config for raw hardware verification. |
-| **Diagnostics** | `hardware_diag` | Read-only system information across 5 sub-pages (System, Memory, Storage, Hardware, Config) with prev/next navigation. |
+| **Diagnostics** | `hardware_diag` | Read-only system information across 6 sub-pages (System, Memory, Storage, Hardware, Config, Network) with prev/next navigation. Network: IP address per interface, MAC address, default gateway, DNS, interface status. |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, color cycle, touch zone grid, display diagnostics, audio frequency sweep) in a 5×2 grid menu. Tests take over full screen. |
 | **Calibration** | `unified_calibrate` | Touch calibration (4-corner crosshair) + bezel margin adjustment. Saves to `/etc/touch_calibration.conf`. |
 

@@ -1,9 +1,19 @@
 #ifndef VNC_CONFIG_H
 #define VNC_CONFIG_H
 
+/* ── VNCConfig struct (shared between vnc_client.c and vnc_settings.c) ─ */
+typedef struct VNCConfig {
+    char host[256];
+    int  port;
+    char password[256];
+    char encodings[256];
+    int  compress_level;
+    int  quality_level;
+} VNCConfig;
+
 // VNC Server Configuration (compile-time defaults, overridden by config file)
 #define VNC_DEFAULT_HOST "192.168.50.56"
-#define VNC_DEFAULT_PORT 5901
+#define VNC_DEFAULT_PORT 5900
 #define VNC_DEFAULT_PASSWORD ""
 
 // Runtime config file (key=value format, lines starting with # are comments)
@@ -88,8 +98,9 @@ typedef enum {
 #define RECONNECT_BTN_W         160
 #define RECONNECT_BTN_H         44
 #define RECONNECT_BTN_Y         380
-#define RECONNECT_BTN_CANCEL_X  160
-#define RECONNECT_BTN_CONNECT_X 480
+#define RECONNECT_BTN_CANCEL_X   60
+#define RECONNECT_BTN_SETTINGS_X 320
+#define RECONNECT_BTN_CONNECT_X  580
 
 /* Mouse acceleration defaults (overridden by /etc/input_config.conf) */
 #define DEFAULT_MOUSE_SENSITIVITY   1.5f

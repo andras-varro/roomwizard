@@ -45,60 +45,61 @@ step " 1/27" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build
 step " 2/27" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
 step " 3/27" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
 step " 4/27" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step " 5/27" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/27" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 7/27" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
-step " 8/27" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
-step " 9/27" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
-step "10/27" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
-step "11/27" "gamepad";      $CC -O2 -static -c common/gamepad.c         -o build/gamepad.o
+step " 5/28" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/28" "keyboard";     $CC -O2 -static -c common/keyboard.c        -o build/keyboard.o
+step " 7/28" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 8/28" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
+step " 9/28" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
+step "10/28" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
+step "11/28" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
+step "12/28" "gamepad";      $CC -O2 -static -c common/gamepad.c         -o build/gamepad.o
 
-COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
+COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/config.o"
 
-step "12/27" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
-step "13/27" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
-step "14/27" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
+step "13/28" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
+step "14/28" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
+step "15/28" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
 
-step "15/27" "brick_breaker"
+step "16/28" "brick_breaker"
 $CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
 
-step "16/27" "samegame"
+step "17/28" "samegame"
 $CC -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
 
-step "17/27" "frogger"
+step "18/28" "frogger"
 $CC -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
 
-step "18/27" "platformer"
+step "19/28" "platformer"
 $CC -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
 
-step "19/27" "game_selector"
+step "20/28" "game_selector"
 $CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
-step "20/27" "app_launcher"
+step "21/28" "app_launcher"
 $CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "21/27" "hardware_test"
+step "22/28" "hardware_test"
 $CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "22/27" "hardware_config"
+step "23/28" "hardware_config"
 $CC -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
-step "23/27" "hardware_diag"
+step "24/28" "hardware_diag"
 $CC -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
 
-step "24/27" "unified_calibrate"
+step "25/28" "unified_calibrate"
 $CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
-step "25/27" "audio_touch_test"
+step "26/28" "audio_touch_test"
 $CC -O2 -static -I. \
   tests/audio_touch_test.c \
   $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
-step "26/27" "backlight"
+step "27/28" "backlight"
 $CC -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
-step "27/27" "device_tools"
+step "28/28" "device_tools"
 $CC -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Collect icon files from source dirs → build/icons/

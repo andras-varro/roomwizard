@@ -15,12 +15,12 @@ RoomWizard's 800×480 screen with touch pass-through.
 - **USB keyboard forwarding** — full key press/release forwarded as X11 keysyms
 - **USB mouse forwarding** — relative movements with 3-tier acceleration, all buttons + scroll
 - **Runtime config file** — all settings in `/opt/vnc_client/vnc_client.conf`
-- **Exit gesture** — long-press top-left corner (3 s) to return to launcher
+- **Settings GUI** — long-press top-left corner (3 s) to edit config on-screen
 - **Watchdog integration** — prevents system reboot during operation
 
-### Performance (v2.1)
+### Performance (v2.3)
 
-| Metric | v1.0 (MVP) | v2.1 (Current) |
+| Metric | v1.0 (MVP) | v2.3 (Current) |
 |--------|-----------|----------------|
 | CPU | 99% | ~5% |
 | Frame rate | <1 fps | 5-7 fps |
@@ -84,12 +84,16 @@ Settings are loaded in this order (later overrides earlier):
 ```ini
 # /opt/vnc_client/vnc_client.conf
 host = 192.168.50.56
-port = 5901
+port = 5900
 password = roomwizard
 encodings = tight zrle copyrect hextile zlib raw
 compress_level = 6
 quality_level = 5
 ```
+
+> **Tip:** All settings (HOST, PORT, PASSWORD, ENCODINGS, COMPRESS, QUALITY) can
+> be changed at runtime via the on-screen settings GUI (long-press top-left corner
+> for 3 seconds).
 
 ### Command-Line
 
@@ -104,7 +108,7 @@ Options:
   --help, -h        Show help
 ```
 
-Legacy positional syntax still works: `vnc_client 192.168.50.56 5901`
+Legacy positional syntax still works: `vnc_client 192.168.50.56 5900`
 
 ### Compile-Time Settings (config.h)
 
@@ -121,7 +125,7 @@ Legacy positional syntax still works: `vnc_client 192.168.50.56 5901`
 ## Architecture
 
 ```
-RPi3 VNC Server (192.168.50.56:5901)
+RPi3 VNC Server (192.168.50.56:5900)
          │ RFB Protocol (Tight encoding)
          ▼
     LibVNCClient (decode)
@@ -150,6 +154,9 @@ RPi3 VNC Server (192.168.50.56:5901)
 | `Makefile` | Cross-compilation and deployment |
 | `build-deps.sh` | Downloads and builds zlib, libjpeg-turbo, LibVNCClient |
 | `rpi_setup.py` | RPi VNC server setup script |
+| `setup-vnc-viewer.sh` | VNC viewer (Remmina) setup for RPi display clients |
+| `vnc_settings.c/h` | Touch-based settings GUI with full alphanumeric keypad; all fields editable |
+| `SETTINGS_GUI_DESIGN.md` | Design document for the settings screen |
 
 ### Shared Libraries (from native_apps)
 
@@ -161,8 +168,9 @@ RPi3 VNC Server (192.168.50.56:5901)
 
 ## RPi VNC Server Setup
 
-The RoomWizard uses **x11vnc** on port 5901 (standard VncAuth) because
-RealVNC on port 5900 uses proprietary encryption incompatible with LibVNCClient.
+The RPi runs **x11vnc** on port 5900 (standard VncAuth), compatible with both
+LibVNCClient (RoomWizard) and RealVNC Viewer (other clients). The proprietary
+RealVNC Server is disabled.
 
 ```bash
 # Requires: pip install paramiko
@@ -176,18 +184,114 @@ python3 rpi_setup.py <rpi_host> <rpi_user> <rpi_password> [action]
 | `verify` | Check x11vnc service status |
 | `inspect` | Inspect RPi display environment |
 
-This creates a systemd service (`x11vnc-roomwizard`) on port 5901 with
-password authentication. RealVNC on port 5900 is left untouched.
+This creates a systemd service (`x11vnc-roomwizard`) on port 5900 with
+password authentication. The setup script disables RealVNC Server if present.
 
 ---
 
-## Exit Gesture
+## RPi VNC Viewer Setup
 
-To return to the game launcher, **long-press the top-left corner** of the
-screen for 3 seconds. The client exits cleanly, restoring 32bpp for other
-applications.
+To use another Raspberry Pi as a dedicated VNC viewer/display that connects to the
+RoomWizard RPi VNC server, use `setup-vnc-viewer.sh`. It installs **Remmina** as
+the VNC viewer with fullscreen auto-scaling and auto-connect on boot.
+
+### Prerequisites
+
+- Raspberry Pi running Raspberry Pi OS (Bullseye/Bookworm) with a desktop environment
+- Network access to the VNC server RPi
+- SSH key-based authentication for remote setup (see below)
+
+### SSH Key Setup (for remote execution)
+
+To run the setup script remotely from your workstation:
+
+    # Generate an SSH key if you don't have one:
+    ssh-keygen -t ed25519
+
+    # Copy your public key to the target Pi:
+    ssh-copy-id pi@<viewer-pi-ip>
+
+    # Verify passwordless login works:
+    ssh pi@<viewer-pi-ip> echo "OK"
+
+### Usage
+
+    # Remote setup from workstation (recommended):
+    ./setup-vnc-viewer.sh --remote pi@192.168.50.121 install
+
+    # Local setup (run directly on the viewer Pi):
+    ./setup-vnc-viewer.sh install
+
+    # Custom VNC server address:
+    ./setup-vnc-viewer.sh --remote pi@192.168.50.121 --server 10.0.0.5 --port 5900 install
+
+    # Skip nightly reboot cron job:
+    ./setup-vnc-viewer.sh --remote pi@192.168.50.121 --no-reboot-cron install
+
+    # Check current setup:
+    ./setup-vnc-viewer.sh --remote pi@192.168.50.121 verify
+
+    # Remove viewer setup:
+    ./setup-vnc-viewer.sh --remote pi@192.168.50.121 uninstall
+
+The script prompts for the VNC password interactively. It is stored in
+Remmina's encrypted format — never saved in plaintext.
+
+### What It Does
+
+| Step | Description |
+|------|-------------|
+| Remove RealVNC Viewer | Uninstalls proprietary viewer if present |
+| Install Remmina | Installs Remmina + VNC plugin via apt |
+| Create profile | `~/.local/share/remmina/roomwizard.remmina` with scaled fullscreen |
+| Autostart | `~/.config/autostart/vnc-viewer.desktop` — connects on login |
+| Desktop shortcut | `~/Desktop/vnc-viewer.desktop` — manual launch |
+| Nightly reboot | `/etc/cron.d/nightly-reboot` — reboots at 3am daily |
+
+### Manual Remmina Launch
+
+Double-click the "VNC to RoomWizard" icon on the desktop, or from a terminal:
+
+    remmina -c ~/.local/share/remmina/roomwizard.remmina
+
+---
+
+## Settings Screen
+
+**Long-press the top-left corner** of the screen for 3 seconds to open the
+settings screen. From there you can:
+
+- **Edit HOST and PORT** — touch the field to open a numeric keypad
+- **Edit PASSWORD** — touch to open a full alphanumeric keypad with shift toggle (max 8 chars, VncAuth limit)
+- **Edit ENCODINGS** — touch to open an alphanumeric keypad
+- **Adjust COMPRESS and QUALITY** — use the +/- buttons (range 1–9)
+
+### Action Buttons
+
+| Button | Action |
+|--------|--------|
+| **BACK** | Return to VNC session without changes |
+| **EXIT TO LAUNCHER** | Quit VNC client, return to app launcher |
+| **SAVE & RECONNECT** | Save settings to config file, reconnect to server |
+
+Changes saved via "Save & Reconnect" are written to the config file
+(`/opt/vnc_client/vnc_client.conf`) and take effect immediately.
 
 No touch events are sent to the VNC server while holding the exit zone.
+A progress bar appears in the top-left corner during the 3-second hold.
+
+### Reconnect Screen
+
+When the VNC connection drops, the client shows a reconnect screen with three buttons:
+
+| Button | Action |
+|--------|--------|
+| **CANCEL** | Return to app launcher |
+| **SETTINGS** | Open the settings screen to change server/password |
+| **CONNECT NOW** | Skip the countdown and reconnect immediately |
+
+The SETTINGS button is useful when the connection fails due to wrong server address,
+port, or password — you can fix the configuration without restarting the client.
 
 ---
 
@@ -283,7 +387,7 @@ Built as static libraries by `build-deps.sh` using the ARM cross-compiler.
 
 ### Connection Failed
 - Verify x11vnc is running: `ssh pi@<rpi> 'systemctl status x11vnc-roomwizard'`
-- Check port: `nmap -p 5901 <rpi_ip>`
+- Check port: `nmap -p 5900 <rpi_ip>`
 - Check password in `/opt/vnc_client/vnc_client.conf`
 
 ### Colors Wrong (orange ↔ blue)
@@ -343,6 +447,8 @@ ln -s /etc/init.d/vnc-client /etc/rc5.d/S99vnc-client
 | v1.0 | 2026-02-27 | MVP: raw encoding, 99% CPU, <1 fps |
 | v2.0 | 2026-03-01 | Tight encoding, 16bpp, partial updates, row dedup → 5% CPU, 5 fps |
 | v2.1 | 2026-03-01 | Bilinear scaling, runtime config file, exit gesture, merged docs |
+| v2.3 | 2026-03-20 | Settings GUI: on-screen config editor (host, port, compress, quality) |
+| v2.4 | 2026-03-22 | Full keyboard: all settings editable, SETTINGS button on reconnect screen |
 
 ---
 

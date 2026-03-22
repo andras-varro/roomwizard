@@ -3,7 +3,7 @@
 RPi Setup for RoomWizard VNC Client
 
 Configures a Raspberry Pi as a VNC server for the RoomWizard display.
-Installs x11vnc on port 5901 alongside the existing RealVNC on port 5900.
+Installs x11vnc on port 5900 (RealVNC is disabled).
 
 Handles Raspbian Buster EOL repository migration automatically.
 
@@ -163,15 +163,19 @@ def install_dispmanx_vnc(client):
         print(f"  err: {err[:300]}")
 
 def configure_x11vnc(client):
-    """Configure x11vnc as a service on port 5901."""
+    """Configure x11vnc as a service on port 5900."""
     print("\n=== Configuring x11vnc ===")
     
     # Create password file
     out, err = ssh_exec(client, "mkdir -p /home/pi/.vnc && x11vnc -storepasswd roomwizard /home/pi/.vnc/x11vnc_passwd 2>&1")
     print(f"Password: {out or err}")
     
-    # Stop the broken service first  
+    # Stop the broken service first
     ssh_exec(client, "sudo systemctl stop x11vnc-roomwizard 2>/dev/null")
+    
+    # Disable RealVNC to free port 5900
+    print("Disabling RealVNC server...")
+    ssh_exec(client, "sudo systemctl stop vncserver-x11-serviced 2>/dev/null; sudo systemctl disable vncserver-x11-serviced 2>/dev/null")
     
     # Create systemd service
     service = r"""[Unit]
@@ -182,7 +186,7 @@ Wants=graphical.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/x11vnc -display :0 -rfbport 5901 -rfbauth /home/pi/.vnc/x11vnc_passwd -shared -forever -noxdamage -repeat -nap -wait 50 -defer 50 -auth /var/run/lightdm/root/:0
+ExecStart=/usr/bin/x11vnc -display :0 -rfbport 5900 -rfbauth /home/pi/.vnc/x11vnc_passwd -shared -forever -noxdamage -repeat -nap -wait 50 -defer 50 -auth /var/run/lightdm/root/:0
 Restart=on-failure
 RestartSec=5
 
@@ -207,7 +211,7 @@ def verify(client):
     out, _ = ssh_exec(client, "sudo systemctl status x11vnc-roomwizard --no-pager 2>&1 | head -12")
     print(out)
     
-    out, _ = ssh_exec(client, "ss -tlnp | grep 5901 || echo 'Port 5901 NOT listening'")
+    out, _ = ssh_exec(client, "ss -tlnp | grep 5900 || echo 'Port 5900 NOT listening'")
     print(f"\nPort check: {out}")
     
     out, _ = ssh_exec(client, "ps aux | grep x11vnc | grep -v grep")

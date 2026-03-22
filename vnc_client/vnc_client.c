@@ -28,6 +28,7 @@
 #include "config.h"
 #include "vnc_renderer.h"
 #include "vnc_input.h"
+#include "vnc_settings.h"
 #include "../native_apps/common/framebuffer.h"
 #include "../native_apps/common/touch_input.h"
 #include "../native_apps/common/hardware.h"
@@ -37,16 +38,8 @@ static Logger g_logger;
 
 /* ── Runtime configuration ─────────────────────────────────────────── */
 
-typedef struct {
-    char host[256];
-    int  port;
-    char password[256];
-    char encodings[256];
-    int  compress_level;
-    int  quality_level;
-} VNCConfig;
-
 static VNCConfig g_config;
+static const char *g_config_path = NULL;
 
 /* Trim leading/trailing whitespace in-place */
 static char *str_trim(char *s) {
@@ -405,6 +398,7 @@ static bool draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
  * Returns:
  *   1 = user pressed Connect Now (or countdown expired) → try reconnect
  *   0 = user pressed Cancel → exit to launcher
+ *   2 = user pressed Settings → open settings screen
  *  -1 = g_running became false (signal)
  */
 static int reconnect_ui(int attempt, int wait_seconds) {
@@ -467,6 +461,11 @@ static int reconnect_ui(int attempt, int wait_seconds) {
             RECONNECT_BTN_W, RECONNECT_BTN_H,
             "CANCEL", RGB565(40, 40, 40), RGB565_WHITE, tx, ty);
 
+        bool settings_hit = draw_button(&g_fb,
+            RECONNECT_BTN_SETTINGS_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_W, RECONNECT_BTN_H,
+            "SETTINGS", RGB565(0, 0, 60), RGB565(100, 150, 255), tx, ty);
+
         bool connect_hit = draw_button(&g_fb,
             RECONNECT_BTN_CONNECT_X, RECONNECT_BTN_Y,
             RECONNECT_BTN_W, RECONNECT_BTN_H,
@@ -477,6 +476,10 @@ static int reconnect_ui(int attempt, int wait_seconds) {
         if (cancel_hit) {
             LOG_INFO(&g_logger, "Reconnect CANCEL hit at (%d,%d)", tx, ty);
             return 0;
+        }
+        if (settings_hit) {
+            LOG_INFO(&g_logger, "Reconnect SETTINGS hit at (%d,%d)", tx, ty);
+            return 2;
         }
         if (connect_hit) {
             LOG_INFO(&g_logger, "Reconnect CONNECT NOW hit at (%d,%d)", tx, ty);
@@ -599,8 +602,8 @@ static int vnc_session(const char *host, int port, int attempt) {
             vnc_input_process(&g_input);
 
             if (vnc_input_exit_requested(&g_input)) {
-                LOG_INFO(&g_logger, "Exit gesture detected, shutting down...");
-                session_result = 1;     /* user quit */
+                LOG_INFO(&g_logger, "Exit gesture detected — opening settings...");
+                session_result = 2;     /* open settings */
                 break;
             }
 
@@ -681,12 +684,50 @@ static int run_vnc_client(const char *host, int port) {
     int attempt = 0;
 
     while (g_running) {
-        int result = vnc_session(host, port, attempt);
+        /* Always use g_config values (may have been updated by settings GUI) */
+        int result = vnc_session(g_config.host, g_config.port, attempt);
+
+        if (result == 2) {
+            /* Open settings screen */
+            LOG_INFO(&g_logger, "Opening settings screen...");
+
+            /* Drain touch before entering settings */
+            if (g_touch_ok)
+                touch_drain_events(&g_touch);
+
+            int settings_result = vnc_settings_run(&g_config, &g_fb,
+                                                    g_touch_ok ? &g_touch : NULL,
+                                                    g_config_path);
+
+            if (settings_result == SETTINGS_EXIT) {
+                /* Exit to launcher */
+                FILE *f = fopen(RESPAWN_CONFIG_FILE, "w");
+                if (f) {
+                    fprintf(f, "%s\n", APP_LAUNCHER_PATH);
+                    fclose(f);
+                    LOG_INFO(&g_logger, "Wrote %s to %s",
+                             APP_LAUNCHER_PATH, RESPAWN_CONFIG_FILE);
+                }
+                ret = 0;
+                break;
+            }
+
+            if (settings_result == SETTINGS_SAVE) {
+                /* Config was modified, reconnect with new settings */
+                LOG_INFO(&g_logger, "Settings saved, reconnecting with new config: %s:%d",
+                         g_config.host, g_config.port);
+                attempt = 0; /* Reset attempt counter for fresh connect */
+                continue;    /* Go back to top of reconnect loop */
+            }
+
+            /* SETTINGS_BACK — resume VNC session */
+            LOG_INFO(&g_logger, "Settings: back to VNC session");
+            attempt = 0;
+            continue;
+        }
 
         if (result == 1) {
-            /* User exit gesture — switch back to app_launcher and exit.
-             * respawn.sh re-reads default-app each cycle, so it will
-             * start the launcher instead of restarting us. */
+            /* Direct exit (fallback — shouldn't normally happen with settings) */
             FILE *f = fopen(RESPAWN_CONFIG_FILE, "w");
             if (f) {
                 fprintf(f, "%s\n", APP_LAUNCHER_PATH);
@@ -737,6 +778,36 @@ static int run_vnc_client(const char *host, int port) {
             LOG_INFO(&g_logger, "User cancelled reconnect");
             ret = 0;
             break;
+        }
+        if (ui_result == 2) {
+            /* User wants settings */
+            LOG_INFO(&g_logger, "Opening settings from reconnect screen...");
+            if (g_touch_ok)
+                touch_drain_events(&g_touch);
+
+            int settings_result = vnc_settings_run(&g_config, &g_fb,
+                                                    g_touch_ok ? &g_touch : NULL,
+                                                    g_config_path);
+
+            if (settings_result == SETTINGS_EXIT) {
+                FILE *f = fopen(RESPAWN_CONFIG_FILE, "w");
+                if (f) {
+                    fprintf(f, "%s\n", APP_LAUNCHER_PATH);
+                    fclose(f);
+                    LOG_INFO(&g_logger, "Wrote %s to %s",
+                             APP_LAUNCHER_PATH, RESPAWN_CONFIG_FILE);
+                }
+                ret = 0;
+                break;
+            }
+
+            if (settings_result == SETTINGS_SAVE) {
+                LOG_INFO(&g_logger, "Settings saved from reconnect, trying new config: %s:%d",
+                         g_config.host, g_config.port);
+                attempt = 0;
+            }
+            /* For BACK or SAVE, continue the reconnect loop (will try connecting) */
+            continue;
         }
         if (ui_result < 0) {
             /* Signal received */
@@ -818,6 +889,7 @@ int main(int argc, char *argv[]) {
         }
     }
     load_config_file(&g_config, config_path);
+    g_config_path = config_path;
 
     /* 3. Command-line overrides (legacy positional: host [port]) */
     for (int i = 1; i < argc; i++) {

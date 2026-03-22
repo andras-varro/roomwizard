@@ -16,8 +16,8 @@ FROGGER_DIR = frogger
 PLATFORMER_DIR = platformer
 BUILD_DIR = build
 # Common source files
-COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c $(COMMON_DIR)/highscore.c
-COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/highscore.o
+COMMON_SRC = $(COMMON_DIR)/framebuffer.c $(COMMON_DIR)/touch_input.c $(COMMON_DIR)/hardware.c $(COMMON_DIR)/common.c $(COMMON_DIR)/ppm.c $(COMMON_DIR)/logger.c $(COMMON_DIR)/highscore.c $(COMMON_DIR)/keyboard.c
+COMMON_OBJ = $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/touch_input.o $(BUILD_DIR)/hardware.o $(BUILD_DIR)/common.o $(BUILD_DIR)/ppm.o $(BUILD_DIR)/logger.o $(BUILD_DIR)/highscore.o $(BUILD_DIR)/keyboard.o
 
 # Additional common objects for device_tools
 COMMON_AUDIO_OBJ = $(BUILD_DIR)/audio.o
@@ -55,7 +55,10 @@ $(BUILD_DIR)/hardware.o: $(COMMON_DIR)/hardware.c $(COMMON_DIR)/hardware.h
 $(BUILD_DIR)/common.o: $(COMMON_DIR)/common.c $(COMMON_DIR)/common.h $(COMMON_DIR)/highscore.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/highscore.o: $(COMMON_DIR)/highscore.c $(COMMON_DIR)/highscore.h $(COMMON_DIR)/common.h
+$(BUILD_DIR)/highscore.o: $(COMMON_DIR)/highscore.c $(COMMON_DIR)/highscore.h $(COMMON_DIR)/keyboard.h $(COMMON_DIR)/common.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/keyboard.o: $(COMMON_DIR)/keyboard.c $(COMMON_DIR)/keyboard.h $(COMMON_DIR)/common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ppm.o: $(COMMON_DIR)/ppm.c $(COMMON_DIR)/ppm.h
