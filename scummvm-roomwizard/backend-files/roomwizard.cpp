@@ -161,6 +161,12 @@ void OSystem_RoomWizard::initBackend() {
 			SearchMan.addDirectory(dataDir.getPath(), dataDir);
 	}
 
+	// Register /opt/games as iconspath so ScummVM can scan for game icon
+	// pack files (gui-icons*.dat).  generateZipSet() in gui/ThemeEngine
+	// scans iconspath for matching .dat files.
+	if (!ConfMan.hasKey("iconspath"))
+		ConfMan.set("iconspath", "/opt/games");
+
 	// Call parent init
 	ModularGraphicsBackend::initBackend();
 	

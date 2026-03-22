@@ -1,6 +1,6 @@
 # ScummVM RoomWizard - Development Guide
 
-## Status: ✅ GUI + touch + audio (OPL/AdLib music + SFX) working
+## Status: ✅ GUI + touch + keyboard + mouse + gamepad + audio (OPL/AdLib music + SFX) working
 
 **Binary:** ~15 MB statically linked → `/opt/games/scummvm` on device  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend  
@@ -43,7 +43,7 @@ bash manage-scummvm-changes.sh restore  # backend-files/ → scummvm/
 ```
 ScummVM Core → OSystem_RoomWizard
   ├── RoomWizardGraphicsManager  → /dev/fb0 (800×480 RGB565, double-buffered)
-  ├── RoomWizardEventSource      → /dev/input/event0 (touch, gestures)
+  ├── RoomWizardEventSource      → /dev/input/event* (touch, keyboard, mouse w/ cursor, gamepad)
   ├── OssMixerManager            → /dev/dsp (22050 Hz MONO, O_NONBLOCK) → TWL4030 → SPKR1
   └── Default managers (timer, events, saves, filesystem)
 ```
@@ -129,6 +129,21 @@ Condensed log of issues found and fixed. Full debugging context is in git histor
 | Audio "bru-bru" stuttering | Blocking `write()` stalls for 506 ms ALSA HW period | O_NONBLOCK + wall-clock pacing + no SETFRAGMENT | `oss-mixer.cpp` |
 | OPL still half-speed after mono fix | `_outputRate` may not match actual device rate (set-ioctl output unreliable) | Read back actual rate with `SOUND_PCM_READ_RATE`; use that for `_outputRate` | `oss-mixer.cpp` |
 | Audio breakup after extended play | Ring buffer draining below safe level (wall-clock pacing drift / XRUN) | Pre-fill ring with 3 silence buffers; GETOSPACE monitoring; emergency refill on near-empty | `oss-mixer.cpp` |
+| **Input not working (12 sub-bugs)** | Multiple issues across event system, graphics manager, and build system | See breakdown below | multiple |
+
+### Input Bug Fixes (12 sub-bugs)
+
+Keyboard, mouse (with cursor), and gamepad all verified working in launcher and in-game (EcoQuest, Full Throttle).
+
+| Sub-bug | Fix | Files |
+|---|---|---|
+| Keymapper disabled | `allowMapping()` returns `true` — enables keyboard/gamepad mapping | `roomwizard-events.cpp` |
+| Mouse movement lost on click | Flush pending mouse movement before emitting button events | `roomwizard-events.cpp` |
+| In-game mouse events ignored | `getScreenChangeID()` returns incrementing counter (was returning 0) | `roomwizard-graphics.cpp` |
+| Cursor not visible/tracking | Cursor position synced from event manager in `updateScreen()` | `roomwizard-graphics.cpp` |
+| Cursor coordinates wrong in-game | Cursor position scaled to framebuffer coordinates in game mode | `roomwizard-graphics.cpp` |
+| Cursor palette broken | `setFeatureState(kFeatureCursorPalette)` properly implemented | `roomwizard-graphics.cpp` |
+| Stale `.o` files after backend changes | `build-and-deploy.sh` auto-restores backend files with `touch` + stale `.o` cleanup | `build-and-deploy.sh` |
 
 **32-bit ARM lesson:** `sizeof(long) == 4` — never compute `(now.tv_sec - epoch_0) * 1000000L`. Always init timing baselines to current time.
 
@@ -158,12 +173,12 @@ Condensed log of issues found and fixed. Full debugging context is in git histor
 ## Limitations & Open Issues
 
 - **Single-touch only** — right-click = long-press 500 ms
+- **PNG crash ("No PNG support compiled!")** — **Fixed.** Clicking the thumbnails/grid-view icon in the launcher would crash with "No PNG support compiled!" because the ARM cross-compilation sysroot lacked `libpng`. The `./configure` script silently disables PNG when it cannot find `libpng` for the target architecture. **Fix:** the build script now automatically cross-compiles zlib 1.3.1 and libpng 1.6.43 from source into a local `arm-deps/` prefix directory (idempotent — skips if already built), then passes `--with-zlib-prefix` and `--with-png-prefix` to `./configure`. No manual package installation needed; Ubuntu Focal WSL doesn't support armhf multiarch (`dpkg --add-architecture armhf` fails because standard mirrors don't carry armhf). After changing dependencies, a full rebuild is required (`clean` + `configure` + `make`).
 - **Software rendering only** — no GPU, no DSS scaler
 - **No MIDI** — NullMidiDriver; future option: software synth (FluidSynth or similar)
 - **OPL tempo** — verify on device with KQ3 intro vs reference recording after mono mixer fix
-- **Cursor not moved by touch** — in-game cursor stays at its initial position; touch events fire clicks at the correct game coordinates but `MOUSEMOVE` is either not synthesised or not applied to the hardware cursor. ScummVM uses `warpMouse()` + `MOUSEMOVE` events to drive the cursor position; `RoomWizardGraphicsManager` may need to implement `showMouse()`/`warpMouse()` or the event source needs to emit `MOUSEMOVE` before each `LBUTTONDOWN`.
 - **Exit game returns to launcher on Ubuntu but exits ScummVM on RoomWizard** — the backend's `quit()` is being called when the engine exits instead of returning to the ScummVM launcher. Likely cause: `OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets the main loop drop back to the launcher. Compare with SDL backend's `_quit` flag + launcher loop.
-- **Wireframe green UI (missing theme data)** — ScummVM falls back to the built-in theme because `gui-icons.dat` and the `scummremastered` skin are not present on the device. These files ship in the ScummVM data package. Copy them to `/opt/games/` alongside the binary (or to a path ScummVM searches, e.g. the same dir as the binary). Files needed: `gui-icons.dat`, `scummremastered.zip` (or the `scummremastered/` directory from the ScummVM data tarball).
+- **Wireframe green UI (missing theme data)** — **Fixed.** The build-and-deploy script now automatically deploys `scummremastered.zip` and `gui-icons.dat` from `gui/themes/` to `/opt/games/` on the device. If you still see the green wireframe UI, re-run `./build-and-deploy.sh <ip>` to redeploy the theme files.
 
 ## Supported Engines
 

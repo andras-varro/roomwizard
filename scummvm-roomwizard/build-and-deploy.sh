@@ -14,6 +14,8 @@
 # Requirements:
 #   - WSL Ubuntu 20.04 or later
 #   - ARM cross-compiler: sudo apt install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+#   - wget (for downloading zlib/libpng sources): sudo apt install wget
+#   - ARM libpng/zlib are cross-compiled automatically by this script (build_arm_deps)
 #   - SSH access to device
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
@@ -42,6 +44,7 @@ DEVICE_USER="root"
 DEVICE_PATH="/opt/games"
 SCUMMVM_DIR="../scummvm"
 NATIVE_APPS_DIR="../native_apps"
+ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
 
 # Colors for output
 RED='\033[0;31m'
@@ -65,6 +68,144 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Cross-compile zlib and libpng for ARM.
+# These are needed for PNG thumbnail support in ScummVM.  Ubuntu Focal WSL
+# doesn't support armhf multiarch packages (standard mirrors don't carry
+# armhf — it lives on ports.ubuntu.com), so we build from source instead.
+# Idempotent: skips if $ARM_DEPS_PREFIX/lib/libpng.a already exists.
+build_arm_deps() {
+    if [ -f "$ARM_DEPS_PREFIX/lib/libpng.a" ]; then
+        log_success "ARM dependencies already built (${ARM_DEPS_PREFIX}/lib/libpng.a exists)"
+        return 0
+    fi
+
+    local ORIG_DIR="$(pwd)"
+
+    log_info "Cross-compiling zlib and libpng for ARM..."
+
+    local BUILD_DIR
+    BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/arm-deps-build.XXXXXX") || {
+        log_error "Failed to create temp build directory"; cd "$ORIG_DIR"; exit 1
+    }
+    log_info "Using build directory: $BUILD_DIR"
+
+    local ZLIB_LOG="$BUILD_DIR/zlib-build.log"
+    local PNG_LOG="$BUILD_DIR/libpng-build.log"
+
+    mkdir -p "$ARM_DEPS_PREFIX" || {
+        log_error "Failed to create ARM deps prefix: $ARM_DEPS_PREFIX"; cd "$ORIG_DIR"; exit 1
+    }
+
+    # ── zlib 1.3.1 (skip if already built) ──────────────────────────────────
+    if [ ! -f "$ARM_DEPS_PREFIX/lib/libz.a" ]; then
+        log_info "Building zlib 1.3.1..."
+        cd "$BUILD_DIR" || { log_error "Failed to cd into $BUILD_DIR"; cd "$ORIG_DIR"; exit 1; }
+
+        log_info "Downloading zlib..."
+        wget -L --no-check-certificate -O zlib-1.3.1.tar.gz \
+            "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz" || {
+            log_error "Failed to download zlib (tried GitHub mirror)"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        tar xf zlib-1.3.1.tar.gz || {
+            log_error "Failed to extract zlib tarball"; rm -rf "$BUILD_DIR"; cd "$ORIG_DIR"; exit 1
+        }
+        cd zlib-1.3.1 || { log_error "Failed to cd into zlib-1.3.1"; rm -rf "$BUILD_DIR"; cd "$ORIG_DIR"; exit 1; }
+
+        CC=arm-linux-gnueabihf-gcc ./configure --prefix="$ARM_DEPS_PREFIX" --static \
+            > "$ZLIB_LOG" 2>&1 || {
+            log_error "zlib configure failed. Log: $ZLIB_LOG"
+            tail -20 "$ZLIB_LOG"
+            cd "$ORIG_DIR"; exit 1
+        }
+        make -j"$(nproc)" >> "$ZLIB_LOG" 2>&1 || {
+            log_error "zlib build failed. Log: $ZLIB_LOG"
+            tail -20 "$ZLIB_LOG"
+            cd "$ORIG_DIR"; exit 1
+        }
+        make install >> "$ZLIB_LOG" 2>&1 || {
+            log_error "zlib install failed. Log: $ZLIB_LOG"
+            tail -20 "$ZLIB_LOG"
+            cd "$ORIG_DIR"; exit 1
+        }
+        log_success "zlib installed to $ARM_DEPS_PREFIX"
+    else
+        log_success "zlib already built (skipped)"
+    fi
+
+    # ── libpng 1.6.43 (skip if already built) ───────────────────────────────
+    if [ ! -f "$ARM_DEPS_PREFIX/lib/libpng.a" ]; then
+        log_info "Building libpng 1.6.43..."
+        cd "$BUILD_DIR" || { log_error "Failed to cd into $BUILD_DIR"; cd "$ORIG_DIR"; exit 1; }
+
+        log_info "Downloading libpng..."
+        wget -L --no-check-certificate -O libpng-1.6.43.tar.gz \
+            "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.43.tar.gz" || {
+            log_error "Failed to download libpng"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        log_info "Extracting libpng..."
+        tar xzf libpng-1.6.43.tar.gz || {
+            log_error "Failed to extract libpng"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        # Find extracted directory (GitHub strips 'v' prefix from tag)
+        LIBPNG_DIR=$(tar tzf libpng-1.6.43.tar.gz | head -1 | cut -d/ -f1)
+        cd "$LIBPNG_DIR" || {
+            log_error "libpng source directory not found"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        # Use pre-built config header (no autotools needed)
+        cp scripts/pnglibconf.h.prebuilt pnglibconf.h || {
+            log_error "Failed to copy pnglibconf.h"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        # Compile all libpng source files
+        log_info "Compiling libpng..."
+        PNG_SRCS="png.c pngerror.c pngget.c pngmem.c pngpread.c pngread.c pngrio.c pngrtran.c pngrutil.c pngset.c pngtrans.c pngwio.c pngwrite.c pngwtran.c pngwutil.c"
+        for src in $PNG_SRCS; do
+            arm-linux-gnueabihf-gcc -c -O2 -I"$ARM_DEPS_PREFIX/include" "$src" || {
+                log_error "Failed to compile $src"
+                rm -rf "$BUILD_DIR"
+                cd "$ORIG_DIR"; exit 1
+            }
+        done
+
+        # Create static library
+        arm-linux-gnueabihf-ar rcs libpng.a png.o pngerror.o pngget.o pngmem.o pngpread.o pngread.o pngrio.o pngrtran.o pngrutil.o pngset.o pngtrans.o pngwio.o pngwrite.o pngwtran.o pngwutil.o || {
+            log_error "Failed to create libpng.a"
+            rm -rf "$BUILD_DIR"
+            cd "$ORIG_DIR"; exit 1
+        }
+
+        # Install
+        cp libpng.a "$ARM_DEPS_PREFIX/lib/" || { log_error "Failed to install libpng.a"; cd "$ORIG_DIR"; exit 1; }
+        cp png.h pngconf.h pnglibconf.h "$ARM_DEPS_PREFIX/include/" || { log_error "Failed to install headers"; cd "$ORIG_DIR"; exit 1; }
+
+        log_success "libpng built and installed"
+        cd "$BUILD_DIR"
+    else
+        log_success "libpng already built (skipped)"
+    fi
+
+    # Restore original working directory
+    cd "$ORIG_DIR"
+
+    # Clean up build directory
+    rm -rf "$BUILD_DIR"
+    log_success "ARM dependencies ready at $ARM_DEPS_PREFIX"
 }
 
 # Check prerequisites
@@ -143,15 +284,30 @@ clean_build() {
 configure_build() {
     log_info "Configuring ScummVM build..."
     
+    # Ensure ARM zlib/libpng are available before configuring
+    build_arm_deps
+    
     cd "$SCUMMVM_DIR"
+    
+    # Remove stale config files so configure starts fresh
+    if [ -f "config.mk" ] || [ -f "config.h" ]; then
+        log_info "Removing stale config.mk/config.h before reconfigure..."
+        rm -f config.mk config.h
+    fi
     
     # Configure with ARM cross-compiler
     # Explicitly set CC and CXX to ensure C files are compiled with ARM compiler
+    # --with-zlib-prefix and --with-png-prefix point configure at our
+    # cross-compiled ARM libraries (needed for PNG thumbnail support;
+    # without it configure silently disables PNG and ScummVM crashes on
+    # "No PNG support compiled!").
     CC=arm-linux-gnueabihf-gcc \
     CXX=arm-linux-gnueabihf-g++ \
     ./configure \
         --host=arm-linux-gnueabihf \
         --backend=roomwizard \
+        --with-zlib-prefix="$ARM_DEPS_PREFIX" \
+        --with-png-prefix="$ARM_DEPS_PREFIX" \
         --disable-all-engines \
         --enable-engine=scumm \
         --enable-engine=scumm-7-8 \
@@ -168,6 +324,10 @@ configure_build() {
         --enable-release \
         --enable-optimizations \
         --enable-vkeybd
+    
+    # Add pthread support - use --whole-archive for static linking to ensure
+    # all pthread symbols are resolved (needed for ARM static cross-compilation)
+    echo "LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive" >> config.mk
     
     # Verify CC and CXX are set correctly in config.mk
     CC_SET=$(grep "^CC " config.mk | head -1 || echo "")
@@ -200,6 +360,68 @@ restore_backend_files() {
     log_success "Backend files restored and stale objects invalidated"
 }
 
+# Build game icon pack (.dat) from scummvm-icons repository.
+# Only includes icons for engines enabled in our build to keep the file small.
+# The resulting gui-icons-roomwizard.dat is deployed alongside the binary and
+# ScummVM discovers it via the iconspath config setting.
+build_icon_pack() {
+    log_info "Building game icon pack..."
+    
+    if ! command -v zip &>/dev/null; then
+        log_error "zip command not found. Install with: sudo apt install zip"
+        return 1
+    fi
+    
+    local ICONS_REPO="$SCRIPT_DIR/../scummvm-icons"
+    local ICONS_OUTPUT="$SCRIPT_DIR/gui-icons-roomwizard.dat"
+    
+    # Check if icons repo exists
+    if [ ! -d "$ICONS_REPO/icons" ]; then
+        log_warning "scummvm-icons repo not found at $ICONS_REPO, cloning..."
+        git clone --depth 1 https://github.com/scummvm/scummvm-icons.git "$ICONS_REPO"
+    fi
+    
+    # Only the engines enabled in our build (from configure_build):
+    # scumm, scumm-7-8, he, agi, sci, agos, queen, sky
+    # Icon filenames use engine prefixes: scumm-*, agi-*, sci-*, agos-*, queen-*, sky-*
+    local ENABLED_ENGINES="scumm agi sci agos queen sky"
+    
+    # Create temp directory for ZIP structure
+    local TEMP_DIR=$(mktemp -d)
+    mkdir -p "$TEMP_DIR/icons"
+    
+    # Copy icons for enabled engines
+    local icon_count=0
+    for engine in $ENABLED_ENGINES; do
+        # Copy engine-specific icons (engine-game.png) and engine fallback (engine.png)
+        for icon in "$ICONS_REPO/icons/${engine}-"*.png "$ICONS_REPO/icons/${engine}.png"; do
+            if [ -f "$icon" ]; then
+                cp "$icon" "$TEMP_DIR/icons/"
+                icon_count=$((icon_count + 1))
+            fi
+        done
+    done
+    
+    # Copy XML metadata from default/
+    for xml in "$ICONS_REPO/default/"*.xml; do
+        if [ -f "$xml" ]; then
+            cp "$xml" "$TEMP_DIR/"
+        fi
+    done
+    
+    # Copy default icons (fallback icons from default/icons/)
+    if [ -d "$ICONS_REPO/default/icons" ]; then
+        cp -r "$ICONS_REPO/default/icons/"* "$TEMP_DIR/icons/" 2>/dev/null || true
+    fi
+    
+    # Create ZIP (.dat) file
+    (cd "$TEMP_DIR" && zip -r "$ICONS_OUTPUT" . -x ".*")
+    
+    rm -rf "$TEMP_DIR"
+    
+    log_info "Icon pack built: $ICONS_OUTPUT ($icon_count engine icons)"
+}
+
 # Build ScummVM
 build_scummvm() {
     log_info "Building ScummVM..."
@@ -211,9 +433,13 @@ build_scummvm() {
     
     cd "$SCUMMVM_DIR"
     
-    # Auto-configure if not yet configured
+    # Auto-configure if not yet configured, or reconfigure if stale
     if [ ! -f "config.mk" ]; then
         log_warning "Not configured yet — running configure automatically..."
+        configure_build
+        cd "$SCUMMVM_DIR"
+    elif ! grep -q "^USE_PNG = 1" config.mk; then
+        log_warning "Stale config detected (missing PNG support), reconfiguring..."
         configure_build
         cd "$SCUMMVM_DIR"
     fi
@@ -228,7 +454,7 @@ build_scummvm() {
     # Build with static linking
     # Use -j4 for parallel compilation (adjust based on CPU cores)
     # Pass CC explicitly to ensure .c files use the ARM cross-compiler
-    make -j4 CC=arm-linux-gnueabihf-gcc LDFLAGS='-static' LIBS='-lpthread -lm'
+    make -j4 CC=arm-linux-gnueabihf-gcc LDFLAGS='-static'
     
     # Check if binary was created
     if [ -f "scummvm" ]; then
@@ -322,6 +548,34 @@ STOP
     # Copy binary to device
     log_info "Copying binary to device..."
     scp scummvm "$DEVICE:$DEVICE_PATH/"
+    
+    # Deploy theme/GUI data files (without these, ScummVM falls back to green wireframe UI)
+    log_info "Deploying theme files..."
+    if [ -f "gui/themes/scummremastered.zip" ]; then
+        scp gui/themes/scummremastered.zip "$DEVICE:$DEVICE_PATH/"
+        log_success "Deployed scummremastered.zip"
+    else
+        log_warning "gui/themes/scummremastered.zip not found — theme will not be available"
+    fi
+    if [ -f "gui/themes/gui-icons.dat" ]; then
+        scp gui/themes/gui-icons.dat "$DEVICE:$DEVICE_PATH/"
+        log_success "Deployed gui-icons.dat"
+    else
+        log_warning "gui/themes/gui-icons.dat not found — GUI icons will not be available"
+    fi
+    
+    # Deploy game icon pack (engine-specific game icons)
+    local ICONS_DAT="$SCRIPT_DIR/gui-icons-roomwizard.dat"
+    if [ ! -f "$ICONS_DAT" ]; then
+        build_icon_pack
+    fi
+    if [ -f "$ICONS_DAT" ]; then
+        log_info "Deploying game icon pack..."
+        scp "$ICONS_DAT" "$DEVICE:$DEVICE_PATH/"
+        log_success "Deployed gui-icons-roomwizard.dat"
+    else
+        log_warning "gui-icons-roomwizard.dat not found — game icons will not be available"
+    fi
     
     # Make executable + set markers
     log_info "Setting permissions and markers..."
@@ -451,14 +705,22 @@ case "$CMD" in
         ;;
     all)
         check_prerequisites
+        build_arm_deps
         clean_build
         configure_build
         build_scummvm
         strip_binary
-        log_success "Build complete! Binary ready at: $SCUMMVM_DIR/scummvm"
-        echo ""
-        log_info "To deploy: $0 <ip>"
-        log_info "To deploy + set as boot app: $0 <ip> set-default"
+        if [ ! -f "$SCRIPT_DIR/gui-icons-roomwizard.dat" ]; then
+            build_icon_pack
+        fi
+        if [ -n "$DEVICE_IP" ]; then
+            deploy_to_device
+        else
+            log_success "Build complete! Binary ready at: $SCUMMVM_DIR/scummvm"
+            echo ""
+            log_info "To deploy: $0 <ip>"
+            log_info "To deploy + set as boot app: $0 <ip> set-default"
+        fi
         ;;
     info)
         show_info

@@ -107,8 +107,12 @@ restore_from_vcs() {
     
     # Apply configure patch
     if [ -f "$ABS_BACKEND_FILES/configure.patch" ]; then
-        git apply "$ABS_BACKEND_FILES/configure.patch"
-        echo -e "${GREEN}✓ Applied configure.patch${NC}"
+        if git apply --check "$ABS_BACKEND_FILES/configure.patch" 2>/dev/null; then
+            git apply "$ABS_BACKEND_FILES/configure.patch"
+            echo -e "${GREEN}✓ Applied configure.patch${NC}"
+        else
+            echo -e "${YELLOW}⚠ configure.patch already applied (skipped)${NC}"
+        fi
     else
         echo -e "${YELLOW}⚠ configure.patch not found${NC}"
     fi
@@ -193,8 +197,12 @@ restore_backup() {
     cd "$ABS_SCUMMVM_DIR"
     
     if [ -f ../scummvm-patches/configure.patch ]; then
-        git apply ../scummvm-patches/configure.patch
-        echo -e "${GREEN}✓ Applied configure.patch${NC}"
+        if git apply --check ../scummvm-patches/configure.patch 2>/dev/null; then
+            git apply ../scummvm-patches/configure.patch
+            echo -e "${GREEN}✓ Applied configure.patch${NC}"
+        else
+            echo -e "${YELLOW}⚠ configure.patch already applied (skipped)${NC}"
+        fi
     fi
     
     if [ -f ../scummvm-patches/roomwizard-backend.tar.gz ]; then

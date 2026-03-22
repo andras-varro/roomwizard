@@ -18,6 +18,8 @@ make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
 arm-linux-gnueabihf-strip scummvm
 ```
 
+> **Note:** `build-and-deploy.sh` auto-restores backend files from `backend-files/` into the ScummVM build tree before each build, so manual `manage-scummvm-changes.sh restore` is no longer needed.
+
 ### Deploy
 ```bash
 scp scummvm root@192.168.50.73:/opt/games/
@@ -37,7 +39,7 @@ ssh root@192.168.50.73 '/opt/games/unified_calibrate'
 
 ## Status
 
-✅ Fully functional — GUI, touch, audio (OPL/AdLib music + SFX), virtual keyboard all working.
+✅ Fully functional — GUI, touch, keyboard, mouse, gamepad, audio (OPL/AdLib music + SFX), virtual keyboard all working. All input verified with EcoQuest and Full Throttle.
 See [SCUMMVM_DEV.md](SCUMMVM_DEV.md) for architecture, audio design, and optimization history.
 
 ## Input Devices
