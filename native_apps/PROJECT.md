@@ -107,6 +107,8 @@ ModalDialogAction action = modal_dialog_update(&pause_dialog, tx, ty, touching, 
 - `hardware_config/` - *(consolidated into `device_tools`)* Device settings GUI
 - `hardware_diag/` - *(consolidated into `device_tools`)* System diagnostics GUI
 - `tests/` - Touch debug/inject, framebuffer capture; `unified_calibrate` consolidated into `device_tools`
+- [mario](https://github.com/nrthyrk/super-mario)
+- [collection of ideas](https://osgameclones.com/)
 
 ## Device Tools
 
