@@ -6,6 +6,11 @@
 # Upstream ScummVM asset used as input to make_vkeybd_scaled.py — not owned by this repo
 scummvm-roomwizard/vkeybd_small_source.zip
 
+# ScummVM build artifacts
+scummvm-roomwizard/gui-icons-roomwizard.dat
+scummvm-icons/
+scummvm-roomwizard/arm-deps/
+
 # dotenv files
 .env
 
