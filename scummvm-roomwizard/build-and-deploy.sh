@@ -47,6 +47,19 @@ SCUMMVM_DIR="../scummvm"
 NATIVE_APPS_DIR="../native_apps"
 ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
 
+# Engine batch level (0-5). Each level includes all engines from previous levels.
+# 0 = base (8 original engines only)
+# 1 = + small zero-dep engines (lure, drascula, touche, teenagent, tucker, hugo, draci, plumbers, supernova, efh, cge, cge2, dreamweb, bbvs, cine, cruise, lab, parallaction)
+# 2 = + larger zero-dep engines (kyra, sword1, sword2, tinsel, gob, saga, tsage, made, mads, toon, sherlock, access, kingdom, mm, voyeur, hypno, chewy, gnap, illusions)
+# 3 = + highres/16bit engines (griffon, neverhood, composer, mortevielle, toltecs, prince, hadesch, pink, private, asylum, cryomni3d, dragons, hopkins, tony, ngi, bladerunner, pegasus, freescape, mtropolis, trecision, adl, vcruise)
+# 4 = + built-in feature engines (hdb, mohawk, ultima, twine, grim)
+# 5 = + cross-compiled lib engines (requires building additional libs)
+ENGINE_BATCH="${ENGINE_BATCH:-0}"
+
+# Optional: add a single extra engine for testing
+# Usage: EXTRA_ENGINE=kyra ./build-and-deploy.sh build
+EXTRA_ENGINE="${EXTRA_ENGINE:-}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -296,6 +309,68 @@ configure_build() {
         rm -f config.mk config.h
     fi
     
+    # ── Build engine list based on ENGINE_BATCH level ────────────────────────
+    # Base engines (always included)
+    ENGINES="--enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he"
+    ENGINES="$ENGINES --enable-engine=agi --enable-engine=sci --enable-engine=agos"
+    ENGINES="$ENGINES --enable-engine=sky --enable-engine=queen"
+
+    if [ "$ENGINE_BATCH" -ge 1 ]; then
+        echo ">>> Including Batch 1 engines (small zero-dep)..."
+        ENGINES="$ENGINES --enable-engine=lure --enable-engine=drascula --enable-engine=touche"
+        ENGINES="$ENGINES --enable-engine=teenagent --enable-engine=tucker --enable-engine=hugo"
+        ENGINES="$ENGINES --enable-engine=draci --enable-engine=plumbers --enable-engine=supernova"
+        ENGINES="$ENGINES --enable-engine=efh --enable-engine=cge --enable-engine=cge2"
+        ENGINES="$ENGINES --enable-engine=dreamweb --enable-engine=bbvs --enable-engine=cine"
+        ENGINES="$ENGINES --enable-engine=cruise --enable-engine=lab --enable-engine=parallaction"
+    fi
+
+    if [ "$ENGINE_BATCH" -ge 2 ]; then
+        echo ">>> Including Batch 2 engines (larger zero-dep)..."
+        ENGINES="$ENGINES --enable-engine=kyra --enable-engine=sword1 --enable-engine=sword2"
+        ENGINES="$ENGINES --enable-engine=tinsel --enable-engine=gob --enable-engine=saga"
+        ENGINES="$ENGINES --enable-engine=tsage --enable-engine=made --enable-engine=mads"
+        ENGINES="$ENGINES --enable-engine=toon --enable-engine=sherlock --enable-engine=access"
+        ENGINES="$ENGINES --enable-engine=kingdom --enable-engine=mm --enable-engine=voyeur"
+        ENGINES="$ENGINES --enable-engine=hypno --enable-engine=chewy --enable-engine=gnap"
+        ENGINES="$ENGINES --enable-engine=illusions"
+    fi
+
+    if [ "$ENGINE_BATCH" -ge 3 ]; then
+        echo ">>> Including Batch 3 engines (highres/16bit)..."
+        ENGINES="$ENGINES --enable-engine=griffon --enable-engine=neverhood --enable-engine=composer"
+        ENGINES="$ENGINES --enable-engine=mortevielle --enable-engine=toltecs --enable-engine=prince"
+        ENGINES="$ENGINES --enable-engine=hadesch --enable-engine=pink --enable-engine=private"
+        ENGINES="$ENGINES --enable-engine=asylum --enable-engine=cryomni3d --enable-engine=dragons"
+        ENGINES="$ENGINES --enable-engine=hopkins --enable-engine=tony --enable-engine=ngi"
+        ENGINES="$ENGINES --enable-engine=bladerunner --enable-engine=pegasus --enable-engine=freescape"
+        ENGINES="$ENGINES --enable-engine=mtropolis --enable-engine=trecision --enable-engine=adl"
+        ENGINES="$ENGINES --enable-engine=vcruise"
+    fi
+
+    if [ "$ENGINE_BATCH" -ge 4 ]; then
+        echo ">>> Including Batch 4 engines (built-in features: lua, tinygl, bink)..."
+        ENGINES="$ENGINES --enable-engine=hdb --enable-engine=mohawk --enable-engine=ultima"
+        ENGINES="$ENGINES --enable-engine=twine --enable-engine=grim"
+    fi
+
+    if [ "$ENGINE_BATCH" -ge 5 ]; then
+        echo ">>> Including Batch 5 engines (need cross-compiled libs)..."
+        echo ">>> WARNING: Batch 5 requires libjpeg, freetype2, tremor, libmad to be cross-compiled"
+        ENGINES="$ENGINES --enable-engine=groovie --enable-engine=wintermute"
+        ENGINES="$ENGINES --enable-engine=buried --enable-engine=zvision --enable-engine=petka"
+        ENGINES="$ENGINES --enable-engine=nancy --enable-engine=ags"
+    fi
+
+    # Optional: add a single extra engine for testing
+    if [ -n "$EXTRA_ENGINE" ]; then
+        echo ">>> Adding extra test engine: $EXTRA_ENGINE"
+        ENGINES="$ENGINES --enable-engine=$EXTRA_ENGINE"
+    fi
+
+    echo ">>> Engine batch level: $ENGINE_BATCH"
+    echo ">>> Configure engines: $ENGINES"
+
     # Configure with ARM cross-compiler
     # Explicitly set CC and CXX to ensure C files are compiled with ARM compiler
     # --with-zlib-prefix and --with-png-prefix point configure at our
@@ -310,14 +385,7 @@ configure_build() {
         --with-zlib-prefix="$ARM_DEPS_PREFIX" \
         --with-png-prefix="$ARM_DEPS_PREFIX" \
         --disable-all-engines \
-        --enable-engine=scumm \
-        --enable-engine=scumm-7-8 \
-        --enable-engine=he \
-        --enable-engine=agi \
-        --enable-engine=sci \
-        --enable-engine=agos \
-        --enable-engine=sky \
-        --enable-engine=queen \
+        $ENGINES \
         --disable-mt32emu \
         --disable-flac \
         --disable-mad \
@@ -472,6 +540,15 @@ build_scummvm() {
             file scummvm
             exit 1
         fi
+
+        # Report binary size for tracking
+        UNSTRIPPED_SIZE=$(ls -la "$SCUMMVM_DIR/scummvm" | awk '{print $5}')
+        STRIPPED_SIZE=$(ls -la scummvm_stripped 2>/dev/null | awk '{print $5}')
+        echo ">>> Binary size (unstripped): $UNSTRIPPED_SIZE bytes ($(( UNSTRIPPED_SIZE / 1024 / 1024 )) MB)"
+        if [ -n "$STRIPPED_SIZE" ]; then
+            echo ">>> Binary size (stripped):   $STRIPPED_SIZE bytes ($(( STRIPPED_SIZE / 1024 / 1024 )) MB)"
+        fi
+        echo ">>> ENGINE_BATCH=$ENGINE_BATCH, EXTRA_ENGINE=${EXTRA_ENGINE:-none}"
     else
         log_error "Build failed - scummvm binary not found"
         exit 1
