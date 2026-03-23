@@ -10,6 +10,7 @@
 # separately by setup-device.sh.  Run that once before deploying for the first time.
 
 set -e
+_START_SECONDS=$(date +%s)
 
 DEVICE_IP="${1:-}"
 MODE="${2:-}"
@@ -18,16 +19,17 @@ GAMES_DIR="/opt/games"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
-info() { echo -e "${YELLOW}  → $*${NC}"; }
-warn() { echo -e "${BLUE}  ! $*${NC}"; }
-err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
+info() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}  → $*${NC}"; }
+warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
+err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── 1. cross-compiler check ─────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
 echo " RoomWizard Build + Deploy"
 echo "════════════════════════════════════════"
+info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
 CC=arm-linux-gnueabihf-gcc
 if ! command -v $CC &>/dev/null; then
@@ -116,7 +118,7 @@ echo ""
 echo "Build sizes:"
 ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/platformer build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools \
     | awk '{printf "  %-24s %s\n", $9, $5}'
-ok "Build complete"
+ok "Build complete ($(( $(date +%s) - _START_SECONDS ))s)"
 echo ""
 
 # ── 3. deploy? ───────────────────────────────────────────────────────────────
@@ -317,4 +319,7 @@ else
     echo "    ssh $DEVICE '/opt/roomwizard/app_launcher'"
 fi
 
+_END_SECONDS=$(date +%s)
+_ELAPSED=$((_END_SECONDS - _START_SECONDS))
+printf "[$(date '+%H:%M:%S')] Total time: %dm%02ds\n" $((_ELAPSED / 60)) $((_ELAPSED % 60))
 echo ""

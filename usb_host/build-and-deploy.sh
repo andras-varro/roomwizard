@@ -20,9 +20,13 @@
 #   7. Installs boot persistence for both
 #   8. Verifies everything is working
 set -e
+_START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 KERNEL_VERSION="4.14.52"
+
+# Timestamp helper
+ts() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 # --- Argument validation ---
 if [ -z "$1" ]; then
@@ -37,10 +41,11 @@ echo "============================================"
 echo "  RoomWizard USB Host + Controller Setup"
 echo "  Target: $DEVICE"
 echo "============================================"
+ts "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # --- Step 0: Check prerequisites ---
-echo "[0/9] Checking prerequisites..."
+ts "[0/9] Checking prerequisites..."
 
 if ! command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1; then
     echo "ERROR: arm-linux-gnueabihf-gcc not found."
@@ -64,7 +69,7 @@ echo "  ✓ SSH to $DEVICE works"
 echo ""
 
 # --- Step 1: Cross-compile devmem_write ---
-echo "[1/9] Cross-compiling devmem_write for ARM..."
+ts "[1/9] Cross-compiling devmem_write for ARM..."
 
 if [ ! -f "$SCRIPT_DIR/devmem_write" ] || [ "$SCRIPT_DIR/devmem_write.c" -nt "$SCRIPT_DIR/devmem_write" ]; then
     arm-linux-gnueabihf-gcc -static -O2 -o "$SCRIPT_DIR/devmem_write" "$SCRIPT_DIR/devmem_write.c"
@@ -75,7 +80,7 @@ fi
 echo ""
 
 # --- Step 2: Build Xbox controller kernel modules ---
-echo "[2/9] Building Xbox controller kernel modules..."
+ts "[2/9] Building Xbox controller kernel modules..."
 
 MODULES_DIR="$SCRIPT_DIR/modules"
 MODULES_NEEDED=true
@@ -117,7 +122,7 @@ echo "  ✓ All modules present: ff-memless.ko, joydev.ko, xpad.ko"
 echo ""
 
 # --- Step 3: Patch DTB USB power budget if needed ---
-echo "[3/9] Checking USB power budget in device tree..."
+ts "[3/9] Checking USB power budget in device tree..."
 
 DTB_NEEDS_REBOOT=false
 
@@ -165,7 +170,7 @@ fi
 echo ""
 
 # --- Step 4: Deploy USB host files ---
-echo "[4/9] Deploying USB host files to device..."
+ts "[4/9] Deploying USB host files to device..."
 
 scp -q "$SCRIPT_DIR/devmem_write"      "$DEVICE:/usr/local/bin/devmem_write"
 echo "  ✓ devmem_write -> /usr/local/bin/devmem_write"
@@ -181,7 +186,7 @@ echo "  ✓ Permissions set"
 echo ""
 
 # --- Step 5: Deploy Xbox controller modules ---
-echo "[5/9] Deploying Xbox controller modules..."
+ts "[5/9] Deploying Xbox controller modules..."
 
 ssh "$DEVICE" "mkdir -p /lib/modules/${KERNEL_VERSION}/extra"
 scp -q "$MODULES_DIR/ff-memless.ko" "$MODULES_DIR/joydev.ko" "$MODULES_DIR/xpad.ko" \
@@ -197,7 +202,7 @@ echo "  ✓ depmod complete"
 echo ""
 
 # --- Step 6: Load Xbox controller modules ---
-echo "[6/9] Loading Xbox controller modules..."
+ts "[6/9] Loading Xbox controller modules..."
 
 ssh "$DEVICE" bash -s <<'LOAD_SCRIPT'
 for mod in ff-memless joydev xpad; do
@@ -213,13 +218,13 @@ LOAD_SCRIPT
 echo ""
 
 # --- Step 7: Enable USB host mode ---
-echo "[7/9] Enabling USB host mode (runtime kernel patch)..."
+ts "[7/9] Enabling USB host mode (runtime kernel patch)..."
 
 ssh "$DEVICE" "/usr/local/bin/enable-usb-host.sh"
 echo ""
 
 # --- Step 8: Install boot persistence ---
-echo "[8/9] Installing boot persistence..."
+ts "[8/9] Installing boot persistence..."
 
 ssh "$DEVICE" "\
     ln -sf ../init.d/S89xpad-modules /etc/rc5.d/S89xpad-modules && \
@@ -229,7 +234,7 @@ ssh "$DEVICE" "\
 echo ""
 
 # --- Step 9: Verify ---
-echo "[9/9] Verifying..."
+ts "[9/9] Verifying..."
 echo ""
 
 ssh "$DEVICE" bash -s <<'VERIFY_SCRIPT'
@@ -274,8 +279,10 @@ ls -la /etc/rc5.d/S90usb-host 2>/dev/null && echo "  ✓ USB host mode: INSTALLE
 VERIFY_SCRIPT
 
 echo ""
+_END_SECONDS=$(date +%s)
+_ELAPSED=$((_END_SECONDS - _START_SECONDS))
 echo "============================================"
-echo "  Setup complete."
+printf "  Setup complete — total time: %dm%02ds\n" $((_ELAPSED / 60)) $((_ELAPSED % 60))
 if [ "$DTB_NEEDS_REBOOT" = true ]; then
     echo ""
     echo "  ⚠  DTB was patched — REBOOT REQUIRED!"

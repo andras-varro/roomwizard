@@ -21,6 +21,7 @@
 #   - WSL (for ScummVM builds)
 
 set -e
+_START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -29,10 +30,10 @@ DEVICE_IP="${1:-}"
 # ── colour helpers ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
-ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
-info() { echo -e "${YELLOW}  → $*${NC}"; }
-warn() { echo -e "${BLUE}  ! $*${NC}"; }
-err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
+info() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}  → $*${NC}"; }
+warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
+err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── discover components ─────────────────────────────────────────────────────
 # Returns an ordered list: native_apps first, then the rest alphabetically.
@@ -105,6 +106,7 @@ echo ""
 echo "╔═══════════════════════════════════════╗"
 echo "║  RoomWizard Deploy All                ║"
 echo "╚═══════════════════════════════════════╝"
+info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # Collect components
@@ -141,7 +143,7 @@ for comp in "${ALL_COMPONENTS[@]}"; do
     DEPLOY_SCRIPT="$SCRIPT_DIR/$comp/build-and-deploy.sh"
 
     echo "════════════════════════════════════════"
-    echo "  Component: $comp"
+    info "Component: $comp"
     echo "════════════════════════════════════════"
     echo ""
 
@@ -211,4 +213,7 @@ if [[ ${#FAILED[@]} -gt 0 ]]; then
 fi
 
 ok "All ${#SUCCEEDED[@]} component(s) deployed to $DEVICE_IP"
+_END_SECONDS=$(date +%s)
+_ELAPSED=$((_END_SECONDS - _START_SECONDS))
+printf "[$(date '+%H:%M:%S')] Total time: %dm%02ds\n" $((_ELAPSED / 60)) $((_ELAPSED % 60))
 echo ""

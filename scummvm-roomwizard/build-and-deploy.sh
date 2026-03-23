@@ -23,6 +23,7 @@
 #
 
 set -e  # Exit on error
+_START_SECONDS=$(date +%s)
 
 # Capture script directory before any cd
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,19 +56,19 @@ NC='\033[0m' # No Color
 
 # Helper functions
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "[$(date '+%H:%M:%S')] ${BLUE}[INFO]${NC} $1"
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "[$(date '+%H:%M:%S')] ${GREEN}[SUCCESS]${NC} $1"
 }
 
 log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARNING]${NC} $1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "[$(date '+%H:%M:%S')] ${RED}[ERROR]${NC} $1"
 }
 
 # Cross-compile zlib and libpng for ARM.
@@ -673,6 +674,7 @@ show_info() {
 }
 
 # Main script
+log_info "ScummVM build started — $(date '+%Y-%m-%d %H:%M:%S') — command: $CMD"
 case "$CMD" in
     clean)
         check_prerequisites
@@ -744,3 +746,6 @@ case "$CMD" in
         exit 1
         ;;
 esac
+_END_SECONDS=$(date +%s)
+_ELAPSED=$((_END_SECONDS - _START_SECONDS))
+log_success "$(printf 'ScummVM build script finished — total time: %dm%02ds' $((_ELAPSED / 60)) $((_ELAPSED % 60)))"

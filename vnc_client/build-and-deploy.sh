@@ -11,6 +11,7 @@
 # separately by setup-device.sh.  Run that once before deploying for the first time.
 
 set -e
+_START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -23,16 +24,17 @@ REMOTE_DIR="/opt/vnc_client"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
-info() { echo -e "${YELLOW}  → $*${NC}"; }
-warn() { echo -e "${BLUE}  ! $*${NC}"; }
-err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
+info() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}  → $*${NC}"; }
+warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
+err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── 1. cross-compiler check ─────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
 echo " VNC Client Build + Deploy"
 echo "════════════════════════════════════════"
+info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
 CC=arm-linux-gnueabihf-gcc
 if ! command -v $CC &>/dev/null; then
@@ -161,4 +163,7 @@ else
     fi
 fi
 
+_END_SECONDS=$(date +%s)
+_ELAPSED=$((_END_SECONDS - _START_SECONDS))
+printf "[$(date '+%H:%M:%S')] Total time: %dm%02ds\n" $((_ELAPSED / 60)) $((_ELAPSED % 60))
 echo ""
