@@ -14,8 +14,9 @@
 8. [Extended Hardware Discovery](#extended-hardware-discovery)
 9. [Live System Analysis](#live-system-analysis)
 10. [Safe Modification Strategy](#safe-modification-strategy)
-11. [Debugging & Rollback](#debugging--rollback)
-12. [Critical Warnings](#critical-warnings)
+11. [ARM Cortex-A8 CPU Limitations & Cross-Compilation](#arm-cortex-a8-cpu-limitations--cross-compilation)
+12. [Debugging & Rollback](#debugging--rollback)
+13. [Critical Warnings](#critical-warnings)
 
 ---
 
@@ -859,6 +860,66 @@ cd native_apps
 ```
 
 See [`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.
+
+---
+
+## ARM Cortex-A8 CPU Limitations & Cross-Compilation
+
+> **Key learnings from debugging ScummVM and other statically-linked ARM binaries**
+
+### 1. CPU: ARM Cortex-A8 (ARMv7-A) — No Hardware Integer Divide
+
+The TI AM3703 SoC in the RoomWizard uses a Cortex-A8 core (CPU part `0xc08`).
+
+**CPU features:** `half thumb fastmult vfp edsp thumbee neon vfpv3 tls vfpd32`
+
+- **Does NOT support** `sdiv`/`udiv` instructions — these require ARMv7ve (Cortex-A15+)
+- Attempting to execute `sdiv`/`udiv` causes **SIGILL** (Illegal Instruction, exit code 132)
+
+### 2. Cross-Compiler Warning
+
+The Ubuntu 20.04 `arm-linux-gnueabihf-gcc-9` cross-compiler targets `armv7-a` by default. However, its `libgcc.a` contains `sdiv`/`udiv` instructions (**93 occurrences**).
+
+- When linking statically (`-static`), these instructions get pulled into the binary
+- **Dynamically-linked binaries are NOT affected** because the device's own `libgcc` handles division correctly
+- This is **only a problem for static linking**
+
+### 3. Required Compiler Flags for Static ARM Binaries
+
+All statically-linked ARM binaries **MUST** use:
+
+```
+-mcpu=cortex-a8 -mfpu=neon
+```
+
+This forces GCC to use software division routines instead of hardware divide.
+
+| Component | Flags Used | Reference |
+|-----------|-----------|-----------|
+| Native apps | `-march=armv7-a -mtune=cortex-a8 -mfpu=neon` | [`native_apps/Makefile`](native_apps/Makefile) |
+| ScummVM | `-mcpu=cortex-a8 -mfpu=neon` added to `config.mk` after configure | [`scummvm-roomwizard/build-and-deploy.sh`](scummvm-roomwizard/build-and-deploy.sh) |
+| ARM dependency libraries | zlib, libpng, etc. must also be compiled with these flags | [`scummvm-roomwizard/build-and-deploy.sh`](scummvm-roomwizard/build-and-deploy.sh) |
+
+### 4. Diagnosis Pattern
+
+| Step | Detail |
+|------|--------|
+| **Symptom** | Binary crashes immediately with no output, no log files created |
+| **dmesg** | May not show the trap on this kernel (4.14.52) |
+| **SSH test** | Running directly via SSH shows: `Illegal instruction` (exit code 132) |
+| **Verification** | `arm-linux-gnueabihf-objdump -d binary \| grep -c 'sdiv\|udiv'` — count should be **0** |
+
+**Quick check for `sdiv`/`udiv` in a binary:**
+```bash
+arm-linux-gnueabihf-objdump -d ./my_binary | grep -c 'sdiv\|udiv'
+# Output should be 0 for Cortex-A8 safe binaries
+```
+
+### 5. libpng ARM NEON Optimization Issue
+
+When cross-compiling libpng with `-mfpu=neon`, libpng's build system detects NEON support and enables NEON-optimized code paths in the C source. However, the actual NEON assembly implementation files (containing `png_do_expand_palette_rgba8_neon`, `png_riffle_palette_neon`, `png_do_expand_palette_rgb8_neon`, `png_init_filter_functions_neon`) are not compiled in our manual build process. This causes undefined reference linker errors.
+
+**Fix**: Add `-DPNG_ARM_NEON_OPT=0` to CFLAGS when compiling libpng. This disables the NEON optimization paths entirely. The performance impact is negligible for the small PNG icons and UI elements ScummVM uses.
 
 ---
 
