@@ -149,6 +149,63 @@ Keyboard, mouse (with cursor), and gamepad all verified working in launcher and 
 
 ---
 
+## Build & Cross-Compilation Learnings
+
+Hard-won lessons from build and runtime failures. These are non-obvious pitfalls specific to the RoomWizard cross-compilation environment.
+
+### `png.h: No such file or directory` (March 2026)
+
+**Symptom:** `image/png.cpp:28:10: fatal error: png.h: No such file or directory` when building via `./deploy-all.sh <IP>`
+
+**Root cause:** The `deploy` command path in `build-and-deploy.sh` ran `build_scummvm()` → `make` without calling `build_arm_deps()` first. The `arm-deps/` directory with cross-compiled zlib and libpng didn't exist. However, `config.mk` from a prior configure still had `USE_PNG = 1`, so make tried to compile `image/png.cpp` which `#include <png.h>`.
+
+**Why it wasn't caught before:** The `all` command path calls `build_arm_deps()` → `configure_build()` → `build_scummvm()` in order. The `deploy` path was a shortcut that skipped dependency building.
+
+**Fix:**
+- Added `build_arm_deps` call at the start of `build_scummvm()` — runs on every code path, idempotent (skips if `libpng.a` exists)
+- Strengthened staleness check to verify `$ARM_DEPS_PREFIX/lib/libpng.a` exists on disk, not just that `config.mk` says `USE_PNG = 1`
+
+**Lesson:** Generated config files can become stale. Always verify the actual build artifacts exist, not just config flags.
+
+### SIGSEGV before `main()` — glibc 2.31 static pthread vs kernel 4.14.52 (March 2026)
+
+**Symptom:** ScummVM crashes immediately with `Segmentation fault (core dumped)`. Even `scummvm --version` crashes. No log file created. `dmesg` shows:
+```
+PC is at 0x40
+LR is at 0x130415d
+r0 : ffffffda                     ← -38 = -ENOSYS
+ISA ThumbEE
+```
+
+**Root cause:** The build used `-Wl,--whole-archive -lpthread -Wl,--no-whole-archive` for static linking. This forces ALL symbols from `libpthread.a` into the binary, including glibc 2.31's pthread initialization code that uses `clock_gettime64` (syscall 403 on ARM).
+
+The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscall was added in **kernel 5.1**. During glibc's `__libc_start_main`, the pthread init path calls `clock_gettime64`, gets `-ENOSYS` (r0=-38), then dereferences a NULL VDSO function pointer at offset 0x40 → **SIGSEGV before `main()` ever executes**.
+
+**Why native C apps weren't affected:** The C apps (brick_breaker, app_launcher, etc.) don't link with `-lpthread` at all, so the problematic pthread initialization code is never included.
+
+**Build environment:**
+
+| Component | Version |
+|-----------|---------|
+| Cross-compiler | `arm-linux-gnueabihf-g++` 9.4.0 |
+| Cross glibc | 2.31 (built against kernel 5.4 headers) |
+| Cross linux-libc-dev | 5.4.0 headers |
+| Target kernel | **4.14.52** (pre-time64, pre-`clock_gettime64`) |
+
+**Diagnostic signature:** If you see `PC=0x40, r0=0xffffffda (-ENOSYS)` in dmesg, this is the classic glibc 2.31 `clock_gettime64` + static pthread + old kernel crash.
+
+**Fix:** Changed `LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `LIBS += -lpthread`. Without `--whole-archive`, the linker only includes pthread symbols actually referenced by ScummVM code, avoiding the problematic `clock_gettime64` initialization path.
+
+**⚠️ CRITICAL RULE:** NEVER use `--whole-archive` with `-lpthread` for static ARM builds targeting kernel < 5.1. The glibc 2.31 pthread library contains `clock_gettime64` syscall code that crashes on pre-5.1 kernels.
+
+**Alternative approaches if `-lpthread` alone causes link errors:**
+1. Use a cross-toolchain with older glibc (2.27 or earlier, pre-time64)
+2. Build a custom sysroot with `linux-libc-dev` headers matching kernel 4.14
+3. Switch to musl-libc for static linking (musl handles old kernels gracefully)
+4. Switch to dynamic linking and use the device's own libc.so
+
+---
+
 ## Optimization Backlog
 
 **Baseline:** CPU ~80% → **32%** after all optimizations (LSL5 gameplay, OPL music + animation)
@@ -180,9 +237,45 @@ Keyboard, mouse (with cursor), and gamepad all verified working in launcher and 
 - **Exit game returns to launcher on Ubuntu but exits ScummVM on RoomWizard** — the backend's `quit()` is being called when the engine exits instead of returning to the ScummVM launcher. Likely cause: `OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets the main loop drop back to the launcher. Compare with SDL backend's `_quit` flag + launcher loop.
 - **Wireframe green UI (missing theme data)** — **Fixed.** The build-and-deploy script now automatically deploys `scummremastered.zip` and `gui-icons.dat` from `gui/themes/` to `/opt/games/` on the device. If you still see the green wireframe UI, re-run `./build-and-deploy.sh <ip>` to redeploy the theme files.
 
-## Supported Engines
+## ScummVM Engine Availability on RoomWizard
 
-SCUMM v0–v8, HE71+, AGI, SCI, AGOS, Beneath a Steel Sky, Flight of the Amazon Queen
+### Currently Enabled
+All default (stable, build-by-default=yes) ScummVM engines are enabled. Engines with unmet library dependencies are automatically skipped by configure.
+
+### 16-bit Color Support (USE_RGB_COLOR)
+The RoomWizard backend was added to the 16-bit backend whitelist via [`configure.patch`](backend-files/configure.patch). This enables `USE_RGB_COLOR` which is required by ~30 engines. After building, verify with:
+```bash
+grep USE_RGB_COLOR scummvm/config.h
+```
+If not defined, ~17 engines will be silently skipped (ADL, Blade Runner, Blazing Dragons, Freescape, Griffon Legend, Grim, Hopkins FBI, Hypno/UFOs, mTropolis, NGI, Pegasus Prime, Tony Tough, Trecision, V-Cruise, Riven, Ultima IV/VIII).
+
+### Skipped Engines — Missing Library Dependencies
+
+| Library to Cross-Compile | Engines Unlocked | Priority |
+|--------------------------|-----------------|----------|
+| **libjpeg** | Groovie 2, Myst 3, Myst ME, Wintermute, Titanic, Glk (partial) — 7 engines | High |
+| **FreeType2** | Buried in Time, Z-Vision, Petka, Stark (partial), Glk (partial) — 6 engines | Medium |
+| **Lua 5.x** | HDB, Sword25 (partial), Ultima VI — 4 engines | Medium |
+| **libvorbis** (remove `--disable-vorbis`) | Nancy Drew, Stark (partial) — 3 engines | Low |
+| **libmad** (remove `--disable-mad`) | AGS, Titanic (partial) — 2 engines | Low |
+| **libtheora** | Sword25 (partial) — 2 engines | Low |
+
+To add a library, extend `build_arm_deps()` in [`build-and-deploy.sh`](build-and-deploy.sh) following the zlib/libpng pattern, and remove any `--disable-*` flags from configure.
+
+### WIP/Unstable Engines (can be force-enabled)
+
+These engines have all their dependencies met but are marked `build-by-default=no`. They can be force-enabled by adding `--enable-engine=<name>` to the configure call:
+
+Avalanche, Chamber, Cryo/Lost Eden, DM/Dungeon Master, ICB/In Cold Blood, Immortal, Last Express, Lilliput, MacVenture, MADS V2, Carmen Sandiego (Mohawk sub), Mutation of JB, Sludge, Star Trek, Ultima I, WAGE
+
+**Note**: Playground 3d and TestBed are testing/debug engines, not games.
+
+### Cannot Be Enabled (require OpenGL GPU)
+
+Hpl1, Watchmaker — require OpenGL which is not available on the RoomWizard hardware.
+
+### Build Artifacts Note
+When compiling libpng with `-mfpu=neon`, add `-DPNG_ARM_NEON_OPT=0` to disable libpng's NEON assembly optimizations (the assembly files are not compiled in our manual build, causing linker errors). See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#5-libpng-arm-neon-optimization-issue) for details.
 
 ## Memory Budget
 
