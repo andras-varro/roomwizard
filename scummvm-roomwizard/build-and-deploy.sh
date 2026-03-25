@@ -429,68 +429,6 @@ restore_backend_files() {
     log_success "Backend files restored and stale objects invalidated"
 }
 
-# Build game icon pack (.dat) from scummvm-icons repository.
-# Only includes icons for engines enabled in our build to keep the file small.
-# The resulting gui-icons-roomwizard.dat is deployed alongside the binary and
-# ScummVM discovers it via the iconspath config setting.
-build_icon_pack() {
-    log_info "Building game icon pack..."
-    
-    if ! command -v zip &>/dev/null; then
-        log_error "zip command not found. Install with: sudo apt install zip"
-        return 1
-    fi
-    
-    local ICONS_REPO="$SCRIPT_DIR/../scummvm-icons"
-    local ICONS_OUTPUT="$SCRIPT_DIR/gui-icons-roomwizard.dat"
-    
-    # Check if icons repo exists
-    if [ ! -d "$ICONS_REPO/icons" ]; then
-        log_warning "scummvm-icons repo not found at $ICONS_REPO, cloning..."
-        git clone --depth 1 https://github.com/scummvm/scummvm-icons.git "$ICONS_REPO"
-    fi
-    
-    # Only the engines enabled in our build (from configure_build):
-    # scumm, scumm-7-8, he, agi, sci, agos, queen, sky
-    # Icon filenames use engine prefixes: scumm-*, agi-*, sci-*, agos-*, queen-*, sky-*
-    local ENABLED_ENGINES="scumm agi sci agos queen sky"
-    
-    # Create temp directory for ZIP structure
-    local TEMP_DIR=$(mktemp -d)
-    mkdir -p "$TEMP_DIR/icons"
-    
-    # Copy icons for enabled engines
-    local icon_count=0
-    for engine in $ENABLED_ENGINES; do
-        # Copy engine-specific icons (engine-game.png) and engine fallback (engine.png)
-        for icon in "$ICONS_REPO/icons/${engine}-"*.png "$ICONS_REPO/icons/${engine}.png"; do
-            if [ -f "$icon" ]; then
-                cp "$icon" "$TEMP_DIR/icons/"
-                icon_count=$((icon_count + 1))
-            fi
-        done
-    done
-    
-    # Copy XML metadata from default/
-    for xml in "$ICONS_REPO/default/"*.xml; do
-        if [ -f "$xml" ]; then
-            cp "$xml" "$TEMP_DIR/"
-        fi
-    done
-    
-    # Copy default icons (fallback icons from default/icons/)
-    if [ -d "$ICONS_REPO/default/icons" ]; then
-        cp -r "$ICONS_REPO/default/icons/"* "$TEMP_DIR/icons/" 2>/dev/null || true
-    fi
-    
-    # Create ZIP (.dat) file
-    (cd "$TEMP_DIR" && zip -r "$ICONS_OUTPUT" . -x ".*")
-    
-    rm -rf "$TEMP_DIR"
-    
-    log_info "Icon pack built: $ICONS_OUTPUT ($icon_count engine icons)"
-}
-
 # Build ScummVM
 build_scummvm() {
     log_info "Building ScummVM..."
@@ -642,17 +580,14 @@ STOP
         log_warning "gui/themes/gui-icons.dat not found — GUI icons will not be available"
     fi
     
-    # Deploy game icon pack (engine-specific game icons)
-    local ICONS_DAT="$SCRIPT_DIR/gui-icons-roomwizard.dat"
-    if [ ! -f "$ICONS_DAT" ]; then
-        build_icon_pack
-    fi
-    if [ -f "$ICONS_DAT" ]; then
-        log_info "Deploying game icon pack..."
-        scp "$ICONS_DAT" "$DEVICE:$DEVICE_PATH/"
-        log_success "Deployed gui-icons-roomwizard.dat"
+    # Deploy virtual keyboard pack (custom scaled layout for 800x480 display)
+    local VKEYBD_ZIP="$SCRIPT_DIR/vkeybd_roomwizard.zip"
+    if [ -f "$VKEYBD_ZIP" ]; then
+        log_info "Deploying virtual keyboard pack..."
+        scp "$VKEYBD_ZIP" "$DEVICE:$DEVICE_PATH/"
+        log_success "Deployed vkeybd_roomwizard.zip"
     else
-        log_warning "gui-icons-roomwizard.dat not found — game icons will not be available"
+        log_warning "vkeybd_roomwizard.zip not found at $VKEYBD_ZIP — virtual keyboard will be disabled"
     fi
     
     # Make executable + set markers
@@ -789,9 +724,6 @@ case "$CMD" in
         configure_build
         build_scummvm
         strip_binary
-        if [ ! -f "$SCRIPT_DIR/gui-icons-roomwizard.dat" ]; then
-            build_icon_pack
-        fi
         if [ -n "$DEVICE_IP" ]; then
             deploy_to_device
         else
