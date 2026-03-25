@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -155,6 +156,7 @@ typedef struct {
     uint32_t    last_rescan_ms;
     uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
+    bool        needs_redraw;       /* Dirty flag — skip rendering when false */
 } Launcher;
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -734,6 +736,7 @@ int main(int argc, char *argv[]) {
     launcher.last_rescan_ms = 0;
     launcher.last_launch_return_ms = 0;
     launcher.selected_app = -1;  /* No keyboard selection until user navigates */
+    launcher.needs_redraw = true;  /* Force initial frame draw */
 
     /* Compute grid layout based on screen dimensions */
     compute_grid_layout(&launcher.fb);
@@ -742,8 +745,15 @@ int main(int argc, char *argv[]) {
     int count = scan_apps(&launcher);
     LOG_INFO(&launcher.logger, "Found %d app(s), %d page(s)", count, launcher.total_pages);
 
-    /* ── Main loop — polling-based (~30 fps) ────────────────────── */
+    /* ── Main loop — polling-based, with dirty-flag rendering ───── */
     while (!quit_flag) {
+        /* Save visual state for dirty detection */
+        int old_selected = launcher.selected_app;
+        int old_page     = launcher.current_page;
+        int old_count    = launcher.app_count;
+        bool old_gp_conn = launcher.input.gamepad_connected;
+        bool old_kb_conn = launcher.input.keyboard_connected;
+
         /* Poll touch (non-blocking) */
         touch_poll(&launcher.touch);
         TouchState ts = touch_get_state(&launcher.touch);
@@ -769,8 +779,11 @@ int main(int argc, char *argv[]) {
          * The drain loop in launch_app() is kept as additional safety. */
         if (launcher.last_launch_return_ms &&
             (now - launcher.last_launch_return_ms) < LAUNCH_COOLDOWN_MS) {
-            /* Still in cooldown — draw UI but skip all input handling */
-            draw_launcher(&launcher);
+            /* Still in cooldown — draw once if needed, skip input */
+            if (launcher.needs_redraw) {
+                draw_launcher(&launcher);
+                launcher.needs_redraw = false;
+            }
             usleep(33333);
             continue;
         }
@@ -779,8 +792,10 @@ int main(int argc, char *argv[]) {
         if (ts.pressed) {
             LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
             int result = handle_touch(&launcher, ts.x, ts.y);
-            if (result >= 0)
+            if (result >= 0) {
                 launch_app(&launcher, result, fb_dev, touch_dev);
+                launcher.needs_redraw = true;  /* State changed after launch return */
+            }
         }
 
         /* Handle mouse click */
@@ -790,19 +805,43 @@ int main(int argc, char *argv[]) {
             int result = handle_touch(&launcher,
                                       launcher.input.mouse_x,
                                       launcher.input.mouse_y);
-            if (result >= 0)
+            if (result >= 0) {
                 launch_app(&launcher, result, fb_dev, touch_dev);
+                launcher.needs_redraw = true;  /* State changed after launch return */
+            }
         }
 
         /* Handle gamepad / keyboard navigation */
         int gp_result = handle_gamepad_input(&launcher);
-        if (gp_result >= 0)
+        if (gp_result >= 0) {
             launch_app(&launcher, gp_result, fb_dev, touch_dev);
+            launcher.needs_redraw = true;  /* State changed after launch return */
+        }
 
-        /* Draw */
-        draw_launcher(&launcher);
+        /* Detect any visual state changes from input handling */
+        if (launcher.selected_app != old_selected ||
+            launcher.current_page != old_page     ||
+            launcher.app_count    != old_count    ||
+            launcher.input.gamepad_connected  != old_gp_conn ||
+            launcher.input.keyboard_connected != old_kb_conn) {
+            launcher.needs_redraw = true;
+        }
 
-        usleep(33333);   /* ~30 fps */
+        /* Conditional rendering — only redraw when UI state has changed */
+        bool drew_frame = false;
+        if (launcher.needs_redraw) {
+            draw_launcher(&launcher);
+            launcher.needs_redraw = false;
+            drew_frame = true;
+        }
+
+        /* Adaptive sleep — longer idle sleep reduces CPU usage significantly.
+         * ~30 fps when actively redrawing; ~10 fps polling when idle. */
+        if (drew_frame) {
+            usleep(33333);   /* ~30 fps when active */
+        } else {
+            usleep(100000);  /* 100ms polling when idle */
+        }
     }
 
     /* Cleanup */

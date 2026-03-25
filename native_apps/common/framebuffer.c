@@ -311,10 +311,17 @@ void fb_swap(Framebuffer *fb) {
 }
 
 void fb_clear(Framebuffer *fb, uint32_t color) {
-    // Clear the back buffer if double buffering is enabled
+    /* Clear the back buffer if double buffering is enabled */
     uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
-    for (uint32_t i = 0; i < fb->width * fb->height; i++) {
-        target[i] = color;
+    uint32_t total = fb->width * fb->height;
+    if (color == 0) {
+        /* Fast path: memset for black (all-zero) */
+        memset(target, 0, total * sizeof(uint32_t));
+    } else {
+        /* Per-pixel fill for non-zero colours */
+        for (uint32_t i = 0; i < total; i++) {
+            target[i] = color;
+        }
     }
 }
 
