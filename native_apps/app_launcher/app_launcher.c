@@ -26,6 +26,7 @@
 #include "common/ppm.h"
 #include "common/logger.h"
 #include "common/gamepad.h"
+#include "common/hardware.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -702,6 +703,10 @@ int main(int argc, char *argv[]) {
 
     /* Initialize logger */
     logger_init(&launcher.logger, "app_launcher", LOG_LEVEL_INFO, true);
+
+    /* Turn off LEDs — they stay yellow after boot from the firmware */
+    hw_leds_off();
+    LOG_INFO(&launcher.logger, "LEDs turned off");
 
     /* Ensure 32bpp — a previous process (e.g. ScummVM) may have left 16bpp */
     fb_set_bpp(fb_dev, 32);
