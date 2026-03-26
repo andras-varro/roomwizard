@@ -270,10 +270,12 @@ static void add_log(KbdState *k, const char *m) {
 }
 
 /* ── Event processing ───────────────────────────────────────────────────── */
-static void proc_kbd(AppState *s) {
-    if (s->usb_fd<0) return;
+static bool proc_kbd(AppState *s) {
+    if (s->usb_fd<0) return false;
+    bool got_event = false;
     struct input_event e;
     while (read(s->usb_fd,&e,sizeof(e))==(ssize_t)sizeof(e)) {
+        got_event = true;
         if (e.type!=EV_KEY || e.code>=KEY_MAX) continue;
         const char *nm=key_name(e.code);
         char nb[32]; if(!nm){snprintf(nb,32,"KEY_%d",e.code);nm=nb;}
@@ -292,12 +294,15 @@ static void proc_kbd(AppState *s) {
             add_log(&s->kbd,lm);
         }
     }
+    return got_event;
 }
 
-static void proc_mouse(AppState *s) {
-    if (s->usb_fd<0) return;
+static bool proc_mouse(AppState *s) {
+    if (s->usb_fd<0) return false;
+    bool got_event = false;
     struct input_event e;
     while (read(s->usb_fd,&e,sizeof(e))==(ssize_t)sizeof(e)) {
+        got_event = true;
         if (e.type==EV_REL) {
             if (e.code==REL_X) {
                 s->mou.cx+=e.value;
@@ -316,13 +321,16 @@ static void proc_mouse(AppState *s) {
             else if (e.code==BTN_MIDDLE) s->mou.bm=p;
             else if (e.code==BTN_RIGHT) s->mou.br=p;
         }
+        return got_event;
     }
 }
 
-static void proc_pad(AppState *s) {
-    if (s->usb_fd<0) return;
+static bool proc_pad(AppState *s) {
+    if (s->usb_fd<0) return false;
+    bool got_event = false;
     struct input_event e;
     while (read(s->usb_fd,&e,sizeof(e))==(ssize_t)sizeof(e)) {
+        got_event = true;
         if (e.type==EV_ABS) {
             int c=e.code;
             if (c==ABS_X) s->pad.lx=norm_axis(e.value,s->pad.amin[c],s->pad.amax[c]);
@@ -346,6 +354,7 @@ static void proc_pad(AppState *s) {
             if (e.code==BTN_TR) s->pad.tr=e.value?1000:0;
         }
     }
+    return got_event;
 }
 
 /* ── Device type string ─────────────────────────────────────────────────── */
@@ -669,28 +678,33 @@ int main(int argc, char *argv[]) {
 
     create_ui();
     scan_devices(&state);
+    bool needs_redraw = true;
 
     while (running) {
         uint32_t now = get_time_ms();
 
-        /* Process USB input */
+        /* Process USB input — flag redraw on any device events */
         switch (state.scr) {
-            case SCR_KEYBOARD: proc_kbd(&state); break;
-            case SCR_MOUSE:    proc_mouse(&state); break;
-            case SCR_GAMEPAD:  proc_pad(&state); break;
+            case SCR_KEYBOARD: if (proc_kbd(&state))   needs_redraw = true; break;
+            case SCR_MOUSE:    if (proc_mouse(&state)) needs_redraw = true; break;
+            case SCR_GAMEPAD:  if (proc_pad(&state))   needs_redraw = true; break;
             default: break;
         }
 
-        /* Draw */
-        switch (state.scr) {
-            case SCR_MAIN:     draw_main(&fb, &state); break;
-            case SCR_KEYBOARD: draw_kbd(&fb, &state); break;
-            case SCR_MOUSE:    draw_mou(&fb, &state); break;
-            case SCR_GAMEPAD:  draw_pad(&fb, &state); break;
+        /* Draw only when state changed */
+        if (needs_redraw) {
+            switch (state.scr) {
+                case SCR_MAIN:     draw_main(&fb, &state); break;
+                case SCR_KEYBOARD: draw_kbd(&fb, &state); break;
+                case SCR_MOUSE:    draw_mou(&fb, &state); break;
+                case SCR_GAMEPAD:  draw_pad(&fb, &state); break;
+            }
+            fb_swap(&fb);
+            needs_redraw = false;
         }
-        fb_swap(&fb);
 
-        /* Touch input */
+        /* Touch input — track screen to detect changes */
+        AppScreen prev_scr = state.scr;
         touch_poll(&touch);
         TouchState ts = touch_get_state(&touch);
         int tx=ts.x, ty=ts.y;
@@ -701,7 +715,7 @@ int main(int argc, char *argv[]) {
             if (button_check_press(&btn_exit, tp && button_is_touched(&btn_exit,tx,ty), now))
                 running = false;
             if (button_check_press(&btn_rescan, tp && button_is_touched(&btn_rescan,tx,ty), now))
-                scan_devices(&state);
+                { scan_devices(&state); needs_redraw = true; }
             if (state.kbd_idx>=0 &&
                 button_check_press(&btn_ktest, tp && button_is_touched(&btn_ktest,tx,ty), now))
                 enter_kbd_test(&state);
@@ -726,7 +740,12 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        usleep(16000); /* ~60fps */
+        /* Screen transition triggers redraw */
+        if (state.scr != prev_scr)
+            needs_redraw = true;
+
+        /* Adaptive frame delay */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     close_usb(&state);

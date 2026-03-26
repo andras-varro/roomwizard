@@ -1801,46 +1801,64 @@ int main(int argc, char *argv[]) {
 
     printf("Brick Breaker started!\n");
 
-    /* ── main loop @ 60 FPS ──────────────────────────────────────────── */
+    /* ── main loop ──────────────────────────────────────────────────── */
+    bool needs_redraw = true;
     while (running) {
         frame_time_ms = get_time_ms();
 
+        GameScreen prev_screen = game.screen;
         handle_input();
         update_game();
 
-        switch (game.screen) {
-        case SCREEN_WELCOME:        draw_welcome();        break;
-        case SCREEN_PLAYING:        draw_game_screen();    break;
-        case SCREEN_PAUSED:         draw_paused();         break;
-        case SCREEN_LEVEL_COMPLETE: draw_level_complete(); break;
-        case SCREEN_GAME_OVER: {
-            /* Draw game field as background (visible through semi-transparent overlay) */
-            draw_game_screen();
-            /* Update and draw the unified game over screen */
-            TouchState go_st = touch_get_state(&touch);
-            GameOverAction action = gameover_update(&gos, &fb,
-                                                     go_st.x, go_st.y, go_st.pressed);
-            switch (action) {
-            case GAMEOVER_ACTION_RESTART:
-                reset_game();
-                audio_beep(&audio);
-                break;
-            case GAMEOVER_ACTION_EXIT:
-                running = false;
-                break;
-            case GAMEOVER_ACTION_RESET_SCORES:
-                /* Handled internally by the component */
-                break;
-            case GAMEOVER_ACTION_NONE:
-            default:
-                break;
+        /* Dirty-flag: active gameplay always redraws; static screens on change */
+        if (game.screen == SCREEN_PLAYING) {
+            needs_redraw = true;  /* continuous rendering during play */
+        } else if (game.screen != prev_screen) {
+            needs_redraw = true;  /* screen transition */
+        } else {
+            /* Static screens: redraw only on input activity */
+            TouchState ts = touch_get_state(&touch);
+            if (ts.pressed || ts.held) needs_redraw = true;
+            for (int i = 0; i < BTN_ID_COUNT; i++) {
+                if (gp_input.buttons[i].pressed) { needs_redraw = true; break; }
             }
-            break;
-        }
         }
 
-        fb_swap(&fb);
-        usleep(16667);  /* ~60 FPS */
+        if (needs_redraw) {
+            switch (game.screen) {
+            case SCREEN_WELCOME:        draw_welcome();        break;
+            case SCREEN_PLAYING:        draw_game_screen();    break;
+            case SCREEN_PAUSED:         draw_paused();         break;
+            case SCREEN_LEVEL_COMPLETE: draw_level_complete(); break;
+            case SCREEN_GAME_OVER: {
+                /* Draw game field as background (visible through semi-transparent overlay) */
+                draw_game_screen();
+                /* Update and draw the unified game over screen */
+                TouchState go_st = touch_get_state(&touch);
+                GameOverAction action = gameover_update(&gos, &fb,
+                                                         go_st.x, go_st.y, go_st.pressed);
+                switch (action) {
+                case GAMEOVER_ACTION_RESTART:
+                    reset_game();
+                    audio_beep(&audio);
+                    break;
+                case GAMEOVER_ACTION_EXIT:
+                    running = false;
+                    break;
+                case GAMEOVER_ACTION_RESET_SCORES:
+                    /* Handled internally by the component */
+                    break;
+                case GAMEOVER_ACTION_NONE:
+                default:
+                    break;
+                }
+                break;
+            }
+            }
+            fb_swap(&fb);
+        }
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        needs_redraw = false;  /* reset for next frame */
     }
 
     /* Clean up */

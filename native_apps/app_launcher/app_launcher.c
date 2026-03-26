@@ -784,7 +784,7 @@ int main(int argc, char *argv[]) {
                 draw_launcher(&launcher);
                 launcher.needs_redraw = false;
             }
-            usleep(33333);
+            usleep(FRAME_DELAY_ACTIVE_US);
             continue;
         }
 
@@ -838,9 +838,9 @@ int main(int argc, char *argv[]) {
         /* Adaptive sleep — longer idle sleep reduces CPU usage significantly.
          * ~30 fps when actively redrawing; ~10 fps polling when idle. */
         if (drew_frame) {
-            usleep(33333);   /* ~30 fps when active */
+            usleep(FRAME_DELAY_ACTIVE_US);
         } else {
-            usleep(100000);  /* 100ms polling when idle */
+            usleep(FRAME_DELAY_IDLE_US);
         }
     }
 

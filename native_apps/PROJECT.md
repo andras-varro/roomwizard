@@ -317,6 +317,70 @@ All apps converted from hardcoded 800/480 pixel values to dynamic `fb->width`/`f
 - [ ] **Calibration prompt on first boot** — detect missing `/etc/touch_calibration.conf` at game_selector startup and offer to run calibration before showing the menu
 - [ ] **Calibration in portrait mode** — Currently deferred. Calibration should be performed in landscape mode since bezel compensation values are in physical screen coordinates. A future enhancement could add a warning in the calibration tab when portrait mode is active, suggesting the user switch to landscape first.
 
+## CPU-Efficient Rendering Pattern
+
+### Problem
+
+On the 600 MHz ARMv7 with no GPU, unconditional 60 fps full-screen redraws waste 40 %+ CPU. Every app must minimise draw calls to keep the system responsive and leave headroom for input polling, audio mixing, and child-process management.
+
+### The Pattern — Dirty Flag + Conditional Draw + Adaptive Sleep
+
+Track a `needs_redraw` boolean. Set it whenever visible state changes (input, animation tick, window resize). Only call the draw routine when the flag is set, and sleep longer when idle.
+
+### For Static UI Apps (launchers, menus, settings)
+
+Use the full dirty-flag pattern. Draw **only** on state change (selection moved, page flipped, dialog opened). Sleep at `FRAME_DELAY_IDLE_US` (~10 fps / 100 ms) when idle — this alone drops CPU from ~40 % to < 5 %.
+
+### For Games
+
+Use the dirty flag for **non-playing** states (welcome screen, paused, game-over) where the screen is static. During active gameplay, render every frame and sleep at `FRAME_DELAY_ACTIVE_US` (~30 fps / 33 ms).
+
+### Code Template
+
+```c
+bool needs_redraw = true;  /* First frame always draws */
+
+while (running) {
+    /* Save old state */
+    int old_selected = state.selected;
+    
+    /* Poll input (non-blocking) */
+    touch_poll(&touch);
+    gamepad_poll(&gp);
+    keyboard_poll(&kb);
+    
+    /* Handle input, update state... */
+    
+    /* Check for state changes */
+    if (state.selected != old_selected /* || other changes */)
+        needs_redraw = true;
+    
+    /* Conditional rendering */
+    if (needs_redraw) {
+        draw_screen(&state);
+        needs_redraw = false;
+    }
+    
+    /* Adaptive sleep */
+    usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+}
+```
+
+### Reference Implementation
+
+[`app_launcher/app_launcher.c`](app_launcher/app_launcher.c) is the canonical example of this pattern. It tracks `needs_redraw` and `drew_frame` flags, only redraws on selection/page changes, and uses adaptive sleep to keep idle CPU under 5 %.
+
+### Constants
+
+Defined in [`common/common.h`](common/common.h):
+
+| Constant | Value | Rate | Use |
+|----------|-------|------|-----|
+| `FRAME_DELAY_ACTIVE_US` | 33 333 µs | ~30 fps | Active rendering (gameplay, animations) |
+| `FRAME_DELAY_IDLE_US` | 100 000 µs | ~10 fps | Idle polling (static screens, menus) |
+
+All apps should use these constants instead of hardcoded `usleep()` values for consistency.
+
 ---
 
 **ScummVM touch patterns:** See [`../scummvm-roomwizard/SCUMMVM_DEV.md`](../scummvm-roomwizard/SCUMMVM_DEV.md#gesture-navigation).

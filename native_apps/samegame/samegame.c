@@ -42,8 +42,7 @@
 #define ANIM_SLIDE_DURATION   200
 #define ANIM_SHAKE_DURATION   200
 
-/* Frame timing */
-#define FRAME_DELAY_US 16666  /* ~60 FPS (16.67ms) */
+/* Frame timing — uses FRAME_DELAY_ACTIVE_US / FRAME_DELAY_IDLE_US from common.h */
 
 /* Block colors (accessible, distinct palette) */
 #define BLOCK_COLOR_RED     RGB(220, 50, 50)
@@ -719,7 +718,7 @@ static void post_move_check(void) {
             fb_clear(&fb, COLOR_BLACK);
             draw_playing_field();
             fb_swap(&fb);
-            usleep(FRAME_DELAY_US);
+            usleep(FRAME_DELAY_ACTIVE_US);
         }
 
         if (!game.perfect_clear) {
@@ -1591,12 +1590,54 @@ int main(int argc, char *argv[]) {
     printf("Grid: %d x %d, block size: %d\n", game.cols, game.rows, game.block_size);
 
     /* Main game loop */
+    bool needs_redraw = true;  /* first frame always draws */
+
     while (running) {
+        /* Save visual state before input handling */
+        GameScreen prev_screen     = current_screen;
+        bool       prev_highlight  = game.highlight_active;
+        int        prev_hl_count   = game.highlight_count;
+        int        prev_score      = game.score;
+        int        prev_remaining  = game.blocks_remaining;
+        int        prev_mouse_x    = input.mouse_x;
+        int        prev_mouse_y    = input.mouse_y;
+        bool       prev_mouse_conn = input.mouse_connected;
+
         handle_input();
         update_game();
-        draw_game();
-        fb_swap(&fb);
-        usleep(FRAME_DELAY_US);
+
+        /* Detect visual state changes after input/update */
+        if (prev_screen    != current_screen       ||
+            prev_highlight != game.highlight_active ||
+            prev_hl_count  != game.highlight_count  ||
+            prev_score     != game.score            ||
+            prev_remaining != game.blocks_remaining ||
+            prev_mouse_conn != input.mouse_connected ||
+            (input.mouse_connected &&
+             (prev_mouse_x != input.mouse_x || prev_mouse_y != input.mouse_y))) {
+            needs_redraw = true;
+        }
+
+        /* Active animations/effects need continuous rendering */
+        if (game.anim_state != ANIM_NONE ||
+            game.shake_active            ||
+            game.flash_active            ||
+            game.perfect_clear) {
+            needs_redraw = true;
+        }
+
+        /* Game-over screen processes input inside draw — always redraw */
+        if (current_screen == SCREEN_GAME_OVER)
+            needs_redraw = true;
+
+        if (needs_redraw) {
+            draw_game();
+            fb_swap(&fb);
+            needs_redraw = false;
+        }
+
+        /* Adaptive sleep: faster polling when a redraw is pending */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     /* Cleanup (reverse order) */

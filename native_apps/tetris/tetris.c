@@ -847,14 +847,49 @@ int main(int argc, char *argv[]) {
     
     printf("Tetris game started!\n");
     
-    // Game loop (60 FPS)
+    /* ── main loop ───────────────────────────────────────────────────── */
+    bool needs_redraw = true;
     while (running) {
+        GameScreen prev_screen = current_screen;
+
+        /* Snapshot game state before processing (for change detection) */
+        int prev_px = game.current.x, prev_py = game.current.y;
+        int prev_rot = game.current.rotation, prev_score = game.score;
+
         handle_input();
         update_game();
-        draw_game();
-        fb_swap(&fb);  // Present back buffer to screen
-        
-        usleep(16667);  // ~60 FPS
+
+        /* Dirty-flag: detect what changed */
+        if (current_screen == SCREEN_PLAYING) {
+            /* Redraw only when piece moved, rotated, score changed, or drop tick */
+            if (game.current.x != prev_px || game.current.y != prev_py ||
+                game.current.rotation != prev_rot || game.score != prev_score)
+                needs_redraw = true;
+            /* Also redraw on any input activity (soft-drop held, etc.) */
+            TouchState ts = touch_get_state(&touch);
+            if (ts.pressed) needs_redraw = true;
+            for (int i = 0; i < BTN_ID_COUNT; i++) {
+                if (input.buttons[i].pressed || input.buttons[i].held) {
+                    needs_redraw = true; break;
+                }
+            }
+        } else if (current_screen != prev_screen) {
+            needs_redraw = true;  /* screen transition */
+        } else {
+            /* Static screens: redraw only on input activity */
+            TouchState ts = touch_get_state(&touch);
+            if (ts.pressed || ts.held) needs_redraw = true;
+            for (int i = 0; i < BTN_ID_COUNT; i++) {
+                if (input.buttons[i].pressed) { needs_redraw = true; break; }
+            }
+        }
+
+        if (needs_redraw) {
+            draw_game();
+            fb_swap(&fb);
+        }
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        needs_redraw = false;  /* reset for next frame */
     }
     
     gamepad_close(&gamepad);

@@ -743,14 +743,33 @@ int main(int argc, char *argv[]) {
 
     printf("Pong game started!\n");
     
-    // Game loop (60 FPS)
+    /* ── main loop ───────────────────────────────────────────────────── */
+    bool needs_redraw = true;
     while (running) {
+        GameScreen prev_screen = current_screen;
         handle_input();
         update_game();
-        draw_game();
-        fb_swap(&fb);  // Present back buffer to screen
-        
-        usleep(16667);  // ~60 FPS
+
+        /* Dirty-flag: active gameplay always redraws; static screens on change */
+        if (current_screen == SCREEN_PLAYING) {
+            needs_redraw = true;  /* continuous rendering (ball + AI always moving) */
+        } else if (current_screen != prev_screen) {
+            needs_redraw = true;  /* screen transition */
+        } else {
+            /* Static screens: redraw only on input activity */
+            TouchState ts = touch_get_state(&touch);
+            if (ts.pressed || ts.held) needs_redraw = true;
+            for (int i = 0; i < BTN_ID_COUNT; i++) {
+                if (input.buttons[i].pressed) { needs_redraw = true; break; }
+            }
+        }
+
+        if (needs_redraw) {
+            draw_game();
+            fb_swap(&fb);
+        }
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        needs_redraw = false;  /* reset for next frame */
     }
     
     gamepad_close(&gamepad);

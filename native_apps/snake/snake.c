@@ -623,15 +623,36 @@ int main(int argc, char *argv[]) {
     gamepad_init(&gamepad);
 
     // Game loop
+    bool needs_redraw = true;
     while (running) {
+        GameScreen prev_screen = current_screen;
         handle_input();
         if (current_screen == SCREEN_PLAYING)
             update_snake();
-        update_led_effects();  // Update LED effects (non-blocking)
-        draw_game();
-        fb_swap(&fb);  // Present back buffer to screen
-        
-        usleep(game.speed);
+        update_led_effects();
+
+        /* Dirty-flag: active gameplay always redraws; static screens only on changes */
+        if (current_screen == SCREEN_PLAYING) {
+            needs_redraw = true;  /* snake moves every tick */
+        } else if (current_screen != prev_screen) {
+            needs_redraw = true;  /* screen transition */
+        } else {
+            /* Static screens: redraw only on input activity */
+            TouchState ts = touch_get_state(&touch);
+            if (ts.pressed || ts.held) needs_redraw = true;
+            for (int i = 0; i < BTN_ID_COUNT; i++) {
+                if (input.buttons[i].pressed) { needs_redraw = true; break; }
+            }
+        }
+
+        if (needs_redraw) {
+            draw_game();
+            fb_swap(&fb);
+        }
+        /* Adaptive sleep: game.speed during play, idle polling on static screens */
+        usleep(current_screen == SCREEN_PLAYING ? game.speed
+             : (needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US));
+        needs_redraw = false;
     }
     
     // Cleanup

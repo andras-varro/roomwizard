@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #define MAX_GAMES 10
 #define GAME_DIR "/opt/games"
@@ -495,7 +496,10 @@ int main(int argc, char *argv[]) {
     selector.selected_game = 0;
     selector.scroll_offset = 0;  // Initialize scroll position
     
-    // Main loop — polling-based (~60fps)
+    // Main loop — polling-based with dirty-flag rendering optimization.
+    // Only redraws when UI state actually changes; uses adaptive sleep
+    // (faster when active, slower when idle) to save CPU.
+    bool needs_redraw = true;
     int running = 1;
     while (running) {
         // Poll touch input (non-blocking)
@@ -513,6 +517,10 @@ int main(int argc, char *argv[]) {
             gamepad_rescan(&selector.gamepad);
         }
 
+        /* Save state for dirty-flag comparison */
+        int old_selected = selector.selected_game;
+        int old_scroll   = selector.scroll_offset;
+
         /* ── Post-launch cooldown ──────────────────────────────────────
          * After returning from a child process, ignore ALL input for
          * LAUNCH_COOLDOWN_MS.  This is the primary defense against
@@ -523,9 +531,12 @@ int main(int argc, char *argv[]) {
          * The drain loop above is kept as an additional safety layer. */
         if (selector.last_launch_return_ms &&
             (current_time - selector.last_launch_return_ms) < LAUNCH_COOLDOWN_MS) {
-            /* Still in cooldown — draw menu but skip all input handling */
-            draw_menu(&selector);
-            usleep(16667);
+            /* Still in cooldown — draw menu (if needed) but skip input */
+            if (needs_redraw) {
+                draw_menu(&selector);
+                needs_redraw = false;
+            }
+            usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
             continue;
         }
 
@@ -538,7 +549,7 @@ int main(int argc, char *argv[]) {
             if (result >= 0) {
                 // Launch game with device paths
                 launch_game(&selector, result, fb_device, touch_device);
-                // Game exited, continue loop to redraw menu
+                needs_redraw = true;  /* Redraw after returning from launched app */
             } else if (result == -2) {
                 // Exit button pressed
                 printf("Exiting game selector\n");
@@ -554,6 +565,7 @@ int main(int argc, char *argv[]) {
 
             if (result >= 0) {
                 launch_game(&selector, result, fb_device, touch_device);
+                needs_redraw = true;  /* Redraw after returning from launched app */
             } else if (result == -2) {
                 printf("Exiting game selector (mouse)\n");
                 running = 0;
@@ -565,16 +577,25 @@ int main(int argc, char *argv[]) {
         if (gp_result >= 0) {
             // Launch selected game
             launch_game(&selector, gp_result, fb_device, touch_device);
-            // Game exited, continue loop to redraw menu
+            needs_redraw = true;  /* Redraw after returning from launched app */
         } else if (gp_result == -2) {
             printf("Exiting game selector (gamepad)\n");
             running = 0;
         }
 
-        // Draw the menu
-        draw_menu(&selector);
-        
-        usleep(16667);  // ~60 FPS
+        /* Dirty-flag: mark for redraw if selection or scroll changed */
+        if (selector.selected_game != old_selected ||
+            selector.scroll_offset != old_scroll)
+            needs_redraw = true;
+
+        /* Only redraw when UI state has changed */
+        if (needs_redraw) {
+            draw_menu(&selector);
+            needs_redraw = false;
+        }
+
+        /* Adaptive sleep: ~30 fps when active, ~10 fps when idle */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
     
     // Cleanup

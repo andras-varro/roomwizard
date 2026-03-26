@@ -285,16 +285,28 @@ int main(void) {
     char status_msg[64] = "";
     uint32_t status_time_ms = 0;
 
-    /* ── Main loop ──────────────────────────────────────────────── */
+    /* ── Main loop with dirty-flag rendering optimization ───────
+     * Only redraws when UI state actually changes; uses adaptive
+     * sleep (~30 fps active, ~10 fps idle) to save CPU.           */
+    bool needs_redraw = true;
+
     while (running) {
         uint32_t now = get_time_ms();
 
         /* Clear status message after 2 seconds */
         if (status_msg[0] && (now - status_time_ms > 2000)) {
             status_msg[0] = '\0';
+            needs_redraw = true;  /* Status text disappeared */
         }
 
-        /* ── Draw ───────────────────────────────────────────────── */
+        /* Save state for dirty-flag comparison */
+        bool old_audio   = audio_enabled;
+        bool old_led     = led_enabled;
+        int  old_led_br  = led_brightness;
+        int  old_bl_br   = backlight_brightness;
+
+        /* ── Draw (only when state changed) ─────────────────────── */
+        if (needs_redraw) {
         fb_clear(&fb, COLOR_BLACK);
 
         /* Header */
@@ -344,6 +356,8 @@ int main(void) {
         }
 
         fb_swap(&fb);
+        needs_redraw = false;
+        }
 
         /* ── Input ──────────────────────────────────────────────── */
         touch_poll(&touch);
@@ -402,6 +416,7 @@ int main(void) {
             config_save(&cfg);
             snprintf(status_msg, sizeof(status_msg), "SAVED!");
             status_time_ms = now;
+            needs_redraw = true;  /* Show status message */
         }
 
         /* Reset button */
@@ -418,6 +433,7 @@ int main(void) {
             apply_backlight(backlight_brightness);
             snprintf(status_msg, sizeof(status_msg), "DEFAULTS RESTORED");
             status_time_ms = now;
+            needs_redraw = true;  /* Show status message */
         }
 
         /* Exit button */
@@ -425,7 +441,13 @@ int main(void) {
             running = false;
         }
 
-        usleep(16000);  /* ~60fps */
+        /* Dirty-flag: mark for redraw if any value changed */
+        if (audio_enabled != old_audio || led_enabled != old_led ||
+            led_brightness != old_led_br || backlight_brightness != old_bl_br)
+            needs_redraw = true;
+
+        /* Adaptive sleep: ~30 fps when active, ~10 fps when idle */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     /* ── Cleanup ────────────────────────────────────────────────── */

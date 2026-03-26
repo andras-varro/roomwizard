@@ -15,6 +15,10 @@
 #include <stdbool.h>
 #include <sys/time.h>
 
+/* --- Frame timing constants for dirty-flag rendering pattern --- */
+#define FRAME_DELAY_ACTIVE_US  33333   /* ~30 fps when actively rendering */
+#define FRAME_DELAY_IDLE_US   100000   /* ~10 fps polling when idle       */
+
 // ============================================================================
 // BUTTON SYSTEM
 // ============================================================================

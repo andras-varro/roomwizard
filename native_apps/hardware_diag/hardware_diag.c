@@ -813,8 +813,8 @@ int main(int argc, char *argv[]) {
 
         was_touching = ts.pressed || ts.held;
 
-        /* Small sleep to avoid busy-spinning */
-        usleep(30000);  /* ~33 fps max */
+        /* Adaptive frame delay — 30fps when rendering, 10fps when idle */
+        usleep(need_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     /* ── Cleanup (reverse order) ────────────────────────────────────── */

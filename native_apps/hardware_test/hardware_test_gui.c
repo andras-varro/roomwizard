@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <time.h>
 #include <linux/fb.h>
 #include <sys/ioctl.h>
@@ -717,10 +718,21 @@ int main(void) {
     int selected = 0;
     bool running = true;
     uint32_t last_time = 0;
+
+    /* Dirty-flag rendering: only redraw when UI state changes.
+     * Uses adaptive sleep (~30 fps active, ~10 fps idle) to save CPU. */
+    bool needs_redraw = true;
     
     while (running) {
         if (state == TEST_MENU) {
-            draw_test_menu(&fb, &layout, buttons, &exit_btn, selected);
+            /* Save state for dirty-flag comparison */
+            int old_selected = selected;
+
+            /* Only redraw when state has changed */
+            if (needs_redraw) {
+                draw_test_menu(&fb, &layout, buttons, &exit_btn, selected);
+                needs_redraw = false;
+            }
             
             int x, y;
             if (check_touch(&touch, &x, &y)) {
@@ -741,6 +753,10 @@ int main(void) {
                     usleep(200000);
                 }
             }
+
+            /* Dirty-flag: mark for redraw if selection changed */
+            if (selected != old_selected)
+                needs_redraw = true;
         } else {
             // Run selected test
             switch (state) {
@@ -762,8 +778,11 @@ int main(void) {
              * tap doesn't immediately re-select a test in the menu.    */
             touch_drain_events(&touch);
             usleep(200000);
+            needs_redraw = true;  /* Redraw menu after returning from test */
         }
-        usleep(10000);
+
+        /* Adaptive sleep: ~30 fps when active, ~10 fps when idle */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
     
     hw_leds_off();

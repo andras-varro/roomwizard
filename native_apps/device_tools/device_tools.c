@@ -2593,11 +2593,16 @@ int main(void) {
     create_usb_ui();
     usb_scan_devices(&state);
 
+    bool needs_redraw = true;  /* first frame always draws */
+
     while (running) {
         uint32_t now = get_time_ms();
 
-        if (state.status_msg[0] && now - state.status_time_ms > 2000)
+        /* Status message timeout — visual change */
+        if (state.status_msg[0] && now - state.status_time_ms > 2000) {
             state.status_msg[0] = '\0';
+            needs_redraw = true;
+        }
 
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
                        || (state.active_tab == TAB_CALIBRATION && state.calib_sub != CALIB_IDLE)
@@ -2605,29 +2610,49 @@ int main(void) {
 
         if (fullscreen) {
             run_current_fullscreen_mode(&fb, &touch, &state);
+            needs_redraw = true;  /* redraw after returning from fullscreen */
             continue;
         }
 
-        fb_clear(&fb, COLOR_BG);
-        draw_tab_bar(&fb, &state);
+        /* --- Render only when visual state changed --- */
+        if (needs_redraw) {
+            fb_clear(&fb, COLOR_BG);
+            draw_tab_bar(&fb, &state);
 
-        switch (state.active_tab) {
-            case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
-            case TAB_DIAGNOSTICS: draw_diagnostics(&fb, &state); break;
-            case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
-            case TAB_CALIBRATION: draw_calibration(&fb, &state); break;
-            case TAB_USB:         draw_usb(&fb, &state);         break;
-            default: break;
+            switch (state.active_tab) {
+                case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
+                case TAB_DIAGNOSTICS: draw_diagnostics(&fb, &state); break;
+                case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
+                case TAB_CALIBRATION: draw_calibration(&fb, &state); break;
+                case TAB_USB:         draw_usb(&fb, &state);         break;
+                default: break;
+            }
+
+            /* Draw confirmation dialog overlay on top of everything */
+            if (state.confirm_action == CONFIRM_SHUTDOWN) {
+                modal_dialog_draw(&shutdown_dialog, &fb);
+            } else if (state.confirm_action == CONFIRM_REBOOT) {
+                modal_dialog_draw(&reboot_dialog, &fb);
+            }
+
+            fb_swap(&fb);
+            needs_redraw = false;
         }
 
-        /* Draw confirmation dialog overlay on top of everything */
-        if (state.confirm_action == CONFIRM_SHUTDOWN) {
-            modal_dialog_draw(&shutdown_dialog, &fb);
-        } else if (state.confirm_action == CONFIRM_REBOOT) {
-            modal_dialog_draw(&reboot_dialog, &fb);
-        }
-
-        fb_swap(&fb);
+        /* --- Save visual state before input handling --- */
+        ActiveTab     prev_tab       = state.active_tab;
+        bool          prev_audio     = state.audio_enabled;
+        bool          prev_led       = state.led_enabled;
+        int           prev_led_br    = state.led_brightness;
+        int           prev_bl_br     = state.backlight_brightness;
+        bool          prev_portrait  = state.portrait_mode;
+        char          prev_status0   = state.status_msg[0];
+        DiagPage      prev_diag_page = state.diag_page;
+        TestSubState  prev_test_sub  = state.test_sub;
+        int           prev_test_sel  = state.test_selected;
+        CalibSubState prev_calib_sub = state.calib_sub;
+        ConfirmAction prev_confirm   = state.confirm_action;
+        USBScreen     prev_usb_scr   = state.usb_scr;
 
         touch_poll(&touch);
         TouchState ts = touch_get_state(&touch);
@@ -2657,7 +2682,26 @@ int main(void) {
             }
         }
 
-        usleep(16000);
+        /* --- Detect visual state changes after input --- */
+        if (prev_tab       != state.active_tab     ||
+            prev_audio     != state.audio_enabled   ||
+            prev_led       != state.led_enabled     ||
+            prev_led_br    != state.led_brightness  ||
+            prev_bl_br     != state.backlight_brightness ||
+            prev_portrait  != state.portrait_mode   ||
+            prev_status0   != state.status_msg[0]   ||
+            prev_diag_page != state.diag_page       ||
+            prev_test_sub  != state.test_sub        ||
+            prev_test_sel  != state.test_selected   ||
+            prev_calib_sub != state.calib_sub       ||
+            prev_confirm   != state.confirm_action  ||
+            prev_usb_scr   != state.usb_scr         ||
+            state.diag_needs_refresh) {
+            needs_redraw = true;
+        }
+
+        /* Adaptive sleep: faster polling when a redraw is pending */
+        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     hw_leds_off();
