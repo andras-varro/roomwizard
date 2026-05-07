@@ -531,6 +531,7 @@ static int vnc_session(const char *host, int port, int attempt) {
     }
     fb_swap(&g_fb);
 
+    hw_set_led(LED_RED, 0);
     hw_set_led(LED_GREEN, 50);      /* dim green = connecting */
 
     /* ── Connect to VNC server ───────────────────────────────── */
@@ -579,6 +580,7 @@ static int vnc_session(const char *host, int port, int attempt) {
 
     /* ── Main event loop ─────────────────────────────────────── */
     LOG_DEBUG(&g_logger, "Entering main loop (target %d fps)", TARGET_FPS);
+    hw_set_led(LED_RED, 0);
     hw_set_led(LED_GREEN, 100);     /* full green = connected */
 
     int session_result = 0;         /* default: connection lost */
