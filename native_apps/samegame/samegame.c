@@ -1602,6 +1602,7 @@ int main(int argc, char *argv[]) {
         int        prev_mouse_x    = input.mouse_x;
         int        prev_mouse_y    = input.mouse_y;
         bool       prev_mouse_conn = input.mouse_connected;
+        AnimState  prev_anim_state = game.anim_state;
 
         handle_input();
         update_game();
@@ -1612,6 +1613,7 @@ int main(int argc, char *argv[]) {
             prev_hl_count  != game.highlight_count  ||
             prev_score     != game.score            ||
             prev_remaining != game.blocks_remaining ||
+            prev_anim_state != game.anim_state     ||
             prev_mouse_conn != input.mouse_connected ||
             (input.mouse_connected &&
              (prev_mouse_x != input.mouse_x || prev_mouse_y != input.mouse_y))) {
