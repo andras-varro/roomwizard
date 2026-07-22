@@ -251,9 +251,8 @@ typedef struct {
     TestSubState  test_sub;
     int           test_selected;
     CalibSubState calib_sub;
-    int           calib_corner;
-    int           calib_offsets_x[4];
-    int           calib_offsets_y[4];
+    /* Raw touch samples captured at the 9 calibration crosshairs (Phase 1 -> 2). */
+    int           calib_rawx[9], calib_rawy[9];
     int           bezel_top, bezel_bottom, bezel_left, bezel_right;
     Config        cfg;
     ConfirmAction confirm_action;
@@ -1694,22 +1693,19 @@ static void draw_calibration(Framebuffer *fb, AppState *state) {
 
     int note_y = CONTENT_Y + 240;
     fb_draw_text(fb, CONTENT_LEFT + 20, note_y,
-                 "Note: Calibration requires touching screen", COLOR_LABEL, 2);
+                 "Note: tap the 9 crosshairs, then review the", COLOR_LABEL, 2);
     fb_draw_text(fb, CONTENT_LEFT + 20, note_y + 24,
-                 "corners. The process takes about 30 seconds.", COLOR_LABEL, 2);
+                 "fit and ACCEPT or REDO. ~15 seconds.", COLOR_LABEL, 2);
 }
 
 static void handle_calib_input(AppState *state, int tx, int ty,
                                bool touching, uint32_t now) {
     if (button_update(&calib_start_btn, tx, ty, touching, now)) {
         state->calib_sub = CALIB_PHASE1;
-        state->calib_corner = 0;
-        memset(state->calib_offsets_x, 0, sizeof(state->calib_offsets_x));
-        memset(state->calib_offsets_y, 0, sizeof(state->calib_offsets_y));
     }
 }
 
-/* â”€â”€ Calibration Phase 1: 4-corner touch calibration (full-screen) â”€â”€â”€â”€â”€ */
+/* -- Calibration helpers ------------------------------------------------- */
 
 static void draw_crosshair(Framebuffer *fb, int x, int y, uint32_t color) {
     int size = 20;
@@ -1720,201 +1716,141 @@ static void draw_crosshair(Framebuffer *fb, int x, int y, uint32_t color) {
             fb_draw_pixel(fb, x + dx, y + dy, color);
 }
 
+static bool calib_in_rect(int x, int y, int rx, int ry, int rw, int rh) {
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+}
+
+/* The 9 calibration/validation targets, inset so they clear the ~30-40px bezel
+ * yet stay well inside the visible area. The least-squares fit extrapolates the
+ * fitted line out to the true screen edges, so tapping these still reaches the
+ * corners on a linear panel. */
+#define CALIB_TAP_INSET 40
+static int calib_targets(Framebuffer *fb, int *tx, int *ty) {
+    int W = (int)fb->width, H = (int)fb->height, I = CALIB_TAP_INSET;
+    int px[9] = { I, W-I, W-I, I,   W/2, W/2, W/2, I,   W-I };
+    int py[9] = { I, I,   H-I, H-I, H/2, I,   H-I, H/2, H/2 };
+    for (int i = 0; i < 9; i++) { tx[i] = px[i]; ty[i] = py[i]; }
+    return 9;
+}
+
+/* Phase 1: tap the 9 crosshairs, capture raw, per-axis least-squares fit. */
 static void run_calib_phase1(Framebuffer *fb, TouchInput *touch, AppState *state) {
-    struct { int x, y; const char *name; } points[] = {
-        {CALIB_MARGIN, CALIB_MARGIN, "Top-Left"},
-        {(int)fb->width - CALIB_MARGIN, CALIB_MARGIN, "Top-Right"},
-        {CALIB_MARGIN, (int)fb->height - CALIB_MARGIN, "Bottom-Left"},
-        {(int)fb->width - CALIB_MARGIN, (int)fb->height - CALIB_MARGIN, "Bottom-Right"}
-    };
+    const int W = (int)fb->width, H = (int)fb->height;
+    int tx[9], ty[9];
+    int NP = calib_targets(fb, tx, ty);
 
-    for (int i = state->calib_corner; i < 4; i++) {
+    /* Rough map for live feedback; the fit below replaces it. */
+    touch_set_raw_range(touch, 0, 4095, 0, 4095);
+    touch_drain_events(touch);
+
+    for (int i = 0; i < NP && running; i++) {
         fb_clear(fb, COLOR_BLACK);
-        draw_crosshair(fb, points[i].x, points[i].y, COLOR_WHITE);
-        char msg[50]; snprintf(msg, sizeof(msg), "TAP CROSSHAIR %d/4", i + 1);
-        fb_draw_text(fb, 250, 20, msg, COLOR_CYAN, 2);
+        text_draw_centered(fb, W/2, 30, "TAP EACH CROSS", COLOR_CYAN, 3);
+        char c[32]; snprintf(c, sizeof(c), "%d / %d", i+1, NP);
+        text_draw_centered(fb, W/2, 64, c, COLOR_WHITE, 2);
+        for (int j = i+1; j < NP; j++)          /* upcoming targets, dim */
+            draw_crosshair(fb, tx[j], ty[j], RGB(55,55,75));
+        draw_crosshair(fb, tx[i], ty[i], COLOR_WHITE);  /* current, bright */
         fb_swap(fb);
 
-        int tx, ty;
-        if (touch_wait_for_press(touch, &tx, &ty) < 0) {
-            state->calib_sub = CALIB_IDLE;
-            return;
-        }
-        state->calib_offsets_x[i] = points[i].x - tx;
-        state->calib_offsets_y[i] = points[i].y - ty;
+        int rx, ry;
+        if (touch_wait_for_press_raw(touch, &rx, &ry) < 0) { state->calib_sub = CALIB_IDLE; return; }
+        state->calib_rawx[i] = rx; state->calib_rawy[i] = ry;
 
-        fb_clear(fb, COLOR_BLACK);
-        draw_crosshair(fb, points[i].x, points[i].y, COLOR_GREEN);
-        draw_crosshair(fb, tx, ty, COLOR_RED);
+        fb_clear(fb, COLOR_BLACK);          /* confirm tick */
+        draw_crosshair(fb, tx[i], ty[i], COLOR_GREEN);
         fb_swap(fb);
-        sleep(1);
-        state->calib_corner = i + 1;
+        usleep(120000);
     }
+    if (!running) { state->calib_sub = CALIB_IDLE; return; }
 
-    touch_set_calibration(touch,
-        state->calib_offsets_x[0], state->calib_offsets_y[0],
-        state->calib_offsets_x[1], state->calib_offsets_y[1],
-        state->calib_offsets_x[2], state->calib_offsets_y[2],
-        state->calib_offsets_x[3], state->calib_offsets_y[3]);
+    /* Per-axis least-squares over the 9 taps. touch_fit_axis_range returns the
+     * raw values mapping to screen 0 and screen dim-1 (extrapolated), which
+     * gives full-screen reach without any edge-drag. */
+    int mnx, mxx, mny, mxy;
+    int okx = touch_fit_axis_range(state->calib_rawx, tx, NP, W, &mnx, &mxx) == 0;
+    int oky = touch_fit_axis_range(state->calib_rawy, ty, NP, H, &mny, &mxy) == 0;
+    if (okx && oky) touch_set_raw_range(touch, mnx, mxx, mny, mxy);
 
     state->calib_sub = CALIB_PHASE2;
-    state->bezel_top = 35;
-    state->bezel_bottom = 35;
-    state->bezel_left = 35;
-    state->bezel_right = 35;
 }
 
-/* â”€â”€ Calibration Phase 2: Bezel margin adjustment (full-screen) â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* map one raw axis value through a range (mirror of scale_coordinates, landscape) */
+static int calib_map_axis(int raw, int mn, int mx, int dim) {
+    int rng = mx - mn; if (rng <= 0) rng = 4095;
+    int r = raw - mn; if (r < 0) r = 0; if (r > rng) r = rng;
+    return r * (dim - 1) / rng;
+}
 
+/* Phase 2: summary - targets (green squares) + fitted landings (red dots),
+ * max error, ACCEPT / REDO. */
 static void run_calib_phase2(Framebuffer *fb, TouchInput *touch, AppState *state) {
-    touch_set_calibration(touch,
-        touch->calib.top_left_x, touch->calib.top_left_y,
-        touch->calib.top_right_x, touch->calib.top_right_y,
-        touch->calib.bottom_left_x, touch->calib.bottom_left_y,
-        touch->calib.bottom_right_x, touch->calib.bottom_right_y);
-    touch_enable_calibration(touch, true);
+    const int W = (int)fb->width, H = (int)fb->height;
+    int tx[9], ty[9];
+    int NP = calib_targets(fb, tx, ty);
 
-    int zone_size = 80;
-    bool done = false;
+    int max_err = 0;
+    for (int i = 0; i < NP; i++) {
+        int lx = calib_map_axis(state->calib_rawx[i], touch->raw_min_x, touch->raw_max_x, W);
+        int ly = calib_map_axis(state->calib_rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+        int ex = lx - tx[i], ey = ly - ty[i];
+        int err = (ex<0?-ex:ex) + (ey<0?-ey:ey);
+        if (err > max_err) max_err = err;
+    }
 
-    while (!done && running) {
+    const int bw = 200, bh = 70, gap = 40, ay = H/2 + 40;
+    const int accept_x = W/2 - bw - gap/2, redo_x = W/2 + gap/2;
+    touch_drain_events(touch);
+    while (running) {
         fb_clear(fb, COLOR_BLACK);
-        int *top = &state->bezel_top, *bot = &state->bezel_bottom;
-        int *lft = &state->bezel_left, *rgt = &state->bezel_right;
-
-        /* Draw checkerboard overlay on margins */
-        for (int yy = 0; yy < *top; yy++)
-            for (int xx = 0; xx < (int)fb->width; xx++)
-                if ((xx/10 + yy/10) % 2 == 0) fb_draw_pixel(fb, xx, yy, COLOR_RED);
-        for (int yy = (int)fb->height - *bot; yy < (int)fb->height; yy++)
-            for (int xx = 0; xx < (int)fb->width; xx++)
-                if ((xx/10 + yy/10) % 2 == 0) fb_draw_pixel(fb, xx, yy, COLOR_RED);
-        for (int yy = *top; yy < (int)fb->height - *bot; yy++) {
-            for (int xx = 0; xx < *lft; xx++)
-                if ((xx/10 + yy/10) % 2 == 0) fb_draw_pixel(fb, xx, yy, COLOR_RED);
-            for (int xx = (int)fb->width - *rgt; xx < (int)fb->width; xx++)
-                if ((xx/10 + yy/10) % 2 == 0) fb_draw_pixel(fb, xx, yy, COLOR_RED);
+        for (int i = 0; i < NP; i++) {
+            int lx = calib_map_axis(state->calib_rawx[i], touch->raw_min_x, touch->raw_max_x, W);
+            int ly = calib_map_axis(state->calib_rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+            fb_draw_rect(fb, tx[i]-6, ty[i]-6, 12, 12, COLOR_GREEN);   /* target */
+            fb_draw_line(fb, tx[i], ty[i], lx, ly, RGB(80,80,40));      /* error */
+            fb_fill_circle(fb, lx, ly, 3, COLOR_RED);                   /* landing */
         }
-
-        /* Safe area outline (thick) */
-        for (int t = 0; t < 5; t++)
-            fb_draw_rect(fb, *lft + t, *top + t,
-                         (int)fb->width - *lft - *rgt - 2*t,
-                         (int)fb->height - *top - *bot - 2*t, COLOR_GREEN);
-
-        int cx = (int)fb->width / 2, cy = (int)fb->height / 2;
-
-        /* TOP +/- zones */
-        int top_y = *top / 2;
-        int tp_x = cx - zone_size - 10, tm_x = cx + 10;
-        fb_fill_rect(fb, tp_x, top_y - zone_size/2, zone_size, zone_size, RGB(0,80,0));
-        fb_draw_rect(fb, tp_x, top_y - zone_size/2, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, tp_x + 25, top_y - 15, "+", COLOR_WHITE, 3);
-        fb_fill_rect(fb, tm_x, top_y - zone_size/2, zone_size, zone_size, RGB(80,0,0));
-        fb_draw_rect(fb, tm_x, top_y - zone_size/2, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, tm_x + 30, top_y - 15, "-", COLOR_WHITE, 3);
-
-        /* BOTTOM +/- zones */
-        int bot_y = (int)fb->height - *bot / 2;
-        fb_fill_rect(fb, tp_x, bot_y - zone_size/2, zone_size, zone_size, RGB(0,80,0));
-        fb_draw_rect(fb, tp_x, bot_y - zone_size/2, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, tp_x + 25, bot_y - 15, "+", COLOR_WHITE, 3);
-        fb_fill_rect(fb, tm_x, bot_y - zone_size/2, zone_size, zone_size, RGB(80,0,0));
-        fb_draw_rect(fb, tm_x, bot_y - zone_size/2, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, tm_x + 30, bot_y - 15, "-", COLOR_WHITE, 3);
-
-        /* LEFT +/- zones */
-        int left_x = *lft / 2;
-        int lp_y = cy - zone_size - 10, lm_y = cy + 10;
-        fb_fill_rect(fb, left_x - zone_size/2, lp_y, zone_size, zone_size, RGB(0,80,0));
-        fb_draw_rect(fb, left_x - zone_size/2, lp_y, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, left_x - 15, lp_y + 25, "+", COLOR_WHITE, 3);
-        fb_fill_rect(fb, left_x - zone_size/2, lm_y, zone_size, zone_size, RGB(80,0,0));
-        fb_draw_rect(fb, left_x - zone_size/2, lm_y, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, left_x - 10, lm_y + 25, "-", COLOR_WHITE, 3);
-
-        /* RIGHT +/- zones */
-        int right_x = (int)fb->width - *rgt / 2;
-        fb_fill_rect(fb, right_x - zone_size/2, lp_y, zone_size, zone_size, RGB(0,80,0));
-        fb_draw_rect(fb, right_x - zone_size/2, lp_y, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, right_x - 15, lp_y + 25, "+", COLOR_WHITE, 3);
-        fb_fill_rect(fb, right_x - zone_size/2, lm_y, zone_size, zone_size, RGB(80,0,0));
-        fb_draw_rect(fb, right_x - zone_size/2, lm_y, zone_size, zone_size, COLOR_CYAN);
-        fb_draw_text(fb, right_x - 10, lm_y + 25, "-", COLOR_WHITE, 3);
-
-        /* Center EXIT button */
-        int esz = 120;
-        fb_fill_rect(fb, cx - esz/2, cy - esz/2, esz, esz, RGB(0,100,0));
-        fb_draw_rect(fb, cx - esz/2, cy - esz/2, esz, esz, COLOR_WHITE);
-        fb_draw_text(fb, cx - 35, cy - 15, "EXIT", COLOR_WHITE, 2);
-
+        text_draw_centered(fb, W/2, H/2 - 70,
+            max_err <= 12 ? "LOOKS GOOD" : "GOOD ENOUGH?",
+            max_err <= 12 ? COLOR_GREEN : COLOR_ORANGE, 3);
+        char s[64]; snprintf(s, sizeof(s), "MAX ERROR ~%d px", max_err);
+        text_draw_centered(fb, W/2, H/2 - 34, s, COLOR_WHITE, 2);
+        fb_fill_rect(fb, accept_x, ay, bw, bh, RGB(0,120,0));
+        fb_draw_rect(fb, accept_x, ay, bw, bh, COLOR_WHITE);
+        text_draw_centered(fb, accept_x + bw/2, ay + bh/2, "ACCEPT", COLOR_WHITE, 2);
+        fb_fill_rect(fb, redo_x, ay, bw, bh, RGB(120,60,0));
+        fb_draw_rect(fb, redo_x, ay, bw, bh, COLOR_WHITE);
+        text_draw_centered(fb, redo_x + bw/2, ay + bh/2, "REDO", COLOR_WHITE, 2);
         fb_swap(fb);
 
-        int tx, ty;
-        if (touch_wait_for_press(touch, &tx, &ty) < 0) { done = true; break; }
-
-        /* Check which zone was touched */
-        if (tx >= tp_x && tx < tp_x + zone_size &&
-            ty >= top_y - zone_size/2 && ty < top_y + zone_size/2) {
-            *top += CALIB_MARGIN_STEP; if (*top > (int)fb->height/3) *top = (int)fb->height/3;
-        } else if (tx >= tm_x && tx < tm_x + zone_size &&
-                   ty >= top_y - zone_size/2 && ty < top_y + zone_size/2) {
-            *top -= CALIB_MARGIN_STEP; if (*top < 0) *top = 0;
-        } else if (tx >= tp_x && tx < tp_x + zone_size &&
-                   ty >= bot_y - zone_size/2 && ty < bot_y + zone_size/2) {
-            *bot += CALIB_MARGIN_STEP; if (*bot > (int)fb->height/3) *bot = (int)fb->height/3;
-        } else if (tx >= tm_x && tx < tm_x + zone_size &&
-                   ty >= bot_y - zone_size/2 && ty < bot_y + zone_size/2) {
-            *bot -= CALIB_MARGIN_STEP; if (*bot < 0) *bot = 0;
-        } else if (tx >= left_x - zone_size/2 && tx < left_x + zone_size/2 &&
-                   ty >= lp_y && ty < lp_y + zone_size) {
-            *lft += CALIB_MARGIN_STEP; if (*lft > (int)fb->width/3) *lft = (int)fb->width/3;
-        } else if (tx >= left_x - zone_size/2 && tx < left_x + zone_size/2 &&
-                   ty >= lm_y && ty < lm_y + zone_size) {
-            *lft -= CALIB_MARGIN_STEP; if (*lft < 0) *lft = 0;
-        } else if (tx >= right_x - zone_size/2 && tx < right_x + zone_size/2 &&
-                   ty >= lp_y && ty < lp_y + zone_size) {
-            *rgt += CALIB_MARGIN_STEP; if (*rgt > (int)fb->width/3) *rgt = (int)fb->width/3;
-        } else if (tx >= right_x - zone_size/2 && tx < right_x + zone_size/2 &&
-                   ty >= lm_y && ty < lm_y + zone_size) {
-            *rgt -= CALIB_MARGIN_STEP; if (*rgt < 0) *rgt = 0;
-        } else if (tx >= cx - esz/2 && tx < cx + esz/2 &&
-                   ty >= cy - esz/2 && ty < cy + esz/2) {
-            done = true;
-        }
-        usleep(200000);
+        int tpx, tpy;
+        if (touch_wait_for_press(touch, &tpx, &tpy) < 0) { state->calib_sub = CALIB_IDLE; return; }
+        if (calib_in_rect(tpx, tpy, accept_x, ay, bw, bh)) { state->calib_sub = CALIB_DONE; return; }
+        if (calib_in_rect(tpx, tpy, redo_x, ay, bw, bh)) { state->calib_sub = CALIB_PHASE1; return; }
     }
-    state->calib_sub = CALIB_DONE;
+    state->calib_sub = CALIB_IDLE;
 }
 
-/* â”€â”€ Calibration Done: save and show result (full-screen) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
+/* Calibration done: persist the calibrated range. */
 static void run_calib_done(Framebuffer *fb, TouchInput *touch, AppState *state) {
-    (void)touch;
-    touch->calib.bezel_top    = state->bezel_top;
-    touch->calib.bezel_bottom = state->bezel_bottom;
-    touch->calib.bezel_left   = state->bezel_left;
-    touch->calib.bezel_right  = state->bezel_right;
-
     if (touch_save_calibration(touch, CALIB_FILE) == 0) {
         fb_clear(fb, COLOR_BLACK);
-        text_draw_centered(fb, fb->width / 2, 180, "CALIBRATION SAVED!", COLOR_GREEN, 3);
-        char summary[100];
-        snprintf(summary, sizeof(summary), "T:%d B:%d L:%d R:%d",
-                 state->bezel_top, state->bezel_bottom,
-                 state->bezel_left, state->bezel_right);
-        text_draw_centered(fb, fb->width / 2, 250, summary, COLOR_YELLOW, 2);
+        text_draw_centered(fb, (int)fb->width/2, 180, "CALIBRATION SAVED!", COLOR_GREEN, 3);
+        char s[80]; snprintf(s, sizeof(s), "raw X %d..%d  Y %d..%d",
+            touch->raw_min_x, touch->raw_max_x, touch->raw_min_y, touch->raw_max_y);
+        text_draw_centered(fb, (int)fb->width/2, 250, s, COLOR_YELLOW, 2);
         fb_swap(fb);
         sleep(2);
         fb_load_safe_area();
     } else {
         fb_clear(fb, COLOR_BLACK);
-        text_draw_centered(fb, fb->width / 2, 200, "SAVE FAILED - RUN AS ROOT", COLOR_RED, 3);
+        text_draw_centered(fb, (int)fb->width/2, 200, "SAVE FAILED - RUN AS ROOT", COLOR_RED, 3);
         fb_swap(fb);
         sleep(3);
     }
     state->calib_sub = CALIB_IDLE;
 }
+
 
 
 /* ======================================================================

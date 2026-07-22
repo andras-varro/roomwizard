@@ -63,7 +63,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     touch_set_screen_size(&touch, fb.width, fb.height);
-    
+
+    // Measure RAW touch error: touch_init() auto-loads and enables any
+    // previously-saved calibration, which would correct taps before we compute
+    // the offset — so each run would calibrate on top of the last and drift.
+    touch_enable_calibration(&touch, false);
+
     // Define calibration points (corners with margin)
     struct {
         int x, y;
