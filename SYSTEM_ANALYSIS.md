@@ -119,8 +119,10 @@ for the device-verified detail.
 
 ### Display
 
+- **Panel:** **Sharp `LQ070Y3LG4A`** — 7" WVGA TFT, LVDS input (part number read off the panel frame during the 2026-07-30 teardown; confirms the `sharp,lq070y3lg4a` compatible string in the vendor DTS is the literal part). Driven by an **SN65LVDS83B** parallel-RGB→LVDS transmitter (`U16`) on the main board, over a JAE ~30-position connector and a discrete twisted-pair harness to the board's 40-pin FFC. The panel is a **field-replaceable module** and on the dissected unit is dated **March 2018** — eight years newer than the © 2010 main board, i.e. it had been replaced in service. A cracked screen is a repair, not a write-off.
+- **Ambient light sensor: none, and none possible** — the enclosure is light-tight. See [Hardware NOT Present](#hardware-not-present).
 - **Resolution:** 800x480 pixels (framebuffer)
-- **Visible Area:** ~720x420 pixels (bezel obscures ~30-40px on all edges)
+- **Visible Area: ~800x455 — the bezel covers ~10-15px on the top and bottom edges only, and effectively nothing left or right.** Measured on **two** physical devices, 2026-07-30. This supersedes the long-standing "~720x420, ~30-40px on all edges" figure in this document, which was wrong on both the amount and the edges, and confirms the root `CLAUDE.md`. All four `SCREEN_SAFE_MARGIN_*_DEFAULT` being `0` is therefore *nearly* right — the residual error is only the ~10-15px top/bottom. **The binding constraint on interactive layout is not the bezel, it is digitizer reach:** touch is not reported in the outer ~10px left/right, ~26px top, ~35px bottom. Size touch targets to that; decoration can go to the edge.
 - **Technology:** TFT LCD with LED backlight
 - **Interface:** Framebuffer (`/dev/fb0`)
 - **Color Depth:** 32-bit RGB (XRGB8888) by default. NOTE: bpp is set at runtime by whichever app is running — native menu/games/tools force **32bpp** (`fb_set_bpp(...,32)`), while ScummVM and the VNC remote session switch to **16bpp RGB565** to halve write bandwidth. A `cat /dev/fb0` dump is one frame; decode it at the bpp of the app that was running (`fb565_to_png.py` defaults to 32bpp, `--bpp 16` for ScummVM/VNC).
@@ -133,7 +135,7 @@ for the device-verified detail.
 
 ### Input
 
-- **Touchscreen:** **Projected-capacitive** panel, Panjit controller on I2C bus 2 at address `0x03` (driver `panjit_ts`, out-of-tree).
+- **Touchscreen:** **Projected-capacitive** panel on I2C bus 2 at address `0x03` (driver `panjit_ts`, out-of-tree). The controller silicon is a **Cypress `CY8CTMG120-56LTXI`** PSoC TrueTouch Multi-Touch Gesture chip (`IC1` on a flex marked `EDT REV.A 40-0016-2`) — *Panjit is the module vendor, not the chip vendor*, despite the driver name.
 - **Device:** `/dev/input/touchscreen0` or `/dev/input/event0`
 - **Protocol:** Linux input events (evdev)
 - **Calibration:** native stack uses `/etc/touch_calibration.conf` (see below), **not** the stock `xinput_calibrator`/`/etc/pointercal.xinput` (that is the removed Steelcase X11 stack)
@@ -276,9 +278,15 @@ Diagnosed via `native_apps/tests/oss_diag.c`.
 
 ### Connectivity
 
-- **Ethernet:** 10/100 Mbps RJ45
-- **USB:** Micro USB OTG (host mode enabled — keyboards, mice, game controllers supported; see [USB Subsystem](#usb-subsystem-analysis) and [`usb_host/README.md`](usb_host/README.md))
+- **Ethernet:** 10/100 Mbps RJ45 (`J3`, TE MagJack `1-6605834-1`) — SMSC **LAN9221** MAC+PHY (`U15`) on the GPMC bus
+- **USB:** Micro USB OTG (host mode enabled — keyboards, mice, game controllers supported; see [USB Subsystem](#usb-subsystem-analysis) and [`usb_host/README.md`](usb_host/README.md)). **This is the only USB connector on the board** — the two EHCI ports in the device tree were never brought out to a connector on board revision `550-0204-03`.
 - **Serial:** UART on ttyO1 (115200 baud) for debugging
+- **Power: 802.3af PoE only — there is no barrel jack.** The PD front end is on the main board:
+  TI **TPS23750** (`U1`) PD interface + DC/DC controller, Coilcraft **POE13F-12L** isolated flyback
+  transformer, with the magnetics in the RJ45. A **PoE injector or PoE switch port is required** to
+  power the unit, on the bench as much as on the wall. Class budget is **12.95 W at the PD**, which
+  bounds anything added inside the case. Invisible to software — `/sys/class/power_supply/` shows
+  only `twl4030_ac`/`twl4030_usb`. Detail: [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#f-power--is-it-poe).
 
 ---
 
@@ -749,12 +757,15 @@ Console:   Enabled (kernel console output)
   Channels 2–7 are the TWL4030's general-purpose external inputs (`ADCIN2..ADCIN7`), all reading
   ~0–120 mV, i.e. idle and available. Channel 9 is the RTC backup cell (reads 3184 mV → the coin
   cell is fitted and charged); channel 12 is VBAT. `in_voltage*_mean_raw` gives free hardware averaging.
-- ⚠️ **Ambient light sensor — PROBABLY PRESENT, UNVERIFIED.** The vendor factory-test suite has a
-  dedicated light-sensor test (`functionaltest.sh` → `pv02_app 5`, strings `Tests the Light sensor`,
-  `/dev/i2c-1`, `Brightness: %u`). It is **not** declared in the 4.14 device tree, so nothing binds it.
-  **Not probed** — the vendor's own wrapper comments that this test can hang the I2C bus, and bus 1
-  carries the PMIC. To confirm safely, cross-compile `i2c-tools` and run `i2cdetect -y -r 1`
-  (likely addresses 0x29 / 0x39 / 0x44 / 0x49).
+- ❌ **Ambient light sensor — NOT PRESENT (settled 2026-07-30; was "probably present").** The vendor
+  factory-test suite does have a dedicated light-sensor test (`functionaltest.sh` → `pv02_app 5`,
+  strings `Tests the Light sensor`, `/dev/i2c-1`, `Brightness: %u`), and it is not declared in the
+  4.14 device tree — which is why this sat as an unverified maybe. The full teardown settles it:
+  **no sensor part, and no aperture, window or light pipe anywhere in the enclosure.** The case is
+  light-tight, so ambient sensing is impossible on this SKU regardless of what is populated. The
+  factory test is shared firmware across a product family. **Do not probe bus 1** looking for it —
+  the vendor's own wrapper warns the test can hang the bus, and bus 1 carries the PMIC.
+  See [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#d-ambient-light-sensor).
 - ⚠️ **Audio input — capture path registered, physical wiring unverified.** `/proc/asound/devices`
   lists `24: [ 0- 0]: digital audio capture`, and `amixer scontrols` exposes 62 controls including
   `Analog Left Main Mic`, `Analog Left Headset Mic`, `AUXL/AUXR`, `TX1`, `TX2` and digital loopback.
@@ -1392,18 +1403,26 @@ Readable with `cat` **today**. Ideas: SoC temperature in Device Tools (ten minut
 a potentiometer on one ADC channel as an analogue paddle for Pong/Breakout — two channels plus
 `/dev/dsp` is a complete analogue controller with no USB involved.
 
-### 3. Ambient light sensor — auto-backlight [needs a safe probe first]
+### 3. ~~Ambient light sensor — auto-backlight~~ [CLOSED — no such hardware]
 
-See the entry under [Hardware NOT Present](#hardware-not-present). Fixes a real usability
-problem: a wall display at 100% backlight in a dark corridor at 3 am. Also enables light-as-input
-games (cover the sensor to flap).
+Removed 2026-07-30. See the entry under [Hardware NOT Present](#hardware-not-present): the teardown
+found no sensor **and no aperture** — the enclosure is light-tight, so auto-backlight and
+light-as-input games are both off the table. Time-of-day dimming remains possible with no hardware
+(RTC + `/sys/class/leds/backlight/brightness`).
 
 ### 4. Multi-touch via direct I2C
 
 The controller is 2-point multi-touch with on-chip gestures; the driver flattens it. Bypass via
 `/dev/i2c-2` (device tree node `tsc_panjit@03`: reg `0x03`, IRQ `gpio1[23]` falling, reset
 `gpio1[16]`). Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher gestures.
-Userspace-only — no kernel work. Protocol must be reverse-engineered; `pv02_app` is the reference.
+Userspace-only — no kernel work.
+
+**The silicon is a Cypress `CY8CTMG120-56LTXI`** (identified from the teardown photos — see
+[`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#display-and-touch--new-part-numbers)), a PSoC
+**TrueTouch Multi-Touch Gesture** controller. "Panjit" is the touch-module vendor, not the chip
+vendor. This upgrades the difficulty of this item from *reverse-engineer an unknown protocol* to
+*implement a documented one* — the TrueTouch I2C register map is published Cypress material.
+`pv02_app` (which reads `Num_Touch` plus two coordinate pairs) remains a useful cross-check.
 
 ### 5. 802.15.4 / ZigBee radio on UART3 — RoomWizard-to-RoomWizard multiplayer
 

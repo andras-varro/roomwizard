@@ -353,6 +353,12 @@ While in there, fix the reported OSS bugs so the ALSA version doesn't inherit th
 - `audio.c:378` abandons a chunk mid-frame on a short write, desynchronising L/R permanently.
 - `oss-mixer.cpp:298` the emergency anti-underrun `write()` ignores errors and partial writes.
 
+**Update 2026-07-30 — the output is mono, permanently.** The teardown confirmed **one** speaker
+(`SPKR1`), **no** 3.5 mm jack and **no** jack footprint (`HARDWARE_INSPECTION.md` §E). So the
+codec's `Headset` stereo path goes nowhere, and the two stereo-related bugs above are best fixed by
+**committing to mono end-to-end** rather than by making the interleaved-stereo bookkeeping correct.
+Also closes the microphone-as-input idea: there is no mic on the board and no acoustic port.
+
 ### F2. Use the DSS overlay planes — **biggest performance win available**
 
 Three hardware overlay planes with a scaler, z-order, global alpha and colour-key, all sitting
@@ -373,15 +379,23 @@ Also investigate `omap_vout: failed to allocate DMA Channel for video-1` at boot
 ⚠️ This is a **legacy omapdss** interface. It is cheap now and would need rewriting as DRM atomic
 plane code if the kernel ever changed — which, per current policy, it won't.
 
-### F3. Auto-backlight from the ambient light sensor
+### F3. ~~Auto-backlight from the ambient light sensor~~ — **CLOSED 2026-07-30, no such hardware**
 
-Fixes a genuine annoyance: a wall display at 100% backlight in a dark corridor at 3 am.
+Was: a wall display at 100% backlight in a dark corridor at 3 am is a genuine annoyance.
 
-**Blocked on** [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md) §D — the sensor is referenced by
-the vendor factory test on I2C bus 1 but is not in the device tree. Do **not** run the vendor's
-`pv02_app 5` probe: its own wrapper warns it can hang the I2C bus, and bus 1 carries the PMIC.
-Cross-compile `i2c-tools` and run `i2cdetect -y -r 1` instead (likely 0x29/0x39/0x44/0x49), or
-just read the part number off the board.
+**Closed by** [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#d-ambient-light-sensor) §D. The
+full teardown (bezel separated from LCD and board) found **no sensor and — decisively — no
+aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so a sensor
+would have nothing to sense even if one were populated. The vendor factory test's I2C-bus-1
+light-sensor step is shared firmware for a product family in which this SKU is not the variant
+with the sensor. No probe needed; don't run `pv02_app 5` (it can hang the bus, and bus 1 carries
+the PMIC).
+
+**Salvage:** *time-of-day* backlight dimming needs no hardware at all — the device has an RTC and
+`/sys/class/leds/backlight/brightness` already works. That is a small, self-contained feature if
+the original annoyance is still worth solving. See also **B9**, which must be fixed first: the
+backlight get/set asymmetry permanently dims the panel, and any auto-dimming built on top of a
+broken setter will make things worse.
 
 ### F4. Surface the MADC — temperature and analogue inputs
 
@@ -398,7 +412,35 @@ Readable with `cat` **today**, zero references in the codebase:
 The most *interesting* capability on the board: two-player games across a corridor, high-score
 sync, presence beacons — with no network involved.
 
-**Blocked on** `HARDWARE_INSPECTION.md` §B (is the module even populated?). If it is:
+**Update 2026-07-30 — the hardware side is done. This is now a pure software task.**
+
+The teardown found `J5`+`J6`: a **2×10 / 2 mm-pitch XBee socket, populated but with no module
+fitted**, on the bottom side of the board. **None of the three devices has a radio**, so this was
+not a per-unit option — the batch shipped without it.
+
+But the mechanical evidence is emphatic. A real Digi XBee (~10 years old, working condition
+unknown) was test-fitted and **seats perfectly**: `J5` has a white **pin-1 dot** aligning with the
+module's pin 1, and the **metal inner bezel carries a trapezoidal cut-out matching the XBee
+outline**. The chassis was tooled for this exact module. There is no longer any question about
+what the socket is.
+
+**Staging — one module is enough to de-risk the whole thing:**
+
+1. **Prove the port** with the single module on the touch-broken unit: patch the DTB, insert, and
+   see whether the XBee answers `+++` / `ATID`. That validates the DTB patch, the socket wiring
+   *and* whether a decade-old module still works — three unknowns for one experiment, no purchase.
+2. **Only then buy a second module** for the actual device-to-device link. Two are needed for
+   multiplayer; one is enough to prove everything else.
+
+Recovery if the DTB patch misboots: power cycle. `bootcmd` is hardcoded to the untouched
+`uImage-system`, and the SD card can be reimaged — see the recovery discussion in
+[`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#a-uart--serial-console--highest-priority-declined-2026-07-30).
+
+⚠️ **One check before first power-on with the module inserted:** confirm 3.3 V on `J5` pin 1 and
+GND on pin 10 with the socket empty. The fit is mechanically keyed and pin 1 is dotted, so this is
+belt-and-braces — but an XBee fed reversed dies instantly, and there is only one module.
+
+The remaining software work:
 
 - UART3 (`serial@49020000`) is `status = "disabled"` and has no pinmux entry.
 - **Possible without kernel source:** the DTB is appended to `uImage-system` and this project
@@ -408,14 +450,18 @@ sync, presence beacons — with no network involved.
 - Protocol reference: `opt/pv02/pv02_app` (XBee AT commands, 57600 baud) and
   `opt/sbin/RoomWizard-zbgatewayd`.
 
-**If nothing is populated, close this item.**
-
 ### F6. Multi-touch via direct I2C
 
 The panel controller is 2-point multi-touch with on-chip gestures; `panjit_ts` flattens it to
 single-touch. Bypass via `/dev/i2c-2` (node `tsc_panjit@03`: reg `0x03`, IRQ `gpio1[23]`, reset
 `gpio1[16]`). Userspace-only. Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher
-gestures. Protocol must be reverse-engineered — `pv02_app` is the reference.
+gestures.
+
+**Update 2026-07-30 — this item got materially easier.** The teardown identified the controller as
+a **Cypress `CY8CTMG120-56LTXI`** PSoC TrueTouch chip ("Panjit" is the *module* vendor, not the
+silicon). Its I2C register map is published Cypress documentation, so there is no unknown protocol
+to reverse-engineer from bus captures — `pv02_app` drops from *the* reference to a cross-check.
+Consider promoting this item; it is userspace-only, so the kernel policy does not touch it.
 
 Cheaper first step: finish `native_apps/hardware_test/pressure_test.c` and determine whether
 `ABS_PRESSURE` actually varies. If it does, that is free analogue input (draw thickness,
@@ -533,7 +579,7 @@ been explicitly ruled out.
 
 | Item | Why it's blocked |
 |------|------------------|
-| Enable the two EHCI USB host ports | `CONFIG_USB_EHCI_HCD` unset. Would likely retire the whole MUSB hack. |
+| Enable the two EHCI USB host ports | `CONFIG_USB_EHCI_HCD` unset — **and now doubly dead:** the 2026-07-30 teardown found **no second USB connector and no unpopulated USB footprint** on board rev `550-0204-03`. The ports exist in the SoC and the DT but were never brought out to anything pluggable, so even a kernel rebuild would gain nothing. |
 | Fix MUSB DMA properly | `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` both unset — a genuine build defect. The `/dev/mem` runtime patch stays. |
 | `PREEMPT` / `HZ=250` / PREEMPT_RT | Config-only, but still a rebuild. |
 | SPI | Four controllers enabled in the DT, `CONFIG_SPI` unset. |
@@ -553,5 +599,10 @@ by patching the appended DTB, which needs no kernel source.
 3. **B15, B16** — stop the scripts from being able to hurt you.
 4. **F1 (ALSA)** — biggest user-visible improvement in the project.
 5. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
-6. **Open the unit once** and work through `HARDWARE_INSPECTION.md` §A and §H together.
+6. ~~**Open the unit once** and work through `HARDWARE_INSPECTION.md` §A and §H together.~~
+   **Done 2026-07-30 — the whole checklist is answered**, except §A, which is **declined**: the
+   console header was located (`P4`, RS-232 behind a MAX3232) but will not be wired up. The
+   recovery loop is **pull the SD card, reimage, DHCP, SSH** — and since the standing rules keep
+   NAND and U-Boot untouched, the card *is* the entire failure surface, so serial would add boot
+   visibility rather than recovery capability. Revisit only if NAND or U-Boot ever get written.
 7. Everything else as appetite allows.
