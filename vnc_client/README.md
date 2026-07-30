@@ -11,7 +11,7 @@ RoomWizard's 800×480 screen with touch pass-through.
 - **Tight/ZRLE encoding** — 10-100× bandwidth reduction vs raw
 - **16bpp RGB565** — halved memory bandwidth (same as ScummVM backend)
 - **Partial region updates** — only dirty rectangles are re-rendered
-- **Touch input** — resistive touchscreen mapped to VNC pointer events
+- **Touch input** — touchscreen mapped to VNC pointer events
 - **USB keyboard forwarding** — full key press/release forwarded as X11 keysyms
 - **USB mouse forwarding** — relative movements with 3-tier acceleration, all buttons + scroll
 - **Runtime config file** — all settings in `/opt/vnc_client/vnc_client.conf`
@@ -156,7 +156,6 @@ RPi3 VNC Server (192.168.50.56:5900)
 | `rpi_setup.py` | RPi VNC server setup script |
 | `setup-vnc-viewer.sh` | VNC viewer (Remmina) setup for RPi display clients |
 | `vnc_settings.c/h` | Touch-based settings GUI with full alphanumeric keypad; all fields editable |
-| `SETTINGS_GUI_DESIGN.md` | Design document for the settings screen |
 
 ### Shared Libraries (from native_apps)
 
@@ -368,7 +367,7 @@ Key techniques adopted from the ScummVM RoomWizard backend:
 | CPU | ARM Cortex-A8 @ 600 MHz |
 | RAM | 234 MB (182 MB available) |
 | Display | 800×480 framebuffer (`/dev/fb0`) |
-| Input | Resistive single-touch (`/dev/input/event0`) + USB keyboard/mouse (`/dev/input/event*`) |
+| Input | Projected-capacitive touch, single-touch via driver (`/dev/input/event0`) + USB keyboard/mouse (`/dev/input/event*`) |
 | Network | 10/100 Mbps Ethernet |
 
 ## Dependencies

@@ -1,0 +1,143 @@
+# scummvm-roomwizard — authoring guide
+
+Rules and traps for working on the ScummVM backend port. Deep reference (engine tables, memory
+budget, bug history, optimisation log) is in [`SCUMMVM_DEV.md`](SCUMMVM_DEV.md). Device facts are
+in [`../SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md). Open work is in
+[`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md).
+
+## The source-of-truth trap — read this first
+
+The real source lives in **`../scummvm/backends/platform/roomwizard/`** (an untracked upstream
+checkout). `backend-files/` in this repo is the *version-controlled copy*.
+
+```bash
+bash manage-scummvm-changes.sh sync     # scummvm/ edits  -> backend-files/   (do this after editing)
+bash manage-scummvm-changes.sh restore  # backend-files/ -> scummvm/
+```
+
+Consequences you must respect:
+
+- Editing `backend-files/` alone changes nothing that gets built. Either edit in `../scummvm/`
+  and `sync`, or edit here and `restore`.
+- `backend-files/README.md` is copied **from** the upstream tree and copied back by `sync`.
+  Anything you write there is upstream-facing and will be overwritten if the upstream copy
+  differs. Do not put RoomWizard project documentation in it.
+- Restoring files from version control breaks `make`'s timestamp logic — the existing `.o` looks
+  newer than the restored source, so you get a silently stale binary. `build-and-deploy.sh`
+  handles this by `touch`ing restored sources and deleting the matching `.o`. If you copy files
+  by hand, do the same.
+
+## Build
+
+```bash
+./build-and-deploy.sh <ip>            # the supported path (all|clean|configure|build|strip|deploy|set-default|info)
+```
+
+`build_arm_deps()` cross-compiles zlib and libpng into `arm-deps/` and is idempotent. It runs on
+every code path — do not add a shortcut that skips it.
+
+**Never trust `config.mk`; check the artifact.** A stale `USE_PNG = 1` from an earlier configure
+once made `make` compile `image/png.cpp` with no `libpng.a` on disk, failing on `png.h`. Test for
+`arm-deps/lib/libpng.a`, not for the flag.
+
+Ubuntu Focal WSL cannot do armhf multiarch (`dpkg --add-architecture armhf` fails — the standard
+mirrors carry no armhf), which is why dependencies are built from source rather than installed.
+To add one, extend `build_arm_deps()` following the zlib/libpng pattern and drop the matching
+`--disable-*` from configure. Changing dependencies requires a full `clean` + `configure` + `make`.
+
+When building libpng with `-mfpu=neon`, pass `-DPNG_ARM_NEON_OPT=0` — the NEON assembly files are
+not part of the manual build and the linker will fail without it.
+
+## Critical: never use `--whole-archive` with `-lpthread`
+
+Static ARM builds targeting a kernel older than 5.1 must link `-lpthread` plainly.
+
+`--whole-archive` pulls in *all* of glibc 2.31's pthread init, which calls `clock_gettime64`
+(ARM syscall 403, added in kernel 5.1). On this device's 4.14.52 kernel that returns `-ENOSYS`,
+after which glibc dereferences a NULL VDSO pointer — **SIGSEGV before `main()`**. Even
+`scummvm --version` dies, and no log is written.
+
+Diagnostic signature in `dmesg`:
+
+```
+PC is at 0x40
+r0 : ffffffda        <- -38 = -ENOSYS
+```
+
+The native C apps escape this only because they never link pthread. If plain `-lpthread` ever
+produces link errors, the options are an older-glibc toolchain, a sysroot with 4.14 headers,
+musl, or dynamic linking — not `--whole-archive`.
+
+## Architecture
+
+```
+ScummVM Core -> OSystem_RoomWizard
+  |- RoomWizardGraphicsManager -> /dev/fb0   (800x480 RGB565, double-buffered)
+  |- RoomWizardEventSource     -> /dev/input/event*  (touch, keyboard, mouse, gamepad)
+  |- OssMixerManager           -> /dev/dsp   (22050 Hz MONO, O_NONBLOCK) -> TWL4030 -> SPKR1
+  \- Default managers (timer, events, saves, filesystem)
+```
+
+**This backend runs the framebuffer at 16bpp RGB565**, not 32bpp. It calls `fb_set_bpp(...,16)`
+on startup. Screenshots must be decoded with `--bpp 16`. Native apps run 32bpp and reset it on
+launch, so the mode depends entirely on which app last ran.
+
+**It links its own copy of `native_apps/common/touch_input.o`** (see `backend-files/configure.patch`).
+The build refreshes it, but a *deployed* ScummVM keeps whatever it was built with — redeploy
+ScummVM after changing touch code in `native_apps/common/`.
+
+## Audio
+
+The OSS shim's bugs are device facts and documented in
+[`../SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#audio). The backend-specific consequences:
+
+- **Mono, 22050 Hz.** Stereo is not merely unsupported — the shim silently ignores
+  `SNDCTL_DSP_STEREO`, so interleaved L/R gets consumed as separate frames and everything plays
+  at half speed. Mono also halves OPL synthesis load. ScummVM's mixer downmixes automatically.
+- **Set SPEED -> FMT -> CHANNELS**, then read back with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and
+  use the *read-back* rate for `_outputRate`. Set-ioctl return values do not reflect device state,
+  and a wrong `_outputRate` makes OPL run at the wrong tempo.
+- **`O_NONBLOCK` + wall-clock deadline pacing.** Blocking `write()` stalls ~506 ms on the ALSA
+  hardware period. Treat `EAGAIN` as a safety valve, not the pacing mechanism.
+- **No `SNDCTL_DSP_SETFRAGMENT`** — the default ~500 ms ring is the jitter buffer.
+- **`SCHED_OTHER`, never `SCHED_RR`.** An RT audio thread starves the main thread on this
+  single core and you get a black screen.
+- **Pre-fill 3 silence buffers** (~280 ms) before the pacing loop or the first playback XRUNs.
+- **50 % attenuation** (`>>1` post-mix) — the speaker distorts at full scale.
+
+Quickest audio test: KQ3 `intro`, which starts music immediately.
+
+## Debugging
+
+```bash
+ssh root@<ip> 'ROOMWIZARD_DEBUG=1 /opt/games/scummvm'   # touch circles + touch-state logging
+ssh root@<ip> '/opt/games/scummvm > /tmp/scummvm.log 2>&1'
+```
+
+`WARNING` goes to stderr and appears immediately; stdout is block-buffered, so redirect both.
+`top -H` gives per-thread CPU.
+
+## Gesture navigation
+
+Triple-tap in a corner: bottom-right = Global Main Menu, bottom-left = virtual keyboard,
+top-right = Enter. The 80 px corner zones are gesture-only — taps there are suppressed from the
+game. Emit a synthetic `LBUTTONUP` when an overlay opens or closes, or SCI games get stuck
+walking.
+
+## Rendering
+
+Software only. The optimisation log (O1–O12, CPU 80 % -> 32 %) is in
+[`SCUMMVM_DEV.md`](SCUMMVM_DEV.md#optimization-backlog). The reusable techniques — palette LUTs,
+precomputed source-column tables, row deduplication, skipping `fb_swap` on unchanged frames — are
+summarised in [`../CLAUDE.md`](../CLAUDE.md).
+
+Note that O9 ("DSS hardware scaler — not viable") was **wrong**; the OMAP3 DSS exposes three
+overlay planes with an independent-input/output-size hardware scaler at
+`/sys/devices/platform/omapdss/`, usable from sysfs with no kernel work. See
+`../IMPROVEMENT_PLAN.md` F2 — ScummVM is the prime candidate.
+
+## 32-bit target
+
+`sizeof(long) == 4`. Baseline all timing to a start timestamp captured at init; never multiply a
+raw `tv_sec` by 1000 or 1000000. `getMillis()` currently overflows after ~24.8 days of uptime
+(`../IMPROVEMENT_PLAN.md` B10).

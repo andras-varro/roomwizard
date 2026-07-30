@@ -220,7 +220,7 @@ The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscal
 | O6 | Right-click fix (LBUTTONUP→RBUTTONDOWN sequence) | done | Correctness, no CPU impact |
 | O7 | Skip `fb_swap` on unchanged frames | done | Menu CPU 35%→15% |
 | O8 | 16bpp RGB565 framebuffer | done | Halves write bandwidth |
-| O9 | OMAP3 DSS hardware scaler | not viable | `caps.ctrl=0`, no kernel support |
+| O9 | OMAP3 DSS hardware scaler | **available, not yet used** | Three overlay planes with independent input/output sizes at `/sys/devices/platform/omapdss/`; sysfs-driven, no kernel work. See [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F2. |
 | O10 | NEON `vst1q_u16` 8-pixel blit | done | |
 | O11 | Row deduplication (L1-cache tempRow) | done | 57% of scaled rows are dupes |
 | O12 | Mono mixer | done | Halves audio-thread work |
@@ -231,7 +231,7 @@ The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscal
 
 - **Single-touch only** — right-click = long-press 500 ms
 - **PNG crash ("No PNG support compiled!")** — **Fixed.** Clicking the thumbnails/grid-view icon in the launcher would crash with "No PNG support compiled!" because the ARM cross-compilation sysroot lacked `libpng`. The `./configure` script silently disables PNG when it cannot find `libpng` for the target architecture. **Fix:** the build script now automatically cross-compiles zlib 1.3.1 and libpng 1.6.43 from source into a local `arm-deps/` prefix directory (idempotent — skips if already built), then passes `--with-zlib-prefix` and `--with-png-prefix` to `./configure`. No manual package installation needed; Ubuntu Focal WSL doesn't support armhf multiarch (`dpkg --add-architecture armhf` fails because standard mirrors don't carry armhf). After changing dependencies, a full rebuild is required (`clean` + `configure` + `make`).
-- **Software rendering only** — no GPU, no DSS scaler
+- **Software rendering only** — no GPU. (The DSS overlay scaler is available but unused; see F2.)
 - **No MIDI** — NullMidiDriver; future option: software synth (FluidSynth or similar)
 - **OPL tempo** — verify on device with KQ3 intro vs reference recording after mono mixer fix
 - **Exit game returns to launcher on Ubuntu but exits ScummVM on RoomWizard** — the backend's `quit()` is being called when the engine exits instead of returning to the ScummVM launcher. Likely cause: `OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets the main loop drop back to the launcher. Compare with SDL backend's `_quit` flag + launcher loop.
@@ -240,7 +240,7 @@ The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscal
 ## ScummVM Engine Availability on RoomWizard
 
 ### Currently Enabled
-All default (stable, build-by-default=yes) ScummVM engines are enabled. Engines with unmet library dependencies are automatically skipped by configure.
+The build enables 8 base engines by default (`ENGINE_BATCH=0` in `build-and-deploy.sh`): scumm, scumm-7-8, he, agi, sci, agos, sky, queen. Engines with unmet library dependencies are skipped by configure. See [`ENGINE_ADDITION_PLAN.md`](ENGINE_ADDITION_PLAN.md) for adding more.
 
 ### 16-bit Color Support (USE_RGB_COLOR)
 The RoomWizard backend was added to the 16-bit backend whitelist via [`configure.patch`](backend-files/configure.patch). This enables `USE_RGB_COLOR` which is required by ~30 engines. After building, verify with:

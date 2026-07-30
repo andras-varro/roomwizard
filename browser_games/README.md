@@ -1,5 +1,15 @@
 # RoomWizard Browser Modifications Guide
 
+> ## ⚠️ Obsolete
+>
+> These games run inside the vendor's X11 → Jetty → WebKit browser stack. That entire stack is
+> **disabled and deleted** by `../setup-device.sh` on every commissioned device, so nothing here
+> works on a current unit. It is kept only as a historical record of the first approach.
+>
+> The native replacement is [`../native_apps/`](../native_apps/) — see
+> `native_apps/brick_breaker` for the direct successor to the HTML brick breaker.
+
+
 > **Complete guide for browser-based game modifications and LED control implementation**
 
 ## Table of Contents
@@ -591,9 +601,9 @@ If anything goes wrong:
 
 ## Related Documentation
 
-- [System Analysis](SYSTEM_ANALYSIS.md) - Hardware and firmware analysis
-- [Native Games Guide](NATIVE_GAMES_GUIDE.md) - Native C games development
-- [Commissioning](COMMISSIONING.md) - Device setup and commissioning
-- [Project Status](PROJECT_STATUS.md) - Current development status
+- [System Analysis](../SYSTEM_ANALYSIS.md) - Hardware and firmware analysis
+ - Native C games development
+- [Commissioning](../COMMISSIONING.md) - Device setup and commissioning
+ - Current development status
 
 ---

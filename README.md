@@ -4,9 +4,30 @@
 
 ## Quick Navigation
 
-### Setup & Commissioning
-- **[Commissioning Guide](COMMISSIONING.md)** — Complete setup workflow (SD card → system setup → deploy)
-- **[System Analysis](SYSTEM_ANALYSIS.md)** — Hardware specs and firmware analysis
+## Documentation map
+
+| Doc | What it owns | Read it when |
+|---|---|---|
+| [CLAUDE.md](CLAUDE.md) | How to build, deploy, and not break things. The trap list. | Before writing any code |
+| [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) | Authoritative device facts: SoC, boot chain, display, audio, GPIO, unused hardware | Before touching anything hardware-related |
+| [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | The single backlog — bugs and features with `file:line` | Before starting work, so you don't rediscover a known bug |
+| [COMMISSIONING.md](COMMISSIONING.md) | Setup workflow: SD card → system setup → deploy | Bringing up a new unit |
+| [SD_CARD_UPGRADE.md](SD_CARD_UPGRADE.md) | Optional 4 GB → 32 GB card upgrade | Only if you run out of disk |
+| [HARDWARE_INSPECTION.md](HARDWARE_INSPECTION.md) | Physical checks needing a screwdriver. Retired once filled in. | Before opening the case |
+
+Each component directory also has a `CLAUDE.md` (authoring guidance for that component) and a
+`README.md` (what it is and how to use it):
+[native_apps](native_apps/CLAUDE.md) · [scummvm-roomwizard](scummvm-roomwizard/CLAUDE.md) ·
+[vnc_client](vnc_client/CLAUDE.md).
+
+**The rule:** component docs describe their own code only. Device facts belong in
+SYSTEM_ANALYSIS.md, open work belongs in IMPROVEMENT_PLAN.md. Link, don't copy.
+
+### The device in one line
+
+TI **OMAP3503** (ARM Cortex-A8 @ 600 MHz, **no GPU, no DSP**), 234 MB RAM, 800×480 LCD via
+legacy `omapfb`/`omapdss` (no DRM/KMS), projected-capacitive touch, Linux 4.14.52, SysVinit.
+All code is cross-compiled on the dev host and deployed over SSH — there is no local app to run.
 
 ### Projects
 - **[Native Apps](native_apps/)** — High-performance C apps with direct framebuffer rendering
@@ -31,6 +52,13 @@
 
 # Phase 2: SSH — disable bloatware, install app launcher
 ./setup-device.sh <ip>
+```
+
+### 1b. Reclaim disk space (optional, recommended)
+```bash
+./setup-device.sh <ip> --remove       # vendor bloatware (~178 MB)
+./setup-device.sh <ip> --deep-clean   # extended cleanup (~560 MB more)
+./setup-device.sh <ip> --status       # report current state
 ```
 
 ### 2. Deploy a project
@@ -98,3 +126,25 @@ It scans manifest files from all projects and displays them as touch-friendly ic
 The init script respawns it automatically when an app exits.
 
 For hardware specs, see **[Hardware Platform](SYSTEM_ANALYSIS.md#hardware-platform)** in System Analysis.
+
+
+---
+
+## Project Status
+
+See **[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)** for the current backlog. Highlights:
+
+- Known bugs are catalogued there with `file:line` references.
+- **Kernel upgrades are out of scope** — vendor source is unavailable and a mainline port would
+  break the runtime bpp switching that ScummVM and the VNC client depend on. See
+  [Kernel Upgrade Assessment](SYSTEM_ANALYSIS.md#kernel-upgrade-assessment).
+
+## A note on secrets
+
+`vnc_client/vnc_client.conf` is **gitignored** because it holds a plaintext VNC password.
+Copy the template to create your own:
+
+```bash
+cp vnc_client/vnc_client.conf.example vnc_client/vnc_client.conf
+# then edit host/password
+```

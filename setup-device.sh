@@ -55,15 +55,238 @@ err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── usage ───────────────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $0 <ip> [--remove|--status]"
+    echo "Usage: $0 <ip> [--remove|--deep-clean|--status] [--dry-run]"
     echo ""
     echo "  <ip>              Device IP address"
-    echo "  --remove          Also remove bloatware files (~178 MB freed)"
+    echo "  --remove          Also remove vendor bloatware files (~178 MB freed)"
+    echo "  --deep-clean      --remove PLUS extended cleanup (~560 MB more)."
+    echo "                    Includes the 474 MB on-device factory restore image."
+    echo "                    See IMPROVEMENT_PLAN.md and the warnings it prints."
     echo "  --status          Show device status only (no changes)"
+    echo "  --dry-run         With --deep-clean: list what would be deleted, delete nothing"
     exit 1
 }
 
 [[ -z "$DEVICE_IP" ]] && usage
+
+# Reject unknown flags rather than silently falling through to a full setup+reboot
+case "$FLAG" in
+    ""|--remove|--deep-clean|--status) ;;
+    *) echo "Unknown option: $FLAG"; echo ""; usage ;;
+esac
+
+DRY_RUN="${3:-}"
+if [[ -n "$DRY_RUN" && "$DRY_RUN" != "--dry-run" ]]; then
+    echo "Unknown option: $DRY_RUN"; echo ""; usage
+fi
+
+# Basic sanity on the target so a typo doesn't run commands against the wrong host
+if ! echo "$DEVICE_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z][a-zA-Z0-9.-]*$'; then
+    err "'$DEVICE_IP' does not look like an IP address or hostname"
+fi
+
+# --deep-clean implies --remove
+DEEP_CLEAN=0
+if [[ "$FLAG" == "--deep-clean" ]]; then
+    DEEP_CLEAN=1
+    FLAG="--remove"
+fi
+
+# ── deep clean ──────────────────────────────────────────────────────────────
+# Extended cleanup beyond the vendor-bloatware list above. Everything here was
+# verified unused on a live device (RW09) on 2026-07-29. The enabling fact is
+# that every binary this project ships is statically linked -- `ldd` reports
+# "not a dynamic executable" for app_launcher, vnc_client and scummvm -- so the
+# only dynamic consumers left are sshd, dbus, syslogd, cron, watchdog, udevd,
+# dhclient and busybox. Nothing below is in their closure.
+#
+# Deliberately NOT included (could not be proven safe):
+#   /usr/share/fonts      4.5 MB - ScummVM glyph source not ruled out
+#   /usr/lib/locale       2.9 MB - static ScummVM embeds locale-archive paths
+#   /usr/lib/perl5        2.5 MB - grep for #!/usr/bin/perl shebangs first
+#   /opt/sbin/*           1.4 MB - entangled with ctrlblk / restore.sh
+run_deep_clean() {
+    echo ""
+    echo "════════════════════════════════════════"
+    echo " Deep Clean"
+    echo "════════════════════════════════════════"
+
+    DEL_FACTORY=0
+    if [[ "$DRY_RUN" == "--dry-run" ]]; then
+        warn "DRY RUN — nothing will be deleted"
+        DEL_FACTORY=1   # so the dry run shows the factory images too
+        confirm2="yes"
+    else
+        warn "This permanently deletes ~85 MB of rootfs + data-partition files."
+        read -p "Continue? (yes/no): " confirm2
+
+        if [[ "$confirm2" == "yes" ]]; then
+            echo ""
+            warn "OPTIONAL: also delete the 474 MB on-device factory restore image"
+            warn "  (/home/root/backup/factory/*.img + .tar.gz, dated Jan 2022)"
+            warn "  This removes the device's SELF-restore capability. Recovery would"
+            warn "  then require pulling the SD card and dd-ing your host-side backup."
+            warn "  PRECONDITION: verify roomwizard.img on this host is intact FIRST."
+            read -p "  Delete factory images too? (yes/no): " confirm_factory
+            [[ "$confirm_factory" == "yes" ]] && DEL_FACTORY=1
+        fi
+    fi
+
+    if [[ "$confirm2" == "yes" ]]; then
+        ssh "$DEVICE" "DRY='$DRY_RUN' DEL_FACTORY='$DEL_FACTORY' bash -s" <<'REMOTE'
+before_root=$(df -k /            | tail -1 | awk '{print $3}')
+before_data=$(df -k /home/root/data   2>/dev/null | tail -1 | awk '{print $3}')
+before_bkp=$(df -k /home/root/backup  2>/dev/null | tail -1 | awk '{print $3}')
+
+# del <paths...>  - remove, or just report under DRY
+del() {
+    for p in "$@"; do
+        for m in $p; do
+            [ -e "$m" ] || continue
+            sz=$(du -sh "$m" 2>/dev/null | awk '{print $1}')
+            if [ -n "$DRY" ]; then
+                echo "  would delete  $sz  $m"
+            else
+                echo "  deleting      $sz  $m"
+                rm -rf "$m"
+            fi
+        done
+    done
+}
+
+echo ""
+echo "-- Browser / WebKit stack (~48 MB) --"
+del /usr/lib/libwebkit2gtk-4.0.so* /usr/lib/libjavascriptcoregtk-4.0.so*
+del /usr/libexec/webkit2gtk-4.0 /usr/lib/webkit2gtk-4.0
+del /usr/bin/WebKitWebDriver /usr/bin/browser /usr/bin/webmonitor
+
+echo "-- ICU (only referenced by webkit/JSC/harfbuzz-icu) (~31 MB) --"
+del /usr/lib/libicu*.so* /usr/lib/libharfbuzz-icu.so*
+
+echo "-- GTK3 + icon/mime/theme data (~17 MB) --"
+del /usr/lib/libgtk-3.so* /usr/lib/libgdk-3.so* /usr/lib/libgdk_pixbuf*
+del /usr/lib/gdk-pixbuf-2.0 /usr/lib/girepository-1.0
+del /usr/share/icons /usr/share/mime /usr/share/themes
+
+echo "-- X11 client libs + server (~6 MB) --"
+del /usr/lib/libX*.so* /usr/lib/libxcb*.so* /usr/lib/libepoxy.so*
+del /usr/lib/libGL.so* /usr/lib/libEGL.so* /usr/lib/libgbm.so*
+del /usr/lib/xorg /usr/lib/X11 /usr/lib/dri /usr/share/drirc.d
+del /usr/bin/Xorg /usr/bin/xkbcomp
+del /usr/libexec/libinput /usr/share/libinput
+
+echo "-- GStreamer (~4.5 MB) --"
+del /usr/lib/libgst*.so* /usr/lib/liborc-0.4.so*
+del /usr/lib/gstreamer-1.0 /usr/libexec/gstreamer-1.0 /usr/share/gst-plugins-base
+
+echo "-- net-snmp / aspell / lftp / orphaned python / tslib (~9 MB) --"
+del /usr/lib/libnetsnmp*.so* /usr/sbin/snmpd /usr/bin/snmp* /usr/bin/net-snmp*
+del /usr/lib/aspell-0.60 /usr/lib/enchant-2 /usr/share/enchant-2
+del /usr/lib/libaspell.so* /usr/lib/libenchant*.so* /usr/bin/aspell*
+del /usr/lib/lftp /usr/share/lftp /usr/lib/liblftp*.so* /usr/bin/lftp*
+del /usr/lib/libpython3.8.so*      # orphaned: no python3 stdlib on this device
+del /usr/lib/ts /usr/lib/libts.so*
+del /usr/share/sounds              # alsa test wavs (NOT /usr/share/alsa - keep that)
+
+echo "-- Unused daemons + Steelcase mail tooling (~3 MB) --"
+del /usr/sbin/wpa_supplicant /usr/sbin/ntpd.ntp /usr/sbin/vsftpd /usr/sbin/avahi-daemon
+del /etc/avahi /etc/wpa_supplicant* /etc/ntp.conf /etc/ntp.conf.template
+del /usr/local/bin/mutt /usr/local/bin/muttbug /usr/local/bin/pgpewrap
+del /usr/local/bin/pgpring /usr/local/bin/smime_keys /usr/local/bin/flea
+del /usr/libexec/nullmailer /var/spool/nullmailer
+del /etc/init.d/avahi-daemon /etc/init.d/wpa_supplicant /etc/init.d/networkmanager
+del /etc/init.d/cursor.sh /etc/init.d/psplash /etc/init.d/cleaup_partition
+
+echo "-- ZigBee tooling (only reachable if the radio is populated) --"
+del /opt/sbin/RoomWizard-zbgatewayd /opt/sbin/wpantools_roomwizard
+
+echo "-- Boot links the stale on-device disable script missed --"
+# KEEP /etc/rc5.d/S40ctrlblk (boot_tracker management) and S50watchdog (HW watchdog)
+del /etc/rc5.d/S21cursor.sh /etc/rc5.d/S75bootscrub /etc/rc5.d/S80cleaup_partition
+del /etc/rc5.d/S99rmnologin.sh /etc/rcS.d/S01psplash /etc/rcS.d/S58wpa_supplicant
+del /etc/rcS.d/S60networkmanager /etc/rcS.d/S45mountnfs.sh
+
+echo "-- Data partition (~91 MB) --"
+if [ -f /home/root/data/cron/log ]; then
+    sz=$(du -sh /home/root/data/cron/log | awk '{print $1}')
+    if [ -n "$DRY" ]; then
+        echo "  would truncate $sz  /home/root/data/cron/log"
+    else
+        echo "  truncating     $sz  /home/root/data/cron/log"
+        : > /home/root/data/cron/log
+    fi
+fi
+del /home/root/data/test.hex        # 10 MB factory burn-in pattern
+del /home/root/data/splash /home/root/data/frontpanel /home/root/data/misc
+del /home/root/data/roombooker /home/root/data/selftest /home/root/data/uploaded
+del /home/root/data/wpa /home/root/data/wpa_ca
+del /home/root/data/pushconfig.tar.gz /home/root/data/rwdb.tgz
+# KEEP /home/root/data/*.hig - our high scores
+
+echo "-- Log churn on the backup partition --"
+del /home/root/backup/logs/rotate_logs /home/root/backup/logs/restore
+# KEEP /home/root/backup/serialno - device identity
+
+echo "-- Cron: both remaining jobs are broken/leaky --"
+# cleanupfiles.sh errors out ("[: 812M: integer expression expected") and both
+# jobs leak 12 files/day into rotate_logs with nothing pruning them. Our own
+# respawn.sh self-rotates, so cron has no remaining purpose.
+if [ -n "$DRY" ]; then
+    echo "  would remove crontab, /etc/rc5.d/S20cron, /opt/sbin/cleanup"
+else
+    crontab -r 2>/dev/null || true
+    rm -f /etc/rc5.d/S20cron
+    rm -rf /opt/sbin/cleanup
+    rm -rf /home/root/data/cron
+    echo "  cron removed"
+fi
+
+echo "-- inittab: drop the pointless tty4 getty (~1.4 MB RSS) --"
+if grep -q '^4:12345:respawn:/sbin/getty 38400 tty4' /etc/inittab 2>/dev/null; then
+    if [ -n "$DRY" ]; then
+        echo "  would remove tty4 getty line from /etc/inittab"
+    else
+        sed -i '/^4:12345:respawn:\/sbin\/getty 38400 tty4/d' /etc/inittab
+        echo "  tty4 getty removed (takes effect next boot)"
+    fi
+fi
+
+if [ "$DEL_FACTORY" = "1" ]; then
+    echo "-- Factory restore image (474 MB) --"
+    del /home/root/backup/factory/sd_rootfs_part.img*
+    del /home/root/backup/factory/sd_boot_archive.tar.gz*
+    del /home/root/backup/factory/sd_data_part.img*
+    del /home/root/backup/factory/sd_log_part.img*
+    # KEEP uImage-system-original (5 MB) - cheap local fallback kernel
+fi
+
+if [ -z "$DRY" ]; then
+    echo ""
+    echo "Freed:"
+    after=$(df -k / | tail -1 | awk '{print $3}')
+    echo "  rootfs:  $(( (before_root - after) / 1024 )) MB"
+    if [ -n "$before_data" ]; then
+        a=$(df -k /home/root/data | tail -1 | awk '{print $3}')
+        echo "  data:    $(( (before_data - a) / 1024 )) MB"
+    fi
+    if [ -n "$before_bkp" ]; then
+        a=$(df -k /home/root/backup | tail -1 | awk '{print $3}')
+        echo "  backup:  $(( (before_bkp - a) / 1024 )) MB"
+    fi
+    echo ""
+    df -h / /home/root/data /home/root/backup 2>/dev/null
+fi
+REMOTE
+        if [[ "$DRY_RUN" == "--dry-run" ]]; then
+            ok "Dry run complete — nothing was deleted"
+        else
+            ok "Deep clean complete"
+        fi
+    else
+        info "Deep clean cancelled"
+    fi
+}
+
 
 # ── SSH check ───────────────────────────────────────────────────────────────
 echo ""
@@ -75,6 +298,15 @@ info "Testing SSH connection to $DEVICE_IP..."
 ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
     || err "Cannot reach $DEVICE — check IP and SSH key"
 ok "SSH OK"
+
+# ── dry-run: report the deep clean and exit WITHOUT running setup or rebooting ──
+if [[ "$DRY_RUN" == "--dry-run" ]]; then
+    [[ "$DEEP_CLEAN" == "1" ]] || err "--dry-run is only supported together with --deep-clean"
+    run_deep_clean
+    echo ""
+    info "Dry run only — no setup performed, device not rebooted."
+    exit 0
+fi
 
 # ── status-only mode ────────────────────────────────────────────────────────
 if [[ "$FLAG" == "--status" ]]; then
@@ -323,7 +555,9 @@ rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
 
 # Additional Steelcase artifacts and data
 rm -rf /opt/pv02 2>/dev/null
-rm -rf /opt/sound 2>/dev/null
+# NOTE: /opt/sound (113 KB) is deliberately KEPT - it holds three usable UI WAVs
+# (asl_click.wav, asl_error.wav, asl_success.wav) that are directly useful as
+# launcher/game feedback sounds via common/audio.c. Cheap to keep.
 rm -f /home/root/sqltool.rc 2>/dev/null
 rm -rf /home/root/data/websign 2>/dev/null
 
@@ -332,7 +566,12 @@ rm -rf /home/root/data/websign 2>/dev/null
 sed -i '/wsplatform\.conf/d' /etc/profile 2>/dev/null
 rm -rf /home/root/data/rwdb 2>/dev/null
 rm -rf /home/root/data/conctest 2>/dev/null
-rm -rf /home/root/data/cron 2>/dev/null
+# BUGFIX 2026-07-29: this used to be `rm -rf /home/root/data/cron`, which is
+# DESTRUCTIVE - /var/cron/tabs/root is a SYMLINK into that directory, so deleting
+# it destroys the root crontab and cron's spool root. Truncate the 79 MB log
+# instead (it has been accumulating since 2017). Use --deep-clean to remove cron
+# entirely, deliberately.
+[ -f /home/root/data/cron/log ] && : > /home/root/data/cron/log
 rm -rf /home/root/backup/websigns 2>/dev/null
 rm -f /var/crontab.steelcase.bak 2>/dev/null
 
@@ -360,9 +599,12 @@ rm -f /home/root/log/snmp_daemon.log 2>/dev/null
 rm -f /home/root/log/networkmngr.err 2>/dev/null
 rm -rf /home/root/log/jetty_logs 2>/dev/null
 
-# Remove Steelcase management binaries (but keep /opt/sbin/cleanup/ for log rotation)
-rm -f /opt/sbin/RoomWizard-zbgatewayd 2>/dev/null
-rm -f /opt/sbin/wpantools_roomwizard 2>/dev/null
+# NOTE: RoomWizard-zbgatewayd and wpantools_roomwizard are the 802.15.4 / ZigBee
+# radio tooling. They are KEPT from 2026-07-29 onwards: if the radio turns out to
+# be populated (see HARDWARE_INSPECTION.md section B) they are the protocol
+# reference for device-to-device wireless. ~1.3 MB total. Copies also exist in the
+# host-side partitions/ dump, so removing them is recoverable - but keeping them
+# costs almost nothing. --deep-clean removes them.
 
 # Dangerous init scripts - remove entirely (already disabled)
 for svc in vsftpd snmpd nullmailer ntpd webserver jetty browser startautoupgrade webmonitor x11 hsqldb mta.sh; do
@@ -376,6 +618,11 @@ REMOTE
     fi
 else
     info "Bloatware files left in place (use --remove to delete)"
+fi
+
+# ── deep clean (function defined above) ─────────────────────────────────────
+if [[ "$DEEP_CLEAN" == "1" ]]; then
+    run_deep_clean
 fi
 
 # ── Status summary ──────────────────────────────────────────────────────────

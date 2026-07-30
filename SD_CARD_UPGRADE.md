@@ -641,7 +641,7 @@ sudo blkid /dev/sdY6  # verify
 
 **Option B — Update the commissioning script:**
 
-Edit [`commission-roomwizard.sh`](commission-roomwizard.sh:50) and change the
+Edit [`commission-roomwizard.sh`](commission-roomwizard.sh) and change the
 UUID on line 50:
 
 ```bash

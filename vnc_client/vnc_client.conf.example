@@ -1,0 +1,38 @@
+# VNC Client for RoomWizard - Configuration TEMPLATE
+#
+# Copy this file to `vnc_client.conf` and edit it with your own values:
+#
+#     cp vnc_client.conf.example vnc_client.conf
+#
+# `vnc_client.conf` is gitignored so your password never reaches the repo.
+# The deploy script installs it to /opt/vnc_client/vnc_client.conf on the
+# device (only if that file does not already exist there).
+#
+# All settings can also be overridden via command-line arguments:
+#   vnc_client --host <ip> --port <port> --password <pw>
+#   vnc_client <host> [port]   (legacy positional syntax)
+#
+# Lines starting with # are comments. Whitespace around = is ignored.
+
+# VNC server hostname or IP address
+host = 192.168.1.100
+
+# VNC server port (x11vnc on 5900)
+port = 5900
+
+# VNC authentication password (VncAuth / security type 2).
+# Must match the password configured on the VNC server.
+#
+# NOTE: this is stored in plaintext on the device and is sent using the
+# legacy VncAuth scheme. Use a throwaway password, not one you reuse.
+password = CHANGEME
+
+# Preferred encodings (most preferred first)
+# Options: tight, zrle, copyrect, hextile, zlib, raw
+encodings = tight zrle copyrect hextile zlib raw
+
+# Tight encoding compression level (1-9, higher = more compression)
+compress_level = 6
+
+# Tight encoding JPEG quality (1-9, higher = better quality)
+quality_level = 5

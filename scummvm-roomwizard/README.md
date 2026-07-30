@@ -28,14 +28,16 @@ ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 
 ScummVM appears in the native game selector automatically. The `scummvm.noargs` marker (already on device) ensures it launches without device-path arguments.
 
-### Touch & Bezel Calibration
+### Touch Calibration
+
 Run once on the device:
 ```bash
 ssh root@192.168.50.73 '/opt/games/unified_calibrate'
 ```
-- **Phase 1:** Tap the 4 corner crosshairs (touch offset)
-- **Phase 2:** Tap `+`/`−` zones (bezel margins)
-- Saves to `/etc/touch_calibration.conf` — loaded automatically
+
+- Tap the 9 crosshairs (corners + edge-midpoints + center)
+- A per-axis least-squares fit maps raw → full screen; a summary shows target-vs-landing, then ACCEPT/REDO
+- Saves the raw range to `/etc/touch_calibration.conf` — loaded automatically by ScummVM and all native apps
 
 ## Status
 

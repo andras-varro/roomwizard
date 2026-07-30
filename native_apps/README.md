@@ -2,7 +2,7 @@
 
 Native C apps and tools for the Steelcase RoomWizard (600MHz ARMv7, 800×480 framebuffer). Direct framebuffer rendering — no browser, no overhead.
 
-See [PROJECT.md](PROJECT.md) for architecture and development status.
+See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.md](../IMPROVEMENT_PLAN.md) for open work.
 
 ## Table of Contents
 
@@ -30,10 +30,31 @@ See [PROJECT.md](PROJECT.md) for architecture and development status.
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
 | `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
-| `hardware_test` | Tool | Diagnostics |
-| `usb_test` | Tool | USB device tester — keyboard, mouse, gamepad visualization |
-| `watchdog_feeder` | Daemon | Feeds `/dev/watchdog` every 30 s |
-| `unified_calibrate` | Tool | Touch + bezel calibration |
+| `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Calibration, USB |
+| `audio_touch_test` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
+| `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
+| `hardware_config` | Tool | Settings GUI — superseded by `device_tools` (hidden) |
+| `hardware_diag` | Tool | System diagnostics GUI — superseded by `device_tools` (hidden) |
+| `unified_calibrate` | Tool | Touch calibration — superseded by `device_tools` (hidden) |
+| `backlight` | Tool | CLI backlight control (hidden) |
+
+Tools marked *hidden* have a `.hidden` marker in `/opt/games/`, so they do not appear in the
+launcher grid but remain runnable over SSH. `usb_test` and `watchdog_feeder` exist as source but
+are **not built or deployed** — USB testing lives in the `device_tools` USB tab, and the system
+`/usr/sbin/watchdog` daemon handles the hardware watchdog.
+
+### Device Tools
+
+[`device_tools/device_tools.c`](device_tools/device_tools.c) consolidates five previously
+separate GUI utilities behind a tab bar:
+
+| Tab | Replaces | What it does |
+|---|---|---|
+| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, backlight brightness, portrait-mode toggle, save/reset. Test buttons deliberately bypass config to exercise raw hardware. |
+| **Diagnostics** | `hardware_diag` | Read-only system info across 6 pages (System, Memory, Storage, Hardware, Config, Network). |
+| **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
+| **Calibration** | `unified_calibrate` | Tap 9 crosshairs; per-axis least-squares fit extrapolated to the screen edges; writes the raw range to `/etc/touch_calibration.conf`. |
+| **USB** | `usb_test` | Keyboard, mouse and gamepad visualisation for attached USB devices. |
 
 ---
 
@@ -188,156 +209,43 @@ Fields:
 
 The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
 
-**Permanent mode** also:
-- Disables watchdog test/repair (prevents unwanted reboots)
-- Stops and disables unnecessary services (browser, X11, Jetty, HSQLDB, etc.)
-- Frees ~80 MB RAM
-- See [System Optimization](#system-optimization) below
-
-Rebuilding just `game_selector` after changes:
-```bash
-arm-linux-gnueabihf-gcc -O2 -static -I. \
-  common/framebuffer.c common/touch_input.c common/hardware.c \
-  common/common.c common/ui_layout.c \
-  game_selector/game_selector.c -o build/game_selector -lm
-```
+To rebuild a single app, run `./build-and-deploy.sh` — it is fast and always links the
+correct object set. Hand-rolled single-file compile lines go stale as `common/` grows
+and will fail to link.
 
 ---
 
 ## System Optimization
 
-### The Problem
+The vendor firmware ships a software watchdog that reboots the device roughly every 70 minutes
+in game mode, plus ~178 MB of bloatware (Jetty, OpenJRE, HSQLDB, X11, CJK fonts) and a further
+~560 MB that can be reclaimed on top of that.
 
-The RoomWizard firmware includes:
-1. **Watchdog system** that monitors browser/webserver stack (causes reboots in game mode)
-2. **Bloatware files** (~178 MB) that are never used in game mode
-3. **Vulnerable software** (Jetty 9.4.11, HSQLDB 2.0.0, outdated Java)
-
-**Symptoms:**
-- Device reboots unexpectedly every 3-4 hours
-- 47% disk usage (405 MB used out of 931 MB)
-- 45% RAM usage (106 MB used out of 234 MB)
-
-### Two-Level Cleanup
-
-**Level 1: Service Cleanup (Safe, Reversible)**
-- Disables watchdog test/repair
-- Stops unnecessary services
-- Frees ~80 MB RAM
-- Prevents reboots
-
-**Level 2: File Removal (Aggressive, Permanent)**
-- Removes bloatware files
-- Frees ~178 MB disk space
-- Removes vulnerable software
-- Requires SD card backup to restore
-
-### Quick Service Cleanup
+None of this is handled here — it is owned by `../setup-device.sh`:
 
 ```bash
-./build-and-deploy.sh 192.168.50.73 cleanup
+../setup-device.sh <ip>                        # disable the SW watchdog + services
+../setup-device.sh <ip> --remove               # + delete vendor bloatware (~178 MB)
+../setup-device.sh <ip> --deep-clean           # + extended cleanup (~560 MB more)
+../setup-device.sh <ip> --deep-clean --dry-run # preview, deletes nothing
+../setup-device.sh <ip> --status               # report current state
 ```
 
-**Result:** No reboots, 80 MB RAM freed, fully reversible
-
-### Full Cleanup with File Removal
-
-```bash
-# Analyze + remove files (requires confirmation)
-./build-and-deploy.sh 192.168.50.73 cleanup --remove
-```
-
-**Bloatware Removed:**
-| Package | Size | Security Issue |
-|---------|------|----------------|
-| Jetty 9.4.11 | 43 MB | CVE-2019-10241, CVE-2019-10247 |
-| OpenJRE 8 | 93 MB | Outdated 2018 build |
-| HSQLDB 2.0.0 | 3.5 MB | CVE-2018-16336 (RCE) |
-| CJK Fonts | 31 MB | Not needed |
-| X11 Data | 5.2 MB | Not needed |
-| SNMP MIBs | 2.5 MB | Not needed |
-| **Total** | **~178 MB** | |
-
-**Result:** 178 MB disk freed, vulnerabilities removed, **permanent**
-
-### Services Disabled
-
-| Service | Purpose | Why Disable |
-|---------|---------|-------------|
-| webserver, browser, x11 | Web interface | Not needed in game mode |
-| jetty, hsqldb | Java backend | Not needed in game mode |
-| snmpd, vsftpd | Monitoring/FTP | Not needed |
-| nullmailer | Email sending | Not needed |
-| ntpd | Time synchronization | Not critical for games |
-| startautoupgrade | Auto-upgrade | Not needed |
-| psplash | Boot splash screen | Uses 6MB RAM after boot |
-
-### Services Kept Running
-
-| Service | Purpose | Why Keep |
-|---------|---------|----------|
-| watchdog | Hardware watchdog feeder | Critical |
-| sshd | SSH access | Remote access |
-| cron, dbus, ntpd | System services | Essential |
-| audio-enable | Speaker amplifier | Required for sound |
-| roomwizard-games | Game selector | Main application |
-
-### Memory Impact
-
-**Before:** 106 MB used / 128 MB free (45% used)  
-**After:** 27 MB used / 207 MB free (12% used)  
-**Freed:** 80 MB RAM
-
-### Disk Impact (with file removal)
-
-**Before:** 405 MB used / 474 MB free (47% used)  
-**After:** 227 MB used / 652 MB free (26% used)  
-**Freed:** 178 MB disk space
-
-### Verification
-
-```bash
-ssh root@192.168.50.73
-
-# Check watchdog (should be disabled)
-grep -E '^(test-binary|repair-binary)' /etc/watchdog.conf
-
-# Check processes (should be none)
-ps aux | grep -E 'java|Xorg|browser|jetty'
-
-# Check memory
-free -h
-```
-
-### Reverting Changes
-
-```bash
-ssh root@192.168.50.73
-
-# Restore watchdog
-cp /etc/watchdog.conf.backup /etc/watchdog.conf
-/etc/init.d/watchdog restart
-
-# Re-enable browser mode
-update-rc.d browser defaults
-update-rc.d x11 defaults
-update-rc.d webserver defaults
-
-reboot
-```
-
-**Note:** File removal cannot be reverted without SD card backup.
+Which services are disabled and why it is safe is documented in
+[`../SYSTEM_ANALYSIS.md#game-mode-optimization`](../SYSTEM_ANALYSIS.md#game-mode-optimization).
 
 ---
 
-## Permanent Game Mode (boot)
+## Permanent App Mode (boot)
 
-Use the deploy script:
 ```bash
-./build-and-deploy.sh 192.168.50.73 permanent
+./build-and-deploy.sh 192.168.50.73 set-default
 ```
 
-Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-games start|stop|status'`
+This writes `/opt/roomwizard/default-app`; the init service respawns whatever it points at.
+Installing the service itself is done once by `../setup-device.sh`.
+
+Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-app start|stop|status'`
 
 ## Game Selector Markers
 

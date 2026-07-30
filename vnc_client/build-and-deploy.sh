@@ -104,14 +104,23 @@ scp vnc_client_stripped "$DEVICE:$REMOTE_DIR/vnc_client"
 ssh "$DEVICE" "chmod +x $REMOTE_DIR/vnc_client"
 ok "Binary uploaded ($(ls -lh vnc_client_stripped | awk '{print $5}'))"
 
-# Upload config file (only if not already present on device, to preserve edits)
+# Upload config file (only if not already present on device, to preserve edits).
+# vnc_client.conf is gitignored (it holds a plaintext password); fall back to
+# the tracked template so a fresh clone can still deploy.
+CONF_SRC="vnc_client.conf"
+if [ ! -f "$CONF_SRC" ]; then
+    CONF_SRC="vnc_client.conf.example"
+    warn "vnc_client.conf not found locally - using $CONF_SRC (password is a placeholder)"
+    warn "Create it with: cp vnc_client.conf.example vnc_client.conf  # then edit"
+fi
 if ssh "$DEVICE" "[ ! -f $REMOTE_DIR/vnc_client.conf ]" 2>/dev/null; then
     info "Uploading default config file..."
-    scp vnc_client.conf "$DEVICE:$REMOTE_DIR/vnc_client.conf"
-    ok "Config file deployed"
+    scp "$CONF_SRC" "$DEVICE:$REMOTE_DIR/vnc_client.conf"
+    ssh "$DEVICE" "chmod 600 $REMOTE_DIR/vnc_client.conf"
+    ok "Config file deployed (mode 0600)"
 else
     ok "Config file already present (preserved)"
-    warn "To force-overwrite: scp vnc_client.conf $DEVICE:$REMOTE_DIR/vnc_client.conf"
+    warn "To force-overwrite: scp $CONF_SRC $DEVICE:$REMOTE_DIR/vnc_client.conf"
 fi
 
 # Install app manifest (for app launcher)

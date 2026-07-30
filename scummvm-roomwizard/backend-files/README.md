@@ -4,8 +4,8 @@ This is a custom ScummVM backend for the RoomWizard device, implementing native 
 
 ## Features
 
-- **Native Framebuffer Rendering**: Direct rendering to `/dev/fb0` (800x480 @ 32-bit ARGB)
-- **Touch Input Support**: Single-touch resistive touchscreen via `/dev/input/event0`
+- **Native Framebuffer Rendering**: Direct rendering to `/dev/fb0` (800x480 @ 16bpp RGB565 (the backend calls fb_set_bpp(...,16)))
+- **Touch Input Support**: Single-touch via `/dev/input/event0` (the panel is projected-capacitive; the `panjit_ts` driver exposes single-touch only)
 - **Automatic Scaling**: Games are centered and scaled to fit the display, with bezel-aware margins
 - **Software Cursor**: Rendered cursor with palette support
 - **Audio via OSS**: OPL/AdLib music and SFX through TWL4030 speaker (`/dev/dsp`)
@@ -15,7 +15,7 @@ This is a custom ScummVM backend for the RoomWizard device, implementing native 
 ## Hardware Requirements
 
 - **Display**: 800x480 framebuffer (RGB/ARGB)
-- **Input**: Resistive touchscreen (single-touch)
+- **Input**: Projected-capacitive touchscreen (driver exposes single-touch)
 - **CPU**: ARMv7 with NEON SIMD
 - **RAM**: 128+ MB available
 - **OS**: Linux with framebuffer and input event support

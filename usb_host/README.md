@@ -465,7 +465,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | Property | Value |
 |----------|-------|
 | Device | Steelcase RoomWizard II |
-| SoC | TI AM335x (OMAP3 family), ARM Cortex-A8 |
+| SoC | TI OMAP3503 (OMAP34xx family), ARM Cortex-A8 |
 | Kernel | Linux 4.14.52 |
 | Build | `oe-user@oe-host` (Yocto/OpenEmbedded), 2018-06-26 |
 | Boot | U-Boot → uImage from SD card FAT32 |

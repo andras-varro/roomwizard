@@ -1,0 +1,27 @@
+# Shell scripts MUST stay LF.
+#
+# roomwizard-app-init.sh and disable-steelcase.sh are scp'd byte-for-byte onto
+# the device and run by BusyBox sh. A CRLF line ending turns the shebang into
+# `#!/bin/sh\r`, which BusyBox rejects with a misleading "no such file or
+# directory" - the device then boots to a black screen with no launcher and no
+# obvious cause.
+#
+# This host has core.autocrlf=true set system-wide, so without this file the
+# next clone on Windows would silently break the device.
+*.sh text eol=lf
+
+# Python helpers are also run on the device / under WSL
+*.py text eol=lf
+
+# Device-side config and manifest formats
+*.conf text eol=lf
+*.app  text eol=lf
+
+# Binary assets - never touch
+*.ppm binary
+*.raw binary
+*.png binary
+*.jpg binary
+*.img binary
+*.zip binary
+*.dat binary

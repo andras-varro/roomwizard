@@ -82,11 +82,6 @@ sync_to_vcs() {
     else
         echo -e "${YELLOW}⚠ OSS mixer directory not found — skipping${NC}"
     fi    
-    # Copy IMPLEMENTATION_SUCCESS.md if it exists
-    if [ -f "$ABS_SCUMMVM_DIR/IMPLEMENTATION_SUCCESS.md" ]; then
-        cp "$ABS_SCUMMVM_DIR/IMPLEMENTATION_SUCCESS.md" "$ABS_BACKEND_FILES/"
-        echo -e "${GREEN}✓ Copied IMPLEMENTATION_SUCCESS.md${NC}"
-    fi
     
     echo ""
     echo -e "${GREEN}Files now in version control:${NC}"
@@ -152,11 +147,6 @@ restore_from_vcs() {
     rm -f "$BACKEND_SRC_DIR"/*.o "$OSS_MIXER_DIR"/*.o 2>/dev/null || true
     echo -e "${GREEN}✓ Removed stale .o files from build tree${NC}"
 
-    # Restore IMPLEMENTATION_SUCCESS.md if it exists
-    if [ -f "$ABS_BACKEND_FILES/IMPLEMENTATION_SUCCESS.md" ]; then
-        cp "$ABS_BACKEND_FILES/IMPLEMENTATION_SUCCESS.md" .
-        echo -e "${GREEN}✓ Restored IMPLEMENTATION_SUCCESS.md${NC}"
-    fi
     
     cd - > /dev/null
 }
@@ -180,7 +170,6 @@ create_backup() {
     # Archive custom files
     tar -czf ../scummvm-patches/roomwizard-backend.tar.gz \
         backends/platform/roomwizard/ \
-        IMPLEMENTATION_SUCCESS.md 2>/dev/null
     
     echo -e "${GREEN}✓ Backup created in ../scummvm-patches/${NC}"
     echo "  - configure.patch"
@@ -264,7 +253,6 @@ setup_ignore() {
 backends/platform/roomwizard/
 
 # RoomWizard documentation
-IMPLEMENTATION_SUCCESS.md
 EOF
     
     # Mark configure with skip-worktree
