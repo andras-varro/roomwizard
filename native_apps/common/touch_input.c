@@ -42,8 +42,10 @@ static void scale_coordinates(TouchInput *touch, int *x, int *y) {
     // edge still lands exactly on the screen border rather than overshooting.
     long rx = (long)*x - touch->raw_min_x;
     long ry = (long)*y - touch->raw_min_y;
-    if (rx < 0) rx = 0; if (rx > range_x) rx = range_x;
-    if (ry < 0) ry = 0; if (ry > range_y) ry = range_y;
+    if (rx < 0) rx = 0;
+    if (rx > range_x) rx = range_x;
+    if (ry < 0) ry = 0;
+    if (ry > range_y) ry = range_y;
 
     int mx = (int)(rx * (phys_w - 1) / range_x);
     int my = (int)(ry * (phys_h - 1) / range_y);

@@ -507,10 +507,15 @@ static void execute_system_action(ConfirmAction action) {
 
     /* Flush filesystem and execute */
     sync();
-    if (action == CONFIRM_SHUTDOWN)
-        system("shutdown -h now");
-    else
-        system("reboot");
+    int rc = (action == CONFIRM_SHUTDOWN) ? system("shutdown -h now")
+                                          : system("reboot");
+    if (rc != 0) {
+        /* Nothing to fall back to, but say so rather than sit on a lying
+           "SHUTTING DOWN..." for 30 seconds and then silently return. */
+        text_draw_centered(g_fb, g_fb->width / 2, g_fb->height / 2 + 40,
+                           "COMMAND FAILED", COLOR_RED, 2);
+        fb_swap(g_fb);
+    }
 
     /* Wait for system to act (in case system() returns immediately) */
     sleep(30);
@@ -913,7 +918,7 @@ static void read_default_gateway(char *gw_buf, size_t buf_size) {
     if (!f) return;
 
     char line[256];
-    fgets(line, sizeof(line), f); // skip header
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return; }  // empty file: no header
     while (fgets(line, sizeof(line), f)) {
         char iface[32];
         unsigned long dest, gateway;
@@ -1434,7 +1439,7 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
         if (touch_wait_for_press(touch, &x, &y) == 0) {
             last_cal_x = x; last_cal_y = y;
             last_raw_x = touch->state.x; last_raw_y = touch->state.y;
-            if (x > fb->width - 100 && y < TZ_HEADER) { test_running = false; break; }
+            if (x > (int)fb->width - 100 && y < TZ_HEADER) { test_running = false; break; }
             int gc = x / tz_cell_w, gr = (y - TZ_HEADER) / tz_cell_h;
             if (gc >= 0 && gc < TZ_COLS && gr >= 0 && gr < TZ_ROWS) {
                 if (!hit[gr][gc]) { hit[gr][gc] = true; hit_count++; }
@@ -1963,8 +1968,8 @@ static void usb_scan_devices(AppState *s) {
         DevType t=usb_classify(fd); close(fd);
         if (t==DEV_UNKNOWN) continue;
         USBDev *d=&s->usb_devs[s->usb_dev_cnt];
-        strncpy(d->name,nm,DEV_NAME_LEN-1); d->name[DEV_NAME_LEN-1]=0;
-        strncpy(d->path,p,63); d->path[63]=0;
+        snprintf(d->name,sizeof(d->name),"%s",nm);
+        snprintf(d->path,sizeof(d->path),"%s",p);
         d->type=t; d->ev_num=i; d->connected=true;
         if (t==DEV_KEYBOARD && s->usb_kbd_idx<0) s->usb_kbd_idx=s->usb_dev_cnt;
         else if (t==DEV_MOUSE && s->usb_mou_idx<0) s->usb_mou_idx=s->usb_dev_cnt;
@@ -2197,7 +2202,8 @@ static void draw_usb_kbd(Framebuffer *fb, AppState *s) {
     fb_draw_rounded_rect(fb,lx2,ly2,lw2,lh2,4,USB_COLOR_PANEL_BD);
     fb_draw_text(fb,lx2+8,ly2+4,"EVENT LOG:",USB_COLOR_DIM,1);
     int lny=ly2+16, llh=13, ml=(lh2-20)/llh;
-    if(ml>LOG_LINES) ml=LOG_LINES; if(ml<0) ml=0;
+    if(ml>LOG_LINES) ml=LOG_LINES;
+    if(ml<0) ml=0;
     int st=s->usb_kbd.log_cnt-ml; if(st<0) st=0;
     for (int i=st; i<s->usb_kbd.log_cnt; i++)
         fb_draw_text(fb,lx2+8,lny+(i-st)*llh,s->usb_kbd.log[i],USB_COLOR_LOG_TXT,1);

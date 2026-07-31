@@ -532,7 +532,7 @@ void handle_input() {
         // Game controls
         int board_right = board_offset_x + BOARD_WIDTH * cell_size;
         
-        if (ty > fb.height - 80) {
+        if (ty > (int)fb.height - 80) {
             // Bottom — hard drop (check this FIRST for both modes)
             while (!check_collision(&game.current, 0, 1, game.current.rotation)) {
                 game.current.y++;

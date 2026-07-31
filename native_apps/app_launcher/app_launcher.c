@@ -1,7 +1,7 @@
 /*
  * App Launcher for RoomWizard
  *
- * Visual grid launcher that scans /opt/roomwizard/apps/*.app manifest files
+ * Visual grid launcher that scans the .app manifest files in /opt/roomwizard/apps
  * and displays them as icon tiles.  Acts as the system shell — respawned
  * by the init script when an app exits.
  *
@@ -510,13 +510,8 @@ static int handle_gamepad_input(Launcher *l) {
         }
     }
 
-    int page_start = l->current_page * apps_per_page;
-    int page_count = l->app_count - page_start;
-    if (page_count > apps_per_page) page_count = apps_per_page;
-    int idx_on_page = l->selected_app - page_start;  /* 0-based index within page */
-
-    int col = idx_on_page % grid_cols;
-    int row = idx_on_page / grid_cols;
+    /* Navigation is over absolute indices; ensure_selection_visible() flips the
+       page when the selection leaves it, so there is no per-page bookkeeping. */
 
     /* Navigate right */
     if (inp->buttons[BTN_ID_RIGHT].pressed) {

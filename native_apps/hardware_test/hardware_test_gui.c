@@ -448,7 +448,7 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
             last_raw_y = touch->state.y;
 
             /* Exit zone: top-right 100×36 */
-            if (x > fb->width - 100 && y < TZ_HEADER) {
+            if (x > (int)fb->width - 100 && y < TZ_HEADER) {
                 running = false;
                 break;
             }
@@ -531,7 +531,7 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
         }
         case 2: { /* Horizontal gradient */
             draw_display_page(fb, "GRADIENT", "tap -> next");
-            for (int col = 0; col < fb->width; col++) {
+            for (int col = 0; col < (int)fb->width; col++) {
                 uint8_t v = (col * 255) / (fb->width - 1);
                 fb_fill_rect(fb, col, 50, 1, fb->height - 100, RGB(v, v, v));
             }
@@ -539,9 +539,9 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
         }
         case 3: { /* 1-pixel grid */
             draw_display_page(fb, "PIXEL GRID", "tap -> next");
-            for (int gx = 0; gx < fb->width; gx += 2)
+            for (int gx = 0; gx < (int)fb->width; gx += 2)
                 fb_fill_rect(fb, gx, 40, 1, fb->height - 80, RGB(200,200,200));
-            for (int gy = 40; gy < fb->height - 40; gy += 2)
+            for (int gy = 40; gy < (int)fb->height - 40; gy += 2)
                 fb_fill_rect(fb, 0, gy, fb->width, 1, RGB(200,200,200));
             break;
         }
@@ -583,7 +583,7 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
         while (1) {
             if (touch_wait_for_press(touch, &x, &y) == 0) {
                 /* Exit zone: top-right */
-                if (x > fb->width - 100 && y < 40) { running = false; break; }
+                if (x > (int)fb->width - 100 && y < 40) { running = false; break; }
                 page++;
                 if (page >= pages) running = false;
                 break;
@@ -658,7 +658,7 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
             for (int w = 0; w < 10; w++) {
                 usleep(30000);
                 if (check_touch(touch, &x, &y)) {
-                    if (x > fb->width - 100 && y < 40) { running = false; break; }
+                    if (x > (int)fb->width - 100 && y < 40) { running = false; break; }
                 }
             }
         } else {

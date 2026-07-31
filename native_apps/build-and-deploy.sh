@@ -32,6 +32,13 @@ echo "════════════════════════�
 info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
 CC=arm-linux-gnueabihf-gcc
+
+# Warning flags applied to every compile line.  These are advisory only — the build
+# does not use -Werror, because ~30k lines of C were written with warnings off and a
+# hard failure would block every deploy.  Capture the output and work the list down:
+#   ./build-and-deploy.sh 2>&1 | grep -E 'warning:' | sort | uniq -c | sort -rn
+WARN="-Wall -Wextra -Wno-unused-parameter"
+
 if ! command -v $CC &>/dev/null; then
     err "ARM cross-compiler not found. Install with:\n  sudo apt-get install gcc-arm-linux-gnueabihf"
 fi
@@ -43,66 +50,66 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/27" "framebuffer";  $CC -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/27" "touch_input";  $CC -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/27" "hardware";     $CC -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 4/27" "common";       $CC -O2 -static -c common/common.c          -o build/common.o
-step " 5/28" "highscore";    $CC -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/28" "keyboard";     $CC -O2 -static -c common/keyboard.c        -o build/keyboard.o
-step " 7/28" "ui_layout";    $CC -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 8/28" "audio";        $CC -O2 -static -c common/audio.c           -o build/audio.o
-step " 9/28" "ppm";          $CC -O2 -static -c common/ppm.c             -o build/ppm.o
-step "10/28" "logger";       $CC -O2 -static -c common/logger.c          -o build/logger.o
-step "11/28" "config";       $CC -O2 -static -c common/config.c          -o build/config.o
-step "12/28" "gamepad";      $CC -O2 -static -c common/gamepad.c         -o build/gamepad.o
+step " 1/27" "framebuffer";  $CC $WARN -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/27" "touch_input";  $CC $WARN -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/27" "hardware";     $CC $WARN -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 4/27" "common";       $CC $WARN -O2 -static -c common/common.c          -o build/common.o
+step " 5/28" "highscore";    $CC $WARN -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 6/28" "keyboard";     $CC $WARN -O2 -static -c common/keyboard.c        -o build/keyboard.o
+step " 7/28" "ui_layout";    $CC $WARN -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 8/28" "audio";        $CC $WARN -O2 -static -c common/audio.c           -o build/audio.o
+step " 9/28" "ppm";          $CC $WARN -O2 -static -c common/ppm.c             -o build/ppm.o
+step "10/28" "logger";       $CC $WARN -O2 -static -c common/logger.c          -o build/logger.o
+step "11/28" "config";       $CC $WARN -O2 -static -c common/config.c          -o build/config.o
+step "12/28" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -o build/gamepad.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/config.o"
 
-step "13/28" "snake";        $CC -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
-step "14/28" "tetris";       $CC -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
-step "15/28" "pong";         $CC -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
+step "13/28" "snake";        $CC $WARN -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
+step "14/28" "tetris";       $CC $WARN -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
+step "15/28" "pong";         $CC $WARN -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
 
 step "16/28" "brick_breaker"
-$CC -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
+$CC $WARN -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
 
 step "17/28" "samegame"
-$CC -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
+$CC $WARN -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
 
 step "18/28" "frogger"
-$CC -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
+$CC $WARN -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
 
 step "19/28" "platformer"
-$CC -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
+$CC $WARN -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
 
 step "20/28" "game_selector"
-$CC -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
+$CC $WARN -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
 step "21/28" "app_launcher"
-$CC -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
+$CC $WARN -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
 step "22/28" "hardware_test"
-$CC -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
+$CC $WARN -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
 step "23/28" "hardware_config"
-$CC -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
+$CC $WARN -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
 step "24/28" "hardware_diag"
-$CC -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
+$CC $WARN -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
 
 step "25/28" "unified_calibrate"
-$CC -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
+$CC $WARN -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
 step "26/28" "audio_touch_test"
-$CC -O2 -static -I. \
+$CC $WARN -O2 -static -I. \
   tests/audio_touch_test.c \
   $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
 step "27/28" "backlight"
-$CC -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
+$CC $WARN -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 step "28/28" "device_tools"
-$CC -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
+$CC $WARN -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Collect icon files from source dirs → build/icons/
 mkdir -p build/icons
@@ -119,6 +126,17 @@ echo "Build sizes:"
 ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/platformer build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete ($(( $(date +%s) - _START_SECONDS ))s)"
+echo ""
+
+# ── 2b. ARM-safety gate ─────────────────────────────────────────────────────
+# Cortex-A8 has no hardware integer divide; an sdiv/udiv means SIGILL (exit 132)
+# with a blank screen and no output.  Runs on build-only too, so the problem is
+# caught at the desk rather than on the wall.
+if [[ -x ./check-arm-safe.sh ]]; then
+    ./check-arm-safe.sh || err "ARM-safety check failed — refusing to deploy"
+else
+    warn "check-arm-safe.sh missing — skipping hardware-divide gate"
+fi
 echo ""
 
 # ── 3. deploy? ───────────────────────────────────────────────────────────────

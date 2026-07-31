@@ -494,13 +494,20 @@ partitions/*
 partitions.zip
 roomwizard.img
 native_games/build/*
+# Scratch framebuffer captures (`cat /dev/fb0 > fb.raw`) and their PNGs are
+# throwaway; blanket-ignoring them keeps the repo clean.  Anything meant to be
+# KEPT goes in one of the two directories below, both tracked via Git LFS -
+# see .gitattributes.
 *.raw
 *.png
 *.jpg
 # ...except the teardown photos indexed in SYSTEM_ANALYSIS.md Appendix A.
-# These are tracked via Git LFS - see .gitattributes.
 !HardwarePhotos/*.jpg
 !HardwarePhotos/*.png
+# ...and screenshots referenced from documentation.  Without this, committing a
+# doc screenshot needs `git add -f`, so in practice nobody ever does.
+!Screenshots/*.png
+!Screenshots/*.jpg
 .deps/
 *.o
 

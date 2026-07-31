@@ -18,6 +18,14 @@ Guidance for writing code in this directory. Device facts live in
 `set-default` is the only mode this script accepts. Cleanup and boot-service install live in
 `../setup-device.sh`.
 
+All targets compile with `-Wall -Wextra -Wno-unused-parameter` and the tree is currently at
+**zero warnings** — keep it there, so a new warning means a new problem. Not `-Werror`, so a
+warning will not block a deploy; that is your job.
+
+Every build (deploy or not) then runs `./check-arm-safe.sh`, which rejects any binary containing a
+hardware `sdiv`/`udiv` — the Cortex-A8 has no integer divide and would SIGILL with a blank screen.
+The expected count is a hard zero. Run it standalone on any binary: `./check-arm-safe.sh <path>`.
+
 **`make` does not work.** `Makefile` targets host `gcc` with ARM flags and cannot compile
 anything; several of its rules point at files that moved. `build-and-deploy.sh` is the only
 build path. (Slated for deletion — `../IMPROVEMENT_PLAN.md` B16.)

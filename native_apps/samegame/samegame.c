@@ -443,7 +443,6 @@ static void compute_highlight(int col, int row) {
 /* ========================================================================== */
 
 static void remove_highlighted(void) {
-    int c, r;
     int n = game.highlight_count;
 
     if (!game.highlight_active || n < 2)
@@ -538,7 +537,6 @@ static void finalize_gravity(void) {
     int c, r;
 
     for (c = 0; c < game.cols; c++) {
-        int write_row = game.rows - 1;
         int temp[MAX_ROWS];
         int idx = 0;
 

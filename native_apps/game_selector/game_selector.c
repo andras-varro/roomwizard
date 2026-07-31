@@ -94,8 +94,12 @@ int scan_games(GameSelector *selector) {
             continue;
         }
 
-        strncpy(selector->games[selector->game_count].name, entry->d_name, 255);
-        strncpy(selector->games[selector->game_count].path, full_path, 511);
+        /* Was strncpy(...,255) / strncpy(...,511): both could leave the buffer
+           unterminated for a maximum-length source, and hardcoded the size. */
+        snprintf(selector->games[selector->game_count].name,
+                 sizeof(selector->games[selector->game_count].name), "%s", entry->d_name);
+        snprintf(selector->games[selector->game_count].path,
+                 sizeof(selector->games[selector->game_count].path), "%s", full_path);
         printf("Added game: %s\n", entry->d_name);
         selector->game_count++;
     }

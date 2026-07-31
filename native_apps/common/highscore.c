@@ -37,8 +37,13 @@ void hs_load(HighScoreTable *t) {
     int  score;
     while (t->count < HS_MAX_ENTRIES &&
            fscanf(f, "%11s %d\n", stored_name, &score) == 2) {
-        strncpy(t->entries[t->count].name, stored_name, HS_NAME_LEN - 1);
-        t->entries[t->count].name[HS_NAME_LEN - 1] = '\0';
+        /* fscanf's %11s can yield one more char than the field holds, so the
+           truncation is explicit here rather than left to strncpy/snprintf
+           (both of which the compiler flags, for good reason). */
+        size_t n = strlen(stored_name);
+        if (n > HS_NAME_LEN - 1) n = HS_NAME_LEN - 1;
+        memcpy(t->entries[t->count].name, stored_name, n);
+        t->entries[t->count].name[n] = '\0';
         /* Underscores → spaces for display */
         for (int j = 0; t->entries[t->count].name[j]; j++)
             if (t->entries[t->count].name[j] == '_')

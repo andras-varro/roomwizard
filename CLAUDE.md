@@ -83,23 +83,27 @@ for how binaries are actually built and shipped.
 
 ## Non-obvious constraints (things that will silently break)
 
-- **Cortex-A8 has no hardware integer divide.** Static binaries that contain `sdiv`/`udiv`
-  crash instantly with SIGILL (exit 132), no output. The cross-compiler's `libgcc.a`
-  contains these. Always compile static ARM binaries with `-mcpu=cortex-a8 -mfpu=neon`.
-  (Those flags appear only in the dead `native_apps/Makefile`; the real deploy path
-  `native_apps/build-and-deploy.sh` compiles with a bare `$CC -O2 -static` and no
-  `-march`/`-mcpu`/`-mfpu` at all. This is fine — see below — but do not assume the
-  flags are being applied.)
-  Verify with `arm-linux-gnueabihf-objdump -d BIN | grep -B300 'sdiv\|udiv' | grep '^[0-9a-f]* <'`:
-  the count is NOT expected to be 0 — a `-static` glibc binary always carries ~45
-  `sdiv/udiv` in *unreached* libc internals (`_dl_*` TLS loader, `hack_digit`/
-  `_i18n_number_rewrite` printf-locale, `__aeabi_ldivmod`/`__udivmoddi4` 64-bit
-  divmod); these are byte-identical in known-good deployed binaries and never trap.
-  What must hold: **no `sdiv/udiv` inside the app's own functions.** App-level 32-bit
-  `int` division compiles to a call to the software `__aeabi_idiv` (no `sdiv`), so with
-  the toolchain default `-march=armv7-a+fp` this is already satisfied — the `-march`/
-  `-mcpu` flags above make no difference to the emitted code here (verified: identical
-  output with and without). Dynamic linking is unaffected. libpng needs `-DPNG_ARM_NEON_OPT=0`.
+- **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv`
+  *instruction* crashes instantly with SIGILL (exit 132) — blank screen, no output, no log.
+  **Verify with `native_apps/check-arm-safe.sh`** (runs automatically from
+  `build-and-deploy.sh` before every deploy, and on build-only runs too).
+  The expected count is a **hard zero**, and it currently is zero across all 30 build
+  artifacts. With the toolchain default `-march=armv7-a+fp`, app-level 32-bit `int`
+  division compiles to a *call* to the software helper `__aeabi_uidiv`/`__udivsi3`, so the
+  deploy path's bare `$CC -O2 -static` is already safe; `-mcpu=cortex-a8 -mfpu=neon`
+  (present only in the dead `native_apps/Makefile`) makes no difference to the emitted code.
+  What *would* break it is an explicit `-march` that implies the idiv extension —
+  `-march=armv7ve`, `-mcpu=cortex-a7/a15/a17`, or anything ARMv8. Dynamic linking is
+  unaffected. libpng needs `-DPNG_ARM_NEON_OPT=0`.
+
+  ⚠️ **Do not use the old `grep 'sdiv\|udiv'` check** — corrected 2026-07-30. It matches the
+  *substring* "udiv" inside the **names** of the software divide helpers (`__udivsi3` ×20,
+  `__udivmoddi4` ×6, plus their call sites), which is why it reported "~45 unreachable libc
+  hits that must be allowlisted". Those 45 are not instructions and not a hazard — they are
+  positive evidence that division is being done in software. The claim that
+  `libgcc.a` carries `sdiv`/`udiv` is also false for this toolchain (measured: zero).
+  Match the tab-delimited mnemonic field, as `check-arm-safe.sh` does; then no allowlist is
+  needed and any hit is real.
 - **Framebuffer bpp is per-app — always confirm before decoding a screenshot.** `/dev/fb0`
   format is set at runtime by whatever app is running: **native menu + games force 32bpp
   XRGB8888**. Caveat — only `app_launcher` calls `fb_set_bpp(fb_dev,32)` *both* on startup

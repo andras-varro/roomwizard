@@ -8,6 +8,9 @@ Prioritised backlog from the full code + hardware review of 2026-07-29.
 - **Verified** means someone actually read the code or ran the command and confirmed it.
   **Reported** means a reviewer found it but it has not been independently re-checked — still
   likely real, but confirm before you spend an afternoon on it.
+- ✅ means **confirmed to be a real defect** — it does *not* mean fixed. Finished items move to
+  [Closed](#closed) at the bottom, which keeps only the reasoning worth not re-litigating;
+  where the code and git history are the whole story, the item is simply deleted.
 - Nothing in this plan requires a kernel rebuild. Items that would are listed at the bottom
   under [Out of Scope](#out-of-scope).
 
@@ -22,65 +25,8 @@ Prioritised backlog from the full code + hardware review of 2026-07-29.
 
 ## Phase 0 — Do these first (no risk, high leverage)
 
-Nothing here can break a running device.
-
-### D1. Turn on compiler warnings ✅ *highest value per minute in this document*
-
-**Status:** Verified. `native_apps/build-and-deploy.sh` compiles all 28 targets with bare
-`$CC -O2 -static`. **No `-Wall`, no `-Wextra`.** ~30k lines of shipping C compiled with warnings off.
-
-Add near `CC=` (line ~34) and interpolate into every compile line:
-
-```sh
-WARN="-Wall -Wextra -Wno-unused-parameter"
-```
-
-Expect a flood on first run. Even fixing only `-Wmaybe-uninitialized` and `-Wformat` hits is worth
-it — several bugs below (B3, B7) are exactly what those flags catch.
-
-### D2. Add the sdiv/udiv pre-deploy gate
-
-**Status:** Verified — the check is fully specified in `CLAUDE.md` and **zero scripts implement it**
-(`grep -r sdiv *.sh` returns nothing). The failure mode it guards against is the worst one in the
-project: SIGILL, exit 132, blank screen, no output.
-
-Create `native_apps/check-arm-safe.sh`: run the documented `objdump` incantation, allowlist the
-~45 known-unreachable libc hits (`_dl_*`, `hack_digit`, `_i18n_number_rewrite`, `__aeabi_ldivmod`,
-`__udivmoddi4`), fail if any hit lands in an app's own function. Call it before each `scp`.
-
-Follows the existing `native_apps/check-evdev.sh` pattern.
-
-### D3. Commit the things that are missing
-
-- `CLAUDE.md` — **untracked**. The authoritative instruction file exists on one disk.
-- `fb565_to_png.py` — **untracked**, yet `CLAUDE.md` names it as *the* verification tool.
-  Meanwhile four *other* framebuffer decoders are tracked
-  (`native_apps/tests/fb_to_png_{16,32}bit.py`, `scummvm-roomwizard/fb_to_png.py`,
-  `scummvm-roomwizard/convert_fb.py`). Commit the canonical one, delete the other four.
-- Root cause: `.gitignore` blanket-ignores `*.png`/`*.jpg`/`*.raw`. Sensible for scratch captures,
-  but it means no doc screenshot can be committed without `-f`.
-
-### D4. Add `.gitattributes` — **done 2026-07-30**
-
-**Status:** Verified. All shell scripts are currently LF in index and worktree — but this machine
-has `core.autocrlf=true` system-wide, so that is luck, not policy. `roomwizard-app-init.sh` and
-`disable-steelcase.sh` are **scp'd byte-for-byte onto the device**; a CRLF normalisation produces
-`#!/bin/sh\r`, which BusyBox rejects with a confusing "no such file or directory" — the device
-boots to a black screen and the init script never runs.
-
-```gitattributes
-*.sh text eol=lf
-```
-
-### D5. Documentation corrections — **done 2026-07-29**
-
-Recorded here for history:
-
-Corrected the SoC (OMAP3503), GPIO bank count, touch panel type, sensor inventory, deploy
-modes and compiler-flag claims across all docs; added SoC identification, display stack, boot
-chain, panel timings, kernel assessment and unused-hardware sections to `SYSTEM_ANALYSIS.md`.
-Dissolved `native_apps/PROJECT.md` into `native_apps/CLAUDE.md` + `README.md` + this file, and
-added per-component `CLAUDE.md` authoring guides. Deleted nine stale/duplicated docs.
+Nothing here can break a running device. **D1–D5 are done** — see [Closed](#closed).
+Only D6 remains, and its remaining step is not a code change.
 
 ### D6. Secrets — **partly done 2026-07-29**
 
@@ -383,23 +329,9 @@ exactly what blocks item 4.
 ⚠️ This is a **legacy omapdss** interface. It is cheap now and would need rewriting as DRM atomic
 plane code if the kernel ever changed — which, per current policy, it won't.
 
-### F3. ~~Auto-backlight from the ambient light sensor~~ — **CLOSED 2026-07-30, no such hardware**
+### F3. ~~Auto-backlight from the ambient light sensor~~
 
-Was: a wall display at 100% backlight in a dark corridor at 3 am is a genuine annoyance.
-
-**Closed by** [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md#314-what-is-not-present). The
-full teardown (bezel separated from LCD and board) found **no sensor and — decisively — no
-aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so a sensor
-would have nothing to sense even if one were populated. The vendor factory test's I2C-bus-1
-light-sensor step is shared firmware for a product family in which this SKU is not the variant
-with the sensor. No probe needed; don't run `pv02_app 5` (it can hang the bus, and bus 1 carries
-the PMIC).
-
-**Salvage:** *time-of-day* backlight dimming needs no hardware at all — the device has an RTC and
-`/sys/class/leds/backlight/brightness` already works. That is a small, self-contained feature if
-the original annoyance is still worth solving. See also **B9**, which must be fixed first: the
-backlight get/set asymmetry permanently dims the panel, and any auto-dimming built on top of a
-broken setter will make things worse.
+Closed 2026-07-30 — there is no such hardware. See [Closed](#closed).
 
 ### F4. Surface the MADC — temperature and analogue inputs
 
@@ -585,6 +517,20 @@ Refactor the SSH/capture/inject/diff plumbing into `tests/rw_harness.py`, then a
 process is alive after 2 s, kill. That covers the two most common regressions (crash at startup,
 renders black) across all ~15 binaries in one command.
 
+⚠️ **Two harness traps found 2026-07-30 while testing the Phase 0 changes** — both cost real time:
+
+- **`touch_inject` is not built.** `build-and-deploy.sh` writes a `touch_inject.hidden` marker for
+  it (`:217`) but never compiles `tests/touch_inject.c`, so the binary is absent on the device
+  while the marker implies it is there. Add it to the build.
+- **Screen→raw conversion must read `/etc/touch_calibration.conf`, not assume 0..4095.** The
+  reference unit is calibrated to `-52 4137 -254 4427` (the least-squares fit extrapolates past
+  the 12-bit range, hence the out-of-range values). Assuming 0..4095 lands every tap ~30 px high,
+  which presents as *intermittent* hits rather than a clean failure — some buttons work, some
+  don't, and it looks like device flakiness. Use
+  `raw = screen*(max-min)/(dim-1) + min`. Note `touch_inject.c:83` rejects args outside 0..4095,
+  so the bottom ~34 px cannot be expressed — which happens to match the digitizer's real
+  unreachable bottom margin, but bottom-edge buttons can only be hit near their top edge.
+
 Separately, a `tests/host_tests.c` with plain `assert()` compiled by **host** gcc would cover the
 pure-logic functions where regressions are invisible until you're mis-tapping by 30 px:
 `touch_fit_axis_range()`, `scale_coordinates()`, `parse_args()` (would have caught the `args=`
@@ -620,18 +566,106 @@ by patching the appended DTB, which needs no kernel source.
 
 ---
 
+## Closed
+
+Finished work. Kept only where the *reasoning* is worth not rediscovering; the code and git
+history are the record for everything else. IDs are retained so older references still resolve.
+
+### D1. Compiler warnings — **done 2026-07-30**
+
+`WARN="-Wall -Wextra -Wno-unused-parameter"` in `native_apps/build-and-deploy.sh`, interpolated
+into all 28 compile lines. Deliberately **not** `-Werror`: a hard failure would block every deploy
+over pre-existing noise.
+
+Two things the original write-up got wrong, worth recording:
+
+- **There was no flood** — 29 warnings total across ~30k lines, now **zero**. The tree was in far
+  better shape than assumed. The build is at a clean baseline, so the *next* warning is visible.
+- **It did not catch B3 or B7,** which the item predicted it would. Neither
+  `-Wmaybe-uninitialized` nor `-Wformat` fired anywhere. B7 is unsigned subtraction — legal C that
+  no warning flags; B3 is a logic/range problem. **Warnings are not a substitute for reading the
+  Phase 1 list.**
+
+One genuine defect surfaced: `game_selector.c:97-98` copied 255/511 bytes into 256/512-byte buffers
+with **no NUL termination** and hardcoded sizes (now `snprintf` + `sizeof`). The other 28 were
+hygiene: 8 `int`/`uint32_t` sign-compares on `fb->width`, 5 dead variables (including three
+leftovers from a per-page launcher navigation scheme that absolute indexing replaced), 9
+`-Wstringop-truncation` on `strncpy(n-1)`+manual-NUL, 3 ignored return values, 3 two-statements-on-
+one-line indentation traps, 1 `/*` inside a comment.
+
+### D2. sdiv/udiv pre-deploy gate — **done 2026-07-30**
+
+`native_apps/check-arm-safe.sh`, called from `build-and-deploy.sh` before deploy (and on build-only
+runs). Verified both ways: passes the 30 real artifacts, and correctly fails a binary built with
+`-march=armv7ve`, naming the offending function.
+
+⚠️ **The check this item specified was wrong, and so was the `CLAUDE.md` text it came from.**
+`grep 'sdiv\|udiv'` matches the *substring* "udiv" inside the **names** of the software divide
+helpers — `__udivsi3` (×20), `__udivmoddi4` (×6) and their call sites. That is the entire source of
+the "~45 known-unreachable libc hits" that were supposed to need an allowlist. They are not
+instructions, they are not unreachable, and they are not a hazard: they are positive evidence that
+division is being done in software. The related claim that the cross-compiler's `libgcc.a` contains
+`sdiv`/`udiv` is also false for this toolchain (measured: zero).
+
+Matching the tab-delimited **mnemonic** field instead gives **zero across all 30 artifacts**, so the
+gate needs no allowlist and any hit is real. `CLAUDE.md` has been corrected.
+
+### D3. Missing/duplicated files — **done 2026-07-30**
+
+`CLAUDE.md` and `fb565_to_png.py` are tracked. The four redundant framebuffer decoders
+(`native_apps/tests/fb_to_png_{16,32}bit.py`, `scummvm-roomwizard/fb_to_png.py`,
+`scummvm-roomwizard/convert_fb.py`) are deleted — `fb565_to_png.py` is a superset (both bpp, page
+select) and nothing invoked them.
+
+`.gitignore` now exempts `Screenshots/` alongside `HardwarePhotos/`, with a matching LFS rule, so a
+doc screenshot no longer needs `git add -f`.
+
+*(A fifth copy of the decode logic is still inlined in
+`native_apps/tests/test_game_selector_scroll.py:80` — that one belongs to **C6**, not here.)*
+
+### D4. `.gitattributes` — **done 2026-07-30**
+
+`*.sh text eol=lf`. The CRLF-shebang-vs-BusyBox reasoning now lives as a comment in
+`.gitattributes` itself.
+
+### D5. Documentation corrections — **done 2026-07-29**
+
+SoC (OMAP3503), GPIO banks, touch panel type, sensor inventory, deploy modes, compiler-flag claims;
+new SoC/display/boot-chain/panel-timing/kernel sections in `SYSTEM_ANALYSIS.md`; per-component
+`CLAUDE.md` guides; nine stale docs deleted.
+
+### F3. Auto-backlight from an ambient light sensor — **closed 2026-07-30, no such hardware**
+
+Kept because it will otherwise be re-proposed. The full teardown found no sensor and — decisively —
+**no aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so a
+sensor would have nothing to sense even if populated. The vendor factory test's I2C-bus-1
+light-sensor step is shared firmware for a product family in which this SKU is not the variant with
+the sensor. Don't probe: `pv02_app 5` can hang the bus, and bus 1 carries the PMIC.
+
+**Salvage:** *time-of-day* dimming needs no sensor — there is an RTC and
+`/sys/class/leds/backlight/brightness` works. Fix **B9** first; auto-dimming on a broken setter
+makes things worse.
+
+### Serial console — **declined 2026-07-30**
+
+`P4` was located and its pinout verified, but the recovery loop is *pull the SD card, reimage, DHCP,
+SSH* — and since the standing rules keep NAND and U-Boot untouched, the card **is** the entire
+failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or
+U-Boot ever get written.
+
+---
+
 ## Suggested order of work
 
-1. **Phase 0 entirely** — a couple of hours, zero risk, and D1/D2 will surface more bugs.
-2. **B1, B2, B3, B4, B5, B6** — the crash/wedge class.
+1. ~~**Phase 0 entirely.**~~ **Done 2026-07-30** except D6's password rotation, which is an action
+   on the VNC server rather than a code change. It surfaced one real defect, not the expected
+   flood — see [Closed](#closed).
+2. **B1, B2, B3, B4, B5, B6** — the crash/wedge class. ← **next**
 3. **B15, B16** — stop the scripts from being able to hurt you.
 4. **F1 (ALSA)** — biggest user-visible improvement in the project.
 5. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 6. ~~**Open the unit once** and inspect the hardware.~~ **Done 2026-07-30.** Full teardown; every
    question answered and folded into [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md) (parts inventory,
-   connectors, unpopulated headers, photo index). The serial console is **declined**: `P4` was
-   located and its pinout verified, but the recovery loop is **pull the SD card, reimage, DHCP,
-   SSH** — and since the standing rules keep NAND and U-Boot untouched, the card *is* the entire
-   failure surface. Serial would add boot visibility, not recovery capability. Revisit only if
-   NAND or U-Boot ever get written.
+   connectors, unpopulated headers, photo index). Serial console declined — see
+   [Closed](#closed).
 7. Everything else as appetite allows.
