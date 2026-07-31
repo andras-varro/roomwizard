@@ -232,7 +232,7 @@ None of this is handled here — it is owned by `../setup-device.sh`:
 ```
 
 Which services are disabled and why it is safe is documented in
-[`../SYSTEM_ANALYSIS.md#game-mode-optimization`](../SYSTEM_ANALYSIS.md#game-mode-optimization).
+[`../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode`](../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
 
 ---
 

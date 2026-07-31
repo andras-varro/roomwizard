@@ -13,7 +13,6 @@
 | [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | The single backlog — bugs and features with `file:line` | Before starting work, so you don't rediscover a known bug |
 | [COMMISSIONING.md](COMMISSIONING.md) | Setup workflow: SD card → system setup → deploy | Bringing up a new unit |
 | [SD_CARD_UPGRADE.md](SD_CARD_UPGRADE.md) | Optional 4 GB → 32 GB card upgrade | Only if you run out of disk |
-| [HARDWARE_INSPECTION.md](HARDWARE_INSPECTION.md) | Physical checks needing a screwdriver. Retired once filled in. | Before opening the case |
 
 Each component directory also has a `CLAUDE.md` (authoring guidance for that component) and a
 `README.md` (what it is and how to use it):
@@ -38,6 +37,11 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 ---
 
 ## Quick Start
+
+> **Cloning:** the teardown photos in [HardwarePhotos/](HardwarePhotos/) are stored in
+> **Git LFS**. Run `git lfs install` once before cloning, or those files arrive as
+> one-line pointer stubs (`git lfs pull` fixes an existing clone). Nothing in the
+> build or deploy path depends on them — they are documentation only.
 
 ### 1. Commission the device (once)
 ```bash
@@ -125,7 +129,7 @@ The **App Launcher** is a visual grid shell deployed by `native_apps/build-and-d
 It scans manifest files from all projects and displays them as touch-friendly icon tiles.
 The init script respawns it automatically when an app exits.
 
-For hardware specs, see **[Hardware Platform](SYSTEM_ANALYSIS.md#hardware-platform)** in System Analysis.
+For hardware specs, see **[Subsystems](SYSTEM_ANALYSIS.md#3-subsystems)** in the device reference.
 
 
 ---
@@ -137,7 +141,7 @@ See **[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)** for the current backlog. High
 - Known bugs are catalogued there with `file:line` references.
 - **Kernel upgrades are out of scope** — vendor source is unavailable and a mainline port would
   break the runtime bpp switching that ScummVM and the VNC client depend on. See
-  [Kernel Upgrade Assessment](SYSTEM_ANALYSIS.md#kernel-upgrade-assessment).
+  [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
 
 ## A note on secrets
 

@@ -25,3 +25,11 @@
 *.img binary
 *.zip binary
 *.dat binary
+
+# Teardown photos (SYSTEM_ANALYSIS.md Appendix A) are the only images the repo
+# carries; they are stored in Git LFS so a clone stays small. This must come
+# AFTER the `*.jpg binary` line above - later rules win, and `binary` would
+# otherwise clobber the diff/merge attributes LFS needs.
+# Requires `git lfs install` before cloning, or the working copy gets pointer
+# text files instead of JPEGs.
+HardwarePhotos/** filter=lfs diff=lfs merge=lfs -text

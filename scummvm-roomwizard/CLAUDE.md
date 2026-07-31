@@ -89,7 +89,7 @@ ScummVM after changing touch code in `native_apps/common/`.
 ## Audio
 
 The OSS shim's bugs are device facts and documented in
-[`../SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#audio). The backend-specific consequences:
+[`../SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#34-audio). The backend-specific consequences:
 
 - **Mono, 22050 Hz.** Stereo is not merely unsupported — the shim silently ignores
   `SNDCTL_DSP_STEREO`, so interleaved L/R gets consumed as separate frames and everything plays

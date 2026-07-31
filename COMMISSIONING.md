@@ -89,7 +89,7 @@ cycle and eventually **reboots the device** (~70 min after first failure). It al
 backlight schedule that turns the screen off at 19:00 on weekdays.
 
 `setup-device.sh` disables all of these non-essential mechanisms. See
-[SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#game-mode-optimization) for the complete rationale.
+[SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode) for the complete rationale.
 
 ## Phase 3: Deploy Apps
 

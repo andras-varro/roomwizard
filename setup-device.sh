@@ -600,9 +600,10 @@ rm -f /home/root/log/networkmngr.err 2>/dev/null
 rm -rf /home/root/log/jetty_logs 2>/dev/null
 
 # NOTE: RoomWizard-zbgatewayd and wpantools_roomwizard are the 802.15.4 / ZigBee
-# radio tooling. They are KEPT from 2026-07-29 onwards: if the radio turns out to
-# be populated (see HARDWARE_INSPECTION.md section B) they are the protocol
-# reference for device-to-device wireless. ~1.3 MB total. Copies also exist in the
+# radio tooling. They are KEPT from 2026-07-29 onwards as the protocol reference
+# for device-to-device wireless. The J5/J6 XBee socket is real and empty on every
+# unit we have (see SYSTEM_ANALYSIS.md section 3.12), so this tooling is what a
+# fitted module would be driven with. ~1.3 MB total. Copies also exist in the
 # host-side partitions/ dump, so removing them is recoverable - but keeping them
 # costs almost nothing. --deep-clean removes them.
 

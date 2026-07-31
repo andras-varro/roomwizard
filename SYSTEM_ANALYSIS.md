@@ -1,1151 +1,869 @@
-# RoomWizard System Analysis
+# RoomWizard Device Reference
 
-> **Comprehensive technical analysis of the Steelcase RoomWizard hardware, firmware, and system architecture**
+Everything known to be true about the Steelcase RoomWizard as a hardware and software platform:
+the silicon, the board, the boot chain, the OS, and the traps. Verified on real units — where
+something is inferred rather than measured, it says so.
 
-## Table of Contents
+**This document answers "what is true?".** It does not argue for changes. Open work, bugs and
+feature proposals live in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the short must-know set
+loaded into every session lives in [`CLAUDE.md`](CLAUDE.md). One fact, one home — if you find
+something stated in two places, the other copy is the stale one.
 
-1. [Executive Summary](#executive-summary)
-2. [System Architecture](#system-architecture)
-3. [Hardware Platform](#hardware-platform)
-4. [Protection Mechanisms](#protection-mechanisms)
-5. [Hardware Control Interfaces](#hardware-control-interfaces)
-6. [Application Framework](#application-framework)
-7. [USB Subsystem Analysis](#usb-subsystem-analysis)
-8. [Extended Hardware Discovery](#extended-hardware-discovery)
-9. [Live System Analysis](#live-system-analysis)
-10. [Safe Modification Strategy](#safe-modification-strategy)
-11. [ARM Cortex-A8 CPU Limitations & Cross-Compilation](#arm-cortex-a8-cpu-limitations--cross-compilation)
-12. [Debugging & Rollback](#debugging--rollback)
-13. [Critical Warnings](#critical-warnings)
-14. [SoC Identification (Verified)](#soc-identification-verified)
-15. [Display Stack: omapfb / omapdss](#display-stack-omapfb--omapdss)
-16. [Boot Chain & U-Boot Environment (Verified)](#boot-chain--u-boot-environment-verified)
-17. [Kernel Upgrade Assessment](#kernel-upgrade-assessment)
-18. [Unused Hardware & Untapped Capabilities](#unused-hardware--untapped-capabilities)
+Each subsystem below follows the same shape, so you can skim to the part you need:
 
----
+| Field | Contains |
+|---|---|
+| **What's there** | parts, addresses, device nodes |
+| **How to drive it** | the path, API or command that works today |
+| **Gotchas** | what bites — stated next to the thing, not collected in a warnings chapter |
+| **As shipped** | stock Steelcase behaviour, *only* where it explains the present |
 
-## Executive Summary
-
-The Steelcase RoomWizard is an embedded Linux device based on a Texas Instruments **OMAP3503** ARM Cortex-A8 SoC. The system uses integrity-based protection mechanisms (MD5 checksums, hardware watchdog, state tracking) rather than cryptographic signing, making modifications possible but requiring careful attention to system requirements.
-
-### Key Findings
-
-- **Hardware:** TI OMAP3503 ARM Cortex-A8 @ 600MHz (dynamically scaled from 300MHz base), 234MB RAM. **No SGX GPU, no IVA DSP** (OMAP3503 is the ARM-only member of the family).
-- **OS:** Embedded Linux (kernel 4.14.52) with SysVinit
-- **Protection:** MD5 checksums, 60-second hardware watchdog, Steelcase software watchdog (cron-based, must disable), boot state tracking
-- **Interfaces:** Framebuffer (`/dev/fb0`), touchscreen (`/dev/input/`), LEDs (sysfs)
-- **Software Stack:** X11 → WebKit browser → Jetty 9.4.11 → Java 8 → HSQLDB
-- **USB:** Host mode enabled via runtime kernel patching; supports keyboards, mice, and game controllers (Xbox via cross-compiled xpad module). DTB binary-patched to raise USB bus power budget from 100mA to 500mA for direct-connect devices.
-- **GPIO:** 6 GPIO banks (192 pins), TWL4030 PMIC with 18 additional GPIO pins
-- **Wireless:** No WiFi or Bluetooth. An **802.15.4 / ZigBee radio on UART3** is referenced by vendor factory-test tooling — presence on this board is unconfirmed, see [Unused Hardware](#unused-hardware--untapped-capabilities)
-- **Display stack:** legacy **omapfb + omapdss** (no DRM/KMS — `/dev/dri` does not exist). Three DSS overlay planes with a hardware scaler are present and unused.
-
-### Modification Success Requirements
-
-1. Regenerate all MD5 checksums after file changes
-2. The hardware watchdog timer is fed by `/usr/sbin/watchdog` daemon (acceptable to keep)
-3. **Disable the Steelcase software watchdog** (cron-based `watchdog.sh` that reboots when Jetty/HSQLDB absent)
-4. Maintain control block state to avoid failure mode
-5. Disable non-essential Steelcase services and cron jobs (see [Game Mode Optimization](#game-mode-optimization))
-6. Use existing runtimes (Java 8 available, Python requires ARM binaries)
+**Provenance.** Software facts were read off live units (primarily RW09, `192.168.50.73`).
+Hardware facts come from a full teardown on 2026-07-30 of the unit labelled `RW29 1G-093`, plus
+on-device measurements across two further units. Photos: [`HardwarePhotos/`](HardwarePhotos/) —
+see [Appendix A](#appendix-a-photo-index).
 
 ---
 
-## System Architecture
+## Contents
 
-### Boot Sequence
-
-```mermaid
-graph TB
-    A[Power On] --> B[NAND Flash MLO]
-    B --> C[U-Boot Bootloader]
-    C --> D{Control Block Check}
-    D -->|bootstrap| E[uImage-bootstrap + ramfilesys.gz]
-    D -->|system| F[uImage-system from SD]
-    E --> G[Upgrade/Recovery Mode]
-    F --> H[Normal Operation]
-    H --> I[SysVinit]
-    I --> J[X11/Xorg]
-    J --> K[WebKit Browser]
-    K --> L[Jetty Web Server]
-    L --> M[Java Application]
-```
-
-### Boot Process Details
-
-1. **NAND** holds only a 12 KB Nuvation boot redirector (`mtd0`) that hands off to SD.
-   `mlo` and `u-boot.bin` live on **SD partition 1**, not in NAND.
-2. **Control Block** (`ctrlblock.bin`, 28 bytes on FAT32 p1) selects the boot mode:
-   - `boot_from=bootstrap`: loads `uImage-bootstrap` + `ramfilesys.gz` (upgrade/recovery)
-   - `boot_from=system`: loads `uImage-system` (normal operation)
-3. **Boot Tracker** is read by U-Boot's `cb_getinfo` and written only by userspace
-   (`/opt/sbin/ctrlblk`), and only on the boot immediately after a firmware upgrade.
-   A kernel that fails to boot does **not** increment it and does **not** trigger recovery.
-
-See [Boot Chain & U-Boot Environment (Verified)](#boot-chain--u-boot-environment-verified)
-for the device-verified detail.
-
-### Partition Structure
-
-| Partition | Type | Size | Mount Point | Purpose |
-|-----------|------|------|-------------|---------|
-| p1 | FAT32 | 70.6MB | `/var/volatile/boot` | `mlo`, `u-boot.bin`, `uImage-system`, `ctrlblock.bin`. The DTB is appended **inside** `uImage-system` (`CONFIG_ARM_APPENDED_DTB=y`) — there is no separate `.dtb` file. |
-| p2 | ext3 | 256MB | `/home/root/data` | Application data |
-| p3 | ext3 | 250MB | `/home/root/log` | System logs |
-| p5 | ext3 | 1500MB | `/home/root/backup` | Firmware backup |
-| p6 | ext3 | ~981MB | `/` | Root filesystem (U-Boot passes `rootfstype=ext4`; the ext4 driver mounts the ext3 filesystem — do **not** reformat as ext4) |
+1. [Read this first](#1-read-this-first)
+2. [The board](#2-the-board)
+3. [Subsystems](#3-subsystems)
+4. [Boot chain and recovery](#4-boot-chain-and-recovery)
+5. [Software stack](#5-software-stack)
+6. [Building for this device](#6-building-for-this-device)
+7. [Kernel policy](#7-kernel-policy)
+8. [Appendix A: photo index](#appendix-a-photo-index)
 
 ---
 
-## Hardware Platform
+## 1. Read this first
 
-### Processor & Memory
+### What this device is
 
-- **SoC:** Texas Instruments **OMAP3503 ES3.1.2**, GP (general-purpose, non-secure) device — OMAP34xx family, ARM Cortex-A8
-- **No GPU, no DSP:** OMAP3503 omits both the SGX530 3D core and the IVA2 DSP. All rendering is software; the DSS overlay hardware (below) is the only graphics acceleration available.
-- **CPU:** 300MHz base, 600MHz current (armv7l architecture, dynamic frequency scaling)
-- **BogoMIPS:** 594.73
-- **Features:** NEON SIMD, VFP, Thumb, TLS
-- **RAM:** 234MB DDR3 (256MB total, ~22MB reserved by system)
-- **Storage:** SD card (3.7GB typical)
-- **NAND Flash:** Boot loader and recovery
+A wall-mounted meeting-room display repurposed as a games/apps platform. TI **OMAP3503** ARM
+Cortex-A8 at 600 MHz, 234 MB RAM, 800×480 LCD, projected-capacitive touch, Linux 4.14.52 with
+SysVinit, booting from a removable microSD card and powered over Ethernet. **No GPU and no DSP** —
+all rendering is software. There is no local app to run: everything is cross-compiled on a host and
+deployed over SSH.
 
-**Verified Measurements (Live System):**
-- Current CPU frequency: 600 MHz (cpufreq scaling active)
-- Total RAM: 239,904 KB (234 MB)
-- Available RAM: 182 MB (76% free under game mode)
-- Load average: 0.00 (idle)
+### The rules that prevent a brick
 
-### Display
+Five rules. Observe them and there is no failure mode this device cannot recover from by itself.
 
-- **Panel:** **Sharp `LQ070Y3LG4A`** — 7" WVGA TFT, LVDS input (part number read off the panel frame during the 2026-07-30 teardown; confirms the `sharp,lq070y3lg4a` compatible string in the vendor DTS is the literal part). Driven by an **SN65LVDS83B** parallel-RGB→LVDS transmitter (`U16`) on the main board, over a JAE ~30-position connector and a discrete twisted-pair harness to the board's 40-pin FFC. The panel is a **field-replaceable module** and on the dissected unit is dated **March 2018** — eight years newer than the © 2010 main board, i.e. it had been replaced in service. A cracked screen is a repair, not a write-off.
-- **Ambient light sensor: none, and none possible** — the enclosure is light-tight. See [Hardware NOT Present](#hardware-not-present).
-- **Resolution:** 800x480 pixels (framebuffer)
-- **Visible Area: ~800x455 — the bezel covers ~10-15px on the top and bottom edges only, and effectively nothing left or right.** Measured on **two** physical devices, 2026-07-30. This supersedes the long-standing "~720x420, ~30-40px on all edges" figure in this document, which was wrong on both the amount and the edges, and confirms the root `CLAUDE.md`. All four `SCREEN_SAFE_MARGIN_*_DEFAULT` being `0` is therefore *nearly* right — the residual error is only the ~10-15px top/bottom. **The binding constraint on interactive layout is not the bezel, it is digitizer reach:** touch is not reported in the outer ~10px left/right, ~26px top, ~35px bottom. Size touch targets to that; decoration can go to the edge.
-- **Technology:** TFT LCD with LED backlight
-- **Interface:** Framebuffer (`/dev/fb0`)
-- **Color Depth:** 32-bit RGB (XRGB8888) by default. NOTE: bpp is set at runtime by whichever app is running — native menu/games/tools force **32bpp** (`fb_set_bpp(...,32)`), while ScummVM and the VNC remote session switch to **16bpp RGB565** to halve write bandwidth. A `cat /dev/fb0` dump is one frame; decode it at the bpp of the app that was running (`fb565_to_png.py` defaults to 32bpp, `--bpp 16` for ScummVM/VNC).
-- **Backlight Control:** `/sys/class/leds/backlight/brightness` (0-100)
+1. **Never write `/dev/mtd*`.** The 12 KB NAND redirector in `mtd0` is the only irreplaceable
+   non-SD component on the device, and the only thing that would make JTAG necessary.
+2. **Never overwrite `mlo`, `u-boot.bin`, `u-boot-sd.bin` or `ctrlblock.bin`** on boot partition 1.
+3. **Leave `uImage-system` alone.** Stage experimental kernels under a *different* filename.
+   `bootcmd` is hardcoded to `uImage-system`, so a power cycle is a free undo.
+4. **Keep a known-good SD image.** It is the entire failure surface and the entire recovery story.
+5. **Feed the watchdog.** Any app owning the screen for long periods must keep `/dev/watchdog`
+   fed (60 s) or the device hard-resets.
 
-**Screen Safe Area:**
-- Applications should keep interactive elements within the visible area
-- Use margins of at least 40px from framebuffer edges
-- See [`native_apps/common/common.h`](native_apps/common/common.h) for `LAYOUT_*` macros implementing safe area
+Follow these and the worst case is a card reflash. Full detail:
+[Boot chain and recovery](#4-boot-chain-and-recovery).
 
-### Input
+### Physical safety
 
-- **Touchscreen:** **Projected-capacitive** panel on I2C bus 2 at address `0x03` (driver `panjit_ts`, out-of-tree). The controller silicon is a **Cypress `CY8CTMG120-56LTXI`** PSoC TrueTouch Multi-Touch Gesture chip (`IC1` on a flex marked `EDT REV.A 40-0016-2`) — *Panjit is the module vendor, not the chip vendor*, despite the driver name.
-- **Device:** `/dev/input/touchscreen0` or `/dev/input/event0`
-- **Protocol:** Linux input events (evdev)
-- **Calibration:** native stack uses `/etc/touch_calibration.conf` (see below), **not** the stock `xinput_calibrator`/`/etc/pointercal.xinput` (that is the removed Steelcase X11 stack)
-- **Resolution:** 12-bit coordinates (0-4095), scaled to screen resolution
-- **Touch Type:** Single-touch **as exposed by the kernel driver**. The `panjit_ts` driver reports only `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The **controller itself is 2-point multi-touch with on-chip gesture recognition** — the vendor factory-test binary (`opt/pv02/pv02_app`) reads `Num_Touch` plus two coordinate pairs and tests pinch-zoom, two-finger pan and multi-touch click. Reaching it requires bypassing the driver and talking to the chip on `/dev/i2c-2`. See [Unused Hardware](#unused-hardware--untapped-capabilities).
-- **Pressure:** `ABS_PRESSURE` is declared in the device's input capabilities (`capabilities/abs = 1000003` → bits 0, 1, 24) but is discarded by [`native_apps/common/touch_input.c`](native_apps/common/touch_input.c). Whether the value actually varies is untested — see `native_apps/hardware_test/pressure_test.c` (written for this, never run to a conclusion).
+- **The unit is PoE-powered.** "Unplug it" means pulling the Ethernet cable — there is no other
+  power lead and no barrel jack.
+- **Up to 57 V sits on the RJ45 (`J3`) magnetics centre taps when powered.** Keep probes out of
+  that corner. Everything downstream of the flyback is isolated and safe.
+- **Releasing the bezel tears the touch flex if you don't disconnect `J2` first.** The touch glass
+  bonds to the bezel; its flex lands on the board. They are tethered with no slack. This has
+  already cost one unit its touchscreen.
+- The board is 3.3 V logic — **no 5 V TTL adapters**. Note that the `P4` console header is behind a
+  MAX3232 and is therefore at **RS-232** levels, not TTL. See [Serial ports](#312-serial-ports).
 
-**Touch Coordinate Scaling:**
-```c
-// Per-axis LINEAR map from the calibrated raw range to the full screen.
-// Defaults to the EVIOCGABS hardware range (0..4095 on this panel).
-screen_x = (raw_x - raw_min_x) * 799 / (raw_max_x - raw_min_x);
-screen_y = (raw_y - raw_min_y) * 479 / (raw_max_y - raw_min_y);
-```
+### If you have read an older version of this document
 
-The panel is linear (verified: a traced border comes out a straight-edged rectangle,
-no keystone/shear), so scale+offset per axis is sufficient. There is no affine, no
-bilinear corner correction, and bezel margins are NOT applied to touch coordinates.
+Five things it used to say that are now known to be wrong. Listed only because they may still be
+in your head or quoted elsewhere — not as a changelog.
 
-**Calibration file** `/etc/touch_calibration.conf` (loaded automatically by `touch_init()`):
-
-- Line 1: `raw min_x max_x min_y max_y` — the calibrated raw range, mapped linearly to the full screen.
-- Line 2: `top bottom left right` — UI margins for drawing/centering only (never move a touch).
-
-`unified_calibrate` / Device Tools → CALIBRATION captures this by tapping 9 crosshairs and
-least-squares fitting a line per axis (extrapolated to the true edges).
-
-**Touch Event Order (Critical):**
-1. `ABS_X` - X coordinate
-2. `ABS_Y` - Y coordinate
-3. `BTN_TOUCH` - Press/release event
-4. `SYN_REPORT` - Event synchronization
-
-**Important:** Coordinates must be captured BEFORE the press event. See [`native_apps/common/touch_input.c`](native_apps/common/touch_input.c) for reference implementation.
-
-**Touch Accuracy:**
-- Center: ~3px accuracy
-- Corners: ~14-27px error (panel edge non-linearity)
-- Calibration can improve corner accuracy
-
-### USB Input Devices
-
-USB keyboards, mice, and game controllers are supported via the USB host mode subsystem. A Micro USB OTG adapter and powered USB hub are required. All input is handled via evdev (`/dev/input/event0`–`event31`). Native apps use [`gamepad.c`](native_apps/common/gamepad.c); ScummVM has an independent evdev implementation with the same fixes.
-
-**Analog stick calibration:** Center is computed as `(axis_min + axis_max) / 2` (not trusting the kernel-reported value). Default dead zone: 25%, configurable via `/etc/input_config.conf`.
-
-**Keyboard Support:**
-- Detected automatically by the built-in `usbhid` kernel driver (HID class `03`)
-- Appears as `/dev/input/eventX` with `EV_KEY` capabilities
-- The [`usb_test`](native_apps/usb_test/usb_test.c) app classifies devices with ≥20 letter keys (A-Z) as keyboards
-- Standard HID keyboards work out-of-the-box once USB host mode is enabled
-
-**Mouse/Touchpad Support:**
-- Detected automatically by the built-in `usbhid` kernel driver
-- Appears as `/dev/input/eventX` with `EV_REL` (relative X/Y) + `BTN_LEFT` capabilities
-- Touchpads with integrated keyboards (combo devices) create multiple event nodes — one for keyboard, one for mouse
-- The `usb_test` app classifies devices with `REL_X`/`REL_Y` + `BTN_LEFT` as mice
-
-**Game Controller Support:**
-- **Xbox 360 controllers** (`045e:028e`) require the `xpad` kernel module (cross-compiled and loaded separately)
-- The controller uses vendor-specific USB class (`ff`), NOT standard HID — the built-in `usbhid` driver cannot claim it
-- Three kernel modules must be loaded: `ff-memless.ko` → `joydev.ko` → `xpad.ko`
-- After loading, the controller appears as `/dev/input/eventX` with `EV_ABS` (sticks/triggers) + `EV_KEY` (buttons) + `EV_FF` (force feedback)
-- Also creates `/dev/input/jsX` (joystick interface)
-- The `usb_test` app classifies devices with `ABS_X`/`ABS_Y` + `BTN_GAMEPAD`/`BTN_SOUTH` as gamepads
-- Standard HID gamepads (non-Xbox) should work with the built-in `usbhid` driver without additional modules
-
-**USB Hub Support:**
-- External USB hubs are supported (tested with keyboard/touchpad combo that includes a built-in hub)
-- Devices connected through hubs enumerate normally
-- Multiple simultaneous USB devices are supported (keyboard + mouse + controller via hub)
-
-**Boot Persistence:**
-- USB host mode: `/etc/init.d/usb-host` (S90) — re-applies MUSB DMA patch
-- Controller modules: `/etc/init.d/S89xpad-modules` (S89) — loads kernel modules
-- Both run automatically on every boot
-
-**See:** [`usb_host/README.md`](usb_host/README.md) for complete technical details on USB host mode and controller support.
-
-### Indicators
-
-- **Red LED:** Status indicator (`/sys/class/leds/red_led/brightness`)
-- **Green LED:** Status indicator (`/sys/class/leds/green_led/brightness`)
-- **Range:** 0-100 (percentage brightness)
-
-### Audio
-
-- **Codec:** Texas Instruments TWL4030 (OMAP companion chip), HiFi DAC
-- **ALSA Card:** `rw20`, card 0 device 0 (`hw:0,0`)
-- **OSS Compat:** `/dev/dsp`, `/dev/audio`, `/dev/mixer` (ALSA OSS shim)
-- **Speaker:** SPKR1 on PCB driven by TWL4030 HandsfreeL/R class-D amplifier
-- **Amp Enable:** GPIO12 (sysfs) — must be driven **HIGH** to unmute the speaker
-- **Native rate:** 48000 Hz (TWL4030 HiFi); OSS shim SRCs from app rate automatically
-- **App rates:** ScummVM uses 22050 Hz (halves OPL synthesis CPU load); native games use 44100 Hz
-- **Channels:** Stereo out (mono speaker physically; both channels drive the same SPKR1 via HandsfreeL/R bridge)
-- **Volume note:** The small PCB speaker distorts at full-scale DAC output. ScummVM applies 50% (−6 dB) software attenuation post-mix. Native apps should do the same.
-- **ALSA HW period:** ~22,317 frames / **~506 ms** at 44100 Hz — see OSS usage note below
-
-**Working mixer signal path:**
-```
-DAC1 (44100 → 48000 SRC) → HandsfreeL Mux (AudioL1) → HandsfreeL Switch
-                          → HandsfreeR Mux (AudioR1) → HandsfreeR Switch
-                                                        → SPKR1
-```
-
-**Volume controls:**
-- `DAC1 Digital Fine Playback Volume` — 0..63, use 63
-- `DAC1 Digital Coarse Playback Volume` — 0..2, use 0 (0 dB)
-- `PreDriv Playback Volume` — 0..3 (0 mute, 3 = +6 dB)
-
-**Boot initialisation script:** `/etc/init.d/audio-enable` (→ `rc5.d/S29audio-enable`)
-```bash
-echo out > /sys/class/gpio/gpio12/direction
-echo 1 > /sys/class/gpio/gpio12/value
-amixer -c 0 cset name="HandsfreeL Mux" AudioL1
-amixer -c 0 cset name="HandsfreeR Mux" AudioR1
-amixer -c 0 cset name="HandsfreeL Switch" on
-amixer -c 0 cset name="HandsfreeR Switch" on
-```
-ALSA DAC volumes are persisted via `alsactl store` → `/var/lib/alsa/asound.state` and restored by `/etc/init.d/alsa-state` at boot.
-
-**⚠ Critical OSS usage notes:**
-
-1. **ALSA HW period stall:** The TWL4030 ALSA driver has a hardware period of ~22,317 frames (~506 ms). A blocking `write()` to `/dev/dsp` stalls for the full ALSA HW period after the OSS ring fills — not the OSS fragment duration (~93 ms). This causes 185 ms of audio followed by 321 ms of silence, repeating ("bru-bru-bru-KLICK" artifact). **Always open `/dev/dsp` with `O_NONBLOCK`** and handle `EAGAIN` with a short sleep (~5 ms). The OSS software ring drains at the hardware sample rate continuously regardless of the ALSA period size.  
-Diagnosed via `native_apps/tests/oss_diag.c`.
-
-2. **Speaker distortion:** The small PCB speaker distorts at full DAC output. Apply software volume attenuation (e.g. 50% via `>>1` on int16 samples) before writing to `/dev/dsp`.
-
-3. **32-bit overflow with timeval:** On 32-bit ARM (`sizeof(long) == 4`), never compute `(now.tv_sec - epoch_0) * 1000000L` — the multiplication overflows. Always initialize timing baselines to the current time, not epoch zero.
-
-4. **ALSA OSS shim ioctl bugs (Linux 4.14.52, TWL4030):** The ALSA OSS compatibility layer has known bugs that silently corrupt audio configuration:
-   - **`SNDCTL_DSP_STEREO` silently ignored:** Returns `rc=0, stereo=1` (success) but the device stays mono. Verified with `native_apps/tests/ch_test.c`.
-   - **`SNDCTL_DSP_SPEED` may reset format and/or channels** after they've been set.
-   - **`SNDCTL_DSP_SETFMT` may reset speed** after it's been set.
-   - **Set-ioctl output values may be unreliable:** The value written back to the variable may not reflect the actual device state.
-
-   **Workaround:** (1) Set SPEED first, then FMT, then CHANNELS (so FMT/CH survive any SPEED-triggered reset). (2) Read back actual device state with `SOUND_PCM_READ_RATE`, `SOUND_PCM_READ_BITS`, `SOUND_PCM_READ_CHANNELS`. (3) Use the read-back rate for `_outputRate` — if `_outputRate` doesn't match the real playback rate, OPL sample-counting produces music at the wrong tempo. See [`scummvm-roomwizard/backend-files/oss-mixer.cpp`](scummvm-roomwizard/backend-files/oss-mixer.cpp) for the working implementation.
-
-   **Evidence:** At 22050 Hz, music played at half speed. Switching to 48000 Hz made it proportionally worse (~4×), consistent with `_outputRate` not matching the real device rate.
-
-### Connectivity
-
-- **Ethernet:** 10/100 Mbps RJ45 (`J3`, TE MagJack `1-6605834-1`) — SMSC **LAN9221** MAC+PHY (`U15`) on the GPMC bus
-- **USB:** Micro USB OTG (host mode enabled — keyboards, mice, game controllers supported; see [USB Subsystem](#usb-subsystem-analysis) and [`usb_host/README.md`](usb_host/README.md)). **This is the only USB connector on the board** — the two EHCI ports in the device tree were never brought out to a connector on board revision `550-0204-03`.
-- **Serial:** UART on ttyO1 (115200 baud) for debugging
-- **Power: 802.3af PoE only — there is no barrel jack.** The PD front end is on the main board:
-  TI **TPS23750** (`U1`) PD interface + DC/DC controller, Coilcraft **POE13F-12L** isolated flyback
-  transformer, with the magnetics in the RJ45. A **PoE injector or PoE switch port is required** to
-  power the unit, on the bench as much as on the wall. Class budget is **12.95 W at the PD**, which
-  bounds anything added inside the case. Invisible to software — `/sys/class/power_supply/` shows
-  only `twl4030_ac`/`twl4030_usb`. Detail: [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#f-power--is-it-poe).
+| Was stated | Actually |
+|---|---|
+| Visible area ~720×420, bezel hides 30–40 px on all edges | **~800×455** — bezel hides 10–15 px top and bottom *only* |
+| Touch controller is a Panjit chip | Panjit is the **module** vendor; the silicon is a **Cypress CY8CTMG120** |
+| Ambient light sensor probably present | **Absent, and impossible** — the enclosure has no aperture |
+| `U17` is a coin cell / battery | A **0.47 F supercapacitor**, so RTC hold-up is hours, not months |
+| Ethernet PHY is a separate LAN8700 | `LAN9221` is **MAC+PHY in one package** |
 
 ---
 
-## Protection Mechanisms
+## 2. The board
 
-### 1. Watchdog Systems (Hardware + Software)
+### 2.1 Identification
 
-The RoomWizard has **two independent watchdog systems** that must be understood:
+| | |
+|---|---|
+| Board | Steelcase Inc **`550-0204-03`**, **© 2010**, `STM-5 STM-5E20784`, `94V-0`, `TESTED Compulrol` |
+| Model string | `Steelcase RoomWizard 20` (`/proc/device-tree/model`) |
+| Compatible | `ti,omap3-rw20`, `ti,omap3` |
+| U-Boot identity | `soc=omap3`, `board=rw20` |
+| OS build | `SteelCase RW20 Embedded Platform (Yocto) 3.1.4` — a Yocto build by eInfochips |
+| Teardown unit | case label `RW29 1G-093`; asset labels `46837.0300`, `47270.0310` |
 
-#### 1a. Hardware Watchdog (OMAP WDT)
+**The `© 2010` silkscreen is a design copyright, not a build date.** Three independent date codes
+on the teardown unit cluster in March 2018: the LCD module (`W180322`), its T-CON board (`1810`)
+and the RJ45 MagJack (`18111`). A panel swap would not also replace the Ethernet jack, so this is
+a 2018-built unit on an eight-year-old board design. (The touch controller's `1043` code is
+long-lived module stock, ordinary for a bonded touch assembly.)
 
-The OMAP3503 SoC has a 60-second hardware watchdog timer (OMAP WDT2).  Once opened, it **must** be fed continuously or the device hard-resets.
+### 2.2 Parts inventory
 
-- **Device:** `/dev/watchdog` (`/dev/watchdog0`, `/dev/watchdog1`)
-- **Timeout:** 60 seconds
-- **Daemon:** `/usr/sbin/watchdog` (standard Linux watchdog daemon)
-- **Config:** `/etc/watchdog.conf` — only feeds the timer; `test-binary` and `repair-binary` are commented out
-- **Enable flag:** `/etc/default/watchdog` → `run_watchdog=1`
-- **Feed interval:** Every ~1 second (daemon default)
+| Ref | Marking | Part |
+|---|---|---|
+| `U11` | `OMAP3503ECUS`, `72P19HQ`, `G1` | TI **OMAP3503** application processor |
+| `U12` | `D9RMJ`, `70CI7 / XQ52` | Micron **mobile DDR SDRAM** (`D9RMJ` is Micron's FBGA code) |
+| `U13` | `NQH53`, `7ME12 / X5Y3` | Micron **NAND flash** — MT29F2G16ABBEAHC, 256 MiB SLC, 16-bit, BCH8 |
+| `U14` | `TPS65930A2`, `74AJKFW $4`, `G1` | TI **TPS65930** — PMIC + audio codec, **TWL4030 family** |
+| `U15` | `LAN9221-ABZJ`, `A1751-AB24` | SMSC **LAN9221** Ethernet **MAC+PHY** on the GPMC bus |
+| `U16` | `LVDS83B`, `77AK23K G4` | TI **SN65LVDS83B** parallel-RGB → LVDS transmitter |
+| `U27` | `MA3232C`, `7AK G4`, `A1R7` | TI **MAX3232C** dual RS-232 transceiver |
+| `U1` | `TPS23750`, `6BTG4 / A89N` | TI **802.3af PoE PD** interface + DC/DC controller |
+| `U2` | `MT1107 V74968` | isolated feedback regulator (PoE secondary side) |
+| `U4` | `PSS4325 / 68154 / C935` | **TPS54325**-class synchronous buck |
+| `U17` | `⧠M` logo, `GC5.5V0.47F`, `JAPAN` | Panasonic/Matsushita **"Gold Cap" supercapacitor**, 5.5 V 0.47 F — RTC hold-up |
+| `U22`, `U23` | — | Side LED bar drivers (`L8`/`L2` inductors adjacent) |
+| `U24` | `CCH / TI 8A / Z86W` | TI, **unidentified** |
+| `U25`, `U32` | `WP245 / TI 81K / CD4S` (16-pin) | TI, **unidentified**. `U25` by the touch flex, `U32` by `J5`/`LED1`–`4`. Position suggests level shifters. |
+| `U33` | — | **Unpopulated** wide SOIC/SSOP land |
+| `Q1`, `D1` | `4848 5BD` · `NHSTQW 3406` | PoE flyback FET / secondary rectifier |
+| `SPKR1` | — | Single square metal-can magnetic speaker, ~20 mm |
+| `LED1`–`LED5` | — | Discrete SMD LEDs; `LED1`–`4` in a row beside `J5` |
+| — | Coilcraft **POE13F-12L** (`1809 J`) | PoE isolated flyback transformer |
+| — | `C&K CHINA(9) EP11 0.4VA MAX 1744` | Small transformer near the touch flex — **purpose unconfirmed** |
 
-The hardware watchdog is acceptable to keep running.  The daemon is low-overhead and prevents hard-resets.
+### 2.3 Connectors
 
-#### 1b. Steelcase Software Watchdog (cron-based) — **MUST DISABLE**
+| Ref | Type | Goes to |
+|---|---|---|
+| `J1` | **microSD** push-push socket | Boot and root storage |
+| `J2` | 8-pin white **FFC** | Touch controller flex — ⚠ release before separating the bezel |
+| `J3` | TE **MagJack `1-6605834-1`** RJ45 | Ethernet **and PoE power in** |
+| `J4` | **micro-USB** | The only USB connector (likely MUSB OTG) |
+| `J5`, `J6` | 1×10 sockets, 2 mm pitch, **empty** | XBee radio site — [see below](#24-unpopulated-and-expansion) |
+| `J7`, `J8` | 5-pin white **JST** | Side LED status bars in the left/right case edges |
+| `P2` | Long fine-pitch 2-row, **unpopulated** | **Unknown** — the last unidentified footprint |
+| `P3` | 2×7, 0.1", **unpopulated** | **TI-14 JTAG** (high confidence) |
+| `P4` | 2×5, 0.1", **unpopulated** | **RS-232 console** via `U27` — verified |
+| — | 40-pin **FFC** | Display panel harness |
 
-Steelcase added a **separate** application-level watchdog that runs via cron **every 5 minutes**:
+`J5`/`J6` are silkscreened on the **bottom** face; `P3`/`P4` on the **top** face. They occupy the
+same board area — `P3`/`P4`'s through-holes pass down the channel between the two sockets — which
+is why both appear together in bottom-side photos.
+
+**Case openings**, along the rear edge in order: RJ45, micro-USB, a second rectangular slot
+(unidentified — nothing behind it, possibly a variant SKU), and a pinhole over a white tact
+**reset button**.
+
+### 2.4 Unpopulated and expansion
+
+**`J5` + `J6` — an empty XBee socket.** Two 1×10 female strips at **2.0 mm pitch**, rows **~24 mm**
+apart: the Digi XBee footprint (2 mm pitch, 22.86 mm row spacing). `J5` carries a white **pin-1
+dot**, and the **metal inner bezel has a trapezoidal cut-out matching the XBee outline** — the
+chassis was tooled for this module. A real XBee test-fits perfectly. **No radio is fitted in any of
+three units**, so the batch shipped without the option; there is no antenna on the PCB because on
+an XBee the antenna is part of the module. Vendor software confirms the intent — see
+[Serial ports](#312-serial-ports).
+
+**`P4` — the RS-232 console. Pinout verified by continuity:**
 
 ```
-*/5 * * * * /opt/sbin/watchdog/watchdog.sh
+P4 pin 2  ->  U27 pin 14 (T1OUT)   console TX, RS-232 level, out of the device
+P4 pin 3  ->  U27 pin 13 (R1IN)    console RX, RS-232 level, into the device
+P4 pin 5  ->  U27 pin 15 (GND)     ground
 ```
 
-**How it works:**
-1. `watchdog.sh` calls `watchdog_test.sh`
-2. `watchdog_test.sh` checks: HSQLDB running? Jetty running? Browser running? Browser log fresh?
-3. If any check fails → exit code 100-112
-4. `watchdog.sh` calls `watchdog_repair.sh` with the error code
-5. If repair fails → **`/sbin/reboot`**
+Pin 1 is the square pad; even pins on the top row, odd on the bottom. Only these three are wired —
+MAX3232 channel 1 only. Three wires, no soldering strictly required (a 0.1" female jumper or pogo
+pins in the plated holes will do). **RS-232 levels: a 3.3 V TTL adapter will not work here** — use
+a real USB↔DB9 adapter, or tap `U27`'s logic side instead.
 
-**Grace period:** After the first failure, `watchdog_repair.sh` enters a grace period (~65 minutes of "repeat failure in grace period" messages).  After the grace period expires, it attempts a database restart.  When that fails, it reboots.
+**`P3` — TI-14 JTAG, high confidence.** Continuity against `U27` produces the TI-14 signature:
 
-**Bypass mechanism:** `watchdog_test.sh` has a built-in bypass:
-```bash
-if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
-    # Only perform application level checks when the state file is there
-```
-Creating `/var/watchdog_test` causes the test to skip all checks and exit 0.
+| `P3` pin | Measured | TI-14 expects | |
+|---|---|---|---|
+| 4 | GND (via `U16` pin 53) | GND | ✔ |
+| 5 | 3.3 V (`U27` pin 16) | `PD` / Vref | ✔ |
+| 6 | open | **keyed, no pin** | ✔ |
+| 8 | GND | GND | ✔ |
+| 10 | GND | GND | ✔ |
+| 12 | open | GND | ✖ one discrepancy |
 
-**Disabling (done by `setup-device.sh <ip>`):**
-1. Creates `/var/watchdog_test` bypass file
-2. Comments out the cron job in root's crontab
-3. Original crontab backed up to `/var/crontab.steelcase.bak`
+Vref on 5 with grounds on 4/8/10 plus the key at 6 is not an arrangement anything else uses. Pin 12
+is the loose end — a no-connect on this board, or a missed probe. The remaining pins (TMS, nTRST,
+TDI, TDO, RTCK, TCK, EMU0, EMU1) read open against `U27` because they run to the SoC. Not
+actionable — the rules in §1 exist so that JTAG is never needed — but don't mistake it for a second
+serial port.
 
-**Consequences of NOT disabling:**
-- Device reboots every ~70 minutes when Steelcase services are absent (game mode)
-- Reboot cycle: test fails → grace period (~65 min) → repair fails → reboot
+**Test points: `TP1`–`TP59`**, individually labelled and probe-sized, over the whole top side.
+Dense clusters at `TP19`–`TP31` (around the SD socket), `TP13`–`TP18` (mid-board), `TP34`–`TP36`
+and a long run `TP39`–`TP59`. They are numbered, not named, so silkscreen alone tells you nothing
+about the net. Mapping them by meter means probing back to `U14`, whose ADCIN pins are BGA-hidden.
+**The practical route is the reverse:** power the unit, touch a resistor from 3.3 V to a candidate
+test point, and watch which `in_voltage2..7_raw` moves. That needs no teardown.
 
-### 2. MD5 Integrity Verification (Triple-Layer)
+**Room inside the case:** modest but real, around the `J5`/`J6`/`P3`/`P4` corner and near the
+unpopulated `U33` and `P2` lands. Two constraints on anything added: the 802.3af power budget
+([Power](#35-network-and-power)) and the fact that the case has **no ventilation slots**.
 
-The system uses three layers of MD5 checksum verification:
+### 2.5 Enclosure and service
 
-#### Layer 1: Upgrade Package Checksum
-```bash
-# Verifies the entire upgrade package
-md5sum -c upgrade.cpio.gz.md5
-```
+**Reopenable, non-destructively: screws and clips, no glue.** Four metal threaded bosses moulded
+into the bezel, self-tapping screws for the LCD mount, plastic retention clips along the top and
+bottom edges. Bezel material is `>PC/ABS<`, moulded part `560-0540-0x`. The only bonded joint is
+touch glass to bezel, which is meant to be permanent.
 
-#### Layer 2: Individual Partition Image Checksums
-```bash
-# Each partition image has its own MD5 file
-sd_rootfs_part.img.md5
-sd_boot_archive.tar.gz.md5
-sd_data_part.img.md5
-sd_log_part.img.md5
-```
+**The one destructive risk is the touch flex.** Disconnect `J2` before separating the bezel from
+the board — see [Physical safety](#physical-safety).
 
-#### Layer 3: Post-Write Verification
-- After writing partitions with `dd`, system reads back data
-- Compares MD5 of written data with expected checksum
-- **Retry Logic:** Up to 3 attempts per partition
-- **Failure:** Exits with error code 6 if all retries fail
-
-**Regenerating Checksums After Modifications:**
-```bash
-cd /path/to/modified/images
-for file in *.img *.gz *.bin; do
-    md5sum "$file" > "${file}.md5"
-done
-```
-
-### 3. Control Block State Machine
-
-**Binary:** `/opt/sbin/ctrlblk`  
-**Storage:** Boot partition as `ctrlblock.bin`
-
-**Parameters:**
-- `boot_from`: `bootstrap` | `system`
-- `upgrade_type`: `factory` | `field`
-- `boot_tracker`: 0-2 (failure counter)
-- `fwversion`: Firmware version string
-
-**Failure Detection Logic:**
-```bash
-if [ $TRACKER -ge 2 ]; then
-    echo "Detected failure mode on boot"
-    start_fail_script  # Triggers recovery/factory reset
-    exit 1
-fi
-```
-
-**Boot Tracker Behaviour (verified):**
-- Written only by userspace `/opt/sbin/ctrlblk`, driven by `/etc/init.d/ctrlblk`
-- That script acts only when `BOOTMODE=system && TRACKER==1` — i.e. the boot after an upgrade
-- U-Boot reads it but never writes it
-- `/opt/sbin/fail.sh` does **not exist** on this device; the automatic recovery path is already
-  dismantled
-
-### 4. Boot Verification Chain
-
-- The NAND boot redirector occupies `mtd0` @0x0 with one mirror @0x20000; `mtd1`–`mtd5` are blank
-- No cryptographic signatures anywhere
-- There is **no boot-time MD5 verification of the kernel** — the only integrity gate on
-  `uImage-system` is the uImage header + data CRC
+Removing **only the rear cover** exposes the entire bottom face — SoC, RAM, NAND, Ethernet, PoE,
+`J5`/`J6` — without going near the bezel or the touch flex. That is the safe way to inspect a
+working unit.
 
 ---
 
-## Hardware Control Interfaces
+## 3. Subsystems
 
-### LED Control (Multi-Color Indicator)
+### 3.1 SoC, memory and storage
 
-**Sysfs GPIO/LED Interface:**
-```bash
-/sys/class/leds/red_led/brightness      # 0-100
-/sys/class/leds/green_led/brightness    # 0-100
-/sys/class/leds/backlight/brightness    # 0-100
-```
-
-**Control Scripts:**
-- `/opt/sbin/backlight/setbacklight.sh`
-- `/opt/sbin/brightness.sh`
-- `/opt/sbin/conc_leds.sh`
-
-**Example Usage:**
-```bash
-# Set red LED to 50%
-echo 50 > /sys/class/leds/red_led/brightness
-
-# Set green LED to full brightness
-echo 100 > /sys/class/leds/green_led/brightness
-
-# Turn off backlight (screen blank)
-echo 0 > /sys/class/leds/backlight/brightness
-```
-
-See [`native_apps/common/hardware.c`](native_apps/common/hardware.c) for C implementation.
-
-### Touchscreen Input
-
-**Device Nodes:**
-```bash
-/dev/input/touchscreen0    # Primary touchscreen device
-/dev/input/event*          # Input event devices
-```
-
-**Input Stack:**
-```
-Hardware → Kernel evdev → application (direct /dev/input/event* reads)
-```
-
-**Calibration:** see [Input](#input) — the native stack uses `/etc/touch_calibration.conf`.
-The stock `xinput_calibrator` / `/etc/pointercal.xinput` belong to the removed Steelcase X11
-stack and are not used.
-
-See [`native_apps/common/touch_input.c`](native_apps/common/touch_input.c) for C implementation.
-
-### Display/Framebuffer
-
-**Device:**
-```bash
-/dev/fb0                   # Framebuffer device
-DISPLAY=:0                 # X11 display server
-```
-
-**X11 Configuration:**
-```bash
-# Started by /etc/init.d/x11
-Xorg -br -nolisten tcp -nocursor -pn -dpms vt8 :0
-```
-
-**Framebuffer Specifications:**
-- Resolution: 800x480
-- Color depth: 32-bit (RGBA)
-- Memory-mapped for direct access
-- Double buffering supported
-
----
-
-## Application Framework
-
-### Software Stack
-
-```mermaid
-graph TB
-    A[Linux Kernel 4.14.52] --> B[X11/Xorg Display Server]
-    B --> C[WebKit GTK Browser - Epiphany]
-    C --> D[Jetty 9.4.11 Web Server]
-    D --> E[Java 8 Runtime - OpenJRE]
-    E --> F[Custom Java Application]
-    F --> G[HSQLDB 2.0.0 Database]
-    F --> H[Interbase Database]
-```
-
-### Key Components
-
-#### Display Server
-- **X11/Xorg:** Started by `/etc/init.d/x11`
-- **Display:** `:0`
-- **Configuration:** Minimal, optimized for embedded use
-
-#### Browser
-- **Type:** WebKit-based (Epiphany/GNOME Web)
-- **Binary:** `/usr/bin/browser` (likely symlink to epiphany)
-- **Home Page:** `http://localhost/frontpanel/pages/index.html`
-- **Logs:** `/var/log/browser.out`, `/var/log/browser.err`
-
-#### Web Server
-- **Type:** Jetty 9.4.11
-- **Location:** `/opt/jetty-9-4-11/`
-- **Purpose:** Serves JSP/Servlet application
-- **Init Script:** `/etc/init.d/webserver`
-
-#### Java Runtime
-- **Version:** OpenJRE 8
-- **Location:** `/opt/openjre-8/`
-- **Usage:** Runs Jetty and custom applications
-
-#### Databases
-- **HSQLDB 2.0.0:** `/home/root/data/rwdb/` (room booking data)
-- **Interbase:** `/opt/interbase/data/websign.gdb` (legacy)
-
----
-
-## USB Subsystem Analysis
-
-### Status: ✅ ENABLED — USB Host Mode + Game Controller Support
-
-The micro USB port is functional in USB host mode with support for keyboards, mice, touchpads, and game controllers. A Micro USB OTG adapter + powered USB hub are required.
-
-**Deploy:** `cd usb_host && ./build-and-deploy.sh 192.168.50.73`
-
-### Three Problems Solved
-
-#### Problem 1: USB Host Mode Disabled (MUSB DMA Bug)
-
-The OEM kernel 4.14.52 has `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` both disabled — making MUSB initialization always fail with "DMA controller not set" (-ENODEV). This is a build configuration defect.
-
-**Solution:** Runtime `/dev/mem` patching of the `omap2430_ops` struct in kernel memory. Noop stub function pointers are written into `dma_init`/`dma_exit` fields, forcing PIO (Programmed I/O) mode fallback. After patching, the MUSB driver rebinds successfully.
-
-#### Problem 2: Game Controllers Not Detected (Missing Joystick Subsystem)
-
-Even with USB host mode working, Xbox 360 controllers (`045e:028e`) appeared in `lsusb` but did NOT create `/dev/input/event*` nodes because:
-- `CONFIG_INPUT_JOYSTICK` is not set — entire joystick subsystem absent
-- `CONFIG_INPUT_JOYDEV` is not set — no `/dev/input/jsX` interface
-- `CONFIG_INPUT_FF_MEMLESS` is not set — force-feedback dependency missing
-- The Xbox controller uses vendor-specific USB class (`bInterfaceClass=ff`), not HID class `03` — the `usbhid` driver ignores it
-
-**Solution:** Cross-compiled three kernel modules from matching kernel source (4.14.52) and loaded them at boot:
-
-| Module | Size | Purpose |
-|--------|------|---------|
-| `ff-memless.ko` | 8.4 KB | Force-feedback memless support (xpad dependency) |
-| `joydev.ko` | 19.5 KB | Joystick device interface (`/dev/input/jsX`) |
-| `xpad.ko` | 36 KB | Xbox gamepad driver (360, One, etc.) |
-
-The kernel supports loadable modules (`CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`, `CONFIG_MODULE_SIG` not set).
-
-#### Problem 3: USB Bus Power Budget Too Low (DTB Patch)
-
-The DTB embedded in `uImage-system` set the MUSB controller's `power` property to `0x32` (100mA), causing devices requiring >100mA (e.g., Xbox 360 controller at 500mA) to be rejected with `"rejected 1 configuration due to insufficient available bus power"` when connected directly without a hub.
-
-**Solution:** Binary-patched the DTB inside `uImage-system`, changing `power` from `0x32` (50 = 100mA) to `0xfa` (250 = 500mA), then recalculated uImage CRC checksums and wrote the patched image back to the FAT32 boot partition (`/dev/mmcblk0p1`). This is a persistent, one-time fix per device image — after re-imaging, the patch must be re-applied.
-
-**Tools:** [`find_dtb.py`](usb_host/find_dtb.py) (locate/extract DTB from uImage), [`patch_dtb.py`](usb_host/patch_dtb.py) (binary-patch power property + recalculate CRCs), [`verify_patch.sh`](usb_host/verify_patch.sh) (verify patch on device).
-
-See [`usb_host/README.md`](usb_host/README.md) for complete DTB patching technical details.
-
-### Verified Working
-
-```
-# USB host mode
-musb-hdrc musb-hdrc.0.auto: MUSB HDRC host driver
-musb-hdrc musb-hdrc.0.auto: new USB bus registered, assigned bus number 1
-hub 1-0:1.0: USB hub found
-
-# Keyboard + touchpad combo (through hub)
-input: HID 04d9:a088 as .../input3  (USB HID v1.11 Keyboard)
-input: HID 04d9:a088 as .../input4  (USB HID v1.11 Mouse)
-
-# Xbox 360 controller (through hub, via xpad driver)
-input: Microsoft X-Box 360 pad as .../input5
-usbcore: registered new interface driver xpad
-```
-
-### Supported USB Device Types
-
-| Device Type | Driver | Kernel Config | Works Out-of-Box |
-|-------------|--------|--------------|------------------|
-| USB Keyboard | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
-| USB Mouse | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
-| USB Touchpad | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes |
-| USB Hub | `hub` (built-in) | `CONFIG_USB=y` | ✅ Yes |
-| Xbox 360 Controller | `xpad` (module) | `CONFIG_JOYSTICK_XPAD=m` | ❌ Needs modules |
-| Xbox One Controller | `xpad` (module) | `CONFIG_JOYSTICK_XPAD=m` | ❌ Needs modules |
-| HID Gamepad (generic) | `usbhid` (built-in) | `CONFIG_USB_HID=y` | ✅ Yes (if HID compliant) |
-
-### Hardware Required
-
-| Item | Purpose |
-|------|---------|
-| Micro USB OTG adapter | Micro-B male → USB-A female |
-| Powered USB hub | Port may not supply VBUS power |
-
-### Deployed Files (on device)
-
-| File | Purpose |
-|------|---------|
-| `/usr/local/bin/devmem_write` | mmap-based /dev/mem read/write tool |
-| `/usr/local/bin/enable-usb-host.sh` | MUSB memory patch + driver rebind |
-| `/etc/init.d/usb-host` | SysV init wrapper (S90) |
-| `/etc/rc5.d/S90usb-host` | Boot persistence symlink |
-| `/lib/modules/4.14.52/extra/ff-memless.ko` | Force-feedback module |
-| `/lib/modules/4.14.52/extra/joydev.ko` | Joystick device module |
-| `/lib/modules/4.14.52/extra/xpad.ko` | Xbox controller driver |
-| `/etc/init.d/S89xpad-modules` | Module loader init script (S89) |
-| `/etc/rc5.d/S89xpad-modules` | Boot persistence symlink |
-
-### Root Cause Details
-
-See [`usb_host/README.md`](usb_host/README.md) for complete technical details including:
-- Memory addresses for MUSB DMA patching
-- omap2430_ops struct layout
-- Why mmap() works but write() doesn't
-- Xbox controller USB descriptor analysis
-- Kernel module cross-compilation process
-- Failed approaches investigated
-
----
-
-## Extended Hardware Discovery
-
-### GPIO Controllers (Multiple Banks)
-
-The OMAP3503 SoC provides **6 GPIO banks** (32 pins each) with extensive pin availability:
-
-```
-gpiochip0   - GPIO 0-31    (48310000.gpio)
-gpiochip32  - GPIO 32-63   (49050000.gpio)
-gpiochip64  - GPIO 64-95   (49052000.gpio)
-gpiochip96  - GPIO 96-127  (49054000.gpio)
-gpiochip128 - GPIO 128-159 (49056000.gpio)
-gpiochip160 - GPIO 160-191 (49058000.gpio)
-gpiochip490 - TWL4030 GPIO 490-507 (18 pins, twl4030-gpio)
-gpiochip508 - GPMC GPIO 508+ (6e000000.gpmc)
-```
-
-**Total:** 192 GPIO pins from the OMAP3503 (6 banks x 32) + 18 pins from the TWL4030 PMIC + 4 from the GPMC.
-
-Bank base addresses (verified from the live device tree): `48310000`, `49050000`, `49052000`, `49054000`, `49056000`, `49058000`. These are OMAP3 addresses.
-
-**Currently Exported:**
-- `gpio12` - Speaker amplifier enable (OUT, HIGH)
-
-**Development Note:** Additional GPIO pins could be exported for custom hardware interfacing, but requires careful device tree analysis to avoid conflicts.
-
-### I2C Bus Devices
-
-**I2C Bus 1 (48070000.i2c)** - Power management and audio:
-- `0x48` - **TWL4030 PMIC** (multi-function device)
-- `0x49-0x4b` - Dummy placeholders
-
-**I2C Bus 2 (48072000.i2c)** - Touchscreen:
-- `0x03` - **Panjit touchscreen controller**
-
-**TWL4030 PMIC Subsystems:**
-1. Audio Codec (twl4030-codec) - HiFi DAC/ADC
-2. Battery Charger Interface (twl4030-bci) - AC/USB power detection
-3. GPIO Expander (twl4030-gpio) - 18 GPIO pins
-4. RTC (twl_rtc) - Real-time clock with battery backup
-5. USB Transceiver (twl4030-usb) - USB PHY interface
-6. MADC - Multi-channel ADC for monitoring
-
-### PWM Controllers
-
-```
-pwmchip0 - dmtimer-pwm@9  (Timer 9)
-pwmchip1 - dmtimer-pwm@11 (Timer 11)
-pwmchip2 - dmtimer-pwm@10 (Timer 10)
-```
-
-**Purpose:** LED brightness control (red, green, backlight), potentially available for additional PWM applications
-
-### Real-Time Clock (RTC)
-
-```
-Device:     /dev/rtc0
-Driver:     twl_rtc (TWL4030 integrated RTC)
-Features:   Battery-backed, alarm, wake-up capability
-```
-
-### Watchdog Timers
-
-```
-/dev/watchdog  - Primary watchdog (symlink)
-/dev/watchdog0 - OMAP watchdog timer (Rev 0x31)
-/dev/watchdog1 - Secondary watchdog
-```
-
-**Hardware watchdog:**
-- Timeout: 60 seconds
-- Fed by: `/usr/sbin/watchdog` daemon (started via `/etc/init.d/watchdog`)
-- Status: Active — acceptable to keep
-
-**Steelcase software watchdog (cron-based):**
-- Script: `/opt/sbin/watchdog/watchdog.sh` (runs every 5 min via cron)
-- Checks: HSQLDB, Jetty, browser process, browser log freshness
-- Action: Reboots device when Steelcase services are absent
-- Status: **Must be disabled** for game mode (see [Protection Mechanisms](#1b-steelcase-software-watchdog-cron-based--must-disable))
-- Bypass: `touch /var/watchdog_test`
-
-### Serial/UART Ports
-
-```
-Device:    /dev/ttyO1
-Hardware:  OMAP UART2 at MMIO 0x4806c000
-           (OMAP3 UART1 is 0x4806a000 and is status="disabled" - do not probe it)
-Baud Rate: 115200n8
-Console:   Enabled (kernel console output)
-```
-
-**Usage:** Boot debugging, kernel panic analysis, emergency access
-
-### Power Management
-
-**Power Supply Monitoring:**
-- `twl4030_ac` - AC power supply status (currently: 0 = not connected)
-- `twl4030_usb` - USB power supply status (currently: 0 = not connected)
-
-**Analysis:** Device uses dedicated power supply (not USB-powered)
-
-### Hardware NOT Present
-
-**Confirmed Absent:**
-- ❌ WiFi - No 802.11 wireless adapter
-- ❌ Bluetooth - No BT controller or radio
-- ❌ Occupancy / PIR / proximity sensor - none. A grep of the entire vendor rootfs for `rfid|nfc|badge.?reader|PIR|occupancy|proximity|motion.?sensor` returns nothing. RoomWizard 2.0 detects presence by people tapping the screen.
-- ❌ Badge / NFC / RFID reader - not on this model
-- ❌ Camera - ISP block enabled in the DT but no sensor declared and no driver module on disk
-- ❌ Accelerometer - none
-- ❌ Second SD slot - `mmc@480ad000` and `mmc@480b4000` are both `status = "disabled"`
-- ❌ Video Output - No HDMI/VGA. (A composite/CVBS encoder exists in the SoC and `manager1: tv` is present in omapdss, but no connector is known to be routed — unverified.)
-- ❌ Hardware RNG - `/dev/hwrng` node exists but `rng_current = none` (not bound on GP silicon). Use `/dev/urandom`.
-
-**Present, and unused by this project:**
-
-- ✅ **Temperature sensor — PRESENT AND WORKING.** The TWL4030 MADC exposes a die-temperature
-  channel at `/sys/bus/iio/devices/iio:device0/in_temp1_input` (read 56 on a live unit).
-  `CONFIG_TWL4030_MADC=y`, driver probes cleanly at boot. Zero references to it anywhere in
-  this project's code.
-- ✅ **16-channel ADC — PRESENT AND UNUSED.** Same IIO device: `in_voltage0..15_{raw,mean_raw,input}`.
-  Channels 2–7 are the TWL4030's general-purpose external inputs (`ADCIN2..ADCIN7`), all reading
-  ~0–120 mV, i.e. idle and available. Channel 9 is the RTC backup cell (reads 3184 mV → the coin
-  cell is fitted and charged); channel 12 is VBAT. `in_voltage*_mean_raw` gives free hardware averaging.
-- ❌ **Ambient light sensor — NOT PRESENT (settled 2026-07-30; was "probably present").** The vendor
-  factory-test suite does have a dedicated light-sensor test (`functionaltest.sh` → `pv02_app 5`,
-  strings `Tests the Light sensor`, `/dev/i2c-1`, `Brightness: %u`), and it is not declared in the
-  4.14 device tree — which is why this sat as an unverified maybe. The full teardown settles it:
-  **no sensor part, and no aperture, window or light pipe anywhere in the enclosure.** The case is
-  light-tight, so ambient sensing is impossible on this SKU regardless of what is populated. The
-  factory test is shared firmware across a product family. **Do not probe bus 1** looking for it —
-  the vendor's own wrapper warns the test can hang the bus, and bus 1 carries the PMIC.
-  See [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#d-ambient-light-sensor).
-- ⚠️ **Audio input — capture path registered, physical wiring unverified.** `/proc/asound/devices`
-  lists `24: [ 0- 0]: digital audio capture`, and `amixer scontrols` exposes 62 controls including
-  `Analog Left Main Mic`, `Analog Left Headset Mic`, `AUXL/AUXR`, `TX1`, `TX2` and digital loopback.
-  The vendor's `init_amixer.sh` never unmutes any mic, which is weak evidence nothing is connected.
-  Cheap to test: unmute `TX1` + `Analog Left Main Mic` and watch capture levels.
-- ⚠️ **SPI — four controllers enabled in the device tree, no driver.** `spi@48098000`, `@4809a000`,
-  `@480b8000`, `@480ba000` are all `status = "okay"`, but **`CONFIG_SPI` is not set** in the running
-  kernel, so `/sys/bus/spi/` does not exist. No children are declared. Unusable without a kernel
-  rebuild, which is out of scope (no kernel source — see [Kernel Upgrade](#kernel-upgrade-assessment)).
-
-### Additional Hardware Summary
-
-| Component | Quantity | Details | Access |
-|-----------|----------|---------|--------|
-| **GPIO Banks** | 6 banks | 192 pins (OMAP3503) + 18 (TWL4030) + 4 (GPMC) | sysfs export |
-| **I2C Buses** | 2 buses | Bus 1: PMIC/Audio, Bus 2: Touch | `/dev/i2c-*` |
-| **PWM Controllers** | 3 channels | DMTIMER-based PWM | sysfs |
-| **RTC** | 1 device | TWL4030 battery-backed RTC | `/dev/rtc0` |
-| **Watchdog Timers** | 2 devices | OMAP hardware watchdog | `/dev/watchdog*` |
-| **UART Ports** | 1 exposed | ttyO1 (115200 baud console) | `/dev/ttyO1` |
-| **Power Monitors** | 2 | AC and USB power detection | sysfs |
-
----
-
-## Live System Analysis
-
-**Device:** 192.168.50.73 (RW09)  
-**Analysis Date:** 2026-02-26  
-**Status:** Operational - Game Mode Active
-
-### Verified Measurements
-
-**CPU:**
-- Model: ARMv7 Processor rev 7 (ARM Cortex-A8)
-- Base Clock: 300 MHz
-- Current Frequency: 600 MHz (cpufreq scaling active)
-- BogoMIPS: 594.73
-- Features: NEON SIMD, VFP, Thumb, TLS
-
-**Memory:**
-- Total RAM: 239,904 KB (234 MB)
-- Available: 182 MB (76% free)
-- Swap: 258 MB (unused)
-- Load Average: 0.00 (idle)
-
-**Storage:**
-- SD Card: 3.7 GB (mmcblk0)
-- Root Partition: 980 MB (47% used, 474 MB free)
-- Data Partition: 251 MB (40% used)
-- Log Partition: 243 MB (4% used)
-
-**Network:**
-- Interface: eth0 (00:07:B0:0D:30:53)
-- IP Address: 192.168.50.73
-- Status: UP, RUNNING
-- Errors: 0
-
-**Services:**
-- ✅ S20roomwizard-games - Game mode active
-- ✅ S29audio-enable - Audio amplifier initialized
-- ✅ S50watchdog - Hardware watchdog active
-- ✅ S09sshd - SSH access enabled
-
-**System Health:** ✅ EXCELLENT
-- Zero load average
-- 76% memory available
-- All partitions healthy
-- No errors detected
-- Watchdog active
-- All hardware operational
-
----
-
-## Safe Modification Strategy
-
-Modifications fail when: MD5 checksums don't match, watchdog times out (60 s), control block tracker reaches ≥2 (failure mode), or service dependencies break.
-
-**Rules:**
-1. Regenerate all MD5 checksums after any file change: `for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done`
-2. Feed watchdog every 30 s — system daemon `/usr/sbin/watchdog` handles this
-3. **Disable the Steelcase software watchdog** (cron job) — it reboots the device when Jetty/HSQLDB/browser are absent
-4. Preserve critical services: `/etc/init.d/watchdog`, `sshd`, `cron`, `dbus`
-5. Safe to add new init scripts at `/etc/rc5.d/S99*`
-6. Java 8 runtime exists at `/opt/openjre-8/`; Python requires ARM cross-compiled binaries
-
-### Game Mode Optimization
-
-When running in game mode (native games, not browser), disable unnecessary services to prevent watchdog-triggered reboots and free memory:
-
-**Problem:** Steelcase added a cron-based software watchdog (`/opt/sbin/watchdog/watchdog.sh`) that monitors the HSQLDB/Jetty/browser stack.  In game mode these services are absent, so the watchdog test fails with exit code 100.  After a ~65-minute grace period the repair script reboots the device.
-
-**Solution:** Disable the software watchdog and stop unnecessary services:
-
-```bash
-# Quick fix (existing deployment)
-cd native_apps
-./setup-device.sh 192.168.50.73
-
-# Automatic (new deployment)
-./native_apps/build-and-deploy.sh 192.168.50.73 set-default
-```
-
-**Init services to disable:**
-
-| Service | Why disable |
-|---------|-------------|
-| webserver | Jetty init wrapper — not needed |
-| browser | Epiphany/WebKit — games use framebuffer |
-| x11 | Xorg display server — games use framebuffer |
-| jetty | Java servlet container — not needed |
-| hsqldb | Room-booking database — not needed |
-| snmpd | SNMP monitoring — not needed |
-| vsftpd | FTP server — not needed, security risk |
-| nullmailer | Mail relay — not needed |
-| ntpd | NTP daemon — replaced by `time-sync` init script |
-| startautoupgrade | Steelcase OTA upgrades — not needed |
-
-**Cron jobs to disable:**
-
-| Cron job | Why disable |
-|----------|-------------|
-| `watchdog.sh` | **Root cause of reboots** — monitors absent Steelcase stack |
-| `get_time_from_server.sh` | Steelcase NTP — fails repeatedly, spams logs |
-| `sync_clocks.sh` | SW/HW clock sync — spams "time difference" log messages |
-| `rotatedbtables.sh` | HSQLDB table rotation — database removed |
-| `backup.sh` | Steelcase data backup — not needed |
-| `scheduledusagereport.sh` | Steelcase telemetry — not needed |
-| `gettimestamp.sh` | Steelcase timestamp — not needed |
-| `remove_older_sync_meetings.sh` | Meeting data cleanup — not needed |
-| `runfsck.sh` | Filesystem check at 03:10 — can stall system |
-| `checkformemoryusage.sh` | Java heap monitor — Java removed |
-
-| `adjustbklight.sh` | Backlight on/off schedule — turns screen off at 19:00 |
-
-**Cron jobs kept:**
-
-| Cron job | Purpose |
-|----------|--------|
-| `rotatelogfiles.sh` | Log rotation (every 4h) — prevents disk fill |
-| `cleanupfiles.sh` | Temp file cleanup (every 4h) |
-
-**Services to keep:**
-
-| Service | Purpose |
-|---------|--------|
-| watchdog | Hardware watchdog feeder (`/usr/sbin/watchdog`) — prevents hard-reset |
-| sshd | Remote access |
-| cron | Runs log rotation + backlight schedule |
-| dbus | System message bus |
-| audio-enable | Speaker amplifier GPIO + mixer setup |
-| time-sync | Simple rdate-based time sync at boot |
-| roomwizard-games | Game selector launcher |
-
-**Result:** ~80 MB RAM freed, no unwanted reboots, stable game mode
-
-**Optional:** Remove bloatware files (~178 MB disk space, removes vulnerable Jetty/HSQLDB/Java):
-```bash
-./setup-device.sh 192.168.50.73 --remove
-```
-
-See [`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization) for complete guide including filesystem analysis and security considerations.
-
----
-
-## ARM Cortex-A8 CPU Limitations & Cross-Compilation
-
-> **Key learnings from debugging ScummVM and other statically-linked ARM binaries**
-
-### 1. CPU: ARM Cortex-A8 (ARMv7-A) — No Hardware Integer Divide
-
-The TI OMAP3503 SoC in the RoomWizard uses a Cortex-A8 core (CPU part `0xc08`).
-
-**CPU features:** `half thumb fastmult vfp edsp thumbee neon vfpv3 tls vfpd32`
-
-- **Does NOT support** `sdiv`/`udiv` instructions — these require ARMv7ve (Cortex-A15+)
-- Attempting to execute `sdiv`/`udiv` causes **SIGILL** (Illegal Instruction, exit code 132)
-
-### 2. Cross-Compiler Warning
-
-The Ubuntu 20.04 `arm-linux-gnueabihf-gcc-9` cross-compiler targets `armv7-a` by default. However, its `libgcc.a` contains `sdiv`/`udiv` instructions (**93 occurrences**).
-
-- When linking statically (`-static`), these instructions get pulled into the binary
-- **Dynamically-linked binaries are NOT affected** because the device's own `libgcc` handles division correctly
-- This is **only a problem for static linking**
-
-### 3. Compiler Flags for Static ARM Binaries
-
-The conventional advice is to build with:
-
-```
--mcpu=cortex-a8 -mfpu=neon
-```
-
-so GCC emits software division helpers rather than hardware divide. On this toolchain that turns
-out to make **no difference to the emitted code** — app-level 32-bit `int` division already
-compiles to a call to `__aeabi_idiv`, and the output is byte-identical with and without the
-flags. The flags are harmless and worth keeping for explicitness, but they are not the reason
-the binaries work.
-
-| Component | Flags Used | Reference |
-|-----------|-----------|-----------|
-| Native apps | none — bare `$CC -O2 -static` | [`native_apps/build-and-deploy.sh`](native_apps/build-and-deploy.sh) |
-| ScummVM | `-mcpu=cortex-a8 -mfpu=neon` added to `config.mk` after configure | [`scummvm-roomwizard/build-and-deploy.sh`](scummvm-roomwizard/build-and-deploy.sh) |
-| ARM dependency libraries | zlib, libpng, etc. must also be compiled with these flags | [`scummvm-roomwizard/build-and-deploy.sh`](scummvm-roomwizard/build-and-deploy.sh) |
-
-### 4. Diagnosis Pattern
-
-| Step | Detail |
-|------|--------|
-| **Symptom** | Binary crashes immediately with no output, no log files created |
-| **dmesg** | May not show the trap on this kernel (4.14.52) |
-| **SSH test** | Running directly via SSH shows: `Illegal instruction` (exit code 132) |
-| **Verification** | See below — the raw count is *not* expected to be 0 |
-
-**Checking a binary.** A raw count is misleading: a `-static` glibc binary always carries
-**~45** `sdiv`/`udiv` in *unreachable* libc internals (the `_dl_*` TLS loader,
-`hack_digit`/`_i18n_number_rewrite` printf-locale paths, and the `__aeabi_ldivmod` /
-`__udivmoddi4` 64-bit divmod helpers). Those are byte-identical across known-good deployed
-binaries and never execute.
-
-What must hold is: **no `sdiv`/`udiv` inside the application's own functions.**
-
-```bash
-arm-linux-gnueabihf-objdump -d BIN | grep -B300 'sdiv\|udiv' | grep '^[0-9a-f]* <'
-# Inspect which functions the hits fall in - all should be libc internals from the list above.
-```
-
-App-level 32-bit `int` division compiles to a call to the software `__aeabi_idiv` (no `sdiv`),
-so with the toolchain default this is already satisfied. Verified: emitted code is identical
-with and without `-march`/`-mcpu`/`-mfpu` flags, so those flags are not what saves you here.
-Dynamic linking is unaffected.
-
-### 5. libpng ARM NEON Optimization Issue
-
-When cross-compiling libpng with `-mfpu=neon`, libpng's build system detects NEON support and enables NEON-optimized code paths in the C source. However, the actual NEON assembly implementation files (containing `png_do_expand_palette_rgba8_neon`, `png_riffle_palette_neon`, `png_do_expand_palette_rgb8_neon`, `png_init_filter_functions_neon`) are not compiled in our manual build process. This causes undefined reference linker errors.
-
-**Fix**: Add `-DPNG_ARM_NEON_OPT=0` to CFLAGS when compiling libpng. This disables the NEON optimization paths entirely. The performance impact is negligible for the small PNG icons and UI elements ScummVM uses.
-
----
-
-## Debugging & Rollback
-
-- **Serial console:** UART ttyO1, 115200 baud, 3.3V TTL adapter
-- **Logs:** `/var/log/` (system), `/home/root/log/` (app), `/var/log/browser.{out,err}`, `/var/log/jettystart`
-- **Rollback:** If boot_tracker ≥ 2 → failure mode → `/opt/sbin/fail.sh` runs recovery. Manual: `dd if=original_backup.img of=/dev/sdX bs=4M`
-
----
-
-## Critical Warnings
-
-- **Never** modify `ctrlblock.bin`, bootloader (`mlo`, `u-boot-sd.bin`), or partition sizes without JTAG recovery
-- **Always** regenerate MD5 checksums, feed watchdog, keep backup of original SD card image
-
----
-
-## SoC Identification (Verified)
-
-Every line below was read off a live device (RW09) — nothing here is inferred.
+**What's there.** TI **OMAP3503 ES3.1.2**, GP (general-purpose, non-secure) silicon — the ARM-only
+member of the OMAP34xx family. **No SGX530 GPU, no IVA2 DSP.** The DSS overlay hardware is the only
+graphics acceleration that exists on this part.
 
 ```
 $ cat /sys/devices/soc0/{family,machine,revision,type}
-OMAP3
-OMAP3503
-ES3.1.2
-GP
-
-$ cat /proc/device-tree/model
-Steelcase RoomWizard 20
-
-$ cat /proc/device-tree/compatible
-ti,omap3-rw20   ti,omap3
-
-$ dmesg | head
+OMAP3 / OMAP3503 / ES3.1.2 / GP
+$ dmesg | head -1
 OMAP3503 ES3.1.2 (l2cache neon isp)
-
-$ strings u-boot.bin | grep -E '^(soc|board)='
-soc=omap3
-board=rw20
 ```
 
-**Corroborating evidence** (all OMAP3 addresses; an AM335x uses entirely different ones):
+| | |
+|---|---|
+| CPU | ARM Cortex-A8 (part `0xc08`), 300 MHz base, **600 MHz** with cpufreq scaling active |
+| BogoMIPS | 594.73 |
+| Features | `half thumb fastmult vfp edsp thumbee neon vfpv3 tls vfpd32` |
+| RAM | 239,904 KB (**234 MB**) usable of 256 MB; ~182 MB free in game mode |
+| Swap | 258 MB, unused |
+| Storage | microSD, 3.7 GB usable (SanDisk "Video Buffer" 4 GB, SDHC, UHS-I, **U3**) |
+| NAND | 256 MB, **effectively unused** — see [Boot chain](#4-boot-chain-and-recovery) |
 
-| Block | Address / identifier |
-|-------|----------------------|
-| GPMC | `6e000000` |
-| I2C1 / I2C2 / I2C3 | `48070000` / `48072000` / `48060000` (I2C3 disabled) |
-| UART2 (console `ttyO1`) | `4806c000` |
-| McBSP2 (audio) | `49022000` |
-| Companion PMIC | TWL4030 @ i2c1 `0x48` (AM335x uses TPS65217) |
-| GPIO banks | 6 (AM335x has 4) |
-| MUSB glue | `omap2430` |
-| Serial naming | `ttyO*` (OMAP), not `ttyS*` |
+**Gotcha — this is an OMAP3, not an AM335x.** Worth stating because the two get confused and the
+addresses differ throughout: GPMC `6e000000`; I2C1/2/3 `48070000`/`48072000`/`48060000`; UART2
+`4806c000`; McBSP2 `49022000`; six GPIO banks (AM335x has four); MUSB glue `omap2430`; serial
+naming `ttyO*` not `ttyS*`; companion PMIC TWL4030 (AM335x uses TPS65217).
 
-**What this changes:** OMAP3503 has **no SGX GPU and no IVA2 DSP**. It has an OMAP DSS
-(display subsystem with overlay planes and a scaler), a TWL4030 companion chip (PMIC + audio
-codec + RTC + 16-channel MADC + 18 GPIOs), and an ISP — none of which exist on an AM335x.
-It also means the display stack is `omapfb`/`omapdss`, which has consequences for any kernel
-upgrade (see below).
+**Gotcha — Cortex-A8 has no hardware integer divide.** This shapes every static build. See
+[Building for this device](#6-building-for-this-device).
 
-**What this does NOT change:** the Cortex-A8 core is the same, so all `sdiv`/`udiv`
-cross-compilation guidance in this document remains correct and necessary.
+**The SD card is the entire failure surface**, and therefore the entire recovery story. "Video
+Buffer" is SanDisk's OEM high-endurance line (dashcams, surveillance) — a sensible choice for
+hardware that gets hard power-cycled, and worth matching when cloning to a larger card.
 
----
+### 3.2 Display
 
-## Display Stack: omapfb / omapdss
+**What's there.** Sharp **`LQ070Y3LG4A`** — 7" WVGA TFT, 800×480, LVDS input, LED backlight. The
+vendor DTS `compatible = "sharp,lq070y3lg4a"` is the literal part number. Signal path:
 
 ```
-$ cat /proc/fb
-0 omapfb
-1 omapfb
+OMAP3 DSS (24-bit RGB888 DPI)
+  -> U16 SN65LVDS83B  (parallel RGB -> LVDS)
+    -> 40-pin FFC -> discrete twisted-pair harness
+      -> JAE ~30-position connector (only ~14-16 positions wired: 4 data pairs + clock + power)
+        -> Sharp T-CON board "K5784TP"
+             60153F00B0 timing controller  +  JRC A770 gamma buffer
+          -> panel
+```
 
-$ cat /sys/class/graphics/fb0/name
-omapfb
+The panel is a **separate, field-replaceable module** and Sharp was still producing it in 2018 — a
+cracked screen is a repair, not a write-off.
 
-$ readlink -f /sys/class/graphics/fb0/device/driver
-/sys/bus/platform/drivers/omapfb
+**How to drive it.** `/dev/fb0`, memory-mapped, double-buffered. Legacy **omapfb + omapdss**:
 
+```
+$ cat /proc/fb            -> 0 omapfb / 1 omapfb   (CONFIG_FB_OMAP2_NUM_FBS=2; we only use fb0)
 $ ls /dev/dri /sys/class/drm
 (neither exists - there is no DRM/KMS on this device at all)
 ```
 
-This is the **legacy omapfb + omapdss** stack. Two framebuffers are registered
-(`CONFIG_FB_OMAP2_NUM_FBS=2`); the project only ever uses `fb0`.
+Backlight: `/sys/class/leds/backlight/brightness`, 0–100.
 
-### Panel timings — recovered, and worth preserving
+**Gotcha — bpp is per-app and set at runtime.** `/dev/fb0`'s format is whatever the running app
+last selected via `FBIOPUT_VSCREENINFO`:
 
-The board's device tree contains **no timing block**: the timings were compiled into a vendor
-panel driver (`sharp,lq070y3lg4a`) whose source is not in any tree we have. omapdss exposes them
-at runtime, so they were recovered from the live device before anything could change:
+| App | bpp |
+|---|---|
+| `app_launcher` | **32bpp XRGB8888** — set on startup *and* after every child exits |
+| `game_selector` | 32bpp, but only after a child exits |
+| `device_tools`, `hardware_config`, `unified_calibrate` | **never set it** — open bug, see `IMPROVEMENT_PLAN.md` B1 |
+| ScummVM, VNC session | **16bpp RGB565**, to halve write bandwidth |
+
+`native_apps/common/framebuffer.c` writes `uint32_t` per pixel and is **32bpp-only**. When
+screenshotting, decode at the bpp of whatever was running: `ssh root@<ip> cat /dev/fb0 > fb.raw`
+then `fb565_to_png.py fb.raw fb.png` (defaults to 32bpp; `--bpp 16` for ScummVM/VNC). One 32bpp
+frame is 800×480×4 = 1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is
+why a wrong-bpp decode looks size-correct while producing garbage.
+
+**Visible area: ~800×455.** The bezel hides **10–15 px on the top and bottom edges only**, and
+effectively nothing left or right. Measured on two devices. All four `SCREEN_SAFE_MARGIN_*_DEFAULT`
+are `0`, which is very nearly right.
+
+> **The constraint that actually binds interactive layout is digitizer reach, not the bezel.**
+> Touch is not reported in the outer ~10 px left/right, ~26 px top, ~35 px bottom. Keep touch
+> targets inside that; decoration can go to the edge.
+
+**Panel timings — recovered, and worth preserving.** The device tree contains no timing block; the
+timings were compiled into a vendor panel driver whose source does not exist in any tree we have.
+omapdss exposes them at runtime, so they were read off a live device before anything could change:
 
 ```
 $ cat /sys/devices/platform/omapdss/display0/timings
 33230770,800/40/88/128,480/9/26/9
 ```
 
-Decoded (omapdss format: `pixclock,hactive/hfp/hbp/hsw,vactive/vfp/vbp/vsw`):
-
 | Parameter | Value |
-|-----------|-------|
+|---|---|
 | Pixel clock | **33,230,770 Hz** |
-| Horizontal | 800 active / 40 front porch / 88 back porch / 128 sync → **htotal 1056** |
-| Vertical | 480 active / 9 front porch / 26 back porch / 9 sync → **vtotal 524** |
+| Horizontal | 800 active / 40 front / 88 back / 128 sync → **htotal 1056** |
+| Vertical | 480 active / 9 front / 26 back / 9 sync → **vtotal 524** |
 | Refresh | 33230770 / (1056 × 524) = **60.05 Hz** |
 | Bus format | 24-bit RGB888 DPI (`data-lines = <24>`) |
 | Panel GPIOs | pwrdn `gpio1[14]`, lvds `gpio1[15]`, backlight `gpio1[19]` — all active-high |
 
-**Why this matters:** with these numbers the panel needs no custom driver on any kernel — it
-becomes a stock `panel-dpi` / `panel-simple` node with a `panel-timing {}` block. This was the
-single hardest blocker to any future kernel work, and it is now recorded here rather than living
-only inside a binary on a 2018 SD card.
+With these numbers the panel needs no custom driver on any kernel: it reduces to a stock
+`panel-dpi` / `panel-simple` node with a `panel-timing {}` block. This was the single hardest
+blocker to any future kernel work, and it now lives here rather than only inside a binary on a
+2018 SD card.
 
-### DSS overlay planes — present, unused, and the biggest free win available
+**DSS overlay planes — present and unused.** Three overlays with an independent hardware scaler:
 
 ```
 $ ls /sys/devices/platform/omapdss/
-display0  manager0  manager1  overlay0  overlay1  overlay2  ...
+display0  manager0  manager1  overlay0  overlay1  overlay2
 
 overlay0: name=gfx   enabled=1  manager=lcd  input_size=800,480  output_size=800,480  zorder=0  global_alpha=255
 overlay1: name=vid1  enabled=0
 overlay2: name=vid2  enabled=0
-manager0: lcd   trans_key_enabled=0   alpha_blending_enabled=0
-manager1: tv    display=<none>
-/dev/video0  = omap_vout (V4L2 output)
+manager0: lcd  trans_key_enabled=0  alpha_blending_enabled=0
+manager1: tv   display=<none>
+/dev/video0 = omap_vout (V4L2 output)
 ```
 
 Each overlay exposes `input_size`, `output_size`, `position`, `zorder`, `global_alpha` and
 `pre_mult_alpha`; the manager exposes `trans_key_enabled` (colour keying) and
-`alpha_blending_enabled`. Because `input_size` and `output_size` are independent, **the DSS
-scaler performs arbitrary hardware up/downscaling**.
+`alpha_blending_enabled`. **Because input and output sizes are independent, the DSS performs
+arbitrary hardware scaling** — on a GPU-less 600 MHz part this is the only graphics acceleration
+available, and nothing in the project uses it. (`omap_vout: failed to allocate DMA Channel for
+video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md` F2.
 
-On a 600 MHz part with no GPU this is the only graphics acceleration that exists, and the project
-currently uses none of it — everything is software-rendered into `fb0`.
-
-> ⚠️ **This is a legacy-omapdss sysfs interface.** It does not exist under `omapdrm`. Anything
+> ⚠️ This is a **legacy omapdss sysfs** interface. It does not exist under `omapdrm`. Anything
 > built on it is cheap today and would need rewriting as DRM atomic plane programming after a
-> kernel jump. See the trade-off in [Kernel Upgrade Assessment](#kernel-upgrade-assessment).
+> kernel jump — see [Kernel policy](#7-kernel-policy).
+
+**As shipped.** X11/Xorg (`Xorg -br -nolisten tcp -nocursor -pn -dpms vt8 :0`, started by
+`/etc/init.d/x11`) hosting a WebKit browser. All removed in game mode; apps render straight to the
+framebuffer.
+
+### 3.3 Touch
+
+**What's there.** A **projected-capacitive** panel on I2C bus 2 at address `0x03`. The controller
+silicon is a **Cypress `CY8CTMG120-56LTXI`** — a PSoC **TrueTouch Multi-Touch Gesture** chip, `IC1`
+on an orange flex marked `EDT REV.A 40-0016-2` (56-QFN, date code `1043`).
+
+> **"Panjit" is the touch-module vendor, not the chip vendor**, despite the kernel driver being
+> called `panjit_ts`. This matters: the CY8CTMG120's I2C register map is published Cypress
+> documentation, so reaching the controller directly is *implementing a documented protocol*, not
+> reverse-engineering an unknown one.
+
+**How to drive it.** evdev at `/dev/input/touchscreen0` (also `/dev/input/event0`). Driver
+`panjit_ts` is out-of-tree. DT node `tsc_panjit@03`: reg `0x03`, IRQ `gpio1[23]` falling, reset
+`gpio1[16]`.
+
+**Gotcha — capture coordinates BEFORE the press event.** The event order is:
+
+```
+ABS_X  ->  ABS_Y  ->  BTN_TOUCH  ->  SYN_REPORT
+```
+
+Read the coordinates on `ABS_X`/`ABS_Y` and latch them; if you wait for `BTN_TOUCH` you get stale
+values. Reference implementation: `native_apps/common/touch_input.c`.
+
+**Coordinate model — per-axis linear, nothing more.** Raw is 12-bit (0–4095), mapped straight to
+the full screen:
+
+```c
+screen_x = (raw_x - raw_min_x) * 799 / (raw_max_x - raw_min_x);
+screen_y = (raw_y - raw_min_y) * 479 / (raw_max_y - raw_min_y);
+```
+
+The panel is linear — a traced border comes out a straight-edged rectangle, no keystone or shear —
+so scale-and-offset per axis is sufficient. There is **no affine transform and no bilinear corner
+correction**, and **bezel margins are NOT applied to touch coordinates** (doing so double-corrects).
+
+**Calibration** lives in `/etc/touch_calibration.conf`, loaded automatically by `touch_init()`:
+
+- Line 1: `raw min_x max_x min_y max_y` — the calibrated raw range, mapped linearly to full screen.
+- Line 2: `UI margins top bottom left right` — for drawing and centering **only**; never moves a touch.
+
+`unified_calibrate` (or Device Tools → CALIBRATION) captures this by tapping 9 crosshairs
+(corners, edges, centre, inset 40 px), least-squares fitting a line per axis, and extrapolating out
+to the true screen edges so the inset targets still reach the corners. A summary shows
+target-vs-landing before saving.
+
+> **ScummVM links its own copy of `touch_input.o`** — rebuild it after changing that file or its
+> touch silently goes stale.
+
+Accuracy: ~3 px at centre, 14–27 px error at the corners before calibration.
+
+**Multi-touch exists in hardware but not in the driver.** `panjit_ts` reports only
+`ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller itself is **2-point multi-touch with
+on-chip gesture recognition** — the vendor factory-test binary `opt/pv02/pv02_app` reads
+`Num_Touch` plus two coordinate pairs and exercises pinch-zoom, two-finger pan and multi-touch
+click. Reaching it means bypassing the driver on `/dev/i2c-2`. Userspace-only, no kernel work.
+Proposal: `IMPROVEMENT_PLAN.md` F6.
+
+**Pressure is declared but untested.** `ABS_PRESSURE` appears in the device's capabilities
+(`capabilities/abs = 1000003` → bits 0, 1, 24) and is discarded by `touch_input.c`. Whether the
+value actually varies has never been run to a conclusion — see
+`native_apps/hardware_test/pressure_test.c`.
+
+**As shipped.** The stock stack used `xinput_calibrator` and `/etc/pointercal.xinput`. Both belong
+to the removed X11 stack and are **not** used by anything current.
+
+### 3.4 Audio
+
+**What's there.** TWL4030 (`U14` TPS65930) HiFi codec driving a **single** metal-can speaker
+(`SPKR1`, ~20 mm) through the HandsfreeL/R class-D bridge.
+
+**There is no microphone, no 3.5 mm jack, and no jack footprint.** Confirmed by teardown. The
+codec registers a capture PCM and exposes 62 mixer controls including `Analog Left Main Mic`,
+`Analog Left Headset Mic`, `AUXL/AUXR`, `TX1`, `TX2` and digital loopback — and the stereo
+`Headset` output path is distinct from the `PreDriv` path that drives the speaker. **All of it goes
+nowhere.** Mono, one small speaker, is a hardware fact and not a driver limitation.
+
+**How to drive it.** ALSA card `rw20`, `hw:0,0` (`twl4030-hifi` ↔ `49022000.mcbsp`). OSS shim at
+`/dev/dsp`, `/dev/audio`, `/dev/mixer`. **GPIO12 must be driven HIGH to unmute the amplifier.**
+
+```
+DAC1 (app rate -> 48000 SRC) -> HandsfreeL Mux (AudioL1) -> HandsfreeL Switch -\
+                              -> HandsfreeR Mux (AudioR1) -> HandsfreeR Switch --> SPKR1
+```
+
+| Control | Range | Use |
+|---|---|---|
+| `DAC1 Digital Fine Playback Volume` | 0..63 | 63 |
+| `DAC1 Digital Coarse Playback Volume` | 0..2 | 0 (0 dB) |
+| `PreDriv Playback Volume` | 0..3 | 0 = mute, 3 = +6 dB |
+
+Boot setup is `/etc/init.d/audio-enable` (→ `rc5.d/S29audio-enable`):
+
+```bash
+echo out > /sys/class/gpio/gpio12/direction
+echo 1   > /sys/class/gpio/gpio12/value
+amixer -c 0 cset name="HandsfreeL Mux" AudioL1
+amixer -c 0 cset name="HandsfreeR Mux" AudioR1
+amixer -c 0 cset name="HandsfreeL Switch" on
+amixer -c 0 cset name="HandsfreeR Switch" on
+```
+
+DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restored by
+`/etc/init.d/alsa-state`.
+
+Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
+(halves OPL synthesis cost), native games 44100 Hz.
+
+**Gotcha — the OSS shim is buggy, in four distinct ways.** All of these are in `snd-pcm-oss`
+emulation, not the hardware. ALSA itself works correctly.
+
+1. **The ~506 ms period stall.** The TWL4030 ALSA driver has a hardware period of ~22,317 frames
+   (~506 ms at 44100). A *blocking* `write()` to `/dev/dsp` stalls for the full ALSA period once
+   the OSS ring fills — not the ~93 ms OSS fragment. Result: 185 ms of audio, 321 ms of silence,
+   repeating — the "bru-bru-bru-KLICK" artifact. **Always open `/dev/dsp` with `O_NONBLOCK`** and
+   handle `EAGAIN` with a ~5 ms sleep. The OSS ring drains at the hardware rate continuously
+   regardless of ALSA period size. Diagnosed with `native_apps/tests/oss_diag.c`.
+2. **Speaker distortion at full scale.** Apply ~50 % software attenuation (`>>1` on int16) before
+   writing. ScummVM does this post-mix.
+3. **ioctls reset each other.** `SNDCTL_DSP_STEREO` is **silently ignored** (returns `rc=0,
+   stereo=1` while the device stays mono — verified with `native_apps/tests/ch_test.c`);
+   `SNDCTL_DSP_SPEED` may reset format and/or channels; `SNDCTL_DSP_SETFMT` may reset speed; and
+   set-ioctl output values may not reflect actual device state. **Workaround:** set SPEED → FMT →
+   CHANNELS in that order, then read back the truth with `SOUND_PCM_READ_RATE`,
+   `SOUND_PCM_READ_BITS`, `SOUND_PCM_READ_CHANNELS`, and use the read-back rate. *Evidence:* at
+   22050 Hz music played at half speed; at 48000 Hz it got proportionally worse (~4×), consistent
+   with `_outputRate` not matching the real device rate. Working implementation:
+   `scummvm-roomwizard/backend-files/oss-mixer.cpp`.
+4. **32-bit `time_t` overflow.** `sizeof(long) == 4`. Never compute
+   `(now.tv_sec - epoch_0) * 1000000L` — baseline timers to *current* time, not epoch zero.
+
+**No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main
+thread and you get a black screen. `SCHED_OTHER` plus the ~500 ms OSS ring is enough.
+
+**As shipped.** The vendor's `init_amixer.sh` never unmutes any mic — corroborating that nothing
+was ever wired to the capture path.
+
+### 3.5 Network and power
+
+**Ethernet.** 10/100 Mbps via `J3` (TE MagJack `1-6605834-1`) and `U15` **SMSC LAN9221** — a
+**MAC+PHY in one package** on the GPMC bus, so there is no separate PHY chip. MAC seen on RW09:
+`00:07:B0:0D:30:53`.
+
+**Power: 802.3af PoE only. There is no barrel jack.** The whole PD front end is on the main board:
+
+| Ref | Part | Role |
+|---|---|---|
+| `J3` | TE MagJack `1-6605834-1` | RJ45 with integrated magnetics and centre taps |
+| `U1` | TI **TPS23750** | 802.3af PD interface **+** DC/DC controller |
+| — | Coilcraft **POE13F-12L** | isolated flyback transformer (Coilcraft's TPS23750 reference part) |
+| `Q1` / `D1` / `U2` | `4848 5BD` / `NHSTQW 3406` / `MT1107` | flyback FET / rectifier / isolated feedback |
+| `U4` | TPS54325-class | secondary-rail buck |
+
+- **A PoE injector or PoE switch port is the only way to power the unit**, on the bench as much as
+  on the wall. Budget for one before planning any out-of-case session.
+- **Class budget is 12.95 W at the PD**, enforced by the TPS23750's class signature. Everything
+  added inside the case draws from it — an XBee at ~50 mA is nothing, a bus-powered USB hard disk
+  is not going to work.
+- The RJ45 is isolated (magnetics in `J3`, transformer isolation in the flyback), so the Ethernet
+  side is safe — but **`J3`'s centre taps carry up to 57 V while powered**.
+
+**Invisible to software.** `/sys/class/power_supply/` shows only `twl4030_ac` and `twl4030_usb`,
+both reading 0 (not connected). Nothing reports PoE state.
+
+**No wireless of any kind is fitted.** No WiFi, no Bluetooth. The 802.15.4 socket is empty — see
+[Serial ports](#312-serial-ports).
+
+### 3.6 USB
+
+**One connector: `J4`, micro-USB, MUSB OTG in host mode.** Working today for keyboards, mice,
+touchpads and game controllers. A micro-USB OTG adapter is required, and a powered hub is
+recommended (the port may not supply enough VBUS).
+
+**There is no second USB port and no unpopulated footprint for one.** The device tree declares two
+EHCI high-speed host ports with their own PHYs and VBUS regulators, and `hsusb2_phy` even carries a
+board-specific reset GPIO (`gpio1[13]`) implying deliberate wiring — but nothing was ever brought
+out to a connector on board revision `550-0204-03`. `CONFIG_USB_EHCI_HCD` and
+`CONFIG_USB_OHCI_HCD` are both unset and `dmesg | grep ehci` is empty. **Even with kernel source,
+enabling EHCI would gain nothing — there is nowhere to plug in.** Recorded so the decision is not
+re-litigated.
+
+**Three problems had to be solved to get host mode working. All three fixes are hacks, and all
+three are load-bearing:**
+
+**Hack 1 — MUSB DMA, patched at runtime through `/dev/mem`.** The OEM kernel has *both*
+`CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` unset, so MUSB init always fails with
+`DMA controller not set` (`-ENODEV`). This is a build defect, not a version problem. The fix writes
+noop stub function pointers into the `dma_init`/`dma_exit` fields of the `omap2430_ops` struct in
+live kernel memory, forcing PIO fallback; the driver then rebinds successfully. Re-applied every
+boot by `/etc/init.d/usb-host` (S90).
+
+**Hack 2 — three cross-compiled kernel modules for Xbox controllers.** `CONFIG_INPUT_JOYSTICK`,
+`CONFIG_INPUT_JOYDEV` and `CONFIG_INPUT_FF_MEMLESS` are all unset, and the Xbox 360 pad
+(`045e:028e`) uses vendor-specific class `ff` rather than HID class `03`, so `usbhid` ignores it.
+Three modules built from matching 4.14.52 source and loaded in order by `/etc/init.d/S89xpad-modules`:
+
+| Module | Size | Purpose |
+|---|---|---|
+| `ff-memless.ko` | 8.4 KB | force-feedback support (xpad dependency) |
+| `joydev.ko` | 19.5 KB | `/dev/input/jsX` interface |
+| `xpad.ko` | 36 KB | Xbox gamepad driver |
+
+Loadable modules work because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`, and
+`CONFIG_MODULE_SIG` is unset.
+
+**Hack 3 — the DTB power-budget patch (`0x32` → `0xfa`).** The DTB embedded in `uImage-system` set
+the MUSB `power` property to `0x32` (50 → **100 mA**), so anything drawing more — an Xbox pad wants
+500 mA — was rejected with `rejected 1 configuration due to insufficient available bus power` when
+connected directly without a hub. The fix binary-patches the DTB *inside* `uImage-system` to `0xfa`
+(250 → **500 mA**), recomputes the uImage CRCs, and writes the image back to `/dev/mmcblk0p1`.
+
+> ⚠️ **This patch does not survive re-imaging.** It is a persistent one-time fix *per SD image* —
+> after any reflash it must be re-applied. Tools: `usb_host/find_dtb.py`, `usb_host/patch_dtb.py`
+> (recomputes CRCs correctly), `usb_host/verify_patch.sh`.
+
+**Supported device types:**
+
+| Device | Driver | Works out of the box |
+|---|---|---|
+| Keyboard, mouse, touchpad, hub | `usbhid` / `hub` (built in) | ✅ |
+| HID gamepad (generic) | `usbhid` | ✅ if HID-compliant |
+| Xbox 360 / One controller | `xpad` (module) | ❌ needs the three modules |
+
+Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
+Touchpad-plus-keyboard combos create two event nodes.
+
+**Verified working:**
+
+```
+musb-hdrc musb-hdrc.0.auto: MUSB HDRC host driver
+hub 1-0:1.0: USB hub found
+input: HID 04d9:a088 as .../input3   (keyboard)
+input: HID 04d9:a088 as .../input4   (mouse)
+input: Microsoft X-Box 360 pad as .../input5
+```
+
+Full technical detail, including MUSB memory addresses, the `omap2430_ops` struct layout, why
+`mmap()` works where `write()` does not, and the approaches that failed:
+[`usb_host/README.md`](usb_host/README.md).
+
+**Application-side input.** All input is evdev (`/dev/input/event0`–`event31`). Native apps use
+`native_apps/common/gamepad.c`, which abstracts touch + USB keyboard + USB mouse + Xbox pad behind
+abstract button IDs (`BTN_ID_UP` … `BTN_ID_BACK`) and is configurable via `/etc/input_config.conf`.
+**New apps should use it rather than reading evdev directly.** ScummVM has an independent evdev
+implementation carrying the same fixes. Analogue stick centre is computed as
+`(axis_min + axis_max) / 2` rather than trusting the kernel-reported value; default dead zone 25 %.
+
+### 3.7 LEDs, backlight and PWM
+
+**What's there.** A **bi-colour red/green** status LED and the panel backlight, all three on true
+`leds-pwm` channels backed by dedicated dmtimers:
+
+```
+pwmchip0 - dmtimer-pwm@9      pwmchip1 - dmtimer-pwm@11      pwmchip2 - dmtimer-pwm@10
+```
+
+```bash
+/sys/class/leds/red_led/brightness     # 0-100, real duty cycle
+/sys/class/leds/green_led/brightness   # 0-100
+/sys/class/leds/backlight/brightness   # 0-100
+```
+
+C implementation: `native_apps/common/hardware.c`. Vendor scripts that still exist:
+`/opt/sbin/backlight/setbacklight.sh`, `/opt/sbin/brightness.sh`, `/opt/sbin/conc_leds.sh`.
+
+**There is no third colour and no light bar on the main indicator** — but driving red and green
+together gives amber, so the effective palette is red / amber / green with smooth crossfade.
+
+Separately, `J7`/`J8` feed **side LED status bars** in the left and right case edges (driven by
+`U22`/`U23`), and `LED1`–`LED5` are discrete SMD indicators on the board itself.
+
+**Gotcha — all three PWM channels are consumed.** There is no spare PWM for a buzzer.
+
+### 3.8 GPIO and pinmux
+
+Six SoC banks of 32, plus the PMIC's and the GPMC's:
+
+```
+gpiochip0    GPIO   0-31    48310000.gpio
+gpiochip32   GPIO  32-63    49050000.gpio
+gpiochip64   GPIO  64-95    49052000.gpio
+gpiochip96   GPIO  96-127   49054000.gpio
+gpiochip128  GPIO 128-159   49056000.gpio
+gpiochip160  GPIO 160-191   49058000.gpio
+gpiochip490  TWL4030 GPIO 490-507   (18 pins)
+gpiochip508  GPMC GPIO 508+         (4 pins)
+```
+
+**Known assignments** (all in bank 1, `gpiochip0`):
+
+| GPIO | Function | Ours? |
+|---|---|---|
+| 12 | Speaker amplifier enable (out, high) | **Yes** — audio unmute |
+| 13 | HSUSB2 PHY reset | No (port is dead) |
+| 14 | LCD panel power-down | No (driver-owned) |
+| 15 | LVDS enable | No (driver-owned) |
+| 16 | Touch controller reset | No (driver-owned) |
+| 17 | Ethernet (SMSC) reset | No (driver-owned) |
+| 19 | LCD backlight enable | No (driver-owned) |
+| 23 | Touch interrupt (active low) | No (driver-owned) |
+| twl | SD card-detect | No |
+
+Currently exported: `gpio12` only.
+
+> ⚠️ **Unclaimed ≠ usable.** The pinmux node configures only ten function groups — `backlight`,
+> `dss_dpi`, `gpmc`, `green_led`, `red_led`, `hsusb_otg`, `i2c1`, `i2c2`, `mmc1_cd`, `uart2`. Every
+> other SoC ball sits at ROM default and may not reach a pad at all. **The 18 TWL4030 GPIOs are the
+> safer expansion target** — they are guaranteed real chip pins.
+
+**`debugfs` is not mounted**, which is why `/sys/kernel/debug/gpio` is unavailable. Mounting it
+gives the definitive pin-by-pin label/direction/value dump and should be step one of any GPIO work.
+
+### 3.9 I2C
+
+| Bus | Address | Device |
+|---|---|---|
+| 1 (`48070000.i2c`) | `0x48` | **TWL4030 PMIC** (multi-function) |
+| 1 | `0x49`–`0x4b` | dummy placeholders |
+| 2 (`48072000.i2c`) | `0x03` | **Touch controller** (Cypress CY8CTMG120) |
+| 3 (`48060000.i2c`) | — | `status = "disabled"` |
+
+**Gotcha — do not scan bus 1.** The vendor's own factory-test wrapper warns its light-sensor probe
+can hang the bus, and bus 1 carries the PMIC. There is nothing to find there anyway (see
+[Not present](#314-what-is-not-present)).
+
+**TWL4030 subsystems**, all on the one chip: audio codec (`twl4030-codec`), battery-charger
+interface (`twl4030-bci`), 18-pin GPIO expander, RTC (`twl_rtc`), USB transceiver
+(`twl4030-usb`), and the MADC.
+
+**TWL4030 blocks declared in the DT but with no driver compiled:** two general PWMs, `pwmled`
+(LEDA/LEDB), a matrix keypad controller, `pwrbutton`, `bci`, and its own watchdog. The
+`pwm`/`pwmled` outputs are the natural place to hang a piezo buzzer — but that needs both a kernel
+option (blocked) and a wire.
+
+### 3.10 RTC and hold-up
+
+```
+Device:  /dev/rtc0
+Driver:  twl_rtc (TWL4030 integrated)
+```
+
+Working correctly — `hwclock -r` matches `date`, and `setup-device.sh` already does `hwclock -w`
+after `rdate`.
+
+**Hold-up is a supercapacitor, not a battery.** `U17` is a Panasonic/Matsushita **"Gold Cap"
+5.5 V 0.47 F** supercap (`GC5.5V0.47F`). MADC channel 9 reads **3184 mV**, meaning the cap is
+charged — not that a cell is healthy.
+
+- **Nothing to replace on a schedule and no leakage risk** — there is no chemistry to exhaust.
+  Supercaps age (ESR climbs, capacitance falls) over decades, not years. One less worry on
+  eight-year-old hardware.
+- **But hold-up is hours-to-days, not months.** **Expect the clock to be wrong after any extended
+  unplugged period.** That is why `setup-device.sh` does time-sync at boot, and it means anything
+  trusting the RTC across a shelf-storage gap needs a sanity check rather than blind faith.
+
+### 3.11 ADC and temperature (TWL4030 MADC)
+
+Present, working, and used by nothing in this project.
+
+```
+/sys/bus/iio/devices/iio:device0 -> 48070000.i2c:twl@48:madc
+
+in_temp1_input   = 56          # SoC die temperature, degrees C
+in_voltage0..15_{raw,mean_raw,input}
+  ch2..ch7  = 7..122 mV        # ADCIN2..ADCIN7 - general-purpose, idle, available
+  ch9       = 3184 mV          # VBKP - the RTC supercap
+  ch12      = 3266 mV          # VBAT
+```
+
+`CONFIG_TWL4030_MADC=y` and the driver probes cleanly at boot. `in_voltage*_mean_raw` gives free
+hardware averaging. **Six general-purpose analogue inputs sitting idle** is the cheapest path to
+real analogue input on this device — the catch is getting a wire to one, see
+[Unpopulated and expansion](#24-unpopulated-and-expansion). Proposal: `IMPROVEMENT_PLAN.md` F4.
+
+### 3.12 Serial ports
+
+| DT node | Linux | Address | Status |
+|---|---|---|---|
+| `serial@4806a000` (UART1) | — | `0x4806a000` | **disabled** — do not probe |
+| `serial@4806c000` (UART2) | `/dev/ttyO1` | `0x4806c000` | **okay** — the console |
+| `serial@49020000` (UART3) | — | `0x49020000` | **disabled** — the radio port |
+
+**`ttyO1` is the console:** 115200 8N1, kernel console output plus a **root login shell already
+running** (`/etc/inittab`: `O1:12345:respawn:/bin/start_getty 115200 ttyO1 vt102`, and `ttyO1` is
+in `/etc/securetty`). U-Boot prints there too with `bootdelay=1` — a one-second window to reach the
+`rw20 #` prompt. Physically it comes out at **`P4`** at RS-232 levels — pinout in
+[Unpopulated and expansion](#24-unpopulated-and-expansion).
+
+> **The serial console is deliberately not used by this project.** The recovery loop is: pull the
+> SD card, reimage, DHCP, SSH. Since the rules in §1 keep NAND and U-Boot untouched, the card *is*
+> the entire failure surface — serial would add boot-time *visibility*, not recovery capability.
+> Revisit only if NAND or U-Boot ever get written. The header is fully characterised, so picking
+> it up later is cheap.
+
+**UART3 is the 802.15.4 / XBee port, and it is dark.** Two independent vendor sources agree:
+
+```
+opt/sbin/RoomWizard-zbgatewayd/readme.txt:
+  ./zbgatewayd /dev/ttyS2 --baud 57600 --stdout --nodaemon --config gateway.conf
+gateway.conf: channelmask 0x07fff800                          # channels 11-26, 2.4 GHz 802.15.4
+              tclinkkey 5a6967426565416c6c69616e63653039      # "ZigBeeAlliance09"
+
+opt/pv02/pv02_app  - full XBee AT-command implementation on /dev/ttyS2:
+  ATID (PAN ID)  ATCH (channel 0x0B-0x1A)  ATMY (source addr)  ATDL (dest addr)
+  "Start an XBee Loopback Test ... Latency = %iusec"
+conc_xbeespam.sh   - runs `pv02_app 8 spam` as a burn-in test
+```
+
+Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial@49020000`. Under
+4.14 that node is `status = "disabled"` **and has no pinmux entry** (the pinmux declares only
+`uart2`). `/dev/ttyS0..3` exist as stale nodes with nothing bound. Enabling it is a DTB edit —
+conceivable without kernel source, since the DTB is appended to `uImage-system` and this project
+already binary-patches it, but adding a whole pinmux node is materially harder than the one-word
+power patch and is **unproven**. Proposal: `IMPROVEMENT_PLAN.md` F5.
+
+### 3.13 Watchdogs
+
+**Two independent watchdogs. Keep one, disable the other.**
+
+**Hardware — OMAP WDT2. Keep it.**
+
+```
+/dev/watchdog, /dev/watchdog0 (OMAP WDT, rev 0x31), /dev/watchdog1
+Timeout:  60 seconds
+Daemon:   /usr/sbin/watchdog, started by /etc/init.d/watchdog
+Config:   /etc/watchdog.conf  (feeds the timer only; test-binary and repair-binary commented out)
+Enable:   /etc/default/watchdog -> run_watchdog=1
+Feed:     ~1 s (daemon default)
+```
+
+Low-overhead and it prevents hard resets. **Once opened it must be fed continuously** — any app
+that owns the screen for long periods must keep feeding it.
+
+**Steelcase software watchdog — cron-based. MUST DISABLE.**
+
+```
+*/5 * * * * /opt/sbin/watchdog/watchdog.sh
+```
+
+`watchdog.sh` → `watchdog_test.sh` checks whether HSQLDB, Jetty and the browser are running and
+whether the browser log is fresh. Any failure exits 100–112, `watchdog_repair.sh` runs, and when
+repair fails it calls `/sbin/reboot`. There is a grace period of roughly 65 minutes of "repeat
+failure in grace period" before it gives up.
+
+**In game mode those services are all absent, so this reboots the device every ~70 minutes.**
+
+The bypass is built in — `watchdog_test.sh` skips every check when the state file is missing:
+
+```bash
+if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
+    # only perform application level checks when the state file is there
+```
+
+`setup-device.sh <ip>` handles this: creates `/var/watchdog_test`, comments out the cron job, and
+backs the original crontab up to `/var/crontab.steelcase.bak`.
+
+### 3.14 What is not present
+
+**Confirmed absent:**
+
+- ❌ **WiFi / Bluetooth** — no radio of any kind fitted.
+- ❌ **Ambient light sensor** — and none is possible. The vendor factory test has a light-sensor
+  step (`functionaltest.sh` → `pv02_app 5`, strings `Tests the Light sensor`, `/dev/i2c-1`,
+  `Brightness: %u`), and it is absent from the 4.14 device tree — which is why this sat as an
+  unverified maybe for a long time. The full teardown settles it: no sensor part, **and no
+  aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so ambient
+  sensing is impossible on this SKU regardless of what is populated. The factory test is shared
+  firmware across a product family. **Do not probe bus 1 looking for it.**
+- ❌ **Microphone, and any audio input path to the outside** — no MEMS mic, no electret, no
+  acoustic port. See [Audio](#34-audio).
+- ❌ **3.5 mm jack**, and no unpopulated footprint for one.
+- ❌ **Second USB port**, and no footprint. See [USB](#36-usb).
+- ❌ **Occupancy / PIR / proximity sensor** — a grep of the entire vendor rootfs for
+  `rfid|nfc|badge.?reader|PIR|occupancy|proximity|motion.?sensor` returns nothing. RoomWizard 2.0
+  detects presence by people tapping the screen.
+- ❌ **Badge / NFC / RFID reader** — not on this model.
+- ❌ **Camera** — the ISP block is enabled in the DT but no sensor is declared and no driver module
+  exists on disk.
+- ❌ **Accelerometer.**
+- ❌ **Second SD slot** — `mmc@480ad000` and `mmc@480b4000` are both `status = "disabled"`.
+- ❌ **Video output** — no HDMI or VGA. A composite/CVBS encoder exists in the SoC and `manager1:
+  tv` is present in omapdss, but no connector is known to be routed. Unverified.
+- ❌ **Hardware RNG** — `/dev/hwrng` exists but `rng_current = none` (not bound on GP silicon). Use
+  `/dev/urandom`.
+
+**Present but unusable without a kernel rebuild** (which is out of scope — see
+[Kernel policy](#7-kernel-policy)):
+
+- ⚠️ **SPI** — four controllers (`spi@48098000`, `@4809a000`, `@480b8000`, `@480ba000`) are all
+  `status = "okay"` in the DT, but **`CONFIG_SPI` is not set**, so `/sys/bus/spi/` does not exist.
+  No children declared.
+- ⚠️ **EHCI USB host** — see [USB](#36-usb). Doubly dead: no kernel support *and* no connector.
 
 ---
 
-## Boot Chain & U-Boot Environment (Verified)
+## 4. Boot chain and recovery
+
+### 4.1 The chain
 
 ```
 OMAP3 ROM
@@ -1157,22 +875,37 @@ OMAP3 ROM
        mlo (50,336 B)  ->  u-boot.bin (467,696 B)
  └─> U-Boot 2015.07 (Dec 13 2021), board=rw20, soc=omap3
        bootcmd: mmc dev 0; mmc rescan;
-                cb_getinfo 0x82000000        <-- custom cmd, READS ctrlblock.bin from FAT
+                cb_getinfo 0x82000000        <-- custom command, READS ctrlblock.bin from FAT
                 if cb_boot_mode == "system":    run loadsysimage; run sysboot
                 if cb_boot_mode == "bootstrap": loadramfs + uimage-bootstrap
  └─> uImage-system (5,225,796 B)
        = 64 B legacy uImage header + zImage (5,158,728 B) + APPENDED DTB (67,004 B @ 0x4eb788)
        CONFIG_ARM_APPENDED_DTB=y  -> there is no separate .dtb file anywhere
- └─> Linux 4.14.52, root=/dev/mmcblk0p6 (ext4)
+ └─> Linux 4.14.52, root=/dev/mmcblk0p6 (ext4 driver, ext3 filesystem)
 ```
 
-### NAND is effectively unused
+### 4.2 Partitions
 
-There **is** NAND (Micron MT29F2G16ABBEAHC, 256 MiB SLC, 16-bit, BCH8), but only `mtd0` holds
-anything. Everything else reads as blank (`ff ff ff ff ...`):
+| Partition | Type | Size | Mount | Contents |
+|---|---|---|---|---|
+| p1 | FAT32 | 70.6 MB | `/var/volatile/boot` | `mlo`, `u-boot.bin`, `uImage-system`, `ctrlblock.bin`. **The DTB is inside `uImage-system`** — no separate `.dtb` file exists. |
+| p2 | ext3 | 256 MB | `/home/root/data` | Application data |
+| p3 | ext3 | 250 MB | `/home/root/log` | System logs |
+| p5 | ext3 | 1500 MB | `/home/root/backup` | Firmware backup, incl. `factory/` upgrade images + `.md5` files |
+| p6 | ext3 | ~981 MB | `/` | Root filesystem |
+
+> **Gotcha — p6 is ext3, mounted by the ext4 driver.** U-Boot passes `rootfstype=ext4` and the ext4
+> driver happily mounts the ext3 filesystem. **Do not reformat it as ext4.**
+
+Live usage: root 47 % used (474 MB free), data 40 %, log 4 %.
+
+### 4.3 NAND is effectively unused
+
+There **is** NAND (`U13`, Micron MT29F2G16ABBEAHC, 256 MiB SLC, 16-bit, BCH8), but only `mtd0`
+holds anything. Everything else reads blank (`ff ff ff ff ...`):
 
 | Partition | Size | Contents |
-|-----------|------|----------|
+|---|---|---|
 | `mtd0` boot | — | 12 KB Nuvation redirector (the u-boot slot @0x80000 is blank) |
 | `mtd1` nandkernel | 11 M | **blank** |
 | `mtd2` sdkernel | 11 M | **blank** |
@@ -1180,20 +913,20 @@ anything. Everything else reads as blank (`ff ff ff ff ...`):
 | `mtd4` scratch | 11 M | **blank** — 11 MB of free space that survives an SD reflash |
 | `mtd5` controlblock | 4 M | **blank** |
 
-So this is a **pure SD-boot device with a 12 KB NAND shim**. The only irreplaceable non-SD
-component is that shim, and there is no reason to ever write to it.
+**This is a pure SD-boot device with a 12 KB NAND shim.** That shim is the only irreplaceable
+non-SD component, and there is no reason ever to write to it. (Writing `/dev/mtd4` is safe;
+`mtd0` is not.)
 
-### The U-Boot environment cannot be persisted
+### 4.4 The U-Boot environment cannot be persisted
 
-`u-boot.bin` contains `setenv`, `printenv`, `editenv` and `showvar` but **no `saveenv`**
-(verified: zero occurrences of the string). It is built `CONFIG_ENV_IS_NOWHERE`. Consistent with
-the absence of `fw_printenv`/`fw_setenv` on the device, no `/etc/fw_env.config`, and no `environ`
-MTD partition.
+`u-boot.bin` contains `setenv`, `printenv`, `editenv` and `showvar` but **no `saveenv`** — verified,
+zero occurrences of the string. It is built `CONFIG_ENV_IS_NOWHERE`, consistent with the absence of
+`fw_printenv`/`fw_setenv` on the device, no `/etc/fw_env.config`, and no `environ` MTD partition.
 
 > **You cannot brick this device through the bootloader environment.** Every reset restores the
 > compiled-in defaults verbatim. Anything typed at the `rw20 #` prompt is a one-shot experiment.
 
-Recovered default environment:
+Recovered defaults:
 
 ```
 bootdelay=1                      # 1 second to interrupt into the "rw20 # " prompt
@@ -1213,57 +946,83 @@ bootscript=echo Running bootscript from mmc ...; source ${loadaddr}
 Available commands include `ext4load`, `tftpboot`, `usb`, `i2c`, `mmc`, `nboot`, plus the custom
 `cb_getinfo`.
 
-> Note: `boot.scr` support is compiled in but **`bootcmd` never calls it**. Dropping a `boot.scr`
-> on p1 does *not* override the boot. Overrides require the serial prompt or replacing
-> `uImage-system` itself.
+> **Gotcha — `boot.scr` is a trap.** Support is compiled in but **`bootcmd` never calls it**.
+> Dropping a `boot.scr` on p1 does *not* override the boot. Overrides require the serial prompt or
+> replacing `uImage-system` itself.
 
-### `boot_tracker` / recovery mode
+### 4.5 Control block and `boot_tracker`
+
+**Binary:** `/opt/sbin/ctrlblk` · **Storage:** `ctrlblock.bin`, 28 bytes, on FAT32 p1 — not in
+NAND, not in the U-Boot environment.
+
+| Field | Values |
+|---|---|
+| `boot_from` | `bootstrap` \| `system` |
+| `upgrade_type` | `factory` \| `field` |
+| `boot_tracker` | 0–2 (failure counter) |
+| `fwversion` | firmware version string |
 
 Verified behaviour:
 
-- It lives in **`ctrlblock.bin`, 28 bytes, on FAT32 p1** — not in NAND, not in the U-Boot env.
 - U-Boot's `cb_getinfo` **only reads** it, setting `cb_boot_mode`, `cb_upgrade_type`,
   `cb_boot_tracker`. It never writes.
-- It is incremented/reset only by **userspace**: `/opt/sbin/ctrlblk`, driven by
-  `/etc/init.d/ctrlblk` (`S40ctrlblk`). That script only acts when
-  `BOOTMODE=system && TRACKER==1`, i.e. the boot immediately after a firmware upgrade.
-- **`/opt/sbin/fail.sh` does not exist on this device** — the automatic recovery path referenced
-  elsewhere in this document is already broken//removed.
+- It is incremented or reset only by **userspace** `/opt/sbin/ctrlblk`, driven by
+  `/etc/init.d/ctrlblk` (`S40ctrlblk`), which acts only when `BOOTMODE=system && TRACKER==1` —
+  i.e. the single boot immediately after a firmware upgrade.
+- **`/opt/sbin/fail.sh` does not exist on this device.** The automatic recovery path that older
+  notes referred to is already dismantled.
 
-**Therefore: a kernel that fails to boot does not increment `boot_tracker` and does not trigger
-recovery mode.** U-Boot prints `Failure to load system kernel image`, `bootcmd` falls through,
-and you land at the `rw20 #` prompt.
+> **Therefore a kernel that fails to boot does not increment `boot_tracker` and does not trigger
+> recovery mode.** U-Boot prints `Failure to load system kernel image`, `bootcmd` falls through,
+> and you land at the `rw20 #` prompt. Nothing has changed state.
 
-### Kernel integrity checking
+### 4.6 Integrity checking — what is and is not verified
 
-No `.md5` files exist on p1. The MD5 scheme documented earlier guards the **upgrade package**
-(`sd_rootfs_part.img.md5` etc. on p5 `/home/root/backup/factory/`) and is checked by scripts
-inside the bootstrap ramdisk. The only integrity gate on `uImage-system` is the uImage header
-CRC + data CRC, which `usb_host/patch_dtb.py` already recomputes correctly. Nothing is signed.
+**Nothing is cryptographically signed. There is no secure boot.**
 
-### Recovery procedure (JTAG not required)
+- **No boot-time MD5 verification of the kernel.** The only integrity gate on `uImage-system` is
+  its uImage header CRC + data CRC — which `usb_host/patch_dtb.py` recomputes correctly, which is
+  why the DTB patch works at all.
+- **No `.md5` files exist on p1.**
+- The MD5 scheme that *does* exist guards the **upgrade package** on p5
+  (`/home/root/backup/factory/`), and is checked by scripts inside the bootstrap ramdisk, in three
+  layers: the whole package (`upgrade.cpio.gz.md5`); each partition image
+  (`sd_rootfs_part.img.md5`, `sd_boot_archive.tar.gz.md5`, `sd_data_part.img.md5`,
+  `sd_log_part.img.md5`); and a post-write read-back comparison after each `dd`, with up to 3
+  retries per partition and exit code 6 on final failure.
 
-Three independent layers:
+If you modify anything inside that upgrade tree, regenerate the checksums:
+
+```bash
+cd /path/to/modified/images
+for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done
+```
+
+### 4.7 Recovery
+
+**Three independent layers. JTAG is not one of them.**
 
 **Layer 1 — the untouched-kernel trick (zero-cost rollback).** `bootcmd` is hardcoded to
 `fatload ... uImage-system`. Stage experiments under a *different filename* and leave
 `uImage-system` alone; a failed experiment is undone by a power cycle.
 
-**Layer 2 — serial console.** `bootdelay=1` gives a 1-second window to reach `rw20 #`.
-Linux `ttyO1` = the SoC's physical **UART2 @ `0x4806c000`**, 115200 8N1, 3.3 V TTL.
-(OMAP3 UART1 @ `0x4806a000` is `status="disabled"` — do not probe the wrong pads.)
-A root login shell is already available there: `/etc/inittab` has
-`O1:12345:respawn:/bin/start_getty 115200 ttyO1 vt102`, and `ttyO1` is in `/etc/securetty`.
+**Layer 2 — pull the card.** The whole system is on removable microSD (`mmcblk0`, root
+`mmcblk0p6`). `dd` a known-good backup back, roughly 10 minutes. **This is the working recovery
+loop for this project:** pop the card, reimage, set up DHCP, SSH back in.
+
+**Layer 3 — the serial console**, if you ever wire it up. `bootdelay=1` gives a one-second window
+to `rw20 #`; a root shell is already running there. Not used by this project — see
+[Serial ports](#312-serial-ports).
 
 ```sh
 # 1. Host, once: full SD backup
 sudo dd if=/dev/sdX of=roomwizard-original-4gb.img bs=4M status=progress
 md5sum roomwizard-original-4gb.img | tee roomwizard-original-4gb.img.md5
 
-# 2. Stage the new kernel under a NEW name on p1 (never overwrite uImage-system)
+# 2. Stage a new kernel under a NEW name on p1 (never overwrite uImage-system)
 sudo mount /dev/sdX1 /mnt/boot && sudo cp uImage-test /mnt/boot/ && sudo umount /mnt/boot
 
-# 3. Attach serial, power on, press a key within 1 s -> "rw20 # "
+# 3. With serial attached: power on, press a key within 1 s -> "rw20 # "
 mmc dev 0
 mmc rescan
 fatload mmc 0 0x82000000 uImage-test
@@ -1277,272 +1036,270 @@ bootm 0x82000000
 cp uImage-system uImage-system-known-good && cp uImage-test uImage-system
 ```
 
-**Layer 3 — pull the card.** The whole system is on a removable SD (`mmcblk0`, root
-`mmcblk0p6`). `dd` the backup back (~10 min).
-
 > **JTAG is required only if you damage the 12 KB NAND redirector (`mtd0`) or write a bad
-> `mlo`/`u-boot.bin` to p1.** Rule: never write to `/dev/mtd*`, and never touch `mlo`,
-> `u-boot.bin`, `u-boot-sd.bin`, or `ctrlblock.bin` on p1. Observe that and JTAG never comes up.
+> `mlo`/`u-boot.bin` to p1.** Observe the rules in [§1](#the-rules-that-prevent-a-brick) and it
+> never comes up. `P3` appears to be a TI-14 JTAG header if it ever does.
 
-**Un-de-risked item:** the physical location and pinout of the UART header is **not documented
-anywhere**. See [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md).
+**Logs** live in `/var/log/` (system), `/home/root/log/` (application),
+`/var/log/browser.{out,err}` and `/var/log/jettystart`.
 
 ---
 
-## Kernel Upgrade Assessment
+## 5. Software stack
 
-**Conclusion: do not upgrade the kernel. Do not attempt a mainline port.**
+### 5.1 As shipped
 
-### Why a version jump is off the table
+```
+Linux 4.14.52 (SysVinit)
+  -> X11 / Xorg
+    -> WebKit browser (Epiphany), home page http://localhost/frontpanel/pages/index.html
+      -> Jetty 9.4.11  (/opt/jetty-9-4-11/, init script /etc/init.d/webserver)
+        -> OpenJRE 8   (/opt/openjre-8/)
+          -> Steelcase room-booking application
+            -> HSQLDB 2.0.0  (/home/root/data/rwdb/)
+            -> Interbase     (/opt/interbase/data/websign.gdb, legacy)
+```
 
-The running kernel cannot be rebuilt from anything available. `usb_host/linux-4.14.52/` is
-**vanilla upstream kernel.org 4.14.52**, not Steelcase source. Two symbols in the device's own
+This entire stack is removed or disabled in game mode. Java 8 still exists at `/opt/openjre-8/` if
+something needs it; Python requires cross-compiled ARM binaries.
+
+### 5.2 As we run it — game mode
+
+Native apps render straight to the framebuffer, so X11, the browser, Jetty, Java and the databases
+are all unnecessary — and the Steelcase software watchdog reboots the device roughly hourly if they
+are simply *absent* without being disabled properly. `setup-device.sh <ip>` does all of this.
+
+**Result: ~80 MB RAM freed, no unwanted reboots, stable game mode.** Optionally
+`setup-device.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
+Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
+
+**Init services disabled:**
+
+| Service | Why |
+|---|---|
+| `webserver`, `jetty` | Jetty wrapper + servlet container — not needed |
+| `browser` | Epiphany/WebKit — games use the framebuffer |
+| `x11` | Xorg — games use the framebuffer |
+| `hsqldb` | Room-booking database — not needed |
+| `snmpd` | SNMP monitoring — not needed |
+| `vsftpd` | FTP server — not needed, security risk |
+| `nullmailer` | Mail relay — not needed |
+| `ntpd` | Replaced by the `time-sync` init script |
+| `startautoupgrade` | Steelcase OTA upgrades — not needed |
+
+**Cron jobs disabled:**
+
+| Job | Why |
+|---|---|
+| `watchdog.sh` | **Root cause of the ~70-minute reboots** — monitors the absent Steelcase stack |
+| `get_time_from_server.sh` | Steelcase NTP — fails repeatedly, spams logs |
+| `sync_clocks.sh` | SW/HW clock sync — spams "time difference" messages |
+| `rotatedbtables.sh` | HSQLDB table rotation — database removed |
+| `backup.sh` | Steelcase data backup |
+| `scheduledusagereport.sh` | Steelcase telemetry |
+| `gettimestamp.sh` | Steelcase timestamp |
+| `remove_older_sync_meetings.sh` | Meeting data cleanup |
+| `runfsck.sh` | Filesystem check at 03:10 — can stall the system |
+| `checkformemoryusage.sh` | Java heap monitor — Java removed |
+| `adjustbklight.sh` | Backlight schedule — turns the screen off at 19:00 |
+
+**Kept:**
+
+| Item | Purpose |
+|---|---|
+| `watchdog` | Hardware watchdog feeder — prevents hard resets |
+| `sshd` | Remote access |
+| `cron` | Runs the two surviving jobs |
+| `dbus` | System message bus |
+| `audio-enable` | Speaker amplifier GPIO + mixer setup |
+| `time-sync` | `rdate`-based time sync at boot (matters — see [RTC](#310-rtc-and-hold-up)) |
+| `roomwizard-games` | App launcher |
+| `rotatelogfiles.sh` (cron, 4 h) | Log rotation — prevents disk fill |
+| `cleanupfiles.sh` (cron, 4 h) | Temp file cleanup |
+
+Full guide including filesystem analysis and security considerations:
+[`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization).
+
+### 5.3 App launcher and manifests
+
+`/etc/init.d/roomwizard-app` reads `/opt/roomwizard/default-app` and **respawns that binary
+whenever it exits** — which is how quitting a game returns you to the launcher.
+
+`app_launcher` scans `/opt/roomwizard/apps/*.app` manifests and renders them as a touch grid.
+Manifest format is INI: `name=`, `exec=`, `icon=` (PPM P6), `args=` (one of `fb,touch` / `fb` /
+`touch` / `none`). **Each component's deploy script writes its own manifests and icons** — that is
+how projects plug into the launcher with no central registry.
+
+Device paths worth knowing:
+
+```
+/opt/games/                  native binaries
+/opt/roomwizard/apps/        .app manifests
+/opt/roomwizard/icons/       PPM icons
+/opt/roomwizard/default-app  boot target
+```
+
+---
+
+## 6. Building for this device
+
+Everything cross-compiles on the host and deploys over SSH. **There is no CI, no test runner and no
+lint** — the "tests" are interactive on-device diagnostic tools.
+
+Toolchain: `arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM
+additionally needs WSL Ubuntu 20.04+ and `g++-arm-linux-gnueabihf`.
+
+### 6.1 Cortex-A8 has no hardware integer divide
+
+The core does **not** implement `sdiv`/`udiv` (those need ARMv7ve, Cortex-A15 and later).
+Executing one raises **SIGILL** — the binary dies instantly with exit code 132, no output, no log
+files. `dmesg` may not even show the trap on 4.14.52.
+
+The conventional advice is to build with `-mcpu=cortex-a8 -mfpu=neon`. **On this toolchain that
+makes no difference to the emitted code** — app-level 32-bit `int` division already compiles to a
+call to the software helper `__aeabi_idiv`, and the output is byte-identical with and without the
+flags (verified). Keep them for explicitness, but they are not what saves you.
+
+| Component | Flags actually used |
+|---|---|
+| Native apps | none — bare `$CC -O2 -static` ([`native_apps/build-and-deploy.sh`](native_apps/build-and-deploy.sh)) |
+| ScummVM | `-mcpu=cortex-a8 -mfpu=neon` added to `config.mk` after configure |
+| ARM dependency libraries | same flags as ScummVM |
+
+**Checking a binary — the raw count is NOT expected to be zero.** A `-static` glibc binary always
+carries **~45** `sdiv`/`udiv` in *unreachable* libc internals: the `_dl_*` TLS loader, the
+`hack_digit` / `_i18n_number_rewrite` printf-locale paths, and the `__aeabi_ldivmod` /
+`__udivmoddi4` 64-bit divmod helpers. These are byte-identical across known-good deployed binaries
+and never execute.
+
+What must hold is: **no `sdiv`/`udiv` inside the application's own functions.**
+
+```bash
+arm-linux-gnueabihf-objdump -d BIN | grep -B300 'sdiv\|udiv' | grep '^[0-9a-f]* <'
+# Every hit should land in one of the libc internals listed above.
+```
+
+Dynamic linking is unaffected — the device's own `libgcc` handles division correctly. This is
+**only** a static-linking concern.
+
+### 6.2 Never use `--whole-archive` with `-lpthread`
+
+It pulls in all of glibc 2.31's pthread init, which calls `clock_gettime64` — ARM syscall 403,
+added in kernel 5.1. This device runs 4.14.52, gets `-ENOSYS`, then dereferences a NULL VDSO
+pointer: **SIGSEGV before `main()`**, with no output and no log. The `dmesg` signature is
+`PC is at 0x40` with `r0 : ffffffda`.
+
+Plain `-lpthread` is fine. The native C apps escape this only because they never link pthread.
+
+### 6.3 Cross-compiled dependencies must be built from source
+
+Ubuntu Focal under WSL cannot do armhf multiarch — `dpkg --add-architecture armhf` fails and the
+standard mirrors carry no armhf. This is why ScummVM and the VNC client each build their own zlib,
+libpng and libjpeg into a local prefix.
+
+**libpng needs `-DPNG_ARM_NEON_OPT=0`.** With `-mfpu=neon`, libpng's build system detects NEON and
+enables NEON code paths in the C source — but the actual NEON assembly files
+(`png_do_expand_palette_rgba8_neon`, `png_riffle_palette_neon`,
+`png_do_expand_palette_rgb8_neon`, `png_init_filter_functions_neon`) are not compiled by our manual
+build, producing undefined-reference link errors. Disabling the paths costs nothing measurable for
+the small PNGs in use.
+
+### 6.4 Verify artifacts on disk, not config flags
+
+Generated `config.mk` / `config.h` files go stale. A leftover `USE_PNG = 1` once made the build
+compile `image/png.cpp` with no `libpng.a` present. **Test for the `.a`, not the flag.**
+
+### 6.5 Software rendering techniques that paid off
+
+ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reused the same set:
+
+- precomputed palette LUTs
+- a precomputed source-column table plus row-pointer lifting, to remove per-pixel division
+- border-only clearing
+- skipping `fb_swap` entirely on unchanged frames
+- 16bpp RGB565 to halve write bandwidth
+- NEON `vst1q_u16` 8-pixel blits
+- row deduplication via an L1-resident temp row (~57 % of scaled rows are duplicates)
+
+---
+
+## 7. Kernel policy
+
+**Do not rebuild or upgrade the kernel. Do not attempt a mainline port.** This is a settled
+decision, recorded so it is not re-litigated.
+
+**The running kernel cannot be rebuilt from anything available.** `usb_host/linux-4.14.52/` is
+**vanilla upstream kernel.org 4.14.52**, not Steelcase source. Three things in the device's own
 `/proc/config.gz` have no counterpart in it:
 
 | Symbol | Status in vanilla 4.14.52 |
-|--------|---------------------------|
+|---|---|
 | `CONFIG_TOUCHSCREEN_PANJIT=y` | **Does not exist.** Vanilla has only `TOUCHSCREEN_USB_PANJIT`, a different USB driver. No `panjit*.c` in the tree. |
 | `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | **Does not exist.** No `panel-sharp-lq070y3lg4a.c` upstream, ever. |
 | `arch/arm/boot/dts/omap3-rw20.dts` | **Does not exist.** |
 
-`build-xpad-module.sh` runs `olddefconfig`, which silently drops both symbols. That is harmless
-for building `.ko` modules, but it means **a kernel image built from this repo would boot with no
-display and no touchscreen.** Build provenance (from u-boot strings) is a Yocto build by
-eInfochips for Steelcase; `/etc/issue` reads `SteelCase RW20 Embedded Platform (Yocto) 3.1.4`.
+`build-xpad-module.sh` runs `olddefconfig`, which silently drops the first two. Harmless for
+building `.ko` modules — but it means **a kernel image built from this repo would boot with no
+display and no touchscreen.** Obtaining the vendor's GPL source would unblock a rebuild;
+**pursuing that has been explicitly ruled out.**
 
-Obtaining the vendor's GPL source would unblock a rebuild. **This project has explicitly decided
-not to pursue that route**, so every option below assumes the kernel binary is fixed as-is.
-
-### What is board-specific vs. mainline
-
-Only three things are genuinely un-portable: the board DTS, `panjit_ts`, and the panel driver.
+**Only three things are genuinely un-portable:** the board DTS, `panjit_ts`, and the panel driver.
 Everything else is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc,
-`ti,omap-twl4030` audio). And the panel is no longer a blocker now that its timings are recorded
-above — it reduces to a stock `panel-dpi` node.
+`ti,omap-twl4030` audio). And the panel is no longer a blocker now that its timings are recorded in
+[Display](#32-display) — it reduces to a stock `panel-dpi` node.
 
-### Why upgrading would be a net loss anyway
+**Upgrading would be a net loss anyway:**
 
-| Hoped-for benefit | Reality on this device |
+| Hoped-for benefit | Reality here |
 |---|---|
-| Working ALSA instead of the buggy OSS shim | **ALSA already works.** Card `rw20`, `twl4030-hifi ↔ 49022000.mcbsp`, all mainline drivers, `hw:0,0` present. The bug is in the `snd-pcm-oss` emulation layer. **Fix is pure userspace, on this kernel, zero risk.** |
-| Better USB host / DMA | A **kernel config defect**, not a version problem: `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` are *both* unset, which is why MUSB fails with `DMA controller not set`. Unfixable without source — the existing `/dev/mem` runtime patch stays. |
+| Working ALSA instead of the buggy OSS shim | **ALSA already works.** The bug is in the `snd-pcm-oss` emulation layer. **Fix is pure userspace, on this kernel, zero risk.** |
+| Better USB host / DMA | A **kernel config defect**, not a version problem. Unfixable without source; the `/dev/mem` runtime patch stays. |
 | PREEMPT_RT / lower latency | Currently `PREEMPT_NONE`, `HZ=100`. Config-only, and 4.14 has an official `-rt` branch. Unfixable without source. |
 | DRM/KMS instead of fbdev | **Net negative — see below.** |
 | Modern WiFi dongle support | No WiFi hardware. 4.14 already carries `rtl8xxxu`, `rtl8192cu`, `mt7601u`, `ath9k_htc`. |
 | Security patches | LAN-only device, no browser, no untrusted input. |
 
-### The DRM/KMS trap (the decisive argument)
-
-`omapfb` and `omapdss` were deprecated across the 4.x series and **removed from mainline during
-5.x**; the replacement for OMAP3 display is `omapdrm` (a DRM/KMS driver). Under `omapdrm` you get
-`/dev/fb0` only via `CONFIG_DRM_FBDEV_EMULATION`, and **DRM's fbdev emulation exposes a fixed
-pixel format**.
-
-This project switches bpp at runtime:
-
-- [`native_apps/common/framebuffer.c`](native_apps/common/framebuffer.c) `fb_set_bpp()` issues
-  `FBIOPUT_VSCREENINFO` with a new `bits_per_pixel`.
-- `app_launcher` forces **32bpp** on startup and after every child exits.
-- ScummVM and `vnc_client` force **16bpp RGB565** to halve write bandwidth.
-
-Under DRM fbdev emulation that runtime switch is expected to fail, which would break ScummVM and
-the VNC client until both are rewritten against DRM dumb buffers — on top of hand-writing a board
-DTS and reverse-engineering the `panjit_ts` protocol.
+**The DRM/KMS trap is the decisive argument.** `omapfb` and `omapdss` were deprecated across 4.x
+and **removed from mainline during 5.x**; the OMAP3 replacement is `omapdrm`, a DRM/KMS driver.
+Under `omapdrm` you get `/dev/fb0` only via `CONFIG_DRM_FBDEV_EMULATION`, and **DRM's fbdev
+emulation exposes a fixed pixel format**. This project switches bpp at runtime in three different
+components ([Display](#32-display)), so that switch is expected to fail — breaking ScummVM and the
+VNC client until both are rewritten against DRM dumb buffers, on top of hand-writing a board DTS
+and reverse-engineering `panjit_ts`. The DSS overlay sysfs interface, the best free performance win
+available, disappears too. And a 6.x kernel has a materially larger footprint on a 234 MB box.
 
 > **Verification status:** that the *current* stack supports runtime bpp switching is verified
 > (`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running). That DRM fbdev
-> emulation would *reject* it is a well-founded expectation based on how DRM fbdev emulation
-> works — but it could **not** be tested here, because this device has no DRM at all. Treat it as
-> a strong prior, not a measurement.
+> emulation would *reject* it is a well-founded expectation based on how that emulation works, but
+> it could **not** be tested here — this device has no DRM at all. Treat it as a strong prior, not
+> a measurement.
 
-Add to that: a 6.x kernel has a materially larger footprint on a 234 MB box, and the DSS overlay
-sysfs interface (the best free performance win available) disappears.
-
-### Recommendation
-
-Stay on 4.14.52. Treat this as a **userspace** problem with a kernel-config footnote. The two
-highest-value items — ALSA audio and DSS overlays — both require no kernel work whatsoever.
-
-**Brick risk for kernel work: LOW** (removable SD + untouched-`uImage-system` discipline).
-**Value: LOW.** Ratio does not justify it.
+**Brick risk for kernel work: LOW** (removable SD plus the untouched-`uImage-system` discipline).
+**Value: LOW.** The ratio does not justify it. Treat this as a userspace problem with a
+kernel-config footnote: the two highest-value improvements available — ALSA audio and DSS
+overlays — need no kernel work at all.
 
 ---
 
-## Unused Hardware & Untapped Capabilities
+## Appendix A: photo index
 
-Discovered 2026-07-29 by read-only audit of a live device plus the vendor factory-test scripts in
-`partitions/`. Ranked by payoff-to-effort. Items needing a kernel rebuild are marked
-**[BLOCKED]** — no kernel source, see above.
+17 images in [`HardwarePhotos/`](HardwarePhotos/), from the 2026-07-30 teardown of `RW29 1G-093`.
+`Top-*` is the face toward the screen; `Bottom-*` is the face toward the rear cover — the one
+carrying the SoC, RAM, NAND, Ethernet, PoE and all the headers.
 
-### 1. DSS overlay planes — free hardware scaling and alpha compositing
+The photos are stored in **Git LFS**. A clone made without `git lfs install` gets pointer stubs
+instead of JPEGs; `git lfs pull` repairs it.
 
-Fully described in [Display Stack](#display-stack-omapfb--omapdss). Pure userspace, no kernel
-work, no hardware risk. **Start here.** Ideas:
-
-- Render a game at 400×240 into `fb1` and let the DSS scale it 2× to 800×480 — a quarter of the
-  pixel fill cost for the same visual size. Directly applicable to ScummVM and the VNC client.
-- Use `vid1` as an alpha-blended HUD plane above the game plane (`zorder` + `global_alpha`) —
-  score bars, pause menus and modal dialogs composited for free, with no redraw of the layer beneath.
-- `trans_key_enabled` gives colour-key sprite transparency at zero CPU cost.
-- `/dev/video0` (`omap_vout`) accepts YUV with hardware colour-space conversion, making a video
-  player plausible. Note `omap_vout: failed to allocate DMA Channel for video-1` at boot — needs
-  investigation.
-
-### 2. TWL4030 MADC — a thermometer and six free analogue inputs
-
-```
-/sys/bus/iio/devices/iio:device0 -> 48070000.i2c:twl@48:madc
-in_temp1_input     = 56        # die temperature
-in_voltage0..15_{raw,mean_raw,input}
-ch9  = 3184 mV   # VBKP - RTC backup cell, fitted and charged
-ch12 = 3266 mV   # VBAT
-ch2..ch7 = 7..122 mV   # ADCIN2..ADCIN7, general-purpose, idle
-```
-
-Readable with `cat` **today**. Ideas: SoC temperature in Device Tools (ten minutes' work);
-a potentiometer on one ADC channel as an analogue paddle for Pong/Breakout — two channels plus
-`/dev/dsp` is a complete analogue controller with no USB involved.
-
-### 3. ~~Ambient light sensor — auto-backlight~~ [CLOSED — no such hardware]
-
-Removed 2026-07-30. See the entry under [Hardware NOT Present](#hardware-not-present): the teardown
-found no sensor **and no aperture** — the enclosure is light-tight, so auto-backlight and
-light-as-input games are both off the table. Time-of-day dimming remains possible with no hardware
-(RTC + `/sys/class/leds/backlight/brightness`).
-
-### 4. Multi-touch via direct I2C
-
-The controller is 2-point multi-touch with on-chip gestures; the driver flattens it. Bypass via
-`/dev/i2c-2` (device tree node `tsc_panjit@03`: reg `0x03`, IRQ `gpio1[23]` falling, reset
-`gpio1[16]`). Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher gestures.
-Userspace-only — no kernel work.
-
-**The silicon is a Cypress `CY8CTMG120-56LTXI`** (identified from the teardown photos — see
-[`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#display-and-touch--new-part-numbers)), a PSoC
-**TrueTouch Multi-Touch Gesture** controller. "Panjit" is the touch-module vendor, not the chip
-vendor. This upgrades the difficulty of this item from *reverse-engineer an unknown protocol* to
-*implement a documented one* — the TrueTouch I2C register map is published Cypress material.
-`pv02_app` (which reads `Num_Touch` plus two coordinate pairs) remains a useful cross-check.
-
-### 5. 802.15.4 / ZigBee radio on UART3 — RoomWizard-to-RoomWizard multiplayer
-
-Two independent vendor sources agree on port and baud:
-
-```
-opt/sbin/RoomWizard-zbgatewayd/readme.txt:
-  ./zbgatewayd /dev/ttyS2 --baud 57600 --stdout --nodaemon --config gateway.conf
-gateway.conf: channelmask 0x07fff800   # channels 11-26, the 2.4 GHz 802.15.4 band
-              tclinkkey 5a6967426565416c6c69616e63653039   # "ZigBeeAlliance09"
-
-opt/pv02/pv02_app (factory test) contains a full XBee AT-command implementation on /dev/ttyS2:
-  ATID (PAN ID)  ATCH (channel, 0x0B-0x1A)  ATMY (source addr)  ATDL (dest addr)
-  "Start an XBee Loopback Test ... Latency = %iusec"
-conc_xbeespam.sh runs `pv02_app 8 spam` as a burn-in test.
-```
-
-Legacy `/dev/ttyS2` under the vendor's 2.6 kernel = OMAP **UART3** = `serial@49020000`.
-
-**Blocker under 4.14:**
-
-```
-serial@4806a000 (UART1): status = "disabled"
-serial@4806c000 (UART2): status = "okay"      # ttyO1, the 115200 debug console
-serial@49020000 (UART3): status = "disabled"  # the radio port
-pinmux@30 declares: backlight, dss_dpi, gpmc, green_led, red_led, hsusb_otg,
-                    i2c1, i2c2, mmc1_cd, uart2      <- no uart1/uart3 pinmux
-```
-
-`/dev/ttyS0..3` exist as stale nodes but nothing is bound.
-
-**Possible without kernel source:** the DTB is *appended* to `uImage-system`, and this project
-**already binary-patches it** (`usb_host/patch_dtb.py`, which correctly recomputes the uImage
-CRCs). Flipping `serial@49020000` to `status="okay"` and adding a `uart3` pinmux entry is
-therefore conceivable as a DTB edit. Adding a whole new pinmux node to a compiled DTB is
-materially harder than the existing one-word power-budget patch, and this is **unproven** — but
-it does not require kernel source, and the recovery story is the untouched-`uImage-system` trick.
-
-**Prerequisite: confirm the module is physically populated** — see
-[`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md). It may have been a paid SKU option.
-
-**Payoff if it works:** a wireless link between RoomWizards with no network involved — two-player
-games across a corridor, high-score sync, presence beacons.
-
-### 6. Two EHCI high-speed USB host ports **[BLOCKED — needs kernel rebuild]**
-
-The device tree declares a full USB host controller with two ports, each with its own transceiver
-and VBUS regulator:
-
-```
-usbhshost@48064000/  port1-mode = "ehci-phy"   port2-mode = "ehci-phy"
-  ehci@48064800   ohci@48064400
-pinmux@30/hsusb2_phy: compatible = "usb-nop-xceiv", gpios = <&gpio1 13 0>, vcc-supply = <&hsusb2_vbus>
-hsusb1_power_reg / hsusb2_power_reg: regulator-fixed, "hsusb1_vbus" / "hsusb2_vbus"
-```
-
-`hsusb2_phy` carries a **board-specific reset GPIO** (`gpio1[13]`), which generic OMAP3 `.dtsi`
-includes do not add — so port 2 at minimum was wired deliberately by Steelcase.
-
-But: `# CONFIG_USB_EHCI_HCD is not set` and `# CONFIG_USB_OHCI_HCD is not set`. `dmesg | grep ehci`
-returns nothing.
-
-This is frustrating, because the entire `usb_host/` MUSB-OTG effort (three cross-compiled modules,
-a DTB power-budget patch, a `/dev/mem` runtime struct patch) exists to work around a port that may
-not have been the right one. **Without kernel source this cannot be enabled.** Recorded here so the
-decision is not re-litigated: if vendor source ever surfaces, this is the first thing to turn on.
-
-### 7. Smaller items
-
-- **NAND `mtd4` "scratch", 11 MB, blank and unused.** Free storage that survives an SD reflash —
-  a natural home for high scores and save games. (Writing to `/dev/mtd4` is safe; `mtd0` is not.)
-- **LEDs are true PWM.** `red_led`, `green_led` and `backlight` are `leds-pwm` on dedicated
-  dmtimer PWM channels, so 0–100 is a real duty cycle. There is **no third colour and no light
-  bar** — it is a bi-colour red/green LED, but driving both gives amber, so the effective palette
-  is red / amber / green with smooth crossfade. All 3 PWM channels are consumed, so there is no
-  spare PWM for a buzzer.
-- **RTC is battery-backed and working correctly.** `twl_rtc`, `hwclock -r` matches `date`,
-  and MADC ch9 confirms the backup cell is alive at 3.18 V. Already handled correctly by
-  `setup-device.sh` (`hwclock -w` after `rdate`). No action needed.
-- **TWL4030 has unused blocks** declared in its DT node: 2 general PWMs, `pwmled` (LEDA/LEDB),
-  a matrix keypad controller, `pwrbutton`, `bci`, and its own watchdog. None have drivers compiled.
-  The `pwm`/`pwmled` outputs would be the natural place to hang a piezo buzzer — but that needs
-  both a kernel option **[BLOCKED]** and a wire.
-- **Audio: a stereo `Headset` output path exists**, distinct from the `PreDriv` path that drives
-  the mono speaker. If a 3.5 mm jack footprint exists, better audio may be one mixer change away.
-- **`debugfs` is not mounted**, which is why `/sys/kernel/debug/gpio` is unavailable. Mounting it
-  gives the definitive pin-by-pin label/direction/value dump and should be the first step of any
-  GPIO expansion work.
-
-### GPIO map (derived from the live device tree)
-
-All bank 1 (`gpiochip0`, base 0):
-
-| GPIO | Function | Used by project? |
-|------|----------|------------------|
-| 12 | Speaker amplifier enable (out, high) | **Yes** — audio unmute |
-| 13 | HSUSB2 PHY reset | No (port is dead — see §6) |
-| 14 | LCD panel power-down | No (driver-owned) |
-| 15 | LVDS enable | No (driver-owned) |
-| 16 | Touch controller reset | No (driver-owned) |
-| 17 | Ethernet (SMSC) reset | No (driver-owned) |
-| 19 | LCD backlight enable | No (driver-owned) |
-| 23 | Touch interrupt (active low) | No (driver-owned) |
-| twl | SD card-detect | No |
-
-**Free:** GPIO 18, 20, 21, 22, 24–31 in bank 1, effectively all of banks 2–6 (32–191), and all
-18 TWL4030 GPIOs (490–507).
-
-> ⚠️ Unclaimed ≠ usable. The pinmux node configures only `backlight`, `dss_dpi`, `gpmc`,
-> `green_led`, `red_led`, `hsusb_otg`, `i2c1`, `i2c2`, `mmc1_cd` and `uart2`. Every other SoC ball
-> is left at ROM default and may not reach a pad. **The TWL4030 GPIOs are the safer expansion
-> target** — they are guaranteed real chip pins.
-
----
-
-## Related Documentation
-
-- [Improvement Plan](IMPROVEMENT_PLAN.md) — prioritised bug + feature backlog
-- [Hardware Inspection Checklist](HARDWARE_INSPECTION.md) — physical checks needed on the unit
-- [Native Apps](native_apps/README.md)
-- [USB Host Mode](usb_host/README.md)
-- [ScummVM Backend](scummvm-roomwizard/README.md)
-- [Commissioning](COMMISSIONING.md)
+| File | Shows |
+|---|---|
+| [`Top-Overwiev.jpg`](HardwarePhotos/Top-Overwiev.jpg) | **Complete top face**, unobstructed — `P3`/`P4`, `U27`, `J1`, `J7`/`J8`, `J3`, 40-pin FFC |
+| [`Top-Left-Top.jpg`](HardwarePhotos/Top-Left-Top.jpg), [`Top-Top-Middle.jpg`](HardwarePhotos/Top-Top-Middle.jpg), [`Top-right-bottom.jpg`](HardwarePhotos/Top-right-bottom.jpg) | Top-face details |
+| [`Bottom-Overview.jpg`](HardwarePhotos/Bottom-Overview.jpg) | **Complete bottom face** |
+| [`Bottom-Top-Right.jpg`](HardwarePhotos/Bottom-Top-Right.jpg) | `J5`/`J6` XBee socket, `P3`/`P4` through-holes, `LED1`–`4`, `U32` |
+| [`Bottom-Top-Left2.jpg`](HardwarePhotos/Bottom-Top-Left2.jpg), [`Bottom-Center.jpg`](HardwarePhotos/Bottom-Center.jpg), [`Bottom-Bottom-Left.jpg`](HardwarePhotos/Bottom-Bottom-Left.jpg), [`Bottom-Bottom-Right.jpg`](HardwarePhotos/Bottom-Bottom-Right.jpg) | Bottom-face details; PoE section; `SPKR1` |
+| [`Connectors-reset-button.jpg`](HardwarePhotos/Connectors-reset-button.jpg) | Rear case edge — RJ45, micro-USB, unidentified slot, reset pinhole |
+| [`Touch-Connector-Probably.jpg`](HardwarePhotos/Touch-Connector-Probably.jpg) | Touch flex, `IC1` Cypress `CY8CTMG120`, `U25` |
+| [`Screen-Controller.jpg`](HardwarePhotos/Screen-Controller.jpg), [`display_controller_closeup.jpg`](HardwarePhotos/display_controller_closeup.jpg) | Sharp T-CON `K5784TP` and its silicon |
+| [`display_back_overview.jpg`](HardwarePhotos/display_back_overview.jpg) | LCD module rear — part-number labels, JAE connector, harness |
+| [`display_screen.jpg`](HardwarePhotos/display_screen.jpg) | Bare LCD module removed from the bezel |
+| [`bezel_with_touch_screen.jpg`](HardwarePhotos/bezel_with_touch_screen.jpg) | Bezel inner face — screw bosses, side LED bars, **no light aperture** |

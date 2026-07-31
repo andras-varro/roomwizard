@@ -497,6 +497,10 @@ native_games/build/*
 *.raw
 *.png
 *.jpg
+# ...except the teardown photos indexed in SYSTEM_ANALYSIS.md Appendix A.
+# These are tracked via Git LFS - see .gitattributes.
+!HardwarePhotos/*.jpg
+!HardwarePhotos/*.png
 .deps/
 *.o
 

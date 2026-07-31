@@ -354,7 +354,7 @@ While in there, fix the reported OSS bugs so the ALSA version doesn't inherit th
 - `oss-mixer.cpp:298` the emergency anti-underrun `write()` ignores errors and partial writes.
 
 **Update 2026-07-30 — the output is mono, permanently.** The teardown confirmed **one** speaker
-(`SPKR1`), **no** 3.5 mm jack and **no** jack footprint (`HARDWARE_INSPECTION.md` §E). So the
+(`SPKR1`), **no** 3.5 mm jack and **no** jack footprint (`SYSTEM_ANALYSIS.md#34-audio`). So the
 codec's `Headset` stereo path goes nowhere, and the two stereo-related bugs above are best fixed by
 **committing to mono end-to-end** rather than by making the interleaved-stereo bookkeeping correct.
 Also closes the microphone-as-input idea: there is no mic on the board and no acoustic port.
@@ -373,8 +373,12 @@ Suggested order:
 2. **HUD plane.** Enable `overlay1` (`vid1`) above the game plane with `zorder` + `global_alpha`
    for score bars, pause menus and modal dialogs — composited free, no redraw underneath.
 3. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
+4. **Video playback**, speculatively. `/dev/video0` (`omap_vout`, V4L2 output) accepts YUV with
+   hardware colour-space conversion, which makes a video player plausible on a part that could
+   never software-decode one. Furthest from proven of the four.
 
-Also investigate `omap_vout: failed to allocate DMA Channel for video-1` at boot.
+Also investigate `omap_vout: failed to allocate DMA Channel for video-1` at boot — it may be
+exactly what blocks item 4.
 
 ⚠️ This is a **legacy omapdss** interface. It is cheap now and would need rewriting as DRM atomic
 plane code if the kernel ever changed — which, per current policy, it won't.
@@ -383,7 +387,7 @@ plane code if the kernel ever changed — which, per current policy, it won't.
 
 Was: a wall display at 100% backlight in a dark corridor at 3 am is a genuine annoyance.
 
-**Closed by** [`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#d-ambient-light-sensor) §D. The
+**Closed by** [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md#314-what-is-not-present). The
 full teardown (bezel separated from LCD and board) found **no sensor and — decisively — no
 aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so a sensor
 would have nothing to sense even if one were populated. The vendor factory test's I2C-bus-1
@@ -404,7 +408,9 @@ Readable with `cat` **today**, zero references in the codebase:
 - `in_temp1_input` — SoC die temperature. Add a readout to Device Tools (~10 minutes).
 - `in_voltage2..7` — six idle general-purpose analogue inputs. A potentiometer on one channel is a
   real analogue paddle for Pong/Breakout; two channels plus `/dev/dsp` is a complete analogue
-  controller with no USB at all. Needs a reachable pad — see `HARDWARE_INSPECTION.md` §G.
+  controller with no USB at all. Needs a reachable pad — see
+  [`SYSTEM_ANALYSIS.md#24-unpopulated-and-expansion`](SYSTEM_ANALYSIS.md#24-unpopulated-and-expansion),
+  which describes the cheap software-side way to map a test point to an ADC channel.
 - `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
 
 ### F5. RoomWizard-to-RoomWizard wireless via the 802.15.4 radio
@@ -434,11 +440,33 @@ what the socket is.
 
 Recovery if the DTB patch misboots: power cycle. `bootcmd` is hardcoded to the untouched
 `uImage-system`, and the SD card can be reimaged — see the recovery discussion in
-[`HARDWARE_INSPECTION.md`](HARDWARE_INSPECTION.md#a-uart--serial-console--highest-priority-declined-2026-07-30).
+[`SYSTEM_ANALYSIS.md#47-recovery`](SYSTEM_ANALYSIS.md#47-recovery).
 
-⚠️ **One check before first power-on with the module inserted:** confirm 3.3 V on `J5` pin 1 and
-GND on pin 10 with the socket empty. The fit is mechanically keyed and pin 1 is dotted, so this is
-belt-and-braces — but an XBee fed reversed dies instantly, and there is only one module.
+**De-risking ladder — the module stays out of the socket until step 4.** `J5` = XBee pins 1–10
+(pin 1 is the dotted end), `J6` = pins 11–20; numbering runs down one strip and back up the other
+like a DIP, so pins 1 and 10 are at opposite ends of `J5`, not across from each other.
+
+1. ~~**Power and ground.**~~ ✅ **Verified 2026-07-30: `J5` pin 1 reads 3.3 V, `J5` pin 10 is
+   ground.** The socket is correctly identified and correctly oriented, and the rail is in spec
+   for an XBee — absolute max is 3.6 V, so a 5 V reading would have been a stop. **Powering the
+   module is safe.** Not checked, and only worth a glance if the module later misbehaves: pin 5
+   (`RESET`) should sit at ~3.3 V released rather than held low, and pin 9 (`SLEEP_RQ`) should not
+   be sitting high.
+2. **Apply the DTB patch, module still out, then measure `J5` pin 3** (`DIN` = the SoC's TX). An
+   idle UART transmitter sits **high**, so a working pinmux shows **~3.3 V** here where a disabled
+   UART3 shows floating or low. **This is the cheapest possible proof that the pinmux entry took
+   effect** — the genuinely unproven part of this item — and it costs nothing if the patch is wrong.
+3. **Insert the module** and try `+++` then `ATID` at **57600 8N1**.
+
+The remaining risk is no longer electrical. An XBee fed reversed dies instantly and there is only
+one module, but that question is now settled — what is still unproven is whether the DTB patch can
+add a `uart3` pinmux node at all, which is exactly what step 2 measures before the module goes in.
+
+**Expect a Series 1 module to be what the vendor assumed.** `ATCH` and a settable `ATMY` are
+802.15.4 (Series 1) commands; on a Series 2 / ZB module `ATMY` is read-only and `ATCH` only reports
+the operating channel. An S2 part will still answer `+++` and `ATID`, which is enough for the
+"does the port work" test — so do not read a partial `AT` response as a wiring fault. Check the
+module label first.
 
 The remaining software work:
 
@@ -585,7 +613,7 @@ been explicitly ruled out.
 | SPI | Four controllers enabled in the DT, `CONFIG_SPI` unset. |
 | USB gadget mode (device as a USB keyboard/serial/ethernet) | No `CONFIG_USB_GADGET`. |
 | Piezo buzzer on TWL4030 PWM | Needs `CONFIG_PWM_TWL` **and** a wire. All 3 dmtimer PWMs are taken. |
-| Mainline 6.x port | Would break runtime bpp switching (ScummVM + VNC), lose the DSS overlay sysfs, and cost RAM. See `SYSTEM_ANALYSIS.md#kernel-upgrade-assessment`. |
+| Mainline 6.x port | Would break runtime bpp switching (ScummVM + VNC), lose the DSS overlay sysfs, and cost RAM. See `SYSTEM_ANALYSIS.md#7-kernel-policy`. |
 
 **Note:** enabling **UART3** for the ZigBee radio (F5) is *not* in this table — it may be reachable
 by patching the appended DTB, which needs no kernel source.
@@ -599,10 +627,11 @@ by patching the appended DTB, which needs no kernel source.
 3. **B15, B16** — stop the scripts from being able to hurt you.
 4. **F1 (ALSA)** — biggest user-visible improvement in the project.
 5. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
-6. ~~**Open the unit once** and work through `HARDWARE_INSPECTION.md` §A and §H together.~~
-   **Done 2026-07-30 — the whole checklist is answered**, except §A, which is **declined**: the
-   console header was located (`P4`, RS-232 behind a MAX3232) but will not be wired up. The
-   recovery loop is **pull the SD card, reimage, DHCP, SSH** — and since the standing rules keep
-   NAND and U-Boot untouched, the card *is* the entire failure surface, so serial would add boot
-   visibility rather than recovery capability. Revisit only if NAND or U-Boot ever get written.
+6. ~~**Open the unit once** and inspect the hardware.~~ **Done 2026-07-30.** Full teardown; every
+   question answered and folded into [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md) (parts inventory,
+   connectors, unpopulated headers, photo index). The serial console is **declined**: `P4` was
+   located and its pinout verified, but the recovery loop is **pull the SD card, reimage, DHCP,
+   SSH** — and since the standing rules keep NAND and U-Boot untouched, the card *is* the entire
+   failure surface. Serial would add boot visibility, not recovery capability. Revisit only if
+   NAND or U-Boot ever get written.
 7. Everything else as appetite allows.

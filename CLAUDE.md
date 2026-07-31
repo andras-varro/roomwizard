@@ -13,15 +13,19 @@ cross-compiled on the dev host and deployed over SSH to a physical device (the
 reference unit is `192.168.50.73`, aka RW09). Verifying a change means deploying it
 and looking at the device screen (framebuffer screenshots via `fb565_to_png.py`).
 
-`SYSTEM_ANALYSIS.md` is the authoritative hardware/firmware reference — read it before
-touching anything hardware-related (audio, USB, watchdog, boot, GPIO, cross-compile).
+**One fact, one home.** Three top-level docs with disjoint jobs — if something appears in two of
+them, the other copy is stale:
 
-Companion docs:
-- `IMPROVEMENT_PLAN.md` — prioritised bug + feature backlog. **Check this before starting
-  work**; it lists known-broken things (with `file:line`) so you don't rediscover them.
-- `HARDWARE_INSPECTION.md` — physical checks that must be done on the unit with a screwdriver
-  (UART header location, whether the ZigBee radio is populated, etc). Several plan items are
-  blocked on these.
+| Doc | Answers | Read it |
+|-----|---------|---------|
+| `SYSTEM_ANALYSIS.md` | *What is true about this device?* — silicon, board, boot chain, OS, traps | Before touching anything hardware-related (audio, USB, watchdog, boot, GPIO, cross-compile) |
+| `IMPROVEMENT_PLAN.md` | *What should we do about it?* — prioritised bug + feature backlog with `file:line` | **Before starting work**, so you don't rediscover a known bug |
+| `CLAUDE.md` (this file) | *What must I know before my first edit?* | Loaded every session |
+
+`SYSTEM_ANALYSIS.md` is organised by subsystem; each one states what's there, how to drive it, the
+gotchas, and (only where it explains the present) how Steelcase shipped it. It also carries the
+full board teardown — parts inventory, connectors, unpopulated headers — and a photo index for
+[`HardwarePhotos/`](HardwarePhotos/).
 
 Each component directory has its own `CLAUDE.md` with authoring guidance for that component
 (`native_apps/`, `scummvm-roomwizard/`, `vnc_client/`); those load automatically when you work
@@ -32,7 +36,7 @@ on files there. Component docs describe **their own code only** — device facts
 not available (the repo's `usb_host/linux-4.14.52/` is vanilla upstream and is missing both
 `panjit_ts` and the panel driver), and requesting it from Steelcase has been explicitly ruled
 out. Anything gated on a kernel config change is out of scope — see
-`SYSTEM_ANALYSIS.md#kernel-upgrade-assessment`.
+`SYSTEM_ANALYSIS.md#7-kernel-policy`.
 
 ## Build & deploy
 
@@ -148,7 +152,7 @@ for how binaries are actually built and shipped.
   **Rules:** never write `/dev/mtd*`; never overwrite `mlo`, `u-boot.bin` or `ctrlblock.bin`
   on p1; stage experimental kernels under a *new* filename and leave `uImage-system` alone —
   `bootcmd` is hardcoded to it, so a power cycle is a free undo. Observe that and JTAG never
-  comes up. Full detail + recovery procedure: `SYSTEM_ANALYSIS.md#boot-chain--u-boot-environment-verified`.
+  comes up. Full detail + recovery procedure: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component engineering rules
 

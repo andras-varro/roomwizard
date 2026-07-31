@@ -69,7 +69,7 @@ Corner zones are gesture-only — all taps in 80px corners are suppressed from t
 
 **Signal path:** OssMixerManager → `/dev/dsp` (O_NONBLOCK, 22050 Hz mono S16_LE) → ALSA OSS shim → TWL4030 DAC1 → HandsfreeL/R → SPKR1  
 **Amp enable:** GPIO12 HIGH (set by `/etc/init.d/audio-enable` at boot)  
-**Hardware audio details:** See [`SYSTEM_ANALYSIS.md#audio`](../SYSTEM_ANALYSIS.md#audio)
+**Hardware audio details:** See [`SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)
 
 **Design choices:**
 - **O_NONBLOCK** — prevents 506 ms ALSA HW-period stall
@@ -275,7 +275,7 @@ Avalanche, Chamber, Cryo/Lost Eden, DM/Dungeon Master, ICB/In Cold Blood, Immort
 Hpl1, Watchmaker — require OpenGL which is not available on the RoomWizard hardware.
 
 ### Build Artifacts Note
-When compiling libpng with `-mfpu=neon`, add `-DPNG_ARM_NEON_OPT=0` to disable libpng's NEON assembly optimizations (the assembly files are not compiled in our manual build, causing linker errors). See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#5-libpng-arm-neon-optimization-issue) for details.
+When compiling libpng with `-mfpu=neon`, add `-DPNG_ARM_NEON_OPT=0` to disable libpng's NEON assembly optimizations (the assembly files are not compiled in our manual build, causing linker errors). See [`SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source) for details.
 
 ## Memory Budget
 
