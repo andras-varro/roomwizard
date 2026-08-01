@@ -28,8 +28,9 @@
 
 /* ── Screen constants ───────────────────────────────────────────────────── */
 
-#define SCREEN_W 800
-#define SCREEN_H 480
+/* The logical (visible) screen — the bezel is already excluded from it. */
+#define SCREEN_W (screen_base_width)
+#define SCREEN_H (screen_base_height)
 
 /* ── Page definitions ───────────────────────────────────────────────────── */
 
@@ -763,6 +764,10 @@ int main(int argc, char *argv[]) {
 
     /* ── Framebuffer init ───────────────────────────────────────────── */
     Framebuffer fb;
+    /* The common draw helpers write one uint32 per pixel, so the framebuffer
+     * must be 32bpp — whatever ran last may have left it at 16. */
+    fb_set_bpp("/dev/fb0", 32);
+
     if (fb_init(&fb, "/dev/fb0") != 0) {
         fprintf(stderr, "hardware_diag: failed to init framebuffer\n");
         return 1;

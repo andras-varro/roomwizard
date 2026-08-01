@@ -28,8 +28,14 @@ typedef struct VNCConfig {
 #define WATCHDOG_FEED_INTERVAL_SEC 30
 
 // Display Configuration
-#define SCREEN_WIDTH 800
-#define SCREEN_HEIGHT 480
+//
+// These bound the PHYSICAL panel and exist only to size fixed arrays.  They are
+// NOT the screen size: fb_init() shrinks the drawing surface to the rectangle
+// the bezel leaves visible (800x450 at the shipped 15/15/0/0 margins), so the
+// logical screen is fb->width x fb->height and changes with the bezel config.
+// Always draw and hit-test against those; any logical surface is <= these.
+#define PANEL_MAX_WIDTH  800
+#define PANEL_MAX_HEIGHT 480
 
 // Scaling Modes
 typedef enum {
@@ -94,10 +100,12 @@ typedef enum {
 #define RESPAWN_CONFIG_FILE    "/opt/roomwizard/default-app"
 #define APP_LAUNCHER_PATH     "/opt/roomwizard/app_launcher"
 
-// Reconnect UI button geometry (800×480 screen)
+// Reconnect UI button geometry.  The row is anchored to the bottom of the
+// logical surface at runtime (fb->height - RECONNECT_BTN_BOTTOM_GAP), which
+// keeps it visible and inside the digitizer's reach at any bezel setting.
 #define RECONNECT_BTN_W         160
 #define RECONNECT_BTN_H         44
-#define RECONNECT_BTN_Y         380
+#define RECONNECT_BTN_BOTTOM_GAP 70
 #define RECONNECT_BTN_CANCEL_X   60
 #define RECONNECT_BTN_SETTINGS_X 320
 #define RECONNECT_BTN_CONNECT_X  580

@@ -37,11 +37,18 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `hardware_diag` | Tool | System diagnostics GUI — superseded by `device_tools` (hidden) |
 | `unified_calibrate` | Tool | Touch calibration — superseded by `device_tools` (hidden) |
 | `backlight` | Tool | CLI backlight control (hidden) |
+| `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
+| `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
+| `touch_inject` | Tool | Injects synthetic evdev touch events, `touch_inject <raw_x> <raw_y> [ms]` (hidden) |
 
 Tools marked *hidden* have a `.hidden` marker in `/opt/games/`, so they do not appear in the
 launcher grid but remain runnable over SSH. `usb_test` and `watchdog_feeder` exist as source but
 are **not built or deployed** — USB testing lives in the `device_tools` USB tab, and the system
 `/usr/sbin/watchdog` daemon handles the hardware watchdog.
+
+The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
+does not — run `fbset -depth 32` first if ScummVM or `vnc_client` left it at 16. Stop the launcher
+before running either (`/etc/init.d/roomwizard-app stop`), and start it again afterwards.
 
 ### Device Tools
 

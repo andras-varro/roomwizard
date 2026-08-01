@@ -67,10 +67,6 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _overlayVisible(false),
 	  _shakeXOffset(0),
 	  _shakeYOffset(0),
-	  _bezelTop(0),
-	  _bezelBottom(0),
-	  _bezelLeft(0),
-	  _bezelRight(0),
 	  _touchPointIndex(0) {
 
 	memset(_palette, 0, sizeof(_palette));
@@ -108,8 +104,7 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 
 	_fbInitialized = true;
 
-	// Load bezel calibration(best-effort; zero margins if not present)
-	loadBezelMargins();
+	debug("RoomWizard: framebuffer %dx%d visible", fbWidth(), fbHeight());
 }
 
 void RoomWizardGraphicsManager::closeFramebuffer() {
@@ -128,72 +123,35 @@ void RoomWizardGraphicsManager::blankScreen() {
 	if (!_fbInitialized || !_fb)
 		return;
 	// memset works at any bpp (fb_clear assumes uint32 per pixel)
-	memset(_fb->back_buffer, 0, _fb->screen_size);
+	memset(_fb->back_buffer, 0, _fb->back_buffer_size);
 	fb_swap(_fb);
-}
-
-void RoomWizardGraphicsManager::loadBezelMargins() {
-	// Parse /etc/touch_calibration.conf for bezel margins.
-	// File format (lines starting with # are comments):
-	//   Line 1: tl_x tl_y tr_x tr_y bl_x bl_y br_x br_y   (touch offsets)
-	//   Line 2: bezel_top bezel_bottom bezel_left bezel_right
-	_bezelTop = _bezelBottom = _bezelLeft = _bezelRight = 0;
-
-	FILE *f = fopen("/etc/touch_calibration.conf", "r");
-	if (!f) {
-		debug("RoomWizard: no calibration file - using zero bezel margins");
-		return;
-	}
-
-	char line[256];
-	int dataLines = 0;
-	while (fgets(line, sizeof(line), f)) {
-		if (line[0] == '#' || line[0] == '\n')
-			continue;
-		dataLines++;
-		if (dataLines == 2) {
-			// Second data line contains bezel margins
-			int t, b, l, r;
-			if (sscanf(line, "%d %d %d %d", &t, &b, &l, &r) == 4) {
-				_bezelTop    = t;
-				_bezelBottom = b;
-				_bezelLeft   = l;
-				_bezelRight  = r;
-				debug("RoomWizard: bezel margins loaded T=%d B=%d L=%d R=%d",
-				      _bezelTop, _bezelBottom, _bezelLeft, _bezelRight);
-			}
-			break;
-		}
-	}
-	fclose(f);
 }
 
 void RoomWizardGraphicsManager::getScalingInfo(int &scaledWidth, int &scaledHeight,
                                                 int &offsetX, int &offsetY) const {
-	// The safe display area is the framebuffer minus bezel obstructions.
-	// We scale the game to fill this area preserving aspect ratio.
-	int safeW = 800 - _bezelLeft - _bezelRight;
-	int safeH = 480 - _bezelTop  - _bezelBottom;
+	// The framebuffer's logical size is already the visible rectangle: the bezel
+	// is handled by fb_init()/fb_swap(). Scale the game to fill it preserving
+	// aspect ratio, and centre whatever is left over.
+	const int fbW = fbWidth();
+	const int fbH = fbHeight();
 
 	if (_screenWidth == 0 || _screenHeight == 0) {
-		scaledWidth  = safeW;
-		scaledHeight = safeH;
-		offsetX = _bezelLeft;
-		offsetY = _bezelTop;
+		scaledWidth  = fbW;
+		scaledHeight = fbH;
+		offsetX = 0;
+		offsetY = 0;
 		return;
 	}
 
-	// Scale to fill safe area, maintaining aspect ratio
-	int scaleX = safeW * 256 / _screenWidth;   // fixed-point *256
-	int scaleY = safeH * 256 / _screenHeight;
+	int scaleX = fbW * 256 / _screenWidth;   // fixed-point *256
+	int scaleY = fbH * 256 / _screenHeight;
 	int scale  = (scaleX < scaleY) ? scaleX : scaleY;  // use smaller to fit
 
 	scaledWidth  = (_screenWidth  * scale) / 256;
 	scaledHeight = (_screenHeight * scale) / 256;
 
-	// Center within the safe area, then offset by bezel
-	offsetX = _bezelLeft + (safeW - scaledWidth)  / 2;
-	offsetY = _bezelTop  + (safeH - scaledHeight) / 2;
+	offsetX = (fbW - scaledWidth)  / 2;
+	offsetY = (fbH - scaledHeight) / 2;
 }
 
 bool RoomWizardGraphicsManager::hasFeature(OSystem::Feature f) const {
@@ -243,17 +201,20 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 	// Allocate game surface
 	_gameSurface.create(width, height, _screenFormat);
 
-	// Allocate overlay surface (same size as framebuffer for GUI)
-	_overlaySurface.create(800, 480, Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
+	// Allocate overlay surface (same size as the visible framebuffer, for the GUI)
+	_overlaySurface.create(fbWidth(), fbHeight(), Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
 	// Pre-fill with transparent key so any stale pixels stay transparent
-	{ uint16 *p = (uint16 *)_overlaySurface.getPixels(); for (int i = 0; i < 800*480; i++) p[i] = 0xF81F; }
+	clearOverlay();
 
-	// Notify event source of new game resolution (needed for coordinate transform)
+	// Notify event source of the new game resolution and, now that the
+	// framebuffer exists, of the visible screen size (needed for coordinate
+	// transforms — the event source is constructed before the framebuffer).
 	{
 		int scaledW, scaledH, offX, offY;
 		getScalingInfo(scaledW, scaledH, offX, offY);
 		OSystem_RoomWizard *system = rwSystem();
 		if (system && system->getEventSource()) {
+			system->getEventSource()->syncScreenGeometry();
 			system->getEventSource()->setGameScreenSize(width, height, offX, offY);
 		}
 	}
@@ -453,7 +414,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	if (!_fbInitialized || !_fb || !_gameSurface.getPixels())
 		return;
 
-	// Compute bezel-aware scaled region
+	// Scaled region within the visible framebuffer
 	int scaledW, scaledH, offsetX, offsetY;
 	getScalingInfo(scaledW, scaledH, offsetX, offsetY);
 
@@ -461,34 +422,37 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	offsetX += _shakeXOffset;
 	offsetY += _shakeYOffset;
 
+	const int fbW = fbWidth();
+	const int fbH = fbHeight();
+
 	// (O3+O8) Clear only the border strips — use uint16* for 16bpp fb
 	{
 		uint16 *buf16 = (uint16 *)_fb->back_buffer;
 		// Top strip
 		int topRows = (offsetY > 0) ? offsetY : 0;
 		if (topRows > 0)
-			memset(buf16, 0, topRows * 800 * 2);
+			memset(buf16, 0, topRows * fbW * 2);
 		// Bottom strip
 		int botStart = offsetY + scaledH;
-		if (botStart < 480)
-			memset(buf16 + botStart * 800, 0, (480 - botStart) * 800 * 2);
+		if (botStart < fbH)
+			memset(buf16 + botStart * fbW, 0, (fbH - botStart) * fbW * 2);
 		// Left strip (within scaled rows)
 		int leftCols = (offsetX > 0) ? offsetX : 0;
 		int rightStart = offsetX + scaledW;
-		int rightCols = (rightStart < 800) ? (800 - rightStart) : 0;
+		int rightCols = (rightStart < fbW) ? (fbW - rightStart) : 0;
 		if (leftCols > 0 || rightCols > 0) {
-			for (int y = topRows; y < botStart && y < 480; y++) {
+			for (int y = topRows; y < botStart && y < fbH; y++) {
 				if (leftCols > 0)
-					memset(buf16 + y * 800, 0, leftCols * 2);
+					memset(buf16 + y * fbW, 0, leftCols * 2);
 				if (rightCols > 0)
-					memset(buf16 + y * 800 + rightStart, 0, rightCols * 2);
+					memset(buf16 + y * fbW + rightStart, 0, rightCols * 2);
 			}
 		}
 	}
 
 	// (O2) Precompute X-coordinate lookup table to eliminate per-pixel division
-	int srcXtab[800];
-	for (int dx = 0; dx < scaledW && dx < 800; dx++) {
+	int srcXtab[kPanelWidth];
+	for (int dx = 0; dx < scaledW && dx < fbW; dx++) {
 		int sx = (dx * (int)_screenWidth) / scaledW;
 		srcXtab[dx] = (sx < (int)_screenWidth) ? sx : (int)_screenWidth - 1;
 	}
@@ -502,23 +466,23 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 	// framebuffer.  Duplicate rows just repeat the memcpy — skipping
 	// palette lookup + NEON entirely.  Using a cached temp buffer avoids
 	// reading from the framebuffer's write-combined memory (very slow on ARM).
-	uint16 tempRow[800];
+	uint16 tempRow[kPanelWidth];
 	int cpySrc = (offsetX < 0) ? 0 : offsetX;
-	int cpyEnd = ((offsetX + scaledW) > 800) ? 800 : (offsetX + scaledW);
+	int cpyEnd = ((offsetX + scaledW) > fbW) ? fbW : (offsetX + scaledW);
 	int cpyBytes = (cpyEnd > cpySrc) ? (cpyEnd - cpySrc) * 2 : 0;
 	int prevSrcY = -1;
 
 	// Scale game surface → framebuffer using nearest-neighbour (O8: 16bpp output)
 	for (int dy = 0; dy < scaledH; dy++) {
 		int fbY = offsetY + dy;
-		if (fbY < 0 || fbY >= 480)
+		if (fbY < 0 || fbY >= fbH)
 			continue;
 
 		// Map destination row back to source row
 		int srcY = (dy * (int)_screenHeight) / scaledH;
 		if (srcY >= (int)_screenHeight) srcY = _screenHeight - 1;
 
-		uint16 *fbRow = (uint16 *)_fb->back_buffer + fbY * 800;
+		uint16 *fbRow = (uint16 *)_fb->back_buffer + fbY * fbW;
 
 		// (O2) Lift row pointer once per source row
 		if (bpp == 1) {
@@ -528,7 +492,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 				// (O1+O8+O10) CLUT8 fast path: render to cached tempRow
 				const byte *srcRow = (const byte *)_gameSurface.getBasePtr(0, srcY);
 				int dxStart = (offsetX < 0) ? -offsetX : 0;
-				int dxEnd   = (offsetX + scaledW > 800) ? (800 - offsetX) : scaledW;
+				int dxEnd   = (offsetX + scaledW > fbW) ? (fbW - offsetX) : scaledW;
 				uint16 *dst = tempRow + offsetX + dxStart;
 				int dx = dxStart;
 #ifdef __ARM_NEON
@@ -560,7 +524,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 			const uint16 *srcRow = (const uint16 *)_gameSurface.getBasePtr(0, srcY);
 			for (int dx = 0; dx < scaledW; dx++) {
 				int fbX = offsetX + dx;
-				if (fbX < 0 || fbX >= 800) continue;
+				if (fbX < 0 || fbX >= fbW) continue;
 				uint16 pixel = srcRow[srcXtab[dx]];
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
@@ -571,7 +535,7 @@ void RoomWizardGraphicsManager::blitGameSurfaceToFramebuffer() {
 			const uint32 *srcRow = (const uint32 *)_gameSurface.getBasePtr(0, srcY);
 			for (int dx = 0; dx < scaledW; dx++) {
 				int fbX = offsetX + dx;
-				if (fbX < 0 || fbX >= 800) continue;
+				if (fbX < 0 || fbX >= fbW) continue;
 				uint32 pixel = srcRow[srcXtab[dx]];
 				byte r, g, b, a;
 				_screenFormat.colorToARGB(pixel, a, r, g, b);
@@ -602,15 +566,17 @@ void RoomWizardGraphicsManager::drawCursor() {
 	}
 
 	uint16 *buf16 = (uint16 *)_fb->back_buffer;
+	const int fbW = fbWidth();
+	const int fbH = fbHeight();
 
 	for (int y = 0; y < _cursorSurface.h; y++) {
 		int fbY = cursorY + y;
-		if (fbY < 0 || fbY >= 480)
+		if (fbY < 0 || fbY >= fbH)
 			continue;
 
 		for (int x = 0; x < _cursorSurface.w; x++) {
 			int fbX = cursorX + x;
-			if (fbX < 0 || fbX >= 800)
+			if (fbX < 0 || fbX >= fbW)
 				continue;
 
 			byte r, g, b;
@@ -641,7 +607,7 @@ void RoomWizardGraphicsManager::drawCursor() {
 				_cursorSurface.format.colorToARGB(pixel, a, r, g, b);
 			}
 
-			buf16[fbY * 800 + fbX] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+			buf16[fbY * fbW + fbX] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 		}
 	}
 }
@@ -710,12 +676,15 @@ void RoomWizardGraphicsManager::updateScreen() {
 		// background and the VKB text input field showing as transparent.
 		// (O8) Overlay is already RGB565 — write directly to 16bpp back buffer.
 		uint16 *obuf16 = (uint16 *)_fb->back_buffer;
-		for (int y = 0; y < 480; y++) {
-			for (int x = 0; x < 800; x++) {
+		const int fbW = fbWidth();
+		const int oh = (_overlaySurface.h < fbHeight()) ? _overlaySurface.h : fbHeight();
+		const int ow = (_overlaySurface.w < fbW) ? _overlaySurface.w : fbW;
+		for (int y = 0; y < oh; y++) {
+			for (int x = 0; x < ow; x++) {
 				uint16 pixel = *(const uint16 *)_overlaySurface.getBasePtr(x, y);
 				if (pixel == 0xF81F)
 					continue; // transparent clear-key – keep game pixel underneath
-				obuf16[y * 800 + x] = pixel;
+				obuf16[y * fbW + x] = pixel;
 			}
 		}
 	} else {
@@ -781,7 +750,8 @@ void RoomWizardGraphicsManager::clearOverlay() {
 		// render opaquely while still allowing the game to show through any
 		// uncovered overlay area (e.g. around the VKB).
 		uint16 *p = (uint16 *)_overlaySurface.getPixels();
-		for (int i = 0; i < 800 * 480; i++)
+		const int count = _overlaySurface.w * _overlaySurface.h;
+		for (int i = 0; i < count; i++)
 			p[i] = 0xF81F;
 	}
 }
@@ -798,11 +768,11 @@ void RoomWizardGraphicsManager::copyRectToOverlay(const void *buf, int pitch, in
 }
 
 int16 RoomWizardGraphicsManager::getOverlayHeight() const {
-	return 480;
+	return (int16)fbHeight();
 }
 
 int16 RoomWizardGraphicsManager::getOverlayWidth() const {
-	return 800;
+	return (int16)fbWidth();
 }
 
 // Mouse cursor methods
@@ -860,6 +830,8 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 		return;
 
 	uint16 *buf16 = (uint16 *)_fb->back_buffer;
+	const int fbW = fbWidth();
+	const int fbH = fbHeight();
 	uint32 currentTime = g_system->getMillis();
 	const uint32 FADE_TIME = 1000; // 1 second fade
 
@@ -889,9 +861,9 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 					int px = cx + dx;
 					int py = cy + dy;
 
-					if (px >= 0 && px < 800 && py >= 0 && py < 480) {
+					if (px >= 0 && px < fbW && py >= 0 && py < fbH) {
 						// Blend red circle with existing RGB565 pixel
-						uint16 existing = buf16[py * 800 + px];
+						uint16 existing = buf16[py * fbW + px];
 						byte er = ((existing >> 11) & 0x1F) << 3;
 						byte eg = ((existing >> 5) & 0x3F) << 2;
 						byte eb = (existing & 0x1F) << 3;
@@ -900,7 +872,7 @@ void RoomWizardGraphicsManager::drawTouchFeedback() {
 						byte g = ((0 * alpha) + (eg * (255 - alpha))) / 255;
 						byte b = ((0 * alpha) + (eb * (255 - alpha))) / 255;
 
-						buf16[py * 800 + px] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+						buf16[py * fbW + px] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 					}
 				}
 			}

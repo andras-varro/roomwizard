@@ -366,7 +366,7 @@ static rfbClient *vnc_client_init(const char *host, int port, unsigned int conne
 static void draw_centered_text(Framebuffer *fb, int y, const char *text,
                                 uint16_t color, int scale) {
     int tw = vnc_renderer_text_width(text, scale);
-    int x = (SCREEN_WIDTH - tw) / 2;
+    int x = ((int)fb->width - tw) / 2;
     if (x < 0) x = 0;
     vnc_renderer_draw_text(fb, x, y, text, color, scale);
 }
@@ -433,7 +433,7 @@ static int reconnect_ui(int attempt, int wait_seconds) {
         /* Progress bar (full width = wait_seconds, shrinks as time passes) */
         {
             int bar_x = 100;
-            int bar_w_max = SCREEN_WIDTH - 200;
+            int bar_w_max = (int)g_fb.width - 200;
             int bar_w = (remaining * bar_w_max) / (wait_seconds > 0 ? wait_seconds : 1);
             if (bar_w < 0) bar_w = 0;
             vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w_max, 8,
@@ -455,19 +455,23 @@ static int reconnect_ui(int attempt, int wait_seconds) {
             }
         }
 
-        /* Draw buttons and check hits */
+        /* Draw buttons and check hits.  The row is anchored to the bottom of
+         * the logical surface so it stays visible — and inside the digitizer's
+         * reach — whatever the bezel margins are. */
+        int btn_y = (int)g_fb.height - RECONNECT_BTN_BOTTOM_GAP;
+
         bool cancel_hit = draw_button(&g_fb,
-            RECONNECT_BTN_CANCEL_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_CANCEL_X, btn_y,
             RECONNECT_BTN_W, RECONNECT_BTN_H,
             "CANCEL", RGB565(40, 40, 40), RGB565_WHITE, tx, ty);
 
         bool settings_hit = draw_button(&g_fb,
-            RECONNECT_BTN_SETTINGS_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_SETTINGS_X, btn_y,
             RECONNECT_BTN_W, RECONNECT_BTN_H,
             "SETTINGS", RGB565(0, 0, 60), RGB565(100, 150, 255), tx, ty);
 
         bool connect_hit = draw_button(&g_fb,
-            RECONNECT_BTN_CONNECT_X, RECONNECT_BTN_Y,
+            RECONNECT_BTN_CONNECT_X, btn_y,
             RECONNECT_BTN_W, RECONNECT_BTN_H,
             "CONNECT NOW", RGB565(0, 60, 0), RGB565_GREEN, tx, ty);
 
@@ -613,11 +617,12 @@ static int vnc_session(const char *host, int port, int attempt) {
             float prog = vnc_input_exit_progress(&g_input);
             if (prog > 0.01f) {
                 uint16_t *buf = (uint16_t *)g_fb.back_buffer;
+                const int stride = (int)g_fb.width;
                 int bar_width = (int)(EXIT_ZONE_SIZE * prog);
                 uint16_t color = (prog < 0.7f) ? RGB565_YELLOW : RGB565_RED;
                 for (int y = 0; y < 3; y++)
-                    for (int x = 0; x < bar_width && x < SCREEN_WIDTH; x++)
-                        buf[y * SCREEN_WIDTH + x] = color;
+                    for (int x = 0; x < bar_width && x < stride; x++)
+                        buf[y * stride + x] = color;
                 g_renderer.needs_present = true;
             }
         }
@@ -918,8 +923,8 @@ int main(int argc, char *argv[]) {
     printf("Target:    %s:%d\n", g_config.host, g_config.port);
     printf("Encodings: %s\n", g_config.encodings);
     printf("Compress:  %d  Quality: %d\n", g_config.compress_level, g_config.quality_level);
-    printf("Display:   %s %dx%d\n", USE_16BPP ? "16bpp RGB565" : "32bpp ARGB",
-           SCREEN_WIDTH, SCREEN_HEIGHT);
+    /* The logical size is not known until fb_init(); run_vnc_client() logs it. */
+    printf("Display:   %s\n", USE_16BPP ? "16bpp RGB565" : "32bpp ARGB");
     printf("Exit:      hold top-left corner %d ms\n\n", EXIT_HOLD_MS);
 
     signal(SIGINT,  signal_handler);

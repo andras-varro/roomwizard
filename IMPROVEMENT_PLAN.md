@@ -43,22 +43,26 @@ making the repo public.
 
 Ordered by (severity × likelihood of being hit).
 
-### B1. 16bpp framebuffer heap overflow — **worst latent bug in the tree**
+### B1. 16bpp framebuffer heap overflow — **partly fixed**
 
-`native_apps/common/framebuffer.c:248` allocates the back buffer as
-`width * height * bytes_per_pixel`, but `fb_clear` (`:319`) memsets
-`width * height * sizeof(uint32_t)` and `fb_draw_pixel` (`:342`) writes `uint32_t`. **At 16bpp
-that is a 768 KB heap overflow.** `fb_init` never rejects a non-32bpp mode.
+The back buffer is allocated as `width * height * bytes_per_pixel`, but the drawing primitives
+(`fb_draw_pixel`, and everything built on it) write `uint32_t` unconditionally. **At 16bpp that
+overruns the allocation by a factor of two.**
 
-Found independently by two reviewers. Currently survived only because `vnc_client` hand-writes
-`uint16_t` and never calls a common draw helper. Triggered by: any game launched while a crashed
-ScummVM/VNC left the panel at 16bpp, or one `fb_draw_text` added to the VNC client.
+Closed so far: `fb_clear`, `fb_swap` and the `fb_set_bezel` reallocation are now byte-sized and
+correct at any bpp, and every app that uses the common primitives (`app_launcher`,
+`game_selector`, `device_tools`, `hardware_config`, `unified_calibrate`) calls
+`fb_set_bpp(dev, 32)` before `fb_init()`, so none of them can inherit 16bpp from a crashed
+ScummVM or VNC session.
 
-Also: `app_launcher` guards with `fb_set_bpp(32)` at startup, but `game_selector` (`:439`),
-`device_tools` (`:2486`), `hardware_config` (`:178`) and `unified_calibrate` (`:143`) do not.
+Still open: the primitives themselves. Nothing currently reaches them at 16bpp — ScummVM and
+`vnc_client` both hand-write `uint16_t` — but one `fb_draw_text` added to either would corrupt
+the heap.
 
-**Fix:** always allocate `width * height * 4`; make `fb_init` fail loudly if
-`bits_per_pixel != 32`; add the missing `fb_set_bpp(dev, 32)` calls.
+**Fix:** make the primitives dispatch on `bytes_per_pixel` (a 16bpp `fb_draw_pixel` writing
+RGB565 would also let ScummVM and the VNC client drop their private text renderers). Note
+`fb_init` must *not* reject non-32bpp modes: ScummVM legitimately runs the framebuffer at 16bpp
+through `fb_init`/`fb_swap`.
 
 ### B2. Gamepad buttons latch on and never release
 
@@ -88,6 +92,60 @@ Three compounding problems:
 **Fix:** sanity-check the fitted range against the hardware `EVIOCGABS` range (reject if overlap
 < 50%); add a **RESET CALIBRATION** button; add a phase-2 timeout that reverts; handle the read
 error and use `poll()` so the loop can observe `running`.
+
+> ⚠️ Do **not** implement the `EVIOCGABS` overlap check as "reject if outside 0..4095". A correct
+> fit on this panel legitimately extrapolates outside it on **Y** — the measured-good calibration
+> is `17 4084 -279 4382`, because the sensor really is ~30 px short top and bottom
+> (`SYSTEM_ANALYSIS.md#33-touch`). The overlap test is still worth having; the threshold has to
+> accommodate a Y range roughly 14 % wider than the hardware range.
+
+### B3a. `unified_calibrate` fits through its own edge-compressed samples
+
+Its 9 crosshairs are inset only **40 px** (`tests/unified_calibrate.c`), and raw is already
+compressing that close to the border. The corner and edge-mid taps therefore have a
+shallower-than-true slope, `touch_fit_axis_range()` drags the whole line to match, and the
+extrapolation lands outside 0..4095 — inventing a horizontal inset that does not exist and that
+varies run to run. This is the confirmed cause of the bogus "~10 px left/right" reach figure that
+stood in the docs until 2026-07-31.
+
+**Fix:** fit from interior targets only. `touch_raw`'s thresholds are a working reference —
+≥100 px from each end on X, ≥80 px on Y — and its capture pass demonstrates the corrected result
+(`X 17..4084`, residuals ≤2 px, edge probes at 20/780 predicted within 7 px). Keep the outer
+crosshairs on screen if you want them as a *check*, but exclude them from the fit.
+
+Verify against the raw capture in the repo: [`touch_raw-2026-07-31-rw09.tsv`](touch_raw-2026-07-31-rw09.tsv).
+
+### B3b. `touch_raw` prints one global verdict where the panel needs two
+
+`build_summary()` reduces both axes to a single worst-case H1/H4 line. On this panel X passes and
+Y fails, so the verdict reads `H4 … misses a limit by 287 raw counts` and buries the fact that X is
+clean. The per-axis table it prints alongside is correct — only the one-line conclusion is wrong.
+Make the verdict per-axis. Small, but it is the line a future reader will quote.
+
+### B3c. Y edge band: ~15 logical px top and bottom cannot be touched
+
+Settled, not speculative: the digitizer stops ~30 panel px short at top and bottom, so after the
+15 px bezel the first and last ~15 rows of the 450-row logical surface are unreachable. X is
+unaffected. Two candidate cures, and they trade against each other:
+
+| Option | Effect | Cost |
+|---|---|---|
+| **(a) Bezel margins 30/30 instead of 15/15** | logical surface becomes 800×420 and *every* logical pixel is both visible and touchable — the "logical screen is the safe area" invariant becomes true again | loses 30 rows of drawing area; needs a re-layout pass over apps that assume 450 |
+| **(b) Band-limited edge stretch** in `scale_coordinates()`, panel space, between stage 1 and 2 | keeps all 450 rows | warps touch by up to 30 px inside the outer band; touch and drawing no longer agree there |
+
+(a) is honest and cheap and needs no touch-mapping change; (b) preserves screen area. Practical
+stake is small either way — for a 320×200 game letterboxed to 720×450, 15 px is ~7 rows of 200 at
+the very bottom of a SCUMM verb bar. Do not rescale the whole axis: that shifts screen centre and
+contradicts the accuracy-first rule in `native_apps/CLAUDE.md`.
+
+### B3d. Fold `unified_calibrate` and `SCREEN EDGES` into one `touch_raw`-based flow — *proposal*
+
+`touch_raw` already measures line 1 correctly and already renders the full panel with 10 px edge
+ladders, which is most of what `SCREEN EDGES` needs to measure line 2. One tool that produces the
+whole of `/etc/touch_calibration.conf` — calibration, bezel, and a reach report — would remove the
+duplicate fit in `unified_calibrate.c` and make it impossible for the two lines to be measured
+against different assumptions. Scope and sequencing not yet decided; B3a is the prerequisite either
+way.
 
 ### B4. Respawn loop always logs exit code 127
 

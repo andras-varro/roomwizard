@@ -194,42 +194,71 @@ Portrait mode (flag file `/opt/games/portrait.mode`):
   otherwise let the runtime dimensions do the work.
 - **Calibrate in landscape.** Calibration in portrait is not supported.
 
-## Screen edges
+## Screen edges — the bezel is already handled
 
-All four `SCREEN_SAFE_MARGIN_*_DEFAULT` are `0` (`common/framebuffer.h:27`) and the reference
-device ships UI margins `0 0 0 0`, so `SCREEN_SAFE_*` currently equals the full screen. Do not
-assume a large inset.
+The plastic bezel hides a band of panel pixels (~15 px top and bottom on the reference unit).
+**Apps never compensate for it.** `fb_init()` sizes the drawing surface to the visible rectangle
+and `fb_swap()` places it on the panel at `fb->view_x/view_y`, leaving the hidden bands black.
 
-What is actually true: the bezel covers roughly **10 px top and bottom**, and on the reference
-unit the touch digitizer cannot reach the outer ~10 px left/right, ~26 px top, ~35 px bottom
-(its 12-bit range maps inside the panel). Keep *interactive* targets inside that; decoration
-can go to the edge. Minimum comfortable touch target is about 60×40 px, with the 200 ms
-`BTN_DEBOUNCE_MS`.
+So `fb.width` / `fb.height`, `screen_base_width` / `screen_base_height` and `SCREEN_SAFE_*` are
+all the **logical** screen — 800×450 at the shipped 15/15/0/0 margins — and every pixel in it is
+visible. `SCREEN_SAFE_LEFT`/`TOP` are `0` and `SCREEN_SAFE_RIGHT`/`BOTTOM` are the logical size:
+the logical screen *is* the safe area. Never subtract a margin yourself; that double-corrects.
+
+Margins live on line 2 of `/etc/touch_calibration.conf`, default to `FB_BEZEL_*_DEFAULT`
+(15/15/0/0) when absent, and are set from Device Tools → Set Screen → `SCREEN EDGES`.
+`fb_set_bezel()` changes them on a live framebuffer (it resizes the back buffer, so re-run any
+layout computed from `SCREEN_SAFE_*` afterwards — see `rebuild_ui()` in `device_tools.c`).
+
+The remaining constraint is digitizer reach, and it is **not** symmetric: measured 2026-07-31 with
+`touch_raw`, the sensor reaches past both the left and right panel edges but stops ~30 panel px
+short at the top and bottom. In the logical coordinates you draw in, that means:
+
+| Edge | Reachable? |
+|---|---|
+| left, right | **yes, fully** — x 0…799 is touchable |
+| top, bottom | **no** — the first ~15 and last ~15 rows of the 450 cannot be touched |
+
+So the logical screen is the safe area for *drawing*, but for *touch* it is 15 px inset top and
+bottom. Keep interactive targets out of those two bands; decoration can go to the edge. Minimum
+comfortable touch target is about 60×40 px, with the 200 ms `BTN_DEBOUNCE_MS`.
+
+This is a sensor property (the electrode array is ~11 mm shorter than the LCD), not a calibration
+error, so no calibration recovers it. The older "~10 px left/right" figure *was* a calibration
+error — see [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch) for the numbers and
+the method.
 
 ## Touch model
 
-The panel is **linear**. A `touch_trace` capture confirmed raw `0..4095` spans the full screen
-on both axes, so the entire model is a per-axis linear map:
+Two stages, in `scale_coordinates()`:
 
 ```text
-screen = (raw - raw_min) * (dim - 1) / (raw_max - raw_min)   -> clamp -> rotate if portrait
+raw -> panel    = (raw - raw_min) * (panel_dim - 1) / (raw_max - raw_min)   [calibration]
+     -> rotate 90° CCW if portrait
+     -> logical  = panel - view_origin                                      [bezel viewport]
+     -> clamp to the logical screen
 ```
 
-Calibration fits `raw_min`/`raw_max` per axis by least squares over 9 crosshair taps
-(inset 40 px for reliable capture) and extrapolates to the true edges. File format is in
+The panel is **linear** — a `touch_trace` capture confirms a traced border is a straight-edged
+rectangle — so stage 1 is a plain per-axis scale+offset. Stage 2 is the exact inverse of what
+`fb_swap()` does, which is what keeps touch and drawing in one coordinate system.
+
+Calibration fits `raw_min`/`raw_max` per axis by least squares over 9 crosshair taps (inset 40 px
+for reliable capture) and extrapolates to the true panel edges. File format is in
 `../SYSTEM_ANALYSIS.md`.
 
-**Rejected approaches — do not reintroduce these:**
+**Rules that are easy to get wrong:**
 
-| Approach | Why it fails |
+| Rule | Why |
 |---|---|
-| Applying bezel margins to touch coordinates | Double-correction. The raw range already spans the whole panel, so subtracting again shifts every touch inward. Margins are a drawing concern only. |
-| Affine transform (rotation/skew term) | Solves a problem the hardware does not have; the extra freedom lets one bad tap rotate the whole mapping. |
-| Bilinear / 4-corner offsets | Same, plus `touch_calibrate.c` computes 8 offsets and silently discards them — `touch_save_calibration()` only stores the raw range. |
-| Edge-drag calibration | Noisy endpoints and awkward on a bezelled panel. Replaced by the 9-tap fit. |
+| Fit calibration against **panel** coordinates, not logical ones | Targets are drawn in logical space, so add `fb->view_x/view_y` and pass `screen_panel_width/height` as the dim before calling `touch_fit_axis_range()`. Otherwise the bezel is baked into line 1 and stage 2 subtracts it again. |
+| Validate with `touch_map_raw()`, not a private copy of the maths | It runs the production path, so the summary screen cannot drift from what apps actually see. |
+| Call `touch_set_screen_size()` (or `touch_set_viewport()`) after any `fb_set_bezel()` | The `TouchInput` caches the panel size and viewport origin. |
+| No affine / rotation / skew term | Solves a problem the hardware does not have; the extra freedom lets one bad tap rotate the whole mapping. |
+| No bilinear / 4-corner offsets | Same, and `touch_save_calibration()` only persists the raw range, so they would be silently discarded. |
 
-`touch_enable_calibration()` is currently a **no-op** — the flag is written but never read, so
-calibration cannot be turned off. Other known defects in this area: `../IMPROVEMENT_PLAN.md` B3.
+`touch_enable_calibration()` is a **no-op** — the flag is written but never read, so calibration
+cannot be turned off. Other known defects in this area: `../IMPROVEMENT_PLAN.md` B3.
 
 **ScummVM links its own copy of `touch_input.o`.** The build refreshes it, but a *deployed*
 ScummVM keeps whatever it was built with — redeploy ScummVM after changing touch code.

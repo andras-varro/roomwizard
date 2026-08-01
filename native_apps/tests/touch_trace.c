@@ -160,10 +160,9 @@ int main(void) {
             fb_draw_text(&fb, 2, y + 2, b, RGB(90, 90, 110), 1);
         }
 
-        /* Safe-area rectangle (green) — what apps treat as usable */
-        int sl = screen_safe_margin_left, st_ = screen_safe_margin_top;
-        int sr = screen_safe_margin_right, sb = screen_safe_margin_bottom;
-        fb_draw_rect(&fb, sl, st_, W - sl - sr, H - st_ - sb, COLOR_GREEN);
+        /* Logical screen outline (green). The bezel is already excluded from it,
+         * so this is the full drawable area. */
+        fb_draw_rect(&fb, 0, 0, W, H, COLOR_GREEN);
 
         /* Finger trail (calibrated coords, yellow) */
         for (int i = 0; i < trail_n; i++) {

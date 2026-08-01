@@ -1,9 +1,15 @@
 /*
  * VNC Renderer - Phase 2 Optimized + Bilinear Interpolation
  *
- * Renders VNC framebuffer updates to the RoomWizard's 800×480 display.
+ * Renders VNC framebuffer updates to the RoomWizard's visible display area.
  * All hot-path rendering uses direct uint16_t writes to the back buffer
  * in RGB565 format — no fb_draw_pixel() calls, no per-pixel bounds checks.
+ *
+ * SCREEN SIZE IS RUNTIME.  fb_init() sizes the drawing surface to the rectangle
+ * the bezel leaves visible, so the back buffer is fb->width x fb->height (e.g.
+ * 800x450 at the shipped margins), not the panel size.  Every stride, bound and
+ * letterbox calculation below reads fb->width / fb->height; PANEL_MAX_* is only
+ * the capacity of the fixed LUT arrays.
  *
  * Key optimizations (see header for details):
  *   - 16bpp RGB565 output (halved memory bandwidth)
@@ -128,7 +134,9 @@ static const uint8_t font_5x7[][5] = {
 
 void vnc_renderer_clear_screen(Framebuffer *fb) {
     if (!fb || !fb->back_buffer) return;
-    memset(fb->back_buffer, 0, fb->screen_size);
+    /* back_buffer_size, NOT screen_size: screen_size is the physical mmap size
+     * (line_length * panel height) and overruns the logical back buffer. */
+    memset(fb->back_buffer, 0, fb->back_buffer_size);
 }
 
 void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
@@ -136,6 +144,8 @@ void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
     if (!fb || !fb->back_buffer || !text) return;
 
     uint16_t *buf = (uint16_t *)fb->back_buffer;
+    const int sw = (int)fb->width;
+    const int sh = (int)fb->height;
     int pen_x = 0;
 
     while (*text) {
@@ -156,9 +166,9 @@ void vnc_renderer_draw_text(Framebuffer *fb, int x, int y, const char *text,
                             for (int sx = 0; sx < scale; sx++) {
                                 int px = x + pen_x + col * scale + sx;
                                 int py = y + row * scale + sy;
-                                if (px >= 0 && px < SCREEN_WIDTH &&
-                                    py >= 0 && py < SCREEN_HEIGHT)
-                                    buf[py * SCREEN_WIDTH + px] = color;
+                                if (px >= 0 && px < sw &&
+                                    py >= 0 && py < sh)
+                                    buf[py * sw + px] = color;
                             }
                         }
                     }
@@ -173,11 +183,13 @@ void vnc_renderer_fill_rect(Framebuffer *fb, int x, int y, int w, int h,
                             uint16_t color) {
     if (!fb || !fb->back_buffer) return;
     uint16_t *buf = (uint16_t *)fb->back_buffer;
-    for (int row = y; row < y + h && row < SCREEN_HEIGHT; row++) {
+    const int sw = (int)fb->width;
+    const int sh = (int)fb->height;
+    for (int row = y; row < y + h && row < sh; row++) {
         if (row < 0) continue;
-        for (int col = x; col < x + w && col < SCREEN_WIDTH; col++) {
+        for (int col = x; col < x + w && col < sw; col++) {
             if (col < 0) continue;
-            buf[row * SCREEN_WIDTH + col] = color;
+            buf[row * sw + col] = color;
         }
     }
 }
@@ -205,28 +217,44 @@ int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb) {
 }
 
 void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height) {
-    if (!renderer) return;
+    if (!renderer || !renderer->fb) return;
+
+    /* The server announces this geometry; a zero or negative dimension would
+     * be a division by zero below. */
+    if (width <= 0 || height <= 0) {
+        DEBUG_PRINT("Rejecting invalid remote size %dx%d", width, height);
+        return;
+    }
+
+    /* The logical surface, not the panel: fb_init() has already excluded the
+     * bezel bands, so letterboxing against fb->height is what puts the remote
+     * desktop flush against the top of the visible area. */
+    const int sw = (int)renderer->fb->width;
+    const int sh = (int)renderer->fb->height;
 
     renderer->remote_width  = width;
     renderer->remote_height = height;
 
     /* Compute letterbox scaling with fixed-point ×256 to avoid floats */
-    int scale_x = (SCREEN_WIDTH  * 256) / width;
-    int scale_y = (SCREEN_HEIGHT * 256) / height;
+    int scale_x = (sw * 256) / width;
+    int scale_y = (sh * 256) / height;
     int scale   = (scale_x < scale_y) ? scale_x : scale_y;
 
     renderer->scaled_width  = (width  * scale) / 256;
     renderer->scaled_height = (height * scale) / 256;
 
-    /* Clamp (shouldn't be needed but defensive) */
-    if (renderer->scaled_width  > SCREEN_WIDTH)  renderer->scaled_width  = SCREEN_WIDTH;
-    if (renderer->scaled_height > SCREEN_HEIGHT) renderer->scaled_height = SCREEN_HEIGHT;
+    /* Clamp to the surface, and to the LUT capacity so src_x_lut cannot
+     * overflow even if a future panel is wider than PANEL_MAX_WIDTH. */
+    if (renderer->scaled_width  > sw) renderer->scaled_width  = sw;
+    if (renderer->scaled_width  > PANEL_MAX_WIDTH)
+        renderer->scaled_width = PANEL_MAX_WIDTH;
+    if (renderer->scaled_height > sh) renderer->scaled_height = sh;
 
-    renderer->offset_x = (SCREEN_WIDTH  - renderer->scaled_width)  / 2;
-    renderer->offset_y = (SCREEN_HEIGHT - renderer->scaled_height) / 2;
+    renderer->offset_x = (sw - renderer->scaled_width)  / 2;
+    renderer->offset_y = (sh - renderer->scaled_height) / 2;
 
     /* ── O2: Precompute bilinear X-coordinate lookup table ──────────── */
-    for (int dx = 0; dx < renderer->scaled_width && dx < SCREEN_WIDTH; dx++) {
+    for (int dx = 0; dx < renderer->scaled_width; dx++) {
         /*
          * Map dest X → fractional source X using fixed-point ×256.
          * For downscaling 1920→795, each dest pixel spans ~2.4 source pixels.
@@ -251,24 +279,23 @@ void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height) 
 
     /* Top border */
     if (renderer->offset_y > 0)
-        memset(buf, 0, renderer->offset_y * SCREEN_WIDTH * 2);
+        memset(buf, 0, renderer->offset_y * sw * 2);
 
     /* Bottom border */
     int bot = renderer->offset_y + renderer->scaled_height;
-    if (bot < SCREEN_HEIGHT)
-        memset(buf + bot * SCREEN_WIDTH, 0,
-               (SCREEN_HEIGHT - bot) * SCREEN_WIDTH * 2);
+    if (bot < sh)
+        memset(buf + bot * sw, 0, (sh - bot) * sw * 2);
 
     /* Left/right borders */
     int left_bytes  = renderer->offset_x * 2;
     int right_start = renderer->offset_x + renderer->scaled_width;
-    int right_bytes = (SCREEN_WIDTH - right_start) * 2;
+    int right_bytes = (sw - right_start) * 2;
 
-    for (int y = renderer->offset_y; y < bot && y < SCREEN_HEIGHT; y++) {
+    for (int y = renderer->offset_y; y < bot && y < sh; y++) {
         if (left_bytes > 0)
-            memset(buf + y * SCREEN_WIDTH, 0, left_bytes);
+            memset(buf + y * sw, 0, left_bytes);
         if (right_bytes > 0)
-            memset(buf + y * SCREEN_WIDTH + right_start, 0, right_bytes);
+            memset(buf + y * sw + right_start, 0, right_bytes);
     }
 
     renderer->borders_cleared = true;
@@ -332,6 +359,7 @@ void vnc_renderer_update_region(VNCRenderer *renderer, const uint8_t *remote_fb,
     if (sx1 >= sx2 || sy1 >= sy2) return;
 
     uint16_t *buf = (uint16_t *)renderer->fb->back_buffer;
+    const int fb_stride  = (int)renderer->fb->width;
     const int row_start  = sx1;
     const int row_pixels = sx2 - sx1;
 
@@ -424,7 +452,7 @@ void vnc_renderer_update_region(VNCRenderer *renderer, const uint8_t *remote_fb,
             }
         }
         /* ── Copy temp row → back buffer (single contiguous write) ── */
-        memcpy(buf + dy * SCREEN_WIDTH + row_start,
+        memcpy(buf + dy * fb_stride + row_start,
                renderer->temp_row + row_start,
                row_pixels * 2);
     }
@@ -475,7 +503,7 @@ bool vnc_renderer_present(VNCRenderer *renderer) {
 bool vnc_renderer_screen_to_remote(VNCRenderer *renderer,
                                    int screen_x, int screen_y,
                                    int *remote_x, int *remote_y) {
-    if (!renderer || !remote_x || !remote_y) return false;
+    if (!renderer || !renderer->fb || !remote_x || !remote_y) return false;
 
     int rel_x = screen_x - renderer->offset_x;
     int rel_y = screen_y - renderer->offset_y;
@@ -485,8 +513,8 @@ bool vnc_renderer_screen_to_remote(VNCRenderer *renderer,
         return false;   /* touch landed in letterbox border */
 
     if (renderer->scaling_mode == SCALING_STRETCH) {
-        *remote_x = (screen_x * renderer->remote_width)  / SCREEN_WIDTH;
-        *remote_y = (screen_y * renderer->remote_height) / SCREEN_HEIGHT;
+        *remote_x = (screen_x * renderer->remote_width)  / (int)renderer->fb->width;
+        *remote_y = (screen_y * renderer->remote_height) / (int)renderer->fb->height;
     } else {
         *remote_x = (rel_x * renderer->remote_width)  / renderer->scaled_width;
         *remote_y = (rel_y * renderer->remote_height) / renderer->scaled_height;

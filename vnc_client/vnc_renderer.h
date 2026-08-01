@@ -61,11 +61,12 @@ typedef struct VNCRenderer {
     int scaled_width;
     int scaled_height;
 
-    /* Precomputed bilinear X-coordinate lookup table (O2 + bilinear) */
-    BilinearXEntry src_x_lut[SCREEN_WIDTH];
+    /* Precomputed bilinear X-coordinate lookup table (O2 + bilinear).
+     * Sized for the widest possible panel; only fb->width entries are used. */
+    BilinearXEntry src_x_lut[PANEL_MAX_WIDTH];
 
     /* Row deduplication temp buffer - stays L1-cache hot (O11) */
-    uint16_t temp_row[SCREEN_WIDTH];
+    uint16_t temp_row[PANEL_MAX_WIDTH];
 
     /* State tracking */
     bool needs_present;

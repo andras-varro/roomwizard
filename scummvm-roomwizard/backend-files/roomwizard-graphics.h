@@ -103,11 +103,15 @@ private:
 	Graphics::Surface _gameSurface;
 	bool _screenDirty;
 
-	// Bezel obstruction margins (pixels from edge)
-	int _bezelTop;
-	int _bezelBottom;
-	int _bezelLeft;
-	int _bezelRight;
+	// The framebuffer's LOGICAL size — the visible rectangle inside the bezel.
+	// fb_init() sizes it and fb_swap() places it on the panel, so everything
+	// here draws in logical coordinates and no bezel arithmetic is needed.
+	int fbWidth() const  { return _fb ? (int)_fb->width  : kPanelWidth; }
+	int fbHeight() const { return _fb ? (int)_fb->height : kPanelHeight; }
+
+	// Panel size, and therefore the upper bound on any logical dimension.
+	static const int kPanelWidth  = 800;
+	static const int kPanelHeight = 480;
 
 	// Palette for CLUT8 mode
 	byte _palette[256 * 3];
@@ -156,7 +160,6 @@ private:
 	uint32 convertColor(uint32 color, const Graphics::PixelFormat &srcFormat);
 	void copyRectToSurface(Graphics::Surface &dst, const void *buf, int pitch,
 	                       int x, int y, int w, int h, const Graphics::PixelFormat &srcFormat);
-	void loadBezelMargins();
 
 public:
 	// Touch feedback API

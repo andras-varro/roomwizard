@@ -7,10 +7,10 @@
 
 typedef struct {
     int fd;
-    uint32_t *buffer;        // Front buffer (mapped to screen)
-    uint32_t *back_buffer;   // Back buffer (for double buffering)
-    uint32_t width;
-    uint32_t height;
+    uint32_t *buffer;        // Front buffer (mapped to screen), PANEL sized
+    uint32_t *back_buffer;   // Back buffer (for double buffering), LOGICAL sized
+    uint32_t width;          // Logical (visible) width  — what apps draw into
+    uint32_t height;         // Logical (visible) height — what apps draw into
     uint32_t line_length;
     uint32_t bytes_per_pixel;
     size_t screen_size;
@@ -20,36 +20,60 @@ typedef struct {
     bool portrait_mode;      // Portrait mode active (90° rotation in fb_swap)
     uint32_t phys_width;     // Physical framebuffer width (from hardware)
     uint32_t phys_height;    // Physical framebuffer height (from hardware)
-    size_t back_buffer_size; // Back buffer size (may differ from screen_size in portrait)
+    size_t back_buffer_size; // Back buffer size (logical dims × bpp)
+    int view_x;              // Logical surface origin within the panel (bezel left)
+    int view_y;              // Logical surface origin within the panel (bezel top)
 } Framebuffer;
 
-// Default safe area margins (used if config file is missing)
-#define SCREEN_SAFE_MARGIN_LEFT_DEFAULT   0
-#define SCREEN_SAFE_MARGIN_RIGHT_DEFAULT  0
-#define SCREEN_SAFE_MARGIN_TOP_DEFAULT    0
-#define SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT 0
+// ---------------------------------------------------------------------------
+// Bezel viewport
+//
+// The plastic bezel hides a band of pixels at the panel edges. Apps never see
+// those pixels: fb_init() shrinks the drawing surface to the visible rectangle
+// and fb_swap() places it on the panel at (view_x, view_y), leaving the hidden
+// bands black. fb->width / fb->height are therefore the LOGICAL (visible) size,
+// and every drawing primitive works in logical coordinates.
+//
+// touch_input.c consumes the same globals to translate a panel touch back into
+// logical space, so drawing and touch always share one coordinate system.
+// ---------------------------------------------------------------------------
 
-// Runtime safe area margins (loaded from /etc/touch_calibration.conf)
-extern int screen_safe_margin_left;
-extern int screen_safe_margin_right;
-extern int screen_safe_margin_top;
-extern int screen_safe_margin_bottom;
+// Bezel margins used when the config file has no margin line
+#define FB_BEZEL_TOP_DEFAULT    15
+#define FB_BEZEL_BOTTOM_DEFAULT 15
+#define FB_BEZEL_LEFT_DEFAULT    0
+#define FB_BEZEL_RIGHT_DEFAULT   0
 
-// Runtime screen base dimensions (set by fb_init(), default 800x480)
+// Runtime bezel margins in pixels (loaded from /etc/touch_calibration.conf).
+// Stored in the app's orientation: fb_init() rotates them in portrait mode.
+extern int screen_bezel_top;
+extern int screen_bezel_bottom;
+extern int screen_bezel_left;
+extern int screen_bezel_right;
+
+// Full panel dimensions in the app's orientation (800x480, swapped in portrait)
+extern int screen_panel_width;
+extern int screen_panel_height;
+
+// Logical surface origin within the panel (== bezel left/top after rotation)
+extern int screen_view_x;
+extern int screen_view_y;
+
+// Logical (visible) screen dimensions — set by fb_init(), default 800x480
 extern int screen_base_width;
 extern int screen_base_height;
 
-// Safe area bounds (now computed from runtime variables)
-#define SCREEN_SAFE_LEFT   (screen_safe_margin_left)
-#define SCREEN_SAFE_RIGHT  (screen_base_width - screen_safe_margin_right)
-#define SCREEN_SAFE_TOP    (screen_safe_margin_top)
-#define SCREEN_SAFE_BOTTOM (screen_base_height - screen_safe_margin_bottom)
+// The logical screen IS the safe area: it contains only visible pixels.
+#define SCREEN_SAFE_LEFT   0
+#define SCREEN_SAFE_TOP    0
+#define SCREEN_SAFE_RIGHT  (screen_base_width)
+#define SCREEN_SAFE_BOTTOM (screen_base_height)
 #define SCREEN_SAFE_WIDTH  (SCREEN_SAFE_RIGHT - SCREEN_SAFE_LEFT)
 #define SCREEN_SAFE_HEIGHT (SCREEN_SAFE_BOTTOM - SCREEN_SAFE_TOP)
 
-// Load safe area margins from calibration config file
-// Called automatically by fb_init()
-void fb_load_safe_area(void);
+// Load bezel margins from the calibration config file.
+// Called automatically by fb_init().
+void fb_load_bezel(void);
 
 // Check if portrait mode is enabled (flag file /opt/games/portrait.mode exists)
 bool fb_is_portrait_mode(void);
@@ -123,6 +147,12 @@ void fb_fade_in(Framebuffer *fb);
 
 // Set framebuffer bits-per-pixel (e.g. 16 or 32). Must be called BEFORE fb_init.
 int fb_set_bpp(const char *device, int bpp);
+
+// Change the bezel margins on a live framebuffer: resizes the logical surface,
+// republishes the globals and re-blacks the panel. Returns 0 on success, -1 if
+// the margins leave no usable area (in which case fb is left unchanged).
+// Callers that also own a TouchInput must follow up with touch_set_viewport().
+int fb_set_bezel(Framebuffer *fb, int top, int bottom, int left, int right);
 
 // Common colors
 #define COLOR_BLACK   RGB(0, 0, 0)

@@ -9,28 +9,36 @@
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 
-// Runtime safe area margins
-int screen_safe_margin_left   = SCREEN_SAFE_MARGIN_LEFT_DEFAULT;
-int screen_safe_margin_right  = SCREEN_SAFE_MARGIN_RIGHT_DEFAULT;
-int screen_safe_margin_top    = SCREEN_SAFE_MARGIN_TOP_DEFAULT;
-int screen_safe_margin_bottom = SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT;
+// Runtime bezel margins (pixels hidden by the plastic bezel)
+int screen_bezel_top    = FB_BEZEL_TOP_DEFAULT;
+int screen_bezel_bottom = FB_BEZEL_BOTTOM_DEFAULT;
+int screen_bezel_left   = FB_BEZEL_LEFT_DEFAULT;
+int screen_bezel_right  = FB_BEZEL_RIGHT_DEFAULT;
 
-// Runtime screen base dimensions (defaults safe for pre-fb_init usage)
+// Panel and viewport geometry. The defaults form an IDENTITY viewport so any
+// code that reads these before fb_init() gets plain panel coordinates.
+int screen_panel_width  = 800;
+int screen_panel_height = 480;
+int screen_view_x = 0;
+int screen_view_y = 0;
+
+// Logical (visible) screen dimensions
 int screen_base_width  = 800;
 int screen_base_height = 480;
 
-void fb_load_safe_area(void) {
-    // Reset to defaults
-    screen_safe_margin_left   = SCREEN_SAFE_MARGIN_LEFT_DEFAULT;
-    screen_safe_margin_right  = SCREEN_SAFE_MARGIN_RIGHT_DEFAULT;
-    screen_safe_margin_top    = SCREEN_SAFE_MARGIN_TOP_DEFAULT;
-    screen_safe_margin_bottom = SCREEN_SAFE_MARGIN_BOTTOM_DEFAULT;
+void fb_load_bezel(void) {
+    // No file, or no margin line in it, means "not configured" → defaults.
+    // A margin line that IS present is honoured exactly, zeros included.
+    screen_bezel_top    = FB_BEZEL_TOP_DEFAULT;
+    screen_bezel_bottom = FB_BEZEL_BOTTOM_DEFAULT;
+    screen_bezel_left   = FB_BEZEL_LEFT_DEFAULT;
+    screen_bezel_right  = FB_BEZEL_RIGHT_DEFAULT;
 
     FILE *f = fopen("/etc/touch_calibration.conf", "r");
     if (!f) {
-        printf("Safe area: no calibration file — using defaults (%d,%d,%d,%d)\n",
-               screen_safe_margin_left, screen_safe_margin_top,
-               screen_safe_margin_right, screen_safe_margin_bottom);
+        printf("Bezel: no calibration file — using defaults T=%d B=%d L=%d R=%d\n",
+               screen_bezel_top, screen_bezel_bottom,
+               screen_bezel_left, screen_bezel_right);
         return;
     }
 
@@ -42,19 +50,93 @@ void fb_load_safe_area(void) {
         if (data_lines == 2) {
             int t, b, l, r;
             if (sscanf(line, "%d %d %d %d", &t, &b, &l, &r) == 4) {
-                screen_safe_margin_top    = t;
-                screen_safe_margin_bottom = b;
-                screen_safe_margin_left   = l;
-                screen_safe_margin_right  = r;
+                screen_bezel_top    = t;
+                screen_bezel_bottom = b;
+                screen_bezel_left   = l;
+                screen_bezel_right  = r;
             }
             break;
         }
     }
     fclose(f);
 
-    printf("Safe area: loaded margins L=%d T=%d R=%d B=%d from /etc/touch_calibration.conf\n",
-           screen_safe_margin_left, screen_safe_margin_top,
-           screen_safe_margin_right, screen_safe_margin_bottom);
+    printf("Bezel: margins T=%d B=%d L=%d R=%d from /etc/touch_calibration.conf\n",
+           screen_bezel_top, screen_bezel_bottom,
+           screen_bezel_left, screen_bezel_right);
+}
+
+// Recompute the logical surface from the panel dims + current bezel margins and
+// publish the result to both fb and the globals. Margins that would leave less
+// than a sixteenth of an axis usable are rejected as a typo/misconfiguration.
+static int fb_apply_viewport(Framebuffer *fb, int panel_w, int panel_h) {
+    int lw = panel_w - screen_bezel_left - screen_bezel_right;
+    int lh = panel_h - screen_bezel_top  - screen_bezel_bottom;
+
+    if (screen_bezel_top < 0 || screen_bezel_bottom < 0 ||
+        screen_bezel_left < 0 || screen_bezel_right < 0 ||
+        lw < panel_w / 16 || lh < panel_h / 16) {
+        return -1;
+    }
+
+    fb->view_x = screen_bezel_left;
+    fb->view_y = screen_bezel_top;
+    fb->width  = (uint32_t)lw;
+    fb->height = (uint32_t)lh;
+
+    screen_panel_width  = panel_w;
+    screen_panel_height = panel_h;
+    screen_view_x       = fb->view_x;
+    screen_view_y       = fb->view_y;
+    screen_base_width   = lw;
+    screen_base_height  = lh;
+    return 0;
+}
+
+// Paint the whole panel black, so the bezel bands are clean and nothing from a
+// previously running app survives outside the logical surface.
+static void fb_black_panel(Framebuffer *fb) {
+    if (fb->buffer != MAP_FAILED && fb->buffer != NULL)
+        memset(fb->buffer, 0, fb->screen_size);
+}
+
+int fb_set_bezel(Framebuffer *fb, int top, int bottom, int left, int right) {
+    int old_t = screen_bezel_top,  old_b = screen_bezel_bottom;
+    int old_l = screen_bezel_left, old_r = screen_bezel_right;
+
+    screen_bezel_top    = top;
+    screen_bezel_bottom = bottom;
+    screen_bezel_left   = left;
+    screen_bezel_right  = right;
+
+    int panel_w = fb->portrait_mode ? (int)fb->phys_height : (int)fb->phys_width;
+    int panel_h = fb->portrait_mode ? (int)fb->phys_width  : (int)fb->phys_height;
+
+    if (fb_apply_viewport(fb, panel_w, panel_h) < 0) {
+        screen_bezel_top    = old_t;
+        screen_bezel_bottom = old_b;
+        screen_bezel_left   = old_l;
+        screen_bezel_right  = old_r;
+        fb_apply_viewport(fb, panel_w, panel_h);
+        return -1;
+    }
+
+    size_t new_size = (size_t)fb->width * fb->height * fb->bytes_per_pixel;
+    if (new_size != fb->back_buffer_size) {
+        uint32_t *nb = (uint32_t *)realloc(fb->back_buffer, new_size);
+        if (nb == NULL) {
+            screen_bezel_top    = old_t;
+            screen_bezel_bottom = old_b;
+            screen_bezel_left   = old_l;
+            screen_bezel_right  = old_r;
+            fb_apply_viewport(fb, panel_w, panel_h);
+            return -1;
+        }
+        fb->back_buffer = nb;
+        fb->back_buffer_size = new_size;
+    }
+    memset(fb->back_buffer, 0, fb->back_buffer_size);
+    fb_black_panel(fb);
+    return 0;
 }
 
 bool fb_is_portrait_mode(void) {
@@ -183,8 +265,8 @@ int fb_init(Framebuffer *fb, const char *device) {
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
 
-    // Load bezel/safe-area margins from calibration config
-    fb_load_safe_area();
+    // Load bezel margins from calibration config
+    fb_load_bezel();
 
     fb->fd = open(device, O_RDWR);
     if (fb->fd == -1) {
@@ -208,52 +290,56 @@ int fb_init(Framebuffer *fb, const char *device) {
     fb->phys_height = vinfo.yres;
     fb->portrait_mode = fb_is_portrait_mode();
 
+    // Panel dimensions in the app's orientation
+    int panel_w, panel_h;
     if (fb->portrait_mode) {
         // Apps see swapped dimensions (e.g., 480x800 instead of 800x480)
-        fb->width = fb->phys_height;
-        fb->height = fb->phys_width;
+        panel_w = fb->phys_height;
+        panel_h = fb->phys_width;
         printf("Portrait mode: physical %dx%d -> virtual %dx%d\n",
-               fb->phys_width, fb->phys_height, fb->width, fb->height);
+               fb->phys_width, fb->phys_height, panel_w, panel_h);
+
+        // Rotate the bezel margins into the virtual coordinate system (90 CCW):
+        // physical left -> virtual top, right -> bottom, top -> right, bottom -> left
+        int pt = screen_bezel_top, pb = screen_bezel_bottom;
+        int pl = screen_bezel_left, pr = screen_bezel_right;
+        screen_bezel_top    = pl;
+        screen_bezel_bottom = pr;
+        screen_bezel_left   = pb;
+        screen_bezel_right  = pt;
+
+        printf("Portrait mode: rotated bezel margins T=%d B=%d L=%d R=%d\n",
+               screen_bezel_top, screen_bezel_bottom,
+               screen_bezel_left, screen_bezel_right);
     } else {
-        fb->width = fb->phys_width;
-        fb->height = fb->phys_height;
+        panel_w = fb->phys_width;
+        panel_h = fb->phys_height;
     }
 
-    // Update global base dimensions so SCREEN_SAFE_* macros adapt
-    screen_base_width  = fb->width;
-    screen_base_height = fb->height;
-
-    if (fb->portrait_mode) {
-        // Rotate safe area margins to match virtual coordinate system (90 CCW)
-        // Physical left -> virtual top, physical right -> virtual bottom
-        // Physical top -> virtual right, physical bottom -> virtual left
-        int phys_top = screen_safe_margin_top;
-        int phys_bottom = screen_safe_margin_bottom;
-        int phys_left = screen_safe_margin_left;
-        int phys_right = screen_safe_margin_right;
-
-        screen_safe_margin_top = phys_left;
-        screen_safe_margin_bottom = phys_right;
-        screen_safe_margin_left = phys_bottom;
-        screen_safe_margin_right = phys_top;
-
-        printf("Portrait mode: rotated safe margins T=%d B=%d L=%d R=%d\n",
-               screen_safe_margin_top, screen_safe_margin_bottom,
-               screen_safe_margin_left, screen_safe_margin_right);
+    // Shrink the drawing surface to the visible rectangle. Bad margins fall
+    // back to no bezel rather than leaving the app with an unusable screen.
+    if (fb_apply_viewport(fb, panel_w, panel_h) < 0) {
+        fprintf(stderr, "Bezel margins T=%d B=%d L=%d R=%d unusable on a %dx%d panel"
+                        " — ignoring them\n",
+                screen_bezel_top, screen_bezel_bottom,
+                screen_bezel_left, screen_bezel_right, panel_w, panel_h);
+        screen_bezel_top = screen_bezel_bottom = 0;
+        screen_bezel_left = screen_bezel_right = 0;
+        fb_apply_viewport(fb, panel_w, panel_h);
     }
 
     fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
     fb->line_length = finfo.line_length;
     fb->screen_size = fb->line_length * fb->phys_height;  // Physical size for mmap
-    fb->back_buffer_size = fb->width * fb->height * fb->bytes_per_pixel;  // Virtual size for back buffer
-    
+    fb->back_buffer_size = (size_t)fb->width * fb->height * fb->bytes_per_pixel;
+
     fb->buffer = (uint32_t *)mmap(0, fb->screen_size, PROT_READ | PROT_WRITE, MAP_SHARED, fb->fd, 0);
     if (fb->buffer == MAP_FAILED) {
         perror("Error mapping framebuffer device to memory");
         close(fb->fd);
         return -1;
     }
-    
+
     // Allocate back buffer for double buffering
     fb->back_buffer = (uint32_t *)malloc(fb->back_buffer_size);
     if (fb->back_buffer == NULL) {
@@ -263,13 +349,16 @@ int fb_init(Framebuffer *fb, const char *device) {
         return -1;
     }
     fb->double_buffering = true;
-    
+
     fb->draw_offset_x = 0;
     fb->draw_offset_y = 0;
 
-    printf("Framebuffer initialized: %dx%d%s, %d bpp (double buffering enabled)\n",
-           fb->width, fb->height, fb->portrait_mode ? " [portrait]" : "",
-           vinfo.bits_per_pixel);
+    // Black the whole panel once: clears the bezel bands and any leftovers.
+    fb_black_panel(fb);
+
+    printf("Framebuffer initialized: %dx%d logical at (%d,%d) on a %dx%d panel%s, %d bpp\n",
+           fb->width, fb->height, fb->view_x, fb->view_y, panel_w, panel_h,
+           fb->portrait_mode ? " [portrait]" : "", vinfo.bits_per_pixel);
     return 0;
 }
 
@@ -286,27 +375,51 @@ void fb_close(Framebuffer *fb) {
 }
 
 void fb_swap(Framebuffer *fb) {
-    if (fb->double_buffering && fb->back_buffer != NULL) {
-        if (fb->portrait_mode) {
-            // 90 CCW rotation: virtual (vx, vy) -> physical (vy, phys_height-1-vx)
-            // Iterate back_buffer row-by-row for cache-friendly reads
-            uint32_t vw = fb->width;    // Virtual width (e.g., 480)
-            uint32_t vh = fb->height;   // Virtual height (e.g., 800)
-            uint32_t pw = fb->phys_width;  // Physical width (e.g., 800)
-            uint32_t ph_minus_1 = fb->phys_height - 1;  // e.g., 479
+    if (!fb->double_buffering || fb->back_buffer == NULL)
+        return;
 
-            for (uint32_t vy = 0; vy < vh; vy++) {
-                uint32_t *src_row = fb->back_buffer + vy * vw;
-                uint32_t px = vy;  // Physical X = virtual Y
-                for (uint32_t vx = 0; vx < vw; vx++) {
-                    uint32_t py = ph_minus_1 - vx;  // Physical Y = phys_height-1-vx
-                    fb->buffer[py * pw + px] = src_row[vx];
-                }
+    if (fb->portrait_mode) {
+        // 90 CCW rotation from the logical surface into the panel, offset by the
+        // viewport: logical (lx, ly) -> virtual (lx+view_x, ly+view_y)
+        //                            -> physical (vy, phys_height-1-vx)
+        // 32bpp only, like the rest of the drawing primitives.
+        uint32_t lw = fb->width;
+        uint32_t lh = fb->height;
+        uint32_t pw = fb->phys_width;
+        uint32_t ph_minus_1 = fb->phys_height - 1;
+
+        for (uint32_t ly = 0; ly < lh; ly++) {
+            uint32_t *src_row = fb->back_buffer + ly * lw;
+            uint32_t px = ly + fb->view_y;   // Physical X = virtual Y
+            for (uint32_t lx = 0; lx < lw; lx++) {
+                uint32_t py = ph_minus_1 - (lx + fb->view_x);
+                fb->buffer[py * pw + px] = src_row[lx];
             }
-        } else {
-            // Normal landscape: straight copy
-            memcpy(fb->buffer, fb->back_buffer, fb->screen_size);
         }
+        return;
+    }
+
+    if (fb->view_x == 0 && fb->view_y == 0 &&
+        fb->width == fb->phys_width && fb->height == fb->phys_height &&
+        fb->line_length == fb->width * fb->bytes_per_pixel) {
+        // No bezel and no line padding: one straight copy
+        memcpy(fb->buffer, fb->back_buffer, fb->back_buffer_size);
+        return;
+    }
+
+    // Letterboxed: copy row by row into the visible rectangle. Byte-based so it
+    // is correct at any bpp (ScummVM runs this path at 16bpp).
+    const uint32_t bpp = fb->bytes_per_pixel;
+    const uint32_t row_bytes = fb->width * bpp;
+    const uint8_t *src = (const uint8_t *)fb->back_buffer;
+    uint8_t *dst = (uint8_t *)fb->buffer
+                 + (size_t)fb->view_y * fb->line_length
+                 + (size_t)fb->view_x * bpp;
+
+    for (uint32_t y = 0; y < fb->height; y++) {
+        memcpy(dst, src, row_bytes);
+        src += row_bytes;
+        dst += fb->line_length;
     }
 }
 
@@ -315,8 +428,10 @@ void fb_clear(Framebuffer *fb, uint32_t color) {
     uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
     uint32_t total = fb->width * fb->height;
     if (color == 0) {
-        /* Fast path: memset for black (all-zero) */
-        memset(target, 0, total * sizeof(uint32_t));
+        /* Fast path: memset for black (all-zero). Sized in bytes so it stays
+         * inside the allocation at any bpp. */
+        memset(target, 0, fb->double_buffering ? fb->back_buffer_size
+                                               : fb->screen_size);
     } else {
         /* Per-pixel fill for non-zero colours */
         for (uint32_t i = 0; i < total; i++) {

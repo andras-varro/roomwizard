@@ -26,12 +26,24 @@
 #include <ctype.h>
 
 /* ── Layout constants (from SETTINGS_GUI_DESIGN.md §1) ─────────────── */
+/*
+ * SCREEN SIZE IS RUNTIME.  fb->width / fb->height are the logical (visible)
+ * surface, which shrinks with the bezel margins (800x450 at the shipped
+ * 15/15/0/0).  Everything anchored to the bottom of the screen — the action
+ * button row, the numeric keypad, the full keypad panel — is therefore
+ * computed from fb->height by the helpers below rather than being a constant.
+ * Both the draw path and the hit-test path must call the SAME helper, or a
+ * button will be drawn somewhere it cannot be tapped.
+ */
 
 #define TITLE_BAR_H      40
 #define ROW_COUNT         6
 #define ROW_H             48
-#define ROW_GAP           6        /* vertical gap between row top edges: ROW_H + ROW_GAP = 54 */
-#define FIRST_ROW_Y       56
+#define ROW_GAP           4        /* vertical gap between rows: pitch = ROW_H + ROW_GAP = 52 */
+#define FIRST_ROW_Y       44
+/* Row block spans FIRST_ROW_Y .. FIRST_ROW_Y + 6*52 - 4 = 44..352, which clears
+ * the status line on a 450-row surface (status 362, buttons 382..430) and still
+ * puts the status line at its original y=392 on a full 480-row panel. */
 
 /* Row internal layout */
 #define LABEL_X           20
@@ -45,22 +57,19 @@
 #define PM_BTN_W          60
 #define PM_BTN_H          38
 
-/* Status line */
-#define STATUS_Y          392
-
-/* Action buttons */
-#define ACT_BTN_Y         424
+/* Action buttons.  BOTTOM_GAP keeps the row clear of the panel edge, where the
+ * digitizer stops reporting (see ../SYSTEM_ANALYSIS.md — touch reach). */
 #define ACT_BTN_H         48
+#define ACT_BTN_BOTTOM_GAP 20
 #define ACT_BTN_BACK_X    20
 #define ACT_BTN_EXIT_X    300
 #define ACT_BTN_SAVE_X    580
 #define ACT_BTN_W         200
 
-/* ── Numeric keypad overlay (original, anchored at Y=240) ──────────── */
-#define KP_Y              240
-#define KP_H              240      /* 480 - 240 */
+/* ── Numeric keypad overlay (anchored to the bottom of the surface) ── */
+#define KP_BLOCK_H        192      /* key rows: 0, 54, 108 + a 30px-tall row */
+#define KP_BOTTOM_GAP     20       /* clear of the digitizer's dead band */
 #define KP_INPUT_X        20
-#define KP_INPUT_Y        244
 #define KP_INPUT_W        760
 #define KP_INPUT_H        36
 #define KP_KEY_W          80
@@ -71,7 +80,7 @@
 #define FKP_X             50
 #define FKP_Y             40
 #define FKP_W             700
-#define FKP_H             420
+#define FKP_BOTTOM_GAP    10
 
 /* Full/Alpha key grid sizing */
 #define FKP_COLS          10
@@ -88,11 +97,37 @@
 /* First row of letter keys Y position */
 #define FKP_KEYS_Y        (FKP_INPUT_Y + FKP_INPUT_H + 10)
 
+/* ── Runtime layout helpers ────────────────────────────────────────── */
+/* The draw path and the hit-test path must both call these; a constant in one
+ * and a helper in the other draws buttons where they cannot be tapped. */
+
+static int settings_act_btn_y(const Framebuffer *fb) {
+    return (int)fb->height - ACT_BTN_BOTTOM_GAP - ACT_BTN_H;
+}
+
+static int settings_status_y(const Framebuffer *fb) {
+    return settings_act_btn_y(fb) - 20;
+}
+
+/* Top of the numeric keypad's key block; everything else hangs off it. */
+static int kp_top(const Framebuffer *fb) {
+    return (int)fb->height - KP_BLOCK_H - KP_BOTTOM_GAP;
+}
+/* Panel top sits far enough above the input field for the title to clear it
+ * (title is drawn at panel_y + 1 and is 8 px tall at scale 1). */
+static int kp_panel_y(const Framebuffer *fb) { return kp_top(fb) - 62; }
+static int kp_input_y(const Framebuffer *fb) { return kp_top(fb) - 44; }
+
+/* Full/alpha keypad panel height (its top edge FKP_Y is fixed). */
+static int fkp_panel_h(const Framebuffer *fb) {
+    return (int)fb->height - FKP_Y - FKP_BOTTOM_GAP;
+}
+
 /* ── Keypad button geometry for NUMERIC mode ───────────────────────── */
 
 typedef struct {
     const char *label;
-    int x, y, w, h;
+    int x, dy, w, h;    /* dy = offset below kp_top(fb), not an absolute Y */
 } KeypadButton;
 
 /* Row 1: digits 1-5 */
@@ -102,28 +137,33 @@ typedef struct {
 /* Row 4: CANCEL  OK */
 static const KeypadButton kp_buttons[] = {
     /* Row 1: digits */
-    { "1",    20, 288,  80, 48 },
-    { "2",   110, 288,  80, 48 },
-    { "3",   200, 288,  80, 48 },
-    { "4",   290, 288,  80, 48 },
-    { "5",   380, 288,  80, 48 },
+    { "1",    20,   0,  80, 48 },
+    { "2",   110,   0,  80, 48 },
+    { "3",   200,   0,  80, 48 },
+    { "4",   290,   0,  80, 48 },
+    { "5",   380,   0,  80, 48 },
     /* Row 2: digits */
-    { "6",    20, 342,  80, 48 },
-    { "7",   110, 342,  80, 48 },
-    { "8",   200, 342,  80, 48 },
-    { "9",   290, 342,  80, 48 },
-    { "0",   380, 342,  80, 48 },
+    { "6",    20,  54,  80, 48 },
+    { "7",   110,  54,  80, 48 },
+    { "8",   200,  54,  80, 48 },
+    { "9",   290,  54,  80, 48 },
+    { "0",   380,  54,  80, 48 },
     /* Row 3: . : CLEAR */
-    { ".",    20, 396,  80, 48 },
-    { ":",   110, 396,  80, 48 },
-    { "CLR", 200, 396, 170, 48 },
+    { ".",    20, 108,  80, 48 },
+    { ":",   110, 108,  80, 48 },
+    { "CLR", 200, 108, 170, 48 },
     /* BACKSPACE (tall, spanning rows 1-2) */
-    { "<-",  520, 288, 140, 102 },
+    { "<-",  520,   0, 140, 102 },
     /* Bottom row: CANCEL, OK */
-    { "CANCEL", 200, 450, 160, 28 },
-    { "OK",     440, 450, 160, 28 },
+    { "CANCEL", 200, 162, 160, 28 },
+    { "OK",     440, 162, 160, 28 },
 };
 #define KP_NUM_BUTTONS  (sizeof(kp_buttons) / sizeof(kp_buttons[0]))
+
+/* Absolute Y of a numeric-keypad button on the current surface. */
+static int kp_btn_y(const Framebuffer *fb, const KeypadButton *btn) {
+    return kp_top(fb) + btn->dy;
+}
 
 /* ── Keypad mode enum ──────────────────────────────────────────────── */
 
@@ -193,7 +233,6 @@ static void draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
 /* ── Row Y position helper ─────────────────────────────────────────── */
 
 static int row_y(int row) {
-    /* Design doc: row 0 at y=56, each row is ROW_H + ROW_GAP = 54px apart */
     return FIRST_ROW_Y + row * (ROW_H + ROW_GAP);
 }
 
@@ -201,15 +240,18 @@ static int row_y(int row) {
 
 static void draw_main_screen(SettingsState *st) {
     Framebuffer *fb = st->fb;
+    const int sw = (int)fb->width;
+    const int act_btn_y = settings_act_btn_y(fb);
+    const int status_y  = settings_status_y(fb);
 
     vnc_renderer_clear_screen(fb);
 
     /* ── Title bar ──────────────────────────────────────────── */
-    vnc_renderer_fill_rect(fb, 0, 0, SCREEN_WIDTH, TITLE_BAR_H, RGB565(0, 0, 100));
+    vnc_renderer_fill_rect(fb, 0, 0, sw, TITLE_BAR_H, RGB565(0, 0, 100));
     {
         const char *title = "VNC SETTINGS";
         int tw = vnc_renderer_text_width(title, 3);
-        vnc_renderer_draw_text(fb, (SCREEN_WIDTH - tw) / 2, 8, title, RGB565_WHITE, 3);
+        vnc_renderer_draw_text(fb, (sw - tw) / 2, 8, title, RGB565_WHITE, 3);
     }
 
     /* ── Settings rows ──────────────────────────────────────── */
@@ -220,7 +262,7 @@ static void draw_main_screen(SettingsState *st) {
 
         /* Alternating row background for readability */
         uint16_t row_bg = (i % 2 == 0) ? RGB565(15, 15, 15) : RGB565(25, 25, 25);
-        vnc_renderer_fill_rect(fb, 0, ry, SCREEN_WIDTH, ROW_H, row_bg);
+        vnc_renderer_fill_rect(fb, 0, ry, sw, ROW_H, row_bg);
 
         /* Label column */
         vnc_renderer_draw_text(fb, LABEL_X, ry + 16, labels[i], RGB565_WHITE, 2);
@@ -288,28 +330,30 @@ static void draw_main_screen(SettingsState *st) {
 
     /* ── Status / hint line ──────────────────────────────────── */
     {
-        const char *hint = "TOUCH ANY ROW TO EDIT  |  LONG FIELDS: SCROLL RIGHT";
-        int tw = vnc_renderer_text_width(hint, 1);
-        vnc_renderer_draw_text(fb, (SCREEN_WIDTH - tw) / 2, STATUS_Y, hint,
-                               RGB565_GREY, 1);
-    }
-
-    /* Show save error if any */
-    if (st->save_error > 0) {
-        const char *err = "SAVE FAILED — config file not writable";
-        int tw = vnc_renderer_text_width(err, 2);
-        vnc_renderer_draw_text(fb, (SCREEN_WIDTH - tw) / 2, STATUS_Y - 20, err,
-                               RGB565_RED, 2);
+        /* One status band, shared: the error replaces the hint rather than
+         * stacking above it, which on a 450-row surface would collide with
+         * the last settings row. */
+        if (st->save_error > 0) {
+            const char *err = "SAVE FAILED — config file not writable";
+            int tw = vnc_renderer_text_width(err, 2);
+            vnc_renderer_draw_text(fb, (sw - tw) / 2, status_y, err,
+                                   RGB565_RED, 2);
+        } else {
+            const char *hint = "TOUCH ANY ROW TO EDIT  |  LONG FIELDS: SCROLL RIGHT";
+            int tw = vnc_renderer_text_width(hint, 1);
+            vnc_renderer_draw_text(fb, (sw - tw) / 2, status_y, hint,
+                                   RGB565_GREY, 1);
+        }
     }
 
     /* ── Action buttons ──────────────────────────────────────── */
-    draw_button(fb, ACT_BTN_BACK_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H,
+    draw_button(fb, ACT_BTN_BACK_X, act_btn_y, ACT_BTN_W, ACT_BTN_H,
                 "BACK", RGB565(60, 60, 60), RGB565_WHITE, 2);
 
-    draw_button(fb, ACT_BTN_EXIT_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H,
+    draw_button(fb, ACT_BTN_EXIT_X, act_btn_y, ACT_BTN_W, ACT_BTN_H,
                 "EXIT", RGB565(160, 0, 0), RGB565_RED, 2);
 
-    draw_button(fb, ACT_BTN_SAVE_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H,
+    draw_button(fb, ACT_BTN_SAVE_X, act_btn_y, ACT_BTN_W, ACT_BTN_H,
                 "SAVE & RECONNECT", RGB565(0, 100, 0), RGB565_GREEN, 2);
 
     fb_swap(fb);
@@ -325,12 +369,14 @@ static void draw_main_screen(SettingsState *st) {
  *   99              switch to keypad screen
  */
 static int handle_main_touch(SettingsState *st, int tx, int ty) {
+    const int act_btn_y = settings_act_btn_y(st->fb);
+
     /* ── Action buttons ────────────────────────────────────── */
-    if (hit_rect(tx, ty, ACT_BTN_BACK_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H))
+    if (hit_rect(tx, ty, ACT_BTN_BACK_X, act_btn_y, ACT_BTN_W, ACT_BTN_H))
         return SETTINGS_BACK;
-    if (hit_rect(tx, ty, ACT_BTN_EXIT_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H))
+    if (hit_rect(tx, ty, ACT_BTN_EXIT_X, act_btn_y, ACT_BTN_W, ACT_BTN_H))
         return SETTINGS_EXIT;
-    if (hit_rect(tx, ty, ACT_BTN_SAVE_X, ACT_BTN_Y, ACT_BTN_W, ACT_BTN_H))
+    if (hit_rect(tx, ty, ACT_BTN_SAVE_X, act_btn_y, ACT_BTN_W, ACT_BTN_H))
         return SETTINGS_SAVE;
 
     /* ── Row touches ───────────────────────────────────────── */
@@ -426,38 +472,42 @@ static int handle_main_touch(SettingsState *st, int tx, int ty) {
 
 static void draw_keypad(SettingsState *st) {
     Framebuffer *fb = st->fb;
+    const int sw       = (int)fb->width;
+    const int sh       = (int)fb->height;
+    const int panel_y  = kp_panel_y(fb);
+    const int input_y  = kp_input_y(fb);
 
     /* Dim the entire screen as overlay background */
-    vnc_renderer_fill_rect(fb, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, RGB565(10, 10, 10));
+    vnc_renderer_fill_rect(fb, 0, 0, sw, sh, RGB565(10, 10, 10));
 
-    /* Keypad panel background */
-    vnc_renderer_fill_rect(fb, 0, KP_Y, SCREEN_WIDTH, KP_H, RGB565(20, 20, 20));
+    /* Keypad panel background — runs from panel_y to the bottom edge */
+    vnc_renderer_fill_rect(fb, 0, panel_y, sw, sh - panel_y, RGB565(20, 20, 20));
     /* Top border line */
-    vnc_renderer_fill_rect(fb, 0, KP_Y, SCREEN_WIDTH, 2, RGB565_WHITE);
+    vnc_renderer_fill_rect(fb, 0, panel_y, sw, 2, RGB565_WHITE);
 
     /* Title above input field */
     const char *title = (st->editing_field == 0) ? "EDIT HOST" : "EDIT PORT";
-    vnc_renderer_draw_text(fb, KP_INPUT_X, KP_Y + 1, title, RGB565_YELLOW, 1);
+    vnc_renderer_draw_text(fb, KP_INPUT_X, panel_y + 1, title, RGB565_YELLOW, 1);
 
     /* Input field */
-    vnc_renderer_fill_rect(fb, KP_INPUT_X, KP_INPUT_Y, KP_INPUT_W, KP_INPUT_H,
+    vnc_renderer_fill_rect(fb, KP_INPUT_X, input_y, KP_INPUT_W, KP_INPUT_H,
                            RGB565(0, 0, 40));
     /* Border */
-    vnc_renderer_fill_rect(fb, KP_INPUT_X, KP_INPUT_Y, KP_INPUT_W, 1, RGB565_GREEN);
-    vnc_renderer_fill_rect(fb, KP_INPUT_X, KP_INPUT_Y + KP_INPUT_H - 1, KP_INPUT_W, 1,
+    vnc_renderer_fill_rect(fb, KP_INPUT_X, input_y, KP_INPUT_W, 1, RGB565_GREEN);
+    vnc_renderer_fill_rect(fb, KP_INPUT_X, input_y + KP_INPUT_H - 1, KP_INPUT_W, 1,
                            RGB565_GREEN);
-    vnc_renderer_fill_rect(fb, KP_INPUT_X, KP_INPUT_Y, 1, KP_INPUT_H, RGB565_GREEN);
-    vnc_renderer_fill_rect(fb, KP_INPUT_X + KP_INPUT_W - 1, KP_INPUT_Y, 1, KP_INPUT_H,
+    vnc_renderer_fill_rect(fb, KP_INPUT_X, input_y, 1, KP_INPUT_H, RGB565_GREEN);
+    vnc_renderer_fill_rect(fb, KP_INPUT_X + KP_INPUT_W - 1, input_y, 1, KP_INPUT_H,
                            RGB565_GREEN);
 
     /* Input text */
-    vnc_renderer_draw_text(fb, KP_INPUT_X + 8, KP_INPUT_Y + 10,
+    vnc_renderer_draw_text(fb, KP_INPUT_X + 8, input_y + 10,
                            st->keypad_buf, RGB565_GREEN, 2);
 
     /* Blinking cursor (always shown — no real blink needed) */
     {
         int cx = KP_INPUT_X + 8 + vnc_renderer_text_width(st->keypad_buf, 2);
-        vnc_renderer_fill_rect(fb, cx, KP_INPUT_Y + 8, 2, 20, RGB565_GREEN);
+        vnc_renderer_fill_rect(fb, cx, input_y + 8, 2, 20, RGB565_GREEN);
     }
 
     /* ── Draw keypad buttons ────────────────────────────────── */
@@ -480,7 +530,8 @@ static void draw_keypad(SettingsState *st) {
             fg = RGB565_WHITE;
         }
 
-        draw_button(fb, btn->x, btn->y, btn->w, btn->h, btn->label, bg, fg, 2);
+        draw_button(fb, btn->x, kp_btn_y(fb, btn), btn->w, btn->h,
+                    btn->label, bg, fg, 2);
     }
 
     fb_swap(fb);
@@ -496,7 +547,7 @@ static void draw_keypad(SettingsState *st) {
 static int handle_keypad_touch(SettingsState *st, int tx, int ty) {
     for (int i = 0; i < (int)KP_NUM_BUTTONS; i++) {
         const KeypadButton *btn = &kp_buttons[i];
-        if (!hit_rect(tx, ty, btn->x, btn->y, btn->w, btn->h))
+        if (!hit_rect(tx, ty, btn->x, kp_btn_y(st->fb, btn), btn->w, btn->h))
             continue;
 
         const char *k = btn->label;
@@ -601,17 +652,19 @@ static void fkp_key_pos(int index, int *kx, int *ky) {
 static void draw_keypad_full(SettingsState *st) {
     Framebuffer *fb = st->fb;
     bool is_full = (st->keypad_mode == KEYPAD_FULL);
+    const int fkp_h = fkp_panel_h(fb);
 
     /* Dim entire screen */
-    vnc_renderer_fill_rect(fb, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, RGB565(10, 10, 10));
+    vnc_renderer_fill_rect(fb, 0, 0, (int)fb->width, (int)fb->height,
+                           RGB565(10, 10, 10));
 
     /* Overlay panel background */
-    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y, FKP_W, FKP_H, RGB565(20, 20, 20));
+    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y, FKP_W, fkp_h, RGB565(20, 20, 20));
     /* Border */
     vnc_renderer_fill_rect(fb, FKP_X, FKP_Y, FKP_W, 2, RGB565_WHITE);
-    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y + FKP_H - 2, FKP_W, 2, RGB565_WHITE);
-    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y, 2, FKP_H, RGB565_WHITE);
-    vnc_renderer_fill_rect(fb, FKP_X + FKP_W - 2, FKP_Y, 2, FKP_H, RGB565_WHITE);
+    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y + fkp_h - 2, FKP_W, 2, RGB565_WHITE);
+    vnc_renderer_fill_rect(fb, FKP_X, FKP_Y, 2, fkp_h, RGB565_WHITE);
+    vnc_renderer_fill_rect(fb, FKP_X + FKP_W - 2, FKP_Y, 2, fkp_h, RGB565_WHITE);
 
     /* Title */
     const char *title;

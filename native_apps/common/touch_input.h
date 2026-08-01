@@ -12,25 +12,30 @@ typedef struct {
     bool held;
 } TouchState;
 
-// Touch calibration.
+// A touch is mapped to app coordinates in two independent stages.
 //
-// Model: a per-axis LINEAR map from the raw digitiser range to the full screen:
-//   screen_x = (raw_x - raw_min_x) * (W-1) / (raw_max_x - raw_min_x)
-//   screen_y = (raw_y - raw_min_y) * (H-1) / (raw_max_y - raw_min_y)
-// The raw range lives in TouchInput (raw_min_x..raw_max_y); it defaults to the
-// hardware-reported EVIOCGABS range and is overridden by calibration.
+// 1. CALIBRATION — raw digitiser value to PANEL pixel, a per-axis linear map:
+//      panel_x = (raw_x - raw_min_x) * (panel_w-1) / (raw_max_x - raw_min_x)
+//      panel_y = (raw_y - raw_min_y) * (panel_h-1) / (raw_max_y - raw_min_y)
+//    The raw range lives in TouchInput (raw_min_x..raw_max_y), defaults to the
+//    hardware-reported EVIOCGABS range, and is overridden by calibration.
+//    The panel is linear — a traced border comes out as a straight-edged
+//    rectangle, no keystone or shear — so scale+offset per axis is accurate
+//    everywhere and reaches every edge. There is no affine term and no bilinear
+//    corner correction.
 //
-// The panel is linear (verified with touch_trace: a traced border comes out as a
-// straight-edged rectangle, no keystone/shear), so this single scale+offset per
-// axis is sufficient and reaches every edge by construction. There is deliberately
-// NO affine, NO bilinear corner correction, and the bezel margins are NOT applied
-// to touch coordinates (doing so double-corrects an already-accurate signal).
+// 2. BEZEL VIEWPORT — panel pixel to LOGICAL pixel, a translation by the
+//    viewport origin (see framebuffer.h). The bezel hides a band of panel
+//    pixels; the drawing surface is the rectangle inside them, so a touch is
+//    shifted by the same origin the framebuffer draws at. Touch and drawing
+//    therefore share one coordinate system, and apps see neither stage.
 //
-// bezel_* are kept only as a DRAWING concern: apps (and ScummVM) read them to keep
-// UI / centre the game surface off the physical bezel. They never move a touch.
+// The two stages must not be conflated: calibration maps onto the WHOLE panel,
+// bezel included, and is unaffected by the bezel margins.
 typedef struct {
     bool enabled;
-    // UI-only obstruction margins (pixels from edge). Drawing/layout use only.
+    // Bezel margins (pixels hidden at each panel edge). Authoritative copy is
+    // in framebuffer.c; these are the values as loaded from / saved to file.
     int bezel_top;
     int bezel_bottom;
     int bezel_left;
@@ -43,11 +48,13 @@ typedef struct {
     int last_x;
     int last_y;
     bool touching;
-    // Raw digitiser range → mapped linearly onto the full screen.
-    // Defaults from EVIOCGABS; overridden by calibration (edge-drag).
+    // Stage 1: raw digitiser range → panel. Defaults from EVIOCGABS.
     int raw_min_x, raw_max_x;
     int raw_min_y, raw_max_y;
-    int screen_width, screen_height;
+    int panel_width, panel_height;   // full panel, app orientation
+    // Stage 2: panel → logical
+    int view_x, view_y;              // logical surface origin within the panel
+    int screen_width, screen_height; // logical (visible) size
     bool calibrated;
     TouchCalibration calib;
     bool portrait_mode;      // Portrait mode active (coordinate rotation)
@@ -69,8 +76,20 @@ int touch_wait_for_press(TouchInput *touch, int *x, int *y);
 // Used by the calibration routine to gather the raw range at the screen edges.
 int touch_wait_for_press_raw(TouchInput *touch, int *raw_x, int *raw_y);
 
-// Set screen dimensions for coordinate scaling
+// Set the logical (visible) screen dimensions. Also refreshes the panel and
+// viewport geometry from the framebuffer globals, so calling this after
+// fb_init() is enough to keep touch and drawing in the same space.
 void touch_set_screen_size(TouchInput *touch, int width, int height);
+
+// Set the bezel viewport explicitly: the full panel size and the origin of the
+// logical surface within it. Use after fb_set_bezel() to keep touch aligned.
+void touch_set_viewport(TouchInput *touch, int panel_w, int panel_h,
+                        int view_x, int view_y);
+
+// Map a raw digitiser reading to logical screen coordinates, in place. This is
+// the same path touch_poll() uses, exposed so calibration can validate against
+// the real mapping instead of reimplementing it.
+void touch_map_raw(TouchInput *touch, int *x, int *y);
 
 // Get current touch state
 TouchState touch_get_state(TouchInput *touch);

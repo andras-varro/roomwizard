@@ -265,7 +265,7 @@ int main(int argc, char *argv[])
     /* Exit button — top-right */
     Button exit_btn;
     button_init_full(&exit_btn,
-                     screen_base_width - BTN_EXIT_WIDTH - screen_safe_margin_right,
+                     SCREEN_SAFE_RIGHT - BTN_EXIT_WIDTH,
                      SCREEN_SAFE_TOP + 5,
                      BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
                      "", BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR, 2);

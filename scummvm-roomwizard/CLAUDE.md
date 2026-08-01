@@ -72,7 +72,7 @@ musl, or dynamic linking — not `--whole-archive`.
 
 ```
 ScummVM Core -> OSystem_RoomWizard
-  |- RoomWizardGraphicsManager -> /dev/fb0   (800x480 RGB565, double-buffered)
+  |- RoomWizardGraphicsManager -> /dev/fb0   (RGB565, double-buffered)
   |- RoomWizardEventSource     -> /dev/input/event*  (touch, keyboard, mouse, gamepad)
   |- OssMixerManager           -> /dev/dsp   (22050 Hz MONO, O_NONBLOCK) -> TWL4030 -> SPKR1
   \- Default managers (timer, events, saves, filesystem)
@@ -82,9 +82,18 @@ ScummVM Core -> OSystem_RoomWizard
 on startup. Screenshots must be decoded with `--bpp 16`. Native apps run 32bpp and reset it on
 launch, so the mode depends entirely on which app last ran.
 
-**It links its own copy of `native_apps/common/touch_input.o`** (see `backend-files/configure.patch`).
-The build refreshes it, but a *deployed* ScummVM keeps whatever it was built with — redeploy
-ScummVM after changing touch code in `native_apps/common/`.
+**It links its own copy of `native_apps/common/touch_input.o` and `framebuffer.o`** (see
+`backend-files/configure.patch`). The build refreshes them, but a *deployed* ScummVM keeps
+whatever it was built with — redeploy ScummVM after changing touch or framebuffer code in
+`native_apps/common/`.
+
+**The backend is an ordinary `fb_init()` client, bezel included.** It has no bezel logic of its
+own: `_fb->width`/`_fb->height` are the logical (visible) screen, and `getScalingInfo()` just
+aspect-fits the game into that and centres it. Everything that indexes `_fb->back_buffer` must use
+`fbWidth()`/`fbHeight()` as the stride and bounds — the buffer is logical-sized (e.g. 800×450×2
+bytes at 16bpp), so a hardcoded 800-pixel stride writes past the allocation. Likewise the touch
+path: `RoomWizardEventSource` is constructed *before* the framebuffer exists, so `initSize()`
+calls `syncScreenGeometry()` to pick up the real geometry once `fb_init()` has run.
 
 ## Audio
 

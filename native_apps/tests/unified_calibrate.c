@@ -1,17 +1,20 @@
 /*
  * Unified Calibration Utility  (9-crosshair tap + least-squares)
  *
- * Touch model is a per-axis linear map from the raw digitiser range to the full
- * screen (see common/touch_input.c). To calibrate we tap 9 known crosshairs,
- * capture the raw reading at each, and least-squares fit a line per axis. The
- * fit is extrapolated out to screen 0 and screen dim-1 (touch_fit_axis_range),
- * so tapping the visible (inset) targets still reaches the true corners on a
- * linear panel — no edge-drag needed. A summary then shows each target (green
- * square) and where the calibrated touch lands (red dot) with the max error;
- * ACCEPT saves, REDO re-taps.
+ * Calibration is the raw→PANEL stage of the touch map (see common/touch_input.h).
+ * We tap 9 known crosshairs, capture the raw reading at each, and least-squares
+ * fit a line per axis. The fit is extrapolated out to panel 0 and panel dim-1
+ * (touch_fit_axis_range), so tapping the visible (inset) targets still reaches
+ * the true corners on a linear panel — no edge-drag needed. A summary then shows
+ * each target (green square) and where the calibrated touch lands (red dot) with
+ * the max error; ACCEPT saves, REDO re-taps.
  *
- * Saves to /etc/touch_calibration.conf (raw range line 1; UI margins line 2,
- * preserved for drawing/centering — never applied to touch coordinates).
+ * Targets are drawn in logical coordinates (that is what the user can see and
+ * reach) but converted to panel coordinates before fitting, so the bezel never
+ * gets baked into the calibration.
+ *
+ * Saves to /etc/touch_calibration.conf: raw range on line 1, bezel margins on
+ * line 2 (round-tripped unchanged — adjust them in Device Tools → Set Screen).
  */
 
 #include <stdio.h>
@@ -36,12 +39,6 @@ static void draw_crosshair(Framebuffer *fb, int x, int y, uint32_t color) {
 
 static bool in_rect(int x, int y, int rx, int ry, int rw, int rh) {
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
-}
-
-static int map_axis(int raw, int mn, int mx, int dim) {
-    int rng = mx - mn; if (rng <= 0) rng = 4095;
-    int r = raw - mn; if (r < 0) r = 0; if (r > rng) r = rng;
-    return r * (dim - 1) / rng;
 }
 
 static int build_targets(Framebuffer *fb, int *tx, int *ty) {
@@ -84,17 +81,25 @@ static int calibrate_once(Framebuffer *fb, TouchInput *touch) {
         usleep(120000);
     }
 
-    // Per-axis least-squares; extrapolate to screen 0 and dim-1 for full reach.
+    // Calibration maps raw onto the PANEL, so fit against panel coordinates:
+    // shift the (logical) targets by the viewport origin and use the panel dims.
+    int pnx[9], pny[9];
+    for (int i = 0; i < NP; i++) {
+        pnx[i] = tx[i] + fb->view_x;
+        pny[i] = ty[i] + fb->view_y;
+    }
+
+    // Per-axis least-squares; extrapolate to panel 0 and dim-1 for full reach.
     int mnx, mxx, mny, mxy;
-    if (touch_fit_axis_range(rawx, tx, NP, W, &mnx, &mxx) == 0 &&
-        touch_fit_axis_range(rawy, ty, NP, H, &mny, &mxy) == 0) {
+    if (touch_fit_axis_range(rawx, pnx, NP, screen_panel_width,  &mnx, &mxx) == 0 &&
+        touch_fit_axis_range(rawy, pny, NP, screen_panel_height, &mny, &mxy) == 0) {
         touch_set_raw_range(touch, mnx, mxx, mny, mxy);
     }
 
     int max_err = 0;
     for (int i = 0; i < NP; i++) {
-        int lx = map_axis(rawx[i], touch->raw_min_x, touch->raw_max_x, W);
-        int ly = map_axis(rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+        int lx = rawx[i], ly = rawy[i];
+        touch_map_raw(touch, &lx, &ly);   // the production path, logical coords
         int ex = lx - tx[i], ey = ly - ty[i];
         int err = (ex < 0 ? -ex : ex) + (ey < 0 ? -ey : ey);
         if (err > max_err) max_err = err;
@@ -107,8 +112,8 @@ static int calibrate_once(Framebuffer *fb, TouchInput *touch) {
     while (1) {
         fb_clear(fb, COLOR_BLACK);
         for (int i = 0; i < NP; i++) {
-            int lx = map_axis(rawx[i], touch->raw_min_x, touch->raw_max_x, W);
-            int ly = map_axis(rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+            int lx = rawx[i], ly = rawy[i];
+            touch_map_raw(touch, &lx, &ly);
             fb_draw_rect(fb, tx[i]-6, ty[i]-6, 12, 12, COLOR_GREEN);
             fb_draw_line(fb, tx[i], ty[i], lx, ly, RGB(80,80,40));
             fb_fill_circle(fb, lx, ly, 3, COLOR_RED);
@@ -139,6 +144,10 @@ int main(void) {
     TouchInput touch;
 
     printf("=== Unified Calibration (9-crosshair tap) ===\n");
+
+    /* The common draw helpers write one uint32 per pixel, so the framebuffer
+     * must be 32bpp — whatever ran last may have left it at 16. */
+    fb_set_bpp("/dev/fb0", 32);
 
     if (fb_init(&fb, "/dev/fb0") < 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");

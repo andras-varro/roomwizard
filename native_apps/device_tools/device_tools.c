@@ -182,7 +182,7 @@ typedef enum {
     TAB_SETTINGS,
     TAB_DIAGNOSTICS,
     TAB_TESTS,
-    TAB_CALIBRATION,
+    TAB_SCREEN,
     TAB_USB,
     TAB_COUNT
 } ActiveTab;
@@ -206,7 +206,8 @@ typedef enum {
     CALIB_IDLE,
     CALIB_PHASE1,
     CALIB_PHASE2,
-    CALIB_DONE
+    CALIB_DONE,
+    CALIB_BEZEL      /* full-screen bezel (screen edge) adjuster */
 } CalibSubState;
 
 typedef enum {
@@ -215,7 +216,7 @@ typedef enum {
     CONFIRM_REBOOT
 } ConfirmAction;
 
-static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "CALIBRATION", "USB" };
+static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "SET SCREEN", "USB" };
 
 static const char *test_names[] = {
     "RED LED", "GREEN LED", "BOTH LEDS", "BACKLIGHT", "PULSE",
@@ -304,6 +305,7 @@ static Button test_buttons[NUM_TESTS];
 
 /* Calibration */
 static Button calib_start_btn;
+static Button calib_bezel_btn;
 
 /* USB */
 static Button usb_btn_rescan, usb_btn_ktest, usb_btn_mtest, usb_btn_gtest;
@@ -387,7 +389,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "SET", "DIAG", "TEST", "CAL", "USB" };
+    static const char *short_labels[] = { "SET", "DIAG", "TEST", "SCREEN", "USB" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -1662,11 +1664,19 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
  * Calibration Tab  (from unified_calibrate.c)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+/* Two independent adjustments, deliberately kept apart:
+ *   TOUCH CALIBRATION - raw digitiser to panel pixel   (conf line 1)
+ *   SCREEN EDGES      - panel pixels hidden by the bezel (conf line 2) */
 static void create_calibration_ui(void) {
-    int btn_x = CONTENT_LEFT + (CONTENT_WIDTH - 250) / 2;
-    int btn_y = CONTENT_Y + 160;
+    const int bw = 260, bh = 55, gap = 20;
+    int btn_x = CONTENT_LEFT + (CONTENT_WIDTH - bw) / 2;
+    int btn_y = CONTENT_Y + 130;
     button_init_full(&calib_start_btn, btn_x, btn_y,
-                     250, 55, "START CALIBRATION",
+                     bw, bh, "TOUCH CALIBRATION",
+                     BTN_COLOR_PRIMARY, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 2);
+    button_init_full(&calib_bezel_btn, btn_x, btn_y + bh + gap,
+                     bw, bh, "SCREEN EDGES",
                      BTN_COLOR_PRIMARY, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 }
@@ -1674,39 +1684,36 @@ static void create_calibration_ui(void) {
 static void draw_calibration(Framebuffer *fb, AppState *state) {
     (void)state;
     text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                       CONTENT_Y + 20, "TOUCH CALIBRATION", COLOR_WHITE, 3);
+                       CONTENT_Y + 16, "SET SCREEN", COLOR_WHITE, 3);
 
-    int y = CONTENT_Y + 60;
+    int y = CONTENT_Y + 52;
     if (access(CALIB_FILE, 0) == 0)
-        y = draw_info_row(fb, y, "STATUS:", "CALIBRATED", COLOR_GREEN);
+        y = draw_info_row(fb, y, "TOUCH:", "CALIBRATED", COLOR_GREEN);
     else
-        y = draw_info_row(fb, y, "STATUS:", "NOT CALIBRATED", COLOR_YELLOW);
-    y = draw_info_row(fb, y, "FILE:", CALIB_FILE, COLOR_LABEL);
+        y = draw_info_row(fb, y, "TOUCH:", "NOT CALIBRATED", COLOR_YELLOW);
 
-    if (access(CALIB_FILE, 0) == 0) {
-        TouchInput tmp; memset(&tmp, 0, sizeof(tmp));
-        if (touch_load_calibration(&tmp, CALIB_FILE) == 0) {
-            char margins[64];
-            snprintf(margins, sizeof(margins), "T:%d  B:%d  L:%d  R:%d",
-                     tmp.calib.bezel_top, tmp.calib.bezel_bottom,
-                     tmp.calib.bezel_left, tmp.calib.bezel_right);
-            y = draw_info_row(fb, y, "MARGINS:", margins, COLOR_DATA);
-        }
-    }
+    char margins[64];
+    snprintf(margins, sizeof(margins), "T:%d  B:%d  L:%d  R:%d",
+             screen_bezel_top, screen_bezel_bottom,
+             screen_bezel_left, screen_bezel_right);
+    y = draw_info_row(fb, y, "EDGES:", margins, COLOR_DATA);
+
+    char visible[64];
+    snprintf(visible, sizeof(visible), "%dx%d OF %dx%d",
+             (int)fb->width, (int)fb->height,
+             screen_panel_width, screen_panel_height);
+    y = draw_info_row(fb, y, "VISIBLE:", visible, COLOR_DATA);
 
     button_draw(fb, &calib_start_btn);
-
-    int note_y = CONTENT_Y + 240;
-    fb_draw_text(fb, CONTENT_LEFT + 20, note_y,
-                 "Note: tap the 9 crosshairs, then review the", COLOR_LABEL, 2);
-    fb_draw_text(fb, CONTENT_LEFT + 20, note_y + 24,
-                 "fit and ACCEPT or REDO. ~15 seconds.", COLOR_LABEL, 2);
+    button_draw(fb, &calib_bezel_btn);
 }
 
 static void handle_calib_input(AppState *state, int tx, int ty,
                                bool touching, uint32_t now) {
     if (button_update(&calib_start_btn, tx, ty, touching, now)) {
         state->calib_sub = CALIB_PHASE1;
+    } else if (button_update(&calib_bezel_btn, tx, ty, touching, now)) {
+        state->calib_sub = CALIB_BEZEL;
     }
 }
 
@@ -1725,9 +1732,9 @@ static bool calib_in_rect(int x, int y, int rx, int ry, int rw, int rh) {
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
-/* The 9 calibration/validation targets, inset so they clear the ~30-40px bezel
- * yet stay well inside the visible area. The least-squares fit extrapolates the
- * fitted line out to the true screen edges, so tapping these still reaches the
+/* The 9 calibration/validation targets, in LOGICAL coordinates and inset so the
+ * digitiser can reliably report them. The least-squares fit extrapolates the
+ * fitted line out to the true panel edges, so tapping these still reaches the
  * corners on a linear panel. */
 #define CALIB_TAP_INSET 40
 static int calib_targets(Framebuffer *fb, int *tx, int *ty) {
@@ -1740,7 +1747,7 @@ static int calib_targets(Framebuffer *fb, int *tx, int *ty) {
 
 /* Phase 1: tap the 9 crosshairs, capture raw, per-axis least-squares fit. */
 static void run_calib_phase1(Framebuffer *fb, TouchInput *touch, AppState *state) {
-    const int W = (int)fb->width, H = (int)fb->height;
+    const int W = (int)fb->width;
     int tx[9], ty[9];
     int NP = calib_targets(fb, tx, ty);
 
@@ -1769,22 +1776,26 @@ static void run_calib_phase1(Framebuffer *fb, TouchInput *touch, AppState *state
     }
     if (!running) { state->calib_sub = CALIB_IDLE; return; }
 
-    /* Per-axis least-squares over the 9 taps. touch_fit_axis_range returns the
-     * raw values mapping to screen 0 and screen dim-1 (extrapolated), which
-     * gives full-screen reach without any edge-drag. */
+    /* Calibration is the raw→PANEL stage, so fit against panel coordinates:
+     * shift the (logical) targets by the viewport origin and use the panel dims.
+     * Fitting against logical coordinates would bake the bezel into the raw
+     * range, which scale_coordinates() then subtracts a second time. */
+    int pnx[9], pny[9];
+    for (int i = 0; i < NP; i++) {
+        pnx[i] = tx[i] + fb->view_x;
+        pny[i] = ty[i] + fb->view_y;
+    }
+
+    /* touch_fit_axis_range returns the raw values mapping to panel 0 and panel
+     * dim-1 (extrapolated), which gives full reach without any edge-drag. */
     int mnx, mxx, mny, mxy;
-    int okx = touch_fit_axis_range(state->calib_rawx, tx, NP, W, &mnx, &mxx) == 0;
-    int oky = touch_fit_axis_range(state->calib_rawy, ty, NP, H, &mny, &mxy) == 0;
+    int okx = touch_fit_axis_range(state->calib_rawx, pnx, NP,
+                                   screen_panel_width,  &mnx, &mxx) == 0;
+    int oky = touch_fit_axis_range(state->calib_rawy, pny, NP,
+                                   screen_panel_height, &mny, &mxy) == 0;
     if (okx && oky) touch_set_raw_range(touch, mnx, mxx, mny, mxy);
 
     state->calib_sub = CALIB_PHASE2;
-}
-
-/* map one raw axis value through a range (mirror of scale_coordinates, landscape) */
-static int calib_map_axis(int raw, int mn, int mx, int dim) {
-    int rng = mx - mn; if (rng <= 0) rng = 4095;
-    int r = raw - mn; if (r < 0) r = 0; if (r > rng) r = rng;
-    return r * (dim - 1) / rng;
 }
 
 /* Phase 2: summary - targets (green squares) + fitted landings (red dots),
@@ -1796,8 +1807,8 @@ static void run_calib_phase2(Framebuffer *fb, TouchInput *touch, AppState *state
 
     int max_err = 0;
     for (int i = 0; i < NP; i++) {
-        int lx = calib_map_axis(state->calib_rawx[i], touch->raw_min_x, touch->raw_max_x, W);
-        int ly = calib_map_axis(state->calib_rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+        int lx = state->calib_rawx[i], ly = state->calib_rawy[i];
+        touch_map_raw(touch, &lx, &ly);   /* the production path, logical coords */
         int ex = lx - tx[i], ey = ly - ty[i];
         int err = (ex<0?-ex:ex) + (ey<0?-ey:ey);
         if (err > max_err) max_err = err;
@@ -1809,8 +1820,8 @@ static void run_calib_phase2(Framebuffer *fb, TouchInput *touch, AppState *state
     while (running) {
         fb_clear(fb, COLOR_BLACK);
         for (int i = 0; i < NP; i++) {
-            int lx = calib_map_axis(state->calib_rawx[i], touch->raw_min_x, touch->raw_max_x, W);
-            int ly = calib_map_axis(state->calib_rawy[i], touch->raw_min_y, touch->raw_max_y, H);
+            int lx = state->calib_rawx[i], ly = state->calib_rawy[i];
+            touch_map_raw(touch, &lx, &ly);
             fb_draw_rect(fb, tx[i]-6, ty[i]-6, 12, 12, COLOR_GREEN);   /* target */
             fb_draw_line(fb, tx[i], ty[i], lx, ly, RGB(80,80,40));      /* error */
             fb_fill_circle(fb, lx, ly, 3, COLOR_RED);                   /* landing */
@@ -1840,19 +1851,211 @@ static void run_calib_phase2(Framebuffer *fb, TouchInput *touch, AppState *state
 static void run_calib_done(Framebuffer *fb, TouchInput *touch, AppState *state) {
     if (touch_save_calibration(touch, CALIB_FILE) == 0) {
         fb_clear(fb, COLOR_BLACK);
-        text_draw_centered(fb, (int)fb->width/2, 180, "CALIBRATION SAVED!", COLOR_GREEN, 3);
+        text_draw_centered(fb, (int)fb->width/2, (int)fb->height/2 - 60,
+                           "CALIBRATION SAVED!", COLOR_GREEN, 3);
         char s[80]; snprintf(s, sizeof(s), "raw X %d..%d  Y %d..%d",
             touch->raw_min_x, touch->raw_max_x, touch->raw_min_y, touch->raw_max_y);
-        text_draw_centered(fb, (int)fb->width/2, 250, s, COLOR_YELLOW, 2);
+        text_draw_centered(fb, (int)fb->width/2, (int)fb->height/2,
+                           s, COLOR_YELLOW, 2);
         fb_swap(fb);
         sleep(2);
-        fb_load_safe_area();
     } else {
         fb_clear(fb, COLOR_BLACK);
-        text_draw_centered(fb, (int)fb->width/2, 200, "SAVE FAILED - RUN AS ROOT", COLOR_RED, 3);
+        text_draw_centered(fb, (int)fb->width/2, (int)fb->height/2,
+                           "SAVE FAILED - RUN AS ROOT", COLOR_RED, 3);
         fb_swap(fb);
         sleep(3);
     }
+    state->calib_sub = CALIB_IDLE;
+}
+
+/* -- Screen edge (bezel) adjuster --------------------------------------------
+ *
+ * The bezel hides a band of panel pixels. This screen draws a frame at the edge
+ * of the logical (visible) surface: any part of the frame you cannot see means
+ * that margin is still too small. Every step re-letterboxes immediately, so the
+ * frame moves live and touch stays aligned with it.
+ *
+ * All controls sit around the centre — the region that is both reliably visible
+ * and reliably reachable by the digitiser whatever the margins are set to.     */
+
+#define BEZ_BTN_W    56
+#define BEZ_BTN_H    48
+#define BEZ_VAL_W    56
+#define BEZ_MAX      64      /* a margin larger than this is a misconfiguration */
+
+typedef struct { int minus_x, plus_x, y; } BezStepper;
+
+/* Draw "LABEL / [-] value [+]" centred on (cx, cy); returns its hit rects. */
+static BezStepper draw_bez_stepper(Framebuffer *fb, int cx, int cy,
+                                   const char *label, int value) {
+    BezStepper s;
+    s.y       = cy - BEZ_BTN_H / 2;
+    s.minus_x = cx - BEZ_VAL_W / 2 - BEZ_BTN_W;
+    s.plus_x  = cx + BEZ_VAL_W / 2;
+
+    text_draw_centered(fb, cx, s.y - 22, label, COLOR_LABEL, 2);
+
+    fb_fill_rect(fb, s.minus_x, s.y, BEZ_BTN_W, BEZ_BTN_H, RGB(60, 60, 90));
+    fb_draw_rect(fb, s.minus_x, s.y, BEZ_BTN_W, BEZ_BTN_H, COLOR_WHITE);
+    text_draw_centered(fb, s.minus_x + BEZ_BTN_W / 2, s.y + BEZ_BTN_H / 2,
+                       "-", COLOR_WHITE, 3);
+
+    fb_fill_rect(fb, s.plus_x, s.y, BEZ_BTN_W, BEZ_BTN_H, RGB(60, 60, 90));
+    fb_draw_rect(fb, s.plus_x, s.y, BEZ_BTN_W, BEZ_BTN_H, COLOR_WHITE);
+    text_draw_centered(fb, s.plus_x + BEZ_BTN_W / 2, s.y + BEZ_BTN_H / 2,
+                       "+", COLOR_WHITE, 3);
+
+    char v[8]; snprintf(v, sizeof(v), "%d", value);
+    text_draw_centered(fb, cx, s.y + BEZ_BTN_H / 2, v, COLOR_DATA, 3);
+    return s;
+}
+
+/* Apply the working margins to the live framebuffer and keep touch in step. */
+static void bez_apply(Framebuffer *fb, TouchInput *touch, AppState *state) {
+    if (fb_set_bezel(fb, state->bezel_top, state->bezel_bottom,
+                     state->bezel_left, state->bezel_right) < 0) {
+        /* Rejected (no usable area left): resync from what actually took. */
+        state->bezel_top    = screen_bezel_top;
+        state->bezel_bottom = screen_bezel_bottom;
+        state->bezel_left   = screen_bezel_left;
+        state->bezel_right  = screen_bezel_right;
+    }
+    touch_set_screen_size(touch, (int)fb->width, (int)fb->height);
+}
+
+static void bez_step(Framebuffer *fb, TouchInput *touch, AppState *state,
+                     int *margin, int delta) {
+    int v = *margin + delta;
+    if (v < 0) v = 0;
+    if (v > BEZ_MAX) v = BEZ_MAX;
+    if (v == *margin) return;
+    *margin = v;
+    bez_apply(fb, touch, state);
+}
+
+static void run_bezel_adjust(Framebuffer *fb, TouchInput *touch, AppState *state) {
+    /* fb_init() rotates the margins into virtual space in portrait, so values
+     * edited here would be saved rotated and re-rotated on the next start.
+     * Same constraint as touch calibration: adjust in landscape. */
+    if (fb->portrait_mode) {
+        fb_clear(fb, COLOR_BLACK);
+        text_draw_centered(fb, (int)fb->width / 2, (int)fb->height / 2 - 20,
+                           "ADJUST SCREEN EDGES", COLOR_YELLOW, 3);
+        text_draw_centered(fb, (int)fb->width / 2, (int)fb->height / 2 + 20,
+                           "IN LANDSCAPE MODE", COLOR_YELLOW, 3);
+        fb_swap(fb);
+        sleep(3);
+        state->calib_sub = CALIB_IDLE;
+        return;
+    }
+
+    const int entry_t = screen_bezel_top,  entry_b = screen_bezel_bottom;
+    const int entry_l = screen_bezel_left, entry_r = screen_bezel_right;
+
+    state->bezel_top    = entry_t;
+    state->bezel_bottom = entry_b;
+    state->bezel_left   = entry_l;
+    state->bezel_right  = entry_r;
+
+    touch_drain_events(touch);
+
+    while (running) {
+        /* Recompute the layout every frame: the logical size changes as the
+         * margins do, so the cluster stays centred in what is visible. The row
+         * spacing is derived from the height, so the whole cluster still fits
+         * at the largest margins BEZ_MAX allows. */
+        const int W = (int)fb->width, H = (int)fb->height;
+        const int cx = W / 2, cy = H / 2;
+        const int ah = 56;                       /* SAVE / CANCEL height */
+        int step = (H / 2 - ah / 2 - 6) / 3;     /* 3 rows above and below cy */
+        if (step > 56) step = 56;
+        if (step < 30) step = 30;
+
+        fb_clear(fb, COLOR_BLACK);
+
+        /* 2px frame on the logical edge + corner ticks */
+        fb_draw_rect(fb, 0, 0, W, H, COLOR_CYAN);
+        fb_draw_rect(fb, 1, 1, W - 2, H - 2, COLOR_CYAN);
+        for (int i = 0; i < 40; i++) {
+            fb_draw_pixel(fb, i, 4, COLOR_YELLOW);
+            fb_draw_pixel(fb, W - 1 - i, 4, COLOR_YELLOW);
+            fb_draw_pixel(fb, i, H - 5, COLOR_YELLOW);
+            fb_draw_pixel(fb, W - 1 - i, H - 5, COLOR_YELLOW);
+            fb_draw_pixel(fb, 4, i, COLOR_YELLOW);
+            fb_draw_pixel(fb, 4, H - 1 - i, COLOR_YELLOW);
+            fb_draw_pixel(fb, W - 5, i, COLOR_YELLOW);
+            fb_draw_pixel(fb, W - 5, H - 1 - i, COLOR_YELLOW);
+        }
+
+        text_draw_centered(fb, cx, cy - 3 * step,
+                           "GROW EACH EDGE UNTIL THE FRAME IS FULLY VISIBLE",
+                           COLOR_WHITE, 2);
+
+        BezStepper st = draw_bez_stepper(fb, cx, cy - 2 * step, "TOP", state->bezel_top);
+        BezStepper sl = draw_bez_stepper(fb, cx - 190, cy, "LEFT", state->bezel_left);
+        BezStepper sr = draw_bez_stepper(fb, cx + 190, cy, "RIGHT", state->bezel_right);
+        BezStepper sb = draw_bez_stepper(fb, cx, cy + 2 * step, "BOTTOM", state->bezel_bottom);
+
+        /* Visible size, in the gap between the LEFT and RIGHT steppers */
+        char dims[32];
+        snprintf(dims, sizeof(dims), "%dx%d", W, H);
+        text_draw_centered(fb, cx, cy, dims, COLOR_DATA, 2);
+
+        const int aw = 170, agap = 30;
+        const int ay = cy + 3 * step - ah / 2;
+        const int save_x = cx - agap / 2 - aw, cancel_x = cx + agap / 2;
+        fb_fill_rect(fb, save_x, ay, aw, ah, RGB(0, 120, 0));
+        fb_draw_rect(fb, save_x, ay, aw, ah, COLOR_WHITE);
+        text_draw_centered(fb, save_x + aw / 2, ay + ah / 2, "SAVE", COLOR_WHITE, 2);
+        fb_fill_rect(fb, cancel_x, ay, aw, ah, RGB(120, 60, 0));
+        fb_draw_rect(fb, cancel_x, ay, aw, ah, COLOR_WHITE);
+        text_draw_centered(fb, cancel_x + aw / 2, ay + ah / 2, "CANCEL", COLOR_WHITE, 2);
+
+        fb_swap(fb);
+
+        int px, py;
+        if (touch_wait_for_press(touch, &px, &py) < 0) break;
+
+        if (calib_in_rect(px, py, st.minus_x, st.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_top, -1);
+        else if (calib_in_rect(px, py, st.plus_x, st.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_top, +1);
+        else if (calib_in_rect(px, py, sb.minus_x, sb.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_bottom, -1);
+        else if (calib_in_rect(px, py, sb.plus_x, sb.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_bottom, +1);
+        else if (calib_in_rect(px, py, sl.minus_x, sl.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_left, -1);
+        else if (calib_in_rect(px, py, sl.plus_x, sl.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_left, +1);
+        else if (calib_in_rect(px, py, sr.minus_x, sr.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_right, -1);
+        else if (calib_in_rect(px, py, sr.plus_x, sr.y, BEZ_BTN_W, BEZ_BTN_H))
+            bez_step(fb, touch, state, &state->bezel_right, +1);
+        else if (calib_in_rect(px, py, save_x, ay, aw, ah)) {
+            touch->calib.bezel_top    = state->bezel_top;
+            touch->calib.bezel_bottom = state->bezel_bottom;
+            touch->calib.bezel_left   = state->bezel_left;
+            touch->calib.bezel_right  = state->bezel_right;
+            bool ok = (touch_save_calibration(touch, CALIB_FILE) == 0);
+            fb_clear(fb, COLOR_BLACK);
+            text_draw_centered(fb, (int)fb->width / 2, (int)fb->height / 2,
+                               ok ? "SCREEN EDGES SAVED" : "SAVE FAILED - RUN AS ROOT",
+                               ok ? COLOR_GREEN : COLOR_RED, 3);
+            fb_swap(fb);
+            sleep(2);
+            break;
+        } else if (calib_in_rect(px, py, cancel_x, ay, aw, ah)) {
+            state->bezel_top    = entry_t;
+            state->bezel_bottom = entry_b;
+            state->bezel_left   = entry_l;
+            state->bezel_right  = entry_r;
+            bez_apply(fb, touch, state);
+            break;
+        }
+    }
+
     state->calib_sub = CALIB_IDLE;
 }
 
@@ -2451,17 +2654,34 @@ static void run_usb_fullscreen(Framebuffer *fb, TouchInput *touch, AppState *sta
  * Full-Screen Mode Handler
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
+/* Lay out every tab's widgets. Re-run whenever the logical screen size changes,
+ * since all of them derive their geometry from SCREEN_SAFE_*. */
+static void rebuild_ui(AppState *state) {
+    create_tab_bar();
+    create_settings_ui(state);
+    create_diagnostics_ui();
+    create_tests_ui();
+    create_calibration_ui();
+    create_usb_ui();
+}
+
 static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
                                         AppState *state) {
     if (state->active_tab == TAB_TESTS) {
         run_test(fb, touch, state->test_selected);
         state->test_sub = TEST_MENU_VIEW;
         hw_leds_off();
-    } else if (state->active_tab == TAB_CALIBRATION) {
+    } else if (state->active_tab == TAB_SCREEN) {
         switch (state->calib_sub) {
             case CALIB_PHASE1: run_calib_phase1(fb, touch, state); break;
             case CALIB_PHASE2: run_calib_phase2(fb, touch, state); break;
             case CALIB_DONE:   run_calib_done(fb, touch, state);   break;
+            case CALIB_BEZEL:
+                run_bezel_adjust(fb, touch, state);
+                /* The logical screen may have resized under the UI - the tab
+                 * bar and every tab's widgets are laid out from SCREEN_SAFE_*. */
+                rebuild_ui(state);
+                break;
             default: break;
         }
     } else if (state->active_tab == TAB_USB) {
@@ -2487,6 +2707,11 @@ int main(void) {
 
     hw_init();
     hw_set_backlight(100);
+
+    /* The common draw helpers write one uint32 per pixel, so the framebuffer
+     * must be 32bpp. Whatever ran last (ScummVM, the VNC session) may have left
+     * it at 16. */
+    fb_set_bpp("/dev/fb0", 32);
 
     Framebuffer fb;
     if (fb_init(&fb, "/dev/fb0") < 0) {
@@ -2527,12 +2752,7 @@ int main(void) {
     state.usb_fd = -1;
     state.usb_kbd_idx = state.usb_mou_idx = state.usb_pad_idx = -1;
 
-    create_tab_bar();
-    create_settings_ui(&state);
-    create_diagnostics_ui();
-    create_tests_ui();
-    create_calibration_ui();
-    create_usb_ui();
+    rebuild_ui(&state);
     usb_scan_devices(&state);
 
     bool needs_redraw = true;  /* first frame always draws */
@@ -2547,7 +2767,7 @@ int main(void) {
         }
 
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
-                       || (state.active_tab == TAB_CALIBRATION && state.calib_sub != CALIB_IDLE)
+                       || (state.active_tab == TAB_SCREEN && state.calib_sub != CALIB_IDLE)
                        || (state.active_tab == TAB_USB && state.usb_scr != USB_SCR_MAIN);
 
         if (fullscreen) {
@@ -2565,7 +2785,7 @@ int main(void) {
                 case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
                 case TAB_DIAGNOSTICS: draw_diagnostics(&fb, &state); break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
-                case TAB_CALIBRATION: draw_calibration(&fb, &state); break;
+                case TAB_SCREEN:      draw_calibration(&fb, &state); break;
                 case TAB_USB:         draw_usb(&fb, &state);         break;
                 default: break;
             }
@@ -2618,7 +2838,7 @@ int main(void) {
                 case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
                 case TAB_DIAGNOSTICS: handle_diag_input(&state, tx, ty, touching, now);     break;
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
-                case TAB_CALIBRATION: handle_calib_input(&state, tx, ty, touching, now);    break;
+                case TAB_SCREEN:      handle_calib_input(&state, tx, ty, touching, now);    break;
                 case TAB_USB:         handle_usb_input(&state, tx, ty, touching, now);      break;
                 default: break;
             }

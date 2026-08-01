@@ -100,6 +100,9 @@ RoomWizardEventSource::RoomWizardEventSource()
 	memset(_cornerTaps, 0, sizeof(_cornerTaps));
 	memset(_pending,    0, sizeof(_pending));
 
+	_screenW = screen_base_width;
+	_screenH = screen_base_height;
+
 	initDefaultGamepadMap();
 	loadInputConfig();
 	initTouch();
@@ -132,15 +135,14 @@ void RoomWizardEventSource::initTouch() {
 		return;
 	}
 
-	// Set screen size for coordinate scaling
-	touch_set_screen_size(_touchInput, 800, 480);
+	// Coordinate geometry. This runs before the framebuffer exists, so it picks
+	// up the pre-bezel defaults; syncScreenGeometry() corrects it from initSize().
+	touch_set_screen_size(_touchInput, screen_base_width, screen_base_height);
 
-	// Load touch/bezel calibration if available
+	// Load touch calibration if available
 	if (touch_load_calibration(_touchInput, "/etc/touch_calibration.conf") == 0) {
 		touch_enable_calibration(_touchInput, true);
-		debug("RoomWizard: touch calibration loaded (bezel T=%d B=%d L=%d R=%d)",
-		      _touchInput->calib.bezel_top, _touchInput->calib.bezel_bottom,
-		      _touchInput->calib.bezel_left, _touchInput->calib.bezel_right);
+		debug("RoomWizard: touch calibration loaded");
 	} else {
 		debug("RoomWizard: no calibration file, using defaults");
 	}
@@ -295,9 +297,9 @@ void RoomWizardEventSource::loadGamepadAxisCalibration() {
 
 RoomWizardEventSource::Corner RoomWizardEventSource::cornerFor(int x, int y) const {
 	const int ZONE = 80;
-	if (y > 480 - ZONE) {
-		if (x < ZONE)       return CORNER_BL;
-		if (x > 800 - ZONE) return CORNER_BR;
+	if (y > _screenH - ZONE) {
+		if (x < ZONE)            return CORNER_BL;
+		if (x > _screenW - ZONE) return CORNER_BR;
 	}
 	return CORNER_COUNT;
 }
@@ -371,15 +373,14 @@ void RoomWizardEventSource::checkGestures(int touchX, int touchY, uint32 now) {
 	}
 }
 
-void RoomWizardEventSource::getBezelMargins(int &top, int &bottom, int &left, int &right) const {
+void RoomWizardEventSource::syncScreenGeometry() {
+	_screenW = screen_base_width;
+	_screenH = screen_base_height;
 	if (_touchInitialized && _touchInput) {
-		top    = _touchInput->calib.bezel_top;
-		bottom = _touchInput->calib.bezel_bottom;
-		left   = _touchInput->calib.bezel_left;
-		right  = _touchInput->calib.bezel_right;
-	} else {
-		top = bottom = left = right = 0;
+		// Also refreshes the panel size and bezel viewport from the globals.
+		touch_set_screen_size(_touchInput, _screenW, _screenH);
 	}
+	debug("RoomWizard: visible screen %dx%d", _screenW, _screenH);
 }
 
 void RoomWizardEventSource::setGameScreenSize(int width, int height, int offsetX, int offsetY) {
@@ -396,8 +397,8 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 		gameY = touchY;
 		if (gameX < 0) gameX = 0;
 		if (gameY < 0) gameY = 0;
-		if (gameX >= 800) gameX = 799;
-		if (gameY >= 480) gameY = 479;
+		if (gameX >= _screenW) gameX = _screenW - 1;
+		if (gameY >= _screenH) gameY = _screenH - 1;
 	} else {
 		int scaledW = _gameWidth, scaledH = _gameHeight;
 		int fbOffsetX = 0, fbOffsetY = 0;
@@ -737,9 +738,9 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 		int mx = _mouseX + (int)(accumDx * multiplier);
 		int my = _mouseY + (int)(accumDy * multiplier);
 		if (mx < 0) mx = 0;
-		if (mx >= 800) mx = 799;
+		if (mx >= _screenW) mx = _screenW - 1;
 		if (my < 0) my = 0;
-		if (my >= 480) my = 479;
+		if (my >= _screenH) my = _screenH - 1;
 		_mouseX = mx;
 		_mouseY = my;
 		int gmx, gmy;
@@ -828,8 +829,8 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 
 		if (_mouseX < 0) _mouseX = 0;
 		if (_mouseY < 0) _mouseY = 0;
-		if (_mouseX >= 800) _mouseX = 799;
-		if (_mouseY >= 480) _mouseY = 479;
+		if (_mouseX >= _screenW) _mouseX = _screenW - 1;
+		if (_mouseY >= _screenH) _mouseY = _screenH - 1;
 
 		int gameX, gameY;
 		transformCoordinates(_mouseX, _mouseY, gameX, gameY);
@@ -1030,8 +1031,8 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 
 		if (_mouseX < 0) _mouseX = 0;
 		if (_mouseY < 0) _mouseY = 0;
-		if (_mouseX >= 800) _mouseX = 799;
-		if (_mouseY >= 480) _mouseY = 479;
+		if (_mouseX >= _screenW) _mouseX = _screenW - 1;
+		if (_mouseY >= _screenH) _mouseY = _screenH - 1;
 
 		int gx, gy;
 		transformCoordinates(_mouseX, _mouseY, gx, gy);

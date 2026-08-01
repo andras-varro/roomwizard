@@ -106,12 +106,12 @@ for how binaries are actually built and shipped.
   needed and any hit is real.
 - **Framebuffer bpp is per-app — always confirm before decoding a screenshot.** `/dev/fb0`
   format is set at runtime by whatever app is running: **native menu + games force 32bpp
-  XRGB8888**. Caveat — only `app_launcher` calls `fb_set_bpp(fb_dev,32)` *both* on startup
-  and after every child exits; `game_selector` does it only after a child exits, and
-  `device_tools`/`hardware_config`/`unified_calibrate` never do it at all (open bug — see
-  IMPROVEMENT_PLAN.md B1: at 16bpp the common draw helpers overflow the back buffer); **ScummVM and the VNC
+  XRGB8888** via `fb_set_bpp(fb_dev,32)` at startup (`app_launcher` also re-asserts it after
+  every child exits; `game_selector` only does it after a child exits); **ScummVM and the VNC
   remote session run 16bpp RGB565** (they call `fb_set_bpp(...,16)` to halve memory
-  bandwidth). `framebuffer.c` (common lib) writes `uint32_t` per pixel, so it is 32bpp-only.
+  bandwidth). `framebuffer.c` (common lib) draws `uint32_t` per pixel, so its primitives are
+  32bpp-only — but `fb_swap()` and `fb_clear(…,0)` are byte-sized and correct at any bpp, which
+  is what lets ScummVM drive its own 16bpp pixels through the same `Framebuffer`.
   Screenshot: `ssh root@<ip> cat /dev/fb0 > fb.raw` (one 32bpp frame = 800×480×4 =
   1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is why the old
   16bpp decoder looked size-correct while decoding garbage), then `python3 fb565_to_png.py
@@ -128,24 +128,33 @@ for how binaries are actually built and shipped.
   is silently ignored, and SPEED/FMT/CHANNELS ioctls reset each other — set SPEED→FMT→CHANNELS
   and read back actual rate with `SOUND_PCM_READ_*`. See `scummvm-roomwizard/backend-files/oss-mixer.cpp`.
 - **Touch coordinates must be captured before the `BTN_TOUCH` press event** (event order:
-  ABS_X, ABS_Y, BTN_TOUCH, SYN_REPORT). Raw 12-bit (0–4095) → screen: `x*800/4095`, `y*480/4095`.
-  The touch model (`common/touch_input.c`) is exactly this: a per-axis LINEAR map from the raw
-  range to the full screen — no affine, no keystone correction, and the bezel margins are NOT
-  applied to touch coords (that double-corrects; a `touch_trace` capture confirmed the panel is
-  linear and raw 0..4095 already spans the full screen). The panel is projected-capacitive
-  (Panjit on i2c-2 @ 0x03) and the controller is 2-point multi-touch capable, but the
-  `panjit_ts` driver exposes only ABS_X/ABS_Y/BTN_TOUCH. Calibration (Device Tools → CALIBRATION,
-  or `unified_calibrate`) has you tap 9 crosshairs (corners+edges+center, inset 40px); a per-axis
-  least-squares line is fit over the taps and extrapolated out to the true screen edges (so the
-  visible inset targets still reach the corners), then a summary shows target-vs-landing before
-  save. `/etc/touch_calibration.conf`: line 1 = `raw min_x max_x min_y max_y`,
-  line 2 = `UI margins top bottom left right` (drawing/centering only). ScummVM links its own
-  copy of `touch_input.o`, so rebuild it after changing this file or its touch goes stale.
-- **Screen edges.** The bezel covers only ~10px top and bottom. All four
-  `SCREEN_SAFE_MARGIN_*_DEFAULT` are `0` and the reference device ships UI margins `0 0 0 0`,
-  so `SCREEN_SAFE_*` currently equals the full screen. The real constraint is digitizer reach:
-  on the reference unit touch cannot be reported in the outer ~10px left/right, ~26px top,
-  ~35px bottom. Keep *interactive* targets inside that; decoration can go to the edge.
+  ABS_X, ABS_Y, BTN_TOUCH, SYN_REPORT). The panel is projected-capacitive (Panjit on i2c-2 @ 0x03)
+  and the controller is 2-point multi-touch capable, but the `panjit_ts` driver exposes only
+  ABS_X/ABS_Y/BTN_TOUCH. `common/touch_input.c` maps a raw reading in **two stages**:
+  raw 12-bit (0–4095) → **panel** pixel by a per-axis LINEAR map (no affine, no keystone — a
+  `touch_trace` capture confirms the panel is linear), then **panel → logical** by subtracting the
+  bezel viewport origin. Stage 1 is calibration; stage 2 is the bezel; they are separate and the
+  fit for stage 1 must be done in panel coordinates or the bezel gets subtracted twice.
+  `/etc/touch_calibration.conf`: line 1 = `raw min_x max_x min_y max_y` (calibration),
+  line 2 = `bezel top bottom left right`. Both are set from **Device Tools → Set Screen**, on
+  separate buttons: `TOUCH CALIBRATION` (tap 9 crosshairs, per-axis least-squares fit
+  extrapolated to the true panel edges, summary before save) and `SCREEN EDGES`. ScummVM links
+  its own copy of `touch_input.o`, so rebuild it after changing this file or its touch goes stale.
+- **Screen edges are the library's problem, not the app's.** The bezel covers ~15px top and bottom.
+  `fb_init()` shrinks the drawing surface to the visible rectangle and `fb_swap()` places it on the
+  panel at the viewport origin, leaving the hidden bands black — so `fb.width`/`fb.height` and
+  `SCREEN_SAFE_*` are the **logical** screen (800×450 at the shipped margins) and every pixel in it
+  is visible. Never add your own bezel arithmetic. Margins default to `FB_BEZEL_*_DEFAULT`
+  (15/15/0/0) when the config has no line 2.
+- **Touchable is smaller than visible — on Y only** (measured 2026-07-31 with `touch_raw`). The
+  digitizer reaches *past* both the left and right panel edges, but stops **~30 panel px short at
+  the top and bottom**. In logical coordinates that means the top ~15 and bottom ~15 rows of the
+  drawing surface **cannot be touched**, while every column can. Keep *interactive* targets out of
+  those two bands; decoration can go to the edge. It is a sensor property — the electrode array is
+  ~11 mm shorter than the LCD — so no calibration recovers it.
+  The old "~10px left/right, ~25 top, ~30 bottom" figures were **wrong on X**: an artifact of the
+  9-tap calibration fitting crosshairs inset only 40px, i.e. inside the compressed band. Numbers,
+  method and the raw capture: `SYSTEM_ANALYSIS.md#33-touch`.
 - **32-bit ARM:** `sizeof(long)==4`. Never do `(now.tv_sec - 0) * 1000000L` (overflows) —
   baseline timers to current time, not epoch 0.
 - **Firmware / boot edits.** There is **no boot-time MD5 check** of the kernel and no

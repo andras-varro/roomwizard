@@ -459,6 +459,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    /* The common draw helpers write one uint32 per pixel, so the framebuffer
+     * must be 32bpp — whatever ran last may have left it at 16. */
+    fb_set_bpp(fb_device, 32);
+
     // Initialize framebuffer
     if (fb_init(&selector.fb, fb_device) != 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");

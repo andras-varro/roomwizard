@@ -54,7 +54,7 @@ public:
 	virtual bool getFeatureState(Feature f) override;
 	void showVirtualKeyboard();
 
-	// Access to event source for bezel margin queries
+	// Access to the event source (screen geometry, game screen size)
 	RoomWizardEventSource *getEventSource() const { return _eventSource; }
 
 private:

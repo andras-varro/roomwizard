@@ -306,13 +306,20 @@ then `fb565_to_png.py fb.raw fb.png` (defaults to 32bpp; `--bpp 16` for ScummVM/
 frame is 800×480×4 = 1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is
 why a wrong-bpp decode looks size-correct while producing garbage.
 
-**Visible area: ~800×455.** The bezel hides **10–15 px on the top and bottom edges only**, and
-effectively nothing left or right. Measured on two devices. All four `SCREEN_SAFE_MARGIN_*_DEFAULT`
-are `0`, which is very nearly right.
+**Visible area.** The bezel hides **10–15 px on the top and bottom edges only**, and effectively
+nothing left or right. Measured on two devices.
 
-> **The constraint that actually binds interactive layout is digitizer reach, not the bezel.**
-> Touch is not reported in the outer ~10 px left/right, ~26 px top, ~35 px bottom. Keep touch
-> targets inside that; decoration can go to the edge.
+Apps never deal with this. `fb_init()` shrinks the drawing surface to the visible rectangle and
+`fb_swap()` places it on the panel at the viewport origin, leaving the hidden bands black — so
+`fb.width`/`fb.height` and `SCREEN_SAFE_*` are the **logical** (fully visible) screen, 800×450 at
+the shipped 15/15/0/0 margins. Margins come from `/etc/touch_calibration.conf` line 2, default
+`FB_BEZEL_*_DEFAULT` = 15/15/0/0 (`native_apps/common/framebuffer.h`), and are set on-device from
+**Device Tools → Set Screen → SCREEN EDGES**.
+
+> **The constraint that actually binds interactive layout is digitizer reach, not the bezel** —
+> and on this panel the two do not coincide. Touch is not reported in a band at the top and bottom
+> of the *logical* surface, so keep interactive targets out of it; decoration can go to the edge.
+> The measured figures live in [§3.3 Touch](#33-touch); do not restate them here.
 
 **Panel timings — recovered, and worth preserving.** The device tree contains no timing block; the
 timings were compiled into a vendor panel driver whose source does not exist in any tree we have.
@@ -390,32 +397,100 @@ ABS_X  ->  ABS_Y  ->  BTN_TOUCH  ->  SYN_REPORT
 Read the coordinates on `ABS_X`/`ABS_Y` and latch them; if you wait for `BTN_TOUCH` you get stale
 values. Reference implementation: `native_apps/common/touch_input.c`.
 
-**Coordinate model — per-axis linear, nothing more.** Raw is 12-bit (0–4095), mapped straight to
-the full screen:
+**Coordinate model — two independent stages.** A raw reading becomes an app coordinate in two
+steps, each owned by a different concern and configured on its own line of the config file:
+
+| Stage | Maps | Owner | Config |
+|---|---|---|---|
+| 1. Calibration | raw digitiser → **panel** pixel | `scale_coordinates()` in `touch_input.c` | line 1 |
+| 2. Bezel viewport | panel pixel → **logical** pixel | the same function, from the framebuffer globals | line 2 |
+
+Stage 1 is per-axis linear over the whole 800×480 panel, bezel included. Raw is 12-bit (0–4095):
 
 ```c
-screen_x = (raw_x - raw_min_x) * 799 / (raw_max_x - raw_min_x);
-screen_y = (raw_y - raw_min_y) * 479 / (raw_max_y - raw_min_y);
+panel_x = (raw_x - raw_min_x) * (panel_w - 1) / (raw_max_x - raw_min_x);
+panel_y = (raw_y - raw_min_y) * (panel_h - 1) / (raw_max_y - raw_min_y);
 ```
 
 The panel is linear — a traced border comes out a straight-edged rectangle, no keystone or shear —
 so scale-and-offset per axis is sufficient. There is **no affine transform and no bilinear corner
-correction**, and **bezel margins are NOT applied to touch coordinates** (doing so double-corrects).
+correction**.
 
-**Calibration** lives in `/etc/touch_calibration.conf`, loaded automatically by `touch_init()`:
+Stage 2 subtracts the viewport origin (`screen_view_x`/`screen_view_y`), which is exactly the
+offset `fb_swap()` draws at. A touch on the bezel therefore clamps to the nearest logical edge, and
+drawing and touch always share one coordinate system.
 
-- Line 1: `raw min_x max_x min_y max_y` — the calibrated raw range, mapped linearly to full screen.
-- Line 2: `UI margins top bottom left right` — for drawing and centering **only**; never moves a touch.
+Keep the stages apart: calibration must be fitted against **panel** coordinates. Fitting it against
+logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a second time.
 
-`unified_calibrate` (or Device Tools → CALIBRATION) captures this by tapping 9 crosshairs
-(corners, edges, centre, inset 40 px), least-squares fitting a line per axis, and extrapolating out
-to the true screen edges so the inset targets still reach the corners. A summary shows
-target-vs-landing before saving.
+**`/etc/touch_calibration.conf`**, loaded automatically by `touch_init()` and `fb_init()`:
+
+- Line 1: `raw min_x max_x min_y max_y` — calibrated raw range, mapped linearly onto the whole panel.
+- Line 2: `bezel top bottom left right` — panel pixels hidden by the bezel. Omit the line to get the
+  compiled defaults (15/15/0/0).
+
+**Device Tools → Set Screen** owns both, on separate buttons:
+
+- `TOUCH CALIBRATION` (also the standalone `unified_calibrate`) taps 9 crosshairs (corners, edges,
+  centre, inset 40 px), least-squares fits a line per axis in panel space, and extrapolates to the
+  true panel edges so the inset targets still reach the corners. A summary shows target-vs-landing
+  before saving. **Its 40 px inset is too small** — the corner and edge-mid crosshairs sit inside
+  the compressed band, which is what produced the phantom X inset above. `IMPROVEMENT_PLAN.md` B3a.
+- `SCREEN EDGES` draws a frame on the logical edge and steps each margin by 1 px, re-letterboxing
+  live. Any part of the frame you cannot see means that margin is too small.
+
+**`touch_raw`** (`native_apps/tests/touch_raw.c`, deployed to `/opt/games/`, hidden from the
+launcher) is the diagnostic that settled reach, and the only tool that shows the panel with **no
+calibration and no bezel**: it resets the raw range to the `EVIOCGABS` values and calls
+`fb_set_bezel(fb,0,0,0,0)`, so a drawn pixel *is* a panel pixel and the dot is `raw × 799 / 4095`.
+Two modes — a live crosshair with per-edge 10 px ladders, session extremes and a pin flag when raw
+sticks at a hardware limit; and a capture pass (11 targets × 3 taps, then a hard press on each
+bezel) that fits interior-only vs all-points and reports what each predicts at the panel edges.
+Logs to `/tmp/touch_raw.tsv` with a monotonic millisecond column. It can write the interior fit to
+line 1 after backing the file up to `.bakN`.
+
+Caveat: its printed verdict is a **single global H1/H4 driven by the worst axis**, which is
+misleading on this panel — read the per-axis table it prints, not the verdict line.
+`IMPROVEMENT_PLAN.md` B3b.
 
 > **ScummVM links its own copy of `touch_input.o`** — rebuild it after changing that file or its
 > touch silently goes stale.
 
 Accuracy: ~3 px at centre, 14–27 px error at the corners before calibration.
+
+**Reach at the border — measured, and it differs per axis.** The controller hard-clamps raw at 0
+and 4095 while the finger is still moving. *Where* that clamp lands on the glass was settled on
+2026-07-31 with `touch_raw` (see below): fit each axis from **interior targets only**, then test
+that fit against edge probes and against a finger pressed hard into the bezel. Raw capture:
+[`touch_raw-2026-07-31-rw09.tsv`](touch_raw-2026-07-31-rw09.tsv).
+
+| | X | Y |
+|---|---|---|
+| interior-only fit → raw at panel 0 | **+17** | **−279** |
+| interior-only fit → raw at panel max | **4084** (of 799) | **4382** (of 479) |
+| raw 0..4095 therefore covers panel | **−3 … 801** | **29 … 449** |
+| bezel press, low edge | LEFT `raw 0` → panel **−3** | TOP `raw 22` → panel **31** |
+| bezel press, high edge | RIGHT `raw 4095` → panel **801** | BOTTOM `raw 4095` → panel **449** |
+| **inset** | **none** | **~30 px top and bottom** |
+
+**X reaches both edges. Y is short by ~30 px at each end** (~5.7 mm at 5.25 px/mm). Two independent
+methods — an interior fit extrapolated outward, and a fingertip pressed into the plastic — agree on
+Y to within 2 px. Physically the digitizer spans about **153.4 × 80.1 mm** against an LCD active
+area of 152.4 × 91.4 mm: the electrode array matches the width and is ~11 mm short of the height.
+
+> **Touchable is smaller than visible, on Y only.** The logical surface is panel y 15…464; the
+> touchable band is panel y 29…449. So **the top ~15 and bottom ~15 rows of the drawing surface
+> cannot be touched**, while every column can. This is the one place where "the logical screen is
+> the safe area" does not hold, and it is a property of the sensor, not of the bezel.
+
+The earlier per-edge figures (~10 px left/right, ~25 top, ~30 bottom) were **wrong on X**. They came
+from the 9-tap calibration, whose crosshairs are inset only 40 px — inside the compressed band — so
+the fit slope came out too shallow and extrapolated to raw values outside 0..4095, inventing a
+horizontal inset that varied from run to run. Fitting from interior targets only removes it, and
+recovers the full 800 px width on a config change alone. Remaining loose end: the x=780 probe reads
++6 px high, so raw does bunch a little in the last ~20 px on the right and probably pins near panel
+795 rather than 801 — a handful of pixels, not measured precisely. Open work:
+[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3a/B3b.
 
 **Multi-touch exists in hardware but not in the driver.** `panjit_ts` reports only
 `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller itself is **2-point multi-touch with

@@ -10,28 +10,26 @@
 // Default calibration file path
 #define TOUCH_CALIB_FILE "/etc/touch_calibration.conf"
 
-// Map raw touch coordinates to screen coordinates.
+// Map raw touch coordinates to logical screen coordinates.
 //
-// Single per-axis LINEAR map from the raw range to the FULL physical screen:
-//   screen = (raw - raw_min) * (dim-1) / (raw_max - raw_min)
-// then, in portrait mode, rotate physical→virtual and clamp.
-//
-// This is the whole model. No affine, no bilinear corner offsets, no bezel
-// remap — the panel is linear (a traced border is a straight-edged rectangle),
-// and the raw range already spans the full screen, so scale+offset per axis is
-// accurate everywhere and reaches every edge. Applying bezel margins here would
-// double-correct an already-correct coordinate; bezel is a drawing concern only.
+//   raw -> clamp to the calibrated range
+//       -> panel      (per-axis linear scale; stage 1, see touch_input.h)
+//       -> rotate 90° CCW if portrait
+//       -> logical    (subtract the viewport origin; stage 2)
+//       -> clamp to the logical screen
 static void scale_coordinates(TouchInput *touch, int *x, int *y) {
-    // Hardware panel is always 800×480; in portrait the app-visible dims are
-    // swapped. Map into physical space first, then rotate to virtual at the end.
+    // The hardware panel is always 800×480; in portrait the app-visible axes
+    // are swapped. Map into unrotated panel space first, rotate at the end.
     int phys_w, phys_h;
     if (touch->portrait_mode) {
-        phys_w = touch->screen_height;  // physical width  = virtual height (800)
-        phys_h = touch->screen_width;   // physical height = virtual width  (480)
+        phys_w = touch->panel_height;  // physical width  = virtual height (800)
+        phys_h = touch->panel_width;   // physical height = virtual width  (480)
     } else {
-        phys_w = touch->screen_width;
-        phys_h = touch->screen_height;
+        phys_w = touch->panel_width;
+        phys_h = touch->panel_height;
     }
+    if (phys_w <= 1) phys_w = 800;
+    if (phys_h <= 1) phys_h = 480;
 
     int range_x = touch->raw_max_x - touch->raw_min_x;
     int range_y = touch->raw_max_y - touch->raw_min_y;
@@ -39,7 +37,7 @@ static void scale_coordinates(TouchInput *touch, int *x, int *y) {
     if (range_y <= 0) { touch->raw_min_y = 0; range_y = 4095; }
 
     // Clamp raw into the calibrated range so a touch slightly past the sampled
-    // edge still lands exactly on the screen border rather than overshooting.
+    // edge still lands exactly on the panel border rather than overshooting.
     long rx = (long)*x - touch->raw_min_x;
     long ry = (long)*y - touch->raw_min_y;
     if (rx < 0) rx = 0;
@@ -50,14 +48,18 @@ static void scale_coordinates(TouchInput *touch, int *x, int *y) {
     int mx = (int)(rx * (phys_w - 1) / range_x);
     int my = (int)(ry * (phys_h - 1) / range_y);
 
-    // Portrait mode: rotate physical coords → virtual coords (90° CCW)
+    // Portrait mode: rotate panel coords → virtual coords (90° CCW)
     if (touch->portrait_mode) {
         int px = mx, py = my;
         mx = phys_h - 1 - py;
         my = px;
     }
 
-    // Clamp to virtual screen bounds
+    // Panel → logical: the drawing surface starts at the viewport origin, so a
+    // touch on the bezel maps outside it and clamps to the nearest edge.
+    mx -= touch->view_x;
+    my -= touch->view_y;
+
     if (mx < 0) mx = 0;
     if (mx >= touch->screen_width)  mx = touch->screen_width - 1;
     if (my < 0) my = 0;
@@ -65,6 +67,10 @@ static void scale_coordinates(TouchInput *touch, int *x, int *y) {
 
     *x = mx;
     *y = my;
+}
+
+void touch_map_raw(TouchInput *touch, int *x, int *y) {
+    scale_coordinates(touch, x, y);
 }
 
 int touch_init(TouchInput *touch, const char *device) {
@@ -103,18 +109,35 @@ int touch_init(TouchInput *touch, const char *device) {
         touch->raw_min_y = 0; touch->raw_max_y = 4095;
         printf("Touch EVIOCGABS failed, using default 0-4095 range\n");
     }
-    touch->screen_width  = screen_base_width;   // 800×480 default (fb globals)
+    // Geometry from the framebuffer globals. fb_init() must run first (it does
+    // in every app); before it, these are an identity viewport on a 800×480
+    // panel, so an uninitialised framebuffer yields plain panel coordinates.
+    touch->panel_width   = screen_panel_width;
+    touch->panel_height  = screen_panel_height;
+    touch->view_x        = screen_view_x;
+    touch->view_y        = screen_view_y;
+    touch->screen_width  = screen_base_width;
     touch->screen_height = screen_base_height;
     touch->calibrated = false;
 
     touch->calib.enabled = false;
-    touch->calib.bezel_top = 0;
-    touch->calib.bezel_bottom = 0;
-    touch->calib.bezel_left = 0;
-    touch->calib.bezel_right = 0;
 
     // Detect portrait mode
     touch->portrait_mode = (access("/opt/games/portrait.mode", F_OK) == 0);
+
+    // Seed the bezel margins from the framebuffer so that saving a calibration
+    // preserves them even when the config file has no margin line. In portrait
+    // the globals are rotated and would not round-trip, so leave them at zero —
+    // calibration is landscape-only.
+    if (touch->portrait_mode) {
+        touch->calib.bezel_top = touch->calib.bezel_bottom = 0;
+        touch->calib.bezel_left = touch->calib.bezel_right = 0;
+    } else {
+        touch->calib.bezel_top    = screen_bezel_top;
+        touch->calib.bezel_bottom = screen_bezel_bottom;
+        touch->calib.bezel_left   = screen_bezel_left;
+        touch->calib.bezel_right  = screen_bezel_right;
+    }
 
     // Auto-load calibration so all apps get the measured range (if calibrated).
     if (touch_load_calibration(touch, TOUCH_CALIB_FILE) == 0) {
@@ -129,7 +152,25 @@ int touch_init(TouchInput *touch, const char *device) {
 void touch_set_screen_size(TouchInput *touch, int width, int height) {
     touch->screen_width = width;
     touch->screen_height = height;
-    printf("Touch screen size set to: %dx%d\n", width, height);
+    // Re-read the viewport too: an app that calls this after fb_init() ends up
+    // consistent even if it initialised touch before the framebuffer.
+    touch->panel_width  = screen_panel_width;
+    touch->panel_height = screen_panel_height;
+    touch->view_x       = screen_view_x;
+    touch->view_y       = screen_view_y;
+    printf("Touch screen size set to: %dx%d (panel %dx%d, view %d,%d)\n",
+           width, height, touch->panel_width, touch->panel_height,
+           touch->view_x, touch->view_y);
+}
+
+void touch_set_viewport(TouchInput *touch, int panel_w, int panel_h,
+                        int view_x, int view_y) {
+    touch->panel_width  = panel_w;
+    touch->panel_height = panel_h;
+    touch->view_x       = view_x;
+    touch->view_y       = view_y;
+    printf("Touch viewport set: panel %dx%d, view %d,%d\n",
+           panel_w, panel_h, view_x, view_y);
 }
 
 void touch_close(TouchInput *touch) {
@@ -285,12 +326,15 @@ int touch_save_calibration(TouchInput *touch, const char *filename) {
         return -1;
     }
 
-    fprintf(f, "# RoomWizard touch calibration\n");
-    fprintf(f, "# Line 1: raw range  min_x max_x min_y max_y  (raw touch mapped linearly to full screen)\n");
+    fprintf(f, "# RoomWizard screen configuration\n");
+    fprintf(f, "# Line 1: touch calibration — raw range  min_x max_x min_y max_y\n");
+    fprintf(f, "#         (raw digitiser range mapped linearly onto the whole panel)\n");
     fprintf(f, "%d %d %d %d\n",
             touch->raw_min_x, touch->raw_max_x,
             touch->raw_min_y, touch->raw_max_y);
-    fprintf(f, "# Line 2: UI margins (drawing/layout only)  top bottom left right\n");
+    fprintf(f, "# Line 2: bezel margins — top bottom left right\n");
+    fprintf(f, "#         (panel pixels hidden by the bezel; the drawing surface is\n");
+    fprintf(f, "#          the rectangle inside them. Omit the line for the defaults.)\n");
     fprintf(f, "%d %d %d %d\n",
             touch->calib.bezel_top, touch->calib.bezel_bottom,
             touch->calib.bezel_left, touch->calib.bezel_right);
@@ -325,7 +369,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
                 printf("Calibration loaded from: %s\n", filename);
             }
         } else if (!got_margins) {
-            // Line 2: UI margins (top bottom left right)
+            // Line 2: bezel margins (top bottom left right)
             int m[4];
             if (sscanf(line, "%d %d %d %d", &m[0], &m[1], &m[2], &m[3]) == 4) {
                 touch->calib.bezel_top    = m[0];
@@ -333,7 +377,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
                 touch->calib.bezel_left   = m[2];
                 touch->calib.bezel_right  = m[3];
                 got_margins = true;
-                printf("  UI margins: T=%d B=%d L=%d R=%d\n", m[0], m[1], m[2], m[3]);
+                printf("  Bezel margins: T=%d B=%d L=%d R=%d\n", m[0], m[1], m[2], m[3]);
             }
         }
     }
@@ -345,7 +389,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
         return -1;
     }
     if (!got_margins)
-        printf("  No UI margins found (using 0)\n");
+        printf("  No bezel margins in file (framebuffer defaults apply)\n");
 
     touch->calib.enabled = true;
     return 0;

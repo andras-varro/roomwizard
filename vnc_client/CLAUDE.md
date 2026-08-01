@@ -39,6 +39,30 @@ into the back buffer. Two consequences:
   768 KB. This component survives only because it hand-writes `uint16_t` and never calls them.
   See `../IMPROVEMENT_PLAN.md` B1 — until that is fixed, the restriction stands.
 
+## Screen size is runtime, not 800×480
+
+`fb_init()` shrinks the drawing surface to the rectangle the bezel leaves visible — **800×450**
+at the shipped `15 15 0 0` margins, and whatever the config says otherwise. So the back buffer
+is `fb->width × fb->height`, and that is also the stride for every `uint16_t` index into it.
+
+- **Never use a compile-time screen dimension.** `PANEL_MAX_WIDTH` / `PANEL_MAX_HEIGHT` in
+  `config.h` bound the *physical panel* and exist only to size the fixed `src_x_lut` /
+  `temp_row` arrays. They are not the screen.
+- **`fb->screen_size` is not the back-buffer size.** It is the physical mmap size
+  (`line_length × panel height`). Clearing the back buffer with it overruns the allocation by
+  48 KB at 16bpp. Use `fb->back_buffer_size` — that is what `vnc_renderer_clear_screen()` does.
+- **This component never compensates for the bezel itself**, and must not start: `fb_swap()`
+  already places the logical surface at `fb->view_x/view_y`. Letterboxing against 480 instead
+  of 450 is what put a 16 px black bar at the top of the remote desktop and wrote 30 rows past
+  the back buffer.
+- **Layout anchored to the bottom must be computed from `fb->height`**, and the draw path and
+  the hit-test path must call the *same* helper — see `settings_act_btn_y()`, `kp_btn_y()` and
+  `fkp_panel_h()` in `vnc_settings.c`. A constant in one and a helper in the other draws
+  buttons where they cannot be tapped.
+- Keep bottom-anchored controls ~20 px clear of the surface edge. The digitizer stops reporting
+  before the panel border (see `../SYSTEM_ANALYSIS.md`), so a button flush with the bottom is
+  visible but not touchable.
+
 ## Shared code
 
 Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o` and `logger.o` from

@@ -27,6 +27,7 @@
 // Include C headers directly
 extern "C" {
 #include "touch_input.h"
+#include "framebuffer.h"   // screen_base_width/height (the visible screen size)
 }
 
 class RoomWizardEventSource : public Common::EventSource {
@@ -46,11 +47,17 @@ public:
 
 	// Set game screen dimensions for coordinate transformation
 	void setGameScreenSize(int width, int height, int offsetX, int offsetY);
-	
-	// Get bezel margins from touch calibration
-	void getBezelMargins(int &top, int &bottom, int &left, int &right) const;
+
+	// Pick up the framebuffer's logical (visible) size and bezel viewport.
+	// Call once the framebuffer is up: touch is initialised before it, so the
+	// geometry it read at construction time is the pre-bezel default.
+	void syncScreenGeometry();
 
 private:
+	// Logical (visible) screen size — the framebuffer minus the bezel
+	int _screenW;
+	int _screenH;
+
 	// -------------------------------------------------------
 	// Touch input (existing)
 	// -------------------------------------------------------
