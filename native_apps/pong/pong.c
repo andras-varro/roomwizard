@@ -151,7 +151,7 @@ void reset_ball() {
     game.ball.y = play_area_height / 2;
     
     float angle = ((rand() % 90) - 45) * M_PI / 180.0;
-    float speed = 5.0;
+    float speed = BALL_START_SPEED;
     
     if (portrait_mode) {
         // Ball moves primarily up/down in portrait
@@ -230,7 +230,7 @@ void update_game() {
             game.ball.x + BALL_SIZE >= game.player.y &&
             game.ball.x <= game.player.y + PADDLE_HEIGHT) {
             
-            game.ball.vy = -game.ball.vy * 1.05;
+            game.ball.vy = -game.ball.vy * BALL_SPEEDUP;
             game.ball.y = play_area_height - PADDLE_WIDTH - BALL_SIZE;
             
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
@@ -247,7 +247,7 @@ void update_game() {
             game.ball.x + BALL_SIZE >= game.ai.y &&
             game.ball.x <= game.ai.y + PADDLE_HEIGHT) {
             
-            game.ball.vy = -game.ball.vy * 1.05;
+            game.ball.vy = -game.ball.vy * BALL_SPEEDUP;
             game.ball.y = PADDLE_WIDTH;
             
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
@@ -322,7 +322,7 @@ void update_game() {
             game.ball.y + BALL_SIZE >= game.player.y &&
             game.ball.y <= game.player.y + PADDLE_HEIGHT) {
             
-            game.ball.vx = -game.ball.vx * 1.05;
+            game.ball.vx = -game.ball.vx * BALL_SPEEDUP;
             game.ball.x = PADDLE_WIDTH;
             
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
@@ -339,7 +339,7 @@ void update_game() {
             game.ball.y + BALL_SIZE >= game.ai.y &&
             game.ball.y <= game.ai.y + PADDLE_HEIGHT) {
             
-            game.ball.vx = -game.ball.vx * 1.05;
+            game.ball.vx = -game.ball.vx * BALL_SPEEDUP;
             game.ball.x = play_area_width - PADDLE_WIDTH - BALL_SIZE;
             
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
