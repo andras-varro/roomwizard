@@ -552,6 +552,7 @@ OPL; nobody confirmed it on hardware.
 | B13i | `platformer.c:951` | Stomping two overlapping enemies kills the player (no `break` after a successful stomp). |
 | B13j | `samegame.c:250` | `pixel_to_grid` truncates toward zero, so taps up to one block outside the left/top edge select row/column 0. |
 | ~~B13k~~ | `frogger.c`, `platformer.c` — **DONE 2026-08-02** | The virtual D-pad `TouchRegion`s are gone from **both** games, along with the `gamepad_draw_touch_controls()` overlay call. Frogger never needed them: `handle_input()` already hops the frog from a plain tap relative to its position (`ts.y >= grid_offset_y`, `frog_sy`), so the regions were a redundant second path that made the frog jump on its own, and B2's un-cleared `.held` left the overlay stuck light-blue. The whole playfield is now one tap target and the hint text says so. **Platformer removed on the user's call in the same pass** — its overlay latched identically, and its drawn boxes were not even where its six regions were (`fb.height-120` vs the overlay's `sh-100`). It has no tap-relative fallback, so it is now controller-only and `draw_all()` shows an amber `NO CONTROLLER DETECTED / CONNECT A USB KEYBOARD OR GAMEPAD` on the welcome screen when none is connected (new `screen_draw_welcome_warn()`, see B3k); its touch EXIT button still works either way. **`snake.c` still calls `gamepad_set_touch_regions()`**, but its regions are dead code — B13g's ordering bug wipes them — so fixing B13g would *activate* a latching D-pad. Fix B2 first, or delete snake's regions with it. `gamepad_draw_touch_controls()` now has no callers. |
+| ~~B13l~~ | `pong.c:152` — **DONE 2026-08-02, panel-confirmed** | Every serve started at `speed = 5.0` px/frame. At `FRAME_DELAY_ACTIVE_US` (30 fps) and a ±45° serve angle that is ~3.5 px/frame along the long axis — **~7 s to cross the playfield** — and since `reset_ball()` runs after every point, all 11 points restarted slow. Reported from the panel as *"it takes like 10 exchanges until the ball speed is actually enjoyable"*, which is exactly the `1.05`-per-hit ramp reaching 5·1.05¹⁰ ≈ 8.1. Serve speed is now `BALL_START_SPEED 8.5f` — the old rally's comfortable point, from the first serve — and the four scattered `* 1.05` literals are one `BALL_SPEEDUP` macro. **No cap and no AI change**, both deliberate and both still open if the panel disagrees: 10 hits into a rally is now ≈13.8 px/frame (~1.7× the old peak), and `ai_speed` is `3.0 + difficulty` = 5 px/frame at the default medium, so the AI is now the side that cannot keep up. Nothing tunnels at any speed — the paddle and wall tests are half-planes (`ball.x <= PADDLE_WIDTH`) that clamp the position on contact, which is why a cap was not needed for correctness. |
 
 ### B14. Blocking `usleep()` inside input/update paths
 
@@ -644,12 +645,12 @@ original B22 (one caller's local workaround concealing a component defect).
 | Game | Status |
 |---|---|
 | tetris, snake, frogger | ✅ game over → high-score screen advances on its own, no tap |
-| samegame | ✅ advances on its own — then ❌ **wedged** on the settled overlay (the regression above). Re-fixed and deployed 16:42; **the fix itself is unverified** |
-| brick_breaker | ⬜ untested. Carries the one case nothing else covers: `MENU` → `RETIRE` must show the overlay immediately **with the table still populated** — `RETIRE` overlaps `RESET SCORES` by 21 px, so a failed `armed` guard wipes the table on a screen nobody saw |
-| pong | ⬜ untested. `WINNING_SCORE` is 11; parking the paddle at one end lets the AI run it out without playing |
-| platformer | ⬜ untested, and **needs a USB keyboard or gamepad** — B13k made it controller-only, and B13a's `BTN_ID_BACK` handler cannot be checked without one |
+| samegame | ✅ **re-fix confirmed on the panel** — advances on its own *and* the settled overlay stays responsive; the full sequence (lose → overlay+table → `RESET SCORES` empties it immediately → name-entry keyboard with no tap → entry appears → `RESET SCORES` again on a second game over → `RESTART` → `EXIT`) all behaves |
+| brick_breaker | ✅ confirmed — `MENU` → `RETIRE` shows the overlay immediately **with the table still populated**, so the `armed` guard holds against the 21 px `RETIRE`/`RESET SCORES` overlap |
+| pong | ✅ confirmed (parked the paddle and let the AI run out `WINNING_SCORE` 11) |
+| platformer | ⬜ **the one row still untested**, and it **needs a USB keyboard or gamepad** — B13k made it controller-only, and B13a's `BTN_ID_BACK` handler cannot be checked without one. Also confirm `RESTART`/`EXIT` respond to touch |
 
-Not script-verifiable past the first screen (no `/dev/uinput` — see C6), so the remaining rows need a
+Not script-verifiable past the first screen (no `/dev/uinput` — see C6), so the remaining row needs a
 human at the panel. `RESET SCORES` on an empty table is the cheap way to reach the name-entry keyboard:
 it makes any subsequent score qualify.
 
@@ -1150,8 +1151,9 @@ U-Boot ever get written.
    gone but the bug is not** — B13k deleted the last `TouchRegion`s any shipped game actually uses, so
    nothing exercises the latching path today. It is a latent trap that has to be cleared before B13g,
    before the next app registers a touch region, and before anyone wires up an analog stick.
-   **Outstanding first:** B22's panel-status table has four rows unconfirmed (samegame's re-fix,
-   brick_breaker's `RETIRE`, pong, platformer). **B7 and B9 are the available quick wins** — both
+   **Outstanding first:** B22's panel-status table now has **one** row unconfirmed — platformer, which
+   needs a USB keyboard or gamepad attached. samegame's re-fix, brick_breaker's `RETIRE` and pong were
+   all confirmed on the panel 2026-08-02. **B7 and B9 are the available quick wins** — both
    small, both `verified`, both independent of everything above.
 3. ~~**The per-app layout pass the panel test asked for**~~ — **DONE 2026-08-02.** B3i + B3j + B13d as
    one pass over `tetris.c`, B3i's frogger half plus B13k, and B3k in `common/common.c`. B13k grew to

@@ -237,6 +237,17 @@ static overlay produces no frames — which was the point of asking the componen
 `common/common.h`. Use them; don't hardcode `usleep()` values. Reference implementation:
 `app_launcher/app_launcher.c`.
 
+**A per-frame motion constant is a speed only in combination with the frame delay, so sanity-check it
+in px/s.** At 30 fps the conversion is ×30, which makes small-looking numbers unplayably slow: pong
+served every ball at `5.0` px/frame — 150 px/s, and only ~3.5 px/frame along the long axis at a 45°
+serve, so **~7 s to cross the playfield** (B13l). It read as a perfectly ordinary constant in source.
+Two rules follow. Multiply by 30 and ask whether you'd enjoy that speed before you commit the number.
+And never count *frames* where you mean *time* — a dirty-flagged loop's frame rate varies with what the
+app is doing, so a per-iteration counter runs at whatever pace the screen happens to need; that was
+tetris' gravity, which fell ~3× too slow while idle and sped up when a key was held (B13d). Motion
+tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything the player experiences as a
+duration wants a `get_time_ms()` delta.
+
 ## Coordinates, dimensions, portrait
 
 - **Never hardcode 800, 480, or 400.** Use `fb.width` / `fb.height`, `screen_base_width` /
