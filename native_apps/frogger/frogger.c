@@ -38,6 +38,14 @@
 #define INITIAL_LIVES     3
 #define HOP_COOLDOWN_MS   200
 
+/* HUD metrics.  The lives icons are 12 px squares on an 18 px pitch; the timer
+ * bar sits between the MENU and EXIT buttons with this much clearance either
+ * side of it (B3i). */
+#define LIFE_ICON_SIZE    12
+#define LIFE_ICON_PITCH   18
+#define TIMER_BAR_HEIGHT  12
+#define TIMER_BAR_GAP     10
+
 /* ─── Color palette ─────────────────────────────────────────────────────── */
 
 /* Environment */
@@ -199,6 +207,13 @@ static int grid_offset_x;
 static int grid_offset_y;
 static int goal_cols[NUM_GOALS];
 
+/* HUD band height, computed at init: HUD_HEIGHT plus the measured touch inset,
+ * because the MENU/EXIT row inside it is SCREEN_SAFE_*-anchored.  The band has to
+ * grow with the row — at only 70 px the timer bar already grazes the buttons, so
+ * moving them without growing the band would put the bar through their middle and
+ * push them into the playfield.  Equals HUD_HEIGHT when the inset is 0. */
+static int hud_height;
+
 /* UI Buttons */
 Button menu_button;
 Button exit_button;
@@ -338,14 +353,15 @@ static void update_led_effects(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void compute_grid(void) {
-    int available_height = (int)fb.height - HUD_HEIGHT;
+    hud_height = SCREEN_SAFE_TOP + HUD_HEIGHT;
+    int available_height = (int)fb.height - hud_height;
     cell_size = available_height / NUM_ROWS;
     if (cell_size < 8) cell_size = 8;
     num_cols = (int)fb.width / cell_size;
     if (num_cols < NUM_GOALS + 2) num_cols = NUM_GOALS + 2;
     grid_width = num_cols * cell_size;
     grid_offset_x = ((int)fb.width - grid_width) / 2;
-    grid_offset_y = HUD_HEIGHT;
+    grid_offset_y = hud_height;
 
     /* Compute goal slot positions */
     if (num_cols <= NUM_GOALS * 2) {
@@ -405,14 +421,21 @@ static void init_lanes(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void init_buttons(void) {
-    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+    /* LAYOUT_* is SCREEN_SAFE_*-anchored, so the row moves down with the measured
+     * touch inset instead of losing its top rows to it.  compute_grid() grows the
+     * HUD band to match — see hud_height. */
+    button_init(&menu_button, LAYOUT_MENU_BTN_X, LAYOUT_MENU_BTN_Y,
+                BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, (int)fb.width - BTN_EXIT_WIDTH - 10, 10,
+    button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    /* screen_draw_welcome() positions start_button below the measured
+     * instruction block (B3k); these coordinates only cover a hit-test that
+     * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button,
-                (int)fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                (int)fb.height / 2 + 40,
+                LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
+                LAYOUT_BOTTOM_BTN_Y,
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
                 "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -459,20 +482,13 @@ static void init_game(void) {
     hs_init(&hs_table, "frogger");
     hs_load(&hs_table);
 
-    // Set up touch regions for gamepad module (4 directional zones around center)
-    int sw = (int)fb.width;
-    int sh = (int)fb.height;
-    TouchRegion touch_regions[] = {
-        /* Up: top band of play area */
-        { 0, grid_offset_y, sw, (sh - grid_offset_y) / 3, BTN_ID_UP },
-        /* Down: bottom band of play area */
-        { 0, grid_offset_y + (sh - grid_offset_y) * 2 / 3, sw, (sh - grid_offset_y) / 3, BTN_ID_DOWN },
-        /* Left: left third of screen */
-        { 0, grid_offset_y, sw / 3, sh - grid_offset_y, BTN_ID_LEFT },
-        /* Right: right third of screen */
-        { sw * 2 / 3, grid_offset_y, sw / 3, sh - grid_offset_y, BTN_ID_RIGHT },
-    };
-    gamepad_set_touch_regions(&gamepad, touch_regions, 4);
+    /* No virtual D-pad TouchRegions (B13k).  handle_input() already hops the
+     * frog from a plain tap anywhere in the play area, relative to the frog's
+     * own position, so the regions were a redundant second path: they made the
+     * frog jump on its own, and because gamepad.c never clears a region's
+     * .held (B2) they also latched the on-screen overlay permanently
+     * highlighted.  The whole playfield is the tap target now — do not add
+     * regions back without fixing B2 first. */
 
     reset_game();
 }
@@ -1187,10 +1203,15 @@ static void draw_lane_objects(int lane_idx) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void draw_timer_bar(void) {
-    int bx = grid_offset_x;
-    int by = HUD_HEIGHT - 18;
-    int bw = grid_width;
-    int bh = 12;
+    /* The bar lives in the gap BETWEEN the MENU and EXIT buttons, vertically
+     * centred on the row (B3i).  It used to span the whole grid width at
+     * hud_height - 18, which covered the bottom ~8 px of both buttons. */
+    int bx = LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + TIMER_BAR_GAP;
+    int bw = LAYOUT_EXIT_BTN_X - TIMER_BAR_GAP - bx;
+    int bh = TIMER_BAR_HEIGHT;
+    int by = LAYOUT_MENU_BTN_Y + (BTN_MENU_HEIGHT - bh) / 2;
+
+    if (bw < 40) return;   /* no room between the buttons — skip it */
 
     fb_fill_rect(&fb, bx, by, bw, bh, RGB(40, 40, 40));
 
@@ -1210,7 +1231,7 @@ static void draw_timer_bar(void) {
 
 static void draw_life_icons(int x, int y) {
     for (int i = 0; i < state.lives && i < 5; i++) {
-        int ix = x + i * 18;
+        int ix = x + i * LIFE_ICON_PITCH;
         fb_fill_circle(&fb, ix + 6, y + 6, 5, COLOR_FROG_BODY);
         fb_fill_circle(&fb, ix + 3, y + 3, 1, COLOR_FROG_EYE_W);
         fb_fill_circle(&fb, ix + 9, y + 3, 1, COLOR_FROG_EYE_W);
@@ -1218,36 +1239,52 @@ static void draw_life_icons(int x, int y) {
 }
 
 static void draw_hud(void) {
-    fb_fill_rect(&fb, 0, 0, (int)fb.width, HUD_HEIGHT, RGB(20, 20, 30));
+    /* The band starts at the visible top (it is only drawn) and ends below the
+     * SAFE-anchored button row.  Score, level and the lives icons sit in the
+     * VISIBLE band ABOVE the row — none of them is pressable, and that band is
+     * the screen area the two-rectangle split exists to keep usable (B3i).
+     * Horizontally they stay in the gap between MENU and EXIT, so a short band
+     * (uncalibrated panel, inset 0) puts them level with the buttons without
+     * colliding with either. */
+    fb_fill_rect(&fb, 0, 0, (int)fb.width, hud_height, RGB(20, 20, 30));
     draw_menu_button(&fb, &menu_button);
     draw_exit_button(&fb, &exit_button);
 
-    /* Score */
-    char buf[48];
-    int txt_x;
-    if ((int)fb.width < 600) {
-        snprintf(buf, sizeof(buf), "SC:%d", state.score);
-        txt_x = 90;
-    } else {
-        snprintf(buf, sizeof(buf), "SCORE: %d", state.score);
-        txt_x = (int)fb.width / 2 - 100;
-    }
-    fb_draw_text(&fb, txt_x, 12, buf, COLOR_WHITE, 2);
+    const int hud_scale = 2;
+    int hud_h  = text_measure_height(hud_scale);
+    int band_h = LAYOUT_MENU_BTN_Y - SCREEN_VISIBLE_TOP;
+    int row_y  = (band_h >= hud_h)
+                 ? SCREEN_VISIBLE_TOP + (band_h - hud_h) / 2
+                 : LAYOUT_MENU_BTN_Y - hud_h - 2;
+    if (row_y < SCREEN_VISIBLE_TOP) row_y = SCREEN_VISIBLE_TOP;
 
-    /* Level */
-    if ((int)fb.width < 600) {
-        snprintf(buf, sizeof(buf), "LV:%d", state.level);
-        txt_x = (int)fb.width / 2 + 20;
-    } else {
-        snprintf(buf, sizeof(buf), "LVL: %d", state.level);
-        txt_x = (int)fb.width / 2 + 80;
-    }
-    fb_draw_text(&fb, txt_x, 12, buf, COLOR_CYAN, 2);
+    /* One row: SCORE, LVL, lives — laid out from a measured total width so it
+     * stays centred in the gap whatever the numbers grow to. */
+    char score_buf[32];
+    char level_buf[32];
+    bool narrow = ((int)fb.width < 600);
+    snprintf(score_buf, sizeof(score_buf), narrow ? "SC:%d" : "SCORE: %d", state.score);
+    snprintf(level_buf, sizeof(level_buf), narrow ? "LV:%d" : "LVL: %d", state.level);
 
-    /* Lives */
-    int lives_x = (int)fb.width - BTN_EXIT_WIDTH - 20 - state.lives * 18;
-    if (lives_x < txt_x + 60) lives_x = txt_x + 60;
-    draw_life_icons(lives_x, 30);
+    int lives_shown = state.lives > 5 ? 5 : state.lives;
+    int lives_w = lives_shown * LIFE_ICON_PITCH;
+    int score_w = text_measure_width(score_buf, hud_scale);
+    int level_w = text_measure_width(level_buf, hud_scale);
+    int gap     = narrow ? 12 : 24;
+
+    int total_w = score_w + gap + level_w + (lives_w ? gap + lives_w : 0);
+    int gap_lo  = LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + 8;
+    int gap_hi  = LAYOUT_EXIT_BTN_X - 8;
+    int x = gap_lo + (gap_hi - gap_lo - total_w) / 2;
+    if (x < gap_lo) x = gap_lo;
+
+    fb_draw_text(&fb, x, row_y, score_buf, COLOR_WHITE, hud_scale);
+    x += score_w + gap;
+    fb_draw_text(&fb, x, row_y, level_buf, COLOR_CYAN, hud_scale);
+    if (lives_w) {
+        x += level_w + gap;
+        draw_life_icons(x, row_y + (hud_h - LIFE_ICON_SIZE) / 2);
+    }
 
     /* Timer bar */
     draw_timer_bar();
@@ -1322,7 +1359,8 @@ static void draw_all(void) {
     /* ── Welcome screen ──────────────────────────────────────────────── */
     if (current_screen == SCREEN_WELCOME) {
         draw_welcome_screen(&fb, "FROGGER",
-            "D-PAD/ARROWS: HOP\n"
+            "TAP AHEAD OF THE FROG TO HOP\n"
+            "OR USE A D-PAD / ARROW KEYS\n"
             "CROSS ROAD AND RIVER\n"
             "REACH THE LILY PADS\n"
             "PRESS START OR TAP TO BEGIN",
@@ -1363,14 +1401,14 @@ static void draw_all(void) {
         return;
     }
 
-    /* Virtual touch controls overlay when no physical controller */
-    if (!input.gamepad_connected && !input.keyboard_connected)
-        gamepad_draw_touch_controls(&fb, &input);
+    /* No virtual-controller overlay: the frog is driven by tapping the
+     * playfield, not by an on-screen D-pad, and the overlay's boxes were never
+     * where its TouchRegions were anyway (B13k). */
 
     /* Hint text at bottom */
     if (!input.gamepad_connected && !input.keyboard_connected)
         fb_draw_text(&fb, 10, (int)fb.height - 20,
-                     "TAP DIRECTION TO HOP", RGB(100, 100, 100), 1);
+                     "TAP AHEAD OF THE FROG TO HOP", RGB(100, 100, 100), 1);
     else
         fb_draw_text(&fb, 10, (int)fb.height - 20,
                      "ARROWS/D-PAD: HOP  ESC: PAUSE", RGB(100, 100, 100), 1);
@@ -1451,6 +1489,13 @@ int main(int argc, char *argv[]) {
                 if (input.buttons[i].pressed) { needs_redraw = true; break; }
             }
         }
+
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
 
         if (needs_redraw) {
             draw_all();

@@ -721,9 +721,12 @@ static void init_buttons(void) {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    /* screen_draw_welcome*() positions start_button below the measured
+     * instruction block (B3k); these coordinates only cover a hit-test that
+     * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button,
-                (int)fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                (int)fb.height / 2 + 40,
+                LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
+                LAYOUT_BOTTOM_BTN_Y,
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
                 "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
@@ -749,15 +752,14 @@ static void init_game(void) {
     hs_load(&hs_table);
     reset_game();
 
-    TouchRegion touch_regions[] = {
-        { 10,  (int)fb.height - 120, 60, 60, BTN_ID_LEFT  },
-        { 130, (int)fb.height - 120, 60, 60, BTN_ID_RIGHT },
-        { 70,  (int)fb.height - 180, 60, 60, BTN_ID_UP    },
-        { 70,  (int)fb.height - 60,  60, 60, BTN_ID_DOWN  },
-        { (int)fb.width - 130, (int)fb.height - 120, 60, 60, BTN_ID_JUMP },
-        { (int)fb.width - 70,  (int)fb.height - 120, 60, 60, BTN_ID_RUN  },
-    };
-    gamepad_set_touch_regions(&gamepad, touch_regions, 6);
+    /* No virtual D-pad TouchRegions and no on-screen controller overlay.
+     * gamepad.c never clears a region's .held (B2), so every zone latched on
+     * first touch: the player ran in one direction forever and the overlay's
+     * boxes stayed highlighted light-blue.  The boxes were also drawn in
+     * different places from the regions that actually received the taps.  This
+     * game needs a real controller; draw_all() says so on the welcome screen
+     * when none is connected, and the touch EXIT button still works either way.
+     * Do not add regions back without fixing B2 first. */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1483,10 +1485,16 @@ static void draw_all(void) {
     /* Welcome screen */
     if (current_screen == SCREEN_WELCOME) {
         fb_clear(&fb, COLOR_BLACK);
-        draw_welcome_screen(&fb, "OFFICE RUNNER",
+        /* This game has no touch controls, so say so up front rather than
+         * shipping a virtual D-pad that latches on (B2, B13k). */
+        bool no_controller = !input.gamepad_connected && !input.keyboard_connected;
+        draw_welcome_screen_warn(&fb, "OFFICE RUNNER",
             "D-PAD: MOVE   A: JUMP   B: RUN\n"
             "STOMP ENEMIES FROM ABOVE\n"
             "COLLECT COINS   REACH THE FLAG",
+            no_controller ? "NO CONTROLLER DETECTED\n"
+                            "CONNECT A USB KEYBOARD OR GAMEPAD"
+                          : NULL,
             &start_button);
         return;
     }
@@ -1501,9 +1509,7 @@ static void draw_all(void) {
     draw_player_sprite();
     draw_hud();
 
-    /* Touch controls overlay */
-    if (!input.gamepad_connected && !input.keyboard_connected)
-        gamepad_draw_touch_controls(&fb, &input);
+    /* No touch-controls overlay — see init_game(). */
 
     /* Pause overlay */
     if (current_screen == SCREEN_PAUSED) {
@@ -1534,7 +1540,9 @@ static void draw_all(void) {
 
     /* Game over */
     if (current_screen == SCREEN_GAME_OVER) {
-        touch_poll(&touch);
+        /* No touch_poll() here. handle_input() already polled this frame, and
+         * touch_poll() clears TouchState.pressed at entry — a second poll ate the
+         * press edge, so RESTART and EXIT could never fire (IMPROVEMENT_PLAN B13a). */
         TouchState ts = touch_get_state(&touch);
         GameOverAction act = gameover_update(&gos, &fb,
                                              ts.x, ts.y, ts.pressed);
@@ -1565,6 +1573,14 @@ static void handle_input(void) {
     TouchState ts = touch_get_state(&touch);
     gamepad_poll(&gamepad, &input, ts.x, ts.y, ts.pressed);
     uint32_t now = get_time_ms();
+
+    /* BTN_BACK always exits to the launcher. Platformer was the only game without
+     * this, which left its game-over screen with no way out (IMPROVEMENT_PLAN B13a). */
+    if (input.buttons[BTN_ID_BACK].pressed) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
 
     switch (current_screen) {
     case SCREEN_WELCOME:
@@ -1720,6 +1736,13 @@ int main(int argc, char *argv[]) {
                 if (input.buttons[i].pressed) { needs_redraw = true; break; }
             }
         }
+
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
 
         if (needs_redraw) {
             draw_all();

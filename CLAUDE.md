@@ -38,6 +38,15 @@ not available (the repo's `usb_host/linux-4.14.52/` is vanilla upstream and is m
 out. Anything gated on a kernel config change is out of scope — see
 `SYSTEM_ANALYSIS.md#7-kernel-policy`.
 
+## Working style
+
+**Delegate the reading.** This repo's docs are long by design and its sources are large
+(`device_tools.c` is 2651 lines), so answering "where is X / which call sites do Y / does this
+pattern hold across all seven games" by reading files into the main context burns the budget that
+the actual edit and its verification need. Spin up subagents for that — one per independent
+question, in parallel — and keep only their conclusions. Do the edits, the build and the on-device
+verification in the main thread, where the context is worth spending.
+
 ## Build & deploy
 
 Everything builds with the ARM cross-compiler and deploys over SSH. There is **no

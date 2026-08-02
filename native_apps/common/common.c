@@ -379,30 +379,113 @@ void button_draw_exit(Framebuffer *fb, Button *btn) {
 // SCREEN TEMPLATES
 // ============================================================================
 
-void screen_draw_welcome(Framebuffer *fb, const char *game_title,
-                        const char *instructions, Button *start_btn) {
+/* Draw one '\n'-separated block of text, each line individually centred on
+ * center_x.  Returns the y just below the last line.  fb_draw_text() does not
+ * interpret '\n' (it falls into the "unprintable" branch and advances 6*scale
+ * px), so a multi-line string handed to it straight renders as one long line
+ * and mis-centres badly — that was the frogger welcome-screen defect. */
+static int screen_draw_centered_block(Framebuffer *fb, int center_x, int y,
+                                      const char *text, uint32_t color,
+                                      int scale, int line_gap) {
+    int line_h = text_measure_height(scale);
+    const char *p = text;
+
+    for (;;) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+
+        if (len > 0) {
+            char line[256];
+            if (len >= sizeof(line)) len = sizeof(line) - 1;
+            memcpy(line, p, len);
+            line[len] = '\0';
+            text_draw_centered(fb, center_x, y + line_h / 2, line, color, scale);
+        }
+        y += line_h + line_gap;
+
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return y - line_gap;
+}
+
+/* Height screen_draw_centered_block() will consume for the same arguments —
+ * both count lines as 1 + the number of '\n', so they cannot disagree. */
+static int screen_measure_block(const char *text, int scale, int line_gap) {
+    if (!text || !text[0]) return 0;
+    int lines = 1;
+    for (const char *p = text; *p; p++)
+        if (*p == '\n') lines++;
+    return lines * text_measure_height(scale) + (lines - 1) * line_gap;
+}
+
+void screen_draw_welcome_warn(Framebuffer *fb, const char *game_title,
+                             const char *instructions, const char *warning,
+                             Button *start_btn) {
     fb_clear(fb, COLOR_BLACK);
-    
-    // Draw title (using safe area)
+
+    /* Text is only seen, never pressed, so it is centred on the VISIBLE
+     * screen.  The start button IS pressed, so it stays in the SAFE area. */
+    int center_x = SCREEN_VISIBLE_LEFT + SCREEN_VISIBLE_WIDTH / 2;
+
     char upper_title[256];
     text_to_uppercase(upper_title, game_title, sizeof(upper_title));
-    int title_width = strlen(upper_title) * 8 * 4;
-    int title_x = LAYOUT_CENTER_X(title_width);
-    int title_y = SCREEN_VISIBLE_TOP + 50;  // text: only has to be seen, not pressed
-    fb_draw_text(fb, title_x, title_y, upper_title, COLOR_CYAN, 4);
-    
-    // Draw instructions (centered in safe area)
-    if (instructions && instructions[0]) {
-        char upper_inst[512];
+    int title_y = SCREEN_VISIBLE_TOP + 50;
+    text_draw_centered(fb, center_x, title_y + text_measure_height(4) / 2,
+                       upper_title, COLOR_CYAN, 4);
+
+    /* Lay the instruction block out below the title, then the (optional)
+     * warning, then the button below whatever that came to — instead of at a
+     * fixed fb->height/2 + 40, which used to slide under the button. */
+    char upper_inst[512];
+    char upper_warn[512];
+    upper_inst[0] = upper_warn[0] = '\0';
+    if (instructions && instructions[0])
         text_to_uppercase(upper_inst, instructions, sizeof(upper_inst));
-        int inst_width = strlen(upper_inst) * 8;
-        int inst_x = LAYOUT_CENTER_X(inst_width);
-        int inst_y = LAYOUT_CENTER_Y(8) + 20;  // Slightly below center
-        fb_draw_text(fb, inst_x, inst_y, upper_inst, COLOR_WHITE, 1);
+    if (warning && warning[0])
+        text_to_uppercase(upper_warn, warning, sizeof(upper_warn));
+
+    int inst_h = screen_measure_block(upper_inst, WELCOME_INST_SCALE,
+                                     WELCOME_LINE_GAP);
+    int warn_h = screen_measure_block(upper_warn, WELCOME_INST_SCALE,
+                                     WELCOME_LINE_GAP);
+    if (warn_h) warn_h += WELCOME_BLOCK_GAP;
+
+    int block_h = inst_h + warn_h;
+    int btn_h   = start_btn ? start_btn->height : 0;
+
+    /* Centre {instructions + warning + gap + button} in the space between the
+     * title and the bottom of the visible screen. */
+    int area_top    = title_y + text_measure_height(4) + WELCOME_BLOCK_GAP;
+    int area_bottom = SCREEN_VISIBLE_BOTTOM - WELCOME_BLOCK_GAP;
+    int total_h     = block_h + (btn_h ? WELCOME_BLOCK_GAP + btn_h : 0);
+    int y = area_top + (area_bottom - area_top - total_h) / 2;
+    if (y < area_top) y = area_top;
+
+    if (inst_h)
+        y = screen_draw_centered_block(fb, center_x, y, upper_inst, COLOR_WHITE,
+                                      WELCOME_INST_SCALE, WELCOME_LINE_GAP);
+    if (warn_h) {
+        y += WELCOME_BLOCK_GAP;
+        y = screen_draw_centered_block(fb, center_x, y, upper_warn,
+                                      BTN_COLOR_WARNING, WELCOME_INST_SCALE,
+                                      WELCOME_LINE_GAP);
     }
-    
-    // Draw start button
-    button_draw(fb, start_btn);
+
+    if (start_btn) {
+        start_btn->x = LAYOUT_CENTER_X(start_btn->width);
+        start_btn->y = y + WELCOME_BLOCK_GAP;
+        /* Never let it leave the touchable rectangle — it has to be pressable. */
+        int max_y = SCREEN_SAFE_BOTTOM - start_btn->height;
+        if (start_btn->y > max_y) start_btn->y = max_y;
+        if (start_btn->y < SCREEN_SAFE_TOP) start_btn->y = SCREEN_SAFE_TOP;
+        button_draw(fb, start_btn);
+    }
+}
+
+void screen_draw_welcome(Framebuffer *fb, const char *game_title,
+                        const char *instructions, Button *start_btn) {
+    screen_draw_welcome_warn(fb, game_title, instructions, NULL, start_btn);
 }
 
 void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
@@ -676,6 +759,8 @@ void gameover_init(GameOverScreen *gos, Framebuffer *fb,
     gos->touch = touch;
     gos->hs_qualifies = false;
     gos->has_reset_scores = (hs_table != NULL);
+    gos->pending_draw = true;   /* nothing of ours is on screen yet */
+    gos->armed = false;         /* ignore the press that got us here */
 
     // Store title (default to "GAME OVER" if NULL/empty)
     if (title && title[0]) {
@@ -729,6 +814,10 @@ void gameover_init(GameOverScreen *gos, Framebuffer *fb,
 GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
                                int touch_x, int touch_y, bool touch_active) {
     // ── CHECK state: determine if score qualifies for highscore ──
+    // Falls through to the next state in the SAME call. It must: the caller only
+    // runs its draw path when its dirty flag is set, so a state that returns
+    // without drawing costs a frame the loop will not grant until the player
+    // taps — which is precisely the "tap to see the game over screen" bug.
     if (gos->state == GAMEOVER_STATE_CHECK) {
         if (gos->hs_table != NULL) {
             gos->hs_qualifies = (hs_qualifies(gos->hs_table, gos->score) >= 0);
@@ -741,10 +830,13 @@ GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
         } else {
             gos->state = GAMEOVER_STATE_DISPLAY;
         }
-        return GAMEOVER_ACTION_NONE;
     }
 
     // ── NAME_ENTRY state: blocking keyboard for player name ──
+    // This one deliberately does NOT fall through. hs_enter_name() repaints and
+    // swaps the framebuffer itself, so drawing our overlay now would composite it
+    // over the keyboard's last frame. pending_draw stays true, so the caller
+    // gives us one clean frame with the playfield redrawn underneath.
     if (gos->state == GAMEOVER_STATE_NAME_ENTRY) {
         char hs_name[HS_NAME_LEN];
         hs_enter_name(fb, gos->touch, hs_name, gos->score);
@@ -766,35 +858,85 @@ GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
 
     // ── DISPLAY state: draw screen and handle button presses ──
     gameover_draw(gos, fb);
+    gos->pending_draw = false;
 
-    if (!touch_active)
+    // The press that ended the game is still in the caller's TouchState on this
+    // frame (touch_active is a rising edge, cleared by the next touch_poll()), so
+    // reading input now would let it press a button on a screen nobody has seen —
+    // brick_breaker's pause-dialog RETIRE overlaps this screen's RESET SCORES by
+    // 21 px, which would silently wipe the table. One frame of arming closes that.
+    if (!gos->armed) {
+        gos->armed = true;
         return GAMEOVER_ACTION_NONE;
+    }
 
     uint32_t now = get_time_ms();
 
+    // Every button is fed each frame, including frames with no touch: that is what
+    // clears Button.was_pressed on release. Early-returning on !touch_active left
+    // it latched, so RESET SCORES only ever fired once per game over.
+
     // Check RESTART button
-    bool restart_touched = button_is_touched(&gos->restart_btn, touch_x, touch_y);
-    if (button_check_press(&gos->restart_btn, restart_touched, now)) {
-        return GAMEOVER_ACTION_RESTART;
-    }
+    bool restart_touched = touch_active && button_is_touched(&gos->restart_btn, touch_x, touch_y);
+    bool restart_fired = button_check_press(&gos->restart_btn, restart_touched, now);
 
     // Check EXIT button
-    bool exit_touched = button_is_touched(&gos->exit_btn, touch_x, touch_y);
-    if (button_check_press(&gos->exit_btn, exit_touched, now)) {
-        return GAMEOVER_ACTION_EXIT;
-    }
+    bool exit_touched = touch_active && button_is_touched(&gos->exit_btn, touch_x, touch_y);
+    bool exit_fired = button_check_press(&gos->exit_btn, exit_touched, now);
 
     // Check RESET SCORES button (only if highscore enabled)
+    bool reset_fired = false;
     if (gos->has_reset_scores) {
-        bool reset_touched = button_is_touched(&gos->reset_scores_btn, touch_x, touch_y);
-        if (button_check_press(&gos->reset_scores_btn, reset_touched, now)) {
-            hs_reset(gos->hs_table);
-            hs_save(gos->hs_table);
-            return GAMEOVER_ACTION_RESET_SCORES;
-        }
+        bool reset_touched = touch_active &&
+                             button_is_touched(&gos->reset_scores_btn, touch_x, touch_y);
+        reset_fired = button_check_press(&gos->reset_scores_btn, reset_touched, now);
+    }
+
+    if (restart_fired)
+        return GAMEOVER_ACTION_RESTART;
+    if (exit_fired)
+        return GAMEOVER_ACTION_EXIT;
+    if (reset_fired) {
+        hs_reset(gos->hs_table);
+        hs_save(gos->hs_table);
+        // The table we just drew is stale — ask for one more frame so the emptied
+        // table is actually shown instead of waiting for the next tap.
+        gos->pending_draw = true;
+        return GAMEOVER_ACTION_RESET_SCORES;
     }
 
     return GAMEOVER_ACTION_NONE;
+}
+
+bool gameover_needs_redraw(const GameOverScreen *gos) {
+    if (gos->pending_draw)
+        return true;
+
+    // Our buttons are read inside gameover_update(), which the caller only runs
+    // from its draw path — so a frame we do not ask for is also an input event we
+    // never see. Reporting "I owe a frame" alone was not enough: once the overlay
+    // had settled, a loop whose dirty flag is a pure visible-state diff produced
+    // no more frames and RESTART / RESET SCORES / EXIT were all dead, with no
+    // other handler on that screen to exit with (samegame, 2026-08-02 — the only
+    // game with no "redraw on input activity" branch of its own, which is why it
+    // was the only one to show it).
+    if (gos->touch != NULL) {
+        TouchState ts = touch_get_state(gos->touch);
+        if (ts.pressed || ts.held)
+            return true;
+    }
+
+    // A fired button needs one frame on which it is NOT touched before it can
+    // fire again — that is where button_check_press() clears was_pressed. On a
+    // screen paced at FRAME_DELAY_IDLE_US a press and its release can both land
+    // in a single touch_poll(), so waiting for ts.held/ts.released to produce
+    // that frame is not enough: there would be none, and the next press would be
+    // silently eaten. Ask the buttons instead.
+    if (gos->restart_btn.was_pressed || gos->exit_btn.was_pressed ||
+        (gos->has_reset_scores && gos->reset_scores_btn.was_pressed))
+        return true;
+
+    return false;
 }
 
 void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {

@@ -314,20 +314,49 @@ static void draw_usage_bar(Framebuffer *fb, int x, int y, int width,
 }
 
 /**
+ * The EXIT corner — one rect, shared by the drawn box and the hit-test, so the
+ * two literals that used to have to agree by hand cannot drift.  Anchored on
+ * SCREEN_SAFE_* so the box stays reachable once the panel has been swept; at
+ * inset 0 it is the old 720, 2, 76, 36 exactly.
+ */
+#define DIAG_EXIT_W 76
+#define DIAG_EXIT_H 36
+
+static void diag_exit_rect(int *x, int *y, int *w, int *h) {
+    *x = SCREEN_SAFE_RIGHT - DIAG_EXIT_W - 4;
+    *y = SCREEN_SAFE_TOP + 2;
+    *w = DIAG_EXIT_W;
+    *h = DIAG_EXIT_H;
+}
+
+/** Header band height — deep enough to contain the EXIT box at any inset. */
+static int diag_header_height(void) {
+    int h = SCREEN_SAFE_TOP + 40;
+    if (h < 50) h = 50;
+    /* Page content starts at y=70 and deliberately does not move (dense read-only
+     * text, and one page carries a y < SCREEN_H - 60 guard), so the band must never
+     * grow into it.  Past an inset of ~30 the EXIT box simply overhangs the band. */
+    if (h > 68) h = 68;
+    return h;
+}
+
+/**
  * Draw page header: background, title, and exit zone indicator.
  */
 static void draw_page_header(Framebuffer *fb, int page) {
     fb_clear(fb, COLOR_BG);
 
     /* Header background */
-    fb_fill_rect(fb, 0, 0, SCREEN_W, 50, RGB(30, 30, 50));
+    fb_fill_rect(fb, 0, 0, SCREEN_W, diag_header_height(), RGB(30, 30, 50));
 
     /* Title */
     text_draw_centered(fb, SCREEN_W / 2, 25, page_titles[page], COLOR_HEADER, 3);
 
     /* Exit zone indicator (top-right corner) */
-    fb_fill_rect(fb, 720, 2, 76, 36, RGB(80, 20, 20));
-    text_draw_centered(fb, 758, 20, "EXIT", RGB(200, 100, 100), 2);
+    int ex, ey, ew, eh;
+    diag_exit_rect(&ex, &ey, &ew, &eh);
+    fb_fill_rect(fb, ex, ey, ew, eh, RGB(80, 20, 20));
+    text_draw_centered(fb, ex + ew / 2, ey + eh / 2, "EXIT", RGB(200, 100, 100), 2);
 }
 
 /**
@@ -810,8 +839,12 @@ int main(int argc, char *argv[]) {
         TouchState ts = touch_get_state(&touch);
 
         if (ts.pressed && !was_touching) {
-            /* Check exit zone: top-right corner (x > 700, y < 40) */
-            if (ts.x > 700 && ts.y < 40) {
+            /* Exit zone: the same rect draw_page_header() paints, plus the slop
+             * the old hardcoded test had (x > 700, y < 40) so the target stays
+             * comfortably finger-sized — derived, not a second set of literals. */
+            int ex, ey, ew, eh;
+            diag_exit_rect(&ex, &ey, &ew, &eh);
+            if (ts.x > ex - 20 && ts.y < ey + eh + 2) {
                 running = false;
             } else {
                 /* Advance page */

@@ -6,6 +6,7 @@
 #include "highscore.h"
 #include "keyboard.h"
 #include "common.h"
+#include "config.h"     /* file_write_atomic_* */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,11 +56,14 @@ void hs_load(HighScoreTable *t) {
 }
 
 void hs_save(const HighScoreTable *t) {
-    mkdir(HS_DATA_DIR, 0755);   /* ensure dir exists; ok if already there */
     char path[128];
     hs_filepath(t, path, sizeof(path));
 
-    FILE *f = fopen(path, "w");
+    /* Atomic: write <path>.tmp, fsync, rename.  A power cut mid-write used to
+     * leave the table empty, because fopen(path,"w") truncated first.  The
+     * signature stays void — a failed save is still silently ignored. */
+    char tmp_path[160];
+    FILE *f = file_write_atomic_open(path, tmp_path, sizeof(tmp_path));
     if (!f) return;
 
     for (int i = 0; i < t->count; i++) {
@@ -69,9 +73,13 @@ void hs_save(const HighScoreTable *t) {
         safe[HS_NAME_LEN - 1] = '\0';
         for (int j = 0; safe[j]; j++)
             if (safe[j] == ' ') safe[j] = '_';
-        fprintf(f, "%s %d\n", safe, t->entries[i].score);
+        if (fprintf(f, "%s %d\n", safe, t->entries[i].score) < 0) {
+            file_write_atomic_abort(f, tmp_path);
+            return;
+        }
     }
-    fclose(f);
+
+    (void)file_write_atomic_commit(f, tmp_path, path);
 }
 
 void hs_reset(HighScoreTable *t) {

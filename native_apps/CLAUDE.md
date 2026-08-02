@@ -44,7 +44,7 @@ tools that measure the touch mapping (`device_tools`, `touch_raw`) add `$CALIB_O
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
 | `hardware.c` | LEDs, backlight | writing `/sys/class/leds/*` |
-| `common.c` | buttons, `ModalDialog`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
+| `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
 | `audio.c` | beeps, tones, streaming | opening `/dev/dsp` yourself |
 | `config.c` | `/opt/games/rw_config.conf` | ad-hoc config files |
@@ -53,6 +53,20 @@ tools that measure the touch mapping (`device_tools`, `touch_raw`) add `$CALIB_O
 
 `keyboard_enter(fb, touch, "Title", buf, max_len, KB_LAYOUT_ALPHA)` — `buf` must hold
 `max_len + 1` bytes.
+
+**`fb_draw_text()` does not interpret `'\n'`.** A newline takes the unprintable-character branch and
+just advances 6·scale px, so a multi-line string renders as one long line. Anything with embedded
+newlines must be split per line by the caller — `screen_draw_welcome*()` does this now, and until
+2026-08-02 it did not, which is why every game's welcome text was one 500 px line centred on the wrong
+width (`../IMPROVEMENT_PLAN.md` B3k).
+
+`screen_draw_welcome(fb, title, instructions, start_btn)` / `screen_draw_welcome_warn(…, warning, …)`
+**position `start_btn` as well as drawing it** — below the measured instruction (and warning) block,
+centred in and clamped to `SCREEN_SAFE_*`. So the drawn rect and the hit-test rect are one
+computation, and a caller's `button_init()` coordinates for the start button are only a fallback for a
+hit-test arriving before the first draw; use `LAYOUT_CENTER_X` / `LAYOUT_BOTTOM_BTN_Y` there, not a
+`fb.height / 2 + 40`-style literal. `instructions` and `warning` may both contain `'\n'`; the warning
+block renders amber and exists for "this game needs a controller and none is connected".
 
 `ModalDialog`: `modal_dialog_init()` → `modal_dialog_set_button()` per button →
 `modal_dialog_draw()` after all other content but before `fb_swap()` → `modal_dialog_update()`
@@ -164,9 +178,60 @@ while (running) {
 ```
 
 The `bool drew` matters. Testing `needs_redraw` in the `usleep` after clearing it inside the
-`if` always yields the idle delay, pinning the app to 10 fps — that is a real shipped bug
-(`../IMPROVEMENT_PLAN.md` B13c). Either capture it first, as above, or clear the flag *after*
-the `usleep`.
+`if` always yields the idle delay, pinning the app to 10 fps — that **was** a real shipped bug, in
+`samegame.c` (`../IMPROVEMENT_PLAN.md` B13c, fixed 2026-08-02). Either capture it first, as above, or
+clear the flag *after* the `usleep`.
+
+**A component whose `update()` both draws and reads input has to tell the caller when it still needs
+frames.** The dirty flag is computed by the loop from things the loop can see — state changes and input
+— so a component with internal states of its own is invisible to it and gets starved. That shipped:
+`gameover_update()` is a `CHECK` → (`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY`
+draws**, so entering game over drew the playfield, ran `CHECK`, returned without drawing, and then
+nothing redrew until the player tapped — the game-over overlay and the high-score keyboard both needed
+a tap to appear (`../IMPROVEMENT_PLAN.md` B22). The component now exposes `gameover_needs_redraw()`
+and every game ORs it in:
+
+```c
+if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+    needs_redraw = true;
+```
+
+Two corollaries, both learned from the same bug:
+
+- **Do not fix it in the caller.** `samegame.c` did — an unconditional redraw while `SCREEN_GAME_OVER`
+  — which cured samegame, left the other six games broken, and pinned a static overlay to 30 fps.
+  Ask the component; it is the only thing that knows.
+- **Making the first frame appear on the transition frame puts the press that caused the transition in
+  front of the new screen's buttons.** `TouchState.pressed` is a rising edge that survives until the
+  next `touch_poll()`, and a draw-then-check-input component draws before it reads. So the component
+  must ignore input on its own first drawn frame (`GameOverScreen.armed`); brick_breaker's pause-dialog
+  `RETIRE` overlaps the game-over `RESET SCORES` by 21 px, so without that guard retiring could wipe
+  the high-score table on a screen nobody had seen.
+
+**And the corollary that cost a wedged app: the predicate must cover pending *input*, not just a
+pending draw.** If the component reads its buttons inside the draw path, then a frame the loop
+declines to run is also **an input event the component never sees** — so a predicate that only
+reports "I owe a frame" goes quiet the moment the screen settles and the buttons die. It is not
+enough that most callers happen to have an input-activity branch of their own:
+
+| Game | `else { /* static screens: redraw on input activity */ }` |
+|---|---|
+| tetris, snake, frogger, pong, platformer, brick_breaker | yes — a tap produces a frame, so the buttons worked |
+| **samegame** | **no** — its dirty flag is a pure visible-state diff (screen, highlight, score, blocks, mouse, anim), and a tap on an overlay changes none of them |
+
+So samegame's game-over screen drew correctly and then went completely unresponsive — all three
+buttons dead, no other handler on that screen, only killable over SSH (reported from the panel
+2026-08-02, fixed the same day). `gameover_needs_redraw()` now returns true on three grounds, and
+each is load-bearing:
+
+| Ground | Why |
+|---|---|
+| `pending_draw` | the original B22 fix — the multi-frame machine owes the screen a frame |
+| `ts.pressed \|\| ts.held` | there is input to act on, and only a drawn frame lets us act on it |
+| any button's `was_pressed` | `button_check_press()` clears that latch only on a frame where the button is **not** touched. At `FRAME_DELAY_IDLE_US` a press and its release can both land in one `touch_poll()`, so there may be no `held`/`released` frame at all — and then the *next* press is silently eaten. Ask the buttons, not the touch state |
+
+Idle still costs nothing: with no finger down and nothing latched, all three are false and the
+static overlay produces no frames — which was the point of asking the component in the first place.
 
 `FRAME_DELAY_ACTIVE_US` = 33 333 (~30 fps), `FRAME_DELAY_IDLE_US` = 100 000 (~10 fps), both in
 `common/common.h`. Use them; don't hardcode `usleep()` values. Reference implementation:
@@ -264,6 +329,41 @@ capped at `FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Consequences:
 - Not every playfield can move: Tetris' board and Brick Breaker's play area are drawn and collided
   against but never pressed (touch is X-only), so they use `SCREEN_VISIBLE_*`; SameGame's grid *is*
   tapped cell-by-cell, so it stays inside `SCREEN_SAFE_*`.
+- **A top button row is `LAYOUT_MENU_BTN_X/Y` + `LAYOUT_EXIT_BTN_X/Y`, never a literal `10, 10`** —
+  and **the reserve below it derives from the row**, not from a second literal. So a playfield that
+  starts under the row is `LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + <gap>`, and its height comes off
+  `SCREEN_VISIBLE_BOTTOM`, not `fb.height - <sum of the gaps>`. A literal offset silently loses its
+  top rows to the inset, and a literal reserve leaves the row sitting on the playfield once it moves.
+  If the row lives inside a fixed-height HUD band, **the band has to grow with it**
+  (`frogger.c`'s `hud_height = SCREEN_SAFE_TOP + HUD_HEIGHT`) or its own content collides with the
+  buttons. Where a drawn rect and a hit-test describe the same target, compute both from **one**
+  helper (`hardware_diag.c`'s `diag_exit_rect()`) — two literals that have to agree by hand will
+  eventually not. All of this was swept and fixed on 2026-08-02
+  (`../IMPROVEMENT_PLAN.md` B3e); `grep -n 'button_init(&[a-z_]*, *[0-9]'` is the check.
+  **A literal reserve that is *smaller* than the row is the same bug from the other side**, and it
+  shipped: tetris' board used `SCREEN_SAFE_TOP + 55` against a row occupying `SAFE_TOP + 10 .. + 60`,
+  so the buttons were drawn on top of the board *and* the board ran 5 px off the bottom (B3j). Also
+  count the **frame**: a `fb_draw_rect()` outline sits *outside* the content rect on every side, so its
+  thickness belongs in the vertical budget too, from the same named constant the drawing uses.
+- **Put a status row in the band above the button row, not below it.** The inverse of the rule above
+  and the other way to get this wrong: HUD text is only *seen*, so it belongs in `SCREEN_VISIBLE_TOP`
+  — the band the two-rectangle split exists to keep usable. Stacking it under `SCREEN_SAFE_TOP`
+  instead put tetris' `LVL` and frogger's lives icons **behind** the buttons, which are drawn after
+  them (B3i). The pattern both games now use, and the reason it is safe on an uncalibrated panel:
+
+  ```c
+  int band_h = LAYOUT_MENU_BTN_Y - SCREEN_VISIBLE_TOP;   /* == inset + 10 */
+  int row_y  = (band_h >= text_h)
+               ? SCREEN_VISIBLE_TOP + (band_h - text_h) / 2   /* in the band */
+               : LAYOUT_MENU_BTN_Y + (BTN_MENU_HEIGHT - text_h) / 2;  /* level with the row */
+  ```
+
+  At inset 0 the band is 10 px and cannot hold 14 px of text, so the row drops level with the buttons
+  — which is only safe because **horizontally it is confined to the gap between MENU and EXIT**
+  (`LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH` → `LAYOUT_EXIT_BTN_X`). Lay it out from a *measured* total
+  width so it stays centred in that gap as the numbers grow; frogger's old HUD used `fb.width/2 - 100`
+  and friends and drifted. That gap is also where a full-width bar goes: frogger's timer bar used to
+  span the grid at `hud_height - 18` and covered the bottom 8 px of both buttons.
 
 See [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch) for the numbers and the method.
 
@@ -369,6 +469,26 @@ Use `gamepad.c` for everything; don't scan evdev per-app. Abstract buttons are
 discrete actions; `.held` for continuous movement. Note `.held` is currently **never cleared**
 for touch regions and analog-stick directions (`../IMPROVEMENT_PLAN.md` B2), so until that is
 fixed a virtual D-pad latches on permanently.
+
+**Do not add a `TouchRegion` virtual D-pad until B2 is fixed.** They were removed from frogger and
+platformer on 2026-08-02 (B13k) precisely because of the latch: the zones stuck highlighted and the
+character kept moving on its own. `gamepad_set_touch_regions()` now has exactly one caller (`snake.c`)
+and its regions never take effect because `gamepad_init()` runs after them and `memset`s the manager
+(B13g) — so **fixing B13g without fixing B2 first re-introduces the bug in snake**.
+`gamepad_draw_touch_controls()` has no callers at all; note its boxes were drawn at fixed positions
+that never matched the regions they were supposed to represent, in either game.
+
+Prefer a **tap relative to the object being controlled** over a virtual pad — frogger hops the frog
+towards wherever you tap in the playfield, which needs no regions, cannot latch, and makes the whole
+playfield one target. Where that does not map (platformer needs simultaneous run + jump), say so on the
+welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
+
+**You cannot test any of this from a script.** Synthesising input needs `/dev/uinput` and this kernel
+has `CONFIG_INPUT_UINPUT` unset, so `tests/touch_inject.c`'s `write()` to `/dev/input/event0`
+succeeds, reports success, and delivers nothing to any reader. Verified on RW09 2026-08-02.
+Script-side you can launch a binary over SSH and `cat /dev/fb0` to check the **first** screen — the one
+drawn before any input — and that is all; everything past it needs a human at the panel. See
+`../IMPROVEMENT_PLAN.md` C6.
 
 Every app should handle `BTN_ID_BACK` as "exit / back". Platformer does not, which leaves its
 game-over screen with no way out.

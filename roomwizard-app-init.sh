@@ -52,15 +52,25 @@ do_start() {
     # Read configured app
     read_config
 
+    # Neither "no app configured" nor "app not executable" is fatal any more:
+    # the wrapper counts the failures and falls back to the launcher, which is
+    # the only on-device recovery path.  Refusing to start here is what used to
+    # leave a bad default-app on a black screen with no way back.
     if [ -z "$APP_EXEC" ]; then
         echo "WARNING: No default app configured"
         echo "  Set one with: echo /path/to/app > $CONFIG"
-        return 0
+        echo "  Starting the respawn wrapper anyway — it will fall back to the launcher"
+    elif [ ! -x "$APP_EXEC" ]; then
+        echo "WARNING: Configured app not found or not executable: $APP_EXEC"
+        echo "  Starting the respawn wrapper anyway — it will fall back to the launcher"
     fi
 
-    if [ ! -x "$APP_EXEC" ]; then
-        echo "ERROR: Configured app not found or not executable: $APP_EXEC"
-        return 1
+    # Never launch a second wrapper.  Checked BEFORE the heredoc below, because
+    # truncating and rewriting a script file that a running /bin/sh still has
+    # open can make that sh misparse the remainder of the file.
+    if pidof -x respawn.sh >/dev/null 2>&1; then
+        echo "  Already running — use 'restart' to pick up a new default-app"
+        return 0
     fi
 
     # Write respawn wrapper (re-reads config on each restart cycle, so
@@ -71,19 +81,42 @@ do_start() {
 CONFIG=/opt/roomwizard/default-app
 LOGDIR=/var/log/roomwizard
 LOGFILE=$LOGDIR/respawn.log
+APPLOG=$LOGDIR/app_stdout.log
 CHILD_PID=
+
+# Recovery policy: after MAX_FAILURES consecutive failures of the configured
+# app — either "not executable" or "exited in under FAST_EXIT_SECS" — switch to
+# FALLBACK so the device always comes back to something usable.  FALLBACK never
+# falls back to itself; a broken launcher settles into the capped retry below.
+FALLBACK=/opt/roomwizard/app_launcher
+MAX_FAILURES=3
+FAST_EXIT_SECS=5
+MAX_BACKOFF_SECS=30
+LOG_MAX_BYTES=262144
+
+FAIL_COUNT=0
+USE_FALLBACK=0
+PREV_CONFIGURED=
 
 # Ensure log directory exists
 mkdir -p "$LOGDIR"
 
-# Rotate log if over 256 KB
-rotate_log() {
-    if [ -f "$LOGFILE" ]; then
-        size=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
-        if [ "$size" -gt 262144 ]; then
-            mv -f "$LOGFILE" "$LOGFILE.1"
-        fi
+# Rotate a log if over 256 KB.  Both logs are rotated at the top of the respawn
+# loop, which is the right boundary: the child's '>>' redirection is reopened on
+# every launch, so a rotation between launches actually frees the old inode.
+rotate_one() {
+    _rf=$1
+    [ -f "$_rf" ] || return 0
+    _rsz=$(wc -c < "$_rf" 2>/dev/null || echo 0)
+    [ -z "$_rsz" ] && _rsz=0
+    if [ "$_rsz" -gt "$LOG_MAX_BYTES" ]; then
+        mv -f "$_rf" "$_rf.1"
     fi
+}
+
+rotate_logs() {
+    rotate_one "$LOGFILE"
+    rotate_one "$APPLOG"
 }
 
 log() {
@@ -108,43 +141,118 @@ trap cleanup TERM INT
 
 log "=== Respawn wrapper started (pid $$) ==="
 
-while true; do
-    rotate_log
-    APP=$(head -1 "$CONFIG" 2>/dev/null | tr -d '[:space:]')
-    if [ -x "$APP" ]; then
-        log "Starting $APP"
-        "$APP" >> "$LOGDIR/app_stdout.log" 2>&1 &
-        CHILD_PID=$!
-        log "$APP running as PID $CHILD_PID"
-        # Robust wait: keep waiting until the child truly exits.
-        # BusyBox ash 'wait' may return prematurely on some signals;
-        # the kill -0 guard prevents respawning while the app is alive.
-        while kill -0 "$CHILD_PID" 2>/dev/null; do
-            wait "$CHILD_PID" 2>/dev/null
-        done
-        wait "$CHILD_PID" 2>/dev/null
-        EXIT_CODE=$?
-        log "$APP (PID $CHILD_PID) exited (code $EXIT_CODE), restarting in 2s..."
-        # Do NOT clear CHILD_PID until after sleep so cleanup() can
-        # still kill the child if TERM arrives during the delay.
-        sleep 2
-        CHILD_PID=
-    else
-        log "No valid app configured ($APP), retrying in 10s..."
-        sleep 10
+# Switch to FALLBACK if we are not already on it.  Sets USE_FALLBACK even in the
+# "nothing to fall back to" case, so the decision is not re-logged every cycle;
+# the capped backoff then keeps a broken launcher from spinning.
+try_fallback() {
+    [ "$USE_FALLBACK" = 1 ] && return 1
+    if [ ! -x "$FALLBACK" ]; then
+        log "ERROR: fallback $FALLBACK is not executable — cannot recover automatically"
+        USE_FALLBACK=1
+        return 1
     fi
+    if [ "$FALLBACK" = "$CONFIGURED" ]; then
+        log "ERROR: the configured app IS the fallback ($FALLBACK) — nothing to fall back to"
+        USE_FALLBACK=1
+        return 1
+    fi
+    log "*** FALLING BACK to $FALLBACK after $FAIL_COUNT consecutive failures ***"
+    USE_FALLBACK=1
+    FAIL_COUNT=0
+    return 0
+}
+
+while true; do
+    rotate_logs
+
+    CONFIGURED=$(head -1 "$CONFIG" 2>/dev/null | tr -d '[:space:]')
+
+    # A newly configured default-app deserves a clean slate.
+    if [ "$CONFIGURED" != "$PREV_CONFIGURED" ]; then
+        if [ -n "$PREV_CONFIGURED" ]; then
+            log "default-app changed ('$PREV_CONFIGURED' -> '$CONFIGURED'), clearing failure state"
+        fi
+        PREV_CONFIGURED=$CONFIGURED
+        FAIL_COUNT=0
+        USE_FALLBACK=0
+    fi
+
+    if [ "$USE_FALLBACK" = 1 ]; then
+        APP=$FALLBACK
+    else
+        APP=$CONFIGURED
+    fi
+
+    if [ ! -x "$APP" ]; then
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        log "No valid app configured ($APP) [failure $FAIL_COUNT/$MAX_FAILURES]"
+        if [ "$FAIL_COUNT" -ge "$MAX_FAILURES" ] && try_fallback; then
+            continue        # retry the fallback immediately
+        fi
+        sleep 10
+        continue
+    fi
+
+    log "Starting $APP"
+    START_TS=$(date +%s)
+    "$APP" >> "$APPLOG" 2>&1 &
+    CHILD_PID=$!
+    log "$APP running as PID $CHILD_PID"
+
+    # Robust wait that also keeps the child's real exit status.  BusyBox ash
+    # 'wait' can return early on a signal, so the kill -0 guard decides whether
+    # the status is real; the sleep 1 stops that guard from busy-spinning.
+    EXIT_CODE=0
+    while true; do
+        wait "$CHILD_PID"; EXIT_CODE=$?
+        kill -0 "$CHILD_PID" 2>/dev/null || break
+        sleep 1
+    done
+
+    RUNTIME=$(( $(date +%s) - START_TS ))
+    [ "$RUNTIME" -lt 0 ] && RUNTIME=0
+    # 'exited (code 132) after 0s' is the Cortex-A8 SIGILL signature in one line.
+    log "$APP (PID $CHILD_PID) exited (code $EXIT_CODE) after ${RUNTIME}s"
+
+    DELAY=2
+    if [ "$RUNTIME" -lt "$FAST_EXIT_SECS" ]; then
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        DELAY=$((2 * FAIL_COUNT))
+        [ "$DELAY" -gt "$MAX_BACKOFF_SECS" ] && DELAY=$MAX_BACKOFF_SECS
+        log "  exited within ${FAST_EXIT_SECS}s — treating as a crash [failure $FAIL_COUNT/$MAX_FAILURES]"
+        if [ "$FAIL_COUNT" -ge "$MAX_FAILURES" ]; then
+            try_fallback && DELAY=2
+        fi
+    else
+        FAIL_COUNT=0        # a clean long run clears the crash history
+    fi
+
+    log "  restarting in ${DELAY}s..."
+    # Do NOT clear CHILD_PID until after sleep so cleanup() can
+    # still kill the child if TERM arrives during the delay.
+    sleep "$DELAY"
+    CHILD_PID=
 done
 RESPAWN_EOF
     chmod +x "$RESPAWN_SCRIPT"
 
-    echo "  Launching: $APP_EXEC (with respawn)"
+    echo "  Launching: ${APP_EXEC:-(none — will fall back)} (with respawn)"
     start-stop-daemon --start --background --make-pidfile \
-        --pidfile "$PIDFILE" --exec "$RESPAWN_SCRIPT" || {
-        # Fallback if start-stop-daemon fails
-        "$RESPAWN_SCRIPT" &
-        echo $! > "$PIDFILE"
-    }
-    echo "$DESC started ($APP_EXEC)"
+        --pidfile "$PIDFILE" --exec "$RESPAWN_SCRIPT"
+    SSD_RC=$?
+    if [ "$SSD_RC" -ne 0 ]; then
+        # rc=1 also means "already running", and the old unconditional fallback
+        # fired exactly then — launching a second wrapper, so two apps fought
+        # over /dev/fb0.  Only exec directly if nothing is actually up.
+        if pidof -x respawn.sh >/dev/null 2>&1; then
+            echo "  start-stop-daemon rc=$SSD_RC but the wrapper is running — not starting a second one"
+        else
+            echo "  start-stop-daemon failed (rc=$SSD_RC) — starting the wrapper directly"
+            "$RESPAWN_SCRIPT" &
+            echo $! > "$PIDFILE"
+        fi
+    fi
+    echo "$DESC started (${APP_EXEC:-none})"
     return 0
 }
 

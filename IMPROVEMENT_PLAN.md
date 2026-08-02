@@ -64,7 +64,7 @@ RGB565 would also let ScummVM and the VNC client drop their private text rendere
 `fb_init` must *not* reject non-32bpp modes: ScummVM legitimately runs the framebuffer at 16bpp
 through `fb_init`/`fb_swap`.
 
-### B2. Gamepad buttons latch on and never release
+### B2. Gamepad buttons latch on and never release — ✅ *confirmed on the panel 2026-08-02*
 
 `native_apps/common/gamepad.c:791` (virtual touch regions) and `:649` (analog stick → D-pad) both
 set `.held = true`, and **nothing anywhere ever clears it** — `gamepad_poll` deliberately doesn't
@@ -73,8 +73,25 @@ set `.held = true`, and **nothing anywhere ever clears it** — `gamepad_poll` d
 - platformer: one tap on the virtual left pad → the player runs left forever.
 - frogger/snake (which read `.pressed`): first tap works, every later tap in that region is dead.
 
+**Seen on RW09 2026-08-02, in frogger:** the virtual D-pad zones **light up light-blue and stay
+highlighted**, and the frog "sometimes just randomly jumps" — which is exactly a latched `.held`
+re-firing a direction on later frames. This is the most user-visible symptom found in that pass and it
+is why B2 is next rather than deferred again.
+
 **Fix:** keep touch/stick-derived state in a separate per-frame bitmask and OR it with the latched
 key/hat state each poll.
+
+**Status after B13k (2026-08-02): the *symptom* is gone from every game that showed it, but the *bug*
+is untouched.** Frogger's and platformer's `TouchRegion`s were deleted, so nothing in the shipped games
+now feeds the latching path: `gamepad_set_touch_regions()` has one remaining caller (`snake.c`) whose
+regions never take effect because B13g's ordering bug wipes them, and
+`gamepad_draw_touch_controls()` has none. **That makes B2 a latent trap rather than a live fault** —
+it is now the thing that must be fixed *before* B13g, before any new app registers a touch region, and
+before anyone wires up an analog stick, because `:649` latches stick-derived directions too and no
+game currently exercises that path either. Do not read "no game misbehaves" as "the code is fine".
+
+~~**Related, and cheaper than B2 itself:** frogger does not need a virtual D-pad at all~~ — **done, see
+B13k.**
 
 ### ~~B3. A bad calibration can wedge the device with no recovery~~ — **DONE 2026-07-31**
 
@@ -193,27 +210,47 @@ The bezel is measured by *looking*, not by touching: numbered 2 px ladders at ea
 the operator raises each margin until its line clears the plastic. The old adjuster drew its
 reference frame on the *logical* edge, which is defined by the margins it was trying to measure.
 
-### B3e. Buttons positioned with hardcoded offsets lose rows to the touch inset
+### ~~B3e. Buttons positioned with hardcoded offsets lose rows to the touch inset~~ — **DONE 2026-08-02**
 
-Found during the B3c per-app safe-area audit (2026-08-01) and **not** fixed there, because it is a
+Found during the B3c per-app safe-area audit (2026-08-01) and deferred there, because it is a
 pre-existing violation of the "never hardcode 800/480/400" rule rather than part of that change.
 
-A handful of touch targets are placed at literal pixel offsets instead of `SCREEN_SAFE_*` /
-`LAYOUT_*`. That was harmless while `SCREEN_SAFE_TOP` was `0`; now that the touch inset is real, the
-outermost rows of those targets fall in the band no finger can reach:
+**The wider sweep the old entry asked for was the whole value of this item.** The audit had listed
+`tetris.c` alone; `grep -n 'button_init(&[a-z_]*, *[0-9]'` found **four** games with the same
+`button_init(&menu_button, 10, 10, …)` + `fb.width - BTN_EXIT_WIDTH - 10` pair — `tetris.c`,
+`pong.c`, `snake.c`, `frogger.c` — because the audit's method only saw call sites that already
+mentioned `SCREEN_SAFE_*`, and a hardcoded one is invisible to it by construction.
 
-| Site | Code | Effect at a 17 px inset |
-|---|---|---|
-| `native_apps/tetris/tetris.c:203,205` | `button_init(&menu_button, 10, 10, …)` and the matching exit button | rows 10–16 of a 40 px button are dead; 17–50 still respond |
-| `native_apps/hardware_diag/hardware_diag.c` (`draw_page_header`) | `fb_fill_rect(fb, 720, 2, 76, 36, …)` EXIT zone | rows 2–16 dead, 17–38 respond |
+All five sites now derive from the macros, and every replacement expression was chosen to be
+**byte-identical to the old literal at inset 0**, so nothing moves on an uncalibrated panel:
 
-Both still work, but by luck — a larger inset on another panel would kill them outright, and the
-inset is measured per unit (B3c). Fix: use `LAYOUT_MENU_BTN_X/Y` and `LAYOUT_EXIT_BTN_X/Y` in
-`tetris.c`, and derive the `hardware_diag` EXIT zone from `SCREEN_SAFE_RIGHT` / `SCREEN_SAFE_TOP`.
+| Site | Fix |
+|---|---|
+| `tetris.c`, `pong.c`, `snake.c`, `frogger.c` | `LAYOUT_MENU_BTN_X/Y` + `LAYOUT_EXIT_BTN_X/Y` |
+| `pong.c`, `snake.c` playfield top | `LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + 20`, height from `SCREEN_VISIBLE_BOTTOM` |
+| `frogger.c` HUD | runtime `hud_height = SCREEN_SAFE_TOP + HUD_HEIGHT`; band, grid top, `available_height` and the three content rows all offset. Its 70 px band had to grow with the row, or the timer bar would cross the buttons' middle and they would push 9 px into the playfield |
+| `hardware_diag.c` | `diag_exit_rect()` — one rect shared by the drawn box (`:329`) and the hit-test (`:814`), which were two independent literals that had to agree by hand. Header band is `max(50, SCREEN_SAFE_TOP + 40)`, capped at 68 so it never grows into the page content at `y=70` |
 
-Worth a wider sweep at the same time: `grep -n 'button_init\|fb_fill_rect'` for any touch target
-whose coordinates are literals rather than macros. The audit only covered call sites that already
-mentioned `SCREEN_SAFE_*`, so a hardcoded one is invisible to that method by construction.
+Page content in `hardware_diag` is **deliberately not** shifted: dense read-only text, one page with
+a `y < SCREEN_H - 60` guard, and per the B3c audit it is draw-only everywhere but the EXIT corner.
+
+One pre-existing cosmetic overlap is preserved exactly rather than fixed: frogger's timer bar
+(`hud_height - 18`, full grid width) is drawn after the buttons and covers their bottom 8 px. The
+relative geometry is unchanged by this batch — it was 8 px before and is 8 px now. **The panel pass
+then found the right fix** and it is logged as part of B3i: move the bar up, between the two buttons.
+
+**Panel verification, RW09, 2026-08-02.** Device Tools → Display reported
+`touchable: X 6..793 Y 19..438  visible: 800x455 of 800x480` — i.e. a real ~19 px top inset, so these
+rows genuinely moved rather than being a no-op. Per app:
+
+| App | Result |
+|---|---|
+| Tetris | MENU and EXIT both in the safe area ✅ — but three *other* defects surfaced: B3i, B3j, B13d |
+| Pong | all good ✅ |
+| Snake | all good ✅ |
+| Frogger | MENU and EXIT in the safe area ✅, all lanes visible with logs and lily pads ✅ — surfaced B3i, B3k, and confirmed B2 |
+| SameGame | "works much better than before, buttons, score, blocks well aligned and visible" ✅ (this also confirms B13c) |
+| `hardware_diag` | EXIT corner and pages all correct ✅ — and prompted C8 |
 
 ### B3f. The `content_area` setting is config-file-only, with no UI
 
@@ -289,36 +326,136 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B4. Respawn loop always logs exit code 127
+### ~~B3i. HUD text sits in the safe area, wasting the band it was allowed to use~~ — **DONE 2026-08-02**
 
-`roomwizard-app-init.sh:122-126`. The `while kill -0 …; do wait; done` loop reaps the child and
-consumes its status; the `wait` after the loop targets an already-reaped PID and returns 127
-unconditionally.
+Found on the panel on 2026-08-02, in the same pass that confirmed B3e. B3e moved the button rows into
+`SCREEN_SAFE_*` correctly — but the score/level/lives text moved with them, and **that text does not
+need to be pressable.** The whole point of the two-rectangle split is that the visible-but-untouchable
+band is *good screen area*: a status row belongs there.
 
-Per `CLAUDE.md`, **exit 132 (SIGILL) is the diagnostic for the Cortex-A8 divide trap** — the one
-failure this log exists to catch is the one it can never report. The construct is also a
-100%-CPU busy-spin if `wait` ever returns while the PID is live.
+Both halves fixed, and both turned out to be worse than "wasted band": the text was **behind the
+buttons**, which are drawn after it.
 
-**Fix:** `wait "$CHILD_PID"; EXIT_CODE=$?` *inside* the loop; drop the outer `wait`.
+| Where | Was | Now |
+|---|---|---|
+| `tetris.c` `draw_playing_field()` | `SCORE` at a literal `y=15` and `LVL` at `y=40`, stacked — the button row (`SAFE_TOP+10 .. +60` = 29..79 on RW09) is drawn over `LVL` | one line, `SCORE` white + `LVL` cyan, centred in the gap between MENU and EXIT at `y=7`, i.e. in the `SCREEN_VISIBLE_TOP` band above the row |
+| `frogger.c` `draw_hud()` | score/level at `SCREEN_SAFE_TOP + 12`, lives at `+ 30` | one row of score + level + lives, laid out from a **measured** total width, centred in the same gap at `y=7` |
+| `frogger.c` timer bar | `hud_height - 18`, full grid width — covered the bottom ~8 px of both buttons | between the buttons (`LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + gap` → `LAYOUT_EXIT_BTN_X - gap`), vertically centred on the row |
 
-### B5. No fallback when `default-app` is broken
+Both files use the same fallback so the layout survives an uncalibrated panel, where the band above the
+row is only 10 px and cannot hold 14 px of text: **if `LAYOUT_MENU_BTN_Y - SCREEN_VISIBLE_TOP` is
+shorter than the text, the row drops into the button row's own vertical centre** — which is safe
+because horizontally it is always confined to the empty gap between MENU and EXIT. At inset 0 nothing
+collides; at RW09's inset 19 the band carries it, as intended.
 
-`roomwizard-app-init.sh:113-135`. A missing/non-executable `default-app` loops on a 10 s sleep
-**forever** with a black screen and no on-device recovery. An app that crashes instantly restarts
-every 2 s with no backoff. Both `vnc_client` and `scummvm` deploy paths let you point
-`default-app` at a binary that may not exist yet.
+This is the *inverse* of B3e and easy to get backwards, so re-read the rule in `native_apps/CLAUDE.md`
+before touching it: **pressed → `SAFE`, only seen → `VISIBLE`.** Note the constraint recorded during
+the B3c audit: HUD text that shares a band with `SAFE`-anchored buttons and is meant to *align* with
+them must stay `SAFE`. Here it is meant to sit **above** them, which is why the flip is correct —
+check the intended alignment per string, not per file.
 
-**Fix:** after N consecutive failures (or if the path isn't executable), fall back to
-`/opt/roomwizard/app_launcher` and log it, so touch access is always recoverable.
+### ~~B3j. Tetris' board overflows the bottom of the screen~~ — **DONE 2026-08-02**
 
-### B6. `start-stop-daemon` fallback starts a second app
+Reported on the panel 2026-08-02: the well the pieces fall into **hangs off the bottom edge** — the
+lowest rows are not visible. Per the B3c audit the board legitimately uses `SCREEN_VISIBLE_*` (touch is
+X-thresholds only, so its vertical extent is free), which means the height was simply mis-derived
+rather than a safe-area question. It was, in two ways:
 
-`roomwizard-app-init.sh:141-146`. `start-stop-daemon --start` exits **1 when a matching process is
-already running** — its normal "already up" signal. The `||` therefore fires precisely then and
-launches a second wrapper; two apps fight over `/dev/fb0`. Every deploy path calls `start`, not
-`restart`, and `setup-device.sh` installs the symlink in rc2–rc5.d.
+- `board_top = SCREEN_SAFE_TOP + 55`, a literal **smaller than the button row it was supposed to
+  clear** (`LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT` = `SAFE_TOP + 60`), so the buttons sat on the board
+  and everything below them ran 5 px long. Exactly the "literal reserve leaves the row sitting on the
+  playfield" failure `native_apps/CLAUDE.md` warns about.
+- the vertical budget ignored the 2 px frame `fb_draw_rect()` draws *outside* the cells on every side,
+  so the frame's bottom line fell off the surface.
 
-**Fix:** call `restart` from deploy scripts; make the fallback conditional on a real failure.
+Now `board_top = LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + BOARD_GAP_TOP` and
+`available_h = SCREEN_VISIBLE_BOTTOM - board_top - 2 * BOARD_BORDER`, and the frame is drawn from
+`BOARD_BORDER` rather than a literal `2`/`4` pair. On RW09 (inset 19, 800×455 logical) that gives
+`board_top 85`, `cell_size 18`, frame `y 86..449` — 5 px clear of the bottom. Moving SCORE/LVL into the
+top band (B3i) is what paid for the clearance.
+
+### ~~B3k. The shared welcome screen overlaps and mis-centres its own text~~ — **DONE 2026-08-02**
+
+`draw_welcome_screen()` in `common/common.c`, used by every game. Two defects seen on 2026-08-02:
+
+- **Tetris:** the instruction/info text slides *under* the `TAP TO START` button.
+- **Frogger:** the start-page text is not centred.
+
+The root cause of the second was sharper than "not centred": **`fb_draw_text()` does not interpret
+`'\n'`** — it takes the unprintable-character branch and advances 6·scale px — so every caller's
+multi-line instruction string was rendered as **one long line**, measured with the wrong font width
+(`strlen * 8`, where the 5×7 font advances 6), and centred on that wrong width. Frogger's four lines
+came out as one 516 px line starting at x=55 instead of 142.
+
+Fixed in one place, as planned:
+
+- `screen_draw_centered_block()` splits on `'\n'` and centres each line with `text_measure_width()`;
+  `screen_measure_block()` returns the height it will consume, and both count lines as
+  `1 + strchr` hits so they cannot disagree.
+- The title, instructions and button are laid out in sequence: `{instructions + button}` is centred in
+  the space between the title and `SCREEN_VISIBLE_BOTTOM`, and the button goes **below the measured
+  block** instead of at a fixed `fb->height / 2 + 40`.
+- Text is centred on `SCREEN_VISIBLE_WIDTH` (only seen); the button is centred on and clamped into
+  `SCREEN_SAFE_*` (pressed), and the function now **sets** `start_btn->x/y` — so the drawn rect and the
+  hit-test rect are one computation, per the `diag_exit_rect()` rule. The five callers' own
+  `button_init()` coordinates are now only a pre-first-draw fallback and were changed to
+  `LAYOUT_CENTER_X` / `LAYOUT_BOTTOM_BTN_Y`.
+- `tetris.c` had its **own** copy of the welcome screen (four hand-placed `text_draw_centered()` calls
+  plus a button at `fb.height/2 + 40` — the fourth line landed inside the button). It now calls the
+  shared function, so the fix reaches it too.
+- New `screen_draw_welcome_warn()` adds an optional amber block below the instructions; see B13k for
+  why platformer needs it. `screen_draw_welcome()` is that function with `warning = NULL`.
+
+Verified by framebuffer capture on RW09 for all five games (tetris, frogger, platformer, snake,
+samegame).
+
+### ~~B4. Respawn loop always logs exit code 127~~ — **DONE 2026-08-02**
+
+`roomwizard-app-init.sh:122-126`. The `while kill -0 …; do wait; done` loop reaped the child and
+consumed its status; the `wait` after the loop targeted an already-reaped PID and returned 127
+unconditionally — so **exit 132 (SIGILL), the Cortex-A8 divide trap and the one failure this log
+exists to catch**, could never be reported. The construct was also a 100 %-CPU busy-spin if `wait`
+ever returned while the PID was live.
+
+Now `wait "$CHILD_PID"; EXIT_CODE=$?` runs *inside* the loop, the `kill -0` guard only decides
+whether that status is real (ash can return early on a signal), and a `sleep 1` stops the guard from
+spinning. The log line gained the runtime, so the SIGILL signature is one line:
+`exited (code 132) after 0s`. Verified on RW09 by sending the launcher `SIGTERM` (logged code 0
+after 44 s) and `SIGILL` (logged **code 132** after 10 s).
+
+### ~~B5. No fallback when `default-app` is broken~~ — **DONE 2026-08-02**
+
+A missing/non-executable `default-app` looped on a 10 s sleep **forever** with a black screen and no
+on-device recovery; an app that crashed instantly restarted every 2 s with no backoff.
+
+The wrapper now carries `FALLBACK=/opt/roomwizard/app_launcher`, `MAX_FAILURES=3` and
+`FAST_EXIT_SECS=5`. Not-executable and exited-under-5 s both count as failures; the crash case backs
+off `2 × FAIL_COUNT` seconds capped at 30; three consecutive failures switch to `FALLBACK` and log it
+loudly. A clean long run clears the count, and a changed `default-app` resets the whole failure state.
+`FALLBACK` never falls back to itself, so a broken launcher settles into a 30 s retry.
+
+`do_start`'s pre-flight `[ ! -x "$APP_EXEC" ] && return 1` had to be relaxed to a warning that still
+starts the wrapper (and the "no app configured" `return 0` with it) — otherwise the service refuses
+to run and the fallback never gets its chance, which is the exact wedge this item describes.
+
+Both branches verified on RW09: `default-app=/opt/games/nope` logged three `[failure n/3]` lines then
+`*** FALLING BACK ***` and the launcher came up; a script exiting 7 immediately logged
+`exited within 5s`, backed off 2 s then 4 s, and fell back on the third.
+
+### ~~B6. `start-stop-daemon` fallback starts a second app~~ — **DONE 2026-08-02**
+
+`start-stop-daemon --start` exits **1 when a matching process is already running** — its normal
+"already up" signal — so the `||` fired precisely then and launched a second wrapper; two apps fought
+over `/dev/fb0`.
+
+`do_start` now returns early on `pidof -x respawn.sh`, and the direct-exec fallback runs only when
+`start-stop-daemon` returned non-zero **and** nothing is actually up. The guard sits **before** the
+heredoc, which also fixes an unrecorded hazard: truncating and rewriting a script file that a running
+`sh` still has open can make that `sh` misparse the rest of the file.
+
+The deploy-script half — converting `killall -9 respawn.sh` + `start` into
+`/etc/init.d/roomwizard-app restart` — is **still open as B20**. Deploy paths keep working because
+each one kills the wrapper first.
 
 ### B7. Descending gradients render garbage — ✅ *verified*
 
@@ -328,13 +465,25 @@ correct. Affects **every** descending gradient — all brick colours, the paddle
 
 **Fix:** `int dr = (int)br - (int)tr;` and clamp to 0..255.
 
-### B8. Non-atomic config/highscore saves
+### ~~B8. Non-atomic config/highscore saves~~ — **DONE 2026-08-02**
 
-`config.c:112` and `highscore.c:57` both `fopen(path,"w")` (immediate truncate) → `fprintf` →
-`fclose`, with no `fsync`. This device gets power-cycled; `hs_save()` runs at game-over. A
-truncated config silently reverts every setting to defaults.
+`config.c:112` and `highscore.c:57` both did `fopen(path,"w")` (immediate truncate) → `fprintf` →
+`fclose` with no `fsync`. This device gets power-cycled and `hs_save()` runs at game-over, so a cut
+mid-write left the file empty and silently reverted every setting to defaults.
 
-**Fix:** write `<path>.tmp`, `fflush` + `fsync(fileno(f))`, `fclose`, `rename()`.
+One implementation, in **`common/config.c`** and declared in `config.h`:
+`file_write_atomic_open()` / `_commit()` / `_abort()`. It writes `<path>.tmp`, `fflush` +
+`fsync(fileno(f))`, `fclose`, `rename()`, then `fsync`es the parent directory so the rename itself
+survives a power cut; any failure unlinks the temp and leaves the original intact.
+
+**It lives in `config.c` rather than a new `common/atomic_file.c` on purpose:** a new object would
+have to be added to every link line in `native_apps/build-and-deploy.sh`, to `vnc_client/Makefile`
+and to `scummvm-roomwizard/backend-files/configure.patch`, for ten lines of code. `highscore.c` picks
+it up with `#include "config.h"` — it already links `config.o`.
+
+`hs_save()` keeps its `void` signature; a failed save is still silently ignored, it just no longer
+destroys the previous table. Verified on the host: no leftover `.tmp`, contents round-trip, and a
+save to an unwritable path returns −1 with the original file unchanged.
 
 ### B9. Backlight get/set asymmetry permanently dims the panel
 
@@ -392,16 +541,17 @@ OPL; nobody confirmed it on hardware.
 
 | # | Where | Bug |
 |---|-------|-----|
-| B13a | `platformer.c:1537` | Game-over screen polls touch a second time in the same frame, clearing `pressed` → RESTART/EXIT never fire. Also the **only** game with no `BTN_ID_BACK` handler, so the process can only be killed. |
+| ~~B13a~~ | `platformer.c` — **DONE 2026-08-02** | Two defects, both fixed. The game-over screen called `touch_poll(&touch)` a **second** time in the same frame (`:1543`); `touch_poll()` clears `TouchState.pressed` at entry (`touch_input.c:376`), so the press edge `handle_input()` had already captured was eaten and RESTART/EXIT could never fire. The poll is deleted — `handle_input()` polls once per frame and `draw_all()` runs after it. Platformer was also the **only** game with no `BTN_ID_BACK` handler, which left that screen with no way out at all; `handle_input()` now opens with the same `fb_fade_out()` + `running = false` block the other six games use (`frogger.c:762`). Found and fixed alongside B22, which is why the buttons it re-enables are also now reachable. **Neither half is panel-verified** — see B22's panel-status table; platformer has been controller-only since B13k, so checking the `BTN_ID_BACK` exit needs a USB keyboard or gamepad attached. |
 | B13b | `brick_breaker.c:459` | Indestructible bricks use `health = -1`, which every other site reads as "destroyed" (`health <= 0`) → from level 5 they are invisible and have no collision. |
-| B13c | `samegame.c:1638` ✅ *verified* | `needs_redraw = false` set **before** the pacing ternary → permanently locked to 10 FPS. Every other game resets it after the `usleep`. |
-| B13d | `tetris.c:863` | Gravity counted in loop iterations while idle frames sleep 100 ms → pieces fall ~3× too slow, and speed up while a key is held. |
+| ~~B13c~~ | `samegame.c:1639` — **DONE 2026-08-02** | `needs_redraw = false` was set **before** the pacing ternary, so `usleep()` always picked IDLE → permanently locked to 10 FPS. Now captures `bool drew = needs_redraw;` first and sleeps on `drew`, the pattern `native_apps/CLAUDE.md` documents. |
+| ~~B13d~~ | `tetris.c` — **DONE 2026-08-02** | Gravity counted loop iterations while idle frames sleep 100 ms → pieces fell ~3× too slow (**measured on the panel: one row every 5–6 s**) and sped up while a key was held. Now a `get_time_ms()` delta against `game.last_drop_ms`, with the interval in **ms** (`DROP_BASE_MS` 800 at level 1, −60/level, floor 120; `DROP_SOFT_MS` 50 while DOWN is held). At most one row per call, so a long pause or a blocking LED/audio effect cannot replay a backlog, and a `drop_clock_stale` flag rebaselines the clock on re-entering play — set in `update_game()`'s own not-playing branch so none of the six `current_screen = SCREEN_PLAYING` sites has to remember to. |
 | B13e | `tetris.c:567` | No wall kick — an I-piece rotated vertically against the right wall can never rotate back. |
 | B13f | `snake.c:320` | Growing exposes a stale `body[]` slot: a detached cell is drawn for one tick and stepping on it ends the game. |
 | B13g | `snake.c:623` | `gamepad_init()` called *after* `init_game()` wipes the registered touch regions (frogger/platformer get the order right). |
 | B13h | `brick_breaker.c:535` | Speed power-ups compound — `effect_mult` is never divided out, so SLOW DOWN can make the ball faster. |
 | B13i | `platformer.c:951` | Stomping two overlapping enemies kills the player (no `break` after a successful stomp). |
 | B13j | `samegame.c:250` | `pixel_to_grid` truncates toward zero, so taps up to one block outside the left/top edge select row/column 0. |
+| ~~B13k~~ | `frogger.c`, `platformer.c` — **DONE 2026-08-02** | The virtual D-pad `TouchRegion`s are gone from **both** games, along with the `gamepad_draw_touch_controls()` overlay call. Frogger never needed them: `handle_input()` already hops the frog from a plain tap relative to its position (`ts.y >= grid_offset_y`, `frog_sy`), so the regions were a redundant second path that made the frog jump on its own, and B2's un-cleared `.held` left the overlay stuck light-blue. The whole playfield is now one tap target and the hint text says so. **Platformer removed on the user's call in the same pass** — its overlay latched identically, and its drawn boxes were not even where its six regions were (`fb.height-120` vs the overlay's `sh-100`). It has no tap-relative fallback, so it is now controller-only and `draw_all()` shows an amber `NO CONTROLLER DETECTED / CONNECT A USB KEYBOARD OR GAMEPAD` on the welcome screen when none is connected (new `screen_draw_welcome_warn()`, see B3k); its touch EXIT button still works either way. **`snake.c` still calls `gamepad_set_touch_regions()`**, but its regions are dead code — B13g's ordering bug wipes them — so fixing B13g would *activate* a latching D-pad. Fix B2 first, or delete snake's regions with it. `gamepad_draw_touch_controls()` now has no callers. |
 
 ### B14. Blocking `usleep()` inside input/update paths
 
@@ -411,6 +561,97 @@ never polls touch, so the exit button is dead during it).
 
 **Fix:** drive these from the existing non-blocking `LEDEffect`/`get_time_ms()` pattern that
 snake, frogger and platformer already use.
+
+### ~~B22. The game-over screen only appeared after a tap~~ — **DONE 2026-08-02**
+
+Reported from the panel: *"if a game ends, by all lives exhausted or by retire, I need to tap the
+screen to advance to the highscore screen."* Real, and in the **shared** component, so it affected six
+of the seven games that use it.
+
+`gameover_update()` (`common/common.c`) is a three-state machine — `CHECK` → (`NAME_ENTRY`) →
+`DISPLAY` — and **only `DISPLAY` draws anything.** Every game calls it from inside its *draw*
+function, which a dirty-flagged main loop runs only when `needs_redraw` is set. So on the frame a game
+entered `SCREEN_GAME_OVER`: the screen-transition test set the flag, the playfield was drawn, `CHECK`
+computed `hs_qualifies` and **returned without drawing**, `fb_swap()` presented a bare playfield — and
+then the flag cleared and the static-screen branch only re-set it on input activity. The tap was the
+only thing that could produce the second frame, and the same applied to the name-entry keyboard.
+
+**`samegame` was the one game that did not show it**, because it already carried a local workaround —
+an unconditional redraw while `SCREEN_GAME_OVER` with the comment *"Game-over screen processes input
+inside draw — always redraw"*. Someone hit this before and patched the caller rather than the
+component, so the other six kept the bug and samegame pinned a static overlay to 30 fps.
+
+**Fixed in the component, with one predicate for the callers** — `gameover_needs_redraw()`, backed by
+two new fields:
+
+- `pending_draw` — "I owe the screen a frame". True from `gameover_init()`, cleared straight after
+  `gameover_draw()`, **re-set when `RESET SCORES` empties the table** so the emptied table appears
+  immediately instead of on the next tap (same class of bug, one line).
+- `armed` — false until the first `DISPLAY` frame has been drawn; input is ignored while false.
+
+`CHECK` now **falls through** to `NAME_ENTRY`/`DISPLAY` in the same call, so the no-highscore path
+draws on the transition frame with no extra frame at all. `NAME_ENTRY` deliberately keeps its `return`:
+`hs_enter_name()` is a blocking keyboard that repaints and swaps the framebuffer itself, so drawing our
+overlay in the same call would composite it over the keyboard's last frame. It leaves `pending_draw`
+set and takes one clean frame, with the playfield redrawn underneath first.
+
+**`armed` is part of the fix, not a nicety.** `gameover_draw()` runs before the button checks in the
+same call, so making the overlay appear on the transition frame also puts the *press that ended the
+game* in front of its buttons — `touch_active` is a rising edge that survives until the next
+`touch_poll()`. In brick_breaker the pause dialog's `RETIRE` (y 266..310) overlaps this screen's
+`RESET SCORES` (y 289..349) by 21 px, so without the guard a `RETIRE` press landing in that band would
+**wipe the high-score table** on a screen nobody had seen yet.
+
+Also fixed in passing: `gameover_update()` early-returned on `!touch_active` *before*
+`button_check_press()` could clear `Button.was_pressed`, so `RESET SCORES` only ever fired **once** per
+game over. All three buttons are now fed every frame with `touch_active && button_is_touched(...)`.
+
+The seven callers each gained the same three-line block before their `if (needs_redraw)`; samegame's
+unconditional redraw was replaced by it. The rule this bug breaks is now recorded in
+`native_apps/CLAUDE.md` under *Rendering: dirty flag + adaptive sleep* — **a component whose
+`update()` both draws and reads input has to tell the caller when it still needs frames.**
+
+**Follow-up: the first fix wedged samegame, and the reason is worth keeping.** Panel test 2026-08-02:
+samegame advanced to the high-score screen on its own (the fix working), and then *"the user interface
+becomes unresponsive — I needed to kill it from the commandline"*. Tetris, snake and frogger were fine.
+
+`gameover_needs_redraw()` reported only `pending_draw` — "I owe the screen a frame" — and **the
+component's buttons are read inside the draw path**, so a frame the loop declines to run is also an
+input event the component never sees. Six games hid that: they each have an
+`else { /* static screens: redraw on input activity */ if (ts.pressed || ts.held) … }` branch, so a
+tap produces a frame by itself. **samegame has no such branch** — its dirty flag is a pure
+visible-state diff (screen, highlight, highlight count, score, blocks remaining, mouse, anim state)
+and a tap on an overlay changes none of those. Its old unconditional `SCREEN_GAME_OVER` redraw *was*
+its input path, and replacing it with a predicate that correctly goes quiet removed the only frame
+source. With `handle_input()` routing nothing else on that screen, all three buttons were dead and
+SSH was the only way out.
+
+Fixed in the component, not in samegame's loop: the predicate now returns true on three grounds —
+`pending_draw` (owes a frame), `ts.pressed || ts.held` (has input to act on), and **any button's
+`was_pressed` still latched**. The third is not belt-and-braces: `button_check_press()` clears that
+latch only on a frame where the button is *not* touched, and at `FRAME_DELAY_IDLE_US` a press and its
+release can both arrive in one `touch_poll()` — so there may be no `held`/`released` frame at all and
+the *next* press would be silently eaten. Idle still produces no frames, so the 30 fps-static-overlay
+problem does not come back.
+
+**The lesson is about the predicate's contract, not about samegame:** "needs redraw" for a component
+that reads input in its draw path means *draw pending **or** input pending **or** re-arm pending*. Six
+correct-looking callers concealed an incomplete predicate, which is the same shape of mistake as the
+original B22 (one caller's local workaround concealing a component defect).
+
+**Panel status, 2026-08-02 (this is what is and is not confirmed):**
+
+| Game | Status |
+|---|---|
+| tetris, snake, frogger | ✅ game over → high-score screen advances on its own, no tap |
+| samegame | ✅ advances on its own — then ❌ **wedged** on the settled overlay (the regression above). Re-fixed and deployed 16:42; **the fix itself is unverified** |
+| brick_breaker | ⬜ untested. Carries the one case nothing else covers: `MENU` → `RETIRE` must show the overlay immediately **with the table still populated** — `RETIRE` overlaps `RESET SCORES` by 21 px, so a failed `armed` guard wipes the table on a screen nobody saw |
+| pong | ⬜ untested. `WINNING_SCORE` is 11; parking the paddle at one end lets the AI run it out without playing |
+| platformer | ⬜ untested, and **needs a USB keyboard or gamepad** — B13k made it controller-only, and B13a's `BTN_ID_BACK` handler cannot be checked without one |
+
+Not script-verifiable past the first screen (no `/dev/uinput` — see C6), so the remaining rows need a
+human at the panel. `RESET SCORES` on an empty table is the cheap way to reach the name-entry keyboard:
+it makes any subsequent score qualify.
 
 ---
 
@@ -689,11 +930,18 @@ library they all link writes to stdout unconditionally: `touch_input.c` 15 `prin
 calls it after **every** child exit, so launcher stdout grows the same banner forever
 (see also B21 below).
 
-### B21. `app_stdout.log` is never rotated
+### ~~B21. `app_stdout.log` is never rotated~~ — **DONE 2026-08-02**
 
-`roomwizard-app-init.sh:116`. `rotate_log()` (`:80`) only touches `respawn.log`. A crash-looping
-app restarting every 2 s writes forever; the rootfs has under 1 GB. A full rootfs means no config
-writes, no high scores, and a failed next deploy.
+`rotate_log()` only touched `respawn.log`. A crash-looping app restarting every 2 s wrote forever and
+the rootfs has under 1 GB; a full rootfs means no config writes, no high scores, and a failed next
+deploy. Measured on RW09 before the fix: `app_stdout.log` **2 091 622 bytes** against a rotated
+`respawn.log` of 122 956.
+
+Generalised into `rotate_one <file>` + `rotate_logs()` covering both logs, keeping the 256 KB
+threshold and the `.1` suffix. It stays at the top of the respawn loop, which is the right boundary:
+the child's `>>` redirection is reopened on each launch, so a rotation between launches actually frees
+the inode. Verified on RW09 — `app_stdout.log.1` appeared at 2 131 339 bytes and the live log
+restarted at 2 372.
 
 ### C5. Fix `text_truncate` and the 8px/6px font-width confusion
 
@@ -703,34 +951,43 @@ writes, no high scores, and a failed next deploy.
   change from a stack smash. Add a `size_t dest_size` parameter.
 - `common.c:389/398/415/423` and `ui_layout.c:326` compute text width as **8 px/char**, but
   `fb_draw_text` advances **6 px/char**. Titles render ~17% left of centre; long strings clip off
-  the left edge. Use `text_measure_width()` everywhere.
+  the left edge. Use `text_measure_width()` everywhere. **Partly done 2026-08-02:**
+  `screen_draw_welcome*()` was rewritten for B3k and now measures with `text_measure_width()`
+  throughout. Still wrong: `screen_draw_game_over()` (message and score widths) and
+  `ui_layout.c:326`.
 
 ### C6. Extend the host-buildable test harness
 
-**You already have one** — `native_apps/tests/test_game_selector_scroll.py` (277 lines) does
-SSH-launch → `cat /dev/fb0` → inject touch via `touch_inject` → numpy-diff the frames. It is
-aimed at the *older* launcher and appears to have been used once.
+⚠️ **`touch_inject` does not work and cannot be made to work on this device. Measured on RW09
+2026-08-02.** This invalidates the touch half of everything below, so read it first.
 
-Refactor the SSH/capture/inject/diff plumbing into `tests/rw_harness.py`, then a ~20-line
-`smoke_all_apps.py`: for each `.app` manifest — launch, capture, assert not-all-black, assert the
-process is alive after 2 s, kill. That covers the two most common regressions (crash at startup,
-renders black) across all ~15 binaries in one command.
+`tests/touch_inject.c` `write()`s `input_event` structs to `/dev/input/event0`. The write **succeeds**
+— it prints "Touch event injected successfully" and exits 0 — but evdev's `write()` path is for output
+events (force feedback, LEDs), **not** for synthesising input, so no reader ever sees the event. Proven
+by injecting a tap at the exact centre of tetris' `TAP TO START` button (raw `2047 1876`, computed
+through the live calibration) and capturing `/dev/fb0`: the welcome screen was unchanged.
 
-⚠️ **Two harness traps found 2026-07-30 while testing the Phase 0 changes** — both cost real time:
+Synthesising input on Linux needs `/dev/uinput`, and this kernel does not have it:
+`CONFIG_INPUT_UINPUT is not set` in `/proc/config.gz`, no `/dev/uinput`, no module. Enabling it is a
+kernel config change, which is **out of scope by policy** (`SYSTEM_ANALYSIS.md#7-kernel-policy`).
 
-- ~~**`touch_inject` is not built.**~~ Fixed — `build-and-deploy.sh` compiles and deploys it, and
-  the `.hidden` marker loop no longer names binaries that do not exist.
-- **Screen→raw conversion must read `/etc/touch_calibration.conf`, not assume 0..4095.** The
-  reference unit is calibrated to `17 4084 -279 4382` (the least-squares fit extrapolates past
-  the 12-bit range on Y, hence the out-of-range values). Assuming 0..4095 lands every tap ~30 px
-  high, which presents as *intermittent* hits rather than a clean failure — some buttons work,
-  some don't, and it looks like device flakiness. Use `raw = screen*(max-min)/(dim-1) + min`.
-- **`touch_inject`'s 0..4095 argument clamp is now stale** (`tests/touch_inject.c:83`). It mirrors
-  the hardware range, which is correct for *raw* input, but the note that once stood here — "the
-  bottom ~34 px cannot be expressed" — was written against the old bad calibration and no longer
-  describes anything real. Either teach it to read the config and accept panel coordinates, or
-  document precisely that its arguments are raw digitiser counts, not pixels. Small, but it is a
-  trap for whoever writes the harness above.
+So: **there is no way to drive a touch UI on this device from a script.** `touch_inject` should be
+deleted or reduced to a loud "this cannot work, and here is why" stub — as it stands it reports success
+and does nothing, which is worse than not existing. `tests/test_game_selector_scroll.py` (277 lines,
+built on `touch_inject`) has never worked for the same reason and should not be refactored into a
+harness as previously planned.
+
+**What automated on-device testing is still possible, and is what this session used:** SSH-launch a
+binary, `cat /dev/fb0`, decode with `fb565_to_png.py`, and inspect the *first* screen — the one drawn
+before any input. That is enough for a real smoke test (`assert not-all-black`, `assert alive after
+2 s`) across all ~15 binaries, and it verified all five games' welcome screens after B3k. Anything
+past the first screen needs a human at the panel; write the tap-by-tap checklist instead.
+
+Superseded by the above, kept because the calibration point is still true for anyone reading a raw
+value off the wire: **screen→raw conversion must read `/etc/touch_calibration.conf`, not assume
+0..4095.** RW09's fit is `X -33..4122 / Y -296..4379` (the least-squares fit extrapolates past the
+12-bit range because the digitiser saturates before the panel edge). Assuming 0..4095 is ~30 px out on
+Y. Use `raw = screen*(max-min)/(dim-1) + min`.
 
 Separately, host-gcc tests over the pure-logic functions, where regressions are invisible until
 you're mis-tapping by 30 px. **Started 2026-07-31:** `tests/touch_calib_test.c` covers the
@@ -746,6 +1003,25 @@ caught the `args=` bug immediately), and the `config.c`/`ppm.c` parsers.
 
 The shell scripts *are* the deployment system and they run as root over SSH.
 `shellcheck *.sh */*.sh` — one command, no config, no repo changes.
+
+### C8. Retire `hardware_diag` — it is a second copy of a `device_tools` tab
+
+Raised on the panel 2026-08-02: *"it is working well, but why do we keep this, this is integrated in
+device tools"*. The redundancy is already half-acknowledged —
+[`native_apps/README.md:37`](native_apps/README.md) calls it "superseded by `device_tools` (hidden)",
+and `build-and-deploy.sh:349` deliberately deletes its `.app` manifest so it never appears in the
+launcher. So it ships, is built on every deploy, is unreachable without SSH, and duplicates read-only
+info pages that `device_tools` renders from the same sysfs/procfs sources.
+
+Two independent copies of the same six pages is exactly the drift `C3` (calibration maths) and B3e's
+`diag_exit_rect()` were both about — and this batch had to fix `hardware_diag`'s EXIT corner and header
+band **separately** from the equivalent code in `device_tools`, which is the cost being paid.
+
+Before deleting, confirm page-by-page that `device_tools` actually covers all six (System, Memory,
+Storage, Hardware, Config, Network) — the diag pages are terse and one of them may have a field the
+tabs lack. Then drop the source, the two build steps (`build-and-deploy.sh:102-103`), the four
+deploy/marker references, and the README rows. If a page turns out to be unique, move that page into
+`device_tools` rather than keeping the binary.
 
 ---
 
@@ -866,12 +1142,27 @@ U-Boot ever get written.
 1. ~~**Phase 0 entirely.**~~ **Done 2026-07-30** except D6's password rotation, which is an action
    on the VNC server rather than a code change. It surfaced one real defect, not the expected
    flood — see [Closed](#closed).
-2. **B1, B2, B3, B4, B5, B6** — the crash/wedge class. ← **next**
-3. **B15, B16** — stop the scripts from being able to hurt you.
-4. **F1 (ALSA)** — biggest user-visible improvement in the project.
-5. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
-6. ~~**Open the unit once** and inspect the hardware.~~ **Done 2026-07-30.** Full teardown; every
+2. **The crash/wedge class.** B3, B4, B5, B6 are done — the device can now always recover to a
+   usable launcher on its own, and the log that diagnoses a SIGILL finally reports it.
+   **B1 (bpp-aware framebuffer primitives) and B2 (latched `.held`) are what remain.** ← **next**
+   The 2026-08-02 batches took B4/B5/B6/B21 plus B13c, B3e, B8, then B3i/B3j/B3k/B13d/B13k, then
+   B22/B13a, in preference to them; both were deliberately left whole rather than started. **B2's symptom is now
+   gone but the bug is not** — B13k deleted the last `TouchRegion`s any shipped game actually uses, so
+   nothing exercises the latching path today. It is a latent trap that has to be cleared before B13g,
+   before the next app registers a touch region, and before anyone wires up an analog stick.
+   **Outstanding first:** B22's panel-status table has four rows unconfirmed (samegame's re-fix,
+   brick_breaker's `RETIRE`, pong, platformer). **B7 and B9 are the available quick wins** — both
+   small, both `verified`, both independent of everything above.
+3. ~~**The per-app layout pass the panel test asked for**~~ — **DONE 2026-08-02.** B3i + B3j + B13d as
+   one pass over `tetris.c`, B3i's frogger half plus B13k, and B3k in `common/common.c`. B13k grew to
+   cover `platformer.c` as well, on the user's call: it loses its virtual controller and warns on the
+   welcome screen instead. Also found in the process: **`touch_inject` cannot work on this device at
+   all** (no `CONFIG_INPUT_UINPUT`) — see C6, which was planned around it.
+4. **B15, B16** — stop the scripts from being able to hurt you.
+5. **F1 (ALSA)** — biggest user-visible improvement in the project.
+6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
+7. ~~**Open the unit once** and inspect the hardware.~~ **Done 2026-07-30.** Full teardown; every
    question answered and folded into [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md) (parts inventory,
    connectors, unpopulated headers, photo index). Serial console declined — see
    [Closed](#closed).
-7. Everything else as appetite allows.
+8. Everything else as appetite allows.

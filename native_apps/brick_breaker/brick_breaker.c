@@ -1829,6 +1829,13 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (game.screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
+
         if (needs_redraw) {
             switch (game.screen) {
             case SCREEN_WELCOME:        draw_welcome();        break;

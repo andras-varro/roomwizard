@@ -25,6 +25,21 @@
 #define BOARD_HEIGHT 20
 #define NUM_TETROMINOS 7
 
+/* Board frame: fb_draw_rect() puts a BOARD_BORDER-thick outline this far
+ * outside the cells on every side, so the vertical budget has to include it. */
+#define BOARD_BORDER   2
+#define BOARD_GAP_TOP  6   /* clearance between the button row and the frame */
+
+/* Gravity in MILLISECONDS per row, never in frames.  The main loop sleeps
+ * FRAME_DELAY_IDLE_US (100 ms) on any iteration it did not redraw, so a frame
+ * counter made the fall rate depend on how busy the renderer was: measured on
+ * the panel at roughly one row every 5-6 seconds, and it sped up while a key
+ * was held (B13d). */
+#define DROP_BASE_MS        800   /* level 1 */
+#define DROP_LEVEL_STEP_MS   60   /* subtracted per level above 1 */
+#define DROP_MIN_MS         120   /* floor, however high the level gets */
+#define DROP_SOFT_MS         50   /* while DOWN is held */
+
 typedef enum {
     SCREEN_WELCOME,
     SCREEN_PLAYING,
@@ -52,8 +67,8 @@ typedef struct {
     int level;
     bool game_over;
     bool paused;
-    int drop_speed;
-    int drop_counter;
+    int drop_interval_ms;      /* ms per row at the current level */
+    uint32_t last_drop_ms;     /* when the piece last moved down */
 } GameState;
 
 // Tetromino shapes (4 rotations each)
@@ -156,6 +171,9 @@ static uint32_t last_rescan_ms = 0;
 static DASState das_left  = {false, 0, 0};
 static DASState das_right = {false, 0, 0};
 static bool soft_drop_active = false;
+/* Set whenever the game is not in play, so update_game() rebaselines the
+ * gravity clock on the way back in instead of owing a row. */
+static bool drop_clock_stale = true;
 
 // Function prototypes
 void init_game();
@@ -181,11 +199,14 @@ void init_game() {
     //
     // The board is drawn, never pressed — touch control is X-thresholds either
     // side of it plus a full-width bottom band — so it may use the whole
-    // VISIBLE screen vertically. Its top still clears the SAFE-anchored
-    // menu/exit button row, which is why hud_height is added to SCREEN_SAFE_TOP.
-    int hud_height = 55;  // Space for score/level/next piece at top
-    int board_top = SCREEN_SAFE_TOP + hud_height;
-    int available_h = SCREEN_VISIBLE_BOTTOM - board_top;
+    // VISIBLE screen vertically.  It only has to clear the SAFE-anchored
+    // MENU/EXIT row, because the SCORE/LVL line now lives in the VISIBLE band
+    // *above* that row rather than in a HUD strip below it (B3i).  Deriving the
+    // top from the row instead of a 55 px literal is also what stopped the well
+    // hanging off the bottom edge (B3j): the old literal was smaller than the
+    // row itself, so the buttons sat on the board and the board ran long.
+    int board_top = LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + BOARD_GAP_TOP;
+    int available_h = SCREEN_VISIBLE_BOTTOM - board_top - 2 * BOARD_BORDER;
 
     cell_size = available_h / BOARD_HEIGHT;
 
@@ -205,14 +226,21 @@ void init_game() {
     hs_load(&hs_table);
     game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
 
-    // Initialize buttons
-    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+    // Initialize buttons — LAYOUT_* is SCREEN_SAFE_*-anchored, so the row moves
+    // down with the measured touch inset instead of losing its top rows to it.
+    button_init(&menu_button, LAYOUT_MENU_BTN_X, LAYOUT_MENU_BTN_Y,
+                BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10, 
-                BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
+    button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
+                BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
+                "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2, 
-                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+    // The welcome screen positions start_button itself (screen_draw_welcome
+    // lays it out below the measured instruction block); these coordinates only
+    // cover a hit-test that arrives before the first draw, so they just have to
+    // be inside the touchable rectangle.
+    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
+                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
@@ -228,8 +256,8 @@ void reset_game() {
     game.level = 1;
     game.game_over = false;
     game.paused = false;
-    game.drop_speed = 60;  // Frames per drop
-    game.drop_counter = 0;
+    game.drop_interval_ms = DROP_BASE_MS;
+    game.last_drop_ms = get_time_ms();
     
     spawn_piece(&game.current);
     spawn_piece(&game.next);
@@ -331,8 +359,8 @@ void clear_lines() {
         game.lines_cleared += lines;
         game.score += (lines * lines * 100);  // Bonus for multiple lines
         game.level = 1 + game.lines_cleared / 10;
-        game.drop_speed = 60 - (game.level * 3);
-        if (game.drop_speed < 10) game.drop_speed = 10;
+        game.drop_interval_ms = DROP_BASE_MS - (game.level - 1) * DROP_LEVEL_STEP_MS;
+        if (game.drop_interval_ms < DROP_MIN_MS) game.drop_interval_ms = DROP_MIN_MS;
         
         // LED + audio effects for line clears
         if (lines == 4) {
@@ -356,24 +384,37 @@ void clear_lines() {
 
 void update_game() {
     // Only process game logic when actually playing (Issue #9)
-    if (current_screen != SCREEN_PLAYING) return;
-    if (game.game_over || game.paused) return;
-    
-    game.drop_counter++;
+    if (current_screen != SCREEN_PLAYING || game.game_over || game.paused) {
+        /* Not playing: the gravity clock stops, and is rebaselined on the way
+         * back in so a long pause does not owe the player a row.  Doing it here
+         * rather than at each of the six "current_screen = SCREEN_PLAYING"
+         * sites means a seventh one cannot forget to. */
+        drop_clock_stale = true;
+        return;
+    }
 
-    // Soft drop: when BTN_DOWN is held, drop faster (every 3 frames instead of normal speed)
-    int effective_speed = soft_drop_active ? 3 : game.drop_speed;
+    /* Gravity off a wall-clock delta, so the fall rate is independent of how
+     * long the last frame took and of whether the loop took the idle sleep
+     * (B13d).  uint32_t subtraction is wrap-safe. */
+    uint32_t now = get_time_ms();
+    if (drop_clock_stale) {
+        drop_clock_stale = false;
+        game.last_drop_ms = now;
+        return;
+    }
 
-    if (game.drop_counter >= effective_speed) {
-        game.drop_counter = 0;
-        
-        if (!check_collision(&game.current, 0, 1, game.current.rotation)) {
-            game.current.y++;
-            if (soft_drop_active)
-                game.score += 1;  // Soft drop bonus
-        } else {
-            lock_piece();
-        }
+    int interval = soft_drop_active ? DROP_SOFT_MS : game.drop_interval_ms;
+    if ((uint32_t)(now - game.last_drop_ms) < (uint32_t)interval) return;
+
+    /* One row per call, whatever the delta: never replay a backlog. */
+    game.last_drop_ms = now;
+
+    if (!check_collision(&game.current, 0, 1, game.current.rotation)) {
+        game.current.y++;
+        if (soft_drop_active)
+            game.score += 1;  // Soft drop bonus
+    } else {
+        lock_piece();
     }
 }
 
@@ -661,24 +702,43 @@ void handle_input() {
 // Draw the playing field (board, falling piece, HUD) — used as background
 // for PLAYING, PAUSED, and GAME_OVER screens
 void draw_playing_field() {
-    // Draw HUD — centered text using text_draw_centered()
-    int center_x = fb.width / 2;
-    
+    /* HUD: SCORE and LEVEL on ONE line, in the VISIBLE band above the
+     * SAFE-anchored MENU/EXIT row (B3i).  The band is drawable, just not
+     * pressable, and a status row is exactly what it is for; stacking the two
+     * strings below SAFE_TOP put LEVEL underneath the buttons, which are drawn
+     * after it.  Horizontally the line sits in the gap between the two buttons,
+     * so it cannot collide with either — and when the band is shorter than the
+     * text (uncalibrated panel, inset 0) it drops into the row's own vertical
+     * centre, which is empty between the buttons. */
     char score_text[32];
-    snprintf(score_text, sizeof(score_text), "SCORE:%d", game.score);
-    text_draw_centered(&fb, center_x, 15, score_text, COLOR_WHITE, 2);
-    
     char level_text[32];
+    snprintf(score_text, sizeof(score_text), "SCORE:%d", game.score);
     snprintf(level_text, sizeof(level_text), "LVL:%d", game.level);
-    text_draw_centered(&fb, center_x, 40, level_text, COLOR_CYAN, 2);
-    
+
+    const int hud_scale = 2;
+    const int hud_gap   = 24;
+    int hud_h  = text_measure_height(hud_scale);
+    int band_h = LAYOUT_MENU_BTN_Y - SCREEN_VISIBLE_TOP;
+    int hud_y  = (band_h >= hud_h)
+                 ? SCREEN_VISIBLE_TOP + (band_h - hud_h) / 2
+                 : LAYOUT_MENU_BTN_Y + (BTN_MENU_HEIGHT - hud_h) / 2;
+
+    int score_w = text_measure_width(score_text, hud_scale);
+    int level_w = text_measure_width(level_text, hud_scale);
+    int hud_cx  = (LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + LAYOUT_EXIT_BTN_X) / 2;
+    int hud_x   = hud_cx - (score_w + hud_gap + level_w) / 2;
+
+    fb_draw_text(&fb, hud_x, hud_y, score_text, COLOR_WHITE, hud_scale);
+    fb_draw_text(&fb, hud_x + score_w + hud_gap, hud_y, level_text, COLOR_CYAN, hud_scale);
+
     // Draw menu and exit buttons
     draw_menu_button(&fb, &menu_button);
     draw_exit_button(&fb, &exit_button);
-    
+
     // Draw board border
-    fb_draw_rect(&fb, board_offset_x - 2, board_offset_y - 2,
-                 BOARD_WIDTH * cell_size + 4, BOARD_HEIGHT * cell_size + 4, COLOR_WHITE);
+    fb_draw_rect(&fb, board_offset_x - BOARD_BORDER, board_offset_y - BOARD_BORDER,
+                 BOARD_WIDTH * cell_size + 2 * BOARD_BORDER,
+                 BOARD_HEIGHT * cell_size + 2 * BOARD_BORDER, COLOR_WHITE);
     
     // Draw locked pieces
     for (int y = 0; y < BOARD_HEIGHT; y++) {
@@ -758,22 +818,17 @@ void draw_playing_field() {
 void draw_game() {
     fb_clear(&fb, COLOR_BLACK);
     
-    // Handle welcome screen (Issue #10: draw each instruction line centered)
+    // Welcome screen — the shared implementation measures the instruction block
+    // and lays TAP TO START out below it (B3k).  This used to be four hand-placed
+    // text_draw_centered() calls plus a button at a fixed fb.height/2 + 40, and
+    // the fourth line landed inside the button.
     if (current_screen == SCREEN_WELCOME) {
-        // Title
-        int center_x = fb.width / 2;
-        text_draw_centered(&fb, center_x, SCREEN_VISIBLE_TOP + 50, "TETRIS", COLOR_CYAN, 4);
-        
-        // Instructions — each line individually centered
-        int line_height = text_measure_height(1);
-        int inst_y = LAYOUT_CENTER_Y(4 * line_height) + 20;
-        text_draw_centered(&fb, center_x, inst_y, "L/R: MOVE  UP/A: ROTATE", COLOR_WHITE, 1);
-        text_draw_centered(&fb, center_x, inst_y + line_height + 4, "DOWN: SOFT DROP  X: HARD DROP", COLOR_WHITE, 1);
-        text_draw_centered(&fb, center_x, inst_y + 2 * (line_height + 4), "TAP LEFT/RIGHT/CENTER/BOTTOM", COLOR_WHITE, 1);
-        text_draw_centered(&fb, center_x, inst_y + 3 * (line_height + 4), "PRESS START OR TAP TO BEGIN", COLOR_WHITE, 1);
-        
-        // Start button
-        button_draw(&fb, &start_button);
+        draw_welcome_screen(&fb, "TETRIS",
+            "L/R: MOVE   UP/A: ROTATE\n"
+            "DOWN: SOFT DROP   X: HARD DROP\n"
+            "TAP LEFT/RIGHT/CENTER/BOTTOM\n"
+            "PRESS START OR TAP TO BEGIN",
+            &start_button);
         return;
     }
     
@@ -889,6 +944,13 @@ int main(int argc, char *argv[]) {
                 if (input.buttons[i].pressed) { needs_redraw = true; break; }
             }
         }
+
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
 
         if (needs_redraw) {
             draw_game();

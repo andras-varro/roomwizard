@@ -175,21 +175,28 @@ void update_led_effects() {
 }
 
 void init_game() {
-    // Calculate grid dimensions
+    // Calculate grid dimensions.  The grid starts below the MENU/EXIT row, which
+    // is SCREEN_SAFE_*-anchored, so its top must move with the measured touch
+    // inset. Identical to the old 80 / fb.height - 120 when the inset is 0.
+    grid_offset_y = LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + 20;
     int usable_width = fb.width - 40;
-    int usable_height = fb.height - 120;
+    int usable_height = SCREEN_VISIBLE_BOTTOM - grid_offset_y - 40;
     cell_size = (usable_width < usable_height ? usable_width : usable_height) / GRID_SIZE;
     grid_offset_x = (fb.width - (GRID_SIZE * cell_size)) / 2;
-    grid_offset_y = 80;
-    
-    // Initialize buttons
-    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+
+    // Initialize buttons — LAYOUT_* is SCREEN_SAFE_*-anchored, so the row moves
+    // down with the measured touch inset instead of losing its top rows to it.
+    button_init(&menu_button, LAYOUT_MENU_BTN_X, LAYOUT_MENU_BTN_Y,
+                BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10,
+    button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+    /* screen_draw_welcome() positions start_button below the measured
+     * instruction block (B3k); these coordinates only cover a hit-test that
+     * arrives before the first draw, so they just have to be touchable. */
+    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
+                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
@@ -644,6 +651,13 @@ int main(int argc, char *argv[]) {
                 if (input.buttons[i].pressed) { needs_redraw = true; break; }
             }
         }
+
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
 
         if (needs_redraw) {
             draw_game();

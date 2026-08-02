@@ -311,8 +311,11 @@ static void init_layout(void) {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
+    /* screen_draw_welcome() positions start_button below the measured
+     * instruction block (B3k); these coordinates only cover a hit-test that
+     * arrives before the first draw, so they just have to be touchable. */
+    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
+                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
@@ -1632,18 +1635,26 @@ int main(int argc, char *argv[]) {
             needs_redraw = true;
         }
 
-        /* Game-over screen processes input inside draw — always redraw */
-        if (current_screen == SCREEN_GAME_OVER)
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. This used to be an unconditional redraw while
+         * SCREEN_GAME_OVER, which worked but pinned a static overlay to 30 fps;
+         * asking the component is the same fix the other six games now use. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        bool drew = needs_redraw;       /* capture BEFORE the if clears it */
         if (needs_redraw) {
             draw_game();
             fb_swap(&fb);
             needs_redraw = false;
         }
 
-        /* Adaptive sleep: faster polling when a redraw is pending */
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        /* Adaptive sleep: full rate while frames are actually being drawn.
+         * Testing needs_redraw here instead of drew always picked IDLE, which
+         * pinned the whole game to 10 FPS (IMPROVEMENT_PLAN B13c). */
+        usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     /* Cleanup (reverse order) */

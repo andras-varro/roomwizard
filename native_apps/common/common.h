@@ -124,6 +124,7 @@ void button_draw_exit(Framebuffer *fb, Button *btn);
 #define draw_menu_button button_draw_menu
 #define draw_exit_button button_draw_exit
 #define draw_welcome_screen screen_draw_welcome
+#define draw_welcome_screen_warn screen_draw_welcome_warn
 #define draw_game_over_screen screen_draw_game_over
 
 // ============================================================================
@@ -160,9 +161,26 @@ void button_auto_size(Button *btn, int padding);
 // SCREEN TEMPLATES
 // ============================================================================
 
-// Draw welcome screen with title and start button
+// Draw welcome screen with title and start button.
+//
+// `instructions` may contain '\n'; each line is measured and centred
+// individually (fb_draw_text does NOT interpret '\n' — passing a multi-line
+// string straight to it renders one long line and mis-centres it).
+//
+// The function also *positions* `start_btn`: it is laid out below the measured
+// instruction block, centred in the safe area and clamped to it, so the drawn
+// rectangle and the hit-test rectangle can never disagree.  Callers no longer
+// need to pick welcome-screen coordinates in button_init().
 void screen_draw_welcome(Framebuffer *fb, const char *game_title,
                         const char *instructions, Button *start_btn);
+
+// As screen_draw_welcome(), plus an optional amber `warning` block drawn below
+// the instructions (also '\n'-splittable).  Pass NULL for no warning; then this
+// is exactly screen_draw_welcome().  Used to tell the player that the game
+// needs a USB keyboard or gamepad and none is connected.
+void screen_draw_welcome_warn(Framebuffer *fb, const char *game_title,
+                             const char *instructions, const char *warning,
+                             Button *start_btn);
 
 // Draw game over screen with score and restart button
 void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
@@ -245,6 +263,13 @@ uint32_t get_time_ms(void);
 #define LAYOUT_EXIT_BTN_Y       (SCREEN_SAFE_TOP + 10)
 #define LAYOUT_BOTTOM_BTN_Y     (SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 20)  // Bottom buttons
 
+// Welcome-screen text metrics (screen_draw_welcome*): instruction/warning text
+// scale, the gap between wrapped lines, and the gap between blocks (title,
+// instructions, warning, start button).
+#define WELCOME_INST_SCALE  2
+#define WELCOME_LINE_GAP    8
+#define WELCOME_BLOCK_GAP   16
+
 // ============================================================================
 // SINGLETON INSTANCE LOCK
 // ============================================================================
@@ -321,6 +346,8 @@ typedef struct {
     Button exit_btn;
     Button reset_scores_btn;
     bool has_reset_scores;    // Show reset scores button?
+    bool pending_draw;        // "I owe the screen a frame" — see gameover_needs_redraw()
+    bool armed;               // Overlay has been on screen a frame; input allowed
 } GameOverScreen;
 
 // Initialize the game over screen. Call once when entering game-over state.
@@ -334,6 +361,27 @@ void gameover_init(GameOverScreen *gos, Framebuffer *fb,
 // Returns the action taken (NONE if no button pressed yet).
 GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
                                int touch_x, int touch_y, bool touch_active);
+
+// True while the component still owes the screen a frame, OR while there is
+// touch input it has not been given a chance to act on.
+//
+// gameover_update() is a multi-frame state machine — it checks the highscore
+// table, may run the blocking name-entry keyboard, and only draws once it
+// reaches DISPLAY — but every game calls it from inside its *draw* function,
+// which a dirty-flagged main loop runs only when needs_redraw is set. A loop
+// that computes that flag without asking the component starves it: the overlay
+// never appears until the player taps something. So OR this into the flag:
+//
+//   if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+//       needs_redraw = true;
+//
+// The input half matters just as much as the draw half: because our buttons are
+// read inside the draw path, a frame the loop declines to run is also an input
+// event we never see, and a fired button needs a not-touched frame before it can
+// fire again. So this reports draw-pending OR input-pending OR re-arm-pending. Do
+// not assume the caller has its own "redraw on input activity" branch — samegame
+// did not, and its game-over buttons were dead.
+bool gameover_needs_redraw(const GameOverScreen *gos);
 
 // Draw the game over screen overlay (called each frame from gameover_update,
 // but may also be called directly if needed).

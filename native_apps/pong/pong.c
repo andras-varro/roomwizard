@@ -25,6 +25,8 @@
 #define WINNING_SCORE 11
 #define PADDLE_SPEED 6       /* pixels per frame for keyboard/d-pad */
 #define PADDLE_MAX_ANALOG 8  /* max pixels per frame from analog stick */
+#define BALL_START_SPEED 8.5f /* px/frame at 30fps; 5.0 took ~7s to cross the playfield */
+#define BALL_SPEEDUP 1.05f    /* per paddle hit, on the primary axis */
 
 typedef enum {
     SCREEN_WELCOME,
@@ -95,9 +97,12 @@ void init_game() {
     portrait_mode = fb.portrait_mode;
     
     play_area_width = fb.width - 40;
-    play_area_height = fb.height - 120;
     offset_x = 20;
-    offset_y = 80;
+    // The play area starts below the MENU/EXIT row, which is SCREEN_SAFE_*-anchored,
+    // so it must move with the measured touch inset rather than sit at a literal 80.
+    // Identical to the old 80 / fb.height - 120 when the inset is 0.
+    offset_y = LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + 20;
+    play_area_height = SCREEN_VISIBLE_BOTTOM - offset_y - 40;
     
     game.difficulty = 2;
     
@@ -105,10 +110,12 @@ void init_game() {
     hs_init(&hs_table, "pong");
     hs_load(&hs_table);
     
-    // Initialize buttons — positions use fb.width/fb.height so they auto-adapt
-    button_init(&menu_button, 10, 10, BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
+    // Initialize buttons — LAYOUT_* is SCREEN_SAFE_*-anchored, so the row moves
+    // down with the measured touch inset instead of losing its top rows to it.
+    button_init(&menu_button, LAYOUT_MENU_BTN_X, LAYOUT_MENU_BTN_Y,
+                BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
                 BTN_MENU_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&exit_button, fb.width - BTN_EXIT_WIDTH - 10, 10,
+    button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
@@ -763,6 +770,13 @@ int main(int argc, char *argv[]) {
                 if (input.buttons[i].pressed) { needs_redraw = true; break; }
             }
         }
+
+        /* The game-over component runs a multi-frame state machine (highscore
+         * check, blocking name entry) and only draws once it reaches DISPLAY —
+         * give it frames until it says it is settled, or the overlay never
+         * appears without a tap. */
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
 
         if (needs_redraw) {
             draw_game();

@@ -9,7 +9,75 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <libgen.h>
+
+/* ── Atomic file writes (see config.h) ───────────────────────────────────── */
+
+/* Copy the parent directory of path into buf. "." if there is no '/'. */
+static void parent_dir(const char *path, char *buf, size_t n) {
+    char scratch[256];
+    strncpy(scratch, path, sizeof(scratch) - 1);
+    scratch[sizeof(scratch) - 1] = '\0';
+    const char *d = dirname(scratch);
+    strncpy(buf, d, n - 1);
+    buf[n - 1] = '\0';
+}
+
+/* fsync a directory so a rename inside it is durable. Best effort: some
+ * filesystems refuse O_RDONLY fsync on a directory, and that is not fatal. */
+static void fsync_dir(const char *dir) {
+    int fd = open(dir, O_RDONLY);
+    if (fd < 0) return;
+    (void)fsync(fd);
+    close(fd);
+}
+
+FILE *file_write_atomic_open(const char *path, char *tmp_path, size_t tmp_sz) {
+    if (!path || !tmp_path || tmp_sz == 0) return NULL;
+
+    char dir[256];
+    parent_dir(path, dir, sizeof(dir));
+    mkdir(dir, 0755);   /* ok if it already exists */
+
+    int n = snprintf(tmp_path, tmp_sz, "%s.tmp", path);
+    if (n < 0 || (size_t)n >= tmp_sz) {
+        tmp_path[0] = '\0';
+        return NULL;    /* would truncate the temp name onto the real one */
+    }
+
+    return fopen(tmp_path, "w");
+}
+
+int file_write_atomic_commit(FILE *f, const char *tmp_path, const char *path) {
+    if (!f) return -1;
+
+    if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+        fclose(f);
+        unlink(tmp_path);
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+    if (rename(tmp_path, path) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* The data is durable but the directory entry may not be. */
+    char dir[256];
+    parent_dir(path, dir, sizeof(dir));
+    fsync_dir(dir);
+    return 0;
+}
+
+void file_write_atomic_abort(FILE *f, const char *tmp_path) {
+    if (f) fclose(f);
+    if (tmp_path && tmp_path[0]) unlink(tmp_path);
+}
 
 /* ── Internal helpers ───────────────────────────────────────────────────── */
 
@@ -102,25 +170,24 @@ int config_load(Config *cfg) {
 }
 
 int config_save(const Config *cfg) {
-    /* Create parent directory if needed */
-    char tmp[128];
-    strncpy(tmp, cfg->filepath, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
-    char *dir = dirname(tmp);
-    mkdir(dir, 0755);   /* ok if already exists */
-
-    FILE *f = fopen(cfg->filepath, "w");
+    char tmp_path[160];
+    FILE *f = file_write_atomic_open(cfg->filepath, tmp_path, sizeof(tmp_path));
     if (!f) return -1;
 
-    fprintf(f, "# RoomWizard Configuration\n");
-    fprintf(f, "# Auto-generated — edit with hardware_config tool\n\n");
-
-    for (int i = 0; i < cfg->count; i++) {
-        fprintf(f, "%s=%s\n", cfg->entries[i].key, cfg->entries[i].value);
+    if (fprintf(f, "# RoomWizard Configuration\n") < 0 ||
+        fprintf(f, "# Auto-generated — edit with hardware_config tool\n\n") < 0) {
+        file_write_atomic_abort(f, tmp_path);
+        return -1;
     }
 
-    fclose(f);
-    return 0;
+    for (int i = 0; i < cfg->count; i++) {
+        if (fprintf(f, "%s=%s\n", cfg->entries[i].key, cfg->entries[i].value) < 0) {
+            file_write_atomic_abort(f, tmp_path);
+            return -1;
+        }
+    }
+
+    return file_write_atomic_commit(f, tmp_path, cfg->filepath);
 }
 
 /* ── Getters ─────────────────────────────────────────────────────────────── */
