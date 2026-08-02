@@ -24,9 +24,18 @@
 #
 # i.e. they are positive evidence that division is being done in software.
 # Grepping for the bare string "sdiv\|udiv" matches them; matching the
-# instruction MNEMONIC field does not.  Measured over all 30 build artifacts,
+# instruction MNEMONIC field does not.  Measured across every build artifact,
 # the true instruction count is 0.  So this check demands a hard zero: if it
 # ever fires, it is real.
+#
+# ── Check the UNSTRIPPED binary ──────────────────────────────────────────────
+# With no symbol table, objdump cannot tell code from the literal pools and data
+# blobs embedded in .text, so it disassembles them anyway and some four-byte
+# constants decode as instructions.  vnc_client_stripped produced exactly one
+# such phantom: "sdiv r4, sp, pc" — sdiv with pc as an operand, which no
+# compiler emits and the architecture calls UNPREDICTABLE.  The unstripped
+# vnc_client is clean.  This script warns when a target has no symbols; treat a
+# hit in a stripped binary as unproven until you re-check the unstripped one.
 
 set -u
 
@@ -57,6 +66,14 @@ bad=0
 for bin in "${TARGETS[@]}"; do
     [ -f "$bin" ] || { echo -e "${RED}✗ $bin: no such file${NC}"; bad=$((bad + 1)); continue; }
 
+    # No symbol table means objdump has to guess where code ends and literal
+    # pools begin, and it guesses wrong — see the header note. Say so, so a hit
+    # here is not mistaken for a real one.
+    stripped=""
+    if ! "$OBJDUMP" -t "$bin" 2>/dev/null | grep -q '\.text'; then
+        stripped=" (stripped — verify any hit against the unstripped binary)"
+    fi
+
     # Track the enclosing symbol, print it for every real sdiv/udiv instruction.
     # objdump format:  "   121d8:\t<encoding>\tmnemonic\toperands"
     # so the mnemonic is a tab-delimited field, which "<__udivsi3>" never is.
@@ -68,7 +85,7 @@ for bin in "${TARGETS[@]}"; do
     checked=$((checked + 1))
 
     if [ -n "$hits" ]; then
-        echo -e "${RED}✗ $bin — hardware divide instruction(s):${NC}"
+        echo -e "${RED}✗ $bin — hardware divide instruction(s):${NC}${stripped}"
         printf '%s\n' "$hits" | sed 's/^/      /'
         bad=$((bad + 1))
     fi

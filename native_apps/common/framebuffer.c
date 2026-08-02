@@ -26,6 +26,34 @@ int screen_view_y = 0;
 int screen_base_width  = 800;
 int screen_base_height = 480;
 
+// Visible-but-not-touchable band at each logical edge. Zero until touch_input.c
+// measures it, so an app that never initialises touch treats the whole logical
+// screen as safe — which is also the right answer on an uncalibrated device.
+int screen_touch_inset_top    = 0;
+int screen_touch_inset_bottom = 0;
+int screen_touch_inset_left   = 0;
+int screen_touch_inset_right  = 0;
+
+static int clamp_inset(const char *side, int v) {
+    if (v < 0) return 0;
+    if (v > FB_TOUCH_INSET_MAX) {
+        // Loud, because the alternative is every UI in the system quietly
+        // shrinking to fit a broken calibration.
+        printf("Touch inset: %s %d px exceeds the %d px limit — clamped. "
+               "The calibration is almost certainly wrong; recalibrate.\n",
+               side, v, FB_TOUCH_INSET_MAX);
+        return FB_TOUCH_INSET_MAX;
+    }
+    return v;
+}
+
+void fb_set_touch_inset(int top, int bottom, int left, int right) {
+    screen_touch_inset_top    = clamp_inset("top", top);
+    screen_touch_inset_bottom = clamp_inset("bottom", bottom);
+    screen_touch_inset_left   = clamp_inset("left", left);
+    screen_touch_inset_right  = clamp_inset("right", right);
+}
+
 void fb_load_bezel(void) {
     // No file, or no margin line in it, means "not configured" → defaults.
     // A margin line that IS present is honoured exactly, zeros included.

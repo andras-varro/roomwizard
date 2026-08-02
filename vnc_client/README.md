@@ -89,11 +89,28 @@ password = roomwizard
 encodings = tight zrle copyrect hextile zlib raw
 compress_level = 6
 quality_level = 5
+content_area = safe
 ```
 
 > **Tip:** All settings (HOST, PORT, PASSWORD, ENCODINGS, COMPRESS, QUALITY) can
 > be changed at runtime via the on-screen settings GUI (long-press top-left corner
 > for 3 seconds).
+
+### `content_area` — reachability vs. size
+
+`safe` (the default) letterboxes the remote desktop into the part of the screen a finger can
+actually reach. The touch digitizer saturates a little before the panel edge, so a band at each
+end is visible but not pressable — and on someone else's desktop, the bottom row may be a
+taskbar you need to click. The cost is size: a 1920×1080 desktop scales to about 747×420 instead
+of 795×447.
+
+Set `content_area = visible` to use the whole screen instead — bigger and easier to read, at the
+price of a band top and bottom that you cannot tap. Either way this app's own touch UI (settings
+screen, reconnect buttons, exit-gesture corner) stays reachable.
+
+The setting does nothing until the panel's touch reach has been measured — Device Tools →
+Display → `CALIBRATE TOUCH`, the `REACH` step. Before that, `safe` and `visible` are the same
+rectangle. It is not on the settings GUI, but that GUI preserves it when you press SAVE.
 
 ### Command-Line
 

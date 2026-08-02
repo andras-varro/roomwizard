@@ -88,12 +88,46 @@ whatever it was built with — redeploy ScummVM after changing touch or framebuf
 `native_apps/common/`.
 
 **The backend is an ordinary `fb_init()` client, bezel included.** It has no bezel logic of its
-own: `_fb->width`/`_fb->height` are the logical (visible) screen, and `getScalingInfo()` just
-aspect-fits the game into that and centres it. Everything that indexes `_fb->back_buffer` must use
-`fbWidth()`/`fbHeight()` as the stride and bounds — the buffer is logical-sized (e.g. 800×450×2
-bytes at 16bpp), so a hardcoded 800-pixel stride writes past the allocation. Likewise the touch
-path: `RoomWizardEventSource` is constructed *before* the framebuffer exists, so `initSize()`
-calls `syncScreenGeometry()` to pick up the real geometry once `fb_init()` has run.
+own: `_fb->width`/`_fb->height` are the logical (visible) screen. Everything that indexes
+`_fb->back_buffer` must use `fbWidth()`/`fbHeight()` as the stride and bounds — the buffer is
+logical-sized (e.g. 800×450×2 bytes at 16bpp), so a hardcoded 800-pixel stride writes past the
+allocation.
+
+## Content and the overlay go in the touch-safe rectangle
+
+`fbWidth()`/`fbHeight()` are the stride and bounds of the back buffer and **nothing else** — they are
+not where content goes. The digitizer saturates before the panel edge, so a band at each end of the
+visible surface is drawable but **not pressable** (~19 px top / ~16 px bottom / ~6 px each side on
+RW09; measured at runtime by `touch_input.c`, `0` until a panel's edge reach has been swept). Neither
+a game nor the GUI theme can be audited for which of its pixels have to be reachable, so:
+
+| What | Rectangle | Set by |
+|---|---|---|
+| **overlay** — launcher, GMM, virtual keyboard | `safeWidth()` × `safeHeight()` at `safeLeft()`/`safeTop()`, **always** | `getOverlayWidth/Height()`, `_overlaySurface.create()`, the composite loop in `updateScreen()`, `drawCursor()`'s overlay branch |
+| **game picture** | the safe rect by default; the whole surface when `rwFullContentArea()` | `getScalingInfo()` — the single chokepoint |
+| gesture corners, overlay touch coordinates | safe rect, **always** | `roomwizard-events.cpp` via `safeRect()`, which reads `getSafeRect()` |
+| virtual cursor (USB mouse, gamepad stick) | wherever the current content is — safe rect in the GUI, the *picture* in game mode | `cursorBounds()` in `roomwizard-events.cpp` |
+
+The overlay surface **must** be exactly `getOverlayWidth()` × `getOverlayHeight()`: `ThemeEngine` and
+the virtual keyboard `grabOverlay()` into a surface sized from those and `copyRectToOverlay()` it
+straight back, so a mismatch corrupts every dialog backdrop.
+
+`getScalingInfo()` returns offsets that already include the content rect's origin, which is why
+`transformCoordinates()`'s game branch and `drawCursor()`'s game branch need no knowledge of any of
+this. Keep it that way — one chokepoint, not three.
+
+**Ordering, and the trap it fixes:** `SCREEN_SAFE_*` is only correct after both `fb_init()` and
+`touch_init()`. `RoomWizardEventSource` is constructed *before* the framebuffer exists, so
+`initSize()` calls `initFramebuffer()` and then **`syncScreenGeometry()` immediately**, before
+sizing the overlay surface — that call is what republishes the geometry and with it the measured
+inset. Moving it back below the surface creation silently sizes the overlay from the pre-bezel
+defaults.
+
+`ROOMWIZARD_CONTENT_AREA=visible` (one-off) or `rw_content_area=visible` in `scummvm.ini` opts the
+**picture** out. It deliberately does not move the overlay or any gesture zone; an option that could
+strand the launcher's bottom button row is a footgun, not a feature.
+
+Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
 
 ## Audio
 

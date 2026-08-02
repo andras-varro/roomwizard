@@ -11,6 +11,10 @@
  * letterbox calculation below reads fb->width / fb->height; PANEL_MAX_* is only
  * the capacity of the fixed LUT arrays.
  *
+ * THE PICTURE GOES IN THE TOUCH-SAFE RECTANGLE, not the whole surface — see
+ * vnc_content_rect() in the header.  fb->width / fb->height remain the stride
+ * and the bounds of the back buffer; they are no longer the letterbox target.
+ *
  * Key optimizations (see header for details):
  *   - 16bpp RGB565 output (halved memory bandwidth)
  *   - Precomputed X-coord bilinear LUT (no per-pixel division)
@@ -199,6 +203,31 @@ int vnc_renderer_text_width(const char *text, int scale) {
     return (int)strlen(text) * 6 * scale;
 }
 
+/* ── The content rectangle ─────────────────────────────────────────── */
+
+/* Set from the config once at startup; see the header for why the picture is
+ * confined and why our own touch UI deliberately ignores this flag. */
+static bool s_content_full = false;
+
+void vnc_content_set_full(bool full) {
+    s_content_full = full;
+}
+
+void vnc_content_rect(const Framebuffer *fb, int *x, int *y, int *w, int *h) {
+    if (!fb) return;
+    if (s_content_full) {
+        *x = 0;
+        *y = 0;
+        *w = (int)fb->width;
+        *h = (int)fb->height;
+    } else {
+        *x = SCREEN_SAFE_LEFT;
+        *y = SCREEN_SAFE_TOP;
+        *w = SCREEN_SAFE_WIDTH;
+        *h = SCREEN_SAFE_HEIGHT;
+    }
+}
+
 /* ── Renderer lifecycle ────────────────────────────────────────────── */
 
 int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb) {
@@ -226,32 +255,36 @@ void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height) 
         return;
     }
 
-    /* The logical surface, not the panel: fb_init() has already excluded the
-     * bezel bands, so letterboxing against fb->height is what puts the remote
-     * desktop flush against the top of the visible area. */
+    /* The letterbox target is the CONTENT rectangle — the touch-safe area by
+     * default — not the whole logical surface.  Every pixel of a third-party
+     * desktop has to be reachable, and the digitizer saturates before the panel
+     * edge.  sw/sh remain the surface, because they are still the stride and the
+     * bound for the border clearing below. */
     const int sw = (int)renderer->fb->width;
     const int sh = (int)renderer->fb->height;
+    int cx, cy, cw, ch;
+    vnc_content_rect(renderer->fb, &cx, &cy, &cw, &ch);
 
     renderer->remote_width  = width;
     renderer->remote_height = height;
 
     /* Compute letterbox scaling with fixed-point ×256 to avoid floats */
-    int scale_x = (sw * 256) / width;
-    int scale_y = (sh * 256) / height;
+    int scale_x = (cw * 256) / width;
+    int scale_y = (ch * 256) / height;
     int scale   = (scale_x < scale_y) ? scale_x : scale_y;
 
     renderer->scaled_width  = (width  * scale) / 256;
     renderer->scaled_height = (height * scale) / 256;
 
-    /* Clamp to the surface, and to the LUT capacity so src_x_lut cannot
+    /* Clamp to the content rect, and to the LUT capacity so src_x_lut cannot
      * overflow even if a future panel is wider than PANEL_MAX_WIDTH. */
-    if (renderer->scaled_width  > sw) renderer->scaled_width  = sw;
+    if (renderer->scaled_width  > cw) renderer->scaled_width  = cw;
     if (renderer->scaled_width  > PANEL_MAX_WIDTH)
         renderer->scaled_width = PANEL_MAX_WIDTH;
-    if (renderer->scaled_height > sh) renderer->scaled_height = sh;
+    if (renderer->scaled_height > ch) renderer->scaled_height = ch;
 
-    renderer->offset_x = (sw - renderer->scaled_width)  / 2;
-    renderer->offset_y = (sh - renderer->scaled_height) / 2;
+    renderer->offset_x = cx + (cw - renderer->scaled_width)  / 2;
+    renderer->offset_y = cy + (ch - renderer->scaled_height) / 2;
 
     /* ── O2: Precompute bilinear X-coordinate lookup table ──────────── */
     for (int dx = 0; dx < renderer->scaled_width; dx++) {
@@ -300,9 +333,10 @@ void vnc_renderer_set_remote_size(VNCRenderer *renderer, int width, int height) 
 
     renderer->borders_cleared = true;
 
-    DEBUG_PRINT("Remote: %dx%d -> Scaled: %dx%d, Offset: (%d,%d)",
+    DEBUG_PRINT("Remote: %dx%d -> Scaled: %dx%d, Offset: (%d,%d) "
+                "in content rect %dx%d at (%d,%d) of %dx%d surface",
                 width, height, renderer->scaled_width, renderer->scaled_height,
-                renderer->offset_x, renderer->offset_y);
+                renderer->offset_x, renderer->offset_y, cw, ch, cx, cy, sw, sh);
 }
 
 /* ── Core rendering: partial region update with bilinear interpolation ── */
@@ -513,8 +547,13 @@ bool vnc_renderer_screen_to_remote(VNCRenderer *renderer,
         return false;   /* touch landed in letterbox border */
 
     if (renderer->scaling_mode == SCALING_STRETCH) {
-        *remote_x = (screen_x * renderer->remote_width)  / (int)renderer->fb->width;
-        *remote_y = (screen_y * renderer->remote_height) / (int)renderer->fb->height;
+        /* Stretch fills the CONTENT rect, so the mapping must be relative to it
+         * — mapping against the whole surface would disagree with where
+         * set_remote_size() actually put the picture. */
+        int cx, cy, cw, ch;
+        vnc_content_rect(renderer->fb, &cx, &cy, &cw, &ch);
+        *remote_x = ((screen_x - cx) * renderer->remote_width)  / (cw > 0 ? cw : 1);
+        *remote_y = ((screen_y - cy) * renderer->remote_height) / (ch > 0 ? ch : 1);
     } else {
         *remote_x = (rel_x * renderer->remote_width)  / renderer->scaled_width;
         *remote_y = (rel_y * renderer->remote_height) / renderer->scaled_height;

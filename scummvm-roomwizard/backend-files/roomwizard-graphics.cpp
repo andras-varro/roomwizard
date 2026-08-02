@@ -65,6 +65,7 @@ RoomWizardGraphicsManager::RoomWizardGraphicsManager()
 	  _prevDrawnCursorY(-1),
 	  _prevDrawnCursorVisible(false),
 	  _overlayVisible(false),
+	  _overlayDirty(false),
 	  _shakeXOffset(0),
 	  _shakeYOffset(0),
 	  _touchPointIndex(0) {
@@ -127,31 +128,47 @@ void RoomWizardGraphicsManager::blankScreen() {
 	fb_swap(_fb);
 }
 
+void RoomWizardGraphicsManager::getSafeRect(int &x, int &y, int &w, int &h) const {
+	x = safeLeft();
+	y = safeTop();
+	w = safeWidth();
+	h = safeHeight();
+}
+
 void RoomWizardGraphicsManager::getScalingInfo(int &scaledWidth, int &scaledHeight,
                                                 int &offsetX, int &offsetY) const {
 	// The framebuffer's logical size is already the visible rectangle: the bezel
-	// is handled by fb_init()/fb_swap(). Scale the game to fill it preserving
-	// aspect ratio, and centre whatever is left over.
-	const int fbW = fbWidth();
-	const int fbH = fbHeight();
+	// is handled by fb_init()/fb_swap().  Inside that, the game is fitted to the
+	// CONTENT rectangle — the touch-safe area by default, so that every pixel of
+	// the picture can be reached by a finger (a game may put its verb bar or
+	// inventory on the bottom row, and we cannot audit third-party content for
+	// what has to be pressable).  rwFullContentArea() opts out and hands the
+	// picture the whole visible surface, dead band included.
+	// Scale to fill the content rect preserving aspect ratio, and centre
+	// whatever is left over within it.
+	const bool full = rwFullContentArea();
+	const int rectX = full ? 0 : safeLeft();
+	const int rectY = full ? 0 : safeTop();
+	const int rectW = full ? fbWidth()  : safeWidth();
+	const int rectH = full ? fbHeight() : safeHeight();
 
 	if (_screenWidth == 0 || _screenHeight == 0) {
-		scaledWidth  = fbW;
-		scaledHeight = fbH;
-		offsetX = 0;
-		offsetY = 0;
+		scaledWidth  = rectW;
+		scaledHeight = rectH;
+		offsetX = rectX;
+		offsetY = rectY;
 		return;
 	}
 
-	int scaleX = fbW * 256 / _screenWidth;   // fixed-point *256
-	int scaleY = fbH * 256 / _screenHeight;
+	int scaleX = rectW * 256 / _screenWidth;   // fixed-point *256
+	int scaleY = rectH * 256 / _screenHeight;
 	int scale  = (scaleX < scaleY) ? scaleX : scaleY;  // use smaller to fit
 
 	scaledWidth  = (_screenWidth  * scale) / 256;
 	scaledHeight = (_screenHeight * scale) / 256;
 
-	offsetX = (fbW - scaledWidth)  / 2;
-	offsetY = (fbH - scaledHeight) / 2;
+	offsetX = rectX + (rectW - scaledWidth)  / 2;
+	offsetY = rectY + (rectH - scaledHeight) / 2;
 }
 
 bool RoomWizardGraphicsManager::hasFeature(OSystem::Feature f) const {
@@ -189,6 +206,15 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 
 	initFramebuffer();
 
+	// BEFORE anything is sized from the touch-safe rectangle: this is what
+	// republishes the geometry (and with it the measured touch inset) now that
+	// fb_init() has run and the real logical dimensions are known.  The event
+	// source is constructed before the framebuffer exists, so until this call
+	// SCREEN_SAFE_* still reflects the pre-bezel defaults.
+	OSystem_RoomWizard *system = rwSystem();
+	if (system && system->getEventSource())
+		system->getEventSource()->syncScreenGeometry();
+
 	_screenWidth = width;
 	_screenHeight = height;
 
@@ -201,22 +227,23 @@ void RoomWizardGraphicsManager::initSize(uint width, uint height, const Graphics
 	// Allocate game surface
 	_gameSurface.create(width, height, _screenFormat);
 
-	// Allocate overlay surface (same size as the visible framebuffer, for the GUI)
-	_overlaySurface.create(fbWidth(), fbHeight(), Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
+	// Allocate overlay surface.  Sized to the TOUCH-SAFE rectangle, not the
+	// whole visible framebuffer: the overlay is the ScummVM GUI — launcher,
+	// GMM, virtual keyboard — which is nothing but buttons, so all of it has to
+	// be reachable.  It must match getOverlayWidth()/getOverlayHeight() exactly,
+	// because ThemeEngine and the virtual keyboard grabOverlay() into a surface
+	// sized from those and copyRectToOverlay() it straight back.
+	_overlaySurface.create(safeWidth(), safeHeight(),
+	                       Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0));
 	// Pre-fill with transparent key so any stale pixels stay transparent
 	clearOverlay();
 
-	// Notify event source of the new game resolution and, now that the
-	// framebuffer exists, of the visible screen size (needed for coordinate
-	// transforms — the event source is constructed before the framebuffer).
+	// Notify event source of the new game resolution and its placement.
 	{
 		int scaledW, scaledH, offX, offY;
 		getScalingInfo(scaledW, scaledH, offX, offY);
-		OSystem_RoomWizard *system = rwSystem();
-		if (system && system->getEventSource()) {
-			system->getEventSource()->syncScreenGeometry();
+		if (system && system->getEventSource())
 			system->getEventSource()->setGameScreenSize(width, height, offX, offY);
-		}
 	}
 
 	// Fix 1: Increment screen change ID so ScummVM detects the mode transition.
@@ -560,9 +587,11 @@ void RoomWizardGraphicsManager::drawCursor() {
 		cursorX = _cursorX * scaledW / (int)_screenWidth + offsetX - _cursorHotspotX;
 		cursorY = _cursorY * scaledH / (int)_screenHeight + offsetY - _cursorHotspotY;
 	} else {
-		// Overlay mode: cursor coordinates are already in screen space
-		cursorX = _cursorX - _cursorHotspotX;
-		cursorY = _cursorY - _cursorHotspotY;
+		// Overlay mode: cursor coordinates are in OVERLAY space, which is the
+		// touch-safe rectangle — so shift by its origin to get framebuffer
+		// coordinates.
+		cursorX = _cursorX - _cursorHotspotX + safeLeft();
+		cursorY = _cursorY - _cursorHotspotY + safeTop();
 	}
 
 	uint16 *buf16 = (uint16 *)_fb->back_buffer;
@@ -638,11 +667,18 @@ void RoomWizardGraphicsManager::updateScreen() {
 	                    _cursorY != _prevDrawnCursorY ||
 	                    _cursorVisible != _prevDrawnCursorVisible);
 
-	bool needsRedraw = _screenDirty || _overlayVisible || cursorMoved;
+	// Nothing changed: leave the framebuffer alone entirely.  This test used
+	// _overlayVisible rather than _overlayDirty, and because the launcher IS the
+	// overlay it was permanently true — so the cap below never applied and a
+	// static screen recomposited 800x455 as fast as the GUI could call
+	// updateScreen(), pinning ~52 % of the single core with nothing happening.
+	// The dirty flags are only cleared once a frame is really drawn, so a change
+	// skipped here stays pending for the next call.
+	bool needsRedraw = _screenDirty || _overlayDirty || cursorMoved;
+	if (!needsRedraw)
+		return;
 
-	// Cap at 30 fps (~33 ms) to avoid burning the 300 MHz ARM CPU.
-	// The game list GUI calls updateScreen() hundreds of times per second
-	// without this guard, saturating the single core.
+	// Cap at 30 fps (~33 ms) to avoid burning the 600 MHz ARM CPU.
 	// NOTE: _lastFrame is initialised on first call, NOT to {0,0}.  On
 	// 32-bit ARM `long` is 32 bits; subtracting epoch 0 from the current
 	// time and multiplying by 1 000 000 overflows to a negative value,
@@ -658,7 +694,7 @@ void RoomWizardGraphicsManager::updateScreen() {
 	} else {
 		long _elapsedUs = (_now.tv_sec - _lastFrame.tv_sec) * 1000000L
 		                + (_now.tv_usec - _lastFrame.tv_usec);
-		if (!needsRedraw && _elapsedUs > 0 && _elapsedUs < 33333L)
+		if (_elapsedUs > 0 && _elapsedUs < 33333L)
 			return;
 		_lastFrame = _now;
 	}
@@ -675,18 +711,24 @@ void RoomWizardGraphicsManager::updateScreen() {
 		// all other real colours are composited opaquely, which fixes the GMM
 		// background and the VKB text input field showing as transparent.
 		// (O8) Overlay is already RGB565 — write directly to 16bpp back buffer.
+		// The overlay surface is the size of the touch-safe rectangle, so it is
+		// blitted at that rectangle's origin; blitGameSurfaceToFramebuffer()
+		// above has already blacked everything outside the game's own rect.
 		uint16 *obuf16 = (uint16 *)_fb->back_buffer;
 		const int fbW = fbWidth();
-		const int oh = (_overlaySurface.h < fbHeight()) ? _overlaySurface.h : fbHeight();
-		const int ow = (_overlaySurface.w < fbW) ? _overlaySurface.w : fbW;
+		const int ox = safeLeft();
+		const int oy = safeTop();
+		const int oh = (_overlaySurface.h < safeHeight()) ? _overlaySurface.h : safeHeight();
+		const int ow = (_overlaySurface.w < safeWidth())  ? _overlaySurface.w : safeWidth();
 		for (int y = 0; y < oh; y++) {
 			for (int x = 0; x < ow; x++) {
 				uint16 pixel = *(const uint16 *)_overlaySurface.getBasePtr(x, y);
 				if (pixel == 0xF81F)
 					continue; // transparent clear-key – keep game pixel underneath
-				obuf16[y * fbW + x] = pixel;
+				obuf16[(y + oy) * fbW + (x + ox)] = pixel;
 			}
 		}
+		_overlayDirty = false;
 	} else {
 		// Always re-blit the game surface.  Even when _screenDirty is false
 		// we need to erase the previous cursor position before drawing the
@@ -728,6 +770,7 @@ void RoomWizardGraphicsManager::clearFocusRectangle() {
 // Overlay methods
 void RoomWizardGraphicsManager::showOverlay(bool inGUI) {
 	_overlayVisible = true;
+	_overlayDirty = true;      // first frame with the overlay up must composite
 }
 
 void RoomWizardGraphicsManager::hideOverlay() {
@@ -753,6 +796,7 @@ void RoomWizardGraphicsManager::clearOverlay() {
 		const int count = _overlaySurface.w * _overlaySurface.h;
 		for (int i = 0; i < count; i++)
 			p[i] = 0xF81F;
+		_overlayDirty = true;
 	}
 }
 
@@ -765,14 +809,17 @@ void RoomWizardGraphicsManager::copyRectToOverlay(const void *buf, int pitch, in
 		return;
 
 	copyRectToSurface(_overlaySurface, buf, pitch, x, y, w, h, getOverlayFormat());
+	_overlayDirty = true;
 }
 
 int16 RoomWizardGraphicsManager::getOverlayHeight() const {
-	return (int16)fbHeight();
+	// The overlay is the GUI: all of it must be pressable, so it gets the
+	// touch-safe rectangle and not the whole visible surface.
+	return (int16)safeHeight();
 }
 
 int16 RoomWizardGraphicsManager::getOverlayWidth() const {
-	return (int16)fbWidth();
+	return (int16)safeWidth();
 }
 
 // Mouse cursor methods
@@ -801,6 +848,10 @@ void RoomWizardGraphicsManager::setMouseCursor(const void *buf, uint w, uint h,
 
 	_cursorSurface.create(w, h, cursorFormat);
 	memcpy(_cursorSurface.getPixels(), buf, w * h * cursorFormat.bytesPerPixel);
+	// The cursor bitmap changed without the cursor moving, so the dirty test in
+	// updateScreen() would not otherwise notice.  Rare enough that a full reblit
+	// costs nothing.
+	_screenDirty = true;
 }
 
 void RoomWizardGraphicsManager::setCursorPalette(const byte *colors, uint start, uint num) {
@@ -811,6 +862,7 @@ void RoomWizardGraphicsManager::setCursorPalette(const byte *colors, uint start,
 
 	memcpy(&_cursorPalette[start * 3], colors, num * 3);
 	_cursorPaletteEnabled = true;
+	_screenDirty = true;
 }
 
 void RoomWizardGraphicsManager::addTouchPoint(int x, int y) {

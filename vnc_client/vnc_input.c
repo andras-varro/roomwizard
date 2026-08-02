@@ -486,11 +486,16 @@ void vnc_input_process(VNCInput *input) {
     
     if (state.held || state.pressed) {
         /*
-         * Exit gesture: long-press in top-left corner.
+         * Exit gesture: long-press in the top-left corner.
          * Check raw screen coordinates (before VNC mapping) so the
          * exit zone works even if the touch lands in the letterbox border.
+         * Anchored to SCREEN_SAFE_* — the zone has to be pressable, and the
+         * top-left few rows/columns are visible but unreachable on a swept
+         * panel.  It follows the safe rect, NOT the content rect, so it stays
+         * reachable whichever content_area the user picked.
          */
-        bool in_exit_zone = (state.x < EXIT_ZONE_SIZE && state.y < EXIT_ZONE_SIZE);
+        bool in_exit_zone = (state.x < SCREEN_SAFE_LEFT + EXIT_ZONE_SIZE &&
+                             state.y < SCREEN_SAFE_TOP  + EXIT_ZONE_SIZE);
 
         if (in_exit_zone) {
             if (!input->exit_touching) {

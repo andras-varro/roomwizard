@@ -32,11 +32,16 @@
  *  Constants
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/* Play area within the safe zone */
-#define AREA_X      SCREEN_SAFE_LEFT
+/* Play area.
+ *
+ * The playfield is drawn and collided against, never pressed (the paddle
+ * follows touch X only), so it spans the whole VISIBLE screen horizontally and
+ * down to its bottom edge. AREA_Y stays anchored to SCREEN_SAFE_TOP because it
+ * has to clear the menu/exit button row, which does have to be pressable. */
+#define AREA_X      SCREEN_VISIBLE_LEFT
 #define AREA_Y      (SCREEN_SAFE_TOP + 65)      /* leave room for buttons (50px) + small gap */
-#define AREA_W      SCREEN_SAFE_WIDTH
-#define AREA_H      (SCREEN_SAFE_HEIGHT - 65)
+#define AREA_W      SCREEN_VISIBLE_WIDTH
+#define AREA_H      (SCREEN_VISIBLE_BOTTOM - AREA_Y)
 
 /* Paddle */
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)

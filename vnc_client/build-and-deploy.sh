@@ -63,6 +63,19 @@ echo ""
 ok "Build complete: $(ls -lh vnc_client_stripped | awk '{print $5}')"
 echo ""
 
+# ── 3b. ARM-safety gate ─────────────────────────────────────────────────────
+# Cortex-A8 has no hardware integer divide; an sdiv/udiv means SIGILL (exit 132)
+# with a blank screen and no output.  Checks the UNSTRIPPED binary on purpose:
+# without symbols objdump disassembles literal pools as code and reports
+# phantom hits (vnc_client_stripped yields a bogus "sdiv r4, sp, pc").
+if [[ -x ../native_apps/check-arm-safe.sh ]]; then
+    ../native_apps/check-arm-safe.sh vnc_client \
+        || err "ARM-safety check failed — refusing to deploy"
+else
+    warn "../native_apps/check-arm-safe.sh missing — skipping hardware-divide gate"
+fi
+echo ""
+
 # ── 4. deploy? ───────────────────────────────────────────────────────────────
 if [[ -z "$DEVICE_IP" ]]; then
     echo "No IP supplied — build only. To deploy:"

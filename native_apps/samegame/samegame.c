@@ -261,7 +261,13 @@ static bool pixel_to_grid(int px, int py, int *out_col, int *out_row) {
 /* ========================================================================== */
 
 static void init_layout(void) {
-    /* Calculate grid dimensions based on screen size */
+    /* Calculate grid dimensions based on screen size.
+     *
+     * The grid stays inside SCREEN_SAFE_* — unlike Tetris' or Brick Breaker's
+     * playfields, every block here is a touch target (board_to_cell() maps a
+     * press straight to a cell), so a block drawn in the visible-but-unreachable
+     * band would simply never respond. The HUD above it is SAFE-anchored too,
+     * because it shares that band with the menu/exit buttons. */
     int safe_left = SCREEN_SAFE_LEFT;
     int safe_top = SCREEN_SAFE_TOP;
     int safe_w = SCREEN_SAFE_WIDTH;

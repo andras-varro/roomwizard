@@ -90,6 +90,40 @@ bool rwDebugMode() {
 	return enabled;
 }
 
+// Content area: by default the game picture is letterboxed into the TOUCH-SAFE
+// rectangle (see roomwizard-graphics.cpp), because we cannot audit a game for
+// which of its pixels must be pressable — a verb bar or inventory on the bottom
+// row has to be reachable.  Opt out with ROOMWIZARD_CONTENT_AREA=visible for a
+// one-off run, or rw_content_area=visible in scummvm.ini to persist it.
+// The OVERLAY (launcher / GMM / virtual keyboard) is deliberately NOT affected:
+// it is nothing but buttons, so it always stays inside the safe rect.
+bool rwFullContentArea() {
+	static bool checked = false;
+	static bool full = false;
+	if (!checked) {
+		checked = true;
+		// Copy into a String — ConfMan.get() returns by value, so holding a
+		// c_str() into it would dangle.
+		Common::String mode;
+		const char *env = getenv("ROOMWIZARD_CONTENT_AREA");
+		if (env && env[0] != '\0')
+			mode = env;
+		else if (ConfMan.hasKey("rw_content_area"))
+			mode = ConfMan.get("rw_content_area");
+		else
+			mode = "safe";
+
+		full = mode.equalsIgnoreCase("visible");
+		if (full)
+			debug("RoomWizard: content area = visible (game picture may extend "
+			      "outside the touch-safe rectangle)");
+		else if (!mode.equalsIgnoreCase("safe"))
+			warning("RoomWizard: content area '%s' is not 'safe' or 'visible' — using 'safe'",
+			        mode.c_str());
+	}
+	return full;
+}
+
 // Cached pointer — avoids dynamic_cast<OSystem_RoomWizard*>(g_system) on every poll
 static OSystem_RoomWizard *s_rwSystem = nullptr;
 OSystem_RoomWizard *rwSystem() { return s_rwSystem; }

@@ -9,12 +9,19 @@ typedef struct VNCConfig {
     char encodings[256];
     int  compress_level;
     int  quality_level;
+    /* content_area: 0 = 'safe' (letterbox the remote desktop into the
+     * touch-safe rectangle so every pixel of it is reachable — the default),
+     * 1 = 'visible' (use the whole visible surface and accept that a band at
+     * each end cannot be tapped).  Affects the PICTURE only; this component's
+     * own touch UI is always inside the safe rect.  See vnc_renderer.h. */
+    int  content_full;
 } VNCConfig;
 
 // VNC Server Configuration (compile-time defaults, overridden by config file)
 #define VNC_DEFAULT_HOST "192.168.50.56"
 #define VNC_DEFAULT_PORT 5900
 #define VNC_DEFAULT_PASSWORD ""
+#define VNC_DEFAULT_CONTENT_FULL 0
 
 // Runtime config file (key=value format, lines starting with # are comments)
 #define VNC_CONFIG_FILE "/opt/vnc_client/vnc_client.conf"
@@ -101,11 +108,13 @@ typedef enum {
 #define APP_LAUNCHER_PATH     "/opt/roomwizard/app_launcher"
 
 // Reconnect UI button geometry.  The row is anchored to the bottom of the
-// logical surface at runtime (fb->height - RECONNECT_BTN_BOTTOM_GAP), which
-// keeps it visible and inside the digitizer's reach at any bezel setting.
+// TOUCH-SAFE rectangle at runtime (SCREEN_SAFE_BOTTOM - RECONNECT_BTN_H -
+// RECONNECT_BTN_BOTTOM_MARGIN), which keeps it pressable at any bezel setting
+// and on any panel: the digitizer saturates before the panel edge, and
+// SCREEN_SAFE_BOTTOM is where that band is measured to start.
 #define RECONNECT_BTN_W         160
 #define RECONNECT_BTN_H         44
-#define RECONNECT_BTN_BOTTOM_GAP 70
+#define RECONNECT_BTN_BOTTOM_MARGIN 10
 #define RECONNECT_BTN_CANCEL_X   60
 #define RECONNECT_BTN_SETTINGS_X 320
 #define RECONNECT_BTN_CONNECT_X  580

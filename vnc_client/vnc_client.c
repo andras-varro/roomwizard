@@ -52,7 +52,8 @@ static char *str_trim(char *s) {
 /*
  * Parse a config file with key=value lines.
  * Lines starting with # are comments; empty lines are ignored.
- * Supported keys: host, port, password, encodings, compress_level, quality_level
+ * Supported keys: host, port, password, encodings, compress_level,
+ *                 quality_level, content_area
  */
 static void load_config_file(VNCConfig *cfg, const char *path) {
     FILE *f = fopen(path, "r");
@@ -97,6 +98,20 @@ static void load_config_file(VNCConfig *cfg, const char *path) {
         } else if (strcmp(key, "quality_level") == 0) {
             cfg->quality_level = atoi(val);
             count++;
+        } else if (strcmp(key, "content_area") == 0) {
+            /* 'safe' (default) letterboxes the remote desktop into the
+             * touch-safe rectangle so all of it is reachable; 'visible' gives
+             * it the whole surface and accepts an unreachable band. */
+            if (strcmp(val, "visible") == 0) {
+                cfg->content_full = 1;
+                count++;
+            } else if (strcmp(val, "safe") == 0) {
+                cfg->content_full = 0;
+                count++;
+            } else {
+                LOG_WARN(&g_logger, "content_area '%s' is not 'safe' or "
+                         "'visible' — keeping 'safe'", val);
+            }
         } else {
             LOG_WARN(&g_logger, "Unknown config key '%s'", key);
         }
@@ -371,11 +386,9 @@ static void draw_centered_text(Framebuffer *fb, int y, const char *text,
     vnc_renderer_draw_text(fb, x, y, text, color, scale);
 }
 
-/* Draw a button rectangle with centered label.
- * Returns true if (tx,ty) falls inside the button. */
-static bool draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
-                         const char *label, uint16_t bg, uint16_t fg,
-                         int tx, int ty) {
+/* Draw a button rectangle with centered label. */
+static void draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
+                         const char *label, uint16_t bg, uint16_t fg) {
     vnc_renderer_fill_rect(fb, bx, by, bw, bh, bg);
     /* 1-pixel border */
     vnc_renderer_fill_rect(fb, bx, by, bw, 1, fg);
@@ -387,8 +400,13 @@ static bool draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
     int lx = bx + (bw - tw) / 2;
     int ly = by + (bh - 14) / 2;
     vnc_renderer_draw_text(fb, lx, ly, label, fg, 2);
-    /* Hit test */
-    return (tx >= bx && tx < bx + bw && ty >= by && ty < by + bh);
+}
+
+/* Hit test, deliberately separate from draw_button: the reconnect screen only
+ * repaints when the countdown changes, and a hit test performed as a side effect
+ * of drawing would then only run once a second. */
+static bool in_rect(int x, int y, int rx, int ry, int rw, int rh) {
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
 /*
@@ -410,38 +428,9 @@ static int reconnect_ui(int attempt, int wait_seconds) {
     gettimeofday(&start, NULL);
 
     int remaining = wait_seconds;
+    int drawn_remaining = -1;       /* != remaining, so the first pass draws */
 
     while (g_running && remaining >= 0) {
-        /* ── Draw screen ──────────────────────────────────────── */
-        vnc_renderer_clear_screen(&g_fb);
-
-        draw_centered_text(&g_fb, 100, "CONNECTION LOST", RGB565_RED, 3);
-        draw_centered_text(&g_fb, 160, "RECONNECTING...", RGB565_WHITE, 2);
-
-        {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "ATTEMPT: %d", attempt);
-            draw_centered_text(&g_fb, 220, buf, RGB565_YELLOW, 2);
-        }
-
-        {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "WAITING %ds", remaining);
-            draw_centered_text(&g_fb, 270, buf, RGB565(160, 160, 160), 2);
-        }
-
-        /* Progress bar (full width = wait_seconds, shrinks as time passes) */
-        {
-            int bar_x = 100;
-            int bar_w_max = (int)g_fb.width - 200;
-            int bar_w = (remaining * bar_w_max) / (wait_seconds > 0 ? wait_seconds : 1);
-            if (bar_w < 0) bar_w = 0;
-            vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w_max, 8,
-                                   RGB565(40, 40, 40));
-            vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w, 8,
-                                   RGB565_GREEN);
-        }
-
         /* Poll touch — trigger buttons on finger-up (release),
          * not finger-down, to avoid accidental activations.        */
         int tx = -1, ty = -1;
@@ -455,39 +444,77 @@ static int reconnect_ui(int attempt, int wait_seconds) {
             }
         }
 
-        /* Draw buttons and check hits.  The row is anchored to the bottom of
-         * the logical surface so it stays visible — and inside the digitizer's
-         * reach — whatever the bezel margins are. */
-        int btn_y = (int)g_fb.height - RECONNECT_BTN_BOTTOM_GAP;
+        /* The button row is anchored to the bottom of the TOUCH-SAFE rectangle,
+         * so it stays visible — and inside the digitizer's reach — whatever the
+         * bezel margins are and whatever the panel's dead band turns out to be. */
+        int btn_y = SCREEN_SAFE_BOTTOM - RECONNECT_BTN_H - RECONNECT_BTN_BOTTOM_MARGIN;
 
-        bool cancel_hit = draw_button(&g_fb,
-            RECONNECT_BTN_CANCEL_X, btn_y,
-            RECONNECT_BTN_W, RECONNECT_BTN_H,
-            "CANCEL", RGB565(40, 40, 40), RGB565_WHITE, tx, ty);
-
-        bool settings_hit = draw_button(&g_fb,
-            RECONNECT_BTN_SETTINGS_X, btn_y,
-            RECONNECT_BTN_W, RECONNECT_BTN_H,
-            "SETTINGS", RGB565(0, 0, 60), RGB565(100, 150, 255), tx, ty);
-
-        bool connect_hit = draw_button(&g_fb,
-            RECONNECT_BTN_CONNECT_X, btn_y,
-            RECONNECT_BTN_W, RECONNECT_BTN_H,
-            "CONNECT NOW", RGB565(0, 60, 0), RGB565_GREEN, tx, ty);
-
-        fb_swap(&g_fb);
-
-        if (cancel_hit) {
-            LOG_INFO(&g_logger, "Reconnect CANCEL hit at (%d,%d)", tx, ty);
-            return 0;
+        if (tx >= 0) {
+            if (in_rect(tx, ty, RECONNECT_BTN_CANCEL_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
+                LOG_INFO(&g_logger, "Reconnect CANCEL hit at (%d,%d)", tx, ty);
+                return 0;
+            }
+            if (in_rect(tx, ty, RECONNECT_BTN_SETTINGS_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
+                LOG_INFO(&g_logger, "Reconnect SETTINGS hit at (%d,%d)", tx, ty);
+                return 2;
+            }
+            if (in_rect(tx, ty, RECONNECT_BTN_CONNECT_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
+                LOG_INFO(&g_logger, "Reconnect CONNECT NOW hit at (%d,%d)", tx, ty);
+                return 1;
+            }
         }
-        if (settings_hit) {
-            LOG_INFO(&g_logger, "Reconnect SETTINGS hit at (%d,%d)", tx, ty);
-            return 2;
-        }
-        if (connect_hit) {
-            LOG_INFO(&g_logger, "Reconnect CONNECT NOW hit at (%d,%d)", tx, ty);
-            return 1;
+
+        /* ── Draw screen, only when it actually changed ───────────
+         * Nothing on this screen moves except the one-second countdown and its
+         * progress bar, but the loop used to clear and repaint the whole 800x455
+         * surface plus three buttons every 33 ms — ~15 % of the single core for a
+         * static image.  Touch still polls at 30 Hz above, so latency is
+         * unchanged. */
+        if (remaining != drawn_remaining) {
+            vnc_renderer_clear_screen(&g_fb);
+
+            draw_centered_text(&g_fb, 100, "CONNECTION LOST", RGB565_RED, 3);
+            draw_centered_text(&g_fb, 160, "RECONNECTING...", RGB565_WHITE, 2);
+
+            {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "ATTEMPT: %d", attempt);
+                draw_centered_text(&g_fb, 220, buf, RGB565_YELLOW, 2);
+            }
+
+            {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "WAITING %ds", remaining);
+                draw_centered_text(&g_fb, 270, buf, RGB565(160, 160, 160), 2);
+            }
+
+            /* Progress bar (full width = wait_seconds, shrinks as time passes) */
+            {
+                int bar_x = 100;
+                int bar_w_max = (int)g_fb.width - 200;
+                int bar_w = (remaining * bar_w_max) / (wait_seconds > 0 ? wait_seconds : 1);
+                if (bar_w < 0) bar_w = 0;
+                vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w_max, 8,
+                                       RGB565(40, 40, 40));
+                vnc_renderer_fill_rect(&g_fb, bar_x, 310, bar_w, 8,
+                                       RGB565_GREEN);
+            }
+
+            draw_button(&g_fb, RECONNECT_BTN_CANCEL_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H,
+                        "CANCEL", RGB565(40, 40, 40), RGB565_WHITE);
+            draw_button(&g_fb, RECONNECT_BTN_SETTINGS_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H,
+                        "SETTINGS", RGB565(0, 0, 60), RGB565(100, 150, 255));
+            draw_button(&g_fb, RECONNECT_BTN_CONNECT_X, btn_y,
+                        RECONNECT_BTN_W, RECONNECT_BTN_H,
+                        "CONNECT NOW", RGB565(0, 60, 0), RGB565_GREEN);
+
+            fb_swap(&g_fb);
+            drawn_remaining = remaining;
         }
 
         /* Update countdown */
@@ -496,7 +523,7 @@ static int reconnect_ui(int attempt, int wait_seconds) {
         int elapsed = (int)(now.tv_sec - start.tv_sec);
         remaining = wait_seconds - elapsed;
 
-        /* ~30 fps UI refresh */
+        /* ~30 Hz input poll (the redraw above is gated on the countdown) */
         usleep(33000);
     }
 
@@ -613,15 +640,17 @@ static int vnc_session(const char *host, int port, int attempt) {
                 break;
             }
 
-            /* Draw exit progress indicator while holding corner */
+            /* Draw exit progress indicator while holding corner.  Drawn at the
+             * safe-rect origin so it sits on the zone vnc_input.c hit-tests. */
             float prog = vnc_input_exit_progress(&g_input);
             if (prog > 0.01f) {
                 uint16_t *buf = (uint16_t *)g_fb.back_buffer;
                 const int stride = (int)g_fb.width;
                 int bar_width = (int)(EXIT_ZONE_SIZE * prog);
                 uint16_t color = (prog < 0.7f) ? RGB565_YELLOW : RGB565_RED;
-                for (int y = 0; y < 3; y++)
-                    for (int x = 0; x < bar_width && x < stride; x++)
+                for (int y = SCREEN_SAFE_TOP; y < SCREEN_SAFE_TOP + 3; y++)
+                    for (int x = SCREEN_SAFE_LEFT;
+                         x < SCREEN_SAFE_LEFT + bar_width && x < stride; x++)
                         buf[y * stride + x] = color;
                 g_renderer.needs_present = true;
             }
@@ -866,7 +895,9 @@ int main(int argc, char *argv[]) {
         printf("  --password <pw>   VNC password\n");
         printf("  --help, -h        Show this help\n\n");
         printf("Config file format: key = value (one per line, # for comments)\n");
-        printf("Keys: host, port, password, encodings, compress_level, quality_level\n\n");
+        printf("Keys: host, port, password, encodings, compress_level, quality_level,\n");
+        printf("      content_area (safe|visible — 'safe' keeps the whole remote\n");
+        printf("      desktop within finger reach; 'visible' uses the full screen)\n\n");
         printf("Exit: long-press top-left corner for 3 seconds\n");
         return 0;
     }
@@ -886,6 +917,7 @@ int main(int argc, char *argv[]) {
     strncpy(g_config.encodings, VNC_ENCODINGS, sizeof(g_config.encodings) - 1);
     g_config.compress_level = VNC_COMPRESS_LEVEL;
     g_config.quality_level  = VNC_QUALITY_LEVEL;
+    g_config.content_full   = VNC_DEFAULT_CONTENT_FULL;
 
     /* 2. Config file overrides */
     const char *config_path = VNC_CONFIG_FILE;
@@ -897,6 +929,11 @@ int main(int argc, char *argv[]) {
     }
     load_config_file(&g_config, config_path);
     g_config_path = config_path;
+
+    /* Publish the content-area choice to the renderer.  Only the remote
+     * desktop's letterbox honours it; this app's own touch UI always stays
+     * inside SCREEN_SAFE_*. */
+    vnc_content_set_full(g_config.content_full != 0);
 
     /* 3. Command-line overrides (legacy positional: host [port]) */
     for (int i = 1; i < argc; i++) {

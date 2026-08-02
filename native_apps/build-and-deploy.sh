@@ -52,52 +52,55 @@ step() { echo "[$1] $2..."; }
 
 step " 1/31" "framebuffer";  $CC $WARN -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
 step " 2/31" "touch_input";  $CC $WARN -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/31" "hardware";     $CC $WARN -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 4/31" "common";       $CC $WARN -O2 -static -c common/common.c          -o build/common.o
-step " 5/31" "highscore";    $CC $WARN -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 6/31" "keyboard";     $CC $WARN -O2 -static -c common/keyboard.c        -o build/keyboard.o
-step " 7/31" "ui_layout";    $CC $WARN -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 8/31" "audio";        $CC $WARN -O2 -static -c common/audio.c           -o build/audio.o
-step " 9/31" "ppm";          $CC $WARN -O2 -static -c common/ppm.c             -o build/ppm.o
-step "10/31" "logger";       $CC $WARN -O2 -static -c common/logger.c          -o build/logger.o
-step "11/31" "config";       $CC $WARN -O2 -static -c common/config.c          -o build/config.o
-step "12/31" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -o build/gamepad.o
+step " 3/31" "touch_calib";  $CC $WARN -O2 -static -c common/touch_calib.c    -o build/touch_calib.o
+step " 4/31" "hardware";     $CC $WARN -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 5/31" "common";       $CC $WARN -O2 -static -c common/common.c          -o build/common.o
+step " 6/31" "highscore";    $CC $WARN -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 7/31" "keyboard";     $CC $WARN -O2 -static -c common/keyboard.c        -o build/keyboard.o
+step " 8/31" "ui_layout";    $CC $WARN -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 9/31" "audio";        $CC $WARN -O2 -static -c common/audio.c           -o build/audio.o
+step "10/31" "ppm";          $CC $WARN -O2 -static -c common/ppm.c             -o build/ppm.o
+step "11/31" "logger";       $CC $WARN -O2 -static -c common/logger.c          -o build/logger.o
+step "12/31" "config";       $CC $WARN -O2 -static -c common/config.c          -o build/config.o
+step "13/31" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -o build/gamepad.o
 
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/config.o"
 
-step "13/31" "snake";        $CC $WARN -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
-step "14/31" "tetris";       $CC $WARN -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
-step "15/31" "pong";         $CC $WARN -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
+# touch_calib.o is NOT in COMMON_OBJ: only the two tools that measure the touch
+# mapping need it, and there is no reason to carry the target table into eight
+# games.  Both of them must link it, though — it is the one place the fit lives.
+CALIB_OBJ="build/touch_calib.o"
 
-step "16/31" "brick_breaker"
+step "14/31" "snake";        $CC $WARN -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
+step "15/31" "tetris";       $CC $WARN -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
+step "16/31" "pong";         $CC $WARN -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
+
+step "17/31" "brick_breaker"
 $CC $WARN -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
 
-step "17/31" "samegame"
+step "18/31" "samegame"
 $CC $WARN -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
 
-step "18/31" "frogger"
+step "19/31" "frogger"
 $CC $WARN -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
 
-step "19/31" "platformer"
+step "20/31" "platformer"
 $CC $WARN -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
 
-step "20/31" "game_selector"
+step "21/31" "game_selector"
 $CC $WARN -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
-step "21/31" "app_launcher"
+step "22/31" "app_launcher"
 $CC $WARN -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "22/31" "hardware_test"
+step "23/31" "hardware_test"
 $CC $WARN -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "23/31" "hardware_config"
+step "24/31" "hardware_config"
 $CC $WARN -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
-step "24/31" "hardware_diag"
+step "25/31" "hardware_diag"
 $CC $WARN -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
-
-step "25/31" "unified_calibrate"
-$CC $WARN -O2 -static -I. tests/unified_calibrate.c $COMMON_OBJ -o build/unified_calibrate -lm
 
 step "26/31" "audio_touch_test"
 $CC $WARN -O2 -static -I. \
@@ -108,14 +111,17 @@ $CC $WARN -O2 -static -I. \
 step "27/31" "backlight"
 $CC $WARN -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
+# Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
+# The standalone unified_calibrate was folded into it and deleted — it was a
+# second, independent copy of the same 9-tap fit, carrying the same defect.
 step "28/31" "device_tools"
-$CC $WARN -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ build/ui_layout.o -o build/device_tools -lm
+$CC $WARN -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Touch diagnostics. All three were previously absent from this script, which is
 # why the deployed touch_trace was stale (pre-bezel) and touch_inject got a
 # .hidden marker below without ever being built.
 step "29/31" "touch_raw"
-$CC $WARN -O2 -static -I. tests/touch_raw.c $COMMON_OBJ -o build/touch_raw -lm
+$CC $WARN -O2 -static -I. tests/touch_raw.c $COMMON_OBJ $CALIB_OBJ -o build/touch_raw -lm
 
 step "30/31" "touch_trace"
 $CC $WARN -O2 -static -I. tests/touch_trace.c $COMMON_OBJ -o build/touch_trace -lm
@@ -135,7 +141,7 @@ done
 
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/platformer build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/unified_calibrate build/audio_touch_test build/backlight build/device_tools build/touch_raw build/touch_trace build/touch_inject \
+ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/platformer build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/audio_touch_test build/backlight build/device_tools build/touch_raw build/touch_trace build/touch_inject \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete ($(( $(date +%s) - _START_SECONDS ))s)"
 echo ""
@@ -205,7 +211,6 @@ scp build/snake build/tetris build/pong \
     build/game_selector build/hardware_test \
     build/hardware_config \
     build/hardware_diag \
-    build/unified_calibrate \
     build/audio_touch_test \
     build/backlight \
     build/device_tools \
@@ -239,7 +244,7 @@ chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
          /opt/games/game_selector /opt/games/hardware_test \
          /opt/games/hardware_config \
          /opt/games/hardware_diag \
-         /opt/games/unified_calibrate /opt/games/backlight \
+         /opt/games/backlight \
          /opt/games/device_tools \
          /opt/games/touch_raw /opt/games/touch_trace /opt/games/touch_inject \
          /opt/roomwizard/app_launcher
@@ -247,11 +252,26 @@ chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
 
-# .hidden markers for dev tools (hidden from game_selector but still accessible via SSH)
-for name in touch_test touch_debug touch_inject touch_raw touch_trace touch_calibrate pressure_test backlight hardware_test hardware_config hardware_diag unified_calibrate; do
+# .hidden markers for dev tools (hidden from game_selector but still reachable
+# over SSH).  This list must contain only binaries this script actually deploys:
+# it used to name touch_test, touch_debug, touch_calibrate, pressure_test and
+# unified_calibrate, none of which were ever built, so the device accumulated
+# markers for binaries that did not exist and `ls /opt/games` lied about what
+# was installed.
+for name in touch_inject touch_raw touch_trace backlight \
+            hardware_test hardware_config hardware_diag; do
     touch  /opt/games/$name.hidden 2>/dev/null || true
     chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
+
+# Retired tools: sweep the orphan markers, and the one binary that was really
+# deployed before being folded into device_tools' Display tab.
+rm -f /opt/games/touch_test.hidden \
+      /opt/games/touch_debug.hidden \
+      /opt/games/touch_calibrate.hidden \
+      /opt/games/pressure_test.hidden \
+      /opt/games/unified_calibrate.hidden \
+      /opt/games/unified_calibrate
 REMOTE
 ok "Permissions and markers set"
 

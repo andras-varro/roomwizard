@@ -30,12 +30,11 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
 | `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
-| `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Calibration, USB |
+| `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
 | `audio_touch_test` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
 | `hardware_config` | Tool | Settings GUI — superseded by `device_tools` (hidden) |
 | `hardware_diag` | Tool | System diagnostics GUI — superseded by `device_tools` (hidden) |
-| `unified_calibrate` | Tool | Touch calibration — superseded by `device_tools` (hidden) |
 | `backlight` | Tool | CLI backlight control (hidden) |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
@@ -57,11 +56,37 @@ separate GUI utilities behind a tab bar:
 
 | Tab | Replaces | What it does |
 |---|---|---|
-| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, backlight brightness, portrait-mode toggle, save/reset. Test buttons deliberately bypass config to exercise raw hardware. |
+| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset, and the SYSTEM shutdown/reboot pair. Test buttons deliberately bypass config to exercise raw hardware. |
 | **Diagnostics** | `hardware_diag` | Read-only system info across 6 pages (System, Memory, Storage, Hardware, Config, Network). |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
-| **Calibration** | `unified_calibrate` | Tap 9 crosshairs; per-axis least-squares fit extrapolated to the screen edges; writes the raw range to `/etc/touch_calibration.conf`. |
+| **Display** | `unified_calibrate` | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
 | **USB** | `usb_test` | Keyboard, mouse and gamepad visualisation for attached USB devices. |
+
+#### The Display tab and the calibration wizard
+
+Backlight and portrait mode live here rather than under Settings because they are screen
+properties, and because calibration refuses to run in portrait — the toggle that disables it
+should be visible from the same screen.
+
+`CALIBRATE TOUCH` runs a five-step wizard that writes **both** lines of
+`/etc/touch_calibration.conf`. Every step runs with the bezel zeroed on the full 800×480 panel,
+so a drawn pixel is a panel pixel:
+
+| Step | What you do |
+|---|---|
+| `TAP` | Tap 11 targets, 3 times each. They sit well inside the edges on purpose. |
+| `CHECK` | Read the fitted range, the reach, a **per-axis** verdict and the edge-probe residuals. `ACCEPT` / `REDO` / `RESET`. |
+| `EDGES` | Raise each margin until its yellow line clears the plastic, against a numbered 2 px ladder. |
+| `REPORT` | Visible rectangle vs touchable rectangle, with the per-edge gap spelled out. |
+| `CONFIRM` | The new mapping goes live for 20 s. Press `KEEP THESE` or it reverts on its own. |
+
+`SCREEN EDGES` jumps straight to `EDGES` for a margins-only tweak. `RESET` puts both lines back to
+the hardware `EVIOCGABS` range and the default margins — the escape hatch if a calibration ever
+leaves the screen hard to press.
+
+**Nothing is written until `CONFIRM`,** the previous file is copied to `.bakN` first, and every
+button before that step is hit-tested through the *old* calibration, so a bad fit can never leave
+you unable to press the button that rejects it.
 
 ---
 
@@ -270,7 +295,7 @@ Two non-executable marker files in `/opt/games/` control how `game_selector` han
 ```
 
 Current state on device:
-- **Hidden:** `watchdog_feeder`, `touch_test`, `touch_debug`, `touch_inject`, `touch_calibrate`, `unified_calibrate`, `pressure_test`
+- **Hidden:** `touch_inject`, `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`, `hardware_diag`
 - **No-args:** `scummvm`
 - **Visible:** `snake`, `tetris`, `pong`, `hardware_test`, `usb_test`, `scummvm`
 

@@ -295,11 +295,56 @@ void RoomWizardEventSource::loadGamepadAxisCalibration() {
 // Gesture detection (unchanged from original)
 // =========================================================================
 
+// The touch-safe rectangle, from the graphics manager so there is one source of
+// truth for it. Falls back to the whole logical screen before the graphics
+// manager exists (and on a panel whose reach has never been swept, where the
+// safe rect IS the whole screen anyway).
+void RoomWizardEventSource::safeRect(int &x, int &y, int &w, int &h) const {
+	OSystem_RoomWizard *system = rwSystem();
+	if (system && system->getGraphicsManager()) {
+		((RoomWizardGraphicsManager *)system->getGraphicsManager())
+			->getSafeRect(x, y, w, h);
+		return;
+	}
+	x = 0;
+	y = 0;
+	w = _screenW;
+	h = _screenH;
+}
+
+// Where the virtual cursor (USB mouse, gamepad stick) is allowed to go: exactly
+// the rectangle the current content occupies. In overlay mode that is the
+// touch-safe rectangle; in game mode it is the picture, wherever getScalingInfo()
+// put it — which matters for the rw_content_area=visible opt-out, where the
+// picture deliberately extends past the safe rect and a mouse can still reach it
+// even though a finger cannot.
+void RoomWizardEventSource::cursorBounds(int &x, int &y, int &w, int &h) const {
+	OSystem_RoomWizard *system = rwSystem();
+	RoomWizardGraphicsManager *gfx = (system && system->getGraphicsManager())
+		? (RoomWizardGraphicsManager *)system->getGraphicsManager() : nullptr;
+	if (gfx && !gfx->isOverlayVisible()) {
+		int scaledW, scaledH, offX, offY;
+		gfx->getScalingInfo(scaledW, scaledH, offX, offY);
+		if (scaledW > 0 && scaledH > 0) {
+			x = offX;
+			y = offY;
+			w = scaledW;
+			h = scaledH;
+			return;
+		}
+	}
+	safeRect(x, y, w, h);
+}
+
 RoomWizardEventSource::Corner RoomWizardEventSource::cornerFor(int x, int y) const {
 	const int ZONE = 80;
-	if (y > _screenH - ZONE) {
-		if (x < ZONE)            return CORNER_BL;
-		if (x > _screenW - ZONE) return CORNER_BR;
+	// Measured from the touch-safe rectangle, not the surface: a gesture zone is
+	// a touch target, and the outermost rows/columns cannot be pressed at all.
+	int sx, sy, sw, sh;
+	safeRect(sx, sy, sw, sh);
+	if (y > sy + sh - ZONE) {
+		if (x < sx + ZONE)      return CORNER_BL;
+		if (x > sx + sw - ZONE) return CORNER_BR;
 	}
 	return CORNER_COUNT;
 }
@@ -391,20 +436,26 @@ void RoomWizardEventSource::setGameScreenSize(int width, int height, int offsetX
 
 void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &gameX, int &gameY) {
 	OSystem_RoomWizard *system = rwSystem();
-	if (system && system->getGraphicsManager() &&
-	    ((RoomWizardGraphicsManager *)system->getGraphicsManager())->isOverlayVisible()) {
-		gameX = touchX;
-		gameY = touchY;
+	RoomWizardGraphicsManager *gfx = (system && system->getGraphicsManager())
+		? (RoomWizardGraphicsManager *)system->getGraphicsManager() : nullptr;
+	if (gfx && gfx->isOverlayVisible()) {
+		// Overlay space is the touch-safe rectangle (the GUI is all buttons, so
+		// it is confined to what a finger can reach), so subtract its origin and
+		// clamp to the overlay's own size rather than the screen's.
+		int sx, sy, sw, sh;
+		safeRect(sx, sy, sw, sh);
+		gameX = touchX - sx;
+		gameY = touchY - sy;
 		if (gameX < 0) gameX = 0;
 		if (gameY < 0) gameY = 0;
-		if (gameX >= _screenW) gameX = _screenW - 1;
-		if (gameY >= _screenH) gameY = _screenH - 1;
+		if (gameX >= sw) gameX = sw - 1;
+		if (gameY >= sh) gameY = sh - 1;
 	} else {
 		int scaledW = _gameWidth, scaledH = _gameHeight;
 		int fbOffsetX = 0, fbOffsetY = 0;
-		if (system && system->getGraphicsManager()) {
-			((RoomWizardGraphicsManager *)system->getGraphicsManager())
-				->getScalingInfo(scaledW, scaledH, fbOffsetX, fbOffsetY);
+		if (gfx) {
+			// The offsets already include the content rectangle's origin.
+			gfx->getScalingInfo(scaledW, scaledH, fbOffsetX, fbOffsetY);
 		}
 		int relX = touchX - fbOffsetX;
 		int relY = touchY - fbOffsetY;
@@ -737,10 +788,15 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 			multiplier = _mouseSensitivity * _mouseAcceleration;
 		int mx = _mouseX + (int)(accumDx * multiplier);
 		int my = _mouseY + (int)(accumDy * multiplier);
-		if (mx < 0) mx = 0;
-		if (mx >= _screenW) mx = _screenW - 1;
-		if (my < 0) my = 0;
-		if (my >= _screenH) my = _screenH - 1;
+		// Clamp to wherever the current content is — the touch-safe rectangle in
+		// the GUI, the picture in game mode.  A cursor parked outside the content
+		// is a trap, not extra range.
+		int sx, sy, sw, sh;
+		cursorBounds(sx, sy, sw, sh);
+		if (mx < sx) mx = sx;
+		if (mx >= sx + sw) mx = sx + sw - 1;
+		if (my < sy) my = sy;
+		if (my >= sy + sh) my = sy + sh - 1;
 		_mouseX = mx;
 		_mouseY = my;
 		int gmx, gmy;
@@ -827,10 +883,15 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 		_mouseX += (int)(accumDx * multiplier);
 		_mouseY += (int)(accumDy * multiplier);
 
-		if (_mouseX < 0) _mouseX = 0;
-		if (_mouseY < 0) _mouseY = 0;
-		if (_mouseX >= _screenW) _mouseX = _screenW - 1;
-		if (_mouseY >= _screenH) _mouseY = _screenH - 1;
+		// Clamp to wherever the current content is (see cursorBounds()).
+		{
+			int sx, sy, sw, sh;
+			cursorBounds(sx, sy, sw, sh);
+			if (_mouseX < sx) _mouseX = sx;
+			if (_mouseY < sy) _mouseY = sy;
+			if (_mouseX >= sx + sw) _mouseX = sx + sw - 1;
+			if (_mouseY >= sy + sh) _mouseY = sy + sh - 1;
+		}
 
 		int gameX, gameY;
 		transformCoordinates(_mouseX, _mouseY, gameX, gameY);
@@ -1029,10 +1090,15 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		_mouseX += moveX;
 		_mouseY += moveY;
 
-		if (_mouseX < 0) _mouseX = 0;
-		if (_mouseY < 0) _mouseY = 0;
-		if (_mouseX >= _screenW) _mouseX = _screenW - 1;
-		if (_mouseY >= _screenH) _mouseY = _screenH - 1;
+		// Clamp to wherever the current content is (see cursorBounds()).
+		{
+			int sx, sy, sw, sh;
+			cursorBounds(sx, sy, sw, sh);
+			if (_mouseX < sx) _mouseX = sx;
+			if (_mouseY < sy) _mouseY = sy;
+			if (_mouseX >= sx + sw) _mouseX = sx + sw - 1;
+			if (_mouseY >= sy + sh) _mouseY = sy + sh - 1;
+		}
 
 		int gx, gy;
 		transformCoordinates(_mouseX, _mouseY, gx, gy);

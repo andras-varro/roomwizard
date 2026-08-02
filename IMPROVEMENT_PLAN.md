@@ -51,7 +51,7 @@ overruns the allocation by a factor of two.**
 
 Closed so far: `fb_clear`, `fb_swap` and the `fb_set_bezel` reallocation are now byte-sized and
 correct at any bpp, and every app that uses the common primitives (`app_launcher`,
-`game_selector`, `device_tools`, `hardware_config`, `unified_calibrate`) calls
+`game_selector`, `device_tools`, `hardware_config`, `touch_raw`) calls
 `fb_set_bpp(dev, 32)` before `fb_init()`, so none of them can inherit 16bpp from a crashed
 ScummVM or VNC session.
 
@@ -76,76 +76,218 @@ set `.held = true`, and **nothing anywhere ever clears it** — `gamepad_poll` d
 **Fix:** keep touch/stick-derived state in a separate per-frame bitmask and OR it with the latched
 key/hat state each poll.
 
-### B3. A bad calibration can wedge the device with no recovery
+### ~~B3. A bad calibration can wedge the device with no recovery~~ — **DONE 2026-07-31**
 
-Three compounding problems:
+All three parts fixed:
 
-1. `touch_input.c:244` only rejects raw ranges narrower than 16 counts, so a skewed fit
-   (e.g. `0..60000`) is accepted, saved to `/etc/touch_calibration.conf`, and auto-loaded by
-   every app.
-2. Phase-2 ACCEPT/REDO buttons are hit-tested **through the new calibration**
-   (`device_tools.c:1827`) — if the fit is bad you can press neither.
-3. `touch_input.c:155` `touch_wait_for_press_raw` has `while(1)` with no `else` on the read: any
-   read error spins at 100% CPU forever, `return -1` is unreachable dead code, and glibc
-   `signal()` implies `SA_RESTART` so SIGTERM won't break it either.
+1. **Sanity gate.** `touch_calib_range_sane()` (`common/touch_calib.c`) requires
+   `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`. Accepts the measured-good `-279..4382`
+   (overlap 4095 of max span 4661), rejects `0..60000` and any range disjoint from the hardware's.
+   Deliberately **not** "reject outside 0..4095" — a correct fit on this panel legitimately
+   extrapolates outside it on Y.
+2. **Hit-testing.** The wizard keeps the *entry* calibration installed through TAP, CHECK, EDGES
+   and REPORT, so its own buttons always work. The new mapping goes live only at CONFIRM, behind a
+   20 s auto-revert countdown, and nothing is written until you press KEEP. Plus a `RESET` on the
+   Display tab and inside CHECK, so there is always a way back without SSH.
+3. **`touch_wait_for_press_raw()`** now uses `poll()` with a 200 ms slice, returns -1 on a real
+   read error instead of spinning, and can be interrupted.
 
-**Fix:** sanity-check the fitted range against the hardware `EVIOCGABS` range (reject if overlap
-< 50%); add a **RESET CALIBRATION** button; add a phase-2 timeout that reverts; handle the read
-error and use `poll()` so the loop can observe `running`.
+### ~~B3a. The 9-tap calibration fits through its own edge-compressed samples~~ — **DONE 2026-07-31**
 
-> ⚠️ Do **not** implement the `EVIOCGABS` overlap check as "reject if outside 0..4095". A correct
-> fit on this panel legitimately extrapolates outside it on **Y** — the measured-good calibration
-> is `17 4084 -279 4382`, because the sensor really is ~30 px short top and bottom
-> (`SYSTEM_ANALYSIS.md#33-touch`). The overlap test is still worth having; the threshold has to
-> accommodate a Y range roughly 14 % wider than the hardware range.
+Fixed by fitting from interior targets only (≥100 px from each end on X, ≥80 px on Y) in the new
+wizard. The duplicate implementation in `tests/unified_calibrate.c` is gone — it was folded into
+`device_tools` and deleted, so there is now one fit, in `common/touch_calib.c`.
 
-### B3a. `unified_calibrate` fits through its own edge-compressed samples
+Regression: feeding the 11 target medians from
+[`touch_raw-2026-07-31-rw09.tsv`](touch_raw-2026-07-31-rw09.tsv) through `touch_calib_fit()`
+reproduces `X 17..4084` / `Y -279..4382` exactly, with edge-probe residuals `-7/+6` px on X and
+`+8/-9` px on Y. Note that X endpoints *outside* `0..4095` are **not** by themselves a symptom of edge
+samples leaking into the fit — RW09's accepted 2026-08-01 18:50 calibration is `X -33..4122`, and the
+sanity gate in B3 exists precisely because overshoot is legitimate on either axis. What indicts a fit
+is an interior mask that admits near-edge targets, or a slope that disagrees with the interior line.
 
-Its 9 crosshairs are inset only **40 px** (`tests/unified_calibrate.c`), and raw is already
-compressing that close to the border. The corner and edge-mid taps therefore have a
-shallower-than-true slope, `touch_fit_axis_range()` drags the whole line to match, and the
-extrapolation lands outside 0..4095 — inventing a horizontal inset that does not exist and that
-varies run to run. This is the confirmed cause of the bogus "~10 px left/right" reach figure that
-stood in the docs until 2026-07-31.
+### ~~B3b. `touch_raw` prints one global verdict where the panel needs two~~ — **DONE 2026-07-31, reworded 2026-08-01 (twice)**
 
-**Fix:** fit from interior targets only. `touch_raw`'s thresholds are a working reference —
-≥100 px from each end on X, ≥80 px on Y — and its capture pass demonstrates the corrected result
-(`X 17..4084`, residuals ≤2 px, edge probes at 20/780 predicted within 7 px). Keep the outer
-crosshairs on screen if you want them as a *check*, but exclude them from the fit.
+`touch_calib_axis_verdict()` produces one line per axis, and both `touch_raw` and the wizard's CHECK
+screen print both. It now takes the hardware range and reports the **dead band in panel pixels**,
+because that is what the measurement actually shows. On the reference data it reads
+`X: reaches both edges, no dead band` and
+`Y: sensor saturates 28 px inside the low edge, 30 inside the high - still drawable, not pressable`.
 
-Verify against the raw capture in the repo: [`touch_raw-2026-07-31-rw09.tsv`](touch_raw-2026-07-31-rw09.tsv).
+Two earlier wordings were wrong and are recorded so the mistake is not repeated: the original
+H1/H4 text asserted a hardware inset it had not measured, and the 2026-08-01 morning rewrite replaced
+it with `- edges still reach`, which asserted the opposite and was equally unmeasured. A verdict about
+reach must come from `INSET`-style inward stepping, never from a bezel press or an edge sweep.
 
-### B3b. `touch_raw` prints one global verdict where the panel needs two
+### ~~B3c. Edge bands that could not be touched~~ — **DONE 2026-08-01 (evening)**
 
-`build_summary()` reduces both axes to a single worst-case H1/H4 line. On this panel X passes and
-Y fails, so the verdict reads `H4 … misses a limit by 287 raw counts` and buries the fact that X is
-clean. The per-axis table it prints alongside is correct — only the one-line conclusion is wrong.
-Make the verdict per-axis. Small, but it is the line a future reader will quote.
+This item has been wrong in both directions; the settled answer is that **both effects were real**.
 
-### B3c. Y edge band: ~15 logical px top and bottom cannot be touched
+1. The dead bands *were* partly manufactured by the fit. A single line fitted to the interior
+   extrapolates outside the emittable range (`Y -279..4382` against `0..4095`), and
+   `scale_coordinates()` mapped that fitted span onto the whole panel, so the sensor's real extremes
+   landed inside it. On X the overshoot was run-to-run tap noise, which is why the right edge worked
+   on some runs and not others; the `6 4181` config saved on 2026-08-01 lost 17 logical columns.
+2. The sensor *also* saturates before the physical edge. Measured with `touch_raw`'s `INSET` mode on
+   2026-08-01 (capture: `touch_raw-2026-08-01-rw09.tsv`): raw 4095 is first emitted around panel 450
+   and raw 0 around panel 30 — a flat band of ~30 px at each end of Y, and ~0–12 px on X. `SWEEP`
+   separately confirms every edge *does* drive raw to its limit (16/16 buckets, all four edges), which
+   is why a bezel press could never settle this: it reads identically under either hypothesis.
 
-Settled, not speculative: the digitizer stops ~30 panel px short at top and bottom, so after the
-15 px bezel the first and last ~15 rows of the 450-row logical surface are unreachable. X is
-unaffected. Two candidate cures, and they trade against each other:
+**The morning fix over-corrected.** It bent the outer segments to land raw 0/4095 on panel 0 and
+panel dim-1 — i.e. it clamped the endpoints — which asserted raw 4095 is emitted at panel 479 when it
+is emitted at panel ~450. That tilted the upper outer segment and made the reported position run
+**ahead of the finger by up to +19 px across the bottom quarter**: visibly worse than the bug it
+replaced.
 
-| Option | Effect | Cost |
+**The fix that shipped.** The clamp is gone from both `touch_calib_curve_from_fit()` and
+`touch_input.c`'s legacy migration (`clamp_to_hw()`, deleted). Endpoints are stored exactly where the
+fitted line puts them, so the stored three-segment curve *is* that line (the host regression asserts
+zero deviation) and interior accuracy is ±2 px. The dead band is then **exposed rather than hidden**:
+
+- `framebuffer.h` carries two rectangles — `SCREEN_VISIBLE_*` (full logical screen) and
+  `SCREEN_SAFE_*` (visible ∩ touchable). The band stays fully drawable, which the user explicitly
+  wanted: a status bar or score row there is good use of screen.
+- The inset is **measured at runtime**, never hardcoded: `publish_safe_area()` pushes the four raw
+  edge extremes through the production `scale_coordinates()`. `0` until an edge sweep is recorded;
+  capped at `FB_TOUCH_INSET_MAX` (48 px) with a warning.
+- Config line 3 (`reach x_lo x_hi y_lo y_hi`, keyword-tagged and optional) persists the swept reach;
+  the wizard's new `REACH` step measures it. Tagged and trailing so old parsers ignore it.
+- Per-app audit done: draw-only call sites moved to `SCREEN_VISIBLE_*` (Tetris board, Brick Breaker
+  play area, `hardware_diag` in full, titles/hints/score tables in `common.c`, `app_launcher`,
+  `game_selector`, `pong`). SameGame's grid stayed on `SCREEN_SAFE_*` — every block is a tap target.
+
+Consequently **not needed**: `SCREEN_TOUCH_*` macros, bigger bezel margins, and a band-limited
+stretch. A dead band is a fact about the panel, so the wizard's `REPORT` step and the `TOUCHABLE:` row
+report it as a number and go amber only on *magnitude* (24 px), not on "non-zero".
+
+Still open, and the only part of this item left: **measure a second unit** with `/opt/games/touch_raw`
+(SWEEP then INSET on all four edges). Everything above is RW09 only. What a second unit settles is
+whether the ~30 px Y band generalises — if it varies per panel, the runtime measurement already
+handles it and no code changes. Save the `/tmp/touch_raw.tsv` capture into the repo before the device
+reboots: the **wizard writes no tsv**, only the diagnostic does, which is why RW09's live 18:50
+calibration has no capture of its own and the 16:53 one remains the reference (see
+`SYSTEM_ANALYSIS.md#33-touch` → *Provenance*).
+
+The audit also turned up **B3e** (touch targets at hardcoded offsets), which is tracked separately.
+
+**Follow-on, done 2026-08-01 (late):** the per-app audit above only covers code we wrote. ScummVM and
+`vnc_client` display **third-party** content that cannot be audited for what has to be pressable — a
+remote taskbar, a game's verb bar, the ScummVM theme's button row — so both were still placing guest
+pixels in the dead band (reported on the device as "~10 px unreachable top and bottom" right after a
+precision calibration). Both now confine the guest content rectangle *itself* to `SCREEN_SAFE_*`, and
+everything hit-tested in them (VNC settings/reconnect/exit gesture, ScummVM's overlay and gesture
+corners) is on the safe rect unconditionally. Each has an opt-out that moves only the picture, whose
+discoverability is **B3f/B3g** and whose config-file location is **B3h**. Rules in
+`vnc_client/CLAUDE.md` and `scummvm-roomwizard/CLAUDE.md`.
+
+### ~~B3d. Fold `unified_calibrate` and `SCREEN EDGES` into one `touch_raw`-based flow~~ — **DONE 2026-07-31**
+
+Done as the Display tab's `run_calib_wizard()`: TAP → CHECK → EDGES → REACH → REPORT → CONFIRM, all with
+the bezel zeroed on the full panel, writing both config lines. `tests/unified_calibrate.c` is
+deleted and the fit moved to `common/touch_calib.c`, shared with `touch_raw` — so the diagnostic
+now validates the same code the wizard calibrates with, and the two lines can no longer be measured
+against different assumptions.
+
+The bezel is measured by *looking*, not by touching: numbered 2 px ladders at each panel edge, and
+the operator raises each margin until its line clears the plastic. The old adjuster drew its
+reference frame on the *logical* edge, which is defined by the margins it was trying to measure.
+
+### B3e. Buttons positioned with hardcoded offsets lose rows to the touch inset
+
+Found during the B3c per-app safe-area audit (2026-08-01) and **not** fixed there, because it is a
+pre-existing violation of the "never hardcode 800/480/400" rule rather than part of that change.
+
+A handful of touch targets are placed at literal pixel offsets instead of `SCREEN_SAFE_*` /
+`LAYOUT_*`. That was harmless while `SCREEN_SAFE_TOP` was `0`; now that the touch inset is real, the
+outermost rows of those targets fall in the band no finger can reach:
+
+| Site | Code | Effect at a 17 px inset |
 |---|---|---|
-| **(a) Bezel margins 30/30 instead of 15/15** | logical surface becomes 800×420 and *every* logical pixel is both visible and touchable — the "logical screen is the safe area" invariant becomes true again | loses 30 rows of drawing area; needs a re-layout pass over apps that assume 450 |
-| **(b) Band-limited edge stretch** in `scale_coordinates()`, panel space, between stage 1 and 2 | keeps all 450 rows | warps touch by up to 30 px inside the outer band; touch and drawing no longer agree there |
+| `native_apps/tetris/tetris.c:203,205` | `button_init(&menu_button, 10, 10, …)` and the matching exit button | rows 10–16 of a 40 px button are dead; 17–50 still respond |
+| `native_apps/hardware_diag/hardware_diag.c` (`draw_page_header`) | `fb_fill_rect(fb, 720, 2, 76, 36, …)` EXIT zone | rows 2–16 dead, 17–38 respond |
 
-(a) is honest and cheap and needs no touch-mapping change; (b) preserves screen area. Practical
-stake is small either way — for a 320×200 game letterboxed to 720×450, 15 px is ~7 rows of 200 at
-the very bottom of a SCUMM verb bar. Do not rescale the whole axis: that shifts screen centre and
-contradicts the accuracy-first rule in `native_apps/CLAUDE.md`.
+Both still work, but by luck — a larger inset on another panel would kill them outright, and the
+inset is measured per unit (B3c). Fix: use `LAYOUT_MENU_BTN_X/Y` and `LAYOUT_EXIT_BTN_X/Y` in
+`tetris.c`, and derive the `hardware_diag` EXIT zone from `SCREEN_SAFE_RIGHT` / `SCREEN_SAFE_TOP`.
 
-### B3d. Fold `unified_calibrate` and `SCREEN EDGES` into one `touch_raw`-based flow — *proposal*
+Worth a wider sweep at the same time: `grep -n 'button_init\|fb_fill_rect'` for any touch target
+whose coordinates are literals rather than macros. The audit only covered call sites that already
+mentioned `SCREEN_SAFE_*`, so a hardcoded one is invisible to that method by construction.
 
-`touch_raw` already measures line 1 correctly and already renders the full panel with 10 px edge
-ladders, which is most of what `SCREEN EDGES` needs to measure line 2. One tool that produces the
-whole of `/etc/touch_calibration.conf` — calibration, bezel, and a reach report — would remove the
-duplicate fit in `unified_calibrate.c` and make it impossible for the two lines to be measured
-against different assumptions. Scope and sequencing not yet decided; B3a is the prerequisite either
-way.
+### B3f. The `content_area` setting is config-file-only, with no UI
+
+Added with the guest-content change (2026-08-01, the follow-on to B3c): `vnc_client` letterboxes the
+remote desktop into `SCREEN_SAFE_*` so all of it is reachable, and `content_area = safe | visible` in
+`/opt/vnc_client/vnc_client.conf` trades that back for ~11 % more pixels on a 1080p desktop.
+
+**It is not on the settings screen.** On a wall-mounted panel with no keyboard, that means the only
+way to change it is SSH — every other setting in that file is editable on the device.
+
+Deliberate, for a concrete reason: `vnc_settings.c` has `ROW_COUNT 6`, the row block already spans
+y 44–352 at a 52 px pitch, and the status line sits at 367 — a seventh row lands on top of it. Adding
+the control needs a layout change, not just a row:
+
+- a second page (the screen has no paging today), or
+- shrink `ROW_H`/`ROW_GAP` to fit 7 rows in the same band, or
+- put it on a settings *tab bar* like `device_tools` has.
+
+The value does round-trip safely in the meantime — `save_config_file()` writes the key even though
+nothing edits it, so pressing SAVE cannot silently reset a hand-edited choice. That was the trap
+worth closing first.
+
+Same gap on the ScummVM side, for the same reason (`rw_content_area` — see B3g), so whichever fix
+lands should cover both.
+
+### B3g. ScummVM's `rw_content_area` is invisible until you know it exists
+
+`rwFullContentArea()` (`roomwizard.cpp`) reads the key with `ConfMan.hasKey("rw_content_area")` and
+never writes it. ConfMan only persists keys that were *set*, so the line **does not appear** in any
+`scummvm.ini` — the option is undiscoverable from the device, and the first thing a user does is look
+in the file, not find it, and conclude it does not work. (Reported 2026-08-01, exactly that way.)
+
+`ConfMan.registerDefault()` does not help: registered defaults are not written to the file either.
+
+Fix options, cheapest first:
+
+- `ConfMan.setAndFlush("rw_content_area", "safe")` on first run when `!hasKey()`, so the key is
+  present and self-documenting from then on. One line, and it makes the file the discovery surface.
+- Expose it in the GUI. ScummVM's Options dialog is upstream code, so this means a backend-specific
+  tab — much more work, and it shares the "no UI" problem with B3f.
+
+Until then the reliable route is the environment variable `ROOMWIZARD_CONTENT_AREA=visible`, which
+takes precedence over the config and needs no file at all. It is documented in
+`scummvm-roomwizard/README.md`; the config key should not be documented as the *primary* route while
+this is open.
+
+### B3h. ScummVM's config file location depends on the working directory
+
+`OSystem_RoomWizard` does not override `getDefaultConfigFileName()`, so it inherits the base
+`OSystem` implementation — `common/system.cpp:245` returns the bare relative name `"scummvm.ini"`.
+`OSystem_POSIX` overrides that with an absolute `$HOME/.config/scummvm/…` path, but our backend
+derives from `ModularGraphicsBackend`, not from it. So the config file is resolved **against the
+process's current directory**, and RW09 now has three of them:
+
+| File | Written when | Contents |
+|---|---|---|
+| `/scummvm.ini` | launched by the boot init script — `/etc/init.d/roomwizard-app` does not `cd`, and `app_launcher` `execl()`s without `chdir()`, so the cwd is `/` | the real one; has the game list |
+| `/home/root/scummvm.ini` | someone ran `/opt/games/scummvm` from an SSH shell, where the cwd is `$HOME` | a stale partial copy |
+| `/opt/games/scummvm.ini` | ran with `cd /opt/games` first | was created empty on 2026-08-01 and deleted again |
+
+**Nothing in the repo copies or deploys an ini** — `scummvm-roomwizard/build-and-deploy.sh` ships no
+`.ini` at all. Each of those files is one ScummVM wrote for itself wherever it happened to be
+started. That answers "why do we copy our ini to the home folder": we do not, and neither does the
+launcher; ScummVM does, and the location is an accident of the invocation.
+
+Consequences beyond the confusion: settings do not follow the user between an SSH-launched run and a
+boot-launched one, save-game paths and the game list can differ per launch method, and editing "the"
+ini is a coin flip (which is how B3g surfaced).
+
+Fix: override `getDefaultConfigFileName()` in `OSystem_RoomWizard` to return one absolute path —
+`/opt/games/scummvm.ini` is the natural home, next to the binary, the icons and the game data, and it
+survives the `$HOME`-less environment the init script runs in. Then migrate the existing
+`/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
+it makes B3g's `setAndFlush` land somewhere predictable.
 
 ### B4. Respawn loop always logs exit code 127
 
@@ -285,15 +427,12 @@ disk. The size gate (`:281`) has a 16 GB **minimum** and no maximum. On this Win
 **Fix:** require `/sys/block/$(basename $dev)/removable == 1`; reject the disk backing `/`
 (`findmnt -no SOURCE /` → `lsblk -no PKNAME`); add `MAX_TARGET_SIZE_GB`.
 
-### B16. Delete `native_apps/Makefile`
+### ~~B16. Delete `native_apps/Makefile`~~ — **DONE 2026-07-31**
 
-It **cannot work**: `CC = gcc` with `-march=armv7-a` fails on x86; three rules point at moved
-files (`game_selector.c`, `watchdog_feeder.c`, `game-mode-init.sh` — the last doesn't exist);
-and `install:` (`:169`) copies x86 binaries into the **host's** `/opt/games` and drops an init
-script into the host's `/etc/init.d`.
-
-`CLAUDE.md` and `native_apps/CLAUDE.md` both say it is not the deployment path.
-`build-and-deploy.sh` is a complete replacement.
+Deleted. It could not work — `CC = gcc` with `-march=armv7-a` fails on x86, several rules pointed
+at moved or deleted files, and `install:` copied x86 binaries into the **host's** `/opt/games` and
+dropped an init script into the host's `/etc/init.d`. `build-and-deploy.sh` is the only build path
+and always was.
 
 ### B17. `commission-roomwizard.sh` sed can wipe the network config
 
@@ -533,12 +672,14 @@ mechanical and costs one line each in `build-and-deploy.sh`.
 
 It would also make C3 deletable.
 
-### C3. De-duplicate the calibration math
+### ~~C3. De-duplicate the calibration math~~ — **DONE 2026-07-31**
 
-`device_tools.c:1657` is literally commented *"Calibration Tab (from unified_calibrate.c)"*, and
-`:1719-1800` duplicates `unified_calibrate.c:42-120`. Both binaries still ship, and
-`device_tools` was documented as *replacing* `unified_calibrate`, but the older binary was never removed.
-Two copies of safety-critical math that must stay in sync.
+There were three copies of the same safety-critical fit: `device_tools`' Calibration tab, the
+standalone `unified_calibrate`, and a private one inside `touch_raw`. They drifted, and the drift
+cost a day of measurement to unpick (`SYSTEM_ANALYSIS.md#33-touch`).
+
+Now: one implementation in `common/touch_calib.c`, linked by `device_tools` and `touch_raw`.
+`unified_calibrate` is deleted. See B3a/B3d.
 
 ### C4. Make the common library use the logger
 
@@ -577,22 +718,29 @@ renders black) across all ~15 binaries in one command.
 
 ⚠️ **Two harness traps found 2026-07-30 while testing the Phase 0 changes** — both cost real time:
 
-- **`touch_inject` is not built.** `build-and-deploy.sh` writes a `touch_inject.hidden` marker for
-  it (`:217`) but never compiles `tests/touch_inject.c`, so the binary is absent on the device
-  while the marker implies it is there. Add it to the build.
+- ~~**`touch_inject` is not built.**~~ Fixed — `build-and-deploy.sh` compiles and deploys it, and
+  the `.hidden` marker loop no longer names binaries that do not exist.
 - **Screen→raw conversion must read `/etc/touch_calibration.conf`, not assume 0..4095.** The
-  reference unit is calibrated to `-52 4137 -254 4427` (the least-squares fit extrapolates past
-  the 12-bit range, hence the out-of-range values). Assuming 0..4095 lands every tap ~30 px high,
-  which presents as *intermittent* hits rather than a clean failure — some buttons work, some
-  don't, and it looks like device flakiness. Use
-  `raw = screen*(max-min)/(dim-1) + min`. Note `touch_inject.c:83` rejects args outside 0..4095,
-  so the bottom ~34 px cannot be expressed — which happens to match the digitizer's real
-  unreachable bottom margin, but bottom-edge buttons can only be hit near their top edge.
+  reference unit is calibrated to `17 4084 -279 4382` (the least-squares fit extrapolates past
+  the 12-bit range on Y, hence the out-of-range values). Assuming 0..4095 lands every tap ~30 px
+  high, which presents as *intermittent* hits rather than a clean failure — some buttons work,
+  some don't, and it looks like device flakiness. Use `raw = screen*(max-min)/(dim-1) + min`.
+- **`touch_inject`'s 0..4095 argument clamp is now stale** (`tests/touch_inject.c:83`). It mirrors
+  the hardware range, which is correct for *raw* input, but the note that once stood here — "the
+  bottom ~34 px cannot be expressed" — was written against the old bad calibration and no longer
+  describes anything real. Either teach it to read the config and accept panel coordinates, or
+  document precisely that its arguments are raw digitiser counts, not pixels. Small, but it is a
+  trap for whoever writes the harness above.
 
-Separately, a `tests/host_tests.c` with plain `assert()` compiled by **host** gcc would cover the
-pure-logic functions where regressions are invisible until you're mis-tapping by 30 px:
-`touch_fit_axis_range()`, `scale_coordinates()`, `parse_args()` (would have caught the `args=`
-bug immediately), and the `config.c`/`ppm.c` parsers.
+Separately, host-gcc tests over the pure-logic functions, where regressions are invisible until
+you're mis-tapping by 30 px. **Started 2026-07-31:** `tests/touch_calib_test.c` covers the
+calibration fit end-to-end — it replays the 11 target medians from the reference capture and
+asserts `touch_calib_fit()` still lands on `X 17..4084` / `Y -279..4382`, plus the per-axis verdict
+and the sanity gate's accept/reject boundaries. Build line is in the file header; it is host gcc,
+so `build-and-deploy.sh` does not run it.
+
+Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` (would have
+caught the `args=` bug immediately), and the `config.c`/`ppm.c` parsers.
 
 ### C7. Run shellcheck
 

@@ -367,7 +367,7 @@ static void draw_page_dots(Framebuffer *fb, int current, int total) {
     int dot_gap = 20;
     int total_w = total * dot_r * 2 + (total - 1) * (dot_gap - dot_r * 2);
     int sx = fb->width / 2 - total_w / 2;
-    int y  = SCREEN_SAFE_BOTTOM - 15;
+    int y  = SCREEN_VISIBLE_BOTTOM - 15;
 
     for (int i = 0; i < total; i++) {
         int cx = sx + i * dot_gap;
@@ -377,15 +377,17 @@ static void draw_page_dots(Framebuffer *fb, int current, int total) {
 }
 
 static void draw_page_arrows(Framebuffer *fb, Launcher *l) {
+    /* Chevrons only — the page-flip touch zones themselves are hit-tested in
+     * handle_touch() against SCREEN_SAFE_*, so these are pure decoration. */
     /* Left arrow: ◀ */
     if (l->current_page > 0) {
-        int ax = SCREEN_SAFE_LEFT + 10;
+        int ax = SCREEN_VISIBLE_LEFT + 10;
         int ay = grid_top + grid_content_h / 2 - 10;
         fb_draw_text(fb, ax, ay, "<", RGB(150, 150, 170), 3);
     }
     /* Right arrow: ▶ */
     if (l->current_page < l->total_pages - 1) {
-        int ax = SCREEN_SAFE_RIGHT - 20;
+        int ax = SCREEN_VISIBLE_RIGHT - 20;
         int ay = grid_top + grid_content_h / 2 - 10;
         fb_draw_text(fb, ax, ay, ">", RGB(150, 150, 170), 3);
     }
@@ -405,7 +407,7 @@ static void draw_launcher(Launcher *l) {
     fb_clear(&l->fb, BG_COLOR);
 
     /* Title */
-    text_draw_centered(&l->fb, l->fb.width / 2, SCREEN_SAFE_TOP + 18,
+    text_draw_centered(&l->fb, l->fb.width / 2, SCREEN_VISIBLE_TOP + 18,
                        "ROOMWIZARD", TITLE_COLOR, 4);
 
     /* Tiles for current page */
@@ -438,7 +440,7 @@ static void draw_launcher(Launcher *l) {
 
     /* Input hint */
     if (l->input.gamepad_connected || l->input.keyboard_connected)
-        fb_draw_text(&l->fb, SCREEN_SAFE_LEFT + 10, l->fb.height - 18,
+        fb_draw_text(&l->fb, SCREEN_VISIBLE_LEFT + 10, l->fb.height - 18,
                      "D-PAD: NAVIGATE  A/ENTER: LAUNCH", RGB(100, 100, 100), 1);
 
     fb_swap(&l->fb);

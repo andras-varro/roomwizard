@@ -30,14 +30,35 @@ ScummVM appears in the native game selector automatically. The `scummvm.noargs` 
 
 ### Touch Calibration
 
-Run once on the device:
+Run once, on the device screen: **Device Tools → Display → `CALIBRATE TOUCH`**.
+(The standalone `/opt/games/unified_calibrate` binary was folded into that wizard and removed.)
+
+- Tap 11 targets, 3 times each; a per-axis least-squares fit over the **interior** targets maps
+  raw → panel, and a check screen shows the reach and per-axis verdict before anything is applied
+- Writes both lines of `/etc/touch_calibration.conf` — loaded automatically by ScummVM and all
+  native apps
+- **Redeploy ScummVM after any change to `native_apps/common/touch_input.c`**: it links its own
+  copy, so a deployed binary keeps whatever it was built with
+
+### Screen area
+
+Once the panel's touch reach has been measured (the wizard's `REACH` step), ScummVM keeps both the
+game picture and its own GUI inside the part of the screen a finger can actually reach — the
+digitizer saturates a little before the panel edge, so a band at each end is visible but not
+pressable, and a game's verb bar or the launcher's button row must not land there.
+
+The GUI (launcher, global menu, virtual keyboard) always stays inside that rectangle. The **game
+picture** can be given the whole screen back if you prefer the extra size to the reachability:
+
 ```bash
-ssh root@192.168.50.73 '/opt/games/unified_calibrate'
+ROOMWIZARD_CONTENT_AREA=visible /opt/games/scummvm     # one run
 ```
 
-- Tap the 9 crosshairs (corners + edge-midpoints + center)
-- A per-axis least-squares fit maps raw → full screen; a summary shows target-vs-landing, then ACCEPT/REDO
-- Saves the raw range to `/etc/touch_calibration.conf` — loaded automatically by ScummVM and all native apps
+To make it permanent, add `rw_content_area = visible` under `[scummvm]` in the config file. **Note
+that ScummVM resolves `scummvm.ini` relative to its working directory on this device**, so the copy
+the boot launcher uses is `/scummvm.ini` — an SSH shell in `$HOME` writes `/home/root/scummvm.ini`
+instead, and editing the wrong one looks like the setting being ignored. The environment variable
+takes precedence over both. Before the panel has been swept, `safe` and `visible` are identical.
 
 ## Status
 

@@ -297,7 +297,8 @@ last selected via `FBIOPUT_VSCREENINFO`:
 |---|---|
 | `app_launcher` | **32bpp XRGB8888** — set on startup *and* after every child exits |
 | `game_selector` | 32bpp, but only after a child exits |
-| `device_tools`, `hardware_config`, `unified_calibrate` | **never set it** — open bug, see `IMPROVEMENT_PLAN.md` B1 |
+| `device_tools`, `hardware_config`, `hardware_diag`, `touch_raw` | 32bpp, asserted on startup |
+| `touch_trace` | **never sets it** — run `fbset -depth 32` first if ScummVM or the VNC session ran last |
 | ScummVM, VNC session | **16bpp RGB565**, to halve write bandwidth |
 
 `native_apps/common/framebuffer.c` writes `uint32_t` per pixel and is **32bpp-only**. When
@@ -314,7 +315,7 @@ Apps never deal with this. `fb_init()` shrinks the drawing surface to the visibl
 `fb.width`/`fb.height` and `SCREEN_SAFE_*` are the **logical** (fully visible) screen, 800×450 at
 the shipped 15/15/0/0 margins. Margins come from `/etc/touch_calibration.conf` line 2, default
 `FB_BEZEL_*_DEFAULT` = 15/15/0/0 (`native_apps/common/framebuffer.h`), and are set on-device from
-**Device Tools → Set Screen → SCREEN EDGES**.
+**Device Tools → Display → SCREEN EDGES**.
 
 > **The constraint that actually binds interactive layout is digitizer reach, not the bezel** —
 > and on this panel the two do not coincide. Touch is not reported in a band at the top and bottom
@@ -405,16 +406,40 @@ steps, each owned by a different concern and configured on its own line of the c
 | 1. Calibration | raw digitiser → **panel** pixel | `scale_coordinates()` in `touch_input.c` | line 1 |
 | 2. Bezel viewport | panel pixel → **logical** pixel | the same function, from the framebuffer globals | line 2 |
 
-Stage 1 is per-axis linear over the whole 800×480 panel, bezel included. Raw is 12-bit (0–4095):
+Stage 1 is per-axis **piecewise linear** over the whole 800×480 panel, bezel included: three
+segments joined at two knots fixed at panel `dim/4` and `3*dim/4`. Raw is 12-bit (0–4095), and four
+raw values per axis define the curve — the readings at panel `0`, `dim/4`, `3*dim/4` and `dim-1`:
 
-```c
-panel_x = (raw_x - raw_min_x) * (panel_w - 1) / (raw_max_x - raw_min_x);
-panel_y = (raw_y - raw_min_y) * (panel_h - 1) / (raw_max_y - raw_min_y);
+```text
+raw_min .. knot_lo   ->  panel       0 .. dim/4       outer segment
+knot_lo .. knot_hi   ->  panel   dim/4 .. 3*dim/4     fitted interior
+knot_hi .. raw_max   ->  panel 3*dim/4 .. dim-1       outer segment
 ```
 
-The panel is linear — a traced border comes out a straight-edged rectangle, no keystone or shear —
-so scale-and-offset per axis is sufficient. There is **no affine transform and no bilinear corner
-correction**.
+`touch_map_axis_panel()` is the single implementation; a linear map is the `knot_lo == knot_hi == 0`
+sentinel. There is **no affine transform, no rotation, no shear and no bilinear corner
+correction** — each axis remains an independent monotone 1-D curve.
+
+**Why the format has three segments — and why the curve is currently a straight line.** The model
+consistent with every measurement is **linear across the panel, hard-clipped at raw 0 and 4095**. The
+clipping starts *inside* the panel: on Y, raw 4095 is first emitted around panel 450 and raw 0 around
+panel 30 (see **Reach** below). A single line fitted to the interior therefore extrapolates outside
+the emittable range — the reference capture's Y fit is `-279..4382` against a hardware range of
+`0..4095` — and **that overshoot is the correct answer, not an error.** With the endpoints stored
+unclamped, the three-segment curve reduces to exactly that line; the host regression asserts *zero*
+deviation.
+
+The format is kept anyway for one practical reason: changing line 1's field count is the single edit
+that silently breaks a component linking a stale `touch_input.o` (the old 4-number `sscanf` returns 4
+on an 8-number line and accepts it as a legacy config). Three segments also leave room to model a
+genuinely non-linear panel if one ever turns up.
+
+> **A claim that was here and is not supported by the data:** a per-segment slope table
+> (`8.81 / 9.66 / 9.93 / 8.76` raw counts per panel pixel over Y spans 22→120→240→360→458) with the
+> conclusion "the interior is ~12 % steeper than the outer bands". Residuals against the interior line
+> are ±80 raw — about ±8 px of finger placement — with no consistent sign, and over ~100 px baselines
+> that alone accounts for ±8 % of slope. One run cannot distinguish 12 % from noise. Do not build
+> anything on outer-band compression without a repeated, multi-target measurement.
 
 Stage 2 subtracts the viewport origin (`screen_view_x`/`screen_view_y`), which is exactly the
 offset `fb_swap()` draws at. A touch on the bezel therefore clamps to the nearest logical edge, and
@@ -425,72 +450,215 @@ logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a
 
 **`/etc/touch_calibration.conf`**, loaded automatically by `touch_init()` and `fb_init()`:
 
-- Line 1: `raw min_x max_x min_y max_y` — calibrated raw range, mapped linearly onto the whole panel.
+- Line 1: `x0 x_knot_lo x_knot_hi x1  y0 y_knot_lo y_knot_hi y1` — the raw→panel curve, per axis the
+  raw readings at panel `0`, `dim/4`, `3*dim/4`, `dim-1`. Endpoints may legitimately fall outside
+  `0..4095`; that is the measurement.
+  A legacy **4-number** line (`min_x max_x min_y max_y`) is still accepted and migrated on load:
+  the knots go onto the line it described and the endpoints are left exactly where that line puts
+  them, so the legacy mapping is reproduced rather than "improved". A legacy file carries no edge
+  measurement, so there is no basis for moving its endpoints — if it described a map with a dead band,
+  the migration keeps the dead band and `TOUCHABLE:` reports it. The migration is logged.
 - Line 2: `bezel top bottom left right` — panel pixels hidden by the bezel. Omit the line to get the
   compiled defaults (15/15/0/0).
+- Line 3 (optional, keyword-tagged): `reach x_lo x_hi y_lo y_hi` — the raw values the **physical**
+  edges actually emit, from the wizard's `REACH` sweep. Absent means "assume the `EVIOCGABS` limits",
+  which yields a zero inset. Tagged and trailing on purpose: an old parser reads lines 1–2
+  positionally and ignores what it does not recognise, so the file stayed back-compatible.
 
-**Device Tools → Set Screen** owns both, on separate buttons:
+**Device Tools → Display** owns both lines, through **one wizard** — `run_calib_wizard()` in
+`native_apps/device_tools/device_tools.c`. Everything it does runs with the bezel zeroed
+(`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and
+both lines are measured against the same premise:
 
-- `TOUCH CALIBRATION` (also the standalone `unified_calibrate`) taps 9 crosshairs (corners, edges,
-  centre, inset 40 px), least-squares fits a line per axis in panel space, and extrapolates to the
-  true panel edges so the inset targets still reach the corners. A summary shows target-vs-landing
-  before saving. **Its 40 px inset is too small** — the corner and edge-mid crosshairs sit inside
-  the compressed band, which is what produced the phantom X inset above. `IMPROVEMENT_PLAN.md` B3a.
-- `SCREEN EDGES` draws a frame on the logical edge and steps each margin by 1 px, re-letterboxing
-  live. Any part of the frame you cannot see means that margin is too small.
+| Step | Measures | How |
+|---|---|---|
+| `TAP` | line 1 | 11 targets × 3 taps, median; least-squares per axis from **interior targets only** |
+| `CHECK` | — | the derived curve, per-axis dead-band verdict, edge-probe residuals; ACCEPT / REDO / RESET |
+| `EDGES` | line 2 | numbered 2 px ladders at each panel edge; raise each margin until its line clears the plastic |
+| `REACH` | line 3 | slide a finger along each of the four edges; 16 coverage cells per edge, all four live at once. An unswept edge falls back to the hardware limit; a *completed* sweep that fell short widens the reported band |
+| `REPORT` | — | visible rectangle vs touch-safe rectangle and the per-side inset in px, with the reminder that the band is still drawable. Amber on **magnitude** (`DISP_INSET_SUSPECT`, 24 px), not on "non-zero" |
+| `CONFIRM` | — | goes live on the new mapping with a 20 s countdown; reverts unless you press KEEP |
+
+Two entry buttons, one implementation: `CALIBRATE TOUCH` runs the whole thing, `SCREEN EDGES`
+jumps to the `EDGES` step for a margins-only tweak. `RESET` restores the hardware `EVIOCGABS`
+range and the default margins.
+
+**Nothing is written until CONFIRM,** and the wizard hit-tests its own buttons through the
+*entry* calibration until then — so a bad fit can never leave you unable to press the button that
+rejects it. `touch_calib_backup()` copies the old file to `.bakN` first.
+
+> **Why it is one flow.** It used to be two, and they disagreed. The 9-tap calibration inset its
+> crosshairs only 40 px — inside the band where raw compresses — so the fit slope came out shallow
+> and extrapolated outside 0..4095, inventing a phantom X inset. The separate
+> `SCREEN EDGES` adjuster drew its reference frame on the *logical* edge, i.e. measured the bezel
+> through the bezel. There was also a third copy of the same defective fit in a standalone
+> `unified_calibrate` binary. One wizard, and one fit in `common/touch_calib.c`, is what stops
+> that recurring.
+
+**The fit lives in `native_apps/common/touch_calib.c`** and nowhere else: the target set, the
+per-axis interior masks (≥100 px from each end on X, ≥80 px on Y), the least-squares call,
+`touch_calib_curve_from_fit()` (which places the knots on the fitted line and stores the endpoints
+**unclamped** — `c->v0 = f->in0`, `c->v1 = f->in1`), the per-axis dead-band verdict, the reach
+calculation, `touch_calib_inset_from_reach()`, the shared edge-sweep accumulator (`TouchCalibSweep`,
+`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. Both the wizard and `touch_raw` link
+it, so the diagnostic validates the very code the wizard calibrates with. Its sanity gate is **not**
+"reject outside 0..4095" — a correct fit on this panel legitimately extrapolates outside it. It
+requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which accepts the measured-good
+`-279..4382` and rejects a skewed `0..60000`.
+
+> ⚠️ **Never reintroduce the endpoint clamp.** `touch_calib_curve_from_fit()` used to clamp `v0`/`v1`
+> into `0..4095`, and `touch_input.c`'s legacy migration had a `clamp_to_hw()` doing the same. Both
+> are deleted. The clamp asserted that raw 4095 is emitted at panel 479 when it is emitted at panel
+> ~450, which tilted the upper outer segment so the reported position ran **ahead of the finger by up
+> to +19 px across the bottom quarter** — visibly worse than the bug it was meant to fix.
+> `overshoot_lo/hi` remains, as reporting only.
 
 **`touch_raw`** (`native_apps/tests/touch_raw.c`, deployed to `/opt/games/`, hidden from the
-launcher) is the diagnostic that settled reach, and the only tool that shows the panel with **no
-calibration and no bezel**: it resets the raw range to the `EVIOCGABS` values and calls
-`fb_set_bezel(fb,0,0,0,0)`, so a drawn pixel *is* a panel pixel and the dot is `raw × 799 / 4095`.
-Two modes — a live crosshair with per-edge 10 px ladders, session extremes and a pin flag when raw
-sticks at a hardware limit; and a capture pass (11 targets × 3 taps, then a hard press on each
-bezel) that fits interior-only vs all-points and reports what each predicts at the panel edges.
-Logs to `/tmp/touch_raw.tsv` with a monotonic millisecond column. It can write the interior fit to
-line 1 after backing the file up to `.bakN`.
+launcher; reachable from Device Tools → Display → `TOUCH DIAGNOSTIC`) is the diagnostic that settled
+reach, and the only tool that shows the panel with **no calibration and no bezel**: it resets the raw
+range to the `EVIOCGABS` values and calls `fb_set_bezel(fb,0,0,0,0)`, so the dot is
+`raw × 799 / 4095`. Four modes, and the split between the middle two is the whole point:
 
-Caveat: its printed verdict is a **single global H1/H4 driven by the worst axis**, which is
-misleading on this panel — read the per-axis table it prints, not the verdict line.
-`IMPROVEMENT_PLAN.md` B3b.
+| Mode | Question it answers | Method |
+|---|---|---|
+| `LIVE` | free tracking | crosshair, trail, session extremes, pin flag when raw sticks at a hardware limit |
+| `SWEEP` | *what raw does the physical edge emit?* | slide a finger along each edge; per-bucket extreme along the edge, so a corner reading differently from the middle shows up instead of averaging away |
+| `INSET` | *where does raw first reach that value?* | tap a bar walked inward from each edge at 0/10/20/35/55 px; the answer localises where the flat band starts |
+| `TARGETS` | the interior line | 11 targets × 3 taps, then a hard press on each bezel; fits interior-only vs all-points and reports what each predicts at the edges, per axis |
 
-> **ScummVM links its own copy of `touch_input.o`** — rebuild it after changing that file or its
-> touch silently goes stale.
+**Only `INSET` decides the curve.** `SWEEP` alone cannot: a finger sliding along an edge yields no
+position information, so it reads identically whether clipping begins at the edge or 30 px inside it.
+Conflating the two questions is what kept the endpoint bug alive across three sessions. Logs to
+`/tmp/touch_raw.tsv` with a monotonic millisecond column; it can write the interior fit to line 1
+after backing the file up to `.bakN`.
+
+> **Beware two-point slopes.** `INSET`'s derived slope must come from the 11-target interior fit, not
+> from two adjacent bars: ±80 raw of tap noise over a 10–20 px baseline printed "raw reached at panel
+> 594, 614, 817 and −4" on a 480-row panel. Adjacent bars are only good for the *comparison* "is this
+> bar already at the limit?".
+
+**ScummVM and `vnc_client` each link their own copy of `touch_input.o`** — rebuild and redeploy both
+after changing that file or its touch silently goes stale (see *Reach* below for how silently).
 
 Accuracy: ~3 px at centre, 14–27 px error at the corners before calibration.
 
-**Reach at the border — measured, and it differs per axis.** The controller hard-clamps raw at 0
-and 4095 while the finger is still moving. *Where* that clamp lands on the glass was settled on
-2026-07-31 with `touch_raw` (see below): fit each axis from **interior targets only**, then test
-that fit against edge probes and against a finger pressed hard into the bezel. Raw capture:
-[`touch_raw-2026-07-31-rw09.tsv`](touch_raw-2026-07-31-rw09.tsv).
+**Reach at the border — every edge drives raw to its limit, but not at the edge.** Settled on
+2026-08-01 with `touch_raw`'s `SWEEP` and `INSET` modes, with the calibration and bezel zeroed so a
+drawn pixel is a panel pixel. Raw capture:
+[`touch_raw-2026-08-01-rw09.tsv`](touch_raw-2026-08-01-rw09.tsv), 16:53.
 
-| | X | Y |
-|---|---|---|
-| interior-only fit → raw at panel 0 | **+17** | **−279** |
-| interior-only fit → raw at panel max | **4084** (of 799) | **4382** (of 479) |
-| raw 0..4095 therefore covers panel | **−3 … 801** | **29 … 449** |
-| bezel press, low edge | LEFT `raw 0` → panel **−3** | TOP `raw 22` → panel **31** |
-| bezel press, high edge | RIGHT `raw 4095` → panel **801** | BOTTOM `raw 4095` → panel **449** |
-| **inset** | **none** | **~30 px top and bottom** |
+> **Every number in this section is the reference capture, not the live calibration of any unit.**
+> The fit is re-run per unit (and per wizard run), so the curve stored in
+> `/etc/touch_calibration.conf` on a given device will not match the values below — see
+> *Provenance* at the end of this section for what RW09 actually carries. What generalises is the
+> *shape* of the result — linear interior, a saturated band inside each Y edge, a much smaller one on
+> X — not the digits. The host regression deliberately replays this capture's medians rather than
+> reading the device, which is what makes it a regression instead of a snapshot.
 
-**X reaches both edges. Y is short by ~30 px at each end** (~5.7 mm at 5.25 px/mm). Two independent
-methods — an interior fit extrapolated outward, and a fingertip pressed into the plastic — agree on
-Y to within 2 px. Physically the digitizer spans about **153.4 × 80.1 mm** against an LCD active
-area of 152.4 × 91.4 mm: the electrode array matches the width and is ~11 mm short of the height.
+`SWEEP` first: **all 16 buckets on all four edges** drive raw to `0`/`4095`, uniformly, with no
+corner-vs-middle variation. So the electrode array is not short.
 
-> **Touchable is smaller than visible, on Y only.** The logical surface is panel y 15…464; the
-> touchable band is panel y 29…449. So **the top ~15 and bottom ~15 rows of the drawing surface
-> cannot be touched**, while every column can. This is the one place where "the logical screen is
-> the safe area" does not hold, and it is a property of the sensor, not of the bezel.
+`INSET` then asks where that limit is *first* reached, and this is the part a bezel press cannot see:
 
-The earlier per-edge figures (~10 px left/right, ~25 top, ~30 bottom) were **wrong on X**. They came
-from the 9-tap calibration, whose crosshairs are inset only 40 px — inside the compressed band — so
-the fit slope came out too shallow and extrapolated to raw values outside 0..4095, inventing a
-horizontal inset that varied from run to run. Fitting from interior targets only removes it, and
-recovers the full 800 px width on a config change alone. Remaining loose end: the x=780 probe reads
-+6 px high, so raw does bunch a little in the last ~20 px on the right and probably pins near panel
-795 rather than 801 — a handful of pixels, not measured precisely. Open work:
-[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3a/B3b.
+| Axis end | raw limit first emitted at panel | panel extent | flat (saturated) band |
+|---|---|---|---|
+| X left | ~0–12 | 0 | ~0–12 px |
+| X right | ~790–799 | 799 | ~0–9 px |
+| **Y top** | **~30** | 0 | **~30 px** |
+| **Y bottom** | **~450** | 479 | **~29 px** |
+
+Confirmed independently: the 11-target interior fit (`X 10..4076`, `Y -296..4376`), which never sees
+an edge sample, predicts a bezel press landing at panel **30 / 450** — the same numbers from a
+different method. Whether the cause is a short electrode array or controller clipping is not
+distinguished by this data and does not matter for calibration. (Two fits from that day are quoted in
+this document: `X 10..4076 / Y -296..4376` above, and `X 17..4084 / Y -279..4382`, which is what the
+host regression replays. They differ by ≤7 raw — an order below the ±80 raw tap residual — and
+neither is what is stored on RW09 now.)
+
+**Consequence: drawable ≠ pressable.** The band at each end of Y is visible and fully drawable but
+cannot be pressed, so `native_apps/common/framebuffer.h` carries **two** rectangles:
+`SCREEN_VISIBLE_*` (the full logical screen) and `SCREEN_SAFE_*` (visible ∩ touchable). On the
+reference capture at bezel T=11 B=14 the inset is **~17 px top / ~16 px bottom**, with X ≈ 0; the
+live RW09 calibration gives 19/16 **and ~6 px on each side of X** (see *Provenance*). **X's band is
+much smaller than Y's and can be zero, but a non-zero X inset is not a fault** — it arises by exactly
+the same mechanism as Y, from fitted X endpoints that fall outside `0..4095`. Treat any of these
+numbers as per-unit, per-calibration.
+
+The inset is **measured at runtime, never hardcoded** — `publish_safe_area()` pushes the four raw edge
+extremes through the production `scale_coordinates()` and calls `fb_set_touch_inset()`, so it is
+correct in portrait and under any bezel, is `0` until an edge sweep has been recorded, and is capped at
+`FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Read it from Device Tools → Display → `TOUCHABLE:`,
+the wizard's `REPORT` screen, or the display test's `SAFE AREA` page (red rect = visible, green =
+touchable). **A dead band is a fact about this panel, not a bug.**
+
+**The mapping lives in the config file, so deploying code never fixes a bad stored curve.** Line 1 of
+`/etc/touch_calibration.conf` is what `touch_init()` uses; a unit whose line 1 was written by older
+code keeps that behaviour, symptom intact, across any number of correct deploys until the wizard is
+re-run. Corollary for handovers: "the fix is deployed" and "the device behaves correctly" are separate
+claims.
+
+**Provenance — the reference capture vs what RW09 actually carries.**
+
+The figures above come from the 16:53 diagnostic run. The user then ran the wizard at **18:50 on
+2026-08-01** and kept the result, so RW09's live config is a *different* fit of the same panel:
+
+```text
+line 1  -33 1007 3087 4122   -296 875 3217 4379
+line 2  11 14 0 0
+line 3  reach 0 4095 0 4095
+        -> published inset: X 6..793  Y 19..438  of 800x455
+```
+
+Three things to read off that, because each one otherwise looks like a contradiction:
+
+- **`reach 0 4095 0 4095` means the sweep found the hardware limits on all four edges** — the
+  "assume the hardware limit" case, contributing *nothing* to the inset. So on this unit the entire
+  published inset comes from the fit's endpoint overshoot (`-33`/`4122` on X, `-296`/`4379` on Y
+  against a `0..4095` hardware range), which is the model working as designed.
+- **Therefore 19/16/6 and the ~30/29 px flat band are not the same measurement** and must not be
+  reconciled. The inset is *logical rows the current curve cannot address*; the flat band is *panel
+  pixels over which the sensor's reading is saturated*, measured by `INSET` mode with no calibration
+  in the path. Both are true at once, of different things.
+- **No `touch_raw` capture exists for the 18:50 calibration.** The wizard writes the config; only the
+  diagnostic writes `/tmp/touch_raw.tsv`, and it was not run afterwards (nor would it survive a
+  reboot). The repo's captures are 07-31 and 08-01 16:53, and the 16:53 one stands as the reference.
+
+**Three claims that were in this document and were wrong** — recorded because the mistakes are easy
+to repeat, and because two of them were *opposite* errors made two days apart:
+
+1. *"The electrode array is ~11 mm shorter than the LCD; the digitizer spans 153.4 × 80.1 mm."*
+   That height was computed by mapping bezel-press raw values through the very fit under test. The
+   sweep shows every edge driving raw to its limit, so the array is not short. The millimetre figure
+   was an artifact.
+2. *"The top ~15 and bottom ~15 rows cannot be touched, and no calibration recovers it."* Wrong as
+   stated — the *cause* was the fit, and the band is not 15 px.
+3. *"Every visible pixel is touchable; a dead band now means a bug."* (2026-08-01, morning.) This
+   over-corrected #1 and #2. It was right that the extrapolated fit manufactured dead bands, and
+   wrong that the sensor has none. The clamp it introduced made the bottom edge measurably worse
+   (+19 px). A bezel press drives raw to `4095` whether clipping starts at panel 479 or panel 450, so
+   that evidence could never have supported the conclusion.
+
+The earlier per-edge figures (~10 px left/right, ~25 top, ~30 bottom) were wrong on X for a separate
+reason: the 9-tap flow inset its crosshairs only 40 px. The deeper problem was methodological —
+*every* figure gathered before `touch_raw`'s `INSET` mode was inferred **through** a calibration, or
+from a gesture that carried no position information. Design the measurement to answer **one** question
+and state what it cannot answer.
+
+Two secondary effects, measured at the same time:
+
+- **Finger-centroid scatter is real.** Nine hard presses on the top bezel returned raw
+  `22, 76, 105, 111, 93, 79, 90, 118, 47`. Pressing flat near the saturation zone gives a tall
+  contact patch whose centroid is pushed inward, and it scatters widely. It shifts the intercept,
+  not the slope. Prefer target taps to bezel presses when measuring anything quantitative; use
+  bezel presses only to ask the yes/no question "does raw reach its limit here?".
+- **A stale binary misparses the config instead of failing.** A `vnc_client` built before the
+  8-number line 1 read `0 1020 3074 4095  0 874 3215 4095` as `X [0..1020] Y [3074..4095]`, confining
+  touch to the left quarter and the bottom strip. It presented as "touch is broken in vnc_client", not
+  as a version mismatch. To check what a deployed binary parsed, look for `Touch raw curve set:` plus
+  `(piecewise)` in its startup output; the old code printed `Touch raw range set (linear):`.
+
+Measurements are from **RW09 only**; a second unit has not been measured. Open work:
+[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3c.
 
 **Multi-touch exists in hardware but not in the driver.** `panjit_ts` reports only
 `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller itself is **2-point multi-touch with
@@ -1241,18 +1409,28 @@ flags (verified). Keep them for explicitness, but they are not what saves you.
 | ScummVM | `-mcpu=cortex-a8 -mfpu=neon` added to `config.mk` after configure |
 | ARM dependency libraries | same flags as ScummVM |
 
-**Checking a binary — the raw count is NOT expected to be zero.** A `-static` glibc binary always
-carries **~45** `sdiv`/`udiv` in *unreachable* libc internals: the `_dl_*` TLS loader, the
-`hack_digit` / `_i18n_number_rewrite` printf-locale paths, and the `__aeabi_ldivmod` /
-`__udivmoddi4` 64-bit divmod helpers. These are byte-identical across known-good deployed binaries
-and never execute.
+**Checking a binary — the expected count is a hard zero.** Use
+[`native_apps/check-arm-safe.sh`](native_apps/check-arm-safe.sh), which
+`build-and-deploy.sh` runs before every deploy and on build-only runs too. It currently reports
+zero across every build artifact.
 
-What must hold is: **no `sdiv`/`udiv` inside the application's own functions.**
+> ⚠️ **Corrected 2026-07-30.** This section used to claim a `-static` glibc binary "always carries
+> ~45 `sdiv`/`udiv` in unreachable libc internals" that had to be allowlisted, and gave a
+> `grep 'sdiv\|udiv'` recipe. Both were wrong. That grep matches the *substring* `udiv` inside the
+> **names** of the software-divide helpers — `__udivsi3` (×20), `__udivmoddi4` (×6) and their call
+> sites. Those are symbol names and branch targets, not instructions, and their presence is
+> positive evidence that division is being done in software. Measured on this toolchain,
+> `libgcc.a` contains **zero** hardware `sdiv`/`udiv`. There is nothing to allowlist.
+
+Match the tab-delimited mnemonic field, not the line, and any hit is real. This is what
+`check-arm-safe.sh` does:
 
 ```bash
-arm-linux-gnueabihf-objdump -d BIN | grep -B300 'sdiv\|udiv' | grep '^[0-9a-f]* <'
-# Every hit should land in one of the libc internals listed above.
+arm-linux-gnueabihf-objdump -d BIN | awk '/\t(sdiv|udiv)(\.w)?\t/ {print}'
+# Expected output: nothing.
 ```
+
+What must hold is: **no `sdiv`/`udiv` instruction anywhere in the binary.**
 
 Dynamic linking is unaffected — the device's own `libgcc` handles division correctly. This is
 **only** a static-linking concern.

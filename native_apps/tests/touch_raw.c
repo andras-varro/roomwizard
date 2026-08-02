@@ -3,11 +3,9 @@
  *
  * Why this exists
  * ---------------
- * TOUCH_REACH_INVESTIGATION.md asks whether the untouchable band at the panel
- * border is a physical sensor inset (H4) or an artifact of the 9-tap
- * calibration fit (H1).  Every number gathered so far was inferred *through* a
- * calibration, so it cannot separate the two.  This tool removes every layer of
- * interpretation between finger and pixel:
+ * Every number gathered before this tool was inferred *through* a calibration,
+ * so it could not separate a physical sensor limit from an artifact of the fit.
+ * This tool removes every layer of interpretation between finger and pixel:
  *
  *   - no calibration : the raw range is reset to what EVIOCGABS reports, so
  *                      /etc/touch_calibration.conf line 1 has no effect here;
@@ -17,22 +15,50 @@
  *                      than bypassed, so what you see is what scale_coordinates()
  *                      produces (native_apps/CLAUDE.md: one implementation only).
  *
- * Two modes
- * ---------
+ * Two separate questions have to be kept apart, and mixing them is what produced
+ * every wrong conclusion so far:
+ *
+ *   1. What raw value does the physical edge emit?   -> SWEEP mode
+ *   2. Where does raw first reach that value?        -> INSET mode
+ *
+ * A press against the bezel answers neither on its own: it reads raw 4095 at the
+ * bottom whether saturation begins at the panel edge or 20 px inside it, and it
+ * is the second case that makes a calibration curve's outer segment too steep.
+ *
+ * Four modes
+ * ----------
  * LIVE     Free drag.  Cyan dot + full-screen crosshair (your finger covers the
  *          dot, not the crosshair), yellow trail, the extremes reached so far,
  *          and a PINNED flag the instant raw sticks at its hardware limit.
  *
+ * SWEEP    Slide one finger along each edge in turn.  Keeps the extreme raw on
+ *          the perpendicular axis per bucket along the edge, so coverage and
+ *          corner-vs-middle differences are visible while you sweep.  Answers
+ *          "what raw does the PHYSICAL edge emit?" — i.e. where the curve's
+ *          endpoints belong.
+ *
+ * INSET    Tap a bar walked inward from each edge in known steps (0/10/20/35/55
+ *          px from the innermost visible row).  Answers "WHERE does raw reach
+ *          that extreme?" — i.e. the outer-band slope, and how far in the
+ *          saturated flat band starts.  A sweep cannot see this, because it
+ *          never leaves the edge; a bezel press cannot either, because it reads
+ *          the same whether saturation begins at the edge or 20 px inside it.
+ *
  * TARGETS  Tap 11 marked crosshairs (median of 3 taps each), then press hard
  *          against each of the four bezel edges.  The tool then fits the axes
  *          from INTERIOR targets only and reports what that fit predicts at the
- *          panel edges — experiment E1.  If the interior fit reaches the edges,
- *          the sensor is fine and the 9-tap calibration is contaminated (H1).
+ *          panel edges.
+ *
+ * The targets, the fit and the verdicts live in common/touch_calib.c, shared
+ * with the Device Tools calibration wizard — this tool validates the very code
+ * that wizard calibrates with, which it could not do with a private copy.
  *
  * Log: /tmp/touch_raw.tsv  (.tsv, not .log — .gitignore drops *.log)
  *   L <ms> <raw_x> <raw_y> <panel_x> <panel_y> <pinmask>   live sample
  *   T <ms> <idx> <target_x> <target_y> <raw_x> <raw_y>     target tap
  *   B <ms> <edge> <raw_x> <raw_y>                          bezel press extreme
+ *   S <ms> <edge> <bucket> <raw_x> <raw_y>                 edge-sweep sample
+ *   I <ms> <edge> <bar_panel> <tap> <raw_x> <raw_y>        inward-step tap
  *   # ...                                                  header / summary
  *
  * Landscape only.  Nothing is written outside /tmp unless you press APPLY on
@@ -54,12 +80,13 @@
 
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
+#include "../common/touch_calib.h"
 #include "../common/common.h"
 
 #define LOG_PATH    "/tmp/touch_raw.tsv"
 #define CALIB_PATH  "/etc/touch_calibration.conf"
 #define TRAIL_MAX   6000
-#define TAPS_PER_TARGET 3
+#define TAPS_PER_TARGET TOUCH_CALIB_TAPS
 
 /* Pin mask bits: raw sitting exactly on a hardware limit */
 #define PIN_XMIN 1
@@ -67,38 +94,56 @@
 #define PIN_YMIN 4
 #define PIN_YMAX 8
 
-/* A target counts as "interior" along an axis when it is far enough from both
- * ends of that axis that any edge compression cannot reach it.  The 9-tap
- * calibration insets its crosshairs by only 40 px, which is the very thing H1
- * says is too close; these thresholds are deliberately far more conservative. */
-#define INTERIOR_MARGIN_X 100
-#define INTERIOR_MARGIN_Y  80
-
-/* The interior fit "reaches the edge" if it predicts a raw value this close to
- * the hardware limit.  40 counts is ~8 px of panel — smaller than the effect
- * under test, larger than the run-to-run tap noise. */
-#define REACH_TOL_RAW 40
-
 typedef enum {
     MODE_LIVE = 0,
     MODE_TARGETS,
     MODE_BEZEL,
+    MODE_SWEEP,
+    MODE_INSET,
     MODE_SUMMARY
 } Mode;
 
-typedef struct { int px, py; } Target;
+/* ---- the two edge measurements ------------------------------------------ *
+ * These answer two different questions, and the difference is the whole
+ * reason both exist.
+ *
+ * SWEEP  What raw value does the PHYSICAL edge produce?  Slide one finger
+ *        along an edge; the tool keeps the extreme raw on the perpendicular
+ *        axis, per bucket along the edge, so a corner that reads differently
+ *        from the middle shows up instead of averaging away.  This pins the
+ *        curve's ENDPOINTS: if the top edge never emits raw_y 0, then storing
+ *        "raw 0 == panel row 0" is simply false.
+ *
+ * INSET  WHERE does raw reach that extreme?  Tap a bar walked inward from the
+ *        edge in known steps.  A sweep never leaves the edge, so it cannot see
+ *        whether the extreme is first reached at the edge or 20 px inside it —
+ *        and that distance is exactly what makes the outer segment of the
+ *        calibration curve too steep or not.  This pins the SLOPE.
+ *
+ * A press against the bezel reads the same under either hypothesis, which is
+ * why the pre-existing BEZEL phase could not settle it. */
 
-/* Interior cross + two off-axis points, then four edge probes.  Every target
- * feeds BOTH axis fits: an edge probe at (20,240) is an outlier on X but a
- * perfectly good interior sample on Y. */
-static const Target TARGETS[] = {
-    {150, 240}, {400, 240}, {650, 240},   /* interior X sweep */
-    {400, 120}, {400, 360},               /* interior Y sweep */
-    {200, 150}, {600, 330},               /* off-axis, both interior */
-    { 20, 240}, {780, 240},               /* X edge probes */
-    {400,  22}, {400, 458},               /* Y edge probes */
-};
-#define N_TARGETS ((int)(sizeof(TARGETS) / sizeof(TARGETS[0])))
+/* The sweep accumulator itself — TouchCalibSweep, its bucket count, the edge
+ * numbering convention and the reset/add/reached logic — lives in
+ * common/touch_calib.c, shared with the Device Tools wizard's REACH step. This
+ * tool used to carry a private copy; that is exactly the drift that put three
+ * copies of the fit in the tree. */
+
+/* Offsets inward from the innermost VISIBLE row/column of each edge. Rows under
+ * the bezel are excluded on purpose: an invisible bar cannot be tapped, and
+ * "press against the plastic" is already covered by the BEZEL phase. */
+#define INSET_ROWS 5
+#define INSET_TAPS 3
+#define INSET_ACCEPT 60         /* px, perpendicular; buttons sit far outside this */
+static const int INSET_OFFSET[INSET_ROWS] = { 0, 10, 20, 35, 55 };
+
+/* The targets, the interior masks, the fit and the verdicts all live in
+ * common/touch_calib.c — shared with the Device Tools calibration wizard, so
+ * there is exactly one implementation of the thing this tool exists to
+ * validate. */
+#define TARGETS   TOUCH_CALIB_TARGETS
+#define N_TARGETS TOUCH_CALIB_N_TARGETS
+#define MAX_TARGETS 16   /* fixed-size arrays; N_TARGETS is 11 */
 
 static const char *EDGE_NAME[4] = { "TOP", "BOTTOM", "LEFT", "RIGHT" };
 
@@ -127,32 +172,24 @@ static FILE *g_log = NULL;
 static Pt  trail[TRAIL_MAX];
 static int trail_n = 0, trail_head = 0;
 
-static int  tap_raw_x[N_TARGETS][TAPS_PER_TARGET];
-static int  tap_raw_y[N_TARGETS][TAPS_PER_TARGET];
-static int  tgt_raw_x[N_TARGETS], tgt_raw_y[N_TARGETS];  /* median per target */
-static int  edge_raw[4];                                  /* bezel-press extremes */
+static int  tap_raw_x[MAX_TARGETS][TAPS_PER_TARGET];
+static int  tap_raw_y[MAX_TARGETS][TAPS_PER_TARGET];
+static int  tgt_raw_x[MAX_TARGETS], tgt_raw_y[MAX_TARGETS];  /* median per target */
+static int  edge_raw[4];                                     /* bezel-press extremes */
 static bool edge_done[4];
+
+static TouchCalibSweep g_sweep[4];
+static int  inset_raw[4][INSET_ROWS][INSET_TAPS];
+static int  inset_med[4][INSET_ROWS];   /* median raw per bar */
+static int  inset_pos[4][INSET_ROWS];   /* panel coordinate the bar was drawn at */
+static bool inset_have[4][INSET_ROWS];
+static bool inset_done[4];
 
 static void trail_push(int x, int y) {
     trail[trail_head].x = x;
     trail[trail_head].y = y;
     trail_head = (trail_head + 1) % TRAIL_MAX;
     if (trail_n < TRAIL_MAX) trail_n++;
-}
-
-static int median3(int a, int b, int c) {
-    if (a > b) { int t = a; a = b; b = t; }
-    if (b > c) { int t = b; b = c; c = t; }
-    if (a > b) { int t = a; a = b; b = t; }
-    return b;
-}
-
-/* Panel coordinate predicted for a raw value by a fitted range — the same
- * arithmetic scale_coordinates() uses, so predictions and reality agree. */
-static int predict_panel(int raw, int raw_at_0, int raw_at_max, int dim) {
-    int span = raw_at_max - raw_at_0;
-    if (span == 0) return 0;
-    return (raw - raw_at_0) * (dim - 1) / span;
 }
 
 /* ---- drawing helpers ---------------------------------------------------- */
@@ -245,114 +282,219 @@ static bool near_target(int x, int y, int i) {
     return dx * dx + dy * dy <= TAP_ACCEPT_RADIUS * TAP_ACCEPT_RADIUS;
 }
 
-/* ---- calibration backup ------------------------------------------------- */
-static int backup_calibration(char *out_path, size_t out_len) {
-    for (int n = 1; n < 100; n++) {
-        char path[256];
-        snprintf(path, sizeof(path), "%s.bak%d", CALIB_PATH, n);
-        if (access(path, F_OK) == 0) continue;
+/* ---- edge geometry ------------------------------------------------------- *
+ * Edge order is fixed by EDGE_NAME and matches touch_calib.c's: 0 TOP,
+ * 1 BOTTOM, 2 LEFT, 3 RIGHT. TOP/BOTTOM measure raw_y and run ALONG x;
+ * LEFT/RIGHT measure raw_x and run along y. TOP and LEFT look for the raw
+ * MINIMUM, BOTTOM and RIGHT the maximum. touch_calib_sweep_edge_is_y() and
+ * touch_calib_sweep_wants_min() are the only implementation of that. */
 
-        FILE *src = fopen(CALIB_PATH, "rb");
-        if (!src) return -1;
-        FILE *dst = fopen(path, "wb");
-        if (!dst) { fclose(src); return -1; }
-
-        char buf[1024];
-        size_t got;
-        while ((got = fread(buf, 1, sizeof(buf), src)) > 0)
-            fwrite(buf, 1, got, dst);
-        fclose(src);
-        fclose(dst);
-
-        snprintf(out_path, out_len, "%s", path);
-        return 0;
+/* Panel coordinate of INSET bar k on edge e. Measured from the innermost row
+ * the bezel still leaves visible, so every bar can actually be seen and hit. */
+static int inset_bar_pos(int e, int k, int W, int H,
+                         int bez_t, int bez_b, int bez_l, int bez_r) {
+    switch (e) {
+        case 0:  return bez_t + INSET_OFFSET[k];
+        case 1:  return H - 1 - bez_b - INSET_OFFSET[k];
+        case 2:  return bez_l + INSET_OFFSET[k];
+        default: return W - 1 - bez_r - INSET_OFFSET[k];
     }
-    return -1;
+}
+
+/* ---- edge reports ------------------------------------------------------- */
+
+static void print_sweep(int hw_min_x, int hw_max_x, int hw_min_y, int hw_max_y) {
+    FILE *out[2] = { stdout, g_log };
+    for (int k = 0; k < 2; k++) {
+        FILE *f = out[k];
+        if (!f) continue;
+        const char *p = (f == stdout) ? "" : "# ";
+        fprintf(f, "%s\n%s=== EDGE SWEEP: what raw does the physical edge emit? ===\n", p, p);
+        for (int e = 0; e < 4; e++) {
+            const TouchCalibSweep *s = &g_sweep[e];
+            if (!s->done && s->covered == 0) {
+                fprintf(f, "%s%-6s  not swept\n", p, EDGE_NAME[e]);
+                continue;
+            }
+            bool ymin = touch_calib_sweep_wants_min(e);
+            int limit = touch_calib_sweep_edge_is_y(e) ? (ymin ? hw_min_y : hw_max_y)
+                                     : (ymin ? hw_min_x : hw_max_x);
+            int shortfall = ymin ? (s->extreme - limit) : (limit - s->extreme);
+            fprintf(f, "%s%-6s  raw_%c %s %5d / %d   %+d counts from the limit   %s\n",
+                    p, EDGE_NAME[e], touch_calib_sweep_edge_is_y(e) ? 'y' : 'x',
+                    ymin ? "min" : "max", s->extreme, limit, -shortfall,
+                    shortfall <= 0 ? "PINNED" : "NOT PINNED");
+            fprintf(f, "%s        covered %d/%d buckets, %ld samples, %ld pinned\n",
+                    p, s->covered, TOUCH_CALIB_SWEEP_BUCKETS, s->samples, s->pinned);
+            fprintf(f, "%s        per-bucket extreme:", p);
+            for (int i = 0; i < TOUCH_CALIB_SWEEP_BUCKETS; i++) {
+                if (s->bucket_hit[i]) fprintf(f, " %d", s->bucket[i]);
+                else                  fprintf(f, " -");
+            }
+            fprintf(f, "\n");
+        }
+        fflush(f);
+    }
+}
+
+/* Where does raw reach the hardware limit, in panel pixels?
+ *
+ * The slope comes from the 11-target INTERIOR FIT, never from two adjacent
+ * INSET bars. Adjacent bars are 10–20 px apart and each median carries ±80 raw
+ * of tap noise, so a two-point slope is dominated by the noise: on the
+ * reference capture that method printed "raw reached at panel 594, 614, 817
+ * and -4" for a 480-row panel. The INSET table's own job is narrower and it
+ * does it reliably — it says WHERE the reading goes flat, which is a
+ * comparison, not a division.
+ *
+ * `fx`/`fy` are only read when have_fit; the TARGETS phase must have run. */
+static void print_inset(int hw_min_x, int hw_max_x, int hw_min_y, int hw_max_y,
+                        int panel_w, int panel_h,
+                        const TouchAxisFit *fx, const TouchAxisFit *fy,
+                        bool have_fit) {
+    FILE *out[2] = { stdout, g_log };
+    for (int k = 0; k < 2; k++) {
+        FILE *f = out[k];
+        if (!f) continue;
+        const char *p = (f == stdout) ? "" : "# ";
+        fprintf(f, "%s\n%s=== INWARD STEP: where does raw reach the limit? ===\n", p, p);
+        for (int e = 0; e < 4; e++) {
+            bool any = false;
+            for (int i = 0; i < INSET_ROWS; i++) any |= inset_have[e][i];
+            if (!any) { fprintf(f, "%s%-6s  not measured\n", p, EDGE_NAME[e]); continue; }
+
+            bool ymin  = touch_calib_sweep_wants_min(e);
+            int  limit = touch_calib_sweep_edge_is_y(e) ? (ymin ? hw_min_y : hw_max_y)
+                                      : (ymin ? hw_min_x : hw_max_x);
+            fprintf(f, "%s%-6s  raw_%c, limit %d %s\n", p, EDGE_NAME[e],
+                    touch_calib_sweep_edge_is_y(e) ? 'y' : 'x', limit, ymin ? "(min)" : "(max)");
+            for (int i = 0; i < INSET_ROWS; i++) {
+                if (!inset_have[e][i]) {
+                    fprintf(f, "%s        panel %4d   (skipped)\n", p, inset_pos[e][i]);
+                    continue;
+                }
+                if (i == 0) {
+                    fprintf(f, "%s        panel %4d   raw %5d\n",
+                            p, inset_pos[e][i], inset_med[e][i]);
+                } else if (inset_have[e][i - 1]) {
+                    /* Bar-to-bar difference. Read this only as a flatness
+                     * indicator — over a 10–20 px baseline with ±80 raw of tap
+                     * noise the number itself is not a slope worth quoting. */
+                    int dp = inset_pos[e][i - 1] - inset_pos[e][i];
+                    int dr = inset_med[e][i - 1] - inset_med[e][i];
+                    double sl = (dp != 0) ? (double)dr / (double)dp : 0.0;
+                    fprintf(f, "%s        panel %4d   raw %5d   d %6.2f raw/px%s\n",
+                            p, inset_pos[e][i], inset_med[e][i], sl,
+                            (sl > -0.5 && sl < 0.5) ? "   <- FLAT (saturated)" : "");
+                } else {
+                    fprintf(f, "%s        panel %4d   raw %5d\n",
+                            p, inset_pos[e][i], inset_med[e][i]);
+                }
+            }
+            /* (a) Where clipping is observed — a comparison against the limit,
+             * immune to tap noise. Bars run outermost (offset 0) to innermost. */
+            int flat_to = -1, outermost = -1;
+            for (int i = 0; i < INSET_ROWS; i++) {
+                if (!inset_have[e][i]) continue;
+                if (outermost < 0) outermost = i;
+                bool sat = ymin ? (inset_med[e][i] <= limit)
+                                : (inset_med[e][i] >= limit);
+                if (!sat) break;
+                flat_to = i;
+            }
+            if (flat_to >= 0)
+                fprintf(f, "%s        clipped at raw %d from the edge out to panel %d\n",
+                        p, limit, inset_pos[e][flat_to]);
+            else if (outermost >= 0)
+                fprintf(f, "%s        no bar read the limit; clipping (if any) starts "
+                           "outside panel %d\n", p, inset_pos[e][outermost]);
+
+            /* (b) Where the interior line says raw WOULD reach the limit,
+             * anchored on the innermost measured bar (furthest from the edge, so
+             * least likely to sit inside the flat band) and using the fit's
+             * slope. Agreement between (a) and (b) is the cross-check. */
+            int ia = -1;
+            for (int i = INSET_ROWS - 1; i >= 0; i--)
+                if (inset_have[e][i]) { ia = i; break; }
+
+            if (!have_fit) {
+                fprintf(f, "%s        (no slope: run TARGETS to fit the interior line)\n", p);
+            } else if (ia >= 0) {
+                const TouchAxisFit *fit = touch_calib_sweep_edge_is_y(e) ? fy : fx;
+                int dim = touch_calib_sweep_edge_is_y(e) ? panel_h : panel_w;
+                double sl = (dim > 1)
+                          ? (double)(fit->in1 - fit->in0) / (double)(dim - 1) : 0.0;
+                if (sl > 0.01) {
+                    double at = (double)inset_pos[e][ia] +
+                                ((double)limit - inset_med[e][ia]) / sl;
+                    fprintf(f, "%s     => fit slope %.2f raw/px (11-target interior); "
+                               "raw %d reached at panel %.0f\n", p, sl, limit, at);
+                } else {
+                    fprintf(f, "%s        (fit slope %.2f raw/px is not usable)\n", p, sl);
+                }
+            }
+        }
+        fflush(f);
+    }
 }
 
 /* ---- summary ------------------------------------------------------------ */
 typedef struct {
-    int in0, in1;      /* interior-only fit: raw at panel 0 / panel dim-1 */
-    int all0, all1;    /* all-point fit                                    */
-    bool in_ok, all_ok;
-    int dim;
-} AxisFit;
-
-typedef struct {
-    AxisFit x, y;
+    TouchAxisFit x, y;
     int  edge_panel[4];   /* bezel-press raw mapped through the interior fit */
     int  probe_resid[4];  /* edge-probe residual: predicted - drawn, in px   */
-    bool verdict_h1;
-    char verdict[96];
+    TouchAxisCurve cx, cy;  /* the three-segment curve the wizard would save */
+    /* One report PER AXIS: how much edge compression the outer segments have to
+     * absorb. Not a hardware verdict — the sensor reaches every edge. */
+    bool reach_x, reach_y;
+    char verdict_x[128], verdict_y[128];
 } Summary;
-
-static void fit_axis(AxisFit *f, const int *raw, const int *pos, const bool *interior,
-                     int n, int dim) {
-    int ri[N_TARGETS], pi[N_TARGETS], ni = 0;
-    for (int i = 0; i < n; i++) {
-        if (!interior[i]) continue;
-        ri[ni] = raw[i]; pi[ni] = pos[i]; ni++;
-    }
-    f->dim = dim;
-    f->in_ok  = (ni >= 2) &&
-                touch_fit_axis_range(ri, pi, ni, dim, &f->in0, &f->in1) == 0;
-    f->all_ok = touch_fit_axis_range(raw, pos, n, dim, &f->all0, &f->all1) == 0;
-    if (!f->in_ok)  { f->in0  = 0; f->in1  = 4095; }
-    if (!f->all_ok) { f->all0 = 0; f->all1 = 4095; }
-}
 
 static void build_summary(Summary *s, int panel_w, int panel_h,
                           int hw_min_x, int hw_max_x, int hw_min_y, int hw_max_y) {
-    int rx[N_TARGETS], ry[N_TARGETS], px[N_TARGETS], py[N_TARGETS];
-    bool ix[N_TARGETS], iy[N_TARGETS];
+    int rx[MAX_TARGETS], ry[MAX_TARGETS], px[MAX_TARGETS], py[MAX_TARGETS];
+    bool ix[MAX_TARGETS], iy[MAX_TARGETS];
 
     for (int i = 0; i < N_TARGETS; i++) {
         rx[i] = tgt_raw_x[i];  ry[i] = tgt_raw_y[i];
         px[i] = TARGETS[i].px; py[i] = TARGETS[i].py;
-        ix[i] = (px[i] >= INTERIOR_MARGIN_X && px[i] <= panel_w - 1 - INTERIOR_MARGIN_X);
-        iy[i] = (py[i] >= INTERIOR_MARGIN_Y && py[i] <= panel_h - 1 - INTERIOR_MARGIN_Y);
+        ix[i] = touch_calib_interior_x(px[i], panel_w);
+        iy[i] = touch_calib_interior_y(py[i], panel_h);
     }
 
-    fit_axis(&s->x, rx, px, ix, N_TARGETS, panel_w);
-    fit_axis(&s->y, ry, py, iy, N_TARGETS, panel_h);
+    touch_calib_fit(&s->x, rx, px, ix, N_TARGETS, panel_w);
+    touch_calib_fit(&s->y, ry, py, iy, N_TARGETS, panel_h);
+    touch_calib_curve_from_fit(&s->x, hw_min_x, hw_max_x, &s->cx);
+    touch_calib_curve_from_fit(&s->y, hw_min_y, hw_max_y, &s->cy);
 
-    /* Where does a hard press against each bezel land, according to the fit
-     * that never saw an edge sample?  This is the number the whole question
-     * turns on. */
-    s->edge_panel[0] = predict_panel(edge_done[0] ? edge_raw[0] : hw_min_y,
-                                     s->y.in0, s->y.in1, panel_h);
-    s->edge_panel[1] = predict_panel(edge_done[1] ? edge_raw[1] : hw_max_y,
-                                     s->y.in0, s->y.in1, panel_h);
-    s->edge_panel[2] = predict_panel(edge_done[2] ? edge_raw[2] : hw_min_x,
-                                     s->x.in0, s->x.in1, panel_w);
-    s->edge_panel[3] = predict_panel(edge_done[3] ? edge_raw[3] : hw_max_x,
-                                     s->x.in0, s->x.in1, panel_w);
+    /* Where does a hard press against each bezel land, according to the fitted
+     * LINE that never saw an edge sample?  A press that reads well inside the
+     * panel is the extrapolation overshooting, not the sensor falling short —
+     * which is the distinction this tool exists to make. */
+    s->edge_panel[0] = touch_calib_predict_panel(edge_done[0] ? edge_raw[0] : hw_min_y,
+                                                 s->y.in0, s->y.in1, panel_h);
+    s->edge_panel[1] = touch_calib_predict_panel(edge_done[1] ? edge_raw[1] : hw_max_y,
+                                                 s->y.in0, s->y.in1, panel_h);
+    s->edge_panel[2] = touch_calib_predict_panel(edge_done[2] ? edge_raw[2] : hw_min_x,
+                                                 s->x.in0, s->x.in1, panel_w);
+    s->edge_panel[3] = touch_calib_predict_panel(edge_done[3] ? edge_raw[3] : hw_max_x,
+                                                 s->x.in0, s->x.in1, panel_w);
 
     /* Edge-probe residuals: does the interior fit still describe a target at
      * x=20 / y=22?  A large residual is compression reaching that far in. */
-    s->probe_resid[0] = predict_panel(ry[9],  s->y.in0, s->y.in1, panel_h) - py[9];
-    s->probe_resid[1] = predict_panel(ry[10], s->y.in0, s->y.in1, panel_h) - py[10];
-    s->probe_resid[2] = predict_panel(rx[7],  s->x.in0, s->x.in1, panel_w) - px[7];
-    s->probe_resid[3] = predict_panel(rx[8],  s->x.in0, s->x.in1, panel_w) - px[8];
+    s->probe_resid[0] = touch_calib_predict_panel(ry[TOUCH_CALIB_PROBE_YLO],
+                            s->y.in0, s->y.in1, panel_h) - py[TOUCH_CALIB_PROBE_YLO];
+    s->probe_resid[1] = touch_calib_predict_panel(ry[TOUCH_CALIB_PROBE_YHI],
+                            s->y.in0, s->y.in1, panel_h) - py[TOUCH_CALIB_PROBE_YHI];
+    s->probe_resid[2] = touch_calib_predict_panel(rx[TOUCH_CALIB_PROBE_XLO],
+                            s->x.in0, s->x.in1, panel_w) - px[TOUCH_CALIB_PROBE_XLO];
+    s->probe_resid[3] = touch_calib_predict_panel(rx[TOUCH_CALIB_PROBE_XHI],
+                            s->x.in0, s->x.in1, panel_w) - px[TOUCH_CALIB_PROBE_XHI];
 
-    int d[4] = {
-        s->x.in0 - hw_min_x, s->x.in1 - hw_max_x,
-        s->y.in0 - hw_min_y, s->y.in1 - hw_max_y
-    };
-    int worst = 0;
-    for (int i = 0; i < 4; i++) {
-        int a = d[i] < 0 ? -d[i] : d[i];
-        if (a > worst) worst = a;
-    }
-    s->verdict_h1 = (worst <= REACH_TOL_RAW);
-    if (s->verdict_h1)
-        snprintf(s->verdict, sizeof(s->verdict),
-                 "H1: sensor reaches the edges (worst %d raw) - 9-tap fit is at fault",
-                 worst);
-    else
-        snprintf(s->verdict, sizeof(s->verdict),
-                 "H4: real inset - interior fit misses a limit by %d raw counts",
-                 worst);
+    s->reach_x = touch_calib_axis_verdict(&s->cx, hw_min_x, hw_max_x, "X",
+                                          s->verdict_x, sizeof(s->verdict_x));
+    s->reach_y = touch_calib_axis_verdict(&s->cy, hw_min_y, hw_max_y, "Y",
+                                          s->verdict_y, sizeof(s->verdict_y));
 }
 
 /* Emit the summary to stdout and the log. Both, because the on-screen table is
@@ -378,6 +520,14 @@ static void print_summary(const Summary *s, int panel_w, int panel_h,
                 p, edge_raw[3], s->edge_panel[3]);
         fprintf(f, "%s  edge-probe residual  x=20: %+d px   x=780: %+d px\n",
                 p, s->probe_resid[2], s->probe_resid[3]);
+        {   int lo, hi;
+            touch_calib_reach(&s->cx, hw_min_x, hw_max_x, &lo, &hi);
+            fprintf(f, "%s  curve raw %d %d %d %d\n", p,
+                    s->cx.v0, s->cx.k_lo, s->cx.k_hi, s->cx.v1);
+            fprintf(f, "%s  raw %d..%d covers panel %d..%d\n",
+                    p, hw_min_x, hw_max_x, lo, hi);
+            fprintf(f, "%s  %s\n", p, s->verdict_x);
+        }
         fprintf(f, "%s\n%sAXIS Y          interior-only   all-points\n", p, p);
         fprintf(f, "%s  raw @ panel 0      %7d       %7d\n", p, s->y.in0, s->y.all0);
         fprintf(f, "%s  raw @ panel %-4d   %7d       %7d\n",
@@ -388,7 +538,14 @@ static void print_summary(const Summary *s, int panel_w, int panel_h,
                 p, edge_raw[1], s->edge_panel[1]);
         fprintf(f, "%s  edge-probe residual  y=22: %+d px   y=458: %+d px\n",
                 p, s->probe_resid[0], s->probe_resid[1]);
-        fprintf(f, "%s\n%s%s\n", p, p, s->verdict);
+        {   int lo, hi;
+            touch_calib_reach(&s->cy, hw_min_y, hw_max_y, &lo, &hi);
+            fprintf(f, "%s  curve raw %d %d %d %d\n", p,
+                    s->cy.v0, s->cy.k_lo, s->cy.k_hi, s->cy.v1);
+            fprintf(f, "%s  raw %d..%d covers panel %d..%d\n",
+                    p, hw_min_y, hw_max_y, lo, hi);
+            fprintf(f, "%s  %s\n", p, s->verdict_y);
+        }
 
         fprintf(f, "%s\n%sper-target medians (target_x target_y raw_x raw_y)\n", p, p);
         for (int i = 0; i < N_TARGETS; i++)
@@ -446,13 +603,8 @@ int main(int argc, char *argv[]) {
     /* touch_init() auto-loaded the stored calibration into raw_min/raw_max.
      * Re-read what the hardware itself declares and install that instead — the
      * whole point is to see the panel with the calibration taken out. */
-    int hw_min_x = 0, hw_max_x = 4095, hw_min_y = 0, hw_max_y = 4095;
-    struct input_absinfo abs_x, abs_y;
-    if (ioctl(touch.fd, EVIOCGABS(ABS_X), &abs_x) == 0 &&
-        ioctl(touch.fd, EVIOCGABS(ABS_Y), &abs_y) == 0) {
-        hw_min_x = abs_x.minimum; hw_max_x = abs_x.maximum;
-        hw_min_y = abs_y.minimum; hw_max_y = abs_y.maximum;
-    }
+    int hw_min_x, hw_max_x, hw_min_y, hw_max_y;
+    touch_calib_hw_range(&touch, &hw_min_x, &hw_max_x, &hw_min_y, &hw_max_y);
     const int stored_x0 = touch.raw_min_x, stored_x1 = touch.raw_max_x;
     const int stored_y0 = touch.raw_min_y, stored_y1 = touch.raw_max_y;
     touch_set_raw_range(&touch, hw_min_x, hw_max_x, hw_min_y, hw_max_y);
@@ -473,6 +625,8 @@ int main(int argc, char *argv[]) {
         fprintf(g_log, "# L ms raw_x raw_y panel_x panel_y pinmask\n");
         fprintf(g_log, "# T ms idx target_x target_y raw_x raw_y\n");
         fprintf(g_log, "# B ms edge raw_x raw_y\n");
+        fprintf(g_log, "# S ms edge bucket raw_x raw_y            edge-sweep sample\n");
+        fprintf(g_log, "# I ms edge bar_panel tap raw_x raw_y     inward-step tap\n");
         fflush(g_log);
     }
 
@@ -482,8 +636,10 @@ int main(int argc, char *argv[]) {
 
     /* Buttons stay well clear of the border so the tool is still operable if
      * the inset turns out to be real. */
-    Hit btn_exit    = { 60, 380, 170, 70, "EXIT",      RGB(120, 30, 30) };
-    Hit btn_targets = { 570, 380, 170, 70, "TARGETS",  RGB(30, 80, 120) };
+    Hit btn_exit    = { 30, 380, 140, 70, "EXIT",      RGB(120, 30, 30) };
+    Hit btn_sweep   = { 190, 380, 140, 70, "SWEEP",    RGB(30, 100, 100) };
+    Hit btn_inset   = { 350, 380, 140, 70, "INSET",    RGB(100, 60, 120) };
+    Hit btn_targets = { 600, 380, 170, 70, "TARGETS",  RGB(30, 80, 120) };
     /* NEXT/REDO sit mid-screen, not at the bottom: the bezel-press phase treats
      * the outer sixth of each axis as "a press against that edge", and a button
      * inside that band would have its own tap recorded as an edge extreme. */
@@ -497,14 +653,34 @@ int main(int argc, char *argv[]) {
     Hit btn_abort_b = { 350, 300, 100, 60, "ABORT",    RGB(90, 40, 40) };
     Hit btn_apply   = { 480, 400, 250, 60, "APPLY FIT", RGB(100, 60, 120) };
     Hit btn_done    = { 70, 400, 200, 60, "EXIT",      RGB(120, 30, 30) };
+    /* SWEEP and INSET accept samples/taps within INSET_ACCEPT px of an edge or
+     * bar, so their controls must sit clear of all four edges on BOTH axes —
+     * one button row serves edges that run horizontally and vertically. The row
+     * is also outside the outer-sixth bands the sweep samples from. */
+    Hit btn_s_next  = { 200, 258, 130, 54, "NEXT",     RGB(30, 100, 60) };
+    Hit btn_s_redo  = { 340, 258, 130, 54, "REDO",     RGB(110, 80, 20) };
+    Hit btn_s_quit  = { 480, 258, 130, 54, "BACK",     RGB(90, 40, 40) };
 
     Mode mode = MODE_LIVE;
     int  tgt_i = 0, tap_i = 0, edge_i = 0;
     bool edge_capturing = false;
+    int  sweep_e = 0;                       /* 4 == report screen */
+    int  inset_e = 0, inset_k = 0, inset_t = 0;   /* 4 == report screen */
     Summary summary;
     memset(&summary, 0, sizeof(summary));
     bool summary_ready = false;
     char apply_msg[128] = "";
+
+    for (int e = 0; e < 4; e++) {
+        touch_calib_sweep_reset(&g_sweep[e], e);
+        inset_done[e] = false;
+        for (int k = 0; k < INSET_ROWS; k++) {
+            inset_have[e][k] = false;
+            inset_med[e][k]  = -1;
+            inset_pos[e][k]  = inset_bar_pos(e, k, W, H, file_bez_t, file_bez_b,
+                                             file_bez_l, file_bez_r);
+        }
+    }
 
     ModalDialog dlg;
     memset(&dlg, 0, sizeof(dlg));
@@ -564,15 +740,20 @@ int main(int argc, char *argv[]) {
             ModalDialogAction a = modal_dialog_update(&dlg, st.x, st.y, st.pressed, t);
             if (a == MODAL_ACTION_BTN0) {
                 char bak[256] = "";
-                if (backup_calibration(bak, sizeof(bak)) == 0) {
-                    /* Save the interior fit, then put the tool straight back to
-                     * uncalibrated so what it displays never silently changes. */
+                if (touch_calib_backup(CALIB_PATH, bak, sizeof(bak)) == 0) {
+                    /* Save the fitted CURVE (interior line between the knots,
+                     * outer segments landing on the emittable raw extremes), then
+                     * put the tool straight back to uncalibrated so what it
+                     * displays never silently changes. */
                     touch.calib.bezel_top    = file_bez_t;
                     touch.calib.bezel_bottom = file_bez_b;
                     touch.calib.bezel_left   = file_bez_l;
                     touch.calib.bezel_right  = file_bez_r;
-                    touch_set_raw_range(&touch, summary.x.in0, summary.x.in1,
-                                        summary.y.in0, summary.y.in1);
+                    touch_set_raw_curve(&touch,
+                                        summary.cx.v0, summary.cx.k_lo,
+                                        summary.cx.k_hi, summary.cx.v1,
+                                        summary.cy.v0, summary.cy.k_lo,
+                                        summary.cy.k_hi, summary.cy.v1);
                     int rc = touch_save_calibration(&touch, CALIB_PATH);
                     touch_set_raw_range(&touch, hw_min_x, hw_max_x, hw_min_y, hw_max_y);
                     snprintf(apply_msg, sizeof(apply_msg),
@@ -595,6 +776,134 @@ int main(int argc, char *argv[]) {
                     tgt_i = 0; tap_i = 0;
                     last_action_ms = t;
                 }
+                if (hit_test(&btn_sweep, st.x, st.y)) {
+                    mode = MODE_SWEEP;
+                    sweep_e = 0;
+                    last_action_ms = t;
+                }
+                if (hit_test(&btn_inset, st.x, st.y)) {
+                    mode = MODE_INSET;
+                    inset_e = 0; inset_k = 0; inset_t = 0;
+                    last_action_ms = t;
+                }
+            }
+        }
+        /* ---- EDGE SWEEP ---- *
+         * Accumulate while the finger is down anywhere in the outer sixth of the
+         * axis under test. Nothing is captured on lift: a sweep is the stroke
+         * itself, and demanding a clean lift inside the band threw away the end
+         * of every stroke. */
+        else if (mode == MODE_SWEEP) {
+            if (sweep_e < 4 && st.held) {
+                bool relevant =
+                    (sweep_e == 0 && st.y < H / 6) || (sweep_e == 1 && st.y > H * 5 / 6) ||
+                    (sweep_e == 2 && st.x < W / 6) || (sweep_e == 3 && st.x > W * 5 / 6);
+                if (relevant) {
+                    bool is_y     = touch_calib_sweep_edge_is_y(sweep_e);
+                    bool want_min = touch_calib_sweep_wants_min(sweep_e);
+                    int  v        = is_y ? raw_y : raw_x;
+                    int  along    = is_y ? st.x  : st.y;
+                    int  span     = is_y ? W     : H;
+                    int  hw_limit = is_y ? (want_min ? hw_min_y : hw_max_y)
+                                         : (want_min ? hw_min_x : hw_max_x);
+
+                    touch_calib_sweep_add(&g_sweep[sweep_e], sweep_e,
+                                          v, along, span, hw_limit);
+
+                    if (g_log) {
+                        int bk = along * TOUCH_CALIB_SWEEP_BUCKETS / (span > 0 ? span : 1);
+                        if (bk < 0) bk = 0;
+                        if (bk >= TOUCH_CALIB_SWEEP_BUCKETS) bk = TOUCH_CALIB_SWEEP_BUCKETS - 1;
+                        fprintf(g_log, "S %u %s %d %d %d\n",
+                                t, EDGE_NAME[sweep_e], bk, raw_x, raw_y);
+                    }
+                }
+            }
+            if (st.pressed && debounced) {
+                if (hit_test(&btn_s_quit, st.x, st.y)) {
+                    mode = MODE_LIVE;
+                    last_action_ms = t;
+                } else if (hit_test(&btn_s_redo, st.x, st.y)) {
+                    if (sweep_e < 4) touch_calib_sweep_reset(&g_sweep[sweep_e], sweep_e);
+                    else { for (int e = 0; e < 4; e++) touch_calib_sweep_reset(&g_sweep[e], e);
+                           sweep_e = 0; }
+                    last_action_ms = t;
+                } else if (hit_test(&btn_s_next, st.x, st.y) && sweep_e < 4) {
+                    if (g_log) {
+                        fprintf(g_log, "# SWEEP %s extreme %d covered %d/%d "
+                                       "samples %ld pinned %ld\n",
+                                EDGE_NAME[sweep_e], g_sweep[sweep_e].extreme,
+                                g_sweep[sweep_e].covered, TOUCH_CALIB_SWEEP_BUCKETS,
+                                g_sweep[sweep_e].samples, g_sweep[sweep_e].pinned);
+                        fflush(g_log);
+                    }
+                    sweep_e++;
+                    last_action_ms = t;
+                    if (sweep_e >= 4)
+                        print_sweep(hw_min_x, hw_max_x, hw_min_y, hw_max_y);
+                }
+            }
+        }
+        /* ---- INWARD STEP ---- */
+        else if (mode == MODE_INSET) {
+            if (st.pressed && debounced) {
+                if (hit_test(&btn_s_quit, st.x, st.y)) {
+                    mode = MODE_LIVE;
+                    last_action_ms = t;
+                } else if (hit_test(&btn_s_redo, st.x, st.y) && inset_e < 4) {
+                    inset_t = 0;                     /* retake the current bar */
+                    inset_have[inset_e][inset_k] = false;
+                    last_action_ms = t;
+                } else if (hit_test(&btn_s_next, st.x, st.y) && inset_e < 4) {
+                    inset_t = 0;                     /* skip this bar */
+                    inset_k++;
+                    if (inset_k >= INSET_ROWS) {
+                        inset_done[inset_e] = true;
+                        inset_k = 0; inset_e++;
+                        if (inset_e >= 4)
+                            print_inset(hw_min_x, hw_max_x, hw_min_y, hw_max_y,
+                                        W, H, &summary.x, &summary.y, summary_ready);
+                    }
+                    last_action_ms = t;
+                } else if (inset_e < 4) {
+                    int perp = touch_calib_sweep_edge_is_y(inset_e) ? st.y : st.x;
+                    int bar  = inset_pos[inset_e][inset_k];
+                    int d    = perp - bar;
+                    if (d < 0) d = -d;
+                    if (d <= INSET_ACCEPT) {
+                        inset_raw[inset_e][inset_k][inset_t] =
+                            touch_calib_sweep_edge_is_y(inset_e) ? raw_y : raw_x;
+                        if (g_log)
+                            fprintf(g_log, "I %u %s %d %d %d %d\n", t,
+                                    EDGE_NAME[inset_e], bar, inset_t, raw_x, raw_y);
+                        inset_t++;
+                        last_action_ms = t;
+                        if (inset_t >= INSET_TAPS) {
+                            inset_med[inset_e][inset_k] = touch_calib_median3(
+                                inset_raw[inset_e][inset_k][0],
+                                inset_raw[inset_e][inset_k][1],
+                                inset_raw[inset_e][inset_k][2]);
+                            inset_have[inset_e][inset_k] = true;
+                            if (g_log) {
+                                fprintf(g_log, "# INSET %s panel %d median %d\n",
+                                        EDGE_NAME[inset_e], bar,
+                                        inset_med[inset_e][inset_k]);
+                                fflush(g_log);
+                            }
+                            inset_t = 0;
+                            inset_k++;
+                            if (inset_k >= INSET_ROWS) {
+                                inset_done[inset_e] = true;
+                                inset_k = 0; inset_e++;
+                                if (inset_e >= 4)
+                                    print_inset(hw_min_x, hw_max_x,
+                                                hw_min_y, hw_max_y, W, H,
+                                                &summary.x, &summary.y,
+                                                summary_ready);
+                            }
+                        }
+                    }
+                }
             }
         }
         /* ---- TARGETS (phase A) ---- */
@@ -612,12 +921,12 @@ int main(int argc, char *argv[]) {
                 tap_i++;
                 last_action_ms = t;
                 if (tap_i >= TAPS_PER_TARGET) {
-                    tgt_raw_x[tgt_i] = median3(tap_raw_x[tgt_i][0],
-                                               tap_raw_x[tgt_i][1],
-                                               tap_raw_x[tgt_i][2]);
-                    tgt_raw_y[tgt_i] = median3(tap_raw_y[tgt_i][0],
-                                               tap_raw_y[tgt_i][1],
-                                               tap_raw_y[tgt_i][2]);
+                    tgt_raw_x[tgt_i] = touch_calib_median3(tap_raw_x[tgt_i][0],
+                                                           tap_raw_x[tgt_i][1],
+                                                           tap_raw_x[tgt_i][2]);
+                    tgt_raw_y[tgt_i] = touch_calib_median3(tap_raw_y[tgt_i][0],
+                                                           tap_raw_y[tgt_i][1],
+                                                           tap_raw_y[tgt_i][2]);
                     tap_i = 0;
                     tgt_i++;
                     if (tgt_i >= N_TARGETS) {
@@ -753,9 +1062,12 @@ int main(int argc, char *argv[]) {
                      summary.probe_resid[0], summary.probe_resid[1]);
             fb_draw_text(&fb, 20, y0 + 156, b, COLOR_WHITE, 1);
 
-            uint32_t vc = summary.verdict_h1 ? COLOR_GREEN : COLOR_ORANGE;
-            fb_draw_text(&fb, 20, y0 + 186, summary.verdict_h1 ? "H1" : "H4", vc, 3);
-            fb_draw_text(&fb, 70, y0 + 194, summary.verdict, vc, 1);
+            /* Per axis, deliberately: this panel is H1 on X and H4 on Y, and a
+             * single line cannot say that (IMPROVEMENT_PLAN.md B3b). */
+            uint32_t cx = summary.reach_x ? COLOR_GREEN : COLOR_ORANGE;
+            uint32_t cy = summary.reach_y ? COLOR_GREEN : COLOR_ORANGE;
+            fb_draw_text(&fb, 20, y0 + 182, summary.verdict_x, cx, 1);
+            fb_draw_text(&fb, 20, y0 + 198, summary.verdict_y, cy, 1);
 
             if (apply_msg[0])
                 fb_draw_text(&fb, 20, y0 + 220, apply_msg, COLOR_MAGENTA, 1);
@@ -788,32 +1100,271 @@ int main(int argc, char *argv[]) {
             if (pin & PIN_YMIN) fb_fill_rect(&fb, 20, file_bez_t + 2, W - 40, 6, COLOR_RED);
             if (pin & PIN_YMAX) fb_fill_rect(&fb, 20, H - file_bez_b - 8, W - 40, 6, COLOR_RED);
 
-            /* Readout panel */
-            text_boxed(&fb, 230, 120, 340, 130);
-            snprintf(b, sizeof(b), "RAW   %5d %5d", last_raw_x, last_raw_y);
-            fb_draw_text(&fb, 244, 130, b, COLOR_WHITE, 2);
-            snprintf(b, sizeof(b), "PANEL %5d %5d", last_px, last_py);
-            fb_draw_text(&fb, 244, 154, b, COLOR_CYAN, 2);
-            snprintf(b, sizeof(b), "PX REACHED  X %d..%d  Y %d..%d",
-                     ext_px_max < 0 ? 0 : ext_px_min, ext_px_max < 0 ? 0 : ext_px_max,
-                     ext_py_max < 0 ? 0 : ext_py_min, ext_py_max < 0 ? 0 : ext_py_max);
-            fb_draw_text(&fb, 244, 182, b, RGB(200, 0, 200), 1);
-            snprintf(b, sizeof(b), "RAW REACHED X %d..%d  Y %d..%d",
-                     ext_rx_max < 0 ? 0 : ext_rx_min, ext_rx_max < 0 ? 0 : ext_rx_max,
-                     ext_ry_max < 0 ? 0 : ext_ry_min, ext_ry_max < 0 ? 0 : ext_ry_max);
-            fb_draw_text(&fb, 244, 196, b, RGB(200, 0, 200), 1);
-            snprintf(b, sizeof(b), "PINNED %s%s%s%s   SAMPLES %ld",
-                     (pin & PIN_XMIN) ? "X-MIN " : "", (pin & PIN_XMAX) ? "X-MAX " : "",
-                     (pin & PIN_YMIN) ? "Y-MIN " : "", (pin & PIN_YMAX) ? "Y-MAX " : "",
-                     samples);
-            fb_draw_text(&fb, 244, 214, b, pin ? COLOR_RED : COLOR_GRAY, 1);
-            fb_draw_text(&fb, 244, 230, "NO CALIBRATION - NO BEZEL", COLOR_GRAY, 1);
+            /* Readout panel. SWEEP and INSET draw their own, larger box in the
+             * same place — two boxes at one position is an unreadable smear. */
+            if (mode != MODE_SWEEP && mode != MODE_INSET) {
+                text_boxed(&fb, 230, 120, 340, 130);
+                snprintf(b, sizeof(b), "RAW   %5d %5d", last_raw_x, last_raw_y);
+                fb_draw_text(&fb, 244, 130, b, COLOR_WHITE, 2);
+                snprintf(b, sizeof(b), "PANEL %5d %5d", last_px, last_py);
+                fb_draw_text(&fb, 244, 154, b, COLOR_CYAN, 2);
+                snprintf(b, sizeof(b), "PX REACHED  X %d..%d  Y %d..%d",
+                         ext_px_max < 0 ? 0 : ext_px_min, ext_px_max < 0 ? 0 : ext_px_max,
+                         ext_py_max < 0 ? 0 : ext_py_min, ext_py_max < 0 ? 0 : ext_py_max);
+                fb_draw_text(&fb, 244, 182, b, RGB(200, 0, 200), 1);
+                snprintf(b, sizeof(b), "RAW REACHED X %d..%d  Y %d..%d",
+                         ext_rx_max < 0 ? 0 : ext_rx_min, ext_rx_max < 0 ? 0 : ext_rx_max,
+                         ext_ry_max < 0 ? 0 : ext_ry_min, ext_ry_max < 0 ? 0 : ext_ry_max);
+                fb_draw_text(&fb, 244, 196, b, RGB(200, 0, 200), 1);
+                snprintf(b, sizeof(b), "PINNED %s%s%s%s   SAMPLES %ld",
+                         (pin & PIN_XMIN) ? "X-MIN " : "", (pin & PIN_XMAX) ? "X-MAX " : "",
+                         (pin & PIN_YMIN) ? "Y-MIN " : "", (pin & PIN_YMAX) ? "Y-MAX " : "",
+                         samples);
+                fb_draw_text(&fb, 244, 214, b, pin ? COLOR_RED : COLOR_GRAY, 1);
+                fb_draw_text(&fb, 244, 230, "NO CALIBRATION - NO BEZEL", COLOR_GRAY, 1);
+            }
 
             if (mode == MODE_LIVE) {
                 fb_draw_text(&fb, 244, 100,
                              "DRAG INTO EVERY EDGE AND CORNER", COLOR_WHITE, 1);
                 draw_hit(&fb, &btn_exit);
+                draw_hit(&fb, &btn_sweep);
+                draw_hit(&fb, &btn_inset);
                 draw_hit(&fb, &btn_targets);
+            } else if (mode == MODE_SWEEP) {
+                if (sweep_e < 4) {
+                    const TouchCalibSweep *s = &g_sweep[sweep_e];
+                    bool want_min = touch_calib_sweep_wants_min(sweep_e);
+                    int  limit    = touch_calib_sweep_edge_is_y(sweep_e)
+                                  ? (want_min ? hw_min_y : hw_max_y)
+                                  : (want_min ? hw_min_x : hw_max_x);
+                    bool touched  = (s->covered > 0);
+
+                    /* Coverage cells laid along the edge under test, so a gap in
+                     * the stroke is visible as a gap in the row. Green = that
+                     * stretch of edge reached the hardware limit. */
+                    for (int i = 0; i < TOUCH_CALIB_SWEEP_BUCKETS; i++) {
+                        int cw, ch, cx2, cy2;
+                        if (touch_calib_sweep_edge_is_y(sweep_e)) {
+                            cw = W / TOUCH_CALIB_SWEEP_BUCKETS - 4;  ch = 16;
+                            cx2 = i * (W / TOUCH_CALIB_SWEEP_BUCKETS) + 2;
+                            cy2 = (sweep_e == 0) ? file_bez_t + 8
+                                                 : H - 1 - file_bez_b - 24;
+                        } else {
+                            cw = 16;  ch = H / TOUCH_CALIB_SWEEP_BUCKETS - 4;
+                            cy2 = i * (H / TOUCH_CALIB_SWEEP_BUCKETS) + 2;
+                            cx2 = (sweep_e == 2) ? file_bez_l + 8
+                                                 : W - 1 - file_bez_r - 24;
+                        }
+                        uint32_t col;
+                        if (!s->bucket_hit[i])                       col = RGB(45, 45, 55);
+                        else if (want_min ? (s->bucket[i] <= limit)
+                                          : (s->bucket[i] >= limit)) col = COLOR_GREEN;
+                        else                                         col = COLOR_ORANGE;
+                        fb_fill_rect(&fb, cx2, cy2, cw, ch, col);
+                        fb_draw_rect(&fb, cx2, cy2, cw, ch, RGB(90, 90, 110));
+                    }
+
+                    snprintf(b, sizeof(b),
+                             "SWEEP THE %s EDGE - SLIDE ONE FINGER END TO END",
+                             EDGE_NAME[sweep_e]);
+                    text_boxed(&fb, 170, 120, 460, 160);
+                    fb_draw_text(&fb, 184, 130, b, COLOR_YELLOW, 1);
+                    snprintf(b, sizeof(b), "EDGE %d/4   COVERED %d/%d   %s",
+                             sweep_e + 1, s->covered, TOUCH_CALIB_SWEEP_BUCKETS,
+                             s->done ? "ENOUGH - PRESS NEXT" : "KEEP GOING");
+                    fb_draw_text(&fb, 184, 150, b,
+                                 s->done ? COLOR_GREEN : COLOR_GRAY, 1);
+                    snprintf(b, sizeof(b), "RAW %5d %5d", last_raw_x, last_raw_y);
+                    fb_draw_text(&fb, 184, 172, b, COLOR_WHITE, 2);
+                    snprintf(b, sizeof(b), "EXTREME raw_%c %s  %d / %d",
+                             touch_calib_sweep_edge_is_y(sweep_e) ? 'y' : 'x',
+                             want_min ? "MIN" : "MAX",
+                             touched ? s->extreme : 0, limit);
+                    fb_draw_text(&fb, 184, 202, b,
+                                 !touched ? COLOR_GRAY
+                                 : (want_min ? (s->extreme <= limit)
+                                             : (s->extreme >= limit))
+                                   ? COLOR_GREEN : COLOR_ORANGE, 1);
+                    snprintf(b, sizeof(b), "SAMPLES %ld   PINNED %ld",
+                             s->samples, s->pinned);
+                    fb_draw_text(&fb, 184, 222, b, COLOR_GRAY, 1);
+                    fb_draw_text(&fb, 184, 242,
+                                 "GREEN CELL = THAT STRETCH HIT THE LIMIT",
+                                 COLOR_GRAY, 1);
+                    fb_draw_text(&fb, 184, 258, "NO CALIBRATION - NO BEZEL",
+                                 COLOR_GRAY, 1);
+                } else {
+                    fb_fill_rect(&fb, 40, 70, W - 80, 170, RGB(10, 10, 14));
+                    fb_draw_rect(&fb, 40, 70, W - 80, 170, RGB(60, 60, 80));
+                    fb_draw_text(&fb, 56, 80,
+                                 "EDGE SWEEP - RAW AT THE PHYSICAL EDGE", COLOR_YELLOW, 1);
+                    for (int e = 0; e < 4; e++) {
+                        const TouchCalibSweep *s = &g_sweep[e];
+                        bool want_min = touch_calib_sweep_wants_min(e);
+                        int  limit = touch_calib_sweep_edge_is_y(e) ? (want_min ? hw_min_y : hw_max_y)
+                                                  : (want_min ? hw_min_x : hw_max_x);
+                        bool reached = s->covered &&
+                                       (want_min ? (s->extreme <= limit)
+                                                 : (s->extreme >= limit));
+                        int shortfall = want_min ? (s->extreme - limit)
+                                                : (limit - s->extreme);
+                        if (!s->covered)
+                            snprintf(b, sizeof(b), "%-6s  NOT SWEPT", EDGE_NAME[e]);
+                        else
+                            snprintf(b, sizeof(b),
+                                     "%-6s  raw_%c %s %5d / %-5d  %+4d  %-10s %d/%d",
+                                     EDGE_NAME[e], touch_calib_sweep_edge_is_y(e) ? 'y' : 'x',
+                                     want_min ? "MIN" : "MAX", s->extreme, limit,
+                                     -shortfall, reached ? "PINNED" : "NOT PINNED",
+                                     s->covered, TOUCH_CALIB_SWEEP_BUCKETS);
+                        fb_draw_text(&fb, 56, 104 + e * 18, b,
+                                     !s->covered ? COLOR_GRAY
+                                     : reached ? COLOR_GREEN : COLOR_ORANGE, 1);
+                    }
+                    fb_draw_text(&fb, 56, 190,
+                                 "GREEN = THAT EDGE DRIVES RAW TO THE HARDWARE LIMIT",
+                                 COLOR_GRAY, 1);
+                    fb_draw_text(&fb, 56, 206,
+                                 "FULL REPORT ON STDOUT AND /tmp/touch_raw.tsv",
+                                 COLOR_GRAY, 1);
+                }
+                draw_hit(&fb, &btn_s_quit);
+                draw_hit(&fb, &btn_s_redo);
+                if (sweep_e < 4) draw_hit(&fb, &btn_s_next);
+            } else if (mode == MODE_INSET) {
+                if (inset_e < 4) {
+                    int bar = inset_pos[inset_e][inset_k];
+                    /* Thick bar, not a hairline: the finger has to cover it, and
+                     * a 1 px line cannot be aimed at to better than the effect
+                     * being measured. */
+                    if (touch_calib_sweep_edge_is_y(inset_e))
+                        fb_fill_rect(&fb, 0, bar - 3, W, 7, COLOR_GREEN);
+                    else
+                        fb_fill_rect(&fb, bar - 3, 0, 7, H, COLOR_GREEN);
+
+                    snprintf(b, sizeof(b), "TAP THE GREEN BAR - %s EDGE",
+                             EDGE_NAME[inset_e]);
+                    text_boxed(&fb, 170, 120, 460, 160);
+                    fb_draw_text(&fb, 184, 130, b, COLOR_YELLOW, 1);
+                    snprintf(b, sizeof(b), "BAR %d/%d AT PANEL %s=%d   TAP %d/%d",
+                             inset_k + 1, INSET_ROWS,
+                             touch_calib_sweep_edge_is_y(inset_e) ? "Y" : "X", bar,
+                             inset_t + 1, INSET_TAPS);
+                    fb_draw_text(&fb, 184, 150, b, COLOR_GREEN, 1);
+                    snprintf(b, sizeof(b), "RAW %5d %5d", last_raw_x, last_raw_y);
+                    fb_draw_text(&fb, 184, 170, b, COLOR_WHITE, 2);
+                    fb_draw_text(&fb, 184, 196,
+                                 "NEXT SKIPS THIS BAR - REDO RESTARTS IT", COLOR_GRAY, 1);
+                    /* Bars already measured on this edge, so drift is visible as
+                     * you go rather than only in the final report. */
+                    int ly = 214;
+                    for (int k = 0; k < INSET_ROWS; k++) {
+                        if (!inset_have[inset_e][k]) continue;
+                        snprintf(b, sizeof(b), "PANEL %4d -> RAW %5d",
+                                 inset_pos[inset_e][k], inset_med[inset_e][k]);
+                        fb_draw_text(&fb, 184, ly, b, COLOR_CYAN, 1);
+                        ly += 13;
+                    }
+                } else {
+                    fb_fill_rect(&fb, 20, 50, W - 40, 200, RGB(10, 10, 14));
+                    fb_draw_rect(&fb, 20, 50, W - 40, 200, RGB(60, 60, 80));
+                    fb_draw_text(&fb, 34, 58,
+                                 "INWARD STEP - WHERE RAW REACHES THE LIMIT",
+                                 COLOR_YELLOW, 1);
+                    int ry = 80;
+                    for (int e = 0; e < 4; e++) {
+                        /* Anchor on the INNERMOST measured bar and take the
+                         * slope from the interior fit — never from two adjacent
+                         * bars. Same reasoning as print_inset(): 10–20 px apart
+                         * with ±80 raw of tap noise is not a slope. */
+                        int ia = -1;
+                        for (int k = INSET_ROWS - 1; k >= 0; k--)
+                            if (inset_have[e][k]) { ia = k; break; }
+                        if (ia < 0) {
+                            snprintf(b, sizeof(b), "%-6s  NOT MEASURED", EDGE_NAME[e]);
+                            fb_draw_text(&fb, 34, ry, b, COLOR_GRAY, 1);
+                            ry += 28;
+                            continue;
+                        }
+                        bool is_y     = touch_calib_sweep_edge_is_y(e);
+                        bool want_min = touch_calib_sweep_wants_min(e);
+                        int  limit = is_y ? (want_min ? hw_min_y : hw_max_y)
+                                          : (want_min ? hw_min_x : hw_max_x);
+
+                        /* Where clipping is observed: outermost run of bars that
+                         * already read the limit. Noise-immune (a comparison). */
+                        int flat_to = -1;
+                        for (int k = 0; k < INSET_ROWS; k++) {
+                            if (!inset_have[e][k]) continue;
+                            bool sat = want_min ? (inset_med[e][k] <= limit)
+                                                : (inset_med[e][k] >= limit);
+                            if (!sat) break;
+                            flat_to = k;
+                        }
+
+                        if (!summary_ready) {
+                            if (flat_to >= 0)
+                                snprintf(b, sizeof(b),
+                                         "%-6s FLAT TO PANEL %d   (RUN TARGETS FOR A SLOPE)",
+                                         EDGE_NAME[e], inset_pos[e][flat_to]);
+                            else
+                                snprintf(b, sizeof(b),
+                                         "%-6s NO FLAT BAR   (RUN TARGETS FOR A SLOPE)",
+                                         EDGE_NAME[e]);
+                            fb_draw_text(&fb, 34, ry, b, COLOR_ORANGE, 1);
+                        } else {
+                            const TouchAxisFit *fit = is_y ? &summary.y : &summary.x;
+                            int dim = is_y ? H : W;
+                            double sl = (dim > 1)
+                                      ? (double)(fit->in1 - fit->in0) / (double)(dim - 1)
+                                      : 0.0;
+                            if (sl <= 0.01) {
+                                snprintf(b, sizeof(b), "%-6s  FIT SLOPE UNUSABLE - RETAKE",
+                                         EDGE_NAME[e]);
+                                fb_draw_text(&fb, 34, ry, b, COLOR_ORANGE, 1);
+                            } else {
+                                int at = (int)((double)inset_pos[e][ia] +
+                                               ((double)limit - inset_med[e][ia]) / sl);
+                                if (flat_to >= 0)
+                                    snprintf(b, sizeof(b),
+                                             "%-6s FIT %4.2f raw/px  RAW %4d AT PANEL %d"
+                                             "  FLAT TO %d",
+                                             EDGE_NAME[e], sl, limit, at,
+                                             inset_pos[e][flat_to]);
+                                else
+                                    snprintf(b, sizeof(b),
+                                             "%-6s FIT %4.2f raw/px  RAW %4d AT PANEL %d"
+                                             "  NO FLAT BAR",
+                                             EDGE_NAME[e], sl, limit, at);
+                                fb_draw_text(&fb, 34, ry, b, COLOR_CYAN, 1);
+                            }
+                        }
+                        /* One line of panel:raw pairs — five stacked lines per
+                         * edge does not fit four edges on one screen. */
+                        int n = 0;
+                        b[0] = '\0';
+                        for (int k = 0; k < INSET_ROWS && n < (int)sizeof(b) - 12; k++) {
+                            if (!inset_have[e][k]) continue;
+                            n += snprintf(b + n, sizeof(b) - n, "%d:%d  ",
+                                          inset_pos[e][k], inset_med[e][k]);
+                        }
+                        fb_draw_text(&fb, 60, ry + 13, b, COLOR_WHITE, 1);
+                        ry += 28;
+                    }
+                    fb_draw_text(&fb, 34, 196,
+                                 "FLAT TO = LAST PANEL ROW STILL READING THE LIMIT;",
+                                 COLOR_GRAY, 1);
+                    fb_draw_text(&fb, 34, 210,
+                                 "THAT IS WHERE THE CURVE ENDPOINT BELONGS",
+                                 COLOR_GRAY, 1);
+                    fb_draw_text(&fb, 34, 228,
+                                 "FULL TABLE ON STDOUT AND /tmp/touch_raw.tsv",
+                                 COLOR_GRAY, 1);
+                }
+                draw_hit(&fb, &btn_s_quit);
+                draw_hit(&fb, &btn_s_redo);
+                if (inset_e < 4) draw_hit(&fb, &btn_s_next);
             } else if (mode == MODE_TARGETS) {
                 snprintf(b, sizeof(b), "TARGET %d/%d  (%d,%d)   TAP %d/%d",
                          tgt_i + 1, N_TARGETS, TARGETS[tgt_i].px, TARGETS[tgt_i].py,
@@ -845,6 +1396,12 @@ int main(int argc, char *argv[]) {
         fb_swap(&fb);
         usleep(FRAME_DELAY_ACTIVE_US / 4);   /* ~120 Hz: this is a tracking tool */
     }
+
+    /* Always report the edge measurements, even on an early EXIT: a partial
+     * sweep is still data, and losing it means tapping it all again. */
+    print_sweep(hw_min_x, hw_max_x, hw_min_y, hw_max_y);
+    print_inset(hw_min_x, hw_max_x, hw_min_y, hw_max_y, W, H,
+                &summary.x, &summary.y, summary_ready);
 
     if (g_log) {
         fprintf(g_log, "# extremes: panel X %d..%d Y %d..%d   raw X %d..%d Y %d..%d\n",

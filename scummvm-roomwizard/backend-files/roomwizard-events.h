@@ -108,6 +108,15 @@ private:
 
 	void   checkGestures(int touchX, int touchY, uint32 now);
 	Corner cornerFor(int x, int y) const; // returns CORNER_COUNT if not in any corner
+	// The touch-safe rectangle (visible AND reachable), read from the graphics
+	// manager so it cannot disagree with what is drawn. Everything hit-tested
+	// here — gesture corners, overlay coordinates, the virtual cursor — is
+	// confined to it; the whole logical screen before the manager exists.
+	void   safeRect(int &x, int &y, int &w, int &h) const;
+	// Where the virtual cursor may go: the safe rect in the GUI, the game
+	// picture in game mode (so the rw_content_area=visible opt-out stays
+	// mouse-reachable even outside the safe rect).
+	void   cursorBounds(int &x, int &y, int &w, int &h) const;
 	void   pushEvent(const Common::Event &e);
 
 	// Touch helper methods

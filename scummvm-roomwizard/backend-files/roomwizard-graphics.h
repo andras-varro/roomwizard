@@ -106,8 +106,29 @@ private:
 	// The framebuffer's LOGICAL size — the visible rectangle inside the bezel.
 	// fb_init() sizes it and fb_swap() places it on the panel, so everything
 	// here draws in logical coordinates and no bezel arithmetic is needed.
+	//
+	// These remain the STRIDE and the BOUNDS of the back buffer, and nothing
+	// else. They are NOT where content goes: see safeWidth() below.
 	int fbWidth() const  { return _fb ? (int)_fb->width  : kPanelWidth; }
 	int fbHeight() const { return _fb ? (int)_fb->height : kPanelHeight; }
+
+	// The touch-safe rectangle: visible AND reachable by a finger. The digitiser
+	// saturates before the panel edge, so a band at each end of Y (and a few
+	// columns on X) is drawable but unpressable — measured at runtime by
+	// touch_input.c's publish_safe_area(), zero until a panel has been swept.
+	//
+	// The OVERLAY lives here unconditionally (launcher, GMM, virtual keyboard —
+	// all buttons). The GAME PICTURE lives here too by default, because a game's
+	// verb bar or inventory may sit on its bottom row and we cannot audit
+	// third-party content for what has to be pressable; rwFullContentArea()
+	// opts out and gives the picture the whole surface instead.
+	//
+	// Only correct after touch_init(), which is why initSize() calls
+	// syncScreenGeometry() before sizing anything from these.
+	int safeLeft() const   { return SCREEN_SAFE_LEFT; }
+	int safeTop() const    { return SCREEN_SAFE_TOP; }
+	int safeWidth() const  { return SCREEN_SAFE_WIDTH; }
+	int safeHeight() const { return SCREEN_SAFE_HEIGHT; }
 
 	// Panel size, and therefore the upper bound on any logical dimension.
 	static const int kPanelWidth  = 800;
@@ -137,6 +158,14 @@ private:
 	// Overlay
 	Graphics::Surface _overlaySurface;
 	bool _overlayVisible;
+	/* Overlay CONTENT changed, as opposed to the overlay merely being up.
+	 * updateScreen() used _overlayVisible in its dirty test, and since the
+	 * ScummVM launcher *is* the overlay that made the flag permanently true —
+	 * the 30 fps cap never applied and a static launcher screen recomposited
+	 * the whole 800x455 surface as fast as the GUI could call, ~52 % of the
+	 * single core. Set by showOverlay/clearOverlay/copyRectToOverlay, cleared
+	 * when a frame is actually drawn. */
+	bool _overlayDirty;
 
 	// Shake offset
 	int _shakeXOffset;
@@ -167,6 +196,11 @@ public:
 
 	// Scaling info for coordinate transformation
 	void getScalingInfo(int &scaledWidth, int &scaledHeight, int &offsetX, int &offsetY) const;
+
+	// The touch-safe rectangle in logical coordinates, for the event source:
+	// the overlay's origin/size and the gesture corners must agree with what is
+	// drawn here, so both read it from one place rather than the macros twice.
+	void getSafeRect(int &x, int &y, int &w, int &h) const;
 
 	// Framebuffer teardown (used on exit from OSystem_RoomWizard::quit)
 	void closeFramebuffer();

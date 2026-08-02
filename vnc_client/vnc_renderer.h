@@ -82,6 +82,27 @@ typedef struct VNCRenderer {
     struct timeval last_present_time;
 } VNCRenderer;
 
+/* ── The content rectangle ─────────────────────────────────────────────
+ * The remote desktop is letterboxed into the TOUCH-SAFE rectangle, not the
+ * whole visible surface: we cannot audit a third-party desktop for which of
+ * its pixels have to be pressable, so the only safe assumption is all of
+ * them.  A remote taskbar on the bottom row must be clickable.
+ *
+ * `content_area = visible` in the config opts out and gives the picture the
+ * whole surface back, at the cost of a band at each end that a finger cannot
+ * reach.  The opt-out moves ONLY the picture — this component's own touch UI
+ * (settings screen, reconnect row, exit gesture) always uses SCREEN_SAFE_*
+ * and ignores it, because stranding our own SAVE button is not a trade the
+ * user should be able to make by accident.
+ *
+ * SCREEN_SAFE_* is zero-inset until a panel's edge reach has been swept, so
+ * on an uncalibrated device both settings produce identical output.  It is
+ * only correct after BOTH fb_init() and touch_init(). */
+void vnc_content_set_full(bool full);
+
+/* The rectangle the picture is letterboxed into, in logical coordinates. */
+void vnc_content_rect(const Framebuffer *fb, int *x, int *y, int *w, int *h);
+
 /* Initialize renderer */
 int vnc_renderer_init(VNCRenderer *renderer, Framebuffer *fb);
 

@@ -177,23 +177,29 @@ void signal_handler(int sig) {
 void init_game() {
     portrait_mode = fb.portrait_mode;
     
-    // Calculate board dimensions using safe area bounds
+    // Calculate board dimensions.
+    //
+    // The board is drawn, never pressed — touch control is X-thresholds either
+    // side of it plus a full-width bottom band — so it may use the whole
+    // VISIBLE screen vertically. Its top still clears the SAFE-anchored
+    // menu/exit button row, which is why hud_height is added to SCREEN_SAFE_TOP.
     int hud_height = 55;  // Space for score/level/next piece at top
-    int available_h = SCREEN_SAFE_HEIGHT - hud_height;
-    
+    int board_top = SCREEN_SAFE_TOP + hud_height;
+    int available_h = SCREEN_VISIBLE_BOTTOM - board_top;
+
     cell_size = available_h / BOARD_HEIGHT;
-    
+
     // In portrait mode, allow larger cells (up to what fits); in landscape cap at 30
     if (!portrait_mode && cell_size > 30) cell_size = 30;
-    
+
     int board_h = BOARD_HEIGHT * cell_size;
     int board_w = BOARD_WIDTH * cell_size;
-    
-    // Center board horizontally in safe area
-    board_offset_x = SCREEN_SAFE_LEFT + (SCREEN_SAFE_WIDTH - board_w) / 2;
-    
+
+    // Center board horizontally on the visible screen
+    board_offset_x = SCREEN_VISIBLE_LEFT + (SCREEN_VISIBLE_WIDTH - board_w) / 2;
+
     // Center board vertically in available space below HUD
-    board_offset_y = SCREEN_SAFE_TOP + hud_height + (available_h - board_h) / 2;
+    board_offset_y = board_top + (available_h - board_h) / 2;
     
     hs_init(&hs_table, "tetris");
     hs_load(&hs_table);
@@ -756,7 +762,7 @@ void draw_game() {
     if (current_screen == SCREEN_WELCOME) {
         // Title
         int center_x = fb.width / 2;
-        text_draw_centered(&fb, center_x, SCREEN_SAFE_TOP + 50, "TETRIS", COLOR_CYAN, 4);
+        text_draw_centered(&fb, center_x, SCREEN_VISIBLE_TOP + 50, "TETRIS", COLOR_CYAN, 4);
         
         // Instructions — each line individually centered
         int line_height = text_measure_height(1);

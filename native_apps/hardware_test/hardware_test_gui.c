@@ -513,7 +513,10 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
             INFO_LINE("Line length: %d bytes", fb->line_length);
             INFO_LINE("Screen size: %d bytes", fb->screen_size);
             INFO_LINE("Bytes/pixel: %d", fb->bytes_per_pixel);
-            INFO_LINE("Safe area:   (%d,%d)-(%d,%d)",
+            INFO_LINE("Visible:     (%d,%d)-(%d,%d)",
+                       SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
+                       SCREEN_VISIBLE_RIGHT, SCREEN_VISIBLE_BOTTOM);
+            INFO_LINE("Touch-safe:  (%d,%d)-(%d,%d)",
                        SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
                        SCREEN_SAFE_RIGHT, SCREEN_SAFE_BOTTOM);
             INFO_LINE("Double buf:  %s", fb->double_buffering ? "yes" : "no");
@@ -545,18 +548,22 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
                 fb_fill_rect(fb, 0, gy, fb->width, 1, RGB(200,200,200));
             break;
         }
-        case 4: { /* Safe-area boundary */
+        case 4: { /* The two rectangles: visible vs touchable */
             draw_display_page(fb, "SAFE AREA", "tap -> next");
-            /* Outer edge = screen boundary (red) */
-            fb_draw_rect(fb, 0, 0, fb->width, fb->height, COLOR_RED);
-            fb_draw_rect(fb, 1, 1, fb->width - 2, fb->height - 2, COLOR_RED);
-            /* Inner edge = safe area (green) */
+            /* Outer edge (red) = SCREEN_VISIBLE_*: every pixel of the logical
+             * screen. The drawing surface already excludes the bezel, so this
+             * is fb->width/height. */
+            fb_draw_rect(fb, SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
+                         SCREEN_VISIBLE_WIDTH, SCREEN_VISIBLE_HEIGHT, COLOR_RED);
+            fb_draw_rect(fb, SCREEN_VISIBLE_LEFT+1, SCREEN_VISIBLE_TOP+1,
+                         SCREEN_VISIBLE_WIDTH-2, SCREEN_VISIBLE_HEIGHT-2, COLOR_RED);
+            /* Inner edge (green) = SCREEN_SAFE_*: visible AND touchable. */
             fb_draw_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
                          SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT, COLOR_GREEN);
             fb_draw_rect(fb, SCREEN_SAFE_LEFT+1, SCREEN_SAFE_TOP+1,
                          SCREEN_SAFE_WIDTH-2, SCREEN_SAFE_HEIGHT-2, COLOR_GREEN);
             /* Labels */
-            char buf[32];
+            char buf[64];
             snprintf(buf, sizeof(buf), "L=%d", SCREEN_SAFE_LEFT);
             fb_draw_text(fb, SCREEN_SAFE_LEFT + 4, 240, buf, COLOR_GREEN, 1);
             snprintf(buf, sizeof(buf), "R=%d", SCREEN_SAFE_RIGHT);
@@ -565,6 +572,13 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
             fb_draw_text(fb, 370, SCREEN_SAFE_TOP + 4, buf, COLOR_GREEN, 1);
             snprintf(buf, sizeof(buf), "B=%d", SCREEN_SAFE_BOTTOM);
             fb_draw_text(fb, 370, SCREEN_SAFE_BOTTOM - 16, buf, COLOR_GREEN, 1);
+            snprintf(buf, sizeof(buf), "RED %dx%d VISIBLE  GREEN %dx%d TOUCHABLE",
+                     SCREEN_VISIBLE_WIDTH, SCREEN_VISIBLE_HEIGHT,
+                     SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT);
+            text_draw_centered(fb, fb->width / 2, 200, buf, COLOR_WHITE, 1);
+            text_draw_centered(fb, fb->width / 2, 280,
+                               "THE GAP IS DRAWABLE BUT NOT PRESSABLE",
+                               COLOR_YELLOW, 1);
             break;
         }
         case 5: { /* Alpha / transparency */

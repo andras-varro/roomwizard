@@ -63,11 +63,61 @@ extern int screen_view_y;
 extern int screen_base_width;
 extern int screen_base_height;
 
-// The logical screen IS the safe area: it contains only visible pixels.
-#define SCREEN_SAFE_LEFT   0
-#define SCREEN_SAFE_TOP    0
-#define SCREEN_SAFE_RIGHT  (screen_base_width)
-#define SCREEN_SAFE_BOTTOM (screen_base_height)
+// ---------------------------------------------------------------------------
+// Two rectangles, not one: visible and touch-safe
+//
+// The whole logical screen is DRAWABLE. It is not all PRESSABLE. The digitiser
+// saturates before the physical panel edge — measured on RW09, raw pins at 4095
+// from panel row ~450 of 480 and at 0 from row ~30 — so a band at each end of Y
+// is visible but cannot be addressed by a finger. X reaches both edges. How wide
+// the band is depends on the panel and the calibration, so it is MEASURED at
+// runtime, never assumed: touch_input.c maps the raw hardware corners through the
+// live map and calls fb_set_touch_inset(). An uncalibrated device gets zero.
+//
+//   SCREEN_VISIBLE_*  the full logical screen. Backgrounds, borders, titles,
+//                     status and score rows, game playfields — anything the user
+//                     only has to SEE. The band is good screen area; use it.
+//   SCREEN_SAFE_*     visible AND touchable. Buttons, toggles, tab bars, touch
+//                     grids — anything the user has to PRESS.
+//
+// Drawing primitives are unchanged: they take logical coordinates and fb->width /
+// fb->height remain the full logical size.
+//
+// SCREEN_SAFE_* is only correct after touch_init() (or a later
+// touch_set_screen_size() / touch_set_raw_curve()), so compute layout after both
+// fb_init() and touch_init() — which is the documented app lifecycle anyway. The
+// macros read the globals at each use, so a layout recomputed after
+// fb_set_bezel() picks up the new values.
+// ---------------------------------------------------------------------------
+
+// Logical pixels at each edge that are visible but not touchable. Set by
+// touch_input.c via fb_set_touch_inset(); zero until then, so an app that never
+// initialises touch sees the whole logical screen as safe.
+extern int screen_touch_inset_top;
+extern int screen_touch_inset_bottom;
+extern int screen_touch_inset_left;
+extern int screen_touch_inset_right;
+
+// Largest inset that will be believed. A calibration that puts more than this out
+// of reach is broken, and silently shrinking every UI to match it hides the fault
+// where a loud warning finds it. ~10% of the short axis.
+#define FB_TOUCH_INSET_MAX 48
+
+// Publish the measured inset. Values are clamped to [0, FB_TOUCH_INSET_MAX] and a
+// clamp is reported on stdout — see the note above.
+void fb_set_touch_inset(int top, int bottom, int left, int right);
+
+#define SCREEN_VISIBLE_LEFT   0
+#define SCREEN_VISIBLE_TOP    0
+#define SCREEN_VISIBLE_RIGHT  (screen_base_width)
+#define SCREEN_VISIBLE_BOTTOM (screen_base_height)
+#define SCREEN_VISIBLE_WIDTH  (SCREEN_VISIBLE_RIGHT - SCREEN_VISIBLE_LEFT)
+#define SCREEN_VISIBLE_HEIGHT (SCREEN_VISIBLE_BOTTOM - SCREEN_VISIBLE_TOP)
+
+#define SCREEN_SAFE_LEFT   (screen_touch_inset_left)
+#define SCREEN_SAFE_TOP    (screen_touch_inset_top)
+#define SCREEN_SAFE_RIGHT  (screen_base_width  - screen_touch_inset_right)
+#define SCREEN_SAFE_BOTTOM (screen_base_height - screen_touch_inset_bottom)
 #define SCREEN_SAFE_WIDTH  (SCREEN_SAFE_RIGHT - SCREEN_SAFE_LEFT)
 #define SCREEN_SAFE_HEIGHT (SCREEN_SAFE_BOTTOM - SCREEN_SAFE_TOP)
 

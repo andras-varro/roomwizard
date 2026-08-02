@@ -79,6 +79,14 @@ private:
 // verbose touch-state logging.
 bool rwDebugMode();
 
+// True when the GAME PICTURE may use the whole visible surface instead of the
+// touch-safe rectangle. Set ROOMWIZARD_CONTENT_AREA=visible for a one-off run,
+// or rw_content_area=visible in scummvm.ini to persist it. Default: safe, i.e.
+// every pixel of the picture is reachable by a finger.
+// Checked once at first call and cached. The OVERLAY (launcher / GMM / virtual
+// keyboard) always stays inside the safe rect and ignores this.
+bool rwFullContentArea();
+
 // Cached pointer to the single backend instance.
 // Set in OSystem_RoomWizard constructor, avoids repeated dynamic_cast on g_system.
 OSystem_RoomWizard *rwSystem();

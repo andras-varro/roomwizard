@@ -388,7 +388,7 @@ void screen_draw_welcome(Framebuffer *fb, const char *game_title,
     text_to_uppercase(upper_title, game_title, sizeof(upper_title));
     int title_width = strlen(upper_title) * 8 * 4;
     int title_x = LAYOUT_CENTER_X(title_width);
-    int title_y = SCREEN_SAFE_TOP + 50;  // 50px from safe top
+    int title_y = SCREEN_VISIBLE_TOP + 50;  // text: only has to be seen, not pressed
     fb_draw_text(fb, title_x, title_y, upper_title, COLOR_CYAN, 4);
     
     // Draw instructions (centered in safe area)
@@ -414,7 +414,7 @@ void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
     text_to_uppercase(upper_msg, message, sizeof(upper_msg));
     int msg_width = strlen(upper_msg) * 8 * 3;
     int msg_x = LAYOUT_CENTER_X(msg_width);
-    int msg_y = SCREEN_SAFE_TOP + (SCREEN_SAFE_HEIGHT / 3);
+    int msg_y = SCREEN_VISIBLE_TOP + (SCREEN_VISIBLE_HEIGHT / 3);
     fb_draw_text(fb, msg_x, msg_y, upper_msg, COLOR_RED, 3);
     
     // Draw score (centered in safe area)
@@ -803,8 +803,10 @@ void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {
 
     int center_x = fb->width / 2;
 
-    // Title — upper portion of screen
-    int title_y = SCREEN_SAFE_TOP + SCREEN_SAFE_HEIGHT / 5;
+    // Title — upper portion of screen. Text and the score table below it are
+    // read, not pressed, so they use the full visible screen; the buttons at
+    // the bottom of this overlay stay inside SCREEN_SAFE_*.
+    int title_y = SCREEN_VISIBLE_TOP + SCREEN_VISIBLE_HEIGHT / 5;
     text_draw_centered(fb, center_x, title_y, gos->title, COLOR_YELLOW, 4);
 
     // Score — below title
@@ -822,7 +824,7 @@ void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {
 
     // Highscore leaderboard (if table exists and has entries)
     if (gos->hs_table != NULL && gos->hs_table->count > 0) {
-        int hs_width = SCREEN_SAFE_WIDTH - 40;
+        int hs_width = SCREEN_VISIBLE_WIDTH - 40;
         int hs_x = LAYOUT_CENTER_X(hs_width);
         hs_draw(fb, gos->hs_table, hs_x, info_y, hs_width);
     }

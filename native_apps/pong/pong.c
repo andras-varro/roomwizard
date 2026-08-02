@@ -659,7 +659,7 @@ void draw_game() {
     
     // Handle welcome screen — custom drawing for properly centered multi-line text
     if (current_screen == SCREEN_WELCOME) {
-        text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 70, "PONG", COLOR_CYAN, 4);
+        text_draw_centered(&fb, fb.width / 2, SCREEN_VISIBLE_TOP + 70, "PONG", COLOR_CYAN, 4);
         text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 10,
                           "TOUCH TO MOVE PADDLE", COLOR_WHITE, 1);
         text_draw_centered(&fb, fb.width / 2, fb.height / 2 + 10,

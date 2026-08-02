@@ -29,11 +29,18 @@
 /*
  * SCREEN SIZE IS RUNTIME.  fb->width / fb->height are the logical (visible)
  * surface, which shrinks with the bezel margins (800x450 at the shipped
- * 15/15/0/0).  Everything anchored to the bottom of the screen — the action
- * button row, the numeric keypad, the full keypad panel — is therefore
- * computed from fb->height by the helpers below rather than being a constant.
+ * 15/15/0/0).  Not all of it is PRESSABLE, though: the digitizer saturates
+ * before the panel edge, so everything on this screen — it is nothing but
+ * buttons — is laid out inside SCREEN_SAFE_*, the measured visible-and-
+ * touchable rectangle.  The bottom-anchored parts (action button row, numeric
+ * keypad, full keypad panel) are therefore computed from SCREEN_SAFE_BOTTOM by
+ * the helpers below rather than from fb->height or a constant.
  * Both the draw path and the hit-test path must call the SAME helper, or a
  * button will be drawn somewhere it cannot be tapped.
+ *
+ * SCREEN_SAFE_* is only correct after touch_init(), which vnc_client.c does
+ * before this screen can ever open.  It is zero-inset on an unswept panel, so
+ * the layout then matches what it always was.
  */
 
 #define TITLE_BAR_H      40
@@ -57,18 +64,20 @@
 #define PM_BTN_W          60
 #define PM_BTN_H          38
 
-/* Action buttons.  BOTTOM_GAP keeps the row clear of the panel edge, where the
- * digitizer stops reporting (see ../SYSTEM_ANALYSIS.md — touch reach). */
+/* Action buttons.  BOTTOM_GAP is a visual gap only — SCREEN_SAFE_BOTTOM already
+ * excludes the band where the digitizer stops reporting, so the 20 px this used
+ * to reserve by hand is no longer needed (and reserving it twice would push the
+ * status line onto the last settings row). */
 #define ACT_BTN_H         48
-#define ACT_BTN_BOTTOM_GAP 20
+#define ACT_BTN_BOTTOM_GAP 4
 #define ACT_BTN_BACK_X    20
 #define ACT_BTN_EXIT_X    300
 #define ACT_BTN_SAVE_X    580
 #define ACT_BTN_W         200
 
-/* ── Numeric keypad overlay (anchored to the bottom of the surface) ── */
+/* ── Numeric keypad overlay (anchored to the bottom of the safe rect) ── */
 #define KP_BLOCK_H        192      /* key rows: 0, 54, 108 + a 30px-tall row */
-#define KP_BOTTOM_GAP     20       /* clear of the digitizer's dead band */
+#define KP_BOTTOM_GAP     4        /* visual gap; the dead band is already out */
 #define KP_INPUT_X        20
 #define KP_INPUT_W        760
 #define KP_INPUT_H        36
@@ -99,10 +108,13 @@
 
 /* ── Runtime layout helpers ────────────────────────────────────────── */
 /* The draw path and the hit-test path must both call these; a constant in one
- * and a helper in the other draws buttons where they cannot be tapped. */
+ * and a helper in the other draws buttons where they cannot be tapped.
+ * They anchor to SCREEN_SAFE_BOTTOM, not fb->height: the last ~16 logical rows
+ * are visible but unreachable on a swept panel. */
 
 static int settings_act_btn_y(const Framebuffer *fb) {
-    return (int)fb->height - ACT_BTN_BOTTOM_GAP - ACT_BTN_H;
+    (void)fb;
+    return SCREEN_SAFE_BOTTOM - ACT_BTN_BOTTOM_GAP - ACT_BTN_H;
 }
 
 static int settings_status_y(const Framebuffer *fb) {
@@ -111,7 +123,8 @@ static int settings_status_y(const Framebuffer *fb) {
 
 /* Top of the numeric keypad's key block; everything else hangs off it. */
 static int kp_top(const Framebuffer *fb) {
-    return (int)fb->height - KP_BLOCK_H - KP_BOTTOM_GAP;
+    (void)fb;
+    return SCREEN_SAFE_BOTTOM - KP_BLOCK_H - KP_BOTTOM_GAP;
 }
 /* Panel top sits far enough above the input field for the title to clear it
  * (title is drawn at panel_y + 1 and is 8 px tall at scale 1). */
@@ -120,7 +133,8 @@ static int kp_input_y(const Framebuffer *fb) { return kp_top(fb) - 44; }
 
 /* Full/alpha keypad panel height (its top edge FKP_Y is fixed). */
 static int fkp_panel_h(const Framebuffer *fb) {
-    return (int)fb->height - FKP_Y - FKP_BOTTOM_GAP;
+    (void)fb;
+    return SCREEN_SAFE_BOTTOM - FKP_Y - FKP_BOTTOM_GAP;
 }
 
 /* ── Keypad button geometry for NUMERIC mode ───────────────────────── */
@@ -976,6 +990,10 @@ static int save_config_file(const VNCConfig *cfg, const char *path) {
     fprintf(f, "encodings = %s\n", cfg->encodings);
     fprintf(f, "compress_level = %d\n", cfg->compress_level);
     fprintf(f, "quality_level = %d\n", cfg->quality_level);
+    /* Not editable on this screen, but it MUST be written: this function
+     * rewrites the whole file, so omitting the key would silently reset the
+     * user's choice to 'safe' every time they press SAVE. */
+    fprintf(f, "content_area = %s\n", cfg->content_full ? "visible" : "safe");
 
     fclose(f);
     return 0;
@@ -1003,16 +1021,34 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
     if (touch)
         touch_drain_events(touch);
 
+    /* Redraw only when the state that determines the picture has changed.
+     * This loop used to repaint the whole screen every 33 ms, which costs a
+     * double-digit percentage of the single 600 MHz core for a settings form
+     * that changes only when a button is pressed.
+     *
+     * The dirty test is a snapshot of the whole SettingsState rather than a list
+     * of fields: nothing outside the struct affects what is drawn (there is no
+     * animation or blink), so a memcmp cannot miss a visible change the way an
+     * enumerated list silently does when a field is added later.  The struct is
+     * memset above, so padding bytes compare equal. */
+    SettingsState prev;
+    memcpy(&prev, &st, sizeof(prev));
+    bool needs_redraw = true;
+
     while (1) {
         /* Draw current screen */
-        if (st.screen == SCREEN_MAIN) {
-            draw_main_screen(&st);
-        } else {
-            /* Keypad screen — choose layout based on mode */
-            if (st.keypad_mode == KEYPAD_NUMERIC)
-                draw_keypad(&st);
-            else
-                draw_keypad_full(&st);
+        if (needs_redraw) {
+            if (st.screen == SCREEN_MAIN) {
+                draw_main_screen(&st);
+            } else {
+                /* Keypad screen — choose layout based on mode */
+                if (st.keypad_mode == KEYPAD_NUMERIC)
+                    draw_keypad(&st);
+                else
+                    draw_keypad_full(&st);
+            }
+            memcpy(&prev, &st, sizeof(prev));
+            needs_redraw = false;
         }
 
         /* Poll touch input */
@@ -1063,7 +1099,13 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
             }
         }
 
-        /* ~30 fps */
+        /* Any change to the state that feeds the drawing code — a field edit, a
+         * screen switch, the save-error counter ticking down — schedules exactly
+         * one repaint. */
+        if (memcmp(&prev, &st, sizeof(prev)) != 0)
+            needs_redraw = true;
+
+        /* ~30 Hz input poll; the redraw above is gated on state changes */
         usleep(33000);
     }
 }

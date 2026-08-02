@@ -55,13 +55,43 @@ is `fb->width × fb->height`, and that is also the stride for every `uint16_t` i
   already places the logical surface at `fb->view_x/view_y`. Letterboxing against 480 instead
   of 450 is what put a 16 px black bar at the top of the remote desktop and wrote 30 rows past
   the back buffer.
-- **Layout anchored to the bottom must be computed from `fb->height`**, and the draw path and
-  the hit-test path must call the *same* helper — see `settings_act_btn_y()`, `kp_btn_y()` and
+- **Layout anchored to the bottom must be computed from `SCREEN_SAFE_BOTTOM`**, and the draw path
+  and the hit-test path must call the *same* helper — see `settings_act_btn_y()`, `kp_btn_y()` and
   `fkp_panel_h()` in `vnc_settings.c`. A constant in one and a helper in the other draws
   buttons where they cannot be tapped.
-- Keep bottom-anchored controls ~20 px clear of the surface edge. The digitizer stops reporting
-  before the panel border (see `../SYSTEM_ANALYSIS.md`), so a button flush with the bottom is
-  visible but not touchable.
+
+## Everything here goes in the touch-safe rectangle
+
+The digitizer saturates before the panel edge, so a band at each end of the *visible* surface is
+drawable but **not pressable** (~19 px top / ~16 px bottom / ~6 px each side on RW09; measured at
+runtime, `0` until a panel's edge reach has been swept). `native_apps` splits its call sites between
+`SCREEN_VISIBLE_*` and `SCREEN_SAFE_*` by asking whether each thing is *seen* or *pressed*.
+
+**That audit is impossible here.** The remote desktop is not ours: it may put a taskbar on its
+bottom row, and we have no way to know. So the only safe assumption is that *all* of it must be
+pressable, and the whole component works in `SCREEN_SAFE_*`:
+
+| What | Rectangle | Where |
+|---|---|---|
+| the remote desktop's letterbox | `vnc_content_rect()` — the safe rect, or the whole surface if the user opted out | `vnc_renderer.c` |
+| exit gesture zone, its progress bar | safe rect, always | `vnc_input.c`, `vnc_client.c` |
+| reconnect button row | safe rect, always | `vnc_client.c` `reconnect_ui()` |
+| settings screen, both keypads | safe rect, always | `vnc_settings.c` layout helpers |
+| stride and bounds of the back buffer | `fb->width` / `fb->height`, unchanged | everywhere |
+
+`content_area = safe | visible` in the config (default `safe`) opts the **picture** out and hands it
+the whole visible surface, trading reachability for ~11 % more pixels on a 1080p desktop. It
+deliberately does **not** move anything in the table's "always" rows: an option that could strand
+the SAVE button is a footgun, not a feature. Read it once in `load_config_file()` and publish it with
+`vnc_content_set_full()`; `vnc_settings.c`'s config writer rewrites the whole file, so it must emit
+the key or SAVE silently resets the user's choice.
+
+**Ordering:** `SCREEN_SAFE_*` is only correct after **both** `fb_init()` and `touch_init()`, in that
+order — which is what `run_vnc_client()` already does. The bottom-anchored gap constants
+(`ACT_BTN_BOTTOM_GAP`, `KP_BOTTOM_GAP`) are now *visual* gaps only; they used to reserve 20 px by
+hand for the dead band, and reserving it twice pushes the status line onto the last settings row.
+
+Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
 
 ## Shared code
 

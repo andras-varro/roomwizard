@@ -36,3 +36,22 @@ compress_level = 6
 
 # Tight encoding JPEG quality (1-9, higher = better quality)
 quality_level = 5
+
+# Where the remote desktop is drawn: safe | visible
+#
+#   safe    (default) letterbox it into the TOUCH-SAFE rectangle, so every pixel
+#           of the remote desktop can be reached by a finger. The digitizer
+#           saturates before the panel edge — a band at each end is visible but
+#           not pressable — and a remote taskbar on the bottom row has to be
+#           clickable. Costs some size: a 1920x1080 desktop scales to ~747x420
+#           instead of ~795x447.
+#   visible use the whole visible surface. Bigger, sharper text, but a band at
+#           the top and bottom of the remote desktop cannot be tapped.
+#
+# Only affects the remote desktop. This app's own touch UI — the settings
+# screen, the reconnect buttons and the exit gesture corner — always stays
+# inside the touch-safe rectangle.
+#
+# Has no effect until the panel's edge reach has been measured (Device Tools ->
+# Display -> CALIBRATE TOUCH, the REACH step); before that the two are the same.
+content_area = safe

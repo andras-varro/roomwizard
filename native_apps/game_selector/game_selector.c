@@ -210,7 +210,7 @@ void draw_menu(GameSelector *selector) {
     
     // Draw input hint at bottom
     if (selector->input.gamepad_connected || selector->input.keyboard_connected)
-        fb_draw_text(&selector->fb, SCREEN_SAFE_LEFT + 10, selector->fb.height - 18,
+        fb_draw_text(&selector->fb, SCREEN_VISIBLE_LEFT + 10, selector->fb.height - 18,
                      "D-PAD: NAVIGATE  A/ENTER: SELECT  BACK: EXIT", RGB(100, 100, 100), 1);
     
     // Swap buffers for double buffering

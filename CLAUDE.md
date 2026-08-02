@@ -77,9 +77,15 @@ ScummVM additionally needs **WSL Ubuntu 20.04+** and `g++-arm-linux-gnueabihf`; 
 cross-compiles its own zlib/libpng. `usb_host` needs kernel-module build deps
 (`bc libssl-dev bison flex`) + `python3`.
 
-**Note:** `native_apps/Makefile` uses native `gcc` and is *not* the deployment path —
-`native_apps/build-and-deploy.sh` (cross-compiler, `-static`) is the source of truth
-for how binaries are actually built and shipped.
+**On this Windows host, every build goes through WSL.** The Bash tool is Git Bash, which has neither
+the ARM cross-compiler nor a host `gcc` — so the host-side regression needs WSL too, not just the
+cross-builds. Invoke as
+`wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/<component> && ./build-and-deploy.sh <ip>"`.
+
+**Note:** `native_apps/` has no `Makefile` — there was one, it targeted host `gcc` with ARM flags
+and could not compile anything, and it was deleted. `native_apps/build-and-deploy.sh`
+(cross-compiler, `-static`) is the only build path and the source of truth for how binaries are
+actually built and shipped.
 
 ## Non-obvious constraints (things that will silently break)
 
@@ -91,7 +97,7 @@ for how binaries are actually built and shipped.
   artifacts. With the toolchain default `-march=armv7-a+fp`, app-level 32-bit `int`
   division compiles to a *call* to the software helper `__aeabi_uidiv`/`__udivsi3`, so the
   deploy path's bare `$CC -O2 -static` is already safe; `-mcpu=cortex-a8 -mfpu=neon`
-  (present only in the dead `native_apps/Makefile`) makes no difference to the emitted code.
+  makes no difference to the emitted code.
   What *would* break it is an explicit `-march` that implies the idiv extension —
   `-march=armv7ve`, `-mcpu=cortex-a7/a15/a17`, or anything ARMv8. Dynamic linking is
   unaffected. libpng needs `-DPNG_ARM_NEON_OPT=0`.
@@ -131,30 +137,75 @@ for how binaries are actually built and shipped.
   ABS_X, ABS_Y, BTN_TOUCH, SYN_REPORT). The panel is projected-capacitive (Panjit on i2c-2 @ 0x03)
   and the controller is 2-point multi-touch capable, but the `panjit_ts` driver exposes only
   ABS_X/ABS_Y/BTN_TOUCH. `common/touch_input.c` maps a raw reading in **two stages**:
-  raw 12-bit (0–4095) → **panel** pixel by a per-axis LINEAR map (no affine, no keystone — a
-  `touch_trace` capture confirms the panel is linear), then **panel → logical** by subtracting the
-  bezel viewport origin. Stage 1 is calibration; stage 2 is the bezel; they are separate and the
-  fit for stage 1 must be done in panel coordinates or the bezel gets subtracted twice.
-  `/etc/touch_calibration.conf`: line 1 = `raw min_x max_x min_y max_y` (calibration),
-  line 2 = `bezel top bottom left right`. Both are set from **Device Tools → Set Screen**, on
-  separate buttons: `TOUCH CALIBRATION` (tap 9 crosshairs, per-axis least-squares fit
-  extrapolated to the true panel edges, summary before save) and `SCREEN EDGES`. ScummVM links
-  its own copy of `touch_input.o`, so rebuild it after changing this file or its touch goes stale.
+  raw 12-bit (0–4095) → **panel** pixel by a per-axis **piecewise-linear** curve (three segments,
+  knots fixed at panel ¼ and ¾), then **panel → logical** by subtracting the bezel viewport origin.
+  Stage 1 is calibration; stage 2 is the bezel; they are separate and the fit for stage 1 must be
+  done in panel coordinates or the bezel gets subtracted twice.
+  **Why three segments:** the format keeps them, but with the endpoints unclamped (see below) the
+  stored curve *is* a straight line — the host regression asserts **zero** deviation from the
+  interior fit. The model consistent with every measurement is **linear across the panel, hard-clipped
+  at raw 0 and 4095**. (An earlier revision claimed Y runs ~9.9 raw counts/px in the middle and ~8.8
+  in the outer bands; that came from a single target and is **not supported** — residuals against the
+  interior line are ±80 raw, ≈±8 px of tap placement, with no consistent sign.) The three-segment
+  format is retained anyway because changing line 1's field count is the one edit that silently breaks
+  a component linking a stale `touch_input.o`.
+  `/etc/touch_calibration.conf`: line 1 = eight numbers, per axis the raw readings at panel
+  `0 ¼ ¾ dim-1` (`x0 xk_lo xk_hi x1  y0 yk_lo yk_hi y1`); line 2 = `bezel top bottom left right`;
+  line 3 = optional, keyword-tagged `reach x_lo x_hi y_lo y_hi` — what the *physical* edges actually
+  emit, from the wizard's sweep. Absent means "assume the hardware limit". A legacy 4-number line 1 is
+  still read and **migrated on load** — knots onto the line it described, endpoints left where the
+  line puts them.
+  ⚠️ **Never clamp a fitted endpoint into `0..4095`.** A correct fit on this panel legitimately
+  extrapolates outside it (the reference Y fit is `-279..4382`), because the interior line reaches raw
+  0/4095 *before* the panel edge. The clamp that used to be applied asserted raw 4095 is emitted at
+  panel 479 when it is actually emitted at panel ~450, which tilted the outer segment so the reported
+  position ran **ahead of the finger by up to +19 px across the bottom quarter**. Both the fit's clamp
+  and `touch_input.c`'s legacy-migration `clamp_to_hw()` are deleted; endpoints outside the emittable
+  range are the measurement, not an error.
+  Both geometry lines are written by **one wizard** — Device Tools → **Display** → `CALIBRATE TOUCH`
+  (`SCREEN EDGES` jumps to its margins step, its `REACH` step measures line 3; `RESET` restores
+  hardware defaults). It runs with the
+  bezel zeroed so a drawn pixel is a panel pixel, fits from **interior targets only**, and writes
+  nothing until you confirm on the live mapping behind a 20 s auto-revert. **The fit lives in
+  `common/touch_calib.c` and nowhere else** — it previously existed in three places with the same
+  defect. **ScummVM and vnc_client each link their own copy of `touch_input.o`, so redeploy every
+  component after changing that file or the calibration file format.** A stale binary does not error:
+  its 4-number `sscanf` succeeds on the first four of the eight values and it accepts them as a legacy
+  config, so touch silently collapses (a stale vnc_client read `X [0..1020] Y [3074..4095]`).
 - **Screen edges are the library's problem, not the app's.** The bezel covers ~15px top and bottom.
   `fb_init()` shrinks the drawing surface to the visible rectangle and `fb_swap()` places it on the
   panel at the viewport origin, leaving the hidden bands black — so `fb.width`/`fb.height` and
-  `SCREEN_SAFE_*` are the **logical** screen (800×450 at the shipped margins) and every pixel in it
+  `SCREEN_VISIBLE_*` are the **logical** screen (800×450 at the shipped margins) and every pixel in it
   is visible. Never add your own bezel arithmetic. Margins default to `FB_BEZEL_*_DEFAULT`
   (15/15/0/0) when the config has no line 2.
-- **Touchable is smaller than visible — on Y only** (measured 2026-07-31 with `touch_raw`). The
-  digitizer reaches *past* both the left and right panel edges, but stops **~30 panel px short at
-  the top and bottom**. In logical coordinates that means the top ~15 and bottom ~15 rows of the
-  drawing surface **cannot be touched**, while every column can. Keep *interactive* targets out of
-  those two bands; decoration can go to the edge. It is a sensor property — the electrode array is
-  ~11 mm shorter than the LCD — so no calibration recovers it.
-  The old "~10px left/right, ~25 top, ~30 bottom" figures were **wrong on X**: an artifact of the
-  9-tap calibration fitting crosshairs inset only 40px, i.e. inside the compressed band. Numbers,
-  method and the raw capture: `SYSTEM_ANALYSIS.md#33-touch`.
+- **Drawable ≠ pressable: the digitizer saturates before the panel edge on Y.** Every edge *does*
+  drive raw to 0/4095 — all 16 sweep buckets on all four edges — but the value is **clipped flat over
+  a band inside the edge**, and on Y that band is ~30 px. Measured on RW09 2026-08-01 with
+  `touch_raw`'s SWEEP + INSET modes (calibration and bezel zeroed, so a drawn pixel is a panel pixel):
+  raw 4095 is first emitted at panel ~450, raw 0 at panel ~30; on X the flat band is ~0–12 px.
+  Confirmed independently by the 11-target interior fit, which never sees an edge sample and predicts
+  the same 30 / 450. **A bezel press alone cannot distinguish "clipping starts at the edge" from
+  "clipping starts 30 px inside it"** — which is why the earlier revision of this bullet was wrong on
+  exactly that point, and why the bug survived three sessions. So the codebase carries **two**
+  rectangles: `SCREEN_VISIBLE_*` (the full logical screen — backgrounds, titles, status rows,
+  playfields) and `SCREEN_SAFE_*` (visible **∩** touchable — buttons, toggles, tab bars, touch grids).
+  The band between them is good screen area and stays fully drawable; it just must not hold anything
+  the user has to press. The inset is **measured at runtime, never hardcoded** — `publish_safe_area()`
+  pushes the raw edge extremes through the production `scale_coordinates()` — so it is `0` until a
+  panel has been swept, and `SCREEN_SAFE_*` is only correct after `touch_init()`. Read it back from
+  Device Tools → Display → `TOUCHABLE:` or the wizard's REPORT screen; the numbers above are the
+  reference capture, and **the live inset is per-unit and per-calibration-run** — RW09's current fit
+  publishes `X 6..793 Y 19..438 of 800x455`, i.e. ~19/16 on Y *and* ~6 px each side on X. **X's band is
+  much smaller than Y's and can be zero, but a non-zero X inset is the model working, not a fault** —
+  it comes from fitted X endpoints outside `0..4095`, exactly as on Y. A dead band is a **fact about
+  this panel**, not a bug.
+  **ScummVM and `vnc_client` are the exception to "the band is drawable, so use it":** their content
+  is third-party — a remote taskbar, a game's verb bar, the ScummVM theme's button row — so nobody
+  can audit which of its pixels must be pressable. Both confine the *content rectangle itself* to
+  `SCREEN_SAFE_*` and leave the band black, with a per-component opt-out
+  (`content_area = visible` in `vnc_client.conf`, `ROOMWIZARD_CONTENT_AREA=visible` /
+  `rw_content_area=visible` for ScummVM) that moves only the picture, never their own buttons.
+  Numbers, method and the raw capture: `SYSTEM_ANALYSIS.md#33-touch`.
 - **32-bit ARM:** `sizeof(long)==4`. Never do `(now.tv_sec - 0) * 1000000L` (overflows) —
   baseline timers to current time, not epoch 0.
 - **Firmware / boot edits.** There is **no boot-time MD5 check** of the kernel and no
@@ -226,7 +277,9 @@ this is how projects plug into the launcher without a central registry.
 - `gamepad.c` — **unified input abstraction** across touch + USB keyboard + USB mouse +
   Xbox gamepad, mapped to abstract buttons (`BTN_ID_UP`…`BTN_ID_BACK`). New apps should
   use this rather than reading evdev directly. Configurable via `/etc/input_config.conf`.
-- `touch_input.c`, `hardware.c` (LED/backlight sysfs), `common.c` (buttons, ModalDialog,
+- `touch_input.c` (the raw→panel→logical map), `touch_calib.c` (**the** implementation of the
+  calibration fit — targets, interior masks, per-axis verdict, sanity gate, `.bakN` backup; linked
+  only by `device_tools` and `touch_raw`), `hardware.c` (LED/backlight sysfs), `common.c` (buttons, ModalDialog,
   safe-area screens), `ui_layout.c` (layouts + ScrollableList), `audio.c` (OSS beeps/tones),
   `config.c` (`/opt/games/rw_config.conf`), `keyboard.c` (on-screen touch keyboard),
   `highscore.c`, `ppm.c`, `logger.c`.

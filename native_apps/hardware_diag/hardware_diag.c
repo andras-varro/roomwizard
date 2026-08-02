@@ -32,6 +32,12 @@
 #define SCREEN_W (screen_base_width)
 #define SCREEN_H (screen_base_height)
 
+/* This tool lays out entirely with SCREEN_VISIBLE_*, not SCREEN_SAFE_*: every
+ * page is read-only text, and the only touch interaction is "tap anywhere to
+ * continue" plus the EXIT corner. Nothing here has to be pressed at a
+ * particular pixel, so shrinking the pages by the digitizer's dead band would
+ * cost rows of information for no benefit. */
+
 /* ── Page definitions ───────────────────────────────────────────────────── */
 
 #define PAGE_SYSTEM   0
@@ -264,8 +270,8 @@ static void format_bytes(unsigned long kb, char *buf, size_t len) {
  */
 static int draw_info_row(Framebuffer *fb, int y, const char *label,
                          const char *value, uint32_t value_color) {
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, label, COLOR_LABEL, 2);
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 280, y, value, value_color, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, label, COLOR_LABEL, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 280, y, value, value_color, 2);
     return y + 28;
 }
 
@@ -333,8 +339,8 @@ static void draw_page_indicator(Framebuffer *fb, int page) {
     text_draw_centered(fb, SCREEN_W / 2, SCREEN_H - 20, ind, COLOR_PAGE_IND, 1);
 
     /* Divider above indicator */
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, SCREEN_H - 38,
-                 SCREEN_SAFE_RIGHT - 20, SCREEN_H - 38, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, SCREEN_H - 38,
+                 SCREEN_VISIBLE_RIGHT - 20, SCREEN_H - 38, COLOR_SECTION_LINE);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -347,7 +353,7 @@ static void draw_page_indicator(Framebuffer *fb, int page) {
 static void draw_page_system(Framebuffer *fb) {
     draw_page_header(fb, PAGE_SYSTEM);
 
-    int y = SCREEN_SAFE_TOP + 70;
+    int y = SCREEN_VISIBLE_TOP + 70;
 
     /* Kernel version */
     char kernel[256];
@@ -412,8 +418,8 @@ static void draw_page_system(Framebuffer *fb) {
 
     /* Section divider */
     y += 12;
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
 
     /* Additional info: hostname */
     y += 12;
@@ -440,7 +446,7 @@ static void draw_page_memory(Framebuffer *fb) {
     unsigned long used_kb = mi.total_kb - mi.free_kb - mi.buffers_kb - mi.cached_kb;
     if (used_kb > mi.total_kb) used_kb = 0; /* underflow guard */
 
-    int y = SCREEN_SAFE_TOP + 70;
+    int y = SCREEN_VISIBLE_TOP + 70;
 
     /* RAM info rows */
     {
@@ -463,13 +469,13 @@ static void draw_page_memory(Framebuffer *fb) {
 
     /* RAM usage bar */
     y += 8;
-    draw_usage_bar(fb, SCREEN_SAFE_LEFT + 40, y + 18, SCREEN_SAFE_WIDTH - 80,
+    draw_usage_bar(fb, SCREEN_VISIBLE_LEFT + 40, y + 18, SCREEN_VISIBLE_WIDTH - 80,
                    22, used_kb, mi.total_kb, "RAM USAGE:");
     y += 58;
 
     /* Divider */
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
     y += 12;
 
     /* Swap info */
@@ -490,8 +496,8 @@ static void draw_page_memory(Framebuffer *fb) {
     y += 8;
     {
         unsigned long swap_used = mi.swap_total_kb - mi.swap_free_kb;
-        draw_usage_bar(fb, SCREEN_SAFE_LEFT + 40, y + 18,
-                       SCREEN_SAFE_WIDTH - 80, 22,
+        draw_usage_bar(fb, SCREEN_VISIBLE_LEFT + 40, y + 18,
+                       SCREEN_VISIBLE_WIDTH - 80, 22,
                        swap_used, mi.swap_total_kb, "SWAP USAGE:");
     }
 
@@ -505,14 +511,14 @@ static void draw_page_memory(Framebuffer *fb) {
 static void draw_page_storage(Framebuffer *fb) {
     draw_page_header(fb, PAGE_STORAGE);
 
-    int y = SCREEN_SAFE_TOP + 70;
+    int y = SCREEN_VISIBLE_TOP + 70;
 
     for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
         DiskInfo di;
         read_disk_usage(mount_points[i], &di);
 
         /* Mount point label */
-        fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, mount_points[i], COLOR_HEADER, 2);
+        fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, mount_points[i], COLOR_HEADER, 2);
         y += 22;
 
         if (di.valid) {
@@ -524,16 +530,16 @@ static void draw_page_storage(Framebuffer *fb) {
             char detail[128];
             snprintf(detail, sizeof(detail), "%s USED / %s TOTAL  (%s FREE)",
                      used_str, total_str, free_str);
-            fb_draw_text(fb, SCREEN_SAFE_LEFT + 40, y, detail, COLOR_LABEL, 1);
+            fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 40, y, detail, COLOR_LABEL, 1);
             y += 14;
 
             /* Usage bar */
-            draw_usage_bar(fb, SCREEN_SAFE_LEFT + 40, y + 4,
-                           SCREEN_SAFE_WIDTH - 80, 18,
+            draw_usage_bar(fb, SCREEN_VISIBLE_LEFT + 40, y + 4,
+                           SCREEN_VISIBLE_WIDTH - 80, 18,
                            di.used_kb, di.total_kb, "");
             y += 30;
         } else {
-            fb_draw_text(fb, SCREEN_SAFE_LEFT + 40, y, "N/A (NOT MOUNTED)",
+            fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 40, y, "N/A (NOT MOUNTED)",
                          RGB(200, 80, 80), 2);
             y += 28;
         }
@@ -541,8 +547,8 @@ static void draw_page_storage(Framebuffer *fb) {
         /* Divider between partitions */
         if (i < NUM_MOUNT_POINTS - 1) {
             y += 4;
-            fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                         SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+            fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                         SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
             y += 8;
         }
     }
@@ -557,13 +563,13 @@ static void draw_page_storage(Framebuffer *fb) {
 static void draw_page_hardware(Framebuffer *fb) {
     draw_page_header(fb, PAGE_HARDWARE);
 
-    int y = SCREEN_SAFE_TOP + 70;
+    int y = SCREEN_VISIBLE_TOP + 70;
 
     /* Section: LED Brightness */
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, "LED BRIGHTNESS", COLOR_HEADER, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, "LED BRIGHTNESS", COLOR_HEADER, 2);
     y += 24;
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
     y += 8;
 
     {
@@ -602,10 +608,10 @@ static void draw_page_hardware(Framebuffer *fb) {
     y += 8;
 
     /* Section: Framebuffer Info */
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, "FRAMEBUFFER", COLOR_HEADER, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, "FRAMEBUFFER", COLOR_HEADER, 2);
     y += 24;
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
     y += 8;
 
     {
@@ -638,25 +644,25 @@ static void draw_page_hardware(Framebuffer *fb) {
 static void draw_page_config(Framebuffer *fb) {
     draw_page_header(fb, PAGE_CONFIG);
 
-    int y = SCREEN_SAFE_TOP + 70;
+    int y = SCREEN_VISIBLE_TOP + 70;
 
     /* Section: Config file settings */
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, "CONFIG FILE", COLOR_HEADER, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, "CONFIG FILE", COLOR_HEADER, 2);
     y += 22;
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, CONFIG_FILE_PATH, COLOR_LABEL, 1);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, CONFIG_FILE_PATH, COLOR_LABEL, 1);
     y += 16;
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
     y += 10;
 
     /* Load config */
     Config cfg;
     config_init(&cfg);
     if (config_load(&cfg) < 0) {
-        fb_draw_text(fb, SCREEN_SAFE_LEFT + 40, y,
+        fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 40, y,
                      "CONFIG FILE NOT FOUND", RGB(200, 80, 80), 2);
         y += 24;
-        fb_draw_text(fb, SCREEN_SAFE_LEFT + 40, y,
+        fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 40, y,
                      "(USING DEFAULTS)", COLOR_LABEL, 2);
         y += 28;
     } else {
@@ -691,7 +697,7 @@ static void draw_page_config(Framebuffer *fb) {
             if (!is_known) {
                 if (!has_extra) {
                     y += 4;
-                    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, "OTHER SETTINGS:", COLOR_HEADER, 1);
+                    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, "OTHER SETTINGS:", COLOR_HEADER, 1);
                     y += 14;
                     has_extra = true;
                 }
@@ -699,7 +705,7 @@ static void draw_page_config(Framebuffer *fb) {
                     char line[196];
                     snprintf(line, sizeof(line), "%s = %s",
                              cfg.entries[i].key, cfg.entries[i].value);
-                    fb_draw_text(fb, SCREEN_SAFE_LEFT + 30, y, line, COLOR_LABEL, 1);
+                    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 30, y, line, COLOR_LABEL, 1);
                     y += 14;
                 }
             }
@@ -708,12 +714,12 @@ static void draw_page_config(Framebuffer *fb) {
 
     /* Section divider */
     y += 8;
-    fb_draw_line(fb, SCREEN_SAFE_LEFT + 20, y,
-                 SCREEN_SAFE_RIGHT - 20, y, COLOR_SECTION_LINE);
+    fb_draw_line(fb, SCREEN_VISIBLE_LEFT + 20, y,
+                 SCREEN_VISIBLE_RIGHT - 20, y, COLOR_SECTION_LINE);
     y += 10;
 
     /* Section: System configuration */
-    fb_draw_text(fb, SCREEN_SAFE_LEFT + 20, y, "SYSTEM", COLOR_HEADER, 2);
+    fb_draw_text(fb, SCREEN_VISIBLE_LEFT + 20, y, "SYSTEM", COLOR_HEADER, 2);
     y += 28;
 
     /* Default app (auto-launch) */
