@@ -206,17 +206,6 @@ makes any subsequent score qualify.
 
 ## Phase 2 — Script safety
 
-### B15. `clone-to-32gb.sh` can destroy a host disk — open, **most dangerous item in the repo**
-
-`clone-to-32gb.sh:250`. The only blacklist is the literal string `/dev/sda`. The mount guard
-(`:269`) misses LVM/LUKS roots (`mount` shows `/dev/mapper/…`, never the disk) and any unmounted
-disk. The size gate (`:281`) has a 16 GB **minimum** and no maximum. On this Windows host a
-`wsl --mount`ed physical drive appears as `/dev/sdd`/`/dev/sde` and is typically unmounted.
-`:355` then runs `dd if="$SOURCE" of="$DEVICE" bs=4M`.
-
-**Fix:** require `/sys/block/$(basename $dev)/removable == 1`; reject the disk backing `/`
-(`findmnt -no SOURCE /` → `lsblk -no PKNAME`); add `MAX_TARGET_SIZE_GB`.
-
 ### B17. `commission-roomwizard.sh` sed can wipe the network config — open
 
 `:244` — `sed -i '/^auto eth0/,/^$/d'` deletes to EOF if the eth0 stanza is last or the file has
@@ -557,6 +546,37 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B15. `clone-to-32gb.sh` could destroy a host disk** — done 2026-08-03, guard exercised in an
+isolated harness against this host's real disks. The old `check_device_safe()` blacklisted the literal
+string `/dev/sda` and called `mount | grep "^${dev}"`, then `dd if=… of="$DEVICE" bs=4M`. Measured on
+the dev host the same day, and the numbers are the argument for the shape of the fix:
+
+| Disk here | What it is | Old guard | New guard |
+|---|---|---|---|
+| `/dev/sda`, `/dev/sdb` | 0 GB WSL stubs | **blacklisted** | rejected (size) |
+| `/dev/sdc` | 8 GB, swap only | **passed the mount check** — `mount` never lists swap — then rejected by the 16 GB minimum, which is luck, not a guard | rejected (mounted: `lsblk` sees `[SWAP]`) |
+| `/dev/sdd` | 1024 GB, **carries `/`** | passed the blacklist; caught by the mount check only because `/` is mounted straight from the disk. An LVM/LUKS root shows `/dev/mapper/…` and would have passed both | rejected by name against the resolved root disk |
+
+So the disk the plan named as the likely *target* (`/dev/sdd`, where a `wsl --mount`ed card lands) is
+also this host's *root* disk, and the one name the old code protected was a 0 GB stub. Now:
+`root_whole_disk()` resolves `findmnt -no SOURCE --target /` through `lsblk -rnso NAME`, so partitions
+and device-mapper stacks all reduce to the whole disk and the target is refused if it matches; the
+mount check walks the holder tree with `lsblk -rno NAME,MOUNTPOINT` instead of grepping `mount`, which
+is what catches swap, LVM and LUKS; a partition target is refused outright (the script writes a
+partition table); and `MAX_TARGET_SIZE_GB` (default 128, env-overridable) closes the open top end —
+a minimum alone rejects the original 4 GB card and waves through a 4 TB drive.
+
+**One deliberate deviation from the fix this entry prescribed.** `removable == 1` is a **flag-gated
+default, not a hard requirement**: every disk on this host reads `removable=0`, the root disk included,
+so a hard gate would reject every legitimate target and the first thing anyone would do is comment it
+out. It refuses by default and prints what to look at; `--allow-fixed-disk` opens it, and **cannot**
+bypass the root-disk, mount, whole-disk or size checks. A safety check that has to be disabled to get
+work done is not a safety check.
+
+Not verified end-to-end: nothing was cloned, because doing that needs a spare card and the only disks
+here are the host's own. The guard was extracted into a harness and run against `/dev/sdd`, `/dev/sdc`,
+a nonexistent path and `/dev/sdc` with the override — all four behaved as the table says.
 
 **B25. A `vnc_client` no `stop` path could kill — done 2026-08-03, reproduced and verified on RW09
 the same day. The recorded cause was wrong, and the fix is not where the entry said it was.**
@@ -1207,8 +1227,11 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
 3. **The per-app layout pass** — done 2026-08-02 (B3e, B3i, B3j, B3k, B13d, B13k). It also
    established that **`touch_inject` cannot work on this device at all** (no `CONFIG_INPUT_UINPUT`),
    which is why C6 had to be rewritten around framebuffer capture instead.
-4. **B15** — stop the scripts from being able to hurt you. B17–B19 are the rest of Phase 2 and are
-   cheaper; take them in the same pass if the appetite is there. **B20 is done** (2026-08-03, with B25).
+4. **B15** — stop the scripts from being able to hurt you. **Done 2026-08-03**, and the measurement
+   reframed it: on this host the disk the entry named as the likely target (`/dev/sdd`) is also the
+   root disk, and the one name the old code blacklisted (`/dev/sda`) is a 0 GB WSL stub. **B17, B18 and
+   B19 are the rest of Phase 2** and are cheaper; take them in the same pass if the appetite is there.
+   **B20 is done** (2026-08-03, with B25).
 5. **F1 (ALSA)** — biggest user-visible improvement in the project.
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into

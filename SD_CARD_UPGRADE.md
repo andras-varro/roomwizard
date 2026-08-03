@@ -586,7 +586,12 @@ sudo umount /mnt/rw
 The helper script [`clone-to-32gb.sh`](clone-to-32gb.sh) automates the
 recommended procedure (Steps 2–6). It:
 
-- Validates target device (block device, ≥16 GB, not `/dev/sda`, not mounted)
+- Validates the target: a whole disk (not a partition), 16–128 GB, removable
+  media, nothing mounted anywhere below it, and **not the disk carrying `/`** —
+  resolved through partitions, LVM and LUKS, so it holds where `mount` shows only
+  `/dev/mapper/…`. Add `--allow-fixed-disk` for a card reader that reports as
+  fixed; under WSL every attached disk does, the one carrying `/` included, so
+  read `lsblk` before you use it. `MAX_TARGET_SIZE_GB=n` raises the ceiling.
 - Clones the source image/device with `dd` (or skips with `--expand-only`)
 - Verifies the 7-partition layout and rootfs UUID
 - Repartitions with `sfdisk` (expands p4 + p6, drops p7 swap, preserves p5)

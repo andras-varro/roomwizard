@@ -39,6 +39,9 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 EXPECTED_ROOTFS_UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
 MIN_TARGET_SIZE_GB=16
+# Upper bound as well as a lower one: a minimum alone rejects the original 4 GB
+# card and accepts a 4 TB disk.  Env-overridable for a genuinely large card.
+MAX_TARGET_SIZE_GB=${MAX_TARGET_SIZE_GB:-128}
 EXPECTED_PARTITION_COUNT=7  # Original has 7 partitions (including swap on p7)
 SCRIPT_NAME="$(basename "$0")"
 
@@ -59,6 +62,7 @@ MODE=""            # "clone" or "expand"
 SOURCE=""          # Image file or source device (clone mode only)
 DEVICE=""          # Target block device
 DRY_RUN=false
+ALLOW_FIXED_DISK=false   # --allow-fixed-disk: accept a target with removable=0
 STEP=0
 
 # ---------------------------------------------------------------------------
@@ -125,14 +129,21 @@ usage() {
     echo ""
     echo -e "${BOLD}OPTIONS${NC}"
     echo "  --dry-run            Show what would be done without making any changes."
+    echo "  --allow-fixed-disk   Accept a target whose /sys/block/<dev>/removable is 0."
+    echo "                       Needed for a card reader that reports as fixed, and for"
+    echo "                       any disk attached under WSL — every one of those reads 0,"
+    echo "                       including the disk carrying /.  The root-disk, mount and"
+    echo "                       size checks still apply and cannot be bypassed."
     echo "  --help, -h           Show this help message."
     echo ""
     echo -e "${BOLD}SAFETY${NC}"
     echo "  • Must be run as root (sudo)"
-    echo "  • Refuses to operate on /dev/sda (likely system disk)"
-    echo "  • Refuses to operate on mounted devices"
+    echo "  • Refuses the disk carrying / — resolved through partitions, LVM and LUKS"
+    echo "  • Refuses a target with anything mounted below it, holder tree included"
+    echo "  • Refuses a partition; the target must be a whole disk"
+    echo "  • Requires removable media unless --allow-fixed-disk is given"
+    echo "  • Requires ${MIN_TARGET_SIZE_GB}–${MAX_TARGET_SIZE_GB} GB (override the max with MAX_TARGET_SIZE_GB=n)"
     echo "  • Requires explicit confirmation before destructive operations"
-    echo "  • Validates target is a block device ≥${MIN_TARGET_SIZE_GB} GB"
     echo ""
     echo -e "${BOLD}WHAT IT DOES${NC}"
     echo "  1. (Clone mode) dd the source image/device to the target"
@@ -173,6 +184,10 @@ parse_args() {
                 ;;
             --dry-run)
                 DRY_RUN=true
+                shift
+                ;;
+            --allow-fixed-disk)
+                ALLOW_FIXED_DISK=true
                 shift
                 ;;
             --clone-from)
@@ -243,48 +258,123 @@ check_dependencies() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Target-device safety
+#
+# The old guard was a literal /dev/sda blacklist plus `mount | grep "^$dev"`, and
+# both are wrong in ways that matter on the host this is actually run from.  Under
+# WSL the root filesystem sits on /dev/sdd (measured 2026-08-03), so the blacklist
+# protected a disk that is not the system disk while leaving the real one wide
+# open — and a `wsl --mount`ed physical card lands on /dev/sdd or /dev/sde too.
+# `mount` also never shows the disk behind an LVM or LUKS root (it shows
+# /dev/mapper/…), so that check passed on exactly the systems where getting it
+# wrong is unrecoverable.  See IMPROVEMENT_PLAN.md B15.
+# ---------------------------------------------------------------------------
+
+# Whole-disk device name (no /dev/ prefix) backing $1, following partition and
+# device-mapper parents.  Empty if it cannot be resolved.
+whole_disk_of() {
+    lsblk -rnso NAME "$1" 2>/dev/null | tail -1 | tr -d ' '
+}
+
+# The whole disk carrying the root filesystem.  Empty if it cannot be resolved —
+# callers must treat that as "guard inactive", not as "safe".
+root_whole_disk() {
+    local src
+    src=$(findmnt -no SOURCE --target / 2>/dev/null | head -1 || true)
+    src=${src%%\[*}                      # strip a btrfs [/subvol] suffix
+    [ -n "$src" ] && [ -b "$src" ] || return 0
+    whole_disk_of "$src"
+}
+
 check_device_safe() {
     local dev="$1"
 
-    # Must not be /dev/sda
-    if [[ "$dev" == "/dev/sda" ]]; then
-        error "Refusing to operate on /dev/sda (likely your system disk!)"
-        exit 1
-    fi
-
-    # Must exist
+    # Must exist, and be a block device — everything below reads it.
     if [ ! -e "$dev" ]; then
         error "Device '${dev}' does not exist"
         exit 1
     fi
-
-    # Must be a block device
     if [ ! -b "$dev" ]; then
         error "'${dev}' is not a block device"
         exit 1
     fi
 
-    # Must not be mounted (check all partitions)
-    local mounts
-    mounts=$(mount | grep "^${dev}" || true)
-    if [ -n "$mounts" ]; then
-        error "Device '${dev}' (or its partitions) appears to be mounted:"
-        echo "$mounts"
-        error "Unmount all partitions first: sudo umount ${dev}* 2>/dev/null"
+    local name
+    name=$(basename "$(readlink -f "$dev")")
+
+    # Must be a whole disk: this script writes a partition table.
+    if [ -e "/sys/class/block/${name}/partition" ]; then
+        error "'${dev}' is a partition, not a whole disk"
+        error "Pass the disk itself — e.g. /dev/sdb, not /dev/sdb1"
+        exit 1
+    fi
+    if [ ! -d "/sys/block/${name}" ]; then
+        error "'${dev}' does not resolve to a whole disk (no /sys/block/${name})"
         exit 1
     fi
 
-    # Check minimum size
-    local size_bytes
+    # THE check: never the disk this system booted from.  Resolves through
+    # partitions and device-mapper, so an LVM or LUKS root is caught.
+    local root_disk
+    root_disk=$(root_whole_disk)
+    if [ -n "$root_disk" ]; then
+        if [ "$name" = "$root_disk" ]; then
+            error "Refusing to operate on ${dev} — it carries this system's root filesystem"
+            error "  / is on /dev/${root_disk}"
+            exit 1
+        fi
+        info "Root filesystem is on /dev/${root_disk}; target is a different disk"
+    else
+        warn "Could not determine which disk carries / — the root-disk guard is INACTIVE"
+        warn "Read 'lsblk' yourself and be certain about ${dev} before you continue"
+    fi
+
+    # Nothing mounted anywhere below it — partitions, LVM, LUKS, the whole holder
+    # tree.  `mount | grep "^${dev}"` saw none of that.
+    local mounts
+    mounts=$(lsblk -rno NAME,MOUNTPOINT "$dev" 2>/dev/null | awk 'NF > 1' || true)
+    if [ -n "$mounts" ]; then
+        error "Device '${dev}' has mounted filesystems:"
+        echo "$mounts"
+        error "Unmount them first, including any LVM/LUKS mapping stacked on top"
+        exit 1
+    fi
+
+    # A size *window*.  A minimum alone is not a safety check — it rejects the
+    # original 4 GB card and waves through a 4 TB drive.
+    local size_bytes size_gb
     size_bytes=$(blockdev --getsize64 "$dev")
-    local size_gb=$(( size_bytes / 1073741824 ))
+    size_gb=$(( size_bytes / 1073741824 ))
     if [ "$size_gb" -lt "$MIN_TARGET_SIZE_GB" ]; then
         error "Target device is ${size_gb} GB — minimum ${MIN_TARGET_SIZE_GB} GB required"
         error "This check ensures you're not accidentally writing to the original 4GB card"
         exit 1
     fi
+    if [ "$size_gb" -gt "$MAX_TARGET_SIZE_GB" ]; then
+        error "Target device is ${size_gb} GB — over the ${MAX_TARGET_SIZE_GB} GB maximum"
+        error "A card for this device is 16–64 GB; something this large is probably a real disk"
+        error "If you are certain, re-run with MAX_TARGET_SIZE_GB=${size_gb} in the environment"
+        exit 1
+    fi
 
-    info "Target device: ${dev} (${size_gb} GB) — OK"
+    # Removable media by default — but only as a gate you must open deliberately,
+    # never as a fact to lean on: plenty of USB disks report removable=0, and
+    # under WSL *every* attached disk does, the one carrying / included.
+    local removable
+    removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo "0")
+    if [ "$removable" != "1" ]; then
+        if $ALLOW_FIXED_DISK; then
+            warn "${dev} is not removable media (removable=${removable}) — allowed by --allow-fixed-disk"
+        else
+            error "'${dev}' is not removable media (/sys/block/${name}/removable = ${removable})"
+            error "If this really is your card reader, re-run with --allow-fixed-disk"
+            error "Look at 'lsblk -o NAME,SIZE,TYPE,RM,MOUNTPOINT' before you do"
+            exit 1
+        fi
+    fi
+
+    info "Target device: ${dev} (${size_gb} GB, removable=${removable}) — OK"
 }
 
 check_source() {
