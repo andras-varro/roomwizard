@@ -23,6 +23,9 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <rfb/rfbclient.h>
 
 #include "config.h"
@@ -130,6 +133,12 @@ static VNCInput      g_input;
 static rfbClient    *g_vnc_client = NULL;
 static pthread_t     g_watchdog_thread;
 static bool          g_touch_ok = false;
+
+/* ── Forward declarations ──────────────────────────────────────────── */
+/* Both are defined next to the reconnect helpers they belong with, but
+ * vnc_client_init() calls vnc_enable_keepalive() before that point. */
+static void vnc_client_destroy(rfbClient **client);
+static void vnc_enable_keepalive(rfbClient *client);
 
 /* ── Signal handler ────────────────────────────────────────────────── */
 
@@ -372,7 +381,70 @@ static rfbClient *vnc_client_init(const char *host, int port, unsigned int conne
     LOG_DEBUG(&g_logger, "Encodings requested: %s", g_config.encodings);
     LOG_DEBUG(&g_logger, "Compress=%d Quality=%d", g_config.compress_level, g_config.quality_level);
 
+    /* Socket exists only now that rfbInitClient() has connected (B12). */
+    vnc_enable_keepalive(client);
+
     return client;
+}
+
+/*
+ * Tear down a session's rfbClient.
+ *
+ * B11: rfbClientCleanup() frees raw_buffer, ultra_buffer, desktopName and
+ * serverHost, but NOT client->frameBuffer — vnc_malloc_fb() allocated that, so
+ * this side owns it and nothing else was freeing it.  With
+ * RECONNECT_MAX_ATTEMPTS 0 (unlimited) against a 1080p host that is
+ * 1920*1080*4 = ~8.3 MB leaked per drop on a 234 MB device: OOM after ~25
+ * reconnects.  Both cleanup sites go through here so a third one cannot
+ * reintroduce the leak (../IMPROVEMENT_PLAN.md B11).
+ */
+static void vnc_client_destroy(rfbClient **client) {
+    if (!client || !*client)
+        return;
+    free((*client)->frameBuffer);
+    (*client)->frameBuffer = NULL;
+    rfbClientCleanup(*client);
+    *client = NULL;
+}
+
+/*
+ * B12: ask the kernel to detect a dead peer for us.
+ *
+ * libvncclient 0.9.14 sets no SO_KEEPALIVE and never pings, so a silent TCP
+ * death (AP drop, NAT idle timeout, VM suspend) left a stale frame on screen
+ * forever — WaitForMessage() just kept returning 0 and the loop spun.  With
+ * keepalive armed the socket eventually errors, WaitForMessage() returns < 0,
+ * and the existing "VNC connection lost" branch runs the reconnect UI.
+ *
+ * Deliberately NOT the other half of what IMPROVEMENT_PLAN suggested — see the
+ * B11/B12 entry.  "Break after N seconds with no server message" would
+ * disconnect *healthy* sessions: steady-state requests are incremental, so a
+ * static remote desktop correctly sends nothing for minutes, which is exactly
+ * what a wall-mounted dashboard looks like.  Silence is not evidence of death
+ * here; an unacknowledged TCP segment is.
+ */
+static void vnc_enable_keepalive(rfbClient *client) {
+    if (!client || client->sock < 0)
+        return;
+
+    int on = 1;
+    if (setsockopt(client->sock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) < 0) {
+        LOG_WARN(&g_logger, "SO_KEEPALIVE failed — a dead peer will not be detected");
+        return;
+    }
+
+    /* Defaults are 2 h idle + 9 probes 75 s apart (~11 min to notice). Tighten
+     * to idle 20 s, 3 probes 10 s apart: a dead peer is detected in ~50 s,
+     * which is inside the 60 s hardware watchdog window. Non-fatal if the
+     * kernel refuses any of them — plain SO_KEEPALIVE is still better than none. */
+    int idle = 20, intvl = 10, cnt = 3;
+    if (setsockopt(client->sock, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle))  < 0 ||
+        setsockopt(client->sock, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) < 0 ||
+        setsockopt(client->sock, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt))   < 0) {
+        LOG_WARN(&g_logger, "TCP keepalive tuning failed — falling back to kernel defaults (~11 min)");
+        return;
+    }
+    LOG_DEBUG(&g_logger, "TCP keepalive: idle %ds, %d probes %ds apart", idle, cnt, intvl);
 }
 
 /* ── Reconnect UI helpers ──────────────────────────────────────────── */
@@ -583,8 +655,7 @@ static int vnc_session(const char *host, int port, int attempt) {
     /* ── Initialize renderer ─────────────────────────────────── */
     if (vnc_renderer_init(&g_renderer, &g_fb) < 0) {
         LOG_ERROR(&g_logger, "Failed to initialize renderer");
-        rfbClientCleanup(g_vnc_client);
-        g_vnc_client = NULL;
+        vnc_client_destroy(&g_vnc_client);
         return -1;
     }
     vnc_renderer_set_remote_size(&g_renderer,
@@ -661,11 +732,10 @@ static int vnc_session(const char *host, int port, int attempt) {
 
     LOG_INFO(&g_logger, "Session ended (result=%d)", session_result);
 
-    /* Cleanup VNC connection (but NOT framebuffer/touch/watchdog) */
-    if (g_vnc_client) {
-        rfbClientCleanup(g_vnc_client);
-        g_vnc_client = NULL;
-    }
+    /* Cleanup VNC connection (but NOT framebuffer/touch/watchdog).
+     * vnc_client_destroy() frees client->frameBuffer, which rfbClientCleanup()
+     * does not — this is the reconnect path, so it is the leak (B11). */
+    vnc_client_destroy(&g_vnc_client);
     vnc_input_cleanup(&g_input);
     /* Note: renderer is NOT cleaned up here (no 32bpp restore).
      * We stay in 16bpp for the reconnect UI. */

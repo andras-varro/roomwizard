@@ -127,7 +127,13 @@ typedef enum {
 
 /* Input device scanning */
 #define INPUT_CONFIG_FILE       "/etc/input_config.conf"
-#define MAX_INPUT_DEVICES       16
+/* Must stay in step with common/gamepad.h GAMEPAD_MAX_DEVICES and
+ * roomwizard-events.h MAX_EVDEV_DEVICES, both 32.  This was 16, so a USB
+ * keyboard that enumerated as /dev/input/event17 worked under the native apps
+ * and ScummVM but was invisible here.  It bounds the scan loop only and sizes
+ * no array, so raising it costs nothing but 16 more failed open() calls per
+ * rescan.  The real fix is one shared scanner — ../IMPROVEMENT_PLAN.md C1. */
+#define MAX_INPUT_DEVICES       32
 #define DEVICE_SCAN_INTERVAL_MS 5000
 
 #endif // VNC_CONFIG_H

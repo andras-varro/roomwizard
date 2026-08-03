@@ -111,26 +111,33 @@ Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o` and `logger.o` 
 `vnc_input.c`, which is a duplicate of the one in `common/gamepad.c` and of a third copy in the
 ScummVM backend.
 
-That divergence is a live bug source: `MAX_INPUT_DEVICES` is 16 here but 32 in the other two, so
-a USB keyboard enumerating as `/dev/input/event17` works everywhere except here. The
-"clear `errno` before the read loop" hardening also exists only in the ScummVM copy. Prefer
+That divergence is a live bug source. `MAX_INPUT_DEVICES` was 16 here but 32 in the other two, so a
+USB keyboard enumerating as `/dev/input/event17` worked everywhere except here — **resynced to 32 on
+2026-08-03, for the second time**, which is the argument for linking one scanner rather than a fix.
+The "clear `errno` before the read loop" hardening still exists only in the ScummVM copy. Prefer
 linking `common/gamepad.c`; see `../IMPROVEMENT_PLAN.md` C1.
 
 ## Network robustness
 
-The remote end is untrusted input. Two known gaps to keep in mind when touching this code:
+The remote end is untrusted input. One known gap remains:
 
 - **Validate server-supplied geometry.** `vnc_malloc_fb()` and the scaling setup divide by and
   allocate from the server's announced width/height with no bounds check — a zero dimension is a
   SIGFPE. The bilinear X-LUT also overflows `int` for very wide desktops, producing a negative
   source index and an out-of-bounds read.
-- **There is no dead-peer detection.** `WaitForMessage()` returning 0 is treated as "nothing to
-  do", libvncclient sets no `SO_KEEPALIVE`, and nothing pings — so a silent TCP death leaves a
-  stale frame on screen forever with no reconnect. Track the time of the last successful message
-  and give up after a timeout.
 
-Also: `rfbClientCleanup()` does not free `client->frameBuffer`. Free it yourself before calling
-cleanup, or every reconnect leaks a full framebuffer (`../IMPROVEMENT_PLAN.md` B11).
+Two that are fixed, both worth not undoing:
+
+- **Session teardown goes through `vnc_client_destroy()`, never bare `rfbClientCleanup()`.** Cleanup
+  does not free `client->frameBuffer` — `vnc_malloc_fb()` owns it — so every reconnect leaked a full
+  framebuffer, ~8.3 MB against a 1080p host on a 234 MB device (`../IMPROVEMENT_PLAN.md` B11).
+- **Dead peers are detected by TCP keepalive, not by an application timeout.**
+  `vnc_enable_keepalive()` runs after `rfbInitClient()` (no socket before that) and sets idle 20 s /
+  3 probes / 10 s apart, so a silent TCP death surfaces in ~50 s — inside the 60 s hardware watchdog
+  — as a `WaitForMessage() < 0`, which the existing "connection lost" branch already handles.
+  ⚠️ **Do not add "break after N seconds with no server message."** Steady-state update requests are
+  *incremental*, so a static remote desktop legitimately sends nothing for minutes; a silence timeout
+  would disconnect exactly the healthy wall-dashboard case this component exists for. See B12.
 
 ## Rendering
 

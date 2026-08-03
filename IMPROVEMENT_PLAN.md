@@ -125,25 +125,6 @@ timing, touch-feedback fade and `DefaultTimerManager` all break simultaneously.
 
 **Fix:** `(uint32)(curTime.tv_sec - _startTime.tv_sec) * 1000u + …`.
 
-### B11. VNC: framebuffer leaked on every reconnect — open
-
-`vnc_client/vnc_client.c:632`. `vnc_malloc_fb` mallocs `width*height*4`; `rfbClientCleanup()`
-frees `raw_buffer`/`ultra_buffer`/`desktopName`/`serverHost` but **not** `frameBuffer`, and
-nothing else does either. With `RECONNECT_MAX_ATTEMPTS 0` (unlimited) and a 1080p host that is
-~8.3 MB per drop on a 234 MB device — OOM after ~25 reconnects.
-
-**Fix:** `free(g_vnc_client->frameBuffer)` before `rfbClientCleanup()`.
-
-### B12. VNC: no dead-peer detection — open
-
-`vnc_client/vnc_client.c:589`. `WaitForMessage(…, 10000)` returns 0 on timeout and the loop just
-spins; libvncclient 0.9.14 sets no `SO_KEEPALIVE` and the client never pings. A silent TCP death
-(AP drop, NAT idle timeout, VM suspend) leaves a stale frame on screen forever — "connection lost"
-never logs and the reconnect UI never appears.
-
-**Fix:** track the time of the last successful `HandleRFBServerMessage` and break after N seconds;
-set `SO_KEEPALIVE` after `rfbInitClient`.
-
 ### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — open, confirmed
 
 `OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets
@@ -352,16 +333,18 @@ Three parallel implementations of device classification, the `/dev/input/event*`
 | Config parser | `:294` | `:172` | `:429` |
 | Rescan timer | `:492` | `:468` | `:1263` |
 
-**They have already drifted** — `MAX_INPUT_DEVICES` is 16 in the VNC client but 32 in the other
-two, so a keyboard on `event17` works everywhere except VNC (this constant has already been manually
-resynced once). The "clear errno before the read loop" hardening exists only in the ScummVM copy.
+**They have already drifted** — `MAX_INPUT_DEVICES` was 16 in the VNC client but 32 in the other two,
+so a keyboard on `event17` worked everywhere except VNC. **That constant is now resynced to 32 (done
+2026-08-03) — and it is the second manual resync, which is the argument for this item rather than a
+substitute for it.** The "clear errno before the read loop" hardening still exists only in the ScummVM
+copy.
 
 The ScummVM copy is defensible (C++, different event model, links only 4 common objects). **The
 VNC copy is not** — `vnc_client/Makefile:21-29` already compiles five objects from
 `../native_apps/common/`; it could link `gamepad.o` too.
 
-**Fix:** extract classifier + scan + config parser into `common/evdev_scan.c` (~150 lines).
-Quick win in the meantime: bump `MAX_INPUT_DEVICES` to 32.
+**Fix:** extract classifier + scan + config parser into `common/evdev_scan.c` (~150 lines). The cheap
+`MAX_INPUT_DEVICES` stopgap is spent; there is no quick win left here.
 
 ### C2. Split `device_tools.c` (2651 lines) — open
 
@@ -572,6 +555,53 @@ the count — the first two runs did exactly that). Also checked the round trip 
 including one with a space, a backslash and a `$`: `crypt.crypt(pw, hash) == hash` and **no trailing
 newline leaks into the hash**, which is the one way `-stdin` could have silently produced a
 password nobody can log in with.
+
+**B11 + B12 + C1's quick win. VNC: leaked a framebuffer per reconnect, never noticed a dead peer,
+and could not see `event17`** — done 2026-08-03, keepalive verified on RW09's live socket.
+
+**B11** — `rfbClientCleanup()` frees `raw_buffer`, `ultra_buffer`, `desktopName` and `serverHost` but
+**not** `client->frameBuffer`, which `vnc_malloc_fb()` allocated and nothing freed. With
+`RECONNECT_MAX_ATTEMPTS 0` (unlimited) against a 1080p host that is ~8.3 MB per drop on a 234 MB
+device. Both teardown sites now go through one `vnc_client_destroy(rfbClient **)` that frees the
+buffer, NULLs it and then cleans up, so a third site cannot reintroduce the leak.
+
+**B12 — implemented as `SO_KEEPALIVE` + TCP tuning only, and the other half of the prescribed fix was
+deliberately NOT done.** The entry said to "track the time of the last successful
+`HandleRFBServerMessage` and break after N seconds". **That would disconnect healthy sessions.**
+Steady-state `FramebufferUpdateRequest`s are *incremental*, so a server with a static screen correctly
+sends nothing for minutes — and a wall-mounted panel showing an unchanging dashboard is this
+component's main use case. Silence is not evidence of death; an unacknowledged TCP segment is. So
+`vnc_enable_keepalive()` arms `SO_KEEPALIVE` after `rfbInitClient()` (the socket does not exist
+before it) and tightens the kernel defaults from 2 h idle + 9 probes × 75 s (~11 min to notice) to
+**idle 20 s, 3 probes 10 s apart ≈ 50 s**, which is inside the 60 s hardware-watchdog window. A dead
+peer then errors the socket, `WaitForMessage()` returns < 0, and the *existing* "VNC connection lost"
+branch runs the reconnect UI — no new state machine.
+
+Verified on RW09, and this is the check worth repeating because `TCP_KEEPIDLE` is the part that could
+silently fail on a 4.14 kernel: with a session up 9 s, `/proc/net/tcp` reports the connection to
+`:170C` as
+
+```text
+1: 4932A8C0:C99A 3832A8C0:170C 01 ... tr=02:00000483
+```
+
+`timer_active = 02` is *keepalive*, and `tm->when = 0x483` = 1155 jiffies ≈ **11.6 s** — i.e. 20 s
+idle minus the 9 s elapsed. The kernel default would have read ~7200 s, so this proves the tuning was
+accepted and not merely attempted. Each `setsockopt` degrades independently: a failure warns and
+falls back rather than aborting the connection.
+
+**C1's quick win** — `MAX_INPUT_DEVICES` 16 → 32, matching `GAMEPAD_MAX_DEVICES` and
+`MAX_EVDEV_DEVICES`. It bounds the scan loop and sizes **no array** (checked — its only use is
+`for (i = 0; i < MAX_INPUT_DEVICES; i++)`), so the cost is 16 more failed `open()` calls per 5 s
+rescan. C1 itself stays open: this resyncs a constant for the second time, which is the argument for
+the shared scanner, not a substitute for it.
+
+Not measured end-to-end: the leak was fixed by inspection (`free()` on a `malloc()`ed pointer that
+nothing else released) rather than by counting RSS across ~25 reconnects. Forcing that many session
+teardowns needs either a human at the panel (exit gesture → SAVE & RECONNECT) or interrupting the
+shared x11vnc server on `192.168.50.56` — which **`.53` is a live client of**, so it was left alone.
+Compiles at **no new warnings** (3 before, 3 after — all pre-existing: two unused parameters and one
+ignored `write()` return).
 
 **B19. Deploy hygiene** — done 2026-08-03, verified against both units. Five separate defects; the
 useful part of the entry is which ones were reproduced and which are latent.
