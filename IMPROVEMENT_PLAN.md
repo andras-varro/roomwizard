@@ -116,14 +116,19 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B10. ScummVM `getMillis()` overflows at 24.85 days — open
+### B10. ScummVM `getMillis()` overflows at 24.85 days — partly done 2026-08-03
 
-`scummvm-roomwizard/backend-files/roomwizard.cpp:184`. Correctly baselined to start time, but
-`(curTime.tv_sec - _startTime.tv_sec) * 1000` is evaluated in 32-bit signed `time_t`. A wall
-display is always on; the reference unit is already at 7 days. Long-press detection, cursor
-timing, touch-feedback fade and `DefaultTimerManager` all break simultaneously.
+`scummvm-roomwizard/backend-files/roomwizard.cpp:214`. The multiply is now done in `uint32`, so it
+wraps cleanly at 49.7 days instead of overflowing a signed 32-bit `time_t` at 24.85 — which was UB
+and took long-press detection, cursor timing, the touch-feedback fade and `DefaultTimerManager` with
+it. All six `getMillis()` consumers were checked and every one computes `now - _last` in `uint32`, so
+they are wrap-safe and needed no change.
 
-**Fix:** `(uint32)(curTime.tv_sec - _startTime.tv_sec) * 1000u + …`.
+**What is left: build it and deploy it.** The edit is in both trees (`../scummvm/` and
+`backend-files/`, synced and md5-identical), but ScummVM was **not rebuilt this session** — it is the
+multi-minute build, and its `build-and-deploy.sh` does `rm -f native_apps/common/*.o` at two points,
+so it cannot run concurrently with a native_apps build. Until `scummvm-roomwizard/build-and-deploy.sh
+<ip>` runs, RW09 is still running the overflowing binary.
 
 ### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — open, confirmed
 
@@ -139,27 +144,14 @@ Open verification task — play the KQ3 intro on the device and compare against 
 recording. The mono mixer and the `SOUND_PCM_READ_RATE` read-back were supposed to fix half-speed
 OPL; nobody confirmed it on hardware.
 
-### B13. Game-specific bugs — open
+### B13. Game-specific bugs — done 2026-08-03
 
-Fixed rows (B13a, B13c, B13d, B13g, B13k, B13l) are in [Closed](#closed).
+**All rows are closed.** B13a, B13c, B13d, B13g, B13k and B13l closed earlier; B13b, B13e, B13f,
+B13h, B13i and B13j closed 2026-08-03. See [Closed](#closed).
 
-| # | Where | Bug |
-|---|-------|-----|
-| B13b | `brick_breaker.c:459` | Indestructible bricks use `health = -1`, which every other site reads as "destroyed" (`health <= 0`) → from level 5 they are invisible and have no collision. |
-| B13e | `tetris.c:567` | No wall kick — an I-piece rotated vertically against the right wall can never rotate back. |
-| B13f | `snake.c:320` | Growing exposes a stale `body[]` slot: a detached cell is drawn for one tick and stepping on it ends the game. |
-| B13h | `brick_breaker.c:535` | Speed power-ups compound — `effect_mult` is never divided out, so SLOW DOWN can make the ball faster. |
-| B13i | `platformer.c:951` | Stomping two overlapping enemies kills the player (no `break` after a successful stomp). |
-| B13j | `samegame.c:250` | `pixel_to_grid` truncates toward zero, so taps up to one block outside the left/top edge select row/column 0. |
+### B14. Blocking `usleep()` inside input/update paths — done 2026-08-03
 
-### B14. Blocking `usleep()` inside input/update paths — open
-
-Up to ~1.2 s of frozen UI: `tetris.c:286` (game-over LED pulse *inside* `handle_input`),
-`pong.c:267/290/359/380`, `brick_breaker.c:1124`, `samegame.c:713` (a 300–1500 ms render loop that
-never polls touch, so the exit button is dead during it).
-
-**Fix:** drive these from the existing non-blocking `LEDEffect`/`get_time_ms()` pattern that
-snake, frogger and platformer already use.
+See [Closed](#closed).
 
 ### B22. Game-over screen — one row still unverified — partly done 2026-08-02
 
@@ -495,6 +487,81 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B13 + B14. The last six game bugs, and the blocking sleeps** — done 2026-08-03. All built with zero
+warnings, `check-arm-safe.sh` at a hard zero across 31 ARM binaries, the three host regressions
+(`touch_calib_test`, `gamepad_latch_test`, `framebuffer_bpp_test`) passing, and deployed to RW09 with
+18/18 md5 verified. **Verification stops at the first screen** — no `/dev/uinput`, so all six games
+were SSH-launched, confirmed alive at 32bpp with a decoded `/dev/fb0`, and everything past the welcome
+screen still needs a human at the panel (see C6). The gameplay effects below are *reasoned*, not
+observed.
+
+- **B13b** — `brick_breaker.c`: indestructible bricks stored `health = -1` and five other sites tested
+  `health <= 0`, so from level 5 up they were invisible **and** had no collision. Both their bounce
+  path (`if (b->fireball)` / else fall through) and their diagonal-stripe rendering were already
+  written and were dead code, which is what confirms the marker was the defect. Fixed with one
+  predicate, `brick_is_destroyed(b)` ⇔ `health == 0`, plus a named `BRICK_HEALTH_INDESTRUCTIBLE`. No
+  `health <= 0` test remains in the file. **Levels 5+ are now harder than anyone has played them.**
+- **B13h** — `brick_breaker.c`: `normalize_ball_speeds()` divided out `lv->speed_mult` (a no-op — it
+  multiplied it straight back) but never the previously-applied `effect_mult`, so SPEED UP / SLOW DOWN
+  compounded on a figure that already contained them. Going +2 → +1 gave `1.5 × 1.25 = 1.875`: **SLOW
+  DOWN made the ball faster**, exactly as reported. Fixed by making the multiplier *derived* rather
+  than accumulated — `Ball.base_speed` holds the speed without it, `ball_apply_speed()` is now the only
+  writer of `Ball.speed`, and the per-brick `BALL_SPEED_INC` goes onto the base. `BALL_MAX_SPEED` still
+  clamps the **effective** speed, deliberately: an 11 px/frame cap is what stops the ball tunnelling
+  through a brick, so it belongs on the speed the ball travels at, not the base. At effect level 0 the
+  emitted behaviour is unchanged, which is what keeps the default feel intact.
+- **B13e** — `tetris.c`: no wall kick. Added `try_rotate()`, which replaces four identical
+  `if (!check_collision(...)) rotation = new` sites (two touch, clockwise and counter-clockwise
+  gamepad) and tries in place → ∓1 → ∓2 → the same nudges one row up. Two is what an I-piece needs
+  (its rotation centre sits one cell in from the end); the upward floor kick is what frees a piece
+  resting on the stack, and it is representable because `check_collision()` permits negative `board_y`
+  and `lock_piece()` skips those cells. A rotation that fits nowhere is still refused.
+- **B13f** — `snake.c`: the body shift writes only `body[1..length-1]`, so `length++` on eating
+  published `body[length]` — whatever an earlier, longer tick left there, and `{0,0}` on the very
+  **first** grow because the struct is zero-initialised. That put a detached cell at the grid origin
+  which was drawn, counted by the self-collision test, and fatal if the head stepped on it. It healed
+  on the next tick's shift, which is why it read as a one-frame glitch. The new segment now takes the
+  cell the tail just vacated, captured before the shift.
+- **B13i** — `platformer.c`: **the plan's prescribed `break` would not have fixed this.** A successful
+  stomp sets `player.vy = STOMP_BOUNCE` (negative), so the second of two overlapping enemies failed
+  `vy > 0` and killed the player — but a `break` leaves enemy #2 alive directly under the rising
+  player, and at 6.0 px/frame against a 22 px enemy the overlap persists ~3 more frames with `vy`
+  already negative, so the player dies on the *next* frame instead. `check_enemy_collisions()` now
+  resolves the whole frame before acting: each enemy is judged against the velocity the player arrived
+  with, everything genuinely landed on dies, the bounce and sound fire once, and the player only dies
+  if nothing was stomped. Residual narrow case, left alone deliberately: enemies at *different* heights
+  where one is a side-hit and one a stomp leaves the side-hit enemy alive and fatal next frame — all
+  enemies share one height (`TILE_SIZE - 2`), so same-platform stacks, the reachable case, are clean.
+- **B13j** — `samegame.c`: `pixel_to_grid()` divided before range-checking, and C integer division
+  truncates toward zero — a delta in `(-block_size, 0)` yields `0`, not `-1`, so the `col < 0 ||
+  row < 0` guard could never fire and every tap within one block outside the left or top edge selected
+  column or row 0. Now rejects a negative delta before dividing. The high edges were always fine;
+  truncation rounds those down, into range.
+- **B14** — the blocking sleeps. `common/hardware.c` gains a non-blocking sibling to the existing
+  (and still correct, for shutdown) blocking `hw_blink_led`: `LedPulse` + `hw_led_pulse_start/update/
+  stop/active`. **It takes `now_ms` as a parameter, not a `get_time_ms()` call** — `hardware.c` is
+  linked by `vnc_client`, which does **not** link `common.c`, so calling into it would break that
+  link; a caller-supplied clock is also host-testable. It went in the library rather than as three
+  more private copies because four games already carry their own `LEDEffect`. Converted: tetris'
+  game-over pulse (1.2 s, inside `update_game()`, and it ran *before* the game-over screen was drawn
+  so the player stared at the old playfield); pong's four win/loss pulses, folded into the
+  `enter_game_over()` helper that already branched on `game.winner` — the sound moved with them, so
+  four duplicated blocks became none; brick_breaker's 300 ms lost-ball flash and 50 ms power-up flash;
+  and the 100 ms game-start green flash in tetris, pong and samegame (samegame's went through its own
+  `start_led_effect(1)`, which is already exactly a 100 ms green flash — no second mechanism in one
+  file). Games that can cancel a pulse mid-flight call `hw_led_pulse_stop()` from `reset_game()` /
+  `init_level()` so a flourish cannot flash into the next round.
+  samegame's was the different one: a 300–1500 ms `while (running) { draw; fb_swap; usleep }` that
+  never called `touch_poll()`, so **MENU and EXIT were dead for its whole duration**. It is now a
+  fourth animation state, `ANIM_GAMEOVER_DELAY`, so the ordinary main loop keeps polling and drawing —
+  its dirty flag already forces frames on `anim_state != ANIM_NONE`, and `handle_input()` checks both
+  buttons *before* it gates the grid on the animation. Bonus: `update_game()` returns early unless
+  `SCREEN_PLAYING`, so pausing mid-delay holds the overlay back instead of dropping it over the pause
+  dialog.
+  **The remaining `usleep()` loops in the games are deliberate and stay:** the 3 × 100 ms exit
+  flourishes immediately before `running = false`. There is nothing left to be responsive to, and
+  `hw_blink_led()` exists for exactly that case.
 
 **D6. Secrets** — done 2026-08-03. `vnc_client/vnc_client.conf` held a plaintext password and was
 tracked; it became untracked + gitignored on 2026-07-29, with `vnc_client.conf.example` as the
@@ -1423,6 +1490,10 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
    [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md). Serial console declined — see [Closed](#closed).
-8. Everything else as appetite allows: B3g/B3h, B10–B12c, the six open B13 rows, B14, and all
-   of C1–C8. **These are genuinely unranked**, not deprioritised — C6's smoke-test harness and C1's
-   `MAX_INPUT_DEVICES` one-liner are both cheap enough to take out of order.
+8. Everything else as appetite allows: B3g/B3h, B12b/B12c, and all of C1–C8. **These are genuinely
+   unranked**, not deprioritised. **The six open B13 rows and B14 are all done 2026-08-03** — see
+   [Closed](#closed); two of them (B13b, B13i) had real gameplay impact and **B13i's prescribed fix
+   was wrong**, which is the third time this plan's suggested fix turned out to be a hypothesis.
+   **B10's code fix is in the tree but ScummVM was not rebuilt** — it is now the cheapest open item
+   and needs nothing but the multi-minute build. C1's `MAX_INPUT_DEVICES` stopgap is **spent**
+   (resynced to 32), so what is left there is the shared evdev scanner itself, not a quick win.

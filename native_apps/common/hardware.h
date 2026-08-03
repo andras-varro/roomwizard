@@ -152,6 +152,56 @@ int hw_pulse_led(LEDColor led, uint32_t duration_ms, uint8_t max_brightness);
 int hw_blink_led(LEDColor led, int count, uint32_t on_ms, uint32_t off_ms, uint8_t brightness);
 
 /**
+ * Non-blocking LED blink — the one to use from a game.
+ *
+ * hw_blink_led() above cannot be called from an update or input path: it sleeps
+ * for its whole duration, so the panel freezes with no touch poll, no redraw and
+ * no gamepad poll. Tetris and Pong hand-rolled the same loop for their
+ * game-over/win flourish and each froze for 1.2 s *before* the game-over screen
+ * was drawn, which also swallowed every tap made during it
+ * (IMPROVEMENT_PLAN.md B14).
+ *
+ * Start one, then call hw_led_pulse_update() once per frame until it reports
+ * inactive; it writes the LED only on the frames the phase actually changes.
+ *
+ * The current time is a parameter rather than a get_time_ms() call because
+ * hardware.c is linked by vnc_client, which does not link common.c — and
+ * because a caller-supplied clock is testable on the host.
+ */
+typedef struct {
+    bool     active;
+    LEDColor led;
+    int      flashes;          /* number of on-phases remaining to play out */
+    uint32_t half_period_ms;   /* duration of one on- or off-phase */
+    uint32_t start_ms;
+    int      phase;            /* phase index last written, -1 = none yet */
+} LedPulse;
+
+/**
+ * Begin a blink of `flashes` on/off pairs, each half lasting half_period_ms.
+ * Lights the LED immediately, so a one-frame effect still shows.
+ * @param now_ms: current millisecond clock (get_time_ms() in native_apps)
+ */
+void hw_led_pulse_start(LedPulse *p, LEDColor led, int flashes,
+                        uint32_t half_period_ms, uint32_t now_ms);
+
+/**
+ * Advance the blink. Call once per frame. Turns the LED off and clears
+ * `active` when the last phase has elapsed. Safe to call on an inactive pulse.
+ */
+void hw_led_pulse_update(LedPulse *p, uint32_t now_ms);
+
+/** True while a pulse still owes the LED at least one phase change. */
+bool hw_led_pulse_active(const LedPulse *p);
+
+/**
+ * Cancel a pulse and turn its LED off. Call this when the state that started
+ * the pulse goes away — restarting a game mid-flourish would otherwise leave
+ * the LED flashing into the new round, or stuck on. Safe on an inactive pulse.
+ */
+void hw_led_pulse_stop(LedPulse *p);
+
+/**
  * Set LED color by mixing red and green
  * Predefined color combinations:
  * - Red only: (100, 0)

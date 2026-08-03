@@ -283,6 +283,54 @@ int hw_blink_led(LEDColor led, int count, uint32_t on_ms, uint32_t off_ms, uint8
             usleep(off_ms * 1000);
         }
     }
-    
+
     return 0;
+}
+
+/* ── Non-blocking LED pulse (see hardware.h) ─────────────────────────────── */
+
+void hw_led_pulse_start(LedPulse *p, LEDColor led, int flashes,
+                        uint32_t half_period_ms, uint32_t now_ms) {
+    if (!p) return;
+    p->led            = led;
+    p->flashes        = flashes;
+    p->half_period_ms = half_period_ms;
+    p->start_ms       = now_ms;
+    p->phase          = -1;
+    p->active         = (flashes > 0 && half_period_ms > 0);
+    /* Light it on the frame it was started, so the flourish is visible even if
+     * the caller exits before the next update. */
+    hw_led_pulse_update(p, now_ms);
+}
+
+void hw_led_pulse_update(LedPulse *p, uint32_t now_ms) {
+    if (!p || !p->active) return;
+
+    /* Unsigned subtraction, so this stays correct across the ms counter's wrap. */
+    uint32_t elapsed = now_ms - p->start_ms;
+    /* Phase 0 = first on, 1 = first off, 2 = second on ... 2*flashes = done.
+     * A runtime divisor compiles to a call to __aeabi_uidiv on Cortex-A8, which
+     * is fine — what would not be is a hardware udiv instruction. */
+    uint32_t phase = elapsed / p->half_period_ms;
+
+    if (phase >= (uint32_t)(p->flashes * 2)) {
+        p->active = false;
+        hw_set_led(p->led, 0);
+        return;
+    }
+    if ((int)phase == p->phase) return;   /* nothing changed this frame */
+
+    p->phase = (int)phase;
+    hw_set_led(p->led, (phase & 1u) ? 0 : 100);
+}
+
+bool hw_led_pulse_active(const LedPulse *p) {
+    return p && p->active;
+}
+
+void hw_led_pulse_stop(LedPulse *p) {
+    if (!p) return;
+    p->active = false;
+    p->phase  = -1;
+    hw_set_led(p->led, 0);
 }

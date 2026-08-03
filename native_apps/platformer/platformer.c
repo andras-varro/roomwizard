@@ -940,6 +940,24 @@ static void update_enemies(void) {
 static void check_enemy_collisions(void) {
     if (player.state == PSTATE_DYING) return;
 
+    /* Resolve every overlap before acting on any of them.
+     *
+     * The stomp test reads player.vy, and a stomp *writes* it (STOMP_BOUNCE is
+     * negative — upward), so applying the bounce inside the loop made the second
+     * of two overlapping enemies fail `vy > 0` and take the fatal branch: landing
+     * on a stack killed the player (../IMPROVEMENT_PLAN.md B13i).  A plain
+     * `break` after the first stomp is not enough either — it leaves enemy #2
+     * alive directly under the player's feet, and the bounce only clears the
+     * overlap after ~3 frames at 6.0 px/frame against a 22 px enemy, so the
+     * player still dies on the next frame with vy already negative.
+     *
+     * So: judge each enemy against the velocity the player arrived with, kill
+     * everything that was genuinely landed on, and only die if nothing was.  A
+     * stomp beats a side-hit in the same frame. */
+    const float arrival_vy = player.vy;
+    bool stomped = false;
+    bool struck  = false;
+
     for (int i = 0; i < enemy_count; i++) {
         Enemy *e = &enemies[i];
         if (!e->alive) continue;
@@ -950,17 +968,24 @@ static void check_enemy_collisions(void) {
         float player_feet = player.y + player.height;
         float enemy_mid = e->y + (float)e->height / 2.0f;
 
-        if (player.vy > 0 && player_feet < enemy_mid + 4.0f) {
+        if (arrival_vy > 0 && player_feet < enemy_mid + 4.0f) {
             e->alive = false;
-            player.vy = STOMP_BOUNCE;
-            player.on_ground = false;
             score += STOMP_SCORE;
-            play_stomp_sound();
-            start_led_effect(2);
+            stomped = true;
         } else {
-            player_die();
-            return;
+            struck = true;
         }
+    }
+
+    if (stomped) {
+        /* Once per frame, however many enemies went under the boots — two
+         * play_stomp_sound() calls in one frame just cut each other off. */
+        player.vy = STOMP_BOUNCE;
+        player.on_ground = false;
+        play_stomp_sound();
+        start_led_effect(2);
+    } else if (struck) {
+        player_die();
     }
 }
 

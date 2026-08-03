@@ -130,6 +130,14 @@ typedef enum {
 typedef struct {
     float x, y;
     float dx, dy;
+    /* `base_speed` is the ball's own speed — the level multiplier plus every
+     * per-brick BALL_SPEED_INC — and deliberately excludes the SPEED UP / SLOW
+     * DOWN multiplier.  `speed` is the effective one, always *derived* from the
+     * pair by ball_apply_speed().  Keeping the multiplier out of the stored
+     * value is the whole point: it used to be re-applied to a figure that
+     * already contained it, so the effects compounded and SLOW DOWN from +2 to
+     * +1 made the ball faster (1.5 * 1.25) — ../IMPROVEMENT_PLAN.md B13h. */
+    float base_speed;
     float speed;
     bool  active;
     bool  stuck;     /* stuck on paddle until launched */
@@ -139,15 +147,25 @@ typedef struct {
     int   trail_idx;  /* next write position in circular buffer */
 } Ball;
 
+/* An indestructible brick's health is negative on purpose: it must never be
+ * reachable by the `health--` a normal hit does.  So "destroyed" is
+ * health == 0 *exactly* — a `health <= 0` test swallows the indestructible ones
+ * too, which is what made them invisible and non-colliding from level 5 up, and
+ * left both their bounce path and their stripe rendering as dead code
+ * (../IMPROVEMENT_PLAN.md B13b).  Ask this predicate, never the sign. */
+#define BRICK_HEALTH_INDESTRUCTIBLE (-1)
+
 typedef struct {
     int  x, y, w, h;
-    int  health;     /* 0 = destroyed, -1 = indestructible */
+    int  health;     /* 0 = destroyed, BRICK_HEALTH_INDESTRUCTIBLE = indestructible */
     int  max_health;
     BrickType type;  /* brick special type */
     int  color_index; /* row index for colorful rendering */
     uint32_t color_top;
     uint32_t color_bot;
 } Brick;
+
+static inline bool brick_is_destroyed(const Brick *b) { return b->health == 0; }
 
 typedef struct {
     float x, y;
@@ -214,6 +232,8 @@ static uint32_t     frame_time_ms;  /* updated each frame */
 static bool test_mode = false;     /* --test: special test levels */
 static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
 static GameOverScreen gos;  /* unified game over screen */
+/* Power-up / lost-ball LED flashes, advanced once per frame by the main loop. */
+static LedPulse     fx_pulse;
 static uint32_t last_rescan_ms = 0;
 #define RESCAN_INTERVAL_MS 5000
 
@@ -461,7 +481,7 @@ static void create_bricks(void) {
                 if (roll < 15 && game.level >= 5) {
                     /* 15% of specials: indestructible (level 5+) */
                     b->type = BRICK_INDESTRUCTIBLE;
-                    b->health = -1;  /* Special marker for indestructible */
+                    b->health = BRICK_HEALTH_INDESTRUCTIBLE;
                     b->color_top = BRICK_INDESTRUCTIBLE_TOP;
                     b->color_bot = BRICK_INDESTRUCTIBLE_BOT;
                 } else if (roll < 40) {
@@ -529,22 +549,32 @@ static float get_speed_mult(void) {
     return SPEED_MULTS[idx];
 }
 
-/* Normalize all active ball speeds to current base * level_mult * effect_mult */
+/* Recompute a ball's effective speed from its base speed and the current effect
+ * level, and re-scale its velocity to match.  This is the only writer of
+ * b->speed, so the multiplier is applied exactly once no matter how many
+ * power-ups have been collected.  BALL_MAX_SPEED clamps the *effective* speed,
+ * as it always has — an 11 px/frame cap is what stops the ball tunnelling
+ * through a brick, and that is a property of the speed it actually travels at,
+ * not of the base. */
+static void ball_apply_speed(Ball *b) {
+    float sp = b->base_speed * get_speed_mult();
+    if (sp > BALL_MAX_SPEED) sp = BALL_MAX_SPEED;
+    b->speed = sp;
+    float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
+    if (mag > 0.01f) {
+        b->dx = (b->dx / mag) * sp;
+        b->dy = (b->dy / mag) * sp;
+    }
+}
+
+/* Re-derive every ball's speed after the effect level changed.  Stuck balls are
+ * included: a power-up can be caught while the next life's ball waits on the
+ * paddle, and skipping it left that ball carrying the previous multiplier. */
 static void normalize_ball_speeds(void) {
-    const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-    float effect_mult = get_speed_mult();
     for (int i = 0; i < game.ball_count; i++) {
         Ball *b = &game.balls[i];
-        if (!b->active || b->stuck) continue;
-        /* Recompute speed with new multiplier, preserving per-brick increments */
-        float base = b->speed / lv->speed_mult;  /* remove old level mult */
-        /* Re-apply with effect multiplier */
-        b->speed = base * lv->speed_mult * effect_mult;
-        float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
-        if (mag > 0.01f) {
-            b->dx = (b->dx / mag) * b->speed;
-            b->dy = (b->dy / mag) * b->speed;
-        }
+        if (!b->active) continue;
+        ball_apply_speed(b);
     }
 }
 
@@ -552,15 +582,19 @@ static void normalize_ball_speeds(void) {
  *  Ball management
  * ══════════════════════════════════════════════════════════════════════════ */
 
-static Ball *add_ball(float x, float y, float dx, float dy, float speed) {
+/* `base_speed` excludes the SPEED UP / SLOW DOWN multiplier — see the Ball
+ * struct.  Callers pass dx/dy already scaled to the effective speed; the clamp
+ * inside ball_apply_speed() re-scales them if the pair disagrees. */
+static Ball *add_ball(float x, float y, float dx, float dy, float base_speed) {
     if (game.ball_count >= MAX_BALLS) return NULL;
     Ball *b = &game.balls[game.ball_count++];
     b->x = x; b->y = y;
     b->dx = dx; b->dy = dy;
-    b->speed = speed;
+    b->base_speed = base_speed;
     b->active = true;
     b->stuck = false;
     b->fireball = (game.fx.fireball != 0);
+    ball_apply_speed(b);
     /* Initialize trail positions to starting position */
     for (int t = 0; t < TRAIL_LEN; t++) {
         b->trail_x[t] = x;
@@ -574,10 +608,9 @@ static void reset_ball_on_paddle(void) {
     game.ball_count = 0;
     float start_x = game.paddle_x;
     float start_y = PADDLE_Y - BALL_RADIUS - 1;
-    Ball *b = add_ball(start_x, start_y, 0, 0, 0);
+    const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
+    Ball *b = add_ball(start_x, start_y, 0, 0, ball_base_speed * lv->speed_mult);
     if (b) {
-        const LevelDef *lv = &levels[clampi(game.level - 1, 0, MAX_LEVELS - 1)];
-        b->speed = ball_base_speed * lv->speed_mult * get_speed_mult();
         b->stuck = true;
         /* Re-initialize trail to paddle position (add_ball already did this) */
     }
@@ -648,7 +681,11 @@ static void spawn_powerup(float x, float y) {
 }
 
 static void apply_powerup(PowerUpType type) {
-    hw_set_led(LED_GREEN, 100);
+    /* Non-blocking 50 ms green flash.  This used to be hw_set_led() here and
+     * `usleep(50000); hw_leds_off();` at the end of the function — a sleep in an
+     * update path, which freezes touch and rendering along with it
+     * (../IMPROVEMENT_PLAN.md B14). */
+    hw_led_pulse_start(&fx_pulse, LED_GREEN, 1, 50, get_time_ms());
 
     switch (type) {
     case PU_WIDEN:
@@ -695,14 +732,17 @@ static void apply_powerup(PowerUpType type) {
             float angle1 = -M_PI / 2.0f - 0.5f;  /* upward-left */
             float angle2 = -M_PI / 2.0f + 0.5f;  /* upward-right */
             
+            /* dx/dy from the effective speed, base_speed inherited as the base —
+             * passing src->speed as the base would bake the current multiplier
+             * in a second time. */
             add_ball(src->x, src->y,
                      cosf(angle1) * src->speed,
                      sinf(angle1) * src->speed,
-                     src->speed);
+                     src->base_speed);
             add_ball(src->x, src->y,
                      cosf(angle2) * src->speed,
                      sinf(angle2) * src->speed,
-                     src->speed);
+                     src->base_speed);
         }
         audio_blip(&audio);
         break;
@@ -714,9 +754,6 @@ static void apply_powerup(PowerUpType type) {
     /* Brief LED + beep */
     if (type != PU_MULTIBALL && type != PU_EXTRA_LIFE)
         audio_beep(&audio);
-
-    usleep(50000);
-    hw_leds_off();
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -727,6 +764,7 @@ static void init_level(void) {
     /* Reset power-ups, effects, and screen shake */
     memset(game.powerups, 0, sizeof(game.powerups));
     memset(game.particles, 0, sizeof(game.particles));
+    hw_led_pulse_stop(&fx_pulse);   /* no flash carried into the new level */
     game.shake_x = 0; game.shake_y = 0;
     game.shake_frames = 0; game.shake_intensity = 0;
     game.clear_cooldown = 0;
@@ -768,7 +806,7 @@ static void queue_deferred_explosion(int brick_idx, int delay_frames) {
  * queue any adjacent explosive bricks for further chain reaction */
 static void detonate_brick(int brick_idx) {
     Brick *br = &game.bricks[brick_idx];
-    if (br->health <= 0) return;  /* Already destroyed (e.g., by ball in the meantime) */
+    if (brick_is_destroyed(br)) return;  /* Already destroyed (e.g., by ball in the meantime) */
 
     br->health = 0;
     if (br->type != BRICK_INDESTRUCTIBLE) {
@@ -799,7 +837,7 @@ static void detonate_brick(int brick_idx) {
     /* Destroy adjacent bricks */
     for (int k = 0; k < game.brick_count; k++) {
         Brick *adj = &game.bricks[k];
-        if (adj->health <= 0) continue;
+        if (brick_is_destroyed(adj)) continue;
         if (k == brick_idx) continue;
 
         int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
@@ -895,7 +933,7 @@ static void update_balls(void) {
         /* Brick collisions */
         for (int j = 0; j < game.brick_count; j++) {
             Brick *br = &game.bricks[j];
-            if (br->health <= 0) continue;
+            if (brick_is_destroyed(br)) continue;
 
             /* AABB check */
             if (b->x + BALL_RADIUS <= br->x || b->x - BALL_RADIUS >= br->x + br->w ||
@@ -935,7 +973,7 @@ static void update_balls(void) {
                 for (int k = 0; k < game.brick_count; k++) {
                     if (k == j) continue;
                     Brick *adj = &game.bricks[k];
-                    if (adj->health <= 0) continue;
+                    if (brick_is_destroyed(adj)) continue;
                     
                     int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
                     int ady = abs((adj->y + adj->h/2) - (br->y + br->h/2));
@@ -972,7 +1010,7 @@ static void update_balls(void) {
                     int ci = clampi(br->health - 1, 0, 5);
                     br->color_top = brick_colors[ci][0];
                     br->color_bot = brick_colors[ci][1];
-                    if (br->health <= 0) {
+                    if (brick_is_destroyed(br)) {
                         brick_destroyed = true;
                     }
                 }
@@ -1029,14 +1067,11 @@ static void update_balls(void) {
                     b->dy = -b->dy;
             }
 
-            /* Speed up slightly */
-            if (b->speed < BALL_MAX_SPEED) {
-                b->speed += BALL_SPEED_INC;
-                float mag = sqrtf(b->dx * b->dx + b->dy * b->dy);
-                if (mag > 0.01f) {
-                    b->dx = (b->dx / mag) * b->speed;
-                    b->dy = (b->dy / mag) * b->speed;
-                }
+            /* Speed up slightly — on base_speed, so the effect multiplier stays
+             * a multiplier and is not accumulated into the ball's own speed. */
+            if (b->base_speed < BALL_MAX_SPEED) {
+                b->base_speed += BALL_SPEED_INC;
+                ball_apply_speed(b);
             }
 
             break;  /* one brick per frame per ball */
@@ -1124,10 +1159,10 @@ static void update_game(void) {
     /* All balls lost? (skip during level clear cooldown) */
     if (game.ball_count == 0 && game.ball_launched && game.clear_cooldown == 0) {
         game.lives--;
-        hw_set_led(LED_RED, 100);
+        /* Non-blocking 300 ms red flash — the usleep() that was here froze the
+         * panel for 300 ms on every lost ball (../IMPROVEMENT_PLAN.md B14). */
+        hw_led_pulse_start(&fx_pulse, LED_RED, 1, 300, get_time_ms());
         audio_fail(&audio);
-        usleep(300000);
-        hw_leds_off();
 
         /* Reset effects on ball lost */
         reset_effects();
@@ -1160,6 +1195,7 @@ static void update_game(void) {
             game.score += game.lives * 50;  /* bonus */
             reset_effects();
             apply_paddle_width();
+            hw_led_pulse_stop(&fx_pulse);  /* so a pulse cannot re-light it */
             hw_leds_off();
         }
     }
@@ -1216,7 +1252,7 @@ static void draw_hud(void) {
 static void draw_bricks(void) {
     for (int i = 0; i < game.brick_count; i++) {
         Brick *b = &game.bricks[i];
-        if (b->health <= 0) continue;
+        if (brick_is_destroyed(b)) continue;
 
         int bx = b->x;
         int by = b->y;
@@ -1817,6 +1853,7 @@ int main(int argc, char *argv[]) {
         GameScreen prev_screen = game.screen;
         handle_input();
         update_game();
+        hw_led_pulse_update(&fx_pulse, get_time_ms());
 
         /* Dirty-flag: active gameplay always redraws; static screens on change */
         if (game.screen == SCREEN_PLAYING) {

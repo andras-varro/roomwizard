@@ -174,6 +174,8 @@ static bool soft_drop_active = false;
 /* Set whenever the game is not in play, so update_game() rebaselines the
  * gravity clock on the way back in instead of owing a row. */
 static bool drop_clock_stale = true;
+/* LED flourishes (game start, game over), advanced once per frame by the main loop. */
+static LedPulse led_pulse;
 
 // Function prototypes
 void init_game();
@@ -258,7 +260,10 @@ void reset_game() {
     game.paused = false;
     game.drop_interval_ms = DROP_BASE_MS;
     game.last_drop_ms = get_time_ms();
-    
+    /* The game-over flourish outlives the game-over screen now that it does not
+     * block, so cancel it rather than flash red into the new round. */
+    hw_led_pulse_stop(&led_pulse);
+
     spawn_piece(&game.current);
     spawn_piece(&game.next);
 }
@@ -291,6 +296,36 @@ bool check_collision(Piece *piece, int dx, int dy, int new_rotation) {
     return false;
 }
 
+/* Rotate the current piece into `new_rotation`, nudging it if the rotated form
+ * does not fit where it stands — a wall kick.
+ *
+ * Without one, a rotation whose cells land outside the board or inside settled
+ * blocks is simply refused, and the classic casualty is the I-piece: stood
+ * vertically hard against the right wall, all four cells of its horizontal form
+ * are off-board, so it can never be turned back flat for the rest of the game
+ * (../IMPROVEMENT_PLAN.md B13e).
+ *
+ * Offsets are tried in order: in place, then one and two cells left/right (two
+ * is what an I-piece needs, since its rotation centre sits one cell in from the
+ * end), then the same nudges one row up — a floor kick, which is what frees a
+ * piece resting on the stack.  `check_collision()` permits negative board_y and
+ * `lock_piece()` skips those cells, so an upward kick is representable.  If no
+ * offset fits, the rotation is refused exactly as it was before. */
+static bool try_rotate(int new_rotation) {
+    static const int kick_dx[] = { 0, -1,  1, -2,  2,  0, -1,  1 };
+    static const int kick_dy[] = { 0,  0,  0,  0,  0, -1, -1, -1 };
+
+    for (unsigned k = 0; k < sizeof(kick_dx) / sizeof(kick_dx[0]); k++) {
+        if (check_collision(&game.current, kick_dx[k], kick_dy[k], new_rotation))
+            continue;
+        game.current.x += kick_dx[k];
+        game.current.y += kick_dy[k];
+        game.current.rotation = new_rotation;
+        return true;
+    }
+    return false;
+}
+
 void lock_piece() {
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
@@ -316,13 +351,13 @@ void lock_piece() {
         char info_line[64];
         snprintf(info_line, sizeof(info_line), "LEVEL %d", game.level);
         gameover_init(&gos, &fb, game.score, NULL, info_line, &hs_table, &touch);
-        // Red pulse + fail sound
-        for (int i = 0; i < 3; i++) {
-            hw_set_led(LED_RED, 100);
-            usleep(200000);
-            hw_leds_off();
-            usleep(200000);
-        }
+        /* Red pulse + fail sound.  Non-blocking: this runs inside update_game(),
+         * so the 3 x 200 ms on/off loop that used to be here froze the panel for
+         * 1.2 s with no touch poll and no redraw — and it ran *before* the
+         * game-over screen was ever drawn, so the player stared at the old
+         * playfield and any tap made during it was discarded
+         * (../IMPROVEMENT_PLAN.md B14). */
+        hw_led_pulse_start(&led_pulse, LED_RED, 3, 200, get_time_ms());
         audio_fail(&audio);  // Descending game-over tone (~600ms)
     }
 }
@@ -472,9 +507,10 @@ void handle_input() {
             bool touched = button_is_touched(&start_button, state.x, state.y);
             if (button_check_press(&start_button, touched, current_time)) {
                 current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
+                /* Non-blocking: a usleep() here delayed the first frame of play
+                 * by 100 ms from inside handle_input() (../IMPROVEMENT_PLAN.md
+                 * B14). */
+                hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
             }
         }
         // Gamepad/keyboard: start game
@@ -482,9 +518,7 @@ void handle_input() {
             input.buttons[BTN_ID_ACTION].pressed ||
             input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PLAYING;
-            hw_set_led(LED_GREEN, 100);
-            usleep(100000);
-            hw_leds_off();
+            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
         }
         return;
     }
@@ -611,10 +645,7 @@ void handle_input() {
                 }
             } else {
                 // Center 60% of board — rotate
-                int new_rotation = (game.current.rotation + 1) % 4;
-                if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                    game.current.rotation = new_rotation;
-                }
+                try_rotate((game.current.rotation + 1) % 4);
             }
         } else {
             // Landscape touch zones (existing logic)
@@ -634,10 +665,7 @@ void handle_input() {
                 }
             } else {
                 // Center — rotate
-                int new_rotation = (game.current.rotation + 1) % 4;
-                if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                    game.current.rotation = new_rotation;
-                }
+                try_rotate((game.current.rotation + 1) % 4);
             }
         }
         
@@ -668,18 +696,12 @@ void handle_input() {
         // Rotate: BTN_UP or BTN_JUMP (pressed edge only)
         if (input.buttons[BTN_ID_UP].pressed ||
             input.buttons[BTN_ID_JUMP].pressed) {
-            int new_rotation = (game.current.rotation + 1) % 4;
-            if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                game.current.rotation = new_rotation;
-            }
+            try_rotate((game.current.rotation + 1) % 4);
         }
 
         // Counter-clockwise rotate: BTN_RUN (optional)
         if (input.buttons[BTN_ID_RUN].pressed) {
-            int new_rotation = (game.current.rotation + 3) % 4;
-            if (!check_collision(&game.current, 0, 0, new_rotation)) {
-                game.current.rotation = new_rotation;
-            }
+            try_rotate((game.current.rotation + 3) % 4);
         }
 
         // Soft drop: BTN_DOWN held accelerates drop
@@ -922,6 +944,7 @@ int main(int argc, char *argv[]) {
 
         handle_input();
         update_game();
+        hw_led_pulse_update(&led_pulse, get_time_ms());
 
         /* Dirty-flag: detect what changed */
         if (current_screen == SCREEN_PLAYING) {

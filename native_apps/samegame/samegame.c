@@ -80,7 +80,11 @@ typedef enum {
     ANIM_NONE,
     ANIM_REMOVING,
     ANIM_FALLING,
-    ANIM_SLIDING
+    ANIM_SLIDING,
+    /* Board held on screen for a beat before the game-over overlay. A state
+     * rather than a render loop, so the main loop keeps polling touch — see
+     * post_move_check(). */
+    ANIM_GAMEOVER_DELAY
 } AnimState;
 
 /* ========================================================================== */
@@ -109,6 +113,7 @@ typedef struct {
     /* Animation */
     AnimState anim_state;
     uint32_t anim_start;
+    uint32_t gameover_delay_ms;  /* duration of ANIM_GAMEOVER_DELAY (varies) */
     /* For removal animation: store which blocks are being removed */
     bool removing_map[MAX_COLS][MAX_ROWS];
     int removing_count;
@@ -247,9 +252,20 @@ static uint32_t color_lerp(uint32_t a, uint32_t b, float t) {
 }
 
 static bool pixel_to_grid(int px, int py, int *out_col, int *out_row) {
-    int col = (px - game.grid_x) / game.block_size;
-    int row = (py - game.grid_y) / game.block_size;
-    if (col < 0 || col >= game.cols || row < 0 || row >= game.rows)
+    /* Reject a press above or left of the grid *before* dividing.  C integer
+     * division truncates toward zero, so a delta in (-block_size, 0) yields 0
+     * rather than -1 and the old `col < 0 || row < 0` guard could never fire:
+     * every tap within one block outside the left or top edge selected column or
+     * row 0 (../IMPROVEMENT_PLAN.md B13j).  The high edges were always fine —
+     * truncation rounds those *down*, into range. */
+    int dx = px - game.grid_x;
+    int dy = py - game.grid_y;
+    if (dx < 0 || dy < 0)
+        return false;
+
+    int col = dx / game.block_size;
+    int row = dy / game.block_size;
+    if (col >= game.cols || row >= game.rows)
         return false;
     *out_col = col;
     *out_row = row;
@@ -264,7 +280,7 @@ static void init_layout(void) {
     /* Calculate grid dimensions based on screen size.
      *
      * The grid stays inside SCREEN_SAFE_* — unlike Tetris' or Brick Breaker's
-     * playfields, every block here is a touch target (board_to_cell() maps a
+     * playfields, every block here is a touch target (pixel_to_grid() maps a
      * press straight to a cell), so a block drawn in the visible-but-unreachable
      * band would simply never respond. The HUD above it is SAFE-anchored too,
      * because it shares that band with the menu/exit buttons. */
@@ -716,25 +732,20 @@ static void post_move_check(void) {
 
     /* Check for game over */
     if (game.blocks_remaining == 0 || check_game_over()) {
-        /* Small delay before showing game over screen */
-        uint32_t delay_until = get_time_ms() + (game.perfect_clear ? 1500 : 300);
-        while (running && get_time_ms() < delay_until) {
-            /* Keep rendering during delay */
-            update_shake();
-            update_led_effects();
-            fb_clear(&fb, COLOR_BLACK);
-            draw_playing_field();
-            fb_swap(&fb);
-            usleep(FRAME_DELAY_ACTIVE_US);
-        }
-
-        if (!game.perfect_clear) {
-            audio_fail(&audio);
-            start_led_effect(4);  /* Game over LED */
-        }
-
-        current_screen = SCREEN_GAME_OVER;
-        gameover_init(&gos, &fb, game.score, NULL, NULL, &hs_table, &touch);
+        /* Hold the board on screen for a beat before the overlay — as an
+         * animation state, not a render loop.  This used to be a 300-1500 ms
+         * `while (running) { draw; fb_swap; usleep }` which never called
+         * touch_poll(), so MENU and EXIT were dead for its whole duration and a
+         * tap made during it was discarded (../IMPROVEMENT_PLAN.md B14).  As a
+         * state the ordinary main loop keeps polling and drawing: its dirty flag
+         * already forces frames whenever anim_state != ANIM_NONE, and
+         * handle_input() checks both buttons before it gates the grid on the
+         * animation, so they stay live.  update_game() returns early unless
+         * SCREEN_PLAYING, so pausing mid-delay holds the overlay back instead of
+         * dropping it over the pause dialog. */
+        game.anim_state = ANIM_GAMEOVER_DELAY;
+        game.anim_start = get_time_ms();
+        game.gameover_delay_ms = game.perfect_clear ? 1500 : 300;
     }
 }
 
@@ -768,6 +779,19 @@ static void update_animations(void) {
             finalize_column_collapse();
             game.anim_state = ANIM_NONE;
             post_move_check();
+        }
+        break;
+
+    case ANIM_GAMEOVER_DELAY:
+        elapsed = now - game.anim_start;
+        if (elapsed >= game.gameover_delay_ms) {
+            game.anim_state = ANIM_NONE;
+            if (!game.perfect_clear) {
+                audio_fail(&audio);
+                start_led_effect(4);  /* Game over LED */
+            }
+            current_screen = SCREEN_GAME_OVER;
+            gameover_init(&gos, &fb, game.score, NULL, NULL, &hs_table, &touch);
         }
         break;
 
@@ -1385,14 +1409,17 @@ static void handle_input(void) {
 
     /* Welcome screen */
     if (current_screen == SCREEN_WELCOME) {
+        /* The green start flash goes through this game's own LED effect system —
+         * effect 1 is already exactly a 100 ms green flash.  It used to be
+         * hw_set_led() + usleep(100000) + hw_leds_off(), i.e. a 100 ms freeze
+         * inside handle_input() before the first frame of play
+         * (../IMPROVEMENT_PLAN.md B14). */
         /* Touch: tap start button */
         if (state.pressed) {
             bool touched = button_is_touched(&start_button, state.x, state.y);
             if (button_check_press(&start_button, touched, now)) {
                 current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);
-                hw_leds_off();
+                start_led_effect(1);
             }
         }
         /* Mouse: click start button */
@@ -1400,9 +1427,7 @@ static void handle_input(void) {
             bool touched = button_is_touched(&start_button, input.mouse_x, input.mouse_y);
             if (button_check_press(&start_button, touched, now)) {
                 current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);
-                hw_leds_off();
+                start_led_effect(1);
             }
         }
         /* Gamepad/keyboard: start game with Jump, Action, or Pause */
@@ -1410,9 +1435,7 @@ static void handle_input(void) {
             input.buttons[BTN_ID_ACTION].pressed ||
             input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PLAYING;
-            hw_set_led(LED_GREEN, 100);
-            usleep(100000);
-            hw_leds_off();
+            start_led_effect(1);
         }
         return;
     }

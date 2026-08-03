@@ -300,6 +300,10 @@ void update_snake() {
         }
     }
     
+    /* The cell the tail is about to leave.  If this move eats food we extend
+     * into it, so it must be read before the body shifts over it. */
+    Point vacated_tail = snake.body[snake.length - 1];
+
     // Move snake body
     for (int i = snake.length - 1; i > 0; i--) {
         snake.body[i] = snake.body[i - 1];
@@ -315,6 +319,17 @@ void update_snake() {
         start_led_effect(1);  // Start food effect (non-blocking)
         
         if (snake.length < MAX_SNAKE_LENGTH) {
+            /* The shift above only wrote body[1..length-1], so body[length] is
+             * still whatever an earlier, longer tick left there — {0,0} on the
+             * very first grow, because the struct is zero-initialised.  Just
+             * incrementing length therefore published a detached cell at the
+             * grid origin: it was drawn for one tick, counted by the
+             * self-collision test, and ended the game if the head stepped on it
+             * (../IMPROVEMENT_PLAN.md B13f).  The new segment belongs in the
+             * cell the tail just vacated, which is what growing physically is.
+             * It self-healed on the next tick's shift, which is why this looked
+             * like a one-frame rendering glitch rather than a fatal one. */
+            snake.body[snake.length] = vacated_tail;
             snake.length++;
             start_led_effect(2);  // Start grow effect (non-blocking)
         }

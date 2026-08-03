@@ -77,6 +77,8 @@ static HighScoreTable hs_table;
 static GameOverScreen gos;
 static uint32_t last_rescan_ms = 0;
 #define RESCAN_INTERVAL_MS 5000
+/* LED flourishes (game start, match won), advanced once per frame by the main loop. */
+static LedPulse led_pulse;
 
 // Function prototypes
 void init_game();
@@ -142,7 +144,10 @@ void reset_game() {
     game.game_over = false;
     game.paused = false;
     game.winner = 0;
-    
+    /* The win flourish outlives the game-over screen now that it does not block,
+     * so cancel it rather than flash into the new match. */
+    hw_led_pulse_stop(&led_pulse);
+
     reset_ball();
 }
 
@@ -167,6 +172,13 @@ void reset_ball() {
 }
 
 // Helper: initialize the unified game over screen when a match ends
+//
+// The win flourish lives here rather than at the four call sites, all of which
+// followed this call with the same 3 x 200 ms on/off usleep() loop plus a sound.
+// Two reasons: that loop ran inside update_game() and froze the panel for 1.2 s
+// with no touch poll and no redraw — before the game-over screen had been drawn,
+// so taps made during it were discarded (../IMPROVEMENT_PLAN.md B14) — and the
+// LED colour and the sound both follow game.winner, which is decided here.
 static void enter_game_over(void) {
     char info[64];
     bool player_won = (game.winner == 1);
@@ -176,6 +188,13 @@ static void enter_game_over(void) {
         snprintf(info, sizeof(info), "AI WINS %d - %d", game.ai.score, game.player.score);
     gameover_init(&gos, &fb, game.player.score,
                   player_won ? "YOU WIN!" : "AI WINS!", info, &hs_table, &touch);
+
+    hw_led_pulse_start(&led_pulse, player_won ? LED_GREEN : LED_RED,
+                       3, 200, get_time_ms());
+    if (player_won)
+        audio_success(&audio);
+    else
+        audio_fail(&audio);
 }
 
 void update_ai() {
@@ -270,14 +289,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
-                enter_game_over();
-                for (int i = 0; i < 3; i++) {
-                    hw_set_led(LED_GREEN, 100);
-                    usleep(200000);
-                    hw_leds_off();
-                    usleep(200000);
-                }
-                audio_success(&audio);
+                enter_game_over();   /* also starts the win pulse + sound */
             } else {
                 reset_ball();
             }
@@ -288,19 +300,12 @@ void update_game() {
             hw_set_led(LED_RED, 100);
             audio_blip(&audio);
             hw_leds_off();
-            
+
             if (game.ai.score >= WINNING_SCORE) {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
-                enter_game_over();
-                for (int i = 0; i < 3; i++) {
-                    hw_set_led(LED_RED, 100);
-                    usleep(200000);
-                    hw_leds_off();
-                    usleep(200000);
-                }
-                audio_fail(&audio);
+                enter_game_over();   /* also starts the win pulse + sound */
             } else {
                 reset_ball();
             }
@@ -362,14 +367,7 @@ void update_game() {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
-                enter_game_over();
-                for (int i = 0; i < 3; i++) {
-                    hw_set_led(LED_RED, 100);
-                    usleep(200000);
-                    hw_leds_off();
-                    usleep(200000);
-                }
-                audio_fail(&audio);
+                enter_game_over();   /* also starts the win pulse + sound */
             } else {
                 reset_ball();
             }
@@ -378,19 +376,12 @@ void update_game() {
             hw_set_led(LED_GREEN, 100);
             audio_blip(&audio);
             hw_leds_off();
-            
+
             if (game.player.score >= WINNING_SCORE) {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
-                enter_game_over();
-                for (int i = 0; i < 3; i++) {
-                    hw_set_led(LED_GREEN, 100);
-                    usleep(200000);
-                    hw_leds_off();
-                    usleep(200000);
-                }
-                audio_success(&audio);
+                enter_game_over();   /* also starts the win pulse + sound */
             } else {
                 reset_ball();
             }
@@ -428,9 +419,10 @@ void handle_input() {
             if (button_check_press(&start_button, touched, current_time)) {
                 reset_game();
                 current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
+                /* Non-blocking: a usleep() here delayed the first frame of play
+                 * by 100 ms from inside handle_input() (../IMPROVEMENT_PLAN.md
+                 * B14).  After reset_game(), which cancels any pending pulse. */
+                hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
             }
         }
         // Gamepad/keyboard: start game with Jump, Action, or Pause
@@ -439,9 +431,7 @@ void handle_input() {
             input.buttons[BTN_ID_PAUSE].pressed) {
             reset_game();
             current_screen = SCREEN_PLAYING;
-            hw_set_led(LED_GREEN, 100);
-            usleep(100000);
-            hw_leds_off();
+            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
         }
         return;
     }
@@ -759,6 +749,7 @@ int main(int argc, char *argv[]) {
         GameScreen prev_screen = current_screen;
         handle_input();
         update_game();
+        hw_led_pulse_update(&led_pulse, get_time_ms());
 
         /* Dirty-flag: active gameplay always redraws; static screens on change */
         if (current_screen == SCREEN_PLAYING) {

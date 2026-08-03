@@ -56,7 +56,7 @@ process holding an old inode (the B20/B25 failure mode) otherwise all look like 
 | `touch_input.c` | touch events, the raw→panel→logical map, publishing the touch inset | reading evdev directly |
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
-| `hardware.c` | LEDs, backlight | writing `/sys/class/leds/*` |
+| `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
 | `audio.c` | beeps, tones, streaming | opening `/dev/dsp` yourself |
@@ -304,6 +304,33 @@ static overlay produces no frames — which was the point of asking the componen
 `FRAME_DELAY_ACTIVE_US` = 33 333 (~30 fps), `FRAME_DELAY_IDLE_US` = 100 000 (~10 fps), both in
 `common/common.h`. Use them; don't hardcode `usleep()` values. Reference implementation:
 `app_launcher/app_launcher.c`.
+
+**The only `usleep()` in a game is the one at the bottom of the main loop.** Anything else in an
+update or input path stops the world: no `touch_poll()`, no `gamepad_poll()`, no redraw. Every game
+had at least one and they were fixed on 2026-08-03 (`../IMPROVEMENT_PLAN.md` B14). Two shapes, and
+both have a replacement:
+
+| Shape | Was | Use instead |
+|---|---|---|
+| "flash an LED for N ms" | `hw_set_led(); usleep(); hw_leds_off();` — up to 1.2 s in tetris and pong | `LedPulse` + `hw_led_pulse_start/update/stop()` in `hardware.c` |
+| "hold this screen for N ms" | `while (...) { draw; fb_swap; usleep; }` — samegame's 300–1500 ms pre-game-over hold | a state in the app's existing animation machine (`ANIM_GAMEOVER_DELAY`) |
+
+Three things about that, learned from doing it:
+
+- **`hw_led_pulse_update()` takes `now_ms` as an argument rather than calling `get_time_ms()`.**
+  `hardware.c` is linked by `vnc_client`, which does **not** link `common.c`, so a call into it breaks
+  that link. Same reasoning as `gamepad_poll()`'s touch coordinate — and it makes the pulse
+  host-testable. `hw_blink_led()`/`hw_pulse_led()` are still there and still blocking; they are
+  correct for exactly one case, the exit flourish before `running = false`, where there is nothing
+  left to be responsive to.
+- **The render-loop shape is the one that hides a dead button.** samegame's held the screen without
+  polling, so MENU and EXIT were dead for its whole duration. As an animation state it costs nothing:
+  the dirty flag already forces frames on `anim_state != ANIM_NONE`, and `handle_input()` checks the
+  buttons *before* it gates the grid on the animation. Check that order if you add one.
+- **A pulse outlives the state that started it, so whoever can leave that state must cancel it.**
+  `reset_game()` / `init_level()` call `hw_led_pulse_stop()`, or a game-over flourish flashes into the
+  next round. If a code path writes the LED directly (`hw_leds_off()` at brick_breaker's level-clear),
+  stop the pulse first or the next update re-lights it.
 
 **A per-frame motion constant is a speed only in combination with the frame delay, so sanity-check it
 in px/s.** At 30 fps the conversion is ×30, which makes small-looking numbers unplayably slow: pong
