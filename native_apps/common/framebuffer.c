@@ -695,12 +695,24 @@ void fb_fill_rect_gradient(Framebuffer *fb, int x, int y, int w, int h,
                            uint32_t top_color, uint32_t bottom_color) {
     x += fb->draw_offset_x;
     y += fb->draw_offset_y;
-    uint32_t tr = (top_color >> 16) & 0xFF, tg = (top_color >> 8) & 0xFF, tb = top_color & 0xFF;
-    uint32_t br = (bottom_color >> 16) & 0xFF, bg = (bottom_color >> 8) & 0xFF, bb = bottom_color & 0xFF;
+    /* The channel deltas MUST be signed. A descending gradient (bottom channel
+     * darker than top) makes bottom < top, and an unsigned subtraction wraps to
+     * ~4.29e9 instead of going negative. The division that follows destroys the
+     * modular-arithmetic equivalence that would otherwise have rescued it, so
+     * every row got a garbage colour rather than a ramp. */
+    int tr = (int)((top_color >> 16) & 0xFF);
+    int tg = (int)((top_color >>  8) & 0xFF);
+    int tb = (int)( top_color        & 0xFF);
+    int dr = (int)((bottom_color >> 16) & 0xFF) - tr;
+    int dg = (int)((bottom_color >>  8) & 0xFF) - tg;
+    int db = (int)( bottom_color        & 0xFF) - tb;
+    int span = (h > 1) ? h - 1 : 1;
     for (int j = 0; j < h; j++) {
-        uint32_t r = tr + (br - tr) * j / (h > 1 ? h - 1 : 1);
-        uint32_t g = tg + (bg - tg) * j / (h > 1 ? h - 1 : 1);
-        uint32_t b = tb + (bb - tb) * j / (h > 1 ? h - 1 : 1);
+        /* j <= span, so |d*j/span| <= |d| and each channel stays between its
+         * two endpoints — both already masked to 0..255. No clamp needed. */
+        uint32_t r = (uint32_t)(tr + dr * j / span);
+        uint32_t g = (uint32_t)(tg + dg * j / span);
+        uint32_t b = (uint32_t)(tb + db * j / span);
         uint32_t c = (r << 16) | (g << 8) | b;
         for (int i = 0; i < w; i++)
             fb_draw_pixel(fb, x + i, y + j, c);

@@ -1,15 +1,17 @@
 /**
  * Backlight Control Utility for RoomWizard
- * 
+ *
  * Simple command-line tool to set the backlight brightness.
- * 
+ *
  * Usage: ./backlight <percentage>
+ *        ./backlight get
  *   percentage: 0-100 (0=off, 100=full brightness)
- * 
+ *
  * Examples:
  *   ./backlight 50    # Set backlight to 50%
  *   ./backlight 100   # Set backlight to full brightness
  *   ./backlight 0     # Turn off backlight
+ *   ./backlight get   # Print the current brightness
  */
 
 #include "../common/hardware.h"
@@ -19,6 +21,7 @@
 
 void print_usage(const char *prog) {
     printf("Usage: %s <percentage>\n", prog);
+    printf("       %s get\n", prog);
     printf("\n");
     printf("Set the backlight brightness to the specified percentage.\n");
     printf("\n");
@@ -26,11 +29,17 @@ void print_usage(const char *prog) {
     printf("  percentage    Brightness level (0-100)\n");
     printf("                0   = backlight off\n");
     printf("                100 = full brightness\n");
+    printf("  get           Print the current brightness and exit\n");
+    printf("\n");
+    printf("Both are percentages of the configured maximum\n");
+    printf("(backlight_brightness in /opt/games/rw_config.conf), so the value\n");
+    printf("printed by 'get' can be handed straight back to this tool.\n");
     printf("\n");
     printf("Examples:\n");
     printf("  %s 50     # Set backlight to 50%%\n", prog);
     printf("  %s 100    # Set backlight to full brightness\n", prog);
     printf("  %s 0      # Turn off backlight\n", prog);
+    printf("  %s get    # Print the current brightness\n", prog);
 }
 
 int main(int argc, char *argv[]) {
@@ -46,7 +55,22 @@ int main(int argc, char *argv[]) {
         print_usage(argv[0]);
         return 0;
     }
-    
+
+    // Read-back mode: the only way to check the get/set round trip on a device
+    // with no keyboard (IMPROVEMENT_PLAN B9)
+    if (strcmp(argv[1], "get") == 0) {
+        if (hw_init() < 0) {
+            fprintf(stderr, "Warning: Hardware initialization reported issues\n");
+        }
+        int current = hw_get_backlight();
+        if (current < 0) {
+            fprintf(stderr, "Error: Failed to read backlight brightness\n");
+            return 1;
+        }
+        printf("%d\n", current);
+        return 0;
+    }
+
     // Parse brightness value
     char *endptr;
     long brightness = strtol(argv[1], &endptr, 10);

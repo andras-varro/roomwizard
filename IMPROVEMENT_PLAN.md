@@ -68,9 +68,14 @@ correct at any bpp, and every app that uses the common primitives (`app_launcher
 `fb_set_bpp(dev, 32)` before `fb_init()`, so none of them can inherit 16bpp from a crashed
 ScummVM or VNC session.
 
-Still open: the primitives themselves. Nothing currently reaches them at 16bpp — ScummVM and
-`vnc_client` both hand-write `uint16_t` — but one `fb_draw_text` added to either would corrupt
-the heap.
+Still open: the primitives themselves. ~~Nothing currently reaches them at 16bpp~~ — **corrected
+2026-08-02: something does.** The apps listed above assert 32bpp, but **no game does** (see **B24**),
+so a game launched outside the launcher inherits whatever the last app left. Observed on RW09: a stale
+`vnc_client` (B25) left 16bpp and `brick_breaker` came up at `800x455 … 16 bpp`, i.e. running the full
+2× overflow. Under the launcher it stays unreachable, because the launcher re-asserts 32bpp after
+every child — but an SSH-launched binary is exactly what C6's smoke harness does, so this is now a
+live hazard rather than a theoretical one. Separately, one `fb_draw_text` added to ScummVM or
+`vnc_client` would corrupt the heap.
 
 **Fix:** make the primitives dispatch on `bytes_per_pixel` (a 16bpp `fb_draw_pixel` writing
 RGB565 would also let ScummVM and the VNC client drop their private text renderers). Note
@@ -189,23 +194,58 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B7. Descending gradients render garbage — open, confirmed by reading the code
+### B23. The backlight slider's live preview writes to a node that does not exist — open, confirmed 2026-08-02
 
-`native_apps/common/framebuffer.c:558`. `tr`/`br` are `uint32_t`, so when the bottom colour is
-darker `(br - tr)` wraps to ~2³², and the subsequent division does not undo it. Only row 0 is
-correct. Affects **every** descending gradient — all brick colours, the paddle, the platformer sky.
+`device_tools.c:512` and `hardware_config.c:127` (`apply_backlight()`, a verbatim copy in each) write
+`/sys/class/backlight/pwm-backlight/brightness` to preview the slider value unscaled. **That path is
+not present on this device:** `/sys/class/backlight/` is an empty directory and the only backlight
+control is `/sys/class/leds/backlight/brightness`, which is what `hardware.c` uses. Measured on RW09
+2026-08-02. So dragging the backlight slider in either tool changes nothing until the value is saved
+and some later `hw_set_backlight()` call picks it up — the preview is silently dead, and the `fopen`
+failure is not checked.
 
-**Fix:** `int dr = (int)br - (int)tr;` and clamp to 0..255.
+Found while fixing B9. Not folded into it: B9 was the getter/setter *units* bug and is closed, this
+is a wrong *path*.
 
-### B9. Backlight get/set asymmetry permanently dims the panel — open, confirmed by reading the code
+**Fix:** preview through the same node `hardware.c` owns. The intent is an *unscaled* write (the
+slider is choosing the scale factor itself, so `hw_set_backlight()` would apply the old cached
+percentage), so this wants a raw entry point in `hardware.c` — `hw_set_backlight_raw()` — rather than
+a fourth copy of the sysfs path. Check the write, and delete the duplicate while you are there
+(`apply_backlight()` and `do_led_test()` are both duplicated between these two files; see C8, which
+already proposes retiring one of the two tools).
 
-`hardware.c:201` `hw_set_backlight()` applies the config percentage; `:208` `hw_get_backlight()`
-returns the raw sysfs value. `device_tools.c:1339`, `hardware_test.c:53` and
-`hardware_test_gui.c:276` all do `int original = hw_get_backlight(); … hw_set_backlight(original);`.
-With `backlight_brightness=50`, **each run of the backlight test halves the panel** (100→50→25→…).
-Same asymmetry for LEDs.
+### B24. No game asserts the framebuffer bpp, so B1 is reachable from a bare SSH launch — open, confirmed 2026-08-02
 
-**Fix:** unscale in the getter, or add `hw_set_backlight_raw()` for restore paths.
+`fb_set_bpp()` has ten call sites and **not one of them is a game**: `app_launcher` (×2),
+`game_selector` (×2), `device_tools` (×2), `hardware_config`, `hardware_diag`, `touch_raw`. Games
+inherit whatever bpp the previous app left. Under the launcher that is fine — it re-asserts 32bpp
+after every child exits, which is exactly why this has never been seen.
+
+It is **not** fine when a binary is launched directly, which is what an SSH smoke test does (C6) and
+what happened on RW09 2026-08-02: a stale `vnc_client` had left `/dev/fb0` at 16bpp, and
+`brick_breaker` started and logged `Framebuffer initialized: 800x455 logical … 16 bpp`. Every
+`framebuffer.c` primitive then writes `uint32_t` into a back buffer sized by `bytes_per_pixel`
+(800×455×2 = 728 000 B), addressing up to 800×455×4 = 1 456 000 B — a 2× heap overflow. This is the
+**reachable** case of B1, whose entry says it currently is not.
+
+Note this also corrects `CLAUDE.md` and `native_apps/CLAUDE.md`, which both state that the native
+menu *and games* force 32bpp. Only the menus do.
+
+**Fix:** either `fb_init()` asserts the bpp it is going to draw at, or B1's dispatch-on-bpp lands and
+the question stops mattering. Prefer the latter; do the former as a one-line stopgap.
+
+### B25. `vnc_client` sets a process title the deploy scripts cannot kill — open, confirmed 2026-08-02
+
+`vnc_client` presents its `cmdline` as `VNC Client` (with a space), so `killall vnc_client` matches
+nothing. On RW09 2026-08-02 an instance survived `deploy-all.sh`, two `/etc/init.d/roomwizard-app
+stop` calls and a service restart, holding `/dev/fb0` at 16bpp and repainting over every app that
+tried to start — `app_launcher` came up and could not keep the screen. It had to be killed by PID.
+Diagnosing it is also harder than it should be: busybox `ps w` lists only processes with a TTY, so
+the survivor is invisible unless you walk `/proc/*/cmdline`.
+
+This is the concrete failure B20 predicts ("each kills a different basename") and it argues for
+raising B20's priority: the shared `/etc/init.d/roomwizard-app stop` path must match on the
+*executable*, not a title the process chose.
 
 ### B10. ScummVM `getMillis()` overflows at 24.85 days — open
 
@@ -337,12 +377,18 @@ the failure is invisible.
 - **`clean.sh`** has no shebang, no `set -e`, no `cd` — run from the repo root its
   `find . -name '*.o' -delete` wipes `native_apps/build/`, `usb_host/modules/` and the ScummVM tree.
 
-### B20. Three component scripts hand-roll the init script's `stop` logic — open
+### B20. Three component scripts hand-roll the init script's `stop` logic — open, drift confirmed 2026-08-02
 
 `native_apps:155`, `vnc_client:89`, `scummvm-roomwizard:557` all duplicate
 `killall -9 respawn.sh` + `rm -f …pid`, which is exactly what `do_stop()` exists for — and the
 copies have already drifted (each kills a different basename). `CLAUDE.md` says component scripts
 must not do this. This is the deploy-script half of B6, which was left open when B6 shipped.
+
+**The drift is no longer hypothetical — see B25.** A `vnc_client` whose process title is `VNC Client`
+survived a full `deploy-all.sh` plus two `stop` calls and had to be killed by PID, meanwhile holding
+the framebuffer at 16bpp and repainting over `app_launcher`. Consolidating on one `stop` is necessary
+but **not sufficient**: whatever that single implementation matches on must be the executable, not a
+title the process chose for itself.
 
 **Fix:** replace with `ssh "$DEVICE" '/etc/init.d/roomwizard-app stop'`, end with `restart`.
 
@@ -563,8 +609,17 @@ Separately, host-gcc tests over the pure-logic functions, where regressions are 
 you're mis-tapping by 30 px. **Started 2026-07-31:** `tests/touch_calib_test.c` covers the
 calibration fit end-to-end — it replays the 11 target medians from the reference capture and
 asserts `touch_calib_fit()` still lands on `X 17..4084` / `Y -279..4382`, plus the per-axis verdict
-and the sanity gate's accept/reject boundaries. Build line is in the file header; it is host gcc,
-so `build-and-deploy.sh` does not run it.
+and the sanity gate's accept/reject boundaries. **Added 2026-08-02:** `tests/gradient_test.c` covers
+`fb_fill_rect_gradient()` (B7) — ascending, descending, mixed per-channel directions, `h == 1`,
+`h == 0`, horizontal uniformity. It also demonstrates the pattern for testing *drawing* primitives on
+the host: `fb_draw_pixel()` only touches `back_buffer` / `width` / `height` / `double_buffering`, so a
+synthetic `Framebuffer` over a `malloc`'d buffer exercises the real code with no `/dev/fb0`. Build
+lines are in each file header; both are host gcc, so `build-and-deploy.sh` runs neither.
+
+**Write the failing version first.** `gradient_test.c` was compiled against
+`git show HEAD:native_apps/common/framebuffer.c` and confirmed to fail (12 assertions) before the fix
+was trusted — on a codebase with no CI, a test that has only ever been seen passing is not evidence
+that it can fail.
 
 Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` (would have
 caught the `args=` bug immediately), and the `config.c`/`ppm.c` parsers.
@@ -626,6 +681,44 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B7. Descending gradients rendered wrong** — done 2026-08-02.
+`fb_fill_rect_gradient()` computed its channel deltas in `uint32_t`, so a descending channel wrapped
+`(bottom - top)` to ~2³² and the following division did not undo it. Now signed deltas, with the
+`h > 1 ? h - 1 : 1` span hoisted out of the row loop. **No clamp** — `j <= span`, so each channel
+provably stays between two endpoints already masked to `0..255`, and adding one would be dead code.
+The symptom was *not* the "garbage" the original entry claimed: the wrapped delta's high bits bled
+across channel boundaries, so a ramp still appeared but non-monotone and ending on the wrong colour
+(platformer's sky red ended at 117 instead of 100) — which reads as banding, not corruption, and is
+why it survived. Every one of brick_breaker's eight `ROW_COLORS` descends on all three channels, so
+every brick was affected, as were the paddle and the platformer sky.
+Covered by a new host regression, `tests/gradient_test.c` (ascending, descending, mixed per-channel
+directions, `h == 1`, `h == 0`, horizontal uniformity); it was confirmed to **fail** against the
+pre-fix `framebuffer.c` before being trusted. Verified on RW09 pixel-exact from a first-screen
+capture: brick_breaker's welcome-screen rule (`RGB(0,220,255)` → `RGB(255,80,200)`, green and blue
+both descending) reads `(0,220,255) / (127,150,228) / (255,80,200)` across all 640 px of its run.
+
+**B9. Backlight get/set asymmetry permanently dimmed the panel** — done 2026-08-02.
+`hw_set_backlight()`/`hw_set_led()` scale by the configured percentage; the getters returned the raw
+sysfs value, so the three `int original = hw_get_backlight(); … hw_set_backlight(original);` restore
+pairs multiplied the panel by pct/100 on every run. Fixed in the **getters** (`hw_unscale_brightness()`,
+the inverse of `hw_scale_brightness()`), not at the call sites, so all three are fixed at once and the
+natural `hw_set_backlight(hw_get_backlight())` is now a no-op — the trap is closed rather than
+documented. A raw value above the configured maximum can only come from something that bypassed the
+API, so it clamps to 100 instead of reporting >100; a read error (−1) propagates unchanged.
+`hw_get_led()` gets the same treatment, which also fixes `hardware_test.c:112-129`, a read-back test
+that printed the scaled values while claiming it had set 75/25.
+`hardware.h`'s file header claimed "all brightness values are 0-100 (percentage)" — that ambiguity is
+what allowed the two halves of the API to drift, so it now names the space explicitly ("percent of the
+user's configured maximum") and both getters say they round-trip.
+Verified on RW09 with `backlight_brightness=50`: `set 80` → raw 40, `get` → 80, and three feed-back
+cycles all held raw at 40. The old behaviour, reproduced by feeding the raw value back as the old
+getter did, decayed 80 → 40 → 20 → 10 → 5.
+The plan's line reference `device_tools.c:1339` was stale — the site is `:1302`. Two adjacent bugs
+found while doing this and filed separately: **B23** (the slider's live preview writes a nonexistent
+sysfs node) and, indirectly, **B24**.
+Note `native_apps/backlight` gained a `get` subcommand. It is not a convenience: with no `/dev/uinput`
+(C6) and no keyboard, an SSH-readable value was the only way to verify the round trip at all.
 
 **B3. A bad calibration could wedge the device with no recovery** — done 2026-07-31.
 Three parts: `touch_calib_range_sane()` (`2 × overlap(fit, hw) ≥ max span`, deliberately **not**
@@ -1038,8 +1131,11 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    region, and before anyone wires up an analog stick.
    **Outstanding first:** B22's panel table has **one** row unconfirmed — platformer, which needs a
    USB keyboard or gamepad attached.
-   **B7 and B9 are the available quick wins** — both small, both confirmed by reading the code,
-   both independent of everything above.
+   **B7 and B9 are done** (2026-08-02) — they were the available quick wins. Doing them turned up
+   three new items, all confirmed on the panel the same day: **B23** (backlight slider previews to a
+   sysfs node that does not exist), **B24** (no game asserts bpp, which makes B1 reachable from a bare
+   SSH launch — read it before starting B1) and **B25** (a `vnc_client` the deploy scripts cannot
+   kill, which is B20's predicted failure actually happening).
 3. **The per-app layout pass** — done 2026-08-02 (B3e, B3i, B3j, B3k, B13d, B13k). It also
    established that **`touch_inject` cannot work on this device at all** (no `CONFIG_INPUT_UINPUT`),
    which is why C6 had to be rewritten around framebuffer capture instead.

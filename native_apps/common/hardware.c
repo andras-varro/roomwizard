@@ -44,6 +44,27 @@ static uint8_t hw_scale_brightness(uint8_t brightness, int pct) {
     return (uint8_t)((int)brightness * pct / 100);
 }
 
+/**
+ * Inverse of hw_scale_brightness(): raw sysfs duty cycle -> setter space.
+ *
+ * The setters take "percent of the user's configured maximum" and scale down
+ * before writing, so a getter that returned the raw sysfs value put the two
+ * halves of the API in different units. Every save/restore pair then multiplied
+ * the panel by pct/100 again on each run — three sweeps at 50% left the
+ * backlight at 12% (IMPROVEMENT_PLAN B9). Returning setter space makes
+ * hw_set_backlight(hw_get_backlight()) a no-op, which is what callers assume.
+ *
+ * A raw value larger than the configured maximum can only come from something
+ * that bypassed the API, so it clamps to 100 rather than reporting >100.
+ */
+static int hw_unscale_brightness(int raw, int pct) {
+    if (raw < 0) return raw;          /* propagate the read error unchanged */
+    if (pct >= 100) return raw;
+    if (pct <= 0) return 0;
+    int v = raw * 100 / pct;
+    return (v > 100) ? 100 : v;
+}
+
 // Internal helper to write brightness value to sysfs
 static int write_brightness(const char *path, uint8_t brightness) {
     // Clamp brightness to 0-100
@@ -154,8 +175,9 @@ int hw_get_led(LEDColor led) {
         fprintf(stderr, "Error: Invalid LED color\n");
         return -1;
     }
-    
-    return read_brightness(path);
+
+    hw_load_config();
+    return hw_unscale_brightness(read_brightness(path), hw_led_brightness_pct);
 }
 
 int hw_set_red_led(uint8_t brightness) {
@@ -206,7 +228,9 @@ int hw_set_backlight(uint8_t brightness) {
 }
 
 int hw_get_backlight(void) {
-    return read_brightness(BACKLIGHT_PATH);
+    hw_load_config();
+    return hw_unscale_brightness(read_brightness(BACKLIGHT_PATH),
+                                 hw_backlight_brightness_pct);
 }
 
 int hw_pulse_led(LEDColor led, uint32_t duration_ms, uint8_t max_brightness) {

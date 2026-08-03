@@ -11,6 +11,10 @@ scummvm-roomwizard/gui-icons-roomwizard.dat
 scummvm-icons/
 scummvm-roomwizard/arm-deps/
 
+# Upstream ScummVM source tree, configured in place for the cross-build. Not
+# owned by this repo - scummvm-roomwizard/ holds our backend port.
+/scummvm/
+
 # dotenv files
 .env
 

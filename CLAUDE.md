@@ -131,17 +131,25 @@ actually built and shipped.
   Match the tab-delimited mnemonic field, as `check-arm-safe.sh` does; then no allowlist is
   needed and any hit is real.
 - **Framebuffer bpp is per-app — always confirm before decoding a screenshot.** `/dev/fb0`
-  format is set at runtime by whatever app is running: **native menu + games force 32bpp
+  format is set at runtime by whatever app is running: **the native menus and tools force 32bpp
   XRGB8888** via `fb_set_bpp(fb_dev,32)` at startup (`app_launcher` also re-asserts it after
   every child exits; `game_selector` only does it after a child exits); **ScummVM and the VNC
   remote session run 16bpp RGB565** (they call `fb_set_bpp(...,16)` to halve memory
-  bandwidth). `framebuffer.c` (common lib) draws `uint32_t` per pixel, so its primitives are
+  bandwidth). ⚠️ **No *game* calls `fb_set_bpp` at all** — corrected 2026-08-02; the ten call sites
+  are `app_launcher` ×2, `game_selector` ×2, `device_tools` ×2, `hardware_config`, `hardware_diag`,
+  `touch_raw`, plus the definition. Games inherit whatever the previous app left, which is safe under
+  the launcher and **not safe from a bare SSH launch**: after a 16bpp app, a game comes up at 16bpp and
+  every `uint32_t` primitive overruns the back buffer 2× (`IMPROVEMENT_PLAN.md` B24, and it is the
+  reachable case of B1).
+  `framebuffer.c` draws `uint32_t` per pixel, so its primitives are
   32bpp-only — but `fb_swap()` and `fb_clear(…,0)` are byte-sized and correct at any bpp, which
   is what lets ScummVM drive its own 16bpp pixels through the same `Framebuffer`.
   Screenshot: `ssh root@<ip> cat /dev/fb0 > fb.raw` (one 32bpp frame = 800×480×4 =
   1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is why the old
   16bpp decoder looked size-correct while decoding garbage), then `python3 fb565_to_png.py
   fb.raw fb.png` (defaults to 32bpp; pass `--bpp 16` for ScummVM/VNC-session screens).
+  **Check `fbset | grep geometry` on the device before trusting a decode** — a stale 16bpp app can
+  leave the panel in a mode no running app asked for.
 - **Steelcase software watchdog reboots the device ~every 70 min** in game mode (when
   Jetty/HSQLDB/browser are absent). It's a cron job (`/opt/sbin/watchdog/watchdog.sh`).
   `setup-device.sh <ip>` disables it (`touch /var/watchdog_test` + comment out cron).

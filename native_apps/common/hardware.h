@@ -11,7 +11,11 @@
  * - LED indicators (red and green)
  * - Backlight brightness
  * 
- * All brightness values are 0-100 (percentage)
+ * All brightness values are 0-100, expressed as a percentage OF THE USER'S
+ * CONFIGURED MAXIMUM (led_brightness / backlight_brightness in
+ * /opt/games/rw_config.conf) — not of the raw sysfs duty cycle. Setters scale
+ * down before writing and getters scale back up, so a value round-trips:
+ * hw_set_backlight(hw_get_backlight()) leaves the panel where it was.
  */
 
 // LED color enumeration
@@ -50,7 +54,8 @@ int hw_set_led(LEDColor led, uint8_t brightness);
 /**
  * Get individual LED brightness
  * @param led: LED_RED or LED_GREEN
- * Returns: brightness value 0-100, or -1 on error
+ * Returns: brightness value 0-100 in the same space hw_set_led() takes
+ *          (percent of the configured maximum), or -1 on error
  */
 int hw_get_led(LEDColor led);
 
@@ -98,7 +103,9 @@ int hw_set_backlight(uint8_t brightness);
 
 /**
  * Get backlight brightness
- * Returns: brightness value 0-100, or -1 on error
+ * Returns: brightness value 0-100 in the same space hw_set_backlight() takes
+ *          (percent of the configured maximum), or -1 on error.
+ *          Safe to feed straight back into hw_set_backlight().
  */
 int hw_get_backlight(void);
 
