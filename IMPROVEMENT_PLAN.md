@@ -78,19 +78,34 @@ See [Closed](#closed).
 
 See [Closed](#closed).
 
-### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — open, confirmed
+### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — partly done 2026-08-03
 
-`OSystem_RoomWizard::quit()` calls `exit()` unconditionally rather than setting a flag that lets
-the main loop fall back to the ScummVM launcher. The same build returns to the launcher correctly
-on Ubuntu. Compare with the SDL backend's `_quit` flag + launcher loop.
+**The fix shipped and the recorded diagnosis was wrong.** Archived in full at
+[B12b in Closed](#closed) — read it before touching `quit()`, which is *not* the cause and must keep
+its `exit(0)`.
 
-Diagnosed but unfixed; was recorded only in `scummvm-roomwizard/SCUMMVM_DEV.md`.
+**What is left is verification, and it needs both a game and a human at the panel:**
+
+| Check | Status |
+|---|---|
+| the option is written to the config | **pass** — `gui_return_to_launcher_at_exit=true` in `/opt/games/scummvm.ini` after one run |
+| the route back to `app_launcher` survives | **pass** — the ScummVM launcher's `Quit` button is still on a decoded framebuffer capture, which is the control against the `kFeatureNoQuit` alternative that would have removed it |
+| leaving a game lands on the ScummVM launcher | **unverified** — and **not verifiable on RW09 as it stands** |
+
+The last row is blocked on something the plan had not recorded: **there is no ScummVM game data on the
+device at all.** `/opt/games` holds the binary, the theme, the icon pack and the vkeybd pack and no
+game directory; `df` shows nothing mounted that carries one; and the config file has no game entries.
+So the game list is legitimately empty, "start a game and exit it" cannot be done, and neither can
+B12c's KQ3 audio check. Installing a game is the prerequisite for both, and adding one needs the panel
+(`Add Game...` is a touch file browser). Once a game exists, the check is one tap: start it, leave it,
+and the ScummVM launcher — not `app_launcher` — must appear.
 
 ### B12c. ScummVM: OPL tempo unverified after the mono-mixer fix — open
 
 Open verification task — play the KQ3 intro on the device and compare against a reference
 recording. The mono mixer and the `SOUND_PCM_READ_RATE` read-back were supposed to fix half-speed
-OPL; nobody confirmed it on hardware.
+OPL; nobody confirmed it on hardware. **Blocked on the same thing as B12b's last row: no game data is
+installed on RW09** (see above), so there is no KQ3 to play.
 
 ### B13. Game-specific bugs — done 2026-08-03
 
@@ -402,6 +417,36 @@ tabs lack. Then drop the source, the two build steps (`build-and-deploy.sh:102-1
 deploy/marker references, and the README rows. If a page turns out to be unique, move that page into
 `device_tools` rather than keeping the binary.
 
+### C9. Gate the ScummVM binary too — and gate it unstripped — open, measured 2026-08-03
+
+Two halves, and the second is why this is not a one-line addition.
+
+`scummvm-roomwizard/build-and-deploy.sh` never calls `check-arm-safe.sh`, so the largest ARM binary in
+the project — the only C++ one, and the one doing the most division — ships through no SIGILL gate at
+all. `native_apps` has had a hard-zero gate since D2, and the whole point of that gate is that a
+hardware `sdiv`/`udiv` on this Cortex-A8 is the worst failure mode available: blank screen, no output,
+no log, indistinguishable from "the app didn't start".
+
+But it cannot just be bolted on where the script strips, because **the gate is unreliable on a stripped
+binary, and ScummVM is the case that demonstrates it.** The A/B that settles it, on one file: the gate
+reports **8–9 hardware divide instructions** in the stripped binary and **zero** in the unstripped one —
+the *same binary*, before and after `strip`, which removes the symbol table and cannot alter `.text`.
+Without symbols, objdump cannot separate code from the literal pools embedded in `.text`, so four-byte
+constants decode as plausible instructions. The script's header already documents this mode from a
+single `vnc_client` phantom and prints a warning on symbol-less targets. What is new:
+
+- On ScummVM it fires ~9 times, not once, so it reads like a real and widespread problem.
+- **The phantom operands are not reliably invalid.** `udiv pc, fp, sl` and `sdiv sp, sp, r5` are
+  architecturally UNPREDICTABLE and easy to dismiss, but `udiv r3, fp, r9` and `udiv r7, r1, lr` are
+  legal encodings that look exactly like compiler output. So "eyeball the operands" is **not** a
+  sufficient triage rule — the symbol table is what settles it, nothing else.
+
+So: call it from `build_scummvm()` **before** `strip_binary()`, on the unstripped artifact. Do not put
+it after the strip step, and do not add an allowlist of offsets — they move on every build, because
+`base/version.o` re-embeds the build date on every link, which alone shifts every address after it.
+The ScummVM binary was confirmed clean unstripped on this date, so adding the gate should be a no-op
+that stays a no-op.
+
 ---
 
 ## Out of Scope
@@ -435,6 +480,40 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B12b. Leaving a game terminated ScummVM — and both the recorded cause and the prescribed fix were
+wrong** — code fix done 2026-08-03 (behavioural verification is blocked; see the Phase 1 entry).
+
+The entry said `OSystem_RoomWizard::quit()` "calls `exit()` unconditionally rather than setting a flag",
+and prescribed comparing with "the SDL backend's `_quit` flag + launcher loop". Three things are wrong
+with that, all checkable by reading upstream:
+
+- **`OSystem_SDL::quit()` does `destroy(); exit(0);` too.** There is no `_quit` flag to copy. The
+  backend it points at as the good example behaves identically to ours.
+- **Nothing in the game-exit path calls `quit()` at all.** Across the whole tree the only caller is
+  `common/recorderfile.cpp`. `quit()` was never on the path being blamed.
+- **The decision is in `base/main.cpp:832`**, in the launcher loop: it `break`s out — ending the
+  process — when a game returns `kNoError`, no return-to-launcher was requested, and neither
+  `kFeatureNoQuit` nor `gui_return_to_launcher_at_exit` is set. That is upstream's default on **every**
+  platform, which also explains the "the same build returns to the launcher correctly on Ubuntu"
+  observation: not a backend difference, but a desktop config that had the option on — it is a Global
+  Options checkbox, registered `false` by default in `base/commandLine.cpp:383`.
+
+**Fix:** `initBackend()` sets `gui_return_to_launcher_at_exit` true on first run, behind `!hasKey()` so
+the user keeps control of it, next to the `rw_content_area` default from B3g. Nothing in `quit()`
+changed, and a comment there now says so — with the reason — because "replace `exit()` with a flag" is
+exactly what the next reader will try.
+
+**The other way to satisfy `main.cpp:832` is `kFeatureNoQuit`, and it is a trap.** It would also hide
+the `Quit` button on both the ScummVM launcher (`gui/launcher.cpp:264`) and the in-game global menu
+(`engines/dialogs.cpp:90`), and make `launcherDialog()` loop until a game is started
+(`base/main.cpp:109`). On this device quitting ScummVM is the **only** way back to `app_launcher` and
+the native games, so that would trap the user inside ScummVM — a worse bug than the one being fixed.
+The option chosen leaves both Quit buttons alone, and a framebuffer capture after the fix showing the
+launcher's `Quit` still present is the control for exactly that.
+
+**C9. The ScummVM binary is not gated for sdiv/udiv, and gating it stripped would cry wolf** — see
+[C9 in Phase 4](#c9-gate-the-scummvm-binary-too--and-gate-it-unstripped--open-measured-2026-08-03).
 
 **B3h + B3g. One config file, at one absolute path, with its options written into it** — done
 2026-08-03, both in `roomwizard.cpp`, built and deployed to RW09 together.

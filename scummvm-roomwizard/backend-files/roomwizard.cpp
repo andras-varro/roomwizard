@@ -206,20 +206,48 @@ void OSystem_RoomWizard::initBackend() {
 	if (!ConfMan.hasKey("iconspath"))
 		ConfMan.set("iconspath", "/opt/games");
 
-	// Write rw_content_area out on first run so the option is DISCOVERABLE.
-	// ConfMan only persists keys that were actually set, and registerDefault()
-	// is not written either — so a key we merely read with hasKey() never
-	// appears in scummvm.ini, and the first thing anyone does is open the file,
-	// not find it, and conclude the option does not exist.  Writing the default
-	// makes the file itself the discovery surface.
+	// Backend defaults written into the config file on first run.  ConfMan only
+	// persists keys that were actually set — registerDefault() is not written
+	// either — so a key we merely read with hasKey() never appears in
+	// scummvm.ini.  Writing them makes the file the discovery surface, and the
+	// !hasKey() guards mean a user's choice is never overwritten and a second
+	// launch does not rewrite the file.
 	//
-	// setAndFlush, not set: quit() calls exit(0) and bypasses ScummVM's normal
-	// shutdown flush, so a plain set() can be lost on the one exit path this
-	// device actually takes.  The !hasKey() guard is what stops us overwriting
-	// a user's "visible".  ROOMWIZARD_CONTENT_AREA still takes precedence at
-	// read time and is deliberately NOT persisted — it is a one-off override.
-	if (!ConfMan.hasKey("rw_content_area"))
-		ConfMan.setAndFlush("rw_content_area", "safe");
+	// Flushed explicitly rather than left for shutdown: quit() calls exit(0) and
+	// bypasses ScummVM's normal flush, so a plain set() can be lost on the one
+	// exit path this device actually takes.
+	bool configDirty = false;
+
+	// rw_content_area: see rwFullContentArea() above.  ROOMWIZARD_CONTENT_AREA
+	// still takes precedence at read time and is deliberately NOT persisted —
+	// it is documented as a one-off override.
+	if (!ConfMan.hasKey("rw_content_area")) {
+		ConfMan.set("rw_content_area", "safe");
+		configDirty = true;
+	}
+
+	// Leaving a game must return to the ScummVM launcher, not terminate ScummVM.
+	// base/main.cpp's launcher loop `break`s out — quitting the process — when a
+	// game exits cleanly and neither this option nor kFeatureNoQuit is set; that
+	// is upstream's default on every platform, and it is why exiting a game here
+	// dropped the user all the way back to app_launcher.  Setting it also makes
+	// DefaultEventManager rewrite EVENT_QUIT as EVENT_RETURN_TO_LAUNCHER while an
+	// engine that supports it is running, so the in-game route agrees with the
+	// loop's.
+	//
+	// NOT kFeatureNoQuit, which is the other way to satisfy the same conditions:
+	// it also hides the Quit button on BOTH the ScummVM launcher (gui/launcher.cpp)
+	// and the global main menu (engines/dialogs.cpp), and on this device quitting
+	// ScummVM is the only way back to app_launcher and the native games.  That
+	// would trap the user inside ScummVM — a worse bug than the one being fixed.
+	// This option leaves the launcher's Quit button alone.
+	if (!ConfMan.hasKey("gui_return_to_launcher_at_exit")) {
+		ConfMan.setBool("gui_return_to_launcher_at_exit", true);
+		configDirty = true;
+	}
+
+	if (configDirty)
+		ConfMan.flushToDisk();
 
 	// Call parent init
 	ModularGraphicsBackend::initBackend();
@@ -271,6 +299,14 @@ void OSystem_RoomWizard::quit() {
 	// Restore framebuffer to 32bpp before exiting so the app launcher (or any
 	// respawned app) finds a clean 32bpp framebuffer.  closeFramebuffer() blanks
 	// the screen, unmaps the fb, and calls fb_set_bpp("/dev/fb0", 32).
+	//
+	// The exit(0) is deliberate and is NOT what made leaving a game terminate
+	// ScummVM — do not replace it with a _quit flag.  OSystem_SDL::quit() does
+	// `destroy(); exit(0);` too, and nothing in ScummVM's game-exit path calls
+	// this at all: the launcher loop in base/main.cpp decides, and it is
+	// gui_return_to_launcher_at_exit that changes its mind (set in initBackend
+	// above).  Exiting the process here is correct on this device — it is how the
+	// init script's respawn returns the panel to app_launcher.
 	if (_graphicsManager)
 		((RoomWizardGraphicsManager *)_graphicsManager)->closeFramebuffer();
 	exit(0);

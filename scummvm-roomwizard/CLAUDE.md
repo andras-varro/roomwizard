@@ -212,6 +212,26 @@ overlay planes with an independent-input/output-size hardware scaler at
 `/sys/devices/platform/omapdss/`, usable from sysfs with no kernel work. See
 `../IMPROVEMENT_PLAN.md` F2 — ScummVM is the prime candidate.
 
+## Leaving a game, and why `quit()` keeps its `exit(0)`
+
+**Do not replace `OSystem_RoomWizard::quit()`'s `exit(0)` with a `_quit` flag.** It is not on the
+game-exit path and never was: across the whole ScummVM tree the only caller of `OSystem::quit()` is
+`common/recorderfile.cpp`, and `OSystem_SDL::quit()` does `destroy(); exit(0);` too. Exiting the
+process here is *correct* on this device — it is how the init script's respawn hands the panel back to
+`app_launcher`.
+
+What decides whether leaving a game returns to the ScummVM launcher is the launcher loop in
+`base/main.cpp:832`, which `break`s out — ending the process — when a game returns `kNoError`, no
+return-to-launcher was requested, and neither `kFeatureNoQuit` nor `gui_return_to_launcher_at_exit` is
+set. That is upstream's default on every platform, so "it returns to the launcher on Ubuntu" was a
+desktop config with that Global Options box ticked, not a backend difference. `initBackend()` sets
+`gui_return_to_launcher_at_exit` on first run (`../IMPROVEMENT_PLAN.md` B12b, fixed 2026-08-03).
+
+**`kFeatureNoQuit` satisfies the same condition and is a trap.** It also hides the `Quit` button on the
+ScummVM launcher (`gui/launcher.cpp:264`) *and* the in-game global menu (`engines/dialogs.cpp:90`), and
+loops `launcherDialog()` until a game starts. Quitting ScummVM is the only route back to `app_launcher`
+and the native games, so that traps the user inside ScummVM. Never set it here.
+
 ## 32-bit target
 
 `sizeof(long) == 4`. Baseline all timing to a start timestamp captured at init; never multiply a
