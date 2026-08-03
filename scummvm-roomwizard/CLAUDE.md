@@ -36,6 +36,15 @@ Consequences you must respect:
 `build_arm_deps()` cross-compiles zlib and libpng into `arm-deps/` and is idempotent. It runs on
 every code path — do not add a shortcut that skips it.
 
+**`clean` is the only clean path — do not add a second one.** A root-level `clean.sh` used to exist
+and was deleted 2026-08-03 (`../IMPROVEMENT_PLAN.md` B19a): it was this tree's clean script with no
+shebang and no `cd`, so from the repo root its `find . -name '*.o' -delete` reached
+`native_apps/build/` and the `usb_host/linux-4.14.52/` kernel objects, and `-name '*.d'` matched
+*directories* in the extracted rootfs under `partitions/`. `clean_build()` already does strictly
+more than it did — `make clean` inside the tree, plus `native_apps/common/*.o`, which is the one
+that actually bites (a stale x86 `.o` there fails the cross-build with "file format not
+recognized").
+
 **Never trust `config.mk`; check the artifact.** A stale `USE_PNG = 1` from an earlier configure
 once made `make` compile `image/png.cpp` with no `libpng.a` on disk, failing on `png.h`. Test for
 `arm-deps/lib/libpng.a`, not for the flag.

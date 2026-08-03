@@ -206,19 +206,28 @@ B15, B17 and B18 are done — see [Closed](#closed). **B19 is all that is left o
 
 ### B19. Deploy hygiene — open
 
+**B19a (`clean.sh`) is done — see [Closed](#closed).** What is left:
+
 - **No IP validation** (`deploy-all.sh:28`, `setup-device.sh:43`, `native_apps:15`). Only
   `scummvm-roomwizard:35` checks. `./deploy-all.sh vnc_client` (forgetting the IP) builds
   *everything*, including the multi-minute ScummVM build, then fails at `ssh root@vnc_client`.
-  Unknown flags are silently ignored and the script proceeds with the full destructive setup.
+  (An earlier revision added "unknown flags are silently ignored and the script proceeds with the
+  full destructive setup" — **that half is stale**: `setup-device.sh:72-75` has rejected unknown
+  `$2` flags with a `case` since B17's pass. The missing check is on the *IP*, not the flag.)
 - **No verification of what landed.** 16 binaries are scp'd then `chmod +x`'d with no check.
   Add `md5sum` comparison and fail on mismatch.
 - **`audio_touch_test` is never `chmod +x`'d** (`native_apps:201-211`) — the only deployed binary
   missing from the list. Works today only because scp carries the mode.
 - **Only `vnc_client` cd's to its own directory.** The others break when invoked by path;
   they work only because `deploy-all.sh:156` wraps them in a subshell `cd`.
-- **`clean.sh`** has no shebang, no `set -e`, no `cd` — run from the repo root its
-  `find . -name '*.o' -delete` wipes `native_apps/build/`, `usb_host/modules/` and the ScummVM tree.
 - **Nothing tells you which version of a script a device is running**, and they drift silently.
+  Measured 2026-08-03 while reproducing B18: RW09's `/opt/roomwizard/disable-steelcase.sh` was *older
+  than the repo's pre-fix copy* — it predated a defect the tracked file had already grown — so the
+  reproduction had to stage `git show HEAD:disable-steelcase.sh` to `/tmp` instead. `md5sum` on the
+  device against the repo file settles it in one command and is what the "verify what landed" bullet
+  above should print. `.53` is the standing example: it is still on the pre-B25
+  `/etc/init.d/roomwizard-app`, which is visible only by running `status` and noticing a missing
+  section.
   Measured 2026-08-03 while reproducing B18: RW09's `/opt/roomwizard/disable-steelcase.sh` was *older
   than the repo's pre-fix copy* — it predated a defect the tracked file had already grown — so the
   reproduction had to stage `git show HEAD:disable-steelcase.sh` to `/tmp` instead. `md5sum` on the
@@ -595,6 +604,32 @@ the count — the first two runs did exactly that). Also checked the round trip 
 including one with a space, a backslash and a `$`: `crypt.crypt(pw, hash) == hash` and **no trailing
 newline leaks into the hash**, which is the one way `-stdin` could have silently produced a
 password nobody can log in with.
+
+**B19a. `clean.sh` could delete every other component's build output** — done 2026-08-03 by
+**deleting the script**, blast radius measured first. Three lines, no shebang, no `set -e`, no `cd`,
+and its contents (`rm -f config.mk config.h config.log scummvm`) name the *ScummVM* tree's configure
+output — so it only ever made sense run from `/scummvm/`, while living at the repo root. From the
+root, measured on the dev host:
+
+| Its line | What it actually reaches from the repo root |
+|---|---|
+| `find . -name '*.o' -delete` | **307 `.o` outside `scummvm/`** — all of `native_apps/build/`, the stray `native_apps/common/*.o`, and the `usb_host/linux-4.14.52/` kernel objects (a multi-hour rebuild for the xpad modules) |
+| `find . -name '*.d' -delete` | `-name` matches **directories**, and `-delete` implies `-depth`: **69 empty `*.d` directories** under `partitions/` (the extracted device rootfs) are `rmdir`'d — `/etc/rc0.d`…`/etc/rcS.d`, `/etc/modprobe.d`, `/etc/network/if-up.d`, `/etc/security/limits.d` |
+
+The `.d` behaviour was verified in a scratch tree rather than assumed, and is worse than "it removes
+empty directories": a `*.d` directory whose contents are *also* `*.d` is emptied child-first and then
+removed outright. Only a `*.d` directory holding a non-matching file survives, with a
+`Directory not empty` error. `usb_host/modules/` — named in the original entry — holds `.ko`, not
+`.o`, so that specific claim was wrong; the kernel tree it builds from is the real casualty.
+
+**Deleted rather than hardened**, because `scummvm-roomwizard/build-and-deploy.sh clean`
+(`clean_build()`) already does strictly more: `make clean` inside the tree, which handles that tree's
+`.o`/`.d` correctly, plus `rm -f native_apps/common/*.o`, which is the removal that actually matters
+(a stale x86 `.o` there fails the cross-build with "file format not recognized"). It is the
+documented supported command, `clean.sh` had **zero callers** anywhere in the repo, and hardening it
+would have meant a second implementation of clean to keep in step — the same mistake as the three
+copies of the calibration fit. Same precedent as `native_apps/`'s deleted `Makefile`. Noted in
+`scummvm-roomwizard/CLAUDE.md` so it is not reintroduced.
 
 **B18. `disable-steelcase.sh` died before the watchdog bypass, invisibly** — done 2026-08-03,
 reproduced on RW09 and verified there across a reboot. `set -e`, then an **unguarded**
@@ -1311,8 +1346,11 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    B18 are also done** (2026-08-03), both reproduced against the pre-fix code first — B17's harness
    turned up two unrecorded defects in the same sed, and B18's reproduction needed the repo's
    pre-fix file because RW09's deployed copy was older than the bug. **B19 is the last of Phase 2**;
-   its `clean.sh` bullet (no shebang, no `cd`, `find . -name '*.o' -delete`) is the dangerous one and
-   is worth taking on its own. **B20 is done** (2026-08-03, with B25).
+   its dangerous bullet was `clean.sh`, and that one is **done 2026-08-03 as B19a** — deleted rather
+   than hardened, since `build-and-deploy.sh clean` already did more and it had no callers. What is
+   left of B19 is hygiene, not hazard: IP validation, md5 verification of what landed (which also
+   answers "which script version is this device on"), one missing `chmod +x`, and four scripts that
+   only work because `deploy-all.sh` cd's for them. **B20 is done** (2026-08-03, with B25).
 5. **F1 (ALSA)** — biggest user-visible improvement in the project.
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
