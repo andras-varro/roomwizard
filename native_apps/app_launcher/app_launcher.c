@@ -634,18 +634,15 @@ static void launch_app(Launcher *l, int index,
 
     /* Wait-for-release drain: prevent auto-relaunch from held Enter/A.
      *
-     * After gamepad_init(), prev_held[] is zeroed.  If the launch button
-     * (Enter or A) is still physically held, evdev key-repeat events keep
-     * arriving.  Simply doing two dummy polls with separate zeroed
-     * InputStates can leave prev_held in an inconsistent state: if the
-     * second dummy poll sees no new events its InputState stays held=false,
-     * flipping prev_held back to false — then the first REAL poll reads a
-     * repeat event and sees a false "pressed" edge, re-launching the app.
+     * gamepad_init() has just cleared the manager, including the latched key
+     * levels.  If the launch button (Enter or A) is still physically held,
+     * evdev key-repeat events keep arriving, and the first REAL poll would see
+     * a fresh press edge and immediately relaunch the app.  So poll until the
+     * launch buttons read released (or a 2-second safety timeout expires).
      *
-     * Fix: use a single persistent InputState across a polling loop so
-     * that the held flag accurately tracks the physical key state (set by
-     * key-down/repeat, cleared only by key-up).  Loop until all launch
-     * buttons are released (or a 2-second safety timeout expires). */
+     * Since B2, held is a pure output of gamepad_poll() computed from state
+     * inside the manager, so the InputState used here is arbitrary — it does
+     * not have to be the same one the main loop uses. */
     {
         InputState drain;
         memset(&drain, 0, sizeof(drain));

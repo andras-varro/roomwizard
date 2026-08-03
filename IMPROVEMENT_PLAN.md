@@ -56,57 +56,6 @@ making the repo public.
 
 Ordered by (severity × likelihood of being hit).
 
-### B1. 16bpp framebuffer heap overflow — partly done
-
-The back buffer is allocated as `width * height * bytes_per_pixel`, but the drawing primitives
-(`fb_draw_pixel`, and everything built on it) write `uint32_t` unconditionally. **At 16bpp that
-overruns the allocation by a factor of two.**
-
-Closed so far: `fb_clear`, `fb_swap` and the `fb_set_bezel` reallocation are now byte-sized and
-correct at any bpp, and every app that uses the common primitives (`app_launcher`,
-`game_selector`, `device_tools`, `hardware_config`, `touch_raw`) calls
-`fb_set_bpp(dev, 32)` before `fb_init()`, so none of them can inherit 16bpp from a crashed
-ScummVM or VNC session.
-
-Still open: the primitives themselves. ~~Nothing currently reaches them at 16bpp~~ — **corrected
-2026-08-02: something does.** The apps listed above assert 32bpp, but **no game does** (see **B24**),
-so a game launched outside the launcher inherits whatever the last app left. Observed on RW09: a stale
-`vnc_client` (B25) left 16bpp and `brick_breaker` came up at `800x455 … 16 bpp`, i.e. running the full
-2× overflow. Under the launcher it stays unreachable, because the launcher re-asserts 32bpp after
-every child — but an SSH-launched binary is exactly what C6's smoke harness does, so this is now a
-live hazard rather than a theoretical one. Separately, one `fb_draw_text` added to ScummVM or
-`vnc_client` would corrupt the heap.
-
-**Fix:** make the primitives dispatch on `bytes_per_pixel` (a 16bpp `fb_draw_pixel` writing
-RGB565 would also let ScummVM and the VNC client drop their private text renderers). Note
-`fb_init` must *not* reject non-32bpp modes: ScummVM legitimately runs the framebuffer at 16bpp
-through `fb_init`/`fb_swap`.
-
-### B2. Gamepad buttons latch on and never release — open, confirmed on the panel 2026-08-02
-
-`native_apps/common/gamepad.c:791` (virtual touch regions) and `:649` (analog stick → D-pad) both
-set `.held = true`, and **nothing anywhere ever clears it** — `gamepad_poll` deliberately doesn't
-(`:828`), and no caller does.
-
-- platformer: one tap on the virtual left pad → the player runs left forever.
-- frogger/snake (which read `.pressed`): first tap works, every later tap in that region is dead.
-
-**Seen on RW09 2026-08-02, in frogger:** the virtual D-pad zones **light up light-blue and stay
-highlighted**, and the frog "sometimes just randomly jumps" — which is exactly a latched `.held`
-re-firing a direction on later frames.
-
-**Fix:** keep touch/stick-derived state in a separate per-frame bitmask and OR it with the latched
-key/hat state each poll.
-
-**Status after B13k (2026-08-02): the *symptom* is gone from every game that showed it, but the *bug*
-is untouched.** Frogger's and platformer's `TouchRegion`s were deleted, so nothing in the shipped games
-now feeds the latching path: `gamepad_set_touch_regions()` has one remaining caller (`snake.c`) whose
-regions never take effect because B13g's ordering bug wipes them, and
-`gamepad_draw_touch_controls()` has none. **That makes B2 a latent trap rather than a live fault** —
-it is now the thing that must be fixed *before* B13g, before any new app registers a touch region, and
-before anyone wires up an analog stick, because `:649` latches stick-derived directions too and no
-game currently exercises that path either. Do not read "no game misbehaves" as "the code is fine".
-
 ### B3c. Second-unit measurement of the touch dead band — partly done 2026-08-01
 
 The fix shipped and is archived in full at [B3c in Closed](#b3c-edge-bands-that-could-not-be-touched--done-2026-08-01-evening) —
@@ -171,46 +120,6 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B23. The backlight slider's live preview writes to a node that does not exist — open, confirmed 2026-08-02
-
-`device_tools.c:512` and `hardware_config.c:127` (`apply_backlight()`, a verbatim copy in each) write
-`/sys/class/backlight/pwm-backlight/brightness` to preview the slider value unscaled. **That path is
-not present on this device:** `/sys/class/backlight/` is an empty directory and the only backlight
-control is `/sys/class/leds/backlight/brightness`, which is what `hardware.c` uses. Measured on RW09
-2026-08-02. So dragging the backlight slider in either tool changes nothing until the value is saved
-and some later `hw_set_backlight()` call picks it up — the preview is silently dead, and the `fopen`
-failure is not checked.
-
-Found while fixing B9. Not folded into it: B9 was the getter/setter *units* bug and is closed, this
-is a wrong *path*.
-
-**Fix:** preview through the same node `hardware.c` owns. The intent is an *unscaled* write (the
-slider is choosing the scale factor itself, so `hw_set_backlight()` would apply the old cached
-percentage), so this wants a raw entry point in `hardware.c` — `hw_set_backlight_raw()` — rather than
-a fourth copy of the sysfs path. Check the write, and delete the duplicate while you are there
-(`apply_backlight()` and `do_led_test()` are both duplicated between these two files; see C8, which
-already proposes retiring one of the two tools).
-
-### B24. No game asserts the framebuffer bpp, so B1 is reachable from a bare SSH launch — open, confirmed 2026-08-02
-
-`fb_set_bpp()` has ten call sites and **not one of them is a game**: `app_launcher` (×2),
-`game_selector` (×2), `device_tools` (×2), `hardware_config`, `hardware_diag`, `touch_raw`. Games
-inherit whatever bpp the previous app left. Under the launcher that is fine — it re-asserts 32bpp
-after every child exits, which is exactly why this has never been seen.
-
-It is **not** fine when a binary is launched directly, which is what an SSH smoke test does (C6) and
-what happened on RW09 2026-08-02: a stale `vnc_client` had left `/dev/fb0` at 16bpp, and
-`brick_breaker` started and logged `Framebuffer initialized: 800x455 logical … 16 bpp`. Every
-`framebuffer.c` primitive then writes `uint32_t` into a back buffer sized by `bytes_per_pixel`
-(800×455×2 = 728 000 B), addressing up to 800×455×4 = 1 456 000 B — a 2× heap overflow. This is the
-**reachable** case of B1, whose entry says it currently is not.
-
-Note this also corrects `CLAUDE.md` and `native_apps/CLAUDE.md`, which both state that the native
-menu *and games* force 32bpp. Only the menus do.
-
-**Fix:** either `fb_init()` asserts the bpp it is going to draw at, or B1's dispatch-on-bpp lands and
-the question stops mattering. Prefer the latter; do the former as a one-line stopgap.
-
 ### B25. `vnc_client` sets a process title the deploy scripts cannot kill — open, confirmed 2026-08-02
 
 `vnc_client` presents its `cmdline` as `VNC Client` (with a space), so `killall vnc_client` matches
@@ -268,14 +177,13 @@ OPL; nobody confirmed it on hardware.
 
 ### B13. Game-specific bugs — open
 
-Fixed rows (B13a, B13c, B13d, B13k, B13l) are in [Closed](#closed).
+Fixed rows (B13a, B13c, B13d, B13g, B13k, B13l) are in [Closed](#closed).
 
 | # | Where | Bug |
 |---|-------|-----|
 | B13b | `brick_breaker.c:459` | Indestructible bricks use `health = -1`, which every other site reads as "destroyed" (`health <= 0`) → from level 5 they are invisible and have no collision. |
 | B13e | `tetris.c:567` | No wall kick — an I-piece rotated vertically against the right wall can never rotate back. |
 | B13f | `snake.c:320` | Growing exposes a stale `body[]` slot: a detached cell is drawn for one tick and stepping on it ends the game. |
-| B13g | `snake.c:623` | `gamepad_init()` called *after* `init_game()` wipes the registered touch regions (frogger/platformer get the order right). **Fix B2 first** — snake's regions are dead code today, so fixing this ordering bug would *activate* a latching D-pad. |
 | B13h | `brick_breaker.c:535` | Speed power-ups compound — `effect_mult` is never divided out, so SLOW DOWN can make the ball faster. |
 | B13i | `platformer.c:951` | Stomping two overlapping enemies kills the player (no `break` after a successful stomp). |
 | B13j | `samegame.c:250` | `pixel_to_grid` truncates toward zero, so taps up to one block outside the left/top edge select row/column 0. |
@@ -590,13 +498,32 @@ and the sanity gate's accept/reject boundaries. **Added 2026-08-02:** `tests/gra
 `fb_fill_rect_gradient()` (B7) — ascending, descending, mixed per-channel directions, `h == 1`,
 `h == 0`, horizontal uniformity. It also demonstrates the pattern for testing *drawing* primitives on
 the host: `fb_draw_pixel()` only touches `back_buffer` / `width` / `height` / `double_buffering`, so a
-synthetic `Framebuffer` over a `malloc`'d buffer exercises the real code with no `/dev/fb0`. Build
-lines are in each file header; both are host gcc, so `build-and-deploy.sh` runs neither.
+synthetic `Framebuffer` over a `malloc`'d buffer exercises the real code with no `/dev/fb0`.
+**Added 2026-08-03:** `tests/framebuffer_bpp_test.c` covers the bpp dispatch (B1) — a guard region
+after a 16bpp back buffer, all 17 primitives driven over the whole surface including its last pixel,
+the RGB565 pixel values, the alpha path's unpack-blend-repack, the source-space colour key, and the
+same sweep repeated at 32bpp so the fix cannot regress the depth every app actually uses. It extends
+`gradient_test.c`'s pattern in the one way that matters for a heap overflow: **guard bytes make an
+out-of-bounds write an assertion instead of a mystery**, which is the only way to see this bug at all
+— on the device it corrupts whatever `malloc` handed out next rather than drawing anything wrong.
+**Also added 2026-08-03:** `tests/gamepad_latch_test.c` covers the held-state model (B2) — a touch
+region asserting and *clearing*, a key and a hat latching across quiet frames, the stick following
+itself back to centre, an unplug while deflected, and two sources OR-ing rather than overwriting. It
+widens the harness past drawing primitives for the first time, and it retires a standing assumption
+worth retiring: **"input cannot be tested without `/dev/uinput`" is about the device, not about the
+code.** `gamepad_poll()` takes the touch coordinate as a plain argument, and its evdev sources are
+`read(2)` on an fd — so a temp file of `struct input_event` assigned to `gm.gamepad_fd` drives the real
+`poll_gamepad()`, returning each event and then 0 at EOF exactly as a quiet non-blocking evdev fd does.
+No kernel support, no device, no human. The same trick will work for anything else in `gamepad.c`.
+Build lines are in each file header; all four are host gcc, so `build-and-deploy.sh` runs none of them.
 
 **Write the failing version first.** `gradient_test.c` was compiled against
 `git show HEAD:native_apps/common/framebuffer.c` and confirmed to fail (12 assertions) before the fix
-was trusted — on a codebase with no CI, a test that has only ever been seen passing is not evidence
-that it can fail.
+was trusted; `framebuffer_bpp_test.c` was confirmed to fail with **29** against the pre-B1 file, and
+the 32bpp half of it passed from the start, which is the evidence that the sweep is measuring depth
+and not just "does anything draw"; `gamepad_latch_test.c` was confirmed to fail with **10** against the
+pre-B2 `gamepad.c`, and those ten are the reported panel symptoms verbatim. On a codebase with no CI, a
+test that has only ever been seen passing is not evidence that it can fail.
 
 Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` (would have
 caught the `args=` bug immediately), and the `config.c`/`ppm.c` parsers.
@@ -658,6 +585,132 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B1. 16bpp framebuffer heap overflow** — done 2026-08-03, deployed and verified on RW09 the same day.
+The back buffer is sized `width * height * bytes_per_pixel`, but every drawing primitive wrote a
+`uint32_t` unconditionally, so at 16bpp it overran the allocation **2×**. Reachable, not theoretical —
+see B24. `framebuffer.c` now dispatches on `bytes_per_pixel` through four helpers (`fb_pack565` /
+`fb_unpack565` / `fb_store` / `fb_load`) which are **the only code that knows the surface format**; the
+public API still takes RGB888 everywhere, so no caller changed. Converted: `fb_draw_pixel` (which
+carries every shape, the font and the gradient), `fb_clear`'s **non-zero** path (only its `memset`
+black path had ever been correct), `fb_draw_pixel_alpha` (which also had to *unpack* the destination,
+or a 16bpp read-modify-write blends RGB565 bits as if they were RGB888), all three `fb_blit_sprite*`
+variants, and `fb_swap`'s portrait rotation, which was 32bpp-only *and* ignored `line_length`.
+Two deliberate choices: a sprite's **colour key is compared in the source's 32-bit space, before
+packing** (two RGB888 colours can collapse onto one RGB565 word, so keying after packing turns opaque
+pixels transparent), and **`fb_unpack565` replicates high bits rather than dividing**
+(`(r << 3) | (r >> 2)`) — exact at both ends, and a `/31` in the alpha inner loop would be a call into
+`__aeabi_uidiv` on this core. `fb_init()` still accepts 16bpp (ScummVM and `vnc_client` drive it on
+purpose); what it no longer accepts is a depth with *no* primitives — on anything but 16 or 32 it
+forces 32bpp on the fd it already holds, re-reads the stride, and **fails with a reason on stderr**,
+because a refusing app beats a heap-corrupting one. Nothing on this device reports anything else, so
+that branch is unreachable by design.
+Covered by `tests/framebuffer_bpp_test.c`, written failing-first per C6: **29 failures** against the
+pre-fix file, 0 after. A guard region sits immediately after a 16bpp back buffer and all 17 primitives
+are driven over the whole surface *including its last pixel* — a `uint32_t` write at the last 16bpp
+index lands a whole buffer past the end — then the pixel *values* are checked, because a primitive can
+stay in bounds and still write the wrong format; the same sweep re-runs at 32bpp so the fix cannot
+regress the depth every app actually uses.
+**Verified on RW09 2026-08-03** after `./deploy-all.sh` rebuilt all three consumers (`native_apps`,
+`vnc_client`, ScummVM — the last one linking `framebuffer.o` via `configure.patch`): the launcher is
+pixel-identical to before, which is the point; ScummVM's launcher renders correctly at 16bpp
+(build stamp `Aug 3 2026 10:54:54`, confirming the fresh link); and a live `vnc_client` remote session
+renders full-colour at 16bpp — the real exercise of the dispatch on hardware. The one thing left
+undone is item 3 of the old residue: ScummVM and `vnc_client` could now drop their private text
+renderers onto `fb_draw_text`. **Not done, deliberately out of scope** — file it separately if wanted.
+
+**B24. No game asserted the framebuffer bpp, so B1 was reachable from a bare SSH launch** — done
+2026-08-03, deployed and verified on RW09 the same day. `fb_set_bpp()` had ten call sites and **not one
+was a game**: `app_launcher` (×2), `game_selector` (×2), `device_tools` (×2), `hardware_config`,
+`hardware_diag`, `touch_raw`. Games inherited whatever depth the previous app left. Under the launcher
+that is harmless — it re-asserts 32bpp after every child exits, which is exactly why this was never
+seen. It was **not** harmless for a directly-launched binary, which is what an SSH smoke test does
+(C6): on RW09 2026-08-02 a stale `vnc_client` (B25) had left `/dev/fb0` at 16bpp and `brick_breaker`
+came up logging `800x455 logical … 16 bpp`, running B1's full 2× overflow.
+Both halves are in: B1's dispatch makes the depth a correctness non-issue, and **all 11 remaining
+`fb_init()` call sites now pin 32bpp first** — the seven games plus `hardware_test_gui`, `usb_test`,
+`tests/audio_touch_test` and `tests/touch_trace`. So the reason to pin is no longer memory safety but
+**determinism and appearance**: 16bpp bands every gradient, and how an app looks must not depend on
+which app ran before it. That rationale now lives once, on `fb_set_bpp()` in `framebuffer.h`; the five
+call-site comments saying "the common draw helpers write one uint32 per pixel, so the framebuffer must
+be 32bpp" were stale the moment B1 landed and now point at it. Also corrected `CLAUDE.md` and
+`native_apps/CLAUDE.md`, which both claimed the native menus *and games* forced 32bpp — only the menus
+did.
+**Verified on RW09 2026-08-03 by reproducing the original failure exactly**: `vnc_client` was started
+(panel → 16bpp for the remote session) and then `SIGKILL`ed by matching `/proc/*/exe`, so it left
+`/dev/fb0` at 16bpp with nothing running — the 2026-08-02 state. `fbset` confirmed `800 480 … 16`;
+`/opt/games/brick_breaker` was then launched over SSH and `fbset` immediately read `… 32`, with a
+clean, correctly-coloured welcome screen. Repeated independently with `fbset -depth 16` → `tetris`.
+Note for anyone re-running this: because the pin works, the game does **not** come up at 16bpp, so the
+capture decodes at `--bpp 32` — run `fbset | grep geometry` and believe it rather than assuming a
+depth from which app you launched.
+
+**B2. Gamepad buttons latched on and were never released** — done 2026-08-03.
+`poll_touch()` (virtual touch regions) and the analog-stick→D-pad merge both set `.held = true` on the
+caller's `InputState`, and **nothing anywhere cleared it** — `gamepad_poll` deliberately didn't, and no
+caller did. One tap on a virtual left pad ran the player left forever; a `.pressed` reader saw its
+first tap in a region and then nothing. Confirmed on RW09 2026-08-02 in frogger: the zones stayed
+highlighted light-blue and the frog "sometimes just randomly jumps".
+**The fix separates the two kinds of source, which is the whole point** — the naive "clear `held` at
+the top of every poll" breaks keys and the D-pad hat, whose level legitimately has to survive quiet
+frames because a key-up may be hundreds of frames away. So event-driven level state moved into
+`GamepadManager.held_latched[]` (written by `poll_gamepad`/`poll_keyboard`), the position-reporting
+sources write a **per-frame** `derived[]` array rebuilt on every poll, and `state->buttons[i].held`
+became a pure **output** = `latched || derived`. Three consequences that were part of the same bug:
+the stick merge had to move out of `poll_gamepad` into `gamepad_poll` (it must run after this frame's
+`EV_ABS` events and after the no-pad branch); `poll_gamepad` now **zeroes the axes when
+`gamepad_fd < 0`**, or a stick unplugged while deflected asserts its direction forever; and
+`gamepad_rescan()` clears `held_latched[]`, or a key held at unplug time freezes on because its key-up
+will never arrive. Because `held` is now an output, `app_launcher.c`'s drain loop no longer depends on
+reusing one persistent `InputState` — that comment's "separate zeroed `InputState`s" hazard is
+structurally impossible and has been trimmed to say so.
+**Covered by `tests/gamepad_latch_test.c`** (host gcc; build line in its header), written
+failing-first: **10 failures** against the pre-fix `gamepad.c`, 26 assertions green after. Contrary to
+the standing assumption that none of this is testable without a human at the panel, it needs no device
+and no `/dev/uinput`: `gamepad_poll()` takes the touch coordinate as a plain argument, and the evdev
+sources are `read(2)` on an fd — so a temp file of `struct input_event` assigned to `gm.gamepad_fd`
+drives the real `poll_gamepad()`, returning each event and then 0 at EOF exactly as a quiet
+non-blocking evdev fd does. The ten pre-fix failures are the reported symptoms verbatim: region stays
+held after lift, no released edge, second tap produces no press edge, stick stays held after centring,
+axes stale after unplug, latch survives a rescan. What still needs the panel is only whether a game
+*feels* right — B13g removed the last shipped consumer, so nothing on the device exercises the path
+today.
+
+**B13g. Snake's touch regions were wiped by `gamepad_init()` ordering** — done 2026-08-03, **as a
+deletion, not the reorder the row implied**. `gamepad_init()` ran after `init_game()` and `memset`s the
+manager, so the four `TouchRegion`s snake registered never took effect. Making them live would have
+been actively wrong twice over: snake **already** hops relative to the head (`snake.c:454`), so the
+regions were a redundant second input path — the exact situation B13k deleted from frogger — and they
+**overlapped pathologically**, UP/DOWN being the full-width top/bottom halves of the grid while
+LEFT/RIGHT were the full-height left/right halves, so *every* in-grid tap asserted two directions at
+once. Reordering would have activated that, and pre-B2 the latch would have made both stick. So the
+array and the `gamepad_set_touch_regions()` call are gone, and that API now has **zero** callers
+(`gamepad_draw_touch_controls()` already had none). Both library functions are kept — they are correct
+surface now that B2 has landed, and B2 landed first precisely so the next caller is safe.
+
+**B23. The backlight slider's live preview wrote to a node that does not exist** — done 2026-08-03.
+`device_tools.c:512` and `hardware_config.c:127` held a verbatim copy each of `apply_backlight()`,
+writing `/sys/class/backlight/pwm-backlight/brightness`. **That path is not present on this device** —
+`/sys/class/backlight/` is empty and the panel is a LED-class device at
+`/sys/class/leds/backlight/brightness` (measured on RW09 2026-08-02), so dragging either slider did
+nothing until the value was saved and some later `hw_set_backlight()` picked it up, and the `fopen`
+failure was unchecked. Both copies now call a new `hw_set_backlight_raw()` in `hardware.c`, which
+writes the node `hardware.c` already owns through the same clamping/error-reporting `write_brightness()`
+helper as everything else, and both callers check the return. **Raw is deliberate, not an oversight:**
+the slider is choosing the very scale factor `hw_set_backlight()` applies, so previewing through the
+scaling setter would multiply by the factor being replaced (that was B9, and it is closed). This also
+removes the duplication the entry asked about, for the backlight path — `do_led_test()` is still
+duplicated between the two tools, which is C8's business (it proposes retiring one tool outright).
+
+**D2b. `check-arm-safe.sh` counted files it could not check** — done 2026-08-03. The gate defaults to
+"every executable regular file in `build/`", and `build/` also collects **host** binaries: the
+`tests/` regressions are compiled with native gcc into the same directory, and because `/mnt/c` under
+WSL reports every file as mode 0777, three stray `.png` captures were "executable" too. `arm-objdump`
+cannot disassemble an x86-64 ELF or a PNG, so all eight passed trivially while proving nothing — which
+is how the headline "zero across 38 build artifacts" came about when only **31** of them were ARM. The
+loop now skips anything whose `objdump -f` architecture is not ARM and reports the count it skipped.
+No ARM artifact's treatment changed; this only makes the number mean what it says. Docs quoting 38 (or
+the older 30) were corrected to 31.
 
 **B7. Descending gradients rendered wrong** — done 2026-08-02.
 `fb_fill_rect_gradient()` computed its channel deltas in `uint32_t`, so a descending channel wrapped
@@ -1053,8 +1106,9 @@ instructions, they are not unreachable, and they are not a hazard: they are posi
 division is being done in software. The related claim that the cross-compiler's `libgcc.a` contains
 `sdiv`/`udiv` is also false for this toolchain (measured: zero).
 
-Matching the tab-delimited **mnemonic** field instead gives **zero across all 30 artifacts**, so the
-gate needs no allowlist and any hit is real. `CLAUDE.md` has been corrected.
+Matching the tab-delimited **mnemonic** field instead gives **zero across every ARM artifact**, so the
+gate needs no allowlist and any hit is real. `CLAUDE.md` has been corrected. (The artifact *count* was
+itself wrong until D2b — the gate was also being handed host binaries it could not disassemble.)
 
 ### D3. Missing/duplicated files — done 2026-07-30
 
@@ -1111,19 +1165,21 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    server rather than a code change.
 2. **The crash/wedge class.** B3, B4, B5, B6 are done — the device can now always recover to a
    usable launcher on its own, and the log that diagnoses a SIGILL finally reports it.
-   **B1 (bpp-aware framebuffer primitives) and B2 (latched `.held`) are what remain.** ← **next**
-   Both were deliberately left whole rather than started while the 2026-08-02 layout and
-   game-over batches ran. **B2's symptom is now gone but the bug is not** — B13k deleted the last
-   `TouchRegion`s any shipped game actually uses, so nothing exercises the latching path today. It
-   is a latent trap that has to be cleared before B13g, before the next app registers a touch
-   region, and before anyone wires up an analog stick.
+   **B1 + B24 are deployed and verified on RW09 (2026-08-03)**, all three components rebuilt, with the
+   original 16bpp-after-a-VNC-session failure reproduced and shown fixed. **B2 (latched `.held`) is
+   done the same day** and now has a host-side regression (`tests/gamepad_latch_test.c`), which also
+   settled that this bug *was* testable without a device — the touch coordinate is a plain argument and
+   evdev is just `read(2)`. **B13g followed it immediately, as a deletion** rather than the reorder its
+   one-line row implied, so `gamepad_set_touch_regions()` now has zero callers.
    **Outstanding first:** B22's panel table has **one** row unconfirmed — platformer, which needs a
-   USB keyboard or gamepad attached.
+   USB keyboard or gamepad attached. ← **next, and it needs a human at the panel**
    **B7 and B9 are done** (2026-08-02) — they were the available quick wins. Doing them turned up
-   three new items, all confirmed on the panel the same day: **B23** (backlight slider previews to a
-   sysfs node that does not exist), **B24** (no game asserts bpp, which makes B1 reachable from a bare
-   SSH launch — read it before starting B1) and **B25** (a `vnc_client` the deploy scripts cannot
-   kill, which is B20's predicted failure actually happening).
+   three new items, all confirmed on the panel the same day: **B23** (backlight slider previewed to a
+   sysfs node that does not exist — **done 2026-08-03**), **B24** (no game asserted bpp, which made B1
+   reachable from a bare SSH launch — done with it) and **B25** (a `vnc_client` the deploy scripts
+   cannot kill, which is B20's predicted failure actually happening). **B25 is the cheap one left** in
+   this class, and it was hit again on 2026-08-03 while reproducing B24: `killall vnc_client` still
+   matches nothing, and the process has to be found by `readlink /proc/*/exe`.
 3. **The per-app layout pass** — done 2026-08-02 (B3e, B3i, B3j, B3k, B13d, B13k). It also
    established that **`touch_inject` cannot work on this device at all** (no `CONFIG_INPUT_UINPUT`),
    which is why C6 had to be rewritten around framebuffer capture instead.
@@ -1133,6 +1189,6 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
    [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md). Serial console declined — see [Closed](#closed).
-8. Everything else as appetite allows: B3g/B3h, B10–B12c, the seven open B13 rows, B14, and all
+8. Everything else as appetite allows: B3g/B3h, B10–B12c, the six open B13 rows, B14, and all
    of C1–C8. **These are genuinely unranked**, not deprioritised — C6's smoke-test harness and C1's
    `MAX_INPUT_DEVICES` one-liner are both cheap enough to take out of order.

@@ -102,6 +102,24 @@ int hw_leds_off(void);
 int hw_set_backlight(uint8_t brightness);
 
 /**
+ * Set backlight brightness WITHOUT applying the configured maximum.
+ * @param brightness: 0-100, written straight to the panel
+ * Returns: 0 on success, -1 on error
+ *
+ * For the settings sliders only.  Those are choosing the scale factor that
+ * hw_set_backlight() applies, so previewing a value through the scaling setter
+ * would multiply it by the factor being replaced.  Everything else wants
+ * hw_set_backlight().
+ *
+ * This exists so a preview does not need its own copy of the sysfs path:
+ * device_tools and hardware_config each had one, both naming
+ * /sys/class/backlight/pwm-backlight/brightness, which does not exist on this
+ * device — /sys/class/backlight is empty and the panel is a LED class device.
+ * So both previews silently did nothing (IMPROVEMENT_PLAN B23).
+ */
+int hw_set_backlight_raw(uint8_t brightness);
+
+/**
  * Get backlight brightness
  * Returns: brightness value 0-100 in the same space hw_set_backlight() takes
  *          (percent of the configured maximum), or -1 on error.

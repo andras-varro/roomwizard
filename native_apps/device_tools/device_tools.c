@@ -507,10 +507,12 @@ static void do_led_test(int brightness_pct) {
 }
 
 static void apply_backlight(int brightness_pct) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", brightness_pct);
-    FILE *f = fopen("/sys/class/backlight/pwm-backlight/brightness", "w");
-    if (f) { fputs(buf, f); fclose(f); }
+    /* Live preview of the slider value — unscaled on purpose: the slider IS the
+     * scale factor, so hw_set_backlight() would apply the outgoing one (B23). */
+    if (brightness_pct < 0)   brightness_pct = 0;
+    if (brightness_pct > 100) brightness_pct = 100;
+    if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)
+        fprintf(stderr, "device_tools: backlight preview write failed\n");
 }
 
 /* ── System Action Functions ──────────────────────────────────────────── */
@@ -3433,9 +3435,8 @@ int main(void) {
     hw_init();
     hw_set_backlight(100);
 
-    /* The common draw helpers write one uint32 per pixel, so the framebuffer
-     * must be 32bpp. Whatever ran last (ScummVM, the VNC session) may have left
-     * it at 16. */
+    /* Pin the depth rather than inherit it: /dev/fb0 keeps whatever ran last
+     * (ScummVM and the VNC session leave 16bpp). See fb_set_bpp. */
     fb_set_bpp(FB_DEVICE, 32);
 
     Framebuffer fb;

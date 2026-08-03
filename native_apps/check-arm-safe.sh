@@ -63,8 +63,20 @@ fi
 checked=0
 bad=0
 
+skipped=0
+
 for bin in "${TARGETS[@]}"; do
     [ -f "$bin" ] || { echo -e "${RED}✗ $bin: no such file${NC}"; bad=$((bad + 1)); continue; }
+
+    # build/ also collects HOST binaries — the tests/ regressions are compiled
+    # with native gcc into the same directory.  arm-objdump cannot disassemble
+    # an x86 ELF, so those would count as "checked" while proving nothing, which
+    # makes the headline number a lie.  Skip anything that is not an ARM ELF;
+    # every real deploy artifact still goes through the check below.
+    if ! "$OBJDUMP" -f "$bin" 2>/dev/null | grep -qi 'architecture: *arm'; then
+        skipped=$((skipped + 1))
+        continue
+    fi
 
     # No symbol table means objdump has to guess where code ends and literal
     # pools begin, and it guesses wrong — see the header note. Say so, so a hit
@@ -99,4 +111,7 @@ if [ "$bad" -gt 0 ]; then
 fi
 
 echo -e "${GREEN}  ✓ ARM-safe: no hardware divide in $checked binaries${NC}"
+if [ "$skipped" -gt 0 ]; then
+    echo -e "${YELLOW}  ! skipped $skipped non-ARM file(s) in build/ (host-compiled tests)${NC}"
+fi
 exit 0

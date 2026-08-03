@@ -113,8 +113,11 @@ actually built and shipped.
   *instruction* crashes instantly with SIGILL (exit 132) — blank screen, no output, no log.
   **Verify with `native_apps/check-arm-safe.sh`** (runs automatically from
   `build-and-deploy.sh` before every deploy, and on build-only runs too).
-  The expected count is a **hard zero**, and it currently is zero across all 30 build
-  artifacts. With the toolchain default `-march=armv7-a+fp`, app-level 32-bit `int`
+  The expected count is a **hard zero**, and it currently is zero across all **31** ARM build
+  artifacts. (The gate skips non-ARM files in `build/` — the `tests/` regressions are host-compiled
+  into the same directory, and under WSL every file on `/mnt/c` looks executable, so it used to
+  "check" five x86 binaries and three PNGs and report 38. See `IMPROVEMENT_PLAN.md` D2b.)
+  With the toolchain default `-march=armv7-a+fp`, app-level 32-bit `int`
   division compiles to a *call* to the software helper `__aeabi_uidiv`/`__udivsi3`, so the
   deploy path's bare `$CC -O2 -static` is already safe; `-mcpu=cortex-a8 -mfpu=neon`
   makes no difference to the emitted code.
@@ -131,19 +134,20 @@ actually built and shipped.
   Match the tab-delimited mnemonic field, as `check-arm-safe.sh` does; then no allowlist is
   needed and any hit is real.
 - **Framebuffer bpp is per-app — always confirm before decoding a screenshot.** `/dev/fb0`
-  format is set at runtime by whatever app is running: **the native menus and tools force 32bpp
-  XRGB8888** via `fb_set_bpp(fb_dev,32)` at startup (`app_launcher` also re-asserts it after
-  every child exits; `game_selector` only does it after a child exits); **ScummVM and the VNC
-  remote session run 16bpp RGB565** (they call `fb_set_bpp(...,16)` to halve memory
-  bandwidth). ⚠️ **No *game* calls `fb_set_bpp` at all** — corrected 2026-08-02; the ten call sites
-  are `app_launcher` ×2, `game_selector` ×2, `device_tools` ×2, `hardware_config`, `hardware_diag`,
-  `touch_raw`, plus the definition. Games inherit whatever the previous app left, which is safe under
-  the launcher and **not safe from a bare SSH launch**: after a 16bpp app, a game comes up at 16bpp and
-  every `uint32_t` primitive overruns the back buffer 2× (`IMPROVEMENT_PLAN.md` B24, and it is the
-  reachable case of B1).
-  `framebuffer.c` draws `uint32_t` per pixel, so its primitives are
-  32bpp-only — but `fb_swap()` and `fb_clear(…,0)` are byte-sized and correct at any bpp, which
-  is what lets ScummVM drive its own 16bpp pixels through the same `Framebuffer`.
+  format is set at runtime by whatever app is running: **every native menu, tool and game now pins
+  32bpp XRGB8888** via `fb_set_bpp(dev, 32)` before `fb_init()` (`app_launcher` also re-asserts it
+  after every child exits); **ScummVM and the VNC remote session run 16bpp RGB565** (they call
+  `fb_set_bpp(...,16)` to halve memory bandwidth). ⚠️ **Until 2026-08-03 no *game* pinned it** — they
+  inherited the previous app's depth, which was safe under the launcher and **not safe from a bare SSH
+  launch**: after a 16bpp app a game came up at 16bpp and every `uint32_t` primitive overran the back
+  buffer 2× (`IMPROVEMENT_PLAN.md` B24, the reachable case of B1). Both halves are fixed:
+  the 11 remaining `fb_init()` call sites pin 32bpp, **and** `framebuffer.c`'s primitives now dispatch
+  on `bytes_per_pixel` — they take RGB888 and pack to RGB565 at 16bpp, so no depth corrupts the heap
+  any more. **Deployed to all three components and verified on RW09 2026-08-03**, including the original
+  failure: a `vnc_client` killed mid-session leaves the panel at 16bpp, and `brick_breaker` launched over
+  SSH into that state now flips it to 32bpp and renders correctly.
+  `fb_swap()` and `fb_clear(…,0)` were already byte-sized; what was 32bpp-only was everything else,
+  including `fb_clear` with a *non-zero* colour and the portrait rotation.
   Screenshot: `ssh root@<ip> cat /dev/fb0 > fb.raw` (one 32bpp frame = 800×480×4 =
   1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is why the old
   16bpp decoder looked size-correct while decoding garbage), then `python3 fb565_to_png.py

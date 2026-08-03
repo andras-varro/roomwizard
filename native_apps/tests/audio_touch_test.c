@@ -244,6 +244,9 @@ int main(int argc, char *argv[])
     signal(SIGTERM, sig_handler);
 
     Framebuffer fb;
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp(fb_dev, 32);
+
     if (fb_init(&fb, fb_dev) < 0) {
         LOG_ERROR(&logger, "Cannot open framebuffer: %s", fb_dev); return 1;
     }

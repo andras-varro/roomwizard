@@ -227,6 +227,13 @@ int hw_set_backlight(uint8_t brightness) {
     return write_brightness(BACKLIGHT_PATH, brightness);
 }
 
+int hw_set_backlight_raw(uint8_t brightness) {
+    /* Deliberately unscaled — see the header.  Used by the settings sliders,
+     * which are choosing the scale factor itself, so hw_set_backlight() would
+     * apply the previous factor on top and preview the wrong brightness. */
+    return write_brightness(BACKLIGHT_PATH, brightness);
+}
+
 int hw_get_backlight(void) {
     hw_load_config();
     return hw_unscale_brightness(read_brightness(BACKLIGHT_PATH),

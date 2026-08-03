@@ -93,7 +93,9 @@ int main(int argc, char *argv[]) {
     /* 5. Audio (non-fatal if /dev/dsp is unavailable) */
     Audio audio;  audio_init(&audio);
 
-    /* 6. Framebuffer BEFORE touch - touch_init() reads the screen dims fb_init() sets */
+    /* 6. Framebuffer BEFORE touch - touch_init() reads the screen dims fb_init() sets.
+     *    Pin the depth first: /dev/fb0 keeps whatever the last process set. */
+    fb_set_bpp(fb_device, 32);
     Framebuffer fb;    fb_init(&fb, fb_device);
     TouchInput  touch; touch_init(&touch, touch_device);
 
@@ -122,14 +124,52 @@ Two ordering rules in there are load-bearing and have both been violated in ship
 - **`fb_init()` before `touch_init()`** — `touch_init()` reads `screen_base_width/height`,
   which `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes
-  `touch_region_count`. Snake gets this backwards, which is why its virtual D-pad is dead code.
+  `touch_region_count`. Snake had this backwards, so its virtual D-pad was dead code; those regions
+  are now deleted outright (B13g) and nothing in the tree registers any, so this rule currently has
+  no live example — get it right in the app that revives it.
+
+## Pixel format — pin it, and never assume it
+
+`/dev/fb0`'s depth is **global mutable state**: it is whatever the last process to run set it to.
+The native menus, tools and games all pin 32bpp XRGB8888; **ScummVM and `vnc_client` set 16bpp
+RGB565 on purpose**, to halve write bandwidth on this memory-bound part, and they are allowed to —
+`fb_init()` must keep accepting 16bpp.
+
+So there are two rules, and until 2026-08-03 the codebase broke both:
+
+- **Every app calls `fb_set_bpp(dev, 32)` before `fb_init()`.** No game did (`../IMPROVEMENT_PLAN.md`
+  B24), so a game launched over SSH after a VNC session inherited 16bpp. Now all 11 remaining
+  `fb_init()` sites pin it. The reason to pin is no longer safety — it is that 16bpp bands every
+  gradient, and how an app looks must not depend on what ran before it.
+- **The primitives dispatch on `fb->bytes_per_pixel`.** They used to write `uint32_t`
+  unconditionally, which at 16bpp overran the back buffer — sized `w * h * bpp` — by exactly 2×
+  (B1). Four helpers in `framebuffer.c` (`fb_pack565` / `fb_unpack565` / `fb_store` / `fb_load`) are
+  the only code that knows the format; **the API is unchanged, callers always pass RGB888**. If you
+  add a primitive, go through `fb_store()`/`fb_load()` — do not index `back_buffer` as `uint32_t`.
+
+Two subtleties worth not rediscovering: a sprite's **colour key is compared in the source's 32-bit
+space, before packing** (two RGB888 colours can share one RGB565 word, so a key tested after packing
+turns opaque pixels transparent), and `fb_unpack565` **replicates high bits rather than dividing**,
+because a `/31` in the alpha inner loop is a call into `__aeabi_uidiv` on this core.
+
+Covered by `tests/framebuffer_bpp_test.c` (host gcc, build line in its header): guard bytes after a
+16bpp back buffer turn an overflow into an assertion, all 17 primitives are driven over the whole
+surface *including its last pixel*, and the same sweep runs again at 32bpp so a fix cannot regress the
+depth every app actually uses. It failed 29 assertions against the pre-fix file before being trusted.
+
+⚠️ **When capturing `/dev/fb0`, run `fbset | grep geometry` first.** A 32bpp frame and two 16bpp
+pages are both 1,536,000 bytes, so a wrong `--bpp` decodes garbage at exactly the right size.
 
 ## Hardware API rules
 
 1. **LEDs: `hw_set_led()` / `hw_set_leds()`.** Never write `/sys/class/leds/` directly — these
    respect the `led_enabled` and `led_brightness` config.
 2. **Backlight: `hw_set_backlight()`.** It scales by the configured `backlight_brightness`
-   percentage, so `hw_set_backlight(100)` means "the user's chosen maximum".
+   percentage, so `hw_set_backlight(100)` means "the user's chosen maximum". The one exception is a
+   settings slider *previewing* a value — it is choosing that percentage, so scaling by the outgoing
+   one shows the wrong brightness. That is what `hw_set_backlight_raw()` is for, and it exists so a
+   preview does not carry its own copy of the sysfs path: two of them did, both naming a node that
+   does not exist on this device, so both previews silently did nothing (B23).
 3. **Call `hw_set_backlight(100)` at both startup and exit.** Startup so the app matches the
    user's preference; exit so the next app inherits a sane value. `snake.c` misses the exit
    call and `app_launcher.c` misses both — do not copy them.
@@ -488,32 +528,55 @@ Use `gamepad.c` for everything; don't scan evdev per-app. Abstract buttons are
 `BTN_ID_UP..BTN_ID_BACK`, configurable via `/etc/input_config.conf`.
 
 `.pressed` is a rising edge, `.held` is level. Prefer `.pressed` for menu navigation and
-discrete actions; `.held` for continuous movement. Note `.held` is currently **never cleared**
-for touch regions and analog-stick directions (`../IMPROVEMENT_PLAN.md` B2), so until that is
-fixed a virtual D-pad latches on permanently.
+discrete actions; `.held` for continuous movement.
 
-**Do not add a `TouchRegion` virtual D-pad until B2 is fixed.** They were removed from frogger and
-platformer on 2026-08-02 (B13k) precisely because of the latch: the zones stuck highlighted and the
-character kept moving on its own. `gamepad_set_touch_regions()` now has exactly one caller (`snake.c`)
-and its regions never take effect because `gamepad_init()` runs after them and `memset`s the manager
-(B13g) — so **fixing B13g without fixing B2 first re-introduces the bug in snake**.
-`gamepad_draw_touch_controls()` has no callers at all; note its boxes were drawn at fixed positions
-that never matched the regions they were supposed to represent, in either game.
+**All three fields are pure outputs of `gamepad_poll()`** — it recomputes them from scratch every call,
+so writing them from an app has no effect past the next poll. `held` is the OR of two kinds of source,
+and the split is the fix for B2 (done 2026-08-03):
+
+| Source | Reports | Level lives in |
+|---|---|---|
+| gamepad buttons, D-pad hat, keyboard | press/release **events** | `GamepadManager.held_latched[]` — must survive quiet frames, because a key-up may be hundreds of frames away |
+| touch regions, analog stick | an absolute **position** | a per-frame array inside `gamepad_poll()`, rebuilt every call |
+
+Until 2026-08-03 both kinds wrote `.held` on the caller's `InputState` and only the first kind was ever
+cleared, so **a virtual D-pad latched on permanently** and a `.pressed` reader saw one tap per region
+for the life of the process. If you add a source, decide which column it is in first: the naive
+"clear `held` at the top of the poll" is what breaks the event-driven half.
+
+Two smaller holes closed with it, both worth not reopening: `poll_gamepad()` **zeroes the axes when
+`gamepad_fd < 0`** (a stick unplugged while deflected otherwise asserts its direction forever), and
+`gamepad_rescan()` clears `held_latched[]` (a key held at unplug time never gets its key-up).
+
+**A `TouchRegion` virtual D-pad is safe again, but still usually the wrong design.** They were removed
+from frogger and platformer on 2026-08-02 (B13k) because of the latch, and from snake on 2026-08-03
+(B13g) for two other reasons that outlived it: snake already hopped relative to the head, so the regions
+were a redundant second input path, and its four regions *overlapped* — UP/DOWN were the full-width
+top/bottom halves of the grid while LEFT/RIGHT were the full-height left/right halves, so every in-grid
+tap asserted two directions at once. `gamepad_set_touch_regions()` therefore has **zero** callers now,
+as does `gamepad_draw_touch_controls()`; both are kept as library surface. Note the latter's boxes were
+drawn at fixed positions that never matched the regions they claimed to represent, in either game.
 
 Prefer a **tap relative to the object being controlled** over a virtual pad — frogger hops the frog
 towards wherever you tap in the playfield, which needs no regions, cannot latch, and makes the whole
 playfield one target. Where that does not map (platformer needs simultaneous run + jump), say so on the
 welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
 
-**You cannot test any of this from a script.** Synthesising input needs `/dev/uinput` and this kernel
-has `CONFIG_INPUT_UINPUT` unset — no device node, no module. `tests/touch_inject.c`'s `write()` to
-`/dev/input/event0` therefore succeeds, reports success, and delivers nothing to any reader: evdev's
-`write()` path is for **output** events (force feedback, LEDs), not for synthesising input, so there is
-nothing to "fix" in it. Verified on RW09 2026-08-02 by injecting a tap at the computed centre of
-tetris' `TAP TO START` and capturing an unchanged `/dev/fb0`.
-Script-side you can launch a binary over SSH and `cat /dev/fb0` to check the **first** screen — the one
-drawn before any input — and that is all; everything past it needs a human at the panel. See
-`../IMPROVEMENT_PLAN.md` C6.
+**What you can and cannot test from a script.** Synthesising input *on the device* needs `/dev/uinput`,
+and this kernel has `CONFIG_INPUT_UINPUT` unset — no device node, no module. `tests/touch_inject.c`'s
+`write()` to `/dev/input/event0` therefore succeeds, reports success, and delivers nothing to any
+reader: evdev's `write()` path is for **output** events (force feedback, LEDs), not for synthesising
+input, so there is nothing to "fix" in it. Verified on RW09 2026-08-02 by injecting a tap at the
+computed centre of tetris' `TAP TO START` and capturing an unchanged `/dev/fb0`. Script-side you can
+launch a binary over SSH and `cat /dev/fb0` to check the **first** screen — the one drawn before any
+input — and that is all; everything past it needs a human at the panel. See `../IMPROVEMENT_PLAN.md` C6.
+
+But that is a limit on *the device*, not on the code: `gamepad.c`'s own state machine is fully testable
+on the host, and `tests/gamepad_latch_test.c` does it. `gamepad_poll()` takes the touch coordinate as a
+plain argument, and its evdev sources are `read(2)` on an fd — so a temp file of `struct input_event`
+assigned to `gm.gamepad_fd` drives the real `poll_gamepad()`, returning each event and then 0 at EOF
+exactly as a quiet non-blocking evdev fd does. Run that after touching input logic; what still needs
+the panel is only whether a game *feels* right.
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way

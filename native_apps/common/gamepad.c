@@ -493,6 +493,9 @@ void gamepad_rescan(GamepadManager *gm) {
     /* Close existing devices and re-scan */
     gamepad_close(gm);
     memset(gm->prev_held, 0, sizeof(gm->prev_held));
+    /* Drop the latched levels too: the key-up for anything held at unplug time
+     * will never arrive, so keeping it would freeze that button on (B2). */
+    memset(gm->held_latched, 0, sizeof(gm->held_latched));
     gm->prev_mouse_left = false;
     gm->prev_mouse_right = false;
     gm->prev_mouse_middle = false;
@@ -544,7 +547,14 @@ void gamepad_set_button_map(GamepadManager *gp, const GamepadButtonMap *map) {
 
 /* ── Read gamepad events (using configurable button map) ────────────────── */
 static void poll_gamepad(GamepadManager *gm, InputState *state) {
-    if (gm->gamepad_fd < 0) return;
+    if (gm->gamepad_fd < 0) {
+        /* No pad attached.  Zero the axes: a stick that was deflected when the
+         * controller was unplugged must not keep asserting a direction through
+         * merge_stick_dpad() forever (B2). */
+        state->axis_lx = state->axis_ly = 0;
+        state->axis_rx = state->axis_ry = 0;
+        return;
+    }
 
     struct input_event ev;
     GamepadButtonMap *m = &gm->button_map;
@@ -605,60 +615,65 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
             }
             /* D-pad horizontal */
             else if (code == m->hat_x_axis) {
-                state->buttons[BTN_ID_LEFT].held  = (ev.value < 0);
-                state->buttons[BTN_ID_RIGHT].held = (ev.value > 0);
+                gm->held_latched[BTN_ID_LEFT]  = (ev.value < 0);
+                gm->held_latched[BTN_ID_RIGHT] = (ev.value > 0);
             }
             /* D-pad vertical */
             else if (code == m->hat_y_axis) {
-                state->buttons[BTN_ID_UP].held   = (ev.value < 0);
-                state->buttons[BTN_ID_DOWN].held = (ev.value > 0);
+                gm->held_latched[BTN_ID_UP]   = (ev.value < 0);
+                gm->held_latched[BTN_ID_DOWN] = (ev.value > 0);
             }
         } else if (ev.type == EV_KEY) {
             bool down = (ev.value != 0);
 
             if ((int)ev.code == m->btn_jump)
-                state->buttons[BTN_ID_JUMP].held = down;
+                gm->held_latched[BTN_ID_JUMP] = down;
             else if ((int)ev.code == m->btn_run)
-                state->buttons[BTN_ID_RUN].held = down;
+                gm->held_latched[BTN_ID_RUN] = down;
             else if ((int)ev.code == m->btn_action)
-                state->buttons[BTN_ID_ACTION].held = down;
+                gm->held_latched[BTN_ID_ACTION] = down;
             else if ((int)ev.code == m->btn_pause)
-                state->buttons[BTN_ID_PAUSE].held = down;
+                gm->held_latched[BTN_ID_PAUSE] = down;
             else if ((int)ev.code == m->btn_back)
-                state->buttons[BTN_ID_BACK].held = down;
+                gm->held_latched[BTN_ID_BACK] = down;
         }
     }
+}
 
-    /* BUG-INPUT-003 FIX: Left stick → D-pad merging using normalized values.
-     *
-     * The normalized axis values from normalize_axis_calibrated() already have
-     * the calibrated dead zone applied — they return exactly 0 when the stick
-     * is within the dead zone.  The old code compared against the legacy
-     * GAMEPAD_DEADZONE (200) constant on the ±1000 normalized scale, which was
-     * inconsistent with the calibrated dead zone and could cause the stick to
-     * appear "stuck" in a direction (the calibrated normalizer thought the
-     * stick was deflected while the D-pad merge threshold disagreed, or vice
-     * versa).
-     *
-     * We now use a small threshold (100 on the ±1000 scale, i.e. 10%) on the
-     * already-dead-zoned normalized value.  This provides a consistent
-     * behaviour: any stick deflection that survives the calibrated dead zone
-     * and exceeds this small activation threshold triggers the D-pad button. */
-    #define STICK_DPAD_THRESHOLD 100  /* 10% of normalized ±1000 range */
+/* ── Merge the left analog stick into the D-pad directions ──────────────── */
+/*
+ * Runs from gamepad_poll(), not from poll_gamepad(), and writes the per-frame
+ * `derived` array rather than any persistent state.  Both of those matter:
+ *
+ *  - The stick reports an absolute position, so its contribution has to be
+ *    recomputed every poll.  It used to write `.held = true` directly and
+ *    nothing ever cleared it, so one deflection stuck a direction on for the
+ *    rest of the process's life (B2, `:649` in the old numbering).
+ *  - It has to run *after* poll_gamepad() has consumed this frame's EV_ABS
+ *    events, and after the fd < 0 branch has zeroed the axes.
+ *
+ * BUG-INPUT-003: the threshold is applied to the already-dead-zoned normalized
+ * value from normalize_axis_calibrated(), which returns exactly 0 inside the
+ * calibrated dead zone.  The old code compared against the legacy
+ * GAMEPAD_DEADZONE (200) on the ±1000 scale, which disagreed with the
+ * calibrated dead zone and could make the stick appear stuck in a direction.
+ */
+#define STICK_DPAD_THRESHOLD 100  /* 10% of normalized ±1000 range */
 
+static void merge_stick_dpad(const InputState *state, bool *derived) {
     if (state->axis_lx < -STICK_DPAD_THRESHOLD)
-        state->buttons[BTN_ID_LEFT].held = true;
+        derived[BTN_ID_LEFT] = true;
     else if (state->axis_lx > STICK_DPAD_THRESHOLD)
-        state->buttons[BTN_ID_RIGHT].held = true;
+        derived[BTN_ID_RIGHT] = true;
 
     if (state->axis_ly < -STICK_DPAD_THRESHOLD)
-        state->buttons[BTN_ID_UP].held = true;
+        derived[BTN_ID_UP] = true;
     else if (state->axis_ly > STICK_DPAD_THRESHOLD)
-        state->buttons[BTN_ID_DOWN].held = true;
+        derived[BTN_ID_DOWN] = true;
 }
 
 /* ── Read keyboard events ───────────────────────────────────────────────── */
-static void poll_keyboard(GamepadManager *gm, InputState *state) {
+static void poll_keyboard(GamepadManager *gm) {
     if (gm->keyboard_fd < 0) return;
 
     struct input_event ev;
@@ -670,35 +685,35 @@ static void poll_keyboard(GamepadManager *gm, InputState *state) {
         switch (ev.code) {
             case KEY_UP:
             case KEY_W:
-                state->buttons[BTN_ID_UP].held = down;
+                gm->held_latched[BTN_ID_UP] = down;
                 break;
             case KEY_DOWN:
             case KEY_S:
-                state->buttons[BTN_ID_DOWN].held = down;
+                gm->held_latched[BTN_ID_DOWN] = down;
                 break;
             case KEY_LEFT:
             case KEY_A:
-                state->buttons[BTN_ID_LEFT].held = down;
+                gm->held_latched[BTN_ID_LEFT] = down;
                 break;
             case KEY_RIGHT:
             case KEY_D:
-                state->buttons[BTN_ID_RIGHT].held = down;
+                gm->held_latched[BTN_ID_RIGHT] = down;
                 break;
             case KEY_SPACE:
-                state->buttons[BTN_ID_JUMP].held = down;
+                gm->held_latched[BTN_ID_JUMP] = down;
                 break;
             case KEY_LEFTSHIFT:
             case KEY_RIGHTSHIFT:
-                state->buttons[BTN_ID_RUN].held = down;
+                gm->held_latched[BTN_ID_RUN] = down;
                 break;
             case KEY_ENTER:
-                state->buttons[BTN_ID_ACTION].held = down;
+                gm->held_latched[BTN_ID_ACTION] = down;
                 break;
             case KEY_ESC:
-                state->buttons[BTN_ID_PAUSE].held = down;
+                gm->held_latched[BTN_ID_PAUSE] = down;
                 break;
             case KEY_BACKSPACE:
-                state->buttons[BTN_ID_BACK].held = down;
+                gm->held_latched[BTN_ID_BACK] = down;
                 break;
             default:
                 break;
@@ -778,7 +793,14 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
 }
 
 /* ── Apply touch regions ────────────────────────────────────────────────── */
-static void poll_touch(GamepadManager *gm, InputState *state,
+/*
+ * Writes the per-frame `derived` array, never any persistent state: a touch
+ * region is asserted exactly on the frames the finger is inside it.  It used
+ * to set `.held = true` on the caller's InputState, which nothing ever
+ * cleared, so the first tap latched a virtual D-pad direction on permanently
+ * (B2 — the reason frogger's and platformer's pads were removed in B13k).
+ */
+static void poll_touch(GamepadManager *gm, bool *derived,
                        int touch_x, int touch_y, bool touch_active) {
     if (!touch_active || gm->touch_region_count <= 0) return;
 
@@ -788,7 +810,7 @@ static void poll_touch(GamepadManager *gm, InputState *state,
 
         if (touch_x >= r->x && touch_x < r->x + r->w &&
             touch_y >= r->y && touch_y < r->y + r->h) {
-            state->buttons[r->button].held = true;
+            derived[r->button] = true;
         }
     }
 }
@@ -824,20 +846,29 @@ static void compute_mouse_edges(GamepadManager *gm, InputState *state) {
 
 void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active) {
-    /* Clear button held states (will be re-set by each source) */
-    /* NOTE: We do NOT clear held here — gamepad/keyboard set them via events,
-     * and D-pad hat events only fire on change.  Instead, we let the event
-     * handlers maintain held state directly (key up/down).  Touch is additive. */
-
     state->gamepad_connected  = (gm->gamepad_fd >= 0);
     state->keyboard_connected = (gm->keyboard_fd >= 0);
     state->mouse_connected    = (gm->mouse_fd >= 0) ? 1 : 0;
 
+    /* Level state from the sources that report an absolute position rather
+     * than press/release events — touch regions and the analog stick.  Zeroed
+     * every poll and rebuilt below, which is what stops them latching (B2).
+     * The event-driven sources are the other half: their level lives in
+     * gm->held_latched[] because a key-up may be many frames away. */
+    bool derived[BTN_ID_COUNT];
+    memset(derived, 0, sizeof(derived));
+
     /* Read from each input source */
-    poll_gamepad(gm, state);
-    poll_keyboard(gm, state);
+    poll_gamepad(gm, state);          /* latches keys/hat, updates the axes */
+    poll_keyboard(gm);                /* latches keys */
     poll_mouse(gm, state);
-    poll_touch(gm, state, touch_x, touch_y, touch_active);
+    poll_touch(gm, derived, touch_x, touch_y, touch_active);
+    merge_stick_dpad(state, derived); /* after poll_gamepad: needs this frame's axes */
+
+    /* `held` is a pure output — never read back as state, so a caller that
+     * zeroes its InputState between polls cannot lose a physically held key. */
+    for (int i = 0; i < BTN_ID_COUNT; i++)
+        state->buttons[i].held = gm->held_latched[i] || derived[i];
 
     /* Compute pressed/released edges */
     compute_edges(gm, state);

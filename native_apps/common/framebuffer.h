@@ -7,6 +7,10 @@
 
 typedef struct {
     int fd;
+    // Pixel storage. Typed uint32_t for history, but the pixel SIZE is
+    // bytes_per_pixel: 4 = XRGB8888, 2 = RGB565. The drawing primitives pack and
+    // unpack accordingly — never index these as uint32_t from outside
+    // framebuffer.c without checking bytes_per_pixel first.
     uint32_t *buffer;        // Front buffer (mapped to screen), PANEL sized
     uint32_t *back_buffer;   // Back buffer (for double buffering), LOGICAL sized
     uint32_t width;          // Logical (visible) width  — what apps draw into
@@ -146,6 +150,15 @@ void fb_set_draw_offset(Framebuffer *fb, int dx, int dy);
 // Clear draw offset (reset to 0,0)
 void fb_clear_draw_offset(Framebuffer *fb);
 
+// ---------------------------------------------------------------------------
+// Drawing primitives
+//
+// All of them take logical coordinates and a 24-bit RGB888 colour (the RGB() /
+// COLOR_* macros) and work at either supported depth — they pack to the
+// surface's pixel format internally. An app never needs to know the bpp, and
+// must not assume 32: /dev/fb0 keeps whatever the previous process set.
+// ---------------------------------------------------------------------------
+
 // Draw pixel
 void fb_draw_pixel(Framebuffer *fb, int x, int y, uint32_t color);
 
@@ -195,7 +208,18 @@ void fb_fade_in(Framebuffer *fb);
 // RGB color helper
 #define RGB(r, g, b) (((r) << 16) | ((g) << 8) | (b))
 
-// Set framebuffer bits-per-pixel (e.g. 16 or 32). Must be called BEFORE fb_init.
+// Set framebuffer bits-per-pixel (16 or 32). Must be called BEFORE fb_init.
+//
+// EVERY app should pin this rather than inherit it. /dev/fb0 keeps whatever the
+// last process set, so a game launched over SSH after ScummVM or vnc_client
+// starts at 16bpp. That used to be a 2x heap overflow (IMPROVEMENT_PLAN B1);
+// the primitives are bpp-aware now, so what is left is appearance and
+// determinism — 16bpp bands every gradient, and "how does this app look"
+// should not depend on which app ran before it (B24).
+//
+// Native UIs and games want 32. ScummVM and the VNC session set 16 on purpose,
+// to halve write bandwidth on this memory-bound part, and fb_init() must keep
+// accepting that.
 int fb_set_bpp(const char *device, int bpp);
 
 // Change the bezel margins on a live framebuffer: resizes the logical surface,

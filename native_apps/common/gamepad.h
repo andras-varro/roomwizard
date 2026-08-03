@@ -56,9 +56,16 @@ extern "C" {
 /* Maximum axes tracked for calibration */
 #define GAMEPAD_MAX_AXES 8
 
-/* Button state with edge detection */
+/* Button state with edge detection.
+ *
+ * All three fields are pure *outputs* of gamepad_poll() — it recomputes them
+ * from scratch every call, so writing them from an app has no effect beyond
+ * the next poll.  `held` is the OR of two kinds of source: event-driven ones
+ * that report press/release and whose level therefore lives in the manager
+ * (GamepadManager.held_latched), and per-frame ones (touch regions, analog
+ * stick) that report an absolute position and are rebuilt each poll. */
 typedef struct {
-    bool held;      /* Currently held down */
+    bool held;      /* Currently held down (level) */
     bool pressed;   /* Just pressed this frame (edge) */
     bool released;  /* Just released this frame (edge) */
 } ButtonState;
@@ -153,6 +160,16 @@ typedef struct {
 
     /* Internal previous-frame state for edge detection (abstract buttons) */
     bool prev_held[BTN_ID_COUNT];
+
+    /* Level state for the event-driven sources (gamepad keys, D-pad hat,
+     * keyboard).  Those arrive as discrete press/release events, so their
+     * level has to persist between polls — and it persists *here* rather than
+     * in the caller's InputState, so a caller that zeroes or swaps its
+     * InputState can never desync it.  Sources that report an absolute
+     * position instead (touch regions, analog stick) are deliberately NOT in
+     * here: they are rebuilt per frame, which is what stops them latching
+     * (IMPROVEMENT_PLAN B2). */
+    bool held_latched[BTN_ID_COUNT];
 
     /* Internal previous-frame state for mouse button edge detection */
     bool prev_mouse_left;

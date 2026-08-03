@@ -799,8 +799,8 @@ int main(int argc, char *argv[]) {
 
     /* ── Framebuffer init ───────────────────────────────────────────── */
     Framebuffer fb;
-    /* The common draw helpers write one uint32 per pixel, so the framebuffer
-     * must be 32bpp — whatever ran last may have left it at 16. */
+    /* Pin the depth rather than inherit it: /dev/fb0 keeps whatever ran last
+     * (ScummVM and the VNC session leave 16bpp). See fb_set_bpp. */
     fb_set_bpp("/dev/fb0", 32);
 
     if (fb_init(&fb, "/dev/fb0") != 0) {

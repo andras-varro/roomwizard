@@ -63,6 +63,9 @@ int main(void) {
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);
 
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp("/dev/fb0", 32);
+
     if (fb_init(&fb, "/dev/fb0") < 0) {
         fprintf(stderr, "Failed to init framebuffer\n");
         return 1;

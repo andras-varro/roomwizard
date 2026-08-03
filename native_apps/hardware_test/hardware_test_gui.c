@@ -692,6 +692,9 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
 
 int main(void) {
     Framebuffer fb;
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp("/dev/fb0", 32);
+
     if (fb_init(&fb, "/dev/fb0") < 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");
         return 1;

@@ -210,22 +210,12 @@ void init_game() {
     hs_load(&hs_table);
     game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
 
-    // Set up touch regions for gamepad module (4 directional zones + action buttons)
-    int grid_cx = grid_offset_x + (GRID_SIZE * cell_size) / 2;
-    int grid_cy = grid_offset_y + (GRID_SIZE * cell_size) / 2;
-    int half_w = (GRID_SIZE * cell_size) / 2;
-    int half_h = (GRID_SIZE * cell_size) / 2;
-    TouchRegion touch_regions[] = {
-        /* Up zone: top half of grid, center strip */
-        { grid_cx - half_w, grid_offset_y, half_w * 2, half_h, BTN_ID_UP },
-        /* Down zone: bottom half of grid, center strip */
-        { grid_cx - half_w, grid_cy, half_w * 2, half_h, BTN_ID_DOWN },
-        /* Left zone: left half of grid */
-        { grid_offset_x, grid_offset_y, half_w, half_h * 2, BTN_ID_LEFT },
-        /* Right zone: right half of grid */
-        { grid_cx, grid_offset_y, half_w, half_h * 2, BTN_ID_RIGHT },
-    };
-    gamepad_set_touch_regions(&gamepad, touch_regions, 4);
+    /* No virtual D-pad: handle_input() already hops the snake relative to the
+     * head, so TouchRegions would be a redundant second input path — and the
+     * four that used to be registered here covered the grid's top/bottom halves
+     * *and* its left/right halves, so every in-grid tap asserted two directions
+     * at once.  Deleted 2026-08-03 (IMPROVEMENT_PLAN B13g); prefer a tap
+     * relative to the controlled object over a pad. */
 
     reset_game();
 }
@@ -602,6 +592,9 @@ int main(int argc, char *argv[]) {
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
     
     // Initialize framebuffer
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp(fb_device, 32);
+
     if (fb_init(&fb, fb_device) < 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");
         return 1;

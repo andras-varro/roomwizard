@@ -1444,6 +1444,9 @@ int main(int argc, char *argv[]) {
     audio_init(&audio);
 
     /* Framebuffer init */
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp(fb_device, 32);
+
     if (fb_init(&fb, fb_device) < 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");
         return 1;

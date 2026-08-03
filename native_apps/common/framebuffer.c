@@ -289,6 +289,59 @@ int fb_set_bpp(const char *device, int bpp) {
     return ret;
 }
 
+// ---------------------------------------------------------------------------
+// Pixel format dispatch
+//
+// /dev/fb0's bpp is chosen at RUNTIME by whatever app called fb_set_bpp(): the
+// native menus, tools and games run 32bpp XRGB8888; ScummVM and the VNC session
+// run 16bpp RGB565 to halve write bandwidth on this memory-bound part. The back
+// buffer is allocated as width * height * bytes_per_pixel, so a primitive that
+// writes a uint32_t unconditionally overruns a 16bpp allocation by exactly 2x —
+// which is what every primitive below used to do (IMPROVEMENT_PLAN B1). It was
+// reachable, not theoretical: no game asserted the bpp, so one launched over SSH
+// after a 16bpp app inherited 16bpp and ran the full overflow (B24).
+//
+// The API is unchanged: callers always pass 24-bit RGB888 and these four helpers
+// are the only code that knows what the surface actually holds. fb_init() must
+// keep accepting 16bpp — ScummVM legitimately drives this path.
+// ---------------------------------------------------------------------------
+
+#define FB_IS_16BPP(fb) ((fb)->bytes_per_pixel == 2)
+
+static inline uint16_t fb_pack565(uint32_t c) {
+    return (uint16_t)((((c >> 16) & 0xF8) << 8) |
+                      (((c >>  8) & 0xFC) << 3) |
+                      (( c        & 0xF8) >> 3));
+}
+
+// 5/6-bit channel back to 8 bits by replicating the high bits into the low ones.
+// Exact at both ends (0 -> 0, max -> 255) and division-free, which matters here:
+// the Cortex-A8 has no hardware divide, so a /31 would become a call into
+// __aeabi_uidiv inside the alpha-blend inner loop.
+static inline uint32_t fb_unpack565(uint16_t v) {
+    uint32_t r = (v >> 11) & 0x1F, g = (v >> 5) & 0x3F, b = v & 0x1F;
+    r = (r << 3) | (r >> 2);
+    g = (g << 2) | (g >> 4);
+    b = (b << 3) | (b >> 2);
+    return (r << 16) | (g << 8) | b;
+}
+
+static inline void fb_store(void *target, size_t idx, uint32_t color, bool is16) {
+    if (is16) ((uint16_t *)target)[idx] = fb_pack565(color);
+    else      ((uint32_t *)target)[idx] = color;
+}
+
+static inline uint32_t fb_load(const void *target, size_t idx, bool is16) {
+    if (is16) return fb_unpack565(((const uint16_t *)target)[idx]);
+    return ((const uint32_t *)target)[idx] & 0x00FFFFFF;
+}
+
+// The surface every primitive writes into. Kept in one place so the
+// double-buffering test is not repeated in a dozen functions.
+static inline void *fb_target(Framebuffer *fb) {
+    return fb->double_buffering ? (void *)fb->back_buffer : (void *)fb->buffer;
+}
+
 int fb_init(Framebuffer *fb, const char *device) {
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
@@ -357,6 +410,34 @@ int fb_init(Framebuffer *fb, const char *device) {
     }
 
     fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
+
+    // Only 32bpp XRGB8888 and 16bpp RGB565 have drawing primitives (see the
+    // pixel-format dispatch above). Anything else would silently write the wrong
+    // pixel size into the allocation, so try to force 32bpp on the fd we already
+    // hold and give up loudly if the panel will not take it — a heap-corrupting
+    // app is worse than one that refuses to start with a reason on stdout.
+    if (fb->bytes_per_pixel != 4 && fb->bytes_per_pixel != 2) {
+        fprintf(stderr, "Framebuffer: %d bpp is not a format the drawing primitives"
+                        " support — forcing 32 bpp\n", vinfo.bits_per_pixel);
+        vinfo.bits_per_pixel = 32;
+        if (ioctl(fb->fd, FBIOPUT_VSCREENINFO, &vinfo) == -1 ||
+            ioctl(fb->fd, FBIOGET_VSCREENINFO, &vinfo) == -1 ||
+            (vinfo.bits_per_pixel != 32 && vinfo.bits_per_pixel != 16)) {
+            fprintf(stderr, "Framebuffer: still %d bpp — refusing to draw, every"
+                            " primitive would write the wrong pixel size\n",
+                    vinfo.bits_per_pixel);
+            close(fb->fd);
+            return -1;
+        }
+        // Re-read the stride: it changes with the pixel size.
+        if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+            perror("Error re-reading fixed information");
+            close(fb->fd);
+            return -1;
+        }
+        fb->bytes_per_pixel = vinfo.bits_per_pixel / 8;
+    }
+
     fb->line_length = finfo.line_length;
     fb->screen_size = fb->line_length * fb->phys_height;  // Physical size for mmap
     fb->back_buffer_size = (size_t)fb->width * fb->height * fb->bytes_per_pixel;
@@ -410,18 +491,24 @@ void fb_swap(Framebuffer *fb) {
         // 90 CCW rotation from the logical surface into the panel, offset by the
         // viewport: logical (lx, ly) -> virtual (lx+view_x, ly+view_y)
         //                            -> physical (vy, phys_height-1-vx)
-        // 32bpp only, like the rest of the drawing primitives.
+        // Byte-addressed, so it is correct at either bpp and under a line_length
+        // that is wider than the visible row (both hold on this panel).
+        const uint32_t bpp = fb->bytes_per_pixel;
+        const bool is16 = FB_IS_16BPP(fb);
         uint32_t lw = fb->width;
         uint32_t lh = fb->height;
-        uint32_t pw = fb->phys_width;
         uint32_t ph_minus_1 = fb->phys_height - 1;
+        const uint8_t *src = (const uint8_t *)fb->back_buffer;
+        uint8_t *dst = (uint8_t *)fb->buffer;
 
         for (uint32_t ly = 0; ly < lh; ly++) {
-            uint32_t *src_row = fb->back_buffer + ly * lw;
+            const uint8_t *src_row = src + (size_t)ly * lw * bpp;
             uint32_t px = ly + fb->view_y;   // Physical X = virtual Y
             for (uint32_t lx = 0; lx < lw; lx++) {
                 uint32_t py = ph_minus_1 - (lx + fb->view_x);
-                fb->buffer[py * pw + px] = src_row[lx];
+                uint8_t *d = dst + (size_t)py * fb->line_length + (size_t)px * bpp;
+                if (is16) *(uint16_t *)d = ((const uint16_t *)src_row)[lx];
+                else      *(uint32_t *)d = ((const uint32_t *)src_row)[lx];
             }
         }
         return;
@@ -453,18 +540,22 @@ void fb_swap(Framebuffer *fb) {
 
 void fb_clear(Framebuffer *fb, uint32_t color) {
     /* Clear the back buffer if double buffering is enabled */
-    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
-    uint32_t total = fb->width * fb->height;
+    void *target = fb_target(fb);
+    size_t total = (size_t)fb->width * fb->height;
     if (color == 0) {
         /* Fast path: memset for black (all-zero). Sized in bytes so it stays
          * inside the allocation at any bpp. */
         memset(target, 0, fb->double_buffering ? fb->back_buffer_size
                                                : fb->screen_size);
+    } else if (FB_IS_16BPP(fb)) {
+        /* One packed word per pixel — a uint32_t fill would run off the end of
+         * a 16bpp allocation, which is exactly B1. */
+        uint16_t c = fb_pack565(color);
+        uint16_t *p = (uint16_t *)target;
+        for (size_t i = 0; i < total; i++) p[i] = c;
     } else {
-        /* Per-pixel fill for non-zero colours */
-        for (uint32_t i = 0; i < total; i++) {
-            target[i] = color;
-        }
+        uint32_t *p = (uint32_t *)target;
+        for (size_t i = 0; i < total; i++) p[i] = color;
     }
 }
 
@@ -481,8 +572,7 @@ void fb_clear_draw_offset(Framebuffer *fb) {
 void fb_draw_pixel(Framebuffer *fb, int x, int y, uint32_t color) {
     if (x >= 0 && x < (int)fb->width && y >= 0 && y < (int)fb->height) {
         // Draw to back buffer if double buffering is enabled
-        uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
-        target[y * fb->width + x] = color;
+        fb_store(fb_target(fb), (size_t)y * fb->width + x, color, FB_IS_16BPP(fb));
     }
 }
 
@@ -671,15 +761,20 @@ void fb_draw_pixel_alpha(Framebuffer *fb, int x, int y, uint32_t color, uint8_t 
     x += fb->draw_offset_x;
     y += fb->draw_offset_y;
     if (x < 0 || x >= (int)fb->width || y < 0 || y >= (int)fb->height) return;
-    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
-    uint32_t dst = target[y * fb->width + x];
+    void *target = fb_target(fb);
+    bool is16 = FB_IS_16BPP(fb);
+    size_t idx = (size_t)y * fb->width + x;
+    /* Read-modify-write, so the destination has to be UNPACKED first: at 16bpp
+     * the stored word is RGB565 and blending it as if it were RGB888 produces a
+     * colour unrelated to what is on screen. */
+    uint32_t dst = fb_load(target, idx, is16);
     uint32_t sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
     uint32_t dr = (dst   >> 16) & 0xFF, dg = (dst   >> 8) & 0xFF, db = dst   & 0xFF;
     uint32_t a = alpha, ia = 255 - alpha;
     uint32_t r = (sr * a + dr * ia) / 255;
     uint32_t g = (sg * a + dg * ia) / 255;
     uint32_t b = (sb * a + db * ia) / 255;
-    target[y * fb->width + x] = (r << 16) | (g << 8) | b;
+    fb_store(target, idx, (r << 16) | (g << 8) | b, is16);
 }
 
 /* -- Alpha-blended filled rect ------------------------------------------ */
@@ -752,6 +847,13 @@ void fb_fade_in(Framebuffer *fb) {
 
 /* ======================================================================
  * Sprite Blitting Functions
+ *
+ * The SOURCE is always uint32_t RGB888 — that is what ppm.c produces and what
+ * every sprite table in the games is declared as — while the DESTINATION is the
+ * surface's own format. So the colour-key comparison happens in source space
+ * (two distinct RGB888 colours can collapse onto one RGB565 word, and a key
+ * compared after packing would make an opaque pixel transparent), and only the
+ * store converts. `is16` is hoisted out of the loops.
  * ====================================================================== */
 
 void fb_blit_sprite(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
@@ -761,7 +863,8 @@ void fb_blit_sprite(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
     int off_y = fb->draw_offset_y;
     int fb_w  = (int)fb->width;
     int fb_h  = (int)fb->height;
-    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+    void *target = fb_target(fb);
+    const bool is16 = FB_IS_16BPP(fb);
 
     for (int row = 0; row < h; row++) {
         int dest_y = dy + off_y + row;
@@ -778,7 +881,7 @@ void fb_blit_sprite(Framebuffer *fb, const uint32_t *src_pixels, int src_w,
             uint32_t pixel = src_pixels[src_row_offset + col];
             if (pixel == color_key) continue;
 
-            target[dest_y * fb_w + dest_x] = pixel;
+            fb_store(target, (size_t)dest_y * fb_w + dest_x, pixel, is16);
         }
     }
 }
@@ -790,7 +893,8 @@ void fb_blit_sprite_flipped(Framebuffer *fb, const uint32_t *src_pixels, int src
     int off_y = fb->draw_offset_y;
     int fb_w  = (int)fb->width;
     int fb_h  = (int)fb->height;
-    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+    void *target = fb_target(fb);
+    const bool is16 = FB_IS_16BPP(fb);
 
     for (int row = 0; row < h; row++) {
         int dest_y = dy + off_y + row;
@@ -808,7 +912,7 @@ void fb_blit_sprite_flipped(Framebuffer *fb, const uint32_t *src_pixels, int src
             uint32_t pixel = src_pixels[src_row_offset + (sx + w - 1 - col)];
             if (pixel == color_key) continue;
 
-            target[dest_y * fb_w + dest_x] = pixel;
+            fb_store(target, (size_t)dest_y * fb_w + dest_x, pixel, is16);
         }
     }
 }
@@ -823,7 +927,8 @@ void fb_blit_sprite_scaled(Framebuffer *fb, const uint32_t *src_pixels, int src_
     int off_y = fb->draw_offset_y;
     int fb_w  = (int)fb->width;
     int fb_h  = (int)fb->height;
-    uint32_t *target = fb->double_buffering ? fb->back_buffer : fb->buffer;
+    void *target = fb_target(fb);
+    const bool is16 = FB_IS_16BPP(fb);
 
     for (int j = 0; j < dh; j++) {
         int dest_y = dy + off_y + j;
@@ -844,7 +949,7 @@ void fb_blit_sprite_scaled(Framebuffer *fb, const uint32_t *src_pixels, int src_
             uint32_t pixel = src_pixels[src_y * src_w + src_x];
             if (pixel == color_key) continue;
 
-            target[dest_y * fb_w + dest_x] = pixel;
+            fb_store(target, (size_t)dest_y * fb_w + dest_x, pixel, is16);
         }
     }
 }

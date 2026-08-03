@@ -725,6 +725,9 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
+    /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
+    fb_set_bpp(fb_device, 32);
+
     if (fb_init(&fb, fb_device) < 0) {
         fprintf(stderr, "Failed to initialize framebuffer\n");
         return 1;
