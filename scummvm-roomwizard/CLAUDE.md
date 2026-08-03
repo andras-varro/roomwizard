@@ -192,6 +192,6 @@ overlay planes with an independent-input/output-size hardware scaler at
 
 `sizeof(long) == 4`. Baseline all timing to a start timestamp captured at init; never multiply a
 raw `tv_sec` by 1000 or 1000000. `getMillis()` does the multiply in `uint32` since 2026-08-03, so it
-wraps cleanly at 49.7 days rather than overflowing signed `time_t` at 24.85 — but **the fix is source
-only; ScummVM has not been rebuilt or deployed** (`../IMPROVEMENT_PLAN.md` B10). All six
-`getMillis()` consumers compute `now - _last` in `uint32` and are wrap-safe; keep it that way.
+wraps cleanly at 49.7 days rather than overflowing signed `time_t` at 24.85 — **built, deployed and
+verified on RW09 the same day** (`../IMPROVEMENT_PLAN.md` B10). All six `getMillis()` consumers
+compute `now - _last` in `uint32` and are wrap-safe; keep it that way.

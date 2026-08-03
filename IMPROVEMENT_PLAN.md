@@ -116,19 +116,9 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B10. ScummVM `getMillis()` overflows at 24.85 days — partly done 2026-08-03
+### B10. ScummVM `getMillis()` overflows at 24.85 days — done 2026-08-03
 
-`scummvm-roomwizard/backend-files/roomwizard.cpp:214`. The multiply is now done in `uint32`, so it
-wraps cleanly at 49.7 days instead of overflowing a signed 32-bit `time_t` at 24.85 — which was UB
-and took long-press detection, cursor timing, the touch-feedback fade and `DefaultTimerManager` with
-it. All six `getMillis()` consumers were checked and every one computes `now - _last` in `uint32`, so
-they are wrap-safe and needed no change.
-
-**What is left: build it and deploy it.** The edit is in both trees (`../scummvm/` and
-`backend-files/`, synced and md5-identical), but ScummVM was **not rebuilt this session** — it is the
-multi-minute build, and its `build-and-deploy.sh` does `rm -f native_apps/common/*.o` at two points,
-so it cannot run concurrently with a native_apps build. Until `scummvm-roomwizard/build-and-deploy.sh
-<ip>` runs, RW09 is still running the overflowing binary.
+See [Closed](#closed).
 
 ### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — open, confirmed
 
@@ -487,6 +477,29 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B10. ScummVM `getMillis()` overflowed at 24.85 days** — done 2026-08-03. The multiply now happens in
+`uint32`, so it wraps cleanly at 49.7 days instead of overflowing a signed 32-bit `time_t` at 24.85 —
+which was UB and took long-press detection, cursor timing, the touch-feedback fade and
+`DefaultTimerManager` with it. All six `getMillis()` consumers compute `now - _last` in `uint32`, so
+they are wrap-safe and needed no change. **Built and deployed 2026-08-03** (the source-only half was
+committed in `4c6feef` and left unbuilt deliberately; the build is the multi-minute one and its
+`build-and-deploy.sh` does `rm -f native_apps/common/*.o` at two points, so it cannot run concurrently
+with a native_apps build). Verified three ways, because the overflow itself is **not observable** —
+it needs 24.85 days of uptime:
+
+- **The binary on the device is the new one.** `md5sum /opt/games/scummvm` == the local stripped
+  artifact (`84ceb107…`, was `e546214f…`), and the ScummVM launcher's own version line, read off a
+  decoded `--bpp 16` framebuffer capture, reads `2.8.1pre (Aug 3 2026 17:19:35)` — the build that
+  finished at 17:19:59. A build stamp rendered on the panel is the one identity check that cannot be
+  satisfied by a stale binary.
+- **It still runs.** Launched over SSH, `fbset` reports 16bpp as this backend intends, and the
+  launcher renders correctly with the overlay inside the safe rect.
+- **The arithmetic, with a negative control.** A host-compiled check of both expressions at
+  `tv_sec` diff 2147484 (24.85 days): the old signed form yields **−2147482796**, the new `uint32`
+  form **2147484500**, and at 4294968 s it wraps to 704 as intended. The negative control is the point
+  — without it "the new expression returns the right number" says nothing about whether the old one
+  was ever wrong.
 
 **B13 + B14. The last six game bugs, and the blocking sleeps** — done 2026-08-03. All built with zero
 warnings, `check-arm-safe.sh` at a hard zero across 31 ARM binaries, the three host regressions
@@ -1494,6 +1507,6 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    unranked**, not deprioritised. **The six open B13 rows and B14 are all done 2026-08-03** — see
    [Closed](#closed); two of them (B13b, B13i) had real gameplay impact and **B13i's prescribed fix
    was wrong**, which is the third time this plan's suggested fix turned out to be a hypothesis.
-   **B10's code fix is in the tree but ScummVM was not rebuilt** — it is now the cheapest open item
-   and needs nothing but the multi-minute build. C1's `MAX_INPUT_DEVICES` stopgap is **spent**
+   **B10 is done 2026-08-03** — built, deployed and verified on RW09; the panel's own build stamp is
+   what proves the running binary is the new one. C1's `MAX_INPUT_DEVICES` stopgap is **spent**
    (resynced to 32), so what is left there is the shared evdev scanner itself, not a quick win.
