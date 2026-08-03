@@ -162,7 +162,10 @@ actually built and shipped.
   why a failure in it used to be invisible and left the watchdog armed (`IMPROVEMENT_PLAN.md` B18).
   It now prints whether the bypass is in place, so `setup-device.sh` output answers the question.
   **A device can be running an older copy than the repo's until `setup-device.sh` is re-run** —
-  `md5sum` the deployed file before reproducing anything against it.
+  **`./setup-device.sh <ip> --status` now md5s both deployed scripts against the repo's and says
+  `matches repo` or `DRIFTED` per file** (read-only, no reboot; it also runs after a normal setup).
+  Check that before reproducing anything against a device. Measured 2026-08-03: RW09 matches on both,
+  `.53` is drifted on both.
   The *hardware* watchdog (`/usr/sbin/watchdog` daemon) is fine — keep it, but note any app
   that takes over the screen for long periods must keep feeding `/dev/watchdog` (60 s) or the
   device hard-resets.

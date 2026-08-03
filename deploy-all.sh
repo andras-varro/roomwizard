@@ -101,6 +101,26 @@ fi
 
 FILTER="${2:-}"
 
+# ── validate the device IP before building anything ─────────────────────────
+# `./deploy-all.sh vnc_client` (forgetting the IP) used to build *everything*,
+# including the multi-minute ScummVM build, and only fail at `ssh root@vnc_client`
+# minutes later.  The single most likely typo is a component name in $1, so name
+# that case explicitly (../IMPROVEMENT_PLAN.md B19).
+IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
+if [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
+    echo ""
+    if [[ -f "$SCRIPT_DIR/$DEVICE_IP/build-and-deploy.sh" ]]; then
+        echo "  '$DEVICE_IP' is a component, not an IP — the IP comes first:"
+        echo "      $0 <ip> $DEVICE_IP"
+    else
+        echo "  Not an IPv4 address: '$DEVICE_IP'"
+    fi
+    echo ""
+    echo "Usage: $0 <ip> [component]"
+    echo "       $0 --list"
+    exit 1
+fi
+
 # ── main ────────────────────────────────────────────────────────────────────
 echo ""
 echo "╔═══════════════════════════════════════╗"

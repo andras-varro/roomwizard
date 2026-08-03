@@ -202,39 +202,7 @@ makes any subsequent score qualify.
 
 ## Phase 2 — Script safety
 
-B15, B17 and B18 are done — see [Closed](#closed). **B19 is all that is left of this phase.**
-
-### B19. Deploy hygiene — open
-
-**B19a (`clean.sh`) is done — see [Closed](#closed).** What is left:
-
-- **No IP validation** (`deploy-all.sh:28`, `setup-device.sh:43`, `native_apps:15`). Only
-  `scummvm-roomwizard:35` checks. `./deploy-all.sh vnc_client` (forgetting the IP) builds
-  *everything*, including the multi-minute ScummVM build, then fails at `ssh root@vnc_client`.
-  (An earlier revision added "unknown flags are silently ignored and the script proceeds with the
-  full destructive setup" — **that half is stale**: `setup-device.sh:72-75` has rejected unknown
-  `$2` flags with a `case` since B17's pass. The missing check is on the *IP*, not the flag.)
-- **No verification of what landed.** 16 binaries are scp'd then `chmod +x`'d with no check.
-  Add `md5sum` comparison and fail on mismatch.
-- **`audio_touch_test` is never `chmod +x`'d** (`native_apps:201-211`) — the only deployed binary
-  missing from the list. Works today only because scp carries the mode.
-- **Only `vnc_client` cd's to its own directory.** The others break when invoked by path;
-  they work only because `deploy-all.sh:156` wraps them in a subshell `cd`.
-- **Nothing tells you which version of a script a device is running**, and they drift silently.
-  Measured 2026-08-03 while reproducing B18: RW09's `/opt/roomwizard/disable-steelcase.sh` was *older
-  than the repo's pre-fix copy* — it predated a defect the tracked file had already grown — so the
-  reproduction had to stage `git show HEAD:disable-steelcase.sh` to `/tmp` instead. `md5sum` on the
-  device against the repo file settles it in one command and is what the "verify what landed" bullet
-  above should print. `.53` is the standing example: it is still on the pre-B25
-  `/etc/init.d/roomwizard-app`, which is visible only by running `status` and noticing a missing
-  section.
-  Measured 2026-08-03 while reproducing B18: RW09's `/opt/roomwizard/disable-steelcase.sh` was *older
-  than the repo's pre-fix copy* — it predated a defect the tracked file had already grown — so the
-  reproduction had to stage `git show HEAD:disable-steelcase.sh` to `/tmp` instead. `md5sum` on the
-  device against the repo file settles it in one command and is what the "verify what landed" bullet
-  above should print. `.53` is the standing example: it is still on the pre-B25
-  `/etc/init.d/roomwizard-app`, which is visible only by running `status` and noticing a missing
-  section.
+**Phase 2 is closed.** B15, B17, B18, B19a and B19 are all done — see [Closed](#closed).
 
 ---
 
@@ -604,6 +572,74 @@ the count — the first two runs did exactly that). Also checked the round trip 
 including one with a space, a backslash and a `$`: `crypt.crypt(pw, hash) == hash` and **no trailing
 newline leaks into the hash**, which is the one way `-stdin` could have silently produced a
 password nobody can log in with.
+
+**B19. Deploy hygiene** — done 2026-08-03, verified against both units. Five separate defects; the
+useful part of the entry is which ones were reproduced and which are latent.
+
+| Defect | Fix | Verified |
+|---|---|---|
+| No IP validation — `./deploy-all.sh vnc_client` built *everything* including the multi-minute ScummVM build, then failed at `ssh root@vnc_client` | Octet-range IPv4 check **before** the build in `deploy-all.sh`, `setup-device.sh`, `native_apps`, `vnc_client`, `usb_host`; `deploy-all.sh` names the component-in-`$1` case explicitly | pass — all guards exit 1 with no build; `--list` still works |
+| No verification of what landed | `native_apps` md5-compares all 18 executables against `build/` and fails with a per-file diff | pass — `Verified 18/18`, and a **negative control** (a byte appended to `/opt/games/touch_inject` on the device) was caught and named |
+| `audio_touch_test` never `chmod +x`'d | added — but see below | **latent, not reproducible from this host** |
+| Only `vnc_client` cd'd to its own directory | `cd "$SCRIPT_DIR"` in `native_apps` and `usb_host`; `scummvm`'s `SCUMMVM_DIR`/`NATIVE_APPS_DIR` anchored to `$REPO_ROOT` | pass — before/after measured, see below |
+| Nothing said which script version a device runs | `report_script_versions()` in `setup-device.sh`, in `--status` and after a normal run | pass — **on both units, with opposite results** |
+
+**The chmod fix cannot be demonstrated from this host, and that is worth knowing before someone
+"verifies" it.** `/mnt/c` is a DrvFs 9p mount that reports every file `-rwxrwxrwx` and silently
+discards `chmod` — measured: `chmod 644 build/audio_touch_test` leaves it `-rwxrwxrwx`. So scp always
+carries an executable mode from a Windows host and the missing `chmod +x` is unreachable here. It
+becomes reachable from a Linux dev host, or if a build step ever produces that artifact with a tool
+other than `gcc -o`. The fix is correct and removes the dependency on an accident; it is not a
+behaviour change anyone can observe from Windows. Same debt shape as B15's and B17's.
+
+**The drift report was validated against a known positive, not just a happy path** — the failure mode
+this repo keeps hitting is a harness that only ever reports success:
+
+| Unit | `disable-steelcase.sh` | `roomwizard-app` |
+|---|---|---|
+| RW09 (`.73`) | matches repo `76514c7d` | matches repo `82d60fcc` |
+| `.53` | **DRIFTED** — device `3bf114ce` | **DRIFTED** — device `c5da12f1` |
+
+which is exactly `.53`'s recorded state (deliberately left on pre-B25 scripts). Byte comparison is
+valid because `.gitattributes` pins `*.sh` to `eol=lf`, so the working tree is LF even on this
+Windows host and scp copies it unchanged — without that the check would report permanent false drift.
+This closes the entry's last bullet with a command instead of "run `status` and notice a missing
+section".
+
+**Two things the fix does beyond what the entry asked for**, both because the entry's own bullets
+pointed at them:
+
+- **The deployed-binary list is now defined once** (`GAMES_BINARIES`), and the remote `chmod` receives
+  it as `"$@"` through `ssh bash -s --` rather than being written out again. `audio_touch_test` was
+  missing from the chmod list *because* the list existed twice; adding a third copy for the md5 check
+  would have recreated the same bug by construction.
+- **`native_apps` and `vnc_client` now reject an unknown mode.** `set-default` is the only mode
+  `native_apps` accepts and anything else was silently ignored, so a typo deployed without doing what
+  was asked. `vnc_client`'s dead `KILL_FIRST="${3:-}"` (assigned, never read) went with it.
+
+Measured before/after for the cwd bullet, since "breaks when invoked by path" was two different
+failures and one non-failure:
+
+- `native_apps` — fails **loudly**: `bash native_apps/build-and-deploy.sh` from the repo root dies at
+  the first compile, `common/framebuffer.c: No such file or directory`, exit 1. Not a silently skipped
+  `./check-arm-safe.sh` as the `./` there suggests — the build never reaches it.
+- `scummvm` — resolved `../scummvm` against the **cwd**, so from the repo root it looked for the tree
+  in the repo's *parent*: pre-fix `clean` prints `ScummVM directory not found: ../scummvm`. Post-fix
+  `info` prints `/mnt/c/work/roomwizard/scummvm`. (It previously worked from inside
+  `scummvm-roomwizard/` only by coincidence — `scummvm/` is a sibling, so `../scummvm` evaluated from
+  *inside* `scummvm/` also resolves to itself, which is why the repeated `cd "$SCUMMVM_DIR"` calls
+  never broke.)
+- `usb_host` — already used `"$SCRIPT_DIR/…"` for every local path, so the entry's "the others break"
+  was too broad. It breaks for a *different* reason: `patch_dtb.py` opens `'uImage-system'` relative
+  to the **cwd** (its documented contract — `usb_host/README.md`) while the script scp's that file to
+  `$SCRIPT_DIR`. Invoked by path the two disagree and the kernel-image patch dies. Fixed with
+  `cd "$SCRIPT_DIR"` rather than by changing the Python's contract.
+
+Not verified end-to-end: `usb_host` and `scummvm` deploys were not run (the first patches a kernel
+image, the second is a multi-minute build and neither was otherwise needed); their changes are
+argument- and path-resolution only, exercised via `info`/guard paths. `bash -n` on all ten scripts and
+`dash -n` on the two `/bin/sh` ones that run under busybox ash. `native_apps` rebuilt and deployed to
+RW09 at **zero warnings** with `check-arm-safe.sh` at **31 binaries, hard zero**.
 
 **B19a. `clean.sh` could delete every other component's build output** — done 2026-08-03 by
 **deleting the script**, blast radius measured first. Three lines, no shebang, no `set -e`, no `cd`,
@@ -1345,12 +1381,14 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    root disk, and the one name the old code blacklisted (`/dev/sda`) is a 0 GB WSL stub. **B17 and
    B18 are also done** (2026-08-03), both reproduced against the pre-fix code first — B17's harness
    turned up two unrecorded defects in the same sed, and B18's reproduction needed the repo's
-   pre-fix file because RW09's deployed copy was older than the bug. **B19 is the last of Phase 2**;
-   its dangerous bullet was `clean.sh`, and that one is **done 2026-08-03 as B19a** — deleted rather
-   than hardened, since `build-and-deploy.sh clean` already did more and it had no callers. What is
-   left of B19 is hygiene, not hazard: IP validation, md5 verification of what landed (which also
-   answers "which script version is this device on"), one missing `chmod +x`, and four scripts that
-   only work because `deploy-all.sh` cd's for them. **B20 is done** (2026-08-03, with B25).
+   pre-fix file because RW09's deployed copy was older than the bug. **B19 and B19a are done too
+   (2026-08-03), which closes Phase 2 entirely.** B19a was a deletion — `clean.sh` had no callers and
+   `build-and-deploy.sh clean` already did more. B19's five defects split three ways worth
+   remembering: two were reproduced and fixed with a negative control (the md5 check catches a
+   corrupted deployed binary; the drift report shows RW09 clean and `.53` drifted), two were
+   path-resolution bugs whose *failure modes differed per script*, and one — `audio_touch_test`'s
+   missing `chmod +x` — is **unreachable from this Windows host at all**, because `/mnt/c` discards
+   `chmod` and reports everything executable. **B20 is done** (2026-08-03, with B25).
 5. **F1 (ALSA)** — biggest user-visible improvement in the project.
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into

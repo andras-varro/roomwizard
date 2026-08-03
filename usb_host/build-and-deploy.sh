@@ -23,13 +23,27 @@ set -e
 _START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Local build paths below all go through $SCRIPT_DIR, but patch_dtb.py opens
+# 'uImage-system' relative to the *cwd* (its documented contract — see
+# usb_host/README.md), while step 3 scp's that file to $SCRIPT_DIR.  Invoked by
+# path the two disagree and the DTB patch dies on a missing file; it worked only
+# because deploy-all.sh wraps this in a subshell cd (../IMPROVEMENT_PLAN.md B19).
+cd "$SCRIPT_DIR"
 KERNEL_VERSION="4.14.52"
 
 # Timestamp helper
 ts() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 # --- Argument validation ---
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
+    echo "Usage: $0 <device_ip>"
+    echo "Example: $0 192.168.50.73"
+    exit 1
+fi
+# Validate before building: this script builds kernel modules and patches a
+# kernel image before it ever contacts the device.
+if ! echo "$1" | grep -qE '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'; then
+    echo "Not an IPv4 address: $1"
     echo "Usage: $0 <device_ip>"
     echo "Example: $0 192.168.50.73"
     exit 1

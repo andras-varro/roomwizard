@@ -18,7 +18,6 @@ cd "$SCRIPT_DIR"
 
 DEVICE_IP="${1:-}"
 MODE="${2:-}"
-KILL_FIRST="${3:-}"
 DEVICE="root@${DEVICE_IP}"
 REMOTE_DIR="/opt/vnc_client"
 
@@ -28,6 +27,27 @@ ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
 info() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}  → $*${NC}"; }
 warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
+
+# ── argument validation ─────────────────────────────────────────────────────
+# Validate before building, not at the first ssh (../IMPROVEMENT_PLAN.md B19).
+usage() {
+    echo "Usage: $0 [<ip>] [run|set-default]"
+    echo ""
+    echo "  <ip>          Device IPv4 address; omit to build without deploying"
+    echo "  run           Also start vnc_client on the device"
+    echo "  set-default   Also make vnc_client the boot app"
+    exit 1
+}
+
+IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
+if [[ -n "$DEVICE_IP" ]] && [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
+    echo "Not an IPv4 address: $DEVICE_IP"; echo ""; usage
+fi
+
+case "$MODE" in
+    ""|run|set-default) ;;
+    *) echo "Unknown mode: $MODE"; echo ""; usage ;;
+esac
 
 # ── 1. cross-compiler check ─────────────────────────────────────────────────
 echo ""

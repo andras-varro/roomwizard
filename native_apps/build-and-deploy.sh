@@ -12,6 +12,15 @@
 set -e
 _START_SECONDS=$(date +%s)
 
+# Work from this script's own directory, so it can be invoked by path.  Every
+# source, build and icon path below is relative (common/*.c, build/, tests/,
+# ./check-arm-safe.sh); without this the first compile dies with
+# "common/framebuffer.c: No such file or directory" and the script only ever
+# worked because deploy-all.sh wraps it in a subshell cd
+# (../IMPROVEMENT_PLAN.md B19).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
 DEVICE_IP="${1:-}"
 MODE="${2:-}"
 DEVICE="root@${DEVICE_IP}"
@@ -23,6 +32,37 @@ ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
 info() { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}  → $*${NC}"; }
 warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
+
+# ── argument validation ─────────────────────────────────────────────────────
+# Validate BEFORE building.  A bad first argument used to surface only at the
+# first ssh, i.e. after all 31 targets had already been compiled
+# (../IMPROVEMENT_PLAN.md B19).
+usage() {
+    echo "Usage: $0 [<ip>] [set-default]"
+    echo ""
+    echo "  <ip>          Device IPv4 address; omit to build without deploying"
+    echo "  set-default   Also make app_launcher the boot app"
+    echo ""
+    echo "Examples:"
+    echo "  $0                          # build only"
+    echo "  $0 192.168.50.73            # build + deploy"
+    echo "  $0 192.168.50.73 set-default"
+    exit 1
+}
+
+IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
+if [[ -n "$DEVICE_IP" ]] && [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
+    echo "Not an IPv4 address: $DEVICE_IP"
+    echo ""
+    usage
+fi
+
+# set-default is the only mode this script accepts; anything else was silently
+# ignored, so a typo deployed without doing what you asked.
+case "$MODE" in
+    ""|set-default) ;;
+    *) echo "Unknown mode: $MODE"; echo ""; usage ;;
+esac
 
 # ── 1. cross-compiler check ─────────────────────────────────────────────────
 echo ""
@@ -205,23 +245,20 @@ info "Ensuring target directories exist..."
 ssh "$DEVICE" "mkdir -p $GAMES_DIR /var/log/roomwizard"
 ok "Target directories ready"
 
+# ── deployed artifacts ──────────────────────────────────────────────────────
+# ONE list, used for the upload, the chmod and the md5 verification below.
+# There used to be two (scp and chmod) and audio_touch_test was missing from the
+# chmod one — it worked only because scp happens to carry the source file's mode.
+# A third copy for the md5 check would have recreated exactly that bug
+# (../IMPROVEMENT_PLAN.md B19).
+GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
+                game_selector hardware_test hardware_config hardware_diag
+                audio_touch_test backlight device_tools
+                touch_raw touch_trace touch_inject)
+
 # Upload game binaries
-info "Uploading game binaries → $GAMES_DIR/"
-scp build/snake build/tetris build/pong \
-    build/brick_breaker \
-    build/samegame \
-    build/frogger \
-    build/platformer \
-    build/game_selector build/hardware_test \
-    build/hardware_config \
-    build/hardware_diag \
-    build/audio_touch_test \
-    build/backlight \
-    build/device_tools \
-    build/touch_raw \
-    build/touch_trace \
-    build/touch_inject \
-    "$DEVICE:$GAMES_DIR/"
+info "Uploading game binaries → $GAMES_DIR/ (${#GAMES_BINARIES[@]} files)"
+scp "${GAMES_BINARIES[@]/#/build/}" "$DEVICE:$GAMES_DIR/"
 ok "Game binaries uploaded"
 
 # Upload app launcher
@@ -237,21 +274,16 @@ if ls build/icons/*.ppm &>/dev/null; then
     ok "Icons uploaded ($(ls build/icons/*.ppm | wc -l) file(s))"
 fi
 
+# Every executable this script put on the device, as the device sees it.
+DEPLOYED_EXECUTABLES=("${GAMES_BINARIES[@]/#/$GAMES_DIR/}" /opt/roomwizard/app_launcher)
+
 # Set permissions + markers
+# The chmod list is passed in as "$@" rather than written out again, so it
+# cannot drift from what was uploaded.  The heredoc stays quoted because its
+# body has a `$name` loop that must expand on the device, not here.
 info "Setting permissions and markers..."
-ssh "$DEVICE" bash <<'REMOTE'
-chmod +x /opt/games/snake /opt/games/tetris /opt/games/pong \
-         /opt/games/brick_breaker \
-         /opt/games/samegame \
-         /opt/games/frogger \
-         /opt/games/platformer \
-         /opt/games/game_selector /opt/games/hardware_test \
-         /opt/games/hardware_config \
-         /opt/games/hardware_diag \
-         /opt/games/backlight \
-         /opt/games/device_tools \
-         /opt/games/touch_raw /opt/games/touch_trace /opt/games/touch_inject \
-         /opt/roomwizard/app_launcher
+ssh "$DEVICE" bash -s -- "${DEPLOYED_EXECUTABLES[@]}" <<'REMOTE'
+chmod +x "$@"
 
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
@@ -278,6 +310,29 @@ rm -f /opt/games/touch_test.hidden \
       /opt/games/unified_calibrate
 REMOTE
 ok "Permissions and markers set"
+
+# ── verify what landed ──────────────────────────────────────────────────────
+# 18 executables were copied and made runnable with nothing checking that the
+# bytes on the device are the bytes that were built.  A truncated scp, a full
+# filesystem, or a surviving process still holding an old inode (the B20/B25
+# failure mode) all look like a successful deploy otherwise.
+info "Verifying deployed binaries (md5)..."
+LOCAL_SUMS="$(
+    for remote in "${DEPLOYED_EXECUTABLES[@]}"; do
+        printf '%s  %s\n' "$remote" "$(md5sum "build/$(basename "$remote")" | cut -d' ' -f1)"
+    done | sort
+)"
+REMOTE_SUMS="$(ssh "$DEVICE" md5sum "${DEPLOYED_EXECUTABLES[@]}" | awk '{print $2"  "$1}' | sort)"
+
+if [[ "$LOCAL_SUMS" == "$REMOTE_SUMS" ]]; then
+    ok "Verified ${#DEPLOYED_EXECUTABLES[@]}/${#DEPLOYED_EXECUTABLES[@]} binaries — md5 matches what was built"
+else
+    echo ""
+    echo "  built (local)                        vs  deployed (device):"
+    diff <(printf '%s\n' "$LOCAL_SUMS") <(printf '%s\n' "$REMOTE_SUMS") | sed 's/^/    /' || true
+    echo ""
+    err "md5 mismatch — what is on the device is NOT what was built.\n     A process may still hold an old binary: ssh $DEVICE /etc/init.d/roomwizard-app status"
+fi
 
 # Deploy app manifests
 info "Installing app manifests..."

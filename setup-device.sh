@@ -69,6 +69,53 @@ usage() {
 
 [[ -z "$DEVICE_IP" ]] && usage
 
+# Validate the IP before doing anything: every step past here is destructive and
+# ends in a reboot (../IMPROVEMENT_PLAN.md B19).
+IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
+if [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
+    echo "Not an IPv4 address: $DEVICE_IP"
+    echo ""
+    usage
+fi
+
+# ── deployed-script drift ───────────────────────────────────────────────────
+# These two files are the only ones this script copies from the repo, and they
+# reach a device ONLY through here — deploy-all.sh does not push them.  So a
+# device can silently run an older copy than the repo's, with nothing saying so:
+# while B18 was being reproduced, RW09's disable-steelcase.sh turned out to be
+# older than the repo's *pre-fix* copy, which is why that repro had to stage the
+# tracked file to /tmp instead of using the device's own.  md5 settles it in one
+# command (../IMPROVEMENT_PLAN.md B19).
+#
+# Byte comparison is valid because .gitattributes pins *.sh to eol=lf, so the
+# working tree is LF even on this Windows host and scp copies it unchanged.
+report_script_versions() {
+    local pairs=(
+        "$SCRIPT_DIR/disable-steelcase.sh:$REMOTE_DIR/disable-steelcase.sh"
+        "$SCRIPT_DIR/roomwizard-app-init.sh:$INIT_SCRIPT"
+    )
+    local pair local_path remote_path local_md5 remote_md5 drift=0
+    for pair in "${pairs[@]}"; do
+        local_path="${pair%%:*}"
+        remote_path="${pair#*:}"
+        local_md5="$(md5sum "$local_path" | cut -d' ' -f1)"
+        remote_md5="$(ssh "$DEVICE" "md5sum $remote_path 2>/dev/null" 2>/dev/null | cut -d' ' -f1 || true)"
+        if [[ -z "$remote_md5" ]]; then
+            warn "$(basename "$remote_path"): NOT INSTALLED"
+            drift=1
+        elif [[ "$local_md5" == "$remote_md5" ]]; then
+            ok "$(basename "$remote_path"): matches repo (${local_md5:0:8})"
+        else
+            warn "$(basename "$remote_path"): DRIFTED — device ${remote_md5:0:8}, repo ${local_md5:0:8}"
+            drift=1
+        fi
+    done
+    if [[ $drift -ne 0 ]]; then
+        warn "Run '$0 $DEVICE_IP' to push the repo's versions (this REBOOTS the device)"
+    fi
+    return 0
+}
+
 # Reject unknown flags rather than silently falling through to a full setup+reboot
 case "$FLAG" in
     ""|--remove|--deep-clean|--status) ;;
@@ -329,6 +376,9 @@ echo ""
 echo "Init services in rc5.d:"
 ls -1 /etc/rc5.d/S* 2>/dev/null | sed 's|.*/||; s/^/  /'
 REMOTE
+    echo ""
+    info "Deployed script versions:"
+    report_script_versions
     echo ""
     exit 0
 fi
@@ -645,6 +695,13 @@ echo ""
 echo "Active cron jobs:"
 crontab -l 2>/dev/null | grep -v '^#' | grep -v '^$' | sed 's/^/  /'
 REMOTE
+
+# Confirm the two scripts this run just pushed are byte-identical on the device.
+# scp reporting success is not the same as the right bytes landing, and these are
+# the files whose silent staleness cost a session (B18, B19).
+echo ""
+info "Deployed script versions:"
+report_script_versions
 
 # ── Reboot ──────────────────────────────────────────────────────────────────
 echo ""

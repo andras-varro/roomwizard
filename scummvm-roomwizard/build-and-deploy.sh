@@ -27,6 +27,7 @@ _START_SECONDS=$(date +%s)
 
 # Capture script directory before any cd
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 # Detect whether $1 is an IP address or a command.
@@ -43,8 +44,14 @@ fi
 # Configuration
 DEVICE_USER="root"
 DEVICE_PATH="/opt/games"
-SCUMMVM_DIR="../scummvm"
-NATIVE_APPS_DIR="../native_apps"
+# Anchored to this script, not to the cwd.  Both were "../scummvm" and
+# "../native_apps" relative, so invoking this by path resolved them against
+# wherever you happened to be standing — `bash scummvm-roomwizard/build-and-deploy.sh`
+# from the repo root looked for the ScummVM tree in the repo's *parent*.  It
+# worked only because deploy-all.sh wraps it in a subshell cd
+# (../IMPROVEMENT_PLAN.md B19).
+SCUMMVM_DIR="$REPO_ROOT/scummvm"
+NATIVE_APPS_DIR="$REPO_ROOT/native_apps"
 ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
 
 # Engine batch level (0-5). Each level includes all engines from previous levels.

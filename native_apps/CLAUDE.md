@@ -35,6 +35,19 @@ keyboard.o audio.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o
 tools that measure the touch mapping (`device_tools`, `touch_raw`) add `$CALIB_OBJ` =
 `touch_calib.o`. Add new objects to `build-and-deploy.sh`.
 
+**A new *binary* goes in `GAMES_BINARIES` and nowhere else.** That one array drives the upload, the
+remote `chmod +x` (passed in as `"$@"` through `ssh bash -s --`) and the md5 verification. It used to
+be two hand-written lists, and `audio_touch_test` was missing from the `chmod` one — harmless only
+because scp happens to carry the source file's mode, and invisible on a Windows host because `/mnt/c`
+is a DrvFs mount that reports every file executable and discards `chmod` outright
+(`../IMPROVEMENT_PLAN.md` B19). Do not add a second list.
+
+**The deploy verifies itself.** After `chmod`, all 18 executables are md5-compared against `build/`
+and a mismatch is fatal with a per-file diff — a truncated scp, a full filesystem, or a surviving
+process holding an old inode (the B20/B25 failure mode) otherwise all look like a clean deploy. Also
+`./build-and-deploy.sh <ip>` validates the IP and the mode *before* compiling all 31 targets, and it
+`cd`s to its own directory, so it can be invoked by path.
+
 ## The common library
 
 | Module | Use it for | Never do this instead |
