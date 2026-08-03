@@ -85,12 +85,18 @@ Settings are loaded in this order (later overrides earlier):
 # /opt/vnc_client/vnc_client.conf
 host = 192.168.50.56
 port = 5900
-password = roomwizard
+password = CHANGEME
 encodings = tight zrle copyrect hextile zlib raw
 compress_level = 6
 quality_level = 5
 content_area = safe
 ```
+
+**Note:** `password` is a placeholder here on purpose — this file is tracked, and until
+2026-08-03 this example carried the reference setup's **real** password (`IMPROVEMENT_PLAN.md`
+D6). Put the real one only in the gitignored `vnc_client.conf`. It is sent under the legacy
+VncAuth scheme, which **truncates it to 8 characters** at both ends, so use a throwaway LAN
+credential and don't rely on characters past position 8.
 
 > **Tip:** All settings (HOST, PORT, PASSWORD, ENCODINGS, COMPRESS, QUALITY,
 > CONTENT) can be changed at runtime via the on-screen settings GUI (long-press

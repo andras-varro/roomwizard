@@ -100,7 +100,15 @@ while true; do
 done
 
 info "Generating password hash..."
-PASSWORD_HASH=$(openssl passwd -6 "$PASSWORD")
+# Feed the password on stdin, never as an argument: an argument is world-readable
+# in /proc/<pid>/cmdline for the lifetime of the openssl process, which defeats
+# the `read -s` above.  `printf` is a shell builtin, so it forks nothing and the
+# password never reaches another process's command line either.  (B17.)
+PASSWORD_HASH=$(printf '%s\n' "$PASSWORD" | openssl passwd -6 -stdin)
+if [ -z "$PASSWORD_HASH" ]; then
+    error "openssl produced no password hash. Is 'openssl passwd -6 -stdin' supported?"
+    exit 1
+fi
 success "Password hash generated."
 echo ""
 
@@ -218,6 +226,65 @@ else
 fi
 echo ""
 
+# ── Remove every eth0 stanza from an interfaces(5) file read on stdin ──────
+#
+# The old implementation was `sed -i '/^auto eth0/,/^$/d'` plus the same range
+# for /^iface eth0/.  A sed range whose end address never matches runs to EOF,
+# so on a file whose eth0 stanza is last — or that simply has no blank lines,
+# which is how plenty of vendor images ship — it deleted everything from eth0
+# onwards.  Any `auto lo` / `iface lo` below that point went with it, and the
+# device then booted with no network and no SSH: an unrecoverable commissioning
+# short of re-mounting the card.  (IMPROVEMENT_PLAN.md B17.)
+#
+# This is a stanza-aware filter instead.  Two things about interfaces(5) that
+# the sed version got wrong:
+#   - `auto` and `allow-*` lines carry a LIST of interfaces, so eth0 has to be
+#     removed token by token and the line kept if anything else remains
+#     (`auto lo eth0` must become `auto lo`, not vanish).
+#   - an `iface` stanza owns every following line up to the next stanza keyword
+#     *or* a blank line — not "up to the next blank line", which assumes a
+#     formatting convention the file is under no obligation to follow.
+strip_eth0_stanzas() {
+    awk '
+    BEGIN { skip = 0 }
+    {
+        kw = $0
+        sub(/^[ \t]+/, "", kw)
+
+        # auto / allow-hotplug / allow-auto: a list of interface names
+        if (kw ~ /^(auto|allow-[^ \t]+)([ \t]|$)/) {
+            skip = 0
+            n = split(kw, tok, /[ \t]+/)
+            out = tok[1]; kept = 0; dropped = 0
+            for (i = 2; i <= n; i++) {
+                if (tok[i] == "") continue
+                if (tok[i] == "eth0") { dropped = 1; continue }
+                out = out " " tok[i]; kept = 1
+            }
+            if (!dropped) print         # untouched — keep the original spacing
+            else if (kept) print out
+            next
+        }
+
+        # iface: opens a stanza whose option lines belong to it
+        if (kw ~ /^iface([ \t]|$)/) {
+            split(kw, tok, /[ \t]+/)
+            skip = (tok[2] == "eth0")
+            if (!skip) print
+            next
+        }
+
+        # any other stanza keyword closes the current stanza
+        if (kw ~ /^(mapping|source|source-directory|no-auto-down|no-scripts)([ \t]|$)/) {
+            skip = 0; print; next
+        }
+
+        if (kw == "") { skip = 0; print; next }   # a blank line also closes it
+
+        if (!skip) print                          # option line of a kept stanza
+    }'
+}
+
 # Step 7: Enable DHCP
 echo "================================================"
 echo "  Network Configuration (DHCP)"
@@ -240,15 +307,31 @@ info "Created backup: $INTERFACES_FILE.backup"
 if grep -A 1 "^auto eth0" "$INTERFACES_FILE" | grep -q "iface eth0 inet dhcp"; then
     success "eth0 is already configured for DHCP."
 else
-    # Remove existing eth0 configuration and add DHCP
-    sudo sed -i '/^auto eth0/,/^$/d' "$INTERFACES_FILE"
-    sudo sed -i '/^iface eth0/,/^$/d' "$INTERFACES_FILE"
-    
-    # Add DHCP configuration
-    echo "" | sudo tee -a "$INTERFACES_FILE" > /dev/null
-    echo "auto eth0" | sudo tee -a "$INTERFACES_FILE" > /dev/null
-    echo "iface eth0 inet dhcp" | sudo tee -a "$INTERFACES_FILE" > /dev/null
-    
+    # Strip any existing eth0 stanza, then append the DHCP one.  Built in a temp
+    # file so the target is either the old file or the complete new one, never a
+    # half-edited in-place result.
+    TMP_INTERFACES=$(mktemp)
+    {
+        strip_eth0_stanzas < "$INTERFACES_FILE"
+        echo ""
+        echo "auto eth0"
+        echo "iface eth0 inet dhcp"
+    } > "$TMP_INTERFACES"
+
+    # Assert the loopback survived rather than trusting the filter: losing it is
+    # the exact failure this replaces, and it costs one grep to make impossible.
+    LO_RE='^[[:space:]]*iface[[:space:]]+lo([[:space:]]|$)'
+    if grep -Eq "$LO_RE" "$INTERFACES_FILE" && ! grep -Eq "$LO_RE" "$TMP_INTERFACES"; then
+        rm -f "$TMP_INTERFACES"
+        error "Refusing to write $INTERFACES_FILE: the loopback stanza would be lost."
+        error "The file is unchanged (backup: $INTERFACES_FILE.backup). Please edit it by hand."
+        exit 1
+    fi
+
+    # cp onto the existing file, so its mode and owner are preserved.
+    sudo cp "$TMP_INTERFACES" "$INTERFACES_FILE"
+    rm -f "$TMP_INTERFACES"
+
     success "eth0 configured for DHCP."
 fi
 echo ""

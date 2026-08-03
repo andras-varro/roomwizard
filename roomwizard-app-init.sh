@@ -80,7 +80,14 @@ do_start() {
 
     # Disable Steelcase bloatware (idempotent — safe on every boot)
     if [ -x "$DISABLE_SCRIPT" ]; then
-        "$DISABLE_SCRIPT"
+        # `|| touch` is the same safety net as the else branch: the script does
+        # the bypass as its very first command now (B18), but a truncated scp or
+        # a CRLF shebang can still make it fail before that, and a device with an
+        # armed Steelcase watchdog reboots every ~70 minutes.
+        "$DISABLE_SCRIPT" || {
+            echo "WARNING: $DISABLE_SCRIPT failed, applying watchdog bypass only"
+            touch /var/watchdog_test
+        }
     else
         echo "WARNING: $DISABLE_SCRIPT not found, skipping cleanup"
         # Minimal safety net: at least create the watchdog bypass

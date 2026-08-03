@@ -38,17 +38,7 @@ item below links to the section that describes the hardware it touches.
 
 ## Phase 0 — Do these first (no risk, high leverage)
 
-Nothing here can break a running device. D1–D5 are done — see [Closed](#closed). Only D6 remains,
-and its remaining step is not a code change.
-
-### D6. Secrets — partly done 2026-07-29
-
-`vnc_client/vnc_client.conf` held a plaintext password and was tracked. Now untracked +
-gitignored, with `vnc_client.conf.example` as the template and `chmod 600` on deploy.
-
-⚠️ **Still to do:** the password remains in git history. For a LAN VNC password the pragmatic fix
-is to **change the password on the VNC server** rather than rewrite history. Do that before
-making the repo public.
+Nothing here can break a running device. D1–D6 are all done — see [Closed](#closed).
 
 ---
 
@@ -206,22 +196,7 @@ makes any subsequent score qualify.
 
 ## Phase 2 — Script safety
 
-### B17. `commission-roomwizard.sh` sed can wipe the network config — open
-
-`:244` — `sed -i '/^auto eth0/,/^$/d'` deletes to EOF if the eth0 stanza is last or the file has
-no blank lines, taking `auto lo` with it. Device boots with no network and no SSH.
-
-Related, `:103`: `openssl passwd -6 "$PASSWORD"` puts the plaintext password in
-`/proc/<pid>/cmdline`, defeating the `read -s` two lines earlier. Use `-stdin`.
-
-### B18. `disable-steelcase.sh` fails silently and skips the watchdog disable — open
-
-`set -e` at `:22` plus an unguarded `sed` at `:28` — if `/etc/profile` is absent the script dies
-**before** `touch /var/watchdog_test` (`:32`), so the Steelcase software watchdog stays armed and
-the device reboots every ~70 minutes. It runs on every boot from `roomwizard-app-init.sh:44`, so
-the failure is invisible.
-
-**Fix:** `|| true` on the best-effort commands.
+B15, B17 and B18 are done — see [Closed](#closed). **B19 is all that is left of this phase.**
 
 ### B19. Deploy hygiene — open
 
@@ -546,6 +521,95 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**D6. Secrets** — done 2026-08-03. `vnc_client/vnc_client.conf` held a plaintext password and was
+tracked; it became untracked + gitignored on 2026-07-29, with `vnc_client.conf.example` as the
+template and `chmod 600` on deploy — which left the old password live in git history. Closed the
+prescribed way (**rotate, don't rewrite history**): the x11vnc password on the RPi server
+(`192.168.50.56`, `x11vnc-roomwizard.service`, `-rfbauth /home/pi/.vnc/x11vnc_passwd`) was
+regenerated with `x11vnc -storepasswd`, the service restarted, and the new value written to
+`/opt/vnc_client/vnc_client.conf` on **both** clients (`.73`, `.53`, mode 0600) plus the dev host's
+gitignored copy. The old file is kept as `x11vnc_passwd.bak` on the pi.
+Verified with a positive **and** a negative control, because "it connected" alone does not prove the
+server changed: on RW09 the client authenticated and streamed the live 1920×1080 desktop at 16bpp
+(framebuffer capture, `--bpp 16`), the same binary run with `--password <old>` logged
+`VNC connection failed: password check failed!`, and `.53` independently logged
+`VNC authentication succeeded`.
+⚠️ **VncAuth truncates the password to 8 characters** — that is the protocol, not a bug here, and it
+applies at both ends (x11vnc's passwd file is 8 bytes; libvncclient truncates identically). So only
+the first 8 characters are the actual secret. The previous password was also longer than 8, so
+nothing changed operationally, but do not pick a password whose distinguishing characters are past
+position 8. The password is still plaintext in three files on two devices and is sent under the
+legacy VncAuth scheme — it is a throwaway LAN credential by design, as
+`vnc_client.conf.example` says.
+
+**B17. `commission-roomwizard.sh` could delete the network config, and leaked the password** — done
+2026-08-03, both halves host-verified against the pre-fix code.
+
+*The sed range.* `sed -i '/^auto eth0/,/^$/d'` plus the same range for `/^iface eth0/`. **A sed range
+whose end address never matches runs to EOF**, so on an `interfaces` file whose eth0 stanza is last —
+or that simply has no blank lines — it deleted everything from eth0 onwards, and any `auto lo` /
+`iface lo` below that point went with it. The device then boots with no loopback and no SSH, which on
+a freshly commissioned card means re-mounting it on the dev host.
+Replaced with a stanza-aware `strip_eth0_stanzas()` awk filter, built into a temp file and installed
+with `cp` (so the target is either the old file or the whole new one, never a half-edited in-place
+result), behind an **assertion that the loopback survived** — losing it is the entire failure mode,
+and one `grep` makes it impossible rather than unlikely.
+Exercised in a harness that `eval`s the real function out of the script and runs the old sed and the
+new filter over the same four inputs. **Two of the four cases were defects nobody had recorded:**
+
+| Input | Old sed | New filter |
+|---|---|---|
+| lo first, blank-line separated (the case it was written for) | correct | identical output |
+| **eth0 stanza last, `lo` after it** | **loopback deleted — B17 exactly** | loopback kept |
+| no blank lines, a `usb0` stanza after eth0 | **`usb0` silently eaten too** | `usb0` kept |
+| **`auto lo eth0`** (one auto line, two interfaces) | **`auto eth0` left behind** while `/^iface eth0/` deleted its stanza → a dangling `auto` entry for an interface with no `iface`, which fails at `ifup` | token removed, `auto lo` kept |
+
+The last row is why the fix is a parser and not a better regex: per `interfaces(5)` an `auto` /
+`allow-*` line carries a **list**, and an `iface` stanza owns every following line until the next
+stanza keyword *or* a blank line — "until the next blank line" assumed a formatting convention the
+file is under no obligation to follow.
+
+*The password leak.* `openssl passwd -6 "$PASSWORD"` put the plaintext in `/proc/<pid>/cmdline`,
+world-readable for the life of the process, two lines after a `read -s` taken specifically to keep it
+off the screen. Now `printf '%s\n' "$PASSWORD" | openssl passwd -6 -stdin` — `printf` is a shell
+builtin, so it forks nothing and the password reaches no process's argv at all. Measured, because
+"probably too fast to catch" is not an argument: a `/proc` scanner looping against 60 hash
+invocations caught the old form **dozens** of times and the new form **zero** (the scanner's own
+`grep` pattern had to move into a file, and the harness into a file, or both self-match and inflate
+the count — the first two runs did exactly that). Also checked the round trip on three passwords
+including one with a space, a backslash and a `$`: `crypt.crypt(pw, hash) == hash` and **no trailing
+newline leaks into the hash**, which is the one way `-stdin` could have silently produced a
+password nobody can log in with.
+
+**B18. `disable-steelcase.sh` died before the watchdog bypass, invisibly** — done 2026-08-03,
+reproduced on RW09 and verified there across a reboot. `set -e`, then an **unguarded**
+`sed -i '/wsplatform\.conf/d' /etc/profile 2>/dev/null` as the first command, then
+`touch /var/watchdog_test`. On a device with no `/etc/profile` the script therefore exited **1 at its
+second command**, leaving the Steelcase software watchdog armed — a reboot every ~70 minutes — and
+because `roomwizard-app-init.sh` runs it on every boot and did not check the exit status, **the
+failure produced no output anywhere**.
+Reproduced against the pre-fix file on RW09 with `/etc/profile` moved aside: `rc=1`, **zero lines of
+output**, `/var/watchdog_test` MISSING. The same conditions with the fixed file: `rc=0`, bypass
+present. Note the deployed copy on RW09 was *older than the repo's* and predated the `sed` entirely,
+so reproducing this needed `git show HEAD:disable-steelcase.sh` staged to `/tmp` — the device's own
+script could not have shown it.
+Three changes, and the ordering is as load-bearing as the guards:
+
+- **The watchdog bypass is step 0**, ahead of every fallible command. It is one syscall and it is the
+  whole reason the device stays up, so a future unguarded line cannot re-arm the watchdog the way the
+  sed did. `|| true` on the profile sed and on the `find /etc/rc*.d/` sweep (which also exits
+  non-zero when a directory in the glob is absent), and a warning on the `crontab -` install.
+- **It says out loud whether the bypass is in place** (step 7), so `setup-device.sh` output and the
+  boot log both carry the answer. The other half of this bug was that nobody could see it.
+- **`roomwizard-app-init.sh`'s call is now `"$DISABLE_SCRIPT" || { warn; touch /var/watchdog_test; }`**
+  — the same safety net the `else` branch already had for a missing script, extended to a script that
+  is present but fails (truncated scp, CRLF shebang).
+
+Verified on RW09 after `./setup-device.sh 192.168.50.73`: both files md5-match the repo, and
+`/var/watchdog_test` carries a timestamp from **this boot** (uptime 1 min), i.e. the every-boot path
+recreated it. `bash -n` and **`dash -n`** on all three edited scripts — the two `/bin/sh` ones run
+under busybox ash, where a bashism is a runtime error on a device you may have just lost SSH to.
 
 **B15. `clone-to-32gb.sh` could destroy a host disk** — done 2026-08-03, guard exercised in an
 isolated harness against this host's real disks. The old `check_device_safe()` blacklisted the literal
@@ -1202,8 +1266,8 @@ U-Boot ever get written.
 
 Forecast only. What actually happened is in the dates on each entry and in `git log`.
 
-1. **Phase 0** — done 2026-07-30 except D6's password rotation, which is an action on the VNC
-   server rather than a code change.
+1. **Phase 0** — done. D1–D5 on 2026-07-30; **D6's password rotation done 2026-08-03**, on the VNC
+   server and both clients rather than by rewriting git history.
 2. **The crash/wedge class.** B3, B4, B5, B6 are done — the device can now always recover to a
    usable launcher on its own, and the log that diagnoses a SIGILL finally reports it.
    **B1 + B24 are deployed and verified on RW09 (2026-08-03)**, all three components rebuilt, with the
@@ -1229,9 +1293,12 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    which is why C6 had to be rewritten around framebuffer capture instead.
 4. **B15** — stop the scripts from being able to hurt you. **Done 2026-08-03**, and the measurement
    reframed it: on this host the disk the entry named as the likely target (`/dev/sdd`) is also the
-   root disk, and the one name the old code blacklisted (`/dev/sda`) is a 0 GB WSL stub. **B17, B18 and
-   B19 are the rest of Phase 2** and are cheaper; take them in the same pass if the appetite is there.
-   **B20 is done** (2026-08-03, with B25).
+   root disk, and the one name the old code blacklisted (`/dev/sda`) is a 0 GB WSL stub. **B17 and
+   B18 are also done** (2026-08-03), both reproduced against the pre-fix code first — B17's harness
+   turned up two unrecorded defects in the same sed, and B18's reproduction needed the repo's
+   pre-fix file because RW09's deployed copy was older than the bug. **B19 is the last of Phase 2**;
+   its `clean.sh` bullet (no shebang, no `cd`, `find . -name '*.o' -delete`) is the dangerous one and
+   is worth taking on its own. **B20 is done** (2026-08-03, with B25).
 5. **F1 (ALSA)** — biggest user-visible improvement in the project.
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
