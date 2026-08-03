@@ -86,6 +86,17 @@ the SAVE button is a footgun, not a feature. Read it once in `load_config_file()
 `vnc_content_set_full()`; `vnc_settings.c`'s config writer rewrites the whole file, so it must emit
 the key or SAVE silently resets the user's choice.
 
+It is also the settings screen's **CONTENT** row (seventh, `TOGGLE` button). Two things that row
+depends on:
+
+- The renderer keeps the flag in a **static** that only `vnc_renderer_set_remote_size()` reads, and
+  that runs once per session — so both `SETTINGS_SAVE` sites in `vnc_client.c` must re-publish with
+  `vnc_content_set_full()` before reconnecting, or the row appears to do nothing until a restart.
+- A seventh row does not fit a fixed 52 px pitch (that is why the control was config-only until
+  2026-08-03). `settings_row_pitch()` divides the space between `FIRST_ROW_Y` and the status line,
+  capped at the old 52 — so **row height is runtime**, like everything bottom-anchored, and the draw
+  path and the hit-test path must both go through `settings_row_y()` / `settings_row_h()`.
+
 **Ordering:** `SCREEN_SAFE_*` is only correct after **both** `fb_init()` and `touch_init()`, in that
 order — which is what `run_vnc_client()` already does. The bottom-anchored gap constants
 (`ACT_BTN_BOTTOM_GAP`, `KP_BOTTOM_GAP`) are now *visual* gaps only; they used to reserve 20 px by

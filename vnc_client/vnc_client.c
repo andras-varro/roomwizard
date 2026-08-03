@@ -752,6 +752,11 @@ static int run_vnc_client(const char *host, int port) {
                 /* Config was modified, reconnect with new settings */
                 LOG_INFO(&g_logger, "Settings saved, reconnecting with new config: %s:%d",
                          g_config.host, g_config.port);
+                /* Re-publish the content-area choice: the renderer keeps it in a
+                 * static that only vnc_renderer_set_remote_size() reads, and that
+                 * runs once per session.  Without this the CONTENT row would take
+                 * effect only after a restart. */
+                vnc_content_set_full(g_config.content_full != 0);
                 attempt = 0; /* Reset attempt counter for fresh connect */
                 continue;    /* Go back to top of reconnect loop */
             }
@@ -840,6 +845,8 @@ static int run_vnc_client(const char *host, int port) {
             if (settings_result == SETTINGS_SAVE) {
                 LOG_INFO(&g_logger, "Settings saved from reconnect, trying new config: %s:%d",
                          g_config.host, g_config.port);
+                /* Same reason as the in-session SAVE above. */
+                vnc_content_set_full(g_config.content_full != 0);
                 attempt = 0;
             }
             /* For BACK or SAVE, continue the reconnect loop (will try connecting) */

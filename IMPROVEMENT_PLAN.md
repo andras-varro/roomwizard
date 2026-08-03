@@ -120,30 +120,6 @@ reboots: the **wizard writes no tsv**, only the diagnostic does, which is why RW
 calibration has no capture of its own and the 16:53 one remains the reference (see
 `SYSTEM_ANALYSIS.md#33-touch` → *Provenance*).
 
-### B3f. The `content_area` setting is config-file-only, with no UI — open
-
-Added with the guest-content change (2026-08-01, the follow-on to B3c): `vnc_client` letterboxes the
-remote desktop into `SCREEN_SAFE_*` so all of it is reachable, and `content_area = safe | visible` in
-`/opt/vnc_client/vnc_client.conf` trades that back for ~11 % more pixels on a 1080p desktop.
-
-**It is not on the settings screen.** On a wall-mounted panel with no keyboard, that means the only
-way to change it is SSH — every other setting in that file is editable on the device.
-
-Deliberate, for a concrete reason: `vnc_settings.c` has `ROW_COUNT 6`, the row block already spans
-y 44–352 at a 52 px pitch, and the status line sits at 367 — a seventh row lands on top of it. Adding
-the control needs a layout change, not just a row:
-
-- a second page (the screen has no paging today), or
-- shrink `ROW_H`/`ROW_GAP` to fit 7 rows in the same band, or
-- put it on a settings *tab bar* like `device_tools` has.
-
-The value does round-trip safely in the meantime — `save_config_file()` writes the key even though
-nothing edits it, so pressing SAVE cannot silently reset a hand-edited choice. That was the trap
-worth closing first.
-
-Same gap on the ScummVM side, for the same reason (`rw_content_area` — see B3g), so whichever fix
-lands should cover both.
-
 ### B3g. ScummVM's `rw_content_area` is invisible until you know it exists — open, confirmed 2026-08-01
 
 `rwFullContentArea()` (`roomwizard.cpp`) reads the key with `ConfMan.hasKey("rw_content_area")` and
@@ -158,7 +134,8 @@ Fix options, cheapest first:
 - `ConfMan.setAndFlush("rw_content_area", "safe")` on first run when `!hasKey()`, so the key is
   present and self-documenting from then on. One line, and it makes the file the discovery surface.
 - Expose it in the GUI. ScummVM's Options dialog is upstream code, so this means a backend-specific
-  tab — much more work, and it shares the "no UI" problem with B3f.
+  tab — much more work. B3f solved the same "no UI" problem on the VNC side by shrinking that
+  screen's row pitch, which is not a move that is available here.
 
 Until then the reliable route is the environment variable `ROOMWIZARD_CONTENT_AREA=visible`, which
 takes precedence over the config and needs no file at all. It is documented in
@@ -744,6 +721,16 @@ config lines; `tests/unified_calibrate.c` deleted. Design point worth keeping: *
 by looking, not by touching** — numbered 2 px ladders at each panel edge. The old adjuster drew its
 reference frame on the *logical* edge, which is defined by the margins it was trying to measure.
 
+**B3f. `content_area` was config-file-only, with no UI** — done 2026-08-03, panel-confirmed.
+The blocker was layout, not plumbing: `vnc_settings.c` had `ROW_COUNT 6` and a fixed 52 px pitch, so a
+seventh row landed on the status line. Fixed by **deriving** the pitch — `settings_row_pitch()` divides
+the space between `FIRST_ROW_Y` and the status line and caps at the old 52, so row height joins the
+button row and both keypads in coming from `SCREEN_SAFE_BOTTOM` at runtime (45/41 on RW09's inset,
+51/47 on a full 480-row panel, i.e. unchanged there). Row 7 is **CONTENT** with a `TOGGLE`. The trap:
+the renderer keeps the flag in a static that only `vnc_renderer_set_remote_size()` reads, once per
+session, so **both** `SETTINGS_SAVE` sites must re-publish with `vnc_content_set_full()` or the row
+appears to do nothing until a restart. Rules in `vnc_client/CLAUDE.md`. ScummVM's half is **B3g**.
+
 **B3i. HUD text sat in the safe area, wasting the band it was allowed to use** — done 2026-08-02.
 The inverse of B3e and easy to get backwards: **pressed → `SAFE`, only seen → `VISIBLE`.** Tetris'
 SCORE/LVL and frogger's HUD moved into the `SCREEN_VISIBLE_TOP` band above the button row (they were
@@ -894,7 +881,8 @@ pixels in the dead band (reported on the device as "~10 px unreachable top and b
 precision calibration). Both now confine the guest content rectangle *itself* to `SCREEN_SAFE_*`, and
 everything hit-tested in them (VNC settings/reconnect/exit gesture, ScummVM's overlay and gesture
 corners) is on the safe rect unconditionally. Each has an opt-out that moves only the picture, whose
-discoverability is **B3f/B3g** and whose config-file location is **B3h**. Rules in
+discoverability is **B3g** on the ScummVM side (**B3f** was the VNC side — fixed 2026-08-03, it is a
+row on the settings screen now) and whose config-file location is **B3h**. Rules in
 `vnc_client/CLAUDE.md` and `scummvm-roomwizard/CLAUDE.md`.
 
 ### B3e. Buttons positioned with hardcoded offsets lose rows to the touch inset — done 2026-08-02
@@ -1145,6 +1133,6 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
    [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md). Serial console declined — see [Closed](#closed).
-8. Everything else as appetite allows: B3f/B3g/B3h, B10–B12c, the seven open B13 rows, B14, and all
+8. Everything else as appetite allows: B3g/B3h, B10–B12c, the seven open B13 rows, B14, and all
    of C1–C8. **These are genuinely unranked**, not deprioritised — C6's smoke-test harness and C1's
    `MAX_INPUT_DEVICES` one-liner are both cheap enough to take out of order.

@@ -54,4 +54,7 @@ quality_level = 5
 #
 # Has no effect until the panel's edge reach has been measured (Device Tools ->
 # Display -> CALIBRATE TOUCH, the REACH step); before that the two are the same.
+#
+# Editable on the device: settings GUI -> CONTENT row -> TOGGLE, then
+# SAVE & RECONNECT (the picture is laid out once per session).
 content_area = safe

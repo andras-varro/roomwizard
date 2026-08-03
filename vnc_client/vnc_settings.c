@@ -5,7 +5,8 @@
  * rendering primitives.  Allows viewing and editing VNC connection
  * parameters without SSH access.
  *
- * See SETTINGS_GUI_DESIGN.md for full layout specification.
+ * Layout: the constants block below.  Everything bottom-anchored, and the row
+ * block itself, is computed at runtime from SCREEN_SAFE_BOTTOM.
  *
  * Keypad modes:
  *   NUMERIC — 0-9, dot, colon (for HOST and PORT)
@@ -25,7 +26,7 @@
 #include <unistd.h>
 #include <ctype.h>
 
-/* ── Layout constants (from SETTINGS_GUI_DESIGN.md §1) ─────────────── */
+/* ── Layout constants ──────────────────────────────────────────────── */
 /*
  * SCREEN SIZE IS RUNTIME.  fb->width / fb->height are the logical (visible)
  * surface, which shrinks with the bezel margins (800x450 at the shipped
@@ -33,8 +34,9 @@
  * before the panel edge, so everything on this screen — it is nothing but
  * buttons — is laid out inside SCREEN_SAFE_*, the measured visible-and-
  * touchable rectangle.  The bottom-anchored parts (action button row, numeric
- * keypad, full keypad panel) are therefore computed from SCREEN_SAFE_BOTTOM by
- * the helpers below rather than from fb->height or a constant.
+ * keypad, full keypad panel) and the settings-row pitch are therefore computed
+ * from SCREEN_SAFE_BOTTOM by the helpers below rather than from fb->height or a
+ * constant.
  * Both the draw path and the hit-test path must call the SAME helper, or a
  * button will be drawn somewhere it cannot be tapped.
  *
@@ -44,13 +46,21 @@
  */
 
 #define TITLE_BAR_H      40
-#define ROW_COUNT         6
-#define ROW_H             48
-#define ROW_GAP           4        /* vertical gap between rows: pitch = ROW_H + ROW_GAP = 52 */
-#define FIRST_ROW_Y       44
-/* Row block spans FIRST_ROW_Y .. FIRST_ROW_Y + 6*52 - 4 = 44..352, which clears
- * the status line on a 450-row surface (status 362, buttons 382..430) and still
- * puts the status line at its original y=392 on a full 480-row panel. */
+#define ROW_COUNT         7
+#define ROW_GAP           4        /* vertical gap between rows */
+#define ROW_H_MAX        48        /* row height where there is room to spare */
+#define ROW_H_MIN        30        /* floor — below this a row stops being a target */
+#define FIRST_ROW_Y      44
+#define ROW_BLOCK_GAP     6        /* clearance between the last row and the status line */
+/*
+ * ROW HEIGHT IS RUNTIME, for the same reason the button row is.  The block has to
+ * fit between FIRST_ROW_Y and the status line, and the status line is anchored to
+ * SCREEN_SAFE_BOTTOM, which is per-unit.  A seventh row at the old fixed 52 px
+ * pitch would run to y=408 and land on top of the status line (366 on RW09) —
+ * which is exactly why the content-area control was config-file-only until now
+ * (IMPROVEMENT_PLAN.md B3f).  settings_row_pitch() divides the space that is
+ * actually there and caps at the old 52, so a taller surface looks unchanged.
+ */
 
 /* Row internal layout */
 #define LABEL_X           20
@@ -60,9 +70,16 @@
 #define ROW_BTN_X         700
 #define ROW_BTN_W         80
 
-/* +/- buttons for COMPRESS and QUALITY rows */
+/* In-row control column, shared by the COMPRESS/QUALITY +/- pair and the
+ * CONTENT toggle.  Both the draw path and the hit-test path read these — a
+ * literal in one and a constant in the other is how a button ends up drawn
+ * where it cannot be tapped. */
 #define PM_BTN_W          60
-#define PM_BTN_H          38
+#define PM_MINUS_X        620
+#define PM_PLUS_X         700
+#define PM_BTN_INSET       4       /* vertical inset inside the row */
+#define TOGGLE_BTN_X      PM_MINUS_X
+#define TOGGLE_BTN_W      140      /* spans the [-] and [+] columns */
 
 /* Action buttons.  BOTTOM_GAP is a visual gap only — SCREEN_SAFE_BOTTOM already
  * excludes the band where the digitizer stops reporting, so the 20 px this used
@@ -119,6 +136,30 @@ static int settings_act_btn_y(const Framebuffer *fb) {
 
 static int settings_status_y(const Framebuffer *fb) {
     return settings_act_btn_y(fb) - 20;
+}
+
+/* Row block geometry.  The pitch is derived from the space between the first row
+ * and the status line rather than fixed, so seven rows fit on the shortest safe
+ * rectangle a swept panel can produce. */
+static int settings_row_pitch(const Framebuffer *fb) {
+    int avail = settings_status_y(fb) - ROW_BLOCK_GAP - FIRST_ROW_Y;
+    int pitch = avail / ROW_COUNT;
+    if (pitch > ROW_H_MAX + ROW_GAP) pitch = ROW_H_MAX + ROW_GAP;
+    if (pitch < ROW_H_MIN + ROW_GAP) pitch = ROW_H_MIN + ROW_GAP;
+    return pitch;
+}
+
+static int settings_row_h(const Framebuffer *fb) {
+    return settings_row_pitch(fb) - ROW_GAP;
+}
+
+static int settings_row_y(const Framebuffer *fb, int row) {
+    return FIRST_ROW_Y + row * settings_row_pitch(fb);
+}
+
+/* Height of the in-row controls (+/- and TOGGLE), inset inside the row. */
+static int settings_pm_h(const Framebuffer *fb) {
+    return settings_row_h(fb) - 2 * PM_BTN_INSET;
 }
 
 /* Top of the numeric keypad's key block; everything else hangs off it. */
@@ -244,12 +285,6 @@ static void draw_button(Framebuffer *fb, int bx, int by, int bw, int bh,
     vnc_renderer_draw_text(fb, lx, ly, label, fg, scale);
 }
 
-/* ── Row Y position helper ─────────────────────────────────────────── */
-
-static int row_y(int row) {
-    return FIRST_ROW_Y + row * (ROW_H + ROW_GAP);
-}
-
 /* ── Draw the main settings screen ─────────────────────────────────── */
 
 static void draw_main_screen(SettingsState *st) {
@@ -257,6 +292,10 @@ static void draw_main_screen(SettingsState *st) {
     const int sw = (int)fb->width;
     const int act_btn_y = settings_act_btn_y(fb);
     const int status_y  = settings_status_y(fb);
+    const int rh        = settings_row_h(fb);
+    const int pm_h      = settings_pm_h(fb);
+    /* Baseline that centres 16px-tall scale-2 text in a row of height rh. */
+    const int text_dy   = (rh - 16) / 2;
 
     vnc_renderer_clear_screen(fb);
 
@@ -269,75 +308,81 @@ static void draw_main_screen(SettingsState *st) {
     }
 
     /* ── Settings rows ──────────────────────────────────────── */
-    const char *labels[] = { "HOST", "PORT", "PASSWORD", "ENCODINGS", "COMPRESS", "QUALITY" };
+    const char *labels[] = { "HOST", "PORT", "PASSWORD", "ENCODINGS", "COMPRESS",
+                             "QUALITY", "CONTENT" };
 
     for (int i = 0; i < ROW_COUNT; i++) {
-        int ry = row_y(i);
+        int ry = settings_row_y(fb, i);
 
         /* Alternating row background for readability */
         uint16_t row_bg = (i % 2 == 0) ? RGB565(15, 15, 15) : RGB565(25, 25, 25);
-        vnc_renderer_fill_rect(fb, 0, ry, sw, ROW_H, row_bg);
+        vnc_renderer_fill_rect(fb, 0, ry, sw, rh, row_bg);
 
         /* Label column */
-        vnc_renderer_draw_text(fb, LABEL_X, ry + 16, labels[i], RGB565_WHITE, 2);
+        vnc_renderer_draw_text(fb, LABEL_X, ry + text_dy, labels[i], RGB565_WHITE, 2);
 
         /* Value field background */
-        vnc_renderer_fill_rect(fb, VALUE_FIELD_X, ry, VALUE_FIELD_W, ROW_H, RGB565(30, 30, 30));
+        vnc_renderer_fill_rect(fb, VALUE_FIELD_X, ry, VALUE_FIELD_W, rh, RGB565(30, 30, 30));
 
         char val_str[256];
         switch (i) {
         case 0: /* HOST — editable via keypad */
             snprintf(val_str, sizeof(val_str), "%.42s", st->working.host);
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, val_str, RGB565_YELLOW, 2);
-            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, ROW_H,
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, val_str, RGB565_YELLOW, 2);
+            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, rh,
                         "[>]", RGB565(0, 60, 120), RGB565_WHITE, 2);
             break;
 
         case 1: /* PORT — editable via keypad */
             snprintf(val_str, sizeof(val_str), "%d", st->working.port);
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, val_str, RGB565_YELLOW, 2);
-            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, ROW_H,
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, val_str, RGB565_YELLOW, 2);
+            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, rh,
                         "[>]", RGB565(0, 60, 120), RGB565_WHITE, 2);
             break;
 
         case 2: /* PASSWORD — editable via FULL keypad */
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, "********", RGB565_YELLOW, 2);
-            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, ROW_H,
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, "********", RGB565_YELLOW, 2);
+            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, rh,
                         "[>]", RGB565(0, 60, 120), RGB565_WHITE, 2);
             break;
 
         case 3: /* ENCODINGS — editable via ALPHA keypad */
             snprintf(val_str, sizeof(val_str), "%.42s", st->working.encodings);
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, val_str, RGB565_YELLOW, 2);
-            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, ROW_H,
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, val_str, RGB565_YELLOW, 2);
+            draw_button(fb, ROW_BTN_X, ry, ROW_BTN_W, rh,
                         "[>]", RGB565(0, 60, 120), RGB565_WHITE, 2);
             break;
 
         case 4: /* COMPRESS — +/- buttons (1-9) */
             snprintf(val_str, sizeof(val_str), "%d", st->working.compress_level);
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, val_str, RGB565_YELLOW, 2);
-            {
-                /* [-] button at X=620 */
-                int minus_x = 620;
-                int plus_x  = 700;
-                draw_button(fb, minus_x, ry + 5, PM_BTN_W, PM_BTN_H,
-                            "-", RGB565(0, 80, 80), RGB565_WHITE, 2);
-                draw_button(fb, plus_x, ry + 5, PM_BTN_W, PM_BTN_H,
-                            "+", RGB565(0, 80, 80), RGB565_WHITE, 2);
-            }
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, val_str, RGB565_YELLOW, 2);
+            draw_button(fb, PM_MINUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h,
+                        "-", RGB565(0, 80, 80), RGB565_WHITE, 2);
+            draw_button(fb, PM_PLUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h,
+                        "+", RGB565(0, 80, 80), RGB565_WHITE, 2);
             break;
 
         case 5: /* QUALITY — +/- buttons (1-9) */
             snprintf(val_str, sizeof(val_str), "%d", st->working.quality_level);
-            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + 16, val_str, RGB565_YELLOW, 2);
-            {
-                int minus_x = 620;
-                int plus_x  = 700;
-                draw_button(fb, minus_x, ry + 5, PM_BTN_W, PM_BTN_H,
-                            "-", RGB565(0, 80, 80), RGB565_WHITE, 2);
-                draw_button(fb, plus_x, ry + 5, PM_BTN_W, PM_BTN_H,
-                            "+", RGB565(0, 80, 80), RGB565_WHITE, 2);
-            }
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy, val_str, RGB565_YELLOW, 2);
+            draw_button(fb, PM_MINUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h,
+                        "-", RGB565(0, 80, 80), RGB565_WHITE, 2);
+            draw_button(fb, PM_PLUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h,
+                        "+", RGB565(0, 80, 80), RGB565_WHITE, 2);
+            break;
+
+        case 6: /* CONTENT — where the remote desktop is drawn */
+            /* SAFE keeps every pixel of the remote desktop inside finger reach;
+             * FULL gives it the whole visible surface and accepts that a band at
+             * each end cannot be tapped.  Moves the PICTURE only — this screen's
+             * own buttons stay in the safe rect either way. */
+            vnc_renderer_draw_text(fb, VALUE_TEXT_X, ry + text_dy,
+                                   st->working.content_full ? "FULL (EDGES UNTAPPABLE)"
+                                                            : "SAFE (ALL TAPPABLE)",
+                                   st->working.content_full ? RGB565(255, 140, 0)
+                                                            : RGB565_YELLOW, 2);
+            draw_button(fb, TOGGLE_BTN_X, ry + PM_BTN_INSET, TOGGLE_BTN_W, pm_h,
+                        "TOGGLE", RGB565(0, 80, 80), RGB565_WHITE, 2);
             break;
         }
     }
@@ -353,7 +398,7 @@ static void draw_main_screen(SettingsState *st) {
             vnc_renderer_draw_text(fb, (sw - tw) / 2, status_y, err,
                                    RGB565_RED, 2);
         } else {
-            const char *hint = "TOUCH ANY ROW TO EDIT  |  LONG FIELDS: SCROLL RIGHT";
+            const char *hint = "TOUCH A ROW TO EDIT  |  CONTENT APPLIES ON SAVE & RECONNECT";
             int tw = vnc_renderer_text_width(hint, 1);
             vnc_renderer_draw_text(fb, (sw - tw) / 2, status_y, hint,
                                    RGB565_GREY, 1);
@@ -384,6 +429,8 @@ static void draw_main_screen(SettingsState *st) {
  */
 static int handle_main_touch(SettingsState *st, int tx, int ty) {
     const int act_btn_y = settings_act_btn_y(st->fb);
+    const int rh        = settings_row_h(st->fb);
+    const int pm_h      = settings_pm_h(st->fb);
 
     /* ── Action buttons ────────────────────────────────────── */
     if (hit_rect(tx, ty, ACT_BTN_BACK_X, act_btn_y, ACT_BTN_W, ACT_BTN_H))
@@ -395,8 +442,8 @@ static int handle_main_touch(SettingsState *st, int tx, int ty) {
 
     /* ── Row touches ───────────────────────────────────────── */
     for (int i = 0; i < ROW_COUNT; i++) {
-        int ry = row_y(i);
-        if (ty < ry || ty >= ry + ROW_H)
+        int ry = settings_row_y(st->fb, i);
+        if (ty < ry || ty >= ry + rh)
             continue;
 
         switch (i) {
@@ -444,33 +491,30 @@ static int handle_main_touch(SettingsState *st, int tx, int ty) {
             return 99;
 
         case 4: /* COMPRESS +/- */
-            {
-                int minus_x = 620;
-                int plus_x  = 700;
-                if (hit_rect(tx, ty, minus_x, ry + 5, PM_BTN_W, PM_BTN_H)) {
-                    if (st->working.compress_level > 1)
-                        st->working.compress_level--;
-                }
-                if (hit_rect(tx, ty, plus_x, ry + 5, PM_BTN_W, PM_BTN_H)) {
-                    if (st->working.compress_level < 9)
-                        st->working.compress_level++;
-                }
+            if (hit_rect(tx, ty, PM_MINUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h)) {
+                if (st->working.compress_level > 1)
+                    st->working.compress_level--;
+            }
+            if (hit_rect(tx, ty, PM_PLUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h)) {
+                if (st->working.compress_level < 9)
+                    st->working.compress_level++;
             }
             break;
 
         case 5: /* QUALITY +/- */
-            {
-                int minus_x = 620;
-                int plus_x  = 700;
-                if (hit_rect(tx, ty, minus_x, ry + 5, PM_BTN_W, PM_BTN_H)) {
-                    if (st->working.quality_level > 1)
-                        st->working.quality_level--;
-                }
-                if (hit_rect(tx, ty, plus_x, ry + 5, PM_BTN_W, PM_BTN_H)) {
-                    if (st->working.quality_level < 9)
-                        st->working.quality_level++;
-                }
+            if (hit_rect(tx, ty, PM_MINUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h)) {
+                if (st->working.quality_level > 1)
+                    st->working.quality_level--;
             }
+            if (hit_rect(tx, ty, PM_PLUS_X, ry + PM_BTN_INSET, PM_BTN_W, pm_h)) {
+                if (st->working.quality_level < 9)
+                    st->working.quality_level++;
+            }
+            break;
+
+        case 6: /* CONTENT — toggle safe rect vs whole visible surface */
+            if (hit_rect(tx, ty, TOGGLE_BTN_X, ry + PM_BTN_INSET, TOGGLE_BTN_W, pm_h))
+                st->working.content_full = !st->working.content_full;
             break;
 
         default:
@@ -990,9 +1034,9 @@ static int save_config_file(const VNCConfig *cfg, const char *path) {
     fprintf(f, "encodings = %s\n", cfg->encodings);
     fprintf(f, "compress_level = %d\n", cfg->compress_level);
     fprintf(f, "quality_level = %d\n", cfg->quality_level);
-    /* Not editable on this screen, but it MUST be written: this function
-     * rewrites the whole file, so omitting the key would silently reset the
-     * user's choice to 'safe' every time they press SAVE. */
+    /* Edited by the CONTENT row.  It was written even when nothing edited it,
+     * because this function rewrites the whole file — omitting the key would
+     * silently reset a hand-edited choice on every SAVE. */
     fprintf(f, "content_area = %s\n", cfg->content_full ? "visible" : "safe");
 
     fclose(f);

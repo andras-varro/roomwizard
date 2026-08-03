@@ -92,9 +92,9 @@ quality_level = 5
 content_area = safe
 ```
 
-> **Tip:** All settings (HOST, PORT, PASSWORD, ENCODINGS, COMPRESS, QUALITY) can
-> be changed at runtime via the on-screen settings GUI (long-press top-left corner
-> for 3 seconds).
+> **Tip:** All settings (HOST, PORT, PASSWORD, ENCODINGS, COMPRESS, QUALITY,
+> CONTENT) can be changed at runtime via the on-screen settings GUI (long-press
+> top-left corner for 3 seconds).
 
 ### `content_area` — reachability vs. size
 
@@ -110,7 +110,11 @@ screen, reconnect buttons, exit-gesture corner) stays reachable.
 
 The setting does nothing until the panel's touch reach has been measured — Device Tools →
 Display → `CALIBRATE TOUCH`, the `REACH` step. Before that, `safe` and `visible` are the same
-rectangle. It is not on the settings GUI, but that GUI preserves it when you press SAVE.
+rectangle.
+
+On the settings GUI it is the **CONTENT** row: `TOGGLE` flips between `SAFE (ALL TAPPABLE)` and
+`FULL (EDGES UNTAPPABLE)`, and the change takes effect when you press **SAVE & RECONNECT** — the
+picture is letterboxed once per session, so BACK alone leaves the current session as it was.
 
 ### Command-Line
 
