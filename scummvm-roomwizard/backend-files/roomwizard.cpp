@@ -97,6 +97,11 @@ bool rwDebugMode() {
 // one-off run, or rw_content_area=visible in scummvm.ini to persist it.
 // The OVERLAY (launcher / GMM / virtual keyboard) is deliberately NOT affected:
 // it is nothing but buttons, so it always stays inside the safe rect.
+//
+// initBackend() writes the key on first run, so the "safe" default is visible in
+// scummvm.ini rather than being an undocumented reader.  The else-branch below is
+// still needed: it covers the run that CREATES the key (this can be called before
+// or after initBackend depending on the graphics path) and any hand-emptied file.
 bool rwFullContentArea() {
 	static bool checked = false;
 	static bool full = false;
@@ -201,6 +206,21 @@ void OSystem_RoomWizard::initBackend() {
 	if (!ConfMan.hasKey("iconspath"))
 		ConfMan.set("iconspath", "/opt/games");
 
+	// Write rw_content_area out on first run so the option is DISCOVERABLE.
+	// ConfMan only persists keys that were actually set, and registerDefault()
+	// is not written either — so a key we merely read with hasKey() never
+	// appears in scummvm.ini, and the first thing anyone does is open the file,
+	// not find it, and conclude the option does not exist.  Writing the default
+	// makes the file itself the discovery surface.
+	//
+	// setAndFlush, not set: quit() calls exit(0) and bypasses ScummVM's normal
+	// shutdown flush, so a plain set() can be lost on the one exit path this
+	// device actually takes.  The !hasKey() guard is what stops us overwriting
+	// a user's "visible".  ROOMWIZARD_CONTENT_AREA still takes precedence at
+	// read time and is deliberately NOT persisted — it is a one-off override.
+	if (!ConfMan.hasKey("rw_content_area"))
+		ConfMan.setAndFlush("rw_content_area", "safe");
+
 	// Call parent init
 	ModularGraphicsBackend::initBackend();
 	
@@ -254,6 +274,23 @@ void OSystem_RoomWizard::quit() {
 	if (_graphicsManager)
 		((RoomWizardGraphicsManager *)_graphicsManager)->closeFramebuffer();
 	exit(0);
+}
+
+// The base OSystem returns the bare relative name "scummvm.ini", which
+// Common::FSNode resolves against the process's CURRENT DIRECTORY — and the cwd
+// differs per launch method.  The boot init script does not cd and app_launcher
+// execl()s without chdir(), so a boot-launched run used "/", an SSH-launched one
+// used $HOME, and `cd /opt/games` first gave a third file.  RW09 accumulated
+// three of them; settings did not follow the user between launch methods, and
+// editing "the" ini was a coin flip.  OSystem_POSIX solves this with an absolute
+// $HOME/.config path, but this backend derives from ModularGraphicsBackend, not
+// from OSystem_POSIX, so it inherited the relative name instead.
+//
+// /opt/games is the natural home: it is next to the binary, the icons and the
+// game data, it is writable, and it does not depend on $HOME — which the init
+// script's environment does not set.
+Common::String OSystem_RoomWizard::getDefaultConfigFileName() {
+	return "/opt/games/scummvm.ini";
 }
 
 static const char *logTypeTag(LogMessageType::Type type) {

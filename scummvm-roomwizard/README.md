@@ -54,11 +54,15 @@ picture** can be given the whole screen back if you prefer the extra size to the
 ROOMWIZARD_CONTENT_AREA=visible /opt/games/scummvm     # one run
 ```
 
-To make it permanent, add `rw_content_area = visible` under `[scummvm]` in the config file. **Note
-that ScummVM resolves `scummvm.ini` relative to its working directory on this device**, so the copy
-the boot launcher uses is `/scummvm.ini` — an SSH shell in `$HOME` writes `/home/root/scummvm.ini`
-instead, and editing the wrong one looks like the setting being ignored. The environment variable
-takes precedence over both. Before the panel has been swept, `safe` and `visible` are identical.
+To make it permanent, set `rw_content_area = visible` under `[scummvm]` in
+**`/opt/games/scummvm.ini`** — one absolute path, regardless of how ScummVM was started. The key is
+written out with its `safe` default on first run, so it is already in the file and you are editing a
+line rather than guessing a name. The environment variable still takes precedence over it. Before the
+panel has been swept, `safe` and `visible` are identical.
+
+(Until 2026-08-03 the config path was resolved against the *working directory*, so the boot launcher
+used `/scummvm.ini`, an SSH shell in `$HOME` wrote `/home/root/scummvm.ini`, and editing the wrong one
+looked like the setting being ignored. Both strays are gone — see `../IMPROVEMENT_PLAN.md` B3h.)
 
 ## Status
 

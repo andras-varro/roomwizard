@@ -44,6 +44,10 @@ public:
 
 	virtual void quit() override;
 
+	// The config file lives at ONE absolute path, not wherever the process was
+	// started from.  See getDefaultConfigFileName() in roomwizard.cpp.
+	virtual Common::String getDefaultConfigFileName() override;
+
 	virtual void logMessage(LogMessageType::Type type, const char *message) override;
 
 	virtual void addSysArchivesToSearchSet(Common::SearchSet &s, int priority) override;

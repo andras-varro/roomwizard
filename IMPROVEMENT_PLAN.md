@@ -65,56 +65,14 @@ hardware-acquisition one. Two caveats: as of that date it is still running **pre
 (`./setup-device.sh 192.168.50.53` has not been re-run, and an orphan `vnc_client` had survived a
 `stop` there), and `touch_raw` needs a human at the panel — SWEEP and INSET are finger measurements.
 
-### B3g. ScummVM's `rw_content_area` is invisible until you know it exists — open, confirmed 2026-08-01
+### B3g. ScummVM's `rw_content_area` is invisible until you know it exists — done 2026-08-03
 
-`rwFullContentArea()` (`roomwizard.cpp`) reads the key with `ConfMan.hasKey("rw_content_area")` and
-never writes it. ConfMan only persists keys that were *set*, so the line **does not appear** in any
-`scummvm.ini` — the option is undiscoverable from the device, and the first thing a user does is look
-in the file, not find it, and conclude it does not work. (Reported 2026-08-01, exactly that way.)
+See [Closed](#closed).
 
-`ConfMan.registerDefault()` does not help: registered defaults are not written to the file either.
+### B3h. ScummVM's config file location depends on the working directory — done 2026-08-03
 
-Fix options, cheapest first:
+See [Closed](#closed).
 
-- `ConfMan.setAndFlush("rw_content_area", "safe")` on first run when `!hasKey()`, so the key is
-  present and self-documenting from then on. One line, and it makes the file the discovery surface.
-- Expose it in the GUI. ScummVM's Options dialog is upstream code, so this means a backend-specific
-  tab — much more work. B3f solved the same "no UI" problem on the VNC side by shrinking that
-  screen's row pitch, which is not a move that is available here.
-
-Until then the reliable route is the environment variable `ROOMWIZARD_CONTENT_AREA=visible`, which
-takes precedence over the config and needs no file at all. It is documented in
-`scummvm-roomwizard/README.md`; the config key should not be documented as the *primary* route while
-this is open.
-
-### B3h. ScummVM's config file location depends on the working directory — open, confirmed 2026-08-01
-
-`OSystem_RoomWizard` does not override `getDefaultConfigFileName()`, so it inherits the base
-`OSystem` implementation — `common/system.cpp:245` returns the bare relative name `"scummvm.ini"`.
-`OSystem_POSIX` overrides that with an absolute `$HOME/.config/scummvm/…` path, but our backend
-derives from `ModularGraphicsBackend`, not from it. So the config file is resolved **against the
-process's current directory**, and RW09 now has three of them:
-
-| File | Written when | Contents |
-|---|---|---|
-| `/scummvm.ini` | launched by the boot init script — `/etc/init.d/roomwizard-app` does not `cd`, and `app_launcher` `execl()`s without `chdir()`, so the cwd is `/` | the real one; has the game list |
-| `/home/root/scummvm.ini` | someone ran `/opt/games/scummvm` from an SSH shell, where the cwd is `$HOME` | a stale partial copy |
-| `/opt/games/scummvm.ini` | ran with `cd /opt/games` first | was created empty on 2026-08-01 and deleted again |
-
-**Nothing in the repo copies or deploys an ini** — `scummvm-roomwizard/build-and-deploy.sh` ships no
-`.ini` at all. Each of those files is one ScummVM wrote for itself wherever it happened to be
-started. That answers "why do we copy our ini to the home folder": we do not, and neither does the
-launcher; ScummVM does, and the location is an accident of the invocation.
-
-Consequences beyond the confusion: settings do not follow the user between an SSH-launched run and a
-boot-launched one, save-game paths and the game list can differ per launch method, and editing "the"
-ini is a coin flip (which is how B3g surfaced).
-
-Fix: override `getDefaultConfigFileName()` in `OSystem_RoomWizard` to return one absolute path —
-`/opt/games/scummvm.ini` is the natural home, next to the binary, the icons and the game data, and it
-survives the `$HOME`-less environment the init script runs in. Then migrate the existing
-`/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
-it makes B3g's `setAndFlush` land somewhere predictable.
 
 ### B10. ScummVM `getMillis()` overflows at 24.85 days — done 2026-08-03
 
@@ -477,6 +435,46 @@ each is the only place that records *why* a subsystem is shaped the way it is, a
 least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
+
+**B3h + B3g. One config file, at one absolute path, with its options written into it** — done
+2026-08-03, both in `roomwizard.cpp`, built and deployed to RW09 together.
+
+**B3h** — `OSystem_RoomWizard` now overrides `getDefaultConfigFileName()` to return
+`/opt/games/scummvm.ini`. It had inherited the base `OSystem`'s bare relative `"scummvm.ini"`, which
+`Common::FSNode` resolves against the process's **current directory**; the init script does not `cd`
+and `app_launcher` `execl()`s without `chdir()`, so the location was an accident of the launch method
+and RW09 had accumulated three files. `OSystem_POSIX` avoids this with an absolute `$HOME/.config`
+path, but this backend derives from `ModularGraphicsBackend`, not from it. `/opt/games` is next to the
+binary, the icons and the game data, and does not depend on `$HOME` — which the init script's
+environment does not set.
+
+**B3g** — `initBackend()` writes `rw_content_area=safe` on first run behind `!ConfMan.hasKey()`, so
+the option appears in the file instead of being an undocumented reader. `setAndFlush`, not `set`,
+deliberately: `quit()` calls `exit(0)` and bypasses ScummVM's normal shutdown flush, so a plain `set()`
+can be lost on the one exit path this device actually takes. `ROOMWIZARD_CONTENT_AREA` still wins at
+read time and is deliberately *not* persisted — it is documented as a one-off override.
+
+**Verified on the device, with the negative control that matters — the same binary run from two
+different working directories:**
+
+| Check | Result |
+|---|---|
+| baseline mtimes of all three inis | recorded before either run |
+| run with `cd /` (the boot-launcher case) | `/scummvm.ini` and `/home/root/scummvm.ini` mtimes **unchanged**; only `/opt/games/scummvm.ini` advanced |
+| run with `cd /home/root` (the SSH case) | both strays still **unchanged** — this is the run that used to create `/home/root/scummvm.ini` |
+| `rw_content_area` in the file | present, `=safe`, alongside the migrated `extrapath` / `iconspath` / `browser_lastpath` / `gui_browser_show_hidden` |
+| second run's mtime | **unchanged** — the `!hasKey()` guard declines to rewrite on every launch, which is the behaviour that makes it safe to leave in `initBackend()` |
+
+The cwd runs are the control: without them, "the setting is in `/opt/games/scummvm.ini`" is equally
+consistent with the old code, because a `cd /opt/games` run would have put it there too. What proves
+the fix is the file that did **not** get written.
+
+`/scummvm.ini` was copied onto the new path first (so its settings survived) and both strays were then
+deleted. **The archived claim that `/scummvm.ini` was "the one with the real game list" was wrong** —
+dumped before touching it, it held seven lines of paths and GUI state and *no game entries at all*, as
+did the `$HOME` copy. Nothing on RW09 had a configured game, so the migration risked nothing; do not
+repeat the "real game list" claim. Docs corrected in `scummvm-roomwizard/README.md`, whose paragraph
+describing the cwd-relative behaviour as a device fact is now the fixed behaviour instead.
 
 **B10. ScummVM `getMillis()` overflowed at 24.85 days** — done 2026-08-03. The multiply now happens in
 `uint32`, so it wraps cleanly at 49.7 days instead of overflowing a signed 32-bit `time_t` at 24.85 —
@@ -1082,7 +1080,8 @@ button row and both keypads in coming from `SCREEN_SAFE_BOTTOM` at runtime (45/4
 51/47 on a full 480-row panel, i.e. unchanged there). Row 7 is **CONTENT** with a `TOGGLE`. The trap:
 the renderer keeps the flag in a static that only `vnc_renderer_set_remote_size()` reads, once per
 session, so **both** `SETTINGS_SAVE` sites must re-publish with `vnc_content_set_full()` or the row
-appears to do nothing until a restart. Rules in `vnc_client/CLAUDE.md`. ScummVM's half is **B3g**.
+appears to do nothing until a restart. Rules in `vnc_client/CLAUDE.md`. ScummVM's half was **B3g** —
+fixed 2026-08-03, by writing the key's default into `scummvm.ini` rather than by adding a UI.
 
 **B3i. HUD text sat in the safe area, wasting the band it was allowed to use** — done 2026-08-02.
 The inverse of B3e and easy to get backwards: **pressed → `SAFE`, only seen → `VISIBLE`.** Tetris'
@@ -1234,9 +1233,10 @@ pixels in the dead band (reported on the device as "~10 px unreachable top and b
 precision calibration). Both now confine the guest content rectangle *itself* to `SCREEN_SAFE_*`, and
 everything hit-tested in them (VNC settings/reconnect/exit gesture, ScummVM's overlay and gesture
 corners) is on the safe rect unconditionally. Each has an opt-out that moves only the picture, whose
-discoverability is **B3g** on the ScummVM side (**B3f** was the VNC side — fixed 2026-08-03, it is a
-row on the settings screen now) and whose config-file location is **B3h**. Rules in
-`vnc_client/CLAUDE.md` and `scummvm-roomwizard/CLAUDE.md`.
+discoverability was **B3g** on the ScummVM side (**B3f** was the VNC side — fixed 2026-08-03, it is a
+row on the settings screen now) and whose config-file location was **B3h**. Both ScummVM rows are
+fixed 2026-08-03: the key's default is written into a `scummvm.ini` that now lives at one absolute
+path. Rules in `vnc_client/CLAUDE.md` and `scummvm-roomwizard/CLAUDE.md`.
 
 ### B3e. Buttons positioned with hardcoded offsets lose rows to the touch inset — done 2026-08-02
 
@@ -1503,10 +1503,12 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into
    [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md). Serial console declined — see [Closed](#closed).
-8. Everything else as appetite allows: B3g/B3h, B12b/B12c, and all of C1–C8. **These are genuinely
+8. Everything else as appetite allows: B12b/B12c and all of C1–C8. **These are genuinely
    unranked**, not deprioritised. **The six open B13 rows and B14 are all done 2026-08-03** — see
    [Closed](#closed); two of them (B13b, B13i) had real gameplay impact and **B13i's prescribed fix
    was wrong**, which is the third time this plan's suggested fix turned out to be a hypothesis.
    **B10 is done 2026-08-03** — built, deployed and verified on RW09; the panel's own build stamp is
-   what proves the running binary is the new one. C1's `MAX_INPUT_DEVICES` stopgap is **spent**
+   what proves the running binary is the new one. **B3h and B3g are done the same day**, in one
+   ScummVM build, verified by running the same binary from two working directories and showing the
+   stray inis were not written. C1's `MAX_INPUT_DEVICES` stopgap is **spent**
    (resynced to 32), so what is left there is the shared evdev scanner itself, not a quick win.

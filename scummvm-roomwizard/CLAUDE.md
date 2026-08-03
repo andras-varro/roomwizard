@@ -136,6 +136,30 @@ defaults.
 **picture** out. It deliberately does not move the overlay or any gesture zone; an option that could
 strand the launcher's bottom button row is a footgun, not a feature.
 
+## The config file is at one absolute path
+
+`OSystem_RoomWizard::getDefaultConfigFileName()` returns **`/opt/games/scummvm.ini`**. The base
+`OSystem` returns the bare relative name `"scummvm.ini"`, which `Common::FSNode` resolves against the
+process's **current directory** — and the cwd differs per launch method, because the init script does
+not `cd` and `app_launcher` `execl()`s without `chdir()`. That gave RW09 three config files
+(`/scummvm.ini` from boot, `/home/root/scummvm.ini` from SSH, `/opt/games/scummvm.ini` from a `cd`),
+settings that did not follow the user between launch methods, and an "is the setting being ignored?"
+report that was really an edit to the wrong file (`../IMPROVEMENT_PLAN.md` B3h, fixed 2026-08-03).
+`OSystem_POSIX` solves this with an absolute `$HOME/.config` path, but this backend derives from
+`ModularGraphicsBackend`, not from it. `/opt/games` is the right home: next to the binary, the icons
+and the game data, writable, and independent of `$HOME`, which the init script does not set.
+
+**Backend defaults belong in `initBackend()`, and must be flushed.** ConfMan only persists keys that
+were actually *set* — `registerDefault()` is not written to the file either — so a key the backend
+merely reads with `hasKey()` never appears in `scummvm.ini`, and the option is undiscoverable from the
+device (`../IMPROVEMENT_PLAN.md` B3g). `initBackend()` therefore writes `rw_content_area=safe` on first
+run, behind `!ConfMan.hasKey()` so a user's `visible` is never overwritten. Use **`setAndFlush`**, not
+`set`: `quit()` calls `exit(0)` and bypasses ScummVM's normal shutdown flush, so a plain `set()` can be
+lost on the one exit path this device actually takes. `ConfMan` is loaded (`base/main.cpp:478`) well
+before `initBackend()` (`:572`), and both the read and the write go through
+`createConfigReadStream`/`createConfigWriteStream`, hence through the override above — so the default
+lands in the same one file.
+
 Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
 
 ## Audio
