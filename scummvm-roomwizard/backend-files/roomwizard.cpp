@@ -215,8 +215,16 @@ uint32 OSystem_RoomWizard::getMillis(bool skipRecord) {
 	timeval curTime;
 	gettimeofday(&curTime, 0);
 	
-	return (uint32)(((curTime.tv_sec - _startTime.tv_sec) * 1000) +
-	                ((curTime.tv_usec - _startTime.tv_usec) / 1000));
+	// The multiply must happen in uint32, not in 32-bit signed time_t: at
+	// 2147484 s of uptime (24.85 days) `sec_diff * 1000` overflows a signed
+	// int, which is UB and in practice goes negative.  A wall display is never
+	// power-cycled, so this is reachable, and it takes long-press detection,
+	// cursor timing, the touch-feedback fade and DefaultTimerManager with it.
+	// uint32 wraps cleanly at 49.7 days instead, which is what every
+	// getMillis() consumer already assumes (they all do `now - _last`).
+	// A negative usec delta wraps in the unsigned add and cancels correctly.
+	return (uint32)(curTime.tv_sec - _startTime.tv_sec) * 1000u +
+	       (uint32)((curTime.tv_usec - _startTime.tv_usec) / 1000);
 }
 
 void OSystem_RoomWizard::delayMillis(uint msecs) {
