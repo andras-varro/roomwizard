@@ -78,34 +78,26 @@ See [Closed](#closed).
 
 See [Closed](#closed).
 
-### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — partly done 2026-08-03
+### B12b. ScummVM: exiting a game quits ScummVM instead of returning to the launcher — done 2026-08-03
 
-**The fix shipped and the recorded diagnosis was wrong.** Archived in full at
-[B12b in Closed](#closed) — read it before touching `quit()`, which is *not* the cause and must keep
-its `exit(0)`.
-
-**What is left is verification, and it needs both a game and a human at the panel:**
-
-| Check | Status |
-|---|---|
-| the option is written to the config | **pass** — `gui_return_to_launcher_at_exit=true` in `/opt/games/scummvm.ini` after one run |
-| the route back to `app_launcher` survives | **pass** — the ScummVM launcher's `Quit` button is still on a decoded framebuffer capture, which is the control against the `kFeatureNoQuit` alternative that would have removed it |
-| leaving a game lands on the ScummVM launcher | **unverified** — and **not verifiable on RW09 as it stands** |
-
-The last row is blocked on something the plan had not recorded: **there is no ScummVM game data on the
-device at all.** `/opt/games` holds the binary, the theme, the icon pack and the vkeybd pack and no
-game directory; `df` shows nothing mounted that carries one; and the config file has no game entries.
-So the game list is legitimately empty, "start a game and exit it" cannot be done, and neither can
-B12c's KQ3 audio check. Installing a game is the prerequisite for both, and adding one needs the panel
-(`Add Game...` is a touch file browser). Once a game exists, the check is one tap: start it, leave it,
-and the ScummVM launcher — not `app_launcher` — must appear.
+See [Closed](#closed). **Confirmed on the panel** with King's Quest 1: leaving the game returns to the
+ScummVM main window. Read the Closed entry before touching `quit()` — it is *not* the cause and must
+keep its `exit(0)`, and `kFeatureNoQuit` is a trap.
 
 ### B12c. ScummVM: OPL tempo unverified after the mono-mixer fix — open
 
 Open verification task — play the KQ3 intro on the device and compare against a reference
 recording. The mono mixer and the `SOUND_PCM_READ_RATE` read-back were supposed to fix half-speed
-OPL; nobody confirmed it on hardware. **Blocked on the same thing as B12b's last row: no game data is
-installed on RW09** (see above), so there is no KQ3 to play.
+OPL; nobody confirmed it on hardware.
+
+**No longer blocked on "there is no game data", but not yet satisfiable either.** RW09 had no game data
+at all when this was measured on 2026-08-03; a game was installed the same day — **King's Quest 1
+(CoCo3), `agi` engine**, data under `/home/root/.local/share/scummvm/`. That is the wrong target for
+this check: KQ3 is `sci`, and the CoCo3 platform's AGI sound is not the AdLib/OPL path this item is
+about — the installed target's `guioptions` lists `sndNoSpeech hercGreen hercAmber cga ega amiga 2gs
+atari macintosh`, with no AdLib among them. So B12c still needs an OPL-driven target added. What *is*
+now settled is the prerequisite that blocked everything: adding a game works, via `Add Game...` (a
+touch file browser), and the resulting entry persists to `/opt/games/scummvm.ini`.
 
 ### B13. Game-specific bugs — done 2026-08-03
 
@@ -128,7 +120,7 @@ wrong. Read it before touching `gameover_update()`.
 | Game | Status |
 |---|---|
 | tetris, snake, frogger, samegame, brick_breaker, pong | pass — confirmed on the panel 2026-08-02, see the archived table for what each one exercised |
-| platformer | **unverified** — needs a **USB keyboard or gamepad** attached. B13k made it controller-only, so B13a's `BTN_ID_BACK` exit cannot be checked without one. Also confirm `RESTART`/`EXIT` respond to touch. |
+| platformer | **playable with a gamepad — confirmed 2026-08-03.** A controller was attached and platformer, pong and frogger were all reported working, which clears the blocker this row had (B13k made platformer controller-only, so nothing in it could be exercised without one). The same session confirmed **B2**: gamepad buttons no longer latch. What is **not** separately confirmed is the narrow thing B22 is about — that the game-over screen paints *without* needing a tap, and that its `RESTART`/`EXIT` respond to touch. Ask before closing this row. |
 
 Not script-verifiable past the first screen (no `/dev/uinput` — see C6), so this row needs a human at
 the panel. `RESET SCORES` on an empty table is the cheap way to reach the name-entry keyboard: it
@@ -482,7 +474,8 @@ least one deliberate non-fix that reads as an oversight without the reasoning.
 ### Done — one line each
 
 **B12b. Leaving a game terminated ScummVM — and both the recorded cause and the prescribed fix were
-wrong** — code fix done 2026-08-03 (behavioural verification is blocked; see the Phase 1 entry).
+wrong** — done 2026-08-03, **confirmed on the panel** with King's Quest 1: leaving the game returns to
+the ScummVM main window, not to `app_launcher`.
 
 The entry said `OSystem_RoomWizard::quit()` "calls `exit()` unconditionally rather than setting a flag",
 and prescribed comparing with "the SDL backend's `_quit` flag + launcher loop". Three things are wrong
@@ -511,6 +504,13 @@ the `Quit` button on both the ScummVM launcher (`gui/launcher.cpp:264`) and the 
 the native games, so that would trap the user inside ScummVM — a worse bug than the one being fixed.
 The option chosen leaves both Quit buttons alone, and a framebuffer capture after the fix showing the
 launcher's `Quit` still present is the control for exactly that.
+
+**Verified on the panel the same day, and by a real session rather than a scripted one.** King's Quest 1
+was installed through `Add Game...`, played, and left — and it returned to the ScummVM main window. That
+single session also confirmed **B3h and B3g** end to end from a direction my own test could not reach:
+the new game's `[kq1-coco3]` entry persisted into `/opt/games/scummvm.ini` (not into a cwd-dependent
+stray, and neither stray reappeared), and `gui_return_to_launcher_at_exit=true` was read back *out* of
+that same file to produce the behaviour. Three items, one tap sequence.
 
 **C9. The ScummVM binary is not gated for sdiv/udiv, and gating it stripped would cry wolf** — see
 [C9 in Phase 4](#c9-gate-the-scummvm-binary-too--and-gate-it-unstripped--open-measured-2026-08-03).
@@ -583,8 +583,13 @@ warnings, `check-arm-safe.sh` at a hard zero across 31 ARM binaries, the three h
 (`touch_calib_test`, `gamepad_latch_test`, `framebuffer_bpp_test`) passing, and deployed to RW09 with
 18/18 md5 verified. **Verification stops at the first screen** — no `/dev/uinput`, so all six games
 were SSH-launched, confirmed alive at 32bpp with a decoded `/dev/fb0`, and everything past the welcome
-screen still needs a human at the panel (see C6). The gameplay effects below are *reasoned*, not
-observed.
+screen needs a human at the panel (see C6). **Partly satisfied 2026-08-03:** with a gamepad attached,
+**platformer, pong and frogger were played and reported working**, which also confirmed B2 (buttons no
+longer latch). The gameplay effects below are still *reasoned* rather than observed for the three games
+nobody has driven into their changed states — **brick_breaker** (levels 5+ grey striped bricks, and a
+SPEED UP → SLOW DOWN sequence that must be monotone, B13b/B13h), **tetris** (I-piece wall and floor
+kicks, B13e) and **snake** (first food pickup, no stray cell at the grid origin, B13f) — plus
+**samegame**'s MENU/EXIT during the pre-game-over pause (B14) and taps just outside its grid.
 
 - **B13b** — `brick_breaker.c`: indestructible bricks stored `health = -1` and five other sites tested
   `health <= 0`, so from level 5 up they were invisible **and** had no collision. Both their bounce
@@ -1022,7 +1027,9 @@ Note for anyone re-running this: because the pin works, the game does **not** co
 capture decodes at `--bpp 32` — run `fbset | grep geometry` and believe it rather than assuming a
 depth from which app you launched.
 
-**B2. Gamepad buttons latched on and were never released** — done 2026-08-03.
+**B2. Gamepad buttons latched on and were never released** — done 2026-08-03, **confirmed on the panel
+the same day with a real gamepad attached: the buttons no longer stick**, across platformer, pong and
+frogger.
 `poll_touch()` (virtual touch regions) and the analog-stick→D-pad merge both set `.held = true` on the
 caller's `InputState`, and **nothing anywhere cleared it** — `gamepad_poll` deliberately didn't, and no
 caller did. One tap on a virtual left pad ran the player left forever; a `.pressed` reader saw its
@@ -1548,10 +1555,12 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    original 16bpp-after-a-VNC-session failure reproduced and shown fixed. **B2 (latched `.held`) is
    done the same day** and now has a host-side regression (`tests/gamepad_latch_test.c`), which also
    settled that this bug *was* testable without a device — the touch coordinate is a plain argument and
-   evdev is just `read(2)`. **B13g followed it immediately, as a deletion** rather than the reorder its
+   evdev is just `read(2)`. **B2 is now panel-confirmed too** (2026-08-03, gamepad attached — buttons no
+   longer stick). **B13g followed it immediately, as a deletion** rather than the reorder its
    one-line row implied, so `gamepad_set_touch_regions()` now has zero callers.
-   **Outstanding first:** B22's panel table has **one** row unconfirmed — platformer, which needs a
-   USB keyboard or gamepad attached. ← **next, and it needs a human at the panel**
+   **B22's platformer row is no longer blocked**: a gamepad was attached and platformer, pong and
+   frogger all played correctly. Only the narrow game-over-screen behaviour that row is really about is
+   still unconfirmed. ← **the remaining panel work is brick_breaker, tetris and samegame**
    **B7 and B9 are done** (2026-08-02) — they were the available quick wins. Doing them turned up
    three new items, all confirmed on the panel the same day: **B23** (backlight slider previewed to a
    sysfs node that does not exist — **done 2026-08-03**), **B24** (no game asserted bpp, which made B1
