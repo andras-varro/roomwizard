@@ -1420,6 +1420,23 @@ Device paths worth knowing:
 /opt/roomwizard/default-app  boot target
 ```
 
+**Seeing what is running: use `ps`, never `ps w`.** This busybox (v1.31.1) treats `ps w` as
+"processes with a controlling TTY", which on RW09 is **3 lines against plain `ps`'s 51** — the two
+gettys and the header. An app started at boot or by the launcher has no TTY, so `ps w` shows nothing
+and the process looks absent. Measured 2026-08-03, and it is why a surviving `vnc_client` took a
+session to find (`IMPROVEMENT_PLAN.md` B25). What works:
+
+| Want | Command |
+|---|---|
+| everything | `ps` (shows `comm`, i.e. the **executable's** basename) |
+| the RoomWizard apps, with exe and cmdline | `/etc/init.d/roomwizard-app status` |
+| find one by name | `pidof <basename>` — matches `comm` **or** `basename(argv[0])` |
+| what a PID really is | `readlink /proc/<pid>/exe` |
+
+`comm` comes from the file being executed and **not** from `argv[0]`, so it is trustworthy even when a
+parent sets a display title: `killall`/`pidof` match a process whose `cmdline` reads `VNC Client`.
+`/proc/<pid>/cmdline` is the one that can lie about identity.
+
 ---
 
 ## 6. Building for this device

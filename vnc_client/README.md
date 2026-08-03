@@ -431,31 +431,30 @@ Built as static libraries by `build-deps.sh` using the ARM cross-compiler.
 
 ## Auto-Start on Boot
 
-Create `/etc/init.d/vnc-client`:
+**Do not write a second init script.** Boot is owned by `/etc/init.d/roomwizard-app`, which respawns
+whatever `/opt/roomwizard/default-app` points at — so a private `S99vnc-client` gives you two things
+starting apps and two different ideas of how to stop them, which is the defect the project spent a
+session chasing (`../IMPROVEMENT_PLAN.md` B20/B25). The supported route is one command:
 
 ```bash
-#!/bin/sh
-### BEGIN INIT INFO
-# Provides:          vnc-client
-# Required-Start:    $network
-# Required-Stop:
-# Default-Start:     5
-# Default-Stop:      0 1 6
-### END INIT INFO
-
-case "$1" in
-    start)
-        /opt/vnc_client/vnc_client &
-        ;;
-    stop)
-        killall vnc_client
-        ;;
-esac
+./build-and-deploy.sh <ip> set-default        # boot straight into the VNC client
 ```
 
+To go back to the launcher grid:
+
 ```bash
-chmod +x /etc/init.d/vnc-client
-ln -s /etc/init.d/vnc-client /etc/rc5.d/S99vnc-client
+ssh root@<ip> 'echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app'
+ssh root@<ip> '/etc/init.d/roomwizard-app restart'
+```
+
+Stopping and starting by hand, and seeing what is actually running:
+
+```bash
+ssh root@<ip> '/etc/init.d/roomwizard-app stop'      # matches on the executable, so it
+                                                     # catches a client the launcher started
+ssh root@<ip> '/etc/init.d/roomwizard-app start'
+ssh root@<ip> '/etc/init.d/roomwizard-app status'    # use this, not `ps w` — see
+                                                     # ../SYSTEM_ANALYSIS.md section 5.3
 ```
 
 ---

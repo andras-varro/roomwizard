@@ -128,6 +128,14 @@ Two ordering rules in there are load-bearing and have both been violated in ship
   are now deleted outright (B13g) and nothing in the tree registers any, so this rule currently has
   no live example — get it right in the app that revives it.
 
+**`app_launcher` launches children with `argv[0]` = `exec_path`, not the manifest's `name=`.** The
+display name is for the grid, not for the process table: passing it made `/proc/<pid>/cmdline` read
+`VNC Client` while the binary was `/opt/vnc_client/vnc_client`, and since busybox `ps w` shows nothing
+without a TTY, that cmdline was the only handle left on a launcher-started app — it cost a session and
+a misdiagnosis (`../IMPROVEMENT_PLAN.md` B25). Do not restore the pretty name. Killing was never the
+problem: `comm` comes from the file being executed, so it always read `vnc_client`
+(`../SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`).
+
 ## Pixel format — pin it, and never assume it
 
 `/dev/fb0`'s depth is **global mutable state**: it is whatever the last process to run set it to.

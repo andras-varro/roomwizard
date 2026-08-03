@@ -184,16 +184,20 @@ if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; th
     [[ "$confirm" != "y" ]] && exit 1
 fi
 
-# Stop running launcher (avoids "Text file busy" on scp)
-info "Stopping running launcher (if any)..."
-ssh "$DEVICE" bash <<'STOP'
-# Kill respawn wrapper first, then the app itself
-killall -9 respawn.sh   2>/dev/null || true
-killall -9 app_launcher 2>/dev/null || true
-rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
-# Brief pause to ensure file handles are released
-sleep 1
-STOP
+# Stop whatever is running (avoids "Text file busy" on scp).
+#
+# There is exactly one stop implementation and it lives on the device, in
+# /etc/init.d/roomwizard-app — it matches processes on their executable, so it
+# also catches an app that app_launcher started.  Do NOT re-add a `killall` here:
+# a per-script copy only knows the basenames whoever wrote it thought of, which
+# is how a vnc_client survived a full deploy and repainted over the launcher
+# (../IMPROVEMENT_PLAN.md B20, B25).
+info "Stopping running apps (device init script)..."
+ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
+    /etc/init.d/roomwizard-app stop
+else
+    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+fi' || warn "stop reported a failure - a surviving process may hold the binaries"
 ok "Launcher stopped"
 
 # Ensure target directory exists

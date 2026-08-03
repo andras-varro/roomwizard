@@ -576,19 +576,27 @@ static void launch_app(Launcher *l, int index,
     pid_t pid = fork();
     if (pid == 0) {
         /* ── Child process ────────────────────────────────────────── */
+        /* argv[0] is the executable path, NOT app->name.  Passing the manifest's
+         * display name made /proc/<pid>/cmdline read "VNC Client" while the
+         * binary was /opt/vnc_client/vnc_client — which cost a session to
+         * diagnose, because busybox `ps w` shows only processes with a TTY and
+         * the cmdline is then the only thing left to walk.  (`comm` was always
+         * right: the kernel takes it from the file being executed.)  Nothing
+         * reads argv[0] except the usage text of three CLI tools.
+         * ../IMPROVEMENT_PLAN.md B25. */
         switch (app->args) {
         case ARG_NONE:
-            execl(app->exec_path, app->name, NULL);
+            execl(app->exec_path, app->exec_path, NULL);
             break;
         case ARG_FB:
-            execl(app->exec_path, app->name, fb_dev, NULL);
+            execl(app->exec_path, app->exec_path, fb_dev, NULL);
             break;
         case ARG_TOUCH:
-            execl(app->exec_path, app->name, touch_dev, NULL);
+            execl(app->exec_path, app->exec_path, touch_dev, NULL);
             break;
         case ARG_FB_TOUCH:
         default:
-            execl(app->exec_path, app->name, fb_dev, touch_dev, NULL);
+            execl(app->exec_path, app->exec_path, fb_dev, touch_dev, NULL);
             break;
         }
         perror("execl failed");

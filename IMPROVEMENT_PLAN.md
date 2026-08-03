@@ -120,19 +120,6 @@ survives the `$HOME`-less environment the init script runs in. Then migrate the 
 `/scummvm.ini` onto it once (it is the one with the real game list) and delete the strays. Cheap, and
 it makes B3g's `setAndFlush` land somewhere predictable.
 
-### B25. `vnc_client` sets a process title the deploy scripts cannot kill — open, confirmed 2026-08-02
-
-`vnc_client` presents its `cmdline` as `VNC Client` (with a space), so `killall vnc_client` matches
-nothing. On RW09 2026-08-02 an instance survived `deploy-all.sh`, two `/etc/init.d/roomwizard-app
-stop` calls and a service restart, holding `/dev/fb0` at 16bpp and repainting over every app that
-tried to start — `app_launcher` came up and could not keep the screen. It had to be killed by PID.
-Diagnosing it is also harder than it should be: busybox `ps w` lists only processes with a TTY, so
-the survivor is invisible unless you walk `/proc/*/cmdline`.
-
-This is the concrete failure B20 predicts ("each kills a different basename") and it argues for
-raising B20's priority: the shared `/etc/init.d/roomwizard-app stop` path must match on the
-*executable*, not a title the process chose.
-
 ### B10. ScummVM `getMillis()` overflows at 24.85 days — open
 
 `scummvm-roomwizard/backend-files/roomwizard.cpp:184`. Correctly baselined to start time, but
@@ -261,21 +248,6 @@ the failure is invisible.
   they work only because `deploy-all.sh:156` wraps them in a subshell `cd`.
 - **`clean.sh`** has no shebang, no `set -e`, no `cd` — run from the repo root its
   `find . -name '*.o' -delete` wipes `native_apps/build/`, `usb_host/modules/` and the ScummVM tree.
-
-### B20. Three component scripts hand-roll the init script's `stop` logic — open, drift confirmed 2026-08-02
-
-`native_apps:155`, `vnc_client:89`, `scummvm-roomwizard:557` all duplicate
-`killall -9 respawn.sh` + `rm -f …pid`, which is exactly what `do_stop()` exists for — and the
-copies have already drifted (each kills a different basename). `CLAUDE.md` says component scripts
-must not do this. This is the deploy-script half of B6, which was left open when B6 shipped.
-
-**The drift is no longer hypothetical — see B25.** A `vnc_client` whose process title is `VNC Client`
-survived a full `deploy-all.sh` plus two `stop` calls and had to be killed by PID, meanwhile holding
-the framebuffer at 16bpp and repainting over `app_launcher`. Consolidating on one `stop` is necessary
-but **not sufficient**: whatever that single implementation matches on must be the executable, not a
-title the process chose for itself.
-
-**Fix:** replace with `ssh "$DEVICE" '/etc/init.d/roomwizard-app stop'`, end with `restart`.
 
 ---
 
@@ -586,6 +558,55 @@ least one deliberate non-fix that reads as an oversight without the reasoning.
 
 ### Done — one line each
 
+**B25. A `vnc_client` no `stop` path could kill — done 2026-08-03, reproduced and verified on RW09
+the same day. The recorded cause was wrong, and the fix is not where the entry said it was.**
+
+What was recorded (2026-08-02): `vnc_client` "sets a process title the deploy scripts cannot kill",
+so `killall vnc_client` matches nothing. Measured on RW09 2026-08-03, **every part of that mechanism
+is false**:
+
+| Claim | Measured |
+|---|---|
+| `vnc_client` sets its own title | It does not — no `prctl`, no `argv[0]` write anywhere in the component. **`app_launcher` sets it**, `execl(app->exec_path, app->name, …)`, passing the manifest's *display* name |
+| `cmdline` being `VNC Client` defeats `killall` | It does not. The kernel takes `comm` from the **file** being executed, not from `argv[0]`, so `comm` was always `vnc_client` — and busybox matches `comm` **or** `basename(argv[0])`. `pidof vnc_client` → the PID; `killall vnc_client` → rc=0, process dead |
+
+The real mechanism was in `do_stop()` all along: after the pidfile and `respawn.sh`, it killed
+`basename(default-app)` — which is `app_launcher` — **and nothing else**. The process holding
+`/dev/fb0` is normally the app the launcher *started*: a grandchild whose basename appears in no
+config file, so no name-based rule could ever have found it. Reproduced against the pre-fix script:
+`stop` reported success (**rc=0**), `app_launcher` died, `vnc_client` survived, panel left at
+`geometry 800 480 800 480 16`. That is the reported failure exactly, and the title was a red herring
+that cost a session.
+
+Fixed by making the executable the identity. `roomwizard-app-init.sh` gained `app_pids()`, which
+walks `/proc/*/exe` and matches the three directories components deploy into (`/opt/games`,
+`/opt/roomwizard`, `/opt/vnc_client`); `do_stop()` TERMs that set, waits up to 3 s, `KILL`s the
+remainder and **returns non-zero if anything is still alive** — the bare `exit 0` at the bottom of the
+script was itself part of the silence. Verified: TERM alone cleared two `vnc_client`s (one of them the
+survivor of the old stop) plus the launcher, rc=0, and `start` brought the launcher back at 32bpp.
+
+Two things came off the same measurement:
+
+- **The title is a diagnosis problem, not a kill problem**, and it is real: busybox `ps w` lists only
+  processes with a TTY — 3 lines against `ps`'s 51 on RW09 — so a launcher-started app is invisible to
+  it, and `cmdline` was then the one thing left to walk. `app_launcher` now passes `exec_path` as
+  `argv[0]`, so `cmdline` names the binary, and `do_status` prints exe **and** cmdline per app process.
+  Nothing read `argv[0]` except the usage text of three CLI tools.
+- **Don't reason about busybox from memory.** `killall` was blamed for two sessions on the strength of
+  a plausible story about `cmdline`. One `pidof` on the device would have settled it.
+
+**B20. Three component scripts hand-rolled the init script's `stop` logic** — done 2026-08-03,
+together with B25, which is the failure it predicted. `native_apps`, `vnc_client` and
+`scummvm-roomwizard` each carried their own `killall -9` list (`respawn.sh` + `app_launcher` + their
+own binary, so three different lists), which could only ever kill basenames whoever wrote the copy
+thought of. All three now call `ssh "$DEVICE" '/etc/init.d/roomwizard-app stop'` behind an `[ -x ]`
+guard, with `|| warn` so a failed stop is reported rather than aborting a `set -e` deploy mid-way, and
+a comment saying not to re-add a `killall`. The trailing `start` calls were already there and are
+correct after a real stop. Exercised for real on RW09 by a `native_apps` deploy and a `vnc_client`
+deploy; the ScummVM copy is textually identical but was not run (multi-minute build). **Note that
+changing `do_stop()` means re-running `setup-device.sh <ip>` — that is the only thing that pushes
+`/etc/init.d/roomwizard-app`, so until it runs, a device keeps the old stop behaviour.**
+
 **B1. 16bpp framebuffer heap overflow** — done 2026-08-03, deployed and verified on RW09 the same day.
 The back buffer is sized `width * height * bytes_per_pixel`, but every drawing primitive wrote a
 `uint32_t` unconditionally, so at 16bpp it overran the allocation **2×**. Reachable, not theoretical —
@@ -822,7 +843,7 @@ which is the exact wedge the item describes. Both branches verified on RW09.
 "already up" signal — so the `||` fired precisely then and two apps fought over `/dev/fb0`. Guarded on
 `pidof -x respawn.sh`, **before** the heredoc, which also fixes an unrecorded hazard: rewriting a
 script file that a running `sh` still has open can make that `sh` misparse the rest of it. The
-deploy-script half is still open as **B20**.
+deploy-script half shipped later as **B20** (2026-08-03).
 
 **B8. Non-atomic config/highscore saves** — done 2026-08-02.
 `file_write_atomic_open()` / `_commit()` / `_abort()`: temp file, `fsync`, `rename`, then **`fsync` the
@@ -1176,15 +1197,18 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    **B7 and B9 are done** (2026-08-02) — they were the available quick wins. Doing them turned up
    three new items, all confirmed on the panel the same day: **B23** (backlight slider previewed to a
    sysfs node that does not exist — **done 2026-08-03**), **B24** (no game asserted bpp, which made B1
-   reachable from a bare SSH launch — done with it) and **B25** (a `vnc_client` the deploy scripts
-   cannot kill, which is B20's predicted failure actually happening). **B25 is the cheap one left** in
-   this class, and it was hit again on 2026-08-03 while reproducing B24: `killall vnc_client` still
-   matches nothing, and the process has to be found by `readlink /proc/*/exe`.
+   reachable from a bare SSH launch — done with it) and **B25** (a `vnc_client` no `stop` path could
+   kill, which is B20's predicted failure actually happening). **B25 and B20 are both done 2026-08-03**,
+   reproduced and verified on RW09 — and B25's recorded cause turned out to be wrong in every part.
+   It was never the process title: `killall vnc_client` matches fine, because `comm` comes from the
+   executable and not from `argv[0]`. `do_stop()` was killing `basename(default-app)`, i.e.
+   `app_launcher`, and never the app the launcher had started. See the Closed entry before quoting
+   anything about this bug.
 3. **The per-app layout pass** — done 2026-08-02 (B3e, B3i, B3j, B3k, B13d, B13k). It also
    established that **`touch_inject` cannot work on this device at all** (no `CONFIG_INPUT_UINPUT`),
    which is why C6 had to be rewritten around framebuffer capture instead.
-4. **B15** — stop the scripts from being able to hurt you. B17–B20 are the rest of Phase 2 and are
-   cheaper; take them in the same pass if the appetite is there.
+4. **B15** — stop the scripts from being able to hurt you. B17–B19 are the rest of Phase 2 and are
+   cheaper; take them in the same pass if the appetite is there. **B20 is done** (2026-08-03, with B25).
 5. **F1 (ALSA)** — biggest user-visible improvement in the project.
 6. **Deep clean the device** (`--deep-clean`), then **F2 (DSS overlays)**.
 7. **Open the unit and inspect the hardware** — done 2026-07-30. Full teardown, folded into

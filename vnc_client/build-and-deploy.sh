@@ -96,15 +96,18 @@ ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
     || err "Cannot reach $DEVICE — check IP and SSH key"
 ok "SSH OK"
 
-# Stop running launcher/respawn (avoids "Text file busy")
-info "Stopping running launcher and VNC client (if any)..."
-ssh "$DEVICE" bash <<'STOP'
-killall -9 respawn.sh   2>/dev/null || true
-killall -9 app_launcher 2>/dev/null || true
-killall -9 vnc_client   2>/dev/null || true
-rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
-sleep 1
-STOP
+# Stop whatever is running (avoids "Text file busy").
+#
+# One stop implementation, on the device, matching on the executable — it catches
+# a vnc_client the launcher started, which the `killall vnc_client` that used to
+# be here could not reliably do (../IMPROVEMENT_PLAN.md B20, B25).  Do not re-add
+# a killall here.
+info "Stopping running apps (device init script)..."
+ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
+    /etc/init.d/roomwizard-app stop
+else
+    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+fi' || warn "stop reported a failure - a surviving process may hold the binary"
 ok "Stopped"
 
 # Ensure target directory exists

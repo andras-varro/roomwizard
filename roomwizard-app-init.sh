@@ -37,6 +37,44 @@ read_config() {
     fi
 }
 
+# Every component deploys its binaries into one of these directories.  A running
+# process is one of ours if /proc/<pid>/exe resolves inside one of them.
+APP_DIRS="/opt/games /opt/roomwizard /opt/vnc_client"
+
+# Print the PID of every running RoomWizard app, matched on its *executable*.
+#
+# Matching on a name cannot do this job, for two separate reasons:
+#
+#   1. This script only knows the *configured* app, which is app_launcher.  The
+#      process actually holding /dev/fb0 is usually the app the launcher started
+#      - a grandchild whose basename appears nowhere in any config file.  That is
+#      why a vnc_client survived a full deploy plus two `stop` calls on
+#      2026-08-02, kept the panel at 16bpp and repainted over everything that
+#      tried to start after it (B25).
+#   2. A parent chooses its child's argv[0].  app_launcher used to pass the
+#      manifest's display name, so /proc/<pid>/cmdline read "VNC Client" while
+#      the binary was /opt/vnc_client/vnc_client; it passes the exec path now, but
+#      nothing stops the next parent from doing it again.  (`comm` survives that
+#      either way - the kernel takes it from the file being executed, not from
+#      argv[0] - so `killall vnc_client` does in fact match, measured on RW09
+#      2026-08-03.  A chosen title is a diagnosis problem, not a kill problem:
+#      busybox `ps w` shows only processes with a TTY, so a launcher-started app
+#      is invisible to it and /proc is all you have left.)
+#
+# The exe link is the only identity that is neither chosen by the process nor
+# limited to the configured app.
+app_pids() {
+    for _p in /proc/[0-9]*; do
+        _exe=$(readlink "$_p/exe" 2>/dev/null)
+        [ -n "$_exe" ] || continue
+        for _d in $APP_DIRS; do
+            case "$_exe" in
+                "$_d"/*) echo "${_p#/proc/}"; break ;;
+            esac
+        done
+    done
+}
+
 do_start() {
     echo "Starting $DESC..."
 
@@ -275,17 +313,35 @@ do_stop() {
     fi
     rm -f "$RESPAWN_SCRIPT"
 
-    # Safety net: kill any orphaned child app that survived the wrapper.
-    # Read the configured binary name and killall by basename.
-    read_config
-    if [ -n "$APP_EXEC" ]; then
-        APP_BASE=$(basename "$APP_EXEC")
-        if pidof "$APP_BASE" >/dev/null 2>&1; then
-            echo "  Killing orphaned $APP_BASE..."
-            killall "$APP_BASE" 2>/dev/null || true
+    # Safety net: kill every app that survived the wrapper, matched on its
+    # executable - so an app the launcher started is caught too.  This used to
+    # `killall $(basename default-app)`, i.e. app_launcher and nothing else, and
+    # the process still holding the framebuffer was its child (B25/B20).
+    PIDS=$(app_pids)
+    if [ -n "$PIDS" ]; then
+        echo "  Terminating app processes:" $PIDS
+        kill $PIDS 2>/dev/null || true
+        _tries=0
+        while [ "$_tries" -lt 3 ]; do
             sleep 1
-            killall -9 "$APP_BASE" 2>/dev/null || true
+            _tries=$((_tries + 1))
+            [ -z "$(app_pids)" ] && break
+        done
+        PIDS=$(app_pids)
+        if [ -n "$PIDS" ]; then
+            echo "  Force-killing:" $PIDS
+            kill -9 $PIDS 2>/dev/null || true
+            sleep 1
         fi
+    fi
+
+    PIDS=$(app_pids)
+    if [ -n "$PIDS" ]; then
+        echo "  WARNING: app processes still running:" $PIDS
+        for _pid in $PIDS; do
+            echo "    PID $_pid  $(readlink /proc/$_pid/exe 2>/dev/null)"
+        done
+        return 1
     fi
 
     echo "$DESC stopped"
@@ -305,6 +361,19 @@ do_status() {
     else
         echo "Status: not running"
     fi
+
+    # List what is actually running, by executable.  `ps w` on this busybox
+    # shows only processes with a TTY (3 lines out of 51 on RW09), so an app
+    # started by the launcher is invisible to it - this is the report to read.
+    PIDS=$(app_pids)
+    if [ -n "$PIDS" ]; then
+        echo "App processes:"
+        for _pid in $PIDS; do
+            echo "  PID $_pid  $(readlink /proc/$_pid/exe 2>/dev/null)  [cmdline: $(tr '\0' ' ' < /proc/$_pid/cmdline 2>/dev/null)]"
+        done
+    else
+        echo "App processes: none"
+    fi
 }
 
 case "$1" in
@@ -315,4 +384,7 @@ case "$1" in
     *)  echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac
 
-exit 0
+# Propagate the action's status.  `stop` returning non-zero is the one signal a
+# deploy script has that something is still holding the binaries it is about to
+# overwrite - swallowing it with a bare `exit 0` is how B25 stayed silent.
+exit $?

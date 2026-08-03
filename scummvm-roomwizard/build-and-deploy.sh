@@ -551,15 +551,17 @@ deploy_to_device() {
     # Ensure target directory exists
     ssh "$DEVICE" "mkdir -p $DEVICE_PATH /var/log/roomwizard"
     
-    # Stop running launcher/respawn (avoids "Text file busy")
-    log_info "Stopping running launcher (if any)..."
-    ssh "$DEVICE" bash <<'STOP'
-killall -9 respawn.sh   2>/dev/null || true
-killall -9 app_launcher 2>/dev/null || true
-killall -9 scummvm      2>/dev/null || true
-rm -f /opt/roomwizard/respawn.sh /var/run/roomwizard-app.pid
-sleep 1
-STOP
+    # Stop whatever is running (avoids "Text file busy").
+    #
+    # One stop implementation, on the device, matching on the executable — see
+    # ../IMPROVEMENT_PLAN.md B20/B25.  Do not re-add a killall here: this copy
+    # used to kill `scummvm` and `app_launcher` by name and nothing else.
+    log_info "Stopping running apps (device init script)..."
+    ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
+    /etc/init.d/roomwizard-app stop
+else
+    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+fi' || log_warning "stop reported a failure - a surviving process may hold the binary"
     
     # Copy binary to device
     log_info "Copying binary to device..."

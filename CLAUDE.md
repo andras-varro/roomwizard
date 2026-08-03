@@ -297,6 +297,20 @@ duplicate it. `deploy-all.sh` auto-discovers components (any subdir with a
 `build-and-deploy.sh`), always runs `native_apps` first, then sets `app_launcher` as
 the default boot app.
 
+**Stopping what is running belongs to the init script too, and it matches on the executable.**
+`/etc/init.d/roomwizard-app stop` is the only implementation; the three component scripts call it and
+must not carry a `killall` of their own. The reason is not tidiness: a name-based rule cannot see the
+app that `app_launcher` *started*, and that grandchild is normally the process holding `/dev/fb0`. Its
+basename is in no config file, so `do_stop()`'s old `killall $(basename default-app)` only ever killed
+`app_launcher` — which is how a `vnc_client` survived a full `deploy-all.sh` plus two `stop` calls,
+held the panel at 16bpp and repainted over every app that tried to start (`IMPROVEMENT_PLAN.md`
+B25/B20). `app_pids()` walks `/proc/*/exe` against the three deploy directories instead, because the
+exe link is the only identity neither chosen by the process nor limited to the configured app.
+Two consequences: **`setup-device.sh <ip>` is what pushes that script**, so a `do_stop()` change does
+not reach a device until it is re-run; and to see what is running, use
+`/etc/init.d/roomwizard-app status` — `ps w` on this busybox is a trap, see
+`SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`.
+
 **App launcher + manifests:** The boot init script reads `/opt/roomwizard/default-app`
 and respawns that binary whenever it exits (so exiting a game returns to the launcher).
 `app_launcher` scans `/opt/roomwizard/apps/*.app` manifests (INI: `name=`, `exec=`,
