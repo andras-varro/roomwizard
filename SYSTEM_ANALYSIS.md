@@ -1092,8 +1092,25 @@ if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
     # only perform application level checks when the state file is there
 ```
 
-`setup-device.sh <ip>` handles this: creates `/var/watchdog_test`, comments out the cron job, and
-backs the original crontab up to `/var/crontab.steelcase.bak`.
+**`disable-steelcase.sh` handles this**, not `setup-device.sh` directly: it creates
+`/var/watchdog_test` and **replaces the whole crontab** with the two cleanup jobs worth keeping
+(`rotatelogfiles.sh`, `cleanupfiles.sh`). It does *not* comment the line out and does *not* back the
+original up — an earlier revision of this section claimed both. Commenting out was the old approach
+and was abandoned because it re-appended its own header on every run and inflated the crontab to
+~19 KB; the factory crontab's content is recoverable from the partition images under `partitions/`
+if it is ever wanted.
+
+Two consequences of *where* that script runs, both of which have bitten:
+
+- `setup-device.sh <ip>` is what **deploys** it (to `/opt/roomwizard/`) and runs it once, and
+  `/etc/init.d/roomwizard-app` runs it again **on every boot** as a safety net. So a device can be
+  running a copy older than the repo's until `setup-device.sh` is re-run — measured on RW09
+  2026-08-03, where the deployed copy predated a bug the repo had already grown.
+- Because it runs unattended at boot and nothing checked its exit status, a failure was invisible.
+  Under `set -e` an unguarded `sed` on `/etc/profile` used to run *before* the `touch`, so a device
+  with no `/etc/profile` kept the watchdog armed and rebooted every ~70 minutes with no diagnostic
+  anywhere. The bypass is now the script's first command and it reports the bypass state on its last
+  line ([`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B18, done 2026-08-03).
 
 ### 3.14 What is not present
 

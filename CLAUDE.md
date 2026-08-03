@@ -156,7 +156,13 @@ actually built and shipped.
   leave the panel in a mode no running app asked for.
 - **Steelcase software watchdog reboots the device ~every 70 min** in game mode (when
   Jetty/HSQLDB/browser are absent). It's a cron job (`/opt/sbin/watchdog/watchdog.sh`).
-  `setup-device.sh <ip>` disables it (`touch /var/watchdog_test` + comment out cron).
+  **`disable-steelcase.sh` is what disables it** — `touch /var/watchdog_test` (its *first* command,
+  deliberately) plus a freshly written crontab, not a commented-out line. `setup-device.sh <ip>`
+  deploys and runs that script; `/etc/init.d/roomwizard-app` re-runs it **on every boot**, which is
+  why a failure in it used to be invisible and left the watchdog armed (`IMPROVEMENT_PLAN.md` B18).
+  It now prints whether the bypass is in place, so `setup-device.sh` output answers the question.
+  **A device can be running an older copy than the repo's until `setup-device.sh` is re-run** —
+  `md5sum` the deployed file before reproducing anything against it.
   The *hardware* watchdog (`/usr/sbin/watchdog` daemon) is fine — keep it, but note any app
   that takes over the screen for long periods must keep feeding `/dev/watchdog` (60 s) or the
   device hard-resets.

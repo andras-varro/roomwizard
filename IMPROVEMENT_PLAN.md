@@ -59,6 +59,12 @@ reboots: the **wizard writes no tsv**, only the diagnostic does, which is why RW
 calibration has no capture of its own and the 16:53 one remains the reference (see
 `SYSTEM_ANALYSIS.md#33-touch` → *Provenance*).
 
+**A second unit is available: `192.168.50.53`** (noted 2026-08-03 — nothing in this repo mentioned it
+before). It has the components deployed and is reachable over SSH, so this is a panel-time task, not a
+hardware-acquisition one. Two caveats: as of that date it is still running **pre-B25 deploy scripts**
+(`./setup-device.sh 192.168.50.53` has not been re-run, and an orphan `vnc_client` had survived a
+`stop` there), and `touch_raw` needs a human at the panel — SWEEP and INSET are finger measurements.
+
 ### B3g. ScummVM's `rw_content_area` is invisible until you know it exists — open, confirmed 2026-08-01
 
 `rwFullContentArea()` (`roomwizard.cpp`) reads the key with `ConfMan.hasKey("rw_content_area")` and
@@ -212,6 +218,14 @@ B15, B17 and B18 are done — see [Closed](#closed). **B19 is all that is left o
   they work only because `deploy-all.sh:156` wraps them in a subshell `cd`.
 - **`clean.sh`** has no shebang, no `set -e`, no `cd` — run from the repo root its
   `find . -name '*.o' -delete` wipes `native_apps/build/`, `usb_host/modules/` and the ScummVM tree.
+- **Nothing tells you which version of a script a device is running**, and they drift silently.
+  Measured 2026-08-03 while reproducing B18: RW09's `/opt/roomwizard/disable-steelcase.sh` was *older
+  than the repo's pre-fix copy* — it predated a defect the tracked file had already grown — so the
+  reproduction had to stage `git show HEAD:disable-steelcase.sh` to `/tmp` instead. `md5sum` on the
+  device against the repo file settles it in one command and is what the "verify what landed" bullet
+  above should print. `.53` is the standing example: it is still on the pre-B25
+  `/etc/init.d/roomwizard-app`, which is visible only by running `status` and noticing a missing
+  section.
 
 ---
 
