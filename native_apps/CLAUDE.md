@@ -207,6 +207,13 @@ Two corollaries, both learned from the same bug:
   must ignore input on its own first drawn frame (`GameOverScreen.armed`); brick_breaker's pause-dialog
   `RETIRE` overlaps the game-over `RESET SCORES` by 21 px, so without that guard retiring could wipe
   the high-score table on a screen nobody had seen.
+- **But do not make every state fall through — `NAME_ENTRY` deliberately keeps its `return`.**
+  `gameover_update()`'s `CHECK` state falls through to `NAME_ENTRY`/`DISPLAY` in the same call, so the
+  no-highscore path costs no extra frame. `NAME_ENTRY` must not: `hs_enter_name()` is a **blocking**
+  keyboard that repaints and swaps the framebuffer itself, so drawing the overlay in the same call
+  would composite it over the keyboard's last frame. It leaves `pending_draw` set and takes one clean
+  frame with the playfield redrawn underneath. This reads like an oversight if you only know the
+  fall-through rule — it isn't.
 
 **And the corollary that cost a wedged app: the predicate must cover pending *input*, not just a
 pending draw.** If the component reads its buttons inside the draw path, then a frame the loop
@@ -351,6 +358,10 @@ capped at `FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Consequences:
   helper (`hardware_diag.c`'s `diag_exit_rect()`) — two literals that have to agree by hand will
   eventually not. All of this was swept and fixed on 2026-08-02
   (`../IMPROVEMENT_PLAN.md` B3e); `grep -n 'button_init(&[a-z_]*, *[0-9]'` is the check.
+  **When you replace a literal, choose the expression that is byte-identical to it at inset 0** — so
+  an uncalibrated panel, where the inset is `0`, is provably unaffected and the diff can only move
+  pixels on a panel that has actually been swept. That is what makes this class of change safe to do
+  in bulk without re-testing every unit.
   **A literal reserve that is *smaller* than the row is the same bug from the other side**, and it
   shipped: tetris' board used `SCREEN_SAFE_TOP + 55` against a row occupying `SAFE_TOP + 10 .. + 60`,
   so the buttons were drawn on top of the board *and* the board ran 5 px off the bottom (B3j). Also
@@ -495,14 +506,18 @@ playfield one target. Where that does not map (platformer needs simultaneous run
 welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
 
 **You cannot test any of this from a script.** Synthesising input needs `/dev/uinput` and this kernel
-has `CONFIG_INPUT_UINPUT` unset, so `tests/touch_inject.c`'s `write()` to `/dev/input/event0`
-succeeds, reports success, and delivers nothing to any reader. Verified on RW09 2026-08-02.
+has `CONFIG_INPUT_UINPUT` unset — no device node, no module. `tests/touch_inject.c`'s `write()` to
+`/dev/input/event0` therefore succeeds, reports success, and delivers nothing to any reader: evdev's
+`write()` path is for **output** events (force feedback, LEDs), not for synthesising input, so there is
+nothing to "fix" in it. Verified on RW09 2026-08-02 by injecting a tap at the computed centre of
+tetris' `TAP TO START` and capturing an unchanged `/dev/fb0`.
 Script-side you can launch a binary over SSH and `cat /dev/fb0` to check the **first** screen — the one
 drawn before any input — and that is all; everything past it needs a human at the panel. See
 `../IMPROVEMENT_PLAN.md` C6.
 
-Every app should handle `BTN_ID_BACK` as "exit / back". Platformer does not, which leaves its
-game-over screen with no way out.
+Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
+`frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way
+out at all; fixed 2026-08-02 (B13a), and it is the reason that screen's buttons are reachable now.
 
 ## 32-bit target
 

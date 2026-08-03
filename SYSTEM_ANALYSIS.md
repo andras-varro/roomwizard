@@ -168,6 +168,23 @@ three units**, so the batch shipped without the option; there is no antenna on t
 an XBee the antenna is part of the module. Vendor software confirms the intent — see
 [Serial ports](#312-serial-ports).
 
+**Pinout, partly measured 2026-07-30.** `J5` carries XBee pins **1–10** (pin 1 is the dotted end),
+`J6` carries **11–20**. Numbering runs down one strip and back up the other like a DIP, so pins 1
+and 10 are at opposite ends of `J5`, *not* across from each other — the usual way to get this
+backwards.
+
+| XBee pin | Socket | Signal | Status |
+|---|---|---|---|
+| 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
+| 3 | `J5` | `DIN` — the SoC's TX | not measured. An idle UART transmitter sits **high**, so ~3.3 V here is the cheapest proof a `uart3` pinmux edit took effect; floating or low means it didn't. |
+| 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
+| 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
+| 10 | `J5` | `GND` | **measured ground.** With pin 1 at 3.3 V this confirms the socket is correctly identified *and* correctly oriented. |
+
+The electrical question is therefore settled; what is unproven is the DTB pinmux edit
+([Serial ports](#312-serial-ports)). An XBee fed reversed dies instantly, which is why the
+orientation was measured before anything was inserted.
+
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 
 ```
@@ -365,6 +382,13 @@ Each overlay exposes `input_size`, `output_size`, `position`, `zorder`, `global_
 arbitrary hardware scaling** — on a GPU-less 600 MHz part this is the only graphics acceleration
 available, and nothing in the project uses it. (`omap_vout: failed to allocate DMA Channel for
 video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md` F2.
+
+`fb1` is the second framebuffer (`CONFIG_FB_OMAP2_NUM_FBS=2`, see above) and is the natural
+small-surface render target for a scaled overlay — draw at 400×240 there, let the DSS stretch it.
+`/dev/video0` (`omap_vout`) is the V4L2 *output* path and accepts **YUV with hardware colour-space
+conversion**, which is what would make a video player conceivable on a part that could never
+software-decode one. Both are untried; the DMA-channel error above may be exactly what blocks the
+`omap_vout` route.
 
 > ⚠️ This is a **legacy omapdss sysfs** interface. It does not exist under `omapdrm`. Anything
 > built on it is cheap today and would need rewriting as DRM atomic plane programming after a
@@ -1022,7 +1046,13 @@ Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial
 `uart2`). `/dev/ttyS0..3` exist as stale nodes with nothing bound. Enabling it is a DTB edit —
 conceivable without kernel source, since the DTB is appended to `uImage-system` and this project
 already binary-patches it, but adding a whole pinmux node is materially harder than the one-word
-power patch and is **unproven**. Proposal: `IMPROVEMENT_PLAN.md` F5.
+power patch and is **unproven**. Proposal: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured
+3.3 V rail: [Unpopulated and expansion](#24-unpopulated-and-expansion).
+
+**Expect the vendor to have assumed a Series 1 module.** A settable `ATMY` and `ATCH` are 802.15.4
+(Series 1) commands. On a Series 2 / ZB part `ATMY` is **read-only** and `ATCH` only *reports* the
+operating channel — so an S2 module answers `+++` and `ATID` but gives a partial response to the
+rest. **Do not read that as a wiring fault**; check the module label first.
 
 ### 3.13 Watchdogs
 
@@ -1101,6 +1131,9 @@ backs the original crontab up to `/var/crontab.steelcase.bak`.
   `status = "okay"` in the DT, but **`CONFIG_SPI` is not set**, so `/sys/bus/spi/` does not exist.
   No children declared.
 - ⚠️ **EHCI USB host** — see [USB](#36-usb). Doubly dead: no kernel support *and* no connector.
+- ⚠️ **USB gadget mode** (presenting the device *as* a USB keyboard, serial port or ethernet
+  adapter) — **`CONFIG_USB_GADGET` is not set**. The MUSB controller is dual-role capable and the
+  micro-B port is the one physical socket, so this is a config-only block, but still a rebuild.
 
 ---
 
@@ -1315,6 +1348,11 @@ are simply *absent* without being disabled properly. `setup-device.sh <ip>` does
 **Result: ~80 MB RAM freed, no unwanted reboots, stable game mode.** Optionally
 `setup-device.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
 Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
+
+**Why cleanup this aggressive is safe: every binary we ship is `-static`** (see
+[Building for this device](#6-building-for-this-device)). Nothing we run depends on a shared library,
+an interpreter or a runtime that a deletion could take out from under it, so the blast radius of
+removing a package is limited to the vendor software that used it.
 
 **Init services disabled:**
 

@@ -98,6 +98,17 @@ actually built and shipped.
 
 ## Non-obvious constraints (things that will silently break)
 
+- **You cannot script a touch interaction on this device, and the tool that claims to will lie to
+  you.** There is no `/dev/uinput` (`CONFIG_INPUT_UINPUT` unset, no module), and evdev's `write()`
+  path is for *output* events (force feedback, LEDs) — so `tests/touch_inject.c` writes to
+  `/dev/input/event0`, **prints "injected successfully", exits 0, and delivers nothing to any
+  reader.** Measured on RW09 2026-08-02. Automated verification therefore stops at the **first**
+  screen: SSH-launch the binary, `cat /dev/fb0`, decode, assert. Everything past it needs a human at
+  the panel — write the tap-by-tap checklist instead of a test. Detail:
+  `native_apps/CLAUDE.md` → *Input*, disposition in `IMPROVEMENT_PLAN.md` C6.
+- **Don't probe I2C bus 1.** `pv02_app 5` (the vendor light-sensor factory test) can hang the bus,
+  and **bus 1 carries the PMIC** — see `SYSTEM_ANALYSIS.md#39-i2c`. There is no light sensor to find:
+  the enclosure has no aperture at all.
 - **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv`
   *instruction* crashes instantly with SIGILL (exit 132) — blank screen, no output, no log.
   **Verify with `native_apps/check-arm-safe.sh`** (runs automatically from
