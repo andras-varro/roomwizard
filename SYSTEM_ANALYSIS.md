@@ -800,6 +800,37 @@ both reading 0 (not connected). Nothing reports PoE state.
 **No wireless of any kind is fitted.** No WiFi, no Bluetooth. The 802.15.4 socket is empty — see
 [Serial ports](#312-serial-ports).
 
+**Host name and resolution — the image ships a broken one.** `/etc/hostname` on the vendor rootfs
+is `RW09`, and `/etc/hosts` is:
+
+```text
+127.0.0.1 localhost
+161.218.140.212 RW09.ppmd.siemens.net RW09
+```
+
+That address is a Siemens corporate host, unreachable from anywhere we run these. So on a stock
+image **the device's own name resolves to a dead IP**, and because the name is baked into the image
+rather than generated, *every* unit cloned from it claims `RW09` — which is also where this repo's
+name for the reference unit came from. Anything that resolves its own hostname gets the bogus
+answer. `set-hostname.sh` fixes both files together (it is what `commission-roomwizard.sh`'s prompt
+and `setup-device.sh --hostname` both call); disposition in `IMPROVEMENT_PLAN.md` D7.
+
+**mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
+`/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
+never runs. One symlink enables it (`setup-device.sh` now adds `S30avahi-daemon`), after which the
+unit answers to `<name>.local` and neither SSH nor the deploy scripts need a DHCP-lease hunt. Its
+`Required-Start` is `$remote_fs dbus`, and dbus is one of the few dynamic consumers the deep clean
+deliberately keeps, so the dependency holds even on a fully cleaned device. `enable-wide-area=yes`
+and `publish-workstation=no` are the shipped defaults and neither affects `.local` name resolution.
+⚠️ This is only useful **after** each unit gets a unique name: with the stock image every unit is
+`RW09`, and avahi resolves the collision by renaming to `RW09-2.local`, `RW09-3.local` and so on.
+**Cost measured on RW09 2026-08-03 — cheap:** ~3.9 MB RSS total (2424 kB `avahi-daemon` + a 1512 kB
+chroot helper) of 234 MB, and it does **not** start dbus — `dbus-daemon` was already running at a
+lower PID and costs its own 1692 kB regardless.
+⚠️ **`.local` resolves from Windows but not from WSL**, whose `nsswitch.conf` is `hosts: files dns`
+with no mDNS module — so `ssh root@rw09.local` works in PowerShell while the WSL-based build and
+deploy scripts cannot resolve it until `libnss-mdns` is installed there (`IMPROVEMENT_PLAN.md` D7).
+
 ### 3.6 USB
 
 **One connector: `J4`, micro-USB, MUSB OTG in host mode.** Working today for keyboards, mice,

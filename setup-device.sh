@@ -7,9 +7,13 @@
 # sets up audio + time-sync boot scripts.
 #
 # Usage:
-#   ./setup-device.sh <ip>                    # system setup + reboot
-#   ./setup-device.sh <ip> --remove           # + remove bloatware files (~178 MB freed)
-#   ./setup-device.sh <ip> --status           # show device status only
+#   ./setup-device.sh <target>                 # system setup + reboot
+#   ./setup-device.sh <target> --remove        # + remove bloatware files (~178 MB freed)
+#   ./setup-device.sh <target> --status        # show device status only
+#   ./setup-device.sh <target> --hostname rw09 # set the host name only, no reboot
+#
+# <target> is an IPv4 address or a host name — `rw09.local` works once mDNS is
+# enabled (this script does that) and the unit has a unique name (--hostname).
 #
 # Prerequisites:
 #   - Device commissioned with commission-roomwizard.sh (Phase 1)
@@ -20,7 +24,7 @@
 #   2. Runs disable-steelcase.sh (watchdog bypass, cron cleanup, service stop)
 #   3. Installs roomwizard-app-init.sh as /etc/init.d/roomwizard-app
 #      Registers the init service (priority S99)
-#      Deploys audio-enable + time-sync boot scripts
+#      Deploys audio-enable + time-sync boot scripts, and enables avahi (mDNS)
 #   4. Hardens SSH (PermitEmptyPasswords=no, brute-force limits)
 #   5. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
 #   6. Optionally removes bloatware files + Steelcase artifacts (--remove)
@@ -55,25 +59,50 @@ err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── usage ───────────────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $0 <ip> [--remove|--deep-clean|--status] [--dry-run]"
+    echo "Usage: $0 <target> [--remove|--deep-clean|--status] [--dry-run]"
+    echo "       $0 <target> --hostname NAME"
     echo ""
-    echo "  <ip>              Device IP address"
+    echo "  <target>          Device IPv4 address, or a host name (e.g. rw09.local)"
     echo "  --remove          Also remove vendor bloatware files (~178 MB freed)"
     echo "  --deep-clean      --remove PLUS extended cleanup (~560 MB more)."
     echo "                    Includes the 474 MB on-device factory restore image."
     echo "                    See IMPROVEMENT_PLAN.md and the warnings it prints."
     echo "  --status          Show device status only (no changes)"
     echo "  --dry-run         With --deep-clean: list what would be deleted, delete nothing"
+    echo "  --hostname NAME   Set the device host name only, and exit. No reboot."
+    echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
     exit 1
 }
 
 [[ -z "$DEVICE_IP" ]] && usage
 
-# Validate the IP before doing anything: every step past here is destructive and
-# ends in a reboot (../IMPROVEMENT_PLAN.md B19).
+# Validate the target before doing anything: every step past here is destructive
+# and ends in a reboot (../IMPROVEMENT_PLAN.md B19).
+#
+# An IPv4 address OR a DNS name is accepted. The name form is what makes
+# `./setup-device.sh rw09.local` work, which is the whole point of enabling
+# avahi below — an IPv4-only gate here silently defeated it. (This used to be
+# IPv4-only and there was a SECOND, weaker validator further down that did
+# accept a name; the strict one exited first, so the permissive one was dead
+# code and the script only *looked* like it took a host name. Both are now this
+# one check.)
 IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
-if [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
-    echo "Not an IPv4 address: $DEVICE_IP"
+# RFC-1123: dot-separated labels, each 1..63 chars, alphanumeric at both ends,
+# hyphens allowed inside. No trailing dot.
+DNSNAME_RE='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
+if [[ "$DEVICE_IP" =~ $IPV4_RE ]]; then
+    :   # an address
+elif [[ "$DEVICE_IP" =~ ^[0-9.]+$ ]]; then
+    # Digits and dots only, but not a valid IPv4 — that is a mistyped address,
+    # not a host name. Accepting it as one would turn 192.168.50.999 into a DNS
+    # lookup and a confusing timeout instead of an immediate complaint.
+    echo "Not a valid IPv4 address: $DEVICE_IP"
+    echo ""
+    usage
+elif [[ "$DEVICE_IP" =~ $DNSNAME_RE ]]; then
+    :   # a host name, e.g. rw09.local
+else
+    echo "Not an IPv4 address or host name: $DEVICE_IP"
     echo ""
     usage
 fi
@@ -118,19 +147,46 @@ report_script_versions() {
 
 # Reject unknown flags rather than silently falling through to a full setup+reboot
 case "$FLAG" in
-    ""|--remove|--deep-clean|--status) ;;
+    ""|--remove|--deep-clean|--status|--hostname) ;;
     *) echo "Unknown option: $FLAG"; echo ""; usage ;;
 esac
 
-DRY_RUN="${3:-}"
-if [[ -n "$DRY_RUN" && "$DRY_RUN" != "--dry-run" ]]; then
-    echo "Unknown option: $DRY_RUN"; echo ""; usage
+# No mode takes a fourth argument, so a stray one is a mistake — say so rather
+# than ignoring it, for the same reason the flag case above is exhaustive.
+if [[ -n "${4:-}" ]]; then
+    echo "Unexpected argument: $4"; echo ""; usage
 fi
 
-# Basic sanity on the target so a typo doesn't run commands against the wrong host
-if ! echo "$DEVICE_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z][a-zA-Z0-9.-]*$'; then
-    err "'$DEVICE_IP' does not look like an IP address or hostname"
+# --hostname is the one flag that takes a value, so it consumes $3 and --dry-run
+# cannot also live there.
+NEW_HOSTNAME=""
+DRY_RUN=""
+if [[ "$FLAG" == "--hostname" ]]; then
+    NEW_HOSTNAME="${3:-}"
+    if [[ -z "$NEW_HOSTNAME" ]]; then
+        echo "--hostname requires a NAME"; echo ""; usage
+    fi
+    # Validated HERE, at parse time, for two reasons: a typo should not need a
+    # reachable device to be caught, and the name is later interpolated into an
+    # ssh command string, so nothing unexpected should ever get that far.
+    # set-hostname.sh validates again on the device and remains the authority.
+    if [[ ! "$NEW_HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
+        echo "Not a valid host name: $NEW_HOSTNAME"
+        echo "  RFC-1123, single label: letters, digits and hyphens, alphanumeric at both ends."
+        echo "  Set 'rw09', not 'rw09.local' — mDNS appends the .local itself."
+        echo ""
+        usage
+    fi
+else
+    DRY_RUN="${3:-}"
+    if [[ -n "$DRY_RUN" && "$DRY_RUN" != "--dry-run" ]]; then
+        echo "Unknown option: $DRY_RUN"; echo ""; usage
+    fi
 fi
+
+# NOTE: the target was validated at the top of this file, against both an IPv4
+# address and a DNS name. A second, weaker check used to sit here; it was
+# unreachable, and deleting it is what makes `rw09.local` usable.
 
 # --deep-clean implies --remove
 DEEP_CLEAN=0
@@ -355,6 +411,40 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
     exit 0
 fi
 
+# ── hostname-only mode ──────────────────────────────────────────────────────
+# Targeted and reboot-free, so it can be run against an already-commissioned
+# unit — including one that is a live display and must not be rebooted, which is
+# the case this flag exists for. The work itself is set-hostname.sh, the same
+# script commission-roomwizard.sh runs offline; it is staged to /tmp rather than
+# installed, because it is a one-shot and nothing on the device calls it again
+# (so it stays out of report_script_versions' drift list).
+if [[ "$FLAG" == "--hostname" ]]; then
+    echo ""
+    info "Setting host name to '$NEW_HOSTNAME'..."
+    scp -q "$SCRIPT_DIR/set-hostname.sh" "$DEVICE:/tmp/set-hostname.sh"
+    ssh "$DEVICE" "chmod +x /tmp/set-hostname.sh"
+    ssh "$DEVICE" "/tmp/set-hostname.sh $NEW_HOSTNAME"
+    ssh "$DEVICE" "rm -f /tmp/set-hostname.sh"
+    ok "Host name set"
+    echo ""
+    info "Verifying:"
+    ssh "$DEVICE" bash <<'REMOTE'
+echo "  hostname:      $(hostname)"
+echo "  /etc/hostname: $(cat /etc/hostname)"
+echo "  /etc/hosts:"
+sed 's/^/    /' /etc/hosts
+REMOTE
+    echo ""
+    if ssh "$DEVICE" "test -L /etc/rc5.d/S30avahi-daemon" 2>/dev/null; then
+        ok "mDNS is enabled — after the next reboot, try: ssh root@$NEW_HOSTNAME.local"
+    else
+        warn "mDNS is NOT enabled on this device, so <name>.local will not resolve."
+        warn "Run a full './setup-device.sh $DEVICE_IP' to install it (that reboots)."
+    fi
+    echo ""
+    exit 0
+fi
+
 # ── status-only mode ────────────────────────────────────────────────────────
 if [[ "$FLAG" == "--status" ]]; then
     echo ""
@@ -482,6 +572,30 @@ chmod +x /etc/init.d/time-sync
 ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync
 TIMESYNC_REMOTE
 ok "Time sync boot script deployed"
+
+info "Enabling mDNS (avahi-daemon)..."
+# The vendor image already carries /usr/sbin/avahi-daemon and a full
+# /etc/init.d/avahi-daemon, but ships NO rc5.d link, so it never starts. Adding
+# the link is the whole change — there is no daemon to write and no package to
+# install. S30 puts it after S29audio-enable and after networking is up.
+#
+# Its Required-Start is "$remote_fs dbus", and dbus is one of the few dynamic
+# consumers the deep clean deliberately keeps, so the dependency is satisfied
+# on a fully cleaned device too.
+#
+# Payoff: `ssh root@<name>.local` and `./setup-device.sh <name>.local` instead of
+# hunting DHCP leases. This is only useful once the unit has a UNIQUE name —
+# every unit cloned from the vendor image claims RW09, and avahi would resolve
+# the conflict by renaming to RW09-2.local etc. Hence --hostname above.
+ssh "$DEVICE" bash <<'AVAHI_REMOTE'
+if [ -x /etc/init.d/avahi-daemon ] && [ -x /usr/sbin/avahi-daemon ]; then
+    ln -sf /etc/init.d/avahi-daemon /etc/rc5.d/S30avahi-daemon
+    echo "  linked S30avahi-daemon"
+else
+    echo "  avahi-daemon not present on this image — skipped"
+fi
+AVAHI_REMOTE
+ok "mDNS enabled (resolves <hostname>.local after reboot)"
 
 # ── 4. SSH Hardening ──────────────────────────────────────────────────────
 echo ""

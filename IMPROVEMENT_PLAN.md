@@ -36,9 +36,112 @@ item below links to the section that describes the hardware it touches.
 
 ---
 
+## Open right now
+
+Everything not in [Closed](#closed), so "what is open?" costs one screen instead of scrolling past a
+~1100-line archive. **This table is an index, not a second copy** — status and reasoning live in the
+entry, and if the two disagree the entry wins. Deliberately unranked; see
+[Suggested order of work](#suggested-order-of-work).
+
+| Item | What | Status | Needs |
+|---|---|---|---|
+| [D7](#d7-every-unit-is-rw09-and-rw09-resolves-to-a-dead-siemens-ip--partly-done-2026-08-03) | Every unit is `RW09`, mapped to a dead Siemens IP | partly done | a device: apply it, measure avahi |
+| [B3c](#b3c-second-unit-measurement-of-the-touch-dead-band--partly-done-2026-08-01) | Second-unit touch dead-band sweep | partly done | a human at `.53`'s panel |
+| [B12c](#b12c-scummvm-opl-tempo-unverified-after-the-mono-mixer-fix--open) | ScummVM OPL/AdLib tempo unverified | open | an AdLib-capable game installed |
+| [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) | Port audio OSS → ALSA | open | — **highest user-visible payoff** |
+| [F2](#f2-use-the-dss-overlay-planes--open-biggest-performance-win-available) | Use the DSS overlay planes | open | — **biggest performance win** |
+| [F4](#f4-surface-the-madc--temperature-and-analogue-inputs--open) | Surface the MADC (temperature, analogue in) | open | — |
+| [F5](#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open) | RW-to-RW wireless via 802.15.4 | open | hardware that is not fitted |
+| [F6](#f6-multi-touch-via-direct-i2c--open) | Multi-touch via direct I2C | open | — |
+| [F7](#f7-use-nand-mtd4-scratch-for-persistent-data--open) | NAND `mtd4` for persistent data | open | — |
+| [F8](#f8-smooth-led-effects--open) | Smooth LED effects | open | — |
+| [F9](#f9-ship-binaries-as-github-releases--open) | Ship binaries as GitHub releases | open | — removes the toolchain from the deploy path |
+| [C1](#c1-extract-the-shared-evdev-layer--open) | Extract the shared evdev layer | open | — the `MAX_INPUT_DEVICES` stopgap is spent |
+| [C2](#c2-split-device_toolsc-2651-lines--open) | Split `device_tools.c` (2651 lines) | open | — |
+| [C4](#c4-make-the-common-library-use-the-logger--open) | Make the common library use the logger | open | — |
+| [C5](#c5-fix-text_truncate-and-the-8px6px-font-width-confusion--partly-done-2026-08-02) | `text_truncate` / 8px-vs-6px font width | partly done | — |
+| [C6](#c6-extend-the-host-buildable-test-harness--open) | Extend the host-buildable test harness | open | — |
+| [C7](#c7-run-shellcheck--open) | Run shellcheck | open | `shellcheck` is not in this WSL |
+| [C8](#c8-retire-hardware_diag--it-is-a-second-copy-of-a-device_tools-tab--open-confirmed-2026-08-02) | Retire `hardware_diag` (duplicate of a tab) | open, confirmed | — |
+| [C9](#c9-gate-the-scummvm-binary-too--and-gate-it-unstripped--open-measured-2026-08-03) | Gate the ScummVM binary, **unstripped** | open, measured | — |
+
+Also still needing a human at a panel, tracked inside their Closed entries rather than as open rows:
+**brick_breaker levels 5+** (grey striped bricks, B13b) — postponed at the reporter's request, so
+make the level reachable (`--level N` or a debug entry) instead of asking again; and B13h's SPEED UP
+→ SLOW DOWN monotonicity, which is **not** level-gated and is a one-minute check at level 1.
+
+---
+
 ## Phase 0 — Do these first (no risk, high leverage)
 
 Nothing here can break a running device. D1–D6 are all done — see [Closed](#closed).
+
+### D7. Every unit is `RW09`, and `RW09` resolves to a dead Siemens IP — partly done 2026-08-03
+
+**Confirmed by reading the card image, not inferred.** `partitions/108a1490…/etc/hostname` is `RW09`
+and `etc/hosts` is:
+
+```text
+127.0.0.1 localhost
+161.218.140.212 RW09.ppmd.siemens.net RW09
+```
+
+Two defects in two lines. The name is **baked into the image** rather than generated, so every unit
+cloned from it claims `RW09` — that is where this repo's name for the reference unit came from. And
+the mapping points the device's *own* name at a Siemens corporate address that is unreachable from
+anywhere we run these, so anything resolving its own hostname gets a bogus IP. This is a
+**fleet-wide latent defect, not merely a commissioning gap**: `.53` has it too.
+
+**Shipped 2026-08-03 (host-side only, nothing applied to a device yet):**
+
+- `set-hostname.sh` — one implementation, writing **both** files, called from both bring-up paths
+  (`commission-roomwizard.sh` offline against `$ROOTFS`; `setup-device.sh <ip> --hostname NAME` over
+  SSH). It refuses a name that is not RFC-1123, backs up **once** so a second run cannot overwrite
+  the vendor original with its own output, and **refuses to write at all if the `localhost` entry
+  would be lost** — the same negative-control shape as the loopback guard in
+  `commission-roomwizard.sh`.
+- `setup-device.sh` now links the image's existing `avahi-daemon` into `rc5.d` (S30), so a named
+  unit answers to `<name>.local`.
+- **Prerequisite fixed in the same change:** `setup-device.sh` rejected anything that was not strict
+  IPv4 and exited, while a *second, weaker* validator further down also accepted a DNS name — dead
+  code that could never run. So the script looked like it took `rw09.local` and refused it, which
+  would have made mDNS buy nothing. One validator now, accepting an address or a name; a
+  digits-and-dots string that is not a valid address is still rejected as the typo it is.
+- `commission-roomwizard.sh` also now honours a pre-set `$ROOTFS`. Its own error message tells the
+  operator to `export ROOTFS=/mnt/rw`, but the assignment was unconditional, so that advice never
+  worked — and it is what lets the offline path be exercised against a copy of a real rootfs.
+
+**Verified on the host:** the validator table-driven over 13 good/bad names in both directions; the
+whole offline path run against a copy of the real vendor `etc/`, asserting the Siemens line gone,
+`127.0.0.1 <name>` present, `localhost` intact and the backup still holding the vendor original
+after a second run; and the localhost guard tripped deliberately with `161.218.140.212 RW09
+localhost` to confirm it refuses and changes nothing.
+
+**Residue — one caveat, and one unit unchecked:**
+
+1. **RW09 done 2026-08-03.** `--hostname rw09` applied: `hostname` and `/etc/hostname` are `rw09`,
+   `/etc/hosts` is `127.0.0.1 localhost` + `127.0.0.1 rw09`, and `S30avahi-daemon` is linked and
+   persistent. `rw09.local` resolves from Windows (`ping rw09.local` → 192.168.50.73).
+2. ⚠️ **`.local` does not resolve from WSL, which is where the deploy scripts run.** WSL's
+   `/etc/nsswitch.conf` is `hosts: files dns` — no mDNS module — so `./setup-device.sh rw09.local`
+   passes the validator, reaches the SSH step and then fails to resolve. Windows resolves it fine.
+   Fix is host-side and one package: `sudo apt install libnss-mdns` in WSL. **Until that is done the
+   mDNS payoff applies to Windows-side `ssh` only, not to the build/deploy path.**
+3. `.53` is **not checked** — deliberately left alone (live display). Its `/etc/hosts` state is
+   therefore unknown; see the correction below before assuming it carries the Siemens line.
+
+**Correction to this entry's own scope, measured 2026-08-03.** RW09's *deployed* `/etc/hosts` was
+**not** the vendor line — it read `192.168.50.73 RW09`, a hardcoded self-IP, presumably edited at
+some point in this unit's life. So: the Siemens mapping is confirmed **in the card image**
+(`partitions/108a1490…/etc/hosts`), which is what a newly commissioned unit inherits, but a
+*deployed* unit may have been changed and must be read rather than assumed. The self-IP variant is
+still a defect — a hardcoded DHCP address goes stale the moment the lease moves — just not the one
+this entry was written about.
+
+**avahi cost, measured on RW09 2026-08-03 — cheap, keep it.** ~3.9 MB RSS total (2424 kB for
+`avahi-daemon` plus a 1512 kB chroot helper) out of 234 MB, with 164 MB free at the time. It did
+**not** drag dbus awake: `dbus-daemon` was already running at a lower PID (2231 vs 267x) and uses
+1692 kB of its own regardless. Recorded in `SYSTEM_ANALYSIS.md#35-network-and-power`.
 
 ---
 
@@ -252,6 +355,33 @@ The two LEDs are true PWM and drive to red / amber / green with smooth crossfade
 outside the room ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)).
 Ideas: health/timer bar, heartbeat pulse during ScummVM loading, flash on high score. `hardware.c`
 already reaches both channels; this is presentation work only.
+
+### F9. Ship binaries as GitHub releases — open
+
+**Why this may be the highest-leverage item in Phase 3:** the build is the slowest and most
+environment-bound step in the entire flow — WSL, an ARM cross-compiler, ScummVM's ~1m35s–2m20s link
+that also deletes `native_apps/common/*.o` twice — and it is **pure overhead whenever the source has
+not changed.** Anyone who wants to put apps on a device today must reproduce the whole toolchain
+first. The artifacts suit distribution unusually well: everything ships `-static`, so there is no ABI
+surface to match against the device's glibc.
+
+Design, so it does not have to be re-derived:
+
+- **The host pulls the tarball; the device is untouched.** The existing `scp` path stays exactly as
+  it is. Nothing new runs on the device and there is no CA-certificate problem to solve on a 2022
+  vendor image.
+- `deploy-all.sh` and the per-component scripts gain `--from-release <tag>` that skips **only** the
+  build step.
+- **The release must carry the md5 manifest.** Deploy-time verification currently compares against a
+  local `build/`, which will not exist on a build-free path.
+
+Two caveats to record before anyone tries it:
+
+- `base/version.o` re-embeds the build date on every link, so releases are **not byte-reproducible**.
+  The md5 list must be *generated per release*, not asserted against a known-good set.
+- A release must publish **binaries only, never configs**. This tree's history contains
+  `/etc/hosts` with a corporate address (D7) and the password rotation of D6; a glob that sweeps up
+  `*.conf` would publish exactly the things those two entries exist to have removed.
 
 ---
 

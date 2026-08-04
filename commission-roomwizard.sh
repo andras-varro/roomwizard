@@ -16,6 +16,11 @@
 
 set -e  # Exit on error
 
+# Defined up here rather than at first use: it is needed both by the host-name
+# step (to run set-hostname.sh) and by the next-steps block at the end (to read
+# COMMISSIONING.md), and one definition cannot drift from another.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -49,7 +54,15 @@ echo ""
 # Step 1: Locate the rootfs partition (p6)
 info "Locating rootfs partition (UUID: 108a1490-8feb-4d0c-b3db-995dc5fc066c)..."
 
-ROOTFS=$(findmnt -rno TARGET --source "$(blkid -U 108a1490-8feb-4d0c-b3db-995dc5fc066c 2>/dev/null)" 2>/dev/null || echo "")
+# Honour a pre-set $ROOTFS. The failure message below tells the operator to
+# `export ROOTFS=/mnt/rw` when auto-detection misses — a card mounted by hand, or
+# a copy of a rootfs used to exercise this script without an SD card — but the
+# assignment here used to be unconditional, which made that advice inoperative.
+if [ -n "${ROOTFS:-}" ]; then
+    info "Using ROOTFS from the environment (auto-detection skipped)"
+else
+    ROOTFS=$(findmnt -rno TARGET --source "$(blkid -U 108a1490-8feb-4d0c-b3db-995dc5fc066c 2>/dev/null)" 2>/dev/null || echo "")
+fi
 
 if [ -z "$ROOTFS" ]; then
     error "Could not find mounted rootfs partition (p6)."
@@ -128,6 +141,44 @@ info "Created backup: $SHADOW_FILE.backup"
 # Replace root password in shadow file
 sudo sed -i "s|^root:[^:]*:|root:$PASSWORD_HASH:|" "$SHADOW_FILE"
 success "Root password updated in /etc/shadow"
+echo ""
+
+# Step 3b: Host name
+echo "================================================"
+echo "  Host Name"
+echo "================================================"
+echo ""
+
+# Every unit cloned from this image claims the SAME name, and the image's
+# /etc/hosts points that name at an unreachable corporate address
+# (161.218.140.212 RW09.ppmd.siemens.net RW09) — so a device that resolves its
+# own name gets a bogus IP. Naming the card here is the only point in the flow
+# where it costs nothing: no device to reach, no reboot. See IMPROVEMENT_PLAN.md
+# D7, and set-hostname.sh for what actually gets written.
+CURRENT_HOSTNAME=""
+if [ -f "$ROOTFS/etc/hostname" ]; then
+    CURRENT_HOSTNAME=$(head -1 "$ROOTFS/etc/hostname" | tr -d ' \011\015\012')
+fi
+info "The card currently claims the name: ${CURRENT_HOSTNAME:-(none)}"
+info "A unique name lets you reach the unit as <name>.local once mDNS is on"
+info "(setup-device.sh enables it), instead of hunting for a DHCP lease."
+echo ""
+
+while true; do
+    read -p "Host name [${CURRENT_HOSTNAME:-roomwizard}]: " NEW_HOSTNAME
+    NEW_HOSTNAME="${NEW_HOSTNAME:-${CURRENT_HOSTNAME:-roomwizard}}"
+
+    # set-hostname.sh is the single implementation and the single validator; it
+    # refuses a bad name and changes nothing, so let it be the judge rather than
+    # duplicating the RFC-1123 regex here.
+    if sudo "$SCRIPT_DIR/set-hostname.sh" "$NEW_HOSTNAME" "$ROOTFS"; then
+        success "Host name set to: $NEW_HOSTNAME"
+        break
+    fi
+    echo ""
+    warning "Please try again."
+    echo ""
+done
 echo ""
 
 # Step 4: Configure SSH
@@ -345,7 +396,6 @@ success "All configuration changes have been applied."
 echo ""
 
 # Print next steps from COMMISSIONING.md (single source of truth)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUIDE="$SCRIPT_DIR/COMMISSIONING.md"
 if [ -f "$GUIDE" ]; then
     sed -n '/<!-- NEXT_STEPS_START -->/,/<!-- NEXT_STEPS_END -->/{/<!--/d; p;}' "$GUIDE"
