@@ -14,13 +14,17 @@
 # apart; and because a standalone script can be exercised on the host against a
 # copy of a real vendor rootfs, with no SD card and no device.
 #
-# Why /etc/hosts is rewritten and not just /etc/hostname: the vendor image ships
+# Why /etc/hosts is rewritten and not just /etc/hostname: the vendor image maps
+# the device's OWN host name, on a non-loopback line, to an external address that
+# is unreachable from anywhere these units are used. That mapping is baked into
+# the image, so it is the same on every unit cloned from it. Setting
+# /etc/hostname alone leaves it in place, and anything resolving its own name
+# still gets the wrong answer. See IMPROVEMENT_PLAN.md D7.
 #
-#     127.0.0.1 localhost
-##
 # Usage: set-hostname.sh NAME [ROOTFS]
 #   NAME    RFC-1123 single label. No dots — mDNS appends .local itself, and a
-#           dotted /etc/hostname is what produced the mess above.
+#           dotted name in /etc/hosts is part of what made the shipped mapping
+#           confusing to read.
 #   ROOTFS  prefix to edit under. Empty or absent means the live root, in which
 #           case the running kernel's name is set too.
 #

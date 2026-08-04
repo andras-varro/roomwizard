@@ -149,9 +149,11 @@ echo "  Host Name"
 echo "================================================"
 echo ""
 
-# Naming the card here is the only point in the flow
-# where it costs nothing: no device to reach, no reboot. See IMPROVEMENT_PLAN.md
-# D7, and set-hostname.sh for what actually gets written.
+# Every unit cloned from this image claims the SAME name, and the image also maps
+# that name, on a non-loopback line, to an external address that is unreachable
+# here — so a device resolving its own name gets a bogus IP. Naming the card here
+# is the only point in the flow where it costs nothing: no device to reach, no
+# reboot. See IMPROVEMENT_PLAN.md D7, and set-hostname.sh for what gets written.
 CURRENT_HOSTNAME=""
 if [ -f "$ROOTFS/etc/hostname" ]; then
     CURRENT_HOSTNAME=$(head -1 "$ROOTFS/etc/hostname" | tr -d ' \011\015\012')

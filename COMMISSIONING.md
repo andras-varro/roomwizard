@@ -59,15 +59,20 @@ The [`commission-roomwizard.sh`](commission-roomwizard.sh) script configures the
 
 ### The host name, and why `/etc/hosts` is rewritten too
 
-The vendor image ships `/etc/hostname` as `RW09` and `/etc/hosts` as:
+The vendor image ships `/etc/hostname` as `RW09` — so **every unit cloned from it claims the same
+name** — and its `/etc/hosts` additionally maps that name, on a *non-loopback* line, to an external
+address that is unreachable from anywhere these units are used. Both problems are baked into the
+image rather than generated per unit.
+
+Setting `/etc/hostname` alone would leave that mapping in place, so anything on the device that
+resolves its own name would still get the wrong answer. The prompt therefore writes both files, via
+[`set-hostname.sh`](set-hostname.sh) — one implementation shared with `setup-device.sh --hostname`,
+so the offline and over-SSH paths cannot drift. The result is loopback-only:
 
 ```text
 127.0.0.1 localhost
+127.0.0.1 <name>
 ```
-
-Setting `/etc/hostname` alone leaves the bogus mapping in place.
-The prompt therefore writes both, via [`set-hostname.sh`](set-hostname.sh) — one implementation
-shared with `setup-device.sh --hostname`, so the offline and over-SSH paths cannot drift.
 
 Give each unit a **unique single label** (`rw09`, not `rw09.local` — mDNS appends `.local`
 itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.local` and

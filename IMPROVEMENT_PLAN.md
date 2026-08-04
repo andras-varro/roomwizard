@@ -45,6 +45,7 @@ entry, and if the two disagree the entry wins. Deliberately unranked; see
 
 | Item | What | Status | Needs |
 |---|---|---|---|
+| [D7](#d7-host-names-every-unit-claims-the-same-one-and-it-resolves-to-a-dead-address--partly-done-2026-08-03) | Every unit claims the same host name | partly done | `libnss-mdns` in WSL; a reboot to prove the link |
 | [B3c](#b3c-second-unit-measurement-of-the-touch-dead-band--partly-done-2026-08-01) | Second-unit touch dead-band sweep | partly done | a human at `.53`'s panel |
 | [B12c](#b12c-scummvm-opl-tempo-unverified-after-the-mono-mixer-fix--open) | ScummVM OPL/AdLib tempo unverified | open | an AdLib-capable game installed |
 | [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) | Port audio OSS → ALSA | open | — **highest user-visible payoff** |
@@ -75,7 +76,16 @@ make the level reachable (`--level N` or a debug entry) instead of asking again;
 
 Nothing here can break a running device. D1–D6 are all done — see [Closed](#closed).
 
-**Shipped 2026-08-03 (host-side only, nothing applied to a device yet):**
+### D7. Host names: every unit claims the same one, and it resolves to a dead address — partly done 2026-08-03
+
+The vendor image ships `/etc/hostname` as `RW09`, and its `/etc/hosts` adds a **non-loopback** line
+mapping that same name to an external address unreachable from anywhere these units are used. Both
+are baked into the image rather than generated, so **every unit cloned from it claims `RW09`** —
+which is where this repo's name for the reference unit came from — and on a stock image the device's
+own name resolves to a dead address, so anything resolving its own hostname gets the wrong answer.
+Confirmed by reading the card image, not inferred.
+
+**Shipped 2026-08-03:**
 
 - `set-hostname.sh` — one implementation, writing **both** files, called from both bring-up paths
   (`commission-roomwizard.sh` offline against `$ROOTFS`; `setup-device.sh <ip> --hostname NAME` over
@@ -95,10 +105,11 @@ Nothing here can break a running device. D1–D6 are all done — see [Closed](#
   worked — and it is what lets the offline path be exercised against a copy of a real rootfs.
 
 **Verified on the host:** the validator table-driven over 13 good/bad names in both directions; the
-whole offline path run against a copy of the real vendor `etc/`, 
-`127.0.0.1 <name>` present, `localhost` intact and the backup still holding the vendor original
-after a second run; and the localhost guard tripped deliberately with `161.218.140.212 RW09
-localhost` to confirm it refuses and changes nothing.
+whole offline path run against a copy of the real vendor `etc/`, asserting the stale non-loopback
+mapping gone, `127.0.0.1 <name>` present, `localhost` intact and the backup still holding the vendor
+original after a second run; and the localhost guard tripped deliberately, by putting `localhost` on
+a non-loopback line that also carries the device's own name, to confirm it refuses and changes
+nothing.
 
 **Residue — one caveat, and one unit unchecked:**
 
@@ -111,9 +122,16 @@ localhost` to confirm it refuses and changes nothing.
    Fix is host-side and one package: `sudo apt install libnss-mdns` in WSL. **Until that is done the
    mDNS payoff applies to Windows-side `ssh` only, not to the build/deploy path.**
 
-**Correction to this entry's own scope, measured 2026-08-03.** RW09's *deployed* `/etc/hosts` was
-**not** the vendor line — it read `192.168.50.73 RW09`, a hardcoded self-IP, presumably edited at
-some point in this unit's life. 
+3. The reboot path is unproven: avahi is running and `S30avahi-daemon` is in place, but the link was
+   written directly rather than by a full `setup-device.sh` run, so "it comes up on its own after a
+   reboot" has not been observed.
+
+**Correction to this entry's own scope, measured 2026-08-03.** A *deployed* unit must be read, not
+assumed. Both live units turned out to carry a hardcoded **self-IP** line (`<their own address>
+RW09`) rather than the image's external mapping — so that defect is confirmed **in the image**, which
+a newly commissioned unit inherits, and not in every deployed unit. The self-IP variant is still a
+defect, because a hardcoded DHCP address goes stale as soon as the lease moves; it is simply a
+different one. `.53` was read and is otherwise untouched by request.
 
 **avahi cost, measured on RW09 2026-08-03 — cheap, keep it.** ~3.9 MB RSS total (2424 kB for
 `avahi-daemon` plus a 1512 kB chroot helper) out of 234 MB, with 164 MB free at the time. It did
@@ -356,9 +374,9 @@ Two caveats to record before anyone tries it:
 
 - `base/version.o` re-embeds the build date on every link, so releases are **not byte-reproducible**.
   The md5 list must be *generated per release*, not asserted against a known-good set.
-- A release must publish **binaries only, never configs**. This tree's history contains
-  `/etc/hosts` with a corporate address (D7) and the password rotation of D6; a glob that sweeps up
-  `*.conf` would publish exactly the things those two entries exist to have removed.
+- A release must publish **binaries only, never configs**. Device config carries things that must not
+  be republished — the `/etc/hosts` mapping of D7 and the password rotation of D6; a glob that sweeps
+  up `*.conf` would publish exactly what those two entries exist to have removed.
 
 ---
 

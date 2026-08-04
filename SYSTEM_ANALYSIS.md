@@ -801,14 +801,20 @@ both reading 0 (not connected). Nothing reports PoE state.
 [Serial ports](#312-serial-ports).
 
 **Host name and resolution — the image ships a broken one.** `/etc/hostname` on the vendor rootfs
-is `RW09`, and `/etc/hosts` is:
+is `RW09`, and `/etc/hosts` carries an extra *non-loopback* line mapping that same name to an
+external address that is unreachable from anywhere these units are used:
 
 ```text
 127.0.0.1 localhost
+<external address> RW09.<external domain> RW09
 ```
 
-`set-hostname.sh` fixes both files together (it is what `commission-roomwizard.sh`'s prompt
-and `setup-device.sh --hostname` both call); disposition in `IMPROVEMENT_PLAN.md` D7.
+Two defects in one file. The name is **baked into the image** rather than generated, so every unit
+cloned from it claims `RW09` — which is also where this repo's name for the reference unit came
+from. And on a stock image **the device's own name resolves to a dead address**, so anything that
+resolves its own hostname gets the wrong answer. `set-hostname.sh` fixes both files together, to
+loopback-only (it is what `commission-roomwizard.sh`'s prompt and `setup-device.sh --hostname` both
+call); disposition in `IMPROVEMENT_PLAN.md` D7.
 
 **mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
 `/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
