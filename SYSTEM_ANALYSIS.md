@@ -307,30 +307,37 @@ $ ls /dev/dri /sys/class/drm
 
 Backlight: `/sys/class/leds/backlight/brightness`, 0–100.
 
-**Gotcha — bpp is per-app and set at runtime.** `/dev/fb0`'s format is whatever the running app
-last selected via `FBIOPUT_VSCREENINFO`:
+**Gotcha — bpp is per-app and set at runtime.** `/dev/fb0`'s format is **global mutable state**:
+whatever the running app last selected via `FBIOPUT_VSCREENINFO`.
 
 | App | bpp |
 |---|---|
-| `app_launcher` | **32bpp XRGB8888** — set on startup *and* after every child exits |
-| `game_selector` | 32bpp, but only after a child exits |
-| `device_tools`, `hardware_config`, `hardware_diag`, `touch_raw` | 32bpp, asserted on startup |
-| `touch_trace` | **never sets it** — run `fbset -depth 32` first if ScummVM or the VNC session ran last |
-| ScummVM, VNC session | **16bpp RGB565**, to halve write bandwidth |
+| every native app — games, launcher, tools, diagnostics | **32bpp XRGB8888**, pinned via `fb_set_bpp(dev, 32)` before `fb_init()`. `app_launcher` and `game_selector` also re-assert it after every child exits |
+| ScummVM, VNC remote session | **16bpp RGB565**, to halve write bandwidth |
 
-`native_apps/common/framebuffer.c` writes `uint32_t` per pixel and is **32bpp-only**. When
-screenshotting, decode at the bpp of whatever was running: `ssh root@<ip> cat /dev/fb0 > fb.raw`
+`native_apps/common/framebuffer.c` is **bpp-aware**: its primitives dispatch on `bytes_per_pixel`
+through `fb_pack565`/`fb_unpack565`/`fb_store`/`fb_load`, so the public API takes RGB888 at either
+depth and no depth corrupts the back buffer. `fb_init()` accepts 16 and 32; on any other depth it
+forces 32bpp and reports why on stderr. So the reason an app pins the depth is **determinism and
+appearance** — 16bpp bands every gradient, and how an app looks must not depend on which app ran
+before it — not memory safety.
+
+When screenshotting, decode at the bpp of whatever was running: `ssh root@<ip> cat /dev/fb0 > fb.raw`
 then `fb565_to_png.py fb.raw fb.png` (defaults to 32bpp; `--bpp 16` for ScummVM/VNC). One 32bpp
 frame is 800×480×4 = 1,536,000 bytes — coincidentally the same size as two 16bpp pages, which is
-why a wrong-bpp decode looks size-correct while producing garbage.
+why a wrong-bpp decode looks size-correct while producing garbage. **Run `fbset | grep geometry`
+and believe it** rather than inferring the depth from which app you launched: an app killed
+mid-session leaves the panel in a mode nothing running asked for. RGB565 read as 32bpp has a
+recognisable signature — R == B with a low G, e.g. (64,8,64), (96,16,96).
 
 **Visible area.** The bezel hides **10–15 px on the top and bottom edges only**, and effectively
 nothing left or right. Measured on two devices.
 
 Apps never deal with this. `fb_init()` shrinks the drawing surface to the visible rectangle and
 `fb_swap()` places it on the panel at the viewport origin, leaving the hidden bands black — so
-`fb.width`/`fb.height` and `SCREEN_SAFE_*` are the **logical** (fully visible) screen, 800×450 at
-the shipped 15/15/0/0 margins. Margins come from `/etc/touch_calibration.conf` line 2, default
+`fb.width`/`fb.height` and `SCREEN_VISIBLE_*` are the **logical** (fully visible) screen, 800×450 at
+the shipped 15/15/0/0 margins. (`SCREEN_SAFE_*` is a *different* rectangle — visible ∩ touchable;
+see [§3.3](#33-touch).) Margins come from `/etc/touch_calibration.conf` line 2, default
 `FB_BEZEL_*_DEFAULT` = 15/15/0/0 (`native_apps/common/framebuffer.h`), and are set on-device from
 **Device Tools → Display → SCREEN EDGES**.
 
@@ -1515,19 +1522,34 @@ flags (verified). Keep them for explicitness, but they are not what saves you.
 
 **Checking a binary — the expected count is a hard zero.** Use
 [`native_apps/check-arm-safe.sh`](native_apps/check-arm-safe.sh), which
-`build-and-deploy.sh` runs before every deploy and on build-only runs too. It currently reports
-zero across every build artifact.
+`build-and-deploy.sh` runs before every deploy and on build-only runs too. It reports zero across all
+**31** ARM build artifacts. It skips anything whose `objdump -f` architecture is not ARM and says how
+many it skipped — `build/` also collects host-gcc test binaries, and under WSL every file on `/mnt/c`
+looks executable, so a gate that does not filter counts files it cannot actually disassemble as
+evidence that it passed.
 
-> ⚠️ **Corrected 2026-07-30.** This section used to claim a `-static` glibc binary "always carries
-> ~45 `sdiv`/`udiv` in unreachable libc internals" that had to be allowlisted, and gave a
-> `grep 'sdiv\|udiv'` recipe. Both were wrong. That grep matches the *substring* `udiv` inside the
-> **names** of the software-divide helpers — `__udivsi3` (×20), `__udivmoddi4` (×6) and their call
-> sites. Those are symbol names and branch targets, not instructions, and their presence is
-> positive evidence that division is being done in software. Measured on this toolchain,
-> `libgcc.a` contains **zero** hardware `sdiv`/`udiv`. There is nothing to allowlist.
+Two ways to get a wrong answer out of this check, both measured on this repo. First, matching too
+loosely:
 
-Match the tab-delimited mnemonic field, not the line, and any hit is real. This is what
-`check-arm-safe.sh` does:
+> ⚠️ **Do not match the line; match the tab-delimited mnemonic field.** A bare `grep 'sdiv\|udiv'`
+> matches the *substring* `udiv` inside the **names** of the software-divide helpers — `__udivsi3`
+> (×20), `__udivmoddi4` (×6) and their call sites. Those are symbol names and branch targets, not
+> instructions, and their presence is positive evidence that division is being done in software.
+> `libgcc.a` on this toolchain contains **zero** hardware `sdiv`/`udiv`. There is nothing to
+> allowlist, and any hit from a correctly-matched gate is real.
+
+Second, feeding it an artifact it cannot read correctly:
+
+> ⚠️ **Gate the *unstripped* artifact.** Without a symbol table `objdump` cannot separate code from
+> the literal pools embedded in `.text`, so four-byte constants disassemble as plausible
+> instructions. The same ScummVM binary reports **8–9** hardware divides stripped and **zero**
+> unstripped, and `strip` cannot alter `.text`. The phantom operands are **not** reliably invalid:
+> `udiv pc, fp, sl` is dismissible, but `udiv r7, r1, lr` is a legal encoding indistinguishable from
+> compiler output — so eyeballing operands is not triage, the symbol table is the only thing that
+> settles it. Offsets cannot be allowlisted either: `base/version.o` re-embeds the build date on
+> every link, which moves every address after it.
+
+The check itself:
 
 ```bash
 arm-linux-gnueabihf-objdump -d BIN | awk '/\t(sdiv|udiv)(\.w)?\t/ {print}'

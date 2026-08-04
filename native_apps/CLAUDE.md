@@ -343,6 +343,30 @@ tetris' gravity, which fell ~3× too slow while idle and sped up when a key was 
 tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything the player experiences as a
 duration wants a `get_time_ms()` delta.
 
+**Derive state; don't accumulate it, and don't let a marker mean two things.** Three separate game
+bugs were one shape, and in each the fix was to make the derived value derived rather than to patch
+the failing site:
+
+| Shape | It looked like |
+|---|---|
+| a multiplier re-applied to a figure that already contains it | `brick_breaker`'s `effect_mult` went onto `Ball.speed`, so +2 → +1 gave `1.5 × 1.25` — **SLOW DOWN made the ball faster** |
+| a sentinel every other site reads as something else | a brick's `health = -1` meant "indestructible", but five sites tested `health <= 0` = "destroyed" — invisible and no collision |
+| publishing a slot nothing wrote | `snake`'s `length++` exposed `body[length]`, which the shift never writes — `{0,0}` on the first grow, a stray cell at the grid origin |
+
+So give the value **one writer** and read the rest from it: `ball_apply_speed()` is the only writer
+of `Ball.speed` and reads a separate `base_speed`; `brick_is_destroyed()` is the only test;
+the new snake segment takes the tail cell captured *before* the shift.
+
+Two things that make this class quick to confirm and safe to fix:
+
+- **Look for the dead code that proves the diagnosis.** `brick_breaker` already had a written bounce
+  path and a diagonal-stripe renderer for indestructible bricks, neither of which could ever run.
+  Unreachable code that was clearly written on purpose tells you which value is being misread.
+- **When a clamp moves during the refactor, ask what it was protecting.** `BALL_MAX_SPEED` stayed on
+  the *effective* speed, not the base: 11 px/frame is what stops the ball tunnelling through a brick,
+  so it belongs on the speed the ball actually travels at. At effect level 0 the emitted behaviour
+  must come out byte-identical — that is what preserves the default feel.
+
 ## Coordinates, dimensions, portrait
 
 - **Never hardcode 800, 480, or 400.** Use `fb.width` / `fb.height`, `screen_base_width` /
