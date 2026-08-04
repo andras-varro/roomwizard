@@ -17,13 +17,7 @@
 # Why /etc/hosts is rewritten and not just /etc/hostname: the vendor image ships
 #
 #     127.0.0.1 localhost
-#     161.218.140.212 RW09.ppmd.siemens.net RW09
-#
-# so the device's own name resolves to an unreachable Siemens address — on every
-# unit cloned from that image, which is all of them (IMPROVEMENT_PLAN.md D7).
-# Setting /etc/hostname alone leaves that mapping in place, so anything that
-# resolves its own name still gets the bogus answer.
-#
+##
 # Usage: set-hostname.sh NAME [ROOTFS]
 #   NAME    RFC-1123 single label. No dots — mDNS appends .local itself, and a
 #           dotted /etc/hostname is what produced the mess above.
@@ -91,9 +85,7 @@ trap 'rm -f "$TMP"' EXIT INT TERM
 # image shipped.
 [ -f "$HOSTS_FILE.backup" ] || cp "$HOSTS_FILE" "$HOSTS_FILE.backup"
 
-# Drop every non-loopback line that claims this device's name (old or new),
-# comparing the short name case-insensitively so RW09.ppmd.siemens.net matches
-# a new name of "rw09". Comments and blank lines are passed through untouched,
+# Comments and blank lines are passed through untouched,
 # and loopback lines are never dropped — the localhost entry is not ours to
 # remove, and the assertion below depends on it surviving.
 awk -v old="$OLD" -v new="$NAME" '

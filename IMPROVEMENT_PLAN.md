@@ -45,7 +45,6 @@ entry, and if the two disagree the entry wins. Deliberately unranked; see
 
 | Item | What | Status | Needs |
 |---|---|---|---|
-| [D7](#d7-every-unit-is-rw09-and-rw09-resolves-to-a-dead-siemens-ip--partly-done-2026-08-03) | Every unit is `RW09`, mapped to a dead Siemens IP | partly done | a device: apply it, measure avahi |
 | [B3c](#b3c-second-unit-measurement-of-the-touch-dead-band--partly-done-2026-08-01) | Second-unit touch dead-band sweep | partly done | a human at `.53`'s panel |
 | [B12c](#b12c-scummvm-opl-tempo-unverified-after-the-mono-mixer-fix--open) | ScummVM OPL/AdLib tempo unverified | open | an AdLib-capable game installed |
 | [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) | Port audio OSS → ALSA | open | — **highest user-visible payoff** |
@@ -76,22 +75,6 @@ make the level reachable (`--level N` or a debug entry) instead of asking again;
 
 Nothing here can break a running device. D1–D6 are all done — see [Closed](#closed).
 
-### D7. Every unit is `RW09`, and `RW09` resolves to a dead Siemens IP — partly done 2026-08-03
-
-**Confirmed by reading the card image, not inferred.** `partitions/108a1490…/etc/hostname` is `RW09`
-and `etc/hosts` is:
-
-```text
-127.0.0.1 localhost
-161.218.140.212 RW09.ppmd.siemens.net RW09
-```
-
-Two defects in two lines. The name is **baked into the image** rather than generated, so every unit
-cloned from it claims `RW09` — that is where this repo's name for the reference unit came from. And
-the mapping points the device's *own* name at a Siemens corporate address that is unreachable from
-anywhere we run these, so anything resolving its own hostname gets a bogus IP. This is a
-**fleet-wide latent defect, not merely a commissioning gap**: `.53` has it too.
-
 **Shipped 2026-08-03 (host-side only, nothing applied to a device yet):**
 
 - `set-hostname.sh` — one implementation, writing **both** files, called from both bring-up paths
@@ -112,7 +95,7 @@ anywhere we run these, so anything resolving its own hostname gets a bogus IP. T
   worked — and it is what lets the offline path be exercised against a copy of a real rootfs.
 
 **Verified on the host:** the validator table-driven over 13 good/bad names in both directions; the
-whole offline path run against a copy of the real vendor `etc/`, asserting the Siemens line gone,
+whole offline path run against a copy of the real vendor `etc/`, 
 `127.0.0.1 <name>` present, `localhost` intact and the backup still holding the vendor original
 after a second run; and the localhost guard tripped deliberately with `161.218.140.212 RW09
 localhost` to confirm it refuses and changes nothing.
@@ -127,16 +110,10 @@ localhost` to confirm it refuses and changes nothing.
    passes the validator, reaches the SSH step and then fails to resolve. Windows resolves it fine.
    Fix is host-side and one package: `sudo apt install libnss-mdns` in WSL. **Until that is done the
    mDNS payoff applies to Windows-side `ssh` only, not to the build/deploy path.**
-3. `.53` is **not checked** — deliberately left alone (live display). Its `/etc/hosts` state is
-   therefore unknown; see the correction below before assuming it carries the Siemens line.
 
 **Correction to this entry's own scope, measured 2026-08-03.** RW09's *deployed* `/etc/hosts` was
 **not** the vendor line — it read `192.168.50.73 RW09`, a hardcoded self-IP, presumably edited at
-some point in this unit's life. So: the Siemens mapping is confirmed **in the card image**
-(`partitions/108a1490…/etc/hosts`), which is what a newly commissioned unit inherits, but a
-*deployed* unit may have been changed and must be read rather than assumed. The self-IP variant is
-still a defect — a hardcoded DHCP address goes stale the moment the lease moves — just not the one
-this entry was written about.
+some point in this unit's life. 
 
 **avahi cost, measured on RW09 2026-08-03 — cheap, keep it.** ~3.9 MB RSS total (2424 kB for
 `avahi-daemon` plus a 1512 kB chroot helper) out of 234 MB, with 164 MB free at the time. It did

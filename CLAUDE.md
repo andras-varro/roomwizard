@@ -392,9 +392,7 @@ merged because the cleanup's targets span four partitions that only a booted ker
 one tree; the full argument is in `COMMISSIONING.md`.
 
 **Host name is set in two files, by one script.** `set-hostname.sh` writes `/etc/hostname` **and**
-rewrites `/etc/hosts`, because the vendor image maps its own name to an unreachable corporate
-address (`161.218.140.212 RW09.ppmd.siemens.net RW09`) — so *every* unit cloned from that image is
-`RW09` pointing at a dead IP (`IMPROVEMENT_PLAN.md` D7). It is called from both bring-up paths —
+rewrites `/etc/hosts`. It is called from both bring-up paths —
 `commission-roomwizard.sh` offline against `$ROOTFS`, and `setup-device.sh <ip> --hostname NAME`
 over SSH — so the two cannot drift. `--hostname` is targeted and does **not** reboot, which is what
 makes it usable on a unit in service as a live display. It is staged to `/tmp` per run rather than

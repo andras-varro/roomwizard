@@ -805,14 +805,9 @@ is `RW09`, and `/etc/hosts` is:
 
 ```text
 127.0.0.1 localhost
-161.218.140.212 RW09.ppmd.siemens.net RW09
 ```
 
-That address is a Siemens corporate host, unreachable from anywhere we run these. So on a stock
-image **the device's own name resolves to a dead IP**, and because the name is baked into the image
-rather than generated, *every* unit cloned from it claims `RW09` — which is also where this repo's
-name for the reference unit came from. Anything that resolves its own hostname gets the bogus
-answer. `set-hostname.sh` fixes both files together (it is what `commission-roomwizard.sh`'s prompt
+`set-hostname.sh` fixes both files together (it is what `commission-roomwizard.sh`'s prompt
 and `setup-device.sh --hostname` both call); disposition in `IMPROVEMENT_PLAN.md` D7.
 
 **mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
