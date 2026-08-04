@@ -108,23 +108,12 @@ B13h, B13i and B13j closed 2026-08-03. See [Closed](#closed).
 
 See [Closed](#closed).
 
-### B22. Game-over screen — one row still unverified — partly done 2026-08-02
+### B22. Game-over screen — done 2026-08-03
 
-The fix and its follow-up re-fix shipped and are archived in full at
-[B22 in Closed](#b22-the-game-over-screen-only-appeared-after-a-tap--done-2026-08-02) — including the
-`NAME_ENTRY` exception, which is the one place where the "fall through in the same call" instinct is
-wrong. Read it before touching `gameover_update()`.
-
-**What is left is verification, and it needs hardware:**
-
-| Game | Status |
-|---|---|
-| tetris, snake, frogger, samegame, brick_breaker, pong | pass — confirmed on the panel 2026-08-02, see the archived table for what each one exercised |
-| platformer | **playable with a gamepad — confirmed 2026-08-03.** A controller was attached and platformer, pong and frogger were all reported working, which clears the blocker this row had (B13k made platformer controller-only, so nothing in it could be exercised without one). The same session confirmed **B2**: gamepad buttons no longer latch. What is **not** separately confirmed is the narrow thing B22 is about — that the game-over screen paints *without* needing a tap, and that its `RESTART`/`EXIT` respond to touch. Ask before closing this row. |
-
-Not script-verifiable past the first screen (no `/dev/uinput` — see C6), so this row needs a human at
-the panel. `RESET SCORES` on an empty table is the cheap way to reach the name-entry keyboard: it
-makes any subsequent score qualify.
+See [Closed](#closed). **All seven games are now panel-confirmed** — platformer last, on 2026-08-03
+with a gamepad attached: its game-over screen paints *without* a tap and `RESTART`/`EXIT` respond to
+touch. Read the Closed entry before touching `gameover_update()`, including the `NAME_ENTRY` exception,
+which is the one place where the "fall through in the same call" instinct is wrong.
 
 ---
 
@@ -583,13 +572,25 @@ warnings, `check-arm-safe.sh` at a hard zero across 31 ARM binaries, the three h
 (`touch_calib_test`, `gamepad_latch_test`, `framebuffer_bpp_test`) passing, and deployed to RW09 with
 18/18 md5 verified. **Verification stops at the first screen** — no `/dev/uinput`, so all six games
 were SSH-launched, confirmed alive at 32bpp with a decoded `/dev/fb0`, and everything past the welcome
-screen needs a human at the panel (see C6). **Partly satisfied 2026-08-03:** with a gamepad attached,
-**platformer, pong and frogger were played and reported working**, which also confirmed B2 (buttons no
-longer latch). The gameplay effects below are still *reasoned* rather than observed for the three games
-nobody has driven into their changed states — **brick_breaker** (levels 5+ grey striped bricks, and a
-SPEED UP → SLOW DOWN sequence that must be monotone, B13b/B13h), **tetris** (I-piece wall and floor
-kicks, B13e) and **snake** (first food pickup, no stray cell at the grid origin, B13f) — plus
-**samegame**'s MENU/EXIT during the pre-game-over pause (B14) and taps just outside its grid.
+screen needs a human at the panel (see C6). **Panel verification 2026-08-03, in two sittings:** with a
+gamepad attached, **platformer, pong and frogger** were played and reported working (which also
+confirmed B2 — buttons no longer latch), and later the same day **tetris**, **snake** and **samegame**
+were driven into their changed states:
+
+| Game | Effect | Result |
+|---|---|---|
+| tetris | I-piece wall and floor kicks (B13e) | **pass** — it does not rotate out of the wall; behaves as expected |
+| snake | first food pickup, stray cell at the grid origin (B13f) | **pass** — the reporter remembered the artifact from before and it is **gone**, which makes this a before/after confirmation rather than an absence of evidence |
+| samegame | MENU/EXIT during the pre-game-over pause (B14), taps just outside the grid | **pass, reported as "I think it works"** — recorded as the hedge it was. Nothing looked wrong; nobody deliberately timed a tap into the ~300 ms window |
+| brick_breaker | levels 5+ grey striped bricks (B13b), SPEED UP → SLOW DOWN monotonicity (B13h) | **postponed 2026-08-03 at the reporter's request** — reaching level 5 by playing is *"a considerable amount of effort"* |
+
+**brick_breaker is the only gameplay effect still unobserved, and asking again is the wrong move** — the
+cost is real and it falls on a human every time. The cheap unblock is to make the state reachable
+instead: a level-select or start-at-level path (a `--level N` argument, or a debug entry in the pause
+dialog) turns a long play session into one launch, and it would serve any future level-dependent bug
+too. B13b's fix is the one that most wants it, because indestructible bricks *only* exist from level 5
+up. Note the two effects are independent — the SPEED UP → SLOW DOWN sequence needs no particular level
+and could be checked at level 1 in under a minute; only the grey bricks are gated.
 
 - **B13b** — `brick_breaker.c`: indestructible bricks stored `health = -1` and five other sites tested
   `health <= 0`, so from level 5 up they were invisible **and** had no collision. Both their bounce
@@ -1219,7 +1220,9 @@ new `common/atomic_file.c` on purpose — a new object would have to be added to
 **B13a. platformer: game-over buttons could never fire, and no way out** — done 2026-08-02.
 `touch_poll()` was called a **second** time in the same frame and clears `TouchState.pressed` at
 entry, eating the press edge `handle_input()` had already captured. Platformer was also the only game
-with no `BTN_ID_BACK` handler. Both fixed; **panel verification is still open — see B22 in Phase 1.**
+with no `BTN_ID_BACK` handler. Both fixed, and **both panel-confirmed 2026-08-03** with a gamepad
+attached — the game-over buttons answer touch, so the double-`touch_poll()` really was what ate the
+press edge (see the B22 panel table).
 
 **B13c. samegame locked to 10 FPS** — done 2026-08-02.
 `needs_redraw = false` was set **before** the pacing ternary, so `usleep()` always picked IDLE. Capture
@@ -1369,7 +1372,8 @@ back a day later, not a fresh measurement.) Per app:
 
 ### B22. The game-over screen only appeared after a tap — done 2026-08-02
 
-*Open residue tracked as [B22 in Phase 1](#b22-game-over-screen--one-row-still-unverified--partly-done-2026-08-02).*
+*Verification completed 2026-08-03 — all seven games pass; see the panel table at the end of this
+entry. Nothing open remains.*
 
 Reported from the panel: *"if a game ends, by all lives exhausted or by retire, I need to tap the
 screen to advance to the highscore screen."* Real, and in the **shared** component, so it affected six
@@ -1446,7 +1450,7 @@ that reads input in its draw path means *draw pending **or** input pending **or*
 correct-looking callers concealed an incomplete predicate, which is the same shape of mistake as the
 original B22 (one caller's local workaround concealing a component defect).
 
-**Panel status, 2026-08-02:**
+**Panel status — six games 2026-08-02, platformer 2026-08-03 (all pass):**
 
 | Game | Status |
 |---|---|
@@ -1454,7 +1458,7 @@ original B22 (one caller's local workaround concealing a component defect).
 | samegame | pass — **re-fix confirmed on the panel**: advances on its own *and* the settled overlay stays responsive; the full sequence (lose → overlay+table → `RESET SCORES` empties it immediately → name-entry keyboard with no tap → entry appears → `RESET SCORES` again on a second game over → `RESTART` → `EXIT`) all behaves |
 | brick_breaker | pass — `MENU` → `RETIRE` shows the overlay immediately **with the table still populated**, so the `armed` guard holds against the 21 px `RETIRE`/`RESET SCORES` overlap |
 | pong | pass — parked the paddle and let the AI run out `WINNING_SCORE` 11 |
-| platformer | **unverified** — see [B22 in Phase 1](#b22-game-over-screen--one-row-still-unverified--partly-done-2026-08-02) |
+| platformer | pass — **confirmed 2026-08-03** with a gamepad attached (it is controller-only since B13k, which is why this row lagged the other six by a day): died, the game-over screen painted on its own with no tap, and `RESTART`/`EXIT` both answered touch |
 
 ### D1. Compiler warnings — done 2026-07-30
 
@@ -1558,9 +1562,11 @@ Forecast only. What actually happened is in the dates on each entry and in `git 
    evdev is just `read(2)`. **B2 is now panel-confirmed too** (2026-08-03, gamepad attached — buttons no
    longer stick). **B13g followed it immediately, as a deletion** rather than the reorder its
    one-line row implied, so `gamepad_set_touch_regions()` now has zero callers.
-   **B22's platformer row is no longer blocked**: a gamepad was attached and platformer, pong and
-   frogger all played correctly. Only the narrow game-over-screen behaviour that row is really about is
-   still unconfirmed. ← **the remaining panel work is brick_breaker, tetris and samegame**
+   **B22 is fully closed 2026-08-03** — platformer was the last row, and with a gamepad attached its
+   game-over screen painted with no tap and `RESTART`/`EXIT` answered touch. tetris, snake and samegame
+   were driven into their B13/B14 states the same day and all pass. ← **the only panel work left is
+   brick_breaker levels 5+, postponed at the reporter's request; make the level reachable rather than
+   asking for it again**
    **B7 and B9 are done** (2026-08-02) — they were the available quick wins. Doing them turned up
    three new items, all confirmed on the panel the same day: **B23** (backlight slider previewed to a
    sysfs node that does not exist — **done 2026-08-03**), **B24** (no game asserted bpp, which made B1

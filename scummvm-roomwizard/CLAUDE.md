@@ -36,6 +36,19 @@ Consequences you must respect:
 `build_arm_deps()` cross-compiles zlib and libpng into `arm-deps/` and is idempotent. It runs on
 every code path — do not add a shortcut that skips it.
 
+**Warning baseline: two, both pre-existing** (recorded 2026-08-03) — `oss-mixer.cpp:298`
+unused-result, and a `getaddrinfo` static-link note from timidity. `roomwizard.o` itself is clean, and
+`native_apps/` is at zero, so treat any *third* warning as yours. The `oss-mixer.cpp` one is a real
+defect and is listed under F1 in [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md).
+
+**This build runs no `check-arm-safe.sh` gate at all** — unlike `native_apps/`, which gates every
+build. That is `../IMPROVEMENT_PLAN.md` C9, and the fix has a constraint: hook it into
+`build_scummvm()` **before** `strip_binary()`. The gate reports 8–9 phantom hardware divides on the
+*stripped* binary and zero on the identical file unstripped, because with no symbol table `objdump`
+decodes literal pools as instructions. Never gate after the strip, and never allowlist offsets —
+`base/version.o` re-embeds the build date on every link, so every address after it moves between
+builds of identical source.
+
 **`clean` is the only clean path — do not add a second one.** A root-level `clean.sh` used to exist
 and was deleted 2026-08-03 (`../IMPROVEMENT_PLAN.md` B19a): it was this tree's clean script with no
 shebang and no `cd`, so from the repo root its `find . -name '*.o' -delete` reached

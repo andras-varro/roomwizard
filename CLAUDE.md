@@ -47,6 +47,38 @@ the actual edit and its verification need. Spin up subagents for that — one pe
 question, in parallel — and keep only their conclusions. Do the edits, the build and the on-device
 verification in the main thread, where the context is worth spending.
 
+**A plan entry's recorded cause *and* its prescribed fix are both hypotheses.** `open, confirmed` in
+`IMPROVEMENT_PLAN.md` means the **symptom** reproduced — nothing more. The cause written beside it and
+the fix suggested under it were both written by someone who had not yet done the work. That has now
+been wrong three times, and each time one `grep` would have settled it before any code was touched:
+B12's silence timeout (which would have killed healthy idle VNC sessions), B13i's `break`, and B12b —
+where the named cause (`quit()`), the prescribed fix (a `_quit` flag) and even its "compare with the
+SDL backend" pointer were **all** false, because `OSystem_SDL::quit()` does the same `exit(0)`. So
+reproduce the symptom, then find the cause yourself; and **when an entry says "compare with X", read
+X**. Record what the cause turned out to be when you close the row — several Closed entries exist
+mainly to retract their own diagnosis.
+
+**Give every new check a negative control, and ask which part of the count is the harness.** A gate
+that reports a number can be wrong in *both* directions, and this repo has hit both: the `sdiv`/`udiv`
+gate counted five x86 binaries and three PNGs it could not actually read (false negative,
+`IMPROVEMENT_PLAN.md` D2b), and B17's `/proc` scanner counted its own `grep` argv. The same gate
+false-**positives** ~9 times on a *stripped* ScummVM binary and zero on the identical file unstripped —
+literal pools decoded as instructions — and those phantom operands are **not** reliably invalid
+(`udiv pc, fp, sl` is dismissible, `udiv r7, r1, lr` is a legal encoding), so eyeballing them is not
+triage; the symbol table is the only thing that answers it. If a fix is supposed to drive a number to
+zero, check that it reaches zero.
+
+**Editing the two long docs.** `IMPROVEMENT_PLAN.md` is ~1600 lines and its Closed section is mostly
+headings that other entries deep-link to: anchor an `Edit` on text you intend to **keep**, and expect to
+fix inbound links whenever you retitle a heading — closing a row usually means retitling one. The IDE's
+markdownlint does this for you: **`MD051/link-fragments` fires on exactly the anchors you just broke**,
+so it is a free dangling-link checker, and `comm -23` of the `(#fragment)`s against the slugified
+headings confirms the whole file. (`MD060` table-style warnings, by contrast, fire on every table in the
+repo — that is the established style, not something you introduced.) A long multi-line `old_string` can
+fail to match for no visible reason; the reliable fallback is `head -N` / `cat <<'EOF'` / `tail -n +M`,
+which also preserves LF. **Never bulk-edit a source file with a python script**: it rewrites the whole
+file's line endings. Use `Edit`, or `sed -i`.
+
 ## Build & deploy
 
 Everything builds with the ARM cross-compiler and deploys over SSH. There is **no
@@ -86,15 +118,60 @@ ScummVM additionally needs **WSL Ubuntu 20.04+** and `g++-arm-linux-gnueabihf`; 
 cross-compiles its own zlib/libpng. `usb_host` needs kernel-module build deps
 (`bc libssl-dev bison flex`) + `python3`.
 
-**On this Windows host, every build goes through WSL.** The Bash tool is Git Bash, which has neither
-the ARM cross-compiler nor a host `gcc` — so the host-side regression needs WSL too, not just the
-cross-builds. Invoke as
-`wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/<component> && ./build-and-deploy.sh <ip>"`.
-
 **Note:** `native_apps/` has no `Makefile` — there was one, it targeted host `gcc` with ARM flags
 and could not compile anything, and it was deleted. `native_apps/build-and-deploy.sh`
 (cross-compiler, `-static`) is the only build path and the source of truth for how binaries are
 actually built and shipped.
+
+## Working from this host — Windows, WSL and the tools
+
+The repo lives on `c:\work\roomwizard`; **everything that compiles or decodes lives in WSL.** These are
+tool-level traps rather than device facts, and each one has cost real time.
+
+- **WSL is not just for the cross-compiler.** Git Bash has no host `gcc` and no usable `python3`, so
+  the host-side regressions (`tests/*_test.c`, built with host gcc) and every `fb565_to_png.py` decode
+  need WSL as much as the cross-builds do. Invoke as
+  `wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/<component> && ./build-and-deploy.sh <ip>"`.
+- ⚠️ **`command -v python3` returns success in Git Bash and the interpreter does not exist.** It
+  resolves to the Windows App Execution Alias, which is a real file that prints *"Python was not found;
+  run without arguments to install from the Microsoft Store"* and fails. So a `command -v` probe is a
+  **false positive** here — test by running `python3 --version`, not by looking it up. WSL's python3 has
+  `PIL` (10.4.0), which is what the framebuffer decoder needs.
+- **Git Bash `/tmp` and WSL `/tmp` are different filesystems.** Capture a framebuffer with the Bash
+  tool into Git Bash's `/tmp` and the WSL decoder cannot see it. Write captures somewhere under
+  `c:\work\roomwizard` and both sides reach them.
+- **The Bash tool's working directory does not reliably persist between calls.** Use an absolute path
+  in every command. A `cd` into `scummvm/` silently applied to one later call and not the next,
+  producing a bogus "No such file or directory".
+- **No foreground `sleep`** — it is blocked. Use `run_in_background`, or put the sleep inside the remote
+  command: `ssh root@<ip> 'sleep 3; …'` works, because the local command is `ssh`.
+- **A compound `ssh` command can be refused by the permission classifier** — a `cp` chained with
+  `echo`/`cat` was. Re-issue it as one plain single-purpose command.
+- **File modes are unobservable on this host.** `/mnt/c` is DrvFs 9p: it reports every file
+  `-rwxrwxrwx` and silently discards `chmod`, so a missing-`+x` bug can neither fire nor be
+  demonstrated here (`IMPROVEMENT_PLAN.md` B19) — and you cannot build a negative control for one by
+  `chmod`ing under `/mnt/c`.
+- **`shellcheck` is not installed in this WSL** (C7 wants it). `bash -n` is what you have, plus
+  `dash -n` on anything carrying a `/bin/sh` shebang.
+- **Never run a ScummVM build concurrently with a `native_apps` build.**
+  `scummvm-roomwizard/build-and-deploy.sh` does `rm -f native_apps/common/*.o` at **two** points
+  (lines 296 and 466) — deliberately, because a stale x86 `.o` there fails the cross-build with
+  "file format not recognized". It takes ~1m35s–2m20s; wait it out.
+
+**Redeploy scope by changed file.** All three components link objects from `native_apps/common/`, so
+what you touched decides how much has to go out. A *deployed* binary keeps whatever it was built with,
+and a stale one does not error — it misparses (see the touch-calibration bullet below).
+
+| Changed | Redeploy |
+|---------|----------|
+| an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
+| `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
+| `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
+| `roomwizard-app-init.sh`, `disable-steelcase.sh` | neither — **only** `./setup-device.sh <ip>`, which ends in a reboot |
+
+A **new** native binary goes in `GAMES_BINARIES` in `native_apps/build-and-deploy.sh` and nowhere else;
+that one array drives the upload, the remote `chmod +x` and the md5 verification. Details and the
+reason there is no second list: `native_apps/CLAUDE.md`.
 
 ## Non-obvious constraints (things that will silently break)
 
