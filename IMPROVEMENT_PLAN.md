@@ -122,10 +122,41 @@ Two fixes, and they are not alternatives:
    `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
    (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
    **rejects hyphens**, so `RW-Test` would still be replaced by its fallback `rwtwenty`.
+3. **Either way, `set-hostname.sh` should own `/etc/dhclient.conf`'s `send host-name`** — the third
+   place the name is stored, and the one a DHCP server, and therefore a router's device list, reads.
+   Nothing in this repo writes it, so a unit renamed months ago still announces the shipped `RW09`
+   ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
 
-⚠️ **Do not "fix" this with more offline editing of `/etc/hosts`.** In DHCP mode the vendor's
-`/etc/dhclient-script` writes a non-loopback `<leased-ip> <name>` line by design — D7's original
-defect, returning on every boot. Only removing `websign` (or the service) stops it.
+⚠️ **It is `networkmanager` that has to go, not `/etc/hosts` that has to be re-edited.** The
+non-loopback `<leased-ip> <name>` line is written by the **vendor's** `/etc/dhclient-script`, which runs
+only when `networkmanager` starts `dhclient` with `-sf /etc/dhclient-script`. The ifupdown path
+(`S40networking` + `iface eth0 inet dhcp`) uses `/sbin/dhclient-script`, which contains no reference to
+`/etc/hosts` at all. Measured on a unit in service: with the `rcS.d` link gone and `websign` deleted,
+`/etc/hosts` and `/etc/hostname` have been untouched for five months while leases renew daily
+([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
+
+### D8. `--deep-clean` deletes the mDNS daemon that setup enabled — open, **confirmed 2026-08-05**
+
+`setup-device.sh` step 3 links `/etc/rc5.d/S30avahi-daemon`; its own deep clean then deletes
+`/usr/sbin/avahi-daemon`, `/etc/avahi` and `/etc/init.d/avahi-daemon` (`setup-device.sh:295`, `:300`).
+In one invocation — `./setup-device.sh <ip> --deep-clean` — the link is left dangling and `<name>.local`
+never resolves. The delete list predates the mDNS work. Not yet observed firing: the unit in service
+has both avahi files and no `S30` link, because its setup ran before mDNS was added.
+
+Fix: an `avahi` **keep** entry in [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05)'s
+data file, with the reason recorded, so neither consumer can delete what the other enables. Until then,
+dropping the three avahi paths from the deep-clean list is a two-line change.
+
+### D9. `/var/watchdog_test` is absent on a running unit — open, **benign today, confirmed 2026-08-05**
+
+`disable-steelcase.sh` touches it as its *first* command and runs on every boot from
+`roomwizard-app-init.sh`, yet the unit in service (4 days uptime) does not have the file. It is benign
+**only** because the same script also installs a crontab with no `watchdog.sh` job, so the vendor
+software watchdog is never scheduled — the bypass file is the second line of defence, not the first.
+Two candidate causes, neither measured: the boot-time run is not happening (that unit's deployed
+`disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
+every 4 h) sweeps it. Worth settling before [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05)
+ships an offline `touch /var/watchdog_test`, which would otherwise place a file something deletes.
 
 ---
 
@@ -290,6 +321,13 @@ offline commissioner has no toolchain to fall back on, so the release *is* its o
 binaries. Two obligations that only bite once artifacts are published: ScummVM is GPLv2+, so a binary
 needs the corresponding-source offer, and `vnc_client`'s dependency licences need a pass.
 
+**Preconditions on this host, checked 2026-08-05:** `gh` is installed in **neither** WSL nor Windows,
+so the publish step cannot be exercised until it is (`curl`, `sfdisk`, `dash` and `openssl` are all
+present in WSL). `origin` is `git@github.com-personal:…` — an SSH host alias — so whoever runs the
+publish needs `gh auth` for that account, and the offline installer needs either an authenticated `gh`
+or a public asset URL. Give the tool a `--bundle <file>` path that takes a locally built tarball, so it
+is testable and usable with no network at all.
+
 ---
 
 ### F10. Single-pass offline commissioning — open, **agreed 2026-08-05**
@@ -363,6 +401,38 @@ Those ~40 `rm -rf` targets are written today as **live** paths. Unprefixed on th
 The keep/delete decisions become **a data file with a reason per entry**, read by both
 `setup-device.sh` (live, over SSH) and the offline tool, so the two cannot drift — the same argument
 that put `set-hostname.sh` in its own file. Opt-outs (`--keep-browser`) for whoever wants X11 back.
+
+#### Ground truth, and the shape settled on it
+
+Measured 2026-08-05 from a unit in service (vendor bloatware removed, games running, 4 days uptime) —
+the whitelist cannot be derived on this host, because **both card captures lost every symlink** and
+their `rc*.d` directories are empty (`CLAUDE.md` → *Working from this host*).
+
+- **The `rc5.d`/`rcS.d`/`rc2-4.d` keep-lists are now written down**, from a unit that boots and runs:
+  [`SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode`](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
+  That table *is* the whitelist — everything else under those three can go.
+- ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup.** They are not in scope for any whitelist:
+  they carry `umountfs`, `sendsigs` and `save-rtc.sh`.
+- **Deleting the `rcS.d/S60networkmanager` link is the real D7b fix**, not deleting `websign` — see
+  the corrected note under [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05).
+  Do both; the link is what makes the vendor `dhclient-script` run at all.
+- **`/opt/sbin` (~1.4 MB, 200+ vendor scripts) is present and inert on that unit** and stays — it is
+  the reference material [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was read out of. `/opt` on a
+  working unit holds exactly `games roomwizard sbin vnc_client`.
+- **`/var` is not tmpfs** (only `/var/volatile` is, per `/etc/fstab`), so an offline
+  `touch /var/watchdog_test` persists — belt and braces behind the boot-time one.
+
+Interfaces settled while reading the existing scripts, so they need not be re-derived:
+
+| Piece | Shape |
+|---|---|
+| Bundle from F9 | `<dir>/root/<device-path>` + `<dir>/manifest.d/<component>.list` of `<mode> <device-path>`; **modes are declared, never read off disk** (`/mnt/c` reports 0777) |
+| Per-component staging | `build-and-deploy.sh --bundle <dir>`, reusing that script's own `GAMES_BINARIES` and manifest generator — no second list. `usb_host` is **excluded**: it patches `uImage-system`, and F10 must not touch p1 |
+| `.app` manifests | extract the `ssh` heredoc in `native_apps/build-and-deploy.sh` into one local generator, consumed by both the deploy path and `--bundle` |
+| Boot scripts | `audio-enable`, `time-sync` and `99-security.conf` are heredocs inside `setup-device.sh` today; move them to `device-files/` so the offline installer writes the same bytes |
+| The two `del()`s | the data file is the single source of *decisions*; each consumer keeps its own executor, because `/` is the correct prefix on the device and a refused one offline |
+| Name, offline | `set-hostname.sh NAME ROOTFS` already does `/etc/hostname` + `/etc/hosts`; add `/etc/dhclient.conf` (D7b item 3). `websign` is deleted in the same pass, so `net.hostname` does not arise |
+| Operator prompts | `ROOTFS=<mnt> commission-roomwizard.sh` already asks exactly the two questions and does shadow/sshd/DHCP — the offline tool should orchestrate it, not restate it |
 
 #### Verification, offline and cheap
 

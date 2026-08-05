@@ -849,8 +849,21 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
   accepts `RW09`, `RW20`, `rwtest` and `null` but **rejects `RW-Test` and `rw-test`**; a rejected name
   logs `Invalid host name detected.` and the DHCP client then announces the hardcoded fallback
   `rwtwenty`. Prefer a hyphen-free name on any unit that still has the vendor stack.
-- In DHCP mode `/etc/dhclient-script` writes a **non-loopback** `<leased-ip> <name>` line into
-  `/etc/hosts` deliberately, so D7's original defect returns on every boot unless `websign` is gone.
+- **There are two dhclient scripts, and only the vendor's rewrites `/etc/hosts`.** `/etc/dhclient-script`
+  (vendor, 10,370 bytes) has a `# PV02 Addition` block that on every `BOUND` event writes
+  `net.hostname` into `/etc/hostname`, truncates `/etc/hosts` to `127.0.0.1 localhost` and appends
+  `<leased-ip> <name>` — D7's defect, regenerated. `/sbin/dhclient-script` (the stock ifupdown one,
+  16,772 bytes) contains **zero** references to `/etc/hosts`. Which one runs depends on who starts
+  `dhclient`: the vendor `networkmanager` passes `-sf /etc/dhclient-script`, while `S40networking` +
+  `auto eth0 / iface eth0 inet dhcp` uses the default. **Measured on a unit in service** (vendor stack
+  removed, ifupdown DHCP, `dhclient -pf /var/run/dhclient.eth0.pid eth0` running): `/etc/hosts` and
+  `/etc/hostname` have not been written for five months while `/var/lib/dhcp/dhclient.leases` updates
+  daily. So once the `networkmanager` boot link is gone, **nothing regenerates either file** — which is
+  what makes an offline-set name stick.
+- ⚠️ **`/etc/dhclient.conf`'s `send host-name` is a third copy of the name, and nothing in this repo
+  writes it.** The vendor image ships `send host-name "RW09";` and the same unit still announces `RW09`
+  to DHCP — so a router's device list keeps showing the shipped name however often `/etc/hostname` is
+  corrected. `set-hostname.sh` should own this file too (`IMPROVEMENT_PLAN.md` D7b).
 
 **mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
 `/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
@@ -1537,9 +1550,27 @@ removing a package is limited to the vendor software that used it.
 | `dbus` | System message bus |
 | `audio-enable` | Speaker amplifier GPIO + mixer setup |
 | `time-sync` | `rdate`-based time sync at boot (matters — see [RTC](#310-rtc-and-hold-up)) |
-| `roomwizard-games` | App launcher |
+| `roomwizard-app` | App launcher respawn service (`S99`, runlevels 2–5) |
 | `rotatelogfiles.sh` (cron, 4 h) | Log rotation — prevents disk fill |
 | `cleanupfiles.sh` (cron, 4 h) | Temp file cleanup |
+
+**The boot links a working unit actually has** — read from a unit in service on 2026-08-05 (vendor
+bloatware removed, games running, 4 days uptime). This is the empirical keep-list: everything else
+under `rc5.d`/`rcS.d` on a stock card can go, which is what lets the cleanup be a **whitelist** rather
+than a growing list of vendor service names (`IMPROVEMENT_PLAN.md` F10).
+
+| Directory | Links |
+|---|---|
+| `rcS.d` | `S02banner.sh` `S03sysfs.sh` `S04udev` `S05modutils.sh` `S06alignment.sh` `S06devpts.sh` `S10checkroot.sh` `S30procps.sh` `S30ramdisk` `S35mountall.sh` `S37populate-volatile.sh` `S39hostname.sh` `S40networking` `S43syslog` `S45mountnfs.sh` `S55bootmisc.sh` `S99finish.sh` |
+| `rc5.d` | `S02dbus-1` `S09sshd` `S20cron` `S28time-sync` `S29audio-enable` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` (+ `S89xpad-modules` `S90usb-host` where `usb_host` is installed) |
+| `rc2.d`–`rc4.d` | `S02dbus-1` `S09sshd` `S20hwclock.sh` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` `S99stop-bootlogd` |
+| `rc0.d`, `rc6.d` | `K09sshd` `K20dbus-1` `K20hwclock.sh` `K20psplash` `K20wpa_supplicant` `K31alsa-state` `K85watchdog` `S20sendsigs` `S25save-rtc.sh` `S31umountnfs.sh` `S38urandom` `S40umountfs` `S90halt`/`S90reboot` |
+
+⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** They carry `umountfs`,
+`sendsigs` and `save-rtc.sh`; a unit that cannot unmount cleanly is a unit whose next fsck is not
+optional. Note also that **`S30avahi-daemon` is absent** on that unit while `/usr/sbin/avahi-daemon`
+and `/etc/init.d/avahi-daemon` are both present — mDNS is enabled by a link `setup-device.sh` adds,
+and its own deep clean deletes the daemon (`IMPROVEMENT_PLAN.md` D8).
 
 Full guide including filesystem analysis and security considerations:
 [`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization).

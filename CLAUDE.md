@@ -153,6 +153,13 @@ tool-level traps rather than device facts, and each has cost real time.
 - **File modes are unobservable here.** `/mnt/c` is DrvFs 9p: it reports every file `-rwxrwxrwx` and
   silently discards `chmod`. A missing-`+x` bug can neither fire nor be demonstrated on this host, and
   you cannot build a negative control for one by `chmod`ing under `/mnt/c`.
+- ⚠️ **The card captures under `partitions/` and `partitions.new/` contain no symlinks at all.** They
+  were copied through Windows, which dropped every one: `bin/sh` and `bin/busybox` are simply absent,
+  and `etc/rc0.d` … `etc/rc6.d`, `etc/rcS.d` are all **empty directories**. So the captures are a fine
+  source for regular files — vendor scripts, `/etc` config, sizes — and **worthless for any question
+  about what starts at boot or where a symlink points**. Get that from a running unit
+  (`SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode` has the measured inventory), and build fixtures for
+  boot-link work synthetically rather than from a capture.
 - **Every disk here reports `removable = 0`**, including the root disk, and a `wsl --mount`ed card
   lands on the same `/dev/sd?` names as `/`. So a "removable media only" gate rejects everything.
   Resolve the root disk before writing to any device:
