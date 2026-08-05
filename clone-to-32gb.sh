@@ -37,13 +37,34 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-EXPECTED_ROOTFS_UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
 MIN_TARGET_SIZE_GB=16
 # Upper bound as well as a lower one: a minimum alone rejects the original 4 GB
 # card and accepts a 4 TB disk.  Env-overridable for a genuinely large card.
 MAX_TARGET_SIZE_GB=${MAX_TARGET_SIZE_GB:-128}
 EXPECTED_PARTITION_COUNT=7  # Original has 7 partitions (including swap on p7)
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Layout fingerprint and the rest of "is this a RoomWizard card".  Sourced
+# rather than reimplemented: commission-roomwizard.sh asks the same question of
+# the same cards.
+#
+# ⚠️ Do not gate this script on a rootfs UUID.  A filesystem UUID is generated at
+# mkfs time, so it names ONE CARD: two RoomWizards on the identical firmware
+# build share none of their four UUIDs, so such a gate warns on every unit but
+# the one the constant came from.  And it must never be "repaired" by running
+# `tune2fs -U` to make a card match another — two cards claiming one UUID is a
+# harder bug than the one it hides.  The partition LAYOUT is the invariant:
+# U-Boot has root=/dev/mmcblk0p6 compiled in with no saveenv, so p6 is the rootfs
+# by position on every unit.
+# shellcheck source=rw-identify.sh
+. "$SCRIPT_DIR/rw-identify.sh"
+
+# Captured by do_verify before repartitioning and checked again by
+# do_final_verify.  The meaningful question after a resize is whether the UUID
+# survived it, which is a comparison against this card's own earlier value — not
+# against a constant copied from some other card.
+ORIG_P6_UUID=""
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -484,30 +505,39 @@ do_verify() {
     sfdisk -l "$DEVICE"
     echo ""
 
-    # Check p6 UUID
+    # Verify the LAYOUT, not a UUID.  rw_is_card_disk pins the start and size of
+    # p1 p2 p3 p5 p6 — byte-identical on every unit measured — and deliberately
+    # does NOT pin p4 or p7, which absorb the difference in physical card size.
+    if rw_is_card_disk "$DEVICE"; then
+        info "Partition layout matches the RoomWizard original ✓"
+    else
+        warn "Partition layout does NOT match the RoomWizard original."
+        warn "  p1 p2 p3 p5 p6 must be at their original start sectors and sizes."
+        warn "  Expected: ${RW_LAYOUT}"
+        echo ""
+        warn "If this card has already been expanded, you are past the point this"
+        warn "check is for — p4 and p6 have grown and p7 is gone. Re-running is a"
+        warn "no-op at best."
+        echo ""
+        confirm "Layout does not match. Continue anyway?"
+    fi
+
+    # Record this card's own rootfs UUID.  Not compared against a constant: the
+    # only thing worth asserting is that the resize preserves it, which
+    # do_final_verify checks against the value captured here.
     if $DRY_RUN; then
-        dry_run "Would check UUID of ${p6_dev}"
+        dry_run "Would record the UUID of ${p6_dev}"
         return
     fi
 
-    local p6_uuid
-    p6_uuid=$(blkid -s UUID -o value "$p6_dev" 2>/dev/null || echo "")
+    ORIG_P6_UUID=$(blkid -s UUID -o value "$p6_dev" 2>/dev/null || echo "")
 
-    if [ -z "$p6_uuid" ]; then
+    if [ -z "$ORIG_P6_UUID" ]; then
         error "Could not read UUID from ${p6_dev}"
         error "Is the RoomWizard image properly cloned to this card?"
         exit 1
     fi
-
-    if [ "$p6_uuid" != "$EXPECTED_ROOTFS_UUID" ]; then
-        warn "p6 UUID mismatch!"
-        warn "  Expected: ${EXPECTED_ROOTFS_UUID}"
-        warn "  Found:    ${p6_uuid}"
-        echo ""
-        confirm "UUID does not match expected value. Continue anyway?"
-    else
-        info "p6 UUID: ${p6_uuid} — matches expected value ✓"
-    fi
+    info "p6 UUID: ${ORIG_P6_UUID} (recorded; must survive the resize)"
 }
 
 # ---------------------------------------------------------------------------
@@ -741,20 +771,31 @@ do_final_verify() {
         return
     fi
 
-    # Check UUID
+    # Did the resize preserve this card's UUID?  resize2fs must not change it,
+    # and that — not equality with some other card's UUID — is the only thing
+    # worth asserting here.
+    #
+    # Nothing on the device consumes a UUID at all: U-Boot passes
+    # root=/dev/mmcblk0p6 and /etc/fstab names /dev/mmcblk0p{2,3,5,7}, both by
+    # position.  Neither does our tooling any more — commission-roomwizard.sh
+    # finds the rootfs by content.  So a changed UUID is a curiosity, not a
+    # breakage — and never "fix" one with `tune2fs -U` to match another card.
     echo ""
     info "Checking rootfs UUID..."
     local p6_uuid
     p6_uuid=$(blkid -s UUID -o value "$p6_dev" 2>/dev/null || echo "UNKNOWN")
 
-    if [ "$p6_uuid" = "$EXPECTED_ROOTFS_UUID" ]; then
-        info "✓ UUID preserved: ${p6_uuid}"
+    if [ -z "$ORIG_P6_UUID" ]; then
+        info "p6 UUID is now ${p6_uuid} (no pre-resize value was recorded)"
+    elif [ "$p6_uuid" = "$ORIG_P6_UUID" ]; then
+        info "✓ UUID preserved across the resize: ${p6_uuid}"
     else
-        warn "✗ UUID MISMATCH!"
-        warn "  Expected: ${EXPECTED_ROOTFS_UUID}"
-        warn "  Got:      ${p6_uuid}"
-        warn "  The commissioning script may not find the rootfs."
-        warn "  Fix with: sudo tune2fs -U ${EXPECTED_ROOTFS_UUID} ${p6_dev}"
+        warn "✗ The resize CHANGED the rootfs UUID:"
+        warn "  Before: ${ORIG_P6_UUID}"
+        warn "  After:  ${p6_uuid}"
+        warn "  resize2fs is not supposed to do this. The card still boots and"
+        warn "  still commissions — nothing references the UUID — but it means"
+        warn "  something more than a resize happened to the filesystem."
     fi
 
     # Show blkid details

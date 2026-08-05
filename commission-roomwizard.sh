@@ -52,38 +52,115 @@ echo "================================================"
 echo ""
 
 # Step 1: Locate the rootfs partition (p6)
-info "Locating rootfs partition (UUID: 108a1490-8feb-4d0c-b3db-995dc5fc066c)..."
+#
+# By CONTENT, not by UUID. A filesystem UUID is generated at mkfs time, so it
+# names one card and not a model: two RoomWizards on the identical firmware
+# build share none of their four UUIDs, and a hardcoded one recognises only the
+# unit whose card the constant was copied from. rw-identify.sh holds the markers
+# and the full reasoning.
+#
+# Sourced with `.` rather than run, and via an absolute path, because the Bash
+# tool's working directory is not dependable.
+# shellcheck source=rw-identify.sh
+. "$SCRIPT_DIR/rw-identify.sh"
 
-# Honour a pre-set $ROOTFS. The failure message below tells the operator to
-# `export ROOTFS=/mnt/rw` when auto-detection misses — a card mounted by hand, or
-# a copy of a rootfs used to exercise this script without an SD card — but the
-# assignment here used to be unconditional, which made that advice inoperative.
 if [ -n "${ROOTFS:-}" ]; then
-    info "Using ROOTFS from the environment (auto-detection skipped)"
+    # The documented escape hatch: a card mounted by hand, or a copy of a rootfs
+    # used to exercise this script with no SD card at all. Honoured, but still
+    # checked — `export ROOTFS=/` would otherwise rewrite this host's own
+    # /etc/shadow. A failed check warns and asks rather than refusing, so the
+    # hatch stays usable for a deliberately odd target.
+    info "Using ROOTFS from the environment: $ROOTFS (detection skipped)"
+    if rw_is_rootfs "$ROOTFS"; then
+        success "It looks like a RoomWizard rootfs: $(rw_rootfs_firmware "$ROOTFS")"
+    else
+        warning "$ROOTFS does not look like a RoomWizard rootfs."
+        warning "Expected all of: $RW_ROOTFS_REQUIRED"
+        warning "plus one of: $RW_ROOTFS_VENDOR (or '$RW_ISSUE_RE' in etc/issue)"
+        echo ""
+        warning "Continuing will edit /etc/shadow, /etc/hosts, /etc/hostname,"
+        warning "/etc/ssh/sshd_config and /etc/network/interfaces UNDER THIS PATH."
+        echo ""
+        read -p "Type 'yes' to continue anyway: " FORCE_ROOTFS
+        if [ "$FORCE_ROOTFS" != "yes" ]; then
+            error "Aborted. Nothing was changed."
+            exit 1
+        fi
+    fi
 else
-    ROOTFS=$(findmnt -rno TARGET --source "$(blkid -U 108a1490-8feb-4d0c-b3db-995dc5fc066c 2>/dev/null)" 2>/dev/null || echo "")
-fi
+    info "Locating the RoomWizard rootfs among the mounted filesystems..."
 
-if [ -z "$ROOTFS" ]; then
-    error "Could not find mounted rootfs partition (p6)."
-    echo ""
-    echo "Please ensure the SD card is inserted and partitions are mounted."
-    echo "You can check with: lsblk -o NAME,UUID,FSTYPE,SIZE,MOUNTPOINT | grep -v loop"
-    echo ""
-    echo "If needed, mount manually:"
-    echo "  sudo mkdir -p /mnt/rw"
-    echo "  sudo mount /dev/sdX6 /mnt/rw"
-    echo "  export ROOTFS=/mnt/rw"
-    exit 1
-fi
+    # `|| true`: no match is a normal outcome, reported below with a diagnosis.
+    MOUNTED_ROOTFS=$(rw_find_rootfs || true)
+    ROOTFS_COUNT=$(printf '%s' "$MOUNTED_ROOTFS" | grep -c . || true)
 
-success "Found rootfs at: $ROOTFS"
+    if [ "$ROOTFS_COUNT" -eq 0 ]; then
+        error "No RoomWizard rootfs is mounted."
+        echo ""
+
+        # Make the failure actionable instead of generic. This is a read-only
+        # scan of partition tables — nothing is mounted and nothing is written.
+        CARDS=$(rw_find_card_disks || true)
+        if [ -n "$CARDS" ]; then
+            echo "  A disk carrying the RoomWizard partition layout IS present:"
+            echo ""
+            echo "$CARDS" | while read -r dev size; do
+                echo "    $dev   $size"
+            done
+            echo ""
+            echo "  Its rootfs is partition 6. Mount it and re-run:"
+            echo ""
+            echo "$CARDS" | while read -r dev _; do
+                echo "    sudo mkdir -p /mnt/rw"
+                echo "    sudo mount ${dev}6 /mnt/rw"
+                break
+            done
+        else
+            echo "  No disk on this host carries the RoomWizard partition layout"
+            echo "  (7 partitions; p6 at sector 4096638, 980.5 MB)."
+            echo ""
+            echo "  Check that the card is in the reader and visible:"
+            echo "    lsblk -o NAME,UUID,FSTYPE,SIZE,MOUNTPOINT | grep -v loop"
+            echo ""
+            echo "  On WSL the card must first be attached from Windows:"
+            echo "    wsl --mount \\\\.\\PHYSICALDRIVEn --bare"
+            echo ""
+            echo "  Then mount p6 by hand:"
+            echo "    sudo mkdir -p /mnt/rw"
+            echo "    sudo mount /dev/sdX6 /mnt/rw"
+        fi
+        echo ""
+        echo "  Either way, you can point this script at a mounted tree directly:"
+        echo "    export ROOTFS=/mnt/rw"
+        exit 1
+    fi
+
+    if [ "$ROOTFS_COUNT" -gt 1 ]; then
+        error "More than one RoomWizard rootfs is mounted:"
+        echo ""
+        echo "$MOUNTED_ROOTFS" | while read -r m; do
+            echo "    $m   [$(rw_rootfs_firmware "$m")]"
+        done
+        echo ""
+        echo "  Commissioning writes a host name and a password, so it must not"
+        echo "  guess which card you meant. Unmount the others, or name one:"
+        echo "    export ROOTFS=<mountpoint>"
+        exit 1
+    fi
+
+    ROOTFS="$MOUNTED_ROOTFS"
+    success "Found rootfs at: $ROOTFS"
+    info "Firmware: $(rw_rootfs_firmware "$ROOTFS")"
+fi
 echo ""
 
-# Verify it looks like a valid rootfs
-if [ ! -d "$ROOTFS/etc" ]; then
-    error "The mounted partition at $ROOTFS doesn't look like a valid rootfs."
-    error "Expected to find /etc directory."
+# A read-only mount is the one way detection can succeed and every edit below
+# fail. Catch it here rather than emitting a pile of "Read-only file system".
+if ! rw_is_rootfs_writable "$ROOTFS"; then
+    error "$ROOTFS is mounted read-only; commissioning cannot write to it."
+    echo ""
+    echo "  Remount it read-write:"
+    echo "    sudo mount -o remount,rw $ROOTFS"
     exit 1
 fi
 
@@ -170,7 +247,12 @@ while true; do
     # set-hostname.sh is the single implementation and the single validator; it
     # refuses a bad name and changes nothing, so let it be the judge rather than
     # duplicating the RFC-1123 regex here.
-    if sudo "$SCRIPT_DIR/set-hostname.sh" "$NEW_HOSTNAME" "$ROOTFS"; then
+    #
+    # Run through `bash` rather than as `./set-hostname.sh`: a clone can land
+    # without the executable bit, and failing HERE — after /etc/shadow has
+    # already been rewritten — leaves a half-commissioned card and loops on
+    # "Please try again" forever. The interpreter is not in doubt.
+    if sudo bash "$SCRIPT_DIR/set-hostname.sh" "$NEW_HOSTNAME" "$ROOTFS"; then
         success "Host name set to: $NEW_HOSTNAME"
         break
     fi

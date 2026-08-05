@@ -31,19 +31,58 @@ The obvious simplification — fold Phase 2's cleanup into offline commissioning
 for a mechanical reason. Phase 2's targets are spread across **four partitions** that only a
 booted kernel assembles into one tree:
 
-| Partition (UUID prefix) | Mounted as | Cleanup that touches it |
+| Partition | Mounted as | Cleanup that touches it |
 |---|---|---|
-| `108a1490` | `/` (p6) | `/opt/jetty*`, `/opt/openjre-8`, `/usr/share/cjkfont`, WebKit/GTK/X11 libs, `/etc/init.d/*` |
-| `d5758df8` | `/home/root/data` | `websign`, `conctest`, the 79 MB `cron/log` truncation |
-| `da4cda60` | `/home/root/log` | `Xorg.0.log`, `browser.err`, `jettystart`, … |
-| `26a7a226` | `/home/root/backup` | the 474 MB `factory/*.img` deep-clean option |
+| p6 | `/` | `/opt/jetty*`, `/opt/openjre-8`, `/usr/share/cjkfont`, WebKit/GTK/X11 libs, `/etc/init.d/*` |
+| p2 | `/home/root/data` | `websign`, `conctest`, the 79 MB `cron/log` truncation |
+| p3 | `/home/root/log` | `Xorg.0.log`, `browser.err`, `jettystart`, … |
+| p5 | `/home/root/backup` | the 474 MB `factory/*.img` deep-clean option |
 
-`commission-roomwizard.sh` locates exactly **one** of these (p6, by UUID). Three further reasons:
+`commission-roomwizard.sh` locates exactly **one** of these (p6, by content — see
+[*Finding the card*](#finding-the-card)). Three further reasons:
 `disable-steelcase.sh` is re-run **on every boot** by the init script, so the disable half is
 inherently a running-system job; already-commissioned units exist and must stay cleanable without
 pulling their card; and the deep clean measures `df` before/after and offers a dry run, which
 assumes a live device. Commissioning's job is to produce a device you can *reach* — a cleanup that
 broke boot there would cost you SSH and tell you nothing.
+
+## Finding the card
+
+⚠️ **A partition is identified by position and content, never by filesystem UUID.** A UUID is
+generated at mkfs time, so it names one *card*, not a model: units are mkfs'd independently at the
+factory, and two RoomWizards running the identical firmware build share **none** of their four
+UUIDs. A hardcoded UUID therefore recognises only the unit its constant was copied from and rejects
+every other RoomWizard. It cannot be repaired by assigning the constant to the new card either —
+two cards with one UUID is a worse bug than the one it hides.
+
+Nothing on the device consumes a UUID at all: U-Boot passes `root=/dev/mmcblk0p6` and `/etc/fstab`
+names `/dev/mmcblk0p{2,3,5,7}`, both by position.
+
+[`rw-identify.sh`](rw-identify.sh) holds the two checks, sourced by both
+`commission-roomwizard.sh` and `clone-to-32gb.sh`:
+
+| Function | Question | How |
+|---|---|---|
+| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because `setup-device.sh --remove` deletes `/opt/pv02`, and a card already in service must still be recognisable. |
+| `rw_is_card_disk` | is this disk a RoomWizard card? | the partition table: start and size of p1 p2 p3 p5 p6, which are byte-identical on every unit. p4 and p7 are **not** pinned — they absorb the difference in physical card size. |
+
+Two safety properties worth knowing, because a content scan can reach places a UUID lookup could
+not:
+
+- **`/` is never a candidate.** Commissioning is a card-in-reader operation, so the live root is
+  never the target — and selecting it would rewrite this host's own `/etc/shadow`. It is excluded
+  from the scan unconditionally. To act on a live root, set `ROOTFS=/` by hand.
+- **An explicit `$ROOTFS` is still checked**, and a tree that fails the check needs a typed `yes`
+  before anything is written. The escape hatch stays usable for a deliberately odd target;
+  `export ROOTFS=/` by accident does not silently proceed.
+
+Regression: [`tests/rw_identify_test.sh`](tests/rw_identify_test.sh) — host-only, no card, no root.
+It builds synthetic rootfs trees for every state a card can be in and synthetic partition tables
+with `sfdisk` on sparse files, so both the positive and the negative controls are self-contained.
+
+```bash
+./tests/rw_identify_test.sh
+```
 
 ## Phase 1: SD Card Commissioning
 
@@ -59,15 +98,19 @@ The [`commission-roomwizard.sh`](commission-roomwizard.sh) script configures the
 
 ### The host name, and why `/etc/hosts` is rewritten too
 
-The vendor image ships `/etc/hostname` as `RW09` — so **every unit cloned from it claims the same
-name** — and its `/etc/hosts` additionally maps that name, on a *non-loopback* line, to an external
-address that is unreachable from anywhere these units are used. Both problems are baked into the
-image rather than generated per unit.
+A unit as it arrives carries **a name it did not choose and a mapping for that name that does not
+work**. Both are properties of the image rather than of the unit, so both are the same on every
+card, but *what* the name is varies — measured examples are `RW09` and `null`. What is consistent is
+the shape: `/etc/hosts` maps the device's own name on a **non-loopback** line, to an address that is
+unreachable from anywhere the unit is now used. So more than one unit can claim one name, and every
+unit resolves its own name wrongly.
 
 Setting `/etc/hostname` alone would leave that mapping in place, so anything on the device that
 resolves its own name would still get the wrong answer. The prompt therefore writes both files, via
 [`set-hostname.sh`](set-hostname.sh) — one implementation shared with `setup-device.sh --hostname`,
-so the offline and over-SSH paths cannot drift. The result is loopback-only:
+so the offline and over-SSH paths cannot drift. It keys the removal on the name it reads from
+`/etc/hostname`, not on a hardcoded one, which is why it works on a card whose shipped name is
+anything at all. The result is loopback-only:
 
 ```text
 127.0.0.1 localhost
@@ -80,14 +123,14 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 
 ### Usage
 
-1. **Insert the SD card** into a Linux machine (or WSL)
+1. **Insert the SD card** into a Linux machine (or WSL), and mount its rootfs (p6). Any mount
+   point works — the script finds it by content.
 2. Run:
    ```bash
-   chmod +x commission-roomwizard.sh
    ./commission-roomwizard.sh
    ```
-   If auto-detection cannot find p6, mount it by hand and `export ROOTFS=/mnt/rw` —
-   the script honours a pre-set `$ROOTFS`.
+   If it cannot find a rootfs it names the disk it *did* find and prints the mount command. You
+   can also point it at a mounted tree directly with `export ROOTFS=/mnt/rw`.
 3. Follow the prompts for password / host name / SSH key
 4. Unmount, re-insert into device, power on
 
@@ -255,12 +298,19 @@ scummvm-roomwizard/build-and-deploy.sh Build + deploy ScummVM
 
 ## Troubleshooting
 
-### "Could not find mounted rootfs partition" (Phase 1)
-Mount the SD card manually:
+### "No RoomWizard rootfs is mounted" (Phase 1)
+
+The script prints the diagnosis itself — if a disk with the RoomWizard partition layout is present
+it names it and gives you the exact `mount` command. If it found no such disk, the card is not
+visible to Linux at all; on WSL it must first be attached from Windows:
+
 ```bash
+wsl --mount \\.\PHYSICALDRIVEn --bare
 sudo mkdir -p /mnt/rw
-sudo mount /dev/sdX6 /mnt/rw    # Replace X with your device letter
+sudo mount /dev/sdX6 /mnt/rw          # p6 is the rootfs, always
 ```
+
+**Do not go looking for a particular UUID** — see [*Finding the card*](#finding-the-card).
 
 ### Device reboots after ~70 minutes
 System setup (Phase 2) wasn't completed. Run `./setup-device.sh <ip>`.

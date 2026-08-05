@@ -81,7 +81,8 @@ with a python script** — it rewrites the whole file's line endings. Use `Edit`
 ## Build & deploy
 
 Everything builds with the ARM cross-compiler and deploys over SSH. There is **no CI, no test runner,
-no lint** — "tests" are host-gcc regressions over pure-logic functions plus interactive on-device
+no lint** — "tests" are host-gcc regressions over pure-logic functions (`native_apps/tests/*_test.c`)
+plus shell regressions over host tooling (`tests/*_test.sh`, run directly) plus interactive on-device
 diagnostic tools.
 
 ```bash
@@ -314,9 +315,27 @@ targets span four partitions that only a booted kernel assembles into one tree; 
 
 **Host name is set in two files, by one script.** `set-hostname.sh` writes `/etc/hostname` **and**
 rewrites `/etc/hosts`, because the vendor image maps the device's own name on a **non-loopback** line
-to an unreachable address — so every unit cloned from it claims the same name and resolves it wrongly.
-It is called from both bring-up paths, so the two cannot drift, and `--hostname` does **not** reboot,
-which is what makes it usable on a unit in service as a live display.
+to an unreachable address — so units can collide on a name and each resolves its own name wrongly. It
+keys the removal on the name it reads from `/etc/hostname`, never a hardcoded one; the shipped name
+varies per image (`RW09` and `null` are both real). It is called from both bring-up paths, so the two
+cannot drift, and `--hostname` does **not** reboot, which is what makes it usable on a unit in service
+as a live display.
+
+⚠️ **Never identify a partition by filesystem UUID.** A UUID is assigned at mkfs time, so it names one
+*card*: units are mkfs'd independently at the factory and two RoomWizards on identical firmware share
+**none** of their four UUIDs. Nothing on the device consumes one either — `root=/dev/mmcblk0p6` and
+`/etc/fstab`'s `/dev/mmcblk0p{2,3,5,7}` are both by position. `rw-identify.sh` is the one
+implementation, sourced by `commission-roomwizard.sh` and `clone-to-32gb.sh`: **content** for a
+mounted rootfs (`rw_is_rootfs`), the **partition table** for a disk (`rw_is_card_disk`). It excludes
+`/` from its scan on purpose — a content scan that selected the dev host's root would rewrite this
+host's `/etc/shadow`. Regression: `tests/rw_identify_test.sh` (host-only, no card, no root).
+Reasoning: `COMMISSIONING.md` → *Finding the card*; measurements: `SYSTEM_ANALYSIS.md#42-partitions`.
+
+**A script's executable bit lives in the git index, so one bad commit breaks every fresh clone.** All
+`*.sh` are `100755` there — check with `git ls-files -s -- '*.sh'` after adding one. Belt and braces:
+`roomwizard.sh` and `deploy-all.sh` invoke their children as `bash <script>`, never `./<script>`, so a
+tree whose modes are wrong still works. Note that a missing `+x` **cannot be reproduced on this host**
+— `/mnt/c` is DrvFs and discards `chmod`.
 
 **Stopping what is running belongs to the init script, and it matches on the executable.**
 `/etc/init.d/roomwizard-app stop` is the only implementation; the three component scripts call it and

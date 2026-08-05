@@ -57,7 +57,7 @@ enough for a large library of both classic and remastered titles.
 - **Log partition (p3)** — ext3, ~243 MB — untouched.
 - **Backup partition (p5)** — ext3, ~1.40 GB — kept at original size for safety.
 - **Kernel, U-Boot, device tree** — unchanged.
-- **Commissioning workflow** — `commission-roomwizard.sh` → `setup-device.sh` → `deploy-all.sh` works identically because the rootfs UUID is preserved.
+- **Commissioning workflow** — `commission-roomwizard.sh` → `setup-device.sh` → `deploy-all.sh` works identically, because p6 is still p6 and its content is unchanged. Nothing in the workflow depends on a UUID.
 
 ---
 
@@ -145,19 +145,25 @@ The recommended procedure clones the entire original image and resizes in-place:
    so p6 can fill the entire rest of the extended partition.
 6. **`e2fsck` then `resize2fs`** on p6 to grow the ext3 filesystem to fill the
    new, larger partition.
-7. **Proceed with normal commissioning** — the UUID is preserved.
+7. **Proceed with normal commissioning** — nothing about it depends on the resize.
 
 ### Why This Works
 
-Since we clone with `dd` and only **resize** (never `mkfs` / reformat) the p6
-filesystem, the ext3 filesystem UUID is preserved:
+Two things the upgrade must not disturb, and neither is a UUID.
 
-```
-UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
-```
+**Device numbering.** U-Boot passes `root=/dev/mmcblk0p6` — compiled in, with no `saveenv` — and
+`/etc/fstab` names `/dev/mmcblk0p{2,3,5,7}`. Everything is by *position*, so p6 must stay p6. That
+is why p5 is preserved at its original size rather than deleted (see below).
 
-The commissioning script `commission-roomwizard.sh` locates rootfs by this UUID
-(via `blkid -U`), so it continues to work without any modification.
+**Content.** `commission-roomwizard.sh` finds the rootfs by content, not by UUID, so a card with any
+UUID commissions unchanged. See `COMMISSIONING.md` → *Finding the card*.
+
+⚠️ **Do not treat the rootfs UUID as a value that must match anything.** A UUID is assigned at mkfs
+time, so it names one card: two RoomWizards on identical firmware share none of their four. Since we
+`dd` and only **resize** (never `mkfs`), p6's UUID does survive — but that is a property of
+`resize2fs`, not a requirement, and it is worth checking only as evidence that nothing more than a
+resize happened. `clone-to-32gb.sh` compares it against the value it recorded *on this card* before
+repartitioning, for exactly that reason.
 
 ### Why We Drop p7 (Swap)
 
@@ -183,9 +189,9 @@ guaranteed compatibility.
 > ```bash
 > ssh root@<ip> "cat /proc/cmdline"
 > ```
-> Look for `root=/dev/mmcblk0p6` vs `root=UUID=108a1490-...`. If it uses UUID,
-> device numbering doesn't matter. If it uses the device path, p6 numbering is
-> **critical**.
+> It reads `root=/dev/mmcblk0p6` — a **device path**, so p6 numbering is
+> critical. (`/etc/fstab` is the same: `/dev/mmcblk0p{2,3,5,7}`. Nothing on the
+> device references a UUID.)
 
 ### Alternative Approach (Safest)
 
@@ -378,24 +384,20 @@ Resizing the filesystem on /dev/sdY6 to XXXXXXX (4k) blocks.
 The filesystem on /dev/sdY6 is now XXXXXXX (4k) blocks long.
 ```
 
-### Step 6: Verify UUID Preserved
+### Step 6: Check the UUID survived the resize
 
-This is the critical check. The UUID **must** match the original:
+Not a gate, and not a comparison against any other card — see [*Why This
+Works*](#why-this-works). Record p6's UUID **before** repartitioning and compare
+it after:
 
 ```bash
-sudo blkid ${DEST}6
+sudo blkid -s UUID -o value ${DEST}6
 ```
 
-Expected output:
-
-```
-/dev/sdY6: UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c" TYPE="ext3"
-```
-
-If the UUID matches `108a1490-8feb-4d0c-b3db-995dc5fc066c`, the upgrade is
-successful and commissioning will work unchanged.
-
-> **If the UUID does NOT match**, see [Troubleshooting](#uuid-changed) below.
+`resize2fs` preserves it. If it changed, something more than a resize happened to
+the filesystem — most likely an accidental `mkfs`, which also destroyed the
+rootfs. The card would still boot and still commission; the point of the check is
+that it tells you the `mkfs` happened.
 
 ### Step 7: Verify All Partitions
 
@@ -427,8 +429,8 @@ Insert the 32 GB card into the RoomWizard and follow the standard workflow:
 ./commission-roomwizard.sh
 ```
 
-This finds the rootfs by UUID `108a1490-8feb-4d0c-b3db-995dc5fc066c`, sets the
-root password, enables SSH, and configures DHCP.
+This finds the rootfs by content, sets the root password and host name, enables
+SSH, and configures DHCP. It does not care what the card's UUID is.
 
 **Phase 2 — System Setup** (SSH to device):
 
@@ -562,8 +564,9 @@ sudo umount /mnt/rw
 
 - Total usable space on rootfs: **~27+ GB**
 - After OS + apps: **~27 GB free** for games
-- Device numbering: **preserved** — rootfs remains `mmcblk0p6`
-- Rootfs UUID: **preserved** — `108a1490-8feb-4d0c-b3db-995dc5fc066c`
+- Device numbering: **preserved** — rootfs remains `mmcblk0p6`, which is what
+  `root=` and `/etc/fstab` reference
+- Rootfs UUID: **unchanged by the resize** (and depended on by nothing)
 - Swap: **removed** — not needed for gaming workloads
 
 ### Alternative Layout (Separate game partition, swap preserved)
@@ -633,29 +636,24 @@ the recommended approach where UUID is preserved).
 
 ### UUID Changed
 
-If you accidentally ran `mkfs.ext3` on p6 (reformatted instead of resized),
-the UUID will be different and `commission-roomwizard.sh` won't find the rootfs.
+⚠️ **Do not "fix" this with `tune2fs -U` to make the card match another one.** A
+filesystem UUID names one card. Assigning a second card the same value leaves two
+cards claiming one UUID, which is a harder bug than any it papers over — and
+nothing needs it: `commission-roomwizard.sh` finds the rootfs by content, U-Boot
+passes `root=/dev/mmcblk0p6`, and `/etc/fstab` uses device paths.
 
-**Option A — Restore the original UUID:**
+So a changed UUID is never itself the problem. It is a **symptom**, and the thing
+to work out is what changed it:
 
-```bash
-# Set the UUID back to the original value
-sudo tune2fs -U 108a1490-8feb-4d0c-b3db-995dc5fc066c /dev/sdY6
-sudo blkid /dev/sdY6  # verify
-```
+| What happened | What it means |
+|---|---|
+| you ran `mkfs.ext3` on p6 instead of resizing | the rootfs is **gone**. Re-clone from the image; the UUID is the least of it. |
+| `resize2fs` reported success and the UUID changed | it is not supposed to do that. Verify the filesystem (`e2fsck -f`) before trusting the card. |
+| it never matched the reference unit's UUID | expected. Units are mkfs'd independently at the factory and share no UUIDs — `SYSTEM_ANALYSIS.md#42-partitions`. Nothing is wrong. |
 
-**Option B — Update the commissioning script:**
-
-Edit [`commission-roomwizard.sh`](commission-roomwizard.sh) and change the
-UUID on line 50:
-
-```bash
-# Old:
-ROOTFS=$(findmnt -rno TARGET --source "$(blkid -U 108a1490-8feb-4d0c-b3db-995dc5fc066c 2>/dev/null)" 2>/dev/null || echo "")
-
-# New (replace with actual UUID from blkid):
-ROOTFS=$(findmnt -rno TARGET --source "$(blkid -U <NEW-UUID-HERE> 2>/dev/null)" 2>/dev/null || echo "")
-```
+`clone-to-32gb.sh` distinguishes these for you: it records p6's UUID before
+repartitioning and compares against **that**, so it reports a real change and
+stays quiet about a merely unfamiliar value.
 
 ### Boot Fails After Repartitioning
 
@@ -670,10 +668,13 @@ longer exists.
 ssh root@<ip> "cat /proc/cmdline"
 ```
 
-Look for:
-- `root=/dev/mmcblk0p6` — **device path** (partition numbering matters!)
-- `root=UUID=108a1490-...` — **UUID** (partition numbering doesn't matter)
-- `root=PARTUUID=...` — **partition UUID** (different from filesystem UUID)
+This device uses the first form:
+
+- `root=/dev/mmcblk0p6` — **device path**. Partition numbering matters, and this
+  is what you will see. It is compiled into `u-boot.bin`, which has no `saveenv`,
+  so it cannot be changed on the device — `SYSTEM_ANALYSIS.md#44-the-u-boot-environment-cannot-be-persisted`.
+- `root=UUID=…` / `root=PARTUUID=…` — would make numbering irrelevant. Neither is
+  used here; if you see one, you are not looking at a stock RoomWizard.
 
 **Fix if using device path and you changed numbering:**
 
@@ -902,7 +903,8 @@ sudo resize2fs ${DEST}6
 
 # === STEP 6: Verify ===
 sudo blkid ${DEST}6
-# Must show: UUID="108a1490-8feb-4d0c-b3db-995dc5fc066c"
+# Should still show the UUID the card had before STEP 4 — resize2fs preserves it.
+# Its VALUE does not matter to anything; a change means more than a resize happened.
 
 echo "Done! Proceed with commission-roomwizard.sh → setup-device.sh → deploy-all.sh"
 ```

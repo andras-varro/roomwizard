@@ -1231,6 +1231,38 @@ OMAP3 ROM
 
 Live usage: root 47 % used (474 MB free), data 40 %, log 4 %.
 
+**The layout is the identity; the UUIDs are not.** Measured across two units of the same firmware
+build (`/etc/version` `20180309123456`), the partition table is byte-identical — same start sector
+and same size for p1, p2, p3, p5 and p6:
+
+```text
+p1 : start=      63, size= 144522, type=c, bootable
+p2 : start=  144585, size= 514080, type=83
+p3 : start=  658665, size= 498015, type=83
+p4 : start= 1156680,               type=5    (extended container)
+p5 : start= 1156743, size=2939832, type=83
+p6 : start= 4096638, size=2008062, type=83
+p7 : start= 6104763,               type=82   (swap)
+```
+
+p4 and p7 sizes differ between units — they absorb the difference in physical card size (two nominal
+4 GB cards measured 3.71 and 3.86 GiB), so **do not pin them**.
+
+⚠️ **Every filesystem UUID differs per unit — all four of them.** A UUID is assigned at mkfs time and
+units are mkfs'd independently at the factory, so two RoomWizards on identical firmware share none:
+
+| | p2 | p3 | p5 | p6 (`/`) |
+|---|---|---|---|---|
+| RW09 | `d5758df8` | `da4cda60` | `26a7a226` | `108a1490` |
+| a second unit | `2932baf1` | `d4d5ddbd` | `0f17045a` | `8acefb02` |
+
+**Nothing on the device consumes a UUID.** U-Boot passes `root=/dev/mmcblk0p6` (compiled in, and
+there is no `saveenv` — §4.4), and `/etc/fstab` names `/dev/mmcblk0p{2,3,5,7}`. Both are by position,
+so p6 *is* the rootfs and cannot be renumbered. Host tooling identifies a card by layout and a rootfs
+by content — `rw-identify.sh`, and `COMMISSIONING.md` → *Finding the card*. A hardcoded UUID
+recognises exactly one unit, and assigning it to a second card so it "matches" produces two cards
+claiming one UUID.
+
 ### 4.3 NAND is effectively unused
 
 There **is** NAND (`U13`, Micron MT29F2G16ABBEAHC, 256 MiB SLC, 16-bit, BCH8), but only `mtd0`

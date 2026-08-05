@@ -13,7 +13,7 @@
 # Why a composition layer and not one merged script: the three have genuinely
 # different connection models, and the cleanup in Phase 2 touches paths spread
 # across FOUR partitions that only a booted kernel assembles into one tree,
-# while commissioning locates just p6 by UUID. Merging would mean mounting four
+# while commissioning locates just p6. Merging would mean mounting four
 # partitions and rewriting every absolute path. There are three further reasons
 # in COMMISSIONING.md ("why these are separate").
 #
@@ -21,8 +21,16 @@
 # wait_for_ssh so the operator is not guessing when a rebooted device is back,
 # and a single place that knows the phases run in order.
 #
+# Every child is invoked as `bash <script>`, not `./<script>`. A clone can land
+# without the executable bit — the mode lives in the git index, so one bad commit
+# breaks every fresh clone — and `./` then fails at the point of use with
+# "Permission denied". Nothing is in doubt about which interpreter to use; all
+# three are #!/bin/bash. deploy-all.sh already does the same for the
+# per-component scripts it discovers.
+#
 # Usage:
 #   ./roomwizard.sh          # interactive menu
+#   bash roomwizard.sh       # ... if this file itself lost its +x
 #   ./roomwizard.sh --help
 
 set -u
@@ -123,8 +131,9 @@ do_commission() {
   This runs OFFLINE against the SD card, not the device. Before continuing:
 
     - the card must be out of the RoomWizard and in this host's reader
-    - its partitions must be mounted (the script finds p6 by UUID; if it
-      cannot, mount by hand and `export ROOTFS=/mnt/rw`)
+    - its rootfs (p6) must be mounted. The script finds it by content, so any
+      mount point works; if it cannot, it names the disk it found and prints
+      the mount command. You can also `export ROOTFS=/mnt/rw`.
     - you will be asked for sudo
 
   It sets the root password, the host name, SSH access and DHCP.
@@ -132,7 +141,7 @@ PRE
     echo ""
     confirm "Card mounted and ready?" || { warn "Skipped."; return 0; }
     echo ""
-    "$SCRIPT_DIR/commission-roomwizard.sh" || err "Commissioning failed."
+    bash "$SCRIPT_DIR/commission-roomwizard.sh" || err "Commissioning failed."
 }
 
 # ── Phase 2 ─────────────────────────────────────────────────────────────────
@@ -153,37 +162,37 @@ MENU
         read -r -p "Choice: " choice
         case "$choice" in
             a) ask_target || { pause; continue; }
-               "$SCRIPT_DIR/setup-device.sh" "$TARGET" || err "Setup failed."
+               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" || err "Setup failed."
                pause ;;
             b) ask_target || { pause; continue; }
                warn "--remove DELETES vendor files. It cannot be undone without reflashing."
                confirm "Proceed with --remove on $TARGET?" \
-                   && { "$SCRIPT_DIR/setup-device.sh" "$TARGET" --remove || err "Setup failed."; } \
+                   && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --remove || err "Setup failed."; } \
                    || warn "Skipped."
                pause ;;
             c) ask_target || { pause; continue; }
-               "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean --dry-run \
+               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean --dry-run \
                    || err "Dry run failed."
                pause ;;
             d) ask_target || { pause; continue; }
                warn "Deep clean is PERMANENT and includes the 474 MB on-device"
                warn "factory restore image. Run option (c) first if you have not."
                confirm "Really deep-clean $TARGET?" \
-                   && { "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
+                   && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
                    || warn "Skipped."
                pause ;;
             e) ask_target || { pause; continue; }
                local name
                read -r -p "New host name (single label, e.g. rw09): " name
                if [ -n "$name" ]; then
-                   "$SCRIPT_DIR/setup-device.sh" "$TARGET" --hostname "$name" \
+                   bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --hostname "$name" \
                        || err "Could not set the host name."
                else
                    warn "No name given; skipped."
                fi
                pause ;;
             f) ask_target || { pause; continue; }
-               "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
+               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
                pause ;;
             back|q|Q|"") return 0 ;;
             *) err "Not a choice: $choice"; pause ;;
@@ -195,16 +204,16 @@ MENU
 do_deploy() {
     hdr "3. Deploy apps (ssh)"
     info "Discovered components:"
-    "$SCRIPT_DIR/deploy-all.sh" --list
+    bash "$SCRIPT_DIR/deploy-all.sh" --list
     echo ""
     ask_target || return 0
     local comp
     read -r -p "Component (Enter = all): " comp
     echo ""
     if [ -n "$comp" ]; then
-        "$SCRIPT_DIR/deploy-all.sh" "$TARGET" "$comp" || err "Deploy failed."
+        bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" "$comp" || err "Deploy failed."
     else
-        "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || err "Deploy failed."
+        bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || err "Deploy failed."
     fi
 }
 
@@ -212,7 +221,7 @@ do_deploy() {
 do_status() {
     hdr "4. Device status (read-only)"
     ask_target || return 0
-    "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
+    bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
 }
 
 # ── Full bring-up ───────────────────────────────────────────────────────────
@@ -247,7 +256,7 @@ PRE
     hdr "Phase 2: system setup"
     info "Standard setup (no file removal). Use menu item 2 for --remove/--deep-clean."
     confirm "Run setup on $TARGET now?" || { warn "Stopping after Phase 1."; return 0; }
-    "$SCRIPT_DIR/setup-device.sh" "$TARGET" || { err "Setup failed."; return 1; }
+    bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" || { err "Setup failed."; return 1; }
 
     # setup-device.sh ends in a reboot, so the device is going away right now.
     hdr "Waiting out the reboot"
@@ -258,7 +267,7 @@ PRE
     hdr "Phase 3: deploy"
     confirm "Build and deploy all components to $TARGET?" \
         || { warn "Stopping after Phase 2."; return 0; }
-    "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || { err "Deploy failed."; return 1; }
+    bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || { err "Deploy failed."; return 1; }
 
     hdr "Done"
     ok "Commissioned, set up and deployed: $TARGET"
