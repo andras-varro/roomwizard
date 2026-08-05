@@ -36,7 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **First boot of an offline-commissioned unit** — SSH reachable without an IP hunt, launcher grid, one game, sound, touch | one boot + ~5 min | the tool must exist — [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05) |
+| 5 | **First boot of an offline-commissioned unit** — SSH reachable without an IP hunt, launcher grid, one game, sound, touch | one boot + ~5 min | the tool must exist — [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -115,7 +115,7 @@ straight after commissioning shows the revert.
 
 Two fixes, and they are not alternatives:
 
-1. **Ordering — [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05).** Name the card
+1. **Ordering — [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open).** Name the card
    and delete `websign` in the same offline pass, so no boot happens in between. This removes the
    window instead of patching it, and is the preferred fix.
 2. **For the SSH flow, which keeps the vendor stack:** `set-hostname.sh` must also write
@@ -143,7 +143,7 @@ In one invocation — `./setup-device.sh <ip> --deep-clean` — the link is left
 never resolves. The delete list predates the mDNS work. Not yet observed firing: the unit in service
 has both avahi files and no `S30` link, because its setup ran before mDNS was added.
 
-Fix: an `avahi` **keep** entry in [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05)'s
+Fix: an `avahi` **keep** entry in [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open)'s
 data file, with the reason recorded, so neither consumer can delete what the other enables. Until then,
 dropping the three avahi paths from the deep-clean list is a two-line change.
 
@@ -155,7 +155,7 @@ dropping the three avahi paths from the deep-clean list is a two-line change.
 software watchdog is never scheduled — the bypass file is the second line of defence, not the first.
 Two candidate causes, neither measured: the boot-time run is not happening (that unit's deployed
 `disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
-every 4 h) sweeps it. Worth settling before [F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05)
+every 4 h) sweeps it. Worth settling before [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open)
 ships an offline `touch /var/watchdog_test`, which would otherwise place a file something deletes.
 
 ---
@@ -289,14 +289,28 @@ Ideas: health/timer bar, heartbeat pulse during ScummVM loading, flash on high s
 already reaches both channels and already has the non-blocking `LedPulse` API, so this is presentation
 work only.
 
-### F9. Ship binaries as GitHub releases — open
+### F9. Ship binaries as GitHub releases — **partly built 2026-08-05**, open
 
-**Why this may be the highest-leverage item here:** the build is the slowest and most
-environment-bound step in the entire flow — WSL, an ARM cross-compiler, ScummVM's ~1m35s–2m20s link
-that also deletes `native_apps/common/*.o` twice — and it is **pure overhead whenever the source has
-not changed.** Anyone who wants to put apps on a device today must reproduce the whole toolchain
-first. The artifacts suit distribution unusually well: everything ships `-static`, so there is no ABI
-surface to match against the device's glibc.
+**Built and exercised on this host:** `release.sh` at the repo root, `rw-bundle.sh` (the bundle layout,
+sourced by every producer and consumer), and `--bundle <dir>` on `native_apps`, `vnc_client` and
+`scummvm-roomwizard`. One run of `./release.sh --stage-only --component native_apps --component
+vnc_client` staged 49 files and produced a 5.6 MB tarball in 50 s. The `.app` manifests are now data in
+`native_apps/app-manifests.sh` and one heredoc-into-a-file in each of the other two, written locally and
+copied by both the deploy path and `--bundle` — the nine `cat > … << APP` blocks that used to live
+inside an `ssh … <<REMOTE` heredoc are gone, so a manifest can no longer differ between the two paths.
+`scummvm-roomwizard` gained the ARM-safety gate it never had, inside `strip_binary` before the in-place
+`strip` ([§6.1](SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide)).
+
+**Still open:**
+
+- **`--from-release <tag>` on `deploy-all.sh` and the per-component scripts**, which is what makes the
+  release useful to the *existing* SSH flow. Nothing of this is written yet.
+- **The publish step has never run.** `gh` is installed in neither WSL nor Windows, so
+  `./release.sh --tag <tag>` is unexercised code; `--stage-only` is the tested path. `origin` is
+  `git@github.com-personal:…` — an SSH host alias — so whoever publishes needs `gh auth` for that
+  account.
+- **`usb_host` is excluded by design**, not by omission: it patches `uImage-system` on p1, and
+  [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) must not touch p1.
 
 Design, so it does not have to be re-derived:
 
@@ -306,7 +320,10 @@ Design, so it does not have to be re-derived:
 - `deploy-all.sh` and the per-component scripts gain `--from-release <tag>` that skips **only** the
   build step.
 - **The release must carry the md5 manifest.** Deploy-time verification compares against a local
-  `build/`, which will not exist on a build-free path.
+  `build/`, which will not exist on a build-free path. `rw-bundle.sh` writes
+  `manifest.d/<component>.md5` alongside `.list` for this; they are separate files because the declared
+  modes are stable and the checksums are not (next bullet), so a mode diff between two releases stays
+  readable.
 
 Two caveats to record before anyone tries it:
 
@@ -314,23 +331,39 @@ Two caveats to record before anyone tries it:
   The md5 list must be *generated per release*, not asserted against a known-good set.
 - A release must publish **binaries only, never configs**. Device config carries things that must not
   be republished — the `/etc/hosts` mapping of D7, and the VNC password; a glob that swept up
-  `*.conf` would publish exactly what those two exist to have removed.
+  `*.conf` would publish exactly what those two exist to have removed. `release.sh` now greps the
+  staged manifest for `*.conf`, `/etc/hosts`, `/etc/hostname` and the three device config basenames and
+  refuses — the negative control for a future component that forgets, rather than a rule each component
+  is trusted to remember.
 
-**[F10](#f10-single-pass-offline-commissioning--open-agreed-2026-08-05) depends on this one** — an
+**[F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) depends on this one** — an
 offline commissioner has no toolchain to fall back on, so the release *is* its only source of
 binaries. Two obligations that only bite once artifacts are published: ScummVM is GPLv2+, so a binary
-needs the corresponding-source offer, and `vnc_client`'s dependency licences need a pass.
-
-**Preconditions on this host, checked 2026-08-05:** `gh` is installed in **neither** WSL nor Windows,
-so the publish step cannot be exercised until it is (`curl`, `sfdisk`, `dash` and `openssl` are all
-present in WSL). `origin` is `git@github.com-personal:…` — an SSH host alias — so whoever runs the
-publish needs `gh auth` for that account, and the offline installer needs either an authenticated `gh`
-or a public asset URL. Give the tool a `--bundle <file>` path that takes a locally built tarball, so it
-is testable and usable with no network at all.
+needs the corresponding-source offer, and `vnc_client`'s dependency licences need a pass. Both are now
+written into the bundle's `NOTICE` by `release.sh`; whether that discharges the GPL offer has not been
+checked by anyone qualified to say so.
 
 ---
 
-### F10. Single-pass offline commissioning — open, **agreed 2026-08-05**
+### F10. Single-pass offline commissioning — **partly built 2026-08-05**, open
+
+**Built so far — steps 1 and 2 of the four below.** The bundle producer is
+[F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open), and `rw-identify.sh` now
+reaches all four mounts by position (`rw_part_dev`, `rw_card_partitions`, `rw_role_device_path`,
+`rw_host_root_disk`, `rw_is_host_root_disk`, `rw_mount_card`, `rw_umount_card`,
+`rw_check_card_mounts`). `tests/rw_identify_test.sh` covers them: 37 cases, and each new group was
+checked against a deliberately broken copy — naive partition naming fails 7, dropping the wrong-order
+check fails exactly 1, adding p1 to the role table fails 3.
+
+⚠️ **p1 is absent from `RW_PART_ROLES` on purpose, and the test asserts its absence.** A caller cannot
+reach `mlo`, `u-boot.bin`, `ctrlblock.bin` or `uImage-system` through these functions at all, which is
+a stronger guarantee than every consumer remembering not to. p4 and p7 are absent too — nothing to
+mount.
+
+**Not built yet — steps 3 and 4, which are the whole safety model:** the keep/delete data file, the
+guarded `del()`, `--dry-run`, `commission-offline.sh` itself, and the offline verification pass. The
+plan for them is below and has not changed. Nothing has been run against a card, and no unit has been
+commissioned by this route.
 
 **Goal:** the card goes into a reader, the operator answers two questions, the card goes back, and the
 device **boots working**. Today that is three phases with a reboot and an IP hunt in the middle
@@ -350,7 +383,7 @@ boot happens in between.
 1. Ask host name.
 2. Ask root password.
 3. Clean (below).
-4. Install apps from a GitHub release — [F9](#f9-ship-binaries-as-github-releases--open) is a hard
+4. Install apps from a GitHub release — [F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open) is a hard
    dependency; this is its first non-developer consumer.
 5. Unmount, card back into the device, **one** boot.
 
@@ -422,26 +455,41 @@ their `rc*.d` directories are empty (`CLAUDE.md` → *Working from this host*).
 - **`/var` is not tmpfs** (only `/var/volatile` is, per `/etc/fstab`), so an offline
   `touch /var/watchdog_test` persists — belt and braces behind the boot-time one.
 
-Interfaces settled while reading the existing scripts, so they need not be re-derived:
+Interfaces settled while reading the existing scripts, so they need not be re-derived. The first three
+are **built** and the file named is the implementation:
 
 | Piece | Shape |
 |---|---|
-| Bundle from F9 | `<dir>/root/<device-path>` + `<dir>/manifest.d/<component>.list` of `<mode> <device-path>`; **modes are declared, never read off disk** (`/mnt/c` reports 0777) |
-| Per-component staging | `build-and-deploy.sh --bundle <dir>`, reusing that script's own `GAMES_BINARIES` and manifest generator — no second list. `usb_host` is **excluded**: it patches `uImage-system`, and F10 must not touch p1 |
-| `.app` manifests | extract the `ssh` heredoc in `native_apps/build-and-deploy.sh` into one local generator, consumed by both the deploy path and `--bundle` |
+| Bundle from F9 | **`rw-bundle.sh`** — `<dir>/root/<device-path>` + `<dir>/manifest.d/<component>.list` of `<mode> <device-path>`, plus `.md5` and `bundle.info`; **modes are declared, never read off disk** (`/mnt/c` reports 0777). `rw_bundle_check` asserts both directions: no manifest entry without a file, no file without an entry |
+| Per-component staging | **built** — `build-and-deploy.sh --bundle <dir>` on all three, each reusing its own `GAMES_BINARIES` / artifact list. `usb_host` is **excluded**: it patches `uImage-system`, and F10 must not touch p1 |
+| `.app` manifests | **built** — `native_apps/app-manifests.sh` holds the nine as data; `vnc_client` and `scummvm` each write theirs from one heredoc into a file. Both the deploy path and `--bundle` copy those files |
 | Boot scripts | `audio-enable`, `time-sync` and `99-security.conf` are heredocs inside `setup-device.sh` today; move them to `device-files/` so the offline installer writes the same bytes |
 | The two `del()`s | the data file is the single source of *decisions*; each consumer keeps its own executor, because `/` is the correct prefix on the device and a refused one offline |
-| Name, offline | `set-hostname.sh NAME ROOTFS` already does `/etc/hostname` + `/etc/hosts`; add `/etc/dhclient.conf` (D7b item 3). `websign` is deleted in the same pass, so `net.hostname` does not arise |
+| Name, offline | `set-hostname.sh NAME ROOTFS` already does `/etc/hostname` + `/etc/hosts`; add `/etc/dhclient.conf` (D7b item 3 — a unit in service still announces the shipped `RW09`, measured 2026-08-05). `websign` is deleted in the same pass, so `net.hostname` does not arise |
 | Operator prompts | `ROOTFS=<mnt> commission-roomwizard.sh` already asks exactly the two questions and does shadow/sshd/DHCP — the offline tool should orchestrate it, not restate it |
+| Path resolution | device-absolute paths in the data file; the offline consumer maps `/home/root/{data,log,backup}/…` onto the p2/p3/p5 mounts and everything else onto p6, via `rw_role_device_path`. This is where the prefix guard earns its keep |
 
 #### Verification, offline and cheap
 
-md5 every installed file; assert `+x` (real ext4 honours it, unlike `/mnt/c`); run
-`native_apps/check-arm-safe.sh` on the **downloaded** binaries — a binary nobody built on the spot is
-exactly what that gate is for; assert every `.app`'s `exec=` exists and is executable and that
-`default-app` names one of them; `dash -n` every `/bin/sh` script written. **Host regression:** run the
-whole clean against a *copy* of `partitions.new/` and assert nothing outside the copy was touched.
-Write the failing version first — the guard must be seen refusing an empty prefix.
+md5 every installed file against the bundle's `.md5`; assert `+x` (real ext4 honours it, unlike
+`/mnt/c`); run `native_apps/check-arm-safe.sh` on the **downloaded** binaries — a binary nobody built on
+the spot is exactly what that gate is for, and **say so loudly if `arm-linux-gnueabihf-objdump` is
+absent** rather than reporting a pass over zero artifacts; assert every `.app`'s `exec=` exists and is
+executable and that `default-app` names one of them; `dash -n` every `/bin/sh` script written.
+
+⚠️ **The host regression cannot use `partitions.new/` as its fixture.** An earlier version of this
+entry prescribed "run the whole clean against a *copy* of `partitions.new/`". That is wrong: both card
+captures were copied through Windows and **contain no symlinks at all** — `bin/sh` and `bin/busybox`
+are simply absent and `etc/rc0.d`…`rc6.d`, `etc/rcS.d` are **empty directories** (`CLAUDE.md` →
+*Working from this host*). A whitelist regression whose `rc5.d` is empty passes by having nothing to
+decide. **Build the vendor tree synthetically**, with real symlinks, from
+[§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)'s measured keep-lists plus a few invented vendor
+service names that must be swept; use the captures only for regular-file questions. Then assert nothing
+outside the copy was touched, with canary files as the negative control.
+
+**Write the failing version first** — the guard must be *seen* refusing an empty prefix, not merely
+believed to. The same applies to the whitelist: a rule that deletes nothing passes a test that only
+checks the keeps survived.
 
 #### Scope boundaries
 

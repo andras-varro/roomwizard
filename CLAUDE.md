@@ -95,6 +95,9 @@ diagnostic tools.
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
 
 cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
+
+./release.sh --stage-only           # build all components + stage one offline bundle + tar
+./release.sh --tag <tag>            # the above, then `gh release create`  (gh is NOT installed here)
 ```
 
 `--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
@@ -102,6 +105,37 @@ knowing without looking them up: **`set-default` is the only mode `native_apps/b
 accepts** (anything else is rejected rather than ignored), and **cleanup, bloatware removal and the
 boot service all live in `setup-device.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
 NAME` — never in a component script.
+
+### Bundles: one layout, declared modes, no configs
+
+`release.sh` exists so that putting apps on a device does not require reproducing the toolchain
+(`IMPROVEMENT_PLAN.md` F9). It calls `build-and-deploy.sh --bundle <dir>` on `native_apps`,
+`vnc_client` and `scummvm-roomwizard` — **never `usb_host`**, which patches `uImage-system` on p1. The
+layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
+`<dir>/manifest.d/<component>.{list,md5}`.
+
+- ⚠️ **Modes are *declared* by the caller, never read off disk.** `/mnt/c` reports every file 0777 and
+  discards `chmod`, so `stat -c %a` here is a constant, not a measurement. `rw_bundle_add` takes the
+  mode as an argument and `.list` is the authority.
+- **`rw_bundle_check` asserts both directions** — no manifest entry without a staged file, *and* no
+  staged file without an entry. The second is the one that catches a file added by hand that nothing
+  will ever `chmod`.
+- **`release.sh` greps the staged manifest and refuses to publish config** (`*.conf`, `/etc/hosts`,
+  `/etc/hostname`, `rw_config`, `touch_calibration`, `input_config`). Not a rule each component is
+  trusted to remember — the negative control for the one that forgets. Device config carries the
+  `/etc/hosts` mapping of D7 and `vnc_client`'s plaintext VNC password.
+- **`--stage-only` is the tested path; `--tag` has never run** — `gh` is installed in neither WSL nor
+  Windows. The tarball it produces is a first-class input to the offline installer, so everything
+  downstream is testable with no network.
+
+### `.app` manifests: one generator per component, on disk
+
+The nine `native_apps` manifests are **data in `native_apps/app-manifests.sh`**; `vnc_client` and
+`scummvm-roomwizard` each write theirs from **one** heredoc into a file. They used to be `cat > … << APP`
+blocks inside an `ssh "$DEVICE" bash <<'REMOTE'` heredoc, i.e. they existed only when a device was
+reachable — so the offline installer could not produce the same bytes without a second copy, and an
+`exec=` path drifting between the two renders a launcher tile that does nothing when tapped. **Write the
+manifest to a file, then copy it**; never emit one from inside an `ssh` heredoc again.
 
 Components (each a subdir with a `build-and-deploy.sh`): `native_apps` (C games + launcher + tools),
 `scummvm-roomwizard` (ScummVM backend port), `vnc_client`, `usb_host` (USB host-mode enablement +
@@ -188,12 +222,15 @@ tool-level traps rather than device facts, and each has cost real time.
   thing needs the *kernel* or only needs *events*. Detail: `native_apps/CLAUDE.md` → *Input*.
 - **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv` *instruction*
   crashes instantly with SIGILL (exit 132) — blank screen, no output, no log, indistinguishable from
-  "the app didn't start". **Verify with `native_apps/check-arm-safe.sh`**, which runs automatically
-  from `build-and-deploy.sh` before every deploy and on build-only runs. The expected count is a
-  **hard zero** across all 31 ARM artifacts, and it is zero. The bare `$CC -O2 -static` deploy path is
-  already safe; what would break it is an explicit `-march` implying the idiv extension. Two ways to
-  get a wrong answer out of the gate — matching the line instead of the mnemonic field, and gating a
-  *stripped* binary — are in `SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide`.
+  "the app didn't start". **Verify with `native_apps/check-arm-safe.sh`**, which now runs from **all
+  three** component build scripts — from `native_apps/build-and-deploy.sh` before every deploy, before
+  every `--bundle` and on build-only runs; from `vnc_client`'s after `make`; and from ScummVM's
+  **inside `strip_binary`, before the in-place `strip`**, because that is the only moment an unstripped
+  ScummVM binary exists. The expected count is a **hard zero** across all 31 native ARM artifacts, and
+  it is zero. The bare `$CC -O2 -static` deploy path is already safe; what would break it is an
+  explicit `-march` implying the idiv extension. Two ways to get a wrong answer out of the gate —
+  matching the line instead of the mnemonic field, and gating a *stripped* binary — are in
+  `SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide`.
 - **Framebuffer bpp is per-app — confirm it before decoding a screenshot.** `/dev/fb0`'s format is
   global mutable state: every native app pins **32bpp XRGB8888** via `fb_set_bpp(dev, 32)` before
   `fb_init()`; **ScummVM and the VNC remote session run 16bpp RGB565** to halve write bandwidth.
@@ -318,6 +355,7 @@ flags each component actually uses: `SYSTEM_ANALYSIS.md#6-building-for-this-devi
 | System setup (cleanup, init, audio, time-sync, mDNS) | `setup-device.sh` | once, over SSH |
 | Build + deploy all components | `deploy-all.sh` | per deploy |
 | Per-component build/deploy/manifest | `*/build-and-deploy.sh` | per component |
+| Build + stage + publish an offline bundle | `release.sh` (layout: `rw-bundle.sh`) | per release |
 | App respawn loop at boot | `roomwizard-app-init.sh` (`/etc/init.d/roomwizard-app`) | every boot |
 
 `roomwizard.sh` is a **composition layer with no logic of its own** except `wait_for_ssh`: every item
@@ -347,10 +385,25 @@ window).
 **none** of their four UUIDs. Nothing on the device consumes one either — `root=/dev/mmcblk0p6` and
 `/etc/fstab`'s `/dev/mmcblk0p{2,3,5,7}` are both by position. `rw-identify.sh` is the one
 implementation, sourced by `commission-roomwizard.sh` and `clone-to-32gb.sh`: **content** for a
-mounted rootfs (`rw_is_rootfs`), the **partition table** for a disk (`rw_is_card_disk`). It excludes
-`/` from its scan on purpose — a content scan that selected the dev host's root would rewrite this
-host's `/etc/shadow`. Regression: `tests/rw_identify_test.sh` (host-only, no card, no root).
+mounted rootfs (`rw_is_rootfs`), the **partition table** for a disk (`rw_is_card_disk`), and
+**position** for which partition holds which tree (`rw_card_partitions` → `RW_PART_ROLES` = p6 root,
+p2 data, p3 log, p5 backup). It excludes `/` from its scan on purpose — a content scan that selected
+the dev host's root would rewrite this host's `/etc/shadow`; `rw_host_root_disk` /
+`rw_is_host_root_disk` are the resolved veto for the disk-level equivalent. Regression:
+`tests/rw_identify_test.sh` (host-only, no card, no root; 37 cases).
 Reasoning: `COMMISSIONING.md` → *Finding the card*; measurements: `SYSTEM_ANALYSIS.md#42-partitions`.
+
+⚠️ **p1 is deliberately absent from `RW_PART_ROLES`, and a test asserts its absence.** Nothing can
+reach `mlo`, `u-boot.bin`, `ctrlblock.bin` or `uImage-system` through those functions — which is a
+stronger guarantee than every caller remembering not to, and it is what keeps a power cycle a free
+undo. p4 (extended container) and p7 (swap) are absent for the same reason: nothing to mount.
+
+⚠️ **A rootfs mounted offline shows `/home/root/{data,log,backup}` as three EMPTY directories** — they
+are mount points for p2/p3/p5. An offline tool that mounts only p6 sees no `websign/` (the network
+regenerator's input, p2), no logs (p3) and no 472 MB upgrade payload (p5), and would report success
+having touched none of them. Use `rw_mount_card` / `rw_check_card_mounts`; the latter's negative half —
+"a rootfs where `data` was expected means the partitions are in the wrong order" — is the half that
+catches the mistake that makes every later path resolve under the wrong tree.
 
 **A script's executable bit lives in the git index, so one bad commit breaks every fresh clone.** All
 `*.sh` are `100755` there — check with `git ls-files -s -- '*.sh'` after adding one. Belt and braces:

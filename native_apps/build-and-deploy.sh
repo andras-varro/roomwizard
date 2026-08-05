@@ -5,9 +5,18 @@
 #   ./build-and-deploy.sh                      # build only
 #   ./build-and-deploy.sh <ip>                 # build + deploy binaries
 #   ./build-and-deploy.sh <ip> set-default     # build + deploy + set as default app
+#   ./build-and-deploy.sh --bundle <dir>       # build + stage into an offline bundle
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
 # separately by setup-device.sh.  Run that once before deploying for the first time.
+#
+# --bundle stages the same artifacts this script would scp, under
+# <dir>/root/<device-path>, with a declared-mode manifest — the layout
+# ../release.sh publishes and ../commission-offline.sh installs from
+# (../IMPROVEMENT_PLAN.md F9, F10).  It always builds first: this component's
+# 31 targets take well under a minute, so there is no reason for a
+# stage-what-is-already-there mode and therefore no way to bundle a stale
+# binary.  (ScummVM, whose link is ~2 minutes, does have one.)
 
 set -e
 _START_SECONDS=$(date +%s)
@@ -20,9 +29,40 @@ _START_SECONDS=$(date +%s)
 # (../IMPROVEMENT_PLAN.md B19).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEVICE_IP="${1:-}"
-MODE="${2:-}"
+# The .app manifests are data in one file, written locally, and copied by BOTH
+# the deploy path and --bundle.  They used to be nine heredocs inside an
+# `ssh … <<REMOTE` block, so they existed only when a device was reachable and
+# the offline installer had no way to produce the same bytes
+# (../IMPROVEMENT_PLAN.md F10).
+# shellcheck source=app-manifests.sh
+. "$SCRIPT_DIR/app-manifests.sh"
+
+# ── argument shapes ─────────────────────────────────────────────────────────
+# Two, and they do not mix: `--bundle <dir>` needs no device, and every deploy
+# form needs one.  Parsed before anything else so a typo cannot reach the build.
+BUNDLE_DIR=""
+if [[ "${1:-}" == "--bundle" ]]; then
+    BUNDLE_DIR="${2:-}"
+    DEVICE_IP=""
+    MODE=""
+    if [[ -z "$BUNDLE_DIR" ]]; then
+        echo "--bundle requires a directory"
+        echo ""
+        echo "Usage: $0 --bundle <dir>"
+        exit 1
+    fi
+    if [[ -n "${3:-}" ]]; then
+        echo "Unexpected argument after --bundle <dir>: $3"
+        exit 1
+    fi
+    # shellcheck source=../rw-bundle.sh
+    . "$REPO_ROOT/rw-bundle.sh"
+else
+    DEVICE_IP="${1:-}"
+    MODE="${2:-}"
+fi
 DEVICE="root@${DEVICE_IP}"
 GAMES_DIR="/opt/games"
 
@@ -39,14 +79,18 @@ err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 # (../IMPROVEMENT_PLAN.md B19).
 usage() {
     echo "Usage: $0 [<ip>] [set-default]"
+    echo "       $0 --bundle <dir>"
     echo ""
     echo "  <ip>          Device IPv4 address; omit to build without deploying"
     echo "  set-default   Also make app_launcher the boot app"
+    echo "  --bundle <dir>  Build, then stage every artifact under <dir>/root/"
+    echo "                  with a declared-mode manifest. No device needed."
     echo ""
     echo "Examples:"
     echo "  $0                          # build only"
     echo "  $0 192.168.50.73            # build + deploy"
     echo "  $0 192.168.50.73 set-default"
+    echo "  $0 --bundle /tmp/rw-bundle"
     exit 1
 }
 
@@ -179,9 +223,37 @@ for ppm in *//*.ppm; do
 done
 [ $ICON_COUNT -gt 0 ] && echo "  Collected $ICON_COUNT icon(s) → build/icons/"
 
+# Write the .app manifests locally, from app-manifests.sh's data.  Both the
+# deploy path and --bundle copy these exact files, which is the point of having
+# them on disk rather than in an ssh heredoc.
+rw_write_app_manifests build/apps
+echo "  Wrote $(ls build/apps/*.app 2>/dev/null | wc -l) app manifest(s) → build/apps/"
+
+# ── deployed artifacts ──────────────────────────────────────────────────────
+# ONE list, used for the build-size listing, the upload, the chmod, the md5
+# verification and --bundle.  There used to be two (scp and chmod) and
+# audio_touch_test was missing from the chmod one — it worked only because scp
+# happens to carry the source file's mode.  A third copy for the md5 check would
+# have recreated exactly that bug (../IMPROVEMENT_PLAN.md B19), and a fourth for
+# --bundle would recreate it again.
+GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
+                game_selector hardware_test hardware_config hardware_diag
+                audio_touch_test backlight device_tools
+                touch_raw touch_trace touch_inject)
+
+# .hidden markers: hidden from game_selector's grid but still reachable over SSH.
+# Data rather than a loop body in the remote heredoc, so --bundle ships the same
+# set.  It must contain only binaries this script actually builds: it used to
+# name touch_test, touch_debug, touch_calibrate, pressure_test and
+# unified_calibrate, none of which were ever built, so the device accumulated
+# markers for binaries that did not exist and `ls /opt/games` lied about what
+# was installed.
+HIDDEN_MARKERS=(touch_inject touch_raw touch_trace backlight
+                hardware_test hardware_config hardware_diag)
+
 echo ""
 echo "Build sizes:"
-ls -lh build/snake build/tetris build/pong build/brick_breaker build/samegame build/frogger build/platformer build/game_selector build/app_launcher build/hardware_test build/hardware_config build/hardware_diag build/audio_touch_test build/backlight build/device_tools build/touch_raw build/touch_trace build/touch_inject \
+ls -lh "${GAMES_BINARIES[@]/#/build/}" build/app_launcher \
     | awk '{printf "  %-24s %s\n", $9, $5}'
 ok "Build complete ($(( $(date +%s) - _START_SECONDS ))s)"
 echo ""
@@ -196,6 +268,62 @@ else
     warn "check-arm-safe.sh missing — skipping hardware-divide gate"
 fi
 echo ""
+
+# ── 2c. --bundle: stage instead of deploying ────────────────────────────────
+# Deliberately AFTER the ARM-safety gate.  A bundle is published and then
+# installed by someone with no toolchain, so it is the one artifact that must
+# never carry an sdiv/udiv — the failure would surface on a wall-mounted panel as
+# a blank screen with no output (../SYSTEM_ANALYSIS.md#61).
+if [[ -n "$BUNDLE_DIR" ]]; then
+    echo "════════════════════════════════════════"
+    echo " Staging bundle → $BUNDLE_DIR"
+    echo "════════════════════════════════════════"
+
+    rw_bundle_init "$BUNDLE_DIR" native_apps || err "could not prepare $BUNDLE_DIR"
+
+    # 0755 for everything executable, 0644 for data.  Stated here, not read off
+    # disk — /mnt/c reports 0777 for every file and discards chmod, so a mode
+    # measured on this host is a constant (../CLAUDE.md, ../rw-bundle.sh).
+    for b in "${GAMES_BINARIES[@]}"; do
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0755 "build/$b" "$GAMES_DIR/$b" \
+            || err "staging failed: $b"
+    done
+    rw_bundle_add "$BUNDLE_DIR" native_apps 0755 build/app_launcher /opt/roomwizard/app_launcher \
+        || err "staging failed: app_launcher"
+
+    for m in "${HIDDEN_MARKERS[@]}"; do
+        # The marker's CONTENT is irrelevant — app_launcher and game_selector test
+        # for existence — but a bundle entry needs a real file to copy and an md5
+        # to verify, so stage an empty one rather than special-casing "touch" in
+        # the installer.
+        : > "build/$m.hidden"
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "build/$m.hidden" "$GAMES_DIR/$m.hidden" \
+            || err "staging failed: $m.hidden"
+    done
+
+    for f in build/apps/*.app; do
+        [ -f "$f" ] || continue
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/roomwizard/apps/$(basename "$f")" \
+            || err "staging failed: $f"
+    done
+
+    for f in build/icons/*.ppm; do
+        [ -f "$f" ] || continue
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/roomwizard/icons/$(basename "$f")" \
+            || err "staging failed: $f"
+    done
+
+    # app_launcher is this component's boot target, and the only component that
+    # has one — the launcher is what makes every other .app reachable.  0644:
+    # /opt/roomwizard/default-app is read, never executed.
+    echo '/opt/roomwizard/app_launcher' > build/default-app
+    rw_bundle_add "$BUNDLE_DIR" native_apps 0644 build/default-app /opt/roomwizard/default-app \
+        || err "staging failed: default-app"
+
+    ok "Staged $(rw_bundle_finish "$BUNDLE_DIR" native_apps) file(s)"
+    echo ""
+    exit 0
+fi
 
 # ── 3. deploy? ───────────────────────────────────────────────────────────────
 if [[ -z "$DEVICE_IP" ]]; then
@@ -246,15 +374,8 @@ ssh "$DEVICE" "mkdir -p $GAMES_DIR /var/log/roomwizard"
 ok "Target directories ready"
 
 # ── deployed artifacts ──────────────────────────────────────────────────────
-# ONE list, used for the upload, the chmod and the md5 verification below.
-# There used to be two (scp and chmod) and audio_touch_test was missing from the
-# chmod one — it worked only because scp happens to carry the source file's mode.
-# A third copy for the md5 check would have recreated exactly that bug
-# (../IMPROVEMENT_PLAN.md B19).
-GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
-                game_selector hardware_test hardware_config hardware_diag
-                audio_touch_test backlight device_tools
-                touch_raw touch_trace touch_inject)
+# GAMES_BINARIES and HIDDEN_MARKERS are declared once, up with the build, so
+# --bundle and this deploy path cannot ship different sets.
 
 # Upload game binaries
 info "Uploading game binaries → $GAMES_DIR/ (${#GAMES_BINARIES[@]} files)"
@@ -279,23 +400,21 @@ DEPLOYED_EXECUTABLES=("${GAMES_BINARIES[@]/#/$GAMES_DIR/}" /opt/roomwizard/app_l
 
 # Set permissions + markers
 # The chmod list is passed in as "$@" rather than written out again, so it
-# cannot drift from what was uploaded.  The heredoc stays quoted because its
-# body has a `$name` loop that must expand on the device, not here.
+# cannot drift from what was uploaded.  The .hidden marker names come in as a
+# second, NUL-free argument list for the same reason — HIDDEN_MARKERS is declared
+# with the build, and --bundle stages exactly these names.
 info "Setting permissions and markers..."
-ssh "$DEVICE" bash -s -- "${DEPLOYED_EXECUTABLES[@]}" <<'REMOTE'
-chmod +x "$@"
+ssh "$DEVICE" bash -s -- "${#DEPLOYED_EXECUTABLES[@]}" "${DEPLOYED_EXECUTABLES[@]}" "${HIDDEN_MARKERS[@]}" <<'REMOTE'
+nexe="$1"; shift
+chmod +x "${@:1:$nexe}"
+shift "$nexe"
 
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
 
 # .hidden markers for dev tools (hidden from game_selector but still reachable
-# over SSH).  This list must contain only binaries this script actually deploys:
-# it used to name touch_test, touch_debug, touch_calibrate, pressure_test and
-# unified_calibrate, none of which were ever built, so the device accumulated
-# markers for binaries that did not exist and `ls /opt/games` lied about what
-# was installed.
-for name in touch_inject touch_raw touch_trace backlight \
-            hardware_test hardware_config hardware_diag; do
+# over SSH).
+for name in "$@"; do
     touch  /opt/games/$name.hidden 2>/dev/null || true
     chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
@@ -335,81 +454,25 @@ else
 fi
 
 # Deploy app manifests
+#
+# The manifests were WRITTEN to build/apps/ during the build, from
+# app-manifests.sh's data, and are copied here.  They used to be nine
+# `cat > … << APP` heredocs inside this ssh block, which meant the offline
+# installer could not produce the same bytes without a second copy of them
+# (../IMPROVEMENT_PLAN.md F10).
 info "Installing app manifests..."
-ssh "$DEVICE" bash <<'REMOTE'
-mkdir -p /opt/roomwizard/apps
+ssh "$DEVICE" "mkdir -p /opt/roomwizard/apps"
+scp build/apps/*.app "$DEVICE:/opt/roomwizard/apps/"
+ssh "$DEVICE" bash -s -- $RW_APP_MANIFESTS_RETIRED <<'REMOTE'
+chmod 644 /opt/roomwizard/apps/*.app
 
-cat > /opt/roomwizard/apps/snake.app << 'APP'
-name=Snake
-exec=/opt/games/snake
-icon=/opt/roomwizard/icons/snake.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/tetris.app << 'APP'
-name=Tetris
-exec=/opt/games/tetris
-icon=/opt/roomwizard/icons/tetris.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/pong.app << 'APP'
-name=Pong
-exec=/opt/games/pong
-icon=/opt/roomwizard/icons/pong.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/brick_breaker.app << 'APP'
-name=Brick Breaker
-exec=/opt/games/brick_breaker
-icon=/opt/roomwizard/icons/brick_breaker.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/samegame.app << 'APP'
-name=SameGame
-exec=/opt/games/samegame
-icon=/opt/roomwizard/icons/samegame.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/frogger.app << 'APP'
-name=Frogger
-exec=/opt/games/frogger
-icon=/opt/roomwizard/icons/frogger.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/platformer.app << 'APP'
-name=Office Runner
-exec=/opt/games/platformer
-icon=/opt/roomwizard/icons/platformer.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/audio_touch_test.app << 'APP'
-name=Tap-a-Theremin
-exec=/opt/games/audio_touch_test
-icon=/opt/roomwizard/icons/audio_touch_test.ppm
-args=fb,touch
-APP
-
-cat > /opt/roomwizard/apps/device_tools.app << 'APP'
-name=Device Tools
-exec=/opt/games/device_tools
-icon=/opt/roomwizard/icons/device_tools.ppm
-args=
-APP
-
-# Remove old tool manifests that are now consolidated into device_tools
-rm -f /opt/roomwizard/apps/hardware_test.app \
-      /opt/roomwizard/apps/hardware_config.app \
-      /opt/roomwizard/apps/hardware_diag.app \
-      /opt/roomwizard/apps/calibrate.app \
-      /opt/roomwizard/apps/usb_test.app
+# Manifests this component used to install: their tools were folded into
+# device_tools' tabs, and a stale manifest renders a tile whose exec= is gone.
+for name in "$@"; do
+    rm -f "/opt/roomwizard/apps/$name.app"
+done
 REMOTE
-ok "App manifests installed"
+ok "App manifests installed ($(ls build/apps/*.app | wc -l) file(s))"
 echo ""
 
 # ── 4. set-default mode? ────────────────────────────────────────────────────

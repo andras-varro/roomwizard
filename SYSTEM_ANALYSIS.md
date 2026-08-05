@@ -1569,8 +1569,24 @@ than a growing list of vendor service names (`IMPROVEMENT_PLAN.md` F10).
 ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** They carry `umountfs`,
 `sendsigs` and `save-rtc.sh`; a unit that cannot unmount cleanly is a unit whose next fsck is not
 optional. Note also that **`S30avahi-daemon` is absent** on that unit while `/usr/sbin/avahi-daemon`
-and `/etc/init.d/avahi-daemon` are both present — mDNS is enabled by a link `setup-device.sh` adds,
-and its own deep clean deletes the daemon (`IMPROVEMENT_PLAN.md` D8).
+and `/etc/avahi/` (three entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a
+link `setup-device.sh` adds, and its own deep clean deletes the daemon (`IMPROVEMENT_PLAN.md` D8).
+
+⚠️ **The root crontab lives on p2, reached through a symlink.** `/var/cron/tabs/root` is a symlink to
+`/home/root/data/cron/tabs/root` (measured on the unit in service, symlink dated Jan 2022). Two
+consequences that matter to any cleanup:
+
+- **`rm -rf /home/root/data/cron` destroys the crontab and cron's spool root**, not just the 131 MB
+  `log` file inside it. `setup-device.sh --remove` truncates the log for exactly this reason; only
+  `--deep-clean` removes the directory, and it removes `/etc/rc5.d/S20cron` in the same breath so
+  nothing is left looking for the spool.
+- **Offline, the crontab is on a different partition from `/var`.** A tool that mounts only p6 sees
+  `/var/cron/tabs/root` as a dangling symlink and `/home/root/data` as an empty mount point, so it can
+  neither read nor write the crontab. The four mounts of [§4.2](#42-partitions) are not optional.
+
+The two surviving jobs on that unit are `rotatelogfiles.sh` and `cleanupfiles.sh` at `0 */4` and
+`5 */4`, in a crontab whose header reads `# RoomWizard crontab - managed by disable-steelcase.sh` —
+i.e. the crontab `disable-steelcase.sh` writes, not the vendor's.
 
 Full guide including filesystem analysis and security considerations:
 [`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization).
@@ -1645,6 +1661,20 @@ flags (verified). Keep them for explicitness, but they are not what saves you.
 many it skipped — `build/` also collects host-gcc test binaries, and under WSL every file on `/mnt/c`
 looks executable, so a gate that does not filter counts files it cannot actually disassemble as
 evidence that it passed.
+
+**Where each component's gate runs, and why ScummVM's is where it is.** All three now gate, but not at
+the same point:
+
+| Component | Gate site | Artifact checked |
+|---|---|---|
+| `native_apps` | after the build, before deploy **and** before `--bundle` | all 31, unstripped (nothing is stripped) |
+| `vnc_client` | after `make`, before deploy and before `--bundle` | `vnc_client`, deliberately **not** `vnc_client_stripped` |
+| `scummvm-roomwizard` | inside `strip_binary`, **before** the `strip` runs | `scummvm`, unstripped |
+
+ScummVM's is inside `strip_binary` because `arm-linux-gnueabihf-strip scummvm` strips **in place** — no
+unstripped copy survives it, so that function's first half is the only moment the gate has a readable
+artifact. A gate added anywhere later would be checking a stripped binary, which is the second wrong
+answer below.
 
 Two ways to get a wrong answer out of this check, both measured on this repo. First, matching too
 loosely:

@@ -23,6 +23,22 @@
 #                     (they are gitignored) they are checked too — one of them
 #                     is the unit that made the UUID approach fail.
 #
+#   rw_part_dev       The two partition-naming schemes. /dev/sdf + 6 is
+#   rw_card_partitions  /dev/sdf6 but /dev/mmcblk0 + 6 is /dev/mmcblk0p6, and
+#                     getting that wrong means mounting nothing at all. Plus the
+#                     assertion that matters most: p1 is NOT in the role table,
+#                     so no caller can reach it through these functions.
+#
+#   rw_host_root_disk Resolved, not guessed. Checked against findmnt independently
+#                     of the implementation, and the veto is checked in both
+#                     directions — a veto that always says "no" is invisible.
+#
+#   rw_check_card_mounts
+#                     Both halves, including the one that earns its keep: four
+#                     mounts in the WRONG ORDER must be rejected. A rootfs where
+#                     p2 was expected is the mistake that makes every later path
+#                     resolve under the wrong tree.
+#
 # The count at the end includes a check on the harness itself: a test file that
 # silently ran zero cases reports success just as loudly as one that ran all of
 # them.
@@ -201,6 +217,140 @@ EOF
     expect_disk no "$TMP/empty" "a directory is rejected"
 fi
 
+# ── the four mounts, by position ────────────────────────────────────────────
+
+# expect_eq <want> <got> <description>
+expect_eq() {
+    if [ "$1" = "$2" ]; then
+        ok "$3"
+    else
+        bad "$3 (expected '$1', got '$2')"
+    fi
+}
+
+echo ""
+echo "rw_part_dev"
+
+# The scheme split. /dev/sdf6 vs /dev/mmcblk0p6: appending the number naively
+# gives /dev/mmcblk06, which does not exist, so an offline tool would find no
+# partitions on the device's OWN naming scheme and report "not a RoomWizard card".
+expect_eq "/dev/sdf6"        "$(rw_part_dev /dev/sdf 6)"        "sd disk: /dev/sdf + 6"
+expect_eq "/dev/mmcblk0p6"   "$(rw_part_dev /dev/mmcblk0 6)"    "mmcblk: a 'p' is inserted"
+expect_eq "/dev/loop3p2"     "$(rw_part_dev /dev/loop3 2)"      "loop device: a 'p' is inserted"
+expect_eq "/dev/nvme0n1p5"   "$(rw_part_dev /dev/nvme0n1 5)"    "nvme: a 'p' is inserted"
+
+echo ""
+echo "rw_card_partitions"
+
+PARTS=$(rw_card_partitions /dev/mmcblk0)
+expect_eq "root /dev/mmcblk0p6" "$(echo "$PARTS" | grep '^root ')"   "p6 is root"
+expect_eq "data /dev/mmcblk0p2" "$(echo "$PARTS" | grep '^data ')"   "p2 is data"
+expect_eq "log /dev/mmcblk0p3"  "$(echo "$PARTS" | grep '^log ')"    "p3 is log"
+expect_eq "backup /dev/mmcblk0p5" "$(echo "$PARTS" | grep '^backup ')" "p5 is backup"
+expect_eq "4" "$(echo "$PARTS" | grep -c .)"                         "exactly four roles"
+
+# ⚠️ THE assertion in this section. p1 carries mlo, u-boot.bin, ctrlblock.bin and
+# uImage-system; an untouched p1 is what keeps a power cycle a free undo. If it
+# ever appears in the role table, every consumer gains the ability to write to it
+# — so the table is checked for its absence rather than the consumers for their
+# restraint. p4 (extended container) and p7 (swap) likewise have nothing to mount.
+for forbidden in 1 4 7; do
+    if echo "$PARTS" | grep -q "p${forbidden}\$"; then
+        bad "p$forbidden must NOT be in the role table"
+    else
+        ok "p$forbidden is absent from the role table"
+    fi
+done
+
+echo ""
+echo "rw_role_device_path"
+expect_eq "/"                    "$(rw_role_device_path root)"   "root  → /"
+expect_eq "/home/root/data"      "$(rw_role_device_path data)"   "data  → /home/root/data"
+expect_eq "/home/root/log"       "$(rw_role_device_path log)"    "log   → /home/root/log"
+expect_eq "/home/root/backup"    "$(rw_role_device_path backup)" "backup → /home/root/backup"
+if rw_role_device_path boot >/dev/null 2>&1; then
+    bad "an unknown role must not resolve to a path"
+else
+    ok "an unknown role does not resolve"
+fi
+
+echo ""
+echo "rw_host_root_disk / rw_is_host_root_disk"
+
+HOST_ROOT_DISK=$(rw_host_root_disk 2>/dev/null || true)
+if [ -z "$HOST_ROOT_DISK" ]; then
+    skipped "host root disk" "lsblk/findmnt could not resolve /"
+    skipped "root-disk veto (positive)" "no root disk resolved"
+    skipped "root-disk veto (negative)" "no root disk resolved"
+else
+    # Cross-checked against findmnt directly rather than against the function's
+    # own output, so this is a second opinion and not a tautology.
+    ROOT_SRC=$(findmnt -no SOURCE --target / 2>/dev/null)
+    case "$ROOT_SRC" in
+        *"$HOST_ROOT_DISK"*) ok "root disk '$HOST_ROOT_DISK' is a prefix of '$ROOT_SRC'" ;;
+        *) bad "root disk '$HOST_ROOT_DISK' does not appear in '$ROOT_SRC'" ;;
+    esac
+
+    # Both directions. A veto stuck at "yes" blocks every card; one stuck at "no"
+    # is worse — it silently permits writing to this host's own disk, which is
+    # the one mistake here with no undo.
+    if rw_is_host_root_disk "/dev/$HOST_ROOT_DISK"; then
+        ok "the host root disk is vetoed"
+    else
+        bad "the host root disk is NOT vetoed"
+    fi
+    if rw_is_host_root_disk "/dev/rw-no-such-disk-$$"; then
+        bad "a nonexistent device must not be vetoed as the root disk"
+    else
+        ok "a nonexistent device is not vetoed"
+    fi
+fi
+
+echo ""
+echo "rw_check_card_mounts"
+
+# A correctly mounted card: rootfs at root/, three non-rootfs trees beside it.
+# The three are built from what those partitions really hold on a stock unit
+# (measured 2026-08-05 — SYSTEM_ANALYSIS.md#42-partitions), so the negative half
+# of the check is exercised against realistic input rather than empty directories.
+GOOD="$TMP/mnt-good"
+mkdir -p "$GOOD"
+cp -a "$V" "$GOOD/root"
+mkdir -p "$GOOD/data/websign" "$GOOD/data/cron/tabs" "$GOOD/log" "$GOOD/backup/factory"
+: > "$GOOD/data/websign/net.mode"
+: > "$GOOD/log/messages"
+: > "$GOOD/backup/serialno"
+if OUT=$(rw_check_card_mounts "$GOOD"); then
+    ok "a correctly mounted card passes"
+else
+    bad "a correctly mounted card was rejected: $OUT"
+fi
+
+# ⚠️ The case this function exists for: p2 mounted where p6 was expected. Two
+# rootfs trees, so `root/` still looks right and only the SECOND half of the check
+# can catch it. Without that half the clean runs against the wrong tree and
+# reports having deleted nothing.
+SWAPPED="$TMP/mnt-swapped"
+mkdir -p "$SWAPPED"
+cp -a "$V" "$SWAPPED/root"
+cp -a "$V" "$SWAPPED/data"
+mkdir -p "$SWAPPED/log" "$SWAPPED/backup"
+if rw_check_card_mounts "$SWAPPED" >/dev/null; then
+    bad "a rootfs mounted as 'data' must be rejected"
+else
+    ok "a rootfs mounted as 'data' is rejected (wrong partition order)"
+fi
+
+# root/ is not a rootfs at all — e.g. p2 mounted alone, which is what happens if
+# the partition numbers are read off a differently-partitioned card.
+NOROOT="$TMP/mnt-noroot"
+mkdir -p "$NOROOT/root/cron" "$NOROOT/data" "$NOROOT/log" "$NOROOT/backup"
+if rw_check_card_mounts "$NOROOT" >/dev/null; then
+    bad "a non-rootfs mounted as 'root' must be rejected"
+else
+    ok "a non-rootfs mounted as 'root' is rejected"
+fi
+
 # ── the real card images, when they are here ────────────────────────────────
 #
 # Both are gitignored, so this section is opportunistic. It is the only part
@@ -224,10 +374,17 @@ echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 
-# A harness that runs nothing reports success. There are 12 non-skippable cases
-# above (7 rootfs + 1 firmware + 4 disk); assert the run actually reached them
-# rather than trusting that it did.
-MIN_CASES=12
+# A harness that runs nothing reports success.  The non-skippable cases are:
+#   7  rw_is_rootfs
+#   1  rw_rootfs_firmware
+#   4  rw_is_card_disk (synthetic)
+#   4  rw_part_dev
+#   5  rw_card_partitions + 3 forbidden-partition assertions
+#   5  rw_role_device_path
+#   3  rw_check_card_mounts
+# = 32.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
+# two real card images are gitignored, so neither is counted.
+MIN_CASES=32
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

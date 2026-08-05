@@ -23,6 +23,11 @@
 #                     u-boot.bin with no saveenv, so p6 IS the rootfs by
 #                     position and cannot be renumbered. See
 #                     SYSTEM_ANALYSIS.md#42-partitions.
+#   rw_card_partitions
+#                     POSITION. Which partition holds which of the four trees the
+#                     device assembles into one filesystem. Also by position, for
+#                     the same reason: /etc/fstab names /dev/mmcblk0p{2,3,5,7}
+#                     literally. Nothing on the device consumes a UUID at all.
 #
 # Both are readable without mounting anything new and without writing anything.
 
@@ -202,16 +207,17 @@ rw_is_card_disk() {
 # "DEVICE SIZE" pair per line. Used only to make a "nothing is mounted" error
 # actionable, so it is best-effort and prints nothing if lsblk is unavailable.
 #
-# The root disk is skipped, and by resolution rather than by name: on this host
-# every disk reports removable=0 including the root disk, and a wsl --mount'ed
-# card lands on the same /dev/sd? namespace as / — so a "removable only" filter
-# rejects everything and a name filter rejects nothing. (CLAUDE.md, "Working
-# from this host".)
+# The root disk is skipped, and by resolution rather than by name: rw_host_root_disk
+# below is the one implementation of that resolution, shared with the mount path,
+# because on this host every disk reports removable=0 including the root disk and
+# a wsl --mount'ed card lands on the same /dev/sd? namespace as / — so a
+# "removable only" filter rejects everything and a name filter rejects nothing.
+# (CLAUDE.md, "Working from this host".)
 # ---------------------------------------------------------------------------
 rw_find_card_disks() {
     local rootdisk="" name size
     command -v lsblk >/dev/null 2>&1 || return 0
-    rootdisk=$(lsblk -rnso NAME "$(findmnt -no SOURCE --target / 2>/dev/null)" 2>/dev/null | tail -1)
+    rootdisk=$(rw_host_root_disk 2>/dev/null || true)
 
     while read -r name size; do
         [ -n "$name" ] || continue
@@ -221,4 +227,240 @@ rw_find_card_disks() {
 $(lsblk -drno NAME,SIZE --nodeps 2>/dev/null)
 EOF
     return 0   # see rw_find_rootfs: finding nothing is not an error
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The four mounts, by POSITION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# A booted RoomWizard assembles four partitions into one tree. Offline — a card
+# in a reader — they are four separate mounts, and an offline tool that mounts
+# only p6 sees /home/root/{data,log,backup} as three EMPTY directories, because
+# they are mount points. That is not a subtle failure: the vendor's network
+# config (websign/, which the boot-time regenerator reads — SYSTEM_ANALYSIS.md
+# #35-network-and-power) is on p2, its logs are on p3 and the 472 MB upgrade
+# payload is on p5. A clean that ran against p6 alone would report success having
+# deleted none of them.
+#
+# ⚠️ ROLE IS BY POSITION, NEVER BY UUID OR BY CONTENT.
+#
+#   * Not UUID, for the reason at the top of this file: all four differ per unit.
+#   * Not content either, for p2/p3/p5. p6 has vendor files to recognise;
+#     the other three do not have anything reliable. A stock p2 holds websign/
+#     and cron/, a --deep-cleaned one holds almost nothing, and a p3 that has
+#     been rotated is indistinguishable from a p5 whose factory/ was deleted.
+#     Guessing from content would mis-mount a cleaned unit's partitions and the
+#     clean would then run against the wrong tree.
+#   * Position is what the device itself uses: /etc/fstab names
+#     /dev/mmcblk0p{2,3,5,7} literally and U-Boot passes root=/dev/mmcblk0p6
+#     compiled in, with no saveenv to change it. So position is not merely
+#     convenient here, it is the device's own definition.
+#
+# p1 is deliberately NOT in this table. It carries mlo, u-boot.bin,
+# ctrlblock.bin and uImage-system; leaving it untouched is what keeps a power
+# cycle a free undo (SYSTEM_ANALYSIS.md#47-recovery). A caller cannot reach p1
+# through these functions, which is a stronger guarantee than remembering not to.
+# p4 (extended container) and p7 (swap) are absent for the same reason: nothing
+# to mount.
+RW_PART_ROLES="6:root 2:data 3:log 5:backup"
+
+# Where each role is mounted on a RUNNING device. Used to translate a
+# device-absolute path (which is how the cleanup rules are written) into a path
+# under the right offline mount.
+RW_ROLE_DEVICE_PATH="root:/ data:/home/root/data log:/home/root/log backup:/home/root/backup"
+
+# ---------------------------------------------------------------------------
+# rw_part_dev DISK N
+#
+# Echo the device node of DISK's partition N.
+#
+# Two naming schemes, and the difference is not cosmetic: /dev/sdf + 6 is
+# /dev/sdf6, but /dev/mmcblk0 + 6 is /dev/mmcblk0p6 and /dev/mmcblk06 does not
+# exist. The rule the kernel uses is "insert a 'p' when the disk name already
+# ends in a digit", which covers mmcblk, nvme and loop as well as sd/hd.
+# ---------------------------------------------------------------------------
+rw_part_dev() {
+    local disk="$1" n="$2"
+    [ -n "$disk" ] && [ -n "$n" ] || return 1
+    case "$disk" in
+        *[0-9]) echo "${disk}p${n}" ;;
+        *)      echo "${disk}${n}" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# rw_card_partitions DISK
+#
+# Echo "<role> <partition-device>" for each of the four, one per line, root
+# first. Pure name arithmetic over RW_PART_ROLES — it does not check that the
+# nodes exist, because a caller may be working on an image file where they do
+# not, and rw_is_card_disk has already established the layout.
+# ---------------------------------------------------------------------------
+rw_card_partitions() {
+    local disk="$1" entry num role
+    [ -n "$disk" ] || return 1
+    for entry in $RW_PART_ROLES; do
+        num="${entry%%:*}"
+        role="${entry#*:}"
+        echo "$role $(rw_part_dev "$disk" "$num")"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# rw_role_device_path ROLE
+#
+# Echo the absolute path ROLE's tree has on a running device, or nothing for an
+# unknown role.
+# ---------------------------------------------------------------------------
+rw_role_device_path() {
+    local want="$1" entry
+    for entry in $RW_ROLE_DEVICE_PATH; do
+        [ "${entry%%:*}" = "$want" ] && { echo "${entry#*:}"; return 0; }
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# rw_host_root_disk
+#
+# Echo the whole disk this host boots from.
+#
+# Resolved, never guessed by name or by the removable flag. On the machine this
+# was written on EVERY disk reports removable = 0 — including the root disk — and
+# a `wsl --mount`ed card lands in the same /dev/sd? namespace as /, so a
+# "removable media only" gate rejects everything and a name filter rejects
+# nothing (CLAUDE.md → "Working from this host").
+#
+# `mount | grep ^/dev/sdX` is NOT a substitute: it never lists swap, so a disk
+# whose only mounted piece is the swap partition looks unused.
+# ---------------------------------------------------------------------------
+rw_host_root_disk() {
+    local src
+    command -v lsblk >/dev/null 2>&1 || return 1
+    src=$(findmnt -no SOURCE --target / 2>/dev/null) || return 1
+    [ -n "$src" ] || return 1
+    lsblk -rnso NAME "$src" 2>/dev/null | tail -1
+}
+
+# ---------------------------------------------------------------------------
+# rw_is_host_root_disk DEVICE
+#
+# 0 if DEVICE is (or is a partition of) the disk this host boots from. The gate
+# every write path checks before it does anything: writing to the dev host's own
+# disk is the one mistake in this file with no undo.
+#
+# Returns 1 — "not the root disk" — when lsblk cannot answer at all, which is the
+# permissive direction. That is deliberate: this function is a veto, and callers
+# also require rw_is_card_disk to have said yes. An unanswerable lsblk on a disk
+# that carries the exact RoomWizard partition table is not the dev host.
+# ---------------------------------------------------------------------------
+rw_is_host_root_disk() {
+    local dev="$1" rootdisk name
+    [ -n "$dev" ] || return 1
+    rootdisk=$(rw_host_root_disk) || return 1
+    [ -n "$rootdisk" ] || return 1
+
+    # Compare by resolved disk, not by string: /dev/sda, /dev/sda1 and
+    # /dev/disk/by-id/… all have to match when the root disk is sda.
+    name=$(lsblk -rnso NAME "$dev" 2>/dev/null | tail -1)
+    [ -n "$name" ] || name="$(basename "$dev")"
+    [ "$name" = "$rootdisk" ]
+}
+
+# ---------------------------------------------------------------------------
+# rw_mount_card DISK BASE
+#
+# Mount all four of DISK's trees read-write under BASE/{root,data,log,backup}
+# and echo "<role> <mountpoint>" per line. Needs root.
+#
+# Refuses the host's own disk before mounting anything, rather than after: a
+# read-write mount of the dev host's root is already a bad outcome even if
+# nothing is written to it.
+#
+# Partial failure unwinds. A caller that got three of four mounts and proceeded
+# would clean three trees and silently leave the fourth — which for p2 means
+# leaving websign/ in place, i.e. the exact D7b defect this whole flow exists to
+# remove.
+# ---------------------------------------------------------------------------
+rw_mount_card() {
+    local disk="$1" base="$2" role part mp
+    [ -n "$disk" ] && [ -n "$base" ] || return 1
+
+    if rw_is_host_root_disk "$disk"; then
+        echo "rw_mount_card: $disk is this host's root disk — refusing" >&2
+        return 1
+    fi
+    if ! rw_is_card_disk "$disk"; then
+        echo "rw_mount_card: $disk does not carry the RoomWizard partition layout" >&2
+        return 1
+    fi
+
+    while read -r role part; do
+        [ -n "$role" ] || continue
+        mp="$base/$role"
+        mkdir -p "$mp" || { rw_umount_card "$base"; return 1; }
+        if ! mount "$part" "$mp" 2>/dev/null; then
+            echo "rw_mount_card: could not mount $part on $mp" >&2
+            rw_umount_card "$base"
+            return 1
+        fi
+        echo "$role $mp"
+    done <<EOF
+$(rw_card_partitions "$disk")
+EOF
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_umount_card BASE
+#
+# Unmount whatever rw_mount_card put under BASE. Idempotent, and never an error:
+# it is called from the failure path of rw_mount_card and from a trap, where a
+# non-zero status would mask the real problem.
+# ---------------------------------------------------------------------------
+rw_umount_card() {
+    local base="$1" entry role
+    [ -n "$base" ] || return 0
+    for entry in $RW_PART_ROLES; do
+        role="${entry#*:}"
+        mountpoint -q "$base/$role" 2>/dev/null && umount "$base/$role" 2>/dev/null
+    done
+    # root last is not required — they are four independent filesystems, not
+    # nested mounts — but sync is, before the operator pulls the card.
+    sync
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_check_card_mounts BASE
+#
+# Sanity-check a mounted card: p6 must look like a rootfs, and the other three
+# must NOT. Echoes each problem; returns 1 if there were any.
+#
+# The negative half is the half that earns its keep. Getting the partition order
+# wrong — mounting p2 where p6 was expected — is the one mistake that makes every
+# later path resolve under the wrong tree, and it would otherwise be invisible
+# until the clean reported deleting nothing.
+# ---------------------------------------------------------------------------
+rw_check_card_mounts() {
+    local base="$1" entry role bad=0
+
+    if ! rw_is_rootfs "$base/root"; then
+        echo "  $base/root does not look like a RoomWizard rootfs"
+        bad=$((bad + 1))
+    fi
+
+    for entry in $RW_PART_ROLES; do
+        role="${entry#*:}"
+        [ "$role" = "root" ] && continue
+        if [ ! -d "$base/$role" ]; then
+            echo "  $base/$role is not mounted"
+            bad=$((bad + 1))
+        elif rw_is_rootfs "$base/$role"; then
+            echo "  $base/$role looks like a ROOTFS — the partitions are in the wrong order"
+            bad=$((bad + 1))
+        fi
+    done
+
+    [ "$bad" -eq 0 ]
 }

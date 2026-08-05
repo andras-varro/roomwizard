@@ -6,18 +6,45 @@
 #   ./build-and-deploy.sh <ip>                   # build + deploy
 #   ./build-and-deploy.sh <ip> run               # build + deploy + run
 #   ./build-and-deploy.sh <ip> set-default       # build + deploy + set as default boot app
+#   ./build-and-deploy.sh --bundle <dir>         # build + stage into an offline bundle
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
 # separately by setup-device.sh.  Run that once before deploying for the first time.
+#
+# --bundle stages this component's artifacts under <dir>/root/<device-path> with
+# a declared-mode manifest (../IMPROVEMENT_PLAN.md F9, F10).  It stages the
+# binary, the icon and the .app manifest and DELIBERATELY NOT vnc_client.conf:
+# that file holds a plaintext VNC password, and a release must publish binaries
+# only, never device config (F9's caveat).
 
 set -e
 _START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEVICE_IP="${1:-}"
-MODE="${2:-}"
+BUNDLE_DIR=""
+if [[ "${1:-}" == "--bundle" ]]; then
+    BUNDLE_DIR="${2:-}"
+    DEVICE_IP=""
+    MODE=""
+    if [[ -z "$BUNDLE_DIR" ]]; then
+        echo "--bundle requires a directory"
+        echo ""
+        echo "Usage: $0 --bundle <dir>"
+        exit 1
+    fi
+    if [[ -n "${3:-}" ]]; then
+        echo "Unexpected argument after --bundle <dir>: $3"
+        exit 1
+    fi
+    # shellcheck source=../rw-bundle.sh
+    . "$REPO_ROOT/rw-bundle.sh"
+else
+    DEVICE_IP="${1:-}"
+    MODE="${2:-}"
+fi
 DEVICE="root@${DEVICE_IP}"
 REMOTE_DIR="/opt/vnc_client"
 
@@ -32,10 +59,14 @@ err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 # Validate before building, not at the first ssh (../IMPROVEMENT_PLAN.md B19).
 usage() {
     echo "Usage: $0 [<ip>] [run|set-default]"
+    echo "       $0 --bundle <dir>"
     echo ""
-    echo "  <ip>          Device IPv4 address; omit to build without deploying"
-    echo "  run           Also start vnc_client on the device"
-    echo "  set-default   Also make vnc_client the boot app"
+    echo "  <ip>            Device IPv4 address; omit to build without deploying"
+    echo "  run             Also start vnc_client on the device"
+    echo "  set-default     Also make vnc_client the boot app"
+    echo "  --bundle <dir>  Build, then stage the artifacts under <dir>/root/ with"
+    echo "                  a declared-mode manifest. No device needed. The config"
+    echo "                  file is NOT staged — it holds a plaintext password."
     exit 1
 }
 
@@ -95,6 +126,55 @@ else
     warn "../native_apps/check-arm-safe.sh missing — skipping hardware-divide gate"
 fi
 echo ""
+
+# ── 3c. the .app manifest, written once ─────────────────────────────────────
+# One heredoc, into a file, used by BOTH the deploy path and --bundle.  It used
+# to live inside `ssh "$DEVICE" bash <<REMOTE`, so it existed only when a device
+# was reachable; the offline installer needs the same bytes with no device
+# (../IMPROVEMENT_PLAN.md F10).
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT INT TERM
+cat > "$STAGE/vnc_client.app" <<'APP'
+name=VNC Client
+exec=/opt/vnc_client/vnc_client
+icon=/opt/roomwizard/icons/vnc_client.ppm
+args=none
+APP
+
+# ── 3d. --bundle: stage instead of deploying ────────────────────────────────
+# After the ARM-safety gate, deliberately: a published bundle is installed by
+# someone with no toolchain, so it must never carry an sdiv/udiv.
+if [[ -n "$BUNDLE_DIR" ]]; then
+    echo "════════════════════════════════════════"
+    echo " Staging bundle → $BUNDLE_DIR"
+    echo "════════════════════════════════════════"
+
+    rw_bundle_init "$BUNDLE_DIR" vnc_client || err "could not prepare $BUNDLE_DIR"
+
+    # The STRIPPED binary is what gets deployed and therefore what gets bundled.
+    # (The ARM gate above ran against the unstripped one on purpose — see its
+    # comment; the two are the same code.)
+    rw_bundle_add "$BUNDLE_DIR" vnc_client 0755 vnc_client_stripped "$REMOTE_DIR/vnc_client" \
+        || err "staging failed: vnc_client"
+    rw_bundle_add "$BUNDLE_DIR" vnc_client 0644 "$STAGE/vnc_client.app" \
+        /opt/roomwizard/apps/vnc_client.app || err "staging failed: vnc_client.app"
+    if [ -f vnc_client.ppm ]; then
+        rw_bundle_add "$BUNDLE_DIR" vnc_client 0644 vnc_client.ppm \
+            /opt/roomwizard/icons/vnc_client.ppm || err "staging failed: icon"
+    else
+        warn "vnc_client.ppm not found — the launcher tile will have no icon"
+    fi
+
+    # vnc_client.conf is NOT staged.  It carries a plaintext VNC password, and a
+    # release publishes binaries only (../IMPROVEMENT_PLAN.md F9).  The installer
+    # tells the operator to create it; the app's own defaults do not connect
+    # anywhere without one.
+    warn "vnc_client.conf deliberately NOT bundled (plaintext password)"
+
+    ok "Staged $(rw_bundle_finish "$BUNDLE_DIR" vnc_client) file(s)"
+    echo ""
+    exit 0
+fi
 
 # ── 4. deploy? ───────────────────────────────────────────────────────────────
 if [[ -z "$DEVICE_IP" ]]; then
@@ -159,20 +239,15 @@ else
     warn "To force-overwrite: scp $CONF_SRC $DEVICE:$REMOTE_DIR/vnc_client.conf"
 fi
 
-# Install app manifest (for app launcher)
+# Install app manifest (for app launcher).  The manifest was written to $STAGE
+# above, from the one heredoc this script has; --bundle copies the same file.
 info "Installing app manifest and icon..."
 ssh "$DEVICE" "mkdir -p /opt/roomwizard/apps /opt/roomwizard/icons"
 if [ -f vnc_client.ppm ]; then
     scp vnc_client.ppm "$DEVICE:/opt/roomwizard/icons/vnc_client.ppm"
 fi
-ssh "$DEVICE" bash <<'REMOTE'
-cat > /opt/roomwizard/apps/vnc_client.app << 'APP'
-name=VNC Client
-exec=/opt/vnc_client/vnc_client
-icon=/opt/roomwizard/icons/vnc_client.ppm
-args=none
-APP
-REMOTE
+scp "$STAGE/vnc_client.app" "$DEVICE:/opt/roomwizard/apps/vnc_client.app"
+ssh "$DEVICE" "chmod 644 /opt/roomwizard/apps/vnc_client.app"
 ok "App manifest installed"
 
 echo ""

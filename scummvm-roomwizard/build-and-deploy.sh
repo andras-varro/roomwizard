@@ -8,8 +8,16 @@
 #   ./build-and-deploy.sh <ip>                     # build + deploy
 #   ./build-and-deploy.sh <ip> set-default         # build + deploy + set as boot app
 #   ./build-and-deploy.sh <ip> <command>            # run a specific build stage + deploy
+#   ./build-and-deploy.sh --bundle <dir>            # build + stage into an offline bundle
 #
 # Commands: clean, configure, build, strip, deploy, set-default, all, info
+#
+# --bundle stages this component's artifacts under <dir>/root/<device-path> with
+# a declared-mode manifest (../IMPROVEMENT_PLAN.md F9, F10).  This link takes
+# ~1m35s–2m20s, so RW_BUNDLE_NO_BUILD=1 stages the binary already in
+# $SCUMMVM_DIR instead of relinking — it refuses if there is nothing there, so it
+# cannot silently bundle a component that was never built.  It CAN bundle a stale
+# binary, which is the price of the escape hatch; leave it unset for a release.
 #
 # Requirements:
 #   - WSL Ubuntu 20.04 or later
@@ -30,10 +38,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
-# Detect whether $1 is an IP address or a command.
-# If it looks like an IP, treat as: <ip> [command]
+# Three shapes.  `--bundle <dir>` needs no device and is checked first, because
+# it is neither an IP nor one of the build commands and would otherwise fall into
+# the usage error at the bottom.
+# If $1 looks like an IP, treat as: <ip> [command]
 # Otherwise treat as: [command]  (build-only, no deploy)
-if echo "${1:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+BUNDLE_DIR=""
+if [ "${1:-}" = "--bundle" ]; then
+    BUNDLE_DIR="${2:-}"
+    DEVICE_IP=""
+    CMD="bundle"
+    if [ -z "$BUNDLE_DIR" ]; then
+        echo "--bundle requires a directory"
+        echo "Usage: $0 --bundle <dir>"
+        exit 1
+    fi
+    if [ -n "${3:-}" ]; then
+        echo "Unexpected argument after --bundle <dir>: $3"
+        exit 1
+    fi
+elif echo "${1:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
     DEVICE_IP="$1"
     CMD="${2:-deploy}"
 else
@@ -513,7 +537,23 @@ strip_binary() {
     
     # Get size before stripping
     SIZE_BEFORE=$(du -h scummvm | cut -f1)
-    
+
+    # ── ARM-safety gate, HERE and nowhere else ──────────────────────────────
+    # Cortex-A8 has no hardware integer divide; an sdiv/udiv means SIGILL
+    # (exit 132) — blank screen, no output, indistinguishable from "it didn't
+    # start" (../SYSTEM_ANALYSIS.md#61).  This is the only moment the UNSTRIPPED
+    # binary exists: the strip below is in place.  Checking after it would
+    # disassemble literal pools as code and report phantom hits, which is exactly
+    # how vnc_client_stripped produced a bogus "sdiv r4, sp, pc".
+    if [ -x "$NATIVE_APPS_DIR/check-arm-safe.sh" ]; then
+        "$NATIVE_APPS_DIR/check-arm-safe.sh" scummvm || {
+            log_error "ARM-safety check failed — refusing to strip or deploy"
+            exit 1
+        }
+    else
+        log_warning "$NATIVE_APPS_DIR/check-arm-safe.sh missing — skipping hardware-divide gate"
+    fi
+
     # Strip debug symbols
     arm-linux-gnueabihf-strip scummvm
     
@@ -616,14 +656,14 @@ fi' || log_warning "stop reported a failure - a surviving process may hold the b
     if [ -f "$SCRIPT_DIR/scummvm.ppm" ]; then
         scp "$SCRIPT_DIR/scummvm.ppm" "$DEVICE:/opt/roomwizard/icons/scummvm.ppm"
     fi
-    ssh "$DEVICE" bash <<'REMOTE'
-cat > /opt/roomwizard/apps/scummvm.app << 'APP'
-name=ScummVM
-exec=/opt/games/scummvm
-icon=/opt/roomwizard/icons/scummvm.ppm
-args=none
-APP
-REMOTE
+    # Written locally by the one generator, then copied — the same file --bundle
+    # stages (../IMPROVEMENT_PLAN.md F10).
+    local MANIFEST_DIR
+    MANIFEST_DIR=$(mktemp -d)
+    write_app_manifest "$MANIFEST_DIR"
+    scp "$MANIFEST_DIR/scummvm.app" "$DEVICE:/opt/roomwizard/apps/scummvm.app"
+    ssh "$DEVICE" "chmod 644 /opt/roomwizard/apps/scummvm.app"
+    rm -rf "$MANIFEST_DIR"
     log_success "App manifest installed"
     log_info "Run on device: ssh $DEVICE '$DEVICE_PATH/scummvm'"
 
@@ -633,6 +673,85 @@ REMOTE
         ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
         log_success "Launcher running"
     fi
+}
+
+# ── the .app manifest, written once ─────────────────────────────────────────
+# One heredoc, into a file, used by BOTH deploy_to_device and stage_bundle.  It
+# used to live inside `ssh "$DEVICE" bash <<REMOTE`, so it existed only when a
+# device was reachable (../IMPROVEMENT_PLAN.md F10).
+#
+# args=none: ScummVM opens /dev/fb0 and the evdev devices itself — it has its own
+# input and audio layer, not native_apps/common (../SYSTEM_ANALYSIS.md#52).
+write_app_manifest() {
+    cat > "$1/scummvm.app" <<'APP'
+name=ScummVM
+exec=/opt/games/scummvm
+icon=/opt/roomwizard/icons/scummvm.ppm
+args=none
+APP
+}
+
+# ── stage this component into an offline bundle ─────────────────────────────
+# Everything deploy_to_device scps, plus the .noargs marker it touches on the
+# device.  Nothing here is config, so F9's "binaries only, never configs" caveat
+# is satisfied by construction — ScummVM's own scummvm.ini is created on first run
+# by the device.
+#
+# ⚠️ ScummVM is GPLv2+.  Publishing this binary carries a corresponding-source
+# obligation; release.sh writes the offer into the bundle's NOTICE file.
+stage_bundle() {
+    local dir="$1" n
+
+    # shellcheck source=../rw-bundle.sh
+    . "$REPO_ROOT/rw-bundle.sh"
+
+    if [ ! -f "$SCUMMVM_DIR/scummvm" ]; then
+        log_error "No binary at $SCUMMVM_DIR/scummvm — nothing to stage."
+        log_error "Run '$0 build' first, or unset RW_BUNDLE_NO_BUILD."
+        exit 1
+    fi
+
+    rw_bundle_init "$dir" scummvm || { log_error "could not prepare $dir"; exit 1; }
+
+    rw_bundle_add "$dir" scummvm 0755 "$SCUMMVM_DIR/scummvm" "$DEVICE_PATH/scummvm" \
+        || { log_error "staging failed: scummvm"; exit 1; }
+
+    # .noargs tells app_launcher to exec this with no framebuffer/touch argument.
+    # deploy_to_device `touch`es it on the device; a bundle needs a real file.
+    local NOARGS
+    NOARGS=$(mktemp)
+    : > "$NOARGS"
+    rw_bundle_add "$dir" scummvm 0644 "$NOARGS" "$DEVICE_PATH/scummvm.noargs" \
+        || { log_error "staging failed: scummvm.noargs"; exit 1; }
+    rm -f "$NOARGS"
+
+    # Theme and GUI data.  Without scummremastered.zip ScummVM falls back to the
+    # green wireframe UI, which looks like a broken install rather than a missing
+    # file — so these are warned about individually, not swept with a glob.
+    for pair in \
+        "$SCUMMVM_DIR/gui/themes/scummremastered.zip:$DEVICE_PATH/scummremastered.zip" \
+        "$SCUMMVM_DIR/gui/themes/gui-icons.dat:$DEVICE_PATH/gui-icons.dat" \
+        "$SCRIPT_DIR/vkeybd_roomwizard.zip:$DEVICE_PATH/vkeybd_roomwizard.zip" \
+        "$SCRIPT_DIR/scummvm.ppm:/opt/roomwizard/icons/scummvm.ppm"
+    do
+        local src="${pair%%:*}" dev="${pair#*:}"
+        if [ -f "$src" ]; then
+            rw_bundle_add "$dir" scummvm 0644 "$src" "$dev" \
+                || { log_error "staging failed: $src"; exit 1; }
+        else
+            log_warning "not staged (absent): $src"
+        fi
+    done
+
+    local MANIFEST_DIR
+    MANIFEST_DIR=$(mktemp -d)
+    write_app_manifest "$MANIFEST_DIR"
+    rw_bundle_add "$dir" scummvm 0644 "$MANIFEST_DIR/scummvm.app" \
+        /opt/roomwizard/apps/scummvm.app || { log_error "staging failed: scummvm.app"; exit 1; }
+    rm -rf "$MANIFEST_DIR"
+
+    n=$(rw_bundle_finish "$dir" scummvm)
+    log_success "Staged $n file(s) → $dir"
 }
 
 # Set ScummVM as default boot app
@@ -742,6 +861,19 @@ case "$CMD" in
             log_info "To deploy + set as boot app: $0 <ip> set-default"
         fi
         ;;
+    bundle)
+        # RW_BUNDLE_NO_BUILD skips the ~2-minute link and stages the binary that
+        # is already there.  stage_bundle refuses if there is none, so this cannot
+        # quietly produce a bundle with no ScummVM in it.
+        if [ -n "${RW_BUNDLE_NO_BUILD:-}" ]; then
+            log_warning "RW_BUNDLE_NO_BUILD set — staging the existing binary, not rebuilding"
+        else
+            check_prerequisites
+            build_scummvm
+            strip_binary
+        fi
+        stage_bundle "$BUNDLE_DIR"
+        ;;
     info)
         show_info
         ;;
@@ -751,6 +883,7 @@ case "$CMD" in
         echo "  $0                          Build only (clean + configure + build + strip)"
         echo "  $0 <ip>                     Build + deploy"
         echo "  $0 <ip> set-default         Build + deploy + set as boot app"
+        echo "  $0 --bundle <dir>           Build + stage into an offline bundle"
         echo ""
         echo "Commands:"
         echo "  all          - Clean, configure, build, and strip (default)"
@@ -760,6 +893,7 @@ case "$CMD" in
         echo "  strip        - Strip debug symbols"
         echo "  deploy       - Build + strip + deploy to device"
         echo "  set-default  - Build + strip + deploy + set as default boot app"
+        echo "  bundle       - Build + strip + stage offline (use --bundle <dir>)"
         echo "  info         - Show build information"
         exit 1
         ;;
