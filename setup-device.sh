@@ -44,11 +44,49 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# The keep/delete decisions --deep-clean applies are DATA, in one file, shared
+# with commission-offline.sh so that the live and offline cleans cannot drift.
+# rw-clean.sh is the parser and the plan compiler; the executor below is this
+# script's own, because "/" is the correct prefix on a device and a refused one
+# offline (IMPROVEMENT_PLAN.md F10).
+# shellcheck source=rw-clean.sh
+. "$SCRIPT_DIR/rw-clean.sh"
+
+# ── --keep-<group> is extracted before the positional parsing ──────────────
+#
+# The clean's opt-outs are named after the groups in clean-rules.conf, so the
+# list of valid ones is not repeated here. They are pulled out of "$@" first
+# because everything below is positional ($1 target, $2 flag, $3 --dry-run) and a
+# --keep-browser sitting in $3 would otherwise be rejected as an unknown option.
+KEEP_GROUPS=""
+_ARGS=()
+for _a in "$@"; do
+    case "$_a" in
+        --keep-*)
+            _g="${_a#--keep-}"
+            case " $(rw_clean_optional_groups) " in
+                *" $_g "*) KEEP_GROUPS="$KEEP_GROUPS $_g" ;;
+                *) echo "Unknown clean group: $_g"
+                   echo "  --keep- accepts: $(rw_clean_optional_groups)"
+                   exit 1 ;;
+            esac
+            ;;
+        *) _ARGS+=("$_a") ;;
+    esac
+done
+set -- "${_ARGS[@]}"
+
 DEVICE_IP="${1:-}"
 FLAG="${2:-}"
 DEVICE="root@${DEVICE_IP}"
 REMOTE_DIR="/opt/roomwizard"
 INIT_SCRIPT="/etc/init.d/roomwizard-app"
+# Files installed onto the device verbatim. They live in device-files/ rather
+# than in a heredoc here so that the offline installer writes the same bytes —
+# two copies of an init script is two things to keep in step, and the one that
+# drifts is discovered on a device that boots to a black screen.
+DEVICE_FILES="$SCRIPT_DIR/device-files"
+CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -69,6 +107,10 @@ usage() {
     echo "                    See IMPROVEMENT_PLAN.md and the warnings it prints."
     echo "  --status          Show device status only (no changes)"
     echo "  --dry-run         With --deep-clean: list what would be deleted, delete nothing"
+    echo "  --keep-<group>    With --deep-clean: leave one stack on disk. Groups:"
+    echo "                    $(rw_clean_optional_groups)"
+    echo "                    Files only — it does not re-enable a boot link, because"
+    echo "                    the rc*.d whitelist is what removes an unknown service."
     echo "  --hostname NAME   Set the device host name only, and exit. No reboot."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
     exit 1
@@ -195,24 +237,54 @@ if [[ "$FLAG" == "--deep-clean" ]]; then
     FLAG="--remove"
 fi
 
+
 # ── deep clean ──────────────────────────────────────────────────────────────
-# Extended cleanup beyond the vendor-bloatware list above. Everything here was
-# verified unused on a live device (RW09) on 2026-07-29. The enabling fact is
-# that every binary this project ships is statically linked -- `ldd` reports
-# "not a dynamic executable" for app_launcher, vnc_client and scummvm -- so the
-# only dynamic consumers left are sshd, dbus, syslogd, cron, watchdog, udevd,
-# dhclient and busybox. Nothing below is in their closure.
 #
-# Deliberately NOT included (could not be proven safe):
+# ⚠️ The decisions are NOT here. Every keep and every delete lives in
+# device-files/clean-rules.conf with a reason per entry, read by this script and
+# by commission-offline.sh so the live and offline cleans cannot drift
+# (IMPROVEMENT_PLAN.md F10). rw-clean.sh compiles that file into a plan; what
+# follows is only this script's EXECUTOR, and it is separate from the offline one
+# because "/" is the correct prefix on a device and a refused one offline.
+#
+# The shape of the list, and why it is a whitelist under rc*.d, /opt and
+# /home/root/{data,log,backup}: the risk being managed is an unknown vendor
+# service on a unit nobody has inspected, so an unrecognised one must be removed
+# by construction rather than by someone adding a name. Disk space is not the
+# motive — p6 has 474 MB free before anything is deleted.
+#
+# Everything the file names was verified unused on a live device. The enabling
+# fact is that every binary this project ships is statically linked -- `ldd`
+# reports "not a dynamic executable" for app_launcher, vnc_client and scummvm --
+# so the only dynamic consumers left are sshd, dbus, syslogd, cron, watchdog,
+# udevd, dhclient and busybox.
+#
+# Deliberately NOT in the file (could not be proven safe):
 #   /usr/share/fonts      4.5 MB - ScummVM glyph source not ruled out
 #   /usr/lib/locale       2.9 MB - static ScummVM embeds locale-archive paths
 #   /usr/lib/perl5        2.5 MB - grep for #!/usr/bin/perl shebangs first
-#   /opt/sbin/*           1.4 MB - entangled with ctrlblk / restore.sh
+#   /opt/sbin/*           1.4 MB - kept deliberately; the reference material
+#                                  SYSTEM_ANALYSIS.md 3.5 was read out of
 run_deep_clean() {
     echo ""
     echo "════════════════════════════════════════"
     echo " Deep Clean"
     echo "════════════════════════════════════════"
+
+    [[ -f "$CLEAN_RULES" ]] || err "missing $CLEAN_RULES"
+    if ! CHECK="$(rw_clean_validate "$CLEAN_RULES")"; then
+        echo "$CHECK"
+        err "device-files/clean-rules.conf does not validate — refusing to clean"
+    fi
+
+    local groups="base" g
+    for g in $(rw_clean_optional_groups); do
+        case " $KEEP_GROUPS " in
+            *" $g "*) ;;
+            *) groups="$groups $g" ;;
+        esac
+    done
+    [[ -n "$KEEP_GROUPS" ]] && info "Keeping:$KEEP_GROUPS"
 
     DEL_FACTORY=0
     if [[ "$DRY_RUN" == "--dry-run" ]]; then
@@ -234,116 +306,92 @@ run_deep_clean() {
             [[ "$confirm_factory" == "yes" ]] && DEL_FACTORY=1
         fi
     fi
+    [[ "$DEL_FACTORY" == "1" ]] && groups="$groups factory"
 
     if [[ "$confirm2" == "yes" ]]; then
-        ssh "$DEVICE" "DRY='$DRY_RUN' DEL_FACTORY='$DEL_FACTORY' bash -s" <<'REMOTE'
+        # Compiled on the HOST, where the parser lives, and shipped as a plan the
+        # device only has to interpret. That way the device needs neither bash nor
+        # a copy of the rules, and there is exactly one implementation of "which
+        # groups are on" and "what a disabled group protects".
+        local plan
+        plan=$(mktemp)
+        rw_clean_plan "$CLEAN_RULES" "$groups" > "$plan" \
+            || { rm -f "$plan"; err "could not compile the clean plan"; }
+        info "$(grep -c '^del' "$plan") delete(s), $(grep -c '^sweep' "$plan") sweep(s), $(grep -c '^keep' "$plan") protected path(s)"
+        ssh "$DEVICE" "cat > /tmp/rw-clean-plan" < "$plan"
+        rm -f "$plan"
+
+        ssh "$DEVICE" "DRY='$DRY_RUN' sh -s" <<'REMOTE'
+PLAN=/tmp/rw-clean-plan
 before_root=$(df -k /            | tail -1 | awk '{print $3}')
 before_data=$(df -k /home/root/data   2>/dev/null | tail -1 | awk '{print $3}')
 before_bkp=$(df -k /home/root/backup  2>/dev/null | tail -1 | awk '{print $3}')
 
-# del <paths...>  - remove, or just report under DRY
+# del <path-or-glob> — the LIVE executor. No prefix, because on the device the
+# paths in the plan are already correct; rw_clean_del's refusal of an empty
+# prefix is what the OFFLINE executor needs and this one must not have.
+# $1 is deliberately unquoted so a glob expands.
 del() {
-    for p in "$@"; do
-        for m in $p; do
-            [ -e "$m" ] || continue
+    for m in $1; do
+        [ -e "$m" ] || [ -L "$m" ] || continue
+        if [ -L "$m" ]; then
+            sz=link
+        else
             sz=$(du -sh "$m" 2>/dev/null | awk '{print $1}')
-            if [ -n "$DRY" ]; then
-                echo "  would delete  $sz  $m"
-            else
-                echo "  deleting      $sz  $m"
-                rm -rf "$m"
-            fi
-        done
+        fi
+        if [ -n "$DRY" ]; then
+            echo "  would delete  ${sz:-?}  $m"
+        else
+            echo "  delete        ${sz:-?}  $m"
+            rm -rf "$m"
+        fi
     done
 }
 
 echo ""
-echo "-- Browser / WebKit stack (~48 MB) --"
-del /usr/lib/libwebkit2gtk-4.0.so* /usr/lib/libjavascriptcoregtk-4.0.so*
-del /usr/libexec/webkit2gtk-4.0 /usr/lib/webkit2gtk-4.0
-del /usr/bin/WebKitWebDriver /usr/bin/browser /usr/bin/webmonitor
+echo "-- Named stacks --"
+awk -F'\t' '$1 == "del" { print $2 }' "$PLAN" | while read -r p; do
+    [ -n "$p" ] && del "$p"
+done
 
-echo "-- ICU (only referenced by webkit/JSC/harfbuzz-icu) (~31 MB) --"
-del /usr/lib/libicu*.so* /usr/lib/libharfbuzz-icu.so*
+echo ""
+echo "-- Whitelist sweeps: anything not on the keep list --"
+awk -F'\t' '$1 == "sweep" { print $2 }' "$PLAN" | while read -r d; do
+    [ -n "$d" ] || continue
+    [ -d "$d" ] || continue
+    keeps=$(awk -F'\t' -v dir="$d" '$1 == "keep" && $2 == dir { print $3 }' "$PLAN")
+    # Dotfile globs included explicitly: BusyBox sh has no dotglob, and a vendor
+    # directory that hid its payload in a dotfile would otherwise survive.
+    for c in "$d"/* "$d"/.[!.]* "$d"/..?*; do
+        [ -e "$c" ] || [ -L "$c" ] || continue
+        n=${c##*/}
+        kept=0
+        for k in $keeps; do
+            case "$n" in $k) kept=1; break ;; esac
+        done
+        [ "$kept" = 1 ] && continue
+        del "$c"
+    done
+done
 
-echo "-- GTK3 + icon/mime/theme data (~17 MB) --"
-del /usr/lib/libgtk-3.so* /usr/lib/libgdk-3.so* /usr/lib/libgdk_pixbuf*
-del /usr/lib/gdk-pixbuf-2.0 /usr/lib/girepository-1.0
-del /usr/share/icons /usr/share/mime /usr/share/themes
-
-echo "-- X11 client libs + server (~6 MB) --"
-del /usr/lib/libX*.so* /usr/lib/libxcb*.so* /usr/lib/libepoxy.so*
-del /usr/lib/libGL.so* /usr/lib/libEGL.so* /usr/lib/libgbm.so*
-del /usr/lib/xorg /usr/lib/X11 /usr/lib/dri /usr/share/drirc.d
-del /usr/bin/Xorg /usr/bin/xkbcomp
-del /usr/libexec/libinput /usr/share/libinput
-
-echo "-- GStreamer (~4.5 MB) --"
-del /usr/lib/libgst*.so* /usr/lib/liborc-0.4.so*
-del /usr/lib/gstreamer-1.0 /usr/libexec/gstreamer-1.0 /usr/share/gst-plugins-base
-
-echo "-- net-snmp / aspell / lftp / orphaned python / tslib (~9 MB) --"
-del /usr/lib/libnetsnmp*.so* /usr/sbin/snmpd /usr/bin/snmp* /usr/bin/net-snmp*
-del /usr/lib/aspell-0.60 /usr/lib/enchant-2 /usr/share/enchant-2
-del /usr/lib/libaspell.so* /usr/lib/libenchant*.so* /usr/bin/aspell*
-del /usr/lib/lftp /usr/share/lftp /usr/lib/liblftp*.so* /usr/bin/lftp*
-del /usr/lib/libpython3.8.so*      # orphaned: no python3 stdlib on this device
-del /usr/lib/ts /usr/lib/libts.so*
-del /usr/share/sounds              # alsa test wavs (NOT /usr/share/alsa - keep that)
-
-echo "-- Unused daemons + Steelcase mail tooling (~3 MB) --"
-del /usr/sbin/wpa_supplicant /usr/sbin/ntpd.ntp /usr/sbin/vsftpd /usr/sbin/avahi-daemon
-del /etc/avahi /etc/wpa_supplicant* /etc/ntp.conf /etc/ntp.conf.template
-del /usr/local/bin/mutt /usr/local/bin/muttbug /usr/local/bin/pgpewrap
-del /usr/local/bin/pgpring /usr/local/bin/smime_keys /usr/local/bin/flea
-del /usr/libexec/nullmailer /var/spool/nullmailer
-del /etc/init.d/avahi-daemon /etc/init.d/wpa_supplicant /etc/init.d/networkmanager
-del /etc/init.d/cursor.sh /etc/init.d/psplash /etc/init.d/cleaup_partition
-
-echo "-- ZigBee tooling (only reachable if the radio is populated) --"
-del /opt/sbin/RoomWizard-zbgatewayd /opt/sbin/wpantools_roomwizard
-
-echo "-- Boot links the stale on-device disable script missed --"
-# KEEP /etc/rc5.d/S40ctrlblk (boot_tracker management) and S50watchdog (HW watchdog)
-del /etc/rc5.d/S21cursor.sh /etc/rc5.d/S75bootscrub /etc/rc5.d/S80cleaup_partition
-del /etc/rc5.d/S99rmnologin.sh /etc/rcS.d/S01psplash /etc/rcS.d/S58wpa_supplicant
-del /etc/rcS.d/S60networkmanager /etc/rcS.d/S45mountnfs.sh
-
-echo "-- Data partition (~91 MB) --"
-if [ -f /home/root/data/cron/log ]; then
-    sz=$(du -sh /home/root/data/cron/log | awk '{print $1}')
+echo ""
+echo "-- Truncated in place, not unlinked --"
+awk -F'\t' '$1 == "truncate" { print $2 }' "$PLAN" | while read -r p; do
+    [ -n "$p" ] || continue
+    [ -f "$p" ] || continue
+    sz=$(du -sh "$p" 2>/dev/null | awk '{print $1}')
     if [ -n "$DRY" ]; then
-        echo "  would truncate $sz  /home/root/data/cron/log"
+        echo "  would truncate ${sz:-?}  $p"
     else
-        echo "  truncating     $sz  /home/root/data/cron/log"
-        : > /home/root/data/cron/log
+        echo "  truncate      ${sz:-?}  $p"
+        : > "$p"
     fi
-fi
-del /home/root/data/test.hex        # 10 MB factory burn-in pattern
-del /home/root/data/splash /home/root/data/frontpanel /home/root/data/misc
-del /home/root/data/roombooker /home/root/data/selftest /home/root/data/uploaded
-del /home/root/data/wpa /home/root/data/wpa_ca
-del /home/root/data/pushconfig.tar.gz /home/root/data/rwdb.tgz
-# KEEP /home/root/data/*.hig - our high scores
+done
 
-echo "-- Log churn on the backup partition --"
-del /home/root/backup/logs/rotate_logs /home/root/backup/logs/restore
-# KEEP /home/root/backup/serialno - device identity
-
-echo "-- Cron: both remaining jobs are broken/leaky --"
-# cleanupfiles.sh errors out ("[: 812M: integer expression expected") and both
-# jobs leak 12 files/day into rotate_logs with nothing pruning them. Our own
-# respawn.sh self-rotates, so cron has no remaining purpose.
-if [ -n "$DRY" ]; then
-    echo "  would remove crontab, /etc/rc5.d/S20cron, /opt/sbin/cleanup"
-else
-    crontab -r 2>/dev/null || true
-    rm -f /etc/rc5.d/S20cron
-    rm -rf /opt/sbin/cleanup
-    rm -rf /home/root/data/cron
-    echo "  cron removed"
-fi
-
+# Not a deletion, so it is not in the data file: an EDIT of a config file, which
+# the four record types cannot express and which has no offline equivalent worth
+# having (the tty4 getty costs 1.4 MB of RSS on a running device only).
+echo ""
 echo "-- inittab: drop the pointless tty4 getty (~1.4 MB RSS) --"
 if grep -q '^4:12345:respawn:/sbin/getty 38400 tty4' /etc/inittab 2>/dev/null; then
     if [ -n "$DRY" ]; then
@@ -354,14 +402,7 @@ if grep -q '^4:12345:respawn:/sbin/getty 38400 tty4' /etc/inittab 2>/dev/null; t
     fi
 fi
 
-if [ "$DEL_FACTORY" = "1" ]; then
-    echo "-- Factory restore image (474 MB) --"
-    del /home/root/backup/factory/sd_rootfs_part.img*
-    del /home/root/backup/factory/sd_boot_archive.tar.gz*
-    del /home/root/backup/factory/sd_data_part.img*
-    del /home/root/backup/factory/sd_log_part.img*
-    # KEEP uImage-system-original (5 MB) - cheap local fallback kernel
-fi
+rm -f "$PLAN"
 
 if [ -z "$DRY" ]; then
     echo ""
@@ -530,47 +571,20 @@ echo "════════════════════════�
 echo " 3. Deploy Boot Scripts"
 echo "════════════════════════════════════════"
 
-info "Deploying audio-enable boot script..."
-ssh "$DEVICE" bash <<'AUDIO_REMOTE'
-cat > /etc/init.d/audio-enable << 'EOF'
-#!/bin/sh
-# Enable RoomWizard speaker amplifier (GPIO12) and configure TWL4030 HiFi path
-echo out > /sys/class/gpio/gpio12/direction
-echo 1   > /sys/class/gpio/gpio12/value
-amixer -c 0 cset name="HandsfreeL Mux" AudioL1  > /dev/null 2>&1
-amixer -c 0 cset name="HandsfreeR Mux" AudioR1  > /dev/null 2>&1
-amixer -c 0 cset name="HandsfreeL Switch" on    > /dev/null 2>&1
-amixer -c 0 cset name="HandsfreeR Switch" on    > /dev/null 2>&1
-EOF
-chmod +x /etc/init.d/audio-enable
-ln -sf /etc/init.d/audio-enable /etc/rc5.d/S29audio-enable
-AUDIO_REMOTE
-ok "Audio boot script deployed"
-
-info "Deploying time-sync boot script..."
-ssh "$DEVICE" bash <<'TIMESYNC_REMOTE'
-cat > /etc/init.d/time-sync << 'EOF'
-#!/bin/sh
-# Simple time synchronization for RoomWizard
-# Syncs time with time server if network is available.
-# Try multiple time servers in order using rdate (RFC 868 Time Protocol).
-
-# Wait a bit for network to be fully up
-sleep 2
-
-for server in time.nist.gov time-a-g.nist.gov time-b-g.nist.gov time-c-g.nist.gov; do
-    if rdate -s "$server" >/dev/null 2>&1; then
-        hwclock -w
-        logger "time-sync: Successfully synced time with $server"
-        exit 0
-    fi
+# The two init scripts are FILES in device-files/, not heredocs, so that
+# commission-offline.sh writes the same bytes onto a card. A second copy of
+# /etc/init.d/audio-enable would be a second thing to keep in step, and the one
+# that drifts is found on a device that boots silent.
+for _f in audio-enable time-sync; do
+    info "Deploying $_f boot script..."
+    [[ -f "$DEVICE_FILES/$_f" ]] || err "missing $DEVICE_FILES/$_f"
+    scp -q "$DEVICE_FILES/$_f" "$DEVICE:/etc/init.d/$_f"
 done
-
-logger "time-sync: Failed to sync time with any time server"
-EOF
-chmod +x /etc/init.d/time-sync
-ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync
-TIMESYNC_REMOTE
+# S28 before S29 before S30avahi-daemon, and all three after S20cron; the numbers
+# are the keep-list in device-files/clean-rules.conf, so changing one here means
+# changing it there too or the whitelist sweep removes the link.
+ssh "$DEVICE" "chmod +x /etc/init.d/audio-enable /etc/init.d/time-sync && ln -sf /etc/init.d/audio-enable /etc/rc5.d/S29audio-enable && ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync"
+ok "Audio and time-sync boot scripts deployed"
 ok "Time sync boot script deployed"
 
 info "Enabling mDNS (avahi-daemon)..."
@@ -650,31 +664,18 @@ echo "════════════════════════�
 #   - sysctl network hardening (below)
 #   - Home network — device is not internet-facing
 info "Applying kernel security settings..."
-ssh "$DEVICE" bash <<'SYSCTL'
-    cat > /etc/sysctl.d/99-security.conf << 'EOF'
-# RoomWizard security hardening
-kernel.randomize_va_space = 2
-kernel.dmesg_restrict = 1
-kernel.core_pattern = |/bin/false
-kernel.sysrq = 0
-net.ipv4.ip_forward = 0
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
-net.ipv4.conf.all.log_martians = 1
-net.ipv4.icmp_echo_ignore_broadcasts = 1
-net.ipv4.tcp_syncookies = 1
-EOF
-    # Apply now
-    sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
-        # Fallback: apply individually if sysctl.d not supported
-        sysctl -w kernel.randomize_va_space=2 2>/dev/null
-        sysctl -w kernel.dmesg_restrict=1 2>/dev/null
-        sysctl -w kernel.sysrq=0 2>/dev/null
-    }
+# 99-security.conf is a FILE in device-files/, same reasoning as the two init
+# scripts: the offline installer writes the same bytes.
+[[ -f "$DEVICE_FILES/99-security.conf" ]] || err "missing $DEVICE_FILES/99-security.conf"
+scp -q "$DEVICE_FILES/99-security.conf" "$DEVICE:/etc/sysctl.d/99-security.conf"
+ssh "$DEVICE" sh -s <<'SYSCTL'
+# Apply now. The fallback exists because a kernel without sysctl.d support would
+# otherwise accept the file and apply none of it, silently.
+sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
+    sysctl -w kernel.randomize_va_space=2 2>/dev/null
+    sysctl -w kernel.dmesg_restrict=1 2>/dev/null
+    sysctl -w kernel.sysrq=0 2>/dev/null
+}
 SYSCTL
 ok "Kernel security settings applied"
 
@@ -718,7 +719,11 @@ rm -rf /opt/jetty-9-4-11 /opt/jetty /opt/openjre-8 /opt/java /opt/hsqldb
 rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
 
 # Additional Steelcase artifacts and data
-rm -rf /opt/pv02 2>/dev/null
+# /opt/pv02 (44 KB) is KEPT from 2026-08-05: it is one of rw_is_rootfs's identity
+# markers and a hardware reference, and device-files/clean-rules.conf keeps it
+# with that reason. An `rm -rf /opt/pv02` here would have contradicted the data
+# file the deep clean below reads — two lists in one script is exactly the drift
+# that file exists to prevent.
 # NOTE: /opt/sound (113 KB) is deliberately KEPT - it holds three usable UI WAVs
 # (asl_click.wav, asl_error.wav, asl_success.wav) that are directly useful as
 # launcher/game feedback sounds via common/audio.c. Cheap to keep.
@@ -733,8 +738,8 @@ rm -rf /home/root/data/conctest 2>/dev/null
 # BUGFIX 2026-07-29: this used to be `rm -rf /home/root/data/cron`, which is
 # DESTRUCTIVE - /var/cron/tabs/root is a SYMLINK into that directory, so deleting
 # it destroys the root crontab and cron's spool root. Truncate the 79 MB log
-# instead (it has been accumulating since 2017). Use --deep-clean to remove cron
-# entirely, deliberately.
+# instead (it has been accumulating since 2017). --deep-clean truncates the
+# crontab itself as well, and keeps cron running.
 [ -f /home/root/data/cron/log ] && : > /home/root/data/cron/log
 rm -rf /home/root/backup/websigns 2>/dev/null
 rm -f /var/crontab.steelcase.bak 2>/dev/null

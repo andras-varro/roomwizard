@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enable RoomWizard speaker amplifier (GPIO12) and configure TWL4030 HiFi path
+echo out > /sys/class/gpio/gpio12/direction
+echo 1   > /sys/class/gpio/gpio12/value
+amixer -c 0 cset name="HandsfreeL Mux" AudioL1  > /dev/null 2>&1
+amixer -c 0 cset name="HandsfreeR Mux" AudioR1  > /dev/null 2>&1
+amixer -c 0 cset name="HandsfreeL Switch" on    > /dev/null 2>&1
+amixer -c 0 cset name="HandsfreeR Switch" on    > /dev/null 2>&1

@@ -1,21 +1,23 @@
 #!/bin/bash
 #
-# roomwizard.sh — the front door: one menu over the three bring-up phases
+# roomwizard.sh — the front door: one menu over the bring-up paths
 #
 # This script implements NOTHING of its own. Every item shells out to the
 # existing script with arguments, so anything that works today keeps working
-# exactly as it did, and those three stay non-interactive when called directly:
+# exactly as it did, and those scripts stay non-interactive when called directly:
 #
 #   commission-roomwizard.sh   Phase 1, offline, needs a mounted card + sudo
 #   setup-device.sh            Phase 2, over SSH, ends in a reboot
 #   deploy-all.sh              Phase 3, over SSH, per-component
+#   commission-offline.sh      all three at once, offline, ONE boot
 #
-# Why a composition layer and not one merged script: the three have genuinely
-# different connection models, and the cleanup in Phase 2 touches paths spread
-# across FOUR partitions that only a booted kernel assembles into one tree,
-# while commissioning locates just p6. Merging would mean mounting four
-# partitions and rewriting every absolute path. There are three further reasons
-# in COMMISSIONING.md ("why these are separate").
+# Why a composition layer and not one merged script: the three phases have
+# genuinely different connection models, and the cleanup in Phase 2 touches paths
+# spread across FOUR partitions that only a booted kernel assembles into one tree,
+# while commissioning locates just p6. commission-offline.sh is what does mount
+# all four and map every absolute path onto them (IMPROVEMENT_PLAN.md F10); the
+# SSH phases stay as the verified development loop. There are three further
+# reasons in COMMISSIONING.md ("why these are separate").
 #
 # What this script does add is the two things missing between the phases: a
 # wait_for_ssh so the operator is not guessing when a rebooted device is back,
@@ -60,6 +62,7 @@ scripts it calls. To script a step, call that script directly:
   ./setup-device.sh <target> [flags]            Phase 2 (ssh, reboots)
   ./setup-device.sh <target> --hostname NAME    name only, no reboot
   ./deploy-all.sh <target> [component]          Phase 3 (ssh)
+  ./commission-offline.sh --bundle <b>          all three, offline, one boot
 
 Full guide: COMMISSIONING.md
 USAGE
@@ -142,6 +145,44 @@ PRE
     confirm "Card mounted and ready?" || { warn "Skipped."; return 0; }
     echo ""
     bash "$SCRIPT_DIR/commission-roomwizard.sh" || err "Commissioning failed."
+}
+
+# ── Phase 1+2+3 in one offline pass ─────────────────────────────────────────
+# A composition like everything else here: it execs commission-offline.sh, which
+# in turn orchestrates commission-roomwizard.sh rather than restating its prompts.
+do_commission_offline() {
+    hdr "6. Commission a card completely, offline (one boot)"
+    cat <<'PRE'
+  This does the WHOLE job against the card: password, host name, SSH, DHCP, the
+  vendor cleanup, the boot scripts and the apps. Then one boot and the unit works.
+
+  Before continuing:
+
+    - the card is out of the RoomWizard and in this host's reader
+    - a full-card image backup exists SOMEWHERE ELSE. You will be asked.
+    - you have a bundle: ./release.sh --stage-only leaves one in build/release,
+      or point --bundle at a release tarball
+    - you will be asked for sudo, because it mounts all four partitions
+
+  It never touches p1, so a power cycle undoes nothing it did to the boot chain.
+PRE
+    echo ""
+    local bundle
+    read -r -p "  Bundle (tarball or directory) [build/release]: " bundle
+    bundle="${bundle:-build/release}"
+    if [ ! -e "$SCRIPT_DIR/$bundle" ] && [ ! -e "$bundle" ]; then
+        err "No such bundle: $bundle"
+        info "Build one first:  ./release.sh --stage-only"
+        return 1
+    fi
+    [ -e "$bundle" ] || bundle="$SCRIPT_DIR/$bundle"
+    echo ""
+    confirm "Card in the reader and ready?" || { warn "Skipped."; return 0; }
+    echo ""
+    # sudo here rather than inside: mounting is the only step that needs root, and
+    # the child refuses clearly if it is missing.
+    sudo bash "$SCRIPT_DIR/commission-offline.sh" --bundle "$bundle" \
+        || err "Offline commissioning failed."
 }
 
 # ── Phase 2 ─────────────────────────────────────────────────────────────────
@@ -284,6 +325,7 @@ while true; do
   3) Deploy apps                  (ssh)
   4) Device status                (read-only)
   5) Full bring-up: 1 -> 2 -> 3
+  6) Commission COMPLETELY offline, one boot  (needs a bundle)
   q) Quit
 MENU
     echo ""
@@ -294,6 +336,7 @@ MENU
         3) do_deploy; pause ;;
         4) do_status; pause ;;
         5) do_full; pause ;;
+        6) do_commission_offline; pause ;;
         q|Q|quit|exit) echo ""; ok "Bye."; exit 0 ;;
         "") ;;
         *) err "Not a choice: $CHOICE"; pause ;;

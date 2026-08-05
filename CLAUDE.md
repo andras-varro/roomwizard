@@ -91,6 +91,8 @@ diagnostic tools.
 ./commission-roomwizard.sh          # bring-up 1: SD-card prep (offline; sets host name)
 ./setup-device.sh <ip>              # bring-up 2: SSH cleanup + init service + SW-watchdog bypass
 
+sudo ./commission-offline.sh --bundle <tar.gz|dir>   # all of the above, offline, ONE boot
+
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
 
@@ -104,7 +106,8 @@ cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 knowing without looking them up: **`set-default` is the only mode `native_apps/build-and-deploy.sh`
 accepts** (anything else is rejected rather than ignored), and **cleanup, bloatware removal and the
 boot service all live in `setup-device.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
-NAME` — never in a component script.
+NAME` — never in a component script. `--deep-clean` reads its decisions from
+`device-files/clean-rules.conf`, the same file `commission-offline.sh` uses.
 
 ### Bundles: one layout, declared modes, no configs
 
@@ -137,6 +140,57 @@ reachable — so the offline installer could not produce the same bytes without 
 `exec=` path drifting between the two renders a launcher tile that does nothing when tapped. **Write the
 manifest to a file, then copy it**; never emit one from inside an `ssh` heredoc again.
 
+### `device-files/` and the cleanup rules: one copy, two consumers
+
+Anything installed onto a device **verbatim** by more than one path lives in `device-files/`, never in a
+heredoc: `audio-enable`, `time-sync`, `99-security.conf`, and `clean-rules.conf`. Both
+`setup-device.sh` (over SSH) and `commission-offline.sh` (onto a mounted card) copy those same bytes.
+`.gitattributes` pins `device-files/**` to `eol=lf`, because the init scripts have no `.sh` extension —
+`/etc/init.d/audio-enable` is the name the `rc5.d` link points at — and a CRLF shebang is rejected by
+BusyBox as a misleading "no such file or directory".
+
+**`device-files/clean-rules.conf` is the one place a keep or a delete is decided.** Four tab-separated
+fields, `<type> <group> <path> <reason>`, record types `scope` / `keep` / `delete` / `truncate`; a line
+with fewer than four fields is an error, because a missing reason is how a delete gets in without anyone
+having to justify it. `rw-clean.sh` parses it and compiles it into a plan; each consumer keeps its own
+**executor**, because `/` is the correct prefix on a device and a refused one offline.
+
+- ⚠️ **`rw_clean_del` refuses an empty or `/` base before it looks at anything else.** Unprefixed, those
+  rules resolve to *this host's* `/etc`, `/opt` and `/usr/lib`. Every deletion goes through it,
+  including the ones a `scope` sweep decides on.
+- **`scope` is a whitelist sweep**, which is what makes an unrecognised vendor service on a unit nobody
+  has inspected removed *by construction*. It never recurses, so a kept directory's contents are never
+  examined.
+- ⚠️ **A DISABLED group's paths are protected from every sweep**, not merely skipped by their own
+  `delete` line — otherwise `--keep-java` leaves `/opt/openjre-8` named by a delete nobody runs and the
+  `/opt` sweep removes it anyway. What `--keep-<group>` does *not* do is re-enable a boot link.
+- ⚠️ **`rw_clean_validate` rejects a rules file that names `rc0.d` or `rc6.d`.** They are shutdown, not
+  startup — `umountfs`, `sendsigs`, `save-rtc.sh` — so they are unreachable by construction, the same
+  guarantee as p1's absence from `RW_PART_ROLES`.
+- **A glob is allowed only in the last path component.** `rw_clean_del` quotes the directory part so a
+  base containing a space still resolves, which means a mid-path glob would be taken literally and the
+  rule would silently match nothing. Validation refuses it.
+- Regression: `tests/rw_clean_test.sh` (116 cases, host-only, no card, no root). The fixture is
+  **synthetic, with real symlinks** — `partitions/` and `partitions.new/` cannot be it, see *Working
+  from this host*. Measured against deliberately broken copies: a guardless `del()` fails 11, ignoring
+  `scope` fails 11, dropping the disabled-group protection fails 3.
+
+### Offline commissioning verifies what it installed, on the card
+
+`commission-offline.sh` md5s every **installed** file against the bundle manifest, asserts `+x` (real
+ext4 honours it, so that check is a measurement offline and cannot be one on `/mnt/c`), runs
+`check-arm-safe.sh` over the **downloaded** binaries, asserts every `.app`'s `exec=`/`icon=` and that
+`default-app` names one of them, and `dash -n`s every `/bin/sh` script it wrote.
+
+- ⚠️ **`dash -n` catches parse errors and CRLF, not bashisms.** `[[ -n "$x" ]]` parses fine under dash —
+  `[[` is read as a command name — so it passes and then fails at boot with `[[: not found`.
+- ⚠️ **A missing `arm-linux-gnueabihf-objdump` is a refusal, not a pass.** `check-arm-safe.sh` skips
+  non-ARM files and then reports "no hardware divide in 0 binaries", so the caller counts the ELF
+  candidates itself and says loudly what it did not check. `--arm-check=skip` is the deliberate override.
+- Regression: `tests/commission_offline_test.sh` (21 cases; needs root and a staged bundle). Every check
+  has a sabotage case; the fixture builder is `tests/make-fake-card.sh`, which must live under `/tmp`
+  because DrvFs cannot hold a symlink.
+
 Components (each a subdir with a `build-and-deploy.sh`): `native_apps` (C games + launcher + tools),
 `scummvm-roomwizard` (ScummVM backend port), `vnc_client`, `usb_host` (USB host-mode enablement +
 Xbox controller modules).
@@ -161,7 +215,7 @@ misparses.
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
-| `roomwizard-app-init.sh`, `disable-steelcase.sh` | neither — **only** `./setup-device.sh <ip>`, which ends in a reboot |
+| `roomwizard-app-init.sh`, `disable-steelcase.sh`, `device-files/*` | neither — **only** `./setup-device.sh <ip>`, which ends in a reboot (or `commission-offline.sh`, offline) |
 
 When in doubt, over-deploy. The failure mode is silent.
 
@@ -353,6 +407,7 @@ flags each component actually uses: `SYSTEM_ANALYSIS.md#6-building-for-this-devi
 | Front door (menu over everything below) | `roomwizard.sh` | whenever you'd rather not remember the flags |
 | SD-card commissioning | `commission-roomwizard.sh` | once, offline |
 | System setup (cleanup, init, audio, time-sync, mDNS) | `setup-device.sh` | once, over SSH |
+| **All of the above in one offline pass** | `commission-offline.sh` (rules: `device-files/clean-rules.conf`, executor: `rw-clean.sh`) | once, offline, for *delivery* |
 | Build + deploy all components | `deploy-all.sh` | per deploy |
 | Per-component build/deploy/manifest | `*/build-and-deploy.sh` | per component |
 | Build + stage + publish an offline bundle | `release.sh` (layout: `rw-bundle.sh`) | per release |
@@ -361,24 +416,31 @@ flags each component actually uses: `SYSTEM_ANALYSIS.md#6-building-for-this-devi
 `roomwizard.sh` is a **composition layer with no logic of its own** except `wait_for_ssh`: every item
 execs one of the scripts below it, and all of them stay non-interactive when called directly. It polls
 **SSH, not ping**, because ping answers while `sshd` is still starting — exactly the window that
-produces a spurious "Cannot reach". Commissioning and setup are not merged because the cleanup's
+produces a spurious "Cannot reach". The SSH phases are not merged into one script because the cleanup's
 targets span four partitions that only a booted kernel assembles into one tree; the argument is in
-`COMMISSIONING.md`.
+`COMMISSIONING.md`. **`commission-offline.sh` is the answer to that, not an exception to it** — it
+mounts all four by position and maps every device-absolute path onto the right one, which is the work
+the SSH phases get for free, and it orchestrates `commission-roomwizard.sh` rather than restating its
+two prompts. The SSH path stays as the verified development loop.
 
 **System setup is done once by `setup-device.sh`** — component deploy scripts must not duplicate it.
 `deploy-all.sh` auto-discovers components (any subdir with a `build-and-deploy.sh`), always runs
 `native_apps` first, then sets `app_launcher` as the default boot app.
 
-**Host name is set in two files, by one script.** `set-hostname.sh` writes `/etc/hostname` **and**
-rewrites `/etc/hosts`, because the vendor image maps the device's own name on a **non-loopback** line
-to an unreachable address — so units can collide on a name and each resolves its own name wrongly. It
-keys the removal on the name it reads from `/etc/hostname`, never a hardcoded one; the shipped name
-varies per image (`RW09` and `null` are both real). It is called from both bring-up paths, so the two
-cannot drift, and `--hostname` does **not** reboot, which is what makes it usable on a unit in service
-as a live display. ⚠️ **Neither file is the last word until the vendor stack is gone** — the boot-time
-regenerator above overwrites both, so on an uncleaned unit the name must also be written to
-`/home/root/data/websign/net.hostname` (`IMPROVEMENT_PLAN.md` D7b, and F10 for the fix that removes the
-window).
+**Host name is set in three files, by one script.** `set-hostname.sh` writes `/etc/hostname`, rewrites
+`/etc/hosts` — because the vendor image maps the device's own name on a **non-loopback** line to an
+unreachable address, so units can collide on a name and each resolves its own name wrongly — and sets
+`/etc/dhclient.conf`'s `send host-name`, which is the one a DHCP server and therefore a router's device
+list reads. It keys the `/etc/hosts` removal on the name it reads from `/etc/hostname`, never a
+hardcoded one (the shipped name varies per image; `RW09` and `null` are both real), and it keys the
+dhclient edit on the **directive**, not the old name, because the two disagree on real units. Each
+rewrite has a negative control: it refuses to write a `/etc/hosts` that lost `localhost`, or a
+`dhclient.conf` that would not announce the new name. Called from every bring-up path, so they cannot
+drift, and `--hostname` does **not** reboot — which is what makes it usable on a unit in service as a
+live display. ⚠️ **None of the three is the last word until the vendor stack is gone** — the boot-time
+regenerator above overwrites all of them, so on an uncleaned unit the name must also be written to
+`/home/root/data/websign/net.hostname` (`IMPROVEMENT_PLAN.md` D7b). `commission-offline.sh` deletes
+`websign` in the same pass that sets the name, which removes that window instead of patching it.
 
 ⚠️ **Never identify a partition by filesystem UUID.** A UUID is assigned at mkfs time, so it names one
 *card*: units are mkfs'd independently at the factory and two RoomWizards on identical firmware share

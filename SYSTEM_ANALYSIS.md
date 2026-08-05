@@ -1555,9 +1555,10 @@ removing a package is limited to the vendor software that used it.
 | `cleanupfiles.sh` (cron, 4 h) | Temp file cleanup |
 
 **The boot links a working unit actually has** — read from a unit in service on 2026-08-05 (vendor
-bloatware removed, games running, 4 days uptime). This is the empirical keep-list: everything else
-under `rc5.d`/`rcS.d` on a stock card can go, which is what lets the cleanup be a **whitelist** rather
-than a growing list of vendor service names (`IMPROVEMENT_PLAN.md` F10).
+bloatware removed, games running, 4 days uptime) and re-read on a second unit the same day, which
+matches it link for link. This is the empirical keep-list: everything else under `rc5.d`/`rcS.d` on a
+stock card can go, which is what lets the cleanup be a **whitelist** rather than a growing list of
+vendor service names. `device-files/clean-rules.conf` is that whitelist, transcribed from this table.
 
 | Directory | Links |
 |---|---|
@@ -1568,18 +1569,30 @@ than a growing list of vendor service names (`IMPROVEMENT_PLAN.md` F10).
 
 ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** They carry `umountfs`,
 `sendsigs` and `save-rtc.sh`; a unit that cannot unmount cleanly is a unit whose next fsck is not
-optional. Note also that **`S30avahi-daemon` is absent** on that unit while `/usr/sbin/avahi-daemon`
-and `/etc/avahi/` (three entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a
-link `setup-device.sh` adds, and its own deep clean deletes the daemon (`IMPROVEMENT_PLAN.md` D8).
+optional. `rw_clean_validate` rejects a rules file that even names them, so they are unreachable rather
+than merely unvisited.
+
+**`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` (three
+entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a link `setup-device.sh`
+adds, and all four paths are `keep` entries in `clean-rules.conf` so that no clean can delete what
+setup enables.
+
+⚠️ **`/var/log` is a symlink to `/home/root/log`, i.e. p3, and `syslogd` holds three files there
+open.** Measured from `/proc/<pid>/fd` on a unit in service, 2026-08-05: `messages` (its target per
+`/etc/syslog.conf`), `upgrade.log` and `concurrent.log`. **Unlinking any of them on a running device
+leaves `syslogd` writing to an unlinked inode and logging silently stops until reboot** — so
+`clean-rules.conf` keeps and truncates them rather than deleting them, and the same applies to `wtmp`
+and `lastlog`, which `sshd` and `login` hold open. Offline the symlink dangles, so a rule naming
+`/var/log/anything` reaches nothing at all; name the p3 path.
 
 ⚠️ **The root crontab lives on p2, reached through a symlink.** `/var/cron/tabs/root` is a symlink to
 `/home/root/data/cron/tabs/root` (measured on the unit in service, symlink dated Jan 2022). Two
 consequences that matter to any cleanup:
 
 - **`rm -rf /home/root/data/cron` destroys the crontab and cron's spool root**, not just the 131 MB
-  `log` file inside it. `setup-device.sh --remove` truncates the log for exactly this reason; only
-  `--deep-clean` removes the directory, and it removes `/etc/rc5.d/S20cron` in the same breath so
-  nothing is left looking for the spool.
+  `log` file inside it. `setup-device.sh --remove` truncates the log for exactly this reason, and
+  `clean-rules.conf` keeps the directory and **truncates** both the crontab and the log — cron itself
+  stays running, because the two surviving jobs are in this table's *Kept* list.
 - **Offline, the crontab is on a different partition from `/var`.** A tool that mounts only p6 sees
   `/var/cron/tabs/root` as a dangling symlink and `/home/root/data` as an empty mount point, so it can
   neither read nor write the crontab. The four mounts of [§4.2](#42-partitions) are not optional.

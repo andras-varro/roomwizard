@@ -36,7 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **First boot of an offline-commissioned unit** — SSH reachable without an IP hunt, launcher grid, one game, sound, touch | one boot + ~5 min | the tool must exist — [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) |
+| 5 | **First boot of an offline-commissioned unit** — SSH reachable without an IP hunt, launcher grid, one game, sound, touch | one boot + ~5 min | nothing — the tool is built and host-tested, [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card). This is Unit A |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -107,25 +107,27 @@ the second unit's own syslog. `/opt/sbin/networkmanager` rewrites `/etc/hosts`, 
 `set-hostname.sh`'s offline half **is** undone by the first boot after commissioning, as suspected —
 observed on a unit commissioned as `RW-Test`, which booted with `/etc/hostname` back to `null`.
 
-**What RW09's "weak evidence" actually was.** The deep clean deletes `/home/root/data/websign`
-(`setup-device.sh:726`), and both writers live *inside* `set_manual()`/`set_dhcp()` — so on a cleaned
-unit neither branch runs and the name is never touched again. **The exposure window is exactly
-"commissioned but not yet deep-cleaned",** which is why nothing regressed on RW09 and why a card read
+**What RW09's "weak evidence" actually was.** `--remove` deletes `/home/root/data/websign` and the
+deep clean's data file names it too, and both writers live *inside* `set_manual()`/`set_dhcp()` — so on
+a cleaned unit neither branch runs and the name is never touched again. **The exposure window is exactly
+"commissioned but not yet cleaned",** which is why nothing regressed on RW09 and why a card read
 straight after commissioning shows the revert.
 
-Two fixes, and they are not alternatives:
+**What remains open is the SSH flow only.** Two of the three fixes are in:
 
-1. **Ordering — [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open).** Name the card
-   and delete `websign` in the same offline pass, so no boot happens in between. This removes the
-   window instead of patching it, and is the preferred fix.
-2. **For the SSH flow, which keeps the vendor stack:** `set-hostname.sh` must also write
+1. **Ordering — done, in [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card).**
+   `commission-offline.sh` names the card and deletes both `websign` and the `rcS.d/S60networkmanager`
+   link in the same offline pass, so no boot happens in between, and its verify pass fails if either
+   survives. That removes the window rather than patching it. Untested against a real card.
+2. **STILL OPEN, for the SSH flow, which keeps the vendor stack:** `set-hostname.sh` must also write
    `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
    (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
    **rejects hyphens**, so `RW-Test` would still be replaced by its fallback `rwtwenty`.
-3. **Either way, `set-hostname.sh` should own `/etc/dhclient.conf`'s `send host-name`** — the third
-   place the name is stored, and the one a DHCP server, and therefore a router's device list, reads.
-   Nothing in this repo writes it, so a unit renamed months ago still announces the shipped `RW09`
-   ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
+3. **`/etc/dhclient.conf`'s `send host-name` — done.** `set-hostname.sh` now owns it, in both the
+   offline and the live path, with a negative control: it refuses to write a result that would not
+   announce the new name. It is the third place the name is stored and the one a DHCP server, and
+   therefore a router's device list, reads. A unit in service was announcing the shipped `RW09` months
+   after being renamed, measured 2026-08-05 ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
 
 ⚠️ **It is `networkmanager` that has to go, not `/etc/hosts` that has to be re-edited.** The
 non-loopback `<leased-ip> <name>` line is written by the **vendor's** `/etc/dhclient-script`, which runs
@@ -135,18 +137,6 @@ only when `networkmanager` starts `dhclient` with `-sf /etc/dhclient-script`. Th
 `/etc/hosts` and `/etc/hostname` have been untouched for five months while leases renew daily
 ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
 
-### D8. `--deep-clean` deletes the mDNS daemon that setup enabled — open, **confirmed 2026-08-05**
-
-`setup-device.sh` step 3 links `/etc/rc5.d/S30avahi-daemon`; its own deep clean then deletes
-`/usr/sbin/avahi-daemon`, `/etc/avahi` and `/etc/init.d/avahi-daemon` (`setup-device.sh:295`, `:300`).
-In one invocation — `./setup-device.sh <ip> --deep-clean` — the link is left dangling and `<name>.local`
-never resolves. The delete list predates the mDNS work. Not yet observed firing: the unit in service
-has both avahi files and no `S30` link, because its setup ran before mDNS was added.
-
-Fix: an `avahi` **keep** entry in [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open)'s
-data file, with the reason recorded, so neither consumer can delete what the other enables. Until then,
-dropping the three avahi paths from the deep-clean list is a two-line change.
-
 ### D9. `/var/watchdog_test` is absent on a running unit — open, **benign today, confirmed 2026-08-05**
 
 `disable-steelcase.sh` touches it as its *first* command and runs on every boot from
@@ -155,8 +145,13 @@ dropping the three avahi paths from the deep-clean list is a two-line change.
 software watchdog is never scheduled — the bypass file is the second line of defence, not the first.
 Two candidate causes, neither measured: the boot-time run is not happening (that unit's deployed
 `disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
-every 4 h) sweeps it. Worth settling before [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open)
-ships an offline `touch /var/watchdog_test`, which would otherwise place a file something deletes.
+every 4 h) sweeps it.
+
+⚠️ **[F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) now
+`touch`es it offline anyway**, and says out loud that it is belt and braces only. That is defensible
+because the same pass truncates the vendor crontab — which is what would have scheduled `watchdog.sh` in
+the first place — but it does mean the offline tool places a file that something on the device may
+delete. Settling which of the two causes it is would let that line be either removed or relied on.
 
 ---
 
@@ -310,7 +305,7 @@ inside an `ssh … <<REMOTE` heredoc are gone, so a manifest can no longer diffe
   `git@github.com-personal:…` — an SSH host alias — so whoever publishes needs `gh auth` for that
   account.
 - **`usb_host` is excluded by design**, not by omission: it patches `uImage-system` on p1, and
-  [F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) must not touch p1.
+  [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) must not touch p1.
 
 Design, so it does not have to be re-derived:
 
@@ -336,7 +331,7 @@ Two caveats to record before anyone tries it:
   refuses — the negative control for a future component that forgets, rather than a rule each component
   is trusted to remember.
 
-**[F10](#f10-single-pass-offline-commissioning--partly-built-2026-08-05-open) depends on this one** — an
+**[F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) depends on this one** — an
 offline commissioner has no toolchain to fall back on, so the release *is* its only source of
 binaries. Two obligations that only bite once artifacts are published: ScummVM is GPLv2+, so a binary
 needs the corresponding-source offer, and `vnc_client`'s dependency licences need a pass. Both are now
@@ -345,174 +340,123 @@ checked by anyone qualified to say so.
 
 ---
 
-### F10. Single-pass offline commissioning — **partly built 2026-08-05**, open
+### F10. Single-pass offline commissioning — **built 2026-08-05**, not yet run against a card
 
-**Built so far — steps 1 and 2 of the four below.** The bundle producer is
-[F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open), and `rw-identify.sh` now
-reaches all four mounts by position (`rw_part_dev`, `rw_card_partitions`, `rw_role_device_path`,
-`rw_host_root_disk`, `rw_is_host_root_disk`, `rw_mount_card`, `rw_umount_card`,
-`rw_check_card_mounts`). `tests/rw_identify_test.sh` covers them: 37 cases, and each new group was
-checked against a deliberately broken copy — naive partition naming fails 7, dropping the wrong-order
-check fails exactly 1, adding p1 to the role table fails 3.
+**`commission-offline.sh` exists and does the whole job.** The card goes into a reader, the operator
+answers two questions, the card goes back, and the device should boot working. What has **not**
+happened is the only thing left: running it against a real card and booting a real unit.
 
-⚠️ **p1 is absent from `RW_PART_ROLES` on purpose, and the test asserts its absence.** A caller cannot
-reach `mlo`, `u-boot.bin`, `ctrlblock.bin` or `uImage-system` through these functions at all, which is
-a stronger guarantee than every consumer remembering not to. p4 and p7 are absent too — nothing to
-mount.
-
-**Not built yet — steps 3 and 4, which are the whole safety model:** the keep/delete data file, the
-guarded `del()`, `--dry-run`, `commission-offline.sh` itself, and the offline verification pass. The
-plan for them is below and has not changed. Nothing has been run against a card, and no unit has been
-commissioned by this route.
-
-**Goal:** the card goes into a reader, the operator answers two questions, the card goes back, and the
-device **boots working**. Today that is three phases with a reboot and an IP hunt in the middle
-(`commission-roomwizard.sh` → boot → `setup-device.sh` → `deploy-all.sh`) — fine as a development loop,
-unusable by anyone who is not developing this.
-
-**Offline is not merely a convenience here.** A unit whose `websign/net.mode` is `manual` takes a
-static address and never sends a DHCP request, so it appears in no lease list and **phase 2 can never
-reach it** ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)). Editing the card is the only bootstrap
-for such a unit, and stock cards ship that way. It also **removes [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)**
+**Why offline is not merely a convenience.** A unit whose `websign/net.mode` is `manual` takes a static
+address and never sends a DHCP request, so it appears in no lease list and **the SSH phase can never
+reach it** ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)). Stock cards ship that way. Editing the
+card is the only bootstrap for such a unit. It also **removes
+[D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)'s window**
 rather than patching it: the regenerator's input is deleted in the same pass that sets the name, so no
 boot happens in between.
 
-**Flow**
+#### What is built
 
-0. Operator confirms a full-card backup exists. Tool identifies the card, mounts p2/p3/p5/p6.
-1. Ask host name.
-2. Ask root password.
-3. Clean (below).
-4. Install apps from a GitHub release — [F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open) is a hard
-   dependency; this is its first non-developer consumer.
-5. Unmount, card back into the device, **one** boot.
+| Piece | Where |
+|---|---|
+| The offline commissioner | `commission-offline.sh` — identify, mount, orchestrate, clean, install, verify, unmount |
+| The keep/delete decisions | `device-files/clean-rules.conf` — 198 records, four tab-separated fields, a reason on every one |
+| The parser, plan compiler and guarded `del()` | `rw-clean.sh` |
+| Files installed verbatim | `device-files/{audio-enable,time-sync,99-security.conf}` — no longer heredocs inside `setup-device.sh` |
+| The bundle it installs | `release.sh` → `rw-bundle.sh` ([F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)) |
+| Card and mount identification | `rw-identify.sh`, by content and by **position**, never UUID |
+| Regressions | `tests/rw_clean_test.sh` (116 cases), `tests/commission_offline_test.sh` (21), `tests/make-fake-card.sh` |
+
+**`setup-device.sh --deep-clean` reads the same data file**, so the live and offline cleans cannot
+drift. Each keeps its own executor: `/` is the correct prefix on a device and a refused one offline.
+The host compiles the rules into a line-based plan and ships that, so the device needs neither `bash`
+nor a copy of the rules.
+
+#### The safety model
+
+- **One `del()` that refuses an empty or `/` base**, and every deletion — including every one a sweep
+  decides on — goes through it. Unprefixed, these rules resolve to the dev host's own `/etc`, `/opt`
+  and `/usr/lib`. Measured against a guardless copy: 11 of the 15 group-A cases fail and four of them
+  resolve to this host's `/etc/shadow`.
+- `--dry-run` prints every fully-resolved absolute path before anything is unlinked, and a case asserts
+  that every printed path is absolute and under the base.
+- **The host's root disk is resolved and excluded** (`rw_is_host_root_disk`), checked before mounting
+  rather than after. Every disk on this host reports `removable = 0`, so a "removable only" gate
+  rejects everything.
+- **p1 is unreachable.** It is absent from `RW_PART_ROLES` and `tests/rw_identify_test.sh` asserts its
+  absence, so no caller can reach `mlo`, `u-boot.bin`, `ctrlblock.bin` or `uImage-system` at all. That
+  is what keeps a power cycle a free undo.
+- ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup.** `rw_clean_validate` **rejects a rules file that
+  names them**, so they are unreachable by construction rather than merely unvisited. They carry
+  `umountfs`, `sendsigs` and `save-rtc.sh`.
 
 #### The cleanup criterion is "what runs", not "what it costs"
 
-The risk being managed is **an unknown vendor service on a unit nobody has inspected** — something that
-restores vendor state or eats the 234 MB / single 600 MHz core. Disk space is explicitly *not* a
-motive: p6 has 474 MB free before anything is deleted ([§4.2](SYSTEM_ANALYSIS.md#42-partitions)). That
-criterion decides the shape:
+The risk being managed is **an unknown vendor service on a unit nobody has inspected**. Disk space is
+explicitly not a motive: p6 has 474 MB free before anything is deleted
+([§4.2](SYSTEM_ANALYSIS.md#42-partitions)). That criterion decides the shape:
 
-- **Whitelist everything that can start:** `rc5.d`, `rcS.d`, the crontab, `/opt/*`,
-  `/home/root/{data,log,backup}/*`. Keep a named few, delete the rest — so an unrecognised vendor
-  service on a unit we have never seen is removed **by construction**, with no new blacklist entry.
-- **Blacklist inside the base OS**, and only by *named stack*: browser (GTK3/WebKit/Xorg/GStreamer,
-  ~130 MB), Java (JRE/jetty/hsqldb, 140 MB), SNMP, nullmailer. **Never `/lib`, `/etc`, `/bin`,
-  `/sbin`** — 15 MB combined, all risk and no reward.
-- **Keep inert vendor artifacts**, they are the geeky payload: `/opt/sbin/{networkmanager,networkquery,set_network_config.sh}`,
-  `/opt/pv02` (44 KB), `libpython3.8`, `perl5/`, `ts/`. Once nothing starts them they cost nothing, and
-  reading them is how [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was established.
-- **Delete the upgrade payload** — p5 `factory/` (472 MB) and `startautoupgrade` — as a **safety**
-  item. Whether that path can fire unattended is unestablished; removing the payload makes the question
-  moot.
-- **Derive the keep-list empirically if pushing further:** the union of `/proc/*/maps` across all
-  processes on a cleaned, running unit is the true library closure, and our apps are `-static` so they
-  add nothing to it. Stated blind spot: it misses lazily-loaded plugins (NSS, gconv, PAM, dbus
-  activation), which therefore stay by name.
+- **Whitelist everything that can start** — `rcS.d`, `rc2.d`–`rc5.d`, `/opt`,
+  `/home/root/{data,log,backup}`. Keep a named few, sweep the rest, so an unrecognised vendor service
+  is removed **by construction**. The keep-lists are
+  [§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)'s measured table.
+- **Blacklist inside the base OS**, and only by *named stack*: `browser`, `java`, `snmp`, `mail`,
+  `extras`. **Never `/lib`, `/etc`, `/bin`, `/sbin`.** A case asserts libc survives.
+- **Keep inert vendor artifacts** — `/opt/{sbin,pv02,sound}`, `perl5/`, the ZigBee tooling. Once
+  nothing starts them they cost nothing, and reading them is how
+  [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was established.
+- **The upgrade payload is a `factory` group, off by default** — it removes the device's own restore
+  capability, so it is opt-in rather than opt-out. `factory/uImage-system-original` is kept either way.
+- ⚠️ **`--keep-<group>` protects that group's paths from every sweep, not just from its own delete
+  lines.** Without that rule the `/opt` whitelist would remove `/opt/openjre-8` anyway and the flag
+  would do nothing and say nothing. What it does *not* do is re-enable a boot link: the rc\*.d
+  whitelist is the mechanism, and punching a per-stack hole in it would defeat it.
 
-#### Safety model — the part most likely to go wrong
+#### Verification the tool performs
 
-Those ~40 `rm -rf` targets are written today as **live** paths. Unprefixed on the dev host,
-`rm -rf /opt/java /usr/share/X11` is catastrophic. Non-negotiables:
+md5 of every **installed** file against the bundle's `.md5`; `+x` asserted (real ext4 honours it,
+unlike `/mnt/c`, so this is a measurement offline and could not be one on the dev host);
+`native_apps/check-arm-safe.sh` over the **downloaded** binaries, refusing loudly and naming the
+unchecked count if `arm-linux-gnueabihf-objdump` is absent rather than reporting a pass over zero
+artifacts; every `.app`'s `exec=` and `icon=` installed and executable; `default-app` names one of
+them; `dash -n` every `/bin/sh` script written, plus an explicit CRLF check on the shebang.
 
-- **One `del()` that refuses an empty or `/` prefix.** `setup-device.sh:245` already has `del()` with a
-  `DRY` mode; the offline variant adds the prefix guard, and every target routes through it.
-- `--dry-run` prints every fully-resolved absolute path *before* anything is unlinked.
-- **Resolve and exclude the host's root disk** before mounting:
-  `lsblk -rnso NAME "$(findmnt -no SOURCE --target /)" | tail -1`. Every disk on the dev host reports
-  `removable = 0`, so a "removable only" gate rejects everything (`CLAUDE.md` → *Working from this
-  host*).
-- **Never touch p1** (`mlo`, `u-boot.bin`, `ctrlblock.bin`, `uImage-system`) — that is what keeps a
-  power cycle a free undo.
-- **Identify by layout and content, never UUID.** Extend `rw-identify.sh` from rootfs-only to the four
-  mounts *by position* (p2 data, p3 log, p5 backup, p6 root — [§4.2](SYSTEM_ANALYSIS.md#42-partitions));
-  `rw_is_card_disk` and `rw_is_rootfs` already exist and `tests/rw_identify_test.sh` covers them.
+⚠️ **`dash -n` catches parse errors and CRLF, not bashisms.** `[[ -n "$x" ]]` parses fine — `dash`
+reads `[[` as a command name — so it passes and then fails at boot with `[[: not found`. Catching that
+needs shellcheck ([C7](#c7-run-shellcheck--open)).
 
-#### One list, two consumers
+Each of those checks has a negative control in `tests/commission_offline_test.sh`: a corrupted staged
+file, an installer that skips `chmod`, a manifest naming an absent binary, a `default-app` that names
+nothing, a parse error, a CRLF shebang, a bundle with no ELF at all, a missing `objdump`, and the four
+mounts in the wrong order. **The one thing not controlled is a binary that really contains an `sdiv`** —
+this host's compiler will not emit one for Cortex-A8, so both ways the gate can lie *by omission* are
+controlled instead.
 
-The keep/delete decisions become **a data file with a reason per entry**, read by both
-`setup-device.sh` (live, over SSH) and the offline tool, so the two cannot drift — the same argument
-that put `set-hostname.sh` in its own file. Opt-outs (`--keep-browser`) for whoever wants X11 back.
+#### What is left
 
-#### Ground truth, and the shape settled on it
-
-Measured 2026-08-05 from a unit in service (vendor bloatware removed, games running, 4 days uptime) —
-the whitelist cannot be derived on this host, because **both card captures lost every symlink** and
-their `rc*.d` directories are empty (`CLAUDE.md` → *Working from this host*).
-
-- **The `rc5.d`/`rcS.d`/`rc2-4.d` keep-lists are now written down**, from a unit that boots and runs:
-  [`SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode`](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
-  That table *is* the whitelist — everything else under those three can go.
-- ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup.** They are not in scope for any whitelist:
-  they carry `umountfs`, `sendsigs` and `save-rtc.sh`.
-- **Deleting the `rcS.d/S60networkmanager` link is the real D7b fix**, not deleting `websign` — see
-  the corrected note under [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05).
-  Do both; the link is what makes the vendor `dhclient-script` run at all.
-- **`/opt/sbin` (~1.4 MB, 200+ vendor scripts) is present and inert on that unit** and stays — it is
-  the reference material [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was read out of. `/opt` on a
-  working unit holds exactly `games roomwizard sbin vnc_client`.
-- **`/var` is not tmpfs** (only `/var/volatile` is, per `/etc/fstab`), so an offline
-  `touch /var/watchdog_test` persists — belt and braces behind the boot-time one.
-
-Interfaces settled while reading the existing scripts, so they need not be re-derived. The first three
-are **built** and the file named is the implementation:
-
-| Piece | Shape |
-|---|---|
-| Bundle from F9 | **`rw-bundle.sh`** — `<dir>/root/<device-path>` + `<dir>/manifest.d/<component>.list` of `<mode> <device-path>`, plus `.md5` and `bundle.info`; **modes are declared, never read off disk** (`/mnt/c` reports 0777). `rw_bundle_check` asserts both directions: no manifest entry without a file, no file without an entry |
-| Per-component staging | **built** — `build-and-deploy.sh --bundle <dir>` on all three, each reusing its own `GAMES_BINARIES` / artifact list. `usb_host` is **excluded**: it patches `uImage-system`, and F10 must not touch p1 |
-| `.app` manifests | **built** — `native_apps/app-manifests.sh` holds the nine as data; `vnc_client` and `scummvm` each write theirs from one heredoc into a file. Both the deploy path and `--bundle` copy those files |
-| Boot scripts | `audio-enable`, `time-sync` and `99-security.conf` are heredocs inside `setup-device.sh` today; move them to `device-files/` so the offline installer writes the same bytes |
-| The two `del()`s | the data file is the single source of *decisions*; each consumer keeps its own executor, because `/` is the correct prefix on the device and a refused one offline |
-| Name, offline | `set-hostname.sh NAME ROOTFS` already does `/etc/hostname` + `/etc/hosts`; add `/etc/dhclient.conf` (D7b item 3 — a unit in service still announces the shipped `RW09`, measured 2026-08-05). `websign` is deleted in the same pass, so `net.hostname` does not arise |
-| Operator prompts | `ROOTFS=<mnt> commission-roomwizard.sh` already asks exactly the two questions and does shadow/sshd/DHCP — the offline tool should orchestrate it, not restate it |
-| Path resolution | device-absolute paths in the data file; the offline consumer maps `/home/root/{data,log,backup}/…` onto the p2/p3/p5 mounts and everything else onto p6, via `rw_role_device_path`. This is where the prefix guard earns its keep |
-
-#### Verification, offline and cheap
-
-md5 every installed file against the bundle's `.md5`; assert `+x` (real ext4 honours it, unlike
-`/mnt/c`); run `native_apps/check-arm-safe.sh` on the **downloaded** binaries — a binary nobody built on
-the spot is exactly what that gate is for, and **say so loudly if `arm-linux-gnueabihf-objdump` is
-absent** rather than reporting a pass over zero artifacts; assert every `.app`'s `exec=` exists and is
-executable and that `default-app` names one of them; `dash -n` every `/bin/sh` script written.
-
-⚠️ **The host regression cannot use `partitions.new/` as its fixture.** An earlier version of this
-entry prescribed "run the whole clean against a *copy* of `partitions.new/`". That is wrong: both card
-captures were copied through Windows and **contain no symlinks at all** — `bin/sh` and `bin/busybox`
-are simply absent and `etc/rc0.d`…`rc6.d`, `etc/rcS.d` are **empty directories** (`CLAUDE.md` →
-*Working from this host*). A whitelist regression whose `rc5.d` is empty passes by having nothing to
-decide. **Build the vendor tree synthetically**, with real symlinks, from
-[§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)'s measured keep-lists plus a few invented vendor
-service names that must be swept; use the captures only for regular-file questions. Then assert nothing
-outside the copy was touched, with canary files as the negative control.
-
-**Write the failing version first** — the guard must be *seen* refusing an empty prefix, not merely
-believed to. The same applies to the whitelist: a rule that deletes nothing passes a test that only
-checks the keeps survived.
+1. **Run it against a card.** Nothing here has touched real hardware: the fixture is
+   `tests/make-fake-card.sh`, and `partitions/`/`partitions.new/` cannot be the fixture because both
+   lost every symlink on the way through Windows and their `rc*.d` are empty directories
+   (`CLAUDE.md` → *Working from this host*).
+2. **Unit A — the agreed list in one shot.** Boot, then verify: SSH reachable, launcher grid, one game,
+   sound, touch. If it passes, that becomes the shipped default.
+3. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
+   (no serial console, [§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)); the only post-mortem is mounting
+   p3 offline and reading `messages`, which only helps if it got as far as syslog. That cost is the
+   reason to stop after Unit A unless something specific is being chased.
+4. **`COMMISSIONING.md` is deliberately still the three-phase flow.** Rewriting it before the tool has
+   commissioned a unit would make it a plan rather than a description.
 
 #### Scope boundaries
 
-- **Still needs the device:** touch calibration only (per-unit, per-panel; the wizard exists). One boot
-  remains — this removes two of three, plus the IP hunt.
+- **Still needs the device:** touch calibration only — per-unit, per-panel, and the wizard exists
+  (Device Tools → Display → `CALIBRATE TOUCH`). One boot remains; this removes two of three plus the
+  IP hunt.
 - **Does not replace the SSH path.** `setup-device.sh` and `deploy-all.sh` stay as the verified
   development loop; the offline tool is for *delivery*.
 - **Distribution:** binaries only, never the vendor image (a third party's copyright) and never device
   configs (F9's caveat — `/etc/hosts` and the VNC password). ScummVM is GPLv2+, so a published binary
   needs the corresponding-source offer; `vnc_client`'s dependency licences need a pass.
-- `COMMISSIONING.md` is **deliberately not yet updated** — it documents the three-phase flow, and
-  rewriting it before the tool exists would make it a plan rather than a description.
-
-#### Experiment protocol
-
-Two uncommissioned units are available and expendable (full-card backups exist elsewhere).
-
-- **Unit A** — the agreed list in one shot. Boot, then verify: SSH reachable, launcher grid, one game,
-  sound, touch. If it passes, that becomes the shipped default.
-- **Unit B** — anything more aggressive, **one increment per boot.** A failed boot yields no
-  diagnostics (no serial console, `SYSTEM_ANALYSIS.md#312-serial-ports`); the only post-mortem is
-  mounting p3 offline and reading `messages`, which only helps if it got as far as syslog. That cost is
-  the reason to stop after Unit A unless something specific is being chased.
+- **`usb_host` is excluded from every bundle** — it patches `uImage-system` on p1.
 
 ---
 
@@ -694,8 +638,11 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-0. **F10 + F9 are the agreed next piece of work** (2026-08-05). F9 first, because F10 has no toolchain
-   to fall back on. Everything below was written before that decision and is not competing with it.
+0. **Boot an offline-commissioned unit** (panel check #5). `commission-offline.sh` is built and
+   host-tested against a synthetic card; nothing in it has touched real hardware. Everything it claims
+   is one boot away from being either confirmed or a bug, and until that boot happens
+   [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) is a
+   hypothesis with tests.
 1. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
    (`--deep-clean`) first if disk space is tight.
