@@ -238,6 +238,17 @@ tool-level traps rather than device facts, and each has cost real time.
 - **Don't probe I2C bus 1.** `pv02_app 5` (the vendor light-sensor factory test) can hang the bus, and
   **bus 1 carries the PMIC** — `SYSTEM_ANALYSIS.md#39-i2c`. There is no light sensor to find: the
   enclosure has no aperture at all.
+- **A stock unit may be unreachable, and the vendor rewrites the network files on every boot.**
+  `/opt/sbin/networkmanager` regenerates `/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf` and
+  `/etc/dhclient.conf`'s `send host-name` from `/home/root/data/websign/net.*` at each boot, so an
+  offline edit of `/etc/hostname` alone is undone (`IMPROVEMENT_PLAN.md` D7b). **If
+  `websign/net.mode` is `manual` the unit takes a static address and sends no DHCP request** — it
+  appears in no router lease list and SSH is impossible until the card is edited offline. The deep
+  clean deletes `websign/`, which is what makes a name stick on a *cleaned* unit. The vendor's own
+  validator **rejects hyphens**, so prefer `rwtest` to `rw-test` on anything still carrying the vendor
+  stack. ⚠️ **`/home/root/{data,log,backup}` are mount points (p2/p3/p5)** — a rootfs mounted offline
+  shows all three empty, and the vendor's config and logs are on those other partitions. Detail:
+  `SYSTEM_ANALYSIS.md#35-network-and-power`.
 - **The Steelcase software watchdog reboots the device ~every 70 min** in game mode. It is a cron job
   (`/opt/sbin/watchdog/watchdog.sh`), and **`disable-steelcase.sh` is what disables it** —
   `touch /var/watchdog_test` as its *first* command, deliberately ahead of every fallible line, plus a
@@ -319,7 +330,10 @@ to an unreachable address — so units can collide on a name and each resolves i
 keys the removal on the name it reads from `/etc/hostname`, never a hardcoded one; the shipped name
 varies per image (`RW09` and `null` are both real). It is called from both bring-up paths, so the two
 cannot drift, and `--hostname` does **not** reboot, which is what makes it usable on a unit in service
-as a live display.
+as a live display. ⚠️ **Neither file is the last word until the vendor stack is gone** — the boot-time
+regenerator above overwrites both, so on an uncleaned unit the name must also be written to
+`/home/root/data/websign/net.hostname` (`IMPROVEMENT_PLAN.md` D7b, and F10 for the fix that removes the
+window).
 
 ⚠️ **Never identify a partition by filesystem UUID.** A UUID is assigned at mkfs time, so it names one
 *card*: units are mkfs'd independently at the factory and two RoomWizards on identical firmware share
