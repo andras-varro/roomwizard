@@ -525,3 +525,5 @@ vnc_client/roomwizard.remmina
 # Local VNC config (contains a plaintext password) - use vnc_client.conf.example
 vnc_client/vnc_client.conf
 .claude/settings.json
+roomvizard_new.img
+partitions.new/
