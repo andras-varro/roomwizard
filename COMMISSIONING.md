@@ -134,6 +134,18 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 3. Follow the prompts for password / host name / SSH key
 4. Unmount, re-insert into device, power on
 
+<!--
+  ⚠️ The block between the two markers below is READ AT RUNTIME, not just by humans.
+  commission-roomwizard.sh prints it verbatim as its epilogue, so this file is the single
+  source of truth for the next steps and the script has no second copy. Two consequences:
+
+    - Keep both markers. tests/commission_prep_test.sh asserts the block appears in a
+      standalone run and does NOT appear when RW_COMMISSION_ORCHESTRATED is set (the
+      offline single pass has already done every step it names). Deleting a marker turns
+      that test red, which is the intended alarm rather than a nuisance.
+    - It is printed to a terminal, so it is indented plain text with no markdown syntax.
+      Bullets and backticks would be read out literally.
+-->
 <!-- NEXT_STEPS_START -->
 
   Remaining steps

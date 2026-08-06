@@ -310,6 +310,33 @@ else
 fi
 echo ""
 
+# ── The invoking operator's home, which is not always $HOME ────────────────
+#
+# This script sudo's each individual write rather than requiring root, so run
+# standalone it has the operator's own $HOME and the key is where they expect.
+# But commission-offline.sh runs as root and calls this, and under sudo $HOME is
+# /root — where no operator's SSH key lives. The key was therefore NEVER found in
+# the offline flow: the prompt fell through to "enter a path" on a host where a
+# perfectly good ~/.ssh/id_rsa.pub existed.
+#
+# $SUDO_USER is the only place the invoking identity survives, and getent is
+# asked for the home directory rather than assuming /home/<user> — that is wrong
+# for a root-owned account and on any host with a non-default home layout. If
+# getent is absent or the name resolves to nothing, this falls back to $HOME,
+# which is the pre-existing behaviour rather than a new failure.
+operator_home() {
+    local h
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        h=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+        if [ -n "$h" ] && [ -d "$h" ]; then
+            printf '%s\n' "$h"
+            return 0
+        fi
+    fi
+    printf '%s\n' "$HOME"
+}
+OPERATOR_HOME="$(operator_home)"
+
 # Step 6: SSH Key Setup (optional)
 echo "================================================"
 echo "  SSH Key Setup (Optional)"
@@ -319,20 +346,37 @@ echo ""
 read -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
 
 if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
-    # Check for default SSH public key
-    if [ -f "$HOME/.ssh/id_rsa.pub" ]; then
-        DEFAULT_KEY="$HOME/.ssh/id_rsa.pub"
+    # Both key types, because "never found" is the same operator-facing failure
+    # whichever algorithm they generated. ed25519 first: on a host that has both,
+    # it is the newer one and the one ssh offers first.
+    DEFAULT_KEY=""
+    for _k in id_ed25519.pub id_rsa.pub; do
+        if [ -f "$OPERATOR_HOME/.ssh/$_k" ]; then
+            DEFAULT_KEY="$OPERATOR_HOME/.ssh/$_k"
+            break
+        fi
+    done
+    if [ -n "$DEFAULT_KEY" ]; then
         info "Found SSH public key: $DEFAULT_KEY"
         read -p "Use this key? (y/n): " USE_DEFAULT
-        
+
         if [[ "$USE_DEFAULT" =~ ^[Yy]$ ]]; then
             SSH_KEY_PATH="$DEFAULT_KEY"
         else
             read -p "Enter path to your SSH public key: " SSH_KEY_PATH
         fi
     else
+        # An explicit `if`, not `[ ... ] && info ...`: `set -e` is on (line 17),
+        # and while bash does not exit on a failing left operand of &&, that is a
+        # subtlety to rely on in a script whose failure mode is a half-written
+        # card. Measured, not assumed — but written so it needs no measuring.
+        if [ "$OPERATOR_HOME" != "$HOME" ]; then
+            info "Looked in $OPERATOR_HOME/.ssh (\$SUDO_USER's home, not root's)"
+        fi
         read -p "Enter path to your SSH public key (e.g., ~/.ssh/id_rsa.pub): " SSH_KEY_PATH
-        SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"  # Expand ~ to home directory
+        # ~ expands to the OPERATOR's home for the same reason: under sudo, the
+        # shell's own ~ would be /root.
+        SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"
     fi
     
     if [ ! -f "$SSH_KEY_PATH" ]; then
@@ -469,6 +513,31 @@ fi
 echo ""
 
 # Step 8: Summary and next steps
+#
+# ── Why an explicit flag and not a ROOTFS test ─────────────────────────────
+#
+# The next-steps block below tells the operator to boot the unit, then run
+# setup-device.sh and deploy-all.sh. That is correct for a standalone run and
+# WRONG under commission-offline.sh, which has already done both by the time it
+# gets here — an operator who follows it hunts for an IP to repeat work that is
+# finished, and the banner above says "Complete!" while three phases remain.
+#
+# The signal is an env flag the orchestrator sets deliberately, NOT the presence
+# of ROOTFS. ROOTFS is this script's documented standalone escape hatch
+# ("you can also `export ROOTFS=/mnt/rw`" — roomwizard.sh's own phase-1 text), so
+# sniffing it would silence the next steps for the hand-mounted case, which is
+# exactly the case that needs them most.
+if [ -n "${RW_COMMISSION_ORCHESTRATED:-}" ]; then
+    echo "================================================"
+    echo "  Card prep complete — continuing"
+    echo "================================================"
+    echo ""
+    success "Password, host name, SSH and DHCP are written to the card."
+    info "Returning to commission-offline.sh for the clean, the install and the verify."
+    echo ""
+    exit 0
+fi
+
 echo "================================================"
 echo "  Commissioning Complete!"
 echo "================================================"

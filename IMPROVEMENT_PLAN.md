@@ -106,13 +106,19 @@ If it brightens, the cause is confirmed and the fix is a setter in **our** boot 
 rather than only once an app runs. `common/hardware.c` already drives this sysfs node, so an app-level
 set is the weaker option. If it does *not* brighten, the cause is elsewhere and this entry is wrong.
 
-### B27. `sfdisk` absence is reported as a test failure, not a skip — open, confirmed 2026-08-06
+### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
 `tests/rw_identify_test.sh:363-369` guards the real-card-image cases on **file presence** but not on
 the **tool**, so on a host without `sfdisk` both report `expected yes, got no` — a red failure for
 something the harness could not measure. The synthetic block at `:169` gets this right and skips. This
-is the "which part of the count is the harness" trap from `CLAUDE.md` → *Working style*, and it fires
-on this dev host today because the ARM toolchain and `util-linux` are both absent from WSL.
+is the "which part of the count is the harness" trap from `CLAUDE.md` → *Working style*.
+
+⚠️ **Latent, not reproducible from this host, and the earlier claim that it fires here was a
+mismeasurement.** `sfdisk` is present in this WSL at `/usr/sbin/sfdisk` and on the non-root `PATH`;
+both card images are also present, so the two cases run and pass — measured 2026-08-06, 37 passed, 0
+failed, 0 skipped. The absence was observed in **Git Bash**, which has neither the toolchain nor
+`sfdisk` and is not where these tests run. The defect is real by inspection of the guard; the
+reproduction is not. To see it fire, run the suite with `PATH` stripped of `/usr/sbin`.
 
 Fix: skip with the reason, and account for it in `MIN_CASES` so a skip cannot silently shrink coverage.
 
@@ -491,18 +497,7 @@ Deploy them over SSH, or restage a three-component bundle.
 1. **`COMMISSIONING.md` can now be a description rather than a plan.** This was deliberately deferred
    until the tool had commissioned a unit. It still documents the three-phase SSH flow as the primary
    path; the offline single pass is now the verified one for *delivery*.
-2. **Two bugs the first real run exposed**, neither affecting a card already written:
-   - **The epilogue contradicts the orchestrator.** `commission-roomwizard.sh:479-485` prints
-     `COMMISSIONING.md`'s `NEXT_STEPS` block verbatim, which tells the operator to run
-     `setup-device.sh <ip>` and `deploy-all.sh <ip>` — both of which `commission-offline.sh` has
-     already done in the same pass, and one of which ends in a reboot. A first-time operator is
-     invited to redo the work. Suppress it when orchestrated (an explicit env flag, **not** by
-     sniffing `ROOTFS`, which is a documented standalone escape hatch).
-   - **SSH key setup cannot work under `sudo`.** `commission-roomwizard.sh:323` and `:335` use `$HOME`,
-     which is `/root` under `sudo` — and the offline flow *requires* root to mount, so the operator's
-     `~/.ssh/id_rsa.pub` is never found. Observed 2026-08-06: `~/.ssh/id_rsa.pub` expanded to
-     `/root/.ssh/id_rsa.pub`, "not found", skipped. Resolve `$SUDO_USER`'s home when set.
-3. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
+2. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
    (no serial console, [§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)); the only post-mortem is mounting
    p3 offline and reading `messages`, which only helps if it got as far as syslog. Still the reason to
    stop unless something specific is being chased.
@@ -598,6 +593,15 @@ LibVNCServer into its own prefix. Both idempotent, neither needs `sudo`. Only th
 check-and-tell.
 
 **Intent: one `setup-build-env.sh` at the repo root, one `roomwizard.sh` entry, one package set.**
+
+⚠️ **What this dev host actually has, measured 2026-08-06** — because the opposite was on record here
+and it changed how the whole backlog was ranked. Inside **WSL** (Ubuntu 20.04): `gcc`, `g++`,
+`arm-linux-gnueabihf-gcc`, `arm-linux-gnueabihf-objdump`, `sfdisk` (at `/usr/sbin/sfdisk`, on the
+non-root `PATH` in both login and non-login shells), `python3`, `dash`, `gh`. Absent: `shellcheck` only
+([C7](#c7-run-shellcheck--open)). In **Git Bash**: none of them, and `python3` resolves to the Windows
+App Execution Alias that prints *"Python was not found"*. **A prerequisite check run from the wrong
+shell reports the wrong answer**, which is what happened — so an installer for this must state which
+shell it is measuring, and `wsl.exe -e bash -lc` is the one that counts.
 
 ```text
 gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
@@ -877,10 +881,118 @@ already a precondition.
 
 #### Sequencing
 
-⚠️ **Land this *after* Unit A** ([F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06)).
-The first real run against real hardware should not also be the first run of a newly inverted
-destructive default: if that boot fails, the 472 MB restore payload having just been deleted is one more
-variable in a post-mortem that already has no serial console. Run Unit A on today's default, then flip.
+✅ **The gate is discharged, 2026-08-06.** This was held back so that the first run against real
+hardware would not also be the first run of a newly inverted destructive default — a failed boot has no
+serial console, and "the 472 MB restore payload was just deleted" would have been one more variable in
+that post-mortem. F10 has now commissioned a unit that booted working first time (`rwtest`,
+192.168.50.225) **with `--delete-factory` applied**, so the inverted default has been exercised once on
+real hardware already. Nothing else blocks this.
+
+⚠️ **Do it in one pass with [C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).**
+Both fold a hardcoded list out of `setup-device.sh` into a data file with two executors — C11 the
+*delete* half, C12 the *install* half. Done separately they will invent two plan formats and two test
+harnesses.
+
+---
+
+### C12. One provisioning list, two executors — and a missing online mode — open
+
+**There are two operator situations, and only one of them has a single command.** Measured by reading
+every root script 2026-08-06, not inferred:
+
+| Situation | Today | One command? |
+|---|---|---|
+| Bought a unit, **no network access to it** | `sudo ./commission-offline.sh --bundle <tar.gz>` | **yes** |
+| **Already has SSH** to it | `commission-roomwizard.sh` → boot → find the IP → `setup-device.sh` → `deploy-all.sh` | no — 3 scripts, a reboot and an IP hunt |
+
+⚠️ **The online path cannot deliver, because `deploy-all.sh` *builds*.** It needs the ARM toolchain, and
+the person being delivered to by definition has none. So the online mode is not a repackaging of
+existing code: **bundle-install-over-SSH does not exist anywhere in this repo.** That is the real
+asymmetry, and it is new code rather than a merge — roughly one executor over
+`rw_bundle_entries`, the SSH twin of `commission-offline.sh`'s `put`. It is the same capability F9
+records as `deploy-all.sh --from-release`, which is also still open.
+
+#### There are no duplicate scripts to delete — one duplicated *fact* instead
+
+Checked pairwise. `commission-roomwizard.sh` is **step 3 of** `commission-offline.sh`
+([commission-offline.sh:404](commission-offline.sh#L404)), not an alternative to it; the three `rw-*.sh`
+are libraries with five consumers each; `release.sh` and `deploy-all.sh` genuinely differ. **Nothing in
+the root is a redundant copy of anything else.** What *is* duplicated is the provisioning list — which
+`device-files/` go to which device path, which `rc*.d` links, the sshd hardening, the sysctl file —
+written out once per executor:
+
+| Fact | Offline (`put` / `link_boot` into `$BASE/root`) | Online (`scp` + `ssh` heredoc) |
+|---|---|---|
+| boot scripts + payload → paths | [:475-489](commission-offline.sh#L475-L489) | [:517-531](setup-device.sh#L517-L531), [:538-541](setup-device.sh#L538-L541), [:578-586](setup-device.sh#L578-L586) |
+| `S28`/`S29`/`S99`/`S30avahi` links | [:490-536](commission-offline.sh#L490-L536) | [:546-566](setup-device.sh#L546-L566), [:605-607](setup-device.sh#L605-L607) |
+| sshd hardening | [:537-560](commission-offline.sh#L537-L560) | [:636-649](setup-device.sh#L636-L649) |
+| `99-security.conf` | [:472](commission-offline.sh#L472) | [:667-674](setup-device.sh#L667-L674) |
+
+**They have already drifted:** the online path deletes stale `rc*.d` links before relinking
+([setup-device.sh:546-557](setup-device.sh#L546-L557)) and the offline path does not. This is exactly
+the shape `clean-rules.conf` fixed for the *delete* half — one plan as data, two executors, one
+prefixing `/` and one `$BASE/root`. The install half never got it, which is why this is
+[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)'s other half and not a separate project.
+
+#### Two category errors, worth more than any file move
+
+1. ⚠️ **`disable-steelcase.sh` and `roomwizard-app-init.sh` are device payload, not host tooling.** Both
+   are installed verbatim by **both** paths ([commission-offline.sh:487-488](commission-offline.sh#L487-L488),
+   [setup-device.sh:165-166](setup-device.sh#L165-L166)), which is precisely `CLAUDE.md`'s stated
+   condition for living in `device-files/`. They are in the wrong *category*, not merely the wrong
+   directory — and `roomwizard-app-init.sh` is installed under a different name
+   (`/etc/init.d/roomwizard-app`), so the file should carry the name it is deployed as.
+2. **`commission-roomwizard.sh`'s name is the most misleading thing in the tree.** It reads as the
+   sibling of `commission-offline.sh` and it is a subroutine of it. Renaming it (`card-prep.sh`) removes
+   more confusion than the folder move does.
+
+#### Proposed layout
+
+```text
+roomwizard.sh            front door — stays at root; it is the answer to "what do I run"
+deploy-all.sh            development loop — stays at root, NOT commissioning
+release.sh               produces the bundle — the build side, stays at root
+lib/     rw-identify.sh  rw-clean.sh  rw-bundle.sh  rw-provision.sh (new)
+commissioning/  commission.sh   ONE entry: --card [--disk X] | --ssh <target>, both --bundle
+                card-prep.sh    (was commission-roomwizard.sh)
+                provision.sh    (was setup-device.sh)
+                clone-to-32gb.sh
+device-files/   roomwizard-app  disable-steelcase.sh  audio-enable  time-sync
+                99-security.conf  clean-rules.conf
+```
+
+`lib/` at the top level rather than `commissioning/lib/`: `rw-bundle.sh` is sourced by all three
+component `build-and-deploy.sh` scripts on the **write** side and by the commissioner on the **read**
+side, so filing it under `commissioning/` is the same mistake as filing `disable-steelcase.sh` there.
+
+#### Cost of the move, measured
+
+**438 mentions of these filenames across 32 tracked text files** — `IMPROVEMENT_PLAN.md` 47,
+`COMMISSIONING.md` 41, `CLAUDE.md` 40, `setup-device.sh` 40, `roomwizard.sh` 38, plus 4 test scripts
+that source by path (`tests/commission_offline_test.sh` alone has 18) and 5 component build scripts.
+Mechanical, but it must be **its own commit containing no logic change**, or every diff after it is
+unreviewable.
+
+#### Sequencing, decided 2026-08-06
+
+**Behaviour first, move last** — the user's call, when offered the alternative. So: C11 + the provision
+plan as one pass, then bundle-install-over-SSH, then `COMMISSIONING.md`, and the folder move as the
+final mechanical commit. Two reasons it is not first: renaming files whose logic is mid-rewrite makes
+both diffs unreadable, and C11's fold removes ~85 lines from `setup-device.sh` before it gets moved.
+
+#### Verification, and what cannot be verified from this host
+
+- **The negative control for the fold is a plan diff** — the same one C11 needs. Every path the online
+  heredoc installs must appear in the compiled provision plan, or be deliberately absent with a recorded
+  reason. A fold that silently drops a target looks exactly like a successful one.
+- ⚠️ **`--dry-run` on both executors over the same inputs should print the same resolved set**, modulo
+  the `/` versus `$BASE/root` prefix. That is the assertion that "one list" is *true* rather than
+  intended, and it is the only one that catches the drift above.
+- ⚠️ **A mode cannot be verified on this host.** `/mnt/c` reports every file 0777 and discards `chmod`,
+  so the provision plan must **declare** modes exactly as `rw-bundle.sh` does, and the `+x` assertion
+  stays a measurement only on real ext4.
+- The reorg commit's own control is that all four host-only suites still pass unchanged, and that
+  `git ls-files -s -- '*.sh'` is still all `100755` afterwards.
 
 ---
 
@@ -917,23 +1029,26 @@ Deliberately not a ranking of everything — only the claims worth making.
    backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
    `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
    waiting to be confirmed or refuted.
-1. **[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05).** Three delete policies for one
-   job is the largest live inconsistency in the repo, and one of them is an 85-line heredoc that the
-   data file was created to replace. Small, self-contained, and it makes "the clean is the same either
-   way" true instead of intended. F10 is confirmed on hardware now, so the sequencing caveat that held
-   it back is discharged.
-2. **`COMMISSIONING.md`, and the two bugs the first real run exposed** — F10's *What is left*. The doc
-   can finally be a description; the epilogue and the `$HOME`-under-`sudo` key path are both small.
+1. **[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05) together with
+   [C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).** Three delete
+   policies for one job is the largest live inconsistency in the repo, and one of them is an 85-line
+   heredoc that the data file was created to replace. C12 is the same fold applied to the *install*
+   half, plus the capability the delivery story is actually missing: **the online mode cannot install a
+   bundle, because `deploy-all.sh` builds.** Do them as one pass — separately they invent two plan
+   formats. The folder reorganisation is the *last* commit of that work, not the first.
+2. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
+   plan, and the reorg above renames the scripts it documents, so it lands after them. (The two bugs the
+   first real run exposed are fixed: `git log --grep=F10`.)
 3. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
 4. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
    (`--deep-clean`) first if disk space is tight.
 5. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
 
-[F11](#f11-one-home-for-the-host-build-prerequisites--open) is more urgent than it reads: the ARM
-toolchain and `util-linux` are **both absent from this WSL**, so nothing can be built here today and
-[B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-confirmed-2026-08-06) fires as
-a red failure because of it. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
+[F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
+has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
+item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
+cannot fire here. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
 not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) and
 [F15](#f15-usb-host-mode-is-unreachable-from-the-delivery-flow--open-confirmed-2026-08-06) are recorded
 rather than planned, because the honest answers are a bootable image and a p1 decision respectively.

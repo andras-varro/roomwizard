@@ -399,9 +399,17 @@ else
     # implementation of the two prompts. `bash <script>`, never ./<script>: a
     # fresh clone can land without the executable bit and /mnt/c cannot even show
     # whether it has one.
+    #
+    # RW_COMMISSION_ORCHESTRATED suppresses its closing "Commissioning Complete!"
+    # banner and the next-steps block it reads out of COMMISSIONING.md, which tell
+    # the operator to boot the unit and then run setup-device.sh and deploy-all.sh
+    # — everything phases 4-6 below are about to do. It is a separate flag from
+    # ROOTFS on purpose: ROOTFS alone also means "I mounted the card myself", and
+    # that operator does still need the next steps.
     info "Handing over to commission-roomwizard.sh for the two questions..."
     echo ""
-    ROOTFS="$BASE/root" bash "$SCRIPT_DIR/commission-roomwizard.sh" \
+    ROOTFS="$BASE/root" RW_COMMISSION_ORCHESTRATED=1 \
+        bash "$SCRIPT_DIR/commission-roomwizard.sh" \
         || err "commission-roomwizard.sh failed — the card is half-written; fix it before booting"
     ok "Password, host name, /etc/hosts, /etc/dhclient.conf, sshd and DHCP done"
 fi

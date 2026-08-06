@@ -188,9 +188,24 @@ ext4 honours it, so that check is a measurement offline and cannot be one on `/m
 - ⚠️ **A missing `arm-linux-gnueabihf-objdump` is a refusal, not a pass.** `check-arm-safe.sh` skips
   non-ARM files and then reports "no hardware divide in 0 binaries", so the caller counts the ELF
   candidates itself and says loudly what it did not check. `--arm-check=skip` is the deliberate override.
+- ⚠️ **`commission-roomwizard.sh` is a *step of* the offline pass, not an alternative to it**, and the
+  handover carries **two** variables. `ROOTFS` skips its own card detection; `RW_COMMISSION_ORCHESTRATED`
+  suppresses its closing banner and the `NEXT_STEPS` block it reads out of `COMMISSIONING.md`, which
+  tells the operator to run `setup-device.sh` and `deploy-all.sh` — both already done by the time it
+  prints. They are separate on purpose: **`ROOTFS` alone also means "I mounted the card myself"**, and
+  that operator does still need the next steps. Suppressing on `ROOTFS` is the obvious wrong fix and
+  passes every other case.
 - Regression: `tests/commission_offline_test.sh` (21 cases; needs root and a staged bundle). Every check
   has a sabotage case; the fixture builder is `tests/make-fake-card.sh`, which must live under `/tmp`
   because DrvFs cannot hold a symlink.
+- Regression: `tests/commission_prep_test.sh` (17 cases, host-only, no card, no root) covers
+  `commission-roomwizard.sh`'s two host-side decisions — whose `~/.ssh` the key is looked for in (under
+  `sudo`, `$HOME` is `/root`), and the suppression above. Neither is reachable by running the script, so
+  both are **extracted from the shipped file by line range** and run against stubs. Measured against
+  deliberately broken copies: the `ROOTFS`-sniffing fix fails 4, a call site that ignores
+  `operator_home()` fails 3, an orchestrator that forgets the flag fails 1. ⚠️ **An earlier version of
+  that harness re-emitted the `OPERATOR_HOME=` assignment itself and thereby repaired the sabotage it
+  was meant to catch** — extract the wiring, never restate it.
 
 Components (each a subdir with a `build-and-deploy.sh`): `native_apps` (C games + launcher + tools),
 `scummvm-roomwizard` (ScummVM backend port), `vnc_client`, `usb_host` (USB host-mode enablement +
@@ -232,8 +247,17 @@ tool-level traps rather than device facts, and each has cost real time.
   the Windows App Execution Alias — a real file that prints *"Python was not found"* and fails. Test by
   running `python3 --version`, not by looking it up. WSL's python3 has `PIL`, which the framebuffer
   decoder needs.
+- ⚠️ **Never measure a prerequisite from Git Bash — the answer is "absent" for everything.** `gcc`,
+  `arm-linux-gnueabihf-*`, `sfdisk` and `gh` are all present in WSL and all absent there, so a
+  `command -v` sweep run in the wrong shell reports a host with no toolchain at all. That happened
+  (2026-08-06): it was recorded as fact, made `IMPROVEMENT_PLAN.md` F11 read as a hard blocker on all
+  building, and attributed a test failure to a missing `sfdisk` that is installed. **State which shell a
+  prerequisite claim was measured in**, and measure with `wsl.exe -e bash -lc`. The measured inventory
+  lives in `IMPROVEMENT_PLAN.md` F11.
 - **Git Bash `/tmp` and WSL `/tmp` are different filesystems.** Write captures somewhere under
-  `c:\work\roomwizard` and both sides reach them.
+  `c:\work\roomwizard` and both sides reach them. ⚠️ **WSL's `/tmp` also does not survive between
+  `wsl.exe` calls** — the instance idles out and takes it with it, so a fixture staged in one call can be
+  gone by the next. Stage and use it inside **one** `wsl.exe -e bash -lc`, or put it under the repo.
 - **The Bash tool's working directory does not reliably persist between calls.** Use absolute paths.
 - **No foreground `sleep`** — it is blocked. Use `run_in_background`, or put the sleep inside the remote
   command: `ssh root@<ip> 'sleep 3; …'` works, because the local command is `ssh`.
