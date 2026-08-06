@@ -36,7 +36,7 @@ booted kernel assembles into one tree:
 | p6 | `/` | `/opt/jetty*`, `/opt/openjre-8`, `/usr/share/cjkfont`, WebKit/GTK/X11 libs, `/etc/init.d/*` |
 | p2 | `/home/root/data` | `websign`, `conctest`, the 79 MB `cron/log` truncation |
 | p3 | `/home/root/log` | `Xorg.0.log`, `browser.err`, `jettystart`, … |
-| p5 | `/home/root/backup` | the 474 MB `factory/*.img` deep-clean option |
+| p5 | `/home/root/backup` | `serialno`, `pointercal`, the 5 MB fallback kernel, and the 472 MB `factory/*.img` restore payload the clean deletes |
 
 `commission-roomwizard.sh` locates exactly **one** of these (p6, by content — see
 [*Finding the card*](#finding-the-card)). Three further reasons:
@@ -165,7 +165,8 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
      launcher and enables mDNS. Deletes nothing, and ends in a reboot:
        ./setup-device.sh <ip>
 
-     To also DELETE ~178 MB of vendor files (permanent), add --remove.
+     To also DELETE the vendor software (permanent), add --remove.
+     It asks for a card backup first, and the factory restore goes too.
 
   6. Deploy all apps:
        ./deploy-all.sh <ip>
@@ -186,11 +187,18 @@ It **disables** the Steelcase services and installs the generic app launcher fra
 | | What it does | Default? | Reversible |
 |---|---|---|---|
 | **disable** | stops and de-registers the vendor services, writes the watchdog bypass. Re-applied on **every boot** by the init script. Deletes nothing. | **yes** | yes |
-| **remove** (`--remove`) | additionally *deletes* ~178 MB of vendor files | no, opt-in | no — needs a reflash |
-| **deep clean** (`--deep-clean`) | `--remove` plus ~560 MB more, including the 474 MB on-device factory restore image | no, opt-in | no — needs a reflash |
+| **remove** (`--remove`) | additionally *deletes* the named vendor stacks — ~178 MB plus the 472 MB factory-restore payload | no, opt-in | no — needs the host-side card image |
+| **deep clean** (`--deep-clean`) | `--remove` plus the whitelist sweeps: everything in `/etc/rc*.d`, `/opt` and the data partitions that the keep-list does not name. ~560 MB more | no, opt-in | no — needs the host-side card image |
 
-So a plain `./setup-device.sh <ip>` **deletes nothing**. Use `--deep-clean --dry-run` to see what
-the destructive option would remove before committing to it.
+So a plain `./setup-device.sh <ip>` **deletes nothing**. Both destructive flags read the same
+[`device-files/clean-rules.conf`](device-files/clean-rules.conf) and differ only by its `sweeps`
+group; both ask for a full-card backup before they start. Use `--dry-run` with either to see the
+resolved list first.
+
+⚠️ **Neither is undoable on the device.** The 472 MB on-device factory-restore payload is deleted with
+the rest of the vendor stack — it would only restore software whose start-up mechanism the same clean
+removes, so keeping it preserves the ability to undo a commissioning it can no longer perform.
+`--keep-factory` opts out; the 5 MB fallback kernel is kept either way; p1 is never written.
 
 ### What it does
 1. Deploys [`disable-steelcase.sh`](disable-steelcase.sh) → `/opt/roomwizard/`
@@ -199,16 +207,18 @@ the destructive option would remove before committing to it.
 4. Deploys audio-enable boot script (GPIO12 speaker amplifier)
 5. Deploys time-sync boot script (rdate)
 6. Enables **mDNS** — links the image's existing `avahi-daemon` into `rc5.d` (S30)
-7. Optionally removes bloatware files (`--remove`, ~178 MB freed)
+7. Optionally removes the vendor software (`--remove` / `--deep-clean`)
 8. Reboots
 
 ### Usage
 
 ```bash
 ./setup-device.sh <target>                    # system setup + reboot (deletes nothing)
-./setup-device.sh <target> --remove           # + delete bloatware files (~178 MB)
+./setup-device.sh <target> --remove           # + delete the named vendor stacks
+./setup-device.sh <target> --remove --dry-run       # list what --remove would delete
 ./setup-device.sh <target> --deep-clean --dry-run   # list what deep clean would delete
-./setup-device.sh <target> --deep-clean       # + extended cleanup (~560 MB more)
+./setup-device.sh <target> --deep-clean       # + the whitelist sweeps (~560 MB more)
+./setup-device.sh <target> --deep-clean --keep-factory   # ... but keep the restore payload
 ./setup-device.sh <target> --status           # report only, no changes
 ./setup-device.sh <target> --hostname rw09    # set the host name only. NO reboot.
 ```

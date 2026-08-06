@@ -450,10 +450,10 @@ explicitly not a motive: p6 has 474 MB free before anything is deleted
 - **Keep inert vendor artifacts** — `/opt/{sbin,pv02,sound}`, `perl5/`, the ZigBee tooling. Once
   nothing starts them they cost nothing, and reading them is how
   [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was established.
-- **The upgrade payload is a `factory` group.** Today it is off by default and `--delete-factory` opts
-  in; that default is **reversed by
-  [C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)**, which is where the reasoning lives.
-  `factory/uImage-system-original` is kept either way.
+- **The upgrade payload is a `factory` group, deleted by default.** Reversed 2026-08-06: cleaning a
+  unit of its vendor software is a decision, and the payload restores a stack whose start-up mechanism
+  the same clean removes. `--keep-factory` opts out. `factory/uImage-system-original` — the 5 MB
+  fallback kernel — is kept either way.
 - ⚠️ **`--keep-<group>` protects that group's paths from every sweep, not just from its own delete
   lines.** Without that rule the `/opt` whitelist would remove `/opt/openjre-8` anyway and the flag
   would do nothing and say nothing. What it does *not* do is re-enable a boot link: the rc\*.d
@@ -487,7 +487,8 @@ playable, sound. The unit is `rwtest` at `192.168.50.225`, and it has since surv
 verification in the tool passed on the real card — md5 across 46 installed files, `+x` on 22 (a real
 measurement, impossible on `/mnt/c`), all 9 `.app` manifests resolving, `default-app` → `app_launcher`,
 `dash -n` clean, boot links non-dangling, `websign` gone, host name consistent across three files.
-Run with `--delete-factory`, so the 472 MB on-card restore payload is gone by choice.
+Run with `--delete-factory`, so the 472 MB on-card restore payload was gone by choice — that is now
+the default and the flag is redundant.
 
 ScummVM and `vnc_client` are absent **because the bundle was `native_apps` only** — not a failure.
 Deploy them over SSH, or restage a three-component bundle.
@@ -531,8 +532,8 @@ Two ways to have it back, if wanted:
 
 1. **Restore the link and hand off cleanly.** `psplash` must release `/dev/fb0` before
    `S99roomwizard-app` starts — `psplash-write QUIT` is the mechanism. The keep-list and the boot-link
-   set would both have to name it, since [C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)
-   makes a link the whitelist does not name get swept on the next clean.
+   set would both have to name it, since `device-files/clean-rules.conf`'s whitelist
+   makes a link it does not name get swept on the next clean.
 2. **Draw our own.** `app_launcher` already owns the framebuffer and there is no fb0 contention at all
    — a splash drawn by our stack sidesteps the handoff entirely, and can show something honest about
    what is loading.
@@ -827,74 +828,6 @@ play session of somebody's time — which is why that check keeps being postpone
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
 
-### C11. One clean, one mechanism — open, confirmed 2026-08-05
-
-**Three delete policies exist for one job, and two of them are not the data file.** Measured by reading
-the source, not inferred:
-
-| Path | Mechanism | Reads `clean-rules.conf`? |
-|---|---|---|
-| `setup-device.sh --remove` | ~85 lines of hardcoded `rm -rf` inside an `ssh … <<'REMOTE'` heredoc, [setup-device.sh:700-786](setup-device.sh#L700-L786) | **no** |
-| `setup-device.sh --deep-clean` | implies `--remove`, then runs the compiled plan — so **both** mechanisms, in sequence | partly |
-| `commission-offline.sh` | the compiled plan only, always on, `--no-clean` to disable | yes |
-
-The heredoc even carries its own keep-comments for `/opt/pv02`, `/opt/sound` and the ZigBee tooling,
-restating decisions the data file already records with reasons — and a comment inside it says so
-outright: *"two lists in one script is exactly the drift that file exists to prevent."* It is the older
-of the two and nothing has retired it.
-
-**The factory payload diverges the same way:** `setup-device.sh` prompts for it interactively and has
-no flag at all ([setup-device.sh:298-307](setup-device.sh#L298-L307)); `commission-offline.sh` has
-`--delete-factory` and never prompts. Same rules file, two policies.
-
-#### Intent, decided 2026-08-05
-
-**Both delivery and development want the identical clean**, and it should not matter which path ran it.
-The device is being repurposed as a small Linux computer: delete everything the vendor stack needs and
-nothing a normal Linux needs. If something in the vendor image later turns out to be wanted, the fix is
-to edit the rules file — the original card image is the fallback, which is why a full-card backup is
-already a precondition.
-
-1. **`clean-rules.conf` + `rw-clean.sh` become the only mechanism.** Delete the heredoc. Every target of
-   it that is not already a rule becomes one, with a reason in the fourth field.
-2. **`--remove` becomes a named group subset of the same plan**, not a second implementation. It keeps
-   its meaning ("bloatware only") and loses its private list.
-3. ⚠️ **The factory payload is deleted by default; `--keep-factory` opts out.** This **reverses** the
-   current default. The reasoning: that payload restores the vendor stack the clean just removed, so on
-   a commissioned unit it is 472 MB whose only function is to undo the commissioning. The host-side
-   full-card backup is already required and is a strictly better recovery path.
-   `factory/uImage-system-original` — the fallback kernel — stays kept either way.
-4. **Both consumers take the same flags and produce the same effect.** They keep separate *executors*
-   only because `/` is the correct prefix on a device and a refused one offline.
-
-#### Verification
-
-- **Write the failing version first.** `tests/rw_clean_test.sh` C17, C18 and E22 currently assert the
-  *old* factory default; they invert. Compile the new assertions against the pre-change source and
-  count the failures before fixing anything.
-- **The negative control for folding the heredoc is a plan diff**: every path the heredoc removed must
-  appear in the compiled plan, or be deliberately absent with a recorded reason. A fold that silently
-  drops a target looks exactly like a successful one.
-- `tests/commission_offline_test.sh` covers the offline half; `--dry-run` on both paths over the same
-  card should now print the same set of resolved paths, which is the assertion that "one clean" is true
-  rather than merely intended.
-
-#### Sequencing
-
-✅ **The gate is discharged, 2026-08-06.** This was held back so that the first run against real
-hardware would not also be the first run of a newly inverted destructive default — a failed boot has no
-serial console, and "the 472 MB restore payload was just deleted" would have been one more variable in
-that post-mortem. F10 has now commissioned a unit that booted working first time (`rwtest`,
-192.168.50.225) **with `--delete-factory` applied**, so the inverted default has been exercised once on
-real hardware already. Nothing else blocks this.
-
-⚠️ **Do it in one pass with [C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).**
-Both fold a hardcoded list out of `setup-device.sh` into a data file with two executors — C11 the
-*delete* half, C12 the *install* half. Done separately they will invent two plan formats and two test
-harnesses.
-
----
-
 ### C12. One provisioning list, two executors — and a missing online mode — open
 
 **There are two operator situations, and only one of them has a single command.** Measured by reading
@@ -931,8 +864,8 @@ written out once per executor:
 **They have already drifted:** the online path deletes stale `rc*.d` links before relinking
 ([setup-device.sh:546-557](setup-device.sh#L546-L557)) and the offline path does not. This is exactly
 the shape `clean-rules.conf` fixed for the *delete* half — one plan as data, two executors, one
-prefixing `/` and one `$BASE/root`. The install half never got it, which is why this is
-[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)'s other half and not a separate project.
+prefixing `/` and one `$BASE/root`. The install half never got it, which is why this is the other half
+of the clean fold (`git log --grep=C11`) and not a separate project.
 
 #### Two category errors, worth more than any file move
 
@@ -1029,13 +962,12 @@ Deliberately not a ranking of everything — only the claims worth making.
    backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
    `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
    waiting to be confirmed or refuted.
-1. **[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05) together with
-   [C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).** Three delete
-   policies for one job is the largest live inconsistency in the repo, and one of them is an 85-line
-   heredoc that the data file was created to replace. C12 is the same fold applied to the *install*
+1. **[C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).** C11 landed
+   2026-08-06 (`git log --grep=C11`): the clean is one mechanism reading one data file, and the 85-line
+   heredoc is gone. C12 is the same fold applied to the *install*
    half, plus the capability the delivery story is actually missing: **the online mode cannot install a
-   bundle, because `deploy-all.sh` builds.** Do them as one pass — separately they invent two plan
-   formats. The folder reorganisation is the *last* commit of that work, not the first.
+   bundle, because `deploy-all.sh` builds.** The folder reorganisation is the *last* commit of that
+   work, not the first.
 2. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
    plan, and the reorg above renames the scripts it documents, so it lands after them. (The two bugs the
    first real run exposed are fixed: `git log --grep=F10`.)

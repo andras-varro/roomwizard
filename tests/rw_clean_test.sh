@@ -27,33 +27,53 @@
 #      delete gets in without anyone having to justify it. Also the construction
 #      guarantee — no rule may NAME rc0.d or rc6.d, so they are unreachable
 #      rather than merely unvisited.
-#   C  plan compilation, including the two negative controls — rc0.d/rc6.d
-#      appear in NO plan under ANY group selection (they are shutdown, not
-#      startup), and a DISABLED group's paths become protections, without which
-#      --keep-java would be silently undone by the /opt sweep.
+#   C  plan compilation, including four negative controls — rc0.d/rc6.d appear in
+#      NO plan under ANY group selection (they are shutdown, not startup); a
+#      DISABLED group's paths become protections, without which --keep-java would
+#      be silently undone by the /opt sweep; every plan is asserted to have
+#      COMPILED before anything is asserted about its contents; and --remove's
+#      plan must differ from --deep-clean's by nothing except the sweeps.
 #   D  device-absolute path -> the right one of four offline mounts.
 #   E  the whole clean against the synthetic tree. Asserts all three directions:
 #      the keeps survived, the unknowns were SWEPT (a rule that deletes nothing
 #      passes a test that only checks the keeps), and nothing outside the copy
-#      was touched — md5 manifest of a canary tree, taken before and after.
+#      was touched — md5 manifest of a canary tree, taken before and after. Then
+#      the three opt-outs: --keep-java, --keep-factory and --remove.
 #
 # ── Measured against deliberately broken copies ────────────────────────────
 #
 # Written before the code, and each group checked by breaking the thing it is
-# supposed to catch. Counts out of 112:
+# supposed to catch. Re-run them with tests/measure_sabotage.sh — the sabotages
+# live in a file because a sed pattern containing \t and [++nk] does not survive
+# being quoted through `wsl.exe -e bash -lc`, and one that fails to apply reports
+# "0 failed", which reads exactly like a suite that cannot detect the breakage.
 #
-#   the guardless del() — setup-device.sh:245 lifted offline unchanged, no base
-#   check, plain concatenation                                    11 fail
-#       A1–A4 each resolved to this host's own /etc/shadow; A5 deleted the base
-#       directory itself, which is why A11/A12 then "passed" for the wrong reason.
-#       Run with rm -rf sandboxed to /tmp — demonstrating the claim by destroying
-#       the host is not a demonstration.
-#   scope records ignored, i.e. keeps applied and nothing swept    11 fail
+# Counts out of 148, measured 2026-08-06:
+#
+#   scope records ignored, i.e. keeps applied and nothing swept     12 fail
 #       This is the shape the plan warns about: "a rule that deletes nothing
 #       passes a test that only checks the keeps survived."
-#   a disabled group's paths no longer protect                      3 fail
-#       C15, E50, E51 — --keep-java would leave the JRE named only by a delete
-#       nobody runs, and the /opt sweep would remove it anyway.
+#   a disabled group's paths no longer protect                       4 fail
+#       C15, C17a, E50, E51 — --keep-java would leave the JRE named only by a
+#       delete nobody runs, and the /opt sweep would remove it anyway.
+#   `factory` reverted to opt-in                                     4 fail
+#       C16, C26, E22, E61 — the 2026-08-06 reversal. One default across every
+#       flag; --keep-factory is the only way out.
+#   --remove given the sweeps too, i.e. made a synonym                6 fail
+#   the `scope` records moved back into `base`, same effect           6 fail
+#       C21, C22, C27, C29, E62-E64 — --remove must be a SUBSET.
+#   the eight named vendor logs dropped, relying on the sweep         4 fail
+#       E66-E69. ⚠️ This one failed ZERO cases until those four were added: the
+#       sweep covers the logs under --deep-clean, so the gap was invisible in
+#       every plan the suite checked. The C11 plan diff found it; a gap a one-off
+#       migration script finds and the regression suite does not is a gap that
+#       comes back.
+#   the guardless del() — setup-device.sh's live executor lifted offline with no
+#   base check, plain concatenation                                 11 fail
+#       Against the 116-case version, with rm sandboxed by hand; not re-measured
+#       because unprefixed it would rm -rf this host's /etc/shadow. A1–A4 each
+#       resolved to it; A5 deleted the base directory itself, which is why
+#       A11/A12 then "passed" for the wrong reason.
 #
 # The count at the end includes a check on the harness itself: a file that
 # silently ran zero cases reports success just as loudly as one that ran all of
@@ -228,14 +248,35 @@ echo "C. plan compilation"
 plan_of() { rw_clean_plan "$RULES" "$1"; }
 
 PLAN_DEFAULT=$(plan_of "$(rw_clean_default_groups)")
-PLAN_BASE=$(plan_of "base")
-PLAN_KEEPJAVA=$(plan_of "base browser snmp mail extras")
-PLAN_FACTORY=$(plan_of "$(rw_clean_default_groups) factory")
-PLAN_ALL=$(plan_of "base browser java snmp mail extras factory")
+# The smallest plan that still sweeps. `scope` records live in the `sweeps` group
+# so that --remove can be the same plan without them, so "base" alone no longer
+# implies a whitelist sweep — which is the point of the group and the reason this
+# is not spelled "base".
+PLAN_BASE=$(plan_of "base sweeps")
+PLAN_REMOVE=$(plan_of "$(rw_clean_remove_groups)")
+PLAN_KEEPJAVA=$(plan_of "base browser snmp mail extras factory sweeps")
+PLAN_KEEPFACTORY=$(plan_of "base browser java snmp mail extras sweeps")
 
 has()    { printf '%s\n' "$2" | grep -qxF "$1"; }
 expect() { if has "$1" "$2"; then ok "$3"; else bad "$3 — plan has no '$1'"; fi; }
 absent() { if has "$1" "$2"; then bad "$3 — plan HAS '$1'"; else ok "$3"; fi; }
+
+# ⚠️ Which part of the count is the harness?
+#
+# `absent` against an EMPTY plan passes, so a group name this file uses that
+# rw-clean.sh does not know compiles to nothing and then reads as a row of
+# successes. That is not hypothetical: it is how this group behaved for the whole
+# of the pre-change run, where six `absent` cases "passed" against plans that had
+# failed to compile. So every plan asserts that it compiled BEFORE anything is
+# asserted about its contents.
+plan_built() {
+    if [ -n "$2" ]; then ok "$1"; else bad "$1 — the plan is EMPTY, so every assertion below it is meaningless"; fi
+}
+plan_built "C0a the default plan compiles"        "$PLAN_DEFAULT"
+plan_built "C0b the base+sweeps plan compiles"    "$PLAN_BASE"
+plan_built "C0c --remove's plan compiles"         "$PLAN_REMOVE"
+plan_built "C0d --keep-java's plan compiles"      "$PLAN_KEEPJAVA"
+plan_built "C0e --keep-factory's plan compiles"   "$PLAN_KEEPFACTORY"
 
 expect "$(printf 'sweep\t/etc/rc5.d')"                     "$PLAN_BASE"    "C1 rc5.d is swept"
 expect "$(printf 'sweep\t/etc/rcS.d')"                     "$PLAN_BASE"    "C2 rcS.d is swept"
@@ -252,7 +293,7 @@ expect "$(printf 'del\t/home/root/data/websign')"          "$PLAN_BASE"    "C10 
 # rc0.d and rc6.d are shutdown, not startup. They must be unreachable through
 # the plan under EVERY group selection, not merely absent from the default one.
 RC06_HITS=0
-for p in "$PLAN_BASE" "$PLAN_DEFAULT" "$PLAN_KEEPJAVA" "$PLAN_FACTORY" "$PLAN_ALL"; do
+for p in "$PLAN_BASE" "$PLAN_DEFAULT" "$PLAN_KEEPJAVA" "$PLAN_KEEPFACTORY" "$PLAN_REMOVE"; do
     n=$(printf '%s\n' "$p" | grep -c 'rc0\.d\|rc6\.d' || true)
     RC06_HITS=$((RC06_HITS + n))
 done
@@ -265,12 +306,47 @@ absent "$(printf 'keep\t/opt\topenjre-8')"    "$PLAN_DEFAULT"  "C13 and is not a
 absent "$(printf 'del\t/opt/openjre-8')"      "$PLAN_KEEPJAVA" "C14 --keep-java drops the JRE delete"
 expect "$(printf 'keep\t/opt\topenjre-8')"    "$PLAN_KEEPJAVA" "C15 --keep-java also protects it from the /opt sweep"
 
-absent "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_DEFAULT" \
-    "C16 the 444 MB restore image is NOT deleted by default"
-expect "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_FACTORY" \
-    "C17 --delete-factory deletes it"
-expect "$(printf 'keep\t/home/root/backup\tfactory')" "$PLAN_FACTORY" \
+# ⚠️ Factory is delete-by-DEFAULT, and this is the inversion of what these three
+# cases asserted before 2026-08-06. Choosing to clean a unit of its vendor
+# software is a decision, and it is not reversible by a button press: the clean
+# disables the factory-reset MECHANISM anyway, so leaving the 472 MB payload
+# behind keeps only the ability to undo a commissioning it can no longer perform.
+# The gate is the host-side full-card backup, asked for once and up front.
+expect "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_DEFAULT" \
+    "C16 the 444 MB restore image IS deleted by default"
+absent "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_KEEPFACTORY" \
+    "C17 --keep-factory drops that delete"
+expect "$(printf 'keep\t/home/root/backup/factory\tsd_rootfs_part.img*')" "$PLAN_KEEPFACTORY" \
+    "C17a and protects it, so no sweep can take it instead"
+expect "$(printf 'keep\t/home/root/backup\tfactory')" "$PLAN_DEFAULT" \
     "C18 the factory DIRECTORY survives either way — it holds the fallback kernel"
+expect "$(printf 'keep\t/home/root/backup\tfactory')" "$PLAN_KEEPFACTORY" \
+    "C18a in both plans"
+
+# ── --remove is a NAMED GROUP SUBSET of the same plan, not a second list ──────
+#
+# It means "delete the vendor stacks we have named", where --deep-clean also means
+# "and anything the whitelist does not name". So the one difference is `sweeps`.
+absent "$(printf 'sweep\t/etc/rc5.d')"        "$PLAN_REMOVE" "C21 --remove does not sweep rc5.d"
+absent "$(printf 'sweep\t/opt')"              "$PLAN_REMOVE" "C22 nor /opt"
+expect "$(printf 'sweep\t/opt')"              "$PLAN_DEFAULT" "C23 --deep-clean does"
+expect "$(printf 'del\t/opt/openjre-8')"      "$PLAN_REMOVE" "C24 --remove still deletes the named stacks"
+expect "$(printf 'del\t/usr/share/cjkfont')"  "$PLAN_REMOVE" "C25 including the browser group"
+expect "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_REMOVE" \
+    "C26 and the factory payload — ONE default across every flag, not a softer one here"
+SWEEPS_IN_REMOVE=$(printf '%s\n' "$PLAN_REMOVE" | grep -c '^sweep' || true)
+assert_eq "0" "$SWEEPS_IN_REMOVE" "C27 --remove's plan contains no sweep at all"
+SWEEPS_IN_DEFAULT=$(printf '%s\n' "$PLAN_DEFAULT" | grep -c '^sweep' || true)
+if [ "$SWEEPS_IN_DEFAULT" -ge 8 ]; then
+    ok "C28 --deep-clean's plan contains $SWEEPS_IN_DEFAULT sweeps"
+else
+    bad "C28 --deep-clean's plan contains only $SWEEPS_IN_DEFAULT sweeps (expected >= 8)"
+fi
+# The two lists must differ ONLY by the sweeps, or "one plan, one subset" is a
+# story rather than a fact.
+ONLY_SWEEPS=$(diff <(printf '%s\n' "$PLAN_DEFAULT" | grep -v '^sweep' | LC_ALL=C sort) \
+                   <(printf '%s\n' "$PLAN_REMOVE"  | grep -v '^sweep' | LC_ALL=C sort) | grep -c '^[<>]' || true)
+assert_eq "0" "$ONLY_SWEEPS" "C29 --remove and --deep-clean differ by NOTHING except the sweeps"
 
 # base cannot be switched off.
 if rw_clean_plan "$RULES" "browser java" >/dev/null 2>&1; then
@@ -406,6 +482,8 @@ build_card() {
     # p3 and p5.
     : > "$CARD/log/Xorg.0.log"
     : > "$CARD/log/browser.err"
+    : > "$CARD/log/networkmngr.err"
+    : > "$CARD/log/snmp_daemon.log"
     printf 'vendor noise\n' > "$CARD/log/messages"
     printf 'wtmp\n'         > "$CARD/log/wtmp"
     mkdir -p "$CARD/log/jetty_logs"
@@ -476,7 +554,7 @@ exists "$CARD/backup/lost+found"            "E18 p5 lost+found survives"
 exists "$CARD/backup/serialno"              "E19 serialno survives (device identity)"
 exists "$CARD/backup/pointercal"            "E20 the vendor touch calibration survives"
 exists "$CARD/backup/factory/uImage-system-original" "E21 the fallback kernel survives"
-exists "$CARD/backup/factory/sd_rootfs_part.img"     "E22 the restore image survives without --delete-factory"
+gone   "$CARD/backup/factory/sd_rootfs_part.img"     "E22 the restore image is GONE by default"
 
 assert_eq "" "$(cat "$CARD/data/cron/tabs/root")" "E23 the vendor crontab was TRUNCATED"
 assert_eq "" "$(cat "$CARD/data/cron/log")"       "E24 the 131 MB cron log was truncated"
@@ -547,9 +625,9 @@ assert_eq "$CANARY_MD5" "$(cd "$CANARY" && find . | LC_ALL=C sort | md5sum)" \
 
 # ── E: the opt-outs, on a fresh card ──────────────────────────────────────
 echo ""
-echo "   --keep-java and --delete-factory"
+echo "   --keep-java, --keep-factory and --remove"
 build_card
-rw_clean_plan "$RULES" "base browser snmp mail extras" > "$TMP/plan.keepjava"
+rw_clean_plan "$RULES" "base browser snmp mail extras factory sweeps" > "$TMP/plan.keepjava"
 rw_clean_apply "$CARD" "$TMP/plan.keepjava" >/dev/null
 exists "$CARD/root/opt/openjre-8"   "E50 --keep-java keeps the JRE through the /opt sweep"
 exists "$CARD/root/opt/jetty-9-4-11" "E51 --keep-java keeps Jetty through the /opt sweep"
@@ -557,11 +635,53 @@ gone   "$CARD/root/opt/rwconnector" "E52 and the sweep still removes what no gro
 gone   "$CARD/root/usr/share/cjkfont" "E53 and the other groups still ran"
 
 build_card
-rw_clean_plan "$RULES" "$(rw_clean_default_groups) factory" > "$TMP/plan.factory"
-rw_clean_apply "$CARD" "$TMP/plan.factory" >/dev/null
-gone   "$CARD/backup/factory/sd_rootfs_part.img"     "E54 --delete-factory removes the 444 MB image"
-gone   "$CARD/backup/factory/sd_rootfs_part.img.md5" "E55 and its .md5"
-exists "$CARD/backup/factory/uImage-system-original" "E56 and keeps the fallback kernel"
+rw_clean_plan "$RULES" "base browser java snmp mail extras sweeps" > "$TMP/plan.keepfactory"
+rw_clean_apply "$CARD" "$TMP/plan.keepfactory" >/dev/null
+exists "$CARD/backup/factory/sd_rootfs_part.img"     "E54 --keep-factory keeps the 444 MB image"
+exists "$CARD/backup/factory/sd_rootfs_part.img.md5" "E55 and its .md5"
+exists "$CARD/backup/factory/uImage-system-original" "E56 and the fallback kernel either way"
+gone   "$CARD/root/opt/rwconnector"                  "E57 and the rest of the clean still ran"
+
+# ── E: --remove, the named-subset run ─────────────────────────────────────
+#
+# The whole difference from --deep-clean is the sweeps: the named vendor stacks go,
+# and a vendor directory nobody has whitelisted STAYS. That second half is the
+# assertion that --remove is a subset rather than a synonym.
+build_card
+rw_clean_plan "$RULES" "$(rw_clean_remove_groups)" > "$TMP/plan.remove"
+REMOVE_OUT=$(rw_clean_apply "$CARD" "$TMP/plan.remove")
+gone   "$CARD/root/opt/openjre-8"          "E58 --remove deletes the JRE"
+gone   "$CARD/root/usr/share/cjkfont"      "E59 and the CJK font"
+gone   "$CARD/data/websign"                "E60 and websign"
+gone   "$CARD/backup/factory/sd_rootfs_part.img" \
+    "E61 and the factory payload — the same default as --deep-clean, not a softer one"
+exists "$CARD/root/opt/rwconnector"        "E62 but an unwhitelisted /opt vendor directory SURVIVES --remove"
+exists "$CARD/root/etc/rc5.d/S45roomcast" "E63 and so does an unwhitelisted boot link"
+exists "$CARD/data/rwmeetingcache"         "E64 and an unwhitelisted p2 directory"
+exists "$CARD/backup/factory/uImage-system-original" "E65 the fallback kernel survives --remove too"
+
+# ⚠️ The eight NAMED vendor logs must go under --remove as well.
+#
+# `scope /home/root/log` would sweep every one of them, but that scope is in the
+# `sweeps` group and --remove runs without it — so relying on the sweep alone
+# leaves the vendor's logs on a --remove'd device, which the heredoc --remove used
+# to be did not. Measured: deleting those eight rules and relying on the sweep
+# fails ZERO cases before these four exist, and the C11 plan diff was the only
+# thing that caught it. A gap a one-off migration script finds and the regression
+# suite does not is a gap that comes back.
+gone "$CARD/log/browser.err"        "E66 --remove deletes the named vendor logs, not just the sweep"
+gone "$CARD/log/Xorg.0.log"         "E67 including Xorg's"
+gone "$CARD/log/jetty_logs"         "E68 and Jetty's log directory"
+gone "$CARD/log/networkmngr.err"    "E69 and the network regenerator's"
+exists "$CARD/log/messages"         "E70 but syslog's own messages still survives --remove"
+assert_eq "" "$(cat "$CARD/log/messages")" "E71 and was truncated instead of unlinked"
+
+REMOVE_DELS=$(printf '%s\n' "$REMOVE_OUT" | grep -c 'delete\|truncat' || true)
+if [ "$REMOVE_DELS" -gt 15 ]; then
+    ok "E72 --remove reported $REMOVE_DELS deletions — it did not pass by doing nothing"
+else
+    bad "E72 --remove reported only $REMOVE_DELS deletions (expected > 15)"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""

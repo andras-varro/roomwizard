@@ -191,9 +191,9 @@ do_setup_menu() {
         hdr "2. Set up a booted device (ssh)"
         cat <<'MENU'
   a) Standard setup                 disable bloatware, install launcher, reboot
-  b) Setup + remove bloatware       --remove       (deletes ~178 MB, permanent)
+  b) Setup + remove vendor software  --remove       (named stacks, PERMANENT)
   c) Deep clean DRY RUN             --deep-clean --dry-run   (deletes nothing)
-  d) Deep clean                     --deep-clean   (~560 MB more, PERMANENT)
+  d) Deep clean                     --deep-clean   (+ whitelist sweeps, PERMANENT)
   e) Set host name only             --hostname NAME          (no reboot)
   f) Device status                  --status                 (read-only)
   q) Back
@@ -206,7 +206,8 @@ MENU
                bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" || err "Setup failed."
                pause ;;
             b) ask_target || { pause; continue; }
-               warn "--remove DELETES vendor files. It cannot be undone without reflashing."
+               warn "--remove DELETES the Steelcase software, including the 472 MB"
+               warn "on-device factory restore. Recovery is your host-side card image."
                confirm "Proceed with --remove on $TARGET?" \
                    && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --remove || err "Setup failed."; } \
                    || warn "Skipped."
@@ -216,8 +217,9 @@ MENU
                    || err "Dry run failed."
                pause ;;
             d) ask_target || { pause; continue; }
-               warn "Deep clean is PERMANENT and includes the 474 MB on-device"
-               warn "factory restore image. Run option (c) first if you have not."
+               warn "Deep clean is PERMANENT: --remove plus every path in /etc/rc*.d,"
+               warn "/opt and the data partitions that the keep-list does not name."
+               warn "Run option (c) first if you have not."
                confirm "Really deep-clean $TARGET?" \
                    && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
                    || warn "Skipped."

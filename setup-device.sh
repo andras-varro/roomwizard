@@ -101,16 +101,24 @@ usage() {
     echo "       $0 <target> --hostname NAME"
     echo ""
     echo "  <target>          Device IPv4 address, or a host name (e.g. rw09.local)"
-    echo "  --remove          Also remove vendor bloatware files (~178 MB freed)"
-    echo "  --deep-clean      --remove PLUS extended cleanup (~560 MB more)."
-    echo "                    Includes the 474 MB on-device factory restore image."
-    echo "                    See IMPROVEMENT_PLAN.md and the warnings it prints."
+    echo "  --remove          Delete the named vendor software stacks (~178 MB +"
+    echo "                    the 472 MB factory-restore payload)."
+    echo "  --deep-clean      --remove PLUS the whitelist sweeps: anything in"
+    echo "                    /etc/rc*.d, /opt or the data partitions that the"
+    echo "                    keep-list does not name. ~560 MB more."
+    echo "                    Both read device-files/clean-rules.conf; the only"
+    echo "                    difference is the 'sweeps' group."
+    echo "                    Both ask for a full-card backup first. Neither is"
+    echo "                    reversible on the device — the restore payload goes."
     echo "  --status          Show device status only (no changes)"
-    echo "  --dry-run         With --deep-clean: list what would be deleted, delete nothing"
-    echo "  --keep-<group>    With --deep-clean: leave one stack on disk. Groups:"
+    echo "  --dry-run         With --remove or --deep-clean: list what would be"
+    echo "                    deleted, delete nothing"
+    echo "  --keep-<group>    Leave one stack on disk. Groups:"
     echo "                    $(rw_clean_optional_groups)"
     echo "                    Files only — it does not re-enable a boot link, because"
     echo "                    the rc*.d whitelist is what removes an unknown service."
+    echo "                    --keep-factory keeps the 472 MB restore payload;"
+    echo "                    --keep-sweeps turns --deep-clean into --remove."
     echo "  --hostname NAME   Set the device host name only, and exit. No reboot."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
     exit 1
@@ -230,12 +238,12 @@ fi
 # address and a DNS name. A second, weaker check used to sit here; it was
 # unreachable, and deleting it is what makes `rw09.local` usable.
 
-# --deep-clean implies --remove
+# --deep-clean is --remove plus the `sweeps` group, and both are one call to
+# run_clean. It no longer rewrites FLAG to "--remove": that mattered when the two
+# were separate mechanisms running in sequence, and now it would run the clean
+# twice.
 DEEP_CLEAN=0
-if [[ "$FLAG" == "--deep-clean" ]]; then
-    DEEP_CLEAN=1
-    FLAG="--remove"
-fi
+[[ "$FLAG" == "--deep-clean" ]] && DEEP_CLEAN=1
 
 
 # ── deep clean ──────────────────────────────────────────────────────────────
@@ -265,10 +273,18 @@ fi
 #   /usr/lib/perl5        2.5 MB - grep for #!/usr/bin/perl shebangs first
 #   /opt/sbin/*           1.4 MB - kept deliberately; the reference material
 #                                  SYSTEM_ANALYSIS.md 3.5 was read out of
-run_deep_clean() {
+run_clean() {
+    local mode="$1" title base_groups groups g confirm2
+
+    case "$mode" in
+        remove) title="Remove Vendor Software"; base_groups="$(rw_clean_remove_groups)" ;;
+        deep)   title="Deep Clean";             base_groups="$(rw_clean_default_groups)" ;;
+        *)      err "run_clean: unknown mode '$mode'" ;;
+    esac
+
     echo ""
     echo "════════════════════════════════════════"
-    echo " Deep Clean"
+    echo " $title"
     echo "════════════════════════════════════════"
 
     [[ -f "$CLEAN_RULES" ]] || err "missing $CLEAN_RULES"
@@ -277,51 +293,63 @@ run_deep_clean() {
         err "device-files/clean-rules.conf does not validate — refusing to clean"
     fi
 
-    local groups="base" g
-    for g in $(rw_clean_optional_groups); do
+    # The enabled set is the mode's group list minus every --keep-<group>. `base`
+    # can never be in KEEP_GROUPS: the argument parser only accepts the names
+    # rw_clean_optional_groups lists, and base is not one of them.
+    groups=""
+    for g in $base_groups; do
         case " $KEEP_GROUPS " in
             *" $g "*) ;;
             *) groups="$groups $g" ;;
         esac
     done
     [[ -n "$KEEP_GROUPS" ]] && info "Keeping:$KEEP_GROUPS"
+    info "Groups:$groups"
 
-    DEL_FACTORY=0
+    # ── The gate: asked once, asked FIRST, and about the backup ──────────────
+    #
+    # Same question and same wording as commission-offline.sh's phase 0, because it
+    # is the same precondition. There is no per-flag opt-out to soften it with: a
+    # user who cleans a unit of its vendor software has made a decision, and the
+    # recovery path for that decision is a host-side card image, not a switch here
+    # (IMPROVEMENT_PLAN.md C11). The device has no serial console, so a failed boot
+    # yields no diagnostics at all (SYSTEM_ANALYSIS.md#312-serial-ports).
     if [[ "$DRY_RUN" == "--dry-run" ]]; then
         warn "DRY RUN — nothing will be deleted"
-        DEL_FACTORY=1   # so the dry run shows the factory images too
         confirm2="yes"
     else
-        warn "This permanently deletes ~85 MB of rootfs + data-partition files."
-        read -p "Continue? (yes/no): " confirm2
-
-        if [[ "$confirm2" == "yes" ]]; then
-            echo ""
-            warn "OPTIONAL: also delete the 474 MB on-device factory restore image"
-            warn "  (/home/root/backup/factory/*.img + .tar.gz, dated Jan 2022)"
-            warn "  This removes the device's SELF-restore capability. Recovery would"
-            warn "  then require pulling the SD card and dd-ing your host-side backup."
-            warn "  PRECONDITION: verify roomwizard.img on this host is intact FIRST."
-            read -p "  Delete factory images too? (yes/no): " confirm_factory
-            [[ "$confirm_factory" == "yes" ]] && DEL_FACTORY=1
+        warn "This removes the Steelcase software from this device: the vendor"
+        warn "services, their data and configuration, and — unless --keep-factory —"
+        warn "the 472 MB on-device factory-restore payload."
+        warn ""
+        warn "The original RoomWizard functionality does not come back afterwards,"
+        warn "and the device's own restore mechanism goes with it. The 5 MB fallback"
+        warn "kernel is kept either way; p1 is never touched."
+        warn ""
+        warn "PRECONDITION: a full-card image backup exists somewhere other than"
+        warn "this card. Recovery from a bad boot means dd-ing it back."
+        read -r -p "  Do you have that backup? (yes/no): " confirm2
+        if [[ "$confirm2" != "yes" ]]; then
+            echo "  Make one first: pull the card, then"
+            echo "    sudo dd if=/dev/sdX of=card.img bs=4M status=progress"
+            info "Clean cancelled"
+            return 0
         fi
     fi
-    [[ "$DEL_FACTORY" == "1" ]] && groups="$groups factory"
 
-    if [[ "$confirm2" == "yes" ]]; then
-        # Compiled on the HOST, where the parser lives, and shipped as a plan the
-        # device only has to interpret. That way the device needs neither bash nor
-        # a copy of the rules, and there is exactly one implementation of "which
-        # groups are on" and "what a disabled group protects".
-        local plan
-        plan=$(mktemp)
-        rw_clean_plan "$CLEAN_RULES" "$groups" > "$plan" \
-            || { rm -f "$plan"; err "could not compile the clean plan"; }
-        info "$(grep -c '^del' "$plan") delete(s), $(grep -c '^sweep' "$plan") sweep(s), $(grep -c '^keep' "$plan") protected path(s)"
-        ssh "$DEVICE" "cat > /tmp/rw-clean-plan" < "$plan"
-        rm -f "$plan"
+    # Compiled on the HOST, where the parser lives, and shipped as a plan the
+    # device only has to interpret. That way the device needs neither bash nor
+    # a copy of the rules, and there is exactly one implementation of "which
+    # groups are on" and "what a disabled group protects".
+    local plan
+    plan=$(mktemp)
+    rw_clean_plan "$CLEAN_RULES" "$groups" > "$plan" \
+        || { rm -f "$plan"; err "could not compile the clean plan"; }
+    info "$(grep -c '^del' "$plan") delete(s), $(grep -c '^sweep' "$plan") sweep(s), $(grep -c '^keep' "$plan") protected path(s)"
+    ssh "$DEVICE" "cat > /tmp/rw-clean-plan" < "$plan"
+    rm -f "$plan"
 
-        ssh "$DEVICE" "DRY='$DRY_RUN' sh -s" <<'REMOTE'
+    ssh "$DEVICE" "DRY='$DRY_RUN' sh -s" <<'REMOTE'
 PLAN=/tmp/rw-clean-plan
 before_root=$(df -k /            | tail -1 | awk '{print $3}')
 before_data=$(df -k /home/root/data   2>/dev/null | tail -1 | awk '{print $3}')
@@ -388,11 +416,26 @@ awk -F'\t' '$1 == "truncate" { print $2 }' "$PLAN" | while read -r p; do
     fi
 done
 
-# Not a deletion, so it is not in the data file: an EDIT of a config file, which
-# the four record types cannot express and which has no offline equivalent worth
-# having (the tty4 getty costs 1.4 MB of RSS on a running device only).
+# Not deletions, so they are not in the data file: in-place EDITS of a config
+# file, which the four record types cannot express. Both move to the provision
+# plan's `dropline` records in the next commit, which is what gets them an offline
+# equivalent too — today they exist only on this path.
 echo ""
-echo "-- inittab: drop the pointless tty4 getty (~1.4 MB RSS) --"
+echo "-- config files that reference what we just deleted --"
+# /etc/profile:36 is `. /home/root/data/websign/wsplatform.conf`, and the clean
+# deletes websign/ (half the D7b fix). Measured in both card captures. Left behind,
+# every login prints an error for a file that is never coming back.
+if grep -q 'wsplatform\.conf' /etc/profile 2>/dev/null; then
+    if [ -n "$DRY" ]; then
+        echo "  would remove the wsplatform.conf source line from /etc/profile"
+    else
+        sed -i '/wsplatform\.conf/d' /etc/profile
+        echo "  /etc/profile no longer sources the deleted wsplatform.conf"
+    fi
+fi
+
+# The tty4 getty costs 1.4 MB of RSS on a running device and serves nothing —
+# there is no serial console (SYSTEM_ANALYSIS.md#312-serial-ports).
 if grep -q '^4:12345:respawn:/sbin/getty 38400 tty4' /etc/inittab 2>/dev/null; then
     if [ -n "$DRY" ]; then
         echo "  would remove tty4 getty line from /etc/inittab"
@@ -421,13 +464,10 @@ if [ -z "$DRY" ]; then
     df -h / /home/root/data /home/root/backup 2>/dev/null
 fi
 REMOTE
-        if [[ "$DRY_RUN" == "--dry-run" ]]; then
-            ok "Dry run complete — nothing was deleted"
-        else
-            ok "Deep clean complete"
-        fi
+    if [[ "$DRY_RUN" == "--dry-run" ]]; then
+        ok "Dry run complete — nothing was deleted"
     else
-        info "Deep clean cancelled"
+        ok "$title complete"
     fi
 }
 
@@ -443,10 +483,15 @@ ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
     || err "Cannot reach $DEVICE — check IP and SSH key"
 ok "SSH OK"
 
-# ── dry-run: report the deep clean and exit WITHOUT running setup or rebooting ──
+# ── dry-run: report the clean and exit WITHOUT running setup or rebooting ──
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
-    [[ "$DEEP_CLEAN" == "1" ]] || err "--dry-run is only supported together with --deep-clean"
-    run_deep_clean
+    if [[ "$DEEP_CLEAN" == "1" ]]; then
+        run_clean deep
+    elif [[ "$FLAG" == "--remove" ]]; then
+        run_clean remove
+    else
+        err "--dry-run needs --remove or --deep-clean — there is nothing else to preview"
+    fi
     echo ""
     info "Dry run only — no setup performed, device not rebooted."
     exit 0
@@ -697,102 +742,26 @@ echo "  X11:      $(du -sh /usr/share/X11 2>/dev/null | awk '{print $1}' || echo
 echo "  SNMP:     $(du -sh /usr/share/snmp 2>/dev/null | awk '{print $1}' || echo 'removed')"
 REMOTE
 
-if [[ "$FLAG" == "--remove" ]]; then
-    echo ""
-    warn "File removal mode — this will delete bloatware files (PERMANENT)"
-    read -p "Continue? (yes/no): " confirm
-    
-    if [[ "$confirm" == "yes" ]]; then
-        info "Removing bloatware files..."
-        ssh "$DEVICE" bash <<'REMOTE'
-cat > /home/root/bloatware-removed.txt <<EOF
-Bloatware removed on $(date)
-- /opt/jetty-9-4-11 (43 MB)
-- /opt/openjre-8 (93 MB)
-- /opt/hsqldb (3.5 MB)
-- /usr/share/cjkfont (31 MB)
-- /usr/share/X11 (5.2 MB)
-- /usr/share/snmp (2.5 MB)
-Total freed: ~178 MB
-EOF
-rm -rf /opt/jetty-9-4-11 /opt/jetty /opt/openjre-8 /opt/java /opt/hsqldb
-rm -rf /usr/share/cjkfont /usr/share/X11 /usr/share/snmp
-
-# Additional Steelcase artifacts and data
-# /opt/pv02 (44 KB) is KEPT from 2026-08-05: it is one of rw_is_rootfs's identity
-# markers and a hardware reference, and device-files/clean-rules.conf keeps it
-# with that reason. An `rm -rf /opt/pv02` here would have contradicted the data
-# file the deep clean below reads — two lists in one script is exactly the drift
-# that file exists to prevent.
-# NOTE: /opt/sound (113 KB) is deliberately KEPT - it holds three usable UI WAVs
-# (asl_click.wav, asl_error.wav, asl_success.wav) that are directly useful as
-# launcher/game feedback sounds via common/audio.c. Cheap to keep.
-rm -f /home/root/sqltool.rc 2>/dev/null
-rm -rf /home/root/data/websign 2>/dev/null
-
-# Clean shell profile references to deleted Steelcase configs
-# (wsplatform.conf sourced in /etc/profile causes login errors)
-sed -i '/wsplatform\.conf/d' /etc/profile 2>/dev/null
-rm -rf /home/root/data/rwdb 2>/dev/null
-rm -rf /home/root/data/conctest 2>/dev/null
-# BUGFIX 2026-07-29: this used to be `rm -rf /home/root/data/cron`, which is
-# DESTRUCTIVE - /var/cron/tabs/root is a SYMLINK into that directory, so deleting
-# it destroys the root crontab and cron's spool root. Truncate the 79 MB log
-# instead (it has been accumulating since 2017). --deep-clean truncates the
-# crontab itself as well, and keeps cron running.
-[ -f /home/root/data/cron/log ] && : > /home/root/data/cron/log
-rm -rf /home/root/backup/websigns 2>/dev/null
-rm -f /var/crontab.steelcase.bak 2>/dev/null
-
-# Steelcase service configs
-rm -f /etc/vsftpd.conf 2>/dev/null
-rm -rf /etc/nullmailer 2>/dev/null
-rm -rf /etc/snmp 2>/dev/null
-rm -rf /var/lib/net-snmp 2>/dev/null
-rm -rf /var/lib/nullmailer 2>/dev/null
-rm -rf /var/lib/ntp 2>/dev/null
-
-# Stale logs from Steelcase services
-rm -f /var/log/browser.err 2>/dev/null
-rm -f /var/log/jettystart 2>/dev/null
-rm -rf /var/log/jetty_logs 2>/dev/null
-rm -f /var/log/hsqldbstart 2>/dev/null
-rm -f /var/log/snmp_daemon.log 2>/dev/null
-rm -f /var/log/networkmngr.err 2>/dev/null
-rm -f /home/root/log/Xorg.0.log 2>/dev/null
-rm -f /home/root/log/get_time_from_server.err 2>/dev/null
-rm -f /home/root/log/browser.err 2>/dev/null
-rm -f /home/root/log/jettystart 2>/dev/null
-rm -f /home/root/log/concurrent.log 2>/dev/null
-rm -f /home/root/log/snmp_daemon.log 2>/dev/null
-rm -f /home/root/log/networkmngr.err 2>/dev/null
-rm -rf /home/root/log/jetty_logs 2>/dev/null
-
-# NOTE: RoomWizard-zbgatewayd and wpantools_roomwizard are the 802.15.4 / ZigBee
-# radio tooling. They are KEPT from 2026-07-29 onwards as the protocol reference
-# for device-to-device wireless. The J5/J6 XBee socket is real and empty on every
-# unit we have (see SYSTEM_ANALYSIS.md section 3.12), so this tooling is what a
-# fitted module would be driven with. ~1.3 MB total. Copies also exist in the
-# host-side partitions/ dump, so removing them is recoverable - but keeping them
-# costs almost nothing. --deep-clean removes them.
-
-# Dangerous init scripts - remove entirely (already disabled)
-for svc in vsftpd snmpd nullmailer ntpd webserver jetty browser startautoupgrade webmonitor x11 hsqldb mta.sh; do
-    rm -f "/etc/init.d/$svc" 2>/dev/null
-done
-REMOTE
-        ok "Bloatware files removed (extended cleanup)"
-        warn "Backup list saved to /home/root/bloatware-removed.txt"
-    else
-        info "File removal cancelled"
-    fi
-else
-    info "Bloatware files left in place (use --remove to delete)"
-fi
-
-# ── deep clean (function defined above) ─────────────────────────────────────
+# ── The clean: ONE mechanism, two flags that differ by a group ──────────────
+#
+# --remove and --deep-clean are both `rw_clean_plan` over
+# device-files/clean-rules.conf; the only difference is whether the `sweeps` group
+# is on. --remove used to be ~85 lines of hardcoded `rm -rf` inside an
+# `ssh <<'REMOTE'` heredoc, which restated decisions the data file already records
+# WITH reasons, and had drifted from them in two places: it deleted
+# /home/root/log/concurrent.log (syslogd holds it open — unlinking it live leaves
+# syslogd writing to an unlinked inode) and it carried its own keep-comments for
+# /opt/pv02 and /opt/sound. A comment inside it said so outright.
+#
+# Every path it named is either a rule in that file, covered by a sweep, or
+# recorded there as a deliberate omission — see its "Three deliberate differences"
+# header. IMPROVEMENT_PLAN.md C11.
 if [[ "$DEEP_CLEAN" == "1" ]]; then
-    run_deep_clean
+    run_clean deep
+elif [[ "$FLAG" == "--remove" ]]; then
+    run_clean remove
+else
+    info "Vendor software left in place (use --remove or --deep-clean)"
 fi
 
 # ── Status summary ──────────────────────────────────────────────────────────

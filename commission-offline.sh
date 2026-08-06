@@ -125,11 +125,13 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      Nothing is mounted or unmounted; no root needed.
   --dry-run          Resolve and print everything, change nothing.
   --no-clean         Install only, clean nothing.
-  --delete-factory   Also delete the 472 MB on-device restore payload.
   --keep-<group>     Leave one vendor stack on disk. Groups:
                      $(rw_clean_optional_groups)
                      Files only — it does not re-enable a boot link, because the
                      rc*.d whitelist is what removes an unknown vendor service.
+                     --keep-factory keeps the 472 MB on-device restore payload,
+                     which is otherwise deleted like the rest of the vendor stack.
+  --delete-factory   Accepted and now redundant: that is the default.
   --arm-check=skip   Install binaries this host cannot verify. Say why to
                      yourself first; the message it replaces explains the risk.
   --help
@@ -148,7 +150,7 @@ while [[ $# -gt 0 ]]; do
         --base)           BASE="${2:-}";   [[ -n "$BASE" ]]   || { echo "--base needs a value"; usage; };   shift 2 ;;
         --dry-run)        DRY=1; shift ;;
         --no-clean)       DO_CLEAN=0; shift ;;
-        --delete-factory) DEL_FACTORY=1; shift ;;
+        --delete-factory) DEL_FACTORY=1; shift ;;   # a no-op since 2026-08-06; see below
         --arm-check=skip) ARM_CHECK="skip"; shift ;;
         --keep-*)
             g="${1#--keep-}"
@@ -183,6 +185,12 @@ if [[ -z "$DRY" ]]; then
     warn "This rewrites the card: root password, host name, network, and a"
     warn "whitelist cleanup that deletes every vendor service it does not"
     warn "recognise. p1 is never touched, so a power cycle undoes nothing else."
+    warn ""
+    warn "The Steelcase software does not come back afterwards. That includes the"
+    warn "472 MB on-device factory-restore payload, which is deleted with the rest"
+    warn "of the vendor stack — it would only restore software whose start-up this"
+    warn "same clean removes. --keep-factory opts out. The 5 MB fallback kernel is"
+    warn "kept either way."
     warn ""
     warn "PRECONDITION: a full-card image backup exists somewhere other than"
     warn "this card. Recovery from a bad boot means dd-ing it back."
@@ -429,16 +437,21 @@ else
         echo "$CHECK"
         err "device-files/clean-rules.conf does not validate"
     fi
-    CLEAN_GROUPS="base"
-    for g in $(rw_clean_optional_groups); do
+    # Every group in the default set, minus each --keep-<group>. `factory` is in
+    # that default set as of 2026-08-06 (IMPROVEMENT_PLAN.md C11): cleaning a unit
+    # of its vendor software is a decision, and the payload that would undo it is
+    # 472 MB restoring a stack whose start-up mechanism this same clean removes.
+    # --keep-factory is the opt-out; the phase-0 backup question is the gate.
+    CLEAN_GROUPS=""
+    for g in $(rw_clean_default_groups); do
         case " $KEEP_GROUPS " in
             *" $g "*) ;;
             *) CLEAN_GROUPS="$CLEAN_GROUPS $g" ;;
         esac
     done
-    [[ "$DEL_FACTORY" -eq 1 ]] && CLEAN_GROUPS="$CLEAN_GROUPS factory"
+    [[ "$DEL_FACTORY" -eq 1 ]] && info "--delete-factory is the default now; no need to pass it"
     [[ -n "$KEEP_GROUPS" ]] && info "Keeping:$KEEP_GROUPS"
-    info "Groups: $CLEAN_GROUPS"
+    info "Groups:$CLEAN_GROUPS"
 
     PLAN="$TMPROOT/clean.plan"
     [[ -n "$TMPROOT" ]] || { TMPROOT=$(mktemp -d /tmp/rw-bundle.XXXXXX); PLAN="$TMPROOT/clean.plan"; }

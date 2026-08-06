@@ -106,8 +106,9 @@ cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 knowing without looking them up: **`set-default` is the only mode `native_apps/build-and-deploy.sh`
 accepts** (anything else is rejected rather than ignored), and **cleanup, bloatware removal and the
 boot service all live in `setup-device.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
-NAME` — never in a component script. `--deep-clean` reads its decisions from
-`device-files/clean-rules.conf`, the same file `commission-offline.sh` uses.
+NAME` — never in a component script. **Both `--remove` and `--deep-clean` read their decisions from
+`device-files/clean-rules.conf`**, the same file `commission-offline.sh` uses, and differ from each
+other only by that file's `sweeps` group.
 
 ### Bundles: one layout, declared modes, no configs
 
@@ -162,19 +163,36 @@ having to justify it. `rw-clean.sh` parses it and compiles it into a plan; each 
 - **`scope` is a whitelist sweep**, which is what makes an unrecognised vendor service on a unit nobody
   has inspected removed *by construction*. It never recurses, so a kept directory's contents are never
   examined.
+- **`--remove` and `--deep-clean` are one mechanism differing by one group.** All nine `scope` records
+  are in the `sweeps` group, so `--remove` is exactly `--deep-clean --keep-sweeps`: the named vendor
+  stacks go, and a path no `keep` names stays. `--remove` used to be ~85 lines of hardcoded `rm -rf`
+  inside an `ssh <<'REMOTE'` heredoc.
+- ⚠️ **A rule the sweeps would cover anyway may still need to be named.** The eight vendor logs under
+  `/home/root/log` are named explicitly *and* swept, because the sweep is in `sweeps` and `--remove`
+  runs without it. Dropping them looks safe against `--deep-clean`'s plan and loses them from
+  `--remove`'s — which is why a fold must be checked against **both** plans, not the default one.
+- ⚠️ **The whole vendor stack goes by default, factory-restore payload included.** `--keep-factory` is
+  the only opt-out, and the gate is the full-card-backup question every bring-up path asks first. The
+  reasoning is in the rules file: the payload restores software whose start-up this same clean removes,
+  so keeping it preserves only the ability to undo a commissioning it can no longer perform. Do not
+  reintroduce a middle setting.
 - ⚠️ **A DISABLED group's paths are protected from every sweep**, not merely skipped by their own
   `delete` line — otherwise `--keep-java` leaves `/opt/openjre-8` named by a delete nobody runs and the
-  `/opt` sweep removes it anyway. What `--keep-<group>` does *not* do is re-enable a boot link.
+  `/opt` sweep removes it anyway. What `--keep-<group>` does *not* do is re-enable a boot link. Note the
+  `keep` records deliberately stay in group `base`: a disabled group's keeps are *dropped*, so filing
+  them under `sweeps` would silently unprotect all sixty.
 - ⚠️ **`rw_clean_validate` rejects a rules file that names `rc0.d` or `rc6.d`.** They are shutdown, not
   startup — `umountfs`, `sendsigs`, `save-rtc.sh` — so they are unreachable by construction, the same
   guarantee as p1's absence from `RW_PART_ROLES`.
 - **A glob is allowed only in the last path component.** `rw_clean_del` quotes the directory part so a
   base containing a space still resolves, which means a mid-path glob would be taken literally and the
   rule would silently match nothing. Validation refuses it.
-- Regression: `tests/rw_clean_test.sh` (116 cases, host-only, no card, no root). The fixture is
+- Regression: `tests/rw_clean_test.sh` (148 cases, host-only, no card, no root). The fixture is
   **synthetic, with real symlinks** — `partitions/` and `partitions.new/` cannot be it, see *Working
-  from this host*. Measured against deliberately broken copies: a guardless `del()` fails 11, ignoring
-  `scope` fails 11, dropping the disabled-group protection fails 3.
+  from this host*. `tests/measure_sabotage.sh` re-measures it against six deliberately broken copies
+  and prints the counts its header claims; the sabotages are in a file because a `sed` pattern with
+  `\t` in it does not survive `wsl.exe -e bash -lc` quoting, and one that fails to apply reports
+  "0 failed" — indistinguishable from a suite that cannot detect the breakage.
 
 ### Offline commissioning verifies what it installed, on the card
 

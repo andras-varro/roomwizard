@@ -46,18 +46,39 @@
 RW_CLEAN_TYPES="scope keep delete truncate"
 
 # Every group name the file may use.  `base` is mandatory and always enabled.
-RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras factory"
+RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras factory sweeps"
 
-# Enabled unless the caller says otherwise.  `factory` is absent on purpose: it
-# removes the device's own restore capability, so it is opt-in (a prompt, or
-# --delete-factory) rather than opt-out.
-RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras"
+# ── Enabled unless the caller says otherwise: ALL of them ────────────────────
+#
+# ⚠️ `factory` is in here, and that is the 2026-08-06 reversal of an earlier
+# opt-in.  Choosing to clean a unit of its vendor software is a DECISION, and it
+# is not meant to be reversible by a button press.  The clean disables the
+# factory-reset mechanism anyway, so the 472 MB payload that survives it retains
+# only the ability to undo a commissioning it can no longer actually perform.
+# The gate is the host-side full-card backup, which is asked for once and up
+# front — a strictly better recovery path than the on-device one.
+# `--keep-factory` is the deliberate opt-out.  IMPROVEMENT_PLAN.md C11.
+RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"
 
 # The ones --keep-<name> can switch off.  `base` is not among them.
-RW_CLEAN_GROUPS_OPTIONAL="browser java snmp mail extras"
+RW_CLEAN_GROUPS_OPTIONAL="browser java snmp mail extras factory sweeps"
+
+# ── What --remove is ────────────────────────────────────────────────────────
+#
+# A NAMED GROUP SUBSET of the same plan, not a second implementation: everything
+# except the whitelist sweeps.  So --remove means "delete the vendor stacks we
+# have named" and --deep-clean means "and anything the whitelist does not name",
+# which is exactly the difference the two flags always claimed to have — it just
+# used to be spelled as ~85 lines of hardcoded `rm -rf` in an ssh heredoc.
+#
+# It is identical to `--deep-clean --keep-sweeps`, and that is the whole
+# implementation.  Note that it does NOT soften the factory default: one default
+# across every flag, per above.
+RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"
 
 rw_clean_default_groups()  { echo "$RW_CLEAN_GROUPS_DEFAULT"; }
 rw_clean_optional_groups() { echo "$RW_CLEAN_GROUPS_OPTIONAL"; }
+rw_clean_remove_groups()   { echo "$RW_CLEAN_GROUPS_REMOVE"; }
 
 # ---------------------------------------------------------------------------
 # rw_clean_rules_file
