@@ -36,7 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **First boot of an offline-commissioned unit** — SSH reachable without an IP hunt, launcher grid, one game, sound, touch | one boot + ~5 min | nothing — the tool is built and host-tested, [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card). This is Unit A |
+| 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: [B26](#b26-the-backlight-is-dimmer-than-under-vendor-firmware--open-confirmed-2026-08-06) and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -76,7 +76,45 @@ reference recording.
 lists no AdLib at all. So this needs an OPL-capable game added first. Adding one works and persists:
 `Add Game...` is a touch file browser and the entry lands in `/opt/games/scummvm.ini`.
 
-### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-03
+### B26. The backlight is dimmer than under vendor firmware — open, confirmed 2026-08-06
+
+**Symptom, observed on `rwtest` (192.168.50.225):** after offline commissioning the panel is visibly
+dimmer than the same class of unit running stock firmware. Not seen before the clean.
+
+**A cause chain read out of the captured vendor tree — a hypothesis, so measure before fixing:**
+
+1. `/etc/init.d/browser:77` called `/opt/sbin/backlight/adjustbklight.sh` on every boot.
+2. That family (`setbacklight.sh`) reads `/home/root/data/websign/brightness.conf` and writes the value
+   to `/sys/class/leds/backlight/brightness`, **defaulting to 100** when the file is empty or absent.
+3. Our clean deletes **both** ends of that: `/etc/init.d/browser` (the caller) and `websign/` (the
+   stored level, D7b's input).
+4. So nothing writes `brightness` at boot any more and the panel sits at the driver's power-on default.
+
+⚠️ **`/opt/sbin` is kept, so `/opt/sbin/backlight/*` still exists on the card** — but do not simply call
+it: it depends on `websign/brightness.conf`, which we delete on purpose. Note also that a *dim but
+working* panel means the deletion removed a **setter**, not a driver.
+
+**Measure first, on the unit, cheaply and over SSH:**
+
+```sh
+cat /sys/class/leds/backlight/brightness /sys/class/leds/backlight/max_brightness
+echo 100 > /sys/class/leds/backlight/brightness      # does it brighten?
+```
+
+If it brightens, the cause is confirmed and the fix is a setter in **our** boot path — a
+`device-files/` init script alongside `audio-enable` and `time-sync`, so the panel is bright from boot
+rather than only once an app runs. `common/hardware.c` already drives this sysfs node, so an app-level
+set is the weaker option. If it does *not* brighten, the cause is elsewhere and this entry is wrong.
+
+### B27. `sfdisk` absence is reported as a test failure, not a skip — open, confirmed 2026-08-06
+
+`tests/rw_identify_test.sh:363-369` guards the real-card-image cases on **file presence** but not on
+the **tool**, so on a host without `sfdisk` both report `expected yes, got no` — a red failure for
+something the harness could not measure. The synthetic block at `:169` gets this right and skips. This
+is the "which part of the count is the harness" trap from `CLAUDE.md` → *Working style*, and it fires
+on this dev host today because the ARM toolchain and `util-linux` are both absent from WSL.
+
+Fix: skip with the reason, and account for it in `MIN_CASES` so a skip cannot silently shrink coverage.
 
 `set-hostname.sh` and the avahi link have shipped, so a named unit answers to `<name>.local` from
 Windows. Two pieces of residue:
@@ -115,10 +153,11 @@ straight after commissioning shows the revert.
 
 **What remains open is the SSH flow only.** Two of the three fixes are in:
 
-1. **Ordering — done, in [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card).**
+1. **Ordering — done, in [F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06).**
    `commission-offline.sh` names the card and deletes both `websign` and the `rcS.d/S60networkmanager`
    link in the same offline pass, so no boot happens in between, and its verify pass fails if either
-   survives. That removes the window rather than patching it. Untested against a real card.
+   survives. That removes the window rather than patching it. **Confirmed on real hardware 2026-08-06:**
+   a unit commissioned as `rwtest` booted with its name intact and answered on the network.
 2. **STILL OPEN, for the SSH flow, which keeps the vendor stack:** `set-hostname.sh` must also write
    `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
    (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
@@ -147,7 +186,7 @@ Two candidate causes, neither measured: the boot-time run is not happening (that
 `disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
 every 4 h) sweeps it.
 
-⚠️ **[F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) now
+⚠️ **[F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) now
 `touch`es it offline anyway**, and says out loud that it is belt and braces only. That is defensible
 because the same pass truncates the vendor crontab — which is what would have scheduled `watchdog.sh` in
 the first place — but it does mean the offline tool places a file that something on the device may
@@ -300,12 +339,13 @@ inside an `ssh … <<REMOTE` heredoc are gone, so a manifest can no longer diffe
 
 - **`--from-release <tag>` on `deploy-all.sh` and the per-component scripts**, which is what makes the
   release useful to the *existing* SSH flow. Nothing of this is written yet.
-- **The publish step has never run.** `gh` is installed in neither WSL nor Windows, so
-  `./release.sh --tag <tag>` is unexercised code; `--stage-only` is the tested path. `origin` is
-  `git@github.com-personal:…` — an SSH host alias — so whoever publishes needs `gh auth` for that
-  account.
+- **The publish step has never run**, though it is now reachable: `gh` 2.86.0 is installed in WSL from
+  the release `.deb` (focal's apt has no `gh`, and the snap links against a glibc newer than 2.31).
+  `origin` is `git@github.com-personal:…` — an SSH host alias — so whoever publishes needs `gh auth`
+  for that account, and `gh` may need `--repo andras-varro/roomwizard` because it resolves the owner
+  from the remote URL.
 - **`usb_host` is excluded by design**, not by omission: it patches `uImage-system` on p1, and
-  [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) must not touch p1.
+  [F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) must not touch p1.
 
 Design, so it does not have to be re-derived:
 
@@ -331,7 +371,7 @@ Two caveats to record before anyone tries it:
   refuses — the negative control for a future component that forgets, rather than a rule each component
   is trusted to remember.
 
-**[F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) depends on this one** — an
+**[F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) depends on this one** — an
 offline commissioner has no toolchain to fall back on, so the release *is* its only source of
 binaries. Two obligations that only bite once artifacts are published: ScummVM is GPLv2+, so a binary
 needs the corresponding-source offer, and `vnc_client`'s dependency licences need a pass. Both are now
@@ -340,7 +380,7 @@ checked by anyone qualified to say so.
 
 ---
 
-### F10. Single-pass offline commissioning — **built 2026-08-05**, not yet run against a card
+### F10. Single-pass offline commissioning — **done 2026-08-05**, confirmed on a unit 2026-08-06
 
 **`commission-offline.sh` exists and does the whole job.** The card goes into a reader, the operator
 answers two questions, the card goes back, and the device should boot working. What has **not**
@@ -404,8 +444,10 @@ explicitly not a motive: p6 has 474 MB free before anything is deleted
 - **Keep inert vendor artifacts** — `/opt/{sbin,pv02,sound}`, `perl5/`, the ZigBee tooling. Once
   nothing starts them they cost nothing, and reading them is how
   [§3.5](SYSTEM_ANALYSIS.md#35-network-and-power) was established.
-- **The upgrade payload is a `factory` group, off by default** — it removes the device's own restore
-  capability, so it is opt-in rather than opt-out. `factory/uImage-system-original` is kept either way.
+- **The upgrade payload is a `factory` group.** Today it is off by default and `--delete-factory` opts
+  in; that default is **reversed by
+  [C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)**, which is where the reasoning lives.
+  `factory/uImage-system-original` is kept either way.
 - ⚠️ **`--keep-<group>` protects that group's paths from every sweep, not just from its own delete
   lines.** Without that rule the `/opt` whitelist would remove `/opt/openjre-8` anyway and the flag
   would do nothing and say nothing. What it does *not* do is re-enable a boot link: the rc\*.d
@@ -431,20 +473,39 @@ mounts in the wrong order. **The one thing not controlled is a binary that reall
 this host's compiler will not emit one for Cortex-A8, so both ways the gate can lie *by omission* are
 controlled instead.
 
+#### Confirmed on hardware 2026-08-06
+
+**A unit was commissioned offline and booted working on the first try.** Card from an uncommissioned
+unit, one pass on a Kubuntu host, card back, one boot: launcher grid, SSH reachable by name, games
+playable, sound. The unit is `rwtest` at `192.168.50.225`, and it has since survived a reboot. Every
+verification in the tool passed on the real card — md5 across 46 installed files, `+x` on 22 (a real
+measurement, impossible on `/mnt/c`), all 9 `.app` manifests resolving, `default-app` → `app_launcher`,
+`dash -n` clean, boot links non-dangling, `websign` gone, host name consistent across three files.
+Run with `--delete-factory`, so the 472 MB on-card restore payload is gone by choice.
+
+ScummVM and `vnc_client` are absent **because the bundle was `native_apps` only** — not a failure.
+Deploy them over SSH, or restage a three-component bundle.
+
 #### What is left
 
-1. **Run it against a card.** Nothing here has touched real hardware: the fixture is
-   `tests/make-fake-card.sh`, and `partitions/`/`partitions.new/` cannot be the fixture because both
-   lost every symlink on the way through Windows and their `rc*.d` are empty directories
-   (`CLAUDE.md` → *Working from this host*).
-2. **Unit A — the agreed list in one shot.** Boot, then verify: SSH reachable, launcher grid, one game,
-   sound, touch. If it passes, that becomes the shipped default.
+1. **`COMMISSIONING.md` can now be a description rather than a plan.** This was deliberately deferred
+   until the tool had commissioned a unit. It still documents the three-phase SSH flow as the primary
+   path; the offline single pass is now the verified one for *delivery*.
+2. **Two bugs the first real run exposed**, neither affecting a card already written:
+   - **The epilogue contradicts the orchestrator.** `commission-roomwizard.sh:479-485` prints
+     `COMMISSIONING.md`'s `NEXT_STEPS` block verbatim, which tells the operator to run
+     `setup-device.sh <ip>` and `deploy-all.sh <ip>` — both of which `commission-offline.sh` has
+     already done in the same pass, and one of which ends in a reboot. A first-time operator is
+     invited to redo the work. Suppress it when orchestrated (an explicit env flag, **not** by
+     sniffing `ROOTFS`, which is a documented standalone escape hatch).
+   - **SSH key setup cannot work under `sudo`.** `commission-roomwizard.sh:323` and `:335` use `$HOME`,
+     which is `/root` under `sudo` — and the offline flow *requires* root to mount, so the operator's
+     `~/.ssh/id_rsa.pub` is never found. Observed 2026-08-06: `~/.ssh/id_rsa.pub` expanded to
+     `/root/.ssh/id_rsa.pub`, "not found", skipped. Resolve `$SUDO_USER`'s home when set.
 3. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
    (no serial console, [§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)); the only post-mortem is mounting
-   p3 offline and reading `messages`, which only helps if it got as far as syslog. That cost is the
-   reason to stop after Unit A unless something specific is being chased.
-4. **`COMMISSIONING.md` is deliberately still the three-phase flow.** Rewriting it before the tool has
-   commissioned a unit would make it a plan rather than a description.
+   p3 offline and reading `messages`, which only helps if it got as far as syslog. Still the reason to
+   stop unless something specific is being chased.
 
 #### Scope boundaries
 
@@ -457,6 +518,161 @@ controlled instead.
   configs (F9's caveat — `/etc/hosts` and the VNC password). ScummVM is GPLv2+, so a published binary
   needs the corresponding-source offer; `vnc_client`'s dependency licences need a pass.
 - **`usb_host` is excluded from every bundle** — it patches `uImage-system` on p1.
+
+---
+
+### F14. Decide whether the boot progress bar comes back — open
+
+**What was lost, and it is not a mystery:** the vendor's boot splash with a progress bar was `psplash`.
+`device-files/clean-rules.conf` deletes `/etc/init.d/psplash` and `/etc/rcS.d/S01psplash` with the
+reason *"Splash screen; it holds `/dev/fb0`"* — a real conflict, since our launcher needs that
+framebuffer. Reported 2026-08-06 as missed but not much missed.
+
+**What survives:** `/usr/bin/psplash`, `psplash-write` and `psplash.psplash-angstrom` are all in
+`/usr/bin`, which nothing sweeps. Only the init script and its `rcS.d` link were removed, so this is a
+*decision*, not a loss.
+
+Two ways to have it back, if wanted:
+
+1. **Restore the link and hand off cleanly.** `psplash` must release `/dev/fb0` before
+   `S99roomwizard-app` starts — `psplash-write QUIT` is the mechanism. The keep-list and the boot-link
+   set would both have to name it, since [C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05)
+   makes a link the whitelist does not name get swept on the next clean.
+2. **Draw our own.** `app_launcher` already owns the framebuffer and there is no fb0 contention at all
+   — a splash drawn by our stack sidesteps the handoff entirely, and can show something honest about
+   what is loading.
+
+Option 2 is the smaller change and cannot regress the boot; option 1 restores exactly what was there.
+Neither is urgent — recorded so the deletion stays a decision with a known cost rather than a surprise.
+
+---
+
+### F15. USB host mode is unreachable from the delivery flow — open, confirmed 2026-08-06
+
+**Symptom:** USB does not work on the offline-commissioned unit (`rwtest`, 192.168.50.225).
+
+**This is by construction, not a regression.** USB host mode needs the `usb_host` component, which
+patches the DTB inside `uImage-system` — and that lives on **p1**, which the offline commissioner must
+never write, because an untouched p1 is what keeps a power cycle a free undo
+([§4.7](SYSTEM_ANALYSIS.md#47-recovery)). `release.sh` therefore excludes `usb_host` from **every**
+bundle, deliberately. So no bundle can ever deliver USB, and nothing in the flow says so.
+
+**Today's only path** is over SSH after the unit boots: `usb_host/build-and-deploy.sh <ip>`. That needs
+the kernel-module build deps (`bc libssl-dev bison flex`) plus `python3`, i.e. a full toolchain host —
+which is exactly what the delivery mode does not have.
+
+The tension is real and this entry is where it gets resolved rather than rediscovered:
+
+- **Say so, cheaply.** `commission-offline.sh`'s closing list and `COMMISSIONING.md` should state that a
+  commissioned unit has no USB host mode and name the one command that adds it. One line each; it
+  removes the surprise without touching the p1 rule.
+- **A patched kernel under a *new* filename on p1 is not the same as overwriting `uImage-system`** —
+  `bootcmd` is hardcoded, so a staged alternative is inert and a power cycle still recovers. Whether the
+  bundle should be allowed to *stage* one, without ever changing what boots, is the open design
+  question. It is not obviously safe: p1 is the one partition absent from `RW_PART_ROLES` precisely so
+  that no caller can reach it, and adding a reason to reach it weakens a guarantee that has held.
+- **Do not fold `usb_host` into a bundle before that is settled.** The exclusion is load-bearing.
+
+---
+
+### F11. One home for the host build prerequisites — open
+
+**Two delivery modes, and only one of them has a toolchain.** *Delivery*: someone clones the repo,
+puts a card in a reader, answers a few questions, puts the card back, and the device works — they may
+never build anything. *Development*: we build and deploy onto an already-clean device. F10 serves the
+first, `deploy-all.sh` the second. This item is about making the second reachable on a fresh machine.
+
+**What exists today: six checks, no installer, and they disagree.**
+[`native_apps/build-and-deploy.sh:127`](native_apps/build-and-deploy.sh#L127),
+[`vnc_client/build-and-deploy.sh:92`](vnc_client/build-and-deploy.sh#L92),
+[`scummvm-roomwizard/build-and-deploy.sh:266`](scummvm-roomwizard/build-and-deploy.sh#L266),
+[`vnc_client/build-deps.sh:146`](vnc_client/build-deps.sh#L146) and
+[`usb_host/build-and-deploy.sh:66`](usb_host/build-and-deploy.sh#L66) each do their own `command -v`
+and print their own hand-written `apt` line — `gcc` only, versus `gcc g++`, versus `+cmake wget tar`.
+None installs anything.
+
+**One asymmetry that is correct and stays:** the *cross-compiled* dependencies already install
+themselves. `build_arm_deps` fetches and builds zlib 1.3.1 + libpng 1.6.43 into
+`scummvm-roomwizard/arm-deps/`, and `vnc_client/build-deps.sh` does zlib / libjpeg-turbo /
+LibVNCServer into its own prefix. Both idempotent, neither needs `sudo`. Only the *host packages* are
+check-and-tell.
+
+**Intent: one `setup-build-env.sh` at the repo root, one `roomwizard.sh` entry, one package set.**
+
+```text
+gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+build-essential cmake wget tar dash          # every component, one set
+python3 python3-pil                          # fb565_to_png.py only
+bc libssl-dev bison flex                     # usb_host kernel modules only
+```
+
+- ⚠️ **Name `binutils-arm-linux-gnueabihf` explicitly** even though the `gcc` package pulls it in.
+  `commission-offline.sh` needs `arm-linux-gnueabihf-objdump` on a host that has **no compiler at
+  all**, and a missing objdump there is a refusal, not a pass.
+- **The component scripts keep their own checks** — they are meant to run standalone — but stop
+  reciting package lists and point at the one script instead. Flagging stays; only the six copies go.
+- **Prompt only when stdin is a TTY**, plus `--install-deps` for scripted use. A blocking `read` would
+  hang `release.sh` and `deploy-all.sh`, which invoke the component scripts non-interactively.
+- Print the exact `apt` command before running it. `apt`-only, with a clean refusal on a non-Debian
+  host rather than a guess.
+- ⚠️ **The ScummVM half is not `apt`, and it is the actual blocker on a fresh clone.** The upstream tree
+  at the repo root is gitignored, so a clone has no `scummvm/`:
+  `git clone https://github.com/scummvm/scummvm.git`, `git checkout branch-2-8`, then
+  `bash manage-scummvm-changes.sh restore`. This WSL sits at `eaccc461` (2024-08-29). An installer that
+  skips this has not solved the problem it exists to solve. `vkeybd_roomwizard.zip` and `scummvm.ppm`
+  *are* tracked, so those come with the clone.
+
+---
+
+### F12. Install from a published release — open
+
+`--bundle` is already `commission-offline.sh`'s single source of binaries and everything downstream is
+origin-agnostic — unpack, `rw_bundle_check`, the ARM gate, install, md5 — so `--release <tag|latest>`
+is a fetch into a temp directory plus a handoff to the existing path. That also removes the
+copy-a-tarball-to-the-commissioning-host step from the delivery mode of
+[F11](#f11-one-home-for-the-host-build-prerequisites--open).
+
+- **Never the default, and the `--help` must say so.** The script is called `commission-offline.sh` and
+  its premise is that no network is required. A stock unit with `net.mode = manual` is unreachable by
+  any other means, which is exactly when there may be no network to hand.
+- ⚠️ **The bundle's `.md5` manifest proves internal consistency, not authenticity.** Nothing is signed.
+  Print the tarball md5 — `release.sh` already prints it at publish time — and compare against the
+  asset digest `gh` reports.
+- `gh release download` preferred, `curl -L` as the fallback for a public repo; auth is needed only if
+  the repo is private.
+- ⚠️ **Untestable until a release exists.** `--tag` has never run
+  ([F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)). Publish one first, then
+  build this against a real asset rather than a hand-made fixture.
+- Distinct from F9's still-open `--from-release <tag>` on `deploy-all.sh`, which serves the SSH
+  development flow rather than the offline one.
+
+---
+
+### F13. Commissioning from Windows without WSL, and from macOS — open, unsolved
+
+The delivery mode of [F11](#f11-one-home-for-the-host-build-prerequisites--open) assumes the operator
+can run the card path. Today that means Linux, or Windows with WSL2. This entry exists so the gap is
+recorded rather than discovered by someone holding a card.
+
+⚠️ **This is not a shell-portability problem, and rewriting `bash` as POSIX `sh` would not touch it.**
+The blocker is the *kernel's* filesystem support: `commission-offline.sh` needs read-write ext4 across
+four partitions, real symlink creation (the `rc*.d` links) and a real `chmod` (the `+x` assertion is a
+measurement precisely because ext4 honours it). No shell dialect supplies any of that.
+
+| Host | Route | Status |
+|---|---|---|
+| Linux | native reader | works; the only fully verified path once Unit A passes |
+| Windows + WSL2 | `wsl --mount \\.\PHYSICALDRIVEn --bare` | the documented path; `wsl --install` is one command |
+| Windows, no WSL | none | no native ext4. Third-party drivers are not something to stake a card on |
+| macOS | Linux VM, or a paid ext4 driver | worse than Windows: no kernel ext4 write support, and `ext4fuse` is read-only |
+
+**The option that would actually deliver all three is a bootable USB commissioner image** — a small
+Linux that boots, finds the card and runs the existing script unchanged. That keeps one implementation
+and moves the portability problem to a boot medium instead of into the script. Substantial new work,
+deliberately not scoped here.
+
+**Interim, and cheap:** state the host requirement plainly in `COMMISSIONING.md` instead of letting the
+instructions imply that any machine with a card reader will do.
 
 ---
 
@@ -607,6 +823,65 @@ play session of somebody's time — which is why that check keeps being postpone
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
 
+### C11. One clean, one mechanism — open, confirmed 2026-08-05
+
+**Three delete policies exist for one job, and two of them are not the data file.** Measured by reading
+the source, not inferred:
+
+| Path | Mechanism | Reads `clean-rules.conf`? |
+|---|---|---|
+| `setup-device.sh --remove` | ~85 lines of hardcoded `rm -rf` inside an `ssh … <<'REMOTE'` heredoc, [setup-device.sh:700-786](setup-device.sh#L700-L786) | **no** |
+| `setup-device.sh --deep-clean` | implies `--remove`, then runs the compiled plan — so **both** mechanisms, in sequence | partly |
+| `commission-offline.sh` | the compiled plan only, always on, `--no-clean` to disable | yes |
+
+The heredoc even carries its own keep-comments for `/opt/pv02`, `/opt/sound` and the ZigBee tooling,
+restating decisions the data file already records with reasons — and a comment inside it says so
+outright: *"two lists in one script is exactly the drift that file exists to prevent."* It is the older
+of the two and nothing has retired it.
+
+**The factory payload diverges the same way:** `setup-device.sh` prompts for it interactively and has
+no flag at all ([setup-device.sh:298-307](setup-device.sh#L298-L307)); `commission-offline.sh` has
+`--delete-factory` and never prompts. Same rules file, two policies.
+
+#### Intent, decided 2026-08-05
+
+**Both delivery and development want the identical clean**, and it should not matter which path ran it.
+The device is being repurposed as a small Linux computer: delete everything the vendor stack needs and
+nothing a normal Linux needs. If something in the vendor image later turns out to be wanted, the fix is
+to edit the rules file — the original card image is the fallback, which is why a full-card backup is
+already a precondition.
+
+1. **`clean-rules.conf` + `rw-clean.sh` become the only mechanism.** Delete the heredoc. Every target of
+   it that is not already a rule becomes one, with a reason in the fourth field.
+2. **`--remove` becomes a named group subset of the same plan**, not a second implementation. It keeps
+   its meaning ("bloatware only") and loses its private list.
+3. ⚠️ **The factory payload is deleted by default; `--keep-factory` opts out.** This **reverses** the
+   current default. The reasoning: that payload restores the vendor stack the clean just removed, so on
+   a commissioned unit it is 472 MB whose only function is to undo the commissioning. The host-side
+   full-card backup is already required and is a strictly better recovery path.
+   `factory/uImage-system-original` — the fallback kernel — stays kept either way.
+4. **Both consumers take the same flags and produce the same effect.** They keep separate *executors*
+   only because `/` is the correct prefix on a device and a refused one offline.
+
+#### Verification
+
+- **Write the failing version first.** `tests/rw_clean_test.sh` C17, C18 and E22 currently assert the
+  *old* factory default; they invert. Compile the new assertions against the pre-change source and
+  count the failures before fixing anything.
+- **The negative control for folding the heredoc is a plan diff**: every path the heredoc removed must
+  appear in the compiled plan, or be deliberately absent with a recorded reason. A fold that silently
+  drops a target looks exactly like a successful one.
+- `tests/commission_offline_test.sh` covers the offline half; `--dry-run` on both paths over the same
+  card should now print the same set of resolved paths, which is the assertion that "one clean" is true
+  rather than merely intended.
+
+#### Sequencing
+
+⚠️ **Land this *after* Unit A** ([F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06)).
+The first real run against real hardware should not also be the first run of a newly inverted
+destructive default: if that boot fails, the 472 MB restore payload having just been deleted is one more
+variable in a post-mortem that already has no serial console. Run Unit A on today's default, then flip.
+
 ---
 
 ## Out of Scope
@@ -638,16 +913,30 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-0. **Boot an offline-commissioned unit** (panel check #5). `commission-offline.sh` is built and
-   host-tested against a synthetic card; nothing in it has touched real hardware. Everything it claims
-   is one boot away from being either confirmed or a bug, and until that boot happens
-   [F10](#f10-single-pass-offline-commissioning--built-2026-08-05-not-yet-run-against-a-card) is a
-   hypothesis with tests.
-1. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
-2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
+0. **[B26](#b26-the-backlight-is-dimmer-than-under-vendor-firmware--open-confirmed-2026-08-06) — the
+   backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
+   `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
+   waiting to be confirmed or refuted.
+1. **[C11](#c11-one-clean-one-mechanism--open-confirmed-2026-08-05).** Three delete policies for one
+   job is the largest live inconsistency in the repo, and one of them is an 85-line heredoc that the
+   data file was created to replace. Small, self-contained, and it makes "the clean is the same either
+   way" true instead of intended. F10 is confirmed on hardware now, so the sequencing caveat that held
+   it back is discharged.
+2. **`COMMISSIONING.md`, and the two bugs the first real run exposed** — F10's *What is left*. The doc
+   can finally be a description; the epilogue and the `$HOME`-under-`sudo` key path are both small.
+3. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
+4. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
    (`--deep-clean`) first if disk space is tight.
-3. **C10 before panel check #2** — it converts a play session into one launch, and every future
+5. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
+
+[F11](#f11-one-home-for-the-host-build-prerequisites--open) is more urgent than it reads: the ARM
+toolchain and `util-linux` are **both absent from this WSL**, so nothing can be built here today and
+[B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-confirmed-2026-08-06) fires as
+a red failure because of it. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
+not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) and
+[F15](#f15-usb-host-mode-is-unreachable-from-the-delivery-flow--open-confirmed-2026-08-06) are recorded
+rather than planned, because the honest answers are a bootable image and a p1 decision respectively.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to
 consider promoting**: the register map is published, so it is far less speculative than its position

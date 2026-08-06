@@ -43,12 +43,14 @@
 #
 # ── gh ──────────────────────────────────────────────────────────────────────
 #
-# `gh` is installed in neither WSL nor Windows on the machine this was written
-# on, so --tag has never been exercised; --stage-only is the tested path and
-# produces a tarball commission-offline.sh --bundle <file> takes directly.  That
-# is why the publish step is a thin wrapper around one gh command and nothing
-# depends on its output.  `origin` is an SSH host alias (git@github.com-personal:…),
-# so whoever publishes needs `gh auth` for that account.
+# `gh` 2.86.0 is installed in WSL (from the release .deb — focal's apt has no `gh`
+# and the snap links against a glibc newer than 2.31), but --tag has still never
+# been run; --stage-only is the tested path and produces a tarball
+# commission-offline.sh --bundle <file> takes directly.  That is why the publish
+# step is a thin wrapper around one gh command and nothing depends on its output.
+# `origin` is an SSH host alias (git@github.com-personal:…), so whoever publishes
+# needs `gh auth` for that account — and gh may need --repo, since it resolves the
+# owner from the remote URL.
 
 set -e
 _START_SECONDS=$(date +%s)

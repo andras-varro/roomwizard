@@ -99,7 +99,7 @@ sudo ./commission-offline.sh --bundle <tar.gz|dir>   # all of the above, offline
 cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 
 ./release.sh --stage-only           # build all components + stage one offline bundle + tar
-./release.sh --tag <tag>            # the above, then `gh release create`  (gh is NOT installed here)
+./release.sh --tag <tag>            # the above, then `gh release create`  (gh 2.86.0 in WSL; never run)
 ```
 
 `--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
@@ -127,9 +127,10 @@ layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` 
   `/etc/hostname`, `rw_config`, `touch_calibration`, `input_config`). Not a rule each component is
   trusted to remember — the negative control for the one that forgets. Device config carries the
   `/etc/hosts` mapping of D7 and `vnc_client`'s plaintext VNC password.
-- **`--stage-only` is the tested path; `--tag` has never run** — `gh` is installed in neither WSL nor
-  Windows. The tarball it produces is a first-class input to the offline installer, so everything
-  downstream is testable with no network.
+- **`--stage-only` is the tested path; `--tag` has never run.** `gh` 2.86.0 is now installed in WSL
+  (from the release `.deb` — focal's apt has no `gh`, and the snap links against a glibc newer than
+  2.31), so the publish step is reachable but still unexercised. The tarball `--stage-only` produces is
+  a first-class input to the offline installer, so everything downstream is testable with no network.
 
 ### `.app` manifests: one generator per component, on disk
 

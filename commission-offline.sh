@@ -212,6 +212,16 @@ else
         CARDS=$(rw_find_card_disks || true)
         n=$(printf '%s' "$CARDS" | grep -c . || true)
         if [[ "$n" -eq 0 ]]; then
+            # The not-root case first, because it is the one that produces an empty
+            # scan on a host that HAS a card in the reader: rw_find_card_disks
+            # identifies by partition table and sfdisk -d needs root, so every
+            # candidate silently fails to match and the scan looks conclusive.
+            if [[ "$(id -u)" -ne 0 ]]; then
+                err "No card found — but this ran as $(id -un 2>/dev/null || echo "uid $(id -u)"), and
+     identifying a card reads its partition table, which needs root. A non-root
+     scan finds nothing even with the card in the reader. Re-run with sudo before
+     concluding anything about the card."
+            fi
             err "No disk on this host carries the RoomWizard partition layout.
      On WSL, attach it from Windows first:  wsl --mount \\\\.\\PHYSICALDRIVEn --bare
      Then re-run, or name it:               --disk /dev/sdX"
@@ -223,6 +233,25 @@ else
         DISK=$(printf '%s' "$CARDS" | awk '{print $1}')
     fi
     ok "Card: $DISK"
+
+    # Why this precedes rw_is_card_disk: that function returns 1 both for "not a
+    # RoomWizard" and for "could not read the table", and reporting the second as
+    # the first sends the operator to inspect the card when the fix is `sudo`.
+    # Measured 2026-08-05: a non-root run on a genuine unit's card said
+    # "does not carry the RoomWizard partition layout".
+    if ! rw_can_read_partition_table "$DISK"; then
+        if ! command -v sfdisk >/dev/null 2>&1; then
+            err "sfdisk is not installed, so no disk can be identified.
+     Fix it:  sudo apt install util-linux"
+        fi
+        if [[ "$(id -u)" -ne 0 ]]; then
+            err "cannot read $DISK's partition table as $(id -un 2>/dev/null || echo "uid $(id -u)").
+     \`sfdisk -d\` needs root, so a non-root run cannot identify a card AT ALL —
+     this is not a statement about the card. Re-run with sudo."
+        fi
+        err "cannot read $DISK's partition table even as root — is the card seated?
+     Check:  sudo dmesg | tail -20"
+    fi
 
     rw_is_card_disk "$DISK" || err "$DISK does not carry the RoomWizard partition layout"
     # Checked here as well as inside rw_mount_card, because a --disk given by hand

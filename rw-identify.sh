@@ -158,6 +158,28 @@ rw_is_rootfs_writable() {
 }
 
 # ---------------------------------------------------------------------------
+# rw_can_read_partition_table DEVICE
+#
+# 0 if DEVICE's partition table can be read at all.
+#
+# Exists to separate two failures that rw_is_card_disk cannot distinguish,
+# because both are `return 1`: "this is not a RoomWizard card" and "this process
+# cannot read the table". `sfdisk -d` needs root — block devices are
+# brw-rw---- root:disk — so a non-root run on a genuine card reported
+# "does not carry the RoomWizard partition layout", which is a lie that sends the
+# operator looking at the card instead of at the command. Measured 2026-08-05 on
+# a real unit's card at /dev/mmcblk0.
+#
+# Also 1 when sfdisk is absent, which a caller should report as its own thing.
+# ---------------------------------------------------------------------------
+rw_can_read_partition_table() {
+    local dev="$1"
+    [ -n "$dev" ] || return 1
+    command -v sfdisk >/dev/null 2>&1 || return 1
+    sfdisk -d "$dev" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # rw_is_card_disk DEVICE
 #
 # 0 if DEVICE (a whole disk or an image file) carries the RoomWizard partition
