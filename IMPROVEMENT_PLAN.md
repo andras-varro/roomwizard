@@ -828,48 +828,47 @@ play session of somebody's time — which is why that check keeps being postpone
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
 
-### C12. One provisioning list, two executors — and a missing online mode — open
+### C12. The online mode cannot install a bundle — open
 
-**There are two operator situations, and only one of them has a single command.** Measured by reading
-every root script 2026-08-06, not inferred:
+**The provisioning list is folded; the missing capability is not.** Two of the three parts of this
+entry landed 2026-08-06 (`git log --grep=C12`):
+
+- ✅ **One provisioning list, two executors.** `device-files/provision-rules.conf` +
+  `rw-provision.sh`, the install half of what `clean-rules.conf` + `rw-clean.sh` are for the delete
+  half. The drift it removes was real: the online path deleted stale `rc*.d` links before relinking and
+  the offline path did not, so a card carrying an older `S50roomwizard-app` came out of offline
+  commissioning with two links to one init script at two priorities. Both `--dry-run`s now print the
+  same resolved set, asserted in `tests/rw_provision_test.sh` group E.
+- ✅ **The two in-place config edits that had no offline equivalent** — `/etc/profile`'s dangling
+  `wsplatform.conf` source and `/etc/inittab`'s tty4 getty — are `dropline` records, so both paths do
+  them.
+- ⬜ **Bundle-install-over-SSH still does not exist**, below.
+
+⚠️ **The online path cannot deliver, because `deploy-all.sh` *builds*.** It needs the ARM toolchain,
+and the person being delivered to by definition has none. So this is not a repackaging of existing
+code: **there is no way to put a release bundle onto a device over SSH.** Roughly one executor over
+`rw_bundle_entries` — the SSH twin of `commission-offline.sh`'s bundle loop, which now has a model to
+copy in `rw_provision_online_script`. It is the same capability F9 records as
+`deploy-all.sh --from-release`.
 
 | Situation | Today | One command? |
 |---|---|---|
 | Bought a unit, **no network access to it** | `sudo ./commission-offline.sh --bundle <tar.gz>` | **yes** |
-| **Already has SSH** to it | `commission-roomwizard.sh` → boot → find the IP → `setup-device.sh` → `deploy-all.sh` | no — 3 scripts, a reboot and an IP hunt |
+| **Already has SSH** to it | `commission-roomwizard.sh` → boot → find the IP → `setup-device.sh` → `deploy-all.sh` | no — 3 scripts, a reboot, an IP hunt, and a toolchain |
 
-⚠️ **The online path cannot deliver, because `deploy-all.sh` *builds*.** It needs the ARM toolchain, and
-the person being delivered to by definition has none. So the online mode is not a repackaging of
-existing code: **bundle-install-over-SSH does not exist anywhere in this repo.** That is the real
-asymmetry, and it is new code rather than a merge — roughly one executor over
-`rw_bundle_entries`, the SSH twin of `commission-offline.sh`'s `put`. It is the same capability F9
-records as `deploy-all.sh --from-release`, which is also still open.
+#### What is left after that: the folder move
 
-#### There are no duplicate scripts to delete — one duplicated *fact* instead
+Behaviour first, move last — the user's call. The renames below are mechanical and must be **their own
+commit containing no logic change**, or every diff after them is unreviewable.
 
-Checked pairwise. `commission-roomwizard.sh` is **step 3 of** `commission-offline.sh`
-([commission-offline.sh:404](commission-offline.sh#L404)), not an alternative to it; the three `rw-*.sh`
-are libraries with five consumers each; `release.sh` and `deploy-all.sh` genuinely differ. **Nothing in
-the root is a redundant copy of anything else.** What *is* duplicated is the provisioning list — which
-`device-files/` go to which device path, which `rc*.d` links, the sshd hardening, the sysctl file —
-written out once per executor:
+#### There are no duplicate scripts to delete — one duplicated *fact*, now fixed
 
-| Fact | Offline (`put` / `link_boot` into `$BASE/root`) | Online (`scp` + `ssh` heredoc) |
-|---|---|---|
-| boot scripts + payload → paths | [:475-489](commission-offline.sh#L475-L489) | [:517-531](setup-device.sh#L517-L531), [:538-541](setup-device.sh#L538-L541), [:578-586](setup-device.sh#L578-L586) |
-| `S28`/`S29`/`S99`/`S30avahi` links | [:490-536](commission-offline.sh#L490-L536) | [:546-566](setup-device.sh#L546-L566), [:605-607](setup-device.sh#L605-L607) |
-| sshd hardening | [:537-560](commission-offline.sh#L537-L560) | [:636-649](setup-device.sh#L636-L649) |
-| `99-security.conf` | [:472](commission-offline.sh#L472) | [:667-674](setup-device.sh#L667-L674) |
-
-**They have already drifted:** the online path deletes stale `rc*.d` links before relinking
-([setup-device.sh:546-557](setup-device.sh#L546-L557)) and the offline path does not. This is exactly
-the shape `clean-rules.conf` fixed for the *delete* half — one plan as data, two executors, one
-prefixing `/` and one `$BASE/root`. The install half never got it, which is why this is the other half
-of the clean fold (`git log --grep=C11`) and not a separate project.
+Checked pairwise 2026-08-06. `commission-roomwizard.sh` is **step 3 of** `commission-offline.sh`, not an
+alternative to it; the `rw-*.sh` are libraries with several consumers each; `release.sh` and
+`deploy-all.sh` genuinely differ. **Nothing in the root is a redundant copy of anything else.** What
+*was* duplicated — the provisioning list, written out once per executor — is now one data file.
 
 #### Two category errors, worth more than any file move
-
-1. ⚠️ **`disable-steelcase.sh` and `roomwizard-app-init.sh` are device payload, not host tooling.** Both
    are installed verbatim by **both** paths ([commission-offline.sh:487-488](commission-offline.sh#L487-L488),
    [setup-device.sh:165-166](setup-device.sh#L165-L166)), which is precisely `CLAUDE.md`'s stated
    condition for living in `device-files/`. They are in the wrong *category*, not merely the wrong
@@ -908,23 +907,33 @@ unreviewable.
 
 #### Sequencing, decided 2026-08-06
 
-**Behaviour first, move last** — the user's call, when offered the alternative. So: C11 + the provision
-plan as one pass, then bundle-install-over-SSH, then `COMMISSIONING.md`, and the folder move as the
-final mechanical commit. Two reasons it is not first: renaming files whose logic is mid-rewrite makes
-both diffs unreadable, and C11's fold removes ~85 lines from `setup-device.sh` before it gets moved.
+**Behaviour first, move last** — the user's call, when offered the alternative. C11 and the provision
+plan landed as one pass; then bundle-install-over-SSH, then `COMMISSIONING.md`, and the folder move as
+the final mechanical commit. Two reasons the move is not first: renaming files whose logic is mid-rewrite
+makes both diffs unreadable, and the two folds removed ~85 lines from `setup-device.sh` before it gets
+moved.
 
 #### Verification, and what cannot be verified from this host
 
-- **The negative control for the fold is a plan diff** — the same one C11 needs. Every path the online
-  heredoc installs must appear in the compiled provision plan, or be deliberately absent with a recorded
-  reason. A fold that silently drops a target looks exactly like a successful one.
-- ⚠️ **`--dry-run` on both executors over the same inputs should print the same resolved set**, modulo
-  the `/` versus `$BASE/root` prefix. That is the assertion that "one list" is *true* rather than
-  intended, and it is the only one that catches the drift above.
-- ⚠️ **A mode cannot be verified on this host.** `/mnt/c` reports every file 0777 and discards `chmod`,
-  so the provision plan must **declare** modes exactly as `rw-bundle.sh` does, and the `+x` assertion
-  stays a measurement only on real ext4.
-- The reorg commit's own control is that all four host-only suites still pass unchanged, and that
+- ✅ **Both executors' `--dry-run` print the same resolved set**, compared through
+  `rw_provision_canonical`. `tests/rw_provision_test.sh` group E, with its own negative control (drop a
+  verb from one side and the comparison must fire). The online half runs the *generated* interpreter, not
+  a re-implementation of it.
+- ⚠️ **Neither `tests/commission_offline_test.sh` nor any non-dry `commission-offline.sh` run has been
+  executed since the provision fold.** Both need root and `sudo` cannot be driven non-interactively from
+  this harness (`sudo: a password is required`). The block is not the mount — `--base` needs no root —
+  but `commission-roomwizard.sh`'s `sudo` on the `/etc/shadow` write, which is where a run stalls
+  waiting for a password it cannot be given. What *was* done instead: the test's file list now copies
+  `rw-provision.sh` (without which every case would fail at the source line), and the offline path was
+  driven end to end with `--base --dry-run` through the real script — 29 actions, correct order, correct
+  declared modes. The executor itself is covered by `tests/rw_provision_test.sh` group D, which does
+  perform real writes, real `chmod` and real symlinks against a synthetic card in WSL's own filesystem.
+  **Run the root suite under an interactive sudo before trusting the offline installer again.**
+- ⚠️ **A mode cannot be verified on `/mnt/c`.** It reports every file 0777 and discards `chmod`, so the
+  provision plan **declares** modes exactly as `rw-bundle.sh` does. `tests/rw_provision_test.sh` group D
+  runs under `$(mktemp -d)` in WSL's own filesystem, which does honour modes, so it asserts 0755/0644
+  there; the assertion that a *device* gets them stays `commission-offline.sh`'s `+x` check on real ext4.
+- The reorg commit's own control is that all five host-only suites still pass unchanged, and that
   `git ls-files -s -- '*.sh'` is still all `100755` afterwards.
 
 ---
@@ -962,12 +971,12 @@ Deliberately not a ranking of everything — only the claims worth making.
    backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
    `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
    waiting to be confirmed or refuted.
-1. **[C12](#c12-one-provisioning-list-two-executors--and-a-missing-online-mode--open).** C11 landed
-   2026-08-06 (`git log --grep=C11`): the clean is one mechanism reading one data file, and the 85-line
-   heredoc is gone. C12 is the same fold applied to the *install*
-   half, plus the capability the delivery story is actually missing: **the online mode cannot install a
-   bundle, because `deploy-all.sh` builds.** The folder reorganisation is the *last* commit of that
-   work, not the first.
+1. **[C12](#c12-the-online-mode-cannot-install-a-bundle--open) — the part of it that is left.** Both
+   folds landed 2026-08-06 (`git log --grep=C11`, `--grep=C12`): the clean and the install are each one
+   mechanism reading one data file, and both executors' dry runs are asserted identical. What remains is
+   the capability the delivery story is actually missing: **the online mode cannot install a bundle,
+   because `deploy-all.sh` builds**, so the person being delivered to needs a toolchain they do not have.
+   The folder reorganisation is the *last* commit of that work, not the first.
 2. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
    plan, and the reorg above renames the scripts it documents, so it lands after them. (The two bugs the
    first real run exposed are fixed: `git log --grep=F10`.)

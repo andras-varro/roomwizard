@@ -63,7 +63,7 @@ ANSWERS='yes\nrwfake\nrwfake\nrwfake\nn\n'
 REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps"
 for f in commission-offline.sh commission-roomwizard.sh set-hostname.sh \
-         rw-identify.sh rw-clean.sh rw-bundle.sh \
+         rw-identify.sh rw-clean.sh rw-provision.sh rw-bundle.sh \
          roomwizard-app-init.sh disable-steelcase.sh COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done

@@ -44,24 +44,45 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# The keep/delete decisions --deep-clean applies are DATA, in one file, shared
-# with commission-offline.sh so that the live and offline cleans cannot drift.
-# rw-clean.sh is the parser and the plan compiler; the executor below is this
-# script's own, because "/" is the correct prefix on a device and a refused one
-# offline (IMPROVEMENT_PLAN.md F10).
+# Both halves of the job are DATA in one file each, shared with
+# commission-offline.sh so that the live and offline passes cannot drift:
+#
+#   device-files/clean-rules.conf      what is REMOVED  (rw-clean.sh)
+#   device-files/provision-rules.conf  what is INSTALLED (rw-provision.sh)
+#
+# Each library is the parser and the plan compiler. The executors differ — "/" is
+# the correct prefix on a device and a refused one offline, and on this path the
+# work happens on the far side of an ssh pipe — but there is one implementation of
+# each, and rw_provision_online_script is the one this script ships to the device
+# (IMPROVEMENT_PLAN.md F10, C11, C12).
+# shellcheck source=rw-identify.sh
+. "$SCRIPT_DIR/rw-identify.sh"
 # shellcheck source=rw-clean.sh
 . "$SCRIPT_DIR/rw-clean.sh"
+# shellcheck source=rw-provision.sh
+. "$SCRIPT_DIR/rw-provision.sh"
 
-# ── --keep-<group> is extracted before the positional parsing ──────────────
+# ── --keep-<group> and --no-<group> are extracted before positional parsing ──
 #
-# The clean's opt-outs are named after the groups in clean-rules.conf, so the
-# list of valid ones is not repeated here. They are pulled out of "$@" first
-# because everything below is positional ($1 target, $2 flag, $3 --dry-run) and a
-# --keep-browser sitting in $3 would otherwise be rejected as an unknown option.
+# --keep-<g> switches off part of the CLEAN, --no-<g> part of the PROVISION. Both
+# are named after the groups in their own data file, so neither list is repeated
+# here. They are pulled out of "$@" first because everything below is positional
+# ($1 target, $2 flag, $3 --dry-run) and a --keep-browser sitting in $3 would
+# otherwise be rejected as an unknown option.
 KEEP_GROUPS=""
+NO_PROV_GROUPS=""
 _ARGS=()
 for _a in "$@"; do
     case "$_a" in
+        --no-*)
+            _g="${_a#--no-}"
+            case " $(rw_provision_optional_groups) " in
+                *" $_g "*) NO_PROV_GROUPS="$NO_PROV_GROUPS $_g" ;;
+                *) echo "Unknown provision group: $_g"
+                   echo "  --no- accepts: $(rw_provision_optional_groups)"
+                   exit 1 ;;
+            esac
+            ;;
         --keep-*)
             _g="${_a#--keep-}"
             case " $(rw_clean_optional_groups) " in
@@ -119,6 +140,10 @@ usage() {
     echo "                    the rc*.d whitelist is what removes an unknown service."
     echo "                    --keep-factory keeps the 472 MB restore payload;"
     echo "                    --keep-sweeps turns --deep-clean into --remove."
+    echo "  --no-<group>      Skip one group of the provision plan. Groups:"
+    echo "                    $(rw_provision_optional_groups)"
+    echo "                    --no-mdns leaves <name>.local unresolvable; --no-sshd"
+    echo "                    leaves PermitEmptyPasswords at the factory 'yes'."
     echo "  --hostname NAME   Set the device host name only, and exit. No reboot."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
     exit 1
@@ -559,163 +584,99 @@ REMOTE
     exit 0
 fi
 
-# ── 1. Deploy disable-steelcase.sh ─────────────────────────────────────────
+# ── 1. Provision: the boot scripts, the links, sshd, the config fix-ups ─────
 echo ""
 echo "════════════════════════════════════════"
-echo " 1. Disable Steelcase Bloatware"
+echo " 1. Provision"
 echo "════════════════════════════════════════"
 
-info "Deploying disable-steelcase.sh → $REMOTE_DIR/"
-ssh "$DEVICE" "mkdir -p $REMOTE_DIR"
-scp "$SCRIPT_DIR/disable-steelcase.sh" "$DEVICE:$REMOTE_DIR/disable-steelcase.sh"
-ssh "$DEVICE" "chmod +x $REMOTE_DIR/disable-steelcase.sh"
+# ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
+# device-files/provision-rules.conf with a reason per entry, read by this script AND
+# by commission-offline.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+#
+# What used to be here: five scp calls, an `ssh <<'REMOTE'` block of ln -sf, a second
+# one for avahi, a four-command sed block over sshd_config, and a third for the
+# sysctl file — every one of them written out a second time in commission-offline.sh.
+# They HAD drifted: this path deleted stale rc*.d links before relinking and the
+# offline path did not.
+#
+# The plan is compiled HERE, where the parser lives, and shipped as data the device
+# only interprets — the same division as the clean. The interpreter itself comes
+# from rw_provision_online_script, so there is one implementation of each verb and
+# `--dry-run` on either path prints the same resolved set.
+PROV_RULES="$DEVICE_FILES/provision-rules.conf"
+[[ -f "$PROV_RULES" ]] || err "missing $PROV_RULES"
+if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$SCRIPT_DIR")"; then
+    echo "$PCHECK"
+    err "device-files/provision-rules.conf does not validate — refusing to provision"
+fi
+# A boot link the clean's whitelist does not name is deleted by the next
+# --deep-clean, so the unit would boot right once and lose the link afterwards.
+if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
+    echo "$KCHECK"
+    err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
+fi
 
-info "Running disable-steelcase.sh..."
+PROV_GROUPS="base"
+for _g in $(rw_provision_optional_groups); do
+    case " $NO_PROV_GROUPS " in
+        *" $_g "*) ;;
+        *) PROV_GROUPS="$PROV_GROUPS $_g" ;;
+    esac
+done
+[[ -n "$NO_PROV_GROUPS" ]] && info "Skipping:$NO_PROV_GROUPS"
+
+PROV_PLAN=$(mktemp)
+rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
+    || { rm -f "$PROV_PLAN"; err "could not compile the provision plan"; }
+info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^install' "$PROV_PLAN") install, $(grep -c '^link' "$PROV_PLAN") link, $(grep -c '^unlink' "$PROV_PLAN") unlink"
+
+# The install verb's SOURCE bytes are on this host, so they go over scp first and
+# the remote interpreter only sets the declared mode. That asymmetry is the whole
+# reason the two executors exist; everything else about them is shared.
+while IFS=$'\t' read -r _kind _mode _target _src; do
+    [[ "$_kind" == "install" ]] || continue
+    [[ -f "$SCRIPT_DIR/$_src" ]] || err "missing $SCRIPT_DIR/$_src"
+    ssh "$DEVICE" "mkdir -p '$(dirname "$_target")'"
+    scp -q "$SCRIPT_DIR/$_src" "$DEVICE:$_target" || err "could not copy $_src to $_target"
+    info "copied $_src → $_target"
+done < "$PROV_PLAN"
+
+ssh "$DEVICE" "cat > /tmp/rw-provision-plan" < "$PROV_PLAN"
+rm -f "$PROV_PLAN"
+rw_provision_online_script | ssh "$DEVICE" "cat > /tmp/rw-provision.sh"
+ssh "$DEVICE" "sh /tmp/rw-provision.sh /tmp/rw-provision-plan; rc=\$?; rm -f /tmp/rw-provision.sh /tmp/rw-provision-plan; exit \$rc" \
+    || err "the provision step failed on the device"
+ok "Boot scripts, boot links, sshd, sysctl and the config fix-ups done"
+
+# ── 2. Disable the Steelcase services ──────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════"
+echo " 2. Disable Steelcase Bloatware"
+echo "════════════════════════════════════════"
+
+# disable-steelcase.sh was installed by the provision plan above, with its mode.
+# Running it is an ACTION rather than a piece of state, so it is not a plan record —
+# and it has no offline equivalent by nature: it stops running processes and writes a
+# crontab. /etc/init.d/roomwizard-app re-runs it on every boot, which is what makes
+# the offline path's omission harmless.
+info "Running $REMOTE_DIR/disable-steelcase.sh..."
 ssh "$DEVICE" "$REMOTE_DIR/disable-steelcase.sh"
 ok "Steelcase bloatware disabled"
 
-# ── 2. Install generic init script ─────────────────────────────────────────
-echo ""
-echo "════════════════════════════════════════"
-echo " 2. Install App Launcher Service"
-echo "════════════════════════════════════════"
-
-info "Deploying roomwizard-app-init.sh → $INIT_SCRIPT"
-scp "$SCRIPT_DIR/roomwizard-app-init.sh" "$DEVICE:$INIT_SCRIPT"
-
-info "Registering service..."
-ssh "$DEVICE" bash <<'REMOTE'
-chmod +x /etc/init.d/roomwizard-app
-
-# Clean up old roomwizard-games service if it exists
-rm -f /etc/rc5.d/S*roomwizard-games 2>/dev/null || true
-rm -f /etc/rc2.d/S*roomwizard-games 2>/dev/null || true
-rm -f /etc/rc3.d/S*roomwizard-games 2>/dev/null || true
-rm -f /etc/rc4.d/S*roomwizard-games 2>/dev/null || true
-update-rc.d -f roomwizard-games remove 2>/dev/null || true
-
-# Remove old roomwizard-app symlinks (might have wrong priority)
-rm -f /etc/rc5.d/S*roomwizard-app 2>/dev/null || true
-rm -f /etc/rc2.d/S*roomwizard-app 2>/dev/null || true
-rm -f /etc/rc3.d/S*roomwizard-app 2>/dev/null || true
-rm -f /etc/rc4.d/S*roomwizard-app 2>/dev/null || true
-update-rc.d -f roomwizard-app remove 2>/dev/null || true
-
-# Install with high priority (99) — starts AFTER all other services.
-# This ensures browser/x11/webserver have started before we stop them.
-ln -sf /etc/init.d/roomwizard-app /etc/rc5.d/S99roomwizard-app
-ln -sf /etc/init.d/roomwizard-app /etc/rc2.d/S99roomwizard-app
-ln -sf /etc/init.d/roomwizard-app /etc/rc3.d/S99roomwizard-app
-ln -sf /etc/init.d/roomwizard-app /etc/rc4.d/S99roomwizard-app
-REMOTE
-ok "Service installed (S99roomwizard-app)"
-
-# ── 3. Deploy audio-enable boot script ─────────────────────────────────────
-echo ""
-echo "════════════════════════════════════════"
-echo " 3. Deploy Boot Scripts"
-echo "════════════════════════════════════════"
-
-# The two init scripts are FILES in device-files/, not heredocs, so that
-# commission-offline.sh writes the same bytes onto a card. A second copy of
-# /etc/init.d/audio-enable would be a second thing to keep in step, and the one
-# that drifts is found on a device that boots silent.
-for _f in audio-enable time-sync; do
-    info "Deploying $_f boot script..."
-    [[ -f "$DEVICE_FILES/$_f" ]] || err "missing $DEVICE_FILES/$_f"
-    scp -q "$DEVICE_FILES/$_f" "$DEVICE:/etc/init.d/$_f"
-done
-# S28 before S29 before S30avahi-daemon, and all three after S20cron; the numbers
-# are the keep-list in device-files/clean-rules.conf, so changing one here means
-# changing it there too or the whitelist sweep removes the link.
-ssh "$DEVICE" "chmod +x /etc/init.d/audio-enable /etc/init.d/time-sync && ln -sf /etc/init.d/audio-enable /etc/rc5.d/S29audio-enable && ln -sf /etc/init.d/time-sync /etc/rc5.d/S28time-sync"
-ok "Audio and time-sync boot scripts deployed"
-ok "Time sync boot script deployed"
-
-info "Enabling mDNS (avahi-daemon)..."
-# The vendor image already carries /usr/sbin/avahi-daemon and a full
-# /etc/init.d/avahi-daemon, but ships NO rc5.d link, so it never starts. Adding
-# the link is the whole change — there is no daemon to write and no package to
-# install. S30 puts it after S29audio-enable and after networking is up.
+# ── 3. Apply the sysctl settings now ───────────────────────────────────────
 #
-# Its Required-Start is "$remote_fs dbus", and dbus is one of the few dynamic
-# consumers the deep clean deliberately keeps, so the dependency is satisfied
-# on a fully cleaned device too.
+# NOTE on firewall: this image has no iptables binary, no ip_tables.ko in
+# /lib/modules/4.14.52, no busybox iptables applet, no TCP wrappers and no package
+# manager to add any of them. The kernel has CONFIG_NETFILTER=y and ip_tables was
+# never compiled. Network security is: no unnecessary services, sshd hardened,
+# sysctl hardening, and a home network the device is not exposed through.
 #
-# Payoff: `ssh root@<name>.local` and `./setup-device.sh <name>.local` instead of
-# hunting DHCP leases. This is only useful once the unit has a UNIQUE name —
-# every unit cloned from the vendor image claims RW09, and avahi would resolve
-# the conflict by renaming to RW09-2.local etc. Hence --hostname above.
-ssh "$DEVICE" bash <<'AVAHI_REMOTE'
-if [ -x /etc/init.d/avahi-daemon ] && [ -x /usr/sbin/avahi-daemon ]; then
-    ln -sf /etc/init.d/avahi-daemon /etc/rc5.d/S30avahi-daemon
-    echo "  linked S30avahi-daemon"
-else
-    echo "  avahi-daemon not present on this image — skipped"
-fi
-AVAHI_REMOTE
-ok "mDNS enabled (resolves <hostname>.local after reboot)"
-
-# ── 4. SSH Hardening ──────────────────────────────────────────────────────
-echo ""
-echo "════════════════════════════════════════"
-echo " 4. SSH Hardening"
-echo "════════════════════════════════════════"
-
-# NOTE: SSH keys must already be deployed (Phase 1 / commission-roomwizard.sh).
-# We do NOT disable PasswordAuthentication here — do that manually AFTER
-# confirming key-based login works:
-#   sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-#
-# PermitRootLogin stays "yes" because:
-#   - There is no other user account on the device (only root in /etc/passwd)
-#   - All deployment (scp, ssh) requires root@<ip>
-#   - The device has no adduser/useradd to create non-root accounts
-#   - Security is achieved via key-based auth + PermitEmptyPasswords=no
-info "Hardening SSH configuration..."
-ssh "$DEVICE" bash <<'SSH_HARDEN'
-    # Backup original if not already backed up
-    [ ! -f /etc/ssh/sshd_config.orig ] && cp /etc/ssh/sshd_config /etc/ssh/sshd_config.orig
-
-    # CRITICAL FIX: Disable empty password login (factory default allows it!)
-    sed -i 's/^PermitEmptyPasswords yes/PermitEmptyPasswords no/' /etc/ssh/sshd_config
-
-    # PermitRootLogin stays "yes" — root is the only account on the device.
-    # Do NOT change to "prohibit-password" as it would lock us out if keys break.
-
-    # Add brute-force / session limits if not present
-    grep -q '^MaxAuthTries' /etc/ssh/sshd_config || echo 'MaxAuthTries 3' >> /etc/ssh/sshd_config
-    grep -q '^LoginGraceTime' /etc/ssh/sshd_config || echo 'LoginGraceTime 30' >> /etc/ssh/sshd_config
-    grep -q '^MaxSessions' /etc/ssh/sshd_config || echo 'MaxSessions 5' >> /etc/ssh/sshd_config
-
-    # NOTE: Don't restart sshd here — it would break subsequent SSH commands in this script.
-    # Changes take effect on next reboot (script requests reboot at the end).
-SSH_HARDEN
-ok "SSH hardened (PermitEmptyPasswords=no, MaxAuthTries=3) — takes effect on reboot"
-
-# ── 5. Kernel/sysctl hardening ───────────────────────────────────────────
-echo ""
-echo "════════════════════════════════════════"
-echo " 5. Kernel Security Settings"
-echo "════════════════════════════════════════"
-
-# NOTE on firewall: The RoomWizard firmware has no iptables binary, no
-# ip_tables.ko kernel module in /lib/modules/4.14.52, no busybox iptables
-# applet, no TCP wrappers (libwrap), and no package manager to install any
-# of these. The kernel has CONFIG_NETFILTER=y but the ip_tables module was
-# never compiled. Network security relies on:
-#   - Disabling all unnecessary services (FTP, SNMP, HTTP, Java)
-#   - SSH hardening (empty passwords blocked, brute-force limits)
-#   - sysctl network hardening (below)
-#   - Home network — device is not internet-facing
+# The FILE was installed by the plan; applying it to the running kernel is again an
+# action. The fallback exists because a kernel without sysctl.d support would accept
+# the file and apply none of it, silently.
 info "Applying kernel security settings..."
-# 99-security.conf is a FILE in device-files/, same reasoning as the two init
-# scripts: the offline installer writes the same bytes.
-[[ -f "$DEVICE_FILES/99-security.conf" ]] || err "missing $DEVICE_FILES/99-security.conf"
-scp -q "$DEVICE_FILES/99-security.conf" "$DEVICE:/etc/sysctl.d/99-security.conf"
 ssh "$DEVICE" sh -s <<'SYSCTL'
-# Apply now. The fallback exists because a kernel without sysctl.d support would
-# otherwise accept the file and apply none of it, silently.
 sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
     sysctl -w kernel.randomize_va_space=2 2>/dev/null
     sysctl -w kernel.dmesg_restrict=1 2>/dev/null
@@ -724,10 +685,10 @@ sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
 SYSCTL
 ok "Kernel security settings applied"
 
-# ── 6. Analyze + optionally remove bloatware files ─────────────────────────
+# ── 4. Report what vendor software is still on disk ────────────────────────
 echo ""
 echo "════════════════════════════════════════"
-echo " 6. Bloatware Files"
+echo " 4. Vendor Software On Disk"
 echo "════════════════════════════════════════"
 
 info "Analyzing filesystem..."

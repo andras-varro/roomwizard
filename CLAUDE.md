@@ -142,14 +142,55 @@ reachable — so the offline installer could not produce the same bytes without 
 `exec=` path drifting between the two renders a launcher tile that does nothing when tapped. **Write the
 manifest to a file, then copy it**; never emit one from inside an `ssh` heredoc again.
 
-### `device-files/` and the cleanup rules: one copy, two consumers
+### `device-files/` and the two rules files: one copy, two consumers
 
 Anything installed onto a device **verbatim** by more than one path lives in `device-files/`, never in a
-heredoc: `audio-enable`, `time-sync`, `99-security.conf`, and `clean-rules.conf`. Both
-`setup-device.sh` (over SSH) and `commission-offline.sh` (onto a mounted card) copy those same bytes.
+heredoc: `audio-enable`, `time-sync`, `99-security.conf`, plus the two data files `clean-rules.conf` and
+`provision-rules.conf`. Both `setup-device.sh` (over SSH) and `commission-offline.sh` (onto a mounted
+card) install those same bytes, and neither decides *what* to install or delete — both read the rules.
 `.gitattributes` pins `device-files/**` to `eol=lf`, because the init scripts have no `.sh` extension —
 `/etc/init.d/audio-enable` is the name the `rc5.d` link points at — and a CRLF shebang is rejected by
 BusyBox as a misleading "no such file or directory".
+
+**Two data files, one shape.** `clean-rules.conf` (4 fields) says what is *removed*;
+`provision-rules.conf` (6 fields) says what the device ends up *with*. Both make the reason mandatory
+and last, both are compiled to a plan by a library, and both are executed twice — once with `/` over
+SSH, once under `$BASE/root` offline. `rw-provision.sh` is the install half of what `rw-clean.sh` is for
+the delete half.
+
+- **`provision-rules.conf` is `<type> <group> <mode> <target> <source> <reason>`**, types `install` /
+  `link` / `link-opt` / `unlink` / `touch` / `backup` / `directive` / `dropline`. Every column means one
+  thing for every type; `-` is the explicit not-applicable and an *empty* field is an error.
+- ⚠️ **A `link` source must be RELATIVE** — `../init.d/time-sync`, never `/etc/init.d/time-sync`. An
+  absolute symlink target is correct on a running device and *dangling on a mounted card*, and a
+  dangling `rc5.d` link is skipped in silence at boot. It is the one defect this file could introduce
+  that nothing downstream would catch, so validation rejects it.
+- ⚠️ **`rw_provision_check_keeps` asserts every boot link is on `clean-rules.conf`'s keep list.** A link
+  installed but not whitelisted is deleted by the next `--deep-clean`, so the unit boots right once and
+  loses it. That pairing used to be a comment in *both* files asking a human to remember.
+- **Order is emitted by the compiler, not read from the file**: unlink → install → backup → link →
+  touch → directive → dropline. Unlink before link (a glob would eat the link just made), install before
+  link (a link to a not-yet-written file dangles on a card), dropline last (it edits files install may
+  have just placed).
+- ⚠️ **`dropline` uses `awk`, not `sed "/$ere/d"`.** These EREs contain slashes —
+  `^4:12345:respawn:/sbin/getty 38400 tty4` closes sed's address at `respawn:` and the remainder is read
+  as a command. The symptom was a passing install and an unedited `/etc/inittab`.
+- **`directive` sets a key, it does not append beside it.** Substituted if present (commented or not),
+  appended if absent, so it is idempotent — which matters because both bring-up paths can be re-run. The
+  `sed 's/^PermitEmptyPasswords yes/…/'` it replaced matched one exact string, so `#PermitEmptyPasswords
+  yes` passed through untouched and the hardening silently did nothing.
+- ⚠️ **The online executor is generated, not written twice.** `rw_provision_online_script` emits a POSIX
+  `sh` interpreter that `setup-device.sh` pipes to the device; `install` is the one verb it cannot do
+  alone, because the source bytes are on the host, so the caller `scp`s them first and the interpreter
+  only sets the declared mode. Check it with `dash -n`, not `bash -n` — it runs under BusyBox ash.
+- **`--keep-<group>` switches off part of the clean; `--no-<group>` part of the provision.** Each is
+  named after the groups in its own data file, so neither list is repeated in a script.
+- Regression: `tests/rw_provision_test.sh` (94 cases, host-only, no card, no root). Its group E is the
+  one that matters: **both executors' `--dry-run` over the same plan must print the same resolved set**,
+  compared through `rw_provision_canonical`, which strips only the resolved host path. That is the sole
+  check that catches the drift this file exists to remove, and the online half is exercised by running
+  the *generated* interpreter against a copied tree — a comparison of two executors rather than of one
+  executor and a wish.
 
 **`device-files/clean-rules.conf` is the one place a keep or a delete is decided.** Four tab-separated
 fields, `<type> <group> <path> <reason>`, record types `scope` / `keep` / `delete` / `truncate`; a line

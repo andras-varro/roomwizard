@@ -52,11 +52,14 @@
 #   which card, which mount    rw-identify.sh, by content and by POSITION, never
 #                              by UUID. p1 is unreachable through it by design.
 #   what to delete             device-files/clean-rules.conf, shared with
-#                              setup-device.sh --deep-clean so the two cannot drift.
-#   what to install            the bundle's own manifest (rw-bundle.sh). Modes are
-#                              DECLARED there, never read off disk.
-#   the boot scripts           device-files/{audio-enable,time-sync,99-security.conf},
-#                              the same files setup-device.sh copies.
+#                              setup-device.sh --remove/--deep-clean so the two
+#                              cannot drift.
+#   what to install            device-files/provision-rules.conf — the boot scripts,
+#                              the rc*.d links, the sshd directives and the config
+#                              fix-ups, shared with setup-device.sh for the same
+#                              reason. Modes are DECLARED there, never read off disk.
+#   which binaries             the bundle's own manifest (rw-bundle.sh). Modes are
+#                              DECLARED there too.
 #
 # ── Still needs the device ─────────────────────────────────────────────────
 #
@@ -73,6 +76,8 @@ cd "$SCRIPT_DIR"
 . "$SCRIPT_DIR/rw-identify.sh"
 # shellcheck source=rw-clean.sh
 . "$SCRIPT_DIR/rw-clean.sh"
+# shellcheck source=rw-provision.sh
+. "$SCRIPT_DIR/rw-provision.sh"
 # shellcheck source=rw-bundle.sh
 . "$SCRIPT_DIR/rw-bundle.sh"
 
@@ -90,6 +95,7 @@ DISK=""
 BASE=""
 DRY=""
 KEEP_GROUPS=""
+NO_PROV_GROUPS=""
 DEL_FACTORY=0
 ARM_CHECK="require"
 DO_CLEAN=1
@@ -132,6 +138,11 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      --keep-factory keeps the 472 MB on-device restore payload,
                      which is otherwise deleted like the rest of the vendor stack.
   --delete-factory   Accepted and now redundant: that is the default.
+  --no-<group>       Skip one group of the provision plan. Groups:
+                     $(rw_provision_optional_groups)
+                     --no-mdns leaves <name>.local unresolvable; --no-sshd leaves
+                     PermitEmptyPasswords at the factory "yes". Both are in
+                     device-files/provision-rules.conf with their reasons.
   --arm-check=skip   Install binaries this host cannot verify. Say why to
                      yourself first; the message it replaces explains the risk.
   --help
@@ -152,6 +163,13 @@ while [[ $# -gt 0 ]]; do
         --no-clean)       DO_CLEAN=0; shift ;;
         --delete-factory) DEL_FACTORY=1; shift ;;   # a no-op since 2026-08-06; see below
         --arm-check=skip) ARM_CHECK="skip"; shift ;;
+        --no-*)
+            g="${1#--no-}"
+            case " $(rw_provision_optional_groups) " in
+                *" $g "*) NO_PROV_GROUPS="$NO_PROV_GROUPS $g" ;;
+                *) echo "Unknown provision group: $g"; echo "  --no- accepts: $(rw_provision_optional_groups)"; exit 1 ;;
+            esac
+            shift ;;
         --keep-*)
             g="${1#--keep-}"
             case " $(rw_clean_optional_groups) " in
@@ -493,91 +511,59 @@ put() {
     INSTALLED+=("$mode|$dev|$dest")
 }
 
-# ── 5a. the boot scripts, from device-files/ ────────────────────────────────
-info "Boot scripts"
-for f in audio-enable time-sync; do
-    [[ -f "$DEVICE_FILES/$f" ]] || err "missing $DEVICE_FILES/$f"
-    put 0755 "/etc/init.d/$f" "$DEVICE_FILES/$f"
+# ── 5a. the provision plan: boot scripts, links, sshd, config edits ─────────
+#
+# ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
+# device-files/provision-rules.conf with a reason per entry, read by BOTH this
+# script and setup-device.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+# They HAD drifted: the online path removed stale rc*.d links before relinking and
+# this one did not, so a card carrying an old S50roomwizard-app came out of offline
+# commissioning with two links to one init script at two priorities.
+#
+# What used to be here: five put() calls, seven link_boot() calls, a bare touch of
+# /var/watchdog_test, and a four-command sed block over sshd_config — every one of
+# them written out a second time in setup-device.sh.
+PROV_RULES="$DEVICE_FILES/provision-rules.conf"
+[[ -f "$PROV_RULES" ]] || err "missing $PROV_RULES"
+if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$SCRIPT_DIR")"; then
+    echo "$PCHECK"
+    err "device-files/provision-rules.conf does not validate — refusing to install"
+fi
+# The cross-file invariant: a boot link the clean's whitelist does not name is
+# deleted by the next --deep-clean, so the unit boots right once and then loses it.
+if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
+    echo "$KCHECK"
+    err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
+fi
+
+PROV_GROUPS="base"
+for g in $(rw_provision_optional_groups); do
+    case " $NO_PROV_GROUPS " in
+        *" $g "*) ;;
+        *) PROV_GROUPS="$PROV_GROUPS $g" ;;
+    esac
 done
-[[ -f "$DEVICE_FILES/99-security.conf" ]] || err "missing $DEVICE_FILES/99-security.conf"
-put 0644 /etc/sysctl.d/99-security.conf "$DEVICE_FILES/99-security.conf"
+[[ -n "$NO_PROV_GROUPS" ]] && info "Skipping:$NO_PROV_GROUPS"
 
-# The app respawn loop and the bypass script, from the repo root — the same two
-# files setup-device.sh pushes, and the two whose staleness a live device reports
-# through `--status`.
-put 0755 /etc/init.d/roomwizard-app "$SCRIPT_DIR/roomwizard-app-init.sh"
-put 0755 /opt/roomwizard/disable-steelcase.sh "$SCRIPT_DIR/disable-steelcase.sh"
+PROV_PLAN="$TMPROOT/provision.plan"
+[[ -n "$TMPROOT" ]] || { TMPROOT=$(mktemp -d /tmp/rw-bundle.XXXXXX); PROV_PLAN="$TMPROOT/provision.plan"; }
+rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
+    || err "could not compile the provision plan"
+info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^install' "$PROV_PLAN") install, $(grep -c '^link' "$PROV_PLAN") link, $(grep -c '^unlink' "$PROV_PLAN") unlink"
+RW_PROVISION_DRY="$DRY" rw_provision_apply_offline "$BASE" "$PROV_PLAN" "$SCRIPT_DIR" \
+    || err "the provision step failed"
 
-# ── 5b. the boot links ─────────────────────────────────────────────────────
-#
-# The numbers here and the keep-list in device-files/clean-rules.conf are the same
-# facts: a link this creates that the whitelist does not name is swept on the next
-# clean, so the two are written together or not at all.
-link_boot() {
-    local rcdir="$1" name="$2" target="$3" dest
-    dest="$BASE/root/etc/$rcdir/$name"
-    if [[ -n "$DRY" ]]; then
-        printf '  would link    %s -> %s\n' "$dest" "$target"
-        return 0
-    fi
-    [[ -d "$BASE/root/etc/$rcdir" ]] || mkdir -p "$BASE/root/etc/$rcdir"
-    ln -sf "$target" "$dest"
-}
-info "Boot links"
-link_boot rc5.d S28time-sync    ../init.d/time-sync
-link_boot rc5.d S29audio-enable ../init.d/audio-enable
-for d in rc2.d rc3.d rc4.d rc5.d; do
-    link_boot "$d" S99roomwizard-app ../init.d/roomwizard-app
-done
-
-# mDNS. The vendor image already carries /usr/sbin/avahi-daemon and a full
-# /etc/init.d/avahi-daemon and ships NO rc5.d link, so adding the link is the
-# whole change. clean-rules.conf keeps all four paths, which is what closes D8 —
-# the deep clean used to delete the daemon this link points at.
-if [[ -x "$BASE/root/etc/init.d/avahi-daemon" && -f "$BASE/root/usr/sbin/avahi-daemon" ]]; then
-    link_boot rc5.d S30avahi-daemon ../init.d/avahi-daemon
-    ok "mDNS enabled — <name>.local resolves after the first boot"
-else
-    warn "avahi-daemon is not on this image — <name>.local will not resolve"
+# Feed the plan's declared modes into the +x measurement below. Reading them from
+# the plan rather than having the executor export an array keeps one authority for
+# "what mode was declared" — the data file.
+if [[ -z "$DRY" ]]; then
+    while IFS=$'\t' read -r pkind pmode ptarget psrc; do
+        case "$pkind" in install|touch) ;; *) continue ;; esac
+        pdest=$(rw_clean_offline_path "$BASE" "$ptarget") || continue
+        INSTALLED+=("$pmode|$ptarget|$pdest")
+    done < "$PROV_PLAN"
 fi
-
-# The software-watchdog bypass, offline. /var is NOT tmpfs (only /var/volatile is,
-# per /etc/fstab), so this persists across the boot.
-# ⚠️ It is belt and braces only: disable-steelcase.sh touches the same file as its
-# FIRST command on every boot, and D9 is the open question of why a unit in
-# service does not have it — possibly cleanupfiles.sh (cron, every 4 h) sweeping
-# it. The crontab this run truncates is what would have scheduled the watchdog.
-if [[ -n "$DRY" ]]; then
-    printf '  would touch   %s\n' "$BASE/root/var/watchdog_test"
-else
-    mkdir -p "$BASE/root/var"
-    : > "$BASE/root/var/watchdog_test"
-fi
-ok "Steelcase software-watchdog bypass in place (/var/watchdog_test)"
-
-# ── 5c. sshd hardening ─────────────────────────────────────────────────────
-#
-# commission-roomwizard.sh turns root login and key auth ON; this is the other
-# half, and the factory default is the reason it cannot wait for a second phase:
-# the shipped sshd_config has PermitEmptyPasswords yes.
-#
-# PermitRootLogin stays "yes": root is the only account in /etc/passwd, there is
-# no adduser on the device, and every deploy path is root@<ip>.
-SSHD="$BASE/root/etc/ssh/sshd_config"
-if [[ -f "$SSHD" ]]; then
-    if [[ -n "$DRY" ]]; then
-        printf '  would harden  %s\n' "$SSHD"
-    else
-        [[ -f "$SSHD.orig" ]] || cp "$SSHD" "$SSHD.orig"
-        sed -i 's/^PermitEmptyPasswords yes/PermitEmptyPasswords no/' "$SSHD"
-        grep -q '^MaxAuthTries'   "$SSHD" || echo 'MaxAuthTries 3'   >> "$SSHD"
-        grep -q '^LoginGraceTime' "$SSHD" || echo 'LoginGraceTime 30' >> "$SSHD"
-        grep -q '^MaxSessions'    "$SSHD" || echo 'MaxSessions 5'     >> "$SSHD"
-        grep -q '^PermitEmptyPasswords no' "$SSHD" \
-            || warn "could not set PermitEmptyPasswords=no — check $SSHD by hand"
-    fi
-    ok "sshd hardened (PermitEmptyPasswords=no, MaxAuthTries=3)"
-fi
+ok "Boot scripts, boot links, sshd and the config fix-ups done"
 
 # ── 5d. the bundle ─────────────────────────────────────────────────────────
 info "Bundle: $BUNDLE_FILES file(s)"
