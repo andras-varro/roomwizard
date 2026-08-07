@@ -201,14 +201,26 @@ removes, so keeping it preserves the ability to undo a commissioning it can no l
 `--keep-factory` opts out; the 5 MB fallback kernel is kept either way; p1 is never written.
 
 ### What it does
-1. Deploys [`disable-steelcase.sh`](disable-steelcase.sh) → `/opt/roomwizard/`
-2. Runs it (watchdog bypass, cron cleanup, service stop/disable)
-3. Installs [`roomwizard-app-init.sh`](roomwizard-app-init.sh) as `/etc/init.d/roomwizard-app` (S99)
-4. Deploys audio-enable boot script (GPIO12 speaker amplifier)
-5. Deploys time-sync boot script (rdate)
-6. Enables **mDNS** — links the image's existing `avahi-daemon` into `rc5.d` (S30)
-7. Optionally removes the vendor software (`--remove` / `--deep-clean`)
-8. Reboots
+
+Nothing in the list below is written out in `setup-device.sh`. Steps 1–3 are one compiled plan over
+[`device-files/provision-rules.conf`](device-files/provision-rules.conf) and step 5 is one compiled plan
+over [`device-files/clean-rules.conf`](device-files/clean-rules.conf) — the **same two data files**
+`commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift.
+
+1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `99-security.conf`,
+   `roomwizard-app`, `disable-steelcase.sh`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`,
+   `S99roomwizard-app` in rc2–5.d), the sshd directives, the `/var/watchdog_test` bypass, and the two
+   config fix-ups. Stale `rc*.d` links from an earlier install are removed first.
+2. **Disable** — runs `disable-steelcase.sh`: watchdog bypass, a fresh crontab, services stopped.
+3. **Apply** the sysctl settings to the running kernel.
+4. **Report** what vendor software is still on disk.
+5. **Clean**, only if asked: `--remove` or `--deep-clean`.
+6. **Reboot.**
+
+⚠️ **A plan record is state; running a script is an action.** `disable-steelcase.sh` is *installed* by
+the plan and therefore also lands on an offline-commissioned card, but *running* it stops live processes
+and writes a crontab, so it has no offline equivalent by nature. `/etc/init.d/roomwizard-app` re-runs it
+on every boot, which is what makes the offline path's omission harmless rather than a gap.
 
 ### Usage
 
@@ -274,6 +286,38 @@ cd scummvm-roomwizard && ./build-and-deploy.sh <ip>
 The `set-default` flag makes that app start on boot.
 After deploying, reboot: `ssh root@<ip> reboot`
 
+### From a bundle, with no toolchain — the delivery mode
+
+⚠️ **Everything above BUILDS.** `deploy-all.sh <ip>` and every `build-and-deploy.sh` need
+`arm-linux-gnueabihf-gcc`, and ScummVM needs WSL and a C++ cross-compiler too. Someone who has been
+handed a device has none of that, which is what a release bundle is for:
+
+```bash
+./release.sh --stage-only                                  # on a build host, once
+./deploy-all.sh --from-bundle build/release <ip>            # anywhere, no compiler
+./deploy-all.sh --from-bundle roomwizard-<tag>.tar.gz <ip>  # or from the tarball
+```
+
+It stops the running app, installs, md5-verifies every file against the bundle's manifest, asserts `+x`
+on every entry declared executable, sets `default-app` and restarts the launcher. Modes come from the
+manifest, never from the transfer — see [`CLAUDE.md`](CLAUDE.md) → *Bundles*.
+
+### ⚠️ USB host mode is not in any bundle, and cannot be
+
+A commissioned unit has **no USB host mode**, whichever path commissioned it. That is by construction:
+USB host needs the `usb_host` component, which patches the DTB inside `uImage-system` on **p1** — the one
+partition every offline tool refuses to touch, because an untouched p1 is what keeps a power cycle a free
+undo. `release.sh` therefore excludes `usb_host` from every bundle, deliberately.
+
+The one command that adds it, over SSH after the unit boots:
+
+```bash
+cd usb_host && ./build-and-deploy.sh <ip>      # needs bc libssl-dev bison flex python3
+```
+
+That needs a full toolchain host — precisely what the delivery mode does not have. The tension is
+recorded, not solved: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) F15.
+
 ### Switching Apps
 
 To switch which app starts on boot, just set a different default:
@@ -292,31 +336,58 @@ Then reboot or restart the service: `ssh root@<ip> /etc/init.d/roomwizard-app re
 
 ## Architecture
 
+**Two data files hold every decision; the scripts are executors over them.** Neither the SSH pass nor
+the offline pass decides what to install or delete, which is what makes "the result is the same either
+way" a fact rather than an intention.
+
 ```
-commission-roomwizard.sh                Phase 1: SD card (offline)
-setup-device.sh                        Phase 2: SSH one-time setup
-deploy-all.sh                          Phase 3: build + deploy all components
-disable-steelcase.sh                   Shared: disable bloatware (idempotent)
-roomwizard-app-init.sh                 Generic init: starts /opt/roomwizard/default-app
-native_apps/build-and-deploy.sh        Build + deploy native apps
-vnc_client/build-and-deploy.sh         Build + deploy VNC client
-scummvm-roomwizard/build-and-deploy.sh Build + deploy ScummVM
+device-files/clean-rules.conf      WHAT IS REMOVED     <type> <group> <path> <reason>
+device-files/provision-rules.conf  WHAT IS INSTALLED   <type> <group> <mode> <target> <source> <reason>
+
+rw-clean.sh       parses clean-rules.conf     -> a plan, plus the offline executor
+rw-provision.sh   parses provision-rules.conf -> a plan, plus BOTH executors
+rw-bundle.sh      the bundle layout, plus the SSH bundle installer
+rw-identify.sh    which card, which partition — by content and POSITION, never by UUID
+
+roomwizard.sh                     Front door: a menu over everything below
+commission-roomwizard.sh          Phase 1: SD card (offline). A SUBROUTINE of the next one
+commission-offline.sh             All three phases in ONE offline pass — the delivery path
+setup-device.sh                   Phase 2: SSH provision + optional clean, ends in a reboot
+deploy-all.sh                     Phase 3: build + deploy everything
+deploy-all.sh --from-bundle       Phase 3 with NO toolchain — install a release bundle
+release.sh                        Build all components + stage one offline bundle
+disable-steelcase.sh              Device payload: watchdog bypass + fresh crontab, every boot
+roomwizard-app-init.sh            Device payload: installed as /etc/init.d/roomwizard-app
+*/build-and-deploy.sh             One per component
 ```
+
+⚠️ **`commission-roomwizard.sh` is step 3 *of* `commission-offline.sh`, not an alternative to it.** The
+name reads like a sibling and is misleading; renaming it is recorded in
+[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) C12.
 
 ### On-device layout
 ```
 /opt/roomwizard/
 ├── disable-steelcase.sh         Bloatware cleanup (run on every boot)
+├── apps/*.app                   Launcher manifests (INI: name=, exec=, icon=, args=)
+├── icons/*.ppm                  Tile icons, PPM P6
 └── default-app                  One line: path to executable (e.g. /opt/games/game_selector)
 
 /etc/init.d/
-├── roomwizard-app               Generic app launcher (S99)
+├── roomwizard-app               Generic app launcher (S99 in rc2-5.d)
 ├── audio-enable                 Speaker amplifier setup (S29)
-└── time-sync                    NTP via rdate (S28)
+└── time-sync                    rdate at boot (S28) — the RTC has no battery
 
-/opt/games/                      Native games + ScummVM binaries
+/etc/sysctl.d/99-security.conf   Kernel hardening; there is no iptables on this image
+/var/watchdog_test               The Steelcase software-watchdog bypass
+/opt/games/                      Native games + tools
 /opt/vnc_client/                 VNC client binary + config
+/opt/scummvm/                    ScummVM, where installed
 ```
+
+⚠️ **Every `rc*.d` link above is also on `clean-rules.conf`'s keep list.** A link the whitelist does not
+name is deleted by the next `--deep-clean`, so the pair is asserted rather than remembered —
+`rw_provision_check_keeps` refuses to provision if one is missing.
 
 ## Troubleshooting
 
