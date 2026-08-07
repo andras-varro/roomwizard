@@ -172,3 +172,128 @@ EOF
 
     [ "$bad" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# rw_bundle_install_ssh TARGET DIR
+#
+# Install a staged bundle onto a running device over SSH.  The SSH twin of
+# commission-offline.sh's install loop, and the capability IMPROVEMENT_PLAN.md C12
+# and F9 both record as missing.
+#
+# ── Why this has to exist ───────────────────────────────────────────────────
+#
+# `deploy-all.sh <ip>` BUILDS: it runs each component's build-and-deploy.sh, which
+# needs arm-linux-gnueabihf-gcc.  The person being delivered to has no toolchain by
+# definition — that is what a release bundle is for — so until this existed the
+# offline card path was the ONLY way to put binaries on a unit, even for someone
+# who already had SSH to it.
+#
+# ── ⚠️ Modes are DECLARED by the manifest, not carried by the tar ───────────
+#
+# The stream is unpacked first and every mode applied afterwards from the `.list`.
+# It cannot be the other way round: the staging directory usually lives on /mnt/c,
+# which reports every file 0777 and discards chmod, so tar preserves a mode that was
+# never a measurement.  `.list` is the authority — the same rule rw_bundle_add
+# enforces on the write side.
+#
+# One ssh for the payload rather than one scp per file: 46 files over 46 SSH
+# handshakes to a 600 MHz device is minutes of key exchange.
+#
+# ── How this is testable without a device ───────────────────────────────────
+#
+# $RW_SSH replaces the ssh command and $RW_BUNDLE_ROOT prefixes every device path,
+# both empty in production. Together they let tests/rw_bundle_ssh_test.sh run the
+# real function against a directory on this host — the same approach
+# rw_provision_online_script's $RW_PROVISION_ROOT takes, and for the same reason:
+# an installer whose only test is "it worked on a device once" has no test.
+# ---------------------------------------------------------------------------
+rw_bundle_install_ssh() {
+    local target="$1" dir="$2" mode dev want got n=0 bad=0 m
+    local SSHC="${RW_SSH:-ssh}" P="${RW_BUNDLE_ROOT:-}"
+
+    [ -n "$target" ] || { echo "  rw_bundle_install_ssh: no target"; return 1; }
+    [ -d "$dir" ]    || { echo "  rw_bundle_install_ssh: no such bundle dir: $dir"; return 1; }
+
+    # Both directions, before anything is written: no manifest entry without a
+    # staged file, and no staged file without an entry.  The second is the one that
+    # catches a file added by hand that nothing will ever chmod.
+    if ! rw_bundle_check "$dir"; then
+        echo "  the bundle is not self-consistent — refusing to install"
+        return 1
+    fi
+
+    n=$(rw_bundle_entries "$dir" | grep -c . || true)
+    [ "$n" -gt 0 ] || { echo "  the bundle names no files at all"; return 1; }
+    echo "  installing $n file(s) from $(basename "$dir") to $target"
+
+    # The payload, in one connection.  -p is deliberately absent on extract: the
+    # modes in the stream are meaningless (see above) and the loop below is the
+    # authority.
+    if ! tar -C "$dir/root" -cf - . | $SSHC "$target" "mkdir -p '${P:-/}'; tar -xf - -C '${P:-/}'"; then
+        echo "  the payload transfer failed"
+        return 1
+    fi
+
+    # Modes, from the manifest, in one remote shell.
+    rw_bundle_entries "$dir" | while read -r mode dev; do
+        [ -n "$dev" ] || continue
+        printf "chmod %s '%s%s' || echo 'CHMODFAIL %s'\n" "$mode" "$P" "$dev" "$dev"
+    done | $SSHC "$target" "sh -s" > "$dir/.chmod.out" 2>&1 || bad=1
+    if grep -q CHMODFAIL "$dir/.chmod.out" 2>/dev/null; then
+        sed -n 's/^CHMODFAIL /  could not chmod: /p' "$dir/.chmod.out"
+        bad=1
+    fi
+    rm -f "$dir/.chmod.out"
+
+    # md5 every installed file against the manifest, on the device.  Same assertion
+    # commission-offline.sh makes on the card, and the reason a truncated transfer
+    # is caught here rather than by a blank screen later.
+    local remote_md5 checked=0
+    remote_md5=$(rw_bundle_entries "$dir" | awk -v p="$P" '{print p $2}' \
+                   | $SSHC "$target" "xargs -n 50 md5sum 2>/dev/null" \
+                   | sed "s| $P| |; s|  $P|  |")
+    for m in "$dir"/manifest.d/*.md5; do
+        [ -f "$m" ] || continue
+        while read -r want dev; do
+            [ -n "$dev" ] || continue
+            checked=$((checked + 1))
+            got=$(printf '%s\n' "$remote_md5" | awk -v d="$dev" '$2 == d { print $1; exit }')
+            if [ -z "$got" ]; then
+                echo "  not installed: $dev"; bad=1
+            elif [ "$got" != "$want" ]; then
+                echo "  md5 mismatch: $dev (want $want, got $got)"; bad=1
+            fi
+        done < "$m"
+    done
+    if [ "$checked" -ne "$n" ]; then
+        echo "  md5 covered $checked of $n file(s) — the manifests do not cover the bundle"
+        bad=1
+    fi
+
+    # ⚠️ +x is a MEASUREMENT here and cannot be one on the dev host.  A missing +x on
+    # app_launcher is a black screen at boot and is invisible on /mnt/c.
+    #
+    # The OWNER digit, extracted by position: in a 4-digit mode "0755" it is char 2,
+    # in a 3-digit "755" it is char 1.  Testing the last digit instead would ask
+    # about `other`, so a deliberate 0700 would be reported as non-executable and a
+    # 0644 whose owner bit was wrong would slip through.
+    local xlist xbad
+    xlist=$(rw_bundle_entries "$dir" | awk -v p="$P" '
+        {
+            m = $1
+            o = (length(m) == 4) ? substr(m, 2, 1) : substr(m, 1, 1)
+            if (o % 2 == 1) print p $2
+        }')
+    if [ -n "$xlist" ]; then
+        xbad=$(printf '%s\n' "$xlist" \
+                 | $SSHC "$target" "while read -r p; do [ -x \"\$p\" ] || echo \"\$p\"; done")
+        if [ -n "$xbad" ]; then
+            printf '%s\n' "$xbad" | sed "s|^$P||; s|^|  declared executable but is not: |"
+            bad=1
+        fi
+    fi
+
+    [ "$bad" = 0 ] || return 1
+    echo "  $n file(s) installed, md5 verified, +x verified"
+    return 0
+}
