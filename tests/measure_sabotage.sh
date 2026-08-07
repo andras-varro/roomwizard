@@ -15,9 +15,9 @@ cd "$(dirname "$0")/.." || exit 1
 
 BAK=/tmp/rw-clean.orig.$$
 RULESBAK=/tmp/clean-rules.orig.$$
-cp rw-clean.sh "$BAK"
+cp lib/rw-clean.sh "$BAK"
 cp device-files/clean-rules.conf "$RULESBAK"
-restore() { cp "$BAK" rw-clean.sh; cp "$RULESBAK" device-files/clean-rules.conf; }
+restore() { cp "$BAK" lib/rw-clean.sh; cp "$RULESBAK" device-files/clean-rules.conf; }
 trap 'restore; rm -f "$BAK" "$RULESBAK"' EXIT INT TERM
 
 run() { ./tests/rw_clean_test.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+ passed, [0-9]+ failed'; }
@@ -28,27 +28,27 @@ echo -n "  baseline (nothing broken)          "; run
 # ── 1. scope records ignored: keeps applied, nothing swept ──────────────────
 # "A rule that deletes nothing passes a test that only checks the keeps survived."
 restore
-perl -0pi -e 's/if \(on\(group\)\) sweeps\[\+\+ns\] = path/if (0) sweeps[++ns] = path/' rw-clean.sh
+perl -0pi -e 's/if \(on\(group\)\) sweeps\[\+\+ns\] = path/if (0) sweeps[++ns] = path/' lib/rw-clean.sh
 echo -n "  scope records ignored              "; run
 
 # ── 2. a disabled group's paths no longer protect ──────────────────────────
 # Without this, --keep-java leaves /opt/openjre-8 named only by a delete nobody
 # runs, and the /opt sweep removes it anyway: the flag does nothing and says nothing.
 restore
-perl -0pi -e 's/\n\s+else keeps\[\+\+nk\] = dirof\(path\) "\\t" nameof\(path\)//g' rw-clean.sh
+perl -0pi -e 's/\n\s+else keeps\[\+\+nk\] = dirof\(path\) "\\t" nameof\(path\)//g' lib/rw-clean.sh
 echo -n "  disabled group does not protect    "; run
 
 # ── 3. factory back to opt-in ──────────────────────────────────────────────
 # The 2026-08-06 reversal. One default across every flag; --keep-factory opts out.
 restore
-perl -0pi -e 's/^RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"$/RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras sweeps"/m' rw-clean.sh
-perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras"/m' rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"$/RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras sweeps"/m' lib/rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras"/m' lib/rw-clean.sh
 echo -n "  factory reverted to opt-in         "; run
 
 # ── 4. --remove is a synonym for --deep-clean, not a subset ────────────────
 # i.e. someone "simplifies" by giving --remove the sweeps too.
 restore
-perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory sweeps"/m' rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory sweeps"/m' lib/rw-clean.sh
 echo -n "  --remove given the sweeps too      "; run
 
 # ── 5. the scope records moved back into `base` ────────────────────────────
@@ -66,7 +66,7 @@ echo -n "  the 8 named vendor logs dropped    "; run
 
 restore
 echo ""
-echo "  (the guardless del() case — setup-device.sh's live executor lifted offline"
+echo "  (the guardless del() case — commissioning/provision.sh's live executor lifted offline"
 echo "   with no base check — is not run here: unprefixed it would rm -rf this host's"
 echo "   /etc/shadow. It was measured at 11 failures against the 116-case version of"
 echo "   the suite, with rm sandboxed by hand.)"

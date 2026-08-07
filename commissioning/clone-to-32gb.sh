@@ -1,9 +1,9 @@
 #!/bin/bash
-# clone-to-32gb.sh — Clone and expand RoomWizard SD card from 4GB to 32GB
+# commissioning/clone-to-32gb.sh — Clone and expand RoomWizard SD card from 4GB to 32GB
 #
 # Usage:
-#   sudo ./clone-to-32gb.sh --clone-from <image_or_device> /dev/sdX
-#   sudo ./clone-to-32gb.sh --expand-only /dev/sdX
+#   sudo ./commissioning/clone-to-32gb.sh --clone-from <image_or_device> /dev/sdX
+#   sudo ./commissioning/clone-to-32gb.sh --expand-only /dev/sdX
 #
 # This script clones the original RoomWizard ~4GB SD card image onto a larger
 # (16-32GB) SD card and expands the root filesystem (p6) to use all available
@@ -44,9 +44,10 @@ MAX_TARGET_SIZE_GB=${MAX_TARGET_SIZE_GB:-128}
 EXPECTED_PARTITION_COUNT=7  # Original has 7 partitions (including swap on p7)
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Layout fingerprint and the rest of "is this a RoomWizard card".  Sourced
-# rather than reimplemented: commission-roomwizard.sh asks the same question of
+# rather than reimplemented: commissioning/card-prep.sh asks the same question of
 # the same cards.
 #
 # ⚠️ Do not gate this script on a rootfs UUID.  A filesystem UUID is generated at
@@ -57,8 +58,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # harder bug than the one it hides.  The partition LAYOUT is the invariant:
 # U-Boot has root=/dev/mmcblk0p6 compiled in with no saveenv, so p6 is the rootfs
 # by position on every unit.
-# shellcheck source=rw-identify.sh
-. "$SCRIPT_DIR/rw-identify.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_ROOT/lib/rw-identify.sh"
 
 # Captured by do_verify before repartitioning and checked again by
 # do_final_verify.  The meaningful question after a resize is whether the UUID
@@ -777,7 +778,7 @@ do_final_verify() {
     #
     # Nothing on the device consumes a UUID at all: U-Boot passes
     # root=/dev/mmcblk0p6 and /etc/fstab names /dev/mmcblk0p{2,3,5,7}, both by
-    # position.  Neither does our tooling any more — commission-roomwizard.sh
+    # position.  Neither does our tooling any more — commissioning/card-prep.sh
     # finds the rootfs by content.  So a changed UUID is a curiosity, not a
     # breakage — and never "fix" one with `tune2fs -U` to match another card.
     echo ""
@@ -847,8 +848,8 @@ do_final_verify() {
 
     echo -e "  ${GREEN}Next steps:${NC}"
     echo -e "    1. Insert card into RoomWizard"
-    echo -e "    2. Run: ${BOLD}./commission-roomwizard.sh${NC}"
-    echo -e "    3. Run: ${BOLD}./setup-device.sh <device-ip> --remove${NC}"
+    echo -e "    2. Run: ${BOLD}./commissioning/card-prep.sh${NC}"
+    echo -e "    3. Run: ${BOLD}./commissioning/provision.sh <device-ip> --remove${NC}"
     echo -e "    4. Run: ${BOLD}./deploy-all.sh <device-ip>${NC}"
     echo ""
 }

@@ -27,7 +27,7 @@
 #   - SSH access to device
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
-# separately by setup-device.sh.  Run that once before deploying for the first time.
+# separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 
 set -e  # Exit on error
@@ -589,7 +589,7 @@ deploy_to_device() {
     # Verify system setup has been done
     if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
         log_warning "System setup not detected on device."
-        log_warning "Run setup-device.sh first:  ../setup-device.sh $DEVICE_IP"
+        log_warning "Run commissioning/provision.sh first:  ../commissioning/provision.sh $DEVICE_IP"
         echo ""
         read -p "Continue deploying anyway? (y/n): " confirm
         [[ "$confirm" != "y" ]] && exit 1
@@ -607,7 +607,7 @@ deploy_to_device() {
     ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
     /etc/init.d/roomwizard-app stop
 else
-    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+    echo "  /etc/init.d/roomwizard-app not installed - run ../commissioning/provision.sh <ip>"
 fi' || log_warning "stop reported a failure - a surviving process may hold the binary"
     
     # Copy binary to device
@@ -702,8 +702,8 @@ APP
 stage_bundle() {
     local dir="$1" n
 
-    # shellcheck source=../rw-bundle.sh
-    . "$REPO_ROOT/rw-bundle.sh"
+    # shellcheck source=../lib/rw-bundle.sh
+    . "$REPO_ROOT/lib/rw-bundle.sh"
 
     if [ ! -f "$SCUMMVM_DIR/scummvm" ]; then
         log_error "No binary at $SCUMMVM_DIR/scummvm — nothing to stage."

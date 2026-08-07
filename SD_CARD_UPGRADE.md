@@ -27,7 +27,7 @@ accommodate large ScummVM game data (Full Throttle, The Dig, Grim Fandango, etc.
 The stock RoomWizard SD card is a ~3.7 GB (nominal 4 GB) card. The root
 filesystem (p6) is only **~981 MB**, of which ~463 MB is used out of the box
 (~474 MB free). Even after removing ~178 MB of Steelcase bloatware with
-`setup-device.sh --remove`, only ~652 MB is free.
+`commissioning/provision.sh --remove`, only ~652 MB is free.
 
 ScummVM games are deployed to `/opt/roomwizard/` on the rootfs. Large adventure
 games require significant space:
@@ -57,7 +57,7 @@ enough for a large library of both classic and remastered titles.
 - **Log partition (p3)** — ext3, ~243 MB — untouched.
 - **Backup partition (p5)** — ext3, ~1.40 GB — kept at original size for safety.
 - **Kernel, U-Boot, device tree** — unchanged.
-- **Commissioning workflow** — `commission-roomwizard.sh` → `setup-device.sh` → `deploy-all.sh` works identically, because p6 is still p6 and its content is unchanged. Nothing in the workflow depends on a UUID.
+- **Commissioning workflow** — `commissioning/card-prep.sh` → `commissioning/provision.sh` → `deploy-all.sh` works identically, because p6 is still p6 and its content is unchanged. Nothing in the workflow depends on a UUID.
 
 ---
 
@@ -155,14 +155,14 @@ Two things the upgrade must not disturb, and neither is a UUID.
 `/etc/fstab` names `/dev/mmcblk0p{2,3,5,7}`. Everything is by *position*, so p6 must stay p6. That
 is why p5 is preserved at its original size rather than deleted (see below).
 
-**Content.** `commission-roomwizard.sh` finds the rootfs by content, not by UUID, so a card with any
+**Content.** `commissioning/card-prep.sh` finds the rootfs by content, not by UUID, so a card with any
 UUID commissions unchanged. See `COMMISSIONING.md` → *Finding the card*.
 
 ⚠️ **Do not treat the rootfs UUID as a value that must match anything.** A UUID is assigned at mkfs
 time, so it names one card: two RoomWizards on identical firmware share none of their four. Since we
 `dd` and only **resize** (never `mkfs`), p6's UUID does survive — but that is a property of
 `resize2fs`, not a requirement, and it is worth checking only as evidence that nothing more than a
-resize happened. `clone-to-32gb.sh` compares it against the value it recorded *on this card* before
+resize happened. `commissioning/clone-to-32gb.sh` compares it against the value it recorded *on this card* before
 repartitioning, for exactly that reason.
 
 ### Why We Drop p7 (Swap)
@@ -357,7 +357,7 @@ sudo sfdisk -l ${DEST}
 > **Important:** Replace `/dev/sdX` in the heredoc with your actual device name
 > (e.g., `/dev/sdb`). The `sfdisk` tool uses the device names in the input to
 > match partition entries. Alternatively, the automated script
-> [`clone-to-32gb.sh`](clone-to-32gb.sh) handles device naming automatically.
+> [`commissioning/clone-to-32gb.sh`](commissioning/clone-to-32gb.sh) handles device naming automatically.
 
 > **Verify:** The output should show p1–p3 unchanged, p4 expanded to fill the
 > disk, p5 at the same location/size, p6 taking all remaining space (~27+ GB),
@@ -426,7 +426,7 @@ Insert the 32 GB card into the RoomWizard and follow the standard workflow:
 **Phase 1 — Commission** (SD card in Linux PC):
 
 ```bash
-./commission-roomwizard.sh
+./commissioning/card-prep.sh
 ```
 
 This finds the rootfs by content, sets the root password and host name, enables
@@ -435,7 +435,7 @@ SSH, and configures DHCP. It does not care what the card's UUID is.
 **Phase 2 — System Setup** (SSH to device):
 
 ```bash
-./setup-device.sh <device-ip> --remove
+./commissioning/provision.sh <device-ip> --remove
 ```
 
 Disables Steelcase services, installs init scripts, removes bloatware.
@@ -586,7 +586,7 @@ sudo umount /mnt/rw
 
 ## 8. Script Reference
 
-The helper script [`clone-to-32gb.sh`](clone-to-32gb.sh) automates the
+The helper script [`commissioning/clone-to-32gb.sh`](commissioning/clone-to-32gb.sh) automates the
 recommended procedure (Steps 2–6). It:
 
 - Validates the target: a whole disk (not a partition), 16–128 GB, removable
@@ -604,27 +604,27 @@ recommended procedure (Steps 2–6). It:
 
 ```bash
 # Clone from image and expand:
-sudo ./clone-to-32gb.sh --clone-from roomwizard-original-4gb.img /dev/sdb
+sudo ./commissioning/clone-to-32gb.sh --clone-from roomwizard-original-4gb.img /dev/sdb
 
 # Clone from another SD card and expand:
-sudo ./clone-to-32gb.sh --clone-from /dev/sdc /dev/sdb
+sudo ./commissioning/clone-to-32gb.sh --clone-from /dev/sdc /dev/sdb
 
 # Expand only (image already cloned):
-sudo ./clone-to-32gb.sh --expand-only /dev/sdb
+sudo ./commissioning/clone-to-32gb.sh --expand-only /dev/sdb
 
 # Dry run (show what would happen):
-sudo ./clone-to-32gb.sh --dry-run --expand-only /dev/sdb
+sudo ./commissioning/clone-to-32gb.sh --dry-run --expand-only /dev/sdb
 
 # Help:
-./clone-to-32gb.sh --help
+./commissioning/clone-to-32gb.sh --help
 ```
 
 ### Existing Scripts (Unchanged)
 
 | Script | Phase | Purpose |
 |--------|-------|---------|
-| [`commission-roomwizard.sh`](commission-roomwizard.sh) | 1 | SD card commissioning — finds rootfs by UUID, sets password, SSH, DHCP |
-| [`setup-device.sh`](setup-device.sh) | 2 | Disable Steelcase services, install init scripts, optional bloatware removal |
+| [`commissioning/card-prep.sh`](commissioning/card-prep.sh) | 1 | SD card commissioning — finds rootfs by UUID, sets password, SSH, DHCP |
+| [`commissioning/provision.sh`](commissioning/provision.sh) | 2 | Disable Steelcase services, install init scripts, optional bloatware removal |
 | [`deploy-all.sh`](deploy-all.sh) | 3 | Build and deploy all components to device |
 
 None of these scripts require modification after the SD card upgrade (assuming
@@ -639,7 +639,7 @@ the recommended approach where UUID is preserved).
 ⚠️ **Do not "fix" this with `tune2fs -U` to make the card match another one.** A
 filesystem UUID names one card. Assigning a second card the same value leaves two
 cards claiming one UUID, which is a harder bug than any it papers over — and
-nothing needs it: `commission-roomwizard.sh` finds the rootfs by content, U-Boot
+nothing needs it: `commissioning/card-prep.sh` finds the rootfs by content, U-Boot
 passes `root=/dev/mmcblk0p6`, and `/etc/fstab` uses device paths.
 
 So a changed UUID is never itself the problem. It is a **symptom**, and the thing
@@ -651,7 +651,7 @@ to work out is what changed it:
 | `resize2fs` reported success and the UUID changed | it is not supposed to do that. Verify the filesystem (`e2fsck -f`) before trusting the card. |
 | it never matched the reference unit's UUID | expected. Units are mkfs'd independently at the factory and share no UUIDs — `SYSTEM_ANALYSIS.md#42-partitions`. Nothing is wrong. |
 
-`clone-to-32gb.sh` distinguishes these for you: it records p6's UUID before
+`commissioning/clone-to-32gb.sh` distinguishes these for you: it records p6's UUID before
 repartitioning and compares against **that**, so it reports a real change and
 stays quiet about a merely unfamiliar value.
 
@@ -906,5 +906,5 @@ sudo blkid ${DEST}6
 # Should still show the UUID the card had before STEP 4 — resize2fs preserves it.
 # Its VALUE does not matter to anything; a change means more than a resize happened.
 
-echo "Done! Proceed with commission-roomwizard.sh → setup-device.sh → deploy-all.sh"
+echo "Done! Proceed with commissioning/card-prep.sh → commissioning/provision.sh → deploy-all.sh"
 ```

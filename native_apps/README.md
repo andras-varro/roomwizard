@@ -253,14 +253,14 @@ The vendor firmware ships a software watchdog that reboots the device roughly ev
 in game mode, plus ~178 MB of bloatware (Jetty, OpenJRE, HSQLDB, X11, CJK fonts) and a further
 ~560 MB that can be reclaimed on top of that.
 
-None of this is handled here — it is owned by `../setup-device.sh`:
+None of this is handled here — it is owned by `../commissioning/provision.sh`:
 
 ```bash
-../setup-device.sh <ip>                        # disable the SW watchdog + services
-../setup-device.sh <ip> --remove               # + delete vendor bloatware (~178 MB)
-../setup-device.sh <ip> --deep-clean           # + extended cleanup (~560 MB more)
-../setup-device.sh <ip> --deep-clean --dry-run # preview, deletes nothing
-../setup-device.sh <ip> --status               # report current state
+../commissioning/provision.sh <ip>                        # disable the SW watchdog + services
+../commissioning/provision.sh <ip> --remove               # + delete vendor bloatware (~178 MB)
+../commissioning/provision.sh <ip> --deep-clean           # + extended cleanup (~560 MB more)
+../commissioning/provision.sh <ip> --deep-clean --dry-run # preview, deletes nothing
+../commissioning/provision.sh <ip> --status               # report current state
 ```
 
 Which services are disabled and why it is safe is documented in
@@ -275,7 +275,7 @@ Which services are disabled and why it is safe is documented in
 ```
 
 This writes `/opt/roomwizard/default-app`; the init service respawns whatever it points at.
-Installing the service itself is done once by `../setup-device.sh`.
+Installing the service itself is done once by `../commissioning/provision.sh`.
 
 Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-app start|stop|status'`
 

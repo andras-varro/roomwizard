@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-# rw-provision.sh — read device-files/provision-rules.conf, compile it into a plan,
+# lib/rw-provision.sh — read device-files/provision-rules.conf, compile it into a plan,
 #                   and apply that plan either OFFLINE (to a mounted card) or LIVE
 #                   (as an interpreter piped to the device over ssh).
 #
-# SOURCED, not executed:   . "$REPO_ROOT/rw-provision.sh"
-#                          (needs rw-identify.sh and rw-clean.sh sourced first —
+# SOURCED, not executed:   . "$REPO_ROOT/lib/rw-provision.sh"
+#                          (needs lib/rw-identify.sh and lib/rw-clean.sh sourced first —
 #                          rw_clean_offline_path does the p2/p3/p5/p6 mapping and
 #                          rw_clean_check_base is the guard)
 #
-# IMPROVEMENT_PLAN.md C12. The delete half is rw-clean.sh; this is the install half
+# IMPROVEMENT_PLAN.md C12. The delete half is lib/rw-clean.sh; this is the install half
 # and it is deliberately the same shape.
 #
 # ── The decisions are not in this file ──────────────────────────────────────
@@ -17,8 +17,8 @@
 # Every file, link, mode and config edit lives in device-files/provision-rules.conf
 # with a reason per entry, read by BOTH consumers:
 #
-#   setup-device.sh         live, over SSH
-#   commission-offline.sh   offline, card in a reader
+#   commissioning/provision.sh           live, over SSH
+#   commissioning/commission-offline.sh  offline, card in a reader
 #
 # so the two cannot drift. They HAD drifted: the online path removed stale rc*.d
 # links before relinking and the offline path did not.
@@ -27,12 +27,12 @@
 #
 # The offline executor is a shell function here. The online one CANNOT be, because
 # the work happens on the far side of an ssh pipe — so rw_provision_online_script
-# emits the interpreter as text and setup-device.sh pipes it to `ssh <t> sh -s`
+# emits the interpreter as text and commissioning/provision.sh pipes it to `ssh <t> sh -s`
 # together with the plan. Consequences worth knowing:
 #
 #   - It is /bin/sh for BusyBox ash, not bash. No [[, no arrays, no local.
 #   - `install` is the one verb it cannot do alone: the source bytes are on the
-#     host. setup-device.sh scp's them first and the interpreter only chmods.
+#     host. commissioning/provision.sh scp's them first and the interpreter only chmods.
 #   - It honours $RW_PROVISION_ROOT, which is "" on a device. That is what lets
 #     tests/rw_provision_test.sh group E run it against a copied tree and compare
 #     its dry run with the offline one — a comparison of two executors rather than
@@ -72,7 +72,7 @@ rw_provision_optional_groups() { echo "$RW_PROVISION_GROUPS_OPTIONAL"; }
 # ---------------------------------------------------------------------------
 rw_provision_rules_file() {
     local d
-    d=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
+    d=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)
     echo "$d/device-files/provision-rules.conf"
 }
 
@@ -101,7 +101,7 @@ rw_provision_validate() {
     local file="$1" repo="${2:-}" out
     [ -f "$file" ] || { echo "  no such file: $file"; return 1; }
     if [ -z "$repo" ]; then
-        repo=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
+        repo=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)
     fi
 
     out=$(awk -F'\t' -v types="$RW_PROVISION_TYPES" -v groups="$RW_PROVISION_GROUPS_ALL" \

@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# rw-clean.sh — read device-files/clean-rules.conf, compile it into a plan, and
+# lib/rw-clean.sh — read device-files/clean-rules.conf, compile it into a plan, and
 #               apply that plan to a card mounted OFFLINE.
 #
-# SOURCED, not executed:   . "$REPO_ROOT/rw-clean.sh"
-#                          (needs rw-identify.sh sourced first)
+# SOURCED, not executed:   . "$REPO_ROOT/lib/rw-clean.sh"
+#                          (needs lib/rw-identify.sh sourced first)
 #
 # IMPROVEMENT_PLAN.md F10, step 3.
 #
@@ -13,12 +13,12 @@
 # Every keep and every delete lives in device-files/clean-rules.conf, with a
 # reason per entry, read by BOTH consumers:
 #
-#   setup-device.sh --deep-clean   live, over SSH, base = /
-#   commission-offline.sh          offline, card in a reader, base = a mount point
+#   commissioning/provision.sh --deep-clean   live, over SSH, base = /
+#   commissioning/commission-offline.sh       offline, card in a reader, base = a mount point
 #
 # so the two cannot drift.  What each consumer keeps is its own EXECUTOR, because
 # "/" is the correct prefix on a device and a refused one offline.  This file is
-# the offline executor and the shared parser; setup-device.sh ships the compiled
+# the offline executor and the shared parser; commissioning/provision.sh ships the compiled
 # plan to the device and interprets it there with no prefix at all.
 #
 # ── The plan format, which is the interface between the two ─────────────────
@@ -83,12 +83,13 @@ rw_clean_remove_groups()   { echo "$RW_CLEAN_GROUPS_REMOVE"; }
 # ---------------------------------------------------------------------------
 # rw_clean_rules_file
 #
-# Echo the shipped rules file.  Resolved from this file's own location so that a
-# caller in a subdirectory, or one invoked through a symlink, finds it.
+# Echo the shipped rules file.  Resolved from this file's own location — one level
+# up, because this library lives in lib/ — so that a caller in a subdirectory, or
+# one invoked through a symlink, finds it.
 # ---------------------------------------------------------------------------
 rw_clean_rules_file() {
     local d
-    d=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
+    d=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)
     echo "$d/device-files/clean-rules.conf"
 }
 

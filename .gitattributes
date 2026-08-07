@@ -1,10 +1,10 @@
 # Shell scripts MUST stay LF.
 #
-# roomwizard-app-init.sh and disable-steelcase.sh are scp'd byte-for-byte onto
-# the device and run by BusyBox sh. A CRLF line ending turns the shebang into
-# `#!/bin/sh\r`, which BusyBox rejects with a misleading "no such file or
-# directory" - the device then boots to a black screen with no launcher and no
-# obvious cause.
+# device-files/roomwizard-app and device-files/disable-steelcase.sh are scp'd
+# byte-for-byte onto the device and run by BusyBox sh. A CRLF line ending turns
+# the shebang into `#!/bin/sh\r`, which BusyBox rejects with a misleading "no
+# such file or directory" - the device then boots to a black screen with no
+# launcher and no obvious cause.
 #
 # This host has core.autocrlf=true set system-wide, so without this file the
 # next clone on Windows would silently break the device.
@@ -18,10 +18,11 @@
 *.app  text eol=lf
 
 # device-files/ is installed onto the device VERBATIM by two consumers
-# (setup-device.sh over SSH, commission-offline.sh onto a mounted card), and its
-# init scripts have no .sh extension because /etc/init.d/audio-enable is the name
-# the rc5.d link points at. So the rule above does not cover them, and a CRLF
-# here breaks the boot exactly as described at the top of this file.
+# (commissioning/provision.sh over SSH, commissioning/commission-offline.sh onto
+# a mounted card), and its init scripts have no .sh extension because
+# /etc/init.d/audio-enable is the name the rc5.d link points at. So the rule above
+# does not cover them, and a CRLF here breaks the boot exactly as described at the
+# top of this file.
 device-files/** text eol=lf
 
 # Binary assets - never touch

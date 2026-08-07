@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# rw_identify_test.sh — regression for rw-identify.sh
+# rw_identify_test.sh — regression for lib/rw-identify.sh
 #
 # Host-only, no device, no SD card, no root. Run it:
 #
@@ -9,7 +9,7 @@
 # WHAT IT COVERS, and why each case is here rather than being obvious:
 #
 #   rw_is_rootfs      Every state a real card can be in — vendor-fresh, after
-#                     `setup-device.sh --remove` (which deletes /opt/pv02), and
+#                     `commissioning/provision.sh --remove` (which deletes /opt/pv02), and
 #                     stripped down to nothing but the login banner. Plus the
 #                     negative control that matters: a tree that has all four
 #                     files the caller EDITS and none of the vendor markers,
@@ -48,8 +48,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# shellcheck source=../rw-identify.sh
-. "$REPO_DIR/rw-identify.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_DIR/lib/rw-identify.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -109,7 +109,7 @@ mkdir -p "$V/opt/pv02" "$V/opt/sbin/watchdog"
 echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$V/etc/issue"
 expect_rootfs yes "$V" "vendor-fresh rootfs"
 
-# 2. After setup-device.sh --remove: /opt/pv02 is gone, /opt/roomwizard added.
+# 2. After commissioning/provision.sh --remove: /opt/pv02 is gone, /opt/roomwizard added.
 R="$TMP/removed"
 make_required "$R"
 mkdir -p "$R/opt/sbin/watchdog" "$R/opt/roomwizard"

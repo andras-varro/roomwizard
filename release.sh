@@ -19,7 +19,7 @@
 # artifacts suit distribution unusually well: everything ships -static, so there
 # is no ABI surface to match against the device's glibc.
 #
-# commission-offline.sh is the first non-developer consumer — an offline
+# commissioning/commission-offline.sh is the first non-developer consumer — an offline
 # commissioner has no toolchain to fall back on, so a bundle IS its only source
 # of binaries.
 #
@@ -39,14 +39,14 @@
 #
 # base/version.o re-embeds the build date on every link, so two releases from an
 # identical tree differ.  The md5 manifest is therefore GENERATED per release by
-# rw-bundle.sh, never asserted against a known-good set.
+# lib/rw-bundle.sh, never asserted against a known-good set.
 #
 # ── gh ──────────────────────────────────────────────────────────────────────
 #
 # `gh` 2.86.0 is installed in WSL (from the release .deb — focal's apt has no `gh`
 # and the snap links against a glibc newer than 2.31), but --tag has still never
 # been run; --stage-only is the tested path and produces a tarball
-# commission-offline.sh --bundle <file> takes directly.  That is why the publish
+# commissioning/commission-offline.sh --bundle <file> takes directly.  That is why the publish
 # step is a thin wrapper around one gh command and nothing depends on its output.
 # `origin` is an SSH host alias (git@github.com-personal:…), so whoever publishes
 # needs `gh auth` for that account — and gh may need --repo, since it resolves the
@@ -58,8 +58,8 @@ _START_SECONDS=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# shellcheck source=rw-bundle.sh
-. "$SCRIPT_DIR/rw-bundle.sh"
+# shellcheck source=lib/rw-bundle.sh
+. "$SCRIPT_DIR/lib/rw-bundle.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
@@ -139,7 +139,7 @@ info "Staging to: $OUT"
 # after the operator has already been told the release is ready.
 #
 # Guarded rather than trusted: $OUT comes from the command line and this is an
-# `rm -rf`.  The same reasoning as rw-clean.sh's del() guard, and the same
+# `rm -rf`.  The same reasoning as lib/rw-clean.sh's del() guard, and the same
 # refusal.
 case "$OUT" in
     ""|"/"|"/*") err "refusing to stage into '$OUT'" ;;
@@ -245,7 +245,7 @@ done
 # ── tar ─────────────────────────────────────────────────────────────────────
 # --owner/--group/--numeric-owner so the archive does not carry whoever built it,
 # and so two builds differ only in the artifacts.  Modes inside the tar are NOT
-# the authority — manifest.d/*.list is (see rw-bundle.sh); on /mnt/c every file
+# the authority — manifest.d/*.list is (see lib/rw-bundle.sh); on /mnt/c every file
 # reads 0777 and the tar would say so.
 TARBALL="$SCRIPT_DIR/build/roomwizard-apps-${TAG:-$(date -u '+%Y%m%d')}.tar.gz"
 mkdir -p "$(dirname "$TARBALL")"
@@ -263,7 +263,7 @@ if [[ $STAGE_ONLY -eq 1 ]]; then
     ok "Staged only — nothing was published."
     echo ""
     echo "  Install it offline, with no network and no toolchain:"
-    echo "    ./commission-offline.sh --bundle $TARBALL"
+    echo "    ./commissioning/commission-offline.sh --bundle $TARBALL"
     echo ""
     echo "  Or publish it:"
     echo "    $0 --tag <tag>"
@@ -283,7 +283,7 @@ else
             echo "Install offline, with no toolchain:"
             echo ""
             echo '```'
-            echo "./commission-offline.sh --bundle $(basename "$TARBALL")"
+            echo "./commissioning/commission-offline.sh --bundle $(basename "$TARBALL")"
             echo '```'
             echo ""
             echo "Built from ${GIT_REV}${GIT_DIRTY}. Components:"

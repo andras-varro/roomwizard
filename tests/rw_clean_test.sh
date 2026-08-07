@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# rw_clean_test.sh — regression for rw-clean.sh and device-files/clean-rules.conf
+# rw_clean_test.sh — regression for lib/rw-clean.sh and device-files/clean-rules.conf
 #
 # Host-only, no device, no SD card, no root. Run it:
 #
@@ -68,7 +68,7 @@
 #       every plan the suite checked. The C11 plan diff found it; a gap a one-off
 #       migration script finds and the regression suite does not is a gap that
 #       comes back.
-#   the guardless del() — setup-device.sh's live executor lifted offline with no
+#   the guardless del() — commissioning/provision.sh's live executor lifted offline with no
 #   base check, plain concatenation                                 11 fail
 #       Against the 116-case version, with rm sandboxed by hand; not re-measured
 #       because unprefixed it would rm -rf this host's /etc/shadow. A1–A4 each
@@ -84,10 +84,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# shellcheck source=../rw-identify.sh
-. "$REPO_DIR/rw-identify.sh"
-# shellcheck source=../rw-clean.sh
-. "$REPO_DIR/rw-clean.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_DIR/lib/rw-identify.sh"
+# shellcheck source=../lib/rw-clean.sh
+. "$REPO_DIR/lib/rw-clean.sh"
 
 RULES="$REPO_DIR/device-files/clean-rules.conf"
 
@@ -264,7 +264,7 @@ absent() { if has "$1" "$2"; then bad "$3 — plan HAS '$1'"; else ok "$3"; fi; 
 # ⚠️ Which part of the count is the harness?
 #
 # `absent` against an EMPTY plan passes, so a group name this file uses that
-# rw-clean.sh does not know compiles to nothing and then reads as a row of
+# lib/rw-clean.sh does not know compiles to nothing and then reads as a row of
 # successes. That is not hypothetical: it is how this group behaved for the whole
 # of the pre-change run, where six `absent` cases "passed" against plans that had
 # failed to compile. So every plan asserts that it compiled BEFORE anything is
@@ -497,7 +497,7 @@ build_card() {
 
 build_card
 
-# rw-identify.sh's own sanity check must pass on the fixture, or every later
+# lib/rw-identify.sh's own sanity check must pass on the fixture, or every later
 # assertion is about the wrong tree.
 if rw_check_card_mounts "$CARD" >/dev/null; then
     ok "E1 the synthetic card passes rw_check_card_mounts"

@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# rw-bundle.sh — the bundle layout that F9 publishes and F10 installs.
+# lib/rw-bundle.sh — the bundle layout that F9 publishes and F10 installs.
 #
-# SOURCED, not executed:   . "$REPO_ROOT/rw-bundle.sh"
+# SOURCED, not executed:   . "$REPO_ROOT/lib/rw-bundle.sh"
 #
 # ── Layout ──────────────────────────────────────────────────────────────────
 #
@@ -177,7 +177,7 @@ EOF
 # rw_bundle_install_ssh TARGET DIR
 #
 # Install a staged bundle onto a running device over SSH.  The SSH twin of
-# commission-offline.sh's install loop, and the capability IMPROVEMENT_PLAN.md C12
+# commissioning/commission-offline.sh's install loop, and the capability IMPROVEMENT_PLAN.md C12
 # and F9 both record as missing.
 #
 # ── Why this has to exist ───────────────────────────────────────────────────
@@ -246,7 +246,7 @@ rw_bundle_install_ssh() {
     rm -f "$dir/.chmod.out"
 
     # md5 every installed file against the manifest, on the device.  Same assertion
-    # commission-offline.sh makes on the card, and the reason a truncated transfer
+    # commissioning/commission-offline.sh makes on the card, and the reason a truncated transfer
     # is caught here rather than by a blank screen later.
     local remote_md5 checked=0
     remote_md5=$(rw_bundle_entries "$dir" | awk -v p="$P" '{print p $2}' \

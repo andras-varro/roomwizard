@@ -6,7 +6,7 @@
 # removing the SD card from the box. It configures root access, SSH,
 # and DHCP networking.
 #
-# Usage: ./commission-roomwizard.sh
+# Usage: ./commissioning/card-prep.sh
 #
 # Prerequisites:
 # - SD card must be inserted into a Linux machine
@@ -17,9 +17,11 @@
 set -e  # Exit on error
 
 # Defined up here rather than at first use: it is needed both by the host-name
-# step (to run set-hostname.sh) and by the next-steps block at the end (to read
-# COMMISSIONING.md), and one definition cannot drift from another.
+# step (to run set-hostname.sh beside it) and by the next-steps block at the end
+# (to read COMMISSIONING.md at the repo root), and one definition cannot drift
+# from another.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -56,13 +58,13 @@ echo ""
 # By CONTENT, not by UUID. A filesystem UUID is generated at mkfs time, so it
 # names one card and not a model: two RoomWizards on the identical firmware
 # build share none of their four UUIDs, and a hardcoded one recognises only the
-# unit whose card the constant was copied from. rw-identify.sh holds the markers
+# unit whose card the constant was copied from. lib/rw-identify.sh holds the markers
 # and the full reasoning.
 #
 # Sourced with `.` rather than run, and via an absolute path, because the Bash
 # tool's working directory is not dependable.
-# shellcheck source=rw-identify.sh
-. "$SCRIPT_DIR/rw-identify.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_ROOT/lib/rw-identify.sh"
 
 if [ -n "${ROOTFS:-}" ]; then
     # The documented escape hatch: a card mounted by hand, or a copy of a rootfs
@@ -230,25 +232,25 @@ echo ""
 # that name, on a non-loopback line, to an external address that is unreachable
 # here — so a device resolving its own name gets a bogus IP. Naming the card here
 # is the only point in the flow where it costs nothing: no device to reach, no
-# reboot. See IMPROVEMENT_PLAN.md D7, and set-hostname.sh for what gets written.
+# reboot. See IMPROVEMENT_PLAN.md D7, and commissioning/set-hostname.sh for what gets written.
 CURRENT_HOSTNAME=""
 if [ -f "$ROOTFS/etc/hostname" ]; then
     CURRENT_HOSTNAME=$(head -1 "$ROOTFS/etc/hostname" | tr -d ' \011\015\012')
 fi
 info "The card currently claims the name: ${CURRENT_HOSTNAME:-(none)}"
 info "A unique name lets you reach the unit as <name>.local once mDNS is on"
-info "(setup-device.sh enables it), instead of hunting for a DHCP lease."
+info "(commissioning/provision.sh enables it), instead of hunting for a DHCP lease."
 echo ""
 
 while true; do
     read -p "Host name [${CURRENT_HOSTNAME:-roomwizard}]: " NEW_HOSTNAME
     NEW_HOSTNAME="${NEW_HOSTNAME:-${CURRENT_HOSTNAME:-roomwizard}}"
 
-    # set-hostname.sh is the single implementation and the single validator; it
+    # commissioning/set-hostname.sh is the single implementation and the single validator; it
     # refuses a bad name and changes nothing, so let it be the judge rather than
     # duplicating the RFC-1123 regex here.
     #
-    # Run through `bash` rather than as `./set-hostname.sh`: a clone can land
+    # Run through `bash` rather than as `./commissioning/set-hostname.sh`: a clone can land
     # without the executable bit, and failing HERE — after /etc/shadow has
     # already been rewritten — leaves a half-commissioned card and loops on
     # "Please try again" forever. The interpreter is not in doubt.
@@ -314,7 +316,7 @@ echo ""
 #
 # This script sudo's each individual write rather than requiring root, so run
 # standalone it has the operator's own $HOME and the key is where they expect.
-# But commission-offline.sh runs as root and calls this, and under sudo $HOME is
+# But commissioning/commission-offline.sh runs as root and calls this, and under sudo $HOME is
 # /root — where no operator's SSH key lives. The key was therefore NEVER found in
 # the offline flow: the prompt fell through to "enter a path" on a host where a
 # perfectly good ~/.ssh/id_rsa.pub existed.
@@ -517,8 +519,8 @@ echo ""
 # ── Why an explicit flag and not a ROOTFS test ─────────────────────────────
 #
 # The next-steps block below tells the operator to boot the unit, then run
-# setup-device.sh and deploy-all.sh. That is correct for a standalone run and
-# WRONG under commission-offline.sh, which has already done both by the time it
+# commissioning/provision.sh and deploy-all.sh. That is correct for a standalone run and
+# WRONG under commissioning/commission-offline.sh, which has already done both by the time it
 # gets here — an operator who follows it hunts for an IP to repeat work that is
 # finished, and the banner above says "Complete!" while three phases remain.
 #
@@ -533,7 +535,7 @@ if [ -n "${RW_COMMISSION_ORCHESTRATED:-}" ]; then
     echo "================================================"
     echo ""
     success "Password, host name, SSH and DHCP are written to the card."
-    info "Returning to commission-offline.sh for the clean, the install and the verify."
+    info "Returning to commissioning/commission-offline.sh for the clean, the install and the verify."
     echo ""
     exit 0
 fi
@@ -546,7 +548,7 @@ success "All configuration changes have been applied."
 echo ""
 
 # Print next steps from COMMISSIONING.md (single source of truth)
-GUIDE="$SCRIPT_DIR/COMMISSIONING.md"
+GUIDE="$REPO_ROOT/COMMISSIONING.md"
 if [ -f "$GUIDE" ]; then
     sed -n '/<!-- NEXT_STEPS_START -->/,/<!-- NEXT_STEPS_END -->/{/<!--/d; p;}' "$GUIDE"
 else

@@ -3,7 +3,7 @@
 > ## ⚠️ Obsolete
 >
 > These games run inside the vendor's X11 → Jetty → WebKit browser stack. That entire stack is
-> **disabled and deleted** by `../setup-device.sh` on every commissioned device, so nothing here
+> **disabled and deleted** by `../commissioning/provision.sh` on every commissioned device, so nothing here
 > works on a current unit. It is kept only as a historical record of the first approach.
 >
 > The native replacement is [`../native_apps/`](../native_apps/) — see

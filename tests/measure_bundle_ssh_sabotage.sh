@@ -15,23 +15,23 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 BAK=/tmp/rw-bundle.orig.$$
-cp rw-bundle.sh "$BAK"
-trap 'cp "$BAK" rw-bundle.sh; rm -f "$BAK"' EXIT INT TERM
+cp lib/rw-bundle.sh "$BAK"
+trap 'cp "$BAK" lib/rw-bundle.sh; rm -f "$BAK"' EXIT INT TERM
 
 run() { ./tests/rw_bundle_ssh_test.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+ passed, [0-9]+ failed'; }
 
 # sab <label> <sed-expression>
 sab() {
     local label="$1" expr="$2" before after
-    cp "$BAK" rw-bundle.sh
-    before=$(md5sum rw-bundle.sh | cut -d' ' -f1)
-    sed -i "$expr" rw-bundle.sh
-    after=$(md5sum rw-bundle.sh | cut -d' ' -f1)
+    cp "$BAK" lib/rw-bundle.sh
+    before=$(md5sum lib/rw-bundle.sh | cut -d' ' -f1)
+    sed -i "$expr" lib/rw-bundle.sh
+    after=$(md5sum lib/rw-bundle.sh | cut -d' ' -f1)
     if [ "$before" = "$after" ]; then
         printf '  %-34s DID NOT APPLY — the count below would be a lie\n' "$label"
         return
     fi
-    if ! bash -n rw-bundle.sh 2>/dev/null; then
+    if ! bash -n lib/rw-bundle.sh 2>/dev/null; then
         printf '  %-34s broke the syntax — not a usable sabotage\n' "$label"
         return
     fi
@@ -39,7 +39,7 @@ sab() {
 }
 
 echo ""
-cp "$BAK" rw-bundle.sh
+cp "$BAK" lib/rw-bundle.sh
 printf '  %-34s %s\n' "baseline (nothing broken)" "$(run)"
 
 # The +x measurement, which is the only check that can see a missing chmod on a
@@ -67,7 +67,7 @@ sab "owner digit read from the end" 's|o = (length(m) == 4) ? substr(m, 2, 1) : 
 # `; true` to the echo and changed nothing, then reported 0 failed.
 sab "failed transfer not fatal" 's|^        return 1$|        :|'
 
-cp "$BAK" rw-bundle.sh
+cp "$BAK" lib/rw-bundle.sh
 echo ""
 printf '  %-34s %s\n' "restored" "$(run)"
 echo ""

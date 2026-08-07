@@ -8,11 +8,11 @@
 #   ./build-and-deploy.sh --bundle <dir>       # build + stage into an offline bundle
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
-# separately by setup-device.sh.  Run that once before deploying for the first time.
+# separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 # --bundle stages the same artifacts this script would scp, under
 # <dir>/root/<device-path>, with a declared-mode manifest — the layout
-# ../release.sh publishes and ../commission-offline.sh installs from
+# ../release.sh publishes and ../commissioning/commission-offline.sh installs from
 # (../IMPROVEMENT_PLAN.md F9, F10).  It always builds first: this component's
 # 31 targets take well under a minute, so there is no reason for a
 # stage-what-is-already-there mode and therefore no way to bundle a stale
@@ -57,8 +57,8 @@ if [[ "${1:-}" == "--bundle" ]]; then
         echo "Unexpected argument after --bundle <dir>: $3"
         exit 1
     fi
-    # shellcheck source=../rw-bundle.sh
-    . "$REPO_ROOT/rw-bundle.sh"
+    # shellcheck source=../lib/rw-bundle.sh
+    . "$REPO_ROOT/lib/rw-bundle.sh"
 else
     DEVICE_IP="${1:-}"
     MODE="${2:-}"
@@ -283,7 +283,7 @@ if [[ -n "$BUNDLE_DIR" ]]; then
 
     # 0755 for everything executable, 0644 for data.  Stated here, not read off
     # disk — /mnt/c reports 0777 for every file and discards chmod, so a mode
-    # measured on this host is a constant (../CLAUDE.md, ../rw-bundle.sh).
+    # measured on this host is a constant (../CLAUDE.md, ../lib/rw-bundle.sh).
     for b in "${GAMES_BINARIES[@]}"; do
         rw_bundle_add "$BUNDLE_DIR" native_apps 0755 "build/$b" "$GAMES_DIR/$b" \
             || err "staging failed: $b"
@@ -346,7 +346,7 @@ ok "SSH OK"
 # Verify system setup has been done
 if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
     warn "System setup not detected on device."
-    warn "Run setup-device.sh first:  ../setup-device.sh $DEVICE_IP"
+    warn "Run commissioning/provision.sh first:  ../commissioning/provision.sh $DEVICE_IP"
     echo ""
     read -p "Continue deploying anyway? (y/n): " confirm
     [[ "$confirm" != "y" ]] && exit 1
@@ -364,7 +364,7 @@ info "Stopping running apps (device init script)..."
 ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
     /etc/init.d/roomwizard-app stop
 else
-    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+    echo "  /etc/init.d/roomwizard-app not installed - run ../commissioning/provision.sh <ip>"
 fi' || warn "stop reported a failure - a surviving process may hold the binaries"
 ok "Launcher stopped"
 

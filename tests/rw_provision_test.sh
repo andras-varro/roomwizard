@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# rw_provision_test.sh — regression for rw-provision.sh and
+# rw_provision_test.sh — regression for lib/rw-provision.sh and
 #                        device-files/provision-rules.conf
 #
 # Host-only, no device, no SD card, no root. Run it:
@@ -34,7 +34,7 @@
 #
 # /mnt/c reports every file 0777 and discards chmod, and WSL's own /tmp does honour
 # modes — so group D runs under $(mktemp -d) and CAN assert a mode. What it cannot
-# do is prove the DEVICE gets it; that assertion is commission-offline.sh's verify
+# do is prove the DEVICE gets it; that assertion is commissioning/commission-offline.sh's verify
 # phase against real ext4.
 
 set -u
@@ -42,12 +42,12 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# shellcheck source=../rw-identify.sh
-. "$REPO_DIR/rw-identify.sh"
-# shellcheck source=../rw-clean.sh
-. "$REPO_DIR/rw-clean.sh"
-# shellcheck source=../rw-provision.sh
-. "$REPO_DIR/rw-provision.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_DIR/lib/rw-identify.sh"
+# shellcheck source=../lib/rw-clean.sh
+. "$REPO_DIR/lib/rw-clean.sh"
+# shellcheck source=../lib/rw-provision.sh
+. "$REPO_DIR/lib/rw-provision.sh"
 
 RULES="$REPO_DIR/device-files/provision-rules.conf"
 CLEAN_RULES="$REPO_DIR/device-files/clean-rules.conf"
@@ -176,7 +176,7 @@ expect "$(printf 'install\t0755\t/etc/init.d/audio-enable\tdevice-files/audio-en
     "$PLAN_ALL" "B1 the audio-enable install, with its declared mode"
 expect "$(printf 'install\t0644\t/etc/sysctl.d/99-security.conf\tdevice-files/99-security.conf')" \
     "$PLAN_ALL" "B2 99-security.conf is 0644, not 0755"
-expect "$(printf 'install\t0755\t/etc/init.d/roomwizard-app\troomwizard-app-init.sh')" \
+expect "$(printf 'install\t0755\t/etc/init.d/roomwizard-app\tdevice-files/roomwizard-app')" \
     "$PLAN_ALL" "B3 the init script is installed under a different name from its source"
 expect "$(printf 'link\t-\t/etc/rc5.d/S99roomwizard-app\t../init.d/roomwizard-app')" \
     "$PLAN_ALL" "B4 the rc5.d app link"
@@ -345,7 +345,7 @@ exists "$CARD/root/opt/roomwizard/disable-steelcase.sh" "D8 disable-steelcase.sh
 assert_eq "$(md5sum < "$REPO_DIR/device-files/audio-enable")" \
           "$(md5sum < "$CARD/root/etc/init.d/audio-enable")" \
     "D9 audio-enable is byte-for-byte the repo's copy"
-assert_eq "$(md5sum < "$REPO_DIR/roomwizard-app-init.sh")" \
+assert_eq "$(md5sum < "$REPO_DIR/device-files/roomwizard-app")" \
           "$(md5sum < "$CARD/root/etc/init.d/roomwizard-app")" \
     "D10 and so is the init script, despite the rename"
 
@@ -452,7 +452,7 @@ OFF=$(RW_PROVISION_DRY=1 rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_D
         | rw_provision_canonical)
 
 # The ONLINE executor, run here as the device would run it: rw_provision_online_script
-# emits the interpreter that setup-device.sh pipes to `ssh <target> sh -s`, and it is
+# emits the interpreter that commissioning/provision.sh pipes to `ssh <target> sh -s`, and it is
 # run against a chroot-shaped copy so nothing touches this host. That is what makes
 # this a comparison of the two EXECUTORS rather than of one executor and a wish.
 ONLINE_ROOT="$TMP/online"

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# commission_prep_test.sh — regression for commission-roomwizard.sh's two
+# commission_prep_test.sh — regression for commissioning/card-prep.sh's two
 #                           host-side decisions
 #
 # Host-only, no device, no SD card, no root. Run it:
@@ -16,10 +16,10 @@
 #                     code read (where $HOME looks right), which is exactly the
 #                     shape that needs a case per environment.
 #
-#   the next-steps    commission-roomwizard.sh ends by reading COMMISSIONING.md's
+#   the next-steps    commissioning/card-prep.sh ends by reading COMMISSIONING.md's
 #   suppression       NEXT_STEPS block aloud: boot the unit, find its IP, run
-#                     setup-device.sh, run deploy-all.sh. Correct standalone,
-#                     WRONG under commission-offline.sh, which has already done
+#                     commissioning/provision.sh, run deploy-all.sh. Correct standalone,
+#                     WRONG under commissioning/commission-offline.sh, which has already done
 #                     all of it — and the banner says "Complete!" with three
 #                     phases still to run.
 #
@@ -44,7 +44,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC="$REPO_DIR/commission-roomwizard.sh"
+SRC="$REPO_DIR/commissioning/card-prep.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -68,7 +68,7 @@ trap 'rm -rf "$TMP"' EXIT
 # rather than testing nothing.
 sed -n '/^operator_home() {$/,/^}$/p' "$SRC" > "$TMP/operator_home.sh"
 if [ ! -s "$TMP/operator_home.sh" ]; then
-    echo -e "  ${RED}HARNESS ERROR${NC}: operator_home() not found in commission-roomwizard.sh"
+    echo -e "  ${RED}HARNESS ERROR${NC}: operator_home() not found in commissioning/card-prep.sh"
     echo "  It was renamed or removed. Update this test, do not delete the case."
     exit 2
 fi
@@ -144,9 +144,9 @@ if [ -n "$REAL_SUDO_USER" ]; then SUDO_USER="$REAL_SUDO_USER"; else unset SUDO_U
 # 5. Static: the defect was a literal "$HOME/.ssh". Its absence is not proof the
 #    fix is right, but its presence is proof something reintroduced it.
 if grep -q '\$HOME/\.ssh' "$SRC"; then
-    bad "no bare \$HOME/.ssh remains in commission-roomwizard.sh"
+    bad "no bare \$HOME/.ssh remains in commissioning/card-prep.sh"
 else
-    ok "no bare \$HOME/.ssh remains in commission-roomwizard.sh"
+    ok "no bare \$HOME/.ssh remains in commissioning/card-prep.sh"
 fi
 
 # ── the key lookup itself, driven end to end ────────────────────────────────
@@ -164,7 +164,7 @@ echo "── the SSH-key lookup, under sudo, end to end ────────
 sed -n '/^# Step 6: SSH Key Setup (optional)$/,/^# ── Remove every eth0 stanza/p' "$SRC" \
     | sed '$d' > "$TMP/step6.body"
 if ! grep -q 'SSH Key Setup' "$TMP/step6.body"; then
-    echo -e "  ${RED}HARNESS ERROR${NC}: could not extract Step 6 from commission-roomwizard.sh"
+    echo -e "  ${RED}HARNESS ERROR${NC}: could not extract Step 6 from commissioning/card-prep.sh"
     exit 2
 fi
 
@@ -256,14 +256,14 @@ if [ ! -s "$TMP/step8.body" ]; then
     exit 2
 fi
 
-# The stubs are the script's own colour helpers, reduced to plain echo. SCRIPT_DIR
+# The stubs are the script's own colour helpers, reduced to plain echo. REPO_ROOT
 # points at the real repo so the sed below reads the real COMMISSIONING.md — the
 # markers moving or being deleted is a failure this should catch, not route around.
 {
     echo '#!/bin/bash'
     echo 'success() { echo "  [ok] $*"; }'
     echo 'info()    { echo "  [--] $*"; }'
-    echo "SCRIPT_DIR='$REPO_DIR'"
+    echo "REPO_ROOT='$REPO_DIR'"
     cat "$TMP/step8.body"
 } > "$TMP/step8.sh"
 
@@ -293,10 +293,10 @@ expect_out yes "Card prep complete"      "$TMP/orch.out" "orchestrated: says wha
 
 # 12. The orchestrator must actually set the flag. Two correct halves that never
 #     meet is the failure this catches, and it is the whole fix in one grep.
-if grep -q 'RW_COMMISSION_ORCHESTRATED=1' "$REPO_DIR/commission-offline.sh"; then
-    ok "commission-offline.sh sets RW_COMMISSION_ORCHESTRATED"
+if grep -q 'RW_COMMISSION_ORCHESTRATED=1' "$REPO_DIR/commissioning/commission-offline.sh"; then
+    ok "commissioning/commission-offline.sh sets RW_COMMISSION_ORCHESTRATED"
 else
-    bad "commission-offline.sh does NOT set RW_COMMISSION_ORCHESTRATED — the suppression is dead code"
+    bad "commissioning/commission-offline.sh does NOT set RW_COMMISSION_ORCHESTRATED — the suppression is dead code"
 fi
 
 echo ""

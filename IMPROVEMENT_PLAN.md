@@ -62,7 +62,7 @@ Two practical notes:
 - **Save `/tmp/touch_raw.tsv` into the repo before the device reboots.** The calibration wizard
   writes no tsv — only the diagnostic does.
 - A second unit is available and reachable over SSH, so this is panel time, not hardware
-  acquisition. Check `./setup-device.sh <ip> --status` first: a unit on older deploy scripts will
+  acquisition. Check `./commissioning/provision.sh <ip> --status` first: a unit on older deploy scripts will
   mislead you about anything else you observe there.
 
 ### B12c. ScummVM OPL/AdLib tempo is unverified — open
@@ -122,15 +122,15 @@ reproduction is not. To see it fire, run the suite with `PATH` stripped of `/usr
 
 Fix: skip with the reason, and account for it in `MIN_CASES` so a skip cannot silently shrink coverage.
 
-`set-hostname.sh` and the avahi link have shipped, so a named unit answers to `<name>.local` from
+`commissioning/set-hostname.sh` and the avahi link have shipped, so a named unit answers to `<name>.local` from
 Windows. Two pieces of residue:
 
 1. **WSL cannot resolve `.local`.** Its `/etc/nsswitch.conf` is `hosts: files dns` — no mDNS module —
-   so `./setup-device.sh rw09.local` passes validation, reaches the SSH step and then fails to
+   so `./commissioning/provision.sh rw09.local` passes validation, reaches the SSH step and then fails to
    resolve. The fix is host-side and one package: `sudo apt install libnss-mdns` in WSL. **Until
    then the mDNS payoff applies to Windows-side `ssh` only, not to the build/deploy path.**
 2. **The reboot path is unproven.** `S30avahi-daemon` is in place but the link was written directly
-   rather than by a full `setup-device.sh` run, so "it comes up on its own after a reboot" has not
+   rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
 Scope note for anyone extending this: the defect is confirmed **in the vendor image**, which a newly
@@ -138,7 +138,7 @@ commissioned unit inherits. Units already in service were found carrying a hardc
 instead — a different defect (a DHCP address goes stale as soon as the lease moves), equally worth
 rewriting, but do not assume which variant a given unit has. Read it. A third variant is on record: a
 non-loopback line mapping an RFC-1918 address to the name `null`, on a card whose `/etc/hostname` is
-also `null`. `set-hostname.sh` handles all three, because it keys on the name it reads rather than a
+also `null`. `commissioning/set-hostname.sh` handles all three, because it keys on the name it reads rather than a
 hardcoded one.
 
 ### D7b. `/etc/hosts` and `/etc/hostname` are regenerated on boot — open, **confirmed 2026-08-05**
@@ -148,7 +148,7 @@ the second unit's own syslog. `/opt/sbin/networkmanager` rewrites `/etc/hosts`, 
 `/etc/resolv.conf` and `/etc/dhclient.conf`'s `send host-name` on **every boot** from
 `/home/root/data/websign/net.*`. Mechanism, table and evidence:
 [`SYSTEM_ANALYSIS.md#35-network-and-power`](SYSTEM_ANALYSIS.md#35-network-and-power). So
-`set-hostname.sh`'s offline half **is** undone by the first boot after commissioning, as suspected —
+`commissioning/set-hostname.sh`'s offline half **is** undone by the first boot after commissioning, as suspected —
 observed on a unit commissioned as `RW-Test`, which booted with `/etc/hostname` back to `null`.
 
 **What RW09's "weak evidence" actually was.** `--remove` deletes `/home/root/data/websign` and the
@@ -160,15 +160,15 @@ straight after commissioning shows the revert.
 **What remains open is the SSH flow only.** Two of the three fixes are in:
 
 1. **Ordering — done, in [F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06).**
-   `commission-offline.sh` names the card and deletes both `websign` and the `rcS.d/S60networkmanager`
+   `commissioning/commission-offline.sh` names the card and deletes both `websign` and the `rcS.d/S60networkmanager`
    link in the same offline pass, so no boot happens in between, and its verify pass fails if either
    survives. That removes the window rather than patching it. **Confirmed on real hardware 2026-08-06:**
    a unit commissioned as `rwtest` booted with its name intact and answered on the network.
-2. **STILL OPEN, for the SSH flow, which keeps the vendor stack:** `set-hostname.sh` must also write
+2. **STILL OPEN, for the SSH flow, which keeps the vendor stack:** `commissioning/set-hostname.sh` must also write
    `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
    (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
    **rejects hyphens**, so `RW-Test` would still be replaced by its fallback `rwtwenty`.
-3. **`/etc/dhclient.conf`'s `send host-name` — done.** `set-hostname.sh` now owns it, in both the
+3. **`/etc/dhclient.conf`'s `send host-name` — done.** `commissioning/set-hostname.sh` now owns it, in both the
    offline and the live path, with a negative control: it refuses to write a result that would not
    announce the new name. It is the third place the name is stored and the one a DHCP server, and
    therefore a router's device list, reads. A unit in service was announcing the shipped `RW09` months
@@ -185,7 +185,7 @@ only when `networkmanager` starts `dhclient` with `-sf /etc/dhclient-script`. Th
 ### D9. `/var/watchdog_test` is absent on a running unit — open, **benign today, confirmed 2026-08-05**
 
 `disable-steelcase.sh` touches it as its *first* command and runs on every boot from
-`roomwizard-app-init.sh`, yet the unit in service (4 days uptime) does not have the file. It is benign
+`device-files/roomwizard-app`, yet the unit in service (4 days uptime) does not have the file. It is benign
 **only** because the same script also installs a crontab with no `watchdog.sh` job, so the vendor
 software watchdog is never scheduled — the bypass file is the second line of defence, not the first.
 Two candidate causes, neither measured: the boot-time run is not happening (that unit's deployed
@@ -331,7 +331,7 @@ work only.
 
 ### F9. Ship binaries as GitHub releases — **partly built 2026-08-05**, open
 
-**Built and exercised on this host:** `release.sh` at the repo root, `rw-bundle.sh` (the bundle layout,
+**Built and exercised on this host:** `release.sh` at the repo root, `lib/rw-bundle.sh` (the bundle layout,
 sourced by every producer and consumer), and `--bundle <dir>` on `native_apps`, `vnc_client` and
 `scummvm-roomwizard`. One run of `./release.sh --stage-only --component native_apps --component
 vnc_client` staged 49 files and produced a 5.6 MB tarball in 50 s. The `.app` manifests are now data in
@@ -361,7 +361,7 @@ Design, so it does not have to be re-derived:
 - `deploy-all.sh` and the per-component scripts gain `--from-release <tag>` that skips **only** the
   build step.
 - **The release must carry the md5 manifest.** Deploy-time verification compares against a local
-  `build/`, which will not exist on a build-free path. `rw-bundle.sh` writes
+  `build/`, which will not exist on a build-free path. `lib/rw-bundle.sh` writes
   `manifest.d/<component>.md5` alongside `.list` for this; they are separate files because the declared
   modes are stable and the checksums are not (next bullet), so a mode diff between two releases stays
   readable.
@@ -388,7 +388,7 @@ checked by anyone qualified to say so.
 
 ### F10. Single-pass offline commissioning — **done 2026-08-05**, confirmed on a unit 2026-08-06
 
-**`commission-offline.sh` exists and does the whole job.** The card goes into a reader, the operator
+**`commissioning/commission-offline.sh` exists and does the whole job.** The card goes into a reader, the operator
 answers two questions, the card goes back, and the device should boot working. What has **not**
 happened is the only thing left: running it against a real card and booting a real unit.
 
@@ -404,15 +404,15 @@ boot happens in between.
 
 | Piece | Where |
 |---|---|
-| The offline commissioner | `commission-offline.sh` — identify, mount, orchestrate, clean, install, verify, unmount |
+| The offline commissioner | `commissioning/commission-offline.sh` — identify, mount, orchestrate, clean, install, verify, unmount |
 | The keep/delete decisions | `device-files/clean-rules.conf` — 198 records, four tab-separated fields, a reason on every one |
-| The parser, plan compiler and guarded `del()` | `rw-clean.sh` |
-| Files installed verbatim | `device-files/{audio-enable,time-sync,99-security.conf}` — no longer heredocs inside `setup-device.sh` |
-| The bundle it installs | `release.sh` → `rw-bundle.sh` ([F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)) |
-| Card and mount identification | `rw-identify.sh`, by content and by **position**, never UUID |
+| The parser, plan compiler and guarded `del()` | `lib/rw-clean.sh` |
+| Files installed verbatim | `device-files/{audio-enable,time-sync,99-security.conf}` — no longer heredocs inside `commissioning/provision.sh` |
+| The bundle it installs | `release.sh` → `lib/rw-bundle.sh` ([F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)) |
+| Card and mount identification | `lib/rw-identify.sh`, by content and by **position**, never UUID |
 | Regressions | `tests/rw_clean_test.sh` (116 cases), `tests/commission_offline_test.sh` (21), `tests/make-fake-card.sh` |
 
-**`setup-device.sh --deep-clean` reads the same data file**, so the live and offline cleans cannot
+**`commissioning/provision.sh --deep-clean` reads the same data file**, so the live and offline cleans cannot
 drift. Each keeps its own executor: `/` is the correct prefix on a device and a refused one offline.
 The host compiles the rules into a line-based plan and ships that, so the device needs neither `bash`
 nor a copy of the rules.
@@ -508,7 +508,7 @@ Deploy them over SSH, or restage a three-component bundle.
 - **Still needs the device:** touch calibration only — per-unit, per-panel, and the wizard exists
   (Device Tools → Display → `CALIBRATE TOUCH`). One boot remains; this removes two of three plus the
   IP hunt.
-- **Does not replace the SSH path.** `setup-device.sh` and `deploy-all.sh` stay as the verified
+- **Does not replace the SSH path.** `commissioning/provision.sh` and `deploy-all.sh` stay as the verified
   development loop; the offline tool is for *delivery*.
 - **Distribution:** binaries only, never the vendor image (a third party's copyright) and never device
   configs (F9's caveat — `/etc/hosts` and the VNC password). ScummVM is GPLv2+, so a published binary
@@ -559,7 +559,7 @@ which is exactly what the delivery mode does not have.
 
 The tension is real and this entry is where it gets resolved rather than rediscovered:
 
-- **Say so, cheaply.** `commission-offline.sh`'s closing list and `COMMISSIONING.md` should state that a
+- **Say so, cheaply.** `commissioning/commission-offline.sh`'s closing list and `COMMISSIONING.md` should state that a
   commissioned unit has no USB host mode and name the one command that adds it. One line each; it
   removes the surprise without touching the p1 rule.
 - **A patched kernel under a *new* filename on p1 is not the same as overwriting `uImage-system`** —
@@ -612,7 +612,7 @@ bc libssl-dev bison flex                     # usb_host kernel modules only
 ```
 
 - ⚠️ **Name `binutils-arm-linux-gnueabihf` explicitly** even though the `gcc` package pulls it in.
-  `commission-offline.sh` needs `arm-linux-gnueabihf-objdump` on a host that has **no compiler at
+  `commissioning/commission-offline.sh` needs `arm-linux-gnueabihf-objdump` on a host that has **no compiler at
   all**, and a missing objdump there is a refusal, not a pass.
 - **The component scripts keep their own checks** — they are meant to run standalone — but stop
   reciting package lists and point at the one script instead. Flagging stays; only the six copies go.
@@ -631,13 +631,13 @@ bc libssl-dev bison flex                     # usb_host kernel modules only
 
 ### F12. Install from a published release — open
 
-`--bundle` is already `commission-offline.sh`'s single source of binaries and everything downstream is
+`--bundle` is already `commissioning/commission-offline.sh`'s single source of binaries and everything downstream is
 origin-agnostic — unpack, `rw_bundle_check`, the ARM gate, install, md5 — so `--release <tag|latest>`
 is a fetch into a temp directory plus a handoff to the existing path. That also removes the
 copy-a-tarball-to-the-commissioning-host step from the delivery mode of
 [F11](#f11-one-home-for-the-host-build-prerequisites--open).
 
-- **Never the default, and the `--help` must say so.** The script is called `commission-offline.sh` and
+- **Never the default, and the `--help` must say so.** The script is called `commissioning/commission-offline.sh` and
   its premise is that no network is required. A stock unit with `net.mode = manual` is unreachable by
   any other means, which is exactly when there may be no network to hand.
 - ⚠️ **The bundle's `.md5` manifest proves internal consistency, not authenticity.** Nothing is signed.
@@ -660,7 +660,7 @@ can run the card path. Today that means Linux, or Windows with WSL2. This entry 
 recorded rather than discovered by someone holding a card.
 
 ⚠️ **This is not a shell-portability problem, and rewriting `bash` as POSIX `sh` would not touch it.**
-The blocker is the *kernel's* filesystem support: `commission-offline.sh` needs read-write ext4 across
+The blocker is the *kernel's* filesystem support: `commissioning/commission-offline.sh` needs read-write ext4 across
 four partitions, real symlink creation (the `rc*.d` links) and a real `chmod` (the `+x` assertion is a
 measurement precisely because ext4 honours it). No shell dialect supplies any of that.
 
@@ -828,13 +828,12 @@ play session of somebody's time — which is why that check keeps being postpone
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
 
-### C12. The online mode cannot install a bundle — open
+### C12. One commissioning entry point — open
 
-**The provisioning list is folded; the missing capability is not.** Two of the three parts of this
-entry landed 2026-08-06 (`git log --grep=C12`):
+**Everything else in this entry has landed 2026-08-06** (`git log --grep=C12`):
 
 - ✅ **One provisioning list, two executors.** `device-files/provision-rules.conf` +
-  `rw-provision.sh`, the install half of what `clean-rules.conf` + `rw-clean.sh` are for the delete
+  `lib/rw-provision.sh`, the install half of what `clean-rules.conf` + `lib/rw-clean.sh` are for the delete
   half. The drift it removes was real: the online path deleted stale `rc*.d` links before relinking and
   the offline path did not, so a card carrying an older `S50roomwizard-app` came out of offline
   commissioning with two links to one init script at two priorities. Both `--dry-run`s now print the
@@ -842,97 +841,116 @@ entry landed 2026-08-06 (`git log --grep=C12`):
 - ✅ **The two in-place config edits that had no offline equivalent** — `/etc/profile`'s dangling
   `wsplatform.conf` source and `/etc/inittab`'s tty4 getty — are `dropline` records, so both paths do
   them.
-- ⬜ **Bundle-install-over-SSH still does not exist**, below.
+- ✅ **Bundle-install-over-SSH.** `./deploy-all.sh --from-bundle <tar.gz|dir> <ip>` puts a release
+  bundle on a device and builds **nothing**, so the person being delivered to needs no toolchain. One
+  executor — `rw_bundle_install_ssh` in `lib/rw-bundle.sh` — with the manifest as the authority for
+  modes, the SSH twin of `commissioning/commission-offline.sh`'s install loop.
+  `tests/rw_bundle_ssh_test.sh`, 23 cases. Distinct from F9's `--from-release <tag>`, which is the same
+  install fed by a *download* and is still open.
+- ✅ **The folder move**, below: `lib/`, `commissioning/`, and the two device-side scripts into
+  `device-files/`. One commit, no logic change.
+- ⬜ **One entry point for commissioning**, below.
 
-⚠️ **The online path cannot deliver, because `deploy-all.sh` *builds*.** It needs the ARM toolchain,
-and the person being delivered to by definition has none. So this is not a repackaging of existing
-code: **there is no way to put a release bundle onto a device over SSH.** Roughly one executor over
-`rw_bundle_entries` — the SSH twin of `commission-offline.sh`'s bundle loop, which now has a model to
-copy in `rw_provision_online_script`. It is the same capability F9 records as
-`deploy-all.sh --from-release`.
+⚠️ **What is left is the front door, not a capability.** Both delivery situations are reachable with no
+toolchain now, but by two different scripts with two different flag vocabularies, and the SSH one still
+has a reboot in the middle.
 
 | Situation | Today | One command? |
 |---|---|---|
-| Bought a unit, **no network access to it** | `sudo ./commission-offline.sh --bundle <tar.gz>` | **yes** |
-| **Already has SSH** to it | `commission-roomwizard.sh` → boot → find the IP → `setup-device.sh` → `deploy-all.sh` | no — 3 scripts, a reboot, an IP hunt, and a toolchain |
+| Bought a unit, **no network access to it** | `sudo ./commissioning/commission-offline.sh --bundle <tar.gz>` | **yes** |
+| **Already has SSH** to it | `./commissioning/provision.sh <ip>` → reboot → `./deploy-all.sh --from-bundle <b> <ip>` | no — two, with a reboot between |
 
-#### What is left after that: the folder move
-
-Behaviour first, move last — the user's call. The renames below are mechanical and must be **their own
-commit containing no logic change**, or every diff after them is unreviewable.
+`commissioning/commission.sh` is the remaining idea: **one** entry with `--card [--disk X]` or
+`--ssh <target>` and `--bundle` on both, composing the scripts that already exist rather than adding
+behaviour. `roomwizard.sh` covers the same ground as a menu today, which is why this is an idea and not
+a defect.
 
 #### There are no duplicate scripts to delete — one duplicated *fact*, now fixed
 
-Checked pairwise 2026-08-06. `commission-roomwizard.sh` is **step 3 of** `commission-offline.sh`, not an
+Checked pairwise 2026-08-06. `commissioning/card-prep.sh` is **step 3 of** `commissioning/commission-offline.sh`, not an
 alternative to it; the `rw-*.sh` are libraries with several consumers each; `release.sh` and
 `deploy-all.sh` genuinely differ. **Nothing in the root is a redundant copy of anything else.** What
 *was* duplicated — the provisioning list, written out once per executor — is now one data file.
 
-#### Two category errors, worth more than any file move
-   are installed verbatim by **both** paths ([commission-offline.sh:487-488](commission-offline.sh#L487-L488),
-   [setup-device.sh:165-166](setup-device.sh#L165-L166)), which is precisely `CLAUDE.md`'s stated
-   condition for living in `device-files/`. They are in the wrong *category*, not merely the wrong
-   directory — and `roomwizard-app-init.sh` is installed under a different name
-   (`/etc/init.d/roomwizard-app`), so the file should carry the name it is deployed as.
-2. **`commission-roomwizard.sh`'s name is the most misleading thing in the tree.** It reads as the
-   sibling of `commission-offline.sh` and it is a subroutine of it. Renaming it (`card-prep.sh`) removes
-   more confusion than the folder move does.
+#### Two category errors, worth more than the file move itself
 
-#### Proposed layout
+1. **`roomwizard-app-init.sh` and `disable-steelcase.sh` were at the repo root**, and both
+   are installed verbatim by **both** paths — one `install` record each in
+   [device-files/provision-rules.conf](device-files/provision-rules.conf), read by the SSH executor and
+   the offline one alike — which is precisely `CLAUDE.md`'s stated
+   condition for living in `device-files/`. They were in the wrong *category*, not merely the wrong
+   directory — and the init script is installed under a different name
+   (`/etc/init.d/roomwizard-app`), so the file now carries the name it is deployed as. All five
+   `install` records therefore have a `device-files/` source, which is the
+   invariant that was previously two-thirds true.
+2. **`commission-roomwizard.sh`'s name was the most misleading thing in the tree.** It read as the
+   sibling of `commission-offline.sh` and it is a subroutine of it. Renaming it (`card-prep.sh`) removed
+   more confusion than the folder move did.
+
+#### The layout
 
 ```text
-roomwizard.sh            front door — stays at root; it is the answer to "what do I run"
-deploy-all.sh            development loop — stays at root, NOT commissioning
-release.sh               produces the bundle — the build side, stays at root
-lib/     rw-identify.sh  rw-clean.sh  rw-bundle.sh  rw-provision.sh (new)
-commissioning/  commission.sh   ONE entry: --card [--disk X] | --ssh <target>, both --bundle
-                card-prep.sh    (was commission-roomwizard.sh)
-                provision.sh    (was setup-device.sh)
-                clone-to-32gb.sh
-device-files/   roomwizard-app  disable-steelcase.sh  audio-enable  time-sync
-                99-security.conf  clean-rules.conf
+roomwizard.sh            front door — at root; it is the answer to "what do I run"
+deploy-all.sh            development loop AND --from-bundle delivery — at root, NOT commissioning
+release.sh               produces the bundle — the build side, at root
+lib/            rw-identify.sh  rw-clean.sh  rw-bundle.sh  rw-provision.sh
+commissioning/  commission-offline.sh   card-prep.sh (was commission-roomwizard.sh)
+                provision.sh (was setup-device.sh)  set-hostname.sh  clone-to-32gb.sh
+device-files/   roomwizard-app (was roomwizard-app-init.sh)  disable-steelcase.sh
+                audio-enable  time-sync  99-security.conf
+                clean-rules.conf  provision-rules.conf
 ```
 
-`lib/` at the top level rather than `commissioning/lib/`: `rw-bundle.sh` is sourced by all three
+`lib/` at the top level rather than `commissioning/lib/`: `lib/rw-bundle.sh` is sourced by all three
 component `build-and-deploy.sh` scripts on the **write** side and by the commissioner on the **read**
 side, so filing it under `commissioning/` is the same mistake as filing `disable-steelcase.sh` there.
 
-#### Cost of the move, measured
+`commission-offline.sh` and `set-hostname.sh` went to `commissioning/` on the same test the others
+were judged by — **what is this script's role**: the first is invoked by the front door as one of the
+commissioning paths, the second is called only by `card-prep.sh` (offline) and `provision.sh` (over
+SSH) and by nothing else. Neither is a library and neither is an answer to "what do I run".
 
-**438 mentions of these filenames across 32 tracked text files** — `IMPROVEMENT_PLAN.md` 47,
-`COMMISSIONING.md` 41, `CLAUDE.md` 40, `setup-device.sh` 40, `roomwizard.sh` 38, plus 4 test scripts
-that source by path (`tests/commission_offline_test.sh` alone has 18) and 5 component build scripts.
-Mechanical, but it must be **its own commit containing no logic change**, or every diff after it is
-unreviewable.
+#### What the move had to be careful about
 
-#### Sequencing, decided 2026-08-06
-
-**Behaviour first, move last** — the user's call, when offered the alternative. C11 and the provision
-plan landed as one pass; then bundle-install-over-SSH, then `COMMISSIONING.md`, and the folder move as
-the final mechanical commit. Two reasons the move is not first: renaming files whose logic is mid-rewrite
-makes both diffs unreadable, and the two folds removed ~85 lines from `setup-device.sh` before it gets
-moved.
+- **Three places in `lib/` derived the repo root from the library's own directory** —
+  `rw_clean_rules_file`, `rw_provision_rules_file` and `rw_provision_validate`'s default. All three now
+  go up one level. Miss one and the rules file is looked for in `lib/`, where it is not.
+- **The four `commissioning/` scripts needed `REPO_ROOT` next to `SCRIPT_DIR`**, because `$SCRIPT_DIR`
+  stopped meaning "the repo" for them. `card-prep.sh` calling its sibling `set-hostname.sh` still wants
+  `SCRIPT_DIR`; sourcing `lib/` and reading `device-files/` want `REPO_ROOT`. The install loop in
+  `provision.sh` resolves the plan's repo-relative sources against `REPO_ROOT` too.
+- ⚠️ **Three device-side paths look like repo paths and must not be rewritten**: `/tmp/rw-provision.sh`
+  and `/tmp/set-hostname.sh` (staged on the far side of an ssh pipe) and
+  `/opt/roomwizard/disable-steelcase.sh` (the deployed copy). A blanket rename over the tree turns them
+  into `/tmp/lib/rw-provision.sh` and friends, and nothing on this host would notice.
+- **`tests/commission_prep_test.sh`'s Step 8 stub had to follow**: it injects the variable the extracted
+  block reads to find `COMMISSIONING.md`, which is now `REPO_ROOT`, not `SCRIPT_DIR`.
 
 #### Verification, and what cannot be verified from this host
 
+- ✅ **The move changed no behaviour anything can measure from here.** All five host-only suites pass
+  unchanged (148 + 94 + 37 + 17 + 23 = 319), `tests/c11_plan_diff.sh` is clean on both plans,
+  `deploy-all.sh --list` still discovers exactly the four components, every tracked `*.sh` plus the two
+  `device-files/` init scripts pass `bash -n`, the two device-side scripts pass `dash -n` and are still
+  LF, and `git ls-files -s -- '*.sh'` is still all `100755`.
 - ✅ **Both executors' `--dry-run` print the same resolved set**, compared through
   `rw_provision_canonical`. `tests/rw_provision_test.sh` group E, with its own negative control (drop a
   verb from one side and the comparison must fire). The online half runs the *generated* interpreter, not
   a re-implementation of it.
-- ⚠️ **Neither `tests/commission_offline_test.sh` nor any non-dry `commission-offline.sh` run has been
+- ⚠️ **Neither `tests/commission_offline_test.sh` nor any non-dry `commissioning/commission-offline.sh` run has been
   executed since the provision fold.** Both need root and `sudo` cannot be driven non-interactively from
   this harness (`sudo: a password is required`). The block is not the mount — `--base` needs no root —
-  but `commission-roomwizard.sh`'s `sudo` on the `/etc/shadow` write, which is where a run stalls
+  but `commissioning/card-prep.sh`'s `sudo` on the `/etc/shadow` write, which is where a run stalls
   waiting for a password it cannot be given. What *was* done instead: the test's file list now copies
-  `rw-provision.sh` (without which every case would fail at the source line), and the offline path was
+  `lib/rw-provision.sh` (without which every case would fail at the source line), and the offline path was
   driven end to end with `--base --dry-run` through the real script — 29 actions, correct order, correct
   declared modes. The executor itself is covered by `tests/rw_provision_test.sh` group D, which does
   perform real writes, real `chmod` and real symlinks against a synthetic card in WSL's own filesystem.
   **Run the root suite under an interactive sudo before trusting the offline installer again.**
 - ⚠️ **A mode cannot be verified on `/mnt/c`.** It reports every file 0777 and discards `chmod`, so the
-  provision plan **declares** modes exactly as `rw-bundle.sh` does. `tests/rw_provision_test.sh` group D
+  provision plan **declares** modes exactly as `lib/rw-bundle.sh` does. `tests/rw_provision_test.sh` group D
   runs under `$(mktemp -d)` in WSL's own filesystem, which does honour modes, so it asserts 0755/0644
-  there; the assertion that a *device* gets them stays `commission-offline.sh`'s `+x` check on real ext4.
+  there; the assertion that a *device* gets them stays `commissioning/commission-offline.sh`'s `+x` check on real ext4.
 - The reorg commit's own control is that all five host-only suites still pass unchanged, and that
   `git ls-files -s -- '*.sh'` is still all `100755` afterwards.
 
@@ -971,19 +989,13 @@ Deliberately not a ranking of everything — only the claims worth making.
    backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
    `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
    waiting to be confirmed or refuted.
-1. **[C12](#c12-the-online-mode-cannot-install-a-bundle--open) — the part of it that is left.** Both
-   folds landed 2026-08-06 (`git log --grep=C11`, `--grep=C12`): the clean and the install are each one
-   mechanism reading one data file, and both executors' dry runs are asserted identical. What remains is
-   the capability the delivery story is actually missing: **the online mode cannot install a bundle,
-   because `deploy-all.sh` builds**, so the person being delivered to needs a toolchain they do not have.
-   The folder reorganisation is the *last* commit of that work, not the first.
-2. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
-   plan, and the reorg above renames the scripts it documents, so it lands after them. (The two bugs the
+1. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
+   plan, and the reorg has renamed the scripts it documents, so this is the moment. (The two bugs the
    first real run exposed are fixed: `git log --grep=F10`.)
-3. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
-4. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
+2. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
+3. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
    (`--deep-clean`) first if disk space is tight.
-5. **C10 before panel check #2** — it converts a play session into one launch, and every future
+4. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
 
 [F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL

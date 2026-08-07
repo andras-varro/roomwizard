@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# commission_offline_test.sh — regression for commission-offline.sh's VERIFY pass
+# commission_offline_test.sh — regression for commissioning/commission-offline.sh's VERIFY pass
 #
 # Host-only. No SD card and no device: the card is the synthetic tree from
 # tests/make-fake-card.sh, mounted nowhere and handed over with --base.
 #
 #   wsl.exe -u root -e bash -lc "cd /mnt/c/work/roomwizard && tests/commission_offline_test.sh"
 #
-# Needs root (or passwordless sudo), because commission-roomwizard.sh writes
+# Needs root (or passwordless sudo), because commissioning/card-prep.sh writes
 # through sudo. Needs a staged bundle: ./release.sh --stage-only [--component
 # native_apps] leaves one in build/release.
 #
@@ -19,7 +19,7 @@
 # happy path is case 1 and is the control for all of them.
 #
 # The sabotages run against COPIES — a copy of the bundle, and a copy of just the
-# scripts commission-offline.sh reads (not the repo, which carries 4 GB of card
+# scripts commissioning/commission-offline.sh reads (not the repo, which carries 4 GB of card
 # images). SCRIPT_DIR is derived from the script's own location, so a copied tree
 # is a genuinely different installation.
 #
@@ -43,7 +43,7 @@ ok()  { PASS=$((PASS + 1)); echo -e "  ${GREEN}pass${NC}  $1"; }
 bad() { FAIL=$((FAIL + 1)); echo -e "  ${RED}FAIL${NC}  $1"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo -e "  ${YELLOW}skip${NC}  needs root — commission-roomwizard.sh writes through sudo"
+    echo -e "  ${YELLOW}skip${NC}  needs root — commissioning/card-prep.sh writes through sudo"
     exit 0
 fi
 if [ ! -d "$BUNDLE_SRC" ]; then
@@ -55,16 +55,18 @@ fi
 TMP=$(mktemp -d /tmp/rw-comm-test.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-# The two answers plus commission-roomwizard.sh's own three prompts.
+# The two answers plus commissioning/card-prep.sh's own three prompts.
 ANSWERS='yes\nrwfake\nrwfake\nrwfake\nn\n'
 
-# A copy of only what commission-offline.sh reads. `cp -a` on device-files/ so the
-# init scripts keep their bytes; nothing here needs the 4 GB card images.
+# A copy of only what commissioning/commission-offline.sh reads. `cp -a` on device-files/ so the
+# init scripts keep their bytes — that copy is also what brings roomwizard-app and
+# disable-steelcase.sh, which the provision plan installs from there; nothing here
+# needs the 4 GB card images.
 REPO="$TMP/repo"
-mkdir -p "$REPO/native_apps"
-for f in commission-offline.sh commission-roomwizard.sh set-hostname.sh \
-         rw-identify.sh rw-clean.sh rw-provision.sh rw-bundle.sh \
-         roomwizard-app-init.sh disable-steelcase.sh COMMISSIONING.md; do
+mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
+for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
+         lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
+         COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
 cp -a "$REPO_DIR/device-files" "$REPO/device-files"
@@ -76,7 +78,7 @@ run() {
     local bundle="$1" repo="$2"; shift 2
     bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null || return 1
     set +e
-    OUT=$(printf "$ANSWERS" | bash "$repo/commission-offline.sh" \
+    OUT=$(printf "$ANSWERS" | bash "$repo/commissioning/commission-offline.sh" \
               --bundle "$bundle" --base "$TMP/card" "$@" 2>&1)
     ST=$?
     set -e
@@ -136,8 +138,8 @@ expect_fires 'md5 mismatch' "2a a corrupted staged file is caught by md5"
 B="$TMP/b-nochmod"; cp -a "$BUNDLE_SRC" "$B"
 R="$TMP/repo-nochmod"; cp -a "$REPO" "$R"
 sed -i 's/^    chmod "\$mode" "\$dest"$/    : "no chmod — deliberately broken copy"/' \
-    "$R/commission-offline.sh"
-grep -q 'no chmod — deliberately broken' "$R/commission-offline.sh" \
+    "$R/commissioning/commission-offline.sh"
+grep -q 'no chmod — deliberately broken' "$R/commissioning/commission-offline.sh" \
     || bad "2b harness: the chmod sabotage did not apply"
 # The bundle's staged files must not already be executable, or the check would
 # pass for the wrong reason — cp -a from /mnt/c carries 0777.
@@ -203,7 +205,7 @@ expect_fires 'no ELF binaries' "2g a bundle with no ARM binaries is refused, not
 # say so loudly rather than report a pass over zero artifacts. Simulated through
 # the OBJDUMP override, because uninstalling binutils to test this is absurd.
 set +e
-OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commission-offline.sh" \
+OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" 2>&1); ST=$?
 set -e
 if [ "$ST" -ne 0 ] && printf '%s\n' "$OUT" | grep -q 'IS NOT INSTALLED' \
@@ -215,7 +217,7 @@ fi
 
 bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
 set +e
-OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commission-offline.sh" \
+OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" --arm-check=skip 2>&1); ST=$?
 set -e
 if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'NOT CHECKED'; then
@@ -248,7 +250,7 @@ echo "3. the card itself"
 bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
 mv "$TMP/card/root" "$TMP/card/.r"; mv "$TMP/card/data" "$TMP/card/root"; mv "$TMP/card/.r" "$TMP/card/data"
 set +e
-OUT=$(printf "$ANSWERS" | bash "$REPO/commission-offline.sh" \
+OUT=$(printf "$ANSWERS" | bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" 2>&1); ST=$?
 set -e
 expect_fires 'do not look right|does not look like' "3a the four mounts in the wrong order are refused"
@@ -256,7 +258,7 @@ expect_fires 'do not look right|does not look like' "3a the four mounts in the w
 # A base that is not a card at all.
 mkdir -p "$TMP/notacard"
 set +e
-OUT=$(printf "$ANSWERS" | bash "$REPO/commission-offline.sh" \
+OUT=$(printf "$ANSWERS" | bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/notacard" 2>&1); ST=$?
 set -e
 expect_fires 'do not look right|does not look like' "3b a directory that is not a card is refused"

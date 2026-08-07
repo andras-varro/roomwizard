@@ -55,8 +55,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# shellcheck source=../rw-bundle.sh
-. "$REPO_DIR/rw-bundle.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_DIR/lib/rw-bundle.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 PASS=0; FAIL=0

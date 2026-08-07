@@ -1,14 +1,14 @@
 #!/bin/sh
 #
-# set-hostname.sh — set a RoomWizard's host name, in /etc/hostname, /etc/hosts
+# commissioning/set-hostname.sh — set a RoomWizard's host name, in /etc/hostname, /etc/hosts
 #                   AND /etc/dhclient.conf
 #
 # ONE implementation, called from two places with different connection models:
 #
-#   commission-roomwizard.sh    offline, against a mounted card:
-#                                   sudo ./set-hostname.sh NAME /mnt/rw
-#   setup-device.sh --hostname  over SSH, against the live root:
-#                                   ./set-hostname.sh NAME
+#   card-prep.sh                offline, against a mounted card:
+#                                 sudo ./commissioning/set-hostname.sh NAME /mnt/rw
+#   provision.sh --hostname     over SSH, against the live root:
+#                                 ./commissioning/set-hostname.sh NAME
 #
 # It lives in its own file rather than in either caller because the two paths
 # would otherwise carry the same 30 lines of /etc/hosts rewriting and drift
@@ -28,7 +28,7 @@
 # announcing `send host-name "RW09";`. Nothing in this repo wrote that file until
 # now (IMPROVEMENT_PLAN.md D7b item 3).
 #
-# Usage: set-hostname.sh NAME [ROOTFS]
+# Usage: commissioning/set-hostname.sh NAME [ROOTFS]
 #   NAME    RFC-1123 single label. No dots — mDNS appends .local itself, and a
 #           dotted name in /etc/hosts is part of what made the shipped mapping
 #           confusing to read.
@@ -124,7 +124,7 @@ if ! awk -v new="$NAME" '
 fi
 
 # Negative control, same shape as the loopback-stanza guard in
-# commission-roomwizard.sh: assert the thing the filter must never remove is
+# commissioning/card-prep.sh: assert the thing the filter must never remove is
 # still there, rather than trusting the filter. Losing the localhost entry is
 # the one way this script could break a booting device.
 LOCALHOST_RE='(^|[ \t])localhost([ \t]|$)'

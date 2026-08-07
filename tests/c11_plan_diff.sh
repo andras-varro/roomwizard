@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # One-off migration control for IMPROVEMENT_PLAN.md C11: every path the retired
-# setup-device.sh --remove heredoc deleted must be covered by the compiled clean
+# commissioning/provision.sh --remove heredoc deleted must be covered by the compiled clean
 # plan, or be a recorded deliberate omission.
 #
 # NOT a regression test. The heredoc it reads no longer exists in the working tree
@@ -13,8 +13,8 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-. ./rw-identify.sh
-. ./rw-clean.sh
+. ./lib/rw-identify.sh
+. ./lib/rw-clean.sh
 
 RULES=device-files/clean-rules.conf
 
@@ -29,7 +29,7 @@ PLANS="remove:$(rw_clean_remove_groups)|deep:$(rw_clean_default_groups)"
 
 # The heredoc, from the commit before the fold.
 HD=$(mktemp)
-git show HEAD:setup-device.sh \
+git show HEAD:commissioning/provision.sh \
     | sed -n '/^if \[\[ "\$FLAG" == "--remove" \]\]; then/,/^    info "Bloatware files left in place/p' > "$HD"
 
 # Only the paths it ACTED on: the argument list of an rm, or a truncation target.

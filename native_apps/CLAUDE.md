@@ -16,7 +16,7 @@ Guidance for writing code in this directory. Device facts live in
 ```
 
 `set-default` is the only mode this script accepts. Cleanup and boot-service install live in
-`../setup-device.sh`.
+`../commissioning/provision.sh`.
 
 All targets compile with `-Wall -Wextra -Wno-unused-parameter` and the tree is currently at
 **zero warnings** — keep it there, so a new warning means a new problem. Not `-Werror`, so a

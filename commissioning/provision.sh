@@ -1,28 +1,28 @@
 #!/bin/bash
 #
-# setup-device.sh — Phase 2: One-time system setup over SSH
+# commissioning/provision.sh — Phase 2: One-time system setup over SSH
 #
 # Run this ONCE after the first SSH login to a freshly commissioned device.
 # It disables Steelcase bloatware, installs the generic app launcher, and
 # sets up audio + time-sync boot scripts.
 #
 # Usage:
-#   ./setup-device.sh <target>                 # system setup + reboot
-#   ./setup-device.sh <target> --remove        # + remove bloatware files (~178 MB freed)
-#   ./setup-device.sh <target> --status        # show device status only
-#   ./setup-device.sh <target> --hostname rw09 # set the host name only, no reboot
+#   ./commissioning/provision.sh <target>                 # system setup + reboot
+#   ./commissioning/provision.sh <target> --remove        # + remove bloatware files (~178 MB freed)
+#   ./commissioning/provision.sh <target> --status        # show device status only
+#   ./commissioning/provision.sh <target> --hostname rw09 # set the host name only, no reboot
 #
 # <target> is an IPv4 address or a host name — `rw09.local` works once mDNS is
 # enabled (this script does that) and the unit has a unique name (--hostname).
 #
 # Prerequisites:
-#   - Device commissioned with commission-roomwizard.sh (Phase 1)
+#   - Device commissioned with commissioning/card-prep.sh (Phase 1)
 #   - SSH access as root
 #
 # What it does:
 #   1. Deploys disable-steelcase.sh → /opt/roomwizard/
 #   2. Runs disable-steelcase.sh (watchdog bypass, cron cleanup, service stop)
-#   3. Installs roomwizard-app-init.sh as /etc/init.d/roomwizard-app
+#   3. Installs device-files/roomwizard-app as /etc/init.d/roomwizard-app
 #      Registers the init service (priority S99)
 #      Deploys audio-enable + time-sync boot scripts, and enables avahi (mDNS)
 #   4. Hardens SSH (PermitEmptyPasswords=no, brute-force limits)
@@ -43,24 +43,25 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Both halves of the job are DATA in one file each, shared with
-# commission-offline.sh so that the live and offline passes cannot drift:
+# commissioning/commission-offline.sh so that the live and offline passes cannot drift:
 #
-#   device-files/clean-rules.conf      what is REMOVED  (rw-clean.sh)
-#   device-files/provision-rules.conf  what is INSTALLED (rw-provision.sh)
+#   device-files/clean-rules.conf      what is REMOVED  (lib/rw-clean.sh)
+#   device-files/provision-rules.conf  what is INSTALLED (lib/rw-provision.sh)
 #
 # Each library is the parser and the plan compiler. The executors differ — "/" is
 # the correct prefix on a device and a refused one offline, and on this path the
 # work happens on the far side of an ssh pipe — but there is one implementation of
 # each, and rw_provision_online_script is the one this script ships to the device
 # (IMPROVEMENT_PLAN.md F10, C11, C12).
-# shellcheck source=rw-identify.sh
-. "$SCRIPT_DIR/rw-identify.sh"
-# shellcheck source=rw-clean.sh
-. "$SCRIPT_DIR/rw-clean.sh"
-# shellcheck source=rw-provision.sh
-. "$SCRIPT_DIR/rw-provision.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_ROOT/lib/rw-identify.sh"
+# shellcheck source=../lib/rw-clean.sh
+. "$REPO_ROOT/lib/rw-clean.sh"
+# shellcheck source=../lib/rw-provision.sh
+. "$REPO_ROOT/lib/rw-provision.sh"
 
 # ── --keep-<group> and --no-<group> are extracted before positional parsing ──
 #
@@ -106,7 +107,7 @@ INIT_SCRIPT="/etc/init.d/roomwizard-app"
 # than in a heredoc here so that the offline installer writes the same bytes —
 # two copies of an init script is two things to keep in step, and the one that
 # drifts is discovered on a device that boots to a black screen.
-DEVICE_FILES="$SCRIPT_DIR/device-files"
+DEVICE_FILES="$REPO_ROOT/device-files"
 CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ usage() {
 # and ends in a reboot (../IMPROVEMENT_PLAN.md B19).
 #
 # An IPv4 address OR a DNS name is accepted. The name form is what makes
-# `./setup-device.sh rw09.local` work, which is the whole point of enabling
+# `./commissioning/provision.sh rw09.local` work, which is the whole point of enabling
 # avahi below — an IPv4-only gate here silently defeated it. (This used to be
 # IPv4-only and there was a SECOND, weaker validator further down that did
 # accept a name; the strict one exited first, so the permissive one was dead
@@ -195,8 +196,8 @@ fi
 # working tree is LF even on this Windows host and scp copies it unchanged.
 report_script_versions() {
     local pairs=(
-        "$SCRIPT_DIR/disable-steelcase.sh:$REMOTE_DIR/disable-steelcase.sh"
-        "$SCRIPT_DIR/roomwizard-app-init.sh:$INIT_SCRIPT"
+        "$REPO_ROOT/device-files/disable-steelcase.sh:$REMOTE_DIR/disable-steelcase.sh"
+        "$REPO_ROOT/device-files/roomwizard-app:$INIT_SCRIPT"
     )
     local pair local_path remote_path local_md5 remote_md5 drift=0
     for pair in "${pairs[@]}"; do
@@ -244,7 +245,7 @@ if [[ "$FLAG" == "--hostname" ]]; then
     # Validated HERE, at parse time, for two reasons: a typo should not need a
     # reachable device to be caught, and the name is later interpolated into an
     # ssh command string, so nothing unexpected should ever get that far.
-    # set-hostname.sh validates again on the device and remains the authority.
+    # commissioning/set-hostname.sh validates again on the device and remains the authority.
     if [[ ! "$NEW_HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
         echo "Not a valid host name: $NEW_HOSTNAME"
         echo "  RFC-1123, single label: letters, digits and hyphens, alphanumeric at both ends."
@@ -275,8 +276,8 @@ DEEP_CLEAN=0
 #
 # ⚠️ The decisions are NOT here. Every keep and every delete lives in
 # device-files/clean-rules.conf with a reason per entry, read by this script and
-# by commission-offline.sh so the live and offline cleans cannot drift
-# (IMPROVEMENT_PLAN.md F10). rw-clean.sh compiles that file into a plan; what
+# by commissioning/commission-offline.sh so the live and offline cleans cannot drift
+# (IMPROVEMENT_PLAN.md F10). lib/rw-clean.sh compiles that file into a plan; what
 # follows is only this script's EXECUTOR, and it is separate from the offline one
 # because "/" is the correct prefix on a device and a refused one offline.
 #
@@ -333,7 +334,7 @@ run_clean() {
 
     # ── The gate: asked once, asked FIRST, and about the backup ──────────────
     #
-    # Same question and same wording as commission-offline.sh's phase 0, because it
+    # Same question and same wording as commissioning/commission-offline.sh's phase 0, because it
     # is the same precondition. There is no per-flag opt-out to soften it with: a
     # user who cleans a unit of its vendor software has made a decision, and the
     # recovery path for that decision is a host-side card image, not a switch here
@@ -525,8 +526,8 @@ fi
 # ── hostname-only mode ──────────────────────────────────────────────────────
 # Targeted and reboot-free, so it can be run against an already-commissioned
 # unit — including one that is a live display and must not be rebooted, which is
-# the case this flag exists for. The work itself is set-hostname.sh, the same
-# script commission-roomwizard.sh runs offline; it is staged to /tmp rather than
+# the case this flag exists for. The work itself is commissioning/set-hostname.sh, the same
+# script commissioning/card-prep.sh runs offline; it is staged to /tmp rather than
 # installed, because it is a one-shot and nothing on the device calls it again
 # (so it stays out of report_script_versions' drift list).
 if [[ "$FLAG" == "--hostname" ]]; then
@@ -550,7 +551,7 @@ REMOTE
         ok "mDNS is enabled — after the next reboot, try: ssh root@$NEW_HOSTNAME.local"
     else
         warn "mDNS is NOT enabled on this device, so <name>.local will not resolve."
-        warn "Run a full './setup-device.sh $DEVICE_IP' to install it (that reboots)."
+        warn "Run a full './commissioning/provision.sh $DEVICE_IP' to install it (that reboots)."
     fi
     echo ""
     exit 0
@@ -592,11 +593,11 @@ echo "════════════════════════�
 
 # ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
 # device-files/provision-rules.conf with a reason per entry, read by this script AND
-# by commission-offline.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+# by commissioning/commission-offline.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
 #
 # What used to be here: five scp calls, an `ssh <<'REMOTE'` block of ln -sf, a second
 # one for avahi, a four-command sed block over sshd_config, and a third for the
-# sysctl file — every one of them written out a second time in commission-offline.sh.
+# sysctl file — every one of them written out a second time in commissioning/commission-offline.sh.
 # They HAD drifted: this path deleted stale rc*.d links before relinking and the
 # offline path did not.
 #
@@ -606,7 +607,7 @@ echo "════════════════════════�
 # `--dry-run` on either path prints the same resolved set.
 PROV_RULES="$DEVICE_FILES/provision-rules.conf"
 [[ -f "$PROV_RULES" ]] || err "missing $PROV_RULES"
-if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$SCRIPT_DIR")"; then
+if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"
     err "device-files/provision-rules.conf does not validate — refusing to provision"
 fi
@@ -636,9 +637,9 @@ info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^instal
 # reason the two executors exist; everything else about them is shared.
 while IFS=$'\t' read -r _kind _mode _target _src; do
     [[ "$_kind" == "install" ]] || continue
-    [[ -f "$SCRIPT_DIR/$_src" ]] || err "missing $SCRIPT_DIR/$_src"
+    [[ -f "$REPO_ROOT/$_src" ]] || err "missing $REPO_ROOT/$_src"
     ssh "$DEVICE" "mkdir -p '$(dirname "$_target")'"
-    scp -q "$SCRIPT_DIR/$_src" "$DEVICE:$_target" || err "could not copy $_src to $_target"
+    scp -q "$REPO_ROOT/$_src" "$DEVICE:$_target" || err "could not copy $_src to $_target"
     info "copied $_src → $_target"
 done < "$PROV_PLAN"
 

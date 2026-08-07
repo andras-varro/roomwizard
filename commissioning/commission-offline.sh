@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# commission-offline.sh — put a RoomWizard card in a reader, answer two
+# commissioning/commission-offline.sh — put a RoomWizard card in a reader, answer two
 #                         questions, put it back, and the device BOOTS WORKING.
 #
 # IMPROVEMENT_PLAN.md F10, step 4.
 #
 # Usage:
-#   sudo ./commission-offline.sh --bundle <file.tar.gz|dir> [options]
-#   sudo ./commission-offline.sh --bundle <b> --dry-run
-#        ./commission-offline.sh --bundle <b> --base /mnt/rw   # already mounted
+#   sudo ./commissioning/commission-offline.sh --bundle <file.tar.gz|dir> [options]
+#   sudo ./commissioning/commission-offline.sh --bundle <b> --dry-run
+#        ./commissioning/commission-offline.sh --bundle <b> --base /mnt/rw   # already mounted
 #
 #   --bundle <path>     A release tarball from `./release.sh --stage-only`, or a
 #                       staged bundle directory. THE source of binaries: an
@@ -27,7 +27,7 @@
 # ── Why offline, and why one pass ───────────────────────────────────────────
 #
 # Today's flow is three phases with a reboot and an IP hunt in the middle
-# (commission-roomwizard.sh -> boot -> setup-device.sh -> deploy-all.sh). That is
+# (commissioning/card-prep.sh -> boot -> commissioning/provision.sh -> deploy-all.sh). That is
 # fine as a development loop and unusable by anyone who is not developing this.
 #
 # Offline is also not merely a convenience. A unit whose websign/net.mode is
@@ -43,22 +43,22 @@
 #
 # Nothing here restates a decision that lives somewhere else:
 #
-#   the two operator prompts   ROOTFS=<mnt> commission-roomwizard.sh already asks
+#   the two operator prompts   ROOTFS=<mnt> commissioning/card-prep.sh already asks
 #                              exactly the password and host-name questions, and
 #                              does shadow / sshd / DHCP / the SSH key. This
 #                              orchestrates it.
-#   the host name              set-hostname.sh, which owns /etc/hostname,
+#   the host name              commissioning/set-hostname.sh, which owns /etc/hostname,
 #                              /etc/hosts AND /etc/dhclient.conf (D7b item 3).
-#   which card, which mount    rw-identify.sh, by content and by POSITION, never
+#   which card, which mount    lib/rw-identify.sh, by content and by POSITION, never
 #                              by UUID. p1 is unreachable through it by design.
 #   what to delete             device-files/clean-rules.conf, shared with
-#                              setup-device.sh --remove/--deep-clean so the two
+#                              commissioning/provision.sh --remove/--deep-clean so the two
 #                              cannot drift.
 #   what to install            device-files/provision-rules.conf — the boot scripts,
 #                              the rc*.d links, the sshd directives and the config
-#                              fix-ups, shared with setup-device.sh for the same
+#                              fix-ups, shared with commissioning/provision.sh for the same
 #                              reason. Modes are DECLARED there, never read off disk.
-#   which binaries             the bundle's own manifest (rw-bundle.sh). Modes are
+#   which binaries             the bundle's own manifest (lib/rw-bundle.sh). Modes are
 #                              DECLARED there too.
 #
 # ── Still needs the device ─────────────────────────────────────────────────
@@ -70,18 +70,19 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
-# shellcheck source=rw-identify.sh
-. "$SCRIPT_DIR/rw-identify.sh"
-# shellcheck source=rw-clean.sh
-. "$SCRIPT_DIR/rw-clean.sh"
-# shellcheck source=rw-provision.sh
-. "$SCRIPT_DIR/rw-provision.sh"
-# shellcheck source=rw-bundle.sh
-. "$SCRIPT_DIR/rw-bundle.sh"
+# shellcheck source=../lib/rw-identify.sh
+. "$REPO_ROOT/lib/rw-identify.sh"
+# shellcheck source=../lib/rw-clean.sh
+. "$REPO_ROOT/lib/rw-clean.sh"
+# shellcheck source=../lib/rw-provision.sh
+. "$REPO_ROOT/lib/rw-provision.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_ROOT/lib/rw-bundle.sh"
 
-DEVICE_FILES="$SCRIPT_DIR/device-files"
+DEVICE_FILES="$REPO_ROOT/device-files"
 CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -397,7 +398,7 @@ if ! command -v "$OBJDUMP" >/dev/null 2>&1; then
 else
     # xargs rather than $(cat): the list can be long, and a path with a space in
     # it would otherwise be split into two arguments that both fail to exist.
-    if ! xargs -d '\n' -a "$ELF_LIST" bash "$SCRIPT_DIR/native_apps/check-arm-safe.sh"; then
+    if ! xargs -d '\n' -a "$ELF_LIST" bash "$REPO_ROOT/native_apps/check-arm-safe.sh"; then
         err "a bundled binary would SIGILL on this device — do not install it"
     fi
     ARM_VERIFIED="$ELF_COUNT binaries, hard zero"
@@ -411,14 +412,14 @@ if [[ -z "$BASE" ]]; then
     cleanup_and_exit 0
 fi
 
-# ── 3. name and password: commission-roomwizard.sh, not a second copy ───────
+# ── 3. name and password: commissioning/card-prep.sh, not a second copy ───────
 echo ""
 echo "────────────────────────────────────────"
 echo " 3. Name, password, SSH and DHCP"
 echo "────────────────────────────────────────"
 
 if [[ -n "$DRY" ]]; then
-    warn "Dry run: skipping commission-roomwizard.sh (it prompts and writes)"
+    warn "Dry run: skipping commissioning/card-prep.sh (it prompts and writes)"
 else
     # ROOTFS is its documented escape hatch, and passing it skips its own
     # detection — which is what makes this an orchestration rather than a second
@@ -428,15 +429,15 @@ else
     #
     # RW_COMMISSION_ORCHESTRATED suppresses its closing "Commissioning Complete!"
     # banner and the next-steps block it reads out of COMMISSIONING.md, which tell
-    # the operator to boot the unit and then run setup-device.sh and deploy-all.sh
+    # the operator to boot the unit and then run commissioning/provision.sh and deploy-all.sh
     # — everything phases 4-6 below are about to do. It is a separate flag from
     # ROOTFS on purpose: ROOTFS alone also means "I mounted the card myself", and
     # that operator does still need the next steps.
-    info "Handing over to commission-roomwizard.sh for the two questions..."
+    info "Handing over to commissioning/card-prep.sh for the two questions..."
     echo ""
     ROOTFS="$BASE/root" RW_COMMISSION_ORCHESTRATED=1 \
-        bash "$SCRIPT_DIR/commission-roomwizard.sh" \
-        || err "commission-roomwizard.sh failed — the card is half-written; fix it before booting"
+        bash "$SCRIPT_DIR/card-prep.sh" \
+        || err "commissioning/card-prep.sh failed — the card is half-written; fix it before booting"
     ok "Password, host name, /etc/hosts, /etc/dhclient.conf, sshd and DHCP done"
 fi
 
@@ -515,17 +516,17 @@ put() {
 #
 # ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
 # device-files/provision-rules.conf with a reason per entry, read by BOTH this
-# script and setup-device.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+# script and commissioning/provision.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
 # They HAD drifted: the online path removed stale rc*.d links before relinking and
 # this one did not, so a card carrying an old S50roomwizard-app came out of offline
 # commissioning with two links to one init script at two priorities.
 #
 # What used to be here: five put() calls, seven link_boot() calls, a bare touch of
 # /var/watchdog_test, and a four-command sed block over sshd_config — every one of
-# them written out a second time in setup-device.sh.
+# them written out a second time in commissioning/provision.sh.
 PROV_RULES="$DEVICE_FILES/provision-rules.conf"
 [[ -f "$PROV_RULES" ]] || err "missing $PROV_RULES"
-if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$SCRIPT_DIR")"; then
+if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"
     err "device-files/provision-rules.conf does not validate — refusing to install"
 fi
@@ -550,7 +551,7 @@ PROV_PLAN="$TMPROOT/provision.plan"
 rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
     || err "could not compile the provision plan"
 info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^install' "$PROV_PLAN") install, $(grep -c '^link' "$PROV_PLAN") link, $(grep -c '^unlink' "$PROV_PLAN") unlink"
-RW_PROVISION_DRY="$DRY" rw_provision_apply_offline "$BASE" "$PROV_PLAN" "$SCRIPT_DIR" \
+RW_PROVISION_DRY="$DRY" rw_provision_apply_offline "$BASE" "$PROV_PLAN" "$REPO_ROOT" \
     || err "the provision step failed"
 
 # Feed the plan's declared modes into the +x measurement below. Reading them from

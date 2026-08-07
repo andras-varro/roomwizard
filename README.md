@@ -46,7 +46,7 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 ### 1. Commission the device (once)
 ```bash
 # Phase 1: SD card — set password, SSH, DHCP
-./commission-roomwizard.sh
+./commissioning/card-prep.sh
 
 # Insert SD card, boot device, find its IP...
 # deploy private key for SSH access:
@@ -55,14 +55,14 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 # ssh root@<ip>
 
 # Phase 2: SSH — disable bloatware, install app launcher
-./setup-device.sh <ip>
+./commissioning/provision.sh <ip>
 ```
 
 ### 1b. Reclaim disk space (optional, recommended)
 ```bash
-./setup-device.sh <ip> --remove       # vendor bloatware (~178 MB)
-./setup-device.sh <ip> --deep-clean   # extended cleanup (~560 MB more)
-./setup-device.sh <ip> --status       # report current state
+./commissioning/provision.sh <ip> --remove       # vendor bloatware (~178 MB)
+./commissioning/provision.sh <ip> --deep-clean   # extended cleanup (~560 MB more)
+./commissioning/provision.sh <ip> --status       # report current state
 ```
 
 ### 2. Deploy a project
@@ -90,14 +90,28 @@ ssh root@<ip> reboot
 
 ```
 roomwizard/
-├── commission-roomwizard.sh     # Phase 1: SD card commissioning (offline)
-├── setup-device.sh              # Phase 2: SSH system setup (one-time)
+├── roomwizard.sh                # Front door: a menu over everything below
 ├── deploy-all.sh                # Phase 3: build + deploy all components
-├── disable-steelcase.sh         # Bloatware cleanup (deployed to device)
-├── roomwizard-app-init.sh       # Generic init script (deployed to device)
+├── release.sh                   # Build + stage an offline release bundle
+├── commissioning/
+│   ├── card-prep.sh             # Phase 1: SD card commissioning (offline)
+│   ├── provision.sh             # Phase 2: SSH system setup (one-time)
+│   ├── commission-offline.sh    # Phases 1-3 in one offline pass
+│   ├── set-hostname.sh          # /etc/hostname + /etc/hosts + dhclient.conf
+│   └── clone-to-32gb.sh         # Clone a card onto a larger one
+├── lib/                         # Sourced, never executed
+│   ├── rw-identify.sh           # Which card, which partition, by content/position
+│   ├── rw-clean.sh              # clean-rules.conf -> a plan
+│   ├── rw-provision.sh          # provision-rules.conf -> a plan
+│   └── rw-bundle.sh             # The release-bundle layout, both directions
+├── device-files/                # Installed onto the device verbatim
+│   ├── roomwizard-app           # Generic init script (app respawn loop)
+│   ├── disable-steelcase.sh     # Bloatware cleanup (run at every boot)
+│   ├── clean-rules.conf         # What a clean removes, one reason per line
+│   └── provision-rules.conf     # What the device ends up with
 ├── COMMISSIONING.md             # Commissioning workflow
 ├── SYSTEM_ANALYSIS.md           # Hardware analysis
-├── native_apps/                # C apps (games, launcher, tools)
+├── native_apps/                 # C apps (games, launcher, tools)
 ├── browser_games/               # HTML5 games + LED control
 ├── scummvm-roomwizard/          # ScummVM backend
 └── vnc_client/                  # VNC remote desktop viewer
@@ -107,16 +121,16 @@ roomwizard/
 
 | Layer | Script | Runs |
 |-------|--------|------|
-| **SD card setup** | `commission-roomwizard.sh` | Once (offline) |
-| **System setup** | `setup-device.sh` | Once (SSH) |
+| **SD card setup** | `commissioning/card-prep.sh` | Once (offline) |
+| **System setup** | `commissioning/provision.sh` | Once (SSH) |
 | **Deploy all** | `deploy-all.sh` | After setup (builds + deploys everything) |
 | **Bloatware cleanup** | `disable-steelcase.sh` | On setup + every boot |
-| **App launcher** | `roomwizard-app-init.sh` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
+| **App launcher** | `device-files/roomwizard-app` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
 | **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy + app manifests) |
 
 Each project's `build-and-deploy.sh` handles building, deploying binaries, and installing
 `.app` manifests to `/opt/roomwizard/apps/` for the visual launcher.
-System setup is done once by `setup-device.sh` — no duplication across projects.
+System setup is done once by `commissioning/provision.sh` — no duplication across projects.
 
 ## Projects
 

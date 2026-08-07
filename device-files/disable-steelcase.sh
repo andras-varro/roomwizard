@@ -2,8 +2,8 @@
 # disable-steelcase.sh — Disable non-essential Steelcase firmware services
 #
 # Idempotent: safe to run multiple times.  Called by:
-#   - setup-device.sh  (one-time commissioning over SSH)
-#   - roomwizard-app-init.sh  (on every boot as a safety net)
+#   - commissioning/provision.sh  (one-time commissioning over SSH)
+#   - device-files/roomwizard-app  (on every boot as a safety net)
 #
 # What it does:
 #   0. Creates /var/watchdog_test bypass file (disables Steelcase software watchdog)
@@ -23,12 +23,12 @@
 set -e
 
 # Everything below is best-effort cleanup on a device whose factory filesystem
-# has already been partly deleted (setup-device.sh --remove/--deep-clean), so a
+# has already been partly deleted (commissioning/provision.sh --remove/--deep-clean), so a
 # missing file is normal and must never abort the run.  Under `set -e` it did:
 # the /etc/profile sed below was unguarded and ran *before* the watchdog bypass,
 # so on a device with no /etc/profile this script died at its second command and
 # left the Steelcase software watchdog armed - rebooting the device every ~70
-# minutes.  It runs on every boot from roomwizard-app-init.sh, which does not
+# minutes.  It runs on every boot from device-files/roomwizard-app, which does not
 # check the exit status, so the failure was completely invisible.  (B18.)
 #
 # Two rules follow, and the ordering is as load-bearing as the guards:
@@ -106,8 +106,8 @@ echo "  Services: non-essential stopped and disabled"
 
 # ── 7. Report the one thing that must have worked ─────────────────────────
 # The other half of B18 was that nobody could see the failure: this runs on
-# every boot from roomwizard-app-init.sh, which does not check the exit status.
-# Say out loud whether the bypass is in place, so `setup-device.sh` output and
+# every boot from device-files/roomwizard-app, which does not check the exit status.
+# Say out loud whether the bypass is in place, so `commissioning/provision.sh` output and
 # the boot log both carry the answer.
 if [ -f /var/watchdog_test ]; then
     echo "  Watchdog: Steelcase software watchdog bypassed (/var/watchdog_test present)"

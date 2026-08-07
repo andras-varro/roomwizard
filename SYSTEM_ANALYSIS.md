@@ -819,8 +819,8 @@ external address that is unreachable from anywhere these units are used:
 Two defects in one file. The name is **baked into the image** rather than generated, so every unit
 cloned from it claims `RW09` — which is also where this repo's name for the reference unit came
 from. And on a stock image **the device's own name resolves to a dead address**, so anything that
-resolves its own hostname gets the wrong answer. `set-hostname.sh` fixes both files together, to
-loopback-only (it is what `commission-roomwizard.sh`'s prompt and `setup-device.sh --hostname` both
+resolves its own hostname gets the wrong answer. `commissioning/set-hostname.sh` fixes both files together, to
+loopback-only (it is what `commissioning/card-prep.sh`'s prompt and `commissioning/provision.sh --hostname` both
 call); disposition in `IMPROVEMENT_PLAN.md` D7.
 
 **⚠️ The vendor regenerates all four network files on every boot, so editing them is not the last
@@ -842,8 +842,8 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
   `Manual IP Mode detected.` / `Vaild host name found: null` / `status: manual-bound`.
 - **Deleting `/home/root/data/websign` makes the script inert for the host name.** Both writers live
   *inside* `set_manual()`/`set_dhcp()`; with `net.mode` unreadable neither branch runs, so `/etc/hosts`
-  and `/etc/hostname` are never touched again. `setup-device.sh`'s deep clean removes that directory,
-  which is why a cleaned unit keeps the name `set-hostname.sh` gave it — and an uncleaned one does not
+  and `/etc/hostname` are never touched again. `commissioning/provision.sh`'s deep clean removes that directory,
+  which is why a cleaned unit keeps the name `commissioning/set-hostname.sh` gave it — and an uncleaned one does not
   (`IMPROVEMENT_PLAN.md` D7b).
 - ⚠️ **The vendor's own validator rejects hyphens.** `net.hostname` is filtered by an awk regex that
   accepts `RW09`, `RW20`, `rwtest` and `null` but **rejects `RW-Test` and `rw-test`**; a rejected name
@@ -863,11 +863,11 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
 - ⚠️ **`/etc/dhclient.conf`'s `send host-name` is a third copy of the name, and nothing in this repo
   writes it.** The vendor image ships `send host-name "RW09";` and the same unit still announces `RW09`
   to DHCP — so a router's device list keeps showing the shipped name however often `/etc/hostname` is
-  corrected. `set-hostname.sh` should own this file too (`IMPROVEMENT_PLAN.md` D7b).
+  corrected. `commissioning/set-hostname.sh` should own this file too (`IMPROVEMENT_PLAN.md` D7b).
 
 **mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
 `/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
-never runs. One symlink enables it (`setup-device.sh` now adds `S30avahi-daemon`), after which the
+never runs. One symlink enables it (`commissioning/provision.sh` now adds `S30avahi-daemon`), after which the
 unit answers to `<name>.local` and neither SSH nor the deploy scripts need a DHCP-lease hunt. Its
 `Required-Start` is `$remote_fs dbus`, and dbus is one of the few dynamic consumers the deep clean
 deliberately keeps, so the dependency holds even on a fully cleaned device. `enable-wide-area=yes`
@@ -1055,7 +1055,7 @@ Device:  /dev/rtc0
 Driver:  twl_rtc (TWL4030 integrated)
 ```
 
-Working correctly — `hwclock -r` matches `date`, and `setup-device.sh` already does `hwclock -w`
+Working correctly — `hwclock -r` matches `date`, and `commissioning/provision.sh` already does `hwclock -w`
 after `rdate`.
 
 **Hold-up is a supercapacitor, not a battery.** `U17` is a Panasonic/Matsushita **"Gold Cap"
@@ -1066,7 +1066,7 @@ charged — not that a cell is healthy.
   Supercaps age (ESR climbs, capacitance falls) over decades, not years. One less worry on
   eight-year-old hardware.
 - **But hold-up is hours-to-days, not months.** **Expect the clock to be wrong after any extended
-  unplugged period.** That is why `setup-device.sh` does time-sync at boot, and it means anything
+  unplugged period.** That is why `commissioning/provision.sh` does time-sync at boot, and it means anything
   trusting the RTC across a shelf-storage gap needs a sanity check rather than blind faith.
 
 ### 3.11 ADC and temperature (TWL4030 MADC)
@@ -1173,7 +1173,7 @@ if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
     # only perform application level checks when the state file is there
 ```
 
-**`disable-steelcase.sh` handles this**, not `setup-device.sh` directly: it creates
+**`disable-steelcase.sh` handles this**, not `commissioning/provision.sh` directly: it creates
 `/var/watchdog_test` and **replaces the whole crontab** with the two cleanup jobs worth keeping
 (`rotatelogfiles.sh`, `cleanupfiles.sh`). It does *not* comment the line out and does *not* back the
 original up — an earlier revision of this section claimed both. Commenting out was the old approach
@@ -1183,9 +1183,9 @@ if it is ever wanted.
 
 Two consequences of *where* that script runs, both of which have bitten:
 
-- `setup-device.sh <ip>` is what **deploys** it (to `/opt/roomwizard/`) and runs it once, and
+- `commissioning/provision.sh <ip>` is what **deploys** it (to `/opt/roomwizard/`) and runs it once, and
   `/etc/init.d/roomwizard-app` runs it again **on every boot** as a safety net. So a device can be
-  running a copy older than the repo's until `setup-device.sh` is re-run — measured on RW09
+  running a copy older than the repo's until `commissioning/provision.sh` is re-run — measured on RW09
   2026-08-03, where the deployed copy predated a bug the repo had already grown.
 - Because it runs unattended at boot and nothing checked its exit status, a failure was invisible.
   Under `set -e` an unguarded `sed` on `/etc/profile` used to run *before* the `touch`, so a device
@@ -1280,7 +1280,7 @@ all three empty; the vendor's config and logs are on the other partitions.
 | Partition | Used | Largest items |
 |---|---|---|
 | p6 `/` | 379 MB | `/usr` 223 MB (of which `/usr/lib` 138 MB, `/usr/share` 60 MB) · `/opt` 142 MB (`openjre-8` 93 MB, `jetty-9-4-11` 43 MB). **Everything outside `/usr` and `/opt` totals 15 MB**: `/lib` 5.4, `/sbin` 3.9, `/bin` 3.7, `/etc` 1.6 |
-| p2 `/home/root/data` | 144 MB | `cron/` **131 MB** — a *log*, not the spool (`setup-device.sh` truncates it rather than deleting the directory) · `test.hex` 10 MB · `websign/` 220 KB, the network config of [§3.5](#35-network-and-power) |
+| p2 `/home/root/data` | 144 MB | `cron/` **131 MB** — a *log*, not the spool (`commissioning/provision.sh` truncates it rather than deleting the directory) · `test.hex` 10 MB · `websign/` 220 KB, the network config of [§3.5](#35-network-and-power) |
 | p3 `/home/root/log` | 31 MB | `jetty_logs` 18 MB · `browser.err` 8 MB · `messages` 4 MB |
 | p5 `/home/root/backup` | 492 MB | `factory/` **472 MB** — vendor upgrade/restore images plus `.md5` files · `websigns/` 15 MB |
 
@@ -1327,7 +1327,7 @@ units are mkfs'd independently at the factory, so two RoomWizards on identical f
 **Nothing on the device consumes a UUID.** U-Boot passes `root=/dev/mmcblk0p6` (compiled in, and
 there is no `saveenv` — §4.4), and `/etc/fstab` names `/dev/mmcblk0p{2,3,5,7}`. Both are by position,
 so p6 *is* the rootfs and cannot be renumbered. Host tooling identifies a card by layout and a rootfs
-by content — `rw-identify.sh`, and `COMMISSIONING.md` → *Finding the card*. A hardcoded UUID
+by content — `lib/rw-identify.sh`, and `COMMISSIONING.md` → *Finding the card*. A hardcoded UUID
 recognises exactly one unit, and assigning it to a second card so it "matches" produces two cards
 claiming one UUID.
 
@@ -1499,10 +1499,10 @@ something needs it; Python requires cross-compiled ARM binaries.
 
 Native apps render straight to the framebuffer, so X11, the browser, Jetty, Java and the databases
 are all unnecessary — and the Steelcase software watchdog reboots the device roughly hourly if they
-are simply *absent* without being disabled properly. `setup-device.sh <ip>` does all of this.
+are simply *absent* without being disabled properly. `commissioning/provision.sh <ip>` does all of this.
 
 **Result: ~80 MB RAM freed, no unwanted reboots, stable game mode.** Optionally
-`setup-device.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
+`commissioning/provision.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
 Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
 
 **Why cleanup this aggressive is safe: every binary we ship is `-static`** (see
@@ -1573,7 +1573,7 @@ optional. `rw_clean_validate` rejects a rules file that even names them, so they
 than merely unvisited.
 
 **`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` (three
-entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a link `setup-device.sh`
+entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a link `commissioning/provision.sh`
 adds, and all four paths are `keep` entries in `clean-rules.conf` so that no clean can delete what
 setup enables.
 
@@ -1590,7 +1590,7 @@ and `lastlog`, which `sshd` and `login` hold open. Offline the symlink dangles, 
 consequences that matter to any cleanup:
 
 - **`rm -rf /home/root/data/cron` destroys the crontab and cron's spool root**, not just the 131 MB
-  `log` file inside it. `setup-device.sh --remove` truncates the log for exactly this reason, and
+  `log` file inside it. `commissioning/provision.sh --remove` truncates the log for exactly this reason, and
   `clean-rules.conf` keeps the directory and **truncates** both the crontab and the log — cron itself
   stays running, because the two surviving jobs are in this table's *Kept* list.
 - **Offline, the crontab is on a different partition from `/var`.** A tool that mounts only p6 sees

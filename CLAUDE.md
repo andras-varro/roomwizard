@@ -88,13 +88,14 @@ diagnostic tools.
 ```bash
 ./roomwizard.sh                     # front door: a menu over everything below
 
-./commission-roomwizard.sh          # bring-up 1: SD-card prep (offline; sets host name)
-./setup-device.sh <ip>              # bring-up 2: SSH cleanup + init service + SW-watchdog bypass
+./commissioning/card-prep.sh        # bring-up 1: SD-card prep (offline; sets host name)
+./commissioning/provision.sh <ip>   # bring-up 2: SSH cleanup + init service + SW-watchdog bypass
 
-sudo ./commission-offline.sh --bundle <tar.gz|dir>   # all of the above, offline, ONE boot
+sudo ./commissioning/commission-offline.sh --bundle <tar.gz|dir>   # all of the above, offline, ONE boot
 
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
+./deploy-all.sh --from-bundle <b> <ip>   # install a release bundle; build NOTHING
 
 cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 
@@ -102,12 +103,19 @@ cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 ./release.sh --tag <tag>            # the above, then `gh release create`  (gh 2.86.0 in WSL; never run)
 ```
 
+**Three directories, three jobs.** `lib/` holds the sourced-not-executed libraries (`rw-identify.sh`,
+`rw-clean.sh`, `rw-bundle.sh`, `rw-provision.sh`) — at the top level, not under `commissioning/`,
+because the component build scripts source `rw-bundle.sh` on the *write* side while the commissioner
+reads it. `commissioning/` holds the bring-up scripts, none of which is an answer to "what do I run"
+except through `roomwizard.sh`. `device-files/` holds what is installed onto a device verbatim. The
+three scripts at the root are the three front doors: `roomwizard.sh`, `deploy-all.sh`, `release.sh`.
+
 `--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
 knowing without looking them up: **`set-default` is the only mode `native_apps/build-and-deploy.sh`
 accepts** (anything else is rejected rather than ignored), and **cleanup, bloatware removal and the
-boot service all live in `setup-device.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
+boot service all live in `commissioning/provision.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
 NAME` — never in a component script. **Both `--remove` and `--deep-clean` read their decisions from
-`device-files/clean-rules.conf`**, the same file `commission-offline.sh` uses, and differ from each
+`device-files/clean-rules.conf`**, the same file `commissioning/commission-offline.sh` uses, and differ from each
 other only by that file's `sweeps` group.
 
 ### Bundles: one layout, declared modes, no configs
@@ -115,7 +123,7 @@ other only by that file's `sweeps` group.
 `release.sh` exists so that putting apps on a device does not require reproducing the toolchain
 (`IMPROVEMENT_PLAN.md` F9). It calls `build-and-deploy.sh --bundle <dir>` on `native_apps`,
 `vnc_client` and `scummvm-roomwizard` — **never `usb_host`**, which patches `uImage-system` on p1. The
-layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
+layout lives in **`lib/rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
 `<dir>/manifest.d/<component>.{list,md5}`.
 
 - ⚠️ **Modes are *declared* by the caller, never read off disk.** `/mnt/c` reports every file 0777 and
@@ -145,9 +153,13 @@ manifest to a file, then copy it**; never emit one from inside an `ssh` heredoc 
 ### `device-files/` and the two rules files: one copy, two consumers
 
 Anything installed onto a device **verbatim** by more than one path lives in `device-files/`, never in a
-heredoc: `audio-enable`, `time-sync`, `99-security.conf`, plus the two data files `clean-rules.conf` and
-`provision-rules.conf`. Both `setup-device.sh` (over SSH) and `commission-offline.sh` (onto a mounted
+heredoc: `roomwizard-app` (the boot init script, which is why it carries the name it is *deployed* as
+rather than a `.sh` one), `disable-steelcase.sh`, `audio-enable`, `time-sync`, `99-security.conf`, plus
+the two data files `clean-rules.conf` and
+`provision-rules.conf`. Both `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted
 card) install those same bytes, and neither decides *what* to install or delete — both read the rules.
+**Every `install` record in `provision-rules.conf` has a `device-files/` source**, which is the check
+that a new one is in the right place.
 `.gitattributes` pins `device-files/**` to `eol=lf`, because the init scripts have no `.sh` extension —
 `/etc/init.d/audio-enable` is the name the `rc5.d` link points at — and a CRLF shebang is rejected by
 BusyBox as a misleading "no such file or directory".
@@ -155,7 +167,7 @@ BusyBox as a misleading "no such file or directory".
 **Two data files, one shape.** `clean-rules.conf` (4 fields) says what is *removed*;
 `provision-rules.conf` (6 fields) says what the device ends up *with*. Both make the reason mandatory
 and last, both are compiled to a plan by a library, and both are executed twice — once with `/` over
-SSH, once under `$BASE/root` offline. `rw-provision.sh` is the install half of what `rw-clean.sh` is for
+SSH, once under `$BASE/root` offline. `lib/rw-provision.sh` is the install half of what `lib/rw-clean.sh` is for
 the delete half.
 
 - **`provision-rules.conf` is `<type> <group> <mode> <target> <source> <reason>`**, types `install` /
@@ -180,7 +192,7 @@ the delete half.
   `sed 's/^PermitEmptyPasswords yes/…/'` it replaced matched one exact string, so `#PermitEmptyPasswords
   yes` passed through untouched and the hardening silently did nothing.
 - ⚠️ **The online executor is generated, not written twice.** `rw_provision_online_script` emits a POSIX
-  `sh` interpreter that `setup-device.sh` pipes to the device; `install` is the one verb it cannot do
+  `sh` interpreter that `commissioning/provision.sh` pipes to the device; `install` is the one verb it cannot do
   alone, because the source bytes are on the host, so the caller `scp`s them first and the interpreter
   only sets the declared mode. Check it with `dash -n`, not `bash -n` — it runs under BusyBox ash.
 - **`--keep-<group>` switches off part of the clean; `--no-<group>` part of the provision.** Each is
@@ -195,7 +207,7 @@ the delete half.
 **`device-files/clean-rules.conf` is the one place a keep or a delete is decided.** Four tab-separated
 fields, `<type> <group> <path> <reason>`, record types `scope` / `keep` / `delete` / `truncate`; a line
 with fewer than four fields is an error, because a missing reason is how a delete gets in without anyone
-having to justify it. `rw-clean.sh` parses it and compiles it into a plan; each consumer keeps its own
+having to justify it. `lib/rw-clean.sh` parses it and compiles it into a plan; each consumer keeps its own
 **executor**, because `/` is the correct prefix on a device and a refused one offline.
 
 - ⚠️ **`rw_clean_del` refuses an empty or `/` base before it looks at anything else.** Unprefixed, those
@@ -237,7 +249,7 @@ having to justify it. `rw-clean.sh` parses it and compiles it into a plan; each 
 
 ### Offline commissioning verifies what it installed, on the card
 
-`commission-offline.sh` md5s every **installed** file against the bundle manifest, asserts `+x` (real
+`commissioning/commission-offline.sh` md5s every **installed** file against the bundle manifest, asserts `+x` (real
 ext4 honours it, so that check is a measurement offline and cannot be one on `/mnt/c`), runs
 `check-arm-safe.sh` over the **downloaded** binaries, asserts every `.app`'s `exec=`/`icon=` and that
 `default-app` names one of them, and `dash -n`s every `/bin/sh` script it wrote.
@@ -247,10 +259,10 @@ ext4 honours it, so that check is a measurement offline and cannot be one on `/m
 - ⚠️ **A missing `arm-linux-gnueabihf-objdump` is a refusal, not a pass.** `check-arm-safe.sh` skips
   non-ARM files and then reports "no hardware divide in 0 binaries", so the caller counts the ELF
   candidates itself and says loudly what it did not check. `--arm-check=skip` is the deliberate override.
-- ⚠️ **`commission-roomwizard.sh` is a *step of* the offline pass, not an alternative to it**, and the
+- ⚠️ **`commissioning/card-prep.sh` is a *step of* the offline pass, not an alternative to it**, and the
   handover carries **two** variables. `ROOTFS` skips its own card detection; `RW_COMMISSION_ORCHESTRATED`
   suppresses its closing banner and the `NEXT_STEPS` block it reads out of `COMMISSIONING.md`, which
-  tells the operator to run `setup-device.sh` and `deploy-all.sh` — both already done by the time it
+  tells the operator to run `commissioning/provision.sh` and `deploy-all.sh` — both already done by the time it
   prints. They are separate on purpose: **`ROOTFS` alone also means "I mounted the card myself"**, and
   that operator does still need the next steps. Suppressing on `ROOTFS` is the obvious wrong fix and
   passes every other case.
@@ -258,7 +270,7 @@ ext4 honours it, so that check is a measurement offline and cannot be one on `/m
   has a sabotage case; the fixture builder is `tests/make-fake-card.sh`, which must live under `/tmp`
   because DrvFs cannot hold a symlink.
 - Regression: `tests/commission_prep_test.sh` (17 cases, host-only, no card, no root) covers
-  `commission-roomwizard.sh`'s two host-side decisions — whose `~/.ssh` the key is looked for in (under
+  `commissioning/card-prep.sh`'s two host-side decisions — whose `~/.ssh` the key is looked for in (under
   `sudo`, `$HOME` is `/root`), and the suppression above. Neither is reachable by running the script, so
   both are **extracted from the shipped file by line range** and run against stubs. Measured against
   deliberately broken copies: the `ROOTFS`-sniffing fix fails 4, a call site that ignores
@@ -290,7 +302,7 @@ misparses.
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
-| `roomwizard-app-init.sh`, `disable-steelcase.sh`, `device-files/*` | neither — **only** `./setup-device.sh <ip>`, which ends in a reboot (or `commission-offline.sh`, offline) |
+| anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
 
 When in doubt, over-deploy. The failure mode is silent.
 
@@ -434,10 +446,10 @@ tool-level traps rather than device facts, and each has cost real time.
 - **The Steelcase software watchdog reboots the device ~every 70 min** in game mode. It is a cron job
   (`/opt/sbin/watchdog/watchdog.sh`), and **`disable-steelcase.sh` is what disables it** —
   `touch /var/watchdog_test` as its *first* command, deliberately ahead of every fallible line, plus a
-  freshly written crontab. It prints whether the bypass is in place. `setup-device.sh <ip>` deploys and
+  freshly written crontab. It prints whether the bypass is in place. `commissioning/provision.sh <ip>` deploys and
   runs it; `/etc/init.d/roomwizard-app` re-runs it on **every boot**.
-  **A device can be running an older copy than the repo's until `setup-device.sh` is re-run** —
-  `./setup-device.sh <ip> --status` md5s both deployed scripts against the repo's and says
+  **A device can be running an older copy than the repo's until `commissioning/provision.sh` is re-run** —
+  `./commissioning/provision.sh <ip> --status` md5s both deployed scripts against the repo's and says
   `matches repo` or `DRIFTED` per file (read-only, no reboot). **Check that before reproducing anything
   against a device**, or you will draw conclusions about code the device is not running.
   The *hardware* watchdog (`/usr/sbin/watchdog`) is fine — keep it, but any app that takes over the
@@ -489,29 +501,29 @@ flags each component actually uses: `SYSTEM_ANALYSIS.md#6-building-for-this-devi
 | Layer | Script | When |
 |---|---|---|
 | Front door (menu over everything below) | `roomwizard.sh` | whenever you'd rather not remember the flags |
-| SD-card commissioning | `commission-roomwizard.sh` | once, offline |
-| System setup (cleanup, init, audio, time-sync, mDNS) | `setup-device.sh` | once, over SSH |
-| **All of the above in one offline pass** | `commission-offline.sh` (rules: `device-files/clean-rules.conf`, executor: `rw-clean.sh`) | once, offline, for *delivery* |
+| SD-card commissioning | `commissioning/card-prep.sh` | once, offline |
+| System setup (cleanup, init, audio, time-sync, mDNS) | `commissioning/provision.sh` | once, over SSH |
+| **All of the above in one offline pass** | `commissioning/commission-offline.sh` (rules: `device-files/clean-rules.conf`, executor: `lib/rw-clean.sh`) | once, offline, for *delivery* |
 | Build + deploy all components | `deploy-all.sh` | per deploy |
 | Per-component build/deploy/manifest | `*/build-and-deploy.sh` | per component |
-| Build + stage + publish an offline bundle | `release.sh` (layout: `rw-bundle.sh`) | per release |
-| App respawn loop at boot | `roomwizard-app-init.sh` (`/etc/init.d/roomwizard-app`) | every boot |
+| Build + stage + publish an offline bundle | `release.sh` (layout: `lib/rw-bundle.sh`) | per release |
+| App respawn loop at boot | `device-files/roomwizard-app` (`/etc/init.d/roomwizard-app`) | every boot |
 
 `roomwizard.sh` is a **composition layer with no logic of its own** except `wait_for_ssh`: every item
 execs one of the scripts below it, and all of them stay non-interactive when called directly. It polls
 **SSH, not ping**, because ping answers while `sshd` is still starting — exactly the window that
 produces a spurious "Cannot reach". The SSH phases are not merged into one script because the cleanup's
 targets span four partitions that only a booted kernel assembles into one tree; the argument is in
-`COMMISSIONING.md`. **`commission-offline.sh` is the answer to that, not an exception to it** — it
+`COMMISSIONING.md`. **`commissioning/commission-offline.sh` is the answer to that, not an exception to it** — it
 mounts all four by position and maps every device-absolute path onto the right one, which is the work
-the SSH phases get for free, and it orchestrates `commission-roomwizard.sh` rather than restating its
+the SSH phases get for free, and it orchestrates `commissioning/card-prep.sh` rather than restating its
 two prompts. The SSH path stays as the verified development loop.
 
-**System setup is done once by `setup-device.sh`** — component deploy scripts must not duplicate it.
+**System setup is done once by `commissioning/provision.sh`** — component deploy scripts must not duplicate it.
 `deploy-all.sh` auto-discovers components (any subdir with a `build-and-deploy.sh`), always runs
 `native_apps` first, then sets `app_launcher` as the default boot app.
 
-**Host name is set in three files, by one script.** `set-hostname.sh` writes `/etc/hostname`, rewrites
+**Host name is set in three files, by one script.** `commissioning/set-hostname.sh` writes `/etc/hostname`, rewrites
 `/etc/hosts` — because the vendor image maps the device's own name on a **non-loopback** line to an
 unreachable address, so units can collide on a name and each resolves its own name wrongly — and sets
 `/etc/dhclient.conf`'s `send host-name`, which is the one a DHCP server and therefore a router's device
@@ -523,14 +535,14 @@ rewrite has a negative control: it refuses to write a `/etc/hosts` that lost `lo
 drift, and `--hostname` does **not** reboot — which is what makes it usable on a unit in service as a
 live display. ⚠️ **None of the three is the last word until the vendor stack is gone** — the boot-time
 regenerator above overwrites all of them, so on an uncleaned unit the name must also be written to
-`/home/root/data/websign/net.hostname` (`IMPROVEMENT_PLAN.md` D7b). `commission-offline.sh` deletes
+`/home/root/data/websign/net.hostname` (`IMPROVEMENT_PLAN.md` D7b). `commissioning/commission-offline.sh` deletes
 `websign` in the same pass that sets the name, which removes that window instead of patching it.
 
 ⚠️ **Never identify a partition by filesystem UUID.** A UUID is assigned at mkfs time, so it names one
 *card*: units are mkfs'd independently at the factory and two RoomWizards on identical firmware share
 **none** of their four UUIDs. Nothing on the device consumes one either — `root=/dev/mmcblk0p6` and
-`/etc/fstab`'s `/dev/mmcblk0p{2,3,5,7}` are both by position. `rw-identify.sh` is the one
-implementation, sourced by `commission-roomwizard.sh` and `clone-to-32gb.sh`: **content** for a
+`/etc/fstab`'s `/dev/mmcblk0p{2,3,5,7}` are both by position. `lib/rw-identify.sh` is the one
+implementation, sourced by `commissioning/card-prep.sh` and `commissioning/clone-to-32gb.sh`: **content** for a
 mounted rootfs (`rw_is_rootfs`), the **partition table** for a disk (`rw_is_card_disk`), and
 **position** for which partition holds which tree (`rw_card_partitions` → `RW_PART_ROLES` = p6 root,
 p2 data, p3 log, p5 backup). It excludes `/` from its scan on purpose — a content scan that selected
@@ -563,7 +575,7 @@ tree whose modes are wrong still works. Note that a missing `+x` **cannot be rep
 the app that `app_launcher` *started*, and that grandchild is normally the process holding `/dev/fb0` —
 its basename appears in no config file. `app_pids()` walks `/proc/*/exe` against the three deploy
 directories instead, because the exe link is the only identity neither chosen by the process nor
-limited to the configured app. Two consequences: **`setup-device.sh <ip>` is what pushes that
+limited to the configured app. Two consequences: **`commissioning/provision.sh <ip>` is what pushes that
 script**, so a `do_stop()` change does not reach a device until it is re-run; and to see what is
 running use `/etc/init.d/roomwizard-app status`, because `ps w` on this busybox lists only processes
 with a TTY. See `SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`.

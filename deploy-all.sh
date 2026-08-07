@@ -24,12 +24,12 @@
 # binaries on a unit even for someone who already had SSH to it
 # (IMPROVEMENT_PLAN.md C12, and F9's `--from-release`).
 #
-# It is the SSH twin of commission-offline.sh's install loop and shares its
-# authority: rw_bundle_install_ssh in rw-bundle.sh, one implementation, modes
+# It is the SSH twin of commissioning/commission-offline.sh's install loop and shares its
+# authority: rw_bundle_install_ssh in lib/rw-bundle.sh, one implementation, modes
 # DECLARED by the manifest rather than carried by the transfer.
 #
 # Prerequisites:
-#   - Device set up with setup-device.sh (one-time)
+#   - Device set up with commissioning/provision.sh (one-time)
 #   - ARM cross-compiler installed          — except for --from-bundle
 #   - WSL (for ScummVM builds)              — except for --from-bundle
 
@@ -38,8 +38,8 @@ _START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# shellcheck source=rw-bundle.sh
-. "$SCRIPT_DIR/rw-bundle.sh"
+# shellcheck source=lib/rw-bundle.sh
+. "$SCRIPT_DIR/lib/rw-bundle.sh"
 
 DEVICE_IP="${1:-}"
 
@@ -202,7 +202,7 @@ if [[ -n "$FROM_BUNDLE" ]]; then
         info "Stopping the running app"
         ssh "$DEVICE" '/etc/init.d/roomwizard-app stop' 2>&1 | sed 's/^/    /' || true
     else
-        warn "no /etc/init.d/roomwizard-app — run ./setup-device.sh $DEVICE_IP first"
+        warn "no /etc/init.d/roomwizard-app — run ./commissioning/provision.sh $DEVICE_IP first"
     fi
 
     echo ""

@@ -8,8 +8,8 @@ Bring-up is three phases, run in order, each by its own script:
 
 | Phase | Script | Connection | When |
 |-------|--------|------------|------|
-| **1. SD Card** | `commission-roomwizard.sh` | Offline (SD in PC) | Once per device |
-| **2. System Setup** | `setup-device.sh` | SSH over network | Once per device |
+| **1. SD Card** | `commissioning/card-prep.sh` | Offline (SD in PC) | Once per device |
+| **2. System Setup** | `commissioning/provision.sh` | SSH over network | Once per device |
 | **3. Deploy apps** | `deploy-all.sh` | SSH over network | Per deploy |
 
 **The recommended path is [`roomwizard.sh`](roomwizard.sh)** — a menu over all three, which
@@ -38,7 +38,7 @@ booted kernel assembles into one tree:
 | p3 | `/home/root/log` | `Xorg.0.log`, `browser.err`, `jettystart`, … |
 | p5 | `/home/root/backup` | `serialno`, `pointercal`, the 5 MB fallback kernel, and the 472 MB `factory/*.img` restore payload the clean deletes |
 
-`commission-roomwizard.sh` locates exactly **one** of these (p6, by content — see
+`commissioning/card-prep.sh` locates exactly **one** of these (p6, by content — see
 [*Finding the card*](#finding-the-card)). Three further reasons:
 `disable-steelcase.sh` is re-run **on every boot** by the init script, so the disable half is
 inherently a running-system job; already-commissioned units exist and must stay cleanable without
@@ -58,12 +58,12 @@ two cards with one UUID is a worse bug than the one it hides.
 Nothing on the device consumes a UUID at all: U-Boot passes `root=/dev/mmcblk0p6` and `/etc/fstab`
 names `/dev/mmcblk0p{2,3,5,7}`, both by position.
 
-[`rw-identify.sh`](rw-identify.sh) holds the two checks, sourced by both
-`commission-roomwizard.sh` and `clone-to-32gb.sh`:
+[`lib/rw-identify.sh`](lib/rw-identify.sh) holds the two checks, sourced by both
+`commissioning/card-prep.sh` and `commissioning/clone-to-32gb.sh`:
 
 | Function | Question | How |
 |---|---|---|
-| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because `setup-device.sh --remove` deletes `/opt/pv02`, and a card already in service must still be recognisable. |
+| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because `commissioning/provision.sh --remove` deletes `/opt/pv02`, and a card already in service must still be recognisable. |
 | `rw_is_card_disk` | is this disk a RoomWizard card? | the partition table: start and size of p1 p2 p3 p5 p6, which are byte-identical on every unit. p4 and p7 are **not** pinned — they absorb the difference in physical card size. |
 
 Two safety properties worth knowing, because a content scan can reach places a UUID lookup could
@@ -86,7 +86,7 @@ with `sfdisk` on sparse files, so both the positive and the negative controls ar
 
 ## Phase 1: SD Card Commissioning
 
-The [`commission-roomwizard.sh`](commission-roomwizard.sh) script configures the device offline by mounting its SD card on a Linux machine.
+The [`commissioning/card-prep.sh`](commissioning/card-prep.sh) script configures the device offline by mounting its SD card on a Linux machine.
 
 ### What it does
 - Sets root password (SHA-512 hash in `/etc/shadow`)
@@ -107,7 +107,7 @@ unit resolves its own name wrongly.
 
 Setting `/etc/hostname` alone would leave that mapping in place, so anything on the device that
 resolves its own name would still get the wrong answer. The prompt therefore writes both files, via
-[`set-hostname.sh`](set-hostname.sh) — one implementation shared with `setup-device.sh --hostname`,
+[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) — one implementation shared with `commissioning/provision.sh --hostname`,
 so the offline and over-SSH paths cannot drift. It keys the removal on the name it reads from
 `/etc/hostname`, not on a hardcoded one, which is why it works on a card whose shipped name is
 anything at all. The result is loopback-only:
@@ -119,7 +119,7 @@ anything at all. The result is loopback-only:
 
 Give each unit a **unique single label** (`rw09`, not `rw09.local` — mDNS appends `.local`
 itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.local` and
-`./setup-device.sh rw09.local` work instead of hunting for a DHCP lease.
+`./commissioning/provision.sh rw09.local` work instead of hunting for a DHCP lease.
 
 ### Usage
 
@@ -127,7 +127,7 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
    point works — the script finds it by content.
 2. Run:
    ```bash
-   ./commission-roomwizard.sh
+   ./commissioning/card-prep.sh
    ```
    If it cannot find a rootfs it names the disk it *did* find and prints the mount command. You
    can also point it at a mounted tree directly with `export ROOTFS=/mnt/rw`.
@@ -136,7 +136,7 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 
 <!--
   ⚠️ The block between the two markers below is READ AT RUNTIME, not just by humans.
-  commission-roomwizard.sh prints it verbatim as its epilogue, so this file is the single
+  commissioning/card-prep.sh prints it verbatim as its epilogue, so this file is the single
   source of truth for the next steps and the script has no second copy. Two consequences:
 
     - Keep both markers. tests/commission_prep_test.sh asserts the block appears in a
@@ -163,7 +163,7 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 
   5. One-time system setup. Stops the vendor services, installs the app
      launcher and enables mDNS. Deletes nothing, and ends in a reboot:
-       ./setup-device.sh <ip>
+       ./commissioning/provision.sh <ip>
 
      To also DELETE the vendor software (permanent), add --remove.
      It asks for a card backup first, and the factory restore goes too.
@@ -179,7 +179,7 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 
 ## Phase 2: System Setup (SSH)
 
-The [`setup-device.sh`](setup-device.sh) script is run once over SSH after the device first boots.
+The [`commissioning/provision.sh`](commissioning/provision.sh) script is run once over SSH after the device first boots.
 It **disables** the Steelcase services and installs the generic app launcher framework.
 
 ⚠️ **Disable and remove are different acts, and only one of them is the default.**
@@ -190,7 +190,7 @@ It **disables** the Steelcase services and installs the generic app launcher fra
 | **remove** (`--remove`) | additionally *deletes* the named vendor stacks — ~178 MB plus the 472 MB factory-restore payload | no, opt-in | no — needs the host-side card image |
 | **deep clean** (`--deep-clean`) | `--remove` plus the whitelist sweeps: everything in `/etc/rc*.d`, `/opt` and the data partitions that the keep-list does not name. ~560 MB more | no, opt-in | no — needs the host-side card image |
 
-So a plain `./setup-device.sh <ip>` **deletes nothing**. Both destructive flags read the same
+So a plain `./commissioning/provision.sh <ip>` **deletes nothing**. Both destructive flags read the same
 [`device-files/clean-rules.conf`](device-files/clean-rules.conf) and differ only by its `sweeps`
 group; both ask for a full-card backup before they start. Use `--dry-run` with either to see the
 resolved list first.
@@ -202,10 +202,10 @@ removes, so keeping it preserves the ability to undo a commissioning it can no l
 
 ### What it does
 
-Nothing in the list below is written out in `setup-device.sh`. Steps 1–3 are one compiled plan over
+Nothing in the list below is written out in `commissioning/provision.sh`. Steps 1–3 are one compiled plan over
 [`device-files/provision-rules.conf`](device-files/provision-rules.conf) and step 5 is one compiled plan
 over [`device-files/clean-rules.conf`](device-files/clean-rules.conf) — the **same two data files**
-`commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift.
+`commissioning/commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift.
 
 1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `99-security.conf`,
    `roomwizard-app`, `disable-steelcase.sh`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`,
@@ -225,14 +225,14 @@ on every boot, which is what makes the offline path's omission harmless rather t
 ### Usage
 
 ```bash
-./setup-device.sh <target>                    # system setup + reboot (deletes nothing)
-./setup-device.sh <target> --remove           # + delete the named vendor stacks
-./setup-device.sh <target> --remove --dry-run       # list what --remove would delete
-./setup-device.sh <target> --deep-clean --dry-run   # list what deep clean would delete
-./setup-device.sh <target> --deep-clean       # + the whitelist sweeps (~560 MB more)
-./setup-device.sh <target> --deep-clean --keep-factory   # ... but keep the restore payload
-./setup-device.sh <target> --status           # report only, no changes
-./setup-device.sh <target> --hostname rw09    # set the host name only. NO reboot.
+./commissioning/provision.sh <target>                    # system setup + reboot (deletes nothing)
+./commissioning/provision.sh <target> --remove           # + delete the named vendor stacks
+./commissioning/provision.sh <target> --remove --dry-run       # list what --remove would delete
+./commissioning/provision.sh <target> --deep-clean --dry-run   # list what deep clean would delete
+./commissioning/provision.sh <target> --deep-clean       # + the whitelist sweeps (~560 MB more)
+./commissioning/provision.sh <target> --deep-clean --keep-factory   # ... but keep the restore payload
+./commissioning/provision.sh <target> --status           # report only, no changes
+./commissioning/provision.sh <target> --hostname rw09    # set the host name only. NO reboot.
 ```
 
 `<target>` is an IPv4 address **or** a host name. `--status` also md5s the two deployed scripts
@@ -246,7 +246,7 @@ started. After the reboot the unit answers to `<hostname>.local`:
 
 ```bash
 ssh root@rw09.local
-./setup-device.sh rw09.local --status
+./commissioning/provision.sh rw09.local --status
 ```
 
 This is only useful once the unit has a **unique** name — every unit cloned from the vendor image
@@ -263,7 +263,7 @@ services are absent (which they are after we repurpose the device), the watchdog
 cycle and eventually **reboots the device** (~70 min after first failure). It also includes a
 backlight schedule that turns the screen off at 19:00 on weekdays.
 
-`setup-device.sh` disables all of these non-essential mechanisms. See
+`commissioning/provision.sh` disables all of these non-essential mechanisms. See
 [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode) for the complete rationale.
 
 ## Phase 3: Deploy Apps
@@ -344,24 +344,24 @@ way" a fact rather than an intention.
 device-files/clean-rules.conf      WHAT IS REMOVED     <type> <group> <path> <reason>
 device-files/provision-rules.conf  WHAT IS INSTALLED   <type> <group> <mode> <target> <source> <reason>
 
-rw-clean.sh       parses clean-rules.conf     -> a plan, plus the offline executor
-rw-provision.sh   parses provision-rules.conf -> a plan, plus BOTH executors
-rw-bundle.sh      the bundle layout, plus the SSH bundle installer
-rw-identify.sh    which card, which partition — by content and POSITION, never by UUID
+lib/rw-clean.sh       parses clean-rules.conf     -> a plan, plus the offline executor
+lib/rw-provision.sh   parses provision-rules.conf -> a plan, plus BOTH executors
+lib/rw-bundle.sh      the bundle layout, plus the SSH bundle installer
+lib/rw-identify.sh    which card, which partition — by content and POSITION, never by UUID
 
-roomwizard.sh                     Front door: a menu over everything below
-commission-roomwizard.sh          Phase 1: SD card (offline). A SUBROUTINE of the next one
-commission-offline.sh             All three phases in ONE offline pass — the delivery path
-setup-device.sh                   Phase 2: SSH provision + optional clean, ends in a reboot
-deploy-all.sh                     Phase 3: build + deploy everything
-deploy-all.sh --from-bundle       Phase 3 with NO toolchain — install a release bundle
-release.sh                        Build all components + stage one offline bundle
-disable-steelcase.sh              Device payload: watchdog bypass + fresh crontab, every boot
-roomwizard-app-init.sh            Device payload: installed as /etc/init.d/roomwizard-app
-*/build-and-deploy.sh             One per component
+roomwizard.sh                          Front door: a menu over everything below
+commissioning/card-prep.sh             Phase 1: SD card (offline). A SUBROUTINE of the next one
+commissioning/commission-offline.sh    All three phases in ONE offline pass — the delivery path
+commissioning/provision.sh             Phase 2: SSH provision + optional clean, ends in a reboot
+deploy-all.sh                          Phase 3: build + deploy everything
+deploy-all.sh --from-bundle            Phase 3 with NO toolchain — install a release bundle
+release.sh                             Build all components + stage one offline bundle
+device-files/disable-steelcase.sh      Device payload: watchdog bypass + fresh crontab, every boot
+device-files/roomwizard-app            Device payload: installed as /etc/init.d/roomwizard-app
+*/build-and-deploy.sh                  One per component
 ```
 
-⚠️ **`commission-roomwizard.sh` is step 3 *of* `commission-offline.sh`, not an alternative to it.** The
+⚠️ **`commissioning/card-prep.sh` is step 3 *of* `commissioning/commission-offline.sh`, not an alternative to it.** The
 name reads like a sibling and is misleading; renaming it is recorded in
 [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) C12.
 
@@ -406,10 +406,10 @@ sudo mount /dev/sdX6 /mnt/rw          # p6 is the rootfs, always
 **Do not go looking for a particular UUID** — see [*Finding the card*](#finding-the-card).
 
 ### Device reboots after ~70 minutes
-System setup (Phase 2) wasn't completed. Run `./setup-device.sh <ip>`.
+System setup (Phase 2) wasn't completed. Run `./commissioning/provision.sh <ip>`.
 
 ### Screen goes blank at 19:00
-The backlight cron wasn't disabled. Run `./setup-device.sh <ip>` or manually:
+The backlight cron wasn't disabled. Run `./commissioning/provision.sh <ip>` or manually:
 ```bash
 ssh root@<ip> /opt/roomwizard/disable-steelcase.sh
 ```

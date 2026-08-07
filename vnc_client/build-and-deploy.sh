@@ -9,7 +9,7 @@
 #   ./build-and-deploy.sh --bundle <dir>         # build + stage into an offline bundle
 #
 # System setup (bloatware cleanup, init service, audio, time-sync) is handled
-# separately by setup-device.sh.  Run that once before deploying for the first time.
+# separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 # --bundle stages this component's artifacts under <dir>/root/<device-path> with
 # a declared-mode manifest (../IMPROVEMENT_PLAN.md F9, F10).  It stages the
@@ -39,8 +39,8 @@ if [[ "${1:-}" == "--bundle" ]]; then
         echo "Unexpected argument after --bundle <dir>: $3"
         exit 1
     fi
-    # shellcheck source=../rw-bundle.sh
-    . "$REPO_ROOT/rw-bundle.sh"
+    # shellcheck source=../lib/rw-bundle.sh
+    . "$REPO_ROOT/lib/rw-bundle.sh"
 else
     DEVICE_IP="${1:-}"
     MODE="${2:-}"
@@ -206,7 +206,7 @@ info "Stopping running apps (device init script)..."
 ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
     /etc/init.d/roomwizard-app stop
 else
-    echo "  /etc/init.d/roomwizard-app not installed - run ../setup-device.sh <ip>"
+    echo "  /etc/init.d/roomwizard-app not installed - run ../commissioning/provision.sh <ip>"
 fi' || warn "stop reported a failure - a surviving process may hold the binary"
 ok "Stopped"
 

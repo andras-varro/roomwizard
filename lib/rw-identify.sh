@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# rw-identify.sh — recognise a RoomWizard SD card: its rootfs tree, and its disk.
+# lib/rw-identify.sh — recognise a RoomWizard SD card: its rootfs tree, and its disk.
 #
-# SOURCED, not executed:   . "$SCRIPT_DIR/rw-identify.sh"
+# SOURCED, not executed:   . "$SCRIPT_DIR/lib/rw-identify.sh"
 #
 # ── Why this is not a UUID ──────────────────────────────────────────────────
 #
@@ -39,11 +39,11 @@
 # caller would fail partway through, so it is not merely an identity question.
 #
 # RW_ROOTFS_VENDOR is identity, and it is an OR because our own tooling deletes
-# some of these. `setup-device.sh --remove` does `rm -rf /opt/pv02`, and
+# some of these. `commissioning/provision.sh --remove` does `rm -rf /opt/pv02`, and
 # --deep-clean removes more — yet pulling the card of a unit already in service
 # to reset its password or rename it is a normal thing to do, and must still be
 # recognised. /opt/sbin/watchdog and /etc/issue are never touched by anything in
-# this repo (setup-device.sh keeps /opt/sbin/* deliberately), and
+# this repo (commissioning/provision.sh keeps /opt/sbin/* deliberately), and
 # /opt/roomwizard/ exists only once our own Phase 2 has run — so at least one of
 # the four survives every state a card can be in.
 RW_ROOTFS_REQUIRED="etc/shadow etc/hosts etc/ssh/sshd_config etc/network/interfaces"

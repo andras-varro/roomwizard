@@ -6,15 +6,15 @@
 # existing script with arguments, so anything that works today keeps working
 # exactly as it did, and those scripts stay non-interactive when called directly:
 #
-#   commission-roomwizard.sh   Phase 1, offline, needs a mounted card + sudo
-#   setup-device.sh            Phase 2, over SSH, ends in a reboot
-#   deploy-all.sh              Phase 3, over SSH, per-component
-#   commission-offline.sh      all three at once, offline, ONE boot
+#   commissioning/card-prep.sh           Phase 1, offline, needs a mounted card + sudo
+#   commissioning/provision.sh           Phase 2, over SSH, ends in a reboot
+#   deploy-all.sh                        Phase 3, over SSH, per-component
+#   commissioning/commission-offline.sh  all three at once, offline, ONE boot
 #
 # Why a composition layer and not one merged script: the three phases have
 # genuinely different connection models, and the cleanup in Phase 2 touches paths
 # spread across FOUR partitions that only a booted kernel assembles into one tree,
-# while commissioning locates just p6. commission-offline.sh is what does mount
+# while commissioning locates just p6. commissioning/commission-offline.sh is what does mount
 # all four and map every absolute path onto them (IMPROVEMENT_PLAN.md F10); the
 # SSH phases stay as the verified development loop. There are three further
 # reasons in COMMISSIONING.md ("why these are separate").
@@ -58,11 +58,11 @@ Interactive front door for RoomWizard bring-up. Menu-driven; it takes no
 arguments of its own beyond --help, and reimplements none of the flags of the
 scripts it calls. To script a step, call that script directly:
 
-  ./commission-roomwizard.sh                    Phase 1 (offline, needs sudo)
-  ./setup-device.sh <target> [flags]            Phase 2 (ssh, reboots)
-  ./setup-device.sh <target> --hostname NAME    name only, no reboot
-  ./deploy-all.sh <target> [component]          Phase 3 (ssh)
-  ./commission-offline.sh --bundle <b>          all three, offline, one boot
+  ./commissioning/card-prep.sh                          Phase 1 (offline, needs sudo)
+  ./commissioning/provision.sh <target> [flags]         Phase 2 (ssh, reboots)
+  ./commissioning/provision.sh <target> --hostname NAME name only, no reboot
+  ./deploy-all.sh <target> [component]                  Phase 3 (ssh)
+  ./commissioning/commission-offline.sh --bundle <b>    all three, offline, one boot
 
 Full guide: COMMISSIONING.md
 USAGE
@@ -77,7 +77,7 @@ esac
 # ── the one piece of real logic: waiting for a device ────────────────────────
 # Lives here rather than in the three scripts because it is only needed BETWEEN
 # phases — a device that has just been powered on, or has just been rebooted by
-# setup-device.sh. Polling SSH itself (not ping) is deliberate: ping answers
+# commissioning/provision.sh. Polling SSH itself (not ping) is deliberate: ping answers
 # while sshd is still starting, which is exactly the window that produces a
 # confusing "Cannot reach <ip>" from the next phase.
 wait_for_ssh() {
@@ -144,12 +144,12 @@ PRE
     echo ""
     confirm "Card mounted and ready?" || { warn "Skipped."; return 0; }
     echo ""
-    bash "$SCRIPT_DIR/commission-roomwizard.sh" || err "Commissioning failed."
+    bash "$SCRIPT_DIR/commissioning/card-prep.sh" || err "Commissioning failed."
 }
 
 # ── Phase 1+2+3 in one offline pass ─────────────────────────────────────────
-# A composition like everything else here: it execs commission-offline.sh, which
-# in turn orchestrates commission-roomwizard.sh rather than restating its prompts.
+# A composition like everything else here: it execs commissioning/commission-offline.sh, which
+# in turn orchestrates commissioning/card-prep.sh rather than restating its prompts.
 do_commission_offline() {
     hdr "6. Commission a card completely, offline (one boot)"
     cat <<'PRE'
@@ -181,7 +181,7 @@ PRE
     echo ""
     # sudo here rather than inside: mounting is the only step that needs root, and
     # the child refuses clearly if it is missing.
-    sudo bash "$SCRIPT_DIR/commission-offline.sh" --bundle "$bundle" \
+    sudo bash "$SCRIPT_DIR/commissioning/commission-offline.sh" --bundle "$bundle" \
         || err "Offline commissioning failed."
 }
 
@@ -203,17 +203,17 @@ MENU
         read -r -p "Choice: " choice
         case "$choice" in
             a) ask_target || { pause; continue; }
-               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" || err "Setup failed."
+               bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" || err "Setup failed."
                pause ;;
             b) ask_target || { pause; continue; }
                warn "--remove DELETES the Steelcase software, including the 472 MB"
                warn "on-device factory restore. Recovery is your host-side card image."
                confirm "Proceed with --remove on $TARGET?" \
-                   && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --remove || err "Setup failed."; } \
+                   && { bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --remove || err "Setup failed."; } \
                    || warn "Skipped."
                pause ;;
             c) ask_target || { pause; continue; }
-               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean --dry-run \
+               bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean --dry-run \
                    || err "Dry run failed."
                pause ;;
             d) ask_target || { pause; continue; }
@@ -221,21 +221,21 @@ MENU
                warn "/opt and the data partitions that the keep-list does not name."
                warn "Run option (c) first if you have not."
                confirm "Really deep-clean $TARGET?" \
-                   && { bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
+                   && { bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
                    || warn "Skipped."
                pause ;;
             e) ask_target || { pause; continue; }
                local name
                read -r -p "New host name (single label, e.g. rw09): " name
                if [ -n "$name" ]; then
-                   bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --hostname "$name" \
+                   bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --hostname "$name" \
                        || err "Could not set the host name."
                else
                    warn "No name given; skipped."
                fi
                pause ;;
             f) ask_target || { pause; continue; }
-               bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
+               bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --status || err "Status failed."
                pause ;;
             back|q|Q|"") return 0 ;;
             *) err "Not a choice: $choice"; pause ;;
@@ -264,12 +264,12 @@ do_deploy() {
 do_status() {
     hdr "4. Device status (read-only)"
     ask_target || return 0
-    bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" --status || err "Status failed."
+    bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --status || err "Status failed."
 }
 
 # ── Full bring-up ───────────────────────────────────────────────────────────
 # The ONLY item that chains, and the only reason wait_for_ssh exists: the two
-# gaps it closes are (1) card -> first boot, and (2) setup-device.sh's reboot,
+# gaps it closes are (1) card -> first boot, and (2) commissioning/provision.sh's reboot,
 # after which the operator otherwise guesses when to start deploying.
 do_full() {
     hdr "5. Full bring-up: commission -> set up -> deploy"
@@ -299,11 +299,11 @@ PRE
     hdr "Phase 2: system setup"
     info "Standard setup (no file removal). Use menu item 2 for --remove/--deep-clean."
     confirm "Run setup on $TARGET now?" || { warn "Stopping after Phase 1."; return 0; }
-    bash "$SCRIPT_DIR/setup-device.sh" "$TARGET" || { err "Setup failed."; return 1; }
+    bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" || { err "Setup failed."; return 1; }
 
-    # setup-device.sh ends in a reboot, so the device is going away right now.
+    # commissioning/provision.sh ends in a reboot, so the device is going away right now.
     hdr "Waiting out the reboot"
-    info "setup-device.sh rebooted the device; waiting for it to come back."
+    info "commissioning/provision.sh rebooted the device; waiting for it to come back."
     sleep 10
     wait_for_ssh "$TARGET" 300 || return 1
 

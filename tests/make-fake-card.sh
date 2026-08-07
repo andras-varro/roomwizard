@@ -2,7 +2,7 @@
 #
 # make-fake-card.sh — build a synthetic MOUNTED RoomWizard card under $1.
 #
-# NOT a repo tool: a scratch fixture builder for exercising commission-offline.sh
+# NOT a repo tool: a scratch fixture builder for exercising commissioning/commission-offline.sh
 # without a card and without a device. It is committed because the alternative is
 # retyping it, and because the one thing it must get right — REAL SYMLINKS in
 # rc*.d — is exactly what partitions/ and partitions.new/ lost on the way through
