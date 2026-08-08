@@ -40,6 +40,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=lib/rw-bundle.sh
 . "$SCRIPT_DIR/lib/rw-bundle.sh"
+# shellcheck source=lib/rw-ssh.sh
+. "$SCRIPT_DIR/lib/rw-ssh.sh"
 
 DEVICE_IP="${1:-}"
 
@@ -166,8 +168,7 @@ echo ""
 # ── --from-bundle: install and stop. No component loop, no compiler. ────────
 if [[ -n "$FROM_BUNDLE" ]]; then
     DEVICE="root@${DEVICE_IP}"
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-        || err "Cannot reach $DEVICE — check the IP and the SSH key"
+    rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
     ok "SSH OK"
 
     # A tarball is unpacked into a temp dir; a directory is used where it is.
@@ -236,6 +237,17 @@ if [[ -n "$FROM_BUNDLE" ]]; then
     echo ""
     exit 0
 fi
+
+# ── the SSH gate, ONCE, before the component loop ──────────────────────────
+#
+# The component scripts each have their own gate — they are meant to run standalone —
+# but if the key is missing, going through this one first means the offer is made
+# once instead of once per component, and the loop below never stops to prompt.
+# Nothing else here needs a device, so this is also the earliest point a wrong IP can
+# be reported.
+rw_ssh_gate "root@${DEVICE_IP}" || err "Cannot continue without SSH to root@${DEVICE_IP}"
+ok "SSH OK"
+echo ""
 
 # Collect components
 mapfile -t ALL_COMPONENTS < <(discover_components)

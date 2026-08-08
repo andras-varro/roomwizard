@@ -39,6 +39,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=app-manifests.sh
 . "$SCRIPT_DIR/app-manifests.sh"
 
+# The shared SSH gate. Sourced unconditionally (unlike ../lib/rw-bundle.sh, which
+# only the --bundle path needs) because every deploy goes through it.
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
+
 # ── argument shapes ─────────────────────────────────────────────────────────
 # Two, and they do not mix: `--bundle <dir>` needs no device, and every deploy
 # form needs one.  Parsed before anything else so a typo cannot reach the build.
@@ -339,8 +344,9 @@ echo "════════════════════════�
 
 # Check SSH reachable
 info "Testing SSH connection..."
-ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-    || err "Cannot reach $DEVICE — check IP and SSH key"
+# The shared gate (lib/rw-ssh.sh): "down" and "up but refusing our key" are different
+# answers, and only the second one has a remedy worth offering. IMPROVEMENT_PLAN.md F16.
+rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
 # Verify system setup has been done

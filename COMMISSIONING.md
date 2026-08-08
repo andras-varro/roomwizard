@@ -158,7 +158,10 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
      (after step 5 the device also answers to NAME.local, where NAME is
       the host name you just set)
 
-  4. If SSH key was NOT installed during commissioning:
+  4. If SSH key was NOT installed during commissioning: nothing to do here.
+     Every script's SSH gate now tells "device is down" from "device is up
+     and refused our key", and on the second it offers to generate a key
+     and ssh-copy-id it for you. To do it by hand anyway:
        ssh-copy-id -i ~/.ssh/id_rsa.pub root@<ip>
 
   5. One-time system setup. Stops the vendor services, installs the app
@@ -362,8 +365,8 @@ device-files/roomwizard-app            Device payload: installed as /etc/init.d/
 ```
 
 ⚠️ **`commissioning/card-prep.sh` is step 3 *of* `commissioning/commission-offline.sh`, not an alternative to it.** The
-name reads like a sibling and is misleading; renaming it is recorded in
-[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) C12.
+name still reads like a sibling; the scripts were moved into `commissioning/` and renamed in the C12
+reorg, and this is the one name that kept its old shape because nothing better was agreed.
 
 ### On-device layout
 ```

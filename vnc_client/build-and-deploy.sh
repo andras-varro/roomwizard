@@ -24,6 +24,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The shared SSH gate (IMPROVEMENT_PLAN.md F16). Sourced unconditionally, unlike
+# ../lib/rw-bundle.sh which only the --bundle path needs.
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
+
 BUNDLE_DIR=""
 if [[ "${1:-}" == "--bundle" ]]; then
     BUNDLE_DIR="${2:-}"
@@ -192,8 +197,8 @@ echo "════════════════════════�
 
 # Check SSH reachable
 info "Testing SSH connection..."
-ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-    || err "Cannot reach $DEVICE — check IP and SSH key"
+# The shared gate (../lib/rw-ssh.sh). IMPROVEMENT_PLAN.md F16.
+rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
 # Stop whatever is running (avoids "Text file busy").

@@ -39,6 +39,9 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# shellcheck source=lib/rw-ssh.sh
+. "$SCRIPT_DIR/lib/rw-ssh.sh"
+
 # ── colour helpers (same vocabulary as the three child scripts) ──────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -80,14 +83,25 @@ esac
 # commissioning/provision.sh. Polling SSH itself (not ping) is deliberate: ping answers
 # while sshd is still starting, which is exactly the window that produces a
 # confusing "Cannot reach <ip>" from the next phase.
+#
+# ⚠️ It polls on `down` and STOPS on `auth`. A unit that answers and refuses our key
+# is up: waiting the rest of the timeout cannot change the answer, and the old
+# version spent the full 180 s doing exactly that before reporting "did not answer
+# SSH" about a device that had answered every time (IMPROVEMENT_PLAN.md F16). On that
+# state it hands over to the gate, which offers to install a key.
 wait_for_ssh() {
     local target="$1" timeout="${2:-180}" waited=0
     info "Waiting for SSH on $target (up to ${timeout}s)..."
     while [ "$waited" -lt "$timeout" ]; do
-        if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no \
-               "root@$target" true 2>/dev/null; then
+        if rw_ssh_probe "root@$target" -o StrictHostKeyChecking=no >/dev/null 2>&1; then
             ok "$target is up (after ${waited}s)"
             return 0
+        fi
+        if [ "$RW_SSH_LAST_STATE" = "auth" ]; then
+            echo ""
+            ok "$target is up (after ${waited}s) — but it refused this host's key"
+            rw_ssh_gate "root@$target" -o StrictHostKeyChecking=no && return 0
+            return 1
         fi
         sleep 5
         waited=$((waited + 5))

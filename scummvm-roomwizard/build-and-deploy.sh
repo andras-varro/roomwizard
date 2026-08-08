@@ -37,6 +37,11 @@ _START_SECONDS=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The shared SSH gate (../IMPROVEMENT_PLAN.md F16). Both of this script's gates —
+# deploy and set-default — go through it.
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
+
 # ── Argument parsing ────────────────────────────────────────────────────────
 # Three shapes.  `--bundle <dir>` needs no device and is checked first, because
 # it is neither an IP nor one of the build commands and would otherwise fall into
@@ -583,8 +588,9 @@ deploy_to_device() {
     
     # Check if device is reachable
     log_info "Testing SSH connection..."
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-        || { log_error "Cannot reach $DEVICE — check IP and SSH key"; exit 1; }
+    # The shared gate (../lib/rw-ssh.sh). IMPROVEMENT_PLAN.md F16.
+    rw_ssh_gate "$DEVICE" \
+        || { log_error "Cannot continue without SSH to $DEVICE"; exit 1; }
     
     # Verify system setup has been done
     if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
@@ -766,8 +772,8 @@ set_default_app() {
     local DEVICE="$DEVICE_USER@$DEVICE_IP"
     
     # Check if device is reachable
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-        || { log_error "Cannot reach $DEVICE — check IP and SSH key"; exit 1; }
+    rw_ssh_gate "$DEVICE" \
+        || { log_error "Cannot continue without SSH to $DEVICE"; exit 1; }
     
     ssh "$DEVICE" "mkdir -p /opt/roomwizard && echo '$DEVICE_PATH/scummvm' > /opt/roomwizard/default-app"
     

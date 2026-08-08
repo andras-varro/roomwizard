@@ -62,6 +62,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$REPO_ROOT/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 . "$REPO_ROOT/lib/rw-provision.sh"
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
 
 # ── --keep-<group> and --no-<group> are extracted before positional parsing ──
 #
@@ -505,8 +507,11 @@ echo " RoomWizard System Setup"
 echo "════════════════════════════════════════"
 
 info "Testing SSH connection to $DEVICE_IP..."
-ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" true 2>/dev/null \
-    || err "Cannot reach $DEVICE — check IP and SSH key"
+# One gate, in lib/rw-ssh.sh: it tells "down" from "up and refusing us" and, on a
+# terminal, offers to generate a key and ssh-copy-id it. This is FIRST contact for
+# anyone who did not prep the card, so the old `check IP and SSH key` — advice about
+# a key nothing offered to make — was the whole of F16.
+rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
 # ── dry-run: report the clean and exit WITHOUT running setup or rebooting ──

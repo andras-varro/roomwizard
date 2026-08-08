@@ -104,10 +104,11 @@ cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 ```
 
 **Three directories, three jobs.** `lib/` holds the sourced-not-executed libraries (`rw-identify.sh`,
-`rw-clean.sh`, `rw-bundle.sh`, `rw-provision.sh`) — at the top level, not under `commissioning/`,
-because the component build scripts source `rw-bundle.sh` on the *write* side while the commissioner
-reads it. `commissioning/` holds the bring-up scripts, none of which is an answer to "what do I run"
-except through `roomwizard.sh`. `device-files/` holds what is installed onto a device verbatim. The
+`rw-clean.sh`, `rw-bundle.sh`, `rw-provision.sh`, `rw-ssh.sh`) — at the top level, not under
+`commissioning/`, because the component build scripts source `rw-bundle.sh` on the *write* side while
+the commissioner reads it, and all seven SSH-using scripts source `rw-ssh.sh`. `commissioning/` holds
+the bring-up scripts, none of which is an answer to "what do I run" except through `roomwizard.sh`.
+`device-files/` holds what is installed onto a device verbatim. The
 three scripts at the root are the three front doors: `roomwizard.sh`, `deploy-all.sh`, `release.sh`.
 
 `--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
@@ -140,6 +141,48 @@ layout lives in **`lib/rw-bundle.sh`** and nowhere else: `<dir>/root/<device-pat
   (from the release `.deb` — focal's apt has no `gh`, and the snap links against a glibc newer than
   2.31), so the publish step is reachable but still unexercised. The tarball `--stage-only` produces is
   a first-class input to the offline installer, so everything downstream is testable with no network.
+
+### One SSH gate, and BatchMode stays on it
+
+**`lib/rw-ssh.sh` is the only implementation of "can I reach this device".** Seven scripts source it —
+`commissioning/provision.sh`, `deploy-all.sh`, `roomwizard.sh` and all four `*/build-and-deploy.sh` —
+and eight call sites go through `rw_ssh_gate`. They each keep their own gate *call*, because a component
+script must run standalone; what they must not keep is their own probe. There used to be eight, already
+drifted into three wordings of one message.
+
+- ⚠️ **`BatchMode=yes` stays on the probe.** Only the *probes* set it; the `ssh`/`scp` calls behind them
+  do not. So dropping it "works" and then prompts for a password **once per call** — and
+  `native_apps/build-and-deploy.sh` makes dozens. The goal is never a password-driven deploy; it is to
+  get a key installed once.
+- **"Down" and "up but refusing us" are different answers, and only the second has a remedy.**
+  `rw_ssh_classify` decides, and it matches `Permission denied` — ⚠️ **never the parenthetical method
+  list.** That list is the *server's*: a RoomWizard says `(publickey,password)` because `card-prep.sh`
+  sets `PasswordAuthentication yes`, and a plain `sshd` says `(publickey,keyboard-interactive)`. Keying
+  on `(publickey,password)` passes against a device and calls every other server "down" — which
+  *suppresses* the offer, so nothing looks broken. An unrecognised error classifies as `down` on
+  purpose.
+- ⚠️ **`rw_ssh_probe` reports the state twice — printed AND in `RW_SSH_LAST_STATE`/`_LAST_STDERR` — and
+  the gate must use the globals.** `state="$(rw_ssh_probe …)"` runs it in a *subshell*, so the stderr
+  global is discarded and every message shows a blank line where ssh's own complaint belongs. That was
+  the first version of the file; it passed every wording assertion, because they grepped for the
+  surrounding text rather than for what ssh said.
+- **Interactive help is `[ -t 0 ]`-gated.** `release.sh` and `deploy-all.sh` drive component scripts as
+  a batch, so a blocking `read` there would hang a run nobody is watching. A non-TTY caller gets the
+  diagnosis plus the exact commands.
+- **No stored password, and no `sshpass`.** `ssh-copy-id` asks once and stores nothing;
+  `rw_ssh_keygen` makes an ed25519 key with no passphrase if the operator has none. `release.sh`
+  already refuses to publish config precisely because one shipped file carries a plaintext password —
+  a second one moves toward the thing that check guards. (`sshpass` *is* installed in this WSL,
+  measured 2026-08-07; it is rejected on the merits, not for absence.)
+- ⚠️ **A key generated under `sudo` must be chowned back.** `card-prep.sh` is called as root by
+  `commission-offline.sh`, and `ssh-keygen` as root writes the key root-owned *inside the operator's
+  home* — where `ssh` then needs `sudo` forever. `rw_ssh_key_owner` takes the euid as an **argument**
+  so both branches are reachable from a non-root test.
+- Regression: `tests/rw_ssh_test.sh` (69 cases, host-only, no device, no root). It starts a **real
+  `sshd`** on a loopback high port with an empty `AuthorizedKeysFile` — which needs no root — because a
+  genuine `Permission denied` cannot be produced by a stub without writing the string the code is
+  supposed to recognise. `tests/measure_ssh_sabotage.sh` re-measures it, and its first case is the
+  **pre-fix tree restored from git** rather than a sed patch.
 
 ### `.app` manifests: one generator per component, on disk
 

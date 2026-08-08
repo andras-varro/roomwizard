@@ -65,6 +65,8 @@ echo ""
 # tool's working directory is not dependable.
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
 
 if [ -n "${ROOTFS:-}" ]; then
     # The documented escape hatch: a card mounted by hand, or a copy of a rootfs
@@ -314,30 +316,12 @@ echo ""
 
 # ── The invoking operator's home, which is not always $HOME ────────────────
 #
-# This script sudo's each individual write rather than requiring root, so run
-# standalone it has the operator's own $HOME and the key is where they expect.
-# But commissioning/commission-offline.sh runs as root and calls this, and under sudo $HOME is
-# /root — where no operator's SSH key lives. The key was therefore NEVER found in
-# the offline flow: the prompt fell through to "enter a path" on a host where a
-# perfectly good ~/.ssh/id_rsa.pub existed.
-#
-# $SUDO_USER is the only place the invoking identity survives, and getent is
-# asked for the home directory rather than assuming /home/<user> — that is wrong
-# for a root-owned account and on any host with a non-default home layout. If
-# getent is absent or the name resolves to nothing, this falls back to $HOME,
-# which is the pre-existing behaviour rather than a new failure.
-operator_home() {
-    local h
-    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        h=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
-        if [ -n "$h" ] && [ -d "$h" ]; then
-            printf '%s\n' "$h"
-            return 0
-        fi
-    fi
-    printf '%s\n' "$HOME"
-}
-OPERATOR_HOME="$(operator_home)"
+# The resolution lives in lib/rw-ssh.sh, not here, because rw_ssh_keygen below needs
+# the same answer and two copies of "whose home" is how the original bug got in: this
+# script sudo's each individual write rather than requiring root, but
+# commissioning/commission-offline.sh runs as root and calls it, and under sudo $HOME
+# is /root. The key was therefore NEVER found in the offline flow.
+OPERATOR_HOME="$(rw_ssh_operator_home)"
 
 # Step 6: SSH Key Setup (optional)
 echo "================================================"
@@ -348,16 +332,11 @@ echo ""
 read -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
 
 if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
-    # Both key types, because "never found" is the same operator-facing failure
-    # whichever algorithm they generated. ed25519 first: on a host that has both,
-    # it is the newer one and the one ssh offers first.
-    DEFAULT_KEY=""
-    for _k in id_ed25519.pub id_rsa.pub; do
-        if [ -f "$OPERATOR_HOME/.ssh/$_k" ]; then
-            DEFAULT_KEY="$OPERATOR_HOME/.ssh/$_k"
-            break
-        fi
-    done
+    # Both key types, and the lookup lives in lib/rw-ssh.sh so that this script and
+    # the SSH gate agree on which key they mean. ed25519 first: on a host that has
+    # both, it is the newer one and the one ssh offers first.
+    DEFAULT_KEY="$(rw_ssh_pubkey)" || DEFAULT_KEY=""
+    SSH_KEY_PATH=""
     if [ -n "$DEFAULT_KEY" ]; then
         info "Found SSH public key: $DEFAULT_KEY"
         read -p "Use this key? (y/n): " USE_DEFAULT
@@ -366,6 +345,7 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
             SSH_KEY_PATH="$DEFAULT_KEY"
         else
             read -p "Enter path to your SSH public key: " SSH_KEY_PATH
+            SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"
         fi
     else
         # An explicit `if`, not `[ ... ] && info ...`: `set -e` is on (line 17),
@@ -375,15 +355,34 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
         if [ "$OPERATOR_HOME" != "$HOME" ]; then
             info "Looked in $OPERATOR_HOME/.ssh (\$SUDO_USER's home, not root's)"
         fi
-        read -p "Enter path to your SSH public key (e.g., ~/.ssh/id_rsa.pub): " SSH_KEY_PATH
-        # ~ expands to the OPERATOR's home for the same reason: under sudo, the
-        # shell's own ~ would be /root.
-        SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"
+        # ⚠️ OFFER TO GENERATE, before asking for a path. This was the second half of
+        # IMPROVEMENT_PLAN.md F16: an operator with no key at all was asked for a
+        # path they did not have, and the card was then written WITHOUT
+        # authorized_keys while every later script told them to "check IP and SSH
+        # key". One command closes it, and the key is theirs for everything else
+        # rather than a project-local secret. No password is stored anywhere.
+        info "No SSH public key found in $OPERATOR_HOME/.ssh."
+        if rw_ssh_ask "Generate one now (ed25519, no passphrase)?"; then
+            if SSH_KEY_PATH="$(rw_ssh_keygen)"; then
+                success "Generated $SSH_KEY_PATH"
+            else
+                warning "Could not generate a key."
+                SSH_KEY_PATH=""
+            fi
+        fi
+        if [ -z "$SSH_KEY_PATH" ]; then
+            read -p "Enter path to your SSH public key (e.g., ~/.ssh/id_rsa.pub): " SSH_KEY_PATH
+            # ~ expands to the OPERATOR's home for the same reason: under sudo, the
+            # shell's own ~ would be /root.
+            SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"
+        fi
     fi
-    
+
     if [ ! -f "$SSH_KEY_PATH" ]; then
         error "SSH key file not found: $SSH_KEY_PATH"
-        warning "Skipping SSH key setup. You can add it manually later."
+        warning "This card is being written WITHOUT authorized_keys."
+        warning "Password login still works (this script enables it), and"
+        warning "commissioning/provision.sh will offer to install a key on first contact."
     else
         info "Setting up SSH key authentication..."
         

@@ -9,7 +9,7 @@
 #
 # WHY THESE TWO, and why a test rather than a look:
 #
-#   operator_home     Under sudo, $HOME is /root, so the offline flow looked for
+#   rw_ssh_operator_home   Under sudo, $HOME is /root, so the offline flow looked for
 #                     the operator's SSH public key in /root/.ssh and never found
 #                     it — on hosts that had one. The bug is invisible in a
 #                     standalone run (where $HOME is right) and invisible in a
@@ -61,19 +61,27 @@ skipped() { SKIP=$((SKIP + 1)); echo -e "  ${YELLOW}skip${NC}  $1 — $2"; }
 TMP=$(mktemp -d /tmp/rw-prep-test.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
 
-# ── extract operator_home() from the real file ──────────────────────────────
+# ── extract rw_ssh_operator_home() from the real file ───────────────────────
 #
 # By its own definition boundaries, so the test cannot silently run against a
 # stale inline copy. If the function is renamed or deleted, this fails loudly
 # rather than testing nothing.
-sed -n '/^operator_home() {$/,/^}$/p' "$SRC" > "$TMP/operator_home.sh"
+#
+# ⚠️ It lives in lib/rw-ssh.sh, not in card-prep.sh: rw_ssh_keygen needs the same
+# answer, and two copies of "whose home" is how the original bug got in
+# (IMPROVEMENT_PLAN.md F16). What stays card-prep.sh's own is the CALL SITE, which is
+# what cases 5-6 and the end-to-end block below check.
+LIB="$REPO_DIR/lib/rw-ssh.sh"
+[ -f "$LIB" ] || { echo -e "  ${RED}HARNESS ERROR${NC}: $LIB not found"; exit 2; }
+sed -n '/^rw_ssh_operator_home() {$/,/^}$/p' "$LIB" > "$TMP/operator_home.sh"
 if [ ! -s "$TMP/operator_home.sh" ]; then
-    echo -e "  ${RED}HARNESS ERROR${NC}: operator_home() not found in commissioning/card-prep.sh"
+    echo -e "  ${RED}HARNESS ERROR${NC}: rw_ssh_operator_home() not found in lib/rw-ssh.sh"
     echo "  It was renamed or removed. Update this test, do not delete the case."
     exit 2
 fi
 # shellcheck source=/dev/null
 . "$TMP/operator_home.sh"
+operator_home() { rw_ssh_operator_home; }
 
 echo ""
 echo "── operator_home: whose ~/.ssh the key is looked for in ─────────────────"
@@ -185,13 +193,17 @@ mkdir -p "$TMP/rootfs"
     echo 'error()   { echo "  [XX] $*"; }'
     echo 'sudo()    { "$@"; }'
     echo "ROOTFS='$TMP/rootfs'"
-    # The two lines Step 6 depends on, both taken from the source rather than
+    # The two things Step 6 depends on, both taken from the source rather than
     # restated. ⚠️ The OPERATOR_HOME assignment is EXTRACTED, not echoed: an
     # earlier version of this harness wrote `OPERATOR_HOME="$(operator_home)"`
     # itself, which silently repaired a sabotaged call site and let the defect
     # pass every case here. Measured — sabotage A failed 1 case with the echo and
     # 3 with the extraction.
-    sed -n '/^operator_home() {$/,/^}$/p' "$SRC"
+    #
+    # The library is SOURCED rather than extracted, which is the strongest form of
+    # the same rule: rw_ssh_operator_home, rw_ssh_pubkey, rw_ssh_ask and
+    # rw_ssh_keygen are the shipped implementations, not copies.
+    echo ". '$LIB'"
     sed -n '/^OPERATOR_HOME=/p' "$SRC"
     cat "$TMP/step6.body"
 } > "$TMP/step6.sh"
@@ -237,13 +249,39 @@ else
     skipped "the found key is written to the card" "same"
 fi
 
-# 6. The other half of the same hole: the lookup must go through operator_home,
-#    not $HOME. Static, because a call site that ignores the function is only
-#    visible in the source once the functional case above is skipped.
-if grep -q 'OPERATOR_HOME="\$(operator_home)"' "$SRC"; then
-    ok "the key lookup is wired to operator_home, not \$HOME"
+# 6. The other half of the same hole: the lookup must go through the library's
+#    resolver, not $HOME. Static, because a call site that ignores the function is
+#    only visible in the source once the functional case above is skipped.
+if grep -q 'OPERATOR_HOME="\$(rw_ssh_operator_home)"' "$SRC"; then
+    ok "the key lookup is wired to rw_ssh_operator_home, not \$HOME"
 else
-    bad "OPERATOR_HOME is not assigned from operator_home() — the function is dead code"
+    bad "OPERATOR_HOME is not assigned from rw_ssh_operator_home() — the function is dead code"
+fi
+
+# 6b. ⚠️ The second half of F16: an operator with NO key was asked for a path they did
+#     not have, and the card was written keyless while every later script told them to
+#     "check IP and SSH key". The offer to generate must come BEFORE the path prompt,
+#     which is a thing only the order in the source shows.
+if grep -q 'rw_ssh_keygen' "$SRC"; then
+    ok "card-prep.sh offers to generate a key when none exists"
+else
+    bad "card-prep.sh offers to generate a key when none exists — F16's second gap is open"
+fi
+GEN_LINE=$(grep -n 'rw_ssh_keygen' "$SRC" | head -1 | cut -d: -f1)
+PATH_LINE=$(grep -n 'Enter path to your SSH public key (e.g' "$SRC" | head -1 | cut -d: -f1)
+if [ -n "$GEN_LINE" ] && [ -n "$PATH_LINE" ] && [ "$GEN_LINE" -lt "$PATH_LINE" ]; then
+    ok "the generate offer comes before the 'enter a path' fallback"
+else
+    bad "the generate offer comes before the 'enter a path' fallback (gen=$GEN_LINE path=$PATH_LINE)"
+fi
+
+# 6c. A keyless card must SAY it is keyless and name what fixes it. The old wording
+#     was "Skipping SSH key setup. You can add it manually later." — which names
+#     neither the consequence nor the command.
+if grep -q 'WITHOUT authorized_keys' "$SRC"; then
+    ok "a keyless card says so, and names what will offer to fix it"
+else
+    bad "a keyless card says so, and names what will offer to fix it"
 fi
 
 # ── extract the closing summary and run it both ways ────────────────────────
@@ -315,7 +353,7 @@ echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 # SUDO_USER's-real-home case and the three end-to-end key-lookup cases all need
 # getent plus a non-root user with a writable home, and an environment lacking
 # those should skip rather than fail on a fact about itself.
-MIN_CASES=13
+MIN_CASES=17
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

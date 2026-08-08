@@ -31,6 +31,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 KERNEL_VERSION="4.14.52"
 
+# The shared SSH gate (../IMPROVEMENT_PLAN.md F16). This is the only lib/ file this
+# component sources: it is excluded from every bundle by design (F15), so it has no
+# rw-bundle.sh path.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../lib/rw-ssh.sh
+. "$REPO_ROOT/lib/rw-ssh.sh"
+
 # Timestamp helper
 ts() { echo "[$(date '+%H:%M:%S')] $*"; }
 
@@ -74,9 +81,11 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 echo "  ✓ python3 found"
 
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEVICE" "echo OK" >/dev/null 2>&1; then
-    echo "ERROR: Cannot SSH to $DEVICE"
-    echo "Check: network connectivity, SSH key auth, device is powered on"
+# The shared gate (../lib/rw-ssh.sh). IMPROVEMENT_PLAN.md F16: this used to say
+# "Check: network connectivity, SSH key auth, device is powered on" — three guesses
+# where the probe already knows which one it is.
+if ! rw_ssh_gate "$DEVICE"; then
+    echo "ERROR: Cannot continue without SSH to $DEVICE"
     exit 1
 fi
 echo "  ✓ SSH to $DEVICE works"

@@ -138,10 +138,10 @@ straight after commissioning shows the revert.
    `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
    (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
    **rejects hyphens**, so `RW-Test` would still be replaced by its fallback `rwtwenty`.
-   ⚠️ **Read [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--open-measured-2026-08-07)
-   before implementing this.** The SSH flow keeps the vendor stack only because `provision.sh`'s clean
-   is opt-in while the offline pass's is the default. A commissioning path that cleans removes this
-   window instead of patching it, and then item 2 needs no code at all.
+   ⚠️ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
+   makes this item unnecessary — delete it rather than implement it.** The SSH flow keeps the vendor
+   stack only because `provision.sh`'s clean is opt-in, and C13's decision is to flip that. A
+   commissioning path that cleans removes this window instead of patching it.
 3. **`/etc/dhclient.conf`'s `send host-name` — done.** `commissioning/set-hostname.sh` now owns it, in both the
    offline and the live path, with a negative control: it refuses to write a result that would not
    announce the new name. It is the third place the name is stored and the one a DHCP server, and
@@ -469,9 +469,13 @@ Deploy them over SSH, or restage a three-component bundle.
 
 #### What is left
 
-1. **`COMMISSIONING.md` can now be a description rather than a plan.** This was deliberately deferred
-   until the tool had commissioned a unit. It still documents the three-phase SSH flow as the primary
-   path; the offline single pass is now the verified one for *delivery*.
+1. **`COMMISSIONING.md`'s ORDERING — the prose is done, the emphasis is not.** `b88933a` rewrote the
+   doc as a description rather than a plan, so what is left is smaller and more specific: it still
+   **leads with the three-phase SSH flow** while `commission-offline.sh` is the verified path for
+   *delivery*. Decide whether the offline pass goes first. Two things to fix while there, both found
+   2026-08-07: the line saying `card-prep.sh`'s rename "is recorded in C12" is stale (the rename
+   shipped in `f9f895a`, after the doc rewrite), and `NEXT_STEPS` step 4 still tells the operator to
+   run `ssh-copy-id` by hand — the scripts now offer it (`git log --grep=F16`).
 2. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
    (no serial console, [§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)); the only post-mortem is mounting
    p3 offline and reading `messages`, which only helps if it got as far as syslog. Still the reason to
@@ -542,78 +546,6 @@ The tension is real and this entry is where it gets resolved rather than redisco
   question. It is not obviously safe: p1 is the one partition absent from `RW_PART_ROLES` precisely so
   that no caller can reach it, and adding a reason to reach it weakens a guarantee that has held.
 - **Do not fold `usb_host` into a bundle before that is settled.** The exclusion is load-bearing.
-
----
-
-### F16. First contact over SSH assumes the key is already installed — open, confirmed 2026-08-07
-
-**Every SSH gate in the repo is `ssh -o ConnectTimeout=5 -o BatchMode=yes <target> true`** — eight of
-them: [`commissioning/provision.sh:508`](commissioning/provision.sh#L508),
-[`deploy-all.sh:169`](deploy-all.sh#L169),
-[`native_apps/build-and-deploy.sh:342`](native_apps/build-and-deploy.sh#L342),
-[`vnc_client/build-and-deploy.sh:195`](vnc_client/build-and-deploy.sh#L195),
-`scummvm-roomwizard/build-and-deploy.sh:586` and `:769`,
-[`usb_host/build-and-deploy.sh:77`](usb_host/build-and-deploy.sh#L77), and `roomwizard.sh`'s
-`wait_for_ssh`. **`BatchMode=yes` disables password authentication**, so an operator with no key
-installed gets `Cannot reach <ip> — check IP and SSH key` and an exit, on every path, with no offer to
-fix it.
-
-**The capability is on the device and unusable from the host.**
-[`commissioning/card-prep.sh:287-295`](commissioning/card-prep.sh#L287-L295) forces
-`PasswordAuthentication yes`, so the unit accepts a password. There is **no `sshpass` and no
-`ssh-copy-id` invocation anywhere in the tree**; the only mention is `COMMISSIONING.md`'s
-`NEXT_STEPS` step 4, which asks the operator to run it by hand.
-
-⚠️ **The gate is stricter than the work behind it, and that is why the obvious fix is wrong.** Only the
-*probes* set `BatchMode`; the `ssh`/`scp` calls after them do not. Dropping `BatchMode` therefore
-"works" and then prompts for the password **once per call** — `native_apps/build-and-deploy.sh` makes
-dozens. Password-driven deploy is not the goal; **getting a key installed is.**
-
-**Who this bites.** A key installed by `card-prep.sh` covers the offline path, so this is invisible in
-the flow that has been exercised. It bites whoever arrives at an **already-booted unit whose card they
-never prepped** — which is the delivery mode of
-[F11](#f11-one-home-for-the-host-build-prerequisites--open), and how a unit already in service looks to
-a new operator.
-
-Fix shape, so it is not re-derived:
-
-- **Distinguish "host is down" from "auth failed" at the gate.** They are one error message today.
-  `Permission denied (publickey,password)` on stderr means the unit is up and answering — the case where
-  offering `ssh-copy-id` is the right move. A timeout is not.
-- **Offer `ssh-copy-id`, then re-probe.** Only when stdin is a TTY; non-interactive callers get the
-  present error plus the one command to run. `release.sh` and `deploy-all.sh` invoke component scripts
-  non-interactively, so a blocking `read` here would hang them — the same constraint as
-  [F11](#f11-one-home-for-the-host-build-prerequisites--open).
-- **One implementation, in `lib/`**, because there are eight call sites and they have already drifted
-  once in their wording. The component scripts keep their own gate — they are meant to run standalone —
-  but should call the shared one.
-
-#### An operator with no key at all is a second, silent gap
-
-[`commissioning/card-prep.sh:355-360`](commissioning/card-prep.sh#L355-L360) looks for
-`id_ed25519.pub` then `id_rsa.pub` in the operator's home; absent both, it prompts for a path, and a
-path that does not exist yields `Skipping SSH key setup. You can add it manually later.` and the card is
-written **without** `authorized_keys`. **Nothing offers to generate a key.** So the two gaps compose:
-the card ships keyless, and then every script dies at the `BatchMode` gate saying `check IP and SSH
-key`. Neither step names the fix.
-
-**Decision — generate a key; do not store a password.** `ssh-keygen -t ed25519 -N ''` offered at that
-same prompt, one command, no dependency, and the operator ends up with a key usable for everything
-rather than a project-local secret. The reasons *against* the password route are worth keeping, because
-it is the more obvious answer:
-
-- ⚠️ **A stored password is what `release.sh`'s config refusal exists to prevent.** It greps the staged
-  manifest and refuses to publish `*.conf` and the device config basenames specifically because one of
-  them carries `vnc_client`'s plaintext VNC password
-  ([F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)). A second stored plaintext
-  password moves toward the thing that check guards.
-- **`sshpass` is not installed in this WSL** — it would join F11's package list — and it defeats
-  host-key checking in practice.
-- **Password auth does not cover its own motivating case.** It needs the device to *have* the password
-  `card-prep.sh` set; on a unit nobody prepped, that password is unknown.
-- **`ssh-copy-id` already handles the one legitimate password moment** — bootstrapping a unit whose card
-  was never prepped — prompting for it itself, once, and storing nothing. That is the whole requirement,
-  which is why the gate fix above is the same fix as this one.
 
 ---
 
@@ -911,12 +843,11 @@ has a reboot in the middle.
 behaviour. `roomwizard.sh` covers the same ground as a menu today, which is why this is an idea and not
 a defect.
 
-⚠️ **Two entries below make it more than an idea.**
-[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--open-measured-2026-08-07)
-is the argument that `--ssh` is the only place the two paths' clean defaults can be made one without
-arming the development loop, and
-[F16](#f16-first-contact-over-ssh-assumes-the-key-is-already-installed--open-confirmed-2026-08-07)
-is the reason the second row above can fail at its first command for anyone who did not prep the card.
+⚠️ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
+makes this more than an idea**, though not in the direction this entry assumed: the decision recorded
+there is to flip `provision.sh`'s own default rather than to build `--ssh` for it, so the front door no
+longer needs a reason beyond convenience. (The other reason this row used to fail at its first command
+— no SSH key, and eight gates that only said "check IP and SSH key" — is fixed: `git log --grep=F16`.)
 
 #### There are no duplicate scripts to delete — one duplicated *fact*, now fixed
 
@@ -1007,11 +938,36 @@ SSH) and by nothing else. Neither is a library and neither is an answer to "what
 - The reorg commit's own control is that all five host-only suites still pass unchanged, and that
   `git ls-files -s -- '*.sh'` is still all `100755` afterwards.
 
-### C13. The SSH pass and the offline pass share one clean and disagree on its default — open, measured 2026-08-07
+### C13. The SSH pass and the offline pass share one clean and disagree on its default — decided 2026-08-07, not yet implemented
 
-**The mechanism is unified; the default is not.** Both read
+✅ **DECIDED 2026-08-07: option 1 — flip `provision.sh`'s default**, and **treat a non-TTY invocation
+as consent**. Both halves were put to the user with the costs below stated; this section records the
+decision so it is not relitigated, and what is left is the code.
+
+**What to build:**
+
+1. `commissioning/provision.sh <ip>` cleans by default, with the same group list
+   `commissioning/commission-offline.sh` uses (`base browser java snmp mail extras factory sweeps`).
+   `--no-clean` is the opt-out; `--keep-<group>` stays the partial one. `--remove` and `--deep-clean`
+   become explicit selectors rather than the only way in, and `--status` / `--hostname` still never
+   clean.
+2. **Non-TTY runs the clean, and says so loudly.** ⚠️ Not the current behaviour by accident but by
+   design: today `read` at EOF leaves the answer empty, which cancels the clean and returns 0, so a
+   scripted `provision.sh <ip>` would **silently not clean** while the operator believed the default
+   did. That false-negative gate is the one defect a flip must not inherit. The chosen resolution is
+   that a non-TTY caller has already made the decision by passing no `--no-clean`, so the clean
+   proceeds — but it must print, unmistakably, that the backup question is being auto-answered
+   because stdin is not a terminal.
+   ⚠️ Whoever implements this: the loudness *is* the safety property here. A scripted caller deletes
+   the vendor stack with nobody having answered the backup question, which is exactly the trade the
+   decision accepted — so the printed record of what happened is the only thing left standing
+   between that and an unexplained unit.
+3. Closing this makes [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)
+   **item 2 unnecessary** — delete it rather than implement it.
+
+**The mechanism was already unified; only the default was not.** Both paths read
 [`device-files/clean-rules.conf`](device-files/clean-rules.conf) and compile it with `lib/rw-clean.sh`,
-so *what* a clean does cannot drift. *Whether* one happens does:
+so *what* a clean does cannot drift. *Whether* one happens did:
 
 | | `commissioning/commission-offline.sh` | `commissioning/provision.sh <ip>` |
 |---|---|---|
@@ -1021,20 +977,12 @@ so *what* a clean does cannot drift. *Whether* one happens does:
 
 So the offline default is exactly `provision.sh --deep-clean`, and plain `provision.sh <ip>` is exactly
 offline `--no-clean` — which is what `provision.sh`'s own closing line reports. The result of
-commissioning therefore depends on which path ran, which is the one thing the two data files exist to
+commissioning therefore depended on which path ran, which is the one thing the two data files exist to
 prevent.
 
-**This is the residue of the softer default, and it is where D7b item 2 comes from.**
-[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) needs to write
-`websign/net.hostname` **only** because plain `provision.sh` leaves `websign` and the
-`rcS.d/S60networkmanager` link in place for the boot-time regenerator to use
-([D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)). A pass that
-cleans closes that window by construction, exactly as the offline pass does. **Settle this before
-implementing D7b item 2** — it may not need implementing.
-
-⚠️ **Flipping `provision.sh`'s default is cheaper and safer than it sounds — measured, not argued.**
-The objection worth raising was "a routine re-run becomes destructive"; the rules file already answers
-most of it.
+⚠️ **Flipping is cheaper and safer than it sounds — measured, not argued.** The objection worth raising
+was "a routine re-run becomes destructive"; the rules file already answers most of it. **Do not
+re-raise these as risks.**
 
 - **Nothing we install is sweepable.** `/opt/games`, `/opt/roomwizard`, `/opt/vnc_client` and
   `/opt/scummvm` are `keep` records in group `base`, which is never disabled, and so are
@@ -1043,31 +991,21 @@ most of it.
   they are named anyway. `/etc/init.d` is not a `scope` sweep at all, so the init scripts behind every
   one of those links survive too. **A second deep clean over a fully deployed unit removes none of it.**
 - **The backup question is already the gate**, at the top of `run_clean` — the same wording as
-  `commission-offline.sh`'s phase 0, and anything but a typed `yes` cancels the clean and returns 0. A
-  flipped default therefore cannot run unannounced.
+  `commission-offline.sh`'s phase 0. On a terminal, a flipped default therefore cannot run unannounced.
 - **The residual case is one unit state, not a general hazard:** a unit *not yet* deep-cleaned. A
   `--remove`-only unit would run the sweeps for the first time during what the operator meant as "push a
   changed `device-files/` script" — behind that same prompt.
 
 **When `provision.sh` is re-run at all:** any change under `device-files/` reaches a device through no
-other path (`CLAUDE.md` → *Redeploy scope by changed file*), and the run ends in a reboot. `--status`
-and `--hostname` never clean.
+other path (`CLAUDE.md` → *Redeploy scope by changed file*), and the run ends in a reboot.
 
-⚠️ **The one thing a flip must get right is the non-TTY path.** `read` at EOF leaves the answer empty,
-which cancels the clean and returns 0 — so a scripted `provision.sh <ip>` would **silently not clean**
-while the operator believes the default did. That is a false-negative gate, the failure class
-`CLAUDE.md` → *Working style* warns about, and it must be made loud or made a refusal rather than
-inherited.
+**The cost the decision accepted**, recorded so it is not rediscovered as a surprise: the developer's
+own re-run now answers a prompt every time. `--no-clean` is the way out of that, and it is the flag to
+put in any personal alias.
 
-Two ways to land this, and the choice is about *which script carries the default*, not about safety:
-
-1. **Flip `provision.sh`'s default** to match the offline pass. Smallest change; one default in the
-   whole repo; makes [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)
-   item 2 unnecessary. Costs: the non-TTY behaviour above, and the developer's re-run now answers a
-   prompt every time.
-2. **Put the default on `commission.sh --ssh`** (C12's remaining `⬜`), leaving `provision.sh` as the
-   developer's tool with the clean opt-in. Keeps the dev loop non-interactive and gives the front door a
-   reason to exist beyond convenience. Costs: the `⬜` has to be built first.
+The rejected alternative was to put the default on `commission.sh --ssh` (C12's remaining `⬜`), leaving
+`provision.sh` as the developer's opt-in tool. It would have kept the dev loop non-interactive, but the
+`⬜` has to be built first and the two paths stay divergent until it is.
 
 Neither reintroduces a middle setting: there is one default per *situation served*, and `--keep-<group>`
 remains the only opt-out.
@@ -1103,13 +1041,16 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
-   plan, and the reorg has renamed the scripts it documents, so this is the moment. (The two bugs the
-   first real run exposed are fixed: `git log --grep=F10`.)
-2. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
-3. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
+1. **C13** — the decision is made and the measurements are in the entry, so this is the shortest path
+   from "decided" to "one default in the repo". Get the non-TTY announcement right and D7b item 2 goes
+   away with it.
+2. **`COMMISSIONING.md`'s ordering** — F10's *What is left* #1. The prose is a description now; what is
+   left is that it leads with the SSH flow while the offline pass is the verified delivery path, plus
+   two stale lines named there.
+3. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
+4. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
    (`--deep-clean`) first if disk space is tight.
-4. **C10 before panel check #2** — it converts a play session into one launch, and every future
+5. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
 
 [F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
@@ -1120,9 +1061,9 @@ not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-ma
 [F15](#f15-usb-host-mode-is-unreachable-from-the-delivery-flow--open-confirmed-2026-08-06) are recorded
 rather than planned, because the honest answers are a bootable image and a p1 decision respectively.
 
-[F16](#f16-first-contact-over-ssh-assumes-the-key-is-already-installed--open-confirmed-2026-08-07) is
-cheap and is the **first** thing a non-developer hits on a unit they did not prep, before any of the
-above matters.
+[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
+is **the next thing to write**: the decision is made and recorded, the measurements are in the entry,
+and the only part that needs care is the non-TTY path.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to
 consider promoting**: the register map is published, so it is far less speculative than its position
