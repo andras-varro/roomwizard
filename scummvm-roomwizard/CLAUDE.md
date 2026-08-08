@@ -41,13 +41,11 @@ unused-result, and a `getaddrinfo` static-link note from timidity. `roomwizard.o
 `native_apps/` is at zero, so treat any *third* warning as yours. The `oss-mixer.cpp` one is a real
 defect and is listed under F1 in [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md).
 
-**This build runs no `check-arm-safe.sh` gate at all** — unlike `native_apps/`, which gates every
-build. That is `../IMPROVEMENT_PLAN.md` C9, and the fix has a constraint: hook it into
-`build_scummvm()` **before** `strip_binary()`. The gate reports 8–9 phantom hardware divides on the
-*stripped* binary and zero on the identical file unstripped, because with no symbol table `objdump`
-decodes literal pools as instructions. Never gate after the strip, and never allowlist offsets —
-`base/version.o` re-embeds the build date on every link, so every address after it moves between
-builds of identical source.
+**The `check-arm-safe.sh` gate runs from inside `strip_binary()`, ahead of the in-place `strip`** —
+that is the only moment an unstripped ScummVM binary exists, and the gate is meaningless on a stripped
+one. Never move it after the strip, and never allowlist offsets: `base/version.o` re-embeds the build
+date on every link, so every address after it moves between builds of identical source. Why a stripped
+binary cannot be gated, with the byte-level measurement: `../IMPROVEMENT_PLAN.md` C9.
 
 **`clean` is the only clean path — do not add a second one.** A root-level `clean.sh` used to exist
 and was deleted 2026-08-03 (`../IMPROVEMENT_PLAN.md` B19a): it was this tree's clean script with no

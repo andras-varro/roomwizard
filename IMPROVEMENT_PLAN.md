@@ -777,27 +777,55 @@ the source, the two build steps (`build-and-deploy.sh:102-103`), the four deploy
 the README rows. If a page turns out to be unique, move that page into `device_tools` rather than
 keeping the binary. `do_led_test()` is also duplicated between the two tools and goes with it.
 
-### C9. Gate the ScummVM binary too — and gate it unstripped — open, measured 2026-08-03
+### C9. The SIGILL gate is unsound on a stripped binary, and the offline installer runs it on one — open, measured 2026-08-08
 
-`scummvm-roomwizard/build-and-deploy.sh` never calls `check-arm-safe.sh`, so the largest ARM binary in
-the project — the only C++ one, and the one doing the most division — ships through no SIGILL gate at
-all. `native_apps` has had a hard-zero gate for months, and the point of it is that a hardware
-`sdiv`/`udiv` on this Cortex-A8 is the worst failure mode available: blank screen, no output, no log,
-indistinguishable from "the app didn't start".
+`native_apps/check-arm-safe.sh` answers "does this binary carry a hardware `sdiv`/`udiv`" by
+disassembling it, and **objdump needs the symbol table to disassemble these binaries at all.** They are
+Thumb-2. Stripped, objdump has nothing left to tell it Thumb from ARM, falls back to 32-bit ARM, and
+re-reads the same bytes as ARM words. Measured 2026-08-08 on one file — `samegame`, which ships
+unstripped, against a `strip`ped copy of it:
 
-**It cannot just be bolted on where the script strips, because the gate is unreliable on a stripped
-binary and ScummVM is the case that demonstrates it.** The A/B on one file: the gate reports **8–9
-hardware divide instructions** stripped and **zero** unstripped — the same binary, and `strip` cannot
-alter `.text`. Without symbols, objdump cannot separate code from the literal pools embedded in
-`.text`, so four-byte constants decode as plausible instructions. ⚠️ **The phantom operands are not
-reliably invalid** — `udiv pc, fp, sl` is dismissible, but `udiv r7, r1, lr` is a legal encoding that
-looks exactly like compiler output. "Eyeball the operands" is **not** triage; the symbol table is the
-only thing that answers it.
+| | disassembled lines | verdict |
+|---|---|---|
+| unstripped | 120 498 | `✓ no hardware divide` |
+| stripped copy | 82 076 | `udiv sp, fp, lr` at `.text:4261c` |
 
-So: call it from `build_scummvm()` **before** `strip_binary()`, on the unstripped artifact. Do not put
-it after the strip step, and do not add an allowlist of offsets — they move on every build, because
-`base/version.o` re-embeds the build date on every link. The binary was confirmed clean unstripped, so
-adding the gate should be a no-op that stays a no-op.
+`objdump -s` prints `4846ebf7 1bfe3de7` at `0x42618` for **both** files — `strip` cannot alter `.text`.
+Unstripped that is `mov r0, r9` / `bl <__lll_lock_wait_private>` / `b.n`; read as ARM, the second word
+alone becomes `e73dfe1b` = `udiv sp, fp, lr`. Its neighbours decode as `<UNDEFINED>` and
+`sbcsne pc, r1, …`, which is the signature.
+
+⚠️ **The phantom operands are not reliably invalid.** `udiv pc, fp, sl` is dismissible, but
+`udiv r7, r1, lr` is a legal encoding that looks exactly like compiler output. "Eyeball the operands"
+is **not** triage; the symbol table is the only thing that answers it. Nor is an allowlist of offsets
+possible — they move on every build, because `base/version.o` re-embeds the build date on every link.
+
+So the gate is sound **before** `strip` and meaningless after, and all three component build scripts
+already call it there — `scummvm-roomwizard/build-and-deploy.sh` from inside `strip_binary()`, ahead of
+the in-place `strip`, which is the only moment an unstripped ScummVM exists. Hard zero across all 31
+artifacts.
+
+**What is open: `commissioning/commission-offline.sh:401` runs it on the staged bundle, which is exactly
+where the stripped binaries are.** So the installer refuses every bundle containing `scummvm` or
+`vnc_client`. Measured 2026-08-08 on a full 56-file bundle: 9 phantom hits in `scummvm`, 1 in
+`vnc_client`, `✗ 2 of 20 binaries would SIGILL on Cortex-A8 — NOT deploying`. It has never fired in
+service because the only bundle ever installed on a unit carried `native_apps` alone — 46 files, 18
+binaries, none of them stripped. ⚠️ **`--arm-check=skip` does not cover it:** that flag is inside the
+objdump-*absent* branch (`:380`–`:397`), while a positive hit is the unconditional `err` at `:402`. On a
+host that has the toolchain there is no override at all, so the whole offline delivery path is blocked.
+It also cascades in `tests/commission_offline_test.sh` — 13 of its 16 failures are sabotage cases dying
+at this gate before reaching the check each exists to test.
+
+Two parts. `check-arm-safe.sh` must stop reporting a hit it cannot support: no symbol table is
+**unverifiable**, counted and named separately, never folded into the failure count — and not silently
+skipped either, which is the false-negative version of the same bug. Then `commission-offline.sh`
+records what it could not check in its summary rather than refusing.
+
+⚠️ **That leaves the real gap: an installer cannot verify a stripped binary by any means.** The sound
+verdict exists only at build time, so it has to travel with the bundle — a per-component attestation in
+`manifest.d/`, written where the unstripped artifact is still on disk, and checked by the installer
+instead of re-disassembling. Until that exists, a third-party bundle's stripped binaries are taken on
+trust, and the summary must say so in those words.
 
 ### C10. Make a deep game state reachable without playing to it — open
 
