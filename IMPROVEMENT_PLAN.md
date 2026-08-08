@@ -724,37 +724,55 @@ argument and transport guards, the md5 gate's three outcomes, the dry run, backu
   `usb_host/` from the library's own `BASH_SOURCE`, that one variable also redirects all three Python
   tools — so a sabotage of any of the four is measurable through one door.
 
+✅ **`tests/measure_usbpower_sabotage.sh` — five sabotages, all five caught, 9 s.** The gap below is
+closed: `rw_usbpower_test.sh` has now been seen failing, and it fails the *right* cases.
+
+| Sabotage | Failed | Owned by |
+|---|---|---|
+| `rw_usbpower_classify` returns `vendor` for an unknown md5 | 7 | B5–B8, F11, G6, J7 |
+| step 9's re-read replaced by the constant it compares against | 8 | all of group I |
+| step 6's backup verification deleted | 3 | H1–H3 |
+| `verify_uimage.py` always exits 0 | 7 | C6–C11, C13 |
+| `uimage_fix_crcs`' CRC order swapped | 23 | D4, D6, D7 + every sequence case |
+
+- **It stages FIVE FILES, not two directories** — `lib/rw-usbpower.sh`, `lib/rw-identify.sh` and the
+  three `usb_host/*.py`, which is the entire set the suite reaches through `RW_USBPOWER_LIB`. That is
+  what took the run from "abandoned on a 300 s timeout, twice" to 9 s. ⚠️ **The baseline case is the
+  assertion that the list is complete**: a sixth dependency makes the baseline fail here rather than
+  letting every sabotage below quietly measure the shipped copy.
+- ⚠️ **Two sed patterns need care, and both are recorded in the file.** Step 9's re-read is
+  character-identical to the one inside the rollback branch and is distinguished only by its 4-space
+  indent — patching both would make the rollback claim success too, i.e. two defects and a negative
+  control for neither. And step 6's backup guard is character-identical to step 3's re-check of the
+  pulled copy, *same indent included*, so that sabotage is confined by an address range and a separate
+  assert requires exactly one copy of the guard to survive.
+- **All three of the harness's own refusals were driven deliberately** — a rotted sed pattern, an
+  applied-grep pointing at text the sed does not produce, and the address range dropped — because an
+  applied-assert that has only ever been seen passing is the same defect one level up. A fourth was
+  found by accident and is the argument for keeping the minimums: `echo VENDOR` for `echo vendor`
+  applies and parses, but the library's own `case` falls through to `*)` and refuses anyway, so the
+  sabotage weakens to 4 failures and only the `>= 7` minimum catches it.
+- ⚠️ **A copy of the harness under `/tmp` measures nothing** and says so: it resolves the repo from its
+  own location, so `/tmp/x.sh` looks for the suite at `//tests/`. Put test copies under `tests/`.
+- The fixture builder is unaffected by sabotage 5 **by construction**: `tests/make-fake-uimage.py`
+  imports `uimage_fix_crcs` from the *real* repo's `usb_host` (its `sys.path` is relative to its own
+  file), so a broken CRC order cannot be baked into the input as well as the output.
+
 ⬜ **Left, in order:**
 
-1. **`tests/measure_usbpower_sabotage.sh`**, following `tests/measure_arm_gate_sabotage.sh`: drive the
-   real suite via `RW_USBPOWER_LIB` against deliberately broken copies, and ⚠️ **assert each sabotage
-   APPLIED before believing a count** — one that fails to apply reports "0 failed", which is
-   indistinguishable from a suite that cannot detect the breakage. Two sabotages are already measured by
-   hand (below); the harness should also cover deleting the backup verification, `verify_uimage.py`
-   always exiting 0, and swapping `uimage_fix_crcs`' CRC order.
-2. **`tests/commission_offline_test.sh`** — ⚠️ **add `lib/rw-usbpower.sh` to the fixture repo's copy
+1. **`tests/commission_offline_test.sh`** — ⚠️ **add `lib/rw-usbpower.sh` to the fixture repo's copy
    list** at `tests/commission_offline_test.sh:67-71`. The suite passes today only because `--base`
    skips the p1 phase *before* the lazy `.` of that file is reached; a future `--disk` case would fail to
    source it. Then add the p1 cases: `--no-usb-power` and `--no-usb` each reporting their own skip
    string, and `--base` reporting the "no disk given" one. `ANSWERS` needs no change — no new prompt was
    added, phase 0's existing question was only reworded.
-3. **`LICENSE.md`** — MIT, plus the third-party enumeration (LibVNCServer GPL-2.0 under
+2. **`LICENSE.md`** — MIT, plus the third-party enumeration (LibVNCServer GPL-2.0 under
    `vnc_client/deps/`, the ScummVM backend compiled into GPL-3.0+ ScummVM). The GPL-2.0 **written
    source offer** for the three `.ko`s is already in `release.sh`'s `NOTICE`; `LICENSE.md` is the
    repo-level half.
-4. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
+3. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
    `COMMISSIONING.md` step 5 still says the SSH pass deletes nothing; `usb_host/README.md`'s File
    Reference and its Steps 4/6 still name the pre-move paths. `CLAUDE.md` is done.
-
-⚠️ **NOT YET MEASURED FAILING, and that is the gap item 1 closes.** The suite passed 94/94 on its first
-run, which per `CLAUDE.md` is not evidence it *can* fail. Two sabotages were attempted on 2026-08-08 —
-`rw_usbpower_classify` returning `vendor` for an unknown md5, and the post-write re-read replaced by the
-expected constant — and **both runs were abandoned on a timeout, so neither count was ever read.** The
-cause is mundane and worth knowing: `cp -a lib usb_host` into `/tmp` from `/mnt/c` is slow enough over
-DrvFs to blow a 300 s budget. The harness should therefore copy **only the five files it needs**
-(`lib/rw-usbpower.sh`, `lib/rw-identify.sh`, and the three `usb_host/*.py`) rather than two directories,
-or stage them with `git archive`. Until that harness runs, treat every group F–K claim as "seen passing"
-and nothing more.
 
 ⚠️ **Not attempted and not needed: `usb_host` reaches `deploy-all.sh`'s bundle path by no new
 mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive there
@@ -1294,8 +1312,9 @@ patching the appended DTB, which needs no kernel source.
 Deliberately not a ranking of everything — only the claims worth making.
 
 1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
-   remaining ⬜ list** — the code and its 94-case suite are in; what is left is one sabotage harness, the
-   p1 cases in `tests/commission_offline_test.sh`, `LICENSE.md`, and three prose files. All host-only.
+   remaining ⬜ list** — the code, its 94-case suite and the sabotage harness that proves the suite can
+   fail are all in; what is left is the p1 cases in `tests/commission_offline_test.sh`, `LICENSE.md`, and
+   three prose files. All host-only.
 2. **The three device checks nothing here can do** — `sudo tests/commission_offline_test.sh`, a full
    bundle installed on `.225`, and an Xbox pad plugged in with **no powered hub** after a reboot. That
    last one is the only check that the p1 patch took effect, and until it runs, "500 mA" is a verified

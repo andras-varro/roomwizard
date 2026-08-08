@@ -567,6 +567,9 @@ tool-level traps rather than device facts, and each has cost real time.
   and can never be committed, and `tests/make-fake-uimage.py` works only because `uimage.py` *finds* the
   DTB by magic rather than asserting the vendor offset. Groups F–K therefore override the two md5
   constants with the fixture's own — the sequence is what is tested, not the identity of one kernel.
+  `tests/measure_usbpower_sabotage.sh` re-measures the suite against five broken copies and is where the
+  counts come from; it stages the **five files** the suite sources, never `cp -a lib usb_host`, which
+  over DrvFs blows a 300 s budget and looks like a hung suite.
   p1 is reached only through
   `rw_card_boot_partition` / `rw_mount_boot` / `rw_umount_boot` — `RW_PART_ROLES` still does not
   contain p1 and a test still asserts that. ⚠️ **Three callers now drive that one writer, and two of
