@@ -979,6 +979,24 @@ pwmchip0 - dmtimer-pwm@9      pwmchip1 - dmtimer-pwm@11      pwmchip2 - dmtimer-
 C implementation: `native_apps/common/hardware.c`. Vendor scripts that still exist:
 `/opt/sbin/backlight/setbacklight.sh`, `/opt/sbin/brightness.sh`, `/opt/sbin/conc_leds.sh`.
 
+**The backlight ceiling is 100, and a cleaned unit is already sitting on it.** `max_brightness` is 100
+and a write above it does not raise the duty — `echo 150` reads back `100` — which is why the `150` in
+the vendor's own commented-out `backlight.sh` line was never brighter than `100`. Measured on `rwtest`
+2026-08-06 with a temporary `rc5.d` `S01` probe, i.e. before `sshd` and long before `roomwizard-app`: a
+freshly booted **cleaned** unit reads **100 of 100** with nothing in our stack having written it —
+`app_launcher` makes no `hw_set_backlight()` call at all. The vendor's entire mechanism
+(`adjustbklight.sh` → `setbacklight.sh` / `backlight.sh -1`) writes **this one node** from
+`websign/brightness.conf` and **defaults to 100** when that file is missing, which is the state our
+clean leaves behind. So a cleaned unit is already at the brightest state the vendor firmware could
+reach, and a boot-time setter would write 100 over 100.
+
+⚠️ **"The panel looks dim" is therefore not a software question — at a fixed duty cycle, perceived
+brightness follows what is *drawn*.** The launcher grid measures **19.2 % mean luminance**, 87.5 % of
+its pixels in the darkest quarter (32bpp capture, 2026-08-06); the vendor's browser filled the same
+panel with a near-white page. A dark UI at full backlight looks dimmer than a white page at the same
+full backlight, and no write to `brightness` closes that gap. Judge a brightness claim with **identical
+content on both panels**, or it measures the UI's palette rather than the hardware.
+
 **There is no third colour and no light bar on the main indicator** — but driving red and green
 together gives amber, so the effective palette is red / amber / green with smooth crossfade.
 

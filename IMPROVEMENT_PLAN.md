@@ -36,7 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: [B26](#b26-the-backlight-is-dimmer-than-under-vendor-firmware--open-confirmed-2026-08-06) and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
+| 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -75,36 +75,6 @@ reference recording.
 (CoCo3, `agi`) — the CoCo3 platform's AGI sound is not the AdLib path, and that target's `guioptions`
 lists no AdLib at all. So this needs an OPL-capable game added first. Adding one works and persists:
 `Add Game...` is a touch file browser and the entry lands in `/opt/games/scummvm.ini`.
-
-### B26. The backlight is dimmer than under vendor firmware — open, confirmed 2026-08-06
-
-**Symptom, observed on `rwtest` (192.168.50.225):** after offline commissioning the panel is visibly
-dimmer than the same class of unit running stock firmware. Not seen before the clean.
-
-**A cause chain read out of the captured vendor tree — a hypothesis, so measure before fixing:**
-
-1. `/etc/init.d/browser:77` called `/opt/sbin/backlight/adjustbklight.sh` on every boot.
-2. That family (`setbacklight.sh`) reads `/home/root/data/websign/brightness.conf` and writes the value
-   to `/sys/class/leds/backlight/brightness`, **defaulting to 100** when the file is empty or absent.
-3. Our clean deletes **both** ends of that: `/etc/init.d/browser` (the caller) and `websign/` (the
-   stored level, D7b's input).
-4. So nothing writes `brightness` at boot any more and the panel sits at the driver's power-on default.
-
-⚠️ **`/opt/sbin` is kept, so `/opt/sbin/backlight/*` still exists on the card** — but do not simply call
-it: it depends on `websign/brightness.conf`, which we delete on purpose. Note also that a *dim but
-working* panel means the deletion removed a **setter**, not a driver.
-
-**Measure first, on the unit, cheaply and over SSH:**
-
-```sh
-cat /sys/class/leds/backlight/brightness /sys/class/leds/backlight/max_brightness
-echo 100 > /sys/class/leds/backlight/brightness      # does it brighten?
-```
-
-If it brightens, the cause is confirmed and the fix is a setter in **our** boot path — a
-`device-files/` init script alongside `audio-enable` and `time-sync`, so the panel is bright from boot
-rather than only once an app runs. `common/hardware.c` already drives this sysfs node, so an app-level
-set is the weaker option. If it does *not* brighten, the cause is elsewhere and this entry is wrong.
 
 ### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
@@ -985,10 +955,6 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-0. **[B26](#b26-the-backlight-is-dimmer-than-under-vendor-firmware--open-confirmed-2026-08-06) — the
-   backlight.** It is the one thing a user sees every second the device is on, the unit is reachable at
-   `192.168.50.225`, and the whole first measurement is two SSH commands. A recorded cause chain is
-   waiting to be confirmed or refuted.
 1. **`COMMISSIONING.md`** — F10's *What is left*. The doc can finally be a description rather than a
    plan, and the reorg has renamed the scripts it documents, so this is the moment. (The two bugs the
    first real run exposed are fixed: `git log --grep=F10`.)
