@@ -1,0 +1,590 @@
+./roomwizard.sh
+
+════════════════════════════════════════
+ RoomWizard
+════════════════════════════════════════
+  1) Commission an SD card        (offline)
+  2) Set up a booted device       (ssh)
+  3) Deploy apps                  (ssh)
+  4) Device status                (read-only)
+  5) Full bring-up: 1 -> 2 -> 3
+  6) Commission COMPLETELY offline, one boot  (needs a bundle)
+  q) Quit
+
+Choice: 6
+
+════════════════════════════════════════
+ 6. Commission a card completely, offline (one boot)
+════════════════════════════════════════
+  This does the WHOLE job against the card: password, host name, SSH, DHCP, the
+  vendor cleanup, the boot scripts and the apps. Then one boot and the unit works.
+
+  Before continuing:
+
+    - the card is out of the RoomWizard and in this host's reader
+    - a full-card image backup exists SOMEWHERE ELSE. You will be asked.
+    - you have a bundle: ./release.sh --stage-only leaves one in build/release,
+      or point --bundle at a release tarball
+    - you will be asked for sudo, because it mounts all four partitions
+
+  It never touches p1, so a power cycle undoes nothing it did to the boot chain.
+
+  Bundle (tarball or directory) [build/release]: /run/media/mau/Audio/projects/roomwizard/roomwizard-apps-20260805.tar.gz
+
+Card in the reader and ready? [y/N]: y
+
+
+════════════════════════════════════════
+ RoomWizard offline commissioning
+════════════════════════════════════════
+
+  ! This rewrites the card: root password, host name, network, and a
+  ! whitelist cleanup that deletes every vendor service it does not
+  ! recognise. p1 is never touched, so a power cycle undoes nothing else.
+  ! 
+  ! The Steelcase software does not come back afterwards. That includes the
+  ! 472 MB on-device factory-restore payload, which is deleted with the rest
+  ! of the vendor stack — it would only restore software whose start-up this
+  ! same clean removes. --keep-factory opts out. The 5 MB fallback kernel is
+  ! kept either way.
+  ! 
+  ! PRECONDITION: a full-card image backup exists somewhere other than
+  ! this card. Recovery from a bad boot means dd-ing it back.
+  Do you have that backup? (yes/no): yes
+
+────────────────────────────────────────
+ 1. The card
+────────────────────────────────────────
+  → Looking for a RoomWizard card...
+  ✓ Card: /dev/mmcblk0
+  ✓ Not this host's root disk (which is /dev/nvme1n1)
+  the four trees, by position:
+    root /dev/mmcblk0p6
+    data /dev/mmcblk0p2
+    log /dev/mmcblk0p3
+    backup /dev/mmcblk0p5
+  → Mounting the four partitions under /tmp/rw-commission.GB4nEr
+    root /tmp/rw-commission.GB4nEr/root
+    data /tmp/rw-commission.GB4nEr/data
+    log /tmp/rw-commission.GB4nEr/log
+    backup /tmp/rw-commission.GB4nEr/backup
+  ✓ p6 is a rootfs, p2/p3/p5 are not: SteelCase RW20 Embedded Platform (Yocto) 3.1.4 (build 20180309123456)
+
+────────────────────────────────────────
+ 2. The bundle
+────────────────────────────────────────
+  → Unpacking /run/media/mau/Audio/projects/roomwizard/roomwizard-apps-20260805.tar.gz
+  ✓ Every manifest entry is staged, and every staged file is in a manifest
+    tag=untagged
+    built=2026-08-05T23:30:05Z
+    commit=f849c41 (dirty)
+    components=native_apps 
+  → 46 file(s), components: native_apps 
+  → Checking the bundle's ARM binaries...
+
+  ✓ ARM-safe: no hardware divide in 18 binaries
+
+────────────────────────────────────────
+ 3. Name, password, SSH and DHCP
+────────────────────────────────────────
+  → Handing over to commissioning/card-prep.sh for the two questions...
+
+================================================
+  RoomWizard SD Card Commissioning Script
+================================================
+
+[INFO] Using ROOTFS from the environment: /tmp/rw-commission.GB4nEr/root (detection skipped)
+[SUCCESS] It looks like a RoomWizard rootfs: SteelCase RW20 Embedded Platform (Yocto) 3.1.4 (build 20180309123456)
+
+================================================
+  Root Password Configuration
+================================================
+
+Enter desired root password: 
+Confirm root password: 
+[INFO] Generating password hash...
+[SUCCESS] Password hash generated.
+
+[INFO] Updating /etc/shadow with new root password...
+[INFO] Created backup: /tmp/rw-commission.GB4nEr/root/etc/shadow.backup
+[SUCCESS] Root password updated in /etc/shadow
+
+================================================
+  Host Name
+================================================
+
+[INFO] The card currently claims the name: null
+[INFO] A unique name lets you reach the unit as <name>.local once mDNS is on
+[INFO] (commissioning/provision.sh enables it), instead of hunting for a DHCP lease.
+
+Host name [null]: rwtest
+  host name: null -> rwtest
+  /tmp/rw-commission.GB4nEr/root/etc/hostname and /tmp/rw-commission.GB4nEr/root/etc/hosts updated (backups: *.backup)
+  and /tmp/rw-commission.GB4nEr/root/etc/dhclient.conf updated — the DHCP server will now record 'rwtest'
+[SUCCESS] Host name set to: rwtest
+
+================================================
+  SSH Configuration
+================================================
+
+[INFO] Configuring SSH to allow root login...
+[INFO] Created backup: /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config.backup
+[SUCCESS] SSH configuration updated.
+
+[INFO] Verifying sshd is enabled at boot...
+[SUCCESS] sshd is already configured to start at boot.
+
+================================================
+  SSH Key Setup (Optional)
+================================================
+
+Do you want to set up SSH key authentication? (y/n): y
+[INFO] Found SSH public key: /home/mau/.ssh/id_rsa.pub
+Use this key? (y/n): y
+[INFO] Setting up SSH key authentication...
+[SUCCESS] SSH key installed successfully.
+[INFO] You will be able to SSH without a password using your key.
+
+================================================
+  Network Configuration (DHCP)
+================================================
+
+[INFO] Configuring eth0 to use DHCP...
+[INFO] Created backup: /tmp/rw-commission.GB4nEr/root/etc/network/interfaces.backup
+[SUCCESS] eth0 configured for DHCP.
+
+================================================
+  Card prep complete — continuing
+================================================
+
+[SUCCESS] Password, host name, SSH and DHCP are written to the card.
+[INFO] Returning to commissioning/commission-offline.sh for the clean, the install and the verify.
+
+  ✓ Password, host name, /etc/hosts, /etc/dhclient.conf, sshd and DHCP done
+
+────────────────────────────────────────
+ 4. Clean
+────────────────────────────────────────
+  → Groups: base browser java snmp mail extras factory sweeps
+  → 121 delete(s), 9 sweep(s), 69 protected path(s)
+
+  delete        164K   /tmp/rw-commission.GB4nEr/data/websign
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/networkmanager
+  delete        15M    /tmp/rw-commission.GB4nEr/backup/websigns
+  delete        7.0K   /tmp/rw-commission.GB4nEr/root/home/root/sqltool.rc
+  delete        569K   /tmp/rw-commission.GB4nEr/data/conctest
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/vsftpd
+  delete        5.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/webserver
+  delete        5.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/browser
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/x11
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/startautoupgrade
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/upgradecomplete
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/webmonitor
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/mta.sh
+  delete        4.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/ntpd
+  delete        4.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/cursor.sh
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/psplash
+  delete        10K    /tmp/rw-commission.GB4nEr/root/etc/init.d/bootscrub
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/cleaup_partition
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/rmnologin.sh
+  delete        4.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/wpa_supplicant
+  delete        1.1M   /tmp/rw-commission.GB4nEr/root/usr/sbin/wpa_supplicant
+  delete        835K   /tmp/rw-commission.GB4nEr/root/usr/sbin/ntpd.ntp
+  delete        101K   /tmp/rw-commission.GB4nEr/root/usr/sbin/vsftpd
+  delete        7.0K   /tmp/rw-commission.GB4nEr/root/etc/vsftpd.conf
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/wpa_supplicant.conf
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/wpa_supplicant.conf.template
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/ntp.conf
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/etc/ntp.conf.template
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/var/lib/ntp
+  delete        10K    /tmp/rw-commission.GB4nEr/log/Xorg.0.log
+  delete        8.0M   /tmp/rw-commission.GB4nEr/log/browser.err
+  delete        0      /tmp/rw-commission.GB4nEr/log/get_time_from_server.err
+  delete        799K   /tmp/rw-commission.GB4nEr/log/jettystart
+  delete        87K    /tmp/rw-commission.GB4nEr/log/hsqldbstart
+  delete        0      /tmp/rw-commission.GB4nEr/log/snmp_daemon.log
+  delete        31K    /tmp/rw-commission.GB4nEr/log/networkmngr.err
+  delete        18M    /tmp/rw-commission.GB4nEr/log/jetty_logs
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libwebkit2gtk-4.0.so.37
+  delete        36M    /tmp/rw-commission.GB4nEr/root/usr/lib/libwebkit2gtk-4.0.so.37.44.4
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libjavascriptcoregtk-4.0.so.18
+  delete        9.5M   /tmp/rw-commission.GB4nEr/root/usr/lib/libjavascriptcoregtk-4.0.so.18.16.5
+  delete        1.8M   /tmp/rw-commission.GB4nEr/root/usr/libexec/webkit2gtk-4.0
+  delete        535K   /tmp/rw-commission.GB4nEr/root/usr/lib/webkit2gtk-4.0
+  delete        716K   /tmp/rw-commission.GB4nEr/root/usr/bin/WebKitWebDriver
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/browser
+  delete        7.0K   /tmp/rw-commission.GB4nEr/root/usr/bin/webmonitor
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libicudata.so.66
+  delete        27M    /tmp/rw-commission.GB4nEr/root/usr/lib/libicudata.so.66.1
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libicui18n.so.66
+  delete        2.3M   /tmp/rw-commission.GB4nEr/root/usr/lib/libicui18n.so.66.1
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libicuuc.so.66
+  delete        1.5M   /tmp/rw-commission.GB4nEr/root/usr/lib/libicuuc.so.66.1
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libharfbuzz-icu.so.0
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libharfbuzz-icu.so.0.20600.4
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgtk-3.so.0
+  delete        5.9M   /tmp/rw-commission.GB4nEr/root/usr/lib/libgtk-3.so.0.2404.10
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgdk-3.so.0
+  delete        757K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgdk-3.so.0.2404.10
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgdk_pixbuf-2.0.so.0
+  delete        135K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgdk_pixbuf-2.0.so.0.4000.0
+  delete        103K   /tmp/rw-commission.GB4nEr/root/usr/lib/gdk-pixbuf-2.0
+  delete        1.9M   /tmp/rw-commission.GB4nEr/root/usr/lib/girepository-1.0
+  delete        4.6M   /tmp/rw-commission.GB4nEr/root/usr/share/icons
+  delete        3.7M   /tmp/rw-commission.GB4nEr/root/usr/share/mime
+  delete        17K    /tmp/rw-commission.GB4nEr/root/usr/share/themes
+  delete        31M    /tmp/rw-commission.GB4nEr/root/usr/share/cjkfont
+  delete        5.2M   /tmp/rw-commission.GB4nEr/root/usr/share/X11
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libX11.so.6
+  delete        1.1M   /tmp/rw-commission.GB4nEr/root/usr/lib/libX11.so.6.3.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libX11-xcb.so.1
+  delete        7.0K   /tmp/rw-commission.GB4nEr/root/usr/lib/libX11-xcb.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXau.so.6
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXau.so.6.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXcomposite.so.1
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXcomposite.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXcursor.so.1
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXcursor.so.1.0.2
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXdamage.so.1
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXdamage.so.1.1.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXdmcp.so.6
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXdmcp.so.6.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXext.so.6
+  delete        56K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXext.so.6.4.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXfixes.so.3
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXfixes.so.3.1.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXfont2.so.2
+  delete        177K   /tmp/rw-commission.GB4nEr/root/usr/lib/libXfont2.so.2.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXft.so.2
+  delete        68K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXft.so.2.3.3
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXinerama.so.1
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXinerama.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXi.so.6
+  delete        51K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXi.so.6.1.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXrandr.so.2
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXrandr.so.2.2.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXrender.so.1
+  delete        31K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXrender.so.1.3.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXtst.so.6
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXtst.so.6.1.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libXxf86vm.so.1
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/lib/libXxf86vm.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-dri2.so.0
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-dri2.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-dri3.so.0
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-dri3.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-glx.so.0
+  delete        71K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-glx.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-present.so.0
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-present.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-render.so.0
+  delete        39K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-render.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-shm.so.0
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-shm.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb.so.1
+  delete        111K   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb.so.1.1.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-sync.so.1
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-sync.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-xfixes.so.0
+  delete        23K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-xfixes.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-xkb.so.1
+  delete        83K    /tmp/rw-commission.GB4nEr/root/usr/lib/libxcb-xkb.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libepoxy.so.0
+  delete        895K   /tmp/rw-commission.GB4nEr/root/usr/lib/libepoxy.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libGL.so.1
+  delete        384K   /tmp/rw-commission.GB4nEr/root/usr/lib/libGL.so.1.2.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libEGL.so.1
+  delete        197K   /tmp/rw-commission.GB4nEr/root/usr/lib/libEGL.so.1.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgbm.so.1
+  delete        47K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgbm.so.1.0.0
+  delete        591K   /tmp/rw-commission.GB4nEr/root/usr/lib/xorg
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/usr/lib/X11
+  delete        30K    /tmp/rw-commission.GB4nEr/root/usr/share/drirc.d
+  delete        1.7M   /tmp/rw-commission.GB4nEr/root/usr/bin/Xorg
+  delete        167K   /tmp/rw-commission.GB4nEr/root/usr/bin/xkbcomp
+  delete        383K   /tmp/rw-commission.GB4nEr/root/usr/libexec/libinput
+  delete        73K    /tmp/rw-commission.GB4nEr/root/usr/share/libinput
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstallocators-1.0.so.0
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgstallocators-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstapp-1.0.so.0
+  delete        55K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgstapp-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstaudio-1.0.so.0
+  delete        417K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstaudio-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstbase-1.0.so.0
+  delete        452K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstbase-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstcheck-1.0.so.0
+  delete        108K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstcheck-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstcontroller-1.0.so.0
+  delete        55K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgstcontroller-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstfft-1.0.so.0
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgstfft-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstgl-1.0.so.0
+  delete        357K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstgl-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstnet-1.0.so.0
+  delete        92K    /tmp/rw-commission.GB4nEr/root/usr/lib/libgstnet-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstpbutils-1.0.so.0
+  delete        201K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstpbutils-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstreamer-1.0.so.0
+  delete        1.1M   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstreamer-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgsttag-1.0.so.0
+  delete        212K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgsttag-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstvideo-1.0.so.0
+  delete        549K   /tmp/rw-commission.GB4nEr/root/usr/lib/libgstvideo-1.0.so.0.1603.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/liborc-0.4.so.0
+  delete        414K   /tmp/rw-commission.GB4nEr/root/usr/lib/liborc-0.4.so.0.31.0
+  delete        364K   /tmp/rw-commission.GB4nEr/root/usr/lib/gstreamer-1.0
+  delete        24K    /tmp/rw-commission.GB4nEr/root/usr/libexec/gstreamer-1.0
+  delete        49K    /tmp/rw-commission.GB4nEr/root/usr/share/gst-plugins-base
+  delete        93M    /tmp/rw-commission.GB4nEr/root/opt/openjre-8
+  delete        43M    /tmp/rw-commission.GB4nEr/root/opt/jetty-9-4-11
+  delete        link   /tmp/rw-commission.GB4nEr/root/opt/jetty
+  delete        link   /tmp/rw-commission.GB4nEr/root/opt/java
+  delete        3.5M   /tmp/rw-commission.GB4nEr/root/opt/hsqldb
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmpagent.so.35
+  delete        366K   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmpagent.so.35.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmphelpers.so.35
+  delete        7.0K   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmphelpers.so.35.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmpmibs.so.35
+  delete        1.2M   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmpmibs.so.35.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmp.so.35
+  delete        623K   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmp.so.35.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmptrapd.so.35
+  delete        39K    /tmp/rw-commission.GB4nEr/root/usr/lib/libnetsnmptrapd.so.35.0.0
+  delete        23K    /tmp/rw-commission.GB4nEr/root/usr/sbin/snmpd
+  delete        31K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmp-bridge-mib
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpbulkget
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpbulkwalk
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpcheck
+  delete        27K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpconf
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpdelta
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpdf
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpget
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpgetnext
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/bin/snmpinform
+  delete        53K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpnetstat
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpping
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpps
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpset
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpstatus
+  delete        19K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmptable
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmptest
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/bin/snmptop
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmptranslate
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmptrap
+  delete        29K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpusm
+  delete        22K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpvacm
+  delete        11K    /tmp/rw-commission.GB4nEr/root/usr/bin/snmpwalk
+  delete        78K    /tmp/rw-commission.GB4nEr/root/usr/bin/net-snmp-cert
+  delete        2.5M   /tmp/rw-commission.GB4nEr/root/usr/share/snmp
+  delete        22K    /tmp/rw-commission.GB4nEr/root/etc/snmp
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/var/lib/net-snmp
+  delete        5.0K   /tmp/rw-commission.GB4nEr/root/etc/init.d/snmpd
+  delete        48K    /tmp/rw-commission.GB4nEr/root/usr/libexec/nullmailer
+  delete        8.0K   /tmp/rw-commission.GB4nEr/root/var/spool/nullmailer
+  delete        4.0K   /tmp/rw-commission.GB4nEr/root/etc/nullmailer
+  delete        545K   /tmp/rw-commission.GB4nEr/root/usr/local/bin/mutt
+  delete        2.0K   /tmp/rw-commission.GB4nEr/root/usr/local/bin/muttbug
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/local/bin/pgpewrap
+  delete        63K    /tmp/rw-commission.GB4nEr/root/usr/local/bin/pgpring
+  delete        27K    /tmp/rw-commission.GB4nEr/root/usr/local/bin/smime_keys
+  delete        10K    /tmp/rw-commission.GB4nEr/root/usr/local/bin/flea
+  delete        1.5M   /tmp/rw-commission.GB4nEr/root/usr/lib/aspell-0.60
+  delete        13K    /tmp/rw-commission.GB4nEr/root/usr/lib/enchant-2
+  delete        4.0K   /tmp/rw-commission.GB4nEr/root/usr/share/enchant-2
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libaspell.so.15
+  delete        538K   /tmp/rw-commission.GB4nEr/root/usr/lib/libaspell.so.15.3.1
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libenchant-2.so.2
+  delete        35K    /tmp/rw-commission.GB4nEr/root/usr/lib/libenchant-2.so.2.2.8
+  delete        116K   /tmp/rw-commission.GB4nEr/root/usr/bin/aspell
+  delete        875K   /tmp/rw-commission.GB4nEr/root/usr/lib/lftp
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/share/lftp
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/liblftp-jobs.so.0
+  delete        224K   /tmp/rw-commission.GB4nEr/root/usr/lib/liblftp-jobs.so.0.0.0
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/liblftp-tasks.so.0
+  delete        443K   /tmp/rw-commission.GB4nEr/root/usr/lib/liblftp-tasks.so.0.0.0
+  delete        52K    /tmp/rw-commission.GB4nEr/root/usr/bin/lftp
+  delete        3.0K   /tmp/rw-commission.GB4nEr/root/usr/bin/lftpget
+  delete        2.5M   /tmp/rw-commission.GB4nEr/root/usr/lib/libpython3.8.so.1.0
+  delete        124K   /tmp/rw-commission.GB4nEr/root/usr/lib/ts
+  delete        link   /tmp/rw-commission.GB4nEr/root/usr/lib/libts.so.0
+  delete        15K    /tmp/rw-commission.GB4nEr/root/usr/lib/libts.so.0.10.3
+  delete        1.2M   /tmp/rw-commission.GB4nEr/root/usr/share/sounds
+  delete        426M   /tmp/rw-commission.GB4nEr/backup/factory/sd_rootfs_part.img
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/factory/sd_rootfs_part.img.md5
+  delete        22M    /tmp/rw-commission.GB4nEr/backup/factory/sd_boot_archive.tar.gz
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/factory/sd_boot_archive.tar.gz.md5
+  delete        13M    /tmp/rw-commission.GB4nEr/backup/factory/sd_data_part.img
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/factory/sd_data_part.img.md5
+  delete        9.9M   /tmp/rw-commission.GB4nEr/backup/factory/sd_log_part.img
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/factory/sd_log_part.img.md5
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rcS.d/S01psplash
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rcS.d/S58wpa_supplicant
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rcS.d/S60networkmanager
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S20ntpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S20vsftpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S21cursor.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S25snmpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S30x11
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S32webserver
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S35browser
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S75bootscrub
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S80cleaup_partition
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S90startautoupgrade
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S99rmnologin.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S20ntpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S20vsftpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S21cursor.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S25snmpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S30x11
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S32webserver
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S35browser
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S75bootscrub
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S80cleaup_partition
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S90startautoupgrade
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S95upgradecomplete
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S99rmnologin.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S20ntpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S20vsftpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S21cursor.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S25snmpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S30x11
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S32webserver
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S35browser
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S75bootscrub
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S80cleaup_partition
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S90startautoupgrade
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S95upgradecomplete
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S99rmnologin.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S20ntpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S20vsftpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S21cursor.sh
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S25snmpd
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S30x11
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S32webserver
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S35browser
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S75bootscrub
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S80cleaup_partition
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S90startautoupgrade
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S95upgradecomplete
+  delete        link   /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S99rmnologin.sh
+  delete        29K    /tmp/rw-commission.GB4nEr/data/frontpanel
+  delete        81K    /tmp/rw-commission.GB4nEr/data/misc
+  delete        51K    /tmp/rw-commission.GB4nEr/data/pushconfig.tar.gz
+  delete        58K    /tmp/rw-commission.GB4nEr/data/roombooker
+  delete        24K    /tmp/rw-commission.GB4nEr/data/rwdb.tgz
+  delete        2.0K   /tmp/rw-commission.GB4nEr/data/selftest
+  delete        1.2M   /tmp/rw-commission.GB4nEr/data/splash
+  delete        10M    /tmp/rw-commission.GB4nEr/data/test.hex
+  delete        7.0K   /tmp/rw-commission.GB4nEr/data/uploaded
+  delete        2.0K   /tmp/rw-commission.GB4nEr/data/wpa
+  delete        2.0K   /tmp/rw-commission.GB4nEr/data/wpa_ca
+  delete        0      /tmp/rw-commission.GB4nEr/log/Xorg.0.log.old
+  delete        1.0K   /tmp/rw-commission.GB4nEr/log/backup.background.stderr
+  delete        0      /tmp/rw-commission.GB4nEr/log/backup.background.stdout
+  delete        0      /tmp/rw-commission.GB4nEr/log/browser.out
+  delete        0      /tmp/rw-commission.GB4nEr/log/get_time_from_server.out
+  delete        0      /tmp/rw-commission.GB4nEr/log/mail
+  delete        1.0K   /tmp/rw-commission.GB4nEr/log/notificationvalues.conf
+  delete        0      /tmp/rw-commission.GB4nEr/log/runfsck.err
+  delete        1.0K   /tmp/rw-commission.GB4nEr/log/runfsck.out
+  delete        0      /tmp/rw-commission.GB4nEr/log/snmptrapsend.err
+  delete        0      /tmp/rw-commission.GB4nEr/log/sync_clocks.err
+  delete        0      /tmp/rw-commission.GB4nEr/log/sync_clocks.out
+  delete        11K    /tmp/rw-commission.GB4nEr/log/watchdog
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/IsUpgradeRunning
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/downloadFiles
+  delete        4.7M   /tmp/rw-commission.GB4nEr/backup/logs
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/tmp
+  delete        3.0K   /tmp/rw-commission.GB4nEr/backup/upgrade
+  delete        1.0K   /tmp/rw-commission.GB4nEr/backup/usagereports
+  truncate      2.0K   /tmp/rw-commission.GB4nEr/data/cron/tabs/root
+  truncate      131M   /tmp/rw-commission.GB4nEr/data/cron/log
+  truncate      4.0M   /tmp/rw-commission.GB4nEr/log/messages
+  truncate      0      /tmp/rw-commission.GB4nEr/log/upgrade.log
+  truncate      0      /tmp/rw-commission.GB4nEr/log/concurrent.log
+  truncate      2.0K   /tmp/rw-commission.GB4nEr/log/wtmp
+  truncate      0      /tmp/rw-commission.GB4nEr/log/lastlog
+
+  ✓ Clean complete
+
+────────────────────────────────────────
+ 5. Install
+────────────────────────────────────────
+  → Provision plan: 29 action(s) — 5 install, 7 link, 9 unlink
+  install         0755  /tmp/rw-commission.GB4nEr/root/etc/init.d/audio-enable
+  install         0755  /tmp/rw-commission.GB4nEr/root/etc/init.d/time-sync
+  install         0644  /tmp/rw-commission.GB4nEr/root/etc/sysctl.d/99-security.conf
+  install         0755  /tmp/rw-commission.GB4nEr/root/etc/init.d/roomwizard-app
+  install         0755  /tmp/rw-commission.GB4nEr/root/opt/roomwizard/disable-steelcase.sh
+  backup          /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config.orig
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S28time-sync -> ../init.d/time-sync
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S29audio-enable -> ../init.d/audio-enable
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc2.d/S99roomwizard-app -> ../init.d/roomwizard-app
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc3.d/S99roomwizard-app -> ../init.d/roomwizard-app
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc4.d/S99roomwizard-app -> ../init.d/roomwizard-app
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S99roomwizard-app -> ../init.d/roomwizard-app
+  link            /tmp/rw-commission.GB4nEr/root/etc/rc5.d/S30avahi-daemon -> ../init.d/avahi-daemon
+  touch           0644  /tmp/rw-commission.GB4nEr/root/var/watchdog_test
+  directive       /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config: PermitEmptyPasswords no
+  directive       /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config: MaxAuthTries 3
+  directive       /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config: LoginGraceTime 30
+  directive       /tmp/rw-commission.GB4nEr/root/etc/ssh/sshd_config: MaxSessions 5
+  dropline        /tmp/rw-commission.GB4nEr/root/etc/profile (wsplatform\.conf)
+  dropline        /tmp/rw-commission.GB4nEr/root/etc/inittab (^4:12345:respawn:/sbin/getty 38400 tty4)
+  ✓ Boot scripts, boot links, sshd and the config fix-ups done
+  → Bundle: 46 file(s)
+  ✓ Installed
+
+────────────────────────────────────────
+ 6. Verify
+────────────────────────────────────────
+  ✓ md5: all 46 installed file(s) match the bundle manifest
+  ✓ +x: all 22 file(s) declared executable are executable
+  ✓ .app: all 9 manifest(s) name an installed, executable binary
+  ✓ default-app: /opt/roomwizard/app_launcher (installed, executable)
+  ✓ dash -n: all 4 /bin/sh script(s) parse
+  ✓ boot links resolve (S28, S29, S99)
+  ✓ D7b closed: websign and S60networkmanager are both gone
+  ✓ host name 'rwtest' is consistent across /etc/hostname, /etc/hosts and dhclient.conf
+
+════════════════════════════════════════
+ Done
+════════════════════════════════════════
+  ✓ ARM safety: 18 binaries, hard zero
+  ✓ 46 bundled file(s) installed and md5-verified on the card
+
+  Put the card back and power the unit on. ONE boot.
+
+  Then verify, in this order — each one is cheap and rules out the next:
+    1. it comes up as a launcher grid, not a black screen
+    2. ssh root@rwtest.local   (or find it in the DHCP leases)
+    3. tap a game; it plays and exiting returns to the grid
+    4. sound: Device Tools -> Audio, or Tap-a-Theremin
+    5. touch: Device Tools -> Display -> CALIBRATE TOUCH — the one step
+       that still needs the panel, because it is per-unit.
+
+  Not installed, and no bundle can install it: USB HOST MODE. It needs the
+  usb_host component, which patches the DTB inside uImage-system on p1 — the
+  partition this tool refuses to touch, because an untouched p1 is what keeps
+  a power cycle a free undo. To add it later, from a machine with the ARM
+  toolchain:   cd usb_host && ./build-and-deploy.sh <ip>
+  (IMPROVEMENT_PLAN.md F15.)
+
+  → Unmounting /tmp/rw-commission.GB4nEr
+
+Press Enter to return to the menu... 
+
+════════════════════════════════════════
+ RoomWizard
+════════════════════════════════════════
+  1) Commission an SD card        (offline)
+  2) Set up a booted device       (ssh)
+  3) Deploy apps                  (ssh)
+  4) Device status                (read-only)
+  5) Full bring-up: 1 -> 2 -> 3
+  6) Commission COMPLETELY offline, one boot  (needs a bundle)
+  q) Quit
+
+Choice: q
+
+  ✓ Bye.
