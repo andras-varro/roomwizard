@@ -1,155 +1,118 @@
 #!/usr/bin/env python3
-"""Patch the MUSB power property in the uImage-system DTB.
+"""patch_dtb.py — raise the MUSB USB power budget in a uImage's device tree.
 
-Strategy: Binary-patch the DTB inside the uImage at the exact byte position
-of the power property value (0x32 -> 0xfa), then update uImage CRCs.
+    patch_dtb.py [<in> [<out>]]
+
+Defaults are `uImage-system` and `uImage-system-patched`, relative to the CURRENT
+DIRECTORY — the contract usb_host/README.md documents and the reason
+usb_host/build-and-deploy.sh has to `cd "$SCRIPT_DIR"` before calling it
+(../IMPROVEMENT_PLAN.md B19).  ⚠️ New callers should pass both paths explicitly:
+a rules-driven installer works in a temp directory and must not depend on its cwd.
+
+What it changes and why it cannot be a boot script: the `power` property of the
+`usb_otg_hs` node, 0x32 (100 mA) -> 0xfa (500 mA).  omap2430.c:452 reads that
+value from the device tree at driver PROBE, before any init script exists, and the
+tree is appended to the kernel inside uImage-system — so there is no file on the
+normal filesystem to edit.  That one number is the sole reason p1 enters the
+picture (../IMPROVEMENT_PLAN.md F15).
+
+⚠️ This writes <out>; it never touches <in>.  Putting the result on p1 is
+lib/rw-usbpower.sh's job, gated on md5 and backed up first.
 """
-import struct
-import binascii
 
-# Read the uImage
-with open('uImage-system', 'rb') as f:
-    data = bytearray(f.read())
+import os
+import sys
 
-print(f'uImage size: {len(data)} bytes')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# DTB starts at offset 0x4eb788
-DTB_OFFSET = 0x4eb788
-DTB_SIZE = 67004
+from uimage import (  # noqa: E402
+    POWER_VENDOR,
+    POWER_WANTED,
+    UImageError,
+    be32,
+    find_power_offset,
+    uimage_crcs,
+    uimage_fix_crcs,
+)
 
-# Verify DTB magic at the expected offset
-assert data[DTB_OFFSET:DTB_OFFSET+4] == b'\xd0\x0d\xfe\xed', "DTB magic not found at expected offset"
-print(f'DTB magic verified at offset 0x{DTB_OFFSET:x}')
+import struct  # noqa: E402
 
-# In the DTB, search for the power property within usb_otg_hs node
-# The DTB format stores property values as big-endian 32-bit integers
-# We need to find the 4-byte sequence 0x00000032 that corresponds to the power property
-# To be precise, let's find it in the DTB portion only
 
-dtb_data = data[DTB_OFFSET:DTB_OFFSET+DTB_SIZE]
+def main(argv):
+    args = [a for a in argv[1:] if not a.startswith("-")]
+    if len(argv) > 1 and argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    if len(args) > 2:
+        print("usage: patch_dtb.py [<in> [<out>]]", file=sys.stderr)
+        return 2
 
-# Search for "power" string in the DTB strings block
-# DTB header: magic(4) + totalsize(4) + off_dt_struct(4) + off_dt_strings(4) + ...
-off_dt_strings = struct.unpack('>I', dtb_data[12:16])[0]
-size_dt_strings = struct.unpack('>I', dtb_data[8*4:8*4+4])[0]
-strings_block = dtb_data[off_dt_strings:off_dt_strings+size_dt_strings]
+    src = args[0] if len(args) >= 1 else "uImage-system"
+    dst = args[1] if len(args) >= 2 else "uImage-system-patched"
 
-# Find "power\0" in strings block
-power_str_offset = strings_block.find(b'power\x00')
-print(f'Found "power" string at strings block offset {power_str_offset}')
+    try:
+        with open(src, "rb") as f:
+            data = bytearray(f.read())
+    except OSError as e:
+        print("patch_dtb: cannot read %s: %s" % (src, e), file=sys.stderr)
+        return 1
 
-# Now search the struct block for the property entry that references this string
-# DTB property entry: FDT_PROP(0x00000003) + len(4) + nameoff(4) + data(len, padded to 4)
-off_dt_struct = struct.unpack('>I', dtb_data[8:12])[0]
+    print("in:   %s (%d bytes)" % (src, len(data)))
 
-# Walk the struct block to find the power property in the usb_otg_hs context
-pos = off_dt_struct
-FDT_BEGIN_NODE = 0x00000001
-FDT_END_NODE = 0x00000002
-FDT_PROP = 0x00000003
-FDT_NOP = 0x00000004
-FDT_END = 0x00000009
+    try:
+        # The input's own CRCs are checked before anything is written. A caller
+        # that hands us a corrupt image would otherwise get a *consistently
+        # CRC'd* corrupt image back, which U-Boot would happily boot.
+        shcrc, chcrc, sdcrc, cdcrc = uimage_crcs(data)
+        if shcrc != chcrc or sdcrc != cdcrc:
+            print(
+                "patch_dtb: %s does not verify before patching "
+                "(header=%08x/%08x data=%08x/%08x)" % (src, shcrc, chcrc, sdcrc, cdcrc),
+                file=sys.stderr,
+            )
+            return 1
 
-in_usb_otg = False
-patched = False
+        dtb_off, pow_off = find_power_offset(data)
+    except UImageError as e:
+        print("patch_dtb: %s" % e, file=sys.stderr)
+        return 1
 
-while pos < len(dtb_data) - 4:
-    token = struct.unpack('>I', dtb_data[pos:pos+4])[0]
-    
-    if token == FDT_BEGIN_NODE:
-        pos += 4
-        # Read node name (null-terminated, padded to 4)
-        name_end = dtb_data.index(b'\x00', pos)
-        name = dtb_data[pos:name_end].decode('ascii', errors='replace')
-        if 'usb_otg_hs' in name:
-            in_usb_otg = True
-            print(f'Entered usb_otg_hs node at DTB offset 0x{pos:x}')
-        padded = ((name_end - pos + 1) + 3) & ~3
-        pos += padded
-        
-    elif token == FDT_END_NODE:
-        if in_usb_otg:
-            in_usb_otg = False
-            print('Left usb_otg_hs node')
-        pos += 4
-        
-    elif token == FDT_PROP:
-        pos += 4
-        prop_len = struct.unpack('>I', dtb_data[pos:pos+4])[0]
-        pos += 4
-        nameoff = struct.unpack('>I', dtb_data[pos:pos+4])[0]
-        pos += 4
-        
-        # Get property name from strings block
-        name_end_s = strings_block.index(b'\x00', nameoff)
-        prop_name = strings_block[nameoff:name_end_s].decode('ascii', errors='replace')
-        
-        if in_usb_otg and prop_name == 'power':
-            old_val = struct.unpack('>I', dtb_data[pos:pos+4])[0]
-            print(f'Found power property in usb_otg_hs: value=0x{old_val:02x} ({old_val}) at DTB offset 0x{pos:x}')
-            
-            abs_offset = DTB_OFFSET + pos
-            print(f'Absolute offset in uImage: 0x{abs_offset:x}')
-            
-            # Patch it
-            new_val = 0xfa  # 250 = 500mA
-            struct.pack_into('>I', data, abs_offset, new_val)
-            struct.pack_into('>I', dtb_data, pos, new_val)
-            print(f'Patched power: 0x{old_val:02x} ({old_val}) -> 0x{new_val:02x} ({new_val})')
-            patched = True
-        
-        padded_len = (prop_len + 3) & ~3
-        pos += padded_len
-        
-    elif token == FDT_NOP:
-        pos += 4
-    elif token == FDT_END:
-        break
-    else:
-        pos += 4
+    old = be32(data, pow_off)
+    print("dtb:  0x%x" % dtb_off)
+    print("power at 0x%x = 0x%02x (%d) -> %d mA" % (pow_off, old, old, old * 2))
 
-assert patched, "Failed to find and patch the power property!"
+    if old == POWER_WANTED:
+        print(
+            "patch_dtb: %s is already patched to 0x%02x — nothing to do"
+            % (src, POWER_WANTED),
+            file=sys.stderr,
+        )
+        return 1
+    if old != POWER_VENDOR:
+        # Refuse rather than overwrite. An unexpected value means this is not the
+        # firmware the 9-byte diff was measured against, and the caller's md5
+        # gate should already have stopped us getting here.
+        print(
+            "patch_dtb: expected 0x%02x or 0x%02x, found 0x%02x — refusing"
+            % (POWER_VENDOR, POWER_WANTED, old),
+            file=sys.stderr,
+        )
+        return 1
 
-# Now fix uImage CRCs
-# uImage header format (64 bytes):
-#   0-3:  magic (0x27051956)
-#   4-7:  header CRC
-#   8-11: timestamp
-#  12-15: data size
-#  16-19: load address
-#  20-23: entry point
-#  24-27: data CRC
-#  28:    os
-#  29:    arch
-#  30:    type
-#  31:    comp
-#  32-63: image name
+    struct.pack_into(">I", data, pow_off, POWER_WANTED)
+    hcrc, dcrc = uimage_fix_crcs(data)
+    print("power now 0x%02x (%d) -> %d mA" % (POWER_WANTED, POWER_WANTED, POWER_WANTED * 2))
+    print("header CRC 0x%08x, data CRC 0x%08x" % (hcrc, dcrc))
 
-HEADER_SIZE = 64
+    try:
+        with open(dst, "wb") as f:
+            f.write(data)
+    except OSError as e:
+        print("patch_dtb: cannot write %s: %s" % (dst, e), file=sys.stderr)
+        return 1
+    print("out:  %s (%d bytes)" % (dst, len(data)))
+    return 0
 
-# Calculate data CRC (CRC32 of everything after the header)
-data_crc = binascii.crc32(data[HEADER_SIZE:]) & 0xffffffff
-struct.pack_into('>I', data, 24, data_crc)
-print(f'Updated data CRC: 0x{data_crc:08x}')
 
-# Calculate header CRC (CRC32 of the header with CRC field zeroed)
-# Zero out the header CRC field first
-struct.pack_into('>I', data, 4, 0)
-header_crc = binascii.crc32(data[:HEADER_SIZE]) & 0xffffffff
-struct.pack_into('>I', data, 4, header_crc)
-print(f'Updated header CRC: 0x{header_crc:08x}')
-
-# Write patched uImage
-with open('uImage-system-patched', 'wb') as f:
-    f.write(data)
-
-print(f'\nWrote patched uImage to uImage-system-patched ({len(data)} bytes)')
-
-# Verify
-with open('uImage-system-patched', 'rb') as f:
-    verify = f.read()
-abs_offset_check = DTB_OFFSET + 0  # we'll re-find it
-# Quick check: read the power value back
-dtb_start = DTB_OFFSET
-# Re-walk isn't needed, just check the bytes we patched
-print(f'Verification - bytes at patch location: {verify[DTB_OFFSET:DTB_OFFSET+4].hex()} (should be DTB magic d00dfeed)')
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

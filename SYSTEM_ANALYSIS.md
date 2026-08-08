@@ -898,12 +898,20 @@ re-litigated.
 **Three problems had to be solved to get host mode working. All three fixes are hacks, and all
 three are load-bearing:**
 
-**Hack 1 — MUSB DMA, patched at runtime through `/dev/mem`.** The OEM kernel has *both*
-`CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` unset, so MUSB init always fails with
+**Hack 1 — MUSB forced to IRQ-driven PIO, patched at runtime through `/dev/mem`.** The OEM kernel has
+*both* `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` unset, so MUSB init always fails with
 `DMA controller not set` (`-ENODEV`). This is a build defect, not a version problem. The fix writes
 noop stub function pointers into the `dma_init`/`dma_exit` fields of the `omap2430_ops` struct in
 live kernel memory, forcing PIO fallback; the driver then rebinds successfully. Re-applied every
 boot by `/etc/init.d/usb-host` (S90).
+
+> ⚠️ **State this the right way round: the patch makes MUSB *give up* on DMA.** It does not fix or enable
+> DMA — it installs stubs so the core falls back to interrupt-driven programmed I/O. **DMA remains
+> unavailable on this device**, and every USB transfer costs CPU. That is fine for input devices and a
+> Bluetooth dongle (tens of KB/s) and starts to matter for uncompressed USB audio (~190 KB/s).
+> ⚠️ `CONFIG_DMADEVICES=y` and `CONFIG_TI_EDMA=y` *are* set and are a **red herring** — that is the
+> **system** EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses.
+> Whether DMA is reachable at all is [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
 
 **Hack 2 — three cross-compiled kernel modules for Xbox controllers.** `CONFIG_INPUT_JOYSTICK`,
 `CONFIG_INPUT_JOYDEV` and `CONFIG_INPUT_FF_MEMLESS` are all unset, and the Xbox 360 pad
@@ -925,6 +933,37 @@ the MUSB `power` property to `0x32` (50 → **100 mA**), so anything drawing mor
 connected directly without a hub. The fix binary-patches the DTB *inside* `uImage-system` to `0xfa`
 (250 → **500 mA**), recomputes the uImage CRCs, and writes the image back to `/dev/mmcblk0p1`.
 
+**Why this one cannot be a boot-time script, when Hack 1 can.** Read out of the 4.14.52 source
+2026-08-08:
+
+| Where | What happens |
+|---|---|
+| `drivers/usb/musb/omap2430.c:452` | `of_property_read_u32(np, "power", (u32 *)&pdata->power)` — read from the device tree **at driver probe** |
+| `drivers/usb/musb/musb_core.c:2369`/`:2381` | passed on as `musb_host_setup(musb, plat->power)` |
+| `drivers/usb/musb/musb_host.c:2797` | `hcd->power_budget = 2 * (power_budget ? : 250);` |
+
+The device tree is appended to the kernel image *inside* `uImage-system`, and the driver reads it before
+any init script exists — so unlike Hack 1, which patches a *static* struct that stays patched until
+reboot, there is no file on the normal filesystem to edit. **That one number is the only reason p1 is
+written at all.**
+
+⚠️ **Note the `? : 250`: an absent or zero property would already give 500 mA.** The vendor deliberately
+set 100 mA, overriding a kernel default that was what we wanted. It is a vendor choice, not a hardware
+limit.
+
+**The vendor kernel is byte-identical across units — measured 2026-08-08, five sources, three units:**
+
+| File | md5 | Size |
+|---|---|---|
+| vendor `uImage-system` (p1 of both card captures, both p5 factory payloads, RW09's copy) | `edc637ac14f90e0187b1ed65ffedf6d7` | 5,225,796 |
+| `uImage-system-patched` | `a1fd1af8da18c430a34b24762aa16dab` | 5,225,796 |
+
+Nothing generates it per-unit, unlike the filesystem UUIDs
+([§4.2](#42-partitions)). The two differ in **exactly 9 bytes**: the uImage header CRC (offsets 4–7), the
+data CRC (24–27), and one value byte at `0x4FA2CF`. That makes an md5 gate a complete check, which is what
+[`IMPROVEMENT_PLAN.md` F15](IMPROVEMENT_PLAN.md#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left)
+builds on.
+
 > ⚠️ **This patch does not survive re-imaging.** It is a persistent one-time fix *per SD image* —
 > after any reflash it must be re-applied. Tools: `usb_host/find_dtb.py`, `usb_host/patch_dtb.py`
 > (recomputes CRCs correctly), `usb_host/verify_patch.sh`.
@@ -936,6 +975,19 @@ connected directly without a hub. The fix binary-patches the DTB *inside* `uImag
 | Keyboard, mouse, touchpad, hub | `usbhid` / `hub` (built in) | ✅ |
 | HID gamepad (generic) | `usbhid` | ✅ if HID-compliant |
 | Xbox 360 / One controller | `xpad` (module) | ❌ needs the three modules |
+| **Bluetooth dongle** | `btusb` — ⚠️ **not built** | ❌ `# CONFIG_BT is not set`; see below |
+
+**A Bluetooth dongle is the only route to a wireless peripheral, and the kernel side is unbuilt.** There
+is no radio on the board at all ([§2.4](#24-unpopulated-and-expansion)), so BT means a dongle in this
+single connector. `# CONFIG_BT is not set` — exactly the situation `CONFIG_INPUT_JOYDEV` was in before
+Hack 2 — and its dependencies are satisfiable: `CONFIG_NET`, `CONFIG_CRC16`, `CONFIG_HID` and
+`CRYPTO_AES` are all `=y`, while `CRYPTO_SHA256`, `CRYPTO_BLKCIPHER`, `CRYPTO_ECB` and `CRYPTO_CMAC` are
+`=m` and would have to be **built and shipped**, since `/lib/modules/4.14.52/` ships empty.
+`CONFIG_CRYPTO_ECDH` is unset and is needed only for BT LE Secure Connections. ⚠️ **The controller is far
+more likely to work than the audio** — A2DP needs software SBC encoding on this single core. Also unbuilt
+and worth knowing: `CONFIG_SND=y` and `CONFIG_SND_USB=y` but `# CONFIG_SND_USB_AUDIO is not set`, so a
+wired USB DAC is one module away too. Both are
+[`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 Touchpad-plus-keyboard combos create two event nodes.
@@ -1215,7 +1267,8 @@ Two consequences of *where* that script runs, both of which have bitten:
 
 **Confirmed absent:**
 
-- ❌ **WiFi / Bluetooth** — no radio of any kind fitted.
+- ❌ **WiFi / Bluetooth** — no radio of any kind fitted. A USB Bluetooth dongle is the only route, and
+  `CONFIG_BT` is unset ([§3.6](#36-usb), [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08)).
 - ❌ **Ambient light sensor** — and none is possible. The vendor factory test has a light-sensor
   step (`functionaltest.sh` → `pv02_app 5`, strings `Tests the Light sensor`, `/dev/i2c-1`,
   `Brightness: %u`), and it is absent from the 4.14 device tree — which is why this sat as an
@@ -1432,7 +1485,12 @@ Verified behaviour:
 
 - **No boot-time MD5 verification of the kernel.** The only integrity gate on `uImage-system` is
   its uImage header CRC + data CRC — which `usb_host/patch_dtb.py` recomputes correctly, which is
-  why the DTB patch works at all.
+  why the DTB patch works at all. Both CRCs, the header's own size field and the `power` value are
+  checkable in pure Python with `usb_host/verify_uimage.py`; **neither `mkimage` nor `dtc` is
+  installed in this WSL and neither is needed.** ⚠️ The data CRC must be recomputed *before* the
+  header CRC — the header carries the data CRC, so the other order signs a header that is already
+  stale, and these two CRCs are the only thing standing between a bad write and a unit that does not
+  come up with no serial console to say why.
 - **No `.md5` files exist on p1.**
 - The MD5 scheme that *does* exist guards the **upgrade package** on p5
   (`/home/root/backup/factory/`), and is checked by scripts inside the bootstrap ramdisk, in three
@@ -1456,9 +1514,28 @@ for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done
 `fatload ... uImage-system`. Stage experiments under a *different filename* and leave
 `uImage-system` alone; a failed experiment is undone by a power cycle.
 
+⚠️ **One deliberate exception, and it costs Layer 1 on that unit: the USB 500 mA patch.** `uImage-system`
+is the only file `bootcmd` will load and U-Boot has no `saveenv`, so a unit that comes up at 500 mA by
+itself requires patching that name in place — `IMPROVEMENT_PLAN.md` F15 has the decision and its accepted
+cost. `lib/rw-usbpower.sh` is the only writer, and the in-place remedy is **`uImage-system.vendor`** on
+p1, which it creates and md5-verifies (`edc637ac14f90e0187b1ed65ffedf6d7`) *before* touching the
+original:
+
+```sh
+# On the device, or on the card in a reader — same two commands either way.
+mount -t vfat /dev/mmcblk0p1 /tmp/bootpart
+cp /tmp/bootpart/uImage-system.vendor /tmp/bootpart/uImage-system
+sync; umount /tmp/bootpart
+# Confirm before rebooting: this md5 is the vendor kernel, byte-identical on every
+# unit measured (§3.6). a1fd1af8da18c430a34b24762aa16dab is the 500 mA one.
+md5sum /tmp/bootpart/uImage-system
+```
+
 **Layer 2 — pull the card.** The whole system is on removable microSD (`mmcblk0`, root
 `mmcblk0p6`). `dd` a known-good backup back, roughly 10 minutes. **This is the working recovery
-loop for this project:** pop the card, reimage, set up DHCP, SSH back in.
+loop for this project:** pop the card, reimage, set up DHCP, SSH back in. ⚠️ It is also the *only*
+recovery from a bad `uImage-system` if `uImage-system.vendor` is gone too — nothing runs before the
+kernel loads, so there is no SSH and no serial console to fix it from.
 
 **Layer 3 — the serial console**, if you ever wire it up. `bootdelay=1` gives a one-second window
 to `rw20 #`; a root shell is already running there. Not used by this project — see

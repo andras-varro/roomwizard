@@ -521,19 +521,23 @@ Neither is urgent — recorded so the deletion stays a decision with a known cos
 
 ---
 
-### F15. USB host mode is unreachable from the delivery flow — open, confirmed 2026-08-06
+### F15. USB host mode through commissioning — p6 driver + p1 mechanism BUILT 2026-08-08, two call sites left
 
-**Symptom:** USB does not work on the offline-commissioned unit (`rwtest`, 192.168.50.225).
+**Symptom that opened this:** USB does not work on the offline-commissioned unit (`rwtest`,
+192.168.50.225).
 
-**This is by construction, not a regression.** USB host mode needs the `usb_host` component, which
-patches the DTB inside `uImage-system` — and that lives on **p1**, which the offline commissioner must
-never write, because an untouched p1 is what keeps a power cycle a free undo
-([§4.7](SYSTEM_ANALYSIS.md#47-recovery)). `release.sh` therefore excludes `usb_host` from **every**
-bundle, deliberately. So no bundle can ever deliver USB, and nothing in the flow says so.
+⚠️ **`usb_host` is three independent mechanisms, and only one of them touches p1. Do not treat the p1 rule
+as a blocker on USB as a whole** — it blocks exactly one power-budget refinement:
 
-**Today's only path** is over SSH after the unit boots: `usb_host/build-and-deploy.sh <ip>`. That needs
-the kernel-module build deps (`bc libssl-dev bison flex`) plus `python3`, i.e. a full toolchain host —
-which is exactly what the delivery mode does not have.
+| Mechanism | Delivers | Lives on | p1? |
+|---|---|---|---|
+| `/dev/mem` patch of `omap2430_ops.dma_init`/`.dma_exit` + MUSB rebind | **USB host mode itself** | nothing on disk; re-applied each boot by `/etc/init.d/usb-host` | **no** |
+| `xpad.ko` / `joydev.ko` / `ff-memless.ko`, force-loaded | **controller as `/dev/input/event*`** | `/lib/modules/4.14.52/extra` (p6) | **no** |
+| DTB `power` `0x32`→`0xfa` in `uImage-system` | 100 mA→**500 mA** budget, i.e. a pad with no powered hub | p1 | **yes** |
+
+So "the USB driver" is the first two, and they are eight files entirely on p6 — ordinary
+`provision-rules.conf` `install` + `link` records plus four bundled build artifacts, needing no new
+bundle verb. **The true statement is only that no bundle can deliver the 500 mA budget.**
 
 **Asked 2026-08-08: if we are gutting the vendor stack anyway, what is p1 being protected from?** Not
 the vendor software — that is all on p6/p2/p3/p5, and every bit of it is recoverable over SSH from a
@@ -543,37 +547,225 @@ media is a removable SD card, and a full-card `dd` restore is a demonstrated rou
 cost is a card pull, not a dead unit. What the rule actually protects is *unattended delivery*: a
 wall-mounted unit that fails to boot needs someone standing at it with a card reader.
 
-The constraint that genuinely forecloses the clean version is **U-Boot has no `saveenv`**
-([§4](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)), so `bootcmd` cannot be persistently repointed at a
-new filename. The repo's escape hatch for kernel work — "stage it under a new name, leave `uImage-system`
-alone" — only helps if you can *boot* the new name, which means interrupting U-Boot over serial every
-time. So patching `uImage-system` in place is the only route to a unit that comes up with USB by itself,
-and that route is the irreversible one.
+**Why the 500 mA value cannot be a boot-time script, when the driver fix can.** The obvious question —
+"why not ship it as a launch-time target like everything else?" — has a source-backed answer, read out of
+`usb_host/linux-4.14.52/` on 2026-08-08:
 
-**What would make it shippable, and the two measurements it waits on.** If the vendor `uImage-system` is
-byte-identical across units on the same firmware — plausible, since nothing generates it per-unit, unlike
-the filesystem UUIDs — then no new bundle verb is needed: ship a **pre-patched** `uImage-system` as an
-ordinary manifest entry with a stable md5, gated on the existing file's md5 matching a known-good vendor
-image, original preserved on p1 under another name. That fits `lib/rw-bundle.sh` as it stands. So:
+- `drivers/usb/musb/omap2430.c:452` — `of_property_read_u32(np, "power", (u32 *)&pdata->power)` reads the
+  value from the device tree **at driver probe**.
+- `drivers/usb/musb/musb_core.c:2369`/`:2381` — passes it on as `musb_host_setup(musb, plat->power)`.
+- `drivers/usb/musb/musb_host.c:2797` — `hcd->power_budget = 2 * (power_budget ? : 250);`
 
-1. **md5 p1's `uImage-system` across the gitignored full-card captures.** Offline, no device, no card.
-   If they differ, the whole approach is dead and this entry should say so.
-2. **Is the SD card reachable without disassembling the enclosure?** This is what decides whether the p1
-   rule is load-bearing or ceremony, and it is the one fact nobody has written down.
+The device tree is appended to the kernel image *inside* `uImage-system`, and the driver reads it before
+any init script exists. There is no file on the normal filesystem to edit. **That one number is the sole
+reason p1 enters the picture** — not the driver. The DMA/PIO fix persists as a boot script only because it
+patches a *static* kernel struct, which stays patched until reboot.
 
-Neither has been measured. Until #1 is, the "pre-patched image" idea is an idea.
+Line 2797 also records something worth keeping: the `? : 250` fallback means an **absent or zero**
+property would already yield 500 mA. The vendor deliberately set 100 mA, overriding a kernel default that
+was what we wanted. It is a vendor choice, not a hardware limit.
 
-The tension is real and this entry is where it gets resolved rather than rediscovered:
+**And `bootcmd` cannot be repointed**, because U-Boot has no `saveenv`
+([§4](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). The repo's escape hatch for kernel work — "stage it
+under a new name, leave `uImage-system` alone" — only helps if you can *boot* the new name, which means
+interrupting U-Boot over serial every time. So patching `uImage-system` in place is the only route to a
+unit that comes up with 500 mA by itself.
 
-- **Say so, cheaply.** `commissioning/commission-offline.sh`'s closing list and `COMMISSIONING.md` should state that a
-  commissioned unit has no USB host mode and name the one command that adds it. One line each; it
-  removes the surprise without touching the p1 rule.
-- **A patched kernel under a *new* filename on p1 is not the same as overwriting `uImage-system`** —
-  `bootcmd` is hardcoded, so a staged alternative is inert and a power cycle still recovers. Whether the
-  bundle should be allowed to *stage* one, without ever changing what boots, is the open design
-  question. It is not obviously safe: p1 is the one partition absent from `RW_PART_ROLES` precisely so
-  that no caller can reach it, and adding a reason to reach it weakens a guarantee that has held.
-- **Do not fold `usb_host` into a bundle before that is settled.** The exclusion is load-bearing.
+**Both measurements this decision rested on are answered.**
+
+1. ✅ **The vendor `uImage-system` is byte-identical across units**, measured 2026-08-08:
+   `edc637ac14f90e0187b1ed65ffedf6d7` on p1 of *both* full-card captures, in *both* units' p5
+   factory-restore payloads, and in RW09's own copy — five sources, three units. Nothing generates it
+   per-unit, unlike the filesystem UUIDs. So an md5-gated patch is sound.
+   `uImage-system-patched` is `a1fd1af8da18c430a34b24762aa16dab` and differs in **exactly 9 bytes**: the
+   uImage header CRC (offsets 4–7), the data CRC (24–27), and one value byte at `0x4FA2CF`.
+2. ✅ **The card needs the case popped open** — feasible, but it takes experience and an inexperienced
+   attempt can break the case. Answered by the user 2026-08-08. Their call: this is a README note under a
+   no-warranty heading, **not** a blocker.
+
+⚠️ **Never ship the vendor kernel binary.** `usb_host/.gitignore` already calls `uImage-system*`
+"Copyrighted device-specific files", and this repo is meant to be published. So the installer **derives**
+the patch from the device's own file with the committed `patch_dtb.py` rather than shipping a 5.2 MB
+Steelcase binary. The md5 gate on input plus the md5 assert on output makes that a complete check, and it
+keeps the bundle 5.2 MB smaller. `release.sh` gains a **copyright refusal** for any `uImage-system`
+manifest entry — the negative control for this rule, parallel to its existing config refusal.
+
+⚠️ **Bundling `xpad.ko` is GPL-2.0 redistribution** and needs a written source offer — vanilla kernel.org
+4.14.52 plus the committed `build-xpad-module.sh`. Cheap to satisfy, but it has to be written down, which
+is why a **`LICENSE.md` (MIT for our own code)** is part of this work. MIT is compatible with both
+GPL-2.0 and GPL-3.0, which matters because the repo ships GPL-2.0 module binaries *and* links into
+GPL-3.0+ ScummVM. Apache-2.0 would conflict with the former.
+
+✅ **DECIDED 2026-08-08, with the costs stated: the p1 power patch ships ON by default**, `--no-usb-power`
+as the opt-out, `--no-usb` (free from the `provision-rules.conf` group mechanism) implying it. The
+accepted cost is that **a power cycle is no longer a free undo** on a default-commissioned unit;
+`uImage-system.vendor` on p1 is the in-place remedy and a card pull is the fallback. Do not relitigate,
+and do not re-raise the card-access question as a risk.
+
+**Built 2026-08-08 — the p6 driver and the p1 patch mechanism. Two call sites left.**
+
+✅ **Done, and verified on this host:**
+
+- `device-files/enable-usb-host.sh`, `device-files/usb-host`, `device-files/xpad-modules` — the three
+  device scripts, `git mv`'d out of `usb_host/` and named as they are *deployed*, the
+  `roomwizard-app`/`S99roomwizard-app` precedent. `.gitattributes` already pins `device-files/**` to
+  `eol=lf`, which these `/bin/sh` scripts need.
+- `device-files/provision-rules.conf` — a new **`usb` group**: three `install` (0755), two `link`
+  (`S89xpad-modules` → `../init.d/xpad-modules`, `S90usb-host` → `../init.d/usb-host`, relative
+  sources), and one `unlink` of the module loader's former name `/etc/init.d/S89xpad-modules` —
+  nothing sweeps `/etc/init.d`, so without it the old copy would sit there forever.
+  `rw_provision_check_keeps` passes with no `clean-rules.conf` edit, as predicted.
+- `lib/rw-provision.sh` — the `usb` group in all three group lists, plus
+  **`rw_provision_plan_component FILE GROUP`**: a plan of ONE optional group, for a component script
+  installing its own payload standalone. A separate entry point rather than a flag, so a
+  commissioning path cannot reach a `base`-less plan by mistyping a group list; it refuses `base`.
+  The ordering awk moved into `_rw_provision_emit` so both entry points share it.
+- `usb_host/uimage.py` — the one implementation of "read a uImage, find the MUSB power property".
+  ⚠️ The DTB is **found**, not asserted at `0x4eb788`: that offset is tried first as a hint, and a
+  candidate must carry a valid FDT header **and** yield `power` inside a `usb_otg_hs` node, because a
+  compressed kernel payload can contain `d00dfeed` by accident. Asserting the offset is what made a
+  small synthetic test fixture impossible.
+- `usb_host/patch_dtb.py` — rewritten: `<in> <out>` on argv (B19's cwd hazard), the input's own CRCs
+  checked *before* patching, and a refusal rather than a rewrite on an unexpected power value.
+  Measured: it reproduces `a1fd1af8da18c430a34b24762aa16dab` byte-for-byte from the vendor image, and
+  `cmp -l` gives exactly the 9 recorded bytes — `0x4`–`0x7`, `0x18`–`0x1B`, `0x4FA2CF`.
+- `usb_host/verify_uimage.py` — magic, both CRCs, the header's own size field, and the power value;
+  `--expect-power` turns the reading into an assertion. Pure Python, no `mkimage`/`dtc`.
+- `lib/rw-usbpower.sh` — the gate/backup/patch/verify/rollback sequence, once, with the transport
+  behind six primitives (`RWUP_XPORT` = `local` | `ssh`, `$RW_SSH`/`$RW_SCP` overridable for tests).
+  All four outcomes measured against a synthetic p1 carrying the real vendor image: dry run, patch,
+  idempotent re-run, and refusal on a third md5.
+- `lib/rw-identify.sh` — `RW_BOOT_PARTITION`, `rw_card_boot_partition`, `rw_is_boot_tree`,
+  `rw_mount_boot`, `rw_umount_boot`. `RW_PART_ROLES` is unchanged and
+  `tests/rw_identify_test.sh`'s p1-absence assertion still passes untouched.
+- `usb_host/build-and-deploy.sh` — rewritten. `--bundle <dir>` stages the four artifacts from one
+  declared `USB_ARTIFACTS` table; `--no-usb-power` skips p1; the three scripts and two links now come
+  from `rw_provision_plan_component` run through the *same* generated online executor
+  `commissioning/provision.sh` uses, so its own `scp`/`chmod`/`ln -sf` sequence is gone. The ARM gate
+  runs on all four artifacts before either path, and ⚠️ **exit 2 is fatal here** unlike in
+  `commission-offline.sh`: every `usb_host` artifact is unstripped by construction, so "could not
+  judge" means the build changed. Measured: `checked=4 unverified=0 bad=0`.
+- `release.sh` — `usb_host` added to `RELEASE_COMPONENTS`, the "excluded, it patches p1" header
+  rewritten, a **vendor-firmware refusal** beside the config one (`uImage*`, `mlo`, `u-boot*`,
+  `ctrlblock*`, matched on the basename because p1 is not a bundle path at all), and the `NOTICE`
+  gained the **GPL-2.0 written source offer** for the three `.ko`s.
+- Deleted `usb_host/find_dtb.py` and `usb_host/verify_patch.sh`. The first is a second, unguarded
+  copy of the `d00dfeed` scan — exactly the false-positive `uimage.py` now refuses; the second
+  shelled out to `mkimage`/`dtc` from a hardcoded `/mnt/c/work/roomwizard/usb_host` and could not run
+  on this host at all.
+- Host suites after the change: `rw_provision_test` 94/94, `rw_identify_test` 37/37,
+  `rw_clean_test` 148/148, `c11_plan_diff` clean on both plans. Group E picks the new `usb` records up
+  automatically, which is the check that the two executors agree about them.
+
+⬜ **Left, in order:**
+
+1. **Wire `lib/rw-usbpower.sh` into the two commissioning entry points**, defaulting ON with
+   `--no-usb-power` as the opt-out and `--no-usb` implying it. `commissioning/provision.sh` calls
+   `rw_usbpower_apply_ssh`; `commissioning/commission-offline.sh` calls `rw_mount_boot` →
+   `rw_usbpower_apply_offline` → `rw_umount_boot`, with the unmount reachable from
+   `cleanup_and_exit` too or an aborted run leaks a p1 mount. Both need the p1 verdict in the closing
+   summary, and `commission-offline.sh`'s closing block still says "Not installed, and no bundle can
+   install it: USB HOST MODE" — which is now false and is the last statement of the old belief.
+   **Until this lands, the only path that delivers USB is `usb_host/build-and-deploy.sh <ip>`**, which
+   does work end to end including p1.
+2. **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)**, folded in: same rewrite of `provision.sh`'s defaults, `--help` and
+   closing summary, and the same loud non-TTY consent banner must cover both the auto-answered backup
+   question and the p1 write.
+3. **`tests/rw_usbpower_test.sh`** (host-only, no card, no root) and
+   **`tests/measure_usbpower_sabotage.sh`**. ⚠️ Synthetic fixtures only — the vendor kernel is
+   gitignored and must not be committed, and `uimage.py`'s magic-scan discovery is what makes a small
+   generated uImage with a minimal `usb_otg_hs` FDT usable as one. Cover the CRC validator (flipped
+   payload byte, flipped header byte, wrong magic, wrong size field), the md5 gate's three outcomes,
+   backup-before-write, the `.new` staging, and rollback. Write the failing version first.
+4. **`LICENSE.md`** — MIT, plus the third-party enumeration. The source offer is already in
+   `release.sh`'s `NOTICE`; `LICENSE.md` is the repo-level half.
+5. **`COMMISSIONING.md`, `usb_host/README.md`'s manual playbook, `README.md`** — the new defaults and
+   flags. `usb_host/README.md`'s File Reference and its Steps 4/6 still name the pre-move paths.
+
+⚠️ **Not attempted and not needed: `usb_host` does not appear in `deploy-all.sh`'s bundle path by any
+new mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive
+there for free — but a bundle install does **not** patch p1 and does not install the three device
+scripts. Those come from `commissioning/provision.sh`, which is item 1.
+
+**One scoped experiment would retire the p1 path entirely, and is worth trying first.** Patch the
+**in-RAM** copy of the `usb_otg_hs` `power` property via `/dev/mem`: verify it reads `0x00000032`, write
+`0x000000fa`, rebind, confirm 500 mA. That is the *same* mechanism as the existing `omap2430_ops` patch
+aimed at a different target, and it would make the 500 mA fix an ordinary boot script.
+⚠️ **This is not the sysfs override already recorded as failed** in `usb_host/README.md`'s *Failed
+Approaches* — sysfs exposes no writable `power_budget`; `/dev/mem` against the unflattened tree was never
+tried (`git log -p --follow -- usb_host/enable-usb-host.sh` shows no power-related code, ever). The open
+risk is address stability: `omap2430_ops` is a *static* symbol at a fixed address, which is why the
+existing patch can self-verify against `quirks == 0x00000004`, whereas the unflattened DT is early-boot
+allocated. One SSH session, no panel time.
+
+---
+
+### F17. Bluetooth peripherals, and whether USB DMA is reachable — open, measured 2026-08-08
+
+**The want:** a wireless game controller and a headset or speaker for ScummVM. The unit is PoE-wired, the
+Xbox pad is wired, and the integrated speaker is poor
+([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable, and the one that carries sound
+is the worst-sounding one.
+
+⚠️ **DMA and Bluetooth are independent, and DMA is not what unblocks Bluetooth.** BT is
+bandwidth-trivial: A2DP is tens of KB/s and a controller is a few hundred bytes/s, which PIO handles
+easily. Do not treat "get DMA working" as a prerequisite.
+
+**Bluetooth needs a USB dongle — there is no radio on the board.** No WiFi and no Bluetooth is fitted
+([§2.4](SYSTEM_ANALYSIS.md#24-unpopulated-and-expansion)). The only radio site is `J5`/`J6`, an **XBee
+802.15.4** socket, empty in all three units, on UART3 which is `disabled` in the device tree — XBee is
+Zigbee and cannot host Bluetooth. And there is no second USB port and no footprint for one
+([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
+
+**The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
+as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left)'s
+three modules — and that precedent worked. Every hard dependency is satisfiable, measured from
+`usb_host/device_config`:
+
+| Need | State | Consequence |
+|---|---|---|
+| `CONFIG_NET`, `CONFIG_CRC16`, `CONFIG_HID` | `=y` | built in, nothing to do |
+| `CONFIG_CRYPTO_AES` | `=y` | built in |
+| `CRYPTO_SHA256`, `CRYPTO_BLKCIPHER`, `CRYPTO_ECB`, `CRYPTO_CMAC` | `=m` | ⚠️ the `.ko`s must be **built and shipped** — the device's `/lib/modules/4.14.52/` ships empty |
+| `CONFIG_CRYPTO_ECDH` | not set | needed only for BT LE Secure Connections; buildable as a module |
+| `CONFIG_RFKILL` | not set | optional for `bluetooth`/`btusb`, not a blocker |
+
+Module set: `bluetooth.ko`, `btusb.ko`, a dongle-specific firmware loader (`btrtl`/`btintel`/`btbcm`),
+`hidp.ko` for the controller. Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y` and
+`CONFIG_MODULE_SIG` unset.
+
+⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
+on one 600 MHz core that ScummVM already holds at ~32 %
+([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
+already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
+than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
+— this overlaps [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff). A2DP's
+~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The controller half is
+much more likely to land than the audio half; do not sell them as one feature.**
+
+**Can we get USB DMA?** Probably, but it is research with a worse failure mode than today's.
+`# CONFIG_USB_INVENTRA_DMA is not set`, so `musbhsdma.c` is not compiled at all. ⚠️ **The
+`CONFIG_DMADEVICES=y` / `CONFIG_TI_EDMA=y` that *are* set are a red herring** — that is the **system**
+EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses;
+`CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
+`CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
+could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
+family as [F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left)'s
+existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
+controller scribbles into RAM.** No kernel rebuild is available to do it the clean way
+([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+
+**Where the two questions do connect.** `CONFIG_SND=y` and `CONFIG_SND_USB=y` but
+`# CONFIG_SND_USB_AUDIO is not set` — so a **wired USB DAC** is also one module build away, with no
+encoding, no pairing and no latency, and it fixes the speaker complaint directly. But uncompressed PCM at
+48 kHz stereo is ~190 KB/s over PIO, which is where DMA would start to pay. **BT audio: low bandwidth,
+high CPU. USB audio: high bandwidth, low CPU.** If the goal is "sound that does not suck", the DAC is the
+cheaper experiment; if it is "no cables", it is Bluetooth.
+
+**Two cross-cutting constraints on any dongle:** it draws ~50–100 mA, which is marginal against the
+current 100 mA budget — an *independent* argument for F15's 500 mA patch — plus the 802.3af power budget
+and the case's total lack of ventilation slots
+([§2.4](SYSTEM_ANALYSIS.md#24-unpopulated-and-expansion)).
 
 ---
 
@@ -1079,9 +1271,11 @@ Deliberately not a ranking of everything — only the claims worth making.
 has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
 item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
 cannot fire here. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
-not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) and
-[F15](#f15-usb-host-mode-is-unreachable-from-the-delivery-flow--open-confirmed-2026-08-06) are recorded
-rather than planned, because the honest answers are a bootable image and a p1 decision respectively.
+not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
+recorded rather than planned, because the honest answer is a bootable image.
+[F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left) is **planned**:
+both measurements it rested on are in the entry, the p1 decision is taken, and C13 is folded into the same
+pass.
 
 [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
 is **the next thing to write**: the decision is made and recorded, the measurements are in the entry,

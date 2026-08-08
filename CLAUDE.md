@@ -104,11 +104,11 @@ cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 ```
 
 **Three directories, three jobs.** `lib/` holds the sourced-not-executed libraries (`rw-identify.sh`,
-`rw-clean.sh`, `rw-bundle.sh`, `rw-provision.sh`, `rw-ssh.sh`) — at the top level, not under
-`commissioning/`, because the component build scripts source `rw-bundle.sh` on the *write* side while
-the commissioner reads it, and all seven SSH-using scripts source `rw-ssh.sh`. `commissioning/` holds
-the bring-up scripts, none of which is an answer to "what do I run" except through `roomwizard.sh`.
-`device-files/` holds what is installed onto a device verbatim. The
+`rw-clean.sh`, `rw-bundle.sh`, `rw-provision.sh`, `rw-ssh.sh`, `rw-usbpower.sh`) — at the top level, not
+under `commissioning/`, because the component build scripts source `rw-bundle.sh` on the *write* side
+while the commissioner reads it, and all seven SSH-using scripts source `rw-ssh.sh`. `commissioning/`
+holds the bring-up scripts, none of which is an answer to "what do I run" except through
+`roomwizard.sh`. `device-files/` holds what is installed onto a device verbatim. The
 three scripts at the root are the three front doors: `roomwizard.sh`, `deploy-all.sh`, `release.sh`.
 
 `--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
@@ -122,8 +122,7 @@ other only by that file's `sweeps` group.
 ### Bundles: one layout, declared modes, no configs
 
 `release.sh` exists so that putting apps on a device does not require reproducing the toolchain
-(`IMPROVEMENT_PLAN.md` F9). It calls `build-and-deploy.sh --bundle <dir>` on `native_apps`,
-`vnc_client` and `scummvm-roomwizard` — **never `usb_host`**, which patches `uImage-system` on p1. The
+(`IMPROVEMENT_PLAN.md` F9). It calls `build-and-deploy.sh --bundle <dir>` on all four components. The
 layout lives in **`lib/rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
 `<dir>/manifest.d/<component>.{list,md5}`.
 
@@ -137,6 +136,12 @@ layout lives in **`lib/rw-bundle.sh`** and nowhere else: `<dir>/root/<device-pat
   `/etc/hostname`, `rw_config`, `touch_calibration`, `input_config`). Not a rule each component is
   trusted to remember — the negative control for the one that forgets. Device config carries the
   `/etc/hosts` mapping of D7 and `vnc_client`'s plaintext VNC password.
+- ⚠️ **And it refuses to publish vendor firmware** — any entry whose basename is `uImage*`, `mlo`,
+  `u-boot*` or `ctrlblock*`. Matched on the basename, not a path, because p1 is not a bundle path at
+  all: a staged copy would arrive at some invented location. `uImage-system` is a 5.2 MB Steelcase
+  binary and this repo is meant to be published, which is why the USB 500 mA patch is **derived** from
+  the device's own copy (`lib/rw-usbpower.sh`) rather than shipped. `usb_host`'s `--bundle` carries the
+  four *built* artifacts only.
 - **`--stage-only` is the tested path; `--tag` has never run.** `gh` 2.86.0 is now installed in WSL
   (from the release `.deb` — focal's apt has no `gh`, and the snap links against a glibc newer than
   2.31), so the publish step is reachable but still unexercised. The tarball `--stage-only` produces is
@@ -197,7 +202,8 @@ manifest to a file, then copy it**; never emit one from inside an `ssh` heredoc 
 
 Anything installed onto a device **verbatim** by more than one path lives in `device-files/`, never in a
 heredoc: `roomwizard-app` (the boot init script, which is why it carries the name it is *deployed* as
-rather than a `.sh` one), `disable-steelcase.sh`, `audio-enable`, `time-sync`, `99-security.conf`, plus
+rather than a `.sh` one), `disable-steelcase.sh`, `audio-enable`, `time-sync`, `99-security.conf`, the
+three USB scripts `enable-usb-host.sh` / `usb-host` / `xpad-modules`, plus
 the two data files `clean-rules.conf` and
 `provision-rules.conf`. Both `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted
 card) install those same bytes, and neither decides *what* to install or delete — both read the rules.
@@ -240,6 +246,16 @@ the delete half.
   only sets the declared mode. Check it with `dash -n`, not `bash -n` — it runs under BusyBox ash.
 - **`--keep-<group>` switches off part of the clean; `--no-<group>` part of the provision.** Each is
   named after the groups in its own data file, so neither list is repeated in a script.
+- ⚠️ **`usb` is a provision group, and a component script compiles it through
+  `rw_provision_plan_component`, not through its own `scp`/`ln -sf`.** `usb_host` is three independent
+  mechanisms and **only one touches p1** — do not treat the p1 rule as a blocker on USB
+  (`IMPROVEMENT_PLAN.md` F15): the `/dev/mem` MUSB patch and the `xpad`/`joydev`/`ff-memless` modules
+  are entirely on p6. So the three device scripts and the two `rc5.d` links are ordinary `usb`-group
+  records, the four built artifacts travel in the bundle, and **only the 500 mA power budget** is
+  `lib/rw-usbpower.sh`'s p1 write. `rw_provision_plan_component FILE GROUP` compiles one optional
+  group's records for `usb_host/build-and-deploy.sh` — a separate entry point rather than a flag on
+  `rw_provision_plan`, and it refuses `base`, so a commissioning path cannot reach a base-less plan by
+  mistyping a group list.
 - Regression: `tests/rw_provision_test.sh` (94 cases, host-only, no card, no root). Its group E is the
   one that matters: **both executors' `--dry-run` over the same plan must print the same resolved set**,
   compared through `rw_provision_canonical`, which strips only the resolved host path. That is the sole
@@ -354,6 +370,7 @@ misparses.
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
+| `usb_host/devmem_write.c`, `build-xpad-module.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
 
 When in doubt, over-deploy. The failure mode is silent.
 
@@ -520,11 +537,19 @@ tool-level traps rather than device facts, and each has cost real time.
   timers to current time, not epoch 0.
 - **Firmware / boot edits.** There is **no boot-time MD5 check** of the kernel and no signing — the
   only gate on `uImage-system` is its uImage header + data CRC (which `usb_host/patch_dtb.py`
-  recomputes correctly). U-Boot has no `saveenv`, so the environment cannot be persisted or corrupted.
-  **Rules:** never write `/dev/mtd*`; never overwrite `mlo`, `u-boot.bin` or `ctrlblock.bin` on p1;
-  stage experimental kernels under a *new* filename and leave `uImage-system` alone — `bootcmd` is
-  hardcoded to it, so a power cycle is a free undo. Observe that and JTAG never comes up. Detail and
-  recovery procedure: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
+  recomputes correctly, and `usb_host/verify_uimage.py` checks in pure Python — no `mkimage`, no
+  `dtc`, neither of which is installed here). U-Boot has no `saveenv`, so the environment cannot be
+  persisted or corrupted.
+  **Rules:** never write `/dev/mtd*`; **never** overwrite `mlo`, `u-boot.bin` or `ctrlblock.bin` on p1;
+  stage experimental kernels under a *new* filename. `uImage-system` has **exactly one** legitimate
+  writer — `lib/rw-usbpower.sh`, for the USB 500 mA budget — and it is md5-gated on the way in,
+  backed up to `uImage-system.vendor` (whose md5 is verified *before* the original is touched),
+  verified by re-reading the card afterwards, and rolled back on failure. ⚠️ **Never write a second
+  copy of that sequence into a caller**: it is the one step `tests/rw_provision_test.sh` group E cannot
+  compare between executors, so a duplicate would drift undetected. p1 is reached only through
+  `rw_card_boot_partition` / `rw_mount_boot` / `rw_umount_boot` — `RW_PART_ROLES` still does not
+  contain p1 and a test still asserts that. Observe all of the above and JTAG never comes up. Detail
+  and recovery procedure: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component build rules
 
@@ -608,9 +633,13 @@ the dev host's root would rewrite this host's `/etc/shadow`; `rw_host_root_disk`
 Reasoning: `COMMISSIONING.md` → *Finding the card*; measurements: `SYSTEM_ANALYSIS.md#42-partitions`.
 
 ⚠️ **p1 is deliberately absent from `RW_PART_ROLES`, and a test asserts its absence.** Nothing can
-reach `mlo`, `u-boot.bin`, `ctrlblock.bin` or `uImage-system` through those functions — which is a
-stronger guarantee than every caller remembering not to, and it is what keeps a power cycle a free
-undo. p4 (extended container) and p7 (swap) are absent for the same reason: nothing to mount.
+reach `mlo`, `u-boot.bin` or `ctrlblock.bin` through those functions — a stronger guarantee than every
+caller remembering not to. p4 (extended container) and p7 (swap) are absent for the same reason:
+nothing to mount. The **one** exception is `uImage-system`, reached by three deliberately-named
+functions (`rw_card_boot_partition`, `rw_mount_boot`, `rw_umount_boot`) with exactly one caller,
+`lib/rw-usbpower.sh` — greppable, and a strictly smaller surface than widening the role table, which
+every existing caller iterates blindly. `rw_umount_boot` must be reachable from a caller's failure
+trap too, or an aborted run leaks a p1 mount.
 
 ⚠️ **A rootfs mounted offline shows `/home/root/{data,log,backup}` as three EMPTY directories** — they
 are mount points for p2/p3/p5. An offline tool that mounts only p6 sees no `websign/` (the network

@@ -486,3 +486,133 @@ rw_check_card_mounts() {
 
     [ "$bad" -eq 0 ]
 }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# p1 — reached by NAME, by one caller, and never through the role table
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ⚠️ p1 stays out of RW_PART_ROLES, and tests/rw_identify_test.sh keeps asserting
+# its absence. Everything above therefore still cannot reach mlo, u-boot.bin or
+# ctrlblock.bin, which is the guarantee that matters — those three have no
+# recovery path short of a card reader, and nothing in this repo has a reason to
+# write them.
+#
+# What DOES need p1 is one number: the `power` property of usb_otg_hs inside
+# uImage-system, 0x32 -> 0xfa, i.e. 100 mA -> 500 mA. omap2430.c:452 reads it at
+# driver probe, before any init script exists, and the device tree is appended to
+# the kernel inside that file — so there is no file on the normal filesystem to
+# edit and no boot script that could do it (IMPROVEMENT_PLAN.md F15).
+#
+# The reach is therefore three deliberately-named functions rather than a table
+# entry, used by exactly ONE caller (lib/rw-usbpower.sh). That is greppable —
+# `grep -rn rw_mount_boot` finds every site — and a strictly smaller surface than
+# widening RW_PART_ROLES, which every existing caller iterates blindly.
+#
+# ⚠️ rw_umount_boot must be reachable from the failure path too, or an aborted run
+# leaves p1 mounted and the operator pulls the card mid-write.
+RW_BOOT_PARTITION=1
+
+# The files p1 carries. uImage-system is the only one anything here may write;
+# the other three are named so that a caller can assert it is looking at p1 and
+# not at some other FAT partition that happens to be first.
+RW_BOOT_MARKERS="mlo u-boot.bin uImage-system"
+
+# ---------------------------------------------------------------------------
+# rw_card_boot_partition DISK
+#
+# Echo the device node of DISK's boot partition. Name arithmetic only, like
+# rw_card_partitions — the caller has already established the layout.
+# ---------------------------------------------------------------------------
+rw_card_boot_partition() {
+    local disk="$1"
+    [ -n "$disk" ] || return 1
+    rw_part_dev "$disk" "$RW_BOOT_PARTITION"
+}
+
+# ---------------------------------------------------------------------------
+# rw_is_boot_tree DIR
+#
+# 0 if DIR looks like a mounted p1. Content, not position — because this is the
+# check that a --boot-base given by hand names the boot partition rather than
+# some other FAT volume. Case-insensitive: p1 is FAT and the vendor's own names
+# are lower-case, but a case-preserving mount elsewhere is not worth refusing on.
+# ---------------------------------------------------------------------------
+rw_is_boot_tree() {
+    local d="${1:-}" m f found
+    [ -n "$d" ] || return 1
+    case "$d" in */) d="${d%/}" ;; esac
+    [ -d "$d" ] || return 1
+    for m in $RW_BOOT_MARKERS; do
+        found=0
+        for f in "$d/$m" "$d/$(echo "$m" | tr '[:lower:]' '[:upper:]')"; do
+            [ -f "$f" ] && found=1
+        done
+        [ "$found" = 1 ] || return 1
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_mount_boot DISK BASE
+#
+# Mount DISK's p1 read-write at BASE/boot and echo "boot <mountpoint>".
+# Needs root. Refuses the host's own disk first, exactly as rw_mount_card does.
+#
+# Kept OUT of rw_mount_card deliberately: the four-partition mount is used by
+# every offline path, and folding p1 into it would put a writable boot partition
+# under every one of them for the sake of a single optional step.
+# ---------------------------------------------------------------------------
+rw_mount_boot() {
+    local disk="$1" base="$2" part mp
+    [ -n "$disk" ] && [ -n "$base" ] || return 1
+
+    if rw_is_host_root_disk "$disk"; then
+        echo "rw_mount_boot: $disk is this host's root disk — refusing" >&2
+        return 1
+    fi
+    if ! rw_is_card_disk "$disk"; then
+        echo "rw_mount_boot: $disk does not carry the RoomWizard partition layout" >&2
+        return 1
+    fi
+
+    part=$(rw_card_boot_partition "$disk") || return 1
+    mp="$base/boot"
+    mkdir -p "$mp" || return 1
+    # vfat named explicitly, with an auto fallback: p1 IS FAT, and saying so means
+    # a kernel without vfat autodetection still mounts it. A failure here is not
+    # fatal to commissioning — the caller reports it and carries on with p6.
+    if ! mount -t vfat "$part" "$mp" 2>/dev/null; then
+        if ! mount "$part" "$mp" 2>/dev/null; then
+            echo "rw_mount_boot: could not mount $part on $mp" >&2
+            rmdir "$mp" 2>/dev/null
+            return 1
+        fi
+    fi
+    if ! rw_is_boot_tree "$mp"; then
+        echo "rw_mount_boot: $part mounted, but does not carry $RW_BOOT_MARKERS — refusing" >&2
+        rw_umount_boot "$base"
+        return 1
+    fi
+    echo "boot $mp"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_umount_boot BASE
+#
+# Unmount whatever rw_mount_boot put under BASE. Idempotent and never an error:
+# it is called from rw_mount_boot's own failure path and from a trap, where a
+# non-zero status would mask the real problem. sync before the operator pulls the
+# card — this one wrote the boot partition.
+# ---------------------------------------------------------------------------
+rw_umount_boot() {
+    local base="$1"
+    [ -n "$base" ] || return 0
+    if mountpoint -q "$base/boot" 2>/dev/null; then
+        sync
+        umount "$base/boot" 2>/dev/null
+    fi
+    rmdir "$base/boot" 2>/dev/null
+    sync
+    return 0
+}

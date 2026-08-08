@@ -30,10 +30,23 @@
 #     VNC password.  A glob that swept up *.conf would publish exactly what those
 #     two exist to have removed.  Each component's --bundle decides; this script
 #     re-checks below.
-#   * The vendor image or any part of it — a third party's copyright.
-#   * usb_host.  It patches uImage-system, which lives on p1, and the offline
-#     installer must never touch p1: an untouched p1 is what keeps a power cycle
-#     a free undo (SYSTEM_ANALYSIS.md#47-recovery).
+#   * The vendor image or any part of it — a third party's copyright.  In
+#     particular uImage-system, which usb_host patches: the installer DERIVES the
+#     patch from the card's own copy (lib/rw-usbpower.sh, md5-gated in and
+#     md5-asserted out) rather than shipping 5.2 MB of Steelcase kernel.  The
+#     manifest check below is the negative control for that rule, exactly parallel
+#     to the config one.
+#
+# ── usb_host IS published, and only its p1 step is not ──────────────────────
+#
+# It was excluded outright until 2026-08-08, on the grounds that it "patches
+# uImage-system, which lives on p1".  That conflated three mechanisms
+# (IMPROVEMENT_PLAN.md F15): the /dev/mem MUSB patch and the xpad/joydev modules
+# are entirely on p6, and it is only the 500 mA power budget that touches p1.  So
+# the four build artifacts are bundled like any others; the three device scripts
+# are device-files/provision-rules.conf's `usb` group; and the p1 patch is a
+# separate, opt-out-able step of the installer that no bundle carries.
+
 #
 # ── Not byte-reproducible ───────────────────────────────────────────────────
 #
@@ -68,10 +81,14 @@ warn() { echo -e "${BLUE}  ! $*${NC}"; }
 err()  { echo -e "${RED}  ✗ $*${NC}" >&2; exit 1; }
 
 # ── the components a release carries ────────────────────────────────────────
-# usb_host is absent on purpose — see the header.  Order matters only in that
-# native_apps writes /opt/roomwizard/default-app and the app_launcher every other
-# component's tile is reached through.
-RELEASE_COMPONENTS=(native_apps vnc_client scummvm-roomwizard)
+# Order matters only in that native_apps writes /opt/roomwizard/default-app and
+# the app_launcher every other component's tile is reached through.
+#
+# usb_host is here as of 2026-08-08 (IMPROVEMENT_PLAN.md F15). Its --bundle needs
+# usb_host/device_config and usb_host/modules/*.ko, both gitignored build
+# artifacts; on a fresh clone it refuses with the one command that fetches the
+# config from any unit.
+RELEASE_COMPONENTS=(native_apps vnc_client scummvm-roomwizard usb_host)
 
 usage() {
     echo "Usage: $0 --stage-only [--out <dir>] [--component <name>]..."
@@ -84,7 +101,7 @@ usage() {
     echo "                    ${RELEASE_COMPONENTS[*]}"
     echo "  --notes <file>    Release notes for gh (default: generated)."
     echo ""
-    echo "Components: ${RELEASE_COMPONENTS[*]}   (usb_host is excluded: it patches p1)"
+    echo "Components: ${RELEASE_COMPONENTS[*]}"
     exit 1
 }
 
@@ -208,13 +225,36 @@ Links LibVNCClient (GPLv2+), zlib (zlib licence) and libjpeg-turbo
 
 native_apps
 -----------
-This project's own code, statically linked against glibc (LGPL-2.1+).
+This project's own code (MIT — see LICENSE.md), statically linked against glibc
+(LGPL-2.1+).
+
+usb_host
+--------
+`devmem_write` is this project's own code (MIT).
+
+⚠️ `ff-memless.ko`, `joydev.ko` and `xpad.ko` are LINUX KERNEL MODULES and are
+licensed under the GNU General Public License, version 2 (GPL-2.0-only), as is
+the kernel they are built against.  WRITTEN OFFER FOR SOURCE: the complete
+corresponding source is the unmodified upstream Linux 4.14.52 tree, as published
+at
+
+    https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.14.52.tar.xz
+
+together with the kernel configuration and build script in this project's
+repository at `usb_host/build-xpad-module.sh`.  No kernel source was modified;
+the three modules are upstream drivers compiled for this device's kernel
+configuration, which is read off the device itself.  This offer is honoured for
+the lifetime of the release.
 
 Not included
 ------------
 No device configuration is published, deliberately: /etc/hosts carries a
 host-name mapping that exists in order to be removed, and vnc_client.conf carries
 a plaintext VNC password.  Create the latter on the device after installing.
+
+No vendor firmware is published either.  In particular this bundle does NOT
+contain `uImage-system`: the USB 500 mA power patch is derived on the spot from
+the copy already on the device, gated on its md5 and backed up first.
 NOTICE
 
 # ── structural + policy checks on what was staged ───────────────────────────
@@ -235,6 +275,27 @@ if [[ -n "$CONFIG_HITS" ]]; then
     err "a release must publish binaries only, never device config (IMPROVEMENT_PLAN.md F9)"
 fi
 ok "No config files staged"
+
+# The never-publish-the-vendor-kernel rule, enforced rather than trusted — the
+# negative control for lib/rw-usbpower.sh's "derive, don't ship" design and the
+# reason a bundle stays 5.2 MB smaller.  usb_host/.gitignore already calls
+# uImage-system* "Copyrighted device-specific files"; this repo is meant to be
+# published, so a component that decided to stage one anyway must not get past
+# here (IMPROVEMENT_PLAN.md F15).
+#
+# Matched on the BASENAME, not on a path: p1 is not a bundle path at all, so a
+# staged copy would arrive at some invented location like /opt/roomwizard/ — the
+# hazard is the bytes, wherever they are put.
+info "Checking that no vendor firmware was staged..."
+FIRMWARE_HITS="$(rw_bundle_entries "$OUT_ABS" | awk '{print $2}' \
+    | grep -E '(^|/)(uImage[^/]*|mlo|MLO|u-boot[^/]*|ctrlblock[^/]*)$' || true)"
+if [[ -n "$FIRMWARE_HITS" ]]; then
+    echo "$FIRMWARE_HITS" | sed 's/^/    /'
+    err "a release must never publish the vendor kernel or boot chain — it is a third
+     party's copyright, and the usb_host power patch is DERIVED from the device's
+     own copy for exactly this reason (IMPROVEMENT_PLAN.md F15)"
+fi
+ok "No vendor firmware staged"
 
 FILE_COUNT="$(rw_bundle_entries "$OUT_ABS" | grep -c . || true)"
 info "$FILE_COUNT file(s) staged:"

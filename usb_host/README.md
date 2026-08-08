@@ -124,7 +124,7 @@ legacy uImage at offset `0x4eb788` (67,004 bytes). We binary-patch it in place:
 The patch is:
 
 - **Persistent** — survives reboots (written to the boot partition)
-- **Reversible** — a backup (`uImage-system.bak`) is created before patching
+- **Reversible** — a backup (`uImage-system.vendor`) is created before patching
 - **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
 
 #### DTB Location in uImage
@@ -442,7 +442,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
-| Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.bak uImage-system` |
+| Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
 
 ---
 

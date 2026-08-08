@@ -57,9 +57,9 @@
 # p2/p3/p5/p6 is the offline executor's job.
 
 RW_PROVISION_TYPES="install link link-opt unlink touch backup directive dropline"
-RW_PROVISION_GROUPS_ALL="base mdns sshd"
-RW_PROVISION_GROUPS_DEFAULT="base mdns sshd"
-RW_PROVISION_GROUPS_OPTIONAL="mdns sshd"
+RW_PROVISION_GROUPS_ALL="base mdns sshd usb"
+RW_PROVISION_GROUPS_DEFAULT="base mdns sshd usb"
+RW_PROVISION_GROUPS_OPTIONAL="mdns sshd usb"
 
 rw_provision_default_groups()  { echo "$RW_PROVISION_GROUPS_DEFAULT"; }
 rw_provision_optional_groups() { echo "$RW_PROVISION_GROUPS_OPTIONAL"; }
@@ -299,8 +299,57 @@ rw_provision_plan() {
         return 1
     fi
 
-    # ⚠️ Order is emitted here, not read from the file, so a rule added in the wrong
-    # place in the data file cannot produce a plan that installs after it links.
+    _rw_provision_emit "$file" "$groups"
+}
+
+# ---------------------------------------------------------------------------
+# rw_provision_plan_component FILE GROUP
+#
+# Compile ONLY GROUP's records — for a COMPONENT deploy script that installs its
+# own group's verbatim files standalone, without provisioning a whole device.
+# usb_host/build-and-deploy.sh is the only caller.
+#
+# ⚠️ A separate entry point with a separate name rather than a flag on
+# rw_provision_plan, so that a commissioning path cannot reach a base-less plan by
+# mistyping a group list — and it refuses `base` for the mirror-image reason: the
+# base group is a whole device's boot service, not one component's payload.
+#
+# What this buys: the component script does not restate its own install records,
+# modes or boot links. Before this it carried its own scp/chmod/ln -sf sequence,
+# which is precisely the drift C12 exists to remove — and it HAD drifted, in that
+# it installed the module loader as /etc/init.d/S89xpad-modules while the rest of
+# the repo names init scripts after what they are.
+# ---------------------------------------------------------------------------
+rw_provision_plan_component() {
+    local file="$1" group="$2" found=0
+
+    [ -f "$file" ]  || { echo "rw_provision_plan_component: no such file: $file" >&2; return 1; }
+    [ -n "$group" ] || { echo "rw_provision_plan_component: no group" >&2; return 1; }
+
+    case " $RW_PROVISION_GROUPS_OPTIONAL " in *" $group "*) found=1 ;; esac
+    if [ "$found" != 1 ]; then
+        echo "rw_provision_plan_component: '$group' is not an optional group ($RW_PROVISION_GROUPS_OPTIONAL)" >&2
+        return 1
+    fi
+
+    if ! rw_provision_validate "$file" >/dev/null; then
+        echo "rw_provision_plan_component: $file does not validate:" >&2
+        rw_provision_validate "$file" >&2
+        return 1
+    fi
+
+    _rw_provision_emit "$file" "$group"
+}
+
+# ---------------------------------------------------------------------------
+# _rw_provision_emit FILE GROUPS
+#
+# The ordering, in ONE place. ⚠️ Order is emitted here, not read from the file, so
+# a rule added in the wrong place in the data file cannot produce a plan that
+# installs after it links.
+# ---------------------------------------------------------------------------
+_rw_provision_emit() {
+    local file="$1" groups="$2"
     rw_provision_parse "$file" | awk -F'\t' -v enabled=" $groups " '
         function on(g) { return index(enabled, " " g " ") > 0 }
         {
