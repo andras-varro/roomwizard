@@ -535,6 +535,34 @@ bundle, deliberately. So no bundle can ever deliver USB, and nothing in the flow
 the kernel-module build deps (`bc libssl-dev bison flex`) plus `python3`, i.e. a full toolchain host —
 which is exactly what the delivery mode does not have.
 
+**Asked 2026-08-08: if we are gutting the vendor stack anyway, what is p1 being protected from?** Not
+the vendor software — that is all on p6/p2/p3/p5, and every bit of it is recoverable over SSH from a
+running unit. p1 holds only the boot chain, and the asymmetry is the *recovery path*: break p6 and you
+still have SSH, break p1 and there is no SSH to fix it from. ⚠️ **But "brick" overstates it** — the boot
+media is a removable SD card, and a full-card `dd` restore is a demonstrated routine here, so the real
+cost is a card pull, not a dead unit. What the rule actually protects is *unattended delivery*: a
+wall-mounted unit that fails to boot needs someone standing at it with a card reader.
+
+The constraint that genuinely forecloses the clean version is **U-Boot has no `saveenv`**
+([§4](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)), so `bootcmd` cannot be persistently repointed at a
+new filename. The repo's escape hatch for kernel work — "stage it under a new name, leave `uImage-system`
+alone" — only helps if you can *boot* the new name, which means interrupting U-Boot over serial every
+time. So patching `uImage-system` in place is the only route to a unit that comes up with USB by itself,
+and that route is the irreversible one.
+
+**What would make it shippable, and the two measurements it waits on.** If the vendor `uImage-system` is
+byte-identical across units on the same firmware — plausible, since nothing generates it per-unit, unlike
+the filesystem UUIDs — then no new bundle verb is needed: ship a **pre-patched** `uImage-system` as an
+ordinary manifest entry with a stable md5, gated on the existing file's md5 matching a known-good vendor
+image, original preserved on p1 under another name. That fits `lib/rw-bundle.sh` as it stands. So:
+
+1. **md5 p1's `uImage-system` across the gitignored full-card captures.** Offline, no device, no card.
+   If they differ, the whole approach is dead and this entry should say so.
+2. **Is the SD card reachable without disassembling the enclosure?** This is what decides whether the p1
+   rule is load-bearing or ceremony, and it is the one fact nobody has written down.
+
+Neither has been measured. Until #1 is, the "pre-patched image" idea is an idea.
+
 The tension is real and this entry is where it gets resolved rather than rediscovered:
 
 - **Say so, cheaply.** `commissioning/commission-offline.sh`'s closing list and `COMMISSIONING.md` should state that a
