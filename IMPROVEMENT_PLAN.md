@@ -763,9 +763,38 @@ closed: `rw_usbpower_test.sh` has now been seen failing, and it fails the *right
 1. **`tests/commission_offline_test.sh`** — ⚠️ **add `lib/rw-usbpower.sh` to the fixture repo's copy
    list** at `tests/commission_offline_test.sh:67-71`. The suite passes today only because `--base`
    skips the p1 phase *before* the lazy `.` of that file is reached; a future `--disk` case would fail to
-   source it. Then add the p1 cases: `--no-usb-power` and `--no-usb` each reporting their own skip
-   string, and `--base` reporting the "no disk given" one. `ANSWERS` needs no change — no new prompt was
-   added, phase 0's existing question was only reworded.
+   source it. Then add the p1 cases below. `ANSWERS` needs no change — no new prompt was added, phase 0's
+   existing question was only reworded.
+
+   **Measured 2026-08-08 so the next pass does not re-derive it** (all host-only; the suite itself still
+   needs root and has NOT been run):
+
+   - The three skip strings are exact, from `commissioning/commission-offline.sh:689-710`:
+     `skipped (--no-usb-power)`, `skipped (--no-usb)`,
+     `skipped (--base: no disk given, so p1 cannot be located)`. Each is printed twice — once by phase 6
+     and once by the closing `USB power budget:` summary.
+   - ⚠️ **All three are reachable with `--base`, which is what every case in the file already passes**,
+     because `DO_USB_POWER -eq 0` is tested *before* `-z "$MOUNTED_BASE"`. So `--base` alone gives the
+     third string and is already exercised by case 1; the other two need only the flag added.
+   - **`--no-usb-power` and `--no-usb` are both accepted** — verified by running the real script with
+     `--bundle /nope` and getting `No such bundle` rather than `Unknown provision group: usb-power`,
+     which is the `--no-*` glob-shadowing trap and needs neither root nor a bundle to check.
+   - **`--no-usb` cannot break another verify check**: the boot-link check at `:884` is a hardcoded list
+     of `S28time-sync`, `S29audio-enable`, `S99roomwizard-app` and does not include the `usb` group's
+     links, so excluding the group leaves it unaffected.
+   - ⚠️ **Which is itself a small gap worth a line in the same pass**: on a *default* offline run the
+     `usb` group installs `S89xpad-modules` and `S90usb-host`, and that loop never checks they resolve.
+     A dangling `rc5.d` link is skipped in silence at boot, so it is exactly the class the check exists
+     for. Either add them (they are optional, so the loop must skip them when `usb` is excluded) or say
+     in the code why not.
+   - **The p1 *patching* path is not reachable from this file at all** — it needs `--disk`, i.e. a real
+     card or a loopback image with a vfat p1. `tests/rw_usbpower_test.sh` plus
+     `tests/measure_usbpower_sabotage.sh` own the sequence; what this file can own is which mode reaches
+     it. Say so, rather than leaving a reader to assume the write is covered here.
+   - **Worth adding beside the copy-list fix, as its negative control**: a case that greps the *copied*
+     `commission-offline.sh` for every `. "$REPO_ROOT/…"` and asserts each file is in the fixture tree.
+     All five are on one grep (`lib/rw-{identify,clean,provision,bundle,usbpower}.sh`). That is what
+     would have caught this omission, and the next one, instead of a `--disk` run discovering it.
 2. **`LICENSE.md`** — MIT, plus the third-party enumeration (LibVNCServer GPL-2.0 under
    `vnc_client/deps/`, the ScummVM backend compiled into GPL-3.0+ ScummVM). The GPL-2.0 **written
    source offer** for the three `.ko`s is already in `release.sh`'s `NOTICE`; `LICENSE.md` is the
