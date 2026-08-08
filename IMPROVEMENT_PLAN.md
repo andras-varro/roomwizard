@@ -798,15 +798,35 @@ everything below is `bash -n`-clean and nothing more. It has never been seen pas
   `--no-usb-power` and `--no-usb` reach the bundle check (`No such bundle`) rather than
   `Unknown provision group: usb-power`, i.e. neither is shadowed by the `--no-*` glob.
 
-⬜ **Left, in order:**
+✅ **`LICENSE.md` — MIT, with the third-party enumeration, 2026-08-08.** Three findings came out of
+writing it, all measured on this host:
 
-1. **`LICENSE.md`** — MIT, plus the third-party enumeration (LibVNCServer GPL-2.0 under
-   `vnc_client/deps/`, the ScummVM backend compiled into GPL-3.0+ ScummVM). The GPL-2.0 **written
-   source offer** for the three `.ko`s is already in `release.sh`'s `NOTICE`; `LICENSE.md` is the
-   repo-level half.
-2. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
+- ⚠️ **ScummVM is GPL-3.0-or-later, not GPLv2+.** The local tree's `COPYING` is GPLv3 and its source
+  headers read *"either version 3 of the License, or (at your option) any later version"*.
+  `release.sh`'s `NOTICE` said "version 2 or later" in the ScummVM section and "ScummVM is GPLv2+" in
+  the release notes; **both are fixed**, and the NOTICE now records that the version was measured rather
+  than assumed. A wrong licence version in a published notice is the one defect in this area that
+  nothing downstream could catch.
+- ⚠️ **`scummvm-roomwizard/vkeybd_roomwizard.zip` is the only non-MIT file committed in this
+  repository** — a 2× scaled derivative of ScummVM's own `vkeybd_small.zip`, so GPL-3.0-or-later. It is
+  called out as its own section for that reason; everything else third-party is downloaded or cloned at
+  build time and redistributed only as a **binary**.
+- **`scummremastered.zip` and `gui-icons.dat` are staged into the bundle verbatim out of the ScummVM
+  tree** and were unnamed in `NOTICE`. They are GPL-3.0+ data, not this project's, and are now listed
+  with the same corresponding-source offer.
+- The file states MIT's *scope* explicitly: it covers the **source**, and does not decide the licence of
+  a binary it is linked into — `scummvm` is GPL-3.0+ as a whole and `vnc_client` GPL-2.0+ as a whole,
+  while `backend-files/` taken on its own is MIT. And the p1 write plus the case-opening recovery are
+  written down there as the user asked: a no-warranty note, not a blocker.
+- The Apache-2.0 exclusion is now recorded with its reason on the file itself: the three `.ko`s are
+  GPL-2.0-**only**, which is what the patent-termination clause conflicts with.
+
+⬜ **Left:**
+
+1. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
    `COMMISSIONING.md` step 5 still says the SSH pass deletes nothing; `usb_host/README.md`'s File
-   Reference and its Steps 4/6 still name the pre-move paths. `CLAUDE.md` is done.
+   Reference and its Steps 4/6 still name the pre-move paths. `README.md` also has no licence section
+   yet. `CLAUDE.md` is done.
 
 ⚠️ **Not attempted and not needed: `usb_host` reaches `deploy-all.sh`'s bundle path by no new
 mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive there
@@ -1347,7 +1367,7 @@ Deliberately not a ranking of everything — only the claims worth making.
 
 1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
    remaining ⬜ list** — the code, its 94-case suite, the sabotage harness that proves the suite can
-   fail and `tests/commission_offline_test.sh`'s p1 cases are all in; what is left is `LICENSE.md` and
+   fail, `tests/commission_offline_test.sh`'s p1 cases and `LICENSE.md` are all in; what is left is
    three prose files. All host-only.
 2. **The three device checks nothing here can do** — `sudo tests/commission_offline_test.sh`, a full
    bundle installed on `.225`, and an Xbox pad plugged in with **no powered hub** after a reboot. That

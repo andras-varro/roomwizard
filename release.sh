@@ -212,11 +212,18 @@ device configuration.
 ScummVM
 -------
 The `scummvm` binary is a build of ScummVM, which is licensed under the GNU
-General Public License, version 2 or later.  The complete corresponding source
-for this binary is the upstream ScummVM tree plus this project's backend port in
-`scummvm-roomwizard/backend-files/`; both are available from the repository this
-release was published from.  Written offers for the source are honoured for the
-lifetime of the release.
+General Public License, version 3 or later.  (Measured, not assumed: the upstream
+tree's COPYING is GPLv3 and its source headers read "either version 3 of the
+License, or (at your option) any later version".)  The complete corresponding
+source for this binary is the upstream ScummVM tree plus this project's backend
+port in `scummvm-roomwizard/backend-files/`; both are available from the
+repository this release was published from.  Written offers for the source are
+honoured for the lifetime of the release.
+
+Three data files travel with it and are ALSO GPLv3+, not this project's own:
+`scummremastered.zip` and `gui-icons.dat` are staged verbatim out of the ScummVM
+tree, and `vkeybd_roomwizard.zip` is a 2x scaled derivative of ScummVM's
+`vkeybd_small.zip`.  Same corresponding-source offer.
 
 vnc_client
 ----------
@@ -350,7 +357,7 @@ else
             echo "Built from ${GIT_REV}${GIT_DIRTY}. Components:"
             rw_bundle_components "$OUT_ABS" | sed 's/^/- /'
             echo ""
-            echo "See NOTICE inside the tarball for licence obligations (ScummVM is GPLv2+)."
+            echo "See NOTICE inside the tarball for licence obligations (ScummVM is GPLv3+)."
         } > "$NOTES_FILE"
     fi
 
