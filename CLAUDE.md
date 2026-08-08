@@ -330,6 +330,11 @@ tool-level traps rather than device facts, and each has cost real time.
   `wsl.exe` calls** — the instance idles out and takes it with it, so a fixture staged in one call can be
   gone by the next. Stage and use it inside **one** `wsl.exe -e bash -lc`, or put it under the repo.
 - **The Bash tool's working directory does not reliably persist between calls.** Use absolute paths.
+- ⚠️ **Run `git` from Git Bash, never from WSL.** `git-lfs` is not installed in this WSL and
+  `HardwarePhotos/**` is LFS-tracked, so any command that filters the working tree dies with
+  `git-lfs filter-process: git-lfs: not found` / `fatal: the remote end hung up unexpectedly` —
+  `git status` and `git diff` both do. **`git log` succeeds**, because it runs no filter, so a WSL git
+  session looks half-working rather than misconfigured.
 - **No foreground `sleep`** — it is blocked. Use `run_in_background`, or put the sleep inside the remote
   command: `ssh root@<ip> 'sleep 3; …'` works, because the local command is `ssh`.
 - **A compound `ssh` command can be refused by the permission classifier.** Re-issue it as one plain
