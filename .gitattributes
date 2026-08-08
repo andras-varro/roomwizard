@@ -1,3 +1,19 @@
+# Everything text is LF in the working tree, on every host.
+#
+# Without this line the per-type rules below are the only pins, and this host's
+# system-wide core.autocrlf=true checks out everything else as CRLF. Windows git
+# then normalises on read and calls the tree clean, while a git inside WSL - which
+# has no autocrlf - reports the same 40+ files as modified. Neither is wrong; they
+# are reading the same blobs through different filters. Pinning eol=lf makes the
+# working tree itself the same bytes on both sides, so `git status` agrees.
+#
+# text=auto still lets git detect and skip binary content, and every rule below
+# this one keeps overriding it: later rules win.
+* text=auto eol=lf
+
+# ...except Windows batch files, which cmd.exe parses line-by-line.
+*.bat text eol=crlf
+
 # Shell scripts MUST stay LF.
 #
 # device-files/roomwizard-app and device-files/disable-steelcase.sh are scp'd
