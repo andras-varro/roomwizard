@@ -7,8 +7,10 @@
 # sets up audio + time-sync boot scripts.
 #
 # Usage:
-#   ./commissioning/provision.sh <target>                 # system setup + reboot
-#   ./commissioning/provision.sh <target> --remove        # + remove bloatware files (~178 MB freed)
+#   ./commissioning/provision.sh <target>                 # setup + deep clean + p1 + reboot
+#   ./commissioning/provision.sh <target> --no-clean      # setup only, delete nothing
+#   ./commissioning/provision.sh <target> --remove        # the named stacks, without the sweeps
+#   ./commissioning/provision.sh <target> --dry-run       # list what the clean would delete
 #   ./commissioning/provision.sh <target> --status        # show device status only
 #   ./commissioning/provision.sh <target> --hostname rw09 # set the host name only, no reboot
 #
@@ -25,10 +27,17 @@
 #   3. Installs device-files/roomwizard-app as /etc/init.d/roomwizard-app
 #      Registers the init service (priority S99)
 #      Deploys audio-enable + time-sync boot scripts, and enables avahi (mDNS)
+#      Installs the USB host-mode scripts and their boot links (--no-usb skips)
 #   4. Hardens SSH (PermitEmptyPasswords=no, brute-force limits)
 #   5. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
-#   6. Optionally removes bloatware files + Steelcase artifacts (--remove)
-#   7. Reboots device
+#   6. Deletes the vendor software stack (--no-clean opts out; IMPROVEMENT_PLAN.md C13)
+#   7. Raises the USB power budget to 500 mA by patching p1 (--no-usb-power opts out)
+#   8. Reboots device
+#
+# ⚠️ THE DEFAULTS ARE DESTRUCTIVE, and deliberately the same defaults
+# commissioning/commission-offline.sh has: a plain run of either tool leaves the
+# same unit. Both ask the full-card-backup question first, and both say loudly
+# what they auto-answered when stdin is not a terminal.
 #
 # NOTE: No iptables firewall — the Steelcase firmware ships without iptables
 # userspace tools, the ip_tables.ko kernel module is not included in
@@ -65,18 +74,29 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
 
-# ── --keep-<group> and --no-<group> are extracted before positional parsing ──
+# ── the non-positional flags are extracted before positional parsing ────────
 #
 # --keep-<g> switches off part of the CLEAN, --no-<g> part of the PROVISION. Both
 # are named after the groups in their own data file, so neither list is repeated
 # here. They are pulled out of "$@" first because everything below is positional
-# ($1 target, $2 flag, $3 --dry-run) and a --keep-browser sitting in $3 would
-# otherwise be rejected as an unknown option.
+# ($1 target, $2 flag) and a --keep-browser sitting in $3 would otherwise be
+# rejected as an unknown option.
+#
+# ⚠️ --no-clean and --no-usb-power MUST be matched before the --no-* glob. `case`
+# takes the first match, so an arm placed after it is never reached and the
+# operator gets "Unknown provision group: usb-power" instead. commission-offline.sh
+# has the same two arms in the same order, for the same reason.
 KEEP_GROUPS=""
 NO_PROV_GROUPS=""
+DO_CLEAN=1
+DO_USB_POWER=1
+DRY_RUN=""
 _ARGS=()
 for _a in "$@"; do
     case "$_a" in
+        --no-clean)     DO_CLEAN=0 ;;
+        --no-usb-power) DO_USB_POWER=0 ;;
+        --dry-run)      DRY_RUN="--dry-run" ;;
         --no-*)
             _g="${_a#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -100,6 +120,13 @@ for _a in "$@"; do
 done
 set -- "${_ARGS[@]}"
 
+# --no-usb implies --no-usb-power. With no driver and no controller modules
+# installed there is nothing to spend the raised budget on, so patching p1 would be
+# a gratuitous write to the one partition worth not writing.
+case " $NO_PROV_GROUPS " in
+    *" usb "*) DO_USB_POWER=0 ;;
+esac
+
 DEVICE_IP="${1:-}"
 FLAG="${2:-}"
 DEVICE="root@${DEVICE_IP}"
@@ -121,33 +148,43 @@ err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── usage ───────────────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $0 <target> [--remove|--deep-clean|--status] [--dry-run]"
+    echo "Usage: $0 <target> [--remove|--deep-clean|--status] [--no-clean] [--dry-run]"
     echo "       $0 <target> --hostname NAME"
     echo ""
+    echo "  With no flags this does the FULL commissioning: provision, deep clean,"
+    echo "  the 500 mA USB power budget on p1, and a reboot. Same end state as"
+    echo "  commissioning/commission-offline.sh, which has the same defaults."
+    echo ""
     echo "  <target>          Device IPv4 address, or a host name (e.g. rw09.local)"
-    echo "  --remove          Delete the named vendor software stacks (~178 MB +"
-    echo "                    the 472 MB factory-restore payload)."
-    echo "  --deep-clean      --remove PLUS the whitelist sweeps: anything in"
-    echo "                    /etc/rc*.d, /opt or the data partitions that the"
-    echo "                    keep-list does not name. ~560 MB more."
+    echo "  --no-clean        Delete nothing. Provision, harden, reboot — that is all."
+    echo "  --remove          Clean the named vendor software stacks only, WITHOUT"
+    echo "                    the whitelist sweeps. Narrower than the default."
+    echo "  --deep-clean      The default, stated explicitly: --remove PLUS the"
+    echo "                    whitelist sweeps — anything in /etc/rc*.d, /opt or the"
+    echo "                    data partitions that the keep-list does not name."
     echo "                    Both read device-files/clean-rules.conf; the only"
-    echo "                    difference is the 'sweeps' group."
-    echo "                    Both ask for a full-card backup first. Neither is"
-    echo "                    reversible on the device — the restore payload goes."
-    echo "  --status          Show device status only (no changes)"
-    echo "  --dry-run         With --remove or --deep-clean: list what would be"
-    echo "                    deleted, delete nothing"
+    echo "                    difference is the 'sweeps' group. Neither is reversible"
+    echo "                    on the device — the 472 MB restore payload goes."
+    echo "  --status          Show device status only (no changes, no clean, no reboot)"
+    echo "  --dry-run         List what the clean would delete and what would be"
+    echo "                    written to p1; change nothing, do not reboot."
     echo "  --keep-<group>    Leave one stack on disk. Groups:"
     echo "                    $(rw_clean_optional_groups)"
     echo "                    Files only — it does not re-enable a boot link, because"
     echo "                    the rc*.d whitelist is what removes an unknown service."
     echo "                    --keep-factory keeps the 472 MB restore payload;"
-    echo "                    --keep-sweeps turns --deep-clean into --remove."
+    echo "                    --keep-sweeps turns the default into --remove."
     echo "  --no-<group>      Skip one group of the provision plan. Groups:"
     echo "                    $(rw_provision_optional_groups)"
     echo "                    --no-mdns leaves <name>.local unresolvable; --no-sshd"
-    echo "                    leaves PermitEmptyPasswords at the factory 'yes'."
-    echo "  --hostname NAME   Set the device host name only, and exit. No reboot."
+    echo "                    leaves PermitEmptyPasswords at the factory 'yes';"
+    echo "                    --no-usb installs no USB host mode and implies"
+    echo "                    --no-usb-power."
+    echo "  --no-usb-power    Leave p1 alone. The USB budget stays at the vendor's"
+    echo "                    100 mA, so a controller needs a POWERED hub — and a"
+    echo "                    power cycle stays a free undo."
+    echo "  --hostname NAME   Set the device host name only, and exit. No reboot,"
+    echo "                    no clean, no p1 write."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
     exit 1
 }
@@ -229,20 +266,32 @@ case "$FLAG" in
     *) echo "Unknown option: $FLAG"; echo ""; usage ;;
 esac
 
-# No mode takes a fourth argument, so a stray one is a mistake — say so rather
-# than ignoring it, for the same reason the flag case above is exhaustive.
-if [[ -n "${4:-}" ]]; then
-    echo "Unexpected argument: $4"; echo ""; usage
+# --dry-run previews writes, and these two modes make none — so the combination is a
+# mistake rather than a no-op. Said out loud because the dry-run branch runs BEFORE
+# the --status and --hostname branches, so silently accepting it would preview a
+# clean the operator never asked for.
+if [[ -n "$DRY_RUN" && ( "$FLAG" == "--status" || "$FLAG" == "--hostname" ) ]]; then
+    echo "--dry-run does not apply to $FLAG — neither writes anything."
+    echo ""
+    usage
 fi
 
-# --hostname is the one flag that takes a value, so it consumes $3 and --dry-run
-# cannot also live there.
+# NOTE: a stray positional is rejected per-mode below, where the number of
+# expected ones is known — --hostname takes a NAME, nothing else takes anything.
+
+# --hostname is the one flag that takes a value, so it consumes $3. Every other
+# mode is exhausted by $1 and $2 — --dry-run, --no-clean, --no-usb-power and the
+# two group families were all lifted out of "$@" above, so a leftover positional
+# here is a mistake. Say so rather than ignoring it, for the same reason the flag
+# case above is exhaustive.
 NEW_HOSTNAME=""
-DRY_RUN=""
 if [[ "$FLAG" == "--hostname" ]]; then
     NEW_HOSTNAME="${3:-}"
     if [[ -z "$NEW_HOSTNAME" ]]; then
         echo "--hostname requires a NAME"; echo ""; usage
+    fi
+    if [[ -n "${4:-}" ]]; then
+        echo "Unexpected argument: $4"; echo ""; usage
     fi
     # Validated HERE, at parse time, for two reasons: a typo should not need a
     # reachable device to be caught, and the name is later interpolated into an
@@ -255,23 +304,128 @@ if [[ "$FLAG" == "--hostname" ]]; then
         echo ""
         usage
     fi
-else
-    DRY_RUN="${3:-}"
-    if [[ -n "$DRY_RUN" && "$DRY_RUN" != "--dry-run" ]]; then
-        echo "Unknown option: $DRY_RUN"; echo ""; usage
-    fi
+elif [[ -n "${3:-}" ]]; then
+    echo "Unexpected argument: $3"; echo ""; usage
 fi
 
 # NOTE: the target was validated at the top of this file, against both an IPv4
 # address and a DNS name. A second, weaker check used to sit here; it was
 # unreachable, and deleting it is what makes `rw09.local` usable.
 
-# --deep-clean is --remove plus the `sweeps` group, and both are one call to
-# run_clean. It no longer rewrites FLAG to "--remove": that mattered when the two
-# were separate mechanisms running in sequence, and now it would run the clean
-# twice.
-DEEP_CLEAN=0
-[[ "$FLAG" == "--deep-clean" ]] && DEEP_CLEAN=1
+# ── which clean, if any ─────────────────────────────────────────────────────
+#
+# IMPROVEMENT_PLAN.md C13: the deep clean is the DEFAULT, because the offline pass
+# has always defaulted to it and the result of commissioning must not depend on
+# which path ran. --no-clean is the opt-out; --remove narrows it to the named
+# stacks; --deep-clean names the default explicitly. --deep-clean does not rewrite
+# FLAG to "--remove": that mattered when the two were separate mechanisms running in
+# sequence, and now it would run the clean twice.
+CLEAN_MODE="deep"
+[[ "$FLAG" == "--remove" ]] && CLEAN_MODE="remove"
+
+
+# ── ONE consent gate, for every irreversible thing this run will do ─────────
+#
+# Asked once, asked FIRST, and about the backup — the same question and the same
+# wording as commissioning/commission-offline.sh's phase 0, because it is the same
+# precondition. It covers BOTH irreversible steps: the clean, and the p1 write.
+# There is no per-flag opt-out to soften it with; the opt-outs are --no-clean and
+# --no-usb-power, and choosing neither IS the decision (IMPROVEMENT_PLAN.md C11,
+# C13). The device has no serial console, so a failed boot yields no diagnostics at
+# all (SYSTEM_ANALYSIS.md#312-serial-ports).
+#
+# ⚠️ The non-TTY branch is the whole point of C13, and its loudness IS the safety
+# property. What it replaced: an unguarded `read`, which at EOF left the answer
+# empty, cancelled the clean and returned 0 — so a scripted run SILENTLY did not
+# clean while the operator believed the default did. A false-negative gate. The
+# decision taken was that a caller who passed neither opt-out has already decided,
+# so the work proceeds — but the printed record of what nobody answered is then the
+# only thing standing between that and an unexplained unit.
+CONSENT="no"
+ask_consent() {
+    local answer=""
+
+    # Nothing irreversible selected: there is nothing to consent to. A provision-only
+    # run installs files and reboots, which has never been gated and is undone by
+    # re-running it.
+    if [[ "$DO_CLEAN" -eq 0 && "$DO_USB_POWER" -eq 0 ]]; then
+        CONSENT="yes"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "--dry-run" ]]; then
+        CONSENT="yes"
+        return 0
+    fi
+
+    echo ""
+    echo "════════════════════════════════════════"
+    echo " Before anything is written"
+    echo "════════════════════════════════════════"
+    if [[ "$DO_CLEAN" -eq 1 ]]; then
+        warn "This removes the Steelcase software from this device: the vendor"
+        warn "services, their data and configuration, and — unless --keep-factory —"
+        warn "the 472 MB on-device factory-restore payload."
+        warn ""
+        warn "The original RoomWizard functionality does not come back afterwards,"
+        warn "and the device's own restore mechanism goes with it."
+        warn "  (--no-clean skips this entirely.)"
+        warn ""
+    fi
+    if [[ "$DO_USB_POWER" -eq 1 ]]; then
+        warn "This also WRITES p1 — one value in the device tree inside"
+        warn "uImage-system, raising the USB power budget from the vendor's 100 mA"
+        warn "to 500 mA so a controller works with no powered hub. The vendor image"
+        warn "is copied to uImage-system.vendor on p1 first and md5-verified both"
+        warn "ways, and restoring that copy undoes it."
+        warn ""
+        warn "⚠️ A POWER CYCLE IS THEREFORE NO LONGER A FREE UNDO on this unit."
+        warn "  (--no-usb-power skips this entirely and keeps it one.)"
+        warn ""
+    fi
+    warn "PRECONDITION: a full-card image backup exists somewhere other than"
+    warn "this card. Recovery from a bad boot means dd-ing it back."
+
+    if [[ -t 0 ]]; then
+        read -r -p "  Do you have that backup? (yes/no): " answer
+        if [[ "$answer" == "yes" ]]; then
+            CONSENT="yes"
+        else
+            CONSENT="no"
+            echo "  Make one first: pull the card, then"
+            echo "    sudo dd if=/dev/sdX of=card.img bs=4M status=progress"
+            echo ""
+            info "Nothing irreversible will be done on this run."
+            info "  The provision step still runs, and the device still reboots —"
+            info "  both are repeatable. Re-run when the backup exists."
+        fi
+        return 0
+    fi
+
+    # Not a terminal. Nobody is going to answer, so say — unmissably — what is
+    # being done without an answer, and what would have prevented it.
+    echo ""
+    echo "  ══════════════════════════════════════════════════════════════════"
+    echo "   ⚠  STDIN IS NOT A TERMINAL. THE BACKUP QUESTION ABOVE IS BEING"
+    echo "      AUTO-ANSWERED \"yes\" AND THIS RUN IS PROCEEDING."
+    echo "  ══════════════════════════════════════════════════════════════════"
+    echo "   Nobody confirmed a backup exists. Proceeding anyway, because passing"
+    echo "   neither --no-clean nor --no-usb-power is itself the decision"
+    echo "   (IMPROVEMENT_PLAN.md C13). On this run that means:"
+    if [[ "$DO_CLEAN" -eq 1 ]]; then
+        echo "     · the vendor software stack is being DELETED ($CLEAN_MODE), and the"
+        echo "       factory-restore payload with it unless --keep-factory was passed"
+    fi
+    if [[ "$DO_USB_POWER" -eq 1 ]]; then
+        echo "     · p1 is being WRITTEN: uImage-system patched to a 500 mA USB budget,"
+        echo "       so a power cycle stops being a free undo on this unit"
+    fi
+    echo ""
+    echo "   To get a prompt, run this from a terminal. To avoid the question,"
+    echo "   pass the opt-out you meant."
+    echo "  ══════════════════════════════════════════════════════════════════"
+    CONSENT="yes"
+    return 0
+}
 
 
 # ── deep clean ──────────────────────────────────────────────────────────────
@@ -302,7 +456,7 @@ DEEP_CLEAN=0
 #   /opt/sbin/*           1.4 MB - kept deliberately; the reference material
 #                                  SYSTEM_ANALYSIS.md 3.5 was read out of
 run_clean() {
-    local mode="$1" title base_groups groups g confirm2
+    local mode="$1" title base_groups groups g
 
     case "$mode" in
         remove) title="Remove Vendor Software"; base_groups="$(rw_clean_remove_groups)" ;;
@@ -334,35 +488,14 @@ run_clean() {
     [[ -n "$KEEP_GROUPS" ]] && info "Keeping:$KEEP_GROUPS"
     info "Groups:$groups"
 
-    # ── The gate: asked once, asked FIRST, and about the backup ──────────────
+    # ── The gate is NOT here ─────────────────────────────────────────────────
     #
-    # Same question and same wording as commissioning/commission-offline.sh's phase 0, because it
-    # is the same precondition. There is no per-flag opt-out to soften it with: a
-    # user who cleans a unit of its vendor software has made a decision, and the
-    # recovery path for that decision is a host-side card image, not a switch here
-    # (IMPROVEMENT_PLAN.md C11). The device has no serial console, so a failed boot
-    # yields no diagnostics at all (SYSTEM_ANALYSIS.md#312-serial-ports).
+    # It used to be, and it asked only about the clean. The p1 write is the second
+    # irreversible step, so there is now ONE question covering both, asked before
+    # anything is written — ask_consent above. run_clean is only reached when the
+    # answer was yes, so a `read` here would be a second prompt for one decision.
     if [[ "$DRY_RUN" == "--dry-run" ]]; then
         warn "DRY RUN — nothing will be deleted"
-        confirm2="yes"
-    else
-        warn "This removes the Steelcase software from this device: the vendor"
-        warn "services, their data and configuration, and — unless --keep-factory —"
-        warn "the 472 MB on-device factory-restore payload."
-        warn ""
-        warn "The original RoomWizard functionality does not come back afterwards,"
-        warn "and the device's own restore mechanism goes with it. The 5 MB fallback"
-        warn "kernel is kept either way; p1 is never touched."
-        warn ""
-        warn "PRECONDITION: a full-card image backup exists somewhere other than"
-        warn "this card. Recovery from a bad boot means dd-ing it back."
-        read -r -p "  Do you have that backup? (yes/no): " confirm2
-        if [[ "$confirm2" != "yes" ]]; then
-            echo "  Make one first: pull the card, then"
-            echo "    sudo dd if=/dev/sdX of=card.img bs=4M status=progress"
-            info "Clean cancelled"
-            return 0
-        fi
     fi
 
     # Compiled on the HOST, where the parser lives, and shipped as a plan the
@@ -500,6 +633,69 @@ REMOTE
 }
 
 
+# ── the 500 mA USB power budget, on p1 ──────────────────────────────────────
+#
+# ⚠️ The gate/backup/patch/verify/rollback sequence is NOT here. It is
+# lib/rw-usbpower.sh, shared byte-for-byte with commissioning/commission-offline.sh
+# and usb_host/build-and-deploy.sh, with only the transport differing — this path
+# pulls the image over scp, patches it on the host and pushes it back. Never write a
+# second copy of that sequence into a caller: it is the one step
+# tests/rw_provision_test.sh group E cannot compare between the two executors, so a
+# duplicate would drift undetected (IMPROVEMENT_PLAN.md F15, C12).
+#
+# Why this cannot be an ordinary provision-rules.conf record, when the rest of USB
+# host mode is: the value lives in the device tree appended INSIDE uImage-system on
+# p1, and omap2430.c reads it at driver probe, before any init script exists. There
+# is no file on the normal filesystem to edit. The other two USB mechanisms are
+# entirely on p6 and are plain `usb`-group records.
+P1_STATE="not attempted"
+run_usbpower() {
+    local work prereq
+
+    if [[ "$DO_USB_POWER" -eq 0 ]]; then
+        case " $NO_PROV_GROUPS " in
+            *" usb "*) P1_STATE="skipped (--no-usb)" ;;
+            *)         P1_STATE="skipped (--no-usb-power)" ;;
+        esac
+        warn "$P1_STATE: p1 untouched. The budget stays at the vendor's 100 mA, so a"
+        warn "  controller needs a POWERED hub. A power cycle remains a free undo."
+        return 0
+    fi
+    # A dry run needs no consent: it writes nothing. ask_consent has not even been
+    # called on that path — it is asked after --status/--hostname have had their
+    # chance to exit, so that neither of those ever sees the question.
+    if [[ "$DRY_RUN" != "--dry-run" && "$CONSENT" != "yes" ]]; then
+        P1_STATE="skipped (no backup confirmed)"
+        warn "$P1_STATE — p1 untouched."
+        return 0
+    fi
+
+    # shellcheck source=../lib/rw-usbpower.sh
+    . "$REPO_ROOT/lib/rw-usbpower.sh"
+    if ! prereq="$(rw_usbpower_prereqs)"; then
+        P1_STATE="skipped (missing prerequisites)"
+        warn "cannot patch p1 — the device-tree tooling is not available here:"
+        printf '%s\n' "$prereq"
+        warn "  Install python3, or pass --no-usb-power to say so deliberately."
+        return 0
+    fi
+
+    work=$(mktemp -d)
+    if [[ "$DRY_RUN" == "--dry-run" ]]; then
+        RW_USBPOWER_DRY=1 rw_usbpower_apply_ssh "$DEVICE" "$work" || true
+        P1_STATE="not attempted (dry run)"
+    elif rw_usbpower_apply_ssh "$DEVICE" "$work"; then
+        P1_STATE="500 mA (patched and verified)"
+    else
+        P1_STATE="FAILED — read the block above"
+        warn "the p1 patch did not succeed. Everything else this run installed is"
+        warn "  in place; the USB budget is whatever it was."
+    fi
+    rm -rf "$work"
+    return 0
+}
+
+
 # ── SSH check ───────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
@@ -514,17 +710,23 @@ info "Testing SSH connection to $DEVICE_IP..."
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
-# ── dry-run: report the clean and exit WITHOUT running setup or rebooting ──
+# ── dry-run: report what would change and exit WITHOUT setup or a reboot ────
+#
+# --dry-run no longer needs a clean flag to be meaningful: the clean is the default,
+# so a bare `provision.sh <ip> --dry-run` is the preview of a bare run.
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
-    if [[ "$DEEP_CLEAN" == "1" ]]; then
-        run_clean deep
-    elif [[ "$FLAG" == "--remove" ]]; then
-        run_clean remove
+    if [[ "$DO_CLEAN" -eq 1 ]]; then
+        run_clean "$CLEAN_MODE"
     else
-        err "--dry-run needs --remove or --deep-clean — there is nothing else to preview"
+        info "--no-clean: nothing would be deleted"
     fi
     echo ""
-    info "Dry run only — no setup performed, device not rebooted."
+    echo "════════════════════════════════════════"
+    echo " USB power budget (p1)"
+    echo "════════════════════════════════════════"
+    run_usbpower
+    echo ""
+    info "Dry run only — no setup performed, nothing written, device not rebooted."
     exit 0
 fi
 
@@ -589,6 +791,13 @@ REMOTE
     echo ""
     exit 0
 fi
+
+# ── Consent, once, before the first write ───────────────────────────────────
+#
+# Deliberately AFTER --status and --hostname have had their chance to exit: neither
+# writes anything irreversible, so neither should ever see the question. Everything
+# below this line changes the device and ends in a reboot.
+ask_consent
 
 # ── 1. Provision: the boot scripts, the links, sshd, the config fix-ups ─────
 echo ""
@@ -723,13 +932,31 @@ REMOTE
 # Every path it named is either a rule in that file, covered by a sweep, or
 # recorded there as a deliberate omission — see its "Three deliberate differences"
 # header. IMPROVEMENT_PLAN.md C11.
-if [[ "$DEEP_CLEAN" == "1" ]]; then
-    run_clean deep
-elif [[ "$FLAG" == "--remove" ]]; then
-    run_clean remove
+# The DEFAULT is `deep` (IMPROVEMENT_PLAN.md C13) — the same default
+# commissioning/commission-offline.sh has always had, so the two paths leave the same
+# unit. --no-clean is the opt-out, and a declined backup question is the other one.
+CLEAN_STATE="not attempted"
+if [[ "$DO_CLEAN" -eq 0 ]]; then
+    CLEAN_STATE="skipped (--no-clean)"
+    info "--no-clean: vendor software left in place"
+elif [[ "$CONSENT" != "yes" ]]; then
+    CLEAN_STATE="skipped (no backup confirmed)"
+    warn "$CLEAN_STATE — vendor software left in place"
 else
-    info "Vendor software left in place (use --remove or --deep-clean)"
+    run_clean "$CLEAN_MODE"
+    case "$CLEAN_MODE" in
+        deep)   CLEAN_STATE="deep clean (named stacks + whitelist sweeps)" ;;
+        remove) CLEAN_STATE="named stacks only (--remove, no sweeps)" ;;
+    esac
+    [[ -n "$KEEP_GROUPS" ]] && CLEAN_STATE="$CLEAN_STATE, keeping$KEEP_GROUPS"
 fi
+
+# ── 5. The 500 mA USB power budget on p1 ───────────────────────────────────
+echo ""
+echo "════════════════════════════════════════"
+echo " 5. USB Power Budget (p1)"
+echo "════════════════════════════════════════"
+run_usbpower
 
 # ── Status summary ──────────────────────────────────────────────────────────
 echo ""
@@ -758,12 +985,30 @@ echo ""
 info "Deployed script versions:"
 report_script_versions
 
+# ── What this run actually did ──────────────────────────────────────────────
+#
+# The verdicts follow what was established, not merely that we got this far — a
+# green tick on a step that was skipped is the thing C13 is about.
+echo ""
+info "This run:"
+case "$CLEAN_STATE" in
+    "deep clean"*|"named stacks"*) ok "clean: $CLEAN_STATE" ;;
+    *)                             warn "clean: $CLEAN_STATE" ;;
+esac
+case "$P1_STATE" in
+    "500 mA"*) ok "USB power budget: $P1_STATE" ;;
+    *)         warn "USB power budget: $P1_STATE" ;;
+esac
+
 # ── Reboot ──────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"
 echo " Rebooting"
 echo "════════════════════════════════════════"
 
+# The reboot is also what makes a p1 patch live: omap2430.c reads the power
+# property at driver probe, so the new budget takes effect on the next boot and no
+# earlier. That happens here, so nothing further is needed.
 info "Rebooting device..."
 ssh "$DEVICE" reboot || true
 ok "Device is rebooting"
@@ -779,3 +1024,11 @@ echo "    cd native_apps      && ./build-and-deploy.sh $DEVICE_IP set-default"
 echo "    cd vnc_client        && ./build-and-deploy.sh $DEVICE_IP"
 echo "    cd scummvm-roomwizard && ./build-and-deploy.sh $DEVICE_IP"
 echo ""
+if [[ "$P1_STATE" == "500 mA"* ]]; then
+    echo "  USB: the reboot above makes the 500 mA budget live. Then plug a"
+    echo "  controller in DIRECTLY, with no powered hub — that is the check that the"
+    echo "  p1 patch took effect:"
+    echo "    ssh root@$DEVICE_IP '/etc/init.d/usb-host status; lsusb'"
+    echo "  To undo: copy uImage-system.vendor over uImage-system on p1."
+    echo ""
+fi

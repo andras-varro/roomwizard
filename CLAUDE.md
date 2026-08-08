@@ -111,13 +111,28 @@ holds the bring-up scripts, none of which is an answer to "what do I run" except
 `roomwizard.sh`. `device-files/` holds what is installed onto a device verbatim. The
 three scripts at the root are the three front doors: `roomwizard.sh`, `deploy-all.sh`, `release.sh`.
 
-`--help` on any of them is current; `README.md` has the annotated walkthrough. Two shapes worth
+`--help` on any of them is current; `README.md` has the annotated walkthrough. Three shapes worth
 knowing without looking them up: **`set-default` is the only mode `native_apps/build-and-deploy.sh`
-accepts** (anything else is rejected rather than ignored), and **cleanup, bloatware removal and the
-boot service all live in `commissioning/provision.sh`** — `--remove`, `--deep-clean`, `--status`, `--hostname
-NAME` — never in a component script. **Both `--remove` and `--deep-clean` read their decisions from
-`device-files/clean-rules.conf`**, the same file `commissioning/commission-offline.sh` uses, and differ from each
-other only by that file's `sweeps` group.
+accepts** (anything else is rejected rather than ignored); **cleanup, bloatware removal and the boot
+service all live in `commissioning/provision.sh`** — never in a component script; and ⚠️ **both
+bring-up paths now CLEAN and WRITE p1 BY DEFAULT.** `commissioning/provision.sh <ip>` with no flags
+deep-cleans the vendor stack and patches `uImage-system` to a 500 mA USB budget, exactly as
+`commissioning/commission-offline.sh` always has for the clean — the point being that the two paths
+leave the same unit. `--no-clean` and `--no-usb-power` are the opt-outs, `--keep-<group>` and
+`--no-<group>` the partial ones, and `--status` / `--hostname` still change nothing and never ask.
+**Both `--remove` and `--deep-clean` read their decisions from `device-files/clean-rules.conf`**, the
+same file `commissioning/commission-offline.sh` uses, and differ from each other only by that file's
+`sweeps` group; `--remove` is now the *narrower* selector rather than the only way in.
+
+⚠️ **One consent gate covers both irreversible steps, and its loudness is the safety property.**
+`ask_consent` asks the full-card-backup question once, before the first write, naming the clean and the
+p1 write separately, and it is placed *after* `--status`/`--hostname` have had their chance to exit. On a
+non-TTY it proceeds and prints an unmissable banner saying what nobody answered — because the defect it
+replaced was an unguarded `read` whose EOF cancelled the clean and returned 0, so a scripted run
+silently did not clean while the operator believed the default did. Do not "simplify" that branch into a
+silent proceed or a silent skip. ⚠️ **And `--no-clean` / `--no-usb-power` must be matched BEFORE the
+`--no-*` glob** in both scripts' argument loops: `case` takes the first match, so an arm placed after it
+is unreachable and the operator gets `Unknown provision group: usb-power`.
 
 ### Bundles: one layout, declared modes, no configs
 
@@ -546,9 +561,23 @@ tool-level traps rather than device facts, and each has cost real time.
   backed up to `uImage-system.vendor` (whose md5 is verified *before* the original is touched),
   verified by re-reading the card afterwards, and rolled back on failure. ⚠️ **Never write a second
   copy of that sequence into a caller**: it is the one step `tests/rw_provision_test.sh` group E cannot
-  compare between executors, so a duplicate would drift undetected. p1 is reached only through
+  compare between executors, so a duplicate would drift undetected — `tests/rw_usbpower_test.sh` group J
+  is the stand-in comparison, running the one sequence over both transports (94 cases, host-only, needs
+  `python3`). ⚠️ **Its fixtures are SYNTHETIC and must stay that way**: the vendor kernel is gitignored
+  and can never be committed, and `tests/make-fake-uimage.py` works only because `uimage.py` *finds* the
+  DTB by magic rather than asserting the vendor offset. Groups F–K therefore override the two md5
+  constants with the fixture's own — the sequence is what is tested, not the identity of one kernel.
+  p1 is reached only through
   `rw_card_boot_partition` / `rw_mount_boot` / `rw_umount_boot` — `RW_PART_ROLES` still does not
-  contain p1 and a test still asserts that. Observe all of the above and JTAG never comes up. Detail
+  contain p1 and a test still asserts that. ⚠️ **Three callers now drive that one writer, and two of
+  them do it by default**: `usb_host/build-and-deploy.sh`, `commissioning/provision.sh` (step 5) and
+  `commissioning/commission-offline.sh` (phase 6). So **a power cycle is no longer a free undo on a
+  default-commissioned unit** — `uImage-system.vendor` on p1 is the in-place remedy and a card pull the
+  fallback. That is a taken decision (`IMPROVEMENT_PLAN.md` F15); do not relitigate it, and do not
+  re-raise card access as a risk. ⚠️ **Whichever caller mounts p1 must be able to unmount it from its
+  failure path** — `commission-offline.sh` carries a `BOOT_MOUNTED` variable read by `cleanup_and_exit`,
+  ordered before `rw_umount_card` because `rmdir "$MOUNTED_BASE"` fails while `boot/` is still there.
+  Observe all of the above and JTAG never comes up. Detail
   and recovery procedure: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component build rules

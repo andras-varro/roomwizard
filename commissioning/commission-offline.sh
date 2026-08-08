@@ -23,6 +23,9 @@
 #   --arm-check=skip    Proceed with UNVERIFIED binaries when the ARM objdump is
 #                       absent. Read what it prints before you use it.
 #   --no-clean          Install only; run no cleanup at all.
+#   --no-usb-power      Leave p1 alone. The USB budget stays at the vendor's
+#                       100 mA, so a controller needs a POWERED hub — and a power
+#                       cycle stays a free undo. --no-usb implies this.
 #
 # ── Why offline, and why one pass ───────────────────────────────────────────
 #
@@ -50,7 +53,10 @@
 #   the host name              commissioning/set-hostname.sh, which owns /etc/hostname,
 #                              /etc/hosts AND /etc/dhclient.conf (D7b item 3).
 #   which card, which mount    lib/rw-identify.sh, by content and by POSITION, never
-#                              by UUID. p1 is unreachable through it by design.
+#                              by UUID. p1 is reachable from there through exactly
+#                              three deliberately-named functions, for exactly one
+#                              file — the kernel whose device tree carries the USB
+#                              power budget. See phase 6.
 #   what to delete             device-files/clean-rules.conf, shared with
 #                              commissioning/provision.sh --remove/--deep-clean so the two
 #                              cannot drift.
@@ -103,15 +109,26 @@ ARM_CHECK="require"
 # summary reports it as a caveat rather than under a green tick.
 ARM_TRUSTED=0
 DO_CLEAN=1
+DO_USB_POWER=1
 
 # State the cleanup trap needs.  Set before any mount so an early failure still
 # unwinds, and used by err() above — which is why they are declared up here even
 # though nothing reads them yet.
 MOUNTED_BASE=""
 TMPROOT=""
+# ⚠️ Separate from MOUNTED_BASE: p1 is mounted by a different function, at
+# $MOUNTED_BASE/boot, and it must come down before the rmdir below can succeed.
+# An aborted run that leaks a p1 mount is the one failure this variable exists to
+# prevent (IMPROVEMENT_PLAN.md F15).
+BOOT_MOUNTED=""
 
 cleanup_and_exit() {
     local code="${1:-0}"
+    if [ -n "$BOOT_MOUNTED" ]; then
+        info "Unmounting p1"
+        rw_umount_boot "$BOOT_MOUNTED" || true
+        BOOT_MOUNTED=""
+    fi
     if [ -n "$MOUNTED_BASE" ]; then
         info "Unmounting $MOUNTED_BASE"
         rw_umount_card "$MOUNTED_BASE" || true
@@ -149,11 +166,19 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      device-files/provision-rules.conf with their reasons.
   --arm-check=skip   Install binaries this host cannot verify. Say why to
                      yourself first; the message it replaces explains the risk.
+  --no-usb-power     Leave p1 alone. Default is to raise the USB power budget
+                     from the vendor's 100 mA to 500 mA by patching the device
+                     tree inside uImage-system, which is what lets a controller
+                     run with no powered hub. The vendor image is backed up to
+                     uImage-system.vendor on p1 first, and md5-verified both
+                     ways. --no-usb implies this.
   --help
 
-The card is identified by CONTENT and by PARTITION POSITION, never by UUID, and
-p1 (mlo, u-boot.bin, ctrlblock.bin, uImage-system) is unreachable from here — an
-untouched p1 is what keeps a power cycle a free undo.
+The card is identified by CONTENT and by PARTITION POSITION, never by UUID.
+p1 holds mlo, u-boot.bin, ctrlblock.bin and uImage-system. Only the last of those
+is ever written, only for the USB power budget, and only through the md5-gated
+sequence in lib/rw-usbpower.sh — --no-usb-power leaves the whole partition alone,
+which is what keeps a power cycle a free undo.
 USAGE
     exit 1
 }
@@ -167,6 +192,10 @@ while [[ $# -gt 0 ]]; do
         --no-clean)       DO_CLEAN=0; shift ;;
         --delete-factory) DEL_FACTORY=1; shift ;;   # a no-op since 2026-08-06; see below
         --arm-check=skip) ARM_CHECK="skip"; shift ;;
+        # ⚠️ Must precede the --no-* glob below, exactly as --no-clean does: `case`
+        # takes the FIRST match, so a later arm is never reached and the operator
+        # gets "Unknown provision group: usb-power" instead.
+        --no-usb-power)   DO_USB_POWER=0; shift ;;
         --no-*)
             g="${1#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -191,6 +220,13 @@ done
 [[ -n "$DISK" && -n "$BASE" ]] && { echo "--disk and --base are mutually exclusive."; exit 1; }
 [[ -f "$CLEAN_RULES" ]] || { echo "Missing $CLEAN_RULES"; exit 1; }
 
+# --no-usb implies --no-usb-power. With no driver and no controller modules on the
+# card there is nothing to spend the raised budget on, so patching p1 would be a
+# gratuitous write to the one partition worth not writing.
+case " $NO_PROV_GROUPS " in
+    *" usb "*) DO_USB_POWER=0 ;;
+esac
+
 echo ""
 echo "════════════════════════════════════════"
 echo " RoomWizard offline commissioning"
@@ -206,7 +242,18 @@ if [[ -z "$DRY" ]]; then
     echo ""
     warn "This rewrites the card: root password, host name, network, and a"
     warn "whitelist cleanup that deletes every vendor service it does not"
-    warn "recognise. p1 is never touched, so a power cycle undoes nothing else."
+    warn "recognise."
+    warn ""
+    if [[ "$DO_USB_POWER" -eq 1 ]]; then
+        warn "It ALSO writes p1 — one value in the device tree inside uImage-system,"
+        warn "raising the USB power budget from the vendor's 100 mA to 500 mA so a"
+        warn "controller works with no powered hub. The vendor image is copied to"
+        warn "uImage-system.vendor on p1 first and md5-verified both ways, and"
+        warn "restoring that copy undoes it. --no-usb-power skips it entirely and"
+        warn "leaves a power cycle as a free undo."
+    else
+        warn "--no-usb-power: p1 is not touched, so a power cycle undoes nothing else."
+    fi
     warn ""
     warn "The Steelcase software does not come back afterwards. That includes the"
     warn "472 MB on-device factory-restore payload, which is deleted with the rest"
@@ -622,10 +669,76 @@ while read -r mode dev; do
 done < <(rw_bundle_entries "$BUNDLE_DIR")
 ok "Installed"
 
-# ── 6. verify ───────────────────────────────────────────────────────────────
+# ── 6. p1: the 500 mA USB power budget ─────────────────────────────────────
+#
+# The ONE write to p1 this project makes, and the only one it will ever make. The
+# gate/backup/patch/verify/rollback sequence is NOT here — it is lib/rw-usbpower.sh,
+# shared byte-for-byte with commissioning/provision.sh and
+# usb_host/build-and-deploy.sh, with only the transport differing. ⚠️ Never write a
+# second copy of it into a caller: it is the one step tests/rw_provision_test.sh
+# group E cannot compare between executors, so a duplicate would drift undetected.
+#
+# It runs AFTER the clean and the install, so nothing downstream can delete or
+# overwrite what it wrote, and BEFORE the verify phase, which re-reads the result
+# with md5sum rather than through the writer that produced it.
 echo ""
 echo "────────────────────────────────────────"
-echo " 6. Verify"
+echo " 6. USB power budget (p1)"
+echo "────────────────────────────────────────"
+
+P1_STATE="not attempted"
+if [[ "$DO_USB_POWER" -eq 0 ]]; then
+    case " $NO_PROV_GROUPS " in
+        *" usb "*) P1_STATE="skipped (--no-usb)" ;;
+        *)         P1_STATE="skipped (--no-usb-power)" ;;
+    esac
+    warn "$P1_STATE: p1 untouched. The budget stays at the vendor's 100 mA, so a"
+    warn "  controller needs a POWERED hub. A power cycle remains a free undo."
+elif [[ -n "$DRY" ]]; then
+    P1_STATE="not attempted (dry run)"
+    info "Dry run: would mount p1 and, if uImage-system md5s as the vendor image,"
+    info "  back it up to uImage-system.vendor and patch the device-tree power"
+    info "  property from 0x32 (100 mA) to 0xfa (500 mA)."
+elif [[ -z "$MOUNTED_BASE" ]]; then
+    # --base hands us four mount points and no disk, so there is nothing to derive
+    # p1 from — and guessing a device node from a mount point is exactly the kind of
+    # inference lib/rw-identify.sh exists to refuse.
+    P1_STATE="skipped (--base: no disk given, so p1 cannot be located)"
+    warn "--base was used, so this run knows mount points but not a card. p1 is"
+    warn "  left alone. To raise the budget, re-run with --disk, or afterwards:"
+    warn "    cd usb_host && ./build-and-deploy.sh <ip>"
+else
+    # shellcheck source=../lib/rw-usbpower.sh
+    . "$REPO_ROOT/lib/rw-usbpower.sh"
+    if ! PREREQ="$(rw_usbpower_prereqs)"; then
+        P1_STATE="skipped (missing prerequisites)"
+        warn "cannot patch p1 — the device-tree tooling is not available here:"
+        printf '%s\n' "$PREREQ"
+        warn "  Install python3, or pass --no-usb-power to say so deliberately."
+    else
+        # ⚠️ Not read through a pipe. `rw_mount_boot … | sed` returns SED's status,
+        # so a refusal to mount would read as success (CLAUDE.md → xargs/pipe trap).
+        if BOOT_OUT="$(rw_mount_boot "$DISK" "$MOUNTED_BASE")"; then
+            BOOT_MOUNTED="$MOUNTED_BASE"
+            printf '%s\n' "$BOOT_OUT" | sed 's/^/    /'
+            UP_WORK=$(mktemp -d)
+            if rw_usbpower_apply_offline "$MOUNTED_BASE/boot" "$UP_WORK"; then
+                P1_STATE="500 mA (patched and verified)"
+            else
+                P1_STATE="FAILED — read the block above"
+            fi
+            rm -rf "$UP_WORK"
+        else
+            P1_STATE="FAILED — p1 would not mount"
+            warn "could not mount p1; its own refusal is printed above."
+        fi
+    fi
+fi
+
+# ── 7. verify ───────────────────────────────────────────────────────────────
+echo ""
+echo "────────────────────────────────────────"
+echo " 7. Verify"
 echo "────────────────────────────────────────"
 
 if [[ -n "$DRY" ]]; then
@@ -796,6 +909,35 @@ if [[ "$DO_CLEAN" -eq 1 ]]; then
     fi
 fi
 
+# ── p1: what actually landed on the boot partition ─────────────────────────
+#
+# Read back with md5sum, not with the tool that wrote it. rw_usbpower_apply already
+# re-reads and re-verifies through verify_uimage.py; this is the independent second
+# opinion, and it is the check that decides whether the card may be booted.
+case "$P1_STATE" in
+    "500 mA"*)
+        _p1f="$BOOT_MOUNTED/boot/$RW_UIMAGE_NAME"
+        _p1b="$BOOT_MOUNTED/boot/$RW_UIMAGE_BACKUP"
+        _p1m=$(md5sum "$_p1f" 2>/dev/null | cut -d' ' -f1)
+        _p1v=$(md5sum "$_p1b" 2>/dev/null | cut -d' ' -f1)
+        if [[ "$_p1m" != "$RW_UIMAGE_PATCHED_MD5" ]]; then
+            vfail "p1: $RW_UIMAGE_NAME is ${_p1m:-unreadable}, expected the patched $RW_UIMAGE_PATCHED_MD5"
+        elif [[ "$_p1v" != "$RW_UIMAGE_VENDOR_MD5" ]]; then
+            # Without a good backup the patch is not undoable in place, which is the
+            # single property the whole sequence is built around.
+            vfail "p1: $RW_UIMAGE_BACKUP is ${_p1v:-missing}, expected the vendor $RW_UIMAGE_VENDOR_MD5"
+        else
+            ok "p1: 500 mA budget in place, vendor image backed up as $RW_UIMAGE_BACKUP"
+        fi
+        ;;
+    FAILED*)
+        vfail "p1: $P1_STATE — the USB budget is unknown and so is what is on p1"
+        ;;
+    *)
+        info "p1: $P1_STATE"
+        ;;
+esac
+
 echo ""
 if [[ "$VBAD" -gt 0 ]]; then
     echo -e "${RED}  ✗ $VBAD verification failure(s) — do NOT boot this card until they are understood${NC}"
@@ -813,6 +955,10 @@ else
     ok "ARM safety: $ARM_VERIFIED"
 fi
 ok "$BUNDLE_FILES bundled file(s) installed and md5-verified on the card"
+case "$P1_STATE" in
+    "500 mA"*) ok "USB power budget: $P1_STATE" ;;
+    *)         warn "USB power budget: $P1_STATE" ;;
+esac
 echo ""
 echo "  Put the card back and power the unit on. ONE boot."
 echo ""
@@ -824,11 +970,29 @@ echo "    4. sound: Device Tools -> Audio, or Tap-a-Theremin"
 echo "    5. touch: Device Tools -> Display -> CALIBRATE TOUCH — the one step"
 echo "       that still needs the panel, because it is per-unit."
 echo ""
-echo "  Not installed, and no bundle can install it: USB HOST MODE. It needs the"
-echo "  usb_host component, which patches the DTB inside uImage-system on p1 — the"
-echo "  partition this tool refuses to touch, because an untouched p1 is what keeps"
-echo "  a power cycle a free undo. To add it later, from a machine with the ARM"
-echo "  toolchain:   cd usb_host && ./build-and-deploy.sh <ip>"
-echo "  (IMPROVEMENT_PLAN.md F15.)"
+# USB host mode is three independent mechanisms and only one of them is p1
+# (IMPROVEMENT_PLAN.md F15). This block used to say a bundle could never deliver
+# any of it; the true statement was only ever about the power budget, and now even
+# that is delivered here.
+case " $NO_PROV_GROUPS " in
+    *" usb "*)
+        echo "  USB HOST MODE was skipped (--no-usb): no /etc/init.d/usb-host, no"
+        echo "  controller modules, and p1 untouched. To add it later, from a machine"
+        echo "  with the ARM toolchain:   cd usb_host && ./build-and-deploy.sh <ip>"
+        ;;
+    *)
+        echo "    6. USB: plug an Xbox controller in and check it appears —"
+        echo "         /etc/init.d/usb-host status   and   lsusb"
+        if [[ "$P1_STATE" == "500 mA"* ]]; then
+            echo "       With the 500 mA budget in place it should work with NO powered"
+            echo "       hub. That is the check that the p1 patch took effect."
+            echo ""
+            echo "  To undo the p1 patch: copy uImage-system.vendor over uImage-system"
+            echo "  on p1, and reboot."
+        else
+            echo "       The budget is the vendor's 100 mA, so it needs a POWERED hub."
+        fi
+        ;;
+esac
 echo ""
 cleanup_and_exit 0

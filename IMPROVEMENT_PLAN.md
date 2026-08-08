@@ -111,7 +111,7 @@ non-loopback line mapping an RFC-1918 address to the name `null`, on a card whos
 also `null`. `commissioning/set-hostname.sh` handles all three, because it keys on the name it reads rather than a
 hardcoded one.
 
-### D7b. `/etc/hosts` and `/etc/hostname` are regenerated on boot — open, **confirmed 2026-08-05**
+### D7b. `/etc/hosts` and `/etc/hostname` are regenerated on boot — closed 2026-08-08
 
 Confirmed by reading the vendor script on both captured cards (`diff` reports them identical) and by
 the second unit's own syslog. `/opt/sbin/networkmanager` rewrites `/etc/hosts`, `/etc/hostname`,
@@ -127,21 +127,18 @@ a cleaned unit neither branch runs and the name is never touched again. **The ex
 "commissioned but not yet cleaned",** which is why nothing regressed on RW09 and why a card read
 straight after commissioning shows the revert.
 
-**What remains open is the SSH flow only.** Two of the three fixes are in:
+**All three fixes are in, and the third was closed by deciding not to build it.**
 
 1. **Ordering — done, in [F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06).**
    `commissioning/commission-offline.sh` names the card and deletes both `websign` and the `rcS.d/S60networkmanager`
    link in the same offline pass, so no boot happens in between, and its verify pass fails if either
    survives. That removes the window rather than patching it. **Confirmed on real hardware 2026-08-06:**
    a unit commissioned as `rwtest` booted with its name intact and answered on the network.
-2. **STILL OPEN, for the SSH flow, which keeps the vendor stack:** `commissioning/set-hostname.sh` must also write
-   `websign/net.hostname`, and `websign/net.mode` must read `dhcp` or the unit is unreachable at all
-   (a `manual` card takes a static address and sends no DHCP request). Note the vendor's validator
-   **rejects hyphens**, so `RW-Test` would still be replaced by its fallback `rwtwenty`.
-   ⚠️ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
-   makes this item unnecessary — delete it rather than implement it.** The SSH flow keeps the vendor
-   stack only because `provision.sh`'s clean is opt-in, and C13's decision is to flip that. A
-   commissioning path that cleans removes this window instead of patching it.
+2. **Closed 2026-08-08 by [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08), not implemented.** The proposed fix was to teach
+   `commissioning/set-hostname.sh` to write `websign/net.hostname` too. It is unnecessary: the SSH flow
+   kept the vendor stack only because `provision.sh`'s clean was opt-in, and that default is now
+   flipped. A commissioning path that cleans **removes** this window instead of patching it — the same
+   argument as item 1, now true of both paths.
 3. **`/etc/dhclient.conf`'s `send host-name` — done.** `commissioning/set-hostname.sh` now owns it, in both the
    offline and the live path, with a negative control: it refuses to write a result that would not
    announce the new name. It is the third place the name is stored and the one a DHCP server, and
@@ -370,7 +367,7 @@ happened is the only thing left: running it against a real card and booting a re
 address and never sends a DHCP request, so it appears in no lease list and **the SSH phase can never
 reach it** ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)). Stock cards ship that way. Editing the
 card is the only bootstrap for such a unit. It also **removes
-[D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)'s window**
+[D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--closed-2026-08-08)'s window**
 rather than patching it: the regenerator's input is deleted in the same pass that sets the name, so no
 boot happens in between.
 
@@ -521,7 +518,7 @@ Neither is urgent — recorded so the deletion stays a decision with a known cos
 
 ---
 
-### F15. USB host mode through commissioning — p6 driver + p1 mechanism BUILT 2026-08-08, two call sites left
+### F15. USB host mode through commissioning — driver, p1 patch and tests DONE 2026-08-08, docs left
 
 **Symptom that opened this:** USB does not work on the offline-commissioned unit (`rwtest`,
 192.168.50.225).
@@ -657,35 +654,112 @@ and do not re-raise the card-access question as a risk.
   `rw_clean_test` 148/148, `c11_plan_diff` clean on both plans. Group E picks the new `usb` records up
   automatically, which is the check that the two executors agree about them.
 
+✅ **Wired into both commissioning entry points 2026-08-08 — the p1 patch is ON by default.**
+
+- `commissioning/provision.sh` — a new step 5, `run_usbpower`, calling `rw_usbpower_apply_ssh`.
+  `--no-usb-power` opts out, `--no-usb` implies it (read off `NO_PROV_GROUPS`), a declined backup
+  question skips it, and a missing `python3` degrades to a named skip rather than an abort. The verdict
+  is a `P1_STATE` string reported in a closing "This run:" block, and the run's own reboot is what makes
+  the new budget live — stated there, so nothing further is needed.
+- `commissioning/commission-offline.sh` — a new **phase 6** between install and verify:
+  `rw_mount_boot` → `rw_usbpower_apply_offline` → the caller owns the unmount.
+  ⚠️ **`rw_umount_boot` is reachable from `cleanup_and_exit`**, guarded by its own `BOOT_MOUNTED`
+  variable rather than `MOUNTED_BASE`, and ordered *before* `rw_umount_card` because
+  `rmdir "$MOUNTED_BASE"` fails while `boot/` is still there. Phase 7 (verify) then **re-reads p1 with
+  `md5sum`**, not through the tool that wrote it, and asserts both the patched image and the vendor
+  backup; a `FAILED` p1 is a `vfail`, so the card cannot be declared bootable.
+  ⚠️ **`--base` skips p1 deliberately** — that mode is handed four mount points and no disk, and
+  inferring a device node from a mount point is exactly what `lib/rw-identify.sh` exists to refuse.
+- Both usages, both phase-0/consent texts and both closing summaries were rewritten. The offline
+  closing block no longer says "no bundle can install it: USB HOST MODE" — that sentence was the last
+  statement of the old belief.
+- ⚠️ **The `--no-usb-power` case arm must precede the `--no-*` glob** in both scripts. `case` takes the
+  first match, so an arm placed after it is never reached and the operator gets
+  `Unknown provision group: usb-power`. `--no-clean` was already shadowing for the same reason.
+
+✅ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08) implemented in the
+same pass**, since both changes rewrite the same defaults, `--help` and closing summary:
+
+- `commissioning/provision.sh` **cleans by default** (`CLEAN_MODE=deep`), `--no-clean` opts out,
+  `--remove` narrows to the named stacks, `--deep-clean` names the default explicitly.
+- **One consent gate, `ask_consent`, covering both irreversible steps** — the clean and the p1 write —
+  asked once, before the first write, and *after* `--status`/`--hostname` have had their chance to exit
+  so neither ever sees it. On a TTY a declined answer skips both and says so; the provision and the
+  reboot still happen, because both are repeatable.
+- ⚠️ **The non-TTY branch is a loud banner, and the loudness is the safety property.** It names what is
+  being done with nobody having answered, per selected step. The defect it replaces: an unguarded
+  `read` whose EOF left the answer empty, cancelled the clean and returned 0 — so a scripted run
+  silently did not clean while the operator believed the default did.
+- `--dry-run` was lifted out of positional `$3` into the pre-parse loop, so a bare
+  `provision.sh <ip> --dry-run` now previews the default clean *and* the p1 write. It is rejected with
+  `--status`/`--hostname`, which write nothing — silently accepting it there would preview a clean
+  nobody asked for, because the dry-run branch runs before both of those.
+
+✅ **`tests/rw_usbpower_test.sh` — 94 cases, host-only, no card, no root** (needs `python3`, so WSL).
+Groups A–K: the shipped md5 constants, `rw_usbpower_classify`'s three outcomes, `verify_uimage.py`
+against five one-check-each sabotages, `patch_dtb.py`'s four refusals plus the 9-byte assertion, the
+argument and transport guards, the md5 gate's three outcomes, the dry run, backup-before-write,
+**rollback and failed-rollback**, and group J.
+
+- New `tests/make-fake-uimage.py` builds the fixture: a ~386-byte uImage carrying a real FDT with one
+  `usb_otg_hs` node. ⚠️ **Synthetic only, and it has to be** — the vendor kernel is gitignored and must
+  never be committed. What makes it usable is `uimage.py` *finding* the DTB by magic. Each sabotage is a
+  declared flag, and CRCs are recomputed before a structural sabotage and after a CRC one so that every
+  flag fails **exactly one** check — a fixture that trips two is the negative control for neither.
+- ⚠️ **Groups F–K override `RW_UIMAGE_VENDOR_MD5`/`_PATCHED_MD5` with the fixture's own**, because those
+  constants *are* the identity of one firmware and no synthetic image can match them. The sequence is
+  what is under test; group A asserts the shipped values separately. The expected patched md5 is
+  computed with the **real** `patch_dtb.py`, so a sabotaged copy is caught rather than accommodated.
+- **Rollback is reached by injecting a fault into one private transport primitive** (`_rwup_mv`
+  redefined inside a subshell). The local transport is a `cp` and a `cp` does not fail on demand, so
+  there is no other way to reach step 10 — and what runs is the real rollback code, not a restatement
+  of it. The failed-rollback case pre-places a correct backup so that `_rwup_cp` is reached only by the
+  rollback and not by step 6.
+- **Group J is this file's stand-in for `rw_provision_test.sh` group E** — the p1 step is the one thing
+  that comparison cannot cover, so the same sequence runs over both transports and must leave
+  byte-identical results *and* identical prose. The ssh half runs against a directory on this host
+  through the `$RW_SSH`/`$RW_SCP` stubs the library already documents; every far-side operation really
+  happens.
+- `RW_USBPOWER_LIB` points the suite at a copy of the tree. Because `rw_usbpower_tool` resolves
+  `usb_host/` from the library's own `BASH_SOURCE`, that one variable also redirects all three Python
+  tools — so a sabotage of any of the four is measurable through one door.
+
 ⬜ **Left, in order:**
 
-1. **Wire `lib/rw-usbpower.sh` into the two commissioning entry points**, defaulting ON with
-   `--no-usb-power` as the opt-out and `--no-usb` implying it. `commissioning/provision.sh` calls
-   `rw_usbpower_apply_ssh`; `commissioning/commission-offline.sh` calls `rw_mount_boot` →
-   `rw_usbpower_apply_offline` → `rw_umount_boot`, with the unmount reachable from
-   `cleanup_and_exit` too or an aborted run leaks a p1 mount. Both need the p1 verdict in the closing
-   summary, and `commission-offline.sh`'s closing block still says "Not installed, and no bundle can
-   install it: USB HOST MODE" — which is now false and is the last statement of the old belief.
-   **Until this lands, the only path that delivers USB is `usb_host/build-and-deploy.sh <ip>`**, which
-   does work end to end including p1.
-2. **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)**, folded in: same rewrite of `provision.sh`'s defaults, `--help` and
-   closing summary, and the same loud non-TTY consent banner must cover both the auto-answered backup
-   question and the p1 write.
-3. **`tests/rw_usbpower_test.sh`** (host-only, no card, no root) and
-   **`tests/measure_usbpower_sabotage.sh`**. ⚠️ Synthetic fixtures only — the vendor kernel is
-   gitignored and must not be committed, and `uimage.py`'s magic-scan discovery is what makes a small
-   generated uImage with a minimal `usb_otg_hs` FDT usable as one. Cover the CRC validator (flipped
-   payload byte, flipped header byte, wrong magic, wrong size field), the md5 gate's three outcomes,
-   backup-before-write, the `.new` staging, and rollback. Write the failing version first.
-4. **`LICENSE.md`** — MIT, plus the third-party enumeration. The source offer is already in
-   `release.sh`'s `NOTICE`; `LICENSE.md` is the repo-level half.
-5. **`COMMISSIONING.md`, `usb_host/README.md`'s manual playbook, `README.md`** — the new defaults and
-   flags. `usb_host/README.md`'s File Reference and its Steps 4/6 still name the pre-move paths.
+1. **`tests/measure_usbpower_sabotage.sh`**, following `tests/measure_arm_gate_sabotage.sh`: drive the
+   real suite via `RW_USBPOWER_LIB` against deliberately broken copies, and ⚠️ **assert each sabotage
+   APPLIED before believing a count** — one that fails to apply reports "0 failed", which is
+   indistinguishable from a suite that cannot detect the breakage. Two sabotages are already measured by
+   hand (below); the harness should also cover deleting the backup verification, `verify_uimage.py`
+   always exiting 0, and swapping `uimage_fix_crcs`' CRC order.
+2. **`tests/commission_offline_test.sh`** — ⚠️ **add `lib/rw-usbpower.sh` to the fixture repo's copy
+   list** at `tests/commission_offline_test.sh:67-71`. The suite passes today only because `--base`
+   skips the p1 phase *before* the lazy `.` of that file is reached; a future `--disk` case would fail to
+   source it. Then add the p1 cases: `--no-usb-power` and `--no-usb` each reporting their own skip
+   string, and `--base` reporting the "no disk given" one. `ANSWERS` needs no change — no new prompt was
+   added, phase 0's existing question was only reworded.
+3. **`LICENSE.md`** — MIT, plus the third-party enumeration (LibVNCServer GPL-2.0 under
+   `vnc_client/deps/`, the ScummVM backend compiled into GPL-3.0+ ScummVM). The GPL-2.0 **written
+   source offer** for the three `.ko`s is already in `release.sh`'s `NOTICE`; `LICENSE.md` is the
+   repo-level half.
+4. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
+   `COMMISSIONING.md` step 5 still says the SSH pass deletes nothing; `usb_host/README.md`'s File
+   Reference and its Steps 4/6 still name the pre-move paths. `CLAUDE.md` is done.
 
-⚠️ **Not attempted and not needed: `usb_host` does not appear in `deploy-all.sh`'s bundle path by any
-new mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive
-there for free — but a bundle install does **not** patch p1 and does not install the three device
-scripts. Those come from `commissioning/provision.sh`, which is item 1.
+⚠️ **NOT YET MEASURED FAILING, and that is the gap item 1 closes.** The suite passed 94/94 on its first
+run, which per `CLAUDE.md` is not evidence it *can* fail. Two sabotages were attempted on 2026-08-08 —
+`rw_usbpower_classify` returning `vendor` for an unknown md5, and the post-write re-read replaced by the
+expected constant — and **both runs were abandoned on a timeout, so neither count was ever read.** The
+cause is mundane and worth knowing: `cp -a lib usb_host` into `/tmp` from `/mnt/c` is slow enough over
+DrvFs to blow a 300 s budget. The harness should therefore copy **only the five files it needs**
+(`lib/rw-usbpower.sh`, `lib/rw-identify.sh`, and the three `usb_host/*.py`) rather than two directories,
+or stage them with `git archive`. Until that harness runs, treat every group F–K claim as "seen passing"
+and nothing more.
+
+⚠️ **Not attempted and not needed: `usb_host` reaches `deploy-all.sh`'s bundle path by no new
+mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive there
+for free — but a bundle install alone does **not** patch p1 and does **not** install the three device
+scripts. Those come from `commissioning/provision.sh` or `commissioning/commission-offline.sh`.
 
 **One scoped experiment would retire the p1 path entirely, and is worth trying first.** Patch the
 **in-RAM** copy of the `usb_otg_hs` `power` property via `/dev/mem`: verify it reads `0x00000032`, write
@@ -718,7 +792,7 @@ Zigbee and cannot host Bluetooth. And there is no second USB port and no footpri
 ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
 
 **The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
-as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left)'s
+as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
 three modules — and that precedent worked. Every hard dependency is satisfiable, measured from
 `usb_host/device_config`:
 
@@ -750,7 +824,7 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 `CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
 `CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
-family as [F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left)'s
+family as [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
 controller scribbles into RAM.** No kernel rebuild is available to do it the clean way
 ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
@@ -1057,7 +1131,7 @@ has a reboot in the middle.
 behaviour. `roomwizard.sh` covers the same ground as a menu today, which is why this is an idea and not
 a defect.
 
-⚠️ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
+⚠️ **[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08)
 makes this more than an idea**, though not in the direction this entry assumed: the decision recorded
 there is to flip `provision.sh`'s own default rather than to build `--ssh` for it, so the front door no
 longer needs a reason beyond convenience. (The other reason this row used to fail at its first command
@@ -1152,77 +1226,41 @@ SSH) and by nothing else. Neither is a library and neither is an answer to "what
 - The reorg commit's own control is that all five host-only suites still pass unchanged, and that
   `git ls-files -s -- '*.sh'` is still all `100755` afterwards.
 
-### C13. The SSH pass and the offline pass share one clean and disagree on its default — decided 2026-08-07, not yet implemented
 
-✅ **DECIDED 2026-08-07: option 1 — flip `provision.sh`'s default**, and **treat a non-TTY invocation
-as consent**. Both halves were put to the user with the costs below stated; this section records the
-decision so it is not relitigated, and what is left is the code.
+### C13. The SSH pass and the offline pass share one clean — closed 2026-08-08
 
-**What to build:**
+**Closed by the same commit as [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)**, whose ✅ block records what was built. Kept here for the two
+measurements the decision rested on, because both are still load-bearing and are the kind of thing that
+gets re-raised as a risk.
 
-1. `commissioning/provision.sh <ip>` cleans by default, with the same group list
-   `commissioning/commission-offline.sh` uses (`base browser java snmp mail extras factory sweeps`).
-   `--no-clean` is the opt-out; `--keep-<group>` stays the partial one. `--remove` and `--deep-clean`
-   become explicit selectors rather than the only way in, and `--status` / `--hostname` still never
-   clean.
-2. **Non-TTY runs the clean, and says so loudly.** ⚠️ Not the current behaviour by accident but by
-   design: today `read` at EOF leaves the answer empty, which cancels the clean and returns 0, so a
-   scripted `provision.sh <ip>` would **silently not clean** while the operator believed the default
-   did. That false-negative gate is the one defect a flip must not inherit. The chosen resolution is
-   that a non-TTY caller has already made the decision by passing no `--no-clean`, so the clean
-   proceeds — but it must print, unmistakably, that the backup question is being auto-answered
-   because stdin is not a terminal.
-   ⚠️ Whoever implements this: the loudness *is* the safety property here. A scripted caller deletes
-   the vendor stack with nobody having answered the backup question, which is exactly the trade the
-   decision accepted — so the printed record of what happened is the only thing left standing
-   between that and an unexplained unit.
-3. Closing this makes [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--open-confirmed-2026-08-05)
-   **item 2 unnecessary** — delete it rather than implement it.
+`commissioning/provision.sh` now cleans by default, with the same group list
+`commissioning/commission-offline.sh` uses, so **the result of commissioning no longer depends on which
+path ran** — the one thing the two shared data files exist to prevent. Both paths read
+[`device-files/clean-rules.conf`](device-files/clean-rules.conf) through `lib/rw-clean.sh`, so *what* a
+clean does never could drift; only *whether* one happened did.
 
-**The mechanism was already unified; only the default was not.** Both paths read
-[`device-files/clean-rules.conf`](device-files/clean-rules.conf) and compile it with `lib/rw-clean.sh`,
-so *what* a clean does cannot drift. *Whether* one happens did:
-
-| | `commissioning/commission-offline.sh` | `commissioning/provision.sh <ip>` |
-|---|---|---|
-| Cleans by default | **yes** — `DO_CLEAN=1` | **no** |
-| Groups | `base browser java snmp mail extras factory sweeps` — every group, `sweeps` included | none |
-| The flag | `--no-clean`, `--keep-<group>` opt *out* | `--remove` / `--deep-clean` opt *in* |
-
-So the offline default is exactly `provision.sh --deep-clean`, and plain `provision.sh <ip>` is exactly
-offline `--no-clean` — which is what `provision.sh`'s own closing line reports. The result of
-commissioning therefore depended on which path ran, which is the one thing the two data files exist to
-prevent.
-
-⚠️ **Flipping is cheaper and safer than it sounds — measured, not argued.** The objection worth raising
-was "a routine re-run becomes destructive"; the rules file already answers most of it. **Do not
-re-raise these as risks.**
+⚠️ **Do not re-raise these as risks — they are measured, not argued.**
 
 - **Nothing we install is sweepable.** `/opt/games`, `/opt/roomwizard`, `/opt/vnc_client` and
   `/opt/scummvm` are `keep` records in group `base`, which is never disabled, and so are
-  `/etc/rc5.d/S89xpad-modules` and `S90usb-host`. That last pair is the one to notice: `usb_host`
-  installs them *outside* `provision-rules.conf`, so `rw_provision_check_keeps` cannot assert them, and
-  they are named anyway. `/etc/init.d` is not a `scope` sweep at all, so the init scripts behind every
-  one of those links survive too. **A second deep clean over a fully deployed unit removes none of it.**
-- **The backup question is already the gate**, at the top of `run_clean` — the same wording as
-  `commission-offline.sh`'s phase 0. On a terminal, a flipped default therefore cannot run unannounced.
-- **The residual case is one unit state, not a general hazard:** a unit *not yet* deep-cleaned. A
-  `--remove`-only unit would run the sweeps for the first time during what the operator meant as "push a
-  changed `device-files/` script" — behind that same prompt.
+  `/etc/rc5.d/S89xpad-modules` and `S90usb-host`. `/etc/init.d` is not a `scope` sweep at all, so the
+  init scripts behind every one of those links survive too. **A second deep clean over a fully deployed
+  unit removes none of it.** (Those two USB links are now `provision-rules.conf` records as well, so
+  `rw_provision_check_keeps` asserts the pairing rather than a comment asking a human to remember it.)
+- **The residual case is one unit state, not a general hazard:** a unit *not yet* deep-cleaned. It runs
+  the sweeps for the first time during what the operator meant as "push a changed `device-files/`
+  script" — behind the backup question, which is asked first.
 
-**When `provision.sh` is re-run at all:** any change under `device-files/` reaches a device through no
-other path (`CLAUDE.md` → *Redeploy scope by changed file*), and the run ends in a reboot.
+**The cost the decision accepted:** the developer's own re-run answers a prompt every time. `--no-clean`
+is the way out, and it is the flag to put in a personal alias. Any change under `device-files/` reaches a
+device through no other path (`CLAUDE.md` → *Redeploy scope by changed file*), and the run ends in a
+reboot.
 
-**The cost the decision accepted**, recorded so it is not rediscovered as a surprise: the developer's
-own re-run now answers a prompt every time. `--no-clean` is the way out of that, and it is the flag to
-put in any personal alias.
-
-The rejected alternative was to put the default on `commission.sh --ssh` (C12's remaining `⬜`), leaving
-`provision.sh` as the developer's opt-in tool. It would have kept the dev loop non-interactive, but the
-`⬜` has to be built first and the two paths stay divergent until it is.
-
-Neither reintroduces a middle setting: there is one default per *situation served*, and `--keep-<group>`
-remains the only opt-out.
+**The rejected alternative** was to put the default on `commission.sh --ssh`
+([C12](#c12-one-commissioning-entry-point--open)'s remaining `⬜`), leaving `provision.sh` as the
+developer's opt-in tool. It would have kept the dev loop non-interactive, but the `⬜` has to be built
+first and the two paths stay divergent until it is. Neither option reintroduces a middle setting: there
+is one default per *situation served*, and `--keep-<group>` remains the only partial opt-out.
 
 ---
 
@@ -1255,16 +1293,20 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **C13** — the decision is made and the measurements are in the entry, so this is the shortest path
-   from "decided" to "one default in the repo". Get the non-TTY announcement right and D7b item 2 goes
-   away with it.
-2. **`COMMISSIONING.md`'s ordering** — F10's *What is left* #1. The prose is a description now; what is
+1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
+   remaining ⬜ list** — the code and its 94-case suite are in; what is left is one sabotage harness, the
+   p1 cases in `tests/commission_offline_test.sh`, `LICENSE.md`, and three prose files. All host-only.
+2. **The three device checks nothing here can do** — `sudo tests/commission_offline_test.sh`, a full
+   bundle installed on `.225`, and an Xbox pad plugged in with **no powered hub** after a reboot. That
+   last one is the only check that the p1 patch took effect, and until it runs, "500 mA" is a verified
+   *write* and an unverified *effect*.
+3. **`COMMISSIONING.md`'s ordering** — F10's *What is left* #1. The prose is a description now; what is
    left is that it leads with the SSH flow while the offline pass is the verified delivery path, plus
-   two stale lines named there.
-3. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
-4. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device
-   (`--deep-clean`) first if disk space is tight.
-5. **C10 before panel check #2** — it converts a play session into one launch, and every future
+   two stale lines named there. Worth doing after F15's docs, since C13 changed what the SSH flow does.
+4. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
+5. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device first if
+   disk space is tight — which is now the default.
+6. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
 
 [F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
@@ -1273,13 +1315,11 @@ item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-
 cannot fire here. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
 not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
 recorded rather than planned, because the honest answer is a bootable image.
-[F15](#f15-usb-host-mode-through-commissioning--p6-driver--p1-mechanism-built-2026-08-08-two-call-sites-left) is **planned**:
-both measurements it rested on are in the entry, the p1 decision is taken, and C13 is folded into the same
-pass.
-
-[C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean-and-disagree-on-its-default--decided-2026-08-07-not-yet-implemented)
-is **the next thing to write**: the decision is made and recorded, the measurements are in the entry,
-and the only part that needs care is the non-TTY path.
+[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left) is
+**built and host-tested; its effect on a device is not yet measured**, which is the distinction its own
+entry keeps. [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08) and
+[D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--closed-2026-08-08) closed with it — D7b's
+item 2 by deciding not to build it.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to
 consider promoting**: the register map is published, so it is far less speculative than its position
