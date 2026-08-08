@@ -157,6 +157,14 @@ layout lives in **`lib/rw-bundle.sh`** and nowhere else: `<dir>/root/<device-pat
   binary and this repo is meant to be published, which is why the USB 500 mA patch is **derived** from
   the device's own copy (`lib/rw-usbpower.sh`) rather than shipped. `usb_host`'s `--bundle` carries the
   four *built* artifacts only.
+- ⚠️ **A new staged file is a licence decision, and `LICENSE.md` is where it is recorded.** Ask whether
+  the file is *ours*: `scummremastered.zip`, `gui-icons.dat` and `vkeybd_roomwizard.zip` are all
+  GPL-3.0+ ScummVM data and were being published with no licence line until someone looked, and
+  `vkeybd_roomwizard.zip` is the **only** non-MIT file committed in this repo. `LICENSE.md` is the
+  repo-level half of `release.sh`'s per-release `NOTICE`; **the two must agree**, and MIT governs our
+  *source* — it does not decide the licence of a binary it links into (`scummvm` is GPL-3.0+ as a
+  whole, `vnc_client` GPL-2.0+). Measure a dependency's licence *version* rather than carrying it
+  forward: `NOTICE` claimed GPLv2+ for ScummVM and the tree's `COPYING` is GPLv3.
 - **`--stage-only` is the tested path; `--tag` has never run.** `gh` 2.86.0 is now installed in WSL
   (from the release `.deb` — focal's apt has no `gh`, and the snap links against a glibc newer than
   2.31), so the publish step is reachable but still unexercised. The tarball `--stage-only` produces is
