@@ -881,15 +881,29 @@ fi
 
 # ── the boot links resolve ─────────────────────────────────────────────────
 LINKBAD=0
-for l in "$BASE/root/etc/rc5.d/S28time-sync" "$BASE/root/etc/rc5.d/S29audio-enable" \
-         "$BASE/root/etc/rc5.d/S99roomwizard-app"; do
+BOOT_LINKS=("$BASE/root/etc/rc5.d/S28time-sync" "$BASE/root/etc/rc5.d/S29audio-enable" \
+            "$BASE/root/etc/rc5.d/S99roomwizard-app")
+LINK_NAMES="S28, S29, S99"
+# ⚠️ The usb group's two links are asserted too, but only when the group ran.
+# --no-usb leaves them uninstalled on purpose, so an unconditional list would
+# report a failure for a deliberate omission; and leaving them out entirely was a
+# real gap (IMPROVEMENT_PLAN.md F15) — a dangling rc5.d link is skipped in SILENCE
+# at boot, which is the exact class of defect this check exists for, and these two
+# are the only boot links this project installs that were never covered.
+case " $NO_PROV_GROUPS " in
+    *" usb "*) ;;
+    *) BOOT_LINKS+=("$BASE/root/etc/rc5.d/S89xpad-modules" \
+                    "$BASE/root/etc/rc5.d/S90usb-host")
+       LINK_NAMES="$LINK_NAMES, S89, S90" ;;
+esac
+for l in "${BOOT_LINKS[@]}"; do
     [[ -L "$l" ]] || { vfail "missing boot link: ${l#$BASE/root}"; LINKBAD=1; continue; }
     # A relative link resolves against its own directory, so test it from there —
     # `[ -e "$link" ]` from the wrong cwd is a dangling-link false positive.
     ( cd "$(dirname "$l")" && [ -e "$(readlink "$l")" ] ) \
         || { vfail "dangling boot link: ${l#$BASE/root} -> $(readlink "$l")"; LINKBAD=1; }
 done
-[[ "$LINKBAD" -eq 0 ]] && ok "boot links resolve (S28, S29, S99)"
+[[ "$LINKBAD" -eq 0 ]] && ok "boot links resolve ($LINK_NAMES)"
 
 # ── websign is gone, i.e. D7b's window is closed ───────────────────────────
 if [[ "$DO_CLEAN" -eq 1 ]]; then

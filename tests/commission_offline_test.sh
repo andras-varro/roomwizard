@@ -18,6 +18,11 @@
 # asserts that (a) the right check fires and (b) the tool exits non-zero. The
 # happy path is case 1 and is the control for all of them.
 #
+# Section 4 is the one exception and is the mirror image: the p1 skip paths must
+# exit ZERO and still say which flag skipped them, so they use expect_says rather
+# than expect_fires. Section 0 is neither — it is the structural check on the
+# fixture tree itself.
+#
 # The sabotages run against COPIES — a copy of the bundle, and a copy of just the
 # scripts commissioning/commission-offline.sh reads (not the repo, which carries 4 GB of card
 # images). SCRIPT_DIR is derived from the script's own location, so a copied tree
@@ -66,6 +71,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
+         lib/rw-usbpower.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
@@ -96,6 +102,57 @@ expect_fires() {
     fi
 }
 
+# expect_says <regex> <description>   — the run must have SUCCEEDED, and said it.
+#
+# The mirror of expect_fires, for the skip paths. Both halves are load-bearing and
+# they are different bugs: a skip that exits non-zero turns a deliberate opt-out
+# into a failed commissioning, and a skip that goes unmentioned leaves the operator
+# believing a step ran. Asserting only the exit code would pass a silent skip.
+expect_says() {
+    if [ "$ST" -ne 0 ]; then
+        bad "$2 — the tool exited $ST, but a deliberate skip must still succeed"
+        printf '%s\n' "$OUT" | grep -E '✗|FAIL' | sed 's/^/        /' | head -5
+    elif printf '%s\n' "$OUT" | grep -qE "$1"; then
+        ok "$2"
+    else
+        bad "$2 — exited 0 but no line matched /$1/"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "0. the fixture tree covers everything the tool sources"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The negative control for the copy list above, and the case that would have caught
+# lib/rw-usbpower.sh's omission from it. That omission was invisible for a whole
+# session because the `.` of it is LAZY — it sits inside phase 6's else branch, and
+# every case in this file passes --base, which skips p1 before the source line is
+# reached. So a suite that only ever runs --base cannot discover a missing library
+# by running; it has to look.
+#
+# Reads the COPIED script, not the repo's, so the thing asserted is the tree the
+# cases below actually execute.
+SRC_LINES=$(grep -hoE '^[[:space:]]*\.[[:space:]]+"\$REPO_ROOT/[^"]+"' \
+                "$REPO/commissioning/commission-offline.sh" \
+            | sed 's|.*\$REPO_ROOT/||; s|"$||' | sort -u)
+SRC_N=$(printf '%s\n' "$SRC_LINES" | grep -c . )
+# Ask which part of the count is the harness: a grep whose pattern has rotted
+# matches nothing and every per-file case below then passes over an empty list.
+if [ "$SRC_N" -ge 5 ]; then
+    ok "0a the source-line grep found $SRC_N libraries (>= 5)"
+else
+    bad "0a the source-line grep found only $SRC_N libraries — the pattern has rotted"
+fi
+while read -r f; do
+    [ -n "$f" ] || continue
+    if [ -f "$REPO/$f" ]; then
+        ok "0b sourced by commission-offline.sh and present in the fixture: $f"
+    else
+        bad "0b sourced by commission-offline.sh but MISSING from the fixture: $f"
+    fi
+done <<< "$SRC_LINES"
+
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "1. the happy path — the control for every case below"
@@ -118,6 +175,18 @@ for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh
         bad "1b a verify check did not run: /$want/"
     fi
 done
+# The usb group is ON by default, so its two links must be among the ones checked.
+# Named explicitly because the generic 'boot links resolve' above still matches when
+# they are silently left out — which is how the gap survived (IMPROVEMENT_PLAN.md F15).
+if printf '%s\n' "$OUT" | grep -qE 'boot links resolve .*S89.*S90'; then
+    ok "1c the default run checks the usb group's boot links too (S89, S90)"
+else
+    bad "1c the default run checks the usb group's boot links too (S89, S90)"
+fi
+
+# Kept for section 4: a default --base run is exactly the p1 '--base' skip case, so
+# it is asserted against THIS run rather than paying for a second identical one.
+HAPPY_OUT="$OUT"; HAPPY_ST="$ST"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
@@ -265,10 +334,71 @@ expect_fires 'do not look right|does not look like' "3b a directory that is not 
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
+echo "4. p1: the three ways the power patch is skipped"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ⚠️ What this section does NOT cover: the p1 WRITE. Reaching the
+# gate/backup/patch/verify/rollback sequence needs --disk — a real card or a
+# loopback image with a vfat p1 — and this whole file is built on --base, which
+# hands the tool four mount points and no disk. tests/rw_usbpower_test.sh (94 cases)
+# and tests/measure_usbpower_sabotage.sh (five sabotages, all caught) own that
+# sequence over both transports. What THIS file can own is which mode reaches it,
+# i.e. that every non-writing path says so and still succeeds. Do not read the
+# passes below as evidence that the write is covered here.
+#
+# Each string is asserted in TWO places on purpose: the per-file verify line and the
+# closing summary. A verdict that reaches the detail block but not the summary is a
+# skip the operator scrolls past, and the summary is the only part they are told to
+# read.
+
+# ── --no-usb-power: the driver is installed, only the budget is left alone.
+run "$BUNDLE" "$REPO" --no-usb-power
+expect_says 'p1: skipped \(--no-usb-power\)' \
+    "4a --no-usb-power skips p1, succeeds, and the verify block says which flag did it"
+expect_says 'USB power budget: skipped \(--no-usb-power\)' \
+    "4b --no-usb-power is named in the closing summary too"
+
+# ── --no-usb: the whole group goes, and it must IMPLY --no-usb-power. Patching p1
+# for a unit with no /etc/init.d/usb-host would be a gratuitous least-reversible
+# write. The distinct string is what proves the implication was taken rather than
+# the plain --no-usb-power branch being reached by accident.
+run "$BUNDLE" "$REPO" --no-usb
+expect_says 'p1: skipped \(--no-usb\)' \
+    "4c --no-usb implies --no-usb-power, and says so by its own name"
+expect_says 'USB power budget: skipped \(--no-usb\)' \
+    "4d --no-usb is named in the closing summary too"
+# And the boot-link check must drop S89/S90 rather than fail over links nobody asked
+# to install. This is the half of that check that could turn an opt-out into a
+# verification failure, so it is asserted from the opt-out side.
+#
+# ⚠️ Asserted as "the line exists AND does not name S89", not as a match on the
+# short list: commission-offline.sh's ok() appends ${NC}, so nothing can be anchored
+# with `$`, and unanchored `boot links resolve \(S28, S29, S99\)` is a PREFIX of the
+# default run's own message — it would pass whether or not the exclusion works.
+_bl=$(printf '%s\n' "$OUT" | grep -E 'boot links resolve' | head -1)
+if [ -n "$_bl" ] && ! printf '%s\n' "$_bl" | grep -q 'S89'; then
+    ok "4e --no-usb drops S89/S90 from the boot-link check instead of failing on them"
+else
+    bad "4e --no-usb drops S89/S90 from the boot-link check instead of failing on them"
+    printf '%s\n' "$OUT" | grep -E 'boot link' | sed 's/^/        /' | head -5
+fi
+
+# ── --base with no flags at all: the default path every other case in this file
+# takes. ⚠️ This is reached even though the p1 patch is ON by default, because
+# DO_USB_POWER is tested BEFORE -z "$MOUNTED_BASE" — so the flag cases above are
+# genuinely distinct from this one and not all three the same branch.
+OUT="$HAPPY_OUT"; ST="$HAPPY_ST"
+expect_says 'p1: skipped \(--base: no disk given, so p1 cannot be located\)' \
+    "4f --base alone skips p1 and says a card, not a mount point, is what it needs"
+expect_says 'USB power budget: skipped \(--base' \
+    "4g the --base skip is named in the closing summary too"
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 echo "════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
-if [ "$TOTAL" -lt 18 ]; then
+if [ "$TOTAL" -lt 30 ]; then
     echo -e "  ${RED}✗ only $TOTAL cases ran — the harness itself is broken${NC}"
     exit 1
 fi
