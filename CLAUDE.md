@@ -300,8 +300,16 @@ ext4 honours it, so that check is a measurement offline and cannot be one on `/m
 - ⚠️ **`dash -n` catches parse errors and CRLF, not bashisms.** `[[ -n "$x" ]]` parses fine under dash —
   `[[` is read as a command name — so it passes and then fails at boot with `[[: not found`.
 - ⚠️ **A missing `arm-linux-gnueabihf-objdump` is a refusal, not a pass.** `check-arm-safe.sh` skips
-  non-ARM files and then reports "no hardware divide in 0 binaries", so the caller counts the ELF
+  non-ARM files, so a run that inspected nothing must not report a clean bill; the caller counts the ELF
   candidates itself and says loudly what it did not check. `--arm-check=skip` is the deliberate override.
+- ⚠️ **A stripped binary cannot be gated at all, so the installer says so instead of refusing.**
+  `objdump` needs the symbol table to tell Thumb-2 from ARM and invents `sdiv`/`udiv` without it, so
+  `check-arm-safe.sh` returns **2** ("could not judge") rather than a hit, and the installer proceeds with
+  a loud block naming the count. `scummvm` and `vnc_client` ship stripped, so **every full bundle** takes
+  that path; the sound verdict is the build-time one, on the unstripped artifact. ⚠️ **Never read that
+  status through `xargs`** — it collapses any 1–125 onto 123 and erases the difference between "a real
+  hit" and "could not judge". Regression: `tests/check_arm_safe_test.sh` (25 cases, host-only, needs the
+  cross toolchain). Detail: `IMPROVEMENT_PLAN.md` C9.
 - ⚠️ **`commissioning/card-prep.sh` is a *step of* the offline pass, not an alternative to it**, and the
   handover carries **two** variables. `ROOTFS` skips its own card detection; `RW_COMMISSION_ORCHESTRATED`
   suppresses its closing banner and the `NEXT_STEPS` block it reads out of `COMMISSIONING.md`, which

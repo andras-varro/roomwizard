@@ -1719,14 +1719,24 @@ loosely:
 
 Second, feeding it an artifact it cannot read correctly:
 
-> ⚠️ **Gate the *unstripped* artifact.** Without a symbol table `objdump` cannot separate code from
-> the literal pools embedded in `.text`, so four-byte constants disassemble as plausible
-> instructions. The same ScummVM binary reports **8–9** hardware divides stripped and **zero**
-> unstripped, and `strip` cannot alter `.text`. The phantom operands are **not** reliably invalid:
+> ⚠️ **Gate the *unstripped* artifact.** `objdump` needs the symbol table to tell **Thumb-2 from ARM**,
+> and these binaries are Thumb-2. Stripped, it falls back to 32-bit ARM and re-reads the same bytes as
+> ARM words, manufacturing divides that are not in the file. Measured on `samegame` 2026-08-08:
+> `objdump -s` prints `4846ebf7 1bfe3de7` at `0x42618` for the unstripped file *and* the stripped copy —
+> `strip` cannot alter `.text` — but unstripped that is `mov r0, r9` / `bl …` / `b.n …`, while read as ARM
+> the second word alone becomes `e73dfe1b` = `udiv sp, fp, lr`. Neighbouring lines decode as
+> `<UNDEFINED>` and `sbcsne pc, r1, …`, which is the signature. The same effect gives ScummVM **9**
+> phantom hits and `vnc_client` **1**. The phantom operands are **not** reliably invalid:
 > `udiv pc, fp, sl` is dismissible, but `udiv r7, r1, lr` is a legal encoding indistinguishable from
 > compiler output — so eyeballing operands is not triage, the symbol table is the only thing that
 > settles it. Offsets cannot be allowlisted either: `base/version.o` re-embeds the build date on
 > every link, which moves every address after it.
+>
+> So the gate **refuses to judge** a stripped target rather than reporting a hit for it — and rather than
+> skipping it quietly, which is the same defect from the false-negative side. Three outcomes:
+> **0** clean, **1** a real hit, **2** something could not be judged; the last line is always
+> `ARM-SUMMARY checked=N unverified=N bad=N skipped=N`. ⚠️ **Do not read that status through `xargs`** —
+> it maps any 1–125 onto its own 123 and erases the difference between 1 and 2.
 
 The check itself:
 

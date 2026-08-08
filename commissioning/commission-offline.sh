@@ -99,6 +99,9 @@ KEEP_GROUPS=""
 NO_PROV_GROUPS=""
 DEL_FACTORY=0
 ARM_CHECK="require"
+# Set when the ARM gate could not judge everything it was given, so the closing
+# summary reports it as a caveat rather than under a green tick.
+ARM_TRUSTED=0
 DO_CLEAN=1
 
 # State the cleanup trap needs.  Set before any mount so an early failure still
@@ -395,13 +398,58 @@ if ! command -v "$OBJDUMP" >/dev/null 2>&1; then
     [[ "$ARM_CHECK" == "skip" ]] || err "refusing to install unverified ARM binaries"
     warn "--arm-check=skip given: installing $ELF_COUNT UNVERIFIED binaries"
     ARM_VERIFIED="NOT CHECKED — $OBJDUMP absent"
+    ARM_TRUSTED=1
 else
-    # xargs rather than $(cat): the list can be long, and a path with a space in
-    # it would otherwise be split into two arguments that both fail to exist.
-    if ! xargs -d '\n' -a "$ELF_LIST" bash "$REPO_ROOT/native_apps/check-arm-safe.sh"; then
-        err "a bundled binary would SIGILL on this device — do not install it"
+    # ⚠️ NOT xargs: it maps any command exit of 1–125 onto its own 123, which
+    # erases the difference between "a real hit" (1) and "could not judge" (2) —
+    # the whole distinction this block turns on. mapfile handles both things xargs
+    # was here for: an arbitrarily long list, and paths containing spaces.
+    #
+    # ⚠️ Exit 2 is NOT a failure and must not be treated as one. It means some of
+    # the bundle's binaries are stripped, and the gate refuses to invent a verdict
+    # for those — objdump reads Thumb-2 as ARM without a symbol table and reports
+    # divides that are not in the file (IMPROVEMENT_PLAN.md C9). scummvm and
+    # vnc_client both ship stripped, so every full bundle takes this path; treating
+    # 2 as fatal refused all of them, and --arm-check=skip could not override it
+    # because that flag lives in the objdump-absent branch above.
+    ARM_LOG="$TMPROOT/arm-check.log"
+    mapfile -t ARM_TARGETS < "$ELF_LIST"
+    if bash "$REPO_ROOT/native_apps/check-arm-safe.sh" "${ARM_TARGETS[@]}" \
+             > "$ARM_LOG" 2>&1; then
+        arm_rc=0
+    else
+        arm_rc=$?
     fi
-    ARM_VERIFIED="$ELF_COUNT binaries, hard zero"
+    cat "$ARM_LOG"
+
+    # The counts come off the gate's own machine-readable last line, so this block
+    # cannot disagree with what the gate printed directly above it.
+    ARM_SUM="$(grep -o 'ARM-SUMMARY .*' "$ARM_LOG" | tail -1)"
+    ARM_OK="$(printf '%s' "$ARM_SUM"  | sed -n 's/.*checked=\([0-9]*\).*/\1/p')"
+    ARM_UNV="$(printf '%s' "$ARM_SUM" | sed -n 's/.*unverified=\([0-9]*\).*/\1/p')"
+
+    case "$arm_rc" in
+    0)  ARM_VERIFIED="$ELF_COUNT binaries, hard zero" ;;
+    2)  echo ""
+        echo -e "${YELLOW}  ╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}  ║  ${ARM_UNV:-some} OF ${ELF_COUNT} BUNDLED BINARIES COULD NOT BE CHECKED.${NC}"
+        echo -e "${YELLOW}  ║${NC}"
+        echo -e "${YELLOW}  ║  They are stripped, and the hardware-divide check is meaningless${NC}"
+        echo -e "${YELLOW}  ║  on a stripped binary — it would report divides that are not in${NC}"
+        echo -e "${YELLOW}  ║  the file. Refusing on that basis would refuse every bundle that${NC}"
+        echo -e "${YELLOW}  ║  contains scummvm or vnc_client, so the install continues.${NC}"
+        echo -e "${YELLOW}  ║${NC}"
+        echo -e "${YELLOW}  ║  What that costs you: if one of those ${ARM_UNV:-n} binaries does carry an${NC}"
+        echo -e "${YELLOW}  ║  sdiv/udiv, it will SIGILL when tapped — blank screen, no log.${NC}"
+        echo -e "${YELLOW}  ║  A bundle from this repo's release.sh was gated at BUILD time, on${NC}"
+        echo -e "${YELLOW}  ║  the unstripped artifact, which is the only sound moment. A bundle${NC}"
+        echo -e "${YELLOW}  ║  from anywhere else is taken on trust here. (IMPROVEMENT_PLAN C9)${NC}"
+        echo -e "${YELLOW}  ╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        ARM_VERIFIED="${ARM_OK:-?} verified, ${ARM_UNV:-?} stripped and TAKEN ON TRUST"
+        ARM_TRUSTED=1 ;;
+    *)  err "a bundled binary would SIGILL on this device — do not install it" ;;
+    esac
 fi
 
 if [[ -z "$BASE" ]]; then
@@ -757,7 +805,13 @@ fi
 echo "════════════════════════════════════════"
 echo " Done"
 echo "════════════════════════════════════════"
-ok "ARM safety: $ARM_VERIFIED"
+# A green tick on a partial answer is the thing this whole entry is about, so the
+# marker follows what was actually established, not merely that we got this far.
+if [[ "$ARM_TRUSTED" == 1 ]]; then
+    warn "ARM safety: $ARM_VERIFIED"
+else
+    ok "ARM safety: $ARM_VERIFIED"
+fi
 ok "$BUNDLE_FILES bundled file(s) installed and md5-verified on the card"
 echo ""
 echo "  Put the card back and power the unit on. ONE boot."
