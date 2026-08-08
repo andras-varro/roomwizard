@@ -821,12 +821,44 @@ writing it, all measured on this host:
 - The Apache-2.0 exclusion is now recorded with its reason on the file itself: the three `.ko`s are
   GPL-2.0-**only**, which is what the patent-termination clause conflicts with.
 
-⬜ **Left:**
+✅ **`COMMISSIONING.md` and `README.md` — the new defaults and flags, 2026-08-08.**
 
-1. **`COMMISSIONING.md`, `README.md`, `usb_host/README.md`** — the new defaults and flags.
-   `COMMISSIONING.md` step 5 still says the SSH pass deletes nothing; `usb_host/README.md`'s File
-   Reference and its Steps 4/6 still name the pre-move paths. `README.md` also has no licence section
-   yet. `CLAUDE.md` is done.
+- `COMMISSIONING.md`'s *disable vs remove* table said a bare `provision.sh <ip>` **deletes nothing**.
+  Rewritten: the table's Default? column now reads opt-**out** for disable and **yes** for deep clean,
+  with a fourth row for the 500 mA p1 write. The one-consent-gate behaviour and the non-TTY banner are
+  described where the old "both ask for a backup" sentence was. *What it does* gained step 6 (p1) and
+  step 7 (the reboot is what makes the budget live), and its step 1 now lists the three USB scripts and
+  the `S89`/`S90` links. The *Usage* block leads with the full run and lists both opt-outs.
+- ⚠️ **The `<!-- NEXT_STEPS_START -->` block is read out at runtime by `commissioning/card-prep.sh:552`**,
+  so its step 5 was a *live* wrong instruction, not just stale prose. Rewritten and the extraction
+  re-checked with the same `sed` the script uses.
+- **The section headed "USB host mode is not in any bundle, and cannot be" is gone.** It was the last
+  full statement of the refuted belief. Replaced with the three-mechanism table and what delivers each,
+  plus the ⚠️ that a bundle install *alone* still gives no USB.
+- The file-reference and on-device-layout blocks gained `lib/rw-usbpower.sh`, the three
+  `device-files/` USB scripts, `/etc/init.d/{xpad-modules,usb-host}`, the modules directory, and a note
+  that p1 is absent from that layout with exactly one exception.
+- `README.md`: *1b. Reclaim disk space (optional, recommended)* is gone — the clean is no longer
+  optional. Replaced with the offline one-liner and the five opt-outs, plus the two-sentence statement
+  of what is not undoable. The tree gained `LICENSE.md`, `usb_host/`, `lib/rw-usbpower.sh`,
+  `lib/rw-ssh.sh` and the three USB device files, and the file now has a **Licence** section — it had
+  none.
+
+⬜ **Left — one file:**
+
+1. **`usb_host/README.md`.** Measured 2026-08-08, not yet edited: its *File Reference* (`:401-426`) and
+   its **Step 4** (`:179-193`) and **Step 6** (`:203-207`) still name the **pre-move** paths —
+   `usb-host-initd.sh` and `S89xpad-modules` as *repo* filenames, and
+   `/etc/init.d/S89xpad-modules` as the installed name. All three are wrong now: the files are
+   `device-files/{enable-usb-host.sh,usb-host,xpad-modules}` and the installed init script is
+   `/etc/init.d/xpad-modules` with `/etc/rc5.d/S89xpad-modules` as the link. `provision-rules.conf:94`
+   carries an `unlink` of the old `/etc/init.d/S89xpad-modules` for exactly this reason, so the README
+   is the only place the old name still reads as current. Also worth a line: Steps 4/6 are now what
+   `rw_provision_plan_component` does, so they are a *description* of the automated path rather than
+   the instructions.
+   ⚠️ **And the *Failed Approaches* framing needs one correction that is not a path**: the `/dev/mem`
+   patch **forces IRQ-driven PIO, it does not fix DMA** — the noop stubs make MUSB *give up* on DMA.
+   The README's "broken MUSB DMA configuration" reads backwards.
 
 ⚠️ **Not attempted and not needed: `usb_host` reaches `deploy-all.sh`'s bundle path by no new
 mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive there
@@ -1367,8 +1399,9 @@ Deliberately not a ranking of everything — only the claims worth making.
 
 1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
    remaining ⬜ list** — the code, its 94-case suite, the sabotage harness that proves the suite can
-   fail, `tests/commission_offline_test.sh`'s p1 cases and `LICENSE.md` are all in; what is left is
-   three prose files. All host-only.
+   fail, `tests/commission_offline_test.sh`'s p1 cases, `LICENSE.md`, `COMMISSIONING.md` and `README.md`
+   are all in. What is left is **`usb_host/README.md`** alone, and F15 names the three line ranges.
+   Host-only.
 2. **The three device checks nothing here can do** — `sudo tests/commission_offline_test.sh`, a full
    bundle installed on `.225`, and an Xbox pad plugged in with **no powered hub** after a reboot. That
    last one is the only check that the p1 patch took effect, and until it runs, "500 mA" is a verified

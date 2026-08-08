@@ -165,11 +165,15 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
        ssh-copy-id -i ~/.ssh/id_rsa.pub root@<ip>
 
   5. One-time system setup. Stops the vendor services, installs the app
-     launcher and enables mDNS. Deletes nothing, and ends in a reboot:
+     launcher, enables mDNS, DEEP-CLEANS the vendor software and raises the
+     USB power budget on p1. Ends in a reboot:
        ./commissioning/provision.sh <ip>
 
-     To also DELETE the vendor software (permanent), add --remove.
-     It asks for a card backup first, and the factory restore goes too.
+     It asks once whether the card is backed up, before the first write.
+     Neither the clean nor the p1 write is undoable on the device, and the
+     472 MB factory-restore payload goes with the rest.
+       --no-clean       delete nothing
+       --no-usb-power   leave p1 alone (budget stays at the vendor's 100 mA)
 
   6. Deploy all apps:
        ./deploy-all.sh <ip>
@@ -183,42 +187,64 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
 ## Phase 2: System Setup (SSH)
 
 The [`commissioning/provision.sh`](commissioning/provision.sh) script is run once over SSH after the device first boots.
-It **disables** the Steelcase services and installs the generic app launcher framework.
+It **disables** the Steelcase services, installs the generic app launcher framework, deep-cleans the
+vendor stack and raises the USB power budget on p1.
 
-⚠️ **Disable and remove are different acts, and only one of them is the default.**
+⚠️ **With no flags this now does the FULL commissioning — it CLEANS and it WRITES p1.** The point is
+that the SSH path and the offline path leave the same unit, differing only in how they authenticate.
+`--no-clean` and `--no-usb-power` are the opt-outs.
 
 | | What it does | Default? | Reversible |
 |---|---|---|---|
-| **disable** | stops and de-registers the vendor services, writes the watchdog bypass. Re-applied on **every boot** by the init script. Deletes nothing. | **yes** | yes |
-| **remove** (`--remove`) | additionally *deletes* the named vendor stacks — ~178 MB plus the 472 MB factory-restore payload | no, opt-in | no — needs the host-side card image |
-| **deep clean** (`--deep-clean`) | `--remove` plus the whitelist sweeps: everything in `/etc/rc*.d`, `/opt` and the data partitions that the keep-list does not name. ~560 MB more | no, opt-in | no — needs the host-side card image |
+| **disable** (`--no-clean`) | stops and de-registers the vendor services, writes the watchdog bypass. Re-applied on **every boot** by the init script. Deletes nothing. | no, opt-**out** | yes |
+| **remove** (`--remove`) | additionally *deletes* the named vendor stacks — ~178 MB plus the 472 MB factory-restore payload. **Narrower than the default.** | no, opt-in | no — needs the host-side card image |
+| **deep clean** (`--deep-clean`) | `--remove` plus the whitelist sweeps: everything in `/etc/rc*.d`, `/opt` and the data partitions that the keep-list does not name. ~560 MB more | **yes — this is what a bare run does** | no — needs the host-side card image |
+| **500 mA USB budget** (`--no-usb-power`) | patches the appended device tree inside `uImage-system` on **p1**, `0x32` → `0xfa`, so a controller needs no powered hub | **yes** | in place, from `uImage-system.vendor` — but **not** by a power cycle |
 
-So a plain `./commissioning/provision.sh <ip>` **deletes nothing**. Both destructive flags read the same
+Both clean selectors read the same
 [`device-files/clean-rules.conf`](device-files/clean-rules.conf) and differ only by its `sweeps`
-group; both ask for a full-card backup before they start. Use `--dry-run` with either to see the
-resolved list first.
+group — so `--remove` is exactly `--deep-clean --keep-sweeps`. Use `--dry-run` to see the resolved
+delete list *and* what would be written to p1 before anything happens.
 
-⚠️ **Neither is undoable on the device.** The 472 MB on-device factory-restore payload is deleted with
-the rest of the vendor stack — it would only restore software whose start-up mechanism the same clean
-removes, so keeping it preserves the ability to undo a commissioning it can no longer perform.
-`--keep-factory` opts out; the 5 MB fallback kernel is kept either way; p1 is never written.
+⚠️ **One consent question covers both irreversible steps.** It asks whether the card is backed up, once,
+before the first write, naming the clean and the p1 write separately. A declined answer skips both; the
+provision and the reboot still happen, because both are repeatable. On a **non-TTY** the run proceeds and
+prints an unmissable banner saying what nobody answered — the defect that replaced was an unguarded
+`read` whose EOF cancelled the clean and returned 0, so a scripted run silently did not clean while the
+operator believed the default did. `--status` and `--hostname` never see the question, because they write
+nothing.
+
+⚠️ **Neither the clean nor the p1 write is undoable on the device.** The 472 MB on-device
+factory-restore payload is deleted with the rest of the vendor stack — it would only restore software
+whose start-up mechanism the same clean removes, so keeping it preserves the ability to undo a
+commissioning it can no longer perform. `--keep-factory` opts out, and the 5 MB fallback kernel is kept
+either way. **p1 is written, once, by exactly one mechanism**: the vendor `uImage-system` is md5-gated on
+the way in, backed up to `uImage-system.vendor` (whose md5 is verified *before* the original is touched),
+verified by re-reading the card afterwards and rolled back on any failure. `mlo`, `u-boot.bin` and
+`ctrlblock.bin` are never touched. The accepted cost is that **a power cycle is no longer a free undo**;
+copying the backup over `uImage-system` is the in-place remedy and a card pull the fallback.
 
 ### What it does
 
 Nothing in the list below is written out in `commissioning/provision.sh`. Steps 1–3 are one compiled plan over
 [`device-files/provision-rules.conf`](device-files/provision-rules.conf) and step 5 is one compiled plan
 over [`device-files/clean-rules.conf`](device-files/clean-rules.conf) — the **same two data files**
-`commissioning/commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift.
+`commissioning/commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift. Step 6 is
+the one step that is neither, because p1 is not expressible as a provision rule; it is
+[`lib/rw-usbpower.sh`](lib/rw-usbpower.sh), the single implementation both paths call.
 
 1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `99-security.conf`,
-   `roomwizard-app`, `disable-steelcase.sh`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`,
-   `S99roomwizard-app` in rc2–5.d), the sshd directives, the `/var/watchdog_test` bypass, and the two
-   config fix-ups. Stale `rc*.d` links from an earlier install are removed first.
+   `roomwizard-app`, `disable-steelcase.sh`, and the three USB scripts `enable-usb-host.sh` /
+   `usb-host` / `xpad-modules`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`, `S89xpad-modules`,
+   `S90usb-host`, `S99roomwizard-app` in rc2–5.d), the sshd directives, the `/var/watchdog_test`
+   bypass, and the two config fix-ups. Stale `rc*.d` links from an earlier install are removed first.
 2. **Disable** — runs `disable-steelcase.sh`: watchdog bypass, a fresh crontab, services stopped.
 3. **Apply** the sysctl settings to the running kernel.
 4. **Report** what vendor software is still on disk.
-5. **Clean**, only if asked: `--remove` or `--deep-clean`.
-6. **Reboot.**
+5. **Clean** — the deep clean, unless `--no-clean`, `--remove` or `--keep-<group>` narrows it.
+6. **p1** — the 500 mA USB power budget, unless `--no-usb-power` or `--no-usb`. A missing `python3`
+   degrades to a named skip rather than an abort.
+7. **Reboot** — which is what makes the new budget live, so nothing further is needed.
 
 ⚠️ **A plan record is state; running a script is an action.** `disable-steelcase.sh` is *installed* by
 the plan and therefore also lands on an offline-commissioned card, but *running* it stops live processes
@@ -228,18 +254,22 @@ on every boot, which is what makes the offline path's omission harmless rather t
 ### Usage
 
 ```bash
-./commissioning/provision.sh <target>                    # system setup + reboot (deletes nothing)
-./commissioning/provision.sh <target> --remove           # + delete the named vendor stacks
-./commissioning/provision.sh <target> --remove --dry-run       # list what --remove would delete
-./commissioning/provision.sh <target> --deep-clean --dry-run   # list what deep clean would delete
-./commissioning/provision.sh <target> --deep-clean       # + the whitelist sweeps (~560 MB more)
-./commissioning/provision.sh <target> --deep-clean --keep-factory   # ... but keep the restore payload
+./commissioning/provision.sh <target>                    # FULL: provision + deep clean + p1 + reboot
+./commissioning/provision.sh <target> --dry-run          # what the clean would delete, what p1 would get
+./commissioning/provision.sh <target> --no-clean          # provision, harden, reboot — delete nothing
+./commissioning/provision.sh <target> --remove           # clean the named stacks only, no sweeps
+./commissioning/provision.sh <target> --deep-clean       # the default, stated explicitly
+./commissioning/provision.sh <target> --keep-factory     # ... but keep the 472 MB restore payload
+./commissioning/provision.sh <target> --no-usb-power     # leave p1 alone; budget stays at 100 mA
+./commissioning/provision.sh <target> --no-usb           # no USB host mode at all; implies the above
 ./commissioning/provision.sh <target> --status           # report only, no changes
 ./commissioning/provision.sh <target> --hostname rw09    # set the host name only. NO reboot.
 ```
 
 `<target>` is an IPv4 address **or** a host name. `--status` also md5s the two deployed scripts
-against the repo's and reports `matches repo` or `DRIFTED` per file.
+against the repo's and reports `matches repo` or `DRIFTED` per file. `--keep-<group>` switches off part
+of the clean (`browser java snmp mail extras factory sweeps`); `--no-<group>` part of the provision
+(`mdns sshd usb`). Each is named after the groups in its own data file.
 
 ### mDNS and `--hostname`
 
@@ -305,21 +335,41 @@ It stops the running app, installs, md5-verifies every file against the bundle's
 on every entry declared executable, sets `default-app` and restarts the launcher. Modes come from the
 manifest, never from the transfer — see [`CLAUDE.md`](CLAUDE.md) → *Bundles*.
 
-### ⚠️ USB host mode is not in any bundle, and cannot be
+### USB host mode: two thirds of it travels in the bundle, and the rest is p1
 
-A commissioned unit has **no USB host mode**, whichever path commissioned it. That is by construction:
-USB host needs the `usb_host` component, which patches the DTB inside `uImage-system` on **p1** — the one
-partition every offline tool refuses to touch, because an untouched p1 is what keeps a power cycle a free
-undo. `release.sh` therefore excludes `usb_host` from every bundle, deliberately.
+⚠️ **This section used to say a bundle could never deliver USB host mode. That was wrong**, and it was
+wrong because it conflated three independent mechanisms — only **one** of which touches p1
+([`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) F15):
 
-The one command that adds it, over SSH after the unit boots:
+| Mechanism | Delivers | Lives on | Delivered by |
+|---|---|---|---|
+| `/dev/mem` patch of `omap2430_ops.dma_init`/`.dma_exit` + a MUSB rebind | **USB host mode itself** | nothing on disk — re-applied at every boot by `/etc/init.d/usb-host` | the `usb` group of [`device-files/provision-rules.conf`](device-files/provision-rules.conf) |
+| `xpad.ko` / `joydev.ko` / `ff-memless.ko`, force-loaded | the controller as `/dev/input/event*` | `/lib/modules/4.14.52/extra` (p6) | the release bundle, md5-verified |
+| device-tree `power` `0x32` → `0xfa` inside `uImage-system` | 100 mA → **500 mA**, i.e. a controller with **no powered hub** | **p1** | [`lib/rw-usbpower.sh`](lib/rw-usbpower.sh), from both bring-up paths |
+
+So a unit commissioned by either path — `commissioning/provision.sh <ip>` or
+`commissioning/commission-offline.sh` — comes up with USB host mode **and** the 500 mA budget, by
+default. The three device scripts and the two `rc5.d` links are ordinary provision records; the four
+built artifacts (`devmem_write` plus the three `.ko`s) travel in the bundle and add **no**
+`TAKEN ON TRUST` entries, because all four are unstripped.
+
+⚠️ **The 500 mA value is the one thing that cannot be a boot-time script.** The device tree is appended
+to the kernel image inside `uImage-system` and the MUSB driver reads `power` at *probe*, before any init
+script exists — there is no file on the normal filesystem to edit, and U-Boot has no `saveenv`, so
+`bootcmd` cannot be repointed at a differently-named kernel either. The `/dev/mem` fix persists as a boot
+script only because it patches a *static* kernel struct, which stays patched until reboot.
+
+⚠️ **A bundle install alone does NOT give you USB.** `./deploy-all.sh --from-bundle <b> <ip>` installs
+whatever the manifests name, so the four artifacts arrive — but nothing installs the three device scripts
+or patches p1. Those come from a bring-up path. To add USB to an already-commissioned unit from a machine
+with the ARM toolchain:
 
 ```bash
 cd usb_host && ./build-and-deploy.sh <ip>      # needs bc libssl-dev bison flex python3
 ```
 
-That needs a full toolchain host — precisely what the delivery mode does not have. The tension is
-recorded, not solved: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) F15.
+`--no-usb` opts out of the whole group on both bring-up paths and implies `--no-usb-power`: with no
+driver installed, patching p1 would be a gratuitous write.
 
 ### Switching Apps
 
@@ -351,16 +401,18 @@ lib/rw-clean.sh       parses clean-rules.conf     -> a plan, plus the offline ex
 lib/rw-provision.sh   parses provision-rules.conf -> a plan, plus BOTH executors
 lib/rw-bundle.sh      the bundle layout, plus the SSH bundle installer
 lib/rw-identify.sh    which card, which partition — by content and POSITION, never by UUID
+lib/rw-usbpower.sh    the ONE writer of p1: gate on md5, back up, patch, verify, roll back
 
 roomwizard.sh                          Front door: a menu over everything below
 commissioning/card-prep.sh             Phase 1: SD card (offline). A SUBROUTINE of the next one
 commissioning/commission-offline.sh    All three phases in ONE offline pass — the delivery path
-commissioning/provision.sh             Phase 2: SSH provision + optional clean, ends in a reboot
+commissioning/provision.sh             Phase 2: SSH provision + deep clean + p1, ends in a reboot
 deploy-all.sh                          Phase 3: build + deploy everything
 deploy-all.sh --from-bundle            Phase 3 with NO toolchain — install a release bundle
 release.sh                             Build all components + stage one offline bundle
 device-files/disable-steelcase.sh      Device payload: watchdog bypass + fresh crontab, every boot
 device-files/roomwizard-app            Device payload: installed as /etc/init.d/roomwizard-app
+device-files/{enable-usb-host.sh,usb-host,xpad-modules}   Device payload: the usb group
 */build-and-deploy.sh                  One per component
 ```
 
@@ -379,14 +431,24 @@ reorg, and this is the one name that kept its old shape because nothing better w
 /etc/init.d/
 ├── roomwizard-app               Generic app launcher (S99 in rc2-5.d)
 ├── audio-enable                 Speaker amplifier setup (S29)
-└── time-sync                    rdate at boot (S28) — the RTC has no battery
+├── time-sync                    rdate at boot (S28) — the RTC has no battery
+├── xpad-modules                 insmod -f ff-memless, joydev, xpad (S89)
+└── usb-host                     Re-applies the MUSB host-mode patch (S90, after S89)
 
+/usr/local/bin/enable-usb-host.sh  The /dev/mem patch itself, run by usb-host
+/usr/local/bin/devmem_write        Its tool
+/lib/modules/4.14.52/extra/        ff-memless.ko, joydev.ko, xpad.ko
 /etc/sysctl.d/99-security.conf   Kernel hardening; there is no iptables on this image
 /var/watchdog_test               The Steelcase software-watchdog bypass
 /opt/games/                      Native games + tools
 /opt/vnc_client/                 VNC client binary + config
 /opt/scummvm/                    ScummVM, where installed
 ```
+
+⚠️ **p1 is not in the list above and never will be, with exactly one exception.** `uImage-system` is
+patched in place for the 500 mA budget and backed up beside itself as `uImage-system.vendor`. `mlo`,
+`u-boot.bin` and `ctrlblock.bin` are unreachable from every function in `lib/rw-identify.sh` —
+`RW_PART_ROLES` does not contain p1, and a test asserts its absence.
 
 ⚠️ **Every `rc*.d` link above is also on `clean-rules.conf`'s keep list.** A link the whitelist does not
 name is deleted by the next `--deep-clean`, so the pair is asserted rather than remembered —
