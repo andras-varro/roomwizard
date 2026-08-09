@@ -855,21 +855,23 @@ writing it, all measured on this host:
   `lib/rw-ssh.sh` and the three USB device files, and the file now has a **Licence** section — it had
   none.
 
-⬜ **Left — one file:**
+✅ **`usb_host/README.md` — done 2026-08-08. Every ⬜ of F15's docs is now closed; what remains is
+device verification, below.**
 
-1. **`usb_host/README.md`.** Measured 2026-08-08, not yet edited: its *File Reference* (`:401-426`) and
-   its **Step 4** (`:179-193`) and **Step 6** (`:203-207`) still name the **pre-move** paths —
-   `usb-host-initd.sh` and `S89xpad-modules` as *repo* filenames, and
-   `/etc/init.d/S89xpad-modules` as the installed name. All three are wrong now: the files are
-   `device-files/{enable-usb-host.sh,usb-host,xpad-modules}` and the installed init script is
-   `/etc/init.d/xpad-modules` with `/etc/rc5.d/S89xpad-modules` as the link. `provision-rules.conf:94`
-   carries an `unlink` of the old `/etc/init.d/S89xpad-modules` for exactly this reason, so the README
-   is the only place the old name still reads as current. Also worth a line: Steps 4/6 are now what
-   `rw_provision_plan_component` does, so they are a *description* of the automated path rather than
-   the instructions.
-   ⚠️ **And the *Failed Approaches* framing needs one correction that is not a path**: the `/dev/mem`
-   patch **forces IRQ-driven PIO, it does not fix DMA** — the noop stubs make MUSB *give up* on DMA.
-   The README's "broken MUSB DMA configuration" reads backwards.
+- *File Reference* and *Files Deployed to Device* name the post-move sources
+  `../device-files/{enable-usb-host.sh,usb-host,xpad-modules}`, the installed init script as
+  `/etc/init.d/xpad-modules` with `S89xpad-modules` as the **link**, and `provision-rules.conf:94`'s
+  `unlink` of the old name. `lib/rw-usbpower.sh` is listed as the only writer of `uImage-system`, and
+  the p1 row no longer implies a shippable `uImage-system-patched`.
+- **Steps 4 and 6 are now a description of the automated path**, explicitly labelled as such, showing
+  what the `usb`-group plan resolves to rather than `scp`/`ln -sf` commands to run — with the
+  relative-symlink rule and the `rw_provision_check_keeps` pairing stated where the links are.
+- ***Failed Approaches*** now says the `/dev/mem` patch **forces IRQ-driven PIO and does not fix DMA**,
+  with the reason the failure mode is safe (stubs cost CPU; a misbehaving DMA controller scribbles into
+  RAM), and separates the **sysfs** override recorded as failed from the untried **in-RAM device tree**
+  experiment kept as a scoped future item. The `dr_mode` row's "root cause of DMA failure" wording is
+  gone. ⚠️ *Problem 1* was left alone deliberately — it calls the kernel **config** inconsistent and the
+  fix a PIO fallback, which is correct.
 
 ⚠️ **Not attempted and not needed: `usb_host` reaches `deploy-all.sh`'s bundle path by no new
 mechanism.** `--from-bundle` installs whatever the manifests name, so the four artifacts arrive there
@@ -1408,11 +1410,12 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
-   remaining ⬜ list** — the code, its 94-case suite, the sabotage harness that proves the suite can
-   fail, `tests/commission_offline_test.sh`'s p1 cases, `LICENSE.md`, `COMMISSIONING.md` and `README.md`
-   are all in. What is left is **`usb_host/README.md`** alone, and F15 names the three line ranges.
-   Host-only.
+1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)
+   is host-complete** — the code, its 94-case suite, the sabotage harness that proves the suite can
+   fail, `tests/commission_offline_test.sh` (36/36, run 2026-08-08), `LICENSE.md`, `COMMISSIONING.md`,
+   `README.md` and `usb_host/README.md` are all in. **Nothing host-side is left.** The heading still says
+   *docs left* only because retitling it would break eight inbound anchors; it changes when the device
+   verification in #2 lands.
 2. **The device checks nothing here can do** — a full bundle installed on `.225`, and an Xbox pad
    plugged in with **no powered hub** after a reboot. That last one is the only check that the p1 patch
    took effect, and until it runs, "500 mA" is a verified *write* and an unverified *effect*.

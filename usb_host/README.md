@@ -176,22 +176,29 @@ bash build-xpad-module.sh
 This downloads the Linux 4.14.52 kernel source, configures it with the device's config,
 enables the joystick subsystem, and cross-compiles the three modules into `modules/`.
 
-### Step 4: Copy files to device
+### Step 4: Install the device files — what `build-and-deploy.sh` does for you
+
+⚠️ **This step is automated and the commands below are a *description*, not the instructions.** The three
+device scripts and the two `rc5.d` links are `usb`-group records in
+[`device-files/provision-rules.conf`](../device-files/provision-rules.conf), compiled by
+`rw_provision_plan_component` and executed through the *same* generated interpreter that
+`commissioning/provision.sh` uses. Do not hand-`scp` them: a second copy of the install would drift from
+the rules file, and the modes are **declared** there rather than read off disk. What the plan resolves to:
 
 ```bash
 DEVICE=192.168.50.73
 
-# USB host files
-scp devmem_write      root@$DEVICE:/usr/local/bin/devmem_write
-scp enable-usb-host.sh root@$DEVICE:/usr/local/bin/enable-usb-host.sh
-scp usb-host-initd.sh  root@$DEVICE:/etc/init.d/usb-host
+# 0755, from device-files/ — the same bytes commissioning installs
+../device-files/enable-usb-host.sh  ->  /usr/local/bin/enable-usb-host.sh
+../device-files/usb-host            ->  /etc/init.d/usb-host
+../device-files/xpad-modules        ->  /etc/init.d/xpad-modules
 
-# Xbox controller modules
-ssh root@$DEVICE "mkdir -p /lib/modules/4.14.52/extra"
-scp modules/*.ko root@$DEVICE:/lib/modules/4.14.52/extra/
-scp S89xpad-modules root@$DEVICE:/etc/init.d/S89xpad-modules
-ssh root@$DEVICE "chmod +x /usr/local/bin/devmem_write /usr/local/bin/enable-usb-host.sh /etc/init.d/usb-host /etc/init.d/S89xpad-modules"
+# from the bundle, or built here: devmem_write 0755, the three .ko 0644
+devmem_write   ->  /usr/local/bin/devmem_write
+modules/*.ko   ->  /lib/modules/4.14.52/extra/
 ```
+
+Run it with `./build-and-deploy.sh $DEVICE`, or get the same result from either commissioning path.
 
 ### Step 5: Enable USB host mode and load modules
 
@@ -200,12 +207,20 @@ ssh root@$DEVICE /usr/local/bin/enable-usb-host.sh
 ssh root@$DEVICE "depmod -a 4.14.52 && insmod /lib/modules/4.14.52/extra/ff-memless.ko && insmod /lib/modules/4.14.52/extra/joydev.ko && insmod /lib/modules/4.14.52/extra/xpad.ko"
 ```
 
-### Step 6: Install boot persistence
+### Step 6: Boot persistence — also part of the plan above
+
+Two `link` records, not two `ln -sf` calls. ⚠️ **Both sources are RELATIVE**: an absolute symlink target
+is correct on a running device and *dangling on a mounted card*, and a dangling `rc5.d` link is skipped in
+silence at boot.
 
 ```bash
-ssh root@$DEVICE "ln -sf ../init.d/usb-host /etc/rc5.d/S90usb-host"
-ssh root@$DEVICE "ln -sf ../init.d/S89xpad-modules /etc/rc5.d/S89xpad-modules"
+/etc/rc5.d/S89xpad-modules  ->  ../init.d/xpad-modules
+/etc/rc5.d/S90usb-host      ->  ../init.d/usb-host
 ```
+
+Both are on [`device-files/clean-rules.conf`](../device-files/clean-rules.conf)'s keep list, and
+`rw_provision_check_keeps` refuses to provision if a boot link it installs is not whitelisted — otherwise
+the next `--deep-clean` deletes them and the unit boots right once.
 
 ### Step 7: Verify
 
@@ -407,24 +422,42 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | `patch_dtb.py` | Workstation (Python 3) | Binary-patch MUSB power property in uImage DTB |
 | `find_dtb.py` | Workstation (Python 3) | Extract DTB from uImage for inspection |
 | `devmem_write.c` | Compiled for ARM | `/dev/mem` mmap-based read/write tool |
-| `enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
-| `usb-host-initd.sh` | Device | SysV init.d wrapper for USB host boot persistence |
-| `S89xpad-modules` | Device | SysV init.d script for loading controller modules at boot |
+| `../device-files/enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
+| `../device-files/usb-host` | Device | SysV init.d wrapper for USB host boot persistence |
+| `../device-files/xpad-modules` | Device | SysV init.d script for loading controller modules at boot |
+| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify, rollback |
+
+The three device scripts live in [`device-files/`](../device-files/) rather than here, and are named as
+they are *deployed*, because three paths now install the same bytes — `commissioning/provision.sh`,
+`commissioning/commission-offline.sh` and this component's `build-and-deploy.sh`. They are declared as
+`usb`-group records in [`device-files/provision-rules.conf`](../device-files/provision-rules.conf); the
+four **built** artifacts travel in the release bundle.
 
 ### Files Deployed to Device
 
 | Device Path | Source | Purpose |
 |-------------|--------|---------|
 | `/usr/local/bin/devmem_write` | `devmem_write` (compiled ARM binary) | Physical memory read/write |
-| `/usr/local/bin/enable-usb-host.sh` | `enable-usb-host.sh` | USB host mode enabler |
-| `/etc/init.d/usb-host` | `usb-host-initd.sh` | Boot persistence for USB host |
+| `/usr/local/bin/enable-usb-host.sh` | `../device-files/enable-usb-host.sh` | USB host mode enabler |
+| `/etc/init.d/usb-host` | `../device-files/usb-host` | Boot persistence for USB host |
 | `/etc/rc5.d/S90usb-host` | Symlink → `../init.d/usb-host` | Runlevel 5 boot hook |
 | `/lib/modules/4.14.52/extra/ff-memless.ko` | `modules/ff-memless.ko` | Force-feedback module |
 | `/lib/modules/4.14.52/extra/joydev.ko` | `modules/joydev.ko` | Joystick device module |
 | `/lib/modules/4.14.52/extra/xpad.ko` | `modules/xpad.ko` | Xbox controller driver |
-| `/etc/init.d/S89xpad-modules` | `S89xpad-modules` | Boot persistence for modules |
-| `/etc/rc5.d/S89xpad-modules` | Symlink → `../init.d/S89xpad-modules` | Runlevel 5 boot hook |
-| `/dev/mmcblk0p1/uImage-system` | `uImage-system-patched` (via `patch_dtb.py`) | Kernel with patched DTB (500mA power) |
+| `/etc/init.d/xpad-modules` | `../device-files/xpad-modules` | Boot persistence for modules |
+| `/etc/rc5.d/S89xpad-modules` | Symlink → `../init.d/xpad-modules` | Runlevel 5 boot hook |
+| p1 `uImage-system` | patched in place from the device's own copy | Kernel with patched DTB (500 mA power) |
+
+⚠️ **The module loader's installed name is `/etc/init.d/xpad-modules`; `S89xpad-modules` is the *link*.**
+It used to be installed under the `S89` name in `init.d` as well, and nothing sweeps `/etc/init.d`, so
+`provision-rules.conf:94` carries an `unlink` of the old path to clear it off units commissioned before
+the move.
+
+⚠️ **p1 is not a bundle path and `uImage-system` is never shipped.** It is a 5.2 MB Steelcase binary and
+this repo is published, so the patch is *derived* from the device's own copy by
+[`lib/rw-usbpower.sh`](../lib/rw-usbpower.sh) — md5-gated on the way in, backed up beside itself as
+`uImage-system.vendor`, verified by re-reading the card, rolled back on failure. `release.sh` refuses to
+publish any manifest entry whose basename matches `uImage*`.
 
 ---
 
@@ -453,10 +486,24 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | Vanilla kernel cross-compilation | Bricked device — missing OEM patches (LCD, touch, boot) |
 | Binary patching of OEM zImage | Address relocation + inlining made patch point unfindable |
 | `/dev/mem` via `write()` syscall | `CONFIG_STRICT_KERNEL_RWX` blocks write to kernel pages |
-| DTB `dr_mode` modification only | Root cause of DMA failure is compiled-in code, not device tree |
+| DTB `dr_mode` modification only | Host mode needs the compiled-in `dma_init`/`dma_exit` stubbed out; the device tree cannot express that |
 | EHCI/OHCI alternative | `CONFIG_USB_EHCI_HCD` and `CONFIG_USB_OHCI_HCD` not compiled |
 | usbhid for Xbox controller | Controller uses vendor-specific class `ff`, not HID class `03` |
-| Runtime DTB power override via sysfs | MUSB power budget is read-only once driver initializes |
+| Runtime DTB power override **via sysfs** | MUSB reads `power` at probe and `hcd->power_budget` is not exposed; there is no sysfs node to write |
+
+⚠️ **The `/dev/mem` patch forces IRQ-driven PIO — it does not fix DMA.** Anything above or below reading
+as "the patch repairs a broken DMA configuration" has it backwards: the noop `dma_init`/`dma_exit` stubs
+make MUSB **give up** on DMA and fall back to interrupt-driven programmed I/O, which is what makes host
+mode work at all. DMA on this block is not repaired, not used, and not needed — `musbhsdma.c` is not even
+compiled (`# CONFIG_USB_INVENTRA_DMA is not set`). PIO is also why the failure mode is safe: a
+misbehaving DMA controller would scribble into RAM, whereas stubs simply cost CPU.
+
+⚠️ **The failed sysfs override above is not the untried RAM experiment.** `IMPROVEMENT_PLAN.md` keeps a
+scoped future item — locate the **in-RAM unflattened device tree** and patch its `power` property with
+`devmem_write`, the same mechanism as the `omap2430_ops` patch aimed at a different target. That has never
+been attempted; what failed was writing through *sysfs*, which is a different thing entirely. The open
+risk is address stability: `omap2430_ops` is a static symbol at a fixed address, while the unflattened DT
+is early-boot allocated. If it works, the p1 write and `--no-usb-power` can both be retired.
 
 ---
 
