@@ -112,11 +112,12 @@ else
                 echo "    $dev   $size"
             done
             echo ""
-            echo "  Its rootfs is partition 6. Mount it and re-run:"
+            echo "  Its rootfs is the ~980 MB ext4 partition on that disk. Mount it and"
+            echo "  re-run — the device name below is resolved, not guessed:"
             echo ""
             echo "$CARDS" | while read -r dev _; do
                 echo "    sudo mkdir -p /mnt/rw"
-                echo "    sudo mount ${dev}6 /mnt/rw"
+                echo "    sudo mount $(rw_part_dev "$dev" 6) /mnt/rw"
                 break
             done
         else
@@ -124,14 +125,17 @@ else
             echo "  (7 partitions; p6 at sector 4096638, 980.5 MB)."
             echo ""
             echo "  Check that the card is in the reader and visible:"
-            echo "    lsblk -o NAME,UUID,FSTYPE,SIZE,MOUNTPOINT | grep -v loop"
+            echo "    lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT | grep -v loop"
             echo ""
             echo "  On WSL the card must first be attached from Windows:"
             echo "    wsl --mount \\\\.\\PHYSICALDRIVEn --bare"
             echo ""
-            echo "  Then mount p6 by hand:"
-            echo "    sudo mkdir -p /mnt/rw"
-            echo "    sudo mount /dev/sdX6 /mnt/rw"
+            # Deliberately NOT "mount /dev/sdX6": whoever is holding the card
+            # cannot see partition numbers, and lib/rw-identify.sh exists so
+            # that nobody has to work one out. Once the disk is visible this
+            # script names the exact device itself, in the branch above.
+            echo "  Then re-run this script: with the card visible it finds the"
+            echo "  rootfs by content and prints the exact mount command for it."
         fi
         echo ""
         echo "  Either way, you can point this script at a mounted tree directly:"
@@ -512,6 +516,271 @@ else
     success "eth0 configured for DHCP."
 fi
 echo ""
+
+# ── Step 7b: the vendor boot-time network regenerator (IMPROVEMENT_PLAN D7b) ─
+#
+# Everything written above — the host name, /etc/hosts, dhclient.conf's
+# `send host-name` and the DHCP stanza — is undone ~7 s into the FIRST boot.
+# /opt/sbin/networkmanager, started from etc/rcS.d/S60networkmanager, rewrites
+# all four out of /home/root/data/websign/net.*.
+#
+# Measured on an RW20, 2026-08-08: a card prepared here as `rwtest` booted,
+# S39hostname.sh set `rwtest` (the syslog prefix proves it), and 7 s later
+# S60networkmanager logged "Manual IP Mode detected" / "Vaild host name found:
+# null", reset /etc/hostname to `null`, rewrote /etc/hosts as
+# `10.11.140.22 null`, killed the dhclient that S40networking had started and
+# applied a static address on a subnet the host could not reach. Nothing had
+# failed, and the unit was unreachable — so phase 1 could not lead to phase 2,
+# which needs SSH.
+#
+# Hence: MEASURE, then offer. Two reasons it is not an unconditional delete.
+# The vendor's static address is the right answer for an operator who IS on
+# that subnet and has no DHCP server, and both writers live inside
+# set_manual()/set_dhcp(), so a card whose websign/ is already gone has nothing
+# to fix. The measurement decides which of those a card is.
+#
+# websign/ is on p2 and this script has p6. The probe therefore resolves the
+# card's own disk from the mounted rootfs and mounts p2 READ-ONLY for the three
+# reads — never writes it, and never guesses a device name.
+
+VENDOR_REGEN_LINK="$ROOTFS/etc/rcS.d/S60networkmanager"
+VENDOR_WEBSIGN="unknown"     # yes | no | unknown  (unknown = could not measure)
+VENDOR_NET_MODE=""
+VENDOR_NET_IP=""
+VENDOR_NET_NAME=""
+
+# ---------------------------------------------------------------------------
+# probe_vendor_net ROOTFS
+#
+# Fill VENDOR_WEBSIGN / VENDOR_NET_{MODE,IP,NAME} from p2. Returns 1 without
+# setting VENDOR_WEBSIGN if the card's data partition could not be reached at
+# all, which the caller reports as "unmeasured" rather than as "nothing to do".
+#
+# Three vetoes, in order. A ROOTFS pointing at a copied tree resolves to this
+# HOST's root device, so mounting "its p2" would mount a stranger — that is
+# what rw_is_host_root_disk refuses. rw_is_card_disk then requires the
+# RoomWizard partition table, and rw_card_partitions names p2 by POSITION,
+# never by UUID (two cards share none of their four).
+# ---------------------------------------------------------------------------
+probe_vendor_net() {
+    local rootfs="$1" src disk data tmp
+
+    command -v findmnt >/dev/null 2>&1 || return 1
+    command -v lsblk   >/dev/null 2>&1 || return 1
+
+    src=$(findmnt -no SOURCE --target "$rootfs" 2>/dev/null) || return 1
+    case "$src" in /dev/*) ;; *) return 1 ;; esac
+
+    disk="/dev/$(lsblk -rnso NAME "$src" 2>/dev/null | tail -1)"
+    [ -b "$disk" ] || return 1
+    # An explicit `if`, not `rw_is_host_root_disk "$disk" && return 1`: `set -e`
+    # is on (line 17), and that list's status is the veto's own failure — so the
+    # normal case, a card that is NOT this host's root disk, would abort the run.
+    if rw_is_host_root_disk "$disk"; then
+        return 1
+    fi
+    rw_is_card_disk "$disk" || return 1
+
+    data=$(rw_card_partitions "$disk" | awk '$1 == "data" { print $2 }')
+    [ -b "$data" ] || return 1
+
+    tmp=$(mktemp -d) || return 1
+    if ! sudo mount -o ro "$data" "$tmp" 2>/dev/null; then
+        rmdir "$tmp" 2>/dev/null
+        return 1
+    fi
+
+    if [ -d "$tmp/websign" ]; then
+        VENDOR_WEBSIGN=yes
+        # awk, not cat: these files are written by the vendor's web UI and a
+        # trailing CR or a second field would otherwise land in the verdict.
+        VENDOR_NET_MODE=$(sudo awk 'NR==1 { print $1 }' "$tmp/websign/net.mode"      2>/dev/null)
+        VENDOR_NET_IP=$(  sudo awk 'NR==1 { print $1 }' "$tmp/websign/net.ipaddress" 2>/dev/null)
+        VENDOR_NET_NAME=$(sudo awk 'NR==1 { print $1 }' "$tmp/websign/net.hostname"  2>/dev/null)
+    else
+        VENDOR_WEBSIGN=no
+    fi
+
+    sudo umount "$tmp" 2>/dev/null
+    rmdir "$tmp" 2>/dev/null
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# vendor_regen_verdict LINK_PRESENT WEBSIGN MODE
+#
+# The whole decision, as a pure function of three measurements, so it is
+# host-testable without a card (tests/commission_prep_test.sh).
+#
+#   absent      the rcS.d link is gone; the regenerator cannot run
+#   inert       link present, websign/ absent — both writers are inside
+#               set_manual()/set_dhcp(), and neither branch is entered
+#   manual      link + websign + mode=manual — static address, dhclient killed,
+#               host name reset. This is the unreachable case.
+#   dhcp        link + websign + mode=dhcp — the unit still gets a lease, but
+#               /etc/hostname and /etc/hosts are still rewritten from net.*
+#   unmeasured  p2 unreachable, or a mode this script does not recognise
+# ---------------------------------------------------------------------------
+vendor_regen_verdict() {
+    local link="$1" websign="$2" mode="$3"
+
+    [ "$link" = yes ] || { echo absent; return 0; }
+
+    case "$websign" in
+        no) echo inert ;;
+        yes)
+            case "$mode" in
+                manual) echo manual ;;
+                dhcp)   echo dhcp ;;
+                *)      echo unmeasured ;;
+            esac
+            ;;
+        *) echo unmeasured ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# disable_vendor_regen
+#
+# Remove the rcS.d link, and only that. /etc/init.d/networkmanager stays, so
+# the restore is one `ln -s` — which is also why the link is NOT renamed in
+# place: /etc/init.d/rc globs S[0-9][0-9]*, so `S60networkmanager.disabled`
+# would still be executed.
+#
+# This is not a new deletion decision. device-files/clean-rules.conf already
+# names this link, so every cleaned unit has it removed anyway; doing it here
+# only moves it earlier, to the one phase that has no other way to survive.
+# ---------------------------------------------------------------------------
+disable_vendor_regen() {
+    local target
+    target=$(readlink "$VENDOR_REGEN_LINK" 2>/dev/null)
+    sudo rm -f "$VENDOR_REGEN_LINK" || return 1
+    success "Removed etc/rcS.d/S60networkmanager${target:+  (was -> $target)}"
+    info "/etc/init.d/networkmanager is untouched. To restore, on the card:"
+    echo "    sudo ln -s ../init.d/networkmanager $VENDOR_REGEN_LINK"
+    return 0
+}
+
+echo "================================================"
+echo "  Vendor Network Regenerator"
+echo "================================================"
+echo ""
+
+if [ -n "${RW_COMMISSION_ORCHESTRATED:-}" ]; then
+    # The full offline pass deletes websign/ AND this link in its clean, and its
+    # verify pass fails if either survives. Asking here would ask about a file
+    # that is about to go regardless.
+    info "Skipped: the offline pass deletes websign/ and this link in its clean."
+    echo ""
+else
+    if [ -L "$VENDOR_REGEN_LINK" ] || [ -e "$VENDOR_REGEN_LINK" ]; then
+        LINK_PRESENT=yes
+    else
+        LINK_PRESENT=no
+    fi
+
+    # Same reason as inside probe_vendor_net: an explicit `if`, because a probe
+    # that cannot reach p2 is a measurement failure, not a run failure.
+    if [ "$LINK_PRESENT" = yes ]; then
+        probe_vendor_net "$ROOTFS" || true
+    fi
+    VERDICT=$(vendor_regen_verdict "$LINK_PRESENT" "$VENDOR_WEBSIGN" "$VENDOR_NET_MODE")
+
+    case "$VERDICT" in
+        absent)
+            success "etc/rcS.d/S60networkmanager is already gone — nothing rewrites the above."
+            ;;
+        inert)
+            success "websign/ is absent on p2, so the regenerator writes nothing."
+            info "Its rcS.d link is still there; both writers are inside set_manual()/set_dhcp()."
+            ;;
+        manual|dhcp|unmeasured)
+            case "$VERDICT" in
+                manual)
+                    warning "This unit will IGNORE the DHCP setting just written."
+                    echo ""
+                    echo "  Vendor network config (p2, websign/net.*):"
+                    echo "      mode      manual"
+                    echo "      address   ${VENDOR_NET_IP:-(unset)}"
+                    echo "      host name ${VENDOR_NET_NAME:-(unset)}"
+                    echo ""
+                    echo "  ~7 s into the first boot, /opt/sbin/networkmanager takes the static"
+                    echo "  address above, kills dhclient, and resets /etc/hostname and /etc/hosts"
+                    echo "  to '${VENDOR_NET_NAME:-null}'. If that address is not on a subnet this host can"
+                    echo "  reach, the unit appears in no DHCP lease list and phase 2 is impossible."
+                    echo ""
+                    echo "  This host's own addresses, for comparison:"
+                    # An explicit `if`: in `ip ... | awk ... || echo`, the
+                    # pipeline's status is awk's, so a missing `ip` would print
+                    # nothing at all rather than the fallback.
+                    if command -v ip >/dev/null 2>&1; then
+                        ip -o -4 addr show scope global 2>/dev/null \
+                            | awk '{ printf "      %-8s %s\n", $2, $4 }'
+                    else
+                        echo "      (could not read; 'ip' is not on this host)"
+                    fi
+                    ;;
+                dhcp)
+                    warning "The host name just set will not survive the first boot."
+                    echo ""
+                    echo "  Vendor network config (p2, websign/net.*):"
+                    echo "      mode      dhcp"
+                    echo "      host name ${VENDOR_NET_NAME:-(unset)}"
+                    echo ""
+                    echo "  The unit still gets a lease, so you can reach it. But ~7 s into the"
+                    echo "  first boot /opt/sbin/networkmanager rewrites /etc/hostname and"
+                    echo "  /etc/hosts from the values above, so the name you chose is lost and"
+                    echo "  the router will list this unit under '${VENDOR_NET_NAME:-null}'."
+                    ;;
+                unmeasured)
+                    warning "Could not read the vendor network config on p2."
+                    echo ""
+                    if [ "$VENDOR_WEBSIGN" = yes ]; then
+                        echo "  websign/net.mode says '${VENDOR_NET_MODE:-(empty)}', which is neither"
+                        echo "  'manual' nor 'dhcp'."
+                    else
+                        echo "  p2 (the data partition) could not be resolved from $ROOTFS,"
+                        echo "  so whether the regenerator will act is unknown."
+                    fi
+                    echo ""
+                    echo "  etc/rcS.d/S60networkmanager IS present, so it will run. If"
+                    echo "  websign/net.* holds values, everything set above is rewritten from"
+                    echo "  them ~7 s into the first boot."
+                    ;;
+            esac
+            echo ""
+            echo "  [d] disable the regenerator, so DHCP and '${NEW_HOSTNAME:-the name above}' survive the boot"
+            echo "      removes etc/rcS.d/S60networkmanager on p6. The deep clean in phase 2"
+            echo "      removes it anyway; /etc/init.d/networkmanager stays, so one ln -s undoes this."
+            echo "  [k] keep it, and reach the unit at the vendor's address"
+            echo ""
+
+            # Interactive only. Removing a boot link is a write, and a batch
+            # caller that nobody is watching must not have one chosen for it —
+            # so a non-TTY run reports and changes nothing, loudly, rather than
+            # letting an EOF read as either answer.
+            if [ -t 0 ]; then
+                read -r -p "  Choice [d]: " REGEN_CHOICE
+                REGEN_CHOICE="${REGEN_CHOICE:-d}"
+            else
+                REGEN_CHOICE=k
+                echo "  ################################################################"
+                echo "  # NOT A TTY: nobody was asked, so the regenerator is KEPT."
+                echo "  # Everything this script wrote above may be undone by the first"
+                echo "  # boot. To disable it, on the mounted card:"
+                echo "  #     sudo rm -f $VENDOR_REGEN_LINK"
+                echo "  ################################################################"
+            fi
+            echo ""
+
+            case "$REGEN_CHOICE" in
+                d|D) disable_vendor_regen || error "Could not remove $VENDOR_REGEN_LINK" ;;
+                *)   warning "Kept. The values written above may not survive the first boot." ;;
+            esac
+            ;;
+    esac
+    echo ""
+fi
 
 # Step 8: Summary and next steps
 #

@@ -39,6 +39,22 @@
 # The count at the end includes a check on the harness itself: a test file that
 # silently ran zero cases reports success just as loudly as one that ran all of
 # them.
+#
+# MEASURED AGAINST BROKEN COPIES, 2026-08-09 — 41 pass clean, and:
+#
+#   verdict: unknown websign treated as inert          3 failed
+#   non-TTY answers "d" (deletes with nobody asked)    1 failed
+#   disable also deletes /etc/init.d/networkmanager    1 failed
+#   the host-root-disk veto written as a && list       1 failed
+#   p2 mounted read-write instead of -o ro             1 failed
+#   menu item 1 relabelled back to the incident's      1 failed
+#
+# ⚠️ Two of those took a second attempt, both worth knowing. The
+# init.d sabotage's `sed` pattern contains `||`, so a `|`-delimited s/// silently
+# did not apply and the suite reported "0 failed" — the exact signature of a
+# check that cannot fail. Put the pattern in a file and assert it applied. And
+# the non-TTY sabotage originally HUNG: the sabotaged path calls the real `sudo`
+# with stdin closed. `make_step7b` stubs `sudo` for that reason and no other.
 
 set -u
 
@@ -337,6 +353,190 @@ else
     bad "commissioning/commission-offline.sh does NOT set RW_COMMISSION_ORCHESTRATED — the suppression is dead code"
 fi
 
+# ── the vendor network regenerator: verdict, wiring, and the two writes ─────
+#
+# WHY: phase 1 wrote a host name and DHCP, and an RW20 undid both ~7 s into the
+# first boot (IMPROVEMENT_PLAN D7b, measured 2026-08-08) — leaving a unit at a
+# static address on a foreign subnet, so phase 2 was unreachable and phase 1
+# could not lead anywhere. The decision is now a pure function of three
+# measurements, which is the only part of it a host can exercise: the probe
+# needs a card and the prompt needs a person.
+echo ""
+echo "── vendor network regenerator ───────────────────────────────────────────"
+
+sed -n '/^vendor_regen_verdict() {$/,/^}$/p' "$SRC" > "$TMP/verdict.sh"
+if [ ! -s "$TMP/verdict.sh" ]; then
+    echo -e "  ${RED}HARNESS ERROR${NC}: vendor_regen_verdict() not found in $SRC"
+    exit 2
+fi
+bash -n "$TMP/verdict.sh" || { echo -e "  ${RED}HARNESS ERROR${NC}: vendor_regen_verdict does not parse"; exit 2; }
+
+# verdict LINK WEBSIGN MODE -> EXPECTED
+verdict_is() {
+    local link="$1" websign="$2" mode="$3" want="$4" got
+    got=$(bash -c ". '$TMP/verdict.sh'; vendor_regen_verdict '$link' '$websign' '$mode'" 2>&1)
+    if [ "$got" = "$want" ]; then
+        ok "verdict($link, $websign, '$mode') = $want"
+    else
+        bad "verdict($link, $websign, '$mode') = '$got', expected '$want'"
+    fi
+}
+
+verdict_is no  yes     manual  absent      # ⚠️ link absence wins over everything
+verdict_is no  unknown ""      absent
+verdict_is yes no      ""      inert       # writers live inside set_manual/set_dhcp
+verdict_is yes yes     manual  manual
+verdict_is yes yes     dhcp    dhcp
+verdict_is yes yes     ""      unmeasured  # blank net.mode is a real vendor state
+verdict_is yes yes     static  unmeasured  # a mode we do not model is not "safe"
+verdict_is yes unknown ""      unmeasured  # p2 unreachable != nothing to do
+
+# ── the section, run end to end against a fixture tree ──────────────────────
+#
+# Extracted from '# ── Step 7b' to the Step 8 marker, so what runs is the shipped
+# source. lib/rw-identify.sh is SOURCED, not extracted — the strongest form of
+# "the wiring is real". The probe self-vetoes here: findmnt on a /tmp path
+# resolves to this host's root disk, which rw_is_host_root_disk refuses, so p2 is
+# never reached and no sudo runs.
+sed -n '/^# ── Step 7b: the vendor boot-time network regenerator/,/^# Step 8: Summary and next steps$/p' \
+    "$SRC" | sed '$d' > "$TMP/step7b.body"
+if [ ! -s "$TMP/step7b.body" ]; then
+    echo -e "  ${RED}HARNESS ERROR${NC}: Step 7b not found in $SRC"
+    exit 2
+fi
+
+make_step7b() {   # make_step7b FIXTURE_ROOT
+    {
+        echo '#!/bin/bash'
+        echo 'set -e'
+        echo 'success() { echo "  [ok] $*"; }'
+        echo 'info()    { echo "  [--] $*"; }'
+        echo 'warning() { echo "  [!!] $*"; }'
+        echo 'error()   { echo "  [XX] $*"; }'
+        # ⚠️ sudo MUST be stubbed, and for a harness reason rather than a tidiness
+        # one. The correct source never reaches a write on this path, so an
+        # unstubbed run passes — but a SABOTAGED source (non-TTY answering "d")
+        # calls the real sudo with stdin closed, which on a host that prompts
+        # HANGS the suite instead of failing a case. A negative control that
+        # hangs is worse than one that is absent: it looks like a slow test.
+        echo 'sudo() { "$@"; }'
+        echo ". '$REPO_DIR/lib/rw-identify.sh'"
+        echo "ROOTFS='$1'"
+        echo "NEW_HOSTNAME=rwtest"
+        cat "$TMP/step7b.body"
+    } > "$TMP/step7b.sh"
+    bash -n "$TMP/step7b.sh" || { echo -e "  ${RED}HARNESS ERROR${NC}: extracted Step 7b does not parse"; exit 2; }
+}
+
+# A fixture with the link present. Real symlink, so /tmp — DrvFs cannot hold one.
+FIX="$TMP/card"
+mkdir -p "$FIX/etc/rcS.d" "$FIX/etc/init.d"
+: > "$FIX/etc/init.d/networkmanager"
+ln -sf ../init.d/networkmanager "$FIX/etc/rcS.d/S60networkmanager"
+
+make_step7b "$FIX"
+
+# 13-15. Not a TTY: the diagnosis is printed, the banner says nobody was asked,
+#        and — the case that matters — the link is STILL THERE. An EOF read as
+#        "d" would delete a boot link in a batch run nobody is watching.
+env -u RW_COMMISSION_ORCHESTRATED bash "$TMP/step7b.sh" < /dev/null > "$TMP/regen.out" 2>&1 || true
+expect_out yes "NOT A TTY" "$TMP/regen.out" "non-TTY: says nobody was asked"
+expect_out yes "Could not read the vendor network config" "$TMP/regen.out" \
+    "non-TTY: p2 unreachable is reported as unmeasured, not as nothing-to-do"
+if [ -L "$FIX/etc/rcS.d/S60networkmanager" ]; then
+    ok "non-TTY: the boot link is NOT removed"
+else
+    bad "non-TTY: the boot link was removed with nobody asked"
+fi
+
+# 16. Orchestrated: the offline pass deletes websign/ and this link in its clean,
+#     so asking here would ask about a file that is already going.
+RW_COMMISSION_ORCHESTRATED=1 bash "$TMP/step7b.sh" < /dev/null > "$TMP/regen.orch" 2>&1 || true
+expect_out yes "Skipped" "$TMP/regen.orch" "orchestrated: the section is skipped"
+expect_out no  "NOT A TTY" "$TMP/regen.orch" "orchestrated: does not warn about a question it never asked"
+
+# 17. Link already gone: reported as settled, not as a problem.
+rm -f "$FIX/etc/rcS.d/S60networkmanager"
+make_step7b "$FIX"
+env -u RW_COMMISSION_ORCHESTRATED bash "$TMP/step7b.sh" < /dev/null > "$TMP/regen.absent" 2>&1 || true
+expect_out yes "already gone" "$TMP/regen.absent" "link absent: reported as settled"
+
+# ── the write itself ────────────────────────────────────────────────────────
+# 18-19. disable_vendor_regen removes the rcS.d link and ONLY that. Leaving
+#        /etc/init.d/networkmanager in place is what makes the restore one ln -s,
+#        and it is the difference between disabling a service and deleting it.
+sed -n '/^disable_vendor_regen() {$/,/^}$/p' "$SRC" > "$TMP/disable.sh"
+if [ ! -s "$TMP/disable.sh" ]; then
+    echo -e "  ${RED}HARNESS ERROR${NC}: disable_vendor_regen() not found in $SRC"
+    exit 2
+fi
+ln -sf ../init.d/networkmanager "$FIX/etc/rcS.d/S60networkmanager"
+{
+    echo '#!/bin/bash'
+    echo 'success() { echo "  [ok] $*"; }'
+    echo 'info()    { echo "  [--] $*"; }'
+    echo 'sudo() { "$@"; }'
+    echo "VENDOR_REGEN_LINK='$FIX/etc/rcS.d/S60networkmanager'"
+    cat "$TMP/disable.sh"
+    echo 'disable_vendor_regen'
+} > "$TMP/disable_run.sh"
+bash "$TMP/disable_run.sh" > "$TMP/disable.out" 2>&1 || true
+if [ ! -e "$FIX/etc/rcS.d/S60networkmanager" ] && [ ! -L "$FIX/etc/rcS.d/S60networkmanager" ]; then
+    ok "disable_vendor_regen removes the rcS.d link"
+else
+    bad "disable_vendor_regen left the rcS.d link in place"
+fi
+if [ -f "$FIX/etc/init.d/networkmanager" ]; then
+    ok "disable_vendor_regen leaves /etc/init.d/networkmanager alone"
+else
+    bad "disable_vendor_regen deleted /etc/init.d/networkmanager — the restore is no longer one ln -s"
+fi
+
+# ── wiring that no run can demonstrate ──────────────────────────────────────
+# 20. The probe must mount p2 READ-ONLY. It is a measurement; a rw mount of the
+#     partition holding the vendor's config is a write this script never intends.
+if grep -q 'mount -o ro' "$SRC"; then
+    ok "probe_vendor_net mounts p2 read-only"
+else
+    bad "probe_vendor_net does not mount p2 with -o ro"
+fi
+
+# 21. ⚠️ The veto that stops this from mounting the DEV HOST's own disk, written
+#     as an `if` because `A && return 1` under `set -e` aborts on the normal case.
+if grep -q '^    if rw_is_host_root_disk "$disk"; then' "$SRC"; then
+    ok "the host-root-disk veto is an explicit if, not a && list"
+else
+    bad "the host-root-disk veto is missing or written as a && list (set -e aborts the normal case)"
+fi
+
+# 22. The prompt is [ -t 0 ]-gated. release.sh and deploy-all.sh drive these
+#     scripts as a batch; a blocking read there hangs a run nobody is watching.
+if grep -q 'if \[ -t 0 \]; then' "$SRC"; then
+    ok "the regenerator prompt is [ -t 0 ]-gated"
+else
+    bad "the regenerator prompt is not [ -t 0 ]-gated"
+fi
+
+# 23. ⚠️ THE PAIRING CHECK. Phase 1 now removes a boot link, and phase 2's clean
+#     decides what a unit keeps from device-files/clean-rules.conf. If that file
+#     did not also name this link, the two phases would disagree about what a
+#     commissioned unit looks like — the same class of drift rw_provision_check_keeps
+#     exists to prevent in the other direction.
+if grep -q 'rcS.d/S60networkmanager' "$REPO_DIR/device-files/clean-rules.conf"; then
+    ok "clean-rules.conf also names rcS.d/S60networkmanager"
+else
+    bad "clean-rules.conf does NOT name rcS.d/S60networkmanager — phase 1 and phase 2 disagree"
+fi
+
+# 24. The menu label must not read as the whole job. This is the incident itself:
+#     'Commission an SD card (offline)' was picked, correctly, for a full offline
+#     commission, and delivered phase 1 of 3.
+if grep -qE '^  1\) .*PHASE 1 of 3' "$REPO_DIR/roomwizard.sh"; then
+    ok "roomwizard.sh menu item 1 says it is one phase"
+else
+    bad "roomwizard.sh menu item 1 does not say it is one phase"
+fi
+
 echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
@@ -349,11 +549,17 @@ echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 #   1  ROOTFS-without-flag
 #   3  orchestrated output
 #   1  the orchestrator sets the flag
-# = 13.  Four are skippable and deliberately not counted: operator_home's
+#   8  regenerator verdict (a pure function of three measurements)
+#   5  regenerator section end to end (non-TTY x3, orchestrated x2)
+#   1  regenerator section: link already gone
+#   2  disable_vendor_regen: the link goes, /etc/init.d stays
+#   5  wiring: -o ro, the host-root veto's `if`, [ -t 0 ], the clean-rules
+#      pairing, the menu label
+# = 35.  Four are skippable and deliberately not counted: operator_home's
 # SUDO_USER's-real-home case and the three end-to-end key-lookup cases all need
 # getent plus a non-root user with a writable home, and an environment lacking
 # those should skip rather than fail on a fact about itself.
-MIN_CASES=17
+MIN_CASES=39
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

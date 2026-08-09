@@ -134,11 +134,31 @@ straight after commissioning shows the revert.
    link in the same offline pass, so no boot happens in between, and its verify pass fails if either
    survives. That removes the window rather than patching it. **Confirmed on real hardware 2026-08-06:**
    a unit commissioned as `rwtest` booted with its name intact and answered on the network.
-2. **Closed 2026-08-08 by [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08), not implemented.** The proposed fix was to teach
-   `commissioning/set-hostname.sh` to write `websign/net.hostname` too. It is unnecessary: the SSH flow
-   kept the vendor stack only because `provision.sh`'s clean was opt-in, and that default is now
-   flipped. A commissioning path that cleans **removes** this window instead of patching it — the same
-   argument as item 1, now true of both paths.
+2. **Phase 1 measures the regenerator and offers to disable it — done 2026-08-09.** The proposed fix
+   was to teach `commissioning/set-hostname.sh` to write `websign/net.hostname` too, and
+   [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08) closed it as
+   unnecessary: *a commissioning path that cleans removes this window instead of patching it.* ⚠️ **That
+   argument holds for both COMPLETE paths and has a hole at phase 1 alone** — `card-prep.sh` does not
+   clean, phase 2's clean needs SSH, and the regenerator is what takes SSH away. Measured 2026-08-08:
+   a card prepared as `rwtest` booted, `S39hostname.sh` applied the name, and 7 s later
+   `S60networkmanager` logged `Manual IP Mode detected` / `Vaild host name found: null`, reset
+   `/etc/hostname`, rewrote `/etc/hosts` as `10.11.140.22 null`, killed `dhclient` and took a static
+   address off the host's subnet. Nothing failed and phase 2 was unreachable, so the cleaning path could
+   never run.
+
+   `commissioning/card-prep.sh` now ends by **measuring** it: `websign/` is on p2 and the script has p6,
+   so it resolves the card's own disk from the mounted rootfs and mounts p2 **read-only** to read
+   `net.mode`, `net.ipaddress` and `net.hostname`. `vendor_regen_verdict` maps
+   (link, websign, mode) → `absent` / `inert` / `manual` / `dhcp` / `unmeasured`, and the last three
+   offer to remove `etc/rcS.d/S60networkmanager` — a **p6** file, so no p2 write and no second mount.
+   ⚠️ **Not an unconditional delete**: the vendor's static address is the right answer for an operator
+   who is on that subnet with no DHCP server, and a card whose `websign/` is already gone has nothing to
+   fix. ⚠️ **And `unmeasured` is not `inert`** — a probe that could not reach p2 must not read as
+   "nothing to do"; that inversion is the sabotage that fails 3 cases. The prompt is `[ -t 0 ]`-gated and
+   a non-TTY run **keeps** the link, loudly: an EOF is not consent to remove a boot link.
+   `device-files/clean-rules.conf` already names that link, so this moves a phase-2 deletion earlier
+   rather than inventing one — asserted, not remembered. Regression: 24 new cases in
+   `tests/commission_prep_test.sh` (41 total), measured against six broken copies.
 3. **`/etc/dhclient.conf`'s `send host-name` — done.** `commissioning/set-hostname.sh` now owns it, in both the
    offline and the live path, with a negative control: it refuses to write a result that would not
    announce the new name. It is the third place the name is stored and the one a DHCP server, and
@@ -466,13 +486,12 @@ Deploy them over SSH, or restage a three-component bundle.
 
 #### What is left
 
-1. **`COMMISSIONING.md`'s ORDERING — the prose is done, the emphasis is not.** `b88933a` rewrote the
-   doc as a description rather than a plan, so what is left is smaller and more specific: it still
-   **leads with the three-phase SSH flow** while `commission-offline.sh` is the verified path for
-   *delivery*. Decide whether the offline pass goes first. Two things to fix while there, both found
-   2026-08-07: the line saying `card-prep.sh`'s rename "is recorded in C12" is stale (the rename
-   shipped in `f9f895a`, after the doc rewrite), and `NEXT_STEPS` step 4 still tells the operator to
-   run `ssh-copy-id` by hand — the scripts now offer it (`git log --grep=F16`).
+1. **~~`COMMISSIONING.md`'s ordering~~ — done 2026-08-09.** The doc now **leads with the one offline
+   command** and has a `## Single-pass offline commissioning` section of its own (it previously had
+   none — the delivery path appeared only in the Architecture file list). The three phases are named as
+   the *development loop*, phase 1 carries the ⚠️ that it does not produce a usable unit, and
+   `roomwizard.sh`'s pointer says item 6 is the whole job. The two side items are closed too: the stale
+   C12 line is gone, and `NEXT_STEPS` step 4 already said the scripts offer `ssh-copy-id` themselves.
 2. **Unit B — anything more aggressive, one increment per boot.** A failed boot yields no diagnostics
    (no serial console, [§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)); the only post-mortem is mounting
    p3 offline and reading `messages`, which only helps if it got as far as syslog. Still the reason to
@@ -518,7 +537,7 @@ Neither is urgent — recorded so the deletion stays a decision with a known cos
 
 ---
 
-### F15. USB host mode through commissioning — driver, p1 patch and tests DONE 2026-08-08, docs left
+### F15. USB host mode through commissioning — DONE 2026-08-08, confirmed on a unit 2026-08-09
 
 **Symptom that opened this:** USB does not work on the offline-commissioned unit (`rwtest`,
 192.168.50.225).
@@ -878,6 +897,23 @@ mechanism.** `--from-bundle` installs whatever the manifests name, so the four a
 for free — but a bundle install alone does **not** patch p1 and does **not** install the three device
 scripts. Those come from `commissioning/provision.sh` or `commissioning/commission-offline.sh`.
 
+✅ **CONFIRMED ON A UNIT, 2026-08-09 — the effect, not just the write.** The user commissioned a card
+through `roomwizard.sh` item 6 (the full offline pass, full bundle) and then, on the booted unit,
+plugged an **Xbox controller straight into the micro-USB port through a passive adapter — no powered
+hub** — and it worked. So did ScummVM and the VNC client, launched from the launcher tiles.
+
+⚠️ **The pad is the measurement that matters, and it is the only one that could have been made.** A
+bus-powered pad on the vendor's 100 mA budget is what the p1 patch exists to fix; USB host mode, the
+`xpad`/`joydev`/`ff-memless` modules and the 500 mA budget all had to be right for a pad on a passive
+adapter to enumerate. That closes the gap this entry kept open — "a verified *write* and an unverified
+*effect*" — from the effect side, without a hexdump of `/proc/device-tree`. The two tiles launching
+also settles the *scummvm* and *vnc_client* halves of the bundle install.
+
+**Still unmeasured, and now optional:** the `000000fa` hexdump of
+`/proc/device-tree/ocp*/usb_otg_hs*/power` (the pad *is* the same fact, read at the other end), and a p1
+rollback through `uImage-system.vendor` (the remedy has never been exercised on hardware — worth one
+run before anyone needs it in anger).
+
 **One scoped experiment would retire the p1 path entirely, and is worth trying first.** Patch the
 **in-RAM** copy of the `usb_otg_hs` `power` property via `/dev/mem`: verify it reads `0x00000032`, write
 `0x000000fa`, rebind, confirm 500 mA. That is the *same* mechanism as the existing `omap2430_ops` patch
@@ -909,7 +945,7 @@ Zigbee and cannot host Bluetooth. And there is no second USB port and no footpri
 ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
 
 **The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
-as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
+as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
 three modules — and that precedent worked. Every hard dependency is satisfiable, measured from
 `usb_host/device_config`:
 
@@ -941,7 +977,7 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 `CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
 `CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
-family as [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)'s
+family as [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
 controller scribbles into RAM.** No kernel rebuild is available to do it the clean way
 ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
@@ -1346,7 +1382,7 @@ SSH) and by nothing else. Neither is a library and neither is an answer to "what
 
 ### C13. The SSH pass and the offline pass share one clean — closed 2026-08-08
 
-**Closed by the same commit as [F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)**, whose ✅ block records what was built. Kept here for the two
+**Closed by the same commit as [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)**, whose ✅ block records what was built. Kept here for the two
 measurements the decision rested on, because both are still load-bearing and are the kind of thing that
 gets re-raised as a risk.
 
@@ -1410,38 +1446,39 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)
-   is host-complete** — the code, its 94-case suite, the sabotage harness that proves the suite can
-   fail, `tests/commission_offline_test.sh` (36/36, run 2026-08-08), `LICENSE.md`, `COMMISSIONING.md`,
-   `README.md` and `usb_host/README.md` are all in. **Nothing host-side is left.** The heading still says
-   *docs left* only because retitling it would break eight inbound anchors; it changes when the device
-   verification in #2 lands.
-2. **The device checks nothing here can do** — a full bundle installed on `.225`, and an Xbox pad
-   plugged in with **no powered hub** after a reboot. That last one is the only check that the p1 patch
-   took effect, and until it runs, "500 mA" is a verified *write* and an unverified *effect*.
-   `tests/commission_offline_test.sh` is **done: 36/36, run by the user 2026-08-08.** Its first run
-   failed 24 of 35 on a single harness defect — `lib/rw-ssh.sh` was absent from the fixture copy list,
-   `commissioning/card-prep.sh:69` sources it, and `commission-offline.sh` hands over to that script in
-   phase 3, so every case reaching phase 3 died there. ⚠️ **Section 0 is the negative control for that
-   very list and grepped only `commission-offline.sh`'s own source lines**, so it reported "found 5
-   libraries (>= 5)" and passed while the list was one short. It now scans every script in the fixture,
-   keyed on the `/lib/` path component so a `$SCRIPT_DIR/../lib` caller is covered too. The 11 cases
-   that passed were exactly those failing *before* phase 3 — which is what made the count look like a
-   tool fault rather than a harness one.
-3. **The delivery path is not the one an operator finds** — F10's *What is left* #1, widened by a
-   measured incident on 2026-08-08. `COMMISSIONING.md` leads with the SSH flow while the offline pass is
-   the verified delivery path, and **`roomwizard.sh`'s menu has the same defect**: item **1** is called
-   *"Commission an SD card (offline)"* and is `card-prep.sh`, phase 1 only; the full pass is item **6**.
-   Asked to commission a card offline, the user picked 1 — the correct reading of that label — and got a
-   unit still running the vendor stack at a static `10.11.140.22` out of `websign/`, unreachable from the
-   host's subnet. Nothing had failed: `dhclient.conf` carried `send host-name "rwtest"` and `/etc/shadow`
-   a real hash, and then `S60networkmanager` reset `/etc/hostname` to `null` and rewrote `/etc/hosts` at
-   boot — D7b, live, because only the deep clean removes the regenerator. ⚠️ **Two names to fix, not
-   one**: the menu labels must say which is a phase and which is the whole thing, and
-   `commissioning/card-prep.sh:134` / `COMMISSIONING.md:468` must stop telling an operator to
-   `mount /dev/sdX6` — a card holder cannot see partition numbers, and `lib/rw-identify.sh` exists so
-   that nobody has to. Name it by what is visible (the ~980 MB ext4 one), or do not ask. Worth doing
-   after F15's docs, since C13 changed what the SSH flow does.
+1. **[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09) is
+   CLOSED — host-complete and confirmed on a unit.** Code, the 94-case suite, the sabotage harness,
+   `tests/commission_offline_test.sh` (36/36), `LICENSE.md`, `COMMISSIONING.md`, `README.md` and
+   `usb_host/README.md` all in; and on 2026-08-09 the user ran the full offline pass and plugged an
+   **Xbox pad straight into the micro-USB port through a passive adapter, no powered hub** — it worked,
+   as did ScummVM and VNC from their launcher tiles. That is the one check that proves the p1 500 mA
+   patch has an *effect* and not merely a verified write.
+2. **The device checks that remain are optional, not blocking.** The `000000fa` hexdump of
+   `/proc/device-tree/ocp*/usb_otg_hs*/power` reads the same fact the pad already demonstrated from the
+   other end; a **p1 rollback through `uImage-system.vendor`** has never been exercised on hardware, and
+   is worth one run *before* anyone needs it in anger rather than during. Both are one SSH session — the
+   p1 patch is reachable over SSH (`rw_usbpower_apply_ssh` mounts `/dev/mmcblk0p1` on the running
+   device), so no case-open is involved in any of it.
+3. **~~The delivery path is not the one an operator finds~~ — done 2026-08-09**, and the incident behind
+   it turned out to be two defects, not one naming problem. On 2026-08-08 the user was asked to
+   commission a card offline, picked `roomwizard.sh` item **1** — *"Commission an SD card (offline)"*,
+   the correct reading of that label — and got `card-prep.sh`, phase 1 of 3. Everything in it succeeded.
+   The unit then booted still running the vendor stack, at a static `10.11.140.22` out of `websign/`,
+   unreachable from the host's subnet, with `/etc/hostname` back to `null`.
+   - **The label** said "commission a card" for one phase of three. Fixed: item 1 is
+     *"Prepare the card  PHASE 1 of 3"*, item 6 is *"THE WHOLE JOB"* and is listed on its own, numbers
+     unchanged so no keystroke changed meaning. A test asserts the label
+     (`tests/commission_prep_test.sh`), because prose is exactly what drifts back.
+   - **The mechanism** is [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--closed-2026-08-08)
+     item 2, whose closing argument had a hole at phase 1 — see there. `card-prep.sh` now measures p2
+     and offers to disable the regenerator.
+   - **Also fixed while there:** `card-prep.sh`'s and `COMMISSIONING.md`'s "mount `/dev/sdX6`" — a card
+     holder cannot see partition numbers, and `${dev}6` is the wrong name on an `mmcblk` reader
+     (`rw_part_dev` inserts the `p`). The visible-disk branch now resolves the device itself; the
+     no-disk branch says *re-run this and it will name it* rather than asking for a guess.
+   - ⚠️ **And `roomwizard.sh` item 6 claimed "It never touches p1"**, which
+     [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)
+     made false. It now says what it writes, and names `uImage-system.vendor` as the remedy.
 4. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
 5. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device first if
    disk space is tight — which is now the default.
@@ -1454,7 +1491,7 @@ item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-
 cannot fire here. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
 not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
 recorded rather than planned, because the honest answer is a bootable image.
-[F15](#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left) is
+[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09) is
 **built and host-tested; its effect on a device is not yet measured**, which is the distinction its own
 entry keeps. [C13](#c13-the-ssh-pass-and-the-offline-pass-share-one-clean--closed-2026-08-08) and
 [D7b](#d7b-etchosts-and-etchostname-are-regenerated-on-boot--closed-2026-08-08) closed with it — D7b's

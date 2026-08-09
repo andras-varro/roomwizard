@@ -534,7 +534,11 @@ tool-level traps rather than device facts, and each has cost real time.
   offline edit of `/etc/hostname` alone is undone (`IMPROVEMENT_PLAN.md` D7b). **If
   `websign/net.mode` is `manual` the unit takes a static address and sends no DHCP request** — it
   appears in no router lease list and SSH is impossible until the card is edited offline. The deep
-  clean deletes `websign/`, which is what makes a name stick on a *cleaned* unit. The vendor's own
+  clean deletes `websign/`, which is what makes a name stick on a *cleaned* unit — and ⚠️ **`card-prep.sh`
+  alone does not clean, so phase 1 by itself can produce a unit phase 2 cannot reach** (measured
+  2026-08-08). It therefore now mounts **p2 read-only**, reads `net.mode`, and offers to remove the p6
+  link `etc/rcS.d/S60networkmanager` — `[ -t 0 ]`-gated, keeping it on a non-TTY, and `unmeasured` is
+  never folded into "nothing to do". The vendor's own
   validator **rejects hyphens**, so prefer `rwtest` to `rw-test` on anything still carrying the vendor
   stack. ⚠️ **`/home/root/{data,log,backup}` are mount points (p2/p3/p5)** — a rootfs mounted offline
   shows all three empty, and the vendor's config and logs are on those other partitions. Detail:

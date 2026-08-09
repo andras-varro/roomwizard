@@ -61,11 +61,11 @@ Interactive front door for RoomWizard bring-up. Menu-driven; it takes no
 arguments of its own beyond --help, and reimplements none of the flags of the
 scripts it calls. To script a step, call that script directly:
 
-  ./commissioning/card-prep.sh                          Phase 1 (offline, needs sudo)
-  ./commissioning/provision.sh <target> [flags]         Phase 2 (ssh, reboots)
+  ./commissioning/card-prep.sh                          Phase 1 of 3 (offline, sudo)
+  ./commissioning/provision.sh <target> [flags]         Phase 2 of 3 (ssh, reboots)
   ./commissioning/provision.sh <target> --hostname NAME name only, no reboot
-  ./deploy-all.sh <target> [component]                  Phase 3 (ssh)
-  ./commissioning/commission-offline.sh --bundle <b>    all three, offline, one boot
+  ./deploy-all.sh <target> [component]                  Phase 3 of 3 (ssh)
+  ./commissioning/commission-offline.sh --bundle <b>    THE WHOLE JOB, offline, one boot
 
 Full guide: COMMISSIONING.md
 USAGE
@@ -141,19 +141,27 @@ confirm() {
 
 # ── Phase 1 ─────────────────────────────────────────────────────────────────
 do_commission() {
-    hdr "1. Commission an SD card (offline)"
+    hdr "1. Prepare the card — PHASE 1 of 3 (offline)"
     # Guard rather than letting the child script fail from the inside: it needs a
     # mounted card and sudo, and neither is something this menu can arrange.
     cat <<'PRE'
-  This runs OFFLINE against the SD card, not the device. Before continuing:
+  This is ONE PHASE, not the whole job. It writes credentials and network
+  settings to the card; the vendor software stays, and the unit still boots as
+  a RoomWizard until phase 2 has run over ssh.
+
+  If you want a finished unit from one pass, that is item 6.
+
+  Before continuing:
 
     - the card must be out of the RoomWizard and in this host's reader
-    - its rootfs (p6) must be mounted. The script finds it by content, so any
-      mount point works; if it cannot, it names the disk it found and prints
-      the mount command. You can also `export ROOTFS=/mnt/rw`.
+    - its rootfs must be mounted. The script finds it by content, so any mount
+      point works; if it cannot, it names the disk it found and prints the
+      mount command. You can also `export ROOTFS=/mnt/rw`.
     - you will be asked for sudo
 
-  It sets the root password, the host name, SSH access and DHCP.
+  It sets the root password, the host name, SSH access and DHCP — and then asks
+  whether to disable the vendor's boot-time network regenerator, which would
+  otherwise undo the last two ~7 s into the first boot.
 PRE
     echo ""
     confirm "Card mounted and ready?" || { warn "Skipped."; return 0; }
@@ -165,10 +173,12 @@ PRE
 # A composition like everything else here: it execs commissioning/commission-offline.sh, which
 # in turn orchestrates commissioning/card-prep.sh rather than restating its prompts.
 do_commission_offline() {
-    hdr "6. Commission a card completely, offline (one boot)"
+    hdr "6. THE WHOLE JOB — commission a card completely, offline (one boot)"
     cat <<'PRE'
   This does the WHOLE job against the card: password, host name, SSH, DHCP, the
   vendor cleanup, the boot scripts and the apps. Then one boot and the unit works.
+  Items 1, 2 and 3 are the same ground in three phases, with two boots and a
+  network in between; this is the delivery path.
 
   Before continuing:
 
@@ -178,7 +188,9 @@ do_commission_offline() {
       or point --bundle at a release tarball
     - you will be asked for sudo, because it mounts all four partitions
 
-  It never touches p1, so a power cycle undoes nothing it did to the boot chain.
+  It DOES write p1, to raise the USB power budget to 500 mA, so a power cycle is
+  not a free undo. The vendor kernel is kept beside it as uImage-system.vendor,
+  which is the in-place remedy; --no-usb-power leaves p1 alone entirely.
 PRE
     echo ""
     local bundle
@@ -336,12 +348,14 @@ while true; do
     hdr "RoomWizard"
     [ -n "$TARGET" ] && info "Target: $TARGET"
     cat <<'MENU'
-  1) Commission an SD card        (offline)
-  2) Set up a booted device       (ssh)
-  3) Deploy apps                  (ssh)
-  4) Device status                (read-only)
-  5) Full bring-up: 1 -> 2 -> 3
-  6) Commission COMPLETELY offline, one boot  (needs a bundle)
+  1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
+  2) Set up a booted device      PHASE 2 of 3   ssh; cleans, ends in a reboot
+  3) Deploy apps                 PHASE 3 of 3   ssh
+  5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
+
+  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (needs a bundle)
+
+  4) Device status               read-only
   q) Quit
 MENU
     echo ""

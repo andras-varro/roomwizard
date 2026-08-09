@@ -961,7 +961,7 @@ limit.
 Nothing generates it per-unit, unlike the filesystem UUIDs
 ([§4.2](#42-partitions)). The two differ in **exactly 9 bytes**: the uImage header CRC (offsets 4–7), the
 data CRC (24–27), and one value byte at `0x4FA2CF`. That makes an md5 gate a complete check, which is what
-[`IMPROVEMENT_PLAN.md` F15](IMPROVEMENT_PLAN.md#f15-usb-host-mode-through-commissioning--driver-p1-patch-and-tests-done-2026-08-08-docs-left)
+[`IMPROVEMENT_PLAN.md` F15](IMPROVEMENT_PLAN.md#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)
 builds on.
 
 > ⚠️ **This patch does not survive re-imaging.** It is a persistent one-time fix *per SD image* —

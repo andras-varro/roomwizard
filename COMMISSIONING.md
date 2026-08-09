@@ -4,7 +4,19 @@ This document describes the commissioning process for RoomWizard devices.
 
 ## Overview
 
-Bring-up is three phases, run in order, each by its own script:
+**To deliver a working unit, there is one command.** It runs offline against the card, needs no
+network and no reachable device, and the unit works after a single boot:
+
+```bash
+sudo ./commissioning/commission-offline.sh --bundle build/release
+```
+
+That is [*Single-pass offline commissioning*](#single-pass-offline-commissioning) below, and it is the
+verified delivery path. Everything else in this document is the **development loop** — the same ground
+in three phases, over SSH, which is what you want when you are changing the software rather than
+handing over a unit.
+
+Bring-up in phases is three scripts, run in order:
 
 | Phase | Script | Connection | When |
 |-------|--------|------------|------|
@@ -12,14 +24,22 @@ Bring-up is three phases, run in order, each by its own script:
 | **2. System Setup** | `commissioning/provision.sh` | SSH over network | Once per device |
 | **3. Deploy apps** | `deploy-all.sh` | SSH over network | Per deploy |
 
-**The recommended path is [`roomwizard.sh`](roomwizard.sh)** — a menu over all three, which
-implements nothing of its own and shells out to the scripts above:
+⚠️ **Phase 1 alone does not give you a RoomWizard you can use, and on a stock unit it may not even
+give you one you can reach.** It writes credentials and network settings; the vendor software stays,
+and `/opt/sbin/networkmanager` rewrites the host name and the DHCP setting ~7 s into the first boot
+out of `/home/root/data/websign/net.*` — measured on an RW20, 2026-08-08, which came up at a static
+`10.11.140.22` on a subnet the host could not reach, with `/etc/hostname` back to `null`. Phase 1 now
+**measures** that config on p2 and offers to disable the regenerator; see
+[*The vendor network regenerator*](#the-vendor-network-regenerator).
+
+**A menu over all of it is [`roomwizard.sh`](roomwizard.sh)**, which implements nothing of its own and
+shells out to the scripts above:
 
 ```bash
-./roomwizard.sh          # interactive menu; item 5 is the full 1 -> 2 -> 3 bring-up
+./roomwizard.sh          # item 6 is the whole job; items 1-3 are the three phases
 ```
 
-Item 5 is the only one that chains, and it exists because of the two human gaps between the
+Item **5** chains 1 → 2 → 3, and it exists because of the two human gaps between the
 phases: after commissioning you must boot the device, and Phase 2 *reboots* it, so the operator
 was otherwise guessing when to start the next step. `roomwizard.sh` polls SSH — not ping, which
 answers while `sshd` is still starting — at both transitions. Every phase remains callable
@@ -45,6 +65,50 @@ inherently a running-system job; already-commissioned units exist and must stay 
 pulling their card; and the deep clean measures `df` before/after and offers a dry run, which
 assumes a live device. Commissioning's job is to produce a device you can *reach* — a cleanup that
 broke boot there would cost you SSH and tell you nothing.
+
+**`commissioning/commission-offline.sh` is the answer to that argument, not an exception to it.** It
+mounts all four partitions by *position* and maps every device-absolute path onto the right one — the
+work a booted kernel does for free — which is why one offline pass can do what the three phases do.
+
+## Single-pass offline commissioning
+
+The delivery path. One command, offline, one boot; no network, no reachable device, no toolchain on the
+machine running it.
+
+```bash
+sudo ./commissioning/commission-offline.sh --bundle build/release
+```
+
+`--bundle` takes either a staged directory or a release tarball; `./release.sh --stage-only` produces
+one in `build/release`. `--dry-run` resolves and prints every action without writing.
+
+**What it does, in order:** mounts p6/p2/p3/p5 by position → cleans the vendor stack from
+`device-files/clean-rules.conf` → runs `commissioning/card-prep.sh` for the credentials, host name and
+network → installs the boot scripts and links from `device-files/provision-rules.conf` → installs the
+bundle → patches p1's `uImage-system` to a 500 mA USB budget → verifies.
+
+**What it asks.** One consent question, before the first write, naming the clean and the p1 write
+separately: *is the whole card backed up somewhere else?* Neither is undoable on the device. On a
+non-TTY it proceeds and prints a banner saying what nobody answered.
+
+**What it verifies, on the card, before you boot it.** md5 of every installed file against the bundle
+manifest; `+x` on everything that needs it (a real measurement on ext4, and impossible on `/mnt/c`);
+`native_apps/check-arm-safe.sh` over the downloaded binaries; every `.app`'s `exec=` and `icon=`, and
+that `default-app` names one of them; `dash -n` on every `/bin/sh` script it wrote; and that `websign/`
+and the `rcS.d/S60networkmanager` link are both gone.
+
+⚠️ **It writes p1**, to raise the USB power budget — so a power cycle is not a free undo. The vendor
+kernel is kept beside it as `uImage-system.vendor`, which is the in-place remedy, and md5-verified
+before the original is touched. `--no-usb-power` leaves p1 alone entirely; `--no-clean` deletes
+nothing.
+
+Because this pass deletes `websign/` and the regenerator link in the same run that sets the host name,
+the [regenerator problem below](#the-vendor-network-regenerator) does not exist on this path — it is
+removed rather than worked around. Confirmed on hardware: a unit commissioned as `rwtest` booted with
+its name intact and answered on the network.
+
+Regression: [`tests/commission_offline_test.sh`](tests/commission_offline_test.sh) — 36 cases, every
+check with a sabotage case; needs root and a staged bundle.
 
 ## Finding the card
 
@@ -121,6 +185,50 @@ Give each unit a **unique single label** (`rw09`, not `rw09.local` — mDNS appe
 itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.local` and
 `./commissioning/provision.sh rw09.local` work instead of hunting for a DHCP lease.
 
+### The vendor network regenerator
+
+⚠️ **On a unit that still carries the vendor stack, everything Phase 1 just wrote is rewritten ~7 s
+into the first boot.** `/opt/sbin/networkmanager`, started from `etc/rcS.d/S60networkmanager`, rewrites
+`/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf` and `/etc/dhclient.conf`'s `send host-name` out of
+`/home/root/data/websign/net.*`, and in `manual` mode it also kills the `dhclient` that
+`S40networking` started and applies a static address.
+
+Measured on an RW20, 2026-08-08 — a card prepared here as `rwtest`:
+
+```text
+Aug  8 19:16:21 rwtest kernel: ...                       # S39hostname.sh applied 'rwtest'
+Aug  8 19:16:38 rwtest NETWORKMANAGER: Killed dhclient.
+Aug  8 19:16:42 rwtest NETWORKMANAGER: Manual IP Mode detected.
+Aug  8 19:16:43 rwtest NETWORKMANAGER: Vaild host name found: null
+Aug  8 19:17:01 rwtest NETWORKMANAGER: status: manual-bound
+Aug  8 19:17:01 rwtest NETWORKMANAGER: ip address: 10.11.140.22
+```
+
+The card afterwards: `/etc/hostname` back to `null`, `/etc/hosts` rewritten as
+`# Generated by PV networkmanager` / `10.11.140.22 null`. **Nothing had failed** — and the unit was on
+a subnet the host could not reach, so Phase 2 was impossible and Phase 1 could not lead anywhere.
+
+`commissioning/card-prep.sh` therefore ends by **measuring** this rather than warning about it in the
+abstract. `websign/` is on **p2** and this script has p6, so it resolves the card's own disk from the
+mounted rootfs and mounts p2 **read-only** to read three files:
+
+| `net.mode` | What happens on the first boot | What Phase 1 offers |
+|---|---|---|
+| `manual` | static address, `dhclient` killed, host name reset — **unreachable** if that address is not on your subnet | disable the regenerator (default), or keep it and use the vendor's address |
+| `dhcp` | a lease still arrives, but the host name and `/etc/hosts` are still rewritten | the same choice; only the *name* is at stake |
+| `websign/` absent | nothing — both writers are inside `set_manual()`/`set_dhcp()` | nothing to do, reported as such |
+| p2 unreachable | unknown | reported as **unmeasured**, never as nothing-to-do |
+
+"Disable" removes `etc/rcS.d/S60networkmanager` on p6 and nothing else. `/etc/init.d/networkmanager`
+stays, so the restore is one `ln -s ../init.d/networkmanager`, and the link is *not* renamed in place
+because `/etc/init.d/rc` globs `S[0-9][0-9]*` — `S60networkmanager.disabled` would still run. This is
+not a new deletion decision: `device-files/clean-rules.conf` already names that link, so Phase 2
+removes it on every unit anyway. Phase 1 only moves it earlier, to the one phase that has no other way
+to survive its own first boot.
+
+The prompt is `[ -t 0 ]`-gated. A non-TTY run **keeps** the regenerator and prints an unmissable block
+saying nobody was asked — an EOF must not be read as consent to remove a boot link.
+
 ### Usage
 
 1. **Insert the SD card** into a Linux machine (or WSL), and mount its rootfs (p6). Any mount
@@ -178,7 +286,7 @@ itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.
   6. Deploy all apps:
        ./deploy-all.sh <ip>
 
-  Or do steps 5-6 from the menu:   ./roomwizard.sh
+  Or run those last two from the menu — items 2 and 3:   ./roomwizard.sh
 
   Full guide: COMMISSIONING.md
 
@@ -416,9 +524,13 @@ device-files/{enable-usb-host.sh,usb-host,xpad-modules}   Device payload: the us
 */build-and-deploy.sh                  One per component
 ```
 
-⚠️ **`commissioning/card-prep.sh` is step 3 *of* `commissioning/commission-offline.sh`, not an alternative to it.** The
-name still reads like a sibling; the scripts were moved into `commissioning/` and renamed in the C12
-reorg, and this is the one name that kept its old shape because nothing better was agreed.
+⚠️ **`commissioning/card-prep.sh` is step 3 *of* `commissioning/commission-offline.sh`, not an
+alternative to it.** The name still reads like a sibling, and no better one has been agreed. The
+handover carries **two** variables: `ROOTFS` skips its own card detection, and
+`RW_COMMISSION_ORCHESTRATED` suppresses the closing banner, the `NEXT_STEPS` block and the regenerator
+prompt — all three of which are about work the orchestrator has already done or is about to undo.
+⚠️ `ROOTFS` alone must **not** suppress them: it is also the documented "I mounted the card myself"
+hatch, and that operator does still need the next steps.
 
 ### On-device layout
 ```
@@ -464,9 +576,14 @@ visible to Linux at all; on WSL it must first be attached from Windows:
 
 ```bash
 wsl --mount \\.\PHYSICALDRIVEn --bare
-sudo mkdir -p /mnt/rw
-sudo mount /dev/sdX6 /mnt/rw          # p6 is the rootfs, always
+lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT | grep -v loop
 ```
+
+Then **re-run the script**. Once the disk is visible it resolves the rootfs itself and prints the
+device to mount. ⚠️ **It deliberately does not tell you to `mount /dev/sdX6`**: whoever is holding a
+card cannot see partition numbers, `lib/rw-identify.sh` exists so that nobody has to work one out, and
+`${dev}6` is the wrong name on an `mmcblk` reader anyway (`rw_part_dev` inserts the `p`). If you want
+to mount it by hand, it is the **~980 MB ext4** partition.
 
 **Do not go looking for a particular UUID** — see [*Finding the card*](#finding-the-card).
 
