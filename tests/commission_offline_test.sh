@@ -71,7 +71,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-usbpower.sh \
+         lib/rw-usbpower.sh lib/rw-ssh.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
@@ -131,25 +131,34 @@ echo "0. the fixture tree covers everything the tool sources"
 # reached. So a suite that only ever runs --base cannot discover a missing library
 # by running; it has to look.
 #
-# Reads the COPIED script, not the repo's, so the thing asserted is the tree the
+# Reads the COPIED scripts, not the repo's, so the thing asserted is the tree the
 # cases below actually execute.
-SRC_LINES=$(grep -hoE '^[[:space:]]*\.[[:space:]]+"\$REPO_ROOT/[^"]+"' \
-                "$REPO/commissioning/commission-offline.sh" \
-            | sed 's|.*\$REPO_ROOT/||; s|"$||' | sort -u)
+#
+# ⚠️ Scans EVERY script in the fixture, not just commission-offline.sh. The first
+# version of this check read that one file, and thereby missed lib/rw-ssh.sh —
+# sourced by commissioning/card-prep.sh, which commission-offline.sh hands over to
+# in phase 3. Every case downstream of phase 3 died on it. A negative control for a
+# copy list has to cover every script the list is FOR.
+#
+# The pattern keys on the "/lib/" path component rather than on $REPO_ROOT, so a
+# caller using $SCRIPT_DIR/../lib is covered too.
+SRC_LINES=$(grep -hoE '\.[[:space:]]+"[^"]*/lib/[^"]+"' \
+                "$REPO"/commissioning/*.sh "$REPO"/lib/*.sh \
+            | sed 's|.*/\(lib/[^"]*\)"|\1|' | sort -u)
 SRC_N=$(printf '%s\n' "$SRC_LINES" | grep -c . )
 # Ask which part of the count is the harness: a grep whose pattern has rotted
 # matches nothing and every per-file case below then passes over an empty list.
-if [ "$SRC_N" -ge 5 ]; then
-    ok "0a the source-line grep found $SRC_N libraries (>= 5)"
+if [ "$SRC_N" -ge 6 ]; then
+    ok "0a the source-line grep found $SRC_N libraries (>= 6)"
 else
     bad "0a the source-line grep found only $SRC_N libraries — the pattern has rotted"
 fi
 while read -r f; do
     [ -n "$f" ] || continue
     if [ -f "$REPO/$f" ]; then
-        ok "0b sourced by commission-offline.sh and present in the fixture: $f"
+        ok "0b sourced by a fixture script and present in the fixture: $f"
     else
-        bad "0b sourced by commission-offline.sh but MISSING from the fixture: $f"
+        bad "0b sourced by a fixture script but MISSING from the fixture: $f"
     fi
 done <<< "$SRC_LINES"
 

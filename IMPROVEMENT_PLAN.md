@@ -759,18 +759,29 @@ closed: `rw_usbpower_test.sh` has now been seen failing, and it fails the *right
   file), so a broken CRC order cannot be baked into the input as well as the output.
 
 ✅ **`tests/commission_offline_test.sh` — the p1 skip cases plus the fixture's own negative control,
-2026-08-08.** ⚠️ **Written but NOT RUN**: the suite needs root and `sudo -n` fails on this host, so
-everything below is `bash -n`-clean and nothing more. It has never been seen passing *or* failing.
+2026-08-08. RUN by the user 2026-08-08: 36/36.**
 
-- **`lib/rw-usbpower.sh` is on the fixture copy list**, the fifth library. The suite passed without it
-  only because that `.` is **lazy** — it sits inside phase 6's `else`, and every case in the file
-  passes `--base`, which skips p1 before the source line is reached.
-- **New section 0 is the negative control for that list**, and is what would have caught the omission:
-  it greps the *copied* `commission-offline.sh` for every `. "$REPO_ROOT/…"` and asserts each named
-  file is in the fixture tree. Measured on this host: the grep yields exactly the five
-  `lib/rw-{bundle,clean,identify,provision,usbpower}.sh`. ⚠️ **A rotted pattern matches nothing and
-  every per-file case then passes over an empty list**, so case 0a asserts the count is `>= 5` first —
-  which part of the number is the harness.
+⚠️ **It failed 24 of 35 first, on one harness defect, and the shape of that failure is the lesson.**
+`lib/rw-ssh.sh` was absent from the fixture copy list; `commissioning/card-prep.sh:69` sources it, and
+`commission-offline.sh` hands over to that script in phase 3 — so every case reaching phase 3 died on
+`No such file or directory` and exited non-zero for the wrong reason. **The 11 that passed were exactly
+those that fail *before* phase 3** (section 0, the bundle checks, the card checks), which is what made a
+harness fault present as a tool fault across four unrelated sections.
+
+- **`lib/rw-usbpower.sh` is on the fixture copy list**, and `lib/rw-ssh.sh` is now the sixth. The suite
+  passed without the former only because that `.` is **lazy** — it sits inside phase 6's `else`, and
+  every case in the file passes `--base`, which skips p1 before the source line is reached. `rw-ssh.sh`
+  had no such excuse: it is sourced at the top of `card-prep.sh` and fired on the first run.
+- **Section 0 is the negative control for that list — and its first version was scoped too narrowly to
+  work.** It greps the *copied* scripts for every source line and asserts each named file is in the
+  fixture tree, but v1 read **only `commission-offline.sh`'s own** `. "$REPO_ROOT/…"` lines. So it could
+  not see `card-prep.sh`'s, reported "found 5 libraries (>= 5)", and passed while the list it exists to
+  check was one file short. ⚠️ **A negative control for a copy list must cover every script the list is
+  for**, not the one script that reads it. It now scans `commissioning/*.sh` and `lib/*.sh` in the
+  fixture, keyed on the `/lib/` path component rather than on `$REPO_ROOT`, so a caller using
+  `$SCRIPT_DIR/../lib` is covered too, and 0a's floor is `>= 6`. ⚠️ **A rotted pattern matches nothing
+  and every per-file case then passes over an empty list** — which is the other half of asking which
+  part of the number is the harness.
 - **New section 4, the three p1 skips**, through a new **`expect_says`** — the mirror of
   `expect_fires`: exited **0** *and* said it. Both halves are separate bugs. A skip that exits
   non-zero turns a deliberate opt-out into a failed commissioning; a skip that goes unmentioned leaves
@@ -1402,13 +1413,32 @@ Deliberately not a ranking of everything — only the claims worth making.
    fail, `tests/commission_offline_test.sh`'s p1 cases, `LICENSE.md`, `COMMISSIONING.md` and `README.md`
    are all in. What is left is **`usb_host/README.md`** alone, and F15 names the three line ranges.
    Host-only.
-2. **The three device checks nothing here can do** — `sudo tests/commission_offline_test.sh`, a full
-   bundle installed on `.225`, and an Xbox pad plugged in with **no powered hub** after a reboot. That
-   last one is the only check that the p1 patch took effect, and until it runs, "500 mA" is a verified
-   *write* and an unverified *effect*.
-3. **`COMMISSIONING.md`'s ordering** — F10's *What is left* #1. The prose is a description now; what is
-   left is that it leads with the SSH flow while the offline pass is the verified delivery path, plus
-   two stale lines named there. Worth doing after F15's docs, since C13 changed what the SSH flow does.
+2. **The device checks nothing here can do** — a full bundle installed on `.225`, and an Xbox pad
+   plugged in with **no powered hub** after a reboot. That last one is the only check that the p1 patch
+   took effect, and until it runs, "500 mA" is a verified *write* and an unverified *effect*.
+   `tests/commission_offline_test.sh` is **done: 36/36, run by the user 2026-08-08.** Its first run
+   failed 24 of 35 on a single harness defect — `lib/rw-ssh.sh` was absent from the fixture copy list,
+   `commissioning/card-prep.sh:69` sources it, and `commission-offline.sh` hands over to that script in
+   phase 3, so every case reaching phase 3 died there. ⚠️ **Section 0 is the negative control for that
+   very list and grepped only `commission-offline.sh`'s own source lines**, so it reported "found 5
+   libraries (>= 5)" and passed while the list was one short. It now scans every script in the fixture,
+   keyed on the `/lib/` path component so a `$SCRIPT_DIR/../lib` caller is covered too. The 11 cases
+   that passed were exactly those failing *before* phase 3 — which is what made the count look like a
+   tool fault rather than a harness one.
+3. **The delivery path is not the one an operator finds** — F10's *What is left* #1, widened by a
+   measured incident on 2026-08-08. `COMMISSIONING.md` leads with the SSH flow while the offline pass is
+   the verified delivery path, and **`roomwizard.sh`'s menu has the same defect**: item **1** is called
+   *"Commission an SD card (offline)"* and is `card-prep.sh`, phase 1 only; the full pass is item **6**.
+   Asked to commission a card offline, the user picked 1 — the correct reading of that label — and got a
+   unit still running the vendor stack at a static `10.11.140.22` out of `websign/`, unreachable from the
+   host's subnet. Nothing had failed: `dhclient.conf` carried `send host-name "rwtest"` and `/etc/shadow`
+   a real hash, and then `S60networkmanager` reset `/etc/hostname` to `null` and rewrote `/etc/hosts` at
+   boot — D7b, live, because only the deep clean removes the regenerator. ⚠️ **Two names to fix, not
+   one**: the menu labels must say which is a phase and which is the whole thing, and
+   `commissioning/card-prep.sh:134` / `COMMISSIONING.md:468` must stop telling an operator to
+   `mount /dev/sdX6` — a card holder cannot see partition numbers, and `lib/rw-identify.sh` exists so
+   that nobody has to. Name it by what is visible (the ~980 MB ext4 one), or do not ask. Worth doing
+   after F15's docs, since C13 changed what the SSH flow does.
 4. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
 5. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device first if
    disk space is tight — which is now the default.
