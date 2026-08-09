@@ -223,6 +223,11 @@ do_setup_menu() {
   e) Set host name only             --hostname NAME          (no reboot)
   f) Device status                  --status                 (read-only)
   q) Back
+
+  a, b and d ALSO write p1 — the 500 mA USB power budget. That is step 5 of every
+  mode, not part of any clean: (a) writes it without deleting anything, and (d)
+  would still write it with --keep-sweeps. One consent prompt covers both writes
+  because both are irreversible; --no-usb-power opts out of the p1 half alone.
 MENU
         echo ""
         local choice

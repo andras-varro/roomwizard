@@ -155,6 +155,11 @@ usage() {
     echo "  the 500 mA USB power budget on p1, and a reboot. Same end state as"
     echo "  commissioning/commission-offline.sh, which has the same defaults."
     echo ""
+    echo "  The p1 write is step 5 of EVERY mode, not part of the clean: --no-clean"
+    echo "  still writes it, --keep-sweeps still writes it, and --no-usb-power is the"
+    echo "  only way to skip it. The two share ONE consent prompt because both are"
+    echo "  irreversible, which is the only sense in which they are one action."
+    echo ""
     echo "  <target>          Device IPv4 address, or a host name (e.g. rw09.local)"
     echo "  --no-clean        Delete nothing. Provision, harden, reboot — that is all."
     echo "  --remove          Clean the named vendor software stacks only, WITHOUT"
@@ -844,18 +849,18 @@ done
 PROV_PLAN=$(mktemp)
 rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
     || { rm -f "$PROV_PLAN"; err "could not compile the provision plan"; }
-info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^install' "$PROV_PLAN") install, $(grep -c '^link' "$PROV_PLAN") link, $(grep -c '^unlink' "$PROV_PLAN") unlink"
+info "Provision plan: $(rw_provision_plan_summary "$PROV_PLAN")"
 
 # The install verb's SOURCE bytes are on this host, so they go over scp first and
 # the remote interpreter only sets the declared mode. That asymmetry is the whole
 # reason the two executors exist; everything else about them is shared.
-while IFS=$'\t' read -r _kind _mode _target _src; do
-    [[ "$_kind" == "install" ]] || continue
-    [[ -f "$REPO_ROOT/$_src" ]] || err "missing $REPO_ROOT/$_src"
-    ssh "$DEVICE" "mkdir -p '$(dirname "$_target")'"
-    scp -q "$REPO_ROOT/$_src" "$DEVICE:$_target" || err "could not copy $_src to $_target"
-    info "copied $_src → $_target"
-done < "$PROV_PLAN"
+#
+# ⚠️ The loop lives in lib/rw-provision.sh, not here. It was written out in full in
+# this script and again in usb_host/build-and-deploy.sh, both reading the plan on
+# stdin with an `ssh` in the body — so the first ssh ate the rest of the plan and
+# both installed exactly one file (B28). Do not inline it again.
+rw_provision_push_installs "$PROV_PLAN" "$REPO_ROOT" "$DEVICE" \
+    || { rm -f "$PROV_PLAN"; err "could not copy the provision sources to the device"; }
 
 ssh "$DEVICE" "cat > /tmp/rw-provision-plan" < "$PROV_PLAN"
 rm -f "$PROV_PLAN"

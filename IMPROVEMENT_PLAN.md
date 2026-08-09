@@ -45,64 +45,53 @@ and record the answer with the confidence it was given — "I think it works" is
 
 ## Correctness and verification
 
-### B28. `provision.sh` installs 1 of 8 files — **every SSH setup mode fails — open, reproduced 2026-08-09**
+### B28. `provision.sh` installed 1 of 8 files — **closed 2026-08-09**
 
-⚠️ **`commissioning/provision.sh` is unusable right now.** All three menu-2 modes — (a) standard setup,
-(b) `--remove`, (d) `--deep-clean` — fail identically on a unit that was reachable and healthy:
+`ssh` inside `while IFS=$'\t' read … done < "$PLAN"`. OpenSSH reads its own stdin and
+forwards it to the remote command, so the first `ssh "$DEVICE" "mkdir -p …"` consumed the
+whole rest of the plan and the loop ended after one record: `audio-enable` copied, the
+seven that followed absent, and the live executor then correctly refusing on all seven.
+All three menu-2 modes failed identically because the copy step is upstream of the mode.
 
-```text
-  → Provision plan: 35 action(s) — 8 install, 9 link, 10 unlink
-  → copied device-files/audio-enable → /etc/init.d/audio-enable
-  install         0755  /etc/init.d/audio-enable
-  MISSING /etc/init.d/time-sync — it should have been copied before this ran
-  MISSING /etc/sysctl.d/99-security.conf — it should have been copied before this ran
-  MISSING /etc/init.d/roomwizard-app — it should have been copied before this ran
-  MISSING /opt/roomwizard/disable-steelcase.sh — it should have been copied before this ran
-  MISSING /usr/local/bin/enable-usb-host.sh — it should have been copied before this ran
-  MISSING /etc/init.d/xpad-modules — it should have been copied before this ran
-  ✗ the provision step failed on the device
-```
+**The three rival candidates were all refuted by reading the seven lines** — no `head -1`,
+no `break`, `mkdir -p` handles the directories a vendor unit lacks, no `$(…)` around the
+loop. Measured before it was fixed: the shipped loop extracted by line range and driven by
+a stub `ssh` that slurps stdin copies **exactly 1 of 8**; the same loop with a stub that
+does *not* read stdin copies 8. That pair is now `F1` in the suite.
 
-**One `copied` line for eight `install` records.** `audio-enable` is the *first* install in emitted
-order, and the seven that follow it are all absent — so the caller's copy step does one file and stops.
-`install` is the one verb the generated online executor cannot do alone (the source bytes are on the
-host), so `provision.sh` must `scp` each source before piping the interpreter; the interpreter then only
-sets the declared mode, and correctly refuses on a file that is not there. **The executor is behaving
-as designed. The caller is not.**
+**The loop existed twice** — `usb_host/build-and-deploy.sh` carried a verbatim copy, so the
+defect was in both — and it is now `rw_provision_push_installs` in `lib/rw-provision.sh`,
+which the three callers share:
 
-⚠️ **Every downstream consequence follows from this one line**, so do not chase them separately: the
-`link` records then point at `../init.d/time-sync` and `../init.d/roomwizard-app`, which do not exist —
-i.e. a completed-looking run would leave **dangling `rc5.d` links, skipped in silence at boot**, the
-exact class `rw_provision_check_keeps` and the offline verify pass exist to catch. It failed loudly
-instead, which is the system working.
+- **The plan is read on fd 3, not stdin.** `ssh -n` would have fixed that body and not the
+  next one; fd 3 is a property of the loop, so a second stdin-reading command added there
+  cannot reintroduce it.
+- **`$RW_SSH`/`$RW_SCP` indirection**, the convention `lib/rw-usbpower.sh` already
+  established — which is what makes the copy step reachable from a test with no device.
+- **It counts.** `want` install records in, `got` copied out, and a mismatch is a refusal
+  naming both numbers. B28 was silent where the copying happened and loud six lines later
+  in the executor, which is what made it read as an executor bug.
 
-**Hypothesis, NOT measured — check it first and discard it fast if wrong.** The classic shape for "loop
-does one iteration then stops" is an `ssh` or `scp` inside a `while read` loop **consuming the loop's
-own stdin**, which ends the loop after the first record. `< /dev/null` on the transfer, or reading the
-plan on a non-zero fd, is the fix if so. ⚠️ Other candidates that produce the identical output and must
-be ruled out by reading rather than assumed away: a `head -1`/`break` left in the copy step, a copy step
-that only handles records whose target directory already exists (`/etc/init.d` exists; `/etc/sysctl.d`,
-`/opt/roomwizard` and `/usr/local/bin` may not), and a `$(...)` around the loop that swallows the rest.
+The header arithmetic in the same output — `35 action(s) — 8 install, 9 link, 10 unlink`,
+accounting for 27 — was a genuinely incomplete summary, not a record type nobody executes.
+`rw_provision_plan_summary` now counts every type present, including one the ordered list
+does not know about, and all three callers use it.
 
-⚠️ **Why 94 passing cases in `tests/rw_provision_test.sh` did not see this.** Group E — the one check
-that compares the online and offline executors — compares both `--dry-run` **plans**. A dry run copies
-nothing, so the `scp` loop is precisely the part of the online path that comparison cannot reach, and
-the offline executor has no equivalent step to be compared against. **The gap is structural, not an
-oversight**: the fix needs a case that runs the *real* copy step against a local directory through the
-`$RW_SSH`/`$RW_SCP` stubs `lib/rw-usbpower.sh` already demonstrates, and asserts **all eight** arrive.
-`8 == 8`, not "more than one" — this failure produced exactly one.
+**Regression: group F of `tests/rw_provision_test.sh`, 15 cases (109 total).** ⚠️ Group E
+could never have caught this and the gap is structural: it compares two `--dry-run`
+**plans**, a dry run copies nothing, and the offline executor has no copy step to be
+compared against. Group F runs the real function against a local directory through the
+stubs and asserts **8 of 8** — never "more than one", because the defect produced exactly
+one. `tests/measure_provision_sabotage.sh` re-measures it against five broken copies
+(counts in its header); case 5 is a control on the harness rather than the library — the
+stub `ssh` stops reading stdin and **F1 alone** must fail, because an unfaithful stub makes
+every other case in the group vacuous.
 
-**Also unexplained, and worth one look while in there:** the plan header says `35 action(s) — 8 install,
-9 link, 10 unlink`, which accounts for 27. The remaining 8 (backup, touch, 4 directives, 2 droplines)
-are not in the header's breakdown. Probably just an incomplete summary line, but it is the kind of
-counting error that hides a record type nobody is executing.
+One thing found while there and **not** fixed: `--dry-run` exits before the provision step
+entirely, so it previews the clean and the p1 write but never the install/link plan. The
+plan is compiled on the host, so a preview is cheap; nobody has asked for one.
 
-**Not attributable to anything in `ce30399`** — that commit touches `card-prep.sh`, `roomwizard.sh` and
-docs, and never the provision executor. Suspect the C13/F15 rewrite that generated the online
-interpreter and moved the three USB scripts into the `usb` group. `git log -p -- lib/rw-provision.sh
-commissioning/provision.sh` over 2026-08-08 is the range.
-
-### B29. Three smaller findings from the same 2026-08-09 walkthrough — open
+### B29. Two findings left from the 2026-08-09 walkthrough — open
 
 1. ⚠️ **`card-prep.sh` still asks the operator to mount the rootfs; `commission-offline.sh` does not, and
    the asymmetry has no reason left.** The operator is holding the card either way, and
@@ -119,12 +108,13 @@ commissioning/provision.sh` over 2026-08-08 is the range.
    vendor UI is showing its own stale config, not the live interface. Benign, and it disappears with the
    clean that deletes `websign/`. **Worth confirming that is the source** before writing it down as
    fact anywhere else — it is currently an inference from where the value could have come from.
-3. **The `--deep-clean` menu item announces the USB power change, and the two are not the same step.**
-   The p1 500 mA write is step 5 of *every* `provision.sh` mode, not part of the clean; they share one
-   consent gate because both are irreversible, and the shared gate is what makes them read as one
-   action. The gate is right — the *labelling* is what needs splitting, so an operator choosing "deep
-   clean" is not surprised by a firmware write and an operator choosing standard setup is not surprised
-   by its absence from the prompt.
+3. **~~The `--deep-clean` menu item announces the USB power change~~ — done 2026-08-09.** The p1 500 mA
+   write is step 5 of *every* `provision.sh` mode; the gate was right and the labelling was not. The
+   menu-2 block now says so under the items, naming (a) — which writes p1 while deleting nothing — and
+   `--keep-sweeps` — which still writes it — as the two cases that separate the steps, and
+   `provision.sh --help` carries the same paragraph. The consent prompt is unchanged: it already named
+   the two writes separately.
+
 
 ### B3c. The touch dead band is measured on one unit only — open
 
@@ -1536,13 +1526,16 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-0. ⚠️ **[B28](#b28-provisionsh-installs-1-of-8-files--every-ssh-setup-mode-fails--open-reproduced-2026-08-09)
-   first, before anything else here.** `commissioning/provision.sh` installs one of its eight files, so
-   **all three SSH setup modes fail** and phase 3 was never reached. Everything below that needs a
-   provisioned device is blocked behind it, and the 94-case suite cannot see it — read that entry's
-   "why" before adding a test.
+0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09) is CLOSED — but nothing has been
+   run against a unit since.** `commissioning/provision.sh` copied one of its eight files, because `ssh`
+   inside a `while read` loop ate the plan off stdin; the loop is now one shared function reading fd 3,
+   and group F of `tests/rw_provision_test.sh` (109 cases) plus
+   `tests/measure_provision_sabotage.sh` cover it. **All of that is host-side.** Phase 2 and phase 3 have
+   still never completed on this unit, so the first thing worth doing is `roomwizard.sh` item 2a followed
+   by item 3 on the same device — item 3 is `deploy-all.sh` reaching it for the first time at all.
 1. **[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09) is
-   CLOSED — host-complete and confirmed on a unit.** Code, the 94-case suite, the sabotage harness,
+   CLOSED — host-complete and confirmed on a unit.** Code, the `rw_usbpower_test.sh` suite, the sabotage
+   harness,
    `tests/commission_offline_test.sh` (36/36), `LICENSE.md`, `COMMISSIONING.md`, `README.md` and
    `usb_host/README.md` all in; and on 2026-08-09 the user ran the full offline pass and plugged an
    **Xbox pad straight into the micro-USB port through a passive adapter, no powered hub** — it worked,

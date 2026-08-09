@@ -645,7 +645,7 @@ PROV_PLAN="$TMPROOT/provision.plan"
 [[ -n "$TMPROOT" ]] || { TMPROOT=$(mktemp -d /tmp/rw-bundle.XXXXXX); PROV_PLAN="$TMPROOT/provision.plan"; }
 rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
     || err "could not compile the provision plan"
-info "Provision plan: $(grep -c . "$PROV_PLAN") action(s) — $(grep -c '^install' "$PROV_PLAN") install, $(grep -c '^link' "$PROV_PLAN") link, $(grep -c '^unlink' "$PROV_PLAN") unlink"
+info "Provision plan: $(rw_provision_plan_summary "$PROV_PLAN")"
 RW_PROVISION_DRY="$DRY" rw_provision_apply_offline "$BASE" "$PROV_PLAN" "$REPO_ROOT" \
     || err "the provision step failed"
 

@@ -527,3 +527,6 @@ vnc_client/vnc_client.conf
 .claude/settings.json
 roomvizard_new.img
 partitions.new/
+# Sabotage staging by tests/measure_provision_sabotage.sh (removed on every exit path)
+lib/.rw-provision.sab.sh
+tests/.sab-*

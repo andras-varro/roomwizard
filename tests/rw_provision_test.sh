@@ -47,7 +47,10 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/rw-clean.sh
 . "$REPO_DIR/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
-. "$REPO_DIR/lib/rw-provision.sh"
+# $RW_PROVISION_LIB points the suite at a staged copy of the library — the hook
+# tests/measure_provision_sabotage.sh drives, so a sabotage stages ONE file instead
+# of copying a tree out of /mnt/c (which blows a 300 s budget over DrvFs).
+. "${RW_PROVISION_LIB:-$REPO_DIR/lib/rw-provision.sh}"
 
 RULES="$REPO_DIR/device-files/provision-rules.conf"
 CLEAN_RULES="$REPO_DIR/device-files/clean-rules.conf"
@@ -485,6 +488,154 @@ if [ "$OFF2" = "$ON" ]; then
 else
     ok "E4 E2 would notice a dropped verb"
 fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "F. the online path's copy step — B28"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ⚠️ Group E cannot reach this, and the gap is structural rather than an oversight.
+# E compares two --dry-run PLANS; a dry run copies nothing, so the scp step is
+# precisely the part of the online path that has no offline counterpart to be
+# compared against. That is how B28 shipped past 94 passing cases:
+# commissioning/provision.sh installed 1 of its 8 files, because `ssh` inside
+# `while read … done < "$PLAN"` reads its own stdin and forwarded the whole rest of
+# the plan to the remote `mkdir`.
+#
+# So this group runs the REAL rw_provision_push_installs against a local directory
+# through the $RW_SSH/$RW_SCP stubs lib/rw-usbpower.sh already established, and
+# asserts 8 of 8. **Never "more than one"** — the defect produced exactly one, so
+# any threshold below the full count passes on the broken tree.
+#
+# The got-vs-want guard inside the function is not reachable from here (it needs a
+# loop that actually loses records); its negative control is
+# tests/measure_provision_sabotage.sh, which puts the plan back on stdin.
+
+FW="$TMP/push"; mkdir -p "$FW/bin" "$FW/dev"
+
+# ⚠️ The stub ssh MUST slurp its stdin. That is the behaviour that caused B28, so a
+# stub that skips it cannot fail the way production failed and every case below
+# becomes a vacuous pass. F1 is the check that this one can.
+cat > "$FW/bin/ssh" <<'STUB'
+#!/bin/sh
+shift                                  # the target
+cat > /dev/null                        # what a real ssh does with a non-tty stdin
+echo "$*" >> "$STUBLOG/ssh.calls"
+d=$(printf '%s' "$*" | sed -n "s/^mkdir -p '\(.*\)'$/\1/p")
+[ -n "$d" ] && mkdir -p "$STUBDEV$d"
+exit 0
+STUB
+cat > "$FW/bin/scp" <<'STUB'
+#!/bin/sh
+[ "$1" = "-q" ] && shift
+src=$1; dst=$2; p=${dst#*:}
+# Faithful to scp: it does NOT create the parent, it fails. So a dropped mkdir -p
+# is measurable here rather than papered over by the stub.
+[ -d "$STUBDEV${p%/*}" ] || { echo "scp: $p: No such file or directory" >&2; exit 1; }
+cp "$src" "$STUBDEV$p" || exit 1
+echo "$src -> $p" >> "$STUBLOG/scp.calls"
+STUB
+chmod +x "$FW/bin/ssh" "$FW/bin/scp"
+export STUBLOG="$FW" STUBDEV="$FW/dev"
+reset_stubs() { : > "$FW/ssh.calls"; : > "$FW/scp.calls"; rm -rf "$FW/dev"; mkdir -p "$FW/dev"; }
+push() { RW_SSH="$FW/bin/ssh" RW_SCP="$FW/bin/scp" rw_provision_push_installs "$@"; }
+
+PPLAN="$FW/plan"
+rw_provision_plan "$RULES" "base usb" > "$PPLAN" || bad "F0 the plan compiles"
+NINST=$(awk -F'\t' '$1 == "install"' "$PPLAN" | wc -l | tr -d ' ')
+if [ "$NINST" -ge 8 ]; then
+    ok "F0 the shipped plan has $NINST install record(s)"
+else
+    bad "F0 the shipped plan has $NINST install record(s) — expected >= 8, this group is vacuous below that"
+fi
+
+# ── F1: the harness can reproduce B28 ────────────────────────────────────────
+reset_stubs
+(
+    PATH="$FW/bin:$PATH"; D=root@fake
+    while IFS=$'\t' read -r k m t s; do
+        [ "$k" = install ] || continue
+        ssh "$D" "mkdir -p '${t%/*}'"
+        scp -q "$REPO_DIR/$s" "$D:$t"
+    done < "$PPLAN"
+) >/dev/null 2>&1
+assert_eq 1 "$(grep -c . "$FW/scp.calls" || :)" \
+    "F1 the pre-fix shape (plan on stdin) copies exactly 1 — the stubs do reproduce B28"
+
+# ── F2-F8: the real function ─────────────────────────────────────────────────
+reset_stubs
+if push "$PPLAN" "$REPO_DIR" root@fake > "$FW/out" 2>&1; then
+    ok "F2 rw_provision_push_installs succeeds over the shipped plan"
+else
+    bad "F2 rw_provision_push_installs succeeds over the shipped plan"
+    sed 's/^/        /' "$FW/out"
+fi
+assert_eq "$NINST" "$(grep -c . "$FW/scp.calls" || :)" \
+    "F3 all $NINST install records were copied, not 1"
+assert_eq "$NINST" "$(grep -c '^  copied' "$FW/out" || :)" \
+    "F4 one reported copied line per install record"
+
+MISS=0; DIFFER=0
+while IFS=$'\t' read -r k m t s; do
+    [ "$k" = install ] || continue
+    if [ ! -f "$FW/dev$t" ]; then MISS=$((MISS + 1)); continue; fi
+    cmp -s "$REPO_DIR/$s" "$FW/dev$t" || DIFFER=$((DIFFER + 1))
+done < "$PPLAN"
+assert_eq 0 "$MISS"   "F5 every install target exists on the fake device"
+assert_eq 0 "$DIFFER" "F6 every installed file is byte-identical to its device-files source"
+
+assert_eq "$NINST" "$(grep -c '^mkdir -p' "$FW/ssh.calls" || :)" \
+    "F7 a mkdir -p preceded every copy"
+# The three that do not exist on a vendor unit — /etc/init.d does, so it proves nothing.
+NODIR=0
+for d in /etc/sysctl.d /opt/roomwizard /usr/local/bin; do
+    grep -q "mkdir -p '$d'" "$FW/ssh.calls" || NODIR=$((NODIR + 1))
+done
+assert_eq 0 "$NODIR" "F8 the three directories a vendor unit lacks are created first"
+
+# ── F9-F11: a missing source is a refusal, before the device is touched ──────
+reset_stubs
+printf 'install\t0755\t/etc/init.d/x\tdevice-files/does-not-exist\n' > "$FW/badplan"
+if push "$FW/badplan" "$REPO_DIR" root@fake > "$FW/bad.out" 2>&1; then
+    bad "F9 a missing install source is refused"
+else
+    ok "F9 a missing install source is refused"
+fi
+# ⚠️ "It returned non-zero" is NOT the measurement: scp fails on a missing source
+# anyway, so deleting the check entirely still refuses. What the check buys is that
+# nothing ran on the device first and that the message names the host-side path —
+# so those are what F10 and F11 assert.
+assert_eq 0 "$(( $(grep -c . "$FW/scp.calls" || :) + $(grep -c . "$FW/ssh.calls" || :) ))" \
+    "F10 it refused before running anything on the device"
+if grep -q 'device-files/does-not-exist' "$FW/bad.out"; then
+    ok "F11 the refusal names the missing host-side source"
+else
+    bad "F11 the refusal names the missing host-side source"
+fi
+
+# ── F12: the other caller's shape — usb_host/build-and-deploy.sh ─────────────
+UPLAN="$FW/usbplan"
+rw_provision_plan_component "$RULES" usb > "$UPLAN" || bad "F12 the usb component plan compiles"
+NU=$(awk -F'\t' '$1 == "install"' "$UPLAN" | wc -l | tr -d ' ')
+reset_stubs
+push "$UPLAN" "$REPO_DIR" root@fake >/dev/null 2>&1
+if [ "$NU" -ge 2 ]; then
+    assert_eq "$NU" "$(grep -c . "$FW/scp.calls" || :)" \
+        "F12 the usb-group plan copies all $NU of its install records"
+else
+    bad "F12 the usb-group plan has only $NU install record(s) — nothing to measure"
+fi
+
+# ── F13-F14: the summary line accounts for every action ──────────────────────
+#
+# B28's header read "35 action(s) — 8 install, 9 link, 10 unlink", which accounts
+# for 27. backup, touch, the four directives and the two droplines were simply not
+# in the breakdown — the kind of arithmetic that hides a verb nobody is executing.
+SUM=$(rw_provision_plan_summary "$PPLAN")
+STOT=$(printf '%s' "$SUM" | sed 's/ action.*//')
+SADD=$(printf '%s' "$SUM" | sed 's/^.*— //' | tr ',' '\n' | awk '{s += $1} END {print s + 0}')
+assert_eq "$(grep -c . "$PPLAN")" "$STOT" "F13 the summary's total equals the plan's line count"
+assert_eq "$STOT" "$SADD" "F14 the summary's per-type counts add up to its total"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""

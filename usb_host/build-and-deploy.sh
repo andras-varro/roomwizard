@@ -295,17 +295,15 @@ USB_PLAN=$(mktemp)
 trap 'rm -f "$USB_PLAN"' EXIT INT TERM
 rw_provision_plan_component "$PROV_RULES" usb > "$USB_PLAN" \
     || err "could not compile the usb provision plan"
-info "$(grep -c . "$USB_PLAN") action(s) — $(grep -c '^install' "$USB_PLAN") install, $(grep -c '^link' "$USB_PLAN") link, $(grep -c '^unlink' "$USB_PLAN") unlink"
+info "$(rw_provision_plan_summary "$USB_PLAN")"
 
 # `install` is the one verb the remote interpreter cannot do alone: the source
 # bytes are on this host, so they go over scp first and it only sets the mode.
-while IFS=$'\t' read -r _kind _mode _target _src; do
-    [[ "$_kind" == "install" ]] || continue
-    [[ -f "$REPO_ROOT/$_src" ]] || err "missing $REPO_ROOT/$_src"
-    ssh "$DEVICE" "mkdir -p '$(dirname "$_target")'"
-    scp -q "$REPO_ROOT/$_src" "$DEVICE:$_target" || err "could not copy $_src to $_target"
-    info "copied $_src → $_target"
-done < "$USB_PLAN"
+# ⚠️ The loop is lib/rw-provision.sh's, not a copy — see B28: this script and
+# commissioning/provision.sh each had one, both reading the plan on stdin with an
+# `ssh` in the body, and both therefore installed exactly one file.
+rw_provision_push_installs "$USB_PLAN" "$REPO_ROOT" "$DEVICE" \
+    || err "could not copy the usb provision sources to the device"
 
 ssh "$DEVICE" "cat > /tmp/rw-usb-plan" < "$USB_PLAN"
 rw_provision_online_script | ssh "$DEVICE" "cat > /tmp/rw-usb-provision.sh"

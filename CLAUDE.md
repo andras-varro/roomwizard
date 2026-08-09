@@ -267,6 +267,20 @@ the delete half.
   `sh` interpreter that `commissioning/provision.sh` pipes to the device; `install` is the one verb it cannot do
   alone, because the source bytes are on the host, so the caller `scp`s them first and the interpreter
   only sets the declared mode. Check it with `dash -n`, not `bash -n` — it runs under BusyBox ash.
+- ⚠️ **That `scp` step is `rw_provision_push_installs`, and it reads the plan on fd 3.** `ssh` reads its
+  own stdin and forwards it to the remote command, so a `while read … done < "$PLAN"` loop with an `ssh`
+  in the body loses the whole rest of the plan to the *first* `ssh`: **one file installed of eight**, the
+  `link` records then dangling, and the executor correctly refusing on the seven — which read as an
+  executor bug (`IMPROVEMENT_PLAN.md` B28). `ssh -n` fixes one body and not the next; fd 3 is a property
+  of the loop. The function also **counts** — install records in versus files copied out, refusing on a
+  mismatch — because the old shape was silent exactly where the copying happened. It lives in the library
+  with `$RW_SSH`/`$RW_SCP` indirection because `commissioning/provision.sh` and
+  `usb_host/build-and-deploy.sh` each had a verbatim copy of the loop, i.e. the defect twice, and because
+  indirection is what makes the copy step reachable from a test with no device. **Never inline it again.**
+- **A plan-summary line is computed, never hand-rolled.** `rw_provision_plan_summary` counts every record
+  type present, including one its ordered list does not know about. The three callers' own arithmetic said
+  `35 action(s) — 8 install, 9 link, 10 unlink` — 27 of 35, with backup, touch, the four directives and
+  the two droplines simply missing from the breakdown.
 - **`--keep-<group>` switches off part of the clean; `--no-<group>` part of the provision.** Each is
   named after the groups in its own data file, so neither list is repeated in a script.
 - ⚠️ **`usb` is a provision group, and a component script compiles it through
@@ -279,12 +293,20 @@ the delete half.
   group's records for `usb_host/build-and-deploy.sh` — a separate entry point rather than a flag on
   `rw_provision_plan`, and it refuses `base`, so a commissioning path cannot reach a base-less plan by
   mistyping a group list.
-- Regression: `tests/rw_provision_test.sh` (94 cases, host-only, no card, no root). Its group E is the
+- Regression: `tests/rw_provision_test.sh` (109 cases, host-only, no card, no root). Its group E is the
   one that matters: **both executors' `--dry-run` over the same plan must print the same resolved set**,
   compared through `rw_provision_canonical`, which strips only the resolved host path. That is the sole
   check that catches the drift this file exists to remove, and the online half is exercised by running
   the *generated* interpreter against a copied tree — a comparison of two executors rather than of one
-  executor and a wish.
+  executor and a wish. ⚠️ **Group E cannot see the copy step and never could**: it compares two *plans*,
+  a dry run copies nothing, and the offline executor has no `scp` to be compared against — which is how
+  B28 shipped past 94 green cases. **Group F is that hole**, and it asserts **8 of 8**, never "more than
+  one", because the defect produced exactly one. `tests/measure_provision_sabotage.sh` re-measures group F
+  against five broken copies; it stages the sabotaged library **inside `lib/`**, because
+  `rw_provision_validate` derives the repo root from its own `BASH_SOURCE/..` to check the install
+  sources, so a copy under `/tmp` fails the baseline for a reason no sabotage produces. Its case 5 is a
+  control on the *harness*: the stub `ssh` stops reading stdin and **F1 alone** must fail, because a stub
+  that does not slurp its stdin cannot reproduce B28 and makes the whole group a vacuous pass.
 
 **`device-files/clean-rules.conf` is the one place a keep or a delete is decided.** Four tab-separated
 fields, `<type> <group> <path> <reason>`, record types `scope` / `keep` / `delete` / `truncate`; a line

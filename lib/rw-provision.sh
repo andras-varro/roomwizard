@@ -566,6 +566,90 @@ _rwp_set_directive() {
 }
 
 # ---------------------------------------------------------------------------
+# rw_provision_plan_summary PLAN
+#
+# One line naming every record type present, counted from the plan. The callers
+# used to hand-roll `N install, N link, N unlink`, which accounted for 27 of 35
+# actions and left backup/touch/directive/dropline out of the summary — the kind
+# of arithmetic that hides a verb nobody is executing. Computed, so it cannot
+# drift from the plan or from a new record type.
+# ---------------------------------------------------------------------------
+rw_provision_plan_summary() {
+    local plan="$1"
+    [ -f "$plan" ] || { echo "rw_provision_plan_summary: no such plan: $plan" >&2; return 1; }
+    awk -F'\t' '
+        NF { n[$1]++; total++ }
+        END {
+            # Emitted order, so the summary reads in the order the plan runs.
+            split("unlink install backup link link-opt touch directive dropline", o, " ")
+            out = ""
+            for (i = 1; i in o; i++) if (o[i] in n) {
+                out = out (out == "" ? "" : ", ") n[o[i]] " " o[i]
+                seen[o[i]] = 1
+            }
+            # A type the list above does not know about must still be counted, or
+            # this line goes back to being an incomplete summary.
+            for (k in n) if (!(k in seen)) out = out (out == "" ? "" : ", ") n[k] " " k
+            printf "%d action(s) — %s\n", total, out
+        }' "$plan"
+}
+
+# ---------------------------------------------------------------------------
+# rw_provision_push_installs PLAN REPO_ROOT TARGET
+#
+# Put every `install` record's SOURCE bytes onto the device, ahead of the live
+# executor — which can only set the declared mode, because the bytes live on the
+# host. The one verb the generated interpreter cannot do alone.
+#
+# ⚠️ **The plan is read on fd 3, never on stdin.** `ssh` reads its own stdin and
+# forwards it to the remote command, so `while read … done < "$PLAN"` with an ssh
+# in the body loses the entire rest of the plan to the FIRST ssh: one file copied,
+# seven missing, and the executor then correctly refusing on the seven. That was
+# B28, and it is why this function exists. `ssh -n` would fix today's body and not
+# tomorrow's — fd 3 is a property of the loop, so a second stdin-reading command
+# added here cannot reintroduce it.
+#
+# One implementation for both callers — commissioning/provision.sh (the whole
+# plan) and usb_host/build-and-deploy.sh (the usb group). They had a verbatim copy
+# each, so they had the defect twice; and $RW_SSH/$RW_SCP (the convention
+# lib/rw-usbpower.sh already uses) is what lets the regression drive this real code
+# with no device.
+# ---------------------------------------------------------------------------
+rw_provision_push_installs() {
+    local plan="$1" repo="$2" target="$3"
+    local kind mode tgt src dir want got=0
+
+    [ -f "$plan" ] || { echo "rw_provision_push_installs: no such plan: $plan" >&2; return 1; }
+    [ -d "$repo" ] || { echo "rw_provision_push_installs: no such repo root: $repo" >&2; return 1; }
+    [ -n "$target" ] || { echo "rw_provision_push_installs: no target given" >&2; return 1; }
+    # Counted the way the loop below selects — `grep -c '^install'` would also match
+    # a future `install-opt`, and an inflated want would fail a correct run.
+    want=$(awk -F'\t' '$1 == "install"' "$plan" | wc -l | tr -d ' ')
+
+    while IFS=$'\t' read -r kind mode tgt src <&3; do
+        [ "$kind" = install ] || continue
+        [ -f "$repo/$src" ] || { echo "  missing $repo/$src" >&2; return 1; }
+        dir="${tgt%/*}"
+        ${RW_SSH:-ssh} "$target" "mkdir -p '$dir'" \
+            || { echo "  could not create $dir on $target" >&2; return 1; }
+        ${RW_SCP:-scp} -q "$repo/$src" "$target:$tgt" \
+            || { echo "  could not copy $src to $tgt" >&2; return 1; }
+        printf '  copied          %-5s %s -> %s\n' "$mode" "$src" "$tgt"
+        got=$((got + 1))
+    done 3< "$plan"
+
+    # The count IS the check. B28 was silent at this line and loud six lines later
+    # in the executor, which is what made it read as an executor bug; a fix that is
+    # supposed to reach 8 of 8 has to say so where the copying happens.
+    if [ "$got" != "$want" ]; then
+        echo "rw_provision_push_installs: copied $got of $want install record(s)" >&2
+        echo "    something in the loop body consumed the plan — see B28" >&2
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # rw_provision_online_script
 #
 # Echo the LIVE executor as text, for `ssh <target> sh -s -- /tmp/rw-provision-plan`.
