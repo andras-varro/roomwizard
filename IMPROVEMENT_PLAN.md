@@ -45,6 +45,87 @@ and record the answer with the confidence it was given — "I think it works" is
 
 ## Correctness and verification
 
+### B28. `provision.sh` installs 1 of 8 files — **every SSH setup mode fails — open, reproduced 2026-08-09**
+
+⚠️ **`commissioning/provision.sh` is unusable right now.** All three menu-2 modes — (a) standard setup,
+(b) `--remove`, (d) `--deep-clean` — fail identically on a unit that was reachable and healthy:
+
+```text
+  → Provision plan: 35 action(s) — 8 install, 9 link, 10 unlink
+  → copied device-files/audio-enable → /etc/init.d/audio-enable
+  install         0755  /etc/init.d/audio-enable
+  MISSING /etc/init.d/time-sync — it should have been copied before this ran
+  MISSING /etc/sysctl.d/99-security.conf — it should have been copied before this ran
+  MISSING /etc/init.d/roomwizard-app — it should have been copied before this ran
+  MISSING /opt/roomwizard/disable-steelcase.sh — it should have been copied before this ran
+  MISSING /usr/local/bin/enable-usb-host.sh — it should have been copied before this ran
+  MISSING /etc/init.d/xpad-modules — it should have been copied before this ran
+  ✗ the provision step failed on the device
+```
+
+**One `copied` line for eight `install` records.** `audio-enable` is the *first* install in emitted
+order, and the seven that follow it are all absent — so the caller's copy step does one file and stops.
+`install` is the one verb the generated online executor cannot do alone (the source bytes are on the
+host), so `provision.sh` must `scp` each source before piping the interpreter; the interpreter then only
+sets the declared mode, and correctly refuses on a file that is not there. **The executor is behaving
+as designed. The caller is not.**
+
+⚠️ **Every downstream consequence follows from this one line**, so do not chase them separately: the
+`link` records then point at `../init.d/time-sync` and `../init.d/roomwizard-app`, which do not exist —
+i.e. a completed-looking run would leave **dangling `rc5.d` links, skipped in silence at boot**, the
+exact class `rw_provision_check_keeps` and the offline verify pass exist to catch. It failed loudly
+instead, which is the system working.
+
+**Hypothesis, NOT measured — check it first and discard it fast if wrong.** The classic shape for "loop
+does one iteration then stops" is an `ssh` or `scp` inside a `while read` loop **consuming the loop's
+own stdin**, which ends the loop after the first record. `< /dev/null` on the transfer, or reading the
+plan on a non-zero fd, is the fix if so. ⚠️ Other candidates that produce the identical output and must
+be ruled out by reading rather than assumed away: a `head -1`/`break` left in the copy step, a copy step
+that only handles records whose target directory already exists (`/etc/init.d` exists; `/etc/sysctl.d`,
+`/opt/roomwizard` and `/usr/local/bin` may not), and a `$(...)` around the loop that swallows the rest.
+
+⚠️ **Why 94 passing cases in `tests/rw_provision_test.sh` did not see this.** Group E — the one check
+that compares the online and offline executors — compares both `--dry-run` **plans**. A dry run copies
+nothing, so the `scp` loop is precisely the part of the online path that comparison cannot reach, and
+the offline executor has no equivalent step to be compared against. **The gap is structural, not an
+oversight**: the fix needs a case that runs the *real* copy step against a local directory through the
+`$RW_SSH`/`$RW_SCP` stubs `lib/rw-usbpower.sh` already demonstrates, and asserts **all eight** arrive.
+`8 == 8`, not "more than one" — this failure produced exactly one.
+
+**Also unexplained, and worth one look while in there:** the plan header says `35 action(s) — 8 install,
+9 link, 10 unlink`, which accounts for 27. The remaining 8 (backup, touch, 4 directives, 2 droplines)
+are not in the header's breakdown. Probably just an incomplete summary line, but it is the kind of
+counting error that hides a record type nobody is executing.
+
+**Not attributable to anything in `ce30399`** — that commit touches `card-prep.sh`, `roomwizard.sh` and
+docs, and never the provision executor. Suspect the C13/F15 rewrite that generated the online
+interpreter and moved the three USB scripts into the `usb` group. `git log -p -- lib/rw-provision.sh
+commissioning/provision.sh` over 2026-08-08 is the range.
+
+### B29. Three smaller findings from the same 2026-08-09 walkthrough — open
+
+1. ⚠️ **`card-prep.sh` still asks the operator to mount the rootfs; `commission-offline.sh` does not, and
+   the asymmetry has no reason left.** The operator is holding the card either way, and
+   `rw_mount_card`/`rw_check_card_mounts` already exist and are what the offline pass uses. Phase 1
+   should find the card disk (`rw_find_card_disks`), mount what it needs, and unmount on every exit path
+   — with `$ROOTFS` still honoured as the "I mounted it myself" hatch, and the desktop-automounted case
+   detected rather than double-mounted. ⚠️ **It now needs p2 as well as p6** (B28's sibling change in
+   `ce30399` mounts p2 read-only to read `websign/net.mode`), so this is one mount decision covering
+   both, not a bolt-on. Whatever mounts must also be reachable from a failure trap, the same rule
+   `rw_umount_boot` follows.
+2. **The panel keeps displaying the vendor's old IP after phase 1, while SSH answers on the new one** —
+   observed 2026-08-09 on the unit commissioned with the regenerator disabled. Consistent with the
+   display reading `websign/net.ipaddress`/`net.status` on **p2**, which phase 1 does not touch: the
+   vendor UI is showing its own stale config, not the live interface. Benign, and it disappears with the
+   clean that deletes `websign/`. **Worth confirming that is the source** before writing it down as
+   fact anywhere else — it is currently an inference from where the value could have come from.
+3. **The `--deep-clean` menu item announces the USB power change, and the two are not the same step.**
+   The p1 500 mA write is step 5 of *every* `provision.sh` mode, not part of the clean; they share one
+   consent gate because both are irreversible, and the shared gate is what makes them read as one
+   action. The gate is right — the *labelling* is what needs splitting, so an operator choosing "deep
+   clean" is not surprised by a firmware write and an operator choosing standard setup is not surprised
+   by its absence from the prompt.
+
 ### B3c. The touch dead band is measured on one unit only — open
 
 The model and the fix have shipped; [`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch)
@@ -159,6 +240,15 @@ straight after commissioning shows the revert.
    `device-files/clean-rules.conf` already names that link, so this moves a phase-2 deletion earlier
    rather than inventing one — asserted, not remembered. Regression: 24 new cases in
    `tests/commission_prep_test.sh` (41 total), measured against six broken copies.
+
+   ✅ **Confirmed on a factory card 2026-08-09.** Phase 1 was run on an uncleaned unit, the offer
+   appeared, `d` was chosen — and the unit **booted, took a DHCP address and answered SSH**. The defect
+   is closed at the only place it could be. ⚠️ **Still unmeasured: which verdict was printed.** `manual`
+   and `unmeasured` lead to the *same* offer, so reaching the offer does **not** prove the p2 read
+   worked, and the p2 mount has never run against a real card. The scrollback distinguishes them:
+   `Vendor network config (p2` means the read succeeded, `Could not read the vendor network config on p2`
+   means the offer came from the fallback. Also confirmed the same day: menu 2**e**, `--hostname`, works
+   on a booted unit.
 3. **`/etc/dhclient.conf`'s `send host-name` — done.** `commissioning/set-hostname.sh` now owns it, in both the
    offline and the live path, with a negative control: it refuses to write a result that would not
    announce the new name. It is the third place the name is stored and the one a DHCP server, and
@@ -1446,6 +1536,11 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
+0. ⚠️ **[B28](#b28-provisionsh-installs-1-of-8-files--every-ssh-setup-mode-fails--open-reproduced-2026-08-09)
+   first, before anything else here.** `commissioning/provision.sh` installs one of its eight files, so
+   **all three SSH setup modes fail** and phase 3 was never reached. Everything below that needs a
+   provisioned device is blocked behind it, and the 94-case suite cannot see it — read that entry's
+   "why" before adding a test.
 1. **[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09) is
    CLOSED — host-complete and confirmed on a unit.** Code, the 94-case suite, the sabotage harness,
    `tests/commission_offline_test.sh` (36/36), `LICENSE.md`, `COMMISSIONING.md`, `README.md` and
