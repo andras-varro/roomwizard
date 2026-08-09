@@ -45,7 +45,19 @@ and record the answer with the confidence it was given — "I think it works" is
 
 ## Correctness and verification
 
-### B28. `provision.sh` installed 1 of 8 files — **closed 2026-08-09**
+### B28. `provision.sh` installed 1 of 8 files — **closed 2026-08-09, confirmed on a unit the same day**
+
+**Confirmed on hardware:** `roomwizard.sh` item 2a on the reference unit copied **8 files**, and the run
+finished with boot scripts, boot links, sshd, sysctl and the config fix-ups done, bloatware disabled and
+the kernel security settings applied. Item 3 then ran, the unit rebooted, and VNC and USB (`pong` through
+an Xbox pad) both worked. **That is the first time the three-phase SSH path has been walked end to end.**
+
+Two things about that run worth keeping, neither a defect. The backup question was answered *no*, so the
+clean and the p1 write were both skipped — announced twice, in the run and again in the status summary,
+and the provision half still completed and returned success. That is the loud-non-consent branch working
+on hardware for the first time. And the status summary showed `Default app: (not set)` plus the two
+vendor cleanup cron jobs still scheduled: correct at that point, because item 3 sets the default app and
+the skipped clean is what removes the cron jobs. Item 2d later did both.
 
 `ssh` inside `while IFS=$'\t' read … done < "$PLAN"`. OpenSSH reads its own stdin and
 forwards it to the remote command, so the first `ssh "$DEVICE" "mkdir -p …"` consumed the
@@ -1158,6 +1170,31 @@ copy-a-tarball-to-the-commissioning-host step from the delivery mode of
 
 ---
 
+### F18. `roomwizard.sh` item 3 has no bundle option — open, asked for 2026-08-09
+
+Menu item 3 always builds from source: [`roomwizard.sh:278-292`](roomwizard.sh#L278-L292) calls
+`deploy-all.sh "$TARGET"` (or one component), and nothing in the menu reaches
+`deploy-all.sh --from-bundle <tar.gz|dir> <ip>` — **which already exists and already works.** So this
+is menu exposure, not new capability: a second prompt beside "Component (Enter = all)", defaulting to
+build-from-source so no keystroke changes meaning.
+
+Why it is worth having: after a `./release.sh --stage-only` there is a tarball in `build/release`, and
+re-deploying from it is seconds against ScummVM's ~1m35s–2m20s rebuild. It also puts the *tested* bytes
+on the device rather than a fresh build of them.
+
+- **Offer the same default path the offline installer uses** — `build/release`, which item 6 already
+  prompts with — so the two front doors name one location.
+- ⚠️ **A bundle carries no config**, by construction: `release.sh` refuses to publish `*.conf`,
+  `/etc/hosts`, `touch_calibration` and the rest. So a from-bundle deploy leaves an unprovisioned unit's
+  touch calibration absent, exactly as a from-source deploy does. Not a difference between the two, but
+  the prompt should not imply the bundle is the whole device state.
+- Adjacent and both still open: [F9](#f9-ship-binaries-as-github-releases--partly-built-2026-08-05-open)'s
+  `--from-release <tag>` on `deploy-all.sh` (fetch, rather than a local file) and
+  [F12](#f12-install-from-a-published-release--open)'s `--release` on the offline installer. This one
+  needs neither a network nor a published release, which is why it is separable and small.
+
+---
+
 ### F13. Commissioning from Windows without WSL, and from macOS — open, unsolved
 
 The delivery mode of [F11](#f11-one-home-for-the-host-build-prerequisites--open) assumes the operator
@@ -1526,13 +1563,15 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09) is CLOSED — but nothing has been
-   run against a unit since.** `commissioning/provision.sh` copied one of its eight files, because `ssh`
-   inside a `while read` loop ate the plan off stdin; the loop is now one shared function reading fd 3,
-   and group F of `tests/rw_provision_test.sh` (109 cases) plus
-   `tests/measure_provision_sabotage.sh` cover it. **All of that is host-side.** Phase 2 and phase 3 have
-   still never completed on this unit, so the first thing worth doing is `roomwizard.sh` item 2a followed
-   by item 3 on the same device — item 3 is `deploy-all.sh` reaching it for the first time at all.
+0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
+   is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its
+   eight files because `ssh` inside a `while read` loop ate the plan off stdin; the loop is now one shared
+   function reading fd 3, with group F of `tests/rw_provision_test.sh` (109 cases) and
+   `tests/measure_provision_sabotage.sh` behind it. On 2026-08-09 item 2a copied 8, item 3 deployed, and
+   after a reboot VNC and USB `pong` both worked; item 2d then did the clean and the p1 write. **Nothing
+   below is blocked on a device any more.** The one thing that came out of that walkthrough is
+   [F18](#f18-roomwizardsh-item-3-has-no-bundle-option--open-asked-for-2026-08-09) — item 3 always builds
+   from source, and `deploy-all.sh --from-bundle` already exists.
 1. **[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09) is
    CLOSED — host-complete and confirmed on a unit.** Code, the `rw_usbpower_test.sh` suite, the sabotage
    harness,
