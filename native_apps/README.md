@@ -25,9 +25,9 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `frogger` | Game | Tap / arrow keys / D-pad to hop |
 | `tetris` | Game | Tap / keys / D-pad to move, rotate, drop (DAS auto-repeat) |
 | `pong` | Game | Touch-drag / keys / analog stick for paddle |
-| `brick_breaker` | Game | Touch / mouse / keys / analog stick for paddle |
+| `brick_breaker` | Game | Touch / mouse / keys / analog stick for paddle — pause menu toggles TEST MODE (explosive/power-up levels) |
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
-| `platformer` | Game | Touch / keys / gamepad — reference input implementation |
+| `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
 | `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
 | `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |

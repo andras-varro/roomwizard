@@ -841,22 +841,25 @@ static void handle_input(void) {
         return;
     }
 
-    // Touch: exit and menu buttons
+    // Touch: exit and menu buttons.  Asked EVERY frame, quiet ones included —
+    // that is what clears button_check_press()'s latch.  Behind an ts.pressed
+    // guard the call with `false` is unreachable and the menu fires once per
+    // process; frogger survived it only because a tap in the play area also
+    // reaches the (false) case.  Office Runner, which has no touch gameplay,
+    // did not — reported from the panel 2026-08-10, mechanism in
+    // tests/button_latch_test.c.
+    if (button_check_tap(&exit_button, &ts, now)) {
+        fb_fade_out(&fb);
+        running = false;
+        return;
+    }
+    if (button_check_tap(&menu_button, &ts, now)) {
+        current_screen = SCREEN_PAUSED;
+        modal_dialog_show(&pause_dialog);
+        return;
+    }
+
     if (ts.pressed) {
-        /* Exit button */
-        if (button_is_touched(&exit_button, ts.x, ts.y) &&
-            button_check_press(&exit_button, true, now)) {
-            fb_fade_out(&fb);
-            running = false;
-            return;
-        }
-        /* Menu button */
-        if (button_is_touched(&menu_button, ts.x, ts.y) &&
-            button_check_press(&menu_button, true, now)) {
-            current_screen = SCREEN_PAUSED;
-            modal_dialog_show(&pause_dialog);
-            return;
-        }
         /* Direction input via touch (only in play area, with cooldown) */
         if (ts.y >= grid_offset_y && frog.alive && !death_anim_active) {
             if (now - last_hop_ms < HOP_COOLDOWN_MS) return;

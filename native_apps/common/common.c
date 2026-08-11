@@ -311,6 +311,31 @@ bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_ti
     return false;
 }
 
+/* One safe way to ask "was this button just tapped?".
+ *
+ * button_check_press() derives the press edge from btn->was_pressed and clears
+ * that latch on exactly one kind of call: one where currently_pressed is false.
+ * A caller that only ever calls it with true — the
+ *   if (button_is_touched(...) && button_check_press(..., true, now))
+ * short-circuit — therefore fires ONCE per process and is dead afterwards.
+ * That shipped in platformer.c and frogger.c; Office Runner's hamburger menu
+ * died after its first use and the report came off the panel 2026-08-10.
+ *
+ * Two things this gets right that a call site keeps getting wrong: it is called
+ * on every frame, including the quiet ones, and it derives the level signal from
+ * pressed||held rather than from the coordinates.  touch_input.c leaves
+ * state.x/y at the last touched point after release, so button_is_touched()
+ * alone stays true with no finger on the panel — and the latch never clears.
+ *
+ * Covered by tests/button_latch_test.c (group A reproduces the old idiom's
+ * symptom, so a green run cannot mean "the harness cannot see it").
+ */
+bool button_check_tap(Button *btn, const TouchState *ts, uint32_t current_time_ms) {
+    bool down = ts && (ts->pressed || ts->held) &&
+                button_is_touched(btn, ts->x, ts->y);
+    return button_check_press(btn, down, current_time_ms);
+}
+
 // ============================================================================
 // RENDERING
 // ============================================================================

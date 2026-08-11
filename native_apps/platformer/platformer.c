@@ -70,9 +70,13 @@
 #define MAX_ENEMIES      20
 #define MAX_LEVELS       3
 #define INITIAL_LIVES    3
+#define TRAINING_LIVES   10      /* Training mode: lives a game starts with */
+#define TRAINING_COINS_PER_LIFE 50  /* Training mode: coins per extra life */
+#define MAX_LIFE_ICONS   5       /* HUD draws this many, then falls back to "xN" */
 #define HUD_HEIGHT       40
 #define DEATH_ANIM_FRAMES 20
 #define INVINCIBLE_TIME  60
+#define RESCAN_INTERVAL_MS 5000   /* USB hotplug re-detect, as in the other games */
 #define COIN_SCORE       100
 #define STOMP_SCORE      200
 #define LEVEL_BONUS      1000
@@ -199,6 +203,11 @@ static Camera  camera;
 
 static int     score;
 static int     game_lives;
+/* Training mode: TRAINING_LIVES at game start, one more life per
+ * TRAINING_COINS_PER_LIFE coins.  Toggled from the pause dialog; the credit
+ * counts only while the mode is on, and is reset whenever it is switched on. */
+static bool    training_mode;
+static int     training_coin_credit;
 static uint32_t current_frame;
 static uint32_t level_complete_timer;
 static LEDEffect led_effect;
@@ -279,6 +288,7 @@ static void play_jump_sound(void)           { audio_beep(&audio); }
 static void play_coin_sound(void)           { audio_blip(&audio); }
 static void play_stomp_sound(void)          { audio_beep(&audio); }
 static void play_death_sound(void)          { audio_fail(&audio); }
+static void play_extra_life_sound(void)     { audio_success(&audio); }
 static void play_level_complete_sound(void) { audio_success(&audio); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -714,6 +724,27 @@ static void load_level(int level_num) {
  * Game Init
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+static void refresh_training_button(void) {
+    modal_dialog_set_button(&pause_dialog, 1,
+        training_mode ? "TRAINING: ON" : "TRAINING: OFF",
+        training_mode ? BTN_COLOR_PRIMARY : RGB(100, 100, 100),
+        COLOR_WHITE);
+}
+
+/* The toggle is only reachable mid-run, so switching it on tops the current
+ * run up to TRAINING_LIVES rather than waiting for the next game — otherwise
+ * the button appears to do nothing, which is how a broken toggle looks.
+ * Switching it off never takes lives away. */
+static void set_training_mode(bool on) {
+    training_mode = on;
+    training_coin_credit = 0;
+    if (on && game_lives < TRAINING_LIVES) {
+        game_lives = TRAINING_LIVES;
+        player.lives = game_lives;
+    }
+    refresh_training_button();
+}
+
 static void init_buttons(void) {
     button_init(&menu_button, LAYOUT_MENU_BTN_X, LAYOUT_MENU_BTN_Y,
                 BTN_MENU_WIDTH, BTN_MENU_HEIGHT, "",
@@ -731,14 +762,16 @@ static void init_buttons(void) {
                 "TAP TO START",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 
-    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 3);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
-    modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
+    refresh_training_button();   /* button 1 — label and colour follow the mode */
+    modal_dialog_set_button(&pause_dialog, 2, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
 }
 
 static void reset_game(void) {
     score = 0;
-    game_lives = INITIAL_LIVES;
+    game_lives = training_mode ? TRAINING_LIVES : INITIAL_LIVES;
+    training_coin_credit = 0;
     current_level = 0;
     current_frame = 0;
     level_complete_timer = 0;
@@ -849,6 +882,20 @@ static void check_tile_interactions(void) {
                 score += COIN_SCORE;
                 play_coin_sound();
                 start_led_effect(1);
+                /* Training mode: an extra life per TRAINING_COINS_PER_LIFE.
+                 * The credit is a run counter, not collected_coins, which
+                 * spawn_enemies_from_tiles() resets on every level load —
+                 * per level it would almost never reach the threshold. */
+                if (training_mode) {
+                    training_coin_credit++;
+                    if (training_coin_credit >= TRAINING_COINS_PER_LIFE) {
+                        training_coin_credit -= TRAINING_COINS_PER_LIFE;
+                        game_lives++;
+                        player.lives = game_lives;
+                        play_extra_life_sound();
+                        start_led_effect(2);  /* after the coin's, so it wins */
+                    }
+                }
             }
             if (t == TILE_GOAL) {
                 current_screen = SCREEN_LEVEL_COMPLETE;
@@ -1492,13 +1539,34 @@ static void draw_hud(void) {
     int tw = text_measure_width(buf, 2);
     fb_draw_text(&fb, (int)fb.width / 2 - tw / 2, 12, buf, COLOR_CYAN, 2);
 
-    /* Lives icons */
-    int lx = (int)fb.width - BTN_EXIT_WIDTH - 20 - game_lives * 16;
+    /* Lives — up to MAX_LIFE_ICONS icons, then one icon and a count.  The row
+     * is positioned from what is actually drawn, never from game_lives: the old
+     * "- game_lives * 16" start clamped to mid-screen at training mode's 10
+     * lives, leaving 5 icons floating in a gap next to the EXIT button. */
+    int icons = game_lives > 0 ? game_lives : 0;
+    char more[16] = "";
+    if (icons > MAX_LIFE_ICONS) {
+        snprintf(more, sizeof(more), "x%d", icons);
+        icons = 1;
+    }
+    int more_w = more[0] ? text_measure_width(more, 2) + 4 : 0;
+    int lx = (int)fb.width - BTN_EXIT_WIDTH - 20 - (icons * 16 + more_w);
     if (lx < (int)fb.width / 2 + 60) lx = (int)fb.width / 2 + 60;
-    for (int i = 0; i < game_lives && i < 5; i++) {
+    for (int i = 0; i < icons; i++) {
         int ix = lx + i * 16;
         fb_fill_circle(&fb, ix + 6, 28, 5, COLOR_SHIRT);
         fb_fill_circle(&fb, ix + 6, 23, 3, COLOR_SKIN);
+    }
+    if (more[0])
+        fb_draw_text(&fb, lx + icons * 16 + 4, 20, more, COLOR_WHITE, 2);
+
+    /* Training badge, under the score: says the mode is on and how many more
+     * coins buy the next life.  Scale 1 at y=28 clears the score (12..26) and
+     * stays inside HUD_HEIGHT. */
+    if (training_mode) {
+        snprintf(buf, sizeof(buf), "TRAINING %d/%d",
+                 training_coin_credit, TRAINING_COINS_PER_LIFE);
+        fb_draw_text(&fb, 90, 28, buf, COLOR_YELLOW, 1);
     }
 }
 
@@ -1599,6 +1667,20 @@ static void handle_input(void) {
     gamepad_poll(&gamepad, &input, ts.x, ts.y, ts.pressed);
     uint32_t now = get_time_ms();
 
+    /* Periodic device rescan for hotplug.  This game is controller-only, and it
+     * was the one app of ten with no rescan: gamepad.c's read loop is
+     * `while (read(fd, …) == sizeof(ev))`, so a pad that leaves the bus just
+     * makes read() fail forever on a stale fd and nothing reopens it.  Input
+     * then stays dead for the life of the process — which is what was seen on
+     * the panel 2026-08-10, and why relaunching the game fixed it.
+     * gamepad_rescan() also clears held_latched[], so a direction held at
+     * unplug time does not stay asserted. */
+    static uint32_t last_rescan_ms = 0;
+    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
+        last_rescan_ms = now;
+        gamepad_rescan(&gamepad);
+    }
+
     /* BTN_BACK always exits to the launcher. Platformer was the only game without
      * this, which left its game-over screen with no way out (IMPROVEMENT_PLAN B13a). */
     if (input.buttons[BTN_ID_BACK].pressed) {
@@ -1609,8 +1691,7 @@ static void handle_input(void) {
 
     switch (current_screen) {
     case SCREEN_WELCOME:
-        if (ts.pressed && button_is_touched(&start_button, ts.x, ts.y)
-            && button_check_press(&start_button, true, now)) {
+        if (button_check_tap(&start_button, &ts, now)) {
             current_screen = SCREEN_PLAYING;
         }
         if (input.buttons[BTN_ID_JUMP].pressed ||
@@ -1626,19 +1707,21 @@ static void handle_input(void) {
             modal_dialog_show(&pause_dialog);
             return;
         }
-        if (ts.pressed) {
-            if (button_is_touched(&exit_button, ts.x, ts.y) &&
-                button_check_press(&exit_button, true, now)) {
-                fb_fade_out(&fb);
-                running = false;
-                return;
-            }
-            if (button_is_touched(&menu_button, ts.x, ts.y) &&
-                button_check_press(&menu_button, true, now)) {
-                current_screen = SCREEN_PAUSED;
-                modal_dialog_show(&pause_dialog);
-                return;
-            }
+        /* Both buttons are asked EVERY frame, quiet ones included — that is
+         * what clears button_check_press()'s latch.  Guarding these on
+         * ts.pressed made the call with `false` unreachable, so the hamburger
+         * menu fired once per process and then died; EXIT hid it by only ever
+         * needing to fire once.  Reported from the panel 2026-08-10, mechanism
+         * in tests/button_latch_test.c. */
+        if (button_check_tap(&exit_button, &ts, now)) {
+            fb_fade_out(&fb);
+            running = false;
+            return;
+        }
+        if (button_check_tap(&menu_button, &ts, now)) {
+            current_screen = SCREEN_PAUSED;
+            modal_dialog_show(&pause_dialog);
+            return;
         }
         break;
 
@@ -1656,6 +1739,13 @@ static void handle_input(void) {
                 break;
             }
             if (act == MODAL_ACTION_BTN1) {
+                /* Toggle training mode and stay in the dialog. */
+                set_training_mode(!training_mode);
+                modal_dialog_show(&pause_dialog);  /* re-show: update auto-hid it */
+                audio_beep(&audio);
+                break;
+            }
+            if (act == MODAL_ACTION_BTN2) {
                 fb_fade_out(&fb);
                 running = false;
                 break;

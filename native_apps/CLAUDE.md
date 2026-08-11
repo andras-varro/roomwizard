@@ -479,6 +479,15 @@ capped at `FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Consequences:
   so the buttons were drawn on top of the board *and* the board ran 5 px off the bottom (B3j). Also
   count the **frame**: a `fb_draw_rect()` outline sits *outside* the content rect on every side, so its
   thickness belongs in the vertical budget too, from the same named constant the drawing uses.
+- **A capped row is positioned from the count you draw, not the count you have.** Three HUDs draw a
+  lives row and all three cap the icons; only the arithmetic differs. `frogger.c` computes
+  `lives_shown = min(lives, 5)` and lays out from `lives_shown * LIFE_ICON_PITCH` — right.
+  `platformer.c` positioned from `game_lives * 16` while drawing `min(game_lives, 5)`, which agrees at
+  3 lives and diverges the moment something grants more: Office Runner's training mode gives 10, the
+  row start clamped to `fb.width/2 + 60`, and five icons ended up stranded mid-HUD with a gap to EXIT
+  (fixed 2026-08-10). Cap first, lay out from the capped number, and **say what the cap hid** — one
+  icon plus `x10`, never five icons meaning ten. `brick_breaker` still truncates silently at nine
+  (`../IMPROVEMENT_PLAN.md` B30).
 - **Put a status row in the band above the button row, not below it.** The inverse of the rule above
   and the other way to get this wrong: HUD text is only *seen*, so it belongs in `SCREEN_VISIBLE_TOP`
   — the band the two-rectangle split exists to keep usable. Stacking it under `SCREEN_SAFE_TOP`
@@ -649,6 +658,44 @@ plain argument, and its evdev sources are `read(2)` on an fd — so a temp file 
 assigned to `gm.gamepad_fd` drives the real `poll_gamepad()`, returning each event and then 0 at EOF
 exactly as a quiet non-blocking evdev fd does. Run that after touching input logic; what still needs
 the panel is only whether a game *feels* right.
+
+**Ask a touch button with `button_check_tap()`, every frame.** `button_check_press()` derives the press
+edge from `btn->was_pressed` and clears that latch on exactly one kind of call — one where
+`currently_pressed` is **false**. So this shape, which shipped in `platformer.c` and `frogger.c`, fires
+**once per process** and is dead afterwards:
+
+```c
+if (ts.pressed) {                                          /* WRONG */
+    if (button_is_touched(&menu_button, ts.x, ts.y) &&
+        button_check_press(&menu_button, true, now)) { … }  /* never called with false */
+}
+if (button_check_tap(&menu_button, &ts, now)) { … }         /* right — every frame */
+```
+
+Office Runner's hamburger menu died after its first use and the report came off the panel 2026-08-10
+(`../IMPROVEMENT_PLAN.md` B31). Three things make this class hard to see, and all three are why it needs
+a helper rather than care:
+
+- **EXIT hides it.** An exit button only ever needs to fire once, because it ends the process — same
+  defect, no symptom. In the report EXIT worked and MENU didn't, in the same HUD row.
+- **Touch gameplay hides it.** `brick_breaker.c` and `tetris.c` pass the *value* and survive, but only
+  because their players tap elsewhere constantly and that is what produces the false call. A
+  controller-only game has nothing to clear the latch.
+- **The obvious fix keeps it.** Testing `button_is_touched()` alone on quiet frames does not clear it
+  either: `touch_input.c` leaves `state.x/y` at the last touched point after release, so the
+  coordinates stay inside the rect with no finger on the panel. The level signal has to come from
+  `ts.pressed || ts.held`, which is what `button_check_tap()` does.
+
+`tests/button_latch_test.c` is the regression, and **group A drives the old idiom** so a green run cannot
+mean the harness is blind. `grep -rn 'button_is_touched(&[a-z_]*, *[a-z.]*x, *[a-z.]*y) *&&' --include=*.c`
+is the tree-wide check.
+
+**Every app with a game loop calls `gamepad_rescan()` on a timer.** `RESCAN_INTERVAL_MS` = 5000 in each
+game; nothing inside the library calls it, so an app that omits it never re-detects a device. The read
+loop is `while (read(fd, &ev, sizeof(ev)) == sizeof(ev))` — a pad that leaves the bus (unplugged, or a
+wireless one idling out) leaves a stale fd that fails forever, so input is dead for the life of the
+process and only relaunching fixes it. Platformer was the one app of ten without it, measured from the
+same panel report. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way

@@ -37,6 +37,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
+| 6 | **Office Runner's hamburger menu survives repeated use** — open it, RESUME, open it again, four or five times. Second-tap-onwards is the whole check; the mechanism is host-proven, this is only "the fix reached the panel". Then, if a pad is handy: unplug it mid-game and replug — input should return within ~5 s without relaunching | ~1 min, plus the unplug | [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) — needs a deploy first |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -127,6 +128,73 @@ plan is compiled on the host, so a preview is cheap; nobody has asked for one.
    `provision.sh --help` carries the same paragraph. The consent prompt is unchanged: it already named
    the two writes separately.
 
+
+### B30. `brick_breaker` hides lives past the ninth — open, latent, cosmetic
+
+Found 2026-08-10 while giving Office Runner a training mode. Three games draw a capped HUD lives row
+and each caps it differently:
+
+| Game | Shape | Verdict |
+|---|---|---|
+| `frogger.c:1269` | `lives_shown = min(lives, 5)`, then lays out from `lives_shown * LIFE_ICON_PITCH` | correct |
+| `platformer.c:1541` | positioned from `game_lives * 16`, drew `min(game_lives, 5)` | **was wrong** — fixed 2026-08-10, see below |
+| `brick_breaker.c:1224` | `for (i < game.lives && i < 9)`, each heart at a fixed anchor minus `i * 14` | **silently truncates** |
+
+Brick Breaker's arithmetic cannot produce Office Runner's gap — it grows leftward from a fixed
+anchor, so the row is always where it belongs — but the extra-life power-up at
+`brick_breaker.c:718` does `game.lives++` with no cap, so a tenth life and every one after it is
+**invisible**: the HUD reads nine whether you hold nine or fourteen, and losing one appears to change
+nothing. Cosmetic, never a crash, and it needs a power-up-heavy run to reach, which is why it has not
+been seen.
+
+Fix is the rule the other two now follow: cap first, lay out from the capped number, and say what the
+cap hid — Office Runner draws one icon plus `x10` rather than five icons meaning ten. Do the same with
+a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
+what is drawn.
+
+### B31. Office Runner went unresponsive mid-session — **fixed 2026-08-10, awaiting panel confirmation**
+
+Reported off the panel 2026-08-10, during the longest session any of these games has had (other people
+playing, several restarts, high-score entries, level 2, training mode on): **the controller stopped
+working and the hamburger menu did not respond, while the red EXIT button in the same HUD row still
+did.** Exiting to the launcher and relaunching restored everything.
+
+That asymmetry is the whole diagnosis — MENU and EXIT are two touch buttons in the same handler, so a
+frozen app or a dead digitizer cannot produce it. Two independent pre-existing defects, neither in the
+training-mode code, and training mode is a red herring except that it made people play long enough to
+hit them:
+
+1. **A touch button fires once per process.** `button_check_press()` derives the press edge from
+   `btn->was_pressed` and clears that latch on exactly one kind of call: one where `currently_pressed`
+   is **false**. Both games wrote
+   `if (button_is_touched(&menu_button, …) && button_check_press(&menu_button, true, now))` — the
+   short-circuit means the false call never happens, so the latch sticks and the button is dead for the
+   life of the process. **EXIT hid it**: it only ever needs to fire once, because it ends the process.
+   `brick_breaker.c` and `tetris.c` pass the *value* instead and survive — but only because their
+   players tap elsewhere constantly, which is what produces the false call. Office Runner has no touch
+   gameplay at all, so nothing ever cleared it. `frogger.c` had the identical shape and was saved the
+   same way as brick_breaker, by taps in its play area.
+   Fixed by `button_check_tap(Button *, const TouchState *, uint32_t)` in `common/common.c` — one
+   implementation, called every frame, deriving the level signal from `pressed || held` and **not** from
+   the coordinates, because `touch_input.c` leaves `state.x/y` at the last touched point after release
+   (so a `button_is_touched()`-only fix stays latched with no finger on the panel). Both games now call
+   it; `grep -rn 'button_is_touched(&[a-z_]*, *[a-z.]*x, *[a-z.]*y) *&&' --include=*.c` is the check and
+   returns nothing.
+2. **Office Runner was the one app of ten with no periodic `gamepad_rescan()`.** `gamepad.c`'s read loop
+   is `while (read(fd, &ev, sizeof(ev)) == sizeof(ev))`, so a pad that leaves the bus — unplugged, or a
+   wireless one that idles out — just makes `read()` fail on a stale fd forever; nothing reopens it, and
+   `gamepad_rescan()` has no callers inside the library. Input then stays dead for the life of the
+   process, which is exactly why relaunching fixed it. Fixed with the same 5 s
+   `RESCAN_INTERVAL_MS` poll the other nine use. Note this makes the *recovery* automatic; it does not
+   explain **why** the pad left the bus, which is unmeasured — if it recurs with the rescan in place,
+   that is the next question, and `dmesg` at the time is the measurement.
+
+Regression: `tests/button_latch_test.c` (10 checks, host gcc, no device). **Group A is the negative
+control and it drives the OLD idiom**, asserting that the second tap is swallowed — so a green suite
+cannot mean "the harness cannot see the bug". Group C asserts debounce still works (the fix must not
+just disable it) and group D asserts the retained-coordinate trap. Build line is in its header.
+
+Not yet seen working on hardware — see the panel checklist, item 6.
 
 ### B3c. The touch dead band is measured on one unit only — open
 
@@ -1293,8 +1361,9 @@ Three pieces of work:
    defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
    instead.
 3. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
-   until you are mis-tapping by 30 px. Four exist — `tests/touch_calib_test.c` (the calibration fit
-   end-to-end), `tests/gradient_test.c`, `tests/framebuffer_bpp_test.c`, `tests/gamepad_latch_test.c`.
+   until you are mis-tapping by 30 px. Five exist — `tests/touch_calib_test.c` (the calibration fit
+   end-to-end), `tests/gradient_test.c`, `tests/framebuffer_bpp_test.c`, `tests/gamepad_latch_test.c`,
+   `tests/button_latch_test.c` (the once-per-process touch button, [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation)).
    Build lines are in each file header; all are host gcc, so `build-and-deploy.sh` runs none of them.
    **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
    `config.c` / `ppm.c` parsers.**
@@ -1363,6 +1432,16 @@ the installer's summary must keep saying `TAKEN ON TRUST` in those words.
 play session of somebody's time — which is why that check keeps being postponed, reasonably. A
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
+
+**The fork above is decided: a pause-dialog entry, not a CLI argument** (2026-08-10). Office Runner's
+TRAINING toggle is the first worked example — `platformer.c`'s pause dialog, 10 lives and one more per
+50 coins, which makes its level 3 reachable by hand without a flawless run. A `--training` flag was
+offered and declined, so the shape to copy is menu-only. Note what that costs, because it is the whole
+of C10's original argument: a menu toggle is **not** script-reachable — there is no `/dev/uinput`, so
+nothing can tap it — and a mode with no CLI entry therefore has no first-screen SSH check either. It
+makes a deep state cheaper for a **human**, not automatable. `brick_breaker` already has both halves
+(`--test` and a pause toggle), so its level-5 problem is still open on the level number, not on the
+mechanism.
 
 ### C12. One commissioning entry point — open
 

@@ -107,6 +107,14 @@ bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint
 // Legacy API for compatibility (used by games)
 bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_time_ms);
 
+// "Was this button just tapped?" — call EVERY frame, quiet frames included.
+// Prefer this over button_check_press() at a touch call site: the
+//   if (button_is_touched(...) && button_check_press(..., true, now))
+// shape never passes false, so button_check_press()'s latch is never cleared and
+// the button fires exactly once per process (see common.c, and
+// tests/button_latch_test.c).
+bool button_check_tap(Button *btn, const TouchState *ts, uint32_t current_time_ms);
+
 // ============================================================================
 // RENDERING
 // ============================================================================
