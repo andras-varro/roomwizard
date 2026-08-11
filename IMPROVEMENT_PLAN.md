@@ -38,7 +38,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 | 6 | **Office Runner's hamburger menu survives repeated use** — open it, RESUME, open it again, four or five times. Second-tap-onwards is the whole check; the mechanism is host-proven, this is only "the fix reached the panel" | ~1 min | [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) — needs a deploy first |
-| 7 | **Does a replugged USB device get power?** Unplug the pad, replug it, and say only whether its **LED lights**. That one bit splits [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) into "the port stopped sourcing VBUS" and "it powers up and never enumerates", which are different layers. If SSH is already open, `dmesg \| tail -20` right after the replug decides the second half | seconds, no panel needed | nothing |
+| 7 | ~~Does a replugged USB device get power?~~ — **answered 2026-08-10: yes.** The LED runs its normal red-then-blue sequence, so VBUS and the device are fine and a powered hub is not the answer. **What is still needed: plug the pad in, leave it in, and say so** — then `lsusb` over SSH decides whether the kernel enumerates it at all, which is the whole of what remains | seconds, no panel needed | [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -227,19 +227,33 @@ What the repo already establishes, and what it does not:
   standing recommendation.
 
 **So the cause is unmeasured**, and reading for it will not help: the vendor kernel source does not
-exist here (`CLAUDE.md` → kernel policy), so the MUSB disconnect path is not readable. Three shapes
-could produce this symptom and cheap measurements separate them — in cost order:
+exist here (`CLAUDE.md` → kernel policy), so the MUSB disconnect path is not readable. Measure instead.
+
+**Measured 2026-08-10, and it rules out the power hypothesis.** On replug the pad's LED runs its normal
+sequence — *"red and then blue as usual"*, i.e. indistinguishable from a working power-on. **The port is
+still sourcing VBUS and the device still powers up**, so "the port went dead" is refuted and a powered
+hub will not help. Host-side state on `.225` in the same condition, over SSH:
+
+| Measurement | Result | Reading |
+|---|---|---|
+| `lsusb` | `Bus 001 Device 001: ID 1d6b:0002` and **nothing else** | the host bus itself is fine — `S90usb-host` did its job and the root hub is enumerated. Whatever is attached is **not** on the bus |
+| `ls /dev/input/` | `event0 mice mouse0 touchscreen0 by-path` | no pad node; `event0` is the digitizer |
+| `lsmod` | `xpad 28672 0` | ⚠️ **usage count 0** — the driver is loaded with **nothing bound to it**, so this is not a module problem |
+
+That narrows it to one of two, still in different layers:
 
 | Hypothesis | The measurement that decides it |
 |---|---|
-| The port stops sourcing VBUS after a disconnect, so a later device never powers up | **Does the pad's LED light when you replug it?** No SSH, no panel — a device with no power cannot enumerate, so this one is free |
-| It powers up and the kernel never enumerates it | `dmesg | tail -20` right after the replug: a disconnect line at unplug and then **nothing** on the replug |
-| It enumerates and no driver binds, or no node appears | `ls /dev/input/event*` before the unplug and after the replug, plus `lsmod | grep xpad` |
+| The device powers up and the kernel **never enumerates** it — no address, no descriptor read | `lsusb` with the pad **known-plugged-in**: still only `1d6b:0002` means enumeration never happened. `dmesg` tail right after the replug then shows either a `usb 1-1: new full-speed USB device` line or silence |
+| It enumerates and then fails to stay or to bind | `lsusb` shows a second device, or `dmesg` shows an enumerate-then-reset loop |
 
-Do not pick a fix before one of those has an answer — the candidate remedies (re-poking the bind, a
-`usb-host restart` with the guard bypassed, an authorised-port or autosuspend write, a powered hub) sit
-in different layers and only one layer is broken. **Workaround meanwhile: plug the device in before
-powering the unit.**
+⚠️ **The `lsusb` above was taken without confirming whether the pad was connected at that moment**, so it
+is a baseline and does not yet decide between the two. Re-run it with the pad known-connected; that one
+line is the whole remaining question.
+
+Do not pick a fix before then — re-poking the driver bind, `usb-host restart` with the guard bypassed, an
+autosuspend or authorised-port write, and a powered hub all live in different layers, and the hub is
+already ruled out. **Workaround meanwhile: plug the device in before powering the unit.**
 
 Two things already in the tree assumed otherwise, and both are corrected as of this entry:
 
@@ -553,11 +567,14 @@ inside an `ssh … <<REMOTE` heredoc are gone, so a manifest can no longer diffe
 
 - **`--from-release <tag>` on `deploy-all.sh` and the per-component scripts**, which is what makes the
   release useful to the *existing* SSH flow. Nothing of this is written yet.
-- **The publish step has never run**, though it is now reachable: `gh` 2.86.0 is installed in WSL from
-  the release `.deb` (focal's apt has no `gh`, and the snap links against a glibc newer than 2.31).
-  `origin` is `git@github.com-personal:…` — an SSH host alias — so whoever publishes needs `gh auth`
-  for that account, and `gh` may need `--repo andras-varro/roomwizard` because it resolves the owner
-  from the remote URL.
+- **The publish step has never run, but it is no longer blocked.** `gh` 2.86.0 is installed in WSL from
+  the release `.deb` (focal's apt has no `gh`, and the snap links against a glibc newer than 2.31), and
+  ✅ **`gh auth status` is green, measured 2026-08-10 in WSL**: logged in to github.com as
+  `andras-varro`, active, token scopes `admin:public_key, gist, read:org, repo`. `repo` covers release
+  creation and `origin` is `git@github.com-personal:andras-varro/roomwizard.git`, so the authenticated
+  account **is** the repo owner. Note `gh` resolves the owner from the remote URL and that URL is an SSH
+  host **alias**, so `--repo andras-varro/roomwizard` may still be needed — a flag, not a blocker. The
+  publish path is therefore unexercised for want of someone running it, nothing else.
 - **`usb_host` is excluded by design**, not by omission: it patches `uImage-system` on p1, and
   [F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) must not touch p1.
 
