@@ -37,8 +37,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
-| 6 | **Office Runner's hamburger menu survives repeated use** — open it, RESUME, open it again, four or five times. Second-tap-onwards is the whole check; the mechanism is host-proven, this is only "the fix reached the panel" | ~1 min | [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) — needs a deploy first |
-| 7 | ~~Does a replugged USB device get power?~~ — **answered 2026-08-10: yes.** The LED runs its normal red-then-blue sequence, so VBUS and the device are fine and a powered hub is not the answer. **What is still needed: plug the pad in, leave it in, and say so** — then `lsusb` over SSH decides whether the kernel enumerates it at all, which is the whole of what remains | seconds, no panel needed | [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) |
+| 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
+| 7 | **Unplug the pad, wait, replug it — then say so.** VBUS and the working-state baseline are both measured now, so the only thing left is one `dmesg` read over SSH: whether a disconnect line appears at all, and whether anything follows it. That single comparison decides between three fixes in three different layers | seconds, no panel needed | [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -153,7 +153,7 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B31. Office Runner went unresponsive mid-session — **fixed 2026-08-10, awaiting panel confirmation**
+### B31. Office Runner went unresponsive mid-session — **fixed and confirmed on a unit 2026-08-10**
 
 Reported off the panel 2026-08-10, during the longest session any of these games has had (other people
 playing, several restarts, high-score entries, level 2, training mode on): **the controller stopped
@@ -198,7 +198,11 @@ control and it drives the OLD idiom**, asserting that the second tap is swallowe
 cannot mean "the harness cannot see the bug". Group C asserts debounce still works (the fix must not
 just disable it) and group D asserts the retained-coordinate trap. Build line is in its header.
 
-Not yet seen working on hardware — see the panel checklist, item 6.
+**Confirmed on `.225` 2026-08-10**, reported plainly rather than hedged: the hamburger menu was opened
+and RESUMEd repeatedly and kept responding, and the pad worked. So the host-proven fix reached the panel.
+What that run did **not** exercise is an unplug — the pad was present at power-on throughout, which is
+[B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10)'s
+territory and not something the rescan can settle.
 
 ### B32. A USB device is only recognised if it is plugged in at boot — open, confirmed 2026-08-10
 
@@ -207,7 +211,7 @@ Reported off a unit 2026-08-10 with an Xbox pad. Plugged in **before** power-on 
 hardware confirmation, direct
 through a passive adapter with no powered hub. Unplug it, wait, replug: **it never works again for the
 rest of that boot.** Relaunching the app does not help, which is what separates this from
-[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) —
+[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) —
 there, a relaunch restored input.
 
 What the repo already establishes, and what it does not:
@@ -232,28 +236,53 @@ exist here (`CLAUDE.md` → kernel policy), so the MUSB disconnect path is not r
 **Measured 2026-08-10, and it rules out the power hypothesis.** On replug the pad's LED runs its normal
 sequence — *"red and then blue as usual"*, i.e. indistinguishable from a working power-on. **The port is
 still sourcing VBUS and the device still powers up**, so "the port went dead" is refuted and a powered
-hub will not help. Host-side state on `.225` in the same condition, over SSH:
+hub will not help.
 
-| Measurement | Result | Reading |
-|---|---|---|
-| `lsusb` | `Bus 001 Device 001: ID 1d6b:0002` and **nothing else** | the host bus itself is fine — `S90usb-host` did its job and the root hub is enumerated. Whatever is attached is **not** on the bus |
-| `ls /dev/input/` | `event0 mice mouse0 touchscreen0 by-path` | no pad node; `event0` is the digitizer |
-| `lsmod` | `xpad 28672 0` | ⚠️ **usage count 0** — the driver is loaded with **nothing bound to it**, so this is not a module problem |
+**The working state, so there is something to compare against.** `.225`, pad present at power-on, pad
+confirmed working from the panel. `lsusb` reports `Bus 001 Device 002: ID 045e:028e ShanWan ZD Game For
+Windows` beside the root hub, `/dev/input/` gains `event1` and `js0`, and `dmesg` carries the whole
+sequence with timestamps:
 
-That narrows it to one of two, still in different layers:
+```text
+[    4.088500] musb-hdrc musb-hdrc.0.auto: DMA controller not set
+[    4.093872] musb-hdrc musb-hdrc.0.auto: musb_init_controller failed with status -19
+[   65.650299] usbcore: registered new interface driver xpad          <- S89xpad-modules
+[   66.125427] musb-hdrc musb-hdrc.0.auto: MUSB HDRC host driver      <- S90usb-host rebind
+[   66.127349] musb-hdrc musb-hdrc.0.auto: new USB bus registered, assigned bus number 1
+[   66.150146] hub 1-0:1.0: USB hub found
+[   66.641662] usb 1-1: new full-speed USB device number 2 using musb-hdrc
+[   66.910797] input: Microsoft X-Box 360 pad as /devices/.../usb1/1-1/1-1:1.0/input/input1
+```
 
-| Hypothesis | The measurement that decides it |
+⚠️ **Read the order: the bus is registered at 66.13 and the device appears 0.5 s later, as part of the
+root hub's first scan.** The pad was already physically attached when the bus came up. **So the only
+enumeration this device has ever been observed to perform is that initial scan** — there is no
+observation, anywhere, of it enumerating a device that arrived *after* the bus existed. That reframes the
+bug: the question is not "why does the disconnect break something" but "has hotplug enumeration ever
+worked here at all". A 6-minute-uptime capture in the working state shows **no disconnect line and no
+second enumeration** — and the operator independently confirms the pad had been in since boot and was
+never replugged, so the log and the account agree.
+
+**A wrong inference, corrected.** An earlier revision of this entry read `lsmod`'s `xpad 28672 0` as
+"usage count 0, so nothing is bound to the driver". **That reading is wrong**: the working state above
+reports the *same* `xpad 28672 0` while a pad is bound and `event1`/`js0` exist. A module's refcount
+counts module users — `ff_memless 16384 1 xpad` is the real one — not bound devices, so it says nothing
+either way. The failed-state capture that mattered was `lsusb`, and it was taken without confirming
+whether the pad was attached, which made it a baseline and not evidence.
+
+**What remains is one comparison, and the baseline for it is now on record.** With the pad working,
+unplug it, wait, replug, and re-read `dmesg`:
+
+| Outcome | Means |
 |---|---|
-| The device powers up and the kernel **never enumerates** it — no address, no descriptor read | `lsusb` with the pad **known-plugged-in**: still only `1d6b:0002` means enumeration never happened. `dmesg` tail right after the replug then shows either a `usb 1-1: new full-speed USB device` line or silence |
-| It enumerates and then fails to stay or to bind | `lsusb` shows a second device, or `dmesg` shows an enumerate-then-reset loop |
+| no `usb 1-1: disconnect` line at all | the controller never sees the unplug — the port is not generating disconnect interrupts, and the stack still believes the old device is there |
+| a disconnect line, then **silence** on replug | the disconnect is handled and the port stops scanning — the session is never restarted |
+| a disconnect line, then a `new full-speed USB device` that fails or repeats | enumeration is attempted and breaking, which is a different fix again |
 
-⚠️ **The `lsusb` above was taken without confirming whether the pad was connected at that moment**, so it
-is a baseline and does not yet decide between the two. Re-run it with the pad known-connected; that one
-line is the whole remaining question.
-
-Do not pick a fix before then — re-poking the driver bind, `usb-host restart` with the guard bypassed, an
-autosuspend or authorised-port write, and a powered hub all live in different layers, and the hub is
-already ruled out. **Workaround meanwhile: plug the device in before powering the unit.**
+Do not pick a fix before that: re-poking the driver bind (which is exactly what `enable-usb-host.sh`
+does, and its `usb1` guard is what blocks doing it twice), an autosuspend or authorised-port write, and a
+powered hub all live in different layers, and the hub is already ruled out. **Workaround meanwhile: plug
+the device in before powering the unit.**
 
 Two things already in the tree assumed otherwise, and both are corrected as of this entry:
 
@@ -1437,7 +1466,7 @@ Three pieces of work:
 3. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
    until you are mis-tapping by 30 px. Five exist — `tests/touch_calib_test.c` (the calibration fit
    end-to-end), `tests/gradient_test.c`, `tests/framebuffer_bpp_test.c`, `tests/gamepad_latch_test.c`,
-   `tests/button_latch_test.c` (the once-per-process touch button, [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation)).
+   `tests/button_latch_test.c` (the once-per-process touch button, [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10)).
    Build lines are in each file header; all are host gcc, so `build-and-deploy.sh` runs none of them.
    **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
    `config.c` / `ppm.c` parsers.**
