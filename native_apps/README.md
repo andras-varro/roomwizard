@@ -155,7 +155,15 @@ Gamepad button mapping is configurable to support clone/third-party controllers 
 
 ### USB Hotplug
 
-All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seconds**. Plugging in a keyboard, mouse, or gamepad while an app is running will be detected and usable within seconds — no restart needed.
+All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seconds**, so an app never
+holds a stale device handle: whenever a node appears, the app picks it up within seconds and no restart
+is needed.
+
+⚠️ **That covers the app layer only, and on this device the layer below it does not cooperate.** A USB
+device is currently recognised **only if it was plugged in before power-on** — unplug and replug and it
+does not come back for the rest of that boot, so there is no node for the rescan to find. Cause
+unmeasured; see [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) B32. Until that is solved, plug
+keyboards, mice and gamepads in **before** you power the unit.
 
 ### Input Configuration
 

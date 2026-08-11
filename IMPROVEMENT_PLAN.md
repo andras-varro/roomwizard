@@ -37,7 +37,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
-| 6 | **Office Runner's hamburger menu survives repeated use** — open it, RESUME, open it again, four or five times. Second-tap-onwards is the whole check; the mechanism is host-proven, this is only "the fix reached the panel". Then, if a pad is handy: unplug it mid-game and replug — input should return within ~5 s without relaunching | ~1 min, plus the unplug | [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) — needs a deploy first |
+| 6 | **Office Runner's hamburger menu survives repeated use** — open it, RESUME, open it again, four or five times. Second-tap-onwards is the whole check; the mechanism is host-proven, this is only "the fix reached the panel" | ~1 min | [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) — needs a deploy first |
+| 7 | **Does a replugged USB device get power?** Unplug the pad, replug it, and say only whether its **LED lights**. That one bit splits [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) into "the port stopped sourcing VBUS" and "it powers up and never enumerates", which are different layers. If SSH is already open, `dmesg \| tail -20` right after the replug decides the second half | seconds, no panel needed | nothing |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -186,8 +187,11 @@ hit them:
    `gamepad_rescan()` has no callers inside the library. Input then stays dead for the life of the
    process, which is exactly why relaunching fixed it. Fixed with the same 5 s
    `RESCAN_INTERVAL_MS` poll the other nine use. Note this makes the *recovery* automatic; it does not
-   explain **why** the pad left the bus, which is unmeasured — if it recurs with the rescan in place,
-   that is the next question, and `dmesg` at the time is the measurement.
+   explain **why** the pad left the bus, which is unmeasured — and ⚠️ **it cannot recover a device the
+   kernel never re-enumerates**, which is exactly what
+   [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10)
+   reports one day later. The rescan is still the right shape; it is a fix for a stale fd, not for a dead
+   port.
 
 Regression: `tests/button_latch_test.c` (10 checks, host gcc, no device). **Group A is the negative
 control and it drives the OLD idiom**, asserting that the second tap is swallowed — so a green suite
@@ -195,6 +199,59 @@ cannot mean "the harness cannot see the bug". Group C asserts debounce still wor
 just disable it) and group D asserts the retained-coordinate trap. Build line is in its header.
 
 Not yet seen working on hardware — see the panel checklist, item 6.
+
+### B32. A USB device is only recognised if it is plugged in at boot — open, confirmed 2026-08-10
+
+Reported off a unit 2026-08-10 with an Xbox pad. Plugged in **before** power-on it works — that is
+[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
+hardware confirmation, direct
+through a passive adapter with no powered hub. Unplug it, wait, replug: **it never works again for the
+rest of that boot.** Relaunching the app does not help, which is what separates this from
+[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-2026-08-10-awaiting-panel-confirmation) —
+there, a relaunch restored input.
+
+What the repo already establishes, and what it does not:
+
+- **`enable-usb-host.sh` brings the host bus up once per boot and is a deliberate no-op afterwards.**
+  Its first act is a guard — `if [ -d /sys/bus/usb/devices/usb1 ]; then … exit 0`
+  (`device-files/enable-usb-host.sh:59-62`) — and its only two entry points are the runlevel link
+  `/etc/rc5.d/S90usb-host` (`device-files/usb-host:20-28`) and a manual SSH invocation. So re-running it
+  on a booted unit does nothing at all, and **nothing in the repo is registered as a udev rule or a
+  hotplug handler.**
+- **All three F15 mechanisms are boot-time or earlier**: the p1 500 mA budget is read at driver probe,
+  `S89xpad-modules` insmods before the bus exists, `S90usb-host` patches the MUSB DMA ops and rebinds
+  the driver — once.
+- **The disconnect path is undocumented here.** `devctl`, the session bit and the ID pin appear nowhere
+  in the repo. `VBUS` appears three times and never about a disconnect — but one of them is
+  `usb_host/README.md:26`, *"the port may not supply VBUS"*, which is why the powered hub is the
+  standing recommendation.
+
+**So the cause is unmeasured**, and reading for it will not help: the vendor kernel source does not
+exist here (`CLAUDE.md` → kernel policy), so the MUSB disconnect path is not readable. Three shapes
+could produce this symptom and cheap measurements separate them — in cost order:
+
+| Hypothesis | The measurement that decides it |
+|---|---|
+| The port stops sourcing VBUS after a disconnect, so a later device never powers up | **Does the pad's LED light when you replug it?** No SSH, no panel — a device with no power cannot enumerate, so this one is free |
+| It powers up and the kernel never enumerates it | `dmesg | tail -20` right after the replug: a disconnect line at unplug and then **nothing** on the replug |
+| It enumerates and no driver binds, or no node appears | `ls /dev/input/event*` before the unplug and after the replug, plus `lsmod | grep xpad` |
+
+Do not pick a fix before one of those has an answer — the candidate remedies (re-poking the bind, a
+`usb-host restart` with the guard bypassed, an authorised-port or autosuspend write, a powered hub) sit
+in different layers and only one layer is broken. **Workaround meanwhile: plug the device in before
+powering the unit.**
+
+Two things already in the tree assumed otherwise, and both are corrected as of this entry:
+
+1. **B31's `gamepad_rescan()` fix cannot recover from this.** `gamepad_rescan()`
+   (`native_apps/common/gamepad.c:492-503`) closes its fds and re-`open()`s `/dev/input/event0..31` from
+   scratch, so it *does* find a **new** node — but only one the kernel created. If the kernel never
+   re-enumerates, the 5 s poll finds nothing and input stays dead exactly as before. The rescan is still
+   right, and it is what makes recovery automatic once a node does come back; it is simply not a fix for
+   this, and the unplug half of panel checklist item 6 was written believing it was.
+2. **`native_apps/README.md`'s *USB Hotplug* section claimed hotplug worked unconditionally** — "will be
+   detected and usable within seconds — no restart needed". That is true of the app layer and false of
+   the device; rewritten 2026-08-10 to say which layer it describes.
 
 ### B3c. The touch dead band is measured on one unit only — open
 

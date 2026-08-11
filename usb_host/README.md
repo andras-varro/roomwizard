@@ -474,6 +474,7 @@ publish any manifest entry whose basename matches `uImage*`.
 | insmod fails "Invalid module format" | Version mismatch | Use `insmod -f` (force) — `MODULE_FORCE_LOAD=y` allows this |
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
+| **Worked at boot, dead after a replug** | **Unmeasured** — VBUS not re-sourced, or no re-enumeration. `enable-usb-host.sh` exits early once `usb1` exists, so re-running it does nothing | No fix yet — plug the device in **before** power-on. See `../IMPROVEMENT_PLAN.md` B32 for the three measurements that split the cause |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
 | Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
 
