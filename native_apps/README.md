@@ -159,11 +159,18 @@ All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seco
 holds a stale device handle: whenever a node appears, the app picks it up within seconds and no restart
 is needed.
 
-⚠️ **That covers the app layer only, and on this device the layer below it does not cooperate.** A USB
-device is currently recognised **only if it was plugged in before power-on** — unplug and replug and it
-does not come back for the rest of that boot, so there is no node for the rescan to find. Cause
-unmeasured; see [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) B32. Until that is solved, plug
-keyboards, mice and gamepads in **before** you power the unit.
+⚠️ **That covers the app layer only, and the layer below it needs a nudge.** Measured 2026-08-10: a
+device replugged **quickly** (~10 s) is re-enumerated and the rescan picks it up as advertised, but after
+a longer gap the MUSB port parks in `a_wait_bcon` and never notices the device arriving — so there is no
+node for the rescan to find. One sysfs write recovers it with no reboot:
+
+```sh
+echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode
+```
+
+Automating that write is [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) B32; the device-level detail
+is [`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb). Until it is automated, plug peripherals
+in **before** you power the unit, or issue the write above.
 
 ### Input Configuration
 

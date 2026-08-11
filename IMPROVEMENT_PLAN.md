@@ -38,7 +38,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 | 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
-| 7 | **Unplug the pad, wait, replug it — then say so.** VBUS and the working-state baseline are both measured now, so the only thing left is one `dmesg` read over SSH: whether a disconnect line appears at all, and whether anything follows it. That single comparison decides between three fixes in three different layers | seconds, no panel needed | [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10) |
+| 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and it found the fix.** A 10 s gap recovers, a 60 s gap does not, and `echo host > …/musb-hdrc.0.auto/mode` recovers it with no reboot; confirmed working in the menu and in platformer | — | closed, see [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated) |
+| 8 | **Repeated `echo host > mode` with NOTHING attached** — the one measurement left on [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated), and it picks the fix's shape. Unplug everything, leave it out, say so; I write `host` in a loop and watch `dmesg`. Then plug a pad in and confirm it still enumerates — i.e. that kicking an *empty* port does not leave it deaf to a later arrival | ~1 min, no panel needed | nothing |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -186,12 +187,13 @@ hit them:
    wireless one that idles out — just makes `read()` fail on a stale fd forever; nothing reopens it, and
    `gamepad_rescan()` has no callers inside the library. Input then stays dead for the life of the
    process, which is exactly why relaunching fixed it. Fixed with the same 5 s
-   `RESCAN_INTERVAL_MS` poll the other nine use. Note this makes the *recovery* automatic; it does not
-   explain **why** the pad left the bus, which is unmeasured — and ⚠️ **it cannot recover a device the
-   kernel never re-enumerates**, which is exactly what
-   [B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10)
-   reports one day later. The rescan is still the right shape; it is a fix for a stale fd, not for a dead
-   port.
+   `RESCAN_INTERVAL_MS` poll the other nine use. Note this makes the *recovery* automatic **only from the
+   node upwards**: the rescan re-`open()`s `/dev/input/event0..31` from scratch, so it finds a new node,
+   but it cannot create one. Whether the kernel produces a node at all is
+   [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated),
+   and there a slow replug produces none until the MUSB port is kicked. **The two are complementary, not
+   redundant** — B32's write makes the device enumerate, this poll is what then picks it up without a
+   relaunch — so a complete unplug-and-replug recovery needs both, and neither alone.
 
 Regression: `tests/button_latch_test.c` (10 checks, host gcc, no device). **Group A is the negative
 control and it drives the OLD idiom**, asserting that the second tap is swallowed — so a green suite
@@ -201,88 +203,54 @@ just disable it) and group D asserts the retained-coordinate trap. Build line is
 **Confirmed on `.225` 2026-08-10**, reported plainly rather than hedged: the hamburger menu was opened
 and RESUMEd repeatedly and kept responding, and the pad worked. So the host-proven fix reached the panel.
 What that run did **not** exercise is an unplug — the pad was present at power-on throughout, which is
-[B32](#b32-a-usb-device-is-only-recognised-if-it-is-plugged-in-at-boot--open-confirmed-2026-08-10)'s
+[B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated)'s
 territory and not something the rescan can settle.
 
-### B32. A USB device is only recognised if it is plugged in at boot — open, confirmed 2026-08-10
+### B32. A replugged USB device is never enumerated — cause and fix measured 2026-08-10, not yet automated
 
-Reported off a unit 2026-08-10 with an Xbox pad. Plugged in **before** power-on it works — that is
-[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
-hardware confirmation, direct
-through a passive adapter with no powered hub. Unplug it, wait, replug: **it never works again for the
-rest of that boot.** Relaunching the app does not help, which is what separates this from
-[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) —
-there, a relaunch restored input.
+Reported off a unit 2026-08-10 with an Xbox pad: plugged in **before** power-on it works, but unplug it,
+wait, replug, and it never works again for the rest of that boot — a relaunch does not help, which is
+what separates it from
+[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10). Fully
+measured on `.225` the same day, and **the remedy is one sysfs write**:
 
-What the repo already establishes, and what it does not:
-
-- **`enable-usb-host.sh` brings the host bus up once per boot and is a deliberate no-op afterwards.**
-  Its first act is a guard — `if [ -d /sys/bus/usb/devices/usb1 ]; then … exit 0`
-  (`device-files/enable-usb-host.sh:59-62`) — and its only two entry points are the runlevel link
-  `/etc/rc5.d/S90usb-host` (`device-files/usb-host:20-28`) and a manual SSH invocation. So re-running it
-  on a booted unit does nothing at all, and **nothing in the repo is registered as a udev rule or a
-  hotplug handler.**
-- **All three F15 mechanisms are boot-time or earlier**: the p1 500 mA budget is read at driver probe,
-  `S89xpad-modules` insmods before the bus exists, `S90usb-host` patches the MUSB DMA ops and rebinds
-  the driver — once.
-- **The disconnect path is undocumented here.** `devctl`, the session bit and the ID pin appear nowhere
-  in the repo. `VBUS` appears three times and never about a disconnect — but one of them is
-  `usb_host/README.md:26`, *"the port may not supply VBUS"*, which is why the powered hub is the
-  standing recommendation.
-
-**So the cause is unmeasured**, and reading for it will not help: the vendor kernel source does not
-exist here (`CLAUDE.md` → kernel policy), so the MUSB disconnect path is not readable. Measure instead.
-
-**Measured 2026-08-10, and it rules out the power hypothesis.** On replug the pad's LED runs its normal
-sequence — *"red and then blue as usual"*, i.e. indistinguishable from a working power-on. **The port is
-still sourcing VBUS and the device still powers up**, so "the port went dead" is refuted and a powered
-hub will not help.
-
-**The working state, so there is something to compare against.** `.225`, pad present at power-on, pad
-confirmed working from the panel. `lsusb` reports `Bus 001 Device 002: ID 045e:028e ShanWan ZD Game For
-Windows` beside the root hub, `/dev/input/` gains `event1` and `js0`, and `dmesg` carries the whole
-sequence with timestamps:
-
-```text
-[    4.088500] musb-hdrc musb-hdrc.0.auto: DMA controller not set
-[    4.093872] musb-hdrc musb-hdrc.0.auto: musb_init_controller failed with status -19
-[   65.650299] usbcore: registered new interface driver xpad          <- S89xpad-modules
-[   66.125427] musb-hdrc musb-hdrc.0.auto: MUSB HDRC host driver      <- S90usb-host rebind
-[   66.127349] musb-hdrc musb-hdrc.0.auto: new USB bus registered, assigned bus number 1
-[   66.150146] hub 1-0:1.0: USB hub found
-[   66.641662] usb 1-1: new full-speed USB device number 2 using musb-hdrc
-[   66.910797] input: Microsoft X-Box 360 pad as /devices/.../usb1/1-1/1-1:1.0/input/input1
+```sh
+echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode
 ```
 
-⚠️ **Read the order: the bus is registered at 66.13 and the device appears 0.5 s later, as part of the
-root hub's first scan.** The pad was already physically attached when the bus came up. **So the only
-enumeration this device has ever been observed to perform is that initial scan** — there is no
-observation, anywhere, of it enumerating a device that arrived *after* the bus existed. That reframes the
-bug: the question is not "why does the disconnect break something" but "has hotplug enumeration ever
-worked here at all". A 6-minute-uptime capture in the working state shows **no disconnect line and no
-second enumeration** — and the operator independently confirms the pad had been in since boot and was
-never replugged, so the log and the account agree.
+The pad enumerated 0.26 s later and the operator confirmed it working **in the launcher menu and in
+platformer**, which had been reporting *"No controller detected"*. So what is left here is not a
+diagnosis — it is deciding where that write lives.
 
-**A wrong inference, corrected.** An earlier revision of this entry read `lsmod`'s `xpad 28672 0` as
-"usage count 0, so nothing is bound to the driver". **That reading is wrong**: the working state above
-reports the *same* `xpad 28672 0` while a pad is bound and `event1`/`js0` exist. A module's refcount
-counts module users — `ff_memless 16384 1 xpad` is the real one — not bound devices, so it says nothing
-either way. The failed-state capture that mattered was `lsusb`, and it was taken without confirming
-whether the pad was attached, which made it a baseline and not evidence.
+**The measurements, the `a_wait_bcon` mechanism, the fact that a redundant write is free, and the two
+readings that turned out not to be diagnostic are all device facts and live in
+[`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb)** — read that before touching this. The two
+findings that bear on the *design* are: a **10 s** replug recovers by itself while a **60 s** one does not,
+so this is a race with the state machine rather than "hotplug never works"; and re-asserting `host` while
+already `a_host` is a measured no-op, which is what makes an automatic fix safe.
 
-**What remains is one comparison, and the baseline for it is now on record.** With the pad working,
-unplug it, wait, replug, and re-read `dmesg`:
+**Still to measure — one thing, and it decides the fix's shape.** Repeated writes while **nothing** is
+attached. `a_wait_bcon` is both the stuck state *and* the ordinary empty-bus state, so `mode` alone cannot
+tell them apart and a naive poll would write on every tick with no device connected. The `a_host` case is
+measured free; the empty case is not. Cheap to settle, but it needs a hand: unplug everything, write
+`host` in a loop, watch `dmesg` and the LED of a device plugged in afterwards.
 
-| Outcome | Means |
-|---|---|
-| no `usb 1-1: disconnect` line at all | the controller never sees the unplug — the port is not generating disconnect interrupts, and the stack still believes the old device is there |
-| a disconnect line, then **silence** on replug | the disconnect is handled and the port stops scanning — the session is never restarted |
-| a disconnect line, then a `new full-speed USB device` that fails or repeats | enumeration is attempted and breaking, which is a different fix again |
+**Where the fix belongs is a decision, not a deduction.** Four shapes, none yet written:
 
-Do not pick a fix before that: re-poking the driver bind (which is exactly what `enable-usb-host.sh`
-does, and its `usb1` guard is what blocks doing it twice), an autosuspend or authorised-port write, and a
-powered hub all live in different layers, and the hub is already ruled out. **Workaround meanwhile: plug
-the device in before powering the unit.**
+| Shape | Cost | Catch |
+|---|---|---|
+| A `recover` verb on `/etc/init.d/usb-host` | ~5 lines in `device-files/usb-host` | needs somebody at an SSH prompt — no use to a player, and this bug's whole cost is a player's |
+| A poll in the init script: re-assert when `mode` is `a_wait_bcon` | ~8 lines, one long-lived shell process | gated on the empty-bus measurement above |
+| Kick **once** per observed disconnect, by watching `/sys/bus/usb/devices/1-1` disappear | no timer spam by construction | ⚠️ unmeasured whether a kick issued while *nothing* is attached leaves the port able to see a **later** plug — the one measurement that would settle both this and the row above |
+| `hw_usb_reassert_host()` in `hardware.c`, called from `gamepad_rescan()` | keeps sysfs behind `hardware.c` per house rule, and rides a 5 s poll that already exists | only reaches apps linking `gamepad.c` — ScummVM and `vnc_client` have their own input paths and would still be stuck |
+
+⚠️ **Do not put the write in `enable-usb-host.sh`'s existing path.** That script's job is bringing the bus
+up from nothing — the `/dev/mem` struct patch plus a driver rebind — and its `usb1` guard
+(`device-files/enable-usb-host.sh:59-62`) is correct for that job. Re-asserting `mode` on a *running* bus
+is a different, far cheaper operation; conflating them means a recovery either drags the whole DMA patch
+along or forces the guard open for both.
+
+**Workaround until it is automated:** the write above, or plug the device in before powering the unit.
 
 Two things already in the tree assumed otherwise, and both are corrected as of this entry:
 

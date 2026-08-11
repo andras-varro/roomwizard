@@ -697,11 +697,14 @@ wireless one idling out) leaves a stale fd that fails forever, so input is dead 
 process and only relaunching fixes it. Platformer was the one app of ten without it, measured from the
 same panel report. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
 
-⚠️ **The rescan fixes a stale fd, not a dead port.** It re-`open()`s `/dev/input/event0..31` from
-scratch, so it finds a *new* node — but on this device a replugged USB device currently produces no node
-at all: recognition happens only for devices present at power-on (`../IMPROVEMENT_PLAN.md` B32, cause
-unmeasured). So do not read the 5 s poll as "unplug/replug recovers"; it recovers whatever the kernel
-gives back, which today is nothing.
+⚠️ **The rescan fixes a stale fd, not a dead port — and the two are complementary.** It re-`open()`s
+`/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one. Measured 2026-08-10:
+a device replugged within ~10 s is re-enumerated and this poll picks it up exactly as intended, but after
+a longer gap the MUSB port parks in `a_wait_bcon` and produces no node at all until something writes
+`host` to `.../musb-hdrc.0.auto/mode` (`../IMPROVEMENT_PLAN.md` B32,
+[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb)). So a full unplug-and-replug recovery needs
+**both** halves — the write to make the device enumerate, this poll to pick it up without a relaunch — and
+neither alone is enough. Do not read the 5 s poll as "unplug/replug recovers".
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way

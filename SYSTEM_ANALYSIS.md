@@ -1002,6 +1002,34 @@ input: HID 04d9:a088 as .../input4   (mouse)
 input: Microsoft X-Box 360 pad as .../input5
 ```
 
+⚠️ **Hotplug is unreliable after a slow unplug, and one sysfs write is the cure.** Measured on `.225`
+2026-08-10, with the same pad in one session:
+
+| Action | Result |
+|---|---|
+| attached at power-on | enumerates as part of the root hub's first scan, ~0.5 s after the bus registers |
+| unplug, **10 s**, replug | **works.** `dmesg` shows `musb_stage0_irq 898: unhandled DISCONNECT transition (a_idle)` at the unplug and does not process the disconnect until the device returns |
+| unplug, **60 s**, replug | **fails silently.** A clean `usb 1-1: USB disconnect` at the unplug, then **no log line at all** for the replug. VBUS is still present — the device's own LED lights normally |
+| `echo host > $MUSB/mode` | **recovers, no reboot.** Enumerates 0.26 s later |
+
+where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`.
+
+**The state to read is `$MUSB/mode`.** In the stuck condition it reports **`a_wait_bcon`** — *"A-device
+waiting for B-device connect"* — with a powered device physically attached and not enumerated; writing
+`host` moves it to `a_host` and enumeration follows. **A redundant write is free**: issued while already
+`a_host` with a working device it leaves the mode, the device number and the event nodes untouched and
+logs nothing.
+
+Two neighbouring readings are **not** diagnostic, and both cost time before being controlled:
+
+| Reading | Why it tells you nothing |
+|---|---|
+| `twl4030-usb/vbus` = `off` | reads `off` in the working state **and** the stuck one — in host mode the PHY senses no *externally* supplied VBUS. Its disagreement with `$MUSB/vbus`'s `Vbus on` is normal |
+| `lsmod` → `xpad 28672 0` | a module refcount counts module *users* (`ff_memless 16384 1 xpad`), not bound devices. It reads `0` with a pad bound and `event1`/`js0` present |
+
+A powered hub does **not** help this symptom; the device is already powered. Automating the write is
+[`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated).
+
 Full technical detail, including MUSB memory addresses, the `omap2430_ops` struct layout, why
 `mmap()` works where `write()` does not, and the approaches that failed:
 [`usb_host/README.md`](usb_host/README.md).

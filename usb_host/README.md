@@ -23,7 +23,9 @@ This will:
 - **Python 3** (for DTB patching script)
 - **SSH root access** to the RoomWizard (key-based auth recommended)
 - **Micro USB OTG adapter** (Micro-B male → USB-A female)
-- **Powered USB hub** (recommended — the port may not supply VBUS)
+- **Powered USB hub** — *optional.* Measured 2026-08-10: the port **does** source VBUS, enough to run an
+  Xbox pad through a passive adapter with no hub. Use one for a device whose draw exceeds the 500 mA
+  budget, not as a fix for a device that is not detected (`../SYSTEM_ANALYSIS.md#36-usb`)
 
 Install all prerequisites:
 ```bash
@@ -474,7 +476,7 @@ publish any manifest entry whose basename matches `uImage*`.
 | insmod fails "Invalid module format" | Version mismatch | Use `insmod -f` (force) — `MODULE_FORCE_LOAD=y` allows this |
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
-| **Worked at boot, dead after a replug** | **Unmeasured** — VBUS not re-sourced, or no re-enumeration. `enable-usb-host.sh` exits early once `usb1` exists, so re-running it does nothing | No fix yet — plug the device in **before** power-on. See `../IMPROVEMENT_PLAN.md` B32 for the three measurements that split the cause |
+| **Worked at boot, dead after a replug** | MUSB parks in `a_wait_bcon` after a clean disconnect and never sees the new device. Measured: a ~10 s replug recovers by itself, ~60 s does not | `echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode` — recovers in 0.26 s, no reboot. Detail `../SYSTEM_ANALYSIS.md#36-usb`; automating it is `../IMPROVEMENT_PLAN.md` B32 |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
 | Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
 
