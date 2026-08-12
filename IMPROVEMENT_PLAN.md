@@ -39,7 +39,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 | 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
 | 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and it found the fix.** A 10 s gap recovers, a 60 s gap does not, and `echo host > …/musb-hdrc.0.auto/mode` recovers it with no reboot; confirmed working in the menu and in platformer | — | closed, see [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated) |
-| 8 | **Repeated `echo host > mode` with NOTHING attached** — the one measurement left on [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated), and it picks the fix's shape. Unplug everything, leave it out, say so; I write `host` in a loop and watch `dmesg`. Then plug a pad in and confirm it still enumerates — i.e. that kicking an *empty* port does not leave it deaf to a later arrival | ~1 min, no panel needed | nothing |
+| 8 | **After the B32 poll ships: boot a unit with nothing plugged in, leave it, then read `dmesg`.** Two answers at once — whether the poll spams the log on an idle empty port (tune a backoff if so, not a redesign), and whether plugging a pad in *afterwards* then works, which is the first-ever-hotplug case nobody has ever tried | ~2 min, no panel needed | the poll must be written and deployed first — [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -229,20 +229,17 @@ findings that bear on the *design* are: a **10 s** replug recovers by itself whi
 so this is a race with the state machine rather than "hotplug never works"; and re-asserting `host` while
 already `a_host` is a measured no-op, which is what makes an automatic fix safe.
 
-**Still to measure — one thing, and it decides the fix's shape.** Repeated writes while **nothing** is
-attached. `a_wait_bcon` is both the stuck state *and* the ordinary empty-bus state, so `mode` alone cannot
-tell them apart and a naive poll would write on every tick with no device connected. The `a_host` case is
-measured free; the empty case is not. Cheap to settle, but it needs a hand: unplug everything, write
-`host` in a loop, watch `dmesg` and the LED of a device plugged in afterwards.
+**Decided 2026-08-10: a poll in the init script, enabled by default.** `device-files/usb-host` gains a
+loop — every few seconds, if `$MUSB/mode` reads `a_wait_bcon`, write `host` — installed as an ordinary
+`usb`-group record in `device-files/provision-rules.conf` and deployed by
+`commissioning/provision.sh` / `commissioning/commission-offline.sh`. **Not written yet.** The three
+rejected shapes and why:
 
-**Where the fix belongs is a decision, not a deduction.** Four shapes, none yet written:
-
-| Shape | Cost | Catch |
-|---|---|---|
-| A `recover` verb on `/etc/init.d/usb-host` | ~5 lines in `device-files/usb-host` | needs somebody at an SSH prompt — no use to a player, and this bug's whole cost is a player's |
-| A poll in the init script: re-assert when `mode` is `a_wait_bcon` | ~8 lines, one long-lived shell process | gated on the empty-bus measurement above |
-| Kick **once** per observed disconnect, by watching `/sys/bus/usb/devices/1-1` disappear | no timer spam by construction | ⚠️ unmeasured whether a kick issued while *nothing* is attached leaves the port able to see a **later** plug — the one measurement that would settle both this and the row above |
-| `hw_usb_reassert_host()` in `hardware.c`, called from `gamepad_rescan()` | keeps sysfs behind `hardware.c` per house rule, and rides a 5 s poll that already exists | only reaches apps linking `gamepad.c` — ScummVM and `vnc_client` have their own input paths and would still be stuck |
+| Rejected | Why not |
+|---|---|
+| `hw_usb_reassert_host()` in `hardware.c`, called from the existing 5 s `gamepad_rescan()` | rides a poll that already exists and keeps sysfs behind `hardware.c` — but reaches **only** apps linking `gamepad.c`. ScummVM and `vnc_client` have their own input paths and would stay broken, and a USB keyboard is as much theirs as a pad is a game's |
+| A `recover` verb and nothing else | needs somebody at an SSH prompt. This bug's entire cost is a player's, and a player has no prompt. Worth adding *alongside* the poll, not instead of it |
+| Kick once per observed disconnect (watch `/sys/bus/usb/devices/1-1` disappear) | no timer traffic by construction, but it depends on the same unmeasured thing as the poll *and* adds state to get wrong. The poll is strictly simpler for the same coverage |
 
 ⚠️ **Do not put the write in `enable-usb-host.sh`'s existing path.** That script's job is bringing the bus
 up from nothing — the `/dev/mem` struct patch plus a driver rebind — and its `usb1` guard
@@ -250,7 +247,26 @@ up from nothing — the `/dev/mem` struct patch plus a driver rebind — and its
 is a different, far cheaper operation; conflating them means a recovery either drags the whole DMA patch
 along or forces the guard open for both.
 
-**Workaround until it is automated:** the write above, or plug the device in before powering the unit.
+**Why enabled by default rather than behind a flag.** The first draft of this decision held the poll off
+until the empty-bus case below was measured. That was withdrawn on the operator's challenge, and rightly:
+the write is a **measured** no-op in `a_host`, and in the empty branch there is no device to disturb by
+definition, so the worst realistic outcome of being wrong is `dmesg` noise on an idle unit — not a brick,
+not data. A fix shipped switched off is not a fix, and this is a system-level capability rather than an
+experiment.
+
+**Likely covers a second symptom, unmeasured.** A device plugged into an **idle** port some time after
+boot faces the same `a_wait_bcon` state, so the poll should make first-ever hotplug work too. ⚠️ Stated as
+an expectation, not a measurement: every failure observed here was a **replug after a disconnect**, and a
+first-ever plug into an idle port was never tried. Do not write it down as fixed until someone boots a
+unit with nothing attached and then plugs a pad in.
+
+**One thing still to measure, now a verification rather than a gate:** repeated writes while **nothing** is
+attached. `a_wait_bcon` is both the stuck state *and* the ordinary empty-bus state, so `mode` alone cannot
+tell them apart and the poll will write on every tick with an empty port. The `a_host` case is measured
+free; the empty case is not. Settle it on the first unit that runs the poll — boot with nothing attached,
+leave it, then read `dmesg`. If it spams, add a backoff; that is a tuning change, not a redesign.
+
+**Workaround until it is written:** the write above, or plug the device in before powering the unit.
 
 Two things already in the tree assumed otherwise, and both are corrected as of this entry:
 
@@ -1712,6 +1728,14 @@ patching the appended DTB, which needs no kernel source.
 ## Where to start
 
 Deliberately not a ranking of everything — only the claims worth making.
+
+⚠️ **Top of the list as of 2026-08-10: write
+[B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated)'s
+poll.** The bug is solved and the remedy is a single sysfs write proven on hardware; all that is missing is
+the ~8 lines that issue it. Decided shape: a loop in `device-files/usb-host` re-asserting `host` when
+`mode` reads `a_wait_bcon`, **enabled by default**, installed as a `usb`-group record in
+`device-files/provision-rules.conf`. Cheapest fix-to-payoff ratio open anywhere in this document — a USB
+peripheral currently has to be plugged in before power-on, which is a rule no player will follow.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its
