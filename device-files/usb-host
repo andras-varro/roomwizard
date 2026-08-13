@@ -16,15 +16,25 @@
 #
 # ── The one thing that recovers a dead port: `recover` ──────────────────────
 #
-# MUSB only powers the port if a device is PRESENT WHEN THE DRIVER PROBES. Boot
-# with nothing attached and VBUS collapses a few seconds later; anything plugged
-# in afterwards is never even powered, for the rest of that boot. Measured on
-# .188 2026-08-13 and reproducible on demand. IMPROVEMENT_PLAN.md B32.
+# A USB device is enumerated if it is attached when the driver probes. Boot with
+# nothing attached and VBUS collapses a few seconds later, and a peripheral
+# plugged in afterwards is not powered. Measured on .188 2026-08-13.
+# IMPROVEMENT_PLAN.md B32.
 #
-# A driver unbind+bind is the ONLY recovery reachable from userspace, because
-# musb_start() -- the sole path that sets the DEVCTL SESSION bit that drives
-# VBUS -- has exactly one caller in host mode, the root hub powering its port at
-# probe. `recover` does that rebind.
+# A driver unbind+bind recovers it, because musb_start() -- the path that sets
+# the DEVCTL SESSION bit that drives VBUS -- runs when the root hub powers its
+# port at probe. `recover` does that rebind, retrying (see below).
+#
+# ⚠️ BUT "only at probe" IS NOT THE WHOLE CAUSE, and this file no longer claims
+# it is. Measured on .188 2026-08-13, after the above: with the port dark for
+# 3-5 minutes and everything unplugged, RE-SEATING THE OTG ADAPTER woke it --
+# no rebind, no sysfs write, no reboot. A gamepad plugged into it 10 s later
+# enumerated immediately. So a session can start from something other than a
+# probe, and the earlier claim that "from A_IDLE with VBUS off no interrupt can
+# arrive" is wrong: it accounted for connect detection only and ignored the
+# OTG ID pin, which on this board is watched by the TWL4030 PHY rather than by
+# MUSB. The exact path is being traced in usb_host/linux-4.14.52/; until it is,
+# treat the adapter re-seat as a measurement and not yet as a mechanism.
 #
 # ⚠️ THREE THINGS THAT LOOK LIKE FIXES AND ARE NOT. All three were measured or
 # read out of drivers/usb/musb/ in 4.14.52; do not re-derive them:
@@ -116,32 +126,60 @@ case "$1" in
     ;;
   recover)
     # Re-probe the MUSB driver, which re-runs the root hub's port-power path and
-    # so re-asserts the session. Works whether or not the bus is currently dead;
-    # a device attached NOW will enumerate ~0.5 s later.
+    # so re-asserts the session. Plug the device in FIRST, then run this.
     #
-    # ⚠️ Deliberately NOT run on a timer. With nothing attached the rebind leaves
-    # the port dead again within seconds, so a poll would rebind forever and log
-    # four kernel lines each time. Plug the device in FIRST, then run this.
+    # ⚠️ ONE REBIND IS NOT RELIABLE -- retry until a peripheral appears. Measured
+    # on .188 2026-08-13 with the pad attached THROUGHOUT: the first rebind
+    # failed and the second succeeded. The asymmetry tracked VBUS at unbind time:
+    #
+    #   attempt 1   VBUS before: Vbus on    -> VBUS after: Vbus off   FAILED
+    #   attempt 2   VBUS before: Vbus off   -> VBUS after: Vbus on    enumerated
+    #
+    # so a rebind that starts from a live session appears not to assert a fresh
+    # one, and the failing attempt is what leaves VBUS off for the next to
+    # succeed from. The mechanism is not yet traced in the source, so this loops
+    # on the MEASUREMENT rather than on a theory: rebind, look for a non-hub
+    # device, stop the moment there is one.
+    #
+    # ⚠️ Deliberately NOT run on a timer. With nothing attached every rebind
+    # leaves the port dead again within seconds and logs four kernel lines, so a
+    # poll would rebind forever. Worse, nothing in software can tell "nothing is
+    # plugged in" from "a pad is plugged into an unpowered port" -- VBUS is off
+    # either way and no connect interrupt can arrive in either. An operator who
+    # has just plugged something in holds the one bit no poll can obtain, which
+    # is why this is a command and not a daemon.
     if [ ! -d "$MUSB_DRIVER" ]; then
         echo "ERROR: $MUSB_DRIVER absent -- the musb-hdrc driver is not loaded."
         exit 1
     fi
-    echo "VBUS before: $(vbus_state)"
-    echo "Re-probing $MUSB_DEVICE..."
-    echo "$MUSB_DEVICE" > "$MUSB_DRIVER/unbind" 2>/dev/null
-    echo "$MUSB_DEVICE" > "$MUSB_DRIVER/bind" 2>/dev/null
-    sleep 3
-    echo "VBUS after:  $(vbus_state)"
+
+    tries="${RECOVER_TRIES:-3}"
+    attempt=1
+    while [ "$attempt" -le "$tries" ]; do
+        echo "--- attempt $attempt of $tries"
+        echo "VBUS before: $(vbus_state)"
+        echo "Re-probing $MUSB_DEVICE..."
+        echo "$MUSB_DEVICE" > "$MUSB_DRIVER/unbind" 2>/dev/null
+        echo "$MUSB_DEVICE" > "$MUSB_DRIVER/bind" 2>/dev/null
+        sleep 3
+        echo "VBUS after:  $(vbus_state)"
+        if [ "$(usb_peripherals)" -gt 0 ]; then
+            lsusb 2>/dev/null
+            echo "A device is attached and enumerated (attempt $attempt)."
+            exit 0
+        fi
+        attempt=$((attempt + 1))
+    done
+
     lsusb 2>/dev/null
-    if [ "$(usb_peripherals)" -gt 0 ]; then
-        echo "A device is attached and enumerated."
-    else
-        echo "No non-hub device enumerated. If one is plugged in, check dmesg;"
-        echo "if not, plug it in and run '$0 recover' again."
-        echo "NOTE: 'Vbus on' above is transient -- with nothing attached the"
-        echo "      port goes dark again within seconds. That is the bug, not a"
-        echo "      failure of this command."
-    fi
+    echo "No non-hub device enumerated after $tries attempt(s)."
+    echo "If one IS plugged in, check dmesg -- and try re-seating the OTG"
+    echo "adapter itself, not just the peripheral: on .188 that woke a port"
+    echo "which had been dark for minutes, with no rebind at all."
+    echo "NOTE: any 'Vbus on' above is transient -- with nothing attached the"
+    echo "      port goes dark again within seconds. That is the bug, not a"
+    echo "      failure of this command."
+    exit 1
     ;;
   *)
     echo "Usage: $0 {start|stop|status|restart|recover}"
