@@ -124,6 +124,11 @@
  * build-and-deploy.sh and marked .hidden, so the launcher does not show it —
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
+/* The init script that owns USB host mode, including the MUSB driver re-probe
+ * that revives a port which came up dead (IMPROVEMENT_PLAN.md B32). The RESCAN
+ * button forks this rather than writing MUSB sysfs from here — one copy of the
+ * mechanism, and it is the copy that carries the warnings. */
+#define USB_HOST_INIT     "/etc/init.d/usb-host"
 #define PORTRAIT_FLAG_FILE  "/opt/games/portrait.mode"
 
 #define TZ_COLS   8
@@ -2910,6 +2915,76 @@ static void usb_scan_devices(AppState *s) {
     }
 }
 
+static void usb_close(AppState *s);   /* defined below; used by the recovery path */
+
+/* Bring a dead USB port back, then re-enumerate.
+ *
+ * ⚠️ Recovery is TWO halves and this app only ever had the second.
+ * usb_scan_devices() re-open()s /dev/input/event*, so it finds a node the kernel
+ * has already created and cannot create one. On a port that came up dead
+ * (IMPROVEMENT_PLAN.md B32) no node exists, so tapping RESCAN could never
+ * satisfy the hint this very tab prints — "CONNECT A DEVICE AND TAP RESCAN".
+ * The missing half is a MUSB driver re-probe.
+ *
+ * ⚠️ The rebind is NOT reimplemented here. /etc/init.d/usb-host owns it, along
+ * with the retry and every warning about which sysfs writes are silent no-ops on
+ * this SoC; a second copy of those paths in C is how the two drift apart. This
+ * forks that script and reads its exit status — 0 means it enumerated something.
+ *
+ * ⚠️ It blocks for several seconds, and a rebind invalidates every open USB fd.
+ * So paint a waiting screen first (the app is single-threaded and will not
+ * repaint until this returns) and close our own fd on the way in. */
+static bool usb_recover_port(AppState *s) {
+    if (access(USB_HOST_INIT, X_OK) != 0) {
+        snprintf(s->status_msg, sizeof(s->status_msg),
+                 "USB-HOST SCRIPT NOT INSTALLED");
+        s->status_time_ms = get_time_ms();
+        return false;
+    }
+
+    usb_close(s);   /* the rebind would invalidate it anyway */
+
+    if (g_fb) {
+        fb_clear(g_fb, COLOR_BLACK);
+        text_draw_centered(g_fb, (int)g_fb->width / 2,
+                           (int)g_fb->height / 2 - 20,
+                           "RE-PROBING USB CONTROLLER", COLOR_WHITE, 3);
+        text_draw_centered(g_fb, (int)g_fb->width / 2,
+                           (int)g_fb->height / 2 + 20,
+                           "THIS TAKES A FEW SECONDS", USB_COLOR_DIM, 2);
+        fb_swap(g_fb);
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(s->status_msg, sizeof(s->status_msg), "FORK FAILED");
+        s->status_time_ms = get_time_ms();
+        return false;
+    }
+    if (pid == 0) {
+        execl(USB_HOST_INIT, "usb-host", "recover", (char *)NULL);
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;   /* a signal must not orphan the child */
+
+    usb_scan_devices(s);
+
+    if (s->usb_dev_cnt > 0)
+        snprintf(s->status_msg, sizeof(s->status_msg),
+                 "PORT RECOVERED - %d DEVICE(S)", s->usb_dev_cnt);
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+        snprintf(s->status_msg, sizeof(s->status_msg),
+                 "COULD NOT RUN USB-HOST");
+    else
+        snprintf(s->status_msg, sizeof(s->status_msg),
+                 "STILL NOTHING - IS A DEVICE PLUGGED IN?");
+    s->status_time_ms = get_time_ms();
+    return s->usb_dev_cnt > 0;
+}
+
 static int usb_open(AppState *s, int idx) {
     if (idx<0||idx>=s->usb_dev_cnt) return -1;
     if (s->usb_fd>=0) { close(s->usb_fd); s->usb_fd=-1; }
@@ -3055,8 +3130,15 @@ static void draw_usb(Framebuffer *fb, AppState *s) {
     if (s->usb_dev_cnt==0) {
         text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2-10,
                            "NO USB DEVICES DETECTED", USB_COLOR_DIM, 2);
-        text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
-                           "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
+        /* This tab never drew status_msg, so a recovery attempt that found
+         * nothing looked identical to one that never ran. Show the result where
+         * the hint goes — the hint has served its purpose by then. */
+        if (s->status_msg[0])
+            text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
+                               s->status_msg, COLOR_YELLOW, 2);
+        else
+            text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
+                               "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
     } else {
         int ry0=ly+36, rh=36;
         for (int i=0; i<s->usb_dev_cnt && i<6; i++) {
@@ -3302,8 +3384,16 @@ static void handle_usb_input(AppState *state, int tx, int ty,
                              bool touching, uint32_t now) {
     if (state->usb_scr != USB_SCR_MAIN) return;
 
-    if (button_update(&usb_btn_rescan, tx, ty, touching, now))
+    if (button_update(&usb_btn_rescan, tx, ty, touching, now)) {
         usb_scan_devices(state);
+        /* An empty scan is the dead-port signature: when the port is unpowered
+         * NOTHING enumerates, so finding nothing is exactly when a re-probe is
+         * worth its few seconds. If something is already listed the port is live,
+         * and a device plugged in later enumerates on its own (measured on .188
+         * across gaps of 70-300 s, B32) — so do not disturb a working bus. */
+        if (state->usb_dev_cnt == 0)
+            usb_recover_port(state);
+    }
 
     if (state->usb_kbd_idx >= 0 &&
         button_update(&usb_btn_ktest, tx, ty, touching, now)) {
@@ -3543,6 +3633,12 @@ int main(void) {
         CalibSubState prev_calib_sub = state.calib_sub;
         ConfirmAction prev_confirm   = state.confirm_action;
         USBScreen     prev_usb_scr   = state.usb_scr;
+        /* ⚠️ The device count must be watched, or a RESCAN that discovers (or
+         * loses) a device changes no field in the check below, needs_redraw stays
+         * false, and the list keeps showing the pre-scan state. That was true of
+         * the button before it could recover the port too — the scan worked and
+         * the screen did not admit it. */
+        int           prev_usb_cnt   = state.usb_dev_cnt;
 
         touch_poll(&touch);
         TouchState ts = touch_get_state(&touch);
@@ -3594,6 +3690,7 @@ int main(void) {
             prev_calib_sub != state.calib_sub       ||
             prev_confirm   != state.confirm_action  ||
             prev_usb_scr   != state.usb_scr         ||
+            prev_usb_cnt   != state.usb_dev_cnt     ||
             state.diag_needs_refresh) {
             needs_redraw = true;
         }
