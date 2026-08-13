@@ -33,20 +33,44 @@
 # WHAT KEEPS THE PORT ALIVE IS THE OTG ID PIN, not a device at probe. The
 # TWL4030 PMIC watches ID on its OWN interrupt line (phy-twl4030-usb.c:747), in
 # an always-powered PM_MASTER register (STS_HW_CONDITIONS, :298-314) -- so it
-# fires with the PHY asleep, MUSB in standby, and VBUS off. Grounding ID (any
-# OTG adapter does this) powers the PHY and resumes MUSB, and the resume replays
-# the cached DEVCTL SESSION bit (musb_core.c:2609-2610). That is a session,
-# with no probe and no rebind involved. Measured: a port dark for 3-5 minutes
-# came back the instant the OTG adapter was re-seated.
+# fires with the PHY asleep, MUSB in standby, and VBUS off. Grounding ID powers
+# the PHY and resumes MUSB, and the resume replays the CACHED DEVCTL SESSION bit
+# (musb_core.c:2609-2610).
 #
-# ⚠️ THEREFORE: LEAVING AN OTG ADAPTER PLUGGED IN KEEPS THE PORT OPEN, and
-# peripherals can then be hot-plugged into it freely. The only thing that turns
-# VBUS off in normal operation is the TWL PHY runtime-suspending, and the
-# ID-ground cable_present reference holds that off (phy-twl4030-usb.c:398-410);
-# nothing clears SESSION, because omap2430_ops has no .try_idle so
-# musb_platform_try_idle() is a no-op. A hub is NOT required for this -- the PHY
-# cannot see a descriptor, only two bits of ID/VBUS state, so a passive adapter
-# and a powered hub are indistinguishable to it.
+# ⚠️ "REPLAYS THE CACHED BIT" IS THE WHOLE CATCH, and an earlier version of this
+# comment got it wrong. An ID event can only resume a session that was already
+# established -- it cannot start one on a cold port, because what gets replayed
+# is a DEVCTL with SESSION *clear*. Measured on .188 2026-08-13, refuting the
+# earlier claim that an adapter left plugged in holds the port open:
+#
+#   passive hub connected to a dead port, nothing else   VBUS off at 1, 2 and
+#                                                        3 min, and still off
+#                                                        several minutes later
+#   a device then plugged into that hub                  nothing enumerates
+#
+# So do NOT tell an operator that leaving an adapter or hub attached fixes this.
+# It does not. What it does is preserve a port that is ALREADY alive:
+#
+#   after `recover` succeeded, the peripheral was unplugged and replugged at
+#   gaps of 70, 75, 90, 120, 150, 180, 240 and 300 s -- and worked EVERY time.
+#
+# That half is solid and explains itself from the source: no .try_idle in
+# omap2430_ops means musb_platform_try_idle() is a no-op, so SESSION is never
+# cleared once set, and each ID-ground resume replays it. The gap length was
+# never the variable. A hub is irrelevant to all of this -- the PHY sees two
+# bits of ID/VBUS state and no descriptors, so it cannot tell a passive adapter
+# from a powered hub.
+#
+# ⚠️ SO THE ONE RELIABLE COLD-PORT REMEDY IS STILL A REBIND, and it has needed
+# TWO consecutive runs both times it was measured. The second measurement rules
+# out the obvious explanation: both of its runs started from `Vbus off`, so
+# "VBUS was still valid when the driver re-probed" is NOT the general cause.
+# Current hypothesis, NOT yet verified: omap2430_musb_init() replays the cached
+# glue->status at probe (omap2430.c:312-313) and twl4030_phy_init() re-derives
+# ID about a second later, so the first rebind is what teaches the glue layer
+# the ID state and the second is the one that can use it at probe. Until that is
+# confirmed, `recover` loops on the MEASUREMENT: rebind, look, stop when a
+# non-hub device appears.
 #
 # ⚠️ AND THE EARLIER CLAIM THAT "FROM A_IDLE WITH VBUS OFF NO INTERRUPT CAN
 # ARRIVE" IS WRONG. It reasoned about connect detection only and ignored the ID
@@ -186,9 +210,9 @@ case "$1" in
     # either way and no connect interrupt can arrive in either. An operator who
     # has just plugged something in holds the one bit no poll can obtain, which
     # is why this is a command and not a daemon.
-    # ⚠️ THE UNBIND AND THE BIND MUST BE SEPARATED BY A DELAY, and that delay is
-    # the whole reason one rebind used to fail. Traced to musb_start(),
-    # drivers/usb/musb/musb_core.c:1074-1080 in 4.14.52:
+    # ⚠️ THE UNBIND AND THE BIND ARE SEPARATED BY A DELAY, but do NOT record that
+    # as the fix for the double-run -- see the header. It addresses ONE real
+    # mechanism, which is not the only one. musb_start(), musb_core.c:1074-1080:
     #
     #     devctl &= ~MUSB_DEVCTL_SESSION;
     #     if (musb->port_mode != MUSB_PORT_MODE_HOST &&
@@ -199,20 +223,19 @@ case "$1" in
     #             devctl |= MUSB_DEVCTL_SESSION;
     #     }
     #
-    # This board's DTB says `mode = <0x03>` (MUSB_PORT_MODE_DUAL_ROLE, musb_core.h
-    # :82-84), so the first clause is TRUE. If VBUS still reads above VBusValid
-    # when the driver re-probes, SESSION is left CLEARED and the root hub's
-    # port-power never starts a session -- the bind "succeeds" and enumerates
-    # nothing. Bind with VBUS already decayed and SESSION is set and it works.
+    # This board's DTB says `mode = <0x03>` (MUSB_PORT_MODE_DUAL_ROLE,
+    # musb_core.h:82-84), so the first clause is TRUE. If VBUS still reads above
+    # VBusValid when the driver re-probes, SESSION is left CLEARED and the bind
+    # "succeeds" having enumerated nothing. Letting VBUS decay first removes that
+    # failure mode, and it is free.
     #
-    # That is exactly the measured asymmetry: attempt 1 from `Vbus on` failed,
-    # attempt 2 from `Vbus off` succeeded. The first attempt was not a flake, it
-    # was the thing that dropped VBUS for the second. So: settle between the two
-    # writes rather than rebind twice and hope.
+    # ⚠️ It is NOT sufficient, though: a second measurement had BOTH runs start
+    # from `Vbus off` and the first still failed, so something else is also at
+    # work. Hence the retry, which loops on the measurement rather than on any
+    # one theory.
     #
     # $MUSB/vbus cannot be polled in the gap -- it is an attribute of the bound
-    # driver and disappears with it -- hence a fixed settle, with the retry below
-    # as the backstop for a slower decay than measured.
+    # driver and disappears with it -- hence a fixed settle.
     if [ ! -d "$MUSB_DRIVER" ]; then
         echo "ERROR: $MUSB_DRIVER absent -- the musb-hdrc driver is not loaded."
         exit 1
@@ -240,12 +263,9 @@ case "$1" in
 
     lsusb 2>/dev/null
     echo "No non-hub device enumerated after $tries attempt(s)."
-    echo "If one IS plugged in, check dmesg -- and try re-seating the OTG"
-    echo "adapter itself, not just the peripheral: grounding ID is what starts"
-    echo "a session, and it is the TWL4030 PHY that sees it, not MUSB."
-    echo "NOTE: any 'Vbus on' above is transient -- with NOTHING attached at all"
-    echo "      the PHY runtime-suspends and the port goes dark again. An OTG"
-    echo "      adapter left plugged in holds it open; see B32."
+    echo "If one IS plugged in, check dmesg. Note that a hub or adapter left"
+    echo "attached does NOT revive a dead port -- measured, see B32 -- so there"
+    echo "is nothing to re-seat your way out of; a rebind is the remedy."
     exit 1
     ;;
   *)
