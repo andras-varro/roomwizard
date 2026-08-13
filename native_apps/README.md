@@ -159,18 +159,27 @@ All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seco
 holds a stale device handle: whenever a node appears, the app picks it up within seconds and no restart
 is needed.
 
-⚠️ **That covers the app layer only, and the layer below it needs a nudge.** Measured 2026-08-10: a
-device replugged **quickly** (~10 s) is re-enumerated and the rescan picks it up as advertised, but after
-a longer gap the MUSB port parks in `a_wait_bcon` and never notices the device arriving — so there is no
-node for the rescan to find. One sysfs write recovers it with no reboot:
+⚠️ **That covers the app layer only, and it cannot create a node that the kernel never made.** Measured
+2026-08-13 on `.188`: MUSB powers the port **only for a device that is attached when the driver probes**.
+Boot with the port empty and it stays unpowered for that whole boot — anything plugged in afterwards is
+never even given VBUS, so there is nothing for the rescan to find. Once the port *is* live, an
+unplug/replug re-enumerates normally (measured across a 95 s gap), and then the rescan works exactly as
+advertised.
+
+The only recovery reachable from userspace is a driver re-probe:
 
 ```sh
-echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode
+/etc/init.d/usb-host recover      # plug the device in FIRST, then run this
 ```
 
-Automating that write is [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) B32; the device-level detail
-is [`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb). Until it is automated, plug peripherals
-in **before** you power the unit, or issue the write above.
+⚠️ **Do not use `echo host > …/musb-hdrc.0.auto/mode`.** Earlier versions of this file recommended it. It
+is a **silent no-op** on this SoC — `omap2430_ops` has no `.set_mode`, so the store returns success having
+done nothing. `mode` is not a diagnostic here either; it reads `a_idle` with a pad enumerated and working.
+The reading that distinguishes a live port from a dead one is `$MUSB/vbus`.
+
+Detail: [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) B32 and
+[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb). Until B32 has an automatic fix, plug
+peripherals in **before** you power the unit, or run the `recover` command above.
 
 ### Input Configuration
 

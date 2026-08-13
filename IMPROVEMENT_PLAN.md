@@ -1711,13 +1711,16 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-⚠️ **Top of the list as of 2026-08-10: write
-[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s
-poll.** The bug is solved and the remedy is a single sysfs write proven on hardware; all that is missing is
-the ~8 lines that issue it. Decided shape: a loop in `device-files/usb-host` re-asserting `host` when
-`mode` reads `a_wait_bcon`, **enabled by default**, installed as a `usb`-group record in
-`device-files/provision-rules.conf`. Cheapest fix-to-payoff ratio open anywhere in this document — a USB
-peripheral currently has to be plugged in before power-on, which is a rule no player will follow.
+⚠️ **Top of the list as of 2026-08-13: run
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s hub
+test** (panel checklist item 8). The cause is established and there is **no automatic fix yet** — the one
+working remedy, `/etc/init.d/usb-host recover`, is a manual driver re-probe. A hub left permanently
+attached would satisfy the "some device present at probe" requirement at every boot and needs **no code at
+all**, so it is measured before anything is written. ⚠️ **An earlier version of this block asked for a poll
+re-asserting `host` when `mode` reads `a_wait_bcon`; both halves of that are refuted** — the write is a
+silent no-op and `mode` never reads `a_wait_bcon` here. Do not resurrect it. If the hub fails, the ranked
+fallbacks and their hazards are in B32; a USB peripheral currently has to be plugged in before power-on,
+which is a rule no player will follow.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its

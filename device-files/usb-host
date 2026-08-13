@@ -48,12 +48,38 @@ MUSB="/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto"
 MUSB_DEVICE="musb-hdrc.0.auto"
 MUSB_DRIVER="/sys/bus/platform/drivers/musb-hdrc"
 
+# Overridable only so usb_peripherals() is reachable from a host test with a
+# synthetic sysfs tree; on the device this is never set.
+USB_DEVICES_DIR="${USB_DEVICES_DIR:-/sys/bus/usb/devices}"
+
 vbus_state() {
     if [ -r "$MUSB/vbus" ]; then
         cat "$MUSB/vbus" 2>/dev/null
     else
         echo "unknown ($MUSB/vbus absent -- MUSB not bound)"
     fi
+}
+
+# Count enumerated NON-HUB devices on bus 1.
+#
+# ⚠️ Do NOT test `[ -d /sys/bus/usb/devices/1-1 ]` for this. 1-1 is whatever sits
+# on root-hub port 1 -- and with a hub left permanently attached (the candidate
+# fix in IMPROVEMENT_PLAN.md B32) that is the HUB. The old test therefore
+# reported "a device is attached" with no peripheral present at all, which would
+# have silently passed B32's own hub test. A hub is bDeviceClass 09; a pad is
+# not. Devices behind a hub are 1-1.N and counted here too.
+#
+# The root hub is `usb1`, outside the 1-* glob. `1-0:1.0` and friends are
+# interface directories, skipped on the colon.
+usb_peripherals() {
+    n=0
+    for d in "$USB_DEVICES_DIR"/1-*; do
+        [ -d "$d" ] || continue
+        case "${d##*/}" in *:*) continue ;; esac
+        [ "$(cat "$d/bDeviceClass" 2>/dev/null)" = "09" ] && continue
+        n=$((n + 1))
+    done
+    echo "$n"
 }
 
 case "$1" in
@@ -79,6 +105,10 @@ case "$1" in
     # THE reading that matters -- "Vbus off" means the port is unpowered and
     # nothing plugged into it will ever be seen until a rebind.
     echo "VBUS: $(vbus_state)"
+    # Counted separately from lsusb because a hub is not a peripheral: during
+    # B32's hub test the interesting question is "is anything there BESIDES the
+    # hub", and lsusb's line count cannot answer it at a glance.
+    echo "Non-hub devices: $(usb_peripherals)"
     ;;
   restart)
     # enable-usb-host.sh is idempotent, so restart just calls start
@@ -103,10 +133,10 @@ case "$1" in
     sleep 3
     echo "VBUS after:  $(vbus_state)"
     lsusb 2>/dev/null
-    if [ -d /sys/bus/usb/devices/1-1 ]; then
+    if [ "$(usb_peripherals)" -gt 0 ]; then
         echo "A device is attached and enumerated."
     else
-        echo "No device enumerated. If one is plugged in, check dmesg;"
+        echo "No non-hub device enumerated. If one is plugged in, check dmesg;"
         echo "if not, plug it in and run '$0 recover' again."
         echo "NOTE: 'Vbus on' above is transient -- with nothing attached the"
         echo "      port goes dark again within seconds. That is the bug, not a"

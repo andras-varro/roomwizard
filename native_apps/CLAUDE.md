@@ -698,13 +698,20 @@ process and only relaunching fixes it. Platformer was the one app of ten without
 same panel report. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
 
 ⚠️ **The rescan fixes a stale fd, not a dead port — and the two are complementary.** It re-`open()`s
-`/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one. Measured 2026-08-10:
-a device replugged within ~10 s is re-enumerated and this poll picks it up exactly as intended, but after
-a longer gap the MUSB port parks in `a_wait_bcon` and produces no node at all until something writes
-`host` to `.../musb-hdrc.0.auto/mode` (`../IMPROVEMENT_PLAN.md` B32,
-[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb)). So a full unplug-and-replug recovery needs
-**both** halves — the write to make the device enumerate, this poll to pick it up without a relaunch — and
-neither alone is enough. Do not read the 5 s poll as "unplug/replug recovers".
+`/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one. Measured 2026-08-13
+on `.188`: MUSB powers the port **only for a device attached at the moment the driver probes**, so a unit
+booted with an empty port has no node for this poll to find, for the rest of that boot. Once the port is
+live, an unplug/replug re-enumerates (measured across a 95 s gap) and this poll picks it up exactly as
+intended. So a recovery needs **both** halves — something to make the device enumerate, this poll to pick
+it up without a relaunch — and neither alone is enough. Do not read the 5 s poll as "unplug/replug
+recovers".
+
+⚠️ **Half one is a driver re-probe (`/etc/init.d/usb-host recover`), not a sysfs write.** An earlier
+version of this file named `echo host > .../musb-hdrc.0.auto/mode` as the write that recovers the port; it
+is a **silent no-op** (`omap2430_ops` has no `.set_mode`, so the store reports success having done
+nothing), and `a_wait_bcon` is inert on omap2430. Nor is `mode` diagnostic — it reads `a_idle` with a pad
+enumerated and a game responding. Use `$MUSB/vbus`. See `../IMPROVEMENT_PLAN.md` B32 and
+[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb) before building anything on this.
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way
