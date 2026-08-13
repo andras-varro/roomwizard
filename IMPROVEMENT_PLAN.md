@@ -38,8 +38,9 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 | 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
-| 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and it found the fix.** A 10 s gap recovers, a 60 s gap does not, and `echo host > …/musb-hdrc.0.auto/mode` recovers it with no reboot; confirmed working in the menu and in platformer | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
-| 8 | **Leave a USB hub permanently plugged in, boot, then plug a pad into the hub.** If it enumerates, B32 is fixed with no code: the bug is only that *some* device must be present when the driver probes, and a hub satisfies that at every boot. Read `$MUSB/vbus` after a few minutes with the pad out — `Vbus on` means the port stayed alive | ~3 min, no panel needed | nothing — the hub is the whole apparatus. [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and its conclusion was wrong.** It read as "a 10 s gap recovers, a 60 s gap does not, and `echo host > …/mode` fixes it". That write is a **silent no-op**, and on 2026-08-13 replug was measured working at 70, 75, 90, 120, 150, 180, 240 **and 300 s** once the port was alive. Gap length was never the variable | — | closed, superseded by [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 9 | **Tap Device Tools → USB → RESCAN on a dead port, with a pad attached.** Needs `commissioning/provision.sh <ip>` (or `usb_host/build-and-deploy.sh <ip>`) **first**, so the device has the retrying `recover`; then `deploy-all.sh <ip> native_apps`. Expect a "RE-PROBING USB CONTROLLER" screen for a few seconds, then the pad listed. ⚠️ Tap-by-tap, by a human: `/dev/uinput` does not exist, so this cannot be scripted past the first screen | ~5 min, panel needed | [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -208,50 +209,81 @@ territory and not something the rescan can settle.
 
 ### B32. USB is enumerated only at driver probe — cause established 2026-08-13, no automatic fix
 
-**The bug, in one line: a USB device is enumerated only if it is physically attached at the moment the
-`musb-hdrc` driver probes.** Boot with nothing plugged in and the port is dead for the rest of that boot;
-anything inserted afterwards is never even powered. The operator reports this has always been true on
-every unit — *"the USB only worked if it was connected at boot. If I connected after boot, I needed a
-reboot"* — which makes it considerably broader than the replug symptom this entry was opened for.
+> ⚠️ **The heading is imprecise and is kept only for its anchor** (six inbound links). "Only at driver
+> probe" is what three sessions believed; the measured position is below. Retitle it when there is a
+> reason to touch every link.
 
-**The mechanism is established and it is in the driver, not in our code.** VBUS is driven solely by the
-DEVCTL `SESSION` bit; `SESSION` is set by `musb_start()`; and `musb_start()`'s only host-mode caller is
-the root hub powering its port at probe. Nothing calls it a second time, and from `OTG_STATE_A_IDLE`
-with VBUS off no interrupt can arrive, because connect detection requires the controller to already be
-driving VBUS. Full trace, the `MUSB_QUIRK_A_DISCONNECT_19` path that drops the port, and the six
-readings that are **not** diagnostic:
-[`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb). **Read that before touching this.**
+**The symptom: a peripheral plugged in after boot is never powered, and no reboot-free remedy is
+reachable from the panel.** The operator reports this has always been true on every unit — *"the USB only
+worked if it was connected at boot. If I connected after boot, I needed a reboot"* — which makes it
+considerably broader than the replug symptom this entry was opened for.
 
-**What is shipped: `/etc/init.d/usb-host recover`, a driver re-probe.** It is the only userspace remedy
-measured to work. Plug the device in, run it, and it enumerates ~0.5 s later. ⚠️ **It is deliberately not
-on a timer** — with an empty port every rebind leaves the port dead again within seconds, so a poll would
-rebind forever and log four kernel lines each time.
+**What is measured, 2026-08-13 on `.188`, and what is only inferred — keep these apart.** Three sessions
+have now written an inferred mechanism here as fact and had it refuted; two of those mechanisms had a
+shipped fix built on them.
+
+| Measured | |
+|---|---|
+| Once the port is live, replug works at **70, 75, 90, 120, 150, 180, 240 and 300 s** | gap length was never the variable, contrary to this entry's original "10 s recovers, 60 s does not" |
+| `/etc/init.d/usb-host recover` (a driver rebind) revives a dead port, but has needed **two consecutive runs** both times it was measured | and the second measurement had **both** runs start from `Vbus off`, which rules out "VBUS was still valid at re-probe" as the general cause |
+| A passive hub on a dead port: `Vbus off` at 1, 2, 3 min and after; a device plugged into it enumerates nothing | **ID-ground alone does not revive a dead port.** Panel checklist item 8, closed failed |
+| Re-seating an OTG adapter revived a port that had been dark for minutes — but only on a port that had **already** had a session | the difference between these last two rows is the whole subtlety |
+
+**Source-supported, not yet verified on hardware.** From the vanilla tree, which is authoritative here:
+
+- The DTB declares `mode = <0x03>` (`usb_host/original.dts:3820`) = `MUSB_PORT_MODE_DUAL_ROLE`
+  (`musb_core.h:82-84`), while the kernel is built `# CONFIG_USB_GADGET is not set`
+  (`usb_host/device_config:3106`) and `musb_gadget.c` is not compiled. **Dual-role buys nothing this
+  kernel can use**, and it costs two things: `musb_host_setup()` claims host state only for
+  `MUSB_PORT_MODE_HOST` (`musb_host.c:2789-2793`), and `musb_start()` (`musb_core.c:1074-1080`) masks
+  `SESSION` off and only restores it when that clause is false or VBUS already reads invalid.
+- ID is watched by the **TWL4030 PMIC on its own interrupt line** (`phy-twl4030-usb.c:747`) reading an
+  always-powered `PM_MASTER` register (`:298-314`) — so it fires with the PHY asleep and VBUS off. But an
+  ID event **replays the cached DEVCTL** (`musb_core.c:2609-2610`), so on a cold port there is no
+  `SESSION` bit to resume. That is why the hub test failed.
+- Once a session exists it is never torn down: `omap2430_ops` has no `.try_idle`, so
+  `musb_platform_try_idle()` is a no-op and `SESSION` is never cleared. That is why replug works at any
+  gap.
+- **Hypothesis for the double-run, unverified:** `omap2430_musb_init()` replays the cached `glue->status`
+  at probe (`omap2430.c:312-313`) while `twl4030_phy_init()` re-derives ID about a second later, so the
+  first rebind teaches the glue layer the ID state and the second is the one that can use it at probe.
+
+Full trace and the readings that are **not** diagnostic: [`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb).
+
+**What is shipped.** `/etc/init.d/usb-host recover` — a rebind that now settles VBUS between unbind and
+bind and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub** device appears, and exiting
+non-zero on exhaustion. ⚠️ **Not on a timer**, and the reason is not only the wasted rebinds: nothing in
+software can distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port", so an
+operator who has just plugged something in holds the one bit no poll can obtain. That is why the trigger
+is a **button**. `device_tools` → USB → **RESCAN** now escalates to that script when a scan finds nothing.
+Both are **built and committed but unexercised on a panel** — checklist item 9.
 
 ⚠️ **A poll was written on 2026-08-13 and removed the same day.** It watched `$MUSB/mode` for
 `a_wait_bcon` and wrote `host`. Both halves are wrong on this SoC: `mode` reads `a_idle` in the *working*
 state and never reads `a_wait_bcon` here, and `omap2430_ops` has no `.set_mode`, so the write is a
-**silent no-op that returns success**. It was built on this entry's own recorded remedy, which had been
-measured once on `.225` and written down as fact. `tests/usb_poll_test.sh` went with it — 24 green cases
-over a mechanism that could not work, which is the sharpest available reminder that a passing suite
-tests the code and not the world.
+**silent no-op that returns success**. `tests/usb_poll_test.sh` went with it — 24 green cases over a
+mechanism that could not work, the sharpest available reminder that a passing suite tests the code and
+not the world.
 
-**The open question is how to fix it for a player**, who has no SSH prompt. Four candidates:
+**The open question is how to fix it properly.** Candidates, re-ranked after the hub test:
 
 | Candidate | Status |
 |---|---|
-| **A hub left permanently attached.** The requirement is only that *some* device be present at probe; a hub satisfies it, VBUS then never drops, and later plugs become ordinary hub-port events | **untested, and by far the cheapest — no code at all.** Hubs are known to work ([`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb)) and the operator has one. Try this first |
-| Rebind on a slow timer while `$MUSB/vbus` reads `Vbus off` | works by construction but rebinds forever on an idle unit — four `dmesg` lines per attempt, and first-plug latency equal to the cadence. A fallback, not a fix |
+| **Patch the DTB `mode` from 3 to 1** (`MUSB_PORT_MODE_HOST`), so `musb_start()` always sets `SESSION` and probe claims host state | **the leading candidate, and it addresses the cause rather than the symptom.** Gadget mode is not compiled, so nothing is lost. Same mechanism as the 500 mA `power` patch: one property rewritten in place in the appended DTB, no kernel source. ⚠️ `usb_host/patch_dtb.py` knows only `find_power_offset`, so this needs new code; `lib/rw-usbpower.sh` is the md5-gated, backed-up, verified, rolled-back p1 writer to extend. Needs a reboot |
+| **The RESCAN button** (shipped, unverified) | not a cause fix, but it is reachable by a player with no SSH prompt, and the tab's own hint text already promised it |
 | Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
-| debugfs `softconnect` | dead end. It sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, and this board sits in `a_idle` |
+| ~~A hub left permanently attached~~ | **ruled out 2026-08-13.** Measured not to work (table above), and rejected on the merits: an external bandage, one hub against five units |
+| ~~debugfs `softconnect`~~ | dead end. It sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, and a cold port sits in `a_idle` |
 
-**Not a fix, and worth stating because it was believed twice today:** neither `echo host > mode`, nor any
-value written to `$MUSB/vbus`, nor forbidding runtime PM via `power/control` does anything. All three
-were measured on `.188` and all three are explained by the source.
+**Not a fix, and worth stating because each was believed at some point today:** `echo host > mode` (silent
+no-op, no `.set_mode`), any value written to `$MUSB/vbus` (sets `a_wait_bcon`, which nothing on omap2430
+reads), forbidding runtime PM via `power/control` (measured with `runtime_status` active throughout), and
+`twl4030_usb/vbus` (0444, and it reads `off` while *we* drive VBUS — it reports `vbus_supplied`).
 
-**Still unverified:** whether `.225`'s original replug symptom and this one are the same bug. They were
-measured on different boards, and `.225` no longer exists as a unit — its digitizer is in `.188`. What
-`.188` shows is that a 95 s unplug and replug **works** (the disconnect is never processed, VBUS stays
-up), so the `.225` 60 s failure has no confirmed counterpart on current hardware.
+**Also corrected:** "from `A_IDLE` with VBUS off no interrupt can arrive" is wrong — it reasoned about
+connect detection and ignored the ID pin. And `musb_start()` has **three** call sites, not one
+(`musb_virthub.c:398`, `:461`; `musb_core.c:1977`), the hub one re-enterable at runtime through the port
+over-current path (`musb_core.c:711-713` → `hub.c:5079`).
 
 ### B3c. The touch dead band is measured on one unit only — open
 
@@ -1711,16 +1743,14 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-⚠️ **Top of the list as of 2026-08-13: run
-[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s hub
-test** (panel checklist item 8). The cause is established and there is **no automatic fix yet** — the one
-working remedy, `/etc/init.d/usb-host recover`, is a manual driver re-probe. A hub left permanently
-attached would satisfy the "some device present at probe" requirement at every boot and needs **no code at
-all**, so it is measured before anything is written. ⚠️ **An earlier version of this block asked for a poll
-re-asserting `host` when `mode` reads `a_wait_bcon`; both halves of that are refuted** — the write is a
-silent no-op and `mode` never reads `a_wait_bcon` here. Do not resurrect it. If the hub fails, the ranked
-fallbacks and their hazards are in B32; a USB peripheral currently has to be plugged in before power-on,
-which is a rule no player will follow.
+⚠️ **Top of the list as of 2026-08-13: verify the RESCAN button on a panel (checklist item 9), then decide
+the [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) DTB
+patch.** The hub workaround is **closed failed** — measured, and rejected on the merits. What is built and
+uncommitted-to-hardware is a `recover` that settles and retries, plus a Device Tools RESCAN button that
+forks it; neither has run on a device. The cause fix is one DTB word (`mode` 3 → 1) through the same
+patcher that already sets the 500 mA budget. ⚠️ **Two earlier versions of this block prescribed a poll —
+first re-asserting `host` on `a_wait_bcon`, then a hub — and both are refuted.** Read B32's measured/inferred
+split before proposing a third.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its

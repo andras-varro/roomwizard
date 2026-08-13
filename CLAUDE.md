@@ -46,10 +46,20 @@ being written into the docs as fact. Ten minutes in `drivers/usb/musb/` said whi
 **silent no-ops on this SoC** (`omap2430_ops` has no `.set_mode`; nothing reads `a_wait_bcon`) and named
 the real mechanism. **If a driver's sysfs surface is behaving inexplicably, read the driver.**
 
+⚠️ **A conclusion read out of the driver is still a hypothesis about the device, and B32 produced two
+false ones in one afternoon.** Both came from correct source reading applied one step too far. A code path
+that keeps VBUS up *given an established session* was written down as "leave an adapter plugged in and the
+port stays alive" — the operator refuted it in three minutes with a hub. A guard that skips the `SESSION`
+bit *when VBUS still reads valid* was written down as the cause of a failed rebind — the next transcript
+had VBUS off and the rebind still failed. **Check what the path you just read assumes about the state it
+starts in, and say "measured" or "inferred" in the sentence you write it down in.** `IMPROVEMENT_PLAN.md`
+B32 is now split into those two tables deliberately.
+
 ## Working style
 
 **Delegate the reading.** The docs are long by design and the sources are large (`device_tools.c` is
-2651 lines). Answering "where is X / which call sites do Y / does this pattern hold across all seven
+~3700 lines — do not trust a line count you are carrying from an earlier session, measure it).
+Answering "where is X / which call sites do Y / does this pattern hold across all seven
 games" by reading files into the main context burns the budget the actual edit and its verification
 need. Spin up subagents for that — one per independent question, in parallel — and keep only their
 conclusions. Do the edits, the build and the on-device verification in the main thread.
