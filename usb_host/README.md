@@ -476,7 +476,8 @@ publish any manifest entry whose basename matches `uImage*`.
 | insmod fails "Invalid module format" | Version mismatch | Use `insmod -f` (force) — `MODULE_FORCE_LOAD=y` allows this |
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
-| **Worked at boot, dead after a replug** | MUSB parks in `a_wait_bcon` after a clean disconnect and never sees the new device. Measured: a ~10 s replug recovers by itself, ~60 s does not | `echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode` — recovers in 0.26 s, no reboot. Detail `../SYSTEM_ANALYSIS.md#36-usb`; automating it is `../IMPROVEMENT_PLAN.md` B32 |
+| **Worked at boot, dead after a replug** | On `.188` a 95 s unplug/replug **works** — VBUS stays up and the disconnect is not processed until the device returns. The `.225` 60 s failure has no confirmed counterpart on current hardware | If it does happen: plug the device in, then `/etc/init.d/usb-host recover` (a driver re-probe). ⚠️ **`echo host > .../mode` is a silent no-op on this SoC** — `omap2430_ops` has no `.set_mode`. Detail `../SYSTEM_ANALYSIS.md#36-usb` |
+| **Nothing enumerates unless it was plugged in at boot** | THE bug. MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off | `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` B32 |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
 | Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
 

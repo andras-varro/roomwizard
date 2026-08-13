@@ -358,9 +358,17 @@ echo ""
 # The /dev/mem patch and the module loads are runtime state, so they can be done
 # immediately — which is what makes the dev loop one command. The p1 change is the
 # only part that needs a reboot.
+#
+# Go through the init script rather than straight to enable-usb-host.sh, so this
+# path and the boot path are the same code.
+#
+# ⚠️ If no device is plugged in RIGHT NOW, the port will be dead when you come
+# back to it — MUSB only powers the port when a device is present as the driver
+# probes (IMPROVEMENT_PLAN.md B32). Plug the device in, then run
+# `/etc/init.d/usb-host recover`.
 ts "[7/8] Enabling host mode and loading the modules now"
 ssh "$DEVICE" "/etc/init.d/xpad-modules start" || warn "module load reported a failure"
-ssh "$DEVICE" "/usr/local/bin/enable-usb-host.sh" || warn "enable-usb-host.sh reported a failure"
+ssh "$DEVICE" "/etc/init.d/usb-host start" || warn "usb-host start reported a failure"
 echo ""
 
 # ── 8. verify ───────────────────────────────────────────────────────────────
@@ -372,6 +380,17 @@ if [ -d /sys/bus/usb/devices/usb1 ]; then
     echo "  host mode: ACTIVE"
 else
     echo "  host mode: NOT ACTIVE"
+fi
+
+echo ""
+echo "--- VBUS (the reading that says whether the port is alive) ---"
+VB=/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/vbus
+if [ -r "$VB" ]; then
+    echo "  $(cat "$VB" 2>/dev/null)"
+    echo "  'Vbus off' means nothing plugged in later will be seen — plug the"
+    echo "  device in and run /etc/init.d/usb-host recover.  B32."
+else
+    echo "  unknown — MUSB not bound"
 fi
 
 echo ""

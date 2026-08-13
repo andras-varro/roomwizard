@@ -39,6 +39,13 @@ available (the repo's `usb_host/linux-4.14.52/` is vanilla upstream, missing bot
 panel driver), and requesting it from Steelcase is ruled out. Anything gated on a kernel config change
 is out of scope — `SYSTEM_ANALYSIS.md#7-kernel-policy`.
 
+⚠️ **But that vanilla tree is still the authority for every subsystem the vendor did not patch, and
+reading it beats theorising from sysfs.** B32 cost most of a session to three plausible mechanisms
+inferred from `/sys` — a mode write, an OTG timeout, runtime PM — all three refuted, two of them after
+being written into the docs as fact. Ten minutes in `drivers/usb/musb/` said which sysfs writes are
+**silent no-ops on this SoC** (`omap2430_ops` has no `.set_mode`; nothing reads `a_wait_bcon`) and named
+the real mechanism. **If a driver's sysfs surface is behaving inexplicably, read the driver.**
+
 ## Working style
 
 **Delegate the reading.** The docs are long by design and the sources are large (`device_tools.c` is
@@ -415,6 +422,7 @@ misparses.
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
+| the three **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
 | `usb_host/devmem_write.c`, `build-xpad-module.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
 
 When in doubt, over-deploy. The failure mode is silent.

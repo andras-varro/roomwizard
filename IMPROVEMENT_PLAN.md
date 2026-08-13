@@ -38,8 +38,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | ~~First boot of an offline-commissioned unit~~ — **done 2026-08-06.** Commissioned offline, booted first time, launcher grid, SSH, games, sound. Two findings came out of it: the backlight, since measured and **not** a defect ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)), and [F14](#f14-decide-whether-the-boot-progress-bar-comes-back--open) | — | closed |
 | 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
-| 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and it found the fix.** A 10 s gap recovers, a 60 s gap does not, and `echo host > …/musb-hdrc.0.auto/mode` recovers it with no reboot; confirmed working in the menu and in platformer | — | closed, see [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated) |
-| 8 | **After the B32 poll ships: boot a unit with nothing plugged in, leave it, then read `dmesg`.** Two answers at once — whether the poll spams the log on an idle empty port (tune a backoff if so, not a redesign), and whether plugging a pad in *afterwards* then works, which is the first-ever-hotplug case nobody has ever tried | ~2 min, no panel needed | the poll must be written and deployed first — [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated) |
+| 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and it found the fix.** A 10 s gap recovers, a 60 s gap does not, and `echo host > …/musb-hdrc.0.auto/mode` recovers it with no reboot; confirmed working in the menu and in platformer | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 8 | **Leave a USB hub permanently plugged in, boot, then plug a pad into the hub.** If it enumerates, B32 is fixed with no code: the bug is only that *some* device must be present when the driver probes, and a hub satisfies that at every boot. Read `$MUSB/vbus` after a few minutes with the pad out — `Vbus on` means the port stayed alive | ~3 min, no panel needed | nothing — the hub is the whole apparatus. [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -190,7 +190,7 @@ hit them:
    `RESCAN_INTERVAL_MS` poll the other nine use. Note this makes the *recovery* automatic **only from the
    node upwards**: the rescan re-`open()`s `/dev/input/event0..31` from scratch, so it finds a new node,
    but it cannot create one. Whether the kernel produces a node at all is
-   [B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated),
+   [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix),
    and there a slow replug produces none until the MUSB port is kicked. **The two are complementary, not
    redundant** — B32's write makes the device enumerate, this poll is what then picks it up without a
    relaunch — so a complete unplug-and-replug recovery needs both, and neither alone.
@@ -203,82 +203,55 @@ just disable it) and group D asserts the retained-coordinate trap. Build line is
 **Confirmed on `.225` 2026-08-10**, reported plainly rather than hedged: the hamburger menu was opened
 and RESUMEd repeatedly and kept responding, and the pad worked. So the host-proven fix reached the panel.
 What that run did **not** exercise is an unplug — the pad was present at power-on throughout, which is
-[B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated)'s
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s
 territory and not something the rescan can settle.
 
-### B32. A replugged USB device is never enumerated — cause and fix measured 2026-08-10, not yet automated
+### B32. USB is enumerated only at driver probe — cause established 2026-08-13, no automatic fix
 
-Reported off a unit 2026-08-10 with an Xbox pad: plugged in **before** power-on it works, but unplug it,
-wait, replug, and it never works again for the rest of that boot — a relaunch does not help, which is
-what separates it from
-[B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10). Fully
-measured on `.225` the same day, and **the remedy is one sysfs write**:
+**The bug, in one line: a USB device is enumerated only if it is physically attached at the moment the
+`musb-hdrc` driver probes.** Boot with nothing plugged in and the port is dead for the rest of that boot;
+anything inserted afterwards is never even powered. The operator reports this has always been true on
+every unit — *"the USB only worked if it was connected at boot. If I connected after boot, I needed a
+reboot"* — which makes it considerably broader than the replug symptom this entry was opened for.
 
-```sh
-echo host > /sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode
-```
+**The mechanism is established and it is in the driver, not in our code.** VBUS is driven solely by the
+DEVCTL `SESSION` bit; `SESSION` is set by `musb_start()`; and `musb_start()`'s only host-mode caller is
+the root hub powering its port at probe. Nothing calls it a second time, and from `OTG_STATE_A_IDLE`
+with VBUS off no interrupt can arrive, because connect detection requires the controller to already be
+driving VBUS. Full trace, the `MUSB_QUIRK_A_DISCONNECT_19` path that drops the port, and the six
+readings that are **not** diagnostic:
+[`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb). **Read that before touching this.**
 
-The pad enumerated 0.26 s later and the operator confirmed it working **in the launcher menu and in
-platformer**, which had been reporting *"No controller detected"*. So what is left here is not a
-diagnosis — it is deciding where that write lives.
+**What is shipped: `/etc/init.d/usb-host recover`, a driver re-probe.** It is the only userspace remedy
+measured to work. Plug the device in, run it, and it enumerates ~0.5 s later. ⚠️ **It is deliberately not
+on a timer** — with an empty port every rebind leaves the port dead again within seconds, so a poll would
+rebind forever and log four kernel lines each time.
 
-**The measurements, the `a_wait_bcon` mechanism, the fact that a redundant write is free, and the two
-readings that turned out not to be diagnostic are all device facts and live in
-[`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb)** — read that before touching this. The two
-findings that bear on the *design* are: a **10 s** replug recovers by itself while a **60 s** one does not,
-so this is a race with the state machine rather than "hotplug never works"; and re-asserting `host` while
-already `a_host` is a measured no-op, which is what makes an automatic fix safe.
+⚠️ **A poll was written on 2026-08-13 and removed the same day.** It watched `$MUSB/mode` for
+`a_wait_bcon` and wrote `host`. Both halves are wrong on this SoC: `mode` reads `a_idle` in the *working*
+state and never reads `a_wait_bcon` here, and `omap2430_ops` has no `.set_mode`, so the write is a
+**silent no-op that returns success**. It was built on this entry's own recorded remedy, which had been
+measured once on `.225` and written down as fact. `tests/usb_poll_test.sh` went with it — 24 green cases
+over a mechanism that could not work, which is the sharpest available reminder that a passing suite
+tests the code and not the world.
 
-**Decided 2026-08-10: a poll in the init script, enabled by default.** `device-files/usb-host` gains a
-loop — every few seconds, if `$MUSB/mode` reads `a_wait_bcon`, write `host` — installed as an ordinary
-`usb`-group record in `device-files/provision-rules.conf` and deployed by
-`commissioning/provision.sh` / `commissioning/commission-offline.sh`. **Not written yet.** The three
-rejected shapes and why:
+**The open question is how to fix it for a player**, who has no SSH prompt. Four candidates:
 
-| Rejected | Why not |
+| Candidate | Status |
 |---|---|
-| `hw_usb_reassert_host()` in `hardware.c`, called from the existing 5 s `gamepad_rescan()` | rides a poll that already exists and keeps sysfs behind `hardware.c` — but reaches **only** apps linking `gamepad.c`. ScummVM and `vnc_client` have their own input paths and would stay broken, and a USB keyboard is as much theirs as a pad is a game's |
-| A `recover` verb and nothing else | needs somebody at an SSH prompt. This bug's entire cost is a player's, and a player has no prompt. Worth adding *alongside* the poll, not instead of it |
-| Kick once per observed disconnect (watch `/sys/bus/usb/devices/1-1` disappear) | no timer traffic by construction, but it depends on the same unmeasured thing as the poll *and* adds state to get wrong. The poll is strictly simpler for the same coverage |
+| **A hub left permanently attached.** The requirement is only that *some* device be present at probe; a hub satisfies it, VBUS then never drops, and later plugs become ordinary hub-port events | **untested, and by far the cheapest — no code at all.** Hubs are known to work ([`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb)) and the operator has one. Try this first |
+| Rebind on a slow timer while `$MUSB/vbus` reads `Vbus off` | works by construction but rebinds forever on an idle unit — four `dmesg` lines per attempt, and first-plug latency equal to the cadence. A fallback, not a fix |
+| Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
+| debugfs `softconnect` | dead end. It sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, and this board sits in `a_idle` |
 
-⚠️ **Do not put the write in `enable-usb-host.sh`'s existing path.** That script's job is bringing the bus
-up from nothing — the `/dev/mem` struct patch plus a driver rebind — and its `usb1` guard
-(`device-files/enable-usb-host.sh:59-62`) is correct for that job. Re-asserting `mode` on a *running* bus
-is a different, far cheaper operation; conflating them means a recovery either drags the whole DMA patch
-along or forces the guard open for both.
+**Not a fix, and worth stating because it was believed twice today:** neither `echo host > mode`, nor any
+value written to `$MUSB/vbus`, nor forbidding runtime PM via `power/control` does anything. All three
+were measured on `.188` and all three are explained by the source.
 
-**Why enabled by default rather than behind a flag.** The first draft of this decision held the poll off
-until the empty-bus case below was measured. That was withdrawn on the operator's challenge, and rightly:
-the write is a **measured** no-op in `a_host`, and in the empty branch there is no device to disturb by
-definition, so the worst realistic outcome of being wrong is `dmesg` noise on an idle unit — not a brick,
-not data. A fix shipped switched off is not a fix, and this is a system-level capability rather than an
-experiment.
-
-**Likely covers a second symptom, unmeasured.** A device plugged into an **idle** port some time after
-boot faces the same `a_wait_bcon` state, so the poll should make first-ever hotplug work too. ⚠️ Stated as
-an expectation, not a measurement: every failure observed here was a **replug after a disconnect**, and a
-first-ever plug into an idle port was never tried. Do not write it down as fixed until someone boots a
-unit with nothing attached and then plugs a pad in.
-
-**One thing still to measure, now a verification rather than a gate:** repeated writes while **nothing** is
-attached. `a_wait_bcon` is both the stuck state *and* the ordinary empty-bus state, so `mode` alone cannot
-tell them apart and the poll will write on every tick with an empty port. The `a_host` case is measured
-free; the empty case is not. Settle it on the first unit that runs the poll — boot with nothing attached,
-leave it, then read `dmesg`. If it spams, add a backoff; that is a tuning change, not a redesign.
-
-**Workaround until it is written:** the write above, or plug the device in before powering the unit.
-
-Two things already in the tree assumed otherwise, and both are corrected as of this entry:
-
-1. **B31's `gamepad_rescan()` fix cannot recover from this.** `gamepad_rescan()`
-   (`native_apps/common/gamepad.c:492-503`) closes its fds and re-`open()`s `/dev/input/event0..31` from
-   scratch, so it *does* find a **new** node — but only one the kernel created. If the kernel never
-   re-enumerates, the 5 s poll finds nothing and input stays dead exactly as before. The rescan is still
-   right, and it is what makes recovery automatic once a node does come back; it is simply not a fix for
-   this, and the unplug half of panel checklist item 6 was written believing it was.
-2. **`native_apps/README.md`'s *USB Hotplug* section claimed hotplug worked unconditionally** — "will be
-   detected and usable within seconds — no restart needed". That is true of the app layer and false of
-   the device; rewritten 2026-08-10 to say which layer it describes.
+**Still unverified:** whether `.225`'s original replug symptom and this one are the same bug. They were
+measured on different boards, and `.225` no longer exists as a unit — its digitizer is in `.188`. What
+`.188` shows is that a 95 s unplug and replug **works** (the disconnect is never processed, VBUS stays
+up), so the `.225` 60 s failure has no confirmed counterpart on current hardware.
 
 ### B3c. The touch dead band is measured on one unit only — open
 
@@ -516,22 +489,27 @@ node is materially harder than the existing one-word power-budget patch and **ha
 Recovery if it misboots is a power cycle: `bootcmd` is hardcoded to the untouched `uImage-system`
 ([`#47-recovery`](SYSTEM_ANALYSIS.md#47-recovery)).
 
-**Staging — one module is enough to de-risk the whole thing, and it stays out of the socket until
-step 3:**
+**Staging.** ⚠️ **Rewritten 2026-08-13: the hardware situation changed and the old staging is spent.**
+There are now **three modules**, and **one is already seated** in a unit — so the ordering that existed
+to keep a single irreplaceable module out of a possibly-mis-muxed socket no longer buys anything, and
+step 4's "buy a second module" is done. What the change did *not* do is make the module's health known:
+`J5` pin 1 is a live 3.3 V rail regardless of UART3, so a reversed insertion has already had its effect.
 
-1. **Patch the DTB, module still out, and measure `J5` pin 3** (`DIN`, the SoC's TX). ~3.3 V means the
-   pinmux entry took effect; floating or low means it didn't. This is the cheapest possible proof of
-   the only genuinely unproven part, and it costs nothing if the patch is wrong.
-2. **Check the module label** for Series 1 vs Series 2 before reading any partial `AT` response as a
-   wiring fault.
-3. **Insert the module** and try `+++` then `ATID` at 57600 8N1. That validates the DTB patch, the
-   socket wiring *and* whether a decade-old module still works — three unknowns, one experiment, no
-   purchase.
-4. **Only then buy a second module** for the actual device-to-device link. Two are needed for
-   multiplayer; one is enough to prove everything else.
+1. **Patch the DTB and measure `J5` pin 3** (`DIN`, the SoC's TX). ~3.3 V means the pinmux entry took
+   effect; floating or low means it didn't. Still the cheapest proof of the only genuinely unproven
+   part, and it costs nothing if the patch is wrong. It can be done with a module in the socket — the
+   measurement is of the *board*.
+2. **Check the seated module's orientation against the pin-1 dot before powering the unit again**, and
+   read its label for Series 1 vs Series 2, so a partial `AT` response is not read as a wiring fault.
+3. **`+++` then `ATID` at 57600 8N1 on `ttyS2`.** That validates the DTB patch, the socket wiring *and*
+   whether a decade-old module still works — three unknowns, one experiment.
+4. **A silent module does not distinguish the three failure modes.** With two spares, swapping is now a
+   cheap control: a second module that is also silent points at the DTB or the wiring, one that answers
+   points at the first module. Do step 1 first anyway, because it separates board from module without
+   consuming anything.
 
-There is only one module and an XBee fed reversed dies instantly, which is why step 1 comes before
-step 3 and why the orientation was measured first.
+An XBee fed reversed dies instantly. That is why the orientation was measured before insertion, and it
+is now the leading explanation to *rule out* rather than a hazard to avoid.
 
 ### F6. Multi-touch via direct I2C — open
 
@@ -1187,9 +1165,13 @@ easily. Do not treat "get DMA working" as a prerequisite.
 
 **Bluetooth needs a USB dongle — there is no radio on the board.** No WiFi and no Bluetooth is fitted
 ([§2.4](SYSTEM_ANALYSIS.md#24-unpopulated-and-expansion)). The only radio site is `J5`/`J6`, an **XBee
-802.15.4** socket, empty in all three units, on UART3 which is `disabled` in the device tree — XBee is
-Zigbee and cannot host Bluetooth. And there is no second USB port and no footprint for one
+802.15.4** socket, empty in all three units as received, on UART3 which is `disabled` in the device tree
+— XBee is Zigbee and cannot host Bluetooth. And there is no second USB port and no footprint for one
 ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
+
+**A dongle is on hand as of 2026-08-13**, so this is no longer gated on a purchase. Its chipset is
+unrecorded and decides which module is needed: `btusb` covers most, but the `lsusb` vendor:product is
+the first thing to read, before any module is built.
 
 **The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
 as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
@@ -1730,7 +1712,7 @@ patching the appended DTB, which needs no kernel source.
 Deliberately not a ranking of everything — only the claims worth making.
 
 ⚠️ **Top of the list as of 2026-08-10: write
-[B32](#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated)'s
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s
 poll.** The bug is solved and the remedy is a single sysfs write proven on hardware; all that is missing is
 the ~8 lines that issue it. Decided shape: a loop in `device-files/usb-host` re-asserting `host` when
 `mode` reads `a_wait_bcon`, **enabled by default**, installed as a `usb`-group record in

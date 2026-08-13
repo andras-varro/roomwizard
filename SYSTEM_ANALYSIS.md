@@ -143,7 +143,7 @@ long-lived module stock, ordinary for a bonded touch assembly.)
 | `J2` | 8-pin white **FFC** | Touch controller flex — ⚠ release before separating the bezel |
 | `J3` | TE **MagJack `1-6605834-1`** RJ45 | Ethernet **and PoE power in** |
 | `J4` | **micro-USB** | The only USB connector (likely MUSB OTG) |
-| `J5`, `J6` | 1×10 sockets, 2 mm pitch, **empty** | XBee radio site — [see below](#24-unpopulated-and-expansion) |
+| `J5`, `J6` | 1×10 sockets, 2 mm pitch, **empty as shipped** | XBee radio site — [see below](#24-unpopulated-and-expansion) |
 | `J7`, `J8` | 5-pin white **JST** | Side LED status bars in the left/right case edges |
 | `P2` | Long fine-pitch 2-row, **unpopulated** | **Unknown** — the last unidentified footprint |
 | `P3` | 2×7, 0.1", **unpopulated** | **TI-14 JTAG** (high confidence) |
@@ -160,13 +160,21 @@ is why both appear together in bottom-side photos.
 
 ### 2.4 Unpopulated and expansion
 
-**`J5` + `J6` — an empty XBee socket.** Two 1×10 female strips at **2.0 mm pitch**, rows **~24 mm**
-apart: the Digi XBee footprint (2 mm pitch, 22.86 mm row spacing). `J5` carries a white **pin-1
-dot**, and the **metal inner bezel has a trapezoidal cut-out matching the XBee outline** — the
-chassis was tooled for this module. A real XBee test-fits perfectly. **No radio is fitted in any of
-three units**, so the batch shipped without the option; there is no antenna on the PCB because on
-an XBee the antenna is part of the module. Vendor software confirms the intent — see
+**`J5` + `J6` — the XBee socket, empty as shipped.** Two 1×10 female strips at **2.0 mm pitch**, rows
+**~24 mm** apart: the Digi XBee footprint (2 mm pitch, 22.86 mm row spacing). `J5` carries a white
+**pin-1 dot**, and the **metal inner bezel has a trapezoidal cut-out matching the XBee outline** — the
+chassis was tooled for this module. A real XBee test-fits perfectly. **No radio was fitted in any of
+the three units as received**, so the batch shipped without the option; there is no antenna on the PCB
+because on an XBee the antenna is part of the module. Vendor software confirms the intent — see
 [Serial ports](#312-serial-ports).
+
+⚠️ **One of our units now has a module seated in it** (reported 2026-08-13, fitted by hand). That is a
+fact about that unit, not about the design, and **nothing about it is verified**: not the orientation,
+not whether the module survived being powered, not whether it is Series 1 or Series 2. `J5` pin 1 is a
+live 3.3 V rail whatever UART3 does, so a reversed insertion is already a completed experiment. The
+staging that protected a single module is in
+[`IMPROVEMENT_PLAN.md` F5](IMPROVEMENT_PLAN.md#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open);
+two spare modules are on hand.
 
 **Pinout, partly measured 2026-07-30.** `J5` carries XBee pins **1–10** (pin 1 is the dotted end),
 `J6` carries **11–20**. Numbering runs down one strip and back up the other like a DIP, so pins 1
@@ -183,7 +191,8 @@ backwards.
 
 The electrical question is therefore settled; what is unproven is the DTB pinmux edit
 ([Serial ports](#312-serial-ports)). An XBee fed reversed dies instantly, which is why the
-orientation was measured before anything was inserted.
+orientation was measured before anything was inserted — and why, on the unit that now has one seated,
+the module's health is an open question rather than an assumption.
 
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 
@@ -1002,34 +1011,60 @@ input: HID 04d9:a088 as .../input4   (mouse)
 input: Microsoft X-Box 360 pad as .../input5
 ```
 
-⚠️ **Hotplug is unreliable after a slow unplug, and one sysfs write is the cure.** Measured on `.225`
-2026-08-10, with the same pad in one session:
+⚠️ **A device is enumerated only if it is attached when the MUSB driver probes.** Boot a unit with
+nothing plugged in and the port is dead for the rest of that boot — anything inserted afterwards is
+never even powered. Measured on `.188` 2026-08-13, reproducible on demand with a driver unbind/bind, and
+the operator reports it has always been so on every unit: *"USB only worked if it was connected at
+boot."* Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`:
 
 | Action | Result |
 |---|---|
-| attached at power-on | enumerates as part of the root hub's first scan, ~0.5 s after the bus registers |
-| unplug, **10 s**, replug | **works.** `dmesg` shows `musb_stage0_irq 898: unhandled DISCONNECT transition (a_idle)` at the unplug and does not process the disconnect until the device returns |
-| unplug, **60 s**, replug | **fails silently.** A clean `usb 1-1: USB disconnect` at the unplug, then **no log line at all** for the replug. VBUS is still present — the device's own LED lights normally |
-| `echo host > $MUSB/mode` | **recovers, no reboot.** Enumerates 0.26 s later |
+| device attached as the driver probes (boot, or a rebind) | **works.** `Vbus on`, enumerates ~0.5 s later |
+| driver probes with **nothing** attached | `Vbus on` for a few seconds, then **`Vbus off`** and the port is dead. The OTG adapter alone does not prevent this — measured with the adapter in and no device in it |
+| plug a device into that dead port | **nothing at all.** No log line, no VBUS, the device's own LED stays dark |
+| unplug a working device, wait 95 s, replug | **works.** `Vbus on` throughout; `dmesg` shows `unhandled DISCONNECT transition (a_idle)` and the disconnect is not processed until the device returns |
+| driver unbind + bind with the device attached | **the only userspace recovery found.** Enumerates ~0.5 s later |
 
-where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`.
+**`$MUSB/vbus` is the diagnostic — `Vbus on` live, `Vbus off` dead.** Its on/off half is a real read of
+the DEVCTL VBUS comparator, not cached state.
 
-**The state to read is `$MUSB/mode`.** In the stuck condition it reports **`a_wait_bcon`** — *"A-device
-waiting for B-device connect"* — with a powered device physically attached and not enumerated; writing
-`host` moves it to `a_host` and enumeration follows. **A redundant write is free**: issued while already
-`a_host` with a working device it leaves the mode, the device number and the event nodes untouched and
-logs nothing.
+**Why, read out of the 4.14.52 source** in [`usb_host/linux-4.14.52/`](usb_host/linux-4.14.52/) — vanilla
+upstream, and authoritative for this code because none of it is vendor-patched:
 
-Two neighbouring readings are **not** diagnostic, and both cost time before being controlled:
+- VBUS here is driven **solely by the DEVCTL `SESSION` bit**. `twl4030` registers no `set_vbus` op, so
+  `otg_set_vbus()` returns `-ENOTSUPP` and `omap2430_musb_set_vbus()` does nothing.
+- `SESSION` is set by `musb_start()`, whose **only** host-mode caller is the root hub powering its port
+  at probe (`musb_virthub.c`, `SetPortFeature(POWER)`). **Nothing calls it a second time** — which is
+  exactly why a re-probe is the only way back.
+- With no device connected, `musb_pm_runtime_check_session()` matches `MUSB_QUIRK_A_DISCONNECT_19` and
+  after 3×1000 ms polls drops its pm_runtime reference. With a device present the HM bit is set, the
+  quirk misses, and the reference is **never** dropped — which is why a live port stays live
+  indefinitely, including across an unplug.
+- From `OTG_STATE_A_IDLE` with VBUS off nothing can recover it in kernel: no PHY event (plugging a
+  *peripheral* in changes neither `VBUS_PRES` nor `ID_PRES`) and no MUSB interrupt, because connect
+  detection needs the controller to already be driving VBUS.
 
-| Reading | Why it tells you nothing |
+⚠️ **Six readings and writes that look like the answer and are not.** Three of these were believed and
+written down before being refuted — one of them in this document.
+
+| Looks like | Actually |
 |---|---|
-| `twl4030-usb/vbus` = `off` | reads `off` in the working state **and** the stuck one — in host mode the PHY senses no *externally* supplied VBUS. Its disagreement with `$MUSB/vbus`'s `Vbus on` is normal |
+| `echo host > $MUSB/mode` | **silent no-op.** `omap2430_ops` has no `.set_mode`, so `musb_platform_set_mode()` returns 0 and the store reports success having done nothing. ⚠️ This section previously recorded it as *the* cure for a failed replug on the strength of one `.225` observation. The source refutes it: whatever recovered that unit, it was not this write |
+| `$MUSB/vbus`'s `timeout 1100 msec` | **inert.** Nothing on omap2430 reads `musb->a_wait_bcon` — there is no `.try_idle` — so it is an untouched default from `allocate_instance()`. Writing `0` or `3600000` changes the printed number and nothing else |
+| `power/control = on` (forbidding runtime PM) | **does not prevent the drop.** Measured with `runtime_status` reading `active` throughout and the port still going dark |
+| `$MUSB/mode` as a state reading | **not diagnostic.** Reads `a_idle` with a pad enumerated, `js0` present and the game responding to it |
+| `twl4030-usb/vbus` = `off` | reads `off` in the working state **and** the dead one — in host mode the PHY senses no *externally* supplied VBUS |
 | `lsmod` → `xpad 28672 0` | a module refcount counts module *users* (`ff_memless 16384 1 xpad`), not bound devices. It reads `0` with a pad bound and `event1`/`js0` present |
 
-A powered hub does **not** help this symptom; the device is already powered. Automating the write is
-[`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-a-replugged-usb-device-is-never-enumerated--cause-and-fix-measured-2026-08-10-not-yet-automated).
+A powered hub does not help a *replug* — the device is already powered. Whether a hub left
+**permanently attached** fixes the real bug, by being the device that is present at every probe, is
+untested and is the cheapest open candidate:
+[`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix).
 
+**`/etc/init.d/usb-host recover`** does the rebind, prints VBUS before and after, and says whether
+anything enumerated. Plug the device in **first**. ⚠️ It is deliberately not on a timer: with an empty
+port every rebind leaves the port dead again within seconds, so a poll would rebind forever and log four
+kernel lines each time.
 Full technical detail, including MUSB memory addresses, the `omap2430_ops` struct layout, why
 `mmap()` works where `write()` does not, and the approaches that failed:
 [`usb_host/README.md`](usb_host/README.md).
