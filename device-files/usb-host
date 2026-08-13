@@ -14,30 +14,68 @@
 # The kernel reloads with original (broken) struct values on each boot,
 # so this script re-applies the runtime patch every time.
 #
-# ── The one thing that recovers a dead port: `recover` ──────────────────────
+# ── Why the port dies, and what actually revives it ─────────────────────────
 #
-# A USB device is enumerated if it is attached when the driver probes. Boot with
-# nothing attached and VBUS collapses a few seconds later, and a peripheral
-# plugged in afterwards is not powered. Measured on .188 2026-08-13.
-# IMPROVEMENT_PLAN.md B32.
+# Traced through drivers/usb/musb/ and drivers/phy/ti/ in the vanilla 4.14.52
+# tree, and consistent with every measurement on .188 2026-08-13.
+# IMPROVEMENT_PLAN.md B32, SYSTEM_ANALYSIS.md#36-usb.
 #
-# A driver unbind+bind recovers it, because musb_start() -- the path that sets
-# the DEVCTL SESSION bit that drives VBUS -- runs when the root hub powers its
-# port at probe. `recover` does that rebind, retrying (see below).
+# THE ROOT CAUSE IS ONE DTB WORD: this board declares `mode = <0x03>` on the
+# musb node (MUSB_PORT_MODE_DUAL_ROLE, musb_core.h:82-84), while the kernel is
+# built with `# CONFIG_USB_GADGET is not set`. So dual-role buys NOTHING that
+# this kernel can use, and it costs two things:
 #
-# ⚠️ BUT "only at probe" IS NOT THE WHOLE CAUSE, and this file no longer claims
-# it is. Measured on .188 2026-08-13, after the above: with the port dark for
-# 3-5 minutes and everything unplugged, RE-SEATING THE OTG ADAPTER woke it --
-# no rebind, no sysfs write, no reboot. A gamepad plugged into it 10 s later
-# enumerated immediately. So a session can start from something other than a
-# probe, and the earlier claim that "from A_IDLE with VBUS off no interrupt can
-# arrive" is wrong: it accounted for connect detection only and ignored the
-# OTG ID pin, which on this board is watched by the TWL4030 PHY rather than by
-# MUSB. The exact path is being traced in usb_host/linux-4.14.52/; until it is,
-# treat the adapter re-seat as a measurement and not yet as a mechanism.
+#   1. musb_host_setup() only claims default_a/A_IDLE for MUSB_PORT_MODE_HOST
+#      (musb_host.c:2789-2793), so probe leaves the controller in B_IDLE.
+#   2. musb_start()'s guard (musb_core.c:1074-1080) skips setting DEVCTL SESSION
+#      whenever port_mode != HOST and VBUS still reads valid -- see `recover`.
 #
-# ⚠️ THREE THINGS THAT LOOK LIKE FIXES AND ARE NOT. All three were measured or
-# read out of drivers/usb/musb/ in 4.14.52; do not re-derive them:
+# WHAT KEEPS THE PORT ALIVE IS THE OTG ID PIN, not a device at probe. The
+# TWL4030 PMIC watches ID on its OWN interrupt line (phy-twl4030-usb.c:747), in
+# an always-powered PM_MASTER register (STS_HW_CONDITIONS, :298-314) -- so it
+# fires with the PHY asleep, MUSB in standby, and VBUS off. Grounding ID (any
+# OTG adapter does this) powers the PHY and resumes MUSB, and the resume replays
+# the cached DEVCTL SESSION bit (musb_core.c:2609-2610). That is a session,
+# with no probe and no rebind involved. Measured: a port dark for 3-5 minutes
+# came back the instant the OTG adapter was re-seated.
+#
+# ⚠️ THEREFORE: LEAVING AN OTG ADAPTER PLUGGED IN KEEPS THE PORT OPEN, and
+# peripherals can then be hot-plugged into it freely. The only thing that turns
+# VBUS off in normal operation is the TWL PHY runtime-suspending, and the
+# ID-ground cable_present reference holds that off (phy-twl4030-usb.c:398-410);
+# nothing clears SESSION, because omap2430_ops has no .try_idle so
+# musb_platform_try_idle() is a no-op. A hub is NOT required for this -- the PHY
+# cannot see a descriptor, only two bits of ID/VBUS state, so a passive adapter
+# and a powered hub are indistinguishable to it.
+#
+# ⚠️ AND THE EARLIER CLAIM THAT "FROM A_IDLE WITH VBUS OFF NO INTERRUPT CAN
+# ARRIVE" IS WRONG. It reasoned about connect detection only and ignored the ID
+# pin. musb_start() also has three call sites, not one (musb_virthub.c:398,
+# :461; musb_core.c:1977 babble recovery), and the hub one is re-enterable at
+# runtime via the port-over-current path (musb_core.c:711-713 -> hub.c:5079).
+#
+# ⚠️ FOUR THINGS THAT LOOK LIKE FIXES AND ARE NOT. All read out of the source;
+# do not re-derive them:
+#
+#   echo host > $MUSB/mode   omap2430_ops has no .set_mode, so
+#                            musb_platform_set_mode() returns 0 and the store
+#                            reports SUCCESS having done nothing. Silent no-op.
+#   echo N > $MUSB/vbus      sets musb->a_wait_bcon, which NOTHING on omap2430
+#                            reads (no .try_idle). The "timeout 1100 msec" in
+#                            its output is an untouched default.
+#   power/control = on       forbidding runtime PM does not prevent the drop;
+#                            measured with runtime_status active throughout.
+#   twl4030_usb/vbus         read-only (0444), and it reads "off" while WE drive
+#                            VBUS -- it reports vbus_supplied, i.e. somebody
+#                            feeding US. Not a trigger and not a port state.
+#
+# The one real userspace trigger besides a rebind is debugfs `softconnect`
+# (musb_debugfs.c:301-343), which sets SESSION -- but only in A_WAIT_BCON, so it
+# cannot revive a port sitting in A_IDLE.
+#
+# ⚠️ AND `mode` IS NOT A DIAGNOSTIC. It reads a_idle with a pad enumerated and
+# working. The state that distinguishes a live port from a dead one is
+# $MUSB/vbus: "Vbus on" vs "Vbus off".
 #
 #   echo host > $MUSB/mode   omap2430_ops has no .set_mode, so
 #                            musb_platform_set_mode() returns 0 and the store
@@ -148,18 +186,47 @@ case "$1" in
     # either way and no connect interrupt can arrive in either. An operator who
     # has just plugged something in holds the one bit no poll can obtain, which
     # is why this is a command and not a daemon.
+    # ⚠️ THE UNBIND AND THE BIND MUST BE SEPARATED BY A DELAY, and that delay is
+    # the whole reason one rebind used to fail. Traced to musb_start(),
+    # drivers/usb/musb/musb_core.c:1074-1080 in 4.14.52:
+    #
+    #     devctl &= ~MUSB_DEVCTL_SESSION;
+    #     if (musb->port_mode != MUSB_PORT_MODE_HOST &&
+    #             musb->xceiv->otg->state != OTG_STATE_A_WAIT_BCON &&
+    #             (devctl & MUSB_DEVCTL_VBUS) == MUSB_DEVCTL_VBUS) {
+    #             musb->is_active = 1;
+    #     } else {
+    #             devctl |= MUSB_DEVCTL_SESSION;
+    #     }
+    #
+    # This board's DTB says `mode = <0x03>` (MUSB_PORT_MODE_DUAL_ROLE, musb_core.h
+    # :82-84), so the first clause is TRUE. If VBUS still reads above VBusValid
+    # when the driver re-probes, SESSION is left CLEARED and the root hub's
+    # port-power never starts a session -- the bind "succeeds" and enumerates
+    # nothing. Bind with VBUS already decayed and SESSION is set and it works.
+    #
+    # That is exactly the measured asymmetry: attempt 1 from `Vbus on` failed,
+    # attempt 2 from `Vbus off` succeeded. The first attempt was not a flake, it
+    # was the thing that dropped VBUS for the second. So: settle between the two
+    # writes rather than rebind twice and hope.
+    #
+    # $MUSB/vbus cannot be polled in the gap -- it is an attribute of the bound
+    # driver and disappears with it -- hence a fixed settle, with the retry below
+    # as the backstop for a slower decay than measured.
     if [ ! -d "$MUSB_DRIVER" ]; then
         echo "ERROR: $MUSB_DRIVER absent -- the musb-hdrc driver is not loaded."
         exit 1
     fi
 
     tries="${RECOVER_TRIES:-3}"
+    settle="${RECOVER_SETTLE:-2}"
     attempt=1
     while [ "$attempt" -le "$tries" ]; do
         echo "--- attempt $attempt of $tries"
         echo "VBUS before: $(vbus_state)"
-        echo "Re-probing $MUSB_DEVICE..."
+        echo "Unbinding $MUSB_DEVICE, letting VBUS decay ${settle}s, rebinding..."
         echo "$MUSB_DEVICE" > "$MUSB_DRIVER/unbind" 2>/dev/null
+        sleep "$settle"
         echo "$MUSB_DEVICE" > "$MUSB_DRIVER/bind" 2>/dev/null
         sleep 3
         echo "VBUS after:  $(vbus_state)"
@@ -174,11 +241,11 @@ case "$1" in
     lsusb 2>/dev/null
     echo "No non-hub device enumerated after $tries attempt(s)."
     echo "If one IS plugged in, check dmesg -- and try re-seating the OTG"
-    echo "adapter itself, not just the peripheral: on .188 that woke a port"
-    echo "which had been dark for minutes, with no rebind at all."
-    echo "NOTE: any 'Vbus on' above is transient -- with nothing attached the"
-    echo "      port goes dark again within seconds. That is the bug, not a"
-    echo "      failure of this command."
+    echo "adapter itself, not just the peripheral: grounding ID is what starts"
+    echo "a session, and it is the TWL4030 PHY that sees it, not MUSB."
+    echo "NOTE: any 'Vbus on' above is transient -- with NOTHING attached at all"
+    echo "      the PHY runtime-suspends and the port goes dark again. An OTG"
+    echo "      adapter left plugged in holds it open; see B32."
     exit 1
     ;;
   *)
