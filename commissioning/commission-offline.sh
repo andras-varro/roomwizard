@@ -174,9 +174,9 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      ways. --no-usb implies this.
   --usb-mode         ALSO patch the MUSB 'mode' property from 3 (DUAL_ROLE) to 1
                      (HOST), so the port comes up live on a boot with an empty
-                     socket instead of needing RESCAN. UNVERIFIED ON HARDWARE —
-                     IMPROVEMENT_PLAN.md B32 item 10 is the measurement that
-                     decides it, so this is opt-in. Undo: uImage-system.vendor.
+                     socket instead of needing RESCAN. MEASURED NOT TO WORK —
+                     IMPROVEMENT_PLAN.md B32 item 10, closed FAILED on .188
+                     2026-08-14. Revert: re-run without --usb-mode.
   --help
 
 The card is identified by CONTENT and by PARTITION POSITION, never by UUID.

@@ -129,13 +129,15 @@ The patch is:
 - **Reversible** — a backup (`uImage-system.vendor`) is created before patching
 - **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
 
-⚠️ **`--usb-mode` is a second, opt-in p1 patch** (2026-08-14): it also sets the `usb_otg_hs` node's
-`mode` from 3 (`DUAL_ROLE`) to 1 (`HOST`), which is the candidate *cause* fix for "nothing enumerates
-unless it was plugged in at boot". It is **unverified on hardware** — `../IMPROVEMENT_PLAN.md` B32 panel
-item 10 is the measurement that decides it — so a default run still lands the power-only image. The
-three states are gated on three measured md5s in `../lib/rw-usbpower.sh`, a transition always re-derives
-from `uImage-system.vendor` rather than chaining, and omitting `--usb-mode` on a mode-patched unit
-re-derives it back down: that is the undo.
+⚠️ **`--usb-mode` is a second, opt-in p1 patch, and it was MEASURED NOT TO WORK** (2026-08-14): it also
+sets the `usb_otg_hs` node's `mode` from 3 (`DUAL_ROLE`) to 1 (`HOST`), which was the candidate *cause*
+fix for "nothing enumerates unless it was plugged in at boot". Applied to `.188`'s p1, verified live in
+the booted device tree, unit booted normally — and a pad plugged in after a boot with an empty socket
+still stayed dark, while `/etc/init.d/usb-host recover` on the same firmware brought it up on the first
+attempt. `../IMPROVEMENT_PLAN.md` B32 panel item 10, closed **failed**. The flag stays as the way to
+reproduce that measurement; the three states are gated on three measured md5s in `../lib/rw-usbpower.sh`,
+a transition always re-derives from `uImage-system.vendor` rather than chaining, and omitting
+`--usb-mode` on a mode-patched unit re-derives it back down: that is the revert.
 
 #### DTB Location in uImage
 

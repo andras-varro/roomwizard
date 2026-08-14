@@ -41,7 +41,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and its conclusion was wrong.** It read as "a 10 s gap recovers, a 60 s gap does not, and `echo host > …/mode` fixes it". That write is a **silent no-op**, and on 2026-08-13 replug was measured working at 70, 75, 90, 120, 150, 180, 240 **and 300 s** once the port was alive. Gap length was never the variable | — | closed, superseded by [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 9 | ~~Tap Device Tools → USB → RESCAN on a dead port, with a pad attached~~ — **done 2026-08-14 on `.188`, and it PASSED on the first tap.** Pre-state measured with the pad attached and dark: `Vbus off`, `mode a_idle`, `/sys/bus/usb/devices` = `usb1` + `1-0:1.0` only. One tap → "RE-PROBING USB CONTROLLER" for ~5 s → `1-1` + `1-1:1.0`, `Vbus on`, `event1` + `js0`, pad lit blue, listed as `GAMEPAD Microsoft X-Box 360 pad`, and Pong played with it | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
-| 10 | **Boot a `mode = <1>`-patched unit with the USB socket EMPTY, then plug a pad in.** The one measurement that decides [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix): does the pad enumerate on its own, with no RESCAN and no rebind? Also check a pad attached *at* boot still works, and that the unit boots at all. **Nothing blocks this any more** (2026-08-14): `cd usb_host && ./build-and-deploy.sh <ip> --usb-mode` writes p1, or `RW_USBPOWER_WITH_MODE=1 rw_usbpower_apply_ssh` does it alone. Undo in place: ask for the power-only image again (`--usb-mode` omitted re-derives downward), or copy `uImage-system.vendor` over `uImage-system` on p1 | one reboot + 2 taps, panel needed | [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 10 | ~~Boot a `mode = <1>`-patched unit with the USB socket EMPTY, then plug a pad in~~ — **done 2026-08-14 on `.188`, and it FAILED.** The patch was live in the booted tree (`/sys/firmware/devicetree/base/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 01`, `power` = `00 00 00 fa`) and the unit booted normally. A pad plugged in afterwards stayed **dark**: `Vbus off`, `mode a_idle`, no `1-1`, no pad in `/proc/bus/input/devices`, at t+0 and t+10 s. Negative control: `/etc/init.d/usb-host recover` then brought it up on **attempt 1**, so the pad, the cable and the RESCAN remedy are all fine on this firmware | — | closed **failed**, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -274,7 +274,7 @@ not the world.
 
 | Candidate | Status |
 |---|---|
-| **Patch the DTB `mode` from 3 to 1** (`MUSB_PORT_MODE_HOST`), so `musb_start()` always sets `SESSION` and probe claims host state | **the leading candidate, and it addresses the cause rather than the symptom.** Gadget mode is not compiled, so nothing is lost. Same mechanism as the 500 mA `power` patch: one property rewritten in place in the appended DTB, no kernel source. **Host tooling and the p1 writer are both DONE 2026-08-14** — see below. What remains is one reboot behind `--usb-mode`, i.e. panel item 10 |
+| ~~**Patch the DTB `mode` from 3 to 1**~~ (`MUSB_PORT_MODE_HOST`) | **REFUTED on hardware 2026-08-14, panel item 10 — closed failed.** Written to `.188`'s p1, verified live in the booted tree (`mode` = `00 00 00 01`), unit booted normally — and a pad plugged in after a boot with an empty socket stayed **dark**: `Vbus off`, `a_idle`, no `1-1`. So `musb_start()` setting `SESSION` unconditionally in HOST mode is **not sufficient** to bring up a port that probed with nothing attached. ⚠️ **Inference, one sentence and no further:** at probe with an empty socket there is no ID-ground event to act on, and the mode value does not manufacture one. The tooling and the p1 writer are sound and stay — `--usb-mode` is now a *measured-negative* option, not a candidate fix |
 | **The RESCAN button** (shipped, **verified on a panel 2026-08-14**) | not a cause fix — it is a remedy the player can reach without SSH, and the tab's own hint text already promised it. One tap, ~5 s, dead port → playable pad |
 | Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
 | ~~A hub left permanently attached~~ | **ruled out 2026-08-13.** Measured not to work (table above), and rejected on the merits: an external bandage, one hub against five units |
@@ -334,8 +334,37 @@ and reporting "not caught" for the wrong reason. Sabotage 1's minimum dropped **
 empty-argument guard legitimately makes B7/B8 pass under it; the surviving five were read from a run of
 that sabotage alone rather than inferred from the total.
 
-⚠️ **What is NOT done: nothing has been written to p1 and nothing has been rebooted.** Item 10 below is
-the measurement that decides this entry, and it needs an operator at the panel.
+⚠️ **The mode patch was applied and it does NOT work — measured on `.188`, 2026-08-14, panel item 10
+closed failed.** p1 was written with `--usb-mode` and verified by re-reading the card
+(`90219232…`); the booted kernel's own tree read `mode` = `00 00 00 01` and `power` = `00 00 00 fa`, so
+the patch was genuinely live; the unit booted normally with no regression. Then, with the socket empty
+at boot, a pad plugged in afterwards stayed **dark** — `Vbus off`, `mode a_idle`, no `1-1`, no pad in
+`/proc/bus/input/devices`, read at t+0 and again at t+10 s.
+
+**The negative control is what makes that a verdict rather than a puzzle:** `/etc/init.d/usb-host
+recover` on the same firmware, same pad, same cable, brought it up on **attempt 1** — `Vbus on`, `1-1`,
+`Microsoft X-Box 360 pad`. The pad works, the port works, the shipped remedy works. What does not work
+is `mode = <1>` as a *cause* fix.
+
+**One observation, explicitly not a claim:** that `recover` succeeded on attempt **1**, where both
+earlier manual measurements on the power-only firmware needed **two** consecutive runs. n = 1, on a
+different day and a different boot, and `recover`'s own 3-try loop makes a single tap a weak instrument
+for counting rebinds (item 9 says the same). If anyone wants this, it needs repeated boot-empty → plug →
+`recover` cycles on **both** firmwares, one reboot each — and it is a small prize.
+
+**What the refutation costs and what it does not.** The p1 writer, the three-state gate, `--usb-mode`,
+`patch_dtb.py --mode`, `verify_uimage.py --expect-mode` and the 155-case suite are all sound and stay;
+`--usb-mode` is now a **measured-negative option** rather than a candidate fix, kept because it is the
+only way to reproduce this measurement and because reverting is an ordinary run with the flag omitted.
+The refuted claim is the *inference* — that `musb_start()` masking `SESSION` off for non-HOST modes was
+what kept a cold port dark. It is the **third** mechanism read out of this driver and refuted on
+hardware. ⚠️ **Whatever the next candidate is, it must explain how a port that probed with an EMPTY
+socket ever obtains a session**, because that is the state every failed measurement has started from.
+
+**Where that leaves B32: the RESCAN button is the answer, and it is verified.** No cause fix is known,
+three are refuted, and the remedy a player can reach in one tap works. Treat "nothing enumerates unless
+it was plugged in at boot" as a **standing property of this hardware with a working one-tap remedy**,
+not as an open bug awaiting a fourth theory.
 
 **Not a fix, and worth stating because each was believed at some point today:** `echo host > mode` (silent
 no-op, no `.set_mode`), any value written to `$MUSB/vbus` (sets `a_wait_bcon`, which nothing on omap2430
@@ -1805,25 +1834,18 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-⚠️ **Top of the list as of 2026-08-14: panel checklist item 10 — boot `.188` with the USB socket EMPTY
-after writing the `mode = <1>` image, and see whether a pad plugged in afterwards enumerates on its
-own.** That single measurement decides
-[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix), and
-**everything host-side is done**: `uimage.py`'s locator is parameterised, `patch_dtb.py --mode` patches
-both properties in one pass, `verify_uimage.py --expect-mode` judges it, and `lib/rw-usbpower.sh` now
-gates on **three** measured md5s with the target chosen by the caller — `--usb-mode` on all three
-callers, opt-in until item 10 passes. 155/155, seven of seven sabotages caught, and dry-run against
-`.188` for real. ⚠️ **The trap that gate exists to close, in case it is ever reopened:** the old
-two-element md5 set plus an early return at the `patched` arm meant a mode patch on an
-already-commissioned unit would have written nothing and reported success. Never chain one patch onto
-another either — `patch_dtb.py` refuses an already-patched input, so a transition derives from
-`uImage-system.vendor`, which is also what makes the undo an ordinary run with `--usb-mode` omitted.
-The panel-reachable remedy is already **verified** —
-item 9 passed on `.188` on 2026-08-14, one tap on a dead port bringing a dark pad up in ~5 s — so USB is
-no longer unusable after a boot with an empty socket, and this patch is a *cause* fix rather than a
-rescue. The hub workaround is **closed failed** — measured, and rejected on the merits. ⚠️ **Two earlier
-versions of this block prescribed a poll — first re-asserting `host` on `a_wait_bcon`, then a hub — and
-both are refuted.** Read B32's measured/inferred split before proposing a third.
+⚠️ **B32 is not the place to start any more, and that is a result rather than a gap.** The `mode` 3 → 1
+patch — the leading candidate for three sessions — was written to `.188`'s p1 on 2026-08-14, verified
+live in the booted device tree, and **refuted**: a pad plugged in after a boot with an empty socket
+stayed dark, while `/etc/init.d/usb-host recover` on the same firmware and the same pad brought it up on
+the first attempt. That is the **third** mechanism read out of this driver and refuted on hardware. The
+tooling all stays (three-state p1 gate, `--usb-mode`, 155 cases, seven sabotages) because it is what
+makes the measurement repeatable and the revert a one-flag run — but
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s
+answer is now the **RESCAN button**, verified on a panel as item 9, one tap, ~5 s, dead port → playable
+pad. ⚠️ **Read B32's measured/inferred split before proposing a fourth theory, and require of it the one
+thing all three refuted mechanisms failed to explain: how a port that probed with an EMPTY socket ever
+obtains a session.** The hub workaround is closed failed — measured, and rejected on the merits.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its
