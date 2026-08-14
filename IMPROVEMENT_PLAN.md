@@ -42,6 +42,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 9 | ~~Tap Device Tools → USB → RESCAN on a dead port, with a pad attached~~ — **done 2026-08-14 on `.188`, and it PASSED on the first tap.** Pre-state measured with the pad attached and dark: `Vbus off`, `mode a_idle`, `/sys/bus/usb/devices` = `usb1` + `1-0:1.0` only. One tap → "RE-PROBING USB CONTROLLER" for ~5 s → `1-1` + `1-1:1.0`, `Vbus on`, `event1` + `js0`, pad lit blue, listed as `GAMEPAD Microsoft X-Box 360 pad`, and Pong played with it | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 
+| 10 | **Boot a `mode = <1>`-patched unit with the USB socket EMPTY, then plug a pad in.** The one measurement that decides [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix): does the pad enumerate on its own, with no RESCAN and no rebind? Also check a pad attached *at* boot still works, and that the unit boots at all. ⚠️ **Blocked on the four-state md5 gate in `lib/rw-usbpower.sh`** — the host tooling is done and tested, the p1 writer is not. Undo is `uImage-system.vendor` on p1 | one reboot + 2 taps, panel needed | [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
 
@@ -273,11 +275,51 @@ not the world.
 
 | Candidate | Status |
 |---|---|
-| **Patch the DTB `mode` from 3 to 1** (`MUSB_PORT_MODE_HOST`), so `musb_start()` always sets `SESSION` and probe claims host state | **the leading candidate, and it addresses the cause rather than the symptom.** Gadget mode is not compiled, so nothing is lost. Same mechanism as the 500 mA `power` patch: one property rewritten in place in the appended DTB, no kernel source. ⚠️ `usb_host/patch_dtb.py` knows only `find_power_offset`, so this needs new code; `lib/rw-usbpower.sh` is the md5-gated, backed-up, verified, rolled-back p1 writer to extend. Needs a reboot |
+| **Patch the DTB `mode` from 3 to 1** (`MUSB_PORT_MODE_HOST`), so `musb_start()` always sets `SESSION` and probe claims host state | **the leading candidate, and it addresses the cause rather than the symptom.** Gadget mode is not compiled, so nothing is lost. Same mechanism as the 500 mA `power` patch: one property rewritten in place in the appended DTB, no kernel source. **Host tooling is DONE 2026-08-14** — see below. What remains is the `lib/rw-usbpower.sh` four-state gate, then a reboot |
 | **The RESCAN button** (shipped, **verified on a panel 2026-08-14**) | not a cause fix — it is a remedy the player can reach without SSH, and the tab's own hint text already promised it. One tap, ~5 s, dead port → playable pad |
 | Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
 | ~~A hub left permanently attached~~ | **ruled out 2026-08-13.** Measured not to work (table above), and rejected on the merits: an external bandage, one hub against five units |
 | ~~debugfs `softconnect`~~ | dead end. It sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, and a cold port sits in `a_idle` |
+
+**The host tooling for the `mode` patch is done — 2026-08-14, 116/116, no device involved.**
+`uimage.py` grew a parameterised `find_prop_offset(data, want, hint)`; `find_power_offset` is now a
+one-line wrapper over it and `find_mode_offset` its sibling, plus `MODE_HOST/PERIPHERAL/DUAL_ROLE` and
+`MODE_VENDOR`/`MODE_WANTED` (3 and 1). `patch_dtb.py --mode` patches **both** properties in one pass —
+never mode alone, because a p1 write is one shot and a mode-only image would be a fourth firmware state
+nothing can classify. `verify_uimage.py --expect-mode` judges it. Group L of `tests/rw_usbpower_test.sh`
+is 22 cases; **13 of the first 18 failed against the pre-change tree**, and
+`tests/measure_usbpower_sabotage.sh` still catches all five sabotages.
+
+Three things measured while building it, each of which would otherwise be a plausible wrong turn:
+
+| Measured on `.188`, 2026-08-14 | |
+|---|---|
+| `/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 03`, and it is the **only** property named `mode` in the whole live tree | confirms `original.dts:3818` against the running kernel, not just the decompile |
+| `mode`'s nameoff is `0x3e4`; `usb_mode`'s is `0x3e0` | **`mode` has no string-table entry of its own — it is the SUFFIX of `usb_mode`.** dtc dedupes that block by suffix, so a locator that searches the strings block for `b"mode\0"` is answering a different question. Resolve `nameoff` and compare exact bytes, which is what the walk already did for `power` |
+| `mode` and `power` are siblings of one node, and `power` already reads `0xfa` on this unit | so the existing node walk needed generalising, not replacing — and the two patches must be asserted to land in the **same** d00dfeed candidate |
+
+⚠️ **What is NOT done, and it is the part that can silently do nothing: `lib/rw-usbpower.sh`'s gate is a
+whole-file md5 against a TWO-element set, and two patches make FOUR states.** `rw_usbpower_classify`
+knows `RW_UIMAGE_VENDOR_MD5` and `RW_UIMAGE_PATCHED_MD5` only, and `rw_usbpower_apply` returns **0 at
+the `patched` arm before anything else runs**. So on every already-commissioned unit — `.188` included,
+md5 `a1fd1af8…` — a naive extension **applies no mode patch and reports success**. The four states are
+vendor / power-only / mode-only / both, and today the last two classify as `unknown` and are refused.
+Whoever does this must decide, and each choice has a consequence in the file:
+
+- a **third** md5 constant for the both-patched image, and a classify that returns `power-only` as a
+  state that still needs work — not `unknown`. The both-patched md5 has to be *measured*, by running
+  the new `--mode` path over a real `uImage-system.vendor` (pullable from `.188`; gitignored, never
+  committed);
+- the derivation source. `patch_dtb.py` refuses an already-power-patched input with exit 1, so a
+  power-only unit **cannot be chained** — the patch must be derived from `uImage-system.vendor`, which
+  step 6 already verifies is the pristine vendor image. That collapses four states to one derivation;
+- whether the mode patch is **default or opt-in**. It is unverified on hardware, so making it default
+  before one reboot has confirmed it promotes a hedge to a confirmation on every unit commissioned from
+  then on. Opt-in until item 10 passes;
+- ⚠️ `tests/measure_usbpower_sabotage.sh` anchors two sabotages on **exact full lines** of
+  `rw-usbpower.sh` — a second 4-space `got=$(_rwup_md5 "$img")` is silently sabotaged too, and a second
+  4-space `if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then` makes sabotage 3 refuse to apply at all.
+  Re-run that harness, not just the suite.
 
 **Not a fix, and worth stating because each was believed at some point today:** `echo host > mode` (silent
 no-op, no `.set_mode`), any value written to `$MUSB/vbus` (sets `a_wait_bcon`, which nothing on omap2430
@@ -1747,17 +1789,22 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-⚠️ **Top of the list as of 2026-08-14: the
-[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) DTB
-patch (`mode` 3 → 1), through the same patcher that already sets the 500 mA budget.** The panel-reachable
-remedy is now **verified** — checklist item 9 passed on `.188` on 2026-08-14, one tap on a dead port
-bringing a dark pad up in ~5 s — so USB is no longer unusable after a boot with an empty socket, and the
-DTB patch is a *cause* fix rather than a rescue. The hub workaround is **closed failed** — measured, and
-rejected on the merits. ⚠️ `usb_host/patch_dtb.py` knows only `find_power_offset`, so the patch needs new
-code; `lib/rw-usbpower.sh` is the md5-gated, backed-up, verified, rolled-back p1 writer to extend, and it
-has **exactly one** legitimate writer of `uImage-system` — do not add a second. ⚠️ **Two earlier versions
-of this block prescribed a poll — first re-asserting `host` on `a_wait_bcon`, then a hub — and both are
-refuted.** Read B32's measured/inferred split before proposing a third.
+⚠️ **Top of the list as of 2026-08-14: finish the `mode` 3 → 1 patch by extending
+`lib/rw-usbpower.sh`'s md5 gate from two states to four.** The
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) host
+tooling landed the same day and is tested — `uimage.py`'s locator is parameterised, `patch_dtb.py --mode`
+patches both properties in one pass, `verify_uimage.py --expect-mode` judges it, group L is 22 cases and
+13 of them failed against the pre-change tree. ⚠️ **What is left is the part that fails silently:** the
+gate is a whole-file md5 against two constants and `rw_usbpower_apply` returns 0 at the `patched` arm, so
+on every commissioned unit — `.188` included — a naive extension patches nothing and says it succeeded.
+Read B32's "What is NOT done" list; it names the third md5, why the derivation must start from
+`uImage-system.vendor`, why the mode patch stays opt-in until panel checklist item 10 passes, and the two
+sabotage anchors a new line would collide with. The panel-reachable remedy is already **verified** —
+item 9 passed on `.188` on 2026-08-14, one tap on a dead port bringing a dark pad up in ~5 s — so USB is
+no longer unusable after a boot with an empty socket, and this patch is a *cause* fix rather than a
+rescue. The hub workaround is **closed failed** — measured, and rejected on the merits. ⚠️ **Two earlier
+versions of this block prescribed a poll — first re-asserting `host` on `a_wait_bcon`, then a hub — and
+both are refuted.** Read B32's measured/inferred split before proposing a third.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its

@@ -485,6 +485,99 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
+echo "L. the mode property — locating it, and patching it (B32)"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `mode = <3>` is MUSB_PORT_MODE_DUAL_ROLE on a kernel built with no gadget
+# support, which costs the SESSION bit; B32 wants <1> (MUSB_PORT_MODE_HOST).
+#
+# ⚠️ These cases exist because the obvious implementation is wrong in a way that
+# still produces an answer. Measured on `.188`'s live blob 2026-08-14: dtc emits
+# NO standalone `mode` entry in the strings block — `usb_mode` sits at nameoff
+# 0x3e0 and `mode` at 0x3e4, i.e. `mode` is the SUFFIX of `usb_mode`. The fixture
+# reproduces that, and also puts a decoy 4-byte `usb_mode` property in a
+# different node. So a locator that searches the strings block for b"mode\0",
+# or that does not scope to the usb_otg_hs node, lands on a plausible wrong
+# offset instead of missing cleanly. L3 is the case that catches it.
+set +e
+
+# --- the locator, exercised directly, because the offset is the whole risk
+cat > "$W/locate.py" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from uimage import find_mode_offset, find_power_offset, MODE_VENDOR, MODE_WANTED
+data = bytearray(open(sys.argv[2], "rb").read())
+dtb_m, off_m = find_mode_offset(data)
+dtb_p, off_p = find_power_offset(data)
+val = int.from_bytes(data[off_m:off_m + 4], "big")
+# The decoy usb_mode property holds 1 and lives in another node. Report the
+# comparison as a POSITIVE assertion, so a crash fails the case instead of
+# passing it by producing no output for says_not to miss.
+decoy = data.find((1).to_bytes(4, "big"), dtb_m, off_m)
+print("dtb %d %d  mode_off %d  mode_val %d  vendor %d wanted %d  same_dtb %s"
+      % (dtb_m, dtb_p, off_m, val, MODE_VENDOR, MODE_WANTED, dtb_m == dtb_p))
+print("not_decoy %s" % (val == MODE_VENDOR and off_m != decoy))
+PY
+l_out=$(python3 "$W/locate.py" "$TOOLS" "$W/vendor.img" 2>&1); l_rc=$?
+rc_is "$l_rc" 0 "L1 find_mode_offset exists and locates the property"
+says "$l_out" 'mode_val 3'    "L2 ...reading the vendor value 3 (MUSB_PORT_MODE_DUAL_ROLE)"
+says "$l_out" 'vendor 3 wanted 1' "L2b ...and MODE_VENDOR/MODE_WANTED are 3 and 1"
+says "$l_out" 'not_decoy True' "L3 ...not the decoy usb_mode in another node"
+says "$l_out" 'same_dtb True'  "L4 mode and power are found in the SAME dtb candidate"
+
+# --- patch_dtb.py --mode
+python3 "$MAKE_IMG" "$W/l-vendor.img" >/dev/null
+l_out=$(python3 "$TOOLS/patch_dtb.py" --mode "$W/l-vendor.img" "$W/l-both.img" 2>&1); l_rc=$?
+rc_is "$l_rc" 0 "L5 patch_dtb.py --mode patches the mode property"
+says "$l_out" 'mode at 0x[0-9a-f]+ = 0x03' "L6 ...having read 0x03 first"
+says "$l_out" 'mode now 0x01'              "L7 ...and written 0x01"
+# ⚠️ --mode must patch BOTH, because a p1 write is one shot and the two-patch
+# end state has to be a single md5. A mode-only image would be a fourth state.
+says "$l_out" 'power now 0xfa'             "L8 ...and the power patch too, in one pass"
+l_n=$(cmp -l "$W/l-vendor.img" "$W/l-both.img" | wc -l)
+eq "$l_n" "10" "L9 exactly 10 bytes differ (2 CRCs = 8, power 1, mode 1)"
+l_out=$(python3 "$TOOLS/verify_uimage.py" "$W/l-both.img" --expect-power 0xfa --expect-mode 0x01 2>&1)
+rc_is "$?" 0 "L10 the doubly-patched image verifies, both values and both CRCs"
+# ...and the default (no --mode) must still be power-only, or every existing
+# call site silently changes behaviour and D6's 9-byte diff becomes a lie.
+python3 "$MAKE_IMG" "$W/l-p.img" >/dev/null
+python3 "$TOOLS/patch_dtb.py" "$W/l-p.img" "$W/l-ponly.img" >/dev/null 2>&1
+l_n=$(cmp -l "$W/l-p.img" "$W/l-ponly.img" | wc -l)
+eq "$l_n" "9" "L11 without --mode the diff is still 9 bytes — the default is unchanged"
+l_out=$(python3 "$TOOLS/verify_uimage.py" "$W/l-ponly.img" --expect-mode 0x01 2>&1); l_rc=$?
+rc_is "$l_rc" 1 "L12 ...and such an image fails --expect-mode 0x01"
+
+# --- the refusals, mirroring D8/D11
+l_out=$(python3 "$TOOLS/patch_dtb.py" --mode "$W/l-both.img" "$W/l-again.img" 2>&1); l_rc=$?
+# A fully-patched input is caught by the POWER check, which runs first — so this
+# case asserts recognition, not the mode wording.
+rc_is "$l_rc" 1 "L13 an already fully-patched input is refused, not patched twice"
+says "$l_out" 'already' "L13b ...saying so"
+# The mode branch's own already-patched refusal needs an input the tool cannot
+# itself produce: vendor power, mode already 1.
+python3 "$MAKE_IMG" "$W/l-mp.img" --mode 0x01 >/dev/null
+l_out=$(python3 "$TOOLS/patch_dtb.py" --mode "$W/l-mp.img" "$W/l-mp-out.img" 2>&1); l_rc=$?
+rc_is "$l_rc" 1 "L13c a vendor-power image whose mode is already 1 is refused"
+says "$l_out" 'mode 0x01|mode.*already|already.*mode' "L13d ...naming mode, not power"
+if [ -f "$W/l-mp-out.img" ]; then bad "L13e that refusal still wrote an output file"
+else ok "L13e that refusal wrote no output file"; fi
+python3 "$MAKE_IMG" "$W/l-oddmode.img" --mode 0x07 >/dev/null
+l_out=$(python3 "$TOOLS/patch_dtb.py" --mode "$W/l-oddmode.img" "$W/l-om-out.img" 2>&1); l_rc=$?
+if [ "$l_rc" -eq 0 ]; then bad "L14 an unexpected mode value must be refused, not overwritten"
+else ok "L14 an unexpected mode value (0x07) is refused rather than overwritten"; fi
+if [ -f "$W/l-om-out.img" ]; then bad "L15 the refusal still wrote an output file"
+else ok "L15 the refusal wrote no output file"; fi
+python3 "$MAKE_IMG" "$W/l-nomode.img" --no-mode >/dev/null
+l_out=$(python3 "$TOOLS/patch_dtb.py" --mode "$W/l-nomode.img" "$W/l-nm-out.img" 2>&1); l_rc=$?
+if [ "$l_rc" -eq 0 ]; then bad "L16 an image with no mode property must be refused under --mode"
+else ok "L16 an image with no mode property is refused under --mode"; fi
+# ...but such an image is still a legal POWER patch, so the default must survive it.
+l_out=$(python3 "$TOOLS/patch_dtb.py" "$W/l-nomode.img" "$W/l-nm-p.img" 2>&1); l_rc=$?
+rc_is "$l_rc" 0 "L17 ...and it still patches power without --mode"
+set -e
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
 if [ "$FAIL" -eq 0 ]; then

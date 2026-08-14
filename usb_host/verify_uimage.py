@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """verify_uimage.py — is this uImage intact, and what is its USB power budget?
 
-    verify_uimage.py <file> [--expect-power 0xfa|0x32] [--quiet]
+    verify_uimage.py <file> [--expect-power 0xfa|0x32] [--expect-mode 0x01|0x03] [--quiet]
 
 Exits 0 only if every check passes.  Prints one line per check, in the form
 
@@ -37,6 +37,7 @@ from uimage import (  # noqa: E402
     UIMAGE_MAGIC,
     UImageError,
     be32,
+    find_mode_offset,
     find_power_offset,
     uimage_crcs,
 )
@@ -45,6 +46,7 @@ from uimage import (  # noqa: E402
 def main(argv):
     path = None
     expect = None
+    expect_mode = None
     quiet = False
     i = 1
     while i < len(argv):
@@ -54,16 +56,21 @@ def main(argv):
             return 0
         elif a == "--quiet":
             quiet = True
-        elif a == "--expect-power":
+        elif a in ("--expect-power", "--expect-mode"):
+            flag = a
             i += 1
             if i >= len(argv):
-                print("--expect-power needs a value", file=sys.stderr)
+                print("%s needs a value" % flag, file=sys.stderr)
                 return 2
             try:
-                expect = int(argv[i], 0)
+                val = int(argv[i], 0)
             except ValueError:
                 print("not a number: %s" % argv[i], file=sys.stderr)
                 return 2
+            if flag == "--expect-power":
+                expect = val
+            else:
+                expect_mode = val
         elif a.startswith("-"):
             print("unknown option: %s" % a, file=sys.stderr)
             return 2
@@ -75,7 +82,8 @@ def main(argv):
         i += 1
 
     if path is None:
-        print("usage: verify_uimage.py <file> [--expect-power N] [--quiet]", file=sys.stderr)
+        print("usage: verify_uimage.py <file> [--expect-power N] [--expect-mode N] "
+              "[--quiet]", file=sys.stderr)
         return 2
 
     say = (lambda *a: None) if quiet else (lambda *a: print(*a))
@@ -135,6 +143,32 @@ def main(argv):
         say(line)
     else:
         print(line)
+
+    # ── the mode property, judged only when asked about ──
+    #
+    # ⚠️ Absent is a FAILURE when --expect-mode was given and merely unreported
+    # otherwise: a vendor image has the property, so "cannot find it" means the
+    # walk went wrong, and a caller about to write p1 must not read that as OK.
+    if expect_mode is not None:
+        try:
+            mode_dtb, mode_off = find_mode_offset(data)
+        except UImageError as e:
+            print("mode=absent BAD (%s)" % e)
+            return 1
+        mval = be32(data, mode_off)
+        mverdict = "OK" if mval == expect_mode else "BAD (want 0x%02x)" % expect_mode
+        if mverdict != "OK":
+            bad += 1
+        if mode_dtb != dtb_off:
+            print("mode is in the dtb at 0x%x, power in the one at 0x%x BAD"
+                  % (mode_dtb, dtb_off))
+            bad += 1
+        mline = "mode=0x%02x %s" % (mval, mverdict)
+        if mverdict == "OK":
+            say("mode_at=0x%x" % mode_off)
+            say(mline)
+        else:
+            print(mline)
 
     if bad:
         print("verify_uimage: %s FAILED %d check(s)" % (path, bad), file=sys.stderr)

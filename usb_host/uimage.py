@@ -43,6 +43,15 @@ DTB_OFFSET_HINT = 0x004EB788
 POWER_VENDOR = 0x32   # 50  -> 100 mA, the value Steelcase shipped
 POWER_WANTED = 0xFA   # 250 -> 500 mA, which is also the kernel's own default
 
+# MUSB's port mode, musb_core.h:82-84.  IMPROVEMENT_PLAN.md B32: the vendor
+# declares DUAL_ROLE on a kernel with no gadget support compiled in, which buys
+# nothing and costs the SESSION bit.
+MODE_HOST = 1
+MODE_PERIPHERAL = 2
+MODE_DUAL_ROLE = 3
+MODE_VENDOR = MODE_DUAL_ROLE   # what Steelcase shipped
+MODE_WANTED = MODE_HOST        # what a gadget-less kernel should have
+
 FDT_BEGIN_NODE = 1
 FDT_END_NODE = 2
 FDT_PROP = 3
@@ -144,8 +153,8 @@ def _fdt_header(data, base):
     return h
 
 
-def _power_offset_in(data, base):
-    """Absolute offset of the `power` property VALUE inside `base`'s usb_otg_hs
+def _prop_offset_in(data, base, want):
+    """Absolute offset of the `want` property VALUE inside `base`'s usb_otg_hs
     node, or None.
 
     Node identity is tracked by DEPTH rather than by a boolean, so that a child
@@ -155,6 +164,16 @@ def _power_offset_in(data, base):
     `power` is its LAST of 17 properties, so a boolean would also be correct
     *here* — the depth counter is what makes it correct on a tree nobody has
     inspected, which is the only kind this will meet on a unit that is not RW09.
+
+    ⚠️ The property name is resolved by READING the string at `nameoff` and
+    comparing exact bytes.  Never search the strings block for the name instead:
+    dtc deduplicates that block by SUFFIX, so a short name may have no entry of
+    its own at all.  Measured on `.188` 2026-08-14 — the live blob has
+    `usb_mode` at nameoff 0x3e0 and `mode` at 0x3e4, i.e. `mode` IS the tail of
+    `usb_mode` and `strings.find(b"mode\\0")` would be answering a different
+    question than the one asked.  The node scope is the other half: `usb_mode`
+    is a 4-byte property in `twl4030-usb`, so the `prop_len == 4` gate does not
+    discriminate here and the name alone would not either if it were searched.
     """
     h = _fdt_header(data, base)
     if h is None:
@@ -190,7 +209,7 @@ def _power_offset_in(data, base):
                 pos += 12
                 if usb_depth is not None and prop_len == 4:
                     nul = strings.index(b"\0", nameoff)
-                    if bytes(strings[nameoff:nul]) == b"power":
+                    if bytes(strings[nameoff:nul]) == want:
                         return pos
                 pos += (prop_len + 3) & ~3
             elif token == FDT_NOP:
@@ -206,12 +225,22 @@ def _power_offset_in(data, base):
     return None
 
 
-def find_power_offset(data, hint=DTB_OFFSET_HINT):
-    """Return (dtb_offset, power_value_offset) for the MUSB power property.
+def _power_offset_in(data, base):
+    """Kept as the name the module has always exported for the power property."""
+    return _prop_offset_in(data, base, b"power")
+
+
+def find_prop_offset(data, want, hint=DTB_OFFSET_HINT):
+    """Return (dtb_offset, value_offset) for a 4-byte property of the MUSB node.
 
     Tries `hint` first, then every d00dfeed in the file.  Raises UImageError if
     no candidate satisfies all three conditions in the module docstring —
     refusing rather than guessing, because the caller is about to write p1.
+
+    ⚠️ The candidate is accepted on finding the REQUESTED property, so two calls
+    for two different properties could in principle settle on two different
+    d00dfeeds.  A caller patching both must assert the two dtb offsets are equal;
+    patch_dtb.py does.
     """
     tried = []
     if hint is not None:
@@ -227,11 +256,30 @@ def find_power_offset(data, hint=DTB_OFFSET_HINT):
         start = pos + 1
 
     for base in tried:
-        off = _power_offset_in(data, base)
+        off = _prop_offset_in(data, base, want)
         if off is not None:
             return base, off
 
     raise UImageError(
-        "no device tree in this image carries a `power` property inside a "
-        "usb_otg_hs node (%d d00dfeed candidate(s) examined)" % len(tried)
+        "no device tree in this image carries a `%s` property inside a "
+        "usb_otg_hs node (%d d00dfeed candidate(s) examined)"
+        % (want.decode("ascii", "replace"), len(tried))
     )
+
+
+def find_power_offset(data, hint=DTB_OFFSET_HINT):
+    """Return (dtb_offset, power_value_offset) for the MUSB power property."""
+    return find_prop_offset(data, b"power", hint=hint)
+
+
+def find_mode_offset(data, hint=DTB_OFFSET_HINT):
+    """Return (dtb_offset, mode_value_offset) for the MUSB `mode` property.
+
+    `mode` selects MUSB's port mode: 1 = MUSB_PORT_MODE_HOST,
+    2 = PERIPHERAL, 3 = DUAL_ROLE (musb_core.h:82-84).  The vendor DTB declares
+    3 on a kernel built `# CONFIG_USB_GADGET is not set` with musb_gadget.c not
+    compiled, so dual-role buys nothing this kernel can use and costs the
+    SESSION bit in musb_start() (musb_core.c:1074-1080) plus the host claim in
+    musb_host_setup() (musb_host.c:2789-2793).  IMPROVEMENT_PLAN.md B32.
+    """
+    return find_prop_offset(data, b"mode", hint=hint)

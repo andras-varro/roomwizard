@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make-fake-uimage.py — build a small SYNTHETIC uImage for tests/rw_usbpower_test.sh.
 
-    make-fake-uimage.py <out> [--power 0x32] [<sabotage> ...]
+    make-fake-uimage.py <out> [--power 0x32] [--mode 0x03] [<sabotage> ...]
 
 ⚠️ Synthetic on purpose, and it is the only kind of fixture this suite may use.
 The vendor `uImage-system` is a 5.2 MB copyrighted Steelcase binary; `usb_host/.gitignore`
@@ -17,8 +17,16 @@ What is faithful here, and what is not:
                property of length 4 inside a node whose name contains `usb_otg_hs`.
                Those are what uimage.py reads, so they are what a fixture must get
                right.
-  NOT faithful the payload is filler, not a compressed kernel, and the tree has one
-               node instead of hundreds. So this fixture cannot tell you anything
+               ⚠️ Also faithful, and deliberately so: `mode`'s name is stored as the
+               SUFFIX of a `usb_mode` string-table entry, and a decoy 4-byte
+               `usb_mode` property sits in another node. Both reproduce the shipped
+               blob, measured on `.188` 2026-08-14 — there `usb_mode` is at nameoff
+               0x3e0 and `mode` at 0x3e4, i.e. dtc emitted no standalone `mode`
+               entry at all. So a locator that searches the strings block for
+               `b"mode\\0"`, or that ignores which node it is in, gets a plausible
+               wrong answer here rather than a clean miss. That is the point.
+  NOT faithful the payload is filler, not a compressed kernel, and the tree has two
+               nodes instead of hundreds. So this fixture cannot tell you anything
                about the REAL image's md5 — which is why the suite overrides
                RW_UIMAGE_*_MD5 for the sequence tests and asserts the shipped
                constants separately.
@@ -47,7 +55,8 @@ from uimage import (  # noqa: E402
     uimage_fix_crcs,
 )
 
-SABOTAGES = ("--break-dcrc", "--break-hcrc", "--bad-magic", "--bad-size", "--no-usb-node")
+SABOTAGES = ("--break-dcrc", "--break-hcrc", "--bad-magic", "--bad-size", "--no-usb-node",
+             "--no-mode")
 
 
 def align4(b):
@@ -56,16 +65,43 @@ def align4(b):
     return b
 
 
-def build_fdt(power=0x32, node=b"usb_otg_hs@480ab000"):
-    """A minimal but valid FDT: / { <node> { power = <N>; }; }."""
-    strings = b"power\0"
+def build_fdt(power=0x32, mode=0x03, node=b"usb_otg_hs@480ab000", with_mode=True):
+    """A minimal but valid FDT:
+
+        / {
+            twl4030-usb      { usb_mode = <1>; };      # decoy, another node
+            <node>           { mode = <M>; power = <N>; };
+        };
+
+    ⚠️ The strings block is `power\\0usb_mode\\0` and `mode`'s nameoff points at
+    offset 10 — the tail of `usb_mode\\0`, so there is NO standalone `mode` entry.
+    That is what dtc actually emits (measured on the shipped blob) and it is what
+    makes this fixture able to fail a locator that searches the strings block
+    instead of resolving nameoff. The decoy `usb_mode` is a 4-byte property whose
+    name contains `mode`, in a node the walk must not be scoped to.
+    """
+    strings = b"power\0usb_mode\0"
+    off_power = 0
+    off_usb_mode = 6
+    off_mode = off_usb_mode + 4          # suffix-shared: points inside "usb_mode\0"
+    assert strings[off_mode:off_mode + 5] == b"mode\0"
 
     struct_block = b""
     struct_block += struct.pack(">I", FDT_BEGIN_NODE) + align4(b"\0")          # root, empty name
+
+    # Decoy node first, so a locator that latches onto the first 4-byte property, or
+    # onto a name merely containing `mode`, answers before it reaches the real node.
+    struct_block += struct.pack(">I", FDT_BEGIN_NODE) + align4(b"twl4030-usb\0")
+    struct_block += struct.pack(">III", FDT_PROP, 4, off_usb_mode) + struct.pack(">I", 1)
+    struct_block += struct.pack(">I", FDT_END_NODE)
+
     struct_block += struct.pack(">I", FDT_BEGIN_NODE) + align4(node + b"\0")
     #                          token           len  nameoff-into-strings
-    struct_block += struct.pack(">III", FDT_PROP, 4, 0) + struct.pack(">I", power)
+    if with_mode:
+        struct_block += struct.pack(">III", FDT_PROP, 4, off_mode) + struct.pack(">I", mode)
+    struct_block += struct.pack(">III", FDT_PROP, 4, off_power) + struct.pack(">I", power)
     struct_block += struct.pack(">I", FDT_END_NODE)
+
     struct_block += struct.pack(">I", FDT_END_NODE)
     struct_block += struct.pack(">I", FDT_END)
 
@@ -89,9 +125,11 @@ def build_fdt(power=0x32, node=b"usb_otg_hs@480ab000"):
     return hdr + b"\0" * (off_struct - len(hdr)) + struct_block + strings
 
 
-def build(power=0x32, sabotage=()):
-    fdt = build_fdt(power=power, node=b"nothing_here@0" if "--no-usb-node" in sabotage
-                    else b"usb_otg_hs@480ab000")
+def build(power=0x32, mode=0x03, sabotage=()):
+    fdt = build_fdt(power=power, mode=mode,
+                    node=b"nothing_here@0" if "--no-usb-node" in sabotage
+                    else b"usb_otg_hs@480ab000",
+                    with_mode="--no-mode" not in sabotage)
 
     # Filler before and after, so the FDT is genuinely *found* rather than sitting at
     # a predictable place. 0x11 rather than 0x00 so a stray d00dfeed cannot appear.
@@ -138,6 +176,7 @@ def main(argv):
 
     out = argv[1]
     power = 0x32
+    mode = 0x03
     sabotage = []
     i = 2
     while i < len(argv):
@@ -148,6 +187,12 @@ def main(argv):
                 print("--power needs a value", file=sys.stderr)
                 return 2
             power = int(argv[i], 0)
+        elif a == "--mode":
+            i += 1
+            if i >= len(argv):
+                print("--mode needs a value", file=sys.stderr)
+                return 2
+            mode = int(argv[i], 0)
         elif a in SABOTAGES:
             sabotage.append(a)
         else:
@@ -155,11 +200,11 @@ def main(argv):
             return 2
         i += 1
 
-    data = build(power=power, sabotage=tuple(sabotage))
+    data = build(power=power, mode=mode, sabotage=tuple(sabotage))
     with open(out, "wb") as fh:
         fh.write(data)
-    print("%s  %d bytes  power=0x%02x  %s"
-          % (out, len(data), power, " ".join(sabotage) or "clean"))
+    print("%s  %d bytes  power=0x%02x  mode=0x%02x  %s"
+          % (out, len(data), power, mode, " ".join(sabotage) or "clean"))
     return 0
 
 
