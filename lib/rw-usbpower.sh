@@ -145,11 +145,16 @@ rw_usbpower_classify() {
 #
 # Echo which image the caller wants on p1: "power" (the default) or "both".
 #
-# ⚠️ The mode patch stays OPT-IN until it is verified on a panel — B32 checklist
-# item 10. `mode = <1>` is inferred from omap2430.c, not measured on hardware, and
-# defaulting it would promote that hedge to a confirmation on every unit
-# commissioned afterwards. RW_USBPOWER_WITH_MODE=1 is the opt-in; the three
-# callers each expose it as --usb-mode.
+# ⚠️ The mode patch was applied to a unit and MEASURED NOT TO WORK — B32 checklist
+# item 10, closed failed on `.188` 2026-08-14: the patch was live in the booted
+# kernel's own tree and a pad plugged in after an empty-socket boot still stayed
+# dark. So NO CALLER REACHES IT — there is no --usb-mode flag anywhere, and all
+# three callers `unset RW_USBPOWER_WITH_MODE` before driving the writer.
+#
+# This function still knows the state on purpose: a unit that already carries the
+# patch must classify as "both" and be re-derivable back DOWN to power-only, and a
+# gate that refused it as "unknown" would leave it with no way back. That revert
+# was exercised for real on `.188`.
 # ---------------------------------------------------------------------------
 rw_usbpower_want() {
     case "${RW_USBPOWER_WITH_MODE:-}" in

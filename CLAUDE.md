@@ -395,7 +395,7 @@ ext4 honours it, so that check is a measurement offline and cannot be one on `/m
   prints. They are separate on purpose: **`ROOTFS` alone also means "I mounted the card myself"**, and
   that operator does still need the next steps. Suppressing on `ROOTFS` is the obvious wrong fix and
   passes every other case.
-- Regression: `tests/commission_offline_test.sh` (21 cases; needs root and a staged bundle). Every check
+- Regression: `tests/commission_offline_test.sh` (36 cases; needs root and a staged bundle). Every check
   has a sabotage case; the fixture builder is `tests/make-fake-card.sh`, which must live under `/tmp`
   because DrvFs cannot hold a symlink.
 - Regression: `tests/commission_prep_test.sh` (17 cases, host-only, no card, no root) covers
@@ -614,7 +614,7 @@ tool-level traps rather than device facts, and each has cost real time.
   verified by re-reading the card afterwards, and rolled back on failure. ⚠️ **Never write a second
   copy of that sequence into a caller**: it is the one step `tests/rw_provision_test.sh` group E cannot
   compare between executors, so a duplicate would drift undetected — `tests/rw_usbpower_test.sh` group J
-  is the stand-in comparison, running the one sequence over both transports (155 cases, host-only, needs
+  is the stand-in comparison, running the one sequence over both transports (163 cases, host-only, needs
   `python3`). ⚠️ **The gate knows THREE measured md5s — vendor, 500 mA, and 500 mA + host mode — and the
   target is chosen by the CALLER**, `rw_usbpower_want`/`rw_usbpower_target_md5` off `RW_USBPOWER_WITH_MODE`.
   ⚠️ **The mode patch was applied to a unit and MEASURED NOT TO WORK** — B32 panel item 10, closed failed
@@ -627,7 +627,8 @@ tool-level traps rather than device facts, and each has cost real time.
   unit a second patch wrote nothing and reported success. ⚠️ **Never chain one patch onto another** —
   `patch_dtb.py` refuses an already-patched input, so a transition re-derives from
   `uImage-system.vendor` (which step 6 proves is pristine), and that is also what makes the undo an
-  ordinary run with `--usb-mode` omitted. A power-only card with no usable backup is **refused**.
+  ordinary power-only run — which, with no `--usb-mode` flag anywhere, is now the only run there is.
+  A power-only card with no usable backup is **refused**.
   ⚠️ **Its fixtures are SYNTHETIC and must stay that way**: the vendor kernel is gitignored
   and can never be committed, and `tests/make-fake-uimage.py` works only because `uimage.py` *finds* the
   DTB by magic rather than asserting the vendor offset. Groups F–M therefore override the three md5

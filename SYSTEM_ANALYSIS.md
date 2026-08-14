@@ -1039,7 +1039,7 @@ upstream, and authoritative for this code because none of it is vendor-patched:
 - VBUS here is driven **solely by the DEVCTL `SESSION` bit**. `twl4030` registers no `set_vbus` op, so
   `otg_set_vbus()` returns `-ENOTSUPP` and `omap2430_musb_set_vbus()` does nothing.
 - ⚠️ **The DTB `mode` value looked like the root cause and IS NOT — patched and measured 2026-08-14, see
-  below.** `mode = <0x03>` on the musb node (`usb_host/original.dts:3820`) is
+  below.** `mode = <0x03>` on the musb node (`usb_host/original.dts:3818`) is
   `MUSB_PORT_MODE_DUAL_ROLE` (`musb_core.h:82-84`) — on a kernel built `# CONFIG_USB_GADGET is not set`
   (`usb_host/device_config:3106`) where `musb_gadget.c` is not even compiled. Dual-role therefore buys
   nothing this kernel can use, and it costs two things on paper: `musb_host_setup()` claims

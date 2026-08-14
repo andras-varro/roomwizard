@@ -242,14 +242,19 @@ shipped fix built on them.
 | Re-seating an OTG adapter revived a port that had been dark for minutes — but only on a port that had **already** had a session | the difference between these last two rows is the whole subtlety |
 | **Device Tools → USB → RESCAN revives a dead port from the panel**, one tap, ~5 s, on a pad that had been attached and dark: `Vbus off` / `mode a_idle` / no `1-1` before, `Vbus on` / `1-1` / `event1` + `js0` / pad lit and playable after (2026-08-14, checklist item 9) | so the shipped remedy works. **The internal attempt count is not observable from the panel** — one *tap* sufficed, which is not the same claim as one *rebind* sufficing; `recover`'s 3-try loop may well have absorbed the second run the manual measurements needed |
 
-**Source-supported, not yet verified on hardware.** From the vanilla tree, which is authoritative here:
+**Source-supported. ⚠️ The FIRST bullet has since been refuted on hardware; the rest are still
+inference.** From the vanilla tree, which is authoritative here:
 
-- The DTB declares `mode = <0x03>` (`usb_host/original.dts:3820`) = `MUSB_PORT_MODE_DUAL_ROLE`
+- The DTB declares `mode = <0x03>` (`usb_host/original.dts:3818`) = `MUSB_PORT_MODE_DUAL_ROLE`
   (`musb_core.h:82-84`), while the kernel is built `# CONFIG_USB_GADGET is not set`
   (`usb_host/device_config:3106`) and `musb_gadget.c` is not compiled. **Dual-role buys nothing this
   kernel can use**, and it costs two things: `musb_host_setup()` claims host state only for
   `MUSB_PORT_MODE_HOST` (`musb_host.c:2789-2793`), and `musb_start()` (`musb_core.c:1074-1080`) masks
   `SESSION` off and only restores it when that clause is false or VBUS already reads invalid.
+  ⚠️ **REFUTED on hardware 2026-08-14** — `mode = <1>` was written to `.188`'s p1 and verified live in the
+  booted kernel's own tree, and a pad plugged in after an empty-socket boot still stayed dark. The
+  *reading* of the source stands; the *inference* that this clause is what keeps a cold port dark does
+  not. Measurement below.
 - ID is watched by the **TWL4030 PMIC on its own interrupt line** (`phy-twl4030-usb.c:747`) reading an
   always-powered `PM_MASTER` register (`:298-314`) — so it fires with the PHY asleep and VBUS off. But an
   ID event **replays the cached DEVCTL** (`musb_core.c:2609-2610`), so on a cold port there is no
@@ -285,7 +290,7 @@ not the world.
 
 | Candidate | Status |
 |---|---|
-| ~~**Patch the DTB `mode` from 3 to 1**~~ (`MUSB_PORT_MODE_HOST`) | **REFUTED on hardware 2026-08-14, panel item 10 — closed failed.** Written to `.188`'s p1, verified live in the booted tree (`mode` = `00 00 00 01`), unit booted normally — and a pad plugged in after a boot with an empty socket stayed **dark**: `Vbus off`, `a_idle`, no `1-1`. So `musb_start()` setting `SESSION` unconditionally in HOST mode is **not sufficient** to bring up a port that probed with nothing attached. ⚠️ **Inference, one sentence and no further:** at probe with an empty socket there is no ID-ground event to act on, and the mode value does not manufacture one. The tooling and the p1 writer are sound and stay — `--usb-mode` is now a *measured-negative* option, not a candidate fix |
+| ~~**Patch the DTB `mode` from 3 to 1**~~ (`MUSB_PORT_MODE_HOST`) | **REFUTED on hardware 2026-08-14, panel item 10 — closed failed.** Written to `.188`'s p1, verified live in the booted tree (`mode` = `00 00 00 01`), unit booted normally — and a pad plugged in after a boot with an empty socket stayed **dark**: `Vbus off`, `a_idle`, no `1-1`. So `musb_start()` setting `SESSION` unconditionally in HOST mode is **not sufficient** to bring up a port that probed with nothing attached. ⚠️ **Inference, one sentence and no further:** at probe with an empty socket there is no ID-ground event to act on, and the mode value does not manufacture one. The tooling and the p1 writer are sound and stay, but the patch is **out of every deploy path** — no `--usb-mode` flag on any caller |
 | **The RESCAN button** (shipped, **verified on a panel 2026-08-14**) | not a cause fix — it is a remedy the player can reach without SSH, and the tab's own hint text already promised it. One tap, ~5 s, dead port → playable pad |
 | Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
 | ~~A hub left permanently attached~~ | **ruled out 2026-08-13.** Measured not to work (table above), and rejected on the merits: an external bandage, one hub against five units |
@@ -320,7 +325,7 @@ success**. What is there now:
 | `RW_UIMAGE_PATCHED_MD5` → `RW_UIMAGE_POWER_MD5`, plus `RW_UIMAGE_BOTH_MD5` = `9021923205825a2ec36edeaa1fe3ccc3` | **measured**, by running `patch_dtb.py --mode` over `.188`'s own `uImage-system.vendor`, twice, byte-identical. Control: the power-only derivation from the same source reproduces `a1fd1af8…`, which is what that unit is running — so the source is the pristine vendor image and the toolchain is reproducible. 9 bytes differ vendor→power, 10 vendor→both |
 | **THREE** reachable states, not four | mode-only is unreachable **by construction**: `--mode` patches both properties in one pass and never mode alone. It classifies `unknown`, which is correct — an image with mode patched and power not is not something this repo produced |
 | `rw_usbpower_classify` → `vendor` / `power` / `both` / `unknown`, with an **empty-argument guard first** | `case "" in "$RW_UIMAGE_BOTH_MD5")` would match on an unset constant and classify a missing file as patched. Group A5 is the other half: three constants, pairwise distinct, non-empty |
-| `rw_usbpower_want` (`RW_USBPOWER_WITH_MODE`) and `rw_usbpower_target_md5` | the target is **chosen by the caller** and compared against the state actually on the card, which is the fix for the silent-success arm. `--usb-mode` on all three callers exposes it |
+| `rw_usbpower_want` (`RW_USBPOWER_WITH_MODE`) and `rw_usbpower_target_md5` | the target is **chosen by the caller** and compared against the state actually on the card, which is the fix for the silent-success arm. **No caller exposes it** — all three `unset` it (group N) |
 | the transition **derives from `uImage-system.vendor`, never chains** | `patch_dtb.py` refuses an already-patched input, so power→both cannot be incremental. Step 6 already proves the backup is pristine, so one derivation covers every transition — **including downward**: asking for `power` on a `both` unit re-derives it back, which is the in-place undo if item 10 fails |
 | a power-only card with **no usable backup** is refused, loudly, naming why | the reachable field state that has no remedy in place. `commission-offline.sh`'s p1 verification now reads its expected md5 from `rw_usbpower_target_md5`, not a constant name |
 | ⚠️ the rollback restores the **vendor** image whichever transition failed | so a failed power→both leaves a unit at 100 mA, not back at 500 mA. Deliberate: the backup is the one image whose md5 was verified that run, and a unit at 100 mA is a unit that boots |
@@ -346,7 +351,7 @@ empty-argument guard legitimately makes B7/B8 pass under it; the surviving five 
 that sabotage alone rather than inferred from the total.
 
 ⚠️ **The mode patch was applied and it does NOT work — measured on `.188`, 2026-08-14, panel item 10
-closed failed.** p1 was written with `--usb-mode` and verified by re-reading the card
+closed failed.** p1 was written with the mode patch and verified by re-reading the card
 (`90219232…`); the booted kernel's own tree read `mode` = `00 00 00 01` and `power` = `00 00 00 fa`, so
 the patch was genuinely live; the unit booted normally with no regression. Then, with the socket empty
 at boot, a pad plugged in afterwards stayed **dark** — `Vbus off`, `mode a_idle`, no `1-1`, no pad in
@@ -363,10 +368,12 @@ different day and a different boot, and `recover`'s own 3-try loop makes a singl
 for counting rebinds (item 9 says the same). If anyone wants this, it needs repeated boot-empty → plug →
 `recover` cycles on **both** firmwares, one reboot each — and it is a small prize.
 
-**What the refutation costs and what it does not.** The p1 writer, the three-state gate, `--usb-mode`,
-`patch_dtb.py --mode`, `verify_uimage.py --expect-mode` and the 155-case suite are all sound and stay;
-`--usb-mode` is now a **measured-negative option** rather than a candidate fix, kept because it is the
-only way to reproduce this measurement and because reverting is an ordinary run with the flag omitted.
+**What the refutation costs and what it does not.** The p1 writer, the three-state gate,
+`patch_dtb.py --mode`, `verify_uimage.py --expect-mode` and the suite behind them are all sound and stay
+— but the mode patch is **out of every deploy path**: there is no `--usb-mode` flag on any of the three
+callers, and each one `unset`s `RW_USBPOWER_WITH_MODE` before driving the writer, because a delivery path
+must be deterministic. What the library keeps is the *state*: a unit already carrying the patch classifies
+as `both` and is re-derivable back **down** to power-only, which is how `.188` was reverted.
 The refuted claim is the *inference* — that `musb_start()` masking `SESSION` off for non-HOST modes was
 what kept a cold port dark. It is the **third** mechanism read out of this driver and refuted on
 hardware. ⚠️ **Whatever the next candidate is, it must explain how a port that probed with an EMPTY
@@ -1850,8 +1857,8 @@ patch — the leading candidate for three sessions — was written to `.188`'s p
 live in the booted device tree, and **refuted**: a pad plugged in after a boot with an empty socket
 stayed dark, while `/etc/init.d/usb-host recover` on the same firmware and the same pad brought it up on
 the first attempt. That is the **third** mechanism read out of this driver and refuted on hardware. The
-tooling all stays (three-state p1 gate, `--usb-mode`, 155 cases, seven sabotages) because it is what
-makes the measurement repeatable and the revert a one-flag run — but
+tooling all stays (three-state p1 gate, `patch_dtb.py --mode`, 163 cases, seven sabotages) because it is
+what makes a patched unit re-derivable back down, and the patch itself is out of every deploy path — but
 [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix)'s
 answer is now the **RESCAN button**, verified on a panel as item 9, one tap, ~5 s, dead port → playable
 pad. ⚠️ **Read B32's measured/inferred split before proposing a fourth theory, and require of it the one
