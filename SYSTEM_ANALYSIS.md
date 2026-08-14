@@ -1083,6 +1083,15 @@ written down before being refuted — one of them in this document.
 port sitting in `a_idle`. Ranked candidates, including the DTB `mode` patch that addresses the cause:
 [`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix).
 
+**Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the
+running kernel holds it, and `/sys/firmware/fdt` is the raw blob (67 273 bytes on `.188`, magic
+`d00dfeed`, `totalsize` matching the file size exactly — so it is complete and parseable by
+`usb_host/uimage.py`'s walk). ⚠️ **`find /proc/device-tree -name X` silently finds nothing**:
+`/proc/device-tree` is a *symlink* to the sysfs path and `find` does not follow it. Use the
+`/sys/firmware/devicetree/base` path. That is how `mode = <3>` was confirmed against the running
+kernel rather than against the decompiled `usb_host/original.dts` — and how `mode` was measured to be
+the **only** property of that name in the whole tree.
+
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
