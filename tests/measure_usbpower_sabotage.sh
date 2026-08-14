@@ -59,6 +59,12 @@
 #                                                  refuses the image and the unit
 #                                                  does not boot AT ALL — the
 #                                                  worst outcome in the repo
+#   6  the two-state md5 gate restored             an already-power-patched card is
+#                                                  reported as done, so the mode
+#                                                  patch writes NOTHING and exits 0
+#   7  the transition chains off the patched       patch_dtb.py refuses an
+#      image instead of deriving from the backup   already-patched input, so no card
+#                                                  can move between patched states
 #
 # The expected minimums are MEASURED, printed by this script, and recorded below.
 # They are minimums, not equalities: a case added to the suite may raise a count,
@@ -66,30 +72,57 @@
 # they are named — a sabotage that trips a plausible number of the WRONG checks is
 # the failure mode a bare count cannot show.
 #
-# Measured 2026-08-08, 13 s for the whole run:
+# Measured 2026-08-08, 13 s for the whole run; re-measured 2026-08-14 after the
+# two-state md5 gate became three (B32), which moved two counts and added two
+# sabotages. The 2026-08-14 counts are in the second column:
 #
-#   baseline                                     94 passed,  0 failed
-#   1 classify returns vendor for an unknown     87 passed,  7 failed
-#       B5 B6 B7 B8 — both the third md5 and the EMPTY one stop being refused
+#   baseline                                     94 passed,  0 failed   (155/0)
+#   1 classify returns vendor for an unknown     87 passed,  7 failed   (5 failed)
+#       B5 B6       — a fourth md5 stops being refused
 #       F11 G6 J7   — the run still fails, at step 3, but the word REFUSING is
 #                     gone and a dry run stops refusing altogether
-#   2 post-write re-read replaced by constant    86 passed,  8 failed
+#       ⚠️ 7 -> 5 on 2026-08-14, and the MINIMUM was lowered rather than the
+#       sabotage widened. B7 B8 (the empty md5) used to fail here too; classify now
+#       guards an empty argument BEFORE the constants, so they pass under this
+#       sabotage. That guard exists because an unset constant would make
+#       `case "" in "$RW_UIMAGE_BOTH_MD5")` match and classify a missing file as
+#       patched, and group A5 is what keeps the constants non-empty. The five above
+#       were read from a run of this sabotage alone, not inferred from the total.
+#   2 post-write re-read replaced by constant    86 passed,  8 failed   (8 failed)
 #       I1-I4 I6-I9 — the whole of group I: a corrupted write is reported as a
 #                     success, so neither the rollback nor its failure is reached
-#   3 backup verification deleted                91 passed,  3 failed
+#   3 backup verification deleted                91 passed,  3 failed   (3 failed)
 #       H1 H2 H3    — a pre-existing file that only LOOKS like an undo is accepted
 #                     and p1 is written with no working undo
-#   4 verify_uimage.py always exits 0            87 passed,  7 failed
+#   4 verify_uimage.py always exits 0            87 passed,  7 failed   (8 failed)
 #       C6-C11 C13  — every way the validator must fail, including a missing file
-#   5 uimage_fix_crcs CRC order swapped          71 passed, 23 failed
+#   5 uimage_fix_crcs CRC order swapped          71 passed, 23 failed  (40 failed)
 #       D4 D6 D7    — the patched image no longer verifies and the diff is 5 bytes
 #                     rather than 9: signing the header before storing the data CRC
 #                     leaves offset 4 EQUAL to the vendor's, because the header it
 #                     signed is the vendor's header
-#       F H I J K   — and every sequence case, since step 5's md5 assert then
+#       F H I J K M — and every sequence case, since step 5's md5 assert then
 #                     refuses the derived image outright. The widest blast radius
 #                     of the five, which is proportionate: this is the one that
 #                     produces a unit that does not boot at all.
+#   6 the two-state gate restored                       (2026-08-14)   (9 failed)
+#       M4 M5 M6    — a card already carrying the 500 mA image is reported as done,
+#                     so the mode patch writes NOTHING and exits 0. THE defect B32
+#                     warned about, and group M's reason to exist
+#       M8 M9 M11   — and the same early return swallows the refusals a power-only
+#                     card with no usable backup must produce
+#       M22 M23 M26 — the dry run stops reporting the transition, and the ssh
+#                     transport reaches the wrong bytes
+#       ⚠️ M17 does NOT fail, and the reason is fixture cascade rather than a hole:
+#       the m2 card never becomes both-patched, so the downgrade case is handed a
+#       power-only card and correctly reports "already". Not worth isolating — M4 is
+#       the case that speaks — but do not read M17's pass as coverage.
+#   7 the transition chains off the patched image       (2026-08-14)  (10 failed)
+#       M3-M6 M13   — patch_dtb.py refuses an already-patched input, so a
+#                     power -> both transition dies at step 4 instead of deriving
+#                     from the verified backup, and the follow-on idempotence case
+#                     is then handed the wrong state
+#       M21-M23 M25 M26 — both other transports report the failure too
 #
 # ── The harness's own negative controls, measured 2026-08-08 ─────────────────
 #
@@ -108,7 +141,8 @@
 # A fourth, found by accident and worth keeping in mind: changing `echo vendor` to
 # `echo VENDOR` still APPLIES and still parses, but the library's `case` then falls
 # through to its own `*)` and refuses anyway — so the sabotage weakens to 4 failures
-# and the >= 7 minimum is what catches it. The minimums are not decoration.
+# and the >= 5 minimum is what catches it (that weakening now yields 2, for the
+# reason in sabotage 1's note above). The minimums are not decoration.
 
 set -u
 
@@ -247,18 +281,24 @@ stage_tree || exit 1
 sed -i 's|^        \*)                        echo unknown; return 1 ;;$|        *)                        echo vendor; return 0 ;;|' \
     "$TREE/lib/rw-usbpower.sh"
 measure "classify: unknown md5 reported as vendor" "lib/rw-usbpower.sh" \
-    '^        \*\)                        echo vendor; return 0 ;;$' 7
+    '^        \*\)                        echo vendor; return 0 ;;$' 5
 
 # ── 2. step 9 trusts the write instead of re-reading the card ──────────────
 #
 # ⚠️ The 4-space anchor is load-bearing: the identical expression appears again at
 # 8 spaces inside the rollback branch, and patching both would make the rollback
 # claim success as well — two defects, so a negative control for neither.
+#
+# ⚠️ The replacement must name the variable the library actually compares against.
+# It used to be $RW_UIMAGE_PATCHED_MD5; when the two-state gate became three
+# (B32) that became $target, and a sabotage assigning an UNSET variable assigns
+# the empty string — step 9 then correctly detects a mismatch and rolls back, so
+# the suite passes and the sabotage reports "not caught" for the wrong reason.
 stage_tree || exit 1
-sed -i 's|^    got=\$(_rwup_md5 "\$img")$|    got="$RW_UIMAGE_PATCHED_MD5"  # SABOTAGE: assumed, not re-read|' \
+sed -i 's|^    got=\$(_rwup_md5 "\$img")$|    got="$target"  # SABOTAGE: assumed, not re-read|' \
     "$TREE/lib/rw-usbpower.sh"
-measure "step 9: the re-read replaced by the constant" "lib/rw-usbpower.sh" \
-    '^    got="\$RW_UIMAGE_PATCHED_MD5"  # SABOTAGE' 8
+measure "step 9: the re-read replaced by the expected md5" "lib/rw-usbpower.sh" \
+    '^    got="\$target"  # SABOTAGE' 8
 
 # ── 3. the backup is created and never checked ─────────────────────────────
 #
@@ -309,6 +349,33 @@ sed -i -e 's|^    struct\.pack_into(">I", data, 24, dcrc)$|    pass  # SABOTAGE:
     "$TREE/usb_host/uimage.py"
 measure "uimage_fix_crcs: the CRC order swapped" "usb_host/uimage.py" \
     '^    pass  # SABOTAGE: data CRC not stored yet$' 23
+
+# ── 6. the two-state gate restored: any patched image means "nothing to do" ──
+#
+# ⚠️ THE defect B32 warned about, reproduced exactly. The old gate knew two md5s
+# and returned 0 at its `patched` arm before anything else ran, so a unit already
+# carrying the 500 mA image — which is every unit commissioned so far, .188
+# included — would be asked for the mode patch, write NOTHING, and report success.
+# This is the negative control for group M: if group M cannot see this, group M is
+# decoration.
+stage_tree || exit 1
+sed -i 's|^    if \[ "\$state" = "\$want" \]; then$|    if [ "$state" != vendor ] \&\& [ "$state" != unknown ]; then  # SABOTAGE: two-state gate|' \
+    "$TREE/lib/rw-usbpower.sh"
+measure "the gate treats any patched image as done" "lib/rw-usbpower.sh" \
+    '^    if \[ "\$state" != vendor \] && \[ "\$state" != unknown \]; then  # SABOTAGE' 9
+
+# ── 7. the transition chains instead of deriving from the backup ────────────
+#
+# The other half of the same decision. patch_dtb.py refuses an already-patched
+# input with exit 1, so leaving src at $img means a power -> both transition dies
+# at step 4 — a loud failure rather than a silent one, but still a unit that cannot
+# be moved between states. It is worth its own case because the two lines are
+# independent: fixing the gate without fixing the source produces exactly this.
+stage_tree || exit 1
+sed -i 's|^            src="\$bak"$|            src="$img"  # SABOTAGE: chain the patches|' \
+    "$TREE/lib/rw-usbpower.sh"
+measure "the re-derivation chains off the patched image" "lib/rw-usbpower.sh" \
+    '^            src="\$img"  # SABOTAGE: chain the patches$' 10
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""

@@ -22,9 +22,9 @@
 # magic rather than asserting the vendor's 0x4eb788.
 #
 # ⚠️ The consequence, stated so nobody reads more into a pass than is there: the
-# two md5 constants cannot be exercised against a synthetic image, because their
+# three md5 constants cannot be exercised against a synthetic image, because their
 # whole content is "this is the firmware the 9-byte diff was measured against".
-# Groups F–J therefore OVERRIDE them with the fixture's own md5s — the sequence is
+# Groups F–M therefore OVERRIDE them with the fixture's own md5s — the sequence is
 # what is being tested, not the identity of one kernel. Group A asserts the shipped
 # values separately, which is the half a synthetic fixture can still do.
 #
@@ -104,17 +104,27 @@ echo "A. the shipped constants — measured, not guessable, and not for editing"
 # five sources on three units; if either value changes, whoever changed it has to
 # have re-measured, and this case is where they find that out.
 A_VENDOR=$(grep -E '^RW_UIMAGE_VENDOR_MD5=' "$LIB"  | cut -d'"' -f2)
-A_PATCH=$(grep  -E '^RW_UIMAGE_PATCHED_MD5=' "$LIB" | cut -d'"' -f2)
+A_POWER=$(grep  -E '^RW_UIMAGE_POWER_MD5=' "$LIB"   | cut -d'"' -f2)
+A_BOTH=$(grep   -E '^RW_UIMAGE_BOTH_MD5=' "$LIB"    | cut -d'"' -f2)
 A_NAME=$(grep   -E '^RW_UIMAGE_NAME=' "$LIB"        | cut -d'"' -f2)
 A_BACKUP=$(grep -E '^RW_UIMAGE_BACKUP=' "$LIB"      | cut -d'"' -f2)
 eq "$A_VENDOR" "edc637ac14f90e0187b1ed65ffedf6d7" "A1 the vendor uImage-system md5 is the measured one"
-eq "$A_PATCH"  "a1fd1af8da18c430a34b24762aa16dab" "A2 the patched uImage-system md5 is the measured one"
+eq "$A_POWER"  "a1fd1af8da18c430a34b24762aa16dab" "A2 the 500 mA uImage-system md5 is the measured one"
 eq "$A_NAME"   "uImage-system"                    "A3 the file written on p1 is uImage-system"
 eq "$A_BACKUP" "uImage-system.vendor"             "A4 the backup is uImage-system.vendor"
+# Measured 2026-08-14: patch_dtb.py --mode over .188's own uImage-system.vendor.
+eq "$A_BOTH"   "9021923205825a2ec36edeaa1fe3ccc3" "A7 the 500 mA + host-mode md5 is the measured one"
 
-# The two must differ, or the gate cannot tell "already done" from "do it".
-if [ "$A_VENDOR" != "$A_PATCH" ]; then ok "A5 vendor and patched md5s are different values"
-else bad "A5 vendor and patched md5s are equal — the gate cannot distinguish them"; fi
+# All three must differ PAIRWISE, or the gate cannot tell "already done" from "do
+# it" — and with two patches that is three comparisons, not one. The both-patched
+# constant landing equal to the power-only one is exactly how a mode patch would
+# report success having written nothing.
+A_DUPES=$(printf '%s\n' "$A_VENDOR" "$A_POWER" "$A_BOTH" | sort | uniq -d | wc -l)
+if [ -n "$A_VENDOR" ] && [ -n "$A_POWER" ] && [ -n "$A_BOTH" ] && [ "$A_DUPES" -eq 0 ]; then
+    ok "A5 the vendor, 500 mA and host-mode md5s are three distinct non-empty values"
+else
+    bad "A5 the three md5 constants are not three distinct non-empty values"
+fi
 
 # p1 must not have become reachable through the role table as a side effect.
 if grep -qE 'RW_PART_ROLES=.*(^|[^0-9])1:' "$REPO/lib/rw-identify.sh"; then
@@ -130,21 +140,38 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "B. rw_usbpower_classify — three outcomes, and 'unknown' is a refusal"
+echo "B. rw_usbpower_classify — four outcomes, and 'unknown' is a refusal"
 # ═══════════════════════════════════════════════════════════════════════════
 set +e
 b_out=$(rw_usbpower_classify "$RW_UIMAGE_VENDOR_MD5");  b_rc=$?
 eq "$b_out" "vendor" "B1 the vendor md5 classifies as vendor"
 rc_is "$b_rc" 0      "B2 ...and returns 0"
-b_out=$(rw_usbpower_classify "$RW_UIMAGE_PATCHED_MD5"); b_rc=$?
-eq "$b_out" "patched" "B3 the patched md5 classifies as patched"
+b_out=$(rw_usbpower_classify "$RW_UIMAGE_POWER_MD5"); b_rc=$?
+eq "$b_out" "power" "B3 the 500 mA md5 classifies as power"
 rc_is "$b_rc" 0       "B4 ...and returns 0"
 b_out=$(rw_usbpower_classify "00000000000000000000000000000000"); b_rc=$?
-eq "$b_out" "unknown" "B5 a third md5 classifies as unknown"
+eq "$b_out" "unknown" "B5 a fourth md5 classifies as unknown"
 rc_is "$b_rc" 1       "B6 ...and returns 1, so a caller cannot fall through to patching"
 b_out=$(rw_usbpower_classify ""); b_rc=$?
 eq "$b_out" "unknown" "B7 an empty md5 classifies as unknown"
 rc_is "$b_rc" 1       "B8 ...and returns 1"
+# ── the both-patched state, and the target selector ──
+# ⚠️ B9 is the case the two-state gate could not have: a power-only unit asked for
+# the mode patch used to hit the `patched` early return and report success having
+# written nothing.
+b_out=$(rw_usbpower_classify "$RW_UIMAGE_BOTH_MD5"); b_rc=$?
+eq "$b_out" "both" "B9 the 500 mA + host-mode md5 classifies as both, not unknown"
+rc_is "$b_rc" 0     "B10 ...and returns 0"
+eq "$(RW_USBPOWER_WITH_MODE= rw_usbpower_want)"  "power" "B11 the default want is power — the mode patch is opt-in"
+eq "$(RW_USBPOWER_WITH_MODE=0 rw_usbpower_want)" "power" "B12 ...and 0 is off, not 'set'"
+eq "$(RW_USBPOWER_WITH_MODE=1 rw_usbpower_want)" "both"  "B13 RW_USBPOWER_WITH_MODE=1 asks for both"
+eq "$(rw_usbpower_target_md5 power)" "$RW_UIMAGE_POWER_MD5" "B14 the power target is the 500 mA md5"
+eq "$(rw_usbpower_target_md5 both)"  "$RW_UIMAGE_BOTH_MD5"  "B15 the both target is the host-mode md5"
+b_out=$(rw_usbpower_target_md5 sideways); b_rc=$?
+eq "$b_out" ""  "B16 a word that is not a state yields no md5"
+rc_is "$b_rc" 1 "B17 ...and returns 1, so a caller cannot compare against the empty string"
+eq "$(RW_USBPOWER_WITH_MODE=1 rw_usbpower_target_md5)" "$RW_UIMAGE_BOTH_MD5" \
+    "B18 with no argument the target follows rw_usbpower_want"
 set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -258,18 +285,23 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "F. the md5 gate's three outcomes, over the local transport"
+echo "F. the md5 gate's four outcomes, over the local transport"
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# From here on the two constants are the FIXTURE's, for the reason in the header.
-# The expected patched md5 is computed with the REAL patch_dtb.py, so a sabotaged
+# From here on the three constants are the FIXTURE's, for the reason in the header.
+# The expected md5s are computed with the REAL patch_dtb.py, so a sabotaged
 # copy that produces different bytes is caught rather than accommodated.
 python3 "$REAL_TOOLS/patch_dtb.py" "$W/vendor.img" "$W/expected.img" >/dev/null 2>&1 \
     || bad "F0 harness: the real patch_dtb.py could not build the expected image"
+python3 "$REAL_TOOLS/patch_dtb.py" --mode "$W/vendor.img" "$W/expected-both.img" >/dev/null 2>&1 \
+    || bad "F0 harness: the real patch_dtb.py --mode could not build the expected image"
 RW_UIMAGE_VENDOR_MD5="$(md5of "$W/vendor.img")"
-RW_UIMAGE_PATCHED_MD5="$(md5of "$W/expected.img")"
-[ -n "$RW_UIMAGE_VENDOR_MD5" ] && [ "$RW_UIMAGE_VENDOR_MD5" != "$RW_UIMAGE_PATCHED_MD5" ] \
-    || bad "F0 harness: the two fixture md5s are missing or identical"
+RW_UIMAGE_POWER_MD5="$(md5of "$W/expected.img")"
+RW_UIMAGE_BOTH_MD5="$(md5of "$W/expected-both.img")"
+F_DUPES=$(printf '%s\n' "$RW_UIMAGE_VENDOR_MD5" "$RW_UIMAGE_POWER_MD5" "$RW_UIMAGE_BOTH_MD5" \
+    | sort | uniq -d | wc -l)
+[ -n "$RW_UIMAGE_VENDOR_MD5" ] && [ -n "$RW_UIMAGE_BOTH_MD5" ] && [ "$F_DUPES" -eq 0 ] \
+    || bad "F0 harness: the three fixture md5s are missing or not all distinct"
 
 # fresh_boot <dir> [<image>] — a directory that looks like a mounted p1.
 # mlo and u-boot.bin are present because rw_is_boot_tree requires all three, and a
@@ -286,7 +318,7 @@ set +e
 fresh_boot "$W/b1"
 f_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/b1" "$(fresh_work)" 2>&1); f_rc=$?
 rc_is "$f_rc" 0 "F1 a vendor image is patched and the call succeeds"
-eq "$(md5of "$W/b1/$RW_UIMAGE_NAME")" "$RW_UIMAGE_PATCHED_MD5" "F2 uImage-system now carries 500 mA"
+eq "$(md5of "$W/b1/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" "F2 uImage-system now carries 500 mA"
 eq "$(md5of "$W/b1/$RW_UIMAGE_BACKUP")" "$RW_UIMAGE_VENDOR_MD5" "F3 the vendor image is backed up"
 says "$f_out" 'verified by re-reading' "F4 ...and the result was re-read from the card, not assumed"
 says "$f_out" 'reboot is required'     "F5 ...and the reboot requirement is stated"
@@ -355,7 +387,7 @@ fresh_boot "$W/b6"
 cp "$W/vendor.img" "$W/b6/$RW_UIMAGE_BACKUP"
 h_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/b6" "$(fresh_work)" 2>&1); h_rc=$?
 rc_is "$h_rc" 0 "H4 a pre-existing correct backup is accepted"
-eq "$(md5of "$W/b6/$RW_UIMAGE_NAME")" "$RW_UIMAGE_PATCHED_MD5" "H5 ...and the patch proceeds"
+eq "$(md5of "$W/b6/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" "H5 ...and the patch proceeds"
 set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -469,7 +501,7 @@ set +e
 fresh_boot "$W/k1"
 k_out=$(rw_usbpower_apply_offline "$W/k1" "$(fresh_work)" 2>&1); k_rc=$?
 rc_is "$k_rc" 0 "K1 the offline entry point patches a real-looking boot tree"
-eq "$(md5of "$W/k1/$RW_UIMAGE_NAME")" "$RW_UIMAGE_PATCHED_MD5" "K2 ...and the image is patched"
+eq "$(md5of "$W/k1/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" "K2 ...and the image is patched"
 # A tree with uImage-system but no mlo is NOT p1 — the marker set is the check that
 # a mount landed on the right partition.
 rm -rf "$W/k2"; mkdir -p "$W/k2"; cp "$W/vendor.img" "$W/k2/$RW_UIMAGE_NAME"
@@ -578,6 +610,104 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
+echo "M. the mode patch through the SEQUENCE — the four-state gate (B32)"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Group L drives patch_dtb.py --mode directly. This group drives rw_usbpower_apply,
+# which is where the defect lived: with a two-element md5 set, a power-only unit
+# asked for the mode patch hit the `patched` arm and returned 0 having written
+# NOTHING. M3-M5 are that case. Every unit already commissioned is in that state.
+#
+# fresh_boot leaves no backup, so a re-derivation fixture has to place one; that is
+# deliberate, because "no pristine backup" is a reachable field state and M8-M10
+# are the refusal it must produce.
+with_backup() { cp "$W/vendor.img" "$1/$RW_UIMAGE_BACKUP"; }
+
+set +e
+# ── vendor + opt-in: lands the both-patched image ──
+fresh_boot "$W/m1"
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local rw_usbpower_apply "$W/m1" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M1 a vendor image with RW_USBPOWER_WITH_MODE=1 is patched"
+eq "$(md5of "$W/m1/$RW_UIMAGE_NAME")" "$RW_UIMAGE_BOTH_MD5" "M2 ...to the 500 mA + host-mode image"
+# md5 equality is evidence about bytes; this is evidence about the property.
+m_out2=$(python3 "$REAL_TOOLS/verify_uimage.py" "$W/m1/$RW_UIMAGE_NAME" \
+    --expect-power 0xfa --expect-mode 0x01 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M2b ...and the image on the card really carries power 0xfa and mode 0x01"
+eq "$(md5of "$W/m1/$RW_UIMAGE_BACKUP")" "$RW_UIMAGE_VENDOR_MD5" "M2c ...with the vendor image backed up"
+
+# ── ⚠️ THE DEFECT: a power-only unit asked for both must not report success ──
+fresh_boot "$W/m2" "$W/expected.img"
+with_backup "$W/m2"
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local rw_usbpower_apply "$W/m2" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M3 a power-only card asked for both succeeds"
+eq "$(md5of "$W/m2/$RW_UIMAGE_NAME")" "$RW_UIMAGE_BOTH_MD5" \
+    "M4 ...and the mode patch IS applied — not an early 'nothing to do' return"
+says "$m_out" 're-deriving' "M5 ...saying it re-derived from the backup rather than chaining"
+says "$m_out" 'verified by re-reading' "M6 ...and the result was re-read from the card"
+eq "$(md5of "$W/m2/$RW_UIMAGE_BACKUP")" "$RW_UIMAGE_VENDOR_MD5" "M7 ...leaving the backup pristine"
+
+# ── the same transition with no usable backup: refuse, and write nothing ──
+fresh_boot "$W/m3" "$W/expected.img"
+m_before=$(md5of "$W/m3/$RW_UIMAGE_NAME")
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local rw_usbpower_apply "$W/m3" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 1 "M8 a power-only card with NO backup cannot be re-derived, so it is refused"
+says "$m_out" 'DERIVED|pristine|vendor kernel' "M9 ...explaining that a pristine vendor image is required"
+eq "$(md5of "$W/m3/$RW_UIMAGE_NAME")" "$m_before" "M10 ...and uImage-system is untouched"
+fresh_boot "$W/m4" "$W/expected.img"
+echo "not a kernel" > "$W/m4/$RW_UIMAGE_BACKUP"
+m_before=$(md5of "$W/m4/$RW_UIMAGE_NAME")
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local rw_usbpower_apply "$W/m4" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 1 "M11 a power-only card with a BOGUS backup is refused too"
+eq "$(md5of "$W/m4/$RW_UIMAGE_NAME")" "$m_before" "M12 ...and wrote nothing"
+
+# ── both + opt-in: idempotent ──
+m_before=$(md5of "$W/m2/$RW_UIMAGE_NAME")
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local rw_usbpower_apply "$W/m2" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M13 a second run over the both-patched card succeeds"
+says "$m_out" 'already|nothing to do' "M14 ...saying there was nothing to do"
+eq "$(md5of "$W/m2/$RW_UIMAGE_NAME")" "$m_before" "M15 ...and did not rewrite it"
+
+# ── the undo: a both-patched card asked for power re-derives DOWNWARD ──
+# The remedy if panel item 10 fails, and the reason the transition is expressed as
+# "derive the wanted image from the backup" rather than "apply a patch".
+m_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/m2" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M16 a both-patched card asked for power succeeds"
+eq "$(md5of "$W/m2/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" "M17 ...and is the power-only image again"
+
+# ── the opt-in guarantee, at the sequence level ──
+# ⚠️ B32 item 10 is unverified on hardware, so a default run must never produce a
+# mode-patched card. L11 asserts this of the tool; this asserts it of the writer.
+fresh_boot "$W/m5"
+m_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/m5" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M18 a default run over a vendor card succeeds"
+eq "$(md5of "$W/m5/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" \
+    "M19 ...and lands the POWER-ONLY image — the mode patch is opt-in"
+m_out2=$(python3 "$REAL_TOOLS/verify_uimage.py" "$W/m5/$RW_UIMAGE_NAME" --expect-mode 0x01 2>&1); m_rc=$?
+rc_is "$m_rc" 1 "M20 ...and that card fails --expect-mode 0x01"
+
+# ── the dry run names both ends of the transition and writes nothing ──
+fresh_boot "$W/m6" "$W/expected.img"
+with_backup "$W/m6"
+m_before=$(md5of "$W/m6/$RW_UIMAGE_NAME")
+m_out=$(RW_USBPOWER_DRY=1 RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=local \
+    rw_usbpower_apply "$W/m6" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M21 the dry run over a power-only card asked for both succeeds"
+says "$m_out" 'would patch' "M22 ...saying what it would do"
+says "$m_out" "power .*-> both" "M23 ...naming the state it found and the one it wants"
+eq "$(md5of "$W/m6/$RW_UIMAGE_NAME")" "$m_before" "M24 ...and changed nothing"
+
+# ── the ssh transport reaches the same end state (group J's argument, for mode) ──
+fresh_boot "$W/m7" "$W/expected.img"
+with_backup "$W/m7"
+m_out=$(RW_USBPOWER_WITH_MODE=1 RWUP_XPORT=ssh RWUP_TARGET="root@fake" \
+    RW_SSH="$W/stub-ssh" RW_SCP="$W/stub-scp" \
+    rw_usbpower_apply "$W/m7" "$(fresh_work)" 2>&1); m_rc=$?
+rc_is "$m_rc" 0 "M25 the same transition over the ssh transport succeeds"
+eq "$(md5of "$W/m7/$RW_UIMAGE_NAME")" "$RW_UIMAGE_BOTH_MD5" "M26 ...and reaches the same bytes"
+set -e
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
 if [ "$FAIL" -eq 0 ]; then
@@ -586,7 +716,7 @@ if [ "$FAIL" -eq 0 ]; then
     exit 0
 fi
 echo -e "  ${RED}✗ $FAIL case(s) failed${NC}"
-echo -e "  ${YELLOW}note:${NC} groups F-K override the two md5 constants with the synthetic"
+echo -e "  ${YELLOW}note:${NC} groups F-M override the three md5 constants with the synthetic"
 echo -e "        fixture's own — see this file's header before concluding anything"
 echo -e "        about the real uImage-system from a failure here."
 echo ""

@@ -614,17 +614,26 @@ tool-level traps rather than device facts, and each has cost real time.
   verified by re-reading the card afterwards, and rolled back on failure. ⚠️ **Never write a second
   copy of that sequence into a caller**: it is the one step `tests/rw_provision_test.sh` group E cannot
   compare between executors, so a duplicate would drift undetected — `tests/rw_usbpower_test.sh` group J
-  is the stand-in comparison, running the one sequence over both transports (116 cases, host-only, needs
-  `python3`). ⚠️ **And its gate is a whole-file md5 against a TWO-element set, so it can carry exactly one
-  patch.** `patch_dtb.py --mode` (B32) makes a second one available and `rw_usbpower_apply` **returns 0 at
-  its `patched` arm before anything runs**, so on an already-commissioned unit a naive second patch does
-  nothing and reports success. Two patches are four firmware states; see `IMPROVEMENT_PLAN.md` B32 before
-  touching that gate, and derive from `uImage-system.vendor` rather than chaining. ⚠️ **Its fixtures are SYNTHETIC and must stay that way**: the vendor kernel is gitignored
+  is the stand-in comparison, running the one sequence over both transports (155 cases, host-only, needs
+  `python3`). ⚠️ **The gate knows THREE measured md5s — vendor, 500 mA, and 500 mA + host mode — and the
+  target is chosen by the CALLER**, `rw_usbpower_want`/`rw_usbpower_target_md5` off `RW_USBPOWER_WITH_MODE`
+  (`--usb-mode` on all three callers, **opt-in** until B32 panel item 10 passes). It used to know two and
+  `rw_usbpower_apply` returned 0 at its `patched` arm before anything ran, so on an already-commissioned
+  unit a second patch wrote nothing and reported success. ⚠️ **Never chain one patch onto another** —
+  `patch_dtb.py` refuses an already-patched input, so a transition re-derives from
+  `uImage-system.vendor` (which step 6 proves is pristine), and that is also what makes the undo an
+  ordinary run with `--usb-mode` omitted. A power-only card with no usable backup is **refused**.
+  ⚠️ **Its fixtures are SYNTHETIC and must stay that way**: the vendor kernel is gitignored
   and can never be committed, and `tests/make-fake-uimage.py` works only because `uimage.py` *finds* the
-  DTB by magic rather than asserting the vendor offset. Groups F–K therefore override the two md5
+  DTB by magic rather than asserting the vendor offset. Groups F–M therefore override the three md5
   constants with the fixture's own — the sequence is what is tested, not the identity of one kernel.
-  `tests/measure_usbpower_sabotage.sh` re-measures the suite against five broken copies and is where the
-  counts come from; it stages the **five files** the suite sources, never `cp -a lib usb_host`, which
+  `tests/measure_usbpower_sabotage.sh` re-measures the suite against **seven** broken copies and is where
+  the counts come from; two of them exist purely as group M's negative control — the two-state gate
+  restored, and a transition that chains instead of deriving. ⚠️ **Two of its sabotages anchor on exact
+  full lines of `rw-usbpower.sh`**, so a second 4-space `got=$(_rwup_md5 "$img")` or a second 4-space
+  `if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then` breaks them — and a sabotage whose replacement names a
+  variable that no longer exists assigns the empty string and reports "not caught" for the wrong reason.
+  It stages the **five files** the suite sources, never `cp -a lib usb_host`, which
   over DrvFs blows a 300 s budget and looks like a hung suite.
   p1 is reached only through
   `rw_card_boot_partition` / `rw_mount_boot` / `rw_umount_boot` — `RW_PART_ROLES` still does not

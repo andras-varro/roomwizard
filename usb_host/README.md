@@ -129,6 +129,14 @@ The patch is:
 - **Reversible** — a backup (`uImage-system.vendor`) is created before patching
 - **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
 
+⚠️ **`--usb-mode` is a second, opt-in p1 patch** (2026-08-14): it also sets the `usb_otg_hs` node's
+`mode` from 3 (`DUAL_ROLE`) to 1 (`HOST`), which is the candidate *cause* fix for "nothing enumerates
+unless it was plugged in at boot". It is **unverified on hardware** — `../IMPROVEMENT_PLAN.md` B32 panel
+item 10 is the measurement that decides it — so a default run still lands the power-only image. The
+three states are gated on three measured md5s in `../lib/rw-usbpower.sh`, a transition always re-derives
+from `uImage-system.vendor` rather than chaining, and omitting `--usb-mode` on a mode-patched unit
+re-derives it back down: that is the undo.
+
 #### DTB Location in uImage
 
 ```

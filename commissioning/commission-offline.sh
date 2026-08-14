@@ -172,6 +172,11 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      run with no powered hub. The vendor image is backed up to
                      uImage-system.vendor on p1 first, and md5-verified both
                      ways. --no-usb implies this.
+  --usb-mode         ALSO patch the MUSB 'mode' property from 3 (DUAL_ROLE) to 1
+                     (HOST), so the port comes up live on a boot with an empty
+                     socket instead of needing RESCAN. UNVERIFIED ON HARDWARE —
+                     IMPROVEMENT_PLAN.md B32 item 10 is the measurement that
+                     decides it, so this is opt-in. Undo: uImage-system.vendor.
   --help
 
 The card is identified by CONTENT and by PARTITION POSITION, never by UUID.
@@ -196,6 +201,9 @@ while [[ $# -gt 0 ]]; do
         # takes the FIRST match, so a later arm is never reached and the operator
         # gets "Unknown provision group: usb-power" instead.
         --no-usb-power)   DO_USB_POWER=0; shift ;;
+        # ...and this one must precede it too, for the same reason: --usb-mode is
+        # not a --no-* at all, but it IS a --usb* prefix of the group name.
+        --usb-mode)       export RW_USBPOWER_WITH_MODE=1; shift ;;
         --no-*)
             g="${1#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -723,7 +731,11 @@ else
             printf '%s\n' "$BOOT_OUT" | sed 's/^/    /'
             UP_WORK=$(mktemp -d)
             if rw_usbpower_apply_offline "$MOUNTED_BASE/boot" "$UP_WORK"; then
-                P1_STATE="500 mA (patched and verified)"
+                if [[ "$(rw_usbpower_want)" == both ]]; then
+                    P1_STATE="500 mA + host mode (patched and verified)"
+                else
+                    P1_STATE="500 mA (patched and verified)"
+                fi
             else
                 P1_STATE="FAILED — read the block above"
             fi
@@ -934,14 +946,20 @@ case "$P1_STATE" in
         _p1b="$BOOT_MOUNTED/boot/$RW_UIMAGE_BACKUP"
         _p1m=$(md5sum "$_p1f" 2>/dev/null | cut -d' ' -f1)
         _p1v=$(md5sum "$_p1b" 2>/dev/null | cut -d' ' -f1)
-        if [[ "$_p1m" != "$RW_UIMAGE_PATCHED_MD5" ]]; then
-            vfail "p1: $RW_UIMAGE_NAME is ${_p1m:-unreadable}, expected the patched $RW_UIMAGE_PATCHED_MD5"
+        # ⚠️ The expected md5 comes from rw_usbpower_target_md5, never from a
+        # constant name: with --usb-mode there are two patched images and comparing
+        # against the wrong one is a vfail on a correctly patched card (or, worse,
+        # a pass on a card that never got the mode patch).
+        _p1w=$(rw_usbpower_want)
+        _p1e=$(rw_usbpower_target_md5 "$_p1w")
+        if [[ "$_p1m" != "$_p1e" ]]; then
+            vfail "p1: $RW_UIMAGE_NAME is ${_p1m:-unreadable}, expected the '$_p1w' image $_p1e"
         elif [[ "$_p1v" != "$RW_UIMAGE_VENDOR_MD5" ]]; then
             # Without a good backup the patch is not undoable in place, which is the
             # single property the whole sequence is built around.
             vfail "p1: $RW_UIMAGE_BACKUP is ${_p1v:-missing}, expected the vendor $RW_UIMAGE_VENDOR_MD5"
         else
-            ok "p1: 500 mA budget in place, vendor image backed up as $RW_UIMAGE_BACKUP"
+            ok "p1: '$_p1w' image in place, vendor image backed up as $RW_UIMAGE_BACKUP"
         fi
         ;;
     FAILED*)

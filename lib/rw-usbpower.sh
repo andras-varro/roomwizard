@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# lib/rw-usbpower.sh — raise the USB power budget from 100 mA to 500 mA by
-#                      patching uImage-system on p1, safely, from either transport.
+# lib/rw-usbpower.sh — raise the USB power budget from 100 mA to 500 mA (and,
+#                      opt-in, force MUSB to host mode) by patching uImage-system
+#                      on p1, safely, from either transport.
 #
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-usbpower.sh"
 #                          (needs lib/rw-identify.sh for the offline mount half)
@@ -48,10 +49,37 @@
 # vendor uImage-system is byte-identical everywhere. Nothing generates it per
 # unit, unlike the filesystem UUIDs. That is what makes an md5 gate sound rather
 # than a fingerprint of one card.
+#
+# ── Two patches, THREE reachable states, and why the names changed ──────────
+#
+# patch_dtb.py can set two properties of one node: `power` (100 -> 500 mA) and,
+# under --mode, `mode` (3 DUAL_ROLE -> 1 HOST, IMPROVEMENT_PLAN.md B32). So an
+# image on p1 is one of:
+#
+#   vendor  edc637ac…   power 0x32, mode 0x03   as Steelcase shipped it
+#   power   a1fd1af8…   power 0xfa, mode 0x03   9 bytes from vendor
+#   both    90219232…   power 0xfa, mode 0x01   10 bytes from vendor
+#
+# A fourth — mode-only — is NOT reachable: --mode patches both properties in one
+# pass and never mode alone, deliberately, because a p1 write is one shot. It
+# therefore classifies `unknown` and is refused, which is correct: an image with
+# mode patched and power not is not something this repo produced.
+#
+# ⚠️ The old name for the middle one was RW_UIMAGE_PATCHED_MD5, and it was renamed
+# because "patched" now names two different images. The gate used to know two
+# constants and rw_usbpower_apply returned 0 at its `patched` arm before anything
+# ran — so on an already-power-patched unit a mode patch would have applied
+# NOTHING and reported success. The target is now chosen by the caller
+# (rw_usbpower_want) and compared against the state actually on the card.
+#
+# 90219232… measured 2026-08-14: patch_dtb.py --mode over .188's own
+# uImage-system.vendor, twice, byte-identical; the power-only derivation from the
+# same source reproduces a1fd1af8…, which is what that unit is running.
 RW_UIMAGE_NAME="uImage-system"
 RW_UIMAGE_BACKUP="uImage-system.vendor"
 RW_UIMAGE_VENDOR_MD5="edc637ac14f90e0187b1ed65ffedf6d7"
-RW_UIMAGE_PATCHED_MD5="a1fd1af8da18c430a34b24762aa16dab"
+RW_UIMAGE_POWER_MD5="a1fd1af8da18c430a34b24762aa16dab"
+RW_UIMAGE_BOTH_MD5="9021923205825a2ec36edeaa1fe3ccc3"
 
 # ---------------------------------------------------------------------------
 # rw_usbpower_tool NAME
@@ -91,18 +119,59 @@ rw_usbpower_prereqs() {
 # ---------------------------------------------------------------------------
 # rw_usbpower_classify MD5
 #
-# Echo "vendor", "patched" or "unknown". Return 0 for the first two, 1 for the
-# third — so a caller can `case` on the word and still be safe under `set -e`.
+# Echo "vendor", "power", "both" or "unknown". Return 0 for the first three, 1 for
+# the last — so a caller can `case` on the word and still be safe under `set -e`.
 #
-# ⚠️ "unknown" is a REFUSAL, not a reason to patch anyway. A third md5 means this
-# is not the firmware the 9-byte diff was measured against, and patch_dtb.py's own
+# ⚠️ "unknown" is a REFUSAL, not a reason to patch anyway. A fourth md5 means this
+# is not the firmware the diffs were measured against, and patch_dtb.py's own
 # value check would be the only thing left standing.
+#
+# The empty guard is first on purpose: an unset constant would otherwise make
+# `case "" in "$RW_UIMAGE_BOTH_MD5")` match and classify a missing file as a
+# patched one.
 # ---------------------------------------------------------------------------
 rw_usbpower_classify() {
+    [ -n "${1:-}" ] || { echo unknown; return 1; }
     case "$1" in
         "$RW_UIMAGE_VENDOR_MD5")  echo vendor;  return 0 ;;
-        "$RW_UIMAGE_PATCHED_MD5") echo patched; return 0 ;;
+        "$RW_UIMAGE_POWER_MD5")   echo power;   return 0 ;;
+        "$RW_UIMAGE_BOTH_MD5")    echo both;    return 0 ;;
         *)                        echo unknown; return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# rw_usbpower_want
+#
+# Echo which image the caller wants on p1: "power" (the default) or "both".
+#
+# ⚠️ The mode patch stays OPT-IN until it is verified on a panel — B32 checklist
+# item 10. `mode = <1>` is inferred from omap2430.c, not measured on hardware, and
+# defaulting it would promote that hedge to a confirmation on every unit
+# commissioned afterwards. RW_USBPOWER_WITH_MODE=1 is the opt-in; the three
+# callers each expose it as --usb-mode.
+# ---------------------------------------------------------------------------
+rw_usbpower_want() {
+    case "${RW_USBPOWER_WITH_MODE:-}" in
+        ""|0|no|off) echo power ;;
+        *)           echo both  ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# rw_usbpower_target_md5 [WANT]
+#
+# Echo the md5 of the image WANT names, defaulting to rw_usbpower_want. Echoes
+# nothing and returns 1 for a word that is not a state, so a caller that gets this
+# wrong refuses rather than compares against the empty string.
+# ---------------------------------------------------------------------------
+rw_usbpower_target_md5() {
+    local want="${1:-}"
+    [ -n "$want" ] || want=$(rw_usbpower_want)
+    case "$want" in
+        power) echo "$RW_UIMAGE_POWER_MD5" ;;
+        both)  echo "$RW_UIMAGE_BOTH_MD5" ;;
+        *)     return 1 ;;
     esac
 }
 
@@ -181,18 +250,25 @@ _rwup_sync() {
 # WORKDIR is a scratch directory on THIS host. RWUP_XPORT (and RWUP_TARGET for
 # ssh) must be set. RW_USBPOWER_DRY=1 reports the verdict and writes nothing.
 #
-# Returns 0 when p1 ends up carrying the 500 mA image (including the idempotent
-# "it already did" case), 1 otherwise — and on 1 it has either written nothing or
-# restored the vendor image, and says which.
+# Returns 0 when p1 ends up carrying the image rw_usbpower_want names (including
+# the idempotent "it already did" case), 1 otherwise — and on 1 it has either
+# written nothing or restored the vendor image, and says which.
+#
+# ⚠️ The rollback restores the VENDOR image, whichever transition was being made.
+# So a failed power -> both re-derivation leaves a unit at 100 mA, not back at
+# 500 mA. That is deliberate: uImage-system.vendor is the one image whose md5 has
+# been verified this run, and a unit that boots at 100 mA is a unit that boots.
 #
 # Every step and why it is there:
 #
 #   1  the file exists                  — a BOOTDIR without it is not p1
-#   2  md5 gate, three outcomes         — patched: skip. unknown: refuse. vendor: go
+#   2  md5 gate, four outcomes          — already the wanted image: skip.
+#                                         unknown: refuse. vendor: go. the OTHER
+#                                         patched image: re-derive from the backup
 #   3  pull, and re-check the md5       — a truncated transfer is exactly what a
 #                                         600 MHz device over scp can produce
 #   4  patch_dtb.py                     — derives, never ships, the kernel
-#   5  verify_uimage.py + md5 assert    — both CRCs and the power value, on the
+#   5  verify_uimage.py + md5 assert    — both CRCs and the patched values, on the
 #                                         candidate, BEFORE it is anywhere near p1
 #   6  back up, then verify the BACKUP  — ⚠️ before the original is touched. A
 #                                         backup nobody checked is not a backup
@@ -204,10 +280,17 @@ _rwup_sync() {
 #                                         about a cache, not about the card
 #   10 on any failure past step 6       — restore, verify the restore, and refuse
 #                                         LOUDLY. p1 has no recovery over SSH
+#
+# ⚠️ Step 2's fourth outcome is the one that took a session to find. Never chain
+# one patch onto another: patch_dtb.py refuses an already-patched input by design,
+# so going power -> both means re-deriving from uImage-system.vendor, which step 6
+# already proves is the pristine vendor kernel. Deriving from one source collapses
+# every transition to the same three lines, and it is also the undo — asking for
+# `power` on a `both` unit re-derives downward.
 # ---------------------------------------------------------------------------
 rw_usbpower_apply() {
     local bootdir="$1" work="$2"
-    local img bak new cur state got
+    local img bak new cur src state got want target mode_flag verify_args
 
     [ -n "$bootdir" ] || { echo "  rw_usbpower_apply: no boot directory"; return 1; }
     [ -n "$work" ] && [ -d "$work" ] || { echo "  rw_usbpower_apply: no work directory"; return 1; }
@@ -218,6 +301,19 @@ rw_usbpower_apply() {
     if [ "$RWUP_XPORT" = "ssh" ] && [ -z "${RWUP_TARGET:-}" ]; then
         echo "  rw_usbpower_apply: the ssh transport needs RWUP_TARGET"
         return 1
+    fi
+
+    want=$(rw_usbpower_want)
+    target=$(rw_usbpower_target_md5 "$want") || true
+    if [ -z "$target" ]; then
+        echo "  rw_usbpower_apply: no measured md5 for the '$want' image — refusing"
+        return 1
+    fi
+    mode_flag=""
+    verify_args="--expect-power 0xfa"
+    if [ "$want" = both ]; then
+        mode_flag="--mode"
+        verify_args="--expect-power 0xfa --expect-mode 0x01"
     fi
 
     bootdir="${bootdir%/}"
@@ -232,16 +328,33 @@ rw_usbpower_apply() {
         return 1
     fi
     state=$(rw_usbpower_classify "$cur") || true
+    src="$img"
+    if [ "$state" = "$want" ]; then
+        echo "  $RW_UIMAGE_NAME is already the $want image ($cur) — nothing to do"
+        return 0
+    fi
     case "$state" in
-        patched)
-            echo "  $RW_UIMAGE_NAME is already the 500 mA image ($cur) — nothing to do"
-            return 0
-            ;;
         vendor) ;;
+        power|both)
+            # The other patched image. Re-derive from the backup — see the ⚠️ above.
+            src="$bak"
+            got=$(_rwup_md5 "$src")
+            if [ "$(rw_usbpower_classify "${got:-}")" != vendor ]; then
+                echo "  $RW_UIMAGE_NAME is the '$state' image and $RW_UIMAGE_BACKUP is"
+                echo "      ${got:-missing}, not the vendor kernel. The '$want' image can only be"
+                echo "      DERIVED from a pristine vendor image — patch_dtb.py refuses an"
+                echo "      already-patched input — and there is none here. Nothing was changed."
+                echo "      Restore the vendor kernel to $RW_UIMAGE_BACKUP from a full-card"
+                echo "      backup and re-run."
+                return 1
+            fi
+            echo "  $RW_UIMAGE_NAME is the '$state' image; re-deriving '$want' from $RW_UIMAGE_BACKUP"
+            ;;
         *)
-            echo "  $RW_UIMAGE_NAME md5 is $cur, which is neither the vendor image"
-            echo "      ($RW_UIMAGE_VENDOR_MD5) nor the patched one"
-            echo "      ($RW_UIMAGE_PATCHED_MD5). REFUSING to write p1."
+            echo "  $RW_UIMAGE_NAME md5 is $cur, which is none of the vendor image"
+            echo "      ($RW_UIMAGE_VENDOR_MD5), the 500 mA one"
+            echo "      ($RW_UIMAGE_POWER_MD5) or the 500 mA + host-mode one"
+            echo "      ($RW_UIMAGE_BOTH_MD5). REFUSING to write p1."
             echo "      Nothing was changed. This is not the firmware the patch was"
             echo "      measured against — say what this unit is before overriding."
             return 1
@@ -249,7 +362,8 @@ rw_usbpower_apply() {
     esac
 
     if [ -n "${RW_USBPOWER_DRY:-}" ]; then
-        echo "  would patch    $img  (vendor $cur -> $RW_UIMAGE_PATCHED_MD5)"
+        echo "  would patch    $img  ($state $cur -> $want $target)"
+        echo "  would derive from  $src"
         echo "  would back up  $bak"
         return 0
     fi
@@ -260,35 +374,37 @@ rw_usbpower_apply() {
     fi
 
     # ── 3: pull, and re-check ──
-    if ! _rwup_pull "$img" "$work/vendor"; then
-        echo "  could not read $img"
+    if ! _rwup_pull "$src" "$work/vendor"; then
+        echo "  could not read $src"
         return 1
     fi
     got=$(md5sum "$work/vendor" | cut -d' ' -f1)
     if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then
-        echo "  the copy of $RW_UIMAGE_NAME that arrived here is $got, not $cur —"
-        echo "      the transfer was truncated or altered. Nothing was changed."
+        echo "  the copy of $(basename "$src") that arrived here is $got, not the vendor"
+        echo "      image — the transfer was truncated or altered. Nothing was changed."
         return 1
     fi
 
     # ── 4 + 5: derive and check the candidate, before p1 is involved ──
-    if ! python3 "$(rw_usbpower_tool patch_dtb.py)" "$work/vendor" "$work/patched" \
+    # $mode_flag is deliberately unquoted: it is either empty or the literal
+    # --mode, and an empty quoted argument would reach patch_dtb.py as a path.
+    if ! python3 "$(rw_usbpower_tool patch_dtb.py)" $mode_flag "$work/vendor" "$work/patched" \
             | sed 's/^/      /'; then
         echo "  patch_dtb.py failed — nothing was changed"
         return 1
     fi
     if ! python3 "$(rw_usbpower_tool verify_uimage.py)" "$work/patched" \
-            --expect-power 0xfa | sed 's/^/      /'; then
+            $verify_args | sed 's/^/      /'; then
         echo "  the patched image does not verify — nothing was changed"
         return 1
     fi
     got=$(md5sum "$work/patched" | cut -d' ' -f1)
-    if [ "$got" != "$RW_UIMAGE_PATCHED_MD5" ]; then
-        echo "  the patched image is $got, expected $RW_UIMAGE_PATCHED_MD5 —"
+    if [ "$got" != "$target" ]; then
+        echo "  the patched image is $got, expected the '$want' image $target —"
         echo "      refusing. Nothing was changed."
         return 1
     fi
-    echo "  patched image built and verified ($got)"
+    echo "  '$want' image built and verified ($got)"
 
     # ── 6: the backup, verified BEFORE the original is touched ──
     got=$(_rwup_md5 "$bak")
@@ -311,7 +427,7 @@ rw_usbpower_apply() {
         return 1
     fi
     got=$(_rwup_md5 "$new")
-    if [ "$got" != "$RW_UIMAGE_PATCHED_MD5" ]; then
+    if [ "$got" != "$target" ]; then
         _rwup_rm "$new"
         echo "  $new arrived as $got — $RW_UIMAGE_NAME is untouched"
         return 1
@@ -325,15 +441,15 @@ rw_usbpower_apply() {
     fi
     _rwup_sync
     got=$(_rwup_md5 "$img")
-    if [ "$got" = "$RW_UIMAGE_PATCHED_MD5" ]; then
-        echo "  $RW_UIMAGE_NAME is now the 500 mA image ($got), verified by re-reading it"
+    if [ "$got" = "$target" ]; then
+        echo "  $RW_UIMAGE_NAME is now the '$want' image ($got), verified by re-reading it"
         echo "  a reboot is required before the device tree change is live"
         return 0
     fi
 
     # ── 10: rollback ──
     echo ""
-    echo "  ✗ $RW_UIMAGE_NAME reads back as $got, not $RW_UIMAGE_PATCHED_MD5."
+    echo "  ✗ $RW_UIMAGE_NAME reads back as $got, not $target."
     echo "    Restoring the vendor kernel from $RW_UIMAGE_BACKUP."
     if _rwup_cp "$bak" "$img"; then
         _rwup_sync
