@@ -1015,7 +1015,12 @@ input: Microsoft X-Box 360 pad as .../input5
 nothing plugged in and the port is dead for the rest of that boot — anything inserted afterwards is
 never even powered. Measured on `.188` 2026-08-13, reproducible on demand with a driver unbind/bind, and
 the operator reports it has always been so on every unit: *"USB only worked if it was connected at
-boot."* Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`:
+boot."* ✅ **Treat this as a standing property of the hardware with a working one-tap remedy, not as an
+open bug** (agreed 2026-08-14): three mechanisms inferred from the driver source have each been applied
+and refuted on hardware, and Device Tools → USB → **RESCAN** revives a dead port in one tap, ~5 s,
+verified on a panel. Once a port is live, replug works normally at any gap — so it is **one tap per
+boot**, and none at all if the device was plugged in at boot.
+Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`:
 
 | Action | Result |
 |---|---|
@@ -1033,12 +1038,16 @@ upstream, and authoritative for this code because none of it is vendor-patched:
 
 - VBUS here is driven **solely by the DEVCTL `SESSION` bit**. `twl4030` registers no `set_vbus` op, so
   `otg_set_vbus()` returns `-ENOTSUPP` and `omap2430_musb_set_vbus()` does nothing.
-- **The DTB is the root cause.** `mode = <0x03>` on the musb node (`usb_host/original.dts:3820`) is
+- ⚠️ **The DTB `mode` value looked like the root cause and IS NOT — patched and measured 2026-08-14, see
+  below.** `mode = <0x03>` on the musb node (`usb_host/original.dts:3820`) is
   `MUSB_PORT_MODE_DUAL_ROLE` (`musb_core.h:82-84`) — on a kernel built `# CONFIG_USB_GADGET is not set`
   (`usb_host/device_config:3106`) where `musb_gadget.c` is not even compiled. Dual-role therefore buys
-  nothing this kernel can use, and costs two things: `musb_host_setup()` claims `default_a`/`A_IDLE` only
+  nothing this kernel can use, and it costs two things on paper: `musb_host_setup()` claims
+  `default_a`/`A_IDLE` only
   for `MUSB_PORT_MODE_HOST` (`musb_host.c:2789-2793`), and `musb_start()` (`musb_core.c:1074-1080`) masks
-  `SESSION` off and restores it **only** when that clause is false or VBUS already reads invalid.
+  `SESSION` off and restores it **only** when that clause is false or VBUS already reads invalid. Both
+  readings of the source are correct; **setting `mode = <1>` still does not produce a live port**, so
+  neither was the thing keeping a cold port dark.
 - `musb_start()` has **three** call sites, not one: `musb_virthub.c:398` and `:461`
   (`SetPortFeature(PORT_POWER)`) and `musb_core.c:1977` (babble recovery). The hub one is re-enterable at
   runtime through the port over-current path (`musb_core.c:711-713` → `hub.c:5079`).
@@ -1080,8 +1089,32 @@ written down before being refuted — one of them in this document.
 
 **The one real userspace trigger besides a rebind is debugfs `softconnect`** (`musb_debugfs.c:301-343`,
 `CONFIG_DEBUG_FS=y`) — and it sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, so it cannot revive a
-port sitting in `a_idle`. Ranked candidates, including the DTB `mode` patch that addresses the cause:
+port sitting in `a_idle`. Candidates and what each measurement closed:
 [`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix).
+
+⚠️ **The DTB `mode` 3 → 1 patch was applied to a unit and it does NOT work — measured on `.188`,
+2026-08-14, and this is the third source-derived mechanism to be refuted on hardware.** `uImage-system`
+on p1 was patched to `mode = <1>` with `power = 0xfa`, and the **booted kernel's own tree** read
+`00 00 00 01` / `00 00 00 fa`, so the change was genuinely live rather than merely written; the unit
+booted normally with no regression. With the socket **empty at boot**, a pad plugged in afterwards stayed
+dark: `Vbus off`, `mode a_idle`, no `1-1`, nothing in `/proc/bus/input/devices`, at t+0 and again at
+t+10 s. **Negative control, same firmware, same pad, same cable:** `/etc/init.d/usb-host recover`
+then brought it up on **attempt 1** — `Vbus on`, `1-1`, `Microsoft X-Box 360 pad`. So the pad, the port
+and the remedy all work, and `mode = <1>` is what does not.
+
+⚠️ **What that costs the model above:** `musb_start()`'s `SESSION` mask is real in the source and is
+**not** what keeps a cold port dark. The common thread across all three refuted mechanisms is that none
+of them explains **how a port that probed with an empty socket ever obtains a session** — VBUS and the ID
+pin are both inert at that point, and every failed measurement started from exactly that state. Require
+an answer to that question of any further candidate before spending a reboot on it. The unit was
+returned to the power-only kernel the same day, and no deployment or commissioning path can produce a
+mode-patched unit.
+
+**One observation that is deliberately not a claim:** `recover` succeeded on attempt **1** above, where
+both earlier manual measurements on the power-only firmware needed **two** consecutive runs. n = 1, a
+different boot, and `recover`'s own 3-try loop makes a single invocation a weak instrument for counting
+rebinds. Settling it needs repeated boot-empty → plug → `recover` cycles on **both** firmwares, one
+reboot each.
 
 **Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the
 running kernel holds it, and `/sys/firmware/fdt` is the raw blob (67 273 bytes on `.188`, magic

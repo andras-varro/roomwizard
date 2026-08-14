@@ -65,18 +65,13 @@ err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}" >&2; exit 1; }
 ts()   { echo "[$(date '+%H:%M:%S')] $*"; }
 
 usage() {
-    echo "Usage: $0 [<ip>] [--no-usb-power] [--usb-mode]"
+    echo "Usage: $0 [<ip>] [--no-usb-power]"
     echo "       $0 --bundle <dir>"
     echo ""
     echo "  <ip>             Device IPv4 address; omit to build without deploying"
     echo "  --no-usb-power   Do not patch uImage-system on p1. USB host mode and the"
     echo "                   controller modules still go on; the budget stays at"
     echo "                   100 mA, so a pad needs a POWERED hub."
-    echo "  --usb-mode       ALSO patch the device tree's MUSB \`mode\` from 3"
-    echo "                   (DUAL_ROLE) to 1 (HOST), so the port comes up live on a"
-    echo "                   boot with an empty socket. ⚠️ MEASURED NOT TO WORK —"
-    echo "                   IMPROVEMENT_PLAN.md B32 item 10, closed FAILED on .188"
-    echo "                   2026-08-14. Kept only to reproduce that measurement."
     echo "  --bundle <dir>   Build, then stage the four artifacts under <dir>/root/"
     echo "                   with a declared-mode manifest. No device needed."
     echo ""
@@ -102,7 +97,6 @@ else
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --no-usb-power) NO_USB_POWER=1; shift ;;
-            --usb-mode)     export RW_USBPOWER_WITH_MODE=1; shift ;;
             --help|-h)      usage ;;
             -*)             echo "Unknown option: $1"; echo ""; usage ;;
             *)
@@ -347,13 +341,16 @@ if [[ "$NO_USB_POWER" -eq 1 ]]; then
 else
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
+    # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and no deploy path may reach
+    # it (../IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14). The
+    # library still knows the state so a unit that HAS it can be classified and
+    # re-derived back down, but this is a deploy path: unset it rather than trust an
+    # inherited environment. tests/rw_usbpower_test.sh group N asserts all three
+    # callers do this.
+    unset RW_USBPOWER_WITH_MODE
     UP_WORK=$(mktemp -d)
     if rw_usbpower_apply_ssh "$DEVICE" "$UP_WORK"; then
-        if [[ "$(rw_usbpower_want)" == both ]]; then
-            P1_STATE="500 mA + host mode (patched and verified)"
-        else
-            P1_STATE="500 mA (patched and verified)"
-        fi
+        P1_STATE="500 mA (patched and verified)"
     else
         P1_STATE="FAILED — read the block above"
         warn "the p1 patch did not succeed. USB host mode and the controller"

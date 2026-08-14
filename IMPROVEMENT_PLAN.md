@@ -210,7 +210,18 @@ territory and not something the rescan can settle.
 
 ### B32. USB is enumerated only at driver probe — cause established 2026-08-13, no automatic fix
 
-> ⚠️ **The heading is imprecise and is kept only for its anchor** (six inbound links). "Only at driver
+> ✅ **CLOSED 2026-08-14 — not as fixed, and not as a bug.** Agreed with the operator: "nothing
+> enumerates unless it was plugged in at boot" is a **standing property of this hardware with a working
+> one-tap remedy** (Device Tools → USB → RESCAN, verified as item 9), not an open bug awaiting a fourth
+> theory. Three mechanisms inferred from the driver source have each been applied and refuted **on
+> hardware**. The refuted patch has been removed from every deployment and commissioning path.
+>
+> ⚠️ **It stays in this file, which holds open work only, as a deliberate exception:** six inbound links
+> key on its anchor, and the record of *what was refuted and how* is the only thing that stops a fourth
+> session rediscovering the same three dead ends. **Do not reopen it from source reading alone** — see
+> the requirement at the end of this entry.
+>
+> ⚠️ **The heading is imprecise and is kept only for its anchor.** "Only at driver
 > probe" is what three sessions believed; the measured position is below. Retitle it when there is a
 > reason to touch every link.
 

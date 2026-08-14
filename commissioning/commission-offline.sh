@@ -172,11 +172,6 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      run with no powered hub. The vendor image is backed up to
                      uImage-system.vendor on p1 first, and md5-verified both
                      ways. --no-usb implies this.
-  --usb-mode         ALSO patch the MUSB 'mode' property from 3 (DUAL_ROLE) to 1
-                     (HOST), so the port comes up live on a boot with an empty
-                     socket instead of needing RESCAN. MEASURED NOT TO WORK —
-                     IMPROVEMENT_PLAN.md B32 item 10, closed FAILED on .188
-                     2026-08-14. Revert: re-run without --usb-mode.
   --help
 
 The card is identified by CONTENT and by PARTITION POSITION, never by UUID.
@@ -201,9 +196,6 @@ while [[ $# -gt 0 ]]; do
         # takes the FIRST match, so a later arm is never reached and the operator
         # gets "Unknown provision group: usb-power" instead.
         --no-usb-power)   DO_USB_POWER=0; shift ;;
-        # ...and this one must precede it too, for the same reason: --usb-mode is
-        # not a --no-* at all, but it IS a --usb* prefix of the group name.
-        --usb-mode)       export RW_USBPOWER_WITH_MODE=1; shift ;;
         --no-*)
             g="${1#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -718,6 +710,13 @@ elif [[ -z "$MOUNTED_BASE" ]]; then
 else
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
+    # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and NO commissioning path may
+    # reach it (IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14).
+    # The library still knows the state, so a unit that HAS it classifies correctly
+    # and can be re-derived back down — but this is the DELIVERY path and it must be
+    # deterministic, so unset it rather than inherit it from an environment nobody
+    # read. tests/rw_usbpower_test.sh group N asserts all three callers do this.
+    unset RW_USBPOWER_WITH_MODE
     if ! PREREQ="$(rw_usbpower_prereqs)"; then
         P1_STATE="skipped (missing prerequisites)"
         warn "cannot patch p1 — the device-tree tooling is not available here:"
@@ -732,6 +731,8 @@ else
             UP_WORK=$(mktemp -d)
             if rw_usbpower_apply_offline "$MOUNTED_BASE/boot" "$UP_WORK"; then
                 if [[ "$(rw_usbpower_want)" == both ]]; then
+                    # Unreachable via this script — the unset above is what makes it
+                    # so, and this arm stays as the tell if that unset is dropped.
                     P1_STATE="500 mA + host mode (patched and verified)"
                 else
                     P1_STATE="500 mA (patched and verified)"

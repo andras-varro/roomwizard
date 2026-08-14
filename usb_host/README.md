@@ -129,15 +129,21 @@ The patch is:
 - **Reversible** — a backup (`uImage-system.vendor`) is created before patching
 - **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
 
-⚠️ **`--usb-mode` is a second, opt-in p1 patch, and it was MEASURED NOT TO WORK** (2026-08-14): it also
-sets the `usb_otg_hs` node's `mode` from 3 (`DUAL_ROLE`) to 1 (`HOST`), which was the candidate *cause*
-fix for "nothing enumerates unless it was plugged in at boot". Applied to `.188`'s p1, verified live in
-the booted device tree, unit booted normally — and a pad plugged in after a boot with an empty socket
-still stayed dark, while `/etc/init.d/usb-host recover` on the same firmware brought it up on the first
-attempt. `../IMPROVEMENT_PLAN.md` B32 panel item 10, closed **failed**. The flag stays as the way to
-reproduce that measurement; the three states are gated on three measured md5s in `../lib/rw-usbpower.sh`,
-a transition always re-derives from `uImage-system.vendor` rather than chaining, and omitting
-`--usb-mode` on a mode-patched unit re-derives it back down: that is the revert.
+⚠️ **A second p1 patch — the `mode` 3 → 1 one — was tried and MEASURED NOT TO WORK, and it is no longer
+reachable from any deploy or commissioning path** (2026-08-14). It set the `usb_otg_hs` node's `mode`
+from 3 (`DUAL_ROLE`) to 1 (`HOST`), the candidate *cause* fix for "nothing enumerates unless it was
+plugged in at boot". Applied to `.188`'s p1, verified live in the booted device tree, unit booted
+normally — and a pad plugged in after a boot with an empty socket still stayed dark, while
+`/etc/init.d/usb-host recover` on the same firmware brought it up on the first attempt.
+`../IMPROVEMENT_PLAN.md` B32 panel item 10, closed **failed**.
+
+There is therefore **no `--usb-mode` flag**, and all three callers `unset RW_USBPOWER_WITH_MODE` before
+driving the writer (group N of `../tests/rw_usbpower_test.sh` is the negative control). What was **kept**
+is `../lib/rw-usbpower.sh`'s knowledge of the state, plus `patch_dtb.py --mode` and
+`verify_uimage.py --expect-mode`: a unit that already carries the patch must classify as `both` rather
+than be refused as `unknown`, so that it can be **re-derived back down** to power-only. Every transition
+derives from `uImage-system.vendor` rather than chaining, which is what makes that revert an ordinary
+run — done for real on `.188` the same day.
 
 #### DTB Location in uImage
 

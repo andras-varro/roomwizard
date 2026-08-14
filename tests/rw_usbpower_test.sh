@@ -708,6 +708,65 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
+echo "N. no deploy or commissioning path can reach the REFUTED mode patch"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The `mode` 3 -> 1 patch was applied to .188 on 2026-08-14 and measured NOT to
+# work (B32 panel item 10, closed failed): the port stayed dead after a boot with an
+# empty socket, while `usb-host recover` on the same firmware and pad brought it up
+# on the first attempt. The LIBRARY keeps the state — a unit that has the patch must
+# classify as `both` rather than be refused as `unknown`, and re-derive back down —
+# but no caller may produce one.
+#
+# ⚠️ These are greps over the shipped scripts, not behaviour: they cannot run
+# commission-offline.sh (root, a card) or build-and-deploy.sh (the cross toolchain).
+# What they assert is that the door is shut in the source, in both of the two ways it
+# could be reopened — an argument arm, or an inherited environment variable. Group M
+# is the behaviour half, at the library level.
+#
+# RW_USBPOWER_CALLERS points at the directory holding the three scripts, defaulting
+# to the repo. It exists so these four cases can be MEASURED against deliberately
+# reopened copies without editing the shipped files — the sabotage harness stages
+# only the five files the library needs, so it cannot reach them any other way.
+# Measured 2026-08-14: re-adding a `--usb-mode)` arm to provision.sh fails N1 for
+# provision.sh alone, and deleting build-and-deploy.sh's `unset` fails N2 for that
+# file alone. 2 of 163, in the right two places.
+N_ROOT="${RW_USBPOWER_CALLERS:-$REPO}"
+set +e
+for n_f in commissioning/provision.sh commissioning/commission-offline.sh \
+           usb_host/build-and-deploy.sh; do
+    n_p="$N_ROOT/$n_f"
+    n_b=$(basename "$n_f")
+    if [ ! -f "$n_p" ]; then
+        bad "N harness: no $n_f to check"
+        continue
+    fi
+    # An argument arm setting the variable is the obvious way back in.
+    if grep -qE '^[[:space:]]*--usb-mode\)' "$n_p"; then
+        bad "N1 $n_b still accepts --usb-mode — the refuted patch is reachable from a deploy path"
+    else
+        ok "N1 $n_b does not accept --usb-mode"
+    fi
+    # ...and inheriting it from the environment is the quiet way. A delivery path
+    # must not depend on what the operator's shell happened to export.
+    if grep -q '^[[:space:]]*unset RW_USBPOWER_WITH_MODE$' "$n_p"; then
+        ok "N2 $n_b unsets RW_USBPOWER_WITH_MODE before it drives the p1 writer"
+    else
+        bad "N2 $n_b does not unset RW_USBPOWER_WITH_MODE — an inherited export would patch mode"
+    fi
+done
+
+# The other half of the same decision: the library must still KNOW the state, or a
+# unit that was patched before the refutation classifies `unknown` and is refused —
+# leaving it no way back down. That would make the removal worse than the patch.
+n_out=$(rw_usbpower_classify "$RW_UIMAGE_BOTH_MD5")
+eq "$n_out" "both" "N3 the library still classifies a mode-patched image, so it can be reverted"
+eq "$(rw_usbpower_target_md5 power)" "$RW_UIMAGE_POWER_MD5" \
+    "N4 ...and 'power' is still a target, which is what the revert asks for"
+set -e
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
 if [ "$FAIL" -eq 0 ]; then

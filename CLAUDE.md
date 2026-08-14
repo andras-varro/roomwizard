@@ -616,10 +616,13 @@ tool-level traps rather than device facts, and each has cost real time.
   compare between executors, so a duplicate would drift undetected — `tests/rw_usbpower_test.sh` group J
   is the stand-in comparison, running the one sequence over both transports (155 cases, host-only, needs
   `python3`). ⚠️ **The gate knows THREE measured md5s — vendor, 500 mA, and 500 mA + host mode — and the
-  target is chosen by the CALLER**, `rw_usbpower_want`/`rw_usbpower_target_md5` off `RW_USBPOWER_WITH_MODE`
-  (`--usb-mode` on all three callers, and **off by default because the mode patch was MEASURED NOT TO
-  WORK** — B32 panel item 10, closed failed on `.188` 2026-08-14. The flag stays as the way to reproduce
-  that measurement, and omitting it on a mode-patched unit is the revert). It used to know two and
+  target is chosen by the CALLER**, `rw_usbpower_want`/`rw_usbpower_target_md5` off `RW_USBPOWER_WITH_MODE`.
+  ⚠️ **The mode patch was applied to a unit and MEASURED NOT TO WORK** — B32 panel item 10, closed failed
+  on `.188` 2026-08-14 — so **no caller can reach it**: there is no `--usb-mode` flag anywhere and all
+  three `unset RW_USBPOWER_WITH_MODE` before driving the writer. The *library* still knows the state on
+  purpose, because a unit that already carries the patch must classify as `both` and be **re-derivable
+  back down**; a gate that refused it as `unknown` would leave it with no way back. Group N is the
+  negative control for both halves, and both halves have been seen failing. It used to know two and
   `rw_usbpower_apply` returned 0 at its `patched` arm before anything ran, so on an already-commissioned
   unit a second patch wrote nothing and reported success. ⚠️ **Never chain one patch onto another** —
   `patch_dtb.py` refuses an already-patched input, so a transition re-derives from

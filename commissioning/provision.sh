@@ -96,7 +96,6 @@ for _a in "$@"; do
     case "$_a" in
         --no-clean)     DO_CLEAN=0 ;;
         --no-usb-power) DO_USB_POWER=0 ;;
-        --usb-mode)     export RW_USBPOWER_WITH_MODE=1 ;;
         --dry-run)      DRY_RUN="--dry-run" ;;
         --no-*)
             _g="${_a#--no-}"
@@ -189,10 +188,6 @@ usage() {
     echo "  --no-usb-power    Leave p1 alone. The USB budget stays at the vendor's"
     echo "                    100 mA, so a controller needs a POWERED hub — and a"
     echo "                    power cycle stays a free undo."
-    echo "  --usb-mode        ALSO patch the MUSB 'mode' property from 3 (DUAL_ROLE)"
-    echo "                    to 1 (HOST), so the port is live after a boot with an"
-    echo "                    empty socket. MEASURED NOT TO WORK — B32 item 10,"
-    echo "                    closed FAILED. Revert: re-run without --usb-mode."
     echo "  --hostname NAME   Set the device host name only, and exit. No reboot,"
     echo "                    no clean, no p1 write."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
@@ -682,6 +677,13 @@ run_usbpower() {
 
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
+    # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and NO commissioning path may
+    # reach it (IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14).
+    # The library still knows the state, so a unit that HAS it classifies correctly
+    # and can be re-derived back down — but a delivery path must be deterministic,
+    # so unset it rather than inherit it from an environment nobody read.
+    # tests/rw_usbpower_test.sh group N asserts all three callers do this.
+    unset RW_USBPOWER_WITH_MODE
     if ! prereq="$(rw_usbpower_prereqs)"; then
         P1_STATE="skipped (missing prerequisites)"
         warn "cannot patch p1 — the device-tree tooling is not available here:"
@@ -696,6 +698,8 @@ run_usbpower() {
         P1_STATE="not attempted (dry run)"
     elif rw_usbpower_apply_ssh "$DEVICE" "$work"; then
         if [[ "$(rw_usbpower_want)" == both ]]; then
+            # Unreachable via this script — the unset above is what makes it so, and
+            # this arm stays as the tell if that unset is ever dropped.
             P1_STATE="500 mA + host mode (patched and verified)"
         else
             P1_STATE="500 mA (patched and verified)"
