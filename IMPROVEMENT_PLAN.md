@@ -40,7 +40,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 6 | ~~Office Runner's hamburger menu survives repeated use~~ — **done 2026-08-10 on `.225`.** Opened and RESUMEd repeatedly, kept responding; pad worked. [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10) closed | — | closed |
 | 7 | ~~Unplug the pad, wait, replug it~~ — **done 2026-08-10, and its conclusion was wrong.** It read as "a 10 s gap recovers, a 60 s gap does not, and `echo host > …/mode` fixes it". That write is a **silent no-op**, and on 2026-08-13 replug was measured working at 70, 75, 90, 120, 150, 180, 240 **and 300 s** once the port was alive. Gap length was never the variable | — | closed, superseded by [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
-| 9 | **Tap Device Tools → USB → RESCAN on a dead port, with a pad attached.** Needs `commissioning/provision.sh <ip>` (or `usb_host/build-and-deploy.sh <ip>`) **first**, so the device has the retrying `recover`; then `deploy-all.sh <ip> native_apps`. Expect a "RE-PROBING USB CONTROLLER" screen for a few seconds, then the pad listed. ⚠️ Tap-by-tap, by a human: `/dev/uinput` does not exist, so this cannot be scripted past the first screen | ~5 min, panel needed | [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 9 | ~~Tap Device Tools → USB → RESCAN on a dead port, with a pad attached~~ — **done 2026-08-14 on `.188`, and it PASSED on the first tap.** Pre-state measured with the pad attached and dark: `Vbus off`, `mode a_idle`, `/sys/bus/usb/devices` = `usb1` + `1-0:1.0` only. One tap → "RE-PROBING USB CONTROLLER" for ~5 s → `1-1` + `1-1:1.0`, `Vbus on`, `event1` + `js0`, pad lit blue, listed as `GAMEPAD Microsoft X-Box 360 pad`, and Pong played with it | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -228,6 +228,7 @@ shipped fix built on them.
 | `/etc/init.d/usb-host recover` (a driver rebind) revives a dead port, but has needed **two consecutive runs** both times it was measured | and the second measurement had **both** runs start from `Vbus off`, which rules out "VBUS was still valid at re-probe" as the general cause |
 | A passive hub on a dead port: `Vbus off` at 1, 2, 3 min and after; a device plugged into it enumerates nothing | **ID-ground alone does not revive a dead port.** Panel checklist item 8, closed failed |
 | Re-seating an OTG adapter revived a port that had been dark for minutes — but only on a port that had **already** had a session | the difference between these last two rows is the whole subtlety |
+| **Device Tools → USB → RESCAN revives a dead port from the panel**, one tap, ~5 s, on a pad that had been attached and dark: `Vbus off` / `mode a_idle` / no `1-1` before, `Vbus on` / `1-1` / `event1` + `js0` / pad lit and playable after (2026-08-14, checklist item 9) | so the shipped remedy works. **The internal attempt count is not observable from the panel** — one *tap* sufficed, which is not the same claim as one *rebind* sufficing; `recover`'s 3-try loop may well have absorbed the second run the manual measurements needed |
 
 **Source-supported, not yet verified on hardware.** From the vanilla tree, which is authoritative here:
 
@@ -256,7 +257,10 @@ non-zero on exhaustion. ⚠️ **Not on a timer**, and the reason is not only th
 software can distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port", so an
 operator who has just plugged something in holds the one bit no poll can obtain. That is why the trigger
 is a **button**. `device_tools` → USB → **RESCAN** now escalates to that script when a scan finds nothing.
-Both are **built and committed but unexercised on a panel** — checklist item 9.
+**Both are verified on a panel** — checklist item 9, `.188`, 2026-08-14: one tap on a dead port with a
+dark pad attached brought the pad up in ~5 s and Pong played with it. That is a working reboot-free
+remedy reachable by a player with no SSH prompt; it is **not** a cause fix, and the port still comes up
+dead on any boot with an empty socket.
 
 ⚠️ **A poll was written on 2026-08-13 and removed the same day.** It watched `$MUSB/mode` for
 `a_wait_bcon` and wrote `host`. Both halves are wrong on this SoC: `mode` reads `a_idle` in the *working*
@@ -270,7 +274,7 @@ not the world.
 | Candidate | Status |
 |---|---|
 | **Patch the DTB `mode` from 3 to 1** (`MUSB_PORT_MODE_HOST`), so `musb_start()` always sets `SESSION` and probe claims host state | **the leading candidate, and it addresses the cause rather than the symptom.** Gadget mode is not compiled, so nothing is lost. Same mechanism as the 500 mA `power` patch: one property rewritten in place in the appended DTB, no kernel source. ⚠️ `usb_host/patch_dtb.py` knows only `find_power_offset`, so this needs new code; `lib/rw-usbpower.sh` is the md5-gated, backed-up, verified, rolled-back p1 writer to extend. Needs a reboot |
-| **The RESCAN button** (shipped, unverified) | not a cause fix, but it is reachable by a player with no SSH prompt, and the tab's own hint text already promised it |
+| **The RESCAN button** (shipped, **verified on a panel 2026-08-14**) | not a cause fix — it is a remedy the player can reach without SSH, and the tab's own hint text already promised it. One tap, ~5 s, dead port → playable pad |
 | Poke DEVCTL `SESSION` (bit 0) at phys `0x480AB060` via `devmem_write` | plausible — it is the bit `musb_start()` sets. ⚠️ **Not attempted, and it carries a real hazard**: an OMAP IP in forced standby has its clocks gated, and a register access then raises an external abort. Would need the IP held resumed first |
 | ~~A hub left permanently attached~~ | **ruled out 2026-08-13.** Measured not to work (table above), and rejected on the merits: an external bandage, one hub against five units |
 | ~~debugfs `softconnect`~~ | dead end. It sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, and a cold port sits in `a_idle` |
@@ -1743,14 +1747,17 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-⚠️ **Top of the list as of 2026-08-13: verify the RESCAN button on a panel (checklist item 9), then decide
-the [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) DTB
-patch.** The hub workaround is **closed failed** — measured, and rejected on the merits. What is built and
-uncommitted-to-hardware is a `recover` that settles and retries, plus a Device Tools RESCAN button that
-forks it; neither has run on a device. The cause fix is one DTB word (`mode` 3 → 1) through the same
-patcher that already sets the 500 mA budget. ⚠️ **Two earlier versions of this block prescribed a poll —
-first re-asserting `host` on `a_wait_bcon`, then a hub — and both are refuted.** Read B32's measured/inferred
-split before proposing a third.
+⚠️ **Top of the list as of 2026-08-14: the
+[B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) DTB
+patch (`mode` 3 → 1), through the same patcher that already sets the 500 mA budget.** The panel-reachable
+remedy is now **verified** — checklist item 9 passed on `.188` on 2026-08-14, one tap on a dead port
+bringing a dark pad up in ~5 s — so USB is no longer unusable after a boot with an empty socket, and the
+DTB patch is a *cause* fix rather than a rescue. The hub workaround is **closed failed** — measured, and
+rejected on the merits. ⚠️ `usb_host/patch_dtb.py` knows only `find_power_offset`, so the patch needs new
+code; `lib/rw-usbpower.sh` is the md5-gated, backed-up, verified, rolled-back p1 writer to extend, and it
+has **exactly one** legitimate writer of `uImage-system` — do not add a second. ⚠️ **Two earlier versions
+of this block prescribed a poll — first re-asserting `host` on `a_wait_bcon`, then a hub — and both are
+refuted.** Read B32's measured/inferred split before proposing a third.
 
 0. **[B28](#b28-provisionsh-installed-1-of-8-files--closed-2026-08-09-confirmed-on-a-unit-the-same-day)
    is CLOSED and the three-phase SSH path is now walked end to end.** `provision.sh` copied one of its

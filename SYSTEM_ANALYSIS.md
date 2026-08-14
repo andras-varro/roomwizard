@@ -1086,7 +1086,9 @@ port sitting in `a_idle`. Ranked candidates, including the DTB `mode` patch that
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
-as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing. ⚠️ It is deliberately not on
+as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing. **Measured on `.188`
+2026-08-14:** one tap, with a pad attached and dark on a port reading `Vbus off`, took ~5 s and left
+`Vbus on`, `1-1` present, `event1` + `js0` created and the pad playable. ⚠️ It is deliberately not on
 a timer, and the reason is not merely the wasted rebinds: **nothing in software can distinguish "nothing
 is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either way and no connect
 interrupt can arrive in either — so an operator who has just plugged something in holds the one bit no
