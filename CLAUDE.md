@@ -456,6 +456,13 @@ tool-level traps rather than device facts, and each has cost real time.
   building, and attributed a test failure to a missing `sfdisk` that is installed. **State which shell a
   prerequisite claim was measured in**, and measure with `wsl.exe -e bash -lc`. The measured inventory
   lives in `IMPROVEMENT_PLAN.md` F11.
+- ⚠️ **`strings` is one of those absences, and it fails *silently* into a wrong answer about the
+  device.** `strings <device-binary> 2>/dev/null | grep -q <option>` in Git Bash prints nothing —
+  because `strings` does not exist, not because the option is missing — so it reads as "the vendor's
+  binary lacks that feature". Measured 2026-08-14: it said the shipped `aplay` had no
+  `--dump-hw-params`, which is the flag that made F1's whole Phase 0 need no cross-build at all.
+  **Use `grep -a` on the binary**, which works in both shells, and never route a capability question
+  about a device binary through a tool whose absence looks like a negative result.
 - **Git Bash `/tmp` and WSL `/tmp` are different filesystems.** Write captures somewhere under
   `c:\work\roomwizard` and both sides reach them. ⚠️ **WSL's `/tmp` also does not survive between
   `wsl.exe` calls** — the instance idles out and takes it with it, so a fixture staged in one call can be

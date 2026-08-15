@@ -757,19 +757,126 @@ DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restor
 Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
 (halves OPL synthesis cost), native games 44100 Hz.
 
+**Native ALSA needs no kernel work and nothing shipped.** `CONFIG_SND`, `SND_PCM`, `SND_SOC`,
+`SND_OMAP_SOC`, `SND_OMAP_SOC_MCBSP` and `SND_SOC_TWL4030` are all `=y`
+(`usb_host/device_config:2711`, `:2713`, `:2757`, `:2778-2779`, `:2855`) — OSS is `SND_PCM_OSS` plus
+`SND_PCM_OSS_PLUGINS` **emulation** (`:2718-2720`) layered on this same `rw20` card. Going native
+removes a layer; it adds nothing to the kernel and carries no brick risk. Userspace is already
+complete on a stock unit: `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`, `amixer`, `alsactl`,
+`speaker-test`, and 238 files under `/usr/share/alsa`. Only the **dev** side is absent — no headers,
+no `.a`, no linker symlink — which is why a statically linked client that talks to the kernel
+directly (tinyalsa) is the route rather than `-lasound`.
+
+- ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: that
+  flag is MIDI/sequencer support and cannot produce PCM output here. PCM has to be hand-written,
+  which is why `oss-mixer.cpp` exists at all.
+- **The deep clean is not a hazard here — checked, not assumed.** No `scope` sweep covers `/usr/lib`
+  or `/usr/share` (all nine sweeps are `/etc/rc*.d`, `/opt` and the three `/home/root` trees), and no
+  `delete` glob reaches `libasound`. `/usr/share/alsa` survives because nothing names it; the
+  *intent* is recorded on `device-files/clean-rules.conf:356`, whose reason reads "NOT
+  `/usr/share/alsa`, which the OSS shim needs".
+
+**What `hw:0,0` actually grants — measured on `.188`, 2026-08-14**, with
+`native_apps/tests/alsa_probe.sh`. That probe needs nothing cross-compiled: the vendor's `aplay`
+has `--dump-hw-params`, which is the same `SNDRV_PCM_IOCTL_HW_REFINE` any client calls.
+
+| Parameter | Range | Consequence |
+|---|---|---|
+| `CHANNELS` | **2, exactly** | ⚠️ stereo-only, see below |
+| `RATE` | `[8000 96000]`, continuous | 8000/11025/22050/32000/44100/48000/96000 all granted **exactly** (`exact rate 22050 (22050/1)`), so no userspace resampling is ever needed |
+| `FORMAT` | `S16_LE`, `S32_LE` | `S16_LE`, as today |
+| `PERIOD_SIZE` | `[4 16384]` frames | ⚠️ ~506 ms is not a floor, see below |
+| `BUFFER_SIZE` | `[640 32768]` frames | 13 ms … 683 ms at 48000 |
+| `PERIODS` | `[2 255]` | |
+| `ACCESS` | `MMAP_INTERLEAVED`, `RW_INTERLEAVED` | a plain `write()` loop is fine; no mmap needed |
+
+⚠️ **`hw:0,0` is stereo-only. The hardware is mono; the interface is not.** `CHANNELS: 2` is a point,
+not a range, and `aplay -c 1` is **refused at every one of seven rates**. **The speaker sums L and R —
+measured, see below** — so mono remains the right *source* model, but the device boundary must hand the
+kernel **interleaved stereo frames** with the sample duplicated into both. The interleave arithmetic is
+*confined to that one place* rather than removed. Frame/byte confusion is the bug to guard against
+(`bytes == frames * 2ch * 2B`), not the interleaving itself.
+
+**`SPKR1` sees L + R, not L − R — measured on `.188`, 2026-08-14.** Three 48 kHz stereo tones identical
+but for channel phase (`native_apps/tests/audio_phase_gen.py`, played by `audio_phase_test.sh`):
+
+| Tone | L, R | Heard |
+|---|---|---|
+| `left` | `s`, `0` | audible — reference |
+| `dup` | `s`, `s` | **slightly louder than `left`** |
+| `anti` | `s`, `−s` | **inaudible** |
+
+Complete cancellation on anti-phase is possible only if the speaker is driven by the **sum**. So
+**duplicating a mono sample into both channels is correct, and is the loudest of the three options.**
+⚠️ **"HandsfreeL/R class-D bridge" above means each amp is internally bridge-tied — it does NOT mean
+`SPKR1` bridges L against R.** That ambiguity is worth spelling out because the wrong reading predicts
+silence for exactly the write a mono backend performs, and the two readings are indistinguishable by
+playing music: real stereo content never has `L == R`. The harness self-checks (equal peaks, and
+`R==0` / `R==L` / `R==-L` in every loud frame) so that a loudness comparison cannot be measuring
+differing content instead of phase.
+
+- ⚠️ **The tones must be *self-identifying*.** The first attempt played all three back to back and the
+  operator reported *"I think I heard only two"* — which cannot distinguish "one was silent" from "I
+  lost count". `audio_phase_test.sh` therefore precedes tone *N* with *N* marker clicks, so a silent
+  tone still says which one it was. That is what turned the answer from ambiguous into decisive.
+- **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
+  storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
+  at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
+- ⚠️ *Inference, not measured:* the summing is the likeliest reason full-scale synthesised tones needed
+  the `>>1` attenuation below. Two identical full-scale channels drive the speaker at double amplitude,
+  so `>>1` is very nearly the exact compensation. It predicts that **the attenuation belongs on the
+  synth, not on streamed file content** — corroborated only weakly so far, by 48 kHz stereo music
+  playing through `aplay` (which attenuates nothing) at *"surprisingly loud, but not distorted"*.
+  Settle it with a per-voice gain measurement before deleting or keeping the `>>1` on faith.
+
+⚠️ **A `-c 1` probe fails on channels at every rate, which reads as "no rate is accepted".** That is
+exactly how the first run of `alsa_probe.sh` produced seven REFUSED lines from one mistake — the
+number was the harness. For the same reason the shipped `/opt/sound/*.wav` are mono, so
+`aplay -D hw:0,0 asl_click.wav` fails and **that is not a broken audio path**: use `plughw:0,0` for a
+mono file and let alsa-lib convert, or generate stereo (`speaker-test -c 2`).
+
+**Native ALSA is audible on hardware — confirmed by the operator at `.188`, 2026-08-14.** Both paths
+of `alsa_probe.sh` step 7 exited 0 *and* were heard: the three mono WAVs through `plughw:0,0`, then a
+440 Hz sine **straight at `hw:0,0`** — no plug, no conversion, the same path a tinyalsa backend takes.
+Reported as *"some clinking then a klack then a beep"*. So the native path is proven end to end
+independently of anything this project writes.
+
+- The **"klack"** falls between the two, i.e. at a stream open. A start-of-stream pop is *consistent
+  with* the TWL4030 DAC/amp settling that `audio.c:107-110` blames for its ~60 ms minimum-tone rule,
+  and a persistently-open ALSA stream would open once instead of per sound — but that is **inference,
+  not measurement**, and it is the reason Phase 3 re-measures that 60 ms rather than carrying it
+  forward or deleting it on faith.
+
+⚠️ **The ~506 ms figure is the shim settling for the driver's maximum buffer, not a hardware period —
+refuted 2026-08-14.** `period_size=1024, buffer_size=4096` was requested and **granted exactly** at
+both 48000 (`period_time: 21333` µs) and 22050; the floor is 4 frames. Vanilla `omap-pcm.c:49-52`
+(`period_bytes_min = 32`, `periods_min = 2`, `buffer_bytes_max = 128 * 1024`) predicted this and now
+measures true: 32 B ÷ 4 B/frame is the 8-frame minimum `speaker-test` reports once channels are set,
+and 32768 frames × 4 B is the 128 KB maximum. The mechanism is visible in the same transcript —
+`speaker-test`, negotiating for itself, prints *"Using max buffer size 32768"*. **A client that does
+not ask for a small period gets the biggest one, and the shim cannot ask because
+`SNDCTL_DSP_SETFRAGMENT` is ignored.** So the latency win from going native is real and is ~24× at
+the period (21 ms vs ~506 ms).
+
 **Gotcha — the OSS shim is buggy, in four distinct ways.** All of these are in `snd-pcm-oss`
 emulation, not the hardware. ALSA itself works correctly.
 
-1. **The ~506 ms period stall.** The TWL4030 ALSA driver has a hardware period of ~22,317 frames
-   (~506 ms at 44100). A *blocking* `write()` to `/dev/dsp` stalls for the full ALSA period once
-   the OSS ring fills — not the ~93 ms OSS fragment. Result: 185 ms of audio, 321 ms of silence,
-   repeating — the "bru-bru-bru-KLICK" artifact. **Always open `/dev/dsp` with `O_NONBLOCK`** and
-   handle `EAGAIN` with a ~5 ms sleep. The OSS ring drains at the hardware rate continuously
-   regardless of ALSA period size. Diagnosed with `native_apps/tests/oss_diag.c`.
+1. **The ~506 ms period stall.** The shim runs a ~22,317-frame (~506 ms at 44100) period — **the
+   driver's maximum buffer, not a hardware period** (measured above). A *blocking* `write()` to
+   `/dev/dsp` stalls for the full ALSA period once the OSS ring fills — not the ~93 ms OSS fragment.
+   Result: 185 ms of audio, 321 ms of silence, repeating — the "bru-bru-bru-KLICK" artifact.
+   **Always open `/dev/dsp` with `O_NONBLOCK`** and handle `EAGAIN` with a ~5 ms sleep. The OSS ring
+   drains at the hardware rate continuously regardless of ALSA period size. Diagnosed with
+   `native_apps/tests/oss_diag.c`. ⚠️ **Both consumers already work around this**, so it is not an
+   argument for the ALSA port — latency, mixing and frame arithmetic are.
 2. **Speaker distortion at full scale.** Apply ~50 % software attenuation (`>>1` on int16) before
    writing. ScummVM does this post-mix.
 3. **ioctls reset each other.** `SNDCTL_DSP_STEREO` is **silently ignored** (returns `rc=0,
    stereo=1` while the device stays mono — verified with `native_apps/tests/ch_test.c`);
+   ⚠️ note the PCM underneath is **stereo-only** (measured above), so what stays mono is the *shim's*
+   view of it, with `SND_PCM_OSS_PLUGINS` converting below — *inference from the two measurements, not
+   itself measured.* It is also the likeliest reason a buffer sized as interleaved stereo has never
+   sounded obviously wrong while `sound_end_ms` is out by 2×.
    `SNDCTL_DSP_SPEED` may reset format and/or channels; `SNDCTL_DSP_SETFMT` may reset speed; and
    set-ioctl output values may not reflect actual device state. **Workaround:** set SPEED → FMT →
    CHANNELS in that order, then read back the truth with `SOUND_PCM_READ_RATE`,

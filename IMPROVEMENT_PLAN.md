@@ -42,6 +42,10 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 9 | ~~Tap Device Tools → USB → RESCAN on a dead port, with a pad attached~~ — **done 2026-08-14 on `.188`, and it PASSED on the first tap.** Pre-state measured with the pad attached and dark: `Vbus off`, `mode a_idle`, `/sys/bus/usb/devices` = `usb1` + `1-0:1.0` only. One tap → "RE-PROBING USB CONTROLLER" for ~5 s → `1-1` + `1-1:1.0`, `Vbus on`, `event1` + `js0`, pad lit blue, listed as `GAMEPAD Microsoft X-Box 360 pad`, and Pong played with it | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 10 | ~~Boot a `mode = <1>`-patched unit with the USB socket EMPTY, then plug a pad in~~ — **done 2026-08-14 on `.188`, and it FAILED.** The patch was live in the booted tree (`/sys/firmware/devicetree/base/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 01`, `power` = `00 00 00 fa`) and the unit booted normally. A pad plugged in afterwards stayed **dark**: `Vbus off`, `mode a_idle`, no `1-1`, no pad in `/proc/bus/input/devices`, at t+0 and t+10 s. Negative control: `/etc/init.d/usb-host recover` then brought it up on **attempt 1**, so the pad, the cable and the RESCAN remedy are all fine on this firmware | — | closed **failed**, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
+| 11 | ~~Native ALSA makes sound at all, independent of our code~~ — **done 2026-08-14 on `.188`, PASSED.** `alsa_probe.sh` step 7: three mono WAVs through `plughw:0,0`, then a 440 Hz sine **straight at `hw:0,0`** with no plug — heard as *"some clinking then a klack then a beep"*. This was [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff)'s free negative control and it cost one SSH command | — | closed |
+| 12 | **The three post-port audio checks, as one session:** two overlapping sounds actually *mix* (the headline new capability) · `brick_breaker` paddle/wall/score latency with no stall under load · ScummVM music+speech and CPU% against the 32 % baseline | one play session | **F1 Phases 3–5 must be built first.** Fold item 4 into it — the OPL check is the same ear on the same trip |
+| 13 | ~~**Does the speaker sum L+R or bridge them?**~~ — **done 2026-08-14 on `.188`, and it SUMS.** Three tones differing only in channel phase: L-only audible, `L == R` **slightly louder**, `L == −R` **inaudible**. So duplicating a mono sample into both channels is correct and loudest; the rival reading of "class-D bridge" predicted silence for exactly that write. Cost ~30 s of listening and settled a design question in [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) before any code was written. ⚠️ **The tones had to be self-identifying** — the unmarked first attempt got *"I think I heard only two"*, which cannot separate "one was silent" from "I lost count" | — | closed |
+| 14 | **Do `music1.wav`/`music2.wav` still sound right when mixed under gameplay** — and is 192 KB/s of SD streaming free inside the render loop | part of item 12's session | [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14), which needs F1 Phase 3 |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -425,6 +429,14 @@ reference recording.
 lists no AdLib at all. So this needs an OPL-capable game added first. Adding one works and persists:
 `Add Game...` is a touch file browser and the entry lands in `/opt/games/scummvm.ini`.
 
+⚠️ **Ordering, settled rather than left to be discovered: this verifies the very OSS workaround that
+[F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) Phase 5
+deletes.** What it is really checking is that `_outputRate` matches the device — and on the ALSA path
+that stops being a read-back-the-truth problem, because `hw:0,0` grants **22050 exactly** (measured,
+`SYSTEM_ANALYSIS.md#34-audio`). So do **not** spend a panel trip verifying OPL on the OSS path: add
+the OPL-capable target now, and make "OPL plays at correct tempo" an acceptance criterion of Phase 5.
+Verifying the doomed implementation is the one way to spend this check and learn nothing.
+
 ### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
 `tests/rw_identify_test.sh:363-369` guards the real-card-image cases on **file presence** but not on
@@ -555,26 +567,144 @@ All userspace. No kernel work.
 
 ### F1. Port audio from OSS to ALSA — open, **highest user-visible payoff**
 
-**ALSA already works on this kernel.** The "bru-bru-KLICK" stall, the 506 ms period problem and the
-ioctl-ordering fragility all live in the `snd-pcm-oss` **emulation shim**, not the hardware — see
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) for the card, the mixer path and the
-four OSS bugs in detail.
+**ALSA already works on this kernel, and now it is measured rather than assumed.** The card, the mixer
+path, the four OSS bugs, the in-kernel config, the on-device ALSA userspace and the full `hw:0,0`
+constraint table are all in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) — read it
+before touching this, and do not restate its numbers here.
 
 Rewriting `native_apps/common/audio.c` and `scummvm-roomwizard/backend-files/oss-mixer.cpp` against
-ALSA (or tinyalsa) fixes the project's longest-standing audio complaints with **zero kernel work and
-zero brick risk**.
+tinyalsa fixes the project's longest-standing audio complaints with **zero kernel work and zero brick
+risk**. The full phased plan is `~/.claude/plans/plan-f1-alsa-8-14-2026.md` (approved).
+
+**Decisions taken, not to be relitigated:** tinyalsa, **linked static** (BSD-3, ~30 KB, needs neither
+`libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** · one mono
+generator feeding a stereo device (below) · **one tinyalsa for the whole repo** — ScummVM points at
+`../native_apps/arm-deps` in Phase 5 rather than building a second copy, because zlib is built twice
+here and `LICENSE.md` carries both versions as a result.
+
+**Phase 0 was a gate, and it returned three answers that decide the design:**
+
+1. ✅ **A small period is negotiable.** `period_size=1024 / buffer_size=4096` requested and **granted
+   exactly** at 48000 and 22050 — 21 ms, against the shim's ~506 ms. The latency payoff is real and
+   ~24×. The old "~22,317-frame *hardware* period" was the shim taking the driver's **maximum** buffer;
+   that claim is corrected in `SYSTEM_ANALYSIS.md`.
+2. ✅ **Every rate is accepted directly and exactly**, 8000–96000 (`exact rate 22050 (22050/1)`). **No
+   userspace resampling anywhere** — ScummVM keeps 22050, so the CPU regression that would have made
+   "keep OSS for ScummVM" the right call **does not exist**. This was the plan's largest single risk.
+3. ⚠️ **`hw:0,0` is stereo-only — `CHANNELS: 2` exactly, and `-c 1` is refused at all seven rates.**
+   This **partly refutes the standing "commit to mono end-to-end" decision**: the hardware is still
+   mono, so mono stays right as the *source* model, but the interleaved-stereo bookkeeping **cannot be
+   deleted** — it must be *confined* to a sample-duplication at the write boundary. Restated: **mono
+   source, stereo frames, one conversion point.**
+   ✅ **And the duplication is now measured correct, not assumed.** A three-tone phase test
+   (`native_apps/tests/audio_phase_gen.py` + `audio_phase_test.sh`) on `.188` the same day: L-only
+   audible, `L == R` **slightly louder**, `L == −R` **inaudible**. Complete anti-phase cancellation
+   means `SPKR1` sees **L + R**, so duplicating into both channels is right *and* the loudest option.
+   The wrong reading of "class-D bridge" would have predicted **silence** for exactly that write —
+   see `SYSTEM_ANALYSIS.md#34-audio` for why music cannot distinguish the two.
+
+**Also passed, on hardware:** native ALSA is *audible* — three mono WAVs via `plughw:0,0` and a 440 Hz
+sine straight at `hw:0,0`, heard by the operator at `.188` on 2026-08-14. The native path is proven
+end to end independently of any code this project writes.
+
+The probe is `native_apps/tests/alsa_probe.sh` and it needs **nothing cross-compiled** — the vendor's
+`aplay` has `--dump-hw-params`, so `alsa_probe.c` and the tinyalsa cross-build are off Phase 0's
+critical path entirely. ⚠️ Its own first run is the cautionary tale: a `-c 1` loop printed **seven
+REFUSED rates** that were all one channel-count failure. Read its step 3 before believing its step 4.
 
 Fix these three in passing, so the ALSA version does not inherit them:
 
 - `audio.c:84` uses `SNDCTL_DSP_STEREO`, which the file's own comment says is ignored; it never
   verifies the channel count, yet every buffer is sized assuming interleaved stereo.
-- `audio.c:378` abandons a chunk mid-frame on a short write, desynchronising L/R permanently.
+- `audio.c:378` abandons a chunk mid-frame on a short write, desynchronising L/R permanently. ⚠️ A
+  stereo-only interface makes this **worse** than it read before, not moot: there is no mono fallback
+  underneath to hide a half-frame.
 - `oss-mixer.cpp:298` the emergency anti-underrun `write()` ignores errors and partial writes.
 
-**Decision — commit to mono end-to-end.** The hardware is permanently mono (one speaker, no jack, no
-jack footprint, no mic — `SYSTEM_ANALYSIS.md#34-audio`), so the two stereo bugs above are fixed by
-*removing* the interleaved-stereo bookkeeping rather than by making it correct. This also closes the
-microphone-as-input idea.
+⚠️ **The two stereo items above are now the *frame arithmetic*, not the interleaving.** The invariant
+to assert in the Phase 2 host tests is `bytes == frames * 2 * 2` with the channel count read from the
+device, and `sound_end_ms(N ms) == N` rather than `2N`. The microphone-as-input idea stays closed:
+there is no mic and no jack footprint.
+
+⚠️ **Two call sites hand-roll the fd and must be converted with the port** —
+`native_apps/device_tools/device_tools.c:476-495` and
+`native_apps/hardware_config/hardware_config.c:70-99`. They are **verbatim duplicates** of each other:
+`memset` an `Audio`, `open("/dev/dsp")`, the same three ioctls in the same order, the same GPIO12 poke,
+`sample_rate = 44100` **assigned rather than read back**, then two `audio_tone()` calls.
+
+**The prescribed fix "convert them to `audio_init()`" is wrong, and the code says so.**
+`hardware_config.c:71` reads *"Bypass config-gated `audio_init` — open DSP directly for test"*: the
+bypass is **deliberate**, because a hardware *test* must be able to drive the speaker even when the user
+has switched audio off in config. Calling `audio_init()` would make the test obey the setting it exists
+to test. So the defect is the **duplication**, not the bypass — the fix is one
+`audio_init_unchecked()`-style entry point in the library that both tabs call, which is also the
+precondition for making `Audio` opaque. (`hardware_config` is itself a second copy of a `device_tools`
+tab — [C8](#c8-retire-hardware_diag--it-is-a-second-copy-of-a-device_tools-tab--open-confirmed-2026-08-02)
+is the same shape of problem, one layer up.)
+
+### F19. Background music in the platformer — open, asked for 2026-08-14
+
+The operator hand-copied `music1.wav` and `music2.wav` to `/opt/sound` on `.188` and wants them under
+`native_apps/platformer/`. **Both play correctly today** — `aplay -D hw:0,0`, `rc=0`, reported
+*"surprisingly loud, but not distorted"*.
+
+**The files are already in the ideal format**: `S16_LE / 48000 Hz / stereo`, which is bit-for-bit what
+`hw:0,0` grants (`SYSTEM_ANALYSIS.md#34-audio`) — no resampling, no channel conversion, no `plug`.
+8,486,604 B (44.2 s) and 10,698,444 B (55.7 s), 19.2 MB together, streaming at 192 KB/s.
+
+⚠️ **This is blocked on [F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff)
+Phase 3, and it is that phase's headline use case.** Music under a game means *music playing while a
+jump or coin effect fires* — i.e. two streams summed. Today `audio.c` is one-sound-at-a-time enforced by
+`SNDCTL_DSP_RESET`, so on the current backend the music would be chopped by every sound effect. Do not
+build this against the OSS path; F1 Phase 3's mix bus is exactly what it needs, and this request is the
+concrete answer to "is real mixing worth it".
+
+Decisions to take before it ships:
+
+- ✅ **Licence: cleared, and the provenance is recorded here so nobody has to reconstruct it.** Both
+  tracks are **AI-generated by the operator at `https://musely.ai/tools/platformer-level-music`**
+  (2026-08-14, two tracks, no others). That page's FAQ — *"Can I use the generated platformer music in
+  commercial projects?"* — answers *"Yes, absolutely! All music generated using Musely's AI Platformer
+  Level Music Generator is royalty-free and cleared for both personal and commercial use"*, and says
+  users may add such soundtracks to games or streams *"without worrying about licensing fees or
+  copyright claims"*. Verified against the live page 2026-08-15; **no attribution requirement and no
+  usage restriction appears on it.** (The fetch was checked for proxy interception — the page returned
+  its real title *"Free AI Platformer Level Music Generator | Musely"*, its generator form fields, its
+  `Advanced Settings`/`PRO` badge and all seven section headings, so it was not a Zscaler/captcha wall.
+  ⚠️ Both reads went through the same summariser and the second likely hit the 15-minute URL cache, so
+  they are one retrieval re-read, not two independent ones.)
+- ⚠️ **The page also advertises *"Seamlessly Loopable Audio"* as a feature — treat that as a marketing
+  claim, not a measurement.** Background music under a platformer must loop, and a 44 s track loops
+  every 44 s, so an audible seam would be heard constantly and is the single most likely disappointment
+  in this feature. **Check the loop point before building around it**: `aplay` the file twice back to
+  back and listen at the join, which costs one SSH command and no code. If it seams, the fix is a
+  crossfade in the mix bus — cheap, but only if it is known about before the streaming design is fixed.
+  ⚠️ **Two limits on that, stated rather than glossed:** the page asserts royalty-free *clearance* but
+  **never says who owns the output**, so what we hold is a permission claim rather than a named licence
+  grant; and it is a marketing/FAQ page, **not a terms-of-service or licence agreement** — none is
+  linked from it. That is a normal basis for a hobby project and it is the operator's to price, not a
+  blocker; it is written down because `LICENSE.md` enumerates every other file precisely and this one
+  cannot be reconstructed from the bytes.
+- **`LICENSE.md` row is pre-drafted and OUTSTANDING until the files are committed.** Nothing is added
+  yet, because `LICENSE.md` must not describe files the repo does not have. When they land, add to
+  *Third-party code committed in this repository*:
+  `| /opt/sound/music{1,2}.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
+  — and a matching row in *Distributed binaries* if they go into a bundle.
+- ⚠️ **Still open, and it is a repo-weight decision rather than a licence one: 19.2 MB of WAV in git
+  history is permanent.** Converting to mono first halves it to **9.6 MB** at zero audible cost (below),
+  which is the cheapest version of "yes". The alternative — leave them on the device and load at runtime,
+  degrading silently when absent — keeps git small but loses them on every re-commission. Operator's call.
+- **Store mono, play stereo — halves everything for free.** The speaker sums L + R (measured), so a
+  mono `(L+R)/2` file duplicated at playback is *audibly identical* to the stereo original while
+  halving both the file and the SD read bandwidth. The duplication code is required anyway by `hw:0,0`
+  being stereo-only, so this costs nothing to adopt.
+- **Deployment.** Hand-copied files do not survive a re-commission. If the music ships, it belongs in
+  `native_apps/build-and-deploy.sh` and the bundle manifest. Note `device-files/clean-rules.conf:189`
+  keeps `/opt/sound` wholesale, so the files are safe from the clean; its *reason* text ("113 KB of
+  usable UI WAVs") goes stale the moment they are permanent.
+- **Streaming, not loading.** 19 MB into 234 MB of RAM is possible and wasteful; `audio.c` already has
+  four streaming functions whose only consumer is `tests/audio_touch_test.c`, so they can be redesigned
+  freely (F1 Phase 2). Measure the SD read cost inside the render loop before assuming 192 KB/s is free.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 
@@ -1908,7 +2038,15 @@ obtains a session.** The hub workaround is closed failed — measured, and rejec
    - ⚠️ **And `roomwizard.sh` item 6 claimed "It never touches p1"**, which
      [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)
      made false. It now says what it writes, and names `uImage-system.vendor` as the remedy.
-4. **F1 (ALSA)** is the biggest user-visible improvement available, and it is pure userspace.
+4. **[F1](#f1-port-audio-from-oss-to-alsa--open-highest-user-visible-payoff) (ALSA) is
+   the place to start, and its gate is already through.** It is the biggest user-visible improvement
+   available, pure userspace, no kernel work, no brick risk — and as of 2026-08-14 its Phase 0 is
+   **measured on `.188`, not assumed**: a 21 ms period is granted, every rate is granted exactly (so
+   nothing resamples anywhere), and native ALSA was *heard* making sound before a line of our code
+   exists. The plan is approved and phased at `~/.claude/plans/plan-f1-alsa-8-14-2026.md`; **Phase 1
+   (cross-build tinyalsa) is the next action.** Two things Phase 0 changed: `hw:0,0` is **stereo-only**,
+   so "mono end-to-end" becomes *mono source, stereo frames, one conversion point*; and the largest
+   risk in the plan — ScummVM having to resample on a 600 MHz core — **does not exist**.
 5. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs. Deep-clean the device first if
    disk space is tight — which is now the default.
 6. **C10 before panel check #2** — it converts a play session into one launch, and every future
