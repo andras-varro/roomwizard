@@ -18,6 +18,30 @@ Guidance for writing code in this directory. Device facts live in
 `set-default` is the only mode this script accepts. Cleanup and boot-service install live in
 `../commissioning/provision.sh`.
 
+**ARM dependencies are built by `./build-deps.sh` into `arm-deps/` (gitignored), and
+`build-and-deploy.sh` §1b calls it itself**, guarded on the artifact `arm-deps/lib/libtinyalsa.a` — never
+on a flag, which goes stale. So a fresh clone deploys without a manual prerequisite step, which matters
+because `../deploy-all.sh` drives this script unattended. Run it by hand only when iterating on the dep
+itself; `--force` rebuilds. Today it builds exactly one library, **tinyalsa 2.0.0** (pinned), for the
+native-ALSA audio backend (`../IMPROVEMENT_PLAN.md` F1).
+
+Three rules live in that script's comments and are repeated here only as pointers, because getting any
+of them wrong is silent:
+
+- ⚠️ **Compile five of upstream's eight sources.** Upstream's own `Makefile` and `CMakeLists.txt` build
+  all eight; `snd_card_plugin.c` `dlopen()`s, and these binaries are `-static`. `assert_no_dl()` refuses
+  the build rather than shipping that.
+- ⚠️ **That subset needs the one-line `pcm_close()` patch** the script applies and asserts. Without it
+  the archive builds, passes `nm -u` *and* passes the ARM gate, and only fails at link — which is what
+  `assert_links()` is for.
+- ⚠️ **The ARM-safety gate runs on `libtinyalsa.a` inside `build-deps.sh`**, because nothing in `build/`
+  links it yet. It does disassemble every archive member (measured), but its `checked=1` is a file count.
+
+**Never build a second copy of a dependency that lives here.** ScummVM will point at
+`../native_apps/arm-deps` for tinyalsa, the same way it already links `native_apps/common/framebuffer.o`
+and `touch_input.o`. zlib is built twice in this repo and `../LICENSE.md` has to carry both versions as a
+result — one pin, one licence row.
+
 All targets compile with `-Wall -Wextra -Wno-unused-parameter` and the tree is currently at
 **zero warnings** — keep it there, so a new warning means a new problem. Not `-Werror`, so a
 warning will not block a deploy; that is your job.

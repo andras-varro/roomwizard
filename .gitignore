@@ -11,6 +11,11 @@ scummvm-roomwizard/gui-icons-roomwizard.dat
 scummvm-icons/
 scummvm-roomwizard/arm-deps/
 
+# native_apps cross-compiled dependencies (tinyalsa), downloaded and built by
+# native_apps/build-deps.sh. Third-party source and ARM artifacts - not ours to
+# commit, and re-derivable from the pinned version in that script.
+native_apps/arm-deps/
+
 # Upstream ScummVM source tree, configured in place for the cross-build. Not
 # owned by this repo - scummvm-roomwizard/ holds our backend port.
 /scummvm/

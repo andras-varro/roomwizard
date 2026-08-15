@@ -134,6 +134,19 @@ fi
 info "Compiler: $($CC --version | head -1)"
 echo ""
 
+# ── 1b. ARM dependencies ────────────────────────────────────────────────────
+# tinyalsa, for the native-ALSA audio backend (../IMPROVEMENT_PLAN.md F1).
+# Guarded on the ARTIFACT, never on a flag or a marker file — a generated flag
+# goes stale and a stale one has already cost this project a build failure
+# (../CLAUDE.md, and ScummVM's build_arm_deps()).  Called from here rather than
+# left as a manual prerequisite so a fresh clone still works through
+# ../deploy-all.sh, which drives this script unattended.
+if [[ ! -f arm-deps/lib/libtinyalsa.a ]]; then
+    info "ARM dependencies missing — building them first"
+    bash ./build-deps.sh || err "build-deps.sh failed — cannot build without libtinyalsa.a"
+fi
+echo ""
+
 # ── 2. build ─────────────────────────────────────────────────────────────────
 mkdir -p build
 

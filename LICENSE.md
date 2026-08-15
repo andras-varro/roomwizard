@@ -78,6 +78,7 @@ actually pin, because "current upstream" is not a fact anyone can check later.
 | libjpeg-turbo | 2.1.5.1 | IJG · BSD-3-Clause · zlib | `vnc_client/build-deps.sh` |
 | zlib | 1.2.13 (`vnc_client`), 1.3.1 (ScummVM) | zlib licence | both build scripts |
 | libpng | 1.6.43 | PNG Reference Library License v2 | `scummvm-roomwizard/build-and-deploy.sh` |
+| tinyalsa | 2.0.0 | **BSD-3-Clause** (© 2011 The Android Open Source Project) | `native_apps/build-deps.sh` |
 | Linux kernel | 4.14.52, unmodified upstream | **GPL-2.0-only** | `usb_host/build-xpad-module.sh`; the tree lives at `usb_host/linux-4.14.52/` (gitignored) |
 | glibc | whatever `arm-linux-gnueabihf-gcc` provides | LGPL-2.1-or-later | the distribution's cross toolchain |
 
@@ -106,6 +107,16 @@ and the two must agree.**
 
 The three `.ko`s are the reason the choice of licence for this project's own code mattered at all: a
 GPL-2.0-**only** binary in the same distribution is what rules Apache-2.0 out.
+
+⚠️ **tinyalsa is deliberately absent from the table above, and that is a statement about *today*.**
+`native_apps/build-deps.sh` cross-builds it (BSD-3-Clause, row in the previous section), but no shipped
+binary contains its code yet: nothing links it until the ALSA audio backend lands, and a static archive
+contributes *nothing* to a binary that references none of its members. The moment `common/audio_dev.c`
+links it, the `native_apps` row above also carries **BSD-3-Clause**, whose clause 2 requires the
+copyright notice, condition list and disclaimer to be reproduced with any binary distribution.
+`release.sh`'s `NOTICE` **already reproduces them in full**, a phase early and on purpose — a notice that
+travels before the code does is harmless, whereas one that lands a release late is the obligation
+missed. Do not "tidy" it out of `NOTICE` on the grounds that nothing links it yet.
 
 ---
 

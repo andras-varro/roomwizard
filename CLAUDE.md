@@ -420,6 +420,14 @@ the only build path and the source of truth for how binaries are built and shipp
 goes in `GAMES_BINARIES` there and nowhere else — that one array drives the upload, the remote
 `chmod +x` and the md5 verification. Details: `native_apps/CLAUDE.md`.
 
+**`native_apps/build-deps.sh` is the third dependency builder, and the last one that should exist.**
+It cross-builds **tinyalsa 2.0.0** (pinned) into `native_apps/arm-deps/` for the native-ALSA audio
+backend, and `build-and-deploy.sh` §1b calls it guarded on the artifact so a fresh clone still works
+through `deploy-all.sh`. ⚠️ **ScummVM points at `../native_apps/arm-deps` rather than building its own
+copy** — zlib is built twice in this repo and `LICENSE.md` carries both versions as a result. Three
+traps (five of eight upstream sources, the one-line `pcm_close()` patch, and gating the `.a` rather than
+`build/`) are in that script's comments and summarised in `native_apps/CLAUDE.md`.
+
 ### Redeploy scope by changed file
 
 All three components link objects from `native_apps/common/`, so what you touched decides how much has
@@ -431,6 +439,7 @@ misparses.
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
+| `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing, from F1 Phase 4 `native_apps`, from Phase 5 **all three**. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
 | the three **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
 | `usb_host/devmem_write.c`, `build-xpad-module.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
