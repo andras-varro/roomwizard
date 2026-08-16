@@ -236,7 +236,7 @@ markdownlint's `MD051`. The state lives here instead, where updating it costs no
 | 0 | measure `hw:0,0` before rewriting anything | ✅ **closed, passed** — `.188`, 2026-08-14 |
 | 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
-| 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green at 154 checks, DEPLOYED to `.188`. Two defects found BY PANEL and fixed; the fix for the second is deployed but NOT yet heard** (2026-08-15) |
+| 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green at 154 checks, DEPLOYED. Defect 2's fix HEARD and it WORKED — no crackling. A third defect is now the blocker: every sum is audibly distorted** (2026-08-16) |
 | 4 | rebuild `audio.c`'s device half on tinyalsa | open, next |
 | 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 6 | the docs and the comments this makes stale | open |
@@ -262,16 +262,11 @@ live in `native_apps/CLAUDE.md` → *Build*.
 
 Three results from those phases worth not re-deriving:
 
-- ⚠️ **A hand-rolled `Audio` went silently mute the moment `channels` existed.** `device_tools.c` and
-  `hardware_config.c` were verbatim duplicates that `memset` an `Audio` and set three fields, so `channels`
-  stayed **0** — and `audio_bytes_for_frames(8820, 0)` is **0**, against 35280 for two channels. ⚠️ **The
-  prescribed fix "convert them to `audio_init()`" was wrong and the code said so**: `hardware_config.c:71`
-  reads *"Bypass config-gated `audio_init`"*, and that bypass is deliberate — a hardware *test* must drive
-  the speaker even when the user has switched audio off in config. The defect was the duplication, so the
-  fix is one `audio_init_unchecked()` that both tabs call. Negative control for the whole class:
-  `grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/`, whose only legitimate hit is
-  `audio.c` itself (two standalone OSS probes under `tests/` also hit it; neither uses `Audio`, neither is
-  in `build-and-deploy.sh`).
+- ⚠️ **The prescribed fix "convert both hand-rolled `Audio`s to `audio_init()`" was wrong, and the code said
+  so.** `hardware_config.c:71` reads *"Bypass config-gated `audio_init`"*, and that bypass is deliberate: a
+  hardware *test* must drive the speaker even when the user has switched audio off. The defect was the
+  duplication, not the bypass, so the fix is one `audio_init_unchecked()` that both tabs call. The rule, the
+  silent-mute measurement and the tree-wide negative-control grep are `native_apps/CLAUDE.md` → *Audio*.
 - ⚠️ **The 32-bit overflow cannot be *observed* on this host — `sizeof(long)` is 8 here.** The test models
   the target's truncation explicitly (`(int32_t)(uint32_t)` of the 64-bit product); a test that merely
   wrote the shipped expression would pass here and prove nothing about armhf.
@@ -331,11 +326,11 @@ traces the raw ring numbers for 40 calls per session. Panel state so far:
 | # | Question | Answer |
 |---|---|---|
 | 1 | two overlapping sounds heard as **two** | ✅ **yes** — DRONE 220 + 440, reported as "two tones" 2026-08-15 |
-| 2 | `audio_success()` is an arpeggio, not a chord | ⏳ **unasked** — CHORD was unrecognisable for a reason since fixed, so SUCCESS is worth re-hearing first |
-| 3 | is the summed clamp audible | ✅ **NO, and that refuted the diagnosis** — `LIMIT: HARD` vs `SOFT` was *"no change at all"* by ear while `clip` provably went 0 → 4189. Clipping was real and is fixed, but it was **not** what the panel was hearing |
-| 4 | the ~60 ms rule, three walks | ✅ **PUMP off: unchanged · PUMP on, keepalive OFF: still ~60 ms · PUMP on, keepalive ON: 5 ms is audible, 20 ms recognisable.** The rule is a property of **restarting the stream**, not of `SNDCTL_DSP_RESET` — see [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
+| 2 | `audio_success()` is an arpeggio, not a chord | ❌ **no — it is "a distortion"** by ear, `PUMP: ON` / `KEEP: ON` / `LIMIT: SOFT`, 2026-08-16. SUCCESS and FAIL fired close together distort too. **Reported by ear only, operator's own words** — see defect 3 |
+| 3 | is the summed clamp audible | ⚠️ **The question was too narrow and its ✅ was misleading.** `LIMIT: HARD` vs `SOFT` was *"no change at all"* while `clip` went 0 → 4189, so *clipping* was not what the panel heard then — but with the crackle now gone, **the limiter itself is the prime suspect for the distortion that remains**. `clip == 0` proves int16 never overflowed, **not** that the mix is clean |
+| 4 | the ~60 ms rule, three walks | ✅ **PUMP off: unchanged · PUMP on, keepalive OFF: still ~60 ms · PUMP on, keepalive ON: 5 ms audible, 20 ms recognisable.** A property of **restarting the stream**, not of `SNDCTL_DSP_RESET` — [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 6 |
 | 5 | CPU% while mixing | ⏳ **unmeasured** — `top -b -n 2 \| grep audio_mix_test` from a second shell while a drone runs |
-| 6 | does the ~50 % attenuation belong on the **synth** or on all output | ⏳ **unmeasured** — `AUDIO_PEAK` 18000 is an inference from `SPKR1` summing L + R, and 48 kHz stereo music through `aplay` (no attenuation) was *"loud but not distorted"*, which points at synth-only. A per-voice gain walk (one voice at 18000 vs 26000 vs 32767, listening for distortion) settles it, and Phase 4 needs the number before picking a peak for the tinyalsa path |
+| 6 | does the ~50 % attenuation belong on the **synth** or on all output | ⏳ **unmeasured, and now the critical path.** Defect 3 makes it a per-voice-headroom question rather than a taste question: three voices at `AUDIO_PEAK` 18000 sum to 54000, and nothing scales a voice by the voice count. Phase 4 needs the number, and so does any fix for defect 3 |
 
 **Two defects were found by ear and both are fixed in the tree; the second fix has NOT been heard yet.**
 
@@ -349,30 +344,59 @@ exactly, so **one voice stays byte-identical**), then `y = K + (C−K)·u/(1+u)`
 `lim=6181`); the ceiling is **below** two voices' arithmetic sum, so it protects the speaker and not just
 the store; and `AUDIO_MIX_HARD` keeps the rejected clamp reachable as the on-panel control.
 
-⚠️ **Defect 2 — a lead in MILLISECONDS is the wrong unit, and this is the one the panel was hearing.**
-Measured on `.188` 2026-08-15: the OSS shim moves `appl_ptr` in whole **2048-frame periods** and never
-between, while `GETOSPACE` counts the partial period it is still staging. So an 80 ms lead is **1.7
-periods**, of which ALSA can play one; it drains that, the next is not complete, `state` goes **`XRUN`**,
-and the shim's recovery **discards** the staged audio. Consequences, all reported and all one mechanism:
-a crack every ~120 ms (operator counted "20–25" in a 3 s drone — the same cadence as the measured
-`RUNNING → XRUN → RUNNING` cycle), CHORD *shorter* than the un-pumped version, and a tone chopped ~8 ×/s
-that reads as a **square wave** — which is why the limiter changed nothing audible. The fix is
-`audio_pump_lead_frames()`: take the device's period, floor the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of
-them, round **up** to a whole period, cap at half the ring. On this device that is 6144 frames ≈ **139 ms**,
-and ⚠️ **the lead is the latency ceiling**, so that is a real cost of the shim's period size — Phase 4 buys
-it back, because Phase 0 measured tinyalsa granting `period_size=1024` (23 ms).
+✅ **Defect 2 — a lead in MILLISECONDS was the wrong unit, and the fix is now CONFIRMED BY EAR.** The OSS
+shim moves `appl_ptr` in whole **2048-frame periods** and never between, while `GETOSPACE` counts the partial
+period it is still staging, so an 80 ms lead was 1.7 periods: ALSA drained the one it had, `state` went
+**`XRUN`**, and the shim's recovery **discarded** the staged audio — a crack every ~120 ms, matching the
+measured `RUNNING → XRUN → RUNNING` cadence. `audio_pump_lead_frames()` takes the device's period, floors the
+lead at `AUDIO_PUMP_LEAD_PERIODS` (3), rounds **up**, caps at half the ring: 6144 frames ≈ **139 ms** here.
+⚠️ **The lead is the latency ceiling**, so that is a real cost of the shim's period size, which Phase 4 buys
+back (Phase 0 measured tinyalsa granting `period_size=1024`, 23 ms). Operator 2026-08-16, `PUMP: ON` /
+`KEEP: ON` / `LIMIT: SOFT`: **"No crackling."** Single voices "sound right".
 
-**Two suspects this file recorded are now REFUTED by measurement, and neither should be re-raised:**
-`lost=0` on every logged pump kills "`WPOL_PUMP`'s `stop_on_again` drops rendered frames", and the tool's
-worst frame time stayed at **107 ms while `starve` kept climbing** — one slow frame at start-up, not a
-chronically slow loop — which kills "the render loop cannot feed the lead". The third suspect, the tool's
-own toggle wiring, was checked and was **sound**: the panel capture showed `PUMP: ON` and every log line
-agrees with `audio_pump_active()`.
+**Two suspects this file recorded are REFUTED by measurement, and neither should be re-raised:** `lost=0` on
+every logged pump kills "`WPOL_PUMP`'s `stop_on_again` drops rendered frames", and the tool's worst frame
+stayed at **107 ms while `starve` kept climbing** — one slow frame at start-up, not a chronically slow loop —
+which kills "the render loop cannot feed the lead". The third suspect, the tool's own toggle wiring, was
+checked and was **sound**.
 
-⏳ **What the next session must do first: listen.** The period-aligned lead is deployed to `.188` and has
-never been heard. Ask for PUMP + KEEP, then DRONE 220 + 440, then CHORD, and poll
-`/proc/asound/card0/pcm0p/sub0/status` from a second shell — the `XRUN` cycle disappearing is the
-script-verifiable half of the same answer.
+⏳ **Defect 3 — EVERY SUM IS AUDIBLY DISTORTED, and this is the blocker.** Reported by the operator
+2026-08-16 with `PUMP: ON` / `KEEP: ON` / `LIMIT: SOFT`, **by ear only, and it must not be promoted to a
+measurement until an instrument agrees**: single voices sound right; CHORD is "a distortion"; DRONE 220 + 440
+together, and SUCCESS + FAIL fired close together, all "go into a big distortion". The distortion's pitch
+reads **lower** than 440 alone. Against a phone signal generator the device's 440 matched a **square wave**
+far better than a sine, and the 220 + 440 sum resembled a plain 440 sine more than either input.
+
+**The mechanism that fits all of it, `[inferred]` and not yet measured:** the generator is a genuine sine
+(`sin()` at `common/audio_gen.c:89`, `:130`, `:292`), and `audio_pump_mix()` sums each voice at its **full
+`peak`** — `:292` is `acc += peak * env * sin(phase)` with **no scaling by voice count**. So two voices reach
+36000 and three 54000 against int16's 32767, and `audio_mix_limit()` waveshapes all of it back under
+`AUDIO_MIX_CEIL`. **Memoryless per-sample compression of a sum IS harmonic distortion** — it flattens peaks,
+adds odd harmonics and emphasises the lower fundamental, which is a square-ish, deeper-sounding artefact.
+⚠️ **So `clip == 0` was never evidence of a clean mix, and the gate said PASS while the sound was destroyed.**
+The candidate fix is **per-voice headroom instead of sum limiting** (scale a voice by the live voice count, or
+pick a per-voice peak such that `AUDIO_MAX_VOICES` cannot exceed full scale) — which is panel question 6, now
+on the critical path. ⚠️ **Price the loudness cost before building it:** 18000/3 = 6000 per voice makes a lone
+beep much quieter, so the honest options are a voice-count-dependent gain, a `sqrt` law, or a lower
+`AUDIO_MAX_VOICES`. Refutation if the mechanism is wrong: with **one** voice at 18000 the panel should hear a
+clean sine, and `LIMIT: HARD` vs `SOFT` should now differ audibly on a 3-voice CHORD.
+
+**One operator observation is expected physics, not a defect — do not chase it.** Several 220 Hz drones
+started at different moments were "no or very faint sound until one of them finished": identical frequencies
+at different start phases partially cancel, and `AudioVoice.delay` guarantees the phases differ.
+
+⚠️ **Two defects in the INSTRUMENT were found 2026-08-16 and must be fixed before the next panel session,
+because both make its numbers untrustworthy:**
+
+- **The `lead` readout is a hardcoded constant.** `tests/audio_mix_test.c:311` sets `lead_ms =
+  AUDIO_PUMP_LEAD_MS`, so the panel shows the **requested 80 ms** while the effective lead is ~139 ms — and
+  `:191` colours the worst-frame warning against that same wrong number. There is no accessor for the
+  effective lead; `audio.c:412` computes it as a local. **An A/B tool must report what the library did, not
+  what the header asked for** — the same defect class as a toggle label that does not read the toggle.
+- **`/tmp/mix.log` does not exist and cannot, as launched.** Taps are written to **`stderr`**
+  (`tests/audio_mix_test.c:347`); there is no `fopen` in the file. Started from the launcher tile, that
+  output goes nowhere, so **this file's claim that "every tap logs … to `/tmp/mix.log`" is wrong.** Either
+  launch it as `/opt/games/audio_mix_test 2>/tmp/mix.log` over SSH, or give the tool its own log file.
 
 **Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device** (neither
 `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** · one mono
@@ -1297,9 +1321,8 @@ with a different file, and the classification is what caught it before any editi
 ⚠️ **Part 3 stopped at 713 rather than 690, and the residue is priced rather than spent — 6 lines in Rendering
 and 10 in Audio.** Both sections are at their wrap floor: measured, Rendering averages 84 chars over 93
 non-blank lines and Audio 88 over 85, and every line under 70 chars is a paragraph's wrap remainder, a table
-header or the protected `main()`-loop skeleton. So the next line out is not narration — it is one of `21 px`,
-the 30 fps pin, `1.2 s`, `300–1500 ms`, `150 px/s` / `~7 s`, `~3×`, `11 px/frame`, `18000` / `54000` / `32767`,
-`26000`, `80 ms`, `8820` / `35280`, or one of ~35 named functions and constants. **A war story does not
+header or the protected `main()`-loop skeleton. The next line out is therefore a measurement or a named
+identifier, never narration; the full list of what it would cost is in the plan file. **A war story does not
 compress to its rule; it compresses to its rule *plus the measurement that proves it*, which is where the
 survey's 55 and 24 came from.** Fourth mispriced target in this cleanup and the second by classification —
 the difference is that this one was found by measuring the floor instead of by deleting an identifier and
