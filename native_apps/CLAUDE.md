@@ -214,10 +214,9 @@ that may have changed settings exits. Config changes never propagate into a runn
 
 ## Rendering: dirty flag + adaptive sleep
 
-600 MHz, no GPU. Unconditional 60 fps redraws burn 40 %+ CPU. Track `needs_redraw`, draw only when set,
-and sleep longer when idle — this alone takes a static UI from ~40 % to under 5 %. Static UI (launchers,
-menus, settings): draw only on state change. Games: dirty-flag the non-playing states (welcome, paused,
-game-over); render every frame during actual gameplay.
+600 MHz, no GPU. Unconditional 60 fps redraws burn 40 %+ CPU; tracking `needs_redraw`, drawing only when
+set and sleeping longer when idle takes a static UI from ~40 % to under 5 %. Static UI (launchers, menus,
+settings): draw only on state change. Games: dirty-flag welcome/paused/game-over, render every gameplay frame.
 
 ```c
 bool needs_redraw = true;               /* first frame always draws */
@@ -243,42 +242,33 @@ while (running) {
 }
 ```
 
-The `bool drew` matters: testing `needs_redraw` in the `usleep` after clearing it inside the `if` always
-yields the idle delay, pinning the app to 10 fps — a real shipped bug. Capture it first, as above, or clear
-the flag *after* the `usleep`.
+The `bool drew` matters: testing `needs_redraw` in the `usleep` *after* clearing it inside the `if` always
+yields the idle delay, pinning the app to 10 fps — a shipped bug. Capture it first, or clear the flag last.
 
 **A component whose `update()` both draws and reads input has to tell the caller when it still needs
-frames.** The loop computes the dirty flag from what the loop can see — state changes and input — so a
-component with internal states of its own is invisible to it and gets starved. `gameover_update()` is a
-`CHECK` → (`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY` draws**, so the game-over overlay
-and the high-score keyboard both needed a tap to appear. It exposes `gameover_needs_redraw()`, ORed in:
+frames** — the loop's dirty flag sees only what the loop can see. `gameover_update()` is a `CHECK` →
+(`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY` draws**, so the game-over overlay and the
+high-score keyboard both needed a tap to appear. It exposes `gameover_needs_redraw()`, ORed into the flag
+(`if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos)) needs_redraw = true;`). Three
+corollaries, all from that one bug:
 
-```c
-if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
-    needs_redraw = true;
-```
-
-Three corollaries, all from that one bug:
-
-- **Do not fix it in the caller.** An unconditional redraw while `SCREEN_GAME_OVER` cures one game, leaves
-  the others broken and pins a static overlay to 30 fps. Ask the component; only it knows.
-- **A first frame drawn on the transition frame puts the press that caused the transition in front of the
-  new screen's buttons.** `TouchState.pressed` is a rising edge surviving until the next `touch_poll()`, and
-  a draw-then-check-input component draws before it reads — so it must ignore input on its own first drawn
-  frame (`GameOverScreen.armed`). brick_breaker's pause `RETIRE` overlaps game-over's `RESET SCORES` by
-  21 px, so without the guard retiring could wipe the high-score table on an unseen screen.
+- **Do not fix it in the caller.** An unconditional redraw while `SCREEN_GAME_OVER` cures one game, leaves the
+  others broken and pins a static overlay to 30 fps.
+- **The transition frame's own press lands in front of the new screen's buttons.** `TouchState.pressed` is a
+  rising edge surviving until the next `touch_poll()` and a draw-then-check-input component draws before it
+  reads, so it must ignore input on its first drawn frame (`GameOverScreen.armed`). brick_breaker's pause
+  `RETIRE` overlaps game-over's `RESET SCORES` by 21 px: retiring could wipe the high-score table unseen.
 - **But do not make every state fall through — `NAME_ENTRY` deliberately keeps its `return`.** `CHECK` falls
   through in the same call, so the no-highscore path costs no extra frame. `NAME_ENTRY` must not:
   `hs_enter_name()` is a **blocking** keyboard that repaints and swaps the framebuffer itself, so drawing the
-  overlay in the same call composites it over the keyboard's last frame. It leaves `pending_draw` set and
-  takes one clean frame. Reads like an oversight if you only know the fall-through rule — it isn't.
+  overlay in the same call composites it over the keyboard's last frame; it leaves `pending_draw` set and takes
+  one clean frame.
 
-**And the predicate must cover pending *input*, not just a pending draw.** If the component reads its
-buttons inside the draw path, a frame the loop declines to run is also **an input event it never sees**, so
-a predicate reporting only "I owe a frame" goes quiet as the screen settles and the buttons die — which
+**And the predicate must cover pending *input*, not just a pending draw.** If the component reads its buttons
+inside the draw path, a frame the loop declines to run is also **an input event it never sees** — which
 shipped as a game-over screen drawn correctly and completely unresponsive, only killable over SSH. Do not
-rely on the caller having an input-activity `else` branch; a pure visible-state diff sees nothing in a tap
-on an overlay. Three grounds, each load-bearing:
+rely on the caller having an input-activity `else` branch; a pure visible-state diff sees nothing in a tap on
+an overlay. Three grounds, each load-bearing:
 
 | Ground | Why |
 |---|---|
@@ -287,13 +277,11 @@ on an overlay. Three grounds, each load-bearing:
 | any button's `was_pressed` | `button_check_press()` clears that latch only on a frame where the button is **not** touched. At `FRAME_DELAY_IDLE_US` a press and its release can both land in one `touch_poll()`, so there may be no `held`/`released` frame at all — and then the *next* press is silently eaten. Ask the buttons, not the touch state |
 
 Idle still costs nothing: with no finger down and nothing latched all three are false and the static overlay
-produces no frames — the point of asking the component in the first place. `FRAME_DELAY_ACTIVE_US` = 33 333
-(~30 fps), `FRAME_DELAY_IDLE_US` = 100 000 (~10 fps), both in `common/common.h`. Use them; don't hardcode
-`usleep()` values. Reference implementation: `app_launcher/app_launcher.c`.
+produces no frames. `FRAME_DELAY_ACTIVE_US` = 33 333 (~30 fps) and `FRAME_DELAY_IDLE_US` = 100 000 (~10 fps)
+are in `common/common.h` — use them, don't hardcode `usleep()` values. Reference: `app_launcher/app_launcher.c`.
 
-**The only `usleep()` in a game is the one at the bottom of the main loop.** Anything else in an update or
-input path stops the world: no `touch_poll()`, no `gamepad_poll()`, no redraw. Two shapes, and both have a
-replacement:
+**The only `usleep()` in a game is the one at the bottom of the main loop.** Anything else stops the world:
+no `touch_poll()`, no `gamepad_poll()`, no redraw. Two shapes, both with a replacement:
 
 | Shape | Was | Use instead |
 |---|---|---|
@@ -304,39 +292,38 @@ Three things about that, learned from doing it:
 
 - **`hw_led_pulse_update()` takes `now_ms` as an argument rather than calling `get_time_ms()`**, because
   `vnc_client` links `hardware.c` but **not** `common.c` — same reasoning as `gamepad_poll()`'s touch
-  coordinate, and it makes the pulse host-testable. `hw_blink_led()`/`hw_pulse_led()` are still there and
-  still blocking; correct for exactly one case, the exit flourish before `running = false`.
+  coordinate, and it makes the pulse host-testable. `hw_blink_led()`/`hw_pulse_led()` are still blocking:
+  correct for exactly one case, the exit flourish before `running = false`.
 - **The render-loop shape is the one that hides a dead button** — a screen held without polling leaves MENU
-  and EXIT dead for its whole duration. As an animation state it costs nothing: the dirty flag already
-  forces frames on `anim_state != ANIM_NONE`, and `handle_input()` checks the buttons *before* it gates the
-  grid on the animation. Check that order if you add one.
+  and EXIT dead. As an animation state it costs nothing: the dirty flag already forces frames on
+  `anim_state != ANIM_NONE`, and `handle_input()` checks the buttons *before* it gates the grid on the
+  animation — check that order if you add one.
 - **A pulse outlives the state that started it, so whoever can leave that state must cancel it** —
   `reset_game()` / `init_level()` call `hw_led_pulse_stop()`, or a game-over flourish flashes into the next
   round. If a code path writes the LED directly, stop the pulse first or the next update re-lights it.
 
 **A per-frame motion constant is a speed only in combination with the frame delay, so sanity-check it in
-px/s:** multiply by 30 and ask whether you would enjoy that speed before committing the number. Pong served
-every ball at `5.0` px/frame — 150 px/s, ~3.5 px/frame along the long axis at a 45° serve, so **~7 s to
-cross the playfield** — and it read as a perfectly ordinary constant in source (`BALL_START_SPEED` carries
-the arithmetic in its comment now). And **never count *frames* where you mean *time***: a dirty-flagged
-loop's rate varies with what the app is doing, so a per-iteration counter runs at whatever pace the screen
-happens to need — that was tetris' gravity, ~3× too slow while idle. Motion tied to a fixed physics step (a
-ball's `vx`) may live in px/frame; anything experienced as a duration wants a `get_time_ms()` delta.
+px/s** — multiply by 30 before committing the number. Pong served every ball at `5.0` px/frame: 150 px/s,
+~3.5 px/frame along the long axis at a 45° serve, so **~7 s to cross the playfield**, and it read as an
+ordinary constant in source (`BALL_START_SPEED` carries the arithmetic in its comment now). And **never count
+*frames* where you mean *time***: a dirty-flagged loop's rate varies with what the app is doing, so a
+per-iteration counter runs at whatever pace the screen needs — that was tetris' gravity, ~3× too slow while
+idle. Motion tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything experienced as a
+duration wants a `get_time_ms()` delta.
 
 **Derive state; don't accumulate it, and don't let a marker mean two things.** One shape produced three game
-bugs: a multiplier re-applied to a figure that already contained it (so **SLOW DOWN made the ball faster**),
-a sentinel every other site read as something else (`health = -1` for "indestructible" against `health <= 0`
+bugs: a multiplier re-applied to a figure that already contained it (so **SLOW DOWN made the ball faster**), a
+sentinel every other site read as something else (`health = -1` for "indestructible" against `health <= 0`
 "destroyed", so the brick had no collision), and a published slot nothing wrote (`length++` exposing a
-`body[length]` the shift never fills). Each fix made the derived value derived rather than patching the
-failing site: **one writer**, everyone else reads from it (`ball_apply_speed()` is the only writer of
-`Ball.speed` and reads a separate `base_speed`; `brick_is_destroyed()` is the only test). Two things that
-make the class quick to confirm
-and safe to fix: **the dead code proves the diagnosis** — brick_breaker had a bounce path and a
-diagonal-stripe renderer for indestructible bricks, neither reachable, and deliberate-looking unreachable
-code tells you which value is being misread — and **when a clamp moves, ask what it was protecting**:
-`BALL_MAX_SPEED` stayed on the *effective* speed because 11 px/frame is what stops the ball tunnelling
-through a brick. At effect level 0 the emitted behaviour must come out byte-identical; that is what
-preserves the default feel.
+`body[length]` the shift never fills). Each fix made the derived value derived rather than patching the failing
+site: **one writer**, everyone else reads from it (`ball_apply_speed()` is the only writer of `Ball.speed` and
+reads a separate `base_speed`; `brick_is_destroyed()` is the only test). Two things make the class quick to
+confirm and safe to fix: **the dead code proves the diagnosis** — brick_breaker had a bounce path and a
+diagonal-stripe renderer for indestructible bricks, neither reachable, and deliberate-looking unreachable code
+tells you which value is being misread — and **when a clamp moves, ask what it was protecting**:
+`BALL_MAX_SPEED` stayed on the *effective* speed because 11 px/frame is what stops the ball tunnelling through
+a brick. At effect level 0 the emitted behaviour must come out byte-identical; that is what preserves the
+default feel.
 
 ## Coordinates, dimensions, portrait
 
@@ -629,37 +616,33 @@ group A does it that way and labels it.
 
 ## Audio: the generator is separate from the device
 
-`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it** — so it is the half a
-host regression can reach (`tests/audio_gen_test.c`, build line in its header). `audio.c` keeps the device
-half: the config gate, `/dev/dsp`, the ioctls, the GPIO12 amp poke — and it **consumes `audio_gen` for
-everything else**, so there is no arithmetic in it a host test cannot reach. Three rules live there and
-each has cost something:
+`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it** — the half a host
+regression can reach (`tests/audio_gen_test.c`, build line in its header). `audio.c` keeps the device half:
+the config gate, `/dev/dsp`, the ioctls, the GPIO12 amp poke — and it **consumes `audio_gen` for everything
+else**, so no arithmetic in it is out of a host test's reach. Three rules live there, each having cost something:
 
-- **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums
-  L + R (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the
-  generator is mono and single-sample and `audio_interleave()` is the one conversion point. A `frames * 4`
-  with the 4 spelled out is only accidentally right. `configure_dsp()` reads the count back with
-  `SOUND_PCM_READ_CHANNELS` and warns **once per `Audio`** if it has to fall back to 2 — that function
-  runs on every `audio_flush()`, so a per-call warning would spam.
-- ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest of
-  the stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
-  `audio_write_frames()` is the only code that decides when to stop, and it stops on frame boundaries or
-  reports `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` regardless of the caller's
-  policy — an unlimited policy against a full sink hangs the render loop, which is worse than the swap. The
-  four EAGAIN loops `audio.c` used to hand-roll are now four **named policies** — `WPOL_TONE`,
-  `WPOL_PREFILL`, `WPOL_CHUNK`, `WPOL_FADE` — over one `write_mono()`. Do not add a fifth loop; add a fifth
-  policy.
-- **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` deliberately
-  holds frequency and amplitude still; deleting it while collapsing the duplicated generators deletes the
-  fade. `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long
-  call — which is what lets a caller write whatever the ring will take without a seam.
+- **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums L + R
+  (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the generator is
+  mono and single-sample and `audio_interleave()` the one conversion point; a `frames * 4` with the 4 spelled
+  out is only accidentally right. `configure_dsp()` reads the count back with `SOUND_PCM_READ_CHANNELS` and
+  warns **once per `Audio`** on a fallback to 2 — it runs on every `audio_flush()`, so per-call would spam.
+- ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest of the
+  stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
+  `audio_write_frames()` is the only code that decides when to stop: on frame boundaries, or it reports
+  `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` whatever the caller's policy — an
+  unlimited policy against a full sink hangs the render loop, which is worse than the swap. The four EAGAIN
+  loops `audio.c` hand-rolled are now four **named policies** over one `write_mono()` — `WPOL_TONE`,
+  `WPOL_PREFILL`, `WPOL_CHUNK`, `WPOL_FADE`. Do not add a fifth loop; add a fifth policy.
+- **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` holds frequency and
+  amplitude still, so deleting it while collapsing the duplicated generators deletes the fade.
+  `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —
+  which lets a caller write whatever the ring will take without a seam.
 
 ### Mixing: an optional per-frame pump
 
-Two sounds at once needs userspace to hold the audio and hand the device small pieces of it, because you
-cannot mix into a buffer the kernel already has. `audio_pump()` does that **from the render loop —
-never a thread**: static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar
-(`../CLAUDE.md`). Converting an app is three lines:
+Two sounds at once needs userspace to hold the audio and hand the device small pieces of it — you cannot mix
+into a buffer the kernel already has. `audio_pump()` does that **from the render loop, never a thread**:
+static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar (`../CLAUDE.md`). Three lines:
 
 ```c
 audio_init(&audio);
@@ -674,17 +657,15 @@ while (running) {
 
 Nine rules, each of which is a way to get this wrong:
 
-- ⚠️ **The lead is measured in DEVICE PERIODS, never in milliseconds alone.** `audio_pump_lead_frames()`
-  takes the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds
-  **up**. Why three, and what a shorter lead sounds like:
-  [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio), gotcha 5. ⚠️ **The lead is also the
-  latency ceiling** — ~139 ms on the shim's 46 ms period, which F1 Phase 4's 23 ms period buys back.
-- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit, not a digital one.** Every voice plays
-  at 18000 ≈55 % of full scale *because `SPKR1` sums L + R*, so three voices reach 54000 against 32767.
-  `audio_mix_limit()` is linear up to a knee at `AUDIO_PEAK` — which is what keeps **one voice
-  byte-identical** — then asymptotic to `AUDIO_MIX_CEIL` 26000, deliberately **below** two voices'
-  arithmetic sum so it protects the speaker too. Because the curve is bounded, ⚠️ **`clipped` must read
-  exactly 0**: that is the check, not a comfort margin. `AUDIO_MIX_HARD` keeps the old clamp for A/B.
+- ⚠️ **The lead is measured in DEVICE PERIODS, never in milliseconds alone.** `audio_pump_lead_frames()` takes
+  the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds **up** (why
+  three, and what a shorter lead sounds like: [§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5). ⚠️ **The lead
+  is also the latency ceiling** — ~139 ms on the shim's 46 ms period, which F1 Phase 4's 23 ms buys back.
+- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit, not a digital one.** Every voice plays at
+  18000, ≈55 % of full scale ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) for why), so three voices reach 54000
+  against 32767. `audio_mix_limit()` is linear to a knee at `AUDIO_PEAK` — which keeps **one voice
+  byte-identical** — then asymptotic to `AUDIO_MIX_CEIL` 26000, deliberately **below** two voices' sum so it
+  protects the speaker too. Bounded, so ⚠️ **`clipped` must read exactly 0**; `AUDIO_MIX_HARD` keeps the old clamp for A/B.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it — 0 under
   the soft limiter), `lim` (the knee bent it — expected, not a fault), `starve` (the ring was dry with audio
   still owed: **one audible gap each, and it attributes crackle to pacing rather than to mixing**), `lost`

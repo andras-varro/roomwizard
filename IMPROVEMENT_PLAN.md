@@ -1124,7 +1124,7 @@ Working detail: `~/.claude/plans/peaceful-herding-valiant.md`.
 | 3b | (folded into 3 — the second half of the same cut) | 2149 → 1256 | ✅ 2026-08-15 |
 | 4 | `SYSTEM_ANALYSIS.md`: evict history/hypothesis/process, tag unmeasured claims | 2214 → **2049**, ~1890 met by phase 5 | ✅ 2026-08-16 |
 | 5 | `HARDWARE.md` split out, with the photos beside the parts they show | 2049 → **1871** | ✅ 2026-08-16 |
-| 6 | `native_apps/CLAUDE.md` compress | 891 → **732** of ~690 | ⏳ part 2 done 2026-08-16 |
+| 6 | `native_apps/CLAUDE.md` compress | 891 → **713** | ✅ 2026-08-16 |
 | 7 | `MEMORY.md` index compression | 10.2 KB → **4.5 KB** | ✅ 2026-08-16 |
 
 **Phase 3 is done and it landed at 1256, not the ~700 the table used to promise.** ⚠️ **That target was
@@ -1269,10 +1269,11 @@ is 3703 — the count is out of `C2`'s title rather than corrected there, per th
 **Phase 1's negative control:** every one of the old `CLAUDE.md`'s 56 ⚠️ warnings was checked to survive in
 one of the five files or in `native_apps/CLAUDE.md`; 56 of 56 accounted for.
 
-**Phase 6 was priced before any editing, and ~325 is not reachable — the honest figure is ~690.** Every
-block of `native_apps/CLAUDE.md` was classified *duplicate / war story / reference* first, which is now the
-second target in a row that this question has priced correctly. The per-section arithmetic, summing to
-**~203 lines out of 891**:
+**Phase 6 landed at 713, and the ~690 it was priced at was mispriced in the same way phases 3 and 4 were —
+by classification, in two rows only.** Every block of `native_apps/CLAUDE.md` was classified *duplicate / war
+story / reference* before any editing, which caught most of it; the per-section arithmetic below summed to
+**~203 lines out of 891** and delivered 178. The two rows it got wrong are Rendering and Audio, and the `keep`
+figures in the table are the **measured floors**, not the survey's:
 
 | section | keep | out | what compresses, and what does not |
 |---|---|---|---|
@@ -1281,17 +1282,33 @@ second target in a row that this question has priced correctly. The per-section 
 | App lifecycle | 57 | 5 | the `main()` skeleton is the canonical copy; only the Snake and `argv[0]` narration goes |
 | Pixel format | 23 | 9 | the `fbset` warning and the bpp facts are in root `CLAUDE.md` and §3.2 |
 | Hardware API | 20 | 3 | five numbered rules, all reference |
-| Rendering | 107 | 55 | **the largest block**: six war stories compress to their rules, but the code skeleton, the three-grounds table and the two `usleep` shapes are reference |
+| Rendering | 113 | 13 | **the largest block**: the six war stories compress to their rules, but a *rule plus its measurement* is the floor — the survey's 55 counted the measurements as narration |
 | Coordinates, portrait | 23 | 2 | rules only |
 | Screen edges | 76 | 42 | the measured sweep table is duplicated in §3.3 *with an extra column*; the layout rules are not duplicated anywhere |
 | Touch model | 80 | 14 | the fit, the stage diagram and the 13-row rules table are the only copy; four receipt tokens live here |
 | Input | 88 | 26 | the uinput fact is in root `CLAUDE.md`, the MUSB facts in §3.6; the host-testability half is unique |
 | 32-bit target | 10 | 1 | four lines duplicate root `CLAUDE.md` |
-| Audio | 87 | 24 | the pump's nine rules and the `audio_gen` split live **nowhere else** — they compress by narration only |
+| Audio | 97 | 6 | the pump's nine rules and the `audio_gen` split live **nowhere else**; the survey's 24 assumed narration around them that a *measured* rule does not have |
 
 **Reaching ~325 would mean deleting the module table, the lifecycle skeleton, the touch rules table and
 the pump's nine rules** — the reference content this file exists to be. That is phase 4 part 2's mistake
 with a different file, and the classification is what caught it before any editing rather than after.
+
+⚠️ **Part 3 stopped at 713 rather than 690, and the residue is priced rather than spent — 6 lines in Rendering
+and 10 in Audio.** Both sections are at their wrap floor: measured, Rendering averages 84 chars over 93
+non-blank lines and Audio 88 over 85, and every line under 70 chars is a paragraph's wrap remainder, a table
+header or the protected `main()`-loop skeleton. So the next line out is not narration — it is one of `21 px`,
+the 30 fps pin, `1.2 s`, `300–1500 ms`, `150 px/s` / `~7 s`, `~3×`, `11 px/frame`, `18000` / `54000` / `32767`,
+`26000`, `80 ms`, `8820` / `35280`, or one of ~35 named functions and constants. **A war story does not
+compress to its rule; it compresses to its rule *plus the measurement that proves it*, which is where the
+survey's 55 and 24 came from.** Fourth mispriced target in this cleanup and the second by classification —
+the difference is that this one was found by measuring the floor instead of by deleting an identifier and
+reverting it, which is what part 2 had to do.
+
+⚠️ **Prose compression paid 8 lines and one structural change paid 5.** Inlining `gameover_needs_redraw()`'s
+two-line fence into the sentence that already explained it lost nothing and freed a fence, a blank and two
+short code lines. **When a fence holds one statement, it is narration in a code voice** — the mandate to keep
+"the main-loop skeleton" is about the skeleton, not about every fence near it.
 
 **Part 1 landed 891 → 855**, taking the two clean duplicate deletions and the four highest-value war
 stories: the sweep table (16 → 5, now a pointer), the uinput narration (8 → 5), the two MUSB paragraphs
