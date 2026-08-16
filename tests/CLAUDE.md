@@ -15,7 +15,8 @@ numbers is current without running it, so do not write a fourth.)
 
 ## `doc_check.sh` — the documentation invariants
 
-Host-only, no device, no toolchain. Three groups today.
+Host-only, no device, no toolchain. Each group has its own negative control; `--self-test` runs them all
+and names what each one caught, so the run itself says how many groups there are.
 
 **Group A — every markdown anchor resolves.** A cross-file `<doc>.md#<fragment>` and a same-file
 `(#<fragment>)` alike must name a slugified heading that exists in the target. This is the check that
@@ -46,6 +47,18 @@ so a clean run means "every receipt I was told about holds", never "nothing was 
 a paragraph from a code fence or a stray see-also line. Prefer md5s, hex addresses and `file.c:line`
 tokens over words, which pass as substrings for free. `RECEIPTS_FILE` exists only so `--self-test` can
 drive the group over a fixture table.
+
+**Group D — a per-document line ceiling, and it is the only group that is not about correctness.** Every
+addition that grew the docs to 891, 2287 and 2214 lines was individually justified, so judging additions
+one at a time does not bound the total; a ceiling does, because it is arithmetic and survives a session
+that has forgotten the rule. The ceilings are where the cleanup landed plus room for one substantial
+addition, so the first genuinely new fact passes and the second one without a deletion does not. When it
+fires there are exactly two answers: **pay for the addition** (delete, or move the block to the document
+whose job it is) or **raise the ceiling in a commit that argues for it** — ⚠️ silently raising it is the
+failure mode the group exists to catch. `/doc-update` is the authoring half of the same rule.
+⚠️ **Two things it cannot see**: a paragraph rewrapped to 200 characters passes while getting longer, and a
+missing file would pass as a skip — so a ceiling naming a path that is not there is a **failure**, which
+matters because phase 5 split `HARDWARE.md` out of `SYSTEM_ANALYSIS.md` and the guard has to follow.
 
 ⚠️ **It counted its own prose three times, in three different shapes** — a quoted heredoc fixture, then
 the header sentence about bare IDs, then the header sentence about the no-`.md` citation form. Each one
@@ -209,6 +222,12 @@ wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && timeout 300 ./tests/rw_clean_t
 
 ⚠️ **WSL's `/tmp` does not survive between `wsl.exe` calls** — the instance idles out and takes it with
 it. Stage and use a fixture inside **one** `wsl.exe -e bash -lc`, or put it under the repo.
+
+⚠️ **Never edit one of these scripts while a background run of it is in flight.** Bash reads a script
+incrementally, so an edit shifts the byte offset under the running copy and it dies with
+`syntax error near unexpected token` at a line that is perfectly valid in the file — measured 2026-08-16 on
+`doc_check.sh`, in two concurrent runs, after `bash -n` had already passed and passed again afterwards. The
+group results printed before the corruption are still valid measurements; the exit status is not.
 
 `shellcheck` is not installed in this WSL (`IMPROVEMENT_PLAN.md` C7). `bash -n` is what you have, plus
 `dash -n` on anything carrying a `/bin/sh` shebang.

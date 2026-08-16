@@ -38,6 +38,12 @@ the payload.
 `README.md` is the annotated walkthrough of every script; `COMMISSIONING.md` the operator-facing
 bring-up guide and the argument for its phase split; `LICENSE.md` the per-file licence record.
 
+**Adding to, correcting or closing out any of these goes through `/doc-update`.** It carries the order of
+operations that gets skipped: classify *before* opening a file, ask "is this reference **here**?" of the
+*other* documents, write rule + measurement + identifier, delete the closed thing, then one gate run and
+one commit. ⚠️ **`./tests/doc_check.sh` group D is a per-document line ceiling** — an addition that puts a
+file over it is paid for by a deletion or by raising the ceiling *in the same commit*, never absorbed.
+
 **Directory-scoped `CLAUDE.md` files load automatically when you work there.** They describe their own
 code only — device facts belong in `SYSTEM_ANALYSIS.md`, open work in `IMPROVEMENT_PLAN.md`. Link,
 don't copy.

@@ -21,6 +21,11 @@
 #      optionally the file it must have LEFT. Run it before a deletion to confirm the
 #      destination has the fact, and after to confirm it survived.
 #
+#   D  Per-document size ceilings. Every addition that grew these documents to 891, 2287
+#      and 2214 lines was individually justified, so judging each addition on its merits
+#      does not bound the total — only a ceiling does, because it is arithmetic rather
+#      than judgement and therefore survives a session that has forgotten the rule.
+#
 # ── Why every scan here skips this file ───────────────────────────────────────
 # A gate that documents the pattern it searches for matches its own documentation.
 # Measured four times on this script and its sibling doc, each time inflating the number
@@ -381,6 +386,91 @@ group_c() {
     [ "$bad" -eq 0 ]
 }
 
+# ── group D: per-document size ceilings ───────────────────────────────────────
+# Fields: ceiling <TAB> path
+#
+# This group is not about tidiness. Every addition that grew these documents to 891,
+# 2287 and 2214 lines was individually justified, and a week of cleanup was the price.
+# Judging each addition on its merits does not bound the total; a ceiling does, because
+# it is arithmetic rather than judgement and so it survives a session that has forgotten
+# the rule. `.claude/skills/doc-update/SKILL.md` is the authoring half of the same rule.
+#
+# The ceilings are where the 2026-08-16 cleanup landed, plus room for ONE substantial
+# addition (~20 lines, ~16 for the always-loaded root CLAUDE.md). So a genuinely new
+# measured fact does not fail the gate and a second one without a deletion does. Two
+# legitimate responses when it fires, and only two:
+#   1. PAY for the addition — delete what the document no longer needs, or move a block
+#      to the document whose job it is, which is usually where it should have been.
+#   2. RAISE the ceiling, in a commit that argues for it. Deliberate growth is fine;
+#      what this catches is growth nobody decided on.
+#
+# ⚠️ A ceiling naming a file that is not there is a FAILURE, not a skip. A renamed or
+# split document would otherwise be unguarded forever while it grew — and phase 5 split
+# HARDWARE.md out of SYSTEM_ANALYSIS.md, so that is not hypothetical here.
+# ⚠️ The authoring skill is on this list too. A rulebook that grows without limit is the
+# thing it exists to prevent, and it has no other check on it.
+# ⚠️ tests/CLAUDE.md is 250 rather than 235 because the commit that INTRODUCED these
+# ceilings spent that file's whole headroom documenting this group — so the headroom was
+# never actually granted. Raised deliberately, in that same commit, which is the escape
+# hatch working as designed rather than an exception to it. Every other row still holds
+# its original grant; check the margin before assuming a row is generous.
+# ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
+# paragraph rewrapped to 200 characters passes while getting longer, and a table split
+# across more rows fails while saying the same thing. The ~110-char wrap is a review
+# rule this cannot see. Read the diff; do not let a green D stand in for that.
+ceilings() {
+    # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
+    if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
+    cat <<'EOF'
+1900	SYSTEM_ANALYSIS.md
+1500	IMPROVEMENT_PLAN.md
+260	HARDWARE.md
+390	CLAUDE.md
+740	native_apps/CLAUDE.md
+240	lib/CLAUDE.md
+150	commissioning/CLAUDE.md
+125	device-files/CLAUDE.md
+250	tests/CLAUDE.md
+270	scummvm-roomwizard/CLAUDE.md
+205	vnc_client/CLAUDE.md
+170	.claude/skills/doc-update/SKILL.md
+EOF
+}
+
+group_d() {
+    local root="$1" quiet="${2:-}"
+    local bad=0 total=0 cap path n margin tight=999999 tightest=
+
+    while IFS=$'\t' read -r cap path; do
+        [ -z "$cap" ] && continue
+        total=$((total + 1))
+        if [ ! -f "$root/$path" ]; then
+            bad=$((bad + 1))
+            [ -n "$quiet" ] || printf '  MISSING FILE  %s (ceiling %s) — renamed or split? the ceiling must follow it\n' \
+                "$path" "$cap"
+            continue
+        fi
+        n="$(wc -l < "$root/$path")"
+        n=$((n))
+        if [ "$n" -gt "$cap" ]; then
+            bad=$((bad + 1))
+            [ -n "$quiet" ] || printf '  OVER CEILING  %s  %d lines, ceiling %d (+%d — delete as much, or raise it deliberately)\n' \
+                "$path" "$n" "$cap" "$((n - cap))"
+            continue
+        fi
+        margin=$((cap - n))
+        if [ "$margin" -lt "$tight" ]; then tight="$margin"; tightest="$path"; fi
+    done < <(ceilings)
+
+    if [ -z "$quiet" ]; then
+        printf 'group D: %d ceilings, %d over' "$total" "$bad"
+        [ -n "$tightest" ] && printf ' (tightest margin: %s, %d lines left)' "$tightest" "$tight"
+        printf '\n'
+    fi
+    echo "$bad" > "$RESULT"
+    [ "$bad" -eq 0 ]
+}
+
 # ── negative controls ─────────────────────────────────────────────────────────
 # A gate that reports a number can be wrong in both directions, so both directions
 # are controlled: a fabricated dangling citation MUST be caught, and a citation of a
@@ -463,6 +553,24 @@ EOF
         rc=1
     fi
 
+    # Group D, controlled in THREE directions: over ceiling must fire, under must not, and
+    # a ceiling naming a file that is not there must fire. The third is the one a
+    # "count the lines and compare" check passes by accident, and it is the case that
+    # matters after a split — the guard must follow the document, not the old filename.
+    printf 'a\nb\nc\nd\ne\n' > "$t/BIG.md"       # 5 lines against a ceiling of 3 — must fire
+    printf 'a\nb\n'          > "$t/SMALL.md"     # 2 lines against a ceiling of 9 — must not
+    local cf="$t/ceilings.tsv"
+    printf '3\tBIG.md\n'    > "$cf"
+    printf '9\tSMALL.md\n' >> "$cf"
+    printf '9\tGONE.md\n'  >> "$cf"
+    seen="$(CEILINGS_FILE="$cf" group_d "$t" quiet; cat "$RESULT")"
+    if [ "$seen" = "2" ]; then
+        echo "self-test: PASS — group D caught 2 (BIG.md over, GONE.md missing); SMALL.md under ceiling ignored"
+    else
+        echo "self-test: FAIL — group D expected 2, reported $seen"
+        rc=1
+    fi
+
     rm -rf "$t"
     return $rc
 }
@@ -490,6 +598,9 @@ case "${1:-}" in
         echo
         echo "Extraction receipts — each fact must be at its destination and gone from the source:"
         group_c "$REPO" || fail_total=$((fail_total + 1))
+        echo
+        echo "Document size ceilings — growth is paid for or decided on, never absorbed:"
+        group_d "$REPO" || fail_total=$((fail_total + 1))
         ;;
 esac
 
