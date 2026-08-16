@@ -1124,7 +1124,7 @@ Working detail: `~/.claude/plans/peaceful-herding-valiant.md`.
 | 3b | (folded into 3 — the second half of the same cut) | 2149 → 1256 | ✅ 2026-08-15 |
 | 4 | `SYSTEM_ANALYSIS.md`: evict history/hypothesis/process, tag unmeasured claims | 2214 → **2049**, ~1890 met by phase 5 | ✅ 2026-08-16 |
 | 5 | `HARDWARE.md` split out, with the photos beside the parts they show | 2049 → **1871** | ✅ 2026-08-16 |
-| 6 | `native_apps/CLAUDE.md` compress | 891 → **855** of ~690 | ⏳ part 1 done 2026-08-16 |
+| 6 | `native_apps/CLAUDE.md` compress | 891 → **732** of ~690 | ⏳ part 2 done 2026-08-16 |
 | 7 | `MEMORY.md` index compression | 10.2 KB → **4.5 KB** | ✅ 2026-08-16 |
 
 **Phase 3 is done and it landed at 1256, not the ~700 the table used to promise.** ⚠️ **That target was
@@ -1297,7 +1297,63 @@ with a different file, and the classification is what caught it before any editi
 stories: the sweep table (16 → 5, now a pointer), the uinput narration (8 → 5), the two MUSB paragraphs
 (15 → 8), samegame's per-game `else`-branch table, the derive-state table, the D-pad removal history and
 the tinyalsa build rules. Two prose counts went with them, per the invariant — the deploy no longer claims
-a number of executables or targets. The survey above is the remaining work list.
+a number of executables or targets.
+
+**Part 2 landed 855 → 732, and it is not finished: ~42 lines remain, all of it in two sections.**
+Rendering is 126 against a keep of 107 and Audio 103 against 87; every other section is at or within four
+lines of its surveyed figure (Build 66/62, common library 36/35, lifecycle 58/57, pixel format **23/23**,
+hardware API 22/20, coordinates 25/23, screen edges 80/76, touch model 84/80, input 89/88, 32-bit 11/10).
+⚠️ **Re-measure those rather than trusting them** — one command against the `keep` column above:
+
+```bash
+awk '/^## /{if(p!="")print p": "NR-s; p=$0; s=NR} END{print p": "NR-s+1}' native_apps/CLAUDE.md
+```
+
+⚠️ **The survey's "reference with no other home" was wrong for eight blocks, and that is why the first
+half of part 2 stalled at ~55 % of every section's figure.** Compressing narration alone bought 87 lines
+and then flattened out — each further line cost a named function or a measurement, which is the point at
+which compression stops being free. What unstuck it was asking the *phase 5 classification question a
+second time*, against `SYSTEM_ANALYSIS.md` rather than against the file itself: the bezel/viewport
+preamble, the margin defaults, the per-unit inset digits and where to read them on the device, the
+endpoint-clamp measurement, the stale-`vnc_client` misparse example, the bpp table and its
+"16bpp bands every gradient" rationale, the `argv[0]`/`ps w` justification, the MUSB probe-time
+enumeration fact and gotcha 5's whole-periods measurement are **all** stated in `SYSTEM_ANALYSIS.md` as
+well — 40 lines, deleted to pointers in an afternoon after two hours of squeezing prose had bought less.
+**Classify a block against every other document, not against the one you are editing**: "is this
+reference?" and "is this reference *here*?" are different questions, and only the second one prices the
+work.
+
+⚠️ **And `SYSTEM_ANALYSIS.md` had already declared the split in four of those eight cases** — §3.3 ends
+"The library rules, the deleted legacy-migration clamp and the sanity gate's actual criterion are
+`native_apps/CLAUDE.md` → *Touch model*", §3.3's inset paragraph ends "Which rectangle a call site wants,
+the cap on the inset and the drawing policy are `native_apps/CLAUDE.md` → *Screen edges*", and §3.2/§5.3
+do the same. The duplication was therefore visible from the *destination* the whole time, in a sentence
+naming this file. **When one document says "X lives over there", read X and check nothing came back.**
+
+⚠️ **A drifted claim, found the same way and the sixth pointer-vs-destination hit of this cleanup.**
+`native_apps/CLAUDE.md` said the bezel hides "~15 px top and bottom **on the reference unit**";
+`SYSTEM_ANALYSIS.md` §3.2 says "**10–15 px** on the top and bottom edges only. **Measured on two
+devices.**" The narrower figure attributed to one unit was the stale copy, and it is now a pointer rather
+than a restatement.
+
+⚠️ **Two of the eight pointers had to be checked against their destination before they were allowed to
+stand, and a token grep could not do it.** The MUSB probe fact and gotcha 5's whole-periods measurement
+were both confirmed present — §3.6 words it "a device is enumerated only if it is attached when the MUSB
+driver probes" and §3.4 shouts `WHOLE PERIODS` — but **neither matches the phrasing this file used**, so
+no group C row can express either move: one is a rewording, the other a case difference. Same family as
+part 1's `omap2430_ops`. ⚠️ **And `ps w` is unusable as a receipt token for a third reason** — it is a
+substring of "kee**ps w**hatever" and "swa**ps w**idth", both still in this file, so a row on it would
+report `NOT MOVED` forever. Six rows were added (`15/15/0/0`, `red rect = visible`, `+19 px`,
+`0 1020 3074 4095`, `bands every gradient`, `XRGB8888`), four more for the root-`CLAUDE.md` deletions
+(`1,536,000`, `4-number`, `1000000L`, `injected successfully`), and the `Makefile`, `sdiv`, `ps w`, MUSB
+and whole-periods verifications are greps recorded in the commit.
+
+**What is left is a squeeze, not a survey**, and both sections' reference content is identified: Rendering
+keeps the main-loop skeleton, the three-grounds table and the two `usleep` shapes; Audio keeps the nine
+pump rules, the three-line conversion snippet and the `audio_gen` split. The narration around them is what
+has to give.
+
+The survey above is the remaining work list.
 
 ⚠️ **A duplicate deletion cannot always carry a receipt, and this is the other half of phase 5's lesson.**
 The sweep table got one — `flat (saturated)` appears in exactly two files, so the row is exact. The MUSB

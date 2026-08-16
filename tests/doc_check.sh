@@ -328,6 +328,16 @@ clamp_to_hw	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 FB_TOUCH_INSET_MAX	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 publish_safe_area	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 flat (saturated)	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+1,536,000	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+4-number	CLAUDE.md	native_apps/CLAUDE.md
+1000000L	CLAUDE.md	native_apps/CLAUDE.md
+injected successfully	CLAUDE.md	native_apps/CLAUDE.md
+15/15/0/0	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+red rect = visible	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
++19 px	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+0 1020 3074 4095	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+bands every gradient	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+XRGB8888	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 RW29 1G-093	HARDWARE.md	SYSTEM_ANALYSIS.md
 W180322	HARDWARE.md	SYSTEM_ANALYSIS.md
 D9RMJ	HARDWARE.md	SYSTEM_ANALYSIS.md
