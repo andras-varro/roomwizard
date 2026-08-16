@@ -42,10 +42,10 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 8 | ~~Leave a USB hub permanently plugged in, then plug a pad into it~~ — **done 2026-08-13, and it FAILED.** A passive hub on a dead port left `Vbus off` at 1, 2 and 3 min and for several minutes after; a device plugged into that hub enumerated nothing. So ID-ground alone does **not** revive a dead port, and the hub is ruled out as a fix — the operator also rejects it as an external bandage, with 1 hub and 5 units | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 9 | ~~Tap Device Tools → USB → RESCAN on a dead port, with a pad attached~~ — **done 2026-08-14 on `.188`, and it PASSED on the first tap.** Pre-state measured with the pad attached and dark: `Vbus off`, `mode a_idle`, `/sys/bus/usb/devices` = `usb1` + `1-0:1.0` only. One tap → "RE-PROBING USB CONTROLLER" for ~5 s → `1-1` + `1-1:1.0`, `Vbus on`, `event1` + `js0`, pad lit blue, listed as `GAMEPAD Microsoft X-Box 360 pad`, and Pong played with it | — | closed, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
 | 10 | ~~Boot a `mode = <1>`-patched unit with the USB socket EMPTY, then plug a pad in~~ — **done 2026-08-14 on `.188`, and it FAILED.** The patch was live in the booted tree (`/sys/firmware/devicetree/base/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 01`, `power` = `00 00 00 fa`) and the unit booted normally. A pad plugged in afterwards stayed **dark**: `Vbus off`, `mode a_idle`, no `1-1`, no pad in `/proc/bus/input/devices`, at t+0 and t+10 s. Negative control: `/etc/init.d/usb-host recover` then brought it up on **attempt 1**, so the pad, the cable and the RESCAN remedy are all fine on this firmware | — | closed **failed**, see [B32](#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix) |
-| 11 | ~~Native ALSA makes sound at all, independent of our code~~ — **done 2026-08-14 on `.188`, PASSED.** `alsa_probe.sh` step 7: three mono WAVs through `plughw:0,0`, then a 440 Hz sine **straight at `hw:0,0`** with no plug — heard as *"some clinking then a klack then a beep"*. This was [F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next)'s free negative control and it cost one SSH command | — | closed |
-| 12 | **The three post-port audio checks, as one session:** two overlapping sounds actually *mix* (the headline new capability) · `brick_breaker` paddle/wall/score latency with no stall under load · ScummVM music+speech and CPU% against the 32 % baseline | one play session | **F1 Phases 3–5 must be built first.** Fold item 4 into it — the OPL check is the same ear on the same trip |
-| 13 | ~~**Does the speaker sum L+R or bridge them?**~~ — **done 2026-08-14 on `.188`, and it SUMS.** Three tones differing only in channel phase: L-only audible, `L == R` **slightly louder**, `L == −R` **inaudible**. So duplicating a mono sample into both channels is correct and loudest; the rival reading of "class-D bridge" predicted silence for exactly that write. Cost ~30 s of listening and settled a design question in [F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next) before any code was written. ⚠️ **The tones had to be self-identifying** — the unmarked first attempt got *"I think I heard only two"*, which cannot separate "one was silent" from "I lost count" | — | closed |
-| 14 | **Do `music1.wav`/`music2.wav` still sound right when mixed under gameplay** — and is 192 KB/s of SD streaming free inside the render loop | part of item 12's session | [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14), which needs F1 Phase 3 |
+| 11 | ~~Native ALSA makes sound at all, independent of our code~~ — **done 2026-08-14 on `.188`, PASSED.** `alsa_probe.sh` step 7: three mono WAVs through `plughw:0,0`, then a 440 Hz sine **straight at `hw:0,0`** with no plug — heard as *"some clinking then a klack then a beep"*. This was [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below)'s free negative control and it cost one SSH command | — | closed |
+| 12 | **The mix bus, on the panel — two defects already found by ear and FIXED; the second fix is deployed and UNHEARD.** (a) ✅ two sounds heard as two · (b) `audio_success()` arpeggio-not-chord, still unasked · (c) ✅ answered, and it **refuted** the clipping diagnosis — `LIMIT: HARD` vs `SOFT` was inaudible · (d) ✅ the ~60 ms rule, all three walks — **keepalive removes it, 5 ms audible / 20 ms recognisable** · (e) CPU% while mixing, unmeasured. **First move: listen to the period-aligned lead** — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phase 3 defect 2. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline | one play session | the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
+| 13 | ~~**Does the speaker sum L+R or bridge them?**~~ — **done 2026-08-14 on `.188`, and it SUMS.** Three tones differing only in channel phase: L-only audible, `L == R` **slightly louder**, `L == −R` **inaudible**. So duplicating a mono sample into both channels is correct and loudest; the rival reading of "class-D bridge" predicted silence for exactly that write. Cost ~30 s of listening and settled a design question in [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) before any code was written. ⚠️ **The tones had to be self-identifying** — the unmarked first attempt got *"I think I heard only two"*, which cannot separate "one was silent" from "I lost count" | — | closed |
+| 14 | **Do `music1.wav`/`music2.wav` still sound right when mixed under gameplay** — and is 192 KB/s of SD streaming free inside the render loop | part of item 12's session | [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14). ⚠️ **Still blocked, and item 12 does not unblock it**: the mix bus takes synthesised tone voices only, so a PCM-source voice kind is F19's own first step |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -430,7 +430,7 @@ lists no AdLib at all. So this needs an OPL-capable game added first. Adding one
 `Add Game...` is a touch file browser and the entry lands in `/opt/games/scummvm.ini`.
 
 ⚠️ **Ordering, settled rather than left to be discovered: this verifies the very OSS workaround that
-[F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next) Phase 5
+[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phase 5
 deletes.** What it is really checking is that `_outputRate` matches the device — and on the ALSA path
 that stops being a read-back-the-truth problem, because `hw:0,0` grants **22050 exactly** (measured,
 `SYSTEM_ANALYSIS.md#34-audio`). So do **not** spend a panel trip verifying OPL on the OSS path: add
@@ -565,7 +565,21 @@ delete. Settling which of the two causes it is would let that line be either rem
 
 All userspace. No kernel work.
 
-### F1. Port audio from OSS to ALSA — open, **Phases 0 and 1 CLOSED and PASSED, Phase 2 next**
+### F1. Port audio from OSS to ALSA — open, **phase state in the table below**
+
+⚠️ **The heading deliberately carries no phase number.** It used to, and each phase that closed
+retitled it and dangled every inbound link — seven of them at Phase 2's close, all named by
+markdownlint's `MD051`. The state lives here instead, where updating it costs nothing:
+
+| Phase | What it is | State |
+|---|---|---|
+| 0 | measure `hw:0,0` before rewriting anything | ✅ **closed, passed** — `.188`, 2026-08-14 |
+| 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
+| 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
+| 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green at 154 checks, DEPLOYED to `.188`. Two defects found BY PANEL and fixed; the fix for the second is deployed but NOT yet heard** (2026-08-15) |
+| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next |
+| 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
+| 6 | the docs and the comments this makes stale | open |
 
 **ALSA already works on this kernel, and now it is measured rather than assumed.** The card, the mixer
 path, the four OSS bugs, the in-kernel config, the on-device ALSA userspace and the full `hw:0,0`
@@ -578,7 +592,7 @@ risk**. The full phased plan is `~/.claude/plans/plan-f1-alsa-8-14-2026.md` (app
 
 **Phase 1 is closed (host-only, 2026-08-15): tinyalsa cross-builds and the licence is recorded.**
 `native_apps/build-deps.sh` pins **2.0.0** into `native_apps/arm-deps/` (gitignored),
-`build-and-deploy.sh` §1b calls it guarded on the artifact, and the full build stays at **31 ARM
+`build-and-deploy.sh` §1b calls it guarded on the artifact, and the full build stays at **33 ARM
 artifacts, `bad=0`, zero warnings**. Four results from it are worth knowing before Phase 2, and the
 reasoning is in the plan:
 
@@ -607,7 +621,153 @@ firing** against a sabotaged copy. ⚠️ `assert_links` is there because `ar` a
 unresolved externals happily and both `nm -u` and the ARM gate were green on an archive nothing could
 link against.
 
-**Decisions taken, not to be relitigated:** tinyalsa, **linked static** (BSD-3, ~30 KB, needs neither
+**Phase 2 is CLOSED and PASSED (host-only, 2026-08-15): the generator is split out, `audio.c` is rewired
+onto it, and it ships.** `native_apps/common/audio_gen.{c,h}` holds the audio logic that has no device in
+it — frame and byte arithmetic with **the channel count as an argument**, the `timeval → ms` and
+flush-wait arithmetic, the tone envelope, **one** gliding oscillator with the fade-out as a *mode*, the
+mono→interleaved duplication, and `audio_write_frames()`, the only code that decides when to stop writing.
+`native_apps/tests/audio_gen_test.c` is **green at 154 checks, zero warnings (64 at Phase 2 — Phase 3 added the mix bus, the limiter and the period-aligned lead)**, and its **group A
+transcribes the shipped idioms and reproduces all four defects** listed above.
+
+What the rewiring changed in `audio.c`, all measured host-side (**33 ARM artifacts, `bad=0`, zero
+warnings**; `check-arm-safe.sh` `checked=32 unverified=0 bad=0`):
+
+- `configure_dsp()` now **reads the channel count back** with `SOUND_PCM_READ_CHANNELS`, falling back to 2
+  with a warning printed **once per `Audio`** — it runs on every `audio_flush()`, so a per-call warning
+  would spam. `Audio` gained `channels` and `ch_warned`; the four streaming doubles collapsed into one
+  `AudioOsc osc`; the never-read `void *logger` is gone (and with it `audio_touch_test.c:266`).
+- The **four hand-rolled EAGAIN loops became four named policies** — `WPOL_TONE {5 ms, ∞, wait}`,
+  `WPOL_PREFILL {1 ms, ∞, wait}`, `WPOL_CHUNK {1 ms, ∞, stop at a full ring}`, `WPOL_FADE {2 ms, 100
+  waits, wait}` — over one `write_mono()` that interleaves to the negotiated channel count and reports a
+  `misaligned` write to stderr instead of swapping L/R in silence.
+- The **35 KB stack buffer declared inside the chunk loop is gone**: one `malloc` of the mono buffer per
+  call, and the interleave buffer sized from the read-back. `audio.h:85`'s false "Each call blocks for the
+  sound's duration" is corrected.
+- ⚠️ **Both hand-rolled fd sites are converted, and they had to be in the same change.**
+  `device_tools.c` and `hardware_config.c` each `memset` an `Audio` and set three fields, so `channels`
+  stayed **0** and a 0-channel byte count is 0 — **silently mute**. Measured:
+  `audio_bytes_for_frames(8820, 0)` = **0**, against **35280** for 2 channels. Both now call
+  `audio_init_unchecked()`, the one deliberate config-gate bypass. Negative control for the whole class,
+  and its only legitimate hit is `audio.c` itself:
+  `grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/` (two standalone OSS probes in
+  `tests/` also hit it; neither uses `Audio` and neither is in `build-and-deploy.sh`).
+
+Three things that pass measured rather than assumed, and are worth not re-deriving:
+
+- ⚠️ **The 32-bit overflow cannot be *observed* on this host — `sizeof(long)` is 8 here.** Group A
+  models the target's truncation explicitly (`(int32_t)(uint32_t)` of the 64-bit product); a test that
+  merely wrote the shipped expression would pass on the host and prove nothing about armhf.
+- The new oscillator is **byte-identical** to all three shipped generators from the same starting state,
+  and split calls equal one long call — so the split cannot change what a panel hears.
+- ⚠️ **`audio_write_frames()` needs a bound on its mid-frame retry, and the first version did not have
+  one** — it hung the suite against a permanently full sink under an unlimited policy. Stopping mid-frame
+  swaps L/R for the rest of the stream, but hanging the render loop is worse, so mid frame the policy is
+  replaced by `AUDIO_ALIGN_TRIES`, not by "forever". The test asserts the bound.
+
+
+**Phase 3 is BUILT, host-green and deployed to `.188` — and it is not closed, because two of its
+questions can only be answered by an ear.** The mix bus is `AudioMixer` + `AudioVoice` in
+`native_apps/common/audio_gen.c` (pure) driven by `audio_pump()` in `audio.c` (the device half).
+`tests/audio_gen_test.c` is **green at 154 checks** (was 64) and **all seven sabotaged copies of
+`audio_gen.c` were caught**. The full build is **33 ARM artifacts, `bad=0`, zero warnings**, and the
+deploy to `.188` verified **19/19** binaries by md5.
+
+- **A pump, never a thread.** `native_apps` links no pthread and static ARM + pthread is the
+  `clock_gettime64` → SIGSEGV-before-`main()` scar. `audio_pump(Audio*)` renders active voices → sums
+  in `int32` → clamps once → writes what fits, called once per frame beside `fb_swap()`.
+- ⚠️ **It is OPT-IN, and the plan's sketch of how to make it optional was wrong.** The plan said
+  `audio_tone()` should enqueue a voice *and* write what fits immediately. That cannot work: a bounded
+  immediate write truncates any tone longer than the 80 ms lead (every tone here is), and an unbounded
+  one hands the whole tone to the kernel — which is exactly what makes it unmixable. So the two paths
+  are a **branch** on `audio->pumping`, and an app that never calls `audio_pump_enable()` takes today's
+  code byte for byte. That is a stronger guarantee than "degrades gracefully".
+- ⚠️ **The pump targets a LEAD; it must never write into the free space.** An empty ~506 ms OSS ring
+  will accept half a second of audio, and then a sound triggered on the next frame plays half a second
+  late. `AUDIO_PUMP_LEAD_MS` (80) is therefore both the queue depth and the latency ceiling, and
+  `audio_pump_frames()` returns 0 whenever we are already that far ahead. Group K pins it — including
+  ⚠️ **with the cap taken out of the way**, because with `AUDIO_PUMP_CAP_MS == AUDIO_PUMP_LEAD_MS` the
+  obvious check passes against a space-filling pump *by accident*, which the sabotage measurement caught.
+- ⚠️ **A canned arpeggio needs per-voice start offsets, or it becomes a chord.** `audio_success()` is
+  three notes and its old shape relied on the ring to serialise them; three voices added at once sound
+  together. So `AudioVoice` has a `delay` and the four canned sounds are **four note tables and one
+  sequencer**, signatures unchanged at ~45 call sites. Group A6 is the control: the same three notes
+  with no offsets clip, with offsets do not.
+- ⚠️ **A full bus REFUSES and counts; it never steals a voice.** Stealing the oldest is what a synth
+  does and it is wrong here — the longest voice is
+  [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14)'s 44 s soundtrack, and a
+  missing blip is far cheaper than a chopped track. `audio_pump_dropped()` is the number to watch.
+- **The clamp is once, after the whole sum, and it counts.** `AUDIO_PEAK` is ≈55 % of full scale, so
+  two loud voices exceed int16 by ~10 %. Whether that is audible is a question for a panel, so
+  `audio_pump_clipped()` reports it instead of a gain being invented for it. Group I asserts that
+  **slot order cannot change the mix**, which is the check that catches an `int16` accumulator — and
+  that sabotage fails 5 assertions.
+- ⚠️ **`audio_interrupt()` on the pump is "stop all voices" and no longer resets the ring**, because
+  the reset is what makes mixing impossible. Consequence: up to 80 ms of already-written tail still
+  sounds. Signature unchanged (~23 call sites).
+- **`WPOL_PUMP` is the fifth *policy*, not a fifth loop** — identical values to `WPOL_CHUNK` today,
+  named separately because its reason for never blocking is different (a stalled render loop drops
+  frames, not just audio) and Phase 4 may give it a period-sized wait.
+- **A pumping app must not idle at `FRAME_DELAY_IDLE_US` mid-sound.** 100 ms of sleep against an 80 ms
+  lead starves the device and you hear a gap — which would read as a mixing defect rather than a pacing
+  one. `audio_pump_active()` is the predicate, the same idiom as `gameover_needs_redraw()`, and it
+  returns true while keepalive is on because that is a promise of frames too.
+- **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
+  the pump is on rather than letting two writers interleave frames into one device.
+
+⏳ **Outstanding, and the reason Phase 3 is not closed.** `native_apps/tests/audio_mix_test` is the
+interactive tool built for exactly this (33rd artifact, launcher tile *Mix Bus Test*): **four** toggles
+(PUMP / KEEP / **LIMIT** / STOP ALL) so the rejected behaviour is the negative control on the same panel,
+a drone plus three far-apart pitches, the four canned sounds beside a deliberate CHORD, a live
+`voices`/`clip`/`lim`/`starve`/`lost`/`drop` + *worst frame* readout, and a 5/10/20/40/60/100 ms row. Every
+tap logs the pad's own name, freq and ms plus both toggle states to `/tmp/mix.log`, and `audio_pump()`
+traces the raw ring numbers for 40 calls per session. Panel state so far:
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | two overlapping sounds heard as **two** | ✅ **yes** — DRONE 220 + 440, reported as "two tones" 2026-08-15 |
+| 2 | `audio_success()` is an arpeggio, not a chord | ⏳ **unasked** — CHORD was unrecognisable for a reason since fixed, so SUCCESS is worth re-hearing first |
+| 3 | is the summed clamp audible | ✅ **NO, and that refuted the diagnosis** — `LIMIT: HARD` vs `SOFT` was *"no change at all"* by ear while `clip` provably went 0 → 4189. Clipping was real and is fixed, but it was **not** what the panel was hearing |
+| 4 | the ~60 ms rule, three walks | ✅ **PUMP off: unchanged · PUMP on, keepalive OFF: still ~60 ms · PUMP on, keepalive ON: 5 ms is audible, 20 ms recognisable.** The rule is a property of **restarting the stream**, not of `SNDCTL_DSP_RESET` — see [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
+| 5 | CPU% while mixing | ⏳ **unmeasured** — `top -b -n 2 \| grep audio_mix_test` from a second shell while a drone runs |
+
+**Two defects were found by ear and both are fixed in the tree; the second fix has NOT been heard yet.**
+
+⚠️ **Defect 1 — the bus had no headroom, and one voice's peak is an ACOUSTIC limit.** Every voice plays at
+`AUDIO_PEAK` (18000, ≈55 % of full scale because `SPKR1` sums L + R), so three voices sum to 54000 against
+int16's 32767. Measured on `.188`: `clip` **15402**, read off the panel with `PUMP: ON` *recorded* rather
+than recalled. The fix is `audio_mix_limit()` — linear to a knee at `AUDIO_MIX_KNEE` (= `AUDIO_PEAK`
+exactly, so **one voice stays byte-identical**), then `y = K + (C−K)·u/(1+u)` asymptotic to
+`AUDIO_MIX_CEIL` 26000. Three properties make it checkable rather than plausible: it is bounded, so
+⚠️ **`clipped` must reach exactly 0** (it does, measured both host-side and on the panel: `clip=0` while
+`lim=6181`); the ceiling is **below** two voices' arithmetic sum, so it protects the speaker and not just
+the store; and `AUDIO_MIX_HARD` keeps the rejected clamp reachable as the on-panel control.
+
+⚠️ **Defect 2 — a lead in MILLISECONDS is the wrong unit, and this is the one the panel was hearing.**
+Measured on `.188` 2026-08-15: the OSS shim moves `appl_ptr` in whole **2048-frame periods** and never
+between, while `GETOSPACE` counts the partial period it is still staging. So an 80 ms lead is **1.7
+periods**, of which ALSA can play one; it drains that, the next is not complete, `state` goes **`XRUN`**,
+and the shim's recovery **discards** the staged audio. Consequences, all reported and all one mechanism:
+a crack every ~120 ms (operator counted "20–25" in a 3 s drone — the same cadence as the measured
+`RUNNING → XRUN → RUNNING` cycle), CHORD *shorter* than the un-pumped version, and a tone chopped ~8 ×/s
+that reads as a **square wave** — which is why the limiter changed nothing audible. The fix is
+`audio_pump_lead_frames()`: take the device's period, floor the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of
+them, round **up** to a whole period, cap at half the ring. On this device that is 6144 frames ≈ **139 ms**,
+and ⚠️ **the lead is the latency ceiling**, so that is a real cost of the shim's period size — Phase 4 buys
+it back, because Phase 0 measured tinyalsa granting `period_size=1024` (23 ms).
+
+**Two suspects this file recorded are now REFUTED by measurement, and neither should be re-raised:**
+`lost=0` on every logged pump kills "`WPOL_PUMP`'s `stop_on_again` drops rendered frames", and the tool's
+worst frame time stayed at **107 ms while `starve` kept climbing** — one slow frame at start-up, not a
+chronically slow loop — which kills "the render loop cannot feed the lead". The third suspect, the tool's
+own toggle wiring, was checked and was **sound**: the panel capture showed `PUMP: ON` and every log line
+agrees with `audio_pump_active()`.
+
+⏳ **What the next session must do first: listen.** The period-aligned lead is deployed to `.188` and has
+never been heard. Ask for PUMP + KEEP, then DRONE 220 + 440, then CHORD, and poll
+`/proc/asound/card0/pcm0p/sub0/status` from a second shell — the `XRUN` cycle disappearing is the
+script-verifiable half of the same answer.
+
+**Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device** (neither
 `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** · one mono
 generator feeding a stereo device (below) · **one tinyalsa for the whole repo** — ScummVM points at
 `../native_apps/arm-deps` in Phase 5 rather than building a second copy, because zlib is built twice
@@ -643,32 +803,45 @@ The probe is `native_apps/tests/alsa_probe.sh` and it needs **nothing cross-comp
 critical path entirely. ⚠️ Its own first run is the cautionary tale: a `-c 1` loop printed **seven
 REFUSED rates** that were all one channel-count failure. Read its step 3 before believing its step 4.
 
-Fix these three in passing, so the ALSA version does not inherit them:
+Fix these in passing, so the ALSA version does not inherit them — **the first three are DONE, in Phase 2**:
 
-- `audio.c:84` uses `SNDCTL_DSP_STEREO`, which the file's own comment says is ignored; it never
-  verifies the channel count, yet every buffer is sized assuming interleaved stereo.
-- `audio.c:378` abandons a chunk mid-frame on a short write, desynchronising L/R permanently. ⚠️ A
-  stereo-only interface makes this **worse** than it read before, not moot: there is no mono fallback
-  underneath to hide a half-frame.
-- `oss-mixer.cpp:298` the emergency anti-underrun `write()` ignores errors and partial writes.
+- ✅ **`audio.c` now reads the channel count back.** It used to set it with `SNDCTL_DSP_STEREO`, which the
+  file's own comment says is silently ignored, and `SOUND_PCM_READ_CHANNELS` appeared nowhere while `2` was
+  a literal in all four write paths. Phase 0 measured `hw:0,0` granting exactly 2, so the assumption was
+  *accidentally* right; what would have broken it is a device or format change nothing would notice.
+- ✅ **No write can abandon a chunk mid-frame any more.** `:378` did, and so did `:246` and `:430-451`;
+  `audio_write_frames()` is now the only code that decides when to stop and it stops on a frame boundary or
+  reports `misaligned`. ⚠️ A stereo-only interface made this **worse** than it read before, not moot: there
+  is no mono path underneath to absorb a half-frame.
+- ✅ **The tone-length overflow is gone.** `:203` computed `(long)sample_rate * duration_ms` with
+  `sizeof(long) == 4`, so 44100 × 49 000 exceeded `INT32_MAX` and any tone past ~48.7 s was UB.
+  `audio_frames_for_ms()` computes in `long long` and clamps to `AUDIO_MAX_TONE_MS`. No caller reached it
+  (300 ms is the longest) but
+  [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14)'s music makes long durations
+  plausible.
+- ⏳ `oss-mixer.cpp:298` the emergency anti-underrun `write()` ignores errors and partial writes — Phase 5.
 
-⚠️ **The two stereo items above are now the *frame arithmetic*, not the interleaving.** The invariant
-to assert in the Phase 2 host tests is `bytes == frames * 2 * 2` with the channel count read from the
-device, and `sound_end_ms(N ms) == N` rather than `2N`. The microphone-as-input idea stays closed:
-there is no mic and no jack footprint.
+⚠️ **What Phase 2 asserts about the stereo bookkeeping is a *read-back*, not an arithmetic error.**
+Measured by reading the file: all four write paths size `frames * 4` consistently (`:204`/`:237`,
+`:285`/`:303`, `:339`/`:371`, `:408`/`:423`), and `sound_end_ms` has exactly one non-zero writer
+(`:254`, `now + duration_ms`), so an N-ms tone already ends at N. The invariant worth pinning is
+therefore **`bytes == frames * channels * 2` with `channels` consumed from a device read-back rather
+than a literal** — which still catches what Phase 4 could break, without asserting a defect the source
+does not contain. The microphone-as-input idea stays closed: there is no mic and no jack footprint.
 
-⚠️ **Two call sites hand-roll the fd and must be converted with the port** —
-`native_apps/device_tools/device_tools.c:476-495` and
-`native_apps/hardware_config/hardware_config.c:70-99`. They are **verbatim duplicates** of each other:
-`memset` an `Audio`, `open("/dev/dsp")`, the same three ioctls in the same order, the same GPIO12 poke,
-`sample_rate = 44100` **assigned rather than read back**, then two `audio_tone()` calls.
+✅ **Both hand-rolled fd sites are converted — done in Phase 2, and they could not wait for Phase 4.**
+`native_apps/device_tools/device_tools.c` and `native_apps/hardware_config/hardware_config.c` were
+**verbatim duplicates** of each other: `memset` an `Audio`, `open("/dev/dsp")`, the same three ioctls in the
+same order, the same GPIO12 poke, `sample_rate = 44100` **assigned rather than read back**, then two
+`audio_tone()` calls. The moment `Audio` gained `channels`, that idiom left it at **0** and both tabs would
+have gone **silently mute** — measured, `audio_bytes_for_frames(8820, 0)` = 0.
 
-**The prescribed fix "convert them to `audio_init()`" is wrong, and the code says so.**
-`hardware_config.c:71` reads *"Bypass config-gated `audio_init` — open DSP directly for test"*: the
+**The originally prescribed fix "convert them to `audio_init()`" was wrong, and the code said so.**
+`hardware_config.c:71` read *"Bypass config-gated `audio_init` — open DSP directly for test"*: the
 bypass is **deliberate**, because a hardware *test* must be able to drive the speaker even when the user
 has switched audio off in config. Calling `audio_init()` would make the test obey the setting it exists
-to test. So the defect is the **duplication**, not the bypass — the fix is one
-`audio_init_unchecked()`-style entry point in the library that both tabs call, which is also the
+to test. So the defect was the **duplication**, not the bypass, and the fix is one
+`audio_init_unchecked()` entry point in the library that both tabs call — which is also the
 precondition for making `Audio` opaque. (`hardware_config` is itself a second copy of a `device_tools`
 tab — [C8](#c8-retire-hardware_diag--it-is-a-second-copy-of-a-device_tools-tab--open-confirmed-2026-08-02)
 is the same shape of problem, one layer up.)
@@ -683,12 +856,21 @@ The operator hand-copied `music1.wav` and `music2.wav` to `/opt/sound` on `.188`
 `hw:0,0` grants (`SYSTEM_ANALYSIS.md#34-audio`) — no resampling, no channel conversion, no `plug`.
 8,486,604 B (44.2 s) and 10,698,444 B (55.7 s), 19.2 MB together, streaming at 192 KB/s.
 
-⚠️ **This is blocked on [F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next)
+⚠️ **This is blocked on [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below)
 Phase 3, and it is that phase's headline use case.** Music under a game means *music playing while a
 jump or coin effect fires* — i.e. two streams summed. Today `audio.c` is one-sound-at-a-time enforced by
 `SNDCTL_DSP_RESET`, so on the current backend the music would be chopped by every sound effect. Do not
 build this against the OSS path; F1 Phase 3's mix bus is exactly what it needs, and this request is the
 concrete answer to "is real mixing worth it".
+
+⚠️ **Phase 3's bus now exists, and it does NOT yet unblock this — `AudioVoice` renders a synthesised
+tone and nothing else.** So F19's own first step is a second voice kind that pulls PCM from a source,
+which is a smaller job than the bus was but is not free, and it lands two decisions on it that the tone
+voice never had to answer: where the file read happens (a `read()` inside `audio_pump()` puts SD latency
+in the render loop, which is the thing this project spent seven techniques avoiding), and what
+`AUDIO_MAX_VOICES`-full means when the voice that would be dropped is the soundtrack rather than a blip.
+The refusal-not-stealing rule was written with this case in mind; check it still reads correctly from
+F19's side before building on it.
 
 Decisions to take before it ships:
 
@@ -1497,7 +1679,7 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 ([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
-— this overlaps [F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next). A2DP's
+— this overlaps [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below). A2DP's
 ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The controller half is
 much more likely to land than the audio half; do not sell them as one feature.**
 
@@ -1732,9 +1914,12 @@ Three pieces of work:
    defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
    instead.
 3. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
-   until you are mis-tapping by 30 px. Five exist — `tests/touch_calib_test.c` (the calibration fit
+   until you are mis-tapping by 30 px. Six exist — `tests/touch_calib_test.c` (the calibration fit
    end-to-end), `tests/gradient_test.c`, `tests/framebuffer_bpp_test.c`, `tests/gamepad_latch_test.c`,
-   `tests/button_latch_test.c` (the once-per-process touch button, [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10)).
+   `tests/button_latch_test.c` (the once-per-process touch button, [B31](#b31-office-runner-went-unresponsive-mid-session--fixed-and-confirmed-on-a-unit-2026-08-10)),
+   `tests/audio_gen_test.c` (the audio generator and the mix bus — arithmetic, the frame-aligned write
+   loop, the summed voices and the pump's pacing —
+   [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phases 2–3).
    Build lines are in each file header; all are host gcc, so `build-and-deploy.sh` runs none of them.
    **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
    `config.c` / `ppm.c` parsers.**
@@ -2069,7 +2254,7 @@ obtains a session.** The hub workaround is closed failed — measured, and rejec
    - ⚠️ **And `roomwizard.sh` item 6 claimed "It never touches p1"**, which
      [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)
      made false. It now says what it writes, and names `uImage-system.vendor` as the remedy.
-4. **[F1](#f1-port-audio-from-oss-to-alsa--open-phases-0-and-1-closed-and-passed-phase-2-next) (ALSA) is
+4. **[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) (ALSA) is
    the place to start, and its gate is already through.** It is the biggest user-visible improvement
    available, pure userspace, no kernel work, no brick risk — and as of 2026-08-14 its Phase 0 is
    **measured on `.188`, not assumed**: a 21 ms period is granted, every rate is granted exactly (so

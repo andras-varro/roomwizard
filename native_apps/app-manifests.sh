@@ -42,6 +42,7 @@ brick_breaker|Brick Breaker|/opt/games/brick_breaker|/opt/roomwizard/icons/brick
 samegame|SameGame|/opt/games/samegame|/opt/roomwizard/icons/samegame.ppm|fb,touch
 frogger|Frogger|/opt/games/frogger|/opt/roomwizard/icons/frogger.ppm|fb,touch
 platformer|Office Runner|/opt/games/platformer|/opt/roomwizard/icons/platformer.ppm|fb,touch
+audio_mix_test|Mix Bus Test|/opt/games/audio_mix_test|/opt/roomwizard/icons/audio_mix_test.ppm|fb,touch
 audio_touch_test|Tap-a-Theremin|/opt/games/audio_touch_test|/opt/roomwizard/icons/audio_touch_test.ppm|fb,touch
 device_tools|Device Tools|/opt/games/device_tools|/opt/roomwizard/icons/device_tools.ppm|
 '

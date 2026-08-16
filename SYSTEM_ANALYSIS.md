@@ -822,12 +822,14 @@ differing content instead of phase.
 - **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
   storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
   at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
-- ⚠️ *Inference, not measured:* the summing is the likeliest reason full-scale synthesised tones needed
-  the `>>1` attenuation below. Two identical full-scale channels drive the speaker at double amplitude,
-  so `>>1` is very nearly the exact compensation. It predicts that **the attenuation belongs on the
-  synth, not on streamed file content** — corroborated only weakly so far, by 48 kHz stereo music
-  playing through `aplay` (which attenuates nothing) at *"surprisingly loud, but not distorted"*.
-  Settle it with a per-voice gain measurement before deleting or keeping the `>>1` on faith.
+- ⚠️ *Inference, not measured:* the summing is the likeliest reason synthesised tones need ~50 %
+  attenuation at all. Two identical full-scale channels drive the speaker at double amplitude, so
+  halving is very nearly the exact compensation. ⚠️ Note the two consumers spell that differently: the
+  native synth pins a **peak of 18000** (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a
+  constant, not a shift), while ScummVM does `>>1` post-mix (below). It predicts that **the attenuation
+  belongs on the synth, not on streamed file content** — corroborated only weakly so far, by 48 kHz
+  stereo music playing through `aplay` (which attenuates nothing) at *"surprisingly loud, but not
+  distorted"*. Settle it with a per-voice gain measurement before choosing a number for the ALSA path.
 
 ⚠️ **A `-c 1` probe fails on channels at every rate, which reads as "no rate is accepted".** That is
 exactly how the first run of `alsa_probe.sh` produced seven REFUSED lines from one mistake — the
@@ -841,11 +843,9 @@ of `alsa_probe.sh` step 7 exited 0 *and* were heard: the three mono WAVs through
 Reported as *"some clinking then a klack then a beep"*. So the native path is proven end to end
 independently of anything this project writes.
 
-- The **"klack"** falls between the two, i.e. at a stream open. A start-of-stream pop is *consistent
-  with* the TWL4030 DAC/amp settling that `audio.c:107-110` blames for its ~60 ms minimum-tone rule,
-  and a persistently-open ALSA stream would open once instead of per sound — but that is **inference,
-  not measurement**, and it is the reason Phase 3 re-measures that 60 ms rather than carrying it
-  forward or deleting it on faith.
+- The **"klack"** falls between the two, i.e. at a stream open — and a start-of-stream pop is now the
+  *measured* explanation of the ~60 ms minimum-tone rule rather than a plausible one: see gotcha **6**
+  below, where keeping a stream continuously fed drops the audible floor to 5 ms.
 
 ⚠️ **The ~506 ms figure is the shim settling for the driver's maximum buffer, not a hardware period —
 refuted 2026-08-14.** `period_size=1024, buffer_size=4096` was requested and **granted exactly** at
@@ -875,17 +875,41 @@ emulation, not the hardware. ALSA itself works correctly.
    stereo=1` while the device stays mono — verified with `native_apps/tests/ch_test.c`);
    ⚠️ note the PCM underneath is **stereo-only** (measured above), so what stays mono is the *shim's*
    view of it, with `SND_PCM_OSS_PLUGINS` converting below — *inference from the two measurements, not
-   itself measured.* It is also the likeliest reason a buffer sized as interleaved stereo has never
-   sounded obviously wrong while `sound_end_ms` is out by 2×.
+   itself measured.* It is also why a buffer sized as interleaved stereo has never sounded wrong:
+   `native_apps` writes `frames * channels * 2B` — with the channel count read back, since F1 Phase 2 —
+   and the shim consumes exactly that.
    `SNDCTL_DSP_SPEED` may reset format and/or channels; `SNDCTL_DSP_SETFMT` may reset speed; and
    set-ioctl output values may not reflect actual device state. **Workaround:** set SPEED → FMT →
    CHANNELS in that order, then read back the truth with `SOUND_PCM_READ_RATE`,
-   `SOUND_PCM_READ_BITS`, `SOUND_PCM_READ_CHANNELS`, and use the read-back rate. *Evidence:* at
+   `SOUND_PCM_READ_BITS`, `SOUND_PCM_READ_CHANNELS`, and use the read-back rate **and the read-back
+   channel count**. *Evidence:* at
    22050 Hz music played at half speed; at 48000 Hz it got proportionally worse (~4×), consistent
-   with `_outputRate` not matching the real device rate. Working implementation:
-   `scummvm-roomwizard/backend-files/oss-mixer.cpp`.
+   with `_outputRate` not matching the real device rate. Working implementations:
+   `scummvm-roomwizard/backend-files/oss-mixer.cpp` and, since F1 Phase 2,
+   `native_apps/common/audio.c`'s `configure_dsp()` — which reads the channel count back too, so no byte
+   count in `native_apps` spells a channel count into a constant any more.
 4. **32-bit `time_t` overflow.** `sizeof(long) == 4`. Never compute
    `(now.tv_sec - epoch_0) * 1000000L` — baseline timers to *current* time, not epoch zero.
+5. ⚠️ **The shim only hands ALSA WHOLE PERIODS, and an underrun DISCARDS what it was staging.**
+   Measured on `.188` 2026-08-15 with `native_apps/tests/audio_mix_test` holding `/dev/dsp` open, from
+   `/proc/asound/card0/pcm0p/sub0/`: our `O_NONBLOCK` open negotiates **`period_size` 2048 frames
+   (46 ms) / `buffer_size` 32768 (743 ms) / 16 fragments of 8192 B**, and `appl_ptr` steps
+   2048 → 4096 → 6144 and **never lands between two periods** — while `SNDCTL_DSP_GETOSPACE` counts the
+   partial period the shim is still accumulating. So **a write smaller than one period is invisible to
+   ALSA until the period completes**, and a writer that keeps only 1.7 periods queued leaves ALSA one
+   playable period: it drains that, `state` goes **`XRUN`**, and the recovery throws the staged bytes
+   away. Polled 14 × 40 ms, the cycle is `RUNNING → XRUN → RUNNING` about every **120 ms**, which is
+   also the crack rate an operator counted by ear in a 3 s tone.
+   **Consequence for any incremental writer here: measure the period and queue a whole number of them,
+   at least three.** `native_apps/common/audio_gen.c`'s `audio_pump_lead_frames()` is that rule;
+   `IMPROVEMENT_PLAN.md` F1 Phase 3 has the derivation.
+6. ⚠️ **The ~60 ms minimum-tone rule is a property of RESTARTING the stream, not of
+   `SNDCTL_DSP_RESET` — measured 2026-08-15, and it had been attributed to the wrong thing.** Removing
+   the reset does **not** remove it: with the ring allowed to empty between sounds the stream still
+   stops and restarts, so a 5–40 ms tone is inaudible, 60 ms is partial and 100 ms is clean, exactly as
+   under the reset regime. Keep the stream **continuously fed** (`audio_pump_set_keepalive()`) and the
+   floor collapses: **5 ms is audible and 20 ms is recognisable** on the same unit, same session. Any
+   claim about a minimum tone length must therefore say whether the stream was kept alive.
 
 **No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main
 thread and you get a black screen. `SCHED_OTHER` plus the ~500 ms OSS ring is enough.
@@ -2015,7 +2039,7 @@ the same point:
 
 | Component | Gate site | Artifact checked |
 |---|---|---|
-| `native_apps` | after the build, before deploy **and** before `--bundle` | all 31, unstripped (nothing is stripped) |
+| `native_apps` | after the build, before deploy **and** before `--bundle` | all 33, unstripped (nothing is stripped) |
 | `vnc_client` | after `make`, before deploy and before `--bundle` | `vnc_client`, deliberately **not** `vnc_client_stripped` |
 | `scummvm-roomwizard` | inside `strip_binary`, **before** the `strip` runs | `scummvm`, unstripped |
 

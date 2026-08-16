@@ -55,9 +55,10 @@ compile anything, and was deleted. `build-and-deploy.sh` is the only build path 
 reintroduce a second one.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
-keyboard.o audio.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o logger.o`; the two
-tools that measure the touch mapping (`device_tools`, `touch_raw`) add `$CALIB_OBJ` =
-`touch_calib.o`. Add new objects to `build-and-deploy.sh`.
+keyboard.o audio.o audio_gen.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o
+logger.o`; the two tools that measure the touch mapping (`device_tools`, `touch_raw`) add
+`$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
+optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
 
 **A new *binary* goes in `GAMES_BINARIES` and nowhere else.** That one array drives the upload, the
 remote `chmod +x` (passed in as `"$@"` through `ssh bash -s --`) and the md5 verification. It used to
@@ -66,10 +67,10 @@ because scp happens to carry the source file's mode, and invisible on a Windows 
 is a DrvFs mount that reports every file executable and discards `chmod` outright
 (`../IMPROVEMENT_PLAN.md` B19). Do not add a second list.
 
-**The deploy verifies itself.** After `chmod`, all 18 executables are md5-compared against `build/`
+**The deploy verifies itself.** After `chmod`, all 19 executables are md5-compared against `build/`
 and a mismatch is fatal with a per-file diff — a truncated scp, a full filesystem, or a surviving
 process holding an old inode (the B20/B25 failure mode) otherwise all look like a clean deploy. Also
-`./build-and-deploy.sh <ip>` validates the IP and the mode *before* compiling all 31 targets, and it
+`./build-and-deploy.sh <ip>` validates the IP and the mode *before* compiling all 33 targets, and it
 `cd`s to its own directory, so it can be invoked by path.
 
 ## The common library
@@ -83,7 +84,8 @@ process holding an old inode (the B20/B25 failure mode) otherwise all look like 
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
-| `audio.c` | beeps, tones, streaming | opening `/dev/dsp` yourself |
+| `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
+| `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
 | `config.c` | `/opt/games/rw_config.conf` | ad-hoc config files |
 | `keyboard.c` | on-screen keyboard (ALPHA / ALPHANUM / FULL / NUMERIC) | — |
 | `highscore.c`, `ppm.c`, `logger.c` | scores, icons, logging | — |
@@ -744,4 +746,123 @@ out at all; fixed 2026-08-02 (B13a), and it is the reason that screen's buttons 
 ## 32-bit target
 
 `sizeof(long) == 4`. Never write `tv_sec * 1000000L` — baseline timers to a start timestamp
-captured at init, not to epoch 0, and do the multiply in `uint32_t` or `int64_t`.
+captured at init, not to epoch 0, and do the multiply in `uint32_t` or `int64_t`. A duration times a
+sample rate is the same trap: `(long)44100 * 49000` leaves 32 bits, which is why
+`audio_frames_for_ms()` computes in `long long` and clamps.
+
+⚠️ **A host regression cannot *observe* any of this — this host's `long` is 64 bits.** The overflow has
+to be **modelled**, by truncating the 64-bit product to `int32_t` the way armhf does; a test that simply
+writes the shipped expression passes on the host and says nothing about the target. `tests/audio_gen_test.c`
+group A does it that way and labels it.
+
+## Audio: the generator is separate from the device
+
+`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it** — so it is the half a
+host regression can reach (`tests/audio_gen_test.c`, 154 checks, build line in its header). `audio.c` keeps
+the device half: the config gate, `/dev/dsp`, the ioctls, the GPIO12 amp poke — and it **consumes
+`audio_gen` for everything else**, so there is no arithmetic in it a host test cannot reach. Three rules
+live there and each has cost something:
+
+- **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums
+  L + R (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the
+  generator is mono and single-sample and `audio_interleave()` is the one conversion point. A `frames * 4`
+  with the 4 spelled out is only accidentally right. `configure_dsp()` reads the count back with
+  `SOUND_PCM_READ_CHANNELS` and warns **once per `Audio`** if it has to fall back to 2 — that function
+  runs on every `audio_flush()`, so a per-call warning would spam.
+- ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest
+  of the stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
+  `audio_write_frames()` is the only code that decides when to stop, and it stops on frame boundaries or
+  reports `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` regardless of the caller's
+  policy — an unlimited policy against a full sink hangs the render loop, which is worse than the swap.
+  The four EAGAIN loops `audio.c` used to hand-roll are now four **named policies** — `WPOL_TONE`,
+  `WPOL_PREFILL`, `WPOL_CHUNK`, `WPOL_FADE` — over one `write_mono()`. Do not add a fifth loop; add a
+  fifth policy.
+- **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` deliberately
+  holds frequency and amplitude still; deleting it while collapsing the duplicated generators deletes the
+  fade. `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one
+  long call — which is what lets a caller write whatever the ring will take without a seam.
+
+### Mixing: an optional per-frame pump
+
+Two sounds at once needs userspace to hold the audio and hand the device small pieces of it, because you
+cannot mix into a buffer the kernel already has. `audio_pump()` does that **from the render loop —
+never a thread**: static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar
+(`../CLAUDE.md`). Converting an app is three lines:
+
+```c
+audio_init(&audio);
+audio_pump_enable(&audio, true);              /* once, after init */
+while (running) {
+    /* ... */
+    audio_pump(&audio);                       /* once per frame, beside fb_swap() */
+    usleep((drew || audio_pump_active(&audio)) ? FRAME_DELAY_ACTIVE_US
+                                               : FRAME_DELAY_IDLE_US);
+}
+```
+
+Nine rules, each of which is a way to get this wrong:
+
+- ⚠️ **The lead is measured in DEVICE PERIODS, never in milliseconds alone.** `audio_pump_lead_frames()`
+  takes the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds
+  **up**. A lead of 1.7 periods is what a panel heard as a crack every ~120 ms, a shortened CHORD and a
+  tone so chopped it read as a square wave — because the OSS shim only hands ALSA whole periods and
+  **discards the staged remainder on an underrun**
+  ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio), gotcha 5). ⚠️ **The lead is also
+  the latency ceiling** — ~139 ms on the shim's 46 ms period, which Phase 4's 23 ms period buys back.
+- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit, not a digital one.** Every voice
+  plays at 18000 ≈55 % of full scale *because `SPKR1` sums L + R*, so three voices reach 54000 against
+  32767. `audio_mix_limit()` is linear up to a knee at `AUDIO_PEAK` — which is what keeps **one voice
+  byte-identical** — then asymptotic to `AUDIO_MIX_CEIL` 26000, deliberately **below** two voices'
+  arithmetic sum so it protects the speaker too. Because the curve is bounded, ⚠️ **`clipped` must read
+  exactly 0**: that is the check, not a comfort margin. `AUDIO_MIX_HARD` keeps the old clamp for A/B.
+- ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it —
+  0 under the soft limiter), `lim` (the knee bent it — expected, not a fault), `starve` (the ring was dry
+  with audio still owed: **one audible gap each, and it attributes crackle to pacing rather than to
+  mixing**), `lost` (frames rendered, voices advanced, device refused them), `drop` (a full bus). Two
+  plausible suspects were **refuted** by exactly these numbers: `lost` stayed 0, and the worst frame time
+  stayed at 107 ms while `starve` climbed.
+- ⚠️ **It is opt-in, and an app that never enables it takes today's path byte for byte.**
+  `audio_tone()` branches on `audio->pumping`; it does **not** "enqueue and also write immediately",
+  which was the plan's sketch and cannot work — a bounded immediate write truncates any tone longer than
+  the 80 ms lead, and an unbounded one hands the whole tone to the kernel, which is what makes it
+  unmixable. A silent binary is this project's "does not error — it misparses", and nobody would notice
+  until they played that game.
+- ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** The pump keeps only
+  `AUDIO_PUMP_LEAD_MS` (80 ms) inside the device, so a loop that drops to `FRAME_DELAY_IDLE_US` (100 ms)
+  mid-sound starves it and you hear a gap — which reads as a mixing defect rather than a pacing one.
+  Ask the component, exactly as with `gameover_needs_redraw()`.
+- ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty ~506 ms OSS ring will
+  accept half a second of audio, and then the next sound plays half a second late.
+- **A voice carries a `delay`, and `audio_success()` depends on it.** Three voices added at once are a
+  *chord*; the four canned sounds are four note tables and one sequencer that offsets each note by the
+  ones before it. All four signatures are unchanged (~45 call sites), as is `audio_interrupt()`'s (~23) —
+  which on the pump means "stop all voices" and no longer resets the ring, so up to 80 ms of tail
+  survives it.
+- **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
+  is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
+- **`WPOL_PUMP` is a fifth *policy*, not a fifth loop.** Same rule as the four above it.
+
+The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
+**counts** — `audio_pump_clipped()`. `AUDIO_PEAK` is ≈55 % of full scale, so two loud voices exceed
+int16 by ~10 %; whether that is audible is a panel question, not one to invent a gain for.
+
+`tests/audio_mix_test.c` is the interactive tool for the panel questions, and its **PUMP toggle puts the
+pre-pump path on the same screen as the negative control**. It is also how the ~60 ms minimum-tone rule
+gets re-measured rather than carried forward or deleted on faith.
+
+⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs
+used to `memset` one and set three fields — `dsp_fd`, `available`, `sample_rate` — and open `/dev/dsp`,
+the three ioctls and GPIO12 themselves. The moment the struct gained `channels`, that idiom left it at
+**0**, and a 0-channel byte count is 0: **silently mute**, measured (`audio_bytes_for_frames(8820, 0)`
+= 0 against 35280 for 2 channels). `audio_init_unchecked()` is the one place the config gate is bypassed,
+which the Settings-tab hardware test genuinely needs — a test that drives the speaker must not obey the
+setting it exists to test. The tree-wide check is one grep, and its only legitimate hit is `audio.c`:
+
+```bash
+grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v arm-deps
+```
+
+(`tests/ch_test.c` and `tests/oss_diag.c` also hit it — they are standalone OSS probes that use no
+`Audio` at all and are not in `build-and-deploy.sh`.)
+
+Open work and the phasing: [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1.

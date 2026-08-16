@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audio_gen.h"
 #include "config.h"
 
 #include <stdio.h>
@@ -13,7 +14,12 @@
 #include <sys/soundcard.h>
 #include <sys/time.h>
 
-/* ── Hardware constants ─────────────────────────────────────────────────── */
+/* ── Hardware constants ─────────────────────────────────────────────────────
+ * The device half of the audio library.  Everything that is arithmetic rather
+ * than I/O lives in audio_gen.c, which is what tests/audio_gen_test.c drives —
+ * so the amplitude, the envelope lengths, the glide constants and every byte
+ * count are defined THERE and used here.  Do not re-spell one of them.
+ */
 
 #define GPIO12_DIRECTION  "/sys/class/gpio/gpio12/direction"
 #define GPIO12_VALUE      "/sys/class/gpio/gpio12/value"
@@ -23,22 +29,17 @@
  *  The ALSA OSS shim SRCs internally to the TWL4030's native 48000 Hz. */
 #define TARGET_RATE       44100
 
-/** Peak amplitude for synthesised waveforms (0–32767). */
-#define AMPLITUDE         18000
+/** Channel count assumed only when the read-back fails.  `hw:0,0` is
+ *  stereo-only (measured, ../SYSTEM_ANALYSIS.md#34-audio), so 2 is the right
+ *  fallback — but it is a fallback, not the model. */
+#define FALLBACK_CHANNELS   2
 
 /** Streaming chunk size in milliseconds (~10 ms of audio per chunk) */
 #define STREAM_CHUNK_MS     10
 
-/** Peak amplitude for streaming (same as tone amplitude) */
-#define STREAM_AMPLITUDE    18000
-
-/** Frequency smoothing factor per sample (higher = faster response) */
-#define FREQ_SMOOTH         0.15
-
-/** Amplitude ramp speed per sample for fade-in/fade-out */
-#define AMP_RAMP_SPEED      0.0005
-
-/** Maximum chunk/fade frames to prevent VLA stack overflow (200ms at 44100 Hz) */
+/** Ceiling on a single chunk/fade allocation (200 ms at 44100 Hz).  It exists
+ *  so a corrupted sample_rate cannot ask for an absurd buffer; it was a VLA
+ *  stack-overflow guard when these buffers were on the stack. */
 #define MAX_CHUNK_FRAMES    8820
 
 /* ── Internal helpers ───────────────────────────────────────────────────── */
@@ -53,13 +54,14 @@ static void enable_amp(void)
     if (f) { fputs("1",   f); fclose(f); }
 }
 
-/** Millisecond wall clock (monotonic). */
+/** Millisecond wall clock (monotonic).  The arithmetic — including why the
+ *  22-bit mask wraps every ~48.5 days rather than overflowing — is
+ *  audio_ms_from_timeval()'s, so a host test can reach it without a clock. */
 static uint32_t time_now_ms(void)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    /* Avoid epoch overflow on 32-bit ARM: use low 22 bits of tv_sec (~49 days). */
-    return (uint32_t)((tv.tv_sec & 0x3FFFFF) * 1000U + (uint32_t)(tv.tv_usec / 1000));
+    return audio_ms_from_timeval((long)tv.tv_sec, (long)tv.tv_usec);
 }
 
 /**
@@ -68,9 +70,12 @@ static uint32_t time_now_ms(void)
  * ALSA OSS shim quirk on Linux 4.14.52 / TWL4030:
  *   SNDCTL_DSP_SPEED may reset FMT and CHANNELS.
  *   Set order must be SPEED → FMT → CHANNELS so the last two survive.
- * The SNDCTL_DSP_STEREO ioctl is silently ignored on this hardware;
- * the device stays mono but both L+R channels carry the same sample
- * so stereo writes work correctly.
+ *
+ * SNDCTL_DSP_STEREO is silently ignored on this hardware, which is exactly why
+ * both the rate and the CHANNEL COUNT are read back afterwards: what the
+ * driver granted is the only number the byte arithmetic may use.  Before F1
+ * the channel count was the literal `2` in all four write paths, and `hw:0,0`
+ * happening to grant 2 made that accidentally right.
  */
 static void configure_dsp(Audio *audio)
 {
@@ -89,6 +94,90 @@ static void configure_dsp(Audio *audio)
         audio->sample_rate = actual;
     else
         audio->sample_rate = TARGET_RATE;
+
+    /* And the real channel count.  Warned about ONCE per Audio: this function
+     * runs on every audio_flush(), i.e. before every canned sound. */
+    int channels = 0;
+    if (ioctl(audio->dsp_fd, SOUND_PCM_READ_CHANNELS, &channels) == 0 && channels > 0) {
+        audio->channels = channels;
+    } else {
+        audio->channels = FALLBACK_CHANNELS;
+        if (!audio->ch_warned) {
+            fprintf(stderr, "audio: SOUND_PCM_READ_CHANNELS failed (errno=%d) — "
+                            "assuming %d channels\n", errno, FALLBACK_CHANNELS);
+            audio->ch_warned = true;
+        }
+    }
+}
+
+/* ── The one write path ──────────────────────────────────────────────────────
+ * Four hand-rolled EAGAIN loops used to live in this file, each with its own
+ * retry interval, its own give-up rule and its own way of abandoning a chunk
+ * mid-frame.  They are now four POLICIES over audio_write_frames(), which is
+ * the only code that decides when to stop — and it stops on a frame boundary
+ * or reports that it could not (../IMPROVEMENT_PLAN.md F1).
+ */
+
+static ssize_t dsp_write(void *ctx, const void *buf, size_t nbytes, bool *again)
+{
+    Audio *audio = (Audio *)ctx;
+    ssize_t r = write(audio->dsp_fd, buf, nbytes);
+    if (r < 0 && errno == EAGAIN) *again = true;
+    return r;
+}
+
+static void dsp_wait(void *ctx, int usec)
+{
+    (void)ctx;
+    if (usec > 0) usleep((useconds_t)usec);
+}
+
+/** A tone: the ring will drain at hardware rate, so wait as long as it takes. */
+static const AudioWritePolicy WPOL_TONE    = { 5000, 0, false };
+/** The stream prefill: same, at a finer interval — it primes the DAC. */
+static const AudioWritePolicy WPOL_PREFILL = { 1000, 0, false };
+/** A stream chunk: the caller checked GETOSPACE first, so a full ring means
+ *  "next frame", not "stall the render loop".  wait_us applies only to the
+ *  bounded mid-frame realignment, which never has to happen here. */
+static const AudioWritePolicy WPOL_CHUNK   = { 1000, 0, true  };
+/** The fade-out: worth waiting for, but bounded — 100 × 2 ms = 200 ms. */
+static const AudioWritePolicy WPOL_FADE    = { 2000, 100, false };
+/** The pump: called from the render loop, so it may never wait.  Identical to
+ *  WPOL_CHUNK today by design — the plan asked for a fifth POLICY rather than a
+ *  fifth loop, and it is named separately because its reason for never blocking
+ *  is different (a stalled render loop drops frames, not just audio) and Phase 4
+ *  may well give it a period-sized wait once tinyalsa is underneath. */
+static const AudioWritePolicy WPOL_PUMP    = { 1000, 0, true  };
+
+/**
+ * Interleave `frames` mono samples up to the negotiated channel count and hand
+ * them to the device under `pol`.  Returns the bytes the device took, or -1 if
+ * it could not even try.
+ */
+static long write_mono(Audio *audio, const int16_t *mono, long frames,
+                       const AudioWritePolicy *pol, const char *what)
+{
+    long bytes = audio_bytes_for_frames(frames, audio->channels);
+    if (bytes <= 0) return -1;
+
+    int16_t *ilv = (int16_t *)malloc((size_t)bytes);
+    if (!ilv) return -1;
+    if (audio_interleave(mono, frames, audio->channels, ilv) != bytes) {
+        free(ilv);
+        return -1;
+    }
+
+    AudioSink sink = { dsp_write, dsp_wait, audio };
+    AudioWriteResult res;
+    audio_write_frames(&sink, ilv, frames, audio->channels, pol, &res);
+    free(ilv);
+
+    if (res.misaligned)
+        fprintf(stderr, "audio: %s left a partial frame in the device "
+                        "(%ld of %ld bytes) — channels may be swapped\n",
+                what, res.bytes_written, bytes);
+
+    return res.bytes_written;
 }
 
 /**
@@ -116,13 +205,9 @@ static void configure_dsp(Audio *audio)
 
 static void audio_flush(Audio *audio)
 {
-    uint32_t now = time_now_ms();
-    uint32_t end = audio->sound_end_ms;
-    if (end > now) {
-        uint32_t wait = end - now;
-        if (wait > FLUSH_MAX_WAIT_MS) wait = FLUSH_MAX_WAIT_MS;
-        usleep(wait * 1000U);
-    }
+    uint32_t wait = audio_flush_wait_ms(time_now_ms(), audio->sound_end_ms,
+                                        FLUSH_MAX_WAIT_MS);
+    if (wait > 0) usleep(wait * 1000U);
     /* Reset the ring to prevent tone mixing. */
     ioctl(audio->dsp_fd, SNDCTL_DSP_RESET, 0);
     configure_dsp(audio);
@@ -131,19 +216,46 @@ static void audio_flush(Audio *audio)
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
-int audio_init(Audio *audio)
+/** Everything both entry points do: amp on, open, configure, read back. */
+static int audio_open(Audio *audio)
 {
     memset(audio, 0, sizeof(*audio));
-    audio->dsp_fd       = -1;
-    audio->available    = false;
-    audio->sample_rate  = TARGET_RATE;
-    audio->sound_end_ms = 0;
-    audio->phase        = 0.0;
-    audio->current_freq = 0.0;
-    audio->target_freq  = 0.0;
-    audio->amplitude    = 0.0;
-    audio->streaming    = false;
-    audio->logger       = NULL;
+    audio->dsp_fd      = -1;
+    audio->available   = false;
+    audio->sample_rate = TARGET_RATE;
+    audio->channels    = FALLBACK_CHANNELS;
+    audio->streaming   = false;
+
+    enable_amp();
+
+    /*
+     * O_NONBLOCK is critical: a blocking write() stalls for the full
+     * ALSA HW period (~506 ms) once the OSS ring fills, causing every
+     * subsequent rapid sound event to play hundreds of ms late.
+     * With O_NONBLOCK, write() returns EAGAIN when the ring is full and
+     * the write policies above sleep and retry, following the ring at
+     * real-time pace.
+     */
+    audio->dsp_fd = open(DSP_DEVICE, O_WRONLY | O_NONBLOCK);
+    if (audio->dsp_fd < 0) {
+        perror("audio: cannot open " DSP_DEVICE);
+        return -1;
+    }
+
+    configure_dsp(audio);
+    audio->available = true;
+    return 0;
+}
+
+int audio_init(Audio *audio)
+{
+    /* Zero first, so a caller that ignores the return value still holds a
+     * struct every playback function reads as unavailable. */
+    memset(audio, 0, sizeof(*audio));
+    audio->dsp_fd      = -1;
+    audio->available   = false;
+    audio->sample_rate = TARGET_RATE;
+    audio->channels    = FALLBACK_CHANNELS;
 
     /* Check config — honour "audio_enabled" setting */
     {
@@ -157,27 +269,16 @@ int audio_init(Audio *audio)
         }
     }
 
-    enable_amp();
+    if (audio_open(audio) < 0) return -1;
 
-    /*
-     * O_NONBLOCK is critical: a blocking write() stalls for the full
-     * ALSA HW period (~506 ms) once the OSS ring fills, causing every
-     * subsequent rapid sound event to play hundreds of ms late.
-     * With O_NONBLOCK, write() returns EAGAIN when the ring is full and
-     * we sleep 5 ms and retry, following the ring at real-time pace.
-     */
-    audio->dsp_fd = open(DSP_DEVICE, O_WRONLY | O_NONBLOCK);
-    if (audio->dsp_fd < 0) {
-        perror("audio: cannot open " DSP_DEVICE);
-        return -1;
-    }
-
-    configure_dsp(audio);
-
-    audio->available = true;
-    printf("audio: %s opened at %d Hz S16LE (O_NONBLOCK)\n",
-           DSP_DEVICE, audio->sample_rate);
+    printf("audio: %s opened at %d Hz %d ch S16LE (O_NONBLOCK)\n",
+           DSP_DEVICE, audio->sample_rate, audio->channels);
     return 0;
+}
+
+int audio_init_unchecked(Audio *audio)
+{
+    return audio_open(audio);
 }
 
 void audio_close(Audio *audio)
@@ -186,12 +287,188 @@ void audio_close(Audio *audio)
         close(audio->dsp_fd);
         audio->dsp_fd = -1;
     }
-    audio->available = false;
+    free(audio->pump_buf);
+    audio->pump_buf        = NULL;
+    audio->pump_buf_frames = 0;
+    audio->pumping         = false;
+    audio->available       = false;
 }
 
+/* ── The mix bus, device side ────────────────────────────────────────────────
+ * The voices, the sum, the clamp and the pacing arithmetic are all in
+ * audio_gen.c and host-tested.  What is here is the three things that need a
+ * device: how much room the ring has, the scratch buffer, and the write.
+ */
+
+void audio_pump_enable(Audio *audio, bool on)
+{
+    if (!audio) return;
+    if (on) {
+        if (!audio->pumping) {
+            /* Re-init clears the voices AND the diagnostics, so each PUMP: ON
+             * session counts from zero — which is what makes an A/B on the panel
+             * readable.  The limiter CHOICE is not a diagnostic and survives:
+             * toggling the pump must not silently undo an operator's LIMIT
+             * setting mid-comparison. */
+            int keep_limit = audio->mix.limit;
+            audio_mix_init(&audio->mix, audio->sample_rate);
+            audio_mix_set_limit(&audio->mix, keep_limit);
+            audio->pump_starved = 0;
+            audio->pump_lost    = 0;
+            audio->pump_diag    = 40;
+            audio->pumping      = true;
+        }
+        return;
+    }
+    /* Off: silence the bus, or its voices would simply never be rendered
+     * again.  Whatever is already inside the device still plays out. */
+    audio_mix_stop_all(&audio->mix);
+    audio->pumping = false;
+}
+
+void audio_pump_set_keepalive(Audio *audio, bool on)
+{
+    if (audio) audio->keepalive = on;
+}
+
+bool audio_pump_active(const Audio *audio)
+{
+    if (!audio || !audio->pumping) return false;
+    /* Keepalive counts as active: it is a promise of continuous silence, and a
+     * render loop that drops to FRAME_DELAY_IDLE_US (100 ms) while the lead is
+     * 80 ms starves the device — which would defeat the very thing keepalive is
+     * there to measure.  Callers must not have to know that. */
+    if (audio->keepalive) return true;
+    return audio_mix_pending(&audio->mix) > 0;
+}
+
+int audio_pump_voices(const Audio *audio)
+{
+    return audio ? audio_mix_active(&audio->mix) : 0;
+}
+
+uint32_t audio_pump_clipped(const Audio *audio) { return audio ? audio->mix.clipped : 0; }
+uint32_t audio_pump_dropped(const Audio *audio) { return audio ? audio->mix.dropped : 0; }
+uint32_t audio_pump_limited(const Audio *audio) { return audio ? audio->mix.limited : 0; }
+uint32_t audio_pump_starved(const Audio *audio) { return audio ? audio->pump_starved : 0; }
+uint32_t audio_pump_lost(const Audio *audio)    { return audio ? audio->pump_lost    : 0; }
+
+void audio_pump_set_limit(Audio *audio, int mode)
+{
+    if (audio) audio_mix_set_limit(&audio->mix, mode);
+}
+
+/** Scratch for one pump call, allocated once and kept.  The pump runs every
+ *  frame, so a malloc/free pair per call is the one allocation in this library
+ *  worth removing.  (write_mono()'s interleave buffer is the other one; it
+ *  belongs to the write path Phase 4 rewrites.) */
+static int16_t *pump_scratch(Audio *audio, long frames)
+{
+    if (frames <= 0) return NULL;
+    if (audio->pump_buf && audio->pump_buf_frames >= frames) return audio->pump_buf;
+
+    int16_t *nb = (int16_t *)realloc(audio->pump_buf, (size_t)frames * sizeof(int16_t));
+    if (!nb) return NULL;
+    audio->pump_buf        = nb;
+    audio->pump_buf_frames = frames;
+    return nb;
+}
+
+void audio_pump(Audio *audio)
+{
+    if (!audio->available || audio->dsp_fd < 0 || !audio->pumping) return;
+
+    long pending = audio_mix_pending(&audio->mix);
+    if (pending <= 0 && !audio->keepalive) return;
+
+    int frame_bytes = audio_frame_bytes(audio->channels);
+    if (frame_bytes <= 0) return;
+
+    /* What the ring holds versus what it will take.  in_flight is the reason
+     * this is not just "write into the free space": an empty ~506 ms OSS ring
+     * would accept half a second of audio and put every sound triggered after
+     * it half a second late. */
+    audio_buf_info info;
+    if (ioctl(audio->dsp_fd, SNDCTL_DSP_GETOSPACE, &info) < 0) return;
+
+    long total_bytes = (long)info.fragstotal * (long)info.fragsize;
+    long in_flight   = (total_bytes - (long)info.bytes) / frame_bytes;
+    long space       = (long)info.bytes / frame_bytes;
+
+    /* ⚠️ Measured BEFORE we write, and only when audio was owed: the ring being
+     * empty between sounds is normal, the ring being empty while a voice is still
+     * sounding is a gap the listener hears.  This is what distinguishes "the
+     * mixer is wrong" from "this render loop cannot feed an 80 ms lead". */
+    if (pending > 0 && in_flight <= 0) audio->pump_starved++;
+
+    /* ⚠️ The lead is derived from the DEVICE's period, not from the ms constant
+     * alone.  A lead that is 1.7 periods deep leaves ALSA one playable period and
+     * a partial one it cannot see, which XRUNs every ~120 ms and DISCARDS the
+     * staged audio — measured on `.188`, and the reason a mixed sound read as a
+     * chopped square wave rather than as a level problem.  `fragsize` is the OSS
+     * name for that period; Phase 4 reads it from tinyalsa instead. */
+    long period = (long)info.fragsize / frame_bytes;
+    long ring   = total_bytes / frame_bytes;
+    long lead   = audio_pump_lead_frames(
+                      audio_frames_for_ms(audio->sample_rate, AUDIO_PUMP_LEAD_MS),
+                      period, AUDIO_PUMP_LEAD_PERIODS, ring);
+
+    /* ⚠️ A bounded trace of what the ring actually reported — 40 lines per
+     * PUMP: ON session, so it cannot flood a log, and it prints the RAW ioctl
+     * fields beside our derived ones.  It exists because `starve` climbing ~6 per
+     * 200 ms tone (measured on `.188` 2026-08-15) has two candidate mechanisms
+     * that no derived number can separate: a render loop too slow to feed an
+     * 80 ms lead, or a `bytes`/`fragstotal` pair that does not mean what the pump
+     * reads it to mean.  Guessing between them is what this repo calls theorising
+     * from sysfs. */
+    if (audio->pump_diag > 0) {
+        audio->pump_diag--;
+        fprintf(stderr, "pump: %s bytes=%d frag=%d/%d in_flight=%ld space=%ld "
+                        "pending=%ld period=%ld lead=%ld\n",
+                (pending > 0 && in_flight <= 0) ? "STARVED" : "ok",
+                info.bytes, info.fragsize, info.fragstotal,
+                in_flight, space, pending, period, lead);
+    }
+
+    long want = audio_pump_frames(
+        lead,
+        in_flight, space,
+        (lead > 0) ? lead : audio_frames_for_ms(audio->sample_rate, AUDIO_PUMP_CAP_MS));
+    if (want <= 0) return;
+
+    /* Never render past the end of the last voice — unless keepalive says the
+     * stream must not be allowed to go idle at all. */
+    if (!audio->keepalive && want > pending) want = pending;
+
+    int16_t *mono = pump_scratch(audio, want);
+    if (!mono) return;
+
+    if (audio_mix_render(&audio->mix, mono, want) <= 0) {
+        if (!audio->keepalive) return;         /* nothing to say */
+        memset(mono, 0, (size_t)want * sizeof(int16_t));
+    }
+
+    long taken = write_mono(audio, mono, want, &WPOL_PUMP, "pump");
+
+    /* ⚠️ Count what the device refused.  The voices have already advanced past
+     * those frames, so they are not deferred — they are gone, and the waveform
+     * has a step where they were.  WPOL_PUMP may not block (a stalled render loop
+     * drops frames, not just audio), so this is the price of that; counting it is
+     * what makes it a measured price rather than an assumed-zero one. */
+    long taken_frames = (taken > 0) ? taken / frame_bytes : 0;
+    if (taken_frames < want) audio->pump_lost += (uint32_t)(want - taken_frames);
+}
 void audio_interrupt(Audio *audio)
 {
     if (!audio->available || audio->dsp_fd < 0) return;
+
+    /* On the pump this is "stop all voices": no ring reset, because the reset is
+     * exactly what makes mixing impossible, and no sleep, because there is
+     * nothing to wait for.  Up to AUDIO_PUMP_LEAD_MS of tail survives it. */
+    if (audio->pumping) {
+        audio_mix_stop_all(&audio->mix);
+        return;
+    }
     audio_flush(audio);
 }
 
@@ -200,54 +477,31 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
     if (!audio->available || audio->dsp_fd < 0) return;
     if (freq_hz <= 0 || duration_ms <= 0)        return;
 
-    int     frames    = (int)((long)audio->sample_rate * duration_ms / 1000);
-    int16_t *buf      = (int16_t *)malloc((size_t)frames * 4); /* stereo S16LE */
-    if (!buf) return;
-
-    /* 10 ms attack, 20 ms release — removes clicks at tone boundaries */
-    int attack_frames  = audio->sample_rate * 10 / 1000;
-    int release_frames = audio->sample_rate * 20 / 1000;
-    if (attack_frames  > frames / 2) attack_frames  = frames / 2;
-    if (release_frames > frames / 2) release_frames = frames / 2;
-
-    double phase_step = 2.0 * M_PI * freq_hz / audio->sample_rate;
-    double phase      = 0.0;
-
-    for (int i = 0; i < frames; i++) {
-        double env = 1.0;
-        if (i < attack_frames)
-            env = (double)i / attack_frames;
-        else if (i >= frames - release_frames)
-            env = (double)(frames - 1 - i) / release_frames;
-
-        int16_t sample   = (int16_t)(AMPLITUDE * env * sin(phase));
-        buf[i * 2]     = sample;   /* L */
-        buf[i * 2 + 1] = sample;   /* R */
-
-        phase += phase_step;
-        if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
+    /* ⚠️ The two paths are a BRANCH, not "enqueue and also write immediately".
+     * The plan sketched the latter; it cannot work.  A bounded immediate write
+     * truncates any tone longer than the lead (every tone here is), and an
+     * unbounded one hands the whole tone to the kernel — which is the very thing
+     * that makes it unmixable.  Branching instead means an app that never calls
+     * audio_pump_enable() takes today's path byte for byte, which is a stronger
+     * guarantee than "degrades gracefully". */
+    if (audio->pumping) {
+        audio_mix_add(&audio->mix, freq_hz, duration_ms, 0, AUDIO_PEAK);
+        return;
     }
 
-    /*
-     * Non-blocking write loop.
-     * write() returns EAGAIN when the OSS ring is momentarily full;
-     * sleep 5 ms and retry so the ring drains at the hardware rate.
-     */
-    ssize_t written = 0;
-    ssize_t total   = (ssize_t)frames * 4;
-    const uint8_t *ptr = (const uint8_t *)buf;
-    while (written < total) {
-        ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
-        if (r > 0) {
-            written += r;
-        } else if (r < 0 && errno == EAGAIN) {
-            usleep(5000);   /* 5 ms — wait for OSS ring to drain a fragment */
-        } else {
-            break;          /* real error, give up */
-        }
-    }
+    /* Frames are computed 64-bit and clamped: (long)rate * duration_ms is a
+     * 32-bit multiply on this target and overflows past ~48.7 s. */
+    long frames = audio_frames_for_ms(audio->sample_rate, duration_ms);
+    if (frames <= 0) return;
 
-    free(buf);
+    /* Mono, single-sample — the generator never knows how many channels the
+     * device wants.  write_mono() is the one conversion point. */
+    int16_t *mono = (int16_t *)malloc((size_t)frames * sizeof(int16_t));
+    if (!mono) return;
+
+    audio_render_tone(audio->sample_rate, freq_hz, AUDIO_PEAK, mono, frames);
+    write_mono(audio, mono, frames, &WPOL_TONE, "tone");
+    free(mono);
 
     /* Record when this tone is expected to finish so audio_flush() can
      * wait before discarding it on the next interrupt call. */
@@ -260,6 +514,15 @@ void audio_stream_start(Audio *audio, int freq_hz)
 {
     if (!audio->available || audio->dsp_fd < 0) return;
 
+    /* The theremin owns the ring while it streams, so it and the mix bus cannot
+     * both be writing.  Refuse loudly rather than let two writers interleave
+     * frames into one device. */
+    if (audio->pumping) {
+        fprintf(stderr, "audio: stream_start refused — the mix bus is pumping "
+                        "(call audio_pump_enable(a, false) first)\n");
+        return;
+    }
+
     /* Reset DSP and configure with default OSS buffer.
      * Note: SNDCTL_DSP_SETFRAGMENT is unreliable on the TWL4030 ALSA OSS
      * shim (Linux 4.14.52) — it can leave the DSP in a bad state where
@@ -270,60 +533,33 @@ void audio_stream_start(Audio *audio, int freq_hz)
     }
     configure_dsp(audio);
 
-    /* Initialize streaming state */
-    audio->phase        = 0.0;
-    audio->current_freq = (double)freq_hz;
-    audio->target_freq  = (double)freq_hz;
-    audio->amplitude    = 0.0;   /* will fade in */
-    audio->streaming    = true;
+    /* Initialize streaming state — one oscillator, amplitude 0 so it fades in */
+    audio_osc_init(&audio->osc, audio->sample_rate, (double)freq_hz, AUDIO_PEAK);
+    audio->streaming = true;
 
-    /* Pre-fill ~200ms of audio in blocking mode to prime the OSS ring buffer
-     * past the TWL4030 DAC startup latency.  Without this, the first few
-     * streaming chunks may be silently discarded, causing an audible gap. */
+    /* Pre-fill ~200ms of audio to prime the OSS ring buffer past the TWL4030
+     * DAC startup latency.  Without this, the first few streaming chunks may
+     * be silently discarded, causing an audible gap. */
     {
-        int prefill_frames = audio->sample_rate * 200 / 1000;
-        int16_t *prefill = (int16_t *)malloc((size_t)prefill_frames * 2 * sizeof(int16_t));
-        if (prefill) {
-            for (int i = 0; i < prefill_frames; i++) {
-                audio->current_freq += (audio->target_freq - audio->current_freq) * FREQ_SMOOTH;
-                if (audio->amplitude < 1.0) {
-                    audio->amplitude += AMP_RAMP_SPEED;
-                    if (audio->amplitude > 1.0) audio->amplitude = 1.0;
-                }
-                double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
-                int16_t sample = (int16_t)(STREAM_AMPLITUDE * audio->amplitude * sin(audio->phase));
-                prefill[i * 2]     = sample;
-                prefill[i * 2 + 1] = sample;
-                audio->phase += phase_step;
-                if (audio->phase > 2.0 * M_PI) audio->phase -= 2.0 * M_PI;
-            }
-
-            /* Blocking write loop — retry on EAGAIN to ensure the full
-             * prefill reaches the driver before we return to the main loop. */
-            ssize_t total   = (ssize_t)prefill_frames * 4;
-            ssize_t written = 0;
-            const uint8_t *ptr = (const uint8_t *)prefill;
-            while (written < total) {
-                ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
-                if (r > 0) {
-                    written += r;
-                } else if (r < 0 && errno == EAGAIN) {
-                    usleep(1000);
-                } else {
-                    break;
-                }
-            }
-            free(prefill);
+        long prefill_frames = audio_frames_for_ms(audio->sample_rate, 200);
+        int16_t *mono = (prefill_frames > 0)
+                        ? (int16_t *)malloc((size_t)prefill_frames * sizeof(int16_t))
+                        : NULL;
+        if (mono) {
+            audio_osc_render(&audio->osc, AUDIO_OSC_GLIDE, mono, prefill_frames);
+            write_mono(audio, mono, prefill_frames, &WPOL_PREFILL, "stream prefill");
+            free(mono);
         }
     }
 
-    fprintf(stderr, "audio: stream start at %d Hz (rate=%d)\n", freq_hz, audio->sample_rate);
+    fprintf(stderr, "audio: stream start at %d Hz (rate=%d, %d ch)\n",
+            freq_hz, audio->sample_rate, audio->channels);
 }
 
 void audio_stream_set_freq(Audio *audio, int freq_hz)
 {
     if (!audio->streaming) return;
-    audio->target_freq = (double)freq_hz;
+    audio->osc.target_freq = (double)freq_hz;
 }
 
 void audio_stream_chunk(Audio *audio)
@@ -335,8 +571,16 @@ void audio_stream_chunk(Audio *audio)
     if (ioctl(audio->dsp_fd, SNDCTL_DSP_GETOSPACE, &info) < 0)
         return;
 
-    int chunk_frames = audio->sample_rate * STREAM_CHUNK_MS / 1000;
-    int chunk_bytes  = chunk_frames * 2 * (int)sizeof(int16_t); /* stereo S16LE */
+    long chunk_frames = audio_frames_for_ms(audio->sample_rate, STREAM_CHUNK_MS);
+    if (chunk_frames < 1) return;
+    if (chunk_frames > MAX_CHUNK_FRAMES) chunk_frames = MAX_CHUNK_FRAMES;
+    long chunk_bytes = audio_bytes_for_frames(chunk_frames, audio->channels);
+    if (chunk_bytes <= 0) return;
+
+    /* One allocation for the whole call.  This was a 35 KB buffer declared
+     * INSIDE the loop below, for a ~1.7 KB chunk (../IMPROVEMENT_PLAN.md F1). */
+    int16_t *mono = (int16_t *)malloc((size_t)chunk_frames * sizeof(int16_t));
+    if (!mono) return;
 
     /* Write as many small chunks as fit in the available buffer space.
      * Cap at some reasonable max to avoid spending too long here. */
@@ -344,110 +588,41 @@ void audio_stream_chunk(Audio *audio)
     int chunks_written = 0;
 
     while (info.bytes >= chunk_bytes && chunks_written < max_chunks) {
-        int16_t buf[MAX_CHUNK_FRAMES * 2];
+        audio_osc_render(&audio->osc, AUDIO_OSC_GLIDE, mono, chunk_frames);
 
-        /* Generate one small chunk with current frequency */
-        for (int i = 0; i < chunk_frames; i++) {
-            /* Smooth frequency toward target */
-            audio->current_freq += (audio->target_freq - audio->current_freq) * FREQ_SMOOTH;
-
-            /* Ramp amplitude */
-            if (audio->amplitude < 1.0) {
-                audio->amplitude += AMP_RAMP_SPEED;
-                if (audio->amplitude > 1.0) audio->amplitude = 1.0;
-            }
-
-            double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
-            int16_t sample = (int16_t)(STREAM_AMPLITUDE * audio->amplitude * sin(audio->phase));
-            buf[i * 2]     = sample;
-            buf[i * 2 + 1] = sample;
-
-            audio->phase += phase_step;
-            if (audio->phase > 2.0 * M_PI)
-                audio->phase -= 2.0 * M_PI;
-        }
-
-        /* Blocking write for this small chunk — it fits, so it should succeed */
-        ssize_t total = (ssize_t)chunk_bytes;
-        ssize_t written = 0;
-        uint8_t *ptr = (uint8_t *)buf;
-        while (written < total) {
-            ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
-            if (r > 0) {
-                written += r;
-            } else if (r < 0 && (errno == EAGAIN || errno == EINTR)) {
-                break;  /* shouldn't happen since we checked space, but be safe */
-            } else {
-                break;  /* error */
-            }
-        }
-
-        if (written < total) {
-            /* Partial write — shouldn't happen with space check, but stop writing */
-            break;
-        }
+        /* WPOL_CHUNK stops at the first full ring rather than waiting: the
+         * space check above says it should fit, and stalling the render loop
+         * is worse than skipping a chunk. */
+        long written = write_mono(audio, mono, chunk_frames, &WPOL_CHUNK, "stream chunk");
+        if (written < chunk_bytes) break;   /* partial or failed — stop writing */
 
         info.bytes -= (int)written;
         chunks_written++;
     }
+
+    free(mono);
 }
 
 void audio_stream_stop(Audio *audio)
 {
     if (!audio->available || !audio->streaming) return;
 
-    /* Write a short fade-out chunk to avoid click/pop */
-    int fade_frames = audio->sample_rate * 20 / 1000;  /* 20 ms fade-out */
-    /* Sanity clamp: prevent VLA stack overflow if sample_rate is corrupted */
+    /* Write a short fade-out to avoid a click/pop.  AUDIO_OSC_FADE_OUT holds
+     * frequency and amplitude still and envelopes 1 → 0 over exactly this
+     * call — a glide or a ramp during a fade-out fights the fade. */
+    long fade_frames = audio_frames_for_ms(audio->sample_rate, 20);
     if (fade_frames < 1) fade_frames = 1;
     if (fade_frames > MAX_CHUNK_FRAMES) {
-        fprintf(stderr, "audio: fade_frames=%d exceeds max, clamping to %d (sample_rate=%d)\n",
+        fprintf(stderr, "audio: fade_frames=%ld exceeds max, clamping to %d (sample_rate=%d)\n",
                 fade_frames, MAX_CHUNK_FRAMES, audio->sample_rate);
         fade_frames = MAX_CHUNK_FRAMES;
     }
-    int16_t buf[fade_frames * 2];
 
-    for (int i = 0; i < fade_frames; i++) {
-        double env = 1.0 - (double)i / fade_frames;
-        double phase_step = 2.0 * M_PI * audio->current_freq / audio->sample_rate;
-        int16_t sample = (int16_t)(STREAM_AMPLITUDE * env * audio->amplitude * sin(audio->phase));
-        buf[i * 2]     = sample;
-        buf[i * 2 + 1] = sample;
-
-        audio->phase += phase_step;
-        if (audio->phase > 2.0 * M_PI) audio->phase -= 2.0 * M_PI;
-    }
-
-    /* Best-effort blocking write for fade-out — bail after max retries
-     * to prevent infinite hang if DSP stops accepting data */
-    ssize_t total   = (ssize_t)(fade_frames * 4);
-    ssize_t written = 0;
-    const uint8_t *ptr = (const uint8_t *)buf;
-    int retries = 0;
-    const int max_retries = 100;  /* 100 × 2ms = 200ms max */
-
-
-    while (written < total) {
-        ssize_t r = write(audio->dsp_fd, ptr + written, (size_t)(total - written));
-        if (r > 0) {
-            written += r;
-            retries = 0;  /* reset on progress */
-        } else if (r == 0) {
-            fprintf(stderr, "audio: stream_stop write() returned 0, skipping fade-out\n");
-            break;
-        } else if (errno == EAGAIN) {
-            retries++;
-            if (retries >= max_retries) {
-                fprintf(stderr, "audio: stream_stop fade-out timed out after %d retries (%d/%d bytes written)\n",
-                        max_retries, (int)written, (int)total);
-                break;
-            }
-            usleep(2000);
-        } else {
-            fprintf(stderr, "audio: stream_stop write() error (errno=%d: %s), skipping fade-out\n",
-                    errno, strerror(errno));
-            break;
-        }
+    int16_t *mono = (int16_t *)malloc((size_t)fade_frames * sizeof(int16_t));
+    if (mono) {
+        audio_osc_render(&audio->osc, AUDIO_OSC_FADE_OUT, mono, fade_frames);
+        write_mono(audio, mono, fade_frames, &WPOL_FADE, "stream fade-out");
+        free(mono);
     }
 
     /* Reset DSP to flush remaining buffer */
@@ -457,46 +632,64 @@ void audio_stream_stop(Audio *audio)
     configure_dsp(audio);
 
     audio->streaming    = false;
-    audio->amplitude    = 0.0;
+    audio->osc.amp      = 0.0;
     audio->sound_end_ms = 0;
 
     fprintf(stderr, "audio: stream stop complete\n");
 }
 
-/* ── Convenience sounds ─────────────────────────────────────────────────── */
+/* ── Convenience sounds ─────────────────────────────────────────────────────
+ * Four note tables and ONE sequencer.  The tables exist because the pump needs
+ * each note's start offset, which the old shape — three bare audio_tone() calls
+ * relying on the ring to serialise them — cannot express: three voices added at
+ * once are a chord, and audio_success() is meant to be an arpeggio.  Off the
+ * pump the sequencer is exactly the old code, flush included.
+ */
 
+typedef struct { int freq; int ms; } AudioNote;
+
+static void play_sequence(Audio *audio, const AudioNote *notes, int count)
+{
+    if (!audio->available) return;
+
+    if (audio->pumping) {
+        int delay = 0;
+        for (int i = 0; i < count; i++) {
+            audio_mix_add(&audio->mix, notes[i].freq, notes[i].ms, delay, AUDIO_PEAK);
+            delay += notes[i].ms;
+        }
+        return;
+    }
+
+    audio_flush(audio);                 /* discard any queued audio first */
+    for (int i = 0; i < count; i++)
+        audio_tone(audio, notes[i].freq, notes[i].ms);
+}
+
+/** 880 Hz, 80 ms — UI click / tile place */
 void audio_beep(Audio *audio)
 {
-    if (!audio->available) return;
-    audio_flush(audio);             /* discard any queued audio first */
-    /* 880 Hz, 80 ms — UI click / tile place */
-    audio_tone(audio, 880, 80);
+    static const AudioNote s[] = { { 880, 80 } };
+    play_sequence(audio, s, 1);
 }
 
+/** 1320 Hz, 60 ms — item collected, food eaten */
 void audio_blip(Audio *audio)
 {
-    if (!audio->available) return;
-    audio_flush(audio);
-    /* 1320 Hz, 60 ms — item collected, food eaten */
-    audio_tone(audio, 1320, 60);
+    static const AudioNote s[] = { { 1320, 60 } };
+    play_sequence(audio, s, 1);
 }
 
+/** C5 → E5 → G5 ascending arpeggio — score milestone, level up */
 void audio_success(Audio *audio)
 {
-    if (!audio->available) return;
-    audio_flush(audio);
-    /* C5 → E5 → G5 ascending arpeggio — score milestone, level up */
-    audio_tone(audio, 523, 120);
-    audio_tone(audio, 659, 120);
-    audio_tone(audio, 784, 220);
+    static const AudioNote s[] = { { 523, 120 }, { 659, 120 }, { 784, 220 } };
+    play_sequence(audio, s, 3);
 }
 
+/** G4 → E4 → C4 descending — game over, error */
 void audio_fail(Audio *audio)
 {
-    if (!audio->available) return;
-    audio_flush(audio);
-    /* G4 → E4 → C4 descending — game over, error */
-    audio_tone(audio, 392, 150);
-    audio_tone(audio, 330, 150);
-    audio_tone(audio, 262, 300);
+    static const AudioNote s[] = { { 392, 150 }, { 330, 150 }, { 262, 300 } };
+    play_sequence(audio, s, 3);
 }

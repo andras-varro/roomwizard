@@ -20,7 +20,7 @@
  * Build (from native_apps/):
  *   arm-linux-gnueabihf-gcc -O2 -static -I. \
  *     tests/audio_touch_test.c \
- *     common/audio.c common/touch_input.c common/framebuffer.c \
+ *     common/audio.c common/audio_gen.c common/touch_input.c common/framebuffer.c \
  *     common/hardware.c common/common.c \
  *     -o build/audio_touch_test -lm
  */
@@ -263,7 +263,8 @@ int main(int argc, char *argv[])
         LOG_ERROR(&logger, "Cannot open audio");
         touch_close(&touch); fb_close(&fb); return 1;
     }
-    audio.logger = &logger;  /* wire up logger for streaming diagnostics */
+    /* Audio.logger is gone: it was never read.  Streaming diagnostics go to
+     * stderr from audio.c (../IMPROVEMENT_PLAN.md F1). */
 
     /* Exit button — top-right */
     Button exit_btn;

@@ -474,26 +474,19 @@ static void handle_tab_bar_input(AppState *state, int tx, int ty,
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 static void do_audio_test(void) {
+    /* audio_init_unchecked() bypasses the config gate ON PURPOSE: a hardware
+     * test must be able to drive the speaker even when the user has switched
+     * audio off, and audio_init() would make it obey the very setting it
+     * exists to test.  What used to be here was a hand-rolled copy of the
+     * open, the three ioctls and the GPIO12 poke — a verbatim duplicate of
+     * hardware_config.c's, which went silently mute the moment `Audio` gained
+     * a field neither copy set (../IMPROVEMENT_PLAN.md F1). */
     Audio test_audio;
-    memset(&test_audio, 0, sizeof(test_audio));
-    test_audio.dsp_fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
-    if (test_audio.dsp_fd < 0) return;
-    test_audio.available = true;
-    test_audio.sample_rate = 44100;
-    int rate = 44100;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_SPEED, &rate);
-    int fmt = AFMT_S16_LE;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_SETFMT, &fmt);
-    int stereo = 1;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_STEREO, &stereo);
-    FILE *f = fopen("/sys/class/gpio/gpio12/direction", "w");
-    if (f) { fputs("out", f); fclose(f); }
-    f = fopen("/sys/class/gpio/gpio12/value", "w");
-    if (f) { fputs("1", f); fclose(f); }
+    if (audio_init_unchecked(&test_audio) != 0) return;
     audio_tone(&test_audio, 880, 200);
     usleep(250000);
     audio_tone(&test_audio, 1320, 200);
-    close(test_audio.dsp_fd);
+    audio_close(&test_audio);
 }
 
 static void do_led_test(int brightness_pct) {

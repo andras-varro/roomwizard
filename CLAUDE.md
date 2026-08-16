@@ -437,6 +437,7 @@ misparses.
 | Changed | Redeploy |
 |---|---|
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
+| `common/audio.c`, `common/audio_gen.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile:20-28`) nor ScummVM links `audio.o`; ScummVM has its own OSS mixer |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
 | `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing, from F1 Phase 4 `native_apps`, from Phase 5 **all three**. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |
@@ -482,8 +483,19 @@ tool-level traps rather than device facts, and each has cost real time.
   `git-lfs filter-process: git-lfs: not found` / `fatal: the remote end hung up unexpectedly` —
   `git status` and `git diff` both do. **`git log` succeeds**, because it runs no filter, so a WSL git
   session looks half-working rather than misconfigured.
+- ⚠️ **Do not ask `git grep` about a past revision — measured 2026-08-15 returning a false negative.**
+  `git grep -n 'open("/dev/dsp"' HEAD -- native_apps` **exits 1** on a tree where two files at `HEAD`
+  each contain that exact string (`git show HEAD:<file> | grep -c` says `1` for both). The mechanism was
+  not found — a double quote in the pattern and a `(` in the pattern were each tested and neither
+  reproduces it alone — so the rule is the symptom, not a theory: **`git show <rev>:<file> | grep` is the
+  form to trust for a before/after count.** `git grep` against the *working tree* is fine, and plain
+  `grep -rn` is fine; it is the `<rev>` form that silently answered "nothing here".
 - **No foreground `sleep`** — it is blocked. Use `run_in_background`, or put the sleep inside the remote
   command: `ssh root@<ip> 'sleep 3; …'` works, because the local command is `ssh`.
+- ⚠️ **`wsl.exe … | tail -N` prints nothing until the command exits, which is indistinguishable from a
+  hung WSL.** Redirect to a file inside the repo and `Read` it instead, and `timeout N` anything that
+  could loop — a host regression that hangs is a *test result*, not a tool timeout. That mistake cost two
+  120 s tool timeouts before the real cause (an unbounded retry loop) was visible.
 - **A compound `ssh` command can be refused by the permission classifier.** Re-issue it as one plain
   single-purpose command. The same applies to a `bash -c` heredoc whose body contains apostrophes.
 - **File modes are unobservable here.** `/mnt/c` is DrvFs 9p: it reports every file `-rwxrwxrwx` and
@@ -528,7 +540,7 @@ tool-level traps rather than device facts, and each has cost real time.
   three** component build scripts — from `native_apps/build-and-deploy.sh` before every deploy, before
   every `--bundle` and on build-only runs; from `vnc_client`'s after `make`; and from ScummVM's
   **inside `strip_binary`, before the in-place `strip`**, because that is the only moment an unstripped
-  ScummVM binary exists. The expected count is a **hard zero** across all 31 native ARM artifacts, and
+  ScummVM binary exists. The expected count is a **hard zero** across all 33 native ARM artifacts, and
   it is zero. The bare `$CC -O2 -static` deploy path is already safe; what would break it is an
   explicit `-march` implying the idiv extension. Two ways to get a wrong answer out of the gate —
   matching the line instead of the mnemonic field, and gating a *stripped* binary — are in

@@ -68,34 +68,21 @@ static void signal_handler(int sig) {
 /* ── Test functions (bypass config-gated APIs) ──────────────────────────── */
 
 static void do_audio_test(void) {
-    /* Bypass config-gated audio_init — open DSP directly for test */
+    /* Bypass config-gated audio_init — a hardware test must drive the speaker
+     * even when the user has switched audio off, so it must not obey the very
+     * setting it exists to test.  audio_init_unchecked() is that bypass, in ONE
+     * place: this was a verbatim copy of device_tools.c's open + three ioctls +
+     * GPIO12 poke, and a copy like that goes silently mute as soon as `Audio`
+     * gains a field it does not set (../IMPROVEMENT_PLAN.md F1). */
     Audio test_audio;
-    memset(&test_audio, 0, sizeof(test_audio));
-    test_audio.dsp_fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
-    if (test_audio.dsp_fd < 0) return;
-    test_audio.available = true;
-    test_audio.sample_rate = 44100;
-
-    /* Configure DSP */
-    int rate = 44100;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_SPEED, &rate);
-    int fmt = AFMT_S16_LE;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_SETFMT, &fmt);
-    int stereo = 1;
-    ioctl(test_audio.dsp_fd, SNDCTL_DSP_STEREO, &stereo);
-
-    /* Enable amp */
-    FILE *f = fopen("/sys/class/gpio/gpio12/direction", "w");
-    if (f) { fputs("out", f); fclose(f); }
-    f = fopen("/sys/class/gpio/gpio12/value", "w");
-    if (f) { fputs("1", f); fclose(f); }
+    if (audio_init_unchecked(&test_audio) != 0) return;
 
     /* Play test beep */
     audio_tone(&test_audio, 880, 200);
     usleep(250000);
     audio_tone(&test_audio, 1320, 200);
 
-    close(test_audio.dsp_fd);
+    audio_close(&test_audio);
 }
 
 static void do_led_test(int brightness_pct) {
