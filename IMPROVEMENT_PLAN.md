@@ -1124,8 +1124,8 @@ Working detail: `~/.claude/plans/peaceful-herding-valiant.md`.
 | 3b | (folded into 3 — the second half of the same cut) | 2149 → 1256 | ✅ 2026-08-15 |
 | 4 | `SYSTEM_ANALYSIS.md`: evict history/hypothesis/process, tag unmeasured claims | 2214 → **2049**, ~1890 met by phase 5 | ✅ 2026-08-16 |
 | 5 | `HARDWARE.md` split out, with the photos beside the parts they show | 2049 → **1871** | ✅ 2026-08-16 |
-| 6 | `native_apps/CLAUDE.md` compress | **891** → ~325 | ⬜ |
-| 7 | `MEMORY.md` index compression (hook lines up to 684 chars) | **10.2 KB** → ~3 KB | ⬜ |
+| 6 | `native_apps/CLAUDE.md` compress | 891 → **855** of ~690 | ⏳ part 1 done 2026-08-16 |
+| 7 | `MEMORY.md` index compression | 10.2 KB → **4.5 KB** | ✅ 2026-08-16 |
 
 **Phase 3 is done and it landed at 1256, not the ~700 the table used to promise.** ⚠️ **That target was
 never reachable from its own itemised work list, and the arithmetic says so**: the eight deletions and four
@@ -1268,6 +1268,50 @@ is 3703 — the count is out of `C2`'s title rather than corrected there, per th
 
 **Phase 1's negative control:** every one of the old `CLAUDE.md`'s 56 ⚠️ warnings was checked to survive in
 one of the five files or in `native_apps/CLAUDE.md`; 56 of 56 accounted for.
+
+**Phase 6 was priced before any editing, and ~325 is not reachable — the honest figure is ~690.** Every
+block of `native_apps/CLAUDE.md` was classified *duplicate / war story / reference* first, which is now the
+second target in a row that this question has priced correctly. The per-section arithmetic, summing to
+**~203 lines out of 891**:
+
+| section | keep | out | what compresses, and what does not |
+|---|---|---|---|
+| Build | 62 | 19 | the tinyalsa rules and the `asound.h` ABI check are pointers to `build-deps.sh`; the `Makefile` and `check-arm-safe` paragraphs duplicate root `CLAUDE.md` |
+| The common library | 35 | 3 | the module table is reference with no other home — it compresses to nothing |
+| App lifecycle | 57 | 5 | the `main()` skeleton is the canonical copy; only the Snake and `argv[0]` narration goes |
+| Pixel format | 23 | 9 | the `fbset` warning and the bpp facts are in root `CLAUDE.md` and §3.2 |
+| Hardware API | 20 | 3 | five numbered rules, all reference |
+| Rendering | 107 | 55 | **the largest block**: six war stories compress to their rules, but the code skeleton, the three-grounds table and the two `usleep` shapes are reference |
+| Coordinates, portrait | 23 | 2 | rules only |
+| Screen edges | 76 | 42 | the measured sweep table is duplicated in §3.3 *with an extra column*; the layout rules are not duplicated anywhere |
+| Touch model | 80 | 14 | the fit, the stage diagram and the 13-row rules table are the only copy; four receipt tokens live here |
+| Input | 88 | 26 | the uinput fact is in root `CLAUDE.md`, the MUSB facts in §3.6; the host-testability half is unique |
+| 32-bit target | 10 | 1 | four lines duplicate root `CLAUDE.md` |
+| Audio | 87 | 24 | the pump's nine rules and the `audio_gen` split live **nowhere else** — they compress by narration only |
+
+**Reaching ~325 would mean deleting the module table, the lifecycle skeleton, the touch rules table and
+the pump's nine rules** — the reference content this file exists to be. That is phase 4 part 2's mistake
+with a different file, and the classification is what caught it before any editing rather than after.
+
+**Part 1 landed 891 → 855**, taking the two clean duplicate deletions and the four highest-value war
+stories: the sweep table (16 → 5, now a pointer), the uinput narration (8 → 5), the two MUSB paragraphs
+(15 → 8), samegame's per-game `else`-branch table, the derive-state table, the D-pad removal history and
+the tinyalsa build rules. Two prose counts went with them, per the invariant — the deploy no longer claims
+a number of executables or targets. The survey above is the remaining work list.
+
+⚠️ **A duplicate deletion cannot always carry a receipt, and this is the other half of phase 5's lesson.**
+The sweep table got one — `flat (saturated)` appears in exactly two files, so the row is exact. The MUSB
+paragraphs could not: `omap2430_ops` and `a_wait_bcon` appear in **nine** files each, so any receipt on
+them reports `NOT MOVED` forever. Where phase 5 said *a receipt needs a token unique to the moved block*,
+the corollary is that **a repo-wide token means the verification is a grep recorded in the commit, not a
+gate row** — `SYSTEM_ANALYSIS.md` §3.6 was confirmed to hold both facts before the paragraphs were cut.
+
+**Phase 7 landed at 4.5 KB, not the ~3 KB priced.** All 22 memories are still indexed, one line each,
+longest hook 189 characters against 1097 before — and ~1 KB of the file is the header, the four group
+headings and the `_archive/` footer, which is why the last 1.5 KB is not there: below about 90 characters a
+hook stops being able to distinguish 22 similarly-named memories, which is the one job the index has.
+⚠️ **And the hook that priced this phase was itself a stale count** — it said hooks ran to 684 characters,
+measured 1097, third-longest. A count in an index rots exactly like a count in prose.
 
 **Group C — extraction receipts — is built (2026-08-15), and it checks a MOVE, not a copy.** Each row is
 a distinctive token, the file that must now hold it, and the file it must have *left*; "one fact, one

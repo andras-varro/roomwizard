@@ -28,18 +28,17 @@ native-ALSA audio backend (`../IMPROVEMENT_PLAN.md` F1).
 Three rules live in that script's comments and are repeated here only as pointers, because getting any
 of them wrong is silent:
 
-- ⚠️ **Compile five of upstream's eight sources.** Upstream's own `Makefile` and `CMakeLists.txt` build
-  all eight; `snd_card_plugin.c` `dlopen()`s, and these binaries are `-static` — the same family as the
-  `clock_gettime64` SIGSEGV-before-`main()` trap. The plugin path is dead code anyway
-  (`#ifdef TINYALSA_USES_PLUGINS`, never defined) and the three files add five warnings to a zero-warning
-  tree. `assert_no_dl()` refuses the build rather than shipping that.
+- ⚠️ **Compile five of upstream's eight sources.** `snd_card_plugin.c` `dlopen()`s and these binaries are
+  `-static` — the same family as the `clock_gettime64` SIGSEGV-before-`main()` trap. The plugin path is
+  dead code anyway (`#ifdef TINYALSA_USES_PLUGINS`, never defined) and the three files add warnings to a
+  zero-warning tree. `assert_no_dl()` refuses the build rather than shipping that.
 - ⚠️ **That subset needs the one-line `pcm_close()` patch** the script applies and asserts:
   `src/pcm.c:978` calls `snd_utils_close_dev_node()` **outside** the `#ifdef` guarding its four siblings,
   and it is **still ungated on upstream master** — so do not expect a version bump to retire the patch.
-  Gating it is behaviour-identical and measured so: `struct pcm` is `calloc`'d and `pcm->snd_node` is
-  written only inside that `#ifdef`, so the argument is always `NULL` and upstream returns immediately on
-  `NULL`. Without the patch the archive builds, passes `nm -u` *and* passes the ARM gate, and only fails
-  at link — which is what `assert_links()` is for.
+  Gating it is behaviour-identical and measured so: `struct pcm` is `calloc`'d and `pcm->snd_node` written
+  only inside that `#ifdef`, so the argument is always `NULL` and upstream returns immediately on `NULL`.
+  Without the patch the archive builds, passes `nm -u` *and* the ARM gate, and fails only at link — which
+  is what `assert_links()` is for.
 - ⚠️ **The ARM-safety gate runs on `libtinyalsa.a` inside `build-deps.sh`**, because nothing in `build/`
   links it yet. It does disassemble every archive member (measured), but its `checked=1` is a file count.
 
@@ -82,11 +81,10 @@ because scp happens to carry the source file's mode, and invisible on a Windows 
 is a DrvFs mount that reports every file executable and discards `chmod` outright. Do not add a
 second list.
 
-**The deploy verifies itself.** After `chmod`, all 19 executables are md5-compared against `build/`
-and a mismatch is fatal with a per-file diff — a truncated scp, a full filesystem, or a surviving
-process holding an old inode (the stale-binary failure mode below) otherwise all look like a clean
-deploy. Also
-`./build-and-deploy.sh <ip>` validates the IP and the mode *before* compiling all 33 targets, and it
+**The deploy verifies itself.** After `chmod`, every executable is md5-compared against `build/` and a
+mismatch is fatal with a per-file diff — a truncated scp, a full filesystem, or a surviving process
+holding an old inode (the stale-binary failure mode below) otherwise all look like a clean deploy.
+`./build-and-deploy.sh <ip>` also validates the IP and the mode *before* compiling anything, and it
 `cd`s to its own directory, so it can be invoked by path.
 
 ## The common library
@@ -322,22 +320,15 @@ Two corollaries, both learned from the same bug:
 **And the corollary that cost a wedged app: the predicate must cover pending *input*, not just a
 pending draw.** If the component reads its buttons inside the draw path, then a frame the loop
 declines to run is also **an input event the component never sees** — so a predicate that only
-reports "I owe a frame" goes quiet the moment the screen settles and the buttons die. It is not
-enough that most callers happen to have an input-activity branch of their own:
-
-| Game | `else { /* static screens: redraw on input activity */ }` |
-|---|---|
-| tetris, snake, frogger, pong, platformer, brick_breaker | yes — a tap produces a frame, so the buttons worked |
-| **samegame** | **no** — its dirty flag is a pure visible-state diff (screen, highlight, score, blocks, mouse, anim), and a tap on an overlay changes none of them |
-
-So samegame's game-over screen drew correctly and then went completely unresponsive — all three
-buttons dead, no other handler on that screen, only killable over SSH (reported from the panel
-2026-08-02, fixed the same day). `gameover_needs_redraw()` now returns true on three grounds, and
-each is load-bearing:
+reports "I owe a frame" goes quiet the moment the screen settles and the buttons die. Do not rely on
+the caller having an input-activity `else` branch of its own: samegame's dirty flag is a pure
+visible-state diff and a tap on an overlay changes none of it, so its game-over screen drew correctly
+and was then completely unresponsive — all three buttons dead, no other handler on that screen, only
+killable over SSH. `gameover_needs_redraw()` returns true on three grounds, each load-bearing:
 
 | Ground | Why |
 |---|---|
-| `pending_draw` | the original fix — the multi-frame machine owes the screen a frame |
+| `pending_draw` | the multi-frame machine owes the screen a frame |
 | `ts.pressed \|\| ts.held` | there is input to act on, and only a drawn frame lets us act on it |
 | any button's `was_pressed` | `button_check_press()` clears that latch only on a frame where the button is **not** touched. At `FRAME_DELAY_IDLE_US` a press and its release can both land in one `touch_poll()`, so there may be no `held`/`released` frame at all — and then the *next* press is silently eaten. Ask the buttons, not the touch state |
 
@@ -388,18 +379,15 @@ tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything the 
 duration wants a `get_time_ms()` delta.
 
 **Derive state; don't accumulate it, and don't let a marker mean two things.** Three separate game
-bugs were one shape, and in each the fix was to make the derived value derived rather than to patch
-the failing site:
-
-| Shape | It looked like |
-|---|---|
-| a multiplier re-applied to a figure that already contains it | `brick_breaker`'s `effect_mult` went onto `Ball.speed`, so +2 → +1 gave `1.5 × 1.25` — **SLOW DOWN made the ball faster** |
-| a sentinel every other site reads as something else | a brick's `health = -1` meant "indestructible", but five sites tested `health <= 0` = "destroyed" — invisible and no collision |
-| publishing a slot nothing wrote | `snake`'s `length++` exposed `body[length]`, which the shift never writes — `{0,0}` on the first grow, a stray cell at the grid origin |
-
-So give the value **one writer** and read the rest from it: `ball_apply_speed()` is the only writer
-of `Ball.speed` and reads a separate `base_speed`; `brick_is_destroyed()` is the only test;
-the new snake segment takes the tail cell captured *before* the shift.
+bugs were one shape — a multiplier re-applied to a figure that already contained it (`brick_breaker`'s
+`effect_mult` onto `Ball.speed`, so **SLOW DOWN made the ball faster**), a sentinel every other site
+read as something else (a brick's `health = -1` for "indestructible" against five `health <= 0`
+"destroyed" tests, so it was invisible and had no collision), and a published slot nothing wrote
+(`snake`'s `length++` exposing a `body[length]` the shift never writes, a stray cell at the grid
+origin). In each the fix was to make the derived value derived rather than to patch the failing site:
+give it **one writer** and read the rest from it. `ball_apply_speed()` is the only writer of
+`Ball.speed` and reads a separate `base_speed`; `brick_is_destroyed()` is the only test; the new snake
+segment takes the tail cell captured *before* the shift.
 
 Two things that make this class quick to confirm and safe to fix:
 
@@ -462,22 +450,11 @@ but unpressable. Hence two macro families:
 | `SCREEN_VISIBLE_*` | the full logical screen | backgrounds, borders, titles, status/score rows, game playfields, read-only info pages |
 | `SCREEN_SAFE_*` | visible **∩** touchable | buttons, toggles, tab bars, touch grids, anything hit-tested |
 
-Measured on RW09 2026-08-01 (the 16:53 reference capture) with `touch_raw`'s SWEEP and INSET modes
-(calibration and bezel zeroed, so a drawn pixel is a panel pixel):
-
-| Axis end | raw limit first emitted at panel | flat (saturated) band |
-|---|---|---|
-| X left | ~0–12 | ~0–12 px |
-| X right | ~790–799 | ~0–9 px |
-| **Y top** | **~30** | **~30 px** |
-| **Y bottom** | **~450** | **~29 px** |
-
-Every edge *does* drive raw to its limit — all 16 sweep buckets on all four edges — but the value is
-clipped flat over that band. A bezel press alone **cannot** tell "clipping starts at the edge" from
-"clipping starts 30 px inside it", which is why two earlier revisions of this file got it wrong in
-opposite directions: first blaming an electrode array "~11 mm shorter than the LCD" (wrong), then
-declaring every pixel touchable and a dead band a bug (also wrong). The interior fit, which never
-sees an edge sample, independently predicts panel 30 / 450 — same answer, different method.
+The saturated band is ~30 px inside each Y edge and ~0–12 px inside each X edge, measured on RW09 with
+`touch_raw`'s SWEEP and INSET modes; every edge *does* drive raw to its limit, but the value is clipped
+flat over that band, and the interior fit predicts the same panel 30 / 450 by a different method. The
+table, and why two earlier revisions of this rule got it wrong in *opposite* directions:
+[`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
 
 At bezel T=11 B=14 that capture gives a **~17 px top / ~16 px bottom** logical inset with X ≈ 0. **Do
 not treat those digits, or a zero X inset, as properties of the hardware:** the fit is re-run per unit
@@ -677,29 +654,23 @@ Two smaller holes closed with it, both worth not reopening: `poll_gamepad()` **z
 `gamepad_fd < 0`** (a stick unplugged while deflected otherwise asserts its direction forever), and
 `gamepad_rescan()` clears `held_latched[]` (a key held at unplug time never gets its key-up).
 
-**A `TouchRegion` virtual D-pad is safe again, but still usually the wrong design.** They were removed
-from frogger and platformer on 2026-08-02 because of the latch, and from snake on 2026-08-03
-for two other reasons that outlived it: snake already hopped relative to the head, so the regions
-were a redundant second input path, and its four regions *overlapped* — UP/DOWN were the full-width
-top/bottom halves of the grid while LEFT/RIGHT were the full-height left/right halves, so every in-grid
-tap asserted two directions at once. So **no app calls `gamepad_set_touch_regions()`** — the only
-caller left is `tests/gamepad_latch_test.c` — and `gamepad_draw_touch_controls()` has **no** caller at
-all; both are kept as library surface. Note the latter's boxes were
-drawn at fixed positions that never matched the regions they claimed to represent, in either game.
+**A `TouchRegion` virtual D-pad is safe again, but still usually the wrong design.** Snake's four
+regions *overlapped* — UP/DOWN the full-width top/bottom halves of the grid, LEFT/RIGHT the full-height
+left/right halves, so every in-grid tap asserted two directions at once — and they duplicated the
+head-relative input path it already had. So **no *app* calls `gamepad_set_touch_regions()`**; the only
+caller is `tests/gamepad_latch_test.c`, and `gamepad_draw_touch_controls()` has **no** caller at all.
+Both are kept as library surface; the latter's boxes never matched the regions they claimed to draw.
 
 Prefer a **tap relative to the object being controlled** over a virtual pad — frogger hops the frog
 towards wherever you tap in the playfield, which needs no regions, cannot latch, and makes the whole
 playfield one target. Where that does not map (platformer needs simultaneous run + jump), say so on the
 welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
 
-**What you can and cannot test from a script.** Synthesising input *on the device* needs `/dev/uinput`,
-and this kernel has `CONFIG_INPUT_UINPUT` unset — no device node, no module. `tests/touch_inject.c`'s
-`write()` to `/dev/input/event0` therefore succeeds, reports success, and delivers nothing to any
-reader: evdev's `write()` path is for **output** events (force feedback, LEDs), not for synthesising
-input, so there is nothing to "fix" in it. Verified on RW09 2026-08-02 by injecting a tap at the
-computed centre of tetris' `TAP TO START` and capturing an unchanged `/dev/fb0`. Script-side you can
-launch a binary over SSH and `cat /dev/fb0` to check the **first** screen — the one drawn before any
-input — and that is all; everything past it needs a human at the panel. See `../IMPROVEMENT_PLAN.md` C6.
+**What you can and cannot test from a script.** `CONFIG_INPUT_UINPUT` is unset in this kernel — no node,
+no module — so `tests/touch_inject.c`'s `write()` to `/dev/input/event0` succeeds, reports success and
+delivers nothing: evdev's `write()` path is for **output** events, and there is nothing to "fix" in it.
+Script-side you can launch a binary over SSH and `cat /dev/fb0` to check the **first** screen and no
+further; everything past it needs a human at the panel (`../IMPROVEMENT_PLAN.md` C6).
 
 But that is a limit on *the device*, not on the code: `gamepad.c`'s own state machine is fully testable
 on the host, and `tests/gamepad_latch_test.c` does it. `gamepad_poll()` takes the touch coordinate as a
@@ -747,20 +718,13 @@ process and only relaunching fixes it. Platformer was the one app of ten without
 same panel report. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
 
 ⚠️ **The rescan fixes a stale fd, not a dead port — and the two are complementary.** It re-`open()`s
-`/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one. Measured 2026-08-13
-on `.188`: MUSB powers the port **only for a device attached at the moment the driver probes**, so a unit
-booted with an empty port has no node for this poll to find, for the rest of that boot. Once the port is
-live, an unplug/replug re-enumerates (measured across a 95 s gap) and this poll picks it up exactly as
-intended. So a recovery needs **both** halves — something to make the device enumerate, this poll to pick
-it up without a relaunch — and neither alone is enough. Do not read the 5 s poll as "unplug/replug
-recovers".
-
-⚠️ **Half one is a driver re-probe (`/etc/init.d/usb-host recover`), not a sysfs write.** An earlier
-version of this file named `echo host > .../musb-hdrc.0.auto/mode` as the write that recovers the port; it
-is a **silent no-op** (`omap2430_ops` has no `.set_mode`, so the store reports success having done
-nothing), and `a_wait_bcon` is inert on omap2430. Nor is `mode` diagnostic — it reads `a_idle` with a pad
-enumerated and a game responding. Use `$MUSB/vbus`. See `../IMPROVEMENT_PLAN.md` B32 and
-[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb) before building anything on this.
+`/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one, and a unit booted
+with an empty port has no node for this poll to find for the rest of that boot: MUSB powers the port only
+for a device attached at the moment the driver probes (measured 2026-08-13 on `.188`). A recovery needs
+**both** halves — `/etc/init.d/usb-host recover`, a driver re-probe and **not** a sysfs write to `mode`
+(a silent no-op on this SoC), to make the device enumerate, and this poll to pick it up without a
+relaunch. Do not read the 5 s poll as "unplug/replug recovers", and read
+[`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb) before building anything on it.
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way
