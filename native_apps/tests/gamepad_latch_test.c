@@ -1,4 +1,9 @@
-/* Host-side regression for gamepad.c's held-state model (IMPROVEMENT_PLAN B2).
+/* Host-side regression for gamepad.c's held-state model: an event-driven source
+ * (pad button, D-pad hat, keyboard) keeps its level in GamepadManager.held_latched[]
+ * because a key-up may be many frames away, while an absolute-position source
+ * (touch region, analog stick) is rebuilt every poll so it cannot latch.  Both
+ * used to write the caller's InputState and only the first kind was ever cleared,
+ * which left a virtual D-pad asserted for the life of the process.
  *
  * Runs on the DEV MACHINE with native gcc, not on the device:
  *
@@ -126,7 +131,7 @@ static void test_touch_region_releases(void) {
     expect_bool("still down: LEFT held", st.buttons[BTN_ID_LEFT].held, true);
     expect_bool("still down: no repeated press edge", st.buttons[BTN_ID_LEFT].pressed, false);
 
-    /* Finger lifted.  THIS is B2: held used to stay true forever here. */
+    /* THIS is the latch the suite exists for: held used to stay true forever here. */
     gamepad_poll(&gm, &st, 0, 0, false);
     expect_bool("lifted: LEFT no longer held", st.buttons[BTN_ID_LEFT].held, false);
     expect_bool("lifted: LEFT released edge", st.buttons[BTN_ID_LEFT].released, true);
@@ -310,7 +315,7 @@ static void test_sources_or_together(void) {
 }
 
 int main(void) {
-    printf("gamepad held-state regression (IMPROVEMENT_PLAN B2)\n");
+    printf("gamepad held-state regression (latched events vs per-frame positions)\n");
 
     test_touch_region_releases();
     test_key_and_hat_latch();

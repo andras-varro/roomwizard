@@ -57,7 +57,7 @@ RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras factory sweeps"
 # only the ability to undo a commissioning it can no longer actually perform.
 # The gate is the host-side full-card backup, which is asked for once and up
 # front — a strictly better recovery path than the on-device one.
-# `--keep-factory` is the deliberate opt-out.  IMPROVEMENT_PLAN.md C11.
+# `--keep-factory` is the deliberate opt-out.
 RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"
 
 # The ones --keep-<name> can switch off.  `base` is not among them.

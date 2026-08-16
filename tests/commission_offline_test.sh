@@ -31,7 +31,7 @@
 # ⚠️ One thing is NOT controlled here, deliberately: a binary that really does
 # contain an sdiv. This host's compiler will not emit one for Cortex-A8, so there
 # is no way to build the positive case without hand-assembling it —
-# native_apps/check-arm-safe.sh carries that reasoning and SYSTEM_ANALYSIS.md#61
+# native_apps/check-arm-safe.sh carries that reasoning and SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide
 # the two ways to get a wrong answer out of the gate. What IS controlled is both
 # ways the gate can lie by omission: a bundle with zero ARM binaries (2g) and a
 # host with no arm objdump (2j, 2k), which is the failure F10 warns about by name.
@@ -313,9 +313,9 @@ expect_fires 'not self-consistent' "2h a manifest entry with no staged file is r
 # ── --no-clean must SAY that it leaves D7b open rather than quietly doing so.
 run "$BUNDLE" "$REPO" --no-clean
 if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'websign in place'; then
-    ok "2i --no-clean warns that the host name will be overwritten (D7b)"
+    ok "2i --no-clean warns that the host name will be overwritten on boot"
 else
-    bad "2i --no-clean warns that the host name will be overwritten (D7b)"
+    bad "2i --no-clean warns that the host name will be overwritten on boot"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

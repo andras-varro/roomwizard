@@ -115,8 +115,8 @@
 
 /* The old 40 px calibration-target inset lived here. It is gone on purpose:
  * targets that close to the edge sit inside the band where raw compresses, and
- * fitting through them is what produced a phantom horizontal inset for months
- * (IMPROVEMENT_PLAN.md B3a). Target geometry now comes from common/touch_calib.h. */
+ * fitting through them is what produced a phantom horizontal inset for months.
+ * Target geometry now comes from common/touch_calib.h. */
 #define CALIB_FILE        "/etc/touch_calibration.conf"
 #define FB_DEVICE         "/dev/fb0"
 #define TOUCH_DEVICE      "/dev/input/event0"
@@ -506,7 +506,9 @@ static void do_led_test(int brightness_pct) {
 
 static void apply_backlight(int brightness_pct) {
     /* Live preview of the slider value — unscaled on purpose: the slider IS the
-     * scale factor, so hw_set_backlight() would apply the outgoing one (B23). */
+     * scale factor, so hw_set_backlight() would apply the outgoing one.  The raw
+     * setter also owns the sysfs path; a private copy here named a node that
+     * does not exist on this device and the preview silently did nothing. */
     if (brightness_pct < 0)   brightness_pct = 0;
     if (brightness_pct > 100) brightness_pct = 100;
     if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)
@@ -1646,7 +1648,7 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
  *
  *   - a 9-tap calibration whose crosshairs sat 40 px in, inside the band where
  *     raw compresses, so the fit slope came out shallow and invented a
- *     horizontal inset that does not exist (IMPROVEMENT_PLAN.md B3a); and
+ *     horizontal inset that does not exist; and
  *   - a bezel adjuster that drew its reference frame on the *logical* edge,
  *     i.e. measured the bezel through the bezel.
  *
@@ -2131,7 +2133,7 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
      * is hit-tested through a mapping already known to work. The fitted range
      * goes live only at WIZ_CONFIRM, behind a countdown. The old flow did the
      * opposite — it hit-tested ACCEPT/REDO through the new fit, so a bad fit
-     * left neither of them pressable (IMPROVEMENT_PLAN.md B3). */
+     * left neither of them pressable. */
 
     int tap_rx[WIZ_MAX_TARGETS][TOUCH_CALIB_TAPS];
     int tap_ry[WIZ_MAX_TARGETS][TOUCH_CALIB_TAPS];

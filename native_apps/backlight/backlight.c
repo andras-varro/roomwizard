@@ -56,8 +56,11 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // Read-back mode: the only way to check the get/set round trip on a device
-    // with no keyboard (IMPROVEMENT_PLAN B9)
+    // Read-back mode: the only caller of hw_get_backlight() that PRINTS the
+    // value — device_tools and the two hardware tests read it only to restore
+    // it afterwards — so this is how the get/set round trip gets checked from a
+    // shell. hw_get_backlight() answers in setter space, so
+    // `backlight "$(backlight get)"` must leave the panel where it was.
     if (strcmp(argv[1], "get") == 0) {
         if (hw_init() < 0) {
             fprintf(stderr, "Warning: Hardware initialization reported issues\n");

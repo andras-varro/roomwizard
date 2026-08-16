@@ -20,13 +20,13 @@
 # is unreachable from anywhere these units are used. That mapping is baked into
 # the image, so it is the same on every unit cloned from it. Setting
 # /etc/hostname alone leaves it in place, and anything resolving its own name
-# still gets the wrong answer. See IMPROVEMENT_PLAN.md D7.
+# still gets the wrong answer.
 #
 # Why /etc/dhclient.conf too: it is the THIRD place the name is stored, and the
 # one a DHCP server — and therefore a router's device list — actually reads.
 # Measured on a unit in service on 2026-08-05: renamed months earlier, and still
 # announcing `send host-name "RW09";`. Nothing in this repo wrote that file until
-# now (IMPROVEMENT_PLAN.md D7b item 3).
+# now — it is the third of the three places, after /etc/hostname and /etc/hosts.
 #
 # Usage: commissioning/set-hostname.sh NAME [ROOTFS]
 #   NAME    RFC-1123 single label. No dots — mDNS appends .local itself, and a

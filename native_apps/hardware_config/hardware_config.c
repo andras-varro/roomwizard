@@ -109,7 +109,9 @@ static void do_led_test(int brightness_pct) {
 
 static void apply_backlight(int brightness_pct) {
     /* Live preview of the slider value — unscaled on purpose: the slider IS the
-     * scale factor, so hw_set_backlight() would apply the outgoing one (B23). */
+     * scale factor, so hw_set_backlight() would apply the outgoing one.  The raw
+     * setter also owns the sysfs path; a private copy here named a node that
+     * does not exist on this device and the preview silently did nothing. */
     if (brightness_pct < 0)   brightness_pct = 0;
     if (brightness_pct > 100) brightness_pct = 100;
     if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)

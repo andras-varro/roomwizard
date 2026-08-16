@@ -167,8 +167,7 @@ typedef struct {
      * in the caller's InputState, so a caller that zeroes or swaps its
      * InputState can never desync it.  Sources that report an absolute
      * position instead (touch regions, analog stick) are deliberately NOT in
-     * here: they are rebuilt per frame, which is what stops them latching
-     * (IMPROVEMENT_PLAN B2). */
+     * here: they are rebuilt per frame, which is what stops them latching. */
     bool held_latched[BTN_ID_COUNT];
 
     /* Internal previous-frame state for mouse button edge detection */

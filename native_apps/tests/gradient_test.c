@@ -13,7 +13,7 @@
  *       common/framebuffer.c common/hardware.c common/config.c \
  *       common/touch_input.c -lm && ./build/gradient_test
  *
- * What it asserts, and why (IMPROVEMENT_PLAN B7): the channel deltas used to be
+ * What it asserts, and why: the channel deltas used to be
  * computed in uint32_t, so a DESCENDING gradient — bottom channel darker than
  * top, which is what platformer's sky RGB(135,206,235) -> RGB(100,180,220) is on
  * all three channels — wrapped (br - tr) to ~4.29e9.  The following division
@@ -104,7 +104,7 @@ int main(void) {
     /* Ascending — always worked, kept so a "fix" cannot regress it. */
     run("ascending", RGB(10, 20, 30), RGB(200, 210, 220));
 
-    /* Descending on all three channels: platformer's sky, the B7 reproducer. */
+    /* Descending on all three channels: platformer's sky, the wrap reproducer. */
     printf("\n");
     run("descending (platformer sky)", RGB(135, 206, 235), RGB(100, 180, 220));
 

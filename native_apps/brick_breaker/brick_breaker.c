@@ -136,7 +136,7 @@ typedef struct {
      * pair by ball_apply_speed().  Keeping the multiplier out of the stored
      * value is the whole point: it used to be re-applied to a figure that
      * already contained it, so the effects compounded and SLOW DOWN from +2 to
-     * +1 made the ball faster (1.5 * 1.25) — ../IMPROVEMENT_PLAN.md B13h. */
+     * +1 made the ball faster (1.5 * 1.25). */
     float base_speed;
     float speed;
     bool  active;
@@ -151,8 +151,8 @@ typedef struct {
  * reachable by the `health--` a normal hit does.  So "destroyed" is
  * health == 0 *exactly* — a `health <= 0` test swallows the indestructible ones
  * too, which is what made them invisible and non-colliding from level 5 up, and
- * left both their bounce path and their stripe rendering as dead code
- * (../IMPROVEMENT_PLAN.md B13b).  Ask this predicate, never the sign. */
+ * left both their bounce path and their stripe rendering as dead code.
+ * Ask this predicate, never the sign. */
 #define BRICK_HEALTH_INDESTRUCTIBLE (-1)
 
 typedef struct {
@@ -683,8 +683,7 @@ static void spawn_powerup(float x, float y) {
 static void apply_powerup(PowerUpType type) {
     /* Non-blocking 50 ms green flash.  This used to be hw_set_led() here and
      * `usleep(50000); hw_leds_off();` at the end of the function — a sleep in an
-     * update path, which freezes touch and rendering along with it
-     * (../IMPROVEMENT_PLAN.md B14). */
+     * update path, which freezes touch and rendering along with it. */
     hw_led_pulse_start(&fx_pulse, LED_GREEN, 1, 50, get_time_ms());
 
     switch (type) {
@@ -1160,7 +1159,7 @@ static void update_game(void) {
     if (game.ball_count == 0 && game.ball_launched && game.clear_cooldown == 0) {
         game.lives--;
         /* Non-blocking 300 ms red flash — the usleep() that was here froze the
-         * panel for 300 ms on every lost ball (../IMPROVEMENT_PLAN.md B14). */
+         * panel for 300 ms on every lost ball. */
         hw_led_pulse_start(&fx_pulse, LED_RED, 1, 300, get_time_ms());
         audio_fail(&audio);
 

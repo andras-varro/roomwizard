@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# The shared SSH gate (IMPROVEMENT_PLAN.md F16). Sourced unconditionally, unlike
+# The shared SSH gate (../lib/rw-ssh.sh). Sourced unconditionally, unlike
 # ../lib/rw-bundle.sh which only the --bundle path needs.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
@@ -61,7 +61,8 @@ warn() { echo -e "[$(date '+%H:%M:%S')] ${BLUE}  ! $*${NC}"; }
 err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── argument validation ─────────────────────────────────────────────────────
-# Validate before building, not at the first ssh (../IMPROVEMENT_PLAN.md B19).
+# Validate before building, not at the first ssh — a bad argument otherwise surfaces
+# only after every target has been compiled.
 usage() {
     echo "Usage: $0 [<ip>] [run|set-default]"
     echo "       $0 --bundle <dir>"
@@ -197,7 +198,8 @@ echo "════════════════════════�
 
 # Check SSH reachable
 info "Testing SSH connection..."
-# The shared gate (../lib/rw-ssh.sh). IMPROVEMENT_PLAN.md F16.
+# The shared gate (../lib/rw-ssh.sh): "down" and "up but refusing our key" are
+# different answers, and only the second has a remedy worth offering.
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
@@ -205,7 +207,7 @@ ok "SSH OK"
 #
 # One stop implementation, on the device, matching on the executable — it catches
 # a vnc_client the launcher started, which the `killall vnc_client` that used to
-# be here could not reliably do (../IMPROVEMENT_PLAN.md B20, B25).  Do not re-add
+# be here could not reliably do.  Do not re-add
 # a killall here.
 info "Stopping running apps (device init script)..."
 ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then

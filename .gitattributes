@@ -50,7 +50,7 @@ device-files/** text eol=lf
 *.zip binary
 *.dat binary
 
-# Teardown photos (SYSTEM_ANALYSIS.md Appendix A) are the only images the repo
+# Teardown photos (cited throughout HARDWARE.md) are the only images the repo
 # carries; they are stored in Git LFS so a clone stays small. This must come
 # AFTER the `*.jpg binary` line above - later rules win, and `binary` would
 # otherwise clobber the diff/merge attributes LFS needs.

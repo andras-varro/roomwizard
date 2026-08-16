@@ -16,7 +16,7 @@
 #
 # So the vendor tree here is BUILT, with real symlinks, in $(mktemp -d) — WSL's
 # own filesystem, because /mnt/c is DrvFs and cannot hold a symlink either. Its
-# rc*.d contents are SYSTEM_ANALYSIS.md#52's measured keep-lists plus invented
+# rc*.d contents are SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode's measured keep-lists plus invented
 # vendor service names that must be swept.
 #
 # ── What each group of cases is for ────────────────────────────────────────
@@ -282,12 +282,12 @@ expect "$(printf 'sweep\t/etc/rc5.d')"                     "$PLAN_BASE"    "C1 r
 expect "$(printf 'sweep\t/etc/rcS.d')"                     "$PLAN_BASE"    "C2 rcS.d is swept"
 expect "$(printf 'keep\t/etc/rc5.d\tS50watchdog')"         "$PLAN_BASE"    "C3 the HARDWARE watchdog link is kept"
 expect "$(printf 'keep\t/etc/rc5.d\tS09sshd')"             "$PLAN_BASE"    "C4 sshd is kept"
-expect "$(printf 'keep\t/etc/rc5.d\tS30avahi-daemon')"     "$PLAN_BASE"    "C5 the avahi link is kept (D8)"
+expect "$(printf 'keep\t/etc/rc5.d\tS30avahi-daemon')"     "$PLAN_BASE"    "C5 the avahi link is kept (mDNS, so <name>.local resolves)"
 expect "$(printf 'keep\t/etc/rcS.d\tS45mountnfs.sh')"      "$PLAN_BASE"    "C6 S45mountnfs.sh is kept, per the measurement"
 expect "$(printf 'keep\t/home/root/data\t*.hig')"          "$PLAN_BASE"    "C7 high scores are kept by glob"
 expect "$(printf 'keep\t/home/root/data\tcron')"           "$PLAN_BASE"    "C8 cron's spool root is kept"
 expect "$(printf 'truncate\t/home/root/data/cron/tabs/root')" "$PLAN_BASE" "C9 the vendor crontab is truncated, not unlinked"
-expect "$(printf 'del\t/home/root/data/websign')"          "$PLAN_BASE"    "C10 websign is deleted (half the D7b fix)"
+expect "$(printf 'del\t/home/root/data/websign')"          "$PLAN_BASE"    "C10 websign is deleted — half of stopping the boot-time network regenerator, which reads it"
 
 # ⚠️ THE negative control, the same shape as p1's absence from RW_PART_ROLES:
 # rc0.d and rc6.d are shutdown, not startup. They must be unreachable through
@@ -382,7 +382,7 @@ echo "E. the whole clean, against a synthetic vendor card"
 
 CARD="$TMP/card"
 
-# The links a real unit has, from SYSTEM_ANALYSIS.md#52 — measured on a unit in
+# The links a real unit has, from SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode — measured on a unit in
 # service and re-read on a second unit, 2026-08-05.
 KEEP_RCS="S02banner.sh S03sysfs.sh S04udev S05modutils.sh S06alignment.sh S06devpts.sh
           S10checkroot.sh S30procps.sh S30ramdisk S35mountall.sh S37populate-volatile.sh
@@ -545,7 +545,7 @@ exists "$CARD/root/opt/games/snake"         "E9 /opt/games survives"
 exists "$CARD/root/opt/vnc_client"          "E10 /opt/vnc_client survives"
 exists "$CARD/root/usr/lib/libc.so.6"       "E11 libc survives — no rule may reach /lib or /usr/lib wholesale"
 exists "$CARD/root/usr/sbin/sshd"           "E12 sshd survives"
-exists "$CARD/root/usr/sbin/avahi-daemon"   "E13 avahi-daemon survives (D8: the deep clean used to delete it)"
+exists "$CARD/root/usr/sbin/avahi-daemon"   "E13 avahi-daemon survives — the deep clean used to delete the daemon the rc5.d link points at"
 exists "$CARD/data/snake.hig"               "E14 high scores survive"
 exists "$CARD/data/cron/tabs/root"          "E15 the crontab file still exists"
 exists "$CARD/data/lost+found"              "E16 p2 lost+found survives"
@@ -594,7 +594,7 @@ gone "$CARD/root/usr/sbin/snmpd"          "E35 snmpd is gone"
 gone "$CARD/root/usr/sbin/wpa_supplicant" "E36 wpa_supplicant is gone (no WiFi on this board)"
 gone "$CARD/root/usr/lib/ts"              "E37 tslib is gone"
 gone "$CARD/log/browser.err"              "E38 stale vendor logs on p3 are swept"
-gone "$CARD/data/websign"                 "E39 websign is gone — this is what removes D7b's window"
+gone "$CARD/data/websign"                 "E39 websign is gone — the regenerator's input, so it cannot rewrite the network files at boot"
 gone "$CARD/data/rwmeetingcache"          "E40 an invented p2 vendor directory was swept"
 gone "$CARD/data/test.hex"                "E41 the factory burn-in pattern is gone"
 gone "$CARD/log/Xorg.0.log"               "E42 p3 was swept"
@@ -666,7 +666,7 @@ exists "$CARD/backup/factory/uImage-system-original" "E65 the fallback kernel su
 # `sweeps` group and --remove runs without it — so relying on the sweep alone
 # leaves the vendor's logs on a --remove'd device, which the heredoc --remove used
 # to be did not. Measured: deleting those eight rules and relying on the sweep
-# fails ZERO cases before these four exist, and the C11 plan diff was the only
+# fails ZERO cases before these four exist, and `tests/c11_plan_diff.sh` was the only
 # thing that caught it. A gap a one-off migration script finds and the regression
 # suite does not is a gap that comes back.
 gone "$CARD/log/browser.err"        "E66 --remove deletes the named vendor logs, not just the sweep"

@@ -33,11 +33,13 @@ existing config on the device.
 into the back buffer. Two consequences:
 
 - **Screenshots need `--bpp 16`.** Native apps run 32bpp; the mode depends on which app ran last.
-- **Do not call the `native_apps/common` draw helpers from this component.** `framebuffer.c`
-  sizes its back buffer by hardware bpp but `fb_clear()` and `fb_draw_pixel()` unconditionally
-  write 4 bytes per pixel. At 16bpp a single `fb_draw_text()` call overflows the back buffer by
-  768 KB. This component survives only because it hand-writes `uint16_t` and never calls them.
-  See `../IMPROVEMENT_PLAN.md` B1 — until that is fixed, the restriction stands.
+- **Do not call the `native_apps/common` draw helpers from this component.** This component draws by
+  hand-writing `uint16_t`, and mixing the two is how the 16bpp overflow got in: `fb_clear()` and
+  `fb_draw_pixel()` once wrote 4 bytes per pixel unconditionally, so a single `fb_draw_text()` call at
+  16bpp overflowed the back buffer by 768 KB. ⚠️ **Measured 2026-08-15: they are bpp-aware now** —
+  `fb_clear()` sizes its `memset` in bytes and packs 565 otherwise, `fb_draw_pixel()` goes through
+  `fb_store(…, FB_IS_16BPP(fb))`. So the overflow itself is fixed; what has *not* happened is anything
+  calling them at 16bpp. The restriction stands until something exercises that path on the panel.
 
 ## Screen size is runtime, not 800×480
 
@@ -130,7 +132,7 @@ Two that are fixed, both worth not undoing:
 
 - **Session teardown goes through `vnc_client_destroy()`, never bare `rfbClientCleanup()`.** Cleanup
   does not free `client->frameBuffer` — `vnc_malloc_fb()` owns it — so every reconnect leaked a full
-  framebuffer, ~8.3 MB against a 1080p host on a 234 MB device (`../IMPROVEMENT_PLAN.md` B11).
+  framebuffer, ~8.3 MB against a 1080p host on a 234 MB device — OOM after ~25 reconnects.
 - **Dead peers are detected by TCP keepalive, not by an application timeout.**
   `vnc_enable_keepalive()` runs after `rfbInitClient()` (no socket before that) and sets idle 20 s /
   3 probes / 10 s apart, so a silent TCP death surfaces in ~50 s — inside the 60 s hardware watchdog

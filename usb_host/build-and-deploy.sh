@@ -45,7 +45,7 @@ set -e
 _START_SECONDS=$(date +%s)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# patch_dtb.py now takes <in> <out> on argv (../IMPROVEMENT_PLAN.md B19 — it used
+# patch_dtb.py now takes <in> <out> on argv (it used
 # to open 'uImage-system' relative to the cwd, so this script worked only because
 # deploy-all.sh wrapped it in a subshell cd). The cd stays for the local build
 # paths; nothing depends on it any more.
@@ -105,7 +105,7 @@ else
         esac
     done
     # Validated before building, not at the first ssh: this script builds kernel
-    # modules and patches a kernel image (../IMPROVEMENT_PLAN.md B19).
+    # modules and patches a kernel image.
     IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
     if [[ -n "$DEVICE_IP" && ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
         echo "Not an IPv4 address: $DEVICE_IP"; echo ""; usage
@@ -299,7 +299,7 @@ info "$(rw_provision_plan_summary "$USB_PLAN")"
 
 # `install` is the one verb the remote interpreter cannot do alone: the source
 # bytes are on this host, so they go over scp first and it only sets the mode.
-# ⚠️ The loop is lib/rw-provision.sh's, not a copy — see B28: this script and
+# ⚠️ The loop is lib/rw-provision.sh's, not a copy, and history says why: this script and
 # commissioning/provision.sh each had one, both reading the plan on stdin with an
 # `ssh` in the body, and both therefore installed exactly one file.
 rw_provision_push_installs "$USB_PLAN" "$REPO_ROOT" "$DEVICE" \

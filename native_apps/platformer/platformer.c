@@ -753,7 +753,7 @@ static void init_buttons(void) {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     /* screen_draw_welcome*() positions start_button below the measured
-     * instruction block (B3k); these coordinates only cover a hit-test that
+     * instruction block; these coordinates only cover a hit-test that
      * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button,
                 LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
@@ -786,10 +786,11 @@ static void init_game(void) {
     reset_game();
 
     /* No virtual D-pad TouchRegions and no on-screen controller overlay.
-     * gamepad.c never clears a region's .held (B2), so every zone latched on
+     * gamepad.c used to never clear a region's .held, so every zone latched on
      * first touch: the player ran in one direction forever and the overlay's
-     * boxes stayed highlighted light-blue.  The boxes were also drawn in
-     * different places from the regions that actually received the taps.  This
+     * boxes stayed highlighted light-blue.  That latch is fixed now, but the
+     * boxes were also drawn in different places from the regions that actually
+     * received the taps.  This
      * game needs a real controller; draw_all() says so on the welcome screen
      * when none is connected, and the touch EXIT button still works either way.
      * Do not add regions back without fixing B2 first. */
@@ -992,7 +993,7 @@ static void check_enemy_collisions(void) {
      * The stomp test reads player.vy, and a stomp *writes* it (STOMP_BOUNCE is
      * negative — upward), so applying the bounce inside the loop made the second
      * of two overlapping enemies fail `vy > 0` and take the fatal branch: landing
-     * on a stack killed the player (../IMPROVEMENT_PLAN.md B13i).  A plain
+     * on a stack killed the player.  A plain
      * `break` after the first stomp is not enough either — it leaves enemy #2
      * alive directly under the player's feet, and the bounce only clears the
      * overlap after ~3 frames at 6.0 px/frame against a 22 px enemy, so the
@@ -1579,7 +1580,8 @@ static void draw_all(void) {
     if (current_screen == SCREEN_WELCOME) {
         fb_clear(&fb, COLOR_BLACK);
         /* This game has no touch controls, so say so up front rather than
-         * shipping a virtual D-pad that latches on (B2, B13k). */
+         * shipping a virtual D-pad: the one this game had latched its zones on
+         * and drew its boxes away from the regions that received the taps. */
         bool no_controller = !input.gamepad_connected && !input.keyboard_connected;
         draw_welcome_screen_warn(&fb, "OFFICE RUNNER",
             "D-PAD: MOVE   A: JUMP   B: RUN\n"
@@ -1635,7 +1637,7 @@ static void draw_all(void) {
     if (current_screen == SCREEN_GAME_OVER) {
         /* No touch_poll() here. handle_input() already polled this frame, and
          * touch_poll() clears TouchState.pressed at entry — a second poll ate the
-         * press edge, so RESTART and EXIT could never fire (IMPROVEMENT_PLAN B13a). */
+         * press edge, so RESTART and EXIT could never fire. */
         TouchState ts = touch_get_state(&touch);
         GameOverAction act = gameover_update(&gos, &fb,
                                              ts.x, ts.y, ts.pressed);
@@ -1682,7 +1684,7 @@ static void handle_input(void) {
     }
 
     /* BTN_BACK always exits to the launcher. Platformer was the only game without
-     * this, which left its game-over screen with no way out (IMPROVEMENT_PLAN B13a). */
+     * this, which left its game-over screen with no way out. */
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
         running = false;

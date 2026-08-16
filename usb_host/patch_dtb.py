@@ -5,8 +5,8 @@
 
 Defaults are `uImage-system` and `uImage-system-patched`, relative to the CURRENT
 DIRECTORY — the contract usb_host/README.md documents and the reason
-usb_host/build-and-deploy.sh has to `cd "$SCRIPT_DIR"` before calling it
-(../IMPROVEMENT_PLAN.md B19).  ⚠️ New callers should pass both paths explicitly:
+usb_host/build-and-deploy.sh has to `cd "$SCRIPT_DIR"` before calling it.
+⚠️ New callers should pass both paths explicitly:
 a rules-driven installer works in a temp directory and must not depend on its cwd.
 
 What it changes and why it cannot be a boot script: the `power` property of the

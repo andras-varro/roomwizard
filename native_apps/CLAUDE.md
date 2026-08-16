@@ -29,13 +29,28 @@ Three rules live in that script's comments and are repeated here only as pointer
 of them wrong is silent:
 
 - ⚠️ **Compile five of upstream's eight sources.** Upstream's own `Makefile` and `CMakeLists.txt` build
-  all eight; `snd_card_plugin.c` `dlopen()`s, and these binaries are `-static`. `assert_no_dl()` refuses
-  the build rather than shipping that.
-- ⚠️ **That subset needs the one-line `pcm_close()` patch** the script applies and asserts. Without it
-  the archive builds, passes `nm -u` *and* passes the ARM gate, and only fails at link — which is what
-  `assert_links()` is for.
+  all eight; `snd_card_plugin.c` `dlopen()`s, and these binaries are `-static` — the same family as the
+  `clock_gettime64` SIGSEGV-before-`main()` trap. The plugin path is dead code anyway
+  (`#ifdef TINYALSA_USES_PLUGINS`, never defined) and the three files add five warnings to a zero-warning
+  tree. `assert_no_dl()` refuses the build rather than shipping that.
+- ⚠️ **That subset needs the one-line `pcm_close()` patch** the script applies and asserts:
+  `src/pcm.c:978` calls `snd_utils_close_dev_node()` **outside** the `#ifdef` guarding its four siblings,
+  and it is **still ungated on upstream master** — so do not expect a version bump to retire the patch.
+  Gating it is behaviour-identical and measured so: `struct pcm` is `calloc`'d and `pcm->snd_node` is
+  written only inside that `#ifdef`, so the argument is always `NULL` and upstream returns immediately on
+  `NULL`. Without the patch the archive builds, passes `nm -u` *and* passes the ARM gate, and only fails
+  at link — which is what `assert_links()` is for.
 - ⚠️ **The ARM-safety gate runs on `libtinyalsa.a` inside `build-deps.sh`**, because nothing in `build/`
   links it yet. It does disassemble every archive member (measured), but its `checked=1` is a file count.
+
+⚠️ **No vendored ALSA header is needed, and that is measured rather than assumed.** The cross
+toolchain's `sound/asound.h` is **ABI-identical** to the device kernel's — `SNDRV_PCM_VERSION` 2.0.14 and
+`SNDRV_CTL_VERSION` 2.0.7 in both, and all 172 diff lines against
+`../usb_host/linux-4.14.52/include/uapi/sound/asound.h` are `__user`/`__force` annotations, guard names
+and one `#include <time.h>`. This matters because **ALSA ioctl numbers embed `sizeof(struct)`**: a struct
+that had grown between 4.14.52 and the toolchain's headers would compile cleanly here and return
+`-ENOTTY` on the device. Re-check it if the toolchain is ever upgraded; do not vendor a header to avoid
+checking.
 
 **Never build a second copy of a dependency that lives here.** ScummVM will point at
 `../native_apps/arm-deps` for tinyalsa, the same way it already links `native_apps/common/framebuffer.o`
@@ -64,12 +79,13 @@ optional — `audio.c` calls into it for every frame count, byte count, envelope
 remote `chmod +x` (passed in as `"$@"` through `ssh bash -s --`) and the md5 verification. It used to
 be two hand-written lists, and `audio_touch_test` was missing from the `chmod` one — harmless only
 because scp happens to carry the source file's mode, and invisible on a Windows host because `/mnt/c`
-is a DrvFs mount that reports every file executable and discards `chmod` outright
-(`../IMPROVEMENT_PLAN.md` B19). Do not add a second list.
+is a DrvFs mount that reports every file executable and discards `chmod` outright. Do not add a
+second list.
 
 **The deploy verifies itself.** After `chmod`, all 19 executables are md5-compared against `build/`
 and a mismatch is fatal with a per-file diff — a truncated scp, a full filesystem, or a surviving
-process holding an old inode (the B20/B25 failure mode) otherwise all look like a clean deploy. Also
+process holding an old inode (the stale-binary failure mode below) otherwise all look like a clean
+deploy. Also
 `./build-and-deploy.sh <ip>` validates the IP and the mode *before* compiling all 33 targets, and it
 `cd`s to its own directory, so it can be invoked by path.
 
@@ -97,7 +113,7 @@ process holding an old inode (the B20/B25 failure mode) otherwise all look like 
 just advances 6·scale px, so a multi-line string renders as one long line. Anything with embedded
 newlines must be split per line by the caller — `screen_draw_welcome*()` does this now, and until
 2026-08-02 it did not, which is why every game's welcome text was one 500 px line centred on the wrong
-width (`../IMPROVEMENT_PLAN.md` B3k).
+width.
 
 `screen_draw_welcome(fb, title, instructions, start_btn)` / `screen_draw_welcome_warn(…, warning, …)`
 **position `start_btn` as well as drawing it** — below the measured instruction (and warning) block,
@@ -164,14 +180,14 @@ Two ordering rules in there are load-bearing and have both been violated in ship
   which `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes
   `touch_region_count`. Snake had this backwards, so its virtual D-pad was dead code; those regions
-  are now deleted outright (B13g) and nothing in the tree registers any, so this rule currently has
+  are now deleted outright and nothing in the tree registers any, so this rule currently has
   no live example — get it right in the app that revives it.
 
 **`app_launcher` launches children with `argv[0]` = `exec_path`, not the manifest's `name=`.** The
 display name is for the grid, not for the process table: passing it made `/proc/<pid>/cmdline` read
 `VNC Client` while the binary was `/opt/vnc_client/vnc_client`, and since busybox `ps w` shows nothing
 without a TTY, that cmdline was the only handle left on a launcher-started app — it cost a session and
-a misdiagnosis (`../IMPROVEMENT_PLAN.md` B25). Do not restore the pretty name. Killing was never the
+a misdiagnosis. Do not restore the pretty name. Killing was never the
 problem: `comm` comes from the file being executed, so it always read `vnc_client`
 (`../SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`).
 
@@ -184,13 +200,14 @@ RGB565 on purpose**, to halve write bandwidth on this memory-bound part, and the
 
 So there are two rules, and until 2026-08-03 the codebase broke both:
 
-- **Every app calls `fb_set_bpp(dev, 32)` before `fb_init()`.** No game did (`../IMPROVEMENT_PLAN.md`
-  B24), so a game launched over SSH after a VNC session inherited 16bpp. Now all 11 remaining
-  `fb_init()` sites pin it. The reason to pin is no longer safety — it is that 16bpp bands every
-  gradient, and how an app looks must not depend on what ran before it.
+- **Every app calls `fb_set_bpp(dev, 32)` before `fb_init()`.** No game did, so a game launched over
+  SSH after a VNC session inherited 16bpp. Every `fb_init()` call site in this tree now pins the depth
+  first — `grep -n 'fb_set_bpp\|fb_init(&' */*.c tests/*.c` is the check, and every `fb_init(&` must
+  have an `fb_set_bpp` immediately above it. The reason to pin is no longer safety — it is that 16bpp
+  bands every gradient, and how an app looks must not depend on what ran before it.
 - **The primitives dispatch on `fb->bytes_per_pixel`.** They used to write `uint32_t`
-  unconditionally, which at 16bpp overran the back buffer — sized `w * h * bpp` — by exactly 2×
-  (B1). Four helpers in `framebuffer.c` (`fb_pack565` / `fb_unpack565` / `fb_store` / `fb_load`) are
+  unconditionally, which at 16bpp overran the back buffer — sized `w * h * bpp` — by exactly 2×.
+  Four helpers in `framebuffer.c` (`fb_pack565` / `fb_unpack565` / `fb_store` / `fb_load`) are
   the only code that knows the format; **the API is unchanged, callers always pass RGB888**. If you
   add a primitive, go through `fb_store()`/`fb_load()` — do not index `back_buffer` as `uint32_t`.
 
@@ -216,7 +233,7 @@ pages are both 1,536,000 bytes, so a wrong `--bpp` decodes garbage at exactly th
    settings slider *previewing* a value — it is choosing that percentage, so scaling by the outgoing
    one shows the wrong brightness. That is what `hw_set_backlight_raw()` is for, and it exists so a
    preview does not carry its own copy of the sysfs path: two of them did, both naming a node that
-   does not exist on this device, so both previews silently did nothing (B23).
+   does not exist on this device, so both previews silently did nothing.
 3. **Call `hw_set_backlight(100)` at both startup and exit.** Startup so the app matches the
    user's preference; exit so the next app inherits a sane value. `snake.c` misses the exit
    call and `app_launcher.c` misses both — do not copy them.
@@ -266,7 +283,7 @@ while (running) {
 
 The `bool drew` matters. Testing `needs_redraw` in the `usleep` after clearing it inside the
 `if` always yields the idle delay, pinning the app to 10 fps — that **was** a real shipped bug, in
-`samegame.c` (`../IMPROVEMENT_PLAN.md` B13c, fixed 2026-08-02). Either capture it first, as above, or
+`samegame.c` (fixed 2026-08-02). Either capture it first, as above, or
 clear the flag *after* the `usleep`.
 
 **A component whose `update()` both draws and reads input has to tell the caller when it still needs
@@ -275,7 +292,7 @@ frames.** The dirty flag is computed by the loop from things the loop can see �
 `gameover_update()` is a `CHECK` → (`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY`
 draws**, so entering game over drew the playfield, ran `CHECK`, returned without drawing, and then
 nothing redrew until the player tapped — the game-over overlay and the high-score keyboard both needed
-a tap to appear (`../IMPROVEMENT_PLAN.md` B22). The component now exposes `gameover_needs_redraw()`
+a tap to appear. The component now exposes `gameover_needs_redraw()`
 and every game ORs it in:
 
 ```c
@@ -320,7 +337,7 @@ each is load-bearing:
 
 | Ground | Why |
 |---|---|
-| `pending_draw` | the original B22 fix — the multi-frame machine owes the screen a frame |
+| `pending_draw` | the original fix — the multi-frame machine owes the screen a frame |
 | `ts.pressed \|\| ts.held` | there is input to act on, and only a drawn frame lets us act on it |
 | any button's `was_pressed` | `button_check_press()` clears that latch only on a frame where the button is **not** touched. At `FRAME_DELAY_IDLE_US` a press and its release can both land in one `touch_poll()`, so there may be no `held`/`released` frame at all — and then the *next* press is silently eaten. Ask the buttons, not the touch state |
 
@@ -333,7 +350,7 @@ static overlay produces no frames — which was the point of asking the componen
 
 **The only `usleep()` in a game is the one at the bottom of the main loop.** Anything else in an
 update or input path stops the world: no `touch_poll()`, no `gamepad_poll()`, no redraw. Every game
-had at least one and they were fixed on 2026-08-03 (`../IMPROVEMENT_PLAN.md` B14). Two shapes, and
+had at least one and they were fixed on 2026-08-03. Two shapes, and
 both have a replacement:
 
 | Shape | Was | Use instead |
@@ -361,11 +378,12 @@ Three things about that, learned from doing it:
 **A per-frame motion constant is a speed only in combination with the frame delay, so sanity-check it
 in px/s.** At 30 fps the conversion is ×30, which makes small-looking numbers unplayably slow: pong
 served every ball at `5.0` px/frame — 150 px/s, and only ~3.5 px/frame along the long axis at a 45°
-serve, so **~7 s to cross the playfield** (B13l). It read as a perfectly ordinary constant in source.
+serve, so **~7 s to cross the playfield**. It read as a perfectly ordinary constant in source, and
+`BALL_START_SPEED` carries the arithmetic in its comment now.
 Two rules follow. Multiply by 30 and ask whether you'd enjoy that speed before you commit the number.
 And never count *frames* where you mean *time* — a dirty-flagged loop's frame rate varies with what the
 app is doing, so a per-iteration counter runs at whatever pace the screen happens to need; that was
-tetris' gravity, which fell ~3× too slow while idle and sped up when a key was held (B13d). Motion
+tetris' gravity, which fell ~3× too slow while idle and sped up when a key was held. Motion
 tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything the player experiences as a
 duration wants a `get_time_ms()` delta.
 
@@ -494,15 +512,15 @@ capped at `FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Consequences:
   (`frogger.c`'s `hud_height = SCREEN_SAFE_TOP + HUD_HEIGHT`) or its own content collides with the
   buttons. Where a drawn rect and a hit-test describe the same target, compute both from **one**
   helper (`hardware_diag.c`'s `diag_exit_rect()`) — two literals that have to agree by hand will
-  eventually not. All of this was swept and fixed on 2026-08-02
-  (`../IMPROVEMENT_PLAN.md` B3e); `grep -n 'button_init(&[a-z_]*, *[0-9]'` is the check.
+  eventually not. All of this was swept and fixed on 2026-08-02;
+  `grep -n 'button_init(&[a-z_]*, *[0-9]'` is the check.
   **When you replace a literal, choose the expression that is byte-identical to it at inset 0** — so
   an uncalibrated panel, where the inset is `0`, is provably unaffected and the diff can only move
   pixels on a panel that has actually been swept. That is what makes this class of change safe to do
   in bulk without re-testing every unit.
   **A literal reserve that is *smaller* than the row is the same bug from the other side**, and it
   shipped: tetris' board used `SCREEN_SAFE_TOP + 55` against a row occupying `SAFE_TOP + 10 .. + 60`,
-  so the buttons were drawn on top of the board *and* the board ran 5 px off the bottom (B3j). Also
+  so the buttons were drawn on top of the board *and* the board ran 5 px off the bottom. Also
   count the **frame**: a `fb_draw_rect()` outline sits *outside* the content rect on every side, so its
   thickness belongs in the vertical budget too, from the same named constant the drawing uses.
 - **A capped row is positioned from the count you draw, not the count you have.** Three HUDs draw a
@@ -518,7 +536,7 @@ capped at `FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Consequences:
   and the other way to get this wrong: HUD text is only *seen*, so it belongs in `SCREEN_VISIBLE_TOP`
   — the band the two-rectangle split exists to keep usable. Stacking it under `SCREEN_SAFE_TOP`
   instead put tetris' `LVL` and frogger's lives icons **behind** the buttons, which are drawn after
-  them (B3i). The pattern both games now use, and the reason it is safe on an uncalibrated panel:
+  them. The pattern both games now use, and the reason it is safe on an uncalibrated panel:
 
   ```c
   int band_h = LAYOUT_MENU_BTN_Y - SCREEN_VISIBLE_TOP;   /* == inset + 10 */
@@ -588,6 +606,10 @@ Display wizard and the `touch_raw` diagnostic both link it — which is what let
 validate the code the wizard actually calibrates with. Do not write a second copy; there were three
 of the fit and two of the sweep, and they drifted.
 
+⚠️ **The sanity gate is not "reject outside `0..4095`"** — that is the clamp bug in gate form. It
+requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which **accepts** the measured-good
+`-279..4382` and rejects a skewed `0..60000`.
+
 After changing it, run the host-side regression. It replays the reference capture's 11 target
 medians, asserts the interior fit still lands on `X 17..4084` / `Y -279..4382`, asserts the curve
 derived from it reproduces that line with **zero** deviation, and — the assertions that matter —
@@ -619,7 +641,7 @@ It is host gcc, not the cross-compiler, so `build-and-deploy.sh` does not run it
 | Knots live at panel dim/4 and 3\*dim/4, and nowhere else | They are implicit in the file format (`TOUCH_KNOT_LO/HI`). Moving them silently reinterprets every stored calibration. |
 
 `touch_enable_calibration()` is a **no-op** — the flag is written but never read, so calibration
-cannot be turned off. Other known defects in this area: `../IMPROVEMENT_PLAN.md` B3.
+cannot be turned off.
 
 **ScummVM and vnc_client each link their own copy of `touch_input.o`.** The build refreshes it, but a
 *deployed* binary keeps whatever it was built with — redeploy **both** after changing touch code, and
@@ -639,7 +661,7 @@ discrete actions; `.held` for continuous movement.
 
 **All three fields are pure outputs of `gamepad_poll()`** — it recomputes them from scratch every call,
 so writing them from an app has no effect past the next poll. `held` is the OR of two kinds of source,
-and the split is the fix for B2 (done 2026-08-03):
+and that split is what stops a virtual D-pad latching (done 2026-08-03):
 
 | Source | Reports | Level lives in |
 |---|---|---|
@@ -656,12 +678,13 @@ Two smaller holes closed with it, both worth not reopening: `poll_gamepad()` **z
 `gamepad_rescan()` clears `held_latched[]` (a key held at unplug time never gets its key-up).
 
 **A `TouchRegion` virtual D-pad is safe again, but still usually the wrong design.** They were removed
-from frogger and platformer on 2026-08-02 (B13k) because of the latch, and from snake on 2026-08-03
-(B13g) for two other reasons that outlived it: snake already hopped relative to the head, so the regions
+from frogger and platformer on 2026-08-02 because of the latch, and from snake on 2026-08-03
+for two other reasons that outlived it: snake already hopped relative to the head, so the regions
 were a redundant second input path, and its four regions *overlapped* — UP/DOWN were the full-width
 top/bottom halves of the grid while LEFT/RIGHT were the full-height left/right halves, so every in-grid
-tap asserted two directions at once. `gamepad_set_touch_regions()` therefore has **zero** callers now,
-as does `gamepad_draw_touch_controls()`; both are kept as library surface. Note the latter's boxes were
+tap asserted two directions at once. So **no app calls `gamepad_set_touch_regions()`** — the only
+caller left is `tests/gamepad_latch_test.c` — and `gamepad_draw_touch_controls()` has **no** caller at
+all; both are kept as library surface. Note the latter's boxes were
 drawn at fixed positions that never matched the regions they claimed to represent, in either game.
 
 Prefer a **tap relative to the object being controlled** over a virtual pad — frogger hops the frog
@@ -698,8 +721,8 @@ if (ts.pressed) {                                          /* WRONG */
 if (button_check_tap(&menu_button, &ts, now)) { … }         /* right — every frame */
 ```
 
-Office Runner's hamburger menu died after its first use and the report came off the panel 2026-08-10
-(`../IMPROVEMENT_PLAN.md` B31). Three things make this class hard to see, and all three are why it needs
+Office Runner's hamburger menu died after its first use and the report came off the panel 2026-08-10.
+Three things make this class hard to see, and all three are why it needs
 a helper rather than care:
 
 - **EXIT hides it.** An exit button only ever needs to fire once, because it ends the process — same
@@ -741,7 +764,7 @@ enumerated and a game responding. Use `$MUSB/vbus`. See `../IMPROVEMENT_PLAN.md`
 
 Every app should handle `BTN_ID_BACK` as "exit / back" — `fb_fade_out()` then `running = false`, as
 `frogger.c` does. Platformer was the one game that didn't, which left its game-over screen with no way
-out at all; fixed 2026-08-02 (B13a), and it is the reason that screen's buttons are reachable now.
+out at all; fixed 2026-08-02, and it is the reason that screen's buttons are reachable now.
 
 ## 32-bit target
 

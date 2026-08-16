@@ -58,8 +58,8 @@ sed -i 's/^scope\tsweeps\t/scope\tbase\t/' device-files/clean-rules.conf
 echo -n "  scope records back in 'base'       "; run
 
 # ── 6. the eight named vendor logs dropped, relying on the sweep ───────────
-# The gap the C11 plan diff found: invisible against --deep-clean's plan, real
-# against --remove's.
+# The gap `tests/c11_plan_diff.sh` found: invisible against --deep-clean's plan,
+# real against --remove's.
 restore
 sed -i '/^delete\tbase\t\/home\/root\/log\/[A-Za-z]/d' device-files/clean-rules.conf
 echo -n "  the 8 named vendor logs dropped    "; run

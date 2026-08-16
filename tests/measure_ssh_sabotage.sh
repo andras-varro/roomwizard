@@ -86,7 +86,7 @@ sab() {
 }
 
 # ⚠️ THE sabotage this file exists for: the classifier keyed on the parenthetical
-# method list, which is what IMPROVEMENT_PLAN.md F16 wrote down. It passes against a
+# method list, which is the signature this repo had written down. It passes against a
 # RoomWizard (PasswordAuthentication yes → "publickey,password") and calls every other
 # server "down", so the offer is SUPPRESSED and nothing looks broken.
 sab "classify: auth keyed on (publickey,password)" \

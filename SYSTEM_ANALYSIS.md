@@ -18,23 +18,21 @@ Each subsystem below follows the same shape, so you can skim to the part you nee
 | **Gotchas** | what bites — stated next to the thing, not collected in a warnings chapter |
 | **As shipped** | stock Steelcase behaviour, *only* where it explains the present |
 
-**Provenance.** Software facts were read off live units (primarily RW09, `192.168.50.73`).
-Hardware facts come from a full teardown on 2026-07-30 of the unit labelled `RW29 1G-093`, plus
-on-device measurements across two further units. Photos: [`HardwarePhotos/`](HardwarePhotos/) —
-see [Appendix A](#appendix-a-photo-index).
+**Provenance.** Software facts were read off live units (primarily RW09, `192.168.50.73`), plus
+on-device measurements across two further units. The hardware facts here inherit the teardown and the
+continuity measurements recorded in [`HARDWARE.md`](HARDWARE.md), which also holds the photos.
 
 ---
 
 ## Contents
 
 1. [Read this first](#1-read-this-first)
-2. [The board](#2-the-board)
+2. [The board](#2-the-board) — the hardware itself is [`HARDWARE.md`](HARDWARE.md)
 3. [Subsystems](#3-subsystems)
 4. [Boot chain and recovery](#4-boot-chain-and-recovery)
 5. [Software stack](#5-software-stack)
 6. [Building for this device](#6-building-for-this-device)
 7. [Kernel policy](#7-kernel-policy)
-8. [Appendix A: photo index](#appendix-a-photo-index)
 
 ---
 
@@ -76,178 +74,24 @@ Follow these and the worst case is a card reflash. Full detail:
 - The board is 3.3 V logic — **no 5 V TTL adapters**. Note that the `P4` console header is behind a
   MAX3232 and is therefore at **RS-232** levels, not TTL. See [Serial ports](#312-serial-ports).
 
-### If you have read an older version of this document
+### How to read a claim in this document
 
-Five things it used to say that are now known to be wrong. Listed only because they may still be
-in your head or quoted elsewhere — not as a changelog.
-
-| Was stated | Actually |
-|---|---|
-| Visible area ~720×420, bezel hides 30–40 px on all edges | **~800×455** — bezel hides 10–15 px top and bottom *only* |
-| Touch controller is a Panjit chip | Panjit is the **module** vendor; the silicon is a **Cypress CY8CTMG120** |
-| Ambient light sensor probably present | **Absent, and impossible** — the enclosure has no aperture |
-| `U17` is a coin cell / battery | A **0.47 F supercapacitor**, so RTC hold-up is hours, not months |
-| Ethernet PHY is a separate LAN8700 | `LAN9221` is **MAC+PHY in one package** |
+**Every statement here is measured on this hardware unless it carries a tag**, and there are three:
+**`[inferred]`** — derived from a datasheet, a driver source or another measurement, but not itself
+observed (a good pedigree is not a measurement: two inferences read straight out of the kernel source
+were refuted on hardware in one afternoon); **`[unverified]`** — nobody has tried it, no pedigree at all;
+**`[n=1]`** — measured once, or on one unit, so the *shape* usually generalises and the digits do not.
+⚠️ **Anything needing a test to resolve is an open item in `IMPROVEMENT_PLAN.md`, not a hedge here.** A
+tagged claim is one this document is content to carry untested; a hedge is work nobody has filed.
 
 ---
 
 ## 2. The board
 
-### 2.1 Identification
-
-| | |
-|---|---|
-| Board | Steelcase Inc **`550-0204-03`**, **© 2010**, `STM-5 STM-5E20784`, `94V-0`, `TESTED Compulrol` |
-| Model string | `Steelcase RoomWizard 20` (`/proc/device-tree/model`) |
-| Compatible | `ti,omap3-rw20`, `ti,omap3` |
-| U-Boot identity | `soc=omap3`, `board=rw20` |
-| OS build | `SteelCase RW20 Embedded Platform (Yocto) 3.1.4` — a Yocto build by eInfochips |
-| Teardown unit | case label `RW29 1G-093`; asset labels `46837.0300`, `47270.0310` |
-
-**The `© 2010` silkscreen is a design copyright, not a build date.** Three independent date codes
-on the teardown unit cluster in March 2018: the LCD module (`W180322`), its T-CON board (`1810`)
-and the RJ45 MagJack (`18111`). A panel swap would not also replace the Ethernet jack, so this is
-a 2018-built unit on an eight-year-old board design. (The touch controller's `1043` code is
-long-lived module stock, ordinary for a bonded touch assembly.)
-
-### 2.2 Parts inventory
-
-| Ref | Marking | Part |
-|---|---|---|
-| `U11` | `OMAP3503ECUS`, `72P19HQ`, `G1` | TI **OMAP3503** application processor |
-| `U12` | `D9RMJ`, `70CI7 / XQ52` | Micron **mobile DDR SDRAM** (`D9RMJ` is Micron's FBGA code) |
-| `U13` | `NQH53`, `7ME12 / X5Y3` | Micron **NAND flash** — MT29F2G16ABBEAHC, 256 MiB SLC, 16-bit, BCH8 |
-| `U14` | `TPS65930A2`, `74AJKFW $4`, `G1` | TI **TPS65930** — PMIC + audio codec, **TWL4030 family** |
-| `U15` | `LAN9221-ABZJ`, `A1751-AB24` | SMSC **LAN9221** Ethernet **MAC+PHY** on the GPMC bus |
-| `U16` | `LVDS83B`, `77AK23K G4` | TI **SN65LVDS83B** parallel-RGB → LVDS transmitter |
-| `U27` | `MA3232C`, `7AK G4`, `A1R7` | TI **MAX3232C** dual RS-232 transceiver |
-| `U1` | `TPS23750`, `6BTG4 / A89N` | TI **802.3af PoE PD** interface + DC/DC controller |
-| `U2` | `MT1107 V74968` | isolated feedback regulator (PoE secondary side) |
-| `U4` | `PSS4325 / 68154 / C935` | **TPS54325**-class synchronous buck |
-| `U17` | `⧠M` logo, `GC5.5V0.47F`, `JAPAN` | Panasonic/Matsushita **"Gold Cap" supercapacitor**, 5.5 V 0.47 F — RTC hold-up |
-| `U22`, `U23` | — | Side LED bar drivers (`L8`/`L2` inductors adjacent) |
-| `U24` | `CCH / TI 8A / Z86W` | TI, **unidentified** |
-| `U25`, `U32` | `WP245 / TI 81K / CD4S` (16-pin) | TI, **unidentified**. `U25` by the touch flex, `U32` by `J5`/`LED1`–`4`. Position suggests level shifters. |
-| `U33` | — | **Unpopulated** wide SOIC/SSOP land |
-| `Q1`, `D1` | `4848 5BD` · `NHSTQW 3406` | PoE flyback FET / secondary rectifier |
-| `SPKR1` | — | Single square metal-can magnetic speaker, ~20 mm |
-| `LED1`–`LED5` | — | Discrete SMD LEDs; `LED1`–`4` in a row beside `J5` |
-| — | Coilcraft **POE13F-12L** (`1809 J`) | PoE isolated flyback transformer |
-| — | `C&K CHINA(9) EP11 0.4VA MAX 1744` | Small transformer near the touch flex — **purpose unconfirmed** |
-
-### 2.3 Connectors
-
-| Ref | Type | Goes to |
-|---|---|---|
-| `J1` | **microSD** push-push socket | Boot and root storage |
-| `J2` | 8-pin white **FFC** | Touch controller flex — ⚠ release before separating the bezel |
-| `J3` | TE **MagJack `1-6605834-1`** RJ45 | Ethernet **and PoE power in** |
-| `J4` | **micro-USB** | The only USB connector (likely MUSB OTG) |
-| `J5`, `J6` | 1×10 sockets, 2 mm pitch, **empty as shipped** | XBee radio site — [see below](#24-unpopulated-and-expansion) |
-| `J7`, `J8` | 5-pin white **JST** | Side LED status bars in the left/right case edges |
-| `P2` | Long fine-pitch 2-row, **unpopulated** | **Unknown** — the last unidentified footprint |
-| `P3` | 2×7, 0.1", **unpopulated** | **TI-14 JTAG** (high confidence) |
-| `P4` | 2×5, 0.1", **unpopulated** | **RS-232 console** via `U27` — verified |
-| — | 40-pin **FFC** | Display panel harness |
-
-`J5`/`J6` are silkscreened on the **bottom** face; `P3`/`P4` on the **top** face. They occupy the
-same board area — `P3`/`P4`'s through-holes pass down the channel between the two sockets — which
-is why both appear together in bottom-side photos.
-
-**Case openings**, along the rear edge in order: RJ45, micro-USB, a second rectangular slot
-(unidentified — nothing behind it, possibly a variant SKU), and a pinhole over a white tact
-**reset button**.
-
-### 2.4 Unpopulated and expansion
-
-**`J5` + `J6` — the XBee socket, empty as shipped.** Two 1×10 female strips at **2.0 mm pitch**, rows
-**~24 mm** apart: the Digi XBee footprint (2 mm pitch, 22.86 mm row spacing). `J5` carries a white
-**pin-1 dot**, and the **metal inner bezel has a trapezoidal cut-out matching the XBee outline** — the
-chassis was tooled for this module. A real XBee test-fits perfectly. **No radio was fitted in any of
-the three units as received**, so the batch shipped without the option; there is no antenna on the PCB
-because on an XBee the antenna is part of the module. Vendor software confirms the intent — see
-[Serial ports](#312-serial-ports).
-
-⚠️ **One of our units now has a module seated in it** (reported 2026-08-13, fitted by hand). That is a
-fact about that unit, not about the design, and **nothing about it is verified**: not the orientation,
-not whether the module survived being powered, not whether it is Series 1 or Series 2. `J5` pin 1 is a
-live 3.3 V rail whatever UART3 does, so a reversed insertion is already a completed experiment. The
-staging that protected a single module is in
-[`IMPROVEMENT_PLAN.md` F5](IMPROVEMENT_PLAN.md#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open);
-two spare modules are on hand.
-
-**Pinout, partly measured 2026-07-30.** `J5` carries XBee pins **1–10** (pin 1 is the dotted end),
-`J6` carries **11–20**. Numbering runs down one strip and back up the other like a DIP, so pins 1
-and 10 are at opposite ends of `J5`, *not* across from each other — the usual way to get this
-backwards.
-
-| XBee pin | Socket | Signal | Status |
-|---|---|---|---|
-| 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
-| 3 | `J5` | `DIN` — the SoC's TX | not measured. An idle UART transmitter sits **high**, so ~3.3 V here is the cheapest proof a `uart3` pinmux edit took effect; floating or low means it didn't. |
-| 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
-| 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
-| 10 | `J5` | `GND` | **measured ground.** With pin 1 at 3.3 V this confirms the socket is correctly identified *and* correctly oriented. |
-
-The electrical question is therefore settled; what is unproven is the DTB pinmux edit
-([Serial ports](#312-serial-ports)). An XBee fed reversed dies instantly, which is why the
-orientation was measured before anything was inserted — and why, on the unit that now has one seated,
-the module's health is an open question rather than an assumption.
-
-**`P4` — the RS-232 console. Pinout verified by continuity:**
-
-```
-P4 pin 2  ->  U27 pin 14 (T1OUT)   console TX, RS-232 level, out of the device
-P4 pin 3  ->  U27 pin 13 (R1IN)    console RX, RS-232 level, into the device
-P4 pin 5  ->  U27 pin 15 (GND)     ground
-```
-
-Pin 1 is the square pad; even pins on the top row, odd on the bottom. Only these three are wired —
-MAX3232 channel 1 only. Three wires, no soldering strictly required (a 0.1" female jumper or pogo
-pins in the plated holes will do). **RS-232 levels: a 3.3 V TTL adapter will not work here** — use
-a real USB↔DB9 adapter, or tap `U27`'s logic side instead.
-
-**`P3` — TI-14 JTAG, high confidence.** Continuity against `U27` produces the TI-14 signature:
-
-| `P3` pin | Measured | TI-14 expects | |
-|---|---|---|---|
-| 4 | GND (via `U16` pin 53) | GND | ✔ |
-| 5 | 3.3 V (`U27` pin 16) | `PD` / Vref | ✔ |
-| 6 | open | **keyed, no pin** | ✔ |
-| 8 | GND | GND | ✔ |
-| 10 | GND | GND | ✔ |
-| 12 | open | GND | ✖ one discrepancy |
-
-Vref on 5 with grounds on 4/8/10 plus the key at 6 is not an arrangement anything else uses. Pin 12
-is the loose end — a no-connect on this board, or a missed probe. The remaining pins (TMS, nTRST,
-TDI, TDO, RTCK, TCK, EMU0, EMU1) read open against `U27` because they run to the SoC. Not
-actionable — the rules in §1 exist so that JTAG is never needed — but don't mistake it for a second
-serial port.
-
-**Test points: `TP1`–`TP59`**, individually labelled and probe-sized, over the whole top side.
-Dense clusters at `TP19`–`TP31` (around the SD socket), `TP13`–`TP18` (mid-board), `TP34`–`TP36`
-and a long run `TP39`–`TP59`. They are numbered, not named, so silkscreen alone tells you nothing
-about the net. Mapping them by meter means probing back to `U14`, whose ADCIN pins are BGA-hidden.
-**The practical route is the reverse:** power the unit, touch a resistor from 3.3 V to a candidate
-test point, and watch which `in_voltage2..7_raw` moves. That needs no teardown.
-
-**Room inside the case:** modest but real, around the `J5`/`J6`/`P3`/`P4` corner and near the
-unpopulated `U33` and `P2` lands. Two constraints on anything added: the 802.3af power budget
-([Power](#35-network-and-power)) and the fact that the case has **no ventilation slots**.
-
-### 2.5 Enclosure and service
-
-**Reopenable, non-destructively: screws and clips, no glue.** Four metal threaded bosses moulded
-into the bezel, self-tapping screws for the LCD mount, plastic retention clips along the top and
-bottom edges. Bezel material is `>PC/ABS<`, moulded part `560-0540-0x`. The only bonded joint is
-touch glass to bezel, which is meant to be permanent.
-
-**The one destructive risk is the touch flex.** Disconnect `J2` before separating the bezel from
-the board — see [Physical safety](#physical-safety).
-
-Removing **only the rear cover** exposes the entire bottom face — SoC, RAM, NAND, Ethernet, PoE,
-`J5`/`J6` — without going near the bezel or the touch flex. That is the safe way to inspect a
-working unit.
+The board as a physical object — the parts inventory with markings, every connector and what it goes
+to, the unpopulated `J5`/`J6` XBee socket with its measured pinout, the `P4` RS-232 console and `P3`
+JTAG headers, the enclosure and how it comes apart, and the teardown photos placed beside the parts
+they show — is [`HARDWARE.md`](HARDWARE.md).
 
 ---
 
@@ -399,11 +243,11 @@ arbitrary hardware scaling** — on a GPU-less 600 MHz part this is the only gra
 available, and nothing in the project uses it. (`omap_vout: failed to allocate DMA Channel for
 video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md` F2.
 
-`fb1` is the second framebuffer (`CONFIG_FB_OMAP2_NUM_FBS=2`, see above) and is the natural
-small-surface render target for a scaled overlay — draw at 400×240 there, let the DSS stretch it.
-`/dev/video0` (`omap_vout`) is the V4L2 *output* path and accepts **YUV with hardware colour-space
-conversion**, which is what would make a video player conceivable on a part that could never
-software-decode one. Both are untried; the DMA-channel error above may be exactly what blocks the
+`fb1` is the second framebuffer (`CONFIG_FB_OMAP2_NUM_FBS=2`, see above), and `/dev/video0`
+(`omap_vout`) is the V4L2 *output* path, which accepts **YUV with hardware colour-space conversion**.
+Both are untried. **[inferred]** `fb1` is the natural small-surface render target for a scaled overlay
+(draw at 400×240, let the DSS stretch it), `omap_vout` is what would make a video player conceivable on
+a part that could never software-decode one, and the DMA-channel error above may be what blocks the
 `omap_vout` route.
 
 > ⚠️ This is a **legacy omapdss sysfs** interface. It does not exist under `omapdrm`. Anything
@@ -474,12 +318,11 @@ that silently breaks a component linking a stale `touch_input.o` (the old 4-numb
 on an 8-number line and accepts it as a legacy config). Three segments also leave room to model a
 genuinely non-linear panel if one ever turns up.
 
-> **A claim that was here and is not supported by the data:** a per-segment slope table
-> (`8.81 / 9.66 / 9.93 / 8.76` raw counts per panel pixel over Y spans 22→120→240→360→458) with the
-> conclusion "the interior is ~12 % steeper than the outer bands". Residuals against the interior line
-> are ±80 raw — about ±8 px of finger placement — with no consistent sign, and over ~100 px baselines
-> that alone accounts for ±8 % of slope. One run cannot distinguish 12 % from noise. Do not build
-> anything on outer-band compression without a repeated, multi-target measurement.
+> ⚠️ **Outer-band slope compression is NOT established, and nothing may be built on it.** One run's
+> per-segment slopes suggested a ~12 % steeper interior; residuals against the interior line are
+> **±80 raw** (≈±8 px of finger placement) with no consistent sign, which over ~100 px baselines accounts
+> for ±8 % of slope on its own. One run cannot distinguish 12 % from noise. The repeated multi-target
+> measurement that would settle it is `IMPROVEMENT_PLAN.md` B3c.
 
 Stage 2 subtracts the viewport origin (`screen_view_x`/`screen_view_y`), which is exactly the
 offset `fb_swap()` draws at. A touch on the bezel therefore clamps to the nearest logical edge, and
@@ -507,8 +350,8 @@ logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a
 
 **Device Tools → Display** owns both lines, through **one wizard** — `run_calib_wizard()` in
 `native_apps/device_tools/device_tools.c`. Everything it does runs with the bezel zeroed
-(`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and
-both lines are measured against the same premise:
+(`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and both
+lines are measured against the same premise:
 
 | Step | Measures | How |
 |---|---|---|
@@ -519,45 +362,34 @@ both lines are measured against the same premise:
 | `REPORT` | — | visible rectangle vs touch-safe rectangle and the per-side inset in px, with the reminder that the band is still drawable. Amber on **magnitude** (`DISP_INSET_SUSPECT`, 24 px), not on "non-zero" |
 | `CONFIRM` | — | goes live on the new mapping with a 20 s countdown; reverts unless you press KEEP |
 
-Two entry buttons, one implementation: `CALIBRATE TOUCH` runs the whole thing, `SCREEN EDGES`
-jumps to the `EDGES` step for a margins-only tweak. `RESET` restores the hardware `EVIOCGABS`
-range and the default margins.
+`CALIBRATE TOUCH` runs the whole thing, `SCREEN EDGES` jumps to the `EDGES` step for a margins-only
+tweak, and `RESET` restores the hardware `EVIOCGABS` range and the default margins. ⚠️ **Nothing is
+written until CONFIRM, and the wizard hit-tests its own buttons through the *entry* calibration until
+then** — so a bad fit can never leave you unable to press the button that rejects it.
+`touch_calib_backup()` copies the old file to `.bakN` first.
 
-**Nothing is written until CONFIRM,** and the wizard hit-tests its own buttons through the
-*entry* calibration until then — so a bad fit can never leave you unable to press the button that
-rejects it. `touch_calib_backup()` copies the old file to `.bakN` first.
+> **One flow and one fit, deliberately.** This was two flows plus a third copy of the same defective fit
+> in a standalone `unified_calibrate`, and they disagreed. ⚠️ **An edge adjuster that draws its reference
+> frame on the *logical* edge is measuring the bezel through the bezel**, and a crosshair inset only
+> 40 px sits inside the band where raw compresses, so its fit comes out shallow.
 
-> **Why it is one flow.** It used to be two, and they disagreed. The 9-tap calibration inset its
-> crosshairs only 40 px — inside the band where raw compresses — so the fit slope came out shallow
-> and extrapolated outside 0..4095, inventing a phantom X inset. The separate
-> `SCREEN EDGES` adjuster drew its reference frame on the *logical* edge, i.e. measured the bezel
-> through the bezel. There was also a third copy of the same defective fit in a standalone
-> `unified_calibrate` binary. One wizard, and one fit in `common/touch_calib.c`, is what stops
-> that recurring.
-
-**The fit lives in `native_apps/common/touch_calib.c`** and nowhere else: the target set, the
-per-axis interior masks (≥100 px from each end on X, ≥80 px on Y), the least-squares call,
-`touch_calib_curve_from_fit()` (which places the knots on the fitted line and stores the endpoints
-**unclamped** — `c->v0 = f->in0`, `c->v1 = f->in1`), the per-axis dead-band verdict, the reach
-calculation, `touch_calib_inset_from_reach()`, the shared edge-sweep accumulator (`TouchCalibSweep`,
-`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. Both the wizard and `touch_raw` link
-it, so the diagnostic validates the very code the wizard calibrates with. Its sanity gate is **not**
-"reject outside 0..4095" — a correct fit on this panel legitimately extrapolates outside it. It
-requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which accepts the measured-good
-`-279..4382` and rejects a skewed `0..60000`.
-
-> ⚠️ **Never reintroduce the endpoint clamp.** `touch_calib_curve_from_fit()` used to clamp `v0`/`v1`
-> into `0..4095`, and `touch_input.c`'s legacy migration had a `clamp_to_hw()` doing the same. Both
-> are deleted. The clamp asserted that raw 4095 is emitted at panel 479 when it is emitted at panel
-> ~450, which tilted the upper outer segment so the reported position ran **ahead of the finger by up
-> to +19 px across the bottom quarter** — visibly worse than the bug it was meant to fix.
-> `overshoot_lo/hi` remains, as reporting only.
+**One implementation of the fit, in `native_apps/common/touch_calib.c`** — the target set, the per-axis
+interior masks (≥100 px from each end on X, ≥80 px on Y), the least-squares, the unclamped endpoints, the
+per-axis dead-band verdict, the reach→inset calculation, the edge-sweep accumulator, the sanity gate and
+the `.bakN` backup. Both the wizard and `touch_raw` link it, so the diagnostic validates the very code
+the wizard calibrates with. ⚠️ **The fitted endpoints must never be clamped into `0..4095`** — a correct
+fit on this panel legitimately extrapolates outside it, and the clamp that used to do it asserted raw
+4095 is emitted at panel 479 when it is emitted at panel ~450, running the reported position **ahead of
+the finger by up to +19 px across the bottom quarter**. The library rules, the deleted legacy-migration
+clamp and the sanity gate's actual criterion are `native_apps/CLAUDE.md` → *Touch model*.
 
 **`touch_raw`** (`native_apps/tests/touch_raw.c`, deployed to `/opt/games/`, hidden from the
 launcher; reachable from Device Tools → Display → `TOUCH DIAGNOSTIC`) is the diagnostic that settled
 reach, and the only tool that shows the panel with **no calibration and no bezel**: it resets the raw
 range to the `EVIOCGABS` values and calls `fb_set_bezel(fb,0,0,0,0)`, so the dot is
-`raw × 799 / 4095`. Four modes, and the split between the middle two is the whole point:
+`raw × 799 / 4095`. It logs to `/tmp/touch_raw.tsv` with a monotonic millisecond column and can write
+the interior fit to line 1 after a `.bakN` backup. Four modes, and the split between the middle two is
+the whole point:
 
 | Mode | Question it answers | Method |
 |---|---|---|
@@ -566,16 +398,10 @@ range to the `EVIOCGABS` values and calls `fb_set_bezel(fb,0,0,0,0)`, so the dot
 | `INSET` | *where does raw first reach that value?* | tap a bar walked inward from each edge at 0/10/20/35/55 px; the answer localises where the flat band starts |
 | `TARGETS` | the interior line | 11 targets × 3 taps, then a hard press on each bezel; fits interior-only vs all-points and reports what each predicts at the edges, per axis |
 
-**Only `INSET` decides the curve.** `SWEEP` alone cannot: a finger sliding along an edge yields no
-position information, so it reads identically whether clipping begins at the edge or 30 px inside it.
-Conflating the two questions is what kept the endpoint bug alive across three sessions. Logs to
-`/tmp/touch_raw.tsv` with a monotonic millisecond column; it can write the interior fit to line 1
-after backing the file up to `.bakN`.
-
-> **Beware two-point slopes.** `INSET`'s derived slope must come from the 11-target interior fit, not
-> from two adjacent bars: ±80 raw of tap noise over a 10–20 px baseline printed "raw reached at panel
-> 594, 614, 817 and −4" on a 480-row panel. Adjacent bars are only good for the *comparison* "is this
-> bar already at the limit?".
+⚠️ **Only `INSET` decides the curve.** `SWEEP` alone cannot: a finger sliding along an edge yields no
+position information, so it reads identically whether clipping begins at the edge or 30 px inside it,
+and conflating the two questions kept the endpoint bug alive across three sessions. Nor may a slope come
+from two adjacent `INSET` bars — that rule and its numbers are `native_apps/CLAUDE.md` → *Touch model*.
 
 **ScummVM and `vnc_client` each link their own copy of `touch_input.o`** — rebuild and redeploy both
 after changing that file or its touch silently goes stale (see *Reach* below for how silently).
@@ -587,13 +413,11 @@ Accuracy: ~3 px at centre, 14–27 px error at the corners before calibration.
 drawn pixel is a panel pixel. Raw capture:
 [`touch_raw-2026-08-01-rw09.tsv`](touch_raw-2026-08-01-rw09.tsv), 16:53.
 
-> **Every number in this section is the reference capture, not the live calibration of any unit.**
-> The fit is re-run per unit (and per wizard run), so the curve stored in
-> `/etc/touch_calibration.conf` on a given device will not match the values below — see
-> *Provenance* at the end of this section for what RW09 actually carries. What generalises is the
-> *shape* of the result — linear interior, a saturated band inside each Y edge, a much smaller one on
-> X — not the digits. The host regression deliberately replays this capture's medians rather than
-> reading the device, which is what makes it a regression instead of a snapshot.
+> **Every number below is the reference capture, not the live calibration of any unit** — the fit is
+> re-run per unit and per wizard run (see *Provenance* at the end of this section for what RW09 carries).
+> What generalises is the *shape*: linear interior, a saturated band inside each Y edge, a much smaller
+> one on X. Not the digits. The host regression replays this capture's medians rather than reading a
+> device, which is what makes it a regression and not a snapshot.
 
 `SWEEP` first: **all 16 buckets on all four edges** drive raw to `0`/`4095`, uniformly, with no
 corner-vs-middle variation. So the electrode array is not short.
@@ -610,26 +434,24 @@ corner-vs-middle variation. So the electrode array is not short.
 Confirmed independently: the 11-target interior fit (`X 10..4076`, `Y -296..4376`), which never sees
 an edge sample, predicts a bezel press landing at panel **30 / 450** — the same numbers from a
 different method. Whether the cause is a short electrode array or controller clipping is not
-distinguished by this data and does not matter for calibration. (Two fits from that day are quoted in
-this document: `X 10..4076 / Y -296..4376` above, and `X 17..4084 / Y -279..4382`, which is what the
-host regression replays. They differ by ≤7 raw — an order below the ±80 raw tap residual — and
-neither is what is stored on RW09 now.)
+distinguished by this data and does not matter for calibration. (Two fits of that panel are quoted in
+this section — the one above and `X 17..4084 / Y -279..4382`, which the host regression replays. They
+differ by ≤7 raw, an order below the ±80 raw tap residual.)
 
-**Consequence: drawable ≠ pressable.** The band at each end of Y is visible and fully drawable but
-cannot be pressed, so `native_apps/common/framebuffer.h` carries **two** rectangles:
-`SCREEN_VISIBLE_*` (the full logical screen) and `SCREEN_SAFE_*` (visible ∩ touchable). On the
-reference capture at bezel T=11 B=14 the inset is **~17 px top / ~16 px bottom**, with X ≈ 0; the
-live RW09 calibration gives 19/16 **and ~6 px on each side of X** (see *Provenance*). **X's band is
-much smaller than Y's and can be zero, but a non-zero X inset is not a fault** — it arises by exactly
-the same mechanism as Y, from fitted X endpoints that fall outside `0..4095`. Treat any of these
-numbers as per-unit, per-calibration.
+**Consequence: drawable ≠ pressable, and a dead band is a fact about this panel rather than a bug.** The
+band at each end of Y is visible and fully drawable but cannot be pressed, so two rectangles exist —
+`SCREEN_VISIBLE_*` (the full logical screen) and `SCREEN_SAFE_*` (visible ∩ touchable). On the reference
+capture at bezel T=11 B=14 the inset is **~17 px top / ~16 px bottom** with X ≈ 0; RW09's live
+calibration gives 19/16 **and ~6 px on each side of X** (see *Provenance*). **X's band is much smaller
+than Y's and can be zero, but a non-zero X inset is not a fault** — it arises by exactly the same
+mechanism as Y, from fitted X endpoints falling outside `0..4095`. Treat every one of these numbers as
+per-unit and per-calibration.
 
-The inset is **measured at runtime, never hardcoded** — `publish_safe_area()` pushes the four raw edge
-extremes through the production `scale_coordinates()` and calls `fb_set_touch_inset()`, so it is
-correct in portrait and under any bezel, is `0` until an edge sweep has been recorded, and is capped at
-`FB_TOUCH_INSET_MAX` (48 px) with a loud warning. Read it from Device Tools → Display → `TOUCHABLE:`,
-the wizard's `REPORT` screen, or the display test's `SAFE AREA` page (red rect = visible, green =
-touchable). **A dead band is a fact about this panel, not a bug.**
+The inset is **measured at runtime, never hardcoded** — the four raw edge extremes are pushed through the
+production mapping, so it is correct in portrait and under any bezel and is `0` until an edge sweep has
+been recorded. Read it from Device Tools → Display → `TOUCHABLE:`, the wizard's `REPORT` screen, or the
+display test's `SAFE AREA` page (red rect = visible, green = touchable). Which rectangle a call site
+wants, the cap on the inset and the drawing policy are `native_apps/CLAUDE.md` → *Screen edges*.
 
 **The mapping lives in the config file, so deploying code never fixes a bad stored curve.** Line 1 of
 `/etc/touch_calibration.conf` is what `touch_init()` uses; a unit whose line 1 was written by older
@@ -637,68 +459,49 @@ code keeps that behaviour, symptom intact, across any number of correct deploys 
 re-run. Corollary for handovers: "the fix is deployed" and "the device behaves correctly" are separate
 claims.
 
-**Provenance — the reference capture vs what RW09 actually carries.**
-
-The figures above come from the 16:53 diagnostic run. The user then ran the wizard at **18:50 on
-2026-08-01** and kept the result, so RW09's live config is a *different* fit of the same panel:
+**Provenance — what a live unit carries.** The figures above are the 16:53 diagnostic run; RW09's stored
+config is a *different* fit of the same panel, from the wizard run that was kept at 18:50 the same day:
 
 ```text
 line 1  -33 1007 3087 4122   -296 875 3217 4379
 line 2  11 14 0 0
-line 3  reach 0 4095 0 4095
-        -> published inset: X 6..793  Y 19..438  of 800x455
+line 3  reach 0 4095 0 4095    -> published inset: X 6..793  Y 19..438  of 800x455
 ```
 
-Three things to read off that, because each one otherwise looks like a contradiction:
+`reach 0 4095 0 4095` means the sweep found the hardware limits on all four edges — the "assume the
+hardware limit" case, contributing *nothing* — so this unit's entire published inset comes from the fit's
+endpoint overshoot (`-33`/`4122` on X, `-296`/`4379` on Y against a `0..4095` hardware range), which is
+the model working as designed. ⚠️ **The inset and the ~30/29 px flat band are therefore not the same
+measurement and must not be reconciled:** the inset is *logical rows the current curve cannot address*,
+the flat band is *panel pixels over which the sensor's reading is saturated*, measured by `INSET` with no
+calibration in the path. Both are true at once, of different things. No `touch_raw` capture exists for
+the 18:50 calibration — the wizard writes the config, only the diagnostic writes `/tmp/touch_raw.tsv`.
 
-- **`reach 0 4095 0 4095` means the sweep found the hardware limits on all four edges** — the
-  "assume the hardware limit" case, contributing *nothing* to the inset. So on this unit the entire
-  published inset comes from the fit's endpoint overshoot (`-33`/`4122` on X, `-296`/`4379` on Y
-  against a `0..4095` hardware range), which is the model working as designed.
-- **Therefore 19/16/6 and the ~30/29 px flat band are not the same measurement** and must not be
-  reconciled. The inset is *logical rows the current curve cannot address*; the flat band is *panel
-  pixels over which the sensor's reading is saturated*, measured by `INSET` mode with no calibration
-  in the path. Both are true at once, of different things.
-- **No `touch_raw` capture exists for the 18:50 calibration.** The wizard writes the config; only the
-  diagnostic writes `/tmp/touch_raw.tsv`, and it was not run afterwards (nor would it survive a
-  reboot). The repo's captures are 07-31 and 08-01 16:53, and the 16:53 one stands as the reference.
-
-**Three claims that were in this document and were wrong** — recorded because the mistakes are easy
-to repeat, and because two of them were *opposite* errors made two days apart:
-
-1. *"The electrode array is ~11 mm shorter than the LCD; the digitizer spans 153.4 × 80.1 mm."*
-   That height was computed by mapping bezel-press raw values through the very fit under test. The
-   sweep shows every edge driving raw to its limit, so the array is not short. The millimetre figure
-   was an artifact.
-2. *"The top ~15 and bottom ~15 rows cannot be touched, and no calibration recovers it."* Wrong as
-   stated — the *cause* was the fit, and the band is not 15 px.
-3. *"Every visible pixel is touchable; a dead band now means a bug."* (2026-08-01, morning.) This
-   over-corrected #1 and #2. It was right that the extrapolated fit manufactured dead bands, and
-   wrong that the sensor has none. The clamp it introduced made the bottom edge measurably worse
-   (+19 px). A bezel press drives raw to `4095` whether clipping starts at panel 479 or panel 450, so
-   that evidence could never have supported the conclusion.
-
-The earlier per-edge figures (~10 px left/right, ~25 top, ~30 bottom) were wrong on X for a separate
-reason: the 9-tap flow inset its crosshairs only 40 px. The deeper problem was methodological —
-*every* figure gathered before `touch_raw`'s `INSET` mode was inferred **through** a calibration, or
-from a gesture that carried no position information. Design the measurement to answer **one** question
-and state what it cannot answer.
+⚠️ **A bezel press cannot locate where clipping starts** — raw hits `4095` whether that is panel 479 or
+panel 450 — and nothing inferred *through* a calibration can measure that calibration. Every dead-band
+figure this document carried before `touch_raw`'s `INSET` mode existed was wrong for one of those two
+reasons, twice in *opposite* directions (a "~11 mm shorter electrode array" computed by mapping bezel
+presses through the fit under test; then "every visible pixel is touchable, so a dead band is a bug",
+whose clamp made the bottom edge measurably worse). **Design the measurement to answer one question and
+state what it cannot answer.**
 
 Two secondary effects, measured at the same time:
 
-- **Finger-centroid scatter is real.** Nine hard presses on the top bezel returned raw
-  `22, 76, 105, 111, 93, 79, 90, 118, 47`. Pressing flat near the saturation zone gives a tall
-  contact patch whose centroid is pushed inward, and it scatters widely. It shifts the intercept,
-  not the slope. Prefer target taps to bezel presses when measuring anything quantitative; use
-  bezel presses only to ask the yes/no question "does raw reach its limit here?".
-- **A stale binary misparses the config instead of failing.** A `vnc_client` built before the
-  8-number line 1 read `0 1020 3074 4095  0 874 3215 4095` as `X [0..1020] Y [3074..4095]`, confining
-  touch to the left quarter and the bottom strip. It presented as "touch is broken in vnc_client", not
-  as a version mismatch. To check what a deployed binary parsed, look for `Touch raw curve set:` plus
-  `(piecewise)` in its startup output; the old code printed `Touch raw range set (linear):`.
+- **Finger-centroid scatter is real, and it shifts the intercept rather than the slope.** Nine hard
+  presses on the top bezel returned raw `22, 76, 105, 111, 93, 79, 90, 118, 47` — pressing flat near the
+  saturation zone gives a tall contact patch whose centroid is pushed inward, and it scatters widely.
+  Prefer target taps for anything quantitative; use a bezel press only for the yes/no question "does raw
+  reach its limit here?".
+- **A stale binary misparses the config instead of failing.** A `vnc_client` built before the 8-number
+  line 1 read `0 1020 3074 4095  0 874 3215 4095` as `X [0..1020] Y [3074..4095]`, confining touch to the
+  left quarter and the bottom strip — presenting as "touch is broken in vnc_client" rather than as a
+  version mismatch. ⚠️ **The discriminator is `(piecewise)` in the binary's `Calibration loaded from:`
+  line**, which only 8-number-aware code prints. It is *not* the presence of
+  `Touch raw range set (linear):` — that string is live in `touch_set_raw_range()`, the `EVIOCGABS`/RESET
+  path, and a current binary prints it whenever the hardware range is set.
 
-Measurements are from **RW09 only**; a second unit has not been measured. Open work:
-[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3c.
+Every touch measurement in this section is **`[n=1]`** — RW09 only, and no second unit has been
+swept. Open work: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3c.
 
 **Multi-touch exists in hardware but not in the driver.** `panjit_ts` reports only
 `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller itself is **2-point multi-touch with
@@ -708,9 +511,9 @@ click. Reaching it means bypassing the driver on `/dev/i2c-2`. Userspace-only, n
 Proposal: `IMPROVEMENT_PLAN.md` F6.
 
 **Pressure is declared but untested.** `ABS_PRESSURE` appears in the device's capabilities
-(`capabilities/abs = 1000003` → bits 0, 1, 24) and is discarded by `touch_input.c`. Whether the
-value actually varies has never been run to a conclusion — see
-`native_apps/hardware_test/pressure_test.c`.
+(`capabilities/abs = 1000003` → bits 0, 1, 24) and is discarded by `touch_input.c`. **[unverified]**
+whether the value actually varies — `native_apps/hardware_test/pressure_test.c` is the unfinished probe,
+and `IMPROVEMENT_PLAN.md` F6 carries it as the cheap first step.
 
 **As shipped.** The stock stack used `xinput_calibrator` and `/etc/pointercal.xinput`. Both belong
 to the removed X11 stack and are **not** used by anything current.
@@ -822,14 +625,13 @@ differing content instead of phase.
 - **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
   storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
   at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
-- ⚠️ *Inference, not measured:* the summing is the likeliest reason synthesised tones need ~50 %
-  attenuation at all. Two identical full-scale channels drive the speaker at double amplitude, so
-  halving is very nearly the exact compensation. ⚠️ Note the two consumers spell that differently: the
-  native synth pins a **peak of 18000** (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a
-  constant, not a shift), while ScummVM does `>>1` post-mix (below). It predicts that **the attenuation
-  belongs on the synth, not on streamed file content** — corroborated only weakly so far, by 48 kHz
-  stereo music playing through `aplay` (which attenuates nothing) at *"surprisingly loud, but not
-  distorted"*. Settle it with a per-voice gain measurement before choosing a number for the ALSA path.
+- **The two consumers attenuate differently:** the native synth pins a **peak of 18000**
+  (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a constant, not a shift); ScummVM does `>>1`
+  post-mix (below). **[inferred]** the summing is why ~50 % is about the right figure — two identical
+  full-scale channels drive the speaker at double amplitude — which predicts the attenuation belongs on
+  the **synth** and not on streamed file content. Corroborated only weakly, by 48 kHz stereo music
+  through `aplay` (which attenuates nothing) sounding *"surprisingly loud, but not distorted"*; the
+  per-voice gain measurement that would settle it is `IMPROVEMENT_PLAN.md` F1's panel question 6.
 
 ⚠️ **A `-c 1` probe fails on channels at every rate, which reads as "no rate is accepted".** That is
 exactly how the first run of `alsa_probe.sh` produced seven REFUSED lines from one mistake — the
@@ -847,16 +649,13 @@ independently of anything this project writes.
   *measured* explanation of the ~60 ms minimum-tone rule rather than a plausible one: see gotcha **6**
   below, where keeping a stream continuously fed drops the audible floor to 5 ms.
 
-⚠️ **The ~506 ms figure is the shim settling for the driver's maximum buffer, not a hardware period —
-refuted 2026-08-14.** `period_size=1024, buffer_size=4096` was requested and **granted exactly** at
-both 48000 (`period_time: 21333` µs) and 22050; the floor is 4 frames. Vanilla `omap-pcm.c:49-52`
-(`period_bytes_min = 32`, `periods_min = 2`, `buffer_bytes_max = 128 * 1024`) predicted this and now
-measures true: 32 B ÷ 4 B/frame is the 8-frame minimum `speaker-test` reports once channels are set,
-and 32768 frames × 4 B is the 128 KB maximum. The mechanism is visible in the same transcript —
-`speaker-test`, negotiating for itself, prints *"Using max buffer size 32768"*. **A client that does
-not ask for a small period gets the biggest one, and the shim cannot ask because
-`SNDCTL_DSP_SETFRAGMENT` is ignored.** So the latency win from going native is real and is ~24× at
-the period (21 ms vs ~506 ms).
+⚠️ **The ~506 ms figure is the shim settling for the driver's maximum buffer, not a hardware period.**
+`period_size=1024, buffer_size=4096` is **granted exactly** at 48000 (`period_time: 21333` µs) and at
+22050; vanilla `omap-pcm.c:49-52` (`period_bytes_min = 32`, `periods_min = 2`,
+`buffer_bytes_max = 128 * 1024`) puts the floor at 8 frames and the ceiling at 32768. **A client that
+does not ask for a small period gets the biggest one, and the shim cannot ask because
+`SNDCTL_DSP_SETFRAGMENT` is ignored.** So the latency win from going native is real and is ~24× at the
+period (21 ms vs ~506 ms).
 
 **Gotcha — the OSS shim is buggy, in four distinct ways.** All of these are in `snd-pcm-oss`
 emulation, not the hardware. ALSA itself works correctly.
@@ -903,13 +702,12 @@ emulation, not the hardware. ALSA itself works correctly.
    **Consequence for any incremental writer here: measure the period and queue a whole number of them,
    at least three.** `native_apps/common/audio_gen.c`'s `audio_pump_lead_frames()` is that rule;
    `IMPROVEMENT_PLAN.md` F1 Phase 3 has the derivation.
-6. ⚠️ **The ~60 ms minimum-tone rule is a property of RESTARTING the stream, not of
-   `SNDCTL_DSP_RESET` — measured 2026-08-15, and it had been attributed to the wrong thing.** Removing
-   the reset does **not** remove it: with the ring allowed to empty between sounds the stream still
-   stops and restarts, so a 5–40 ms tone is inaudible, 60 ms is partial and 100 ms is clean, exactly as
-   under the reset regime. Keep the stream **continuously fed** (`audio_pump_set_keepalive()`) and the
-   floor collapses: **5 ms is audible and 20 ms is recognisable** on the same unit, same session. Any
-   claim about a minimum tone length must therefore say whether the stream was kept alive.
+6. ⚠️ **The minimum audible tone length is a property of RESTARTING the stream, not of
+   `SNDCTL_DSP_RESET`** — removing the reset does not change it. Measured on `.188` 2026-08-15: with the
+   ring allowed to empty between sounds, 5–40 ms is inaudible, 60 ms partial, 100 ms clean; with the
+   stream **continuously fed** (`audio_pump_set_keepalive()`), **5 ms is audible and 20 ms
+   recognisable** — same unit, same session. Any claim about a minimum tone length must say which
+   regime it was measured under.
 
 **No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main
 thread and you get a black screen. `SCHED_OTHER` plus the ~500 ms OSS ring is enough.
@@ -961,7 +759,7 @@ cloned from it claims `RW09` — which is also where this repo's name for the re
 from. And on a stock image **the device's own name resolves to a dead address**, so anything that
 resolves its own hostname gets the wrong answer. `commissioning/set-hostname.sh` fixes both files together, to
 loopback-only (it is what `commissioning/card-prep.sh`'s prompt and `commissioning/provision.sh --hostname` both
-call); disposition in `IMPROVEMENT_PLAN.md` D7.
+call).
 
 **⚠️ The vendor regenerates all four network files on every boot, so editing them is not the last
 word.** `/opt/sbin/networkmanager` — a 24,894-byte shell script, started by `/etc/init.d/networkmanager`
@@ -983,8 +781,7 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
 - **Deleting `/home/root/data/websign` makes the script inert for the host name.** Both writers live
   *inside* `set_manual()`/`set_dhcp()`; with `net.mode` unreadable neither branch runs, so `/etc/hosts`
   and `/etc/hostname` are never touched again. `commissioning/provision.sh`'s deep clean removes that directory,
-  which is why a cleaned unit keeps the name `commissioning/set-hostname.sh` gave it — and an uncleaned one does not
-  (`IMPROVEMENT_PLAN.md` D7b).
+  which is why a cleaned unit keeps the name `commissioning/set-hostname.sh` gave it — and an uncleaned one does not.
 - ⚠️ **The vendor's own validator rejects hyphens.** `net.hostname` is filtered by an awk regex that
   accepts `RW09`, `RW20`, `rwtest` and `null` but **rejects `RW-Test` and `rw-test`**; a rejected name
   logs `Invalid host name detected.` and the DHCP client then announces the hardcoded fallback
@@ -992,18 +789,16 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
 - **There are two dhclient scripts, and only the vendor's rewrites `/etc/hosts`.** `/etc/dhclient-script`
   (vendor, 10,370 bytes) has a `# PV02 Addition` block that on every `BOUND` event writes
   `net.hostname` into `/etc/hostname`, truncates `/etc/hosts` to `127.0.0.1 localhost` and appends
-  `<leased-ip> <name>` — D7's defect, regenerated. `/sbin/dhclient-script` (the stock ifupdown one,
-  16,772 bytes) contains **zero** references to `/etc/hosts`. Which one runs depends on who starts
-  `dhclient`: the vendor `networkmanager` passes `-sf /etc/dhclient-script`, while `S40networking` +
-  `auto eth0 / iface eth0 inet dhcp` uses the default. **Measured on a unit in service** (vendor stack
-  removed, ifupdown DHCP, `dhclient -pf /var/run/dhclient.eth0.pid eth0` running): `/etc/hosts` and
-  `/etc/hostname` have not been written for five months while `/var/lib/dhcp/dhclient.leases` updates
-  daily. So once the `networkmanager` boot link is gone, **nothing regenerates either file** — which is
-  what makes an offline-set name stick.
-- ⚠️ **`/etc/dhclient.conf`'s `send host-name` is a third copy of the name, and nothing in this repo
-  writes it.** The vendor image ships `send host-name "RW09";` and the same unit still announces `RW09`
-  to DHCP — so a router's device list keeps showing the shipped name however often `/etc/hostname` is
-  corrected. `commissioning/set-hostname.sh` should own this file too (`IMPROVEMENT_PLAN.md` D7b).
+  `<leased-ip> <name>`. `/sbin/dhclient-script` (the stock ifupdown one, 16,772 bytes) contains
+  **zero** references to `/etc/hosts`. Which one runs depends on who starts `dhclient`: the vendor
+  `networkmanager` passes `-sf /etc/dhclient-script`, while `S40networking` +
+  `auto eth0 / iface eth0 inet dhcp` uses the default. So once the `networkmanager` boot link is gone
+  **nothing regenerates either file**, which is what makes an offline-set name stick — measured on a
+  unit in service, five months of daily `/var/lib/dhcp/dhclient.leases` updates with `/etc/hosts` and
+  `/etc/hostname` untouched.
+- ⚠️ **`/etc/dhclient.conf`'s `send host-name` is a third copy of the name**, and it is the copy a
+  router's device list shows: the vendor image ships `send host-name "RW09";`, and a unit renamed
+  months earlier still announced `RW09`. `commissioning/set-hostname.sh` writes this file too.
 
 **mDNS is present but not started.** `/usr/sbin/avahi-daemon` (109 KB) and a complete
 `/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
@@ -1019,7 +814,7 @@ chroot helper) of 234 MB, and it does **not** start dbus — `dbus-daemon` was a
 lower PID and costs its own 1692 kB regardless.
 ⚠️ **`.local` resolves from Windows but not from WSL**, whose `nsswitch.conf` is `hosts: files dns`
 with no mDNS module — so `ssh root@rw09.local` works in PowerShell while the WSL-based build and
-deploy scripts cannot resolve it until `libnss-mdns` is installed there (`IMPROVEMENT_PLAN.md` D7).
+deploy scripts cannot resolve it until `libnss-mdns` is installed there.
 
 ### 3.6 USB
 
@@ -1096,13 +891,23 @@ limit.
 | File | md5 | Size |
 |---|---|---|
 | vendor `uImage-system` (p1 of both card captures, both p5 factory payloads, RW09's copy) | `edc637ac14f90e0187b1ed65ffedf6d7` | 5,225,796 |
-| `uImage-system-patched` | `a1fd1af8da18c430a34b24762aa16dab` | 5,225,796 |
+| `power` patched — 500 mA, what a commissioned unit runs | `a1fd1af8da18c430a34b24762aa16dab` | 5,225,796 |
+| `power` **and** `mode` patched (`RW_UIMAGE_BOTH_MD5`) | `9021923205825a2ec36edeaa1fe3ccc3` | 5,225,796 |
 
 Nothing generates it per-unit, unlike the filesystem UUIDs
-([§4.2](#42-partitions)). The two differ in **exactly 9 bytes**: the uImage header CRC (offsets 4–7), the
-data CRC (24–27), and one value byte at `0x4FA2CF`. That makes an md5 gate a complete check, which is what
-[`IMPROVEMENT_PLAN.md` F15](IMPROVEMENT_PLAN.md#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)
-builds on.
+([§4.2](#42-partitions)). The power patch differs from the vendor image in **exactly 9 bytes**: the uImage
+header CRC (offsets 4–7), the data CRC (24–27), and one value byte at `0x4FA2CF`; the both-patched image
+differs in **10**. That makes an md5 gate a complete check, which is what `lib/rw-usbpower.sh`'s
+three-state classifier (`vendor` / `power` / `both` / `unknown`) is built on.
+
+⚠️ **The third row is a firmware state no delivery path produces.** The `mode` patch was refuted on
+hardware and is out of every deploy path, so the md5 is recorded for the *classifier* — a unit that was
+patched by hand classifies as `both` and can be re-derived back down to `power`, which is how `.188` was
+reverted. It was measured by running `patch_dtb.py --mode` over `.188`'s own `uImage-system.vendor`
+twice, byte-identical, with the power-only derivation from the same source reproducing `a1fd1af8…` as the
+control — so the source was the pristine vendor image and the toolchain is reproducible. A *mode-only*
+image is unreachable by construction (`--mode` patches both properties in one pass) and classifies as
+`unknown`, which is correct.
 
 > ⚠️ **This patch does not survive re-imaging.** It is a persistent one-time fix *per SD image* —
 > after any reflash it must be re-applied. Tools: `usb_host/find_dtb.py`, `usb_host/patch_dtb.py`
@@ -1118,13 +923,14 @@ builds on.
 | **Bluetooth dongle** | `btusb` — ⚠️ **not built** | ❌ `# CONFIG_BT is not set`; see below |
 
 **A Bluetooth dongle is the only route to a wireless peripheral, and the kernel side is unbuilt.** There
-is no radio on the board at all ([§2.4](#24-unpopulated-and-expansion)), so BT means a dongle in this
+is no radio on the board at all ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)), so BT means a dongle in this
 single connector. `# CONFIG_BT is not set` — exactly the situation `CONFIG_INPUT_JOYDEV` was in before
 Hack 2 — and its dependencies are satisfiable: `CONFIG_NET`, `CONFIG_CRC16`, `CONFIG_HID` and
 `CRYPTO_AES` are all `=y`, while `CRYPTO_SHA256`, `CRYPTO_BLKCIPHER`, `CRYPTO_ECB` and `CRYPTO_CMAC` are
 `=m` and would have to be **built and shipped**, since `/lib/modules/4.14.52/` ships empty.
-`CONFIG_CRYPTO_ECDH` is unset and is needed only for BT LE Secure Connections. ⚠️ **The controller is far
-more likely to work than the audio** — A2DP needs software SBC encoding on this single core. Also unbuilt
+`CONFIG_CRYPTO_ECDH` is unset and is needed only for BT LE Secure Connections. ⚠️ **[inferred] the
+controller is far more likely to work than the audio** — A2DP needs software SBC encoding on this single
+core. Also unbuilt
 and worth knowing: `CONFIG_SND=y` and `CONFIG_SND_USB=y` but `# CONFIG_SND_USB_AUDIO is not set`, so a
 wired USB DAC is one module away too. Both are
 [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
@@ -1169,103 +975,65 @@ upstream, and authoritative for this code because none of it is vendor-patched:
 
 - VBUS here is driven **solely by the DEVCTL `SESSION` bit**. `twl4030` registers no `set_vbus` op, so
   `otg_set_vbus()` returns `-ENOTSUPP` and `omap2430_musb_set_vbus()` does nothing.
-- ⚠️ **The DTB `mode` value looked like the root cause and IS NOT — patched and measured 2026-08-14, see
-  below.** `mode = <0x03>` on the musb node (`usb_host/original.dts:3818`) is
-  `MUSB_PORT_MODE_DUAL_ROLE` (`musb_core.h:82-84`) — on a kernel built `# CONFIG_USB_GADGET is not set`
-  (`usb_host/device_config:3106`) where `musb_gadget.c` is not even compiled. Dual-role therefore buys
-  nothing this kernel can use, and it costs two things on paper: `musb_host_setup()` claims
-  `default_a`/`A_IDLE` only
-  for `MUSB_PORT_MODE_HOST` (`musb_host.c:2789-2793`), and `musb_start()` (`musb_core.c:1074-1080`) masks
-  `SESSION` off and restores it **only** when that clause is false or VBUS already reads invalid. Both
-  readings of the source are correct; **setting `mode = <1>` still does not produce a live port**, so
-  neither was the thing keeping a cold port dark.
-- `musb_start()` has **three** call sites, not one: `musb_virthub.c:398` and `:461`
-  (`SetPortFeature(PORT_POWER)`) and `musb_core.c:1977` (babble recovery). The hub one is re-enterable at
-  runtime through the port over-current path (`musb_core.c:711-713` → `hub.c:5079`).
 - **The OTG ID pin is watched by the TWL4030 PMIC, not by MUSB** — its own interrupt line
-  (`phy-twl4030-usb.c:747`), reading an always-powered `PM_MASTER` register (`STS_HW_CONDITIONS`,
-  `:298-314`), so it fires with the PHY asleep, MUSB in standby and VBUS off. ⚠️ But what an ID event
-  produces is a **resume**, and a resume replays the *cached* DEVCTL (`musb_core.c:2609-2610`). On a cold
-  port the cached `SESSION` bit is clear, so there is nothing to resume — which is why ID-ground alone
-  cannot revive a dead port (measured; see the table below).
-- With no device connected, `musb_pm_runtime_check_session()` matches `MUSB_QUIRK_A_DISCONNECT_19` and
-  after 3×1000 ms polls drops its pm_runtime reference. Once a session exists it is never torn down:
-  `omap2430_ops` has no `.try_idle`, so `musb_platform_try_idle()` is a no-op and `SESSION` is never
-  cleared — which is why a live port stays live indefinitely, including across an unplug.
+  (`phy-twl4030-usb.c:747`) reading an always-powered `PM_MASTER` register, so it fires with the PHY
+  asleep and VBUS off. ⚠️ But what an ID event produces is a **resume**, and a resume replays the
+  *cached* DEVCTL (`musb_core.c:2609-2610`): on a cold port the cached `SESSION` bit is clear, so there
+  is nothing to resume. **[inferred]** as the reason ID-ground alone cannot revive a dead port; the
+  failure itself is measured.
+- **Once a session exists it is never torn down.** `omap2430_ops` has no `.try_idle`, so
+  `musb_platform_try_idle()` is a no-op and `SESSION` is never cleared — which is why a live port stays
+  live indefinitely, including across an unplug. With nothing connected,
+  `musb_pm_runtime_check_session()` matches `MUSB_QUIRK_A_DISCONNECT_19` and after 3×1000 ms polls drops
+  its pm_runtime reference.
 
-⚠️ **Measured on `.188`, 2026-08-13 — and two of these refute what this section used to say.**
+⚠️ **A hub or adapter left permanently attached does NOT fix this.** The driver's teardown path says it
+should, and the claim was written here on that reading — but it assumes a session **already exists**. A
+passive hub on a dead port reads `Vbus off` at 1, 2 and 3 min and for minutes after, and a device plugged
+into that hub enumerates nothing. Re-seating an adapter on a port that *had* already had a session revives
+it immediately, which is the distinction: it holds a port **open**, not a port **alive**.
 
-| Measurement | Result |
+⚠️ **Five readings that look diagnostic and are not** — three were believed and written down before being
+refuted, one of them in this document.
+
+| Reading | Actually |
 |---|---|
-| Replug an already-working peripheral at 70, 75, 90, 120, 150, 180, 240, 300 s | **works every time.** Gap length is not a variable; the earlier "10 s recovers, 60 s does not" reading has no counterpart on current hardware |
-| A passive hub attached to a **dead** port, nothing else | `Vbus off` at 1, 2 and 3 min and for several minutes after; a device then plugged into that hub enumerates nothing |
-| Re-seat an OTG adapter on a port that **had already had a session** | revives it immediately, even after minutes dark |
-| `/etc/init.d/usb-host recover` on a dead port, pad attached | works — but has needed **two consecutive runs** both times, and the second time **both** runs started from `Vbus off`, ruling out "VBUS still valid at re-probe" as the general cause |
+| `echo host > $MUSB/mode` | **silent no-op** — `omap2430_ops` has no `.set_mode`, so the store reports success having done nothing |
+| `$MUSB/vbus`'s `timeout 1100 msec` | **inert** — nothing on omap2430 reads `musb->a_wait_bcon`; writing it changes the printed number and nothing else |
+| `power/control = on` (forbidding runtime PM) | **does not prevent the drop** — measured with `runtime_status` reading `active` throughout |
+| `$MUSB/mode` as a state reading | **not diagnostic** — reads `a_idle` with a pad enumerated, `js0` present and the game responding |
+| `twl4030-usb/vbus` | **not a port-state reading at all** — 0444, reports `vbus_supplied` (somebody feeding *us*), so it reads `off` in the working state **and** the dead one |
+| `lsmod` → `xpad … 0` | a refcount of module *users*, not bound devices — reads `0` with a pad bound and `event1`/`js0` present |
 
-⚠️ **So a hub or adapter left permanently attached does NOT fix this.** That claim was written here and in
-`device-files/usb-host` on the strength of the driver's *teardown* path, which assumes a session already
-exists; it was refuted by the hub row above within the hour. It holds a port **open**, not a port **alive**.
+**The one real userspace trigger besides a rebind is debugfs `softconnect`** (`musb_debugfs.c:301-343`) —
+and it sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, so it cannot revive a port sitting in `a_idle`.
 
-⚠️ **Six readings and writes that look like the answer and are not.** Three of these were believed and
-written down before being refuted — one of them in this document.
-
-| Looks like | Actually |
-|---|---|
-| `echo host > $MUSB/mode` | **silent no-op.** `omap2430_ops` has no `.set_mode`, so `musb_platform_set_mode()` returns 0 and the store reports success having done nothing. ⚠️ This section previously recorded it as *the* cure for a failed replug on the strength of one `.225` observation. The source refutes it: whatever recovered that unit, it was not this write |
-| `$MUSB/vbus`'s `timeout 1100 msec` | **inert.** Nothing on omap2430 reads `musb->a_wait_bcon` — there is no `.try_idle` — so it is an untouched default from `allocate_instance()`. Writing `0` or `3600000` changes the printed number and nothing else |
-| `power/control = on` (forbidding runtime PM) | **does not prevent the drop.** Measured with `runtime_status` reading `active` throughout and the port still going dark |
-| `$MUSB/mode` as a state reading | **not diagnostic.** Reads `a_idle` with a pad enumerated, `js0` present and the game responding to it |
-| `twl4030-usb/vbus` = `off` | **0444, and it is not a port-state reading at all** — it reports `vbus_supplied`, i.e. somebody feeding *us*, which is cleared whenever `twl4030_is_driving_vbus()` is true (`phy-twl4030-usb.c:301-306`). So it reads `off` in the working state **and** the dead one |
-| `lsmod` → `xpad 28672 0` | a module refcount counts module *users* (`ff_memless 16384 1 xpad`), not bound devices. It reads `0` with a pad bound and `event1`/`js0` present |
-
-**The one real userspace trigger besides a rebind is debugfs `softconnect`** (`musb_debugfs.c:301-343`,
-`CONFIG_DEBUG_FS=y`) — and it sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, so it cannot revive a
-port sitting in `a_idle`. Candidates and what each measurement closed:
+⚠️ **Three source-derived mechanisms have each been applied and refuted on hardware**, the last being the
+DTB `mode` 3 → 1 patch: `.188` was patched to `mode = <1>`, the **booted kernel's own tree** read it back,
+and with the socket empty at boot a pad plugged in afterwards still stayed dark — while
+`/etc/init.d/usb-host recover` brought it up on attempt 1 with the same pad and cable as the negative
+control. **The common thread is that none of the three explains how a port that probed with an empty
+socket ever obtains a session** — VBUS and the ID pin are both inert at that point. Require an answer to
+that question of any further candidate before spending a reboot on it. Candidates and what each
+measurement closed:
 [`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix).
 
-⚠️ **The DTB `mode` 3 → 1 patch was applied to a unit and it does NOT work — measured on `.188`,
-2026-08-14, and this is the third source-derived mechanism to be refuted on hardware.** `uImage-system`
-on p1 was patched to `mode = <1>` with `power = 0xfa`, and the **booted kernel's own tree** read
-`00 00 00 01` / `00 00 00 fa`, so the change was genuinely live rather than merely written; the unit
-booted normally with no regression. With the socket **empty at boot**, a pad plugged in afterwards stayed
-dark: `Vbus off`, `mode a_idle`, no `1-1`, nothing in `/proc/bus/input/devices`, at t+0 and again at
-t+10 s. **Negative control, same firmware, same pad, same cable:** `/etc/init.d/usb-host recover`
-then brought it up on **attempt 1** — `Vbus on`, `1-1`, `Microsoft X-Box 360 pad`. So the pad, the port
-and the remedy all work, and `mode = <1>` is what does not.
-
-⚠️ **What that costs the model above:** `musb_start()`'s `SESSION` mask is real in the source and is
-**not** what keeps a cold port dark. The common thread across all three refuted mechanisms is that none
-of them explains **how a port that probed with an empty socket ever obtains a session** — VBUS and the ID
-pin are both inert at that point, and every failed measurement started from exactly that state. Require
-an answer to that question of any further candidate before spending a reboot on it. The unit was
-returned to the power-only kernel the same day, and no deployment or commissioning path can produce a
-mode-patched unit.
-
-**One observation that is deliberately not a claim:** `recover` succeeded on attempt **1** above, where
-both earlier manual measurements on the power-only firmware needed **two** consecutive runs. n = 1, a
-different boot, and `recover`'s own 3-try loop makes a single invocation a weak instrument for counting
-rebinds. Settling it needs repeated boot-empty → plug → `recover` cycles on **both** firmwares, one
-reboot each.
-
-**Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the
-running kernel holds it, and `/sys/firmware/fdt` is the raw blob (67 273 bytes on `.188`, magic
-`d00dfeed`, `totalsize` matching the file size exactly — so it is complete and parseable by
-`usb_host/uimage.py`'s walk). ⚠️ **`find /proc/device-tree -name X` silently finds nothing**:
-`/proc/device-tree` is a *symlink* to the sysfs path and `find` does not follow it. Use the
-`/sys/firmware/devicetree/base` path. That is how `mode = <3>` was confirmed against the running
-kernel rather than against the decompiled `usb_host/original.dts` — and how `mode` was measured to be
-the **only** property of that name in the whole tree.
+**Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the running
+kernel holds it, and `/sys/firmware/fdt` the raw blob, parseable by `usb_host/uimage.py`'s walk.
+⚠️ **`find /proc/device-tree -name X` silently finds nothing**: `/proc/device-tree` is a *symlink* to the
+sysfs path and `find` does not follow it. Use the `/sys/firmware/devicetree/base` path — that is how the
+booted `mode` value was confirmed against the running kernel rather than against the decompiled
+`usb_host/original.dts`.
 
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
-as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing. **Measured on `.188`
-2026-08-14:** one tap, with a pad attached and dark on a port reading `Vbus off`, took ~5 s and left
-`Vbus on`, `1-1` present, `event1` + `js0` created and the pad playable. ⚠️ It is deliberately not on
-a timer, and the reason is not merely the wasted rebinds: **nothing in software can distinguish "nothing
-is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either way and no connect
-interrupt can arrive in either — so an operator who has just plugged something in holds the one bit no
-poll can obtain.
+as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing; measured on `.188`
+2026-08-14 at ~5 s from one tap, leaving `Vbus on`, `1-1`, `event1` + `js0` and the pad playable. ⚠️ It is
+deliberately not on a timer, and the reason is not merely wasted rebinds: **nothing in software can
+distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either
+way and no connect interrupt can arrive in either — so an operator who has just plugged something in
+holds the one bit no poll can obtain.
 Full technical detail, including MUSB memory addresses, the `omap2430_ops` struct layout, why
 `mmap()` works where `write()` does not, and the approaches that failed:
 [`usb_host/README.md`](usb_host/README.md).
@@ -1296,22 +1064,18 @@ C implementation: `native_apps/common/hardware.c`. Vendor scripts that still exi
 `/opt/sbin/backlight/setbacklight.sh`, `/opt/sbin/brightness.sh`, `/opt/sbin/conc_leds.sh`.
 
 **The backlight ceiling is 100, and a cleaned unit is already sitting on it.** `max_brightness` is 100
-and a write above it does not raise the duty — `echo 150` reads back `100` — which is why the `150` in
-the vendor's own commented-out `backlight.sh` line was never brighter than `100`. Measured on `rwtest`
-2026-08-06 with a temporary `rc5.d` `S01` probe, i.e. before `sshd` and long before `roomwizard-app`: a
-freshly booted **cleaned** unit reads **100 of 100** with nothing in our stack having written it —
-`app_launcher` makes no `hw_set_backlight()` call at all. The vendor's entire mechanism
-(`adjustbklight.sh` → `setbacklight.sh` / `backlight.sh -1`) writes **this one node** from
-`websign/brightness.conf` and **defaults to 100** when that file is missing, which is the state our
-clean leaves behind. So a cleaned unit is already at the brightest state the vendor firmware could
-reach, and a boot-time setter would write 100 over 100.
+and a write above it does not raise the duty — `echo 150` reads back `100`. Measured on `rwtest`
+2026-08-06 before `sshd` and long before `roomwizard-app`: a freshly booted **cleaned** unit reads
+**100 of 100** with nothing in our stack having written it — `app_launcher` makes no `hw_set_backlight()`
+call at all. The vendor's own mechanism (`adjustbklight.sh` → `setbacklight.sh` / `backlight.sh -1`)
+writes this one node from `websign/brightness.conf` and **defaults to 100** when that file is missing,
+which is the state our clean leaves behind. So a boot-time setter would write 100 over 100.
 
 ⚠️ **"The panel looks dim" is therefore not a software question — at a fixed duty cycle, perceived
 brightness follows what is *drawn*.** The launcher grid measures **19.2 % mean luminance**, 87.5 % of
 its pixels in the darkest quarter (32bpp capture, 2026-08-06); the vendor's browser filled the same
-panel with a near-white page. A dark UI at full backlight looks dimmer than a white page at the same
-full backlight, and no write to `brightness` closes that gap. Judge a brightness claim with **identical
-content on both panels**, or it measures the UI's palette rather than the hardware.
+panel with a near-white page. Judge a brightness claim with **identical content on both panels**, or it
+measures the UI's palette rather than the hardware.
 
 **There is no third colour and no light bar on the main indicator** — but driving red and green
 together gives amber, so the effective palette is red / amber / green with smooth crossfade.
@@ -1420,7 +1184,7 @@ in_voltage0..15_{raw,mean_raw,input}
 `CONFIG_TWL4030_MADC=y` and the driver probes cleanly at boot. `in_voltage*_mean_raw` gives free
 hardware averaging. **Six general-purpose analogue inputs sitting idle** is the cheapest path to
 real analogue input on this device — the catch is getting a wire to one, see
-[Unpopulated and expansion](#24-unpopulated-and-expansion). Proposal: `IMPROVEMENT_PLAN.md` F4.
+[Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion). Proposal: `IMPROVEMENT_PLAN.md` F4.
 
 ### 3.12 Serial ports
 
@@ -1434,7 +1198,7 @@ real analogue input on this device — the catch is getting a wire to one, see
 running** (`/etc/inittab`: `O1:12345:respawn:/bin/start_getty 115200 ttyO1 vt102`, and `ttyO1` is
 in `/etc/securetty`). U-Boot prints there too with `bootdelay=1` — a one-second window to reach the
 `rw20 #` prompt. Physically it comes out at **`P4`** at RS-232 levels — pinout in
-[Unpopulated and expansion](#24-unpopulated-and-expansion).
+[Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
 
 > **The serial console is deliberately not used by this project.** The recovery loop is: pull the
 > SD card, reimage, DHCP, SSH. Since the rules in §1 keep NAND and U-Boot untouched, the card *is*
@@ -1462,9 +1226,10 @@ Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial
 conceivable without kernel source, since the DTB is appended to `uImage-system` and this project
 already binary-patches it, but adding a whole pinmux node is materially harder than the one-word
 power patch and is **unproven**. Proposal: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured
-3.3 V rail: [Unpopulated and expansion](#24-unpopulated-and-expansion).
+3.3 V rail: [Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
 
-**Expect the vendor to have assumed a Series 1 module.** A settable `ATMY` and `ATCH` are 802.15.4
+**[inferred] expect the vendor to have assumed a Series 1 module** — from the command set the vendor's
+own tooling uses, not from a module ever being read on a unit. A settable `ATMY` and `ATCH` are 802.15.4
 (Series 1) commands. On a Series 2 / ZB part `ATMY` is **read-only** and `ATCH` only *reports* the
 operating channel — so an S2 module answers `+++` and `ATID` but gives a partial response to the
 rest. **Do not read that as a wiring fault**; check the module label first.
@@ -1510,22 +1275,14 @@ if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
 **`disable-steelcase.sh` handles this**, not `commissioning/provision.sh` directly: it creates
 `/var/watchdog_test` and **replaces the whole crontab** with the two cleanup jobs worth keeping
 (`rotatelogfiles.sh`, `cleanupfiles.sh`). It does *not* comment the line out and does *not* back the
-original up — an earlier revision of this section claimed both. Commenting out was the old approach
-and was abandoned because it re-appended its own header on every run and inflated the crontab to
-~19 KB; the factory crontab's content is recoverable from the partition images under `partitions/`
+original up; the factory crontab's content is recoverable from the partition images under `partitions/`
 if it is ever wanted.
 
-Two consequences of *where* that script runs, both of which have bitten:
-
-- `commissioning/provision.sh <ip>` is what **deploys** it (to `/opt/roomwizard/`) and runs it once, and
-  `/etc/init.d/roomwizard-app` runs it again **on every boot** as a safety net. So a device can be
-  running a copy older than the repo's until `commissioning/provision.sh` is re-run — measured on RW09
-  2026-08-03, where the deployed copy predated a bug the repo had already grown.
-- Because it runs unattended at boot and nothing checked its exit status, a failure was invisible.
-  Under `set -e` an unguarded `sed` on `/etc/profile` used to run *before* the `touch`, so a device
-  with no `/etc/profile` kept the watchdog armed and rebooted every ~70 minutes with no diagnostic
-  anywhere. The bypass is now the script's first command and it reports the bypass state on its last
-  line ([`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B18, done 2026-08-03).
+⚠️ **A device can be running a copy of that script older than the repo's.** `commissioning/provision.sh
+<ip>` is what deploys it (to `/opt/roomwizard/`) and runs it once; `/etc/init.d/roomwizard-app` re-runs
+the *deployed* copy on every boot. So check `--status` before drawing a conclusion about behaviour — the
+bypass is now the script's first command and it reports the bypass state on its last line, but a device
+that has not been re-provisioned is running whatever it was given.
 
 ### 3.14 What is not present
 
@@ -1533,13 +1290,10 @@ Two consequences of *where* that script runs, both of which have bitten:
 
 - ❌ **WiFi / Bluetooth** — no radio of any kind fitted. A USB Bluetooth dongle is the only route, and
   `CONFIG_BT` is unset ([§3.6](#36-usb), [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08)).
-- ❌ **Ambient light sensor** — and none is possible. The vendor factory test has a light-sensor
-  step (`functionaltest.sh` → `pv02_app 5`, strings `Tests the Light sensor`, `/dev/i2c-1`,
-  `Brightness: %u`), and it is absent from the 4.14 device tree — which is why this sat as an
-  unverified maybe for a long time. The full teardown settles it: no sensor part, **and no
-  aperture, window or light pipe anywhere in the enclosure**. The case is light-tight, so ambient
-  sensing is impossible on this SKU regardless of what is populated. The factory test is shared
-  firmware across a product family. **Do not probe bus 1 looking for it.**
+- ❌ **Ambient light sensor** — and none is possible. The teardown found no sensor part **and no
+  aperture, window or light pipe anywhere in the enclosure**: the case is light-tight. The vendor
+  factory test does have a light-sensor step (`functionaltest.sh` → `pv02_app 5`, on `/dev/i2c-1`) —
+  it is shared firmware across a product family. **Do not probe bus 1 looking for it.**
 - ❌ **Microphone, and any audio input path to the outside** — no MEMS mic, no electret, no
   acoustic port. See [Audio](#34-audio).
 - ❌ **3.5 mm jack**, and no unpopulated footprint for one.
@@ -1614,25 +1368,23 @@ all three empty; the vendor's config and logs are on the other partitions.
 
 | Partition | Used | Largest items |
 |---|---|---|
-| p6 `/` | 379 MB | `/usr` 223 MB (of which `/usr/lib` 138 MB, `/usr/share` 60 MB) · `/opt` 142 MB (`openjre-8` 93 MB, `jetty-9-4-11` 43 MB). **Everything outside `/usr` and `/opt` totals 15 MB**: `/lib` 5.4, `/sbin` 3.9, `/bin` 3.7, `/etc` 1.6 |
+| p6 `/` | 379 MB | `/usr` 223 MB (`/usr/lib` 138, `/usr/share` 60) · `/opt` 142 MB (`openjre-8` 93, `jetty-9-4-11` 43). **Everything outside `/usr` and `/opt` totals 15 MB** |
 | p2 `/home/root/data` | 144 MB | `cron/` **131 MB** — a *log*, not the spool (`commissioning/provision.sh` truncates it rather than deleting the directory) · `test.hex` 10 MB · `websign/` 220 KB, the network config of [§3.5](#35-network-and-power) |
 | p3 `/home/root/log` | 31 MB | `jetty_logs` 18 MB · `browser.err` 8 MB · `messages` 4 MB |
 | p5 `/home/root/backup` | 492 MB | `factory/` **472 MB** — vendor upgrade/restore images plus `.md5` files · `websigns/` 15 MB |
 
-**`/usr/lib`'s 138 MB is a kiosk-browser stack that nothing in this project uses.** `libwebkit2gtk`
-36 MB, `libicudata` 27 MB, `libjavascriptcoregtk` 9.5 MB, `libgtk-3` 5.9 MB, plus `webkit2gtk-4.0/`,
-`xorg/`, `X11/`, `gstreamer-1.0/`, `gdk-pixbuf-2.0/` and a spell checker (`aspell-0.60/`,
-`enchant-2/`); `/usr/share` carries its `X11/`, `fonts/`, `themes/`, `icons/`, `fontconfig/`. The
-matching service is `/etc/init.d/browser`, and `Xorg.0.log` + the 8 MB `browser.err` on p3 are its
-output. Every component here draws straight to `/dev/fb0`, so none of it is linked or loaded.
-`/usr/lib` also holds `libpython3.8`, `perl5/` and `ts/` (tslib) — worth keeping, unlike the above.
+**`/usr/lib`'s 138 MB is a kiosk-browser stack that nothing in this project uses** — `libwebkit2gtk`,
+`libicudata`, `libjavascriptcoregtk`, `libgtk-3`, the X11 and gstreamer trees, a spell checker — served by
+`/etc/init.d/browser`, with `Xorg.0.log` and p3's `browser.err` as its output. Every component here draws
+straight to `/dev/fb0`, so none of it is linked or loaded. `/usr/lib` also holds `libpython3.8`, `perl5/`
+and `ts/` (tslib), which are worth keeping.
 
 **The vendor's upgrade machinery is on disk and its payload is p5's `factory/`:**
 `/etc/init.d/startautoupgrade`, `/opt/sbin/upgrade_logger.sh`, `IsUpgradeRunning` on p5, and the
-litter of `upgradeProgressListener_upgradeStatus=*` files dropped in `/` show it has run. Whether it
-can still fire unattended has **not** been established — but deleting `factory/` removes the payload
-it would need, which is why that deletion is a safety measure and not a space measure
-(`IMPROVEMENT_PLAN.md` F10).
+litter of `upgradeProgressListener_upgradeStatus=*` files dropped in `/` show it has run.
+**[unverified]** whether it can still fire unattended — nobody has established it either way — but
+deleting `factory/` removes the payload it would need, which is why that deletion is a safety measure
+and not a space measure.
 
 **The layout is the identity; the UUIDs are not.** Measured across two units of the same firmware
 build (`/etc/version` `20180309123456`), the partition table is byte-identical — same start sector
@@ -1761,14 +1513,8 @@ Verified behaviour:
   layers: the whole package (`upgrade.cpio.gz.md5`); each partition image
   (`sd_rootfs_part.img.md5`, `sd_boot_archive.tar.gz.md5`, `sd_data_part.img.md5`,
   `sd_log_part.img.md5`); and a post-write read-back comparison after each `dd`, with up to 3
-  retries per partition and exit code 6 on final failure.
-
-If you modify anything inside that upgrade tree, regenerate the checksums:
-
-```bash
-cd /path/to/modified/images
-for file in *.img *.gz *.bin; do md5sum "$file" > "${file}.md5"; done
-```
+  retries per partition and exit code 6 on final failure. Modify anything in that tree and every
+  `.md5` beside it has to be regenerated.
 
 ### 4.7 Recovery
 
@@ -1803,33 +1549,15 @@ kernel loads, so there is no SSH and no serial console to fix it from.
 
 **Layer 3 — the serial console**, if you ever wire it up. `bootdelay=1` gives a one-second window
 to `rw20 #`; a root shell is already running there. Not used by this project — see
-[Serial ports](#312-serial-ports).
-
-```sh
-# 1. Host, once: full SD backup
-sudo dd if=/dev/sdX of=roomwizard-original-4gb.img bs=4M status=progress
-md5sum roomwizard-original-4gb.img | tee roomwizard-original-4gb.img.md5
-
-# 2. Stage a new kernel under a NEW name on p1 (never overwrite uImage-system)
-sudo mount /dev/sdX1 /mnt/boot && sudo cp uImage-test /mnt/boot/ && sudo umount /mnt/boot
-
-# 3. With serial attached: power on, press a key within 1 s -> "rw20 # "
-mmc dev 0
-mmc rescan
-fatload mmc 0 0x82000000 uImage-test
-run sysargs
-bootm 0x82000000
-
-# 4. If it panics or hangs: power-cycle and do NOT interrupt.
-#    bootcmd loads the untouched uImage-system. You are back. No state changed.
-
-# 5. Promote only after several clean boots, keeping the old one:
-cp uImage-system uImage-system-known-good && cp uImage-test uImage-system
-```
+[Serial ports](#312-serial-ports). The loop it enables, with a card backup taken first: stage the
+experiment under a **new** filename on p1, interrupt into `rw20 #`, `fatload mmc 0 0x82000000 uImage-test;
+run sysargs; bootm 0x82000000`. If it panics, power-cycle and do **not** interrupt — `bootcmd` loads the
+untouched `uImage-system` and nothing has changed state. Promote only after several clean boots, keeping
+the old image under another name.
 
 > **JTAG is required only if you damage the 12 KB NAND redirector (`mtd0`) or write a bad
 > `mlo`/`u-boot.bin` to p1.** Observe the rules in [§1](#the-rules-that-prevent-a-brick) and it
-> never comes up. `P3` appears to be a TI-14 JTAG header if it ever does.
+> never comes up. `P3` is a TI-14 JTAG header **[inferred]** if it ever does.
 
 **Logs** live in `/var/log/` (system), `/home/root/log/` (application),
 `/var/log/browser.{out,err}` and `/var/log/jettystart`.
@@ -1926,10 +1654,8 @@ vendor service names. `device-files/clean-rules.conf` is that whitelist, transcr
 | `rc2.d`–`rc4.d` | `S02dbus-1` `S09sshd` `S20hwclock.sh` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` `S99stop-bootlogd` |
 | `rc0.d`, `rc6.d` | `K09sshd` `K20dbus-1` `K20hwclock.sh` `K20psplash` `K20wpa_supplicant` `K31alsa-state` `K85watchdog` `S20sendsigs` `S25save-rtc.sh` `S31umountnfs.sh` `S38urandom` `S40umountfs` `S90halt`/`S90reboot` |
 
-⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** They carry `umountfs`,
-`sendsigs` and `save-rtc.sh`; a unit that cannot unmount cleanly is a unit whose next fsck is not
-optional. `rw_clean_validate` rejects a rules file that even names them, so they are unreachable rather
-than merely unvisited.
+⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** Why they are unreachable by
+construction rather than merely unvisited: `device-files/CLAUDE.md`.
 
 **`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` (three
 entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a link `commissioning/provision.sh`
@@ -1982,11 +1708,9 @@ Device paths worth knowing:
 /opt/roomwizard/default-app  boot target
 ```
 
-**Seeing what is running: use `ps`, never `ps w`.** This busybox (v1.31.1) treats `ps w` as
-"processes with a controlling TTY", which on RW09 is **3 lines against plain `ps`'s 51** — the two
-gettys and the header. An app started at boot or by the launcher has no TTY, so `ps w` shows nothing
-and the process looks absent. Measured 2026-08-03, and it is why a surviving `vnc_client` took a
-session to find (`IMPROVEMENT_PLAN.md` B25). What works:
+**Seeing what is running: use `ps`, never `ps w`.** This busybox (v1.31.1) treats `ps w` as "processes
+with a controlling TTY" — on RW09 **3 lines against plain `ps`'s 51**, the two gettys and the header. An
+app started at boot or by the launcher has no TTY, so `ps w` shows nothing and the process looks absent.
 
 | Want | Command |
 |---|---|
@@ -2027,57 +1751,26 @@ flags (verified). Keep them for explicitness, but they are not what saves you.
 | ARM dependency libraries | same flags as ScummVM |
 
 **Checking a binary — the expected count is a hard zero.** Use
-[`native_apps/check-arm-safe.sh`](native_apps/check-arm-safe.sh), which
-`build-and-deploy.sh` runs before every deploy and on build-only runs too. It reports zero across all
-**31** ARM build artifacts. It skips anything whose `objdump -f` architecture is not ARM and says how
-many it skipped — `build/` also collects host-gcc test binaries, and under WSL every file on `/mnt/c`
-looks executable, so a gate that does not filter counts files it cannot actually disassemble as
-evidence that it passed.
+[`native_apps/check-arm-safe.sh`](native_apps/check-arm-safe.sh), which all three component build scripts
+run before every deploy and on build-only runs too. It reports zero across every ARM artifact, skips
+anything whose `objdump -f` architecture is not ARM, and says how many it skipped.
 
-**Where each component's gate runs, and why ScummVM's is where it is.** All three now gate, but not at
-the same point:
+Two ways to get a wrong answer out of it, both measured on this repo:
 
-| Component | Gate site | Artifact checked |
-|---|---|---|
-| `native_apps` | after the build, before deploy **and** before `--bundle` | all 33, unstripped (nothing is stripped) |
-| `vnc_client` | after `make`, before deploy and before `--bundle` | `vnc_client`, deliberately **not** `vnc_client_stripped` |
-| `scummvm-roomwizard` | inside `strip_binary`, **before** the `strip` runs | `scummvm`, unstripped |
-
-ScummVM's is inside `strip_binary` because `arm-linux-gnueabihf-strip scummvm` strips **in place** — no
-unstripped copy survives it, so that function's first half is the only moment the gate has a readable
-artifact. A gate added anywhere later would be checking a stripped binary, which is the second wrong
-answer below.
-
-Two ways to get a wrong answer out of this check, both measured on this repo. First, matching too
-loosely:
-
-> ⚠️ **Do not match the line; match the tab-delimited mnemonic field.** A bare `grep 'sdiv\|udiv'`
-> matches the *substring* `udiv` inside the **names** of the software-divide helpers — `__udivsi3`
-> (×20), `__udivmoddi4` (×6) and their call sites. Those are symbol names and branch targets, not
-> instructions, and their presence is positive evidence that division is being done in software.
-> `libgcc.a` on this toolchain contains **zero** hardware `sdiv`/`udiv`. There is nothing to
-> allowlist, and any hit from a correctly-matched gate is real.
-
-Second, feeding it an artifact it cannot read correctly:
-
-> ⚠️ **Gate the *unstripped* artifact.** `objdump` needs the symbol table to tell **Thumb-2 from ARM**,
-> and these binaries are Thumb-2. Stripped, it falls back to 32-bit ARM and re-reads the same bytes as
-> ARM words, manufacturing divides that are not in the file. Measured on `samegame` 2026-08-08:
-> `objdump -s` prints `4846ebf7 1bfe3de7` at `0x42618` for the unstripped file *and* the stripped copy —
-> `strip` cannot alter `.text` — but unstripped that is `mov r0, r9` / `bl …` / `b.n …`, while read as ARM
-> the second word alone becomes `e73dfe1b` = `udiv sp, fp, lr`. Neighbouring lines decode as
-> `<UNDEFINED>` and `sbcsne pc, r1, …`, which is the signature. The same effect gives ScummVM **9**
-> phantom hits and `vnc_client` **1**. The phantom operands are **not** reliably invalid:
-> `udiv pc, fp, sl` is dismissible, but `udiv r7, r1, lr` is a legal encoding indistinguishable from
-> compiler output — so eyeballing operands is not triage, the symbol table is the only thing that
-> settles it. Offsets cannot be allowlisted either: `base/version.o` re-embeds the build date on
-> every link, which moves every address after it.
+> ⚠️ **Match the tab-delimited mnemonic field, not the line.** A bare `grep 'sdiv\|udiv'` matches the
+> *substring* `udiv` inside the **names** of the software-divide helpers — `__udivsi3`, `__udivmoddi4`
+> and their call sites. Those are symbol names and branch targets, and their presence is positive
+> evidence that division is being done in software. `libgcc.a` on this toolchain contains **zero**
+> hardware `sdiv`/`udiv`, so there is nothing to allowlist and any correctly-matched hit is real.
 >
-> So the gate **refuses to judge** a stripped target rather than reporting a hit for it — and rather than
-> skipping it quietly, which is the same defect from the false-negative side. Three outcomes:
-> **0** clean, **1** a real hit, **2** something could not be judged; the last line is always
-> `ARM-SUMMARY checked=N unverified=N bad=N skipped=N`. ⚠️ **Do not read that status through `xargs`** —
-> it maps any 1–125 onto its own 123 and erases the difference between 1 and 2.
+> ⚠️ **Gate the *unstripped* artifact.** `objdump` needs the symbol table to tell **Thumb-2 from ARM**,
+> and these binaries are Thumb-2; stripped, it re-reads the same `.text` bytes as 32-bit ARM words and
+> manufactures divides that are not in the file — 9 phantom hits on ScummVM, 1 on `vnc_client`. The
+> phantom operands are not reliably invalid, so eyeballing them is not triage. The gate therefore
+> **refuses to judge** a stripped target: **0** clean, **1** a real hit, **2** could not be judged.
+> ScummVM's gate sits inside `strip_binary` *before* the `strip` call for this reason — the strip is
+> in-place, so that is the only moment an unstripped artifact exists. Harness rules, including why the
+> status must not be read through `xargs`: `tests/CLAUDE.md`.
 
 The check itself:
 
@@ -2157,58 +1850,23 @@ Everything else is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm
 `ti,omap-twl4030` audio). And the panel is no longer a blocker now that its timings are recorded in
 [Display](#32-display) — it reduces to a stock `panel-dpi` node.
 
-**Upgrading would be a net loss anyway:**
+**Upgrading would be a net loss anyway.** Every hoped-for benefit is either already available or not a
+version problem: ALSA works today and the bug is in the `snd-pcm-oss` emulation layer, so that fix is
+pure userspace at zero risk; USB host/DMA and `PREEMPT_NONE`/`HZ=100` are kernel *config* defects,
+unfixable without source whatever the version; there is no WiFi hardware to gain a driver for; and this
+is a LAN-only device with no browser and no untrusted input.
 
-| Hoped-for benefit | Reality here |
-|---|---|
-| Working ALSA instead of the buggy OSS shim | **ALSA already works.** The bug is in the `snd-pcm-oss` emulation layer. **Fix is pure userspace, on this kernel, zero risk.** |
-| Better USB host / DMA | A **kernel config defect**, not a version problem. Unfixable without source; the `/dev/mem` runtime patch stays. |
-| PREEMPT_RT / lower latency | Currently `PREEMPT_NONE`, `HZ=100`. Config-only, and 4.14 has an official `-rt` branch. Unfixable without source. |
-| DRM/KMS instead of fbdev | **Net negative — see below.** |
-| Modern WiFi dongle support | No WiFi hardware. 4.14 already carries `rtl8xxxu`, `rtl8192cu`, `mt7601u`, `ath9k_htc`. |
-| Security patches | LAN-only device, no browser, no untrusted input. |
-
-**The DRM/KMS trap is the decisive argument.** `omapfb` and `omapdss` were deprecated across 4.x
-and **removed from mainline during 5.x**; the OMAP3 replacement is `omapdrm`, a DRM/KMS driver.
-Under `omapdrm` you get `/dev/fb0` only via `CONFIG_DRM_FBDEV_EMULATION`, and **DRM's fbdev
-emulation exposes a fixed pixel format**. This project switches bpp at runtime in three different
-components ([Display](#32-display)), so that switch is expected to fail — breaking ScummVM and the
-VNC client until both are rewritten against DRM dumb buffers, on top of hand-writing a board DTS
-and reverse-engineering `panjit_ts`. The DSS overlay sysfs interface, the best free performance win
-available, disappears too. And a 6.x kernel has a materially larger footprint on a 234 MB box.
-
-> **Verification status:** that the *current* stack supports runtime bpp switching is verified
-> (`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running). That DRM fbdev
-> emulation would *reject* it is a well-founded expectation based on how that emulation works, but
-> it could **not** be tested here — this device has no DRM at all. Treat it as a strong prior, not
-> a measurement.
+**The DRM/KMS trap is the decisive argument.** `omapfb` and `omapdss` were deprecated across 4.x and
+**removed from mainline during 5.x**; the OMAP3 replacement is `omapdrm`, a DRM/KMS driver. Under it
+`/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev emulation exposes a **fixed** pixel
+format — while this project switches bpp at runtime in three components ([Display](#32-display)). The DSS
+overlay sysfs interface, the best free performance win available, disappears outright, and a 6.x kernel
+has a materially larger footprint on a 234 MB box. **[inferred]** that the emulation would *reject* the
+switch — it follows from how that emulation works but could not be tested, because this device has no DRM
+at all. What is measured is only that the *current* stack supports the switch
+(`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running).
 
 **Brick risk for kernel work: LOW** (removable SD plus the untouched-`uImage-system` discipline).
 **Value: LOW.** The ratio does not justify it. Treat this as a userspace problem with a
 kernel-config footnote: the two highest-value improvements available — ALSA audio and DSS
 overlays — need no kernel work at all.
-
----
-
-## Appendix A: photo index
-
-17 images in [`HardwarePhotos/`](HardwarePhotos/), from the 2026-07-30 teardown of `RW29 1G-093`.
-`Top-*` is the face toward the screen; `Bottom-*` is the face toward the rear cover — the one
-carrying the SoC, RAM, NAND, Ethernet, PoE and all the headers.
-
-The photos are stored in **Git LFS**. A clone made without `git lfs install` gets pointer stubs
-instead of JPEGs; `git lfs pull` repairs it.
-
-| File | Shows |
-|---|---|
-| [`Top-Overwiev.jpg`](HardwarePhotos/Top-Overwiev.jpg) | **Complete top face**, unobstructed — `P3`/`P4`, `U27`, `J1`, `J7`/`J8`, `J3`, 40-pin FFC |
-| [`Top-Left-Top.jpg`](HardwarePhotos/Top-Left-Top.jpg), [`Top-Top-Middle.jpg`](HardwarePhotos/Top-Top-Middle.jpg), [`Top-right-bottom.jpg`](HardwarePhotos/Top-right-bottom.jpg) | Top-face details |
-| [`Bottom-Overview.jpg`](HardwarePhotos/Bottom-Overview.jpg) | **Complete bottom face** |
-| [`Bottom-Top-Right.jpg`](HardwarePhotos/Bottom-Top-Right.jpg) | `J5`/`J6` XBee socket, `P3`/`P4` through-holes, `LED1`–`4`, `U32` |
-| [`Bottom-Top-Left2.jpg`](HardwarePhotos/Bottom-Top-Left2.jpg), [`Bottom-Center.jpg`](HardwarePhotos/Bottom-Center.jpg), [`Bottom-Bottom-Left.jpg`](HardwarePhotos/Bottom-Bottom-Left.jpg), [`Bottom-Bottom-Right.jpg`](HardwarePhotos/Bottom-Bottom-Right.jpg) | Bottom-face details; PoE section; `SPKR1` |
-| [`Connectors-reset-button.jpg`](HardwarePhotos/Connectors-reset-button.jpg) | Rear case edge — RJ45, micro-USB, unidentified slot, reset pinhole |
-| [`Touch-Connector-Probably.jpg`](HardwarePhotos/Touch-Connector-Probably.jpg) | Touch flex, `IC1` Cypress `CY8CTMG120`, `U25` |
-| [`Screen-Controller.jpg`](HardwarePhotos/Screen-Controller.jpg), [`display_controller_closeup.jpg`](HardwarePhotos/display_controller_closeup.jpg) | Sharp T-CON `K5784TP` and its silicon |
-| [`display_back_overview.jpg`](HardwarePhotos/display_back_overview.jpg) | LCD module rear — part-number labels, JAE connector, harness |
-| [`display_screen.jpg`](HardwarePhotos/display_screen.jpg) | Bare LCD module removed from the bezel |
-| [`bezel_with_touch_screen.jpg`](HardwarePhotos/bezel_with_touch_screen.jpg) | Bezel inner face — screw bosses, side LED bars, **no light aperture** |

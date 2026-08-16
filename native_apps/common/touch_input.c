@@ -311,7 +311,7 @@ int touch_wait_for_press_raw(TouchInput *touch, int *raw_x, int *raw_y) {
     // the read, so any error spun at 100% CPU forever with `return -1` as dead
     // code, and glibc signal() implies SA_RESTART so SIGTERM could not break it
     // either. Waking every POLL_SLICE_MS lets the caller's signal handler run
-    // and lets a genuine error propagate.  (IMPROVEMENT_PLAN.md B3.)
+    // and lets a genuine error propagate.
     const int POLL_SLICE_MS = 200;
     struct pollfd pfd = { .fd = touch->fd, .events = POLLIN, .revents = 0 };
 

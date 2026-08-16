@@ -169,12 +169,23 @@ the shape: `/etc/hosts` maps the device's own name on a **non-loopback** line, t
 unreachable from anywhere the unit is now used. So more than one unit can claim one name, and every
 unit resolves its own name wrongly.
 
+⚠️ **Three variants of that broken line have been seen on real units — do not assume which one a given
+unit has, read it.** They are different defects and only the first is the one a factory card shows:
+
+| Variant | What the line holds | Why it is broken |
+|---|---|---|
+| **Vendor image**, on a factory card | the shipped name against a vendor-subnet address | unreachable from anywhere the unit is now used; several units claim one name |
+| **Hardcoded self-IP**, found on units already in service | the unit's own *leased* address | goes stale the moment the lease moves |
+| **RFC-1918 address mapped to the name `null`**, on a card whose `/etc/hostname` is also `null` | a private address against a placeholder name | the unit answers to nothing and resolves nothing |
+
+[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) handles all three, because it keys the
+removal on the name it *reads* from `/etc/hostname` rather than on a hardcoded one — which is also why it
+works on a card whose shipped name is anything at all.
+
 Setting `/etc/hostname` alone would leave that mapping in place, so anything on the device that
 resolves its own name would still get the wrong answer. The prompt therefore writes both files, via
 [`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) — one implementation shared with `commissioning/provision.sh --hostname`,
-so the offline and over-SSH paths cannot drift. It keys the removal on the name it reads from
-`/etc/hostname`, not on a hardcoded one, which is why it works on a card whose shipped name is
-anything at all. The result is loopback-only:
+so the offline and over-SSH paths cannot drift. The result is loopback-only:
 
 ```text
 127.0.0.1 localhost

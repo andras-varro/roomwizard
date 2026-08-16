@@ -25,8 +25,7 @@ _START_SECONDS=$(date +%s)
 # source, build and icon path below is relative (common/*.c, build/, tests/,
 # ./check-arm-safe.sh); without this the first compile dies with
 # "common/framebuffer.c: No such file or directory" and the script only ever
-# worked because deploy-all.sh wraps it in a subshell cd
-# (../IMPROVEMENT_PLAN.md B19).
+# worked because deploy-all.sh wraps it in a subshell cd.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -80,8 +79,7 @@ err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── argument validation ─────────────────────────────────────────────────────
 # Validate BEFORE building.  A bad first argument used to surface only at the
-# first ssh, i.e. after all 33 targets had already been compiled
-# (../IMPROVEMENT_PLAN.md B19).
+# first ssh, i.e. after all 33 targets had already been compiled.
 usage() {
     echo "Usage: $0 [<ip>] [set-default]"
     echo "       $0 --bundle <dir>"
@@ -265,7 +263,7 @@ echo "  Wrote $(ls build/apps/*.app 2>/dev/null | wc -l) app manifest(s) → bui
 # verification and --bundle.  There used to be two (scp and chmod) and
 # audio_touch_test was missing from the chmod one — it worked only because scp
 # happens to carry the source file's mode.  A third copy for the md5 check would
-# have recreated exactly that bug (../IMPROVEMENT_PLAN.md B19), and a fourth for
+# have recreated exactly that bug, and a fourth for
 # --bundle would recreate it again.
 GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
                 game_selector hardware_test hardware_config hardware_diag
@@ -304,7 +302,7 @@ echo ""
 # Deliberately AFTER the ARM-safety gate.  A bundle is published and then
 # installed by someone with no toolchain, so it is the one artifact that must
 # never carry an sdiv/udiv — the failure would surface on a wall-mounted panel as
-# a blank screen with no output (../SYSTEM_ANALYSIS.md#61).
+# a blank screen with no output (../SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide).
 if [[ -n "$BUNDLE_DIR" ]]; then
     echo "════════════════════════════════════════"
     echo " Staging bundle → $BUNDLE_DIR"
@@ -371,7 +369,7 @@ echo "════════════════════════�
 # Check SSH reachable
 info "Testing SSH connection..."
 # The shared gate (lib/rw-ssh.sh): "down" and "up but refusing our key" are different
-# answers, and only the second one has a remedy worth offering. IMPROVEMENT_PLAN.md F16.
+# answers, and only the second one has a remedy worth offering.
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
@@ -390,8 +388,7 @@ fi
 # /etc/init.d/roomwizard-app — it matches processes on their executable, so it
 # also catches an app that app_launcher started.  Do NOT re-add a `killall` here:
 # a per-script copy only knows the basenames whoever wrote it thought of, which
-# is how a vnc_client survived a full deploy and repainted over the launcher
-# (../IMPROVEMENT_PLAN.md B20, B25).
+# is how a vnc_client survived a full deploy and repainted over the launcher.
 info "Stopping running apps (device init script)..."
 ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
     /etc/init.d/roomwizard-app stop

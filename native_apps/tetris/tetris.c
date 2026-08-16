@@ -34,7 +34,7 @@
  * FRAME_DELAY_IDLE_US (100 ms) on any iteration it did not redraw, so a frame
  * counter made the fall rate depend on how busy the renderer was: measured on
  * the panel at roughly one row every 5-6 seconds, and it sped up while a key
- * was held (B13d). */
+ * was held. */
 #define DROP_BASE_MS        800   /* level 1 */
 #define DROP_LEVEL_STEP_MS   60   /* subtracted per level above 1 */
 #define DROP_MIN_MS         120   /* floor, however high the level gets */
@@ -203,9 +203,9 @@ void init_game() {
     // side of it plus a full-width bottom band — so it may use the whole
     // VISIBLE screen vertically.  It only has to clear the SAFE-anchored
     // MENU/EXIT row, because the SCORE/LVL line now lives in the VISIBLE band
-    // *above* that row rather than in a HUD strip below it (B3i).  Deriving the
+    // *above* that row rather than in a HUD strip below it.  Deriving the
     // top from the row instead of a 55 px literal is also what stopped the well
-    // hanging off the bottom edge (B3j): the old literal was smaller than the
+    // hanging off the bottom edge: the old literal was smaller than the
     // row itself, so the buttons sat on the board and the board ran long.
     int board_top = LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT + BOARD_GAP_TOP;
     int available_h = SCREEN_VISIBLE_BOTTOM - board_top - 2 * BOARD_BORDER;
@@ -302,8 +302,7 @@ bool check_collision(Piece *piece, int dx, int dy, int new_rotation) {
  * Without one, a rotation whose cells land outside the board or inside settled
  * blocks is simply refused, and the classic casualty is the I-piece: stood
  * vertically hard against the right wall, all four cells of its horizontal form
- * are off-board, so it can never be turned back flat for the rest of the game
- * (../IMPROVEMENT_PLAN.md B13e).
+ * are off-board, so it can never be turned back flat for the rest of the game.
  *
  * Offsets are tried in order: in place, then one and two cells left/right (two
  * is what an I-piece needs, since its rotation centre sits one cell in from the
@@ -355,8 +354,7 @@ void lock_piece() {
          * so the 3 x 200 ms on/off loop that used to be here froze the panel for
          * 1.2 s with no touch poll and no redraw — and it ran *before* the
          * game-over screen was ever drawn, so the player stared at the old
-         * playfield and any tap made during it was discarded
-         * (../IMPROVEMENT_PLAN.md B14). */
+         * playfield and any tap made during it was discarded. */
         hw_led_pulse_start(&led_pulse, LED_RED, 3, 200, get_time_ms());
         audio_fail(&audio);  // Descending game-over tone (~600ms)
     }
@@ -429,8 +427,8 @@ void update_game() {
     }
 
     /* Gravity off a wall-clock delta, so the fall rate is independent of how
-     * long the last frame took and of whether the loop took the idle sleep
-     * (B13d).  uint32_t subtraction is wrap-safe. */
+     * long the last frame took and of whether the loop took the idle sleep.
+     * uint32_t subtraction is wrap-safe. */
     uint32_t now = get_time_ms();
     if (drop_clock_stale) {
         drop_clock_stale = false;
@@ -508,8 +506,7 @@ void handle_input() {
             if (button_check_press(&start_button, touched, current_time)) {
                 current_screen = SCREEN_PLAYING;
                 /* Non-blocking: a usleep() here delayed the first frame of play
-                 * by 100 ms from inside handle_input() (../IMPROVEMENT_PLAN.md
-                 * B14). */
+                 * by 100 ms from inside handle_input(). */
                 hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
             }
         }
@@ -725,7 +722,7 @@ void handle_input() {
 // for PLAYING, PAUSED, and GAME_OVER screens
 void draw_playing_field() {
     /* HUD: SCORE and LEVEL on ONE line, in the VISIBLE band above the
-     * SAFE-anchored MENU/EXIT row (B3i).  The band is drawable, just not
+     * SAFE-anchored MENU/EXIT row.  The band is drawable, just not
      * pressable, and a status row is exactly what it is for; stacking the two
      * strings below SAFE_TOP put LEVEL underneath the buttons, which are drawn
      * after it.  Horizontally the line sits in the gap between the two buttons,
@@ -841,7 +838,7 @@ void draw_game() {
     fb_clear(&fb, COLOR_BLACK);
     
     // Welcome screen — the shared implementation measures the instruction block
-    // and lays TAP TO START out below it (B3k).  This used to be four hand-placed
+    // and lays TAP TO START out below it.  This used to be four hand-placed
     // text_draw_centered() calls plus a button at a fixed fb.height/2 + 40, and
     // the fourth line landed inside the button.
     if (current_screen == SCREEN_WELCOME) {

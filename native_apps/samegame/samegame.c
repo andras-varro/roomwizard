@@ -256,7 +256,7 @@ static bool pixel_to_grid(int px, int py, int *out_col, int *out_row) {
      * division truncates toward zero, so a delta in (-block_size, 0) yields 0
      * rather than -1 and the old `col < 0 || row < 0` guard could never fire:
      * every tap within one block outside the left or top edge selected column or
-     * row 0 (../IMPROVEMENT_PLAN.md B13j).  The high edges were always fine —
+     * row 0.  The high edges were always fine —
      * truncation rounds those *down*, into range. */
     int dx = px - game.grid_x;
     int dy = py - game.grid_y;
@@ -328,7 +328,7 @@ static void init_layout(void) {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     /* screen_draw_welcome() positions start_button below the measured
-     * instruction block (B3k); these coordinates only cover a hit-test that
+     * instruction block; these coordinates only cover a hit-test that
      * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
                 LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
@@ -736,7 +736,7 @@ static void post_move_check(void) {
          * animation state, not a render loop.  This used to be a 300-1500 ms
          * `while (running) { draw; fb_swap; usleep }` which never called
          * touch_poll(), so MENU and EXIT were dead for its whole duration and a
-         * tap made during it was discarded (../IMPROVEMENT_PLAN.md B14).  As a
+         * tap made during it was discarded.  As a
          * state the ordinary main loop keeps polling and drawing: its dirty flag
          * already forces frames whenever anim_state != ANIM_NONE, and
          * handle_input() checks both buttons before it gates the grid on the
@@ -1412,8 +1412,7 @@ static void handle_input(void) {
         /* The green start flash goes through this game's own LED effect system —
          * effect 1 is already exactly a 100 ms green flash.  It used to be
          * hw_set_led() + usleep(100000) + hw_leds_off(), i.e. a 100 ms freeze
-         * inside handle_input() before the first frame of play
-         * (../IMPROVEMENT_PLAN.md B14). */
+         * inside handle_input() before the first frame of play. */
         /* Touch: tap start button */
         if (state.pressed) {
             bool touched = button_is_touched(&start_button, state.x, state.y);
@@ -1679,7 +1678,7 @@ int main(int argc, char *argv[]) {
 
         /* Adaptive sleep: full rate while frames are actually being drawn.
          * Testing needs_redraw here instead of drew always picked IDLE, which
-         * pinned the whole game to 10 FPS (IMPROVEMENT_PLAN B13c). */
+         * pinned the whole game to 10 FPS. */
         usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 

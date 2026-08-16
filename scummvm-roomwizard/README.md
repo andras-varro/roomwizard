@@ -62,7 +62,8 @@ panel has been swept, `safe` and `visible` are identical.
 
 (Until 2026-08-03 the config path was resolved against the *working directory*, so the boot launcher
 used `/scummvm.ini`, an SSH shell in `$HOME` wrote `/home/root/scummvm.ini`, and editing the wrong one
-looked like the setting being ignored. Both strays are gone — see `../IMPROVEMENT_PLAN.md` B3h.)
+looked like the setting being ignored. Both strays are gone — `initBackend()` resolves the path
+against `/opt/games` now, and `scummvm-roomwizard/CLAUDE.md` has the reasoning.)
 
 ## Status
 

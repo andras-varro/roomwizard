@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# One-off migration control for IMPROVEMENT_PLAN.md C11: every path the retired
-# commissioning/provision.sh --remove heredoc deleted must be covered by the compiled clean
-# plan, or be a recorded deliberate omission.
+# One-off migration control for the clean-rules migration: every path the retired
+# commissioning/provision.sh --remove heredoc deleted must be covered by the plan
+# compiled from device-files/clean-rules.conf, or be a recorded deliberate omission.
 #
 # NOT a regression test. The heredoc it reads no longer exists in the working tree
 # — it is extracted from git — so this cannot be re-run once the commit that

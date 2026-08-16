@@ -51,7 +51,7 @@ static uint8_t hw_scale_brightness(uint8_t brightness, int pct) {
  * before writing, so a getter that returned the raw sysfs value put the two
  * halves of the API in different units. Every save/restore pair then multiplied
  * the panel by pct/100 again on each run — three sweeps at 50% left the
- * backlight at 12% (IMPROVEMENT_PLAN B9). Returning setter space makes
+ * backlight at 12%. Returning setter space makes
  * hw_set_backlight(hw_get_backlight()) a no-op, which is what callers assume.
  *
  * A raw value larger than the configured maximum can only come from something

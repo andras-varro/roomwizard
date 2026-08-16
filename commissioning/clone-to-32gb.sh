@@ -290,7 +290,7 @@ check_dependencies() {
 # open — and a `wsl --mount`ed physical card lands on /dev/sdd or /dev/sde too.
 # `mount` also never shows the disk behind an LVM or LUKS root (it shows
 # /dev/mapper/…), so that check passed on exactly the systems where getting it
-# wrong is unrecoverable.  See IMPROVEMENT_PLAN.md B15.
+# wrong is unrecoverable.
 # ---------------------------------------------------------------------------
 
 # Whole-disk device name (no /dev/ prefix) backing $1, following partition and

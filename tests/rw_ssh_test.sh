@@ -6,8 +6,6 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && ./tests/rw_ssh_test.sh"
 #
-# IMPROVEMENT_PLAN.md F16.
-#
 # ── What each group is for ─────────────────────────────────────────────────
 #
 #   A  rw_ssh_classify, the one decision this file turns on: is the target DOWN or
@@ -38,8 +36,8 @@
 # `setgroups() failed: Operation not permitted` and authenticates the invoking user
 # to itself anyway.
 #
-# ⚠️ It refutes the string this repo had written down. IMPROVEMENT_PLAN.md F16 says
-# the signature is `Permission denied (publickey,password)`; that local sshd says
+# ⚠️ It refutes the string this repo had written down. The recorded signature was
+# `Permission denied (publickey,password)`; that local sshd says
 # `Permission denied (publickey,keyboard-interactive)`, because the parenthetical is
 # the SERVER's method list. A classifier keyed on it would pass against a device
 # (where card-prep.sh sets PasswordAuthentication yes) and call every other server

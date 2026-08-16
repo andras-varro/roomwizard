@@ -212,10 +212,10 @@ void fb_fade_in(Framebuffer *fb);
 //
 // EVERY app should pin this rather than inherit it. /dev/fb0 keeps whatever the
 // last process set, so a game launched over SSH after ScummVM or vnc_client
-// starts at 16bpp. That used to be a 2x heap overflow (IMPROVEMENT_PLAN B1);
-// the primitives are bpp-aware now, so what is left is appearance and
+// starts at 16bpp. That used to be a 2x heap overflow in the drawing
+// primitives; they are bpp-aware now, so what is left is appearance and
 // determinism — 16bpp bands every gradient, and "how does this app look"
-// should not depend on which app ran before it (B24).
+// should not depend on which app ran before it.
 //
 // Native UIs and games want 32. ScummVM and the VNC session set 16 on purpose,
 // to halve write bandwidth on this memory-bound part, and fb_init() must keep

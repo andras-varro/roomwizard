@@ -193,7 +193,7 @@ void init_game() {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     /* screen_draw_welcome() positions start_button below the measured
-     * instruction block (B3k); these coordinates only cover a hit-test that
+     * instruction block; these coordinates only cover a hit-test that
      * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
                 LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
@@ -214,8 +214,8 @@ void init_game() {
      * head, so TouchRegions would be a redundant second input path — and the
      * four that used to be registered here covered the grid's top/bottom halves
      * *and* its left/right halves, so every in-grid tap asserted two directions
-     * at once.  Deleted 2026-08-03 (IMPROVEMENT_PLAN B13g); prefer a tap
-     * relative to the controlled object over a pad. */
+     * at once.  Deleted 2026-08-03; prefer a tap relative to the controlled
+     * object over a pad. */
 
     reset_game();
 }
@@ -324,8 +324,8 @@ void update_snake() {
              * very first grow, because the struct is zero-initialised.  Just
              * incrementing length therefore published a detached cell at the
              * grid origin: it was drawn for one tick, counted by the
-             * self-collision test, and ended the game if the head stepped on it
-             * (../IMPROVEMENT_PLAN.md B13f).  The new segment belongs in the
+             * self-collision test, and ended the game if the head stepped on it.
+             * The new segment belongs in the
              * cell the tail just vacated, which is what growing physically is.
              * It self-healed on the next tick's shift, which is why this looked
              * like a one-frame rendering glitch rather than a fatal one. */

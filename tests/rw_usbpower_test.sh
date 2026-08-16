@@ -571,7 +571,7 @@ eq "$l_n" "10" "L9 exactly 10 bytes differ (2 CRCs = 8, power 1, mode 1)"
 l_out=$(python3 "$TOOLS/verify_uimage.py" "$W/l-both.img" --expect-power 0xfa --expect-mode 0x01 2>&1)
 rc_is "$?" 0 "L10 the doubly-patched image verifies, both values and both CRCs"
 # ...and the default (no --mode) must still be power-only, or every existing
-# call site silently changes behaviour and D6's 9-byte diff becomes a lie.
+# call site silently changes behaviour and the power-only 9-byte diff becomes a lie.
 python3 "$MAKE_IMG" "$W/l-p.img" >/dev/null
 python3 "$TOOLS/patch_dtb.py" "$W/l-p.img" "$W/l-ponly.img" >/dev/null 2>&1
 l_n=$(cmp -l "$W/l-p.img" "$W/l-ponly.img" | wc -l)

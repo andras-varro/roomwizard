@@ -1063,7 +1063,7 @@ int main(int argc, char *argv[]) {
             fb_draw_text(&fb, 20, y0 + 156, b, COLOR_WHITE, 1);
 
             /* Per axis, deliberately: this panel is H1 on X and H4 on Y, and a
-             * single line cannot say that (IMPROVEMENT_PLAN.md B3b). */
+             * single line cannot say that. */
             uint32_t cx = summary.reach_x ? COLOR_GREEN : COLOR_ORANGE;
             uint32_t cy = summary.reach_y ? COLOR_GREEN : COLOR_ORANGE;
             fb_draw_text(&fb, 20, y0 + 182, summary.verdict_x, cx, 1);

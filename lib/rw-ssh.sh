@@ -2,7 +2,7 @@
 #
 # rw-ssh.sh — the one SSH reachability gate, and the key bootstrap behind it
 #
-# Sourced, never executed. IMPROVEMENT_PLAN.md F16.
+# Sourced, never executed.
 #
 # ── What this replaces ─────────────────────────────────────────────────────
 #
@@ -287,7 +287,7 @@ rw_ssh_gate() {
             rw_ssh_say ""
             rw_ssh_say "  Check the IP, that the unit is powered on, and that it is on this network."
             rw_ssh_say "  A unit whose card says net.mode=manual sends no DHCP request and appears"
-            rw_ssh_say "  in no router lease list (IMPROVEMENT_PLAN.md D7b)."
+            rw_ssh_say "  in no router lease list."
             rw_ssh_say ""
             return 1
             ;;

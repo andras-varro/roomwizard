@@ -35,7 +35,7 @@
 #
 # Offline is also not merely a convenience. A unit whose websign/net.mode is
 # `manual` takes a static address and never sends a DHCP request, so it appears in
-# no lease list and PHASE 2 CAN NEVER REACH IT (SYSTEM_ANALYSIS.md#35). Stock
+# no lease list and PHASE 2 CAN NEVER REACH IT (SYSTEM_ANALYSIS.md#35-network-and-power). Stock
 # cards ship that way. Editing the card is the only bootstrap for such a unit.
 #
 # And it REMOVES D7b instead of patching it: the boot-time network regenerator's
@@ -51,7 +51,7 @@
 #                              does shadow / sshd / DHCP / the SSH key. This
 #                              orchestrates it.
 #   the host name              commissioning/set-hostname.sh, which owns /etc/hostname,
-#                              /etc/hosts AND /etc/dhclient.conf (D7b item 3).
+#                              /etc/hosts AND /etc/dhclient.conf (all three are regenerated on boot).
 #   which card, which mount    lib/rw-identify.sh, by content and by POSITION, never
 #                              by UUID. p1 is reachable from there through exactly
 #                              three deliberately-named functions, for exactly one
@@ -545,14 +545,14 @@ echo "────────────────────────�
 if [[ "$DO_CLEAN" -eq 0 ]]; then
     warn "--no-clean: the vendor stack is left exactly as it is."
     warn "⚠️ That leaves /home/root/data/websign in place, so the boot-time"
-    warn "   regenerator will overwrite the host name just set (D7b)."
+    warn "   regenerator will overwrite the host name just set."
 else
     if ! CHECK="$(rw_clean_validate "$CLEAN_RULES")"; then
         echo "$CHECK"
         err "device-files/clean-rules.conf does not validate"
     fi
     # Every group in the default set, minus each --keep-<group>. `factory` is in
-    # that default set as of 2026-08-06 (IMPROVEMENT_PLAN.md C11): cleaning a unit
+    # that default set as of 2026-08-06: cleaning a unit
     # of its vendor software is a decision, and the payload that would undo it is
     # 472 MB restoring a stack whose start-up mechanism this same clean removes.
     # --keep-factory is the opt-out; the phase-0 backup question is the gate.
@@ -918,12 +918,12 @@ for l in "${BOOT_LINKS[@]}"; do
 done
 [[ "$LINKBAD" -eq 0 ]] && ok "boot links resolve ($LINK_NAMES)"
 
-# ── websign is gone, i.e. D7b's window is closed ───────────────────────────
+# ── websign is gone, so the boot-time network regenerator has no input ──────
 if [[ "$DO_CLEAN" -eq 1 ]]; then
     if [[ -e "$BASE/data/websign" ]]; then
-        vfail "/home/root/data/websign survives — the boot-time regenerator will overwrite the host name (D7b)"
+        vfail "/home/root/data/websign survives — the boot-time regenerator will overwrite the host name on the first boot"
     elif [[ -e "$BASE/root/etc/rcS.d/S60networkmanager" ]]; then
-        vfail "/etc/rcS.d/S60networkmanager survives — the vendor dhclient-script will rewrite /etc/hosts (D7b)"
+        vfail "/etc/rcS.d/S60networkmanager survives — the vendor dhclient-script will rewrite /etc/hosts on every lease"
     else
         ok "D7b closed: websign and S60networkmanager are both gone"
     fi

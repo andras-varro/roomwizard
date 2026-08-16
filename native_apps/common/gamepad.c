@@ -494,7 +494,7 @@ void gamepad_rescan(GamepadManager *gm) {
     gamepad_close(gm);
     memset(gm->prev_held, 0, sizeof(gm->prev_held));
     /* Drop the latched levels too: the key-up for anything held at unplug time
-     * will never arrive, so keeping it would freeze that button on (B2). */
+     * will never arrive, so keeping it would freeze that button on. */
     memset(gm->held_latched, 0, sizeof(gm->held_latched));
     gm->prev_mouse_left = false;
     gm->prev_mouse_right = false;
@@ -550,7 +550,7 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
     if (gm->gamepad_fd < 0) {
         /* No pad attached.  Zero the axes: a stick that was deflected when the
          * controller was unplugged must not keep asserting a direction through
-         * merge_stick_dpad() forever (B2). */
+         * merge_stick_dpad() forever. */
         state->axis_lx = state->axis_ly = 0;
         state->axis_rx = state->axis_ry = 0;
         return;
@@ -648,7 +648,7 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
  *  - The stick reports an absolute position, so its contribution has to be
  *    recomputed every poll.  It used to write `.held = true` directly and
  *    nothing ever cleared it, so one deflection stuck a direction on for the
- *    rest of the process's life (B2, `:649` in the old numbering).
+ *    rest of the process's life.
  *  - It has to run *after* poll_gamepad() has consumed this frame's EV_ABS
  *    events, and after the fd < 0 branch has zeroed the axes.
  *
@@ -798,7 +798,7 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
  * region is asserted exactly on the frames the finger is inside it.  It used
  * to set `.held = true` on the caller's InputState, which nothing ever
  * cleared, so the first tap latched a virtual D-pad direction on permanently
- * (B2 — the reason frogger's and platformer's pads were removed in B13k).
+ * (which is why frogger's and platformer's virtual pads were removed).
  */
 static void poll_touch(GamepadManager *gm, bool *derived,
                        int touch_x, int touch_y, bool touch_active) {
@@ -852,7 +852,7 @@ void gamepad_poll(GamepadManager *gm, InputState *state,
 
     /* Level state from the sources that report an absolute position rather
      * than press/release events — touch regions and the analog stick.  Zeroed
-     * every poll and rebuilt below, which is what stops them latching (B2).
+     * every poll and rebuilt below, which is what stops them latching.
      * The event-driven sources are the other half: their level lives in
      * gm->held_latched[] because a key-up may be many frames away. */
     bool derived[BTN_ID_COUNT];

@@ -297,9 +297,11 @@ int fb_set_bpp(const char *device, int bpp) {
 // run 16bpp RGB565 to halve write bandwidth on this memory-bound part. The back
 // buffer is allocated as width * height * bytes_per_pixel, so a primitive that
 // writes a uint32_t unconditionally overruns a 16bpp allocation by exactly 2x —
-// which is what every primitive below used to do (IMPROVEMENT_PLAN B1). It was
-// reachable, not theoretical: no game asserted the bpp, so one launched over SSH
-// after a 16bpp app inherited 16bpp and ran the full overflow (B24).
+// which is what every primitive below used to do. It was reachable, not
+// theoretical: no game asserted the bpp, so one launched over SSH after a 16bpp
+// app inherited 16bpp and ran the full overflow. Both halves are fixed — the
+// dispatch below, and an fb_set_bpp() call in front of every fb_init() — and
+// tests/framebuffer_bpp_test.c is the host regression for this one.
 //
 // The API is unchanged: callers always pass 24-bit RGB888 and these four helpers
 // are the only code that knows what the surface actually holds. fb_init() must
@@ -549,7 +551,8 @@ void fb_clear(Framebuffer *fb, uint32_t color) {
                                                : fb->screen_size);
     } else if (FB_IS_16BPP(fb)) {
         /* One packed word per pixel — a uint32_t fill would run off the end of
-         * a 16bpp allocation, which is exactly B1. */
+         * a 16bpp allocation, which is the 2x overflow the dispatch above
+         * exists to prevent. */
         uint16_t c = fb_pack565(color);
         uint16_t *p = (uint16_t *)target;
         for (size_t i = 0; i < total; i++) p[i] = c;

@@ -381,7 +381,7 @@ static rfbClient *vnc_client_init(const char *host, int port, unsigned int conne
     LOG_DEBUG(&g_logger, "Encodings requested: %s", g_config.encodings);
     LOG_DEBUG(&g_logger, "Compress=%d Quality=%d", g_config.compress_level, g_config.quality_level);
 
-    /* Socket exists only now that rfbInitClient() has connected (B12). */
+    /* Socket exists only now that rfbInitClient() has connected. */
     vnc_enable_keepalive(client);
 
     return client;
@@ -390,13 +390,13 @@ static rfbClient *vnc_client_init(const char *host, int port, unsigned int conne
 /*
  * Tear down a session's rfbClient.
  *
- * B11: rfbClientCleanup() frees raw_buffer, ultra_buffer, desktopName and
+ * ⚠️ rfbClientCleanup() frees raw_buffer, ultra_buffer, desktopName and
  * serverHost, but NOT client->frameBuffer — vnc_malloc_fb() allocated that, so
  * this side owns it and nothing else was freeing it.  With
  * RECONNECT_MAX_ATTEMPTS 0 (unlimited) against a 1080p host that is
  * 1920*1080*4 = ~8.3 MB leaked per drop on a 234 MB device: OOM after ~25
  * reconnects.  Both cleanup sites go through here so a third one cannot
- * reintroduce the leak (../IMPROVEMENT_PLAN.md B11).
+ * reintroduce the leak.
  */
 static void vnc_client_destroy(rfbClient **client) {
     if (!client || !*client)
@@ -734,7 +734,8 @@ static int vnc_session(const char *host, int port, int attempt) {
 
     /* Cleanup VNC connection (but NOT framebuffer/touch/watchdog).
      * vnc_client_destroy() frees client->frameBuffer, which rfbClientCleanup()
-     * does not — this is the reconnect path, so it is the leak (B11). */
+     * does not — this is the reconnect path, so every session would leak one
+     * whole framebuffer. */
     vnc_client_destroy(&g_vnc_client);
     vnc_input_cleanup(&g_input);
     /* Note: renderer is NOT cleaned up here (no 32bpp restore).

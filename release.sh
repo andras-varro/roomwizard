@@ -26,7 +26,7 @@
 # ── What is NOT published, and why ──────────────────────────────────────────
 #
 #   * Device config.  Never.  /etc/hosts carries a mapping that exists to be
-#     removed (IMPROVEMENT_PLAN.md D7) and vnc_client.conf carries a plaintext
+#     removed and vnc_client.conf carries a plaintext
 #     VNC password.  A glob that swept up *.conf would publish exactly what those
 #     two exist to have removed.  Each component's --bundle decides; this script
 #     re-checks below.

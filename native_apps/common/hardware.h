@@ -115,7 +115,7 @@ int hw_set_backlight(uint8_t brightness);
  * device_tools and hardware_config each had one, both naming
  * /sys/class/backlight/pwm-backlight/brightness, which does not exist on this
  * device — /sys/class/backlight is empty and the panel is a LED class device.
- * So both previews silently did nothing (IMPROVEMENT_PLAN B23).
+ * So both previews silently did nothing.
  */
 int hw_set_backlight_raw(uint8_t brightness);
 
@@ -158,8 +158,7 @@ int hw_blink_led(LEDColor led, int count, uint32_t on_ms, uint32_t off_ms, uint8
  * for its whole duration, so the panel freezes with no touch poll, no redraw and
  * no gamepad poll. Tetris and Pong hand-rolled the same loop for their
  * game-over/win flourish and each froze for 1.2 s *before* the game-over screen
- * was drawn, which also swallowed every tap made during it
- * (IMPROVEMENT_PLAN.md B14).
+ * was drawn, which also swallowed every tap made during it.
  *
  * Start one, then call hw_led_pulse_update() once per frame until it reports
  * inactive; it writes the LED only on the frames the phase actually changes.

@@ -37,7 +37,7 @@ _START_SECONDS=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# The shared SSH gate (../IMPROVEMENT_PLAN.md F16). Both of this script's gates —
+# The shared SSH gate (../lib/rw-ssh.sh). Both of this script's gates —
 # deploy and set-default — go through it.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
@@ -77,8 +77,7 @@ DEVICE_PATH="/opt/games"
 # "../native_apps" relative, so invoking this by path resolved them against
 # wherever you happened to be standing — `bash scummvm-roomwizard/build-and-deploy.sh`
 # from the repo root looked for the ScummVM tree in the repo's *parent*.  It
-# worked only because deploy-all.sh wraps it in a subshell cd
-# (../IMPROVEMENT_PLAN.md B19).
+# worked only because deploy-all.sh wraps it in a subshell cd.
 SCUMMVM_DIR="$REPO_ROOT/scummvm"
 NATIVE_APPS_DIR="$REPO_ROOT/native_apps"
 ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
@@ -546,7 +545,7 @@ strip_binary() {
     # ── ARM-safety gate, HERE and nowhere else ──────────────────────────────
     # Cortex-A8 has no hardware integer divide; an sdiv/udiv means SIGILL
     # (exit 132) — blank screen, no output, indistinguishable from "it didn't
-    # start" (../SYSTEM_ANALYSIS.md#61).  This is the only moment the UNSTRIPPED
+    # start" (../SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide).  This is the only moment the UNSTRIPPED
     # binary exists: the strip below is in place.  Checking after it would
     # disassemble literal pools as code and report phantom hits, which is exactly
     # how vnc_client_stripped produced a bogus "sdiv r4, sp, pc".
@@ -588,7 +587,8 @@ deploy_to_device() {
     
     # Check if device is reachable
     log_info "Testing SSH connection..."
-    # The shared gate (../lib/rw-ssh.sh). IMPROVEMENT_PLAN.md F16.
+    # The shared gate (../lib/rw-ssh.sh): "down" and "up but refusing our key" are
+    # different answers, and only the second has a remedy worth offering.
     rw_ssh_gate "$DEVICE" \
         || { log_error "Cannot continue without SSH to $DEVICE"; exit 1; }
     
@@ -606,8 +606,8 @@ deploy_to_device() {
     
     # Stop whatever is running (avoids "Text file busy").
     #
-    # One stop implementation, on the device, matching on the executable — see
-    # ../IMPROVEMENT_PLAN.md B20/B25.  Do not re-add a killall here: this copy
+    # One stop implementation, on the device, matching on the executable, so it also
+    # catches an app that app_launcher started.  Do not re-add a killall here: this copy
     # used to kill `scummvm` and `app_launcher` by name and nothing else.
     log_info "Stopping running apps (device init script)..."
     ssh "$DEVICE" 'if [ -x /etc/init.d/roomwizard-app ]; then
@@ -687,7 +687,7 @@ fi' || log_warning "stop reported a failure - a surviving process may hold the b
 # device was reachable (../IMPROVEMENT_PLAN.md F10).
 #
 # args=none: ScummVM opens /dev/fb0 and the evdev devices itself — it has its own
-# input and audio layer, not native_apps/common (../SYSTEM_ANALYSIS.md#52).
+# input and audio layer, not native_apps/common (../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
 write_app_manifest() {
     cat > "$1/scummvm.app" <<'APP'
 name=ScummVM

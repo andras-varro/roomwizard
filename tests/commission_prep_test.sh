@@ -84,8 +84,8 @@ trap 'rm -rf "$TMP"' EXIT
 # rather than testing nothing.
 #
 # ⚠️ It lives in lib/rw-ssh.sh, not in card-prep.sh: rw_ssh_keygen needs the same
-# answer, and two copies of "whose home" is how the original bug got in
-# (IMPROVEMENT_PLAN.md F16). What stays card-prep.sh's own is the CALL SITE, which is
+# answer, and two copies of "whose home" is how the original bug got in.
+# What stays card-prep.sh's own is the CALL SITE, which is
 # what cases 5-6 and the end-to-end block below check.
 LIB="$REPO_DIR/lib/rw-ssh.sh"
 [ -f "$LIB" ] || { echo -e "  ${RED}HARNESS ERROR${NC}: $LIB not found"; exit 2; }
@@ -356,7 +356,7 @@ fi
 # ── the vendor network regenerator: verdict, wiring, and the two writes ─────
 #
 # WHY: phase 1 wrote a host name and DHCP, and an RW20 undid both ~7 s into the
-# first boot (IMPROVEMENT_PLAN D7b, measured 2026-08-08) — leaving a unit at a
+# first boot (measured 2026-08-08) — leaving a unit at a
 # static address on a foreign subnet, so phase 2 was unreachable and phase 1
 # could not lead anywhere. The decision is now a pure function of three
 # measurements, which is the only part of it a host can exercise: the probe

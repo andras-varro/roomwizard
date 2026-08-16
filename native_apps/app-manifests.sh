@@ -20,7 +20,7 @@
 #
 # ── Format ──────────────────────────────────────────────────────────────────
 #
-# INI, read by app_launcher's manifest scanner (SYSTEM_ANALYSIS.md#53):
+# INI, read by app_launcher's manifest scanner (SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests):
 #
 #     name=Snake
 #     exec=/opt/games/snake

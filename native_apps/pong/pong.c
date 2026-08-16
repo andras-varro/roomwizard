@@ -177,7 +177,7 @@ void reset_ball() {
 // followed this call with the same 3 x 200 ms on/off usleep() loop plus a sound.
 // Two reasons: that loop ran inside update_game() and froze the panel for 1.2 s
 // with no touch poll and no redraw — before the game-over screen had been drawn,
-// so taps made during it were discarded (../IMPROVEMENT_PLAN.md B14) — and the
+// so taps made during it were discarded — and the
 // LED colour and the sound both follow game.winner, which is decided here.
 static void enter_game_over(void) {
     char info[64];
@@ -420,8 +420,8 @@ void handle_input() {
                 reset_game();
                 current_screen = SCREEN_PLAYING;
                 /* Non-blocking: a usleep() here delayed the first frame of play
-                 * by 100 ms from inside handle_input() (../IMPROVEMENT_PLAN.md
-                 * B14).  After reset_game(), which cancels any pending pulse. */
+                 * by 100 ms from inside handle_input().
+                 * After reset_game(), which cancels any pending pulse. */
                 hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
             }
         }

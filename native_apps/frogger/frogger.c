@@ -40,7 +40,7 @@
 
 /* HUD metrics.  The lives icons are 12 px squares on an 18 px pitch; the timer
  * bar sits between the MENU and EXIT buttons with this much clearance either
- * side of it (B3i). */
+ * side of it. */
 #define LIFE_ICON_SIZE    12
 #define LIFE_ICON_PITCH   18
 #define TIMER_BAR_HEIGHT  12
@@ -431,7 +431,7 @@ static void init_buttons(void) {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     /* screen_draw_welcome() positions start_button below the measured
-     * instruction block (B3k); these coordinates only cover a hit-test that
+     * instruction block; these coordinates only cover a hit-test that
      * arrives before the first draw, so they just have to be touchable. */
     button_init(&start_button,
                 LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
@@ -482,13 +482,14 @@ static void init_game(void) {
     hs_init(&hs_table, "frogger");
     hs_load(&hs_table);
 
-    /* No virtual D-pad TouchRegions (B13k).  handle_input() already hops the
+    /* No virtual D-pad TouchRegions.  handle_input() already hops the
      * frog from a plain tap anywhere in the play area, relative to the frog's
      * own position, so the regions were a redundant second path: they made the
-     * frog jump on its own, and because gamepad.c never clears a region's
-     * .held (B2) they also latched the on-screen overlay permanently
-     * highlighted.  The whole playfield is the tap target now — do not add
-     * regions back without fixing B2 first. */
+     * frog jump on its own, and back when gamepad.c never cleared a region's
+     * .held they also latched the on-screen overlay permanently
+     * highlighted.  The whole playfield is the tap target now.  ⚠️ The latch
+     * itself is fixed — poll_touch() writes only the per-frame `derived` array —
+     * so what still argues against regions here is the redundancy, not the latch. */
 
     reset_game();
 }
@@ -1207,7 +1208,7 @@ static void draw_lane_objects(int lane_idx) {
 
 static void draw_timer_bar(void) {
     /* The bar lives in the gap BETWEEN the MENU and EXIT buttons, vertically
-     * centred on the row (B3i).  It used to span the whole grid width at
+     * centred on the row.  It used to span the whole grid width at
      * hud_height - 18, which covered the bottom ~8 px of both buttons. */
     int bx = LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + TIMER_BAR_GAP;
     int bw = LAYOUT_EXIT_BTN_X - TIMER_BAR_GAP - bx;
@@ -1245,7 +1246,7 @@ static void draw_hud(void) {
     /* The band starts at the visible top (it is only drawn) and ends below the
      * SAFE-anchored button row.  Score, level and the lives icons sit in the
      * VISIBLE band ABOVE the row — none of them is pressable, and that band is
-     * the screen area the two-rectangle split exists to keep usable (B3i).
+     * the screen area the two-rectangle split exists to keep usable.
      * Horizontally they stay in the gap between MENU and EXIT, so a short band
      * (uncalibrated panel, inset 0) puts them level with the buttons without
      * colliding with either. */
@@ -1406,7 +1407,7 @@ static void draw_all(void) {
 
     /* No virtual-controller overlay: the frog is driven by tapping the
      * playfield, not by an on-screen D-pad, and the overlay's boxes were never
-     * where its TouchRegions were anyway (B13k). */
+     * where its TouchRegions were anyway. */
 
     /* Hint text at bottom */
     if (!input.gamepad_connected && !input.keyboard_connected)

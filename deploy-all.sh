@@ -141,7 +141,7 @@ FILTER="${2:-}"
 # `./deploy-all.sh vnc_client` (forgetting the IP) used to build *everything*,
 # including the multi-minute ScummVM build, and only fail at `ssh root@vnc_client`
 # minutes later.  The single most likely typo is a component name in $1, so name
-# that case explicitly (../IMPROVEMENT_PLAN.md B19).
+# that case explicitly.
 IPV4_RE='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
 if [[ ! "$DEVICE_IP" =~ $IPV4_RE ]]; then
     echo ""

@@ -29,7 +29,7 @@ set -e
 # so on a device with no /etc/profile this script died at its second command and
 # left the Steelcase software watchdog armed - rebooting the device every ~70
 # minutes.  It runs on every boot from device-files/roomwizard-app, which does not
-# check the exit status, so the failure was completely invisible.  (B18.)
+# check the exit status, so the failure was completely invisible.
 #
 # Two rules follow, and the ordering is as load-bearing as the guards:
 #   - guard every command that may legitimately fail with `|| true` (or a warning)

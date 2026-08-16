@@ -510,7 +510,7 @@ native_games/build/*
 *.raw
 *.png
 *.jpg
-# ...except the teardown photos indexed in SYSTEM_ANALYSIS.md Appendix A.
+# ...except the teardown photos cited throughout HARDWARE.md.
 !HardwarePhotos/*.jpg
 !HardwarePhotos/*.png
 # ...and screenshots referenced from documentation.  Without this, committing a

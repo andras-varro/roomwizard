@@ -420,6 +420,22 @@ Property lookup requires walking the structure block token-by-token:
 The `patch_dtb.py` script walks this structure to find the `power` property specifically
 within the `usb_otg_hs` node, avoiding false matches in other nodes.
 
+⚠️ **Resolve a property's `nameoff` and compare the exact bytes — never search the strings block for
+the name.** The strings block is deduplicated *by suffix*, and on this DTB that bites: measured on
+`.188` 2026-08-14, `mode`'s nameoff is `0x3e4` and `usb_mode`'s is `0x3e0`, so **`mode` has no
+string-table entry of its own — it is the last four bytes of `usb_mode`.** A locator that scans the
+strings block for `b"mode\0"` is therefore answering a different question and will land on the wrong
+property. `uimage.py`'s walk already did the right thing for `power`; `find_prop_offset(data, want,
+hint)` is the shared implementation, with `find_power_offset`/`find_mode_offset` as one-line wrappers.
+
+Two more measurements from the same live tree, each of which would otherwise be a plausible wrong turn:
+`/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 03` and it is the **only** property named `mode`
+anywhere in the tree (so `original.dts:3818` is confirmed against the running kernel, not just against
+the decompile); and `mode` and `power` are **siblings of one node**, so the two patches must be
+asserted to land in the *same* `d00dfeed` candidate. `patch_dtb.py --mode` consequently patches **both**
+properties in one pass and never `mode` alone — a p1 write is one shot, and a mode-only image would be
+a fourth firmware state nothing can classify.
+
 #### uImage CRC Recalculation
 
 After patching the DTB bytes, the uImage checksums must be recalculated:
@@ -493,7 +509,7 @@ publish any manifest entry whose basename matches `uImage*`.
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
 | **Worked at boot, dead after a replug** | On `.188` a 95 s unplug/replug **works** — VBUS stays up and the disconnect is not processed until the device returns. The `.225` 60 s failure has no confirmed counterpart on current hardware | If it does happen: plug the device in, then `/etc/init.d/usb-host recover` (a driver re-probe). ⚠️ **`echo host > .../mode` is a silent no-op on this SoC** — `omap2430_ops` has no `.set_mode`. Detail `../SYSTEM_ANALYSIS.md#36-usb` |
-| **Nothing enumerates unless it was plugged in at boot** | THE bug. MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off | `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` B32 |
+| **Nothing enumerates unless it was plugged in at boot** | **A standing property of this hardware, not an open bug** (settled 2026-08-14). MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off. Three mechanisms read out of the driver source have each been applied and **refuted on hardware** | **Device Tools → USB → RESCAN** — one tap, ~5 s, dead port → playable pad, verified on a panel. Over SSH it is `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` B32 |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
 | Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
 
@@ -510,6 +526,11 @@ publish any manifest entry whose basename matches `uImage*`.
 | EHCI/OHCI alternative | `CONFIG_USB_EHCI_HCD` and `CONFIG_USB_OHCI_HCD` not compiled |
 | usbhid for Xbox controller | Controller uses vendor-specific class `ff`, not HID class `03` |
 | Runtime DTB power override **via sysfs** | MUSB reads `power` at probe and `hcd->power_budget` is not exposed; there is no sysfs node to write |
+| DTB `mode` 3 → 1 (`MUSB_PORT_MODE_HOST`) to revive a cold port | **Refuted on hardware 2026-08-14.** Written to `.188`'s p1 and verified live in the booted tree (`mode` = `00 00 00 01`); a pad plugged in after an empty-socket boot still stayed dark, while `usb-host recover` on the same firmware brought it up on attempt 1. `patch_dtb.py --mode` and the three-state p1 gate all stay — they are what makes a patched unit re-derivable back down — but **no caller exposes the flag** |
+| `echo host > $MUSB/mode` | Silent no-op that returns success: `omap2430_ops` has no `.set_mode` on this SoC |
+| Writing `$MUSB/vbus` | Sets `a_wait_bcon`, which nothing on omap2430 reads |
+| debugfs `softconnect` | Sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`; a cold port sits in `a_idle` |
+| A hub left permanently attached (ID-ground) | Measured 2026-08-13: `Vbus off` at 1, 2 and 3 min, and a device plugged into the hub enumerated nothing. An ID event replays the *cached* DEVCTL, and a cold port has no `SESSION` bit to resume |
 
 ⚠️ **The `/dev/mem` patch forces IRQ-driven PIO — it does not fix DMA.** Anything above or below reading
 as "the patch repairs a broken DMA configuration" has it backwards: the noop `dma_init`/`dma_exit` stubs
@@ -524,6 +545,17 @@ scoped future item — locate the **in-RAM unflattened device tree** and patch i
 been attempted; what failed was writing through *sysfs*, which is a different thing entirely. The open
 risk is address stability: `omap2430_ops` is a static symbol at a fixed address, while the unflattened DT
 is early-boot allocated. If it works, the p1 write and `--no-usb-power` can both be retired.
+
+⚠️ **The other untried `/dev/mem` target is DEVCTL `SESSION`, and it carries a hazard worth stating
+before anyone tries it.** MUSB's DEVCTL register is at physical `0x480AB060`, and bit 0 (`SESSION`) is
+the bit `musb_start()` sets — so poking it is the most direct expression of "make a cold port start a
+session". It has **not** been attempted. The hazard is not the write's effect but the access itself: an
+OMAP IP left in forced standby has its interface clock gated, and a register access to a clock-gated IP
+raises an **external abort** rather than reading zero. The IP has to be held resumed first (via the
+driver's `power/control`, or by keeping a session-capable consumer bound) before `devmem_write` touches
+that address. ⚠️ **Reaching a session is also not the same as fixing the cause** — three mechanisms read
+out of this driver have been applied and refuted on hardware; see `../IMPROVEMENT_PLAN.md` B32 for what
+a fourth candidate has to explain first.
 
 ---
 

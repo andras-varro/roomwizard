@@ -582,8 +582,7 @@ static void launch_app(Launcher *l, int index,
          * diagnose, because busybox `ps w` shows only processes with a TTY and
          * the cmdline is then the only thing left to walk.  (`comm` was always
          * right: the kernel takes it from the file being executed.)  Nothing
-         * reads argv[0] except the usage text of three CLI tools.
-         * ../IMPROVEMENT_PLAN.md B25. */
+         * reads argv[0] except the usage text of three CLI tools. */
         switch (app->args) {
         case ARG_NONE:
             execl(app->exec_path, app->exec_path, NULL);

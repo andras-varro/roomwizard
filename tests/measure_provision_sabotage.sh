@@ -5,13 +5,15 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && bash tests/measure_provision_sabotage.sh"
 #
-# IMPROVEMENT_PLAN.md B28. Host-only: no device, no card, no root.
+# Host-only: no device, no card, no root.
 #
 # ── Why this file exists ────────────────────────────────────────────────────
 #
-# B28 shipped past 94 passing cases in rw_provision_test.sh. Group F is the answer,
+# A one-of-eight install defect shipped past 94 passing cases in rw_provision_test.sh:
+# `rw_provision_online_script` installed the first file of the eight and silently
+# dropped the rest. Group F is the answer,
 # and a group that has only ever been seen passing is not evidence that it can
-# fail — which is exactly the property B28 disproved about the suite it was added
+# fail — which is exactly the property that defect disproved about the suite it was added
 # to. So every case below breaks one thing and names which assertions notice.
 #
 # ⚠️ It stages ONE FILE, via $RW_PROVISION_LIB. `cp -a` of a directory out of
@@ -50,7 +52,7 @@
 # assertions fail matters more than how many, so they are named.
 #
 #   baseline                                    109 passed,  0 failed
-#   1 the plan on stdin (B28)                   102 passed,  7 failed
+#   1 the plan on stdin, not fd 3               102 passed,  7 failed
 #       F2 F3 F4 F5 F7 F8 F12 — 1 of 8 copied, so the function's own got-vs-want
 #                     guard returns 1 (F2) and every downstream count is short
 #   2 the missing-source refusal deleted        108 passed,  1 failed
@@ -159,7 +161,7 @@ measure() {
 
 # ── 1. the plan back on stdin — B28 itself ──────────────────────────────────
 echo ""
-echo "  1. the plan read on stdin instead of fd 3 (B28)"
+echo "  1. the plan read on stdin instead of fd 3"
 stage
 sed -i 's|read -r kind mode tgt src <&3|read -r kind mode tgt src|; s|done 3< "\$plan"|done < "$plan"|' "$STAGED"
 measure "1 plan on stdin" "$STAGED" 'done < "\$plan"' 6 "$(run_suite)"

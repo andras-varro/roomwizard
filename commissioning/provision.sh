@@ -30,7 +30,7 @@
 #      Installs the USB host-mode scripts and their boot links (--no-usb skips)
 #   4. Hardens SSH (PermitEmptyPasswords=no, brute-force limits)
 #   5. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
-#   6. Deletes the vendor software stack (--no-clean opts out; IMPROVEMENT_PLAN.md C13)
+#   6. Deletes the vendor software stack (--no-clean opts out)
 #   7. Raises the USB power budget to 500 mA by patching p1 (--no-usb-power opts out)
 #   8. Reboots device
 #
@@ -64,7 +64,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # the correct prefix on a device and a refused one offline, and on this path the
 # work happens on the far side of an ssh pipe — but there is one implementation of
 # each, and rw_provision_online_script is the one this script ships to the device
-# (IMPROVEMENT_PLAN.md F10, C11, C12).
+# (IMPROVEMENT_PLAN.md C12).
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
 # shellcheck source=../lib/rw-clean.sh
@@ -197,7 +197,7 @@ usage() {
 [[ -z "$DEVICE_IP" ]] && usage
 
 # Validate the target before doing anything: every step past here is destructive
-# and ends in a reboot (../IMPROVEMENT_PLAN.md B19).
+# and ends in a reboot.
 #
 # An IPv4 address OR a DNS name is accepted. The name form is what makes
 # `./commissioning/provision.sh rw09.local` work, which is the whole point of enabling
@@ -231,10 +231,10 @@ fi
 # These two files are the only ones this script copies from the repo, and they
 # reach a device ONLY through here — deploy-all.sh does not push them.  So a
 # device can silently run an older copy than the repo's, with nothing saying so:
-# while B18 was being reproduced, RW09's disable-steelcase.sh turned out to be
-# older than the repo's *pre-fix* copy, which is why that repro had to stage the
-# tracked file to /tmp instead of using the device's own.  md5 settles it in one
-# command (../IMPROVEMENT_PLAN.md B19).
+# while a reboot-loop defect was being reproduced, RW09's disable-steelcase.sh turned
+# out to be older than the repo's *pre-fix* copy, which is why that repro had to stage
+# the tracked file to /tmp instead of using the device's own.  md5 settles it in one
+# command.
 #
 # Byte comparison is valid because .gitattributes pins *.sh to eol=lf, so the
 # working tree is LF even on this Windows host and scp copies it unchanged.
@@ -319,7 +319,7 @@ fi
 
 # ── which clean, if any ─────────────────────────────────────────────────────
 #
-# IMPROVEMENT_PLAN.md C13: the deep clean is the DEFAULT, because the offline pass
+# The deep clean is the DEFAULT, because the offline pass
 # has always defaulted to it and the result of commissioning must not depend on
 # which path ran. --no-clean is the opt-out; --remove narrows it to the named
 # stacks; --deep-clean names the default explicitly. --deep-clean does not rewrite
@@ -335,11 +335,11 @@ CLEAN_MODE="deep"
 # wording as commissioning/commission-offline.sh's phase 0, because it is the same
 # precondition. It covers BOTH irreversible steps: the clean, and the p1 write.
 # There is no per-flag opt-out to soften it with; the opt-outs are --no-clean and
-# --no-usb-power, and choosing neither IS the decision (IMPROVEMENT_PLAN.md C11,
-# C13). The device has no serial console, so a failed boot yields no diagnostics at
+# --no-usb-power, and choosing neither IS the decision. The device has no serial
+# console, so a failed boot yields no diagnostics at
 # all (SYSTEM_ANALYSIS.md#312-serial-ports).
 #
-# ⚠️ The non-TTY branch is the whole point of C13, and its loudness IS the safety
+# ⚠️ The non-TTY branch is the whole point of this gate, and its loudness IS the safety
 # property. What it replaced: an unguarded `read`, which at EOF left the answer
 # empty, cancelled the clean and returned 0 — so a scripted run SILENTLY did not
 # clean while the operator believed the default did. A false-negative gate. The
@@ -414,8 +414,8 @@ ask_consent() {
     echo "      AUTO-ANSWERED \"yes\" AND THIS RUN IS PROCEEDING."
     echo "  ══════════════════════════════════════════════════════════════════"
     echo "   Nobody confirmed a backup exists. Proceeding anyway, because passing"
-    echo "   neither --no-clean nor --no-usb-power is itself the decision"
-    echo "   (IMPROVEMENT_PLAN.md C13). On this run that means:"
+    echo "   neither --no-clean nor --no-usb-power is itself the decision."
+    echo "   On this run that means:"
     if [[ "$DO_CLEAN" -eq 1 ]]; then
         echo "     · the vendor software stack is being DELETED ($CLEAN_MODE), and the"
         echo "       factory-restore payload with it unless --keep-factory was passed"
@@ -589,7 +589,7 @@ done
 echo ""
 echo "-- config files that reference what we just deleted --"
 # /etc/profile:36 is `. /home/root/data/websign/wsplatform.conf`, and the clean
-# deletes websign/ (half the D7b fix). Measured in both card captures. Left behind,
+# deletes websign/. Measured in both card captures. Left behind,
 # every login prints an error for a file that is never coming back.
 if grep -q 'wsplatform\.conf' /etc/profile 2>/dev/null; then
     if [ -n "$DRY" ]; then
@@ -871,7 +871,7 @@ info "Provision plan: $(rw_provision_plan_summary "$PROV_PLAN")"
 # ⚠️ The loop lives in lib/rw-provision.sh, not here. It was written out in full in
 # this script and again in usb_host/build-and-deploy.sh, both reading the plan on
 # stdin with an `ssh` in the body — so the first ssh ate the rest of the plan and
-# both installed exactly one file (B28). Do not inline it again.
+# both installed exactly one file. Do not inline it again.
 rw_provision_push_installs "$PROV_PLAN" "$REPO_ROOT" "$DEVICE" \
     || { rm -f "$PROV_PLAN"; err "could not copy the provision sources to the device"; }
 
@@ -949,8 +949,8 @@ REMOTE
 #
 # Every path it named is either a rule in that file, covered by a sweep, or
 # recorded there as a deliberate omission — see its "Three deliberate differences"
-# header. IMPROVEMENT_PLAN.md C11.
-# The DEFAULT is `deep` (IMPROVEMENT_PLAN.md C13) — the same default
+# header.
+# The DEFAULT is `deep` — the same default
 # commissioning/commission-offline.sh has always had, so the two paths leave the same
 # unit. --no-clean is the opt-out, and a declined backup question is the other one.
 CLEAN_STATE="not attempted"
@@ -997,8 +997,9 @@ crontab -l 2>/dev/null | grep -v '^#' | grep -v '^$' | sed 's/^/  /'
 REMOTE
 
 # Confirm the two scripts this run just pushed are byte-identical on the device.
-# scp reporting success is not the same as the right bytes landing, and these are
-# the files whose silent staleness cost a session (B18, B19).
+# scp reporting success is not the same as the right bytes landing, and a stale
+# disable-steelcase.sh is silent — it re-runs from the init script on every boot,
+# nothing checks its exit status, and the symptom is a reboot ~70 min later.
 echo ""
 info "Deployed script versions:"
 report_script_versions
@@ -1006,7 +1007,7 @@ report_script_versions
 # ── What this run actually did ──────────────────────────────────────────────
 #
 # The verdicts follow what was established, not merely that we got this far — a
-# green tick on a step that was skipped is the thing C13 is about.
+# green tick on a step that was skipped is what this block exists to prevent.
 echo ""
 info "This run:"
 case "$CLEAN_STATE" in

@@ -57,8 +57,8 @@
  * fit between FIRST_ROW_Y and the status line, and the status line is anchored to
  * SCREEN_SAFE_BOTTOM, which is per-unit.  A seventh row at the old fixed 52 px
  * pitch would run to y=408 and land on top of the status line (366 on RW09) —
- * which is exactly why the content-area control was config-file-only until now
- * (IMPROVEMENT_PLAN.md B3f).  settings_row_pitch() divides the space that is
+ * which is exactly why the content-area control was config-file-only until now.
+ * settings_row_pitch() divides the space that is
  * actually there and caps at the old 52, so a taller surface looks unchanged.
  */
 

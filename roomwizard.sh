@@ -87,7 +87,7 @@ esac
 # ⚠️ It polls on `down` and STOPS on `auth`. A unit that answers and refuses our key
 # is up: waiting the rest of the timeout cannot change the answer, and the old
 # version spent the full 180 s doing exactly that before reporting "did not answer
-# SSH" about a device that had answered every time (IMPROVEMENT_PLAN.md F16). On that
+# SSH" about a device that had answered every time. On that
 # state it hands over to the gate, which offers to install a key.
 wait_for_ssh() {
     local target="$1" timeout="${2:-180}" waited=0

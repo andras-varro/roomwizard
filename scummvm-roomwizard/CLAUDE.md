@@ -48,7 +48,7 @@ date on every link, so every address after it moves between builds of identical 
 binary cannot be gated, with the byte-level measurement: `../IMPROVEMENT_PLAN.md` C9.
 
 **`clean` is the only clean path — do not add a second one.** A root-level `clean.sh` used to exist
-and was deleted 2026-08-03 (`../IMPROVEMENT_PLAN.md` B19a): it was this tree's clean script with no
+and was deleted 2026-08-03: it was this tree's clean script with no
 shebang and no `cd`, so from the repo root its `find . -name '*.o' -delete` reached
 `native_apps/build/` and the `usb_host/linux-4.14.52/` kernel objects, and `-name '*.d'` matched
 *directories* in the extracted rootfs under `partitions/`. `clean_build()` already does strictly
@@ -155,7 +155,7 @@ process's **current directory** — and the cwd differs per launch method, becau
 not `cd` and `app_launcher` `execl()`s without `chdir()`. That gave RW09 three config files
 (`/scummvm.ini` from boot, `/home/root/scummvm.ini` from SSH, `/opt/games/scummvm.ini` from a `cd`),
 settings that did not follow the user between launch methods, and an "is the setting being ignored?"
-report that was really an edit to the wrong file (`../IMPROVEMENT_PLAN.md` B3h, fixed 2026-08-03).
+report that was really an edit to the wrong file (fixed 2026-08-03).
 `OSystem_POSIX` solves this with an absolute `$HOME/.config` path, but this backend derives from
 `ModularGraphicsBackend`, not from it. `/opt/games` is the right home: next to the binary, the icons
 and the game data, writable, and independent of `$HOME`, which the init script does not set.
@@ -163,7 +163,7 @@ and the game data, writable, and independent of `$HOME`, which the init script d
 **Backend defaults belong in `initBackend()`, and must be flushed.** ConfMan only persists keys that
 were actually *set* — `registerDefault()` is not written to the file either — so a key the backend
 merely reads with `hasKey()` never appears in `scummvm.ini`, and the option is undiscoverable from the
-device (`../IMPROVEMENT_PLAN.md` B3g). `initBackend()` therefore writes `rw_content_area=safe` on first
+device. `initBackend()` therefore writes `rw_content_area=safe` on first
 run, behind `!ConfMan.hasKey()` so a user's `visible` is never overwritten. Use **`setAndFlush`**, not
 `set`: `quit()` calls `exit(0)` and bypasses ScummVM's normal shutdown flush, so a plain `set()` can be
 lost on the one exit path this device actually takes. `ConfMan` is loaded (`base/main.cpp:478`) well
@@ -236,7 +236,7 @@ What decides whether leaving a game returns to the ScummVM launcher is the launc
 return-to-launcher was requested, and neither `kFeatureNoQuit` nor `gui_return_to_launcher_at_exit` is
 set. That is upstream's default on every platform, so "it returns to the launcher on Ubuntu" was a
 desktop config with that Global Options box ticked, not a backend difference. `initBackend()` sets
-`gui_return_to_launcher_at_exit` on first run (`../IMPROVEMENT_PLAN.md` B12b, fixed 2026-08-03).
+`gui_return_to_launcher_at_exit` on first run (fixed 2026-08-03).
 
 **`kFeatureNoQuit` satisfies the same condition and is a trap.** It also hides the `Quit` button on the
 ScummVM launcher (`gui/launcher.cpp:264`) *and* the in-game global menu (`engines/dialogs.cpp:90`), and
@@ -248,5 +248,5 @@ and the native games, so that traps the user inside ScummVM. Never set it here.
 `sizeof(long) == 4`. Baseline all timing to a start timestamp captured at init; never multiply a
 raw `tv_sec` by 1000 or 1000000. `getMillis()` does the multiply in `uint32` since 2026-08-03, so it
 wraps cleanly at 49.7 days rather than overflowing signed `time_t` at 24.85 — **built, deployed and
-verified on RW09 the same day** (`../IMPROVEMENT_PLAN.md` B10). All six `getMillis()` consumers
+verified on RW09 the same day**. All six `getMillis()` consumers
 compute `now - _last` in `uint32` and are wrap-safe; keep it that way.

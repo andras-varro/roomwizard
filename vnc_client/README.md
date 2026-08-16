@@ -93,8 +93,8 @@ content_area = safe
 ```
 
 **Note:** `password` is a placeholder here on purpose — this file is tracked, and until
-2026-08-03 this example carried the reference setup's **real** password (`IMPROVEMENT_PLAN.md`
-D6). Put the real one only in the gitignored `vnc_client.conf`. It is sent under the legacy
+2026-08-03 this example carried the reference setup's **real** password. Put the real one only in
+the gitignored `vnc_client.conf`. It is sent under the legacy
 VncAuth scheme, which **truncates it to 8 characters** at both ends, so use a throwaway LAN
 credential and don't rely on characters past position 8.
 
@@ -440,7 +440,7 @@ Built as static libraries by `build-deps.sh` using the ARM cross-compiler.
 **Do not write a second init script.** Boot is owned by `/etc/init.d/roomwizard-app`, which respawns
 whatever `/opt/roomwizard/default-app` points at — so a private `S99vnc-client` gives you two things
 starting apps and two different ideas of how to stop them, which is the defect the project spent a
-session chasing (`../IMPROVEMENT_PLAN.md` B20/B25). The supported route is one command:
+session chasing. The supported route is one command:
 
 ```bash
 ./build-and-deploy.sh <ip> set-default        # boot straight into the VNC client

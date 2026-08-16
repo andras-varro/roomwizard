@@ -13,11 +13,11 @@
  *       common/framebuffer.c common/hardware.c common/config.c \
  *       common/touch_input.c -lm && ./build/framebuffer_bpp_test
  *
- * What it asserts, and why (IMPROVEMENT_PLAN B1/B24): the back buffer is sized
+ * What it asserts, and why: the back buffer is sized
  * width * height * bytes_per_pixel, but every primitive used to write a
  * uint32_t unconditionally.  At 16bpp — which is what ScummVM and vnc_client
  * set, and what a game launched over SSH after one of them INHERITS, because no
- * game asserted the bpp (B24) — that addresses twice the allocation.  Observed
+ * game asserted the bpp — that addresses twice the allocation.  Observed
  * on RW09 2026-08-02: a stale vnc_client left /dev/fb0 at 16bpp and
  * brick_breaker came up at "800x455 ... 16 bpp", running the full 2x overflow.
  *

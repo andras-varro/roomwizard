@@ -201,7 +201,7 @@ info "Generating password hash..."
 # Feed the password on stdin, never as an argument: an argument is world-readable
 # in /proc/<pid>/cmdline for the lifetime of the openssl process, which defeats
 # the `read -s` above.  `printf` is a shell builtin, so it forks nothing and the
-# password never reaches another process's command line either.  (B17.)
+# password never reaches another process's command line either.
 PASSWORD_HASH=$(printf '%s\n' "$PASSWORD" | openssl passwd -6 -stdin)
 if [ -z "$PASSWORD_HASH" ]; then
     error "openssl produced no password hash. Is 'openssl passwd -6 -stdin' supported?"
@@ -238,7 +238,7 @@ echo ""
 # that name, on a non-loopback line, to an external address that is unreachable
 # here — so a device resolving its own name gets a bogus IP. Naming the card here
 # is the only point in the flow where it costs nothing: no device to reach, no
-# reboot. See IMPROVEMENT_PLAN.md D7, and commissioning/set-hostname.sh for what gets written.
+# reboot. See commissioning/set-hostname.sh for what gets written.
 CURRENT_HOSTNAME=""
 if [ -f "$ROOTFS/etc/hostname" ]; then
     CURRENT_HOSTNAME=$(head -1 "$ROOTFS/etc/hostname" | tr -d ' \011\015\012')
@@ -359,8 +359,8 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
         if [ "$OPERATOR_HOME" != "$HOME" ]; then
             info "Looked in $OPERATOR_HOME/.ssh (\$SUDO_USER's home, not root's)"
         fi
-        # ⚠️ OFFER TO GENERATE, before asking for a path. This was the second half of
-        # IMPROVEMENT_PLAN.md F16: an operator with no key at all was asked for a
+        # ⚠️ OFFER TO GENERATE, before asking for a path. This is the other half of
+        # the missing-key defect: an operator with no key at all was asked for a
         # path they did not have, and the card was then written WITHOUT
         # authorized_keys while every later script told them to "check IP and SSH
         # key". One command closes it, and the key is theirs for everything else
@@ -415,7 +415,7 @@ echo ""
 # which is how plenty of vendor images ship — it deleted everything from eth0
 # onwards.  Any `auto lo` / `iface lo` below that point went with it, and the
 # device then booted with no network and no SSH: an unrecoverable commissioning
-# short of re-mounting the card.  (IMPROVEMENT_PLAN.md B17.)
+# short of re-mounting the card.
 #
 # This is a stanza-aware filter instead.  Two things about interfaces(5) that
 # the sed version got wrong:
@@ -517,7 +517,7 @@ else
 fi
 echo ""
 
-# ── Step 7b: the vendor boot-time network regenerator (IMPROVEMENT_PLAN D7b) ─
+# ── Step 7b: the vendor boot-time network regenerator ──────────────────────
 #
 # Everything written above — the host name, /etc/hosts, dhclient.conf's
 # `send host-name` and the DHCP stanza — is undone ~7 s into the FIRST boot.
