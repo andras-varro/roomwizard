@@ -236,8 +236,8 @@ markdownlint's `MD051`. The state lives here instead, where updating it costs no
 | 0 | measure `hw:0,0` before rewriting anything | ✅ **closed, passed** — `.188`, 2026-08-14 |
 | 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
-| 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green at 154 checks, DEPLOYED. Defect 2's fix HEARD and it WORKED — no crackling. A third defect is now the blocker: every sum is audibly distorted** (2026-08-16) |
-| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next |
+| 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green, DEPLOYED, and its OWN goals look met — two tones heard as two, crackling gone. Not closed: a third defect turned out NOT to be a mixing defect at all — one voice distorts, and the mix bus is measured innocent** (2026-08-16) |
+| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next — **and now the candidate fix for defect 3**, not a tidy-up |
 | 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 6 | the docs and the comments this makes stale | open |
 
@@ -318,19 +318,21 @@ seven sabotaged copies of `audio_gen.c` were caught. Its design rules, each of w
 ⏳ **Outstanding, and the reason Phase 3 is not closed.** `native_apps/tests/audio_mix_test` is the
 interactive tool built for exactly this (33rd artifact, launcher tile *Mix Bus Test*): **four** toggles
 (PUMP / KEEP / **LIMIT** / STOP ALL) so the rejected behaviour is the negative control on the same panel,
-a drone plus three far-apart pitches, the four canned sounds beside a deliberate CHORD, a live
-`voices`/`clip`/`lim`/`starve`/`lost`/`drop` + *worst frame* readout, and a 5/10/20/40/60/100 ms row. Every
-tap logs the pad's own name, freq and ms plus both toggle states to `/tmp/mix.log`, and `audio_pump()`
-traces the raw ring numbers for 40 calls per session. Panel state so far:
+**two sustained 3 s tones** plus three far-apart short pitches, the four canned sounds beside a deliberate
+CHORD, a live `voices`/`clip`/`lim`/`starve`/`lost`/`drop` + *worst frame* readout, and a 5/10/20/40/60/100 ms
+row. It `freopen()`s its own `stderr` onto `/tmp/mix.log`, so the taps **and** `audio_pump()`'s bounded ring
+trace interleave in one file whether it was started from the tile or over SSH. ⚠️ **A sustained tone is not a
+luxury: a 200 ms blip cannot answer a timbre question**, which is what defect 3 turned out to be. Panel state
+so far:
 
 | # | Question | Answer |
 |---|---|---|
 | 1 | two overlapping sounds heard as **two** | ✅ **yes** — DRONE 220 + 440, reported as "two tones" 2026-08-15 |
 | 2 | `audio_success()` is an arpeggio, not a chord | ❌ **no — it is "a distortion"** by ear, `PUMP: ON` / `KEEP: ON` / `LIMIT: SOFT`, 2026-08-16. SUCCESS and FAIL fired close together distort too. **Reported by ear only, operator's own words** — see defect 3 |
-| 3 | is the summed clamp audible | ⚠️ **The question was too narrow and its ✅ was misleading.** `LIMIT: HARD` vs `SOFT` was *"no change at all"* while `clip` went 0 → 4189, so *clipping* was not what the panel heard then — but with the crackle now gone, **the limiter itself is the prime suspect for the distortion that remains**. `clip == 0` proves int16 never overflowed, **not** that the mix is clean |
+| 3 | is the summed clamp audible | ❌ **the limiter is EXONERATED, measured.** One voice at `AUDIO_PEAK` passes `audio_mix_limit()` **byte-identical** (its knee *is* `AUDIO_PEAK`), and a single voice already distorts — so `HARD` vs `SOFT` sounding alike is the expected result, not a wiring fault. See defect 3 |
 | 4 | the ~60 ms rule, three walks | ✅ **PUMP off: unchanged · PUMP on, keepalive OFF: still ~60 ms · PUMP on, keepalive ON: 5 ms audible, 20 ms recognisable.** A property of **restarting the stream**, not of `SNDCTL_DSP_RESET` — [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 6 |
-| 5 | CPU% while mixing | ⏳ **unmeasured** — `top -b -n 2 \| grep audio_mix_test` from a second shell while a drone runs |
-| 6 | does the ~50 % attenuation belong on the **synth** or on all output | ⏳ **unmeasured, and now the critical path.** Defect 3 makes it a per-voice-headroom question rather than a taste question: three voices at `AUDIO_PEAK` 18000 sum to 54000, and nothing scales a voice by the voice count. Phase 4 needs the number, and so does any fix for defect 3 |
+| 5 | CPU% while mixing | ⏳ **still unmeasured** — `top -b -n 2 \| grep audio_mix_test` from a second shell while a drone runs. Two panel sessions have now missed it; it needs no operator, only a shell open at the same time |
+| 6 | does the ~50 % attenuation belong on the **synth** or on all output | ⚠️ **answered as a LEVEL question, and the answer is that `AUDIO_PEAK` is too high.** A pure sine at peak 6000 is clean on this speaker and at 18000 it is not ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), so the peak comes down regardless of where mixing headroom ends up. What is still open is the **loudness cost**: a lone beep at a lower peak is quieter, so the choice is a voice-count-dependent gain, a `sqrt` law, or a smaller `AUDIO_MAX_VOICES` |
 
 **Two defects were found by ear and both are fixed in the tree; the second fix has NOT been heard yet.**
 
@@ -360,43 +362,46 @@ stayed at **107 ms while `starve` kept climbing** — one slow frame at start-up
 which kills "the render loop cannot feed the lead". The third suspect, the tool's own toggle wiring, was
 checked and was **sound**.
 
-⏳ **Defect 3 — EVERY SUM IS AUDIBLY DISTORTED, and this is the blocker.** Reported by the operator
-2026-08-16 with `PUMP: ON` / `KEEP: ON` / `LIMIT: SOFT`, **by ear only, and it must not be promoted to a
-measurement until an instrument agrees**: single voices sound right; CHORD is "a distortion"; DRONE 220 + 440
-together, and SUCCESS + FAIL fired close together, all "go into a big distortion". The distortion's pitch
-reads **lower** than 440 alone. Against a phone signal generator the device's 440 matched a **square wave**
-far better than a sine, and the 220 + 440 sum resembled a plain 440 sine more than either input.
+⏳ **Defect 3 — one voice at `AUDIO_PEAK` is reproduced as a near-square, and it is TWO faults rather than
+the mixing one this entry used to name.** Measured on `.188` 2026-08-16 by playing reference WAVs through
+the vendor's `aplay` (ALSA direct, **no `/dev/dsp`**) and comparing with the same 440 Hz from the app:
 
-**The mechanism that fits all of it, `[inferred]` and not yet measured:** the generator is a genuine sine
-(`sin()` at `common/audio_gen.c:89`, `:130`, `:292`), and `audio_pump_mix()` sums each voice at its **full
-`peak`** — `:292` is `acc += peak * env * sin(phase)` with **no scaling by voice count**. So two voices reach
-36000 and three 54000 against int16's 32767, and `audio_mix_limit()` waveshapes all of it back under
-`AUDIO_MIX_CEIL`. **Memoryless per-sample compression of a sum IS harmonic distortion** — it flattens peaks,
-adds odd harmonics and emphasises the lower fundamental, which is a square-ish, deeper-sounding artefact.
-⚠️ **So `clip == 0` was never evidence of a clean mix, and the gate said PASS while the sound was destroyed.**
-The candidate fix is **per-voice headroom instead of sum limiting** (scale a voice by the live voice count, or
-pick a per-voice peak such that `AUDIO_MAX_VOICES` cannot exceed full scale) — which is panel question 6, now
-on the critical path. ⚠️ **Price the loudness cost before building it:** 18000/3 = 6000 per voice makes a lone
-beep much quieter, so the honest options are a voice-count-dependent gain, a `sqrt` law, or a lower
-`AUDIO_MAX_VOICES`. Refutation if the mechanism is wrong: with **one** voice at 18000 the panel should hear a
-clean sine, and `LIMIT: HARD` vs `SOFT` should now differ audibly on a 3-voice CHORD.
+| 440 Hz signal | Path | Heard |
+|---|---|---|
+| sine, peak 6000 | `aplay` | ✅ **clean sine** |
+| square, peak 6000 | `aplay` | harsh, and **louder** — a square's RMS is 3 dB over a sine's at equal peak, which is what calibrated the listener |
+| sine, peak **18000** = `AUDIO_PEAK` | `aplay` | ⚠️ *"noisier than the sine, clearer than the square"* — **the amp or the speaker overdrives** |
+| sine, peak 18000, ONE voice | the app, via `/dev/dsp` | ❌ *"absolutely not sine"*, matched a **square** on a signal generator |
 
-**One operator observation is expected physics, not a defect — do not chase it.** Several 220 Hz drones
-started at different moments were "no or very faint sound until one of them finished": identical frequencies
-at different start phases partially cancel, and `AudioVoice.delay` guarantees the phases differ.
+**Half of it is a device fact and lives in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio):
+`AUDIO_PEAK` 18000 is past what this speaker takes cleanly.** The other half is ours — the same tone at
+the same peak is *mildly* noisy through ALSA and a *full square* through the OSS shim, so something in that
+path makes it much worse. ⚠️ **It survived a 20 dB cut at `DAC1 Digital Fine Playback Volume` with the
+timbre IDENTICAL and only the loudness changed**; that control sits after our samples and before the DAC,
+so the corruption is upstream of it. Phase 4 replaces precisely that path, which promotes it from tidy-up
+to candidate fix.
 
-⚠️ **Two defects in the INSTRUMENT were found 2026-08-16 and must be fixed before the next panel session,
-because both make its numbers untrustworthy:**
+⚠️ **Five suspects this file recorded are REFUTED by measurement; do not re-raise any of them.** The
+limiter — one voice at `AUDIO_PEAK` passes it **byte-identical**, 4400 of 4400 samples, its knee *being*
+`AUDIO_PEAK`. The mix bus and the generator — **THD 0.00 %** by DFT over the shipped
+`audio_render_tone()`, indistinguishable from an ideal sine. The effective sample rate — a 440 Hz request
+measures 440 Hz at the panel. A silent sample-format fallback — `hw_params` reports `S16_LE`/2/44100 at
+**both** the ALSA and OSS layers. And analog overdrive as the *whole* story, per the 20 dB test.
+⚠️ **`clip == 0` was never evidence of a clean mix**: it proves int16 did not overflow, which the bounded
+limiter guarantees by construction, and the gate read PASS while the sound was destroyed.
 
-- **The `lead` readout is a hardcoded constant.** `tests/audio_mix_test.c:311` sets `lead_ms =
-  AUDIO_PUMP_LEAD_MS`, so the panel shows the **requested 80 ms** while the effective lead is ~139 ms — and
-  `:191` colours the worst-frame warning against that same wrong number. There is no accessor for the
-  effective lead; `audio.c:412` computes it as a local. **An A/B tool must report what the library did, not
-  what the header asked for** — the same defect class as a toggle label that does not read the toggle.
-- **`/tmp/mix.log` does not exist and cannot, as launched.** Taps are written to **`stderr`**
-  (`tests/audio_mix_test.c:347`); there is no `fopen` in the file. Started from the launcher tile, that
-  output goes nowhere, so **this file's claim that "every tap logs … to `/tmp/mix.log`" is wrong.** Either
-  launch it as `/opt/games/audio_mix_test 2>/tmp/mix.log` over SSH, or give the tool its own log file.
+**Two pitch readings that looked like clues are arithmetic.** 220 + 440 measures 220 Hz, and the
+523/659/784 CHORD measures 131 Hz because that triad is 4:5:6 and 523/4 = 130.75 — a detector reports the
+sum's repetition rate. "The sum sounds lower" is therefore not evidence of anything.
+
+**One operator observation is expected physics — do not chase it.** Several 220 Hz drones started at
+different moments were "no or very faint sound until one of them finished": identical frequencies at
+different start phases partially cancel, and `AudioVoice.delay` guarantees the phases differ.
+
+**Next step is one back-to-back A/B and it needs no new code:** `aplay` a peak-18000 sine against the
+tool's `440 3S` pad — same frequency, same peak, same speaker, only the software path differing. Mild
+versus square confirms the OSS path; indistinguishable means the overdrive is the whole story and
+`AUDIO_PEAK` is the only fix.
 
 **Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device** (neither
 `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** · one mono
@@ -419,13 +424,19 @@ has `--dump-hw-params`, which took the cross-build off Phase 0's critical path e
 in `native_apps/tests/alsa_probe.sh` printed **seven REFUSED rates** that were all one channel-count
 failure. Read its step 3 before believing its step 4.
 
-⏳ **One inherited defect is left, and it belongs to Phase 5:** `oss-mixer.cpp:298`'s emergency
-anti-underrun `write()` ignores errors and partial writes. The three in `audio.c` closed in Phase 2 — the
-channel count that was set with `SNDCTL_DSP_STEREO` and never read back, the three write paths that could
-abandon a chunk mid-frame, and the `(long)sample_rate * duration_ms` overflow past ~48.7 s. ⚠️ A
-stereo-only interface makes the mid-frame one **worse** than it read before, not moot: there is no mono path
-underneath to absorb a half frame. The microphone-as-input idea stays closed — there is no mic and no jack
-footprint.
+⏳ **Two defects are left in the device half, and one of them is a silent-failure hole.**
+⚠️ **`configure_dsp()` sets the sample FORMAT and never reads it back** (`audio.c:85`): the rate goes
+through `SOUND_PCM_READ_RATE` and the channel count through `SOUND_PCM_READ_CHANNELS`, but
+`SNDCTL_DSP_SETFMT` — which writes the *granted* format back into its argument — has its return ignored
+and its value discarded, so a fallback to another format would misinterpret every byte while looking
+like success. **Measured not to be firing here** (`hw_params` says `S16_LE`), which is why it is a defect
+rather than a cause; Phase 4 should not carry the hole forward. Second: `oss-mixer.cpp:298`'s emergency
+anti-underrun `write()` ignores errors and partial writes, and that one belongs to Phase 5. The three in
+`audio.c` closed in Phase 2 — the channel count that was set with `SNDCTL_DSP_STEREO` and never read
+back, the three write paths that could abandon a chunk mid-frame, and the `(long)sample_rate *
+duration_ms` overflow past ~48.7 s. ⚠️ A stereo-only interface makes the mid-frame one **worse** than it
+read before, not moot: there is no mono path underneath to absorb a half frame. The
+microphone-as-input idea stays closed — there is no mic and no jack footprint.
 
 ### F19. Background music in the platformer — open, asked for 2026-08-14
 

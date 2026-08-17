@@ -415,6 +415,14 @@ group_c() {
 # never actually granted. Raised deliberately, in that same commit, which is the escape
 # hatch working as designed rather than an exception to it. Every other row still holds
 # its original grant; check the margin before assuming a row is generous.
+# ⚠️ IMPROVEMENT_PLAN.md is 1515 rather than 1500 because F1 defect 3's recorded cause was
+# REFUTED and replacing it cost more lines than the wrong version had: a 4-row evidence
+# table plus the five suspects that measurement killed, which is what stops the next
+# session re-raising them. Raised to cover exactly that, and the ~20 lines of headroom are
+# deliberately NOT restored. ⚠️ **The next addition to this file has an identified way to
+# pay for itself**: F1's Phase-3 design-rule bullets restate the nine rules in
+# native_apps/CLAUDE.md → *Mixing*, which is that content's home — verify each rule at the
+# destination, add a group C receipt row, then delete the block and leave a pointer.
 # ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
 # paragraph rewrapped to 200 characters passes while getting longer, and a table split
 # across more rows fails while saying the same thing. The ~110-char wrap is a review
@@ -424,7 +432,7 @@ ceilings() {
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
 1900	SYSTEM_ANALYSIS.md
-1500	IMPROVEMENT_PLAN.md
+1515	IMPROVEMENT_PLAN.md
 260	HARDWARE.md
 390	CLAUDE.md
 740	native_apps/CLAUDE.md

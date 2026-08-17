@@ -28,6 +28,16 @@ long audio_bytes_for_frames(long frames, int channels)
     return frames * (long)fb;
 }
 
+long audio_ms_for_frames(int rate, long frames)
+{
+    if (rate <= 0 || frames <= 0) return 0;
+    /* 64-bit for the same reason as above: frames * 1000 leaves 32 bits at
+     * ~2.1 M frames, which is only ~49 s of audio — a ring size, not an
+     * unreachable one. */
+    long long ms = ((long long)frames * 1000) / (long long)rate;
+    return (long)ms;
+}
+
 /* ── Clock arithmetic, without a clock ───────────────────────────────────── */
 
 uint32_t audio_ms_from_timeval(long tv_sec, long tv_usec)

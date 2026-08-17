@@ -62,6 +62,15 @@ typedef struct {
     int      pump_diag;       /**< bounded per-pump stderr trace: lines left.  Set
                                *   by audio_pump_enable(), so it is 40 lines per
                                *   PUMP: ON session and can never flood a log      */
+    long     pump_lead;       /**< the lead audio_pump() LAST TARGETED, in frames,
+                               *   0 until a pump has read the device's period.
+                               *   ⚠️ Recorded because it is derived from fragsize
+                               *   and is NOT AUDIO_PUMP_LEAD_MS — a diagnostic
+                               *   that printed the constant said 80 ms while the
+                               *   library was holding ~139                        */
+    long     pump_period;     /**< the device period the lead was rounded to, in
+                               *   frames.  Reported beside the lead so the panel
+                               *   shows the arithmetic, not just its result        */
 } Audio;
 
 /**
@@ -202,6 +211,22 @@ uint32_t audio_pump_starved(const Audio *audio);
  *  refused to take.  WPOL_PUMP never blocks, so a full ring drops them; they are
  *  gone, and a non-zero count is a discontinuity in the waveform. */
 uint32_t audio_pump_lost(const Audio *audio);
+
+/** The lead the pump LAST TARGETED, in frames, and the device period it was
+ *  rounded up to — both 0 until a pump call has read the period off the device.
+ *
+ * ⚠️ **A diagnostic must report what the library did, not what the header asked
+ * for.**  `AUDIO_PUMP_LEAD_MS` is a *request*: `audio_pump_lead_frames()` floors
+ * it at AUDIO_PUMP_LEAD_PERIODS whole periods and rounds up, which on the OSS
+ * shim's 46 ms period makes the effective lead ~139 ms rather than 80.
+ * `tests/audio_mix_test` printed the constant and so displayed `lead 80 ms` while
+ * the library held nearly twice that — and it coloured its worst-frame warning
+ * against the same wrong number.  Use these; `audio_ms_for_frames()` converts.
+ *
+ * They are a *measurement*, so they stay at 0 rather than falling back to the
+ * constant: "not yet measured" and "80 ms" are different claims. */
+long audio_pump_lead(const Audio *audio);
+long audio_pump_period(const Audio *audio);
 
 /** Choose how the summed bus leaves the mixer: AUDIO_MIX_SOFT (default) or
  *  AUDIO_MIX_HARD, the pre-limiter clamp, kept so a panel can A/B them. */

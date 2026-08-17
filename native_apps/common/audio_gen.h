@@ -141,6 +141,14 @@ long audio_frames_for_ms(int rate, int duration_ms);
 /** Bytes for `frames` interleaved frames of `channels` channels. */
 long audio_bytes_for_frames(long frames, int channels);
 
+/** The inverse of `audio_frames_for_ms()`, and it exists so a DIAGNOSTIC can
+ *  report the lead the pump actually took rather than the constant it asked for.
+ *  ⚠️ It does **not** clamp: `audio_frames_for_ms()` clamps because a caller's
+ *  *request* may be nonsense, while a frame count handed back by the device is a
+ *  measurement — clamping it would hide exactly the surprise worth reporting.
+ *  0 for a non-positive rate or frame count. */
+long audio_ms_for_frames(int rate, long frames);
+
 /* ── Clock arithmetic, without a clock ───────────────────────────────────── */
 
 /**

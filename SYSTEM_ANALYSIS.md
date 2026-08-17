@@ -625,13 +625,28 @@ differing content instead of phase.
 - **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
   storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
   at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
+- ⚠️ **A pure sine at peak 18000 does NOT reproduce cleanly on this speaker, and the same sine at peak
+  6000 does.** Measured `.188` 2026-08-16 **[n=1, by ear against a signal generator]** by playing generated
+  WAVs through the vendor's `aplay` (so nothing of this repo's audio code is in the path): peak 6000 is a
+  clean sine, peak 6000 as a *square* is harsh and audibly **louder** (a square's RMS is 3 dB over a sine's
+  at equal peak — the control that showed the listener was discriminating), and peak 18000 is *"noisier
+  than the sine, clearer than the square"*. So **the ≈55 % figure is not a safe acoustic ceiling** and the
+  overdrive is in the amp or the speaker, downstream of every digital stage. The clean threshold between
+  6000 and 18000 is unmeasured; a level ladder through `aplay` needs no cross-build and no operator taps
+  beyond listening.
 - **The two consumers attenuate differently:** the native synth pins a **peak of 18000**
   (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a constant, not a shift); ScummVM does `>>1`
-  post-mix (below). **[inferred]** the summing is why ~50 % is about the right figure — two identical
-  full-scale channels drive the speaker at double amplitude — which predicts the attenuation belongs on
-  the **synth** and not on streamed file content. Corroborated only weakly, by 48 kHz stereo music
-  through `aplay` (which attenuates nothing) sounding *"surprisingly loud, but not distorted"*; the
-  per-voice gain measurement that would settle it is `IMPROVEMENT_PLAN.md` F1's panel question 6.
+  post-mix (below). The summing is why ~50 % looked like about the right figure — two identical
+  full-scale channels drive the speaker at double amplitude — but the measurement above shows 18000 is
+  already past clean, so the open question in `IMPROVEMENT_PLAN.md` F1's panel question 6 is now the
+  **loudness cost** of lowering it rather than whether it should come down.
+- ⚠️ **Digital attenuation inside the codec does not fix a distortion introduced upstream of it, and that
+  is what makes it a probe.** Cutting `DAC1 Digital Fine Playback Volume` by 20 dB with `amixer` (numid=2,
+  63 → 43) made the app's tone quieter with the timbre **unchanged** — measured `.188` 2026-08-16. That
+  control sits after the samples arrive and before the DAC, so an unchanged timbre localises the corruption
+  **above** it, and a cleaned-up timbre would localise it below. Restore with `amixer cset numid=2 63,63`;
+  the speaker path is `Handsfree`, muxed from `AudioL1`/`AudioR1` = **DAC1**, which sits at 0 dB analog and
+  0 dB digital, so the codec adds no gain of its own.
 
 ⚠️ **A `-c 1` probe fails on channels at every rate, which reads as "no rate is accepted".** That is
 exactly how the first run of `alsa_probe.sh` produced seven REFUSED lines from one mistake — the

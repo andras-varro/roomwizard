@@ -316,6 +316,12 @@ void audio_pump_enable(Audio *audio, bool on)
             audio->pump_starved = 0;
             audio->pump_lost    = 0;
             audio->pump_diag    = 40;
+            /* The lead is a MEASUREMENT taken from the device inside the pump, so
+             * a new session starts without one rather than carrying the last
+             * session's forward — the panel says "not measured yet" until a pump
+             * has actually looked. */
+            audio->pump_lead    = 0;
+            audio->pump_period  = 0;
             audio->pumping      = true;
         }
         return;
@@ -352,6 +358,8 @@ uint32_t audio_pump_dropped(const Audio *audio) { return audio ? audio->mix.drop
 uint32_t audio_pump_limited(const Audio *audio) { return audio ? audio->mix.limited : 0; }
 uint32_t audio_pump_starved(const Audio *audio) { return audio ? audio->pump_starved : 0; }
 uint32_t audio_pump_lost(const Audio *audio)    { return audio ? audio->pump_lost    : 0; }
+long     audio_pump_lead(const Audio *audio)    { return audio ? audio->pump_lead    : 0; }
+long     audio_pump_period(const Audio *audio)  { return audio ? audio->pump_period  : 0; }
 
 void audio_pump_set_limit(Audio *audio, int mode)
 {
@@ -412,6 +420,13 @@ void audio_pump(Audio *audio)
     long lead   = audio_pump_lead_frames(
                       audio_frames_for_ms(audio->sample_rate, AUDIO_PUMP_LEAD_MS),
                       period, AUDIO_PUMP_LEAD_PERIODS, ring);
+
+    /* ⚠️ Publish both, because nothing else can: `lead` is a local derived from
+     * the device's own fragsize, and a diagnostic that reconstructed it from
+     * AUDIO_PUMP_LEAD_MS reported 80 ms against an effective ~139.  See
+     * audio_pump_lead() in audio.h. */
+    audio->pump_lead   = lead;
+    audio->pump_period = period;
 
     /* ⚠️ A bounded trace of what the ring actually reported — 40 lines per
      * PUMP: ON session, so it cannot flood a log, and it prints the RAW ioctl

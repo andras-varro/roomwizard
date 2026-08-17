@@ -378,6 +378,31 @@ int main(void)
         check(audio_frames_for_ms(0, 100) == 0 && audio_frames_for_ms(RATE, 0) == 0 &&
               audio_frames_for_ms(RATE, -5) == 0,
               "junk in gives 0 frames, not a huge allocation");
+
+        /* The inverse, which exists so a diagnostic can report the lead the pump
+         * TOOK rather than the constant it asked for. */
+        check(audio_ms_for_frames(RATE, 13230) == 300, "13230 frames is 300 ms back");
+        check(audio_ms_for_frames(RATE, audio_frames_for_ms(RATE, 250)) == 250,
+              "a round trip through both is exact at 250 ms");
+        /* ⚠️ The negative case must be BIG enough to discriminate.  `-5` frames
+         * divides to 0 with or without the guard, so a check written that way
+         * passes against an implementation that has no guard at all — measured, by
+         * deleting it.  One second of negative frames does not. */
+        check(audio_ms_for_frames(0, 4410) == 0 && audio_ms_for_frames(RATE, 0) == 0 &&
+              audio_ms_for_frames(RATE, -5) == 0 &&
+              audio_ms_for_frames(RATE, -RATE) == 0,
+              "junk in gives 0 ms, not a division by zero or a negative duration");
+        /* ⚠️ It must NOT clamp the way its inverse does: the inverse clamps a
+         * caller's *request*, this reports a *measurement*, and a clamp here would
+         * hide the surprise worth reporting. */
+        check(audio_ms_for_frames(RATE, (long)RATE * 60) == 60000 &&
+              60000 > AUDIO_MAX_TONE_MS,
+              "a frame count past AUDIO_MAX_TONE_MS reports its real duration");
+        /* And the number the panel was getting wrong: the effective lead on the
+         * measured device is ~139 ms, not the 80 ms AUDIO_PUMP_LEAD_MS asks for. */
+        check(audio_ms_for_frames(RATE, 3 * 2048) == 139 &&
+              audio_ms_for_frames(RATE, 3 * 2048) != AUDIO_PUMP_LEAD_MS,
+              "3 periods of 2048 read back as 139 ms, which the constant is not");
     }
 
     printf("\n=== C. the ONE oscillator reproduces all three shipped loops ===\n");

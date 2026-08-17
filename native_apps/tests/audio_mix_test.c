@@ -27,10 +27,20 @@
  *              int16's 32767.  `LIMIT: SOFT` is the fix (a knee at one voice's
  *              peak, asymptotic to `AUDIO_MIX_CEIL`); `LIMIT: HARD` restores the
  *              rejected clamp so the difference can be heard rather than argued.
- *   tones      DRONE is 3 s at 220 Hz; the other three are 200 ms at 440 / 880 /
- *              1760 Hz.  Tap DRONE, then tap the others while it runs.  The
- *              pitches are far apart on purpose: "one tone or two" must not
- *              depend on the listener keeping count.
+ *   tones      DRONE is 3 s at 220 Hz, `440 3s` is 3 s at 440 Hz, and the other
+ *              three are 200 ms at 440 / 880 / 1760 Hz.  Tap a long one, then tap
+ *              the others while it runs.  The pitches are far apart on purpose:
+ *              "one tone or two" must not depend on the listener keeping count.
+ *              ⚠️ **The two 3 s pads exist for a TIMBRE question, which a 200 ms
+ *              blip cannot answer.** Defect 3's decisive test is whether ONE voice
+ *              at `AUDIO_PEAK` sounds like a clean sine — the operator compared the
+ *              device against a phone signal generator and heard a square wave —
+ *              and that comparison needs a tone that sustains.  `440 3s` alone is
+ *              one voice through a limiter whose knee is `AUDIO_PEAK` exactly, so
+ *              it is byte-identical to the unlimited path: if it still sounds
+ *              square, **the limiter is exonerated** and the fault is upstream of
+ *              the mix entirely.  `440 3s` + DRONE is the same question for a
+ *              two-voice sum, sustained long enough to compare.
  *   canned     the four sounds every game uses, unchanged signatures.  SUCCESS
  *              and FAIL are three notes each, and on the pump they are three
  *              voices with start offsets — if either sounds like a CHORD rather
@@ -51,12 +61,39 @@
  * rather than to mixing**), `lost` (frames the device refused after the voices had
  * already advanced past them) and `drop` (sounds refused by a full bus).
  *
+ * ⚠️ **`clip == 0` is NOT evidence of a clean mix** — it proves int16 did not
+ * overflow, and the soft limiter guarantees that by construction.  The limiter
+ * waveshapes the sum instead, which IS harmonic distortion, and this tool once
+ * read PASS on every counter while the operator heard every sum as "a big
+ * distortion" (../IMPROVEMENT_PLAN.md F1 defect 3).  `lim` is the number to read
+ * for that: large `lim` means the sum is being bent, whatever `clip` says.
+ *
+ * ⚠️ **Two of this tool's own numbers were WRONG until 2026-08-16, and both made
+ * a panel session harder to trust than the code it was judging:**
+ *
+ *   - **`lead` was `AUDIO_PUMP_LEAD_MS`, a constant.**  The library floors the
+ *     lead at whole device periods, so the panel displayed 80 ms while the pump
+ *     held ~139 — and the worst-frame warning was coloured against the same wrong
+ *     number.  It now reads `audio_pump_lead()`/`audio_pump_period()` and prints
+ *     the arithmetic (`139 ms (3x46)`), or `lead ?` before the first pump has
+ *     measured anything.  **An A/B tool must report what the library did.**
+ *   - **Every tap went to `stderr` with no `fopen` anywhere**, so from the
+ *     launcher tile the log went nowhere at all and the claim that taps were
+ *     recorded was false.  `main()` now `freopen()`s `stderr` onto
+ *     `MIX_LOG_PATH` — which captures `audio_pump()`'s own bounded ring trace in
+ *     the same file, in order, with no library change.
+ *
+ * `worst frame` is also per-PUMP-session: toggling PUMP resets it alongside the
+ * library counters, because a 2474 ms first frame at boot contention is not a
+ * property of the mix bus and must not sit on the panel looking like one.
+ *
  * CPU is the other open question (mixing on a 600 MHz core with no FPU-friendly
  * sin()).  Measure it from another shell while sound is playing:
  *   ssh root@<ip> "top -b -n 2 | grep audio_mix_test"
  *
- * Run on device:
+ * Run on device (the log needs no redirect — the tool opens it itself):
  *   /opt/games/audio_mix_test /dev/fb0 /dev/input/touchscreen0
+ *   ssh root@<ip> cat /tmp/mix.log
  *
  * Build (from native_apps/):
  *   arm-linux-gnueabihf-gcc -O2 -static -I. tests/audio_mix_test.c \
@@ -82,6 +119,33 @@
 
 static volatile bool running = true;
 static void sig_handler(int s) { (void)s; running = false; }
+
+/** Where the tap log and `audio_pump()`'s ring trace both land.
+ *
+ * ⚠️ **`stderr` was not a log.**  This tool is normally started from the launcher
+ * tile, whose child inherits an init script's stderr and therefore throws it away;
+ * there was no `fopen` anywhere in the file, so "every tap is logged" was false for
+ * every session that mattered.  Redirecting the STREAM rather than opening a
+ * private `FILE *` is deliberate: `audio.c`'s bounded per-pump trace also writes
+ * `stderr`, and this way the taps and the ring numbers interleave in one file, in
+ * order, with no change to the library. */
+#define MIX_LOG_PATH  "/tmp/mix.log"
+
+/** ⚠️ freopen() CLOSES the stream before it opens the target, so a failure leaves
+ *  `stderr` closed — writes then vanish silently rather than crashing.  Say so on
+ *  stdout, which an SSH launch can still see, instead of assuming /tmp is
+ *  writable. */
+static void open_log(void)
+{
+    if (freopen(MIX_LOG_PATH, "a", stderr)) {
+        setvbuf(stderr, NULL, _IONBF, 0);   /* a session that ends in SIGKILL must
+                                             * still have its lines on disk */
+        fprintf(stderr, "\n=== audio_mix_test session start ===\n");
+    } else {
+        printf("audio_mix_test: cannot open %s — taps will not be logged\n",
+               MIX_LOG_PATH);
+    }
+}
 
 /* ── pads ────────────────────────────────────────────────────────────────── */
 
@@ -136,7 +200,10 @@ typedef struct {
     uint32_t starved;
     uint32_t lost;
     uint32_t dropped;
-    uint32_t max_gap;       /* longest gap between two loop iterations, ms */
+    long lead_frames;       /* what the LIBRARY targeted, 0 = not measured yet */
+    long period_frames;     /* the device period it was rounded up to           */
+    uint32_t max_gap;       /* longest gap between two loop iterations, ms —
+                             * reset with the library counters on PUMP: ON      */
     char last[40];
 } View;
 
@@ -172,7 +239,7 @@ static void set_toggle_labels(Pad *pump_pad, Pad *keep_pad, Pad *limit_pad,
 }
 
 static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
-                        int rate, int lead_ms)
+                        int rate)
 {
     fb_clear(fb, RGB(10, 12, 20));
 
@@ -184,12 +251,24 @@ static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
                  "MIX BUS", RGB(255, 200, 80), 3);
     int info_x = SCREEN_SAFE_LEFT + 8 + text_measure_width("MIX BUS", 3) + 12;
 
-    char line[96];
-    snprintf(line, sizeof(line), "%d Hz  lead %d ms  %d voices  worst frame %lu ms",
-             rate, lead_ms, AUDIO_MAX_VOICES, (unsigned long)v->max_gap);
+    /* ⚠️ The lead comes off the LIBRARY and carries its arithmetic with it, and
+     * "not measured yet" is printed as such rather than as the header's request —
+     * the two are different claims and only one of them is a measurement. */
+    char lead[40];
+    long lead_ms = audio_ms_for_frames(rate, v->lead_frames);
+    if (v->lead_frames > 0)
+        snprintf(lead, sizeof(lead), "lead %ld ms (%dx%ld)", lead_ms,
+                 AUDIO_PUMP_LEAD_PERIODS,
+                 audio_ms_for_frames(rate, v->period_frames));
+    else
+        snprintf(lead, sizeof(lead), "lead ? (pump has not measured)");
+
+    char line[112];
+    snprintf(line, sizeof(line), "%d Hz  %s  %d voices  worst frame %lu ms",
+             rate, lead, AUDIO_MAX_VOICES, (unsigned long)v->max_gap);
     fb_draw_text(fb, info_x, SCREEN_VISIBLE_TOP + 6,
-                 line, (v->max_gap > (uint32_t)lead_ms) ? RGB(255, 180, 60)
-                                                        : RGB(130, 140, 160), 1);
+                 line, (lead_ms > 0 && v->max_gap > (uint32_t)lead_ms)
+                       ? RGB(255, 180, 60) : RGB(130, 140, 160), 1);
 
     snprintf(line, sizeof(line), "voices %d/%d  clip %lu  lim %lu  starve %lu  lost %lu  drop %lu",
              v->voices, AUDIO_MAX_VOICES,
@@ -225,6 +304,8 @@ int main(int argc, char *argv[])
 
     int lock_fd = acquire_instance_lock("audio_mix_test");
     if (lock_fd < 0) return 1;
+
+    open_log();
 
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
@@ -274,14 +355,21 @@ int main(int argc, char *argv[])
     pad_add(ACT_STOP, "STOP ALL", x, y, w, 54, BTN_COLOR_DANGER, 2);
 
     y = SCREEN_SAFE_TOP + 140;
-    static const struct { const char *l; int f, ms; } tones[4] = {
-        { "DRONE 220", 220, 3000 }, { "440",  440, 200 },
-        { "880",       880,  200 }, { "1760", 1760, 200 }
+    /* ⚠️ Two SUSTAINED tones, because defect 3's decisive question is about
+     * TIMBRE and a 200 ms blip cannot be compared with a signal generator.
+     * `440 3s` is one voice at AUDIO_PEAK, which the soft limiter passes through
+     * byte-identically (its knee IS AUDIO_PEAK) — so it separates "the limiter
+     * distorts the sum" from "this device's 440 is not a sine at all". */
+    static const struct { const char *l; int f, ms; } tones[5] = {
+        { "DRONE 220", 220, 3000 }, { "440 3s", 440, 3000 },
+        { "440",       440,  200 }, { "880",   880,  200 },
+        { "1760",     1760,  200 }
     };
-    for (int i = 0; i < 4; i++) {
-        row_geom(4, i, gap, &x, &w);
+    for (int i = 0; i < 5; i++) {
+        row_geom(5, i, gap, &x, &w);
         Pad *p = pad_add(ACT_TONE, tones[i].l, x, y, w, 80,
-                         i == 0 ? RGB(120, 60, 160) : RGB(40, 90, 170), 2);
+                         (tones[i].ms >= 3000) ? RGB(120, 60, 160)
+                                               : RGB(40, 90, 170), 2);
         if (p) { p->freq = tones[i].f; p->ms = tones[i].ms; }
     }
 
@@ -308,7 +396,6 @@ int main(int argc, char *argv[])
     snprintf(v.last, sizeof(v.last), "PUMP OFF = the pre-Phase-3 path");
     set_toggle_labels(pump_pad, keep_pad, limit_pad, &v);
 
-    int lead_ms = AUDIO_PUMP_LEAD_MS;
     bool needs_redraw = true;
     uint32_t last_readout = 0;
     uint32_t prev_now     = 0;
@@ -318,10 +405,11 @@ int main(int argc, char *argv[])
         TouchState ts = touch_get_state(&touch);
         uint32_t   now = get_time_ms();
 
-        /* ⚠️ The pump holds only AUDIO_PUMP_LEAD_MS, so ANY iteration longer than
-         * that starves the device however correct the mix is.  Measuring the worst
-         * one is what tells a pacing fault from a mixing fault — and it is the
-         * number `starve` cannot give, because starve counts the symptom. */
+        /* ⚠️ The pump holds only its LEAD — the measured one, ~139 ms here, not the
+         * 80 ms AUDIO_PUMP_LEAD_MS asks for — so ANY iteration longer than that
+         * starves the device however correct the mix is.  Measuring the worst one is
+         * what tells a pacing fault from a mixing fault, and it is the number
+         * `starve` cannot give, because starve counts the symptom. */
         if (prev_now != 0 && (now - prev_now) > v.max_gap) v.max_gap = now - prev_now;
         prev_now = now;
 
@@ -347,7 +435,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d pump_label=%d "
                             "pump_active=%d keepalive=%d limit=%s voices=%d "
                             "clip=%lu lim=%lu starve=%lu lost=%lu drop=%lu "
-                            "gapmax=%lu\n",
+                            "gapmax=%lu lead=%ldfr/%ldms period=%ldfr\n",
                     (int)p->act, p->btn.text, p->freq, p->ms,
                     (int)v.pump, (int)audio_pump_active(&audio),
                     (int)v.keepalive, v.hard ? "hard" : "soft",
@@ -357,12 +445,23 @@ int main(int argc, char *argv[])
                     (unsigned long)audio_pump_starved(&audio),
                     (unsigned long)audio_pump_lost(&audio),
                     (unsigned long)audio_pump_dropped(&audio),
-                    (unsigned long)v.max_gap);
+                    (unsigned long)v.max_gap,
+                    audio_pump_lead(&audio),
+                    audio_ms_for_frames(audio.sample_rate,
+                                        audio_pump_lead(&audio)),
+                    audio_pump_period(&audio));
 
             switch (p->act) {
             case ACT_PUMP:
                 v.pump = !v.pump;
                 audio_pump_enable(&audio, v.pump);
+                /* ⚠️ audio_pump_enable() zeroes the library's counters on ON, so
+                 * the worst frame has to zero with them or the panel shows a
+                 * start-up stall (2474 ms at boot, measured) beside counters that
+                 * start at 0 — one number describing a different session from all
+                 * the others.  prev_now too, or the gap ACROSS this tap becomes
+                 * the new worst frame. */
+                if (v.pump) { v.max_gap = 0; prev_now = 0; }
                 set_toggle_labels(pump_pad, keep_pad, limit_pad, &v);
                 snprintf(v.last, sizeof(v.last), "pump %s", v.pump ? "on" : "off");
                 break;
@@ -421,6 +520,15 @@ int main(int argc, char *argv[])
             needs_redraw = true;
         }
 
+        /* The effective lead only exists once a pump has read the device period,
+         * so it appears mid-session rather than at startup — redraw when it does. */
+        long nlead = audio_pump_lead(&audio);
+        if (nlead != v.lead_frames) {
+            v.lead_frames   = nlead;
+            v.period_frames = audio_pump_period(&audio);
+            needs_redraw    = true;
+        }
+
         /* The counters move on almost every sample, so they are refreshed on a
          * timer rather than on change — see READOUT_MS. */
         if ((uint32_t)(now - last_readout) >= READOUT_MS) {
@@ -440,7 +548,7 @@ int main(int argc, char *argv[])
 
         bool drew = needs_redraw;
         if (needs_redraw) {
-            draw_screen(&fb, &exit_btn, &v, audio.sample_rate, lead_ms);
+            draw_screen(&fb, &exit_btn, &v, audio.sample_rate);
             fb_swap(&fb);
             needs_redraw = false;
         }

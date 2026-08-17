@@ -661,11 +661,15 @@ Nine rules, each of which is a way to get this wrong:
   the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds **up** (why
   three, and what a shorter lead sounds like: [§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5). ⚠️ **The lead
   is also the latency ceiling** — ~139 ms on the shim's 46 ms period, which F1 Phase 4's 23 ms buys back.
-- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit, not a digital one.** Every voice plays at
-  18000, ≈55 % of full scale ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) for why), so three voices reach 54000
-  against 32767. `audio_mix_limit()` is linear to a knee at `AUDIO_PEAK` — which keeps **one voice
-  byte-identical** — then asymptotic to `AUDIO_MIX_CEIL` 26000, deliberately **below** two voices' sum so it
-  protects the speaker too. Bounded, so ⚠️ **`clipped` must read exactly 0**; `AUDIO_MIX_HARD` keeps the old clamp for A/B.
+- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit that is measured TOO HIGH.** Every voice
+  plays at 18000, ≈55 % of full scale, and a pure sine at that peak does **not** reproduce cleanly on this
+  speaker while the same sine at 6000 does ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) — measured through `aplay`,
+  so no code here is implicated). Three voices reach 54000 against 32767, and `audio_mix_limit()` is linear to
+  a knee at `AUDIO_PEAK` — which keeps **one voice byte-identical**, measured 4400 of 4400 samples — then
+  asymptotic to `AUDIO_MIX_CEIL` 26000. Bounded, so ⚠️ **`clipped` must read exactly 0**; `AUDIO_MIX_HARD`
+  keeps the old clamp for A/B. ⚠️ **But `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not
+  overflow, which the bounded curve guarantees. Read `lim` for whether the sum is being bent, and see
+  `../IMPROVEMENT_PLAN.md` F1 defect 3 for the five suspects that measurement has already killed.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it — 0 under
   the soft limiter), `lim` (the knee bent it — expected, not a fault), `starve` (the ring was dry with audio
   still owed: **one audible gap each, and it attributes crackle to pacing rather than to mixing**), `lost`
