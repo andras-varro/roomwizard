@@ -625,21 +625,32 @@ differing content instead of phase.
 - **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
   storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
   at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
-- ⚠️ **A pure sine at peak 18000 does NOT reproduce cleanly on this speaker, and the same sine at peak
-  6000 does.** Measured `.188` 2026-08-16 **[n=1, by ear against a signal generator]** by playing generated
-  WAVs through the vendor's `aplay` (so nothing of this repo's audio code is in the path): peak 6000 is a
-  clean sine, peak 6000 as a *square* is harsh and audibly **louder** (a square's RMS is 3 dB over a sine's
-  at equal peak — the control that showed the listener was discriminating), and peak 18000 is *"noisier
-  than the sine, clearer than the square"*. So **the ≈55 % figure is not a safe acoustic ceiling** and the
-  overdrive is in the amp or the speaker, downstream of every digital stage. The clean threshold between
-  6000 and 18000 is unmeasured; a level ladder through `aplay` needs no cross-build and no operator taps
-  beyond listening.
+- ⚠️ **A pure sine at peak 18000 does NOT reproduce cleanly, and the ceiling is FREQUENCY-DEPENDENT — the
+  driver is excursion-limited, not amplitude-limited.** Measured `.188` 2026-08-16/17 **[n=1, by ear against
+  a signal generator]** through the vendor's `aplay`, so none of this repo's audio code is in the path. A
+  peak-6000 *square* is harsh and audibly **louder** than the sine (3 dB more RMS at equal peak — the
+  control showing the listener was discriminating). At 440 Hz the ladder is monotonic: 6000 clean, 8000
+  *"woodwind"*, 12000 *"brass", harsher*, 18000 distorted. At a **constant** 18000 it instead **falls with
+  pitch**: 220 Hz *"clearly a square wave"*, 440 Hz noisy, 1320 Hz *"cleaner"*. So **≈55 % is not a safe
+  acoustic ceiling**, the overdrive is amp-or-cone below every digital stage, and ⚠️ **one global peak is
+  the wrong shape of limit** — it over-quietens the nearly-clean band and still leaves 220 Hz square. Budget
+  level **per frequency**, and keep sustained low tones out of a mix.
+- ⚠️ **The +12 dB of apparently unused analog gain is NOT headroom — spending it distorts.** `DAC1 Analog
+  Playback Volume` (numid=6) sits at **12 of 18** on a −24 … +12 dB scale and `DAC1 Digital Fine` (numid=2)
+  is already at 0 dB, so the codec looks able to pay for a lower digital peak. It cannot: measured `.188`
+  2026-08-17 **[n=1, by ear]**, peak 6000 is clean at 0 dB analog and *"louder but distorted"* at +12 dB —
+  **identical samples**, so the limit is **acoustic**, downstream of every gain stage the codec exposes.
+- ⚠️ **The kernel will NOT mix — a second concurrent stream is refused.** One card, **one playback
+  subdevice** (`/proc/asound/pcm`), and `default` is `plug` over raw `hw:0,0` (`aplay -v`; `/etc/asound.conf`
+  is an empty comment), so a second `aplay` during a first dies `Device or resource busy` — measured `.188`
+  2026-08-17. `aplay -D plug:dmix` **does** take two streams, but only via `libasound`, which ships
+  **shared**-only. **Mixing two sounds is userspace work by construction, not an optimisation.**
 - **The two consumers attenuate differently:** the native synth pins a **peak of 18000**
   (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a constant, not a shift); ScummVM does `>>1`
   post-mix (below). The summing is why ~50 % looked like about the right figure — two identical
-  full-scale channels drive the speaker at double amplitude — but the measurement above shows 18000 is
-  already past clean, so the open question in `IMPROVEMENT_PLAN.md` F1's panel question 6 is now the
-  **loudness cost** of lowering it rather than whether it should come down.
+  full-scale channels drive the speaker at double amplitude — but the ladder above puts 18000 past clean at
+  every pitch a canned sound uses, and the analog-gain result answers what `IMPROVEMENT_PLAN.md` F1's panel
+  question 6 asked: the **loudness cost** of lowering it is real and no mixer control refunds it.
 - ⚠️ **Digital attenuation inside the codec does not fix a distortion introduced upstream of it, and that
   is what makes it a probe.** Cutting `DAC1 Digital Fine Playback Volume` by 20 dB with `amixer` (numid=2,
   63 → 43) made the app's tone quieter with the timbre **unchanged** — measured `.188` 2026-08-16. That

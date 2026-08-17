@@ -277,43 +277,12 @@ Three results from those phases worth not re-deriving:
 **Phase 3 is BUILT, host-green and deployed to `.188` — and not closed, because two of its questions can
 only be answered by an ear.** The mix bus is `AudioMixer` + `AudioVoice` in `audio_gen.c` (pure) driven by
 `audio_pump()` in `audio.c` (the device half); `tests/audio_gen_test.c` is green at 154 checks and all
-seven sabotaged copies of `audio_gen.c` were caught. Its design rules, each of which cost something:
-
-- **A pump, never a thread.** `native_apps` links no pthread, and static ARM + pthread is the
-  `clock_gettime64` → SIGSEGV-before-`main()` scar. `audio_pump(Audio*)` renders active voices → sums in
-  `int32` → clamps once → writes what fits, called once per frame beside `fb_swap()`.
-- ⚠️ **It is OPT-IN by a branch on `audio->pumping`, and the plan's sketch of how was impossible.** The
-  plan said `audio_tone()` should enqueue a voice *and* write what fits immediately. A bounded immediate
-  write truncates any tone longer than the lead (every tone here is), and an unbounded one hands the whole
-  tone to the kernel — which is exactly what makes it unmixable. An app that never calls
-  `audio_pump_enable()` therefore takes today's code byte for byte, which is stronger than "degrades
-  gracefully".
-- ⚠️ **The pump targets a LEAD; it must never write into the free space.** An empty ~506 ms OSS ring will
-  accept half a second of audio, and a sound triggered on the next frame then plays half a second late. The
-  lead is both the queue depth and the latency ceiling, and `audio_pump_frames()` returns 0 whenever we are
-  already that far ahead. ⚠️ Group K pins that **with the cap taken out of the way**, because while
-  `AUDIO_PUMP_CAP_MS == AUDIO_PUMP_LEAD_MS` the obvious check passes against a space-filling pump by
-  accident — which the sabotage measurement caught.
-- ⚠️ **A canned arpeggio needs per-voice start offsets, or it becomes a chord.** Three voices added at once
-  sound together, so `AudioVoice` has a `delay` and the four canned sounds are four note tables and one
-  sequencer, signatures unchanged at ~45 call sites. Group A6 is the control: the same three notes with no
-  offsets clip, with offsets do not.
-- ⚠️ **A full bus REFUSES and counts; it never steals a voice.** Stealing the oldest is what a synth does
-  and it is wrong here — the longest voice is
-  [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14)'s 44 s soundtrack, and a
-  missing blip is far cheaper than a chopped track. `audio_pump_dropped()` is the number to watch.
-- **The clamp is once, after the whole sum, and it counts.** Group I asserts that **slot order cannot
-  change the mix**, which is the check that catches an `int16` accumulator — and that sabotage fails 5
-  assertions.
-- ⚠️ **`audio_interrupt()` on the pump is "stop all voices" and no longer resets the ring**, because the
-  reset is what makes mixing impossible. Consequence: up to one lead of already-written tail still sounds.
-  Signature unchanged, ~23 call sites.
-- **A pumping app must not idle at `FRAME_DELAY_IDLE_US` mid-sound.** 100 ms of sleep against the lead
-  starves the device and you hear a gap — which would read as a mixing defect rather than a pacing one.
-  `audio_pump_active()` is the predicate, and it returns true while keepalive is on because that is a
-  promise of frames too. ⚠️ **The theremin and the pump cannot both own the ring**, so
-  `audio_stream_start()` refuses loudly when the pump is on rather than letting two writers interleave
-  frames into one device.
+seven sabotaged copies of `audio_gen.c` were caught. **Its design rules are not restated here** — they are
+authoring rules and their home is `native_apps/CLAUDE.md` → *Mixing*, which carries every one: pump not
+thread, opt-in by a branch on `audio->pumping`, a LEAD rather than the free space, the per-voice `delay`
+that keeps `audio_success()` an arpeggio, a bus that refuses rather than steals, one clamp after the whole
+sum, `audio_interrupt()` without a ring reset, `audio_pump_active()` in the frame-pacing decision, and the
+theremin/pump ring ownership.
 
 ⏳ **Outstanding, and the reason Phase 3 is not closed.** `native_apps/tests/audio_mix_test` is the
 interactive tool built for exactly this (33rd artifact, launcher tile *Mix Bus Test*): **four** toggles
@@ -380,6 +349,25 @@ path makes it much worse. ⚠️ **It survived a 20 dB cut at `DAC1 Digital Fine
 timbre IDENTICAL and only the loudness changed**; that control sits after our samples and before the DAC,
 so the corruption is upstream of it. Phase 4 replaces precisely that path, which promotes it from tidy-up
 to candidate fix.
+
+⚠️ **Fault 1 is now characterised, and the prescribed fix is the wrong SHAPE.** Measured `.188` 2026-08-17,
+by ear through `aplay`; the two ladders are in
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio). The clean ceiling **falls as pitch falls** —
+at a constant peak 18000, 1320 Hz is nearly clean while 220 Hz is *"clearly a square wave"* — and the
++12 dB of unused analog gain **is not headroom**, because spending it distorts an otherwise-clean peak 6000.
+Four consequences:
+
+- **Lowering `AUDIO_PEAK` alone is wrong in both directions at once.** At ~6000 it needlessly quietens the
+  band that was almost clean at 18000, and it *still* leaves 220 Hz square. What this needs is a per-voice
+  peak that is a **function of frequency**, in `audio_gen.c` where it stays host-testable.
+- ⚠️ **`AUDIO_MIX_CEIL` 26000 is mispriced by the same measurement**, not just `AUDIO_PEAK` — the entire
+  headroom arithmetic sits above the acoustic ceiling in the band the canned sounds actually use.
+- ⚠️ **`audio_fail()` is 392 / 330 / 262 Hz and the tool's `DRONE` is 220 Hz — precisely the worst band.**
+  Those pitches should move up. This also supplies a simpler candidate than phase cancellation for the
+  near-silent stacked drones: **this speaker cannot do 220 Hz.**
+- **The clean level is too quiet for sustained music.** A 24 s melody at peak 6000 needed focus and
+  repetition to follow — a constraint on
+  [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14), not on defect 3.
 
 ⚠️ **Five suspects this file recorded are REFUTED by measurement; do not re-raise any of them.** The
 limiter — one voice at `AUDIO_PEAK` passes it **byte-identical**, 4400 of 4400 samples, its knee *being*
@@ -1323,10 +1311,10 @@ figures in the table are the **measured floors**, not the survey's:
 | Touch model | 80 | 14 | the fit, the stage diagram and the 13-row rules table are the only copy; four receipt tokens live here |
 | Input | 88 | 26 | the uinput fact is in root `CLAUDE.md`, the MUSB facts in §3.6; the host-testability half is unique |
 | 32-bit target | 10 | 1 | four lines duplicate root `CLAUDE.md` |
-| Audio | 97 | 6 | the pump's nine rules and the `audio_gen` split live **nowhere else**; the survey's 24 assumed narration around them that a *measured* rule does not have |
+| Audio | 97 | 6 | the pump's rules and the `audio_gen` split live **nowhere else**; the survey's 24 assumed narration around them that a *measured* rule does not have |
 
 **Reaching ~325 would mean deleting the module table, the lifecycle skeleton, the touch rules table and
-the pump's nine rules** — the reference content this file exists to be. That is phase 4 part 2's mistake
+the pump's rules** — the reference content this file exists to be. That is phase 4 part 2's mistake
 with a different file, and the classification is what caught it before any editing rather than after.
 
 ⚠️ **Part 3 stopped at 713 rather than 690, and the residue is priced rather than spent — 6 lines in Rendering

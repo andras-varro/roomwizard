@@ -320,6 +320,10 @@ receipts() {
 0x480AB060	usb_host/README.md	IMPROVEMENT_PLAN.md
 SNDRV_PCM_VERSION	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 pcm.c:978	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+never a thread	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+targets a LEAD	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+no longer resets the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+cannot both own the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 button_check_tap	native_apps/CLAUDE.md	-
 RESCAN_INTERVAL_MS	native_apps/CLAUDE.md	-
@@ -419,10 +423,10 @@ group_c() {
 # REFUTED and replacing it cost more lines than the wrong version had: a 4-row evidence
 # table plus the five suspects that measurement killed, which is what stops the next
 # session re-raising them. Raised to cover exactly that, and the ~20 lines of headroom are
-# deliberately NOT restored. ⚠️ **The next addition to this file has an identified way to
-# pay for itself**: F1's Phase-3 design-rule bullets restate the nine rules in
-# native_apps/CLAUDE.md → *Mixing*, which is that content's home — verify each rule at the
-# destination, add a group C receipt row, then delete the block and leave a pointer.
+# deliberately NOT restored. ⚠️ **That identified payment has now been SPENT** (2026-08-17): F1's
+# Phase-3 design-rule bullets were verified at native_apps/CLAUDE.md → *Mixing*, receipted in group C
+# below, and deleted in favour of a pointer — which is where this file's present margin came from.
+# **The next addition needs a NEW way to pay; there is no queued one.**
 # ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
 # paragraph rewrapped to 200 characters passes while getting longer, and a table split
 # across more rows fails while saying the same thing. The ~110-char wrap is a review

@@ -655,7 +655,7 @@ while (running) {
 }
 ```
 
-Nine rules, each of which is a way to get this wrong:
+These rules, each of which is a way to get this wrong:
 
 - ⚠️ **The lead is measured in DEVICE PERIODS, never in milliseconds alone.** `audio_pump_lead_frames()` takes
   the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds **up** (why
@@ -692,6 +692,8 @@ Nine rules, each of which is a way to get this wrong:
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
 - **`WPOL_PUMP` is a fifth *policy*, not a fifth loop.** Same rule as the four above it.
+- ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
+  the pump is on rather than letting two writers interleave frames into one device.
 
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. Two loud voices exceed int16 by ~10 %; whether that is audible is a
