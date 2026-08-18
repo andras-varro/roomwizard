@@ -33,6 +33,7 @@
 #include <stdbool.h>
 
 #include "audio_gen.h"
+#include "audio_out.h"
 
 typedef struct {
     int      dsp_fd;          /**< /dev/dsp file descriptor (-1 = not open)      */
@@ -71,6 +72,17 @@ typedef struct {
     long     pump_period;     /**< the device period the lead was rounded to, in
                                *   frames.  Reported beside the lead so the panel
                                *   shows the arithmetic, not just its result        */
+    /* ── the continuous stream: the device half moved out of this file ──────
+     *
+     * ⚠️ `cont` selects WHICH DEVICE HALF is open, and the two are mutually
+     * exclusive: `dsp_fd` is this file's own fd, `out` is `audio_out`'s.  A
+     * second concurrent open of /dev/dsp is EBUSY, so switching closes one
+     * before opening the other — which is why the toggle is an instrument for
+     * one panel and not something to flip inside a game.
+     */
+    AudioOut out;             /**< the one never-reset stream; valid iff cont      */
+    bool     cont;            /**< the continuous stream owns the device           */
+    bool     osc_stream;      /**< the theremin owns the fill callback             */
 } Audio;
 
 /**
@@ -248,6 +260,47 @@ uint32_t audio_pump_dropped(const Audio *audio);
  * the question by ear.  (../IMPROVEMENT_PLAN.md F1 Phase 3.) */
 void audio_pump_set_keepalive(Audio *audio, bool on);
 
+/* ── The continuous stream ──────────────────────────────────────────────────
+ *
+ * F1 defect 3's fix.  `audio_flush()` fires SNDCTL_DSP_RESET before every canned
+ * sound, so every game sound is a full stream stop and start and every boundary
+ * is a DAI teardown that clicks — the operator's *"every time there is a sound,
+ * there is a click"*.  `common/audio_out.c` is the device half that never resets;
+ * this switch chooses between it and the old path.
+ *
+ * ⚠️ **The old path is deliberately reachable, and it is the negative control.**
+ * `tests/audio_mix_test` has a CONT toggle beside PUMP/KEEP/LIMIT for exactly
+ * that reason: a click that survives CONT: ON is not the one this change removes.
+ *
+ * Three things follow from turning it on, all measured or derived rather than
+ * assumed, and all of them visible on that panel:
+ *
+ *   - **The mix bus becomes the only sound source**, because a continuous stream
+ *     needs something to fill it every service.  So CONT implies PUMP, and
+ *     audio_pump_enable(a, false) while CONT is on is refused LOUDLY rather than
+ *     leaving a stream nobody writes.
+ *   - **audio_pump() becomes the service call** and audio_pump_active() is
+ *     always true — the stream must be serviced whatever the bus is doing, and
+ *     the ceiling for how often is audio_out_service_interval_us().
+ *   - ⚠️ **audio_tone() defaults its delay to the CURRENT TAIL rather than 0.**
+ *     Without that, `tetris.c:620-621`, `tetris.c:714-715` and `snake.c:317-318`
+ *     — two audio_tone()s back to back with no audio_interrupt() between them —
+ *     turn from two-note motifs into dyads, because today it is the ring that
+ *     serialises them and a mix bus will not.
+ *
+ * Returns 0 on success, -1 if the device could not be handed over (in which case
+ * the previous path is restored, so a failed toggle is not a silent mute).
+ */
+int  audio_cont_enable(Audio *audio, bool on);
+
+/** True while the continuous stream owns the device. */
+bool audio_cont_active(const Audio *audio);
+
+/** How often audio_pump() must be called on the continuous stream, in
+ *  microseconds, or 0 when nothing has measured the device yet.  Derived from
+ *  REAL audio rather than the nominal lead — see audio_out.h. */
+long audio_cont_service_interval_us(const Audio *audio);
+
 /* ── Convenience sounds ────────────────────────────────────────────────────
  * Each first waits (≤200 ms) for whatever is still playing, then queues its
  * own tones and returns.  Layer calls for chord effects.
@@ -272,20 +325,27 @@ void audio_fail(Audio *audio);
 
 /* ── Streaming (theremin) API ──────────────────────────────────────────────
  * For continuous pitch-gliding audio driven by a touch loop.
+ *
+ * ⚠️ **This path is ALWAYS the continuous stream — it has no old-path branch.**
+ * It used to bracket itself with two SNDCTL_DSP_RESETs (start and stop) and own
+ * the ring through a chunk loop of its own, which is the same defect the canned
+ * sounds have; and its only caller is `tests/audio_touch_test`, so there is no
+ * shipped game whose sound would change under it.  audio_stream_start() therefore
+ * enters continuous mode itself if it is not already on, and the two write
+ * policies that existed only for this path are gone with it.
  */
 
 /**
- * Begin streaming mode — resets phase accumulator and configures
- * DSP for low-latency small-fragment output.
- * Call once when touch starts.
+ * Begin streaming — takes over the fill callback with one gliding oscillator.
+ *
+ * ⚠️ Refused LOUDLY if the mix bus still has voices pending: a swap that went
+ * quiet would leave those voices enqueued into a mixer nobody renders.
  */
 void audio_stream_start(Audio *audio, int freq_hz);
 
 /**
- * Write one small chunk (~10 ms) of audio at the current frequency,
- * smoothly interpolating toward target_freq.
- * Call this every frame while the user is touching.
- * Non-blocking: returns immediately if OSS ring buffer is full.
+ * Service the stream — call every frame while the user is touching.
+ * Non-blocking; equivalent to audio_pump() with the oscillator installed.
  */
 void audio_stream_chunk(Audio *audio);
 
@@ -296,8 +356,13 @@ void audio_stream_chunk(Audio *audio);
 void audio_stream_set_freq(Audio *audio, int freq_hz);
 
 /**
- * Stop streaming — writes a short fade-out, then resets DSP.
- * Call when touch lifts.
+ * Stop streaming — removes the oscillator, then APPENDS its 20 ms fade-out so
+ * the tone has a release rather than a cut.
+ *
+ * ⚠️ **The release lands one lead behind the finger** (~139 ms on the OSS shim),
+ * because a continuous stream cannot un-write what is already queued and the
+ * whole point is not to reset the ring.  That is a property of the design, not a
+ * bug to fix here; the alternative is the click.
  */
 void audio_stream_stop(Audio *audio);
 
