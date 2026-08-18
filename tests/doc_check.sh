@@ -437,6 +437,18 @@ group_c() {
 # codec's loopbacks run capture → playback, so audio CANNOT be measured acoustically here) closes off
 # a whole class of future investigation and is worth its lines several times over. ⚠️ **Neither raise
 # leaves queued headroom: the next addition to either file pays by deleting.**
+# ⚠️ 2026-08-17, THIRD raise, deliberate and argued: SYSTEM_ANALYSIS.md 1930 → 1940 and
+# IMPROVEMENT_PLAN.md 1545 → 1580 (measured post-edit counts, not estimates). Two new measured
+# device facts, both found in one evening at the panel. (1) B33 — a USB babble error leaves a printk
+# loop that outlives unplugging and hard-resets the unit ~46 min later. It is worth its lines twice:
+# it is a defect, and it is a MEASUREMENT CONTAMINANT, so every future on-device reading needs its
+# one-command check. (2) The audible click at every sound is now a named mechanism with a runtime
+# knob (pmdown_time = 5000) plus a stream-stop teardown, replacing a section that said only "the
+# candidates that remain". F1's half also shrank where it could: the four refuted-mechanism bullets
+# were compressed to three, keeping every measurement.
+# ⚠️ **Identified future payment, not yet spendable:** when the continuous-stream fix lands, F1
+# defect 3 loses BOTH its refuted-mechanism inventory and its onset question — that is where the
+# next ~25 lines come from. Until then there is no queued headroom in either file.
 # ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
 # paragraph rewrapped to 200 characters passes while getting longer, and a table split
 # across more rows fails while saying the same thing. The ~110-char wrap is a review
@@ -445,8 +457,8 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1930	SYSTEM_ANALYSIS.md
-1545	IMPROVEMENT_PLAN.md
+1940	SYSTEM_ANALYSIS.md
+1580	IMPROVEMENT_PLAN.md
 260	HARDWARE.md
 390	CLAUDE.md
 740	native_apps/CLAUDE.md

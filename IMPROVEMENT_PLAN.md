@@ -174,6 +174,23 @@ that stops being a read-back-the-truth problem, because `hw:0,0` grants **22050 
 the OPL-capable target now, and make "OPL plays at correct tempo" an acceptance criterion of Phase 5.
 Verifying the doomed implementation is the one way to spend this check and learn nothing.
 
+### B33. A USB babble error leaves a `printk` loop that hard-resets the device — open, **measured 2026-08-17**
+
+⚠️ **One babble error puts the kernel into an unbounded message loop that outlives the device's removal and
+ends in a hardware reset 46 min later.** From `.188`'s persistent log — `/home/root/log/messages` on p3,
+which keeps the previous boot's tail across a reset — `musb-hdrc: Babble`, then `usb 1-1: USB disconnect,
+device number 2`, then `musb_bus_suspend 2589: trying to suspend as a_idle while active` repeating: syslog
+collapsed it as `last message buffered 1201140 times` in one 10-minute window (≈2000/s), and it ran **46
+minutes with no pad plugged in**. `FAT-fs (mmcblk0p1): Volume was not properly unmounted` in the next boot
+says hard reset, not clean `reboot`. **The reset itself is the hardware watchdog** — `/usr/sbin/watchdog`
+carries no check directives (`SYSTEM_ANALYSIS.md`), so it decided nothing; it was starved of CPU and missed
+its 60 s feed. ⚠️ **It is also a measurement contaminant**: anything judged by ear or timed during a storm
+was judged on a starved device, and a frozen app is a *symptom*, not the bug — an on-panel tool appearing
+to hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before trusting an on-device
+measurement.** The loop is not yet read out of the driver: start at `musb_bus_suspend()` in
+`usb_host/linux-4.14.52/drivers/usb/musb/` and at whether the `Babble` path leaves the port marked active.
+Distinct from B32, which is about enumeration.
+
 ### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
 `tests/rw_identify_test.sh:363-369` guards the real-card-image cases on **file presence** but not on
@@ -351,20 +368,36 @@ plays **the same file** through the shipped write path (`audio_interleave()` + `
 **indistinguishable by ear**, two pairs back to back at a peak inside the clean zone (`.188` 2026-08-17,
 operator at the panel). Every software mechanism is dead by measurement, none of it ear-only:
 
-- **What we hand the kernel is a clean sine, measured ON ARM** rather than on the host: `oss_play --dump`
-  sends the byte stream to a file instead of the device and `--tone=` renders it through the production
-  `audio_render_tone()`. **THD 0.0 %**, every harmonic ≤ −72 dB, at 220 and 440 Hz and at peaks 6000 and
-  18000. The instrument was validated against a real square first — 42.9 %, odd harmonics only, within
-  0.5 dB of theory — so the 0.0 % is not a blind gate.
+- **What we hand the kernel is a clean sine, measured ON ARM**: `oss_play --dump` writes the byte stream to
+  a file and `--tone=` renders it through the production `audio_render_tone()` — **THD 0.0 %**, harmonics
+  ≤ −72 dB, at 220 and 440 Hz and peaks 6000 and 18000. The probe read **42.9 %, odd only** on a real
+  square first, so the 0.0 % is not a blind gate.
 - **No XRUNs on either path or either pacing**, polling `/proc/asound/card0/pcm0p/sub0/status` at ~170 Hz:
-  `aplay` 0, our whole-buffer write 0, the pump's pacing 0 with `starve=0 lost=0` and the lead sitting at
-  exactly `AUDIO_PUMP_LEAD_PERIODS` periods. ⚠️ **An XRUN under the shim is invisible to us** —
-  `pcm_oss.c:1296-1306` calls `snd_pcm_oss_prepare()` and retries, returning no error — so `/proc` is the
-  only window and a `write()` return code will never show one.
+  `aplay` 0, whole-buffer write 0, pump 0 with `starve=0 lost=0`. ⚠️ **An XRUN under the shim is invisible
+  to us** — `pcm_oss.c:1296-1306` calls `snd_pcm_oss_prepare()` and retries, returning no error — so
+  `/proc` is the only window and a `write()` return code will never show one.
 - **The granted format really is `S16_LE`** (`SOUND_PCM_READ_BITS` → `0x10`), so `audio.c:85`'s missing
-  read-back is a latent hole, not this cause.
-- **The shim converts nothing when the parameters match**, so it has no stage that could reshape a
-  waveform: [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio).
+  read-back is a latent hole, not this cause. **And the shim converts nothing when the parameters match**,
+  so it has no stage that could reshape a waveform: [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio).
+
+✅ **The clicking IS explained, and it is our architecture rather than the hardware.** `.188` 2026-08-17,
+operator at the panel, each prediction stated before the listen, `[n=1, by ear]`. Two distinct clicks, both
+device-side stream transitions and neither in the samples — mechanism and the `pmdown_time` measurement in
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio). What makes them *ours*: `audio_flush()` fires
+`SNDCTL_DSP_RESET` **before every canned sound** (`audio.c:191,212`), so every sound is a full stream stop
+and start and every sound therefore gets a click at each boundary — which is exactly the operator's
+*"every time there is a sound, there is a click"*. ⚠️ **So the fix is a continuous stream** — keep the
+substream RUNNING and mix into it, writing silence when nothing plays, instead of stopping per sound. Its
+pacing is already measured **cheaper than today's**: the pump costs 0.5–0.9 % CPU against 3.3–3.7 % for the
+whole-buffer write (`top -b -n 4` against `oss_play` in both pacings, `.188` 2026-08-17). ⚠️ **Padding a
+sound with trailing silence does not help** — 400 ms of it was appended and the click survived.
+
+⏳ **The onset distortion is NOT established, and it did not reproduce.** *"As always, the first sound
+started distorted, then cleaned out"* is what set this session going; four sounds later, across two runs
+with the power-down held off, the operator heard **no distortion at any onset**. n=1 each side and the
+elapsed-idle time differed too, so this is a live question, not a fix. ⚠️ **Do not start a next attempt from
+"lower `AUDIO_PEAK`"** — that shape was measured wrong in both directions.
+
 
 ⚠️ **Two consequences.** Phase 4 is **not** defect 3's fix — its case is back to what it always was, 139 ms
 of lead down to 23 ms and not building on a deprecated emulation. And the 20 dB `DAC1 Digital Fine` cut that

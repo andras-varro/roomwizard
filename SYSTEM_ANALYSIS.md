@@ -661,6 +661,15 @@ differing content instead of phase.
   on output enable (`handsfree_ramp()`, `headset_ramp()`, `twl4030.c:593-720`, ramping *up*) plus a one-time
   offset cancellation at init. So a *"starts distorted, then settles"* onset cannot be an automatic volume
   control; `IMPROVEMENT_PLAN.md` F1 defect 3 carries the candidates that remain.
+- ⚠️ **Every audible click is a stream transition, not the samples, and there are TWO** — `.188` 2026-08-17,
+  operator at the panel, each prediction stated before the listen, `[n=1, by ear]`. **(a)** A lone click ~5 s
+  after the last sound is the ASoC power-down: `/sys/devices/platform/sound/TWL4030 HiFi/pmdown_time` reads
+  **5000**, and writing a large value removes it — an 8 s gap then stays silent. **(b)** A click still ends
+  every sound with the power-down held off, and it survives **400 ms of trailing silence appended to the
+  file**, so it is the stream *stop* (DAI teardown, which `pmdown_time` does not guard), not a truncated tail
+  — `oss_play.c:336` already drains with `SNDCTL_DSP_SYNC`. Heard as *"an old CB radio push-to-talk"*: a step
+  through the class-D bridge. **Native ALSA clicks too** (*"clinking then a klack then a beep"*, below), so
+  no userspace path avoids it — only not stopping the stream does.
 - **The OSS shim adds no conversion when the parameters already match — it cannot reshape a waveform.**
   Every plugin in `snd_pcm_plug_format_plugins()` is gated on a mismatch (`sound/core/oss/pcm_plugin.c:414`
   onward: mu-law, channel reduction, resample, format), and with `S16_LE`/2/44100 granted at **both** layers
@@ -990,6 +999,10 @@ wired USB DAC is one module away too. Both are
 [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
+
+⚠️ **A babble error leaves a `printk` loop that survives unplugging and ends in a hardware reset ~46 min
+later, and it invalidates any measurement taken during it** — mechanism, log evidence and the one-command
+check in [`IMPROVEMENT_PLAN.md` B33](IMPROVEMENT_PLAN.md#b33-a-usb-babble-error-leaves-a-printk-loop-that-hard-resets-the-device--open-measured-2026-08-17).
 Touchpad-plus-keyboard combos create two event nodes.
 
 **Verified working:**
