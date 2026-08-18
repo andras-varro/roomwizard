@@ -412,9 +412,12 @@ pump's `fragsize` and **not** with the "~506 ms period" of
 one: `audio.c:233` says a blocking `write()` stalls "for the full ALSA HW period (~506 ms)" — at a 46 ms
 period it would stall ~46 ms, so `O_NONBLOCK`'s justification needs re-deriving rather than assuming — and
 `audio.c:396` (repeated in `native_apps/CLAUDE.md`) prices the empty ring at "~506 ms" when it is 743 ms,
-which makes the lead argument *stronger*, not weaker. Resolve by re-measuring under both setups
-(`oss_diag.c` sets a fragment, `oss_play.c` does not) and correcting whichever is stale; the numbers above
-are only for the no-`SETFRAGMENT` case.
+which makes the lead argument *stronger*, not weaker. ✅ **Re-measured and CONFIRMED at 743 ms, twice in
+one run**, by `native_apps/tests/oss_geom.c` (new, standalone, writes no audio so it needs no listener) on
+`.188` 2026-08-18: `fragsize` 8192 B × `fragstotal` 16 at 44100/stereo. ⚠️ **The shim gives 2048 frames and
+16 periods for EVERY combination tested**, scaling `fragsize` with the frame size only — so at 22050/mono
+the same 2048 frames is **92 ms** and the ring 1486 ms. Gotcha 1's ~22,317-frame figure is unaccounted for;
+correcting it is the work left here.
 
 ⏳ **The live lead is an ONSET transient, and it is what a 60–300 ms game sound is made of.** Volunteered at
 the panel 2026-08-17 while judging the A/B: *"as always, the first sound started distorted, then cleaned out
