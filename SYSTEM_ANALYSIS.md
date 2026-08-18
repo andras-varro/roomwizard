@@ -588,7 +588,7 @@ has `--dump-hw-params`, which is the same `SNDRV_PCM_IOCTL_HW_REFINE` any client
 | `CHANNELS` | **2, exactly** | ⚠️ stereo-only, see below |
 | `RATE` | `[8000 96000]`, continuous | 8000/11025/22050/32000/44100/48000/96000 all granted **exactly** (`exact rate 22050 (22050/1)`), so no userspace resampling is ever needed |
 | `FORMAT` | `S16_LE`, `S32_LE` | `S16_LE`, as today |
-| `PERIOD_SIZE` | `[4 16384]` frames | ⚠️ ~506 ms is not a floor, see below |
+| `PERIOD_SIZE` | `[4 16384]` frames | ⚠️ the shim always takes 2048, see gotcha 1 |
 | `BUFFER_SIZE` | `[640 32768]` frames | 13 ms … 683 ms at 48000 |
 | `PERIODS` | `[2 255]` | |
 | `ACCESS` | `MMAP_INTERLEAVED`, `RW_INTERLEAVED` | a plain `write()` loop is fine; no mmap needed |
@@ -619,9 +619,8 @@ playing music: real stereo content never has `L == R`. The harness self-checks (
 differing content instead of phase.
 
 - ⚠️ **The tones must be *self-identifying*.** The first attempt played all three back to back and the
-  operator reported *"I think I heard only two"* — which cannot distinguish "one was silent" from "I
-  lost count". `audio_phase_test.sh` therefore precedes tone *N* with *N* marker clicks, so a silent
-  tone still says which one it was. That is what turned the answer from ambiguous into decisive.
+  operator reported *"I think I heard only two"* — which cannot distinguish "one was silent" from "I lost
+  count". `audio_phase_test.sh` precedes tone *N* with *N* marker clicks, which made the answer decisive.
 - **Consequence for streamed stereo content**: a stereo file plays as an analogue `L+R` downmix. So
   storing music **mono on disk and duplicating at playback halves the file and the SD read bandwidth
   at no audible cost** — a mono `(L+R)/2` source, duplicated, reproduces what the speaker already does.
@@ -659,8 +658,7 @@ differing content instead of phase.
 - ⚠️ **There is no AVLS, AGC or output limiter — and no external amplifier.** `SPKR1` is driven from the
   TPS65930 itself (`../HARDWARE.md`), and the driver's only playback-side dynamics are an **anti-pop ramp**
   on output enable (`handsfree_ramp()`, `headset_ramp()`, `twl4030.c:593-720`, ramping *up*) plus a one-time
-  offset cancellation at init. So a *"starts distorted, then settles"* onset cannot be an automatic volume
-  control; `IMPROVEMENT_PLAN.md` F1 defect 3 carries the candidates that remain.
+  offset cancellation at init. So a *"starts distorted, then settles"* onset cannot be an AVLS.
 - ⚠️ **Every audible click is a stream transition, not the samples, and there are TWO** — `.188` 2026-08-17,
   operator at the panel, each prediction stated before the listen, `[n=1, by ear]`. **(a)** A lone click ~5 s
   after the last sound is the ASoC power-down: `/sys/devices/platform/sound/TWL4030 HiFi/pmdown_time` reads
@@ -676,31 +674,27 @@ differing content instead of phase.
   — `SOUND_PCM_READ_*` on our side, `/proc/asound/card0/pcm0p/sub0/hw_params` on the slave's — none is
   built, so the write is a plain copy into the same ring `aplay` fills. `direct` is 0 here, but that only
   runs the *builder*, which then adds nothing. **[source-read, with both endpoint states measured]**
-- ⚠️ **The production OSS buffer is 743 ms in 46.4 ms periods**, measured `.188` 2026-08-17 with no
-  `SNDCTL_DSP_SETFRAGMENT`: `period_size` **2048** frames, `buffer_size` **32768** (16 fragments × 8192 B),
-  against `aplay`'s 5512 / 27560 (125 ms / 625 ms). That is the configuration `audio.c` actually gets, and it
-  agrees with the pump's `fragsize`. ⚠️ **It does not agree with the "~506 ms period" of gotcha 1 below**,
-  which was measured under a different setup and is flagged in `IMPROVEMENT_PLAN.md` F1 for resolution — do
-  not mix the two figures in one calculation.
-- **The two consumers attenuate differently:** the native synth pins a **peak of 18000**
-  (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a constant, not a shift); ScummVM does `>>1`
-  post-mix (below). The summing is why ~50 % looked like about the right figure — two identical
-  full-scale channels drive the speaker at double amplitude — but the ladder above puts 18000 past clean at
-  every pitch a canned sound uses, and the analog-gain result answers what `IMPROVEMENT_PLAN.md` F1's panel
-  question 6 asked: the **loudness cost** of lowering it is real and no mixer control refunds it.
+- ⚠️ **The production OSS buffer is 743 ms in 46.4 ms periods, and the shim grants 2048 frames and 16
+  periods at EVERY rate and channel count tested** — measured `.188` 2026-08-17 and again 2026-08-18
+  (`native_apps/tests/oss_geom.c`, both client configurations) with no `SNDCTL_DSP_SETFRAGMENT`:
+  `period_size` **2048** frames, `buffer_size` **32768**, `fragsize` scaling with the frame size alone
+  (8192 B stereo, 4096 B mono), against `aplay`'s 5512 / 27560. So at 22050 mono that same 2048 frames is
+  **92 ms** and the ring **1486 ms**. It is what both consumers actually get.
+- **The two consumers attenuate differently:** the native synth pins a peak of **18000**
+  (`AUDIO_PEAK` in `native_apps/common/audio_gen.h`, a constant rather than a shift); ScummVM does `>>1`
+  post-mix. The summing is why ~50 % looked about right, but the ladder above puts 18000 past clean at
+  every pitch a canned sound uses, and no mixer control refunds the loudness that lowering it costs.
 - ⚠️ **Digital attenuation inside the codec does not fix a distortion introduced upstream of it, and that
   is what makes it a probe.** Cutting `DAC1 Digital Fine Playback Volume` by 20 dB with `amixer` (numid=2,
-  63 → 43) made the app's tone quieter with the timbre **unchanged** — measured `.188` 2026-08-16. That
-  control sits after the samples arrive and before the DAC, so an unchanged timbre localises the corruption
-  **above** it, and a cleaned-up timbre would localise it below. Restore with `amixer cset numid=2 63,63`;
-  the speaker path is `Handsfree`, muxed from `AudioL1`/`AudioR1` = **DAC1**, which sits at 0 dB analog and
-  0 dB digital, so the codec adds no gain of its own.
+  63 → 43) made the app's tone quieter with the timbre **unchanged** — measured `.188` 2026-08-16 — which
+  localises a corruption **above** that control, where a cleaned-up timbre would localise it below.
+  ⚠️ **On its own it localises nothing**, because a controlled comparison then found no corruption to
+  localise. Restore with `amixer cset numid=2 63,63`.
 
-⚠️ **A `-c 1` probe fails on channels at every rate, which reads as "no rate is accepted".** That is
-exactly how the first run of `alsa_probe.sh` produced seven REFUSED lines from one mistake — the
-number was the harness. For the same reason the shipped `/opt/sound/*.wav` are mono, so
-`aplay -D hw:0,0 asl_click.wav` fails and **that is not a broken audio path**: use `plughw:0,0` for a
-mono file and let alsa-lib convert, or generate stereo (`speaker-test -c 2`).
+⚠️ **A `-c 1` probe fails on CHANNELS at every rate, which reads as "no rate is accepted"** — that is how
+`alsa_probe.sh`'s first run produced seven REFUSED lines from one mistake; the number was the harness. Same
+cause: the shipped `/opt/sound/*.wav` are mono, so `aplay -D hw:0,0 asl_click.wav` fails and **that is not
+a broken audio path** — use `plughw:0,0`, or generate stereo (`speaker-test -c 2`).
 
 **Native ALSA is audible on hardware — confirmed by the operator at `.188`, 2026-08-14.** Both paths
 of `alsa_probe.sh` step 7 exited 0 *and* were heard: the three mono WAVs through `plughw:0,0`, then a
@@ -712,25 +706,24 @@ independently of anything this project writes.
   *measured* explanation of the ~60 ms minimum-tone rule rather than a plausible one: see gotcha **6**
   below, where keeping a stream continuously fed drops the audible floor to 5 ms.
 
-⚠️ **The ~506 ms figure is the shim settling for the driver's maximum buffer, not a hardware period.**
-`period_size=1024, buffer_size=4096` is **granted exactly** at 48000 (`period_time: 21333` µs) and at
-22050; vanilla `omap-pcm.c:49-52` (`period_bytes_min = 32`, `periods_min = 2`,
+⚠️ **Native ALSA's latency win over the shim is ~2× at the period, not the ~24× a 506 ms period would
+imply.** `period_size=1024, buffer_size=4096` is **granted exactly** at 48000 (`period_time: 21333` µs)
+and at 22050; vanilla `omap-pcm.c:49-52` (`period_bytes_min = 32`, `periods_min = 2`,
 `buffer_bytes_max = 128 * 1024`) puts the floor at 8 frames and the ceiling at 32768. **A client that
-does not ask for a small period gets the biggest one, and the shim cannot ask because
-`SNDCTL_DSP_SETFRAGMENT` is ignored.** So the latency win from going native is real and is ~24× at the
-period (21 ms vs ~506 ms).
+does not ask for a small period gets a big one, and the shim cannot ask because
+`SNDCTL_DSP_SETFRAGMENT` is ignored** — but it settles for 2048 frames, so it is 21 ms against 46 ms.
 
 **Gotcha — the OSS shim is buggy, in four distinct ways.** All of these are in `snd-pcm-oss`
 emulation, not the hardware. ALSA itself works correctly.
 
-1. **The ~506 ms period stall.** The shim runs a ~22,317-frame (~506 ms at 44100) period — **the
-   driver's maximum buffer, not a hardware period** (measured above). A *blocking* `write()` to
-   `/dev/dsp` stalls for the full ALSA period once the OSS ring fills — not the ~93 ms OSS fragment.
-   Result: 185 ms of audio, 321 ms of silence, repeating — the "bru-bru-bru-KLICK" artifact.
-   **Always open `/dev/dsp` with `O_NONBLOCK`** and handle `EAGAIN` with a ~5 ms sleep. The OSS ring
-   drains at the hardware rate continuously regardless of ALSA period size. Diagnosed with
-   `native_apps/tests/oss_diag.c`. ⚠️ **Both consumers already work around this**, so it is not an
-   argument for the ALSA port — latency, mixing and frame arithmetic are.
+1. **A blocking `write()` stalls for hundreds of ms — the ~506 ms figure is that STALL, not a period.**
+   The period is 2048 frames (46 ms) and the ring 32768 (743 ms), both measured twice (above), so a
+   blocking write waits on the RING draining rather than on a period; the exact 506 ms is unaccounted
+   for, and the ~22,317-frame "period" it was read as reproduces in **no** configuration `oss_geom.c`
+   tested. Measured effect: 185 ms of audio, 321 ms of silence, repeating — the "bru-bru-bru-KLICK"
+   artifact, diagnosed with `native_apps/tests/oss_diag.c`. **Always open `/dev/dsp` with `O_NONBLOCK`**
+   and handle `EAGAIN` with a ~5 ms sleep. ⚠️ **Both consumers already work around this**, so it is not
+   an argument for the ALSA port — latency, mixing and frame arithmetic are.
 2. **Speaker distortion at full scale.** Apply ~50 % software attenuation (`>>1` on int16) before
    writing. ScummVM does this post-mix.
 3. **ioctls reset each other.** `SNDCTL_DSP_STEREO` is **silently ignored** (returns `rc=0,
@@ -765,15 +758,23 @@ emulation, not the hardware. ALSA itself works correctly.
    **Consequence for any incremental writer here: measure the period and queue a whole number of them,
    at least three.** `native_apps/common/audio_gen.c`'s `audio_pump_lead_frames()` is that rule;
    `IMPROVEMENT_PLAN.md` F1 Phase 3 has the derivation.
+   ⚠️ **`GETOSPACE` over-reports what is really buffered by ~1.3 periods (~60 ms), so a nominal lead is
+   worth that much less in real audio.** Measured `.188` 2026-08-18 by `native_apps/tests/oss_keepalive.c`,
+   reading `GETOSPACE` and `/proc/asound/card0/pcm0p/sub0/status` at the same instant: `in_flight` stands
+   **2650–2670 frames** above the kernel's own `buffer_size − avail` on every `RUNNING` row. A 3-period
+   139 ms target therefore holds ~79 ms, falling to **44 ms** at its shallowest under a 33 ms service loop.
+   ⚠️ **Hence a never-reset stream must be serviced every ~66 ms or better: 33 and 66 ms produce ZERO dry
+   windows, 100 ms empties the ring on 15 of 59 services, and 150 and 200 ms on every one** (one run, one
+   continuous stream, swept clean-to-dirty; 150/200 are the probe's own positive control, since both
+   exceed the lead arithmetically). ⚠️ **An underrun here is otherwise INVISIBLE** — the shim swallows it,
+   and `CONFIG_SND_PCM_XRUN_DEBUG` is unset (`usb_host/device_config:2730`) so neither `xrun_debug` nor a
+   `dmesg` trace exists. The two `/proc` witnesses, and the way each of them lies, are in that probe's header.
 6. ⚠️ **The minimum audible tone length is a property of RESTARTING the stream, not of
    `SNDCTL_DSP_RESET`** — removing the reset does not change it. Measured on `.188` 2026-08-15: with the
    ring allowed to empty between sounds, 5–40 ms is inaudible, 60 ms partial, 100 ms clean; with the
    stream **continuously fed** (`audio_pump_set_keepalive()`), **5 ms is audible and 20 ms
    recognisable** — same unit, same session. Any claim about a minimum tone length must say which
    regime it was measured under.
-
-**No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main
-thread and you get a black screen. `SCHED_OTHER` plus the ~500 ms OSS ring is enough.
 
 **As shipped.** The vendor's `init_amixer.sh` never unmutes any mic — corroborating that nothing
 was ever wired to the capture path.

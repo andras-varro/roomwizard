@@ -254,7 +254,8 @@ markdownlint's `MD051`. The state lives here instead, where updating it costs no
 | 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green, DEPLOYED, and its OWN goals look met — two tones heard as two, crackling gone. Not closed: a third defect turned out NOT to be a mixing defect at all — one voice distorts, and the mix bus is measured innocent** (2026-08-16) |
-| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next — for the **latency** (139 ms of lead → 23 ms) and to stop building on a deprecated emulation; ⚠️ **not** defect 3's fix, see defect 3 |
+| 3b | one shared continuous-stream device half, `oss-mixer.cpp`'s architecture moved into `common/audio_out.{c,h}` | open, **next** — plan `~/.claude/plans/tender-singing-cook.md`, approved; its phase 0 and 0b are both closed by measurement |
+| 4 | rebuild the device half on tinyalsa | open — for the **latency** (3 × 46 ms of lead → 3 × 23 ms) and to stop building on a deprecated emulation; ⚠️ **not** defect 3's fix, see defect 3 |
 | 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 6 | the docs and the comments this makes stale | open |
 
@@ -342,12 +343,6 @@ lead at `AUDIO_PUMP_LEAD_PERIODS` (3), rounds **up**, caps at half the ring: 614
 back (Phase 0 measured tinyalsa granting `period_size=1024`, 23 ms). Operator 2026-08-16, `PUMP: ON` /
 `KEEP: ON` / `LIMIT: SOFT`: **"No crackling."** Single voices "sound right".
 
-**Two suspects this file recorded are REFUTED by measurement, and neither should be re-raised:** `lost=0` on
-every logged pump kills "`WPOL_PUMP`'s `stop_on_again` drops rendered frames", and the tool's worst frame
-stayed at **107 ms while `starve` kept climbing** — one slow frame at start-up, not a chronically slow loop —
-which kills "the render loop cannot feed the lead". The third suspect, the tool's own toggle wiring, was
-checked and was **sound**.
-
 ⏳ **Defect 3 — one voice at `AUDIO_PEAK` is reproduced as a near-square, and it is TWO faults rather than
 the mixing one this entry used to name.** Measured on `.188` 2026-08-16 by playing reference WAVs through
 the vendor's `aplay` (ALSA direct, **no `/dev/dsp`**) and comparing with the same 440 Hz from the app:
@@ -396,28 +391,35 @@ sound with trailing silence does not help** — 400 ms of it was appended and th
 started distorted, then cleaned out"* is what set this session going; four sounds later, across two runs
 with the power-down held off, the operator heard **no distortion at any onset**. n=1 each side and the
 elapsed-idle time differed too, so this is a live question, not a fix. ⚠️ **Do not start a next attempt from
-"lower `AUDIO_PEAK`"** — that shape was measured wrong in both directions.
+"lower `AUDIO_PEAK`"** — that shape was measured wrong in both directions. The two listens that would
+separate a device transient from listener adaptation are a **10 s** tone and the level ladder replayed
+**quietest-first**; ⚠️ every ladder so far ran loud-to-quiet, the direction adaptation biases.
 
+⚠️ **Phase 4 is not defect 3's fix** — its case is 139 ms of lead down to ~69 ms and not building on a
+deprecated emulation, and ⚠️ **the "~24× at the period" figure that case used to carry is wrong**: the
+shim settles for 2048 frames, so native ALSA's win at the period is ~2×
+([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)).
 
-⚠️ **Two consequences.** Phase 4 is **not** defect 3's fix — its case is back to what it always was, 139 ms
-of lead down to 23 ms and not building on a deprecated emulation. And the 20 dB `DAC1 Digital Fine` cut that
-left the timbre unchanged (`.188` 2026-08-16) **localises nothing**: it was read as "the corruption is
-upstream of the DAC", and a controlled comparison finds no corruption to localise.
+✅ **Phase 0b is closed, measured on `.188` 2026-08-18 by `native_apps/tests/oss_keepalive.c`** (new,
+standalone, silence-only so it needs no listener; links `audio_gen.c` so it measures the production
+arithmetic, and its 150/200 ms rows are its own positive control). It answers the design question
+**D16 — how often must a never-reset stream be serviced — objectively: every ~66 ms or better.** 33 and
+66 ms give zero dry windows; **100 ms starves the ring on 15 of 59 services.** Two consequences for the
+shared library, and both were previously inferences:
 
-⏳ **Two OSS buffer figures in this repo disagree, and one of them is in a comment that reasons from it.**
-Measured `.188` 2026-08-17 with no `SNDCTL_DSP_SETFRAGMENT` — i.e. exactly what `audio.c` gets — the shim
-gives `period_size` **2048** frames (46.4 ms) and `buffer_size` **32768** (743 ms), which agrees with the
-pump's `fragsize` and **not** with the "~506 ms period" of
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 1. ⚠️ Two comments reason from the wrong
-one: `audio.c:233` says a blocking `write()` stalls "for the full ALSA HW period (~506 ms)" — at a 46 ms
-period it would stall ~46 ms, so `O_NONBLOCK`'s justification needs re-deriving rather than assuming — and
-`audio.c:396` (repeated in `native_apps/CLAUDE.md`) prices the empty ring at "~506 ms" when it is 743 ms,
-which makes the lead argument *stronger*, not weaker. ✅ **Re-measured and CONFIRMED at 743 ms, twice in
-one run**, by `native_apps/tests/oss_geom.c` (new, standalone, writes no audio so it needs no listener) on
-`.188` 2026-08-18: `fragsize` 8192 B × `fragstotal` 16 at 44100/stereo. ⚠️ **The shim gives 2048 frames and
-16 periods for EVERY combination tested**, scaling `fragsize` with the frame size only — so at 22050/mono
-the same 2048 frames is **92 ms** and the ring 1486 ms. Gotcha 1's ~22,317-frame figure is unaccounted for;
-correcting it is the work left here.
+- **`audio_pump_active()` in the frame-pacing decision is load-bearing, confirmed.** A render loop that
+  drops to `FRAME_DELAY_IDLE_US` (100 ms) while keepalive is on underruns ~2.5 times a second. ⚠️ **And
+  100 ms alone is enough to break it** — adding the mix tool's measured 107 ms worst frame changed
+  nothing (15 dry windows either way), so the plan's "100 ms idle *plus* a slow frame exceeds the lead"
+  understated it.
+- **The two Settings tabs genuinely need a synchronous write mode.** `hardware_config.c:77-85` and
+  `device_tools.c:484-489` have no render loop at all, so nothing would ever service them.
+
+⚠️ **Why 100 ms fails against a nominally 139 ms lead is now measured too, and it re-prices the latency
+the ear test at Phase 3 has to judge**: `GETOSPACE` over-reports the queue by ~60 ms, so 139 ms of
+nominal lead is ~79 ms of real audio and the onset cost is **~44–112 ms, not 139 ms** — number, method
+and the two `/proc` witnesses in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 5.
+
 
 ⏳ **The live lead is an ONSET transient, and it is what a 60–300 ms game sound is made of.** Volunteered at
 the panel 2026-08-17 while judging the A/B: *"as always, the first sound started distorted, then cleaned out
@@ -425,11 +427,7 @@ as the volume has decreased"*, with the four tones otherwise indistinguishable. 
 second of any sound is dirty, then **every canned sound is entirely inside that window** while a 2–3 s test
 tone is mostly outside it — which would explain the whole defect without a mixing, generator or OSS fault,
 and it fits `audio_flush()` re-triggering `SNDCTL_DSP_RESET`'s ~50 ms DAC startup before *every* sound.
-⚠️ **It is not an AVLS** — there is no AGC or limiter on this codec's playback path and no external amp
-([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Three candidates remain, and the two tests
-that separate them need one listen each: a **10 s** tone (a device transient cleans up once and stays clean;
-listener adaptation returns on the next tone after a silence), and the level ladder **replayed in reverse
-order** — ⚠️ every ladder so far ran loud-to-quiet, which is the direction adaptation biases.
+⚠️ **It is not an AVLS** ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)).
 
 ⚠️ **Fault 1 is now characterised, and the prescribed fix is the wrong SHAPE.** Measured `.188` 2026-08-17,
 by ear through `aplay`; the two ladders are in
@@ -450,12 +448,15 @@ Four consequences:
   repetition to follow — a constraint on
   [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14), not on defect 3.
 
-⚠️ **Five suspects this file recorded are REFUTED by measurement; do not re-raise any of them.** The
+⚠️ **Seven suspects this file recorded are REFUTED by measurement; do not re-raise any of them.** The
 limiter — one voice at `AUDIO_PEAK` passes it **byte-identical**, 4400 of 4400 samples, its knee *being*
 `AUDIO_PEAK`. The mix bus and the generator — **THD 0.00 %** by DFT over the shipped
 `audio_render_tone()`, indistinguishable from an ideal sine. The effective sample rate — a 440 Hz request
 measures 440 Hz at the panel. A silent sample-format fallback — `hw_params` reports `S16_LE`/2/44100 at
-**both** the ALSA and OSS layers. And analog overdrive as the *whole* story, per the 20 dB test.
+**both** the ALSA and OSS layers. Analog overdrive as the *whole* story, per the 20 dB test. And from the
+pump's own counters: `WPOL_PUMP` dropping rendered frames (`lost=0` on every logged pump), and a render
+loop too slow to feed the lead (the tool's worst frame stayed **107 ms** while `starve` climbed — one slow
+frame at start-up, not a chronically slow loop). The tool's own toggle wiring was checked and was sound.
 ⚠️ **`clip == 0` was never evidence of a clean mix**: it proves int16 did not overflow, which the bounded
 limiter guarantees by construction, and the gate read PASS while the sound was destroyed.
 
@@ -466,11 +467,6 @@ sum's repetition rate. "The sum sounds lower" is therefore not evidence of anyth
 **One operator observation is expected physics — do not chase it.** Several 220 Hz drones started at
 different moments were "no or very faint sound until one of them finished": identical frequencies at
 different start phases partially cancel, and `AudioVoice.delay` guarantees the phases differ.
-
-**Next step is one back-to-back A/B and it needs no new code:** `aplay` a peak-18000 sine against the
-tool's `440 3S` pad — same frequency, same peak, same speaker, only the software path differing. Mild
-versus square confirms the OSS path; indistinguishable means the overdrive is the whole story and
-`AUDIO_PEAK` is the only fix.
 
 **Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device** (neither
 `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** · one mono

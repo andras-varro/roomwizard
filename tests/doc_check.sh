@@ -325,6 +325,8 @@ targets a LEAD	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 no longer resets the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 cannot both own the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
+1486	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+22,317	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 button_check_tap	native_apps/CLAUDE.md	-
 RESCAN_INTERVAL_MS	native_apps/CLAUDE.md	-
 rw_provision_push_installs	lib/CLAUDE.md	-
