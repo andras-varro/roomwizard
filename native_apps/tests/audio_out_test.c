@@ -37,11 +37,46 @@
  * nominal lead.  Group J is one stream per process.
  *
  * ⚠️ **This file is NEW, so "seen failing against the pre-change source" cannot
- * mean compiling it against an older `audio_out.c` — there is none.** The
- * equivalent evidence is a sabotage sweep, and it is **NOT YET WRITTEN** (F1
- * Phase 1 is unfinished until `measure_audio_out_sabotage.sh` exists and its
- * per-defect counts are transcribed here).  Do not read a green run as evidence
- * that this suite can fail.
+ * mean compiling it against an older `audio_out.c` — there is none.**  The
+ * equivalent evidence is `measure_audio_out_sabotage.sh`, which breaks one stated
+ * rule at a time in a COPY and counts what notices.  Measured 2026-08-18:
+ *
+ *     sabotage                                      failed  caught by
+ *      1  prefill dropped, the stream starts empty     5     A3b D6 D7 D8 D14
+ *      2  scratch not zeroed before the fill           1     D4b
+ *      3  service fills the free space, not the lead   8     D1 D5 D6 D7 D8 D11 …
+ *      4  lead from the ms constant, not the period    8     C2 C3 C4 C5 D5 D11 …
+ *      5  channels from the request, not the grant     8     B2 B3 B4 B5 B6 B7 …
+ *                                                            then SIGFPE
+ *      6  attenuation as a divide, not a shift         1     F2
+ *      7  mode 2 not refused against a callback        1     E4
+ *      8  drain waits for zero, not the slack          1     H4
+ *      9  serviced policy given a non-zero wait        1     D13c
+ *     10  CONTROL: audio_out_starved() returns 0       1     D10
+ *
+ * ⚠️ **Case 10 is the control and its count is the one to read first**: a single
+ * lying accessor must fail exactly ONE check in ONE group.  A cascade there would
+ * mean the suite is coupled and every other count above is inflated.
+ *
+ * ⚠️ **Three stanzas read 0 on the first run and only one of the three was telling
+ * the truth, so reading the sweep is part of running it:**
+ *
+ *   - **case 5 was a LOST BUFFER, not a pass.**  `out=$(…)` makes the child's
+ *     stdout a pipe, libc switches to full buffering, and the SIGFPE discarded
+ *     eight `FAIL:` lines it had already printed.  The sweep now line-buffers the
+ *     child and reports the signal — without both, a sabotage that CRASHES this
+ *     suite is indistinguishable from one the suite cannot see.
+ *   - **case 2 was a hole in this file.**  `D4` ran after three SILENT services,
+ *     so the scratch was already zero and it passed with the `memset` deleted.
+ *     Split into `D4a` (dirty the scratch first) and `D4b` (the real check).
+ *   - **case 9 was a hole in this file.**  Nothing separated a wait from a SLEEP,
+ *     so the load-bearing `wait_us == 0` was untested.  The fake now counts
+ *     `waits_slept` only at `usec > 0`, and `D13b`/`D13c` drive the one path that
+ *     can break it: a permanent mid-frame stall, where the policy's stop condition
+ *     deliberately does not apply.
+ *
+ * Case 1 still fails four pacing checks in group D, but only as a side-effect of
+ * the queue being empty; `A3b` is the check that states the property itself.
  *
  * What HAS been seen failing, on 2026-08-18, is three real defects — two in the
  * suite and one in the library, all found by running it:
@@ -124,7 +159,7 @@ typedef struct {
     long swallow_left;
 
     /* Observations. */
-    int  opens, closes, transitions, spaces, writes, waits;
+    int  opens, closes, transitions, spaces, writes, waits, waits_slept;
     long audible;
     uint8_t got[FAKE_CAP];
     long len;
@@ -219,7 +254,12 @@ static void fake_wait(void *ctx, int usec)
 {
     Fake *f = (Fake *)ctx;
     f->waits++;
-    (void)usec;
+    /* ⚠️ Counting a wait and counting a SLEEP are different measurements, and only
+     * the second one can test "service() never sleeps".  Every real backend's wait
+     * (`oss_wait()`, `dsp_wait`) is a no-op at `usec <= 0`, and the serviced policy
+     * passes 0 — so the call still arrives here and must not be counted as sleep.
+     * Without this split the non-zero-wait sabotage passed the whole suite. */
+    if (usec > 0) f->waits_slept++;
     /* A wait is when the hardware makes progress, so the queue drains here too —
      * otherwise a bounded blocking policy could never finish and the drain loop
      * would always run to its bound. */
@@ -376,6 +416,12 @@ int main(void)
         f.startup_frames = startup;
         check(audio_out_open(&out, &FAKE_DEV, &f, RATE, 2) == 0,
               "A3 the stream opens on the same fake device");
+        check(f.len == audio_out_lead(&out) * f.fb && f.len > 0 &&
+              all_zero(f.got, 0, f.len),
+              "A3b and the open PREFILLS that lead with silence — a stream started "
+              "empty starts with the very transition this design removes.  Added "
+              "because the sabotage sweep caught a dropped prefill only through its "
+              "pacing side-effects, which is a coincidence rather than a check");
         long t_after_open = f.transitions;
         for (int i = 0; i < 20; i++) audio_out_service(&out);
         fc.value = 4000; fc.produce = -1; fc.calls = 0; fc.poison = false; fc.seq = 0;
@@ -485,15 +531,27 @@ int main(void)
         check(fc.calls == 1,
               "D3 the fill callback was still asked, once");
 
-        /* Poisoned scratch must not leak: the fill claims half the frames and
-         * scribbles a sentinel over the rest, exactly as a short mix render plus
-         * stale scratch would. */
+        /* ⚠️ Stale scratch must not leak, and the ORDER below is the entire test.
+         * A loud fill claiming EVERY frame runs first, so the scratch is full of
+         * non-zero samples; only then does a fill claim 100 of them and touch
+         * nothing else, which is exactly `audio_mix_render()` on a silent bus.
+         * Until 2026-08-18 this ran after three SILENT services, so the scratch
+         * was already zero and the check passed with the `memset` deleted —
+         * measured, by the sabotage sweep reporting 0 for that stanza. */
+        fc.value = 7000; fc.produce = -1; fc.poison = false; fc.calls = 0;
+        audio_out_set_fill(&out, fill_const, &fc, "loud");
+        f.len = 0;
+        n = audio_out_service(&out);
+        check(n > 0 && count_nonzero_samples(f.got, f.len) == n * 2,
+              "D4a a fill claiming every frame fills every frame — which is what "
+              "leaves the scratch dirty for D4b to find");
+
         fc.value = 7000; fc.produce = 100; fc.poison = false; fc.calls = 0;
         audio_out_set_fill(&out, fill_const, &fc, "half");
         f.len = 0;
         n = audio_out_service(&out);
         check(n > 100 && count_nonzero_samples(f.got, f.len) == 100 * 2,
-              "D4 a SHORT fill's remainder is silence — the library zeroes the "
+              "D4b a SHORT fill's remainder is silence — the library zeroes the "
               "buffer before every fill, because audio_mix_render() deliberately "
               "does not touch it on a silent bus");
 
@@ -607,6 +665,34 @@ int main(void)
         check(f.len % f.fb == 0 && audio_out_misaligned(&out) == 0,
               "D13 a device taking 3 bytes at a time is left holding whole frames "
               "only — audio_write_frames() is still the only code that stops");
+
+        /* ⚠️ A device that stalls MID-FRAME and never recovers is the one place the
+         * "service() never sleeps" claim can be broken, and nothing tested it: the
+         * sabotage sweep gave the non-zero-wait policy 0 failures.  6 bytes at a
+         * 4-byte frame leaves half a frame in the device, and mid-frame the policy's
+         * stop condition does NOT apply — `audio_write_frames()` waits
+         * AUDIO_ALIGN_TRIES times whatever the caller asked for, which at a 1000 us
+         * interval is 4 ms of sleep inside a render loop. */
+        audio_out_close(&out);
+        fake_reset(&f);
+        f.drain_all = true;
+        audio_out_open(&out, &FAKE_DEV, &f, RATE, 2);
+        f.accept_upto = f.len + 6;             /* 1.5 frames, then EAGAIN forever */
+        fc.value = 1000; fc.produce = -1; fc.calls = 0;
+        /* The prefill is the one call in the library allowed to sleep, so its waits
+         * are not the measurement — zero the counters after the open, not before. */
+        f.waits = 0; f.waits_slept = 0;
+        audio_out_set_fill(&out, fill_const, &fc, "const");
+        n = audio_out_service(&out);
+        check(n == 1 && audio_out_misaligned(&out) == 1,
+              "D13b a permanent MID-FRAME stall is REPORTED, not retried forever: "
+              "one whole frame written, the half frame counted, and the loop bounded "
+              "by AUDIO_ALIGN_TRIES — hanging the render loop is worse than the "
+              "channel swap it is trying to avoid");
+        check(f.waits > 0 && f.waits_slept == 0,
+              "D13c and the realignment it just did SPUN rather than slept — the "
+              "serviced policy's wait_us is 0, which is what makes \"service() never "
+              "sleeps\" true rather than nearly true");
 
         /* The return value is the pacing signal. */
         audio_out_close(&out);
