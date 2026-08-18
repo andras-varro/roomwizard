@@ -768,38 +768,40 @@ int main(void)
         check(lead == 3528 && cap == 3528,
               "80 ms of lead and cap is 3528 frames at 44100");
 
-        /* ⚠️ THE TRAP.  An empty ~506 ms OSS ring will accept 22317 frames, and
-         * a pump that writes them puts every sound triggered on the next frame
-         * half a second late.  The lead is the latency ceiling. */
-        check(audio_pump_frames(lead, 0, 22317, cap) == 3528,
-              "an EMPTY ring gets 80 ms, not the 506 ms it would accept");
+        /* ⚠️ THE TRAP.  An empty OSS ring is 32768 frames — ~743 ms at this rate,
+         * measured on `.188`, and NOT the ~506 ms this stanza used to claim — and it
+         * will accept every one of them.  A pump that writes the free space puts
+         * every sound triggered on the next frame three quarters of a second late.
+         * The lead is the latency ceiling. */
+        check(audio_pump_frames(lead, 0, 32768, cap) == 3528,
+              "an EMPTY ring gets 80 ms, not the 743 ms it would accept");
         /* ⚠️ With the cap equal to the lead, the line above passes even for a
          * pump that just writes the free space — the cap catches it by accident.
          * Take the cap out of the way so only the lead can bound the answer. */
-        check(audio_pump_frames(lead, 0, 22317, 22317) == 3528,
+        check(audio_pump_frames(lead, 0, 32768, 32768) == 3528,
               "with the cap out of the way it is still 80 ms — the LEAD is the bound");
 
-        check(audio_pump_frames(lead, lead, 22317, cap) == 0,
+        check(audio_pump_frames(lead, lead, 32768, cap) == 0,
               "already a full lead ahead: render nothing this frame");
-        check(audio_pump_frames(lead, lead + 500, 22317, cap) == 0,
+        check(audio_pump_frames(lead, lead + 500, 32768, cap) == 0,
               "further ahead than that: still nothing, never negative");
-        check(audio_pump_frames(lead, 3000, 22317, cap) == 528,
+        check(audio_pump_frames(lead, 3000, 32768, cap) == 528,
               "part-drained: top the lead back up, no more");
 
         check(audio_pump_frames(lead, 0, 200, cap) == 200,
               "a nearly full ring caps at the space it actually has");
-        check(audio_pump_frames(lead, 0, 22317, 441) == 441,
+        check(audio_pump_frames(lead, 0, 32768, 441) == 441,
               "and the per-call cap bounds the work one frame may do");
-        check(audio_pump_frames(lead, 0, 22317, 0) == 3528,
+        check(audio_pump_frames(lead, 0, 32768, 0) == 3528,
               "cap 0 means unbounded, so the lead decides");
 
-        check(audio_pump_frames(0, 0, 22317, cap) == 0 &&
-              audio_pump_frames(-1, 0, 22317, cap) == 0,
+        check(audio_pump_frames(0, 0, 32768, cap) == 0 &&
+              audio_pump_frames(-1, 0, 32768, cap) == 0,
               "no lead target, nothing to do");
         check(audio_pump_frames(lead, 0, 0, cap) == 0 &&
               audio_pump_frames(lead, 0, -8, cap) == 0,
               "no space, nothing written — the pump never blocks to make room");
-        check(audio_pump_frames(lead, -9999, 22317, cap) == 3528,
+        check(audio_pump_frames(lead, -9999, 32768, cap) == 3528,
               "a nonsense in-flight read-back cannot inflate the request past the cap");
     }
 
@@ -946,6 +948,61 @@ int main(void)
          * detail: it must stay well inside the ring and well under a second. */
         check(lead < RING / 2 && lead < RATE,
               "3 periods is far inside the ring and well under a second of latency");
+    }
+
+    printf("\n=== N. K and M again at 22050 MONO, which is ScummVM's grant ===\n");
+    {
+        /* K and M above are parameterised on 44100 stereo, which is what the games
+         * are granted.  ScummVM asks for 22050 mono and is granted it, and the shim
+         * hands out the SAME geometry either way — 2048 frames per period, 16
+         * periods, measured at every rate and channel count tried on `.188`
+         * 2026-08-18.  So every frame count below equals M's and every DURATION is
+         * doubled, which is the whole reason this rate earns its own stanza. */
+        const long RATE22 = 22050, P = 2048, RING = 32768;
+        long ms80 = audio_frames_for_ms(RATE22, AUDIO_PUMP_LEAD_MS);   /* 1764 */
+
+        /* ⚠️ The OPPOSITE regime from M, and nothing at 44100 reaches it: 80 ms is
+         * LESS than one period here, so the period floor is doing all the work
+         * rather than rounding up a target that already sat between two periods. */
+        check(ms80 == 1764 && ms80 < P,
+              "at 22050 the 80 ms request is UNDER one period — M's premise inverted");
+
+        long lead = audio_pump_lead_frames(ms80, P, AUDIO_PUMP_LEAD_PERIODS, RING);
+        check(lead == 3 * P,
+              "the floor still yields three whole periods, 6144 frames, exactly as M");
+        /* ⚠️ Same frames, twice the time — and the lead IS the latency ceiling.
+         * 6144 frames is ~139 ms at 44100 and ~278 ms here.  That is not a
+         * regression this rate introduces: ScummVM was measured already holding
+         * ~280 ms, so the shared rule reproduces its shipped behaviour to 2 ms. */
+        check(lead * 1000 / RATE22 == 278,
+              "so the ceiling is ~278 ms at this rate, not the ~139 ms M measures");
+
+        /* ⚠️ And the per-call cap stops being equal to the lead.  At 44100 both come
+         * to 3528, so one service fills the lead and nothing notices the cap; here
+         * the ms-derived cap is 1764 against a period-floored lead of 6144, so a
+         * cold start needs FOUR services.  Anything that paces off "one service
+         * reaches the lead" is wrong at this rate. */
+        long cap = audio_frames_for_ms(RATE22, AUDIO_PUMP_CAP_MS);
+        check(cap == 1764 && cap < lead,
+              "the cap is SMALLER than the lead here, where at 44100 they are equal");
+        check(audio_pump_frames(lead, 0, RING, cap) == cap,
+              "so one service off an empty ring writes the cap, not the lead");
+        check(audio_pump_frames(lead, 3 * cap, RING, cap) == lead - 3 * cap,
+              "and the fourth writes the 852-frame remainder, not a fifth cap");
+
+        /* K's trap at this rate: the free space is a worse liar than at 44100,
+         * because the same 32768 frames are now 1486 ms rather than 743. */
+        check(audio_pump_frames(lead, 0, RING, 0) == lead,
+              "an empty ring still gets the lead, not the 1486 ms it would accept");
+
+        /* At a mono grant one frame IS one sample, so the mid-frame misalignment
+         * `audio_write_frames()` guards against cannot arise in this configuration.
+         * ⚠️ That makes the rule per-configuration, not absolute — the guard stays,
+         * because the games' grant is 2 channels and half a frame swaps L and R
+         * there permanently. */
+        check(audio_bytes_for_frames(1, 1) == 2 &&
+              audio_bytes_for_frames(lead, 1) == lead * 2,
+              "one mono frame is 2 bytes, so half a frame is unreachable at this grant");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

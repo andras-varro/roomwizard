@@ -163,6 +163,16 @@ meant to catch**.
   invents `sdiv`/`udiv` without it, so the checker returns **2** ("could not judge"). ⚠️ **Never read
   that status through `xargs`** — it collapses any 1–125 onto 123 and erases the difference between "a
   real hit" and "could not judge".
+- ⚠️ **An EAR verdict answers the question you asked, not the one you meant.** Asking "which is the
+  lowest **audible** tone" and reading the answer as "all of them are **clean**" fabricated a
+  clean-vs-distorted discriminator that the device log then refuted — a lone canned sound and a lone
+  tone are the same `audio_mix_add()` call, with no clipping on either. Audibility and quality are two
+  questions and one answer cannot serve both; ask them separately, and ask the panel log which state
+  each verdict was given in.
+- ⚠️ **A kernel counter that latches a session high-water mark cannot be attributed to one leg of an
+  A/B.** `/proc/asound/…/status`'s `avail_max` is cleared by whoever reads it first and never says
+  *when* its extreme happened, so a session containing both legs yields one number belonging to
+  neither. The per-leg witness has to be a counter the library itself resets when the mode changes.
 
 ## The holes each suite has, named
 

@@ -679,16 +679,23 @@ These rules, each of which is a way to get this wrong:
   branches on `audio->pumping`; it does **not** "enqueue and also write immediately", which cannot work — a
   bounded immediate write truncates any tone longer than the lead, and an unbounded one hands the whole tone
   to the kernel, which is what makes it unmixable.
-- ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** The pump keeps only
-  `AUDIO_PUMP_LEAD_MS` (80 ms) inside the device, so a loop dropping to `FRAME_DELAY_IDLE_US` (100 ms)
-  mid-sound starves it and you hear a gap — which reads as a mixing defect rather than a pacing one. Ask the
-  component, exactly as with `gameover_needs_redraw()`.
-- ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty ~506 ms OSS ring will
-  accept half a second of audio, and then the next sound plays half a second late.
+- ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** The lead is three device periods —
+  ~139 ms at 44100, and worth only ~79 ms of real audio because `GETOSPACE` over-reports — so a loop
+  dropping to `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves it and you hear a gap, which reads as a
+  mixing defect rather than a pacing one. The measured ceiling is ~66 ms; ask the library for it with
+  `audio_cont_service_interval_us()`, and ask the component whether it needs frames, exactly as with
+  `gameover_needs_redraw()`.
+- ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty OSS ring is 32768 frames —
+  **743 ms** at 44100, not the ~506 ms an earlier revision claimed — and it will accept every one of them,
+  after which the next sound plays three quarters of a second late.
 - **A voice carries a `delay`, and `audio_success()` depends on it.** Three voices added at once are a
   *chord*; the four canned sounds are four note tables and one sequencer that offsets each note by the ones
-  before it. `audio_interrupt()` on the pump means "stop all voices" and no longer resets the ring, so up to
-  80 ms of tail survives it.
+  before it. `audio_interrupt()` on the pump means "stop all voices" and no longer resets the ring, so a
+  lead's worth of tail survives it.
+- ⚠️ **`audio_tone()` on the bus defaults its delay to a TAIL, and today that tail is the whole bus** —
+  so a long voice makes every later tone queue behind it instead of mixing. The ~23
+  `audio_interrupt(); audio_tone();` sites are unaffected, because the interrupt leaves the tail at 0.
+  Open, with the fix: `../IMPROVEMENT_PLAN.md` F1.
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
 - **`WPOL_PUMP` is a fifth *policy*, not a fifth loop.** Same rule as the four above it.
@@ -698,8 +705,12 @@ These rules, each of which is a way to get this wrong:
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. Two loud voices exceed int16 by ~10 %; whether that is audible is a
 panel question, not one to invent a gain for. `tests/audio_mix_test.c` is the interactive tool for the panel
-questions, and its **PUMP toggle puts the pre-pump path on the same screen as the negative control**. It is
-also how the ~60 ms minimum-tone rule gets re-measured rather than carried forward or deleted on faith.
+questions, and its **CONT and PUMP toggles put the older path on the same screen as the negative control**
+— which is the only reason a claim like "the click is gone" can be checked rather than believed.
+⚠️ **The ~60 ms minimum-tone rule is answered and it is not a code constant**: it is the start-of-stream
+pop, so a continuously fed stream drops the audible floor to ~5 ms and five `brick_breaker` tones that
+have never been heard start sounding ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)
+gotcha 6). Nothing in the tree clamps it; do not reintroduce prose that says 60 ms is a minimum.
 
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used
 to `memset` one, set three fields — `dsp_fd`, `available`, `sample_rate` — and open `/dev/dsp`, the three

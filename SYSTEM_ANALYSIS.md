@@ -772,9 +772,9 @@ emulation, not the hardware. ALSA itself works correctly.
 6. ⚠️ **The minimum audible tone length is a property of RESTARTING the stream, not of
    `SNDCTL_DSP_RESET`** — removing the reset does not change it. Measured on `.188` 2026-08-15: with the
    ring allowed to empty between sounds, 5–40 ms is inaudible, 60 ms partial, 100 ms clean; with the
-   stream **continuously fed** (`audio_pump_set_keepalive()`), **5 ms is audible and 20 ms
-   recognisable** — same unit, same session. Any claim about a minimum tone length must say which
-   regime it was measured under.
+   stream **continuously fed**, **5 ms is audible and 20 ms recognisable** — first via
+   `audio_pump_set_keepalive()`, then again 2026-08-18 on the shipped never-reset stream. Any claim about
+   a minimum tone length must say which regime it was measured under; nothing in the tree clamps it.
 
 **As shipped.** The vendor's `init_amixer.sh` never unmutes any mic — corroborating that nothing
 was ever wired to the capture path.

@@ -254,7 +254,7 @@ markdownlint's `MD051`. The state lives here instead, where updating it costs no
 | 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green, DEPLOYED, and its OWN goals look met — two tones heard as two, crackling gone. Not closed: a third defect turned out NOT to be a mixing defect at all — one voice distorts, and the mix bus is measured innocent** (2026-08-16) |
-| 3b | one shared continuous-stream device half, `oss-mixer.cpp`'s architecture moved into `common/audio_out.{c,h}` | open, **next** — plan `~/.claude/plans/tender-singing-cook.md`, approved; its phase 0 and 0b are both closed by measurement |
+| 3b | one shared continuous-stream device half — `oss-mixer.cpp`'s architecture in `common/audio_out.{c,h}` | ⚠️ **the STREAM half is DONE and measured on the panel; it did NOT fix the one-voice distortion, exactly as row 3 predicted.** Plan `~/.claude/plans/tender-singing-cook.md` phases 0–3 closed, 4–7 open. **The remaining blocker is the LEVEL — question 6 below** |
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (3 × 46 ms of lead → 3 × 23 ms) and to stop building on a deprecated emulation; ⚠️ **not** defect 3's fix, see defect 3 |
 | 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 6 | the docs and the comments this makes stale | open |
@@ -400,26 +400,29 @@ deprecated emulation, and ⚠️ **the "~24× at the period" figure that case us
 shim settles for 2048 frames, so native ALSA's win at the period is ~2×
 ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)).
 
-✅ **Phase 0b is closed, measured on `.188` 2026-08-18 by `native_apps/tests/oss_keepalive.c`** (new,
-standalone, silence-only so it needs no listener; links `audio_gen.c` so it measures the production
-arithmetic, and its 150/200 ms rows are its own positive control). It answers the design question
-**D16 — how often must a never-reset stream be serviced — objectively: every ~66 ms or better.** 33 and
-66 ms give zero dry windows; **100 ms starves the ring on 15 of 59 services.** Two consequences for the
-shared library, and both were previously inferences:
+✅ **Phase 0b closed D16 objectively — a never-reset stream needs servicing every ~66 ms or better.** The
+sweep, its positive controls and the `GETOSPACE` over-report live at
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 5, not here. Two consequences, both
+re-confirmed by the deployed stream: `audio_pump_active()` belongs in the frame-pacing decision, and the
+two Settings tabs need a **synchronous** write mode — `hardware_config.c:77-85` and
+`device_tools.c:484-489` have no render loop to service them.
 
-- **`audio_pump_active()` in the frame-pacing decision is load-bearing, confirmed.** A render loop that
-  drops to `FRAME_DELAY_IDLE_US` (100 ms) while keepalive is on underruns ~2.5 times a second. ⚠️ **And
-  100 ms alone is enough to break it** — adding the mix tool's measured 107 ms worst frame changed
-  nothing (15 dry windows either way), so the plan's "100 ms idle *plus* a slow frame exceeds the lead"
-  understated it.
-- **The two Settings tabs genuinely need a synchronous write mode.** `hardware_config.c:77-85` and
-  `device_tools.c:484-489` have no render loop at all, so nothing would ever service them.
+✅ **The stream half is DONE, measured on the panel** (`.188` 2026-08-18, `audio_mix_test` at `CONT: ON`):
+`starve`, `lost` and `drop` hold zero on every logged line and `appl_ptr` never rewinds across a session.
+The published ceiling is ~55 ms against a worst render frame of 70 ms — conservative, not violated.
+`/tmp/mix.log` carries `cont=` and `svc_us=` from the library, never from the pad labels.
 
-⚠️ **Why 100 ms fails against a nominally 139 ms lead is now measured too, and it re-prices the latency
-the ear test at Phase 3 has to judge**: `GETOSPACE` over-reports the queue by ~60 ms, so 139 ms of
-nominal lead is ~79 ms of real audio and the onset cost is **~44–112 ms, not 139 ms** — number, method
-and the two `/proc` witnesses in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 5.
+⚠️ **The CLICK did not reproduce on the negative control, so this defect's premise is in doubt.** At
+`CONT: OFF` the operator heard **no crack**; what reproduced was a missing envelope — *"without attack
+and decay"* against *"more natural"* at `CONT: ON` — consistent with the start-of-stream pop eating a
+short tone's attack (gotcha 6). It is **not** confirmation that a click was removed. Ear-only, n=1.
+⚠️ **Onset latency is answered and does not pull Phase 4 forward**: *"a little delay, in the ms range"*,
+against the ~44–112 ms the over-report prices it at.
 
+⚠️ **NEW, contradicting "overlapping sounds mix": the bus SERIALISES tones.** `audio.c:685` takes
+`audio_tone()`'s default delay from `audio_mix_pending()` — the whole bus — so a 3 s drone schedules every
+later tone behind it. No shipped game is affected: all ~23 sites `audio_interrupt()` first, tail 0.
+**Fix: the tail of the preceding TONE, not of the bus.**
 
 ⏳ **The live lead is an ONSET transient, and it is what a 60–300 ms game sound is made of.** Volunteered at
 the panel 2026-08-17 while judging the A/B: *"as always, the first sound started distorted, then cleaned out
