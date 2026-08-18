@@ -645,6 +645,34 @@ differing content instead of phase.
   is an empty comment), so a second `aplay` during a first dies `Device or resource busy` — measured `.188`
   2026-08-17. `aplay -D plug:dmix` **does** take two streams, but only via `libasound`, which ships
   **shared**-only. **Mixing two sounds is userspace work by construction, not an optimisation.**
+- ⚠️ **Audio on this device cannot be measured acoustically — there is no microphone, and the codec's
+  loopbacks run the wrong way.** `arecord` works and the card really does have a capture subdevice
+  (`/proc/asound/pcm`), so this looks possible and is not: with `TX1 Capture Route` on `Analog`, both main-mic
+  and AUXL capture switches on and gain at maximum, a recording is **railed 50 Hz mains hum**, and the 440 Hz
+  bin is *identical* between a silent capture and one taken during a loud 440 Hz playback — measured `.188`
+  2026-08-17, so there is no acoustic and no electrical coupling to find. Nor can the codec be turned into a
+  loop: **both loopback families route capture → playback** (mic-to-speaker), not playback → capture
+  (`../usb_host/linux-4.14.52/sound/soc/codecs/twl4030.c:1553-1579`). ⚠️ **So every timbre and loudness
+  finding in this section is necessarily `[n=1, by ear]`, and no future session can promote one by
+  instrumenting the device.** What *can* be measured objectively is the byte stream we send it
+  (`native_apps/tests/oss_play.c --dump`), which is a different claim.
+- ⚠️ **There is no AVLS, AGC or output limiter — and no external amplifier.** `SPKR1` is driven from the
+  TPS65930 itself (`../HARDWARE.md`), and the driver's only playback-side dynamics are an **anti-pop ramp**
+  on output enable (`handsfree_ramp()`, `headset_ramp()`, `twl4030.c:593-720`, ramping *up*) plus a one-time
+  offset cancellation at init. So a *"starts distorted, then settles"* onset cannot be an automatic volume
+  control; `IMPROVEMENT_PLAN.md` F1 defect 3 carries the candidates that remain.
+- **The OSS shim adds no conversion when the parameters already match — it cannot reshape a waveform.**
+  Every plugin in `snd_pcm_plug_format_plugins()` is gated on a mismatch (`sound/core/oss/pcm_plugin.c:414`
+  onward: mu-law, channel reduction, resample, format), and with `S16_LE`/2/44100 granted at **both** layers
+  — `SOUND_PCM_READ_*` on our side, `/proc/asound/card0/pcm0p/sub0/hw_params` on the slave's — none is
+  built, so the write is a plain copy into the same ring `aplay` fills. `direct` is 0 here, but that only
+  runs the *builder*, which then adds nothing. **[source-read, with both endpoint states measured]**
+- ⚠️ **The production OSS buffer is 743 ms in 46.4 ms periods**, measured `.188` 2026-08-17 with no
+  `SNDCTL_DSP_SETFRAGMENT`: `period_size` **2048** frames, `buffer_size` **32768** (16 fragments × 8192 B),
+  against `aplay`'s 5512 / 27560 (125 ms / 625 ms). That is the configuration `audio.c` actually gets, and it
+  agrees with the pump's `fragsize`. ⚠️ **It does not agree with the "~506 ms period" of gotcha 1 below**,
+  which was measured under a different setup and is flagged in `IMPROVEMENT_PLAN.md` F1 for resolution — do
+  not mix the two figures in one calculation.
 - **The two consumers attenuate differently:** the native synth pins a **peak of 18000**
   (`AMPLITUDE` / `STREAM_AMPLITUDE`, ≈55 % of full scale — a constant, not a shift); ScummVM does `>>1`
   post-mix (below). The summing is why ~50 % looked like about the right figure — two identical

@@ -713,7 +713,9 @@ exists to test. The tree-wide check is one grep, whose only legitimate hit is `a
 grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v arm-deps
 ```
 
-(`tests/ch_test.c` and `tests/oss_diag.c` also hit it — standalone OSS probes that use no `Audio` at all
-and are not in `build-and-deploy.sh`.)
+(`tests/ch_test.c`, `tests/oss_diag.c` and `tests/oss_play.c` also hit it — standalone OSS probes that use
+no `Audio` at all and are not in `build-and-deploy.sh`. `oss_play.c` plays a **WAV file** through the shipped
+write path, which is what lets an `aplay` A/B change only ALSA-vs-`/dev/dsp`, and `--dump` measures the byte
+stream we hand the kernel **on ARM** instead of on the host; build line in its header.)
 
 Open work and the phasing: [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1.

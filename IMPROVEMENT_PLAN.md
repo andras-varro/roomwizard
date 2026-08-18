@@ -237,7 +237,7 @@ markdownlint's `MD051`. The state lives here instead, where updating it costs no
 | 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 3 | the mix bus, as an optional per-frame pump | ⚠️ **BUILT, host-green, DEPLOYED, and its OWN goals look met — two tones heard as two, crackling gone. Not closed: a third defect turned out NOT to be a mixing defect at all — one voice distorts, and the mix bus is measured innocent** (2026-08-16) |
-| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next — **and now the candidate fix for defect 3**, not a tidy-up |
+| 4 | rebuild `audio.c`'s device half on tinyalsa | open, next — for the **latency** (139 ms of lead → 23 ms) and to stop building on a deprecated emulation; ⚠️ **not** defect 3's fix, see defect 3 |
 | 5 | ScummVM's `alsa-mixer.cpp` | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 6 | the docs and the comments this makes stale | open |
 
@@ -300,7 +300,7 @@ so far:
 | 2 | `audio_success()` is an arpeggio, not a chord | ❌ **no — it is "a distortion"** by ear, `PUMP: ON` / `KEEP: ON` / `LIMIT: SOFT`, 2026-08-16. SUCCESS and FAIL fired close together distort too. **Reported by ear only, operator's own words** — see defect 3 |
 | 3 | is the summed clamp audible | ❌ **the limiter is EXONERATED, measured.** One voice at `AUDIO_PEAK` passes `audio_mix_limit()` **byte-identical** (its knee *is* `AUDIO_PEAK`), and a single voice already distorts — so `HARD` vs `SOFT` sounding alike is the expected result, not a wiring fault. See defect 3 |
 | 4 | the ~60 ms rule, three walks | ✅ **PUMP off: unchanged · PUMP on, keepalive OFF: still ~60 ms · PUMP on, keepalive ON: 5 ms audible, 20 ms recognisable.** A property of **restarting the stream**, not of `SNDCTL_DSP_RESET` — [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 6 |
-| 5 | CPU% while mixing | ⏳ **still unmeasured** — `top -b -n 2 \| grep audio_mix_test` from a second shell while a drone runs. Two panel sessions have now missed it; it needs no operator, only a shell open at the same time |
+| 5 | CPU% while mixing | ✅ **the pump costs LESS than the path it replaces** — `tests/oss_play.c --mode=pump` runs the production pump arithmetic against a 24 s file and measures **0.5–0.9 %**, where the same file through today's whole-buffer write costs **3.3–3.7 %**: `WPOL_TONE` retries every 5 ms while the pump wakes once per render frame. Measured `.188` 2026-08-17 with `top -b -n 4`. A **floor** for a real app, which adds its own drawing |
 | 6 | does the ~50 % attenuation belong on the **synth** or on all output | ⚠️ **answered as a LEVEL question, and the answer is that `AUDIO_PEAK` is too high.** A pure sine at peak 6000 is clean on this speaker and at 18000 it is not ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), so the peak comes down regardless of where mixing headroom ends up. What is still open is the **loudness cost**: a lone beep at a lower peak is quieter, so the choice is a voice-count-dependent gain, a `sqrt` law, or a smaller `AUDIO_MAX_VOICES` |
 
 **Two defects were found by ear and both are fixed in the tree; the second fix has NOT been heard yet.**
@@ -343,12 +343,57 @@ the vendor's `aplay` (ALSA direct, **no `/dev/dsp`**) and comparing with the sam
 | sine, peak 18000, ONE voice | the app, via `/dev/dsp` | ❌ *"absolutely not sine"*, matched a **square** on a signal generator |
 
 **Half of it is a device fact and lives in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio):
-`AUDIO_PEAK` 18000 is past what this speaker takes cleanly.** The other half is ours — the same tone at
-the same peak is *mildly* noisy through ALSA and a *full square* through the OSS shim, so something in that
-path makes it much worse. ⚠️ **It survived a 20 dB cut at `DAC1 Digital Fine Playback Volume` with the
-timbre IDENTICAL and only the loudness changed**; that control sits after our samples and before the DAC,
-so the corruption is upstream of it. Phase 4 replaces precisely that path, which promotes it from tidy-up
-to candidate fix.
+`AUDIO_PEAK` 18000 is past what this speaker takes cleanly.** ⚠️ **The other half — "the OSS path makes it
+far worse" — is REFUTED, and the last row above is what a confounded comparison looks like.** It changed two
+things at once: the `aplay` side played a *file* and the app side played our *synth*. `tests/oss_play.c`
+plays **the same file** through the shipped write path (`audio_interleave()` + `audio_write_frames()`, with
+`configure_dsp()`'s ioctl order), so only ALSA-versus-`/dev/dsp` differs — and the two are
+**indistinguishable by ear**, two pairs back to back at a peak inside the clean zone (`.188` 2026-08-17,
+operator at the panel). Every software mechanism is dead by measurement, none of it ear-only:
+
+- **What we hand the kernel is a clean sine, measured ON ARM** rather than on the host: `oss_play --dump`
+  sends the byte stream to a file instead of the device and `--tone=` renders it through the production
+  `audio_render_tone()`. **THD 0.0 %**, every harmonic ≤ −72 dB, at 220 and 440 Hz and at peaks 6000 and
+  18000. The instrument was validated against a real square first — 42.9 %, odd harmonics only, within
+  0.5 dB of theory — so the 0.0 % is not a blind gate.
+- **No XRUNs on either path or either pacing**, polling `/proc/asound/card0/pcm0p/sub0/status` at ~170 Hz:
+  `aplay` 0, our whole-buffer write 0, the pump's pacing 0 with `starve=0 lost=0` and the lead sitting at
+  exactly `AUDIO_PUMP_LEAD_PERIODS` periods. ⚠️ **An XRUN under the shim is invisible to us** —
+  `pcm_oss.c:1296-1306` calls `snd_pcm_oss_prepare()` and retries, returning no error — so `/proc` is the
+  only window and a `write()` return code will never show one.
+- **The granted format really is `S16_LE`** (`SOUND_PCM_READ_BITS` → `0x10`), so `audio.c:85`'s missing
+  read-back is a latent hole, not this cause.
+- **The shim converts nothing when the parameters match**, so it has no stage that could reshape a
+  waveform: [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio).
+
+⚠️ **Two consequences.** Phase 4 is **not** defect 3's fix — its case is back to what it always was, 139 ms
+of lead down to 23 ms and not building on a deprecated emulation. And the 20 dB `DAC1 Digital Fine` cut that
+left the timbre unchanged (`.188` 2026-08-16) **localises nothing**: it was read as "the corruption is
+upstream of the DAC", and a controlled comparison finds no corruption to localise.
+
+⏳ **Two OSS buffer figures in this repo disagree, and one of them is in a comment that reasons from it.**
+Measured `.188` 2026-08-17 with no `SNDCTL_DSP_SETFRAGMENT` — i.e. exactly what `audio.c` gets — the shim
+gives `period_size` **2048** frames (46.4 ms) and `buffer_size` **32768** (743 ms), which agrees with the
+pump's `fragsize` and **not** with the "~506 ms period" of
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) gotcha 1. ⚠️ Two comments reason from the wrong
+one: `audio.c:233` says a blocking `write()` stalls "for the full ALSA HW period (~506 ms)" — at a 46 ms
+period it would stall ~46 ms, so `O_NONBLOCK`'s justification needs re-deriving rather than assuming — and
+`audio.c:396` (repeated in `native_apps/CLAUDE.md`) prices the empty ring at "~506 ms" when it is 743 ms,
+which makes the lead argument *stronger*, not weaker. Resolve by re-measuring under both setups
+(`oss_diag.c` sets a fragment, `oss_play.c` does not) and correcting whichever is stale; the numbers above
+are only for the no-`SETFRAGMENT` case.
+
+⏳ **The live lead is an ONSET transient, and it is what a 60–300 ms game sound is made of.** Volunteered at
+the panel 2026-08-17 while judging the A/B: *"as always, the first sound started distorted, then cleaned out
+as the volume has decreased"*, with the four tones otherwise indistinguishable. If the first fraction of a
+second of any sound is dirty, then **every canned sound is entirely inside that window** while a 2–3 s test
+tone is mostly outside it — which would explain the whole defect without a mixing, generator or OSS fault,
+and it fits `audio_flush()` re-triggering `SNDCTL_DSP_RESET`'s ~50 ms DAC startup before *every* sound.
+⚠️ **It is not an AVLS** — there is no AGC or limiter on this codec's playback path and no external amp
+([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Three candidates remain, and the two tests
+that separate them need one listen each: a **10 s** tone (a device transient cleans up once and stays clean;
+listener adaptation returns on the next tone after a silence), and the level ladder **replayed in reverse
+order** — ⚠️ every ladder so far ran loud-to-quiet, which is the direction adaptation biases.
 
 ⚠️ **Fault 1 is now characterised, and the prescribed fix is the wrong SHAPE.** Measured `.188` 2026-08-17,
 by ear through `aplay`; the two ladders are in

@@ -427,6 +427,16 @@ group_c() {
 # Phase-3 design-rule bullets were verified at native_apps/CLAUDE.md → *Mixing*, receipted in group C
 # below, and deleted in favour of a pointer — which is where this file's present margin came from.
 # **The next addition needs a NEW way to pay; there is no queued one.**
+# ⚠️ 2026-08-17, second raise, deliberate and argued: SYSTEM_ANALYSIS.md 1900 → 1930 and
+# IMPROVEMENT_PLAN.md 1515 → 1545 (the figure is the measured
+# post-edit line count, not an estimate -- the first attempt at this comment guessed 1535 and the
+# gate caught it, which is the group working). F1 defect 3's "the OSS path corrupts it" cause was REFUTED by a
+# controlled A/B, and replacing a wrong cause with a measured refutation costs more lines than the
+# wrong version had — the same arithmetic as the 1500 → 1515 raise above, one fault later. The
+# SYSTEM_ANALYSIS.md half is four new device facts, one of which (there is no microphone and the
+# codec's loopbacks run capture → playback, so audio CANNOT be measured acoustically here) closes off
+# a whole class of future investigation and is worth its lines several times over. ⚠️ **Neither raise
+# leaves queued headroom: the next addition to either file pays by deleting.**
 # ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
 # paragraph rewrapped to 200 characters passes while getting longer, and a table split
 # across more rows fails while saying the same thing. The ~110-char wrap is a review
@@ -435,8 +445,8 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1900	SYSTEM_ANALYSIS.md
-1515	IMPROVEMENT_PLAN.md
+1930	SYSTEM_ANALYSIS.md
+1545	IMPROVEMENT_PLAN.md
 260	HARDWARE.md
 390	CLAUDE.md
 740	native_apps/CLAUDE.md
