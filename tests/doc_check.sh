@@ -323,7 +323,7 @@ SNDRV_PCM_VERSION	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 pcm.c:978	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 never a thread	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 targets a LEAD	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-no longer resets the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+resets no ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 cannot both own the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 1486	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md

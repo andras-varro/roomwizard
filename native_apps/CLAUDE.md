@@ -661,24 +661,31 @@ These rules, each of which is a way to get this wrong:
   the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds **up** (why
   three, and what a shorter lead sounds like: [§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5). ⚠️ **The lead
   is also the latency ceiling** — ~139 ms on the shim's 46 ms period, which F1 Phase 4's 23 ms buys back.
-- ⚠️ **The sum needs HEADROOM, and `AUDIO_PEAK` is an acoustic limit that is measured TOO HIGH.** Every voice
-  plays at 18000, ≈55 % of full scale, and a pure sine at that peak does **not** reproduce cleanly on this
-  speaker while the same sine at 6000 does ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) — measured through `aplay`,
-  so no code here is implicated). Three voices reach 54000 against 32767, and `audio_mix_limit()` is linear to
-  a knee at `AUDIO_PEAK` — which keeps **one voice byte-identical**, measured 4400 of 4400 samples — then
-  asymptotic to `AUDIO_MIX_CEIL` 26000. Bounded, so ⚠️ **`clipped` must read exactly 0**; `AUDIO_MIX_HARD`
-  keeps the old clamp for A/B. ⚠️ **But `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not
-  overflow, which the bounded curve guarantees. Read `lim` for whether the sum is being bent, and see
-  `../IMPROVEMENT_PLAN.md` F1 defect 3 for the five suspects that measurement has already killed.
-- ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it — 0 under
-  the soft limiter), `lim` (the knee bent it — expected, not a fault), `starve` (the ring was dry with audio
-  still owed: **one audible gap each, and it attributes crackle to pacing rather than to mixing**), `lost`
-  (frames rendered, voices advanced, device refused them), `drop` (a full bus). Read them before theorising:
-  two plausible suspects have already been refuted by exactly these numbers.
-- ⚠️ **It is opt-in, and an app that never enables it takes today's path byte for byte.** `audio_tone()`
-  branches on `audio->pumping`; it does **not** "enqueue and also write immediately", which cannot work — a
-  bounded immediate write truncates any tone longer than the lead, and an unbounded one hands the whole tone
-  to the kernel, which is what makes it unmixable.
+- ⚠️ **The level is `Audio::MixerImpl`'s, and its TWO knobs do different jobs.** A voice's loudness is a
+  *fraction* of full scale — `audio_voice_peak(vol)`, ScummVM's `out = (in * vol) / 256` — and
+  `AUDIO_PEAK` is derived from `AUDIO_VOICE_VOL`, not a second place to set it. **`vol` is HEADROOM**:
+  `n` voices reach the int16 clamp when `n * vol > AUDIO_VOL_UNITY`. **`AUDIO_MASTER_SHIFT` is this
+  SPEAKER'S ceiling**, spent once per device in `audio_out` — the same `>>1` ScummVM applies before
+  `write()`, and `audio_attenuate()` is the one implementation, called by the pre-continuous path too so
+  the CONT toggle changes the architecture and not the loudness. ⚠️ **They are not interchangeable
+  even though they cancel acoustically**: the shift divides after the clamp has decided what survives,
+  so at a fixed acoustic level a lower `vol` with a smaller shift has strictly more headroom. Set them
+  with `audio_set_volume()` / `audio_set_master_shift()`; a lone sine's clean peak on this speaker is
+  measured, and 18000 is a near-square ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
+- ⚠️ **The bus CLAMPS by default (`clampedAdd`), and the soft knee is the A/B.** `AUDIO_MIX_HARD` is what
+  `audio_mix_init()` sets, because that is the chain measured to sound right; `AUDIO_MIX_SOFT` is this
+  repo's own knee and stays reachable on the panel's `LIM` pad. ⚠️ **A knee is only correct while it
+  tracks the voice amplitude** — one voice must pass byte-identical, so every volume change re-derives it
+  (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
+  `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which the bounded
+  curve guarantees by construction. Read `lim` for whether the sum is being bent, and
+  `../IMPROVEMENT_PLAN.md` F1 for the mechanisms measurement has already killed.
+- ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
+  (the knee bent it — expected under SOFT, not a fault), `starve` (the ring was dry with audio still owed:
+  **one audible gap each, pacing not mixing**), `lost` (refused after render), `drop` (full bus). Read them.
+- ⚠️ **It is opt-in: an app that never enables it takes the pre-continuous path.** `audio_tone()` BRANCHES on
+  `audio->pumping` — it does not "enqueue and also write", which cannot work: a bounded immediate write
+  truncates any tone longer than the lead, an unbounded one hands the whole tone to the kernel unmixably.
 - ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** The lead is three device periods —
   ~139 ms at 44100, and worth only ~79 ms of real audio because `GETOSPACE` over-reports — so a loop
   dropping to `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves it and you hear a gap, which reads as a
@@ -688,14 +695,13 @@ These rules, each of which is a way to get this wrong:
 - ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty OSS ring is 32768 frames —
   **743 ms** at 44100, not the ~506 ms an earlier revision claimed — and it will accept every one of them,
   after which the next sound plays three quarters of a second late.
-- **A voice carries a `delay`, and `audio_success()` depends on it.** Three voices added at once are a
-  *chord*; the four canned sounds are four note tables and one sequencer that offsets each note by the ones
-  before it. `audio_interrupt()` on the pump means "stop all voices" and no longer resets the ring, so a
-  lead's worth of tail survives it.
-- ⚠️ **`audio_tone()` on the bus defaults its delay to a TAIL, and today that tail is the whole bus** —
-  so a long voice makes every later tone queue behind it instead of mixing. The ~23
-  `audio_interrupt(); audio_tone();` sites are unaffected, because the interrupt leaves the tail at 0.
-  Open, with the fix: `../IMPROVEMENT_PLAN.md` F1.
+- **A voice carries a `delay`, and `audio_success()` depends on it**: simultaneous voices are a *chord*, and
+  the canned sounds are note tables plus one sequencer. `audio_interrupt()` resets no ring — a tail survives it.
+- ⚠️ **`audio_tone()` defaults its delay to the tail of the PRECEDING TONE, never the bus's.**
+  `audio_mix_voice_pending()` names one voice by (slot, generation) — a slot alone does not, because
+  slots are reused within a call. Taking it from `audio_mix_pending()` instead made one 3 s drone
+  serialise every later tap behind it, which is mixing turned into a queue. The ~23
+  `audio_interrupt(); audio_tone();` sites are unaffected: the interrupt leaves the tail at 0.
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
 - **`WPOL_PUMP` is a fifth *policy*, not a fifth loop.** Same rule as the four above it.
@@ -703,14 +709,15 @@ These rules, each of which is a way to get this wrong:
   the pump is on rather than letting two writers interleave frames into one device.
 
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
-**counts** — `audio_pump_clipped()`. Two loud voices exceed int16 by ~10 %; whether that is audible is a
-panel question, not one to invent a gain for. `tests/audio_mix_test.c` is the interactive tool for the panel
-questions, and its **CONT and PUMP toggles put the older path on the same screen as the negative control**
-— which is the only reason a claim like "the click is gone" can be checked rather than believed.
+**counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
+questions, and its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one
+under test** — which is the only reason a claim like "the click is gone" can be checked rather than
+believed. ⚠️ Its level ladder starts on the QUIETEST rung and wraps: a walk run loud-to-quiet biases
+adaptation, and "can you hear it" is a different question from "is it clean".
 ⚠️ **The ~60 ms minimum-tone rule is answered and it is not a code constant**: it is the start-of-stream
-pop, so a continuously fed stream drops the audible floor to ~5 ms and five `brick_breaker` tones that
-have never been heard start sounding ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)
-gotcha 6). Nothing in the tree clamps it; do not reintroduce prose that says 60 ms is a minimum.
+pop, so a continuous feed drops the audible floor to ~5 ms and five `brick_breaker` tones nobody has heard
+start sounding ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)). Nothing clamps it; do not reintroduce prose
+saying 60 ms is a minimum.
 
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used
 to `memset` one, set three fields — `dsp_fd`, `available`, `sample_rate` — and open `/dev/dsp`, the three
