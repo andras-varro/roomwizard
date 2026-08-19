@@ -146,14 +146,11 @@ static void derive_geometry(AudioOut *out, const AudioOutSpace *sp)
                              sp->ring_frames);
 }
 
-/** Attenuate in place, post-fill, immediately before the write.  An arithmetic
- *  shift on signed int16: exact −6 dB per step, no rounding, and `-1 >> 1 == -1`
- *  so `shift = 0` and ScummVM's `>>1` are both bit-identical to what shipped. */
+/** The device attenuation stage — see audio_attenuate() in audio_gen.c, which is
+ *  the one implementation of it and the reason a shift rather than a multiply. */
 static void attenuate(int16_t *buf, long samples, int shift)
 {
-    if (shift <= 0) return;
-    for (long i = 0; i < samples; i++)
-        buf[i] = (int16_t)(buf[i] >> shift);
+    audio_attenuate(buf, samples, shift);
 }
 
 /** One write of `frames` interleaved frames under `pol`, with the two faults

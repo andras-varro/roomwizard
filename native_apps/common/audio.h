@@ -83,6 +83,20 @@ typedef struct {
     AudioOut out;             /**< the one never-reset stream; valid iff cont      */
     bool     cont;            /**< the continuous stream owns the device           */
     bool     osc_stream;      /**< the theremin owns the fill callback             */
+    /* ── the level, and it is TWO knobs doing different jobs (audio_gen.h) ── */
+    int      vol;             /**< per-voice volume, 0..AUDIO_VOL_UNITY.  Every
+                               *   tone, voice and theremin amplitude derives from
+                               *   it through audio_voice_peak(), so there is one
+                               *   place to change how loud this process is        */
+    int      master_shift;    /**< the device stage, applied by audio_out on the
+                               *   continuous path and by write_mono() on the old
+                               *   one — BOTH, so the CONT toggle changes the path
+                               *   and not the loudness                            */
+    int      last_tone_slot;  /**< the voice audio_tone() added last, and its
+                               *   generation.  ⚠️ A later tone queues behind THIS
+                               *   voice's tail, never behind the whole bus's:
+                               *   see audio_mix_voice_pending()                    */
+    uint32_t last_tone_gen;
 } Audio;
 
 /**
@@ -240,9 +254,40 @@ uint32_t audio_pump_lost(const Audio *audio);
 long audio_pump_lead(const Audio *audio);
 long audio_pump_period(const Audio *audio);
 
-/** Choose how the summed bus leaves the mixer: AUDIO_MIX_SOFT (default) or
- *  AUDIO_MIX_HARD, the pre-limiter clamp, kept so a panel can A/B them. */
+/** Choose how the summed bus leaves the mixer: AUDIO_MIX_HARD (the default, and
+ *  ScummVM's saturating add) or AUDIO_MIX_SOFT, this repo's knee, kept so a panel
+ *  can A/B them. */
 void audio_pump_set_limit(Audio *audio, int mode);
+
+/**
+ * The per-voice volume, 0..AUDIO_VOL_UNITY — how loud this process is, as a
+ * fraction of full scale.
+ *
+ * ⚠️ **This is the HEADROOM knob and `audio_set_master_shift()` is the speaker
+ * knob; they cancel acoustically but are not interchangeable.** `n` voices reach
+ * the clamp when `n * vol > AUDIO_VOL_UNITY`, so halving the volume buys twice
+ * the polyphony while halving the shift buys none.  Setting the volume also
+ * re-derives the soft knee, without which a lone tone would be bent by a limiter
+ * still knee'd at a louder amplitude.
+ *
+ * ⚠️ Takes effect on voices added AFTER it: a sounding voice keeps the amplitude
+ * it was created with, which is what stops a ladder pad from stepping the tone
+ * it is being judged on.  `audio_get_volume()` reads it back for a log line —
+ * from the library, never from a pad's label.
+ */
+void audio_set_volume(Audio *audio, int vol);
+int  audio_get_volume(const Audio *audio);
+
+/**
+ * The device attenuation stage, in bits — `1` is ScummVM's `>>1`.
+ *
+ * Applied on BOTH paths (`audio_out` on the continuous one, `write_mono()` on the
+ * pre-continuous one) so the CONT toggle is a comparison of *architectures* at
+ * one loudness. ⚠️ An arithmetic shift, never a multiply: `audio_attenuate()`
+ * carries the reason.
+ */
+void audio_set_master_shift(Audio *audio, int shift);
+int  audio_get_master_shift(const Audio *audio);
 
 /** Sounds refused because all AUDIO_MAX_VOICES slots were busy.  A full bus
  *  never steals a playing voice; see audio_gen.h. */

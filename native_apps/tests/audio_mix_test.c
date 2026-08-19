@@ -179,10 +179,38 @@ static void open_log(void)
 /* ── pads ────────────────────────────────────────────────────────────────── */
 
 typedef enum {
-    ACT_CONT, ACT_PUMP, ACT_KEEPALIVE, ACT_LIMIT, ACT_STOP,
+    ACT_CONT, ACT_PUMP, ACT_KEEPALIVE, ACT_LIMIT, ACT_LEVEL, ACT_STOP,
     ACT_TONE,                       /* uses freq/ms */
     ACT_BEEP, ACT_BLIP, ACT_SUCCESS, ACT_FAIL, ACT_CHORD
 } Action;
+
+/* ── the level ladder ─────────────────────────────────────────────────────────
+ *
+ * ⚠️ **Quietest FIRST, and the tool starts on the quietest rung rather than on the
+ * shipped default.**  Every level ladder this project has walked so far ran
+ * loud-to-quiet, and that direction biases adaptation: after a distorted rung a
+ * clean one sounds *quiet*, and after a clean one a distorted rung sounds *loud*.
+ * Starting at the bottom makes the honest direction the only one the pad offers.
+ *
+ * ⚠️ **Two SEPARATE questions per rung — "can you hear it?" and "is it clean?"**
+ * Conflating them has already cost a session: *"all work"* was read as *"all
+ * clean"* and a whole discriminator was built on it (`tests/CLAUDE.md`).
+ *
+ * The volume is the only thing that moves.  The master shift stays at ScummVM's
+ * `>>1` — it is the DEVICE stage, one per speaker, and moving both at once would
+ * make the walk a two-variable comparison.  The acoustic peak in the label is
+ * `peak >> shift`, i.e. what actually reaches the amplifier.
+ */
+typedef struct { int vol; const char *note; } LevelRung;
+static const LevelRung ladder[] = {
+    {  24, "quietest"  },
+    {  48, ""          },
+    {  96, "default"   },   /* AUDIO_VOICE_VOL — one voice at the measured-clean 6144 */
+    { 144, ""          },
+    { 192, "ScummVM"   },   /* MixerImpl's own default arithmetic, then >>1 */
+    { 256, "full"      },
+};
+#define LADDER_RUNGS ((int)(sizeof(ladder) / sizeof(ladder[0])))
 
 typedef struct {
     Button btn;
@@ -191,7 +219,7 @@ typedef struct {
     int    ms;
 } Pad;
 
-#define MAX_PADS 24
+#define MAX_PADS 26
 static Pad  pads[MAX_PADS];
 static int  pad_count = 0;
 
@@ -229,6 +257,8 @@ typedef struct {
     bool pump;
     bool keepalive;
     bool hard;              /* LIMIT toggle: true = the pre-limiter hard clamp */
+    int  rung;              /* index into `ladder` — the LEVEL under test.  Starts
+                             * at 0, the quietest, so the walk runs upwards       */
     int  voices;
     uint32_t clipped;
     uint32_t limited;
@@ -250,7 +280,8 @@ typedef struct {
 #define READOUT_MS  250
 
 static void set_toggle_labels(Pad *cont_pad, Pad *pump_pad, Pad *keep_pad,
-                              Pad *limit_pad, const View *v)
+                              Pad *limit_pad, Pad *level_pad, const Audio *audio,
+                              const View *v)
 {
     char t[32];
 
@@ -297,6 +328,19 @@ static void set_toggle_labels(Pad *cont_pad, Pad *pump_pad, Pad *keep_pad,
     button_set_text(&limit_pad->btn, t);
     button_set_colors(&limit_pad->btn,
                       v->hard ? BTN_COLOR_DANGER : BTN_COLOR_PRIMARY,
+                      COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+
+    /* ⚠️ The rung number comes from the tool, but the VOLUME comes from the
+     * library — `audio_get_volume()`, not `ladder[rung].vol`.  A pad that printed
+     * its own intention would have shown a level the library had clamped or
+     * refused, and this file has already paid for a label that disagreed with the
+     * device (the PUMP position that could not be diagnosed).  Six pads in the row
+     * now, so the text stays inside a 112 px cell at the 48 px inset cap. */
+    snprintf(t, sizeof(t), "LVL %d/%d", v->rung + 1, LADDER_RUNGS);
+    button_set_text(&level_pad->btn, t);
+    button_set_colors(&level_pad->btn,
+                      (audio_get_volume(audio) >= AUDIO_VOICE_VOL) ? BTN_COLOR_DANGER
+                                                                   : BTN_COLOR_INFO,
                       COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 }
 
@@ -407,18 +451,20 @@ int main(int argc, char *argv[])
     int gap = 6;
 
     y = SCREEN_SAFE_TOP + 72;
-    /* Five pads now, and CONT is first because it is the OUTER switch: it decides
-     * which device half is open, and the other three describe what is done with it. */
-    row_geom(5, 0, gap, &x, &w);
+    /* Six pads now, and CONT is first because it is the OUTER switch: it decides
+     * which device half is open, and the others describe what is done with it. */
+    row_geom(6, 0, gap, &x, &w);
     Pad *cont_pad = pad_add(ACT_CONT,      "CONT: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
-    row_geom(5, 1, gap, &x, &w);
+    row_geom(6, 1, gap, &x, &w);
     Pad *pump_pad = pad_add(ACT_PUMP,      "PUMP: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
-    row_geom(5, 2, gap, &x, &w);
+    row_geom(6, 2, gap, &x, &w);
     Pad *keep_pad = pad_add(ACT_KEEPALIVE, "KEEP: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
-    row_geom(5, 3, gap, &x, &w);
+    row_geom(6, 3, gap, &x, &w);
     Pad *limit_pad = pad_add(ACT_LIMIT,    "LIM: SOFT",   x, y, w, 54, BTN_COLOR_PRIMARY, 2);
-    row_geom(5, 4, gap, &x, &w);
-    pad_add(ACT_STOP, "STOP ALL", x, y, w, 54, BTN_COLOR_DANGER, 2);
+    row_geom(6, 4, gap, &x, &w);
+    Pad *level_pad = pad_add(ACT_LEVEL,    "LVL 1/6",     x, y, w, 54, BTN_COLOR_INFO, 2);
+    row_geom(6, 5, gap, &x, &w);
+    pad_add(ACT_STOP, "STOP", x, y, w, 54, BTN_COLOR_DANGER, 2);
 
     y = SCREEN_SAFE_TOP + 140;
     /* ⚠️ Two SUSTAINED tones, because defect 3's decisive question is about
@@ -460,7 +506,11 @@ int main(int argc, char *argv[])
 
     View v; memset(&v, 0, sizeof(v));
     snprintf(v.last, sizeof(v.last), "CONT OFF = the per-sound-reset path");
-    set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+    /* ⚠️ Start on the QUIETEST rung, not on the shipped default: the walk has to
+     * run quiet-to-loud, and a tool that begins in the middle cannot enforce it. */
+    v.rung = 0;
+    audio_set_volume(&audio, ladder[0].vol);
+    set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
 
     bool needs_redraw = true;
     uint32_t last_readout = 0;
@@ -507,7 +557,7 @@ int main(int argc, char *argv[])
              * `gapmax` on the same line. */
             fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d cont=%d "
                             "svc_us=%ld pump_label=%d "
-                            "pump_active=%d keepalive=%d limit=%s voices=%d "
+                            "pump_active=%d keepalive=%d limit=%s vol=%d shift=%d acoustic=%d voices=%d "
                             "clip=%lu lim=%lu starve=%lu lost=%lu drop=%lu "
                             "gapmax=%lu lead=%ldfr/%ldms period=%ldfr\n",
                     (int)p->act, p->btn.text, p->freq, p->ms,
@@ -515,6 +565,9 @@ int main(int argc, char *argv[])
                     audio_cont_service_interval_us(&audio),
                     (int)v.pump, (int)audio_pump_active(&audio),
                     (int)v.keepalive, v.hard ? "hard" : "soft",
+                    audio_get_volume(&audio), audio_get_master_shift(&audio),
+                    audio_voice_peak(audio_get_volume(&audio))
+                        >> audio_get_master_shift(&audio),
                     audio_pump_voices(&audio),
                     (unsigned long)audio_pump_clipped(&audio),
                     (unsigned long)audio_pump_limited(&audio),
@@ -551,7 +604,7 @@ int main(int argc, char *argv[])
                     if (audio_cont_enable(&audio, false) != 0) {
                         v.cont = false;
                         snprintf(v.last, sizeof(v.last), "CONT off FAILED - no device");
-                        set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+                        set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
                         break;
                     }
                     v.cont = false;
@@ -565,7 +618,7 @@ int main(int argc, char *argv[])
                     audio_pump_set_keepalive(&audio, v.keepalive);
                     snprintf(v.last, sizeof(v.last), "CONT off: per-sound reset back");
                 }
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
                 break;
             case ACT_PUMP:
                 if (v.cont) {
@@ -586,7 +639,7 @@ int main(int argc, char *argv[])
                  * the others.  prev_now too, or the gap ACROSS this tap becomes
                  * the new worst frame. */
                 if (v.pump) { v.max_gap = 0; prev_now = 0; }
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
                 snprintf(v.last, sizeof(v.last), "pump %s", v.pump ? "on" : "off");
                 break;
             case ACT_KEEPALIVE:
@@ -598,7 +651,7 @@ int main(int argc, char *argv[])
                 }
                 v.keepalive = !v.keepalive;
                 audio_pump_set_keepalive(&audio, v.keepalive);
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
                 snprintf(v.last, sizeof(v.last), "keepalive %s",
                          v.keepalive ? "on (silence written)" : "off");
                 break;
@@ -608,10 +661,28 @@ int main(int argc, char *argv[])
                  * on a loud one — which is the comparison worth hearing. */
                 v.hard = !v.hard;
                 audio_pump_set_limit(&audio, v.hard ? AUDIO_MIX_HARD : AUDIO_MIX_SOFT);
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, &v);
+                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
                 snprintf(v.last, sizeof(v.last), "limit %s",
                          v.hard ? "HARD (clamp at int16)" : "soft (knee 18000)");
                 break;
+            case ACT_LEVEL: {
+                /* ⚠️ Wraps back to the QUIETEST rather than reversing, so a second
+                 * pass runs in the same direction as the first — a ladder walked up
+                 * and then down is two different listening tasks, and the second one
+                 * is the biased one this pad exists to avoid. */
+                v.rung = (v.rung + 1) % LADDER_RUNGS;
+                audio_set_volume(&audio, ladder[v.rung].vol);
+                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad,
+                                  &audio, &v);
+                /* The acoustic peak — after the device shift — is the number the ear
+                 * is judging, and it is read back from the library. */
+                int vol   = audio_get_volume(&audio);
+                int shift = audio_get_master_shift(&audio);
+                snprintf(v.last, sizeof(v.last), "vol %d peak %d%s%s",
+                         vol, audio_voice_peak(vol) >> shift,
+                         ladder[v.rung].note[0] ? " " : "", ladder[v.rung].note);
+                break;
+            }
             case ACT_STOP:
                 audio_interrupt(&audio);
                 snprintf(v.last, sizeof(v.last), "interrupt: all voices stopped");

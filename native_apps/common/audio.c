@@ -179,6 +179,11 @@ static long write_mono(Audio *audio, const int16_t *mono, long frames,
         return -1;
     }
 
+    /* ⚠️ The SAME device stage the continuous path gets, immediately before the
+     * write and after the interleave — otherwise the CONT toggle changes the
+     * loudness as well as the architecture and its A/B answers neither. */
+    audio_attenuate(ilv, frames * (long)audio->channels, audio->master_shift);
+
     AudioSink sink = { dsp_write, dsp_wait, audio };
     AudioWriteResult res;
     audio_write_frames(&sink, ilv, frames, audio->channels, pol, &res);
@@ -254,6 +259,17 @@ static int dsp_reopen(Audio *audio)
     return 0;
 }
 
+/** The level defaults, in one place because three entry points memset this
+ *  struct and a zeroed `vol` is SILENCE while a zeroed `master_shift` is twice
+ *  the intended loudness — two different silent failures from one omission. */
+static void level_defaults(Audio *audio)
+{
+    audio->vol            = AUDIO_VOICE_VOL;
+    audio->master_shift   = AUDIO_MASTER_SHIFT;
+    audio->last_tone_slot = -1;
+    audio->last_tone_gen  = 0;
+}
+
 /** Everything both entry points do: amp on, open, configure, read back. */
 static int audio_open(Audio *audio)
 {
@@ -263,6 +279,7 @@ static int audio_open(Audio *audio)
     audio->sample_rate = TARGET_RATE;
     audio->channels    = FALLBACK_CHANNELS;
     audio->streaming   = false;
+    level_defaults(audio);
 
     return dsp_reopen(audio);
 }
@@ -338,6 +355,12 @@ static void bus_reset(Audio *audio)
     int keep_limit = audio->mix.limit;
     audio_mix_init(&audio->mix, audio->sample_rate);
     audio_mix_set_limit(&audio->mix, keep_limit);
+    /* ⚠️ The knee follows the VOLUME, and a fresh bus would otherwise carry
+     * audio_gen.h's default while the voices are quieter — a limiter knee'd
+     * above one voice is inert, below it bends a lone tone. */
+    audio_mix_set_knee(&audio->mix, audio_voice_peak(audio->vol));
+    audio->last_tone_slot = -1;
+    audio->last_tone_gen  = 0;
     audio->pump_starved = 0;
     audio->pump_lost    = 0;
     audio->pump_diag    = 40;
@@ -413,6 +436,33 @@ void audio_pump_set_limit(Audio *audio, int mode)
 {
     if (audio) audio_mix_set_limit(&audio->mix, mode);
 }
+
+void audio_set_volume(Audio *audio, int vol)
+{
+    if (!audio) return;
+    if (vol < 1)               vol = 1;
+    if (vol > AUDIO_VOL_UNITY) vol = AUDIO_VOL_UNITY;
+    audio->vol = vol;
+    /* The knee's whole job is that ONE voice passes unchanged, so it moves with
+     * the amplitude rather than being a constant beside it. */
+    audio_mix_set_knee(&audio->mix, audio_voice_peak(vol));
+}
+
+int audio_get_volume(const Audio *audio) { return audio ? audio->vol : 0; }
+
+void audio_set_master_shift(Audio *audio, int shift)
+{
+    if (!audio) return;
+    if (shift < 0)  shift = 0;
+    if (shift > 15) shift = 15;
+    audio->master_shift = shift;
+    /* ⚠️ Both paths, from one field.  audio_out holds its own copy because
+     * ScummVM sets it without an `Audio` at all; this keeps them equal whenever
+     * the stream is the live half. */
+    if (audio->cont) audio_out_set_shift(&audio->out, shift);
+}
+
+int audio_get_master_shift(const Audio *audio) { return audio ? audio->master_shift : 0; }
 
 /** Scratch for one pump call, allocated once and kept.  The pump runs every
  *  frame, so a malloc/free pair per call is the one allocation in this library
@@ -498,6 +548,7 @@ int audio_cont_enable(Audio *audio, bool on)
         audio->osc_stream  = false;
 
         bus_reset(audio);              /* CONT implies PUMP — see audio.h */
+        audio_out_set_shift(&audio->out, audio->master_shift);
         audio_out_set_fill(&audio->out, cont_fill_mix, audio, "mix bus");
         return 0;
     }
@@ -669,22 +720,35 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
      * audio_pump_enable() takes today's path byte for byte, which is a stronger
      * guarantee than "degrades gracefully". */
     if (audio->pumping) {
-        /* ⚠️ **The delay defaults to the CURRENT TAIL, not to 0.**  It is the
-         * kernel ring that serialises two back-to-back audio_tone() calls today,
-         * and a mix bus will not: `tetris.c:620-621`, `tetris.c:714-715` and
-         * `snake.c:317-318` play two notes with no audio_interrupt() between them,
-         * so at delay 0 all three turn from two-note motifs into DYADS.
-         * `AudioVoice.delay` already exists for exactly this — it is what makes
-         * audio_success() an arpeggio rather than a chord.
+        /* ⚠️ **The delay defaults to the tail of the PRECEDING TONE**, not to 0
+         * and not to the whole bus's.  It is the kernel ring that serialises two
+         * back-to-back audio_tone() calls today, and a mix bus will not:
+         * `tetris.c:620-621`, `tetris.c:714-715` and `snake.c:317-318` play two
+         * notes with no audio_interrupt() between them, so at delay 0 all three
+         * turn from two-note motifs into DYADS.  `AudioVoice.delay` already
+         * exists for exactly this — it is what makes audio_success() an arpeggio.
+         *
+         * ⚠️ And it must NOT be `audio_mix_pending()`: that is the worst voice on
+         * the whole bus, so one 3 s drone pushed six later taps behind it on the
+         * panel — mixing turned into a queue.  audio_mix_voice_pending() names one
+         * voice by (slot, generation), so a freed or reused slot reads 0 rather
+         * than borrowing whatever moved in.
          *
          * The ~23 `audio_interrupt(); audio_tone();` sites are unaffected: the
          * interrupt stops every voice, so the tail it reads is 0 and the tone still
          * starts immediately.  That is the property that keeps "overlapping sounds
          * mix" from silently becoming "overlapping sounds queue". */
         long tail_ms = audio_ms_for_frames(audio->sample_rate,
-                                           audio_mix_pending(&audio->mix));
-        audio_mix_add(&audio->mix, freq_hz, duration_ms,
-                      (tail_ms > 0) ? (int)tail_ms : 0, AUDIO_PEAK);
+                                           audio_mix_voice_pending(&audio->mix,
+                                                                   audio->last_tone_slot,
+                                                                   audio->last_tone_gen));
+        int slot = audio_mix_add(&audio->mix, freq_hz, duration_ms,
+                                 (tail_ms > 0) ? (int)tail_ms : 0,
+                                 audio_voice_peak(audio->vol));
+        if (slot >= 0) {
+            audio->last_tone_slot = slot;
+            audio->last_tone_gen  = audio_mix_voice_gen(&audio->mix, slot);
+        }
         return;
     }
 
@@ -698,7 +762,7 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
     int16_t *mono = (int16_t *)malloc((size_t)frames * sizeof(int16_t));
     if (!mono) return;
 
-    audio_render_tone(audio->sample_rate, freq_hz, AUDIO_PEAK, mono, frames);
+    audio_render_tone(audio->sample_rate, freq_hz, audio_voice_peak(audio->vol), mono, frames);
     write_mono(audio, mono, frames, &WPOL_TONE, "tone");
     free(mono);
 
@@ -741,7 +805,7 @@ void audio_stream_start(Audio *audio, int freq_hz)
     /* One oscillator, amplitude 0 so it fades in.  No reset and no 200 ms prime of
      * its own: the stream was prefilled with silence at open and is never reset,
      * which is the whole point of it. */
-    audio_osc_init(&audio->osc, audio->sample_rate, (double)freq_hz, AUDIO_PEAK);
+    audio_osc_init(&audio->osc, audio->sample_rate, (double)freq_hz, audio_voice_peak(audio->vol));
     audio->streaming  = true;
     audio->osc_stream = true;
     audio_out_set_fill(&audio->out, cont_fill_osc, audio, "theremin");
@@ -835,7 +899,7 @@ static void play_sequence(Audio *audio, const AudioNote *notes, int count)
     if (audio->pumping) {
         int delay = 0;
         for (int i = 0; i < count; i++) {
-            audio_mix_add(&audio->mix, notes[i].freq, notes[i].ms, delay, AUDIO_PEAK);
+            audio_mix_add(&audio->mix, notes[i].freq, notes[i].ms, delay, audio_voice_peak(audio->vol));
             delay += notes[i].ms;
         }
         return;

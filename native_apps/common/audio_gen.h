@@ -35,10 +35,41 @@
 /** Bytes per sample: S16_LE everywhere, on both the OSS and the ALSA path. */
 #define AUDIO_BYTES_PER_SAMPLE   2
 
-/** Peak amplitude for synthesised waveforms (0–32767).
- *  ≈55 % of full scale.  The speaker SUMS L and R (measured), so two identical
- *  full-scale channels would drive it at double amplitude and distort. */
-#define AUDIO_PEAK               18000
+/** Full-scale sample magnitude, and the unity denominator of a voice volume.
+ *
+ *  ⚠️ **A voice's loudness is a FRACTION of full scale, not an absolute number**,
+ *  and that is `Audio::MixerImpl`'s shape rather than an invention here:
+ *  `scummvm/audio/rate.cpp:122` renders `out = (in * vol) / 256` with `vol`
+ *  composed from a global 0–256 and a per-channel 0–255
+ *  (`scummvm/audio/mixer.cpp:628-651`), sums with a saturating add, and leaves
+ *  ONE attenuation for the device stage.  That chain has driven this speaker
+ *  since 2026-08-03, which is why this library copies it instead of designing a
+ *  level law of its own. */
+#define AUDIO_FULL_SCALE         32767
+#define AUDIO_VOL_UNITY          256
+
+/** The two knobs, and they do DIFFERENT jobs — do not collapse them.
+ *
+ *  `AUDIO_VOICE_VOL` is HEADROOM: `n` voices reach the int16 clamp when
+ *  `n * vol > AUDIO_VOL_UNITY`, so 96 fits two and change, 64 fits four.
+ *  ⚠️ **The master shift is NOT headroom** — it divides the sum after the clamp
+ *  has already decided what survives, so lowering the volume and raising the
+ *  shift are not interchangeable even though they cancel acoustically.
+ *
+ *  `AUDIO_MASTER_SHIFT` is this SPEAKER'S CEILING, spent once per device in
+ *  `audio_out` — the same `>>1` `scummvm-roomwizard/backend-files/oss-mixer.cpp`
+ *  applies immediately before `write()`.  At 96 and 1 a lone voice reaches 6144
+ *  after it, which is the peak a 440 Hz sine is measured clean at here
+ *  (../SYSTEM_ANALYSIS.md#34-audio); 18000 was measured as a near-square.
+ *  ⚠️ Both are runtime-settable and the ladder pad on `tests/audio_mix_test` is
+ *  what chooses them — a constant here is a default, not a verdict. */
+#define AUDIO_VOICE_VOL          96
+#define AUDIO_MASTER_SHIFT       1
+
+/** Default per-voice amplitude before the master shift — derived, so the volume
+ *  above is the only place the level is decided.  Every call site that wants
+ *  "a normal tone" passes this; the runtime knob is `audio_set_volume()`. */
+#define AUDIO_PEAK               ((AUDIO_FULL_SCALE * AUDIO_VOICE_VOL) / AUDIO_VOL_UNITY)
 
 /** Longest tone this library will render.  A longer request is a caller bug:
  *  clamped here rather than overflowed, because `(long)rate * duration_ms` is a
@@ -112,22 +143,21 @@ long audio_pump_lead_frames(long lead_ms_frames, long period_frames,
 
 /** Where the summed bus stops being linear, and where it asymptotes.
  *
- * ⚠️ **The knee is `AUDIO_PEAK` exactly, and that is the load-bearing choice.**
- * One voice can never exceed it, so a single sound is BYTE-IDENTICAL through the
- * limiter — the property `audio_render_tone()` parity depends on.  Two voices
- * reach 36000 and three reach 54000, which is what a panel heard as *"a
- * distorted square wave from an overdriven amplifier"* (measured on `.188`
- * 2026-08-15, `clip` 15402) when the only thing above the knee was a hard clamp.
+ * ⚠️ **These bound the SOFT knee only, and SOFT is no longer the default** — the
+ * bus clamps like `Audio::MixerImpl` does (`clampedAdd`, `scummvm/audio/rate.cpp:127`),
+ * with no curve, because that is the chain measured to sound right on this
+ * speaker.  The knee stays reachable through `audio_mix_set_limit()` so the
+ * rejected shape is an A/B on the same panel rather than a claim.
  *
- * The ceiling is below 32767 on purpose: with the soft curve engaged the store
- * can no longer wrap, so **`clipped` must reach exactly 0** — that is the
- * negative control for this whole change, not a comfort margin.  It is also only
- * ~1.4× one voice, because `AUDIO_PEAK` is ≈55 % of full scale for an ACOUSTIC
- * reason (`SPKR1` sums L + R and distorts near full scale), so a limiter that
- * merely avoided int16 wrap by aiming at 32767 would still overdrive the
- * speaker. */
+ * ⚠️ **The knee TRACKS the voice amplitude and is not a constant** — one voice
+ * must be BYTE-IDENTICAL through the limiter (the property `audio_render_tone()`
+ * parity depends on), and the amplitude is now a runtime volume.  These two are
+ * therefore the defaults for `audio_mix_set_knee()`, which every volume change
+ * must re-derive; the ceiling keeps the measured 1.44× ratio to the knee, which
+ * is what makes the curve bounded BELOW full scale so `clipped` can reach
+ * exactly 0 under SOFT. */
 #define AUDIO_MIX_KNEE           AUDIO_PEAK
-#define AUDIO_MIX_CEIL           26000
+#define AUDIO_MIX_CEIL           (AUDIO_MIX_KNEE + AUDIO_MIX_KNEE * 44 / 100)
 
 /* ── Frame and byte arithmetic ───────────────────────────────────────────── */
 
@@ -300,15 +330,16 @@ void audio_write_frames(const AudioSink *sink, const void *buf, long frames,
  * the panel already hears while still mixing with everything else.
  */
 typedef struct {
-    bool   active;      /**< false = free slot                               */
-    double phase;       /**< radians, wrapped to [0, 2π)                     */
-    double phase_step;  /**< 2π · freq / rate                                */
-    int    peak;        /**< this voice's amplitude — the per-voice gain      */
-    long   delay;       /**< frames of silence still owed before it sounds    */
-    long   frames;      /**< total length                                    */
-    long   pos;         /**< frames sounded so far (0..frames)               */
-    long   attack;      /**< envelope, in frames — same curve as a plain tone */
-    long   release;
+    bool     active;      /**< false = free slot                               */
+    uint32_t gen;         /**< bumped on every add — see audio_mix_voice_gen() */
+    double   phase;       /**< radians, wrapped to [0, 2π)                     */
+    double   phase_step;  /**< 2π · freq / rate                                */
+    int      peak;        /**< this voice's amplitude — the per-voice gain      */
+    long     delay;       /**< frames of silence still owed before it sounds    */
+    long     frames;      /**< total length                                    */
+    long     pos;         /**< frames sounded so far (0..frames)               */
+    long     attack;      /**< envelope, in frames — same curve as a plain tone */
+    long     release;
 } AudioVoice;
 
 typedef struct {
@@ -318,18 +349,23 @@ typedef struct {
     uint32_t   clipped;  /**< samples the summed bus drove past int16 range   */
     uint32_t   limited;  /**< samples the soft knee had to bend              */
     int        limit;    /**< AudioMixLimit — how the sum leaves the bus      */
+    int        knee;     /**< SOFT's knee; 0 means AUDIO_MIX_KNEE            */
+    uint32_t   gen_seq;  /**< monotone, so a slot's identity survives reuse   */
 } AudioMixer;
 
 /**
  * What happens to a summed sample that is louder than one voice can be.
  *
- * `HARD` is what Phase 3 shipped and what the panel rejected; it stays reachable
- * because a fix with no negative control beside it is a claim, not a measurement
- * (`tests/audio_mix_test`'s LIMIT toggle is that control).
+ * ⚠️ **`HARD` is the DEFAULT now, and it is `clampedAdd`** — the saturating add
+ * `Audio::MixerImpl` has always used (`scummvm/audio/rate.cpp:127`).  `SOFT` is
+ * this repo's own knee, kept reachable because a rejected shape with no A/B
+ * beside it is a claim rather than a measurement (`tests/audio_mix_test`'s LIM
+ * toggle is that control).  ⚠️ Headroom is the VOLUME's job, not the limiter's:
+ * at `AUDIO_VOICE_VOL` 96 two voices fit under the clamp and three do not.
  */
 typedef enum {
-    AUDIO_MIX_SOFT = 0,  /**< linear to AUDIO_MIX_KNEE, then asymptotic to CEIL */
-    AUDIO_MIX_HARD = 1   /**< clamp at int16 — a square wave at three voices    */
+    AUDIO_MIX_SOFT = 0,  /**< linear to the knee, then asymptotic to 1.44× it   */
+    AUDIO_MIX_HARD = 1   /**< clamp at int16 — ScummVM's shape, the default     */
 } AudioMixLimit;
 
 /**
@@ -343,10 +379,42 @@ typedef enum {
  */
 int32_t audio_mix_limit(int32_t acc, int mode);
 
+/**
+ * The same map with the knee supplied, which is what the bus actually calls.
+ * `knee <= 0` falls back to `AUDIO_MIX_KNEE`.  The ceiling is derived from the
+ * knee at the measured 1.44× ratio rather than passed, so the two cannot be set
+ * inconsistently — a ceiling below its knee would invert the curve.
+ */
+int32_t audio_mix_limit_at(int32_t acc, int mode, int32_t knee);
+
+/** The amplitude a voice at `vol` renders at, before the master shift.
+ *  `(AUDIO_FULL_SCALE * vol) / AUDIO_VOL_UNITY`, clamped to 1..full scale —
+ *  `rate.cpp:122`'s arithmetic, integer and truncating like the original. */
+int  audio_voice_peak(int vol);
+
+/**
+ * Attenuate `samples` int16s in place by `shift` bits — the device stage, and
+ * the ONE implementation of it.  `audio_out` calls this immediately before every
+ * `write()` and the pre-continuous path calls it before its own, so both reach
+ * the speaker at the same level and an A/B between them changes only the path.
+ *
+ * ⚠️ **An arithmetic shift, never a gain multiply.** `-1 >> 1 == -1` and
+ * `shift == 0` is the identity, so this is bit-identical to what ScummVM has
+ * shipped since 2026-08-03; any rounding multiply changes bits and makes the
+ * adapter's output a new thing to re-verify by ear.
+ */
+void audio_attenuate(int16_t *buf, long samples, int shift);
+
 /** Choose the limiter.  Takes effect on the next rendered sample; it changes
  *  only samples ABOVE the knee, so switching it mid-tone cannot step a quiet
  *  one and the panel can A/B it while a drone is running. */
 void audio_mix_set_limit(AudioMixer *m, int mode);
+
+/** Set SOFT's knee, which every volume change must re-derive from
+ *  `audio_voice_peak()` — the knee's whole job is that ONE voice passes the
+ *  limiter unchanged, and a knee left at a stale amplitude bends a lone tone.
+ *  `knee <= 0` restores `AUDIO_MIX_KNEE`. */
+void audio_mix_set_knee(AudioMixer *m, int knee);
 
 /** Reset the bus to silence at `rate`.  Clears the diagnostics too. */
 void audio_mix_init(AudioMixer *m, int rate);
@@ -379,6 +447,23 @@ int  audio_mix_active(const AudioMixer *m);
  *  0 means there is nothing to render, which is how the pump knows to write
  *  nothing at all rather than a buffer of silence. */
 long audio_mix_pending(const AudioMixer *m);
+
+/** The generation stamp of the voice in `slot`, or 0 for an empty slot.
+ *  Slots are reused within the same call, so a slot number alone does not name a
+ *  voice; a caller that means "the one I just added" keeps the pair. */
+uint32_t audio_mix_voice_gen(const AudioMixer *m, int slot);
+
+/**
+ * Frames until ONE named voice falls silent — 0 if that slot is empty or now
+ * holds a different voice.
+ *
+ * ⚠️ **This exists because `audio_mix_pending()` is the wrong tail to queue
+ * behind.** Defaulting a tone's delay to the whole bus's worst voice makes a
+ * long one serialise every later sound behind it: a 3 s drone pushed six taps to
+ * the far side of it on the panel, which is the opposite of mixing.  The tail
+ * that keeps a two-note motif two notes is the tail of the PRECEDING TONE.
+ */
+long audio_mix_voice_pending(const AudioMixer *m, int slot, uint32_t gen);
 
 /**
  * Render and sum `frames` MONO samples, advancing every voice.  Returns the

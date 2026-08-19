@@ -247,7 +247,8 @@ void audio_mix_init(AudioMixer *m, int rate)
     if (!m) return;
     memset(m, 0, sizeof(*m));
     m->rate  = rate;
-    m->limit = AUDIO_MIX_SOFT;     /* 0, so the memset above already said it */
+    m->limit = AUDIO_MIX_HARD;     /* clampedAdd — see AudioMixLimit */
+    m->knee  = AUDIO_MIX_KNEE;
 }
 
 void audio_mix_set_limit(AudioMixer *m, int mode)
@@ -255,7 +256,34 @@ void audio_mix_set_limit(AudioMixer *m, int mode)
     if (m) m->limit = (mode == AUDIO_MIX_HARD) ? AUDIO_MIX_HARD : AUDIO_MIX_SOFT;
 }
 
+void audio_mix_set_knee(AudioMixer *m, int knee)
+{
+    if (!m) return;
+    m->knee = (knee > 0) ? knee : AUDIO_MIX_KNEE;
+}
+
+int audio_voice_peak(int vol)
+{
+    if (vol <= 0) return 1;                       /* silent is a caller bug */
+    long p = ((long)AUDIO_FULL_SCALE * vol) / AUDIO_VOL_UNITY;
+    if (p > AUDIO_FULL_SCALE) p = AUDIO_FULL_SCALE;
+    if (p < 1)               p = 1;
+    return (int)p;
+}
+
+void audio_attenuate(int16_t *buf, long samples, int shift)
+{
+    if (!buf || samples <= 0 || shift <= 0) return;
+    if (shift > 15) shift = 15;
+    for (long i = 0; i < samples; i++) buf[i] = (int16_t)(buf[i] >> shift);
+}
+
 int32_t audio_mix_limit(int32_t acc, int mode)
+{
+    return audio_mix_limit_at(acc, mode, AUDIO_MIX_KNEE);
+}
+
+int32_t audio_mix_limit_at(int32_t acc, int mode, int32_t knee)
 {
     if (mode == AUDIO_MIX_HARD) {
         if (acc >  32767) return  32767;
@@ -266,13 +294,19 @@ int32_t audio_mix_limit(int32_t acc, int mode)
     int32_t mag = (acc < 0) ? -acc : acc;      /* acc is a sum of int16-range
                                                 * voices, so this cannot be the
                                                 * INT32_MIN that would overflow */
-    if (mag <= AUDIO_MIX_KNEE) return acc;
+    if (knee <= 0) knee = AUDIO_MIX_KNEE;
+    int32_t ceil_at = knee + knee * 44 / 100;  /* the measured 1.44×, derived so
+                                                * a ceiling can never sit under
+                                                * its own knee */
+    if (ceil_at > AUDIO_FULL_SCALE) ceil_at = AUDIO_FULL_SCALE;
+    if (ceil_at <= knee)            return (mag > knee) ? ((acc < 0) ? -knee : knee) : acc;
+    if (mag <= knee) return acc;
 
     /* u/(1+u) is bounded by 1 and has slope 1 at u = 0, so the curve meets the
      * identity at the knee in both value and slope — no step, no corner. */
-    double span = (double)(AUDIO_MIX_CEIL - AUDIO_MIX_KNEE);
-    double u    = (double)(mag - AUDIO_MIX_KNEE) / span;
-    double out  = (double)AUDIO_MIX_KNEE + span * (u / (1.0 + u));
+    double span = (double)(ceil_at - knee);
+    double u    = (double)(mag - knee) / span;
+    double out  = (double)knee + span * (u / (1.0 + u));
 
     /* Rounded, not truncated.  With truncation the first sample past the knee
      * lands back ON the knee — the curve's slope is 1 there, so the whole first
@@ -314,7 +348,7 @@ long audio_mix_render(AudioMixer *m, int16_t *mono, long frames)
          * hold this", which only the hard clamp can produce, and `limited` is
          * "the knee bent it".  Counting both into one number would have hidden
          * the very distinction this change turns on. */
-        int32_t out = audio_mix_limit(acc, m->limit);
+        int32_t out = audio_mix_limit_at(acc, m->limit, m->knee);
         if (out != acc) {
             if (m->limit == AUDIO_MIX_HARD) m->clipped++;
             else                            m->limited++;
@@ -347,6 +381,7 @@ int audio_mix_add(AudioMixer *m, int freq_hz, int duration_ms,
 
         memset(vo, 0, sizeof(*vo));
         vo->active     = true;
+        vo->gen        = ++m->gen_seq;   /* never 0, so 0 can mean "no voice" */
         vo->phase      = 0.0;
         vo->phase_step = 2.0 * M_PI * (double)freq_hz / (double)m->rate;
         vo->peak       = peak;
@@ -388,6 +423,21 @@ long audio_mix_pending(const AudioMixer *m)
         if (left > worst) worst = left;
     }
     return worst;
+}
+
+uint32_t audio_mix_voice_gen(const AudioMixer *m, int slot)
+{
+    if (!m || slot < 0 || slot >= AUDIO_MAX_VOICES) return 0;
+    return m->v[slot].active ? m->v[slot].gen : 0;
+}
+
+long audio_mix_voice_pending(const AudioMixer *m, int slot, uint32_t gen)
+{
+    if (!m || slot < 0 || slot >= AUDIO_MAX_VOICES || gen == 0) return 0;
+    const AudioVoice *vo = &m->v[slot];
+    if (!vo->active || vo->gen != gen) return 0;   /* freed, or reused by another */
+    long left = vo->delay + (vo->frames - vo->pos);
+    return (left > 0) ? left : 0;
 }
 
 long audio_pump_lead_frames(long lead_ms_frames, long period_frames,

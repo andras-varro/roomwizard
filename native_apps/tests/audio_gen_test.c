@@ -41,22 +41,50 @@
  *       `audio_success()` is three notes at 45 call sites, so the voice `delay`
  *       is what keeps them sounding the way the panel already hears them.
  *
+ * Groups O and P are the LEVEL model, which is `Audio::MixerImpl`'s and not this
+ * repo's: a per-voice volume as a fraction of full scale, a saturating add, and
+ * ONE device attenuation — plus the per-voice tail that stops a long voice
+ * serialising every later tone behind it.  ⚠️ Group O asks the HEADROOM law in
+ * both directions (n voices fit while n·vol ≤ unity), because a check that only
+ * ever saw clipping cannot tell a level model from a broken one.
+ *
+ * `tests/measure_audio_gen_sabotage.sh` is the sweep, fourteen stanzas, all
+ * non-zero (2026-08-19): knee below one voice **6** · derived ceiling outside
+ * int16 **3** · no knee at all **7** · counters swapped **3** · SOFT default
+ * again **7** · truncate instead of round **1** · sign ignored **1** · volume
+ * denominator 255 **2** · voice peak unclamped **1** · attenuation by divide
+ * **2** · knee setter ignores its argument **1** · constant generation **3** ·
+ * tail ignores the generation **2** · the bus tail restored **2**.
+ * ⚠️ Three things that sweep taught, each of which had made a stanza lie:
+ *   - **Two stanzas had ROTTED silently** when `AUDIO_MIX_CEIL` became derived
+ *     and the default limiter became `HARD`; they printed `0 failed`, which reads
+ *     as a hole in the suite.  The harness now diffs the copy and says `NO-OP
+ *     EDIT` instead.
+ *   - **The bus-tail stanza SIGSEGVed** the whole suite: its `long left = …`
+ *     pattern matches `audio_mix_pending()` too, so the bus tail called itself.
+ *     0 `FAIL:` lines and a crash look identical unless the harness reports the
+ *     signal, which is why it does.
+ *   - Earlier, with AUDIO_PUMP_CAP_MS equal to AUDIO_PUMP_LEAD_MS the "empty
+ *     ring" check passed against a space-filling pump *because the cap caught it
+ *     by accident*, so K also asks with the cap out of the way; and the first
+ *     clamp check read `peak_abs(...) == 32767`, which is false for a correct
+ *     clamp because `abs(-32768)` is 32768.
+ *
+ * ⚠️ The parity groups (C, D) render at `LEGACY_PEAK`, not `AUDIO_PEAK`: the
+ * amplitude is now a runtime volume, and a parity check written against the
+ * current default would quietly become an assertion that the level never moves.
+ *
  * Groups I/J/K are Phase 3's mix bus: the sum and its single clamp (including
  * that SLOT ORDER cannot change the mix), voice lifetime (frees on its last
  * sample, silence past its end, delays, a full bus that refuses rather than
  * steals) and the pump's pacing — which targets a LEAD and must never simply
  * write the ~506 ms an empty OSS ring would accept.
  *
- * Measured against seven sabotaged copies of `audio_gen.c` (2026-08-15), all
- * seven caught: int16 accumulator **5** · voice freed a frame late **3** · stale
- * scratch past a voice end **4** · delay ignored **3** · pump fills the space
- * instead of a lead **5** · full bus steals slot 0 **3** · positive clamp dropped
- * **1**.  ⚠️ Two of those numbers were earned the hard way: with
- * AUDIO_PUMP_CAP_MS equal to AUDIO_PUMP_LEAD_MS the "empty ring" check passes
- * against a space-filling pump *because the cap catches it by accident*, so K
- * also asks with the cap out of the way; and the first clamp check read
- * `peak_abs(...) == 32767`, which is false for a correct clamp because
- * `abs(-32768)` is 32768.
+ * Measured earlier against seven sabotaged copies of `audio_gen.c` (2026-08-15),
+ * all seven caught: int16 accumulator **5** · voice freed a frame late **3** ·
+ * stale scratch past a voice end **4** · delay ignored **3** · pump fills the
+ * space instead of a lead **5** · full bus steals slot 0 **3** · positive clamp
+ * dropped **1**.
  *
  * Build (host gcc, from native_apps/):
  *   gcc -Wall -Wextra -Wno-unused-parameter -I common -o build/audio_gen_test \
@@ -160,6 +188,14 @@ static long old_write_loop(Sink *s, const uint8_t *buf, long total)
     }
     return written;
 }
+
+/* ⚠️ The amplitude the pre-F1 generators had SPELLED IN, and the one the parity
+ * groups must use.  `AUDIO_PEAK` is now derived from a runtime volume, so a
+ * parity check written against it would silently become a check that the current
+ * default happens to equal the historical one — and would break every time the
+ * level moves, which is exactly the thing the level is allowed to do.  The claim
+ * these groups make is about the GENERATOR, at a fixed amplitude. */
+#define LEGACY_PEAK  18000
 
 /* audio.c:203 as the TARGET evaluates it: `long` is 32-bit on armhf, so the
  * product wraps before the divide.  Modelled, not observed — see the header. */
@@ -346,7 +382,7 @@ int main(void)
         audio_mix_add(&chord, 659, 120, 0, AUDIO_PEAK);
         audio_mix_add(&chord, 784, 220, 0, AUDIO_PEAK);
         audio_mix_render(&chord, a, 2048);
-        check(chord.limited > 0,
+        check(peak_abs(a, 2048) > AUDIO_PEAK,
               "three notes with no start offsets exceed one voice's peak — they "
               "are sounding together");
 
@@ -411,14 +447,14 @@ int main(void)
         double p = 0, f = 300, m = 0;
         old_chunk_gen(&p, &f, 900, &m, RATE, a, 1024);
 
-        AudioOsc o; audio_osc_init(&o, RATE, 300, AUDIO_PEAK);
+        AudioOsc o; audio_osc_init(&o, RATE, 300, LEGACY_PEAK);
         o.target_freq = 900;
         audio_osc_render(&o, AUDIO_OSC_GLIDE, b, 1024);
         check(memcmp(a, b, 1024 * sizeof(int16_t)) == 0,
               "GLIDE is byte-identical to the shipped stream generator");
 
         /* Split calls == one long call: a chunk boundary must not seam. */
-        AudioOsc o2; audio_osc_init(&o2, RATE, 300, AUDIO_PEAK);
+        AudioOsc o2; audio_osc_init(&o2, RATE, 300, LEGACY_PEAK);
         o2.target_freq = 900;
         audio_osc_render(&o2, AUDIO_OSC_GLIDE, mono, 441);
         audio_osc_render(&o2, AUDIO_OSC_GLIDE, mono + 441, 583);
@@ -428,7 +464,7 @@ int main(void)
         /* FADE_OUT == the shipped fade loop, from the same state. */
         double pf = 1.234, ff = 512.0, mf = 0.8;
         old_fade_gen(&pf, ff, mf, RATE, a, 882);
-        AudioOsc o3; audio_osc_init(&o3, RATE, ff, AUDIO_PEAK);
+        AudioOsc o3; audio_osc_init(&o3, RATE, ff, LEGACY_PEAK);
         o3.phase = 1.234; o3.amp = 0.8;
         audio_osc_render(&o3, AUDIO_OSC_FADE_OUT, b, 882);
         check(memcmp(a, b, 882 * sizeof(int16_t)) == 0,
@@ -445,15 +481,15 @@ int main(void)
     printf("\n=== D. tone envelope ===\n");
     {
         old_tone_gen(RATE, 880, a, 3528);            /* 80 ms, as audio_beep asks */
-        audio_render_tone(RATE, 880, AUDIO_PEAK, b, 3528);
+        audio_render_tone(RATE, 880, LEGACY_PEAK, b, 3528);
         check(memcmp(a, b, 3528 * sizeof(int16_t)) == 0,
               "the tone generator is byte-identical to the shipped one");
 
         check(b[0] == 0, "first sample is silence — no click at the attack");
         int peak = 0;
         for (long i = 0; i < 3528; i++) if (abs(b[i]) > peak) peak = abs(b[i]);
-        check(peak <= AUDIO_PEAK, "peak never exceeds the amplitude constant");
-        check(peak > AUDIO_PEAK * 9 / 10, "and does reach it (the envelope opens)");
+        check(peak <= LEGACY_PEAK, "peak never exceeds the amplitude constant");
+        check(peak > LEGACY_PEAK * 9 / 10, "and does reach it (the envelope opens)");
 
         long at = audio_attack_frames(RATE, 3528);
         long rl = audio_release_frames(RATE, 3528);
@@ -641,16 +677,23 @@ int main(void)
         check(summed, "two voices are the POINTWISE SUM of the two rendered alone");
         check(m.clipped == 0, "and 8000 + 6000 needs no clamping");
 
-        /* The clamp, which is now the NON-default mode and has to be asked for.
-         * AUDIO_PEAK is ~55 % of full scale, so two identical loud voices exceed
-         * int16 by ~10 % — and a panel heard three of them as a square wave
-         * (../IMPROVEMENT_PLAN.md F1 Phase 3), which is why SOFT is the default. */
+        /* The clamp, which is the DEFAULT and is ScummVM's clampedAdd.  ⚠️ The
+         * headroom is the VOLUME's job: at AUDIO_VOICE_VOL two voices fit under
+         * int16 and three do not, so this asks for both directions — a check that
+         * only ever saw clipping could not tell a level model from a broken one. */
         audio_mix_init(&m, RATE);
-        audio_mix_set_limit(&m, AUDIO_MIX_HARD);
         audio_mix_add(&m, 880, 80, 0, AUDIO_PEAK);
         audio_mix_add(&m, 880, 80, 0, AUDIO_PEAK);
         audio_mix_render(&m, b, fr);
-        check(m.clipped > 0, "two voices at AUDIO_PEAK DO clip under HARD — measured, not assumed");
+        check(m.limit == AUDIO_MIX_HARD && m.clipped == 0,
+              "TWO voices at the default volume clip NOTHING under the default clamp");
+
+        audio_mix_init(&m, RATE);
+        audio_mix_add(&m, 880, 80, 0, AUDIO_PEAK);
+        audio_mix_add(&m, 880, 80, 0, AUDIO_PEAK);
+        audio_mix_add(&m, 880, 80, 0, AUDIO_PEAK);
+        audio_mix_render(&m, b, fr);
+        check(m.clipped > 0, "THREE do clip — measured, not assumed");
         bool pos_pinned = false, neg_pinned = false;
         for (long i = 0; i < fr; i++) {
             if (b[i] ==  32767) pos_pinned = true;
@@ -807,13 +850,14 @@ int main(void)
 
     printf("\n=== L. the soft limiter: what the panel rejected, and why this fixes it ===\n");
     {
-        /* The defect this group exists for, stated as arithmetic: three voices at
-         * AUDIO_PEAK sum to 54000 against int16's 32767, so the hard clamp
-         * flattens 65 % of the peak — heard on `.188` 2026-08-15 as "a distorted
-         * square wave from an overdriven amplifier", with clip = 15402. */
-        check(3 * AUDIO_PEAK > 32767 && 2 * AUDIO_PEAK > 32767,
-              "two AND three voices at AUDIO_PEAK both exceed int16 — the report is "
-              "arithmetically expected, not a mystery");
+        /* The defect this group exists for, stated as arithmetic — and restated at
+         * the volume model that replaced it: at the default volume THREE voices
+         * exceed int16 and two do not, which is the headroom claim `AUDIO_VOICE_VOL`
+         * makes.  It used to be true of two, at a peak measured too loud for the
+         * speaker anyway. */
+        check(3 * AUDIO_PEAK > 32767 && 2 * AUDIO_PEAK <= 32767,
+              "three voices at the default volume exceed int16 and two do not — the "
+              "headroom is the volume's, not the limiter's");
 
         /* Below the knee the limiter is the identity, in BOTH modes.  This is what
          * keeps one voice byte-identical to audio_render_tone(). */
@@ -863,7 +907,9 @@ int main(void)
         /* And now the two mixes, end to end. */
         long fr = audio_frames_for_ms(RATE, 100);
         AudioMixer m; audio_mix_init(&m, RATE);
-        check(m.limit == AUDIO_MIX_SOFT, "SOFT is the DEFAULT — an app gets the fix without asking");
+        check(m.limit == AUDIO_MIX_HARD && m.knee == AUDIO_MIX_KNEE,
+              "HARD is the DEFAULT — clampedAdd, the shape that already sounds right");
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
         audio_mix_add(&m, 523, 100, 0, AUDIO_PEAK);
         audio_mix_add(&m, 659, 100, 0, AUDIO_PEAK);
         audio_mix_add(&m, 784, 100, 0, AUDIO_PEAK);
@@ -874,10 +920,12 @@ int main(void)
         check(peak_abs(b, fr) <= AUDIO_MIX_CEIL,
               "no sample past the ceiling — nothing pinned at the rail");
 
-        /* A single voice through the default path is still bit-for-bit the old
-         * sound: the fix must not change 45 call sites' one-shot beeps. */
+        /* A single voice through EITHER path is still bit-for-bit the old sound:
+         * the level model must not change 45 call sites' one-shot beeps at a given
+         * volume, and the knee tracking that volume is what preserves it. */
         audio_render_tone(RATE, 880, AUDIO_PEAK, a, fr);
         audio_mix_init(&m, RATE);
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
         audio_mix_add(&m, 880, 100, 0, AUDIO_PEAK);
         audio_mix_render(&m, b, fr);
         check(memcmp(a, b, (size_t)fr * sizeof(int16_t)) == 0 &&
@@ -886,16 +934,20 @@ int main(void)
 
         /* Eight voices — the full bus — is the worst case that can reach it. */
         audio_mix_init(&m, RATE);
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
         for (int i = 0; i < AUDIO_MAX_VOICES; i++)
             audio_mix_add(&m, 300 + 100 * i, 100, 0, AUDIO_PEAK);
         audio_mix_render(&m, b, fr);
         check(m.clipped == 0 && peak_abs(b, fr) <= AUDIO_MIX_CEIL,
               "a FULL BUS of eight loud voices still clips nothing");
 
-        /* Switching mode mid-render is what the panel's LIMIT toggle does. */
+        /* Switching mode mid-render is what the panel's LIM toggle does.  Three
+         * voices, because two no longer reach the clamp at this volume. */
         audio_mix_init(&m, RATE);
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
         audio_mix_add(&m, 523, 100, 0, AUDIO_PEAK);
         audio_mix_add(&m, 659, 100, 0, AUDIO_PEAK);
+        audio_mix_add(&m, 784, 100, 0, AUDIO_PEAK);
         audio_mix_render(&m, b, 512);
         uint32_t soft_clip = m.clipped;
         audio_mix_set_limit(&m, AUDIO_MIX_HARD);
@@ -1005,6 +1057,152 @@ int main(void)
               "one mono frame is 2 bytes, so half a frame is unreachable at this grant");
     }
 
+
+    printf("\n=== O. the level model: a volume, a clamp, and ONE device shift ===\n");
+    {
+        /* The three arithmetic claims the level rests on, each checkable rather
+         * than plausible.  `audio_voice_peak()` is rate.cpp:122's expression. */
+        check(audio_voice_peak(AUDIO_VOL_UNITY) == AUDIO_FULL_SCALE,
+              "unity volume is full scale — the fraction's denominator is real");
+        check(audio_voice_peak(AUDIO_VOL_UNITY / 2) == AUDIO_FULL_SCALE / 2,
+              "half volume is half scale, truncating like the integer original");
+        check(AUDIO_PEAK == audio_voice_peak(AUDIO_VOICE_VOL),
+              "AUDIO_PEAK is DERIVED from the volume, not a second place to set it");
+
+        /* Nonsense in: a zero or negative volume is a caller bug, and silence is
+         * the one answer that would be invisible on the panel — so it is refused
+         * into the quietest audible amplitude instead. */
+        check(audio_voice_peak(0) == 1 && audio_voice_peak(-7) == 1,
+              "a zero or negative volume clamps to 1, never to silence");
+        check(audio_voice_peak(AUDIO_VOL_UNITY * 4) == AUDIO_FULL_SCALE,
+              "and a volume past unity cannot ask for more than full scale");
+
+        /* ⚠️ The HEADROOM law, which is the whole reason the volume and the shift
+         * are separate knobs: n voices fit while n * vol <= unity.  At the shipped
+         * default that is two, and the ladder pad is how the panel chooses it. */
+        int fits = AUDIO_VOL_UNITY / AUDIO_VOICE_VOL;
+        check(fits * AUDIO_PEAK <= AUDIO_FULL_SCALE &&
+              (fits + 1) * AUDIO_PEAK > AUDIO_FULL_SCALE,
+              "the voice count that fits under the clamp is unity / volume, exactly");
+
+        /* The device stage.  ⚠️ Swept over every int16, because the one value that
+         * would betray a rounding multiply is -1 (>> 1 is -1, a multiply gives 0)
+         * and the one that would betray a signed/unsigned slip is -32768. */
+        bool ident = true, half = true;
+        for (int32_t v = -32768; v <= 32767; v++) {
+            int16_t s0 = (int16_t)v, s1 = (int16_t)v;
+            audio_attenuate(&s0, 1, 0);
+            audio_attenuate(&s1, 1, 1);
+            if (s0 != (int16_t)v)        ident = false;
+            if (s1 != (int16_t)(v >> 1)) half  = false;
+        }
+        check(ident, "shift 0 is the identity for every int16 — the native path pre-3c");
+        check(half,  "shift 1 is >>1 for every int16 including -1 and -32768 — "
+                     "bit-identical to what ScummVM has shipped");
+
+        int16_t buf[4] = { -1, 1, -32768, 32767 };
+        audio_attenuate(buf, 4, 99);
+        check(buf[2] == -1 && buf[3] == 0,
+              "an absurd shift is clamped rather than being undefined behaviour");
+        audio_attenuate(NULL, 4, 1);
+        audio_attenuate(buf, 0, 1);
+        audio_attenuate(buf, -3, 1);
+        check(buf[0] == -1, "NULL and non-positive lengths are no-ops, not crashes");
+
+        /* The knee has to FOLLOW the volume, and the failing direction is a knee
+         * left BELOW the voice amplitude: then a lone tone is bent, which is the
+         * one thing the byte-identical property forbids. */
+        long fr = audio_frames_for_ms(RATE, 50);
+        AudioMixer m; audio_mix_init(&m, RATE);
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
+        audio_mix_set_knee(&m, audio_voice_peak(AUDIO_VOICE_VOL / 2));
+        audio_mix_add(&m, 880, 50, 0, AUDIO_PEAK);
+        audio_mix_render(&m, b, fr);
+        check(m.limited > 0,
+              "a stale knee under the voice amplitude BENDS a lone tone — the "
+              "negative control for audio_set_volume() re-deriving it");
+
+        audio_mix_init(&m, RATE);
+        audio_mix_set_limit(&m, AUDIO_MIX_SOFT);
+        audio_mix_set_knee(&m, audio_voice_peak(AUDIO_VOICE_VOL));
+        audio_mix_add(&m, 880, 50, 0, AUDIO_PEAK);
+        audio_mix_render(&m, b, fr);
+        check(m.limited == 0 && m.clipped == 0,
+              "and with the knee derived from the same volume it passes untouched");
+
+        audio_mix_set_knee(&m, 0);
+        check(m.knee == AUDIO_MIX_KNEE, "knee 0 restores the header's default");
+
+        /* A quieter volume must buy polyphony, which is the claim a single global
+         * scalar could not make.  Four voices at half the default volume clip
+         * nothing under the plain clamp. */
+        audio_mix_init(&m, RATE);
+        for (int i = 0; i < 4; i++)
+            audio_mix_add(&m, 300 + 100 * i, 50, 0, audio_voice_peak(AUDIO_VOICE_VOL / 2));
+        audio_mix_render(&m, b, fr);
+        check(m.limit == AUDIO_MIX_HARD && m.clipped == 0,
+              "four voices at half volume clip nothing — halving the volume really "
+              "doubles the polyphony");
+    }
+
+    printf("\n=== P. one voice's tail, which is NOT the bus's ===\n");
+    {
+        long fr = audio_frames_for_ms(RATE, 10);
+        AudioMixer m; audio_mix_init(&m, RATE);
+
+        /* A slot number alone does not name a voice, so the pair is the identity. */
+        int drone = audio_mix_add(&m, 220, 3000, 0, AUDIO_PEAK);
+        uint32_t dg = audio_mix_voice_gen(&m, drone);
+        int note  = audio_mix_add(&m, 880, 40, 0, AUDIO_PEAK);
+        uint32_t ng = audio_mix_voice_gen(&m, note);
+        check(dg != 0 && ng != 0 && dg != ng,
+              "every add stamps a fresh non-zero generation");
+
+        /* ⚠️ THE DEFECT, as arithmetic: the bus's pending is the 3 s drone, so a
+         * tone defaulting its delay to it starts three seconds late.  The tone's
+         * own tail is 40 ms.  That difference is the whole fix. */
+        long bus  = audio_mix_pending(&m);
+        long mine = audio_mix_voice_pending(&m, note, ng);
+        check(bus == audio_frames_for_ms(RATE, 3000) &&
+              mine == audio_frames_for_ms(RATE, 40) && mine < bus,
+              "the bus tail is the DRONE's and the voice tail is the note's own");
+
+        /* It counts down as the voice sounds, delay included. */
+        audio_mix_render(&m, b, fr);
+        check(audio_mix_voice_pending(&m, note, ng) == mine - fr,
+              "and it shrinks by exactly what was rendered");
+
+        int delayed = audio_mix_add(&m, 660, 40, 40, AUDIO_PEAK);
+        uint32_t dl = audio_mix_voice_gen(&m, delayed);
+        check(audio_mix_voice_pending(&m, delayed, dl) ==
+              audio_frames_for_ms(RATE, 40) + audio_frames_for_ms(RATE, 40),
+              "a delayed voice's tail includes the silence it still owes");
+
+        /* Every way of naming nothing reads 0 rather than borrowing a tail. */
+        check(audio_mix_voice_pending(&m, note, dg) == 0,
+              "the RIGHT slot with the WRONG generation is 0 — a reused slot cannot "
+              "lend its tail to the voice that used to live there");
+        check(audio_mix_voice_pending(&m, -1, ng) == 0 &&
+              audio_mix_voice_pending(&m, AUDIO_MAX_VOICES, ng) == 0 &&
+              audio_mix_voice_pending(&m, note, 0) == 0 &&
+              audio_mix_voice_pending(NULL, note, ng) == 0,
+              "an out-of-range slot, a zero generation and a NULL bus are all 0");
+
+        /* audio_interrupt() is audio_mix_stop_all(), and after it the tail a next
+         * tone queues behind must be 0 — that is what keeps the ~23
+         * `interrupt(); tone();` call sites sounding immediately. */
+        audio_mix_stop_all(&m);
+        check(audio_mix_voice_pending(&m, note, ng) == 0 &&
+              audio_mix_voice_gen(&m, note) == 0 &&
+              audio_mix_pending(&m) == 0,
+              "stop_all leaves no tail for a following tone to queue behind");
+
+        /* And the reuse case end to end: the slot comes back with a new stamp. */
+        int again = audio_mix_add(&m, 440, 100, 0, AUDIO_PEAK);
+        check(again == drone && audio_mix_voice_gen(&m, again) != dg &&
+              audio_mix_voice_pending(&m, again, dg) == 0,
+              "slot 0 is reused with a new generation, so the old pair stays dead");
+    }
     printf("\n%s  %d checks, %d failure(s)\n",
            failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;
