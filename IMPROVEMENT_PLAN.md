@@ -255,11 +255,13 @@ state lives in the table instead, where updating it costs nothing.
 | 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
 | 3 | the mix bus, as an optional per-frame pump | ✅ **closed** — two tones heard as two, crackling gone. ⚠️ It did **not** fix the one-voice distortion, and that is the result: the mix bus is measured innocent (2026-08-16) |
 | 3b | one shared continuous-stream device half — `oss-mixer.cpp`'s architecture in `common/audio_out.{c,h}` | ✅ **closed, measured on the panel** — `starve`/`lost`/`drop` zero on every logged line and `appl_ptr` never rewinds. ⚠️ It did not fix the distortion either, exactly as row 3 predicted |
-| 3c | ⚠️ **NEXT: the LEVEL — and it is `MixerImpl`'s architecture rather than a new design.** Detail below | open, needs **one listen** |
+| 3c | the LEVEL — `MixerImpl`'s architecture rather than a new design. Detail below | ✅ **closed, heard 2026-08-19** — settled at `vol` 96, which was already the default, so no constant moved. The digital chain is exonerated by md5 (below); what roughness remains is not the mixer's |
+| 3d | ⚠️ **NEXT and it is a real defect: `audio_tone()` serialises an independent tap behind a long one** | open, **confirmed on the panel 2026-08-19**. `audio.c:742` defaults a tap's delay to the tail of the PRECEDING TONE, so a tap after `440 3s` is scheduled up to 3 s out. Canned sounds bypass `audio_tone()` entirely — `play_sequence()` calls `audio_mix_add()` at `audio.c:900-903` and never updates `last_tone_slot` — which is why SUCCESS **does** overlap while a plain tone queues. All three operator observations fall out of that one line. Fix: chain only notes issued within ~a frame of each other, so tetris' two-note motifs still chain and an independent tap never inherits a drone's tail |
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix |
 | 5 | the games take the continuous stream — `tetris` and `brick_breaker` first | open, after 3c. ⚠️ **`brick_breaker` gains five sounds it has never made**: `audio_tone(600,30)` at `brick_breaker.c:924` and four more are under the ~60 ms floor and inaudible today, and a continuous feed drops that floor to ~5 ms. Flag it before the listen, not after |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
+| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | open, asked for 2026-08-19. Detail below |
 
 The per-phase work, its measurements and the corrections each phase made to its own predecessor live in
 `~/.claude/plans/tender-singing-cook.md`, which carries a finer phase split than this table.
@@ -271,7 +273,7 @@ this, and do not restate its numbers here. The authoring rules for the shared li
 modes are `native_apps/CLAUDE.md` → *Audio* and *Mixing*; the adapter's parameters are
 `scummvm-roomwizard/CLAUDE.md` → *Audio*.
 
-⏳ **What is left is a LEVEL question, and the answer is taken from the implementation that already sounds
+✅ **The LEVEL question is answered, and its answer was taken from the implementation that already sounds
 good.** `scummvm-roomwizard/backend-files/oss-mixer.cpp` has fed this speaker since 2026-08-03 and plays
 Full Throttle's video, MIDI, speech and effects well (operator, 2026-08-18) — so the move that produced
 `common/audio_out.{c,h}` out of its *stream* is available for its *level* too. `Audio::MixerImpl` plus
@@ -282,27 +284,71 @@ Full Throttle's video, MIDI, speech and effects well (operator, 2026-08-18) — 
 - a **clamped add** into int16 (`clampedAdd`, `rate.cpp:127`), with no knee and no soft curve;
 - **one master attenuation** immediately before `write()` — `>>1`, `oss-mixer.cpp:236-243`.
 
-⚠️ **The master shift IS the headroom, and that is the part this repo was missing.** Two voices sum
-without clipping because everything below the shift has 6 dB of room; the soft knee in `audio_mix_limit()`
-was solving with a curve what one arithmetic shift solves for free. `audio_out` already has that stage
+⚠️ **Headroom is the VOLUME's job, and an earlier revision of this entry said it was the master shift's —
+that is FALSE.** The shift divides *after* the clamp has already decided what survives, so it cannot buy a
+voice room: `n` voices fit while `n * vol <= AUDIO_VOL_UNITY`, and the shift is only this SPEAKER's
+ceiling. The two cancel acoustically and are **not** interchangeable — at a fixed loudness a lower `vol`
+with a smaller shift has strictly more headroom. `audio_out` owns the shift stage
 (`audio_out_set_shift()`) — the native path simply passed 0 through it. So question 6's three candidate
 laws — a voice-count-dependent gain, a `sqrt` law, a smaller `AUDIO_MAX_VOICES` — are all **dropped in
 favour of the shipped shape**: volume relative to full scale, clamped add, one shift.
 
-⚠️ **What that leaves open is two numbers and an ear**, because ScummVM's own values do not transfer: its
-content is broadband and ours is a **lone sine**, which is the worst case for this amplifier. A sine at
-peak 6000 is clean here and at 18000 is not, and ⚠️ **the clean ceiling falls as pitch falls** — at a
-constant 18000, 1320 Hz is nearly clean while 220 Hz is *"clearly a square wave"*
-([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) carries both ladders). The verification is
-therefore a ladder pad on `native_apps/tests/audio_mix_test`, walked **quietest-first** — every ladder so
-far ran loud-to-quiet and that direction biases adaptation — asking **two separate questions per rung**:
-is it audible, and is it clean. ⚠️ **"All work" answers the first question only**; that conflation already
-cost a session and the rule is in `tests/CLAUDE.md`.
+✅ **The ladder was walked on 2026-08-19 and the level is SETTLED at `vol` 96** — rung 3/6, which is
+already the shipped `AUDIO_VOICE_VOL`, so the ear confirmed the committed default and **no constant
+changes**. 440 Hz is inaudible below 3/6 (at 1/6 only with an ear against the box); **1760 Hz is
+comfortable at 2/6**. `CHORD` sounded the same under both `LIM` settings. ScummVM's own values were never
+going to transfer — its content is broadband and ours is a **lone sine**, the worst case for this amplifier
+— and ⚠️ **the clean ceiling falls as pitch falls** ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)
+carries both ladders).
 
-⚠️ **A pitch tilt is deliberately NOT in this change.** The falling ceiling argues for a per-voice gain
-that is a function of frequency, but shipping it with the level change makes the one listen a two-variable
-comparison, and this entry has already paid for that mistake once (see the refuted list below). It is the
-next candidate if the ladder's clean rung turns out to be too quiet.
+✅ **The digital chain is EXONERATED, by byte equality rather than by ear.**
+`native_apps/tests/audio_dump.c` renders the shipped chain — `audio_mix_render()` →
+`audio_interleave()` → `audio_attenuate()`, 44100/2ch, `vol` 96, shift 1 — to eight WAVs, and its **md5s
+are identical cross-built and run on `.188` versus built host-side**, which is what makes a host render a
+faithful proxy for this code rather than an approximation of it. Every case the operator called distorted
+comes out `clip=0 lim=0`, and `05-success-plus-880.wav` *"plays clear"* on a PC. Three voices are the only
+ones that exceed — `clip=304` under HARD, `lim=7120` under SOFT — exactly as `n * vol <= 256` predicts.
+⚠️ **The counters are not stuck at zero**: that same chord is the instrument's own negative control.
+
+⚠️ **So the roughness that remains on the panel is NOT the generator and NOT the mixer.** What the dump
+does not cover is *delivery* — the pump renders in chunks and writes through the EAGAIN policy where the
+dump renders in one pass — and everything analog. The session log argues delivery is clean too: `starve`,
+`lost` and `drop` all 0 across 375 taps, `clip` peaking at 133 samples. That leaves the speaker, which
+fits the operator's own control: **ScummVM's sampled material sounds good on this same speaker**, and a
+sustained lone sine parks energy on one resonance where broadband content does not.
+
+⚠️ **A pitch tilt is still NOT in this change**, but it now has *measured* support — 1760 Hz at 2/6 against
+440 Hz at 3/6 — rather than only the older constant-peak ladders. It stays out until phase 8 settles
+whether generated tones are the right source material at all; shipping it beside the level change would
+have made the one listen a two-variable comparison, which this entry has already paid for once.
+
+**Phase 8 — a WAV bed with effects over it.** Asked for 2026-08-19, and it is the operator's own proposal:
+play `/opt/sound/music1.wav` as background music with a stop control, and over it either a generated chord
+or one of the vendor effect files. It is simultaneously the next mixing test and a candidate answer to
+"should the effects be samples rather than sines at all" — which the exoneration above turns into a
+**product question rather than a bug hunt**. The operator's grounds are direct: *"I already know from the
+ScummVM play that the sound and effects are enjoyable at a reasonable sound level."*
+
+⚠️ **The two asset families are not the same format** — measured on `.188`, 2026-08-19:
+
+| file | ch | rate | bits | conversion |
+|---|---|---|---|---|
+| `asl_click.wav`, `asl_error.wav`, `asl_success.wav` | 1 | 44100 | 16 | **none** — already the mixer's internal format |
+| `music1.wav`, `music2.wav` | 2 | 48000 | 16 | downmix to mono **and** 48000 → 44100 |
+
+So the effects are a drop-in and the music is not. **Convert the music offline rather than carrying a
+runtime resampler** — `ffmpeg -y -i music1.wav -ac 1 -ar 44100 -c:a pcm_s16le music1_mono.wav`, which also
+takes it from 8.5 MB to ~3.9 MB (`-ac 1` averages rather than sums, so it cannot clip on the way down).
+Asking `/dev/dsp` for 48000 instead only moves the problem: the generator takes its rate as an argument
+(`audio_mix_init(m, rate)`) so tones are rate-agnostic, but then the `asl_*.wav` files need the resample.
+
+⚠️ **`AudioMixer` has no sample voice at all today** — every voice is a generated sine (frequency plus
+phase), so this is new surface rather than a parameter. And ⚠️ **the bed must STREAM**: 8.5 MB against
+234 MB of RAM means reading from an fd on each pump call, not loading whole. That touches
+`AUDIO_MAX_VOICES` and the "a full bus refuses, it never steals a voice" rule — whose entire point is that
+the longest voice is the one a dropped blip must not cut.
+[F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14) is the same requirement arriving
+from the other direction, so **build one mechanism, not two.**
 
 ⚠️ **Two shipped pitch choices sit in the worst band and should move up**: `audio_fail()` is 392 / 330 /
 262 Hz (`play_sequence()`'s table in `native_apps/common/audio.c`) and the test tool's `DRONE` is 220 Hz.
