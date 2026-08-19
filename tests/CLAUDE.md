@@ -44,21 +44,38 @@ after to confirm it survived. ⚠️ **Three shapes of the same defect it cannot
 a token can be present while the sentence around it is wrong (three of phase 2's 83 comments were exactly
 that — the ID matched perfectly and the claim was stale); a fact extracted with no row here is invisible,
 so a clean run means "every receipt I was told about holds", never "nothing was lost"; and it cannot tell
-a paragraph from a code fence or a stray see-also line. Prefer md5s, hex addresses and `file.c:line`
-tokens over words, which pass as substrings for free. `RECEIPTS_FILE` exists only so `--self-test` can
-drive the group over a fixture table.
+a paragraph. ⚠️ **Every key is a DURABLE token — an identifier, filename, constant, measured number or
+board designator — and 14 of them used to be prose phrases** until 2026-08-19. That was the gate's own
+advice being ignored by its own table, and it cost two sessions: rewording a sentence legitimately reads
+as a lost fact, so the gate failed for a reason unrelated to the defect it exists to catch. Each new key
+was measured present at its destination and absent from its source before it went in. When you add a row,
+`grep -n` the destination for a `#define`, a function name, a `file.c:line` or a number in the same
+paragraph — never key it on a sentence. `RECEIPTS_FILE` exists only so `--self-test` can drive the group
+over a fixture table.
 
-**Group D — a per-document line ceiling, and it is the only group that is not about correctness.** Every
-addition that grew the docs to 891, 2287 and 2214 lines was individually justified, so judging additions
-one at a time does not bound the total; a ceiling does, because it is arithmetic and survives a session
-that has forgotten the rule. The ceilings are where the cleanup landed plus room for one substantial
-addition, so the first genuinely new fact passes and the second one without a deletion does not. When it
-fires there are exactly two answers: **pay for the addition** (delete, or move the block to the document
-whose job it is) or **raise the ceiling in a commit that argues for it** — ⚠️ silently raising it is the
-failure mode the group exists to catch. `/doc-update` is the authoring half of the same rule.
-⚠️ **Two things it cannot see**: a paragraph rewrapped to 200 characters passes while getting longer, and a
-missing file would pass as a skip — so a ceiling naming a path that is not there is a **failure**, which
-matters because phase 5 split `HARDWARE.md` out of `SYSTEM_ANALYSIS.md` and the guard has to follow.
+**Group D — a per-document ceiling counted in NON-BLANK lines, and the only group not about correctness.**
+Every addition that grew the docs to 891, 2287 and 2214 lines was individually justified, so judging
+additions one at a time does not bound the total; a ceiling does, because it is arithmetic and survives a
+session that has forgotten the rule. When it fires there are exactly two answers: **pay for the addition**
+(delete, or move the block to the document whose job it is) or **raise the ceiling in a commit that argues
+for it** — ⚠️ silently raising it is the failure mode the group exists to catch. `/doc-update` is the
+authoring half. ⚠️ **Blank lines are excluded because counting them made whitespace legal currency**: a
+2-line overage paid off by deleting two blank lines passed the gate and broke the markdown, since a
+column-0 paragraph that loses the blank line above it becomes a lazy continuation. The ceilings were
+re-derived when the basis changed, preserving each file's margin exactly, so no file gained or lost
+headroom. ⚠️ **Two things it still cannot see**: a paragraph rewrapped to 200 characters passes while
+getting longer, and a missing file would pass as a skip — so a ceiling naming a path that is not there is
+a **failure**, which matters because phase 5 split `HARDWARE.md` out of `SYSTEM_ANALYSIS.md`.
+
+**Group E — structural markdown health, two defects that render as plausible markdown.** A file with no
+trailing newline (`Edit`, `cat`, `head -N` splices and heredoc rewrites all drop it, and the next append
+then lands *on* the last line rather than after it), and a column-0 paragraph directly after an **indented**
+bullet, which CommonMark folds into that bullet. E1 found one live violation on its first run
+(`scummvm-roomwizard/SCUMMVM_DEV.md`, 2026-08-19), which is its positive control on the real tree; E2's is
+in the fixture. ⚠️ Its blind spots all under-count, deliberately: a paragraph opening `*Note:*` reads as a
+list marker, a column-0 `|` table row is not flagged, and the column-0-bullet case is out of scope because
+it does not read as correct. `scummvm-icons/` is pruned from the walk for this group's sake — a vendored
+upstream tree whose `.github` templates are not ours to fix (measured: 5 scannable files, 0 anchors).
 
 ⚠️ **It counted its own prose three times, in three different shapes** — a quoted heredoc fixture, then
 the header sentence about bare IDs, then the header sentence about the no-`.md` citation form. Each one
@@ -114,10 +131,9 @@ went back to 1 three separate times while this was being written.
 
 The bare scan matches only parenthetical and `see`/`is`/`was`-prefixed IDs, because a bare `B2` in prose
 is indistinguishable from a register name — `vnc_client/deps/`'s vendored libjpeg-turbo is full of `B0`,
-`B1`, `B8`. That directory is pruned, along with `scummvm/`, `usb_host/linux-4.14.52/` and the card
-captures, all of which would otherwise blow the walk's time budget.
-
-Group A (every `<doc>.md#<fragment>` resolves to a real heading) is documented above.
+`B1`, `B8`. That directory is pruned, along with `scummvm/`, `scummvm-icons/`,
+`usb_host/linux-4.14.52/` and the card captures — none of them our source, and most of them would
+otherwise blow the walk's time budget.
 
 ## Writing a check
 

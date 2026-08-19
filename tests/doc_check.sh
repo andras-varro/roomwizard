@@ -21,10 +21,16 @@
 #      optionally the file it must have LEFT. Run it before a deletion to confirm the
 #      destination has the fact, and after to confirm it survived.
 #
-#   D  Per-document size ceilings. Every addition that grew these documents to 891, 2287
-#      and 2214 lines was individually justified, so judging each addition on its merits
-#      does not bound the total — only a ceiling does, because it is arithmetic rather
-#      than judgement and therefore survives a session that has forgotten the rule.
+#   D  Per-document size ceilings, counted in NON-BLANK lines. Every addition that grew
+#      these documents to 891, 2287 and 2214 lines was individually justified, so judging
+#      each addition on its merits does not bound the total — only a ceiling does, because
+#      it is arithmetic rather than judgement and therefore survives a session that has
+#      forgotten the rule. Blank lines are excluded so that deleting whitespace cannot pay
+#      for an overage — a trade that passes a line-counting gate and breaks the markdown.
+#
+#   E  Structural markdown health: every scanned .md ends in a newline, and no column-0
+#      paragraph sits directly after an indented bullet (CommonMark folds it into the
+#      bullet). Both render as plausible markdown, so neither is visible in a diff.
 #
 # ── Why every scan here skips this file ───────────────────────────────────────
 # A gate that documents the pattern it searches for matches its own documentation.
@@ -67,15 +73,19 @@ PLAN_FILE="IMPROVEMENT_PLAN.md"
 fail_total=0
 
 # ── the scanner ───────────────────────────────────────────────────────────────
-# Files worth scanning, relative to $1. Prunes the two vendor trees that make a
-# recursive walk from the repo root exceed a two-minute budget (scummvm/,
-# usb_host/linux-4.14.52/) and the card captures, which are not our source.
+# Files worth scanning, relative to $1. Prunes the three vendored trees that are not our
+# source — scummvm/ and usb_host/linux-4.14.52/, which make a recursive walk from the repo
+# root exceed a two-minute budget, and scummvm-icons/, an upstream icon set whose own
+# .github templates would otherwise be judged by group E's markdown rules — plus the card
+# captures. Measured 2026-08-19: scummvm-icons holds 5 scannable files and 0 anchors, so
+# pruning it moves group A's count by nothing; it is pruned for E's sake, not A's.
 scan_files() {
     local root="$1"
     ( cd "$root" && find . \
         \( -name .git \
         -o -name scummvm \
         -o -name linux-4.14.52 \
+        -o -name scummvm-icons \
         -o -name partitions \
         -o -name partitions.new \
         -o -name HardwarePhotos \
@@ -310,6 +320,19 @@ group_b() {
 #     stray reference passes exactly like a token in the paragraph that explains it.
 #   - **A token that is a substring of something else passes for free.** Prefer md5s, hex
 #     addresses and `file.c:line` forms over words.
+#
+# ⚠️ **Every key here is a DURABLE token — an identifier, a filename, a constant, a measured
+# number, a board designator — and 14 of them used to be prose phrases.** That was the
+# gate's own advice being ignored by the gate's own table, and it cost two sessions: a
+# legitimate rewording of a sentence reads as a lost fact, so `./tests/doc_check.sh` failed
+# for a reason unrelated to the defect it exists to catch. Converted 2026-08-19, each new
+# key measured present at its destination and absent from its source before it went in.
+# ⚠️ One row has no true identifier available and is the weakest here: `forces 32bpp` stands
+# in for "16bpp bands every gradient", because that claim has no constant, function or
+# measurement attached to it — every identifier in its paragraph is shared with the source
+# file, which would fire NOT MOVED. If you give that fact a number, re-key the row to it.
+# ⚠️ And when you ADD a row, do not key it on a sentence. `grep -n` the destination for a
+# `#define`, a function name, a `file.c:line` or a measured value in the same paragraph.
 receipts() {
     # `RECEIPTS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${RECEIPTS_FILE:-}" ]; then cat "$RECEIPTS_FILE"; return; fi
@@ -319,12 +342,12 @@ receipts() {
 9021923205825a2ec36edeaa1fe3ccc3	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 0x480AB060	usb_host/README.md	IMPROVEMENT_PLAN.md
 SNDRV_PCM_VERSION	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-15 of 59	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+oss_keepalive.c	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 pcm.c:978	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-never a thread	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-targets a LEAD	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-resets no ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-cannot both own the ring	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+clock_gettime64	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+743 ms	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+audio_interrupt	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+audio_stream_start	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 1486	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 22,317	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
@@ -336,33 +359,33 @@ rw_clean_validate	device-files/CLAUDE.md	SYSTEM_ANALYSIS.md
 TouchCalibSweep	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 clamp_to_hw	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 0..60000	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
-594, 614, 817	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
+touch_fit_axis_range	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 FB_TOUCH_INSET_MAX	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 publish_safe_area	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
-flat (saturated)	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+X 10..4076	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 1,536,000	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
-4-number	CLAUDE.md	native_apps/CLAUDE.md
+SYN_REPORT	CLAUDE.md	native_apps/CLAUDE.md
 1000000L	CLAUDE.md	native_apps/CLAUDE.md
-injected successfully	CLAUDE.md	native_apps/CLAUDE.md
+/dev/uinput	CLAUDE.md	native_apps/CLAUDE.md
 15/15/0/0	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
-red rect = visible	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
-+19 px	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+SAFE AREA	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
++19	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 0 1020 3074 4095	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
-bands every gradient	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
+forces 32bpp	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 XRGB8888	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 SPKR1	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 35280	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 RW29 1G-093	HARDWARE.md	SYSTEM_ANALYSIS.md
 W180322	HARDWARE.md	SYSTEM_ANALYSIS.md
 D9RMJ	HARDWARE.md	SYSTEM_ANALYSIS.md
-push-push	HARDWARE.md	SYSTEM_ANALYSIS.md
+`J1`	HARDWARE.md	SYSTEM_ANALYSIS.md
 22.86	HARDWARE.md	SYSTEM_ANALYSIS.md
 SLEEP_RQ	HARDWARE.md	SYSTEM_ANALYSIS.md
 T1OUT	HARDWARE.md	SYSTEM_ANALYSIS.md
 TP39	HARDWARE.md	SYSTEM_ANALYSIS.md
 560-0540-0x	HARDWARE.md	SYSTEM_ANALYSIS.md
 Top-Overwiev	HARDWARE.md	SYSTEM_ANALYSIS.md
-no light aperture	HARDWARE.md	SYSTEM_ANALYSIS.md
+bezel_with_touch_screen.jpg	HARDWARE.md	SYSTEM_ANALYSIS.md
 EOF
 }
 
@@ -397,16 +420,28 @@ group_c() {
 # ── group D: per-document size ceilings ───────────────────────────────────────
 # Fields: ceiling <TAB> path
 #
+# ⚠️ **It counts NON-BLANK lines.** Counting all lines made blank lines legal currency, and
+# that is not a theoretical loophole — a 2-line overage paid for by deleting two blank lines
+# passes the gate and silently breaks the markdown, because a column-0 paragraph that loses
+# the blank line above it becomes a lazy continuation and is swallowed into the preceding
+# indented bullet. Group E catches that shape now; counting non-blank lines removes the
+# incentive at the source. Whitespace is not content, so it is free in both directions.
+#
+# The ceilings below were re-derived when the basis changed (2026-08-19), preserving each
+# file's granted margin EXACTLY: new_cap = nonblank_today + (old_cap - total_today). No file
+# gained or lost headroom in the conversion — SYSTEM_ANALYSIS.md was at 0 margin before and
+# is at 0 margin after. So the raise history recorded below still reads correctly as the
+# argument for each grant, even though its numbers were in the old unit.
+#
 # This group is not about tidiness. Every addition that grew these documents to 891,
-# 2287 and 2214 lines was individually justified, and a week of cleanup was the price.
+# 2287 and 2214 lines was individually justified, so a week of cleanup was the price.
 # Judging each addition on its merits does not bound the total; a ceiling does, because
 # it is arithmetic rather than judgement and so it survives a session that has forgotten
 # the rule. `.claude/skills/doc-update/SKILL.md` is the authoring half of the same rule.
 #
 # The ceilings are where the 2026-08-16 cleanup landed, plus room for ONE substantial
-# addition (~20 lines, ~16 for the always-loaded root CLAUDE.md). So a genuinely new
-# measured fact does not fail the gate and a second one without a deletion does. Two
-# legitimate responses when it fires, and only two:
+# addition. So a genuinely new measured fact does not fail the gate and a second one
+# without a deletion does. Two legitimate responses when it fires, and only two:
 #   1. PAY for the addition — delete what the document no longer needs, or move a block
 #      to the document whose job it is, which is usually where it should have been.
 #   2. RAISE the ceiling, in a commit that argues for it. Deliberate growth is fine;
@@ -417,8 +452,14 @@ group_c() {
 # HARDWARE.md out of SYSTEM_ANALYSIS.md, so that is not hypothetical here.
 # ⚠️ The authoring skill is on this list too. A rulebook that grows without limit is the
 # thing it exists to prevent, and it has no other check on it.
-# ⚠️ tests/CLAUDE.md is 250 rather than 235 because the commit that INTRODUCED these
-# ceilings spent that file's whole headroom documenting this group — so the headroom was
+# ⚠️ tests/CLAUDE.md is 223 rather than 214, raised deliberately in the 2026-08-19 commit that
+# added group E: this gate gained a fifth group, changed group D's counting basis and re-keyed
+# 14 group-C receipts, and all three of those are documented in that file and nowhere else.
+# One line was PAID (a see-also that pointed at a section two paragraphs up, plus a prune
+# sentence folded into the one that already existed); the other nine are the raise. ⚠️ **No
+# headroom is granted with it** — the next addition to that file pays by deleting.
+# ⚠️ tests/CLAUDE.md was 250 rather than 235, in the old all-lines basis, because the commit
+# that INTRODUCED these ceilings spent that file's whole headroom documenting this group — so the headroom was
 # never actually granted. Raised deliberately, in that same commit, which is the escape
 # hatch working as designed rather than an exception to it. Every other row still holds
 # its original grant; check the margin before assuming a row is generous.
@@ -452,27 +493,33 @@ group_c() {
 # ⚠️ **Identified future payment, not yet spendable:** when the continuous-stream fix lands, F1
 # defect 3 loses BOTH its refuted-mechanism inventory and its onset question — that is where the
 # next ~25 lines come from. Until then there is no queued headroom in either file.
-# ⚠️ It counts LINES, which is a proxy for size and can be gamed in both directions: a
-# paragraph rewrapped to 200 characters passes while getting longer, and a table split
-# across more rows fails while saying the same thing. The ~110-char wrap is a review
-# rule this cannot see. Read the diff; do not let a green D stand in for that.
+# ⚠️ It counts non-blank LINES, which is a proxy for size and can still be gamed in both
+# directions: a paragraph rewrapped to 200 characters passes while getting longer, and a
+# table split across more rows fails while saying the same thing. The ~110-char wrap is a
+# review rule this cannot see. Read the diff; do not let a green D stand in for that.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1940	SYSTEM_ANALYSIS.md
-1580	IMPROVEMENT_PLAN.md
-260	HARDWARE.md
-390	CLAUDE.md
-740	native_apps/CLAUDE.md
-240	lib/CLAUDE.md
-150	commissioning/CLAUDE.md
-125	device-files/CLAUDE.md
-250	tests/CLAUDE.md
-270	scummvm-roomwizard/CLAUDE.md
-205	vnc_client/CLAUDE.md
-170	.claude/skills/doc-update/SKILL.md
+1581	SYSTEM_ANALYSIS.md
+1321	IMPROVEMENT_PLAN.md
+216	HARDWARE.md
+337	CLAUDE.md
+622	native_apps/CLAUDE.md
+214	lib/CLAUDE.md
+120	commissioning/CLAUDE.md
+106	device-files/CLAUDE.md
+223	tests/CLAUDE.md
+215	scummvm-roomwizard/CLAUDE.md
+162	vnc_client/CLAUDE.md
+137	.claude/skills/doc-update/SKILL.md
 EOF
+}
+
+# Non-blank line count. A line of nothing but whitespace is not content, so it is neither
+# chargeable nor spendable — see the basis note on group D above.
+nonblank_lines() {
+    grep -cve '^[[:space:]]*$' "$1" || true
 }
 
 group_d() {
@@ -488,11 +535,11 @@ group_d() {
                 "$path" "$cap"
             continue
         fi
-        n="$(wc -l < "$root/$path")"
+        n="$(nonblank_lines "$root/$path")"
         n=$((n))
         if [ "$n" -gt "$cap" ]; then
             bad=$((bad + 1))
-            [ -n "$quiet" ] || printf '  OVER CEILING  %s  %d lines, ceiling %d (+%d — delete as much, or raise it deliberately)\n' \
+            [ -n "$quiet" ] || printf '  OVER CEILING  %s  %d non-blank lines, ceiling %d (+%d — delete as much, or raise it deliberately)\n' \
                 "$path" "$n" "$cap" "$((n - cap))"
             continue
         fi
@@ -505,6 +552,78 @@ group_d() {
         [ -n "$tightest" ] && printf ' (tightest margin: %s, %d lines left)' "$tightest" "$tight"
         printf '\n'
     fi
+    echo "$bad" > "$RESULT"
+    [ "$bad" -eq 0 ]
+}
+
+# ── group E: structural markdown health ───────────────────────────────────────
+# Two defects that render as *plausible* markdown, so neither a reader skimming the diff
+# nor GitHub's own view flags them — and both are produced by ordinary editing.
+#
+#   E1  A file with no trailing newline. `Edit`, `cat`, `head -N` splices and heredoc
+#       rewrites all drop it, and the next append then lands on the last line rather than
+#       after it — silently joining two paragraphs, or turning a heading into body text.
+#       ⚠️ Found one live on the first run (2026-08-19), which is this check's positive
+#       control on the real tree: a rule that has only ever been seen passing is not
+#       evidence it can fail.
+#
+#   E2  A column-0 paragraph on the line directly after an INDENTED bullet. CommonMark's
+#       lazy-continuation rule folds it into that bullet, so the paragraph disappears from
+#       where the author put it and reappears inside a list item. This is the shape group
+#       D's old all-lines basis actively rewarded: deleting the blank line above a
+#       paragraph paid off a 1-line overage and broke the document, and the gate said PASS.
+#       The basis change removes the incentive; this check removes the defect.
+#
+# ⚠️ Blind spots, all under-counting, all deliberate:
+#   - a column-0 line beginning `*`, `+`, `-` or a number is read as a list marker, so a
+#     paragraph opening with emphasis (`*Note:* …`) is not seen;
+#   - a column-0 `|` table row after an indented bullet is lazily swallowed the same way
+#     but is not flagged, because a table is not the reported defect;
+#   - a bullet at column 0 followed by a column-0 paragraph is also lazy continuation, and
+#     is out of scope — the reported defect is the INDENTED-bullet case, which is the one
+#     that reads as correct.
+# Fenced code blocks are skipped in both checks, for the same reason group A skips them:
+# a `# comment` or an indented line inside a fence is not markdown structure.
+
+# Every scanned markdown file, relative to $1.
+md_files() {
+    scan_files "$1" | grep '\.md$'
+}
+
+group_e() {
+    local root="$1" quiet="${2:-}"
+    local bad=0 total=0 f
+    local -a files=()
+    mapfile -t files < <(md_files "$root")
+    [ ${#files[@]} -eq 0 ] && { echo 0 > "$RESULT"; return 0; }
+
+    for f in "${files[@]}"; do
+        total=$((total + 1))
+        [ -s "$root/$f" ] || continue
+        if [ "$(tail -c1 "$root/$f" | wc -l)" -eq 0 ]; then
+            bad=$((bad + 1))
+            [ -n "$quiet" ] || printf '  NO EOL AT EOF %s — the next append will join onto its last line\n' "$f"
+        fi
+    done
+
+    local hits
+    hits="$( cd "$root" && awk '
+    FNR == 1 { fence = 0; prev_bullet = 0 }
+    /^[ \t]*```/ { fence = !fence; prev_bullet = 0; next }
+    fence { next }
+    {
+        if (prev_bullet && $0 ~ /^[^ \t#>|*+-]/ && $0 !~ /^[0-9]+[.)]/ && $0 !~ /^</)
+            printf "  LAZY BULLET   %s:%d  column-0 paragraph after an indented bullet — blank line needed: %.48s\n", FILENAME, FNR, $0
+        if ($0 ~ /^[ \t]+([*+-]|[0-9]+[.)])[ \t]/) prev_bullet = 1
+        else if (prev_bullet && $0 ~ /^[ \t]+[^ \t]/) prev_bullet = 1
+        else prev_bullet = 0
+    }' "${files[@]}" )"
+    if [ -n "$hits" ]; then
+        bad=$((bad + $(printf '%s\n' "$hits" | wc -l)))
+        [ -n "$quiet" ] || printf '%s\n' "$hits"
+    fi
+
+    [ -n "$quiet" ] || printf 'group E: %d markdown files, %d structural defects\n' "$total" "$bad"
     echo "$bad" > "$RESULT"
     [ "$bad" -eq 0 ]
 }
@@ -591,21 +710,73 @@ EOF
         rc=1
     fi
 
-    # Group D, controlled in THREE directions: over ceiling must fire, under must not, and
-    # a ceiling naming a file that is not there must fire. The third is the one a
-    # "count the lines and compare" check passes by accident, and it is the case that
-    # matters after a split — the guard must follow the document, not the old filename.
-    printf 'a\nb\nc\nd\ne\n' > "$t/BIG.md"       # 5 lines against a ceiling of 3 — must fire
-    printf 'a\nb\n'          > "$t/SMALL.md"     # 2 lines against a ceiling of 9 — must not
+    # Group D, controlled in FOUR directions: over ceiling must fire, under must not, a
+    # ceiling naming a file that is not there must fire, and — the control on the counting
+    # basis — a file that is over on TOTAL lines but under on NON-BLANK lines must NOT
+    # fire. That last one is what makes deleting whitespace worthless as payment; without
+    # it, the basis could silently revert to `wc -l` and every group-D result would still
+    # look right. The missing-file case is the one a "count the lines and compare" check
+    # passes by accident, and it is the case that matters after a split — the guard must
+    # follow the document, not the old filename.
+    printf 'a\nb\nc\nd\ne\n' > "$t/BIG.md"       # 5 non-blank against a ceiling of 3 — must fire
+    printf 'a\nb\n'          > "$t/SMALL.md"     # 2 non-blank against a ceiling of 9 — must not
+    printf 'a\n\n\nb\n\n   \nc\n\n\n' > "$t/BLANKS.md"  # 9 total, 3 non-blank, ceiling 5 — must not
     local cf="$t/ceilings.tsv"
-    printf '3\tBIG.md\n'    > "$cf"
-    printf '9\tSMALL.md\n' >> "$cf"
-    printf '9\tGONE.md\n'  >> "$cf"
+    printf '3\tBIG.md\n'     > "$cf"
+    printf '9\tSMALL.md\n'  >> "$cf"
+    printf '5\tBLANKS.md\n' >> "$cf"
+    printf '9\tGONE.md\n'   >> "$cf"
     seen="$(CEILINGS_FILE="$cf" group_d "$t" quiet; cat "$RESULT")"
     if [ "$seen" = "2" ]; then
-        echo "self-test: PASS — group D caught 2 (BIG.md over, GONE.md missing); SMALL.md under ceiling ignored"
+        echo "self-test: PASS — group D caught 2 (BIG.md over, GONE.md missing); SMALL.md under ceiling" \
+             "and BLANKS.md (9 total lines, 3 non-blank, ceiling 5) ignored"
     else
         echo "self-test: FAIL — group D expected 2, reported $seen"
+        rc=1
+    fi
+
+    # Group E, controlled in both directions on BOTH of its checks: a file that ends in a
+    # newline and separates its column-0 paragraphs with a blank line must not fire; a file
+    # missing its final newline must, and a column-0 paragraph directly after an indented
+    # bullet must. The two blind spots are asserted too — a column-0 BULLET after an
+    # indented one is legal list continuation, and a fenced block's indented lines are not
+    # structure — because both are shapes a naive version of this check fires on.
+    mkdir -p "$t/e"
+    cat > "$t/e/GOOD.md" <<'EOF'
+# Fixture
+
+- top bullet
+  - indented bullet, wrapped
+    over two lines
+
+A column-0 paragraph, correctly separated by a blank line.
+
+- bullet
+- another column-0 bullet, which continues the list
+
+```text
+  - an indented bullet inside a fence
+not a paragraph, because this is code
+```
+
+Done.
+EOF
+    printf '# No trailing newline\n\nBody.' > "$t/e/NOEOL.md"
+    cat > "$t/e/LAZY.md" <<'EOF'
+# Fixture
+
+- top bullet
+  - indented bullet
+Swallowed into that bullet by lazy continuation.
+
+Fine again.
+EOF
+    seen="$(group_e "$t" quiet; cat "$RESULT")"
+    if [ "$seen" = "2" ]; then
+        echo "self-test: PASS — group E caught 2 (NOEOL.md missing final newline, LAZY.md:5 lazy" \
+             "continuation); GOOD.md's blank-separated paragraph, column-0 bullet and fenced block ignored"
+    else
+        echo "self-test: FAIL — group E expected 2 defects, reported $seen"
         rc=1
     fi
 
@@ -639,6 +810,9 @@ case "${1:-}" in
         echo
         echo "Document size ceilings — growth is paid for or decided on, never absorbed:"
         group_d "$REPO" || fail_total=$((fail_total + 1))
+        echo
+        echo "Structural markdown health — a trailing newline, and no lazily-swallowed paragraph:"
+        group_e "$REPO" || fail_total=$((fail_total + 1))
         ;;
 esac
 
