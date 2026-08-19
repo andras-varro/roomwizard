@@ -97,6 +97,12 @@ typedef struct {
                                *   voice's tail, never behind the whole bus's:
                                *   see audio_mix_voice_pending()                    */
     uint32_t last_tone_gen;
+    uint32_t last_tone_ms;    /**< when that tone was ISSUED, not when it ends.
+                               *   ⚠️ Chaining is only correct for notes meant as
+                               *   one motif, so it is gated on this being RECENT
+                               *   (AUDIO_TONE_CHAIN_MS in audio.c) — without the
+                               *   gate an unrelated tap inherited a 3 s drone's
+                               *   tail and mixing became a queue                   */
 } Audio;
 
 /**

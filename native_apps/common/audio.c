@@ -29,6 +29,12 @@
  *  The ALSA OSS shim SRCs internally to the TWL4030's native 48000 Hz. */
 #define TARGET_RATE       44100
 
+/** How recently the preceding tone must have been ISSUED for the next one to
+ *  chain behind it — half a frame.  The reasoning, and the two ways it goes
+ *  wrong at 0 and at unbounded, are at the one place that reads it: the mixing
+ *  branch of audio_tone(). */
+#define AUDIO_TONE_CHAIN_MS 16
+
 /** Channel count assumed only when the read-back fails.  `hw:0,0` is
  *  stereo-only (measured, ../SYSTEM_ANALYSIS.md#34-audio), so 2 is the right
  *  fallback — but it is a fallback, not the model. */
@@ -268,6 +274,7 @@ static void level_defaults(Audio *audio)
     audio->master_shift   = AUDIO_MASTER_SHIFT;
     audio->last_tone_slot = -1;
     audio->last_tone_gen  = 0;
+    audio->last_tone_ms   = 0;
 }
 
 /** Everything both entry points do: amp on, open, configure, read back. */
@@ -361,6 +368,7 @@ static void bus_reset(Audio *audio)
     audio_mix_set_knee(&audio->mix, audio_voice_peak(audio->vol));
     audio->last_tone_slot = -1;
     audio->last_tone_gen  = 0;
+    audio->last_tone_ms   = 0;
     audio->pump_starved = 0;
     audio->pump_lost    = 0;
     audio->pump_diag    = 40;
@@ -720,34 +728,68 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
      * audio_pump_enable() takes today's path byte for byte, which is a stronger
      * guarantee than "degrades gracefully". */
     if (audio->pumping) {
-        /* ⚠️ **The delay defaults to the tail of the PRECEDING TONE**, not to 0
-         * and not to the whole bus's.  It is the kernel ring that serialises two
-         * back-to-back audio_tone() calls today, and a mix bus will not:
-         * `tetris.c:620-621`, `tetris.c:714-715` and `snake.c:317-318` play two
-         * notes with no audio_interrupt() between them, so at delay 0 all three
-         * turn from two-note motifs into DYADS.  `AudioVoice.delay` already
-         * exists for exactly this — it is what makes audio_success() an arpeggio.
+        /* ⚠️ **The delay defaults to the tail of the PRECEDING TONE** — but only
+         * while that tone is RECENT.  Two rules, and each one exists because the
+         * other alone was heard to be wrong on the panel.
          *
-         * ⚠️ And it must NOT be `audio_mix_pending()`: that is the worst voice on
-         * the whole bus, so one 3 s drone pushed six later taps behind it on the
-         * panel — mixing turned into a queue.  audio_mix_voice_pending() names one
-         * voice by (slot, generation), so a freed or reused slot reads 0 rather
-         * than borrowing whatever moved in.
+         * Chaining, first: it is the kernel ring that serialises two back-to-back
+         * audio_tone() calls today, and a mix bus will not.  `tetris/tetris.c:620-621`,
+         * `tetris/tetris.c:714-715` and `snake/snake.c:317-318` each play two notes
+         * with no audio_interrupt() between them, so at delay 0 all three turn from
+         * two-note motifs into DYADS.  `AudioVoice.delay` already exists for exactly
+         * this — it is what makes audio_success() an arpeggio.
          *
-         * The ~23 `audio_interrupt(); audio_tone();` sites are unaffected: the
-         * interrupt stops every voice, so the tail it reads is 0 and the tone still
-         * starts immediately.  That is the property that keeps "overlapping sounds
-         * mix" from silently becoming "overlapping sounds queue". */
-        long tail_ms = audio_ms_for_frames(audio->sample_rate,
-                                           audio_mix_voice_pending(&audio->mix,
-                                                                   audio->last_tone_slot,
-                                                                   audio->last_tone_gen));
+         * ⚠️ **And recency, because chaining unconditionally is how mixing became a
+         * QUEUE.**  A tap has no relationship to whatever last happened to make a
+         * sound, and with no gate it inherited that sound's whole remaining tail:
+         * four spaced taps over one 3 s drone put the last one 3800 ms out, since
+         * each tap also chains behind the tap before it (measured,
+         * `../tests/audio_tone_test.c` group C).  The operator heard precisely that
+         * — *"the audio is still serialized"* — while `audio_success()` overlapped
+         * the same drone correctly, because play_sequence() calls audio_mix_add()
+         * directly and never sets `last_tone_slot`.  That asymmetry, canned sounds
+         * mixing while a plain tone queues, is this defect's fingerprint.
+         *
+         * ⚠️ **AUDIO_TONE_CHAIN_MS is HALF A FRAME, and the gap it splits is not
+         * close.**  A motif's two calls are consecutive statements — microseconds
+         * apart, same frame.  An independent tap is a frame away at least:
+         * FRAME_DELAY_ACTIVE_US is 33333 (`common.h`), and snake's gameplay frame
+         * is 150 ms falling to 50 (`snake.c:26`).  Half a frame is the midpoint of
+         * µs and 33 ms, so both sides keep an order of magnitude of margin.  The
+         * stamp is the ISSUE time and not the end time, so a third note still
+         * chains behind the second rather than being cut loose by the first.
+         *
+         * ⚠️ And the tail must NOT be `audio_mix_pending()`: that is the worst voice
+         * on the whole bus, so one 3 s drone pushed six later taps behind it on the
+         * panel — the same symptom this gate fixes, by the other mechanism.
+         * audio_mix_voice_pending() names one voice by (slot, generation), so a
+         * freed or reused slot reads 0 rather than borrowing whatever moved in.
+         *
+         * The ~23 `audio_interrupt(); audio_tone();` sites are unaffected either way:
+         * the interrupt stops every voice, so the tail it reads is 0 and the tone
+         * still starts immediately.  That is the property that keeps "overlapping
+         * sounds mix" from silently becoming "overlapping sounds queue". */
+        uint32_t now    = time_now_ms();
+        bool     recent = (uint32_t)(now - audio->last_tone_ms) <= AUDIO_TONE_CHAIN_MS;
+        /* ⚠️ That subtraction is uint32 over a clock audio_ms_from_timeval() masks to
+         * 22 bits, so it is not a 2^32 wrap: across the ~48.5-day rollover the delta
+         * reads ENORMOUS rather than tiny, and the guard therefore fails CLOSED —
+         * one 16 ms window per 48.5 days in which a motif's second note starts on
+         * time instead of after its first.  It can never fail the other way, which
+         * is the direction that would queue a tap. */
+        long     tail_ms = recent
+                         ? audio_ms_for_frames(audio->sample_rate,
+                                               audio_mix_voice_pending(&audio->mix,
+                                                                       audio->last_tone_slot,
+                                                                       audio->last_tone_gen))
+                         : 0;
         int slot = audio_mix_add(&audio->mix, freq_hz, duration_ms,
                                  (tail_ms > 0) ? (int)tail_ms : 0,
                                  audio_voice_peak(audio->vol));
         if (slot >= 0) {
             audio->last_tone_slot = slot;
             audio->last_tone_gen  = audio_mix_voice_gen(&audio->mix, slot);
+            audio->last_tone_ms   = now;
         }
         return;
     }

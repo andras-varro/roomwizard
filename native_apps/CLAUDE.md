@@ -616,10 +616,12 @@ group A does it that way and labels it.
 
 ## Audio: the generator is separate from the device
 
-`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it** — the half a host
-regression can reach (`tests/audio_gen_test.c`, build line in its header). `audio.c` keeps the device half:
-the config gate, `/dev/dsp`, the ioctls, the GPIO12 amp poke — and it **consumes `audio_gen` for everything
-else**, so no arithmetic in it is out of a host test's reach. Three rules live there, each having cost something:
+`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it**
+(`tests/audio_gen_test.c`). `audio.c` keeps the device half — the config gate, `/dev/dsp`, the ioctls,
+the GPIO12 amp poke — and **consumes `audio_gen` for everything else**, so no arithmetic in it is out of
+a host test's reach. ⚠️ **Nor is `audio.c` itself, and it must NOT grow `audio_out.c`'s `__has_include`
+split to get there** — `tests/hostshim/sys/soundcard.h` redirects onto this host's `<linux/soundcard.h>`:
+`-Itests/hostshim` on the host, **off for ARM** (`tests/audio_tone_test.c`). Three rules live there:
 
 - **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums L + R
   (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the generator is
@@ -631,8 +633,8 @@ else**, so no arithmetic in it is out of a host test's reach. Three rules live t
   `audio_write_frames()` is the only code that decides when to stop: on frame boundaries, or it reports
   `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` whatever the caller's policy — an
   unlimited policy against a full sink hangs the render loop, which is worse than the swap. The four EAGAIN
-  loops `audio.c` hand-rolled are now four **named policies** over one `write_mono()` — `WPOL_TONE`,
-  `WPOL_PREFILL`, `WPOL_CHUNK`, `WPOL_FADE`. Do not add a fifth loop; add a fifth policy.
+  loops `audio.c` hand-rolled became **named policies** over one `write_mono()`; two survive (`WPOL_TONE`,
+  `WPOL_PUMP`) now the theremin and the fade live in `audio_out.c`. Add a policy, never a loop.
 - **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` holds frequency and
   amplitude still, so deleting it while collapsing the duplicated generators deletes the fade.
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —
@@ -697,14 +699,13 @@ These rules, each of which is a way to get this wrong:
   after which the next sound plays three quarters of a second late.
 - **A voice carries a `delay`, and `audio_success()` depends on it**: simultaneous voices are a *chord*, and
   the canned sounds are note tables plus one sequencer. `audio_interrupt()` resets no ring — a tail survives it.
-- ⚠️ **`audio_tone()` defaults its delay to the tail of the PRECEDING TONE, never the bus's.**
-  `audio_mix_voice_pending()` names one voice by (slot, generation) — a slot alone does not, because
-  slots are reused within a call. Taking it from `audio_mix_pending()` instead made one 3 s drone
-  serialise every later tap behind it, which is mixing turned into a queue. The ~23
-  `audio_interrupt(); audio_tone();` sites are unaffected: the interrupt leaves the tail at 0.
+- ⚠️ **`audio_tone()` chains onto the preceding tone only while that tone is RECENT** —
+  `AUDIO_TONE_CHAIN_MS`, half a frame. Unbounded, a tap inherited a 3 s drone's tail and taps stacked
+  behind each *other* (last of four at 3800 ms, `tests/audio_tone_test.c` group C); at 0, tetris' and
+  snake's two-note motifs collapse into dyads. The tail is ONE voice's, by (slot, generation) — the bus's
+  (`audio_mix_pending()`) made the same queue. The ~23 interrupt-then-tone sites are unaffected: tail 0.
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
-- **`WPOL_PUMP` is a fifth *policy*, not a fifth loop.** Same rule as the four above it.
 - ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
   the pump is on rather than letting two writers interleave frames into one device.
 
