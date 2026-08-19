@@ -342,6 +342,20 @@ takes it from 8.5 MB to ~3.9 MB (`-ac 1` averages rather than sums, so it cannot
 Asking `/dev/dsp` for 48000 instead only moves the problem: the generator takes its rate as an argument
 (`audio_mix_init(m, rate)`) so tones are rate-agnostic, but then the `asl_*.wav` files need the resample.
 
+✅ **The conversion is DONE and on the device** (operator, 2026-08-19): `/opt/sound/music1-mono.wav`
+(3,898,628 B) and `music2-mono.wav` (4,914,692 B) — note the **hyphen**, not the `_mono` the command above
+prints. Headers read off `.188` with `od -t x1 -N 48`: `audioFormat 0x0001`, `channels 0x0001`,
+`sampleRate 0x0000ac44` (44100), `byteRate 0x00015888`, `blockAlign 0x0002`, `bitsPerSample 0x0010`. So
+**both music files are now byte-for-byte the mixer's internal format too, and Phase 8 needs no conversion
+of any kind.** The originals are still there beside them; do not read those.
+
+⚠️ **The parser must WALK the chunks — the `data` chunk is not at a fixed offset.** `ffmpeg` wrote a
+`LIST`/`INFO` metadata chunk after `fmt `, so in both mono files `data` starts at byte **164**, while in
+`asl_success.wav` it starts at **36** (measured, both with `od -j`). A reader that assumes the textbook
+44-byte header would feed 128 bytes of the encoder's version string into the mixer as samples on the
+music and be correct on the effects — which is the worst shape of this bug, because the effects would
+prove the loader works.
+
 ⚠️ **`AudioMixer` has no sample voice at all today** — every voice is a generated sine (frequency plus
 phase), so this is new surface rather than a parameter. And ⚠️ **the bed must STREAM**: 8.5 MB against
 234 MB of RAM means reading from an fd on each pump call, not loading whole. That touches
