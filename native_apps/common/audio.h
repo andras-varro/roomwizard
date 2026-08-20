@@ -344,6 +344,20 @@ void audio_pump_set_keepalive(Audio *audio, bool on);
  */
 int  audio_cont_enable(Audio *audio, bool on);
 
+/** The mix bus as an `audio_out` fill: render mono, expand to the granted
+ *  channel count.  `audio_cont_enable()` installs this itself, so no app calls
+ *  it — it is exported for two callers that are not apps:
+ *
+ *   - a host regression that drives the REAL continuous path with a file-backed
+ *     `AudioOutDev` instead of `/dev/dsp` (`tests/audio_path_dump.c`).  ⚠️ This
+ *     is the point: `tests/audio_dump.c` hand-transcribes the chain out of
+ *     `audio_gen.c` primitives, so its byte-equality result never covered the
+ *     DELIVERY — the per-service chunking and the bus state carried across
+ *     chunks.  A test that re-implements the fill would have the same hole.
+ *   - F1 Phase 6, where ScummVM's adapter becomes another fill beside this one.
+ */
+long audio_cont_fill_mix(void *ctx, int16_t *buf, long frames, int channels);
+
 /** True while the continuous stream owns the device. */
 bool audio_cont_active(const Audio *audio);
 

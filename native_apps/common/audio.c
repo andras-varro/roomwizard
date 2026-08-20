@@ -502,7 +502,7 @@ static int16_t *pump_scratch(Audio *audio, long frames)
  * SILENCE rather than writing nothing.  That is the whole fix: a stream allowed
  * to go idle is a stream transition, and a transition is the click.  It also
  * makes the old `keepalive` toggle structural rather than optional here. */
-static long cont_fill_mix(void *ctx, int16_t *buf, long frames, int channels)
+long audio_cont_fill_mix(void *ctx, int16_t *buf, long frames, int channels)
 {
     Audio *audio = (Audio *)ctx;
     int16_t *mono = pump_scratch(audio, frames);
@@ -557,7 +557,7 @@ int audio_cont_enable(Audio *audio, bool on)
 
         bus_reset(audio);              /* CONT implies PUMP — see audio.h */
         audio_out_set_shift(&audio->out, audio->master_shift);
-        audio_out_set_fill(&audio->out, cont_fill_mix, audio, "mix bus");
+        audio_out_set_fill(&audio->out, audio_cont_fill_mix, audio, "mix bus");
         return 0;
     }
 
@@ -915,7 +915,7 @@ void audio_stream_stop(Audio *audio)
     /* ⚠️ The stream must never be left without a fill — a service with no callback
      * writes silence, which is correct, but then audio_tone() would enqueue into a
      * mixer nobody renders.  The mix bus is the default owner and takes it back. */
-    audio_out_set_fill(&audio->out, cont_fill_mix, audio, "mix bus");
+    audio_out_set_fill(&audio->out, audio_cont_fill_mix, audio, "mix bus");
 
     audio->streaming    = false;
     audio->osc.amp      = 0.0;
