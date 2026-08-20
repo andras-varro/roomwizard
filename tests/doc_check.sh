@@ -358,6 +358,10 @@ rw_provision_check_keeps	device-files/CLAUDE.md	-
 rw_clean_validate	device-files/CLAUDE.md	SYSTEM_ANALYSIS.md
 TouchCalibSweep	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 clamp_to_hw	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
+11.4 MB/s	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+12287	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+clampedAdd	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+AUDIO_VOL_UNITY	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 0..60000	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 touch_fit_axis_range	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 FB_TOUCH_INSET_MAX	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
@@ -508,6 +512,20 @@ group_c() {
 # ⚠️ **Identified future payment, not yet spendable:** when the continuous-stream fix lands, F1
 # defect 3 loses BOTH its refuted-mechanism inventory and its onset question — that is where the
 # next ~25 lines come from. Until then there is no queued headroom in either file.
+# ✅ **That payment was COLLECTED 2026-08-20 and it came in far above its estimate**: F1's phase table
+# lost its eight closed rows, the LIM A/B, the level derivation, the exoneration, the refuted-mechanism
+# inventory and the onset question, and F19 lost the playback path it no longer owns —
+# IMPROVEMENT_PLAN.md fell 1319 → ~1198 non-blank against a ceiling of 1321. ⚠️ **The ceiling was NOT
+# lowered to match, deliberately**: F1 phase 5 (the games' sound sets) and phase 6 are unwritten, and
+# lowering a ceiling onto a file that is mid-feature buys nothing and blocks the next honest addition.
+# ⚠️ 2026-08-20, FOURTH raise, deliberate and argued: SYSTEM_ANALYSIS.md 1587 → 1592 (measured
+# post-edit count). One measured device fact with no home anywhere in the docs — the card's sequential
+# read speed, ~11.4 MB/s, against the 88.2 KB/s an uncompressed mono bed consumes. It is worth its five
+# lines because it settles a CLASS of question rather than one: whether any asset can be streamed off
+# the card instead of loaded into 234 MB of RAM. The same commit removes ~121 non-blank lines from
+# IMPROVEMENT_PLAN.md, so the documentation shrinks by ~116 net — which is the argument this raise rests
+# on, since per-file ceilings cannot themselves see that. ⚠️ **No headroom is granted: 1592 is the
+# measurement, and the next addition to that file pays by deleting.**
 # ⚠️ It counts non-blank LINES, which is a proxy for size and can still be gamed in both
 # directions: a paragraph rewrapped to 200 characters passes while getting longer, and a
 # table split across more rows fails while saying the same thing. The ~110-char wrap is a
@@ -516,7 +534,7 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1587	SYSTEM_ANALYSIS.md
+1592	SYSTEM_ANALYSIS.md
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md

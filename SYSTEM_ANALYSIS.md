@@ -132,6 +132,12 @@ naming `ttyO*` not `ttyS*`; companion PMIC TWL4030 (AM335x uses TPS65217).
 Buffer" is SanDisk's OEM high-endurance line (dashcams, surveillance) — a sensible choice for
 hardware that gets hard power-cycled, and worth matching when cloning to a larger card.
 
+**Sequential read is ~11.4 MB/s — measured on `.188`, 2026-08-20**, reading a 3,898,628 B file whole.
+That settles whether an asset can be *streamed* off the card rather than loaded: uncompressed 44.1 kHz
+16-bit mono audio needs 88.2 KB/s, i.e. **0.77 %** of it. ⚠️ **That is throughput, not per-read
+LATENCY** — the half that lands in a render loop, which a streaming consumer must absorb with a
+read-ahead buffer it refills only when dry.
+
 ### 3.2 Display
 
 **What's there.** Sharp **`LQ070Y3LG4A`** — 7" WVGA TFT, 800×480, LVDS input, LED backlight. The

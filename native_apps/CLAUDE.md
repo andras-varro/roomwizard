@@ -671,14 +671,14 @@ These rules, each of which is a way to get this wrong:
   so at a fixed acoustic level a lower `vol` with a smaller shift has strictly more headroom. Set them
   with `audio_set_volume()` / `audio_set_master_shift()`; a lone sine's clean peak on this speaker is
   measured, and 18000 is a near-square ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
-- ⚠️ **`AUDIO_MIX_HARD` is `clampedAdd` and what `audio_mix_init()` sets — but NO app runs it: every
-  first bus session is SOFT** (measured 2026-08-20; `../IMPROVEMENT_PLAN.md` F1). `AUDIO_MIX_SOFT` is this
-  repo's own knee and stays reachable on the panel's `LIM` pad. ⚠️ **A knee is only correct while it
-  tracks the voice amplitude** — one voice must pass byte-identical, so every volume change re-derives it
+- ⚠️ **`AUDIO_MIX_HARD` is `clampedAdd`, what `audio_mix_init()` sets, and — since 2026-08-20 — what every
+  app actually runs** (`level_defaults()`; `tests/audio_tone_test.c` group F). At the shipped `vol` it adds
+  no nonlinearity to the ≤ 2 voices a game sums, where `AUDIO_MIX_SOFT` — this repo's own knee, still on
+  the panel's `LIM` pad — bends every two-voice sum. ⚠️ **A knee is only correct while it tracks the voice
+  amplitude**: one voice must pass byte-identical, so every volume change re-derives it
   (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
-  `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which the bounded
-  curve guarantees by construction. Read `lim` for whether the sum is being bent, and
-  `../IMPROVEMENT_PLAN.md` F1 for the mechanisms measurement has already killed.
+  `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which the bounded curve
+  guarantees by construction; `../IMPROVEMENT_PLAN.md` F1 has the mechanisms measurement already killed.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
   (the knee bent it — expected under SOFT, not a fault), `starve` (the ring was dry with audio still owed:
   **one audible gap each, pacing not mixing**), `lost` (refused after render), `drop` (full bus). Read them.

@@ -201,6 +201,15 @@ tool-level traps rather than device facts, and each has cost real time.
   `SYSTEM_ANALYSIS.md` came back `1871` of 1871 lines, and `0` by two other methods. Use
   `awk 'index($0,"\r")>0'`, and cross-check with `cat -A | grep -c '\^M\$'`. Same family as the `strings`
   trap above: a tool whose failure looks like a measurement.
+- ⚠️ **A pipeline reports the LAST command's exit status, so `./tests/<gate>.sh | tail` says PASS when
+  the gate failed.** Same family again, and it is the *gate* it lies about rather than a measurement.
+  Read `${PIPESTATUS[0]}`, or redirect to a file and `Read` it — which is what `./tests/doc_check.sh`
+  needs anyway: it takes ~2 min (background it), it emits NUL bytes that make the output unreadable
+  (`| tr -d '\000'`), and its destination must be **outside** the repo or group D counts the receipt.
+- ⚠️ **Git Bash `sed` does not expand `\n` in a REPLACEMENT** — it inserts a literal `n`, silently, and
+  the corruption lands in the middle of a line you are no longer looking at. Use `Edit` for any
+  multi-line splice, and ⚠️ **never splice into the middle of an existing comment block**: the result
+  parses and reads as though the second half's reasoning belongs to the first half's claim.
 - **Git Bash `/tmp` and WSL `/tmp` are different filesystems.** Write captures somewhere under
   `c:\work\roomwizard` and both sides reach them. ⚠️ **WSL's `/tmp` also does not survive between
   `wsl.exe` calls** — the instance idles out and takes it with it, so a fixture staged in one call can

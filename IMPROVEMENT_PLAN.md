@@ -36,8 +36,8 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and the `bus_reset()` SOFT default, which the A/B's answer now argues should become HARD. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **Do `music{1,2}-mono.wav` still sound right mixed under GAMEPLAY** — the bus itself is answered (bed clean, effects over it clean, wraps inaudible), so what is left is a real game's render loop, not the tool's | part of item 5's session | [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14). ⚠️ **No longer blocked on the library** — the PCM voice ships and is heard; it is blocked on a GAME calling `audio_music_start()`, which nothing does |
+| 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
+| 6 | **Do `music{1,2}-mono.wav` still sound right mixed under GAMEPLAY, and do the WAV effects work as effects** — the bus itself is answered (bed clean, effects over it clean, wraps inaudible), so what is left is a real game's render loop and real game timing, not the tool's | part of item 5's session | F1 Phase 5 — the games must take the stream and grow a sound set first. ⚠️ **`brick_breaker` gains five sounds it has never made; flag them before this listen, not after** |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -248,244 +248,119 @@ All userspace. No kernel work.
 it and dangled every inbound link — seven of them at one close, all named by markdownlint's `MD051`. The
 state lives in the table instead, where updating it costs nothing.
 
+**Phases 0–3d and 8 are closed, and every measurement they produced is homed elsewhere**: the card, the
+four OSS bugs and the full `hw:0,0` constraint table in
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio), the library's authoring rules in
+`native_apps/CLAUDE.md` → *Audio* and *Mixing*, the adapter's parameters in
+`scummvm-roomwizard/CLAUDE.md` → *Audio*, and the per-phase narrative in
+`~/.claude/plans/tender-singing-cook.md`. Between them they built a host-tested generator, the mix bus,
+one shared continuous stream (`common/audio_out.{c,h}`), the level, `audio_tone()`'s recency guard, and a
+streaming sample voice — a WAV bed with effects over it, heard clean on `.188`. ⚠️ **None of them fixed
+the harshness two sustained sines make, and that is a RESULT rather than a shortfall**: the cause is
+analog, below both userspaces, and not ours to fix (below).
+
 | Phase | What it is | State |
 |---|---|---|
-| 0 | measure `hw:0,0` before rewriting anything | ✅ **closed, passed** — `.188`, 2026-08-14 |
-| 1 | cross-build tinyalsa into `arm-deps/` | ✅ **closed, passed** — host-only, 2026-08-15 |
-| 2 | split the pure generator out and host-test it | ✅ **closed, passed** — host-only, 2026-08-15 |
-| 3 | the mix bus, as an optional per-frame pump | ✅ **closed** — two tones heard as two, crackling gone. ⚠️ It did **not** fix the one-voice distortion, and that is the result: the mix bus is measured innocent (2026-08-16) |
-| 3b | one shared continuous-stream device half — `oss-mixer.cpp`'s architecture in `common/audio_out.{c,h}` | ✅ **closed, measured on the panel** — `starve`/`lost`/`drop` zero on every logged line and `appl_ptr` never rewinds. ⚠️ It did not fix the distortion either, exactly as row 3 predicted |
-| 3c | the LEVEL — `MixerImpl`'s architecture rather than a new design. Detail below | ✅ **closed, heard 2026-08-19** — settled at `vol` 96, which was already the default, so no constant moved. The digital chain is exonerated by md5 (below); what roughness remains is not the mixer's |
-| 3d | the recency guard on `audio_tone()`'s chaining | ✅ **closed, heard 2026-08-19** — a tap over a running drone sounds at once, and tetris' and snake' two-note motifs are still two notes. ⚠️ The verdict is valid rather than lucky because `/tmp/mix.log` carried `cont=1 pump_active=1` on every tap: with PUMP off, the old flush-and-replace path would have discarded the drone and sounded *identical* while proving nothing. `tests/audio_tone_test.c` (9 checks, host + cross-built on `.188`) is the regression |
-| 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix |
-| 5 | the games take the continuous stream — `tetris` and `brick_breaker` first | open, after 3c. ⚠️ **`brick_breaker` gains five sounds it has never made**: `audio_tone(600,30)` at `brick_breaker.c:924` and four more are under the ~60 ms floor and inaudible today, and a continuous feed drops that floor to ~5 ms. Flag it before the listen, not after |
+| 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** — `tetris` and `brick_breaker` first. Design below | open, and it is the next thing to do |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
-| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | ✅ **closed, HEARD on `.188` 2026-08-20** — the bed is clean, effects over it are clean, the loop wraps are inaudible, and the two-voice question it existed to settle closed as a product decision (below). ⚠️ Two things the listen itself exposed are open: the `CHORD` pad's predicate and the SOFT-on-first-session default. Library half: `audio_mix_add_sample()` + `common/audio_wav.c` + `audio_mix_release_voice()`, `tests/audio_sample_test.c` 63 checks, all 16 sabotages seen failing. Device half: `audio_music_start/_stop/_active` and `audio_sfx_play()` in `audio.c`, refusing loudly off the bus and on a rate mismatch — one `AudioSampleVoice` mechanism used twice, bed and effect. UI: row 5 (`WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622`), offsets **derived** from `SCREEN_SAFE_HEIGHT`. ⚠️ **The full-bus rule needed no change** — `audio_gen.h:425` was written for this voice: a blip into a full bus is refused, the bed is never stolen. Detail below |
 
-The per-phase work, its measurements and the corrections each phase made to its own predecessor live in
-`~/.claude/plans/tender-singing-cook.md`, which carries a finer phase split than this table.
+⚠️ **The cause hunt is CLOSED, and the rule it produced is about CONTENT rather than source: an effect
+must be BROADBAND and transient, not a sustained pure tone, whatever it is made of.** *"Effects should be
+samples"* was the first wording and it misleads — a WAV of a sine distorts exactly like a generated one.
+The measurement that ended it (a pre-mixed two-sine WAV through the vendor's `aplay` — no mixer, no
+generator, no pump, a different userspace entirely — distorting identically) and the intermodulation
+mechanism are in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **Ten mechanisms are
+refuted by measurement and none may be re-raised**: the limiter, the mix bus, the generator (THD 0.00 %
+by DFT, against 42.9 % on a real square as that probe's positive control), the effective sample rate, a
+silent sample-format fallback, `/dev/dsp`-versus-ALSA as the *cause*, `WPOL_PUMP` dropping rendered
+frames, a chronically slow render loop, truncation in the write path, and analog overdrive as the *whole*
+story. ⚠️ **`clip == 0` was never evidence of a clean mix** — it proves int16 did not overflow, which a
+bounded limiter guarantees by construction, and the gate read PASS while the sound was destroyed.
+⚠️ **A pitch detector's number is not evidence here either**: 220 + 440 measures 220 Hz and a 523/659/784
+triad measures 131 Hz, because that triad is 4:5:6 — both arithmetic, not distortion. And identical
+frequencies started at different moments partially cancel, which `AudioVoice.delay` guarantees they are.
+⚠️ **Do not tune the generator for it**: a pitch tilt has *measured* support (1760 Hz at 2/6 against
+440 Hz at 3/6) and is still a comfort change rather than a fix, and it must not ship beside another audio
+change — that two-variable comparison is one this entry has already paid for once.
 
-✅ **CLOSED 2026-08-20, and the rule is about CONTENT rather than source: effects must be BROADBAND and
-transient, not sustained pure tones, whatever they are made of.** *"Effects should be samples"* was the
-first wording and it is a proxy that misleads — a WAV of a sine distorts exactly like a generated one.
-Three controls, one session, `vol` 96, `CONT: ON`, operator on `.188`:
+**Phase 5 — the games take the stream, and their effects become WAVs.** Designed with the operator
+2026-08-20; the code is the next session's work. Four parts, in this order, because ① alone changes what
+every game sounds like:
 
-| stimulus | verdict |
-|---|---|
-| WAV bed alone | clean |
-| **two full broadband streams** — `music1-mono` bed + `music2-mono` over it | clean, *"not noisy beyond the expected mixup"* |
-| 440 + 880, and 220 + 622 | harsh; the tritone *"very harsh like a trombone"* |
-| **`03-overlap-440-880.wav` PRE-MIXED, played by the vendor's `aplay`** | *"same distortion as on the device"* |
+① **The pump, per game.** `audio_pump_enable(&audio, true)` after `audio_init()`, `audio_pump(&audio)`
+once per frame beside `fb_swap()`, and the frame-pacing decision asks the library rather than the game —
+the three-line shape is in `native_apps/CLAUDE.md` → *Mixing*. ⚠️ **Every game's idle sleep is
+`FRAME_DELAY_IDLE_US` (100 ms) and that STARVES a continuously fed stream**: 100 ms empties the ring on
+15 of 59 services where 66 ms empties it on none (measured;
+[§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 5). So an app with a bed running must pump on **every**
+iteration, drawing or not, and cap its sleep at `audio_cont_service_interval_us()`. ⚠️ **`snake` is the
+worst case and needs naming**: its play sleep is `game.speed`, `INITIAL_SPEED` 150 ms falling to 50
+(`snake/snake.c:26`), so it starves *before* it speeds up rather than after. ⚠️ **And five games hold a
+blocking `usleep(100000)` LED-flash sequence at a menu transition** — `tetris/tetris.c:561`,
+`pong/pong.c:476`, `snake/snake.c:372`, `frogger/frogger.c:777` and the same shape in `brick_breaker` —
+each one a service a bed will not get. They are bounded and fire only on a transition, so a first pass
+may leave them; `starve` is the counter that says whether it mattered, and **one `starve` per bed start
+is expected** (the first service of a fresh stream legitimately has `in_flight` 0).
 
-⚠️ **That last row is the one that ends the hunt, and it is the strongest control this entry has ever
-had.** A file through `aplay` has **no** mixer, generator, pump, chunking or OSS path in it — a different
-userspace stack entirely — and it distorts identically. So the defect is below *both* userspaces, in the
-codec/amp/cone. Measurement and the intermodulation mechanism:
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **It also predicts Phase 4 will not fix
-this** — tinyalsa is another userspace, and `aplay` already proved userspace is not where it lives. And
-the second row kills the *"the `asl_success` ding was too simple"* objection: two full music tracks
-overlapping for 55 s are clean at the same level.
+② **`brick_breaker` GAINS FIVE SOUNDS it has never made.** `audio_tone(&audio, 600, 30)` at
+`brick_breaker.c:924`, then `:959`, `:1000`, `:1046` and `:1049` — 20–40 ms each, under the ~60 ms floor a
+*restarted* stream imposes, and a continuously fed one drops that floor to 5 ms
+([§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 6). ⚠️ **Flag them to the operator BEFORE the deploy, not
+after**: they will be heard as new sounds and read as a regression otherwise.
 
-⚠️ **So the cause hunt ENDS — five candidates dead, do not re-raise any.** The LEVEL, harmonic FUSION,
-the SOFT knee (by arithmetic, not by the void `LIM` pad — see below), the DELIVERY
-(`tests/audio_path_dump.c`), and now the whole of our own userspace. What is left is analog and it is
-**not ours to fix**. ⚠️ **Do not tune the generator for it**: a pitch tilt is a comfort change, and a
-per-frequency level budget is comfort too, not a fix.
+③ **The four canned sounds become sample-backed, so no game edits a line to get WAV effects.**
+`audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` carry most of the games' audio call
+sites and every one of them is a sustained pure tone — `audio_fail()`'s 392 / 330 / 262 Hz sits in the
+worst band this speaker has and the test tool's `DRONE` at 220 Hz is below it entirely, which also
+supplies a simpler candidate than phase cancellation for the near-silent stacked drones: **this speaker
+cannot do 220 Hz.** So back each name with a clip when one is configured and keep today's note table as
+the fallback: every game upgrades at once, a device with no sound files still makes sounds, and the raw
+`audio_tone()` sites keep their tones until somebody gives them names.
 
-✅ **The `LIM` A/B is ANSWERED 2026-08-20 — by arithmetic plus one listen — and the answer is that it
-cannot matter at `vol` 96.** Either the sum fits, and then HARD is a literal no-op while SOFT still bends
-(the knee tracks ONE voice's peak, so any two-voice sum sits above it); or it does not fit, and then both
-are audibly broken. The pre-mixed `06-chord-hard.wav` / `07-chord-soft.wav` pair is the second half:
-*"these are bad, but they are bad on the PC as well"* — expected, because 3 × 96 > `AUDIO_VOL_UNITY`, so
-that chord is a genuine digital overflow (`clip=304` HARD, `lim=7120` SOFT) and therefore **the wrong
-stimulus for a limiter A/B**. ⚠️ **A valid A/B needs TWO voices rendered under both limiters, which
-`audio_dump.c` does not currently emit** — it renders `03-overlap` under HARD only. One line to add if
-anyone wants it, but it is moot for the harshness: the HARD render is `clip=0 lim=0`, provably linear, and
-already sounds wrong.
+④ **A per-game sound set, declared in a config file rather than in C.** The operator's decision, and it
+is what makes ③ cheap: a game names its bed and its effects in a file, so adding, swapping or silencing a
+sound is a deploy of data, not a rebuild — which is also how a sourced file replaces a generated one
+later. Shape it after the `.app` manifests
+([`SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`](SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests)):
+INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
+drifts between the online and offline installer renders a game that plays nothing.
 
-⚠️ **Which settles the shipped default the other way round: HARD is strictly better and `bus_reset()`
-should be fixed.** At `vol` 96 with ≤ 2 voices HARD applies no nonlinearity at all, while SOFT bends every
-two-voice sum for no benefit. So the `AUDIO_MIX_SOFT`-on-first-session bug below is a real quality defect,
-not merely a documentation mismatch — but it still changes shipped audio for every game, so it is the
-operator's call.
+**The effect files are GENERATED rather than sourced** (operator, 2026-08-20; the reason is recorded
+because it is not the obvious one). A generator makes *broadband and transient* a **guaranteed property**
+of every file it writes, where a downloaded or AI-generated effect can be a sustained tone that lands
+straight back in the intermodulation band — and with no microphone on this device
+([§3.4](SYSTEM_ANALYSIS.md#34-audio)) each such file would cost an operator listen to rule out. Generated
+files also carry no licence question and can be re-rolled. Render the stock set to **mono / 44100 /
+16-bit**, which is the mixer's internal format and needs no conversion of any kind; ⚠️ **the loader must
+WALK the chunks** — `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO` chunk, which puts it
+at byte 164 in the music files against 36 in `asl_success.wav`, both measured), and a reader that assumes
+the textbook 44-byte header is correct on the effects and feeds a version string to the mixer on the
+music.
 
-⚠️ **The `CHORD` pad is still broken and must be fixed before question (b) or (c) is asked again.** It
-branches on `audio_pump_active()` (`native_apps/tests/audio_mix_test.c:950`), which is **false** with
-`PUMP` ON, `CONT`/`KEEP` OFF and a silent bus — `native_apps/common/audio.c:473` ends in
-`audio_mix_pending(&audio->mix) > 0`. So on exactly the tap an A/B needs, nothing else sounding, it falls
-back to three chained `audio_tone()` calls, and the 2026-08-20 checklist's own *"`CONT: OFF`, `PUMP: ON`"*
-guaranteed it. Measured in `/tmp/mix.log`: `CHORD` at `cont=0 pump_active=0` left `clip=0`, the next at
-`cont=1 pump_active=1` took `clip` 0 → 304, matching `audio_dump.c` host-side to the sample. **Fix by
-testing `audio->pumping`.** ⚠️ **And `lim`/`clip` accumulate across both halves of a `LIM` A/B** —
-`bus_reset()` is the only thing that zeroes them and it deliberately carries the limit choice across, so
-cycle `PUMP` between halves or neither counter is attributable to a position.
-
-✅ **MEASURED 2026-08-20, no longer inferred: every app's FIRST bus session runs SOFT, not the HARD chain
-`native_apps/CLAUDE.md` documents as the measured-good default.** `audio_init()`'s `memset`
-(`native_apps/common/audio.c:334`) zeroes `mix.limit`, and `bus_reset()` saves that zero across
-`audio_mix_init()`'s `AUDIO_MIX_HARD` to protect an operator's mid-comparison setting
-(`audio.c:404-406`) — and `AUDIO_MIX_SOFT` is 0. Confirmed two ways on `.188`: the panel read
-`LIM: SOFT` immediately after `PUMP: ON`, and an earlier session showed `lim 99143`, a counter only the
-SOFT branch can raise (`audio_gen.c:388`). It changes shipped audio for every game, so whether HARD
-becomes the real default is the operator's call, not a drive-by fix.
-
-**ALSA already works on this kernel, and it is measured rather than assumed.** The card, the mixer path,
-the four OSS bugs, the in-kernel config, the on-device ALSA userspace and the full `hw:0,0` constraint
-table are all in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) — read it before touching
-this, and do not restate its numbers here. The authoring rules for the shared library and its two write
-modes are `native_apps/CLAUDE.md` → *Audio* and *Mixing*; the adapter's parameters are
-`scummvm-roomwizard/CLAUDE.md` → *Audio*.
-
-✅ **The LEVEL question is answered, and its answer was taken from the implementation that already sounds
-good.** `scummvm-roomwizard/backend-files/oss-mixer.cpp` has fed this speaker since 2026-08-03 and plays
-Full Throttle's video, MIDI, speech and effects well (operator, 2026-08-18) — so the move that produced
-`common/audio_out.{c,h}` out of its *stream* is available for its *level* too. `Audio::MixerImpl` plus
-`scummvm/audio/rate.cpp` do exactly three things and none of them is a limiter:
-
-- a **per-voice volume** as a fraction of full scale — `out = (in * vol) / 256`, `rate.cpp:122`, with
-  `vol` composed from a global 0–256 and a per-channel 0–255 (`mixer.cpp:628-651`);
-- a **clamped add** into int16 (`clampedAdd`, `rate.cpp:127`), with no knee and no soft curve;
-- **one master attenuation** immediately before `write()` — `>>1`, `oss-mixer.cpp:236-243`.
-
-⚠️ **Headroom is the VOLUME's job, and an earlier revision of this entry said it was the master shift's —
-that is FALSE.** The shift divides *after* the clamp has already decided what survives, so it cannot buy a
-voice room: `n` voices fit while `n * vol <= AUDIO_VOL_UNITY`, and the shift is only this SPEAKER's
-ceiling. The two cancel acoustically and are **not** interchangeable — at a fixed loudness a lower `vol`
-with a smaller shift has strictly more headroom. `audio_out` owns the shift stage
-(`audio_out_set_shift()`) — the native path simply passed 0 through it. So question 6's three candidate
-laws — a voice-count-dependent gain, a `sqrt` law, a smaller `AUDIO_MAX_VOICES` — are all **dropped in
-favour of the shipped shape**: volume relative to full scale, clamped add, one shift.
-
-✅ **The ladder was walked on 2026-08-19 and the level is SETTLED at `vol` 96** — rung 3/6, which is
-already the shipped `AUDIO_VOICE_VOL`, so the ear confirmed the committed default and **no constant
-changes**. 440 Hz is inaudible below 3/6 (at 1/6 only with an ear against the box); **1760 Hz is
-comfortable at 2/6**. `CHORD` sounded the same under both `LIM` settings. ScummVM's own values were never
-going to transfer — its content is broadband and ours is a **lone sine**, the worst case for this amplifier
-— and ⚠️ **the clean ceiling falls as pitch falls** ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)
-carries both ladders).
-
-✅ **The digital chain is EXONERATED, by byte equality rather than by ear.**
-`native_apps/tests/audio_dump.c` renders the shipped chain — `audio_mix_render()` →
-`audio_interleave()` → `audio_attenuate()`, 44100/2ch, `vol` 96, shift 1 — to eight WAVs, and its **md5s
-are identical cross-built and run on `.188` versus built host-side**, which is what makes a host render a
-faithful proxy for this code rather than an approximation of it. Every case the operator called distorted
-comes out `clip=0 lim=0`, and `05-success-plus-880.wav` *"plays clear"* on a PC. Three voices are the only
-ones that exceed — `clip=304` under HARD, `lim=7120` under SOFT — exactly as `n * vol <= 256` predicts.
-⚠️ **The counters are not stuck at zero**: that same chord is the instrument's own negative control.
-
-⚠️ **So the roughness that remains on the panel is NOT the generator and NOT the mixer.** What the dump
-does not cover is *delivery* — the pump renders in chunks and writes through the EAGAIN policy where the
-dump renders in one pass — and everything analog. The session log argues delivery is clean too: `starve`,
-`lost` and `drop` all 0 across 375 taps, `clip` peaking at 133 samples. That leaves the speaker, which
-fits the operator's own control — and phase 8 upgraded that control from ScummVM's material to **our own
-bus playing samples cleanly** (above), so "a sustained sine parks energy on one resonance where broadband
-content does not" is now the measured reading rather than the plausible one.
-
-⚠️ **A pitch tilt is still NOT in this change and phase 8 removed its main argument.** It has *measured*
-support — 1760 Hz at 2/6 against 440 Hz at 3/6 — but the question it was waiting on is answered: generated
-tones are not the right source material for anything sustained, so tilting their gain is a comfort change
-for the short blips that remain, not a fix for anything. Take it or drop it as a UI preference; do not
-ship it beside another audio change, which is the two-variable comparison this entry has already paid for.
-
-**Phase 8 — a WAV bed with effects over it.** Asked for 2026-08-19, and it is the operator's own proposal:
-play `/opt/sound/music1.wav` as background music with a stop control, and over it either a generated chord
-or one of the vendor effect files. It is simultaneously the next mixing test and a candidate answer to
-"should the effects be samples rather than sines at all" — which the exoneration above turns into a
-**product question rather than a bug hunt**. The operator's grounds are direct: *"I already know from the
-ScummVM play that the sound and effects are enjoyable at a reasonable sound level."* ✅ **Answered: they
-are** — the listen above is the answer, and it is why phase 8 closes.
-
-⏳ **Phase 8's own residual work, all of it small.** ① The `CHORD` pad's predicate (above) — a
-`native_apps` build, and it must land before question (b) or (c) is asked again. ② **There is NO host test
-for the `audio.c` DEVICE half**: `audio_music_start/_stop/_active`, `audio_sfx_play()`,
-`sample_total_frames()` and `sample_live()`. The refusals are loud, so those fail visibly; what is silent
-if wrong is `sample_total_frames()`'s 64-bit clamp against a 32-bit `long` and `sample_live()`'s
-`(slot, gen)` read — a stale generation would let a released voice look live. `tests/audio_tone_test.c`
-is the file to extend: it already links `audio.c` through `-Itests/hostshim`, so no new build route is
-needed. ③ Whether HARD becomes the shipped default (above) — operator's call, one host case first.
-
-⚠️ **The two asset families are not the same format** — measured on `.188`, 2026-08-19:
-
-| file | ch | rate | bits | conversion |
-|---|---|---|---|---|
-| `asl_click.wav`, `asl_error.wav`, `asl_success.wav` | 1 | 44100 | 16 | **none** — already the mixer's internal format |
-| `music1.wav`, `music2.wav` | 2 | 48000 | 16 | downmix to mono **and** 48000 → 44100 |
-
-So the effects are a drop-in and the music is not. **Convert the music offline rather than carrying a
-runtime resampler** — `ffmpeg -y -i music1.wav -ac 1 -ar 44100 -c:a pcm_s16le music1_mono.wav`, which also
-takes it from 8.5 MB to ~3.9 MB (`-ac 1` averages rather than sums, so it cannot clip on the way down).
-Asking `/dev/dsp` for 48000 instead only moves the problem: the generator takes its rate as an argument
-(`audio_mix_init(m, rate)`) so tones are rate-agnostic, but then the `asl_*.wav` files need the resample.
-
-✅ **The conversion is DONE and on the device** (operator, 2026-08-19): `/opt/sound/music1-mono.wav`
-(3,898,628 B) and `music2-mono.wav` (4,914,692 B) — note the **hyphen**, not the `_mono` the command above
-prints. Headers read off `.188` with `od -t x1 -N 48`: `audioFormat 0x0001`, `channels 0x0001`,
-`sampleRate 0x0000ac44` (44100), `byteRate 0x00015888`, `blockAlign 0x0002`, `bitsPerSample 0x0010`. So
-**both music files are now byte-for-byte the mixer's internal format too, and Phase 8 needs no conversion
-of any kind.** The originals are still there beside them; do not read those.
-
-⚠️ **The parser must WALK the chunks — the `data` chunk is not at a fixed offset.** `ffmpeg` wrote a
-`LIST`/`INFO` metadata chunk after `fmt `, so in both mono files `data` starts at byte **164**, while in
-`asl_success.wav` it starts at **36** (measured, both with `od -j`). A reader that assumes the textbook
-44-byte header would feed 128 bytes of the encoder's version string into the mixer as samples on the
-music and be correct on the effects — which is the worst shape of this bug, because the effects would
-prove the loader works.
-
-⚠️ **`AudioMixer` has no sample voice at all today** — every voice is a generated sine (frequency plus
-phase), so this is new surface rather than a parameter. And ⚠️ **the bed must STREAM**: 8.5 MB against
-234 MB of RAM means reading from an fd on each pump call, not loading whole. That touches
-`AUDIO_MAX_VOICES` and the "a full bus refuses, it never steals a voice" rule — whose entire point is that
-the longest voice is the one a dropped blip must not cut.
-[F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14) is the same requirement arriving
-from the other direction, so **build one mechanism, not two.**
-
-⚠️ **Two shipped pitch choices sit in the worst band and should move up**: `audio_fail()` is 392 / 330 /
-262 Hz (`play_sequence()`'s table in `native_apps/common/audio.c`) and the test tool's `DRONE` is 220 Hz.
-This also supplies a simpler candidate than phase cancellation for the near-silent stacked drones: **this
-speaker cannot do 220 Hz.**
-
-**The clean level may be too quiet for sustained music** — a 24 s melody at peak 6000 needed focus and
-repetition to follow. That is a constraint on
-[F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14), not on this entry.
-
-⏳ **The onset distortion is NOT established and did not reproduce.** *"As always, the first sound started
-distorted, then cleaned out"* is what set two sessions going; across two later runs the operator heard no
-distortion at any onset `[n=1 each side]`, and the elapsed idle time differed too. ⚠️ **Onset LATENCY is
-answered and does not pull phase 4 forward**: *"a little delay, in the ms range"*, against the ~44–112 ms
-the queue over-report prices it at. ⚠️ **Do not start a next attempt from "lower `AUDIO_PEAK`"** — that
-shape was measured wrong in both directions, and the volume-plus-shift model is what replaces it.
-
-⚠️ **The CLICK's premise is in doubt, so do not treat the continuous stream as its confirmed fix.** At
-`CONT: OFF` — the per-sound-reset path, kept reachable as that toggle's negative control — the operator
-heard **no crack**. What reproduced was a missing envelope, *"without attack and decay"* against *"more
-natural"* at `CONT: ON`, consistent with the start-of-stream pop eating a short tone's attack (gotcha 6 in
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Ear-only, `[n=1]`. The stream change stands
-on its own measurements — it costs **less** CPU than the path it replaces — not on that click.
-
-⚠️ **Nine mechanisms are refuted by measurement; do not re-raise any of them.** The limiter (one voice at
-the knee passes byte-identical). The mix bus and the generator (**THD 0.00 %** by DFT over the shipped
-`audio_render_tone()`, against 42.9 % on a real square as that probe's positive control). The effective
-sample rate. A silent sample-format fallback. `/dev/dsp` versus ALSA as the *cause* — the same file through
-both is indistinguishable by ear, and the comparison that indicted it had changed two things at once.
-Analog overdrive as the *whole* story. `WPOL_PUMP` dropping rendered frames, and a chronically slow render
-loop (both from the pump's own zeroed counters). And truncation in the write path. ⚠️ **`clip == 0` was
-never evidence of a clean mix**: it proves int16 did not overflow, which a bounded limiter guarantees by
-construction, and the gate read PASS while the sound was destroyed.
-
-**Two pitch readings that looked like clues are arithmetic**, so a pitch detector's number is not evidence
-here: 220 + 440 measures 220 Hz, and the 523/659/784 CHORD measures 131 Hz because that triad is 4:5:6.
-And **one operator observation is expected physics** — identical frequencies started at different moments
-partially cancel, and `AudioVoice.delay` guarantees the phases differ.
+⏳ **What is left over after phase 5, both small.** ① The `CHORD` pad in
+`native_apps/tests/audio_mix_test.c` branches on `audio_pump_active()`, which is **false** on a silent bus
+(that predicate ends in `audio_mix_pending() > 0`), so on exactly the tap a comparison needs it falls back
+to three chained `audio_tone()` calls — **fix by testing `audio->pumping`**, and land it before any level
+or limiter question is put to the panel again. ⚠️ `lim` and `clip` also accumulate across both halves of
+such an A/B, since `bus_reset()` is the only thing that zeroes them and it deliberately carries the
+limiter choice across: cycle `PUMP` between halves or neither counter is attributable to a position.
+② **No host test covers `audio.c`'s sample half** — `audio_music_start/_stop/_active`, `audio_sfx_play()`,
+`sample_total_frames()`'s clamp against a 32-bit `long`, and `sample_live()`'s `(slot, gen)` read. The
+refusals are loud so those fail visibly; the last two are **silent** if wrong, because a stale generation
+would let a released voice look live. `tests/audio_tone_test.c` is the file to extend — it already links
+`audio.c` through `-Itests/hostshim`, so no new build route is needed.
 
 ⏳ **One device-half defect is left and it is the adapter's.** `oss-mixer.cpp:298`'s emergency
 anti-underrun `write()` ignores errors and partial writes; it is deleted rather than fixed, because the
 whole emergency path is a second write loop that the shared library replaces (phase 6). ⚠️ The format
 read-back hole is closed **only on the continuous path** — `audio_out` reads `SOUND_PCM_READ_BITS` and
-warns, while `audio.c:96` still discards `SNDCTL_DSP_SETFMT`'s granted value; that one dies with the old
-path at phase 5, and until then a format fallback there would misinterpret every byte while looking like
-success. Measured not to be firing (`hw_params` says `S16_LE`), which is why it is a defect and not a
-cause. The microphone-as-input idea stays closed — there is no mic and no jack footprint.
+warns, while `audio.c:96` still discards `SNDCTL_DSP_SETFMT`'s granted value. ⚠️ **Phase 5 does not kill
+that path**, an earlier revision of this entry said it would: the games stop using it, but
+`device_tools`, `hardware_config` and `hardware_test` still play tones without a bus, so it dies at phase
+6 at the earliest. Measured not to be firing (`hw_params` says `S16_LE`), which is why it is a defect and
+not a cause. The microphone-as-input idea stays closed — there is no mic and no jack footprint.
 
 **Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device**
 (neither `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** ·
@@ -494,39 +369,26 @@ emulator ports are coming · one mono generator feeding a stereo device, one con
 boundary — ✅ **and that duplication is measured, not assumed**: `SPKR1` sums L + R, so writing the same
 sample to both channels is right *and* the loudest option · **one tinyalsa for the whole repo**, ScummVM
 pointing at `../native_apps/arm-deps` rather than building a second copy, because zlib is built twice here
-and `LICENSE.md` carries both versions as a result.
+and `LICENSE.md` carries both versions as a result · **`AUDIO_MIX_HARD` is the shipped limiter** (decided
+2026-08-20, fixed in `level_defaults()`, `tests/audio_tone_test.c` group F): at the shipped volume HARD
+applies no nonlinearity at all to the ≤ 2 voices a game sums, while SOFT's knee tracks ONE voice's peak
+and therefore bends every two-voice sum for nothing. The `LIM` pad keeps SOFT reachable on the panel.
 
-### F19. Background music in the platformer — open, asked for 2026-08-14
+### F19. The music files, and where they live — open, asked for 2026-08-14
 
 The operator hand-copied `music1.wav` and `music2.wav` to `/opt/sound` on `.188` and wants them under
-`native_apps/platformer/`. **Both play correctly today** — `aplay -D hw:0,0`, `rc=0`, reported
-*"surprisingly loud, but not distorted"*.
+version control eventually. ⚠️ **The PLAYBACK path is no longer this entry's problem** — the streaming
+sample voice ships and has been heard (F1 phase 8), and *a game calling it* is F1 phase 5. What is left
+here is the files themselves: their format, their provenance, and whether they enter git.
 
-**The files are already in the ideal format**: `S16_LE / 48000 Hz / stereo`, which is bit-for-bit what
-`hw:0,0` grants (`SYSTEM_ANALYSIS.md#34-audio`) — no resampling, no channel conversion, no `plug`.
-8,486,604 B (44.2 s) and 10,698,444 B (55.7 s), 19.2 MB together, streaming at 192 KB/s.
-
-⚠️ **This is blocked on [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below)
-Phase 3, and it is that phase's headline use case.** Music under a game means *music playing while a
-jump or coin effect fires* — i.e. two streams summed. Today `audio.c` is one-sound-at-a-time enforced by
-`SNDCTL_DSP_RESET`, so on the current backend the music would be chopped by every sound effect. Do not
-build this against the OSS path; F1 Phase 3's mix bus is exactly what it needs, and this request is the
-concrete answer to "is real mixing worth it".
-
-⚠️ **Phase 3's bus now exists, and as of 2026-08-20 F19's own PLAYBACK PATH is complete and deployed** —
-the PCM-source voice kind ships (`audio_mix_add_sample()`, `common/audio_wav.c`) and so does the device
-half that owns the fd: `audio_music_start(path, loop)` / `_stop()` / `_active()` plus `audio_sfx_play()`
-in `native_apps/common/audio.c`, exercised from `audio_mix_test`'s row 5 on `.188`. Both decisions the
-library half landed are taken. Where the file read happens: a **pull callback**, so the mixer still has no
-fd and the SD read is entered once per 4096-frame buffer rather than once per frame. What a full
-`AUDIO_MAX_VOICES` means when the droppable voice is the soundtrack: nothing changed, because the
-refusal-not-stealing rule was written for exactly this — a blip is refused and counted, the bed is never
-cut. ⚠️ **`loop` is a large FINITE total, not a sentinel**: `audio_mix_render()` early-outs on
-`audio_mix_pending() <= 0`, so `AUDIO_MUSIC_LOOP_PASSES` (200) declares the length and it is clamped
-against a 32-bit `long`. ⚠️ **What is still open is a GAME calling it** — nothing in `platformer/` does —
-**and the loop seam is now HEARD and clean (below).**
-
-Decisions to take before it ships:
+✅ **The conversion is DONE and on the device** (operator, 2026-08-19): `/opt/sound/music1-mono.wav`
+(3,898,628 B) and `music2-mono.wav` (4,914,692 B) — note the **hyphen**, not the `_mono` that
+`ffmpeg -y -i music1.wav -ac 1 -ar 44100 -c:a pcm_s16le music1_mono.wav` prints. Both are now
+byte-for-byte the mixer's internal format (44100 / mono / 16-bit, headers read with `od -t x1 -N 48`), so
+nothing at runtime resamples or downmixes. `-ac 1` averages rather than sums, so it cannot clip on the way
+down. The stereo originals are still there beside them; do not read those. **Store mono, play stereo** —
+the speaker sums L + R (measured, [§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a mono file duplicated at
+playback is audibly identical to the stereo original at half the size and half the SD read.
 
 - ✅ **Licence: cleared, and the provenance is recorded here so nobody has to reconstruct it.** Both
   tracks are **AI-generated by the operator at `https://musely.ai/tools/platformer-level-music`**
@@ -540,11 +402,6 @@ Decisions to take before it ships:
   `Advanced Settings`/`PRO` badge and all seven section headings, so it was not a Zscaler/captcha wall.
   ⚠️ Both reads went through the same summariser and the second likely hit the 15-minute URL cache, so
   they are one retrieval re-read, not two independent ones.)
-- ⚠️ **The page also advertises *"Seamlessly Loopable Audio"* as a feature — treat that as a marketing
-  claim, not a measurement.** Background music under a platformer must loop, and a 44 s track loops
-  every 44 s, so an audible seam would be heard constantly and is the single most likely disappointment
-  in this feature. ✅ **Checked 2026-08-20 and the claim holds** — see the seam measurement below; no
-  crossfade is needed and the streaming design does not have to allow for one.
   ⚠️ **Two limits on that, stated rather than glossed:** the page asserts royalty-free *clearance* but
   **never says who owns the output**, so what we hold is a permission claim rather than a named licence
   grant; and it is a marketing/FAQ page, **not a terms-of-service or licence agreement** — none is
@@ -556,38 +413,35 @@ Decisions to take before it ships:
   *Third-party code committed in this repository*:
   `| /opt/sound/music{1,2}.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
   — and a matching row in *Distributed binaries* if they go into a bundle.
-- ⚠️ **Still open, and it is a repo-weight decision rather than a licence one: 19.2 MB of WAV in git
-  history is permanent.** Converting to mono first halves it to **9.6 MB** at zero audible cost (below),
-  which is the cheapest version of "yes". The alternative — leave them on the device and load at runtime,
-  degrading silently when absent — keeps git small but loses them on every re-commission. Operator's call.
-- **Store mono, play stereo — halves everything for free.** The speaker sums L + R (measured), so a
-  mono `(L+R)/2` file duplicated at playback is *audibly identical* to the stereo original while
-  halving both the file and the SD read bandwidth. The duplication code is required anyway by `hw:0,0`
-  being stereo-only, so this costs nothing to adopt.
-- **Deployment.** Hand-copied files do not survive a re-commission. If the music ships, it belongs in
-  `native_apps/build-and-deploy.sh` and the bundle manifest. Note `device-files/clean-rules.conf:189`
-  keeps `/opt/sound` wholesale, so the files are safe from the clean; its *reason* text ("113 KB of
-  usable UI WAVs") goes stale the moment they are permanent.
-- **Streaming, not loading.** 19 MB into 234 MB of RAM is possible and wasteful; `audio.c` already has
-  four streaming functions whose only consumer is `tests/audio_touch_test.c`, so they can be redesigned
-  freely (F1 Phase 2). ✅ **Bandwidth measured 2026-08-20 and it is a non-issue**: `.188` reads the whole
-  3.9 MB `music1-mono.wav` at **11.4 MB/s**, and a mono 44.1 kHz 16-bit bed needs 88.2 KB/s — **0.77 %**.
-  ⚠️ **That answers throughput, not per-read LATENCY**, which is the half that would land in the render
-  loop; the sample voice absorbs it with a read-ahead buffer refilled only when it runs dry, and the number
-  to watch on the panel is `starve`, not `drop`. ✅ **Latency measured 2026-08-20 and the read-ahead
-  absorbs it**: across a 3-wrap bed at `LVL` 5/6, `starve` reached **2** and `lost`/`drop` stayed **0**.
-  ⚠️ **`starve` counts the FIRST service of a fresh stream, where `in_flight` is legitimately 0** — the
-  log's `pump: STARVED … in_flight=0 space=32768` is the very first write after a `music start`, so **one
-  `starve` per bed start is expected and is not an underrun.** Chase `starve` only when it climbs *during*
-  playback.
-- ✅ **The loop seam is MEASURED and there is NO seam, so no crossfade is needed.** `music1-mono.wav` ran
+- ⏳ **Decided in part, 2026-08-20: the audio SUPPORT lands in git now and the music does not yet.** The
+  9.6 MB mono pair goes in **through `git-lfs`, later**, when a game actually ships a bed — so the repo
+  does not carry 9.6 MB of history for a feature that is still being designed. ⚠️ **Until then the files
+  are device-only, they do not survive a re-commission, and a game whose configured bed is absent must
+  play its effects and carry on** rather than refuse to start. ⚠️ **`git-lfs` is absent from this WSL**
+  (`CLAUDE.md` → *Working from this host*), so whoever adds them runs `git lfs track` from Git Bash.
+- **Deployment, when they do land.** They belong in `native_apps/build-and-deploy.sh` and the bundle
+  manifest. Note `device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale, so the hand-copied
+  files are safe from the clean meanwhile; its *reason* text ("113 KB of usable UI WAVs") goes stale the
+  moment they are permanent.
+- ✅ **Streaming, not loading, and both halves are measured.** Card throughput makes the bed free —
+  0.77 % of a sequential read ([`SYSTEM_ANALYSIS.md#31-soc-memory-and-storage`](SYSTEM_ANALYSIS.md#31-soc-memory-and-storage)) —
+  and the read-ahead absorbs the per-read latency that lands in the render loop: across a 3-wrap bed at
+  `LVL` 5/6, `starve` reached 2 and `lost`/`drop` stayed 0. ⚠️ **`starve` counts the FIRST service of a
+  fresh stream, where `in_flight` is legitimately 0**, so one per bed start is expected and is not an
+  underrun. Chase `starve` only when it climbs *during* playback.
+- ✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `music1-mono.wav` ran
   as a looping bed through three full wraps on `.188` — `/tmp/mix.log` carries `wraps=3` and
   `"release armed on slot 0, 1762684 frames into pass 3"`, at `LVL` 5/6, louder than the settled level —
   and the operator heard *"nothing. Wonderful continuation"* across two deliberate attempts to catch it.
-  ⚠️ **The `aplay`-twice control did NOT run and could not**: what ships is *mono* and `hw:0,0` is
-  stereo-only (above), so `aplay -D hw:0,0` printed `set_params:1347: Channels count non available` to
-  stderr and played silence while otherwise looking like a clean run — the failure mode that reads as a
-  measurement. `plughw:0,0` is the device for a mono file. The bed's own counter is `AudioWav.loops`.
+  So the page's *"Seamlessly Loopable Audio"* marketing claim happens to hold for these two files; it is
+  not a property to assume of a third. ⚠️ **The `aplay`-twice control did NOT run and could not**: what
+  ships is *mono* and `hw:0,0` is stereo-only, so `aplay -D hw:0,0` printed
+  `set_params:1347: Channels count non available` to stderr and played silence while otherwise looking
+  like a clean run — the failure mode that reads as a measurement. `plughw:0,0` is the device for a mono
+  file. The bed's own counter is `AudioWav.loops`.
+- ⚠️ **The clean level may be too quiet for sustained music** — a 24 s melody at peak 6000 needed focus
+  and repetition to follow `[n=1, by ear]`. A bed under a game is background, so this may simply be
+  right; it is the one thing about the music that the phase-8 listen did not settle.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 

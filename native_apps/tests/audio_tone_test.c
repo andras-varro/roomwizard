@@ -51,8 +51,16 @@
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm
  *   scp build/audio_tone_test_arm root@<ip>:/tmp/ && \
  *   ssh root@<ip> "chmod +x /tmp/audio_tone_test_arm && /tmp/audio_tone_test_arm"
- * Measured 2026-08-19 on RW .188: byte-for-byte the same 9 ok lines as the host,
+ * Measured 2026-08-19 on RW .188: byte-for-byte the same ok lines as the host,
  * worst tap tail 200 ms on both.
+ *
+ * ⚠️ **Group F is a SECOND subject in this file, and it is here rather than in a new
+ * one because this is the only host test that links `common/audio.c`.**  It asserts
+ * which limiter a first bus session runs — `bus_reset()` carries `mix.limit` across a
+ * session on purpose, and `AUDIO_MIX_SOFT` being 0 meant a never-armed bus read that
+ * zero as an operator's choice.  Its second check is the negative control: a fix that
+ * hardwired HARD inside `bus_reset()` would satisfy the first and destroy the
+ * carry-across the panel's `LIM` pad depends on.
  *
  * ⚠️ **Group A is group B's negative control, which is why it must not be deleted
  * as redundant.**  A guard that is accidentally always-false passes B and C for the
@@ -208,6 +216,30 @@ int main(void)
         check(p >= 150 && p <= 260,
               "a tone straight after an interrupt owes only its own 200 ms");
         close(fd);
+    }
+
+    printf("\nF. a first bus session runs the DOCUMENTED limiter, not a zeroed field\n");
+    {
+        Audio a2;
+        /* 0xA5 rather than 0: if the defaults came from the caller's memset
+         * instead of from the init path, every check below reads garbage and
+         * says so.  audio_open() memsets internally, so this only proves the
+         * assertion is about init and not about how this test arrived. */
+        memset(&a2, 0xA5, sizeof(a2));
+        (void)audio_init_unchecked(&a2);   /* no /dev/dsp here; defaults still land */
+        audio_pump_enable(&a2, true);
+        check(audio_mix_get_limit(&a2.mix) == AUDIO_MIX_HARD,
+              "the first pump session runs AUDIO_MIX_HARD");
+
+        /* The negative control, and it is the whole reason this is two checks:
+         * bus_reset() deliberately carries the limiter across a re-arm so a
+         * panel A/B is not undone mid-comparison.  A "fix" that hardwired HARD
+         * in bus_reset() would pass the check above and break this one. */
+        audio_mix_set_limit(&a2.mix, AUDIO_MIX_SOFT);
+        audio_pump_enable(&a2, false);
+        audio_pump_enable(&a2, true);
+        check(audio_mix_get_limit(&a2.mix) == AUDIO_MIX_SOFT,
+              "and an operator's SOFT still survives a re-arm (carry-across intact)");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

@@ -299,6 +299,15 @@ static void level_defaults(Audio *audio)
      * somebody else's tone". */
     audio->music.slot     = -1;
     audio->sfx.slot       = -1;
+    /* ⚠️ Same family, and it is the LIMITER that had this bug: bus_reset() keeps
+     * `mix.limit` across a session so a panel A/B is not undone mid-comparison,
+     * but AUDIO_MIX_SOFT is 0 — so on a never-armed bus that zero masqueraded as
+     * an operator's choice and every app's first session ran SOFT.  At the
+     * shipped volume, with the two voices a game actually sums, HARD applies no
+     * nonlinearity at all while SOFT's knee (which tracks ONE voice's peak) bends
+     * every two-voice sum for nothing.  Set here rather than in bus_reset() so
+     * the carry-across keeps working.  tests/audio_tone_test.c group F. */
+    audio->mix.limit      = AUDIO_MIX_HARD;
 }
 
 /** Release one sample voice's OS resources.  Called only from audio_close():
