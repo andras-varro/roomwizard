@@ -329,6 +329,32 @@ void audio_write_frames(const AudioSink *sink, const void *buf, long frames,
  * at 45 call sites.  Offsetting each note by the ones before it preserves what
  * the panel already hears while still mixing with everything else.
  */
+/**
+ * A voice that plays RECORDED mono PCM instead of a sine.
+ *
+ * ⚠️ **The fill is a PULL callback, and that is the whole point.** `audio_gen.c`
+ * opens no fd, calls no ioctl and reads no clock — the property that lets the
+ * whole mixer be host-tested and byte-compared. A `read()` in here would take
+ * that away, so the file half stays in `audio.c` and reaches the bus through
+ * this callback. Same shape as `AudioOutFill` (`audio_out.h`), minus `channels`:
+ * the bus is mono and interleaving is strictly downstream of it.
+ *
+ * Contract, matching `AudioOutFill`'s so the two read as siblings:
+ *   - Produce up to `frames` mono samples in `dst`; return how many you really
+ *     produced. **A short fill is legal** and means "the source ran dry".
+ *   - Do not re-enter the mixer.
+ *   - `dst` is NOT pre-zeroed — a short fill's tail is whatever was there, and
+ *     the bus reads only the returned count.
+ */
+typedef long (*AudioVoiceFill)(void *ctx, int16_t *dst, long frames);
+
+/** What a voice is made of.  TONE is 0 so `memset`-zeroing a slot still yields
+ *  the voice kind every existing caller creates. */
+typedef enum {
+    AUDIO_VOICE_TONE   = 0,  /**< sin(phase) — every voice before F1 Phase 8 */
+    AUDIO_VOICE_SAMPLE = 1   /**< PCM pulled through an AudioVoiceFill       */
+} AudioVoiceKind;
+
 typedef struct {
     bool     active;      /**< false = free slot                               */
     uint32_t gen;         /**< bumped on every add — see audio_mix_voice_gen() */
@@ -340,6 +366,23 @@ typedef struct {
     long     pos;         /**< frames sounded so far (0..frames)               */
     long     attack;      /**< envelope, in frames — same curve as a plain tone */
     long     release;
+
+    /* ── AUDIO_VOICE_SAMPLE only.  Zero for a tone, which is what `memset`
+     *    already leaves behind, so no existing add path has to say so. ── */
+    int            kind;     /**< AudioVoiceKind                               */
+    AudioVoiceFill fill;     /**< pull callback — see above                     */
+    void          *ctx;      /**< opaque; the CALLER owns it and must outlive
+                              *   the voice.  There is no teardown hook on any
+                              *   of the four release sites (self-free,
+                              *   stop_all, init, slot reuse), so ownership
+                              *   cannot live down here.  Poll the voice with
+                              *   `audio_mix_voice_pending()` to learn it went. */
+    int16_t       *buf;      /**< CALLER-owned scratch.  `audio_gen.c` has no
+                              *   allocator and gains none for this.           */
+    long           buf_cap;  /**< frames `buf` holds                            */
+    long           buf_len;  /**< frames currently in `buf`                     */
+    long           buf_pos;  /**< frames of `buf` already rendered              */
+    bool           drained;  /**< the fill returned short: no more will come    */
 } AudioVoice;
 
 typedef struct {
@@ -433,6 +476,58 @@ void audio_mix_init(AudioMixer *m, int rate);
  */
 int  audio_mix_add(AudioMixer *m, int freq_hz, int duration_ms,
                    int delay_ms, int peak);
+
+/**
+ * Add one SAMPLE voice: recorded mono PCM pulled through `fill`.
+ *
+ * Returns its slot, or -1.  The full-bus rule above applies **unchanged, and
+ * that is deliberate** — it was written for exactly this voice.  A music bed is
+ * the longest voice on the bus, so a blip arriving into a full bus is refused
+ * and counted rather than allowed to cut it.  One mechanism, not two.
+ *
+ * `total_frames` is the source's real length, so `pos`, `frames`,
+ * `audio_mix_active()`, `audio_mix_pending()` and the self-free at
+ * `pos >= frames` all behave exactly as they do for a tone. ⚠️ **Getting this
+ * from the WAV's `data` chunk size rather than inventing a sentinel is what
+ * keeps `audio_mix_render()`'s `audio_mix_pending() <= 0` early-out correct**:
+ * a voice that under-reports its length is never rendered at all.  For material
+ * meant to loop, pass the total you intend to play, not one pass.
+ *
+ * `buf` is CALLER-owned scratch of `buf_frames` frames, and `audio_gen.c` never
+ * frees or reallocates it — this file has no allocator and gains none here.
+ * It must outlive the voice, and so must `ctx`.  Size it at a device period or
+ * more: it is refilled only when it runs dry, so it sets how often `fill` (and
+ * therefore the SD read behind it) is entered.
+ *
+ * `peak <= 0`, a NULL `fill`, a NULL/short `buf` and `total_frames <= 0` are all
+ * caller bugs, refused WITHOUT counting a drop — same split as above.
+ */
+int  audio_mix_add_sample(AudioMixer *m, AudioVoiceFill fill, void *ctx,
+                          int16_t *buf, long buf_frames,
+                          long total_frames, int peak);
+
+/**
+ * Ask ONE voice to stop at the end of its release, and free itself there.
+ *
+ * ⚠️ **Not the same thing as clearing `active`, and the difference is audible.**
+ * A voice cut mid-cycle steps the summed bus by its whole instantaneous
+ * amplitude, which is a click — the very defect F1 exists to remove. This
+ * shortens `frames` to `pos + release` instead, so the existing envelope walks
+ * it down to exactly 0 and the slot frees itself in `audio_mix_render()` like
+ * any other finished voice.
+ *
+ * Identified by `(slot, gen)` like `audio_mix_voice_pending()`, so a stale
+ * handle whose slot has been reused cannot stop somebody else's voice.
+ * Returns true if it found that voice and armed the release.
+ */
+bool audio_mix_release_voice(AudioMixer *m, int slot, uint32_t gen);
+
+/** Which limiter the bus is actually using, AUDIO_MIX_HARD or AUDIO_MIX_SOFT.
+ *  ⚠️ **An A/B tool must read its toggle back from here rather than print its
+ *  own variable.** `audio_mix_init()` sets HARD, so a tool whose local flag
+ *  starts false displayed `SOFT` over a HARD bus and the log agreed with it —
+ *  measured in `tests/audio_mix_test.c` 2026-08-19. */
+int  audio_mix_get_limit(const AudioMixer *m);
 
 /** Silence every voice at once.  What `audio_interrupt()` becomes when pumping:
  *  it cannot un-write audio already inside the device, so up to

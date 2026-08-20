@@ -333,6 +333,40 @@ long audio_mix_render(AudioMixer *m, int16_t *mono, long frames)
             }
 
             double env = audio_tone_env(vo->pos, vo->frames, vo->attack, vo->release);
+
+            if (vo->kind == AUDIO_VOICE_SAMPLE) {
+                /* Pull the next block only when the last one is spent, so `fill`
+                 * — and the SD read behind it — is entered once per buffer
+                 * rather than once per frame.  buf/buf_pos/buf_len are voice
+                 * state like `pos` and `phase`, which is what keeps the
+                 * incremental-render property: N then M frames pull the same
+                 * bytes in the same order as one N+M render. */
+                if (vo->buf_pos >= vo->buf_len && !vo->drained) {
+                    long got = vo->fill(vo->ctx, vo->buf, vo->buf_cap);
+                    vo->buf_len = (got > 0) ? got : 0;
+                    vo->buf_pos = 0;
+                    if (vo->buf_len < vo->buf_cap) vo->drained = true;
+                }
+                if (vo->buf_pos >= vo->buf_len) {
+                    /* The source ran dry early — end the voice here rather than
+                     * padding with silence it never contained.  A short fill is
+                     * legal, so this is a normal exit, not an error. */
+                    vo->active = false;
+                    continue;
+                }
+                int16_t s = vo->buf[vo->buf_pos++];
+
+                /* `>> 15`, not `/ AUDIO_FULL_SCALE`.  ⚠️ Cortex-A8 has no
+                 * hardware divide, so a constant divide here would be an
+                 * `__aeabi_idiv` call per sample per voice; the shift is exact
+                 * and the 1/32768-vs-1/32767 difference is a third of an LSB at
+                 * full scale.  Same reasoning as `audio_attenuate()`. */
+                acc += (int32_t)((((long)s * (long)vo->peak) >> 15) * env);
+
+                if (++vo->pos >= vo->frames) vo->active = false;
+                continue;
+            }
+
             acc += (int32_t)((double)vo->peak * env * sin(vo->phase));
 
             vo->phase += vo->phase_step;
@@ -365,6 +399,28 @@ long audio_mix_render(AudioMixer *m, int16_t *mono, long frames)
     return frames;
 }
 
+/* First-fit over the eight slots, lowest index wins.  ⚠️ ONE claim path for both
+ * voice kinds, so the refuse-never-steal rule and the `dropped` counter cannot
+ * drift apart between them — a second copy of this loop is how a sample voice
+ * would quietly acquire a different full-bus policy from a tone. */
+static AudioVoice *claim_slot(AudioMixer *m, int *slot)
+{
+    for (int i = 0; i < AUDIO_MAX_VOICES; i++) {
+        AudioVoice *vo = &m->v[i];
+        if (vo->active) continue;
+
+        memset(vo, 0, sizeof(*vo));
+        vo->active = true;
+        vo->gen    = ++m->gen_seq;       /* never 0, so 0 can mean "no voice" */
+        *slot = i;
+        return vo;
+    }
+
+    /* Every slot busy.  Refuse and COUNT — never steal, see audio_gen.h. */
+    m->dropped++;
+    return NULL;
+}
+
 int audio_mix_add(AudioMixer *m, int freq_hz, int duration_ms,
                   int delay_ms, int peak)
 {
@@ -375,27 +431,75 @@ int audio_mix_add(AudioMixer *m, int freq_hz, int duration_ms,
     if (frames <= 0) return -1;
     long delay = (delay_ms > 0) ? audio_frames_for_ms(m->rate, delay_ms) : 0;
 
-    for (int i = 0; i < AUDIO_MAX_VOICES; i++) {
-        AudioVoice *vo = &m->v[i];
-        if (vo->active) continue;
+    int slot = -1;
+    AudioVoice *vo = claim_slot(m, &slot);
+    if (!vo) return -1;
 
-        memset(vo, 0, sizeof(*vo));
-        vo->active     = true;
-        vo->gen        = ++m->gen_seq;   /* never 0, so 0 can mean "no voice" */
-        vo->phase      = 0.0;
-        vo->phase_step = 2.0 * M_PI * (double)freq_hz / (double)m->rate;
-        vo->peak       = peak;
-        vo->delay      = delay;
-        vo->frames     = frames;
-        vo->pos        = 0;
-        vo->attack     = audio_attack_frames(m->rate, frames);
-        vo->release    = audio_release_frames(m->rate, frames);
-        return i;
+    vo->kind       = AUDIO_VOICE_TONE;
+    vo->phase      = 0.0;
+    vo->phase_step = 2.0 * M_PI * (double)freq_hz / (double)m->rate;
+    vo->peak       = peak;
+    vo->delay      = delay;
+    vo->frames     = frames;
+    vo->pos        = 0;
+    vo->attack     = audio_attack_frames(m->rate, frames);
+    vo->release    = audio_release_frames(m->rate, frames);
+    return slot;
+}
+
+int audio_mix_add_sample(AudioMixer *m, AudioVoiceFill fill, void *ctx,
+                         int16_t *buf, long buf_frames,
+                         long total_frames, int peak)
+{
+    if (!m || m->rate <= 0 || !fill)  return -1;
+    if (!buf || buf_frames <= 0)      return -1;
+    if (total_frames <= 0)            return -1;
+    if (peak <= 0)                    return -1;   /* caller bug, not a full bus */
+
+    int slot = -1;
+    AudioVoice *vo = claim_slot(m, &slot);
+    if (!vo) return -1;
+
+    vo->kind    = AUDIO_VOICE_SAMPLE;
+    vo->fill    = fill;
+    vo->ctx     = ctx;
+    vo->buf     = buf;
+    vo->buf_cap = buf_frames;
+    vo->buf_len = 0;                   /* pulled on the first rendered frame */
+    vo->buf_pos = 0;
+    vo->drained = false;
+    vo->peak    = peak;
+    vo->delay   = 0;
+    vo->frames  = total_frames;
+    vo->pos     = 0;
+    /* The same envelope a tone gets, and it is not cosmetic: a bed that starts at
+     * its first sample's amplitude steps the bus, which is the click.  The
+     * release is what `audio_mix_release_voice()` later arms. */
+    vo->attack  = audio_attack_frames(m->rate, total_frames);
+    vo->release = audio_release_frames(m->rate, total_frames);
+    return slot;
+}
+
+bool audio_mix_release_voice(AudioMixer *m, int slot, uint32_t gen)
+{
+    if (!m || slot < 0 || slot >= AUDIO_MAX_VOICES || gen == 0) return false;
+    AudioVoice *vo = &m->v[slot];
+    if (!vo->active || vo->gen != gen) return false;   /* freed, or reused */
+
+    long release = (vo->release > 0) ? vo->release : 1;
+    long end     = vo->pos + release;
+    if (end < vo->frames) {
+        vo->frames = end;
+        /* `audio_tone_env()` reads the release off the END of `frames`, so
+         * shortening `frames` is what makes the ramp start HERE.  `release` is
+         * left alone: it is the ramp's length, not its position. */
     }
+    return true;
+}
 
-    /* Every slot busy.  Refuse and COUNT — never steal, see audio_gen.h. */
-    m->dropped++;
-    return -1;
+int audio_mix_get_limit(const AudioMixer *m)
+{
+    return m ? m->limit : AUDIO_MIX_HARD;
 }
 
 void audio_mix_stop_all(AudioMixer *m)
