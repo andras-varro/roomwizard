@@ -36,7 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **The mix bus, on the panel — two defects already found by ear and FIXED; the second fix is deployed and UNHEARD.** (a) ✅ two sounds heard as two · (b) `audio_success()` arpeggio-not-chord, still unasked · (c) ✅ answered, and it **refuted** the clipping diagnosis — `LIMIT: HARD` vs `SOFT` was inaudible · (d) ✅ the ~60 ms rule, all three walks — **keepalive removes it, 5 ms audible / 20 ms recognisable** · (e) CPU% while mixing, unmeasured. **First move: listen to the period-aligned lead** — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phase 3 defect 2. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline | one play session | the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
+| 5 | **The mix bus, on the panel — two defects already found by ear and FIXED; both are now HEARD and closed 2026-08-19**; the second listen exposed the two-voice harshness recorded under F1, whose cause is not found. (a) ✅ two sounds heard as two · (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ and the `CHORD` pad offered as its control is itself an arpeggio, so fix that first · (c) ✅ answered, and it **refuted** the clipping diagnosis — `LIMIT: HARD` vs `SOFT` was inaudible · (d) ✅ the ~60 ms rule, all three walks — **keepalive removes it, 5 ms audible / 20 ms recognisable** · (e) CPU% while mixing, unmeasured. **First move: listen to the period-aligned lead** — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phase 3 defect 2. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline | one play session | the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
 | 6 | **Do `music1.wav`/`music2.wav` still sound right when mixed under gameplay** — and is 192 KB/s of SD streaming free inside the render loop | part of item 5's session | [F19](#f19-background-music-in-the-platformer--open-asked-for-2026-08-14). ⚠️ **Still blocked, and item 5 does not unblock it**: the mix bus takes synthesised tone voices only, so a PCM-source voice kind is F19's own first step |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
@@ -256,7 +256,7 @@ state lives in the table instead, where updating it costs nothing.
 | 3 | the mix bus, as an optional per-frame pump | ✅ **closed** — two tones heard as two, crackling gone. ⚠️ It did **not** fix the one-voice distortion, and that is the result: the mix bus is measured innocent (2026-08-16) |
 | 3b | one shared continuous-stream device half — `oss-mixer.cpp`'s architecture in `common/audio_out.{c,h}` | ✅ **closed, measured on the panel** — `starve`/`lost`/`drop` zero on every logged line and `appl_ptr` never rewinds. ⚠️ It did not fix the distortion either, exactly as row 3 predicted |
 | 3c | the LEVEL — `MixerImpl`'s architecture rather than a new design. Detail below | ✅ **closed, heard 2026-08-19** — settled at `vol` 96, which was already the default, so no constant moved. The digital chain is exonerated by md5 (below); what roughness remains is not the mixer's |
-| 3d | **the listen: `audio_tone()`'s chaining is fixed and has not been heard yet** | fixed 2026-08-19, **machine-verified, ear outstanding**. `audio_tone()` defaulted a tap's delay to the tail of the PRECEDING TONE with no test of when that tone was issued, so a tap after `440 3s` was scheduled up to 3 s out. Canned sounds bypass it — `play_sequence()` calls `audio_mix_add()` directly and never sets `last_tone_slot` — which is why SUCCESS **did** overlap while a plain tone queued; that asymmetry is the fingerprint. The fix is a recency guard, not the removal of chaining: chain only within `AUDIO_TONE_CHAIN_MS` (16 ms, half a frame — a motif's two notes are consecutive statements µs apart, an independent tap is a frame away at least), so tetris' and snake's two-note motifs still chain. `tests/audio_tone_test.c` is the **first host regression to link `common/audio.c`**, via a redirect header rather than an `#ifdef` in the device half; its group C put the last of four spaced taps over one 3 s drone at 3800 ms before the fix and 200 ms after — taps had been accumulating behind each OTHER, not just behind the drone. The same 9 checks pass on the host and cross-built on RW .188. **Remaining, and it is the whole verdict: tap DRONE (or `440 3s`) on `audio_mix_test`, then tap 440 / 880 / 1760 while it runs — each blip must sound AT ONCE rather than queueing, and the two-note motifs in tetris and snake must still be two notes rather than a dyad** |
+| 3d | the recency guard on `audio_tone()`'s chaining | ✅ **closed, heard 2026-08-19** — a tap over a running drone sounds at once, and tetris' and snake' two-note motifs are still two notes. ⚠️ The verdict is valid rather than lucky because `/tmp/mix.log` carried `cont=1 pump_active=1` on every tap: with PUMP off, the old flush-and-replace path would have discarded the drone and sounded *identical* while proving nothing. `tests/audio_tone_test.c` (9 checks, host + cross-built on `.188`) is the regression |
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix |
 | 5 | the games take the continuous stream — `tetris` and `brick_breaker` first | open, after 3c. ⚠️ **`brick_breaker` gains five sounds it has never made**: `audio_tone(600,30)` at `brick_breaker.c:924` and four more are under the ~60 ms floor and inaudible today, and a continuous feed drops that floor to ~5 ms. Flag it before the listen, not after |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
@@ -265,6 +265,45 @@ state lives in the table instead, where updating it costs nothing.
 
 The per-phase work, its measurements and the corrections each phase made to its own predecessor live in
 `~/.claude/plans/tender-singing-cook.md`, which carries a finer phase split than this table.
+
+⚠️ **Two overlapping voices are harsh and the cause is NOT FOUND — three candidates are dead, and the
+next move is deliberately not a fourth A/B.** The 3d listen closed one defect and exposed this one
+(operator, `.188`, 2026-08-19): a lone 440 Hz at `LVL` 6/6 is *"clearly not a sine, somewhat
+distorted"*, while 440 + 880 at 3/6 is far worse — and 440 + `CHORD` worse still. What is refuted:
+
+- **the LEVEL**, by arithmetic — the lone 6/6 tone is acoustic peak **16383** and the two-voice 3/6 case
+  is **12287**, so the case that sounds worse is **25 % quieter**. That a lone tone at 6/6 is not a sine
+  is a separate real finding: **6/6 is unusable**, which confirms `vol` 96 from the other side.
+- **harmonic FUSION**, by `CHORD` — 523/659/784 contains no harmonic of 440 and is worse, so the ear is
+  not fusing an octave pair. ⚠️ Every *tone pad* is an octave of every other (220/440/880/1760), so the
+  tool cannot make an inharmonic pair; phase 8's new row adds one.
+- **the SOFT knee**, by the `LIM` pad — it does measurably bend two-voice sums (`lim` climbs ~3000
+  samples per overlapping 200 ms blip, because the knee tracks ONE voice's peak so two sit at 2× it),
+  but HARD sounds no better and at `vol` 96 two voices peak 24574 against int16's 32767, so HARD cannot
+  clip. Real, and not the cause.
+- **the DELIVERY**, by `tests/audio_path_dump.c` — a file-backed `AudioOutDev` in place of `/dev/dsp`,
+  driving `audio_cont_fill_mix()` at the panel's own geometry (period 2048, ring 6144). ⚠️ **This is the
+  region `tests/audio_dump.c` never covered**: that file does not link `common/audio.c`, it
+  hand-transcribes the chain, so its byte-equality result proved the *arithmetic* and never the
+  per-service chunking. Measured: the overlap window peaks at slope **1142** against an analytic
+  **1155** for a clean sum of those sines, every counter 0, both channels byte-identical. The operator
+  confirms the dumped WAVs are clear on a PC.
+
+⚠️ **The remaining suspect is the SPEAKER on pure sine pairs, and one control does not fit** — ScummVM's
+Full Throttle plays MIDI, effects and speech together on this same speaker with no such problem
+(operator). That is consistent with intermodulation being specific to *sustained pure sines*, which
+Full Throttle has none of, rather than to multi-source audio — **inferred, not measured.** Phase 8 tests
+it directly instead: if sampled material mixes cleanly through our own bus, "effects should be samples"
+is the answer and this closes as a product decision.
+
+⚠️ **Two defects in the instrument itself, both open, and the first invalidates a recorded refutation.**
+`audio_mix_test`'s `CHORD` pad is **not a chord** — three `audio_tone()` calls back to back
+(`native_apps/tests/audio_mix_test.c:707-709`) chain into an arpeggio, so it never puts two voices on
+the bus at once. The "`HARD` vs `SOFT` was inaudible, therefore clipping is refuted" result above was
+judged with that pad and **could not have distinguished the two limiters**; the fix is
+`audio_mix_add()` at delay 0, three times. And the tool's log **prints `limit=` from its own `v.hard`
+variable rather than reading the library** (`:567`), so at startup it displays `LIM: SOFT` while
+`audio_mix_init()` has set `AUDIO_MIX_HARD` — an A/B tool must read its toggles back from the library.
 
 **ALSA already works on this kernel, and it is measured rather than assumed.** The card, the mixer path,
 the four OSS bugs, the in-kernel config, the on-device ALSA userspace and the full `hw:0,0` constraint
