@@ -671,8 +671,8 @@ These rules, each of which is a way to get this wrong:
   so at a fixed acoustic level a lower `vol` with a smaller shift has strictly more headroom. Set them
   with `audio_set_volume()` / `audio_set_master_shift()`; a lone sine's clean peak on this speaker is
   measured, and 18000 is a near-square ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
-- ⚠️ **The bus CLAMPS by default (`clampedAdd`), and the soft knee is the A/B.** `AUDIO_MIX_HARD` is what
-  `audio_mix_init()` sets, because that is the chain measured to sound right; `AUDIO_MIX_SOFT` is this
+- ⚠️ **`AUDIO_MIX_HARD` is `clampedAdd` and what `audio_mix_init()` sets — but NO app runs it: every
+  first bus session is SOFT** (measured 2026-08-20; `../IMPROVEMENT_PLAN.md` F1). `AUDIO_MIX_SOFT` is this
   repo's own knee and stays reachable on the panel's `LIM` pad. ⚠️ **A knee is only correct while it
   tracks the voice amplitude** — one voice must pass byte-identical, so every volume change re-derives it
   (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
