@@ -261,7 +261,7 @@ state lives in the table instead, where updating it costs nothing.
 | 5 | the games take the continuous stream — `tetris` and `brick_breaker` first | open, after 3c. ⚠️ **`brick_breaker` gains five sounds it has never made**: `audio_tone(600,30)` at `brick_breaker.c:924` and four more are under the ~60 ms floor and inaudible today, and a continuous feed drops that floor to ~5 ms. Flag it before the listen, not after |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
-| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | open, asked for 2026-08-19. Detail below |
+| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | **library half CLOSED 2026-08-20, host-verified; the UI and the device half are open.** `audio_mix_add_sample()` + `common/audio_wav.c` + `audio_mix_release_voice()` ship, with `tests/audio_sample_test.c` at 63 checks and all 16 of its sabotages seen failing. ⚠️ **The full-bus rule needed no change** — `audio_gen.h:425` was written for this voice, so a blip into a full bus is refused and the bed is never stolen: one mechanism, not two. Remaining: `audio_music_*` in `audio.c` (it owns the fd), row 5 in the tool, and the listen. Detail below |
 
 The per-phase work, its measurements and the corrections each phase made to its own predecessor live in
 `~/.claude/plans/tender-singing-cook.md`, which carries a finer phase split than this table.
@@ -476,14 +476,14 @@ jump or coin effect fires* — i.e. two streams summed. Today `audio.c` is one-s
 build this against the OSS path; F1 Phase 3's mix bus is exactly what it needs, and this request is the
 concrete answer to "is real mixing worth it".
 
-⚠️ **Phase 3's bus now exists, and it does NOT yet unblock this — `AudioVoice` renders a synthesised
-tone and nothing else.** So F19's own first step is a second voice kind that pulls PCM from a source,
-which is a smaller job than the bus was but is not free, and it lands two decisions on it that the tone
-voice never had to answer: where the file read happens (a `read()` inside `audio_pump()` puts SD latency
-in the render loop, which is the thing this project spent seven techniques avoiding), and what
-`AUDIO_MAX_VOICES`-full means when the voice that would be dropped is the soundtrack rather than a blip.
-The refusal-not-stealing rule was written with this case in mind; check it still reads correctly from
-F19's side before building on it.
+⚠️ **Phase 3's bus now exists, and as of 2026-08-20 F19's own first step is DONE** — the PCM-source voice
+kind ships (`audio_mix_add_sample()`, `common/audio_wav.c`), and both decisions it landed are taken.
+Where the file read happens: a **pull callback**, so the mixer still has no fd and the SD read is entered
+once per buffer rather than once per frame. What a full `AUDIO_MAX_VOICES` means when the droppable voice
+is the soundtrack: nothing changed, because the refusal-not-stealing rule was written for exactly this and
+reads correctly from here — a blip is refused and counted, the bed is never cut. ⚠️ **What is still open
+is this feature's own half**: a game has to call it, and the bandwidth question below is answered but the
+loop seam is not.
 
 Decisions to take before it ships:
 
@@ -530,7 +530,15 @@ Decisions to take before it ships:
   usable UI WAVs") goes stale the moment they are permanent.
 - **Streaming, not loading.** 19 MB into 234 MB of RAM is possible and wasteful; `audio.c` already has
   four streaming functions whose only consumer is `tests/audio_touch_test.c`, so they can be redesigned
-  freely (F1 Phase 2). Measure the SD read cost inside the render loop before assuming 192 KB/s is free.
+  freely (F1 Phase 2). ✅ **Bandwidth measured 2026-08-20 and it is a non-issue**: `.188` reads the whole
+  3.9 MB `music1-mono.wav` at **11.4 MB/s**, and a mono 44.1 kHz 16-bit bed needs 88.2 KB/s — **0.77 %**.
+  ⚠️ **That answers throughput, not per-read LATENCY**, which is the half that would land in the render
+  loop; the sample voice absorbs it with a read-ahead buffer refilled only when it runs dry, and the number
+  to watch on the panel is `starve`, not `drop`.
+- ⏳ **The loop seam is still unheard, and it is the cheapest check here.** `aplay` the file twice back to
+  back and listen at the join — one SSH command, no code. The bed now loops in the library (`AudioWav.loop`,
+  counted by `loops`), so if it seams the fix is a crossfade at the wrap and that is far cheaper to add
+  before a game depends on the timing.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 

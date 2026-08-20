@@ -505,7 +505,7 @@ ceilings() {
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-622	native_apps/CLAUDE.md
+626	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

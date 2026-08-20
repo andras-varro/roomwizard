@@ -86,6 +86,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
 | `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
+| `audio_wav.c` | the one streaming RIFF reader: chunk walk, `(L+R)/2` downmix, the `AudioVoiceFill` adapter | assuming a 44-byte header, or loading a whole file to play it |
 | `config.c` | `/opt/games/rw_config.conf` | ad-hoc config files |
 | `keyboard.c` | on-screen keyboard (ALPHA / ALPHANUM / FULL / NUMERIC) | — |
 | `highscore.c`, `ppm.c`, `logger.c` | scores, icons, logging | — |
@@ -448,12 +449,8 @@ raw -> panel    piecewise-linear, 3 segments, knots at panel dim/4 and 3*dim/4  
 so a predicted reach can never disagree with the live mapping. Stage 2 is the exact inverse of what
 `fb_swap()` does, which is what keeps touch and drawing in one coordinate system.
 
-**The panel is linear, and hard-clipped at raw 0 and 4095.** That is the model consistent with every
-measurement: a single straight line across the panel, with the reading pinned flat over a band inside each
-Y edge (~30 px top, ~29 px bottom on RW09 — target 10 at panel y 458 returns raw 4095 on all three taps,
-because clipping already started around panel 450). **Do not believe "~8.8 raw/px in the outer band vs
-~9.9 interior"** — an earlier revision asserted it from one target; residuals against the interior line
-are ±80 raw (≈±8 px, i.e. tap placement) with no consistent sign.
+**The panel is linear, and hard-clipped at raw 0 and 4095** — the model, the per-edge dead band and the
+refuted "~8.8 vs ~9.9 raw/px" claim: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
 
 Calibration therefore has two parts. Least squares over 11 targets × 3 taps gives the interior **line**,
 and **only targets far from the ends enter it** — ≥100 px on X, ≥80 px on Y
@@ -688,10 +685,9 @@ These rules, each of which is a way to get this wrong:
 - ⚠️ **It is opt-in: an app that never enables it takes the pre-continuous path.** `audio_tone()` BRANCHES on
   `audio->pumping` — it does not "enqueue and also write", which cannot work: a bounded immediate write
   truncates any tone longer than the lead, an unbounded one hands the whole tone to the kernel unmixably.
-- ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** The lead is three device periods —
-  ~139 ms at 44100, and worth only ~79 ms of real audio because `GETOSPACE` over-reports — so a loop
-  dropping to `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves it and you hear a gap, which reads as a
-  mixing defect rather than a pacing one. The measured ceiling is ~66 ms; ask the library for it with
+- ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** A loop dropping to
+  `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves the lead and you hear a gap, which reads as a mixing
+  defect rather than a pacing one. Ask the library for the ceiling with
   `audio_cont_service_interval_us()`, and ask the component whether it needs frames, exactly as with
   `gameover_needs_redraw()`.
 - ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty OSS ring is 32768 frames —
@@ -706,6 +702,16 @@ These rules, each of which is a way to get this wrong:
   (`audio_mix_pending()`) made the same queue. The ~23 interrupt-then-tone sites are unaffected: tail 0.
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
+- ⚠️ **A voice is a tone OR a SAMPLE, and the sample PULLS rather than reads.** `audio_mix_add_sample()`
+  takes an `AudioVoiceFill` plus a caller-owned buffer, so `audio_gen.c` keeps its no-fd property and
+  `audio_wav.c` owns the file — never put a `read()` in the mixer. Pass the **real** length from the `data`
+  chunk: `audio_mix_render()` skips a bus whose `audio_mix_pending()` is 0, so a voice that under-reports is
+  never rendered. Stop it with `audio_mix_release_voice()`, which shortens `frames` so the envelope fades
+  it — clearing `active` cuts mid-cycle, which is a click. `tests/audio_sample_test.c`, 63 checks.
+- **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.**
+  `tests/audio_path_dump.c` renders the production fill through a file-backed `AudioOutDev` to a WAV, which
+  exonerated the delivered bytes with no microphone; `tests/audio_dump.c` hand-transcribes and so covers
+  only the arithmetic.
 - ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
   the pump is on rather than letting two writers interleave frames into one device.
 
@@ -715,10 +721,8 @@ questions, and its **CONT, LIM and LVL pads put every rejected shape on the same
 under test** — which is the only reason a claim like "the click is gone" can be checked rather than
 believed. ⚠️ Its level ladder starts on the QUIETEST rung and wraps: a walk run loud-to-quiet biases
 adaptation, and "can you hear it" is a different question from "is it clean".
-⚠️ **The ~60 ms minimum-tone rule is answered and it is not a code constant**: it is the start-of-stream
-pop, so a continuous feed drops the audible floor to ~5 ms and five `brick_breaker` tones nobody has heard
-start sounding ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)). Nothing clamps it; do not reintroduce prose
-saying 60 ms is a minimum.
+⚠️ **Never write prose saying 60 ms is a minimum tone length.** Nothing clamps it; the floor was the
+start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used
 to `memset` one, set three fields — `dsp_fd`, `available`, `sample_rate` — and open `/dev/dsp`, the three
