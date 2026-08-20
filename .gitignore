@@ -503,6 +503,10 @@ partitions/*
 partitions.zip
 roomwizard.img
 native_games/build/*
+# Rendered audio_dump / audio_path_dump WAVs: regenerable from one gcc command, so they
+# are never committed.  A named directory rather than *.wav, which would pre-empt
+# IMPROVEMENT_PLAN.md F19's open decision about the music assets.
+dumpwav/
 # Scratch framebuffer captures (`cat /dev/fb0 > fb.raw`) and their PNGs are
 # throwaway; blanket-ignoring them keeps the repo clean.  Anything meant to be
 # KEPT goes in one of the two directories below, both tracked via Git LFS -

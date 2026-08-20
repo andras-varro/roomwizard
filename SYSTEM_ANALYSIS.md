@@ -632,8 +632,14 @@ differing content instead of phase.
   *"woodwind"*, 12000 *"brass", harsher*, 18000 distorted. At a **constant** 18000 it instead **falls with
   pitch**: 220 Hz *"clearly a square wave"*, 440 Hz noisy, 1320 Hz *"cleaner"*. So **≈55 % is not a safe
   acoustic ceiling**, the overdrive is amp-or-cone below every digital stage, and ⚠️ **one global peak is
-  the wrong shape of limit** — it over-quietens the nearly-clean band and still leaves 220 Hz square. Budget
-  level **per frequency**, and keep sustained low tones out of a mix.
+  the wrong shape of limit** — it over-quietens the nearly-clean band and still leaves 220 Hz square.
+- ⚠️ **TWO sustained sines INTERMODULATE, and no level law fixes it — the fix is source material.** Measured
+  `.188` 2026-08-20 the same way, a **pre-mixed** two-sine WAV through the vendor's `aplay` with no mixer,
+  generator or pump in the path: *"same distortion as on the device"*. 440 + 880 (peak 12287, RMS 6143) is
+  far worse than a lone 440 (peak 16383, RMS 11585), so it is not level in either sense — what the ear gets
+  is |m·f1 ± n·f2|, inharmonic to both inputs unless they are octaves. ⚠️ **Two BROADBAND streams at the
+  same level are CLEAN** (`music1-mono` + `music2-mono` overlapping in full), so **effects must be
+  broadband, not sustained tones, whatever their source**; per-frequency budgeting is comfort, not the fix.
 - ⚠️ **The +12 dB of apparently unused analog gain is NOT headroom — spending it distorts.** `DAC1 Analog
   Playback Volume` (numid=6) sits at **12 of 18** on a −24 … +12 dB scale and `DAC1 Digital Fine` (numid=2)
   is already at 0 dB, so the codec looks able to pay for a lower digital peak. It cannot: measured `.188`

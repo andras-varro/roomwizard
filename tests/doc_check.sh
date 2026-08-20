@@ -460,6 +460,13 @@ group_c() {
 # rule that Phase 8 paid for the hard way: an assertion that rendered `left + 8` frames read
 # TRAILING SILENCE and passed 56/56 with the envelope deleted, and only the 16-case sweep found it.
 # Both raises were audited for a deletion first and neither file had one left.
+# ⚠️ SYSTEM_ANALYSIS.md is 1587 rather than 1581, raised in the 2026-08-20 commit that closed the
+# two-voice distortion hunt. That hunt ran across four sessions and killed five candidate causes;
+# what closed it is a DEVICE fact — a pre-mixed two-sine WAV through the vendor's own `aplay`, none
+# of this repo's code in the path, distorting identically to our bus, while two broadband streams at
+# the same level are clean. #34 is its only home, and it PAID for one line by deleting the
+# "budget level per frequency" prescription the same measurement supersedes. Audited for more: the
+# surrounding one-voice ladder is [n=1] measured data that no other document records.
 # ⚠️ tests/CLAUDE.md was 223 rather than 214 before that, raised in the 2026-08-19 commit that
 # added group E: this gate gained a fifth group, changed group D's counting basis and re-keyed
 # 14 group-C receipts, and all three of those are documented in that file and nowhere else.
@@ -509,7 +516,7 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1581	SYSTEM_ANALYSIS.md
+1587	SYSTEM_ANALYSIS.md
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
