@@ -261,7 +261,7 @@ state lives in the table instead, where updating it costs nothing.
 | 5 | the games take the continuous stream — `tetris` and `brick_breaker` first | open, after 3c. ⚠️ **`brick_breaker` gains five sounds it has never made**: `audio_tone(600,30)` at `brick_breaker.c:924` and four more are under the ~60 ms floor and inaudible today, and a continuous feed drops that floor to ~5 ms. Flag it before the listen, not after |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
-| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | **library half CLOSED 2026-08-20, host-verified; the UI and the device half are open.** `audio_mix_add_sample()` + `common/audio_wav.c` + `audio_mix_release_voice()` ship, with `tests/audio_sample_test.c` at 63 checks and all 16 of its sabotages seen failing. ⚠️ **The full-bus rule needed no change** — `audio_gen.h:425` was written for this voice, so a blip into a full bus is refused and the bed is never stolen: one mechanism, not two. Remaining: `audio_music_*` in `audio.c` (it owns the fd), row 5 in the tool, and the listen. Detail below |
+| 8 | **a streaming SAMPLE voice — a WAV bed with effects over it** | **built and DEPLOYED to `.188` 2026-08-20; only the listen is open.** Library half: `audio_mix_add_sample()` + `common/audio_wav.c` + `audio_mix_release_voice()`, `tests/audio_sample_test.c` 63 checks, all 16 sabotages seen failing. Device half: `audio_music_start/_stop/_active` and `audio_sfx_play()` in `audio.c`, refusing loudly off the bus and on a rate mismatch — one `AudioSampleVoice` mechanism used twice, bed and effect. UI: row 5 (`WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622`), offsets **derived** from `SCREEN_SAFE_HEIGHT`. ⚠️ **The full-bus rule needed no change** — `audio_gen.h:425` was written for this voice: a blip into a full bus is refused, the bed is never stolen. Detail below |
 
 The per-phase work, its measurements and the corrections each phase made to its own predecessor live in
 `~/.claude/plans/tender-singing-cook.md`, which carries a finer phase split than this table.
@@ -296,14 +296,23 @@ Full Throttle has none of, rather than to multi-source audio — **inferred, not
 it directly instead: if sampled material mixes cleanly through our own bus, "effects should be samples"
 is the answer and this closes as a product decision.
 
-⚠️ **Two defects in the instrument itself, both open, and the first invalidates a recorded refutation.**
-`audio_mix_test`'s `CHORD` pad is **not a chord** — three `audio_tone()` calls back to back
-(`native_apps/tests/audio_mix_test.c:707-709`) chain into an arpeggio, so it never puts two voices on
-the bus at once. The "`HARD` vs `SOFT` was inaudible, therefore clipping is refuted" result above was
-judged with that pad and **could not have distinguished the two limiters**; the fix is
-`audio_mix_add()` at delay 0, three times. And the tool's log **prints `limit=` from its own `v.hard`
-variable rather than reading the library** (`:567`), so at startup it displays `LIM: SOFT` while
-`audio_mix_init()` has set `AUDIO_MIX_HARD` — an A/B tool must read its toggles back from the library.
+✅ **Both instrument defects are FIXED (2026-08-20), and the first one's repair exposed a third thing
+that is NOT fixed.** `audio_mix_test`'s `CHORD` pad now adds three voices at delay 0 when the bus is on
+(the chaining `audio_tone()` path is kept for OFF the bus, where the queueing is the point), so
+*"`HARD` vs `SOFT` was inaudible, therefore clipping is refuted"* — judged with the arpeggio version and
+resting on a control that never put two voices on the bus — **is re-runnable and has not been re-run.**
+And the limiter position is read from `audio_mix_get_limit()` everywhere: the pad, the log field and the
+toggle itself, with no tool-local mirror left.
+
+⚠️ **What that read-back revealed, inferred from source and not yet measured: `bus_reset()` overwrites
+`audio_mix_init()`'s `AUDIO_MIX_HARD` with a ZEROED field on the first `audio_pump_enable(true)`.** It
+saves `audio->mix.limit` across the init to protect an operator's mid-comparison setting
+(`native_apps/common/audio.c`), but before any session that field is 0 from the `memset` — i.e.
+`AUDIO_MIX_SOFT`. So **every app's first bus session runs SOFT**, not the HARD chain
+`native_apps/CLAUDE.md` documents as the measured-good default, and the panel showing `LIM: SOFT` with
+PUMP off is now the truth rather than the old lie. Do **not** change it as part of a listen — that would
+move two variables at once. The check is one host case: `audio_init()`, `audio_pump_enable(true)`, assert
+`audio_mix_get_limit()`.
 
 **ALSA already works on this kernel, and it is measured rather than assumed.** The card, the mixer path,
 the four OSS bugs, the in-kernel config, the on-device ALSA userspace and the full `hw:0,0` constraint
@@ -476,14 +485,18 @@ jump or coin effect fires* — i.e. two streams summed. Today `audio.c` is one-s
 build this against the OSS path; F1 Phase 3's mix bus is exactly what it needs, and this request is the
 concrete answer to "is real mixing worth it".
 
-⚠️ **Phase 3's bus now exists, and as of 2026-08-20 F19's own first step is DONE** — the PCM-source voice
-kind ships (`audio_mix_add_sample()`, `common/audio_wav.c`), and both decisions it landed are taken.
-Where the file read happens: a **pull callback**, so the mixer still has no fd and the SD read is entered
-once per buffer rather than once per frame. What a full `AUDIO_MAX_VOICES` means when the droppable voice
-is the soundtrack: nothing changed, because the refusal-not-stealing rule was written for exactly this and
-reads correctly from here — a blip is refused and counted, the bed is never cut. ⚠️ **What is still open
-is this feature's own half**: a game has to call it, and the bandwidth question below is answered but the
-loop seam is not.
+⚠️ **Phase 3's bus now exists, and as of 2026-08-20 F19's own PLAYBACK PATH is complete and deployed** —
+the PCM-source voice kind ships (`audio_mix_add_sample()`, `common/audio_wav.c`) and so does the device
+half that owns the fd: `audio_music_start(path, loop)` / `_stop()` / `_active()` plus `audio_sfx_play()`
+in `native_apps/common/audio.c`, exercised from `audio_mix_test`'s row 5 on `.188`. Both decisions the
+library half landed are taken. Where the file read happens: a **pull callback**, so the mixer still has no
+fd and the SD read is entered once per 4096-frame buffer rather than once per frame. What a full
+`AUDIO_MAX_VOICES` means when the droppable voice is the soundtrack: nothing changed, because the
+refusal-not-stealing rule was written for exactly this — a blip is refused and counted, the bed is never
+cut. ⚠️ **`loop` is a large FINITE total, not a sentinel**: `audio_mix_render()` early-outs on
+`audio_mix_pending() <= 0`, so `AUDIO_MUSIC_LOOP_PASSES` (200) declares the length and it is clamped
+against a 32-bit `long`. ⚠️ **What is still open is a GAME calling it** — nothing in `platformer/` does —
+**and the loop seam, still unheard.**
 
 Decisions to take before it ships:
 

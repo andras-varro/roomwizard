@@ -17,7 +17,7 @@ $CC -O2 -static -c common/ppm.c         -o build/ppm.o
 $CC -O2 -static -c common/logger.c      -o build/logger.o
 $CC -O2 -static -c common/ui_layout.c   -o build/ui_layout.o
 
-COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/config.o"
+COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/audio.o build/audio_gen.o build/audio_out.o build/audio_wav.o build/config.o"
 
 echo "=== Building usb_test ==="
 $CC -O2 -static -I. usb_test/usb_test.c $COMMON_OBJ build/ui_layout.o -o build/usb_test -lm

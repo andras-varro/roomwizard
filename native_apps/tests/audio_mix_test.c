@@ -77,6 +77,47 @@
  *              expects the floor to drop to ~5 ms.  Each stimulus is chosen by the
  *              operator, so it is self-identifying by construction — no marker
  *              clicks needed.
+ *   sample row `WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622` — F1 Phase 8, and
+ *              **this row is the experiment the phase exists for.** Four causes of
+ *              the two-voice harshness are refuted and the survivor is this speaker
+ *              on sustained pure sine PAIRS (../IMPROVEMENT_PLAN.md F1). Every other
+ *              pad here is a synthesised sine, so nothing above this row can test
+ *              that. Tap `WAV 1`, let the bed settle, then tap `SFX` over it: same
+ *              bus, same limiter, same delivery, different waveform. If that is
+ *              clean while `440 3s` + `880` is not, the answer is "effects should be
+ *              samples" and the question closes as a product decision.
+ *              ⚠️ **`W STOP` is not the toggle row's `STOP`** — it releases only the
+ *              bed, so an effect over it keeps sounding.
+ *              ⚠️ **`INH 622` is here because every tone pad above is an OCTAVE of
+ *              every other** (220/440/880/1760), so the tool could not make an
+ *              inharmonic pair and `CHORD` was the only substitute. 622 against 440
+ *              is within 0.03 % of √2 — the tritone, minimum harmonic coincidence.
+ *              ⚠️ **The bed needs the bus**: `audio_music_start()` refuses loudly
+ *              with PUMP off, because a sample voice only exists on the mix bus.
+ *              And the two music files are hand-copied, not in the repo (F19), so
+ *              "cannot open" is a deployment fact rather than a code fault.
+ *
+ * ⚠️ **Two of this tool's INSTRUMENTS were lying and both are fixed (2026-08-20).
+ * The first invalidated a recorded refutation, which is the expensive kind:**
+ *
+ *   - **`CHORD` was an arpeggio.** Three back-to-back `audio_tone()` calls are
+ *     consecutive statements, so `AUDIO_TONE_CHAIN_MS`'s recency gate read them as
+ *     one motif and chained each behind the last. F1 carries "HARD vs SOFT was
+ *     inaudible, therefore clipping is refuted" — and that A/B was judged with this
+ *     pad, which never put two voices on the bus at once. It is now three
+ *     `audio_mix_add()` calls at delay 0 when the bus is on, with the queueing
+ *     `audio_tone()` path kept for OFF the bus, where the difference is the point.
+ *   - **The limiter label printed the tool's own variable.** `audio_mix_init()` sets
+ *     `AUDIO_MIX_HARD` and the tool's bool started false, so the pad read `LIM:
+ *     SOFT` over a HARD bus, the log agreed with it, and the first tap "turned SOFT
+ *     on" by setting HARD. There is no local copy any more: the pad, the log and
+ *     the toggle all read `audio_mix_get_limit()`. **An A/B tool must read its own
+ *     toggles back from the library.**
+ *
+ * ⚠️ **The five row offsets are DERIVED from `SCREEN_SAFE_HEIGHT`, not written
+ * down** — `rows_layout()`, whose comment carries what a heavily-inset panel pays
+ * the shortfall with and why. A fifth row is what made that necessary: the agreed
+ * offsets end at 406 and at the 48/48 inset cap the safe height is 384.
  *
  * The readout shows live voices and five counters: `clip` (samples the int16
  * store could not hold — ⚠️ **must be 0 with LIMIT: SOFT**, that is the check
@@ -125,7 +166,7 @@
  * without it — which is the right failure.  `build-and-deploy.sh` gets it from
  * `$COMMON_OBJ`; this line is for building the tool by hand.
  *   arm-linux-gnueabihf-gcc -O2 -static -I. tests/audio_mix_test.c \
- *     common/audio.c common/audio_gen.c common/audio_out.c \
+ *     common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \
  *     common/touch_input.c \
  *     common/framebuffer.c common/hardware.c common/common.c \
  *     common/config.c common/highscore.c common/keyboard.c \
@@ -181,8 +222,34 @@ static void open_log(void)
 typedef enum {
     ACT_CONT, ACT_PUMP, ACT_KEEPALIVE, ACT_LIMIT, ACT_LEVEL, ACT_STOP,
     ACT_TONE,                       /* uses freq/ms */
-    ACT_BEEP, ACT_BLIP, ACT_SUCCESS, ACT_FAIL, ACT_CHORD
+    ACT_BEEP, ACT_BLIP, ACT_SUCCESS, ACT_FAIL, ACT_CHORD,
+    ACT_MUSIC,                      /* uses `path` — the looping bed          */
+    ACT_MUSIC_STOP,
+    ACT_SFX                         /* uses `path` — one recorded effect      */
 } Action;
+
+/* ── the sample material, and why these files ────────────────────────────────
+ *
+ * All five measured on `.188` 2026-08-20: **mono / 44100 / 16-bit**, which is
+ * what `hw:0,0` grants, so nothing here is resampled or downmixed and a rate
+ * refusal in the log means something changed rather than something is unsupported.
+ *
+ * ⚠️ **The two music files are hand-copied and are not in the repo** — they
+ * survive `device-files/clean-rules.conf`'s wholesale keep of `/opt/sound` but not
+ * a fresh card (../IMPROVEMENT_PLAN.md F19). If a pad refuses with "cannot open",
+ * that is the first thing to check, not a code fault.
+ *
+ * ⚠️ **`asl_success.wav` is the pad that answers phase 8's actual question.**
+ * Everything else on this panel is a synthesised sine, and the surviving
+ * hypothesis for the two-voice harshness is this speaker on sustained pure sine
+ * PAIRS (../IMPROVEMENT_PLAN.md F1 — four other causes are refuted). Sampled
+ * material over sampled material shares the bus, the limiter and the delivery
+ * with the sine case and differs only in the waveform, so if SFX-over-bed is
+ * clean the answer is "effects should be samples" and the question closes.
+ */
+#define MUSIC1_PATH  "/opt/sound/music1-mono.wav"
+#define MUSIC2_PATH  "/opt/sound/music2-mono.wav"
+#define SFX_PATH     "/opt/sound/asl_success.wav"
 
 /* ── the level ladder ─────────────────────────────────────────────────────────
  *
@@ -213,20 +280,36 @@ static const LevelRung ladder[] = {
 #define LADDER_RUNGS ((int)(sizeof(ladder) / sizeof(ladder[0])))
 
 typedef struct {
-    Button btn;
-    Action act;
-    int    freq;
-    int    ms;
+    Button      btn;
+    Action      act;
+    int         freq;
+    int         ms;
+    const char *path;               /* ACT_MUSIC / ACT_SFX only */
 } Pad;
 
-#define MAX_PADS 26
+/** The pad table's size, and it is the EXACT count in use: 6 toggles + 5 tones +
+ *  5 canned + 6 ms + 5 sample = 27.
+ *
+ * ⚠️ **This was 26 with 22 used, and adding a five-pad row silently produced a
+ * row that did not exist** — `pad_add()` returned NULL past the cap and said
+ * nothing, so the buttons were simply absent and nothing in the code looked
+ * wrong. It is exact rather than padded on purpose: a spare slot restores the
+ * silence for the next row. If you add pads, raise this AND check the log line
+ * below, which is the only thing that can tell you the cap was hit. */
+#define MAX_PADS 27
 static Pad  pads[MAX_PADS];
 static int  pad_count = 0;
 
 static Pad *pad_add(Action act, const char *label, int x, int y, int w, int h,
                     uint32_t colour, int scale)
 {
-    if (pad_count >= MAX_PADS) return NULL;
+    if (pad_count >= MAX_PADS) {
+        /* ⚠️ Loud, because the silent version is indistinguishable from a layout
+         * bug: the pad is not drawn, not hit-tested and not in `pad_count`. */
+        fprintf(stderr, "audio_mix_test: MAX_PADS (%d) EXCEEDED — the pad \"%s\" "
+                        "does not exist and cannot be tapped\n", MAX_PADS, label);
+        return NULL;
+    }
     Pad *p = &pads[pad_count++];
     memset(p, 0, sizeof(*p));
     p->act = act;
@@ -245,6 +328,82 @@ static void row_geom(int count, int index, int gap, int *x, int *w)
     *w = cell - gap;
 }
 
+/* ── the vertical layout, DERIVED ────────────────────────────────────────────
+ *
+ * ⚠️ **The five row offsets are computed from `SCREEN_SAFE_HEIGHT`, not written
+ * down, and that is what makes a fifth row safe on a unit nobody has swept.**
+ * The agreed target — rows at 72/136/200/274/348 with heights 54/54/64/64/58 and
+ * gaps of 10 — ends at 406 and needs a safe height of ~410. `.188` has it
+ * (`reach 0 4082 0 4095`, i.e. its digitizer reaches the hardware limit
+ * vertically, so ~418), but at `FB_TOUCH_INSET_MAX` on both edges
+ * `SCREEN_SAFE_HEIGHT` is only **384** and the same offsets overflow the
+ * touchable rectangle by 22 px — a bottom row that is drawn and cannot be
+ * pressed, which is precisely the failure the two-rectangle split exists to
+ * prevent (../CLAUDE.md → *Screen edges*).
+ *
+ * So the shortfall is paid for in a fixed order, and the order is a judgement
+ * about tapping rather than about pixels:
+ *
+ *   1. **gaps first, down to GAP_MIN** — whitespace between rows costs nothing to
+ *      lose, and a pad that shrank is measurably harder to hit than one that moved.
+ *   2. **then the TALLEST row, one pixel at a time** — so the 64 px rows give
+ *      before the 54 px ones and the row heights converge rather than one row
+ *      collapsing.
+ *   3. **never below ROW_H_MIN**, at which point it gives up and lets the bottom
+ *      row sit outside the safe area. ⚠️ That is a real outcome, not a
+ *      theoretical one, and it is REPORTED (`rows: …`) on the log's first line
+ *      rather than silently rendered — a bottom row 6 px outside the touchable
+ *      band looks completely normal on a screenshot.
+ */
+#define ROWS_TOP       72   /* below the voice meter at SCREEN_SAFE_TOP+56, h 8 */
+#define ROWS_BOTTOM_M   4   /* keep the last row off the very last safe pixel   */
+#define ROW_COUNT       5
+#define ROW_GAP_NOM    10
+#define ROW_GAP_MIN     4
+#define ROW_H_MIN      44   /* ~60x40 is the comfortable minimum (../CLAUDE.md) */
+
+static const int row_nom_h[ROW_COUNT] = { 54, 54, 64, 64, 58 };
+static int row_y[ROW_COUNT];
+static int row_h[ROW_COUNT];
+static int row_gap;
+
+static void rows_layout(void)
+{
+    int nom = 0;
+    for (int i = 0; i < ROW_COUNT; i++) { row_h[i] = row_nom_h[i]; nom += row_nom_h[i]; }
+
+    int avail = SCREEN_SAFE_HEIGHT - ROWS_TOP - ROWS_BOTTOM_M;
+
+    row_gap = ROW_GAP_NOM;
+    while (row_gap > ROW_GAP_MIN && nom + row_gap * (ROW_COUNT - 1) > avail) row_gap--;
+
+    int over = nom + row_gap * (ROW_COUNT - 1) - avail;
+    while (over > 0) {
+        int tallest = 0;
+        for (int i = 1; i < ROW_COUNT; i++) if (row_h[i] > row_h[tallest]) tallest = i;
+        if (row_h[tallest] <= ROW_H_MIN) break;      /* nothing left to give */
+        row_h[tallest]--;
+        over--;
+    }
+
+    int y = SCREEN_SAFE_TOP + ROWS_TOP;
+    for (int i = 0; i < ROW_COUNT; i++) { row_y[i] = y; y += row_h[i] + row_gap; }
+
+    /* The receipt.  `over` is the pixels the safe area could NOT absorb, so a
+     * non-zero value means the bottom row is drawable and not pressable. */
+    fprintf(stderr, "mix: rows safe_h=%d avail=%d gap=%d h=%d/%d/%d/%d/%d "
+                    "y=%d/%d/%d/%d/%d bottom=%d over=%d\n",
+            SCREEN_SAFE_HEIGHT, avail, row_gap,
+            row_h[0], row_h[1], row_h[2], row_h[3], row_h[4],
+            row_y[0] - SCREEN_SAFE_TOP, row_y[1] - SCREEN_SAFE_TOP,
+            row_y[2] - SCREEN_SAFE_TOP, row_y[3] - SCREEN_SAFE_TOP,
+            row_y[4] - SCREEN_SAFE_TOP,
+            row_y[4] + row_h[4] - SCREEN_SAFE_TOP, over);
+    if (over > 0)
+        fprintf(stderr, "mix: ⚠ row 5 overflows the touch-safe area by %d px — "
+                        "it is drawn but may not be pressable\n", over);
+}
+
 /* ── state ───────────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -256,7 +415,13 @@ typedef struct {
                              * two things.                                          */
     bool pump;
     bool keepalive;
-    bool hard;              /* LIMIT toggle: true = the pre-limiter hard clamp */
+    /* ⚠️ **There is no `hard` field here any more, and that is the fix.** The
+     * limiter position was a tool-local bool printed as if it were a
+     * measurement: `audio_mix_init()` sets AUDIO_MIX_HARD while a zeroed bool
+     * reads SOFT, so both the pad and `/tmp/mix.log` said "SOFT" over a HARD bus
+     * for a whole panel session (measured 2026-08-19). Everything now reads
+     * `audio_mix_get_limit()`. Do not reintroduce a mirror of a library state
+     * that has a getter. */
     int  rung;              /* index into `ladder` — the LEVEL under test.  Starts
                              * at 0, the quietest, so the walk runs upwards       */
     int  voices;
@@ -265,6 +430,10 @@ typedef struct {
     uint32_t starved;
     uint32_t lost;
     uint32_t dropped;
+    bool music_on;          /* the bed still owes frames — asked of the library  */
+    long music_loops;       /* times it has WRAPPED, which is the number the loop
+                             * seam is judged against: "I heard the join" is only
+                             * actionable beside a wrap count (F19)              */
     long lead_frames;       /* what the LIBRARY targeted, 0 = not measured yet */
     long period_frames;     /* the device period it was rounded up to           */
     uint32_t max_gap;       /* longest gap between two loop iterations, ms —
@@ -323,11 +492,18 @@ static void set_toggle_labels(Pad *cont_pad, Pad *pump_pad, Pad *keep_pad,
     /* HARD is drawn as a WARNING, because it is the state the panel rejected.
      * Abbreviated because the row is five pads wide now: at the 48 px inset cap a
      * cell is 132 px, which "LIMIT: SOFT" fills exactly.  Nothing is lost — the log
-     * line carries `limit=soft|hard` as its own field. */
-    snprintf(t, sizeof(t), "LIM: %s", v->hard ? "HARD" : "SOFT");
+     * line carries `limit=soft|hard` as its own field.
+     *
+     * ⚠️ **Read back from the LIBRARY, never from a tool flag.** This label said
+     * SOFT over a HARD bus for a whole session, because `audio_mix_init()` sets
+     * HARD and the tool's own bool started false. `audio_mix_get_limit()` exists
+     * for exactly this; an A/B tool that prints its own intention is not an
+     * instrument. */
+    bool hard = (audio_mix_get_limit(&audio->mix) == AUDIO_MIX_HARD);
+    snprintf(t, sizeof(t), "LIM: %s", hard ? "HARD" : "SOFT");
     button_set_text(&limit_pad->btn, t);
     button_set_colors(&limit_pad->btn,
-                      v->hard ? BTN_COLOR_DANGER : BTN_COLOR_PRIMARY,
+                      hard ? BTN_COLOR_DANGER : BTN_COLOR_PRIMARY,
                       COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 
     /* ⚠️ The rung number comes from the tool, but the VOLUME comes from the
@@ -369,18 +545,24 @@ static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
     else
         snprintf(lead, sizeof(lead), "lead ? (pump has not measured)");
 
-    char line[112];
+    char line[144];
     snprintf(line, sizeof(line), "%d Hz  %s  %d voices  worst frame %lu ms",
              rate, lead, AUDIO_MAX_VOICES, (unsigned long)v->max_gap);
     fb_draw_text(fb, info_x, SCREEN_VISIBLE_TOP + 6,
                  line, (lead_ms > 0 && v->max_gap > (uint32_t)lead_ms)
                        ? RGB(255, 180, 60) : RGB(130, 140, 160), 1);
 
-    snprintf(line, sizeof(line), "voices %d/%d  clip %lu  lim %lu  starve %lu  lost %lu  drop %lu",
+    /* ⚠️ `bed` carries the WRAP COUNT, not just on/off.  F19's cheapest open
+     * question is whether the loop seams, and "I heard the join" is only
+     * actionable next to which wrap it was — the bed loops every ~44 s, so a
+     * session produces several and they are otherwise indistinguishable. */
+    snprintf(line, sizeof(line),
+             "voices %d/%d  clip %lu  lim %lu  starve %lu  lost %lu  drop %lu  bed %s %ld",
              v->voices, AUDIO_MAX_VOICES,
              (unsigned long)v->clipped, (unsigned long)v->limited,
              (unsigned long)v->starved, (unsigned long)v->lost,
-             (unsigned long)v->dropped);
+             (unsigned long)v->dropped,
+             v->music_on ? "ON wraps" : "off wraps", v->music_loops);
     fb_draw_text(fb, info_x, SCREEN_VISIBLE_TOP + 20,
                  line, (v->clipped || v->starved || v->lost)
                        ? RGB(255, 180, 60) : RGB(130, 200, 140), 1);
@@ -443,35 +625,41 @@ int main(int argc, char *argv[])
 
     /* ── rows.  Everything is laid out from SCREEN_SAFE_*, so it is right on a
      * calibrated panel and unchanged on one whose reach has never been swept.
-     * The four rows are spread down the panel rather than packed at the top:
-     * the bottom row still ends well above SCREEN_SAFE_BOTTOM on a calibrated
-     * 800x450 (376 px against ~418), and bigger pads are easier to tap in
-     * quick succession — which is the whole interaction this tool tests. */
+     * ⚠️ **The five vertical offsets are DERIVED by rows_layout(), not written
+     * here** — see its comment for what the shortfall on a heavily-inset panel is
+     * paid for with, and why a fifth row is where that starts to matter. */
     int x, w, y;
     int gap = 6;
+    rows_layout();
 
-    y = SCREEN_SAFE_TOP + 72;
+    y = row_y[0];
     /* Six pads now, and CONT is first because it is the OUTER switch: it decides
      * which device half is open, and the others describe what is done with it. */
     row_geom(6, 0, gap, &x, &w);
-    Pad *cont_pad = pad_add(ACT_CONT,      "CONT: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
+    Pad *cont_pad = pad_add(ACT_CONT,      "CONT: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
     row_geom(6, 1, gap, &x, &w);
-    Pad *pump_pad = pad_add(ACT_PUMP,      "PUMP: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
+    Pad *pump_pad = pad_add(ACT_PUMP,      "PUMP: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
     row_geom(6, 2, gap, &x, &w);
-    Pad *keep_pad = pad_add(ACT_KEEPALIVE, "KEEP: OFF",   x, y, w, 54, BTN_COLOR_SECONDARY, 2);
+    Pad *keep_pad = pad_add(ACT_KEEPALIVE, "KEEP: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
     row_geom(6, 3, gap, &x, &w);
-    Pad *limit_pad = pad_add(ACT_LIMIT,    "LIM: SOFT",   x, y, w, 54, BTN_COLOR_PRIMARY, 2);
+    /* ⚠️ "LIM" with no value: set_toggle_labels() runs before the first draw and
+     * reads the real position out of the library, so a literal here could only
+     * ever be a lie waiting for a code path that skips that call. */
+    Pad *limit_pad = pad_add(ACT_LIMIT,    "LIM",         x, y, w, row_h[0], BTN_COLOR_PRIMARY, 2);
     row_geom(6, 4, gap, &x, &w);
-    Pad *level_pad = pad_add(ACT_LEVEL,    "LVL 1/6",     x, y, w, 54, BTN_COLOR_INFO, 2);
+    Pad *level_pad = pad_add(ACT_LEVEL,    "LVL 1/6",     x, y, w, row_h[0], BTN_COLOR_INFO, 2);
     row_geom(6, 5, gap, &x, &w);
-    pad_add(ACT_STOP, "STOP", x, y, w, 54, BTN_COLOR_DANGER, 2);
+    pad_add(ACT_STOP, "STOP", x, y, w, row_h[0], BTN_COLOR_DANGER, 2);
 
-    y = SCREEN_SAFE_TOP + 140;
+    y = row_y[1];
     /* ⚠️ Two SUSTAINED tones, because defect 3's decisive question is about
      * TIMBRE and a 200 ms blip cannot be compared with a signal generator.
      * `440 3s` is one voice at AUDIO_PEAK, which the soft limiter passes through
      * byte-identically (its knee IS AUDIO_PEAK) — so it separates "the limiter
-     * distorts the sum" from "this device's 440 is not a sine at all". */
+     * distorts the sum" from "this device's 440 is not a sine at all".
+     * ⚠️ **This row was 80 px tall and is now 54**, which is where most of row 5's
+     * space came from: 54 is confirmed comfortable to tap and the other four rows
+     * were never taller than 64. */
     static const struct { const char *l; int f, ms; } tones[5] = {
         { "DRONE 220", 220, 3000 }, { "440 3s", 440, 3000 },
         { "440",       440,  200 }, { "880",   880,  200 },
@@ -479,30 +667,64 @@ int main(int argc, char *argv[])
     };
     for (int i = 0; i < 5; i++) {
         row_geom(5, i, gap, &x, &w);
-        Pad *p = pad_add(ACT_TONE, tones[i].l, x, y, w, 80,
+        Pad *p = pad_add(ACT_TONE, tones[i].l, x, y, w, row_h[1],
                          (tones[i].ms >= 3000) ? RGB(120, 60, 160)
                                                : RGB(40, 90, 170), 2);
         if (p) { p->freq = tones[i].f; p->ms = tones[i].ms; }
     }
 
-    y = SCREEN_SAFE_TOP + 234;
+    y = row_y[2];
     static const struct { const char *l; Action a; } canned[5] = {
         { "BEEP", ACT_BEEP }, { "BLIP", ACT_BLIP }, { "SUCCESS", ACT_SUCCESS },
         { "FAIL", ACT_FAIL }, { "CHORD", ACT_CHORD }
     };
     for (int i = 0; i < 5; i++) {
         row_geom(5, i, gap, &x, &w);
-        pad_add(canned[i].a, canned[i].l, x, y, w, 64, RGB(45, 110, 90), 2);
+        pad_add(canned[i].a, canned[i].l, x, y, w, row_h[2], RGB(45, 110, 90), 2);
     }
 
-    y = SCREEN_SAFE_TOP + 312;
+    y = row_y[3];
     static const int ms_row[6] = { 5, 10, 20, 40, 60, 100 };
     for (int i = 0; i < 6; i++) {
         char l[12]; snprintf(l, sizeof(l), "%dms", ms_row[i]);
         row_geom(6, i, gap, &x, &w);
-        Pad *p = pad_add(ACT_TONE, l, x, y, w, 64, RGB(150, 100, 30), 2);
+        Pad *p = pad_add(ACT_TONE, l, x, y, w, row_h[3], RGB(150, 100, 30), 2);
         if (p) { p->freq = 880; p->ms = ms_row[i]; }
     }
+
+    /* ── row 5: recorded PCM, and the one inharmonic tone ────────────────────
+     *
+     * ⚠️ **`INH 622` exists because every other tone pad is an OCTAVE of every
+     * other one** — 220 / 440 / 880 / 1760 — so this tool could not make an
+     * inharmonic pair at all, and the `CHORD` pad (523/659/784) was the only
+     * substitute. 622 against 440 is 1.4136, within 0.03 % of √2: the tritone,
+     * the interval whose harmonics coincide least (440x7 = 3080 against
+     * 622x5 = 3110). Against DRONE 220 it is a tritone plus an octave. Sustained
+     * at 3 s for the same reason the other two long pads are
+     * (../IMPROVEMENT_PLAN.md F1 — harmonic fusion is already refuted; this pad
+     * is what lets that refutation be re-run without borrowing CHORD).
+     *
+     * ⚠️ **`W STOP` is not `STOP`.** The toggle row's STOP is `audio_interrupt()`
+     * — every voice at once. This one releases only the bed, so an effect over it
+     * keeps sounding: that difference is the whole point of a bed. */
+    y = row_y[4];
+    static const struct { const char *l; Action a; const char *path; int f, ms; uint32_t c; } srow[5] = {
+        { "WAV 1",   ACT_MUSIC,      MUSIC1_PATH, 0,   0,    RGB(170, 90, 40)  },
+        { "WAV 2",   ACT_MUSIC,      MUSIC2_PATH, 0,   0,    RGB(170, 90, 40)  },
+        { "W STOP",  ACT_MUSIC_STOP, NULL,        0,   0,    RGB(120, 60, 60)  },
+        { "SFX",     ACT_SFX,        SFX_PATH,    0,   0,    RGB(60, 140, 170) },
+        { "INH 622", ACT_TONE,       NULL,        622, 3000, RGB(120, 60, 160) }
+    };
+    for (int i = 0; i < 5; i++) {
+        row_geom(5, i, gap, &x, &w);
+        Pad *p = pad_add(srow[i].a, srow[i].l, x, y, w, row_h[4], srow[i].c, 2);
+        if (p) { p->path = srow[i].path; p->freq = srow[i].f; p->ms = srow[i].ms; }
+    }
+
+    /* ⚠️ The receipt for MAX_PADS.  pad_add() already complains per refused pad;
+     * this says whether the table is exactly full, which is what the next person
+     * adding a row needs to know. */
+    fprintf(stderr, "mix: pads %d of %d\n", pad_count, MAX_PADS);
 
     View v; memset(&v, 0, sizeof(v));
     snprintf(v.last, sizeof(v.last), "CONT OFF = the per-sound-reset path");
@@ -555,16 +777,19 @@ int main(int argc, char *argv[])
              * `svc_us` rides with it because the service ceiling is the one number
              * that turns "I heard a gap" into a pacing verdict — compare it with
              * `gapmax` on the same line. */
-            fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d cont=%d "
+            fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d path=%s cont=%d "
                             "svc_us=%ld pump_label=%d "
                             "pump_active=%d keepalive=%d limit=%s vol=%d shift=%d acoustic=%d voices=%d "
                             "clip=%lu lim=%lu starve=%lu lost=%lu drop=%lu "
+                            "bed=%d wraps=%ld "
                             "gapmax=%lu lead=%ldfr/%ldms period=%ldfr\n",
                     (int)p->act, p->btn.text, p->freq, p->ms,
+                    p->path ? p->path : "-",
                     (int)audio_cont_active(&audio),
                     audio_cont_service_interval_us(&audio),
                     (int)v.pump, (int)audio_pump_active(&audio),
-                    (int)v.keepalive, v.hard ? "hard" : "soft",
+                    (int)v.keepalive,
+                    (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD) ? "hard" : "soft",
                     audio_get_volume(&audio), audio_get_master_shift(&audio),
                     audio_voice_peak(audio_get_volume(&audio))
                         >> audio_get_master_shift(&audio),
@@ -574,6 +799,7 @@ int main(int argc, char *argv[])
                     (unsigned long)audio_pump_starved(&audio),
                     (unsigned long)audio_pump_lost(&audio),
                     (unsigned long)audio_pump_dropped(&audio),
+                    (int)audio_music_active(&audio), audio.music.wav.loops,
                     (unsigned long)v.max_gap,
                     audio_pump_lead(&audio),
                     audio_ms_for_frames(audio.sample_rate,
@@ -655,16 +881,23 @@ int main(int argc, char *argv[])
                 snprintf(v.last, sizeof(v.last), "keepalive %s",
                          v.keepalive ? "on (silence written)" : "off");
                 break;
-            case ACT_LIMIT:
+            case ACT_LIMIT: {
                 /* Switchable while a drone runs: the two curves agree below the
                  * knee, so the change is inaudible on a quiet passage and obvious
-                 * on a loud one — which is the comparison worth hearing. */
-                v.hard = !v.hard;
-                audio_pump_set_limit(&audio, v.hard ? AUDIO_MIX_HARD : AUDIO_MIX_SOFT);
+                 * on a loud one — which is the comparison worth hearing.
+                 *
+                 * ⚠️ **The current position is READ, then flipped.** It used to
+                 * flip a tool-local bool, which started false while the library
+                 * started HARD — so the first tap "turned SOFT on" by setting
+                 * HARD, and everything downstream printed the opposite of the truth. */
+                bool now_hard = (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD);
+                audio_pump_set_limit(&audio, now_hard ? AUDIO_MIX_SOFT : AUDIO_MIX_HARD);
                 set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
+                bool is_hard = (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD);
                 snprintf(v.last, sizeof(v.last), "limit %s",
-                         v.hard ? "HARD (clamp at int16)" : "soft (knee 18000)");
+                         is_hard ? "HARD (clamp at int16)" : "soft (knee 18000)");
                 break;
+            }
             case ACT_LEVEL: {
                 /* ⚠️ Wraps back to the QUIETEST rather than reversing, so a second
                  * pass runs in the same direction as the first — a ladder walked up
@@ -700,14 +933,55 @@ int main(int argc, char *argv[])
             case ACT_FAIL:    audio_fail(&audio);
                 snprintf(v.last, sizeof(v.last), "fail: 3 notes, offset"); break;
             case ACT_CHORD:
-                /* Three tones at once, deliberately.  On the pump these are three
-                 * voices with no offsets; off it they queue back to back and the
-                 * flush in between throws the previous one away — which is the
-                 * whole difference this tool exists to make audible. */
-                audio_tone(&audio, 523, 400);
-                audio_tone(&audio, 659, 400);
-                audio_tone(&audio, 784, 400);
-                snprintf(v.last, sizeof(v.last), "chord: 3 notes together");
+                /* ⚠️ **This pad was an ARPEGGIO and was recorded as a chord, and a
+                 * refutation rests on it.** Three back-to-back `audio_tone()` calls
+                 * are consecutive statements, i.e. microseconds apart, so
+                 * AUDIO_TONE_CHAIN_MS's recency gate saw a motif and CHAINED them:
+                 * note 2 started behind note 1's tail and note 3 behind note 2's.
+                 * F1 carries "HARD vs SOFT was inaudible, therefore clipping is
+                 * refuted", and that A/B was judged with this pad — which never put
+                 * two voices on the bus at once and so could not distinguish two
+                 * limiters. `audio_mix_add()` with delay 0 is what a chord is.
+                 *
+                 * ⚠️ **The `audio_tone()` fallback stays, deliberately, for OFF the
+                 * bus** — there they queue and the flush between throws the previous
+                 * one away, and making that difference audible is what this tool is
+                 * for. `audio_pump_active()` decides, not `v.pump`. */
+                if (audio_pump_active(&audio)) {
+                    int peak = audio_voice_peak(audio_get_volume(&audio));
+                    audio_mix_add(&audio.mix, 523, 400, 0, peak);
+                    audio_mix_add(&audio.mix, 659, 400, 0, peak);
+                    audio_mix_add(&audio.mix, 784, 400, 0, peak);
+                    snprintf(v.last, sizeof(v.last), "chord: 3 voices, delay 0");
+                } else {
+                    audio_tone(&audio, 523, 400);
+                    audio_tone(&audio, 659, 400);
+                    audio_tone(&audio, 784, 400);
+                    snprintf(v.last, sizeof(v.last), "chord: off bus, 3 queued");
+                }
+                break;
+            case ACT_MUSIC:
+                /* ⚠️ Every refusal is the LIBRARY's and is already on stderr with its
+                 * reason; what belongs here is a short version on the panel, because
+                 * an operator holding a checklist cannot read /tmp/mix.log. */
+                if (audio_music_start(&audio, p->path, true))
+                    snprintf(v.last, sizeof(v.last), "bed: %s looping",
+                             strrchr(p->path, '/') ? strrchr(p->path, '/') + 1 : p->path);
+                else
+                    snprintf(v.last, sizeof(v.last), "bed REFUSED - see /tmp/mix.log");
+                break;
+            case ACT_MUSIC_STOP:
+                /* Releases the bed only — an effect over it keeps sounding, which is
+                 * the difference between this and the toggle row's STOP. */
+                audio_music_stop(&audio);
+                snprintf(v.last, sizeof(v.last), "bed: release armed (fades out)");
+                break;
+            case ACT_SFX:
+                if (audio_sfx_play(&audio, p->path))
+                    snprintf(v.last, sizeof(v.last), "sfx: %s over the bus",
+                             strrchr(p->path, '/') ? strrchr(p->path, '/') + 1 : p->path);
+                else
+                    snprintf(v.last, sizeof(v.last), "sfx REFUSED - see /tmp/mix.log");
                 break;
             }
         }
@@ -738,10 +1012,17 @@ int main(int argc, char *argv[])
             uint32_t ns = audio_pump_starved(&audio);
             uint32_t nf = audio_pump_lost(&audio);
             uint32_t nd = audio_pump_dropped(&audio);
+            /* The bed's state rides on the same timer: `loops` moves once every
+             * ~44 s and `music_on` only on a start or the end of a fade, so
+             * neither needs a redraw of its own. */
+            bool nm = audio_music_active(&audio);
+            long nw = audio.music.wav.loops;
             if (nc != v.clipped || nl != v.limited || ns != v.starved ||
-                nf != v.lost    || nd != v.dropped) {
+                nf != v.lost    || nd != v.dropped ||
+                nm != v.music_on || nw != v.music_loops) {
                 v.clipped = nc; v.limited = nl; v.starved = ns;
                 v.lost    = nf; v.dropped = nd;
+                v.music_on = nm; v.music_loops = nw;
                 needs_redraw = true;
             }
             last_readout = now;

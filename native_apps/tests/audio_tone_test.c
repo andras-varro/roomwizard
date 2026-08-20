@@ -38,7 +38,7 @@
  * Build and run (host gcc, from native_apps/):
  *   gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim \
  *       -o build/audio_tone_test tests/audio_tone_test.c \
- *       common/audio.c common/audio_gen.c common/audio_out.c common/config.c -lm && \
+ *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_tone_test
  *
  * It also runs ON THE DEVICE, and there the shim is not wanted — the cross
@@ -48,7 +48,7 @@
  * on-device checks that needs no human at the panel:
  *   arm-linux-gnueabihf-gcc -Wall -Wextra -Wno-unused-parameter -O2 -static -I. \
  *       -o build/audio_tone_test_arm tests/audio_tone_test.c \
- *       common/audio.c common/audio_gen.c common/audio_out.c common/config.c -lm
+ *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm
  *   scp build/audio_tone_test_arm root@<ip>:/tmp/ && \
  *   ssh root@<ip> "chmod +x /tmp/audio_tone_test_arm && /tmp/audio_tone_test_arm"
  * Measured 2026-08-19 on RW .188: byte-for-byte the same 9 ok lines as the host,

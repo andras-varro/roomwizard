@@ -44,7 +44,7 @@
  * Build and run (host gcc, from native_apps/):
  *   gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim \
  *       -o build/audio_path_dump tests/audio_path_dump.c \
- *       common/audio.c common/audio_gen.c common/audio_out.c common/config.c -lm && \
+ *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_path_dump build/
  *
  * ⚠️ `-Itests/hostshim` is host-only.  The cross toolchain has the real

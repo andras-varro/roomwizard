@@ -45,6 +45,24 @@
  *  stack-overflow guard when these buffers were on the stack. */
 #define MAX_CHUNK_FRAMES    8820
 
+/** Read-ahead for one streaming sample voice, in frames (~93 ms at 44100).
+ *
+ *  ⚠️ **It sets how often the SD read is entered, not how much RAM the bed
+ *  costs.**  Measured on `.188` 2026-08-20: the card delivers 11.4 MB/s and a
+ *  mono 44.1 kHz bed needs 88.2 KB/s, so throughput is 0.77 % and irrelevant;
+ *  what is untested is per-read LATENCY inside the render loop, and a buffer
+ *  comfortably larger than the device's 2048-frame period is what absorbs it.
+ *  The counter to watch on the panel is `starve` (../IMPROVEMENT_PLAN.md F19). */
+#define AUDIO_SAMPLE_BUF_FRAMES  4096
+
+/** How many passes `loop` asks for.  ⚠️ **Not a sentinel and not "forever":
+ *  `audio_mix_add_sample()` needs a real length or `audio_mix_render()`'s
+ *  `audio_mix_pending() <= 0` early-out never renders the voice at all
+ *  (audio_gen.h).  200 passes of a 44 s track is ~2.4 h, which outlasts any
+ *  session, and `sample_total_frames()` clamps the product so a 32-bit `long`
+ *  cannot overflow into a negative length. */
+#define AUDIO_MUSIC_LOOP_PASSES  200
+
 /* ── Internal helpers ───────────────────────────────────────────────────── */
 
 /** Drive GPIO12 HIGH to enable the on-board speaker amplifier (SPKR1). */
@@ -275,6 +293,24 @@ static void level_defaults(Audio *audio)
     audio->last_tone_slot = -1;
     audio->last_tone_gen  = 0;
     audio->last_tone_ms   = 0;
+    /* ⚠️ -1, because a zeroed slot is SLOT 0 — i.e. a valid handle onto whatever
+     * voice happens to be there.  Every entry point memsets the struct, so this
+     * is the only place the two sample voices become "idle" rather than "aimed at
+     * somebody else's tone". */
+    audio->music.slot     = -1;
+    audio->sfx.slot       = -1;
+}
+
+/** Release one sample voice's OS resources.  Called only from audio_close():
+ *  see the note there for why stopping a voice must not do this. */
+static void sample_discard(AudioSampleVoice *sv)
+{
+    audio_wav_close(&sv->wav);
+    free(sv->buf);
+    sv->buf        = NULL;
+    sv->buf_frames = 0;
+    sv->slot       = -1;
+    sv->gen        = 0;
 }
 
 /** Everything both entry points do: amp on, open, configure, read back. */
@@ -342,6 +378,12 @@ void audio_close(Audio *audio)
     free(audio->pump_buf);
     audio->pump_buf        = NULL;
     audio->pump_buf_frames = 0;
+    /* ⚠️ The two sample voices hold a `FILE *` and a `malloc`, and this is the
+     * ONLY place either is released — audio_music_stop() deliberately does not,
+     * because the mixer is still pulling from them through the release.  A tool
+     * that starts a bed on every session and never closes leaks one fd per run. */
+    sample_discard(&audio->music);
+    sample_discard(&audio->sfx);
     audio->pumping         = false;
     audio->streaming       = false;
     audio->available       = false;
@@ -978,4 +1020,164 @@ void audio_fail(Audio *audio)
 {
     static const AudioNote s[] = { { 392, 150 }, { 330, 150 }, { 262, 300 } };
     play_sequence(audio, s, 3);
+}
+
+/* ── Recorded PCM: the bed and the sample effect ─────────────────────────────
+ *
+ * ⚠️ **This is the DEVICE half of the sample voice and it owns the fd — the
+ * mixer never does.**  `audio_gen.c` has no `read()`, no `open()` and no clock;
+ * it pulls through an `AudioVoiceFill`, and the thing on the far end of that
+ * callback is `common/audio_wav.c` with its `FILE *` living in the
+ * `AudioSampleVoice` below.  That split is what keeps the mixer host-testable
+ * with no shim (../IMPROVEMENT_PLAN.md F1 Phase 8).
+ *
+ * Shaped after play_sequence(), NOT after audio_tone(): there is no
+ * `last_tone_*` recency state here and therefore no wall-clock branch, so a
+ * harness with a clock of its own cannot make this code take a different path
+ * from the one being claimed — the trap that cost the Phase 3d test a rewrite.
+ */
+
+/** Ceiling on a looping bed's declared length, in frames.  Safely under a
+ *  32-bit `long`'s 2147483647, with room for the mixer's own arithmetic. */
+#define AUDIO_SAMPLE_MAX_TOTAL   1500000000L
+
+/** What to declare as the voice's length.  ⚠️ **A loop is a large FINITE total,
+ *  not a sentinel**: `audio_mix_render()` early-outs on
+ *  `audio_mix_pending() <= 0`, so a voice that under-reports is never rendered
+ *  at all, and one that overflows to negative is refused outright — both silent. */
+static long sample_total_frames(long frames, bool loop)
+{
+    if (frames <= 0) return 0;
+    if (!loop)       return frames;
+    /* 64-bit multiply on purpose: `frames * 200` is a 32-bit multiply on this
+     * target, and a track long enough wraps NEGATIVE rather than saturating. */
+    long long total = (long long)frames * AUDIO_MUSIC_LOOP_PASSES;
+    if (total > AUDIO_SAMPLE_MAX_TOTAL) total = AUDIO_SAMPLE_MAX_TOTAL;
+    return (long)total;
+}
+
+/** Does this voice still owe frames?  ⚠️ **Asked of the MIXER by (slot,
+ *  generation), never of a flag here.**  PUMP: OFF runs bus_reset(), which
+ *  clears every voice without telling this file — a local `playing` bool would
+ *  then be stuck true forever and refuse every restart.  A freed or reused slot
+ *  reads 0 through the generation, so this cannot borrow somebody else's voice. */
+static bool sample_live(const Audio *audio, const AudioSampleVoice *sv)
+{
+    return sv->slot >= 0 &&
+           audio_mix_voice_pending(&audio->mix, sv->slot, sv->gen) > 0;
+}
+
+/** The one start path for both sample voices.  Every refusal is LOUD: on the
+ *  panel a silent no-op reads as "the file is broken", which is the wrong repair. */
+static bool sample_start(Audio *audio, AudioSampleVoice *sv, const char *path,
+                         bool loop, const char *what)
+{
+    if (!audio->available || !path || !*path) return false;
+
+    /* ⚠️ Refused off the bus rather than routed round it.  There IS no other path:
+     * the old one renders a whole tone and hands it to the kernel, so a 44 s bed
+     * sent that way is unmixable and uninterruptible by construction.  `cont` is
+     * not tested separately because CONT implies PUMP, enforced in
+     * audio_cont_enable(). */
+    if (!audio->pumping) {
+        fprintf(stderr, "audio: %s refused — the mix bus is OFF and a sample voice "
+                        "exists only on the bus (audio_pump_enable() first)\n", what);
+        return false;
+    }
+
+    /* ⚠️ One AudioWav per voice, and it IS the live voice's `ctx`: reopening it
+     * under the mixer would make the sound jump rather than retrigger. */
+    if (sample_live(audio, sv)) {
+        fprintf(stderr, "audio: %s refused — the previous %s still owes %ld frames "
+                        "and its file is that voice's ctx\n", what, what,
+                audio_mix_voice_pending(&audio->mix, sv->slot, sv->gen));
+        return false;
+    }
+
+    audio_wav_close(&sv->wav);          /* a restart must not leak the old fd */
+    if (!audio_wav_open(&sv->wav, path, loop)) {
+        fprintf(stderr, "audio: %s cannot open %s\n", what, path);
+        return false;
+    }
+
+    /* ⚠️ No resampler, and no plan for one.  Playing 22050 material at 44100 is a
+     * pitch bug that sounds like a bad recording — the hardest audio fault to
+     * attribute — so failing is cheaper than guessing. */
+    if (sv->wav.rate != audio->sample_rate) {
+        fprintf(stderr, "audio: %s refused — %s is %d Hz, the device granted %d, "
+                        "and there is no resampler\n",
+                what, path, sv->wav.rate, audio->sample_rate);
+        audio_wav_close(&sv->wav);
+        return false;
+    }
+
+    /* Allocated once and kept: the buffer sets how often the SD read is entered,
+     * and reallocating it per start would put a malloc in a tap's path. */
+    if (!sv->buf) {
+        sv->buf = (int16_t *)malloc((size_t)AUDIO_SAMPLE_BUF_FRAMES * sizeof(int16_t));
+        if (!sv->buf) {
+            fprintf(stderr, "audio: %s out of memory for %d read-ahead frames\n",
+                    what, AUDIO_SAMPLE_BUF_FRAMES);
+            audio_wav_close(&sv->wav);
+            return false;
+        }
+        sv->buf_frames = AUDIO_SAMPLE_BUF_FRAMES;
+    }
+
+    long total = sample_total_frames(sv->wav.frames, loop);
+    int  slot  = audio_mix_add_sample(&audio->mix, audio_wav_fill, &sv->wav,
+                                      sv->buf, sv->buf_frames, total,
+                                      audio_voice_peak(audio->vol));
+    if (slot < 0) {
+        /* ⚠️ The full bus REFUSES and never steals (audio_gen.h) — one mechanism
+         * for both voice kinds, which is what keeps a UI blip from cutting the bed.
+         * Reported so a refused bed is distinguishable from a missing file. */
+        fprintf(stderr, "audio: %s refused by the bus — %d of %d voices sounding "
+                        "(the full bus refuses, it never steals)\n",
+                what, audio_pump_voices(audio), AUDIO_MAX_VOICES);
+        audio_wav_close(&sv->wav);
+        return false;
+    }
+
+    sv->slot = slot;
+    sv->gen  = audio_mix_voice_gen(&audio->mix, slot);
+    fprintf(stderr, "audio: %s start %s — %ld frames in file, %ld declared, "
+                    "%d Hz %d ch, loop=%d, slot %d gen %lu\n",
+            what, path, sv->wav.frames, total, sv->wav.rate, sv->wav.channels,
+            (int)loop, slot, (unsigned long)sv->gen);
+    return true;
+}
+
+bool audio_music_start(Audio *audio, const char *path, bool loop)
+{
+    if (!audio) return false;
+    return sample_start(audio, &audio->music, path, loop, "music");
+}
+
+void audio_music_stop(Audio *audio)
+{
+    if (!audio || audio->music.slot < 0) return;
+    /* ⚠️ Release, not cut.  audio_mix_release_voice() shortens the voice to
+     * `pos + release` so the existing envelope walks it to exactly 0; clearing
+     * `active` instead steps the bus by the bed's whole amplitude, which is a
+     * click.  The file and the buffer stay — the mixer pulls from them until the
+     * fade ends, and audio_close() is what releases them. */
+    if (audio_mix_release_voice(&audio->mix, audio->music.slot, audio->music.gen))
+        fprintf(stderr, "audio: music stop — release armed on slot %d, "
+                        "%ld frames into pass %ld\n",
+                audio->music.slot, audio->music.wav.pos, audio->music.wav.loops);
+    else
+        fprintf(stderr, "audio: music stop — slot %d was already gone\n",
+                audio->music.slot);
+}
+
+bool audio_music_active(const Audio *audio)
+{
+    return audio ? sample_live(audio, &audio->music) : false;
+}
+
+bool audio_sfx_play(Audio *audio, const char *path)
+{
+    if (!audio) return false;
+    return sample_start(audio, &audio->sfx, path, false, "sfx");
 }

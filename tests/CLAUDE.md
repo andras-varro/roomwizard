@@ -233,6 +233,15 @@ print the counts their headers claim. Rules learned the hard way:
   from `/mnt/c` into WSL `/tmp` can blow a 300 s budget and looks like a hung suite. And stage the
   sabotaged library **inside `lib/`**, because `rw_provision_validate` derives the repo root from its
   own `BASH_SOURCE/..`, so a copy under `/tmp` fails the baseline for a reason no sabotage produces.
+- ⚠️ **An assertion can PASS by reading past what it claims to measure, and only a sabotage sweep finds
+  it.** `native_apps/tests/audio_sample_test.c` group H checked "the last delivered sample is exactly 0"
+  after rendering `left + 8` frames — but `audio_mix_render()` returns `frames` whatever happened, so it
+  was reading *trailing silence* and passed with the envelope **deleted**. 56/56 green meant nothing.
+  Render the **exact** extent, and neutralise a source that has shape of its own (group H uses a flat
+  source, so nothing but the envelope can shape the tail).
+  `measure_audio_sample_sabotage.sh` is that suite's sweep: **16 cases, every one seen failing**, and it
+  is also what caught three other holes in the same first draft — an unreached RIFF odd-size pad byte,
+  an unchecked 8-bit refusal, and a `sed` pattern spanning two lines that never applied.
 - **A pre-fix tree restored from git beats a `sed` patch** as a harness's first case, where it is
   available — `measure_ssh_sabotage.sh` does this.
 

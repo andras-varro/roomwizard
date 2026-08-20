@@ -59,7 +59,7 @@ deploy; that is your job. Every build then runs `./check-arm-safe.sh` (root `../
 it also takes one binary: `./check-arm-safe.sh <path>`.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
-keyboard.o audio.o audio_gen.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o
+keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o
 logger.o`; the two tools that measure the touch mapping (`device_tools`, `touch_raw`) add
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
@@ -704,10 +704,13 @@ These rules, each of which is a way to get this wrong:
   is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
 - ⚠️ **A voice is a tone OR a SAMPLE, and the sample PULLS rather than reads.** `audio_mix_add_sample()`
   takes an `AudioVoiceFill` plus a caller-owned buffer, so `audio_gen.c` keeps its no-fd property and
-  `audio_wav.c` owns the file — never put a `read()` in the mixer. Pass the **real** length from the `data`
-  chunk: `audio_mix_render()` skips a bus whose `audio_mix_pending()` is 0, so a voice that under-reports is
-  never rendered. Stop it with `audio_mix_release_voice()`, which shortens `frames` so the envelope fades
-  it — clearing `active` cuts mid-cycle, which is a click. `tests/audio_sample_test.c`, 63 checks.
+  `audio_wav.c` owns the file — never put a `read()` in the mixer. Pass the **real** `data`-chunk length:
+  `audio_mix_render()` skips a bus whose `audio_mix_pending()` is 0, so an under-reporting voice is never
+  rendered, and `loop` is therefore a large FINITE total. Stop it with `audio_mix_release_voice()`, which
+  shortens `frames` so the envelope fades it — clearing `active` cuts mid-cycle, which is a click.
+  `audio.c` owns the fd: `audio_music_start(path, loop)`/`_stop()`/`_active()` and `audio_sfx_play(path)`,
+  one `AudioSampleVoice` mechanism used twice, refusing LOUDLY off the bus and on a rate mismatch (there
+  is no resampler). `tests/audio_sample_test.c`, 63 checks; `tests/audio_mix_test.c` row 5 on the panel.
 - **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.**
   `tests/audio_path_dump.c` renders the production fill through a file-backed `AudioOutDev` to a WAV, which
   exonerated the delivered bytes with no microphone; `tests/audio_dump.c` hand-transcribes and so covers

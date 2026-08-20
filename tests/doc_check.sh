@@ -452,12 +452,20 @@ group_c() {
 # HARDWARE.md out of SYSTEM_ANALYSIS.md, so that is not hypothetical here.
 # ⚠️ The authoring skill is on this list too. A rulebook that grows without limit is the
 # thing it exists to prevent, and it has no other check on it.
-# ⚠️ tests/CLAUDE.md is 223 rather than 214, raised deliberately in the 2026-08-19 commit that
+# ⚠️ tests/CLAUDE.md is 232 and native_apps/CLAUDE.md 629, both raised deliberately in the
+# 2026-08-20 commit that landed F1 Phase 8's device half: `audio.c` gained a public
+# `audio_music_*`/`audio_sfx_play()` surface and `common/audio_wav.c` became a COMMON_OBJ member,
+# so the authoring guide's audio bullet had to name them (+3, and it corrected a $COMMON_OBJ list
+# that had been missing `audio_out.o` since Phase 2). tests/CLAUDE.md's +9 is the sabotage-sweep
+# rule that Phase 8 paid for the hard way: an assertion that rendered `left + 8` frames read
+# TRAILING SILENCE and passed 56/56 with the envelope deleted, and only the 16-case sweep found it.
+# Both raises were audited for a deletion first and neither file had one left.
+# ⚠️ tests/CLAUDE.md was 223 rather than 214 before that, raised in the 2026-08-19 commit that
 # added group E: this gate gained a fifth group, changed group D's counting basis and re-keyed
 # 14 group-C receipts, and all three of those are documented in that file and nowhere else.
 # One line was PAID (a see-also that pointed at a section two paragraphs up, plus a prune
 # sentence folded into the one that already existed); the other nine are the raise. ⚠️ **No
-# headroom is granted with it** — the next addition to that file pays by deleting.
+# headroom is granted with either raise** — the next addition to those files pays by deleting.
 # ⚠️ tests/CLAUDE.md was 250 rather than 235, in the old all-lines basis, because the commit
 # that INTRODUCED these ceilings spent that file's whole headroom documenting this group — so the headroom was
 # never actually granted. Raised deliberately, in that same commit, which is the escape
@@ -505,11 +513,11 @@ ceilings() {
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-626	native_apps/CLAUDE.md
+629	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-223	tests/CLAUDE.md
+232	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md

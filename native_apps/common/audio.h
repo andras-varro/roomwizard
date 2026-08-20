@@ -34,6 +34,33 @@
 
 #include "audio_gen.h"
 #include "audio_out.h"
+#include "audio_wav.h"
+
+/**
+ * One streaming sample voice: the file, its read-ahead, and its bus handle.
+ *
+ * ⚠️ **A struct rather than five `music_*` fields, because there are TWO of
+ * these and the policy must not be written twice.**  A bed and an effect differ
+ * only in which instance they name and whether they loop — refusing off the bus,
+ * refusing a rate mismatch, refusing while the previous one still sounds, and
+ * arming the release instead of cutting are one code path in `audio.c`.  The
+ * moment that was two code paths, the bed and the effect could drift apart in
+ * exactly the way `audio_gen.h`'s full-bus rule exists to prevent.
+ *
+ * `slot` is -1 when idle and is set by `level_defaults()`, which every entry
+ * point runs — a zeroed `slot` is slot 0, i.e. somebody else's voice.
+ *
+ * ⚠️ **`buf` and `wav` are the mixer's `ctx`, so this struct must not be copied
+ * or moved while a voice is live**: `audio_mix_add_sample()` stores the pointers.
+ * Nothing copies an `Audio`; this is the reason not to start.
+ */
+typedef struct {
+    AudioWav wav;             /**< the open file; `wav.f` NULL when closed       */
+    int16_t *buf;             /**< read-ahead scratch, allocated on first start  */
+    long     buf_frames;      /**< its size — how often the SD read is entered   */
+    int      slot;            /**< mix-bus slot, -1 when this voice is idle      */
+    uint32_t gen;             /**< its generation, so a REUSED slot is not cut   */
+} AudioSampleVoice;
 
 typedef struct {
     int      dsp_fd;          /**< /dev/dsp file descriptor (-1 = not open)      */
@@ -103,6 +130,13 @@ typedef struct {
                                *   (AUDIO_TONE_CHAIN_MS in audio.c) — without the
                                *   gate an unrelated tap inherited a 3 s drone's
                                *   tail and mixing became a queue                   */
+    /* ── recorded PCM: one bed and one effect, both streamed ────────────────
+     * TWO instances of one mechanism.  The bed is the LONGEST voice on the bus
+     * (../IMPROVEMENT_PLAN.md F19) and the effect is the shortest, which is the
+     * pair audio_gen.h's refuse-never-steal rule was written for.
+     */
+    AudioSampleVoice music;   /**< the bed: long, usually looping                 */
+    AudioSampleVoice sfx;     /**< one-shot recorded effect, over the bed         */
 } Audio;
 
 /**
@@ -387,6 +421,72 @@ void audio_success(Audio *audio);
 
 /** G4→E4→C4 descending tone  (~600 ms)   — game over, error          */
 void audio_fail(Audio *audio);
+
+/* ── Recorded PCM: a music bed and a sample effect ──────────────────────────
+ *
+ * ⚠️ **These exist only on the mix bus, and they REFUSE loudly off it rather
+ * than degrade.**  A sample voice is an `AudioVoice` — there is no non-bus code
+ * path that could play one, because the old path writes a whole rendered tone to
+ * the kernel and a 44 s bed written that way is unmixable and uninterruptible by
+ * construction.  Silently doing nothing would read on the panel as "the file is
+ * broken"; `audio_pump_enable()` (or CONT) first is the fix and the message says so.
+ *
+ * ⚠️ **They REFUSE a rate mismatch too, for the same reason: there is no
+ * resampler here and there is not going to be one.**  Every file we have is
+ * 44100 / mono / 16-bit — measured on `.188` 2026-08-20 for all five of
+ * `/opt/sound/{asl_click,asl_error,asl_success,music1-mono,music2-mono}.wav` —
+ * and so is what `hw:0,0` grants.  Guessing a rate is a pitch bug that sounds
+ * like a bad recording, which is the hardest kind of audio fault to attribute.
+ *
+ * The read is a PULL from the render loop (`common/audio_wav.c` →
+ * `audio_wav_fill`), entered once per read-ahead buffer rather than once per
+ * frame, so `audio_gen.c` still has no fd and this file still owns every one.
+ */
+
+/**
+ * Start the music bed from `path`, looping if asked.
+ *
+ * Returns true if a voice was added.  Refused — with a reason on `stderr` — when
+ * the bus is off, the file will not open, its rate is not the device's, the bus is
+ * full, or a previous bed is still sounding.
+ *
+ * ⚠️ **`loop` does not mean "forever": it means a large finite total**, because
+ * `audio_mix_add_sample()` needs a real `total_frames` for `audio_mix_pending()`
+ * and the self-free to behave (see `audio_gen.h`).  AUDIO_MUSIC_LOOP_PASSES in
+ * `audio.c` sets it, and the total is clamped so the frame count cannot overflow
+ * a 32-bit `long`.
+ */
+bool audio_music_start(Audio *audio, const char *path, bool loop);
+
+/**
+ * Stop the bed at the end of its release, not now.
+ *
+ * ⚠️ **It does NOT close the file or free the buffer**, and it must not: the
+ * envelope walks the voice down to 0 over the following frames and the mixer
+ * pulls from this exact `ctx` until it gets there.  Cutting instead would step
+ * the summed bus by the bed's whole instantaneous amplitude — a click, which is
+ * the defect F1 exists to remove.  `audio_music_active()` reads false once the
+ * fade has finished, and that is when a restart is accepted.
+ */
+void audio_music_stop(Audio *audio);
+
+/** True while the bed still owes frames — read from the MIXER by (slot,
+ *  generation), not from a flag of this file's own, so a bed that PUMP: OFF
+ *  cleared out from under it reads false rather than stuck. */
+bool audio_music_active(const Audio *audio);
+
+/**
+ * Play one recorded effect over whatever else is sounding. Returns true if a
+ * voice was added; same refusals as the bed, plus one of its own.
+ *
+ * ⚠️ **A second tap is refused while the first effect is still sounding**, because
+ * there is ONE `AudioSampleVoice` for effects and its `AudioWav` is the live
+ * voice's `ctx`: rewinding it under the mixer would make the effect jump rather
+ * than retrigger.  This is the pad that answers phase 8's actual question —
+ * sampled material over sampled material, on a speaker that makes two sustained
+ * sines harsh (../IMPROVEMENT_PLAN.md F1).
+ */
+bool audio_sfx_play(Audio *audio, const char *path);
 
 /* ── Streaming (theremin) API ──────────────────────────────────────────────
  * For continuous pitch-gliding audio driven by a touch loop.

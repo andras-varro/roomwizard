@@ -20,7 +20,8 @@
  * Build (from native_apps/):
  *   arm-linux-gnueabihf-gcc -O2 -static -I. \
  *     tests/audio_touch_test.c \
- *     common/audio.c common/audio_gen.c common/touch_input.c common/framebuffer.c \
+ *     common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \
+ *     common/config.c common/touch_input.c common/framebuffer.c \
  *     common/hardware.c common/common.c \
  *     -o build/audio_touch_test -lm
  */
