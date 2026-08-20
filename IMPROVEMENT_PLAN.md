@@ -297,10 +297,15 @@ the three-line shape is in `native_apps/CLAUDE.md` → *Mixing*. ⚠️ **Every 
 [§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 5). So an app with a bed running must pump on **every**
 iteration, drawing or not, and cap its sleep at `audio_cont_service_interval_us()`. ⚠️ **`snake` is the
 worst case and needs naming**: its play sleep is `game.speed`, `INITIAL_SPEED` 150 ms falling to 50
-(`snake/snake.c:26`), so it starves *before* it speeds up rather than after. ⚠️ **And five games hold a
-blocking `usleep(100000)` LED-flash sequence at a menu transition** — `tetris/tetris.c:561`,
-`pong/pong.c:476`, `snake/snake.c:372`, `frogger/frogger.c:777` and the same shape in `brick_breaker` —
-each one a service a bed will not get. They are bounded and fire only on a transition, so a first pass
+(`snake/snake.c:26`), so it starves *before* it speeds up rather than after. ⚠️ **FOUR games hold blocking
+`usleep(100000)` LED-flash sequences, TWELVE sites between them, and `brick_breaker` holds NONE** —
+re-measured 2026-08-20, correcting an earlier revision that named one site per game and added
+`brick_breaker`: `tetris/tetris.c:561,563,587,589`, `pong/pong.c:476,478,502,504`,
+`snake/snake.c:372,382`, `frogger/frogger.c:777,788`. `brick_breaker`'s two and `samegame`'s one were
+already replaced by `hw_led_pulse_start()` (`brick_breaker.c:685`, `:1161`). ⚠️ **And `grep -c` over-counts
+here** — `samegame/samegame.c:1414` is the COMMENT recording that removal, so read the hits per line
+rather than summing them, or a doc claim inherits a site that does not exist.
+Each live one is a service a bed will not get. They are bounded and fire only on a transition, so a first pass
 may leave them; `starve` is the counter that says whether it mattered, and **one `starve` per bed start
 is expected** (the first service of a fresh stream legitimately has `in_flight` 0).
 
@@ -308,7 +313,12 @@ is expected** (the first service of a fresh stream legitimately has `in_flight` 
 `brick_breaker.c:924`, then `:959`, `:1000`, `:1046` and `:1049` — 20–40 ms each, under the ~60 ms floor a
 *restarted* stream imposes, and a continuously fed one drops that floor to 5 ms
 ([§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 6). ⚠️ **Flag them to the operator BEFORE the deploy, not
-after**: they will be heard as new sounds and read as a regression otherwise.
+after**: they will be heard as new sounds and read as a regression otherwise. ✅ **Confirmed from the panel
+2026-08-20** — the operator reports `brick_breaker` silent *during play* while its menus, its lost-ball and
+its level-clear still sound, which is those five tones and nothing else. ⚠️ **The config gate was checked
+first and is NOT the cause**: `.188` has no `/opt/games/rw_config.conf` at all and `config_audio_enabled()`
+defaults to `true` (`common/config.c:290`), so `audio.c:354` passes. Two minutes and no listen — do not
+re-raise it.
 
 ③ **The four canned sounds become sample-backed, so no game edits a line to get WAV effects.**
 `audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` carry most of the games' audio call
@@ -338,6 +348,40 @@ WALK the chunks** — `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/
 at byte 164 in the music files against 36 in `asl_success.wav`, both measured), and a reader that assumes
 the textbook 44-byte header is correct on the effects and feeds a version string to the mixer on the
 music.
+
+✅ **The generator and the stock set are DONE — `native_apps/sounds/`, 2026-08-20, host only, no device and
+no listen.** `fx_gen.c` renders ten noise-excited enveloped effects (27–200 ms, mono/44100/16-bit, peak
+normalised to 0.97 of full scale because the mixer scales a sample by `s * peak >> 15` and a quiet asset
+cannot be made loud again); `gen-sounds.sh` is the one build+run path. The ten `fx_*.wav` are **committed**
+(82 KB total) and re-running the generator leaves them byte-identical — a fixed xorshift32 seed per effect,
+never `rand()`, so a modified `.wav` in a diff means somebody changed a recipe.
+
+⚠️ **The GATE is the deliverable there, not the synthesiser.** `fx_check()` refuses to write a file that is
+not broadband and transient: `tail` (RMS of the last quarter over the first, ≤ 0.35), `sfm` (spectral
+flatness at the peak window, ≥ 0.06) and duration (≤ 200 ms). That is what makes the property *checked*
+rather than intended, which is the whole argument for generating over sourcing. Its negative control is
+`--self-test`: four signals, **1 pass / 3 reject**, and the load-bearing one is a **percussive 440 Hz
+sine** — snappy, short, and tonal, i.e. exactly the file a human would approve. Measured: sines score
+`sfm` 0.000 against 0.51–0.55 for noise, and dropping `FX_SFM_MIN` to 0 on a sabotaged copy lets that one
+control through, is named, exits 1 and writes **zero** files. ⚠️ **The sustained-sine control still
+rejects under that sabotage** (on tail and duration), so a suite without the percussive one would have
+read green. ⚠️ **And the gate rejected two of the ten first-draft specs** (`knock` `sfm` 0.028, `jump`
+0.039): at fixed `q` a LOW centre frequency is a proportionally NARROW absolute band, so a low-pitched
+effect measures less flat. Both were fixed by widening the band and cutting the sine `body` — **retune the
+spec, never the threshold.** End to end, the shipped `audio_wav.c` opens all ten and its `read` total
+equals its header `frames` for every one.
+
+**The clip loader loads into RAM, and that is a CURSOR decision before it is a memory one** (operator,
+2026-08-20). `audio.c` has one `AudioSampleVoice` and refuses a second tap while the first sounds
+(`audio.h`), so a game firing brick hits in bursts would be refused constantly; RAM-resident clips with a
+per-trigger cursor is the fix, and it needs no mixer and no `audio_wav.c` change — `audio_mix_add_sample()`
+already takes an `AudioVoiceFill`, so a RAM clip is just a different `fill`. **The memory is not the
+constraint here**: measured on `.188` 2026-08-20, `MemFree` 143,100 kB and `MemAvailable` 186,068 kB of
+239,904 kB, so the whole effect set is ~0.06 % of free RAM. ⚠️ **The BED stays streaming for now anyway**,
+and not on cost grounds: a cold read of `music1-mono.wav` after `drop_caches` is **0.369 s**, so
+RAM-loading the larger bed would buy a ~0.46 s startup stall to replace a path that has already been
+*heard clean* — a measured-good path traded for an unobserved problem. It is one `fill` either way, chosen
+per sound at load time, so this is reversible and needs no architecture.
 
 ⏳ **What is left over after phase 5, both small.** ① The `CHORD` pad in
 `native_apps/tests/audio_mix_test.c` branches on `audio_pump_active()`, which is **false** on a silent bus

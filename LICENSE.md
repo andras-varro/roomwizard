@@ -45,6 +45,13 @@ ScummVM backend port under `scummvm-roomwizard/backend-files/`, `usb_host/`'s `d
 tooling, every shell script (`roomwizard.sh`, `deploy-all.sh`, `release.sh`, `lib/`, `commissioning/`,
 `device-files/`, `tests/`), the `.ppm` launcher icons, and the documentation.
 
+**`native_apps/sounds/fx_*.wav` carry no third-party licence question at all, by construction.** They are
+the output of `native_apps/sounds/fx_gen.c` in this repository — synthesised from a seeded PRNG and a
+filter, with no sampled, recorded or downloaded material anywhere in the chain — and `gen-sounds.sh`
+reproduces them byte-for-byte from that source. So they are MIT as the generator is, and re-rolling them
+cannot import anyone else's rights. (The two **music** beds are a separate matter with a separate
+provenance record: `IMPROVEMENT_PLAN.md` F19. They are not committed.)
+
 ⚠️ **MIT covers the *source*; it does not decide the licence of a *binary* it is linked into.** The
 backend port under `scummvm-roomwizard/backend-files/` is MIT as source and is compiled into ScummVM, so
 the resulting `scummvm` binary is GPL-3.0-or-later as a whole. Same for `vnc_client`, which links
