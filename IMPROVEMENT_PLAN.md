@@ -37,7 +37,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **Do `music{1,2}-mono.wav` still sound right mixed under GAMEPLAY, and do the WAV effects work as effects** — the bus itself is answered (bed clean, effects over it clean, wraps inaudible), so what is left is a real game's render loop and real game timing, not the tool's | part of item 5's session | F1 Phase 5 — the games must take the stream and grow a sound set first. ⚠️ **`brick_breaker` gains five sounds it has never made; flag them before this listen, not after** |
+| 6 | **The `brick_breaker` interrupt removal, deployed to `.188` and unlistened** — lose a life WITH balls remaining and confirm the `audio_fail()` fanfare now survives the next brick hit; then whether a bed (`music{1,2}-mono.wav`) still sounds right under real gameplay | one play session | nothing — it is already on the device. ⚠️ Ask for the **lost-life** case explicitly: the game-over case already sounded right and is what hid the defect |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -262,7 +262,7 @@ analog, below both userspaces, and not ours to fix (below).
 | Phase | What it is | State |
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** — `tetris` and `brick_breaker` first. Design below | open, and it is the next thing to do |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ①② **done for `tetris` + `brick_breaker`** and gated by `check-audio-pacing.sh`; ③④ open, and one regression open (a blocking sub-loop services nothing). Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -285,49 +285,81 @@ frequencies started at different moments partially cancel, which `AudioVoice.del
 440 Hz at 3/6) and is still a comfort change rather than a fix, and it must not ship beside another audio
 change — that two-variable comparison is one this entry has already paid for once.
 
-**Phase 5 — the games take the stream, and their effects become WAVs.** Designed with the operator
-2026-08-20; the code is the next session's work. Four parts, in this order, because ① alone changes what
-every game sounds like:
+**Phase 5 — the games take the stream, and their effects become WAVs.** Four parts. ① and ② are CLOSED;
+③ and ④ are open, and ③ now has ear evidence it did not have when it was written.
 
-① **The pump, per game.** `audio_pump_enable(&audio, true)` after `audio_init()`, `audio_pump(&audio)`
-once per frame beside `fb_swap()`, and the frame-pacing decision asks the library rather than the game —
-the three-line shape is in `native_apps/CLAUDE.md` → *Mixing*. ⚠️ **Every game's idle sleep is
-`FRAME_DELAY_IDLE_US` (100 ms) and that STARVES a continuously fed stream**: 100 ms empties the ring on
-15 of 59 services where 66 ms empties it on none (measured;
-[§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 5). So an app with a bed running must pump on **every**
-iteration, drawing or not, and cap its sleep at `audio_cont_service_interval_us()`. ⚠️ **`snake` is the
-worst case and needs naming**: its play sleep is `game.speed`, `INITIAL_SPEED` 150 ms falling to 50
-(`snake/snake.c:26`), so it starves *before* it speeds up rather than after. ⚠️ **FOUR games hold blocking
-`usleep(100000)` LED-flash sequences, TWELVE sites between them, and `brick_breaker` holds NONE** —
-re-measured 2026-08-20, correcting an earlier revision that named one site per game and added
-`brick_breaker`: `tetris/tetris.c:561,563,587,589`, `pong/pong.c:476,478,502,504`,
-`snake/snake.c:372,382`, `frogger/frogger.c:777,788`. `brick_breaker`'s two and `samegame`'s one were
-already replaced by `hw_led_pulse_start()` (`brick_breaker.c:685`, `:1161`). ⚠️ **And `grep -c` over-counts
-here** — `samegame/samegame.c:1414` is the COMMENT recording that removal, so read the hits per line
-rather than summing them, or a doc claim inherits a site that does not exist.
-Each live one is a service a bed will not get. They are bounded and fire only on a transition, so a first pass
-may leave them; `starve` is the counter that says whether it mattered, and **one `starve` per bed start
-is expected** (the first service of a fresh stream legitimately has `in_flight` 0).
+✅ **① The pump, per game — done for `tetris` and `brick_breaker`, verified on `.188` 2026-08-20.** Three
+lines each: `audio_cont_enable(&audio, true)` after `audio_init()` — **CONT, not just PUMP**, because the
+never-reset stream is what drops the short-tone floor from ~60 ms to 5 ms
+([§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 6) — then `audio_pump(&audio)` on **every** iteration after the
+draw block, and `audio_pump_active()` in the pacing decision. The shape and its rules live in
+`native_apps/CLAUDE.md` → *Mixing*, and **`native_apps/check-audio-pacing.sh` enforces all three from
+`build-and-deploy.sh`**, so the five games still to convert — `pong`, `snake`, `frogger`, `samegame`,
+`platformer` — cannot be converted with a line missing. Measured: `starve` **0** over 616 and 659 services
+on the two welcome screens, and **8 in 10 959 services** across three real play sessions, with
+`lost`/`drop`/`clip` all 0 and no gap or crackle heard. ⚠️ A dry queue is counted even while the bus is
+SILENT, so a small non-zero `starve` is not automatically an audible fault.
+⚠️ **The twelve blocking `usleep(100000)` LED sites are not twelve lost services** — correcting this
+entry's own earlier claim. EIGHT are the exit flourish immediately before `running = false`
+(`tetris/tetris.c:561,563,587,589`, `pong/pong.c:476,478,502,504`), which is the one blocking case
+`native_apps/CLAUDE.md` sanctions and which happens as the stream is about to drain and close. FOUR are a
+single 100 ms green flash at the START of play, once on the touch path and once on the gamepad path
+(`snake/snake.c:372,382`, `frogger/frogger.c:777,788`): real stalls, but with nothing sounding yet, so at
+most one `starve` each — convert them to `hw_led_pulse_start()` when those two games are converted.
+⚠️ `snake` still needs naming for the other reason: its play sleep is `game.speed`, `INITIAL_SPEED` 150 ms
+falling to 50 (`snake/snake.c:26`), so it starves *before* it speeds up rather than after.
 
-② **`brick_breaker` GAINS FIVE SOUNDS it has never made.** `audio_tone(&audio, 600, 30)` at
-`brick_breaker.c:924`, then `:959`, `:1000`, `:1046` and `:1049` — 20–40 ms each, under the ~60 ms floor a
-*restarted* stream imposes, and a continuously fed one drops that floor to 5 ms
-([§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 6). ⚠️ **Flag them to the operator BEFORE the deploy, not
-after**: they will be heard as new sounds and read as a regression otherwise. ✅ **Confirmed from the panel
-2026-08-20** — the operator reports `brick_breaker` silent *during play* while its menus, its lost-ball and
-its level-clear still sound, which is those five tones and nothing else. ⚠️ **The config gate was checked
-first and is NOT the cause**: `.188` has no `/opt/games/rw_config.conf` at all and `config_audio_enabled()`
-defaults to `true` (`common/config.c:290`), so `audio.c:354` passes. Two minutes and no listen — do not
-re-raise it.
+✅ **② `brick_breaker`'s five during-play tones are audible, 2026-08-20 on `.188`.** `brick_breaker.c:924`,
+`:959`, `:1000`, `:1046` and `:1049`, 20–40 ms each, silent for the whole life of the game until now
+because a *restarted* stream cannot deliver anything under ~60 ms. The operator reports a sound on paddle
+bounce and on brick hits **with the brick types distinguishable** — the mechanism doing the thing it was
+built for. ⚠️ **The config gate was never the cause and must not be re-raised**: `.188` has no
+`/opt/games/rw_config.conf` at all and `config_audio_enabled()` defaults to `true`
+(`common/config.c:290`).
+
+⚠️ **② also produced a defect of its own, and it is the idiom rather than the sound: the interrupt call
+before an effect means "stop ALL voices" on the bus.** Measured by ear on `.188` 2026-08-20 — the 600 ms
+`audio_fail()` fanfare was heard in full when the game ENDED and was inaudible when a life was lost with
+balls remaining, because the next brick hit discarded it. `brick_breaker`'s five sites lost their
+interrupts (the reason is in a comment at `brick_breaker.c:924`, since somebody will otherwise put them
+back); **deployed to `.188` and NOT yet listened to.** ⚠️ **`audio.h`'s own comment still claims
+the ~23 interrupt-then-tone sites mean "replace what is playing, the same intent" — that is now
+known to be wrong for an EFFECT**, and each remaining game must drop its interrupts as it is converted.
+Judge it by ear on a lost life, not by a counter: nothing counts a voice that was stopped early.
+
+⏳ **A sound queued just before a BLOCKING sub-loop is lost, and that is the one real regression ① left.**
+`tetris`' game-over fanfare fires at `tetris/tetris.c:359`, one statement after `gameover_init()`, and the
+next thing the loop does is `gameover_update()` → `hs_enter_name()` → `keyboard_enter()`, which runs its
+**own** render loop (`common/keyboard.c:263` `fb_swap()`, `:325` `usleep(16000)`) and services nothing:
+`common/keyboard.c` contains no `audio_pump()` at all. The mixer advances by frames RENDERED, so the
+fanfare is not dropped but deferred until the keyboard closes — which the operator experiences as no
+game-over sound. ✅ **The precondition is confirmed on the panel 2026-08-20**: the `NEW HIGH SCORE!`
+keyboard does come up, so this path is the common one and not an edge case. On the pre-bus path the whole
+tone had already been handed to the kernel ring, which is why this is new. Two candidate fixes, and the
+choice is a design decision rather than a bug hunt: **thread a `void (*tick)(void *)` through
+`keyboard_enter()`** — the shape `hw_led_pulse_update(now_ms)` already established for keeping `audio.h`
+out of shared UI code, at the cost of touching `gameover_init()`'s signature and every game's call site —
+or **install the one `Audio *` on the library and call `audio_service_tick()` from any loop that owns the
+screen**, which is a file-static global but needs no signature change and states the real invariant: a
+blocking sub-loop IS a render loop. ⚠️ **Whichever wins, `common/keyboard.c:77-86`'s two settle loops need
+it too**, and so does anything else that draws while the main loop is stopped.
 
 ③ **The four canned sounds become sample-backed, so no game edits a line to get WAV effects.**
 `audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` carry most of the games' audio call
-sites and every one of them is a sustained pure tone — `audio_fail()`'s 392 / 330 / 262 Hz sits in the
-worst band this speaker has and the test tool's `DRONE` at 220 Hz is below it entirely, which also
-supplies a simpler candidate than phase cancellation for the near-silent stacked drones: **this speaker
-cannot do 220 Hz.** So back each name with a clip when one is configured and keep today's note table as
-the fallback: every game upgrades at once, a device with no sound files still makes sounds, and the raw
-`audio_tone()` sites keep their tones until somebody gives them names.
+sites and every one of them is a sustained pure tone. ⚠️ **The claim that this speaker "cannot do 220 Hz"
+is REFUTED and must not be re-raised**: [§3.4](SYSTEM_ANALYSIS.md#34-audio) records 220 Hz as *"clearly a
+square wave"* — audible, and badly shaped — and `audio_fail()`'s 392 / 330 / 262 Hz was heard in full at
+`brick_breaker`'s game over on `.188` 2026-08-20. So the low band is a QUALITY problem, not an audibility
+one, and the argument for sample-backing these four names is unchanged: broadband beats a sustained tone on
+this speaker whatever its pitch. What IS still open on audibility is duration × pitch: `tetris.c:620-621`
+and `:714-715`'s 500 Hz then 250 Hz place-down tones are *"so faint I wanted to write there is none"* at
+60/70 ms, where 880 Hz at 60 ms is clear. ⚠️ **Do not tune those two numbers by guessing** —
+`native_apps/tests/speaker_band.sh` is the instrument (400 ms sines at 200–1300 Hz through the vendor's
+`aplay`, each paired with a 1000 Hz reference so a silent tone identifies itself), it is **unrun**, and the
+short-tone half of the question needs `audio_mix_test`'s own 5/10/20/40/60/100 ms row instead, because every
+`aplay` invocation restarts the stream. So back each name with a clip when one is configured and keep
+today's note table as the fallback: every game upgrades at once, a device with no sound files still makes
+sounds, and the raw `audio_tone()` sites keep their tones until somebody gives them names.
 
 ④ **A per-game sound set, declared in a config file rather than in C.** The operator's decision, and it
 is what makes ③ cheap: a game names its bed and its effects in a file, so adding, swapping or silencing a

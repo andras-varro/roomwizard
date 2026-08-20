@@ -645,7 +645,7 @@ static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar (`
 
 ```c
 audio_init(&audio);
-audio_pump_enable(&audio, true);              /* once, after init */
+audio_cont_enable(&audio, true);              /* once, after init — CONT implies PUMP */
 while (running) {
     /* ... */
     audio_pump(&audio);                       /* once per frame, beside fb_swap() */
@@ -677,8 +677,10 @@ These rules, each of which is a way to get this wrong:
   the panel's `LIM` pad — bends every two-voice sum. ⚠️ **A knee is only correct while it tracks the voice
   amplitude**: one voice must pass byte-identical, so every volume change re-derives it
   (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
-  `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which the bounded curve
-  guarantees by construction; `../IMPROVEMENT_PLAN.md` F1 has the mechanisms measurement already killed.
+  `clip == 0` is NOT evidence of a clean mix** — `../IMPROVEMENT_PLAN.md` F1 lists the ten mechanisms
+  measurement has already killed, and this is one of them.
+- ⚠️ **The pump targets a LEAD; it never writes into the free space** — an empty OSS ring would accept
+  its whole 743 ms ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5) and put the next sound that late.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
   (the knee bent it — expected under SOFT, not a fault), `starve` (the ring was dry with audio still owed:
   **one audible gap each, pacing not mixing**), `lost` (refused after render), `drop` (full bus). Read them.
@@ -690,9 +692,6 @@ These rules, each of which is a way to get this wrong:
   defect rather than a pacing one. Ask the library for the ceiling with
   `audio_cont_service_interval_us()`, and ask the component whether it needs frames, exactly as with
   `gameover_needs_redraw()`.
-- ⚠️ **The pump targets a LEAD; it never writes into the free space.** An empty OSS ring is 32768 frames —
-  **743 ms** at 44100, not the ~506 ms an earlier revision claimed — and it will accept every one of them,
-  after which the next sound plays three quarters of a second late.
 - **A voice carries a `delay`, and `audio_success()` depends on it**: simultaneous voices are a *chord*, and
   the canned sounds are note tables plus one sequencer. `audio_interrupt()` resets no ring — a tail survives it.
 - ⚠️ **`audio_tone()` chains onto the preceding tone only while that tone is RECENT** —
@@ -717,7 +716,32 @@ These rules, each of which is a way to get this wrong:
   only the arithmetic.
 - ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
   the pump is on rather than letting two writers interleave frames into one device.
-
+- ⚠️ **A game wants CONT, not just PUMP, and that is what the seven games are being converted to**
+  (`../IMPROVEMENT_PLAN.md` F1 Phase 5): the never-reset stream is what drops the minimum audible tone from
+  ~60 ms to 5 ms, and `brick_breaker`'s five 20–40 ms during-play tones were inaudible for the life of the
+  game until it was turned on. ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
+  serviced only on frames that drew is a stream with gaps in it.
+- ⚠️ **Never `audio_interrupt()` before an effect on the bus — it means "stop ALL voices".** The idiom cost
+  nothing when the kernel ring held exactly one sound; on the bus a 20 ms brick hit throws away a 600 ms
+  fanfare that was still playing (measured by ear, `.188` 2026-08-20: audible at game over, inaudible on a
+  lost life). Each game drops its interrupts as it is converted, and **no counter sees this** — a voice
+  stopped early is not `lost`, `drop` or `clip`.
+- ⚠️ **A blocking sub-loop IS a render loop, and one that does not service the stream loses the sound
+  queued before it.** `keyboard_enter()` (`common/keyboard.c:263`, `:325`) draws and sleeps its own frames
+  and contains no `audio_pump()`, so `tetris`' game-over fanfare is deferred until the high-score keyboard
+  closes. The mixer advances by frames RENDERED, so such a sound is delayed rather than dropped, which is
+  worse to diagnose. Open, with two candidate fixes: `../IMPROVEMENT_PLAN.md` F1 Phase 5.
+- **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
+  it is what lets an operator’s own play session be measured with no mic: from the launcher it lands in
+  `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate it before believing a zero**: `kill -STOP` the
+  game for a second, three times, and `starve` reads exactly 3 — no source change and no rebuild.
+  Measured `.188` 2026-08-20, against 0 over 616 and 659 idle services and 8 in 10 959 under real play;
+  a dry queue is counted even while the bus is SILENT, so a small `starve` is not automatically audible.
+- **`check-audio-pacing.sh` is the gate, and it runs from `build-and-deploy.sh`.** It fails an app that
+  enables a bus and never services it, one that sleeps `FRAME_DELAY_IDLE_US` with no `audio_pump_active()`,
+  and the mirror case. `--self-test` carries its own controls, the load-bearing one being an *unconverted*
+  app. ⚠️ **It reads text, not control flow**, so an `audio_pump()` nested inside the draw branch passes it
+  — its own header lists the three shapes it cannot see, and `starve` is what catches them.
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
 questions, and its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one

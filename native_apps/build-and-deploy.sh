@@ -315,6 +315,18 @@ if [[ -x ./check-arm-safe.sh ]]; then
 else
     warn "check-arm-safe.sh missing — skipping hardware-divide gate"
 fi
+
+# ── 2b2. Audio pacing gate ──────────────────────────────────────────────────
+# A source check, not a binary one: an app that turns the mix bus on must also
+# service it every iteration and keep audio_pump_active() in its frame pacing.
+# Neither omission errors — the game runs and the sound has gaps in it — so this
+# is arithmetic rather than a rule to remember while F1 Phase 5 converts the
+# remaining games.  Runs on build-only too, for the same reason as the gate above.
+if [[ -x ./check-audio-pacing.sh ]]; then
+    ./check-audio-pacing.sh || err "Audio pacing check failed — refusing to deploy"
+else
+    warn "check-audio-pacing.sh missing — skipping audio pacing gate"
+fi
 echo ""
 
 # ── 2c. --bundle: stage instead of deploying ────────────────────────────────

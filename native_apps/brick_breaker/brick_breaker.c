@@ -920,7 +920,15 @@ static void update_balls(void) {
             b->dx = cosf(out_angle) * b->speed;
             b->dy = sinf(out_angle) * b->speed;
 
-            audio_interrupt(&audio);
+            /* ⚠️ **No `audio_interrupt()` before an effect on the mix bus** —
+             * these five sites had one, and on the bus it means "stop ALL
+             * voices", so a brick hit threw away the 600 ms `audio_fail()`
+             * fanfare a lost ball had just started.  Measured by ear on `.188`
+             * 2026-08-20: the fanfare was audible when the game ENDED (no
+             * further play to interrupt it) and inaudible when a life was lost
+             * with balls remaining.  The idiom was free when the kernel ring
+             * held exactly one sound; mixing is the whole point of the bus.
+             * The four sites below dropped theirs for the same reason. */
             audio_tone(&audio, 600, 30);
         }
 
@@ -955,7 +963,6 @@ static void update_balls(void) {
                 br->health = 0;
                 brick_destroyed = true;
                 game.score += 20 * game.level;  /* 2x normal points */
-                audio_interrupt(&audio);
                 audio_tone(&audio, 1500, 30);  /* Higher pitch for bonus */
             } else if (br->type == BRICK_EXPLOSIVE) {
                 /* Explosive brick — immediate detonation + deferred chain */
@@ -996,7 +1003,6 @@ static void update_balls(void) {
                     }
                 }
                 
-                audio_interrupt(&audio);
                 audio_tone(&audio, 1000, 40);
             } else {
                 /* Normal brick */
@@ -1042,10 +1048,8 @@ static void update_balls(void) {
                 }
                 spawn_powerup((float)(br->x + br->w / 2),
                               (float)(br->y + br->h / 2));
-                audio_interrupt(&audio);
                 audio_tone(&audio, 1200, 25);
             } else if (br->type != BRICK_INDESTRUCTIBLE) {
-                audio_interrupt(&audio);
                 audio_tone(&audio, 800, 20);
             }
 
@@ -1780,6 +1784,18 @@ int main(int argc, char *argv[]) {
     hw_init();
     hw_set_backlight(100);
     audio_init(&audio);
+
+    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+     * from this render loop, and it implies the mix bus (common/audio.h).  Two
+     * things follow, and they are why a game wants it: two sounds overlap
+     * instead of one cutting the other, and a tone shorter than ~60 ms becomes
+     * audible at all — that floor is a property of RESTARTING the stream, and a
+     * continuously fed one drops it to 5 ms
+     * (../SYSTEM_ANALYSIS.md#34-audio gotcha 6).
+     * Deliberately unchecked: a failed handover restores the old write path
+     * rather than muting, so there is nothing for a game to do about it, and
+     * audio_close() reports which path actually ran. */
+    audio_cont_enable(&audio, true);
     srand(time(NULL));
 
     /* Gamepad init */
@@ -1908,7 +1924,16 @@ int main(int argc, char *argv[]) {
             }
             fb_swap(&fb);
         }
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+
+        /* Service the stream on EVERY iteration, drawing or not — it holds one
+         * lead (~139 ms on the OSS shim) and a skipped service is an audible
+         * gap.  ⚠️ audio_pump_active() belongs in the pacing decision: it is
+         * unconditionally true while the continuous stream is live, and
+         * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
+         * the library measures for itself (common/audio_out.h). */
+        audio_pump(&audio);
+        usleep((needs_redraw || audio_pump_active(&audio))
+               ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
         needs_redraw = false;  /* reset for next frame */
     }
 

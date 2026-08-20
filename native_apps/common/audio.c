@@ -372,6 +372,26 @@ int audio_init_unchecked(Audio *audio)
 
 void audio_close(Audio *audio)
 {
+    /* ⚠️ **The counters are the diagnosis, and this is the one place every app
+     * reports them.**  One line, from the LIBRARY rather than from a game's own
+     * idea of what it enabled — the same reason `audio_get_volume()` exists — and
+     * only when a bus was actually running, so the two hardware tabs that never
+     * pump stay silent.  It is what separates a PACING fault from a mixing one on
+     * a device with no microphone: `starve` is one audible gap each, and one per
+     * bed start is expected (a fresh stream's first service legitimately finds
+     * `in_flight` 0).  ⚠️ `services` comes from `audio_out` and is 0 off the
+     * continuous path, where nothing counts them. */
+    if (audio->cont || audio->pumping) {
+        fprintf(stderr, "audio: bus closed — cont=%d services=%u starve=%u "
+                        "lost=%u drop=%u lim=%u clip=%u lead=%ldms period=%ldms\n",
+                audio->cont ? 1 : 0,
+                audio->cont ? audio_out_services(&audio->out) : 0u,
+                audio->pump_starved, audio->pump_lost,
+                audio->mix.dropped, audio->mix.limited, audio->mix.clipped,
+                audio_ms_for_frames(audio->sample_rate, audio->pump_lead),
+                audio_ms_for_frames(audio->sample_rate, audio->pump_period));
+    }
+
     /* ⚠️ The continuous stream DRAINS on close, bounded — otherwise the queued
      * tail is discarded, which on a Settings speaker test is most of the tone
      * that was just played.  audio_out_close() is the only implementation. */

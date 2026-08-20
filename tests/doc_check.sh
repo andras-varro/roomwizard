@@ -530,6 +530,15 @@ group_c() {
 # directions: a paragraph rewrapped to 200 characters passes while getting longer, and a
 # table split across more rows fails while saying the same thing. The ~110-char wrap is a
 # review rule this cannot see. Read the diff; do not let a green D stand in for that.
+# 2026-08-20, native_apps/CLAUDE.md 629 → 660. F1 Phase 5 put the first two games on the continuous
+# stream, and that landed FOUR authoring rules this file is the only home for: a game wants CONT rather
+# than PUMP; `audio_pump()` lives outside the draw branch; `audio_interrupt()` before an effect discards a
+# fanfare that is still playing (measured by ear, and NO counter sees it); and a blocking sub-loop is a
+# render loop, so `keyboard_enter()` losing the sound queued before it is a rule and not a one-off. The
+# same commit paid 6 lines by compressing two bullets whose facts are homed in §3.4 and F1, and it adds a
+# gate (`check-audio-pacing.sh`) whose existence has to be discoverable from the doc that states the rule
+# it enforces. ⚠️ 660 grants ~6 lines of headroom, not more: the file was already AT its ceiling when this
+# started, which is what made the raise necessary rather than optional.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -538,7 +547,7 @@ ceilings() {
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-629	native_apps/CLAUDE.md
+660	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
