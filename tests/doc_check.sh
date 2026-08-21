@@ -539,15 +539,28 @@ group_c() {
 # gate (`check-audio-pacing.sh`) whose existence has to be discoverable from the doc that states the rule
 # it enforces. ⚠️ 660 grants ~6 lines of headroom, not more: the file was already AT its ceiling when this
 # started, which is what made the raise necessary rather than optional.
+# ⚠️ 2026-08-21, FIFTH and SIXTH raises, both deliberate and argued, both spending that headroom and a
+# little more. SYSTEM_ANALYSIS.md 1592 → 1597: one measured device fact with no possible home elsewhere —
+# the speaker's USABLE BAND (sharp rolloff below ~700 Hz, inaudible below ~300 Hz at viewing distance). It
+# earns five lines the way the card's read speed did, by settling a CLASS of question rather than one:
+# which frequencies ANY effect may use. It also retires the pitch half of an unrun instrument script and
+# explains every faintness report in the tree, so it removes future work rather than describing past work.
+# native_apps/CLAUDE.md 660 → 665: F1 Phase 5 ① closing across all seven games landed two authoring facts
+# this file is the only home for — `snake`'s play-sleep exception to the three-line pump shape (its sleep IS
+# its step interval, so it is SPLIT rather than shortened), and that two files under `tests/` are shipped
+# launcher tiles and therefore not expendable. The interrupt-before-an-effect rule was rewritten IN PLACE
+# rather than appended to, since its original evidence is refuted and its rule is not.
+# ⚠️ **No headroom is granted by either: 1597 and 665 are the measurements, and the next addition to
+# either file pays by deleting.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1592	SYSTEM_ANALYSIS.md
+1597	SYSTEM_ANALYSIS.md
 1321	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-660	native_apps/CLAUDE.md
+665	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

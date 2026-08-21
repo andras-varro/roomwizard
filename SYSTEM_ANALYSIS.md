@@ -639,6 +639,11 @@ differing content instead of phase.
   pitch**: 220 Hz *"clearly a square wave"*, 440 Hz noisy, 1320 Hz *"cleaner"*. So **≈55 % is not a safe
   acoustic ceiling**, the overdrive is amp-or-cone below every digital stage, and ⚠️ **one global peak is
   the wrong shape of limit** — it over-quietens the nearly-clean band and still leaves 220 Hz square.
+- ⚠️ **The usable BAND is narrow, and low pitches fail on LEVEL rather than on reproduction.** Sharp
+  rolloff below ~700 Hz; below ~300 Hz inaudible at viewing distance, audible only with an ear at the
+  panel; below 500 Hz hard to hear at the shipped level. A continuous glide is what measures this — one
+  `aplay` per tone restarts the stream and cannot. **An effect centred below ~700 Hz is unusable on this
+  hardware whatever its shape**, and everything audible in the tree today is ≥ 880 Hz.
 - ⚠️ **TWO sustained sines INTERMODULATE, and no level law fixes it — the fix is source material.** Measured
   `.188` 2026-08-20 the same way, a **pre-mixed** two-sine WAV through the vendor's `aplay` with no mixer,
   generator or pump in the path: *"same distortion as on the device"*. 440 + 880 (peak 12287, RMS 6143) is

@@ -716,16 +716,22 @@ These rules, each of which is a way to get this wrong:
   only the arithmetic.
 - ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
   the pump is on rather than letting two writers interleave frames into one device.
-- ⚠️ **A game wants CONT, not just PUMP, and that is what the seven games are being converted to**
+- ⚠️ **A game wants CONT, not just PUMP, and all seven games now have it**
   (`../IMPROVEMENT_PLAN.md` F1 Phase 5): the never-reset stream is what drops the minimum audible tone from
-  ~60 ms to 5 ms, and `brick_breaker`'s five 20–40 ms during-play tones were inaudible for the life of the
+  ~60 ms to 5 ms, and `brick_breaker`'s 20–40 ms during-play tones were inaudible for the life of the
   game until it was turned on. ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
-  serviced only on frames that drew is a stream with gaps in it.
+  serviced only on frames that drew is a stream with gaps in it. ⚠️ **`snake` is the exception to the
+  three-line shape**: its play sleep IS its step interval (`game.speed`, 150 ms falling to 50), so
+  shortening it to feed the stream would make the snake faster — the wait is broken into pieces of **half**
+  `audio_cont_service_interval_us()` instead (that figure is a ceiling and already carries half a period of
+  margin), and off the bus it returns 0, collapsing to one `usleep()`.
 - ⚠️ **Never `audio_interrupt()` before an effect on the bus — it means "stop ALL voices".** The idiom cost
-  nothing when the kernel ring held exactly one sound; on the bus a 20 ms brick hit throws away a 600 ms
-  fanfare that was still playing (measured by ear, `.188` 2026-08-20: audible at game over, inaudible on a
-  lost life). Each game drops its interrupts as it is converted, and **no counter sees this** — a voice
-  stopped early is not `lost`, `drop` or `clip`.
+  nothing when the kernel ring held exactly one sound; on the bus a 20 ms effect throws away a 600 ms
+  fanfare that is still playing, and `samegame`'s removal blip against a level-clear fanfare is the
+  constructible case. ⚠️ **The `brick_breaker` lost-life measurement that first motivated this rule is
+  REFUTED** (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ②): the rule stands, its original evidence does not. It is
+  gone from all seven games, and **no counter sees it** — a voice stopped early is not `lost`, `drop` or
+  `clip`.
 - ⚠️ **A blocking sub-loop IS a render loop, and one that does not service the stream loses the sound
   queued before it.** `keyboard_enter()` (`common/keyboard.c:263`, `:325`) draws and sleeps its own frames
   and contains no `audio_pump()`, so `tetris`' game-over fanfare is deferred until the high-score keyboard
@@ -748,6 +754,11 @@ questions, and its **CONT, LIM and LVL pads put every rejected shape on the same
 under test** — which is the only reason a claim like "the click is gone" can be checked rather than
 believed. ⚠️ Its level ladder starts on the QUIETEST rung and wraps: a walk run loud-to-quiet biases
 adaptation, and "can you hear it" is a different question from "is it clean".
+⚠️ **Two files under `tests/` are SHIPPED launcher tiles, so nothing in there is automatically
+expendable** — `audio_touch_test` is the tile `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
+(`app-manifests.sh`, each with a PPM icon), and the theremin is also the instrument that measured the
+speaker's usable band ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). Read that manifest file before calling
+anything under `tests/` a test tool.
 ⚠️ **Never write prose saying 60 ms is a minimum tone length.** Nothing clamps it; the floor was the
 start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
