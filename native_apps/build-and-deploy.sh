@@ -373,6 +373,15 @@ if [[ -n "$BUNDLE_DIR" ]]; then
             || err "staging failed: $f"
     done
 
+    # The effect clips, for the same reason the online path uploads them: without
+    # them the canned sounds are note tables below the speaker's knee.  0644 —
+    # data, read by audio.c, never executed.
+    for f in sounds/fx_*.wav; do
+        [ -f "$f" ] || continue
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/sound/$(basename "$f")" \
+            || err "staging failed: $f"
+    done
+
     # app_launcher is this component's boot target, and the only component that
     # has one — the launcher is what makes every other .app reachable.  0644:
     # /opt/roomwizard/default-app is read, never executed.
@@ -453,6 +462,24 @@ if ls build/icons/*.ppm &>/dev/null; then
     ssh "$DEVICE" "mkdir -p /opt/roomwizard/icons"
     scp build/icons/*.ppm "$DEVICE:/opt/roomwizard/icons/"
     ok "Icons uploaded ($(ls build/icons/*.ppm | wc -l) file(s))"
+fi
+
+# Upload the generated effect clips → /opt/sound/
+#
+# ⚠️ Without these the four canned sounds fall back to their note tables, which
+# is a working device that has NOT had the audibility fix (../IMPROVEMENT_PLAN.md
+# F1 Phase 5 ③) — every one of those tones is at or below the speaker's knee.  So
+# this is not an optional asset step.
+#
+# /opt/sound is where the music bed already lives and device-files/clean-rules.conf
+# keeps that directory wholesale, so a re-commission does not take them away.  They
+# are checked in (sounds/fx_*.wav, byte-reproducible from sounds/gen-sounds.sh), so
+# unlike the music there is nothing to hand-copy.
+if ls sounds/fx_*.wav &>/dev/null; then
+    info "Uploading effect clips → /opt/sound/"
+    ssh "$DEVICE" "mkdir -p /opt/sound"
+    scp sounds/fx_*.wav "$DEVICE:/opt/sound/"
+    ok "Effect clips uploaded ($(ls sounds/fx_*.wav | wc -l) file(s))"
 fi
 
 # Every executable this script put on the device, as the device sees it.

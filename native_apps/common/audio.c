@@ -299,6 +299,13 @@ static void level_defaults(Audio *audio)
      * somebody else's tone". */
     audio->music.slot     = -1;
     audio->sfx.slot       = -1;
+    /* The clip voices, same -1, but for a WEAKER reason than the two above and it
+     * is worth stating rather than implying: a zeroed clip voice reads slot 0 —
+     * which on a game with a bed IS the bed — but its `gen` is 0 and
+     * `audio_mix_voice_gen()` never issues 0, so the pair already answers "not
+     * live" and the voice is correctly seen as free.  The -1 is what keeps
+     * `slot >= 0` meaning "has been armed" for anything that reads it later. */
+    for (int i = 0; i < AUDIO_CLIP_VOICES; i++) audio->fxv[i].slot = -1;
     /* ⚠️ Same family, and it is the LIMITER that had this bug: bus_reset() keeps
      * `mix.limit` across a session so a panel A/B is not undone mid-comparison,
      * but AUDIO_MIX_SOFT is 0 — so on a never-armed bus that zero masqueraded as
@@ -309,6 +316,14 @@ static void level_defaults(Audio *audio)
      * the carry-across keeps working.  tests/audio_tone_test.c group F. */
     audio->mix.limit      = AUDIO_MIX_HARD;
 }
+
+/* The clip bank's three lifecycle hooks, defined with the rest of it further
+ * down: audio_open() sets the default paths, audio_init() applies the config
+ * overrides on top, and audio_close() frees the PCM.  Declared here rather than
+ * moving 200 lines up, so the clip code stays beside the canned sounds it backs. */
+static void fx_defaults(Audio *audio);
+static void fx_config_apply(Audio *audio, Config *cfg);
+static void clip_bank_discard(Audio *audio);
 
 /** Release one sample voice's OS resources.  Called only from audio_close():
  *  see the note there for why stopping a voice must not do this. */
@@ -332,6 +347,7 @@ static int audio_open(Audio *audio)
     audio->channels    = FALLBACK_CHANNELS;
     audio->streaming   = false;
     level_defaults(audio);
+    fx_defaults(audio);
 
     return dsp_reopen(audio);
 }
@@ -346,19 +362,20 @@ int audio_init(Audio *audio)
     audio->sample_rate = TARGET_RATE;
     audio->channels    = FALLBACK_CHANNELS;
 
-    /* Check config — honour "audio_enabled" setting */
-    {
-        Config cfg;
-        config_init(&cfg);
-        config_load(&cfg);   /* silent if file missing */
-        if (!config_audio_enabled(&cfg)) {
-            printf("audio: disabled by config (%s)\n", CONFIG_FILE_PATH);
-            audio->available = false;
-            return 0;   /* success — games continue without sound */
-        }
+    /* Check config — honour "audio_enabled" setting.  ⚠️ The same load also
+     * carries the four clip paths, applied AFTER audio_open() because that
+     * memsets the struct — so this Config outlives the gate it was opened for. */
+    Config cfg;
+    config_init(&cfg);
+    config_load(&cfg);   /* silent if file missing */
+    if (!config_audio_enabled(&cfg)) {
+        printf("audio: disabled by config (%s)\n", CONFIG_FILE_PATH);
+        audio->available = false;
+        return 0;   /* success — games continue without sound */
     }
 
     if (audio_open(audio) < 0) return -1;
+    fx_config_apply(audio, &cfg);
 
     printf("audio: %s opened at %d Hz %d ch S16LE (O_NONBLOCK)\n",
            DSP_DEVICE, audio->sample_rate, audio->channels);
@@ -413,6 +430,7 @@ void audio_close(Audio *audio)
      * that starts a bed on every session and never closes leaks one fd per run. */
     sample_discard(&audio->music);
     sample_discard(&audio->sfx);
+    clip_bank_discard(audio);
     audio->pumping         = false;
     audio->streaming       = false;
     audio->available       = false;
@@ -995,6 +1013,248 @@ void audio_stream_stop(Audio *audio)
     fprintf(stderr, "audio: stream stop — 20 ms fade appended, stream still open\n");
 }
 
+/* ── Recorded clips in RAM: what the four canned sounds are MADE of ──────────
+ *
+ * ⚠️ **The point is AUDIBILITY, and the change is CONTENT** — see audio.h's
+ * convenience-sounds block for the band measurement that makes a pure tone the
+ * wrong signal on this speaker, and ../IMPROVEMENT_PLAN.md F1 Phase 5 ③ for why
+ * no pitch is retuned and no level is raised in the same edit.
+ *
+ * ⚠️ **The cursor is why these live in RAM.**  `audio_sfx_play()`'s one streaming
+ * voice must refuse a retrigger while it sounds, because its `AudioWav` IS the
+ * live voice's `ctx`.  A clip's PCM is shared and read-only, so each trigger
+ * carries its own position and AUDIO_CLIP_VOICES of them can overlap.
+ *
+ * The mixer is untouched by all of this: a clip is an `AudioVoiceFill` like the
+ * bed's, so everything the bus already guarantees — the full-bus refusal, the
+ * envelope, the self-free at `pos >= frames` — applies unchanged.
+ */
+
+/** Where each name's clip lives when nothing overrides it, and the sweep each
+ *  one carries.  ⚠️ Every one of the four is inside the speaker's passband; four
+ *  of the OTHER six stock clips dip below the knee, so if a raw audio_tone() site
+ *  ever gets a name here, retune the spec — never the threshold. */
+static const char *const FX_DEFAULT_PATH[AUDIO_FX_COUNT] = {
+    "/opt/sound/fx_click.wav",     /* BEEP     900 → 1500 Hz */
+    "/opt/sound/fx_pickup.wav",    /* BLIP    1200 → 3200 Hz */
+    "/opt/sound/fx_success.wav",   /* SUCCESS  700 → 4200 Hz */
+    "/opt/sound/fx_fail.wav"       /* FAIL    1800 →  420 Hz */
+};
+
+/** The config keys that override them, and the word each refusal uses. */
+static const char *const FX_CONFIG_KEY[AUDIO_FX_COUNT] = {
+    "fx_beep", "fx_blip", "fx_success", "fx_fail"
+};
+static const char *const FX_NAME[AUDIO_FX_COUNT] = {
+    "beep", "blip", "success", "fail"
+};
+
+/** Defaults into `fx_path`.  Called from audio_open(), so BOTH entry points get
+ *  them — a hardware tab that bypasses the config gate still gets clip content. */
+static void fx_defaults(Audio *audio)
+{
+    for (int i = 0; i < AUDIO_FX_COUNT; i++)
+        snprintf(audio->fx_path[i], AUDIO_FX_PATH_MAX, "%s", FX_DEFAULT_PATH[i]);
+}
+
+/** Config overrides, applied AFTER audio_open() because that memsets the struct.
+ *  A key that is present but EMPTY is a deliberate "use the note table". */
+static void fx_config_apply(Audio *audio, Config *cfg)
+{
+    for (int i = 0; i < AUDIO_FX_COUNT; i++) {
+        const char *p = config_get(cfg, FX_CONFIG_KEY[i], NULL);
+        if (p) snprintf(audio->fx_path[i], AUDIO_FX_PATH_MAX, "%s", p);
+    }
+}
+
+/** `AudioVoiceFill` over RAM: the whole mechanism, and it is a memcpy.  A short
+ *  return is how the clip ends, which the bus already treats as a normal exit. */
+static long clip_fill(void *ctx, int16_t *dst, long frames)
+{
+    AudioClipVoice *cv = (AudioClipVoice *)ctx;
+    if (!cv || !cv->clip || !cv->clip->pcm) return 0;
+
+    long left = cv->clip->frames - cv->pos;
+    if (left <= 0) return 0;
+    if (frames > left) frames = left;
+
+    memcpy(dst, cv->clip->pcm + cv->pos, (size_t)frames * sizeof(int16_t));
+    cv->pos += frames;
+    return frames;
+}
+
+/** How many voices are still reading `c`.  ⚠️ Asked of the MIXER, not of a flag
+ *  of ours: a voice frees itself at `pos >= frames` and nothing tells us. */
+static int clip_refs(const Audio *audio, const AudioClip *c)
+{
+    int n = 0;
+    for (int i = 0; i < AUDIO_CLIP_VOICES; i++) {
+        const AudioClipVoice *cv = &audio->fxv[i];
+        if (cv->clip != c || cv->slot < 0) continue;
+        if (audio_mix_voice_pending(&audio->mix, cv->slot, cv->gen) > 0) n++;
+    }
+    return n;
+}
+
+/**
+ * Read a whole file into `c`.  Returns true iff `c->pcm` came out non-NULL.
+ *
+ * Goes through audio_wav.c rather than reading the header here, and that is
+ * load-bearing: `data` is NOT at byte 44 in our own files, and a reader that
+ * assumes it plays an encoder version string as audio (audio_wav.h).  It also
+ * averages a multi-channel file down instead of picking the left channel.
+ */
+static bool clip_load(Audio *audio, AudioClip *c, const char *path, const char *name)
+{
+    AudioWav w;
+    if (!audio_wav_open(&w, path, false)) {
+        fprintf(stderr, "audio: fx %s has no clip at %s — the note table plays instead\n",
+                name, path);
+        return false;
+    }
+    /* Same refusal as the bed's, same reason: there is no resampler, and playing
+     * 22050 material at 44100 is a pitch bug that sounds like a bad recording. */
+    if (w.rate != audio->sample_rate) {
+        fprintf(stderr, "audio: fx %s refused — %s is %d Hz, the device granted %d, "
+                        "and there is no resampler\n", name, path, w.rate, audio->sample_rate);
+        audio_wav_close(&w);
+        return false;
+    }
+    if (w.frames <= 0 || w.frames > AUDIO_CLIP_MAX_FRAMES) {
+        /* ⚠️ The guard that stops a MUSIC path being RAM-loaded inside a tap. */
+        fprintf(stderr, "audio: fx %s refused — %s is %ld frames, the clip ceiling is "
+                        "%ld (a bed STREAMS; audio_music_start() is its path)\n",
+                name, path, w.frames, AUDIO_CLIP_MAX_FRAMES);
+        audio_wav_close(&w);
+        return false;
+    }
+
+    int16_t *pcm = (int16_t *)malloc((size_t)w.frames * sizeof(int16_t));
+    if (!pcm) {
+        fprintf(stderr, "audio: fx %s out of memory for %ld frames\n", name, w.frames);
+        audio_wav_close(&w);
+        return false;
+    }
+
+    /* Loop rather than one read: audio_wav_read() is allowed to return short, and
+     * a partial file must end the clip at what is really there. */
+    long got = 0;
+    while (got < w.frames) {
+        long n = audio_wav_read(&w, pcm + got, w.frames - got);
+        if (n <= 0) break;
+        got += n;
+    }
+    audio_wav_close(&w);
+
+    if (got <= 0) {
+        fprintf(stderr, "audio: fx %s read nothing from %s\n", name, path);
+        free(pcm);
+        return false;
+    }
+    c->pcm    = pcm;
+    c->frames = got;
+    fprintf(stderr, "audio: fx %s loaded %s — %ld of %ld frames, %d Hz, %ld bytes in RAM\n",
+            name, path, got, w.frames, w.rate, (long)((size_t)got * sizeof(int16_t)));
+    return true;
+}
+
+/** The clip for `id`, loading it on first use, or NULL to mean "play the notes". */
+static AudioClip *clip_ready(Audio *audio, AudioFxId id)
+{
+    AudioClip *c = &audio->fx[id];
+
+    if (c->reload) {
+        /* The path changed.  Free the old PCM here — the one moment we know no
+         * voice is reading it — and fall back to the notes for this one trigger
+         * if one still is. */
+        if (clip_refs(audio, c) > 0) return NULL;
+        free(c->pcm);
+        c->pcm    = NULL;
+        c->frames = 0;
+        c->tried  = false;
+        c->reload = false;
+    }
+
+    if (!c->tried) {
+        c->tried = true;                       /* set BEFORE the load: a miss is
+                                                * permanent, so a failure must not
+                                                * be retried on the next tap */
+        const char *path = audio->fx_path[id];
+        if (path && *path) clip_load(audio, c, path, FX_NAME[id]);
+    }
+    return c->pcm ? c : NULL;
+}
+
+bool audio_fx_play(Audio *audio, AudioFxId id)
+{
+    if (!audio || id < 0 || id >= AUDIO_FX_COUNT) return false;
+    /* Off the bus a sample voice cannot exist at all, and that is precisely when
+     * the note table must run — so this is a QUIET false, not a complaint. */
+    if (!audio->available || !audio->pumping) return false;
+
+    AudioClip *c = clip_ready(audio, id);
+    if (!c) return false;
+
+    for (int i = 0; i < AUDIO_CLIP_VOICES; i++) {
+        AudioClipVoice *cv = &audio->fxv[i];
+        if (cv->slot >= 0 && audio_mix_voice_pending(&audio->mix, cv->slot, cv->gen) > 0)
+            continue;                          /* this one is still sounding */
+
+        if (!cv->buf) {
+            cv->buf = (int16_t *)malloc((size_t)AUDIO_CLIP_VOICE_BUF_FRAMES * sizeof(int16_t));
+            if (!cv->buf) return false;
+            cv->buf_frames = AUDIO_CLIP_VOICE_BUF_FRAMES;
+        }
+
+        /* ⚠️ The cursor is rewound HERE, before the add — the mixer pulls on the
+         * first rendered frame and would otherwise resume where the last trigger
+         * of this voice stopped. */
+        cv->clip = c;
+        cv->pos  = 0;
+
+        int slot = audio_mix_add_sample(&audio->mix, clip_fill, cv,
+                                        cv->buf, cv->buf_frames,
+                                        c->frames, audio_voice_peak(audio->vol));
+        if (slot < 0) return false;             /* full bus: refuses, never steals */
+        cv->slot = slot;
+        cv->gen  = audio_mix_voice_gen(&audio->mix, slot);
+        return true;
+    }
+    /* All AUDIO_CLIP_VOICES sounding.  Not a fault and not counted: the bus's own
+     * drop counter is for the bus, and this is our own pool being busy. */
+    return false;
+}
+
+void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path)
+{
+    if (!audio || id < 0 || id >= AUDIO_FX_COUNT) return;
+    if (!path) path = "";
+    if (strcmp(audio->fx_path[id], path) == 0) return;   /* safe to call per frame */
+
+    snprintf(audio->fx_path[id], AUDIO_FX_PATH_MAX, "%s", path);
+    audio->fx[id].reload = true;    /* the free happens at the next trigger */
+}
+
+/** Release the clip bank.  Called only from audio_close(), same reason as
+ *  sample_discard(): while a voice is pending the mixer is still reading this. */
+static void clip_bank_discard(Audio *audio)
+{
+    for (int i = 0; i < AUDIO_FX_COUNT; i++) {
+        free(audio->fx[i].pcm);
+        audio->fx[i].pcm    = NULL;
+        audio->fx[i].frames = 0;
+        audio->fx[i].tried  = false;
+        audio->fx[i].reload = false;
+    }
+    for (int i = 0; i < AUDIO_CLIP_VOICES; i++) {
+        free(audio->fxv[i].buf);
+        audio->fxv[i].buf        = NULL;
+        audio->fxv[i].buf_frames = 0;
+        audio->fxv[i].clip       = NULL;
+        audio->fxv[i].slot       = -1;
+    }
+}
+
 /* ── Convenience sounds ─────────────────────────────────────────────────────
  * Four note tables and ONE sequencer.  The tables exist because the pump needs
  * each note's start offset, which the old shape — three bare audio_tone() calls
@@ -1023,31 +1283,39 @@ static void play_sequence(Audio *audio, const AudioNote *notes, int count)
         audio_tone(audio, notes[i].freq, notes[i].ms);
 }
 
-/** 880 Hz, 80 ms — UI click / tile place */
+/** 880 Hz, 80 ms — UI click / tile place.  Clip: fx_click, 900→1500 Hz. */
 void audio_beep(Audio *audio)
 {
     static const AudioNote s[] = { { 880, 80 } };
+    if (audio_fx_play(audio, AUDIO_FX_BEEP)) return;
     play_sequence(audio, s, 1);
 }
 
-/** 1320 Hz, 60 ms — item collected, food eaten */
+/** 1320 Hz, 60 ms — item collected, food eaten.  Clip: fx_pickup, 1200→3200 Hz. */
 void audio_blip(Audio *audio)
 {
     static const AudioNote s[] = { { 1320, 60 } };
+    if (audio_fx_play(audio, AUDIO_FX_BLIP)) return;
     play_sequence(audio, s, 1);
 }
 
-/** C5 → E5 → G5 ascending arpeggio — score milestone, level up */
+/** C5 → E5 → G5 ascending arpeggio — score milestone, level up.
+ *  Clip: fx_success, 700→4200 Hz — which also answers the arpeggio-not-chord
+ *  question by removing it: the clip is one sound, not three notes. */
 void audio_success(Audio *audio)
 {
     static const AudioNote s[] = { { 523, 120 }, { 659, 120 }, { 784, 220 } };
+    if (audio_fx_play(audio, AUDIO_FX_SUCCESS)) return;
     play_sequence(audio, s, 3);
 }
 
-/** G4 → E4 → C4 descending — game over, error */
+/** G4 → E4 → C4 descending — game over, error.  ⚠️ **All three notes are BELOW
+ *  the speaker's knee** and this is the sound the operator reported inaudible
+ *  under a music bed on 2026-08-21.  Clip: fx_fail, 1800→420 Hz. */
 void audio_fail(Audio *audio)
 {
     static const AudioNote s[] = { { 392, 150 }, { 330, 150 }, { 262, 300 } };
+    if (audio_fx_play(audio, AUDIO_FX_FAIL)) return;
     play_sequence(audio, s, 3);
 }
 

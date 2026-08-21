@@ -37,7 +37,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **What the 2026-08-21 listen left open.** (a) `tetris` DAS-repeated left/right, now the idiom is gone — still distinct clicks, or a smear? Asked and **not** answered, because the game-over case is input-locked · (b) `audio_success()`'s arpeggio-not-chord, still unasked and now known to have two of its three notes below the knee · (c) **`platformer`'s bed under real gameplay — deployed to `.188` 2026-08-21 and ready to ask**: is the level right for sustained music (F19's one open question), and is the pause→resume seam acceptable? ⚠️ **A frozen fade and a dry stream while `NEW HIGH SCORE!` is open are the DEFERRED blocking-sub-loop regression, not a new fault** — say so when asking, or it comes back as a bug report. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | (b) wants ③ shipped first, or it measures the band rather than the arpeggio |
+| 6 | **What the 2026-08-21 listen left open.** ✅ (c) is ANSWERED: the bed's level is right for sustained music, effects are audible over it, and the log carries 5 pause→resume cycles the operator did not remark on — recorded as clean-unless-contradicted, not as a pass. What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? Asked and **not** answered, because the game-over case is input-locked · (d) **`audio_fail()` and the other three now play clips (③) — is the fail sound audible at last, under a bed?** That is the operator's own complaint, three times reported, and the fix is deployed to `.188` unheard · (b) `audio_success()`'s arpeggio-not-chord is now MOOT if its clip plays: the clip is one sound, not three notes. ⚠️ **A frozen fade and a dry stream while `NEW HIGH SCORE!` is open are the DEFERRED blocking-sub-loop regression, not a new fault** — say so when asking. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | nothing — deployed |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -249,6 +249,16 @@ because the same pass truncates the vendor crontab — which is what would have 
 the first place — but it does mean the offline tool places a file that something on the device may
 delete. Settling which of the two causes it is would let that line be either removed or relied on.
 
+### B35. `gamepad_rescan()` logs a line per poll, so one session fills the log — open, measured 2026-08-21
+
+`/var/log/roomwizard/app_stdout.log` grew 134 KB across one play session on `.188`, and **1720 of those
+lines are the same one**: `gamepad: found gamepad 'Microsoft X-Box 360 pad' at /dev/input/eventN`. Every
+game calls `gamepad_rescan()` on a 5 s timer (`RESCAN_INTERVAL_MS`, `native_apps/CLAUDE.md` → *Input*) and
+the rescan re-`open()`s and re-announces a pad that never left. It is cosmetically harmless and
+operationally not: that log is the only instrument a no-microphone audio session has, and 1720 repeats of
+one line is what a real counter line has to be found among. Print on a CHANGE in what was found, not on a
+poll — and keep the first announcement, which is genuinely useful.
+
 ---
 
 ## Features
@@ -298,48 +308,31 @@ frequencies started at different moments partially cancel, which `AudioVoice.del
 440 Hz at 3/6) and is still a comfort change rather than a fix, and it must not ship beside another audio
 change — that two-variable comparison is one this entry has already paid for once.
 
-**Phase 5 — the games take the stream, and their effects become WAVs.** Four parts. ① and ② are CLOSED;
-③ and ④ are open, and ③ now has ear evidence it did not have when it was written.
+**Phase 5 — the games take the stream, and their effects become WAVs.** Five parts. ①, ② and ③ are
+BUILT — ③ awaits one listen — and ④/⑤ are the open work, all three of ⑤'s items asked for by name.
 
-✅ **① The pump, per game — done for all SEVEN games, verified on `.188` 2026-08-21.** Three lines each:
-`audio_cont_enable(&audio, true)` after `audio_init()` — **CONT, not just PUMP**, because the never-reset
-stream is what drops the short-tone floor from ~60 ms to 5 ms
-([§3.4](SYSTEM_ANALYSIS.md#34-audio) gotcha 6) — then `audio_pump(&audio)` on **every** iteration outside
-the draw block, and `audio_pump_active()` in the pacing decision. The shape, and `snake`'s exception to it,
-live in `native_apps/CLAUDE.md` → *Mixing*; **`native_apps/check-audio-pacing.sh` enforces all three from
-`build-and-deploy.sh`** and reads every game converted. Measured per game, welcome screen, ~7 s each:
-`cont=1`, `starve`/`lost`/`drop`/`lim`/`clip` all **0**; and 8 `starve` in 10 959 services across three
-real play sessions. ⚠️ A dry queue is counted even while the bus is SILENT, so a small non-zero `starve` is
-not automatically an audible fault. ⚠️ **Validate the counter before believing its zero** — three 1 s
-`SIGSTOP`s on a running game must read `starve=3` exactly. The blocking `usleep(100000)` LED sites that
-remain are all the exit flourish immediately before `running = false`, which is the one blocking case
-`native_apps/CLAUDE.md` sanctions and which happens as the stream is about to drain and close.
-
-✅ **② `brick_breaker`'s five during-play tones are audible, 2026-08-20 on `.188`.** `brick_breaker.c:924`,
-`:959`, `:1000`, `:1046` and `:1049`, 20–40 ms each, silent for the whole life of the game until now
-because a *restarted* stream cannot deliver anything under ~60 ms. The operator reports a sound on paddle
-bounce and on brick hits **with the brick types distinguishable** — the mechanism doing the thing it was
-built for. ⚠️ **The config gate was never the cause and must not be re-raised**: `.188` has no
-`/opt/games/rw_config.conf` at all and `config_audio_enabled()` defaults to `true`
+✅ **① The pump is on the continuous stream in all SEVEN games, and ② `brick_breaker`'s five during-play
+tones are audible at last — both verified on `.188`, both closed.** The three-line shape, `snake`'s
+exception to it and the reason it must be **CONT** rather than just PUMP live in `native_apps/CLAUDE.md` →
+*Mixing*, and `native_apps/check-audio-pacing.sh` enforces all three from `build-and-deploy.sh`. ⚠️ **A dry
+queue is counted even while the bus is SILENT**, so a small non-zero `starve` is not automatically an
+audible fault, and ⚠️ **the counter must be validated before a zero is believed** — three 1 s `SIGSTOP`s on
+a running game read `starve=3`. ⚠️ **The config gate was never ②'s cause and must not be re-raised**: `.188`
+has no `/opt/games/rw_config.conf` at all and `config_audio_enabled()` defaults to `true`
 (`common/config.c:290`).
 
-⚠️ **② also produced a diagnosis that is now REFUTED, and the refutation is arithmetic.** The
-interrupt-then-tone idiom does mean "stop ALL voices" on the bus, and it is gone from every game — but it
-is **not** why the `audio_fail()` fanfare sounded wrong on a lost life. That fanfare is **600 ms**
-(`{392,150} {330,150} {262,300}`, cumulative delays in `play_sequence()`), and on a lost life
-`brick_breaker` parks the ball **stuck to the paddle awaiting a tap** (`brick_breaker.c:1163-1168`), so
-nothing can sound inside that window; `tetris` locks input at game over, so it is unreachable there too.
-The operator reports the fanfare audible-but-very-faint on **both** a lost life and game over
-(2026-08-21) — *"inaudible"* and *"very faint"* were one observation described twice, and the real cause is
-the speaker's usable band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)). ⚠️ **Do not re-request the overlap check;
-it is not constructible.** The removals stand on the RULE, which holds wherever a second effect *can* land
-inside a fanfare — `samegame` firing a removal blip 60 ms after a level clear — and
-`native_apps/CLAUDE.md` → *Mixing* is its home. ⚠️ **`tetris` was on the bus for a day with its own sites
-intact**, because ① converted it without dropping them: converting a game and dropping its idiom are two
-edits, and the gate only sees the first. ⚠️ **`audio.h`'s own comment still claims those sites mean
-"replace what is playing, the same intent"**, which is wrong for an effect on a bus. Nothing counts a voice
-stopped early, so this is ear-only in both directions.
-
+⚠️ **② also produced a diagnosis that is REFUTED by arithmetic, and re-raising it costs a session.** The
+interrupt-then-tone idiom does mean "stop ALL voices" on the bus and is gone from every game — but it is
+**not** why `audio_fail()` sounded wrong. That fanfare is 600 ms of cumulative delays, and on a lost life
+`brick_breaker` parks the ball awaiting a tap (`brick_breaker.c:1163-1168`) while `tetris` locks input at
+game over, so nothing can sound inside the window. *"Inaudible"* and *"very faint"* were one observation
+described twice, and the cause is the speaker's band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — which ③ fixes.
+⚠️ **Do not re-request the overlap check; it is not constructible.** The removals stand on the RULE, whose
+home is `native_apps/CLAUDE.md` → *Mixing*: it holds wherever a second effect *can* land inside a fanfare,
+as `samegame`'s removal blip does 60 ms after a level clear. ⚠️ **Converting a game and dropping its idiom
+are two edits and the gate sees only the first** — `tetris` was on the bus for a day with its own sites
+intact. ⚠️ **`audio.h`'s comment still claims those sites mean "replace what is playing"**, which is wrong
+for an effect on a bus. Nothing counts a voice stopped early, so this is ear-only in both directions.
 ⏳ **A sound queued just before a BLOCKING sub-loop is lost, and that is the one real regression ① left.**
 `tetris`' game-over fanfare fires at `tetris/tetris.c:359`, one statement after `gameover_init()`, and the
 next thing the loop does is `gameover_update()` → `hs_enter_name()` → `keyboard_enter()`, which runs its
@@ -357,34 +350,77 @@ screen**, which is a file-static global but needs no signature change and states
 blocking sub-loop IS a render loop. ⚠️ **Whichever wins, `common/keyboard.c:77-86`'s two settle loops need
 it too**, and so does anything else that draws while the main loop is stopped.
 
-③ **The four canned sounds become sample-backed, so no game edits a line to get WAV effects — and it is
-the AUDIBILITY fix, agreed as the next task 2026-08-21.** `audio_beep()`, `audio_blip()`,
-`audio_success()` and `audio_fail()` carry most of the games' audio call sites and every one of them is a
-sustained pure tone. ⚠️ **The claim that this speaker "cannot do 220 Hz" is still REFUTED and must not be
-re-raised** — [§3.4](SYSTEM_ANALYSIS.md#34-audio) records 220 Hz as *"clearly a square wave"*: reproduced,
-and badly shaped. But ⚠️ **the low band is an audibility problem as well as a quality one, and an earlier
-revision of this entry denied exactly that**: at the shipped level the speaker rolls off sharply below
-~700 Hz and is inaudible at viewing distance below ~300 Hz ([§3.4](SYSTEM_ANALYSIS.md#34-audio)). Every
-sound ever reported clear is ≥ 880 Hz; every one reported faint is ≤ 500 Hz — `audio_fail()`'s
-392 / 330 / 262 Hz and `tetris.c:620-621`'s 500-then-250 place-down included. ✅ **The pitch half of
-duration × pitch is therefore ANSWERED and `native_apps/tests/speaker_band.sh` is retired unrun**: a
-continuous glide answered it better than 400 ms `aplay` sines could, because every `aplay` invocation
-restarts the stream. The SHORT-tone half still needs `audio_mix_test`'s own 5/10/20/40/60/100 ms row.
-✅ **And the four stock clips already land in the passband** — `fx_click` 900→1500, `fx_pickup` 1200→3200,
-`fx_success` 700→4200, `fx_fail` 1800→420 Hz — so ③ fixes the faintness by CONTENT, one variable changed
-and no pitch guessing. ⚠️ Four of the other six specs dip below the knee (`knock` ends 260, `thud` is
-800→600 throughout, `burst` starts 600, `jump` starts 500): **retune the spec, never the threshold**, when
-the raw `audio_tone()` sites get names. So back each name with a clip when one is configured and keep
-today's note table as the fallback: every game upgrades at once, and a device with no sound files still
-makes sounds.
+✅ **③ The four canned sounds are CLIP-BACKED, and it is the AUDIBILITY fix — built and deployed to
+`.188` 2026-08-21, unheard.** `audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` each
+try a recorded clip and fall back to their note table, so ~45 call sites upgraded without an edit and a
+device with no sound files still makes every sound. ⚠️ **The claim that this speaker "cannot do 220 Hz" is
+still REFUTED and must not be re-raised** — [§3.4](SYSTEM_ANALYSIS.md#34-audio) records 220 Hz as *"clearly
+a square wave"*: reproduced, and badly shaped. What is real is the ROLL-OFF: at the shipped level the
+speaker falls away sharply below ~700 Hz and is inaudible at viewing distance below ~300, every sound ever
+reported clear is ≥ 880 Hz and every one reported faint is ≤ 500 Hz — and the operator reported
+`audio_fail()` (392/330/262 Hz) *still inaudible under a music bed* on 2026-08-21, which is the third
+report of the same thing. ✅ **So the fix is CONTENT and nothing else**: the four stock clips are broadband
+and land inside the passband (`fx_click` 900→1500, `fx_pickup` 1200→3200, `fx_success` 700→4200, `fx_fail`
+1800→420 Hz), no pitch is retuned and no level is raised. ⚠️ **There is no headroom to raise anyway** —
+that same session produced `clip=126`, the first non-zero clip ever measured here. ⚠️ Four of the other six
+stock clips dip below the knee (`knock` ends 260, `thud` 800→600, `burst` starts 600, `jump` starts 500):
+**retune the spec, never the threshold**, when a raw `audio_tone()` site gets a name.
 
-④ **A per-game sound set, declared in a config file rather than in C.** The operator's decision, and it
-is what makes ③ cheap: a game names its bed and its effects in a file, so adding, swapping or silencing a
-sound is a deploy of data, not a rebuild — which is also how a sourced file replaces a generated one
-later. Shape it after the `.app` manifests
+⏳ **What ③ still owes: one listen, and two things the mechanism cannot answer.** The clip path has been
+driven end to end on the host and on ARM, but never against the real `/opt/sound` files with a finger on
+the panel — a canned sound needs a tap, and lazy loading means a headless run loads nothing. ⚠️ **And the
+mixer applies its 10 ms attack and 20 ms release to a clip too**, so on the 55 ms `fx_click` 30 ms of the
+file is envelope; whether that softens a transient the `fx_check` gate guaranteed is ear-only, and
+`audio_mix_add_sample()` derives both from the total length with no override.
+
+**How it is built, and the one design decision inside it.** A clip is loaded WHOLE into RAM and handed to
+one of `AUDIO_CLIP_VOICES` (4) instances that each carry their own cursor — ⚠️ **RAM is a CURSOR decision,
+not a memory one**: `audio_sfx_play()`'s single streaming voice must refuse a retrigger because its
+`AudioWav` *is* the live voice's `ctx`, which for a game firing brick hits in bursts is a refusal on nearly
+every hit. It costs no mixer change (a clip is just another `AudioVoiceFill`) and the bed still STREAMS.
+⚠️ **`AUDIO_CLIP_MAX_FRAMES` is the guard that matters** — the paths are config strings, so
+`fx_fail=/opt/sound/music1-mono.wav` would otherwise `malloc` 7.8 MB inside a tap. A miss is permanent per
+process (missing files are NORMAL, F19); `audio_fx_set_path()` defers the old PCM's free to the next
+trigger, because a voice may still be reading it. ⚠️ **The clips must be DEPLOYED or ③ is inert** —
+`native_apps/build-and-deploy.sh` uploads `sounds/fx_*.wav` to `/opt/sound` on both the online and the
+bundle path.
+
+✅ **Covered, and the coverage was seen failing.** `tests/audio_tone_test.c` group I — the fallback when
+nothing is configured, the retrigger, independent cursors, a reused voice rewinding, the bounded pool
+falling back to notes, the permanent miss, the rate refusal, the ceiling, the deferred free, and one
+CONTENT assertion (a silent-headed fixture, because every other check reads a POSITION and a fill that
+replays the clip's head advances every position correctly). Passes on the host and prints the same lines on
+`.188` ARM. `tests/measure_audio_clip_sabotage.sh` is its negative control: eight sabotages, every one
+caught, none a NO-OP. ⚠️ **Two triggers of the same clip in ONE frame sit at identical offsets and sum
+COHERENTLY** — 2× amplitude, unlike two tones, which partially cancel because `AudioVoice.delay` guarantees
+different start moments. Group I pins it.
+
+④ **A per-game sound set, declared in a config file rather than in C — and it now has THREE operator
+requests riding on it (2026-08-21), so it is next.** A game names its bed and its effects in a file, so
+adding, swapping or silencing a sound is a deploy of data, not a rebuild. `platformer_music` and ③'s four
+`fx_*` keys are already that shape read straight from `rw_config.conf`, so ④ is a generalisation with two
+working examples rather than a design. Shape the file after the `.app` manifests
 ([`SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`](SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests)):
 INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
 drifts between the online and offline installer renders a game that plays nothing.
+
+⏳ **⑤ Three things the operator asked for on 2026-08-21, after the first bed listen.** They are one
+subject — per-game, per-level sound as data — which is why they sit here rather than as separate features.
+
+- **Stop the music between levels.** `platformer`'s `bed_service()` has `SCREEN_LEVEL_COMPLETE` in its
+  `want_play`, so the bed plays through the 2.5 s level-complete overlay and under `audio_success()`. Take
+  it out and the four-state machine already does the rest — release, then a fresh start on the next level.
+  ⚠️ **That transition is also where a per-level track swap belongs**, so do the two together or the second
+  will move the code the first just wrote.
+- **Different tracks per level, for `platformer` and `brick_breaker` — explicitly NOT `tetris`.** One key
+  per level over ④'s file, falling back to the single-track key when a level names none.
+- **`MUSIC` and `EFFECTS` off, on the GAMES MENU itself** — the operator chose `app_launcher`'s own screen
+  over the `device_tools` SETTINGS tab, which today carries one `AUDIO ENABLED` toggle writing
+  `audio_enabled` (`device_tools.c:562`, `:717`). Two new config keys read by every game, so this is
+  library work plus launcher layout, not seven edits. ⚠️ **`audio_enabled` stays as the master** — a
+  hardware speaker test must keep bypassing it through `audio_init_unchecked()`, which is the one sanctioned
+  bypass. ⚠️ **The launcher grid is already full**, so where the two toggles go is a layout decision on a
+  screen whose tiles are computed at runtime (`compute_grid_layout()`).
 
 **The effect files are GENERATED rather than sourced** (operator, 2026-08-20; the reason is recorded
 because it is not the obvious one). A generator makes *broadband and transient* a **guaranteed property**
@@ -456,28 +492,24 @@ refused for the life of the process; and ⚠️ **a resume can skip up to one re
 because `wav.pos` counts what was READ, not what was heard. Both are inaudible in a bed and wrong for
 anything needing sample-exact continuation.
 
-✅ **Two of that leftover's four holes are now closed, and the closure has negative controls.**
-`tests/audio_tone_test.c` grew groups G and H — start/pause/resume/stop, the double-start and
-double-resume refusals, the remainder arithmetic, and `sample_live()`'s `(slot, gen)` read against a
-`PUMP: OFF` that clears the bus. It PASSES on the host and prints the same lines on `.188` ARM
-(2026-08-21). ⚠️ **Three sabotages were measured against it before it was believed**: a resume declaring
-the whole file again, a pause that closes the file, and a `sample_live()` that trusts its slot alone — 1,
-2 and 9 failures respectively, and the last is the one that would otherwise be silent. **Still uncovered:
-`audio_sfx_play()` and `sample_total_frames()`'s clamp against a 32-bit `long`** (the clamp needs a
-fixture too large for a host test to write, so it wants the modelled-truncation shape
-`tests/audio_gen_test.c` group A uses).
+✅ **`audio.c`'s sample half is covered where it was not, and each closure has a negative control.**
+`tests/audio_tone_test.c` groups G and H hold start/pause/resume/stop, the double-start and double-resume
+refusals, the remainder arithmetic, and `sample_live()`'s `(slot, gen)` read against a `PUMP: OFF` that
+clears the bus; group I holds the clip bank (③). All pass on the host and print the same lines on `.188`
+ARM. ⚠️ **Three sabotages were measured against G/H before it was believed** — a resume declaring the whole
+file again, a pause that closes the file, and a `sample_live()` that trusts its slot alone — 1, 2 and 9
+failures, the last being the one that would otherwise be silent; `tests/measure_audio_clip_sabotage.sh`
+does the same eight ways for group I. **Still uncovered: `audio_sfx_play()` and `sample_total_frames()`'s
+clamp against a 32-bit `long`** — the clamp needs a fixture too large for a host test to write, so it wants
+the modelled-truncation shape `tests/audio_gen_test.c` group A uses.
 
-⏳ **What is left over after phase 5, both small.** ① The `CHORD` pad in
-`native_apps/tests/audio_mix_test.c` branches on `audio_pump_active()`, which is **false** on a silent bus
-(that predicate ends in `audio_mix_pending() > 0`), so on exactly the tap a comparison needs it falls back
-to three chained `audio_tone()` calls — **fix by testing `audio->pumping`**, and land it before any level
-or limiter question is put to the panel again. ⚠️ `lim` and `clip` also accumulate across both halves of
-such an A/B, since `bus_reset()` is the only thing that zeroes them and it deliberately carries the
-limiter choice across: cycle `PUMP` between halves or neither counter is attributable to a position.
-② **`audio.c`'s sample half is now covered where it was not — see the group G/H paragraph above; what
-remains is `audio_sfx_play()` and the 32-bit clamp.** `tests/audio_tone_test.c` is the file to extend — it
-already links `audio.c` through `-Itests/hostshim`, so no new build route is needed.
-
+⏳ **One leftover, small.** The `CHORD` pad in `native_apps/tests/audio_mix_test.c` branches on
+`audio_pump_active()`, which is **false** on a silent bus (that predicate ends in `audio_mix_pending() > 0`),
+so on exactly the tap a comparison needs it falls back to three chained `audio_tone()` calls — **fix by
+testing `audio->pumping`**, and land it before any level or limiter question goes to the panel again.
+⚠️ `lim` and `clip` accumulate across both halves of such an A/B, since `bus_reset()` is the only thing that
+zeroes them and it deliberately carries the limiter choice across: cycle `PUMP` between halves or neither
+counter is attributable to a position.
 ⏳ **One device-half defect is left and it is the adapter's.** `oss-mixer.cpp:298`'s emergency
 anti-underrun `write()` ignores errors and partial writes; it is deleted rather than fixed, because the
 whole emergency path is a second write loop that the shared library replaces (phase 6). ⚠️ The format
@@ -539,13 +571,15 @@ playback is audibly identical to the stereo original at half the size and half t
   *Third-party code committed in this repository*:
   `| /opt/sound/music{1,2}.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
   — and a matching row in *Distributed binaries* if they go into a bundle.
-- ⏳ **Decided in part, 2026-08-20: the audio SUPPORT lands in git now and the music does not yet.** The
-  9.6 MB mono pair goes in **through `git-lfs`, later**, when a game actually ships a bed — so the repo
-  does not carry 9.6 MB of history for a feature that is still being designed. ⚠️ **That condition FIRED
-  2026-08-21: `platformer` ships a bed** (F1 Phase 5), so this is now the operator's call to make rather
-  than a future one, and until it is made the bed works only on a unit that was hand-copied to. ⚠️ **Until
-  then the files are device-only, they do not survive a re-commission, and a game whose configured bed is
-  absent must play its effects and carry on** rather than refuse to start. ⚠️ **`git-lfs` is absent from
+- ⏳ **DECIDED 2026-08-21: the music enters git through `git-lfs`, and the work is NOT done.** The operator
+  made the call once `platformer` shipped a bed; ⚠️ **and per-level tracks (F1 Phase 5 ⑤) multiply it**, so
+  do it before those land rather than after. Four steps, none started: `scp` both files off `.188` (they
+  exist nowhere else), `git lfs track` a pattern scoped to the music directory **from Git Bash** —
+  ⚠️ `git-lfs` is absent from this WSL, and it must NOT catch the small committed `sounds/fx_*.wav`, which
+  would rewrite them as pointers — add the `LICENSE.md` row drafted above, and deploy them the way
+  `sounds/fx_*.wav` already are (`native_apps/build-and-deploy.sh`, online path **and** bundle). ⚠️ **Until
+  all four are done the bed is a `.188`-only feature that no re-commission survives**, and a game whose
+  configured bed is absent must play its effects and carry on rather than refuse to start. ⚠️ **`git-lfs` is absent from
   this WSL** (`CLAUDE.md` → *Working from this host*), so whoever adds them runs `git lfs track` from Git
   Bash.
 - **Deployment, when they do land.** They belong in `native_apps/build-and-deploy.sh` and the bundle
@@ -568,9 +602,13 @@ playback is audibly identical to the stereo original at half the size and half t
   `set_params:1347: Channels count non available` to stderr and played silence while otherwise looking
   like a clean run — the failure mode that reads as a measurement. `plughw:0,0` is the device for a mono
   file. The bed's own counter is `AudioWav.loops`.
-- ⚠️ **The clean level may be too quiet for sustained music** — a 24 s melody at peak 6000 needed focus
-  and repetition to follow `[n=1, by ear]`. A bed under a game is background, so this may simply be
-  right; it is the one thing about the music that the phase-8 listen did not settle.
+- ✅ **ANSWERED 2026-08-21, and the answer is no change.** The operator played Office Runner with the bed
+  under it and reported the sound *"played well"* with the effects audible over it, so the clean level is
+  right for sustained music — a bed is background, and the 24 s melody that *"needed focus"* at peak 6000
+  was a foreground melody being asked to carry itself. ⚠️ **The headroom is nearly gone at the peak
+  though**: that session's counters carry `clip=126` (bed + effect past full scale on 126 samples of
+  ~18.7 M), the first non-zero clip measured here — so any future *"make it louder"* is a content change,
+  not a level one.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 

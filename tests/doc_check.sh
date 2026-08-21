@@ -552,15 +552,29 @@ group_c() {
 # rather than appended to, since its original evidence is refuted and its rule is not.
 # ⚠️ **No headroom is granted by either: 1597 and 665 are the measurements, and the next addition to
 # either file pays by deleting.**
+# ⚠️ 2026-08-21, FIFTH raise, deliberate and argued: IMPROVEMENT_PLAN.md 1321 → 1352 (measured
+# post-edit count). F1 phase 5 gained a fifth part — three sound requests the operator made BY NAME after
+# the first bed listen (stop the music between levels, per-level tracks, MUSIC/EFFECTS off on the games
+# menu) — plus B35 and the closure detail of ③. The same commit collected ~50 non-blank lines by deleting
+# the ① and ② reports now that both are closed and their rules live in native_apps/CLAUDE.md, and by
+# compressing three superseded coverage paragraphs; the raise is what the requests cost NET of that.
+# ⚠️ **No headroom is granted: 1352 is the measurement, and the next addition to that file pays by
+# deleting.** ⚠️ And phase 5 is still mid-feature, so do not lower it back onto ④/⑤ landing.
+# ⚠️ 2026-08-21, SIXTH raise, deliberate and argued: native_apps/CLAUDE.md 665 → 668 (measured post-edit
+# count). The clip bank is new library surface behind the four canned sounds (F1 phase 5 ③) and its rules
+# are ones a caller gets wrong silently — a same-frame double trigger sums COHERENTLY, and the clips have
+# to be DEPLOYED or the fix is inert. Eight lines were added and five clawed back by compressing the
+# audio_init war story, the oss probe parenthetical and the pacing gate; the raise is the remainder.
+# ⚠️ **No headroom is granted: 668 is the measurement.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
 1597	SYSTEM_ANALYSIS.md
-1321	IMPROVEMENT_PLAN.md
+1352	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-665	native_apps/CLAUDE.md
+668	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

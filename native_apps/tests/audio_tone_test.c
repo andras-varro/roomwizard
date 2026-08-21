@@ -119,6 +119,14 @@ static int mk_audio(Audio *a)
     a->pumping        = true;
     a->last_tone_slot = -1;
     a->last_tone_gen  = 0;
+    /* Mirrors what level_defaults() does for the clip voices on the shipped path,
+     * because this test builds an `Audio` by hand and never runs audio_open().
+     * ⚠️ It is NOT what protects the read — a zeroed voice reads (slot 0, gen 0)
+     * and gen 0 is never issued, so the pair already answers "free".  It is here
+     * so `slot >= 0` keeps meaning "has been armed", which group I asserts.
+     * `fx_path` stays empty: a test that inherited /opt/sound would pass or fail
+     * according to what happens to be installed on the host. */
+    for (int i = 0; i < AUDIO_CLIP_VOICES; i++) a->fxv[i].slot = -1;
     return fd;
 }
 
@@ -144,6 +152,17 @@ static void gap_one_tap(void) { usleep(133000); }
  * is still live.
  */
 #define BED_FIXTURE "/tmp/at_bed.wav"
+
+/* Group I's fixtures.  Short, because a clip is an EFFECT: 4410 frames is 100 ms
+ * at TEST_RATE, which is the length the stock set actually renders (27–200 ms).
+ * CLIP_TOO_BIG is written once and removed — it is 353 KB and exists only to
+ * prove the ceiling that stops a 3.9 MB bed being RAM-loaded inside a tap. */
+#define CLIP_FIXTURE  "/tmp/at_clip.wav"
+#define CLIP_FIXTURE2 "/tmp/at_clip2.wav"
+#define CLIP_ABSENT   "/tmp/at_clip_absent.wav"
+#define CLIP_TOO_BIG  "/tmp/at_clip_big.wav"
+#define CLIP_TAIL     "/tmp/at_clip_tail.wav"
+#define CLIP_FRAMES   4410L
 
 static void put32(FILE *f, unsigned long v)
 {
@@ -171,6 +190,50 @@ static void write_bed_fixture(const char *path, long frames)
     fwrite("data", 1, 4, f);  put32(f, (unsigned long)data_bytes);
     for (long i = 0; i < frames; i++)
         put16(f, (unsigned int)(uint16_t)(int16_t)(8000 * ((i / 50) % 2 ? 1 : -1)));
+    fclose(f);
+}
+
+/* The loudest sample the bus produced over `frames`.  ⚠️ Group I needs this
+ * because every other assertion there reads a POSITION, and a fill that replays
+ * the clip's head while advancing the cursor moves every position correctly.
+ * Content is the only thing that separates those two. */
+static int render_peak(Audio *a, long frames)
+{
+    static int16_t mono[2048];
+    int peak = 0;
+    while (frames > 0) {
+        long n = frames > 2048 ? 2048 : frames;
+        audio_mix_render(&a->mix, mono, n);
+        for (long i = 0; i < n; i++) {
+            int v = mono[i] < 0 ? -mono[i] : mono[i];
+            if (v > peak) peak = v;
+        }
+        frames -= n;
+    }
+    return peak;
+}
+
+/* A clip whose first three quarters are SILENT and whose last quarter is loud.
+ * Playing it proves the cursor reaches the tail: a fill that ignores `pos` keeps
+ * returning the silent head, and no position check can tell. */
+static void write_tail_fixture(const char *path, long frames)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) { printf("  FAIL: cannot write %s\n", path); failures++; return; }
+
+    long data_bytes = frames * 2;
+    fwrite("RIFF", 1, 4, f);  put32(f, (unsigned long)(36 + data_bytes));
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);  put32(f, 16);
+    put16(f, 1);  put16(f, 1);
+    put32(f, TEST_RATE);  put32(f, TEST_RATE * 2);
+    put16(f, 2);  put16(f, 16);
+    fwrite("data", 1, 4, f);  put32(f, (unsigned long)data_bytes);
+    for (long i = 0; i < frames; i++) {
+        int16_t s = (i < (frames * 3) / 4) ? 0
+                  : (int16_t)(8000 * ((i / 50) % 2 ? 1 : -1));
+        put16(f, (unsigned int)(uint16_t)s);
+    }
     fclose(f);
 }
 
@@ -347,6 +410,175 @@ int main(void)
         audio_pump_enable(&a, true);
         check(audio_music_start(&a, BED_FIXTURE, true),
               "so a fresh bed is accepted afterwards");
+        close(fd);
+    }
+
+    printf("\nI. the CLIP behind a canned sound — the cursor, the fallback, the guards\n");
+    {
+        /* ⚠️ Group I is the third subject in this file, here for the same reason
+         * as F and G: this is the only host test that links `common/audio.c`.
+         * What it asserts is F1 Phase 5 ③ — that `audio_beep()` and friends play
+         * a recorded clip when one is configured, and their note table when one is
+         * not.  The AUDIBILITY the clip buys is acoustic and ear-only; what is
+         * checkable here is which voice kind ran, and that a clip can RETRIGGER
+         * where the one streaming sfx voice must refuse. */
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        write_bed_fixture(CLIP_FIXTURE, CLIP_FRAMES);
+
+        /* The control FIRST, and it is the shipped default on a device with no
+         * sound files: nothing configured, so the notes must run. */
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL),
+              "no clip configured — audio_fx_play() says no, quietly");
+        audio_beep(&a);
+        check(a.mix.v[0].active && a.mix.v[0].kind == AUDIO_VOICE_TONE,
+              "so audio_beep() put a TONE on the bus, not silence");
+
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_FIXTURE);
+        check(audio_fx_play(&a, AUDIO_FX_FAIL), "a configured clip plays");
+        check(a.fx[AUDIO_FX_FAIL].frames == CLIP_FRAMES,
+              "and the whole file is in RAM, at its real length");
+
+        /* THE point of RAM-resident clips.  The one streaming sfx voice refuses a
+         * second tap because its AudioWav is the live voice's ctx; a clip has a
+         * cursor per trigger, so a game firing hits in bursts gets all of them. */
+        check(audio_fx_play(&a, AUDIO_FX_FAIL),
+              "a SECOND trigger is accepted while the first still sounds");
+        check(audio_pump_voices(&a) == 3, "so three voices are on the bus");
+
+        /* ⚠️ Two triggers in the SAME frame sit at the same offset, which is worth
+         * pinning rather than leaving to be discovered: identical PCM at identical
+         * offsets sums COHERENTLY, so the same effect fired twice in one frame is
+         * 2x the amplitude of one — unlike two tones, which partially cancel
+         * because AudioVoice.delay guarantees they start at different moments. */
+        render_frames(&a, 1000);
+        check(a.fxv[0].pos == a.fxv[1].pos,
+              "two triggers in one frame advance in lockstep (a coherent 2x sum)");
+
+        /* Independence is what the cursor buys, and it shows up the moment the
+         * triggers are a frame apart — which is every real burst of brick hits. */
+        check(audio_fx_play(&a, AUDIO_FX_FAIL), "a third trigger, one render later");
+        render_frames(&a, 1000);
+        check(a.fxv[0].pos > a.fxv[2].pos,
+              "the triggers carry INDEPENDENT positions (the cursor)");
+        check(a.fxv[2].pos > 0 && a.fxv[2].pos < CLIP_FRAMES,
+              "and the later one started at 0 rather than where the first was");
+        close(fd);
+    }
+
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        audio_fx_set_path(&a, AUDIO_FX_BEEP, CLIP_FIXTURE);
+        audio_beep(&a);
+        check(a.mix.v[0].active && a.mix.v[0].kind == AUDIO_VOICE_SAMPLE,
+              "audio_beep() with a clip configured plays the CLIP, not the tone");
+
+        /* A voice that finished must REWIND on reuse, not resume: the pool hands
+         * the same AudioClipVoice back out and its cursor is at end-of-clip. */
+        render_frames(&a, CLIP_FRAMES + 8000);
+        check(audio_pump_voices(&a) == 0, "the clip ended and the voice freed itself");
+        audio_beep(&a);
+        render_frames(&a, 500);
+        check(a.fxv[0].pos > 0 && a.fxv[0].pos <= 2048,
+              "a reused voice REWOUND — it did not resume at end-of-clip");
+        close(fd);
+    }
+
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        audio_fx_set_path(&a, AUDIO_FX_BLIP, CLIP_FIXTURE);
+        for (int i = 0; i < AUDIO_CLIP_VOICES; i++)
+            check(audio_fx_play(&a, AUDIO_FX_BLIP), "a clip voice was free");
+        check(!audio_fx_play(&a, AUDIO_FX_BLIP),
+              "and the pool is bounded — the AUDIO_CLIP_VOICES+1'th says no");
+        audio_blip(&a);
+        check(a.mix.v[AUDIO_CLIP_VOICES].kind == AUDIO_VOICE_TONE,
+              "so audio_blip() fell back to its note table rather than going silent");
+        close(fd);
+    }
+
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        /* A MISSING file is the normal case (the sound files are device-only,
+         * ../IMPROVEMENT_PLAN.md F19) and the refusal is permanent for the
+         * process: a per-trigger retry would fill app_stdout.log.  Creating the
+         * file afterwards is the observable form of "it did not try again". */
+        remove(CLIP_ABSENT);
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_ABSENT);
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL), "a missing clip file is refused");
+        write_bed_fixture(CLIP_ABSENT, CLIP_FRAMES);
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL),
+              "and the refusal is PERMANENT — the file appearing changes nothing");
+        remove(CLIP_ABSENT);
+
+        /* Same refusal as the bed's, and for the same reason: no resampler. */
+        audio_fx_set_path(&a, AUDIO_FX_BEEP, CLIP_FIXTURE);
+        a.sample_rate = TEST_RATE / 2;
+        check(!audio_fx_play(&a, AUDIO_FX_BEEP),
+              "a clip at the wrong rate is refused, not pitch-shifted");
+        a.sample_rate = TEST_RATE;
+
+        /* The guard that stops a MUSIC path being RAM-loaded inside a tap. */
+        write_bed_fixture(CLIP_TOO_BIG, AUDIO_CLIP_MAX_FRAMES + 1);
+        audio_fx_set_path(&a, AUDIO_FX_SUCCESS, CLIP_TOO_BIG);
+        check(!audio_fx_play(&a, AUDIO_FX_SUCCESS),
+              "a file past the clip ceiling is refused — a bed STREAMS");
+        remove(CLIP_TOO_BIG);
+        close(fd);
+    }
+
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        write_bed_fixture(CLIP_FIXTURE, CLIP_FRAMES);
+        write_bed_fixture(CLIP_FIXTURE2, CLIP_FRAMES / 2);
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_FIXTURE);
+        check(audio_fx_play(&a, AUDIO_FX_FAIL), "a clip is sounding");
+
+        /* ④ swaps a path at runtime.  The old PCM cannot be freed while a voice
+         * reads it, so the free waits for the next trigger — and if the old clip
+         * is still sounding then, that one trigger takes the note table. */
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_FIXTURE2);
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL),
+              "a swap while the old clip sounds falls back for that one trigger");
+        render_frames(&a, CLIP_FRAMES + 8000);
+        check(audio_fx_play(&a, AUDIO_FX_FAIL), "and takes effect once it has ended");
+        check(a.fx[AUDIO_FX_FAIL].frames == CLIP_FRAMES / 2,
+              "with the NEW file's length, so the old PCM really was replaced");
+
+        /* Setting the path already set must not invalidate anything — this is
+         * called from a game's config read, which may run per frame. */
+        long before = a.fx[AUDIO_FX_FAIL].frames;
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_FIXTURE2);
+        check(!a.fx[AUDIO_FX_FAIL].reload && a.fx[AUDIO_FX_FAIL].frames == before,
+              "re-setting the same path is a no-op, so it is safe every frame");
+
+        /* Off the bus a sample voice cannot exist, which is exactly when the
+         * notes must run — and it must be a quiet no, not a refusal message. */
+        a.pumping = false;
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL), "off the bus, the clip says no");
+        a.pumping = true;
+        close(fd);
+    }
+
+    {
+        /* The CONTENT check.  Everything above reads a position, and a fill that
+         * replays the clip's head while advancing the cursor satisfies every one
+         * of them — so this is the only assertion that would catch it. */
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        write_tail_fixture(CLIP_TAIL, CLIP_FRAMES);
+        audio_fx_set_path(&a, AUDIO_FX_FAIL, CLIP_TAIL);
+        check(audio_fx_play(&a, AUDIO_FX_FAIL), "a silent-headed clip plays");
+
+        int head = render_peak(&a, (CLIP_FRAMES * 3) / 4 - 1024);
+        int tail = render_peak(&a, CLIP_FRAMES);
+        check(head < 400, "its silent head renders as silence (peak within rounding)");
+        check(tail > 2000, "and its loud TAIL renders loud — the cursor really moved");
+        check(tail > head + 1500, "which is a content difference, not a level one");
         close(fd);
     }
 

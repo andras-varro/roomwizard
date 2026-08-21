@@ -66,6 +66,83 @@ typedef struct {
                                *   the same as "idle": an idle voice has no file  */
 } AudioSampleVoice;
 
+/* ── Recorded clips in RAM: what the four canned sounds are MADE of ──────────
+ *
+ * ⚠️ **A clip is RAM-resident because of the CURSOR, not because of the memory**
+ * (operator, 2026-08-20; ../IMPROVEMENT_PLAN.md F1 Phase 5).  There is one
+ * `AudioSampleVoice` for effects and its `AudioWav` *is* the live voice's `ctx`,
+ * so `audio_sfx_play()` must refuse a second tap while the first sounds — which
+ * for a game firing brick hits in bursts is a refusal on nearly every hit.  A
+ * clip held in RAM can be handed to several voices at once because each gets its
+ * own read position, and that costs no mixer change: `audio_mix_add_sample()`
+ * already takes an `AudioVoiceFill`, so a clip is just a different `fill`.
+ *
+ * The bed does NOT become one of these.  It streams, and that is measured rather
+ * than assumed: a cold read of the 3.9 MB bed is 0.369 s, so RAM-loading it would
+ * buy a startup stall to replace a path that has been heard clean.
+ */
+
+/** One loaded effect, shared by every voice playing it.  `pcm` is the whole file
+ *  as mono 16-bit at the device rate — the mixer's own format, so a trigger is a
+ *  `memcpy` and nothing converts anything at play time. */
+typedef struct {
+    int16_t *pcm;             /**< NULL until loaded, and NULL again on a miss   */
+    long     frames;          /**< what `pcm` holds                              */
+    bool     tried;           /**< a load was ATTEMPTED.  ⚠️ A miss is permanent
+                               *   for the process on purpose: the files can
+                               *   legitimately be absent (F19), and retrying per
+                               *   trigger would put one refusal per tap into
+                               *   /var/log/roomwizard/app_stdout.log            */
+    bool     reload;          /**< the path changed under it: `pcm` is the OLD
+                               *   file's and must be freed before the next load.
+                               *   ⚠️ Deferred to the next TRIGGER rather than done
+                               *   in audio_fx_set_path(), because a voice may be
+                               *   sounding this `pcm` right now and the mixer
+                               *   holds the pointer — freeing there is a
+                               *   use-after-free, not a silence               */
+} AudioClip;
+
+/** One playing instance of a clip: the clip, a cursor into it, and the scratch
+ *  the mixer pulls through.  ⚠️ **`buf` and `pos` are the mixer's `ctx`, so a
+ *  live voice's `AudioClipVoice` must not be moved** — same rule, same reason as
+ *  `AudioSampleVoice` above. */
+typedef struct {
+    const AudioClip *clip;    /**< what it is playing; NULL when never used      */
+    long     pos;             /**< THE per-trigger cursor — see the note above   */
+    int16_t *buf;             /**< mixer scratch, allocated on first use, kept    */
+    long     buf_frames;      /**< its size                                      */
+    int      slot;            /**< mix-bus slot, -1 when idle                     */
+    uint32_t gen;             /**< its generation, so a REUSED slot is not read   */
+} AudioClipVoice;
+
+/** The canned sounds, and the order everything here indexes them in. */
+typedef enum {
+    AUDIO_FX_BEEP = 0,        /**< audio_beep()    — UI click, tile place        */
+    AUDIO_FX_BLIP,            /**< audio_blip()    — item collected             */
+    AUDIO_FX_SUCCESS,         /**< audio_success() — level up, milestone        */
+    AUDIO_FX_FAIL,            /**< audio_fail()    — lost life, game over       */
+    AUDIO_FX_COUNT
+} AudioFxId;
+
+/** How many clip triggers can sound at once.  Bounded by AUDIO_MAX_VOICES (8)
+ *  anyway; 4 leaves room for the bed and a chained tone beside them. */
+#define AUDIO_CLIP_VOICES        4
+
+/** Mixer scratch per clip voice, in frames.  ⚠️ Small on purpose: the doc on
+ *  `audio_mix_add_sample()` says size this at a device period *because* it sets
+ *  how often the SD read is entered — and a clip's `fill` is a `memcpy` from RAM
+ *  with no read behind it, so the only cost of a small buffer is more memcpys. */
+#define AUDIO_CLIP_VOICE_BUF_FRAMES  1024
+
+/** Longest file the clip loader will accept, in frames — 4 s at 44100.
+ *  ⚠️ **This is the guard that stops a MUSIC path being RAM-loaded**: the config
+ *  keys below are strings, and `fx_fail=/opt/sound/music1-mono.wav` would
+ *  otherwise malloc 7.8 MB inside a tap. */
+#define AUDIO_CLIP_MAX_FRAMES    176400L
+
+/** Room for a clip path from config.  Device paths are `/opt/sound/fx_fail.wav`. */
+#define AUDIO_FX_PATH_MAX        128
+
 typedef struct {
     int      dsp_fd;          /**< /dev/dsp file descriptor (-1 = not open)      */
     int      sample_rate;     /**< Negotiated sample rate (read back, typ. 44100) */
@@ -141,6 +218,18 @@ typedef struct {
      */
     AudioSampleVoice music;   /**< the bed: long, usually looping                 */
     AudioSampleVoice sfx;     /**< one-shot recorded effect, over the bed         */
+    /* ── the canned sounds' CONTENT: four clips, four voices ────────────────
+     * ⚠️ Loaded lazily, on the first trigger of each name — not at init, because
+     * a game that never fails should not pay for fx_fail, and because a device
+     * with no sound files must still make sounds (the note tables below).
+     */
+    AudioClip      fx[AUDIO_FX_COUNT];      /**< the loaded PCM, one per name    */
+    AudioClipVoice fxv[AUDIO_CLIP_VOICES];  /**< the concurrent triggers          */
+    char           fx_path[AUDIO_FX_COUNT][AUDIO_FX_PATH_MAX];
+                              /**< where each name's clip lives.  Defaults set by
+                               *   audio_init()/audio_init_unchecked(); an EMPTY
+                               *   string means "use the note table", which is how
+                               *   a config file switches one name back to tones  */
 } Audio;
 
 /**
@@ -412,6 +501,21 @@ long audio_cont_service_interval_us(const Audio *audio);
  * before it — so `audio_success()` is still an ascending arpeggio and not a
  * chord, and it mixes with whatever else is sounding instead of discarding it.
  * All four signatures are unchanged; there are ~45 call sites.
+ *
+ * ⚠️ **Each is backed by a recorded CLIP when one is configured and loads, and
+ * that is the AUDIBILITY fix** (../IMPROVEMENT_PLAN.md F1 Phase 5 ③).  Every one
+ * of the four note tables is a sustained pure tone, and this speaker rolls off
+ * sharply below ~700 Hz and is inaudible below ~300 at viewing distance
+ * (../SYSTEM_ANALYSIS.md#34-audio): every sound ever reported clear is ≥ 880 Hz
+ * and every one reported faint is ≤ 500 Hz — `audio_fail()`'s 392/330/262 Hz
+ * included, reported *still not audible under a music bed* on 2026-08-21.  The
+ * four stock clips are broadband and land inside the passband (`fx_fail` sweeps
+ * 1800→420 Hz), so the fix is one of CONTENT: no pitch is guessed, no level is
+ * raised — and there is no headroom to raise it into anyway, the first non-zero
+ * `clip` count (126 samples) came from that same session.
+ *
+ * The note table is the FALLBACK, not the legacy: a device with no sound files,
+ * or a bus that is off, still makes every one of these sounds.
  */
 
 /** Short 880 Hz blip (~80 ms)  — UI click, tile place, button press */
@@ -425,6 +529,32 @@ void audio_success(Audio *audio);
 
 /** G4→E4→C4 descending tone  (~600 ms)   — game over, error          */
 void audio_fail(Audio *audio);
+
+/**
+ * Play one canned name's CLIP, with no note-table fallback.  Returns true iff a
+ * voice was added.
+ *
+ * The four functions above are `audio_fx_play()` then the notes if it said no, so
+ * this is only for a caller that wants to know which one it got — a test, or a
+ * pad measuring the clip against the tones.  Loads the file on first use.
+ *
+ * ⚠️ Refused (false, quietly) off the mix bus: a clip is a sample voice and a
+ * sample voice exists only on the bus.  That is exactly when the notes must run.
+ */
+bool audio_fx_play(Audio *audio, AudioFxId id);
+
+/**
+ * Point one canned name at a different clip file, or at "" for the note table.
+ *
+ * The path a game names in its own config (../IMPROVEMENT_PLAN.md F1 Phase 5 ④)
+ * arrives here.  ⚠️ **The clip loaded under the old path is freed at the next
+ * TRIGGER, not here**, because a voice may be sounding it and the mixer holds the
+ * pointer — freeing under a live voice is a use-after-free, not a silence.  So a
+ * swap takes effect on the next trigger, and if the old clip is still sounding at
+ * that moment the trigger falls back to the note table for that one tap.  Passing
+ * the path already set is a no-op, so this is safe to call every frame.
+ */
+void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path);
 
 /* ── Recorded PCM: a music bed and a sample effect ──────────────────────────
  *

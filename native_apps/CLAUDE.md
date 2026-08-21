@@ -728,6 +728,14 @@ These rules, each of which is a way to get this wrong:
   constructible case. ⚠️ **The measurement that first motivated the rule is REFUTED and the rule is not**
   (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ②). It is gone from all seven games, and **no counter sees it** — a
   voice stopped early is not `lost`, `drop` or `clip`.
+- ⚠️ **The four canned sounds play a recorded CLIP when one is configured and their note table when not**,
+  which is the audibility fix: every one of those tables is a sustained tone at or below the speaker's knee
+  ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). A clip is loaded WHOLE into RAM and each trigger gets its own
+  cursor, so unlike `audio_sfx_play()` it can retrigger — `AUDIO_CLIP_VOICES` of them, then it falls back to
+  notes. ⚠️ **`build-and-deploy.sh` must upload `sounds/fx_*.wav` to `/opt/sound` or the fix is inert.**
+  ⚠️ **The same clip fired twice in ONE frame sums COHERENTLY — 2× amplitude**, where two tones partially
+  cancel; and the mixer's 10 ms attack / 20 ms release applies to a clip too, so on a 55 ms effect 30 ms of
+  it is envelope. `tests/audio_tone_test.c` group I, controls in `tests/measure_audio_clip_sabotage.sh`.
 - ⚠️ **A blocking sub-loop IS a render loop; one that does not service the stream DEFERS the sound queued
   before it** — delayed rather than dropped, because the mixer advances by frames RENDERED, which is worse
   to diagnose. `keyboard_enter()` (`common/keyboard.c:263`, `:325`) contains no `audio_pump()`: open, with
@@ -740,43 +748,38 @@ These rules, each of which is a way to get this wrong:
   one refusal is permanent per process — a per-frame retry fills `app_stdout.log`. Covered by
   `tests/audio_tone_test.c` G and H.
 - **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
-  it is what lets an operator’s own play session be measured with no mic: from the launcher it lands in
-  `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate it before believing a zero**: `kill -STOP` the game
-  for a second, three times, and `starve` reads exactly 3 — no source change and no rebuild. A dry queue is
-  counted even while the bus is SILENT, so a small `starve` is not automatically audible.
+  it is what lets an operator’s own play session be measured with no mic — from the launcher it lands in
+  `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate before believing a zero**: `kill -STOP` the game
+  for a second, three times, and `starve` reads exactly 3. A dry queue is counted even while the bus is
+  SILENT, so a small `starve` is not automatically audible.
 - **`check-audio-pacing.sh` is the gate, and it runs from `build-and-deploy.sh`.** It fails an app that
   enables a bus and never services it, one that sleeps `FRAME_DELAY_IDLE_US` with no `audio_pump_active()`,
   and the mirror case; `--self-test` carries its own controls, the load-bearing one being an *unconverted*
-  app. ⚠️ **It reads text, not control flow** — its header lists the three shapes it cannot see, an
-  `audio_pump()` nested in the draw branch among them, and `starve` is what catches those.
+  app. ⚠️ **It reads text, not control flow** — its header lists the three shapes it cannot see, and
+  `starve` is what catches those.
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
 questions: its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one under test**,
 which is the only reason "the click is gone" can be checked rather than believed. ⚠️ Its level ladder starts
-on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation, and "can you hear it" is a
-different question from "is it clean".
+on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation.
 ⚠️ **Two files under `tests/` are SHIPPED launcher tiles, so nothing in there is automatically
 expendable** — `audio_touch_test` is `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
-(`app-manifests.sh`, each with a PPM icon), and the theremin also measured the speaker's usable band
+(`app-manifests.sh`, each with a PPM icon), and the theremin measured the speaker's usable band
 ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). Read that manifest before calling anything under `tests/` a tool.
 ⚠️ **Never write prose saying 60 ms is a minimum tone length** — nothing clamps it; the floor was the
 start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used
-to `memset` one, set three fields — `dsp_fd`, `available`, `sample_rate` — and open `/dev/dsp`, the three
-ioctls and GPIO12 themselves. The moment the struct gained `channels`, that idiom left it at **0**, and a
-0-channel byte count is 0: **silently mute**, measured (`audio_bytes_for_frames(8820, 0)` = 0 against 35280
-for 2 channels). `audio_init_unchecked()` is the one place the config gate is bypassed, which the
-Settings-tab hardware test genuinely needs — a test that drives the speaker must not obey the setting it
-exists to test. The tree-wide check is one grep, whose only legitimate hit is `audio.c`:
+to `memset` one and set three fields; when the struct gained `channels` that idiom left it at **0**, and a
+0-channel byte count is 0 — **silently mute**, measured (`audio_bytes_for_frames(8820, 0)` = 0 against
+35280 for 2 channels). `audio_init_unchecked()` is the one sanctioned config-gate bypass, for a hardware
+test that must not obey the setting it exists to test. One grep, legitimate hit `audio.c` only:
 
 ```bash
 grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v arm-deps
 ```
 
-(`tests/ch_test.c`, `tests/oss_diag.c` and `tests/oss_play.c` also hit it — standalone OSS probes that use
-no `Audio` at all and are not in `build-and-deploy.sh`. `oss_play.c` plays a **WAV file** through the shipped
-write path, which is what lets an `aplay` A/B change only ALSA-vs-`/dev/dsp`, and `--dump` measures the byte
-stream we hand the kernel **on ARM** instead of on the host; build line in its header.)
+(`tests/ch_test.c`, `tests/oss_diag.c` and `tests/oss_play.c` also hit it — standalone OSS probes with no
+`Audio` at all, not in `build-and-deploy.sh`, build lines in their own headers.)
 
 Open work and the phasing: [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1.
