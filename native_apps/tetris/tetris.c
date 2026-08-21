@@ -616,7 +616,18 @@ void handle_input() {
                 game.current.y++;
                 game.score += 2;
             }
-            audio_interrupt(&audio);
+            /* ⚠️ No audio_interrupt() before an effect — on the mix bus it means
+             * "stop ALL voices", so a 60 ms move or place-down tone discards a
+             * fanfare that is still playing.  All eight sites in this file
+             * dropped theirs; the rule and the measurement that produced it
+             * (brick_breaker by ear, `.188` 2026-08-20) are in ../CLAUDE.md →
+             * Mixing.  No counter sees this — a voice stopped early is not
+             * `lost`, `drop` or `clip`, so it is judged by ear.
+             * ⚠️ The audible change here is not only the fanfare surviving: a
+             * DAS-repeated left/right no longer cuts its own predecessor, so
+             * fast moves overlap rather than replace.  A full bus REFUSES and
+             * counts `drop`; it never steals a voice, so the worst case is a
+             * missing click, not a truncated one. */
             audio_tone(&audio, 500, 60);
             audio_tone(&audio, 250, 70);
             lock_piece();
@@ -630,14 +641,12 @@ void handle_input() {
                 // Left 20% of board or outside left edge — move left
                 if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
                     game.current.x--;
-                    audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
             } else if (tx > right_zone_edge) {
                 // Right 20% of board or outside right edge — move right
                 if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
                     game.current.x++;
-                    audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
             } else {
@@ -650,14 +659,12 @@ void handle_input() {
                 // Left side — move left
                 if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
                     game.current.x--;
-                    audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
             } else if (tx > board_right + 10) {
                 // Right side — move right
                 if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
                     game.current.x++;
-                    audio_interrupt(&audio);
                     audio_tone(&audio, 880, 60);
                 }
             } else {
@@ -677,7 +684,6 @@ void handle_input() {
                        input.buttons[BTN_ID_LEFT].pressed, current_time)) {
             if (!check_collision(&game.current, -1, 0, game.current.rotation)) {
                 game.current.x--;
-                audio_interrupt(&audio);
                 audio_tone(&audio, 880, 60);
             }
         }
@@ -685,7 +691,6 @@ void handle_input() {
                        input.buttons[BTN_ID_RIGHT].pressed, current_time)) {
             if (!check_collision(&game.current, 1, 0, game.current.rotation)) {
                 game.current.x++;
-                audio_interrupt(&audio);
                 audio_tone(&audio, 880, 60);
             }
         }
@@ -710,7 +715,6 @@ void handle_input() {
                 game.current.y++;
                 game.score += 2;
             }
-            audio_interrupt(&audio);
             audio_tone(&audio, 500, 60);
             audio_tone(&audio, 250, 70);
             lock_piece();

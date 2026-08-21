@@ -240,7 +240,12 @@ void update_game() {
         if (game.ball.x <= 0 || game.ball.x >= play_area_width - BALL_SIZE) {
             game.ball.vx = -game.ball.vx;
             game.ball.x = (game.ball.x <= 0) ? 0 : play_area_width - BALL_SIZE;
-            audio_interrupt(&audio);
+            /* ⚠️ No audio_interrupt() before an effect — on the mix bus it means
+             * "stop ALL voices", so a 60 ms bounce discards a fanfare that is
+             * still playing.  All six sites in this file dropped theirs; the
+             * rule and the measurement that produced it (brick_breaker by ear,
+             * `.188` 2026-08-20) are in ../CLAUDE.md → Mixing.  No counter sees
+             * this — a voice stopped early is not `lost`, `drop` or `clip`. */
             audio_tone(&audio, 2000, 60);
         }
         
@@ -256,7 +261,6 @@ void update_game() {
             game.ball.vx += (hit_pos - 0.5) * 3;
             
             hw_set_led(LED_GREEN, 100);
-            audio_interrupt(&audio);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
         }
@@ -273,7 +277,6 @@ void update_game() {
             game.ball.vx += (hit_pos - 0.5) * 3;
             
             hw_set_led(LED_RED, 100);
-            audio_interrupt(&audio);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
         }
@@ -318,7 +321,6 @@ void update_game() {
         if (game.ball.y <= 0 || game.ball.y >= play_area_height - BALL_SIZE) {
             game.ball.vy = -game.ball.vy;
             game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
-            audio_interrupt(&audio);
             audio_tone(&audio, 2000, 60);
         }
         
@@ -334,7 +336,6 @@ void update_game() {
             game.ball.vy += (hit_pos - 0.5) * 3;
             
             hw_set_led(LED_GREEN, 100);
-            audio_interrupt(&audio);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
         }
@@ -351,7 +352,6 @@ void update_game() {
             game.ball.vy += (hit_pos - 0.5) * 3;
             
             hw_set_led(LED_RED, 100);
-            audio_interrupt(&audio);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
         }
@@ -733,6 +733,17 @@ int main(int argc, char *argv[]) {
     hw_init();
     hw_set_backlight(100);
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
+    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+     * from this render loop, and it implies the mix bus (../common/audio.h).
+     * Two things follow: two sounds overlap instead of one cutting the other,
+     * and a tone shorter than ~60 ms becomes audible at all — that floor is a
+     * property of RESTARTING the stream, and a continuously fed one drops it to
+     * 5 ms (../../SYSTEM_ANALYSIS.md#34-audio gotcha 6).  Pong's own 60 ms wall
+     * bounces sit right on that floor.
+     * Deliberately unchecked: a failed handover restores the old write path
+     * rather than muting, so there is nothing for a game to do about it, and
+     * audio_close() reports which path actually ran. */
+    audio_cont_enable(&audio, true);
     
     srand(time(NULL));
     init_game();
@@ -776,7 +787,16 @@ int main(int argc, char *argv[]) {
             draw_game();
             fb_swap(&fb);
         }
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+
+        /* Service the stream on EVERY iteration, drawing or not — it holds one
+         * lead (~139 ms on the OSS shim) and a skipped service is an audible
+         * gap.  ⚠️ audio_pump_active() belongs in the pacing decision: it is
+         * unconditionally true while the continuous stream is live, and
+         * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
+         * the library measures for itself (../common/audio_out.h). */
+        audio_pump(&audio);
+        usleep((needs_redraw || audio_pump_active(&audio))
+               ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
         needs_redraw = false;  /* reset for next frame */
     }
     

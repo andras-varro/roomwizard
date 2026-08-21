@@ -773,9 +773,13 @@ static void handle_input(void) {
             if (button_check_press(&start_button, touched, now)) {
                 current_screen = SCREEN_PLAYING;
                 last_frame_ms  = get_time_ms();
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);
-                hw_leds_off();
+                /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
+                 * that was here froze the panel for 100 ms from inside the input
+                 * handler — no touch poll, no redraw, and (since F1 Phase 5) no
+                 * audio_pump() either, which is a starved stream as well as a
+                 * dropped frame.  Effect 1 is this file's own 200 ms green
+                 * flash, serviced by update_led_effects() once per frame. */
+                start_led_effect(1);
             }
         }
         // Gamepad/keyboard: start game
@@ -784,9 +788,7 @@ static void handle_input(void) {
             input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PLAYING;
             last_frame_ms  = get_time_ms();
-            hw_set_led(LED_GREEN, 100);
-            usleep(100000);
-            hw_leds_off();
+            start_led_effect(1);
         }
         return;
     }
@@ -1446,6 +1448,16 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     hw_leds_off();
     audio_init(&audio);
+    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+     * from this render loop, and it implies the mix bus (../common/audio.h).
+     * Two things follow: two sounds overlap instead of one cutting the other,
+     * and a tone shorter than ~60 ms becomes audible at all — that floor is a
+     * property of RESTARTING the stream, and a continuously fed one drops it to
+     * 5 ms (../../SYSTEM_ANALYSIS.md#34-audio gotcha 6).
+     * Deliberately unchecked: a failed handover restores the old write path
+     * rather than muting, so there is nothing for a game to do about it, and
+     * audio_close() reports which path actually ran. */
+    audio_cont_enable(&audio, true);
 
     /* Framebuffer init */
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
@@ -1508,7 +1520,16 @@ int main(int argc, char *argv[]) {
             draw_all();
             fb_swap(&fb);
         }
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+
+        /* Service the stream on EVERY iteration, drawing or not — it holds one
+         * lead (~139 ms on the OSS shim) and a skipped service is an audible
+         * gap.  ⚠️ audio_pump_active() belongs in the pacing decision: it is
+         * unconditionally true while the continuous stream is live, and
+         * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
+         * the library measures for itself (../common/audio_out.h). */
+        audio_pump(&audio);
+        usleep((needs_redraw || audio_pump_active(&audio))
+               ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
         needs_redraw = false;
     }
 

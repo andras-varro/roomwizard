@@ -313,9 +313,15 @@ void update_snake() {
     // Check food collision
     if (new_head.x == food.position.x && new_head.y == food.position.y) {
         game.score += 10;
-        audio_interrupt(&audio);
+        /* ⚠️ No audio_interrupt() before an effect — on the mix bus it means
+         * "stop ALL voices", so this 120 ms two-note motif discarded a fanfare
+         * that was still playing.  The rule and the measurement that produced it
+         * (brick_breaker by ear, `.188` 2026-08-20) are in ../CLAUDE.md →
+         * Mixing.  No counter sees this — a voice stopped early is not `lost`,
+         * `drop` or `clip`.  The two tones still chain into one motif: that is
+         * AUDIO_TONE_CHAIN_MS, not the interrupt. */
         audio_tone(&audio, 1800, 60);  // ti-
-            audio_tone(&audio, 2400, 60);  // -ti
+        audio_tone(&audio, 2400, 60);  // -ti
         start_led_effect(1);  // Start food effect (non-blocking)
         
         if (snake.length < MAX_SNAKE_LENGTH) {
@@ -368,9 +374,14 @@ void handle_input() {
             bool touched = button_is_touched(&start_button, state.x, state.y);
             if (button_check_press(&start_button, touched, current_time)) {
                 current_screen = SCREEN_PLAYING;
-                hw_set_led(LED_GREEN, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
+                /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
+                 * that was here froze the panel for 100 ms from inside
+                 * handle_input() — no touch poll, no redraw, and (since F1
+                 * Phase 5) no audio_pump() either, which is a starved stream as
+                 * well as a dropped frame.  Effect 1 is this file's own 100 ms
+                 * green flash, serviced by update_led_effects() once per frame,
+                 * so it is the same flash without the freeze. */
+                start_led_effect(1);
             }
         }
         // Gamepad/keyboard: start game with Jump, Action, or Pause
@@ -378,9 +389,7 @@ void handle_input() {
             input.buttons[BTN_ID_ACTION].pressed ||
             input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PLAYING;
-            hw_set_led(LED_GREEN, 100);
-            usleep(100000);
-            hw_leds_off();
+            start_led_effect(1);
         }
         return;
     }
@@ -605,6 +614,16 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     hw_leds_off();  // Start with LEDs off
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
+    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+     * from this render loop, and it implies the mix bus (../common/audio.h).
+     * Two things follow: two sounds overlap instead of one cutting the other,
+     * and a tone shorter than ~60 ms becomes audible at all — that floor is a
+     * property of RESTARTING the stream, and a continuously fed one drops it to
+     * 5 ms (../../SYSTEM_ANALYSIS.md#34-audio gotcha 6).
+     * Deliberately unchecked: a failed handover restores the old write path
+     * rather than muting, so there is nothing for a game to do about it, and
+     * audio_close() reports which path actually ran. */
+    audio_cont_enable(&audio, true);
     
     // Initialize framebuffer
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
@@ -671,9 +690,43 @@ int main(int argc, char *argv[]) {
             draw_game();
             fb_swap(&fb);
         }
-        /* Adaptive sleep: game.speed during play, idle polling on static screens */
-        usleep(current_screen == SCREEN_PLAYING ? game.speed
-             : (needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US));
+        /* Service the stream on EVERY iteration, drawing or not — it holds one
+         * lead (~139 ms on the OSS shim) and a skipped service is an audible
+         * gap.  ⚠️ audio_pump_active() belongs in the pacing decision: it is
+         * unconditionally true while the continuous stream is live, and
+         * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
+         * the library measures for itself (../common/audio_out.h). */
+        audio_pump(&audio);
+
+        /* Adaptive sleep: game.speed during play, idle polling on static screens.
+         *
+         * ⚠️ Snake is the one game whose play sleep IS its step interval — the
+         * snake advances once per iteration, so game.speed (INITIAL_SPEED
+         * 150 ms falling to 50) cannot be shortened to service the stream
+         * without making the snake faster.  It starves BEFORE it speeds up
+         * rather than after: 150 ms is ~3x the ~55 ms service ceiling, so a
+         * single usleep() here would run the device dry twice per step at
+         * level 1 and stop doing so as the game got harder.  So the wait is
+         * BROKEN INTO service-sized pieces instead of shortened — same step
+         * interval, stream fed throughout.  audio_cont_service_interval_us()
+         * is 0 when there is no continuous stream (audio disabled, or the
+         * handover failed), and then this is one usleep() exactly as before.
+         * ⚠️ HALF the published interval, not all of it: that figure is a
+         * CEILING (it already carries half a period of margin — see
+         * ../common/audio_out.h), so sleeping the whole of it and then pumping
+         * puts the service at its edge.  Half lands snake at ~27 ms, the same
+         * neighbourhood as the other six games' FRAME_DELAY_ACTIVE_US. */
+        long wait_us = (current_screen == SCREEN_PLAYING)
+                     ? (long)game.speed
+                     : ((needs_redraw || audio_pump_active(&audio))
+                        ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        long slice_us = audio_cont_service_interval_us(&audio) / 2;
+        while (slice_us > 0 && wait_us > slice_us) {
+            usleep((useconds_t)slice_us);
+            wait_us -= slice_us;
+            audio_pump(&audio);
+        }
+        usleep((useconds_t)wait_us);
         needs_redraw = false;
     }
     
