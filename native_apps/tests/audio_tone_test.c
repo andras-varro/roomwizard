@@ -136,6 +136,57 @@ static long last_tone_pending_ms(const Audio *a)
  * half-frame threshold the gap fell on, and costs the suite 0.13 s per use. */
 static void gap_one_tap(void) { usleep(133000); }
 
+/* ── the bed's fixture, for groups G and H ───────────────────────────────────
+ * One second of mono PCM with the canonical 44-byte header.  ⚠️ Deliberately
+ * NOT a chunk-walk fixture: WHERE `data` starts is `tests/audio_sample_test.c`
+ * group A's subject and belongs in exactly one suite.  What is under test here
+ * is `audio.c`'s side — start, pause, resume, and who is asked whether a voice
+ * is still live.
+ */
+#define BED_FIXTURE "/tmp/at_bed.wav"
+
+static void put32(FILE *f, unsigned long v)
+{
+    fputc((int)(v & 0xff), f);         fputc((int)((v >> 8) & 0xff), f);
+    fputc((int)((v >> 16) & 0xff), f); fputc((int)((v >> 24) & 0xff), f);
+}
+
+static void put16(FILE *f, unsigned int v)
+{
+    fputc((int)(v & 0xff), f); fputc((int)((v >> 8) & 0xff), f);
+}
+
+static void write_bed_fixture(const char *path, long frames)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) { printf("  FAIL: cannot write %s\n", path); failures++; return; }
+
+    long data_bytes = frames * 2;
+    fwrite("RIFF", 1, 4, f);  put32(f, (unsigned long)(36 + data_bytes));
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);  put32(f, 16);
+    put16(f, 1);  put16(f, 1);                     /* PCM, mono              */
+    put32(f, TEST_RATE);  put32(f, TEST_RATE * 2); /* rate, byte rate        */
+    put16(f, 2);  put16(f, 16);                    /* block align, bits      */
+    fwrite("data", 1, 4, f);  put32(f, (unsigned long)data_bytes);
+    for (long i = 0; i < frames; i++)
+        put16(f, (unsigned int)(uint16_t)(int16_t)(8000 * ((i / 50) % 2 ? 1 : -1)));
+    fclose(f);
+}
+
+/* Render the bus for real, which is the only thing that advances a voice — and
+ * the only thing that finishes a release.  A game does this through
+ * audio_pump(); here there is no device, so drive the mixer directly. */
+static void render_frames(Audio *a, long frames)
+{
+    static int16_t mono[2048];
+    while (frames > 0) {
+        long n = frames > 2048 ? 2048 : frames;
+        audio_mix_render(&a->mix, mono, n);
+        frames -= n;
+    }
+}
+
 int main(void)
 {
     Audio a;
@@ -240,6 +291,63 @@ int main(void)
         audio_pump_enable(&a2, true);
         check(audio_mix_get_limit(&a2.mix) == AUDIO_MIX_SOFT,
               "and an operator's SOFT still survives a re-arm (carry-across intact)");
+    }
+
+    printf("\nG. the BED: a pause RESUMES where it stopped (platformer's music)\n");
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        write_bed_fixture(BED_FIXTURE, TEST_RATE);   /* 1 s of mono tone */
+
+        check(audio_music_start(&a, BED_FIXTURE, true),
+              "a bed starts on a pumping bus");
+        check(audio_music_active(&a), "and the mixer reports it live");
+        check(!audio_music_start(&a, BED_FIXTURE, true),
+              "a second start is refused while the first still sounds");
+        long declared = audio_mix_voice_pending(&a.mix, a.music.slot, a.music.gen);
+
+        render_frames(&a, TEST_RATE / 4);            /* 250 ms of real rendering */
+        long pos = a.music.wav.pos;
+        check(pos >= TEST_RATE / 4,
+              "rendering advanced the FILE, not just the voice");
+
+        check(audio_music_pause(&a), "pause arms the release");
+        render_frames(&a, TEST_RATE / 2);            /* and the release finishes */
+        check(!audio_music_active(&a), "which the mixer then reports as gone");
+        check(a.music.wav.f != NULL,
+              "but the file is still OPEN — that is the whole difference from stop");
+
+        check(audio_music_resume(&a), "resume re-arms a voice over the held file");
+        check(a.music.wav.pos >= pos,
+              "and it continues from the held position rather than from 0");
+        /* ⚠️ The arithmetic sample_arm() exists for: a resumed voice must declare
+         * what is LEFT of the file.  Declaring the whole file again would outlive
+         * its data and the mixer would pad the tail with silence. */
+        check(audio_mix_voice_pending(&a.mix, a.music.slot, a.music.gen) < declared,
+              "declaring the REMAINDER, not the whole file again");
+        check(!audio_music_resume(&a),
+              "and a second resume is refused — nothing is held any more");
+        close(fd);
+    }
+
+    printf("\nH. PUMP: OFF clears the bed, and audio_music_active() must SEE that\n");
+    {
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        write_bed_fixture(BED_FIXTURE, TEST_RATE);
+        check(audio_music_start(&a, BED_FIXTURE, true), "a bed is on the bus");
+
+        /* The SILENT one.  bus_reset() clears every voice without telling
+         * audio.c, so a local `playing` flag would read true forever and refuse
+         * every restart — a game whose music never comes back, with nothing in
+         * any counter to say why.  sample_live() asks the mixer by (slot, gen). */
+        audio_pump_enable(&a, false);
+        check(!audio_music_active(&a),
+              "a bed cleared by PUMP: OFF reads false, not stuck live");
+        audio_pump_enable(&a, true);
+        check(audio_music_start(&a, BED_FIXTURE, true),
+              "so a fresh bed is accepted afterwards");
+        close(fd);
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

@@ -60,6 +60,10 @@ typedef struct {
     long     buf_frames;      /**< its size — how often the SD read is entered   */
     int      slot;            /**< mix-bus slot, -1 when this voice is idle      */
     uint32_t gen;             /**< its generation, so a REUSED slot is not cut   */
+    bool     held;            /**< paused by audio_music_pause(): the voice is
+                               *   released but `wav` stays OPEN at its position,
+                               *   which is what a resume re-arms over.  ⚠️ Not
+                               *   the same as "idle": an idle voice has no file  */
 } AudioSampleVoice;
 
 typedef struct {
@@ -474,6 +478,37 @@ void audio_music_stop(Audio *audio);
  *  generation), not from a flag of this file's own, so a bed that PUMP: OFF
  *  cleared out from under it reads false rather than stuck. */
 bool audio_music_active(const Audio *audio);
+
+/**
+ * Hold the bed where it is, so a resume continues the track instead of restarting it.
+ *
+ * Arms the same release as `audio_music_stop()` — a bed is never cut, because
+ * stepping the summed bus by its whole instantaneous amplitude is a click — but
+ * keeps the file OPEN at its read position, which is what `audio_music_resume()`
+ * re-arms a voice over.  Returns true if a live bed was held.
+ *
+ * ⚠️ **The pump must keep running after this call**, or the release never
+ * finishes and the resume is refused: the mixer advances by frames RENDERED, so
+ * a game that stops servicing the bus while "paused" has paused the fade too.
+ *
+ * ⚠️ **A resume can skip up to one read-ahead buffer (~93 ms).** Frames the
+ * mixer had already pulled out of the file but not yet rendered are gone with the
+ * voice; `wav.pos` counts what was READ, not what was heard.  Inaudible in a bed
+ * and wrong for anything where sample-exact continuation matters.
+ */
+bool audio_music_pause(Audio *audio);
+
+/**
+ * Re-arm the held bed from where it stopped.  Returns true if a voice was added.
+ *
+ * Refused — with a reason on `stderr` — when nothing is held, when the previous
+ * release has not finished (`audio_music_active()` is still true), or when the bus
+ * is off or full.  ⚠️ **It re-opens NOTHING**: the ctx handed to the mixer is the
+ * same still-open `AudioWav`, which is why the track continues rather than
+ * retriggering, and why `audio_music_stop()`'s promise not to close the file is
+ * load-bearing rather than an implementation detail.
+ */
+bool audio_music_resume(Audio *audio);
 
 /**
  * Play one recorded effect over whatever else is sounding. Returns true if a

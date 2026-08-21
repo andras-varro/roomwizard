@@ -707,59 +707,59 @@ These rules, each of which is a way to get this wrong:
   `audio_mix_render()` skips a bus whose `audio_mix_pending()` is 0, so an under-reporting voice is never
   rendered, and `loop` is therefore a large FINITE total. Stop it with `audio_mix_release_voice()`, which
   shortens `frames` so the envelope fades it — clearing `active` cuts mid-cycle, which is a click.
-  `audio.c` owns the fd: `audio_music_start(path, loop)`/`_stop()`/`_active()` and `audio_sfx_play(path)`,
-  one `AudioSampleVoice` mechanism used twice, refusing LOUDLY off the bus and on a rate mismatch (there
-  is no resampler). `tests/audio_sample_test.c`, 63 checks; `tests/audio_mix_test.c` row 5 on the panel.
-- **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.**
-  `tests/audio_path_dump.c` renders the production fill through a file-backed `AudioOutDev` to a WAV, which
-  exonerated the delivered bytes with no microphone; `tests/audio_dump.c` hand-transcribes and so covers
-  only the arithmetic.
-- ⚠️ **The theremin and the pump cannot both own the ring**, so `audio_stream_start()` refuses loudly when
-  the pump is on rather than letting two writers interleave frames into one device.
+  `audio.c` owns the fd: `audio_music_start(path, loop)`/`_stop()`/`_pause()`/`_resume()`/`_active()` and
+  `audio_sfx_play(path)`, one mechanism used twice, refusing LOUDLY off the bus and on a rate mismatch.
+  `tests/audio_sample_test.c`; `tests/audio_mix_test.c` row 5.
+- **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.** `tests/audio_path_dump.c`
+  renders the production fill through a file-backed `AudioOutDev` to a WAV — the bytes exonerated with no mic.
+- ⚠️ **The theremin and the pump cannot both own the ring** — `audio_stream_start()` refuses when it is on.
 - ⚠️ **A game wants CONT, not just PUMP, and all seven games now have it**
   (`../IMPROVEMENT_PLAN.md` F1 Phase 5): the never-reset stream is what drops the minimum audible tone from
   ~60 ms to 5 ms, and `brick_breaker`'s 20–40 ms during-play tones were inaudible for the life of the
   game until it was turned on. ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
   serviced only on frames that drew is a stream with gaps in it. ⚠️ **`snake` is the exception to the
   three-line shape**: its play sleep IS its step interval (`game.speed`, 150 ms falling to 50), so
-  shortening it to feed the stream would make the snake faster — the wait is broken into pieces of **half**
-  `audio_cont_service_interval_us()` instead (that figure is a ceiling and already carries half a period of
-  margin), and off the bus it returns 0, collapsing to one `usleep()`.
+  shortening it to feed the stream would make the snake faster — the wait is split into pieces of **half**
+  `audio_cont_service_interval_us()` (a ceiling already carrying half a period of margin), and off the bus
+  that returns 0, collapsing to one `usleep()`.
 - ⚠️ **Never `audio_interrupt()` before an effect on the bus — it means "stop ALL voices".** The idiom cost
   nothing when the kernel ring held exactly one sound; on the bus a 20 ms effect throws away a 600 ms
   fanfare that is still playing, and `samegame`'s removal blip against a level-clear fanfare is the
-  constructible case. ⚠️ **The `brick_breaker` lost-life measurement that first motivated this rule is
-  REFUTED** (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ②): the rule stands, its original evidence does not. It is
-  gone from all seven games, and **no counter sees it** — a voice stopped early is not `lost`, `drop` or
-  `clip`.
-- ⚠️ **A blocking sub-loop IS a render loop, and one that does not service the stream loses the sound
-  queued before it.** `keyboard_enter()` (`common/keyboard.c:263`, `:325`) draws and sleeps its own frames
-  and contains no `audio_pump()`, so `tetris`' game-over fanfare is deferred until the high-score keyboard
-  closes. The mixer advances by frames RENDERED, so such a sound is delayed rather than dropped, which is
-  worse to diagnose. Open, with two candidate fixes: `../IMPROVEMENT_PLAN.md` F1 Phase 5.
+  constructible case. ⚠️ **The measurement that first motivated the rule is REFUTED and the rule is not**
+  (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ②). It is gone from all seven games, and **no counter sees it** — a
+  voice stopped early is not `lost`, `drop` or `clip`.
+- ⚠️ **A blocking sub-loop IS a render loop; one that does not service the stream DEFERS the sound queued
+  before it** — delayed rather than dropped, because the mixer advances by frames RENDERED, which is worse
+  to diagnose. `keyboard_enter()` (`common/keyboard.c:263`, `:325`) contains no `audio_pump()`: open, with
+  two candidate fixes, `../IMPROVEMENT_PLAN.md` F1 Phase 5.
+- ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** —
+  `platformer`'s `bed_service()`. `audio_music_pause()` arms stop's release but keeps the FILE open, so
+  `audio_music_resume()` continues the track, declaring what is LEFT of it and skipping ≤ one read-ahead
+  buffer; ⚠️ **the pump must keep running while a bed is held**, or no resume is ever accepted. ⚠️ **A
+  missing bed is NORMAL** (device-only files, `../IMPROVEMENT_PLAN.md` F19): the path is a config key, and
+  one refusal is permanent per process — a per-frame retry fills `app_stdout.log`. Covered by
+  `tests/audio_tone_test.c` G and H.
 - **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
   it is what lets an operator’s own play session be measured with no mic: from the launcher it lands in
-  `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate it before believing a zero**: `kill -STOP` the
-  game for a second, three times, and `starve` reads exactly 3 — no source change and no rebuild.
-  Measured `.188` 2026-08-20, against 0 over 616 and 659 idle services and 8 in 10 959 under real play;
-  a dry queue is counted even while the bus is SILENT, so a small `starve` is not automatically audible.
+  `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate it before believing a zero**: `kill -STOP` the game
+  for a second, three times, and `starve` reads exactly 3 — no source change and no rebuild. A dry queue is
+  counted even while the bus is SILENT, so a small `starve` is not automatically audible.
 - **`check-audio-pacing.sh` is the gate, and it runs from `build-and-deploy.sh`.** It fails an app that
   enables a bus and never services it, one that sleeps `FRAME_DELAY_IDLE_US` with no `audio_pump_active()`,
-  and the mirror case. `--self-test` carries its own controls, the load-bearing one being an *unconverted*
-  app. ⚠️ **It reads text, not control flow**, so an `audio_pump()` nested inside the draw branch passes it
-  — its own header lists the three shapes it cannot see, and `starve` is what catches them.
+  and the mirror case; `--self-test` carries its own controls, the load-bearing one being an *unconverted*
+  app. ⚠️ **It reads text, not control flow** — its header lists the three shapes it cannot see, an
+  `audio_pump()` nested in the draw branch among them, and `starve` is what catches those.
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
-questions, and its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one
-under test** — which is the only reason a claim like "the click is gone" can be checked rather than
-believed. ⚠️ Its level ladder starts on the QUIETEST rung and wraps: a walk run loud-to-quiet biases
-adaptation, and "can you hear it" is a different question from "is it clean".
+questions: its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one under test**,
+which is the only reason "the click is gone" can be checked rather than believed. ⚠️ Its level ladder starts
+on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation, and "can you hear it" is a
+different question from "is it clean".
 ⚠️ **Two files under `tests/` are SHIPPED launcher tiles, so nothing in there is automatically
-expendable** — `audio_touch_test` is the tile `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
-(`app-manifests.sh`, each with a PPM icon), and the theremin is also the instrument that measured the
-speaker's usable band ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). Read that manifest file before calling
-anything under `tests/` a test tool.
-⚠️ **Never write prose saying 60 ms is a minimum tone length.** Nothing clamps it; the floor was the
+expendable** — `audio_touch_test` is `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
+(`app-manifests.sh`, each with a PPM icon), and the theremin also measured the speaker's usable band
+([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). Read that manifest before calling anything under `tests/` a tool.
+⚠️ **Never write prose saying 60 ms is a minimum tone length** — nothing clamps it; the floor was the
 start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used

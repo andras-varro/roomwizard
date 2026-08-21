@@ -1096,6 +1096,60 @@ static bool sample_live(const Audio *audio, const AudioSampleVoice *sv)
            audio_mix_voice_pending(&audio->mix, sv->slot, sv->gen) > 0;
 }
 
+/*
+ * Hand `sv`'s ALREADY-OPEN file to the bus.  `how` is the word the receipt uses.
+ *
+ * ⚠️ **Split out of sample_start() because a RESUME must not reopen.**
+ * audio_music_resume() re-arms a voice over the same `AudioWav` at its own read
+ * position, and reopening would restart the track from the top — which is the
+ * whole difference between "pause" and "stop".  `path` is NULL for that case;
+ * `AudioWav` does not remember where it came from.
+ */
+static bool sample_arm(Audio *audio, AudioSampleVoice *sv, const char *what,
+                       const char *how, const char *path)
+{
+    /* Allocated once and kept: the buffer sets how often the SD read is entered,
+     * and reallocating it per start would put a malloc in a tap's path. */
+    if (!sv->buf) {
+        sv->buf = (int16_t *)malloc((size_t)AUDIO_SAMPLE_BUF_FRAMES * sizeof(int16_t));
+        if (!sv->buf) {
+            fprintf(stderr, "audio: %s out of memory for %d read-ahead frames\n",
+                    what, AUDIO_SAMPLE_BUF_FRAMES);
+            audio_wav_close(&sv->wav);
+            return false;
+        }
+        sv->buf_frames = AUDIO_SAMPLE_BUF_FRAMES;
+    }
+
+    /* ⚠️ What is LEFT of the file, not all of it.  On a fresh open `pos` is 0 and
+     * the two are the same expression; a RESUMED voice that declared the whole
+     * file would outlive its data and the mixer would pad the tail with silence. */
+    long total = sample_total_frames(sv->wav.frames - sv->wav.pos, sv->wav.loop);
+    int  slot  = audio_mix_add_sample(&audio->mix, audio_wav_fill, &sv->wav,
+                                      sv->buf, sv->buf_frames, total,
+                                      audio_voice_peak(audio->vol));
+    if (slot < 0) {
+        /* ⚠️ The full bus REFUSES and never steals (audio_gen.h) — one mechanism
+         * for both voice kinds, which is what keeps a UI blip from cutting the bed.
+         * Reported so a refused bed is distinguishable from a missing file. */
+        fprintf(stderr, "audio: %s refused by the bus — %d of %d voices sounding "
+                        "(the full bus refuses, it never steals)\n",
+                what, audio_pump_voices(audio), AUDIO_MAX_VOICES);
+        audio_wav_close(&sv->wav);
+        return false;
+    }
+
+    sv->slot = slot;
+    sv->gen  = audio_mix_voice_gen(&audio->mix, slot);
+    sv->held = false;
+    fprintf(stderr, "audio: %s %s %s — %ld frames in file, %ld consumed, "
+                    "%ld declared, %d Hz %d ch, loop=%d, slot %d gen %lu\n",
+            what, how, path ? path : "(the held file)", sv->wav.frames,
+            sv->wav.pos, total, sv->wav.rate, sv->wav.channels,
+            (int)sv->wav.loop, slot, (unsigned long)sv->gen);
+    return true;
+}
+
 /** The one start path for both sample voices.  Every refusal is LOUD: on the
  *  panel a silent no-op reads as "the file is broken", which is the wrong repair. */
 static bool sample_start(Audio *audio, AudioSampleVoice *sv, const char *path,
@@ -1140,41 +1194,52 @@ static bool sample_start(Audio *audio, AudioSampleVoice *sv, const char *path,
         return false;
     }
 
-    /* Allocated once and kept: the buffer sets how often the SD read is entered,
-     * and reallocating it per start would put a malloc in a tap's path. */
-    if (!sv->buf) {
-        sv->buf = (int16_t *)malloc((size_t)AUDIO_SAMPLE_BUF_FRAMES * sizeof(int16_t));
-        if (!sv->buf) {
-            fprintf(stderr, "audio: %s out of memory for %d read-ahead frames\n",
-                    what, AUDIO_SAMPLE_BUF_FRAMES);
-            audio_wav_close(&sv->wav);
-            return false;
-        }
-        sv->buf_frames = AUDIO_SAMPLE_BUF_FRAMES;
-    }
+    return sample_arm(audio, sv, what, "start", path);
+}
 
-    long total = sample_total_frames(sv->wav.frames, loop);
-    int  slot  = audio_mix_add_sample(&audio->mix, audio_wav_fill, &sv->wav,
-                                      sv->buf, sv->buf_frames, total,
-                                      audio_voice_peak(audio->vol));
-    if (slot < 0) {
-        /* ⚠️ The full bus REFUSES and never steals (audio_gen.h) — one mechanism
-         * for both voice kinds, which is what keeps a UI blip from cutting the bed.
-         * Reported so a refused bed is distinguishable from a missing file. */
-        fprintf(stderr, "audio: %s refused by the bus — %d of %d voices sounding "
-                        "(the full bus refuses, it never steals)\n",
-                what, audio_pump_voices(audio), AUDIO_MAX_VOICES);
-        audio_wav_close(&sv->wav);
+/*
+ * Release the bed's voice but keep its file open where it is.
+ *
+ * ⚠️ Deliberately the SAME release as audio_music_stop() rather than a mixer
+ * "paused" flag: a held voice would go on occupying a slot the full bus refuses
+ * over, and there is no second mechanism to keep in step with this one.
+ */
+bool audio_music_pause(Audio *audio)
+{
+    if (!audio) return false;
+    if (!audio_music_active(audio)) {
+        fprintf(stderr, "audio: music pause — nothing is sounding\n");
         return false;
     }
-
-    sv->slot = slot;
-    sv->gen  = audio_mix_voice_gen(&audio->mix, slot);
-    fprintf(stderr, "audio: %s start %s — %ld frames in file, %ld declared, "
-                    "%d Hz %d ch, loop=%d, slot %d gen %lu\n",
-            what, path, sv->wav.frames, total, sv->wav.rate, sv->wav.channels,
-            (int)loop, slot, (unsigned long)sv->gen);
+    audio_music_stop(audio);       /* release, and it does NOT close the file */
+    audio->music.held = true;
     return true;
+}
+
+bool audio_music_resume(Audio *audio)
+{
+    if (!audio) return false;
+    if (!audio->music.held || !audio->music.wav.f) {
+        fprintf(stderr, "audio: music resume refused — no bed is held "
+                        "(audio_music_pause() first, or start one)\n");
+        return false;
+    }
+    /* ⚠️ The release must have FINISHED.  The mixer still pulls from this exact
+     * AudioWav while the envelope walks down, so re-arming now would give the bus
+     * two voices reading one file — and the pump is what finishes it, which a
+     * caller that stopped servicing the bus while "paused" never does. */
+    if (audio_music_active(audio)) {
+        fprintf(stderr, "audio: music resume refused — the previous release still "
+                        "owes %ld frames; keep pumping and retry\n",
+                audio_mix_voice_pending(&audio->mix, audio->music.slot,
+                                        audio->music.gen));
+        return false;
+    }
+    if (!audio->pumping) {
+        fprintf(stderr, "audio: music resume refused — the mix bus is OFF\n");
+        return false;
+    }
+    return sample_arm(audio, &audio->music, "music", "resume", NULL);
 }
 
 bool audio_music_start(Audio *audio, const char *path, bool loop)

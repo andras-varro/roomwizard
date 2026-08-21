@@ -28,6 +28,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/config.h"
 #include "../common/gamepad.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -290,6 +291,102 @@ static void play_stomp_sound(void)          { audio_beep(&audio); }
 static void play_death_sound(void)          { audio_fail(&audio); }
 static void play_extra_life_sound(void)     { audio_success(&audio); }
 static void play_level_complete_sound(void) { audio_success(&audio); }
+
+/* ── The music bed ───────────────────────────────────────────────────────────
+ * The first game to run one (../../IMPROVEMENT_PLAN.md F1 Phase 5, F19).  The
+ * bed is a streaming sample voice on the mix bus, so it costs one file, one
+ * read-ahead buffer and no thread; the effects above mix OVER it because a full
+ * bus refuses a voice rather than stealing the longest one (../common/audio.h).
+ *
+ * ⚠️ **The files are device-only and NOT in this repo** — 9.6 MB of AI-generated
+ * audio that has not entered git yet (F19), and a re-commission removes them.
+ * So an absent bed is the NORMAL case, not an error case: the game says so once
+ * and plays on with its effects.  That is also why the path is configurable
+ * rather than compiled in — `platformer_music=` (empty) silences the bed, and
+ * `platformer_music=/opt/sound/music2-mono.wav` swaps the track, both without a
+ * rebuild.  F1 ④ generalises this to a per-game sound set; until then this one
+ * key is the whole mechanism.
+ */
+#define BED_DEFAULT_PATH  "/opt/sound/music1-mono.wav"
+#define BED_CONFIG_KEY    "platformer_music"
+
+typedef enum {
+    BED_IDLE,       /* nothing on the bus (nothing started, or a fade finished) */
+    BED_PLAYING,    /* a voice is sounding                                      */
+    BED_HELD,       /* paused: released, but the FILE is still open at its pos  */
+    BED_STOPPING    /* released for good; waiting for the fade to finish        */
+} BedState;
+
+static char     bed_path[CONFIG_VAL_LEN];
+static BedState bed_state  = BED_IDLE;
+static bool     bed_broken = false;
+
+static void bed_configure(void) {
+    Config cfg;
+    config_init(&cfg);
+    config_load(&cfg);                     /* silent when the file is absent */
+    snprintf(bed_path, sizeof bed_path, "%s",
+             config_get(&cfg, BED_CONFIG_KEY, BED_DEFAULT_PATH));
+    if (!bed_path[0]) {
+        bed_broken = true;                 /* an empty value means "no music" */
+        printf("platformer: music bed disabled by %s (%s=)\n",
+               CONFIG_FILE_PATH, BED_CONFIG_KEY);
+    }
+}
+
+/*
+ * One transition per loop iteration, called from the main loop beside
+ * audio_pump().  ⚠️ **Every path through here is gated on
+ * `audio_music_active()`** rather than on this file's own idea of what the bus
+ * is doing: a release takes frames to walk down, `audio_music_resume()` is
+ * refused until it has, and PUMP: OFF can clear the voice out from under us.
+ * The state below tracks INTENT; the mixer is asked about reality.
+ */
+static void bed_service(void) {
+    if (bed_broken) return;
+
+    bool want_play = (current_screen == SCREEN_PLAYING ||
+                      current_screen == SCREEN_LEVEL_COMPLETE);
+    bool want_hold = (current_screen == SCREEN_PAUSED);
+
+    switch (bed_state) {
+    case BED_IDLE:
+        if (!want_play || audio_music_active(&audio)) break;
+        if (audio_music_start(&audio, bed_path, true)) { bed_state = BED_PLAYING; break; }
+        /* A missing file, a rate mismatch or a bus that never came up are all
+         * permanent for this process, and retrying per frame would fill
+         * /var/log/roomwizard/app_stdout.log with one refusal per 33 ms. */
+        bed_broken = true;
+        printf("platformer: no music bed at %s — effects and play continue\n", bed_path);
+        break;
+
+    case BED_PLAYING:
+        if (want_play) {
+            /* 200 loop passes ran out (~2.4 h), or PUMP: OFF cleared the bus:
+             * re-arm from IDLE rather than stay silent for the session. */
+            if (!audio_music_active(&audio)) bed_state = BED_IDLE;
+        } else if (want_hold) {
+            if (audio_music_pause(&audio)) bed_state = BED_HELD;
+        } else {
+            audio_music_stop(&audio);
+            bed_state = BED_STOPPING;
+        }
+        break;
+
+    case BED_HELD:
+        if (want_hold) break;
+        if (!want_play) { bed_state = BED_STOPPING; break; }  /* paused, then quit */
+        if (audio_music_active(&audio)) break;                /* release still fading */
+        if (audio_music_resume(&audio)) { bed_state = BED_PLAYING; break; }
+        bed_broken = true;
+        printf("platformer: music bed could not resume — play continues\n");
+        break;
+
+    case BED_STOPPING:
+        if (!audio_music_active(&audio)) bed_state = BED_IDLE;
+        break;
+    }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Tile Queries
@@ -1816,6 +1913,7 @@ int main(int argc, char *argv[]) {
      * rather than muting, so there is nothing for a game to do about it, and
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
+    bed_configure();
 
     /* Framebuffer init */
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
@@ -1885,6 +1983,8 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (../common/audio_out.h). */
+        bed_service();          /* one bed transition, BEFORE the pump so a voice
+                                 * started this iteration is rendered by it */
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

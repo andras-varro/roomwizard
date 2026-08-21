@@ -37,7 +37,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **What the 2026-08-21 listen left open.** (a) `tetris` DAS-repeated left/right, now the idiom is gone — still distinct clicks, or a smear? Asked and **not** answered, because the game-over case is input-locked · (b) `audio_success()`'s arpeggio-not-chord, still unasked and now known to have two of its three notes below the knee · (c) whether a bed (`music{1,2}-mono.wav`) sounds right under real gameplay. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | (b) wants ③ shipped first, or it measures the band rather than the arpeggio |
+| 6 | **What the 2026-08-21 listen left open.** (a) `tetris` DAS-repeated left/right, now the idiom is gone — still distinct clicks, or a smear? Asked and **not** answered, because the game-over case is input-locked · (b) `audio_success()`'s arpeggio-not-chord, still unasked and now known to have two of its three notes below the knee · (c) **`platformer`'s bed under real gameplay — deployed to `.188` 2026-08-21 and ready to ask**: is the level right for sustained music (F19's one open question), and is the pause→resume seam acceptable? ⚠️ **A frozen fade and a dry stream while `NEW HIGH SCORE!` is open are the DEFERRED blocking-sub-loop regression, not a new fault** — say so when asking, or it comes back as a bug report. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | (b) wants ③ shipped first, or it measures the band rather than the arpeggio |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -275,7 +275,7 @@ analog, below both userspaces, and not ours to fix (below).
 | Phase | What it is | State |
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ next, and ④ open; one regression open (a blocking sub-loop services nothing). Detail below |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ next, and ④ open; **a bed ships in `platformer`**; one regression open (a blocking sub-loop services nothing). Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -432,6 +432,41 @@ RAM-loading the larger bed would buy a ~0.46 s startup stall to replace a path t
 *heard clean* — a measured-good path traded for an unobserved problem. It is one `fill` either way, chosen
 per sound at load time, so this is reversible and needs no architecture.
 
+✅ **`platformer` (Office Runner) is the FIRST game to run a bed, deployed to `.188` 2026-08-21 — asked for
+out of order, ahead of ③, and it needed no part of ③.** `bed_service()` is a four-state machine
+(`BED_IDLE`/`PLAYING`/`HELD`/`STOPPING`) whose every transition is gated on `audio_music_active()` rather
+than a flag of its own, because a release takes frames to walk down and `PUMP: OFF` can clear the voice
+underneath it. The bed sounds during play and the level-complete overlay, is **held** on the pause screen
+and stopped at game over; the path comes from a config key (`platformer_music`, default
+`/opt/sound/music1-mono.wav`, empty value = silence) so a track swap is a `config_set` rather than a
+rebuild — ④'s shape, one game wide. ⚠️ **One refusal is permanent for the process on purpose**: a missing
+file is the NORMAL case (the files are device-only, F19) and a per-frame retry would fill
+`app_stdout.log` with a refusal every 33 ms. Verified as far as no-human verification reaches: the game
+starts clean over SSH with the launcher stopped (`cont=1`, `starve`/`lost`/`drop`/`lim`/`clip` all 0 over
+234 services), and the mechanism itself is covered on the host **and on ARM** — the panel listen is row 6
+(c) and it is what is owed.
+
+⏳ **`audio_music_pause()`/`audio_music_resume()` are new library surface, and "pause" here means
+release-and-hold.** Pause arms the same release as `audio_music_stop()` — a bed is never cut, that is a
+click — but keeps the file OPEN at its read position, and `sample_arm()` (split out of `sample_start()`)
+re-arms a voice over that same `AudioWav` **declaring only what is LEFT of the file**, so a resumed
+non-looping voice cannot outlive its data. Two consequences worth stating rather than rediscovering:
+⚠️ **the pump must keep running while a bed is held**, or the release never finishes and every resume is
+refused for the life of the process; and ⚠️ **a resume can skip up to one read-ahead buffer (~93 ms)**,
+because `wav.pos` counts what was READ, not what was heard. Both are inaudible in a bed and wrong for
+anything needing sample-exact continuation.
+
+✅ **Two of that leftover's four holes are now closed, and the closure has negative controls.**
+`tests/audio_tone_test.c` grew groups G and H — start/pause/resume/stop, the double-start and
+double-resume refusals, the remainder arithmetic, and `sample_live()`'s `(slot, gen)` read against a
+`PUMP: OFF` that clears the bus. It PASSES on the host and prints the same lines on `.188` ARM
+(2026-08-21). ⚠️ **Three sabotages were measured against it before it was believed**: a resume declaring
+the whole file again, a pause that closes the file, and a `sample_live()` that trusts its slot alone — 1,
+2 and 9 failures respectively, and the last is the one that would otherwise be silent. **Still uncovered:
+`audio_sfx_play()` and `sample_total_frames()`'s clamp against a 32-bit `long`** (the clamp needs a
+fixture too large for a host test to write, so it wants the modelled-truncation shape
+`tests/audio_gen_test.c` group A uses).
+
 ⏳ **What is left over after phase 5, both small.** ① The `CHORD` pad in
 `native_apps/tests/audio_mix_test.c` branches on `audio_pump_active()`, which is **false** on a silent bus
 (that predicate ends in `audio_mix_pending() > 0`), so on exactly the tap a comparison needs it falls back
@@ -439,11 +474,9 @@ to three chained `audio_tone()` calls — **fix by testing `audio->pumping`**, a
 or limiter question is put to the panel again. ⚠️ `lim` and `clip` also accumulate across both halves of
 such an A/B, since `bus_reset()` is the only thing that zeroes them and it deliberately carries the
 limiter choice across: cycle `PUMP` between halves or neither counter is attributable to a position.
-② **No host test covers `audio.c`'s sample half** — `audio_music_start/_stop/_active`, `audio_sfx_play()`,
-`sample_total_frames()`'s clamp against a 32-bit `long`, and `sample_live()`'s `(slot, gen)` read. The
-refusals are loud so those fail visibly; the last two are **silent** if wrong, because a stale generation
-would let a released voice look live. `tests/audio_tone_test.c` is the file to extend — it already links
-`audio.c` through `-Itests/hostshim`, so no new build route is needed.
+② **`audio.c`'s sample half is now covered where it was not — see the group G/H paragraph above; what
+remains is `audio_sfx_play()` and the 32-bit clamp.** `tests/audio_tone_test.c` is the file to extend — it
+already links `audio.c` through `-Itests/hostshim`, so no new build route is needed.
 
 ⏳ **One device-half defect is left and it is the adapter's.** `oss-mixer.cpp:298`'s emergency
 anti-underrun `write()` ignores errors and partial writes; it is deleted rather than fixed, because the
@@ -508,10 +541,13 @@ playback is audibly identical to the stereo original at half the size and half t
   — and a matching row in *Distributed binaries* if they go into a bundle.
 - ⏳ **Decided in part, 2026-08-20: the audio SUPPORT lands in git now and the music does not yet.** The
   9.6 MB mono pair goes in **through `git-lfs`, later**, when a game actually ships a bed — so the repo
-  does not carry 9.6 MB of history for a feature that is still being designed. ⚠️ **Until then the files
-  are device-only, they do not survive a re-commission, and a game whose configured bed is absent must
-  play its effects and carry on** rather than refuse to start. ⚠️ **`git-lfs` is absent from this WSL**
-  (`CLAUDE.md` → *Working from this host*), so whoever adds them runs `git lfs track` from Git Bash.
+  does not carry 9.6 MB of history for a feature that is still being designed. ⚠️ **That condition FIRED
+  2026-08-21: `platformer` ships a bed** (F1 Phase 5), so this is now the operator's call to make rather
+  than a future one, and until it is made the bed works only on a unit that was hand-copied to. ⚠️ **Until
+  then the files are device-only, they do not survive a re-commission, and a game whose configured bed is
+  absent must play its effects and carry on** rather than refuse to start. ⚠️ **`git-lfs` is absent from
+  this WSL** (`CLAUDE.md` → *Working from this host*), so whoever adds them runs `git lfs track` from Git
+  Bash.
 - **Deployment, when they do land.** They belong in `native_apps/build-and-deploy.sh` and the bundle
   manifest. Note `device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale, so the hand-copied
   files are safe from the clean meanwhile; its *reason* text ("113 KB of usable UI WAVs") goes stale the
