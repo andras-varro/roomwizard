@@ -568,6 +568,21 @@ group_c() {
 # retires fx_gen.c's gate and puts two silent failure modes (a refused sample rate, a clip shorter than the
 # mixer's own envelope) in the path of anyone adding one. Nothing in the file went stale to fund it.
 # ⚠️ **No headroom is granted: 684 is the measurement.**
+# ⚠️ 2026-08-22, SEVENTH raise, deliberate and argued: native_apps/CLAUDE.md 684 → 701 (measured post-edit
+# count). F1 phase 5 ⑤ landed as a whole — the games-menu MUSIC/EFFECTS toggles, a music PLAYLIST, and a
+# death that holds the bed rather than stopping it — and two of its rules have no other home because they
+# are about how to CALL this directory's library rather than about the device. (1) The toggles are enforced
+# in the library, so a game must NOT re-check them; `audio_music_enabled()` exists to explain a silence in a
+# log line, and both toggles read TRUE through `audio_init_unchecked()` so a speaker test still works. (2)
+# A bed's hold-versus-stop distinction IS the difference between "the music continues" and "the level
+# restarts its music", which is a behaviour a future game will otherwise re-derive. It also lands
+# `check-sound-assets.sh`, whose existence has to be discoverable from the doc stating the rule it enforces
+# — the same argument as check-audio-pacing.sh two raises up. The same commit paid where it could: the
+# *Sound assets* section absorbed the gate in place of its "ffprobe before deploying" line, and the bed
+# bullet's "device-only files" claim was CORRECTED rather than appended to, since the beds are now committed
+# and deployed. The other three docs did not grow; IMPROVEMENT_PLAN.md SHRANK by ~1 net while gaining all of
+# ⑤'s and ③'s results, by compressing F19 to its open remainder and deleting two closed rationales.
+# ⚠️ **No headroom is granted: 701 is the measurement, and the next addition pays by deleting.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -576,7 +591,7 @@ ceilings() {
 1352	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-684	native_apps/CLAUDE.md
+701	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

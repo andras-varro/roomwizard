@@ -637,24 +637,39 @@ split to get there** — `tests/hostshim/sys/soundcard.h` redirects onto this ho
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —
   which lets a caller write whatever the ring will take without a seam.
 
-### Sound assets: sourced, and two ways they fail without saying so
+### Sound assets: sourced, gated, and two ways they fail without saying so
 
 `sounds/fx_*.wav` are **sourced files**, not generated — `sounds/fx_gen.c` and `gen-sounds.sh` are
 superseded and ⚠️ **running `gen-sounds.sh` overwrites them.** `sounds/prompts.md` is the authoring record;
 the reversal and its measurements are [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1 Phase 5 ③.
+⚠️ **They are also the one thing in this repo that is not free for any use** — `../LICENSE.md` is the home
+for that, and it is a release concern, not an authoring one.
+
+**`./check-sound-assets.sh` is the gate, and `build-and-deploy.sh` runs it** — format plus in-band energy,
+with two opposed sine controls it validates itself against before judging a file. Run it after touching any
+asset rather than reasoning about the numbers; it blocks on an unusable file and warns on a weak one.
+⚠️ **It cannot hear whether an effect sounds like its name** — in-band energy is audibility, not identity,
+and the retired generated set would have PASSED it. That half stays ear-only, on the panel.
 
 - ⚠️ **A wrong sample rate is refused in SILENCE.** `clip_load()` in `common/audio.c` rejects any clip whose
   rate is not the granted 44100, logs one line, and the convenience sound falls back to its note table — so
   the game sounds **unchanged** and reads as "the new asset did not work" rather than as a format error.
   Measured: a sourced effect arrived 48000 Hz / stereo and would have changed nothing on the panel. Every
-  asset is **mono / 44100 / 16-bit PCM**; `ffprobe` before deploying, never the ear.
+  asset is **mono / 44100 / 16-bit PCM**.
 - ⚠️ **Nothing under ~90 ms.** The mixer puts a 10 ms attack and 20 ms release on every sample voice, each
   clamped to half the clip (`clamp_edge_frames()` in `common/audio_gen.c`), so a 28 ms effect is almost
   entirely envelope and its transient is gone.
 - **The content rule is IN-BAND ENERGY, not spectral shape.** This speaker rolls off sharply below its knee
   ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so an effect whose energy sits under
-  it is not quiet, it is absent — high-pass at 700 Hz and compare RMS to decide. ⚠️ **Broadband is not the
-  requirement**: chasing flatness instead cost a whole set that measured correct and sounded like noise.
+  it is not quiet, it is absent. ⚠️ **Broadband is not the requirement**: chasing flatness instead cost a
+  whole set that measured correct and sounded like noise.
+- ⚠️ **The MUSIC / EFFECTS toggles are enforced in the LIBRARY, so never re-check them in a game.**
+  `music_enabled` / `effects_enabled` (written by `app_launcher`) are read once by `audio_init()` and gate
+  `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and `audio_music_start()` — a second check in a call
+  site is a second place the rule drifts. `audio_music_enabled()` / `audio_effects_enabled()` exist to
+  explain a silence in a log line, not to decide whether to make a sound. ⚠️ **Both read TRUE on a struct
+  from `audio_init_unchecked()`**, deliberately: that bypass is what lets a hardware speaker test make a
+  noise on a silenced device.
 
 ### Mixing: an optional per-frame pump
 
@@ -760,12 +775,15 @@ These rules, each of which is a way to get this wrong:
   to diagnose. `keyboard_enter()` (`common/keyboard.c:263`, `:325`) contains no `audio_pump()`: open, with
   two candidate fixes, `../IMPROVEMENT_PLAN.md` F1 Phase 5.
 - ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** —
-  `platformer`'s `bed_service()`. `audio_music_pause()` arms stop's release but keeps the FILE open, so
+  `platformer`'s `bed_service()`, whose four states buy three behaviours with no state of their own:
+  level-complete leaves `want_play` (so the bed releases and the next playlist track starts), a **death**
+  is `want_hold` (so the fail effect plays over near-silence and a respawn continues the same track), and
+  only game over stops it. `audio_music_pause()` arms stop's release but keeps the FILE open, so
   `audio_music_resume()` continues the track, declaring what is LEFT of it and skipping ≤ one read-ahead
   buffer; ⚠️ **the pump must keep running while a bed is held**, or no resume is ever accepted. ⚠️ **A
-  missing bed is NORMAL** (device-only files, `../IMPROVEMENT_PLAN.md` F19): the path is a config key, and
-  one refusal is permanent per process — a per-frame retry fills `app_stdout.log`. Covered by
-  `tests/audio_tone_test.c` G and H.
+  missing bed is still a NORMAL case** even though the beds are now committed and deployed
+  (`../IMPROVEMENT_PLAN.md` F19), because the paths are config keys: a refusal is permanent **per track**,
+  since a per-frame retry fills `app_stdout.log`. Covered by `tests/audio_tone_test.c` G and H.
 - **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
   it is what lets an operator’s own play session be measured with no mic — from the launcher it lands in
   `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate before believing a zero**: `kill -STOP` the game

@@ -71,6 +71,14 @@ void config_clear(Config *cfg);
 /* Check if audio is disabled. Reads "audio_enabled" key (default: true). */
 bool config_audio_enabled(const Config *cfg);
 
+/* The two games-menu toggles, BELOW audio_enabled rather than beside it:
+ * audio_enabled off means this process opens no device at all, so these two are
+ * never consulted.  Both default true, so an old config file behaves as before.
+ * Written by app_launcher's own screen; read by common/audio.c's audio_init()
+ * and by nothing else (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤). */
+bool config_music_enabled(const Config *cfg);
+bool config_effects_enabled(const Config *cfg);
+
 /* Check if LED effects are disabled. Reads "led_enabled" key (default: true). */
 bool config_led_enabled(const Config *cfg);
 

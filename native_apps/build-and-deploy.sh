@@ -329,6 +329,24 @@ else
 fi
 echo ""
 
+# ── 2b3. Sound-asset gate ───────────────────────────────────────────────────
+# An ASSET check, not a source one, and it exists because both of the ways a sound
+# file fails on this device are SILENT: a rate the mixer does not grant is refused
+# by clip_load() with the game falling back to its note table (so it sounds
+# unchanged), and energy below the speaker's ~700 Hz knee is not quiet but absent.
+# Neither is visible in a byte comparison, a screenshot or an md5.  It replaces
+# fx_gen.c's retired spectral-flatness gate, which enforced the wrong property
+# (../IMPROVEMENT_PLAN.md F1 Phase 5 ③).
+#
+# ⚠️ **It does not block on a WEAK file, only on an unusable one**, and it skips
+# itself when ffmpeg is absent — a build host without ffmpeg must still build.
+if [[ -x ./check-sound-assets.sh ]]; then
+    ./check-sound-assets.sh || err "Sound-asset check failed — refusing to deploy"
+else
+    warn "check-sound-assets.sh missing — skipping sound-asset gate"
+fi
+echo ""
+
 # ── 2c. --bundle: stage instead of deploying ────────────────────────────────
 # Deliberately AFTER the ARM-safety gate.  A bundle is published and then
 # installed by someone with no toolchain, so it is the one artifact that must
@@ -378,6 +396,26 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     # data, read by audio.c, never executed.
     for f in sounds/fx_*.wav; do
         [ -f "$f" ] || continue
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/sound/$(basename "$f")" \
+            || err "staging failed: $f"
+    done
+
+    # The music beds, same destination and same reason — a bundle that installs
+    # `platformer` without them installs a game whose configured bed is missing.
+    #
+    # ⚠️ These are Git LFS objects, and a clone made WITHOUT git-lfs leaves ~130-byte
+    # POINTER TEXT files in their place (../IMPROVEMENT_PLAN.md F19).  Staging one of
+    # those produces a bundle that installs cleanly and then plays no music at all —
+    # `clip_load()`/the stream reader reject it, log one line and the game carries on.
+    # So refuse it here, where the operator is still at a keyboard, rather than let it
+    # travel.  The check is the pointer file's own first line, which is a documented
+    # format, not the size — a size threshold would also reject a legitimately short
+    # bed.
+    for f in music/music*.wav; do
+        [ -f "$f" ] || continue
+        if head -c 40 "$f" | grep -q 'version https://git-lfs'; then
+            err "$f is an unfetched Git LFS pointer, not audio — run: git lfs install && git lfs pull"
+        fi
         rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/sound/$(basename "$f")" \
             || err "staging failed: $f"
     done
@@ -473,13 +511,48 @@ fi
 #
 # /opt/sound is where the music bed already lives and device-files/clean-rules.conf
 # keeps that directory wholesale, so a re-commission does not take them away.  They
-# are checked in (sounds/fx_*.wav, byte-reproducible from sounds/gen-sounds.sh), so
+# are checked in (sounds/fx_*.wav — SOURCED files, not build output; ⚠️ running
+# sounds/gen-sounds.sh overwrites them with generated noise), so
 # unlike the music there is nothing to hand-copy.
 if ls sounds/fx_*.wav &>/dev/null; then
     info "Uploading effect clips → /opt/sound/"
     ssh "$DEVICE" "mkdir -p /opt/sound"
     scp sounds/fx_*.wav "$DEVICE:/opt/sound/"
     ok "Effect clips uploaded ($(ls sounds/fx_*.wav | wc -l) file(s))"
+fi
+
+# Upload the music beds → /opt/sound/, but ONLY the ones that differ.
+#
+# ⚠️ Unlike the effects these are LARGE — 3.9 MB + 4.9 MB — so an unconditional
+# scp adds ~8.8 MB to every deploy of a component that is otherwise a few hundred
+# KB of binaries.  They also never change: they are two sourced files under LFS
+# (../IMPROVEMENT_PLAN.md F19), not build output.  So compare md5 first and send
+# nothing when the device already matches.  The md5 is the whole check — a size
+# comparison would pass a truncated-then-padded file, and a timestamp comparison
+# cannot be made to mean anything across the device's clock offset (../CLAUDE.md).
+#
+# A game whose configured bed is missing plays its effects and carries on
+# (`platformer`'s bed_service()), so this step failing is not fatal — but then the
+# feature is silently absent, which is why it prints per file either way.
+if ls music/music*.wav &>/dev/null; then
+    info "Checking music beds → /opt/sound/"
+    ssh "$DEVICE" "mkdir -p /opt/sound"
+    remote_md5="$(ssh "$DEVICE" "md5sum /opt/sound/music*-mono.wav 2>/dev/null" || true)"
+    for f in music/music*.wav; do
+        base="$(basename "$f")"
+        # Same LFS-pointer refusal as the --bundle path: uploading a 130-byte
+        # pointer gives the device a file the stream reader rejects in silence.
+        if head -c 40 "$f" | grep -q 'version https://git-lfs'; then
+            err "$f is an unfetched Git LFS pointer, not audio — run: git lfs install && git lfs pull"
+        fi
+        want="$(md5sum "$f" | cut -d' ' -f1)"
+        have="$(echo "$remote_md5" | grep " /opt/sound/$base\$" | cut -d' ' -f1)"
+        if [[ "$want" == "$have" ]]; then
+            info "  $base — already current, skipped"
+        else
+            scp "$f" "$DEVICE:/opt/sound/" && ok "  $base uploaded"
+        fi
+    done
 fi
 
 # Every executable this script put on the device, as the device sees it.

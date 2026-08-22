@@ -120,7 +120,11 @@ typedef enum {
     AUDIO_FX_BEEP = 0,        /**< audio_beep()    — UI click, tile place        */
     AUDIO_FX_BLIP,            /**< audio_blip()    — item collected             */
     AUDIO_FX_SUCCESS,         /**< audio_success() — level up, milestone        */
-    AUDIO_FX_FAIL,            /**< audio_fail()    — lost life, game over       */
+    AUDIO_FX_FAIL,            /**< audio_fail()    — lost life                  */
+    AUDIO_FX_GAMEOVER,        /**< audio_gameover() — the run is over, distinct
+                               *   from FAIL because losing ONE life and losing
+                               *   the game were the same sound and a player
+                               *   could not tell them apart (operator, 2026-08-22) */
     AUDIO_FX_COUNT
 } AudioFxId;
 
@@ -230,6 +234,21 @@ typedef struct {
                                *   audio_init()/audio_init_unchecked(); an EMPTY
                                *   string means "use the note table", which is how
                                *   a config file switches one name back to tones  */
+    /* ── the two operator toggles from the games menu ────────────────────────
+     * ⚠️ **Both default TRUE and only audio_init() lowers them**, which is what
+     * keeps audio_init_unchecked() a real bypass: a hardware speaker test must
+     * make a noise on a device whose operator has silenced the games.
+     * `audio_enabled` remains the master and is checked before either — see
+     * audio_init().  These gate the LIBRARY entry points — audio_tone(),
+     * audio_fx_play() and audio_sfx_play() for effects, audio_music_start() for the
+     * bed — so a game needs no code of its own to honour them.
+     * ⚠️ **audio_stream_start() is deliberately NOT gated.** Its only caller is
+     * `tests/audio_touch_test` (Tap-a-Theremin), an instrument whose entire purpose
+     * is to make a noise on demand; silencing it from a games-menu toggle would take
+     * away a diagnostic for the same reason audio_init_unchecked() exists.
+     */
+    bool     music_on;        /**< `music_enabled`   config key, default true      */
+    bool     effects_on;      /**< `effects_enabled` config key, default true      */
 } Audio;
 
 /**
@@ -527,8 +546,14 @@ void audio_blip(Audio *audio);
 /** C5→E5→G5 ascending arpeggio (~440 ms) — score milestone, level up */
 void audio_success(Audio *audio);
 
-/** G4→E4→C4 descending tone  (~600 ms)   — game over, error          */
+/** G4→E4→C4 descending tone  (~600 ms)   — ONE life lost, error       */
 void audio_fail(Audio *audio);
+
+/** Descending 4-note fall (~680 ms) — the RUN is over, not one life.
+ *  ⚠️ Its note table is deliberately ABOVE the knee (1046/880/740 Hz) unlike
+ *  audio_fail()'s, so the fallback is audible on this speaker without the clip.
+ *  Clip: fx_gameover, the loudest-in-band file of the set. */
+void audio_gameover(Audio *audio);
 
 /**
  * Play one canned name's CLIP, with no note-table fallback.  Returns true iff a
@@ -652,6 +677,22 @@ bool audio_music_resume(Audio *audio);
  * sines harsh (../IMPROVEMENT_PLAN.md F1).
  */
 bool audio_sfx_play(Audio *audio, const char *path);
+
+/**
+ * The two games-menu toggles, as read by audio_init().
+ *
+ * ⚠️ **Ask these to explain a SILENCE, never to decide whether to make a sound** —
+ * the library already refuses; a game that also checks is a second place the rule
+ * can drift. What they are for is the log line and the state machine: `platformer`'s
+ * bed uses `audio_music_enabled()` so a bed that is OFF prints "disabled" rather
+ * than "no music bed at <path>", which is a different fault to chase later.
+ *
+ * ⚠️ Both read TRUE on a struct from audio_init_unchecked(), by design — see the
+ * fields' comment in the struct above.  Both also read TRUE when `audio_enabled` is
+ * false, because that gate short-circuits before them and `available` is what says so.
+ */
+bool audio_music_enabled(const Audio *audio);
+bool audio_effects_enabled(const Audio *audio);
 
 /* ── Streaming (theremin) API ──────────────────────────────────────────────
  * For continuous pitch-gliding audio driven by a touch loop.

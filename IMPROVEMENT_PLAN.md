@@ -404,89 +404,131 @@ working examples rather than a design. Shape the file after the `.app` manifests
 INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
 drifts between the online and offline installer renders a game that plays nothing.
 
-⏳ **⑤ Three things the operator asked for on 2026-08-21, after the first bed listen.** They are one
-subject — per-game, per-level sound as data — which is why they sit here rather than as separate features.
+⏳ **⑤ Per-game, per-level sound as data — BUILT 2026-08-22, and NOT YET HEARD ON THE PANEL.** Four
+operator requests, all implemented in `platformer` and the launcher, none verified by ear. Everything below
+compiles clean and passes all three `native_apps` gates; the panel listen is what is owed.
 
-- **Stop the music between levels.** `platformer`'s `bed_service()` has `SCREEN_LEVEL_COMPLETE` in its
-  `want_play`, so the bed plays through the 2.5 s level-complete overlay and under `audio_success()`. Take
-  it out and the four-state machine already does the rest — release, then a fresh start on the next level.
-  ⚠️ **That transition is also where a per-level track swap belongs**, so do the two together or the second
-  will move the code the first just wrote.
-- **Different tracks per level, for `platformer` and `brick_breaker` — explicitly NOT `tetris`.** One key
-  per level over ④'s file, falling back to the single-track key when a level names none.
-- **`MUSIC` and `EFFECTS` off, on the GAMES MENU itself** — the operator chose `app_launcher`'s own screen
-  over the `device_tools` SETTINGS tab, which today carries one `AUDIO ENABLED` toggle writing
-  `audio_enabled` (`device_tools.c:562`, `:717`). Two new config keys read by every game, so this is
-  library work plus launcher layout, not seven edits. ⚠️ **`audio_enabled` stays as the master** — a
-  hardware speaker test must keep bypassing it through `audio_init_unchecked()`, which is the one sanctioned
-  bypass. ⚠️ **The launcher grid is already full**, so where the two toggles go is a layout decision on a
-  screen whose tiles are computed at runtime (`compute_grid_layout()`).
+- ✅ **The music stops between levels, and stops on a death.** `bed_service()`'s `want_play` is now
+  `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
+  state: level-complete releases the bed (so `audio_success()` plays over near-silence) and IDLE then starts
+  the next track, while a death **holds** it and a respawn **resumes** the same track mid-bar. ⚠️ **Hold
+  versus stop is exactly the difference between "the music continues" and "the level restarts its music"**,
+  which is the thing the request turned on — and a resume does not advance the playlist, so losing a life
+  cannot skip a track.
+- ✅ **Tracks are a PLAYLIST, not a level map** (operator's call, 2026-08-22, after the per-level variant was
+  written). `platformer_music`, `platformer_music2` … `platformer_music6`, one path each, taken in turn on
+  every fresh bed start. ⚠️ **The deciding constraint is a hard limit, not a preference: `CONFIG_VAL_LEN` is
+  64 bytes and `/opt/sound/music1-mono.wav` is 26**, so a comma-separated list holds two paths and can never
+  hold three. Numbered keys have no ceiling, give per-level music as a *consequence* (level 1 → track 1,
+  level 2 → track 2, level 3 → wrap) and survive a change to `MAX_LEVELS`. ⚠️ **Track 1 empty still means
+  silence for the whole game**, which preserves `platformer_music=` as the off switch it already was.
+  A refused path is marked failed **per track**, so one bad entry does not silence the good ones.
+- ✅ **`MUSIC` / `EFFECTS` toggles are on the GAMES MENU**, `app_launcher`'s own screen, chosen over the
+  `device_tools` SETTINGS tab (which keeps its one `AUDIO ENABLED` toggle, `device_tools.c:562`/`:717`).
+  Two keys, `music_enabled` and `effects_enabled`, gated **in the library** — `audio_tone()` (which covers
+  every note table, since `play_sequence()` goes through it), `audio_fx_play()`, `audio_sfx_play()` and
+  `audio_music_start()` — so **no game needed an edit**. ⚠️ **Both must be gated for effects**: gating only
+  the clip would swap every effect for a tone instead of silencing it. ⚠️ **`audio_enabled` stays the
+  master** and `audio_init_unchecked()` stays the one sanctioned bypass, which is why both toggles default
+  TRUE in `audio_open()` and are lowered only by `audio_init()` — a hardware speaker test must make a noise
+  on a device whose operator has silenced the games. The theremin's streaming-oscillator entry point is deliberately **not** gated:
+  its only caller is Tap-a-Theremin, an instrument. **The launcher grid was already full**, so the band is
+  paid for out of the grid's SLACK (`tile_h` is capped at `MAX_TILE_H` and the cap binds on this panel);
+  `compute_grid_layout()` prints a receipt saying whether the row landed inside `SCREEN_SAFE_*`, because an
+  off-panel row looks perfect in a screenshot and is dead to a finger.
+- ✅ **`AUDIO_FX_GAMEOVER` is a fifth canned sound, because losing one life and losing the RUN were the same
+  noise** and nothing told a player which had happened. It fires at the END of the death animation, where
+  the run is actually decided — `player_die()` cannot know yet. Its clip is the operator's own
+  `fx_gameover.wav` (sourced 2026-08-22), chosen over `fx_burst` **on a measurement**: in-band RMS
+  −10.61 dBFS at −0.93 dB band delta makes it the loudest-in-band file of the eleven, against burst's
+  −18.61 / −2.71. Its note-table fallback is 1046/880/784/740 Hz — every note above the knee, unlike
+  `audio_fail()`'s three, because a new fallback had no shipped history to preserve.
+- ⏳ **`brick_breaker` has no bed at all yet**, so "different tracks per level" reaches only `platformer`
+  (`tetris` is explicitly excluded). ⚠️ **Do NOT copy `bed_service()` into it** — that is ~140 lines of state
+  machine and the second copy is where the two drift. Extract it to `common/` first, taking the playlist,
+  the four states and the hold/resume rules with it; the game then supplies its own config key prefix and
+  its own "am I dying" predicate.
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
 chunk, putting it at byte 164 in the music beds against 36 in `asl_success.wav`, both measured), so a
 reader trusting the textbook 44-byte header feeds a version string to the mixer.
 
-⚠️ **The stock effects are SOURCED files, and `fx_gen.c` / `gen-sounds.sh` no longer produce what ships.**
-The generated set was heard as white noise by the operator on the panel *and* on a PC, so the device was
-never in question. Its own gate numbers say why: the four wired clips scored `sfm` 0.116–0.208 where its
-controls put a pure sine at 0.000 and white noise at 0.514–0.553, and the pitched `body` term was 0.10–0.18
-of amplitude lasting 8–30 ms of a 27–200 ms file. ⚠️ **Running `gen-sounds.sh` OVERWRITES the sourced
-`fx_*.wav`** — its header carries the warning; treat the script as retired until the decision below lands.
+⚠️ **The stock effects are SOURCED files, and `fx_gen.c` / `gen-sounds.sh` no longer produce what ships**;
+⚠️ **running `gen-sounds.sh` OVERWRITES them** with generated noise, silently — its header carries the
+warning. The generated set was heard as white noise on the panel *and* on a PC, so the device was never in
+question, and its own gate numbers said why: the four wired clips scored `sfm` 0.116–0.208 where its
+controls put a pure sine at 0.000 and white noise at 0.514–0.553.
 
-⚠️ **The gate enforced the defect, and the mechanism is a measurement window.** `FX_SFM_MIN` is a *floor*
-on flatness, and `sfm` is taken at the file's LOUDEST part — so raising `body` moves that window onto the
-pitched attack and the gate rejects a file most of which is still noise (`body` 0.55 → `sfm` 0.024 REJECT;
-`q` 1.1 → 8 with `body` untouched → 0.045 REJECT). Every change that restores pitch is refused by the
-shipped floor. ⚠️ **The deeper error is the property chosen**: audibility on this speaker needs energy
+⚠️ **That gate ENFORCED the defect, and the mechanism was a measurement window.** `FX_SFM_MIN` is a *floor*
+on flatness and `sfm` is taken at the file's LOUDEST part, so raising the pitched `body` term moves that
+window onto the pitched attack and the gate then rejects a file most of which is still noise (`body`
+0.55 → `sfm` 0.024 REJECT; `q` 1.1 → 8 → 0.045 REJECT) — every change that restores pitch is refused by the
+shipped floor. ⚠️ **The deeper error is the property CHOSEN**: audibility on this speaker needs energy
 INSIDE the usable band ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), not spectral
-flatness — broadband meets the band requirement by accident while destroying pitch identity. **Open
-decision: retire `fx_gen.c` and its gate, or re-aim the gate at in-band energy and keep it for drafts.**
+flatness — broadband meets the band requirement by accident while destroying pitch identity. ✅ **DECIDED
+2026-08-22: the gate is re-aimed at in-band energy and moved OUT of `fx_gen.c`**, which stays committed and
+MIT but produces nothing that ships.
 
-**The measurement that replaces it, and it needs a repo home** — today only in scratch, which means it is
-not a gate. High-pass at 700 Hz and compare RMS: ~0 dB means the sound lives above the knee, a large
-negative means most of its energy is never radiated. Validated against 200 Hz and 2 kHz sine controls
-(−43.4 dB vs −0.1 dB); a per-band RMS profile localises a bad one. ⚠️ **Give it the format check too** —
-see [`../native_apps/CLAUDE.md`](native_apps/CLAUDE.md) → *Sound assets*, because a wrong rate is refused
-in silence. Current state: above the knee `click`, `sparkle`, `tick`, `success`; acceptable `burst`,
-`jump`, `pickup`; ⏳ **below the knee and needing regeneration: `knock` −5.0, `thud` −4.5** (prompts that
-name a register are in `native_apps/sounds/prompts.md`). All ten are peak-normalised to −0.3 dBFS.
+✅ **The replacement measurement is now a GATE, not a habit: `native_apps/check-sound-assets.sh`**, run from
+`build-and-deploy.sh` beside `check-arm-safe.sh` and `check-audio-pacing.sh`. It high-passes at 700 Hz and
+reports two different quantities per file — the **delta** (filtered RMS − file RMS: ~0 dB means the sound
+lives above the knee) and the **absolute in-band RMS** in dBFS (is what survives loud enough to carry over a
+bed) — plus `ffprobe` for mono / 44100 / 16-bit, because a wrong rate is refused in SILENCE. It blocks on an
+unusable file, warns on a weak one, and skips itself when `ffmpeg` is absent so a build host without it can
+still build.
+⚠️ **It validates its own instrument FIRST, with two OPPOSED controls, and reports the INSTRUMENT as broken
+rather than the files as good if they do not separate.** That is not ceremony: this measurement has produced
+a uniform reading three separate times — `ffmpeg -v error` suppresses astats' own report; `ebur128` needs
+400 ms / 3 s windows these effects do not have; and a grep window of `-A8` after astats' "Overall" line
+misses `RMS level dB`, which is ten lines further down. ⚠️ **Measured 2026-08-22, and it is the same family:
+`ffprobe -show_entries stream=sample_rate,channels,sample_fmt` returns the fields in the STREAM's order,
+not the order you listed** — so a positional read called all eleven correct files "wrong format" while
+printing their correct format on the same line. One `ffprobe` per field is the fix.
+⚠️ **The recorded control pair "−43.4 dB vs −0.1 dB" was TWO DIFFERENT QUANTITIES** and a gate asserting
+both as deltas would have failed its own control forever: −43.4 is the 200 Hz control's *absolute* filtered
+RMS (re-measured here as −42.89) and −0.1 is the 2 kHz control's *delta*. As deltas, measured on ffmpeg
+4.2.7 at `highpass=f=700`'s default 2 poles: **200 Hz → −21.82 dB, 2 kHz → −0.07 dB.**
+⚠️ **What the gate CANNOT hear**, stated so a green run is not over-read: in-band energy is an AUDIBILITY
+property, not an identity one, and **the retired generated set would have PASSED it** — broadband meets the
+band requirement by accident. Whether an effect sounds like the thing it is named after stays ear-only.
+Seen failing in both directions (a 200 Hz sine and a 48000/stereo file are both rejected; a 2 kHz mono one
+is not), which is the negative control this repo requires of a new check.
 
-⏳ **`fx_fail` is regenerated, converted and confirmed "much better" on `.188` — one gap left.** Its notes
-were at 300–700 Hz with nothing above 1.5 kHz, which no filter can rescue; the replacement measures in-band
-RMS −18.08 dBFS against `click` −11.90 and `success` −13.35. Peak is already at maximum, so the remaining
-lever is a **limiter** to raise in-band RMS at the same peak — not tried. ⚠️ A 700 Hz high-pass was
-measured and bought 0.16 dB, so it is not the answer.
+⏳ **The two files queued for regeneration, re-measured 2026-08-22 against the CURRENT bytes:** `knock`
+−3.05 dB delta / −21.66 dBFS in-band and `thud` −4.01 / −20.40 are the weakest of the eleven, and the
+earlier figures (−5.0, −4.5) do not reproduce against today's files. Prompts that name a register are in
+`native_apps/sounds/prompts.md`; only the operator can re-source them. All eleven are peak-normalised to
+−0.3 dBFS, so **no level lever remains** — this is a content change.
 
-⏳ **LICENSE.md is BLOCKED on provenance, and nothing may be invented.** The ten `fx_*.wav` are no longer
-this repo's own output, and which tool made them is unrecorded — `LICENSE.md` enumerates every file
-precisely, so this needs the operator's answer in the shape F19 used for the music beds.
+⏳ **`fx_fail`'s remaining gap is a LIMITER, and it is still untried.** Confirmed *"much better"* on `.188`
+after regeneration; re-measured 2026-08-22 at in-band RMS −16.14 dBFS against `click` −11.80 and
+`success` −12.83. Peak is already at maximum, so the only lever that raises in-band RMS at the same peak is
+a limiter. ⚠️ A 700 Hz high-pass was measured and bought 0.16 dB, so it is not the answer.
 
-**The clip loader loads into RAM, and that is a CURSOR decision before it is a memory one** (operator,
-2026-08-20). `audio.c` has one `AudioSampleVoice` and refuses a second tap while the first sounds
-(`audio.h`), so a game firing brick hits in bursts would be refused constantly; RAM-resident clips with a
-per-trigger cursor is the fix, and it needs no mixer and no `audio_wav.c` change — `audio_mix_add_sample()`
-already takes an `AudioVoiceFill`, so a RAM clip is just a different `fill`. **The memory is not the
-constraint here**: measured on `.188` 2026-08-20, `MemFree` 143,100 kB and `MemAvailable` 186,068 kB of
-239,904 kB, so the whole effect set is ~0.06 % of free RAM. ⚠️ **The BED stays streaming for now anyway**,
-and not on cost grounds: a cold read of `music1-mono.wav` after `drop_caches` is **0.369 s**, so
-RAM-loading the larger bed would buy a ~0.46 s startup stall to replace a path that has already been
-*heard clean* — a measured-good path traded for an unobserved problem. It is one `fill` either way, chosen
-per sound at load time, so this is reversible and needs no architecture.
+✅ **The provenance question is ANSWERED and `LICENSE.md` carries it** (operator, 2026-08-22): the eleven
+`fx_*.wav` are AI-generated at **elevenlabs.io on a FREE account**, which does **not** grant commercial use.
+⚠️ **That makes the effects the only content in this repository narrower than MIT**, and a commercial
+redistribution of the repo or of a release bundle must remove or replace them (harmless — every game falls
+back to its note tables). `release.sh`'s `NOTICE` says so too, since the two halves must agree.
+⏳ **Do not widen it from inference:** the operator has asked ElevenLabs for the exact terms, and until they
+answer, "not commercial" is the whole of what is established — nothing about testing, learning or OSS use
+may be written down.
 
-✅ **`platformer` (Office Runner) is the FIRST game to run a bed, deployed to `.188` 2026-08-21 — asked for
-out of order, ahead of ③, and it needed no part of ③.** `bed_service()` is a four-state machine
+⚠️ **The BED stays STREAMING while the effects are RAM-resident, and not on cost grounds.** The whole effect
+set is ~0.06 % of free RAM (`.188`, `MemAvailable` 186,068 kB of 239,904 kB), but a cold read of
+`music1-mono.wav` after `drop_caches` is **0.369 s** — so RAM-loading the larger bed would buy a ~0.46 s
+startup stall to replace a path already *heard clean*. It is one `AudioVoiceFill` either way, chosen per
+sound at load time, so this is reversible and needs no architecture.
+
+✅ **`platformer` (Office Runner) is the FIRST game to run a bed.** `bed_service()` is a four-state machine
 (`BED_IDLE`/`PLAYING`/`HELD`/`STOPPING`) whose every transition is gated on `audio_music_active()` rather
 than a flag of its own, because a release takes frames to walk down and `PUMP: OFF` can clear the voice
-underneath it. The bed sounds during play and the level-complete overlay, is **held** on the pause screen
-and stopped at game over; the path comes from a config key (`platformer_music`, default
-`/opt/sound/music1-mono.wav`, empty value = silence) so a track swap is a `config_set` rather than a
-rebuild — ④'s shape, one game wide. ⚠️ **One refusal is permanent for the process on purpose**: a missing
-file is the NORMAL case (the files are device-only, F19) and a per-frame retry would fill
-`app_stdout.log` with a refusal every 33 ms. Verified as far as no-human verification reaches: the game
-starts clean over SSH with the launcher stopped (`cont=1`, `starve`/`lost`/`drop`/`lim`/`clip` all 0 over
-234 services), and the mechanism itself is covered on the host **and on ARM** — the panel listen is row 6
-(c) and it is what is owed.
+underneath it. Current behaviour and the playlist keys are in ⑤ above. ⚠️ **A refusal is permanent on
+purpose** — a missing file is a NORMAL case and a per-frame retry would fill `app_stdout.log` with one
+refusal every 33 ms. Verified as far as no-human verification reaches: it starts clean over SSH with the
+launcher stopped (`cont=1`, `starve`/`lost`/`drop`/`lim`/`clip` all 0 over 234 services), and the mechanism
+is covered on the host **and on ARM** — the panel listen is row 6 (c) and it is what is owed.
 
 ⏳ **`audio_music_pause()`/`audio_music_resume()` are new library surface, and "pause" here means
 release-and-hold.** Pause arms the same release as `audio_music_stop()` — a bed is never cut, that is a
@@ -538,80 +580,41 @@ and `LICENSE.md` carries both versions as a result · **`AUDIO_MIX_HARD` is the 
 applies no nonlinearity at all to the ≤ 2 voices a game sums, while SOFT's knee tracks ONE voice's peak
 and therefore bends every two-voice sum for nothing. The `LIM` pad keeps SOFT reachable on the panel.
 
-### F19. The music files, and where they live — open, asked for 2026-08-14
+### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
 
-The operator hand-copied `music1.wav` and `music2.wav` to `/opt/sound` on `.188` and wants them under
-version control eventually. ⚠️ **The PLAYBACK path is no longer this entry's problem** — the streaming
-sample voice ships and has been heard (F1 phase 8), and *a game calling it* is F1 phase 5. What is left
-here is the files themselves: their format, their provenance, and whether they enter git.
+⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
+*licence text* (`LICENSE.md` carries the row, and the two limits on musely.ai's clearance claim, verbatim).
+It is the anchor the audio sources cite for "the bed", so it stays as one; what is left in it is small.
 
-✅ **The conversion is DONE and on the device** (operator, 2026-08-19): `/opt/sound/music1-mono.wav`
-(3,898,628 B) and `music2-mono.wav` (4,914,692 B) — note the **hyphen**, not the `_mono` that
-`ffmpeg -y -i music1.wav -ac 1 -ar 44100 -c:a pcm_s16le music1_mono.wav` prints. Both are now
-byte-for-byte the mixer's internal format (44100 / mono / 16-bit, headers read with `od -t x1 -N 48`), so
-nothing at runtime resamples or downmixes. `-ac 1` averages rather than sums, so it cannot clip on the way
-down. The stereo originals are still there beside them; do not read those. **Store mono, play stereo** —
-the speaker sums L + R (measured, [§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a mono file duplicated at
-playback is audibly identical to the stereo original at half the size and half the SD read.
+✅ **DONE and verified: format, git, deploy.** Both beds are `native_apps/music/music{1,2}-mono.wav` —
+44100 / mono / 16-bit, byte-for-byte the mixer's internal format, so nothing resamples or downmixes at
+runtime (`-ac 1` averages rather than sums, so it cannot clip on the way down). **Store mono, play stereo:**
+the speaker sums L + R ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a mono file duplicated at playback is
+audibly identical to a stereo original at half the size and half the SD read. They are committed under
+Git LFS (`native_apps/music/**`, verified to leave `sounds/fx_*.wav` at `filter: unspecified`), and
+`native_apps/build-and-deploy.sh` installs them to `/opt/sound` on the online path (md5-gated: 8.8 MB is
+not re-sent on every deploy) and the `--bundle` path (unconditional).
+⚠️ **A clone without `git-lfs` leaves ~130-byte POINTER TEXT files in their place**, and a pointer deployed
+to the device is refused in silence — so both deploy paths refuse one by its first line rather than let it
+travel. `git lfs install && git lfs pull` is the fix. ⚠️ Run `git` from **Git Bash**; `git-lfs` is absent
+from this WSL (`CLAUDE.md` → *Working from this host*).
 
-- ✅ **Licence: cleared, and the provenance is recorded here so nobody has to reconstruct it.** Both
-  tracks are **AI-generated by the operator at `https://musely.ai/tools/platformer-level-music`**
-  (2026-08-14, two tracks, no others). That page's FAQ — *"Can I use the generated platformer music in
-  commercial projects?"* — answers *"Yes, absolutely! All music generated using Musely's AI Platformer
-  Level Music Generator is royalty-free and cleared for both personal and commercial use"*, and says
-  users may add such soundtracks to games or streams *"without worrying about licensing fees or
-  copyright claims"*. Verified against the live page 2026-08-15; **no attribution requirement and no
-  usage restriction appears on it.** (The fetch was checked for proxy interception — the page returned
-  its real title *"Free AI Platformer Level Music Generator | Musely"*, its generator form fields, its
-  `Advanced Settings`/`PRO` badge and all seven section headings, so it was not a Zscaler/captcha wall.
-  ⚠️ Both reads went through the same summariser and the second likely hit the 15-minute URL cache, so
-  they are one retrieval re-read, not two independent ones.)
-  ⚠️ **Two limits on that, stated rather than glossed:** the page asserts royalty-free *clearance* but
-  **never says who owns the output**, so what we hold is a permission claim rather than a named licence
-  grant; and it is a marketing/FAQ page, **not a terms-of-service or licence agreement** — none is
-  linked from it. That is a normal basis for a hobby project and it is the operator's to price, not a
-  blocker; it is written down because `LICENSE.md` enumerates every other file precisely and this one
-  cannot be reconstructed from the bytes.
-- ⏳ **`git-lfs` landing: two of four steps done, both UNCOMMITTED.** ✅ Both beds are off `.188` into
-  `native_apps/music/` and md5-verified against it (they existed nowhere else); ✅ `native_apps/music/**` is
-  `filter=lfs`, verified to leave `sounds/fx_*.wav` at `filter: unspecified` so the small committed effects
-  are not rewritten as pointers. ⚠️ **That ORDER is load-bearing: `git-lfs` never retroactively adopts an
-  already-committed file** — a pattern only affects what is staged after it exists, and converting history
-  needs `git lfs migrate import` plus a force-push. ⚠️ Run it from **Git Bash**; `git-lfs` is absent from
-  this WSL (`CLAUDE.md` → *Working from this host*). Still open: the `LICENSE.md` row below, and the deploy
-  wiring in `native_apps/build-and-deploy.sh` (online path **and** bundle loop). ⚠️ **Until both land the bed
-  is a `.188`-only feature no re-commission survives**, and a game whose configured bed is absent must play
-  its effects and carry on rather than refuse to start.
-- **`LICENSE.md` row is pre-drafted and OUTSTANDING until the files are committed**, because `LICENSE.md`
-  must not describe files the repo does not have. Add to *Third-party code committed in this repository* —
-  ⚠️ the paths are the COMMITTED mono ones, not the `/opt/sound` stereo originals:
-  `| native_apps/music/music{1,2}-mono.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
-  — and a matching row in *Distributed binaries* if they go into a bundle.
-- **`device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale**, so the hand-copied beds survive a
-  clean meanwhile; its *reason* text ("113 KB of usable UI WAVs") goes stale once they are permanent.
-- ✅ **Streaming, not loading, and both halves are measured.** Card throughput makes the bed free —
-  0.77 % of a sequential read ([`SYSTEM_ANALYSIS.md#31-soc-memory-and-storage`](SYSTEM_ANALYSIS.md#31-soc-memory-and-storage)) —
-  and the read-ahead absorbs the per-read latency that lands in the render loop: across a 3-wrap bed at
-  `LVL` 5/6, `starve` reached 2 and `lost`/`drop` stayed 0. ⚠️ **`starve` counts the FIRST service of a
-  fresh stream, where `in_flight` is legitimately 0**, so one per bed start is expected and is not an
-  underrun. Chase `starve` only when it climbs *during* playback.
-- ✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `music1-mono.wav` ran
-  as a looping bed through three full wraps on `.188` — `/tmp/mix.log` carries `wraps=3` and
-  `"release armed on slot 0, 1762684 frames into pass 3"`, at `LVL` 5/6, louder than the settled level —
-  and the operator heard *"nothing. Wonderful continuation"* across two deliberate attempts to catch it.
-  So the page's *"Seamlessly Loopable Audio"* marketing claim happens to hold for these two files; it is
-  not a property to assume of a third. ⚠️ **The `aplay`-twice control did NOT run and could not**: what
-  ships is *mono* and `hw:0,0` is stereo-only, so `aplay -D hw:0,0` printed
-  `set_params:1347: Channels count non available` to stderr and played silence while otherwise looking
-  like a clean run — the failure mode that reads as a measurement. `plughw:0,0` is the device for a mono
-  file. The bed's own counter is `AudioWav.loops`.
-- ✅ **ANSWERED 2026-08-21, and the answer is no change.** The operator played Office Runner with the bed
-  under it and reported the sound *"played well"* with the effects audible over it, so the clean level is
-  right for sustained music — a bed is background, and the 24 s melody that *"needed focus"* at peak 6000
-  was a foreground melody being asked to carry itself. ⚠️ **The headroom is nearly gone at the peak
-  though**: that session's counters carry `clip=126` (bed + effect past full scale on 126 samples of
-  ~18.7 M), the first non-zero clip measured here — so any future *"make it louder"* is a content change,
-  not a level one.
+✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `music1-mono.wav` ran as
+a looping bed through three full wraps on `.188` at `LVL` 5/6, louder than the settled level, and the
+operator heard *"nothing. Wonderful continuation"* across two deliberate attempts to catch it. ⚠️ That is a
+property of **these two files**, not of a third one someone adds. The bed's own counter is `AudioWav.loops`.
+
+✅ **The level is settled and the headroom is not.** Office Runner with the bed under it *"played well"*
+with the effects audible over it, so the clean level is right for sustained music. ⚠️ **That session's
+counters carry `clip=126`** — bed + effect past full scale on 126 samples of ~18.7 M, the first non-zero
+`clip` measured here. Any future *"make it louder"* is therefore a CONTENT change, not a level one.
+
+⚠️ **`starve` counts the FIRST service of a fresh stream**, where `in_flight` is legitimately 0, so one per
+bed start is expected and is not an underrun. Chase it only when it climbs *during* playback.
+
+⏳ **Still open, and it is all that is:** `device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale,
+and its *reason* text ("113 KB of usable UI WAVs") is now stale — the directory holds ~18 MB of beds and
+effects that a deploy replaces anyway. Correct the reason; the rule itself is right.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 

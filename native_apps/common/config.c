@@ -290,6 +290,14 @@ bool config_audio_enabled(const Config *cfg) {
     return config_get_bool(cfg, "audio_enabled", true);
 }
 
+bool config_music_enabled(const Config *cfg) {
+    return config_get_bool(cfg, "music_enabled", true);
+}
+
+bool config_effects_enabled(const Config *cfg) {
+    return config_get_bool(cfg, "effects_enabled", true);
+}
+
 bool config_led_enabled(const Config *cfg) {
     return config_get_bool(cfg, "led_enabled", true);
 }

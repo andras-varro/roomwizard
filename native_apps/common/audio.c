@@ -346,6 +346,11 @@ static int audio_open(Audio *audio)
     audio->sample_rate = TARGET_RATE;
     audio->channels    = FALLBACK_CHANNELS;
     audio->streaming   = false;
+    /* ⚠️ TRUE here, and lowered ONLY by audio_init() below.  audio_open() is also
+     * audio_init_unchecked()'s whole body, so a hardware speaker test gets a
+     * struct with both toggles up — which is the point of that bypass. */
+    audio->music_on    = true;
+    audio->effects_on  = true;
     level_defaults(audio);
     fx_defaults(audio);
 
@@ -376,6 +381,17 @@ int audio_init(Audio *audio)
 
     if (audio_open(audio) < 0) return -1;
     fx_config_apply(audio, &cfg);
+
+    /* The two games-menu toggles, applied AFTER audio_open() for the same reason
+     * fx_config_apply() is: that call memsets the struct and raises both.  ⚠️ They
+     * are NOT a second `audio_enabled` — the device is open either way, so a game
+     * whose music is off still mixes its effects, and the pump still runs. */
+    audio->music_on   = config_music_enabled(&cfg);
+    audio->effects_on = config_effects_enabled(&cfg);
+    if (!audio->music_on || !audio->effects_on)
+        printf("audio: music %s, effects %s (%s)\n",
+               audio->music_on ? "on" : "OFF",
+               audio->effects_on ? "on" : "OFF", CONFIG_FILE_PATH);
 
     printf("audio: %s opened at %d Hz %d ch S16LE (O_NONBLOCK)\n",
            DSP_DEVICE, audio->sample_rate, audio->channels);
@@ -802,6 +818,10 @@ void audio_interrupt(Audio *audio)
 void audio_tone(Audio *audio, int freq_hz, int duration_ms)
 {
     if (!audio || !audio->available)             return;
+    /* The EFFECTS toggle, at the one place every tone in the project passes
+     * through — play_sequence() calls this, so the four canned sounds' note-table
+     * fallbacks are covered by this line and not by four of their own. */
+    if (!audio->effects_on)                      return;
     /* ⚠️ Not `audio_live()`: on the continuous stream this function does not touch
      * the device at all — it adds a voice — so it must work while `dsp_fd` is -1
      * by design, and it must NOT be gated on `audio_out_is_open()` either, since a
@@ -1038,15 +1058,22 @@ static const char *const FX_DEFAULT_PATH[AUDIO_FX_COUNT] = {
     "/opt/sound/fx_click.wav",     /* BEEP     900 → 1500 Hz */
     "/opt/sound/fx_pickup.wav",    /* BLIP    1200 → 3200 Hz */
     "/opt/sound/fx_success.wav",   /* SUCCESS  700 → 4200 Hz */
-    "/opt/sound/fx_fail.wav"       /* FAIL    1800 →  420 Hz */
+    "/opt/sound/fx_fail.wav",      /* FAIL    1800 →  420 Hz */
+    /* GAMEOVER: its own sourced clip, added by the operator 2026-08-22 for this
+     * id.  ⚠️ Chosen over `fx_burst` on a MEASUREMENT, not on the name: in-band
+     * RMS −10.61 dBFS at delta −0.93 dB makes it the loudest-in-band file of the
+     * eleven, where burst is −18.61 / −2.71.  The most important sound in a game
+     * should not be one of its quietest (../IMPROVEMENT_PLAN.md F1 Phase 5 ③;
+     * `../check-sound-assets.sh` is what re-measures this). */
+    "/opt/sound/fx_gameover.wav"   /* GAMEOVER */
 };
 
 /** The config keys that override them, and the word each refusal uses. */
 static const char *const FX_CONFIG_KEY[AUDIO_FX_COUNT] = {
-    "fx_beep", "fx_blip", "fx_success", "fx_fail"
+    "fx_beep", "fx_blip", "fx_success", "fx_fail", "fx_gameover"
 };
 static const char *const FX_NAME[AUDIO_FX_COUNT] = {
-    "beep", "blip", "success", "fail"
+    "beep", "blip", "success", "fail", "gameover"
 };
 
 /** Defaults into `fx_path`.  Called from audio_open(), so BOTH entry points get
@@ -1188,6 +1215,11 @@ static AudioClip *clip_ready(Audio *audio, AudioFxId id)
 bool audio_fx_play(Audio *audio, AudioFxId id)
 {
     if (!audio || id < 0 || id >= AUDIO_FX_COUNT) return false;
+    /* ⚠️ The EFFECTS toggle returns false here rather than "played", so the caller
+     * falls through to its note table — which audio_tone() then refuses too.  Both
+     * halves must be gated: gating only the clip would make an OFF toggle swap
+     * every effect for a tone instead of silencing it. */
+    if (!audio->effects_on) return false;
     /* Off the bus a sample voice cannot exist at all, and that is precisely when
      * the note table must run — so this is a QUIET false, not a complaint. */
     if (!audio->available || !audio->pumping) return false;
@@ -1317,6 +1349,19 @@ void audio_fail(Audio *audio)
     static const AudioNote s[] = { { 392, 150 }, { 330, 150 }, { 262, 300 } };
     if (audio_fx_play(audio, AUDIO_FX_FAIL)) return;
     play_sequence(audio, s, 3);
+}
+
+/** The run is over — a different sound from losing one life, because they were
+ *  the same one and a player could not hear which had happened (operator,
+ *  2026-08-22).  ⚠️ Every note is ABOVE the ~700 Hz knee, unlike audio_fail()'s
+ *  three: this fallback had no shipped history to preserve, so it was tuned to
+ *  the speaker from the start rather than inheriting a musical descent that the
+ *  hardware cannot radiate.  Clip: fx_burst. */
+void audio_gameover(Audio *audio)
+{
+    static const AudioNote s[] = { { 1046, 140 }, { 880, 140 }, { 784, 140 }, { 740, 260 } };
+    if (audio_fx_play(audio, AUDIO_FX_GAMEOVER)) return;
+    play_sequence(audio, s, 4);
 }
 
 /* ── Recorded PCM: the bed and the sample effect ─────────────────────────────
@@ -1513,6 +1558,9 @@ bool audio_music_resume(Audio *audio)
 bool audio_music_start(Audio *audio, const char *path, bool loop)
 {
     if (!audio) return false;
+    /* The MUSIC toggle.  Quiet, because a game's bed state machine reads this as
+     * "no bed" and stops asking — audio_music_enabled() is what it should print. */
+    if (!audio->music_on) return false;
     return sample_start(audio, &audio->music, path, loop, "music");
 }
 
@@ -1541,5 +1589,16 @@ bool audio_music_active(const Audio *audio)
 bool audio_sfx_play(Audio *audio, const char *path)
 {
     if (!audio) return false;
+    if (!audio->effects_on) return false;   /* the EFFECTS toggle */
     return sample_start(audio, &audio->sfx, path, false, "sfx");
+}
+
+bool audio_music_enabled(const Audio *audio)
+{
+    return audio && audio->music_on;
+}
+
+bool audio_effects_enabled(const Audio *audio)
+{
+    return audio && audio->effects_on;
 }

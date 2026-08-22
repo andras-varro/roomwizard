@@ -235,6 +235,22 @@ native_apps
 This project's own code (MIT — see LICENSE.md), statically linked against glibc
 (LGPL-2.1+).
 
+Audio assets  ⚠️ NOT FOR COMMERCIAL USE
+---------------------------------------
+The sound effects installed to /opt/sound as `fx_*.wav` (eleven files) are AI-
+generated audio from https://elevenlabs.io, produced on a FREE account, which
+does not grant commercial use.  They are the only content in this bundle that is
+narrower than its code licence: THIS BUNDLE MAY NOT BE USED OR REDISTRIBUTED
+COMMERCIALLY unless those eleven files are removed or replaced.  Removing them is
+safe — every game falls back to its built-in note tables.  No permission beyond
+"not commercial" has been established; see LICENSE.md, which is the repo-level
+half of this notice and must agree with it.
+
+The two music beds installed as `music1-mono.wav` and `music2-mono.wav` are AI-
+generated at musely.ai/tools/platformer-level-music and ARE royalty-free for
+commercial use per that generator's FAQ, with no attribution requirement.  They
+are not this project's composition.
+
 tinyalsa
 --------
 The native_apps audio backend is built against tinyalsa 2.0.0, cross-built from

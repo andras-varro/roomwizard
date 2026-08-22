@@ -1,4 +1,4 @@
-# Sourcing the ten RoomWizard sound effects
+# Sourcing the eleven RoomWizard sound effects
 
 ## Hard file spec — a file that misses this is REFUSED at load
 
@@ -38,7 +38,7 @@ This is a small panel speaker, excursion-limited, measured by ear against a sign
 > boom. Clean single-voice sound, no chords or held harmony. Sharp start, quick decay to
 > silence. Dry - no reverb, no room tail.
 
-## The ten
+## The eleven
 
 | file | game event | length | prompt |
 |---|---|---|---|
@@ -52,5 +52,12 @@ This is a small panel speaker, excursion-limited, measured by ear against a sign
 | `fx_sparkle.wav` | bonus brick | ~200 ms | A quick bright sparkle: three or four very short high shimmering notes rising fast, like a magic pickup in an arcade game. Twinkly, clean, one note at a time. |
 | `fx_burst.wav` | explosive brick | ~250 ms | A small bright arcade explosion: a sharp filtered noise burst with a fast bright decay and a hint of pitch falling through it. Crackly and energetic but with NO low boom at all. |
 | `fx_jump.wav` | jump / stomp | ~120 ms | A classic upward jump swoop - a single tone sliding quickly from mid to high pitch, bright and springy, like a platform-game hop. Clearly pitched, no noise. |
+| `fx_gameover.wav` | the RUN is over, not one life (`audio_gameover`) | ~1.19 s | ⏳ **PROMPT NOT RECORDED** — sourced by the operator 2026-08-22 and delivered straight into this directory, so the text is theirs and is not reconstructable from the bytes. Fill it in; every other row here exists so a lost file can be re-sourced, and this row cannot do that job until it is. |
+
+⚠️ **`fx_gameover` is the only effect longer than the 400 ms guideline above** (1.19 s against a 4.0 s hard
+ceiling) and that is fine: the ceiling is `AUDIO_CLIP_MAX_FRAMES`, and the guideline is about effects that
+fire during play. This one fires once, when play has stopped. It also measures the LOUDEST in-band of the
+set — −10.61 dBFS at a −0.93 dB band delta — which is why `AUDIO_FX_GAMEOVER` points at it rather than at
+`fx_burst`. Re-measure with `../check-sound-assets.sh`, never by ear alone.
 
 Deliver into `native_apps/sounds/` under exactly those filenames.

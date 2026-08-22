@@ -289,6 +289,11 @@ static void play_jump_sound(void)           { audio_beep(&audio); }
 static void play_coin_sound(void)           { audio_blip(&audio); }
 static void play_stomp_sound(void)          { audio_beep(&audio); }
 static void play_death_sound(void)          { audio_fail(&audio); }
+/* ⚠️ A DIFFERENT sound from losing one life (operator, 2026-08-22): the two were
+ * both audio_fail(), so nothing told a player whether they had another go coming.
+ * It fires at the END of the death animation, where the run is actually decided —
+ * not in player_die(), which cannot yet know. */
+static void play_game_over_sound(void)      { audio_gameover(&audio); }
 static void play_extra_life_sound(void)     { audio_success(&audio); }
 static void play_level_complete_sound(void) { audio_success(&audio); }
 
@@ -298,17 +303,37 @@ static void play_level_complete_sound(void) { audio_success(&audio); }
  * read-ahead buffer and no thread; the effects above mix OVER it because a full
  * bus refuses a voice rather than stealing the longest one (../common/audio.h).
  *
- * ⚠️ **The files are device-only and NOT in this repo** — 9.6 MB of AI-generated
- * audio that has not entered git yet (F19), and a re-commission removes them.
- * So an absent bed is the NORMAL case, not an error case: the game says so once
- * and plays on with its effects.  That is also why the path is configurable
- * rather than compiled in — `platformer_music=` (empty) silences the bed, and
- * `platformer_music=/opt/sound/music2-mono.wav` swaps the track, both without a
- * rebuild.  F1 ④ generalises this to a per-game sound set; until then this one
- * key is the whole mechanism.
+ * The two beds are committed (`native_apps/music/`, Git LFS) and
+ * `build-and-deploy.sh` installs them to /opt/sound, so a deployed device has
+ * them.  ⚠️ **An absent bed is still a NORMAL case rather than an error**, since a
+ * config file can name any path and a hand-managed device may have none: the game
+ * says so once and plays on with its effects.  That is also why the paths are
+ * configuration rather than compiled in.
+ *
+ * ⚠️ **TRACKS ARE A PLAYLIST, NOT A LEVEL MAP** (operator, 2026-08-22, and it was
+ * their call after a per-level variant had been written).  `platformer_music` names
+ * track 1, `platformer_music2` … `platformer_music<BED_MAX_TRACKS>` the rest; the
+ * bed takes the NEXT one every time it starts fresh, wrapping at the end.  Two
+ * reasons it beats one key per level, and the first is a hard limit rather than a
+ * preference:
+ *   1. ⚠️ **`CONFIG_VAL_LEN` is 64 bytes and `/opt/sound/music1-mono.wav` is 26**, so
+ *      a comma-separated list holds two paths and can never hold three.  Numbered
+ *      keys have no such ceiling.
+ *   2. A playlist GIVES per-level music (level 1 → track 1, level 2 → track 2,
+ *      level 3 → wrap) without a level→track table anyone has to maintain, and it
+ *      keeps working when MAX_LEVELS changes.
+ * ⚠️ **Track 1 EMPTY means silence for the whole game**, deliberately, and it is
+ * the one non-obvious rule here: it preserves `platformer_music=` as the off switch
+ * it already was, which a per-track reading would have broken (track 2 has a
+ * non-empty default, so an empty track 1 would otherwise still play music).
+ *
+ * ⚠️ **A fresh start ADVANCES the playlist; a resume does not** — which is why death
+ * uses pause/resume.  Losing a life must continue the track, not skip to the next.
  */
-#define BED_DEFAULT_PATH  "/opt/sound/music1-mono.wav"
-#define BED_CONFIG_KEY    "platformer_music"
+#define BED_DEFAULT_PATH   "/opt/sound/music1-mono.wav"
+#define BED_DEFAULT_PATH_2 "/opt/sound/music2-mono.wav"
+#define BED_CONFIG_KEY     "platformer_music"
+#define BED_MAX_TRACKS     6
 
 typedef enum {
     BED_IDLE,       /* nothing on the bus (nothing started, or a fade finished) */
@@ -317,21 +342,39 @@ typedef enum {
     BED_STOPPING    /* released for good; waiting for the fade to finish        */
 } BedState;
 
-static char     bed_path[CONFIG_VAL_LEN];
-static BedState bed_state  = BED_IDLE;
-static bool     bed_broken = false;
+static char     bed_track[BED_MAX_TRACKS][CONFIG_VAL_LEN];
+static bool     bed_failed[BED_MAX_TRACKS];
+static int      bed_track_count = 0;   /* how many of the above are non-empty   */
+static int      bed_next        = 0;   /* the playlist cursor                   */
+static BedState bed_state       = BED_IDLE;
+static bool     bed_disabled    = false;
 
 static void bed_configure(void) {
     Config cfg;
     config_init(&cfg);
     config_load(&cfg);                     /* silent when the file is absent */
-    snprintf(bed_path, sizeof bed_path, "%s",
-             config_get(&cfg, BED_CONFIG_KEY, BED_DEFAULT_PATH));
-    if (!bed_path[0]) {
-        bed_broken = true;                 /* an empty value means "no music" */
+
+    /* Track 1's key is the historic one and is also the whole-game off switch. */
+    const char *first = config_get(&cfg, BED_CONFIG_KEY, BED_DEFAULT_PATH);
+    if (!first[0]) {
+        bed_disabled = true;
         printf("platformer: music bed disabled by %s (%s=)\n",
                CONFIG_FILE_PATH, BED_CONFIG_KEY);
+        return;
     }
+    snprintf(bed_track[0], sizeof bed_track[0], "%s", first);
+    bed_track_count = 1;
+
+    for (int i = 1; i < BED_MAX_TRACKS; i++) {
+        char key[48];
+        snprintf(key, sizeof key, "%s%d", BED_CONFIG_KEY, i + 1);
+        const char *p = config_get(&cfg, key, (i == 1) ? BED_DEFAULT_PATH_2 : "");
+        if (!p[0]) continue;               /* a gap ends nothing; it is skipped */
+        snprintf(bed_track[bed_track_count], sizeof bed_track[0], "%s", p);
+        bed_track_count++;
+    }
+    printf("platformer: music playlist — %d track(s), first %s\n",
+           bed_track_count, bed_track[0]);
 }
 
 /*
@@ -341,24 +384,65 @@ static void bed_configure(void) {
  * is doing: a release takes frames to walk down, `audio_music_resume()` is
  * refused until it has, and PUMP: OFF can clear the voice out from under us.
  * The state below tracks INTENT; the mixer is asked about reality.
+ *
+ * The two things this function's want_play/want_hold split buys, both asked for
+ * by the operator (2026-08-21, 2026-08-22), and NEITHER needs a state of its own:
+ *
+ *  - ⚠️ **SCREEN_LEVEL_COMPLETE is not want_play.**  The bed used to play through
+ *    the 2.5 s overlay and under audio_success().  Dropping the screen silences
+ *    that overlay AND — because the release completes and IDLE then takes the next
+ *    playlist entry — is the entire mechanism of the per-level track change.
+ *  - ⚠️ **Dying is want_HOLD, not want_stop.**  A death holds the bed (so
+ *    audio_fail() is heard over near-silence for the 20-frame animation) and a
+ *    respawn RESUMES the same track mid-bar.  Only game over lets it go.  The
+ *    difference between hold and stop here is exactly the difference between "the
+ *    music continues" and "the level restarts its music", which is the thing the
+ *    request turned on.
  */
 static void bed_service(void) {
-    if (bed_broken) return;
+    if (bed_disabled || bed_track_count == 0) return;
 
-    bool want_play = (current_screen == SCREEN_PLAYING ||
-                      current_screen == SCREEN_LEVEL_COMPLETE);
-    bool want_hold = (current_screen == SCREEN_PAUSED);
+    bool dying     = (player.state == PSTATE_DYING);
+    bool want_play = (current_screen == SCREEN_PLAYING && !dying);
+    bool want_hold = (current_screen == SCREEN_PAUSED ||
+                      (current_screen == SCREEN_PLAYING && dying));
 
     switch (bed_state) {
-    case BED_IDLE:
+    case BED_IDLE: {
         if (!want_play || audio_music_active(&audio)) break;
-        if (audio_music_start(&audio, bed_path, true)) { bed_state = BED_PLAYING; break; }
+        /* Walk the playlist from the cursor, skipping entries that already failed.
+         * ⚠️ Bounded by ONE lap: without the counter a playlist whose every entry
+         * is missing would spin here for the life of the process. */
+        int tried = 0;
+        while (tried < bed_track_count && bed_failed[bed_next]) {
+            bed_next = (bed_next + 1) % bed_track_count;
+            tried++;
+        }
+        if (tried >= bed_track_count) {     /* every track refused — stop asking */
+            bed_disabled = true;
+            break;
+        }
+        int t = bed_next;
+        if (audio_music_start(&audio, bed_track[t], true)) {
+            bed_state = BED_PLAYING;
+            bed_next  = (t + 1) % bed_track_count;   /* the NEXT fresh start */
+            break;
+        }
         /* A missing file, a rate mismatch or a bus that never came up are all
-         * permanent for this process, and retrying per frame would fill
-         * /var/log/roomwizard/app_stdout.log with one refusal per 33 ms. */
-        bed_broken = true;
-        printf("platformer: no music bed at %s — effects and play continue\n", bed_path);
+         * permanent for THIS TRACK, and retrying per frame would fill
+         * /var/log/roomwizard/app_stdout.log with one refusal per 33 ms.
+         * ⚠️ Per track rather than per process, so one bad path in the config does
+         * not silence the tracks that are fine — and the MUSIC toggle being off is
+         * reported as itself rather than as a missing file. */
+        bed_failed[t] = true;
+        if (!audio_music_enabled(&audio)) {
+            bed_disabled = true;            /* one line, not one per track */
+            printf("platformer: music is off (music_enabled=false) — effects and play continue\n");
+        } else {
+            printf("platformer: no music bed at %s — effects and play continue\n", bed_track[t]);
+        }
         break;
+    }
 
     case BED_PLAYING:
         if (want_play) {
@@ -375,11 +459,14 @@ static void bed_service(void) {
 
     case BED_HELD:
         if (want_hold) break;
-        if (!want_play) { bed_state = BED_STOPPING; break; }  /* paused, then quit */
+        if (!want_play) { bed_state = BED_STOPPING; break; }  /* died out, or quit */
         if (audio_music_active(&audio)) break;                /* release still fading */
         if (audio_music_resume(&audio)) { bed_state = BED_PLAYING; break; }
-        bed_broken = true;
-        printf("platformer: music bed could not resume — play continues\n");
+        /* ⚠️ IDLE, not disabled: a refused resume loses the held file, but the
+         * playlist is intact and the next level can start a fresh voice.  Marking
+         * the track failed here would silence a game for one recoverable hiccup. */
+        bed_state = BED_IDLE;
+        printf("platformer: music bed could not resume — starting fresh at the next level\n");
         break;
 
     case BED_STOPPING:
@@ -1146,6 +1233,7 @@ static void update_player(void) {
         if (player.death_timer <= 0) {
             if (game_lives <= 0) {
                 current_screen = SCREEN_GAME_OVER;
+                play_game_over_sound();
                 gameover_init(&gos, &fb, score, NULL, NULL,
                               &hs_table, &touch);
             } else {
