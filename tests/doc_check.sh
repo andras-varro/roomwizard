@@ -563,9 +563,11 @@ group_c() {
 # ⚠️ 2026-08-21, SIXTH raise, deliberate and argued: native_apps/CLAUDE.md 665 → 668 (measured post-edit
 # count). The clip bank is new library surface behind the four canned sounds (F1 phase 5 ③) and its rules
 # are ones a caller gets wrong silently — a same-frame double trigger sums COHERENTLY, and the clips have
-# to be DEPLOYED or the fix is inert. Eight lines were added and five clawed back by compressing the
-# audio_init war story, the oss probe parenthetical and the pacing gate; the raise is the remainder.
-# ⚠️ **No headroom is granted: 668 is the measurement.**
+# to be DEPLOYED or the fix is inert.
+# The 2026-08-22 raise pays for *Sound assets*: the effects became SOURCED rather than generated, which
+# retires fx_gen.c's gate and puts two silent failure modes (a refused sample rate, a clip shorter than the
+# mixer's own envelope) in the path of anyone adding one. Nothing in the file went stale to fund it.
+# ⚠️ **No headroom is granted: 684 is the measurement.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -574,7 +576,7 @@ ceilings() {
 1352	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-668	native_apps/CLAUDE.md
+684	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

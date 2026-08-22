@@ -637,6 +637,25 @@ split to get there** — `tests/hostshim/sys/soundcard.h` redirects onto this ho
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —
   which lets a caller write whatever the ring will take without a seam.
 
+### Sound assets: sourced, and two ways they fail without saying so
+
+`sounds/fx_*.wav` are **sourced files**, not generated — `sounds/fx_gen.c` and `gen-sounds.sh` are
+superseded and ⚠️ **running `gen-sounds.sh` overwrites them.** `sounds/prompts.md` is the authoring record;
+the reversal and its measurements are [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1 Phase 5 ③.
+
+- ⚠️ **A wrong sample rate is refused in SILENCE.** `clip_load()` in `common/audio.c` rejects any clip whose
+  rate is not the granted 44100, logs one line, and the convenience sound falls back to its note table — so
+  the game sounds **unchanged** and reads as "the new asset did not work" rather than as a format error.
+  Measured: a sourced effect arrived 48000 Hz / stereo and would have changed nothing on the panel. Every
+  asset is **mono / 44100 / 16-bit PCM**; `ffprobe` before deploying, never the ear.
+- ⚠️ **Nothing under ~90 ms.** The mixer puts a 10 ms attack and 20 ms release on every sample voice, each
+  clamped to half the clip (`clamp_edge_frames()` in `common/audio_gen.c`), so a 28 ms effect is almost
+  entirely envelope and its transient is gone.
+- **The content rule is IN-BAND ENERGY, not spectral shape.** This speaker rolls off sharply below its knee
+  ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so an effect whose energy sits under
+  it is not quiet, it is absent — high-pass at 700 Hz and compare RMS to decide. ⚠️ **Broadband is not the
+  requirement**: chasing flatness instead cost a whole set that measured correct and sounded like noise.
+
 ### Mixing: an optional per-frame pump
 
 Two sounds at once needs userspace to hold the audio and hand the device small pieces of it — you cannot mix

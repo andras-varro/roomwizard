@@ -2,25 +2,26 @@
 #
 # gen-sounds.sh — rebuild the stock sound effects from fx_gen.c.
 #
-# HOST ONLY. No device, no cross-compiler, no listen: this is the whole reason
-# the effects are generated rather than sourced (fx_gen.c's header has the
-# argument, and ../../IMPROVEMENT_PLAN.md F1 has the operator's decision).
+# ⚠️ **RETIRED, AND IT OVERWRITES THE SHIPPED EFFECTS.** The ten fx_*.wav are SOURCED files now, not this
+# generator's output: its gate enforced "broadband and transient", the operator heard the result as white
+# noise on the panel and on a PC, and the property that actually matters is energy inside the speaker's
+# usable band rather than spectral flatness. Running this replaces every sourced clip with generated noise
+# and the loss is silent. See prompts.md for how the shipped set is authored and ../../IMPROVEMENT_PLAN.md
+# F1 Phase 5 ③ for the measurements and the open decision on whether to re-aim the gate or delete it.
 #
-# ⚠️ **The self-test runs FIRST and a failure stops the script.** fx_gen's gate is
-# what makes "broadband and transient" a checked property rather than an intended
-# one, and a gate that has only ever been seen passing is not evidence
-# (../../CLAUDE.md → *Working style*). If its four controls stop coming out
-# 1-pass / 3-reject, nothing it writes can be trusted, so nothing is written.
+# HOST ONLY. No device, no cross-compiler, no listen.
 #
-# ⚠️ **The .wav files here are COMMITTED**, and fx_gen is deterministic by
-# construction (a fixed xorshift32 seed per effect, never rand()). So a clean
-# `git status` after running this is the normal outcome, and a modified .wav means
-# somebody changed a recipe — which is exactly what should show up in review.
+# ⚠️ **The self-test runs FIRST and a failure stops the script.** Its gate makes
+# "broadband and transient" a checked property, and a gate that has only ever been
+# seen passing is not evidence (../../CLAUDE.md → *Working style*). If its four
+# controls stop coming out 1-pass / 3-reject, nothing it writes can be trusted.
+# ⚠️ That gate is also why this script is retired: the checked property was the
+# wrong one, so the numbers were green and the sounds were unusable.
 #
-# These files are not deployed by this script. Installing them on a device is
-# F1 phase 5's clip loader and per-game sound set; until that lands, nothing on
-# the device reads them.
-#
+# fx_gen is deterministic by construction (a fixed xorshift32 seed per effect,
+# never rand()), so what it writes is reviewable — but it no longer matches the
+# committed .wav files, and a clean `git status` after a run is NOT expected now.
+# The effects this script installs are deployed by ../build-and-deploy.sh.
 # Run from WSL (this host has no gcc in Git Bash — root ../../CLAUDE.md):
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/native_apps/sounds && ./gen-sounds.sh"
 

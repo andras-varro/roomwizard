@@ -422,39 +422,45 @@ subject — per-game, per-level sound as data — which is why they sit here rat
   bypass. ⚠️ **The launcher grid is already full**, so where the two toggles go is a layout decision on a
   screen whose tiles are computed at runtime (`compute_grid_layout()`).
 
-**The effect files are GENERATED rather than sourced** (operator, 2026-08-20; the reason is recorded
-because it is not the obvious one). A generator makes *broadband and transient* a **guaranteed property**
-of every file it writes, where a downloaded or AI-generated effect can be a sustained tone that lands
-straight back in the intermodulation band — and with no microphone on this device
-([§3.4](SYSTEM_ANALYSIS.md#34-audio)) each such file would cost an operator listen to rule out. Generated
-files also carry no licence question and can be re-rolled. Render the stock set to **mono / 44100 /
-16-bit**, which is the mixer's internal format and needs no conversion of any kind; ⚠️ **the loader must
-WALK the chunks** — `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO` chunk, which puts it
-at byte 164 in the music files against 36 in `asl_success.wav`, both measured), and a reader that assumes
-the textbook 44-byte header is correct on the effects and feeds a version string to the mixer on the
-music.
+**Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
+⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
+chunk, putting it at byte 164 in the music beds against 36 in `asl_success.wav`, both measured), so a
+reader trusting the textbook 44-byte header feeds a version string to the mixer.
 
-✅ **The generator and the stock set are DONE — `native_apps/sounds/`, 2026-08-20, host only, no device and
-no listen.** `fx_gen.c` renders ten noise-excited enveloped effects (27–200 ms, mono/44100/16-bit, peak
-normalised to 0.97 of full scale because the mixer scales a sample by `s * peak >> 15` and a quiet asset
-cannot be made loud again); `gen-sounds.sh` is the one build+run path. The ten `fx_*.wav` are **committed**
-(82 KB total) and re-running the generator leaves them byte-identical — a fixed xorshift32 seed per effect,
-never `rand()`, so a modified `.wav` in a diff means somebody changed a recipe.
+⚠️ **The stock effects are SOURCED files, and `fx_gen.c` / `gen-sounds.sh` no longer produce what ships.**
+The generated set was heard as white noise by the operator on the panel *and* on a PC, so the device was
+never in question. Its own gate numbers say why: the four wired clips scored `sfm` 0.116–0.208 where its
+controls put a pure sine at 0.000 and white noise at 0.514–0.553, and the pitched `body` term was 0.10–0.18
+of amplitude lasting 8–30 ms of a 27–200 ms file. ⚠️ **Running `gen-sounds.sh` OVERWRITES the sourced
+`fx_*.wav`** — its header carries the warning; treat the script as retired until the decision below lands.
 
-⚠️ **The GATE is the deliverable there, not the synthesiser.** `fx_check()` refuses to write a file that is
-not broadband and transient: `tail` (RMS of the last quarter over the first, ≤ 0.35), `sfm` (spectral
-flatness at the peak window, ≥ 0.06) and duration (≤ 200 ms). That is what makes the property *checked*
-rather than intended, which is the whole argument for generating over sourcing. Its negative control is
-`--self-test`: four signals, **1 pass / 3 reject**, and the load-bearing one is a **percussive 440 Hz
-sine** — snappy, short, and tonal, i.e. exactly the file a human would approve. Measured: sines score
-`sfm` 0.000 against 0.51–0.55 for noise, and dropping `FX_SFM_MIN` to 0 on a sabotaged copy lets that one
-control through, is named, exits 1 and writes **zero** files. ⚠️ **The sustained-sine control still
-rejects under that sabotage** (on tail and duration), so a suite without the percussive one would have
-read green. ⚠️ **And the gate rejected two of the ten first-draft specs** (`knock` `sfm` 0.028, `jump`
-0.039): at fixed `q` a LOW centre frequency is a proportionally NARROW absolute band, so a low-pitched
-effect measures less flat. Both were fixed by widening the band and cutting the sine `body` — **retune the
-spec, never the threshold.** End to end, the shipped `audio_wav.c` opens all ten and its `read` total
-equals its header `frames` for every one.
+⚠️ **The gate enforced the defect, and the mechanism is a measurement window.** `FX_SFM_MIN` is a *floor*
+on flatness, and `sfm` is taken at the file's LOUDEST part — so raising `body` moves that window onto the
+pitched attack and the gate rejects a file most of which is still noise (`body` 0.55 → `sfm` 0.024 REJECT;
+`q` 1.1 → 8 with `body` untouched → 0.045 REJECT). Every change that restores pitch is refused by the
+shipped floor. ⚠️ **The deeper error is the property chosen**: audibility on this speaker needs energy
+INSIDE the usable band ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), not spectral
+flatness — broadband meets the band requirement by accident while destroying pitch identity. **Open
+decision: retire `fx_gen.c` and its gate, or re-aim the gate at in-band energy and keep it for drafts.**
+
+**The measurement that replaces it, and it needs a repo home** — today only in scratch, which means it is
+not a gate. High-pass at 700 Hz and compare RMS: ~0 dB means the sound lives above the knee, a large
+negative means most of its energy is never radiated. Validated against 200 Hz and 2 kHz sine controls
+(−43.4 dB vs −0.1 dB); a per-band RMS profile localises a bad one. ⚠️ **Give it the format check too** —
+see [`../native_apps/CLAUDE.md`](native_apps/CLAUDE.md) → *Sound assets*, because a wrong rate is refused
+in silence. Current state: above the knee `click`, `sparkle`, `tick`, `success`; acceptable `burst`,
+`jump`, `pickup`; ⏳ **below the knee and needing regeneration: `knock` −5.0, `thud` −4.5** (prompts that
+name a register are in `native_apps/sounds/prompts.md`). All ten are peak-normalised to −0.3 dBFS.
+
+⏳ **`fx_fail` is regenerated, converted and confirmed "much better" on `.188` — one gap left.** Its notes
+were at 300–700 Hz with nothing above 1.5 kHz, which no filter can rescue; the replacement measures in-band
+RMS −18.08 dBFS against `click` −11.90 and `success` −13.35. Peak is already at maximum, so the remaining
+lever is a **limiter** to raise in-band RMS at the same peak — not tried. ⚠️ A 700 Hz high-pass was
+measured and bought 0.16 dB, so it is not the answer.
+
+⏳ **LICENSE.md is BLOCKED on provenance, and nothing may be invented.** The ten `fx_*.wav` are no longer
+this repo's own output, and which tool made them is unrecorded — `LICENSE.md` enumerates every file
+precisely, so this needs the operator's answer in the shape F19 used for the music beds.
 
 **The clip loader loads into RAM, and that is a CURSOR decision before it is a memory one** (operator,
 2026-08-20). `audio.c` has one `AudioSampleVoice` and refuses a second tap while the first sounds
@@ -566,26 +572,23 @@ playback is audibly identical to the stereo original at half the size and half t
   linked from it. That is a normal basis for a hobby project and it is the operator's to price, not a
   blocker; it is written down because `LICENSE.md` enumerates every other file precisely and this one
   cannot be reconstructed from the bytes.
-- **`LICENSE.md` row is pre-drafted and OUTSTANDING until the files are committed.** Nothing is added
-  yet, because `LICENSE.md` must not describe files the repo does not have. When they land, add to
-  *Third-party code committed in this repository*:
-  `| /opt/sound/music{1,2}.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
+- ⏳ **`git-lfs` landing: two of four steps done, both UNCOMMITTED.** ✅ Both beds are off `.188` into
+  `native_apps/music/` and md5-verified against it (they existed nowhere else); ✅ `native_apps/music/**` is
+  `filter=lfs`, verified to leave `sounds/fx_*.wav` at `filter: unspecified` so the small committed effects
+  are not rewritten as pointers. ⚠️ **That ORDER is load-bearing: `git-lfs` never retroactively adopts an
+  already-committed file** — a pattern only affects what is staged after it exists, and converting history
+  needs `git lfs migrate import` plus a force-push. ⚠️ Run it from **Git Bash**; `git-lfs` is absent from
+  this WSL (`CLAUDE.md` → *Working from this host*). Still open: the `LICENSE.md` row below, and the deploy
+  wiring in `native_apps/build-and-deploy.sh` (online path **and** bundle loop). ⚠️ **Until both land the bed
+  is a `.188`-only feature no re-commission survives**, and a game whose configured bed is absent must play
+  its effects and carry on rather than refuse to start.
+- **`LICENSE.md` row is pre-drafted and OUTSTANDING until the files are committed**, because `LICENSE.md`
+  must not describe files the repo does not have. Add to *Third-party code committed in this repository* —
+  ⚠️ the paths are the COMMITTED mono ones, not the `/opt/sound` stereo originals:
+  `| native_apps/music/music{1,2}-mono.wav | Royalty-free, commercial use permitted | AI-generated at musely.ai/tools/platformer-level-music (2026-08-14). Not our composition; no attribution required per that page's FAQ, which asserts clearance but not ownership. |`
   — and a matching row in *Distributed binaries* if they go into a bundle.
-- ⏳ **DECIDED 2026-08-21: the music enters git through `git-lfs`, and the work is NOT done.** The operator
-  made the call once `platformer` shipped a bed; ⚠️ **and per-level tracks (F1 Phase 5 ⑤) multiply it**, so
-  do it before those land rather than after. Four steps, none started: `scp` both files off `.188` (they
-  exist nowhere else), `git lfs track` a pattern scoped to the music directory **from Git Bash** —
-  ⚠️ `git-lfs` is absent from this WSL, and it must NOT catch the small committed `sounds/fx_*.wav`, which
-  would rewrite them as pointers — add the `LICENSE.md` row drafted above, and deploy them the way
-  `sounds/fx_*.wav` already are (`native_apps/build-and-deploy.sh`, online path **and** bundle). ⚠️ **Until
-  all four are done the bed is a `.188`-only feature that no re-commission survives**, and a game whose
-  configured bed is absent must play its effects and carry on rather than refuse to start. ⚠️ **`git-lfs` is absent from
-  this WSL** (`CLAUDE.md` → *Working from this host*), so whoever adds them runs `git lfs track` from Git
-  Bash.
-- **Deployment, when they do land.** They belong in `native_apps/build-and-deploy.sh` and the bundle
-  manifest. Note `device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale, so the hand-copied
-  files are safe from the clean meanwhile; its *reason* text ("113 KB of usable UI WAVs") goes stale the
-  moment they are permanent.
+- **`device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale**, so the hand-copied beds survive a
+  clean meanwhile; its *reason* text ("113 KB of usable UI WAVs") goes stale once they are permanent.
 - ✅ **Streaming, not loading, and both halves are measured.** Card throughput makes the bed free —
   0.77 % of a sequential read ([`SYSTEM_ANALYSIS.md#31-soc-memory-and-storage`](SYSTEM_ANALYSIS.md#31-soc-memory-and-storage)) —
   and the read-ahead absorbs the per-read latency that lands in the render loop: across a 3-wrap bed at

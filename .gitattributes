@@ -10,10 +10,8 @@
 # text=auto still lets git detect and skip binary content, and every rule below
 # this one keeps overriding it: later rules win.
 * text=auto eol=lf
-
 # ...except Windows batch files, which cmd.exe parses line-by-line.
 *.bat text eol=crlf
-
 # Shell scripts MUST stay LF.
 #
 # device-files/roomwizard-app and device-files/disable-steelcase.sh are scp'd
@@ -25,14 +23,11 @@
 # This host has core.autocrlf=true set system-wide, so without this file the
 # next clone on Windows would silently break the device.
 *.sh text eol=lf
-
 # Python helpers are also run on the device / under WSL
 *.py text eol=lf
-
 # Device-side config and manifest formats
 *.conf text eol=lf
 *.app  text eol=lf
-
 # device-files/ is installed onto the device VERBATIM by two consumers
 # (commissioning/provision.sh over SSH, commissioning/commission-offline.sh onto
 # a mounted card), and its init scripts have no .sh extension because
@@ -40,7 +35,6 @@
 # does not cover them, and a CRLF here breaks the boot exactly as described at the
 # top of this file.
 device-files/** text eol=lf
-
 # Binary assets - never touch
 *.ppm binary
 *.raw binary
@@ -49,7 +43,7 @@ device-files/** text eol=lf
 *.img binary
 *.zip binary
 *.dat binary
-
+*.wav binary
 # Teardown photos (cited throughout HARDWARE.md) are the only images the repo
 # carries; they are stored in Git LFS so a clone stays small. This must come
 # AFTER the `*.jpg binary` line above - later rules win, and `binary` would
@@ -57,6 +51,6 @@ device-files/** text eol=lf
 # Requires `git lfs install` before cloning, or the working copy gets pointer
 # text files instead of JPEGs.
 HardwarePhotos/** filter=lfs diff=lfs merge=lfs -text
-
 # Documentation screenshots, same reasoning as above.
 Screenshots/** filter=lfs diff=lfs merge=lfs -text
+native_apps/music/** filter=lfs diff=lfs merge=lfs -text
