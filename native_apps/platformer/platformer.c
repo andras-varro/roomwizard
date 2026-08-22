@@ -303,9 +303,15 @@ static void play_level_complete_sound(void) { audio_success(&audio); }
  * read-ahead buffer and no thread; the effects above mix OVER it because a full
  * bus refuses a voice rather than stealing the longest one (../common/audio.h).
  *
- * The two beds are committed (`native_apps/music/`, Git LFS) and
- * `build-and-deploy.sh` installs them to /opt/sound, so a deployed device has
- * them.  ⚠️ **An absent bed is still a NORMAL case rather than an error**, since a
+ * The beds are committed (`native_apps/music/`, Git LFS) and `build-and-deploy.sh`
+ * installs them to /opt/sound, so a deployed device has them.  ⚠️ **The file name
+ * is `<game><n>-mono.wav` and that is the whole per-game mapping** — the operator
+ * sourced sets for eight games on 2026-08-22 and renamed this game's first two
+ * from the original `music{1,2}-mono.wav`, so nothing but the name says which bed
+ * belongs to which game.  A bed added under a new name reaches no game until some
+ * game's default table or `rw_config.conf` names it.
+ *
+ * ⚠️ **An absent bed is still a NORMAL case rather than an error**, since a
  * config file can name any path and a hand-managed device may have none: the game
  * says so once and plays on with its effects.  That is also why the paths are
  * configuration rather than compiled in.
@@ -316,24 +322,39 @@ static void play_level_complete_sound(void) { audio_success(&audio); }
  * bed takes the NEXT one every time it starts fresh, wrapping at the end.  Two
  * reasons it beats one key per level, and the first is a hard limit rather than a
  * preference:
- *   1. ⚠️ **`CONFIG_VAL_LEN` is 64 bytes and `/opt/sound/music1-mono.wav` is 26**, so
- *      a comma-separated list holds two paths and can never hold three.  Numbered
- *      keys have no such ceiling.
+ *   1. ⚠️ **`CONFIG_VAL_LEN` is 64 bytes and `/opt/sound/officerunner1-mono.wav` is
+ *      33**, so a comma-separated list holds ONE path and can never hold two — the
+ *      rename that put the game's name in the file name is what took the last of
+ *      that headroom.  Numbered keys have no such ceiling.
  *   2. A playlist GIVES per-level music (level 1 → track 1, level 2 → track 2,
  *      level 3 → wrap) without a level→track table anyone has to maintain, and it
  *      keeps working when MAX_LEVELS changes.
  * ⚠️ **Track 1 EMPTY means silence for the whole game**, deliberately, and it is
  * the one non-obvious rule here: it preserves `platformer_music=` as the off switch
- * it already was, which a per-track reading would have broken (track 2 has a
- * non-empty default, so an empty track 1 would otherwise still play music).
+ * it already was, which a per-track reading would have broken (every OTHER slot has
+ * a non-empty default too, so an empty track 1 would otherwise still play music).
  *
  * ⚠️ **A fresh start ADVANCES the playlist; a resume does not** — which is why death
  * uses pause/resume.  Losing a life must continue the track, not skip to the next.
  */
-#define BED_DEFAULT_PATH   "/opt/sound/music1-mono.wav"
-#define BED_DEFAULT_PATH_2 "/opt/sound/music2-mono.wav"
 #define BED_CONFIG_KEY     "platformer_music"
 #define BED_MAX_TRACKS     6
+
+/* One default per track slot, in playlist order.  The operator sourced exactly
+ * BED_MAX_TRACKS beds for this game (2026-08-22), so ⚠️ **the shipped default IS
+ * the playlist** and `rw_config.conf` only has to exist in order to CHANGE it —
+ * which is why a table replaced the two `BED_DEFAULT_PATH*` macros that were here.
+ * A short table is fine: a slot whose default is "" is simply skipped, exactly as
+ * an empty key in the file is.  Slot 0 is the one that also carries the off switch,
+ * so ⚠️ **never leave it empty here** or the game ships silent. */
+static const char *const bed_default[BED_MAX_TRACKS] = {
+    "/opt/sound/officerunner1-mono.wav",
+    "/opt/sound/officerunner2-mono.wav",
+    "/opt/sound/officerunner3-mono.wav",
+    "/opt/sound/officerunner4-mono.wav",
+    "/opt/sound/officerunner5-mono.wav",
+    "/opt/sound/officerunner6-mono.wav",
+};
 
 typedef enum {
     BED_IDLE,       /* nothing on the bus (nothing started, or a fade finished) */
@@ -355,7 +376,7 @@ static void bed_configure(void) {
     config_load(&cfg);                     /* silent when the file is absent */
 
     /* Track 1's key is the historic one and is also the whole-game off switch. */
-    const char *first = config_get(&cfg, BED_CONFIG_KEY, BED_DEFAULT_PATH);
+    const char *first = config_get(&cfg, BED_CONFIG_KEY, bed_default[0]);
     if (!first[0]) {
         bed_disabled = true;
         printf("platformer: music bed disabled by %s (%s=)\n",
@@ -368,7 +389,7 @@ static void bed_configure(void) {
     for (int i = 1; i < BED_MAX_TRACKS; i++) {
         char key[48];
         snprintf(key, sizeof key, "%s%d", BED_CONFIG_KEY, i + 1);
-        const char *p = config_get(&cfg, key, (i == 1) ? BED_DEFAULT_PATH_2 : "");
+        const char *p = config_get(&cfg, key, bed_default[i]);
         if (!p[0]) continue;               /* a gap ends nothing; it is skipped */
         snprintf(bed_track[bed_track_count], sizeof bed_track[0], "%s", p);
         bed_track_count++;
@@ -1968,6 +1989,12 @@ static void handle_input(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 int main(int argc, char *argv[]) {
+    /* Line-buffer stdout: at boot this is a log FILE, not a tty, so bed_configure()'s
+     * playlist line and every other diagnostic would sit in a 4 KB glibc buffer
+     * instead of in /var/log/roomwizard/app_stdout.log.  Same reason as
+     * app_launcher.c's, measured the same day. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     const char *fb_device    = "/dev/fb0";
     const char *touch_device = "/dev/input/touchscreen0";
 

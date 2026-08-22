@@ -132,11 +132,11 @@ naming `ttyO*` not `ttyS*`; companion PMIC TWL4030 (AM335x uses TPS65217).
 Buffer" is SanDisk's OEM high-endurance line (dashcams, surveillance) — a sensible choice for
 hardware that gets hard power-cycled, and worth matching when cloning to a larger card.
 
-**Sequential read is ~11.4 MB/s — measured on `.188`, 2026-08-20**, reading a 3,898,628 B file whole.
-That settles whether an asset can be *streamed* off the card rather than loaded: uncompressed 44.1 kHz
-16-bit mono audio needs 88.2 KB/s, i.e. **0.77 %** of it. ⚠️ **That is throughput, not per-read
-LATENCY** — the half that lands in a render loop, which a streaming consumer must absorb with a
-read-ahead buffer it refills only when dry.
+**Sequential read is ~11.4 MB/s; sequential write is ~0.87 MB/s — a 13× asymmetry, measured on `.188`
+2026-08-20 and 2026-08-22** (read: one 3,898,628 B file whole; write: 9.8 MB by `scp`, 4.6 s plus 6.7 s of
+`sync` — count the flush or the card reads twice as fast as it is). Read settles whether an asset can be
+*streamed* rather than loaded: 44.1 kHz 16-bit mono needs 88.2 KB/s, **0.77 %** of it. ⚠️ **Both are
+throughput, not per-read LATENCY** — the half a render loop feels, absorbed by a read-ahead refilled when dry.
 
 ### 3.2 Display
 
@@ -649,7 +649,7 @@ differing content instead of phase.
   generator or pump in the path: *"same distortion as on the device"*. 440 + 880 (peak 12287, RMS 6143) is
   far worse than a lone 440 (peak 16383, RMS 11585), so it is not level in either sense — what the ear gets
   is |m·f1 ± n·f2|, inharmonic to both inputs unless they are octaves. ⚠️ **Two BROADBAND streams at the
-  same level are CLEAN** (`music1-mono` + `music2-mono` overlapping in full), so **effects must be
+  same level are CLEAN** (`officerunner1-mono` + `officerunner2-mono` overlapping in full), so **effects must be
   broadband, not sustained tones, whatever their source**; per-frequency budgeting is comfort, not the fix.
 - ⚠️ **The +12 dB of apparently unused analog gain is NOT headroom — spending it distorts.** `DAC1 Analog
   Playback Volume` (numid=6) sits at **12 of 18** on a −24 … +12 dB scale and `DAC1 Digital Fine` (numid=2)

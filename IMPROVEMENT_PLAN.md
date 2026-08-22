@@ -379,7 +379,7 @@ not a memory one**: `audio_sfx_play()`'s single streaming voice must refuse a re
 `AudioWav` *is* the live voice's `ctx`, which for a game firing brick hits in bursts is a refusal on nearly
 every hit. It costs no mixer change (a clip is just another `AudioVoiceFill`) and the bed still STREAMS.
 ⚠️ **`AUDIO_CLIP_MAX_FRAMES` is the guard that matters** — the paths are config strings, so
-`fx_fail=/opt/sound/music1-mono.wav` would otherwise `malloc` 7.8 MB inside a tap. A miss is permanent per
+`fx_fail=/opt/sound/officerunner1-mono.wav` would otherwise `malloc` 7.8 MB inside a tap. A miss is permanent per
 process (missing files are NORMAL, F19); `audio_fx_set_path()` defers the old PCM's free to the next
 trigger, because a voice may still be reading it. ⚠️ **The clips must be DEPLOYED or ③ is inert** —
 `native_apps/build-and-deploy.sh` uploads `sounds/fx_*.wav` to `/opt/sound` on both the online and the
@@ -404,9 +404,13 @@ working examples rather than a design. Shape the file after the `.app` manifests
 INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
 drifts between the online and offline installer renders a game that plays nothing.
 
-⏳ **⑤ Per-game, per-level sound as data — BUILT 2026-08-22, and NOT YET HEARD ON THE PANEL.** Four
-operator requests, all implemented in `platformer` and the launcher, none verified by ear. Everything below
-compiles clean and passes all three `native_apps` gates; the panel listen is what is owed.
+⏳ **⑤ Per-game, per-level sound as data — BUILT 2026-08-22; the RECEIPTS now read, the EAR half does not.**
+Both printed receipts are good on `.188` — the launcher's grid layout says `fits`, and `platformer` reports a
+6-track playlist starting at `officerunner1-mono.wav`. ⚠️ **Reading them at all needed a fix**: stdout is
+block-buffered into `app_stdout.log`, so neither line arrived until `setvbuf(_IOLBF)` went into both mains,
+and the other `native_apps` binaries still have no such call — every printf receipt in them is unreadable.
+Owed: the listen — the track change at LEVEL COMPLETE, the death that holds the music, `fx_gameover` against
+`fx_fail`, and the two toggles actually silencing a game.
 
 - ✅ **The music stops between levels, and stops on a death.** `bed_service()`'s `want_play` is now
   `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
@@ -418,24 +422,20 @@ compiles clean and passes all three `native_apps` gates; the panel listen is wha
 - ✅ **Tracks are a PLAYLIST, not a level map** (operator's call, 2026-08-22, after the per-level variant was
   written). `platformer_music`, `platformer_music2` … `platformer_music6`, one path each, taken in turn on
   every fresh bed start. ⚠️ **The deciding constraint is a hard limit, not a preference: `CONFIG_VAL_LEN` is
-  64 bytes and `/opt/sound/music1-mono.wav` is 26**, so a comma-separated list holds two paths and can never
-  hold three. Numbered keys have no ceiling, give per-level music as a *consequence* (level 1 → track 1,
+  64 bytes and `/opt/sound/officerunner1-mono.wav` is 33**, so a comma-separated list holds ONE path and
+  cannot hold two. Numbered keys have no ceiling, give per-level music as a *consequence* (level 1 → track 1,
   level 2 → track 2, level 3 → wrap) and survive a change to `MAX_LEVELS`. ⚠️ **Track 1 empty still means
   silence for the whole game**, which preserves `platformer_music=` as the off switch it already was.
   A refused path is marked failed **per track**, so one bad entry does not silence the good ones.
 - ✅ **`MUSIC` / `EFFECTS` toggles are on the GAMES MENU**, `app_launcher`'s own screen, chosen over the
   `device_tools` SETTINGS tab (which keeps its one `AUDIO ENABLED` toggle, `device_tools.c:562`/`:717`).
-  Two keys, `music_enabled` and `effects_enabled`, gated **in the library** — `audio_tone()` (which covers
-  every note table, since `play_sequence()` goes through it), `audio_fx_play()`, `audio_sfx_play()` and
-  `audio_music_start()` — so **no game needed an edit**. ⚠️ **Both must be gated for effects**: gating only
-  the clip would swap every effect for a tone instead of silencing it. ⚠️ **`audio_enabled` stays the
-  master** and `audio_init_unchecked()` stays the one sanctioned bypass, which is why both toggles default
-  TRUE in `audio_open()` and are lowered only by `audio_init()` — a hardware speaker test must make a noise
-  on a device whose operator has silenced the games. The theremin's streaming-oscillator entry point is deliberately **not** gated:
-  its only caller is Tap-a-Theremin, an instrument. **The launcher grid was already full**, so the band is
-  paid for out of the grid's SLACK (`tile_h` is capped at `MAX_TILE_H` and the cap binds on this panel);
-  `compute_grid_layout()` prints a receipt saying whether the row landed inside `SCREEN_SAFE_*`, because an
-  off-panel row looks perfect in a screenshot and is dead to a finger.
+  Two keys, `music_enabled` and `effects_enabled`, gated **in the library**, so **no game needed an edit** —
+  which functions, why BOTH must be gated for effects, and why the `audio_init_unchecked()` bypass reads them
+  TRUE are `native_apps/CLAUDE.md` → *Sound assets*. The theremin's streaming oscillator is deliberately
+  **not** gated: its only caller is Tap-a-Theremin, an instrument. **The launcher grid was already full**, so
+  the band is paid for out of the grid's SLACK (`tile_h` is capped at `MAX_TILE_H` and the cap binds on this
+  panel); `compute_grid_layout()` prints a receipt saying whether the row landed inside `SCREEN_SAFE_*`,
+  because an off-panel row looks perfect in a screenshot and is dead to a finger.
 - ✅ **`AUDIO_FX_GAMEOVER` is a fifth canned sound, because losing one life and losing the RUN were the same
   noise** and nothing told a player which had happened. It fires at the END of the death animation, where
   the run is actually decided — `player_die()` cannot know yet. Its clip is the operator's own
@@ -447,7 +447,9 @@ compiles clean and passes all three `native_apps` gates; the panel listen is wha
   (`tetris` is explicitly excluded). ⚠️ **Do NOT copy `bed_service()` into it** — that is ~140 lines of state
   machine and the second copy is where the two drift. Extract it to `common/` first, taking the playlist,
   the four states and the hold/resume rules with it; the game then supplies its own config key prefix and
-  its own "am I dying" predicate.
+  its own "am I dying" predicate. ⚠️ **The beds for seven other games are already committed and deployed and
+  reach nothing** — the operator sourced sets for brickbreaker, frogger, pong, samegame, snake and tetris on
+  2026-08-22, and only a game with a bed consumer can play one, so this extraction is what unblocks them.
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
@@ -517,7 +519,7 @@ may be written down.
 
 ⚠️ **The BED stays STREAMING while the effects are RAM-resident, and not on cost grounds.** The whole effect
 set is ~0.06 % of free RAM (`.188`, `MemAvailable` 186,068 kB of 239,904 kB), but a cold read of
-`music1-mono.wav` after `drop_caches` is **0.369 s** — so RAM-loading the larger bed would buy a ~0.46 s
+`officerunner1-mono.wav` after `drop_caches` is **0.369 s** — so RAM-loading the larger bed would buy a ~0.46 s
 startup stall to replace a path already *heard clean*. It is one `AudioVoiceFill` either way, chosen per
 sound at load time, so this is reversible and needs no architecture.
 
@@ -599,7 +601,7 @@ to the device is refused in silence — so both deploy paths refuse one by its f
 travel. `git lfs install && git lfs pull` is the fix. ⚠️ Run `git` from **Git Bash**; `git-lfs` is absent
 from this WSL (`CLAUDE.md` → *Working from this host*).
 
-✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `music1-mono.wav` ran as
+✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `officerunner1-mono.wav` ran as
 a looping bed through three full wraps on `.188` at `LVL` 5/6, louder than the settled level, and the
 operator heard *"nothing. Wonderful continuation"* across two deliberate attempts to catch it. ⚠️ That is a
 property of **these two files**, not of a third one someone adds. The bed's own counter is `AudioWav.loops`.

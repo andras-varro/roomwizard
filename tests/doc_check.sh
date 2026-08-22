@@ -583,6 +583,19 @@ group_c() {
 # and deployed. The other three docs did not grow; IMPROVEMENT_PLAN.md SHRANK by ~1 net while gaining all of
 # ⑤'s and ③'s results, by compressing F19 to its open remainder and deleting two closed rationales.
 # ⚠️ **No headroom is granted: 701 is the measurement, and the next addition pays by deleting.**
+# ⚠️ 2026-08-22, EIGHTH raise, deliberate and argued, and it goes AGAINST the note above — read that as the
+# cost being acknowledged rather than dodged: native_apps/CLAUDE.md 701 → 708 (measured post-edit count).
+# One rule, and it is the rule that makes every OTHER receipt in this directory readable: stdout is a LOG
+# FILE at boot, so glibc block-buffers it and a printf receipt does not arrive. It was measured the hard
+# way — compute_grid_layout()'s layout receipt was absent from app_stdout.log while `grep -ac` on the
+# deployed binary found the string in it — and the thing that makes it cost a session rather than a minute
+# is that common/logger.c line-buffers its OWN file, so the logger's lines are all present and only the
+# printf ones are missing, which reads as a missing printf. It has no other home: it is a rule about how to
+# write main() in this directory, not a device fact. The commit paid what it could elsewhere rather than
+# here — SYSTEM_ANALYSIS.md took the card's WRITE rate at net ZERO by compressing the read-rate paragraph it
+# belongs beside, and the beds' `<game><n>-mono.wav` naming rule was deliberately NOT added to this file:
+# it lives in platformer.c's bed comment and build-and-deploy.sh's glob comment, at both consumers.
+# ⚠️ **No headroom is granted: 708 is the measurement, and the next addition pays by deleting.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -591,7 +604,7 @@ ceilings() {
 1352	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-701	native_apps/CLAUDE.md
+708	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

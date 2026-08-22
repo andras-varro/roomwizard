@@ -411,7 +411,7 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     # travel.  The check is the pointer file's own first line, which is a documented
     # format, not the size — a size threshold would also reject a legitimately short
     # bed.
-    for f in music/music*.wav; do
+    for f in music/*.wav; do
         [ -f "$f" ] || continue
         if head -c 40 "$f" | grep -q 'version https://git-lfs'; then
             err "$f is an unfetched Git LFS pointer, not audio — run: git lfs install && git lfs pull"
@@ -523,22 +523,30 @@ fi
 
 # Upload the music beds → /opt/sound/, but ONLY the ones that differ.
 #
-# ⚠️ Unlike the effects these are LARGE — 3.9 MB + 4.9 MB — so an unconditional
-# scp adds ~8.8 MB to every deploy of a component that is otherwise a few hundred
-# KB of binaries.  They also never change: they are two sourced files under LFS
+# ⚠️ Unlike the effects these are LARGE — 24 beds, 116.9 MB — so an unconditional
+# scp adds all of that to every deploy of a component that is otherwise a few hundred
+# KB of binaries.  They also never change: they are sourced files under LFS
 # (../IMPROVEMENT_PLAN.md F19), not build output.  So compare md5 first and send
 # nothing when the device already matches.  The md5 is the whole check — a size
 # comparison would pass a truncated-then-padded file, and a timestamp comparison
 # cannot be made to mean anything across the device's clock offset (../CLAUDE.md).
 #
+# ⚠️ **The glob is `music/*.wav`, deliberately not a per-game list.**  It was
+# `music/music*.wav` while two beds existed and matched NOTHING the moment they were
+# renamed to `officerunner{1,2}-mono.wav` — a name-gated list is a place a bed can be
+# added and never travel, and the failure is silent at both ends (the game says "no
+# music bed" once and plays on).  Cost of the general glob, measured 2026-08-22 on
+# `.188`: **0.87 MB/s sustained** including the flush (9.8 MB = 4.6 s scp + 6.7 s
+# `sync`), so a first deploy of all 24 is ~2¼ min and every later one is the md5 read.
+#
 # A game whose configured bed is missing plays its effects and carries on
 # (`platformer`'s bed_service()), so this step failing is not fatal — but then the
 # feature is silently absent, which is why it prints per file either way.
-if ls music/music*.wav &>/dev/null; then
+if ls music/*.wav &>/dev/null; then
     info "Checking music beds → /opt/sound/"
     ssh "$DEVICE" "mkdir -p /opt/sound"
-    remote_md5="$(ssh "$DEVICE" "md5sum /opt/sound/music*-mono.wav 2>/dev/null" || true)"
-    for f in music/music*.wav; do
+    remote_md5="$(ssh "$DEVICE" "md5sum /opt/sound/*-mono.wav 2>/dev/null" || true)"
+    for f in music/*.wav; do
         base="$(basename "$f")"
         # Same LFS-pointer refusal as the --bundle path: uploading a 130-byte
         # pointer gives the device a file the stream reader rejects in silence.

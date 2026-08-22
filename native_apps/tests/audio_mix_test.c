@@ -247,8 +247,8 @@ typedef enum {
  * with the sine case and differs only in the waveform, so if SFX-over-bed is
  * clean the answer is "effects should be samples" and the question closes.
  */
-#define MUSIC1_PATH  "/opt/sound/music1-mono.wav"
-#define MUSIC2_PATH  "/opt/sound/music2-mono.wav"
+#define MUSIC1_PATH  "/opt/sound/officerunner1-mono.wav"
+#define MUSIC2_PATH  "/opt/sound/officerunner2-mono.wav"
 #define SFX_PATH     "/opt/sound/asl_success.wav"
 
 /* ── the level ladder ─────────────────────────────────────────────────────────

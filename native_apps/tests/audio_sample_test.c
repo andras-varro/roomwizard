@@ -9,7 +9,7 @@
  * ⚠️ **The `data` offset is the defect this file exists to catch, and the vendor
  * effects cannot catch it.**  A reader that assumes the canonical 44-byte header
  * is CORRECT on `/opt/sound/asl_*.wav` (`data` ID at 36, PCM at 44) and wrong on
- * `/opt/sound/music1-mono.wav` (164 and 172 — ffmpeg wrote a LIST/INFO chunk
+ * `/opt/sound/officerunner1-mono.wav` (164 and 172 — ffmpeg wrote a LIST/INFO chunk
  * holding an encoder version string).  So a suite that tested only the effects
  * would pass while the music played 128 bytes of ASCII as audio.  Group A builds
  * both shapes and asserts the offsets measured on `.188` 2026-08-20.

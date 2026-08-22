@@ -803,6 +803,17 @@ static volatile sig_atomic_t quit_flag = 0;
 static void on_sigterm(int sig) { (void)sig; quit_flag = 1; }
 
 int main(int argc, char *argv[]) {
+    /* ⚠️ **stdout is a FILE at boot, so it is block-buffered and the receipt below
+     * does not arrive.** `/etc/init.d/roomwizard-app` redirects us into
+     * /var/log/roomwizard/app_stdout.log; glibc then buffers 4 KB and the
+     * compute_grid_layout() receipt — the one thing that has to be read BEFORE a
+     * screenshot is trusted — sits in that buffer until the app exits or the
+     * buffer fills.  Measured 2026-08-22 on `.188`: the log ended mid-word in
+     * "Touch-safe area: lo" with the receipt nowhere in it.  `common/logger.c`
+     * line-buffers its OWN file and so was never affected, which is what makes
+     * this look like a missing printf rather than a buffering one. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     const char *fb_dev    = "/dev/fb0";
     const char *touch_dev = "/dev/input/touchscreen0";
     if (argc > 1) fb_dev    = argv[1];

@@ -213,7 +213,7 @@ static void write_wav(const char *path, const int16_t *mono, long frames)
     uint32_t fmt_len = 16, rate = RATE;
 
     /* A canonical 44-byte header, which is what a WRITER may assume.  ⚠️ A READER
-     * may not: `/opt/sound/music1-mono.wav` has `data` at byte 164 because ffmpeg
+     * may not: `/opt/sound/officerunner1-mono.wav` has `data` at byte 164 because ffmpeg
      * wrote a LIST/INFO chunk, while the vendor effects have it at 36.  The sample
      * voice must walk the chunks — see F1 phase 8. */
     fwrite("RIFF", 1, 4, f);      fwrite(&riff, 4, 1, f);

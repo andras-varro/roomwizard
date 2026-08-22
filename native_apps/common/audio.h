@@ -140,7 +140,7 @@ typedef enum {
 
 /** Longest file the clip loader will accept, in frames — 4 s at 44100.
  *  ⚠️ **This is the guard that stops a MUSIC path being RAM-loaded**: the config
- *  keys below are strings, and `fx_fail=/opt/sound/music1-mono.wav` would
+ *  keys below are strings, and `fx_fail=/opt/sound/officerunner1-mono.wav` would
  *  otherwise malloc 7.8 MB inside a tap. */
 #define AUDIO_CLIP_MAX_FRAMES    176400L
 
@@ -592,8 +592,9 @@ void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path);
  *
  * ⚠️ **They REFUSE a rate mismatch too, for the same reason: there is no
  * resampler here and there is not going to be one.**  Every file we have is
- * 44100 / mono / 16-bit — measured on `.188` 2026-08-20 for all five of
- * `/opt/sound/{asl_click,asl_error,asl_success,music1-mono,music2-mono}.wav` —
+ * 44100 / mono / 16-bit — measured on `.188` 2026-08-20 for the three
+ * `/opt/sound/asl_*.wav`, and on the committed bytes 2026-08-22 for all 24
+ * `native_apps/music/` beds (RIFF `fmt ` chunk: PCM, 1 channel, 44100, 16) —
  * and so is what `hw:0,0` grants.  Guessing a rate is a pitch bug that sounds
  * like a bad recording, which is the hardest kind of audio fault to attribute.
  *

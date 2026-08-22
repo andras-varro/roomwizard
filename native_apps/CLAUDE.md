@@ -114,6 +114,9 @@ and skip every other handler.
 
 ```c
 int main(int argc, char *argv[]) {
+    /* 0. Line-buffer stdout — at boot it is a LOG FILE, not a tty */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     /* 1. Parse args (fb_device, touch_device) */
     /* 2. Singleton guard */
     int lock_fd = acquire_instance_lock("my_app");
@@ -156,8 +159,13 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-Two ordering rules in there are load-bearing and have both been violated in shipped code:
+Three rules in there are load-bearing, and every one has been violated in shipped code:
 
+- ⚠️ **`setvbuf(stdout, NULL, _IOLBF, 0)` FIRST, or a printf receipt never arrives.** At boot stdout is
+  `/var/log/roomwizard/app_stdout.log`, so glibc block-buffers 4 KB: `compute_grid_layout()`'s layout
+  receipt was absent from that log while `grep -ac 'launcher: safe'` on the deployed binary returned 1
+  (`.188`, 2026-08-22). `common/logger.c` line-buffers its OWN file, which is why this reads as a missing
+  printf rather than a buffering one. Only `app_launcher` and `platformer` do it; the rest are still blind.
 - **`fb_init()` before `touch_init()`** — `touch_init()` reads `screen_base_width/height`, which
   `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes

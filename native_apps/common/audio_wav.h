@@ -3,7 +3,7 @@
  *
  * ⚠️ **This exists because a 44-byte header is a WRITER's assumption and a
  * reader that shares it is silently wrong on our own files.** Measured on `.188`
- * 2026-08-20: `/opt/sound/music1-mono.wav` has its `data` chunk ID at byte 164
+ * 2026-08-20: `/opt/sound/officerunner1-mono.wav` has its `data` chunk ID at byte 164
  * and its PCM at 172, because ffmpeg wrote a LIST/INFO chunk carrying an encoder
  * version string; the vendor's `asl_success.wav` has them at 36 and 44. So a
  * loader hardcoded to 44 plays 128 bytes of the text "made with suno; created=…"
