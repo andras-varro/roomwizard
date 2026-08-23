@@ -172,6 +172,7 @@ void hs_drain_touches(TouchInput *touch) {
         touch_poll(touch);
         TouchState s = touch_get_state(touch);
         if (!s.held) break;
+        ui_frame_service();   /* this loop owns the screen — see common.h */
         usleep(10000);   /* 10 ms */
     }
 
@@ -180,6 +181,7 @@ void hs_drain_touches(TouchInput *touch) {
     start = get_time_ms();
     while (get_time_ms() - start < 300) {
         touch_poll(touch);
+        ui_frame_service();
         usleep(10000);   /* 10 ms */
     }
 }

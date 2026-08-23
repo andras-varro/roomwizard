@@ -52,6 +52,24 @@ int acquire_instance_lock(const char *app_name) {
 }
 
 // ============================================================================
+// PER-FRAME SERVICE FOR BLOCKING SUB-LOOPS   (rationale: common.h)
+// ============================================================================
+
+/* One slot, not a list: audio is the only registrant and a list would invite a
+ * game to add its own, which is the signature-threading this avoided. */
+static void (*ui_service_fn)(void *ctx) = NULL;
+static void  *ui_service_ctx            = NULL;
+
+void ui_frame_service_set(void (*fn)(void *ctx), void *ctx) {
+    ui_service_fn  = fn;
+    ui_service_ctx = ctx;
+}
+
+void ui_frame_service(void) {
+    if (ui_service_fn) ui_service_fn(ui_service_ctx);
+}
+
+// ============================================================================
 // TEXT UTILITIES
 // ============================================================================
 

@@ -289,6 +289,42 @@ uint32_t get_time_ms(void);
 int acquire_instance_lock(const char *app_name);
 
 // ============================================================================
+// PER-FRAME SERVICE FOR BLOCKING SUB-LOOPS
+// ============================================================================
+
+/*
+ * A BLOCKING SUB-LOOP IS A RENDER LOOP: it owes every per-frame service the
+ * main loop owes.  keyboard_enter() and hs_drain_touches() each run their own
+ * draw/poll/usleep loop while the game's loop is stopped, and until 2026-08-22
+ * neither serviced the audio mix bus — so a `NEW HIGH SCORE!` keyboard froze a
+ * fade and DEFERRED (not dropped) the game-over fanfare until it closed, which
+ * the operator experiences as no game-over sound.  The mixer advances by frames
+ * RENDERED, so a loop that renders nothing stops time for every voice.
+ *
+ * ⚠️ The slot holds ONE service and audio is its only registrant, deliberately:
+ * the alternative was threading a `void (*tick)(void *)` through
+ * keyboard_enter() → hs_enter_name() → gameover_init() and every game's call
+ * site, where a new game silently opts out by forgetting it.  Registered by
+ * `audio_open()` and cleared by `audio_close()` — never by a game — so this
+ * header stays free of `audio.h` (the same separation `hw_led_pulse_update()`
+ * keeps) and no app changed a line to get the fix.
+ *
+ * ⚠️ Any NEW loop that draws while the main loop is stopped owes a call to
+ * ui_frame_service() beside its fb_swap().  `hw_pulse_led()` and
+ * `hw_blink_led()` block too and do NOT call it: their waits are single long
+ * usleeps rather than a loop, and (measured 2026-08-22) their only callers are
+ * device_tools and hardware_test, neither of which runs a bed.
+ */
+
+// Install the per-frame service.  ctx is passed back verbatim.  fn == NULL
+// clears the slot.
+void ui_frame_service_set(void (*fn)(void *ctx), void *ctx);
+
+// Run the installed service, if any.  Cheap and safe to call when nothing is
+// registered; call it once per iteration of any loop that owns the screen.
+void ui_frame_service(void);
+
+// ============================================================================
 // TOGGLE SWITCH CONTROL
 // ============================================================================
 

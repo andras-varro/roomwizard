@@ -20,6 +20,7 @@
 #include "../common/hardware.h"
 #include "../common/highscore.h"
 #include "../common/audio.h"
+#include "../common/audio_bed.h"
 #include "../common/logger.h"
 #include "../common/gamepad.h"
 
@@ -1425,6 +1426,13 @@ static void draw_all(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 int main(int argc, char *argv[]) {
+    /* Line-buffer stdout FIRST: at boot it is /var/log/roomwizard/app_stdout.log,
+     * not a tty, so glibc block-buffers 4 KB and audio_bed_init()'s playlist
+     * receipt never arrives — which reads as a printf that was never reached.
+     * common/logger.c line-buffers its own file, which is why only the printf
+     * lines go missing (../CLAUDE.md → App lifecycle). */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     const char *fb_device    = "/dev/fb0";
     const char *touch_device = "/dev/input/touchscreen0";
 
@@ -1458,6 +1466,13 @@ int main(int argc, char *argv[]) {
      * rather than muting, so there is nothing for a game to do about it, and
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
+
+    /* The music bed: a playlist over music/frogger<n>-mono.wav, with the four
+     * states and the hold/resume rules in common/audio_bed.c (F1 Phase 5 ⑤).
+     * Its config keys are frogger_music, frogger_music2 …, and ⚠️ the FIRST of
+     * those set empty is this game's music off switch. */
+    AudioBed bed;
+    audio_bed_init(&bed, &audio, "frogger", "frogger", 4);
 
     /* Framebuffer init */
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */
@@ -1527,6 +1542,9 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (../common/audio_out.h). */
+        /* One bed transition, BEFORE the pump so a voice started on this
+         * iteration is fed on the same one. */
+        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED || death_anim_active);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

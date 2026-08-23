@@ -338,6 +338,24 @@ static void sample_discard(AudioSampleVoice *sv)
 }
 
 /** Everything both entry points do: amp on, open, configure, read back. */
+/* ── The per-frame service a blocking sub-loop owes (see common.h) ────────── */
+
+/* ⚠️ The setter is declared WEAK rather than by including "common.h", because
+ * audio.c must stay linkable WITHOUT common.o: tests/audio_tone_test.c,
+ * audio_gen_test.c, audio_sample_test.c, audio_out_test.c and the four
+ * measure_audio_*_sabotage.sh harnesses all compile audio.c on the host with no
+ * UI code at all, deliberately (`native_apps/CLAUDE.md` → *Audio*).  Absent
+ * common.o the symbol resolves to 0, nothing registers, and the tests behave
+ * exactly as they did before.  Every shipped binary links common.o explicitly
+ * (COMMON_OBJ in build-and-deploy.sh — objects, never an archive, so a weak
+ * reference does resolve). */
+extern void ui_frame_service_set(void (*fn)(void *ctx), void *ctx) __attribute__((weak));
+
+static void audio_frame_service(void *ctx)
+{
+    audio_pump((Audio *)ctx);
+}
+
 static int audio_open(Audio *audio)
 {
     memset(audio, 0, sizeof(*audio));
@@ -353,6 +371,12 @@ static int audio_open(Audio *audio)
     audio->effects_on  = true;
     level_defaults(audio);
     fx_defaults(audio);
+
+    /* ⚠️ Registered HERE and not in audio_init(), because audio_init_unchecked()
+     * is audio_open()'s whole body and a speaker test blocks the same way a game
+     * does.  One process opens one Audio; a second open replaces the slot, which
+     * is correct — the newest struct is the one being pumped. */
+    if (ui_frame_service_set) ui_frame_service_set(audio_frame_service, audio);
 
     return dsp_reopen(audio);
 }
@@ -450,6 +474,10 @@ void audio_close(Audio *audio)
     audio->pumping         = false;
     audio->streaming       = false;
     audio->available       = false;
+    /* ⚠️ Cleared, because the registered ctx is usually a `main()` STACK
+     * address: a blocking sub-loop entered after audio_close() would otherwise
+     * pump a dead struct. */
+    if (ui_frame_service_set) ui_frame_service_set(NULL, NULL);
 }
 
 /* ── The mix bus, device side ────────────────────────────────────────────────

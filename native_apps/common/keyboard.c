@@ -78,11 +78,13 @@ static void kb_drain_touches(TouchInput *touch) {
         touch_poll(touch);
         TouchState s = touch_get_state(touch);
         if (!s.held) break;
+        ui_frame_service();
         usleep(10000);
     }
     start = get_time_ms();
     while (get_time_ms() - start < 300) {
         touch_poll(touch);
+        ui_frame_service();
         usleep(10000);
     }
 }
@@ -261,6 +263,14 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
         button_draw(fb, &btn_ok);
 
         fb_swap(fb);
+
+        /* ⚠️ A blocking sub-loop IS a render loop, and this one owns the screen
+         * for as long as a player takes to type a name.  Without this the mix bus
+         * stops advancing (it counts frames RENDERED), so the game-over fanfare
+         * queued one statement before gameover_init() is DEFERRED until this
+         * returns and a music bed's fade freezes mid-way.  Rationale and the
+         * registration side: common.h → PER-FRAME SERVICE. */
+        ui_frame_service();
 
         /* ── Input ───────────────────────────────────────────────────── */
         touch_poll(touch);

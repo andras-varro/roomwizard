@@ -150,24 +150,25 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/35" "framebuffer";  $CC $WARN -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/35" "touch_input";  $CC $WARN -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/35" "touch_calib";  $CC $WARN -O2 -static -c common/touch_calib.c    -o build/touch_calib.o
-step " 4/35" "hardware";     $CC $WARN -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 5/35" "common";       $CC $WARN -O2 -static -c common/common.c          -o build/common.o
-step " 6/35" "highscore";    $CC $WARN -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 7/35" "keyboard";     $CC $WARN -O2 -static -c common/keyboard.c        -o build/keyboard.o
-step " 8/35" "ui_layout";    $CC $WARN -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 9/35" "audio";        $CC $WARN -O2 -static -c common/audio.c           -o build/audio.o
-step "10/35" "audio_gen";    $CC $WARN -O2 -static -c common/audio_gen.c       -o build/audio_gen.o
-step "11/35" "audio_out";    $CC $WARN -O2 -static -c common/audio_out.c       -o build/audio_out.o
-step "12/35" "audio_wav";    $CC $WARN -O2 -static -c common/audio_wav.c       -o build/audio_wav.o
-step "13/35" "ppm";          $CC $WARN -O2 -static -c common/ppm.c             -o build/ppm.o
-step "14/35" "logger";       $CC $WARN -O2 -static -c common/logger.c          -o build/logger.o
-step "15/35" "config";       $CC $WARN -O2 -static -c common/config.c          -o build/config.o
-step "16/35" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -o build/gamepad.o
+step " 1/36" "framebuffer";  $CC $WARN -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/36" "touch_input";  $CC $WARN -O2 -static -c common/touch_input.c    -o build/touch_input.o
+step " 3/36" "touch_calib";  $CC $WARN -O2 -static -c common/touch_calib.c    -o build/touch_calib.o
+step " 4/36" "hardware";     $CC $WARN -O2 -static -c common/hardware.c        -o build/hardware.o
+step " 5/36" "common";       $CC $WARN -O2 -static -c common/common.c          -o build/common.o
+step " 6/36" "highscore";    $CC $WARN -O2 -static -c common/highscore.c       -o build/highscore.o
+step " 7/36" "keyboard";     $CC $WARN -O2 -static -c common/keyboard.c        -o build/keyboard.o
+step " 8/36" "ui_layout";    $CC $WARN -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
+step " 9/36" "audio";        $CC $WARN -O2 -static -c common/audio.c           -o build/audio.o
+step "10/36" "audio_gen";    $CC $WARN -O2 -static -c common/audio_gen.c       -o build/audio_gen.o
+step "11/36" "audio_out";    $CC $WARN -O2 -static -c common/audio_out.c       -o build/audio_out.o
+step "12/36" "audio_wav";    $CC $WARN -O2 -static -c common/audio_wav.c       -o build/audio_wav.o
+step "13/36" "audio_bed";    $CC $WARN -O2 -static -c common/audio_bed.c       -o build/audio_bed.o
+step "14/36" "ppm";          $CC $WARN -O2 -static -c common/ppm.c             -o build/ppm.o
+step "15/36" "logger";       $CC $WARN -O2 -static -c common/logger.c          -o build/logger.o
+step "16/36" "config";       $CC $WARN -O2 -static -c common/config.c          -o build/config.o
+step "17/36" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -o build/gamepad.o
 
-COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/audio_gen.o build/audio_out.o build/audio_wav.o build/config.o"
+COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/audio_gen.o build/audio_out.o build/audio_wav.o build/audio_bed.o build/config.o"
 
 # audio_gen.o rides with audio.o and is not optional: audio.c calls into it for
 # every frame count, every byte count, the envelope and the write loop
@@ -190,75 +191,81 @@ COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/commo
 # calls audio_wav_open/close/fill, so in practice the link fails without it,
 # which is the right failure.  It has no device in it at all (plain stdio), so it
 # is also the one audio object a host test needs no shim to reach.
+#
+# audio_bed.o joined in Phase 5 ⑤ and IS optional in the link sense — nothing in
+# `audio.h` reaches it and a binary with no bed never calls it, so it costs those
+# binaries only its bytes.  It is in COMMON_OBJ anyway rather than named per game:
+# a bed is now three lines in any game (`common/audio_bed.h`), and a per-game
+# object list is exactly the kind of second place a new game silently misses.
 
 # touch_calib.o is NOT in COMMON_OBJ: only the two tools that measure the touch
 # mapping need it, and there is no reason to carry the target table into eight
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "17/35" "snake";        $CC $WARN -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
-step "18/35" "tetris";       $CC $WARN -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
-step "19/35" "pong";         $CC $WARN -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
+step "18/36" "snake";        $CC $WARN -O2 -static snake/snake.c             $COMMON_OBJ build/gamepad.o -o build/snake         -lm
+step "19/36" "tetris";       $CC $WARN -O2 -static tetris/tetris.c           $COMMON_OBJ build/gamepad.o -o build/tetris        -lm
+step "20/36" "pong";         $CC $WARN -O2 -static pong/pong.c               $COMMON_OBJ build/gamepad.o -o build/pong          -lm
 
-step "20/35" "brick_breaker"
+step "21/36" "brick_breaker"
 $CC $WARN -O2 -static brick_breaker/brick_breaker.c $COMMON_OBJ build/gamepad.o -o build/brick_breaker -lm
 
-step "21/35" "samegame"
+step "22/36" "samegame"
 $CC $WARN -O2 -static samegame/samegame.c $COMMON_OBJ build/gamepad.o -o build/samegame -lm
 
-step "22/35" "frogger"
+step "23/36" "frogger"
 $CC $WARN -O2 -static frogger/frogger.c $COMMON_OBJ build/gamepad.o -o build/frogger -lm
 
-step "23/35" "platformer"
+step "24/36" "platformer"
 $CC $WARN -O2 -static platformer/platformer.c $COMMON_OBJ build/gamepad.o -o build/platformer -lm
 
-step "24/35" "game_selector"
+step "25/36" "game_selector"
 $CC $WARN -O2 -static -I. game_selector/game_selector.c $COMMON_OBJ build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
-step "25/35" "app_launcher"
+step "26/36" "app_launcher"
 $CC $WARN -O2 -static -I. app_launcher/app_launcher.c $COMMON_OBJ build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
-step "26/35" "hardware_test"
+step "27/36" "hardware_test"
 $CC $WARN -O2 -static -I. hardware_test/hardware_test_gui.c $COMMON_OBJ build/ui_layout.o -o build/hardware_test -lm
 
-step "27/35" "hardware_config"
+step "28/36" "hardware_config"
 $CC $WARN -O2 -static -I. hardware_config/hardware_config.c $COMMON_OBJ build/ui_layout.o -o build/hardware_config -lm
 
-step "28/35" "hardware_diag"
+step "29/36" "hardware_diag"
 $CC $WARN -O2 -static -I. hardware_diag/hardware_diag.c $COMMON_OBJ -o build/hardware_diag -lm
 
-step "29/35" "audio_touch_test"
+step "30/36" "audio_touch_test"
 $CC $WARN -O2 -static -I. \
   tests/audio_touch_test.c \
   $COMMON_OBJ build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
-step "30/35" "backlight"
+step "31/36" "backlight"
 $CC $WARN -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 # Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
-step "31/35" "device_tools"
+step "32/36" "device_tools"
 $CC $WARN -O2 -static -I. device_tools/device_tools.c $COMMON_OBJ $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Touch diagnostics. All three were previously absent from this script, which is
 # why the deployed touch_trace was stale (pre-bezel) and touch_inject got a
 # .hidden marker below without ever being built.
-step "32/35" "touch_raw"
+step "33/36" "touch_raw"
 $CC $WARN -O2 -static -I. tests/touch_raw.c $COMMON_OBJ $CALIB_OBJ -o build/touch_raw -lm
 
-step "33/35" "touch_trace"
+step "34/36" "touch_trace"
 $CC $WARN -O2 -static -I. tests/touch_trace.c $COMMON_OBJ -o build/touch_trace -lm
 
-step "34/35" "touch_inject"
+step "35/36" "touch_inject"
 $CC $WARN -O2 -static -I. tests/touch_inject.c -o build/touch_inject
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the
 # panel (../IMPROVEMENT_PLAN.md F1 Phase 3, panel items 12 and 14).
-step "35/35" "audio_mix_test"
+step "36/36" "audio_mix_test"
 $CC $WARN -O2 -static -I. tests/audio_mix_test.c $COMMON_OBJ -o build/audio_mix_test -lm
 
 # Collect icon files from source dirs → build/icons/
@@ -344,6 +351,20 @@ if [[ -x ./check-sound-assets.sh ]]; then
     ./check-sound-assets.sh || err "Sound-asset check failed — refusing to deploy"
 else
     warn "check-sound-assets.sh missing — skipping sound-asset gate"
+fi
+echo ""
+
+# ── 2b4. Music-bed gate ─────────────────────────────────────────────────────
+# The naming CONVENTION is load-bearing: audio_bed_init() derives slot n's path
+# as /opt/sound/<name><n>-mono.wav, so a mistyped stem or a count one too high
+# ships a game that plays its effects in silence — indistinguishable from a game
+# with no bed.  This is also the only thing that counts beds reaching NO game,
+# which is the state the tree was in while 18 of 24 were unreachable
+# (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).  Cheap: it reads the repo, no ffmpeg.
+if [[ -x ./check-bed-files.sh ]]; then
+    ./check-bed-files.sh || err "Music-bed check failed — refusing to deploy"
+else
+    warn "check-bed-files.sh missing — skipping music-bed gate"
 fi
 echo ""
 
