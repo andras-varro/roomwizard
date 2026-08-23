@@ -286,7 +286,7 @@ static void update_led_effects(void) {
  * Audio Helpers
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void play_jump_sound(void)           { audio_beep(&audio); }
+static void play_jump_sound(void)           { audio_jump(&audio); }
 static void play_coin_sound(void)           { audio_blip(&audio); }
 static void play_stomp_sound(void)          { audio_beep(&audio); }
 static void play_death_sound(void)          { audio_fail(&audio); }

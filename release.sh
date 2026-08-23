@@ -242,9 +242,16 @@ generated audio from https://elevenlabs.io, produced on a FREE account, which
 does not grant commercial use.  They are the only content in this bundle that is
 narrower than its code licence: THIS BUNDLE MAY NOT BE USED OR REDISTRIBUTED
 COMMERCIALLY unless those eleven files are removed or replaced.  Removing them is
-safe — every game falls back to its built-in note tables.  No permission beyond
-"not commercial" has been established; see LICENSE.md, which is the repo-level
-half of this notice and must agree with it.
+safe — every game falls back to its built-in note tables.
+
+ATTRIBUTION, REQUIRED — this credit must travel with the bundle:
+
+    Sound effects generated with ElevenLabs — elevenlabs.io.
+
+Both obligations were confirmed by ElevenLabs and relayed by the author on
+2026-08-23, and they are the whole of what is established: non-commercial use,
+plus that credit.  See LICENSE.md, which is the repo-level half of this notice
+and must agree with it.
 
 The music beds installed to /opt/sound as `<stem><n>-mono.wav` (one set per game)
 are AI-generated and are not this project's composition.  All of them are from

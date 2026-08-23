@@ -930,7 +930,7 @@ static void update_balls(void) {
              * with balls remaining.  The idiom was free when the kernel ring
              * held exactly one sound; mixing is the whole point of the bus.
              * The four sites below dropped theirs for the same reason. */
-            audio_tone(&audio, 600, 30);
+            audio_knock(&audio);
         }
 
         /* Bottom — ball lost */
@@ -964,7 +964,7 @@ static void update_balls(void) {
                 br->health = 0;
                 brick_destroyed = true;
                 game.score += 20 * game.level;  /* 2x normal points */
-                audio_tone(&audio, 1500, 30);  /* Higher pitch for bonus */
+                audio_sparkle(&audio);         /* bonus brick — fx_sparkle */
             } else if (br->type == BRICK_EXPLOSIVE) {
                 /* Explosive brick — immediate detonation + deferred chain */
                 br->health = 0;
@@ -1004,7 +1004,7 @@ static void update_balls(void) {
                     }
                 }
                 
-                audio_tone(&audio, 1000, 40);
+                audio_burst(&audio);
             } else {
                 /* Normal brick */
                 if (b->fireball) {
@@ -1049,9 +1049,9 @@ static void update_balls(void) {
                 }
                 spawn_powerup((float)(br->x + br->w / 2),
                               (float)(br->y + br->h / 2));
-                audio_tone(&audio, 1200, 25);
+                audio_tick(&audio);
             } else if (br->type != BRICK_INDESTRUCTIBLE) {
-                audio_tone(&audio, 800, 20);
+                audio_thud(&audio);
             }
 
             /* Bounce (skip if fireball or hit indestructible without fireball) */
@@ -1166,13 +1166,19 @@ static void update_game(void) {
         /* Non-blocking 300 ms red flash — the usleep() that was here froze the
          * panel for 300 ms on every lost ball. */
         hw_led_pulse_start(&fx_pulse, LED_RED, 1, 300, get_time_ms());
-        audio_fail(&audio);
 
         /* Reset effects on ball lost */
         reset_effects();
         apply_paddle_width();
 
         if (game.lives <= 0) {
+            /* ⚠️ **The RUN ending and ONE life ending must not be the same
+             * noise** — that is the whole reason `audio_gameover()` exists
+             * (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤), and this game played
+             * `audio_fail()` for both, so a player could not hear which had
+             * happened.  It fires INSTEAD of fail, not after it: fx_gameover is
+             * 1.19 s against fail's 350 ms and the two would sum on the bus. */
+            audio_gameover(&audio);
             game.screen = SCREEN_GAME_OVER;
             {
                 char info[64];
@@ -1180,6 +1186,7 @@ static void update_game(void) {
                 gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
             }
         } else {
+            audio_fail(&audio);
             reset_ball_on_paddle();
         }
     }
@@ -1682,7 +1689,7 @@ static void handle_input(void) {
                 snprintf(info, sizeof(info), "LEVEL %d", game.level);
                 gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
             }
-            audio_tone(&audio, 600, 100);
+            audio_gameover(&audio);   /* retiring ends the RUN — see the lost-ball site */
         }
         if (action == MODAL_ACTION_BTN3) {
             /* Exit */
@@ -1948,7 +1955,18 @@ int main(int argc, char *argv[]) {
          * the library measures for itself (common/audio_out.h). */
         /* One bed transition, BEFORE the pump so a voice started on this
          * iteration is fed on the same one. */
-        audio_bed_service(&bed, game.screen == SCREEN_PLAYING, game.screen == SCREEN_PAUSED);
+        /* The ball parked on the paddle HOLDS the bed, which is `platformer`'s
+         * death rule with this game's spelling for it (operator, 2026-08-23).
+         * ⚠️ The term is in BOTH predicates, exactly as platformer's `dying` is:
+         * clearing `want_play` is what releases the voice, and setting
+         * `want_hold` is what keeps the FILE open at its read position — so the
+         * relaunch RESUMES the same track mid-bar instead of restarting the
+         * level's music, and the playlist cursor does not advance.  It also
+         * covers the pre-launch wait at a level's start, so the bed begins when
+         * play does rather than over a stationary ball. */
+        bool bed_waiting = !game.ball_launched;
+        audio_bed_service(&bed, game.screen == SCREEN_PLAYING && !bed_waiting,
+                                game.screen == SCREEN_PAUSED || bed_waiting);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

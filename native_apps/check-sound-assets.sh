@@ -215,10 +215,55 @@ for f in "${FILES[@]}"; do
     esac
 done
 
+# ── the CLAIM check: is anything in C actually going to PLAY this file? ──────
+#
+# ⚠️ **This is the check whose absence shipped the bug.**  Five of the eleven
+# effects were sourced, gated, format-correct, deployed to /opt/sound — and named
+# by nothing in `common/audio.c`, so `brick_breaker` went on playing generated
+# tones at the five sites `sounds/prompts.md` had already assigned those files to.
+# Everything above measures a file's FORMAT and its ENERGY; no measurement of a
+# WAV can see that no caller exists.  Reported by ear on `.188` 2026-08-23.
+#
+# Two directions, exactly as ./check-bed-files.sh does for the music beds:
+#   orphan  — a committed fx_*.wav that FX_DEFAULT_PATH never names
+#   missing — an FX_DEFAULT_PATH entry with no committed file behind it
+#
+# Negative control, and it takes one command — see the gate fail without
+# touching shipped source:
+#   cp sounds/fx_click.wav sounds/fx_decoy.wav && ./check-sound-assets.sh; \
+#     rm sounds/fx_decoy.wav
+AUDIO_C="$(dirname "$0")/common/audio.c"
+n_orphan=0; n_missing=0
+if [ ! -f "$AUDIO_C" ]; then
+    echo -e "${YELLOW}    ! claim check skipped: $AUDIO_C not found${NC}"
+else
+    for f in "${FILES[@]}"; do
+        base=$(basename "$f")
+        grep -q "\"/opt/sound/$base\"" "$AUDIO_C" || {
+            n_orphan=$((n_orphan + 1))
+            echo -e "${RED}    ✗ $base: no AudioFxId names it — nothing can play it${NC}"
+        }
+    done
+    # The other direction: a name pointing at a file we do not ship.
+    while read -r want; do
+        [ -n "$want" ] || continue
+        [ -f "$DIR/$want" ] || {
+            n_missing=$((n_missing + 1))
+            echo -e "${RED}    ✗ $want: named in audio.c, not committed in $DIR${NC}"
+        }
+    done < <(grep -o '"/opt/sound/fx_[a-z_]*\.wav"' "$AUDIO_C" \
+             | tr -d '"' | sed 's|.*/||' | sort -u)
+fi
+
 total=$((n_ok + n_warn + n_fail))
 echo "SOUND-SUMMARY checked=$total ok=$n_ok warn=$n_warn fail=$n_fail" \
+     "orphan=$n_orphan missing=$n_missing" \
      "ctl200=$CTL_LOW ctl2k=$CTL_HIGH"
 
+if [ $n_orphan -gt 0 ] || [ $n_missing -gt 0 ]; then
+    echo -e "${RED}  x Sound assets: $n_orphan unplayable, $n_missing named but absent${NC}"
+    exit 1
+fi
 if [ $n_fail -gt 0 ]; then
     echo -e "${RED}  ✗ Sound assets: $n_fail of $total unusable${NC}"
     exit 1

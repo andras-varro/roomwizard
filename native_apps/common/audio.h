@@ -125,6 +125,22 @@ typedef enum {
                                *   from FAIL because losing ONE life and losing
                                *   the game were the same sound and a player
                                *   could not tell them apart (operator, 2026-08-22) */
+    /* ── The six DURING-PLAY names ────────────────────────────────────────
+     * ⚠️ **These are not a design; they are the mapping the operator already
+     * wrote down.**  `../sounds/prompts.md`'s table names the game event each
+     * file was RECORDED for, and every one of these six was sourced for a site
+     * that went on calling raw `audio_tone()` — so the panel played a generated
+     * pitch while the sourced file sat on the device unreferenced.  Reported by
+     * ear on `.188` 2026-08-23: "the brick thud, explosion and break plays the
+     * stock ping, not the effect".  ⚠️ No gate could see it — the assets gate
+     * measures a file's FORMAT and its ENERGY, never whether anything plays it;
+     * `../check-sound-assets.sh` gained the claim check with this change. */
+    AUDIO_FX_KNOCK,           /**< audio_knock()   — ball off the paddle/bat    */
+    AUDIO_FX_THUD,            /**< audio_thud()    — a hit that did NOT destroy */
+    AUDIO_FX_TICK,            /**< audio_tick()    — a brick destroyed          */
+    AUDIO_FX_SPARKLE,         /**< audio_sparkle() — a bonus / rare reward      */
+    AUDIO_FX_BURST,           /**< audio_burst()   — an explosion, chain blast  */
+    AUDIO_FX_JUMP,            /**< audio_jump()    — a jump / stomp             */
     AUDIO_FX_COUNT
 } AudioFxId;
 
@@ -554,6 +570,43 @@ void audio_fail(Audio *audio);
  *  audio_fail()'s, so the fallback is audible on this speaker without the clip.
  *  Clip: fx_gameover, the loudest-in-band file of the set. */
 void audio_gameover(Audio *audio);
+
+/* ── The six during-play effects ─────────────────────────────────────────────
+ *
+ * Same shape as the five above: try the clip, fall back to ONE note.  ⚠️ **Every
+ * fallback pitch here was RAISED when the site got a name** — the five
+ * `brick_breaker` sites played 600/800/1000/1200/1500 Hz and the first two are at
+ * or below the speaker's ~700 Hz knee ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
+ * The rule this repo already wrote for the moment a raw `audio_tone()` site gets
+ * a name is *retune the spec, never the threshold*, so the notes are lifted to
+ * 880 Hz and above while KEEPING the author's pitch ORDER — paddle < thud <
+ * burst < tick < sparkle — which is the part a player actually reads.
+ */
+
+/** ~880 Hz, 30 ms — the ball off a paddle or bat.  Clip: fx_knock.
+ *  ⚠️ **The weakest-measured file of the eleven drives the most FREQUENT event**
+ *  (−21.66 dBFS in-band at a −3.05 dB band delta, `../check-sound-assets.sh`).
+ *  That is the argument for re-sourcing it, and it is not a reason to leave the
+ *  site on a 600 Hz tone the panel cannot radiate at all. */
+void audio_knock(Audio *audio);
+
+/** ~988 Hz, 20 ms — a hit that did NOT destroy its target.  Clip: fx_thud. */
+void audio_thud(Audio *audio);
+
+/** ~1319 Hz, 25 ms — a brick destroyed, a block cleared.  Clip: fx_tick. */
+void audio_tick(Audio *audio);
+
+/** ~1568 Hz, 30 ms — a bonus brick, a rare reward.  Clip: fx_sparkle, which has
+ *  the FLATTEST band delta of the set (−0.05 dB). */
+void audio_sparkle(Audio *audio);
+
+/** ~1175 Hz, 40 ms — an explosion or a chain detonation.  Clip: fx_burst. */
+void audio_burst(Audio *audio);
+
+/** ~1046 Hz, 40 ms — a jump or a stomp.  Clip: fx_jump.
+ *  ⚠️ `platformer`'s jump called `audio_beep()` (fx_click, a UI tap) while
+ *  `fx_jump.wav` — sourced for "jump / stomp" — reached nothing. */
+void audio_jump(Audio *audio);
 
 /**
  * Play one canned name's CLIP, with no note-table fallback.  Returns true iff a

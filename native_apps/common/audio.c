@@ -1093,15 +1093,30 @@ static const char *const FX_DEFAULT_PATH[AUDIO_FX_COUNT] = {
      * eleven, where burst is −18.61 / −2.71.  The most important sound in a game
      * should not be one of its quietest (../IMPROVEMENT_PLAN.md F1 Phase 5 ③;
      * `../check-sound-assets.sh` is what re-measures this). */
-    "/opt/sound/fx_gameover.wav"   /* GAMEOVER */
+    "/opt/sound/fx_gameover.wav",  /* GAMEOVER */
+    /* The six during-play names.  ⚠️ **This column is `../sounds/prompts.md`'s
+     * "game event" column, not a choice made here** — each file was sourced for
+     * the site it now backs, and each site went on playing a generated tone
+     * until 2026-08-23.  Four of these six dip below the knee as SOURCED
+     * (knock ends 260, thud 800→600, burst starts 600, jump starts 500 Hz);
+     * that is an argument for re-sourcing the FILE, and the note fallbacks
+     * beside them are what got retuned. */
+    "/opt/sound/fx_knock.wav",     /* KNOCK    ball off the paddle             */
+    "/opt/sound/fx_thud.wav",      /* THUD     brick hit, not destroyed        */
+    "/opt/sound/fx_tick.wav",      /* TICK     brick destroyed                 */
+    "/opt/sound/fx_sparkle.wav",   /* SPARKLE  bonus brick                     */
+    "/opt/sound/fx_burst.wav",     /* BURST    explosive brick                 */
+    "/opt/sound/fx_jump.wav"       /* JUMP     jump / stomp                    */
 };
 
 /** The config keys that override them, and the word each refusal uses. */
 static const char *const FX_CONFIG_KEY[AUDIO_FX_COUNT] = {
-    "fx_beep", "fx_blip", "fx_success", "fx_fail", "fx_gameover"
+    "fx_beep", "fx_blip", "fx_success", "fx_fail", "fx_gameover",
+    "fx_knock", "fx_thud", "fx_tick", "fx_sparkle", "fx_burst", "fx_jump"
 };
 static const char *const FX_NAME[AUDIO_FX_COUNT] = {
-    "beep", "blip", "success", "fail", "gameover"
+    "beep", "blip", "success", "fail", "gameover",
+    "knock", "thud", "tick", "sparkle", "burst", "jump"
 };
 
 /** Defaults into `fx_path`.  Called from audio_open(), so BOTH entry points get
@@ -1384,12 +1399,85 @@ void audio_fail(Audio *audio)
  *  2026-08-22).  ⚠️ Every note is ABOVE the ~700 Hz knee, unlike audio_fail()'s
  *  three: this fallback had no shipped history to preserve, so it was tuned to
  *  the speaker from the start rather than inheriting a musical descent that the
- *  hardware cannot radiate.  Clip: fx_burst. */
+ *  hardware cannot radiate.  Clip: fx_gameover — its OWN sourced file, and the
+ *  loudest-in-band of the eleven; the "fx_burst" this line used to name was the
+ *  candidate it was chosen OVER, on the measurement recorded above. */
 void audio_gameover(Audio *audio)
 {
     static const AudioNote s[] = { { 1046, 140 }, { 880, 140 }, { 784, 140 }, { 740, 260 } };
     if (audio_fx_play(audio, AUDIO_FX_GAMEOVER)) return;
     play_sequence(audio, s, 4);
+}
+
+/* ── The six during-play effects ─────────────────────────────────────────────
+ *
+ * ⚠️ **Each of these replaced a raw `audio_tone()` at a site whose FILE was
+ * already sourced and already deployed** — `../sounds/prompts.md` names the
+ * event for every one of the eleven, and these six named nothing in C, so the
+ * panel played a generated pitch and the recording was dead weight in
+ * `/opt/sound`.  Reported by ear on `.188` 2026-08-23; invisible to every gate,
+ * because `../check-sound-assets.sh` measured each file's format and its energy
+ * and nothing asked whether a name pointed at it.  It does now.
+ *
+ * ⚠️ **The note tables are RETUNED, not transplanted.**  `brick_breaker` played
+ * 600 / 800 / 1000 / 1200 / 1500 Hz and the first two are at or under the ~700 Hz
+ * knee, so a device with no clip files heard the two most frequent effects
+ * barely or not at all.  The order is preserved because it is the information a
+ * player gets — a paddle bounce stays below a thud stays below a break — while
+ * every pitch is lifted to the ≥880 Hz band this speaker actually radiates
+ * ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)).  ⚠️ Durations are UNCHANGED: they
+ * are what the sites' feel was tuned on, and length is not the audibility axis.
+ */
+
+/** Ball off the paddle.  Was a 600 Hz tone — under the knee.  Clip: fx_knock. */
+void audio_knock(Audio *audio)
+{
+    static const AudioNote s[] = { { 880, 30 } };
+    if (audio_fx_play(audio, AUDIO_FX_KNOCK)) return;
+    play_sequence(audio, s, 1);
+}
+
+/** A hit that did NOT destroy its target.  Was 800 Hz.  Clip: fx_thud. */
+void audio_thud(Audio *audio)
+{
+    static const AudioNote s[] = { { 988, 20 } };
+    if (audio_fx_play(audio, AUDIO_FX_THUD)) return;
+    play_sequence(audio, s, 1);
+}
+
+/** A brick destroyed.  Was 1200 Hz — already in band, lifted for order.
+ *  Clip: fx_tick. */
+void audio_tick(Audio *audio)
+{
+    static const AudioNote s[] = { { 1319, 25 } };
+    if (audio_fx_play(audio, AUDIO_FX_TICK)) return;
+    play_sequence(audio, s, 1);
+}
+
+/** A bonus brick or rare reward.  Was 1500 Hz.  Clip: fx_sparkle. */
+void audio_sparkle(Audio *audio)
+{
+    static const AudioNote s[] = { { 1568, 30 } };
+    if (audio_fx_play(audio, AUDIO_FX_SPARKLE)) return;
+    play_sequence(audio, s, 1);
+}
+
+/** An explosion or chain detonation.  Was 1000 Hz.  Clip: fx_burst. */
+void audio_burst(Audio *audio)
+{
+    static const AudioNote s[] = { { 1175, 40 } };
+    if (audio_fx_play(audio, AUDIO_FX_BURST)) return;
+    play_sequence(audio, s, 1);
+}
+
+/** A jump or stomp.  ⚠️ Its site called `audio_beep()` — a UI tap — so this one
+ *  replaces a WRONG NAME rather than a raw tone, and the fallback keeps beep's
+ *  in-band character.  Clip: fx_jump. */
+void audio_jump(Audio *audio)
+{
+    static const AudioNote s[] = { { 1046, 40 } };
+    if (audio_fx_play(audio, AUDIO_FX_JUMP)) return;
+    play_sequence(audio, s, 1);
 }
 
 /* ── Recorded PCM: the bed and the sample effect ─────────────────────────────

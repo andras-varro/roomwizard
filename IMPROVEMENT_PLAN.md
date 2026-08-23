@@ -323,14 +323,12 @@ has no `/opt/games/rw_config.conf` at all and `config_audio_enabled()` defaults 
 
 ⚠️ **② also produced a diagnosis that is REFUTED by arithmetic, and re-raising it costs a session.** The
 interrupt-then-tone idiom does mean "stop ALL voices" on the bus and is gone from every game — but it is
-**not** why `audio_fail()` sounded wrong. That fanfare is 600 ms of cumulative delays, and on a lost life
-`brick_breaker` parks the ball awaiting a tap (`brick_breaker.c:1163-1168`) while `tetris` locks input at
-game over, so nothing can sound inside the window. *"Inaudible"* and *"very faint"* were one observation
-described twice, and the cause is the speaker's band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — which ③ fixes.
-⚠️ **Do not re-request the overlap check; it is not constructible.** The removals stand on the RULE, whose
-home is `native_apps/CLAUDE.md` → *Mixing*: it holds wherever a second effect *can* land inside a fanfare,
-as `samegame`'s removal blip does 60 ms after a level clear. ⚠️ **Converting a game and dropping its idiom
-are two edits and the gate sees only the first** — `tetris` was on the bus for a day with its own sites
+**not** why `audio_fail()` sounded wrong: that fanfare is 600 ms of cumulative delays and nothing can sound
+inside the window, so *"inaudible"* and *"very faint"* were one observation described twice, whose cause is
+the speaker's band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — which ③ fixes. ⚠️ **Do not re-request the overlap
+check; it is not constructible.** The removals stand on the RULE, whose home is `native_apps/CLAUDE.md` →
+*Mixing*. ⚠️ **Converting a game and dropping its idiom are two edits and the gate sees only the first** —
+`tetris` was on the bus for a day with its own sites
 intact. ⚠️ **`audio.h`'s comment still claims those sites mean "replace what is playing"**, which is wrong
 for an effect on a bus. Nothing counts a voice stopped early, so this is ear-only in both directions.
 ✅ **The blocking sub-loop now services the bus — the regression ① left is CLOSED (2026-08-22).** The rule
@@ -354,9 +352,7 @@ reported clear is ≥ 880 Hz and every one reported faint is ≤ 500 Hz — and 
 report of the same thing. ✅ **So the fix is CONTENT and nothing else**: the four stock clips are broadband
 and land inside the passband (`fx_click` 900→1500, `fx_pickup` 1200→3200, `fx_success` 700→4200, `fx_fail`
 1800→420 Hz), no pitch is retuned and no level is raised. ⚠️ **There is no headroom to raise anyway** —
-that same session produced `clip=126`, the first non-zero clip ever measured here. ⚠️ Four of the other six
-stock clips dip below the knee (`knock` ends 260, `thud` 800→600, `burst` starts 600, `jump` starts 500):
-**retune the spec, never the threshold**, when a raw `audio_tone()` site gets a name.
+that same session produced `clip=126`, the first non-zero clip ever measured here.
 
 ⏳ **What ③ still owes: one listen, and two things the mechanism cannot answer.** The clip path has been
 driven end to end on the host and on ARM, but never against the real `/opt/sound` files with a finger on
@@ -445,9 +441,24 @@ Owed: the listen — the track change at LEVEL COMPLETE, the death that holds th
   right first track and count each, and every bus closing at `starve=0` bar one first-service.**
   ⏳ **What is NOT verified is a bed actually STARTING in the six new games** — that needs a finger on
   START, so it joins the ear list above.
-  ⚠️ **`brick_breaker`'s lost ball is NOT a `want_hold`** the way a `platformer` death is: it holds only on
-  `SCREEN_PAUSED`, so the bed plays through a lost life. Whether it should get the same treatment (one term
-  in one predicate — `!game.ball_launched`) is an ear question, not a mechanism one.
+  ✅ **`brick_breaker`'s lost ball HOLDS the bed** (operator, 2026-08-23): `!game.ball_launched` in **both**
+  predicates, as `platformer`'s `dying` is, so a relaunch resumes mid-bar and the cursor does not advance.
+- ✅ **The six unclaimed effects have NAMES, and a gate counts the ones that do not** (2026-08-23).
+  `brick_breaker`'s five during-play sites and `platformer`'s jump played generated pitches while the files
+  `sounds/prompts.md` assigned to them sat deployed and unreferenced — `orphan=6` of eleven, measured.
+  ⚠️ **No content gate could see it**: format and energy are properties of the WAV, reachability of the C.
+  `check-sound-assets.sh` gained both directions (`orphan=0` now) with a decoy control in its header.
+  Fallback pitches were lifted ≥880 Hz keeping the author's order.
+- ⏳ **OPEN — the bed is never told to STOP before a blocking sub-loop opens, in all SEVEN games**, reported
+  as *"the end of game keeps playing the music over the keyboard"* and it is **row 6's residual half**:
+  `ui_frame_service()` fixed the *pump*, but `gameover_update()` runs the blocking name entry from inside the
+  redraw block **before** `audio_bed_service()`, so the bed is still `PLAYING` for the whole keyboard
+  session. `want_play` is already `SCREEN_PLAYING` alone, so only the ORDERING is wrong: move that call above
+  the redraw block, still before `audio_pump()`. One line per game, uniform shape, unheard.
+- ⏳ **OPEN — six of seven games never call `audio_gameover()`**; only `platformer` did, and `brick_breaker`
+  was fixed here (it played `audio_fail()` on the last ball too — exactly the one-life-versus-the-run
+  confusion the fifth name exists to end). ⚠️ It fires **instead of** `fail`: 1.19 s against 350 ms, and the
+  two sum on the bus.
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`

@@ -560,6 +560,15 @@ group_c() {
 # compressing three superseded coverage paragraphs; the raise is what the requests cost NET of that.
 # ⚠️ **No headroom is granted: 1352 is the measurement, and the next addition to that file pays by
 # deleting.** ⚠️ And phase 5 is still mid-feature, so do not lower it back onto ④/⑤ landing.
+# ⚠️ 2026-08-23, SEVENTH raise, deliberate and argued: IMPROVEMENT_PLAN.md 1352 → 1362 (measured
+# post-edit count). Phase 5 ⑤ gained one CLOSED item (brick_breaker's lost ball holds the bed) and two
+# OPEN findings that came off one ear report: the bed is never told to STOP before a blocking sub-loop
+# opens in all seven games (row 6's residual half — the pump was fixed, the ORDERING was not), and six of
+# seven games never call audio_gameover(). The same commit paid ~12 lines by deleting ③'s anticipation of
+# the moment a raw audio_tone() site gets a name — that moment arrived, so the rule now lives beside the
+# code in common/audio.{c,h} — and by compressing ②'s refuted-diagnosis paragraph to its two standing
+# "do not re-raise" claims. The raise is what the two new findings cost NET of that.
+# ⚠️ **No headroom: 1362 is the measurement, and the next addition to that file pays by deleting.**
 # ⚠️ 2026-08-21, SIXTH raise, deliberate and argued: native_apps/CLAUDE.md 665 → 668 (measured post-edit
 # count). The clip bank is new library surface behind the four canned sounds (F1 phase 5 ③) and its rules
 # are ones a caller gets wrong silently — a same-frame double trigger sums COHERENTLY, and the clips have
@@ -601,7 +610,7 @@ ceilings() {
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
 1597	SYSTEM_ANALYSIS.md
-1352	IMPROVEMENT_PLAN.md
+1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
 708	native_apps/CLAUDE.md
