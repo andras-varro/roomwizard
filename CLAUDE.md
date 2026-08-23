@@ -160,7 +160,7 @@ misparses.
 | Changed | Redeploy |
 |---|---|
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
-| `common/audio.c`, `common/audio_gen.c`, `common/audio_wav.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM has its own OSS mixer |
+| `common/audio.c`, `common/audio_gen.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM has its own OSS mixer |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
 | `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing, from F1 Phase 4 `native_apps`, from Phase 5 **all three**. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |

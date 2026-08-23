@@ -165,7 +165,7 @@ Three rules in there are load-bearing, and every one has been violated in shippe
   `/var/log/roomwizard/app_stdout.log`, so glibc block-buffers 4 KB: `compute_grid_layout()`'s layout
   receipt was absent from that log while `grep -ac 'launcher: safe'` on the deployed binary returned 1
   (`.188`, 2026-08-22). `common/logger.c` line-buffers its OWN file, which is why this reads as a missing
-  printf rather than a buffering one. Only `app_launcher` and `platformer` do it; the rest are still blind.
+  printf rather than a buffering one. The seven games and `app_launcher` have it; ⚠️ the TOOLS do not.
 - **`fb_init()` before `touch_init()`** — `touch_init()` reads `screen_base_width/height`, which
   `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes
@@ -778,20 +778,20 @@ These rules, each of which is a way to get this wrong:
   ⚠️ **The same clip fired twice in ONE frame sums COHERENTLY — 2× amplitude**, where two tones partially
   cancel; and the mixer's 10 ms attack / 20 ms release applies to a clip too, so on a 55 ms effect 30 ms of
   it is envelope. `tests/audio_tone_test.c` group I, controls in `tests/measure_audio_clip_sabotage.sh`.
-- ⚠️ **A blocking sub-loop IS a render loop; one that does not service the stream DEFERS the sound queued
-  before it** — delayed rather than dropped, because the mixer advances by frames RENDERED, which is worse
-  to diagnose. `keyboard_enter()` (`common/keyboard.c:263`, `:325`) contains no `audio_pump()`: open, with
-  two candidate fixes, `../IMPROVEMENT_PLAN.md` F1 Phase 5.
-- ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** —
-  `platformer`'s `bed_service()`, whose four states buy three behaviours with no state of their own:
+- ⚠️ **A blocking sub-loop IS a render loop and owes the same per-frame services** — the mixer advances by
+  frames RENDERED, so a loop that draws its own screen and services nothing DEFERS the queued sound rather
+  than dropping it, which is worse to diagnose. `ui_frame_service()` (`common/common.h`) is the call it
+  owes; `audio_open()` registers `audio_pump()` on it. ⚠️ **A new loop that owns the screen must call it.**
+- ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** — and it
+  lives ONCE, in `common/audio_bed.{c,h}`, whose header carries the four states and the hold/resume rules:
   level-complete leaves `want_play` (so the bed releases and the next playlist track starts), a **death**
   is `want_hold` (so the fail effect plays over near-silence and a respawn continues the same track), and
-  only game over stops it. `audio_music_pause()` arms stop's release but keeps the FILE open, so
-  `audio_music_resume()` continues the track, declaring what is LEFT of it and skipping ≤ one read-ahead
-  buffer; ⚠️ **the pump must keep running while a bed is held**, or no resume is ever accepted. ⚠️ **A
-  missing bed is still a NORMAL case** even though the beds are now committed and deployed
-  (`../IMPROVEMENT_PLAN.md` F19), because the paths are config keys: a refusal is permanent **per track**,
-  since a per-frame retry fills `app_stdout.log`. Covered by `tests/audio_tone_test.c` G and H.
+  only game over stops it. A game supplies a tag, a bed-file stem, a track count and those two predicates,
+  ⚠️ **never its own copy of the machine**. ⚠️ **The pump must keep running while a bed is held**, or no
+  resume is accepted, and ⚠️ **slot n's path is DERIVED as `/opt/sound/<stem><n>-mono.wav`, so a mistyped
+  stem ships a silent game** — `./check-bed-files.sh` gates that and counts beds reaching no game. ⚠️ **A
+  missing bed is NORMAL**: paths are config keys, so a refusal is permanent **per track**, and a per-frame
+  retry would fill `app_stdout.log` (`tests/audio_tone_test.c` G, H).
 - **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
   it is what lets an operator’s own play session be measured with no mic — from the launcher it lands in
   `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate before believing a zero**: `kill -STOP` the game

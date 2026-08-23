@@ -246,19 +246,16 @@ safe — every game falls back to its built-in note tables.  No permission beyon
 "not commercial" has been established; see LICENSE.md, which is the repo-level
 half of this notice and must agree with it.
 
-The music beds installed to /opt/sound as `<game><n>-mono.wav` (24 files) are AI-
-generated and are not this project's composition.  Two of them,
-`officerunner1-mono.wav` and `officerunner2-mono.wav`, are from
-musely.ai/tools/platformer-level-music and ARE royalty-free for commercial use per
-that generator's FAQ, with no attribution requirement.
-
-⚠️ THE OTHER 22 BEDS HAVE NO ESTABLISHED LICENCE.  They were added 2026-08-22; all
-24 carry the string "made with suno" in their own WAV metadata, and no one has
-recorded which service and which plan the 22 were obtained under.  A free Suno
-account does not grant commercial use.  So until LICENSE.md records their actual
-terms, read them like the effects above: THIS BUNDLE MAY NOT BE USED OR
-REDISTRIBUTED COMMERCIALLY while they are in it.  Removing any bed is safe — a game
-whose configured bed is missing plays its effects and carries on.
+The music beds installed to /opt/sound as `<stem><n>-mono.wav` (one set per game)
+are AI-generated and are not this project's composition.  All of them are from
+musely.ai and ARE royalty-free for commercial use per that generator's FAQ, with
+no attribution requirement — so they are NOT a restriction on this bundle.  Two
+limits: the FAQ asserts clearance but not ownership, so they cannot be licensed
+onward as this project's own, and every bed carries the string "made with suno" in
+its WAV metadata, which is consistent with musely.ai being a Suno front end and is
+not a separate licence claim.  LICENSE.md is the repo-level half of this and must
+agree with it.  Removing any bed is safe — a game whose configured bed is missing
+plays its effects and carries on.
 
 tinyalsa
 --------

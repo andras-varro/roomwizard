@@ -41,6 +41,15 @@
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_tone_test
  *
+ * ⚠️ **A HOST WITHOUT /dev/dsp CANNOT PASS THIS, and it does not say so once — it
+ * says so 34 times.**  Every group that needs a bus fails, the first line of
+ * output is `audio: cannot open /dev/dsp: No such file or directory`, and the
+ * summary reads `FAILED 58 checks, 34 failure(s)`.  That is the ENVIRONMENT, not a
+ * regression: measured 2026-08-22 in this WSL, where the same 34 fail identically
+ * when the five sources are taken from `git show HEAD:<file>`.  ⚠️ So before
+ * reading a failure count here as a defect, compile the same test against HEAD's
+ * sources and compare the two numbers — and never conclude "the fix broke it" from
+ * a run on a host with no sound device.
  * It also runs ON THE DEVICE, and there the shim is not wanted — the cross
  * toolchain has the real `<sys/soundcard.h>`, so leaving `-Itests/hostshim` off is
  * what makes the ARM binary compile the same header the shipped build does.  It

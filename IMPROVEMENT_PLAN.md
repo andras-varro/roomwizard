@@ -37,7 +37,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **What the 2026-08-21 listen left open.** ✅ (c) is ANSWERED: the bed's level is right for sustained music, effects are audible over it, and the log carries 5 pause→resume cycles the operator did not remark on — recorded as clean-unless-contradicted, not as a pass. What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? Asked and **not** answered, because the game-over case is input-locked · (d) **`audio_fail()` and the other three now play clips (③) — is the fail sound audible at last, under a bed?** That is the operator's own complaint, three times reported, and the fix is deployed to `.188` unheard · (b) `audio_success()`'s arpeggio-not-chord is now MOOT if its clip plays: the clip is one sound, not three notes. ⚠️ **A frozen fade and a dry stream while `NEW HIGH SCORE!` is open are the DEFERRED blocking-sub-loop regression, not a new fault** — say so when asking. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | nothing — deployed |
+| 6 | **What the 2026-08-21 listen left open.** ✅ (c) is ANSWERED: the bed's level is right for sustained music, effects are audible over it, and the log carries 5 pause→resume cycles the operator did not remark on — recorded as clean-unless-contradicted, not as a pass. What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? Asked and **not** answered, because the game-over case is input-locked · (d) **`audio_fail()` and the other three now play clips (③) — is the fail sound audible at last, under a bed?** That is the operator's own complaint, three times reported, and the fix is deployed to `.188` unheard · (b) `audio_success()`'s arpeggio-not-chord is now MOOT if its clip plays: the clip is one sound, not three notes. ⚠️ **The frozen fade and dry stream while `NEW HIGH SCORE!` was open are FIXED and deployed UNHEARD** — so if they are still there, that IS a new fault. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | nothing — deployed |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -285,7 +285,7 @@ analog, below both userspaces, and not ours to fix (below).
 | Phase | What it is | State |
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ next, and ④ open; **a bed ships in `platformer`**; one regression open (a blocking sub-loop services nothing). Detail below |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built, **every game has a bed and every receipt reads**, and the four ear questions are all that is left. Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -333,22 +333,14 @@ as `samegame`'s removal blip does 60 ms after a level clear. ⚠️ **Converting
 are two edits and the gate sees only the first** — `tetris` was on the bus for a day with its own sites
 intact. ⚠️ **`audio.h`'s comment still claims those sites mean "replace what is playing"**, which is wrong
 for an effect on a bus. Nothing counts a voice stopped early, so this is ear-only in both directions.
-⏳ **A sound queued just before a BLOCKING sub-loop is lost, and that is the one real regression ① left.**
-`tetris`' game-over fanfare fires at `tetris/tetris.c:359`, one statement after `gameover_init()`, and the
-next thing the loop does is `gameover_update()` → `hs_enter_name()` → `keyboard_enter()`, which runs its
-**own** render loop (`common/keyboard.c:263` `fb_swap()`, `:325` `usleep(16000)`) and services nothing:
-`common/keyboard.c` contains no `audio_pump()` at all. The mixer advances by frames RENDERED, so the
-fanfare is not dropped but deferred until the keyboard closes — which the operator experiences as no
-game-over sound. ✅ **The precondition is confirmed on the panel 2026-08-20**: the `NEW HIGH SCORE!`
-keyboard does come up, so this path is the common one and not an edge case. On the pre-bus path the whole
-tone had already been handed to the kernel ring, which is why this is new. Two candidate fixes, and the
-choice is a design decision rather than a bug hunt: **thread a `void (*tick)(void *)` through
-`keyboard_enter()`** — the shape `hw_led_pulse_update(now_ms)` already established for keeping `audio.h`
-out of shared UI code, at the cost of touching `gameover_init()`'s signature and every game's call site —
-or **install the one `Audio *` on the library and call `audio_service_tick()` from any loop that owns the
-screen**, which is a file-static global but needs no signature change and states the real invariant: a
-blocking sub-loop IS a render loop. ⚠️ **Whichever wins, `common/keyboard.c:77-86`'s two settle loops need
-it too**, and so does anything else that draws while the main loop is stopped.
+✅ **The blocking sub-loop now services the bus — the regression ① left is CLOSED (2026-08-22).** The rule
+it produced has its home in `native_apps/CLAUDE.md` → *Mixing*; what belongs here is the ⏳ it leaves: the
+deferred `tetris` game-over fanfare, and the frozen fade and dry stream under `NEW HIGH SCORE!`, have not
+been HEARD fixed. Of the two candidate fixes the second won — one service slot on the library, filled by
+`audio_open()` — with one change to it: the slot is `ui_frame_service()` in `common/common.c` and the
+setter is declared **weak** in `audio.c`, so `audio.h` stays out of shared UI code and audio.c stays
+linkable without `common.o`, which four host tests and four sabotage harnesses depend on. No game changed a
+line and no signature moved.
 
 ✅ **③ The four canned sounds are CLIP-BACKED, and it is the AUDIBILITY fix — built and deployed to
 `.188` 2026-08-21, unheard.** `audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` each
@@ -395,24 +387,24 @@ caught, none a NO-OP. ⚠️ **Two triggers of the same clip in ONE frame sit at
 COHERENTLY** — 2× amplitude, unlike two tones, which partially cancel because `AudioVoice.delay` guarantees
 different start moments. Group I pins it.
 
-④ **A per-game sound set, declared in a config file rather than in C — and it now has THREE operator
-requests riding on it (2026-08-21), so it is next.** A game names its bed and its effects in a file, so
-adding, swapping or silencing a sound is a deploy of data, not a rebuild. `platformer_music` and ③'s four
-`fx_*` keys are already that shape read straight from `rw_config.conf`, so ④ is a generalisation with two
-working examples rather than a design. Shape the file after the `.app` manifests
+④ **A per-game sound set, declared in a config file rather than in C — HALF done, and the open half is the
+FILE.** ⑤'s `audio_bed_init()` took the key naming with it, so a game's playlist keys (`<tag>_music`,
+`<tag>_music2` …) and its default paths are now declared ONCE in `common/audio_bed.c` instead of per game —
+which was the part that had to land beside the extraction. What is still open: those keys, and ③'s four
+`fx_*` ones, live in the single global `rw_config.conf`, so a per-GAME file does not exist yet. Shape it
+after the `.app` manifests
 ([`SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`](SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests)):
 INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
 drifts between the online and offline installer renders a game that plays nothing.
 
-⏳ **⑤ Per-game, per-level sound as data — BUILT 2026-08-22; the RECEIPTS now read, the EAR half does not.**
-Both printed receipts are good on `.188` — the launcher's grid layout says `fits`, and `platformer` reports a
-6-track playlist starting at `officerunner1-mono.wav`. ⚠️ **Reading them at all needed a fix**: stdout is
-block-buffered into `app_stdout.log`, so neither line arrived until `setvbuf(_IOLBF)` went into both mains,
-and the other `native_apps` binaries still have no such call — every printf receipt in them is unreadable.
+⏳ **⑤ Per-game, per-level sound as data — BUILT; every RECEIPT reads, the EAR half does not.** On `.188`
+the launcher's grid layout says `fits` and all seven games print their playlist. ⚠️ **Reading them at all
+needed a fix**: stdout is block-buffered into `app_stdout.log`, so no line arrived until `setvbuf(_IOLBF)`
+went into each main — the seven games and `app_launcher` have it now, the TOOLS do not.
 Owed: the listen — the track change at LEVEL COMPLETE, the death that holds the music, `fx_gameover` against
 `fx_fail`, and the two toggles actually silencing a game.
 
-- ✅ **The music stops between levels, and stops on a death.** `bed_service()`'s `want_play` is now
+- ✅ **The music stops between levels, and stops on a death.** `audio_bed_service()`'s `want_play` is now
   `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
   state: level-complete releases the bed (so `audio_success()` plays over near-silence) and IDLE then starts
   the next track, while a death **holds** it and a respawn **resumes** the same track mid-bar. ⚠️ **Hold
@@ -443,13 +435,19 @@ Owed: the listen — the track change at LEVEL COMPLETE, the death that holds th
   −10.61 dBFS at −0.93 dB band delta makes it the loudest-in-band file of the eleven, against burst's
   −18.61 / −2.71. Its note-table fallback is 1046/880/784/740 Hz — every note above the knee, unlike
   `audio_fail()`'s three, because a new fallback had no shipped history to preserve.
-- ⏳ **`brick_breaker` has no bed at all yet**, so "different tracks per level" reaches only `platformer`
-  (`tetris` is explicitly excluded). ⚠️ **Do NOT copy `bed_service()` into it** — that is ~140 lines of state
-  machine and the second copy is where the two drift. Extract it to `common/` first, taking the playlist,
-  the four states and the hold/resume rules with it; the game then supplies its own config key prefix and
-  its own "am I dying" predicate. ⚠️ **The beds for seven other games are already committed and deployed and
-  reach nothing** — the operator sourced sets for brickbreaker, frogger, pong, samegame, snake and tetris on
-  2026-08-22, and only a game with a bed consumer can play one, so this extraction is what unblocks them.
+- ✅ **`bed_service()` is EXTRACTED to `common/audio_bed.{c,h}` and all SEVEN games have a bed** (the six
+  whose files were committed and reaching nothing: `snake`, `tetris`, `pong`, `samegame` at 2 tracks,
+  `frogger` at 4, `brick_breaker` at 6). A game costs three lines: a tag, a bed-file stem, a track count
+  and two per-frame predicates. ⚠️ **Slot n's path is DERIVED, `/opt/sound/<stem><n>-mono.wav`**, which is
+  why there is no per-game defaults table — and why `check-bed-files.sh` exists: a mistyped stem ships a
+  game that plays its effects in silence, and nothing else in the tree can see the difference. It also
+  counts beds reaching NO game, which nothing else did. **Receipts on `.188`: seven playlists, the
+  right first track and count each, and every bus closing at `starve=0` bar one first-service.**
+  ⏳ **What is NOT verified is a bed actually STARTING in the six new games** — that needs a finger on
+  START, so it joins the ear list above.
+  ⚠️ **`brick_breaker`'s lost ball is NOT a `want_hold`** the way a `platformer` death is: it holds only on
+  `SCREEN_PAUSED`, so the bed plays through a lost life. Whether it should get the same treatment (one term
+  in one predicate — `!game.ball_launched`) is an ear question, not a mechanism one.
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
@@ -523,14 +521,14 @@ set is ~0.06 % of free RAM (`.188`, `MemAvailable` 186,068 kB of 239,904 kB), bu
 startup stall to replace a path already *heard clean*. It is one `AudioVoiceFill` either way, chosen per
 sound at load time, so this is reversible and needs no architecture.
 
-✅ **`platformer` (Office Runner) is the FIRST game to run a bed.** `bed_service()` is a four-state machine
-(`BED_IDLE`/`PLAYING`/`HELD`/`STOPPING`) whose every transition is gated on `audio_music_active()` rather
-than a flag of its own, because a release takes frames to walk down and `PUMP: OFF` can clear the voice
-underneath it. Current behaviour and the playlist keys are in ⑤ above. ⚠️ **A refusal is permanent on
-purpose** — a missing file is a NORMAL case and a per-frame retry would fill `app_stdout.log` with one
-refusal every 33 ms. Verified as far as no-human verification reaches: it starts clean over SSH with the
-launcher stopped (`cont=1`, `starve`/`lost`/`drop`/`lim`/`clip` all 0 over 234 services), and the mechanism
-is covered on the host **and on ARM** — the panel listen is row 6 (c) and it is what is owed.
+✅ **`platformer` (Office Runner) was the FIRST game to run a bed; since 2026-08-22 all seven do**, and the
+four-state machine behind them lives in `common/audio_bed.{c,h}` — every transition gated on
+`audio_music_active()` rather than a flag of its own, because a release takes frames to walk down and
+`PUMP: OFF` can clear the voice underneath it. Behaviour, keys and what the extraction cost are in ⑤ above.
+⚠️ **A refusal is permanent on purpose** — a missing file is a NORMAL case and a per-frame retry would fill
+`app_stdout.log` with one refusal every 33 ms. Verified as far as no-human verification reaches: each game
+starts clean over SSH with the launcher stopped (`cont=1`, `starve=0` bar one first-service on `tetris`), and
+the mechanism is covered on the host **and on ARM** — the panel listen is row 6 (c) and it is what is owed.
 
 ⏳ **`audio_music_pause()`/`audio_music_resume()` are new library surface, and "pause" here means
 release-and-hold.** Pause arms the same release as `audio_music_stop()` — a bed is never cut, that is a
@@ -585,10 +583,11 @@ and therefore bends every two-voice sum for nothing. The `LIM` pad keeps SOFT re
 ### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
 
 ⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
-*licence text* (`LICENSE.md` carries the row, and the two limits on musely.ai's clearance claim, verbatim).
+*licence text* (`LICENSE.md` carries the one row for all 24 beds, its terms and the two limits on them).
 It is the anchor the audio sources cite for "the bed", so it stays as one; what is left in it is small.
 
-✅ **DONE and verified: format, git, deploy.** Both beds are `native_apps/music/music{1,2}-mono.wav` —
+✅ **DONE and verified: format, git, deploy.** The beds are `native_apps/music/<stem><n>-mono.wav`, one set
+per game — what `./check-bed-files.sh` counts, and it fails the build when one a game names is missing —
 44100 / mono / 16-bit, byte-for-byte the mixer's internal format, so nothing resamples or downmixes at
 runtime (`-ac 1` averages rather than sums, so it cannot clip on the way down). **Store mono, play stereo:**
 the speaker sums L + R ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a mono file duplicated at playback is
