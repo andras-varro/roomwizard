@@ -163,9 +163,9 @@ Three rules in there are load-bearing, and every one has been violated in shippe
 
 - ⚠️ **`setvbuf(stdout, NULL, _IOLBF, 0)` FIRST, or a printf receipt never arrives.** At boot stdout is
   `/var/log/roomwizard/app_stdout.log`, so glibc block-buffers 4 KB: `compute_grid_layout()`'s layout
-  receipt was absent from that log while `grep -ac 'launcher: safe'` on the deployed binary returned 1
-  (`.188`, 2026-08-22). `common/logger.c` line-buffers its OWN file, which is why this reads as a missing
-  printf rather than a buffering one. The seven games and `app_launcher` have it; ⚠️ the TOOLS do not.
+  receipt was absent from that log while `grep -ac 'launcher: safe'` on the deployed binary returned 1.
+  `common/logger.c` line-buffers its OWN file, which is why this reads as a missing printf rather than a
+  buffering one. The seven games, `app_launcher` and `device_tools` have it; ⚠️ the OTHER tools do not.
 - **`fb_init()` before `touch_init()`** — `touch_init()` reads `screen_base_width/height`, which
   `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes
@@ -672,12 +672,12 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   it is not quiet, it is absent. ⚠️ **Broadband is not the requirement**: chasing flatness instead cost a
   whole set that measured correct and sounded like noise.
 - ⚠️ **The MUSIC / EFFECTS toggles are enforced in the LIBRARY, so never re-check them in a game.**
-  `music_enabled` / `effects_enabled` (written by `app_launcher`) are read once by `audio_init()` and gate
-  `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and `audio_music_start()` — a second check in a call
-  site is a second place the rule drifts. `audio_music_enabled()` / `audio_effects_enabled()` exist to
-  explain a silence in a log line, not to decide whether to make a sound. ⚠️ **Both read TRUE on a struct
-  from `audio_init_unchecked()`**, deliberately: that bypass is what lets a hardware speaker test make a
-  noise on a silenced device.
+  `music_enabled` / `effects_enabled` (one writer: `device_tools`' SETTINGS tab, under `audio_enabled`) are
+  read once by `audio_init()` and gate `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and
+  `audio_music_start()` — a second check in a call site is a second place the rule drifts.
+  `audio_music_enabled()` / `audio_effects_enabled()` exist to explain a silence in a log line, not to
+  decide whether to make a sound. ⚠️ **Both read TRUE on a struct from `audio_init_unchecked()`**,
+  deliberately: that bypass is what lets a hardware speaker test make a noise on a silenced device.
 
 ### Mixing: an optional per-frame pump
 

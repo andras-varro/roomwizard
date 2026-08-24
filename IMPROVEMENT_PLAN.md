@@ -285,7 +285,7 @@ analog, below both userspaces, and not ours to fix (below).
 | Phase | What it is | State |
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built, **every game has a bed and every receipt reads**, and the four ear questions are all that is left. Detail below |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built, **every game has a bed and every receipt reads**, and three ear questions are all that is left. Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -394,11 +394,11 @@ INI, **one generator per component on disk**, never emitted from inside an `ssh`
 drifts between the online and offline installer renders a game that plays nothing.
 
 ⏳ **⑤ Per-game, per-level sound as data — BUILT; every RECEIPT reads, the EAR half does not.** On `.188`
-the launcher's grid layout says `fits` and all seven games print their playlist. ⚠️ **Reading them at all
-needed a fix**: stdout is block-buffered into `app_stdout.log`, so no line arrived until `setvbuf(_IOLBF)`
-went into each main — the seven games and `app_launcher` have it now, the TOOLS do not.
-Owed: the listen — the track change at LEVEL COMPLETE, the death that holds the music, `fx_gameover` against
-`fx_fail`, and the two toggles actually silencing a game.
+the launcher's grid layout says `fits` and all seven games print their playlist.
+Owed: the track change at LEVEL COMPLETE, the death that holds the music, and `fx_gameover` against
+`fx_fail`. ✅ **The two toggles silence a game — heard, operator 2026-08-24**, which confirms the library
+gate; the SETTINGS-tab UI is confirmed on its READ half only (a screenshot agreeing with
+`rw_config.conf`), so tap → `SAVE` → relaunch is still owed.
 
 - ✅ **The music stops between levels, and stops on a death.** `audio_bed_service()`'s `want_play` is now
   `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
@@ -415,15 +415,15 @@ Owed: the listen — the track change at LEVEL COMPLETE, the death that holds th
   level 2 → track 2, level 3 → wrap) and survive a change to `MAX_LEVELS`. ⚠️ **Track 1 empty still means
   silence for the whole game**, which preserves `platformer_music=` as the off switch it already was.
   A refused path is marked failed **per track**, so one bad entry does not silence the good ones.
-- ✅ **`MUSIC` / `EFFECTS` toggles are on the GAMES MENU**, `app_launcher`'s own screen, chosen over the
-  `device_tools` SETTINGS tab (which keeps its one `AUDIO ENABLED` toggle, `device_tools.c:562`/`:717`).
-  Two keys, `music_enabled` and `effects_enabled`, gated **in the library**, so **no game needed an edit** —
-  which functions, why BOTH must be gated for effects, and why the `audio_init_unchecked()` bypass reads them
-  TRUE are `native_apps/CLAUDE.md` → *Sound assets*. The theremin's streaming oscillator is deliberately
-  **not** gated: its only caller is Tap-a-Theremin, an instrument. **The launcher grid was already full**, so
-  the band is paid for out of the grid's SLACK (`tile_h` is capped at `MAX_TILE_H` and the cap binds on this
-  panel); `compute_grid_layout()` prints a receipt saying whether the row landed inside `SCREEN_SAFE_*`,
-  because an off-panel row looks perfect in a screenshot and is dead to a finger.
+- ✅ **`MUSIC` / `EFFECTS` live in `device_tools`' SETTINGS tab**, on the row below the `AUDIO ENABLED`
+  master they are subordinate to (`create_settings_ui()`; dimmed by `draw_settings()` when the master is
+  off, because with no device opened neither decides anything). Two keys, gated **in the library**, so **no
+  game needed an edit** — which functions, why BOTH must be gated for effects, and why the
+  `audio_init_unchecked()` bypass reads them TRUE are `native_apps/CLAUDE.md` → *Sound assets*; the
+  theremin's oscillator is deliberately not gated. ⚠️ **Why neither the games menu nor a pause modal, in
+  measurements rather than taste: `app_launcher.c`'s comment above `MAX_TILE_W`.** The tab's stack is
+  hand-placed from `CONTENT_Y`, so `create_settings_ui()` prints its bottom against `CONTENT_H` — measured
+  `+317 of 375` on `.188`, landscape.
 - ✅ **`AUDIO_FX_GAMEOVER` is a fifth canned sound, because losing one life and losing the RUN were the same
   noise** and nothing told a player which had happened. It fires at the END of the death animation, where
   the run is actually decided — `player_die()` cannot know yet. Its clip is the operator's own

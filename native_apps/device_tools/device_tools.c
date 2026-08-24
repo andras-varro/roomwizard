@@ -260,6 +260,8 @@ typedef struct {
 typedef struct {
     ActiveTab     active_tab;
     bool          audio_enabled;
+    bool          music_enabled;      /* subordinate to audio_enabled — see create_settings_ui() */
+    bool          effects_enabled;
     bool          led_enabled;
     int           led_brightness;
     int           backlight_brightness;
@@ -303,6 +305,7 @@ static Button exit_btn;
 /* Settings — sound, indicators, system. Screen-related settings live on the
  * Display tab, next to the calibration they interact with. */
 static ToggleSwitch audio_toggle;
+static ToggleSwitch music_toggle, effects_toggle;
 static ToggleSwitch led_toggle;
 static Button test_audio_btn, test_led_btn;
 static Button led_minus_btn, led_plus_btn;
@@ -546,20 +549,55 @@ static void execute_system_action(ConfirmAction action) {
 }
 
 /* Settings layout. Backlight and portrait used to live here; they moved to the
- * Display tab, which is why the action row sits so much higher than it did. */
+ * Display tab, which is why the action row sits so much higher than it did.
+ *
+ * ⚠️ **Everything below AUDIO is offset by SET_AUDIO_ROW2_H**, the row that
+ * carries MUSIC / EFFECTS.  The row was added after the rest of this stack was
+ * hand-placed, so the offset is a named constant applied to the two `action_y`
+ * expressions rather than 44 baked into a dozen literals — and
+ * create_settings_ui() prints the resulting bottom against CONTENT_H, because at
+ * the maximum believed touch inset (FB_TOUCH_INSET_MAX both sides, landscape) the
+ * SYSTEM buttons clear it by ~21 px and nothing on screen would show that they
+ * had stopped clearing it. */
+#define SET_AUDIO_ROW2_H 44                          /* 28 px track + 16 px lead */
 #define SET_SEC_AUDIO_Y  (CONTENT_Y + 2)
-#define SET_SEC_LED_Y    (CONTENT_Y + 52)
+#define SET_AUDIO_ROW2_Y (SET_SEC_AUDIO_Y + 54)
+#define SET_SEC_LED_Y    (CONTENT_Y + 52 + SET_AUDIO_ROW2_H)
 #define SET_LED_BAR_Y    (SET_SEC_LED_Y + 50)
 
 static void create_settings_ui(AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
     int sec_led_y   = SET_SEC_LED_Y;
-    int action_y    = CONTENT_Y + (portrait ? 175 : 145);
+    int action_y    = CONTENT_Y + (portrait ? 175 : 145) + SET_AUDIO_ROW2_H;
     int led_bar_y   = SET_LED_BAR_Y;
 
     toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 20,
                 60, 28, "AUDIO ENABLED", state->audio_enabled);
+
+    /* ── MUSIC / EFFECTS ────────────────────────────────────────────────────
+     * The two keys every game reads through common/audio.c's audio_init().  They
+     * are SUBORDINATE to AUDIO ENABLED: the master off means the process opens
+     * no device at all, so these two decide nothing (common/config.h documents
+     * the same hierarchy, and draw_settings() dims them when the master is off).
+     *
+     * They used to be a band on the launcher's games menu.  Moved here because
+     * that made a games menu carry settings widgets, and because a per-game copy
+     * — the other candidate — needs a live setter for `Audio.music_on`, a mid-run
+     * bed stop, and seven writers of one config key.  This is one writer and no
+     * new audio API; the price is that changing them means leaving the game.
+     *
+     * ⚠️ Widths are MEASURED, not guessed: toggle_draw() puts the label at
+     * scale 1 eight pixels right of the track, and that whole box is what
+     * toggle_check_press() hit-tests.  Both tracks are FLUSH with the master's
+     * at CONTENT_LEFT + 5 — an indent read as a stray row rather than as a
+     * child, so the subordination is carried by the dimming instead. */
+    int music_w = 60 + 8 + text_measure_width("MUSIC", 1);
+    toggle_init(&music_toggle, CONTENT_LEFT + 5, SET_AUDIO_ROW2_Y,
+                60, 28, "MUSIC", state->music_enabled);
+    toggle_init(&effects_toggle, CONTENT_LEFT + 5 + music_w + 40, SET_AUDIO_ROW2_Y,
+                60, 28, "EFFECTS", state->effects_enabled);
+
     toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 20,
                 60, 28, "LED EFFECTS", state->led_enabled);
 
@@ -637,18 +675,46 @@ static void create_settings_ui(AppState *state) {
                               "THE DEVICE WILL RESTART.",
                               "REBOOT", BTN_COLOR_WARNING,
                               "CANCEL", RGB(100, 100, 100));
+
+    /* ⚠️ THE RECEIPT. This stack is hand-placed from CONTENT_Y and CONTENT_Y is
+     * derived from a per-unit touch inset, so a row pushed past the bottom of the
+     * touchable rect looks perfect in a framebuffer screenshot and is simply dead
+     * to a finger.  The SYSTEM buttons are the last thing on the tab, so their
+     * bottom is the number that matters.  Printed once per tab build, and it says
+     * whether it fits rather than leaving that to be inferred. */
+    {
+        int bottom = (system_y + 20 + sys_btn_h) - CONTENT_Y;
+        printf("device_tools: settings stack %s — bottom +%d of CONTENT_H %d "
+               "(safe %dx%d, %s, row2 +%d)\n",
+               bottom <= CONTENT_H ? "fits" : "⚠ PAST CONTENT BOTTOM",
+               bottom, CONTENT_H, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
+               portrait ? "portrait" : "landscape", SET_AUDIO_ROW2_H);
+    }
 }
 
 static void draw_settings(Framebuffer *fb, AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
     int sec_led_y   = SET_SEC_LED_Y;
-    int action_y    = CONTENT_Y + (portrait ? 175 : 145);
+    int action_y    = CONTENT_Y + (portrait ? 175 : 145) + SET_AUDIO_ROW2_H;
     int led_bar_y   = SET_LED_BAR_Y;
 
     draw_section_header(fb, sec_audio_y, "AUDIO");
     toggle_draw(fb, &audio_toggle);
     button_draw(fb, &test_audio_btn);
+
+    /* MUSIC / EFFECTS are still LIVE with the master off — they are saved
+     * preferences, and refusing the press would just look broken — but they are
+     * drawn dimmed, because with no device opened neither of them decides
+     * anything and a bright green switch that changes nothing is a lie. */
+    uint32_t on_c   = state->audio_enabled ? RGB(0, 180, 60)    : RGB(0,  70, 25);
+    uint32_t off_c  = state->audio_enabled ? RGB(100, 100, 100) : RGB(55, 55, 55);
+    uint32_t knob_c = state->audio_enabled ? COLOR_WHITE        : RGB(150, 150, 150);
+    uint32_t lbl_c  = state->audio_enabled ? RGB(200, 200, 200) : RGB(120, 120, 120);
+    toggle_set_colors(&music_toggle,   on_c, off_c, knob_c, lbl_c);
+    toggle_set_colors(&effects_toggle, on_c, off_c, knob_c, lbl_c);
+    toggle_draw(fb, &music_toggle);
+    toggle_draw(fb, &effects_toggle);
 
     draw_section_header(fb, sec_led_y, "LEDS");
     toggle_draw(fb, &led_toggle);
@@ -691,6 +757,10 @@ static void handle_settings_input(AppState *state, int tx, int ty,
                                   bool touching, uint32_t now) {
     if (toggle_check_press(&audio_toggle, tx, ty, touching, now))
         state->audio_enabled = audio_toggle.state;
+    if (toggle_check_press(&music_toggle, tx, ty, touching, now))
+        state->music_enabled = music_toggle.state;
+    if (toggle_check_press(&effects_toggle, tx, ty, touching, now))
+        state->effects_enabled = effects_toggle.state;
     if (toggle_check_press(&led_toggle, tx, ty, touching, now))
         state->led_enabled = led_toggle.state;
 
@@ -715,6 +785,8 @@ static void handle_settings_input(AppState *state, int tx, int ty,
      * other. */
     if (button_update(&save_btn, tx, ty, touching, now)) {
         config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
+        config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
+        config_set_bool(&state->cfg, "effects_enabled", state->effects_enabled);
         config_set_bool(&state->cfg, "led_enabled", state->led_enabled);
         config_set_int(&state->cfg, "led_brightness", state->led_brightness);
         config_save(&state->cfg);
@@ -725,13 +797,23 @@ static void handle_settings_input(AppState *state, int tx, int ty,
     if (button_update(&reset_btn, tx, ty, touching, now)) {
         /* config_clear() drops the Display keys too, so restore their defaults
          * and re-apply, otherwise the backlight keeps a value no longer in the
-         * file and the Display tab shows a stale number. */
+         * file and the Display tab shows a stale number.
+         *
+         * ⚠️ MUSIC / EFFECTS have no DEFAULT_* macro here on purpose: their
+         * default lives in common/config.c's helpers, which is what
+         * common/audio.c reads, so the switch on screen cannot disagree with
+         * what a game will do.  On a cleared Config those helpers return
+         * exactly that default. */
         config_clear(&state->cfg);
         state->audio_enabled = DEFAULT_AUDIO_ENABLED;
+        state->music_enabled = config_music_enabled(&state->cfg);
+        state->effects_enabled = config_effects_enabled(&state->cfg);
         state->led_enabled = DEFAULT_LED_ENABLED;
         state->led_brightness = DEFAULT_LED_BRIGHTNESS;
         state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
         audio_toggle.state = state->audio_enabled;
+        music_toggle.state = state->music_enabled;
+        effects_toggle.state = state->effects_enabled;
         led_toggle.state = state->led_enabled;
         apply_backlight(state->backlight_brightness);
         snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
@@ -1064,6 +1146,8 @@ static void draw_diag_config(Framebuffer *fb) {
     } else {
         static const struct { const char *key; const char *lbl; const char *def; } kk[] = {
             {"audio_enabled","AUDIO ENABLED:","1 (default)"},
+            {"music_enabled","MUSIC:","1 (default)"},
+            {"effects_enabled","EFFECTS:","1 (default)"},
             {"led_enabled","LED ENABLED:","1 (default)"},
             {"led_brightness","LED BRIGHTNESS:","100 (default)"},
             {"backlight_brightness","BACKLIGHT:","100 (default)"},
@@ -3511,6 +3595,13 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 int main(void) {
+    /* ⚠️ FIRST, before any printf. Launched from the launcher, stdout is
+     * /var/log/roomwizard/app_stdout.log — a FILE, so glibc block-buffers 4 KB
+     * and a receipt printed by a process that is then killed never arrives at
+     * all.  create_settings_ui()'s layout receipt is exactly that shape.
+     * ../CLAUDE.md → App lifecycle carries the measurement. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     int lock_fd = acquire_instance_lock("device_tools");
     if (lock_fd < 0) return 1;
 
@@ -3546,6 +3637,8 @@ int main(void) {
 
     state.active_tab = TAB_SETTINGS;
     state.audio_enabled = config_get_bool(&state.cfg, "audio_enabled", DEFAULT_AUDIO_ENABLED);
+    state.music_enabled = config_music_enabled(&state.cfg);
+    state.effects_enabled = config_effects_enabled(&state.cfg);
     state.led_enabled = config_get_bool(&state.cfg, "led_enabled", DEFAULT_LED_ENABLED);
     state.led_brightness = config_get_int(&state.cfg, "led_brightness", DEFAULT_LED_BRIGHTNESS);
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
@@ -3617,6 +3710,8 @@ int main(void) {
         /* --- Save visual state before input handling --- */
         ActiveTab     prev_tab       = state.active_tab;
         bool          prev_audio     = state.audio_enabled;
+        bool          prev_music     = state.music_enabled;
+        bool          prev_effects   = state.effects_enabled;
         bool          prev_led       = state.led_enabled;
         int           prev_led_br    = state.led_brightness;
         int           prev_bl_br     = state.backlight_brightness;
@@ -3674,6 +3769,8 @@ int main(void) {
         /* --- Detect visual state changes after input --- */
         if (prev_tab       != state.active_tab     ||
             prev_audio     != state.audio_enabled   ||
+            prev_music     != state.music_enabled   ||
+            prev_effects   != state.effects_enabled ||
             prev_led       != state.led_enabled     ||
             prev_led_br    != state.led_brightness  ||
             prev_bl_br     != state.backlight_brightness ||

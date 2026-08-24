@@ -62,23 +62,22 @@
 #define TITLE_H         50
 #define DOTS_H          30
 
-/* ── The MUSIC / EFFECTS band ────────────────────────────────────────────────
- * A strip between the last tile row and the page dots, carrying the two audio
- * toggles the operator asked for on the GAMES MENU rather than in device_tools'
- * SETTINGS tab (../../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).
+/* ── The MUSIC / EFFECTS toggles are NOT here ────────────────────────────────
+ * They were, as a band between the last tile row and the page dots, and they
+ * moved to device_tools' SETTINGS tab under the `AUDIO ENABLED` master they are
+ * subordinate to (../../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).  Two reasons, in
+ * order: a games menu carrying settings widgets is a games menu doing a settings
+ * tab's job, and this screen was then the only games-side WRITER of two keys
+ * every game reads — so the launcher had to re-read the file before each write
+ * to avoid reverting whatever device_tools had set in the meantime.  One writer
+ * removes both problems.
  *
- * ⚠️ **This band is paid for out of the grid's SLACK, not out of the tiles.**
- * `tile_h` is capped at MAX_TILE_H, and on this panel the cap binds — the grid
- * had ~60 px of unused vertical space before this existed.  So the band is
- * subtracted from `avail_h` and the tiles keep their size; on a screen where the
- * cap does NOT bind the tiles shrink by ~22 px each instead, which is why
- * compute_grid_layout() prints its derived numbers (see the receipt there) rather
- * than leaving a silently off-panel row to be spotted in a screenshot.
+ * ⚠️ **Do not put them back here, and do not put them in a game's pause modal
+ * either.** `MODAL_MAX_BUTTONS` is 4 and brick_breaker already uses all four;
+ * `ModalDialog` has no widget slot; and a toggle that takes effect mid-run needs
+ * a live setter for `Audio.music_on` (read once by `audio_init()`), a bed
+ * stop/resume in the middle of a run, and seven writers of one key.
  */
-#define CONTROLS_H      44
-#define TOGGLE_TRACK_W  60
-#define TOGGLE_TRACK_H  28
-#define TOGGLE_PAIR_GAP 70
 
 #define MAX_TILE_W      200
 #define MAX_TILE_H      150
@@ -88,7 +87,6 @@ static int grid_cols, grid_rows, apps_per_page;
 static int tile_w, tile_h;
 static int grid_content_w, grid_content_h;
 static int grid_left, grid_top;
-static int controls_top;            /* top of the MUSIC / EFFECTS band */
 
 static void compute_grid_layout(Framebuffer *fb) {
     if (fb->portrait_mode) {
@@ -102,7 +100,7 @@ static void compute_grid_layout(Framebuffer *fb) {
 
     /* Calculate tile sizes to fit available space, capped at max */
     int max_w = (SCREEN_SAFE_WIDTH  - (grid_cols - 1) * TILE_GAP_X) / grid_cols;
-    int avail_h = SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H - CONTROLS_H;
+    int avail_h = SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H;
     int max_h = (avail_h - (grid_rows - 1) * TILE_GAP_Y) / grid_rows;
 
     tile_w = (max_w < MAX_TILE_W) ? max_w : MAX_TILE_W;
@@ -116,24 +114,15 @@ static void compute_grid_layout(Framebuffer *fb) {
     grid_top  = SCREEN_SAFE_TOP  + TITLE_H +
                 (avail_h - grid_content_h) / 2;
 
-    /* The toggle band sits centred in whatever is left between the last tile row
-     * and the dots.  Derived, never a literal — the touch inset is per-unit and
-     * measured at runtime, so a hardcoded y is off-panel on the next device. */
-    int band_top    = grid_top + grid_content_h;
-    int band_bottom = SCREEN_SAFE_BOTTOM - DOTS_H;
-    int band_h      = band_bottom - band_top;
-    controls_top    = band_top + (band_h - TOGGLE_TRACK_H) / 2;
-    if (controls_top < band_top) controls_top = band_top;
-
     /* ⚠️ The RECEIPT. A layout that puts a row past the bottom of the touchable
      * rect looks perfect in a framebuffer screenshot and is simply dead to a
      * finger, so the derivation prints itself and says whether it fits. */
-    bool fits = (controls_top + TOGGLE_TRACK_H) <= SCREEN_SAFE_BOTTOM;
+    bool fits = (grid_top + grid_content_h) <= SCREEN_SAFE_BOTTOM;
     printf("launcher: safe %dx%d at (%d,%d)  tiles %dx%d %dx%d  grid_top %d "
-           "controls_top %d (+%d) %s\n",
+           "grid_h %d %s\n",
            SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
            grid_cols, grid_rows, tile_w, tile_h, grid_top,
-           controls_top, TOGGLE_TRACK_H, fits ? "fits" : "⚠ PAST SAFE BOTTOM");
+           grid_content_h, fits ? "fits" : "⚠ PAST SAFE BOTTOM");
 }
 
 /* ── Colours ────────────────────────────────────────────────────────────── */
@@ -196,13 +185,6 @@ typedef struct {
     uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
     bool        needs_redraw;       /* Dirty flag — skip rendering when false */
-    /* ── the two audio toggles ───────────────────────────────────────────────
-     * ⚠️ **No SAVE button, deliberately**: this is a games menu, not a settings
-     * tab, and a toggle that needs a second tap to mean anything is a toggle
-     * people leave in the wrong state.  Each flip writes the file immediately —
-     * see toggles_apply() for why it RE-READS first. */
-    ToggleSwitch music_sw;
-    ToggleSwitch effects_sw;
 } Launcher;
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -439,64 +421,6 @@ static void draw_page_arrows(Framebuffer *fb, Launcher *l) {
     }
 }
 
-/* ── The MUSIC / EFFECTS toggles ─────────────────────────────────────────────
- * Two config keys read by every game through common/audio.c's audio_init(), so
- * this screen is the only place that WRITES them and no game needed an edit
- * (../../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).
- *
- * ⚠️ **`audio_enabled` is NOT here and stays the master.**  It lives in
- * device_tools' SETTINGS tab because switching all sound off is a device setting a
- * technician makes once, and because a hardware speaker test must be able to bypass
- * it (audio_init_unchecked()).  These two are the everyday knobs, which is why the
- * operator asked for them on the games menu instead.
- */
-static void toggles_layout(Launcher *l) {
-    /* Two widgets side by side, the pair centred.  A widget is its track plus its
-     * label, so its width is measured rather than guessed — the label is drawn at
-     * scale 1 by toggle_draw() and that is what toggle_check_press() hit-tests. */
-    int music_w   = TOGGLE_TRACK_W + 8 + text_measure_width("MUSIC", 1);
-    int effects_w = TOGGLE_TRACK_W + 8 + text_measure_width("EFFECTS", 1);
-    int pair_w    = music_w + TOGGLE_PAIR_GAP + effects_w;
-    int x0        = l->fb.width / 2 - pair_w / 2;
-    if (x0 < SCREEN_SAFE_LEFT) x0 = SCREEN_SAFE_LEFT;
-
-    bool music   = l->music_sw.state;
-    bool effects = l->effects_sw.state;
-    toggle_init(&l->music_sw,   x0, controls_top,
-                TOGGLE_TRACK_W, TOGGLE_TRACK_H, "MUSIC", music);
-    toggle_init(&l->effects_sw, x0 + music_w + TOGGLE_PAIR_GAP, controls_top,
-                TOGGLE_TRACK_W, TOGGLE_TRACK_H, "EFFECTS", effects);
-}
-
-/* Persist one toggle.  ⚠️ **Re-reads the file first, and that is not paranoia:**
- * config_save() rewrites the WHOLE file from the in-memory Config, so a launcher
- * holding a copy loaded at boot would silently revert every key device_tools wrote
- * in the meantime — and the launcher is the process that outlives all of them. */
-static void toggles_apply(Launcher *l) {
-    Config cfg;
-    config_init(&cfg);
-    config_load(&cfg);
-    config_set_bool(&cfg, "music_enabled",   l->music_sw.state);
-    config_set_bool(&cfg, "effects_enabled", l->effects_sw.state);
-    if (config_save(&cfg) != 0) {
-        LOG_ERROR(&l->logger, "Could not save audio toggles to %s", CONFIG_FILE_PATH);
-        return;
-    }
-    LOG_INFO(&l->logger, "music_enabled=%d effects_enabled=%d saved",
-             l->music_sw.state, l->effects_sw.state);
-}
-
-/* Called EVERY frame, pressed or not — toggle_check_press() clears its own
- * press-edge latch on the not-pressed call, so gating this on ts.pressed (as the
- * tile hit-test is) would let one touch flip the switch on every frame it lasts. */
-static bool toggles_poll(Launcher *l, int x, int y, bool pressed, uint32_t now) {
-    bool changed = false;
-    if (toggle_check_press(&l->music_sw,   x, y, pressed, now)) changed = true;
-    if (toggle_check_press(&l->effects_sw, x, y, pressed, now)) changed = true;
-    if (changed) toggles_apply(l);
-    return changed;
-}
-
 static void draw_selection_border(Framebuffer *fb, int tx, int ty) {
     int bw = 3;
     for (int b = 0; b < bw; b++) {
@@ -537,10 +461,6 @@ static void draw_launcher(Launcher *l) {
                            "Deploy apps with build-and-deploy.sh",
                            RGB(100, 100, 100), 2);
     }
-
-    /* The two audio toggles, between the last tile row and the dots */
-    toggle_draw(&l->fb, &l->music_sw);
-    toggle_draw(&l->fb, &l->effects_sw);
 
     /* Page arrows and dots */
     draw_page_arrows(&l->fb, l);
@@ -737,18 +657,6 @@ static void launch_app(Launcher *l, int index,
 
     /* Recompute grid layout (screen dimensions may differ after child) */
     compute_grid_layout(&l->fb);
-    /* ⚠️ And the toggles with it — their y comes from the grid, so a child that
-     * changed the mode would otherwise leave two switches drawn where the grid
-     * used to end and hit-tested somewhere else again.  A game may also have
-     * written the config (nothing does today), so re-read the state as well. */
-    {
-        Config cfg;
-        config_init(&cfg);
-        config_load(&cfg);
-        l->music_sw.state   = config_music_enabled(&cfg);
-        l->effects_sw.state = config_effects_enabled(&cfg);
-    }
-    toggles_layout(l);
 
     /* Re-acquire touch */
     if (touch_init(&l->touch, touch_dev) == 0) {
@@ -873,21 +781,6 @@ int main(int argc, char *argv[]) {
     /* Compute grid layout based on screen dimensions */
     compute_grid_layout(&launcher.fb);
 
-    /* The two audio toggles: state from the config file, geometry from the layout
-     * just computed.  ⚠️ Read with the same helpers common/audio.c uses, so the
-     * switch on screen cannot disagree with what a game will do. */
-    {
-        Config cfg;
-        config_init(&cfg);
-        config_load(&cfg);
-        launcher.music_sw.state   = config_music_enabled(&cfg);
-        launcher.effects_sw.state = config_effects_enabled(&cfg);
-        if (!config_audio_enabled(&cfg))
-            LOG_INFO(&launcher.logger,
-                     "audio_enabled=false — the master is off, so both toggles are moot");
-    }
-    toggles_layout(&launcher);
-
     /* Scan for installed apps */
     int count = scan_apps(&launcher);
     LOG_INFO(&launcher.logger, "Found %d app(s), %d page(s)", count, launcher.total_pages);
@@ -935,15 +828,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* ── The audio toggles, BEFORE the tile hit-test and every frame ──────
-         * ⚠️ Unconditional, unlike the tile hit-test below: toggle_check_press()
-         * needs the not-pressed call to release its latch.  And it runs first so a
-         * flip consumes the touch — the widgets sit below the grid and outside the
-         * page-flip edges, so nothing else would claim it, but the ordering makes
-         * that a decision rather than a coincidence. */
-        if (toggles_poll(&launcher, ts.x, ts.y, ts.pressed, now)) {
-            launcher.needs_redraw = true;
-        } else if (ts.pressed) {
+        if (ts.pressed) {
             /* Handle touch press */
             LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
             int result = handle_touch(&launcher, ts.x, ts.y);
