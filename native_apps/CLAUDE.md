@@ -774,14 +774,18 @@ These rules, each of which is a way to get this wrong:
   which is the audibility fix: every one of those tables is a sustained tone at or below the speaker's knee
   ([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). A clip is loaded WHOLE into RAM and each trigger gets its own
   cursor, so unlike `audio_sfx_play()` it can retrigger — `AUDIO_CLIP_VOICES` of them, then it falls back to
-  notes. ⚠️ **`build-and-deploy.sh` must upload `sounds/fx_*.wav` to `/opt/sound` or the fix is inert.**
-  ⚠️ **The same clip fired twice in ONE frame sums COHERENTLY — 2× amplitude**, where two tones partially
-  cancel; and the mixer's 10 ms attack / 20 ms release applies to a clip too, so on a 55 ms effect 30 ms of
-  it is envelope. `tests/audio_tone_test.c` group I, controls in `tests/measure_audio_clip_sabotage.sh`.
+  notes; *Sound assets*' envelope rule above applies to a clip unchanged. ⚠️ **`build-and-deploy.sh` must
+  upload `sounds/fx_*.wav` to `/opt/sound` or the fix is inert.** ⚠️ **The same clip fired twice in ONE frame
+  sums COHERENTLY — 2× amplitude**, where two tones partially cancel. `tests/audio_tone_test.c` group I,
+  controls in `tests/measure_audio_clip_sabotage.sh`.
 - ⚠️ **A blocking sub-loop IS a render loop and owes the same per-frame services** — the mixer advances by
   frames RENDERED, so a loop that draws its own screen and services nothing DEFERS the queued sound rather
   than dropping it, which is worse to diagnose. `ui_frame_service()` (`common/common.h`) is the call it
   owes; `audio_open()` registers `audio_pump()` on it. ⚠️ **A new loop that owns the screen must call it.**
+  ⚠️ **The CALLER owes the mirror of that: a per-frame service the sub-loop's own screen change should
+  trigger must run BEFORE the block that opens it.** `gameover_update()`'s name entry sits inside the redraw
+  block, so a bed serviced after it never sees `SCREEN_GAME_OVER` and plays for the whole keyboard session —
+  servicing the pump does not save it. Hence `audio_bed_service()` sits above that block in every game.
 - ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** — and it
   lives ONCE, in `common/audio_bed.{c,h}`, whose header carries the four states and the hold/resume rules:
   level-complete leaves `want_play` (so the bed releases and the next playlist track starts), a **death**
@@ -797,11 +801,11 @@ These rules, each of which is a way to get this wrong:
   `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate before believing a zero**: `kill -STOP` the game
   for a second, three times, and `starve` reads exactly 3. A dry queue is counted even while the bus is
   SILENT, so a small `starve` is not automatically audible.
-- **`check-audio-pacing.sh` is the gate, and it runs from `build-and-deploy.sh`.** It fails an app that
-  enables a bus and never services it, one that sleeps `FRAME_DELAY_IDLE_US` with no `audio_pump_active()`,
-  and the mirror case; `--self-test` carries its own controls, the load-bearing one being an *unconverted*
-  app. ⚠️ **It reads text, not control flow** — its header lists the three shapes it cannot see, and
-  `starve` is what catches those.
+- **`check-audio-pacing.sh` is the gate, and it runs from `build-and-deploy.sh`.** It enforces every
+  per-frame obligation a converted game owes — the pump, the pacing, the bed serviced above the redraw block,
+  and `audio_gameover()` in any game that has a game-over screen. ⚠️ **It reads text, not control flow**, and
+  its own header is the authority on both what it checks and what it cannot see; `--self-test` carries a
+  fixture control per check, and `starve` catches what the text cannot.
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
 questions: its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one under test**,

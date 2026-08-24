@@ -357,7 +357,11 @@ void lock_piece() {
          * game-over screen was ever drawn, so the player stared at the old
          * playfield and any tap made during it was discarded. */
         hw_led_pulse_start(&led_pulse, LED_RED, 3, 200, get_time_ms());
-        audio_fail(&audio);  // Descending game-over tone (~600ms)
+        /* ⚠️ gameover, not fail: tetris has no LIVES, so a blocked spawn ends the
+         * RUN and audio_fail() is the lost-a-life sound (common/audio.h's enum).
+         * It fires INSTEAD of fail, never after — fx_gameover is 1.19 s against
+         * fail's 350 ms and the two would sum on the bus. */
+        audio_gameover(&audio);
     }
 }
 
@@ -1006,6 +1010,14 @@ int main(int argc, char *argv[]) {
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* One bed transition, ABOVE the redraw block and before the pump.
+         * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs
+         * gameover_update()'s BLOCKING name entry, so a bed serviced after the
+         * block stays PLAYING for the whole keyboard session.  Before the pump
+         * so a voice started on this iteration is fed on the same one, and so
+         * the release fade is rendered.  Full reason: brick_breaker.c's copy. */
+        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED);
+
         if (needs_redraw) {
             draw_game();
             fb_swap(&fb);
@@ -1017,9 +1029,6 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (common/audio_out.h). */
-        /* One bed transition, BEFORE the pump so a voice started on this
-         * iteration is fed on the same one. */
-        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

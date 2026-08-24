@@ -285,7 +285,7 @@ analog, below both userspaces, and not ours to fix (below).
 | Phase | What it is | State |
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh` at 7/7; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built, **every game has a bed and every receipt reads**, and three ear questions are all that is left. Detail below |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh`; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built and every receipt reads — **every game has a bed, the bed stops before a blocking sub-loop and every game reaches `audio_gameover()`** — so only ear questions are left. Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -449,16 +449,16 @@ gate; the SETTINGS-tab UI is confirmed on its READ half only (a screenshot agree
   ⚠️ **No content gate could see it**: format and energy are properties of the WAV, reachability of the C.
   `check-sound-assets.sh` gained both directions (`orphan=0` now) with a decoy control in its header.
   Fallback pitches were lifted ≥880 Hz keeping the author's order.
-- ⏳ **OPEN — the bed is never told to STOP before a blocking sub-loop opens, in all SEVEN games**, reported
-  as *"the end of game keeps playing the music over the keyboard"* and it is **row 6's residual half**:
-  `ui_frame_service()` fixed the *pump*, but `gameover_update()` runs the blocking name entry from inside the
-  redraw block **before** `audio_bed_service()`, so the bed is still `PLAYING` for the whole keyboard
-  session. `want_play` is already `SCREEN_PLAYING` alone, so only the ORDERING is wrong: move that call above
-  the redraw block, still before `audio_pump()`. One line per game, uniform shape, unheard.
-- ⏳ **OPEN — six of seven games never call `audio_gameover()`**; only `platformer` did, and `brick_breaker`
-  was fixed here (it played `audio_fail()` on the last ball too — exactly the one-life-versus-the-run
-  confusion the fifth name exists to end). ⚠️ It fires **instead of** `fail`: 1.19 s against 350 ms, and the
-  two sum on the bus.
+- ✅ **Both ORDERING defects are fixed in all seven games, and both are now GATED.** The bed is serviced
+  ABOVE the redraw block (so a blocking name entry no longer plays over the music — reported as *"the end of
+  game keeps playing the music over the keyboard"*, and `want_play` was already right: only the position was
+  wrong), and `audio_gameover()` is reached from every game rather than `platformer` alone. The authoring
+  rule's home is `native_apps/CLAUDE.md` → *Mixing*; `check-audio-pacing.sh` carries both as obligations,
+  each with its own fixture control, and the pre-fix tree measures seven ordering failures and five missing
+  `audio_gameover()` against `fail=0 unchecked=0` today. ⚠️ `audio_gameover()` fires **instead of** `fail`,
+  never after: 1.19 s against 350 ms, and the two sum on the bus. ⚠️ **The converse is NOT gated and cannot
+  be** — "has lives" is not a text property, so that `audio_fail()` survives in exactly the three games that
+  have lives (`brick_breaker`, `frogger`, `platformer`) is review-and-ear only. ⏳ Neither fix is HEARD.
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
@@ -517,14 +517,14 @@ after regeneration; re-measured 2026-08-22 at in-band RMS −16.14 dBFS against 
 `success` −12.83. Peak is already at maximum, so the only lever that raises in-band RMS at the same peak is
 a limiter. ⚠️ A 700 Hz high-pass was measured and bought 0.16 dB, so it is not the answer.
 
-✅ **The provenance question is ANSWERED and `LICENSE.md` carries it** (operator, 2026-08-22): the eleven
-`fx_*.wav` are AI-generated at **elevenlabs.io on a FREE account**, which does **not** grant commercial use.
+✅ **The provenance question is CLOSED and `LICENSE.md` is its home** (settled 2026-08-23, once ElevenLabs
+answered): the eleven `fx_*.wav` are AI-generated on a **free** ElevenLabs account and carry **two**
+obligations — **not for commercial use**, and **attribution to `elevenlabs.io` is required**.
 ⚠️ **That makes the effects the only content in this repository narrower than MIT**, and a commercial
 redistribution of the repo or of a release bundle must remove or replace them (harmless — every game falls
-back to its note tables). `release.sh`'s `NOTICE` says so too, since the two halves must agree.
-⏳ **Do not widen it from inference:** the operator has asked ElevenLabs for the exact terms, and until they
-answer, "not commercial" is the whole of what is established — nothing about testing, learning or OSS use
-may be written down.
+back to its note tables). `release.sh`'s `NOTICE` carries both halves, since the two must agree.
+⚠️ **Do not widen either obligation from inference:** `LICENSE.md` holds the exact terms and the attribution
+line to reproduce.
 
 ⚠️ **The BED stays STREAMING while the effects are RAM-resident, and not on cost grounds.** The whole effect
 set is ~0.06 % of free RAM (`.188`, `MemAvailable` 186,068 kB of 239,904 kB), but a cold read of

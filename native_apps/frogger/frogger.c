@@ -701,7 +701,20 @@ static void kill_frog(DeathType cause) {
     state.lives--;
 
     start_led_effect(2);
-    audio_fail(&audio);
+    /* ⚠️ **The RUN ending and ONE life ending must not be the same noise** —
+     * that is the whole reason audio_gameover() exists (../IMPROVEMENT_PLAN.md
+     * F1 Phase 5 ⑤), and this site played audio_fail() for both.  frogger is the
+     * only one of the seven games with LIVES, and unlike platformer's
+     * player_die() it already knows which happened — state.lives is decremented
+     * two lines up — so it branches HERE rather than deferring to the end of the
+     * death animation.  It fires INSTEAD of fail, never after: fx_gameover is
+     * 1.19 s against fail's 350 ms and the two would sum on the bus.
+     * Either sound lands over near-silence, because death_anim_active is the
+     * bed's want_HOLD (see the main loop) for the whole animation. */
+    if (state.lives <= 0)
+        audio_gameover(&audio);
+    else
+        audio_fail(&audio);
 
     death_anim_frame  = 0;
     death_anim_active = true;
@@ -1531,6 +1544,14 @@ int main(int argc, char *argv[]) {
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* One bed transition, ABOVE the redraw block and before the pump.
+         * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs
+         * gameover_update()'s BLOCKING name entry, so a bed serviced after the
+         * block stays PLAYING for the whole keyboard session.  Before the pump
+         * so a voice started on this iteration is fed on the same one, and so
+         * the release fade is rendered.  Full reason: brick_breaker.c's copy. */
+        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED || death_anim_active);
+
         if (needs_redraw) {
             draw_all();
             fb_swap(&fb);
@@ -1542,9 +1563,6 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (../common/audio_out.h). */
-        /* One bed transition, BEFORE the pump so a voice started on this
-         * iteration is fed on the same one. */
-        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED || death_anim_active);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

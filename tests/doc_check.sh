@@ -560,6 +560,18 @@ group_c() {
 # compressing three superseded coverage paragraphs; the raise is what the requests cost NET of that.
 # ⚠️ **No headroom is granted: 1352 is the measurement, and the next addition to that file pays by
 # deleting.** ⚠️ And phase 5 is still mid-feature, so do not lower it back onto ④/⑤ landing.
+# ⚠️ 2026-08-24, deliberate and argued: native_apps/CLAUDE.md 708 → 712 (measured post-edit).
+# F1 Phase 5 ⑤ closed its last two ordering defects and both had shipped broken in ALL SEVEN games at
+# once, which is the signature of a missing authoring rule rather than seven mistakes. The rule this file
+# is the only home for is the CALLER's half of the blocking-sub-loop contract: a per-frame service that
+# the sub-loop's own screen change should trigger has to run BEFORE the block that opens it, because
+# `gameover_update()`'s name entry lives inside the redraw block and a bed serviced after it never sees
+# the transition. Servicing the pump — the fix that closed row 6 — does not save it, which is exactly why
+# the residual half survived a session. The same commit paid 2 lines by compressing the envelope fact
+# (stated twice in this file) to a pointer and by dropping a prose COUNT from the gate bullet; the raise is
+# the remaining 4. ⚠️ **No headroom is granted: 712 is the measurement, and the next addition pays by
+# deleting.** The two new obligations are GATED (`check-audio-pacing.sh`, a fixture control each), so the
+# doc states the rule and the gate enforces it — neither is load-bearing alone.
 # ⚠️ 2026-08-23, SEVENTH raise, deliberate and argued: IMPROVEMENT_PLAN.md 1352 → 1362 (measured
 # post-edit count). Phase 5 ⑤ gained one CLOSED item (brick_breaker's lost ball holds the bed) and two
 # OPEN findings that came off one ear report: the bed is never told to STOP before a blocking sub-loop
@@ -613,7 +625,7 @@ ceilings() {
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 337	CLAUDE.md
-708	native_apps/CLAUDE.md
+712	native_apps/CLAUDE.md
 214	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

@@ -195,7 +195,12 @@ static void enter_game_over(void) {
     if (player_won)
         audio_success(&audio);
     else
-        audio_fail(&audio);
+        /* ⚠️ gameover, not fail: this runs when the MATCH is decided, not when a
+         * point is conceded — pong scores no sound for a lost rally at all, so
+         * audio_fail() (the lost-a-LIFE sound, ../common/audio.h's enum) was
+         * never the right name here.  INSTEAD of fail, never after: fx_gameover
+         * is 1.19 s against fail's 350 ms and the two would sum on the bus. */
+        audio_gameover(&audio);
 }
 
 void update_ai() {
@@ -798,6 +803,14 @@ int main(int argc, char *argv[]) {
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* One bed transition, ABOVE the redraw block and before the pump.
+         * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs
+         * gameover_update()'s BLOCKING name entry, so a bed serviced after the
+         * block stays PLAYING for the whole keyboard session.  Before the pump
+         * so a voice started on this iteration is fed on the same one, and so
+         * the release fade is rendered.  Full reason: brick_breaker.c's copy. */
+        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED);
+
         if (needs_redraw) {
             draw_game();
             fb_swap(&fb);
@@ -809,9 +822,6 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (../common/audio_out.h). */
-        /* One bed transition, BEFORE the pump so a voice started on this
-         * iteration is fed on the same one. */
-        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

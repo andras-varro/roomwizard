@@ -1913,6 +1913,31 @@ int main(int argc, char *argv[]) {
         if (game.screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* ⚠️ The bed is serviced ABOVE the redraw block, and the ORDER is
+         * load-bearing rather than tidiness.  SCREEN_GAME_OVER's redraw calls
+         * gameover_update(), whose name entry is a BLOCKING sub-loop that owns
+         * the screen for as long as the player types — so a bed serviced *after*
+         * the block never sees the transition and stays PLAYING for the whole
+         * keyboard session, reported as "the end of game keeps playing the music
+         * over the keyboard".  `want_play` was already SCREEN_PLAYING alone;
+         * only the position was wrong.  Servicing first releases the voice, and
+         * the sub-loop's own ui_frame_service() pumps the release envelope out
+         * while it runs — so the music fades instead of cutting.  It stays
+         * BEFORE audio_pump() for the original reason: a voice started on this
+         * iteration is fed on the same one. */
+        /* The ball parked on the paddle HOLDS the bed, which is `platformer`'s
+         * death rule with this game's spelling for it (operator, 2026-08-23).
+         * ⚠️ The term is in BOTH predicates, exactly as platformer's `dying` is:
+         * clearing `want_play` is what releases the voice, and setting
+         * `want_hold` is what keeps the FILE open at its read position — so the
+         * relaunch RESUMES the same track mid-bar instead of restarting the
+         * level's music, and the playlist cursor does not advance.  It also
+         * covers the pre-launch wait at a level's start, so the bed begins when
+         * play does rather than over a stationary ball. */
+        bool bed_waiting = !game.ball_launched;
+        audio_bed_service(&bed, game.screen == SCREEN_PLAYING && !bed_waiting,
+                                game.screen == SCREEN_PAUSED || bed_waiting);
+
         if (needs_redraw) {
             switch (game.screen) {
             case SCREEN_WELCOME:        draw_welcome();        break;
@@ -1953,20 +1978,6 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (common/audio_out.h). */
-        /* One bed transition, BEFORE the pump so a voice started on this
-         * iteration is fed on the same one. */
-        /* The ball parked on the paddle HOLDS the bed, which is `platformer`'s
-         * death rule with this game's spelling for it (operator, 2026-08-23).
-         * ⚠️ The term is in BOTH predicates, exactly as platformer's `dying` is:
-         * clearing `want_play` is what releases the voice, and setting
-         * `want_hold` is what keeps the FILE open at its read position — so the
-         * relaunch RESUMES the same track mid-bar instead of restarting the
-         * level's music, and the playlist cursor does not advance.  It also
-         * covers the pre-launch wait at a level's start, so the bed begins when
-         * play does rather than over a stationary ball. */
-        bool bed_waiting = !game.ball_launched;
-        audio_bed_service(&bed, game.screen == SCREEN_PLAYING && !bed_waiting,
-                                game.screen == SCREEN_PAUSED || bed_waiting);
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);

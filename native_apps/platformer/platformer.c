@@ -319,7 +319,9 @@ static void play_level_complete_sound(void) { audio_success(&audio); }
 
 static AudioBed bed;
 
-/* One transition per loop iteration, called beside audio_pump().
+/* One transition per loop iteration, called ABOVE the redraw block and before
+ * audio_pump() — the game-over redraw runs a BLOCKING name entry, so a bed
+ * serviced after it plays through the whole keyboard session.
  *
  *  - ⚠️ **SCREEN_LEVEL_COMPLETE is not want_play.**  The bed used to play through
  *    the 2.5 s overlay and under audio_success().  Dropping the screen silences
@@ -1927,6 +1929,14 @@ int main(int argc, char *argv[]) {
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* One bed transition, ABOVE the redraw block and before the pump.
+         * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs
+         * gameover_update()'s BLOCKING name entry, so a bed serviced after the
+         * block stays PLAYING for the whole keyboard session.  Before the pump
+         * so a voice started on this iteration is fed on the same one, and so
+         * the release fade is rendered.  Full reason: brick_breaker.c's copy. */
+        bed_service();
+
         if (needs_redraw) {
             draw_all();
             fb_swap(&fb);
@@ -1938,8 +1948,6 @@ int main(int argc, char *argv[]) {
          * unconditionally true while the continuous stream is live, and
          * FRAME_DELAY_IDLE_US (100 ms) is well above the ~55 ms service ceiling
          * the library measures for itself (../common/audio_out.h). */
-        bed_service();          /* one bed transition, BEFORE the pump so a voice
-                                 * started this iteration is rendered by it */
         audio_pump(&audio);
         usleep((needs_redraw || audio_pump_active(&audio))
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
