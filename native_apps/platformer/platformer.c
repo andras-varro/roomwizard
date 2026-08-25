@@ -1870,7 +1870,7 @@ int main(int argc, char *argv[]) {
      * rather than muting, so there is nothing for a game to do about it, and
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
-    audio_bed_init(&bed, &audio, "platformer", "officerunner", 6);
+    audio_bed_init(&bed, &audio, "platformer");
 
     /* Framebuffer init */
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */

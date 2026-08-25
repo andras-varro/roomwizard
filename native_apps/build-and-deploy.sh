@@ -37,6 +37,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # (../IMPROVEMENT_PLAN.md F10).
 # shellcheck source=app-manifests.sh
 . "$SCRIPT_DIR/app-manifests.sh"
+# shellcheck source=sound-sets.sh
+. "$SCRIPT_DIR/sound-sets.sh"
 
 # The shared SSH gate. Sourced unconditionally (unlike ../lib/rw-bundle.sh, which
 # only the --bundle path needs) because every deploy goes through it.
@@ -284,6 +286,14 @@ done
 rw_write_app_manifests build/apps
 echo "  Wrote $(ls build/apps/*.app 2>/dev/null | wc -l) app manifest(s) → build/apps/"
 
+# The per-game sound sets, from sound-sets.sh's data and for the same reason: that
+# table is the ONE home for every game's music paths (F1 Phase 5 ④), and a path
+# that drifted between this path and --bundle would install a game that plays
+# nothing.  ⚠️ Checked rather than assumed — rw_write_sound_sets counts what it
+# wrote, because its writer loop runs in a subshell and cannot report itself.
+rw_write_sound_sets build/soundsets || err "could not write the sound sets"
+echo "  Wrote $(ls build/soundsets/*.sound 2>/dev/null | wc -l) sound set(s) → build/soundsets/"
+
 # ── deployed artifacts ──────────────────────────────────────────────────────
 # ONE list, used for the build-size listing, the upload, the chmod, the md5
 # verification and --bundle.  There used to be two (scp and chmod) and
@@ -355,8 +365,8 @@ fi
 echo ""
 
 # ── 2b4. Music-bed gate ─────────────────────────────────────────────────────
-# The naming CONVENTION is load-bearing: audio_bed_init() derives slot n's path
-# as /opt/sound/<name><n>-mono.wav, so a mistyped stem or a count one too high
+# The naming CONVENTION is load-bearing and lives in sound-sets.sh: that table is
+# the ONE home for a bed path, so a mistyped stem or a count one too high there
 # ships a game that plays its effects in silence — indistinguishable from a game
 # with no bed.  This is also the only thing that counts beds reaching NO game,
 # which is the state the tree was in while 18 of 24 were unreachable
@@ -409,6 +419,15 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     for f in build/icons/*.ppm; do
         [ -f "$f" ] || continue
         rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "/opt/roomwizard/icons/$(basename "$f")" \
+            || err "staging failed: $f"
+    done
+
+    # The per-game sound sets.  ⚠️ Without these the games have NO MUSIC — the set
+    # file is the only home for a bed path, so a bundle that omits them installs
+    # seven games that play their effects in silence and log one line each.
+    for f in build/soundsets/*.sound; do
+        [ -f "$f" ] || continue
+        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "$f" "$RW_SOUND_SET_DIR/$(basename "$f")" \
             || err "staging failed: $f"
     done
 
@@ -662,6 +681,19 @@ for name in "$@"; do
 done
 REMOTE
 ok "App manifests installed ($(ls build/apps/*.app | wc -l) file(s))"
+echo ""
+
+# Deploy the per-game sound sets
+#
+# Same shape as the manifests above and for the same reason: written to
+# build/soundsets/ during the build from sound-sets.sh's data, copied here, and
+# copied by --bundle.  ⚠️ These are not optional — since F1 Phase 5 ④ the C side
+# derives no bed path, so a device without them has seven games with no music.
+info "Installing sound sets..."
+ssh "$DEVICE" "mkdir -p $RW_SOUND_SET_DIR"
+scp build/soundsets/*.sound "$DEVICE:$RW_SOUND_SET_DIR/"
+ssh "$DEVICE" "chmod 644 $RW_SOUND_SET_DIR/*.sound"
+ok "Sound sets installed ($(ls build/soundsets/*.sound | wc -l) file(s))"
 echo ""
 
 # ── 4. set-default mode? ────────────────────────────────────────────────────

@@ -1812,12 +1812,12 @@ int main(int argc, char *argv[]) {
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
 
-    /* The music bed: a playlist over music/brickbreaker<n>-mono.wav, with the four
-     * states and the hold/resume rules in common/audio_bed.c (F1 Phase 5 ⑤).
-     * Its config keys are brick_breaker_music, brick_breaker_music2 …, and ⚠️ the FIRST of
-     * those set empty is this game's music off switch. */
+    /* The music bed: the playlist named by /opt/roomwizard/soundsets/brick_breaker.sound,
+     * with the four states and the hold/resume rules in common/audio_bed.c
+     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
+     * file means no music, and brick_breaker_music present but EMPTY is the off switch. */
     AudioBed bed;
-    audio_bed_init(&bed, &audio, "brick_breaker", "brickbreaker", 6);
+    audio_bed_init(&bed, &audio, "brick_breaker");
     srand(time(NULL));
 
     /* Gamepad init */

@@ -87,7 +87,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
 | `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
 | `audio_wav.c` | the one streaming RIFF reader: chunk walk, `(L+R)/2` downmix, the `AudioVoiceFill` adapter | assuming a 44-byte header, or loading a whole file to play it |
-| `config.c` | `/opt/games/rw_config.conf` | ad-hoc config files |
+| `config.c` | `/opt/games/rw_config.conf`, and a game's sound set | ad-hoc config files |
 | `keyboard.c` | on-screen keyboard (ALPHA / ALPHANUM / FULL / NUMERIC) | — |
 | `highscore.c`, `ppm.c`, `logger.c` | scores, icons, logging | — |
 
@@ -790,12 +790,12 @@ These rules, each of which is a way to get this wrong:
   lives ONCE, in `common/audio_bed.{c,h}`, whose header carries the four states and the hold/resume rules:
   level-complete leaves `want_play` (so the bed releases and the next playlist track starts), a **death**
   is `want_hold` (so the fail effect plays over near-silence and a respawn continues the same track), and
-  only game over stops it. A game supplies a tag, a bed-file stem, a track count and those two predicates,
-  ⚠️ **never its own copy of the machine**. ⚠️ **The pump must keep running while a bed is held**, or no
-  resume is accepted, and ⚠️ **slot n's path is DERIVED as `/opt/sound/<stem><n>-mono.wav`, so a mistyped
-  stem ships a silent game** — `./check-bed-files.sh` gates that and counts beds reaching no game. ⚠️ **A
-  missing bed is NORMAL**: paths are config keys, so a refusal is permanent **per track**, and a per-frame
-  retry would fill `app_stdout.log` (`tests/audio_tone_test.c` G, H).
+  only game over stops it. A game supplies a **tag** and those two predicates, ⚠️ **never its own copy of
+  the machine**. ⚠️ **The pump must keep running while a bed is held**, or no resume is accepted. ⚠️ **The
+  paths are the SET FILE's and C derives none of them** — `/opt/roomwizard/soundsets/<tag>.sound`, whose
+  one generator is `sound-sets.sh`; no file means no music, and `./check-bed-files.sh` gates both
+  directions plus that the C and shell install paths agree. ⚠️ **A missing bed is NORMAL**: a refusal is
+  permanent **per track** (`tests/audio_tone_test.c` G, H; resolution in `tests/audio_bed_test.c`).
 - **`audio_close()` prints the counters — one line, from the library, for every app that ran a bus**, and
   it is what lets an operator’s own play session be measured with no mic — from the launcher it lands in
   `/var/log/roomwizard/app_stdout.log`. ⚠️ **Validate before believing a zero**: `kill -STOP` the game

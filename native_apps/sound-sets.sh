@@ -1,0 +1,157 @@
+#!/bin/bash
+#
+# sound-sets.sh — the ONE generator for native_apps' per-game sound sets.
+#
+# SOURCED, not executed:   . "$SCRIPT_DIR/sound-sets.sh"
+#
+# ── Why this is its own file ─────────────────────────────────────────────────
+#
+# Shaped after app-manifests.sh, for the same reason and against the same trap:
+# a file that only exists as a side effect of a reachable device cannot be
+# reproduced byte-for-byte by the offline installer, so the two copies drift and
+# a path that drifts renders a game that plays nothing.  So the sets are DATA
+# here, written locally by rw_write_sound_sets, and both the deploy path and
+# `--bundle` copy those same files.
+#
+# ── This table is the ONE HOME for every game's music paths ──────────────────
+#
+# ⚠️ **The C side does not derive a bed path any more, and must not learn how
+# again.**  audio_bed_init() takes a tag, reads the set file, and plays whatever
+# paths it finds; a game with no set file has no music.  That is the operator's
+# call (2026-08-24) and it is the stricter reading of CLAUDE.md's one-fact-one-home
+# rule: the previous shape had the stem and the count in each game's C call AND
+# would have had the paths here, which is a duplication a gate has to police
+# forever.  Deriving `<stem><n>-mono.wav` below is not a second home — it is how
+# this single home spells its own rows out.
+#
+# ── Format ──────────────────────────────────────────────────────────────────
+#
+# INI, read by common/config.c's parser (`key=value`, `#` comments, blanks
+# skipped) via config_load_sound_set(), from
+# <CONFIG_SOUND_SET_DIR>/<tag>.sound = /opt/roomwizard/soundsets/<tag>.sound:
+#
+#     platformer_music=/opt/sound/officerunner1-mono.wav
+#     platformer_music2=/opt/sound/officerunner2-mono.wav
+#
+# The key spelling is audio_bed_init()'s, declared once in common/audio_bed.c:
+# slot 0 has no number because it carries the off switch.  ⚠️ **Slot 0 present
+# but EMPTY means silence for the whole game** — that is the documented off
+# switch and it survives this change; slot 0 ABSENT means the same thing by a
+# different route, and both are one log line.
+#
+# One record per line below: tag|display name|bed stem|track count
+# The separator is `|` because a display name legitimately contains a space.
+#
+# ⚠️ A tag here with no audio_bed_init() caller, or a caller with no row here,
+# is a game that plays no music and says so only in a log — ./check-bed-files.sh
+# is the gate for both directions, and for the files themselves existing.
+
+RW_SOUND_SETS='
+snake|Snake|snake|2
+tetris|Tetris|tetris|2
+pong|Pong|pong|2
+brick_breaker|Brick Breaker|brickbreaker|6
+samegame|SameGame|samegame|2
+frogger|Frogger|frogger|4
+platformer|Office Runner|officerunner|6
+'
+
+# Where a bed lives on the device, and the suffix every committed one carries.
+# ⚠️ These moved OUT of common/audio_bed.h with this change: the C side no longer
+# knows the convention, so this is the only place that spells it.
+RW_SOUND_BED_DIR='/opt/sound'
+RW_SOUND_BED_SUFFIX='-mono.wav'
+
+# Where the set files are installed, and the extension.  Must agree with
+# CONFIG_SOUND_SET_DIR / CONFIG_SOUND_SET_EXT in common/config.h — a gate checks
+# it, because a mismatch installs seven files that nothing ever opens.
+RW_SOUND_SET_DIR='/opt/roomwizard/soundsets'
+RW_SOUND_SET_EXT='.sound'
+
+# ---------------------------------------------------------------------------
+# rw_sound_set_paths TAG
+#
+# Echo the bed paths for TAG, one per line, in playlist order.  Empty if TAG has
+# no row.  This is the derivation, and it lives here and nowhere else.
+# ---------------------------------------------------------------------------
+rw_sound_set_paths() {
+    local want="$1" tag name stem count i
+    printf '%s\n' "$RW_SOUND_SETS" | while IFS='|' read -r tag name stem count; do
+        [ -n "$tag" ] || continue
+        [ "$tag" = "$want" ] || continue
+        i=1
+        while [ "$i" -le "$count" ]; do
+            printf '%s/%s%d%s\n' "$RW_SOUND_BED_DIR" "$stem" "$i" "$RW_SOUND_BED_SUFFIX"
+            i=$((i + 1))
+        done
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_write_sound_sets DIR
+#
+# Write every set above into DIR as <tag>.sound.  DIR is created.
+# Echoes nothing on success; the caller reports.
+#
+# Mode is NOT set here — /mnt/c is DrvFs and discards chmod (../CLAUDE.md), so a
+# mode set on this host is unobservable.  0644 is DECLARED in the bundle manifest
+# and applied by whoever installs them, exactly as for the .app manifests.
+# ---------------------------------------------------------------------------
+rw_write_sound_sets() {
+    local dir="$1" tag name stem count i path
+    [ -n "$dir" ] || { echo "rw_write_sound_sets: no directory given" >&2; return 1; }
+    mkdir -p "$dir" || return 1
+
+    printf '%s\n' "$RW_SOUND_SETS" | while IFS='|' read -r tag name stem count; do
+        [ -n "$tag" ] || continue
+        {
+            printf '# %s — sound set.  Generated by native_apps/sound-sets.sh.\n' "$name"
+            printf '#\n'
+            printf '# The music playlist, taken in turn on every fresh bed start: a level\n'
+            printf '# completing releases the bed and the next start takes the next track, a\n'
+            printf '# death HOLDS it and a respawn resumes the same track mid-bar.\n'
+            printf '#\n'
+            printf '# Set %s_music to nothing to silence this game; delete a later line to\n' "$tag"
+            printf '# drop that track.  A path that does not exist is refused per track, so one\n'
+            printf '# bad line does not silence the others.\n'
+            i=1
+            while [ "$i" -le "$count" ]; do
+                path="$RW_SOUND_BED_DIR/$stem$i$RW_SOUND_BED_SUFFIX"
+                if [ "$i" -eq 1 ]; then
+                    printf '%s_music=%s\n' "$tag" "$path"
+                else
+                    printf '%s_music%d=%s\n' "$tag" "$i" "$path"
+                fi
+                i=$((i + 1))
+            done
+        } > "$dir/$tag$RW_SOUND_SET_EXT"
+    done
+
+    # ⚠️ The loop above CANNOT report this itself.  It runs in a subshell (it is
+    # the right-hand side of a pipe), and its exit status is the last command's —
+    # which for the trailing blank line in the data is a FAILED `[ -n "$tag" ]`.
+    # So the function would return 1 having written all seven files correctly.
+    # Count the result instead of trusting the loop: a wrong count is the failure
+    # that matters anyway, and it is the only one a caller can act on.
+    local want got
+    want=$(rw_sound_set_tags | wc -l)
+    got=$(ls "$dir"/*"$RW_SOUND_SET_EXT" 2>/dev/null | wc -l)
+    if [ "$want" -ne "$got" ]; then
+        echo "rw_write_sound_sets: wrote $got set(s) into $dir, expected $want" >&2
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_sound_set_tags
+#
+# Echo each set's tag, one per line.  Used to build the bundle's declared-mode
+# manifest and to cross-check against the audio_bed_init() call sites.
+# ---------------------------------------------------------------------------
+rw_sound_set_tags() {
+    printf '%s\n' "$RW_SOUND_SETS" | while IFS='|' read -r tag _rest; do
+        [ -n "$tag" ] && echo "$tag"
+    done
+}

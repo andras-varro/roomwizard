@@ -637,12 +637,12 @@ int main(int argc, char *argv[]) {
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
 
-    /* The music bed: a playlist over music/snake<n>-mono.wav, with the four
-     * states and the hold/resume rules in common/audio_bed.c (F1 Phase 5 ⑤).
-     * Its config keys are snake_music, snake_music2 …, and ⚠️ the FIRST of
-     * those set empty is this game's music off switch. */
+    /* The music bed: the playlist named by /opt/roomwizard/soundsets/snake.sound,
+     * with the four states and the hold/resume rules in common/audio_bed.c
+     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
+     * file means no music, and snake_music present but EMPTY is the off switch. */
     AudioBed bed;
-    audio_bed_init(&bed, &audio, "snake", "snake", 2);
+    audio_bed_init(&bed, &audio, "snake");
     
     // Initialize framebuffer
     /* Pin 32bpp — /dev/fb0 keeps whatever ran last (see fb_set_bpp). */

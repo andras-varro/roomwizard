@@ -758,12 +758,12 @@ int main(int argc, char *argv[]) {
      * audio_close() reports which path actually ran. */
     audio_cont_enable(&audio, true);
 
-    /* The music bed: a playlist over music/pong<n>-mono.wav, with the four
-     * states and the hold/resume rules in common/audio_bed.c (F1 Phase 5 ⑤).
-     * Its config keys are pong_music, pong_music2 …, and ⚠️ the FIRST of
-     * those set empty is this game's music off switch. */
+    /* The music bed: the playlist named by /opt/roomwizard/soundsets/pong.sound,
+     * with the four states and the hold/resume rules in common/audio_bed.c
+     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
+     * file means no music, and pong_music present but EMPTY is the off switch. */
     AudioBed bed;
-    audio_bed_init(&bed, &audio, "pong", "pong", 2);
+    audio_bed_init(&bed, &audio, "pong");
     
     srand(time(NULL));
     init_game();

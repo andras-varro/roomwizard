@@ -615,7 +615,7 @@ group_c() {
 # write main() in this directory, not a device fact. The commit paid what it could elsewhere rather than
 # here — SYSTEM_ANALYSIS.md took the card's WRITE rate at net ZERO by compressing the read-rate paragraph it
 # belongs beside, and the beds' `<game><n>-mono.wav` naming rule was deliberately NOT added to this file:
-# it lives in platformer.c's bed comment and build-and-deploy.sh's glob comment, at both consumers.
+# it lives in native_apps/sound-sets.sh, the one home for it, and at both consumers of that table.
 # ⚠️ **No headroom is granted: 708 is the measurement, and the next addition pays by deleting.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.

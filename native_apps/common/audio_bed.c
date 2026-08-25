@@ -8,8 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-void audio_bed_init(AudioBed *bed, Audio *audio, const char *tag,
-                    const char *bed_name, int track_count)
+void audio_bed_init(AudioBed *bed, Audio *audio, const char *tag)
 {
     if (!bed) return;
     memset(bed, 0, sizeof(*bed));
@@ -17,45 +16,64 @@ void audio_bed_init(AudioBed *bed, Audio *audio, const char *tag,
     bed->state = AUDIO_BED_IDLE;
     snprintf(bed->tag, sizeof bed->tag, "%s", tag ? tag : "game");
 
-    if (track_count < 1) track_count = 1;
-    if (track_count > AUDIO_BED_MAX_TRACKS) {
-        printf("%s: %d bed tracks asked for, %d is the cap — the rest are ignored\n",
-               bed->tag, track_count, AUDIO_BED_MAX_TRACKS);
-        track_count = AUDIO_BED_MAX_TRACKS;
-    }
-
+    /* The set file is the ONE home for this game's paths — nothing is derived
+     * here, so an absent file is an empty playlist rather than a fallback to a
+     * convention.  ⚠️ Reported at INFO volume and not as an error: a device
+     * without the file is a device without music, which is a state the off
+     * switch already made legal. */
     Config cfg;
-    config_init(&cfg);
-    config_load(&cfg);                     /* silent when the file is absent */
+    if (config_load_sound_set(&cfg, bed->tag) < 0) {
+        bed->disabled = true;
+        printf("%s: no sound set at %s/%s%s — no music bed, effects continue\n",
+               bed->tag, CONFIG_SOUND_SET_DIR, bed->tag, CONFIG_SOUND_SET_EXT);
+        return;
+    }
+    audio_bed_set_playlist(bed, &cfg);
+}
 
-    for (int i = 0; i < track_count; i++) {
-        /* Slot 0's key is the historic one and carries the off switch, so it has
-         * no number — see the header. */
+void audio_bed_set_playlist(AudioBed *bed, Config *cfg)
+{
+    if (!bed || !cfg) return;
+
+    /* Walk the whole cap rather than a passed-in count: the file decides how many
+     * tracks there are, and a gap ends nothing.  ⚠️ `config_get` is asked for
+     * NULL rather than a derived default, which is what makes ABSENT and
+     * PRESENT-BUT-EMPTY two different answers — only the second is the off
+     * switch, and conflating them would silence a game whose track 1 line was
+     * merely deleted. */
+    for (int i = 0; i < AUDIO_BED_MAX_TRACKS; i++) {
         char key[CONFIG_KEY_LEN];
         if (i == 0) snprintf(key, sizeof key, "%s_music", bed->tag);
         else        snprintf(key, sizeof key, "%s_music%d", bed->tag, i + 1);
 
-        char def[CONFIG_VAL_LEN];
-        snprintf(def, sizeof def, "%s/%s%d%s", AUDIO_BED_DIR,
-                 bed_name ? bed_name : bed->tag, i + 1, AUDIO_BED_SUFFIX);
-
-        const char *p = config_get(&cfg, key, def);
+        const char *p = config_get(cfg, key, NULL);
+        if (!p) continue;                  /* no such line; a gap is skipped */
         if (i == 0 && !p[0]) {
-            /* ⚠️ Track 1 EMPTY means silence for the whole game, deliberately:
-             * it preserves `<tag>_music=` as the off switch it already was.  A
-             * per-track reading would have broken that, since every other slot
-             * has a non-empty default too. */
+            /* ⚠️ Track 1 PRESENT AND EMPTY means silence for the whole game,
+             * deliberately: it preserves `<tag>_music=` as the off switch it
+             * already was, and it is the one thing an operator can write in the
+             * file to mean "this game, no music". */
             bed->disabled = true;
             printf("%s: music bed disabled by %s (%s=)\n",
-                   bed->tag, CONFIG_FILE_PATH, key);
+                   bed->tag, cfg->filepath, key);
             return;
         }
-        if (!p[0]) continue;               /* a gap ends nothing; it is skipped */
+        if (!p[0]) continue;               /* a later empty line: also a gap */
         snprintf(bed->track[bed->count], sizeof bed->track[0], "%s", p);
         bed->count++;
     }
+
+    if (bed->count == 0) {
+        /* A file that exists and names nothing. audio_bed_service() would return
+         * early on count==0 anyway; say it once so the log distinguishes this
+         * from a file that is simply absent. */
+        bed->disabled = true;
+        printf("%s: sound set %s names no music — no music bed, effects continue\n",
+               bed->tag, cfg->filepath);
+        return;
+    }
     printf("%s: music playlist — %d track(s), first %s\n",
-           bed->tag, bed->count, bed->count ? bed->track[0] : "(none)");
+           bed->tag, bed->count, bed->track[0]);
 }
 
 void audio_bed_service(AudioBed *bed, bool want_play, bool want_hold)

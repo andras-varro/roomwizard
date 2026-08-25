@@ -33,19 +33,22 @@
 #include "audio.h"
 #include "config.h"
 
-/* The array cap, not a game's track count — the most any game ships today is 6
- * (`music/brickbreaker[1-6]-mono.wav`, `music/officerunner[1-6]-mono.wav`).
- * A count above this is clamped and said so, rather than overrunning. */
+/* The array cap, and now also how far audio_bed_init() looks for numbered keys —
+ * the most any game ships today is 6 (`music/brickbreaker[1-6]-mono.wav`,
+ * `music/officerunner[1-6]-mono.wav`).  ⚠️ A set file carrying a key past this
+ * is IGNORED rather than overrunning, and says so: raising the cap is the fix,
+ * not a per-game count, which is the parameter this change deleted. */
 #define AUDIO_BED_MAX_TRACKS   8
 
-/* Where the beds live on the device, and the file-name shape the defaults are
- * derived from: <AUDIO_BED_DIR>/<name><n>-mono.wav.  ⚠️ Every committed bed
- * follows it and `check-sound-assets.sh` gates that it keeps doing so — a typo
- * in a game's bed name would otherwise ship a game that is simply silent, with
- * no error anywhere.  A file that CANNOT follow it is still reachable: name it
- * in `rw_config.conf`, which overrides every slot. */
-#define AUDIO_BED_DIR          "/opt/sound"
-#define AUDIO_BED_SUFFIX       "-mono.wav"
+/* ⚠️ AUDIO_BED_DIR / AUDIO_BED_SUFFIX used to live here, and the C side used to
+ * DERIVE slot n's path as <dir>/<stem><n><suffix>.  Both are gone: the sound-set
+ * file is now the ONE home for a game's bed paths and the convention is spelled
+ * only in native_apps/sound-sets.sh.  ⚠️ **Do not teach this file the convention
+ * again** — a derived fallback beside a file that already carries the paths is
+ * the same fact in two places, which is what the operator's 2026-08-24 call
+ * refused.  A game with no set file has no music, and that is the answer, not a
+ * gap to fill.
+ */
 
 typedef enum {
     AUDIO_BED_IDLE,      /* nothing on the bus (nothing started, or a fade finished) */
@@ -68,23 +71,41 @@ typedef struct {
 /*
  * Read the playlist and say what it is.  Call once, after audio_init().
  *
- *   tag         the game's name — the log prefix, and the config key prefix:
- *               "<tag>_music" names track 1 and "<tag>_music2".."<tag>_musicN"
- *               the rest.  ⚠️ Track 1's key carries NO number, because
- *               `platformer_music` shipped before the playlist existed and is
- *               also the whole-game OFF SWITCH: set it empty and the game plays
- *               its effects in silence.
- *   bed_name    the file-name stem, which is often NOT the tag: platformer's
- *               beds are `officerunner<n>-mono.wav`.  The shipped default for
- *               slot n is <AUDIO_BED_DIR>/<bed_name><n><AUDIO_BED_SUFFIX>.
- *   track_count how many slots to look for, 1..AUDIO_BED_MAX_TRACKS.
+ *   tag   the game's name, and the ONLY thing a game declares.  It names both
+ *         the set file (<CONFIG_SOUND_SET_DIR>/<tag><CONFIG_SOUND_SET_EXT>) and
+ *         the keys inside it: "<tag>_music" is track 1 and
+ *         "<tag>_music2".."<tag>_musicN" the rest.  ⚠️ Track 1's key carries NO
+ *         number, because `platformer_music` shipped before the playlist existed
+ *         and is also the whole-game OFF SWITCH: present but empty and the game
+ *         plays its effects in silence.
  *
- * ⚠️ The defaults are DERIVED rather than passed in as a table, and that is what
- * makes adding a bed to a game three lines.  It also means the shipped default
- * IS the playlist, so `rw_config.conf` only has to exist in order to CHANGE it.
+ * ⚠️ The track COUNT is not a parameter — it is however many numbered keys the
+ * set file actually carries, up to AUDIO_BED_MAX_TRACKS.  That is what makes the
+ * file the only home: a track is added or dropped by editing the file, with no
+ * matching edit in C, and the two can therefore never disagree.  A gap ends
+ * nothing and is skipped, so deleting a middle line is legal.
+ *
+ * ⚠️ No set file means NO MUSIC, reported as one log line and nothing worse.
+ * Effects are unaffected — they are the mixer's, not the bed's.
  */
-void audio_bed_init(AudioBed *bed, Audio *audio, const char *tag,
-                    const char *bed_name, int track_count);
+void audio_bed_init(AudioBed *bed, Audio *audio, const char *tag);
+
+/*
+ * The RESOLUTION half of the above, over an already-loaded Config: it reads
+ * "<bed->tag>_music" and its numbered siblings out of `cfg` and fills the
+ * playlist.  audio_bed_init() is this plus the file load, and nothing else calls
+ * it in shipped code.
+ *
+ * It is split out for the same reason `audio_gen.c` is split out of `audio.c`: it
+ * has NO path of its own, so `tests/audio_bed_test.c` can drive the real
+ * resolution from a temp file instead of needing CONFIG_SOUND_SET_DIR to exist on
+ * the host.  ⚠️ Keep the split — folding it back inline makes every rule below it
+ * (absent vs empty, the gap, the cap) reachable only on a device.
+ *
+ * Expects `bed` already zeroed with `tag` set, exactly as audio_bed_init() leaves
+ * it before the load.
+ */
+void audio_bed_set_playlist(AudioBed *bed, Config *cfg);
 
 /*
  * One transition per call, from the game's loop beside audio_pump().

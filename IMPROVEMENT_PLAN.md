@@ -307,8 +307,8 @@ frequencies started at different moments partially cancel, which `AudioVoice.del
 440 Hz at 3/6) and is still a comfort change rather than a fix, and it must not ship beside another audio
 change — that two-variable comparison is one this entry has already paid for once.
 
-**Phase 5 — the games take the stream, and their effects become WAVs.** Five parts. ①, ② and ③ are
-BUILT — ③ awaits one listen — and ④/⑤ are the open work, all three of ⑤'s items asked for by name.
+**Phase 5 — the games take the stream, and their effects become WAVs.** Five parts. ①, ②, ③ and ⑤ are
+BUILT and their ear checks CLOSED; ④'s music half is built, and its `fx_*` half is the only open work.
 
 ✅ **① The pump is on the continuous stream in all SEVEN games, and ② `brick_breaker`'s five during-play
 tones are audible at last — both verified on `.188`, both closed.** The three-line shape, `snake`'s
@@ -379,15 +379,15 @@ caught, none a NO-OP. ⚠️ **Two triggers of the same clip in ONE frame sit at
 COHERENTLY** — 2× amplitude, unlike two tones, which partially cancel because `AudioVoice.delay` guarantees
 different start moments. Group I pins it.
 
-④ **A per-game sound set, declared in a config file rather than in C — HALF done, and the open half is the
-FILE.** ⑤'s `audio_bed_init()` took the key naming with it, so a game's playlist keys (`<tag>_music`,
-`<tag>_music2` …) and its default paths are now declared ONCE in `common/audio_bed.c` instead of per game —
-which was the part that had to land beside the extraction. What is still open: those keys, and ③'s four
-`fx_*` ones, live in the single global `rw_config.conf`, so a per-GAME file does not exist yet. Shape it
-after the `.app` manifests
-([`SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`](SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests)):
-INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
-drifts between the online and offline installer renders a game that plays nothing.
+④ **A per-game sound set — the MUSIC half is BUILT; the open half is the `fx_*` keys.** The file exists:
+`/opt/roomwizard/soundsets/<tag>.sound`, INI, one generator on disk (`native_apps/sound-sets.sh`), copied by
+both the online and the bundle path. ⚠️ **That generator's table is the ONE home and C derives nothing** — a
+game passes only its tag, the track count is however many numbered keys the file carries, and no file means
+no music (operator's call 2026-08-24; the key-ceiling arithmetic that also argues for it is the
+`CONFIG_SOUND_SET_DIR` comment in `common/config.h`). Host coverage: `tests/audio_bed_test.c`, seen failing
+under sabotage. **Still open:** ③'s `fx_*` keys remain in the global `rw_config.conf`, so a per-game EFFECT
+set does not exist. ⚠️ **Decide ③'s fallback first** — making a clip conditional on a set file means a device
+whose file did not land plays note tables, which silently reverts ③'s whole audibility fix.
 
 ✅ **⑤ Per-game, per-level sound as data — BUILT, and the EAR half CLOSED on 2026-08-24.** Heard on `.188` and
 corroborated in `app_stdout.log`: the playlist advances on level complete (`officerunner1` → `officerunner2`,
@@ -430,9 +430,9 @@ the shipped `vol`; `starve` is small and nonzero, and a dry queue counts while t
   `audio_fail()`'s three, because a new fallback had no shipped history to preserve.
 - ✅ **`bed_service()` is EXTRACTED to `common/audio_bed.{c,h}` and all SEVEN games have a bed** (the six
   whose files were committed and reaching nothing: `snake`, `tetris`, `pong`, `samegame` at 2 tracks,
-  `frogger` at 4, `brick_breaker` at 6). A game costs three lines: a tag, a bed-file stem, a track count
-  and two per-frame predicates. ⚠️ **Slot n's path is DERIVED, `/opt/sound/<stem><n>-mono.wav`**, which is
-  why there is no per-game defaults table — and why `check-bed-files.sh` exists: a mistyped stem ships a
+  `frogger` at 4, `brick_breaker` at 6). A game costs a tag and two per-frame predicates — the stem and the
+  count moved to the generator's table with ④. ⚠️ **C derives no path at all now**, which is why
+  `check-bed-files.sh` exists and why it grew the both-directions check: a mistyped stem there ships a
   game that plays its effects in silence, and nothing else in the tree can see the difference. It also
   counts beds reaching NO game, which nothing else did. **Receipts on `.188`: seven playlists, the
   right first track and count each, a bus closing at `starve=0` bar one first-service, and a bed that STARTS

@@ -124,6 +124,18 @@ void config_init_path(Config *cfg, const char *path) {
     cfg->count = 0;
 }
 
+int config_load_sound_set(Config *cfg, const char *tag) {
+    /* The longest real path is /opt/roomwizard/soundsets/brick_breaker.sound at
+     * 45 bytes against Config::filepath's 128, so this cannot truncate for any
+     * tag a game passes — but snprintf bounds it anyway, because a truncated
+     * path would open a DIFFERENT file rather than fail. */
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s%s", CONFIG_SOUND_SET_DIR,
+             (tag && *tag) ? tag : "default", CONFIG_SOUND_SET_EXT);
+    config_init_path(cfg, path);
+    return config_load(cfg);
+}
+
 /* ── File I/O ────────────────────────────────────────────────────────────── */
 
 int config_load(Config *cfg) {
