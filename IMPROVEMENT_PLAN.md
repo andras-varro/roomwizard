@@ -564,7 +564,7 @@ measured is HEADROOM rather than the mixer.** With `PUMP` or `CONT` on the three
 amplitude adds; with both off they play sequentially, the deliberate off-bus fallback. ⚠️ **Its
 `audio_pump_active()` branch is unreachable-false in the configuration that matters** — a CONT stream always
 has pending frames — so do not "fix" that predicate on the code alone. ⚠️ **At `LVL` 3/6 the chord DISTORTS
-and at 1/6 it does not**: `n` voices reach the int16 clamp when `n * vol > AUDIO_VOL_UNITY` and the shipped
+and at 1/6 it does not**: `n` voices reach the int16 clamp at the unity threshold (`native_apps/CLAUDE.md` → *Mixing*) and the shipped
 `vol` is set for the ≤ 2 voices a game sums, so three is outside the envelope by construction — read `clip`
 before treating it as anything else. ⚠️ `lim` and `clip` accumulate across both halves of such an A/B, since
 `bus_reset()` alone zeroes them and it carries the limiter choice across: cycle `PUMP` between halves or
