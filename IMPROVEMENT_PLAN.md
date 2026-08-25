@@ -36,8 +36,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 | 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
 | 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
 | 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **The mix bus is DONE — the 2026-08-20 listen closed the two-voice question, the `LIM` A/B and phase 8.** What is LEFT: (b) `audio_success()` arpeggio-not-chord, still unasked — ⚠️ **fix the `CHORD` pad first**, its repair does not fire on a silent bus · (e) CPU% while mixing, unmeasured · and a confirming listen that `AUDIO_MIX_HARD` as the shipped limiter changed nothing audible for one voice. Then `brick_breaker` latency under load, and ScummVM music+speech vs the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | the pad fix is a `native_apps` build; the game and ScummVM halves still need F1 Phases 4–5. Fold item 4 in — the OPL check is the same ear on the same trip |
-| 6 | **What the 2026-08-21 listen left open.** ✅ (c) is ANSWERED: the bed's level is right for sustained music, effects are audible over it, and the log carries 5 pause→resume cycles the operator did not remark on — recorded as clean-unless-contradicted, not as a pass. What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? Asked and **not** answered, because the game-over case is input-locked · (d) **`audio_fail()` and the other three now play clips (③) — is the fail sound audible at last, under a bed?** That is the operator's own complaint, three times reported, and the fix is deployed to `.188` unheard · (b) `audio_success()`'s arpeggio-not-chord is now MOOT if its clip plays: the clip is one sound, not three notes. ⚠️ **The frozen fade and dry stream while `NEW HIGH SCORE!` was open are FIXED and deployed UNHEARD** — so if they are still there, that IS a new fault. ⚠️ **The ② overlap check is NOT constructible — do not re-request it** | one play session | nothing — deployed |
+| 5 | **The 2026-08-24 panel session closed the audio ear list — nine items, every one corroborated by `app_stdout.log`.** What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? asked and **not** answered, because the game-over case is input-locked · (e) CPU% while mixing, unmeasured · and ScummVM music+speech against the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | nothing for (a) or (e); the ScummVM half needs F1 Phase 6. Fold item 4 in — the OPL check is the same ear on the same trip |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -284,8 +283,8 @@ analog, below both userspaces, and not ours to fix (below).
 
 | Phase | What it is | State |
 |---|---|---|
-| 4 | rebuild the device half on tinyalsa | open — for the **latency** (three 46 ms periods of lead → three 23 ms ones) and to stop building on a deprecated emulation. ⚠️ **not** the distortion's fix, and `aplay` has already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ① **done, all seven games**, gated by `check-audio-pacing.sh`; ② **corrected, not closed** — its cause is refuted; ③ built, one listen owed; ④ **half done** — the keys are declared once, the per-game FILE is not written; ⑤ built and every receipt reads — **every game has a bed, the bed stops before a blocking sub-loop and every game reaches `audio_gameover()`** — so only ear questions are left. Detail below |
+| 4 | rebuild the device half on tinyalsa | **deferred 2026-08-24, operator's call** — it buys LATENCY only (`lead=139ms period=46ms` in every counter line, against ~70 ms on three 23 ms periods) and freedom from a deprecated emulation, and **no latency symptom has been reported**: the paddle bounce is the most frequent sound in the repo and reads *"audible at an enjoyable level"*. ⚠️ **not** the distortion's fix, and `aplay` already proved userspace is not where it lives |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | ①②③⑤ **CLOSED, ear half included** (2026-08-24), gated by `check-audio-pacing.sh`; ④ **half done and the only open part** — the keys are declared once in `common/audio_bed.c`, the per-game FILE is not written. Detail below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -318,7 +317,7 @@ exception to it and the reason it must be **CONT** rather than just PUMP live in
 queue is counted even while the bus is SILENT**, so a small non-zero `starve` is not automatically an
 audible fault, and ⚠️ **the counter must be validated before a zero is believed** — three 1 s `SIGSTOP`s on
 a running game read `starve=3`. ⚠️ **The config gate was never ②'s cause and must not be re-raised**: `.188`
-has no `/opt/games/rw_config.conf` at all and `config_audio_enabled()` defaults to `true`
+carries a `/opt/games/rw_config.conf` with all three audio keys at `1`, and `config_audio_enabled()` defaults to `true`
 (`common/config.c:290`).
 
 ⚠️ **② also produced a diagnosis that is REFUTED by arithmetic, and re-raising it costs a session.** The
@@ -354,12 +353,9 @@ and land inside the passband (`fx_click` 900→1500, `fx_pickup` 1200→3200, `f
 1800→420 Hz), no pitch is retuned and no level is raised. ⚠️ **There is no headroom to raise anyway** —
 that same session produced `clip=126`, the first non-zero clip ever measured here.
 
-⏳ **What ③ still owes: one listen, and two things the mechanism cannot answer.** The clip path has been
-driven end to end on the host and on ARM, but never against the real `/opt/sound` files with a finger on
-the panel — a canned sound needs a tap, and lazy loading means a headless run loads nothing. ⚠️ **And the
-mixer applies its 10 ms attack and 20 ms release to a clip too**, so on the 55 ms `fx_click` 30 ms of the
-file is envelope; whether that softens a transient the `fx_check` gate guaranteed is ear-only, and
-`audio_mix_add_sample()` derives both from the total length with no override.
+✅ **③'s listen is DONE (2026-08-24): every canned sound was heard against the real `/opt/sound` files.** The
+mixer's 10 ms attack / 20 ms release still lands on a clip and `audio_mix_add_sample()` derives both from the
+total length with no override — no softened transient was reported, so it is a note, not an item.
 
 **How it is built, and the one design decision inside it.** A clip is loaded WHOLE into RAM and handed to
 one of `AUDIO_CLIP_VOICES` (4) instances that each carry their own cursor — ⚠️ **RAM is a CURSOR decision,
@@ -393,12 +389,13 @@ after the `.app` manifests
 INI, **one generator per component on disk**, never emitted from inside an `ssh` heredoc — a path that
 drifts between the online and offline installer renders a game that plays nothing.
 
-⏳ **⑤ Per-game, per-level sound as data — BUILT; every RECEIPT reads, the EAR half does not.** On `.188`
-the launcher's grid layout says `fits` and all seven games print their playlist.
-Owed: the track change at LEVEL COMPLETE, the death that holds the music, and `fx_gameover` against
-`fx_fail`. ✅ **The two toggles silence a game — heard, operator 2026-08-24**, which confirms the library
-gate; the SETTINGS-tab UI is confirmed on its READ half only (a screenshot agreeing with
-`rw_config.conf`), so tap → `SAVE` → relaunch is still owed.
+✅ **⑤ Per-game, per-level sound as data — BUILT, and the EAR half CLOSED on 2026-08-24.** Heard on `.188` and
+corroborated in `app_stdout.log`: the playlist advances on level complete (`officerunner1` → `officerunner2`,
+each `0 consumed`), a death HOLDS and a respawn resumes at the SAME FRAME (`stop … 184320 frames into pass 0`
+→ `resume … 184320 consumed`), `fx_gameover` is distinguishable from `fx_fail`, the bed fades before `NEW HIGH
+SCORE!` opens, and both toggles silence a game and read back after `SAVE` + relaunch. ⚠️ **All seven games
+closed at `clip=0 lim=0 lost=0 drop=0`**, the measurement behind `AUDIO_MIX_HARD` adding no nonlinearity at
+the shipped `vol`; `starve` is small and nonzero, and a dry queue counts while the bus is SILENT.
 
 - ✅ **The music stops between levels, and stops on a death.** `audio_bed_service()`'s `want_play` is now
   `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
@@ -438,9 +435,8 @@ gate; the SETTINGS-tab UI is confirmed on its READ half only (a screenshot agree
   why there is no per-game defaults table — and why `check-bed-files.sh` exists: a mistyped stem ships a
   game that plays its effects in silence, and nothing else in the tree can see the difference. It also
   counts beds reaching NO game, which nothing else did. **Receipts on `.188`: seven playlists, the
-  right first track and count each, and every bus closing at `starve=0` bar one first-service.**
-  ⏳ **What is NOT verified is a bed actually STARTING in the six new games** — that needs a finger on
-  START, so it joins the ear list above.
+  right first track and count each, a bus closing at `starve=0` bar one first-service, and a bed that STARTS
+  in all seven — heard 2026-08-24, one `music start` per launch in the log.**
   ✅ **`brick_breaker`'s lost ball HOLDS the bed** (operator, 2026-08-23): `!game.ball_launched` in **both**
   predicates, as `platformer`'s `dying` is, so a relaunch resumes mid-bar and the cursor does not advance.
 - ✅ **The six unclaimed effects have NAMES, and a gate counts the ones that do not** (2026-08-23).
@@ -458,7 +454,7 @@ gate; the SETTINGS-tab UI is confirmed on its READ half only (a screenshot agree
   `audio_gameover()` against `fail=0 unchecked=0` today. ⚠️ `audio_gameover()` fires **instead of** `fail`,
   never after: 1.19 s against 350 ms, and the two sum on the bus. ⚠️ **The converse is NOT gated and cannot
   be** — "has lives" is not a text property, so that `audio_fail()` survives in exactly the three games that
-  have lives (`brick_breaker`, `frogger`, `platformer`) is review-and-ear only. ⏳ Neither fix is HEARD.
+  have lives (`brick_breaker`, `frogger`, `platformer`) is review-and-ear only. ✅ Both are HEARD (operator, 2026-08-24).
 
 **Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
 ⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
@@ -506,11 +502,12 @@ band requirement by accident. Whether an effect sounds like the thing it is name
 Seen failing in both directions (a 200 Hz sine and a 48000/stereo file are both rejected; a 2 kHz mono one
 is not), which is the negative control this repo requires of a new check.
 
-⏳ **The two files queued for regeneration, re-measured 2026-08-22 against the CURRENT bytes:** `knock`
-−3.05 dB delta / −21.66 dBFS in-band and `thud` −4.01 / −20.40 are the weakest of the eleven, and the
-earlier figures (−5.0, −4.5) do not reproduce against today's files. Prompts that name a register are in
-`native_apps/sounds/prompts.md`; only the operator can re-source them. All eleven are peak-normalised to
-−0.3 dBFS, so **no level lever remains** — this is a content change.
+✅ **The two weakest-in-band files are settled, and one settles by EAR against its own number.** `knock`
+measures −3.05 dB delta / −21.66 dBFS in-band, weakest of the eleven, and drives the most frequent sound in
+`brick_breaker` — yet the operator reports it *"audible at an enjoyable level"* (2026-08-24), so no
+re-sourcing is needed. ⚠️ **A WARN from `check-sound-assets.sh` is therefore a prompt to LISTEN, not a
+verdict**: in-band RMS ranks files, it does not predict audibility at the shipped level. `thud` is
+re-sourced. All eleven are peak-normalised to −0.3 dBFS, so no level lever remains either way.
 
 ⏳ **`fx_fail`'s remaining gap is a LIMITER, and it is still untried.** Confirmed *"much better"* on `.188`
 after regeneration; re-measured 2026-08-22 at in-band RMS −16.14 dBFS against `click` −11.80 and
@@ -562,13 +559,17 @@ does the same eight ways for group I. **Still uncovered: `audio_sfx_play()` and 
 clamp against a 32-bit `long`** — the clamp needs a fixture too large for a host test to write, so it wants
 the modelled-truncation shape `tests/audio_gen_test.c` group A uses.
 
-⏳ **One leftover, small.** The `CHORD` pad in `native_apps/tests/audio_mix_test.c` branches on
-`audio_pump_active()`, which is **false** on a silent bus (that predicate ends in `audio_mix_pending() > 0`),
-so on exactly the tap a comparison needs it falls back to three chained `audio_tone()` calls — **fix by
-testing `audio->pumping`**, and land it before any level or limiter question goes to the panel again.
-⚠️ `lim` and `clip` accumulate across both halves of such an A/B, since `bus_reset()` is the only thing that
-zeroes them and it deliberately carries the limiter choice across: cycle `PUMP` between halves or neither
-counter is attributable to a position.
+✅ **The `CHORD` pad DOES put three simultaneous voices on the bus, measured by ear 2026-08-24, and what it
+measured is HEADROOM rather than the mixer.** With `PUMP` or `CONT` on the three sum coherently and the
+amplitude adds; with both off they play sequentially, the deliberate off-bus fallback. ⚠️ **Its
+`audio_pump_active()` branch is unreachable-false in the configuration that matters** — a CONT stream always
+has pending frames — so do not "fix" that predicate on the code alone. ⚠️ **At `LVL` 3/6 the chord DISTORTS
+and at 1/6 it does not**: `n` voices reach the int16 clamp when `n * vol > AUDIO_VOL_UNITY` and the shipped
+`vol` is set for the ≤ 2 voices a game sums, so three is outside the envelope by construction — read `clip`
+before treating it as anything else. ⚠️ `lim` and `clip` accumulate across both halves of such an A/B, since
+`bus_reset()` alone zeroes them and it carries the limiter choice across: cycle `PUMP` between halves or
+neither counter is attributable to a position.
+
 ⏳ **One device-half defect is left and it is the adapter's.** `oss-mixer.cpp:298`'s emergency
 anti-underrun `write()` ignores errors and partial writes; it is deleted rather than fixed, because the
 whole emergency path is a second write loop that the shared library replaces (phase 6). ⚠️ The format
