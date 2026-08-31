@@ -128,12 +128,15 @@ rw_write_sound_sets() {
         } > "$dir/$tag$RW_SOUND_SET_EXT"
     done
 
-    # ⚠️ The loop above CANNOT report this itself.  It runs in a subshell (it is
-    # the right-hand side of a pipe), and its exit status is the last command's —
-    # which for the trailing blank line in the data is a FAILED `[ -n "$tag" ]`.
-    # So the function would return 1 having written all seven files correctly.
-    # Count the result instead of trusting the loop: a wrong count is the failure
-    # that matters anyway, and it is the only one a caller can act on.
+    # ⚠️ The loop above CANNOT report a failed write, and this is MEASURED rather
+    # than reasoned: with a record whose redirect fails in the middle of the data
+    # the loop still exits 0, because the loop's status is its LAST body command's
+    # and the guard's `|| continue` makes that 0.  (It only surfaces a failure when
+    # the failing record happens to be last with no trailing blank line — which is
+    # to say, never here: the table ends in a blank line.)  It is also a subshell,
+    # being the right-hand side of a pipe, so it can set no variable to read after.
+    # Count the artifacts instead: a wrong count is the failure that matters, and
+    # it is the only one a caller can act on.
     local want got
     want=$(rw_sound_set_tags | wc -l)
     got=$(ls "$dir"/*"$RW_SOUND_SET_EXT" 2>/dev/null | wc -l)

@@ -57,7 +57,11 @@ RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardw
 # rw_write_app_manifests DIR
 #
 # Write every manifest above into DIR as <basename>.app.  DIR is created.
-# Echoes nothing on success; the caller reports.
+# Echoes nothing on success; the caller reports.  Returns non-zero if a manifest
+# the table names did not appear — which is also the only way this can report at
+# all, for the reason spelled out at sound-sets.sh's rw_write_sound_sets.  It
+# counts the TABLE's files, not `*.app`: build/ is never cleaned, so a retired
+# manifest left behind by an older checkout must not read as a failure here.
 #
 # Mode is NOT set here.  /mnt/c is DrvFs and discards chmod (CLAUDE.md), so a
 # mode set on this host is unobservable and unreliable; 0644 for these is
@@ -77,6 +81,17 @@ rw_write_app_manifests() {
             printf 'args=%s\n' "$args"
         } > "$dir/$base.app"
     done
+
+    local base_wanted want=0 got=0
+    for base_wanted in $(rw_app_manifest_names); do
+        want=$((want + 1))
+        [ -f "$dir/$base_wanted.app" ] && got=$((got + 1))
+    done
+    if [ "$want" -ne "$got" ]; then
+        echo "rw_write_app_manifests: wrote $got manifest(s) into $dir, expected $want" >&2
+        return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------

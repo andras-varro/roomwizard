@@ -283,8 +283,8 @@ analog, below both userspaces, and not ours to fix (below).
 
 | Phase | What it is | State |
 |---|---|---|
-| 4 | rebuild the device half on tinyalsa | **deferred 2026-08-24, operator's call** — it buys LATENCY only (`lead=139ms period=46ms` in every counter line, against ~70 ms on three 23 ms periods) and freedom from a deprecated emulation, and **no latency symptom has been reported**: the paddle bounce is the most frequent sound in the repo and reads *"audible at an enjoyable level"*. ⚠️ **not** the distortion's fix, and `aplay` already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | ①②③⑤ **CLOSED, ear half included** (2026-08-24), gated by `check-audio-pacing.sh`; ④ **half done and the only open part** — the keys are declared once in `common/audio_bed.c`, the per-game FILE is not written. Detail below |
+| 4 | rebuild the device half on tinyalsa | **WON'T DO, operator's call 2026-08-31 — a footnote, not a target.** It buys LATENCY only (`lead=139ms period=46ms` in every counter line, against ~70 ms on three 23 ms periods), and **no latency symptom has been reported**: the paddle bounce is the most frequent sound in the repo and reads *"audible at an enjoyable level"*. ⚠️ **It removes a translation layer, not a driver** — `/dev/dsp` and `/dev/snd/pcmC0D0p` are the SAME PCM, so tinyalsa cannot reach different hardware behaviour; the layering and the shim's four bugs are [§3.4](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **not** the distortion's fix, and `aplay` already proved userspace is not where it lives |
+| 5 | **the games take the continuous stream, and their sounds become WAVs** | **CLOSED, ear half included** — ①②③⑤ 2026-08-24, ④ 2026-08-31, gated by `check-audio-pacing.sh`, `check-bed-files.sh` and `check-sound-assets.sh`. What ④ decided, and the three measurements behind declining its `fx_*` half, are below |
 | 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
 | 7 | the docs and the comments this makes stale | open |
 
@@ -379,15 +379,16 @@ caught, none a NO-OP. ⚠️ **Two triggers of the same clip in ONE frame sit at
 COHERENTLY** — 2× amplitude, unlike two tones, which partially cancel because `AudioVoice.delay` guarantees
 different start moments. Group I pins it.
 
-④ **A per-game sound set — the MUSIC half is BUILT; the open half is the `fx_*` keys.** The file exists:
-`/opt/roomwizard/soundsets/<tag>.sound`, INI, one generator on disk (`native_apps/sound-sets.sh`), copied by
-both the online and the bundle path. ⚠️ **That generator's table is the ONE home and C derives nothing** — a
-game passes only its tag, the track count is however many numbered keys the file carries, and no file means
-no music (operator's call 2026-08-24; the key-ceiling arithmetic that also argues for it is the
-`CONFIG_SOUND_SET_DIR` comment in `common/config.h`). Host coverage: `tests/audio_bed_test.c`, seen failing
-under sabotage. **Still open:** ③'s `fx_*` keys remain in the global `rw_config.conf`, so a per-game EFFECT
-set does not exist. ⚠️ **Decide ③'s fallback first** — making a clip conditional on a set file means a device
-whose file did not land plays note tables, which silently reverts ③'s whole audibility fix.
+✅ ④ **A per-game sound set — the MUSIC half SHIPPED and the `fx_*` half is DECLINED, on three
+measurements (2026-08-31).** The file is `/opt/roomwizard/soundsets/<tag>.sound`, INI, one generator on
+disk (`native_apps/sound-sets.sh`); ⚠️ **that table is the ONE home and C derives nothing** — a game passes
+only its tag, the track count is however many numbered keys the file carries, no file means no music. Host
+coverage: `tests/audio_bed_test.c`. ⚠️ **Do not re-propose per-game `fx_*` keys.** The motive was the key
+ceiling and it is SPENT (worst case 6 system + 11 `fx_*` against `CONFIG_MAX_KEYS` 32, `common/config.h`);
+`fx_*` is ROLE-data shared by all seven games, so seven files would give one fact seven homes; and
+`check-sound-assets.sh`'s claim check greps `FX_DEFAULT_PATH` in `common/audio.c`, so generated set files
+would re-open the `orphan=6` bug class invisibly. The override users need already exists — a global
+`fx_<name>=` key (`native_apps/CLAUDE.md` → *Sound assets*).
 
 ✅ **⑤ Per-game, per-level sound as data — BUILT, and the EAR half CLOSED on 2026-08-24.** Heard on `.188` and
 corroborated in `app_stdout.log`: the playlist advances on level complete (`officerunner1` → `officerunner2`,
@@ -509,10 +510,12 @@ re-sourcing is needed. ⚠️ **A WARN from `check-sound-assets.sh` is therefore
 verdict**: in-band RMS ranks files, it does not predict audibility at the shipped level. `thud` is
 re-sourced. All eleven are peak-normalised to −0.3 dBFS, so no level lever remains either way.
 
-⏳ **`fx_fail`'s remaining gap is a LIMITER, and it is still untried.** Confirmed *"much better"* on `.188`
-after regeneration; re-measured 2026-08-22 at in-band RMS −16.14 dBFS against `click` −11.80 and
-`success` −12.83. Peak is already at maximum, so the only lever that raises in-band RMS at the same peak is
-a limiter. ⚠️ A 700 Hz high-pass was measured and bought 0.16 dB, so it is not the answer.
+⏳ **`fx_fail` is LIMITED and it landed the intended 4 dB — deployed to `.188` 2026-08-31, unheard.**
+`alimiter=level_in=3` then an exact correction back to −0.3 dBFS peak takes in-band RMS **−16.14 → −11.87
+dBFS**, level with `click`'s −11.80. ⚠️ **Its band delta gets WORSE, −3.73 → −4.29 dB, and that is
+arithmetic rather than a defect** — the sub-knee sweep tail rises with everything else, and the existing
+`check-sound-assets.sh` WARN is unchanged in kind. A 700 Hz high-pass bought 0.16 dB, so filtering was never
+the lever. **Owed: one ear check that it is not a flat honk** (`level_in=6`, −11.08, staged in `build/`).
 
 ✅ **The provenance question is CLOSED and `LICENSE.md` is its home** (settled 2026-08-23, once ElevenLabs
 answered): the eleven `fx_*.wav` are AI-generated on a **free** ElevenLabs account and carry **two**
@@ -536,7 +539,7 @@ four-state machine behind them lives in `common/audio_bed.{c,h}` — every trans
 ⚠️ **A refusal is permanent on purpose** — a missing file is a NORMAL case and a per-frame retry would fill
 `app_stdout.log` with one refusal every 33 ms. Verified as far as no-human verification reaches: each game
 starts clean over SSH with the launcher stopped (`cont=1`, `starve=0` bar one first-service on `tetris`), and
-the mechanism is covered on the host **and on ARM** — the panel listen is row 6 (c) and it is what is owed.
+the mechanism is covered on the host **and on ARM** — the panel listen is the table above's row 5 and it is what is owed.
 
 ⏳ **`audio_music_pause()`/`audio_music_resume()` are new library surface, and "pause" here means
 release-and-hold.** Pause arms the same release as `audio_music_stop()` — a bed is never cut, that is a
@@ -1596,13 +1599,10 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) (ALSA) is the place to
-   start, and its gate is already through.** It is the biggest user-visible improvement available, pure
-   userspace, no kernel work, no brick risk — and Phase 0 is **measured on `.188`, not assumed**: a 21 ms
-   period is granted, every rate is granted exactly (so nothing resamples anywhere), and native ALSA was
-   *heard* making sound before a line of our code existed. Phases 1–2 are closed; **Phase 3 is deployed
-   to `.188` and its period-aligned lead has never been heard — that listen is the next action**, and it
-   costs one panel visit rather than a session.
+1. **[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) (ALSA) is DONE where a
+   player can hear it** — Phases 0–3d, 5 and 8 closed, 4 won't-do. What is left is Phase 6 (`oss-mixer.cpp`
+   reduced to an adapter, which is really a ScummVM refactor and carries the CPU% number) and Phase 7's
+   stale comments. Phase 6 costs panel time and a ~2 min ScummVM rebuild per iteration.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
 3. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.

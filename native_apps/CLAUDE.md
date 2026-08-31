@@ -679,6 +679,11 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   decide whether to make a sound. ⚠️ **Both read TRUE on a struct from `audio_init_unchecked()`**,
   deliberately: that bypass is what lets a hardware speaker test make a noise on a silenced device.
 
+- ⚠️ **Every effect's path is already overridable per name — do NOT build a second mechanism for it.**
+  `fx_config_apply()` in `common/audio.c` reads one `fx_<name>=` key per `AudioFxId` from
+  `/opt/games/rw_config.conf` over `FX_DEFAULT_PATH`: an absent key keeps the stock clip, a **present but
+  empty** one selects the note table. A per-GAME variant was declined — `../IMPROVEMENT_PLAN.md` F1 ④.
+
 ### Mixing: an optional per-frame pump
 
 Two sounds at once needs userspace to hold the audio and hand the device small pieces of it — you cannot mix
