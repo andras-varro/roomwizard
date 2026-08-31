@@ -41,15 +41,28 @@
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_tone_test
  *
- * ⚠️ **A HOST WITHOUT /dev/dsp CANNOT PASS THIS, and it does not say so once — it
- * says so 34 times.**  Every group that needs a bus fails, the first line of
- * output is `audio: cannot open /dev/dsp: No such file or directory`, and the
- * summary reads `FAILED 58 checks, 34 failure(s)`.  That is the ENVIRONMENT, not a
- * regression: measured 2026-08-22 in this WSL, where the same 34 fail identically
- * when the five sources are taken from `git show HEAD:<file>`.  ⚠️ So before
- * reading a failure count here as a defect, compile the same test against HEAD's
- * sources and compare the two numbers — and never conclude "the fix broke it" from
- * a run on a host with no sound device.
+ * ⚠️ **This host passes all 58, and `/dev/dsp` is irrelevant to that.**  It used to
+ * report `FAILED 58 checks, 34 failure(s)`, and this comment used to explain those
+ * 34 as the ENVIRONMENT — a host with no sound device.  That was WRONG, measured
+ * 2026-08-31: the cause was two missing lines in mk_audio() below.  The EFFECTS and
+ * MUSIC toggles landed in `common/audio.c` after this file was written, and every
+ * entry point begins by reading one of them — `audio_tone()` (:852),
+ * `audio_fx_play()` (:1265), `audio_music_start()` (:1679), `audio_sfx_play()`
+ * (:1708) — so a hand-built `Audio` that had been memset to zero was refused at the
+ * door by code doing exactly what it says it does.  Setting both fields took the
+ * count to 0.  audio_tone()'s own comment says it must work with `dsp_fd` at -1, and
+ * it does.
+ *
+ * ⚠️ **The lesson is about the INSTRUMENT, not the toggles: 34 checks agreed with
+ * each other for a whole week, and the agreement was the tell.**  A group that
+ * always fails is unfalsifiable in both directions — it can neither catch a
+ * regression nor be seen to catch one, and its sabotage harness reports "caught"
+ * for the wrong reason (`tests/measure_audio_clip_sabotage.sh` prints a FAIL count,
+ * and 34 unrelated failures read the same as a detection).  The old paragraph made
+ * that permanent by instructing the reader to expect the 34 and compare against
+ * HEAD — and HEAD was silenced identically, so the comparison agreed.  ⚠️ **If a
+ * failure count here is not ZERO, read the failing lines; never restore a paragraph
+ * that explains a number away.**
  * It also runs ON THE DEVICE, and there the shim is not wanted — the cross
  * toolchain has the real `<sys/soundcard.h>`, so leaving `-Itests/hostshim` off is
  * what makes the ARM binary compile the same header the shipped build does.  It
@@ -125,6 +138,13 @@ static int mk_audio(Audio *a)
     a->master_shift = AUDIO_MASTER_SHIFT;
     audio_mix_init(&a->mix, TEST_RATE);
     audio_mix_set_knee(&a->mix, audio_voice_peak(a->vol));
+    /* ⚠️ BOTH TOGGLES, and they are load-bearing rather than tidy: every entry
+     * point this file tests begins by reading one of them, so a zeroed `Audio`
+     * is refused at the door and 34 of 58 checks fail for a harness reason.
+     * See the header — that count was misread as a missing /dev/dsp for a week.
+     * audio_open() sets them from config; a hand-built Audio must say so itself. */
+    a->music_on       = true;
+    a->effects_on     = true;
     a->pumping        = true;
     a->last_tone_slot = -1;
     a->last_tone_gen  = 0;
