@@ -661,23 +661,6 @@ bc libssl-dev bison flex                     # usb_host kernel modules only
 
 ---
 
-### F21. `README.md` does not reflect `roomwizard.sh` or the release path — open
-
-`roomwizard.sh` is the front door and the reason a single card write produces a working unit at next
-boot, and `README.md` mentions it **once**, in a directory listing. Quick Start leads with the
-two-phase SSH loop, so the item that actually delivers a unit — *THE WHOLE JOB, offline, one boot* — is
-invisible to a reader, and so is installing from a published release now that
-[F9](#f9-ship-binaries-as-github-releases--published-and-fetchable-2026-09-01) makes that a real
-option. Check the shape with `grep -c roomwizard.sh README.md` against
-`grep -c 'build-and-deploy\|deploy-all' README.md`.
-
-- **Document it against the real thing.** Tag `v1.0.0` exists, so the release path can be written from a
-  command that has been run rather than from the flag list.
-- ⚠️ **The two-phase SSH path is the development loop and stays.** This is about which one a *reader*
-  meets first, not about retiring anything.
-
----
-
 ### F22. A bundle carries no device scripts, for any component — open, undecided
 
 Raised by the operator 2026-09-01 and **not yet decided**, which is why it is a question rather than a
@@ -1270,9 +1253,11 @@ two remainders.
 [F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
 has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
 item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
-cannot fire here. [F21](#f21-readmemd-does-not-reflect-roomwizardsh-or-the-release-path--open) is now what
-stands between a non-developer and a working unit — the install-from-a-release path exists and is
-undocumented; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
+cannot fire here. What stands between a non-developer and a working unit is now narrower than it was:
+`README.md` leads with `roomwizard.sh` and documents installing from a published release, so the
+remaining gap is [F22](#f22-a-bundle-carries-no-device-scripts-for-any-component--open-undecided) —
+a holder of nothing but the tarball still gets no boot-time loaders — and that one is undecided rather
+than planned. [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
 recorded rather than planned, because the honest answer is a bootable image.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to

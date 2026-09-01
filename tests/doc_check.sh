@@ -456,6 +456,15 @@ group_c() {
 # HARDWARE.md out of SYSTEM_ANALYSIS.md, so that is not hypothetical here.
 # ⚠️ The authoring skill is on this list too. A rulebook that grows without limit is the
 # thing it exists to prevent, and it has no other check on it.
+# ⚠️ 2026-09-01, a NEW entry rather than a raise: README.md at 190, its measured non-blank count
+# after the commit that added it. It was absent for no decided reason — the 2026-08-16 cleanup that
+# set this group's basis did not cover it — and the commit adding it grew it 163 -> 190 non-blank
+# documenting the front door and the release path, which is the growth shape this group exists to
+# bound. It is the ONE entry deliberately granted zero margin from the start, and on a different
+# argument from the zero-margin files above: README is NAVIGATIONAL. Its job is to point, and every
+# new capability wants a mention in it, so the pressure that keeps it correct is that a new mention
+# is paid for by trimming what a component README or CLAUDE.md now owns better. Raising it with an
+# argument is the intended escape, not a defeat.
 # ⚠️ tests/CLAUDE.md is 232 and native_apps/CLAUDE.md 629, both raised deliberately in the
 # 2026-08-20 commit that landed F1 Phase 8's device half: `audio.c` gained a public
 # `audio_music_*`/`audio_sfx_play()` surface and `common/audio_wav.c` became a COMMON_OBJ member,
@@ -638,6 +647,7 @@ ceilings() {
 1597	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
+190	README.md
 337	CLAUDE.md
 716	native_apps/CLAUDE.md
 232	lib/CLAUDE.md

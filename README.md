@@ -2,8 +2,6 @@
 
 > **Development projects for the Steelcase RoomWizard embedded Linux device**
 
-## Quick Navigation
-
 ## Documentation map
 
 | Doc | What it owns | Read it when |
@@ -44,7 +42,67 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 > one-line pointer stubs (`git lfs pull` fixes an existing clone). Nothing in the
 > build or deploy path depends on them — they are documentation only.
 
-### 1. Commission the device (once)
+### Start here — `./roomwizard.sh`
+
+One menu over every path below, and the reason a single card write can produce a working unit at next
+boot. It has **no logic of its own**: each item execs one of the scripts documented further down, and
+every one of those stays non-interactive when called directly.
+
+```bash
+./roomwizard.sh
+```
+
+```
+  1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
+  2) Set up a booted device      PHASE 2 of 3   ssh; cleans, ends in a reboot
+  3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
+  5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
+
+  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
+
+  4) Device status               read-only
+```
+
+Which item you want depends on whether you are **delivering** a unit or **developing** on one. Both
+paths are supported and neither is going away; they differ in how many boots and how much toolchain
+they need.
+
+### Delivering a unit — item 6, offline, one boot
+
+Everything the two-phase path does over SSH, done to the card instead: card commissioning, system
+setup and the binaries, in one pass. The unit works at first boot and never needs to be reachable.
+
+```bash
+sudo ./commissioning/commission-offline.sh --bundle <tar.gz|dir>
+sudo ./commissioning/commission-offline.sh --release latest   # fetch the bundle first
+```
+
+⚠️ **`--release` is the one step here that opens a socket** — everything else is offline. It and
+`--bundle` are mutually exclusive: both name a source of binaries, so pass one.
+
+Make a bundle with `./release.sh --stage-only`, or publish one with `./release.sh --tag <tag>`.
+
+### Installing from a published release — no cross-compiler
+
+Every other mode builds, so every other mode needs `arm-linux-gnueabihf-gcc`. Someone handed a device
+has no toolchain, so a published release is installable directly — over SSH, or onto a card:
+
+```bash
+./deploy-all.sh --from-release latest <ip>       # over SSH, to a set-up unit
+./deploy-all.sh --from-release v1.0.0 <ip>       # a specific tag
+```
+
+The tarball's sha256 is checked against the digest GitHub publishes, and it is cached under
+`build/release-cache/<tag>/`, so a second unit costs no second download. Digest mismatch refuses and
+deletes the partial file. `v1.0.0` is the first published release (~125 MiB, one asset); the fetch
+rules are in [lib/CLAUDE.md](lib/CLAUDE.md).
+
+`--from-bundle <tar.gz|dir>` is the same install with a local bundle instead of a download.
+
+### Developing on a unit — the two-phase SSH loop
+
+This is the build/deploy loop, and what you want while writing code.
+
 ```bash
 # Phase 1: SD card — set password, SSH, DHCP
 ./commissioning/card-prep.sh
@@ -57,12 +115,10 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 
 # Phase 2: SSH — provision, deep clean, the 500 mA USB budget on p1, reboot
 ./commissioning/provision.sh <ip>
-```
 
-Or all three phases in one offline pass, which is the delivery path — no SSH, one boot:
-
-```bash
-sudo ./commissioning/commission-offline.sh --bundle <tar.gz|dir>
+# Phase 3: build + deploy everything (native_apps first — it provides the launcher)
+./deploy-all.sh <ip>
+./deploy-all.sh <ip> vnc_client      # or one component;  --list  to see them
 ```
 
 ⚠️ **Both bring-up paths CLEAN and WRITE p1 by default**, so that they leave the same unit. Each asks
@@ -82,34 +138,13 @@ with the rest of the vendor stack, and a power cycle no longer reverts p1. The v
 beside itself as `uImage-system.vendor`, which is the in-place remedy; a card pull is the fallback.
 Details, and why the 500 mA value cannot be a boot-time script: [COMMISSIONING.md](COMMISSIONING.md).
 
-### 2. Deploy a project
-```bash
-# All at once (recommended)
-./deploy-all.sh <ip>
-
-# Or individually:
-cd native_apps
-./build-and-deploy.sh <ip> set-default
-
-cd vnc_client
-./build-and-deploy.sh <ip> set-default
-
-cd scummvm-roomwizard
-./build-and-deploy.sh <ip> set-default
-```
-
-### 3. Reboot
-```bash
-ssh root@<ip> reboot
-```
-
 ## Architecture
 
 ```
 roomwizard/
 ├── roomwizard.sh                # Front door: a menu over everything below
 ├── deploy-all.sh                # Phase 3: build + deploy all components
-├── release.sh                   # Build + stage an offline release bundle
+├── release.sh                   # Build + stage a bundle; --tag also publishes it
 ├── commissioning/
 │   ├── card-prep.sh             # Phase 1: SD card commissioning (offline)
 │   ├── provision.sh             # Phase 2: SSH system setup (one-time)
@@ -122,6 +157,7 @@ roomwizard/
 │   ├── rw-provision.sh          # provision-rules.conf -> a plan
 │   ├── rw-usbpower.sh           # The ONE writer of p1: the 500 mA USB budget
 │   ├── rw-ssh.sh                # The one "can I reach this device" gate
+│   ├── rw-release.sh            # Resolve + fetch + verify a published release
 │   └── rw-bundle.sh             # The release-bundle layout, both directions
 ├── device-files/                # Installed onto the device verbatim
 │   ├── roomwizard-app           # Generic init script (app respawn loop)
@@ -145,9 +181,12 @@ roomwizard/
 
 | Layer | Script | Runs |
 |-------|--------|------|
+| **Front door** | `roomwizard.sh` | Whenever you'd rather not remember the flags (composition only) |
 | **SD card setup** | `commissioning/card-prep.sh` | Once (offline) |
 | **System setup** | `commissioning/provision.sh` | Once (SSH) |
+| **All of the above, offline** | `commissioning/commission-offline.sh` | Once, offline, to deliver a unit |
 | **Deploy all** | `deploy-all.sh` | After setup (builds + deploys everything) |
+| **Build + stage + publish** | `release.sh` | Per release |
 | **Bloatware cleanup** | `disable-steelcase.sh` | On setup + every boot |
 | **App launcher** | `device-files/roomwizard-app` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
 | **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy + app manifests) |
