@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # release.sh — build every component, stage one bundle, publish it as a GitHub
-#              release.  IMPROVEMENT_PLAN.md F9.
+#              release.
 #
 # Usage:
 #   ./release.sh --stage-only [--out <dir>]        # build + stage + tar, no network
@@ -57,13 +57,15 @@
 # ── gh ──────────────────────────────────────────────────────────────────────
 #
 # `gh` 2.86.0 is installed in WSL (from the release .deb — focal's apt has no `gh`
-# and the snap links against a glibc newer than 2.31), but --tag has still never
-# been run; --stage-only is the tested path and produces a tarball
-# commissioning/commission-offline.sh --bundle <file> takes directly.  That is why the publish
-# step is a thin wrapper around one gh command and nothing depends on its output.
-# `origin` is an SSH host alias (git@github.com-personal:…), so whoever publishes
-# needs `gh auth` for that account — and gh may need --repo, since it resolves the
-# owner from the remote URL.
+# and the snap links against a glibc newer than 2.31).  --stage-only stays the
+# network-free path and produces a tarball commissioning/commission-offline.sh
+# --bundle <file> takes directly.
+#
+# ⚠️ Every gh call below passes --repo, and it is NOT optional.  `origin` is an SSH
+# host alias, and gh does not merely fail to guess the owner from it — it refuses
+# the repository outright: "none of the git remotes configured for this repository
+# point to a known GitHub host".  So the publish step derives owner/repo itself.
+# Whoever publishes still needs `gh auth` for an account with write access.
 
 set -e
 _START_SECONDS=$(date +%s)
@@ -341,7 +343,7 @@ info "Checking that no device config was staged..."
 CONFIG_HITS="$(rw_bundle_entries "$OUT_ABS" | awk '{print $2}' | grep -E '\.conf$|/etc/hosts$|/etc/hostname$|rw_config|touch_calibration|input_config' || true)"
 if [[ -n "$CONFIG_HITS" ]]; then
     echo "$CONFIG_HITS" | sed 's/^/    /'
-    err "a release must publish binaries only, never device config (IMPROVEMENT_PLAN.md F9)"
+    err "a release must publish binaries only, never device config"
 fi
 ok "No config files staged"
 
@@ -405,6 +407,40 @@ else
     command -v gh >/dev/null 2>&1 || err "gh is not installed — install it, or use --stage-only.
      The tarball is already built: $TARBALL"
 
+    # gh resolves owner/repo from the remote URL and CANNOT resolve this one:
+    # `origin` is an SSH host alias (git@github.com-personal:owner/repo.git), and
+    # gh rejects the whole repository with "none of the git remotes configured for
+    # this repository point to a known GitHub host".  Measured, not anticipated —
+    # every gh call here therefore needs an explicit --repo.
+    #
+    # Derived rather than hardcoded, so a fork publishes to the fork: strip any
+    # scheme and user@host prefix, then the trailing .git.  Handles the alias form
+    # above, plain git@github.com:owner/repo.git, and https://github.com/owner/repo.
+    GH_REMOTE_URL="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)"
+    GH_REPO="$(echo "$GH_REMOTE_URL" | sed -e 's#^[a-z+]*://##' -e 's#^[^/@]*@##' -e 's#^[^:/]*[:/]##' -e 's#\.git$##')"
+    case "$GH_REPO" in
+        */*) ;;
+        *)   err "could not derive owner/repo from origin ('$GH_REMOTE_URL').
+     gh cannot resolve it either, so pass a tarball to 'gh release create --repo
+     <owner>/<repo>' by hand. The tarball is already built: $TARBALL" ;;
+    esac
+    info "Publishing to $GH_REPO"
+
+    # A tag whose commit is not on the remote makes the bundle's NOTICE false.
+    # NOTICE carries a GPL written offer — "the complete corresponding source ...
+    # available from the repository this release was published from" — for ScummVM
+    # (GPLv3+), LibVNCClient (GPLv2+) and three kernel modules (GPL-2.0-only).  An
+    # unpushed or dirty tree does not satisfy that offer, and the failure is silent:
+    # gh would tag the remote default branch's HEAD instead, so the release would
+    # name a commit that builds different binaries.
+    [[ -z "$GIT_DIRTY" ]] || err "the working tree is dirty, so the source for these
+     binaries is not in any commit — and NOTICE offers exactly that source. Commit
+     first. The tarball is already built: $TARBALL"
+    if [[ -z "$(git -C "$SCRIPT_DIR" branch -r --contains HEAD 2>/dev/null)" ]]; then
+        err "HEAD ($GIT_REV) is on no remote branch, so the corresponding source
+     NOTICE offers is unpublished. Push first. The tarball is already built: $TARBALL"
+    fi
+
     if [[ -z "$NOTES_FILE" ]]; then
         NOTES_FILE="$(mktemp)"
         {
@@ -424,11 +460,17 @@ else
     fi
 
     info "gh release create $TAG"
+    # --target pins the tag to the commit the binaries were actually built from.
+    # Without it gh tags the remote default branch's HEAD, which is a different
+    # commit whenever anything landed on main after this build started.
     gh release create "$TAG" "$TARBALL" \
+        --repo "$GH_REPO" \
+        --target "$GIT_REV" \
         --title "RoomWizard apps $TAG" \
         --notes-file "$NOTES_FILE" \
         || err "gh release create failed — the tarball is still at $TARBALL"
     ok "Published $TAG"
+    gh release view "$TAG" --repo "$GH_REPO" --json url --jq .url 2>/dev/null | sed 's/^/    /'
 fi
 
 _ELAPSED=$(( $(date +%s) - _START_SECONDS ))
