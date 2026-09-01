@@ -3,6 +3,9 @@
  */
 
 #include "common.h"
+/* For the high-score chime in gameover_update().  ⚠️ common.h itself must stay
+ * free of this include — see its PER-FRAME SERVICE block. */
+#include "audio.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -67,6 +70,10 @@ void ui_frame_service_set(void (*fn)(void *ctx), void *ctx) {
 
 void ui_frame_service(void) {
     if (ui_service_fn) ui_service_fn(ui_service_ctx);
+}
+
+void *ui_frame_service_ctx(void) {
+    return ui_service_ctx;
 }
 
 // ============================================================================
@@ -866,6 +873,36 @@ GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
             gos->hs_qualifies = (hs_qualifies(gos->hs_table, gos->score) >= 0);
             if (gos->hs_qualifies) {
                 snprintf(gos->title, sizeof(gos->title), "NEW HIGH SCORE!");
+
+                /* Sound the chime.  Until 2026-08-31 nothing here played
+                 * anything: the title was set, name entry opened, and a player
+                 * who had just beaten the table heard only the game-over descent
+                 * the game had fired a moment earlier — reported by ear on .188,
+                 * and invisible to every host test because no gate can hear a
+                 * call that was never written.
+                 *
+                 * ⚠️ **`audio_sparkle()`, not `audio_success()`.** Success is the
+                 * level-up fanfare and is heard DURING play; reusing it here
+                 * would repeat the mistake `audio_gameover()` exists to undo —
+                 * two different events on one sound, which the operator could
+                 * not tell apart (audio.c's audio_gameover comment).  Sparkle's
+                 * documented event is "a bonus / rare reward", which is what
+                 * this is, and its clip is already sourced and deployed.
+                 *
+                 * It overlaps the game-over sound rather than cutting it, and
+                 * that needs no arbitration: the canned sounds are RAM clips and
+                 * AUDIO_CLIP_VOICES is 4, so both simply sound.  ⚠️ No
+                 * audio_interrupt() — on the mix bus that means "drop what is
+                 * rendered", not "make room".
+                 *
+                 * ⚠️ Nothing drains it here, deliberately.  keyboard_enter()
+                 * calls ui_frame_service() beside its fb_swap(), so the chime is
+                 * rendered WHILE the player types.  Before that existed this
+                 * would have been deferred, not heard — the defect that comment
+                 * records. */
+                Audio *audio = (Audio *)ui_frame_service_ctx();
+                if (audio != NULL) audio_sparkle(audio);
+
                 gos->state = GAMEOVER_STATE_NAME_ENTRY;
             } else {
                 gos->state = GAMEOVER_STATE_DISPLAY;

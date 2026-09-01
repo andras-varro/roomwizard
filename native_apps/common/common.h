@@ -324,6 +324,21 @@ void ui_frame_service_set(void (*fn)(void *ctx), void *ctx);
 // registered; call it once per iteration of any loop that owns the screen.
 void ui_frame_service(void);
 
+/* The registered ctx, or NULL when the slot is empty.
+ *
+ * ⚠️ **This is `Audio *` and the cast belongs to the caller**, which is why the
+ * return type is `void *`: the whole point of the slot is that this header does
+ * not name `audio.h`.  Legitimate only because the invariant above is explicit —
+ * audio is the slot's ONLY registrant, `audio_open()` installs it and
+ * `audio_close()` clears it, so the pointer is an open `Audio` or nothing.  A
+ * second registrant would make this unsound, and there must not be one.
+ *
+ * It exists so `gameover_update()` can sound the high-score chime without an
+ * `Audio *` threaded through `gameover_init()` and thirteen call sites — the
+ * same signature-threading the slot was created to avoid, and the reason no app
+ * changed a line to get either fix. */
+void *ui_frame_service_ctx(void);
+
 // ============================================================================
 // TOGGLE SWITCH CONTROL
 // ============================================================================
