@@ -11,6 +11,7 @@
 #   ./deploy-all.sh <ip> <component>         # build + deploy one component
 #   ./deploy-all.sh --list                   # show discovered components
 #   ./deploy-all.sh --from-bundle <b> <ip>   # install a bundle; build NOTHING
+#   ./deploy-all.sh --from-release <tag> <ip>  # fetch that release, then the above
 #
 # Components are detected automatically from subdirectories containing a
 # build-and-deploy.sh script.  They are deployed in a deterministic order:
@@ -28,10 +29,17 @@
 # authority: rw_bundle_install_ssh in lib/rw-bundle.sh, one implementation, modes
 # DECLARED by the manifest rather than carried by the transfer.
 #
+# ── --from-release: the same mode, over the network ─────────────────────────
+#
+# Identical downstream — it resolves a published release to a local tarball and
+# then IS --from-bundle.  The fetch lives in lib/rw-release.sh, the one library
+# here that opens a socket, and it happens AFTER the SSH gate below: a device that
+# cannot be reached is worth finding out about before 126 MB, not after.
+#
 # Prerequisites:
 #   - Device set up with commissioning/provision.sh (one-time)
-#   - ARM cross-compiler installed          — except for --from-bundle
-#   - WSL (for ScummVM builds)              — except for --from-bundle
+#   - ARM cross-compiler installed          — except for --from-bundle/--from-release
+#   - WSL (for ScummVM builds)              — except for --from-bundle/--from-release
 
 set -e
 _START_SECONDS=$(date +%s)
@@ -40,6 +48,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=lib/rw-bundle.sh
 . "$SCRIPT_DIR/lib/rw-bundle.sh"
+# shellcheck source=lib/rw-release.sh
+. "$SCRIPT_DIR/lib/rw-release.sh"
 # shellcheck source=lib/rw-ssh.sh
 . "$SCRIPT_DIR/lib/rw-ssh.sh"
 
@@ -105,18 +115,31 @@ fi
 # ── --from-bundle mode: install a staged bundle, build nothing ─────────────
 #
 # Parsed before the IPv4 validation below because the IP is $2 here, not $1.
+#
+# --from-release is the same mode with a download in front of it, so it sets the
+# tag and the block below resolves it to a tarball once SSH is known to work.
+# The tag is REQUIRED and `latest` is a legal value: guessing from the shape of
+# the argument ("does this look like an IP or a tag") is how a typo becomes a
+# deploy of the wrong release.
 FROM_BUNDLE=""
+FROM_RELEASE=""
 if [[ "$DEVICE_IP" == "--from-bundle" ]]; then
     FROM_BUNDLE="${2:-}"
     DEVICE_IP="${3:-}"
     [[ -n "$FROM_BUNDLE" ]] || err "--from-bundle needs a tarball or staged directory"
     [[ -n "$DEVICE_IP" ]]   || err "--from-bundle <bundle> <ip> — the IP is missing"
+elif [[ "$DEVICE_IP" == "--from-release" ]]; then
+    FROM_RELEASE="${2:-}"
+    DEVICE_IP="${3:-}"
+    [[ -n "$FROM_RELEASE" ]] || err "--from-release needs a tag, or the word 'latest'"
+    [[ -n "$DEVICE_IP" ]]    || err "--from-release <tag|latest> <ip> — the IP is missing"
 fi
 
 # ── usage ───────────────────────────────────────────────────────────────────
 if [[ -z "$DEVICE_IP" ]]; then
     echo "Usage: $0 <ip> [component]"
     echo "       $0 --from-bundle <tar.gz|dir> <ip>"
+    echo "       $0 --from-release <tag|latest> <ip>"
     echo "       $0 --list"
     echo ""
     echo "Builds and deploys all components (or a single one) to the device."
@@ -125,17 +148,22 @@ if [[ -z "$DEVICE_IP" ]]; then
     echo "  --from-bundle   Install a release bundle over SSH and build NOTHING."
     echo "                  Needs no cross-compiler; this is the delivery mode."
     echo "                  Make one with:  ./release.sh --stage-only"
+    echo "  --from-release  The same, from a published GitHub release: it is"
+    echo "                  downloaded, its sha256 checked against the digest"
+    echo "                  GitHub publishes, and cached under build/release-cache"
+    echo "                  so a second unit costs no second download."
     echo ""
     echo "Examples:"
     echo "  $0 192.168.50.53              # deploy everything"
     echo "  $0 192.168.50.53 vnc_client   # deploy VNC client only"
     echo "  $0 --from-bundle build/release 192.168.50.53"
+    echo "  $0 --from-release latest 192.168.50.53"
     echo "  $0 --list                     # show available components"
     exit 1
 fi
 
 FILTER="${2:-}"
-[[ -n "$FROM_BUNDLE" ]] && FILTER=""
+[[ -n "$FROM_BUNDLE" || -n "$FROM_RELEASE" ]] && FILTER=""
 
 # ── validate the device IP before building anything ─────────────────────────
 # `./deploy-all.sh vnc_client` (forgetting the IP) used to build *everything*,
@@ -166,10 +194,21 @@ info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # ── --from-bundle: install and stop. No component loop, no compiler. ────────
-if [[ -n "$FROM_BUNDLE" ]]; then
+if [[ -n "$FROM_BUNDLE" || -n "$FROM_RELEASE" ]]; then
     DEVICE="root@${DEVICE_IP}"
     rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
     ok "SSH OK"
+
+    # --from-release becomes --from-bundle here, and deliberately not sooner: the
+    # gate above is cheap and the download is 126 MB.
+    if [[ -n "$FROM_RELEASE" ]]; then
+        GH_REPO="$(rw_release_repo "$SCRIPT_DIR")" \
+            || err "could not work out which GitHub repo to fetch from — see above"
+        info "Fetching release $FROM_RELEASE from $GH_REPO"
+        FROM_BUNDLE="$(rw_release_fetch "$GH_REPO" "$FROM_RELEASE" \
+                          "$(rw_release_cache_dir "$SCRIPT_DIR")")" \
+            || err "could not fetch release $FROM_RELEASE — nothing was installed"
+    fi
 
     # A tarball is unpacked into a temp dir; a directory is used where it is.
     BUNDLE_TMP=""

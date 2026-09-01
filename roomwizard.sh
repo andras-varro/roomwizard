@@ -193,12 +193,40 @@ do_commission_offline() {
   which is the in-place remedy; --no-usb-power leaves p1 alone entirely.
 PRE
     echo ""
-    local bundle
+    cat <<'SRC'
+  Where should the binaries come from?
+
+    b) a local bundle       build/release, or a path       (default)
+    r) a published release  fetched from GitHub, sha256-checked against the
+                            digest it publishes. THE ONE STEP HERE THAT NEEDS
+                            A NETWORK — everything else works from the card
+                            alone, which is the whole point of this item.
+SRC
+    echo ""
+    local src bundle tag
+    read -r -p "Source [b]: " src
+    case "${src:-b}" in
+        r|R|release)
+            read -r -p "Release tag [latest]: " tag
+            echo ""
+            confirm "Card in the reader and ready?" || { warn "Skipped."; return 0; }
+            echo ""
+            # sudo here rather than inside: mounting is the only step that needs
+            # root, and the child refuses clearly if it is missing. The fetch runs
+            # as root as a consequence, which is why rw_release_fetch hands the
+            # cached file back to $SUDO_UID.
+            sudo bash "$SCRIPT_DIR/commissioning/commission-offline.sh" --release "${tag:-latest}" \
+                || err "Offline commissioning failed."
+            return $? ;;
+        b|B|bundle|"") ;;
+        *) err "Not a choice: $src"; return 1 ;;
+    esac
     read -r -p "  Bundle (tarball or directory) [build/release]: " bundle
     bundle="${bundle:-build/release}"
     if [ ! -e "$SCRIPT_DIR/$bundle" ] && [ ! -e "$bundle" ]; then
         err "No such bundle: $bundle"
         info "Build one first:  ./release.sh --stage-only"
+        info "Or choose 'r' to fetch a published release."
         return 1
     fi
     [ -e "$bundle" ] || bundle="$SCRIPT_DIR/$bundle"
@@ -275,20 +303,68 @@ MENU
 }
 
 # ── Phase 3 ─────────────────────────────────────────────────────────────────
+# Three sources of binaries, and the default is the one that changes no meaning
+# for anyone who was already pressing Enter here: build from source. The other
+# two are pure delegation — deploy-all.sh already accepts a local bundle and a
+# release tag, and the DOWNLOAD lives in lib/rw-release.sh behind that script, not
+# here. This file opens no sockets of its own.
 do_deploy() {
     hdr "3. Deploy apps (ssh)"
     info "Discovered components:"
     bash "$SCRIPT_DIR/deploy-all.sh" --list
     echo ""
     ask_target || return 0
-    local comp
-    read -r -p "Component (Enter = all): " comp
+    cat <<'SRC'
+
+  Where should the binaries come from?
+
+    s) build them from source   needs the cross-compiler and WSL; ScummVM is
+                                a ~2 min link          (default — press Enter)
+    b) a local bundle           build/release, from ./release.sh --stage-only.
+                                Seconds instead of a rebuild, and it puts the
+                                bytes you already TESTED on the device.
+    r) a published release      downloaded from GitHub, sha256-checked against
+                                the digest it publishes, and cached — so the
+                                second unit costs no second download.
+
+  b and r install binaries and NOTHING ELSE: a bundle carries no config, by
+  construction. Touch calibration, the host name and the VNC password come from
+  item 2, exactly as they do after a from-source deploy.
+SRC
     echo ""
-    if [ -n "$comp" ]; then
-        bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" "$comp" || err "Deploy failed."
-    else
-        bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || err "Deploy failed."
-    fi
+    local src
+    read -r -p "Source [s]: " src
+    case "${src:-s}" in
+        s|S|source|"")
+            local comp
+            read -r -p "Component (Enter = all): " comp
+            echo ""
+            if [ -n "$comp" ]; then
+                bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" "$comp" || err "Deploy failed."
+            else
+                bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || err "Deploy failed."
+            fi ;;
+        b|B|bundle)
+            local bundle
+            read -r -p "Bundle (tarball or directory) [build/release]: " bundle
+            bundle="${bundle:-build/release}"
+            if [ ! -e "$SCRIPT_DIR/$bundle" ] && [ ! -e "$bundle" ]; then
+                err "No such bundle: $bundle"
+                info "Build one first:  ./release.sh --stage-only"
+                return 1
+            fi
+            [ -e "$bundle" ] || bundle="$SCRIPT_DIR/$bundle"
+            echo ""
+            bash "$SCRIPT_DIR/deploy-all.sh" --from-bundle "$bundle" "$TARGET" \
+                || err "Deploy failed." ;;
+        r|R|release)
+            local tag
+            read -r -p "Release tag [latest]: " tag
+            echo ""
+            bash "$SCRIPT_DIR/deploy-all.sh" --from-release "${tag:-latest}" "$TARGET" \
+                || err "Deploy failed." ;;
+        *)  err "Not a choice: $src" ;;
+    esac
 }
 
 # ── Status ──────────────────────────────────────────────────────────────────
@@ -355,10 +431,10 @@ while true; do
     cat <<'MENU'
   1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
   2) Set up a booted device      PHASE 2 of 3   ssh; cleans, ends in a reboot
-  3) Deploy apps                 PHASE 3 of 3   ssh
+  3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
   5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
 
-  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (needs a bundle)
+  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
 
   4) Device status               read-only
   q) Quit

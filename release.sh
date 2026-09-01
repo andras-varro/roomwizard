@@ -75,6 +75,10 @@ cd "$SCRIPT_DIR"
 
 # shellcheck source=lib/rw-bundle.sh
 . "$SCRIPT_DIR/lib/rw-bundle.sh"
+# shellcheck source=lib/rw-release.sh
+# Sourced for rw_release_repo alone — the one owner/repo derivation, shared with
+# the fetch side so a fork publishes to and fetches from the same place.
+. "$SCRIPT_DIR/lib/rw-release.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
@@ -418,14 +422,14 @@ else
     # this repository point to a known GitHub host".  Measured, not anticipated —
     # every gh call here therefore needs an explicit --repo.
     #
-    # Derived rather than hardcoded, so a fork publishes to the fork: strip any
-    # scheme and user@host prefix, then the trailing .git.  Handles the alias form
-    # above, plain git@github.com:owner/repo.git, and https://github.com/owner/repo.
-    GH_REMOTE_URL="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)"
-    GH_REPO="$(echo "$GH_REMOTE_URL" | sed -e 's#^[a-z+]*://##' -e 's#^[^/@]*@##' -e 's#^[^:/]*[:/]##' -e 's#\.git$##')"
+    # ⚠️ The derivation itself lives in lib/rw-release.sh and there is ONE of it,
+    # because the fetch side needs exactly the same answer: a fork must fetch from
+    # the fork it published to.  Do not write a second copy here.
+    GH_REPO="$(rw_release_repo "$SCRIPT_DIR" 2>/dev/null || true)"
     case "$GH_REPO" in
         */*) ;;
-        *)   err "could not derive owner/repo from origin ('$GH_REMOTE_URL').
+        *)   err "could not derive owner/repo from origin
+     ('$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)').
      gh cannot resolve it either, so pass a tarball to 'gh release create --repo
      <owner>/<repo>' by hand. The tarball is already built: $TARBALL" ;;
     esac

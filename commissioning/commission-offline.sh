@@ -9,10 +9,19 @@
 #   sudo ./commissioning/commission-offline.sh --bundle <file.tar.gz|dir> [options]
 #   sudo ./commissioning/commission-offline.sh --bundle <b> --dry-run
 #        ./commissioning/commission-offline.sh --bundle <b> --base /mnt/rw   # already mounted
+#   sudo ./commissioning/commission-offline.sh --release latest [options]    # NEEDS A NETWORK
 #
 #   --bundle <path>     A release tarball from `./release.sh --stage-only`, or a
 #                       staged bundle directory. THE source of binaries: an
 #                       offline commissioner has no toolchain to fall back on.
+#   --release <tag>     Fetch that published release and use it as --bundle.
+#                       `latest` is a legal value. ⚠️ NEVER the default, and it is
+#                       the one option here that needs a network: this script's
+#                       whole premise is that a card and a reader are enough. A
+#                       stock unit with net.mode = manual is unreachable by any
+#                       other means, which is exactly when there may be no
+#                       network to hand. Verified by sha256 against the digest
+#                       GitHub publishes; the fetch is lib/rw-release.sh.
 #   --disk <dev>        The card. Default: the one RoomWizard disk found, if
 #                       exactly one is present.
 #   --base <dir>        The card is ALREADY mounted, as <dir>/{root,data,log,backup}.
@@ -87,6 +96,8 @@ cd "$REPO_ROOT"
 . "$REPO_ROOT/lib/rw-provision.sh"
 # shellcheck source=../lib/rw-bundle.sh
 . "$REPO_ROOT/lib/rw-bundle.sh"
+# shellcheck source=../lib/rw-release.sh
+. "$REPO_ROOT/lib/rw-release.sh"
 
 DEVICE_FILES="$REPO_ROOT/device-files"
 CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
@@ -98,6 +109,7 @@ warn() { echo -e "${BLUE}  ! $*${NC}"; }
 err()  { echo -e "${RED}  ✗ $*${NC}" >&2; cleanup_and_exit 1; }
 
 BUNDLE=""
+RELEASE=""
 DISK=""
 BASE=""
 DRY=""
@@ -144,8 +156,17 @@ trap 'cleanup_and_exit 1' INT TERM
 usage() {
     cat <<USAGE
 Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
+       sudo $0 --release <tag|latest> [options]
 
-  --bundle <path>    Release tarball or staged bundle directory (REQUIRED)
+  --bundle <path>    Release tarball or staged bundle directory (REQUIRED,
+                     unless --release provides one)
+  --release <tag>    Download that published GitHub release and use it as the
+                     bundle. 'latest' is accepted. NOT the default and NOT
+                     offline: everything else here works with no network, which
+                     is the whole point — a stock unit whose net.mode is
+                     'manual' cannot be reached any other way. The download is
+                     sha256-verified against the digest GitHub publishes and
+                     cached under build/release-cache, so a second card is free.
   --disk <dev>       The SD card whole disk, e.g. /dev/sdf. Auto-detected if
                      exactly one RoomWizard card is present.
   --base <dir>       The card is already mounted as <dir>/{root,data,log,backup}.
@@ -186,6 +207,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bundle)         BUNDLE="${2:-}"; [[ -n "$BUNDLE" ]] || { echo "--bundle needs a value"; usage; }; shift 2 ;;
+        --release)        RELEASE="${2:-}"; [[ -n "$RELEASE" ]] || { echo "--release needs a tag, or the word 'latest'"; usage; }; shift 2 ;;
         --disk)           DISK="${2:-}";   [[ -n "$DISK" ]]   || { echo "--disk needs a value"; usage; };   shift 2 ;;
         --base)           BASE="${2:-}";   [[ -n "$BASE" ]]   || { echo "--base needs a value"; usage; };   shift 2 ;;
         --dry-run)        DRY=1; shift ;;
@@ -214,6 +236,25 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1"; echo ""; usage ;;
     esac
 done
+
+# ── --release: the one step here that opens a socket ────────────────────────
+#
+# Resolved to a local tarball before anything else happens, so a name the network
+# cannot supply is refused while the card is still untouched — rather than after
+# four partitions are mounted and the vendor stack is deleted.
+#
+# Mutually exclusive with --bundle rather than one overriding the other: an
+# operator who passed both meant one of them, and guessing which is how the wrong
+# binaries reach a delivered unit.
+[[ -n "$BUNDLE" && -n "$RELEASE" ]] && {
+    echo "--bundle and --release both name a source of binaries; pass one."; exit 1; }
+if [[ -n "$RELEASE" ]]; then
+    GH_REPO="$(rw_release_repo "$REPO_ROOT")" \
+        || { echo "Could not work out which GitHub repo to fetch from — see above."; exit 1; }
+    echo "  → Fetching release $RELEASE from $GH_REPO (this is the non-offline step)"
+    BUNDLE="$(rw_release_fetch "$GH_REPO" "$RELEASE" "$(rw_release_cache_dir "$REPO_ROOT")")" \
+        || { echo "Could not fetch release $RELEASE — the card was not touched."; exit 1; }
+fi
 
 [[ -n "$BUNDLE" ]] || { echo "A bundle is required — an offline commissioner has no toolchain."; echo ""; usage; }
 [[ -e "$BUNDLE" ]] || { echo "No such bundle: $BUNDLE"; exit 1; }
