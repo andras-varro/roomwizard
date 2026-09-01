@@ -192,6 +192,11 @@ echo " Bundle"
 echo "────────────────────────────────────────"
 
 GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The full SHA as well, for gh --target only.  GitHub's API takes a branch name or
+# a 40-character SHA for target_commitish and rejects an abbreviated one outright:
+# a short rev there fails the whole publish with "HTTP 422 Validation Failed:
+# Release.target_commitish is invalid", after the build and the staging are done.
+GIT_REV_FULL="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 GIT_DIRTY=""
 git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || GIT_DIRTY=" (dirty)"
 
@@ -465,7 +470,7 @@ else
     # commit whenever anything landed on main after this build started.
     gh release create "$TAG" "$TARBALL" \
         --repo "$GH_REPO" \
-        --target "$GIT_REV" \
+        --target "$GIT_REV_FULL" \
         --title "RoomWizard apps $TAG" \
         --notes-file "$NOTES_FILE" \
         || err "gh release create failed — the tarball is still at $TARBALL"
