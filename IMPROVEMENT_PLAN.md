@@ -355,39 +355,50 @@ Three MADC channels are readable with `cat` **today** and have zero references i
 The most *interesting* capability on the board: two-player games across a corridor, high-score sync,
 presence beacons — with no network involved.
 
-**The hardware side is settled; this is a pure software task.** The board carries a populated but
-empty XBee socket (`J5`/`J6`), the chassis was tooled for that exact module, and the socket's
-orientation and 3.3 V rail are measured — so powering a module is safe. Socket, pinout and
-measurements:
+**The hardware side is settled, and so is the pinmux.** The board carries a populated but empty XBee
+socket (`J5`/`J6`), the chassis was tooled for that exact module, and the socket's orientation and 3.3 V
+rail are measured — so powering a module is safe. Socket, pinout and measurements:
 [`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion).
-Vendor protocol references, the `ttyS2`→UART3 mapping and the Series 1 vs Series 2 `AT` caveat:
+⚠️ **The "add a whole pinmux node" difficulty is GONE — measured 2026-09-01 on `.188`: the UART3 pads
+already come up in the right mode, set by vendor U-Boot, which this project leaves alone.** The registers,
+their values and the command that reads them back:
 [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports).
 
-**The one unproven thing is the DTB pinmux edit.** UART3 is `status = "disabled"` with no pinmux
-entry. The DTB is appended to `uImage-system` and this project already binary-patches it
-(`usb_host/patch_dtb.py`, which recomputes the uImage CRCs correctly) — but adding a whole pinmux
-node is materially harder than the existing one-word power-budget patch and **has never been done**.
-Recovery if it misboots is a power cycle: `bootcmd` is hardcoded to the untouched `uImage-system`
-([`#47-recovery`](SYSTEM_ANALYSIS.md#47-recovery)).
+**What is left is one 5-byte edit and a way to boot it.** `serial@49020000` is byte-for-byte the working
+console node minus `pinctrl-*` and with `status = "disabled"`. The kernel tests that property with
+`strcmp(status, "okay")` and only checks its length is non-zero (`drivers/of/base.c:568` in the vanilla
+tree), so writing `okay\0` over `disabled\0` **in place** enables it — the property length field is
+untouched and the DTB is not relaid out. That is the same class of patch `usb_host/patch_dtb.py` already
+does, and `usb_host/uimage.py` recomputes the uImage CRCs.
 
-**Staging.** ⚠️ **Rewritten 2026-08-13: the hardware situation changed and the old staging is spent.**
-There are now **three modules**, and **one is already seated** in a unit — so the ordering that existed
-to keep a single irreplaceable module out of a possibly-mis-muxed socket no longer buys anything, and
-step 4's "buy a second module" is done. What the change did *not* do is make the module's health known:
-`J5` pin 1 is a live 3.3 V rail regardless of UART3, so a reversed insertion has already had its effect.
+⚠️ **The hard part is now the boot path, not the patch.** `bootcmd` will load only `uImage-system` and
+U-Boot has no `saveenv`, so **staging the experiment under a new filename cannot boot it** — that loop
+needs the serial console, which is not wired
+([`#47-recovery`](SYSTEM_ANALYSIS.md#47-recovery)). Two ways forward, and the choice is the actual
+decision this entry is waiting on:
 
-1. **Patch the DTB and measure `J5` pin 3** (`DIN`, the SoC's TX). ~3.3 V means the pinmux entry took
-   effect; floating or low means it didn't. Still the cheapest proof of the only genuinely unproven
-   part, and it costs nothing if the patch is wrong. It can be done with a module in the socket — the
-   measurement is of the *board*.
-2. **Check the seated module's orientation against the pin-1 dot before powering the unit again**, and
+- **Wire `P4`** — three wires and a real RS-232 adapter, no soldering strictly required. Buys the
+  zero-cost rollback loop for this and every future kernel experiment.
+- **Go through the one writer** — `lib/rw-usbpower.sh` is the only thing allowed to write
+  `uImage-system`, it is md5-gated on a fixed set of known images, and it refuses a chained patch. A
+  UART3 image is a *new* target derived from the vendor kernel in one pass, so this means extending that
+  gate's set and its callers, not adding a second writer (`lib/CLAUDE.md`). It costs the untouched-kernel
+  rollback on whichever unit gets it.
+
+**Then the module, and it needs no peer.** `AT` command mode is a local conversation with the radio:
+`+++` for `OK`, then `ATID` at 57600 8N1. The vendor's own `pv02_app` carries a full `AT` implementation
+and an XBee loopback test on the same port, so the first probe is a kept vendor binary rather than
+anything we write ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
+
+**Staging.**
+
+1. **Decide the boot path above.** Nothing else can be tested until a UART3 kernel can actually run.
+2. **Check the seated module's orientation against the pin-1 dot before powering that unit again**, and
    read its label for Series 1 vs Series 2, so a partial `AT` response is not read as a wiring fault.
-3. **`+++` then `ATID` at 57600 8N1 on `ttyS2`.** That validates the DTB patch, the socket wiring *and*
-   whether a decade-old module still works — three unknowns, one experiment.
-4. **A silent module does not distinguish the three failure modes.** With two spares, swapping is now a
-   cheap control: a second module that is also silent points at the DTB or the wiring, one that answers
-   points at the first module. Do step 1 first anyway, because it separates board from module without
-   consuming anything.
+3. **`+++` then `ATID` on `ttyO2`.** That validates the `status` patch, the socket wiring *and* whether a
+   decade-old module still works — three unknowns, one experiment, no second radio.
+4. **A silent module does not distinguish those three.** With two spares, swapping is a cheap control: a
+   second silent module points at the DTB or the wiring, one that answers points at the first module.
 
 An XBee fed reversed dies instantly. That is why the orientation was measured before insertion, and it
 is now the leading explanation to *rule out* rather than a hazard to avoid.
@@ -952,7 +963,7 @@ tokens used instead were each grepped for uniqueness first, and finding this is 
 ⚠️ **A fifth stale claim, and again it was a pointer that its destination did not satisfy.** §2.4 said
 "the staging that protected a single module is in `IMPROVEMENT_PLAN.md` F5" — F5 was rewritten 2026-08-13
 to say that staging is **spent**: there are three modules, one is seated, and the open steps are proving
-the pinmux and the seated module's health. Rewritten to what F5 now says, in `HARDWARE.md` §4. **That is
+the seated module's health. Rewritten to what F5 now says, in `HARDWARE.md` §4. **That is
 five for five: every pointer checked against its destination this cleanup has found one wrong.**
 
 ⚠️ **Group C is the instrument for a duplicate deletion, not only for a planned extraction.** Writing the

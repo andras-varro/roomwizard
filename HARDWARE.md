@@ -138,8 +138,7 @@ because on an XBee the antenna is part of the module. Vendor software confirms t
 fact about that unit, not about the design, and **nothing about it is verified**: not the orientation, not
 whether the module survived being powered, not whether it is Series 1 or Series 2. `J5` pin 1 is a live
 3.3 V rail whatever UART3 does, so a reversed insertion is already a completed experiment. Establishing
-whether that module still works — and proving the DTB pinmux edit, which is the only genuinely unproven
-part — is
+whether that module still works is
 [`IMPROVEMENT_PLAN.md` F5](IMPROVEMENT_PLAN.md#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open);
 two spare modules are on hand, which makes swapping a cheap control.
 
@@ -150,12 +149,12 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 | XBee pin | Socket | Signal | Status |
 |---|---|---|---|
 | 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
-| 3 | `J5` | `DIN` — the SoC's TX | not measured. An idle UART transmitter sits **high**, so ~3.3 V here is the cheapest proof a `uart3` pinmux edit took effect; floating or low means it didn't. |
+| 3 | `J5` | `DIN` — the SoC's TX | not measured. The pad is already muxed as `uart3_tx` ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)), so this no longer proves the mux; what it would confirm is the socket trace. An idle UART transmitter sits **high**. |
 | 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
 | 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
 | 10 | `J5` | `GND` | **measured ground.** With pin 1 at 3.3 V this confirms the socket is correctly identified *and* correctly oriented. |
 
-The electrical question is therefore settled; what is unproven is the DTB pinmux edit
+The electrical question is therefore settled, and so is the pinmux — the pads come up in `uart3` mode
 ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). An XBee fed reversed dies instantly, which is why
 the orientation was measured before anything was inserted — and why, on the unit that now has one seated,
 the module's health is an open question rather than an assumption.

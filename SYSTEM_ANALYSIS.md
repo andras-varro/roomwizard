@@ -1304,13 +1304,16 @@ opt/pv02/pv02_app  - full XBee AT-command implementation on /dev/ttyS2:
 conc_xbeespam.sh   - runs `pv02_app 8 spam` as a burn-in test
 ```
 
-Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial@49020000`. Under
-4.14 that node is `status = "disabled"` **and has no pinmux entry** (the pinmux declares only
-`uart2`). `/dev/ttyS0..3` exist as stale nodes with nothing bound. Enabling it is a DTB edit —
-conceivable without kernel source, since the DTB is appended to `uImage-system` and this project
-already binary-patches it, but adding a whole pinmux node is materially harder than the one-word
-power patch and is **unproven**. Proposal: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured
-3.3 V rail: [Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
+Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial@49020000` = the
+`serial2` alias, so enabling it yields `ttyO2`; `/dev/ttyS0..3` are stale nodes with nothing bound.
+⚠️ **The pads are already muxed for UART3, so no pinmux node is needed** — measured on a running unit,
+`0x4800219e` reads `0x118` (`PIN_INPUT_PULLUP | MUX_MODE0`) and `0x480021a0` reads `0x000`
+(`PIN_OUTPUT | MUX_MODE0`), which is what the upstream OMAP3 boards prescribe; vendor U-Boot sets them
+and this project leaves U-Boot alone. Check with `mount -t debugfs none /sys/kernel/debug` then
+`grep -E '4800219e|480021a0' /sys/kernel/debug/pinctrl/48002030.pinmux/pins`. The node is otherwise
+identical to the working console node, so `status = "disabled"` is the whole blocker and a 5-byte
+in-place edit clears it: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured 3.3 V rail:
+[Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
 
 **[inferred] expect the vendor to have assumed a Series 1 module** — from the command set the vendor's
 own tooling uses, not from a module ever being read on a unit. A settable `ATMY` and `ATCH` are 802.15.4
