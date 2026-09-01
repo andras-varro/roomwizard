@@ -88,6 +88,25 @@ The native C apps escape this only because they never link pthread. If plain `-l
 produces link errors, the options are an older-glibc toolchain, a sysroot with 4.14 headers,
 musl, or dynamic linking — not `--whole-archive`.
 
+⚠️ **Measured 2026-09-01: `build-and-deploy.sh` does this anyway and the binary runs.** The flag reaches
+the link line and no SIGSEGV follows, so the rule above is right about the mechanism but overstates when
+it fires — `IMPROVEMENT_PLAN.md` B36 holds the counts and the outstanding decision. Do not delete the
+line to "comply"; that is an untested change to a working binary.
+
+## Verifying that a link did what you asked
+
+⚠️ **The deployed `scummvm` is `stripped`, so `grep -a` for an internal symbol answers zero whether or not
+it was linked.** Asking it about `audio_out_open` reads exactly like "the object never made it in", which
+is a false negative dressed as a measurement. What does answer:
+
+- the build log's own lines — `C ../native_apps/common/<name>.o` per object, then `LINK scummvm`;
+- `md5sum` of the freshly built binary against the deployed one;
+- the build date ScummVM draws on its launcher screen, which dates the *running* binary;
+- what it prints — the shared device half logs its `/dev/dsp` open on the first mixer init.
+
+⚠️ **A glibc symbol is not an instrument either**: `grep -ac clock_gettime64` is nonzero in every working
+binary on the device, the native apps included.
+
 ## Architecture
 
 ```

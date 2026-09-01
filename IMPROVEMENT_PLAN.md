@@ -237,29 +237,37 @@ poll — and keep the first announcement, which is genuinely useful.
 
 ---
 
-### B36. Three documents forbid `--whole-archive -lpthread`; the ScummVM build script does it — open, measured 2026-09-01
+### B36. `--whole-archive -lpthread` reaches the ScummVM link line and the binary runs anyway — open, the rule needs re-scoping
 
 `scummvm-roomwizard/build-and-deploy.sh:434` appends
-`LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `config.mk`, with a comment saying it
-is "needed for ARM static cross-compilation". Three places say never to:
+`LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `config.mk`. Three places forbid it:
 `CLAUDE.md` → *Cross-component build rules*, `scummvm-roomwizard/CLAUDE.md` → *Critical: never use
 `--whole-archive` with `-lpthread`* (SIGSEGV before `main()` via the 64-bit-time syscall
 `native_apps/CLAUDE.md` names, unimplemented on this 4.14.52 kernel), and
 `scummvm-roomwizard/ENGINE_ADDITION_PLAN.md:301` ("do NOT reintroduce").
 
-**Both cannot be right, and the deployed binary is the evidence that matters: ScummVM RUNS** — King's
-Quest and Full Throttle confirmed on hardware 2026-08-31. So either the rule is narrower than stated
-(a link-order or glibc-version condition the three documents do not name) or the flag is inert here.
+⚠️ **Measured 2026-09-01: the flag is not inert — it reaches the final link, and the stated consequence
+still does not follow.** ScummVM's `Makefile` clears `LIBS` at line 16 and only then reads the generated
+file (`-include config.mk`, line 28), so the append lands *after* the clear and survives; the
+`LDFLAGS='-static'` on the `make` line overrides a **different** variable and cannot displace it; the link
+recipe is `Makefile.common:133`, `$(LD) $(LDFLAGS) … $(LIBS)`. A full rebuild carrying the flag was
+linked, deployed and **launched** — it reached its game list at 16 bpp and opened the mixer. There is no
+SIGSEGV before `main()` here to explain away.
 
-- ⚠️ **Do not "fix" it by deleting the line.** It has been in every ScummVM build that was verified on
-  the panel, so removing it is an untested change to a working binary, not a correction.
-- **What settles it is one measurement, not a reading**: `grep -a` the linked `scummvm` binary for the
-  syscall symbol `native_apps/CLAUDE.md` names, and check whether the flag survives into the final link
-  at all — `config.mk`'s `LIBS` may be overridden by the `LDFLAGS='-static'` on the `make` line. Do it
-  during the full rebuild [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open)
-  now needs anyway; that link is where a real hazard would bite.
-- Whichever way it resolves, **one of the four files is wrong and must change** — three rules and one
-  contradicting call site is the state that cost this session a paragraph of doubt.
+⚠️ **The measurement this entry used to prescribe is not an instrument, and would have read as a pass.**
+`grep -ac` for that syscall symbol on the deployed binaries answers `1` for `scummvm` and `3` for each of
+`tetris`, `brick_breaker` and `app_launcher` — every known-good native binary carries the symbol *more*
+often, because its presence is only glibc's static `clock_gettime` path and not evidence of the hazard.
+Only a zero would have meant anything. `grep -ac pthread_create` separates them properly (`scummvm` 2,
+the native apps 0), which is the reason `scummvm-roomwizard/CLAUDE.md` already gives for the native apps
+escaping: they never link pthread at all. **The original scar was cut by a recipe that is not the recipe
+these three rules now police.**
+
+- ⚠️ **Do not "fix" it by deleting the line.** Removing it is an untested change to a working binary.
+- **What is left is a decision, not a measurement**: name the condition the prohibition actually needs —
+  link order, glibc version, or which archive is whole-archived — and re-scope the three rules to it, or
+  drop the flag and re-verify a build built without it. Until one of those happens the three rules
+  overstate their case and the call site contradicts them.
 
 ---
 
@@ -279,7 +287,7 @@ latency symptom has ever been reported). What is left is structural.
 **One implementation of each audio half, because more emulator ports are coming.** ScummVM carried its
 own OSS mixer, duplicating a device half that `common/audio_out.{c,h}` already provides.
 
-⏳ **The adapter is WRITTEN and COMPILES; it has never run.** 2026-09-01, in one commit:
+⏳ **The adapter is WRITTEN, LINKED and has RUN.** 2026-09-01, in one commit:
 `oss-mixer.cpp` is 355 → 182 lines and holds only the mixer, the fill and the service thread. Gone with
 the device half: the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN
 retry loop, the wall-clock deadline and the emergency second write. `configure.patch` appends
@@ -291,12 +299,18 @@ clean; `oss-mixer.cpp` compiles through ScummVM's own `make` rule with its real 
 the `audio_*` link closure is exactly `audio_out.o` + `audio_gen.o`, 20 symbols needed and 0 unresolved
 (negative control: an injected fake symbol is reported); `sdiv`/`udiv` is 0 in all three objects.
 
-⚠️ **What remains is the whole of the verification.** The full ScummVM LINK has not been run, so
-nothing has been on a device. ⚠️ **`scummvm/config.mk` is stale and does not list the two new
-objects** — the build script reconfigures only when `config.mk` is absent or `USE_PNG` is missing, so
-the next session must `rm -f scummvm/config.mk scummvm/config.h`, which forces a **full** ScummVM
-rebuild rather than the usual ~2 min incremental. Then `./deploy-all.sh <ip>` (all three) and an ear
-check that King's Quest and Full Throttle still sound as they did.
+✅ **Linked, deployed and launched, 2026-09-01.** `scummvm/config.mk` was stale and listed neither new
+object — the build script reconfigures only when it is absent or `USE_PNG` is missing — so
+`rm -f scummvm/config.mk scummvm/config.h` forced the full rebuild it needed. The build log then shows
+`audio_out.o`, `audio_gen.o` and `oss-mixer.o` compiled and `LINK scummvm`; the deployed md5 matches the
+binary built; and ScummVM reached its game list at 16 bpp having printed exactly one audio line, from the
+shared half — `audio_out: /dev/dsp open, granted 22050 Hz 16-bit 1 ch`. ⚠️ **Verify a ScummVM link this
+way and never with `grep -a` on the binary**, which is `stripped`, so every internal symbol answers zero:
+`scummvm-roomwizard/CLAUDE.md` → *Verifying that a link did what you asked*.
+
+⏳ **What is left is the ear check, and only that**: King's Quest and Full Throttle must sound as they
+did. ⚠️ **`.188` carries only Full Throttle** — `scummvm.ini` there has one game section — so that unit
+can run half of it; King's Quest needs a unit that has the game installed.
 
 ⚠️ **The payoff is structural, not audible** — ScummVM audio is confirmed good on hardware (King's
 Quest and Full Throttle, 12–13 % CPU, OPL tempo correct), so this buys nothing a user can hear and must
