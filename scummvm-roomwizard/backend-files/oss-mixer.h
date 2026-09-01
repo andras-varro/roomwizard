@@ -25,11 +25,22 @@
 #include "backends/mixer/mixer.h"
 #include <pthread.h>
 
+// Include C headers directly
+extern "C" {
+#include "audio_out.h"
+}
+
 /**
- * Audio mixer that outputs to /dev/dsp (OSS / ALSA OSS-compat layer).
- * Runs a dedicated audio thread that pulls mixed samples and writes them
- * to the device in real time.  Used by the RoomWizard backend which has
- * a TWL4030 codec accessible via the ALSA OSS compatibility shim.
+ * Audio mixer that outputs to /dev/dsp, as a thin ADAPTER over the shared
+ * device half in native_apps/common/audio_out.{c,h}.
+ *
+ * This class owns exactly three things: the ScummVM mixer, the fill callback
+ * that hands its bytes to `AudioOut`, and the thread that services the stream.
+ * Everything a device needs — the open, the SPEED → FMT → CHANNELS order and the
+ * read-back, the ring geometry, the lead, the prefill, the write policy and the
+ * underrun accounting — belongs to `audio_out` and must not be reimplemented
+ * here.  The next emulator port adapts the same way rather than writing a second
+ * OSS backend.  Device facts: ../SYSTEM_ANALYSIS.md#34-audio.
  */
 class OssMixerManager : public MixerManager {
 public:
@@ -44,8 +55,11 @@ public:
 	void audioThread();
 
 private:
-	int      _fd;           ///< File descriptor for /dev/dsp
-	uint32   _outputRate;   ///< Actual sample rate accepted by driver
+	/** `AudioOutFill`: hands the interleaved device buffer to the mixer. */
+	static long fillFromMixer(void *ctx, int16_t *buf, long frames, int channels);
+
+	AudioOut _out;          ///< The shared stream. The ONLY writer of /dev/dsp.
+	uint32   _outputRate;   ///< What the device GRANTED — OPL tempo depends on it
 	uint32   _samples;      ///< Frames per mixCallback call
 	pthread_t _thread;
 	volatile bool _threadRunning;

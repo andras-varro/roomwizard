@@ -21,22 +21,46 @@
 
 // These must come before any ScummVM header (forbidden.h is pulled in transitively).
 #define FORBIDDEN_SYMBOL_EXCEPTION_unistd_h
-#define FORBIDDEN_SYMBOL_EXCEPTION_FILE
 #define FORBIDDEN_SYMBOL_EXCEPTION_time_h
-#define FORBIDDEN_SYMBOL_EXCEPTION_write
 
 #include "backends/mixer/oss/oss-mixer.h"
 #include "audio/mixer_intern.h"
 #include "common/debug.h"
 
-#include <fcntl.h>
+#include <string.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/ioctl.h>
-#include <sys/soundcard.h>
-#include <sys/time.h>
+
+// ---------------------------------------------------------------------------
+// This file is an ADAPTER, and the point of it is what is NOT here
+// ---------------------------------------------------------------------------
+//
+// It used to carry its own /dev/dsp open, its own ioctl order, its own ring-size
+// query, its own silence prefill, its own EAGAIN retry loop, its own wall-clock
+// deadline and its own emergency second write.  All of that is the DEVICE half,
+// all of it is now audio_out.{c,h}, and there is one implementation of it because
+// more emulator ports are coming: the next one adapts here rather than writing a
+// third OSS backend.
+//
+// ⚠️ Two things about the old code are deliberately NOT carried over:
+//
+//   - The emergency anti-underrun write.  On a near-empty ring it mixed a second
+//     buffer and wrote it while IGNORING the result — a partial write there
+//     desynchronises the stream it was trying to rescue, and it was the second
+//     write loop in a file that should have none.  `audio_out_service()` targets
+//     the lead on every call, which is the same job done once and accounted for;
+//     `audio_out_starved()` is where the count lives now.
+//
+//   - The fixed per-buffer deadline.  audio_out_service() writes a VARIABLE
+//     frame count, so advancing a constant deadline against it is two pacing
+//     models neither of which bounds the queue (audio_out.h says so about this
+//     exact file).  The thread below drops the deadline and paces off the
+//     library's own measured interval instead.
+//
+// ⚠️ Loudness is held IDENTICAL: audio_out_set_shift(&_out, 1) is the old `>>1`,
+// and audio_out.h guarantees it is an arithmetic shift rather than a rounding
+// multiply for exactly that reason.  ScummVM audio was verified good on the panel
+// (King's Quest, Full Throttle) and this change must not be audible.
 
 // ---------------------------------------------------------------------------
 // C-linkage thread shim
@@ -52,10 +76,10 @@ static void *ossAudioThreadShim(void *arg) {
 
 OssMixerManager::OssMixerManager()
 	: MixerManager()
-	, _fd(-1)
 	, _outputRate(22050)
 	, _samples(2048)
 	, _threadRunning(false) {
+	memset(&_out, 0, sizeof(_out));
 }
 
 OssMixerManager::~OssMixerManager() {
@@ -63,284 +87,87 @@ OssMixerManager::~OssMixerManager() {
 		_threadRunning = false;
 		pthread_join(_thread, nullptr);
 	}
-	if (_fd >= 0) {
-		close(_fd);
-		_fd = -1;
-	}
+	// Remove the fill BEFORE closing: close() drains, and the mixer it would
+	// call back into is destroyed by the base class right after this.
+	if (audio_out_is_open(&_out))
+		audio_out_set_fill(&_out, nullptr, nullptr, nullptr);
+	audio_out_close(&_out);
+}
+
+// The fill contract speaks DEVICE FRAMES because of this call site: mixCallback
+// wants a byte count, and audio_out.h hands the interleaved buffer straight
+// through so no repacking is needed at 1 channel or at 2.
+//
+// The buffer arrives zeroed and a short fill is legal, but mixCallback always
+// fills what it is given, so this returns the whole request.
+long OssMixerManager::fillFromMixer(void *ctx, int16_t *buf, long frames, int channels) {
+	OssMixerManager *self = static_cast<OssMixerManager *>(ctx);
+	if (!self->_mixer)
+		return 0;
+	self->_mixer->mixCallback((byte *)buf, (uint)(frames * channels * 2));
+	return frames;
 }
 
 void OssMixerManager::init() {
-	// Open non-blocking: blocking write() on this device stalls for the full
-	// TWL4030 ALSA HW period (~506 ms) once the OSS ring fills, causing
-	// long silent gaps.  O_NONBLOCK avoids that stall entirely.
-	_fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
-	if (_fd < 0) {
-		// No DSP device — fall back to silent mixer so ScummVM still works.
-		warning("OssMixerManager: cannot open /dev/dsp (%d), audio disabled", _fd);
+	// ⚠️ channels_req stays 1.  audio_out.h: forcing stereo doubles this mixer's
+	// work and its byte count on a core already at ~32 % with Full Throttle.
+	if (audio_out_open_oss(&_out, 22050, 1) != 0) {
+		// No usable device — fall back to a silent mixer so ScummVM still works.
+		warning("OssMixerManager: cannot open /dev/dsp, audio disabled");
 		_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 		_mixer->setReady(true);
 		return;
 	}
 
-	// ---------------------------------------------------------------
-	// We deliberately do NOT call SNDCTL_DSP_SETFRAGMENT.
-	//
-	// Constraining the ring to 2×16384 bytes only provided 185 ms of
-	// buffer.  On a loaded 300 MHz ARM, kernel scheduling jitter can
-	// stretch usleep(5 ms) to 20-30 ms; 18 such sleeps = 360 ms >
-	// 185 ms → ring empties → fragment-boundary underrun → Te-te-CLICK.
-	//
-	// With the default unconstrained ring (~500 ms) there is enough
-	// headroom to absorb any realistic scheduling jitter.  We pace
-	// writes with a wall-clock deadline instead of relying on write()
-	// or EAGAIN blocking behaviour.
+	// ⚠️ Use the GRANTED rate, never the requested one.  If _outputRate does not
+	// match real playback, OPL sample-counting produces music at the wrong tempo.
+	int granted = audio_out_rate(&_out);
+	if (granted > 0)
+		_outputRate = (uint32)granted;
 
-	// ---------------------------------------------------------------
-	// ALSA OSS shim ioctl bugs (Linux 4.14.52, TWL4030):
-	//  - SNDCTL_DSP_STEREO is silently ignored
-	//  - SNDCTL_DSP_SPEED may reset format and/or channels
-	//  - SNDCTL_DSP_SETFMT may reset speed
-	//
-	// The ioctl output values (written back to the variable) may also
-	// not reflect the ACTUAL device state.  Trust only SOUND_PCM_READ_*
-	// read-back ioctls for the final configuration.
-	//
-	// Strategy: set all three params, then read back the actual state.
-	// Use the read-back rate for _outputRate so OPL sample-counting
-	// matches the real playback rate.
-	// ---------------------------------------------------------------
+	// The old `>>1` speaker attenuation, bit for bit.
+	audio_out_set_shift(&_out, 1);
 
-	int val;
-
-	// Set speed FIRST (most likely to reset other params)
-	val = 22050;
-	ioctl(_fd, SNDCTL_DSP_SPEED, &val);
-
-	// Set format AFTER speed
-	val = AFMT_S16_LE;
-	ioctl(_fd, SNDCTL_DSP_SETFMT, &val);
-
-	// Set mono LAST
-	val = 1;
-	ioctl(_fd, SNDCTL_DSP_CHANNELS, &val);
-
-	// Read back the ACTUAL device state with read-only ioctls.
-	// These are more reliable than the set-ioctl output values.
-	int actualRate = 0, actualBits = 0, actualChannels = 0;
-	ioctl(_fd, SOUND_PCM_READ_RATE, &actualRate);
-	ioctl(_fd, SOUND_PCM_READ_BITS, &actualBits);
-	ioctl(_fd, SOUND_PCM_READ_CHANNELS, &actualChannels);
-
-	debug("OssMixerManager: read-back: rate=%d bits=%d channels=%d",
-	      actualRate, actualBits, actualChannels);
-
-	// Use the read-back rate if sane; fall back to requested rate.
-	// This is critical: if _outputRate doesn't match the real playback
-	// rate, OPL sample-counting produces music at the wrong tempo.
-	if (actualRate > 0 && actualRate <= 96000) {
-		_outputRate = (uint32)actualRate;
-	} else {
-		_outputRate = 22050;
-		debug("OssMixerManager: SOUND_PCM_READ_RATE returned %d, using 22050", actualRate);
-	}
-
-	if (actualBits != 16) {
-		warning("OssMixerManager: device is %d-bit, expected 16-bit!", actualBits);
-	}
-	if (actualChannels != 1) {
-		warning("OssMixerManager: device has %d channels, expected 1!", actualChannels);
-	}
-
-	debug("OssMixerManager: using rate=%u Hz, mono S16LE", _outputRate);
+	debug("OssMixerManager: %u Hz, %d ch, %d bit, %u frames/buf",
+	      _outputRate, audio_out_channels(&_out), audio_out_bits(&_out), _samples);
 
 	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 	_mixer->setReady(true);
 
+	// Install the fill only once _mixer exists — it is what the fill calls.
+	audio_out_set_fill(&_out, fillFromMixer, this, "ScummVM");
+
 	_threadRunning = true;
 	pthread_create(&_thread, nullptr, ossAudioThreadShim, this);
 
-	// NOTE: SCHED_RR was previously used here to prevent audio-thread
-	// starvation on the loaded 300 MHz ARM.  However, with the correct
-	// mixCallback byte count (bufBytes) the audio thread now does 4x more
-	// mixing work per cycle.  On single-core ARM, SCHED_RR causes the
-	// RT-priority audio thread to starve the main thread during init,
-	// producing a black screen.  The ~500 ms OSS ring buffer easily
-	// absorbs 20-40 ms of SCHED_OTHER scheduling jitter, so RT priority
-	// is unnecessary.
-
-	debug("OssMixerManager: /dev/dsp ready at %u Hz mono, %u frames/buf", _outputRate, _samples);
+	// NOTE: no SCHED_RR.  On this single 600 MHz core an RT-priority audio thread
+	// starves the main thread during init and you get a black screen
+	// (../CLAUDE.md → Cross-component build rules).
 }
 
 void OssMixerManager::audioThread() {
-	// 1 channel * 2 bytes per sample (mono)
-	const int bufBytes = (int)(_samples * 2);
-	// How long one mix buffer represents in microseconds.
-	const long usPerBuf = (long)(1000000LL * _samples / _outputRate); // ~93 ms
-
-	uint8 *buf = new uint8[bufBytes];
-
-	// ── Query ring-buffer capacity ──────────────────────────────
-	// SNDCTL_DSP_GETOSPACE tells us how much space the driver has.
-	// At init (ring empty) the total fragstotal*fragsize = ring capacity.
-	int ringBytes = 0;
-	{
-		audio_buf_info abi;
-		if (ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
-			ringBytes = abi.fragstotal * abi.fragsize;
-		debug("OssMixerManager: ring buffer: %d fragments x %d bytes = %d bytes (%.0f ms)",
-		      abi.fragstotal, abi.fragsize, ringBytes,
-		      1000.0 * ringBytes / (2.0 * _outputRate));
-		} else {
-			debug("OssMixerManager: GETOSPACE failed, cannot query ring size");
-		}
-	}
-
-	// ── Pre-fill the ring with silence ──────────────────────────
-	// Writing several silent buffers before starting the pacing loop
-	// gives the ring ~200+ ms of headroom.  Without this, the first
-	// scheduling hiccup can drain the ring to zero → ALSA XRUN →
-	// audible breakup.
-	{
-		memset(buf, 0, bufBytes);
-		int prefillBufs = 3; // 3 × 93 ms ≈ 280 ms of silence
-		for (int i = 0; i < prefillBufs; i++) {
-			int r = (int)write(_fd, buf, bufBytes);
-			if (r <= 0) break;
-		}
-		debug("OssMixerManager: pre-filled %d silence buffers (%d ms)",
-		      prefillBufs, (int)(prefillBufs * usPerBuf / 1000));
-	}
-
-	// ── Diagnostic counters ─────────────────────────────────────
-	uint32 totalBufs     = 0;
-	uint32 eagainCount   = 0;
-	uint32 writeErrCount = 0;
-	uint32 deadlineResets = 0;
-	uint32 xrunDetected  = 0;
-	struct timeval lastReport;
-	gettimeofday(&lastReport, nullptr);
-
-	// Wall-clock deadline: we advance this by usPerBuf after each write.
-	struct timeval deadline;
-	gettimeofday(&deadline, nullptr);
-
 	while (_threadRunning) {
 		if (_audioSuspended) {
 			usleep(50000);
-			gettimeofday(&deadline, nullptr); // reset after resume
 			continue;
 		}
 
-		_mixer->mixCallback(buf, bufBytes);
+		audio_out_service(&_out);
 
-		// Attenuate to ~50% volume to avoid distorting the small
-		// RoomWizard speaker.  Arithmetic right-shift on signed int16
-		// is exact −6 dB with no clipping risk.
-		{
-			int16 *s = (int16 *)buf;
-			int n = bufBytes / 2;
-			for (int i = 0; i < n; ++i)
-				s[i] >>= 1;
-		}
-
-		// Write the buffer.  With O_NONBLOCK and the unconstrained ring
-		// (~500 ms), write() almost always succeeds in 1-2 calls.
-		// The EAGAIN path is a safety net for the rare case we somehow
-		// overfill the ring (e.g. after resume).
-		int written = 0;
-		while (written < bufBytes && _threadRunning) {
-			int r = (int)write(_fd, buf + written, bufBytes - written);
-			if (r > 0) {
-				written += r;
-			} else if (r < 0 && errno == EAGAIN) {
-				eagainCount++;
-				usleep(2000); // ring full — wait 2 ms & retry
-			} else {
-				// write() returned 0 or a non-EAGAIN error.
-				// Log it — silent drops cause audio breakup.
-				writeErrCount++;
-				if (writeErrCount <= 10 || (writeErrCount % 100) == 0) {
-					warning("OssMixerManager: write() returned %d, errno=%d (%s), wrote %d/%d",
-					        r, errno, strerror(errno), written, bufBytes);
-				}
-				usleep(10000);
-				break;
-			}
-		}
-		totalBufs++;
-
-		// ── Check ring fill level & detect XRUN ─────────────────
-		// If the ring is completely empty after we just wrote, it means
-		// the hardware drained faster than we filled → XRUN territory.
-		{
-			audio_buf_info abi;
-			if (ringBytes > 0 && ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
-				int freeBytes = abi.fragments * abi.fragsize;
-				int filledBytes = ringBytes - freeBytes;
-				// If less than one buffer worth of audio is queued,
-				// we're dangerously close to underrun.
-				if (filledBytes < bufBytes) {
-					xrunDetected++;
-					if (xrunDetected <= 5 || (xrunDetected % 50) == 0) {
-						warning("OssMixerManager: ring near-empty! filled=%d/%d bytes (%.0f ms), xruns=%u",
-						        filledBytes, ringBytes,
-						        1000.0 * filledBytes / (2.0 * _outputRate),
-						        xrunDetected);
-					}
-					// Emergency: write an extra buffer to prevent XRUN
-					_mixer->mixCallback(buf, bufBytes);
-					{
-						int16 *s = (int16 *)buf;
-						int n = bufBytes / 2;
-						for (int i = 0; i < n; ++i)
-							s[i] >>= 1;
-					}
-					write(_fd, buf, bufBytes);
-				}
-			}
-		}
-
-		// ── Periodic diagnostic report (~10 seconds) ────────────
-		if ((totalBufs % 107) == 0) { // 107 × 93 ms ≈ 10 s
-			struct timeval now;
-			gettimeofday(&now, nullptr);
-			int elapsed = (int)(now.tv_sec - lastReport.tv_sec);
-
-			int filledBytes = 0;
-			audio_buf_info abi;
-			if (ringBytes > 0 && ioctl(_fd, SNDCTL_DSP_GETOSPACE, &abi) == 0) {
-				filledBytes = ringBytes - (abi.fragments * abi.fragsize);
-			}
-
-			debug("OssMixerManager: [%ds] bufs=%u ring=%d/%d bytes eagain=%u err=%u reset=%u xrun=%u",
-			      elapsed, totalBufs, filledBytes, ringBytes,
-			      eagainCount, writeErrCount, deadlineResets, xrunDetected);
-			lastReport = now;
-		}
-
-		// Advance deadline by exactly one buffer period.
-		deadline.tv_usec += usPerBuf;
-		if (deadline.tv_usec >= 1000000L) {
-			deadline.tv_sec  += deadline.tv_usec / 1000000L;
-			deadline.tv_usec  = deadline.tv_usec % 1000000L;
-		}
-
-		// Sleep until deadline.  This is the primary pacing mechanism:
-		// the audio thread is idle for ~90 ms out of every 93 ms.
-		struct timeval now;
-		gettimeofday(&now, nullptr);
-		long sleepUs = (long)(deadline.tv_sec  - now.tv_sec)  * 1000000L
-		            + (long)(deadline.tv_usec - now.tv_usec);
-		if (sleepUs > 500L && sleepUs < (usPerBuf * 4L)) {
-			usleep((useconds_t)sleepUs);
-		} else if (sleepUs <= 0L) {
-			// Fell behind schedule — reset deadline to now.
-			deadlineResets++;
-			gettimeofday(&deadline, nullptr);
-		}
+		// ⚠️ Pace at HALF the library's interval, not at it.
+		//
+		// audio_out_service_interval_us() is documented as the LONGEST a caller
+		// may go between services — a ceiling, and the native path stays far
+		// under it because it services from its render loop.  A dedicated thread
+		// that sleeps the whole ceiling has no room left for the 20-40 ms of
+		// scheduling jitter this core is measured to produce, so one late wakeup
+		// starves the stream.  Half the ceiling means two services per budget
+		// window and a single late wakeup cannot.
+		long budget = audio_out_service_interval_us(&_out);
+		if (budget <= 0)
+			budget = 20000;   // geometry not measured yet (pre-first-service)
+		usleep((useconds_t)(budget / 2));
 	}
-
-	delete[] buf;
 }
 
 void OssMixerManager::suspendAudio() {

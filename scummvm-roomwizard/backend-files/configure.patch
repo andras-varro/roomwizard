@@ -2,7 +2,7 @@ diff --git a/configure b/configure
 index 480916a2..f7d1d5df 100755
 --- a/configure
 +++ b/configure
-@@ -4117,6 +4117,15 @@ case $_backend in
+@@ -4117,6 +4117,17 @@ case $_backend in
  		append_var DEFINES "-DUSE_NULL_DRIVER"
  		_text_console=yes
  		;;
@@ -14,6 +14,8 @@ index 480916a2..f7d1d5df 100755
 +		append_var OBJS "../native_apps/common/touch_input.o"
 +		append_var OBJS "../native_apps/common/hardware.o"
 +		append_var OBJS "../native_apps/common/config.o"
++		append_var OBJS "../native_apps/common/audio_out.o"
++		append_var OBJS "../native_apps/common/audio_gen.o"
 +		;;
  	opendingux | miyoo | miyoomini)
  		_sdlconfig=sdl-config

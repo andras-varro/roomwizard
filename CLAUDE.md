@@ -160,9 +160,9 @@ misparses.
 | Changed | Redeploy |
 |---|---|
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
-| `common/audio.c`, `common/audio_gen.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM has its own OSS mixer |
-| `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
-| `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
+| `common/audio.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM reaches the device half through `audio_out.o` and never the mix-bus client layer |
+| `common/logger.c` | `native_apps` + `vnc_client` |
+| `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c`, `common/audio_out.c`, `common/audio_gen.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain (`audio_out.h`, `audio_gen.h`) counts too |
 | `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
 | the three **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
