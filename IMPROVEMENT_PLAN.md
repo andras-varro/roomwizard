@@ -237,6 +237,32 @@ poll — and keep the first announcement, which is genuinely useful.
 
 ---
 
+### B36. Three documents forbid `--whole-archive -lpthread`; the ScummVM build script does it — open, measured 2026-09-01
+
+`scummvm-roomwizard/build-and-deploy.sh:434` appends
+`LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `config.mk`, with a comment saying it
+is "needed for ARM static cross-compilation". Three places say never to:
+`CLAUDE.md` → *Cross-component build rules*, `scummvm-roomwizard/CLAUDE.md` → *Critical: never use
+`--whole-archive` with `-lpthread`* (SIGSEGV before `main()` via the 64-bit-time syscall
+`native_apps/CLAUDE.md` names, unimplemented on this 4.14.52 kernel), and
+`scummvm-roomwizard/ENGINE_ADDITION_PLAN.md:301` ("do NOT reintroduce").
+
+**Both cannot be right, and the deployed binary is the evidence that matters: ScummVM RUNS** — King's
+Quest and Full Throttle confirmed on hardware 2026-08-31. So either the rule is narrower than stated
+(a link-order or glibc-version condition the three documents do not name) or the flag is inert here.
+
+- ⚠️ **Do not "fix" it by deleting the line.** It has been in every ScummVM build that was verified on
+  the panel, so removing it is an untested change to a working binary, not a correction.
+- **What settles it is one measurement, not a reading**: `grep -a` the linked `scummvm` binary for the
+  syscall symbol `native_apps/CLAUDE.md` names, and check whether the flag survives into the final link
+  at all — `config.mk`'s `LIBS` may be overridden by the `LDFLAGS='-static'` on the `make` line. Do it
+  during the full rebuild [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open)
+  now needs anyway; that link is where a real hazard would bite.
+- Whichever way it resolves, **one of the four files is wrong and must change** — three rules and one
+  contradicting call site is the state that cost this session a paragraph of doubt.
+
+---
+
 ## Features
 
 All userspace. No kernel work.
@@ -250,30 +276,45 @@ beds, the per-game sound sets and the level all ship and are heard. Its device f
 (`/dev/dsp` and `/dev/snd/pcmC0D0p` are the same PCM, so it buys latency and nothing else, and no
 latency symptom has ever been reported). What is left is structural.
 
-**One implementation of each audio half, because more emulator ports are coming.** ScummVM carries its
-own OSS mixer and its own evdev input, duplicating a device half that `common/audio_out.{c,h}` and the
-mix bus already provide. Reduce `oss-mixer.cpp` to a thin adapter whose fill sits beside the one the
-library registers itself (the `AudioVoiceFill` contract in `common/audio.h`), so the next emulator
-adapts rather than reimplements. ⚠️ **The payoff is structural, not audible** — ScummVM audio is
-confirmed good on hardware (King's Quest and Full Throttle, 12–13 % CPU, OPL tempo correct), so this
-buys nothing a user can hear and must not be sold as a fix.
+**One implementation of each audio half, because more emulator ports are coming.** ScummVM carried its
+own OSS mixer, duplicating a device half that `common/audio_out.{c,h}` already provides.
 
-⚠️ **Two device-half defects belong to the adapter, and neither causes anything audible today.**
+⏳ **The adapter is WRITTEN and COMPILES; it has never run.** 2026-09-01, in one commit:
+`oss-mixer.cpp` is 355 → 182 lines and holds only the mixer, the fill and the service thread. Gone with
+the device half: the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN
+retry loop, the wall-clock deadline and the emergency second write. `configure.patch` appends
+`audio_out.o` and `audio_gen.o`; the fill hands `buf` to `mixCallback` as `audio_out.h`'s contract
+anticipates; `audio_out_set_shift(&_out, 1)` reproduces the old `>>1` bit for bit.
 
-- The emergency anti-underrun `write()` at `oss-mixer.cpp:298` ignores errors and partial writes.
-  **Delete the path rather than fix it** — the whole emergency loop is the second write loop the shared
-  library replaces.
-- `native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants, where `audio_out`
-  reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says `S16_LE`),
-  which is why it is a defect and not a cause.
+**Measured on the host, all four green:** `audio_out.c` and `audio_gen.c` cross-compile `-Wall -Wextra`
+clean; `oss-mixer.cpp` compiles through ScummVM's own `make` rule with its real `CXXFLAGS`/`CPPFLAGS`;
+the `audio_*` link closure is exactly `audio_out.o` + `audio_gen.o`, 20 symbols needed and 0 unresolved
+(negative control: an injected fake symbol is reported); `sdiv`/`udiv` is 0 in all three objects.
 
-⚠️ **The pre-continuous path does not die when the games leave it.** `device_tools`,
-`hardware_config` and `hardware_test` still play tones without a bus, so that path dies here at the
-earliest — do not assume the games' conversion already removed it.
+⚠️ **What remains is the whole of the verification.** The full ScummVM LINK has not been run, so
+nothing has been on a device. ⚠️ **`scummvm/config.mk` is stale and does not list the two new
+objects** — the build script reconfigures only when `config.mk` is absent or `USE_PNG` is missing, so
+the next session must `rm -f scummvm/config.mk scummvm/config.h`, which forces a **full** ScummVM
+rebuild rather than the usual ~2 min incremental. Then `./deploy-all.sh <ip>` (all three) and an ear
+check that King's Quest and Full Throttle still sound as they did.
 
-⚠️ **Redeploy becomes all three components** the moment `oss-mixer.cpp` links the shared library,
-rather than the `native_apps`-only rule that holds today — `CLAUDE.md` → *Redeploy scope by changed
-file* has to change in the same commit, and ScummVM is the slow build.
+⚠️ **The payoff is structural, not audible** — ScummVM audio is confirmed good on hardware (King's
+Quest and Full Throttle, 12–13 % CPU, OPL tempo correct), so this buys nothing a user can hear and must
+not be sold as a fix. The one thing to listen *for* is a regression.
+
+⚠️ **One pacing decision is a judgement, not a measurement.** The thread sleeps
+`audio_out_service_interval_us() / 2`, because that function is documented as the *longest* a caller may
+go between services and the native path stays far under it by servicing from its render loop. Half was
+chosen so a single late wakeup on a core with 20–40 ms of jitter cannot starve the stream; **the halving
+has not been measured against the whole interval on hardware.**
+
+⚠️ **Still open: `native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants**, where
+`audio_out` reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says
+`S16_LE`), which is why it is a defect and not a cause. Untouched by the adapter.
+
+⚠️ **Also still open: the pre-continuous path does not die when the games leave it.** `device_tools`,
+`hardware_config` and `hardware_test` still play tones without a bus — untouched by this commit, so it
+did **not** die here.
 
 ⏳ **Two loose ends, unrelated to the refactor.** `fx_fail` is limited and landed its intended 4 dB
 (in-band RMS −16.14 → −11.87 dBFS, level with `click`) but is **unheard** — deployed to `.188`
