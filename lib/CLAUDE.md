@@ -14,6 +14,7 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 | `rw-clean.sh` | compile `clean-rules.conf` to a delete plan |
 | `rw-provision.sh` | compile `provision-rules.conf` to an install plan, and generate the online executor |
 | `rw-bundle.sh` | the release-bundle layout |
+| `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
 | `rw-usbpower.sh` | the only legitimate writer of `uImage-system` on p1 |
 
@@ -208,10 +209,49 @@ layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` 
   *source* — it does not decide the licence of a binary it links into (`scummvm` is GPL-3.0+ as a
   whole, `vnc_client` GPL-2.0+). Measure a dependency's licence *version* rather than carrying it
   forward: `NOTICE` claimed GPLv2+ for ScummVM and the tree's `COPYING` is GPLv3.
-- **`--stage-only` is the tested path; `--tag` has never run.** `gh` 2.86.0 is installed in WSL (from
-  the release `.deb` — focal's apt has no `gh`, and the snap links against a glibc newer than 2.31), so
-  the publish step is reachable but still unexercised. The tarball `--stage-only` produces is a
-  first-class input to the offline installer, so everything downstream is testable with no network.
+- **Both halves have now run end to end.** `--stage-only` produces a tarball that is a first-class input
+  to the offline installer, and `--tag` published `v1.0.0` — verified by comparing a local `sha256sum`
+  against the digest GitHub reports. `gh` 2.86.0 is installed in WSL (from the release `.deb`: focal's
+  apt has no `gh`, and the snap links against a glibc newer than 2.31).
+
+## `rw-release.sh` fetches, and it is the only file here that opens a socket
+
+The fetch is thin by construction: `deploy-all.sh --from-bundle` and `commission-offline.sh --bundle`
+both already accept a tarball *or* an unpacked directory, so it resolves, downloads, verifies and hands
+over a path. It installs nothing and never touches a device. `rw-bundle.sh` stays network-free so that
+"does this code reach the network" is answerable from the source list alone.
+
+- ⚠️ **There is ONE owner/repo derivation, `rw_release_repo`, and `release.sh` sources it.** A fork must
+  fetch from the fork it published to. `gh` cannot resolve this repository from its remote at all —
+  `origin` is an SSH host **alias**, and `gh` refuses the repository outright with "none of the git
+  remotes configured for this repository point to a known GitHub host" — so `--repo` is mandatory on
+  every `gh` call. ⚠️ **It reads the remote URL and nothing else from git**: `remote get-url` is local,
+  while any *network* git operation dies under WSL with "Could not resolve hostname
+  github.com-personal", because the alias lives in the Windows ssh config.
+- ⚠️ **sha256, never md5.** The bundle's `manifest.d/*.md5` proves internal consistency once unpacked and
+  says nothing about whether the bytes that arrived are the bytes GitHub served. Nothing is signed, so
+  the one authenticity check available is `.assets[].digest`, which GitHub reports as `sha256:…` — on
+  `gh release view --json assets` **and** on the unauthenticated REST API. Comparing the manifest's md5
+  against that digest compares two different algorithms and can never agree, and a release publishing
+  **no** digest is refused outright: an asset that cannot be verified is not a safer install than none.
+- ⚠️ **`gh release download` prints NOTHING — zero bytes on stdout and stderr for a 125 MB asset.** The
+  bundle is ~126 MB, most of it uncompressed mono music beds, so on an ordinary link that is minutes of
+  dead terminal, which reads as a hang and gets Ctrl-C'd. `_rw_release_progress` polls the partial file
+  against the size the resolve step already knows; it wraps `curl` too, so both transports look alike.
+- **Cached by digest, and the download lands on a `.part` first.** A cached file whose sha256 matches is
+  the same bytes GitHub would serve, so a second unit costs no second download; one that does not match
+  is re-downloaded rather than trusted. The move into place happens only after verification, so an
+  interrupted run leaves nothing for the next one to find and a mismatch cannot poison the cache — `gh`
+  refuses an existing target without `--clobber` anyway.
+- **`jq` is not installed here**, so the `gh` path uses gh's built-in `--jq` and the `curl` fallback
+  parses with `grep`/`sed`. ⚠️ **It splits on commas, not braces**: every asset object nests an
+  `uploader` object, and a brace split cuts one asset in half, separating its name from its digest. With
+  more than one tarball asset that fallback **refuses** rather than pairing a digest by guesswork.
+- ⚠️ **stdout carries the path and nothing else.** Callers do `p="$(rw_release_fetch …)"`, which is a
+  subshell — the same trap as `rw_ssh_probe`, avoided here by having no globals to lose. Every
+  diagnostic and every progress line goes to stderr.
+- **A fetch under `sudo` hands the cached file back to `$SUDO_UID`**, for the reason
+  `rw_ssh_key_owner` exists: otherwise the operator needs `sudo` to touch their own `build/`.
 
 ## Regressions
 

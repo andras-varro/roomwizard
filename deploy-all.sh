@@ -22,8 +22,7 @@
 # Every other mode BUILDS, so every other mode needs arm-linux-gnueabihf-gcc.
 # Someone being handed a device has no toolchain — that is what a release bundle is
 # for — so before this existed, the offline card pass was the only way to put
-# binaries on a unit even for someone who already had SSH to it
-# (IMPROVEMENT_PLAN.md C12, and F9's `--from-release`).
+# binaries on a unit even for someone who already had SSH to it.
 #
 # It is the SSH twin of commissioning/commission-offline.sh's install loop and shares its
 # authority: rw_bundle_install_ssh in lib/rw-bundle.sh, one implementation, modes

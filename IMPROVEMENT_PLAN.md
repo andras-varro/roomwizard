@@ -429,7 +429,7 @@ Ideas: health/timer bar, heartbeat pulse during ScummVM loading, flash on high s
 already reaches both channels and already has the non-blocking `LedPulse` API, so this is presentation
 work only.
 
-### F9. Ship binaries as GitHub releases — **published 2026-09-01**, the fetch half open
+### F9. Ship binaries as GitHub releases — **published and fetchable 2026-09-01**
 
 `release.sh` at the repo root, `lib/rw-bundle.sh` (the bundle layout, sourced by every producer and
 consumer) and `--bundle <dir>` on all four components are built and exercised. ✅ **`--tag` has now run
@@ -438,57 +438,30 @@ end to end**: tag `v1.0.0` on `andras-varro/roomwizard`, with its `targetCommiti
 `usb_host` is in a release like any other component — only its p1 power step is not, which is
 [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09).
 
-**Still open — the fetch half.** `--from-release <tag>` on `deploy-all.sh` and the per-component
-scripts, which is what makes a release useful to the *existing* SSH flow. Nothing of it is written.
-⚠️ **Asked for 2026-09-01: `roomwizard.sh` should offer to pull the latest release and use it**, which
-spans this, [F12](#f12-install-from-a-published-release--open) and
-[F18](#f18-roomwizardsh-item-3-has-no-bundle-option--open-asked-for-2026-08-09). Constraints, so they do
-not have to be re-derived:
+✅ **And the fetch half is done and confirmed on a unit.** `lib/rw-release.sh` resolves, downloads and
+sha256-verifies a published asset; `deploy-all.sh --from-release <tag|latest> <ip>`,
+`commissioning/commission-offline.sh --release <tag|latest>` and `roomwizard.sh` items 3 and 6 are its
+consumers. Confirmed 2026-09-01 against `v1.0.0` on `192.168.50.188`: 105 files installed, md5- and
+`+x`-verified, launcher grid back on the panel. The measurements that shaped it are in `lib/CLAUDE.md`.
 
-- **The fetch belongs in a shared library, not in `roomwizard.sh`** — that is a composition layer with no
-  logic of its own except `wait_for_ssh`, and every item must keep working when the script below it is
-  called directly. `lib/rw-bundle.sh` is deliberately network-free, so a separate `lib/rw-release.sh` is
-  the fit, with `deploy-all.sh` and `commissioning/commission-offline.sh` as its two consumers.
-- **It is a thin layer over working code.** `deploy-all.sh --from-bundle` already installs a bundle and
-  builds nothing, and both it and `commission-offline.sh --bundle` accept **either** a tarball or an
-  unpacked directory. So the fetch is: download, then hand over the path.
-- ⚠️ **Reuse `release.sh`'s owner/repo derivation rather than writing a second one.** `gh` cannot resolve
-  this repo from its remote at all: `origin` is an SSH host **alias**, and `gh` does not guess and fail,
-  it refuses the repository outright with "none of the git remotes configured for this repository point to
-  a known GitHub host". Every `gh` call needs an explicit `--repo`, derived from the remote so a fork
-  publishes to the fork.
-- ⚠️ **A silent download of this bundle reads as a hang** — the four-component tarball is ~126 MB, most of
-  it the uncompressed mono music beds. Cache by published digest, skip a re-download that would produce
-  bytes already on disk, and show progress.
-- The repo is **public**, so `curl -L` is a viable fallback where `gh` is absent; auth is needed only for
-  a private repo.
+**What is still open here, and it is small:**
 
-⚠️ **`release.sh` checks its publish preconditions only after the build and staging are done**, so a
-refusal costs a full rebuild before it prints. Correct, but wasteful — moving them ahead of the component
-loop needs `GIT_REV`/`GIT_DIRTY` computed earlier than the bundle metadata that consumes them.
+- ⚠️ **`release.sh` checks its publish preconditions only after the build and staging are done**, so a
+  refusal costs a full rebuild before it prints. Correct, but wasteful — moving them ahead of the
+  component loop needs `GIT_REV`/`GIT_DIRTY` computed earlier than the bundle metadata that consumes
+  them.
+- **Whether the `NOTICE` written offer is actually discharged has not been checked by anyone qualified to
+  say so.** `release.sh` generates the per-release half and `LICENSE.md` says the two must agree; that is
+  a bookkeeping guarantee, not a legal opinion. ⚠️ **Measure a dependency's licence *version* rather than
+  carrying it forward**: this entry once said ScummVM was GPLv2+ and the tree is **GPL-3.0-or-later**.
 
 **The host pulls the tarball; the device is untouched.** Nothing new runs on the device and there is no
 CA-certificate problem to solve on a 2022 vendor image.
 
-**A release carries the md5 manifest** because deploy-time verification otherwise compares against a
-local `build/`, which a build-free path does not have. `lib/rw-bundle.sh` writes
-`manifest.d/<component>.md5` beside `.list`; they are separate files because the declared modes are stable
-and the checksums are not — ⚠️ **releases are not byte-reproducible**, since `base/version.o` re-embeds
-the build date on every link. So the md5 list is generated per release, never asserted against a
-known-good set.
-
-**A release publishes binaries only, never configs.** Device config carries the device's `/etc/hosts` name
-mapping and the VNC password, so a glob that swept up `*.conf` would publish exactly what those two exist
-to have removed. `release.sh` greps the staged manifest and refuses — the negative control for a future
-component that forgets, rather than a rule each component is trusted to remember.
-
 **[F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) depends on
 this one** — an offline commissioner has no toolchain to fall back on, so the release *is* its only source
 of binaries. The obligations that only bite once artifacts are published are enumerated per artifact in
-[`LICENSE.md`](LICENSE.md) — ⚠️ **measure a dependency's licence *version* rather than carrying it
-forward**: this entry said ScummVM was GPLv2+ and the tree is **GPL-3.0-or-later**. `release.sh` generates
-the per-release half as the bundle's `NOTICE`, and `LICENSE.md` says the two must agree; whether that
-discharges the written source offer has not been checked by anyone qualified to say so.
+[`LICENSE.md`](LICENSE.md).
 
 ---
 
@@ -688,55 +661,38 @@ bc libssl-dev bison flex                     # usb_host kernel modules only
 
 ---
 
-### F12. Install from a published release — open
+### F21. `README.md` does not reflect `roomwizard.sh` or the release path — open
 
-`--bundle` is already `commissioning/commission-offline.sh`'s single source of binaries and everything downstream is
-origin-agnostic — unpack, `rw_bundle_check`, the ARM gate, install, md5 — so `--release <tag|latest>`
-is a fetch into a temp directory plus a handoff to the existing path. That also removes the
-copy-a-tarball-to-the-commissioning-host step from the delivery mode of
-[F11](#f11-one-home-for-the-host-build-prerequisites--open).
+`roomwizard.sh` is the front door and the reason a single card write produces a working unit at next
+boot, and `README.md` mentions it **once**, in a directory listing. Quick Start leads with the
+two-phase SSH loop, so the item that actually delivers a unit — *THE WHOLE JOB, offline, one boot* — is
+invisible to a reader, and so is installing from a published release now that
+[F9](#f9-ship-binaries-as-github-releases--published-and-fetchable-2026-09-01) makes that a real
+option. Check the shape with `grep -c roomwizard.sh README.md` against
+`grep -c 'build-and-deploy\|deploy-all' README.md`.
 
-- **Never the default, and the `--help` must say so.** The script is called `commissioning/commission-offline.sh` and
-  its premise is that no network is required. A stock unit with `net.mode = manual` is unreachable by
-  any other means, which is exactly when there may be no network to hand.
-- ⚠️ **The bundle's `.md5` manifest proves internal consistency, not authenticity.** Nothing is signed, so
-  the only check worth making is that the tarball matches what GitHub says it served — and ⚠️ **those two
-  are not the same algorithm.** `gh release view --json assets` reports `.assets[].digest` as `sha256:…`,
-  while the bundle manifest and `release.sh` both print md5, so verify a fetched asset with `sha256sum`
-  against that digest. The md5 serves the bundle's internal consistency check and nothing else.
-- `gh release download` preferred, `curl -L` as the fallback for a public repo; auth is needed only if
-  the repo is private.
-- ✅ **A real published asset exists to build this against** — tag `v1.0.0`
-  ([F9](#f9-ship-binaries-as-github-releases--published-2026-09-01-the-fetch-half-open)), verified on
-  publish by comparing a local `sha256sum` against the digest above. Use it rather than a hand-made
-  fixture.
-- Distinct from F9's still-open `--from-release <tag>` on `deploy-all.sh`, which serves the SSH
-  development flow rather than the offline one.
+- **Document it against the real thing.** Tag `v1.0.0` exists, so the release path can be written from a
+  command that has been run rather than from the flag list.
+- ⚠️ **The two-phase SSH path is the development loop and stays.** This is about which one a *reader*
+  meets first, not about retiring anything.
 
 ---
 
-### F18. `roomwizard.sh` item 3 has no bundle option — open, asked for 2026-08-09
+### F22. A bundle carries no device scripts, for any component — open, undecided
 
-Menu item 3 always builds from source: [`roomwizard.sh:278-292`](roomwizard.sh#L278-L292) calls
-`deploy-all.sh "$TARGET"` (or one component), and nothing in the menu reaches
-`deploy-all.sh --from-bundle <tar.gz|dir> <ip>` — **which already exists and already works.** So this
-is menu exposure, not new capability: a second prompt beside "Component (Enter = all)", defaulting to
-build-from-source so no keystroke changes meaning.
+Raised by the operator 2026-09-01 and **not yet decided**, which is why it is a question rather than a
+task. The bundle stages built artifacts only. `usb_host`'s three device scripts (`usb-host`,
+`enable-usb-host.sh`, `xpad-modules`) are `device-files/provision-rules.conf`'s `usb` group, as are
+`roomwizard-app` and `disable-steelcase.sh` — so a holder of nothing but the tarball gets
+`xpad.ko`/`joydev.ko`/`ff-memless.ko`/`devmem_write` and nothing that loads them at boot.
 
-Why it is worth having: after a `./release.sh --stage-only` there is a tarball in `build/release`, and
-re-deploying from it is seconds against ScummVM's ~1m35s–2m20s rebuild. It also puts the *tested* bytes
-on the device rather than a fresh build of them.
-
-- **Offer the same default path the offline installer uses** — `build/release`, which item 6 already
-  prompts with — so the two front doors name one location.
-- ⚠️ **A bundle carries no config**, by construction: `release.sh` refuses to publish `*.conf`,
-  `/etc/hosts`, `touch_calibration` and the rest. So a from-bundle deploy leaves an unprovisioned unit's
-  touch calibration absent, exactly as a from-source deploy does. Not a difference between the two, but
-  the prompt should not imply the bundle is the whole device state.
-- Adjacent and both still open: [F9](#f9-ship-binaries-as-github-releases--published-2026-09-01-the-fetch-half-open)'s
-  `--from-release <tag>` on `deploy-all.sh` (fetch, rather than a local file) and
-  [F12](#f12-install-from-a-published-release--open)'s `--release` on the offline installer. This one
-  needs neither a network nor a published release, which is why it is separable and small.
+- **`commissioning/commission-offline.sh` is unaffected**, and that is what makes this a question rather
+  than a bug: it runs from a clone, so it has `device-files/` beside it either way.
+- The decision is whether a **tarball alone** should be self-sufficient. If yes, that is a new bundle
+  group and a change to what `release.sh` refuses to publish — not a tweak to an existing path.
+- ⚠️ Whatever is decided, `release.sh`'s refusal to publish **config** and **vendor firmware** stays.
+  Those exist to keep a plaintext password and 5 MB of Steelcase kernel out of a public release, and a
+  device *script* is neither.
 
 ---
 
@@ -1314,8 +1270,9 @@ two remainders.
 [F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
 has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
 item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
-cannot fire here. [F12](#f12-install-from-a-published-release--open) unblocks anyone who is
-not the developer; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
+cannot fire here. [F21](#f21-readmemd-does-not-reflect-roomwizardsh-or-the-release-path--open) is now what
+stands between a non-developer and a working unit — the install-from-a-release path exists and is
+undocumented; [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
 recorded rather than planned, because the honest answer is a bootable image.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to

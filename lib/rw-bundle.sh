@@ -12,7 +12,7 @@
 #   <dir>/manifest.d/<component>.list    "<mode> <device-path>", one per line
 #   <dir>/manifest.d/<component>.md5     "<md5>  <device-path>", one per line
 #   <dir>/manifest.d/bundle.info         tag, build date, component list
-#   <dir>/NOTICE                         licence obligations (ScummVM is GPLv2+)
+#   <dir>/NOTICE                         licence obligations (ScummVM is GPL-3.0-or-later)
 #
 # ── ⚠️ Modes are DECLARED, never read off disk ───────────────────────────────
 #

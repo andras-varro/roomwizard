@@ -617,6 +617,20 @@ group_c() {
 # belongs beside, and the beds' `<game><n>-mono.wav` naming rule was deliberately NOT added to this file:
 # it lives in native_apps/sound-sets.sh, the one home for it, and at both consumers of that table.
 # ⚠️ **No headroom is granted: 708 is the measurement, and the next addition pays by deleting.**
+# ⚠️ 2026-09-01, NINTH raise, deliberate and argued: lib/CLAUDE.md 214 → 232 (measured post-edit count).
+# A new subsystem landed in this directory — lib/rw-release.sh, the release fetch — and its rules have no
+# other home: they are about how to call these libraries, not device facts and not open work. The raise buys
+# the four that cost real time to establish and would each be re-derived from scratch otherwise: gh release
+# download prints NOTHING for a 125 MB asset (which is why the library carries its own progress), GitHub
+# publishes sha256 while every manifest here is md5, there is exactly ONE owner/repo derivation because gh
+# cannot resolve an SSH host alias at all, and the no-jq JSON parse must split on commas because an asset
+# nests an uploader object. The same commit paid several times over, and NOT out of this file: two closed
+# entries were DELETED from IMPROVEMENT_PLAN.md and a third compressed to its open remainder, taking that
+# document ~1081 → ~1040 non-blank while it GAINED two newly-recorded open items. Net documentation change
+# across the repo is ~23 lines SMALLER. Two stale claims were CORRECTED rather than appended to, per the
+# overwrite rule: this file's "--tag has never run" (it has, v1.0.0) and rw-bundle.sh's "ScummVM is GPLv2+"
+# (the tree is GPL-3.0-or-later).
+# ⚠️ **No headroom is granted: 232 is the measurement, and the next addition pays by deleting.**
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -626,7 +640,7 @@ ceilings() {
 216	HARDWARE.md
 337	CLAUDE.md
 716	native_apps/CLAUDE.md
-214	lib/CLAUDE.md
+232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
 232	tests/CLAUDE.md
