@@ -456,6 +456,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | `patch_dtb.py` | Workstation (Python 3) | Binary-patch MUSB power property in uImage DTB |
 | `find_dtb.py` | Workstation (Python 3) | Extract DTB from uImage for inspection |
 | `devmem_write.c` | Compiled for ARM | `/dev/mem` mmap-based read/write tool |
+| `xbee_probe.sh` | Device (needs `devmem_write`) | Drives UART3 and the radio socket from userspace, with no DTB patch or reboot |
 | `../device-files/enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
 | `../device-files/usb-host` | Device | SysV init.d wrapper for USB host boot persistence |
 | `../device-files/xpad-modules` | Device | SysV init.d script for loading controller modules at boot |

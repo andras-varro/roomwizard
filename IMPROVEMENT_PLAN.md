@@ -355,53 +355,40 @@ Three MADC channels are readable with `cat` **today** and have zero references i
 The most *interesting* capability on the board: two-player games across a corridor, high-score sync,
 presence beacons — with no network involved.
 
-**The hardware side is settled, and so is the pinmux.** The board carries a populated but empty XBee
-socket (`J5`/`J6`), the chassis was tooled for that exact module, and the socket's orientation and 3.3 V
-rail are measured — so powering a module is safe. Socket, pinout and measurements:
-[`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion).
-⚠️ **The "add a whole pinmux node" difficulty is GONE — measured 2026-09-01 on `.188`: the UART3 pads
-already come up in the right mode, set by vendor U-Boot, which this project leaves alone.** The registers,
-their values and the command that reads them back:
+**Everything underneath the radio is settled, and none of it needs kernel work.** The socket, its
+orientation and its 3.3 V rail are measured
+([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)); the UART3 pads
+already come up in the right mode; and because a `status = "disabled"` node has no driver bound to it,
+userspace can drive UART3 outright for the cost of one clock-gate bit — no DTB patch, no reboot.
+Registers, measured values and the self-validation rule:
 [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports).
 
-**What is left is one 5-byte edit and a way to boot it.** `serial@49020000` is byte-for-byte the working
-console node minus `pinctrl-*` and with `status = "disabled"`. The kernel tests that property with
-`strcmp(status, "okay")` and only checks its length is non-zero (`drivers/of/base.c:568` in the vanilla
-tree), so writing `okay\0` over `disabled\0` **in place** enables it — the property length field is
-untouched and the DTB is not relaid out. That is the same class of patch `usb_host/patch_dtb.py` already
-does, and `usb_host/uimage.py` recomputes the uImage CRCs.
+⚠️ **So the boot path does not gate this entry, and the radio has already been probed.**
+`usb_host/xbee_probe.sh` on `.188` drove command mode at 9600, 19200, 38400, 57600 and 115200 — `+++`
+and a bare `AT` at each — and the module was **silent at every rate**. 57600 is only what the vendor's
+own tooling uses; an XBee leaves the factory at 9600, so silence at one rate would have proved nothing.
+The probe proves itself against the UART's internal loopback before reporting, and has been seen
+printing both outcomes, so this is a result about the radio rather than about the instrument.
 
-⚠️ **The hard part is now the boot path, not the patch.** `bootcmd` will load only `uImage-system` and
-U-Boot has no `saveenv`, so **staging the experiment under a new filename cannot boot it** — that loop
-needs the serial console, which is not wired
-([`#47-recovery`](SYSTEM_ANALYSIS.md#47-recovery)). Two ways forward, and the choice is the actual
-decision this entry is waiting on:
+**What is left is the module and the socket, and the next step wants a human at the unit.**
 
-- **Wire `P4`** — three wires and a real RS-232 adapter, no soldering strictly required. Buys the
-  zero-cost rollback loop for this and every future kernel experiment.
-- **Go through the one writer** — `lib/rw-usbpower.sh` is the only thing allowed to write
-  `uImage-system`, it is md5-gated on a fixed set of known images, and it refuses a chained patch. A
-  UART3 image is a *new* target derived from the vendor kernel in one pass, so this means extending that
-  gate's set and its callers, not adding a second writer (`lib/CLAUDE.md`). It costs the untouched-kernel
-  rollback on whichever unit gets it.
+1. **Read the module's label.** An S2 left in API mode (`AP = 1`) answers **no** `AT` at all, at any
+   rate — which is exactly the symptom seen, and a stronger caveat than the partial-response one
+   recorded for an S2 already in `AT` mode.
+2. **Check orientation against the pin-1 dot.** Pin 1 is a live 3.3 V rail and the module has now been
+   powered, so a reversed insertion has already had its effect. Leading thing to rule out.
+3. **Swap in a spare and re-run the probe.** Two are on hand, and that separates module from socket in
+   one step: a second silent module points at the socket or the pads, one that answers at the first.
 
-**Then the module, and it needs no peer.** `AT` command mode is a local conversation with the radio:
-`+++` for `OK`, then `ATID` at 57600 8N1. The vendor's own `pv02_app` carries a full `AT` implementation
-and an XBee loopback test on the same port, so the first probe is a kept vendor binary rather than
-anything we write ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
-
-**Staging.**
-
-1. **Decide the boot path above.** Nothing else can be tested until a UART3 kernel can actually run.
-2. **Check the seated module's orientation against the pin-1 dot before powering that unit again**, and
-   read its label for Series 1 vs Series 2, so a partial `AT` response is not read as a wiring fault.
-3. **`+++` then `ATID` on `ttyO2`.** That validates the `status` patch, the socket wiring *and* whether a
-   decade-old module still works — three unknowns, one experiment, no second radio.
-4. **A silent module does not distinguish those three.** With two spares, swapping is a cheap control: a
-   second silent module points at the DTB or the wiring, one that answers points at the first module.
-
-An XBee fed reversed dies instantly. That is why the orientation was measured before insertion, and it
-is now the leading explanation to *rule out* rather than a hazard to avoid.
+**Only once a module answers is the boot path worth paying for**, and then it buys a real `ttyO2` for
+game code instead of register pokes, plus visibility into a boot that fails. Two ways, unchanged: wire
+`P4` — three wires and a true RS-232 adapter, a 3.3 V TTL one will not do — or extend
+`lib/rw-usbpower.sh`, the one legitimate `uImage-system` writer, to a further target derived from the
+vendor kernel in a single pass, never a second writer (`lib/CLAUDE.md`). ⚠️ **On `.188` the second
+option costs less than the entry used to claim:** that unit already runs the 500 mA patched kernel with
+a verified pristine `uImage-system.vendor` beside it on p1, so its untouched-kernel rollback is already
+spent, and recovery there is the card-reader file copy that writer already prescribes on failure. What
+`P4` adds is a diagnosis of a boot that fails, which no card pull gives you.
 
 ### F6. Multi-touch via direct I2C — open
 

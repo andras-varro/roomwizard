@@ -640,11 +640,20 @@ group_c() {
 # overwrite rule: this file's "--tag has never run" (it has, v1.0.0) and rw-bundle.sh's "ScummVM is GPLv2+"
 # (the tree is GPL-3.0-or-later).
 # ⚠️ **No headroom is granted: 232 is the measurement, and the next addition pays by deleting.**
+# ⚠️ 2026-09-01, a deliberate raise: SYSTEM_ANALYSIS.md 1599 -> 1610, and NOT paid for by a deletion.
+# The addition is a measured capability rather than another paragraph about one: a peripheral whose DT
+# node says `status = "disabled"` has no driver bound, so nothing contends for it and userspace can
+# drive it outright — on UART3 that is one clock-gate bit, with no DTB patch and no reboot. That
+# matters out of proportion to its length because §7 forbids rebuilding this kernel, so "the node is
+# disabled" had been read as "out of scope" for every peripheral, not just this one. The same commit
+# CORRECTED rather than appended to the claim it falsifies ("`disabled` is the whole blocker", now
+# scoped to the tty), and it paid elsewhere: IMPROVEMENT_PLAN.md F5's boot-path decision, which the
+# measurement demotes from gating to deferred, shrank 43 -> 34 non-blank. Net across the repo is +1 line.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1599	SYSTEM_ANALYSIS.md
+1610	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 190	README.md

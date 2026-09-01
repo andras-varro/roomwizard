@@ -1311,9 +1311,21 @@ Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial
 (`PIN_OUTPUT | MUX_MODE0`), which is what the upstream OMAP3 boards prescribe; vendor U-Boot sets them
 and this project leaves U-Boot alone. Check with `mount -t debugfs none /sys/kernel/debug` then
 `grep -E '4800219e|480021a0' /sys/kernel/debug/pinctrl/48002030.pinmux/pins`. The node is otherwise
-identical to the working console node, so `status = "disabled"` is the whole blocker and a 5-byte
-in-place edit clears it: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured 3.3 V rail:
-[Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
+identical to the working console node, so `status = "disabled"` is all that stands between it and a
+`ttyO2`, and a 5-byte in-place edit clears it: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured
+3.3 V rail: [Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
+
+⚠️ **A `ttyO2` is not needed to reach the radio, and `disabled` is the reason: with no driver bound,
+nothing contends for UART3, so userspace may own it outright.** Measured on a running unit — the module
+is out of reset and already half-clocked, so the whole cost is one bit. `uart3_ick` (`0x48005010`
+bit 11) is already set; `uart3_fck` (`CM_FCLKEN_PER`, `0x48005000`, bit 11) is not. Take both from the
+vanilla tree's `omap3xxx-clocks.dtsi` (`reg` `0x1000`/`0x1010`, `ti,bit-shift = 11`), not a remembered
+layout. With `fclk` on, `0x49020000` reads `MVR` `0x46`, `SYSS` `0x01` (RESETDONE), `MDR1` `0x07` — the
+reset value, so nothing has ever driven it — and `LSR` `0x60`; parent `per_48m_fck` is a fixed 48 MHz,
+so the 16x divisor is 48e6/(16 × baud) and 57600 wants 52 (`0x34`). ⚠️ **Validate any such probe with
+the UART's own internal loopback before believing a silent radio** (`MCR` bit 4, TX→RX inside the
+module — not the vendor *XBee* loopback test above): without it a dead radio and a wrong register
+sequence produce identical output. `usb_host/xbee_probe.sh` does that and restores what it writes.
 
 **[inferred] expect the vendor to have assumed a Series 1 module** — from the command set the vendor's
 own tooling uses, not from a module ever being read on a unit. A settable `ATMY` and `ATCH` are 802.15.4
