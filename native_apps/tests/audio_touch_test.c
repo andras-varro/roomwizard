@@ -345,14 +345,22 @@ int main(int argc, char *argv[])
         draw_exit_button(&fb, &exit_btn);
         fb_swap(&fb);
 
-        /* Frame pacing: streaming write provides some throttling,
-         * but add a small sleep to prevent busy-spinning.
-         * IMPORTANT: every path MUST sleep to yield CPU and prevent
-         * starving other processes or triggering the hardware watchdog. */
+        /* ⚠️ Service the continuous stream every frame, including after the finger
+         * lifts.  audio_stream_stop() appends its 20 ms fade and leaves the stream
+         * OPEN, so audio->cont stays true and this loop still owes it a service; with
+         * none the ring drains and the device underruns, which is what a lift crack
+         * sounds like.  All seven games call audio_pump() unconditionally for exactly
+         * this reason.  Gated on !was_playing only to avoid servicing twice: while the
+         * finger is down audio_stream_chunk() above has already done it. */
         if (!was_playing)
-            usleep(16000);  /* 16 ms idle — ~60 fps */
-        else
-            usleep(1000);   /* 1 ms active — keep feeding audio */
+            audio_pump(&audio);
+
+        /* Frame pacing.  Every path MUST sleep, to yield CPU and to keep the hardware
+         * watchdog fed.  ⚠️ audio_pump_active() is what decides, not was_playing: it
+         * is unconditionally true while the continuous stream is open, and the idle
+         * 16 ms is longer than the stream's service ceiling, so a lift that dropped
+         * this loop to idle would starve the device while the tail is still sounding. */
+        usleep((was_playing || audio_pump_active(&audio)) ? 1000 : 16000);
     }
 
     /* Clean shutdown */

@@ -88,10 +88,13 @@ The native C apps escape this only because they never link pthread. If plain `-l
 produces link errors, the options are an older-glibc toolchain, a sysroot with 4.14 headers,
 musl, or dynamic linking — not `--whole-archive`.
 
-⚠️ **Measured 2026-09-01: `build-and-deploy.sh` does this anyway and the binary runs.** The flag reaches
-the link line and no SIGSEGV follows, so the rule above is right about the mechanism but overstates when
-it fires — `IMPROVEMENT_PLAN.md` B36 holds the counts and the outstanding decision. Do not delete the
-line to "comply"; that is an untested change to a working binary.
+⚠️ **What `build-and-deploy.sh` actually needs is plain `-lpthread`, and it appends exactly that**
+(`build-and-deploy.sh:442`). `oss-mixer.cpp` starts the service thread, so the link genuinely needs the
+library: with no `-lpthread` at all it fails with `undefined reference to pthread_create`/`pthread_join`
+from `oss-mixer.cpp`, measured 2026-09-01 by removing the append and rebuilding. A
+`--whole-archive -lpthread` append lived there for months and did **not** crash, because the link is
+`-static` — that is what kept the hazard off, not any weakness in the rule above. The rule stands as
+written, and the call site no longer contradicts it.
 
 ## Verifying that a link did what you asked
 

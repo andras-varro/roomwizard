@@ -142,6 +142,21 @@ static void configure_dsp(Audio *audio)
             audio->ch_warned = true;
         }
     }
+
+    /* ⚠️ And the format the driver actually GRANTED, which SNDCTL_DSP_SETFMT above
+     * does not tell us: this path threw its own request away and then did byte
+     * arithmetic that assumes 16-bit samples.  Measured on `.188` as S16_LE, so this
+     * warns rather than converts — a grant that is not 16-bit would make every frame
+     * count here wrong, and silence is the failure mode, so it must be said out loud.
+     * audio_out does the same read-back on the continuous path. */
+    int bits = 0;
+    if (ioctl(audio->dsp_fd, SOUND_PCM_READ_BITS, &bits) != 0 || bits != 16) {
+        if (!audio->fmt_warned) {
+            fprintf(stderr, "audio: SOUND_PCM_READ_BITS gave %d (errno=%d) — the byte "
+                            "arithmetic on this path assumes 16\n", bits, errno);
+            audio->fmt_warned = true;
+        }
+    }
 }
 
 /* ── The one write path, and what is left of it ───────────────────────────────

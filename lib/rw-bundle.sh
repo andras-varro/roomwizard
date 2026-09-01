@@ -14,6 +14,19 @@
 #   <dir>/manifest.d/bundle.info         tag, build date, component list
 #   <dir>/NOTICE                         licence obligations (ScummVM is GPL-3.0-or-later)
 #
+# ── ⚠️ A bundle carries BUILT ARTIFACTS ONLY, and that is a decision ──────────
+#
+# Deliberate, decided 2026-09-01: no device scripts go in.  A holder of nothing but
+# the tarball therefore gets xpad.ko/joydev.ko/ff-memless.ko/devmem_write and nothing
+# that loads them at boot, and gets no roomwizard-app or disable-steelcase.sh either.
+# That is not a gap to fix.  commissioning/commission-offline.sh is the only consumer
+# that installs those, it runs from a clone, so it has device-files/ beside it either
+# way — a self-sufficient tarball would buy a second copy of them and a second path
+# for an exec= to drift along.
+#
+# ⚠️ release.sh's refusal to publish CONFIG and VENDOR FIRMWARE is a different rule
+# and stays whatever happens here: those keep a plaintext password and 5 MB of
+# Steelcase kernel out of a public release.  A device script is neither.
 # ── ⚠️ Modes are DECLARED, never read off disk ───────────────────────────────
 #
 # This repo lives on /mnt/c, which is DrvFs 9p: it reports every file

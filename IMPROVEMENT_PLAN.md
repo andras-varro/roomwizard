@@ -30,10 +30,14 @@ There is no `/dev/uinput`, so nothing past an app's first screen is script-verif
 (`CLAUDE.md` → *Non-obvious constraints*). Panel time is the project's scarce resource, so these are
 grouped to be handed over as **one checklist** rather than asked for one at a time.
 
-**Nothing is outstanding.** The last item — that the high-score chime is actually audible — was confirmed
-at the panel 2026-09-01: it plays, together with the game-over descent as designed. ⚠️ **Whether the two
-are *distinct* to the ear was not assessed**, and that is the shape the next such question should take:
-ask for a description, not a verdict. The rules below stand for the next item that needs an ear.
+**One item outstanding, and it is one gesture.** Open `Tap-a-Theremin`, hold a finger on the pad, then
+lift it: the crack on release should be gone
+([B34](#b34-tap-a-theremin-cracks-when-the-finger-lifts--cause-found-fix-applied-needs-an-ear)). ⚠️ Ask for
+a *description*, not a verdict — the tone is designed to persist ~139 ms after the finger goes, so "it
+still makes a noise after I lift" is the expected tail and only a *click or crack* is the defect.
+
+The high-score chime and the game-over descent were confirmed distinct to the ear 2026-09-01, so the
+question of whether two simultaneous sounds separate does not need asking again for that pair.
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -168,18 +172,33 @@ measurement.** The loop is not yet read out of the driver: start at `musb_bus_su
 `usb_host/linux-4.14.52/drivers/usb/musb/` and at whether the `Babble` path leaves the port marked active.
 Distinct from B32, which is about enumeration.
 
-### B34. `Tap-a-Theremin` cracks when the finger lifts — open, reported 2026-08-21
+### B34. `Tap-a-Theremin` cracks when the finger lifts — cause found, fix applied, **needs an ear**
 
 The operator's report on `.188`: tracking follows the finger **much** better on the continuous stream, and
-**lifting the finger cracks.** ⚠️ **This is not the reset-click F1 already fixed** —
-`audio_stream_stop()` (`native_apps/common/audio.c:947`) removes the fill FIRST and only then appends a
-20 ms `AUDIO_OSC_FADE_OUT`, and the release deliberately lands one lead (~139 ms) behind the finger, so no
-`SNDCTL_DSP_RESET` is left in that path at all. Not diagnosed; the fade reaching the device is the first
-thing to check, since `audio_out_write()` is refused while a callback is installed. ⚠️ **And this is a
-SHIPPED app rather than a test tool** — `audio_touch_test` is the launcher tile `Tap-a-Theremin`
-(`native_apps/app-manifests.sh`), the operator's words are *"a loved app, not just a test tool"*, and it is
-also the instrument that measured the speaker's usable band
-([§3.4](SYSTEM_ANALYSIS.md#34-audio)). So a crack in it costs a measurement as well as a user.
+**lifting the finger cracks.** Not the reset-click, and not the fade either: `audio_stream_stop()`
+(`native_apps/common/audio.c:947`) removes the fill first and only then writes its 20 ms
+`AUDIO_OSC_FADE_OUT`, which is the order that makes the write legal — `audio_out_write()` is refused while
+any fill is installed — so the fade does reach the device.
+
+⚠️ **The cause is that nothing serviced the stream after the lift.** `audio_stream_stop()` leaves the
+stream OPEN, so `audio->cont` stays true and the loop still owes it a service; `audio_touch_test.c` called
+`audio_stream_chunk()` only inside the finger-down branch and `audio_pump()` nowhere at all, so on release
+it fell to a 16 ms idle sleep while the ring drained. `audio_pump_active()`
+(`native_apps/common/audio.c:545`) already documents the consequence in as many words — a loop that idles
+while the continuous stream is open starves this device, measured on `.188`. All seven games call
+`audio_pump()` unconditionally once per frame; this one app did not.
+
+**Fixed** by giving it the games' idiom: `audio_pump()` every frame that
+`audio_stream_chunk()` did not already service, and `audio_pump_active()` in the pacing decision so the
+post-lift tail keeps active pacing instead of dropping to idle. Built and deployed to `.188` 2026-09-01.
+
+⚠️ **Unverified by ear.** The mechanism is measured and the fix is deployed, but nobody has lifted a
+finger off the pad since. It is a launcher tile (`Tap-a-Theremin`, `native_apps/app-manifests.sh`) and the
+operator's words are *"a loved app, not just a test tool"*; it is also the instrument that measured the
+speaker's usable band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a crack in it costs a measurement as well
+as a user. ⚠️ **A residual is expected and is not the defect**: the fade lands one lead (~139 ms) behind
+the finger by design, so the tone persists briefly after release. A *crack* is the bug; a short *tail* is
+not.
 
 ### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
@@ -238,40 +257,6 @@ poll — and keep the first announcement, which is genuinely useful.
 
 ---
 
-### B36. `--whole-archive -lpthread` reaches the ScummVM link line and the binary runs anyway — open, the rule needs re-scoping
-
-`scummvm-roomwizard/build-and-deploy.sh:434` appends
-`LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `config.mk`. Three places forbid it:
-`CLAUDE.md` → *Cross-component build rules*, `scummvm-roomwizard/CLAUDE.md` → *Critical: never use
-`--whole-archive` with `-lpthread`* (SIGSEGV before `main()` via the 64-bit-time syscall
-`native_apps/CLAUDE.md` names, unimplemented on this 4.14.52 kernel), and
-`scummvm-roomwizard/ENGINE_ADDITION_PLAN.md:301` ("do NOT reintroduce").
-
-⚠️ **Measured 2026-09-01: the flag is not inert — it reaches the final link, and the stated consequence
-still does not follow.** ScummVM's `Makefile` clears `LIBS` at line 16 and only then reads the generated
-file (`-include config.mk`, line 28), so the append lands *after* the clear and survives; the
-`LDFLAGS='-static'` on the `make` line overrides a **different** variable and cannot displace it; the link
-recipe is `Makefile.common:133`, `$(LD) $(LDFLAGS) … $(LIBS)`. A full rebuild carrying the flag was
-linked, deployed and **launched** — it reached its game list at 16 bpp and opened the mixer. There is no
-SIGSEGV before `main()` here to explain away.
-
-⚠️ **The measurement this entry used to prescribe is not an instrument, and would have read as a pass.**
-`grep -ac` for that syscall symbol on the deployed binaries answers `1` for `scummvm` and `3` for each of
-`tetris`, `brick_breaker` and `app_launcher` — every known-good native binary carries the symbol *more*
-often, because its presence is only glibc's static `clock_gettime` path and not evidence of the hazard.
-Only a zero would have meant anything. `grep -ac pthread_create` separates them properly (`scummvm` 2,
-the native apps 0), which is the reason `scummvm-roomwizard/CLAUDE.md` already gives for the native apps
-escaping: they never link pthread at all. **The original scar was cut by a recipe that is not the recipe
-these three rules now police.**
-
-- ⚠️ **Do not "fix" it by deleting the line.** Removing it is an untested change to a working binary.
-- **What is left is a decision, not a measurement**: name the condition the prohibition actually needs —
-  link order, glibc version, or which archive is whole-archived — and re-scope the three rules to it, or
-  drop the flag and re-verify a build built without it. Until one of those happens the three rules
-  overstate their case and the call site contradicts them.
-
----
-
 ## Features
 
 All userspace. No kernel work.
@@ -289,9 +274,9 @@ symptom has ever been reported).
 thread; the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN retry, the
 wall-clock deadline and the emergency second write all live in `common/audio_out.{c,h}` instead — one
 implementation of the device half, which is the point, for the emulator ports still to come. Linked,
-deployed and checked at the panel 2026-09-01: **Full Throttle plays correctly, audio and all** (operator,
-unhedged). ⚠️ **King's Quest was not re-checked** — it is not installed on the unit used, so the
-regression check ran on one game, not two.
+deployed and checked at the panel 2026-09-01: **Full Throttle plays correctly, audio and all**, and
+**King's Quest 2's AdLib synthesis and its shore-wave sample both play as expected** — two engines and
+two synthesis paths, operator unhedged on both.
 
 ⚠️ **The service thread sleeps `audio_out_service_interval_us() / 2`, and the halving is still unmeasured
 against the whole interval.** That function documents the *longest* a caller may go between services, and
@@ -299,16 +284,14 @@ the native path stays far under it by servicing from its render loop; half was c
 on a core with 20–40 ms of jitter cannot starve the stream. It ships and it sounds right, which is not the
 same as being the right number.
 
-What is left is small, and none of it is audible:
+**One residual, and it is not audible:** the pre-continuous tone path does not die when the games leave
+it. `device_tools`, `hardware_config` and `hardware_test` still call `audio_tone()` without a bus, and
+they are also the last callers of the interrupt-then-tone pair that `common/audio.h` warns against
+(`native_apps/CLAUDE.md` → *Audio* owns that rule). Porting the three to the mix bus is the close-out;
+nothing a player can hear depends on it, and `audio_tone()`'s own path is measured working.
 
-- ⚠️ **`native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants**, where `audio_out`
-  reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says `S16_LE`), which
-  is why it is a defect and not a cause.
-- ⚠️ **The pre-continuous tone path does not die when the games leave it.** `device_tools`,
-  `hardware_config` and `hardware_test` still play tones without a bus.
-- ⚠️ **`common/audio.h`'s comment still claims the interrupt-then-tone call sites mean *"replace what is
-  playing"***, which is wrong for an effect on a bus. The call sites themselves are gone from all seven
-  games, so the comment is the only thing left saying it.
+---
+
 ### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
 
 ⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
@@ -342,9 +325,18 @@ counters carry `clip=126`** — bed + effect past full scale on 126 samples of ~
 ⚠️ **`starve` counts the FIRST service of a fresh stream**, where `in_flight` is legitimately 0, so one per
 bed start is expected and is not an underrun. Chase it only when it climbs *during* playback.
 
-⏳ **Still open, and it is all that is:** `device-files/clean-rules.conf:189` keeps `/opt/sound` wholesale,
-and its *reason* text ("113 KB of usable UI WAVs") is now stale — the directory holds ~18 MB of beds and
-effects that a deploy replaces anyway. Correct the reason; the rule itself is right.
+✅ **The keep rule now states what it keeps.** `device-files/clean-rules.conf:189` keeps `/opt/sound`
+wholesale and its reason is measured rather than guessed: **118 MB on `.188` 2026-09-01** — 24 beds, 14
+effect WAVs and three vendor UI clips — against **222 MB free on a 931 MB rootfs (75 % used)**. It is the
+largest single thing on the device, and wiping it only forces a re-send, since the beds install md5-gated.
+
+⚠️ **That free-space figure is the one number here worth re-measuring before adding music.** A bed set
+this size is ~13× what this entry claimed while nobody checked, and the headroom is finite.
+
+⏳ **All that is left is bookkeeping:** this entry has no open work, but five places cite `F19` as the
+anchor for "the bed" — `.gitignore:508`, `native_apps/build-and-deploy.sh:444` and `:565`,
+`native_apps/CLAUDE.md:749`, `native_apps/common/audio_wav.h:17`. Each of those sentences must be rewritten
+to carry its own reason before the entry is deleted, per the rule that an ID is not a durable reference.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 
@@ -687,24 +679,6 @@ bc libssl-dev bison flex                     # usb_host kernel modules only
   `bash manage-scummvm-changes.sh restore`. This WSL sits at `eaccc461` (2024-08-29). An installer that
   skips this has not solved the problem it exists to solve. `vkeybd_roomwizard.zip` and `scummvm.ppm`
   *are* tracked, so those come with the clone.
-
----
-
-### F22. A bundle carries no device scripts, for any component — open, undecided
-
-Raised by the operator 2026-09-01 and **not yet decided**, which is why it is a question rather than a
-task. The bundle stages built artifacts only. `usb_host`'s three device scripts (`usb-host`,
-`enable-usb-host.sh`, `xpad-modules`) are `device-files/provision-rules.conf`'s `usb` group, as are
-`roomwizard-app` and `disable-steelcase.sh` — so a holder of nothing but the tarball gets
-`xpad.ko`/`joydev.ko`/`ff-memless.ko`/`devmem_write` and nothing that loads them at boot.
-
-- **`commissioning/commission-offline.sh` is unaffected**, and that is what makes this a question rather
-  than a bug: it runs from a clone, so it has `device-files/` beside it either way.
-- The decision is whether a **tarball alone** should be self-sufficient. If yes, that is a new bundle
-  group and a change to what `release.sh` refuses to publish — not a tweak to an existing path.
-- ⚠️ Whatever is decided, `release.sh`'s refusal to publish **config** and **vendor firmware** stays.
-  Those exist to keep a plaintext password and 5 MB of Steelcase kernel out of a public release, and a
-  device *script* is neither.
 
 ---
 
@@ -1283,10 +1257,11 @@ two remainders.
 has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
 item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
 cannot fire here. What stands between a non-developer and a working unit is now narrower than it was:
-`README.md` leads with `roomwizard.sh` and documents installing from a published release, so the
-remaining gap is [F22](#f22-a-bundle-carries-no-device-scripts-for-any-component--open-undecided) —
-a holder of nothing but the tarball still gets no boot-time loaders — and that one is undecided rather
-than planned. [F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
+`README.md` leads with `roomwizard.sh` and documents installing from a published release. A tarball alone
+still carries no boot-time loaders, and that is now a **settled decision rather than a gap** — bundles hold
+built artifacts only, because the one consumer that installs device scripts runs from a clone and has
+`device-files/` beside it either way (`lib/rw-bundle.sh` header).
+[F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
 recorded rather than planned, because the honest answer is a bootable image.
 
 Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to

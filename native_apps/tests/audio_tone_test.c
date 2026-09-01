@@ -348,7 +348,7 @@ int main(void)
         close(fd);
     }
 
-    printf("\nE. audio_interrupt() still clears the tail (the ~23 interrupt+tone sites)\n");
+    printf("\nE. audio_interrupt() still clears the tail (device_tools and hardware_test_gui, the two callers left)\n");
     {
         fd = mk_audio(&a);
         if (fd < 0) return 1;

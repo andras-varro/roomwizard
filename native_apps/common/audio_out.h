@@ -267,9 +267,11 @@ void audio_out_close(AudioOut *out);
  * vanish.
  *
  * ⚠️ A caller with a release to write — `audio_stream_stop()`'s 20 ms
- * `AUDIO_OSC_FADE_OUT` — must write it BEFORE swapping itself out, or the fade
- * lands behind the whole lead and the oscillator sounds at full amplitude
- * through the gap.
+ * `AUDIO_OSC_FADE_OUT` — must remove its fill FIRST and write the fade after,
+ * because `audio_out_write()` is refused while any fill is installed.  The price
+ * is that the fade lands one lead (~139 ms) behind the finger, with the
+ * oscillator at full amplitude until then; that is accepted, because the only way
+ * to cut the lead short is a reset, and the reset is the click.
  *
  * Returns 0, or -1 if the stream is not open.
  */

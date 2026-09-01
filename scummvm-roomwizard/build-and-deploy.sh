@@ -429,9 +429,18 @@ configure_build() {
         --enable-optimizations \
         --enable-vkeybd
     
-    # Add pthread support - use --whole-archive for static linking to ensure
-    # all pthread symbols are resolved (needed for ARM static cross-compilation)
-    echo "LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive" >> config.mk
+    # oss-mixer.cpp starts the service thread, so the link needs pthread: without any
+    # -lpthread it fails with undefined reference to pthread_create/pthread_join, measured
+    # 2026-09-01.  PLAIN -lpthread is the way to supply it.
+    #
+    # ⚠️ Never -Wl,--whole-archive -lpthread here.  Whole-archiving drags in glibc 2.31's
+    # pthread startup, which calls the 64-bit-time clock syscall that native_apps/CLAUDE.md
+    # names — unimplemented on this 4.14.52 kernel, so it gets -ENOSYS and dereferences a
+    # NULL VDSO pointer: SIGSEGV before main(), blank screen, no log.  An append of that
+    # form lived here and did not crash, because -static (the make line below) kept the
+    # hazard off; it was still the wrong way to get -lpthread onto the line, since the
+    # crash returns for anyone who builds this without -static.
+    echo "LIBS += -lpthread" >> config.mk
     
     # Verify CC and CXX are set correctly in config.mk
     CC_SET=$(grep "^CC " config.mk | head -1 || echo "")
@@ -703,8 +712,9 @@ APP
 # is satisfied by construction — ScummVM's own scummvm.ini is created on first run
 # by the device.
 #
-# ⚠️ ScummVM is GPLv2+.  Publishing this binary carries a corresponding-source
-# obligation; release.sh writes the offer into the bundle's NOTICE file.
+# ⚠️ ScummVM is GPL-3.0-or-later (scummvm/COPYING, and LICENSE.md agrees).  Publishing
+# this binary carries a corresponding-source obligation; release.sh writes the offer
+# into the bundle's NOTICE file.
 stage_bundle() {
     local dir="$1" n
 

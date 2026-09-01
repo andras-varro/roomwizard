@@ -542,3 +542,9 @@ tests/.sab-*
 
 # Build/deploy transcript redirects (a0ff5a8 committed one by accident)
 .build_out.txt
+# Session receipts: build/deploy/test transcripts redirected here because WSL /tmp does
+# not survive between wsl.exe calls.  ⚠️ A doc_check receipt must still go OUTSIDE the
+# repo — group D counts a receipt it can see.
+.deploy.txt
+.tone.txt
+.b36_build*.txt

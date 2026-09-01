@@ -4,8 +4,8 @@
  *
  * This host has no `<sys/soundcard.h>` (that spelling is the BSD/OSS-proper one),
  * but it does ship `<linux/soundcard.h>`, and the kernel's copy defines every one
- * of the eight OSS symbols `common/audio.c` names: SNDCTL_DSP_{SPEED,STEREO,SETFMT,
- * RESET,GETOSPACE}, SOUND_PCM_READ_{RATE,CHANNELS}, AFMT_S16_LE, and
+ * of the nine OSS symbols `common/audio.c` names: SNDCTL_DSP_{SPEED,STEREO,SETFMT,
+ * RESET,GETOSPACE}, SOUND_PCM_READ_{RATE,BITS,CHANNELS}, AFMT_S16_LE, and
  * `struct audio_buf_info`.  So the shim is a redirect, not a mock — the constants
  * and the struct layout are the real ones.
  *

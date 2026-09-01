@@ -171,6 +171,7 @@ typedef struct {
                                *   see audio_gen.h.  Never 0 on an open device.  */
     bool     available;       /**< false if /dev/dsp could not be opened           */
     bool     ch_warned;       /**< channel read-back already complained once       */
+    bool     fmt_warned;      /**< format read-back already complained once        */
     uint32_t sound_end_ms;    /**< Expected wall-clock end of current tone (ms)    */
     /* ── streaming theremin state: ONE oscillator, in audio_gen.h ── */
     AudioOsc osc;             /**< phase + frequency glide + amplitude ramp        */
@@ -310,9 +311,13 @@ void audio_close(Audio *audio);
  * ⚠️ **With the pump enabled this becomes "stop all voices", and it no longer
  * resets the ring** — resetting the ring is precisely what makes mixing
  * impossible, so up to AUDIO_PUMP_LEAD_MS of already-written tail still sounds.
- * The signature is unchanged because ~23 call sites use it, most of them as
- * `audio_interrupt(); audio_tone();` — which on the pump means "replace what is
- * playing", the same intent, without the ~50 ms DAC settle after it.
+ * ⚠️ **Never put it before an effect on the mix bus.** The seven games no longer
+ * call it at all — every mention left in them is a comment saying not to — and the
+ * only live callers are device_tools and hardware_test_gui, both still on the
+ * pre-continuous tone path.  On a bus it stops the OTHER voices, so an
+ * `audio_interrupt(); audio_tone();` pair does not mean "replace what is playing":
+ * it cuts whatever else was sounding, which for a game effect is a defect and not
+ * the intent the pair used to carry.
  */
 void audio_interrupt(Audio *audio);
 
