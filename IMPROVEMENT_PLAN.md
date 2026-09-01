@@ -241,337 +241,45 @@ poll — and keep the first announcement, which is genuinely useful.
 
 All userspace. No kernel work.
 
-### F1. Port audio from OSS to ALSA — open, **phase state in the table below**
+### F20. ScummVM oss-mixer.cpp becomes an adapter over the shared audio library — open
 
-⚠️ **The heading deliberately carries no phase number.** It used to, and each phase that closed retitled
-it and dangled every inbound link — seven of them at one close, all named by markdownlint's `MD051`. The
-state lives in the table instead, where updating it costs nothing.
+**The audio subsystem itself is DONE** — the mix bus, the continuous stream, the clip bank, the WAV
+beds, the per-game sound sets and the level all ship and are heard. Its device facts are
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) and its authoring rules
+`native_apps/CLAUDE.md` → *Audio*, *Mixing* and *Sound assets*; the ALSA port is **not planned**
+(`/dev/dsp` and `/dev/snd/pcmC0D0p` are the same PCM, so it buys latency and nothing else, and no
+latency symptom has ever been reported). What is left is structural.
 
-**Phases 0–3d and 8 are closed, and every measurement they produced is homed elsewhere**: the card, the
-four OSS bugs and the full `hw:0,0` constraint table in
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio), the library's authoring rules in
-`native_apps/CLAUDE.md` → *Audio* and *Mixing*, the adapter's parameters in
-`scummvm-roomwizard/CLAUDE.md` → *Audio*, and the per-phase narrative in
-`~/.claude/plans/tender-singing-cook.md`. Between them they built a host-tested generator, the mix bus,
-one shared continuous stream (`common/audio_out.{c,h}`), the level, `audio_tone()`'s recency guard, and a
-streaming sample voice — a WAV bed with effects over it, heard clean on `.188`. ⚠️ **None of them fixed
-the harshness two sustained sines make, and that is a RESULT rather than a shortfall**: the cause is
-analog, below both userspaces, and not ours to fix (below).
+**One implementation of each audio half, because more emulator ports are coming.** ScummVM carries its
+own OSS mixer and its own evdev input, duplicating a device half that `common/audio_out.{c,h}` and the
+mix bus already provide. Reduce `oss-mixer.cpp` to a thin adapter whose fill sits beside the one the
+library registers itself (the `AudioVoiceFill` contract in `common/audio.h`), so the next emulator
+adapts rather than reimplements. ⚠️ **The payoff is structural, not audible** — ScummVM audio is
+confirmed good on hardware (King's Quest and Full Throttle, 12–13 % CPU, OPL tempo correct), so this
+buys nothing a user can hear and must not be sold as a fix.
 
-| Phase | What it is | State |
-|---|---|---|
-| 4 | rebuild the device half on tinyalsa | **WON'T DO, operator's call 2026-08-31 — a footnote, not a target.** It buys LATENCY only (`lead=139ms period=46ms` in every counter line, against ~70 ms on three 23 ms periods), and **no latency symptom has been reported**: the paddle bounce is the most frequent sound in the repo and reads *"audible at an enjoyable level"*. ⚠️ **It removes a translation layer, not a driver** — `/dev/dsp` and `/dev/snd/pcmC0D0p` are the SAME PCM, so tinyalsa cannot reach different hardware behaviour; the layering and the shim's four bugs are [§3.4](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **not** the distortion's fix, and `aplay` already proved userspace is not where it lives |
-| 5 | **the games take the continuous stream, and their sounds become WAVs** | **CLOSED, ear half included** — ①②③⑤ 2026-08-24, ④ 2026-08-31, gated by `check-audio-pacing.sh`, `check-bed-files.sh` and `check-sound-assets.sh`. What ④ decided, and the three measurements behind declining its `fx_*` half, are below |
-| 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open |
-| 7 | the docs and the comments this makes stale | open |
+⚠️ **Two device-half defects belong to the adapter, and neither causes anything audible today.**
 
-⚠️ **The cause hunt is CLOSED, and the rule it produced is about CONTENT rather than source: an effect
-must be BROADBAND and transient, not a sustained pure tone, whatever it is made of.** *"Effects should be
-samples"* was the first wording and it misleads — a WAV of a sine distorts exactly like a generated one.
-The measurement that ended it (a pre-mixed two-sine WAV through the vendor's `aplay` — no mixer, no
-generator, no pump, a different userspace entirely — distorting identically) and the intermodulation
-mechanism are in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **Ten mechanisms are
-refuted by measurement and none may be re-raised**: the limiter, the mix bus, the generator (THD 0.00 %
-by DFT, against 42.9 % on a real square as that probe's positive control), the effective sample rate, a
-silent sample-format fallback, `/dev/dsp`-versus-ALSA as the *cause*, `WPOL_PUMP` dropping rendered
-frames, a chronically slow render loop, truncation in the write path, and analog overdrive as the *whole*
-story. ⚠️ **`clip == 0` was never evidence of a clean mix** — it proves int16 did not overflow, which a
-bounded limiter guarantees by construction, and the gate read PASS while the sound was destroyed.
-⚠️ **A pitch detector's number is not evidence here either**: 220 + 440 measures 220 Hz and a 523/659/784
-triad measures 131 Hz, because that triad is 4:5:6 — both arithmetic, not distortion. And identical
-frequencies started at different moments partially cancel, which `AudioVoice.delay` guarantees they are.
-⚠️ **Do not tune the generator for it**: a pitch tilt has *measured* support (1760 Hz at 2/6 against
-440 Hz at 3/6) and is still a comfort change rather than a fix, and it must not ship beside another audio
-change — that two-variable comparison is one this entry has already paid for once.
+- The emergency anti-underrun `write()` at `oss-mixer.cpp:298` ignores errors and partial writes.
+  **Delete the path rather than fix it** — the whole emergency loop is the second write loop the shared
+  library replaces.
+- `native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants, where `audio_out`
+  reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says `S16_LE`),
+  which is why it is a defect and not a cause.
 
-**Phase 5 — the games take the stream, and their effects become WAVs.** Five parts. ①, ②, ③ and ⑤ are
-BUILT and their ear checks CLOSED; ④'s music half is built, and its `fx_*` half is the only open work.
+⚠️ **The pre-continuous path does not die when the games leave it.** `device_tools`,
+`hardware_config` and `hardware_test` still play tones without a bus, so that path dies here at the
+earliest — do not assume the games' conversion already removed it.
 
-✅ **① The pump is on the continuous stream in all SEVEN games, and ② `brick_breaker`'s five during-play
-tones are audible at last — both verified on `.188`, both closed.** The three-line shape, `snake`'s
-exception to it and the reason it must be **CONT** rather than just PUMP live in `native_apps/CLAUDE.md` →
-*Mixing*, and `native_apps/check-audio-pacing.sh` enforces all three from `build-and-deploy.sh`. ⚠️ **A dry
-queue is counted even while the bus is SILENT**, so a small non-zero `starve` is not automatically an
-audible fault, and ⚠️ **the counter must be validated before a zero is believed** — three 1 s `SIGSTOP`s on
-a running game read `starve=3`. ⚠️ **The config gate was never ②'s cause and must not be re-raised**: `.188`
-carries a `/opt/games/rw_config.conf` with all three audio keys at `1`, and `config_audio_enabled()` defaults to `true`
-(`common/config.c:290`).
+⚠️ **Redeploy becomes all three components** the moment `oss-mixer.cpp` links the shared library,
+rather than the `native_apps`-only rule that holds today — `CLAUDE.md` → *Redeploy scope by changed
+file* has to change in the same commit, and ScummVM is the slow build.
 
-⚠️ **② also produced a diagnosis that is REFUTED by arithmetic, and re-raising it costs a session.** The
-interrupt-then-tone idiom does mean "stop ALL voices" on the bus and is gone from every game — but it is
-**not** why `audio_fail()` sounded wrong: that fanfare is 600 ms of cumulative delays and nothing can sound
-inside the window, so *"inaudible"* and *"very faint"* were one observation described twice, whose cause is
-the speaker's band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — which ③ fixes. ⚠️ **Do not re-request the overlap
-check; it is not constructible.** The removals stand on the RULE, whose home is `native_apps/CLAUDE.md` →
-*Mixing*. ⚠️ **Converting a game and dropping its idiom are two edits and the gate sees only the first** —
-`tetris` was on the bus for a day with its own sites
-intact. ⚠️ **`audio.h`'s comment still claims those sites mean "replace what is playing"**, which is wrong
-for an effect on a bus. Nothing counts a voice stopped early, so this is ear-only in both directions.
-✅ **The blocking sub-loop now services the bus — the regression ① left is CLOSED (2026-08-22).** The rule
-it produced has its home in `native_apps/CLAUDE.md` → *Mixing*; what belongs here is the ⏳ it leaves: the
-deferred `tetris` game-over fanfare, and the frozen fade and dry stream under `NEW HIGH SCORE!`, have not
-been HEARD fixed. Of the two candidate fixes the second won — one service slot on the library, filled by
-`audio_open()` — with one change to it: the slot is `ui_frame_service()` in `common/common.c` and the
-setter is declared **weak** in `audio.c`, so `audio.h` stays out of shared UI code and audio.c stays
-linkable without `common.o`, which four host tests and four sabotage harnesses depend on. No game changed a
-line and no signature moved.
-
-✅ **③ The four canned sounds are CLIP-BACKED, and it is the AUDIBILITY fix — built and deployed to
-`.188` 2026-08-21, unheard.** `audio_beep()`, `audio_blip()`, `audio_success()` and `audio_fail()` each
-try a recorded clip and fall back to their note table, so ~45 call sites upgraded without an edit and a
-device with no sound files still makes every sound. ⚠️ **The claim that this speaker "cannot do 220 Hz" is
-still REFUTED and must not be re-raised** — [§3.4](SYSTEM_ANALYSIS.md#34-audio) records 220 Hz as *"clearly
-a square wave"*: reproduced, and badly shaped. What is real is the ROLL-OFF: at the shipped level the
-speaker falls away sharply below ~700 Hz and is inaudible at viewing distance below ~300, every sound ever
-reported clear is ≥ 880 Hz and every one reported faint is ≤ 500 Hz — and the operator reported
-`audio_fail()` (392/330/262 Hz) *still inaudible under a music bed* on 2026-08-21, which is the third
-report of the same thing. ✅ **So the fix is CONTENT and nothing else**: the four stock clips are broadband
-and land inside the passband (`fx_click` 900→1500, `fx_pickup` 1200→3200, `fx_success` 700→4200, `fx_fail`
-1800→420 Hz), no pitch is retuned and no level is raised. ⚠️ **There is no headroom to raise anyway** —
-that same session produced `clip=126`, the first non-zero clip ever measured here.
-
-✅ **③'s listen is DONE (2026-08-24): every canned sound was heard against the real `/opt/sound` files.** The
-mixer's 10 ms attack / 20 ms release still lands on a clip and `audio_mix_add_sample()` derives both from the
-total length with no override — no softened transient was reported, so it is a note, not an item.
-
-**How it is built, and the one design decision inside it.** A clip is loaded WHOLE into RAM and handed to
-one of `AUDIO_CLIP_VOICES` (4) instances that each carry their own cursor — ⚠️ **RAM is a CURSOR decision,
-not a memory one**: `audio_sfx_play()`'s single streaming voice must refuse a retrigger because its
-`AudioWav` *is* the live voice's `ctx`, which for a game firing brick hits in bursts is a refusal on nearly
-every hit. It costs no mixer change (a clip is just another `AudioVoiceFill`) and the bed still STREAMS.
-⚠️ **`AUDIO_CLIP_MAX_FRAMES` is the guard that matters** — the paths are config strings, so
-`fx_fail=/opt/sound/officerunner1-mono.wav` would otherwise `malloc` 7.8 MB inside a tap. A miss is permanent per
-process (missing files are NORMAL, F19); `audio_fx_set_path()` defers the old PCM's free to the next
-trigger, because a voice may still be reading it. ⚠️ **The clips must be DEPLOYED or ③ is inert** —
-`native_apps/build-and-deploy.sh` uploads `sounds/fx_*.wav` to `/opt/sound` on both the online and the
-bundle path.
-
-✅ **Covered, and the coverage was seen failing.** `tests/audio_tone_test.c` group I — the fallback when
-nothing is configured, the retrigger, independent cursors, a reused voice rewinding, the bounded pool
-falling back to notes, the permanent miss, the rate refusal, the ceiling, the deferred free, and one
-CONTENT assertion (a silent-headed fixture, because every other check reads a POSITION and a fill that
-replays the clip's head advances every position correctly). Passes on the host and prints the same lines on
-`.188` ARM. `tests/measure_audio_clip_sabotage.sh` is its negative control: eight sabotages, every one
-caught, none a NO-OP. ⚠️ **Two triggers of the same clip in ONE frame sit at identical offsets and sum
-COHERENTLY** — 2× amplitude, unlike two tones, which partially cancel because `AudioVoice.delay` guarantees
-different start moments. Group I pins it.
-
-✅ ④ **A per-game sound set — the MUSIC half SHIPPED and the `fx_*` half is DECLINED, on three
-measurements (2026-08-31).** The file is `/opt/roomwizard/soundsets/<tag>.sound`, INI, one generator on
-disk (`native_apps/sound-sets.sh`); ⚠️ **that table is the ONE home and C derives nothing** — a game passes
-only its tag, the track count is however many numbered keys the file carries, no file means no music. Host
-coverage: `tests/audio_bed_test.c`. ⚠️ **Do not re-propose per-game `fx_*` keys.** The motive was the key
-ceiling and it is SPENT (worst case 6 system + 11 `fx_*` against `CONFIG_MAX_KEYS` 32, `common/config.h`);
-`fx_*` is ROLE-data shared by all seven games, so seven files would give one fact seven homes; and
-`check-sound-assets.sh`'s claim check greps `FX_DEFAULT_PATH` in `common/audio.c`, so generated set files
-would re-open the `orphan=6` bug class invisibly. The override users need already exists — a global
-`fx_<name>=` key (`native_apps/CLAUDE.md` → *Sound assets*).
-
-✅ **⑤ Per-game, per-level sound as data — BUILT, and the EAR half CLOSED on 2026-08-24.** Heard on `.188` and
-corroborated in `app_stdout.log`: the playlist advances on level complete (`officerunner1` → `officerunner2`,
-each `0 consumed`), a death HOLDS and a respawn resumes at the SAME FRAME (`stop … 184320 frames into pass 0`
-→ `resume … 184320 consumed`), `fx_gameover` is distinguishable from `fx_fail`, the bed fades before `NEW HIGH
-SCORE!` opens, and both toggles silence a game and read back after `SAVE` + relaunch. ⚠️ **All seven games
-closed at `clip=0 lim=0 lost=0 drop=0`**, the measurement behind `AUDIO_MIX_HARD` adding no nonlinearity at
-the shipped `vol`; `starve` is small and nonzero, and a dry queue counts while the bus is SILENT.
-
-- ✅ **The music stops between levels, and stops on a death.** `audio_bed_service()`'s `want_play` is now
-  `SCREEN_PLAYING` alone and its `want_hold` gained `PSTATE_DYING`, which buys both requests with no new
-  state: level-complete releases the bed (so `audio_success()` plays over near-silence) and IDLE then starts
-  the next track, while a death **holds** it and a respawn **resumes** the same track mid-bar. ⚠️ **Hold
-  versus stop is exactly the difference between "the music continues" and "the level restarts its music"**,
-  which is the thing the request turned on — and a resume does not advance the playlist, so losing a life
-  cannot skip a track.
-- ✅ **Tracks are a PLAYLIST, not a level map** (operator's call, 2026-08-22, after the per-level variant was
-  written). `platformer_music`, `platformer_music2` … `platformer_music6`, one path each, taken in turn on
-  every fresh bed start. ⚠️ **The deciding constraint is a hard limit, not a preference: `CONFIG_VAL_LEN` is
-  64 bytes and `/opt/sound/officerunner1-mono.wav` is 33**, so a comma-separated list holds ONE path and
-  cannot hold two. Numbered keys have no ceiling, give per-level music as a *consequence* (level 1 → track 1,
-  level 2 → track 2, level 3 → wrap) and survive a change to `MAX_LEVELS`. ⚠️ **Track 1 empty still means
-  silence for the whole game**, which preserves `platformer_music=` as the off switch it already was.
-  A refused path is marked failed **per track**, so one bad entry does not silence the good ones.
-- ✅ **`MUSIC` / `EFFECTS` live in `device_tools`' SETTINGS tab**, on the row below the `AUDIO ENABLED`
-  master they are subordinate to (`create_settings_ui()`; dimmed by `draw_settings()` when the master is
-  off, because with no device opened neither decides anything). Two keys, gated **in the library**, so **no
-  game needed an edit** — which functions, why BOTH must be gated for effects, and why the
-  `audio_init_unchecked()` bypass reads them TRUE are `native_apps/CLAUDE.md` → *Sound assets*; the
-  theremin's oscillator is deliberately not gated. ⚠️ **Why neither the games menu nor a pause modal, in
-  measurements rather than taste: `app_launcher.c`'s comment above `MAX_TILE_W`.** The tab's stack is
-  hand-placed from `CONTENT_Y`, so `create_settings_ui()` prints its bottom against `CONTENT_H` — measured
-  `+317 of 375` on `.188`, landscape.
-- ✅ **`AUDIO_FX_GAMEOVER` is a fifth canned sound, because losing one life and losing the RUN were the same
-  noise** and nothing told a player which had happened. It fires at the END of the death animation, where
-  the run is actually decided — `player_die()` cannot know yet. Its clip is the operator's own
-  `fx_gameover.wav` (sourced 2026-08-22), chosen over `fx_burst` **on a measurement**: in-band RMS
-  −10.61 dBFS at −0.93 dB band delta makes it the loudest-in-band file of the eleven, against burst's
-  −18.61 / −2.71. Its note-table fallback is 1046/880/784/740 Hz — every note above the knee, unlike
-  `audio_fail()`'s three, because a new fallback had no shipped history to preserve.
-- ✅ **`bed_service()` is EXTRACTED to `common/audio_bed.{c,h}` and all SEVEN games have a bed** (the six
-  whose files were committed and reaching nothing: `snake`, `tetris`, `pong`, `samegame` at 2 tracks,
-  `frogger` at 4, `brick_breaker` at 6). A game costs a tag and two per-frame predicates — the stem and the
-  count moved to the generator's table with ④. ⚠️ **C derives no path at all now**, which is why
-  `check-bed-files.sh` exists and why it grew the both-directions check: a mistyped stem there ships a
-  game that plays its effects in silence, and nothing else in the tree can see the difference. It also
-  counts beds reaching NO game, which nothing else did. **Receipts on `.188`: seven playlists, the
-  right first track and count each, a bus closing at `starve=0` bar one first-service, and a bed that STARTS
-  in all seven — heard 2026-08-24, one `music start` per launch in the log.**
-  ✅ **`brick_breaker`'s lost ball HOLDS the bed** (operator, 2026-08-23): `!game.ball_launched` in **both**
-  predicates, as `platformer`'s `dying` is, so a relaunch resumes mid-bar and the cursor does not advance.
-- ✅ **The six unclaimed effects have NAMES, and a gate counts the ones that do not** (2026-08-23).
-  `brick_breaker`'s five during-play sites and `platformer`'s jump played generated pitches while the files
-  `sounds/prompts.md` assigned to them sat deployed and unreferenced — `orphan=6` of eleven, measured.
-  ⚠️ **No content gate could see it**: format and energy are properties of the WAV, reachability of the C.
-  `check-sound-assets.sh` gained both directions (`orphan=0` now) with a decoy control in its header.
-  Fallback pitches were lifted ≥880 Hz keeping the author's order.
-- ✅ **Both ORDERING defects are fixed in all seven games, and both are now GATED.** The bed is serviced
-  ABOVE the redraw block (so a blocking name entry no longer plays over the music — reported as *"the end of
-  game keeps playing the music over the keyboard"*, and `want_play` was already right: only the position was
-  wrong), and `audio_gameover()` is reached from every game rather than `platformer` alone. The authoring
-  rule's home is `native_apps/CLAUDE.md` → *Mixing*; `check-audio-pacing.sh` carries both as obligations,
-  each with its own fixture control, and the pre-fix tree measures seven ordering failures and five missing
-  `audio_gameover()` against `fail=0 unchecked=0` today. ⚠️ `audio_gameover()` fires **instead of** `fail`,
-  never after: 1.19 s against 350 ms, and the two sum on the bus. ⚠️ **The converse is NOT gated and cannot
-  be** — "has lives" is not a text property, so that `audio_fail()` survives in exactly the three games that
-  have lives (`brick_breaker`, `frogger`, `platformer`) is review-and-ear only. ✅ Both are HEARD (operator, 2026-08-24).
-
-**Effect files are mono / 44100 / 16-bit — the mixer's internal format, so nothing converts at runtime.**
-⚠️ **The loader must WALK the chunks**: `data` is not at a fixed offset (`ffmpeg` writes a `LIST`/`INFO`
-chunk, putting it at byte 164 in the music beds against 36 in `asl_success.wav`, both measured), so a
-reader trusting the textbook 44-byte header feeds a version string to the mixer.
-
-⚠️ **The stock effects are SOURCED files, and `fx_gen.c` / `gen-sounds.sh` no longer produce what ships**;
-⚠️ **running `gen-sounds.sh` OVERWRITES them** with generated noise, silently — its header carries the
-warning. The generated set was heard as white noise on the panel *and* on a PC, so the device was never in
-question, and its own gate numbers said why: the four wired clips scored `sfm` 0.116–0.208 where its
-controls put a pure sine at 0.000 and white noise at 0.514–0.553.
-
-⚠️ **That gate ENFORCED the defect, and the mechanism was a measurement window.** `FX_SFM_MIN` is a *floor*
-on flatness and `sfm` is taken at the file's LOUDEST part, so raising the pitched `body` term moves that
-window onto the pitched attack and the gate then rejects a file most of which is still noise (`body`
-0.55 → `sfm` 0.024 REJECT; `q` 1.1 → 8 → 0.045 REJECT) — every change that restores pitch is refused by the
-shipped floor. ⚠️ **The deeper error is the property CHOSEN**: audibility on this speaker needs energy
-INSIDE the usable band ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), not spectral
-flatness — broadband meets the band requirement by accident while destroying pitch identity. ✅ **DECIDED
-2026-08-22: the gate is re-aimed at in-band energy and moved OUT of `fx_gen.c`**, which stays committed and
-MIT but produces nothing that ships.
-
-✅ **The replacement measurement is now a GATE, not a habit: `native_apps/check-sound-assets.sh`**, run from
-`build-and-deploy.sh` beside `check-arm-safe.sh` and `check-audio-pacing.sh`. It high-passes at 700 Hz and
-reports two different quantities per file — the **delta** (filtered RMS − file RMS: ~0 dB means the sound
-lives above the knee) and the **absolute in-band RMS** in dBFS (is what survives loud enough to carry over a
-bed) — plus `ffprobe` for mono / 44100 / 16-bit, because a wrong rate is refused in SILENCE. It blocks on an
-unusable file, warns on a weak one, and skips itself when `ffmpeg` is absent so a build host without it can
-still build.
-⚠️ **It validates its own instrument FIRST, with two OPPOSED controls, and reports the INSTRUMENT as broken
-rather than the files as good if they do not separate.** That is not ceremony: this measurement has produced
-a uniform reading three separate times — `ffmpeg -v error` suppresses astats' own report; `ebur128` needs
-400 ms / 3 s windows these effects do not have; and a grep window of `-A8` after astats' "Overall" line
-misses `RMS level dB`, which is ten lines further down. ⚠️ **Measured 2026-08-22, and it is the same family:
-`ffprobe -show_entries stream=sample_rate,channels,sample_fmt` returns the fields in the STREAM's order,
-not the order you listed** — so a positional read called all eleven correct files "wrong format" while
-printing their correct format on the same line. One `ffprobe` per field is the fix.
-⚠️ **The recorded control pair "−43.4 dB vs −0.1 dB" was TWO DIFFERENT QUANTITIES** and a gate asserting
-both as deltas would have failed its own control forever: −43.4 is the 200 Hz control's *absolute* filtered
-RMS (re-measured here as −42.89) and −0.1 is the 2 kHz control's *delta*. As deltas, measured on ffmpeg
-4.2.7 at `highpass=f=700`'s default 2 poles: **200 Hz → −21.82 dB, 2 kHz → −0.07 dB.**
-⚠️ **What the gate CANNOT hear**, stated so a green run is not over-read: in-band energy is an AUDIBILITY
-property, not an identity one, and **the retired generated set would have PASSED it** — broadband meets the
-band requirement by accident. Whether an effect sounds like the thing it is named after stays ear-only.
-Seen failing in both directions (a 200 Hz sine and a 48000/stereo file are both rejected; a 2 kHz mono one
-is not), which is the negative control this repo requires of a new check.
-
-✅ **The two weakest-in-band files are settled, and one settles by EAR against its own number.** `knock`
-measures −3.05 dB delta / −21.66 dBFS in-band, weakest of the eleven, and drives the most frequent sound in
-`brick_breaker` — yet the operator reports it *"audible at an enjoyable level"* (2026-08-24), so no
-re-sourcing is needed. ⚠️ **A WARN from `check-sound-assets.sh` is therefore a prompt to LISTEN, not a
-verdict**: in-band RMS ranks files, it does not predict audibility at the shipped level. `thud` is
-re-sourced. All eleven are peak-normalised to −0.3 dBFS, so no level lever remains either way.
-
-⏳ **`fx_fail` is LIMITED and it landed the intended 4 dB — deployed to `.188` 2026-08-31, unheard.**
-`alimiter=level_in=3` then an exact correction back to −0.3 dBFS peak takes in-band RMS **−16.14 → −11.87
-dBFS**, level with `click`'s −11.80. ⚠️ **Its band delta gets WORSE, −3.73 → −4.29 dB, and that is
-arithmetic rather than a defect** — the sub-knee sweep tail rises with everything else, and the existing
-`check-sound-assets.sh` WARN is unchanged in kind. A 700 Hz high-pass bought 0.16 dB, so filtering was never
-the lever. **Owed: one ear check that it is not a flat honk** (`level_in=6`, −11.08, staged in `build/`).
-
-✅ **The provenance question is CLOSED and `LICENSE.md` is its home** (settled 2026-08-23, once ElevenLabs
-answered): the eleven `fx_*.wav` are AI-generated on a **free** ElevenLabs account and carry **two**
-obligations — **not for commercial use**, and **attribution to `elevenlabs.io` is required**.
-⚠️ **That makes the effects the only content in this repository narrower than MIT**, and a commercial
-redistribution of the repo or of a release bundle must remove or replace them (harmless — every game falls
-back to its note tables). `release.sh`'s `NOTICE` carries both halves, since the two must agree.
-⚠️ **Do not widen either obligation from inference:** `LICENSE.md` holds the exact terms and the attribution
-line to reproduce.
-
-⚠️ **The BED stays STREAMING while the effects are RAM-resident, and not on cost grounds.** The whole effect
-set is ~0.06 % of free RAM (`.188`, `MemAvailable` 186,068 kB of 239,904 kB), but a cold read of
-`officerunner1-mono.wav` after `drop_caches` is **0.369 s** — so RAM-loading the larger bed would buy a ~0.46 s
-startup stall to replace a path already *heard clean*. It is one `AudioVoiceFill` either way, chosen per
-sound at load time, so this is reversible and needs no architecture.
-
-✅ **`platformer` (Office Runner) was the FIRST game to run a bed; since 2026-08-22 all seven do**, and the
-four-state machine behind them lives in `common/audio_bed.{c,h}` — every transition gated on
-`audio_music_active()` rather than a flag of its own, because a release takes frames to walk down and
-`PUMP: OFF` can clear the voice underneath it. Behaviour, keys and what the extraction cost are in ⑤ above.
-⚠️ **A refusal is permanent on purpose** — a missing file is a NORMAL case and a per-frame retry would fill
-`app_stdout.log` with one refusal every 33 ms. Verified as far as no-human verification reaches: each game
-starts clean over SSH with the launcher stopped (`cont=1`, `starve=0` bar one first-service on `tetris`), and
-the mechanism is covered on the host **and on ARM** — the panel listen is the table above's row 5 and it is what is owed.
-
-⏳ **`audio_music_pause()`/`audio_music_resume()` are new library surface, and "pause" here means
-release-and-hold.** Pause arms the same release as `audio_music_stop()` — a bed is never cut, that is a
-click — but keeps the file OPEN at its read position, and `sample_arm()` (split out of `sample_start()`)
-re-arms a voice over that same `AudioWav` **declaring only what is LEFT of the file**, so a resumed
-non-looping voice cannot outlive its data. Two consequences worth stating rather than rediscovering:
-⚠️ **the pump must keep running while a bed is held**, or the release never finishes and every resume is
-refused for the life of the process; and ⚠️ **a resume can skip up to one read-ahead buffer (~93 ms)**,
-because `wav.pos` counts what was READ, not what was heard. Both are inaudible in a bed and wrong for
-anything needing sample-exact continuation.
-
-✅ **`audio.c`'s sample half is covered where it was not, and each closure has a negative control.**
-`tests/audio_tone_test.c` groups G and H hold start/pause/resume/stop, the double-start and double-resume
-refusals, the remainder arithmetic, and `sample_live()`'s `(slot, gen)` read against a `PUMP: OFF` that
-clears the bus; group I holds the clip bank (③). All pass on the host and print the same lines on `.188`
-ARM. ⚠️ **Three sabotages were measured against G/H before it was believed** — a resume declaring the whole
-file again, a pause that closes the file, and a `sample_live()` that trusts its slot alone — 1, 2 and 9
-failures, the last being the one that would otherwise be silent; `tests/measure_audio_clip_sabotage.sh`
-does the same eight ways for group I. **Still uncovered: `audio_sfx_play()` and `sample_total_frames()`'s
-clamp against a 32-bit `long`** — the clamp needs a fixture too large for a host test to write, so it wants
-the modelled-truncation shape `tests/audio_gen_test.c` group A uses.
-
-✅ **The `CHORD` pad DOES put three simultaneous voices on the bus, measured by ear 2026-08-24, and what it
-measured is HEADROOM rather than the mixer.** With `PUMP` or `CONT` on the three sum coherently and the
-amplitude adds; with both off they play sequentially, the deliberate off-bus fallback. ⚠️ **Its
-`audio_pump_active()` branch is unreachable-false in the configuration that matters** — a CONT stream always
-has pending frames — so do not "fix" that predicate on the code alone. ⚠️ **At `LVL` 3/6 the chord DISTORTS
-and at 1/6 it does not**: `n` voices reach the int16 clamp at the unity threshold (`native_apps/CLAUDE.md` → *Mixing*) and the shipped
-`vol` is set for the ≤ 2 voices a game sums, so three is outside the envelope by construction — read `clip`
-before treating it as anything else. ⚠️ `lim` and `clip` accumulate across both halves of such an A/B, since
-`bus_reset()` alone zeroes them and it carries the limiter choice across: cycle `PUMP` between halves or
-neither counter is attributable to a position.
-
-⏳ **One device-half defect is left and it is the adapter's.** `oss-mixer.cpp:298`'s emergency
-anti-underrun `write()` ignores errors and partial writes; it is deleted rather than fixed, because the
-whole emergency path is a second write loop that the shared library replaces (phase 6). ⚠️ The format
-read-back hole is closed **only on the continuous path** — `audio_out` reads `SOUND_PCM_READ_BITS` and
-warns, while `audio.c:96` still discards `SNDCTL_DSP_SETFMT`'s granted value. ⚠️ **Phase 5 does not kill
-that path**, an earlier revision of this entry said it would: the games stop using it, but
-`device_tools`, `hardware_config` and `hardware_test` still play tones without a bus, so it dies at phase
-6 at the earliest. Measured not to be firing (`hw_params` says `S16_LE`), which is why it is a defect and
-not a cause. The microphone-as-input idea stays closed — there is no mic and no jack footprint.
-
-**Decisions taken by the operator:** tinyalsa linked **static** · **nothing shipped to the device**
-(neither `libasound` nor `/usr/share/alsa`) · **both** `native_apps` and ScummVM · **add real mixing** ·
-**one implementation of each audio half**, with `oss-mixer.cpp` reduced to a thin adapter because more
-emulator ports are coming · one mono generator feeding a stereo device, one conversion point at the write
-boundary — ✅ **and that duplication is measured, not assumed**: `SPKR1` sums L + R, so writing the same
-sample to both channels is right *and* the loudest option · **one tinyalsa for the whole repo**, ScummVM
-pointing at `../native_apps/arm-deps` rather than building a second copy, because zlib is built twice here
-and `LICENSE.md` carries both versions as a result · **`AUDIO_MIX_HARD` is the shipped limiter** (decided
-2026-08-20, fixed in `level_defaults()`, `tests/audio_tone_test.c` group F): at the shipped volume HARD
-applies no nonlinearity at all to the ≤ 2 voices a game sums, while SOFT's knee tracks ONE voice's peak
-and therefore bends every two-voice sum for nothing. The `LIM` pad keeps SOFT reachable on the panel.
-
+⏳ **Two loose ends, unrelated to the refactor.** `fx_fail` is limited and landed its intended 4 dB
+(in-band RMS −16.14 → −11.87 dBFS, level with `click`) but is **unheard** — deployed to `.188`
+2026-08-31, and one ear check is owed that it is not a flat honk. And `common/audio.h`'s comment still
+claims the interrupt-then-tone call sites mean *"replace what is playing"*, which is wrong for an
+effect on a bus; the sites themselves are gone from all seven games.
 ### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
 
 ⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
@@ -890,7 +598,7 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 ([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
-— this overlaps [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below). A2DP's
+— this overlaps [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open). A2DP's
 ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The controller half is
 much more likely to land than the audio half; do not sell them as one feature.**
 
@@ -1130,8 +838,7 @@ Three pieces of work:
    `tests/button_latch_test.c` (the once-per-process touch button latch — its group A drives the old
    `button_is_touched() && button_check_press()` idiom and asserts the second tap is swallowed),
    `tests/audio_gen_test.c` (the audio generator and the mix bus — arithmetic, the frame-aligned write
-   loop, the summed voices and the pump's pacing —
-   [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phases 2–3).
+   loop, the summed voices and the pump pacing).
    Build lines are in each file header; all are host gcc, so `build-and-deploy.sh` runs none of them.
    **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
    `config.c` / `ppm.c` parsers.**
@@ -1581,10 +1288,10 @@ patching the appended DTB, which needs no kernel source.
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) (ALSA) is DONE where a
-   player can hear it** — Phases 0–3d, 5 and 8 closed, 4 won't-do. What is left is Phase 6 (`oss-mixer.cpp`
-   reduced to an adapter, which is really a ScummVM refactor and carries the CPU% number) and Phase 7's
-   stale comments. Phase 6 costs panel time and a ~2 min ScummVM rebuild per iteration.
+1. **The audio subsystem is DONE where a player can hear it** — the mix bus, the continuous stream, the
+   clip bank, the beds and the per-game sound sets all ship and are heard, and the ALSA port is not
+   planned. What is left is [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open),
+   which is really a ScummVM refactor and buys nothing a user can hear.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
 3. **C10 before panel check #2** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.

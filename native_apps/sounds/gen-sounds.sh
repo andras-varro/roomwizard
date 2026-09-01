@@ -6,8 +6,7 @@
 # generator's output: its gate enforced "broadband and transient", the operator heard the result as white
 # noise on the panel and on a PC, and the property that actually matters is energy inside the speaker's
 # usable band rather than spectral flatness. Running this replaces every sourced clip with generated noise
-# and the loss is silent. See prompts.md for how the shipped set is authored and ../../IMPROVEMENT_PLAN.md
-# F1 Phase 5 ③ for the measurements and the open decision on whether to re-aim the gate or delete it.
+# and the loss is silent. See prompts.md for how the shipped set is authored.
 #
 # HOST ONLY. No device, no cross-compiler, no listen.
 #

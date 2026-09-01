@@ -1860,7 +1860,7 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     hw_leds_off();
     audio_init(&audio);
-    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+    /* The continuous stream.  One never-reset /dev/dsp writer, fed
      * from this render loop, and it implies the mix bus (../common/audio.h).
      * Two things follow: two sounds overlap instead of one cutting the other,
      * and a tone shorter than ~60 ms becomes audible at all — that floor is a

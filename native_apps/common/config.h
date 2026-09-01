@@ -29,8 +29,7 @@
  *
  * ⚠️ The fx_* paths deliberately stay GLOBAL, and this is the arithmetic that
  * permits it: with music moved out, a fully-populated global file is 6 system +
- * 11 fx_* = 17 keys, comfortably under 32.  Do not move them here — the reasons
- * are ../IMPROVEMENT_PLAN.md F1 Phase 5 ④.
+ * 11 fx_* = 17 keys, comfortably under 32.  Do not move them here.
  *
  * ⚠️ These two must agree with RW_SOUND_SET_DIR / RW_SOUND_SET_EXT in
  * native_apps/sound-sets.sh — ./check-bed-files.sh is the gate, because a
@@ -107,7 +106,7 @@ bool config_audio_enabled(const Config *cfg);
  * audio_enabled off means this process opens no device at all, so these two are
  * never consulted.  Both default true, so an old config file behaves as before.
  * Written by app_launcher's own screen; read by common/audio.c's audio_init()
- * and by nothing else (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤). */
+ * and by nothing else. */
 bool config_music_enabled(const Config *cfg);
 bool config_effects_enabled(const Config *cfg);
 

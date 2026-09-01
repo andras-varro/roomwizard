@@ -5,9 +5,8 @@
  * ⚠️ **This is an EXTRACTION, not a new design.**  Every rule below shipped in
  * `platformer.c` first and was verified on `.188`; it moved here the moment a
  * second game wanted a bed, because ~140 lines of state machine copied twice is
- * where the two copies drift (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ⑤).  The
- * beds for seven games are committed and deployed, and this is what lets them
- * reach a player.
+ * where the two copies drift.  The beds for seven games are committed and
+ * deployed, and this is what lets them reach a player.
  *
  * A game owns exactly three things and this file owns the rest:
  *   1. an `AudioBed` next to its `Audio`,

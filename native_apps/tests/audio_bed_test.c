@@ -1,7 +1,7 @@
 /*
  * audio_bed_test — the SOUND SET's resolution rules, on the host
  *
- * F1 Phase 5 ④.  A game's music paths used to be DERIVED in C from a stem and a
+ * A game's music paths used to be DERIVED in C from a stem and a
  * count each game passed to audio_bed_init(); they now live in one place, the
  * per-game set file that native_apps/sound-sets.sh generates, and the C side
  * derives nothing.  That moved four rules out of "obvious" and into "asserted":

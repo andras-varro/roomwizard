@@ -11,7 +11,7 @@
 # plays its effects with no music: exactly what a game with no bed at all sounds
 # like.  Nothing else in the tree can see the difference.
 #
-# Since F1 Phase 5 ④ the paths live in ONE home — sound-sets.sh's RW_SOUND_SETS —
+# The paths live in ONE home — sound-sets.sh's RW_SOUND_SETS —
 # and the C side derives nothing, so this gate no longer reads a convention out
 # of a call site.  It reads the table, and checks FIVE things:
 #

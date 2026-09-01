@@ -746,7 +746,7 @@ int main(int argc, char *argv[]) {
     hw_init();
     hw_set_backlight(100);
     audio_init(&audio);  // Initialize audio (non-fatal if unavailable)
-    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+    /* The continuous stream.  One never-reset /dev/dsp writer, fed
      * from this render loop, and it implies the mix bus (../common/audio.h).
      * Two things follow: two sounds overlap instead of one cutting the other,
      * and a tone shorter than ~60 ms becomes audible at all — that floor is a
@@ -759,9 +759,9 @@ int main(int argc, char *argv[]) {
     audio_cont_enable(&audio, true);
 
     /* The music bed: the playlist named by /opt/roomwizard/soundsets/pong.sound,
-     * with the four states and the hold/resume rules in common/audio_bed.c
-     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
-     * file means no music, and pong_music present but EMPTY is the off switch. */
+     * with the four states and the hold/resume rules in common/audio_bed.c.
+     * ⚠️ That file is the ONLY home for the paths — no set file means no music,
+     * and pong_music present but EMPTY is the off switch. */
     AudioBed bed;
     audio_bed_init(&bed, &audio, "pong");
     

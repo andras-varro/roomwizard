@@ -702,13 +702,13 @@ static void kill_frog(DeathType cause) {
 
     start_led_effect(2);
     /* ⚠️ **The RUN ending and ONE life ending must not be the same noise** —
-     * that is the whole reason audio_gameover() exists (../IMPROVEMENT_PLAN.md
-     * F1 Phase 5 ⑤), and this site played audio_fail() for both.  frogger is the
-     * only one of the seven games with LIVES, and unlike platformer's
-     * player_die() it already knows which happened — state.lives is decremented
-     * two lines up — so it branches HERE rather than deferring to the end of the
-     * death animation.  It fires INSTEAD of fail, never after: fx_gameover is
-     * 1.19 s against fail's 350 ms and the two would sum on the bus.
+     * that is the whole reason audio_gameover() exists, and this site played
+     * audio_fail() for both.  frogger is the only one of the seven games with
+     * LIVES, and unlike platformer's player_die() it already knows which
+     * happened — state.lives is decremented two lines up — so it branches HERE
+     * rather than deferring to the end of the death animation.  It fires INSTEAD
+     * of fail, never after: fx_gameover is 1.19 s against fail's 350 ms and the
+     * two would sum on the bus.
      * Either sound lands over near-silence, because death_anim_active is the
      * bed's want_HOLD (see the main loop) for the whole animation. */
     if (state.lives <= 0)
@@ -789,10 +789,10 @@ static void handle_input(void) {
                 last_frame_ms  = get_time_ms();
                 /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
                  * that was here froze the panel for 100 ms from inside the input
-                 * handler — no touch poll, no redraw, and (since F1 Phase 5) no
-                 * audio_pump() either, which is a starved stream as well as a
-                 * dropped frame.  Effect 1 is this file's own 200 ms green
-                 * flash, serviced by update_led_effects() once per frame. */
+                 * handler — no touch poll, no redraw, and no audio_pump()
+                 * either, which is a starved stream as well as a dropped frame.
+                 * Effect 1 is this file's own 200 ms green flash, serviced by
+                 * update_led_effects() once per frame. */
                 start_led_effect(1);
             }
         }
@@ -1469,7 +1469,7 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     hw_leds_off();
     audio_init(&audio);
-    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+    /* The continuous stream.  One never-reset /dev/dsp writer, fed
      * from this render loop, and it implies the mix bus (../common/audio.h).
      * Two things follow: two sounds overlap instead of one cutting the other,
      * and a tone shorter than ~60 ms becomes audible at all — that floor is a
@@ -1481,9 +1481,9 @@ int main(int argc, char *argv[]) {
     audio_cont_enable(&audio, true);
 
     /* The music bed: the playlist named by /opt/roomwizard/soundsets/frogger.sound,
-     * with the four states and the hold/resume rules in common/audio_bed.c
-     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
-     * file means no music, and frogger_music present but EMPTY is the off switch. */
+     * with the four states and the hold/resume rules in common/audio_bed.c.
+     * ⚠️ That file is the ONLY home for the paths — no set file means no music,
+     * and frogger_music present but EMPTY is the off switch. */
     AudioBed bed;
     audio_bed_init(&bed, &audio, "frogger");
 

@@ -1,18 +1,17 @@
 /*
  * audio_mix_test — the mix bus, driven by hand
  *
- * F1 Phase 3 adds real mixing to `common/audio.c` through an optional per-frame
+ * `common/audio.c` does real mixing through an optional per-frame
  * `audio_pump()`.  Everything about it that is arithmetic is host-tested
  * (`tests/audio_gen_test.c`, groups I/J/K).  What no host can answer is whether
  * two sounds at once are AUDIBLE as two sounds on a 20 mm speaker that sums
  * L + R — and whether the ~60 ms minimum-tone rule survives a stream that is
- * never reset.  Both need an ear at the panel, so this is the tool for that trip
- * (../IMPROVEMENT_PLAN.md panel items 12 and 14).
+ * never reset.  Both need an ear at the panel, so this is the tool for that trip.
  *
  * ⚠️ **CONT is the outer toggle, and it is the negative control for the CLICK.**
  * With it OFF every button takes the per-sound-reset path — `audio_flush()`,
- * SNDCTL_DSP_RESET before every sound, one sound at a time — which is exactly F1
- * defect 3's *"every time there is a sound, there is a click"*.  With it ON the
+ * SNDCTL_DSP_RESET before every sound, one sound at a time — which is exactly the
+ * reported *"every time there is a sound, there is a click"*.  With it ON the
  * device is `common/audio_out.c`'s one never-reset stream instead.  So the control
  * is on the same panel, in the same session, one tap away: **a click that survives
  * CONT: ON is not the click this change removes.**
@@ -73,14 +72,14 @@
  *              then CONT ON.  Three numbers, and the rule is whichever of them still
  *              holds.  ⚠️ The rule is attributed to DAC start-up under the
  *              per-sound reset, so **CONT ON is the configuration that should
- *              abolish it** — a continuous feed has no start-up to wait for, and F1
- *              expects the floor to drop to ~5 ms.  Each stimulus is chosen by the
+ *              abolish it** — a continuous feed has no start-up to wait for, and
+ *              the floor is expected to drop to ~5 ms.  Each stimulus is chosen by the
  *              operator, so it is self-identifying by construction — no marker
  *              clicks needed.
- *   sample row `WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622` — F1 Phase 8, and
- *              **this row is the experiment the phase exists for.** Four causes of
+ *   sample row `WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622` — the sample voice,
+ *              **this row is the experiment it exists for.** Four causes of
  *              the two-voice harshness are refuted and the survivor is this speaker
- *              on sustained pure sine PAIRS (../IMPROVEMENT_PLAN.md F1). Every other
+ *              on sustained pure sine PAIRS. Every other
  *              pad here is a synthesised sine, so nothing above this row can test
  *              that. Tap `WAV 1`, let the bed settle, then tap `SFX` over it: same
  *              bus, same limiter, same delivery, different waveform. If that is
@@ -94,7 +93,7 @@
  *              is within 0.03 % of √2 — the tritone, minimum harmonic coincidence.
  *              ⚠️ **The bed needs the bus**: `audio_music_start()` refuses loudly
  *              with PUMP off, because a sample voice only exists on the mix bus.
- *              And the two music files are hand-copied, not in the repo (F19), so
+ *              And the two music files are hand-copied, not in the repo, so
  *              "cannot open" is a deployment fact rather than a code fault.
  *
  * ⚠️ **Two of this tool's INSTRUMENTS were lying and both are fixed (2026-08-20).
@@ -102,7 +101,7 @@
  *
  *   - **`CHORD` was an arpeggio.** Three back-to-back `audio_tone()` calls are
  *     consecutive statements, so `AUDIO_TONE_CHAIN_MS`'s recency gate read them as
- *     one motif and chained each behind the last. F1 carries "HARD vs SOFT was
+ *     one motif and chained each behind the last. A refutation says "HARD vs SOFT was
  *     inaudible, therefore clipping is refuted" — and that A/B was judged with this
  *     pad, which never put two voices on the bus at once. It is now three
  *     `audio_mix_add()` calls at delay 0 when the bus is on, with the queueing
@@ -131,7 +130,7 @@
  * overflow, and the soft limiter guarantees that by construction.  The limiter
  * waveshapes the sum instead, which IS harmonic distortion, and this tool once
  * read PASS on every counter while the operator heard every sum as "a big
- * distortion" (../IMPROVEMENT_PLAN.md F1 defect 3).  `lim` is the number to read
+ * distortion".  `lim` is the number to read
  * for that: large `lim` means the sum is being bent, whatever `clip` says.
  *
  * ⚠️ **Two of this tool's own numbers were WRONG until 2026-08-16, and both made
@@ -236,13 +235,13 @@ typedef enum {
  *
  * ⚠️ **The two music files are hand-copied and are not in the repo** — they
  * survive `device-files/clean-rules.conf`'s wholesale keep of `/opt/sound` but not
- * a fresh card (../IMPROVEMENT_PLAN.md F19). If a pad refuses with "cannot open",
+ * a fresh card. If a pad refuses with "cannot open",
  * that is the first thing to check, not a code fault.
  *
- * ⚠️ **`asl_success.wav` is the pad that answers phase 8's actual question.**
+ * ⚠️ **`asl_success.wav` is the pad that answers the actual question.**
  * Everything else on this panel is a synthesised sine, and the surviving
  * hypothesis for the two-voice harshness is this speaker on sustained pure sine
- * PAIRS (../IMPROVEMENT_PLAN.md F1 — four other causes are refuted). Sampled
+ * PAIRS (four other causes are refuted by measurement). Sampled
  * material over sampled material shares the bus, the limiter and the delivery
  * with the sine case and differs only in the waveform, so if SFX-over-bed is
  * clean the answer is "effects should be samples" and the question closes.
@@ -433,7 +432,7 @@ typedef struct {
     bool music_on;          /* the bed still owes frames — asked of the library  */
     long music_loops;       /* times it has WRAPPED, which is the number the loop
                              * seam is judged against: "I heard the join" is only
-                             * actionable beside a wrap count (F19)              */
+                             * actionable beside a wrap count                    */
     long lead_frames;       /* what the LIBRARY targeted, 0 = not measured yet */
     long period_frames;     /* the device period it was rounded up to           */
     uint32_t max_gap;       /* longest gap between two loop iterations, ms —
@@ -552,7 +551,7 @@ static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
                  line, (lead_ms > 0 && v->max_gap > (uint32_t)lead_ms)
                        ? RGB(255, 180, 60) : RGB(130, 140, 160), 1);
 
-    /* ⚠️ `bed` carries the WRAP COUNT, not just on/off.  F19's cheapest open
+    /* ⚠️ `bed` carries the WRAP COUNT, not just on/off.  The cheapest open
      * question is whether the loop seams, and "I heard the join" is only
      * actionable next to which wrap it was — the bed loops every ~44 s, so a
      * session produces several and they are otherwise indistinguishable. */
@@ -701,7 +700,7 @@ int main(int argc, char *argv[])
      * the interval whose harmonics coincide least (440x7 = 3080 against
      * 622x5 = 3110). Against DRONE 220 it is a tritone plus an octave. Sustained
      * at 3 s for the same reason the other two long pads are
-     * (../IMPROVEMENT_PLAN.md F1 — harmonic fusion is already refuted; this pad
+     * (harmonic fusion is already refuted; this pad
      * is what lets that refutation be re-run without borrowing CHORD).
      *
      * ⚠️ **`W STOP` is not `STOP`.** The toggle row's STOP is `audio_interrupt()`
@@ -938,7 +937,7 @@ int main(int argc, char *argv[])
                  * are consecutive statements, i.e. microseconds apart, so
                  * AUDIO_TONE_CHAIN_MS's recency gate saw a motif and CHAINED them:
                  * note 2 started behind note 1's tail and note 3 behind note 2's.
-                 * F1 carries "HARD vs SOFT was inaudible, therefore clipping is
+                 * A refutation says "HARD vs SOFT was inaudible, therefore clipping is
                  * refuted", and that A/B was judged with this pad — which never put
                  * two voices on the bus at once and so could not distinguish two
                  * limiters. `audio_mix_add()` with delay 0 is what a chord is.

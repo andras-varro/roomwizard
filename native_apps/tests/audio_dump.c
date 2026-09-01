@@ -30,7 +30,6 @@
  *   /tmp/audio_dump <outdir>
  *
  * Rules and the level model: ../CLAUDE.md → *Mixing*.
- * Open work: ../../IMPROVEMENT_PLAN.md F1.
  */
 
 #include <stdio.h>

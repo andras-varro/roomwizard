@@ -1,4 +1,4 @@
-/* oss_keepalive.c — Phase 0b probe for F1's continuous-stream unification.
+/* oss_keepalive.c — Probe for the continuous-stream unification.
  *
  * ONE question, objectively, with no ear involved: on a stream that is never reset,
  * HOW OFTEN must a render loop call the service function before the device runs dry?
@@ -78,7 +78,7 @@
 #define ROW_SECONDS  6
 
 /** The stall injected in the composite row, in ms.  This is the WORST FRAME the mix-bus
- *  tool actually measured on `.188` (../IMPROVEMENT_PLAN.md F1), not a round number. */
+ *  tool actually measured on `.188`, not a round number. */
 #define WORST_FRAME_MS  107
 
 /* ── The device, exactly as the library drives it ────────────────────────────── */
@@ -202,8 +202,8 @@ typedef struct {
     long waits;
     /** ⚠️ How much MORE queue GETOSPACE claims than the kernel does, at the same
      *  instant: `in_flight` from GETOSPACE minus `buffer_size - avail` from
-     *  /proc.  The shim counts the period it is still STAGING as already queued
-     *  (../IMPROVEMENT_PLAN.md F1, defect 2's mechanism), so the pump's effective
+     *  /proc.  The shim counts the period it is still STAGING as already queued,
+     *  so the pump's effective
      *  lead is the nominal one MINUS this.  It is the only number that explains
      *  why a 100 ms service interval starves a 139 ms lead. */
     long worst_stage_gap;
@@ -336,7 +336,7 @@ int main(void)
     }
 
     /* SPEED -> FMT -> CHANNELS, then believe only the read-backs.  CHANNELS rather than
-     * the deprecated STEREO (Phase 0: both grant identically here). */
+     * the deprecated STEREO (measured: both grant identically here). */
     int rate = 44100;
     ioctl(dsp_fd, SNDCTL_DSP_SPEED, &rate);
     int fmt = AFMT_S16_LE;

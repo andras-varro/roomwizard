@@ -1173,11 +1173,11 @@ static void update_game(void) {
 
         if (game.lives <= 0) {
             /* ⚠️ **The RUN ending and ONE life ending must not be the same
-             * noise** — that is the whole reason `audio_gameover()` exists
-             * (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤), and this game played
-             * `audio_fail()` for both, so a player could not hear which had
-             * happened.  It fires INSTEAD of fail, not after it: fx_gameover is
-             * 1.19 s against fail's 350 ms and the two would sum on the bus. */
+             * noise** — that is the whole reason `audio_gameover()` exists, and
+             * this game played `audio_fail()` for both, so a player could not
+             * hear which had happened.  It fires INSTEAD of fail, not after it:
+             * fx_gameover is 1.19 s against fail's 350 ms and the two would sum
+             * on the bus. */
             audio_gameover(&audio);
             game.screen = SCREEN_GAME_OVER;
             {
@@ -1800,7 +1800,7 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     audio_init(&audio);
 
-    /* The continuous stream — F1 Phase 5.  One never-reset /dev/dsp writer, fed
+    /* The continuous stream.  One never-reset /dev/dsp writer, fed
      * from this render loop, and it implies the mix bus (common/audio.h).  Two
      * things follow, and they are why a game wants it: two sounds overlap
      * instead of one cutting the other, and a tone shorter than ~60 ms becomes
@@ -1813,9 +1813,9 @@ int main(int argc, char *argv[]) {
     audio_cont_enable(&audio, true);
 
     /* The music bed: the playlist named by /opt/roomwizard/soundsets/brick_breaker.sound,
-     * with the four states and the hold/resume rules in common/audio_bed.c
-     * (F1 Phase 5 ④⑤).  ⚠️ That file is the ONLY home for the paths — no set
-     * file means no music, and brick_breaker_music present but EMPTY is the off switch. */
+     * with the four states and the hold/resume rules in common/audio_bed.c.
+     * ⚠️ That file is the ONLY home for the paths — no set file means no music,
+     * and brick_breaker_music present but EMPTY is the off switch. */
     AudioBed bed;
     audio_bed_init(&bed, &audio, "brick_breaker");
     srand(time(NULL));

@@ -1,7 +1,7 @@
 /*
  * tests/audio_sample_test.c — the sample voice, from the RIFF walk to the bus.
  *
- * F1 Phase 8 needs a mix-bus voice that plays a file, and the two things most
+ * The mix bus needs a voice that plays a file, and the two things most
  * likely to be wrong about it are invisible on the panel: WHERE the PCM starts,
  * and whether a streamed voice survives being rendered in pieces.  Both are
  * pinned here, on the host, before anything is deployed.
@@ -327,7 +327,7 @@ int main(void)
               "the rendered bus follows the source ramp");
     }
 
-    /* ── G. the full-bus rule, from F19's side ───────────────────────────── */
+    /* ── G. the full-bus rule, from the bed's side ───────────────────────── */
     printf("\nG. a full bus refuses a blip and never steals the bed\n");
     {
         AudioMixer m;

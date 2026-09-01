@@ -748,7 +748,7 @@ emulation, not the hardware. ALSA itself works correctly.
    ⚠️ note the PCM underneath is **stereo-only** (measured above), so what stays mono is the *shim's*
    view of it, with `SND_PCM_OSS_PLUGINS` converting below — *inference from the two measurements, not
    itself measured.* It is also why a buffer sized as interleaved stereo has never sounded wrong:
-   `native_apps` writes `frames * channels * 2B` — with the channel count read back, since F1 Phase 2 —
+   `native_apps` writes `frames * channels * 2B` — with the channel count read back —
    and the shim consumes exactly that.
    `SNDCTL_DSP_SPEED` may reset format and/or channels; `SNDCTL_DSP_SETFMT` may reset speed; and
    set-ioctl output values may not reflect actual device state. **Workaround:** set SPEED → FMT →
@@ -757,7 +757,7 @@ emulation, not the hardware. ALSA itself works correctly.
    channel count**. *Evidence:* at
    22050 Hz music played at half speed; at 48000 Hz it got proportionally worse (~4×), consistent
    with `_outputRate` not matching the real device rate. Working implementations:
-   `scummvm-roomwizard/backend-files/oss-mixer.cpp` and, since F1 Phase 2,
+   `scummvm-roomwizard/backend-files/oss-mixer.cpp` and
    `native_apps/common/audio.c`'s `configure_dsp()` — which reads the channel count back too, so no byte
    count in `native_apps` spells a channel count into a constant any more.
 4. **32-bit `time_t` overflow.** `sizeof(long) == 4`. Never compute
@@ -773,8 +773,7 @@ emulation, not the hardware. ALSA itself works correctly.
    away. Polled 14 × 40 ms, the cycle is `RUNNING → XRUN → RUNNING` about every **120 ms**, which is
    also the crack rate an operator counted by ear in a 3 s tone.
    **Consequence for any incremental writer here: measure the period and queue a whole number of them,
-   at least three.** `native_apps/common/audio_gen.c`'s `audio_pump_lead_frames()` is that rule;
-   `IMPROVEMENT_PLAN.md` F1 Phase 3 has the derivation.
+   at least three.** `native_apps/common/audio_gen.c`'s `audio_pump_lead_frames()` is that rule.
    ⚠️ **`GETOSPACE` over-reports what is really buffered by ~1.3 periods (~60 ms), so a nominal lead is
    worth that much less in real audio.** Measured `.188` 2026-08-18 by `native_apps/tests/oss_keepalive.c`,
    reading `GETOSPACE` and `/proc/asound/card0/pcm0p/sub0/status` at the same instant: `in_flight` stands

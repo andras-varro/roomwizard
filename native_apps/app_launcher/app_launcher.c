@@ -65,12 +65,11 @@
 /* ── The MUSIC / EFFECTS toggles are NOT here ────────────────────────────────
  * They were, as a band between the last tile row and the page dots, and they
  * moved to device_tools' SETTINGS tab under the `AUDIO ENABLED` master they are
- * subordinate to (../../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).  Two reasons, in
- * order: a games menu carrying settings widgets is a games menu doing a settings
- * tab's job, and this screen was then the only games-side WRITER of two keys
- * every game reads — so the launcher had to re-read the file before each write
- * to avoid reverting whatever device_tools had set in the meantime.  One writer
- * removes both problems.
+ * subordinate to.  Two reasons, in order: a games menu carrying settings widgets
+ * is a games menu doing a settings tab's job, and this screen was then the only
+ * games-side WRITER of two keys every game reads — so the launcher had to
+ * re-read the file before each write to avoid reverting whatever device_tools
+ * had set in the meantime.  One writer removes both problems.
  *
  * ⚠️ **Do not put them back here, and do not put them in a game's pause modal
  * either.** `MODAL_MAX_BUTTONS` is 4 and brick_breaker already uses all four;

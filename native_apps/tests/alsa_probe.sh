@@ -1,5 +1,5 @@
 #!/bin/sh
-# alsa_probe.sh - what will hw:0,0 actually grant us?  (IMPROVEMENT_PLAN.md F1, Phase 0)
+# alsa_probe.sh - what will hw:0,0 actually grant us?
 #
 # Runs ON THE DEVICE, needs nothing cross-compiled and nothing shipped: the vendor
 # image already carries alsa-lib 1.2.1.2 plus aplay/amixer/alsactl, and this aplay

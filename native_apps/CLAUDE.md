@@ -23,7 +23,7 @@ Guidance for writing code in this directory. Device facts live in
 on a flag, which goes stale. So a fresh clone deploys without a manual prerequisite step, which matters
 because `../deploy-all.sh` drives this script unattended. Run it by hand only when iterating on the dep
 itself; `--force` rebuilds. Today it builds exactly one library, **tinyalsa 2.0.0** (pinned), for the
-native-ALSA audio backend (`../IMPROVEMENT_PLAN.md` F1).
+native-ALSA audio backend.
 
 Three rules live in that script's comments and are pointers here, because getting any of them wrong is
 silent:
@@ -648,8 +648,7 @@ split to get there** — `tests/hostshim/sys/soundcard.h` redirects onto this ho
 ### Sound assets: sourced, gated, and two ways they fail without saying so
 
 `sounds/fx_*.wav` are **sourced files**, not generated — `sounds/fx_gen.c` and `gen-sounds.sh` are
-superseded and ⚠️ **running `gen-sounds.sh` overwrites them.** `sounds/prompts.md` is the authoring record;
-the reversal and its measurements are [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1 Phase 5 ③.
+superseded and ⚠️ **running `gen-sounds.sh` overwrites them.** `sounds/prompts.md` is the authoring record.
 ⚠️ **They are also the one thing in this repo that is not free for any use** — `../LICENSE.md` is the home
 for that, and it is a release concern, not an authoring one.
 
@@ -682,7 +681,7 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
 - ⚠️ **Every effect's path is already overridable per name — do NOT build a second mechanism for it.**
   `fx_config_apply()` in `common/audio.c` reads one `fx_<name>=` key per `AudioFxId` from
   `/opt/games/rw_config.conf` over `FX_DEFAULT_PATH`: an absent key keeps the stock clip, a **present but
-  empty** one selects the note table. A per-GAME variant was declined — `../IMPROVEMENT_PLAN.md` F1 ④.
+  empty** one selects the note table. A per-GAME variant was declined.
 
 ### Mixing: an optional per-frame pump
 
@@ -706,7 +705,7 @@ These rules, each of which is a way to get this wrong:
 - ⚠️ **The lead is measured in DEVICE PERIODS, never in milliseconds alone.** `audio_pump_lead_frames()` takes
   the period off the device, floors the lead at `AUDIO_PUMP_LEAD_PERIODS` (3) of them and rounds **up** (why
   three, and what a shorter lead sounds like: [§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5). ⚠️ **The lead
-  is also the latency ceiling** — ~139 ms on the shim's 46 ms period, which F1 Phase 4's 23 ms buys back.
+  is also the latency ceiling** — ~139 ms on the shim's 46 ms period; a client asking 23 ms buys that back.
 - ⚠️ **The level is `Audio::MixerImpl`'s, and its TWO knobs do different jobs.** A voice's loudness is a
   *fraction* of full scale — `audio_voice_peak(vol)`, ScummVM's `out = (in * vol) / 256` — and
   `AUDIO_PEAK` is derived from `AUDIO_VOICE_VOL`, not a second place to set it. **`vol` is HEADROOM**:
@@ -724,8 +723,8 @@ These rules, each of which is a way to get this wrong:
   the panel's `LIM` pad — bends every two-voice sum. ⚠️ **A knee is only correct while it tracks the voice
   amplitude**: one voice must pass byte-identical, so every volume change re-derives it
   (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
-  `clip == 0` is NOT evidence of a clean mix** — `../IMPROVEMENT_PLAN.md` F1 lists the ten mechanisms
-  measurement has already killed, and this is one of them.
+  `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which a bounded
+  limiter guarantees by construction, and a gate read PASS while the sound was destroyed.
 - ⚠️ **The pump targets a LEAD; it never writes into the free space** — an empty OSS ring would accept
   its whole 743 ms ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5) and put the next sound that late.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
@@ -760,8 +759,8 @@ These rules, each of which is a way to get this wrong:
 - **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.** `tests/audio_path_dump.c`
   renders the production fill through a file-backed `AudioOutDev` to a WAV — the bytes exonerated with no mic.
 - ⚠️ **The theremin and the pump cannot both own the ring** — `audio_stream_start()` refuses when it is on.
-- ⚠️ **A game wants CONT, not just PUMP, and all seven games now have it**
-  (`../IMPROVEMENT_PLAN.md` F1 Phase 5): the never-reset stream is what drops the minimum audible tone from
+- ⚠️ **A game wants CONT, not just PUMP, and all seven games now have it**:
+  the never-reset stream is what drops the minimum audible tone from
   ~60 ms to 5 ms, and `brick_breaker`'s 20–40 ms during-play tones were inaudible for the life of the
   game until it was turned on. ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
   serviced only on frames that drew is a stream with gaps in it. ⚠️ **`snake` is the exception to the
@@ -772,8 +771,8 @@ These rules, each of which is a way to get this wrong:
 - ⚠️ **Never `audio_interrupt()` before an effect on the bus — it means "stop ALL voices".** The idiom cost
   nothing when the kernel ring held exactly one sound; on the bus a 20 ms effect throws away a 600 ms
   fanfare that is still playing, and `samegame`'s removal blip against a level-clear fanfare is the
-  constructible case. ⚠️ **The measurement that first motivated the rule is REFUTED and the rule is not**
-  (`../IMPROVEMENT_PLAN.md` F1 Phase 5 ②). It is gone from all seven games, and **no counter sees it** — a
+  constructible case. ⚠️ **The measurement that first motivated the rule is REFUTED and the rule is not**.
+  It is gone from all seven games, and **no counter sees it** — a
   voice stopped early is not `lost`, `drop` or `clip`.
 - ⚠️ **The four canned sounds play a recorded CLIP when one is configured and their note table when not**,
   which is the audibility fix: every one of those tables is a sustained tone at or below the speaker's knee
@@ -835,5 +834,3 @@ grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v
 
 (`tests/ch_test.c`, `tests/oss_diag.c` and `tests/oss_play.c` also hit it — standalone OSS probes with no
 `Audio` at all, not in `build-and-deploy.sh`, build lines in their own headers.)
-
-Open work and the phasing: [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md) F1.

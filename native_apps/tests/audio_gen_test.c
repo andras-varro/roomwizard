@@ -1,7 +1,7 @@
 /*
  * audio_gen_test.c — the audio logic, on the host, with no device in it.
  *
- * F1 Phase 2 splits `common/audio.c` into a pure generator (`audio_gen.c`) and
+ * `common/audio.c` is split into a pure generator (`audio_gen.c`) and
  * the device half that stays behind.  Before this file existed, no audio logic
  * was host-testable at all: every buffer-fill was welded to its write().
  *
@@ -24,7 +24,7 @@
  *       does.  A test that just wrote the expression would pass and prove
  *       nothing.
  *   A3  the byte count is `frames * 4` with the 4 spelled out: the channel count
- *       is a literal that no code reads back from the device.  Phase 0 measured
+ *       is a literal that no code reads back from the device.  A probe measured
  *       hw:0,0 granting exactly 2, so today the arithmetic is ACCIDENTALLY
  *       right — and cannot express a device that grants anything else.
  *   A4  the freq/ramp/phase generator is duplicated as 2 + 1: the stream prefill
@@ -35,7 +35,7 @@
  *   A5  the shipped path CANNOT HOLD TWO SOUNDS.  `audio_beep()` is
  *       `audio_flush(); audio_tone();` and the flush issues SNDCTL_DSP_RESET, so
  *       a beep during a drone leaves the beep alone — zero frames of the drone
- *       survive.  Not a bug; the shape of the code, and what Phase 3's mix bus
+ *       survive.  Not a bug; the shape of the code, and what the mix bus
  *       has to beat.
  *   A6  three notes queued with no start offset are a CHORD, not an arpeggio.
  *       `audio_success()` is three notes at 45 call sites, so the voice `delay`
@@ -74,7 +74,7 @@
  * amplitude is now a runtime volume, and a parity check written against the
  * current default would quietly become an assertion that the level never moves.
  *
- * Groups I/J/K are Phase 3's mix bus: the sum and its single clamp (including
+ * Groups I/J/K are the mix bus: the sum and its single clamp (including
  * that SLOT ORDER cannot change the mix), voice lifetime (frees on its last
  * sample, silence past its end, delays, a full bus that refuses rather than
  * steals) and the pump's pacing — which targets a LEAD and must never simply
@@ -189,7 +189,7 @@ static long old_write_loop(Sink *s, const uint8_t *buf, long total)
     return written;
 }
 
-/* ⚠️ The amplitude the pre-F1 generators had SPELLED IN, and the one the parity
+/* ⚠️ The amplitude the original generators had SPELLED IN, and the one the parity
  * groups must use.  `AUDIO_PEAK` is now derived from a runtime volume, so a
  * parity check written against it would silently become a check that the current
  * default happens to equal the historical one — and would break every time the
@@ -277,7 +277,7 @@ static void old_tone_gen(int rate, int freq_hz, int16_t *mono, long frames)
  * `audio_beep()` is `audio_flush(); audio_tone();` and `audio_flush()` issues
  * SNDCTL_DSP_RESET, which DISCARDS whatever is still queued.  A tone is written
  * whole in one call, so there is no state in which two sounds coexist — not as a
- * bug, as the shape of the code.  That is what F1 Phase 3 exists to change, and
+ * bug, as the shape of the code.  That is what the mix bus exists to change, and
  * this is the model it has to beat.
  */
 #define OLD_RING_CAP 65536
@@ -768,7 +768,7 @@ int main(void)
         check(a[0] == 999 && a[63] == 999, "and leaves the caller's buffer alone");
 
         /* A full bus REFUSES.  It must not steal a playing voice: the longest
-         * one is the thing a dropped blip must never cut (F19's music). */
+         * one is the thing a dropped blip must never cut (the music bed). */
         audio_mix_init(&m, RATE);
         for (int i = 0; i < AUDIO_MAX_VOICES; i++)
             check(audio_mix_add(&m, 440 + 50 * i, 100, 0, AUDIO_PEAK) == i,

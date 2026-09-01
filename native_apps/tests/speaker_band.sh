@@ -2,7 +2,7 @@
 # Measure the LOW-FREQUENCY LIMIT of the RoomWizard's speaker, by ear, in pairs.
 #
 # ── Why this exists ─────────────────────────────────────────────────────────
-# F1 Phase 5's first panel listen (2026-08-20, `.188`) produced five ear results
+# The first panel listen (2026-08-20, `.188`) produced five ear results
 # that sort perfectly by frequency: 800–1500 Hz tones audible at 20 ms, 600 Hz
 # inaudible at 30 ms, 500 Hz faint at 60 ms, `audio_fail()`'s 392/330/262 Hz
 # silent.  That says the ~20 mm metal-can SPKR1 rolls off hard somewhere between

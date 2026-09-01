@@ -22,8 +22,7 @@
 #     and be inaudible at viewing distance.
 #
 # It REPLACES fx_gen.c's spectral-flatness gate, which enforced the wrong property
-# and rejected every change that restored pitch — the reversal and its numbers are
-# in ../IMPROVEMENT_PLAN.md F1 Phase 5 ③.
+# and rejected every change that restored pitch.
 #
 # ⚠️ **WHAT THIS GATE CANNOT HEAR, stated so nobody reads a green run as more than
 # it is:** in-band energy is an AUDIBILITY property, not an identity one.  The

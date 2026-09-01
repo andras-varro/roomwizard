@@ -163,7 +163,7 @@ misparses.
 | `common/audio.c`, `common/audio_gen.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM has its own OSS mixer |
 | `common/hardware.c`, `common/config.c`, `common/logger.c` | `native_apps` + `vnc_client` |
 | `common/framebuffer.c`, `common/touch_input.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one |
-| `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing, from F1 Phase 4 `native_apps`, from Phase 5 **all three**. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |
+| `native_apps/build-deps.sh` (the tinyalsa pin), or a wiped `native_apps/arm-deps/` | whatever links it — today nothing. `build-and-deploy.sh` rebuilds the dep itself; it does **not** relink a component you did not ask for |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
 | the three **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
 | `usb_host/devmem_write.c`, `build-xpad-module.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
@@ -192,7 +192,7 @@ tool-level traps rather than device facts, and each has cost real time.
   device.** `strings <device-binary> 2>/dev/null | grep -q <option>` in Git Bash prints nothing —
   because `strings` does not exist, not because the option is missing — so it reads as "the vendor's
   binary lacks that feature". Measured 2026-08-14: it said the shipped `aplay` had no
-  `--dump-hw-params`, which is the flag that made F1's whole Phase 0 need no cross-build at all.
+  `--dump-hw-params`, which is the flag that let a whole audio-probing phase skip the cross-build.
   **Use `grep -a` on the binary**, which works in both shells, and never route a capability question
   about a device binary through a tool whose absence looks like a negative result.
 - ⚠️ **`grep -c $'\r'` in Git Bash reports every line of the file, whatever its line endings.** The

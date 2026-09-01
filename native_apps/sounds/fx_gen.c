@@ -5,8 +5,8 @@
  * ⚠️ **The effects are GENERATED rather than sourced, and the reason is not the
  * obvious one.**  Two sustained sines played together on this speaker
  * intermodulate, harshly, and the cause is ANALOG — below both userspaces, not
- * ours to fix ([§3.4](../../SYSTEM_ANALYSIS.md#34-audio); the hunt is CLOSED,
- * ../../IMPROVEMENT_PLAN.md F1).  The rule it produced is about CONTENT rather
+ * ours to fix ([§3.4](../../SYSTEM_ANALYSIS.md#34-audio); the hunt is CLOSED).
+ * The rule it produced is about CONTENT rather
  * than source: an effect must be BROADBAND and TRANSIENT, whatever it is made
  * of — a WAV of a sine distorts exactly like a generated sine.  A downloaded or
  * AI-generated effect can be a sustained tone that lands straight back in that
@@ -40,7 +40,7 @@
  *   /tmp/fx_gen --self-test          # the gate's controls; writes nothing
  *   /tmp/fx_gen native_apps/sounds   # write (or re-roll) the stock set
  *
- * Authoring rules: ../CLAUDE.md → *Audio*.  Open work: ../../IMPROVEMENT_PLAN.md F1.
+ * Authoring rules: ../CLAUDE.md → *Audio*.
  */
 
 #include <math.h>
@@ -423,7 +423,7 @@ static int wav_write(const char *path, const double *buf, long frames)
  *
  * ⚠️ The first four names shadow the canned sounds audio_beep() / audio_blip() /
  * audio_success() / audio_fail() carry today, which is what lets every game
- * upgrade without editing a call site (../../IMPROVEMENT_PLAN.md F1 phase 5 ③).
+ * upgrade without editing a call site.
  * The frequency beside each is the tone it REPLACES — it is the centre of the
  * noise band now, not a pitch that is sounded.
  */

@@ -515,8 +515,8 @@ static int oss_open(void *ctx, int rate_req, int channels_req,
      * ioctls do (../SYSTEM_ANALYSIS.md#34-audio).
      *
      * ⚠️ SNDCTL_DSP_CHANNELS, never the deprecated STEREO ioctl: both grant
-     * identically here (measured, F1 Phase 0), and STEREO cannot express a
-     * request that is not 1 or 2 channels. */
+     * identically here (measured), and STEREO cannot express a request that is
+     * not 1 or 2 channels. */
     int val = rate_req;
     ioctl(*fdp, SNDCTL_DSP_SPEED, &val);
 
@@ -557,8 +557,8 @@ static int oss_open(void *ctx, int rate_req, int channels_req,
 
 /* ⚠️ No SETFRAGMENT.  Constraining the ring is what removed the jitter buffer the
  * pacing depends on; the shim grants 2048 frames per period and 16 periods for
- * every rate and channel count measured (F1 Phase 0), i.e. 743 ms at 44100 —
- * NOT the ~506 ms this repo believed for months. */
+ * every rate and channel count measured, i.e. 743 ms at 44100 — NOT the
+ * ~506 ms this repo believed for months. */
 static int oss_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
 {
     int *fdp = (int *)ctx;

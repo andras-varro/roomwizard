@@ -1,7 +1,7 @@
 /*
  * oss_play.c — play a WAV file through /dev/dsp using the SHIPPED write path.
  *
- * Why this exists.  F1 defect 3's fault 2 is the claim that the OSS path itself
+ * Why this exists.  One suspected fault is the claim that the OSS path itself
  * corrupts audio: the same 440 Hz tone is mild through the vendor's `aplay`
  * (ALSA direct) and a full square through our `/dev/dsp` writes.  Every earlier
  * comparison changed TWO things at once — the samples came from our generator on
@@ -74,7 +74,7 @@ static void sink_wait(void *ctx, int usec)
 }
 
 /* ── WAV reading ──────────────────────────────────────────────────────────────
- * Minimal RIFF walk.  Only what the F1 stimuli generator emits is accepted —
+ * Minimal RIFF walk.  Only what the stimuli generator emits is accepted —
  * PCM, 16-bit — and the file's own channel count is reduced to ONE by taking
  * the left channel, because the generator downstream of here is mono and
  * audio_interleave() is the single conversion point (../CLAUDE.md → Audio).
@@ -166,7 +166,7 @@ static void configure(int fd, int *rate_out, int *ch_out)
     *ch_out = (ioctl(fd, SOUND_PCM_READ_CHANNELS, &ch) == 0 && ch > 0) ? ch : 2;
 
     /* And the format, which production does NOT read back — the silent-failure
-     * hole recorded in F1.  Printing it here is how this probe answers whether
+     * hole.  Printing it here is how this probe answers whether
      * that hole is live on this device. */
     int gfmt = 0;
     if (ioctl(fd, SOUND_PCM_READ_BITS, &gfmt) == 0)

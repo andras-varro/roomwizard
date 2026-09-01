@@ -69,13 +69,13 @@ typedef struct {
 /* ── Recorded clips in RAM: what the four canned sounds are MADE of ──────────
  *
  * ⚠️ **A clip is RAM-resident because of the CURSOR, not because of the memory**
- * (operator, 2026-08-20; ../IMPROVEMENT_PLAN.md F1 Phase 5).  There is one
- * `AudioSampleVoice` for effects and its `AudioWav` *is* the live voice's `ctx`,
- * so `audio_sfx_play()` must refuse a second tap while the first sounds — which
- * for a game firing brick hits in bursts is a refusal on nearly every hit.  A
- * clip held in RAM can be handed to several voices at once because each gets its
- * own read position, and that costs no mixer change: `audio_mix_add_sample()`
- * already takes an `AudioVoiceFill`, so a clip is just a different `fill`.
+ * (operator, 2026-08-20).  There is one `AudioSampleVoice` for effects and its
+ * `AudioWav` *is* the live voice's `ctx`, so `audio_sfx_play()` must refuse a
+ * second tap while the first sounds — which for a game firing brick hits in
+ * bursts is a refusal on nearly every hit.  A clip held in RAM can be handed
+ * to several voices at once because each gets its own read position, and that
+ * costs no mixer change: `audio_mix_add_sample()` already takes an
+ * `AudioVoiceFill`, so a clip is just a different `fill`.
  *
  * The bed does NOT become one of these.  It streams, and that is measured rather
  * than assumed: a cold read of the 3.9 MB bed is 0.369 s, so RAM-loading it would
@@ -90,7 +90,7 @@ typedef struct {
     long     frames;          /**< what `pcm` holds                              */
     bool     tried;           /**< a load was ATTEMPTED.  ⚠️ A miss is permanent
                                *   for the process on purpose: the files can
-                               *   legitimately be absent (F19), and retrying per
+                               *   legitimately be absent, and retrying per
                                *   trigger would put one refusal per tap into
                                *   /var/log/roomwizard/app_stdout.log            */
     bool     reload;          /**< the path changed under it: `pcm` is the OLD
@@ -232,9 +232,9 @@ typedef struct {
                                *   gate an unrelated tap inherited a 3 s drone's
                                *   tail and mixing became a queue                   */
     /* ── recorded PCM: one bed and one effect, both streamed ────────────────
-     * TWO instances of one mechanism.  The bed is the LONGEST voice on the bus
-     * (../IMPROVEMENT_PLAN.md F19) and the effect is the shortest, which is the
-     * pair audio_gen.h's refuse-never-steal rule was written for.
+     * TWO instances of one mechanism.  The bed is the LONGEST voice on the bus,
+     * the effect the shortest — the pair audio_gen.h's refuse-never-steal rule
+     * was written for.
      */
     AudioSampleVoice music;   /**< the bed: long, usually looping                 */
     AudioSampleVoice sfx;     /**< one-shot recorded effect, over the bed         */
@@ -282,9 +282,9 @@ int  audio_init(Audio *audio);
  * For a hardware *test* that must be able to drive the speaker even when the
  * user has switched audio off in config — `device_tools` and `hardware_config`
  * both have such a tab, and both used to hand-roll the open, the three ioctls
- * and the GPIO12 poke themselves (../IMPROVEMENT_PLAN.md F1).  That duplication
- * is what this exists to remove; the bypass itself is deliberate, because
- * audio_init() would make the test obey the very setting it exists to test.
+ * and the GPIO12 poke themselves.  That duplication is what this exists to
+ * remove; the bypass itself is deliberate, because audio_init() would make the
+ * test obey the very setting it exists to test.
  *
  * ⚠️ Any other caller wants audio_init().  A struct filled by hand instead of
  * by one of these two leaves `channels` at 0 and goes SILENTLY mute.
@@ -387,7 +387,7 @@ int  audio_pump_voices(const Audio *audio);
  * asymptotes below full scale — so this is the negative control for the limiter
  * being engaged at all, not a loudness gauge.  It read **15402** on `.188`
  * 2026-08-15 with the hard clamp, which a panel heard as an overdriven square
- * wave (../IMPROVEMENT_PLAN.md F1 Phase 3). */
+ * wave. */
 uint32_t audio_pump_clipped(const Audio *audio);
 
 /** Samples the soft knee bent — the sum was louder than one voice can be.
@@ -466,16 +466,16 @@ uint32_t audio_pump_dropped(const Audio *audio);
  * ⚠️ **This exists to be MEASURED, and it is off by default.**  `audio.c`'s
  * ~60 ms minimum-tone rule is attributed to TWL4030 DAC start-up under the
  * SNDCTL_DSP_RESET regime; a stream that is never allowed to go idle would
- * remove it, and the "klack" heard between two Phase 0 playbacks is consistent
+ * remove it, and the "klack" heard between two playbacks is consistent
  * with that — but consistent-with is not measured.  It costs ~176 KB/s of
  * writes at 44100 Hz stereo, so it is not free either.  `audio_mix_test` has a
  * toggle for it beside a 5/10/20/40/60/100 ms tone row, which is what settles
- * the question by ear.  (../IMPROVEMENT_PLAN.md F1 Phase 3.) */
+ * the question by ear. */
 void audio_pump_set_keepalive(Audio *audio, bool on);
 
 /* ── The continuous stream ──────────────────────────────────────────────────
  *
- * F1 defect 3's fix.  `audio_flush()` fires SNDCTL_DSP_RESET before every canned
+ * The click fix.  `audio_flush()` fires SNDCTL_DSP_RESET before every canned
  * sound, so every game sound is a full stream stop and start and every boundary
  * is a DAI teardown that clicks — the operator's *"every time there is a sound,
  * there is a click"*.  `common/audio_out.c` is the device half that never resets;
@@ -516,7 +516,7 @@ int  audio_cont_enable(Audio *audio, bool on);
  *     `audio_gen.c` primitives, so its byte-equality result never covered the
  *     DELIVERY — the per-service chunking and the bus state carried across
  *     chunks.  A test that re-implements the fill would have the same hole.
- *   - F1 Phase 6, where ScummVM's adapter becomes another fill beside this one.
+ *   - a ScummVM adapter, which becomes another fill beside this one.
  */
 long audio_cont_fill_mix(void *ctx, int16_t *buf, long frames, int channels);
 
@@ -538,16 +538,16 @@ long audio_cont_service_interval_us(const Audio *audio);
  * All four signatures are unchanged; there are ~45 call sites.
  *
  * ⚠️ **Each is backed by a recorded CLIP when one is configured and loads, and
- * that is the AUDIBILITY fix** (../IMPROVEMENT_PLAN.md F1 Phase 5 ③).  Every one
- * of the four note tables is a sustained pure tone, and this speaker rolls off
- * sharply below ~700 Hz and is inaudible below ~300 at viewing distance
- * (../SYSTEM_ANALYSIS.md#34-audio): every sound ever reported clear is ≥ 880 Hz
- * and every one reported faint is ≤ 500 Hz — `audio_fail()`'s 392/330/262 Hz
- * included, reported *still not audible under a music bed* on 2026-08-21.  The
- * four stock clips are broadband and land inside the passband (`fx_fail` sweeps
- * 1800→420 Hz), so the fix is one of CONTENT: no pitch is guessed, no level is
- * raised — and there is no headroom to raise it into anyway, the first non-zero
- * `clip` count (126 samples) came from that same session.
+ * that is the AUDIBILITY fix**.  Every one of the four note tables is a
+ * sustained pure tone, and this speaker rolls off sharply below ~700 Hz and is
+ * inaudible below ~300 at viewing distance (../SYSTEM_ANALYSIS.md#34-audio):
+ * every sound ever reported clear is ≥ 880 Hz and every one reported faint is
+ * ≤ 500 Hz — `audio_fail()`'s 392/330/262 Hz included, reported *still not
+ * audible under a music bed* on 2026-08-21.  The four stock clips are broadband
+ * and land inside the passband (`fx_fail` sweeps 1800→420 Hz), so the fix is one
+ * of CONTENT: no pitch is guessed, no level is raised — and there is no headroom
+ * to raise it into anyway, the first non-zero `clip` count (126 samples) came
+ * from that same session.
  *
  * The note table is the FALLBACK, not the legacy: a device with no sound files,
  * or a bus that is off, still makes every one of these sounds.
@@ -624,13 +624,13 @@ bool audio_fx_play(Audio *audio, AudioFxId id);
 /**
  * Point one canned name at a different clip file, or at "" for the note table.
  *
- * The path a game names in its own config (../IMPROVEMENT_PLAN.md F1 Phase 5 ④)
- * arrives here.  ⚠️ **The clip loaded under the old path is freed at the next
- * TRIGGER, not here**, because a voice may be sounding it and the mixer holds the
- * pointer — freeing under a live voice is a use-after-free, not a silence.  So a
- * swap takes effect on the next trigger, and if the old clip is still sounding at
- * that moment the trigger falls back to the note table for that one tap.  Passing
- * the path already set is a no-op, so this is safe to call every frame.
+ * The path a game names in its own config arrives here.  ⚠️ **The clip loaded
+ * under the old path is freed at the next TRIGGER, not here**, because a voice
+ * may be sounding it and the mixer holds the pointer — freeing under a live
+ * voice is a use-after-free, not a silence.  So a swap takes effect on the next
+ * trigger, and if the old clip is still sounding at that moment the trigger
+ * falls back to the note table for that one tap.  Passing the path already set
+ * is a no-op, so this is safe to call every frame.
  */
 void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path);
 
@@ -677,9 +677,9 @@ bool audio_music_start(Audio *audio, const char *path, bool loop);
  * ⚠️ **It does NOT close the file or free the buffer**, and it must not: the
  * envelope walks the voice down to 0 over the following frames and the mixer
  * pulls from this exact `ctx` until it gets there.  Cutting instead would step
- * the summed bus by the bed's whole instantaneous amplitude — a click, which is
- * the defect F1 exists to remove.  `audio_music_active()` reads false once the
- * fade has finished, and that is when a restart is accepted.
+ * the summed bus by the bed's whole instantaneous amplitude — an audible click.
+ * `audio_music_active()` reads false once the fade has finished, and that is
+ * when a restart is accepted.
  */
 void audio_music_stop(Audio *audio);
 
@@ -726,9 +726,9 @@ bool audio_music_resume(Audio *audio);
  * ⚠️ **A second tap is refused while the first effect is still sounding**, because
  * there is ONE `AudioSampleVoice` for effects and its `AudioWav` is the live
  * voice's `ctx`: rewinding it under the mixer would make the effect jump rather
- * than retrigger.  This is the pad that answers phase 8's actual question —
+ * than retrigger.  This is the pad that answers the real question —
  * sampled material over sampled material, on a speaker that makes two sustained
- * sines harsh (../IMPROVEMENT_PLAN.md F1).
+ * sines harsh.
  */
 bool audio_sfx_play(Audio *audio, const char *path);
 

@@ -73,7 +73,7 @@ static void do_audio_test(void) {
      * setting it exists to test.  audio_init_unchecked() is that bypass, in ONE
      * place: this was a verbatim copy of device_tools.c's open + three ioctls +
      * GPIO12 poke, and a copy like that goes silently mute as soon as `Audio`
-     * gains a field it does not set (../IMPROVEMENT_PLAN.md F1). */
+     * gains a field it does not set. */
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
 

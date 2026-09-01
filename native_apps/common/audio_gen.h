@@ -7,7 +7,7 @@
  * Everything here is a pure function of its arguments: no fd, no ioctl, no
  * clock, no sysfs.  That is the whole point — it is the half of `audio.c` a
  * host regression can reach (`tests/audio_gen_test.c`), and the half that must
- * survive the OSS → ALSA port unchanged (../IMPROVEMENT_PLAN.md F1).
+ * survive the OSS → ALSA port unchanged.
  *
  * The device half — open/configure/write/close plus the GPIO12 amp poke —
  * stays in `audio.c` and moves to `audio_dev.c` when it becomes tinyalsa.
@@ -123,8 +123,8 @@
  * Three is the smallest depth that leaves a whole spare period *while* one is
  * being staged and one is playing.  ⚠️ **The lead is also the latency ceiling** —
  * at a 46 ms period this buys ~139 ms, which is the price of the OSS shim's
- * period size and is exactly what Phase 4 buys back (tinyalsa granted
- * `period_size=1024`, i.e. 23 ms, measured in Phase 0). */
+ * period size and is exactly what tinyalsa buys back (it granted
+ * `period_size=1024`, i.e. 23 ms, measured). */
 #define AUDIO_PUMP_LEAD_PERIODS  3
 
 /**
@@ -351,7 +351,7 @@ typedef long (*AudioVoiceFill)(void *ctx, int16_t *dst, long frames);
 /** What a voice is made of.  TONE is 0 so `memset`-zeroing a slot still yields
  *  the voice kind every existing caller creates. */
 typedef enum {
-    AUDIO_VOICE_TONE   = 0,  /**< sin(phase) — every voice before F1 Phase 8 */
+    AUDIO_VOICE_TONE   = 0,  /**< sin(phase) — a generated tone            */
     AUDIO_VOICE_SAMPLE = 1   /**< PCM pulled through an AudioVoiceFill       */
 } AudioVoiceKind;
 
@@ -468,8 +468,8 @@ void audio_mix_init(AudioMixer *m, int rate);
  * ⚠️ **A full bus REFUSES and counts (`dropped`); it never steals a voice.**
  * Stealing the oldest is what a synth does, and it is wrong here: the longest
  * voice on this bus is the one thing a dropped UI beep must not be allowed to
- * cut — background music (../IMPROVEMENT_PLAN.md F19) is a 44 s voice, and a
- * missing blip is far cheaper than a chopped soundtrack.
+ * cut — background music is a 44 s voice, and a missing blip is far cheaper
+ * than a chopped soundtrack.
  *
  * `peak <= 0` is a caller bug, refused WITHOUT counting a drop: `dropped` means
  * "the bus was full", which is the number worth watching.
@@ -511,10 +511,10 @@ int  audio_mix_add_sample(AudioMixer *m, AudioVoiceFill fill, void *ctx,
  *
  * ⚠️ **Not the same thing as clearing `active`, and the difference is audible.**
  * A voice cut mid-cycle steps the summed bus by its whole instantaneous
- * amplitude, which is a click — the very defect F1 exists to remove. This
- * shortens `frames` to `pos + release` instead, so the existing envelope walks
- * it down to exactly 0 and the slot frees itself in `audio_mix_render()` like
- * any other finished voice.
+ * amplitude, which is an audible click.  This shortens `frames` to
+ * `pos + release` instead, so the existing envelope walks it down to exactly 0
+ * and the slot frees itself in `audio_mix_render()` like any other finished
+ * voice.
  *
  * Identified by `(slot, gen)` like `audio_mix_voice_pending()`, so a stale
  * handle whose slot has been reused cannot stop somebody else's voice.

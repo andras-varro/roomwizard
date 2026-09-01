@@ -6,10 +6,10 @@
  *
  * The device is opened once, configured once, prefilled with silence and then
  * never reset and never reconfigured until shutdown.  That is the whole point:
- * F1 defect 3's click is a stream transition, and every canned sound used to be
- * a full stop and start of the DAI (`audio.c`'s per-sound ring reset).  Native
- * ALSA clicks at a transition too, so no userspace API avoids it — only not
- * stopping the stream does.
+ * a click is a stream transition, and every canned sound used to be a full stop
+ * and start of the DAI (`audio.c`'s per-sound ring reset).  Native ALSA clicks
+ * at a transition too, so no userspace API avoids it — only not stopping the
+ * stream does.
  *
  * This is not a design.  `scummvm-roomwizard/backend-files/oss-mixer.cpp` has
  * run exactly this — one open, prefill, deadline pacing, an arithmetic-shift
@@ -62,7 +62,7 @@
  * tabs.  `hardware_config.c` and `device_tools.c` play their speaker test tones
  * with **no render loop at all** — init, tone, `usleep`, tone, close — so nothing
  * would ever call `audio_out_service()` and the tones would sit in a callback
- * that is never invoked.  Measured objectively, not inferred: F1 Phase 0b.
+ * that is never invoked.  Measured objectively, not inferred.
  *
  *   mode 1, SERVICED    `audio_out_service()` from a render loop or an audio
  *                       thread.  Targets a lead; never sleeps.
@@ -96,10 +96,10 @@
  *
  * It is expressed as a fraction of the PERIOD because periods are the only unit
  * the shim moves in, and its period is 2048 frames at every rate and channel
- * count tested (F1 Phase 0).  ⚠️ The mechanism — how much is the staged period and
- * how much a stale `hw_ptr` — is NOT established, so treat the fraction as the
- * shape of the measurement rather than as a law, and re-measure it on tinyalsa
- * (F1 Phase 4) rather than carrying it across.
+ * count tested.  ⚠️ The mechanism — how much is the staged period and how much
+ * a stale `hw_ptr` — is NOT established, so treat the fraction as the shape of
+ * the measurement rather than as a law, and re-measure it on tinyalsa rather
+ * than carrying it across.
  *
  * ⚠️ **It is deliberately NOT subtracted from the in-flight figure.** Subtracting
  * it would make the library write more, deepening the queue and the onset latency
@@ -144,11 +144,11 @@ typedef struct {
 /**
  * `open` must report what the device GRANTED, never what was asked for.
  *
- * ⚠️ Reading the granted **bits** back is not optional and closes a latent hole
- * F1 records: `oss-mixer.cpp` already warns when the device is not 16-bit and
- * `audio.c` never looked, so a device that quietly granted another width would
- * have produced noise with no diagnostic anywhere.  All three read-backs go
- * through this one call so no client can forget one.
+ * ⚠️ Reading the granted **bits** back is not optional and closes a latent hole:
+ * `oss-mixer.cpp` already warns when the device is not 16-bit and `audio.c`
+ * never looked, so a device that quietly granted another width would have
+ * produced noise with no diagnostic anywhere.  All three read-backs go through
+ * this one call so no client can forget one.
  */
 typedef struct {
     int  (*open)(void *ctx, int rate_req, int channels_req,
@@ -240,7 +240,7 @@ int  audio_out_open(AudioOut *out, const AudioOutDev *dev, void *dev_ctx,
  * ⚠️ **`channels_req` is a per-client argument and must stay 1 for ScummVM.**
  * Forcing stereo doubles its mixer's work and its byte count on a core already
  * at ~32 % with Full Throttle.  The native path asks for 2 and is granted 2; the
- * speaker sums L + R, so that is also the louder of the two (measured, F1 Phase 0).
+ * speaker sums L + R, so that is also the louder of the two (measured).
  */
 int  audio_out_open_oss(AudioOut *out, int rate_req, int channels_req);
 
@@ -287,8 +287,8 @@ const char *audio_out_fill_owner(const AudioOut *out);
  * changes bits and the port would no longer be the thing that was verified on
  * the panel.  `shift = 0` is the identity and is what the native path uses,
  * because loudness is held IDENTICAL in this change — the level question is a
- * separate ear-verified follow-up (../IMPROVEMENT_PLAN.md F1), and confounding it
- * with the stream change is a mistake F1 has already paid for twice.
+ * separate ear-verified follow-up, and confounding it with the stream change is
+ * a mistake this work has already paid for twice.
  *
  * ⚠️ And this is not "one acoustic ceiling for every client": §3.4 measured that
  * a single global scalar is the wrong SHAPE, because the clean ceiling falls with
@@ -344,7 +344,7 @@ long audio_out_write(AudioOut *out, const int16_t *mono, long frames);
  * actually exists.  This subtracts that and keeps half a period of margin.  At
  * 44100 with the shim's 2048-frame period and a 3-period lead it comes out under
  * the 66 ms that was measured to survive with ~11 ms to spare, and well under the
- * 100 ms that starves ~2.5×/s (F1 Phase 0b).
+ * 100 ms that starves ~2.5×/s.
  *
  * ⚠️ **This is why `audio_pump_active()` stays in the frame-pacing decision.**
  * `FRAME_DELAY_IDLE_US` is 100 000 — above this figure at every configuration

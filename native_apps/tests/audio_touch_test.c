@@ -265,7 +265,7 @@ int main(int argc, char *argv[])
         touch_close(&touch); fb_close(&fb); return 1;
     }
     /* Audio.logger is gone: it was never read.  Streaming diagnostics go to
-     * stderr from audio.c (../IMPROVEMENT_PLAN.md F1). */
+     * stderr from audio.c. */
 
     /* Exit button — top-right */
     Button exit_btn;

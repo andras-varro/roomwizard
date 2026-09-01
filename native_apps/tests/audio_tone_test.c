@@ -1,7 +1,7 @@
 /*
  * audio_tone_test — audio_tone()'s CHAINING RULE, on the host
  *
- * F1 phase 3d.  The mix bus made "two sounds at once" possible, and then one line
+ * The mix bus made "two sounds at once" possible, and then one line
  * in `audio_tone()` quietly took it back for a whole class of sound: a new tone
  * defaults its start delay to the TAIL OF THE PRECEDING TONE, with no test of how
  * long ago that tone was issued.  So a tap 400 ms after `440 3s` was scheduled 2.6 s
@@ -446,7 +446,7 @@ int main(void)
     {
         /* ⚠️ Group I is the third subject in this file, here for the same reason
          * as F and G: this is the only host test that links `common/audio.c`.
-         * What it asserts is F1 Phase 5 ③ — that `audio_beep()` and friends play
+         * What it asserts is that `audio_beep()` and friends play
          * a recorded clip when one is configured, and their note table when one is
          * not.  The AUDIBILITY the clip buys is acoustic and ear-only; what is
          * checkable here is which voice kind ran, and that a clip can RETRIGGER
@@ -531,8 +531,8 @@ int main(void)
     {
         fd = mk_audio(&a);
         if (fd < 0) return 1;
-        /* A MISSING file is the normal case (the sound files are device-only,
-         * ../IMPROVEMENT_PLAN.md F19) and the refusal is permanent for the
+        /* A MISSING file is the normal case (the sound files are device-only)
+         * and the refusal is permanent for the
          * process: a per-trigger retry would fill app_stdout.log.  Creating the
          * file afterwards is the observable form of "it did not try again". */
         remove(CLIP_ABSENT);

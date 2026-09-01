@@ -3,7 +3,7 @@
  *
  * `common/audio_out.c` is the device half of the audio library: it opens the
  * device once, reads the GRANT back, prefills silence, and then never resets and
- * never reconfigures until shutdown.  That is F1 defect 3's fix — the click is a
+ * never reconfigures until shutdown.  That is the click's fix — the click is a
  * stream transition, and every canned sound used to be a full stop and start.
  * This drives all of it through the injectable `AudioOutDev` vtable, so the whole
  * file is reachable on the host and no test here opens anything.
@@ -276,7 +276,7 @@ static const AudioOutDev FAKE_DEV = {
 };
 
 /** 44100 / 2 channels / 2048-frame period / 16-period ring — the configuration
- *  `native_apps` is actually granted (F1 Phase 0, measured on `.188`). */
+ *  `native_apps` is actually granted (measured on `.188`). */
 static void fake_reset(Fake *f)
 {
     memset(f, 0, sizeof(*f));

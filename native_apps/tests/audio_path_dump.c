@@ -1,7 +1,7 @@
 /*
  * audio_path_dump — the DELIVERED bytes of the real continuous path, on the host
  *
- * F1 phase 8's first step, and the answer to a question three phases of mixer work
+ * The answer to a question earlier mixer work
  * could not settle: when two voices overlap, the operator hears harsh noise that a
  * LOUDER single voice does not produce.  Measured on RW .188, 2026-08-19:
  *
@@ -215,7 +215,7 @@ static void write_wav(const char *path, const int16_t *mono, long frames)
     /* A canonical 44-byte header, which is what a WRITER may assume.  ⚠️ A READER
      * may not: `/opt/sound/officerunner1-mono.wav` has `data` at byte 164 because ffmpeg
      * wrote a LIST/INFO chunk, while the vendor effects have it at 36.  The sample
-     * voice must walk the chunks — see F1 phase 8. */
+     * voice must walk the chunks. */
     fwrite("RIFF", 1, 4, f);      fwrite(&riff, 4, 1, f);
     fwrite("WAVEfmt ", 1, 8, f);  fwrite(&fmt_len, 4, 1, f);
     fwrite(&one, 2, 1, f);        fwrite(&one, 2, 1, f);

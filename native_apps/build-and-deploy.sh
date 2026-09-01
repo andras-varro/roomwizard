@@ -135,7 +135,7 @@ info "Compiler: $($CC --version | head -1)"
 echo ""
 
 # ── 1b. ARM dependencies ────────────────────────────────────────────────────
-# tinyalsa, for the native-ALSA audio backend (../IMPROVEMENT_PLAN.md F1).
+# tinyalsa, for the native-ALSA audio backend.
 # Guarded on the ARTIFACT, never on a flag or a marker file — a generated flag
 # goes stale and a stale one has already cost this project a build failure
 # (../CLAUDE.md, and ScummVM's build_arm_deps()).  Called from here rather than
@@ -173,17 +173,16 @@ step "17/36" "gamepad";      $CC $WARN -O2 -static -c common/gamepad.c         -
 COMMON_OBJ="build/framebuffer.o build/touch_input.o build/hardware.o build/common.o build/highscore.o build/keyboard.o build/audio.o build/audio_gen.o build/audio_out.o build/audio_wav.o build/audio_bed.o build/config.o"
 
 # audio_gen.o rides with audio.o and is not optional: audio.c calls into it for
-# every frame count, every byte count, the envelope and the write loop
-# (../IMPROVEMENT_PLAN.md F1 Phase 2).  Both are in COMMON_OBJ, so all 17
-# binaries that link the library get them; `backlight` links neither.
+# every frame count, every byte count, the envelope and the write loop.  Both are
+# in COMMON_OBJ, so all 17 binaries that link the library get them; `backlight`
+# links neither.
 #
 # audio_out.o joined them in Phase 2 and is not optional either: `audio.h`
 # includes `audio_out.h` and every `Audio` embeds an `AudioOut`, so the link
 # fails without it rather than degrading — which is the right failure.  ⚠️ It is
 # ALSO what makes `native_apps` the only component to redeploy for a change to
 # `common/audio*.c`: neither vnc_client (its Makefile's SRCS) nor ScummVM links
-# any of the three today, and ScummVM's own OSS mixer becomes a thin adapter over
-# this file only at F1 Phase 6.
+# any of the three today; ScummVM has its own OSS mixer.
 #
 # audio_wav.o joined in Phase 8 and is not optional either, for a DIFFERENT and
 # less obvious reason than audio_out.o's: `audio.h` includes `audio_wav.h` and
@@ -265,8 +264,7 @@ $CC $WARN -O2 -static -I. tests/touch_inject.c -o build/touch_inject
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
-# minimum-tone rule survives a stream that is never reset, need an ear at the
-# panel (../IMPROVEMENT_PLAN.md F1 Phase 3, panel items 12 and 14).
+# minimum-tone rule survives a stream that is never reset, need an ear at the panel.
 step "36/36" "audio_mix_test"
 $CC $WARN -O2 -static -I. tests/audio_mix_test.c $COMMON_OBJ -o build/audio_mix_test -lm
 
@@ -287,7 +285,7 @@ rw_write_app_manifests build/apps
 echo "  Wrote $(ls build/apps/*.app 2>/dev/null | wc -l) app manifest(s) → build/apps/"
 
 # The per-game sound sets, from sound-sets.sh's data and for the same reason: that
-# table is the ONE home for every game's music paths (F1 Phase 5 ④), and a path
+# table is the ONE home for every game's music paths, and a path
 # that drifted between this path and --bundle would install a game that plays
 # nothing.  ⚠️ Checked rather than assumed — rw_write_sound_sets counts what it
 # wrote, because its writer loop runs in a subshell and cannot report itself.
@@ -337,8 +335,8 @@ fi
 # A source check, not a binary one: an app that turns the mix bus on must also
 # service it every iteration and keep audio_pump_active() in its frame pacing.
 # Neither omission errors — the game runs and the sound has gaps in it — so this
-# is arithmetic rather than a rule to remember while F1 Phase 5 converts the
-# remaining games.  Runs on build-only too, for the same reason as the gate above.
+# is arithmetic rather than a rule to remember.  Runs on build-only too, for the
+# same reason as the gate above.
 if [[ -x ./check-audio-pacing.sh ]]; then
     ./check-audio-pacing.sh || err "Audio pacing check failed — refusing to deploy"
 else
@@ -352,8 +350,7 @@ echo ""
 # by clip_load() with the game falling back to its note table (so it sounds
 # unchanged), and energy below the speaker's ~700 Hz knee is not quiet but absent.
 # Neither is visible in a byte comparison, a screenshot or an md5.  It replaces
-# fx_gen.c's retired spectral-flatness gate, which enforced the wrong property
-# (../IMPROVEMENT_PLAN.md F1 Phase 5 ③).
+# fx_gen.c's retired spectral-flatness gate, which enforced the wrong property.
 #
 # ⚠️ **It does not block on a WEAK file, only on an unusable one**, and it skips
 # itself when ffmpeg is absent — a build host without ffmpeg must still build.
@@ -369,8 +366,8 @@ echo ""
 # the ONE home for a bed path, so a mistyped stem or a count one too high there
 # ships a game that plays its effects in silence — indistinguishable from a game
 # with no bed.  This is also the only thing that counts beds reaching NO game,
-# which is the state the tree was in while 18 of 24 were unreachable
-# (../IMPROVEMENT_PLAN.md F1 Phase 5 ⑤).  Cheap: it reads the repo, no ffmpeg.
+# which is the state the tree was in while 18 of 24 were unreachable.
+# Cheap: it reads the repo, no ffmpeg.
 if [[ -x ./check-bed-files.sh ]]; then
     ./check-bed-files.sh || err "Music-bed check failed — refusing to deploy"
 else
@@ -545,9 +542,8 @@ fi
 # Upload the generated effect clips → /opt/sound/
 #
 # ⚠️ Without these the four canned sounds fall back to their note tables, which
-# is a working device that has NOT had the audibility fix (../IMPROVEMENT_PLAN.md
-# F1 Phase 5 ③) — every one of those tones is at or below the speaker's knee.  So
-# this is not an optional asset step.
+# is a working device that has NOT had the audibility fix — every one of those
+# tones is at or below the speaker's knee.  So this is not an optional asset step.
 #
 # /opt/sound is where the music bed already lives and device-files/clean-rules.conf
 # keeps that directory wholesale, so a re-commission does not take them away.  They
@@ -687,8 +683,8 @@ echo ""
 #
 # Same shape as the manifests above and for the same reason: written to
 # build/soundsets/ during the build from sound-sets.sh's data, copied here, and
-# copied by --bundle.  ⚠️ These are not optional — since F1 Phase 5 ④ the C side
-# derives no bed path, so a device without them has seven games with no music.
+# copied by --bundle.  ⚠️ These are not optional — the C side derives no bed
+# path, so a device without them has seven games with no music.
 info "Installing sound sets..."
 ssh "$DEVICE" "mkdir -p $RW_SOUND_SET_DIR"
 scp build/soundsets/*.sound "$DEVICE:$RW_SOUND_SET_DIR/"

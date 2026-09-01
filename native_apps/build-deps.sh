@@ -2,12 +2,12 @@
 # Cross-build native_apps' ARM dependencies into arm-deps/.
 #
 # Today that is exactly one library: **tinyalsa**, for the native-ALSA audio
-# backend (../IMPROVEMENT_PLAN.md F1).  The OSS /dev/dsp shim it replaces needs no
-# library at all, so this script is new with F1 Phase 1 and has one consumer for
-# now — but two are planned: native_apps' own common/audio_dev.c (Phase 4) and the
-# ScummVM backend's alsa-mixer.cpp (Phase 5).  ScummVM already reaches into
-# native_apps/common/ for framebuffer.o and touch_input.o, so it will reach here
-# the same way rather than building a second copy.  ONE tinyalsa, one pinned
+# backend.  The OSS /dev/dsp shim it replaces needs no library at all, so this
+# script has one consumer for now — but two are planned: native_apps' own
+# common/audio_dev.c (Phase 4) and the ScummVM backend's alsa-mixer.cpp (Phase 5).
+# ScummVM already reaches into native_apps/common/ for framebuffer.o and
+# touch_input.o, so it will reach here the same way rather than building a second
+# copy.  ONE tinyalsa, one pinned
 # version, one LICENSE.md row.
 #
 # Usage:
@@ -144,7 +144,7 @@ assert_no_dl() {
 # `ar` is happy to archive objects with unresolved externals, and both the
 # ARM-safety gate and `nm -u` pass on an archive nothing can link against.  So the
 # subset decision is proven from both sides, at dep-build time, instead of
-# surfacing as a mystery in F1 Phase 4's first build.
+# surfacing as a mystery in a consumer's first build.
 assert_links() {
     local a="$1" inc="$2" tmp
     tmp="$(mktemp -d)"

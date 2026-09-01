@@ -125,9 +125,9 @@
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
 /* The init script that owns USB host mode, including the MUSB driver re-probe
- * that revives a port which came up dead (IMPROVEMENT_PLAN.md B32). The RESCAN
- * button forks this rather than writing MUSB sysfs from here — one copy of the
- * mechanism, and it is the copy that carries the warnings. */
+ * that revives a port which came up dead. The RESCAN button forks this rather
+ * than writing MUSB sysfs from here — one copy of the mechanism, and it is the
+ * copy that carries the warnings. */
 #define USB_HOST_INIT     "/etc/init.d/usb-host"
 #define PORTRAIT_FLAG_FILE  "/opt/games/portrait.mode"
 
@@ -483,7 +483,7 @@ static void do_audio_test(void) {
      * exists to test.  What used to be here was a hand-rolled copy of the
      * open, the three ioctls and the GPIO12 poke — a verbatim duplicate of
      * hardware_config.c's, which went silently mute the moment `Audio` gained
-     * a field neither copy set (../IMPROVEMENT_PLAN.md F1). */
+     * a field neither copy set. */
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
     audio_tone(&test_audio, 880, 200);
@@ -3000,9 +3000,9 @@ static void usb_close(AppState *s);   /* defined below; used by the recovery pat
  *
  * ⚠️ Recovery is TWO halves and this app only ever had the second.
  * usb_scan_devices() re-open()s /dev/input/event*, so it finds a node the kernel
- * has already created and cannot create one. On a port that came up dead
- * (IMPROVEMENT_PLAN.md B32) no node exists, so tapping RESCAN could never
- * satisfy the hint this very tab prints — "CONNECT A DEVICE AND TAP RESCAN".
+ * has already created and cannot create one. On a port that came up dead no
+ * node exists, so tapping RESCAN could never satisfy the hint this very tab
+ * prints — "CONNECT A DEVICE AND TAP RESCAN".
  * The missing half is a MUSB driver re-probe.
  *
  * ⚠️ The rebind is NOT reimplemented here. /etc/init.d/usb-host owns it, along

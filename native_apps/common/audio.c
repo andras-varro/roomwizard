@@ -52,7 +52,7 @@
  *  mono 44.1 kHz bed needs 88.2 KB/s, so throughput is 0.77 % and irrelevant;
  *  what is untested is per-read LATENCY inside the render loop, and a buffer
  *  comfortably larger than the device's 2048-frame period is what absorbs it.
- *  The counter to watch on the panel is `starve` (../IMPROVEMENT_PLAN.md F19). */
+ *  The counter to watch on the panel is `starve`. */
 #define AUDIO_SAMPLE_BUF_FRAMES  4096
 
 /** How many passes `loop` asks for.  ⚠️ **Not a sentinel and not "forever":
@@ -107,9 +107,9 @@ static bool audio_live(const Audio *audio)
  *
  * SNDCTL_DSP_STEREO is silently ignored on this hardware, which is exactly why
  * both the rate and the CHANNEL COUNT are read back afterwards: what the
- * driver granted is the only number the byte arithmetic may use.  Before F1
- * the channel count was the literal `2` in all four write paths, and `hw:0,0`
- * happening to grant 2 made that accidentally right.
+ * driver granted is the only number the byte arithmetic may use.  A hardcoded
+ * `2` in the write paths is only accidentally right, because `hw:0,0` happens
+ * to grant 2.
  */
 static void configure_dsp(Audio *audio)
 {
@@ -549,7 +549,7 @@ bool audio_pump_active(const Audio *audio)
      * serviced whatever the bus is doing, and the ceiling on how long a frame may
      * take is audio_cont_service_interval_us() — which is measured, and below
      * FRAME_DELAY_IDLE_US.  A loop that idles at 100 ms starves this device ~2.5
-     * times a second on its own (F1 Phase 0b, measured on `.188`). */
+     * times a second on its own (measured on `.188`). */
     if (audio->cont) return true;
     if (!audio->pumping) return false;
     /* Keepalive counts as active: it is a promise of continuous silence, and a
@@ -608,7 +608,7 @@ int audio_get_master_shift(const Audio *audio) { return audio ? audio->master_sh
 /** Scratch for one pump call, allocated once and kept.  The pump runs every
  *  frame, so a malloc/free pair per call is the one allocation in this library
  *  worth removing.  (write_mono()'s interleave buffer is the other one; it
- *  belongs to the write path Phase 4 rewrites.) */
+ *  belongs to the write path.) */
 static int16_t *pump_scratch(Audio *audio, long frames)
 {
     if (frames <= 0) return NULL;
@@ -625,7 +625,7 @@ static int16_t *pump_scratch(Audio *audio, long frames)
  * `audio_out.c` owns the fd, the geometry, the prefill, the attenuation stage and
  * the bounded drain.  What belongs in THIS file is only which mono source fills
  * it — so there is one implementation of the device half, and ScummVM's adapter
- * (F1 Phase 6) becomes another fill rather than another loop.
+ * becomes another fill rather than another loop.
  */
 
 /** The mix bus as a fill: render mono, expand to the granted channel count.
@@ -761,7 +761,7 @@ void audio_pump(Audio *audio)
      * a partial one it cannot see, which XRUNs every ~120 ms and DISCARDS the
      * staged audio — measured on `.188`, and the reason a mixed sound read as a
      * chopped square wave rather than as a level problem.  `fragsize` is the OSS
-     * name for that period; Phase 4 reads it from tinyalsa instead. */
+     * name for that period; tinyalsa calls it `period_size`. */
     long period = (long)info.fragsize / frame_bytes;
     long ring   = total_bytes / frame_bytes;
     long lead   = audio_pump_lead_frames(
@@ -953,8 +953,8 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
 /* ── Streaming (theremin) API ─────────────────────────────────────────────────
  * ⚠️ **Always the continuous stream — there is no old-path branch here.**  This
  * path used to bracket itself with two SNDCTL_DSP_RESETs and own the ring through
- * a chunk loop of its own, which is F1 defect 3's click twice per gesture; and its
- * only caller is `tests/audio_touch_test`, so no shipped game's sound changes.
+ * a chunk loop of its own, which clicked twice per gesture; and its only caller
+ * is `tests/audio_touch_test`, so no shipped game's sound changes.
  * audio_stream_start() therefore enters continuous mode itself, and the two write
  * policies that existed only for this path (WPOL_CHUNK, WPOL_PREFILL) are gone.
  */
@@ -1019,12 +1019,12 @@ void audio_stream_stop(Audio *audio)
         return;
     }
 
-    /* ⚠️ **Remove the fill FIRST, then APPEND the fade.**  This is the reverse of
-     * what F1's plan prescribed, and the prescription cannot work: the fade has to
-     * go through audio_out_write() (mode 2), which is refused while a callback is
-     * installed — and a fade rendered *through* the fill would be stretched to
-     * whatever that service happened to ask for, or skipped entirely, because a
-     * queue already at the lead is asked for ZERO frames.
+    /* ⚠️ **Remove the fill FIRST, then APPEND the fade.**  The other order cannot
+     * work: the fade has to go through audio_out_write() (mode 2), which is
+     * refused while a callback is installed — and a fade rendered *through* the
+     * fill would be stretched to whatever that service happened to ask for, or
+     * skipped entirely, because a queue already at the lead is asked for ZERO
+     * frames.
      *
      * ⚠️ The release therefore lands one lead (~139 ms) behind the finger, which is
      * a property of a stream that is never reset rather than a bug: the alternative
@@ -1065,8 +1065,8 @@ void audio_stream_stop(Audio *audio)
  *
  * ⚠️ **The point is AUDIBILITY, and the change is CONTENT** — see audio.h's
  * convenience-sounds block for the band measurement that makes a pure tone the
- * wrong signal on this speaker, and ../IMPROVEMENT_PLAN.md F1 Phase 5 ③ for why
- * no pitch is retuned and no level is raised in the same edit.
+ * wrong signal on this speaker.  No pitch is retuned and no level is raised
+ * in the same edit, so an ear verdict names one variable.
  *
  * ⚠️ **The cursor is why these live in RAM.**  `audio_sfx_play()`'s one streaming
  * voice must refuse a retrigger while it sounds, because its `AudioWav` IS the
@@ -1091,8 +1091,8 @@ static const char *const FX_DEFAULT_PATH[AUDIO_FX_COUNT] = {
      * id.  ⚠️ Chosen over `fx_burst` on a MEASUREMENT, not on the name: in-band
      * RMS −10.61 dBFS at delta −0.93 dB makes it the loudest-in-band file of the
      * eleven, where burst is −18.61 / −2.71.  The most important sound in a game
-     * should not be one of its quietest (../IMPROVEMENT_PLAN.md F1 Phase 5 ③;
-     * `../check-sound-assets.sh` is what re-measures this). */
+     * should not be one of its quietest (`../check-sound-assets.sh` is what
+     * re-measures this). */
     "/opt/sound/fx_gameover.wav",  /* GAMEOVER */
     /* The six during-play names.  ⚠️ **This column is `../sounds/prompts.md`'s
      * "game event" column, not a choice made here** — each file was sourced for
@@ -1487,12 +1487,12 @@ void audio_jump(Audio *audio)
  * it pulls through an `AudioVoiceFill`, and the thing on the far end of that
  * callback is `common/audio_wav.c` with its `FILE *` living in the
  * `AudioSampleVoice` below.  That split is what keeps the mixer host-testable
- * with no shim (../IMPROVEMENT_PLAN.md F1 Phase 8).
+ * with no shim.
  *
  * Shaped after play_sequence(), NOT after audio_tone(): there is no
  * `last_tone_*` recency state here and therefore no wall-clock branch, so a
  * harness with a clock of its own cannot make this code take a different path
- * from the one being claimed — the trap that cost the Phase 3d test a rewrite.
+ * from the one being claimed — the trap that cost an earlier test a rewrite.
  */
 
 /** Ceiling on a looping bed's declared length, in frames.  Safely under a

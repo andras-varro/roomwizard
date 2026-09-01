@@ -1,8 +1,7 @@
 #!/bin/bash
 # Pre-deploy gate: an app that turns the audio bus ON must also FEED it.
 #
-# F1 Phase 5 converts the games one at a time, and the conversion is three lines
-# in two different places:
+# Converting a game to the bus is three lines in two different places:
 #
 #     audio_cont_enable(&audio, true);          /* once, after audio_init()  */
 #     audio_pump(&audio);                       /* EVERY iteration           */
@@ -36,8 +35,7 @@
 #   - a sleep that is not spelled with the FRAME_DELAY_* constants at all.
 #
 # So this bounds the conversion, and the device's own counters judge it.
-# Rule and measurements: ../IMPROVEMENT_PLAN.md F1 Phase 5, and
-# ../SYSTEM_ANALYSIS.md#34-audio gotcha 5 for the 66 ms figure.
+# ../SYSTEM_ANALYSIS.md#34-audio gotcha 5 has the 66 ms figure.
 #
 # ── Two more obligations, both of which SHIPPED broken ───────────────────────
 # Same family — a rule about a game's audio that no counter and no screenshot

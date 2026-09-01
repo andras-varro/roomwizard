@@ -1,4 +1,4 @@
-/* oss_geom.c — Phase 0 probe for F1's continuous-stream unification.
+/* oss_geom.c — Probe for the continuous-stream unification.
  *
  * Answers, for BOTH client configurations, in one run on one unit:
  *   - what the OSS shim GRANTS (rate / bits / channels), read back with SOUND_PCM_READ_*
