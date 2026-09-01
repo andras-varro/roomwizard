@@ -32,11 +32,7 @@ grouped to be handed over as **one checklist** rather than asked for one at a ti
 
 | # | Check | Cost | Blocked on |
 |---|---|---|---|
-| 1 | **brick_breaker SPEED UP → SLOW DOWN is monotonic** — the multiplier is derived now, so +2 → +1 must slow the ball down | ~1 min at level 1 | nothing |
-| 2 | **brick_breaker levels 5+ grey striped bricks** are visible and bounce the ball | a full play session | **make the level reachable first** — [C10](#c10-make-a-deep-game-state-reachable-without-playing-to-it--open) |
-| 3 | **Second-unit touch dead-band sweep** | one sweep, four edges | [B3c](#b3c-the-touch-dead-band-is-measured-on-one-unit-only--open) |
-| 4 | **ScummVM OPL/AdLib tempo** | one intro | an AdLib target must be installed — [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
-| 5 | **The 2026-08-24 panel session closed the audio ear list — nine items, every one corroborated by `app_stdout.log`.** What is LEFT: (a) `tetris` DAS-repeated left/right — distinct clicks or a smear? asked and **not** answered, because the game-over case is input-locked · (e) CPU% while mixing, unmeasured · and ScummVM music+speech against the 32 % baseline — [F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) | one play session | nothing for (a) or (e); the ScummVM half needs F1 Phase 6. Fold item 4 in — the OPL check is the same ear on the same trip |
+| 1 | **The high-score chime sounds** — clear a line, then lose. A sparkle must sound as `NEW HIGH SCORE!` opens name entry, distinct from the game-over descent underneath it | ~2 min | nothing |
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -125,17 +121,17 @@ a different boot, and `recover`'s own 3-try loop makes a single invocation a wea
 rebinds — so this is not evidence that the two firmwares differ. Settling it needs repeated boot-empty →
 plug → `recover` cycles on **both** firmwares, one reboot each. Low value: the remedy works either way.
 
-### B3c. The touch dead band is measured on one unit only — open
+### B3c. Whether the interior touch slope is steeper than the outer bands — open, not established
 
 The model and the fix have shipped; [`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch)
 carries the measurement, the method and the reference capture. **Read that section before touching
 the touch model** — this question has been answered wrongly in *both* directions, and each wrong
 answer came from inferring a hardware limit *through* the calibration under suspicion.
 
-**What is left: sweep a second panel** with `/opt/games/touch_raw` — `SWEEP` then `INSET`, all four
-edges. Every number on record is one unit's. What a second unit settles is whether the ~30 px Y band
-generalises; if it varies per panel the runtime measurement already handles it and **no code
-changes**.
+**The second-unit question is settled and needed no code change.** Touch is confirmed working on two or
+more units (operator, 2026-08-31) — the *shape* generalising, not the digits transferring, which is what
+`[n=1]` means. Either answer always left per-panel variation to the runtime measurement, so a recorded
+`SWEEP`/`INSET` tsv from a second panel is documentary value now, not a blocker.
 
 **And on either panel: is the interior slope actually steeper than the outer bands?** One `TARGETS` run
 gave per-segment slopes suggesting ~12 %, and `SYSTEM_ANALYSIS.md` §3.3 now records that as **not
@@ -633,6 +629,11 @@ and its *reason* text ("113 KB of usable UI WAVs") is now stale — the director
 effects that a deploy replaces anyway. Correct the reason; the rule itself is right.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
+
+**What compositing costs today, measured 2026-08-31 and *accepted* rather than filed as a fault:**
+`samegame` tapping over a music bed runs at **45 % CPU** on the one 600 MHz core, ScummVM playing *Full
+Throttle* at **12–13 % CPU / 5.4 % memory**. 45 % is what an overlay composite has to beat. ⚠️ **Not the
+same quantity as the 32 % below** — a game mixing while it redraws, against O1–O12's endpoint.
 
 Three hardware overlay planes with a scaler, z-order, global alpha and colour-key, sitting unused. On
 a GPU-less 600 MHz part this is the only graphics acceleration that exists, and it is pure sysfs — no

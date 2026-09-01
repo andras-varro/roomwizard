@@ -506,8 +506,8 @@ Two secondary effects, measured at the same time:
   `Touch raw range set (linear):` — that string is live in `touch_set_raw_range()`, the `EVIOCGABS`/RESET
   path, and a current binary prints it whenever the hardware range is set.
 
-Every touch measurement in this section is **`[n=1]`** — RW09 only, and no second unit has been
-swept. Open work: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) B3c.
+Every touch measurement in this section is **`[n=1]`** — the digits are RW09's. Touch itself is
+confirmed working on two or more units; no second panel has been *swept* and recorded.
 
 **Multi-touch exists in hardware but not in the driver.** `panjit_ts` reports only
 `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller itself is **2-point multi-touch with
