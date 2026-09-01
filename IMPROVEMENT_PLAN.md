@@ -150,25 +150,6 @@ Two practical notes:
   acquisition. Check `./commissioning/provision.sh <ip> --status` first: a unit on older deploy scripts will
   mislead you about anything else you observe there.
 
-### B12c. ScummVM OPL/AdLib tempo is unverified — open
-
-The mono mixer and the `SOUND_PCM_READ_RATE` read-back were supposed to fix half-speed OPL. Nobody
-has confirmed it on hardware. Play an AdLib-driven intro on the device and compare against a
-reference recording.
-
-**Not yet satisfiable: no installed target drives OPL.** The one installed game is King's Quest 1
-(CoCo3, `agi`) — the CoCo3 platform's AGI sound is not the AdLib path, and that target's `guioptions`
-lists no AdLib at all. So this needs an OPL-capable game added first. Adding one works and persists:
-`Add Game...` is a touch file browser and the entry lands in `/opt/games/scummvm.ini`.
-
-⚠️ **Ordering, settled rather than left to be discovered: this verifies the very OSS workaround that
-[F1](#f1-port-audio-from-oss-to-alsa--open-phase-state-in-the-table-below) Phase 5
-deletes.** What it is really checking is that `_outputRate` matches the device — and on the ALSA path
-that stops being a read-back-the-truth problem, because `hw:0,0` grants **22050 exactly** (measured,
-`SYSTEM_ANALYSIS.md#34-audio`). So do **not** spend a panel trip verifying OPL on the OSS path: add
-the OPL-capable target now, and make "OPL plays at correct tempo" an acceptance criterion of Phase 5.
-Verifying the doomed implementation is the one way to spend this check and learn nothing.
-
 ### B33. A USB babble error leaves a `printk` loop that hard-resets the device — open, **measured 2026-08-17**
 
 ⚠️ **One babble error puts the kernel into an unbounded message loop that outlives the device's removal and
@@ -281,7 +262,7 @@ analog, below both userspaces, and not ours to fix (below).
 |---|---|---|
 | 4 | rebuild the device half on tinyalsa | **WON'T DO, operator's call 2026-08-31 — a footnote, not a target.** It buys LATENCY only (`lead=139ms period=46ms` in every counter line, against ~70 ms on three 23 ms periods), and **no latency symptom has been reported**: the paddle bounce is the most frequent sound in the repo and reads *"audible at an enjoyable level"*. ⚠️ **It removes a translation layer, not a driver** — `/dev/dsp` and `/dev/snd/pcmC0D0p` are the SAME PCM, so tinyalsa cannot reach different hardware behaviour; the layering and the shim's four bugs are [§3.4](SYSTEM_ANALYSIS.md#34-audio). ⚠️ **not** the distortion's fix, and `aplay` already proved userspace is not where it lives |
 | 5 | **the games take the continuous stream, and their sounds become WAVs** | **CLOSED, ear half included** — ①②③⑤ 2026-08-24, ④ 2026-08-31, gated by `check-audio-pacing.sh`, `check-bed-files.sh` and `check-sound-assets.sh`. What ④ decided, and the three measurements behind declining its `fx_*` half, are below |
-| 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open; folds in [B12c](#b12c-scummvm-opladlib-tempo-is-unverified--open) |
+| 6 | `oss-mixer.cpp` reduced to an adapter over the shared library | open |
 | 7 | the docs and the comments this makes stale | open |
 
 ⚠️ **The cause hunt is CLOSED, and the rule it produced is about CONTENT rather than source: an effect
