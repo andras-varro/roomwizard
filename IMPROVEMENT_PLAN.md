@@ -30,11 +30,12 @@ There is no `/dev/uinput`, so nothing past an app's first screen is script-verif
 (`CLAUDE.md` → *Non-obvious constraints*). Panel time is the project's scarce resource, so these are
 grouped to be handed over as **one checklist** rather than asked for one at a time.
 
-**One item outstanding, and it is one gesture.** Open `Tap-a-Theremin`, hold a finger on the pad, then
-lift it: the crack on release should be gone
-([B34](#b34-tap-a-theremin-cracks-when-the-finger-lifts--cause-found-fix-applied-needs-an-ear)). ⚠️ Ask for
-a *description*, not a verdict — the tone is designed to persist ~139 ms after the finger goes, so "it
-still makes a noise after I lift" is the expected tail and only a *click or crack* is the defect.
+**Nothing is outstanding.** The last item — the crack when a finger lifts off `Tap-a-Theremin`'s pad — was
+answered at the panel 2026-09-01 on `.188`: *"working perfectly"*, unhedged. ⚠️ **That is a verdict where a
+description was asked for**, so the ~139 ms tail the fade leaves behind the finger went unmentioned and is
+neither confirmed nor denied. The pass stands anyway, because the guard was against a *tail* being reported
+as the defect and no defect was reported at all — but a verdict is the weaker answer, and the next item
+should say which one it needs.
 
 The high-score chime and the game-over descent were confirmed distinct to the ear 2026-09-01, so the
 question of whether two simultaneous sounds separate does not need asking again for that pair.
@@ -171,34 +172,6 @@ to hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before t
 measurement.** The loop is not yet read out of the driver: start at `musb_bus_suspend()` in
 `usb_host/linux-4.14.52/drivers/usb/musb/` and at whether the `Babble` path leaves the port marked active.
 Distinct from B32, which is about enumeration.
-
-### B34. `Tap-a-Theremin` cracks when the finger lifts — cause found, fix applied, **needs an ear**
-
-The operator's report on `.188`: tracking follows the finger **much** better on the continuous stream, and
-**lifting the finger cracks.** Not the reset-click, and not the fade either: `audio_stream_stop()`
-(`native_apps/common/audio.c:947`) removes the fill first and only then writes its 20 ms
-`AUDIO_OSC_FADE_OUT`, which is the order that makes the write legal — `audio_out_write()` is refused while
-any fill is installed — so the fade does reach the device.
-
-⚠️ **The cause is that nothing serviced the stream after the lift.** `audio_stream_stop()` leaves the
-stream OPEN, so `audio->cont` stays true and the loop still owes it a service; `audio_touch_test.c` called
-`audio_stream_chunk()` only inside the finger-down branch and `audio_pump()` nowhere at all, so on release
-it fell to a 16 ms idle sleep while the ring drained. `audio_pump_active()`
-(`native_apps/common/audio.c:545`) already documents the consequence in as many words — a loop that idles
-while the continuous stream is open starves this device, measured on `.188`. All seven games call
-`audio_pump()` unconditionally once per frame; this one app did not.
-
-**Fixed** by giving it the games' idiom: `audio_pump()` every frame that
-`audio_stream_chunk()` did not already service, and `audio_pump_active()` in the pacing decision so the
-post-lift tail keeps active pacing instead of dropping to idle. Built and deployed to `.188` 2026-09-01.
-
-⚠️ **Unverified by ear.** The mechanism is measured and the fix is deployed, but nobody has lifted a
-finger off the pad since. It is a launcher tile (`Tap-a-Theremin`, `native_apps/app-manifests.sh`) and the
-operator's words are *"a loved app, not just a test tool"*; it is also the instrument that measured the
-speaker's usable band ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a crack in it costs a measurement as well
-as a user. ⚠️ **A residual is expected and is not the defect**: the fade lands one lead (~139 ms) behind
-the finger by design, so the tone persists briefly after release. A *crack* is the bug; a short *tail* is
-not.
 
 ### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
 
