@@ -539,3 +539,6 @@ partitions.new/
 # Sabotage staging by tests/measure_provision_sabotage.sh (removed on every exit path)
 lib/.rw-provision.sab.sh
 tests/.sab-*
+
+# Build/deploy transcript redirects (a0ff5a8 committed one by accident)
+.build_out.txt
