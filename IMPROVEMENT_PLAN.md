@@ -30,9 +30,10 @@ There is no `/dev/uinput`, so nothing past an app's first screen is script-verif
 (`CLAUDE.md` → *Non-obvious constraints*). Panel time is the project's scarce resource, so these are
 grouped to be handed over as **one checklist** rather than asked for one at a time.
 
-| # | Check | Cost | Blocked on |
-|---|---|---|---|
-| 1 | **The high-score chime sounds** — clear a line, then lose. A sparkle must sound as `NEW HIGH SCORE!` opens name entry, distinct from the game-over descent underneath it | ~2 min | nothing |
+**Nothing is outstanding.** The last item — that the high-score chime is actually audible — was confirmed
+at the panel 2026-09-01: it plays, together with the game-over descent as designed. ⚠️ **Whether the two
+are *distinct* to the ear was not assessed**, and that is the shape the next such question should take:
+ask for a description, not a verdict. The rules below stand for the next item that needs an ear.
 
 Rules for asking: price the check before requesting it, split an item when only part of it is gated,
 and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
@@ -275,66 +276,39 @@ these three rules now police.**
 
 All userspace. No kernel work.
 
-### F20. ScummVM oss-mixer.cpp becomes an adapter over the shared audio library — open
+### F20. Audio tidy-up left behind by the ScummVM adapter — open
 
-**The audio subsystem itself is DONE** — the mix bus, the continuous stream, the clip bank, the WAV
-beds, the per-game sound sets and the level all ship and are heard. Its device facts are
+**The audio subsystem is DONE where a player can hear it** — the mix bus, the continuous stream, the clip
+bank, the WAV beds, the per-game sound sets and the level all ship and are heard. Its device facts are
 [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) and its authoring rules
 `native_apps/CLAUDE.md` → *Audio*, *Mixing* and *Sound assets*; the ALSA port is **not planned**
-(`/dev/dsp` and `/dev/snd/pcmC0D0p` are the same PCM, so it buys latency and nothing else, and no
-latency symptom has ever been reported). What is left is structural.
+(`/dev/dsp` and `/dev/snd/pcmC0D0p` are the same PCM, so it buys latency and nothing else, and no latency
+symptom has ever been reported).
 
-**One implementation of each audio half, because more emulator ports are coming.** ScummVM carried its
-own OSS mixer, duplicating a device half that `common/audio_out.{c,h}` already provides.
+✅ **The adapter is DONE, and heard.** `oss-mixer.cpp` keeps only the mixer, the fill and the service
+thread; the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN retry, the
+wall-clock deadline and the emergency second write all live in `common/audio_out.{c,h}` instead — one
+implementation of the device half, which is the point, for the emulator ports still to come. Linked,
+deployed and checked at the panel 2026-09-01: **Full Throttle plays correctly, audio and all** (operator,
+unhedged). ⚠️ **King's Quest was not re-checked** — it is not installed on the unit used, so the
+regression check ran on one game, not two.
 
-⏳ **The adapter is WRITTEN, LINKED and has RUN.** 2026-09-01, in one commit:
-`oss-mixer.cpp` is 355 → 182 lines and holds only the mixer, the fill and the service thread. Gone with
-the device half: the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN
-retry loop, the wall-clock deadline and the emergency second write. `configure.patch` appends
-`audio_out.o` and `audio_gen.o`; the fill hands `buf` to `mixCallback` as `audio_out.h`'s contract
-anticipates; `audio_out_set_shift(&_out, 1)` reproduces the old `>>1` bit for bit.
+⚠️ **The service thread sleeps `audio_out_service_interval_us() / 2`, and the halving is still unmeasured
+against the whole interval.** That function documents the *longest* a caller may go between services, and
+the native path stays far under it by servicing from its render loop; half was chosen so one late wakeup
+on a core with 20–40 ms of jitter cannot starve the stream. It ships and it sounds right, which is not the
+same as being the right number.
 
-**Measured on the host, all four green:** `audio_out.c` and `audio_gen.c` cross-compile `-Wall -Wextra`
-clean; `oss-mixer.cpp` compiles through ScummVM's own `make` rule with its real `CXXFLAGS`/`CPPFLAGS`;
-the `audio_*` link closure is exactly `audio_out.o` + `audio_gen.o`, 20 symbols needed and 0 unresolved
-(negative control: an injected fake symbol is reported); `sdiv`/`udiv` is 0 in all three objects.
+What is left is small, and none of it is audible:
 
-✅ **Linked, deployed and launched, 2026-09-01.** `scummvm/config.mk` was stale and listed neither new
-object — the build script reconfigures only when it is absent or `USE_PNG` is missing — so
-`rm -f scummvm/config.mk scummvm/config.h` forced the full rebuild it needed. The build log then shows
-`audio_out.o`, `audio_gen.o` and `oss-mixer.o` compiled and `LINK scummvm`; the deployed md5 matches the
-binary built; and ScummVM reached its game list at 16 bpp having printed exactly one audio line, from the
-shared half — `audio_out: /dev/dsp open, granted 22050 Hz 16-bit 1 ch`. ⚠️ **Verify a ScummVM link this
-way and never with `grep -a` on the binary**, which is `stripped`, so every internal symbol answers zero:
-`scummvm-roomwizard/CLAUDE.md` → *Verifying that a link did what you asked*.
-
-⏳ **What is left is the ear check, and only that**: King's Quest and Full Throttle must sound as they
-did. ⚠️ **`.188` carries only Full Throttle** — `scummvm.ini` there has one game section — so that unit
-can run half of it; King's Quest needs a unit that has the game installed.
-
-⚠️ **The payoff is structural, not audible** — ScummVM audio is confirmed good on hardware (King's
-Quest and Full Throttle, 12–13 % CPU, OPL tempo correct), so this buys nothing a user can hear and must
-not be sold as a fix. The one thing to listen *for* is a regression.
-
-⚠️ **One pacing decision is a judgement, not a measurement.** The thread sleeps
-`audio_out_service_interval_us() / 2`, because that function is documented as the *longest* a caller may
-go between services and the native path stays far under it by servicing from its render loop. Half was
-chosen so a single late wakeup on a core with 20–40 ms of jitter cannot starve the stream; **the halving
-has not been measured against the whole interval on hardware.**
-
-⚠️ **Still open: `native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants**, where
-`audio_out` reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says
-`S16_LE`), which is why it is a defect and not a cause. Untouched by the adapter.
-
-⚠️ **Also still open: the pre-continuous path does not die when the games leave it.** `device_tools`,
-`hardware_config` and `hardware_test` still play tones without a bus — untouched by this commit, so it
-did **not** die here.
-
-⏳ **Two loose ends, unrelated to the refactor.** `fx_fail` is limited and landed its intended 4 dB
-(in-band RMS −16.14 → −11.87 dBFS, level with `click`) but is **unheard** — deployed to `.188`
-2026-08-31, and one ear check is owed that it is not a flat honk. And `common/audio.h`'s comment still
-claims the interrupt-then-tone call sites mean *"replace what is playing"*, which is wrong for an
-effect on a bus; the sites themselves are gone from all seven games.
+- ⚠️ **`native_apps/common/audio.c:96` discards the value `SNDCTL_DSP_SETFMT` grants**, where `audio_out`
+  reads `SOUND_PCM_READ_BITS` and warns. Measured **not** to be firing (`hw_params` says `S16_LE`), which
+  is why it is a defect and not a cause.
+- ⚠️ **The pre-continuous tone path does not die when the games leave it.** `device_tools`,
+  `hardware_config` and `hardware_test` still play tones without a bus.
+- ⚠️ **`common/audio.h`'s comment still claims the interrupt-then-tone call sites mean *"replace what is
+  playing"***, which is wrong for an effect on a bus. The call sites themselves are gone from all seven
+  games, so the comment is the only thing left saying it.
 ### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
 
 ⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
@@ -628,9 +602,9 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 ([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
-— this overlaps [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open). A2DP's
-~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The controller half is
-much more likely to land than the audio half; do not sell them as one feature.**
+— but that path is now `common/audio_out` for every component (F20), so the reroute has one home rather
+than two. A2DP's ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
+controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
 **Can we get USB DMA?** Probably, but it is research with a worse failure mode than today's.
 `# CONFIG_USB_INVENTRA_DMA is not set`, so `musbhsdma.c` is not compiled at all. ⚠️ **The
@@ -1289,10 +1263,10 @@ Deliberately not a ranking of everything — only the claims worth making.
 
 1. **The audio subsystem is DONE where a player can hear it** — the mix bus, the continuous stream, the
    clip bank, the beds and the per-game sound sets all ship and are heard, and the ALSA port is not
-   planned. What is left is [F20](#f20-scummvm-oss-mixercpp-becomes-an-adapter-over-the-shared-audio-library--open),
-   which is really a ScummVM refactor and buys nothing a user can hear.
+   planned. What is left is the F20 tidy-up,
+   none of which is audible.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
-3. **C10 before panel check #2** — it converts a play session into one launch, and every future
+3. **C10 before the next panel check** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
 
 ⚠️ **B32 is not the place to start, and that is a result rather than a gap.** Three mechanisms read out
