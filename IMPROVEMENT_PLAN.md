@@ -390,6 +390,17 @@ a verified pristine `uImage-system.vendor` beside it on p1, so its untouched-ker
 spent, and recovery there is the card-reader file copy that writer already prescribes on failure. What
 `P4` adds is a diagnosis of a boot that fails, which no card pull gives you.
 
+**A second unit now has a radio fitted, and the userspace route reaches it unchanged — measured
+2026-09-02, offline from its card.** That unit is on a different firmware release, so this was worth
+checking rather than assuming: its device tree has UART3 (`serial@49020000`) `status = "disabled"` with no
+pinctrl property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and
+`ti,bit-shift` — identical to the release everything else was measured on, whose live
+`/proc/device-tree` says the same. So the clock-gate step and `usb_host/xbee_probe.sh` transfer as they
+are. ⚠️ **The pad configuration is the part this does not establish**: no release muxes those pads in the
+device tree, so on a working unit it comes from the bootloader, and on a newly-radio'd unit that is a
+register read once it is up — not something to infer from the tree. Commission such a unit with
+`--no-usb-power` (F23); the radio needs no USB budget.
+
 ### F6. Multi-touch via direct I2C — open
 
 The panel controller is 2-point multi-touch with on-chip gestures, and `panjit_ts` flattens it to
@@ -521,6 +532,54 @@ write `0x000000fa`, rebind, confirm 500 mA. That would make the whole fix an ord
 `--no-usb-power` go. ⚠️ **This is not the sysfs override already recorded as failed** — `usb_host/README.md`
 keeps both, and says which is which. Open risk is address stability: the unflattened DT is early-boot
 allocated, unlike the static symbol the existing patch aims at.
+
+### F23. The p1 gate knows one firmware release, and refuses every other — open, measured 2026-09-02
+
+**The symptom, hit for real:** offline commissioning of a newly-acquired unit refused at step 6 with
+`uImage-system md5 is 5642fd05969e366c58e930e51de48ccb, which is none of` the three it knows, and wrote
+nothing. That refusal was **correct**, and the unit is not damaged or half-patched: `verify_uimage.py`
+reports both CRCs valid and `power=0x32 (50) 100mA`, and there is no `uImage-system.vendor` beside it —
+the writer creates that backup *before* it writes, so p1 was never touched. The cause is that the unit
+ships a different Steelcase release (`SYSTEM_ANALYSIS.md#51-as-shipped`), so its kernel is a different
+binary with a different md5.
+
+**Why this does not scale, and what actually pins it.** `lib/rw-usbpower.sh` gates on **identity** —
+`RW_UIMAGE_VENDOR_MD5` / `_POWER_MD5` / `_BOTH_MD5`, three hardcoded strings, plus the backup assertion in
+`commissioning/commission-offline.sh`. Those strings are the *only* thing tied to one release. Two
+measurements say so: `usb_host/patch_dtb.py` verifies the input's own header and data CRCs before
+anything, **finds** the appended tree by `uimage.py`'s three-condition walk rather than trusting
+`DTB_OFFSET_HINT`, and refuses unless the source byte reads exactly `POWER_VENDOR` — and it patched the
+unknown release first try, at a different offset, with `verify_uimage.py --expect-power 0xfa` passing
+afterwards. Meanwhile `tests/rw_usbpower_test.sh` already drives the whole apply/verify/revert sequence
+with all three constants **overridden by md5s of its own fixtures**, so the sequence is proven
+release-independent; only the production constants are not.
+
+**Proposed fix — two tiers, with the second opt-in and never silent.** Tier 1 is today's md5 lookup,
+unchanged. Tier 2 applies when that returns `unknown`: proceed only if the structural gate passes (both
+CRCs valid ∧ the walk finds `power` inside a `usb_otg_hs` node ∧ that byte reads the vendor value), and
+replace each md5 comparison with a measurement that is strictly stronger than the constant it retires —
+read the actual `power`/`mode` property values for the current state instead of looking up an identity;
+compare the card byte-for-byte against the patched file just produced locally instead of against
+`_POWER_MD5`; and assert the backup matches what was read off the card *before* the write instead of
+against `RW_UIMAGE_VENDOR_MD5`.
+
+⚠️ **What tier 2 cannot buy, and the reason it must stay opt-in:** an md5 in that table also records that
+somebody booted *that exact image* and the unit came back up. No structural check can establish that, and
+a unit that does not come up has no serial console to say why. Whether a given kernel's MUSB honours the
+property at all is a read of `musb_host.c:2797` in the vanilla 4.14.52 tree — the only tree available.
+
+⚠️ **Two traps for the implementer.** `tests/measure_usbpower_sabotage.sh` `sed`-matches the *exact* line
+`if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then` inside the backup step; editing that line rots the
+sabotage into a false negative rather than failing loudly. And the three constants must not simply become
+a longer table — a table still has to be fed a new release before it helps, which is the defect.
+
+**Ruled out: shipping a prebuilt patched kernel as a release artifact.** It would not scale (obtaining
+every release is the same table plus 5 MB of payload each) and it is not ours to publish — see
+`LICENSE.md`.
+
+**Not a blocker for anything today.** `--no-usb-power` commissions such a unit fully; the cost is that it
+keeps the vendor's 100 mA budget, so USB peripherals on *that* unit stay limited. The 802.15.4 radio needs
+no USB budget at all (F5).
 
 ### F17. Bluetooth peripherals, and whether USB DMA is reachable — open, measured 2026-08-08
 

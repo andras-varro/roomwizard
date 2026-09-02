@@ -148,6 +148,18 @@ copyright notice, condition list and disclaimer to be reproduced with any binary
 travels before the code does is harmless, whereas one that lands a release late is the obligation
 missed. Do not "tidy" it out of `NOTICE` on the grounds that nothing links it yet.
 
+⚠️ **The vendor's `uImage-system` may never be published, patched or not, and "it is only one byte
+different" does not change that.** It is Steelcase's build of Linux, so it is **GPL-2.0-only** and
+redistributing the binary obliges the *corresponding source* — which is exactly what this project does
+not have and has ruled out obtaining
+([`SYSTEM_ANALYSIS.md` §7](SYSTEM_ANALYSIS.md#7-kernel-policy)). That obligation cannot be met, so the
+image cannot ship: not as a release asset, not as a tarball, not as a bundle file. This is already
+enforced rather than merely intended — `usb_host/build-and-deploy.sh` stages the `usb` group *without* it
+and says why, and `.gitignore` keeps whole-card dumps and their extracted partition trees out of the repo.
+The consequence for anyone meeting an unrecognised firmware release is that the patch has to be **derived
+on the operator's own card**, which is what `IMPROVEMENT_PLAN.md` F23 is about; publishing a prebuilt one
+is not an available shortcut.
+
 ---
 
 ## No warranty, and one hardware note

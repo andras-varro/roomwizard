@@ -649,11 +649,19 @@ group_c() {
 # CORRECTED rather than appended to the claim it falsifies ("`disabled` is the whole blocker", now
 # scoped to the tty), and it paid elsewhere: IMPROVEMENT_PLAN.md F5's boot-path decision, which the
 # measurement demotes from gating to deferred, shrank 43 -> 34 non-blank. Net across the repo is +1 line.
+# ⚠️ 2026-09-02, a second deliberate raise: SYSTEM_ANALYSIS.md 1610 -> 1616, also not paid for by a
+# deletion. Two consecutive raises is a smell and this one is argued on scope rather than on content: the
+# fleet is NOT on one firmware release, and the release decides the kernel. Every subsystem measurement in
+# that document was taken on one release, so the addition does not describe a subsystem — it bounds the
+# whole file, the way §1's [inferred]/[unverified]/[n=1] tags do. It was found the expensive way, by a
+# commissioning run refusing p1 on a unit nobody had identified. The same commit CORRECTED rather than
+# appended to the claim it falsifies (§5.1's bare `Linux 4.14.52`, now qualified by release) and qualified
+# HARDWARE.md's `OS build` row in place at no line cost, so nothing else in the repo grew.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1610	SYSTEM_ANALYSIS.md
+1616	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 190	README.md

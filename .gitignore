@@ -501,7 +501,6 @@ $RECYCLE.BIN/
 *.swp
 partitions/*
 partitions.zip
-roomwizard.img
 native_games/build/*
 # Rendered audio_dump / audio_path_dump WAVs: regenerable from one gcc command, so they
 # are never committed.  A named directory rather than *.wav, which would pre-empt
@@ -534,7 +533,14 @@ vnc_client/roomwizard.remmina
 # Local VNC config (contains a plaintext password) - use vnc_client.conf.example
 vnc_client/vnc_client.conf
 .claude/settings.json
-roomvizard_new.img
+# Offline card dumps and the partition trees extracted from them.  A whole-card
+# .img is ~4 GB and the extracted trees are Steelcase firmware, so neither may
+# ever be committed.  ⚠️ A GLOB rather than another literal name: roomwizard.img,
+# roomvizard_new.img and partitions.new/ were each added one at a time as a new
+# card got dumped, and the next dump landed as 4 GB of UNTRACKED files that a
+# `git add -A` would have taken.
+*.img
+roomwizard.new*/
 partitions.new/
 # Sabotage staging by tests/measure_provision_sabotage.sh (removed on every exit path)
 lib/.rw-provision.sab.sh

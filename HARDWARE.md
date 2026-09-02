@@ -49,7 +49,7 @@ is why both appear together in bottom-side photos.
 | Model string | `Steelcase RoomWizard 20` (`/proc/device-tree/model`) |
 | Compatible | `ti,omap3-rw20`, `ti,omap3` |
 | U-Boot identity | `soc=omap3`, `board=rw20` |
-| OS build | `SteelCase RW20 Embedded Platform (Yocto) 3.1.4` — a Yocto build by eInfochips |
+| OS build | `SteelCase RW20 Embedded Platform (Yocto) 3.1.4` — a Yocto build by eInfochips. ⚠️ A per-unit reading, not a fleet constant: `SYSTEM_ANALYSIS.md#51-as-shipped` |
 | Teardown unit | case label `RW29 1G-093`; asset labels `46837.0300`, `47270.0310` |
 
 **The `© 2010` silkscreen is a design copyright, not a build date.** Three independent date codes on the

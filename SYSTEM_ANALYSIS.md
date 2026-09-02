@@ -1668,7 +1668,7 @@ the old image under another name.
 ### 5.1 As shipped
 
 ```
-Linux 4.14.52 (SysVinit)
+Linux (SysVinit)   4.14.52 on firmware 4.12.0.0 — the release decides the kernel, see below
   -> X11 / Xorg
     -> WebKit browser (Epiphany), home page http://localhost/frontpanel/pages/index.html
       -> Jetty 9.4.11  (/opt/jetty-9-4-11/, init script /etc/init.d/webserver)
@@ -1680,6 +1680,13 @@ Linux 4.14.52 (SysVinit)
 
 This entire stack is removed or disabled in game mode. Java 8 still exists at `/opt/openjre-8/` if
 something needs it; Python requires cross-compiled ARM binaries.
+
+**⚠️ The firmware release is per unit and it decides the kernel — do not assume the unit in front of you
+is the one this document was measured on.** `/etc/firmware.version` names it, `/etc/issue` the Yocto
+version, `/lib/modules/` the kernel. `4.12.0.0` is Yocto 3.1.4 on **4.14.52**, which every measurement
+here was made against; `4.7.1.0` is Yocto 1.8 on **4.1.32** (two cards, 2026-09-02). So `uImage-system`
+is per-release rather than a constant — different md5, appended device tree at a different offset — and
+anything gated on that file's *identity* is gated on the release.
 
 ### 5.2 As we run it — game mode
 
