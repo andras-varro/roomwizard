@@ -170,10 +170,13 @@ spurious 4.4 V before that control was added. Holding UART3's transmitter low th
 **pin 3 from 3.3 V to 0 V**: the same pin in two states, so only the drive changed. **Pin 2 ignores the
 `uart3_rx` pad's internal pull.** Driven `PULLUP` → `PULLDOWN` → `PULLUP` with a read-back after each write,
 pin 2 read 0 V in all three states, where a pullup of tens of kΩ against a 10 MΩ meter would have to show
-~3.3 V on a connected pin. The one competing reading — connected, but held at ground by something else on
-the net, which would also beat the pullup — is excluded by the unpowered >MΩ above, though that was taken on
-a different unit. `usb_host/xbee_socket_continuity.sh` drives both directions from the SoC end, so the BGA
-never needs probing. **[n=1]** — whether the other two units share the open net is unmeasured.
+~3.3 V on a connected pin. The competing reading — connected, but held at ground by something else, which
+would also beat the pullup — is excluded on the same unit: **unpowered, pin 2 to pin 10 is DC-open.**
+⚠️ It does not *look* open at first. An ohmmeter reports a different value on every range and then reads
+infinite when the leads are lifted and replaced, because its test current is charging a capacitance rather
+than finding a resistance; the reconnect is the tell. `usb_host/xbee_socket_continuity.sh` drives both
+directions from the SoC end, so the BGA never needs probing, and its `padup`/`paddown` steps are the
+meter-only pin-2 test. **[n=1]** — whether the other two units share the open net is unmeasured.
 
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 

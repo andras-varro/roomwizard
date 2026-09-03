@@ -387,11 +387,11 @@ while the pad's own pullup drove the ball high, one clear while a break was acti
 factory-unpopulated series link on the `DOUT` net: no unit shipped with a radio, so a part only the radio
 needs is exactly what gets left off. Look for bare two-pad footprints on the traces leaving `J5`, then
 continuity-check pin 2 to each pad with the unit **unpowered**. A cold joint on the socket pin itself is
-the cheaper alternative and shows the same symptom. Pin 2 to pin 10 unpowered also settles the competing
-reading above. ② **Establish whether it is per-unit** before assuming three identical boards share it —
-run `usb_host/xbee_socket_continuity.sh` on the reference unit and on the 4.12 unit. ③ Only once a receive
-path exists is module health testable, and then the one spare module is the control, with `SM` sleep on
-XBee pin 9 and `D6` RTS on pin 16 as the suspects the socket may leave floating.
+the cheaper alternative and shows the same symptom. ② **Establish whether it is per-unit** before assuming
+three identical boards share it — run `usb_host/xbee_socket_continuity.sh` on the reference unit and on the
+4.12 unit; its `padup`/`paddown` steps are the meter-only test and need neither clock nor UART.
+③ Only once a receive path exists is module health testable, and then the one spare module is the control,
+with `SM` sleep on XBee pin 9 and `D6` RTS on pin 16 as the suspects the socket may leave floating.
 
 **Everything underneath the radio is settled, and none of it needs kernel work.** The socket, its
 orientation and its 3.3 V rail are measured
