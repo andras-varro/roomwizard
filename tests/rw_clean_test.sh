@@ -38,7 +38,8 @@
 #      the keeps survived, the unknowns were SWEPT (a rule that deletes nothing
 #      passes a test that only checks the keeps), and nothing outside the copy
 #      was touched — md5 manifest of a canary tree, taken before and after. Then
-#      the three opt-outs: --keep-java, --keep-factory and --remove.
+#      the four opt-outs: --keep-java, --keep-factory, --keep-vendorscripts and
+#      --remove.
 #
 # ── Measured against deliberately broken copies ────────────────────────────
 #
@@ -48,17 +49,31 @@
 # being quoted through `wsl.exe -e bash -lc`, and one that fails to apply reports
 # "0 failed", which reads exactly like a suite that cannot detect the breakage.
 #
-# Counts out of 148, measured 2026-08-06:
+# Counts out of 159, re-measured 2026-09-03 (148 before the `vendorscripts` group):
 #
 #   scope records ignored, i.e. keeps applied and nothing swept     12 fail
 #       This is the shape the plan warns about: "a rule that deletes nothing
-#       passes a test that only checks the keeps survived."
-#   a disabled group's paths no longer protect                       4 fail
-#       C15, C17a, E50, E51 — --keep-java would leave the JRE named only by a
-#       delete nobody runs, and the /opt sweep would remove it anyway.
+#       passes a test that only checks the keeps survived." ⚠️ Still 12, but a
+#       DIFFERENT 12: E46's threshold is `> 40` and this sabotage produced exactly
+#       40 deletions at 148 cases, so it was sitting on the boundary. The
+#       /opt/sbin delete made it 41, E46 dropped out and E57c came in.
+#   a disabled group's paths no longer protect                       7 fail
+#       C15, C17a, C31a, E50, E51, E57a, E57b — --keep-java would leave the JRE
+#       named only by a delete nobody runs, and the /opt sweep would remove it
+#       anyway; --keep-vendorscripts the same for /opt/sbin.
 #   `factory` reverted to opt-in                                     4 fail
 #       C16, C26, E22, E61 — the 2026-08-06 reversal. One default across every
 #       flag; --keep-factory is the only way out.
+#   `vendorscripts` reverted to opt-in                               5 fail
+#   the /opt/sbin delete replaced by the keep it used to be          5 fail
+#       C26a, C30, C30a, E6, E61a — the 2026-09-03 decision, and E6 asserted the
+#       opposite until then.
+#   the /opt/sbin delete moved into `base`, i.e. made unconditional   4 fail
+#       C31, C31a, E57a, E57b. ⚠️ This is the case the two above cannot reach:
+#       the default plan is unchanged and E6 still passes, while
+#       --keep-vendorscripts silently stops meaning anything. A group-gated delete
+#       and an unconditional one are indistinguishable from the default plan
+#       alone, which is why both directions are asserted at both levels.
 #   --remove given the sweeps too, i.e. made a synonym                6 fail
 #   the `scope` records moved back into `base`, same effect           6 fail
 #       C21, C22, C27, C29, E62-E64 — --remove must be a SUBSET.
@@ -256,6 +271,7 @@ PLAN_BASE=$(plan_of "base sweeps")
 PLAN_REMOVE=$(plan_of "$(rw_clean_remove_groups)")
 PLAN_KEEPJAVA=$(plan_of "base browser snmp mail extras factory sweeps")
 PLAN_KEEPFACTORY=$(plan_of "base browser java snmp mail extras sweeps")
+PLAN_KEEPVENDOR=$(plan_of "base browser java snmp mail extras factory sweeps")
 
 has()    { printf '%s\n' "$2" | grep -qxF "$1"; }
 expect() { if has "$1" "$2"; then ok "$3"; else bad "$3 — plan has no '$1'"; fi; }
@@ -277,6 +293,7 @@ plan_built "C0b the base+sweeps plan compiles"    "$PLAN_BASE"
 plan_built "C0c --remove's plan compiles"         "$PLAN_REMOVE"
 plan_built "C0d --keep-java's plan compiles"      "$PLAN_KEEPJAVA"
 plan_built "C0e --keep-factory's plan compiles"   "$PLAN_KEEPFACTORY"
+plan_built "C0f --keep-vendorscripts' plan compiles" "$PLAN_KEEPVENDOR"
 
 expect "$(printf 'sweep\t/etc/rc5.d')"                     "$PLAN_BASE"    "C1 rc5.d is swept"
 expect "$(printf 'sweep\t/etc/rcS.d')"                     "$PLAN_BASE"    "C2 rcS.d is swept"
@@ -293,7 +310,7 @@ expect "$(printf 'del\t/home/root/data/websign')"          "$PLAN_BASE"    "C10 
 # rc0.d and rc6.d are shutdown, not startup. They must be unreachable through
 # the plan under EVERY group selection, not merely absent from the default one.
 RC06_HITS=0
-for p in "$PLAN_BASE" "$PLAN_DEFAULT" "$PLAN_KEEPJAVA" "$PLAN_KEEPFACTORY" "$PLAN_REMOVE"; do
+for p in "$PLAN_BASE" "$PLAN_DEFAULT" "$PLAN_KEEPJAVA" "$PLAN_KEEPFACTORY" "$PLAN_KEEPVENDOR" "$PLAN_REMOVE"; do
     n=$(printf '%s\n' "$p" | grep -c 'rc0\.d\|rc6\.d' || true)
     RC06_HITS=$((RC06_HITS + n))
 done
@@ -323,6 +340,17 @@ expect "$(printf 'keep\t/home/root/backup\tfactory')" "$PLAN_DEFAULT" \
 expect "$(printf 'keep\t/home/root/backup\tfactory')" "$PLAN_KEEPFACTORY" \
     "C18a in both plans"
 
+# ⚠️ /opt/sbin is delete-by-DEFAULT as well, decided 2026-09-03 — and E6 used to
+# assert the exact opposite, that it survived. Both halves are asserted on
+# purpose: a delete that is unconditional and a delete that is group-gated look
+# identical if only the default plan is ever checked, so C31/C31a are what say the
+# flag still means something.
+expect "$(printf 'del\t/opt/sbin')"   "$PLAN_DEFAULT"     "C30 /opt/sbin IS deleted by default"
+absent "$(printf 'keep\t/opt\tsbin')" "$PLAN_DEFAULT"     "C30a and is not also protected"
+absent "$(printf 'del\t/opt/sbin')"   "$PLAN_KEEPVENDOR"  "C31 --keep-vendorscripts drops that delete"
+expect "$(printf 'keep\t/opt\tsbin')" "$PLAN_KEEPVENDOR"  \
+    "C31a and protects it, so the /opt sweep cannot take it instead"
+
 # ── --remove is a NAMED GROUP SUBSET of the same plan, not a second list ──────
 #
 # It means "delete the vendor stacks we have named", where --deep-clean also means
@@ -334,6 +362,8 @@ expect "$(printf 'del\t/opt/openjre-8')"      "$PLAN_REMOVE" "C24 --remove still
 expect "$(printf 'del\t/usr/share/cjkfont')"  "$PLAN_REMOVE" "C25 including the browser group"
 expect "$(printf 'del\t/home/root/backup/factory/sd_rootfs_part.img*')" "$PLAN_REMOVE" \
     "C26 and the factory payload — ONE default across every flag, not a softer one here"
+expect "$(printf 'del\t/opt/sbin')" "$PLAN_REMOVE" \
+    "C26a and /opt/sbin — it IS one of the named vendor stacks, so --remove takes it"
 SWEEPS_IN_REMOVE=$(printf '%s\n' "$PLAN_REMOVE" | grep -c '^sweep' || true)
 assert_eq "0" "$SWEEPS_IN_REMOVE" "C27 --remove's plan contains no sweep at all"
 SWEEPS_IN_DEFAULT=$(printf '%s\n' "$PLAN_DEFAULT" | grep -c '^sweep' || true)
@@ -538,7 +568,7 @@ for d in rc2.d rc3.d rc4.d; do
 done
 assert_eq "0" "$MISS" "E5 all $(echo $KEEP_RCS $KEEP_RC5 | wc -w) rcS.d/rc5.d keeps plus rc2-4.d survived"
 
-exists "$CARD/root/opt/sbin/networkmanager" "E6 /opt/sbin survives (the reference material F5 needs)"
+gone   "$CARD/root/opt/sbin"                "E6 /opt/sbin is GONE by default — 1.4 MB of vendor scripts nothing calls"
 exists "$CARD/root/opt/sound/asl_click.wav" "E7 /opt/sound survives (the UI WAVs)"
 exists "$CARD/root/opt/pv02"                "E8 /opt/pv02 survives"
 exists "$CARD/root/opt/games/snake"         "E9 /opt/games survives"
@@ -625,7 +655,7 @@ assert_eq "$CANARY_MD5" "$(cd "$CANARY" && find . | LC_ALL=C sort | md5sum)" \
 
 # ── E: the opt-outs, on a fresh card ──────────────────────────────────────
 echo ""
-echo "   --keep-java, --keep-factory and --remove"
+echo "   --keep-java, --keep-factory, --keep-vendorscripts and --remove"
 build_card
 rw_clean_plan "$RULES" "base browser snmp mail extras factory sweeps" > "$TMP/plan.keepjava"
 rw_clean_apply "$CARD" "$TMP/plan.keepjava" >/dev/null
@@ -642,6 +672,20 @@ exists "$CARD/backup/factory/sd_rootfs_part.img.md5" "E55 and its .md5"
 exists "$CARD/backup/factory/uImage-system-original" "E56 and the fallback kernel either way"
 gone   "$CARD/root/opt/rwconnector"                  "E57 and the rest of the clean still ran"
 
+# ── E: --keep-vendorscripts, the other side of E6 ─────────────────────────
+#
+# E6 asserts /opt/sbin is gone by default. On its own that is satisfied by an
+# unconditional delete just as well as by a group-gated one, so this run is what
+# separates the two: the flag must put the whole directory back, INCLUDING through
+# the /opt sweep, which needs the disabled group's paths to become protections.
+build_card
+rw_clean_plan "$RULES" "base browser java snmp mail extras factory sweeps" > "$TMP/plan.keepvendor"
+rw_clean_apply "$CARD" "$TMP/plan.keepvendor" >/dev/null
+exists "$CARD/root/opt/sbin/networkmanager"        "E57a --keep-vendorscripts keeps /opt/sbin"
+exists "$CARD/root/opt/sbin/watchdog/watchdog.sh"  "E57b including rw_is_rootfs's watchdog.sh marker"
+gone   "$CARD/root/opt/rwconnector"                "E57c and the /opt sweep still removed what no group protects"
+gone   "$CARD/root/usr/share/cjkfont"              "E57d and the other groups still ran"
+
 # ── E: --remove, the named-subset run ─────────────────────────────────────
 #
 # The whole difference from --deep-clean is the sweeps: the named vendor stacks go,
@@ -655,6 +699,8 @@ gone   "$CARD/root/usr/share/cjkfont"      "E59 and the CJK font"
 gone   "$CARD/data/websign"                "E60 and websign"
 gone   "$CARD/backup/factory/sd_rootfs_part.img" \
     "E61 and the factory payload — the same default as --deep-clean, not a softer one"
+gone   "$CARD/root/opt/sbin" \
+    "E61a and /opt/sbin — a named vendor stack, so it goes without the sweeps"
 exists "$CARD/root/opt/rwconnector"        "E62 but an unwhitelisted /opt vendor directory SURVIVES --remove"
 exists "$CARD/root/etc/rc5.d/S45roomcast" "E63 and so does an unwhitelisted boot link"
 exists "$CARD/data/rwmeetingcache"         "E64 and an unwhitelisted p2 directory"

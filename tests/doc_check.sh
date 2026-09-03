@@ -53,6 +53,11 @@
 # every qualified dangling citation fixed and the gate reporting a clean zero, 41 bare ones
 # were still in the tree — `(B13g)`, `(B3k)`, `see B28`. A gate that passes on a repo which
 # still violates its invariant is worse than no gate.
+# ⚠️ The bare scan has a PERMANENT collision class, and a live heading was masking it: function
+# keys. F1-F12 are plan IDs here AND key names, so `Save/load dialog (F5)` in a ScummVM table
+# matched the bare scan and resolved silently while that heading existed. Deleting that entry
+# (2026-09-03) turned one shipped key binding into a dangling citation. The tree was fixed by
+# rewording that key row, not by excluding the file; narrowing the scan is filed as a chore.
 #
 # ⚠️ Both scans SKIP this file. Its header discusses IDs by writing them out, and a scan over
 # its own source counted those as findings — three times, in three different shapes, each one
@@ -390,6 +395,7 @@ TP39	HARDWARE.md	SYSTEM_ANALYSIS.md
 560-0540-0x	HARDWARE.md	SYSTEM_ANALYSIS.md
 Top-Overwiev	HARDWARE.md	SYSTEM_ANALYSIS.md
 bezel_with_touch_screen.jpg	HARDWARE.md	SYSTEM_ANALYSIS.md
+does not reach the SoC	HARDWARE.md	IMPROVEMENT_PLAN.md
 EOF
 }
 
@@ -647,7 +653,7 @@ group_c() {
 # matters out of proportion to its length because §7 forbids rebuilding this kernel, so "the node is
 # disabled" had been read as "out of scope" for every peripheral, not just this one. The same commit
 # CORRECTED rather than appended to the claim it falsifies ("`disabled` is the whole blocker", now
-# scoped to the tty), and it paid elsewhere: IMPROVEMENT_PLAN.md F5's boot-path decision, which the
+# scoped to the tty), and it paid elsewhere: the boot-path decision in the 802.15.4 entry, which the
 # measurement demotes from gating to deferred, shrank 43 -> 34 non-blank. Net across the repo is +1 line.
 # ⚠️ 2026-09-02, a second deliberate raise: SYSTEM_ANALYSIS.md 1610 -> 1616, also not paid for by a
 # deletion. Two consecutive raises is a smell and this one is argued on scope rather than on content: the
@@ -657,6 +663,10 @@ group_c() {
 # commissioning run refusing p1 on a unit nobody had identified. The same commit CORRECTED rather than
 # appended to the claim it falsifies (§5.1's bare `Linux 4.14.52`, now qualified by release) and qualified
 # HARDWARE.md's `OS build` row in place at no line cost, so nothing else in the repo grew.
+# ⚠️ 2026-09-03: both raises above are now over-paid. Closing the 802.15.4 work
+# by operator decision deleted its whole plan entry, IMPROVEMENT_PLAN.md 1108 -> 1026 non-blank, so they came
+# back from the file that had borrowed against them. No ceiling was LOWERED: a ceiling is a budget, not a
+# measurement, and lowering one here would make the next legitimate addition pay twice.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi

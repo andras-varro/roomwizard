@@ -46,7 +46,7 @@
 RW_CLEAN_TYPES="scope keep delete truncate"
 
 # Every group name the file may use.  `base` is mandatory and always enabled.
-RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras factory sweeps"
+RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras vendorscripts factory sweeps"
 
 # ── Enabled unless the caller says otherwise: ALL of them ────────────────────
 #
@@ -58,10 +58,17 @@ RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras factory sweeps"
 # The gate is the host-side full-card backup, which is asked for once and up
 # front — a strictly better recovery path than the on-device one.
 # `--keep-factory` is the deliberate opt-out.
-RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"
+#
+# ⚠️ `vendorscripts` (/opt/sbin) is in here for the same reason, decided
+# 2026-09-03.  1.4 MB of vendor shell scripts that nothing this project calls and
+# that no surviving service starts, so a kept copy is software whose start-up the
+# same clean removed.  What it used to buy was reference material; that is
+# recorded in the docs and in probes/README.md, so the bytes are not the record.
+# `--keep-vendorscripts` is the deliberate opt-out.
+RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras vendorscripts factory sweeps"
 
 # The ones --keep-<name> can switch off.  `base` is not among them.
-RW_CLEAN_GROUPS_OPTIONAL="browser java snmp mail extras factory sweeps"
+RW_CLEAN_GROUPS_OPTIONAL="browser java snmp mail extras vendorscripts factory sweeps"
 
 # ── What --remove is ────────────────────────────────────────────────────────
 #
@@ -73,8 +80,10 @@ RW_CLEAN_GROUPS_OPTIONAL="browser java snmp mail extras factory sweeps"
 #
 # It is identical to `--deep-clean --keep-sweeps`, and that is the whole
 # implementation.  Note that it does NOT soften the factory default: one default
-# across every flag, per above.
-RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"
+# across every flag, per above.  `vendorscripts` is in here for the same reason —
+# /opt/sbin IS a named vendor stack, so "delete the stacks we identified" covers
+# it whether or not the whitelist sweeps run.
+RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts factory"
 
 rw_clean_default_groups()  { echo "$RW_CLEAN_GROUPS_DEFAULT"; }
 rw_clean_optional_groups() { echo "$RW_CLEAN_GROUPS_OPTIONAL"; }

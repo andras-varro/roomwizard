@@ -1312,7 +1312,7 @@ Legacy `/dev/ttyS2` under the vendor's old 2.6 kernel = OMAP **UART3** = `serial
 and this project leaves U-Boot alone. Check with `mount -t debugfs none /sys/kernel/debug` then
 `grep -E '4800219e|480021a0' /sys/kernel/debug/pinctrl/48002030.pinmux/pins`. The node is otherwise
 identical to the working console node, so `status = "disabled"` is all that stands between it and a
-`ttyO2`, and a 5-byte in-place edit clears it: `IMPROVEMENT_PLAN.md` F5. Socket pinout and the measured
+`ttyO2`, and a 5-byte in-place edit clears it. Socket pinout and the measured
 3.3 V rail: [Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
 
 ⚠️ **A `ttyO2` is not needed to reach the radio, and `disabled` is the reason: with no driver bound,
@@ -1325,13 +1325,13 @@ reset value, so nothing has ever driven it — and `LSR` `0x60`; parent `per_48m
 so the 16x divisor is 48e6/(16 × baud) and 57600 wants 52 (`0x34`). ⚠️ **Validate any such probe with
 the UART's own internal loopback before believing a silent radio** (`MCR` bit 4, TX→RX inside the
 module — not the vendor *XBee* loopback test above): without it a dead radio and a wrong register
-sequence produce identical output. `usb_host/xbee_probe.sh` does that and restores what it writes.
+sequence produce identical output. `probes/xbee_probe.sh` does that and restores what it writes.
 
-**The vendor assumed a Series 1 module, and the modules fitted are Series 1** — both radio'd units carry
+**The vendor assumed a Series 1 module, and the modules on hand are Series 1** — they are
 `XB24-ACI-001 revC` (MaxStream, 802.15.4), read off the label, which is why the vendor's settable `ATMY`
 and `ATCH` are the right command set. ⚠️ **`AP = 1` is the trap, not the series**: a module in API mode
 answers no `AT` at any rate whatever it is, so a framed `ATVR` must be swept before silence is read as a
-wiring fault. `usb_host/xbee_probe.sh` sweeps both, and all eight `BD` rates: `IMPROVEMENT_PLAN.md` F5.
+wiring fault. `probes/xbee_probe.sh` sweeps both, and all eight `BD` rates.
 
 ### 3.13 Watchdogs
 

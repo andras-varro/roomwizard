@@ -15,7 +15,7 @@
 # The suspected cause is that LSR's error bits describe the character at the HEAD
 # of the RX FIFO rather than the live line, so they neither clear while a break
 # char sits at the head nor reload while the FIFO is full. That is a hypothesis
-# about this UART, and this script is the measurement that settles it.
+# about this UART, and this script was meant to be the measurement that settles it.
 #
 # WHAT IT PRINTS
 # Four states, each sampled several times, with the RX FIFO level (RXFIFO_LVL) and
@@ -27,6 +27,24 @@
 #   D  break OFF, FIFO reset first        -- BI must read CLEAR
 # A and D are the two controls. If either fails, no J5 conclusion drawn from BI on
 # this unit can be trusted, whatever the socket does.
+#
+# WHAT IT ACTUALLY MEASURED -- UNEXPLAINED, NOT REFUTED
+# ----------------------------------------------------
+# ⚠️ This script did not settle the hypothesis above. The false positive and the
+# false negative were both on unit .115, and run on that same unit it produced NO
+# received character at all: LSR read 0x60 in every state -- its RESET value, THRE
+# and TEMT and nothing else -- with RXFIFO_LVL and DR both zero across all twelve
+# samples (four states, three samples each). So a break driven under the UART's OWN
+# internal loopback never arrived anywhere the reader could see it, and state A, a
+# control, did not pass. Nothing read off BI on that unit can be attributed to a
+# line, a pad or a socket.
+# ⚠️ And the same internal-loopback break control has PASSED historically on unit
+# .73: a forced break there did set BI. Two units, the same register sequence,
+# opposite results. That contradiction is UNEXPLAINED -- the FIFO-head hypothesis
+# above is neither confirmed nor refuted by it, and no other mechanism has been
+# measured. Treat both blocks above as an open question rather than settled truth,
+# and get state A passing on the unit in front of you before believing any BI
+# reading taken on it.
 
 D=/usr/local/bin/devmem_write
 CM_FCLKEN_PER=0x48005000

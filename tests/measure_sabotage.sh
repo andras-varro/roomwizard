@@ -41,14 +41,14 @@ echo -n "  disabled group does not protect    "; run
 # ── 3. factory back to opt-in ──────────────────────────────────────────────
 # The 2026-08-06 reversal. One default across every flag; --keep-factory opts out.
 restore
-perl -0pi -e 's/^RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"$/RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras sweeps"/m' lib/rw-clean.sh
-perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras"/m' lib/rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras vendorscripts factory sweeps"$/RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras vendorscripts sweeps"/m' lib/rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts"/m' lib/rw-clean.sh
 echo -n "  factory reverted to opt-in         "; run
 
 # ── 4. --remove is a synonym for --deep-clean, not a subset ────────────────
 # i.e. someone "simplifies" by giving --remove the sweeps too.
 restore
-perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory sweeps"/m' lib/rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts factory sweeps"/m' lib/rw-clean.sh
 echo -n "  --remove given the sweeps too      "; run
 
 # ── 5. the scope records moved back into `base` ────────────────────────────
@@ -63,6 +63,37 @@ echo -n "  scope records back in 'base'       "; run
 restore
 sed -i '/^delete\tbase\t\/home\/root\/log\/[A-Za-z]/d' device-files/clean-rules.conf
 echo -n "  the 8 named vendor logs dropped    "; run
+
+# ── 7. vendorscripts back to opt-in ────────────────────────────────────────
+# The 2026-09-03 decision: /opt/sbin is deleted by default, --keep-vendorscripts
+# is the only way out. This is the same shape as case 3 one group over, and it is
+# what proves the E6/C30 pair is two-sided rather than a restatement of the
+# default. ⚠️ Both patterns name the group list VERBATIM, so adding a group to
+# lib/rw-clean.sh makes them no-ops and the harness then prints "not caught".
+restore
+perl -0pi -e 's/^RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras vendorscripts factory sweeps"$/RW_CLEAN_GROUPS_DEFAULT="base browser java snmp mail extras factory sweeps"/m' lib/rw-clean.sh
+perl -0pi -e 's/^RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras vendorscripts factory"$/RW_CLEAN_GROUPS_REMOVE="base browser java snmp mail extras factory"/m' lib/rw-clean.sh
+echo -n "  vendorscripts reverted to opt-in   "; run
+
+# ── 8. the /opt/sbin delete dropped, back to a keep ─────────────────────────
+# The revert-by-tidying shape for this group: someone restores the record this
+# change removed. The delete must be the thing that takes /opt/sbin, so with the
+# rule gone the /opt sweep must not quietly do it instead — which is why the
+# vendorscripts cases assert the plan, not only the tree.
+restore
+sed -i '/^delete\tvendorscripts\t\/opt\/sbin\t/d' device-files/clean-rules.conf
+printf 'keep\tbase\t/opt/sbin\trestored by hand, the pre-2026-09-03 record\n' >> device-files/clean-rules.conf
+echo -n "  /opt/sbin back to a base keep      "; run
+
+# ── 9. the /opt/sbin delete moved into `base`, i.e. made UNCONDITIONAL ──────
+# The case cases 7 and 8 cannot reach: with the record filed under `base` the
+# default plan is unchanged and E6 still passes, but --keep-vendorscripts no
+# longer means anything. This is the sabotage C31/C31a exist for — and the reason
+# both directions are asserted, since a group-gated delete and an unconditional
+# one are indistinguishable from the default plan alone.
+restore
+sed -i 's|^delete\tvendorscripts\t/opt/sbin\t|delete\tbase\t/opt/sbin\t|' device-files/clean-rules.conf
+echo -n "  /opt/sbin delete made base-group   "; run
 
 restore
 echo ""

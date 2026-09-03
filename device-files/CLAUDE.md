@@ -43,6 +43,11 @@ decided.
   reasoning is in the rules file: the payload restores software whose start-up this same clean removes,
   so keeping it preserves only the ability to undo a commissioning it can no longer perform. Do not
   reintroduce a middle setting.
+- ⚠️ **`/opt/sbin` goes with it, decided 2026-09-03** — group `vendorscripts`, `--keep-vendorscripts`
+  the opt-out. It used to be a `keep` bought by the reference material read out of those scripts; that
+  material is written down, so the bytes are not the record. Two consequences worth knowing: the kept
+  `S40ctrlblk` link now logs a missing-utility line once per boot, and `disable-steelcase.sh`'s
+  no-`/opt/sbin/cleanup` branch is the one that normally runs.
 - ⚠️ **A DISABLED group's paths are protected from every sweep**, not merely skipped by their own
   `delete` line — otherwise `--keep-java` leaves `/opt/openjre-8` named by a delete nobody runs and the
   `/opt` sweep removes it anyway. What `--keep-<group>` does *not* do is re-enable a boot link. Note the

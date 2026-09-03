@@ -8,9 +8,9 @@
 #
 # WHAT IT COVERS, and why each case is here rather than being obvious:
 #
-#   rw_is_rootfs      Every state a real card can be in — vendor-fresh, after
-#                     `commissioning/provision.sh --remove` (which deletes /opt/pv02), and
-#                     stripped down to nothing but the login banner. Plus the
+#   rw_is_rootfs      Every state a real card can be in — vendor-fresh, after a
+#                     default clean (which deletes /opt/sbin), and stripped down
+#                     to nothing but the login banner. Plus the
 #                     negative control that matters: a tree that has all four
 #                     files the caller EDITS and none of the vendor markers,
 #                     i.e. an ordinary Linux host's own root. The detector this
@@ -109,13 +109,13 @@ mkdir -p "$V/opt/pv02" "$V/opt/sbin/watchdog"
 echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$V/etc/issue"
 expect_rootfs yes "$V" "vendor-fresh rootfs"
 
-# 2. After commissioning/provision.sh --remove: /opt/pv02 is gone, /opt/roomwizard added.
+# 2. After a default clean: /opt/sbin is deleted (group `vendorscripts`) and our
+#    own /opt/roomwizard has arrived. /opt/pv02 is a `keep`, so it stays.
 R="$TMP/removed"
 make_required "$R"
-mkdir -p "$R/opt/sbin/watchdog" "$R/opt/roomwizard"
-: > "$R/opt/sbin/watchdog/watchdog.sh"
+mkdir -p "$R/opt/pv02" "$R/opt/roomwizard"
 echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$R/etc/issue"
-expect_rootfs yes "$R" "rootfs after --remove (no /opt/pv02)"
+expect_rootfs yes "$R" "rootfs after a default clean (no /opt/sbin)"
 
 # 3. Stripped to the banner alone: no /opt marker of any kind survives.
 B="$TMP/banner"

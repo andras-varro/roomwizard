@@ -140,9 +140,8 @@ part — read off the can, with 64-bit addresses `0013A200 4060D747` and `0013A2
 question is settled and the vendor's settable `ATMY`/`ATCH` are the right command set
 ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). ⚠️ **Orientation is still unverified**, and `J5`
 pin 1 is a live 3.3 V rail whatever UART3 does, so a reversed insertion is already a completed
-experiment. Neither module answers, and the hunt is
-[`IMPROVEMENT_PLAN.md` F5](IMPROVEMENT_PLAN.md#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open);
-one spare module is left, which still makes a swap a cheap control.
+experiment. Neither module ever answered, and the open `DOUT` net below is why — no module was ever
+given a receive path. No unit now has a module fitted; the modules are loose spares.
 
 **Pinout, partly measured 2026-07-30.** `J5` carries XBee pins **1–10** (pin 1 is the dotted end), `J6`
 carries **11–20**. Numbering runs down one strip and back up the other like a DIP, so pins 1 and 10 are
@@ -151,7 +150,7 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 | XBee pin | Socket | Signal | Status |
 |---|---|---|---|
 | 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
-| 2 | `J5` | `DOUT` — the SoC's RX | **measured OPEN: it does not reach the SoC's `uart3_rx` ball**, so nothing a module says can arrive. Of the twenty pins this was the one that mattered most, and it is the answer to F5's silence — see below. Unpowered it also reads open (>MΩ) to both pin 1 and pin 10, which excludes a discrete pull at the socket. |
+| 2 | `J5` | `DOUT` — the SoC's RX | **measured OPEN: it does not reach the SoC's `uart3_rx` ball**, so nothing a module says can arrive. Of the twenty pins this was the one that mattered most, and it is the answer to the radio's silence — see below. Unpowered it also reads open (>MΩ) to both pin 1 and pin 10, which excludes a discrete pull at the socket. |
 | 3 | `J5` | `DIN` — the SoC's TX | **measured: reaches the SoC's `uart3_tx` pad.** Driven low on command and read at the socket, against a 3.3 V idle — so the pinmux ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)) and the socket trace are both confirmed in this direction. |
 | 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
 | 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
@@ -174,7 +173,7 @@ pin 2 read 0 V in all three states, where a pullup of tens of kΩ against a 10 M
 would also beat the pullup — is excluded on the same unit: **unpowered, pin 2 to pin 10 is DC-open.**
 ⚠️ It does not *look* open at first. An ohmmeter reports a different value on every range and then reads
 infinite when the leads are lifted and replaced, because its test current is charging a capacitance rather
-than finding a resistance; the reconnect is the tell. `usb_host/xbee_socket_continuity.sh` drives both
+than finding a resistance; the reconnect is the tell. `probes/xbee_socket_continuity.sh` drives both
 directions from the SoC end, so the BGA never needs probing, and its `padup`/`paddown` steps are the
 meter-only pin-2 test. **[n=1]** — whether the other two units share the open net is unmeasured.
 

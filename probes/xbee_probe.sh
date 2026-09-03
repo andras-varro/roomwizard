@@ -1,6 +1,7 @@
 #!/bin/sh
 # xbee_probe.sh - talk to the radio on UART3 from userspace, with no kernel change.
-# Runs ON the device. Needs /usr/local/bin/devmem_write (this directory builds it).
+# Runs ON the device. Needs /usr/local/bin/devmem_write, which the usb_host component
+# builds and deploys; this folder builds nothing.
 #
 # WHY THIS WORKS WITHOUT A DTB PATCH, AND WHY THAT IS SAFE
 # -------------------------------------------------------

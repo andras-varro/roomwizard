@@ -458,8 +458,11 @@ ask_consent() {
 #   /usr/share/fonts      4.5 MB - ScummVM glyph source not ruled out
 #   /usr/lib/locale       2.9 MB - static ScummVM embeds locale-archive paths
 #   /usr/lib/perl5        2.5 MB - grep for #!/usr/bin/perl shebangs first
-#   /opt/sbin/*           1.4 MB - kept deliberately; the reference material
-#                                  SYSTEM_ANALYSIS.md 3.5 was read out of
+#
+# /opt/sbin (1.4 MB of vendor shell scripts) WAS in that list and is not any more:
+# it is deleted by default as of 2026-09-03, in group `vendorscripts`, with
+# --keep-vendorscripts as the opt-out. The reference material it used to buy is
+# already written down — see the record in the rules file's own reason.
 run_clean() {
     local mode="$1" title base_groups groups g
 

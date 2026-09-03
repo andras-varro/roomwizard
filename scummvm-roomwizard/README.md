@@ -115,7 +115,7 @@ D-pad and analog stick control the on-screen cursor. Full button mapping:
 | X (West) | Skip cutscene (Space) |
 | Y (North) | Escape / cancel |
 | Start | Global Main Menu (Ctrl+F5) |
-| Select | Save/load dialog (F5) |
+| Select | Save/load dialog — F5 |
 | L Bumper | Skip dialog text |
 | R Bumper | Skip dialog text |
 | D-pad / Left Stick | Move cursor |

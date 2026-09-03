@@ -39,13 +39,14 @@
 # caller would fail partway through, so it is not merely an identity question.
 #
 # RW_ROOTFS_VENDOR is identity, and it is an OR because our own tooling deletes
-# some of these. `commissioning/provision.sh --remove` does `rm -rf /opt/pv02`, and
-# --deep-clean removes more — yet pulling the card of a unit already in service
-# to reset its password or rename it is a normal thing to do, and must still be
-# recognised. /opt/sbin/watchdog and /etc/issue are never touched by anything in
-# this repo (commissioning/provision.sh keeps /opt/sbin/* deliberately), and
-# /opt/roomwizard/ exists only once our own Phase 2 has run — so at least one of
-# the four survives every state a card can be in.
+# some of these. The clean removes /opt/sbin BY DEFAULT as of 2026-09-03 (group
+# `vendorscripts` in device-files/clean-rules.conf, so watchdog.sh goes under
+# --remove too), and /opt/roomwizard exists only once our own Phase 2 has run —
+# yet pulling the card of a unit already in service to reset its password or
+# rename it is a normal thing to do, and must still be recognised. What no clean
+# touches is /opt/pv02, which is a `keep` there and asserted to survive by
+# tests/rw_clean_test.sh, and /etc/issue, which no rule in either rules file
+# names — so at least one of the four survives every state a card can be in.
 RW_ROOTFS_REQUIRED="etc/shadow etc/hosts etc/ssh/sshd_config etc/network/interfaces"
 RW_ROOTFS_VENDOR="opt/sbin/watchdog/watchdog.sh opt/pv02 opt/roomwizard"
 RW_ISSUE_RE='RW20 Embedded Platform'

@@ -127,7 +127,7 @@ names `/dev/mmcblk0p{2,3,5,7}`, both by position.
 
 | Function | Question | How |
 |---|---|---|
-| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because `commissioning/provision.sh --remove` deletes `/opt/pv02`, and a card already in service must still be recognisable. |
+| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because our own clean deletes `/opt/sbin` by default and `/opt/roomwizard` arrives only with phase 2, and a card already in service must still be recognisable. |
 | `rw_is_card_disk` | is this disk a RoomWizard card? | the partition table: start and size of p1 p2 p3 p5 p6, which are byte-identical on every unit. p4 and p7 are **not** pinned — they absorb the difference in physical card size. |
 
 Two safety properties worth knowing, because a content scan can reach places a UUID lookup could

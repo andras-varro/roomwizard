@@ -61,7 +61,8 @@ if [ -d "/opt/sbin/cleanup" ]; then
 CRONTAB_EOF
     echo "  Cron: clean crontab installed (kept: rotatelogfiles, cleanupfiles)"
 else
-    # No cleanup scripts available (removed by --remove), empty crontab
+    # No cleanup scripts available — /opt/sbin goes with every clean by default
+    # (group `vendorscripts`), so this is the branch that normally runs.
     crontab -r 2>/dev/null || true
     echo "  Cron: crontab cleared (cleanup scripts not found)"
 fi

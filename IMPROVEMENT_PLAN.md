@@ -350,97 +350,6 @@ Three MADC channels are readable with `cat` **today** and have zero references i
   channel without a teardown.
 - `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
 
-### F5. RoomWizard-to-RoomWizard wireless via the 802.15.4 radio — open
-
-The most *interesting* capability on the board: two-player games across a corridor, high-score sync,
-presence beacons — with no network involved.
-
-⚠️ **The cause of the silence is measured, and it is wiring: `J5` pin 2 (`DOUT`) does not reach the SoC.**
-On an opened, powered unit with the socket empty, pin 3 (`DIN`) follows UART3's transmitter from 3.3 V to
-0 V on command, while pin 2 reads 0 V through a `PULLUP` → `PULLDOWN` → `PULLUP` sweep of the `uart3_rx`
-pad — a pullup a connected pin could not lose to. Numbers, controls and the one competing reading:
-[`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion). **So the SoC can
-transmit to a module and can never receive from one, and this entry is a wiring job before it is anything
-else.** Everything downstream — a real `ttyO2`, a game protocol, pairing — is unchanged but unreachable
-until the net is closed.
-
-⚠️ **That retires both sweeps as evidence about the modules.** `AT` command mode at all eight `BD` rates
-and a framed `ATVR` at all eight were silent on both radio'd units, and each was read as a statement about
-the module or its mode. Both were listening on a net that is not attached, so they say nothing about
-either module: an `XB24-ACI-001 revC` may have been answering correctly the whole time. The `AP = 1`
-reasoning and the eight-rate sweep were sound and stay in `usb_host/xbee_probe.sh` — they have simply
-never been *given* a receive path.
-
-⚠️ **The pad-pulldown stage is struck, and with it every reading that rests on `LSR` `BI`.** That stage
-flipped the RX pad to `PIN_INPUT_PULLDOWN` and looked for a break; a never-populated unit read `LSR 0x60`
-with no `BI`, identical to the radio'd ones, so it cannot see presence. The deeper problem is the detector
-itself: on the opened unit a break driven under the UART's own **internal loopback** produced no received
-character at all — `LSR` stuck at `0x60`, its reset value, with `RXFIFO_LVL` and `DR` both zero across
-twelve samples in four states. `usb_host/xbee_uart_break_semantics.sh` is that measurement; it needs no
-socket and no meter, and prints the FIFO level beside `BI` so a stuck flag can be told from a live one.
-**Its controls A and D are the gate: while A fails, no `BI`-derived conclusion on that unit means
-anything** — including the same probe's own "forced break set `BI`" control, which has passed historically
-and must therefore be re-measured. Two contradictory readings came out of that bit within an hour, one set
-while the pad's own pullup drove the ball high, one clear while a break was actively being driven.
-
-**Next, in order — the first two need no code.** ① **Locate the break.** The leading candidate is a
-factory-unpopulated series link on the `DOUT` net: no unit shipped with a radio, so a part only the radio
-needs is exactly what gets left off. Look for bare two-pad footprints on the traces leaving `J5`, then
-continuity-check pin 2 to each pad with the unit **unpowered**. A cold joint on the socket pin itself is
-the cheaper alternative and shows the same symptom. ② **Establish whether it is per-unit** before assuming
-three identical boards share it — run `usb_host/xbee_socket_continuity.sh` on the reference unit and on the
-4.12 unit; its `padup`/`paddown` steps are the meter-only test and need neither clock nor UART.
-③ Only once a receive path exists is module health testable, and then the one spare module is the control,
-with `SM` sleep on XBee pin 9 and `D6` RTS on pin 16 as the suspects the socket may leave floating.
-
-**Everything underneath the radio is settled, and none of it needs kernel work.** The socket, its
-orientation and its 3.3 V rail are measured
-([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)); the UART3 pads
-already come up in the right mode; and because a `status = "disabled"` node has no driver bound to it,
-userspace can drive UART3 outright for the cost of one clock-gate bit — no DTB patch, no reboot.
-Registers, measured values and the self-validation rule:
-[`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports). Pad identity is confirmed from the vanilla
-tree rather than assumed — four OMAP3 boards carry the same `uart3_rx` pad address and the mux macro's
-argument is the absolute low-16 address — so "wrong pad" is dead.
-
-⚠️ **`usb_host/xbee_socket_continuity.sh` has a stepped mode, and it exists for a harness reason.** The
-self-timed run prints a prompt and then sleeps 30 s, which only works if the operator can see the device's
-own terminal; driven over `ssh` from a host nobody is watching, the window is invisible and the meter
-reading is missed. `init`, `txlow`, `txidle`, `phase2`, `phase2up`, `clearctl` and `restore` each **hold**
-their state until the next invocation instead. State is therefore deliberately persistent, so a stepped
-session **must** end in `restore`, which puts the pad and the clock gate back and prints both read-backs.
-
-⚠️ **Reading the same ball through the GPIO module is deprioritised rather than open.**
-`usb_host/xbee_pad_gpio_read.sh` muxes the RX pad to `MUX_MODE4` and sweeps all six banks' `DATAIN` while
-driving the pad's own pull; no bit follows, but nothing has shown `DATAIN` tracks *any* pin on this path,
-so it needs a known SoC GPIO in a known bank as a positive control — the LEDs cannot be it, being TWL4030
-PMIC PWM ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)),
-and GPIO12, the speaker unmute, is the candidate. Its motive was to see a module through that pad, which
-an open net makes impossible, so it is now worth finishing only as instrument work. ⚠️ Banks 3–6 are
-**clock-gated off** on a stock unit and a gated read returns *nothing*, which reads as steady agreement
-rather than as a blind column; the script refuses an unreadable bank (`CM_ICLKEN_PER` bits 13–17).
-
-**Only once a module answers is the boot path worth paying for**, and then it buys a real `ttyO2` for
-game code instead of register pokes, plus visibility into a boot that fails. Two ways, unchanged: wire
-`P4` — three wires and a true RS-232 adapter, a 3.3 V TTL one will not do — or extend
-`lib/rw-usbpower.sh`, the one legitimate `uImage-system` writer, to a further target derived from the
-vendor kernel in a single pass, never a second writer (`lib/CLAUDE.md`). ⚠️ **On the 4.12 unit the second
-option costs less than this entry used to claim:** it already runs the 500 mA patched kernel with a
-verified pristine `uImage-system.vendor` beside it on p1, so its untouched-kernel rollback is already
-spent, and recovery there is the card-reader file copy that writer already prescribes on failure. What
-`P4` adds is a diagnosis of a boot that fails, which no card pull gives you.
-
-**The userspace route reaches a second unit unchanged, and the pad question is closed by measurement.**
-That unit shipped on a third firmware release, so this was worth checking rather than assuming: read
-offline from its card, its device tree has UART3 (`serial@49020000`) `status = "disabled"` with no pinctrl
-property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and `ti,bit-shift` —
-identical to the release everything else was measured on, whose live `/proc/device-tree` says the same. So
-the clock-gate step and `usb_host/xbee_probe.sh` transfer as they are. **The pad configuration was the part
-the tree could not establish** — no release muxes those pads, so on a working unit it comes from the
-bootloader — and a live register read on that unit says `0x4800219e` = `0x118` and `0x480021a0` = `0x000`,
-the same pair as the reference unit. Commission such a unit with `--no-usb-power` (F23); the radio needs no
-USB budget.
-
 ### F6. Multi-touch via direct I2C — open
 
 The panel controller is 2-point multi-touch with on-chip gestures, and `panjit_ts` flattens it to
@@ -618,8 +527,7 @@ every release is the same table plus 5 MB of payload each) and it is not ours to
 `LICENSE.md`.
 
 **Not a blocker for anything today.** `--no-usb-power` commissions such a unit fully; the cost is that it
-keeps the vendor's 100 mA budget, so USB peripherals on *that* unit stay limited. The 802.15.4 radio needs
-no USB budget at all (F5).
+keeps the vendor's 100 mA budget, so USB peripherals on *that* unit stay limited.
 
 **A same-release card restore is the other way out, and it worked** — the refusing unit was re-imaged by
 `dd` from a whole-card capture of the reference unit and then patched, after which its p1 carries
@@ -1059,11 +967,10 @@ point of the split rather than a cost of it, since the always-open document is t
 tokens used instead were each grepped for uniqueness first, and finding this is the reason to grep: **a
 "move it out" receipt needs a token that is unique to the block being moved, not merely distinctive.**
 
-⚠️ **A fifth stale claim, and again it was a pointer that its destination did not satisfy.** §2.4 said
-"the staging that protected a single module is in `IMPROVEMENT_PLAN.md` F5" — F5 was rewritten 2026-08-13
-to say that staging is **spent**: there are three modules, one is seated, and the open steps are proving
-the seated module's health. Rewritten to what F5 now says, in `HARDWARE.md` §4. **That is
-five for five: every pointer checked against its destination this cleanup has found one wrong.**
+⚠️ **A fifth stale claim, and again it was a pointer that its destination did not satisfy.** §2.4 pointed
+at a plan entry for "the staging that protected a single module", and that entry had since been rewritten
+to say the staging was **spent**. The fact itself now lives in `HARDWARE.md` §4, in place of the pointer.
+**That is five for five: every pointer checked against its destination this cleanup has found one wrong.**
 
 ⚠️ **Group C is the instrument for a duplicate deletion, not only for a planned extraction.** Writing the
 row *before* the cut is what proves the destination already holds the fact, and it is cheap — part 2 added
@@ -1287,6 +1194,19 @@ number 1 again, twice.** For group A the safe form is a fragment in angle bracke
 `.md` in front of it: bracketing only the *filename* half does not help, because the scan's path part
 matches the empty string.
 
+### C15. The bare plan-ID scan collides with function-key names — open, measured 2026-09-03
+
+`bare_sites()` in `tests/doc_check.sh` matches an `F`-numbered ID in parentheses or after `see`/`is`/
+`was`, and F1-F12 are key names as well as plan IDs here — so the ScummVM key-table row
+`Save/load dialog (F5)` counted as a citation. It resolved silently for as long as that heading
+existed, then became a dangling citation the moment the entry was deleted; the tree was made green by
+rewording the key row in `scummvm-roomwizard/README.md`. **So the reported citation count carries
+false positives, and the next F-numbered entry to close will fail the gate on unrelated
+documentation.** Narrow the scan rather than excluding a file: a hit on a line that also carries a
+key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key table, is not a
+citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
+fire in a file of the same kind, or the scan goes blind where it used to see.
+
 ---
 
 ## Out of Scope
@@ -1309,8 +1229,8 @@ Steelcase has been explicitly ruled out.
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
 | Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
 
-**Note:** enabling **UART3** for the ZigBee radio (F5) is *not* in this table — it may be reachable by
-patching the appended DTB, which needs no kernel source.
+**Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the
+appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
 
 ---
 
