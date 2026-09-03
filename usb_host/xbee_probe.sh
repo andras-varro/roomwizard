@@ -227,29 +227,37 @@ tryapi " 57600" 0x34 0x00
 tryapi "115200" 0x1a 0x00
 
 # ---------------------------------------------------------------------------
-# IS ANYTHING OUT THERE AT ALL? -- the one thing the loopback cannot see
+# THE DOUT NET'S IDLE STATE -- which cannot tell you what is in the socket
 # ---------------------------------------------------------------------------
 # MCR bit 4 loops TX into RX *inside* the module, so the self-test above proves
 # the UART and proves nothing about the pads. And the RX pad comes up
 # PIN_INPUT_PULLUP, so the line reads idle-high whether a module is driving it
-# or not -- which is exactly why a radio in the wrong mode and a pad that
-# reaches nothing produce the identical silence above.
-#
-# Flipping that one pad to PIN_INPUT_PULLDOWN separates them. An XBee DOUT is a
-# push-pull 3.3 V output and beats the SoC's internal pulldown, so a powered,
-# correctly-oriented module holds the line HIGH. With nothing driving it the
-# pulldown wins, the UART sees a continuous space, and LSR sets BI (bit 4).
+# or not. Flipping that one pad to PIN_INPUT_PULLDOWN was meant to separate
+# those: an XBee DOUT is a push-pull 3.3 V output that beats the SoC's internal
+# pulldown, so a live module should hold the line HIGH, and with nothing driving
+# it the pulldown should win, giving a continuous space and LSR BI (bit 4).
 # Bit values are PIN_INPUT_PULLUP / PIN_INPUT_PULLDOWN straight out of the
 # vanilla tree's include/dt-bindings/pinctrl/omap.h, not a remembered layout.
 #
-# TWO CONTROLS, neither optional, because "no break" is the interesting answer
-# and both failure modes of this instrument produce it for free:
+# ⚠️ MEASURED, AND THE SECOND HALF OF THAT IS FALSE ON THIS BOARD. Run on a unit
+# with NO module fitted at all -- an empty socket, both controls below passing --
+# this stage read LSR 0x60 with no BI: byte-identical to the two units that do
+# carry a module. Something on the DOUT net outpulls the SoC's internal pulldown,
+# so "held high" is simply this board's idle state, with or without a radio, and
+# says nothing about presence, power or orientation. The AT and API sweeps above
+# are the only stages here that can see a module at all.
+#
+# The stage is kept because its controls are sound and the net's idle state is a
+# board fact worth printing -- not because it can identify what is fitted.
+#
+# TWO CONTROLS, neither optional, because both failure modes of this instrument
+# produce a "no break" reading for free:
 #   * a break detector that can never fire. So force a break first -- LCR bit 6
 #     drives TX low, and under loopback that lands on RX -- and require BI.
 #   * a padconf write that did not land. So read the register back and require
 #     the pad to have actually changed before believing the reading.
 echo
-echo "== is anything driving the RX pad? (pullup off, so the pad cannot fake it) =="
+echo "== the DOUT net's idle state (pullup off; it cannot identify a module) =="
 setbaud 0x38 0x01               # 9600: longest bit time, most robust break detect
 
 w $MCR 0x13; w $LCR 0x43        # loopback + break enable: TX held low onto RX
@@ -280,8 +288,8 @@ else
       echo "   driving DOUT: the pad is not reaching a powered module."
       driving=1
     else
-      echo "   LSR $lsr -- no break: something is holding the line high. ⚠️ Read the"
-      echo "   caveat at the end before calling that a working socket."
+      echo "   LSR $lsr -- no break: the net is held high. ⚠️ An EMPTY socket on this"
+      echo "   board reads exactly the same, so this says nothing about a module."
       driving=0
     fi
   fi
@@ -297,15 +305,16 @@ elif [ $apianswered -eq 0 ]; then
   echo "   ATWR to persist it, and the AT sweep above will answer next run."
   answered=0
 elif [ $driving -eq 0 ]; then
-  echo "== silent to AT and to API, and the RX line is held HIGH. =="
+  echo "== silent to AT and to API, at every rate. =="
   echo "   API mode is ruled out by the frame sweep, and every BD value by the"
-  echo "   eight-rate sweep. What is left is a pin the socket leaves floating --"
-  echo "   SM sleep on pin 9, or D6 RTS flow control on pin 16."
-  echo "   ⚠️ This does NOT yet rule out the wiring: the forced break above proves"
-  echo "   the detector fires, not that THIS pad can ever read low, and a board"
-  echo "   pullup on the DOUT net would read identical with no module fitted."
-  echo "   Re-run once with the module OUT: it must say BREAK. Until it has, treat"
-  echo "   \"held high\" as \"not measured\" rather than as a working socket."
+  echo "   eight-rate sweep, with the instrument proving itself first."
+  echo "   ⚠️ The RX line reads high, but do NOT read that as a working socket: an"
+  echo "   EMPTY socket on this board reads identically, measured with both"
+  echo "   controls passing, so the net is held up by something other than a radio."
+  echo "   What has never been measured is continuity from J5 pin 2 (DOUT) and"
+  echo "   pin 3 (DIN) to the SoC pads. Until a meter says the socket reaches"
+  echo "   UART3 at all, a floating SM or RTS pin is a guess about a link that may"
+  echo "   not exist -- see HARDWARE.md, Unpopulated and expansion."
 elif [ $driving -eq 1 ]; then
   echo "== silent AND nothing is driving DOUT. =="
   echo "   The module is not talking to the pad at all. Check orientation against"

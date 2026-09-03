@@ -151,15 +151,27 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 | XBee pin | Socket | Signal | Status |
 |---|---|---|---|
 | 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
+| 2 | `J5` | `DOUT` — the SoC's RX | **continuity not measured**, and of the twenty pins this is the one that matters most. Its idle *level* is measured and is not informative — see below. |
 | 3 | `J5` | `DIN` — the SoC's TX | not measured. The pad is already muxed as `uart3_tx` ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)), so this no longer proves the mux; what it would confirm is the socket trace. An idle UART transmitter sits **high**. |
 | 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
 | 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
 | 10 | `J5` | `GND` | **measured ground.** With pin 1 at 3.3 V this confirms the socket is correctly identified *and* correctly oriented. |
 
-The electrical question is therefore settled, and so is the pinmux — the pads come up in `uart3` mode
+The **power** question is therefore settled, and so is the pinmux — the pads come up in `uart3` mode
 ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). An XBee fed reversed dies instantly, which is why
 the orientation was measured before anything was inserted — and why, on the unit that now has one seated,
-the module's health is an open question rather than an assumption.
+the module's health is an open question rather than an assumption. **The two data nets are the part that
+is not settled**, and neither `DOUT` nor `DIN` has been shown to reach the SoC.
+
+⚠️ **The `DOUT` net idles high with the socket EMPTY, so its level cannot tell you what is fitted.**
+`usb_host/xbee_probe.sh` flips the SoC's `uart3_rx` pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN`
+and looks for a break, reasoning that an XBee's push-pull `DOUT` would beat an internal pulldown while an
+unfitted socket would not. Run on a unit with **no module fitted at all**, and with both of the probe's
+controls passing — a forced break under loopback setting `BI`, and the padconf write reading back changed
+— it returned `LSR 0x60` with no `BI`: byte-identical to the units that do carry a module. So something
+on that net outpulls the SoC's internal pulldown and a held-high reading is this board's idle state
+either way. Only the `AT` and `API` sweeps can see a module. **The measurement that would actually settle
+the link is a meter: continuity from `J5` pin 2 to the `uart3_rx` pad, and pin 3 to `uart3_tx`.**
 
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 

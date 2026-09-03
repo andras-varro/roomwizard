@@ -364,17 +364,15 @@ Registers, measured values and the self-validation rule:
 [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports).
 
 ⚠️ **So the boot path does not gate this entry, and the radio has already been probed.**
-`usb_host/xbee_probe.sh` on `.188` drove command mode at 9600, 19200, 38400, 57600 and 115200 — `+++`
-and a bare `AT` at each — and the module was **silent at every rate**. 57600 is only what the vendor's
-own tooling uses; an XBee leaves the factory at 9600, so silence at one rate would have proved nothing.
-The probe proves itself against the UART's internal loopback before reporting, and has been seen
-printing both outcomes, so this is a result about the radio rather than about the instrument.
+`usb_host/xbee_probe.sh` reaches UART3 from userspace, proves itself against the UART's internal loopback
+before reporting anything, and has been seen printing both outcomes. So the silence below is a result
+about the radio **or about its wiring** — but not about the instrument.
 
-**What is left is not the module, not the socket, and not the module's mode — all three were measured
-out.** Two units now carry a radio, and `usb_host/xbee_probe.sh` was run on both. Each is
+**The module and its mode are measured out. The socket is not, and that is now the open end.** Two units
+now carry a radio, and `usb_host/xbee_probe.sh` was run on both. Each is
 `XB24-ACI-001 revC`, a Series 1 802.15.4 part read off the label
 ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)), so the series
-question is closed and so is the "S2 answers no `AT`" caveat that used to head this list. Three sweeps,
+question is closed and so is the "S2 answers no `AT`" caveat that used to head this list. Two sweeps,
 identical on both units:
 
 1. **`AT` command mode at all eight `BD` rates — silent.** The sweep used to try five; `BD = 0..2` is
@@ -383,23 +381,27 @@ identical on both units:
 2. **A framed `ATVR` at all eight rates — silent.** `AP = 1` is a setting rather than a series, so a
    module left in API mode answers no `AT` at any rate and looks exactly like a dead one. It answers a
    frame, so this rules API mode out rather than leaving it as the leading candidate.
-3. **The RX line is held HIGH with the pad's pullup turned off** — `LSR 0x60`, no `BI`, on both units.
 
-⚠️ **Do not promote step 3 to "the socket works" — that is the one claim this session did not earn.**
-The internal loopback (`MCR` bit 4) proves the UART and never reaches the pads, so the probe flips the RX
-pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN` (`0x4800219c`, upper halfword; values from the vanilla
-tree's `include/dt-bindings/pinctrl/omap.h`) and looks for a break. It carries two controls — a forced
-break under loopback, which must set `BI`, and a read-back of the padconf write — and both pass. But
-neither establishes that *this pad* can ever read low: **a pullup somewhere on the DOUT net would read
-`0x60` with no module fitted at all**, and both units reading byte-identical is consistent with that.
+⚠️ **A third sweep used to be listed here, and it is struck: the pad-pulldown stage cannot see a module.**
+That stage flips the RX pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN` (`0x4800219c`, upper halfword)
+and looks for a break, and on both radio'd units it read `LSR 0x60` with no `BI` — which was written down
+as "something is holding DOUT high, so the socket reaches a powered module". **A unit whose socket is
+EMPTY reads exactly the same**, with that stage's two controls passing: a forced break under loopback
+setting `BI`, and a read-back of the padconf write. So the board holds that net up on its own, and the
+reading carries no information about presence, power or orientation
+([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
+`usb_host/xbee_probe.sh` no longer claims otherwise.
 
-**The next step is a human at a unit, and it is one run, not a swap.** Pull the module and re-run the
-probe: it must print `BREAK`. If it does, the socket is genuinely reaching a powered module and the
-remaining suspects are pins the socket may leave floating — `SM` pin sleep on XBee pin 9, or `D6` RTS
-flow control on pin 16, either of which keeps a live module quiet while it still idles DOUT high. If it
-still prints "no break" with the module out, the pulldown stage is measuring the board and not the radio,
-and step 3 above must be struck from this entry. One spare module is left, so a swap is still available
-as a second control — but it is no longer the cheapest next measurement.
+**The next measurement is a meter, not another probe run.** Nothing has established that the socket
+reaches UART3 at all: neither `J5` pin 2 (`DOUT`) nor pin 3 (`DIN`) has been checked for continuity to its
+pad, and every result above is consistent with a link that does not exist. The SoC is a BGA, so its pads
+cannot be probed — `usb_host/xbee_socket_continuity.sh` puts the UART at the far end of each direction
+instead. It holds TX low so a voltmeter on pin 3 reads ~0 V against ~3.3 V idle, then watches for `BI`
+while pin 2 is pulled to GND through a resistor; run it with the socket **empty**, and it restores the
+clock gate and the pad on exit. That partitions what is left. If both traces are good, the suspects are
+pins the socket may leave floating — `SM` sleep on XBee pin 9, or `D6` RTS flow control on pin 16, either
+of which keeps a live module quiet — and the one spare module becomes the next control. If a trace is
+open, no register work will ever reach the radio and this becomes a wiring job.
 
 **Only once a module answers is the boot path worth paying for**, and then it buys a real `ttyO2` for
 game code instead of register pokes, plus visibility into a boot that fails. Two ways, unchanged: wire
