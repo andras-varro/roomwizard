@@ -41,18 +41,249 @@ LCR=0x4902000c; MCR=0x49020010; LSR=0x49020014
 MDR1=0x49020020; RHR=0x49020000
 PADCONF_RX=0x4800219c
 PAD_RX_PULLDOWN=0x0108
+PAD_RX_PULLUP=0x0118          # the boot value on every unit measured
 padconf_orig=""
 
 [ -x "$D" ] || { echo "missing $D -- deploy it first"; exit 2; }
 
 r() { $D "$1" | sed -n 's/.*current value = 0x\([0-9a-fA-F]*\).*/\1/p'; }
 w() { $D "$1" "$2" >/dev/null 2>&1; }
+# ⚠️ LSR's error bits (BI included) describe the character at the HEAD of the RX
+# FIFO, not the live line. They do not clear until that character is popped, and
+# they only RELOAD when the head advances -- so a break that has already happened
+# keeps BI set indefinitely, and a clearing read while the FIFO is full leaves BI
+# clear indefinitely. Both failure directions were measured on 2026-09-02, an hour
+# apart, and each one read as a confident statement about the socket.
+#
+# ⚠️ Emptying it by reading RHR does not work here: every read is a fork+exec of
+# devmem_write, tens of ms, while a continuous break delivers a character every
+# ~1 ms at 9600. The pop loop loses that race, the FIFO stays full, and a forced
+# break under loopback then reads as NO break -- measured, with the break still
+# being driven. FCR bit 1 resets the RX FIFO in ONE write instead, which no
+# arrival rate can outrun.
+#
+# So a sample is: flush, read LSR once to clear the sticky bits, WAIT, read again.
+# A genuinely low line re-latches BI during the wait; a high line delivers nothing
+# and leaves it clear.
+rx_flush() { w $FCR 0x07; }
 cleanup() {
   w $LCR 0x03; w $MCR 0x03; w $MDR1 0x7
   [ -n "$padconf_orig" ] && w $PADCONF_RX 0x$padconf_orig
   w $CM_FCLKEN_PER $FCLK_RESTORE
 }
 trap cleanup EXIT INT TERM
+
+# STEPPED MODE -- why it exists
+# -----------------------------
+# The self-timed run below prints a prompt and then sleeps 30 s. That only works
+# if the operator can SEE this terminal. Driven over ssh from a host the operator
+# is not watching, the windows are invisible and the meter reading is missed.
+# These subcommands HOLD each state until the next invocation instead, so the
+# reading is taken at the operator's pace. State is therefore deliberately
+# persistent -- the EXIT trap is cleared and NOTHING is put back until
+# `restore` is called. Always finish a stepped session with `restore`.
+#
+#   init      clock on, 9600 8N1, break-detector control, TX left IDLE
+#   txlow     hold TX low            (same pin as init, the other state)
+#   txidle    release TX to idle
+#   phase2 [s]  RX pad -> pulldown, baseline, then watch s seconds for a break
+#   phase2up [s] the inverse: baseline IS the break, watch for it to CLEAR
+#   clearctl  the control phase2up needs: can BI be seen CLEARING at all?
+#   padup / paddown  set the RX pad pull for a meter-only test of J5 pin 2
+#   restore   UART regs, RX pad and the clock gate back; prints both read-backs
+PAD_SAVE=/tmp/xbee_j5_padconf.orig
+
+uart_9600() {
+  w $MDR1 0x7
+  w $LCR 0xbf; w $EFR 0x10
+  w $LCR 0x00; w $IER 0x00
+  w $LCR 0xbf; w $DLL 0x38; w $DLH 0x01
+  w $LCR 0x03; w $MCR 0x03; w $FCR 0x07; w $MDR1 0x00
+}
+
+case "$1" in
+  init)
+    trap - EXIT INT TERM
+    w $CM_FCLKEN_PER $FCLK_UART3_ON
+    r $PADCONF_RX > $PAD_SAVE
+    echo "padconf_rx saved as 0x$(cat $PAD_SAVE)"
+    uart_9600
+    w $MCR 0x13; w $LCR 0x43
+    sleep 1; rx_flush; r $LSR >/dev/null; sleep 1
+    bi=$(( 0x$(r $LSR) & 0x10 ))
+    w $LCR 0x03; w $MCR 0x03
+    if [ $(( bi )) -eq 0 ]; then
+      echo "CONTROL FAILED: a forced break under loopback did not set BI."
+      echo "Nothing measured after this could be attributed. Stopping."
+      exit 1
+    fi
+    echo "CONTROL OK: forced break set BI, so the detector fires."
+    echo "TX is IDLE and stays idle. Expect ~3.3 V on J5 pin 3 (black on pin 10)."
+    ;;
+  txlow)
+    trap - EXIT INT TERM
+    w $LCR 0x43
+    echo "TX HELD LOW (LCR 0x$(r $LCR)). Expect ~0 V on J5 pin 3."
+    ;;
+  txidle)
+    trap - EXIT INT TERM
+    w $LCR 0x03
+    echo "TX released to IDLE (LCR 0x$(r $LCR))."
+    ;;
+  phase2)
+    trap - EXIT INT TERM
+    [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
+    orig=$(cat $PAD_SAVE)
+    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | ($PAD_RX_PULLDOWN << 16) )))
+    got=$(( 0x$(r $PADCONF_RX) >> 16 ))
+    if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
+      echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
+      exit 1
+    fi
+    echo "RX pad set to PIN_INPUT_PULLDOWN, verified by read-back."
+    rx_flush; r $LSR >/dev/null; sleep 2
+    base=$(r $LSR)
+    echo "baseline with nothing pulled: LSR 0x$base"
+    if [ $(( 0x$base & 0x10 )) -ne 0 ]; then
+      echo "BASELINE ALREADY SHOWS A BREAK -- cannot attribute one. Stopping."
+      exit 1
+    fi
+    lim=${2:-60}
+    echo "baseline clean. Watching ${lim} s -- pull J5 pin 2 to GND now."
+    hit=0; n=0
+    while [ $n -lt $lim ]; do
+      rx_flush; r $LSR >/dev/null; sleep 1; l=$(r $LSR)
+      if [ $(( 0x$l & 0x10 )) -ne 0 ]; then
+        echo "BREAK at ~${n}s (LSR 0x$l) -- J5 pin 2 REACHES the SoC RX pad."
+        hit=1; break
+      fi
+      n=$((n+1))
+    done
+    [ $hit -eq 0 ] && echo "NO break in ${lim} s -- J5 pin 2 did not reach the pad."
+    ;;
+  padup|paddown)
+    # The pin-2 test that does not involve the UART at all, and the only one that
+    # has produced a clean answer. The pad's pull lives in the control module, so
+    # these need no clock gate, no UART setup and no break detection -- which is
+    # what makes them trustworthy while BI is not (see clearctl). A connected pin
+    # cannot lose to a pullup of tens of kohm against a 10 Mohm meter, so:
+    #   padup   -> meter J5 pin 2, black on pin 10.  Connected reads ~3.3 V.
+    #   paddown -> meter it again.                   Either way reads ~0 V.
+    #   padup   -> meter it again.  Still 0 V twice = the pin is not connected.
+    # ⚠️ Re-read pin 1 (3.3 V) beside EVERY reading. A poor probe contact on pin 2
+    # produced a spurious 4.4 V once, which briefly read as a live net.
+    # The upper halfword is written explicitly rather than saved, so these steps
+    # stand alone and cannot poison a saved original by running out of order.
+    trap - EXIT INT TERM
+    case "$1" in
+      padup)   want=$PAD_RX_PULLUP ;;
+      paddown) want=$PAD_RX_PULLDOWN ;;
+    esac
+    cur=$(r $PADCONF_RX)
+    w $PADCONF_RX $(printf "0x%08x" $(( (0x$cur & 0x0000ffff) | ($want << 16) )))
+    got=$(( 0x$(r $PADCONF_RX) >> 16 ))
+    if [ $(( got )) -ne $(( want )) ]; then
+      echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
+      exit 1
+    fi
+    echo "uart3_rx pad = $(printf 0x%04x $want) ($1), verified: 0x$(r $PADCONF_RX)"
+    echo "Now meter J5 pin 2 with black on pin 10, and re-read pin 1 as the control."
+    ;;
+  clearctl)
+    # The control phase2up needs and cannot supply itself. phase2up's positive
+    # signal is BI *stopping* -- so a run that never sees BI stop is only a result
+    # if BI has been seen stopping on THIS pad, in THIS session. Restoring the
+    # pad's own PIN_INPUT_PULLUP is that demonstration: it drives the same ball
+    # high from inside the SoC, needing no operator and no socket. BI clears ->
+    # the detector reports "high" and phase2up's silence is about pin 2. BI does
+    # NOT clear -> the reader cannot see high here at all and phase2up's negative
+    # means nothing. Left in PULLDOWN afterwards so phase2up can follow it.
+    trap - EXIT INT TERM
+    [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
+    orig=$(cat $PAD_SAVE)
+    w $PADCONF_RX 0x$orig
+    echo "RX pad restored to its boot value 0x$(r $PADCONF_RX) (pullup)."
+    rx_flush; r $LSR >/dev/null; sleep 1
+    c1=$(r $LSR); rx_flush; r $LSR >/dev/null; sleep 1; c2=$(r $LSR)
+    echo "with the internal pullup: LSR 0x$c1 then 0x$c2"
+    if [ $(( 0x$c1 & 0x10 )) -eq 0 ] && [ $(( 0x$c2 & 0x10 )) -eq 0 ]; then
+      echo "CONTROL OK: BI cleared, so this reader can see the line HIGH."
+      ok=1
+    else
+      echo "CONTROL FAILED: BI still latching with the pad's own pullup driving"
+      echo "the ball high. This reader has not been shown able to see HIGH, so a"
+      echo "phase2up negative cannot be attributed to pin 2."
+      ok=0
+    fi
+    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | ($PAD_RX_PULLDOWN << 16) )))
+    echo "pad returned to PIN_INPUT_PULLDOWN (0x$(r $PADCONF_RX))."
+    [ $ok -eq 1 ] || exit 1
+    ;;
+  phase2up)
+    # The INVERTED phase 2, and on some units it is the only one that can run.
+    # phase2 asks the operator to pull DOUT low and looks for a break appearing.
+    # That needs a baseline with NO break -- i.e. a net that idles high. Measured
+    # 2026-09-02 on a second unit, socket empty: with the pad in PIN_INPUT_PULLDOWN
+    # the line falls and BI latches with nothing attached (LSR 0xf1), so phase2
+    # refuses and cannot be made to work there. Inverting it restores both halves:
+    # the baseline is the break itself, and the operator pulls pin 2 UP to pin 1
+    # (3.3 V, the ADJACENT pin) through the same resistor. If pin 2 reaches the
+    # pad, the pull beats the internal pulldown and BI stops re-latching. If the
+    # trace is open the pad stays low whatever happens at pin 2, so this
+    # distinguishes exactly what phase2 was built to distinguish.
+    # ⚠️ Current is limited by the pad's own pulldown (~tens of kohm), not by the
+    # resistor, so this sources microamps into the ball, not milliamps.
+    trap - EXIT INT TERM
+    [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
+    orig=$(cat $PAD_SAVE)
+    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | ($PAD_RX_PULLDOWN << 16) )))
+    got=$(( 0x$(r $PADCONF_RX) >> 16 ))
+    if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
+      echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
+      exit 1
+    fi
+    echo "RX pad set to PIN_INPUT_PULLDOWN, verified by read-back."
+    rx_flush; r $LSR >/dev/null; sleep 1
+    b1=$(r $LSR); rx_flush; r $LSR >/dev/null; sleep 1; b2=$(r $LSR)
+    echo "baseline, nothing attached: LSR 0x$b1 then 0x$b2"
+    if [ $(( 0x$b1 & 0x10 )) -eq 0 ] || [ $(( 0x$b2 & 0x10 )) -eq 0 ]; then
+      echo "BASELINE IS NOT A STEADY BREAK -- this phase needs one. Use phase2."
+      exit 1
+    fi
+    echo "baseline is a steady break, so a CLEARED break from here is yours."
+    lim=${2:-90}
+    echo "Watching ${lim} s -- bridge J5 pin 2 to pin 1 through the resistor now."
+    clear_run=0; n=0; hit=0
+    while [ $n -lt $lim ]; do
+      rx_flush; r $LSR >/dev/null; sleep 1; l=$(r $LSR)
+      if [ $(( 0x$l & 0x10 )) -eq 0 ]; then
+        clear_run=$((clear_run+1))
+        if [ $clear_run -ge 2 ]; then
+          echo "BREAK CLEARED at ~${n}s (LSR 0x$l) -- J5 pin 2 REACHES the SoC RX pad."
+          hit=1; break
+        fi
+      else
+        clear_run=0
+      fi
+      n=$((n+1))
+    done
+    [ $hit -eq 0 ] && echo "break NEVER cleared in ${lim} s -- pin 2 did not reach the pad."
+    ;;
+  restore)
+    trap - EXIT INT TERM
+    [ -s $PAD_SAVE ] && padconf_orig=$(cat $PAD_SAVE)
+    cleanup
+    echo "padconf_rx now 0x$(r $PADCONF_RX)   CM_FCLKEN_PER now 0x$(r $CM_FCLKEN_PER)"
+    rm -f $PAD_SAVE
+    exit 0
+    ;;
+  ""|run) : ;;
+  *) echo "usage: $0 [run|init|txlow|txidle|phase2 [secs]|phase2up [secs]|clearctl|padup|paddown|restore]"; exit 2 ;;
+esac
+[ -n "$1" ] && [ "$1" != run ] && exit 0
 
 w $CM_FCLKEN_PER $FCLK_UART3_ON
 padconf_orig=$(r $PADCONF_RX)
@@ -70,7 +301,7 @@ echo
 
 echo "== control: can this UART detect a break at all? =="
 w $MCR 0x13; w $LCR 0x43
-sleep 1; r $LSR >/dev/null; sleep 1
+sleep 1; rx_flush; r $LSR >/dev/null; sleep 1
 bi=$(( 0x$(r $LSR) & 0x10 ))
 w $LCR 0x03; w $MCR 0x03
 if [ $(( bi )) -eq 0 ]; then
@@ -103,7 +334,7 @@ if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
   exit 1
 fi
 echo "   RX pad set to PIN_INPUT_PULLDOWN, verified by read-back."
-r $LSR >/dev/null; sleep 2
+rx_flush; r $LSR >/dev/null; sleep 2
 base=$(r $LSR)
 echo "   baseline with nothing pulled: LSR $base"
 if [ $(( 0x$base & 0x10 )) -ne 0 ]; then
@@ -119,7 +350,7 @@ echo "   Watching for 45 s..."
 hit=0
 n=0
 while [ $n -lt 45 ]; do
-  l=$(r $LSR)
+  rx_flush; r $LSR >/dev/null; sleep 1; l=$(r $LSR)
   if [ $(( 0x$l & 0x10 )) -ne 0 ]; then
     echo "   BREAK at ~${n}s (LSR $l) -- pin 2 REACHES the SoC's RX pad."
     hit=1; break

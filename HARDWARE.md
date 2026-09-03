@@ -151,8 +151,8 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 | XBee pin | Socket | Signal | Status |
 |---|---|---|---|
 | 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
-| 2 | `J5` | `DOUT` — the SoC's RX | **continuity not measured**, and of the twenty pins this is the one that matters most. Unpowered it reads open (>MΩ) to both pin 1 and pin 10, which excludes a discrete pull at the socket but cannot distinguish a trace reaching the SoC from one reaching nothing. Its idle *level* is measured and is not informative — see below. |
-| 3 | `J5` | `DIN` — the SoC's TX | not measured. The pad is already muxed as `uart3_tx` ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)), so this no longer proves the mux; what it would confirm is the socket trace. An idle UART transmitter sits **high**. |
+| 2 | `J5` | `DOUT` — the SoC's RX | **measured OPEN: it does not reach the SoC's `uart3_rx` ball**, so nothing a module says can arrive. Of the twenty pins this was the one that mattered most, and it is the answer to F5's silence — see below. Unpowered it also reads open (>MΩ) to both pin 1 and pin 10, which excludes a discrete pull at the socket. |
+| 3 | `J5` | `DIN` — the SoC's TX | **measured: reaches the SoC's `uart3_tx` pad.** Driven low on command and read at the socket, against a 3.3 V idle — so the pinmux ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)) and the socket trace are both confirmed in this direction. |
 | 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
 | 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
 | 10 | `J5` | `GND` | **measured ground.** With pin 1 at 3.3 V this confirms the socket is correctly identified *and* correctly oriented. |
@@ -160,23 +160,20 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 The **power** question is therefore settled, and so is the pinmux — the pads come up in `uart3` mode
 ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). An XBee fed reversed dies instantly, which is why
 the orientation was measured before anything was inserted — and why, on the unit that now has one seated,
-the module's health is an open question rather than an assumption. **The two data nets are the part that
-is not settled**, and neither `DOUT` nor `DIN` has been shown to reach the SoC.
+the module's health is an open question rather than an assumption. **The two data nets are now measured,
+and they disagree.**
 
-⚠️ **The `DOUT` net idles high with the socket EMPTY, so its level cannot tell you what is fitted.**
-`usb_host/xbee_probe.sh` flips the SoC's `uart3_rx` pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN`
-and looks for a break, reasoning that an XBee's push-pull `DOUT` would beat an internal pulldown while an
-unfitted socket would not. Run on a unit with **no module fitted at all**, and with both of the probe's
-controls passing — a forced break under loopback setting `BI`, and the padconf write reading back changed
-— it returned `LSR 0x60` with no `BI`: byte-identical to the units that do carry a module. So a held-high
-reading is this board's idle state either way, and only the `AT` and `API` sweeps can see a module.
-
-⚠️ **What holds that net high is NOT established, and the obvious candidate is excluded by meter.**
-Unpowered, `J5` pin 2 reads open (>MΩ) to both pin 1 and pin 10, so there is no discrete pull resistor on
-the socket's own rails. That does not settle it the other way either: a pullup to a 3.3 V node isolated
-from pin 1 while the unit is off would read the same, and an unpowered SoC ball reads open whether the
-trace reaches it or not. **Settling it needs the powered test, and that needs a unit opened — `J5` is not
-reachable from the top side.**
+⚠️ **`DIN` reaches the SoC and `DOUT` does not, so a module can be talked to and can never answer.**
+Measured on a powered, opened unit with the socket empty, black lead on pin 10 throughout, and **pin 1
+re-read as 3.3 V beside each reading** so a poor probe contact cannot pass as a result — it produced one
+spurious 4.4 V before that control was added. Holding UART3's transmitter low through `LCR` bit 6 takes
+**pin 3 from 3.3 V to 0 V**: the same pin in two states, so only the drive changed. **Pin 2 ignores the
+`uart3_rx` pad's internal pull.** Driven `PULLUP` → `PULLDOWN` → `PULLUP` with a read-back after each write,
+pin 2 read 0 V in all three states, where a pullup of tens of kΩ against a 10 MΩ meter would have to show
+~3.3 V on a connected pin. The one competing reading — connected, but held at ground by something else on
+the net, which would also beat the pullup — is excluded by the unpowered >MΩ above, though that was taken on
+a different unit. `usb_host/xbee_socket_continuity.sh` drives both directions from the SoC end, so the BGA
+never needs probing. **[n=1]** — whether the other two units share the open net is unmeasured.
 
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 

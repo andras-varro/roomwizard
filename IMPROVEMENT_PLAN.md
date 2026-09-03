@@ -355,87 +355,91 @@ Three MADC channels are readable with `cat` **today** and have zero references i
 The most *interesting* capability on the board: two-player games across a corridor, high-score sync,
 presence beacons — with no network involved.
 
+⚠️ **The cause of the silence is measured, and it is wiring: `J5` pin 2 (`DOUT`) does not reach the SoC.**
+On an opened, powered unit with the socket empty, pin 3 (`DIN`) follows UART3's transmitter from 3.3 V to
+0 V on command, while pin 2 reads 0 V through a `PULLUP` → `PULLDOWN` → `PULLUP` sweep of the `uart3_rx`
+pad — a pullup a connected pin could not lose to. Numbers, controls and the one competing reading:
+[`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion). **So the SoC can
+transmit to a module and can never receive from one, and this entry is a wiring job before it is anything
+else.** Everything downstream — a real `ttyO2`, a game protocol, pairing — is unchanged but unreachable
+until the net is closed.
+
+⚠️ **That retires both sweeps as evidence about the modules.** `AT` command mode at all eight `BD` rates
+and a framed `ATVR` at all eight were silent on both radio'd units, and each was read as a statement about
+the module or its mode. Both were listening on a net that is not attached, so they say nothing about
+either module: an `XB24-ACI-001 revC` may have been answering correctly the whole time. The `AP = 1`
+reasoning and the eight-rate sweep were sound and stay in `usb_host/xbee_probe.sh` — they have simply
+never been *given* a receive path.
+
+⚠️ **The pad-pulldown stage is struck, and with it every reading that rests on `LSR` `BI`.** That stage
+flipped the RX pad to `PIN_INPUT_PULLDOWN` and looked for a break; a never-populated unit read `LSR 0x60`
+with no `BI`, identical to the radio'd ones, so it cannot see presence. The deeper problem is the detector
+itself: on the opened unit a break driven under the UART's own **internal loopback** produced no received
+character at all — `LSR` stuck at `0x60`, its reset value, with `RXFIFO_LVL` and `DR` both zero across
+twelve samples in four states. `usb_host/xbee_uart_break_semantics.sh` is that measurement; it needs no
+socket and no meter, and prints the FIFO level beside `BI` so a stuck flag can be told from a live one.
+**Its controls A and D are the gate: while A fails, no `BI`-derived conclusion on that unit means
+anything** — including the same probe's own "forced break set `BI`" control, which has passed historically
+and must therefore be re-measured. Two contradictory readings came out of that bit within an hour, one set
+while the pad's own pullup drove the ball high, one clear while a break was actively being driven.
+
+**Next, in order — the first two need no code.** ① **Locate the break.** The leading candidate is a
+factory-unpopulated series link on the `DOUT` net: no unit shipped with a radio, so a part only the radio
+needs is exactly what gets left off. Look for bare two-pad footprints on the traces leaving `J5`, then
+continuity-check pin 2 to each pad with the unit **unpowered**. A cold joint on the socket pin itself is
+the cheaper alternative and shows the same symptom. Pin 2 to pin 10 unpowered also settles the competing
+reading above. ② **Establish whether it is per-unit** before assuming three identical boards share it —
+run `usb_host/xbee_socket_continuity.sh` on the reference unit and on the 4.12 unit. ③ Only once a receive
+path exists is module health testable, and then the one spare module is the control, with `SM` sleep on
+XBee pin 9 and `D6` RTS on pin 16 as the suspects the socket may leave floating.
+
 **Everything underneath the radio is settled, and none of it needs kernel work.** The socket, its
 orientation and its 3.3 V rail are measured
 ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)); the UART3 pads
 already come up in the right mode; and because a `status = "disabled"` node has no driver bound to it,
 userspace can drive UART3 outright for the cost of one clock-gate bit — no DTB patch, no reboot.
 Registers, measured values and the self-validation rule:
-[`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports).
+[`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports). Pad identity is confirmed from the vanilla
+tree rather than assumed — four OMAP3 boards carry the same `uart3_rx` pad address and the mux macro's
+argument is the absolute low-16 address — so "wrong pad" is dead.
 
-⚠️ **So the boot path does not gate this entry, and the radio has already been probed.**
-`usb_host/xbee_probe.sh` reaches UART3 from userspace, proves itself against the UART's internal loopback
-before reporting anything, and has been seen printing both outcomes. So the silence below is a result
-about the radio **or about its wiring** — but not about the instrument.
+⚠️ **`usb_host/xbee_socket_continuity.sh` has a stepped mode, and it exists for a harness reason.** The
+self-timed run prints a prompt and then sleeps 30 s, which only works if the operator can see the device's
+own terminal; driven over `ssh` from a host nobody is watching, the window is invisible and the meter
+reading is missed. `init`, `txlow`, `txidle`, `phase2`, `phase2up`, `clearctl` and `restore` each **hold**
+their state until the next invocation instead. State is therefore deliberately persistent, so a stepped
+session **must** end in `restore`, which puts the pad and the clock gate back and prints both read-backs.
 
-**The module and its mode are measured out. The socket is not, and that is now the open end.** Two units
-now carry a radio, and `usb_host/xbee_probe.sh` was run on both. Each is
-`XB24-ACI-001 revC`, a Series 1 802.15.4 part read off the label
-([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)), so the series
-question is closed and so is the "S2 answers no `AT`" caveat that used to head this list. Two sweeps,
-identical on both units:
-
-1. **`AT` command mode at all eight `BD` rates — silent.** The sweep used to try five; `BD = 0..2` is
-   1200/2400/4800 and was missing, which would have read a perfectly good module as dead hardware. At
-   48 MHz those three divide exactly (2500, 1250, 625).
-2. **A framed `ATVR` at all eight rates — silent.** `AP = 1` is a setting rather than a series, so a
-   module left in API mode answers no `AT` at any rate and looks exactly like a dead one. It answers a
-   frame, so this rules API mode out rather than leaving it as the leading candidate.
-
-⚠️ **A third sweep used to be listed here, and it is struck: the pad-pulldown stage cannot see a module.**
-That stage flips the RX pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN` (`0x4800219c`, upper halfword)
-and looks for a break, and on both radio'd units it read `LSR 0x60` with no `BI` — which was written down
-as "something is holding DOUT high, so the socket reaches a powered module". **A unit whose socket is
-EMPTY reads exactly the same**, with that stage's two controls passing: a forced break under loopback
-setting `BI`, and a read-back of the padconf write. So the reading carries no information about presence,
-power or orientation — and **what does hold the line up is not established**: a meter finds no pull
-resistor on the socket's own rails
-([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
-`usb_host/xbee_probe.sh` no longer claims otherwise.
-
-⚠️ **Reading the same ball through the GPIO module is the obvious second instrument, and it is not yet
-controlled.** `usb_host/xbee_pad_gpio_read.sh` muxes the RX pad to `MUX_MODE4` and sweeps all six banks'
-`DATAIN` while driving the pad's own pull `UP, DOWN, UP`; the ball's GPIO number is not in the vanilla
-4.14 tree, so the bit that follows the pull is meant to identify itself. No bit follows — but that is **not
-yet a result**, because nothing has shown `DATAIN` tracks *any* pin on this path, and a reader that cannot
-be seen responding agrees with itself. Two traps already fired here: banks 3–6 are **clock-gated off on a
-stock unit** and a gated read returns *nothing*, which read as four columns of steady agreement until the
-script was made to refuse an unreadable bank (`CM_ICLKEN_PER` bits 13–17, from the vanilla tree); and the
-LEDs are useless as the control subject because they are **PMIC PWM, not SoC GPIOs**
-([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)). The
-control this needs is a known SoC GPIO in a known bank at a known bit, toggled while `DATAIN` is watched.
-
-**The next measurement is a meter, not another probe run.** Nothing has established that the socket
-reaches UART3 at all: neither `J5` pin 2 (`DOUT`) nor pin 3 (`DIN`) has been checked for continuity to its
-pad, and every result above is consistent with a link that does not exist. The SoC is a BGA, so its pads
-cannot be probed — `usb_host/xbee_socket_continuity.sh` puts the UART at the far end of each direction
-instead. It holds TX low so a voltmeter on pin 3 reads ~0 V against ~3.3 V idle, then watches for `BI`
-while pin 2 is pulled to GND through a resistor; run it with the socket **empty**, and it restores the
-clock gate and the pad on exit. That partitions what is left. If both traces are good, the suspects are
-pins the socket may leave floating — `SM` sleep on XBee pin 9, or `D6` RTS flow control on pin 16, either
-of which keeps a live module quiet — and the one spare module becomes the next control. If a trace is
-open, no register work will ever reach the radio and this becomes a wiring job.
+⚠️ **Reading the same ball through the GPIO module is deprioritised rather than open.**
+`usb_host/xbee_pad_gpio_read.sh` muxes the RX pad to `MUX_MODE4` and sweeps all six banks' `DATAIN` while
+driving the pad's own pull; no bit follows, but nothing has shown `DATAIN` tracks *any* pin on this path,
+so it needs a known SoC GPIO in a known bank as a positive control — the LEDs cannot be it, being TWL4030
+PMIC PWM ([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)),
+and GPIO12, the speaker unmute, is the candidate. Its motive was to see a module through that pad, which
+an open net makes impossible, so it is now worth finishing only as instrument work. ⚠️ Banks 3–6 are
+**clock-gated off** on a stock unit and a gated read returns *nothing*, which reads as steady agreement
+rather than as a blind column; the script refuses an unreadable bank (`CM_ICLKEN_PER` bits 13–17).
 
 **Only once a module answers is the boot path worth paying for**, and then it buys a real `ttyO2` for
 game code instead of register pokes, plus visibility into a boot that fails. Two ways, unchanged: wire
 `P4` — three wires and a true RS-232 adapter, a 3.3 V TTL one will not do — or extend
 `lib/rw-usbpower.sh`, the one legitimate `uImage-system` writer, to a further target derived from the
-vendor kernel in a single pass, never a second writer (`lib/CLAUDE.md`). ⚠️ **On `.188` the second
-option costs less than the entry used to claim:** that unit already runs the 500 mA patched kernel with
-a verified pristine `uImage-system.vendor` beside it on p1, so its untouched-kernel rollback is already
+vendor kernel in a single pass, never a second writer (`lib/CLAUDE.md`). ⚠️ **On the 4.12 unit the second
+option costs less than this entry used to claim:** it already runs the 500 mA patched kernel with a
+verified pristine `uImage-system.vendor` beside it on p1, so its untouched-kernel rollback is already
 spent, and recovery there is the card-reader file copy that writer already prescribes on failure. What
 `P4` adds is a diagnosis of a boot that fails, which no card pull gives you.
 
-**The userspace route reaches a second unit unchanged, and the pad question is now closed by
-measurement.** That unit shipped on a third firmware release, so this was worth checking rather than
-assuming: read offline from its card, its device tree has UART3 (`serial@49020000`) `status = "disabled"`
-with no pinctrl property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and
-`ti,bit-shift` — identical to the release everything else was measured on, whose live
-`/proc/device-tree` says the same. So the clock-gate step and `usb_host/xbee_probe.sh` transfer as they
-are. **The pad configuration was the part the tree could not establish** — no release muxes those pads,
-so on a working unit it comes from the bootloader — and a live register read on that unit now says
-`0x4800219e` = `0x118` and `0x480021a0` = `0x000`, the same pair as the reference unit. Commission such a
-unit with `--no-usb-power` (F23); the radio needs no USB budget.
+**The userspace route reaches a second unit unchanged, and the pad question is closed by measurement.**
+That unit shipped on a third firmware release, so this was worth checking rather than assuming: read
+offline from its card, its device tree has UART3 (`serial@49020000`) `status = "disabled"` with no pinctrl
+property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and `ti,bit-shift` —
+identical to the release everything else was measured on, whose live `/proc/device-tree` says the same. So
+the clock-gate step and `usb_host/xbee_probe.sh` transfer as they are. **The pad configuration was the part
+the tree could not establish** — no release muxes those pads, so on a working unit it comes from the
+bootloader — and a live register read on that unit says `0x4800219e` = `0x118` and `0x480021a0` = `0x000`,
+the same pair as the reference unit. Commission such a unit with `--no-usb-power` (F23); the radio needs no
+USB budget.
 
 ### F6. Multi-touch via direct I2C — open
 
