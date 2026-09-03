@@ -387,10 +387,23 @@ That stage flips the RX pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN` (`0x
 and looks for a break, and on both radio'd units it read `LSR 0x60` with no `BI` — which was written down
 as "something is holding DOUT high, so the socket reaches a powered module". **A unit whose socket is
 EMPTY reads exactly the same**, with that stage's two controls passing: a forced break under loopback
-setting `BI`, and a read-back of the padconf write. So the board holds that net up on its own, and the
-reading carries no information about presence, power or orientation
+setting `BI`, and a read-back of the padconf write. So the reading carries no information about presence,
+power or orientation — and **what does hold the line up is not established**: a meter finds no pull
+resistor on the socket's own rails
 ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
 `usb_host/xbee_probe.sh` no longer claims otherwise.
+
+⚠️ **Reading the same ball through the GPIO module is the obvious second instrument, and it is not yet
+controlled.** `usb_host/xbee_pad_gpio_read.sh` muxes the RX pad to `MUX_MODE4` and sweeps all six banks'
+`DATAIN` while driving the pad's own pull `UP, DOWN, UP`; the ball's GPIO number is not in the vanilla
+4.14 tree, so the bit that follows the pull is meant to identify itself. No bit follows — but that is **not
+yet a result**, because nothing has shown `DATAIN` tracks *any* pin on this path, and a reader that cannot
+be seen responding agrees with itself. Two traps already fired here: banks 3–6 are **clock-gated off on a
+stock unit** and a gated read returns *nothing*, which read as four columns of steady agreement until the
+script was made to refuse an unreadable bank (`CM_ICLKEN_PER` bits 13–17, from the vanilla tree); and the
+LEDs are useless as the control subject because they are **PMIC PWM, not SoC GPIOs**
+([`SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm`](SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)). The
+control this needs is a known SoC GPIO in a known bank at a known bit, toggled while `DATAIN` is watched.
 
 **The next measurement is a meter, not another probe run.** Nothing has established that the socket
 reaches UART3 at all: neither `J5` pin 2 (`DOUT`) nor pin 3 (`DIN`) has been checked for continuity to its

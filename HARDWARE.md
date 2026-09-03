@@ -151,7 +151,7 @@ at opposite ends of `J5`, *not* across from each other — the usual way to get 
 | XBee pin | Socket | Signal | Status |
 |---|---|---|---|
 | 1 | `J5` | `VCC` | **measured 3.3 V.** In spec — an XBee's absolute max is 3.6 V, so a 5 V reading would have been a stop. Powering a module is safe. |
-| 2 | `J5` | `DOUT` — the SoC's RX | **continuity not measured**, and of the twenty pins this is the one that matters most. Its idle *level* is measured and is not informative — see below. |
+| 2 | `J5` | `DOUT` — the SoC's RX | **continuity not measured**, and of the twenty pins this is the one that matters most. Unpowered it reads open (>MΩ) to both pin 1 and pin 10, which excludes a discrete pull at the socket but cannot distinguish a trace reaching the SoC from one reaching nothing. Its idle *level* is measured and is not informative — see below. |
 | 3 | `J5` | `DIN` — the SoC's TX | not measured. The pad is already muxed as `uart3_tx` ([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)), so this no longer proves the mux; what it would confirm is the socket trace. An idle UART transmitter sits **high**. |
 | 5 | `J5` | `RESET` | not measured; should sit ~3.3 V released rather than held low. |
 | 9 | `J5` | `SLEEP_RQ` | not measured; should not be sitting high. |
@@ -168,10 +168,15 @@ is not settled**, and neither `DOUT` nor `DIN` has been shown to reach the SoC.
 and looks for a break, reasoning that an XBee's push-pull `DOUT` would beat an internal pulldown while an
 unfitted socket would not. Run on a unit with **no module fitted at all**, and with both of the probe's
 controls passing — a forced break under loopback setting `BI`, and the padconf write reading back changed
-— it returned `LSR 0x60` with no `BI`: byte-identical to the units that do carry a module. So something
-on that net outpulls the SoC's internal pulldown and a held-high reading is this board's idle state
-either way. Only the `AT` and `API` sweeps can see a module. **The measurement that would actually settle
-the link is a meter: continuity from `J5` pin 2 to the `uart3_rx` pad, and pin 3 to `uart3_tx`.**
+— it returned `LSR 0x60` with no `BI`: byte-identical to the units that do carry a module. So a held-high
+reading is this board's idle state either way, and only the `AT` and `API` sweeps can see a module.
+
+⚠️ **What holds that net high is NOT established, and the obvious candidate is excluded by meter.**
+Unpowered, `J5` pin 2 reads open (>MΩ) to both pin 1 and pin 10, so there is no discrete pull resistor on
+the socket's own rails. That does not settle it the other way either: a pullup to a 3.3 V node isolated
+from pin 1 while the unit is off would read the same, and an unpowered SoC ball reads open whether the
+trace reaches it or not. **Settling it needs the powered test, and that needs a unit opened — `J5` is not
+reachable from the top side.**
 
 **`P4` — the RS-232 console. Pinout verified by continuity:**
 
