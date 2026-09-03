@@ -307,7 +307,7 @@ largest single thing on the device, and wiping it only forces a re-send, since t
 this size is ~13× what this entry claimed while nobody checked, and the headroom is finite.
 
 ⏳ **All that is left is bookkeeping:** this entry has no open work, but five places cite `F19` as the
-anchor for "the bed" — `.gitignore:508`, `native_apps/build-and-deploy.sh:444` and `:565`,
+anchor for "the bed" — `.gitignore:507`, `native_apps/build-and-deploy.sh:444` and `:565`,
 `native_apps/CLAUDE.md:749`, `native_apps/common/audio_wav.h:17`. Each of those sentences must be rewritten
 to carry its own reason before the entry is deleted, per the rule that an ID is not a durable reference.
 
@@ -370,15 +370,36 @@ own tooling uses; an XBee leaves the factory at 9600, so silence at one rate wou
 The probe proves itself against the UART's internal loopback before reporting, and has been seen
 printing both outcomes, so this is a result about the radio rather than about the instrument.
 
-**What is left is the module and the socket, and the next step wants a human at the unit.**
+**What is left is not the module, not the socket, and not the module's mode — all three were measured
+out.** Two units now carry a radio, and `usb_host/xbee_probe.sh` was run on both. Each is
+`XB24-ACI-001 revC`, a Series 1 802.15.4 part read off the label
+([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)), so the series
+question is closed and so is the "S2 answers no `AT`" caveat that used to head this list. Three sweeps,
+identical on both units:
 
-1. **Read the module's label.** An S2 left in API mode (`AP = 1`) answers **no** `AT` at all, at any
-   rate — which is exactly the symptom seen, and a stronger caveat than the partial-response one
-   recorded for an S2 already in `AT` mode.
-2. **Check orientation against the pin-1 dot.** Pin 1 is a live 3.3 V rail and the module has now been
-   powered, so a reversed insertion has already had its effect. Leading thing to rule out.
-3. **Swap in a spare and re-run the probe.** Two are on hand, and that separates module from socket in
-   one step: a second silent module points at the socket or the pads, one that answers at the first.
+1. **`AT` command mode at all eight `BD` rates — silent.** The sweep used to try five; `BD = 0..2` is
+   1200/2400/4800 and was missing, which would have read a perfectly good module as dead hardware. At
+   48 MHz those three divide exactly (2500, 1250, 625).
+2. **A framed `ATVR` at all eight rates — silent.** `AP = 1` is a setting rather than a series, so a
+   module left in API mode answers no `AT` at any rate and looks exactly like a dead one. It answers a
+   frame, so this rules API mode out rather than leaving it as the leading candidate.
+3. **The RX line is held HIGH with the pad's pullup turned off** — `LSR 0x60`, no `BI`, on both units.
+
+⚠️ **Do not promote step 3 to "the socket works" — that is the one claim this session did not earn.**
+The internal loopback (`MCR` bit 4) proves the UART and never reaches the pads, so the probe flips the RX
+pad from `PIN_INPUT_PULLUP` to `PIN_INPUT_PULLDOWN` (`0x4800219c`, upper halfword; values from the vanilla
+tree's `include/dt-bindings/pinctrl/omap.h`) and looks for a break. It carries two controls — a forced
+break under loopback, which must set `BI`, and a read-back of the padconf write — and both pass. But
+neither establishes that *this pad* can ever read low: **a pullup somewhere on the DOUT net would read
+`0x60` with no module fitted at all**, and both units reading byte-identical is consistent with that.
+
+**The next step is a human at a unit, and it is one run, not a swap.** Pull the module and re-run the
+probe: it must print `BREAK`. If it does, the socket is genuinely reaching a powered module and the
+remaining suspects are pins the socket may leave floating — `SM` pin sleep on XBee pin 9, or `D6` RTS
+flow control on pin 16, either of which keeps a live module quiet while it still idles DOUT high. If it
+still prints "no break" with the module out, the pulldown stage is measuring the board and not the radio,
+and step 3 above must be struck from this entry. One spare module is left, so a swap is still available
+as a second control — but it is no longer the cheapest next measurement.
 
 **Only once a module answers is the boot path worth paying for**, and then it buys a real `ttyO2` for
 game code instead of register pokes, plus visibility into a boot that fails. Two ways, unchanged: wire
@@ -390,16 +411,16 @@ a verified pristine `uImage-system.vendor` beside it on p1, so its untouched-ker
 spent, and recovery there is the card-reader file copy that writer already prescribes on failure. What
 `P4` adds is a diagnosis of a boot that fails, which no card pull gives you.
 
-**A second unit now has a radio fitted, and the userspace route reaches it unchanged — measured
-2026-09-02, offline from its card.** That unit is on a different firmware release, so this was worth
-checking rather than assuming: its device tree has UART3 (`serial@49020000`) `status = "disabled"` with no
-pinctrl property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and
+**The userspace route reaches a second unit unchanged, and the pad question is now closed by
+measurement.** That unit shipped on a third firmware release, so this was worth checking rather than
+assuming: read offline from its card, its device tree has UART3 (`serial@49020000`) `status = "disabled"`
+with no pinctrl property and no uart3 pinmux node, and `uart3_fck` / `uart3_ick` carry the same `reg` and
 `ti,bit-shift` — identical to the release everything else was measured on, whose live
 `/proc/device-tree` says the same. So the clock-gate step and `usb_host/xbee_probe.sh` transfer as they
-are. ⚠️ **The pad configuration is the part this does not establish**: no release muxes those pads in the
-device tree, so on a working unit it comes from the bootloader, and on a newly-radio'd unit that is a
-register read once it is up — not something to infer from the tree. Commission such a unit with
-`--no-usb-power` (F23); the radio needs no USB budget.
+are. **The pad configuration was the part the tree could not establish** — no release muxes those pads,
+so on a working unit it comes from the bootloader — and a live register read on that unit now says
+`0x4800219e` = `0x118` and `0x480021a0` = `0x000`, the same pair as the reference unit. Commission such a
+unit with `--no-usb-power` (F23); the radio needs no USB budget.
 
 ### F6. Multi-touch via direct I2C — open
 
@@ -580,6 +601,18 @@ every release is the same table plus 5 MB of payload each) and it is not ours to
 **Not a blocker for anything today.** `--no-usb-power` commissions such a unit fully; the cost is that it
 keeps the vendor's 100 mA budget, so USB peripherals on *that* unit stay limited. The 802.15.4 radio needs
 no USB budget at all (F5).
+
+**A same-release card restore is the other way out, and it worked** — the refusing unit was re-imaged by
+`dd` from a whole-card capture of the reference unit and then patched, after which its p1 carries
+`uImage-system` = `RW_UIMAGE_POWER_MD5` and `uImage-system.vendor` = `RW_UIMAGE_VENDOR_MD5` exactly, so
+tier 1 accepts it with no code change. ⚠️ **That also pins what the three constants are: they are the
+reference unit's release**, not the other release in the fleet
+([`SYSTEM_ANALYSIS.md#51-as-shipped`](SYSTEM_ANALYSIS.md#51-as-shipped)). It is a workaround and not the
+fix — it needs a card capture of a matching release on hand, and it replaces the whole card, so the
+restored unit inherits the donor's `/etc/touch_calibration.conf` and needs recalibrating (B3c). ⚠️ **Only
+p1 may be restored file-by-file** (FAT32, all regular files); any ext partition must go back with `dd`,
+because a per-partition file copy of a live rootfs carries no symlinks and leaves the unit with no
+`/bin/sh` and no boot sequence, on hardware with no serial console.
 
 ### F17. Bluetooth peripherals, and whether USB DMA is reachable — open, measured 2026-08-08
 
@@ -985,8 +1018,9 @@ untested · untried · nobody has* — and the triage is the point: most hits we
 already honest. Two were the legend defining those very words, nine sat inside an existing tag or were
 explicit *negative* statements (§3.3's "outer-band slope compression is **NOT** established", §3.4's
 "checked, not assumed"), and one described what the *code* assumes rather than what this document claims. **One
-genuine untagged inference survived** — §3.12's "expect the vendor to have assumed a Series 1 module",
-inferred from the command set the vendor's tooling uses and from no module ever read on a unit, now tagged.
+genuine untagged inference survived** — §3.12's expectation that the vendor assumed a Series 1 module,
+inferred at the time from the command set the vendor's tooling uses; it has since been measured off two
+module labels and the tag retired.
 ⚠️ **A hedge-vocabulary sweep mostly finds its own legend and its own warnings**, so triage it before
 believing the count — same shape as every other gate here.
 

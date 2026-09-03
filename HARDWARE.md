@@ -134,13 +134,15 @@ because on an XBee the antenna is part of the module. Vendor software confirms t
 `AT`-command implementation and a ZigBee gateway daemon, both on the legacy `ttyS2`:
 [Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports).
 
-⚠️ **One of our units now has a module seated in it** (reported 2026-08-13, fitted by hand). That is a
-fact about that unit, not about the design, and **nothing about it is verified**: not the orientation, not
-whether the module survived being powered, not whether it is Series 1 or Series 2. `J5` pin 1 is a live
-3.3 V rail whatever UART3 does, so a reversed insertion is already a completed experiment. Establishing
-whether that module still works is
+⚠️ **Two of our units now have a module seated in them, and both modules are identified.** Each carries
+`XB24-ACI-001 revC` — MaxStream, © 2007, `FCC ID OUR-XBEE`: the 1 mW chip-antenna 802.15.4 **Series 1**
+part — read off the can, with 64-bit addresses `0013A200 4060D747` and `0013A200 403BEA96`. So the series
+question is settled and the vendor's settable `ATMY`/`ATCH` are the right command set
+([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). ⚠️ **Orientation is still unverified**, and `J5`
+pin 1 is a live 3.3 V rail whatever UART3 does, so a reversed insertion is already a completed
+experiment. Neither module answers, and the hunt is
 [`IMPROVEMENT_PLAN.md` F5](IMPROVEMENT_PLAN.md#f5-roomwizard-to-roomwizard-wireless-via-the-802154-radio--open);
-two spare modules are on hand, which makes swapping a cheap control.
+one spare module is left, which still makes a swap a cheap control.
 
 **Pinout, partly measured 2026-07-30.** `J5` carries XBee pins **1–10** (pin 1 is the dotted end), `J6`
 carries **11–20**. Numbering runs down one strip and back up the other like a DIP, so pins 1 and 10 are

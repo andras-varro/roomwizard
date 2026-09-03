@@ -1327,11 +1327,11 @@ the UART's own internal loopback before believing a silent radio** (`MCR` bit 4,
 module — not the vendor *XBee* loopback test above): without it a dead radio and a wrong register
 sequence produce identical output. `usb_host/xbee_probe.sh` does that and restores what it writes.
 
-**[inferred] expect the vendor to have assumed a Series 1 module** — from the command set the vendor's
-own tooling uses, not from a module ever being read on a unit. A settable `ATMY` and `ATCH` are 802.15.4
-(Series 1) commands. On a Series 2 / ZB part `ATMY` is **read-only** and `ATCH` only *reports* the
-operating channel — so an S2 module answers `+++` and `ATID` but gives a partial response to the
-rest. **Do not read that as a wiring fault**; check the module label first.
+**The vendor assumed a Series 1 module, and the modules fitted are Series 1** — both radio'd units carry
+`XB24-ACI-001 revC` (MaxStream, 802.15.4), read off the label, which is why the vendor's settable `ATMY`
+and `ATCH` are the right command set. ⚠️ **`AP = 1` is the trap, not the series**: a module in API mode
+answers no `AT` at any rate whatever it is, so a framed `ATVR` must be swept before silence is read as a
+wiring fault. `usb_host/xbee_probe.sh` sweeps both, and all eight `BD` rates: `IMPROVEMENT_PLAN.md` F5.
 
 ### 3.13 Watchdogs
 
@@ -1668,7 +1668,7 @@ the old image under another name.
 ### 5.1 As shipped
 
 ```
-Linux (SysVinit)   4.14.52 on firmware 4.12.0.0 — the release decides the kernel, see below
+Linux (SysVinit)   4.14.52 on firmware 4.13.1.0 — the release decides the kernel, see below
   -> X11 / Xorg
     -> WebKit browser (Epiphany), home page http://localhost/frontpanel/pages/index.html
       -> Jetty 9.4.11  (/opt/jetty-9-4-11/, init script /etc/init.d/webserver)
@@ -1683,10 +1683,10 @@ something needs it; Python requires cross-compiled ARM binaries.
 
 **⚠️ The firmware release is per unit and it decides the kernel — do not assume the unit in front of you
 is the one this document was measured on.** `/etc/firmware.version` names it, `/etc/issue` the Yocto
-version, `/lib/modules/` the kernel. `4.12.0.0` is Yocto 3.1.4 on **4.14.52**, which every measurement
-here was made against; `4.7.1.0` is Yocto 1.8 on **4.1.32** (two cards, 2026-09-02). So `uImage-system`
-is per-release rather than a constant — different md5, appended device tree at a different offset — and
-anything gated on that file's *identity* is gated on the release.
+version, `/lib/modules/` the kernel. `4.13.1.0` and `4.12.0.0` are both Yocto 3.1.4 on **4.14.52** and
+the reference unit is `4.13.1.0`, so that is what was measured here; `4.7.1.0` is Yocto 1.8 on
+**4.1.32** (two cards). So `uImage-system` is per-release rather than a constant — different md5, tree at
+a different offset — and anything gated on that file's *identity* is gated on the release.
 
 ### 5.2 As we run it — game mode
 
