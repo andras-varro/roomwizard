@@ -975,7 +975,7 @@ figures in the table are the **measured floors**, not the survey's:
 
 | section | keep | out | what compresses, and what does not |
 |---|---|---|---|
-| Build | 62 | 19 | the tinyalsa rules and the `asound.h` ABI check are pointers to `build-deps.sh`; the `Makefile` and `check-arm-safe` paragraphs duplicate root `CLAUDE.md` |
+| Build | 24 | 0 | ⚠️ **re-derived: 62/19 assumed the tinyalsa dependency.** That dep is gone, and its rules and the `asound.h` ABI check went with it — deletion, not compression. What is left is the `Makefile` and `check-arm-safe` pointers, which duplicate root `CLAUDE.md` |
 | The common library | 35 | 3 | the module table is reference with no other home — it compresses to nothing |
 | App lifecycle | 57 | 5 | the `main()` skeleton is the canonical copy; only the Snake and `argv[0]` narration goes |
 | Pixel format | 23 | 9 | the `fbset` warning and the bpp facts are in root `CLAUDE.md` and §3.2 |
@@ -1010,7 +1010,7 @@ short code lines. **When a fence holds one statement, it is narration in a code 
 **Part 1 landed 891 → 855**, taking the two clean duplicate deletions and the four highest-value war
 stories: the sweep table (16 → 5, now a pointer), the uinput narration (8 → 5), the two MUSB paragraphs
 (15 → 8), samegame's per-game `else`-branch table, the derive-state table, the D-pad removal history and
-the tinyalsa build rules. Two prose counts went with them, per the invariant — the deploy no longer claims
+the dependency build rules. Two prose counts went with them, per the invariant — the deploy no longer claims
 a number of executables or targets.
 
 **Part 2 landed 855 → 732, and it is not finished: ~42 lines remain, all of it in two sections.**
@@ -1144,7 +1144,7 @@ from Steelcase has been explicitly ruled out.
 | Mainline 6.x port | Would break runtime bpp switching (ScummVM + VNC), lose the DSS overlay sysfs, cost RAM | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
 | Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
-| Native ALSA backend (the "ALSA port") | **Nothing** — it needs no kernel work and the userspace side is complete on a stock unit ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Declined on **value**: `/dev/dsp` and the ALSA device are the same PCM, so it buys latency, and no latency symptom has ever been reported. ⚠️ **Re-read that reason before quoting it** — [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) names *mixing* and *frame arithmetic* as arguments too. Mixing has since shipped in userspace; the frame-arithmetic argument has not been re-checked against the decision. | [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
+| Native ALSA backend (the "ALSA port") | **Nothing** — it needs no kernel work and the userspace side is complete on a stock unit ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Declined on **value**, and the reason is now settled rather than pending: `/dev/dsp` and the ALSA device are the same PCM, the only measured win is ~2× at the period, and no latency symptom has ever been reported. Both other arguments once recorded beside it are gone — *mixing* shipped in userspace, and the *frame arithmetic* lives in `audio_gen.c`, which a port would leave unchanged. The tinyalsa dependency, its build script and its licence rows were deleted with this decision; nothing in the tree prepares for it. **Revisit only if something we port needs ALSA.** | [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
 
 **Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the
 appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).

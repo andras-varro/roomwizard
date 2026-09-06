@@ -6,11 +6,10 @@
  *
  * Everything here is a pure function of its arguments: no fd, no ioctl, no
  * clock, no sysfs.  That is the whole point — it is the half of `audio.c` a
- * host regression can reach (`tests/audio_gen_test.c`), and the half that must
- * survive the OSS → ALSA port unchanged.
+ * host regression can reach (`tests/audio_gen_test.c`).
  *
  * The device half — open/configure/write/close plus the GPIO12 amp poke —
- * stays in `audio.c` and moves to `audio_dev.c` when it becomes tinyalsa.
+ * stays in `audio.c`.
  *
  * Two rules this file exists to enforce:
  *
@@ -123,8 +122,9 @@
  * Three is the smallest depth that leaves a whole spare period *while* one is
  * being staged and one is playing.  ⚠️ **The lead is also the latency ceiling** —
  * at a 46 ms period this buys ~139 ms, which is the price of the OSS shim's
- * period size and is exactly what tinyalsa buys back (it granted
- * `period_size=1024`, i.e. 23 ms, measured). */
+ * period size.  Native ALSA grants `period_size=1024` (23 ms, measured), so that
+ * price is theoretically recoverable — see ../SYSTEM_ANALYSIS.md#34-audio, which
+ * records why the port is not planned. */
 #define AUDIO_PUMP_LEAD_PERIODS  3
 
 /**

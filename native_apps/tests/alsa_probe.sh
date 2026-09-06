@@ -3,13 +3,19 @@
 #
 # Runs ON THE DEVICE, needs nothing cross-compiled and nothing shipped: the vendor
 # image already carries alsa-lib 1.2.1.2 plus aplay/amixer/alsactl, and this aplay
-# has --dump-hw-params.  That is the same SNDRV_PCM_IOCTL_HW_REFINE that tinyalsa
-# would call, so the ranges below are the ranges our backend gets.
+# has --dump-hw-params.  That is the same SNDRV_PCM_IOCTL_HW_REFINE any ALSA client
+# calls, so the ranges below are the ranges the hardware really grants.
 #
 #   scp native_apps/tests/alsa_probe.sh root@<ip>:/tmp/ && ssh root@<ip> sh /tmp/alsa_probe.sh
 #
 # stdout-only, no touch, no framebuffer -> fully automatable.  Only step 7 needs an ear.
 # Everything before it is silent; step 7 is the one thing a human has to confirm.
+#
+# WHY THIS IS KEPT.  A native ALSA backend is NOT planned — see
+# ../../SYSTEM_ANALYSIS.md#34-audio, which records it as a theoretical improvement
+# with a marginal win.  This probe stays because that section cites it three times
+# as the provenance for what hw:0,0 actually grants; it is a measurement record of
+# the hardware, not preparation for a port.
 
 set -u
 PCM=hw:0,0
@@ -36,13 +42,13 @@ for p in /proc/*/fd; do
 done
 echo "(no lines above = PCM is free)"
 
-say "3. hw:0,0 RANGES  -- Phase 0 questions 1 and 3"
+say "3. hw:0,0 RANGES  -- period size (latency) and channel count"
 # PERIOD_SIZE min is the latency answer; CHANNELS min/max is the mono answer.
 aplay -D "$PCM" --dump-hw-params "$CLICK" 2>&1
 
-say "4. which rates does hw:0,0 accept DIRECTLY  -- Phase 0 question 2"
-# tinyalsa has no plug/resampler, so a rate that needs alsa-lib's plug is a rate we
-# cannot use.  Silent: 1 s of /dev/zero, raw, S16_LE.
+say "4. which rates does hw:0,0 accept DIRECTLY"
+# A raw hw:0,0 client has no plug/resampler, so a rate that needs alsa-lib's plug is
+# one it cannot use.  Silent: 1 s of /dev/zero, raw, S16_LE.
 #
 # CHANNELS from step 3 is the count to use here.  The first version of this loop passed
 # -c 1 and printed REFUSED for all six rates -- every one of them failing on the channel
@@ -84,7 +90,7 @@ say "7. AUDIBLE: native ALSA end to end, independent of any code we write"
 # fails on channels and proves nothing -- that is not a broken audio path.  Two tests:
 #   a) plughw:0,0 lets alsa-lib convert mono -> stereo.  Proves the kernel path.
 #   b) speaker-test generates its own stereo tone, so it needs no plug at all -- this is
-#      the one that matches what our tinyalsa backend will do.
+#      the one that matches a raw hw:0,0 client doing no conversion.
 echo "--- a) mono WAV through plughw (alsa-lib converts):  listen for a click x3"
 for i in 1 2 3; do aplay -D plughw:0,0 "$CLICK" >/dev/null 2>&1; echo "     play $i -> exit $?"; done
 echo "--- b) stereo sine straight at hw:0,0 (no plug, no conversion): listen for a tone"

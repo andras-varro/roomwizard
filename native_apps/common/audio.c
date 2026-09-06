@@ -793,9 +793,10 @@ void audio_pump(Audio *audio)
     if (frame_bytes <= 0) return;
 
     /* What the ring holds versus what it will take.  in_flight is the reason
-     * this is not just "write into the free space": an empty ~506 ms OSS ring
-     * would accept half a second of audio and put every sound triggered after
-     * it half a second late. */
+     * this is not just "write into the free space": the OSS ring is 743 ms at
+     * 44100 (2048-frame periods x 16, measured — NOT the ~506 ms this repo
+     * believed for months), so an empty one would accept three quarters of a
+     * second of audio and put every sound triggered after it that late. */
     audio_buf_info info;
     if (ioctl(audio->dsp_fd, SNDCTL_DSP_GETOSPACE, &info) < 0) return;
 
@@ -814,7 +815,7 @@ void audio_pump(Audio *audio)
      * a partial one it cannot see, which XRUNs every ~120 ms and DISCARDS the
      * staged audio — measured on `.188`, and the reason a mixed sound read as a
      * chopped square wave rather than as a level problem.  `fragsize` is the OSS
-     * name for that period; tinyalsa calls it `period_size`. */
+     * name for that period; ALSA calls it `period_size`. */
     long period = (long)info.fragsize / frame_bytes;
     long ring   = total_bytes / frame_bytes;
     long lead   = audio_pump_lead_frames(

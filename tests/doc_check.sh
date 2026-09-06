@@ -346,9 +346,7 @@ receipts() {
 0x3e4	usb_host/README.md	IMPROVEMENT_PLAN.md
 9021923205825a2ec36edeaa1fe3ccc3	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 0x480AB060	usb_host/README.md	IMPROVEMENT_PLAN.md
-SNDRV_PCM_VERSION	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 oss_keepalive.c	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
-pcm.c:978	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 clock_gettime64	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 743 ms	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 audio_interrupt	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md

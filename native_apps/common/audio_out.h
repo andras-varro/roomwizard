@@ -98,8 +98,7 @@
  * the shim moves in, and its period is 2048 frames at every rate and channel
  * count tested.  ⚠️ The mechanism — how much is the staged period and how much
  * a stale `hw_ptr` — is NOT established, so treat the fraction as the shape of
- * the measurement rather than as a law, and re-measure it on tinyalsa rather
- * than carrying it across.
+ * the measurement rather than as a law.
  *
  * ⚠️ **It is deliberately NOT subtracted from the in-flight figure.** Subtracting
  * it would make the library write more, deepening the queue and the onset latency

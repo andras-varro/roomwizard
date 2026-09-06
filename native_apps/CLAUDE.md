@@ -18,41 +18,6 @@ Guidance for writing code in this directory. Device facts live in
 `set-default` is the only mode this script accepts. Cleanup and boot-service install live in
 `../commissioning/provision.sh`.
 
-**ARM dependencies are built by `./build-deps.sh` into `arm-deps/` (gitignored), and
-`build-and-deploy.sh` §1b calls it itself**, guarded on the artifact `arm-deps/lib/libtinyalsa.a` — never
-on a flag, which goes stale. So a fresh clone deploys without a manual prerequisite step, which matters
-because `../deploy-all.sh` drives this script unattended. Run it by hand only when iterating on the dep
-itself; `--force` rebuilds. Today it builds exactly one library, **tinyalsa 2.0.0** (pinned), for the
-native-ALSA audio backend.
-
-Three rules live in that script's comments and are pointers here, because getting any of them wrong is
-silent:
-
-- ⚠️ **Compile five of upstream's eight sources.** `snd_card_plugin.c` `dlopen()`s and these binaries are
-  `-static` — the same family as the `clock_gettime64` SIGSEGV-before-`main()` trap. The plugin path is
-  dead code anyway (`#ifdef TINYALSA_USES_PLUGINS`, never defined); `assert_no_dl()` refuses the build
-  rather than shipping it.
-- ⚠️ **That subset needs the one-line `pcm_close()` patch** the script applies and asserts: `src/pcm.c:978`
-  calls `snd_utils_close_dev_node()` **outside** the `#ifdef` guarding its four siblings, and it is **still
-  ungated on upstream master** — do not expect a version bump to retire it. Gating it is behaviour-identical
-  and measured so: `pcm->snd_node` is written only inside that `#ifdef`, so the argument is always `NULL`.
-  Without the patch the archive builds, passes `nm -u` *and* the ARM gate, and fails only at link — which
-  is what `assert_links()` is for.
-- ⚠️ **The ARM-safety gate runs on `libtinyalsa.a` inside `build-deps.sh`**, because nothing in `build/`
-  links it yet. It does disassemble every archive member (measured), but its `checked=1` is a file count.
-
-⚠️ **No vendored ALSA header is needed, measured rather than assumed.** The cross toolchain's
-`sound/asound.h` is **ABI-identical** to the device kernel's — `SNDRV_PCM_VERSION` 2.0.14 and
-`SNDRV_CTL_VERSION` 2.0.7 in both, and every diff line against
-`../usb_host/linux-4.14.52/include/uapi/sound/asound.h` is a `__user`/`__force` annotation, a guard name
-or one `#include <time.h>`. It matters because **ALSA ioctl numbers embed `sizeof(struct)`**: a struct
-that had grown between 4.14.52 and the toolchain would compile cleanly here and return `-ENOTTY` on the
-device. Re-check on any toolchain upgrade; do not vendor a header to avoid checking.
-
-**Never build a second copy of a dependency that lives here** — ScummVM points at `arm-deps/` the way it
-already links `common/framebuffer.o` and `touch_input.o`. zlib is built twice in this repo and
-`../LICENSE.md` carries both versions as a result: one pin, one licence row.
-
 All targets compile with `-Wall -Wextra -Wno-unused-parameter` and the tree is at **zero warnings** —
 keep it there, so a new warning means a new problem. Not `-Werror`, so a warning will not block a
 deploy; that is your job. Every build then runs `./check-arm-safe.sh` (root `../CLAUDE.md` for why);

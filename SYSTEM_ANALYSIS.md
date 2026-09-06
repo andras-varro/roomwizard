@@ -566,15 +566,15 @@ DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restor
 Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
 (halves OPL synthesis cost), native games 44100 Hz.
 
-**Native ALSA needs no kernel work and nothing shipped.** `CONFIG_SND`, `SND_PCM`, `SND_SOC`,
-`SND_OMAP_SOC`, `SND_OMAP_SOC_MCBSP` and `SND_SOC_TWL4030` are all `=y`
-(`usb_host/device_config:2711`, `:2713`, `:2757`, `:2778-2779`, `:2855`) — OSS is `SND_PCM_OSS` plus
-`SND_PCM_OSS_PLUGINS` **emulation** (`:2718-2720`) layered on this same `rw20` card. Going native
-removes a layer; it adds nothing to the kernel and carries no brick risk. Userspace is already
-complete on a stock unit: `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`, `amixer`, `alsactl`,
-`speaker-test`, and 238 files under `/usr/share/alsa`. Only the **dev** side is absent — no headers,
-no `.a`, no linker symlink — which is why a statically linked client that talks to the kernel
-directly (tinyalsa) is the route rather than `-lasound`.
+⚠️ **A native ALSA client is possible, and NOT PLANNED — a theoretical improvement with a marginal
+win.** The kernel side is already there: `CONFIG_SND`, `SND_PCM`, `SND_SOC`, `SND_OMAP_SOC`,
+`SND_OMAP_SOC_MCBSP`, `SND_SOC_TWL4030` all `=y` (`usb_host/device_config:2711`, `:2713`, `:2757`,
+`:2778-2779`, `:2855`); OSS is `SND_PCM_OSS` + `SND_PCM_OSS_PLUGINS` **emulation** (`:2718-2720`) over
+that same `rw20` card, so going native removes a layer. Userspace is complete on a stock unit —
+`libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`, `amixer`, `alsactl`, `speaker-test`, 238 files
+under `/usr/share/alsa` — but the **dev** side is absent (no headers, no `.a`, no symlink), so a client
+would talk to the kernel directly. It would buy ~2× at the period (below) and nothing else: the shim's
+bugs are all worked around, mixing ships in userspace, and the click is not a userspace problem.
 
 - ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: that
   flag is MIDI/sequencer support and cannot produce PCM output here. PCM has to be hand-written,
@@ -715,7 +715,7 @@ a broken audio path** — use `plughw:0,0`, or generate stereo (`speaker-test -c
 
 **Native ALSA is audible on hardware — confirmed by the operator at `.188`, 2026-08-14.** Both paths
 of `alsa_probe.sh` step 7 exited 0 *and* were heard: the three mono WAVs through `plughw:0,0`, then a
-440 Hz sine **straight at `hw:0,0`** — no plug, no conversion, the same path a tinyalsa backend takes.
+440 Hz sine **straight at `hw:0,0`** — no plug, no conversion.
 Reported as *"some clinking then a klack then a beep"*. So the native path is proven end to end
 independently of anything this project writes.
 
@@ -739,8 +739,7 @@ emulation, not the hardware. ALSA itself works correctly.
    for, and the ~22,317-frame "period" it was read as reproduces in **no** configuration `oss_geom.c`
    tested. Measured effect: 185 ms of audio, 321 ms of silence, repeating — the "bru-bru-bru-KLICK"
    artifact, diagnosed with `native_apps/tests/oss_diag.c`. **Always open `/dev/dsp` with `O_NONBLOCK`**
-   and handle `EAGAIN` with a ~5 ms sleep. ⚠️ **Both consumers already work around this**, so it is not
-   an argument for the ALSA port — latency, mixing and frame arithmetic are.
+   and handle `EAGAIN` with a ~5 ms sleep. ⚠️ **Both consumers already work around this.**
 2. **Speaker distortion at full scale.** Apply ~50 % software attenuation (`>>1` on int16) before
    writing. ScummVM does this post-mix.
 3. **ioctls reset each other.** `SNDCTL_DSP_STEREO` is **silently ignored** (returns `rc=0,
