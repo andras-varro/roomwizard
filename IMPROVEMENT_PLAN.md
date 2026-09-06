@@ -616,6 +616,39 @@ instructions imply that any machine with a card reader will do.
 
 ---
 
+### F100. USB audio output — one out-of-tree module, no kernel rebuild — open, measured 2026-09-06
+
+**The ALSA core is already built in, so a USB DAC costs a module and no app changes.** Measured on
+`.188`: `/proc/asound/card0` is `[rw20]`, `/proc/asound/oss/sndstat` reports `Type 10: ALSA emulation`,
+and no `snd*.ko` exists anywhere under `/lib/modules` because the whole stack is compiled in.
+`usb_host/device_config` has `CONFIG_SND=y`, `CONFIG_SND_PCM=y`, `CONFIG_SND_SOC_TWL4030=y`,
+`CONFIG_SND_OSSEMUL=y`, `CONFIG_SND_PCM_OSS=y`, `CONFIG_MODULES=y`, `CONFIG_MODVERSIONS=y` — and
+`CONFIG_SND_USB_AUDIO` unset, which is the only gap. So `/dev/dsp` is an OSS shim over a live ALSA
+core, and this entry does **not** reopen the declined native-ALSA-client decision: the driver is
+consumed through the same shim, with no `libasound` linkage and no app rewrite.
+
+**Build it the way `xpad` is already built** (`usb_host/build-xpad-module.sh`): vanilla tree,
+`device_config` → `.config`, `modules_prepare`, then `M=sound/usb`. Four modules ship —
+`snd-usb-audio`, `snd-usbmidi-lib` (same obj line), plus `snd-hwdep` and `snd-rawmidi`, which
+`SND_USB_AUDIO` selects and the built-in kernel lacks. ⚠️ **After `olddefconfig`, assert
+`CONFIG_SND_HWDEP=m` and `CONFIG_SND_RAWMIDI=m`, not `=y`** — resolved to `y` they drop out of the
+module build while the running kernel has no such symbols, and `insmod` then fails on unresolved
+symbols rather than on anything that names the cause. `depmod -a` on the device afterwards.
+
+**No app work.** `SND_DYNAMIC_MINORS` is unset, so OSS minors are static and card 1 lands
+deterministically at `/dev/dsp1`, created by devtmpfs+udevd on plug exactly as `js0` was for `xpad`.
+`common/audio_out.c` already sits behind the `AudioOutDev` vtable with `audio_out_open_oss()`, so the
+DAC is a second instance or a configured path string. ⚠️ **Skip the GPIO12 amp unmute on the USB
+path** — that unmutes card 0's speaker and means nothing to a DAC.
+
+⚠️ **The unknown that could sink it is PIO cost, and it has never been measured.** MUSB DMA is
+noop-stubbed and falls back to PIO; a 48 kHz stereo stream is ~190 KB/s, which F17 records as where
+DMA would start to pay, and the baseline is 45 % of the one core for `samegame` over a music bed.
+**Measure before writing code:** `lsusb` to identify the dongle, then `aplay -D plughw:1,0` with `top`
+alongside. ⚠️ **Plugging USB is what provokes B33's babble storm**, which both hard-resets the unit and
+invalidates anything measured during it — run `dmesg | grep -c musb_bus_suspend` first and treat a
+non-zero count as "discard this measurement".
+
 ## Structural and cleanup
 
 ### C1. Extract the shared evdev layer — open
@@ -806,310 +839,6 @@ installer again.** The block is not the mount; `--base` needs no root.
 step, so it previews the clean and the p1 write but never the install/link plan. The plan is compiled on
 the host, so a full preview is cheap; nobody has asked for one.
 
-### C14. Documentation cleanup — open, **phase state in the table below**
-
-Three documents had outgrown their jobs, measured by reading each in full: this file 2287 lines against
-a stated job of "open work only", `SYSTEM_ANALYSIS.md` 2214 with ~470 of history, hypothesis and
-host-tooling process, `CLAUDE.md` 829 of which ~525 was duplicate, reference or war-story narration.
-Working detail: `~/.claude/plans/peaceful-herding-valiant.md`.
-
-| # | phase | from → to | state |
-|---|---|---|---|
-| 1 | `CLAUDE.md` → `lib/`, `commissioning/`, `tests/`, `device-files/` + compress | 829 → 366 | ✅ 2026-08-15 |
-| 2 | De-reference the plan IDs cited from code — **qualified form** | 83 → **0** | ✅ 2026-08-15 |
-| 2b | The same, **bare form** (`(<ID>)`, `see <ID>`, `IMPROVEMENT_PLAN <ID>`) | 41 → **0** | ✅ 2026-08-16 |
-| 3 | This file: extract the six unique facts, then cut to open work | 2287 → 1256 | ✅ 2026-08-15 |
-| 3b | (folded into 3 — the second half of the same cut) | 2149 → 1256 | ✅ 2026-08-15 |
-| 4 | `SYSTEM_ANALYSIS.md`: evict history/hypothesis/process, tag unmeasured claims | 2214 → **2049**, ~1890 met by phase 5 | ✅ 2026-08-16 |
-| 5 | `HARDWARE.md` split out, with the photos beside the parts they show | 2049 → **1871** | ✅ 2026-08-16 |
-| 6 | `native_apps/CLAUDE.md` compress | 891 → **713** | ✅ 2026-08-16 |
-| 7 | `MEMORY.md` index compression | 10.2 KB → **4.5 KB** | ✅ 2026-08-16 |
-
-**Phase 3 is done and it landed at 1256, not the ~700 the table used to promise.** ⚠️ **That target was
-never reachable from its own itemised work list, and the arithmetic says so**: the eight deletions and four
-compressions it named remove ~1040 lines gross from 2287, and the stubs and receipts put ~100 back. Reaching
-700 would have meant cutting a further ~550 lines of *open* items, which is not what this phase was for.
-**Price a target against the list that is supposed to deliver it before writing the target down** — the
-number here is now the measured result.
-
-⚠️ **Phase 4's ~1150 had the same defect and it was caught before any cutting, which is the point.** The
-itemised survey — every block located by reading `SYSTEM_ANALYSIS.md` in full, with what survives each
-compression — sums to **~325 lines**, so the reachable figure is **~1890**, and phase 5 taking §2 and the
-photo index out brings it to **~1680**. Reaching 1150 would mean deleting ~700 lines of *measured device
-facts*, which is that document's entire job. And the original survey's own finding ("~470 lines of history,
-hypothesis and host-tooling process", i.e. 2214 − 470 = **1744**) does not yield 1150 either — so the
-number was never derived from the measurement that was supposed to support it. **Two phases in a row: sum
-the list.** Phase 4 parts 1+2 landed 2026-08-16 at **2049**.
-
-⚠️ **And the ~325 itemised survey was mispriced too, in a third and different way — by classification, not
-arithmetic.** §3.3 Touch was priced at ~85 lines out and the whole of part 2 delivered ~50, because the
-survey counted the wizard step table, the `touch_raw` mode table and the config-format bullets as
-narration. They are **reference content with no other home**, and cutting them only moves the cost to
-whoever next re-derives them from `device_tools.c`. What *did* compress hard was every block already
-duplicated in `native_apps/CLAUDE.md` — six of part 2's cuts are duplicate deletions, each now carrying a
-group C receipt. **Ask "where else does this live?" of a block before pricing it:** a duplicate is nearly
-free, a war story compresses to its rule, a reference table compresses to nothing. Remaining headroom here
-is small; **phase 5 (§2 + the photo index out to `HARDWARE.md`) is where ~1890 is actually met.**
-
-**Phase 4 part 3 closed 2026-08-16, and it was a content pass with no line target** — the line goal was
-already met by phase 5, so leaving the row `⏳` against a number that had moved said nothing about the work
-left. What part 3 owed was the *checkable* half of the tagging invariant, and all of it is in place: the
-legend is §1, the tags are applied, and both hedges that needed a test were filed as items rather than left
-in prose (**F1 panel question 6**, and the interior-slope hedge now carried as §3.3's *not established*). The closing sweep looked for unmeasured
-claims by **hedge vocabulary** — *probably · likely · presumably · appears to · seems · may be · assume ·
-untested · untried · nobody has* — and the triage is the point: most hits were the instrument or were
-already honest. Two were the legend defining those very words, nine sat inside an existing tag or were
-explicit *negative* statements (§3.3's "outer-band slope compression is **NOT** established", §3.4's
-"checked, not assumed"), and one described what the *code* assumes rather than what this document claims. **One
-genuine untagged inference survived** — §3.12's expectation that the vendor assumed a Series 1 module,
-inferred at the time from the command set the vendor's tooling uses; it has since been measured off two
-module labels and the tag retired.
-⚠️ **A hedge-vocabulary sweep mostly finds its own legend and its own warnings**, so triage it before
-believing the count — same shape as every other gate here.
-
-**Phase 5 landed 2026-08-16 at 1871, and it was priced correctly by asking the classification question
-first.** Every block in §2 and Appendix A was surveyed as *duplicate / war story / reference* before a
-target was written, and the answer was that **none of it is duplicated and none of it is narration** — it
-is all reference, so it compresses to nothing and the phase is a pure move: ≈183 lines of §2 body and
-photo appendix out, ~5 back as the pointer §2 becomes and the Contents row naming the new file — net
-**178**. Predicted ~1870, landed **1871**, the first target in four to hold. `HARDWARE.md` is
-236 lines, i.e. larger than what left, because photo captions and a seam were written for it — that is the
-point of the split rather than a cost of it, since the always-open document is the one that had to shrink.
-
-⚠️ **Seven part numbers that looked like clean move receipts were already duplicated inside
-`SYSTEM_ANALYSIS.md`** — `550-0204-03`, `MT29F2G16ABBEAHC`, `POE13F-12L`, `GC5.5V0.47F`, `1-6605834-1`,
-`TPS23750` and `TI-14` each appear in §2's inventory *and* in the subsystem section that drives the part
-(§3.5, §3.10, §4.3, §4.7). A receipt on any of them would have fired `NOT MOVED` forever. The eleven
-tokens used instead were each grepped for uniqueness first, and finding this is the reason to grep: **a
-"move it out" receipt needs a token that is unique to the block being moved, not merely distinctive.**
-
-⚠️ **A fifth stale claim, and again it was a pointer that its destination did not satisfy.** §2.4 pointed
-at a plan entry for "the staging that protected a single module", and that entry had since been rewritten
-to say the staging was **spent**. The fact itself now lives in `HARDWARE.md` §4, in place of the pointer.
-**That is five for five: every pointer checked against its destination this cleanup has found one wrong.**
-
-⚠️ **Group C is the instrument for a duplicate deletion, not only for a planned extraction.** Writing the
-row *before* the cut is what proves the destination already holds the fact, and it is cheap — part 2 added
-six rows (`TouchCalibSweep`, `clamp_to_hw`, `0..60000`, `594, 614, 817`, `FB_TOUCH_INSET_MAX`,
-`publish_safe_area`) and all went green. ⚠️ **But a pointer must itself be checked against its
-destination:** two cuts pointed at `native_apps/CLAUDE.md` for the fit's sanity-gate criterion, which
-lived **only** in `SYSTEM_ANALYSIS.md`. It was written into `native_apps/CLAUDE.md` before the pointer was
-allowed to stand — a "see X" that X does not satisfy is worse than the duplication it replaced.
-
-⚠️ **A fourth stale claim, caught the same way as the three above.** §3.3 told the reader to treat
-`Touch raw range set (linear):` as the signature of a pre-8-number binary. That string is **live** —
-`touch_input.c:428`, `touch_set_raw_range()`, the `EVIOCGABS`/RESET path — so a current binary prints it
-routinely and the test was worthless. The real discriminator is `(piecewise)` in the
-`Calibration loaded from:` line (`:589`). Fixed with the measurement, not by deleting the sentence.
-
-What the second half cut: `B28`, `B31`, `D7b` and the 8 struck-through panel rows deleted; `B32`
-(186 → 24), `F15` (388 → 18) and `F10` (132 → 15) reduced to open stubs with their headings byte-for-byte
-intact; `F1` compressed 281 → 156 with its phase table and ⏳ outstanding block untouched; and the missing
-`D7` heading restored — 19 lines of mDNS residue had been sitting under `B27`, and `git log -S` recovered
-the heading the 2026-08-05 edit dropped. `B28`'s one genuinely-open remainder survives in `C12`, where the
-other half-measure in the same flag vocabulary already lived: `provision.sh --dry-run` exits before the
-provision step, so it previews the clean and the p1 write but never the install/link plan.
-
-⚠️ **Deleting an item breaks the gate in the shape phase 2 did not fix.** Group B went 41 → **53** on the
-cut, because `D7b` (8 sites) and `B28` (4) were cited in the **bare** form that phase 2 left for 2b, and a
-bare citation of a *live* ID resolves — so those 12 were invisible until the heading went away. All 12 were
-de-referenced with the clause they already implied and the gate is back at 41, which is 2b's own list.
-**Before deleting an entry, grep the bare form too, not only the qualified one.**
-
-⚠️ **Three claims in the deleted text were wrong, and one was wrong in a way a receipt cannot see.**
-`F10`'s opening said its only outstanding task was "running it against a real card and booting a real
-unit", 91 lines above its own *Confirmed on hardware* subsection saying exactly that had happened. `F9` and
-`F10` both said ScummVM is GPLv2+; the tree is **GPL-3.0-or-later** (`scummvm/COPYING`, `LICENSE.md`). And a
-survey of the third reported `LICENSE.md`'s written source offer as a missing-file compliance gap —
-`LICENSE.md:95` says outright that `NOTICE` is generated per release by `release.sh` and shipped in the
-tarball, so **checking the claim is what stopped that one reaching a doc.**
-
-**Decisions taken, do not relitigate.** No closed-work ledger: closed items are deleted outright,
-because ⚠️ **an ID is not a durable reference** — 20 IDs cited from shipped source resolve to nothing
-here, and `git log --grep` does not rescue them either (`B3k` and `B13c` return **zero** commits). The
-replacement rule is that a code comment must carry its own reason, which is what phase 2 does. Phase 4
-keeps this file's filename and every heading it keeps content for, because ~130 anchor links into it
-live in `.sh`, `.conf`, `.c` and `.py` files.
-
-**The gate for that rule is `tests/doc_check.sh` group B**, host-only, with a negative control in both
-directions. It scans two citation shapes and fails on any ID with no heading here, which makes it
-self-maintaining in the direction that matters: **deleting a closed item below fails the gate until
-every citation of it has been rewritten.** ⚠️ It currently reports **41**, all bare-form — that is
-phase 2b's work list, printed by the run rather than written down anywhere.
-
-⚠️ **The counts in this table were both bigger than the survey said, and the surveys were not sloppy —
-they were scoped.** Phase 2 was planned as "~45 sites" from `.c/.h/.sh/.py/.conf`; the qualified figure
-was **83**, because four `.md` files cite IDs in a backticked form the first regex did not match. The
-bare form was found only after the qualified scan reached zero. **A clean zero from a gate is evidence
-about what the gate looks at, not about the repo.**
-
-⚠️ **Three of the 83 comments were stale about the current tree, not just about a dead ID** — an ID in
-a comment is often the only reason nobody re-read it. `fb_clear()`/`fb_draw_pixel()` are bpp-aware now
-(`vnc_client/CLAUDE.md` said otherwise); `poll_touch()` no longer latches a touch region's `.held`
-(`frogger.c`, `platformer.c` said otherwise, present tense); `commissioning/set-hostname.sh` does write
-`/etc/dhclient.conf` (`SYSTEM_ANALYSIS.md` §3.5 said nothing did). Each was fixed with the measurement.
-
-⚠️ **`doc_check.sh` counted its own prose three times**, in three shapes — a quoted heredoc fixture,
-then the header text about bare IDs, then the header text about the no-`.md` form — inflating the number
-it reported each time. Both scans now skip it; the self-test fixture is its coverage. **When a gate's
-number looks wrong, check what part of it is the harness first.**
-
-**Invariants the cleanup establishes**, each checkable: no file outside this one depends on a plan ID; a
-statement in `SYSTEM_ANALYSIS.md` is measured or it is tagged (`[inferred]`, `[unverified]`, `[n=1]` —
-**the legend is now §1 *How to read a claim in this document***, added by phase 4 part 2, which also
-replaced §1's *older version* changelog table after verifying all five of its rows were stated in their
-own sections), and anything needing a test becomes an item here instead — part 2 filed two: **F1 panel
-question 6** (does the ~50 % attenuation belong on the synth or on all output) and the interior-slope
-hedge, now carried as §3.3's own *not established* record rather than as an item here.
-No line count in prose that a session could carry stale (this file said `device_tools.c` was 2651 lines; it
-is 3703 — the count is out of `C2`'s title rather than corrected there, per the invariant).
-
-**Phase 1's negative control:** every one of the old `CLAUDE.md`'s 56 ⚠️ warnings was checked to survive in
-one of the five files or in `native_apps/CLAUDE.md`; 56 of 56 accounted for.
-
-**Phase 6 landed at 713, and the ~690 it was priced at was mispriced in the same way phases 3 and 4 were —
-by classification, in two rows only.** Every block of `native_apps/CLAUDE.md` was classified *duplicate / war
-story / reference* before any editing, which caught most of it; the per-section arithmetic below summed to
-**~203 lines out of 891** and delivered 178. The two rows it got wrong are Rendering and Audio, and the `keep`
-figures in the table are the **measured floors**, not the survey's:
-
-| section | keep | out | what compresses, and what does not |
-|---|---|---|---|
-| Build | 24 | 0 | ⚠️ **re-derived: 62/19 assumed the tinyalsa dependency.** That dep is gone, and its rules and the `asound.h` ABI check went with it — deletion, not compression. What is left is the `Makefile` and `check-arm-safe` pointers, which duplicate root `CLAUDE.md` |
-| The common library | 35 | 3 | the module table is reference with no other home — it compresses to nothing |
-| App lifecycle | 57 | 5 | the `main()` skeleton is the canonical copy; only the Snake and `argv[0]` narration goes |
-| Pixel format | 23 | 9 | the `fbset` warning and the bpp facts are in root `CLAUDE.md` and §3.2 |
-| Hardware API | 20 | 3 | five numbered rules, all reference |
-| Rendering | 113 | 13 | **the largest block**: the six war stories compress to their rules, but a *rule plus its measurement* is the floor — the survey's 55 counted the measurements as narration |
-| Coordinates, portrait | 23 | 2 | rules only |
-| Screen edges | 76 | 42 | the measured sweep table is duplicated in §3.3 *with an extra column*; the layout rules are not duplicated anywhere |
-| Touch model | 80 | 14 | the fit, the stage diagram and the 13-row rules table are the only copy; four receipt tokens live here |
-| Input | 88 | 26 | the uinput fact is in root `CLAUDE.md`, the MUSB facts in §3.6; the host-testability half is unique |
-| 32-bit target | 10 | 1 | four lines duplicate root `CLAUDE.md` |
-| Audio | 97 | 6 | the pump's rules and the `audio_gen` split live **nowhere else**; the survey's 24 assumed narration around them that a *measured* rule does not have |
-
-**Reaching ~325 would mean deleting the module table, the lifecycle skeleton, the touch rules table and
-the pump's rules** — the reference content this file exists to be. That is phase 4 part 2's mistake
-with a different file, and the classification is what caught it before any editing rather than after.
-
-⚠️ **Part 3 stopped at 713 rather than 690, and the residue is priced rather than spent — 6 lines in Rendering
-and 10 in Audio.** Both sections are at their wrap floor: measured, Rendering averages 84 chars over 93
-non-blank lines and Audio 88 over 85, and every line under 70 chars is a paragraph's wrap remainder, a table
-header or the protected `main()`-loop skeleton. The next line out is therefore a measurement or a named
-identifier, never narration; the full list of what it would cost is in the plan file. **A war story does not
-compress to its rule; it compresses to its rule *plus the measurement that proves it*, which is where the
-survey's 55 and 24 came from.** Fourth mispriced target in this cleanup and the second by classification —
-the difference is that this one was found by measuring the floor instead of by deleting an identifier and
-reverting it, which is what part 2 had to do.
-
-⚠️ **Prose compression paid 8 lines and one structural change paid 5.** Inlining `gameover_needs_redraw()`'s
-two-line fence into the sentence that already explained it lost nothing and freed a fence, a blank and two
-short code lines. **When a fence holds one statement, it is narration in a code voice** — the mandate to keep
-"the main-loop skeleton" is about the skeleton, not about every fence near it.
-
-**Part 1 landed 891 → 855**, taking the two clean duplicate deletions and the four highest-value war
-stories: the sweep table (16 → 5, now a pointer), the uinput narration (8 → 5), the two MUSB paragraphs
-(15 → 8), samegame's per-game `else`-branch table, the derive-state table, the D-pad removal history and
-the dependency build rules. Two prose counts went with them, per the invariant — the deploy no longer claims
-a number of executables or targets.
-
-**Part 2 landed 855 → 732, and it is not finished: ~42 lines remain, all of it in two sections.**
-Rendering is 126 against a keep of 107 and Audio 103 against 87; every other section is at or within four
-lines of its surveyed figure (Build 66/62, common library 36/35, lifecycle 58/57, pixel format **23/23**,
-hardware API 22/20, coordinates 25/23, screen edges 80/76, touch model 84/80, input 89/88, 32-bit 11/10).
-⚠️ **Re-measure those rather than trusting them** — one command against the `keep` column above:
-
-```bash
-awk '/^## /{if(p!="")print p": "NR-s; p=$0; s=NR} END{print p": "NR-s+1}' native_apps/CLAUDE.md
-```
-
-⚠️ **The survey's "reference with no other home" was wrong for eight blocks, and that is why the first
-half of part 2 stalled at ~55 % of every section's figure.** Compressing narration alone bought 87 lines
-and then flattened out — each further line cost a named function or a measurement, which is the point at
-which compression stops being free. What unstuck it was asking the *phase 5 classification question a
-second time*, against `SYSTEM_ANALYSIS.md` rather than against the file itself: the bezel/viewport
-preamble, the margin defaults, the per-unit inset digits and where to read them on the device, the
-endpoint-clamp measurement, the stale-`vnc_client` misparse example, the bpp table and its
-"16bpp bands every gradient" rationale, the `argv[0]`/`ps w` justification, the MUSB probe-time
-enumeration fact and gotcha 5's whole-periods measurement are **all** stated in `SYSTEM_ANALYSIS.md` as
-well — 40 lines, deleted to pointers in an afternoon after two hours of squeezing prose had bought less.
-**Classify a block against every other document, not against the one you are editing**: "is this
-reference?" and "is this reference *here*?" are different questions, and only the second one prices the
-work.
-
-⚠️ **And `SYSTEM_ANALYSIS.md` had already declared the split in four of those eight cases** — §3.3 ends
-"The library rules, the deleted legacy-migration clamp and the sanity gate's actual criterion are
-`native_apps/CLAUDE.md` → *Touch model*", §3.3's inset paragraph ends "Which rectangle a call site wants,
-the cap on the inset and the drawing policy are `native_apps/CLAUDE.md` → *Screen edges*", and §3.2/§5.3
-do the same. The duplication was therefore visible from the *destination* the whole time, in a sentence
-naming this file. **When one document says "X lives over there", read X and check nothing came back.**
-
-⚠️ **A drifted claim, found the same way and the sixth pointer-vs-destination hit of this cleanup.**
-`native_apps/CLAUDE.md` said the bezel hides "~15 px top and bottom **on the reference unit**";
-`SYSTEM_ANALYSIS.md` §3.2 says "**10–15 px** on the top and bottom edges only. **Measured on two
-devices.**" The narrower figure attributed to one unit was the stale copy, and it is now a pointer rather
-than a restatement.
-
-⚠️ **Two of the eight pointers had to be checked against their destination before they were allowed to
-stand, and a token grep could not do it.** The MUSB probe fact and gotcha 5's whole-periods measurement
-were both confirmed present — §3.6 words it "a device is enumerated only if it is attached when the MUSB
-driver probes" and §3.4 shouts `WHOLE PERIODS` — but **neither matches the phrasing this file used**, so
-no group C row can express either move: one is a rewording, the other a case difference. Same family as
-part 1's `omap2430_ops`. ⚠️ **And `ps w` is unusable as a receipt token for a third reason** — it is a
-substring of "kee**ps w**hatever" and "swa**ps w**idth", both still in this file, so a row on it would
-report `NOT MOVED` forever. Six rows were added (`15/15/0/0`, `red rect = visible`, `+19 px`,
-`0 1020 3074 4095`, `bands every gradient`, `XRGB8888`), four more for the root-`CLAUDE.md` deletions
-(`1,536,000`, `4-number`, `1000000L`, `injected successfully`), and the `Makefile`, `sdiv`, `ps w`, MUSB
-and whole-periods verifications are greps recorded in the commit.
-
-**What is left is a squeeze, not a survey**, and both sections' reference content is identified: Rendering
-keeps the main-loop skeleton, the three-grounds table and the two `usleep` shapes; Audio keeps the nine
-pump rules, the three-line conversion snippet and the `audio_gen` split. The narration around them is what
-has to give.
-
-The survey above is the remaining work list.
-
-⚠️ **A duplicate deletion cannot always carry a receipt, and this is the other half of phase 5's lesson.**
-The sweep table got one — `flat (saturated)` appears in exactly two files, so the row is exact. The MUSB
-paragraphs could not: `omap2430_ops` and `a_wait_bcon` appear in **nine** files each, so any receipt on
-them reports `NOT MOVED` forever. Where phase 5 said *a receipt needs a token unique to the moved block*,
-the corollary is that **a repo-wide token means the verification is a grep recorded in the commit, not a
-gate row** — `SYSTEM_ANALYSIS.md` §3.6 was confirmed to hold both facts before the paragraphs were cut.
-
-**Phase 7 landed at 4.5 KB, not the ~3 KB priced.** All 22 memories are still indexed, one line each,
-longest hook 189 characters against 1097 before — and ~1 KB of the file is the header, the four group
-headings and the `_archive/` footer, which is why the last 1.5 KB is not there: below about 90 characters a
-hook stops being able to distinguish 22 similarly-named memories, which is the one job the index has.
-⚠️ **And the hook that priced this phase was itself a stale count** — it said hooks ran to 684 characters,
-measured 1097, third-longest. A count in an index rots exactly like a count in prose.
-
-**Group C — extraction receipts — is built (2026-08-15), and it checks a MOVE, not a copy.** Each row is
-a distinctive token, the file that must now hold it, and the file it must have *left*; "one fact, one
-home" means a token present in both is the drift this cleanup exists to remove. Run *before* a deletion to
-confirm the destination has the fact and *after* to confirm it survived. Its self-test fires in both
-directions (an unextracted token and a copied-not-moved one). ⚠️ **Three shapes of the same defect it
-cannot see, all under-reporting:** a token can be present while the sentence around it is wrong (three of
-phase 2's 83 comments were exactly that); a fact extracted with no row is invisible, so a clean run says
-"every receipt holds", never "nothing was lost"; and it cannot tell a paragraph from a stray see-also
-line. The ⚠️-warning survival census therefore stays a manual per-phase control. **All eleven receipts are
-green as of phase 3's close** — the six `NOT MOVED` rows that were the pre-deletion state went to zero as
-each source entry was cut, which is what makes the group a progress meter and not just a gate.
-
-**Group A — every markdown anchor resolves — is built (2026-08-16)**, which is what phase 4 needed: a
-moved or retitled section is otherwise silent, and ~120 of these anchors live in `.sh`, `.c`, `.py` and
-`.conf` comments that no markdown linter reads. It resolves each anchor's fragment against the slugified
-headings of the target file, is fence-aware (a `#` comment inside a ```` ``` ```` block is not a
-heading), and is controlled in both directions. **234 anchors, 0 dangling** as of build, so phase 4
-cannot move a section silently. ⚠️ **Most of the first run's 41 findings were the gate, not the repo**,
-which is the reason to itemise before believing a number: 25 were bare filenames in code comments that
-resolve only from the repo root, 7 were CSS colours written `(#0a0e27)`, and 2 were a fragment eating a
-sentence-ending period. **What it genuinely found: 8 anchors in shipped `.sh` comments truncated to a
-section number** — `#61` where the heading slugifies to `61-cortex-a8-…`, all dead, all now spelled out —
-and 2 more of this gate's own documentation matching itself. ⚠️ **Naming one of those in prose made the
-number 1 again, twice.** For group A the safe form is a fragment in angle brackets or a fragment with no
-`.md` in front of it: bracketing only the *filename* half does not help, because the scan's path part
-matches the empty string.
-
 ### C15. The bare plan-ID scan collides with function-key names — open, measured 2026-09-03
 
 `bare_sites()` in `tests/doc_check.sh` matches an `F`-numbered ID in parentheses or after `see`/`is`/
@@ -1153,35 +882,86 @@ appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSI
 
 ## Where to start
 
-Deliberately not a ranking of everything — only the claims worth making.
+**This is the operator's ranking, set 2026-09-06, and it is the authority.** The tiers and their order
+are theirs; the ⚠️ notes under each are what measurement has since added, not a re-ranking.
 
-1. **Audio is not where to start** — the whole player-audible half ships and is heard
-   ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), and nothing audible is left open.
-2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
-3. **C10 before the next panel check** — it converts a play session into one launch, and every future
-   level-dependent bug pays the same toll until it exists.
+### Stability first
 
-⚠️ **B32 is not the place to start, and that is a result rather than a gap.** Three mechanisms read out
-of the MUSB driver have each been applied and **refuted on hardware**; the answer is the shipped RESCAN
+1. **F9** — the release path. ⚠️ Its second remainder is **blocked on non-engineering expertise**: whether
+   the `NOTICE` written offer is discharged has never been checked by anyone qualified to say so, and
+   `release.sh` guarantees bookkeeping rather than legality. ⚠️ **Measure a dependency's licence
+   *version*** — this entry once said GPLv2+ and the ScummVM tree is GPL-3.0-or-later. Adjacent and cheap:
+   nothing on a unit records which bundle tag or commit it runs, so no device can answer "what is this
+   running?" — dropping `manifest.d/bundle.info` during install fixes that.
+2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
+   during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
+   `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.
+3. **B27** — report the `sfdisk` absence as a skip. Host-only, one guard plus a `MIN_CASES` adjustment.
+4. **D9** — delete the vendor **software** watchdog instead of bypassing it. ⚠️ **Measured 2026-09-06: on a
+   properly-provisioned unit it is already gone** — `clean-rules.conf` deletes all of `/opt/sbin` by
+   default — so the real gap is that `--keep-vendorscripts` can opt out of that deletion, and `.188` is
+   the outlier where the scripts survive with only the crontab rewrite holding them off. Put
+   `/opt/sbin/watchdog` in group `base` so nothing can preserve it. ⚠️ **`/usr/sbin/watchdog` +
+   `S50watchdog` is the hardware watchdog and stays** — and `/etc/init.d/watchdog` calls *itself* a
+   "software watchdog daemon", which is Debian's generic wording, not Steelcase's. ⚠️ `lib/rw-identify.sh`
+   uses `opt/sbin/watchdog/watchdog.sh` as a rootfs-identity marker, so that moves in the same change.
+5. **F23** — tier 2 of the p1 gate, so a unit on any other Steelcase release can take the 500 mA patch.
+6. **F11** — one home for the host build prerequisites.
+
+### Usability, features, maintainability
+
+F2 (the biggest performance win available) · F100 (USB audio) · B35 · C1 · C4 · C6 with C7 · C2 · B30 ·
+F4 · C5 · C8 · F17 · F6 · F14.
+
+⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
+`check-audio-pacing.sh`, both blocking. No test suite runs from any build script, from `deploy-all.sh` or
+from `release.sh`, so C6 and C7 are one task: a pre-deploy gate that runs the host regressions and
+shellcheck beside the two that already block. **shellcheck is installed as of 2026-09-06**, so C7 is no
+longer blocked.
+
+⚠️ **Most of this tier is NOT gated on a kernel rebuild, measured 2026-09-06.** This repo already builds
+and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
+F17 and F100 are module builds, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
+cheaper option draws its splash in `app_launcher`, which already owns the framebuffer. **What genuinely
+needs kernel work is short: B32's enumeration reliability, and MUSB DMA.** Anything else claiming to need
+a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek
+by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
+read `lsusb`'s VID:PID before building anything.
+
+⚠️ **F4 is two items in one and should be split**: `in_temp1_input` is a die-temperature readout costing
+about ten minutes, while the analogue-input half needs a test point physically wired to a channel and is
+a soldering job. ⚠️ **C5 is also two items**, and only one is cosmetic: `text_truncate()` takes no
+destination size and one caller hands it a 48-byte buffer for a 128-byte device name, which is a stack
+overwrite waiting on a geometry change. The 8px/6px centring is the cosmetic half.
+
+### Nice to have
+
+B29 · C9 · C10 · C15 · F8 · D7 · F13.
+
+⚠️ **C9 is accepted rather than open for our own bundles**: we gate before stripping and the installer
+says `TAKEN ON TRUST` in those words. The gap is third-party bundles, which do not exist yet.
+⚠️ **C10's shape decision is REVERSED, 2026-09-06, by the operator**: a test-only command-line switch is
+acceptable after all, superseding the 2026-08-10 ruling that only a pause-dialog entry would do. The
+launcher passes no arguments, so such a flag is reachable over SSH and deliberately not from the panel —
+which is what a test entry point wants. ⚠️ **D7's prescribed fix is insufficient, measured 2026-09-06**:
+`libnss-mdns` is installed and in `nsswitch.conf`, avahi runs on the device, and `.local` still does not
+resolve — WSL2 is NAT'd onto its own subnet and mDNS is link-local multicast, so it cannot cross. The fix
+is `networkingMode=mirrored` in `.wslconfig`, which changes networking for every distro on the host and is
+the operator's call. ⚠️ **F13's interim is one honest line in `COMMISSIONING.md`** stating the host
+requirement; the real answer is a bootable image, and macOS cannot be tested from here at all.
+
+**F7 is dropped, measured 2026-09-06.** High scores live at `/home/root/data/*.hig` on **p2** and survive
+both re-commissioning paths by an explicit `keep base` rule; `build-and-deploy.sh` never touches that
+tree. Only a whole-card reflash loses them. NAND would buy the card-swap case alone, and buy it with a
+store that a reflash cannot clear. ⚠️ **The one caveat worth keeping: that whitelist matches `*.hig`, so a
+future game storing anything else under `/home/root/data` is swept by the clean.**
+
+⚠️ **B32 is not the place to start, and that is a result rather than a gap.** Three mechanisms read out of
+the MUSB driver have each been applied and **refuted on hardware**; the answer is the shipped RESCAN
 button, verified on a panel. **Read B32's measured/inferred split before proposing a fourth theory, and
 require of it the one thing all three failed to explain: how a port that probed with an EMPTY socket ever
 obtains a session.**
 
 Two device checks remain and both are optional rather than blocking, one SSH session each and no
-case-open: they are [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
-two remainders.
-
-[F11](#f11-one-home-for-the-host-build-prerequisites--open) reads more urgent than it is: **this WSL
-has the whole toolchain** (measured 2026-08-06 — see F11), so it is a fresh-machine and documentation
-item rather than a blocker, and [B27](#b27-sfdisk-absence-is-reported-as-a-test-failure-not-a-skip--open-latent)
-cannot fire here. What stands between a non-developer and a working unit is now narrower than it was:
-`README.md` leads with `roomwizard.sh` and documents installing from a published release. A tarball alone
-still carries no boot-time loaders, and that is now a **settled decision rather than a gap** — bundles hold
-built artifacts only, because the one consumer that installs device scripts runs from a clone and has
-`device-files/` beside it either way (`lib/rw-bundle.sh` header).
-[F13](#f13-commissioning-from-windows-without-wsl-and-from-macos--open-unsolved) is
-recorded rather than planned, because the honest answer is a bootable image.
-
-Everything else is genuinely unranked rather than deprioritised. **F6 (multi-touch) is the one to
-consider promoting**: the register map is published, so it is far less speculative than its position
-in this list suggests.
+case-open: they are F15's two remainders. Bundles hold built artifacts only — settled, because the one
+consumer that installs device scripts runs from a clone and has `device-files/` beside it either way.
