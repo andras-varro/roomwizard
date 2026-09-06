@@ -327,8 +327,8 @@ genuinely non-linear panel if one ever turns up.
 > ⚠️ **Outer-band slope compression is NOT established, and nothing may be built on it.** One run's
 > per-segment slopes suggested a ~12 % steeper interior; residuals against the interior line are
 > **±80 raw** (≈±8 px of finger placement) with no consistent sign, which over ~100 px baselines accounts
-> for ±8 % of slope on its own. One run cannot distinguish 12 % from noise. The repeated multi-target
-> measurement that would settle it is `IMPROVEMENT_PLAN.md` B3c.
+> for ±8 % of slope on its own. One run cannot distinguish 12 % from noise. Settling it needs `touch_raw`'s
+> `TARGETS` mode repeated — three or more runs on one panel, compared *across* runs, not within one.
 
 Stage 2 subtracts the viewport origin (`screen_view_x`/`screen_view_y`), which is exactly the
 offset `fb_swap()` draws at. A touch on the bezel therefore clamps to the nearest logical edge, and

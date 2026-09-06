@@ -27,7 +27,7 @@ anti INAUDIBLE.  Complete cancellation on anti-phase is only possible if the spe
 L + R, so THE SPEAKER SUMS and duplication is correct.  "Bridge" in the docs refers to each
 Handsfree amp being internally bridge-tied, not to SPKR1 bridging L against R.
 
-Re-run this on a new unit before assuming it holds there -- it is one panel, like B3c.
+Re-run this on a new unit before assuming it holds there -- it is one panel [n=1].
 Verify the generator itself first (peaks equal, R==0 / R==L / R==-L in every loud frame):
 the files must differ ONLY in phase or the loudness comparison measures the wrong thing.
 """

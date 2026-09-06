@@ -127,35 +127,6 @@ a different boot, and `recover`'s own 3-try loop makes a single invocation a wea
 rebinds — so this is not evidence that the two firmwares differ. Settling it needs repeated boot-empty →
 plug → `recover` cycles on **both** firmwares, one reboot each. Low value: the remedy works either way.
 
-### B3c. Whether the interior touch slope is steeper than the outer bands — open, not established
-
-The model and the fix have shipped; [`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch)
-carries the measurement, the method and the reference capture. **Read that section before touching
-the touch model** — this question has been answered wrongly in *both* directions, and each wrong
-answer came from inferring a hardware limit *through* the calibration under suspicion.
-
-**The second-unit question is settled and needed no code change.** Touch is confirmed working on two or
-more units (operator, 2026-08-31) — the *shape* generalising, not the digits transferring, which is what
-`[n=1]` means. Either answer always left per-panel variation to the runtime measurement, so a recorded
-`SWEEP`/`INSET` tsv from a second panel is documentary value now, not a blocker.
-
-**And on either panel: is the interior slope actually steeper than the outer bands?** One `TARGETS` run
-gave per-segment slopes suggesting ~12 %, and `SYSTEM_ANALYSIS.md` §3.3 now records that as **not
-established** — residuals against the interior line are ±80 raw with no consistent sign, which over
-~100 px baselines accounts for ±8 % of slope by itself, so one run cannot separate 12 % from noise. The
-measurement is **`TARGETS` repeated** — three or more independent 11-target × 3-tap runs on the same
-panel, comparing per-segment slopes *across* runs rather than within one. A real effect survives the
-repeat; noise does not. Nothing in the shipped model depends on the answer (the curve is a straight line
-today), so this is only worth doing if a genuinely non-linear panel is ever suspected.
-
-Two practical notes:
-
-- **Save `/tmp/touch_raw.tsv` into the repo before the device reboots.** The calibration wizard
-  writes no tsv — only the diagnostic does.
-- A second unit is available and reachable over SSH, so this is panel time, not hardware
-  acquisition. Check `./commissioning/provision.sh <ip> --status` first: a unit on older deploy scripts will
-  mislead you about anything else you observe there.
-
 ### B33. A USB babble error leaves a `printk` loop that hard-resets the device — open, **measured 2026-08-17**
 
 ⚠️ **One babble error puts the kernel into an unbounded message loop that outlives the device's removal and
@@ -234,33 +205,26 @@ poll — and keep the first announcement, which is genuinely useful.
 
 All userspace. No kernel work.
 
-### F20. Audio tidy-up left behind by the ScummVM adapter — open
+### F24. The two audio diagnostic screens cycle the bus per button press — open
 
-**Port the three no-bus `audio_tone()` callers to the mix bus.** `device_tools`, `hardware_config` and
-`hardware_test` (built from `hardware_test/hardware_test_gui.c`) are the last programs calling
-`audio_tone()` **without a bus** — keep that qualifier: the four games that still call it (`pong`,
-`tetris`, `snake`, `samegame`) are all on one, so dropping it makes the entry read as false. The port
-target is documented at `native_apps/common/audio.h:340-370` — `audio_pump_enable()` once after init,
-`audio_pump()` once per frame — and ⚠️ **the frame-pacing clause at the end of that block is part of
-the recipe, not advice**: a loop that falls to `FRAME_DELAY_IDLE_US` mid-sound starves the stream.
-Nothing a player can hear depends on any of this, and `audio_tone()`'s own path is measured working.
+**Hold the bus for the screen, not for one press.** `device_tools`' SETTINGS `TEST` button
+(`device_tools/device_tools.c:479`), its TESTS → `AUDIO` sweep (`device_tools.c:1627`) and the
+SSH-only copies in `hardware_test/hardware_test_gui.c:616` and `hardware_config/hardware_config.c:70`
+each open and close the stream **per invocation**, so every press crosses a stream open and a stream
+stop. A game holds one bus for its whole session instead. **Measured on `.188` 2026-09-05** from
+`/var/log/roomwizard/app_stdout.log`: a single `device_tools` process logged fifteen `bus closed`
+lines — six at `services=28` (the two-tone test) and nine at `services=80` (the eight-tone sweep) —
+against one line per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, the
+latter the only `starve=1` seen). Every diagnostic line read `starve=0 lost=0 drop=0 lim=0 clip=0`.
 
-⚠️ **For the two `test_audio_diag()` sweeps, the port DROPS the interrupt half of the
-interrupt-then-tone pair rather than translating it.** Those are `device_tools/device_tools.c:1652` and
-`hardware_test/hardware_test_gui.c:668`, the only live callers left; `hardware_config` has none to
-drop. On a bus that call already becomes "stop all voices" (`native_apps/common/audio.c:855-857`), and
-both sites are a 300 ms tone followed by 10 x 30 ms of tap-polling, so per-tone serialisation is the
-intent rather than an effect being cut — why the pair is wrong for a game is `native_apps/CLAUDE.md`
-→ *Audio*.
-
-**What makes the drop safe is `audio_tone()`'s chaining guard, and the margin is wide.**
-`native_apps/common/audio.c:925-941` delays a tone only when the previous one started within
-`AUDIO_TONE_CHAIN_MS`, which is **16 ms** (`audio.c:36`); the sweeps leave ~600 ms between tone starts,
-so `recent` is false and `tail_ms` is 0 either way. The tap inside those wait loops
-is the top-right exit button — it ends the sweep rather than shortening the gap — so it cannot narrow
-that margin either.
-
----
+Both transitions are the audible click
+([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), which is why one is heard on the first
+press after a gap and one ~5 s after the last, and **not** on presses following inside the codec's
+`pmdown_time`. ⚠️ **The operator accepts the current behaviour (2026-09-05), so this is tidy-up rather
+than a defect to chase.** ⚠️ **And §3.4's stop-click does not yet reconcile with this report** — §3.4
+records a click at *every* stream stop, measured with the power-down held off, whereas repeat presses
+at the default `pmdown_time` are inaudible. Both are `[n=1, by ear]` and nothing has measured the two
+together; do that before promising a click-free screen.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 
@@ -487,7 +451,8 @@ tier 1 accepts it with no code change. ⚠️ **That also pins what the three co
 reference unit's release**, not the other release in the fleet
 ([`SYSTEM_ANALYSIS.md#51-as-shipped`](SYSTEM_ANALYSIS.md#51-as-shipped)). It is a workaround and not the
 fix — it needs a card capture of a matching release on hand, and it replaces the whole card, so the
-restored unit inherits the donor's `/etc/touch_calibration.conf` and needs recalibrating (B3c). ⚠️ **Only
+restored unit inherits the donor's `/etc/touch_calibration.conf` and needs recalibrating
+([`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch)). ⚠️ **Only
 p1 may be restored file-by-file** (FAT32, all regular files); any ext partition must go back with `dd`,
 because a per-partition file copy of a live rootfs carries no symlinks and leaves the unit with no
 `/bin/sh` and no boot sequence, on hardware with no serial console.
@@ -535,7 +500,7 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 ([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
-— but that path is now `common/audio_out` for every component (F20), so the reroute has one home rather
+— but that path is now `common/audio_out` for every component, so the reroute has one home rather
 than two. A2DP's ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
@@ -890,7 +855,7 @@ is small; **phase 5 (§2 + the photo index out to `HARDWARE.md`) is where ~1890 
 already met by phase 5, so leaving the row `⏳` against a number that had moved said nothing about the work
 left. What part 3 owed was the *checkable* half of the tagging invariant, and all of it is in place: the
 legend is §1, the tags are applied, and both hedges that needed a test were filed as items rather than left
-in prose (**F1 panel question 6**, the second half of **B3c**). The closing sweep looked for unmeasured
+in prose (**F1 panel question 6**, and the interior-slope hedge now carried as §3.3's *not established*). The closing sweep looked for unmeasured
 claims by **hedge vocabulary** — *probably · likely · presumably · appears to · seems · may be · assume ·
 untested · untried · nobody has* — and the triage is the point: most hits were the instrument or were
 already honest. Two were the legend defining those very words, nine sat inside an existing tag or were
@@ -994,8 +959,8 @@ statement in `SYSTEM_ANALYSIS.md` is measured or it is tagged (`[inferred]`, `[u
 **the legend is now §1 *How to read a claim in this document***, added by phase 4 part 2, which also
 replaced §1's *older version* changelog table after verifying all five of its rows were stated in their
 own sections), and anything needing a test becomes an item here instead — part 2 filed two: **F1 panel
-question 6** (does the ~50 % attenuation belong on the synth or on all output) and a second half of
-**B3c** (`TARGETS` repeated, to settle whether the interior slope is really steeper than the outer bands).
+question 6** (does the ~50 % attenuation belong on the synth or on all output) and the interior-slope
+hedge, now carried as §3.3's own *not established* record rather than as an item here.
 No line count in prose that a session could carry stale (this file said `device_tools.c` was 2651 lines; it
 is 3703 — the count is out of `C2`'s title rather than corrected there, per the invariant).
 
@@ -1191,8 +1156,7 @@ appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSI
 Deliberately not a ranking of everything — only the claims worth making.
 
 1. **Audio is not where to start** — the whole player-audible half ships and is heard
-   ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). F20 is all that is left of it, and
-   none of F20 is audible.
+   ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), and nothing audible is left open.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
 3. **C10 before the next panel check** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.

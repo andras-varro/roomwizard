@@ -136,8 +136,8 @@ enablement + Xbox controller modules).
 **Toolchain:** `arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM
 additionally needs **WSL Ubuntu 20.04+** and `g++-arm-linux-gnueabihf`. `usb_host` needs
 kernel-module build deps (`bc libssl-dev bison flex`) + `python3`. `native_apps/build-deps.sh`
-cross-builds tinyalsa into `native_apps/arm-deps/`; ⚠️ **ScummVM points at that same directory rather
-than building its own copy.**
+cross-builds tinyalsa into `native_apps/arm-deps/`; ⚠️ **ScummVM builds its own separate
+`scummvm-roomwizard/arm-deps/` (zlib + libpng only) and links no tinyalsa.**
 
 **`native_apps/` has no `Makefile`.** `native_apps/build-and-deploy.sh` (cross-compiler, `-static`) is
 the only build path. A **new** binary goes in `GAMES_BINARIES` there and nowhere else — that one array

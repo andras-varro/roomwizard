@@ -277,9 +277,10 @@ plays its effects and carries on.
 
 tinyalsa
 --------
-The native_apps audio backend is built against tinyalsa 2.0.0, cross-built from
-source by `native_apps/build-deps.sh` (not vendored, not modified beyond one
-one-line build fix documented in that script).  BSD-3-Clause requires its
+No binary in this bundle links tinyalsa 2.0.0 today.  The notice travels early on
+purpose: one that lands a release late is the obligation missed.  tinyalsa is
+cross-built from source by `native_apps/build-deps.sh` (not vendored, not modified
+beyond one one-line build fix documented in that script).  BSD-3-Clause requires its
 copyright notice, list of conditions and disclaimer to accompany a binary
 distribution, so they are reproduced here in full:
 
