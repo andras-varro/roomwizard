@@ -163,6 +163,13 @@ void OssMixerManager::audioThread() {
 		// scheduling jitter this core is measured to produce, so one late wakeup
 		// starves the stream.  Half the ceiling means two services per budget
 		// window and a single late wakeup cannot.
+		//
+		// ⚠️ But HALF is a choice, never measured.  Neither the whole ceiling nor
+		// any other divisor has been tried; the stream is heard clean at half, and
+		// that is the whole of the evidence.  It also stacks on a margin the library
+		// already keeps (audio_out_service_interval_us() subtracts half a hardware
+		// period internally) — though that one guards period granularity rather
+		// than caller-side wakeup jitter, so the two are not obviously redundant.
 		long budget = audio_out_service_interval_us(&_out);
 		if (budget <= 0)
 			budget = 20000;   // geometry not measured yet (pre-first-service)

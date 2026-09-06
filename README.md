@@ -216,9 +216,9 @@ For hardware specs, see **[Subsystems](SYSTEM_ANALYSIS.md#3-subsystems)** in the
 See **[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)** for the current backlog. Highlights:
 
 - Known bugs are catalogued there with `file:line` references.
-- **Kernel upgrades are out of scope** — vendor source is unavailable and a mainline port would
-  break the runtime bpp switching that ScummVM and the VNC client depend on. See
-  [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
+- **Kernel rebuilds and upgrades are out of scope** — an image can be compiled, but it would boot with
+  a dead touchscreen, and a mainline port would additionally break the runtime bpp switching that
+  ScummVM and the VNC client depend on. See [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
 
 ## A note on secrets
 

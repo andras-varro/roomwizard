@@ -258,7 +258,7 @@ a part that could never software-decode one, and the DMA-channel error above may
 
 > ⚠️ This is a **legacy omapdss sysfs** interface. It does not exist under `omapdrm`. Anything
 > built on it is cheap today and would need rewriting as DRM atomic plane programming after a
-> kernel jump — see [Kernel policy](#7-kernel-policy).
+> **mainline** port (a 4.14.52 rebuild leaves it intact) — see [Kernel policy](#7-kernel-policy).
 
 **As shipped.** X11/Xorg (`Xorg -br -nolisten tcp -nocursor -pn -dpms vt8 :0`, started by
 `/etc/init.d/x11`) hosting a WebKit browser. All removed in game mode; apps render straight to the
@@ -906,7 +906,7 @@ recommended (the port may not supply enough VBUS).
 EHCI high-speed host ports with their own PHYs and VBUS regulators, and `hsusb2_phy` even carries a
 board-specific reset GPIO (`gpio1[13]`) implying deliberate wiring — but nothing was ever brought
 out to a connector on board revision `550-0204-03`. `CONFIG_USB_EHCI_HCD` and
-`CONFIG_USB_OHCI_HCD` are both unset and `dmesg | grep ehci` is empty. **Even with kernel source,
+`CONFIG_USB_OHCI_HCD` are both unset and `dmesg | grep ehci` is empty. **Even with a rebuilt kernel,
 enabling EHCI would gain nothing — there is nowhere to plug in.** Recorded so the decision is not
 re-litigated.
 
@@ -1933,46 +1933,45 @@ ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reu
 
 ## 7. Kernel policy
 
-**Do not rebuild or upgrade the kernel. Do not attempt a mainline port.** This is a settled
-decision, recorded so it is not re-litigated.
+**Do not rebuild or upgrade the kernel, and do not attempt a mainline port.** The decision is settled;
+only the reasons are, and they have been stated wrongly once. **A 4.14.52 rebuild and a mainline
+5.x/6.x port are separate questions** — the case against the second does not carry to the first.
 
-**The running kernel cannot be rebuilt from anything available.** `usb_host/linux-4.14.52/` is
-**vanilla upstream kernel.org 4.14.52**, not Steelcase source. Three things in the device's own
-`/proc/config.gz` have no counterpart in it:
+**The vanilla tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla
+upstream 4.14.52, not Steelcase source — but `build-xpad-module.sh` configures it from the device's
+own `/proc/config.gz` plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured**
+building from it and loading there (`vermagic=4.14.52`). So "there is no source to build from" is
+**wrong**; whether a full image links is untried, but the tree is not what would stop it. What such
+an image would be missing has shrunk from three gaps to one:
 
-| Symbol | Status in vanilla 4.14.52 |
-|---|---|
-| `CONFIG_TOUCHSCREEN_PANJIT=y` | **Does not exist.** Vanilla has only `TOUCHSCREEN_USB_PANJIT`, a different USB driver. No `panjit*.c` in the tree. |
-| `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | **Does not exist.** No `panel-sharp-lq070y3lg4a.c` upstream, ever. |
-| `arch/arm/boot/dts/omap3-rw20.dts` | **Does not exist.** |
+| `/proc/config.gz` symbol | Absent from vanilla 4.14.52 | Cost today |
+|---|---|---|
+| `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **none** — it reduces to a stock `panel-dpi` node now the timings are recorded in [Display](#32-display) |
+| `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low** — every other peripheral is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc, `ti,omap-twl4030` audio), and `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
+| `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **the blocker** — `olddefconfig` drops it silently, so an image built from this repo as it stands would boot with a dead touchscreen; a driver has to be written |
 
-`build-xpad-module.sh` runs `olddefconfig`, which silently drops the first two. Harmless for
-building `.ko` modules — but it means **a kernel image built from this repo would boot with no
-display and no touchscreen.** Obtaining the vendor's GPL source would unblock a rebuild;
-**pursuing that has been explicitly ruled out.**
+**That last one is an implementation job, not a reverse-engineering one**, because the controller's
+I2C register map is published Cypress documentation ([Touch](#33-touch)). What the absent vendor
+source would actually buy is `panjit_ts` and the panel driver ready-made; requesting it from
+Steelcase is explicitly ruled out.
 
-**Only three things are genuinely un-portable:** the board DTS, `panjit_ts`, and the panel driver.
-Everything else is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc,
-`ti,omap-twl4030` audio). And the panel is no longer a blocker now that its timings are recorded in
-[Display](#32-display) — it reduces to a stock `panel-dpi` node.
+**Verification is the harder blocker.** With no `/dev/uinput` here, a kernel that boots with a dead
+touchscreen cannot be diagnosed or regression-tested from the host — every iteration needs an operator
+at the panel, and every bad one a card swap. That is the cost that scales.
 
-**Upgrading would be a net loss anyway.** Every hoped-for benefit is either already available or not a
-version problem: ALSA works today and the bug is in the `snd-pcm-oss` emulation layer, so that fix is
-pure userspace at zero risk; USB host/DMA and `PREEMPT_NONE`/`HZ=100` are kernel *config* defects,
-unfixable without source whatever the version; there is no WiFi hardware to gain a driver for; and this
-is a LAN-only device with no browser and no untrusted input.
+**A mainline port fails on DRM/KMS — and this argument is about 5.x/6.x only.** `omapfb`/`omapdss`
+were deprecated across 4.x and **removed from mainline during 5.x**; the OMAP3 replacement `omapdrm`
+is a DRM/KMS driver. Under it `/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev
+emulation exposes a **fixed** pixel format, while this project switches bpp at runtime in three
+components ([Display](#32-display)); the DSS overlay sysfs interface, the best free performance win
+available, disappears outright; and a 6.x kernel has a materially larger footprint on a 234 MB box.
+That the emulation would *reject* the switch is **[inferred]**, untestable here for want of any DRM at
+all; what is **measured** is only that the current stack supports it
+(`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running). ⚠️ **None of this argues
+against a 4.14.52 rebuild**, which leaves omapfb, that switch and the overlay sysfs as they are.
 
-**The DRM/KMS trap is the decisive argument.** `omapfb` and `omapdss` were deprecated across 4.x and
-**removed from mainline during 5.x**; the OMAP3 replacement is `omapdrm`, a DRM/KMS driver. Under it
-`/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev emulation exposes a **fixed** pixel
-format — while this project switches bpp at runtime in three components ([Display](#32-display)). The DSS
-overlay sysfs interface, the best free performance win available, disappears outright, and a 6.x kernel
-has a materially larger footprint on a 234 MB box. **[inferred]** that the emulation would *reject* the
-switch — it follows from how that emulation works but could not be tested, because this device has no DRM
-at all. What is measured is only that the *current* stack supports the switch
-(`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running).
-
-**Brick risk for kernel work: LOW** (removable SD plus the untouched-`uImage-system` discipline).
-**Value: LOW.** The ratio does not justify it. Treat this as a userspace problem with a
-kernel-config footnote: the two highest-value improvements available — ALSA audio and DSS
-overlays — need no kernel work at all.
+**Value settles it.** **Brick risk: LOW** (removable SD; `uImage-system` stays untouched), but the
+gains are thin. The *config* defects (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are real and a rebuild
+would fix them, yet none limits anything measured; the OSS shim's bugs sit in `snd-pcm-oss`, which both
+consumers already work around and which native ALSA would bypass — neither needing a rebuild
+([Audio](#34-audio)); there is no WiFi hardware. **DSS overlays, the clear win, are pure sysfs.**

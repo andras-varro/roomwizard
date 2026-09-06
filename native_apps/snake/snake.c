@@ -742,7 +742,12 @@ int main(int argc, char *argv[]) {
          * CEILING (it already carries half a period of margin — see
          * ../common/audio_out.h), so sleeping the whole of it and then pumping
          * puts the service at its edge.  Half lands snake at ~27 ms, the same
-         * neighbourhood as the other six games' FRAME_DELAY_ACTIVE_US. */
+         * neighbourhood as the other six games' FRAME_DELAY_ACTIVE_US.
+         * ⚠️ But HALF is a choice, never measured — neither the whole interval
+         * nor any other divisor has been tried, and "it sounds right" is the whole
+         * of the evidence.  Note the ceiling's own half-period margin guards period
+         * granularity, not the per-iteration wakeup jitter this halving covers, so
+         * the two margins are not obviously redundant. */
         long wait_us = (current_screen == SCREEN_PLAYING)
                      ? (long)game.speed
                      : ((needs_redraw || audio_pump_active(&audio))

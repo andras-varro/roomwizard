@@ -71,19 +71,24 @@ Corner zones are gesture-only — all taps in 80px corners are suppressed from t
 **Amp enable:** GPIO12 HIGH (set by `/etc/init.d/audio-enable` at boot)  
 **Hardware audio details:** See [`SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)
 
-**Design choices:**
-- **O_NONBLOCK** — prevents 506 ms ALSA HW-period stall
-- **No `SNDCTL_DSP_SETFRAGMENT`** — keeps default ~500 ms ring as jitter buffer
-- **Wall-clock deadline pacing** — sleep until `now + usPerBuf` after each write; `EAGAIN` is safety valve only
+**Design choices that are still this file's:**
 - **Mono output** — single speaker; eliminates stereo/mono mismatch bugs; halves all audio-thread work
 - **22050 Hz** — halves OPL synthesis load vs 44100
 - **2048-frame buffer** — 93 ms at 22050 Hz; 4096 bytes mono
 - **SCHED_OTHER** — SCHED_RR starved main thread on single-core ARM; ~500 ms ring absorbs jitter
-- **50% volume attenuation** — `>>1` on int16 samples post-mix; prevents speaker distortion
-- **Read-back ioctls** — `SOUND_PCM_READ_RATE/BITS/CHANNELS` verify actual device state after setup; `_outputRate` uses read-back rate so OPL sample-counting matches real playback
-- **Ring pre-fill** — 3 silence buffers (~280 ms) written before pacing loop starts; prevents initial XRUN
-- **XRUN detection** — `SNDCTL_DSP_GETOSPACE` monitors ring fill level; emergency extra buffer if near-empty
-- **Diagnostic counters** — every ~10s logs: ring fill, EAGAIN count, write errors, deadline resets, XRUNs
+- **50% volume attenuation** — `audio_out_set_shift(&_out, 1)`, the old `>>1`; the speaker distorts at full scale
+
+**The device half is `native_apps/common/audio_out.{c,h}`, not this file.** The `/dev/dsp` open,
+`O_NONBLOCK`, the ioctl order and its read-backs, the absent `SNDCTL_DSP_SETFRAGMENT`, the
+`SNDCTL_DSP_GETOSPACE` ring query, the silence prefill and the `EAGAIN` retry all live there;
+`oss-mixer.cpp` keeps only the mixer, the fill and the service thread. Two of the old choices were
+**deleted rather than moved** — the fixed wall-clock deadline (the thread paces off
+`audio_out_service_interval_us()` instead) and the emergency anti-underrun second write.
+`oss-mixer.cpp:45-58` records why for both.
+
+**Verified at the panel 2026-09-01, after that move:** Full Throttle plays correctly, audio and all,
+and King's Quest 2's AdLib synthesis *and* its shore-wave sample both play as expected — two engines
+and two synthesis paths, operator unhedged on both.
 
 ### OSS Stereo Caveat (ALSA OSS shim)
 

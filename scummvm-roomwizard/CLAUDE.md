@@ -206,13 +206,13 @@ The OSS shim's bugs are device facts and documented in
 - **Set SPEED -> FMT -> CHANNELS**, then read back with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and
   use the *read-back* rate for `_outputRate`. Set-ioctl return values do not reflect device state,
   and a wrong `_outputRate` makes OPL run at the wrong tempo.
-- **`O_NONBLOCK` + wall-clock deadline pacing.** Blocking `write()` stalls ~506 ms on the ALSA
-  hardware period. Treat `EAGAIN` as a safety valve, not the pacing mechanism.
+- **The device half is not this file's.** `O_NONBLOCK`, the ioctl order and read-backs, the ring
+  query, the silence prefill and the `EAGAIN` retry all live in `common/audio_out.{c,h}`; this is an
+  adapter. ⚠️ **The wall-clock deadline and the emergency second write were DELETED, not moved** —
+  the thread paces off `audio_out_service_interval_us()`, and `oss-mixer.cpp:45-58` says why.
 - **No `SNDCTL_DSP_SETFRAGMENT`** — the default ~500 ms ring is the jitter buffer.
-- **`SCHED_OTHER`, never `SCHED_RR`.** An RT audio thread starves the main thread on this
-  single core and you get a black screen.
-- **Pre-fill 3 silence buffers** (~280 ms) before the pacing loop or the first playback XRUNs.
-- **50 % attenuation** (`>>1` post-mix) — the speaker distorts at full scale.
+- **`SCHED_OTHER`, never `SCHED_RR`.** An RT audio thread starves the main thread on this single
+  core and you get a black screen.
 
 Quickest audio test: KQ3 `intro`, which starts music immediately.
 

@@ -236,33 +236,29 @@ All userspace. No kernel work.
 
 ### F20. Audio tidy-up left behind by the ScummVM adapter — open
 
-**The audio subsystem is DONE where a player can hear it** — the mix bus, the continuous stream, the clip
-bank, the WAV beds, the per-game sound sets and the level all ship and are heard. Its device facts are
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) and its authoring rules
-`native_apps/CLAUDE.md` → *Audio*, *Mixing* and *Sound assets*; the ALSA port is **not planned**
-(`/dev/dsp` and `/dev/snd/pcmC0D0p` are the same PCM, so it buys latency and nothing else, and no latency
-symptom has ever been reported).
+**Port the three no-bus `audio_tone()` callers to the mix bus.** `device_tools`, `hardware_config` and
+`hardware_test` (built from `hardware_test/hardware_test_gui.c`) are the last programs calling
+`audio_tone()` **without a bus** — keep that qualifier: the four games that still call it (`pong`,
+`tetris`, `snake`, `samegame`) are all on one, so dropping it makes the entry read as false. The port
+target is documented at `native_apps/common/audio.h:340-370` — `audio_pump_enable()` once after init,
+`audio_pump()` once per frame — and ⚠️ **the frame-pacing clause at the end of that block is part of
+the recipe, not advice**: a loop that falls to `FRAME_DELAY_IDLE_US` mid-sound starves the stream.
+Nothing a player can hear depends on any of this, and `audio_tone()`'s own path is measured working.
 
-✅ **The adapter is DONE, and heard.** `oss-mixer.cpp` keeps only the mixer, the fill and the service
-thread; the `/dev/dsp` open, the ioctl order, the ring query, the silence prefill, the EAGAIN retry, the
-wall-clock deadline and the emergency second write all live in `common/audio_out.{c,h}` instead — one
-implementation of the device half, which is the point, for the emulator ports still to come. Linked,
-deployed and checked at the panel 2026-09-01: **Full Throttle plays correctly, audio and all**, and
-**King's Quest 2's AdLib synthesis and its shore-wave sample both play as expected** — two engines and
-two synthesis paths, operator unhedged on both.
+⚠️ **For the two `test_audio_diag()` sweeps, the port DROPS the interrupt half of the
+interrupt-then-tone pair rather than translating it.** Those are `device_tools/device_tools.c:1652` and
+`hardware_test/hardware_test_gui.c:668`, the only live callers left; `hardware_config` has none to
+drop. On a bus that call already becomes "stop all voices" (`native_apps/common/audio.c:855-857`), and
+both sites are a 300 ms tone followed by 10 x 30 ms of tap-polling, so per-tone serialisation is the
+intent rather than an effect being cut — why the pair is wrong for a game is `native_apps/CLAUDE.md`
+→ *Audio*.
 
-⚠️ **The service thread sleeps `audio_out_service_interval_us() / 2`, and the halving is still unmeasured
-against the whole interval.** That function documents the *longest* a caller may go between services, and
-the native path stays far under it by servicing from its render loop; half was chosen so one late wakeup
-on a core with 20–40 ms of jitter cannot starve the stream. It ships and it sounds right, which is not the
-same as being the right number.
-
-**One residual, and it is not audible:** the pre-continuous tone path does not die when the games leave
-it. `device_tools`, `hardware_config` and `hardware_test` still call `audio_tone()` without a bus, and
-two of them — `device_tools` and `hardware_test_gui`, NOT `hardware_config` — are the last callers
-of the interrupt-then-tone pair `common/audio.h:316` warns against (`native_apps/CLAUDE.md` → *Audio*).
-Porting the three to the mix bus is the close-out;
-nothing a player can hear depends on it, and `audio_tone()`'s own path is measured working.
+**What makes the drop safe is `audio_tone()`'s chaining guard, and the margin is wide.**
+`native_apps/common/audio.c:925-941` delays a tone only when the previous one started within
+`AUDIO_TONE_CHAIN_MS`, which is **16 ms** (`audio.c:36`); the sweeps leave ~600 ms between tone starts,
+so `recent` is false and `tail_ms` is 0 either way. The tap inside those wait loops
+is the top-right exit button — it ends the sweep rather than shortening the gap — so it cannot narrow
+that margin either.
 
 ---
 
@@ -290,8 +286,8 @@ Suggested order:
    conversion. Furthest from proven of the four, and the boot-time `omap_vout: failed to allocate DMA
    Channel for video-1` may be exactly what blocks it.
 
-⚠️ Cheap today, but it would need rewriting as DRM atomic plane code if the kernel ever changed —
-which, per current policy, it won't.
+⚠️ Cheap today, but it would need rewriting as DRM atomic plane code after a **mainline** port — which
+is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.
 
 ### F4. Surface the MADC — temperature and analogue inputs — open
 
@@ -552,8 +548,8 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
 family as [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
-controller scribbles into RAM.** No kernel rebuild is available to do it the clean way
-([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+controller scribbles into RAM.** A kernel rebuild would be the clean way and is not impossible, only
+ruled out on value ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 **Where the two questions do connect.** `CONFIG_SND=y` and `CONFIG_SND_USB=y` but
 `# CONFIG_SND_USB_AUDIO is not set` — so a **wired USB DAC** is also one module build away, with no
@@ -1166,11 +1162,11 @@ fire in a file of the same kind, or the scan goes blind where it used to see.
 
 ## Out of Scope
 
-Recorded so the decision is not re-litigated. Most of these need a kernel rebuild, and the vendor
-kernel source is unavailable — the full rationale, the three un-portable drivers and the per-symbol
-evidence are in [`SYSTEM_ANALYSIS.md#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) and
-[`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present). Requesting GPL source from
-Steelcase has been explicitly ruled out.
+Recorded so the decision is not re-litigated. Most of these need a kernel rebuild, which is ruled out
+on **value, not feasibility** — the full rationale, the single blocking driver (`panjit_ts`) and the
+per-symbol evidence are in [`SYSTEM_ANALYSIS.md#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)
+and [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present). Requesting GPL source
+from Steelcase has been explicitly ruled out.
 
 | Item | Blocked by | Detail |
 |------|---|---|
@@ -1183,6 +1179,7 @@ Steelcase has been explicitly ruled out.
 | Mainline 6.x port | Would break runtime bpp switching (ScummVM + VNC), lose the DSS overlay sysfs, cost RAM | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
 | Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
+| Native ALSA backend (the "ALSA port") | **Nothing** — it needs no kernel work and the userspace side is complete on a stock unit ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Declined on **value**: `/dev/dsp` and the ALSA device are the same PCM, so it buys latency, and no latency symptom has ever been reported. ⚠️ **Re-read that reason before quoting it** — [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) names *mixing* and *frame arithmetic* as arguments too. Mixing has since shipped in userspace; the frame-arithmetic argument has not been re-checked against the decision. | [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
 
 **Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the
 appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
@@ -1193,10 +1190,9 @@ appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSI
 
 Deliberately not a ranking of everything — only the claims worth making.
 
-1. **The audio subsystem is DONE where a player can hear it** — the mix bus, the continuous stream, the
-   clip bank, the beds and the per-game sound sets all ship and are heard, and the ALSA port is not
-   planned. What is left is the F20 tidy-up,
-   none of which is audible.
+1. **Audio is not where to start** — the whole player-audible half ships and is heard
+   ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). F20 is all that is left of it, and
+   none of F20 is audible.
 2. **F2 (DSS overlays)** is the biggest performance win, also pure sysfs.
 3. **C10 before the next panel check** — it converts a play session into one launch, and every future
    level-dependent bug pays the same toll until it exists.
