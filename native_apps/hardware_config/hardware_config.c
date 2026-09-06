@@ -77,10 +77,22 @@ static void do_audio_test(void) {
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
 
-    /* Play test beep */
+    /* ⚠️ **The continuous stream, not the bare pump** — `audio_close()` drains only
+     * when `cont` is set (`common/audio.c`, the drain beside the counter line), and
+     * this function's whole shape is "tone, wait, close".  It also removes the
+     * SNDCTL_DSP_RESET before each tone, so what the operator hears is the speaker
+     * rather than two teardown clicks around it, which is the point of the test.
+     * A failed handover leaves the previous path intact, so the beep still sounds. */
+    audio_cont_enable(&test_audio, true);
+
+    /* Play test beep.  audio_hold_serviced() rather than usleep(): on the bus each
+     * tone is a mixer voice until something pumps it, and nothing else here does.
+     * The second hold is not padding — without it the 1320 Hz tone is still in the
+     * mixer when audio_close() runs and is never heard at all. */
     audio_tone(&test_audio, 880, 200);
-    usleep(250000);
+    audio_hold_serviced(&test_audio, 250);
     audio_tone(&test_audio, 1320, 200);
+    audio_hold_serviced(&test_audio, 250);
 
     audio_close(&test_audio);
 }

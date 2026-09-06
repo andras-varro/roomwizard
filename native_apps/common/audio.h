@@ -383,6 +383,28 @@ void audio_pump(Audio *audio);
  *  is on, because a promise of continuous silence is also a promise of frames. */
 bool audio_pump_active(const Audio *audio);
 
+/** Hold for `ms` while SERVICING the bus, for a caller with no render loop.
+ *
+ * ⚠️ **A tone on the bus lives in the MIXER until something pumps it, and
+ * `audio_close()` does not pump.**  `audio_out_close()`'s drain waits on the
+ * device's own `in_flight` and never calls the fill (`audio_out.c:289-296`), so
+ * it rescues only what is already *inside* the device.  Off the bus that is the
+ * whole tone — `audio_tone()` wrote it there — which is why the two Settings
+ * speaker tests have always sounded right with a bare `usleep()` and a close.
+ * On the bus it is nothing, and the tone is lost.  So this is the frame-pacing
+ * clause above, applied to the one shape it does not cover: a hardware test that
+ * plays a tone, waits, and closes, with no loop to hang an `audio_pump()` on.
+ *
+ * Off the bus it is exactly the `usleep()` it replaced, so a caller need not ask
+ * which path it is on.  It does NOT poll touch — a loop that must stay responsive
+ * keeps its own `audio_pump()` beside its own poll instead.
+ *
+ * One implementation for the same reason `audio_init_unchecked()` is one: this
+ * was going to be a four-line pump loop copied into `hardware_config.c` and
+ * `device_tools.c`, and a copy like that goes silently wrong the moment the
+ * service ceiling moves. */
+void audio_hold_serviced(Audio *audio, int ms);
+
 /** Voices occupying a slot right now (0..AUDIO_MAX_VOICES). */
 int  audio_pump_voices(const Audio *audio);
 

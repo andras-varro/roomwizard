@@ -348,7 +348,13 @@ int main(void)
         close(fd);
     }
 
-    printf("\nE. audio_interrupt() still clears the tail (device_tools and hardware_test_gui, the two callers left)\n");
+    /* ⚠️ No shipped app calls audio_interrupt() any more — the two audio sweeps
+     * were its last callers and the mix-bus port dropped it rather than translating
+     * it.  This group stays because the LIBRARY behaviour is still reachable
+     * (tests/audio_mix_test's STOP-ALL pad drives it) and because "a tone straight
+     * after an interrupt owes only its own duration" is the property that keeps
+     * "overlapping sounds mix" from becoming "overlapping sounds queue". */
+    printf("\nE. audio_interrupt() still clears the tail (library behaviour; no shipped app calls it)\n");
     {
         fd = mk_audio(&a);
         if (fd < 0) return 1;

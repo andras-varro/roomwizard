@@ -617,6 +617,11 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
     Audio audio;
     int audio_ok = (audio_init(&audio) == 0);
 
+    /* ⚠️ **Guarded on audio_ok** — audio_cont_enable() on a failed init would hand
+     * the stream a device that is not there, and the error screen below is what a
+     * failed init must still be able to draw. */
+    if (audio_ok) audio_cont_enable(&audio, true);
+
     const int freqs[] = { 200, 400, 600, 800, 1000, 1500, 2000, 3000 };
     const int nfreqs = sizeof(freqs) / sizeof(freqs[0]);
     int played = 0;
@@ -664,19 +669,41 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
         fb_swap(fb);
 
         if (played < nfreqs) {
-            /* Play current frequency (non-blocking visual, blocking tone) */
-            audio_interrupt(&audio);
+            /* Play current frequency.  ⚠️ **No audio_interrupt(), and it is DROPPED
+             * rather than translated.**  On a bus that call means "stop every
+             * voice", and this sweep does not want it: one tone plays, ~300 ms of
+             * tap-polling follows, the next tone starts.  The device ring used to
+             * serialise them; what serialises them now is that gap being an order of
+             * magnitude past AUDIO_TONE_CHAIN_MS (16 ms), so audio_tone() finds no
+             * recent tone to chain behind and starts immediately anyway.  The exit
+             * tap only ENDS the sweep, so it cannot narrow that gap. */
             audio_tone(&audio, freqs[played], 300);
             played++;
             /* Brief pause, also check for tap */
             for (int w = 0; w < 10; w++) {
-                usleep(30000);
+                /* The service call.  ⚠️ Above the touch check, not below it: a tap
+                 * `break`s out of this loop, and a pump placed after the check would
+                 * be skipped on exactly the iteration that ends the sweep.  The
+                 * off-bus arm keeps the original 30 ms rather than
+                 * FRAME_DELAY_IDLE_US: ten of those would stretch a 300 ms tone's
+                 * wait to a second and the sweep would crawl. */
+                audio_pump(&audio);
+                usleep(audio_pump_active(&audio) ? FRAME_DELAY_ACTIVE_US : 30000);
                 if (check_touch(touch, &x, &y)) {
                     if (x > (int)fb->width - 100 && y < 40) { running = false; break; }
                 }
             }
         } else {
-            /* Done — wait for exit tap */
+            /* Done — wait for the exit tap.  ⚠️ **The stream is closed BEFORE this
+             * wait, not after it.**  touch_wait_for_press() blocks in 200 ms poll
+             * slices and is unbounded — it returns when somebody taps — which is far
+             * past the continuous stream's service ceiling, so a stream left open
+             * here would run dry for however long the operator spends reading the
+             * results.  The sweep is over and there is nothing left to play, so the
+             * honest fix is to stop owning the device rather than to service it from
+             * a loop that cannot.  Clearing audio_ok is what stops the close below
+             * running a second time. */
+            if (audio_ok) { audio_close(&audio); audio_ok = 0; }
             while (1) {
                 if (touch_wait_for_press(touch, &x, &y) == 0) {
                     running = false;

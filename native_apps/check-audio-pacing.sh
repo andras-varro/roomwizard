@@ -23,7 +23,7 @@
 # The last line always carries the counts as PACING-SUMMARY.
 #
 # ── What it cannot see ───────────────────────────────────────────────────────
-# It reads text, not control flow, so three real defects pass it:
+# It reads text, not control flow, so five real defects pass it:
 #
 #   - an `audio_pump()` placed INSIDE `if (needs_redraw) { … }`, which services
 #     the stream only on frames that drew.  That is the shape the pacing rule
@@ -33,6 +33,19 @@
 #     stripping comments from C with grep is a worse bug than this one, and the
 #     failure direction is a false PASS on a file somebody was writing prose about.
 #   - a sleep that is not spelled with the FRAME_DELAY_* constants at all.
+#   - a file whose only servicing is audio_hold_serviced() is EXEMPT from the
+#     pacing check, and that exemption is a hole rather than a derivation.  The
+#     hold does pace itself (20 ms slices, `common/audio.c`), so a bus session
+#     that lives entirely inside one is correctly paced — but a file could hold
+#     once and then run a FRAME_DELAY_IDLE_US loop with the bus still open, and
+#     this gate would pass it.  Nothing does today: both callers close the bus
+#     before their idle loop is reachable, which is a SCOPE fact and the one thing
+#     a text reader cannot check.  `starve` at exit is what would catch it.
+#   - `ui_frame_service()` does NOT count as servicing, even though it resolves to
+#     audio_pump() once audio_open() has registered it.  Deliberate: the
+#     registration is a weak symbol resolved at link time, so "this file services
+#     its bus" would depend on what else got linked — a worse thing to be wrong
+#     about than the extra call this costs a caller that owns the screen.
 #
 # So this bounds the conversion, and the device's own counters judge it.
 # ../SYSTEM_ANALYSIS.md#34-audio gotcha 5 has the 66 ms figure.
@@ -66,7 +79,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,75p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # Scan one tree.  Prints a FAIL line per defect on stdout and echoes the three
@@ -75,13 +88,14 @@ usage() {
 # runs a different code path proves nothing about the gate.
 scan_dir() {
     local root=$1
-    local f enable service active idle converted=0 ok=0 fail=0 unchecked=0
+    local f enable service active idle hold converted=0 ok=0 fail=0 unchecked=0
 
     while IFS= read -r f; do
         enable=$(grep -c 'audio_cont_enable(\|audio_pump_enable(' "$f")
         service=$(grep -c 'audio_pump(' "$f")
         active=$(grep -c 'audio_pump_active(' "$f")
         idle=$(grep -c 'FRAME_DELAY_IDLE_US' "$f")
+        hold=$(grep -c 'audio_hold_serviced(' "$f")
 
         if [ "$enable" -eq 0 ]; then
             # Not converted.  ⚠️ The MIRROR defect: a service call with no bus to
@@ -95,11 +109,20 @@ scan_dir() {
 
         converted=$((converted + 1))
         local bad=0
-        if [ "$service" -eq 0 ]; then
-            echo "FAIL ${f#$root/}: enables the audio bus and never services it (no audio_pump())"
+        # ⚠️ audio_hold_serviced() counts as servicing, and it is not a courtesy:
+        # it pumps in 20 ms slices for its whole duration and again on the way out
+        # (common/audio.c), which is the obligation, discharged by the library
+        # instead of by the caller's loop.  The two Settings speaker tests have no
+        # loop to put an audio_pump() in — they are a tone, a wait and a close —
+        # and inlining one in each was the copy that comment in
+        # hardware_config.c:do_audio_test() exists to warn about.
+        if [ "$service" -eq 0 ] && [ "$hold" -eq 0 ]; then
+            echo "FAIL ${f#$root/}: enables the audio bus and never services it (no audio_pump(), no audio_hold_serviced())"
             bad=1
         fi
-        if [ "$idle" -gt 0 ] && [ "$active" -eq 0 ]; then
+        # ⚠️ The hold also exempts the PACING check, and that is a real hole rather
+        # than a derivation — see the fourth bullet of "What it cannot see".
+        if [ "$idle" -gt 0 ] && [ "$active" -eq 0 ] && [ "$hold" -eq 0 ]; then
             echo "FAIL ${f#$root/}: sleeps FRAME_DELAY_IDLE_US with no audio_pump_active() in the pacing"
             bad=1
         fi
@@ -148,7 +171,8 @@ self_test() {
     trap "rm -rf '$tmp'" EXIT
 
     mkdir -p "$tmp/good" "$tmp/nopump" "$tmp/nopace" "$tmp/plain" "$tmp/orphan" \
-             "$tmp/bedlate" "$tmp/nogover" "$tmp/wrapper" "$tmp/wraplate" "$tmp/noland"
+             "$tmp/bedlate" "$tmp/nogover" "$tmp/wrapper" "$tmp/wraplate" "$tmp/noland" \
+             "$tmp/hold"
 
     # 1. correct conversion — must PASS
     cat > "$tmp/good/good.c" <<'EOC'
@@ -234,9 +258,21 @@ int main(void){ audio_cont_enable(&a,true);
     usleep((drew || audio_pump_active(&a)) ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US); } }
 EOC
 
+    # 11. serviced ONLY through audio_hold_serviced() — must PASS.  This is the
+    #     shape of both Settings speaker tests: no loop to hang an audio_pump() on,
+    #     and FRAME_DELAY_IDLE_US present in a DIFFERENT loop that the bus is
+    #     already closed before reaching.  ⚠️ Its negative control is fixture 3
+    #     (nopace), which is the same defect WITHOUT the hold and must still FAIL —
+    #     so the exemption is proven to require the hold rather than to be blanket.
+    cat > "$tmp/hold/hold.c" <<'EOC'
+static void do_audio_test(void){ audio_cont_enable(&a,true);
+  audio_tone(&a,880,200); audio_hold_serviced(&a,250); audio_close(&a); }
+int main(void){ while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US); } }
+EOC
+
     out=$(scan_dir "$tmp")
     local expect_fail="nopump/nopump.c nopace/nopace.c orphan/orphan.c bedlate/bedlate.c nogover/nogover.c wraplate/wraplate.c"
-    local expect_pass="good/good.c plain/plain.c wrapper/wrapper.c"
+    local expect_pass="good/good.c plain/plain.c wrapper/wrapper.c hold/hold.c"
 
     echo "── self-test ────────────────────────────────────────────────────"
     for c in $expect_fail; do
@@ -261,7 +297,7 @@ EOC
         echo "  NOT REPORTED: noland/noland.c   <-- a skipped check is reading as a pass"; rc=1
     fi
     echo "  fixture counts: $counts"
-    [ "$counts" = "COUNTS 8 3 6 1" ] || { echo "  counts wrong <-- expected 'COUNTS 8 3 6 1'"; rc=1; }
+    [ "$counts" = "COUNTS 9 4 6 1" ] || { echo "  counts wrong <-- expected 'COUNTS 9 4 6 1'"; rc=1; }
     echo "── self-test $([ $rc -eq 0 ] && echo PASSED || echo FAILED) ─────────────────────────────────"
     return $rc
 }

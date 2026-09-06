@@ -486,9 +486,22 @@ static void do_audio_test(void) {
      * a field neither copy set. */
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
+
+    /* ⚠️ **The continuous stream, not the bare pump** — `audio_close()` drains only
+     * when `cont` is set, and this function's whole shape is "tone, wait, close".
+     * It also drops the SNDCTL_DSP_RESET before each tone, so the operator hears
+     * the speaker rather than two teardown clicks around it.  Same three lines as
+     * hardware_config.c's copy of this tab, and for the same reasons. */
+    audio_cont_enable(&test_audio, true);
+
+    /* audio_hold_serviced() rather than usleep(): on the bus each tone is a mixer
+     * voice until something pumps it, and nothing else here does.  The second hold
+     * is not padding — without it the 1320 Hz tone is still in the mixer when
+     * audio_close() runs and is never heard at all. */
     audio_tone(&test_audio, 880, 200);
-    usleep(250000);
+    audio_hold_serviced(&test_audio, 250);
     audio_tone(&test_audio, 1320, 200);
+    audio_hold_serviced(&test_audio, 250);
     audio_close(&test_audio);
 }
 
@@ -1614,6 +1627,11 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
 static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
     Audio audio;
     int audio_ok = (audio_init(&audio) == 0);
+
+    /* ⚠️ **Guarded on audio_ok** — audio_cont_enable() on a failed init would hand
+     * the stream a device that is not there.  The sweep's own error screen below is
+     * what a failed init produces, and it must stay reachable. */
+    if (audio_ok) audio_cont_enable(&audio, true);
     const int freqs[] = { 200, 400, 600, 800, 1000, 1500, 2000, 3000 };
     const int nfreqs = sizeof(freqs) / sizeof(freqs[0]);
     int played = 0;
@@ -1649,16 +1667,39 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
         fb_swap(fb);
 
         if (played < nfreqs) {
-            audio_interrupt(&audio);
+            /* ⚠️ **No audio_interrupt() here, and it is DROPPED rather than
+             * translated.**  On a bus that call means "stop every voice", and this
+             * sweep does not want that: one tone plays, 300 ms of tap-polling
+             * follows, the next tone starts.  What used to serialise them was the
+             * device ring; what serialises them now is that ~300 ms gap being an
+             * order of magnitude past AUDIO_TONE_CHAIN_MS (16 ms), so audio_tone()
+             * finds no recent tone to chain behind and starts immediately anyway.
+             * The exit tap only ENDS the sweep, so it cannot narrow that gap. */
             audio_tone(&audio, freqs[played], 300);
             played++;
             for (int w = 0; w < 10; w++) {
-                usleep(30000);
+                /* The service call.  ⚠️ Above the touch check, not below it: a tap
+                 * `break`s out of this loop, and a pump placed after the check would
+                 * be skipped on exactly the iteration that ends the sweep.  The
+                 * off-bus arm keeps the original 30 ms rather than
+                 * FRAME_DELAY_IDLE_US: ten of those would stretch a 300 ms tone's
+                 * wait to a second and the sweep would crawl. */
+                audio_pump(&audio);
+                usleep(audio_pump_active(&audio) ? FRAME_DELAY_ACTIVE_US : 30000);
                 if (check_touch(touch, &x, &y)) {
                     if (x > (int)fb->width - 100 && y < 40) { aud_running = false; break; }
                 }
             }
         } else {
+            /* ⚠️ **The stream is closed BEFORE this wait, not after it.**
+             * touch_wait_for_press() blocks in 200 ms poll slices and is unbounded —
+             * it returns when somebody taps — which is far past the continuous
+             * stream's service ceiling, so a stream left open here would run dry for
+             * however long the operator spends reading the results.  The sweep is
+             * over and there is nothing left to play, so the honest fix is to stop
+             * owning the device rather than to service it from a loop that cannot.
+             * Clearing audio_ok is what stops the close at the end running twice. */
+            if (audio_ok) { audio_close(&audio); audio_ok = 0; }
             while (1) {
                 if (touch_wait_for_press(touch, &x, &y) == 0) {
                     aud_running = false; break;

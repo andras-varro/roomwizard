@@ -447,8 +447,12 @@ void audio_close(Audio *audio)
     /* ⚠️ **The counters are the diagnosis, and this is the one place every app
      * reports them.**  One line, from the LIBRARY rather than from a game's own
      * idea of what it enabled — the same reason `audio_get_volume()` exists — and
-     * only when a bus was actually running, so the two hardware tabs that never
-     * pump stay silent.  It is what separates a PACING fault from a mixing one on
+     * only when a bus was actually running — which is every app that makes a
+     * sound, the four hardware-tab sessions (two Settings speaker tests, two audio
+     * sweeps) included.  Those four are the shortest bus sessions in the project
+     * and the only ones an operator runs deliberately to judge the speaker, so
+     * `starve` there is the reading rather than noise.
+     * It is what separates a PACING fault from a mixing one on
      * a device with no microphone: `starve` is one audible gap each, and one per
      * bed start is expected (a fresh stream's first service legitimately finds
      * `in_flight` 0).  ⚠️ `services` comes from `audio_out` and is 0 off the
@@ -574,6 +578,39 @@ bool audio_pump_active(const Audio *audio)
      * there to measure.  Callers must not have to know that. */
     if (audio->keepalive) return true;
     return audio_mix_pending(&audio->mix) > 0;
+}
+
+/** 20 ms.  Comfortably under both the continuous stream's measured service
+ *  ceiling (~55 ms, ../SYSTEM_ANALYSIS.md#34-audio gotcha 5) and
+ *  AUDIO_PUMP_LEAD_MS.  ⚠️ Not the measured ceiling itself: servicing exactly at
+ *  a ceiling has no margin for the loop's own work, and this is a diagnostic hold
+ *  rather than a render loop — the cost of servicing three times more often than
+ *  necessary is nothing, and the cost of being one slice late is an audible gap. */
+#define AUDIO_HOLD_SLICE_US 20000
+
+void audio_hold_serviced(Audio *audio, int ms)
+{
+    if (ms <= 0) return;
+
+    /* Off the bus there is nothing to service and audio_tone() has already put the
+     * whole tone in the device, so this is exactly the usleep() it replaced. */
+    if (!audio || !(audio->cont || audio->pumping)) {
+        usleep((useconds_t)ms * 1000);
+        return;
+    }
+
+    /* ⚠️ Service BEFORE the first sleep and again after the last.  The caller's
+     * tone was added microseconds ago and is entirely in the mixer; a loop that
+     * slept first would hand the device its opening 20 ms of silence, and one that
+     * did not service after the final slice would close on an unwritten tail. */
+    long left_us = (long)ms * 1000;
+    while (left_us > 0) {
+        long slice_us = (left_us < AUDIO_HOLD_SLICE_US) ? left_us : AUDIO_HOLD_SLICE_US;
+        audio_pump(audio);
+        usleep((useconds_t)slice_us);
+        left_us -= slice_us;
+    }
+    audio_pump(audio);
 }
 
 int audio_pump_voices(const Audio *audio)
