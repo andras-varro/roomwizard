@@ -671,11 +671,21 @@ group_c() {
 # by operator decision deleted its whole plan entry, IMPROVEMENT_PLAN.md 1108 -> 1026 non-blank, so they came
 # back from the file that had borrowed against them. No ceiling was LOWERED: a ceiling is a budget, not a
 # measurement, and lowering one here would make the next legitimate addition pay twice.
+# ⚠️ 2026-09-06, a third deliberate raise: SYSTEM_ANALYSIS.md 1616 -> 1640, and this one buys a whole new
+# SECTION rather than a measurement. §8 Hardware policy states, for the first time anywhere in the repo,
+# that the board is used as delivered and nothing is soldered. Before this the rule existed only as the
+# operator's rulings on two separate items (the MADC analogue inputs, XBee wireless) and a reader had no
+# way to find it — one of those two entries argued from "needs a reachable pad", which reads as expensive
+# rather than out of scope. It is a scope policy, so §7 Kernel policy is the shape it copies and the
+# neighbour it must be read against. It CORRECTED rather than appended twice: §3.11's closing sentence
+# (which proposed the ruled-out half and pointed at a plan ID) and §3.4's stop-click bullet, whose scope
+# limit was folded into the existing text at a cost of 4 lines rather than a new paragraph. IMPROVEMENT_PLAN.md
+# paid for part of it -- F4 halved and F24 closed outright -- but into its own slack, not into this ceiling.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1616	SYSTEM_ANALYSIS.md
+1640	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 190	README.md

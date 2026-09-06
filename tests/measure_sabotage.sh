@@ -95,6 +95,16 @@ restore
 sed -i 's|^delete\tvendorscripts\t/opt/sbin\t|delete\tbase\t/opt/sbin\t|' device-files/clean-rules.conf
 echo -n "  /opt/sbin delete made base-group   "; run
 
+# ── 10. the SOFTWARE watchdog's own `base` delete dropped ────────────────────
+# The mirror image of case 9, and the control E57b needs. /opt/sbin/watchdog is a
+# separate `delete base` record precisely so --keep-vendorscripts cannot preserve
+# a cron job that reboots the unit; drop that record and the vendorscripts delete
+# still takes the directory on a DEFAULT run, so nothing but the
+# --keep-vendorscripts case can see the difference.
+restore
+sed -i '/^delete\tbase\t\/opt\/sbin\/watchdog\t/d' device-files/clean-rules.conf
+echo -n "  the base SW-watchdog delete dropped "; run
+
 restore
 echo ""
 echo "  (the guardless del() case — commissioning/provision.sh's live executor lifted offline"

@@ -100,7 +100,9 @@ All standard keys are forwarded — letters, numbers, F-keys, arrows, modifiers,
 ### USB Mouse
 
 Direct cursor control with 3-tier acceleration (same as native apps):
-- Left click = left click, right click = right click, middle click = middle click
+- Left click = left click, right click = right click. **Middle click opens the Global Main Menu**
+  (it is synthesised into Ctrl+F5, `backend-files/roomwizard-events.cpp:821`) — it is not forwarded as
+  a middle click, because ScummVM games do not use one and a menu needs a mouse-only way in
 - Precise point-and-click gameplay — ideal for adventure games
 - Mouse sensitivity configurable via `/etc/input_config.conf`
 

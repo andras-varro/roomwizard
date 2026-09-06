@@ -213,10 +213,11 @@ tool-level traps rather than device facts, and each has cost real time.
   `wsl.exe` calls** — the instance idles out and takes it with it, so a fixture staged in one call can
   be gone by the next. Stage and use it inside **one** `wsl.exe -e bash -lc`, or put it under the repo.
 - **The Bash tool's working directory does not reliably persist between calls.** Use absolute paths.
-- ⚠️ **Run `git` from Git Bash, never from WSL.** `git-lfs` is not installed in this WSL and
-  `HardwarePhotos/**` is LFS-tracked, so any command that filters the working tree dies with
-  `git-lfs filter-process: git-lfs: not found`. **`git log` succeeds**, because it runs no filter, so a
-  WSL git session looks half-working rather than misconfigured.
+- **Prefer Git Bash for `git`, but the LFS reason is gone — re-measured 2026-09-06.** `git-lfs` 2.9.2
+  **is** installed in this WSL now, and `git status`/`git diff` over LFS-tracked `HardwarePhotos/**` both
+  exit 0 there with no filter error. The old absolute prohibition rested on
+  `git-lfs filter-process: git-lfs: not found`, which no longer happens. Git Bash stays the default only
+  because that is where every recorded git measurement here was taken.
 - ⚠️ **Do not ask `git grep` about a past revision — measured 2026-08-15 returning a false negative.**
   `git grep -n 'open("/dev/dsp"' HEAD -- native_apps` **exits 1** on a tree where two files at `HEAD`
   each contain that exact string (`git show HEAD:<file> | grep -c` says `1` for both). The mechanism was
@@ -235,8 +236,8 @@ tool-level traps rather than device facts, and each has cost real time.
   single-purpose command. The same applies to a `bash -c` heredoc whose body contains apostrophes.
 - **File modes are unobservable here.** `/mnt/c` is DrvFs 9p: it reports every file `-rwxrwxrwx` and
   silently discards `chmod`. A missing-`+x` bug can neither fire nor be demonstrated on this host.
-- **`shellcheck` is not installed in this WSL** (`IMPROVEMENT_PLAN.md` C7). `bash -n` is what you have,
-  plus `dash -n` on anything carrying a `/bin/sh` shebang.
+- **`shellcheck` IS installed in this WSL — re-measured 2026-09-06, version 0.7.0.** Use it; `bash -n`
+  and `dash -n` (the latter on anything carrying a `/bin/sh` shebang) remain the cheaper first pass.
 - **Never run a ScummVM build concurrently with a `native_apps` build.**
   `scummvm-roomwizard/build-and-deploy.sh` does `rm -f native_apps/common/*.o` at two points —
   deliberately, because a stale x86 `.o` there fails the cross-build with "file format not recognized".

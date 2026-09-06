@@ -33,6 +33,7 @@ continuity measurements recorded in [`HARDWARE.md`](HARDWARE.md), which also hol
 5. [Software stack](#5-software-stack)
 6. [Building for this device](#6-building-for-this-device)
 7. [Kernel policy](#7-kernel-policy)
+8. [Hardware policy](#8-hardware-policy) — the board is used as delivered
 
 ---
 
@@ -684,7 +685,11 @@ differing content instead of phase.
   file**, so it is the stream *stop* (DAI teardown, which `pmdown_time` does not guard), not a truncated tail
   — `oss_play.c:336` already drains with `SNDCTL_DSP_SYNC`. Heard as *"an old CB radio push-to-talk"*: a step
   through the class-D bridge. **Native ALSA clicks too** (*"clinking then a klack then a beep"*, below), so
-  no userspace path avoids it — only not stopping the stream does.
+  no userspace path avoids it — only not stopping the stream does. ⚠️ **(b)'s scope is one stop in
+  isolation, and it does not yet reconcile with repeat presses** — a diagnostic screen pressed again
+  inside the default `pmdown_time` was reported inaudible (`.188` 2026-09-05, `[n=1, by ear]`), whereas (b)
+  was measured with the power-down held *off*. The two have never been listened to together, so neither
+  bounds the other; do that before promising any screen is click-free.
 - **The OSS shim adds no conversion when the parameters already match — it cannot reshape a waveform.**
   Every plugin in `snd_pcm_plug_format_plugins()` is gated on a mismatch (`sound/core/oss/pcm_plugin.c:414`
   onward: mu-law, channel reduction, resample, format), and with `S16_LE`/2/44100 granted at **both** layers
@@ -1265,9 +1270,9 @@ in_voltage0..15_{raw,mean_raw,input}
 ```
 
 `CONFIG_TWL4030_MADC=y` and the driver probes cleanly at boot. `in_voltage*_mean_raw` gives free
-hardware averaging. **Six general-purpose analogue inputs sitting idle** is the cheapest path to
-real analogue input on this device — the catch is getting a wire to one, see
-[Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion). Proposal: `IMPROVEMENT_PLAN.md` F4.
+hardware averaging. ⚠️ **The six general-purpose channels are out of scope, not merely awaiting work** —
+reaching one needs a test point physically wired to it, which [Hardware policy](#8-hardware-policy)
+rules out. `in_temp1_input` and `in_voltage9` need no wire and are the half worth surfacing.
 
 ### 3.12 Serial ports
 
@@ -1974,3 +1979,28 @@ gains are thin. The *config* defects (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
 would fix them, yet none limits anything measured; the OSS shim's bugs sit in `snd-pcm-oss`, which both
 consumers already work around and which native ALSA would bypass — neither needing a rebuild
 ([Audio](#34-audio)); there is no WiFi hardware. **DSS overlays, the clear win, are pure sysfs.**
+
+---
+
+## 8. Hardware policy
+
+**Use the device as delivered. No modification to the board, and no soldering.** Settled by the
+operator 2026-09-06, and it is a scope rule rather than a feasibility claim — several of the things it
+rules out are entirely doable.
+
+**What it excludes.** Anything whose first step is a wire, a pad or an iron. The two worked examples:
+
+| Ruled out | Why it was tempting | What was actually possible |
+|---|---|---|
+| The six idle MADC general-purpose channels ([ADC and temperature](#311-adc-and-temperature-twl4030-madc)) | a potentiometer on one channel is a real analogue paddle, and two plus `/dev/dsp` is a whole controller with no USB | nothing in software reaches them — `ADCIN2..ADCIN7` have no populated test point, so an input device needs one physically wired to a channel |
+| XBee wireless | the header is on the board | closed on **value**, not on difficulty — a BGA pin could have been patched up |
+
+⚠️ **This is why an entry that reads "needs a reachable pad" is out of scope, not merely expensive** —
+and it is a different judgement from [Kernel policy](#7-kernel-policy), which rules out a rebuild on
+value while the tree stays buildable. Here the tree is fine and the *board* is the boundary.
+
+**What it does not exclude**, and these stay good candidates: every reading obtainable through a driver
+already probing. `in_temp1_input` is SoC die temperature in degrees C and `in_voltage9` is the RTC
+supercap, both `cat`-able today with no wire and no reference in the codebase — a die-temperature
+readout and a "backup cell low" warning are Device Tools work of about ten minutes each. The rule bars
+adding a *sensor*, not surfacing one.

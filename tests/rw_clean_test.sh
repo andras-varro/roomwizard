@@ -68,12 +68,18 @@
 #   the /opt/sbin delete replaced by the keep it used to be          5 fail
 #       C26a, C30, C30a, E6, E61a — the 2026-09-03 decision, and E6 asserted the
 #       opposite until then.
-#   the /opt/sbin delete moved into `base`, i.e. made unconditional   4 fail
-#       C31, C31a, E57a, E57b. ⚠️ This is the case the two above cannot reach:
+#   the /opt/sbin delete moved into `base`, i.e. made unconditional   3 fail
+#       C31, C31a, E57a. ⚠️ This is the case the two above cannot reach:
 #       the default plan is unchanged and E6 still passes, while
 #       --keep-vendorscripts silently stops meaning anything. A group-gated delete
 #       and an unconditional one are indistinguishable from the default plan
 #       alone, which is why both directions are asserted at both levels.
+#   the SOFTWARE watchdog's own `delete base` record dropped          1 fail
+#       E57b. The mirror of the case above, and the only one that sees it:
+#       /opt/sbin/watchdog is filed in `base` separately so that
+#       --keep-vendorscripts can keep the reference bytes and NOT a cron job that
+#       reboots the unit. On a default run the `vendorscripts` delete takes the
+#       directory anyway, so no other flag combination can tell the difference.
 #   --remove given the sweeps too, i.e. made a synonym                6 fail
 #   the `scope` records moved back into `base`, same effect           6 fail
 #       C21, C22, C27, C29, E62-E64 — --remove must be a SUBSET.
@@ -682,7 +688,7 @@ build_card
 rw_clean_plan "$RULES" "base browser java snmp mail extras factory sweeps" > "$TMP/plan.keepvendor"
 rw_clean_apply "$CARD" "$TMP/plan.keepvendor" >/dev/null
 exists "$CARD/root/opt/sbin/networkmanager"        "E57a --keep-vendorscripts keeps /opt/sbin"
-exists "$CARD/root/opt/sbin/watchdog/watchdog.sh"  "E57b including rw_is_rootfs's watchdog.sh marker"
+gone   "$CARD/root/opt/sbin/watchdog"              "E57b but NOT the software watchdog -- base group, so no flag keeps a rebooter"
 gone   "$CARD/root/opt/rwconnector"                "E57c and the /opt sweep still removed what no group protects"
 gone   "$CARD/root/usr/share/cjkfont"              "E57d and the other groups still ran"
 

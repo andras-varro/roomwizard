@@ -166,7 +166,9 @@ esac
 echo ""
 echo "rw_is_card_disk"
 
-if ! command -v sfdisk >/dev/null 2>&1; then
+if command -v sfdisk >/dev/null 2>&1; then HAVE_SFDISK=yes; else HAVE_SFDISK=no; fi
+
+if [ "$HAVE_SFDISK" = no ]; then
     skipped "synthetic partition tables" "sfdisk not installed"
 else
     # 4 GB sparse file. sfdisk on a regular file needs no root and touches no
@@ -361,10 +363,12 @@ fi
 echo ""
 echo "real card images (gitignored; skipped when absent)"
 for img in roomwizard.img roomvizard_new.img; do
-    if [ -f "$REPO_DIR/$img" ]; then
-        expect_disk yes "$REPO_DIR/$img" "$img carries the RoomWizard layout"
-    else
+    if [ ! -f "$REPO_DIR/$img" ]; then
         skipped "$img" "not present in $REPO_DIR"
+    elif [ "$HAVE_SFDISK" = no ]; then
+        skipped "$img" "sfdisk not installed, so no table can be read"
+    else
+        expect_disk yes "$REPO_DIR/$img" "$img carries the RoomWizard layout"
     fi
 done
 
@@ -383,8 +387,12 @@ echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 #   5  rw_role_device_path
 #   3  rw_check_card_mounts
 # = 32.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
-# two real card images are gitignored, so neither is counted.
+# two real card images are gitignored, so neither is counted.  The 4 synthetic
+# rw_is_card_disk cases need sfdisk, so on a host without it the floor drops to
+# 28 -- otherwise fixing the skip above just trades a red FAIL for a red harness
+# error, which is the same defect wearing a different label.
 MIN_CASES=32
+[ "$HAVE_SFDISK" = no ] && MIN_CASES=28
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

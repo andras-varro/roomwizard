@@ -205,27 +205,6 @@ poll — and keep the first announcement, which is genuinely useful.
 
 All userspace. No kernel work.
 
-### F24. The two audio diagnostic screens cycle the bus per button press — open
-
-**Hold the bus for the screen, not for one press.** `device_tools`' SETTINGS `TEST` button
-(`device_tools/device_tools.c:479`), its TESTS → `AUDIO` sweep (`device_tools.c:1627`) and the
-SSH-only copies in `hardware_test/hardware_test_gui.c:616` and `hardware_config/hardware_config.c:70`
-each open and close the stream **per invocation**, so every press crosses a stream open and a stream
-stop. A game holds one bus for its whole session instead. **Measured on `.188` 2026-09-05** from
-`/var/log/roomwizard/app_stdout.log`: a single `device_tools` process logged fifteen `bus closed`
-lines — six at `services=28` (the two-tone test) and nine at `services=80` (the eight-tone sweep) —
-against one line per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, the
-latter the only `starve=1` seen). Every diagnostic line read `starve=0 lost=0 drop=0 lim=0 clip=0`.
-
-Both transitions are the audible click
-([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)), which is why one is heard on the first
-press after a gap and one ~5 s after the last, and **not** on presses following inside the codec's
-`pmdown_time`. ⚠️ **The operator accepts the current behaviour (2026-09-05), so this is tidy-up rather
-than a defect to chase.** ⚠️ **And §3.4's stop-click does not yet reconcile with this report** — §3.4
-records a click at *every* stream stop, measured with the power-down held off, whereas repeat presses
-at the default `pmdown_time` are inaudible. Both are `[n=1, by ear]` and nothing has measured the two
-together; do that before promising a click-free screen.
-
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 
 **What compositing costs today, measured 2026-08-31 and *accepted* rather than filed as a fault:**
@@ -253,17 +232,19 @@ Suggested order:
 ⚠️ Cheap today, but it would need rewriting as DRM atomic plane code after a **mainline** port — which
 is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.
 
-### F4. Surface the MADC — temperature and analogue inputs — open
+### F4. Surface the two MADC channels that need no wire — open
 
-Three MADC channels are readable with `cat` **today** and have zero references in the codebase
+Both are readable with `cat` today and have zero references in the codebase
 ([`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)):
 
 - `in_temp1_input` — SoC die temperature. Add a readout to Device Tools (~10 minutes).
-- `in_voltage2..7` — six idle general-purpose inputs. A potentiometer on one channel is a real
-  analogue paddle for Pong/Breakout; two channels plus `/dev/dsp` is a complete analogue controller
-  with no USB at all. Needs a reachable pad — §2.4 describes the cheap way to map a test point to a
-  channel without a teardown.
 - `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
+
+⚠️ **The analogue-paddle half is closed, 2026-09-06, and must not be re-proposed.** `in_voltage2..7`
+are six idle general-purpose channels and a potentiometer on one would be a real analogue paddle, but
+`ADCIN2..ADCIN7` have no populated test point — an input device needs one physically wired to a
+channel, which [`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) rules
+out. That is a scope decision, not a difficulty one.
 
 ### F6. Multi-touch via direct I2C — open
 
@@ -464,6 +445,24 @@ Xbox pad is wired, and the integrated speaker is poor
 ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable, and the one that carries sound
 is the worst-sounding one.
 
+⚠️ **The dongle is identified and the verdict is "one number decides it" — measured 2026-09-06.** The
+operator's dongle is `0b05:1bf6` (ASUSTek; no model or chipset is published for that PID). `0x1bf6`
+appears **nowhere** in `drivers/bluetooth/` in the 4.14.52 tree, but the dongle's USB class is
+`e0-01-01`, which `btusb.c:75,81` match generically — so `btusb` binds it and `hci0` appears. ⚠️ **The
+trap is that a generic match has `driver_info == 0`, so `btusb.c:3142` never takes the
+`BTUSB_REALTEK` branch and `btrtl_setup_realtek` does not run at all** — no firmware or config download
+happens, whatever the chip is. This `btrtl` knows five ROM subversions only (8723A, 8723B, 8821A, 8822B,
+8761A); RTL8761**B**/BU, the likely chip, landed around 5.8, and there is no `hci_rev` lookup table yet.
+
+**So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
+`BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
+`usb_host/device_config:1070`) that either just works or needs a `btrtl` backport, and the host cannot
+tell which.** ⚠️ **Do not fetch a firmware file or source a second dongle before the number exists.**
+Build and load the modules, then read `lmp_subver` — from `btrtl`'s own line if it runs, otherwise
+`hcitool -i hci0 cmd 0x04 0x0001` bytes 7-8. `0x8723`/`0x8821`/`0x8761`/`0x8822` ⇒ proceed;
+anything else ⇒ this dongle needs newer source than we have, and the safe substitutes are a CSR8510
+(`0a12:0001`) or an ASUS USB-BT400 (`0b05:17cb`, Broadcom BCM20702).
+
 ⚠️ **DMA and Bluetooth are independent, and DMA is not what unblocks Bluetooth.** BT is
 bandwidth-trivial: A2DP is tens of KB/s and a controller is a few hundred bytes/s, which PIO handles
 easily. Do not treat "get DMA working" as a prerequisite.
@@ -635,11 +634,24 @@ consumed through the same shim, with no `libasound` linkage and no app rewrite.
 module build while the running kernel has no such symbols, and `insmod` then fails on unresolved
 symbols rather than on anything that names the cause. `depmod -a` on the device afterwards.
 
-**No app work.** `SND_DYNAMIC_MINORS` is unset, so OSS minors are static and card 1 lands
-deterministically at `/dev/dsp1`, created by devtmpfs+udevd on plug exactly as `js0` was for `xpad`.
-`common/audio_out.c` already sits behind the `AudioOutDev` vtable with `audio_out_open_oss()`, so the
-DAC is a second instance or a configured path string. ⚠️ **Skip the GPIO12 amp unmute on the USB
-path** — that unmutes card 0's speaker and means nothing to a DAC.
+⚠️ **There IS app work, and the earlier "no app work" claim was wrong — measured 2026-09-06.**
+`SND_DYNAMIC_MINORS` is unset, so OSS minors are static and card 1 lands deterministically at
+`/dev/dsp1`, created by devtmpfs+udevd on plug exactly as `js0` was for `xpad` — but nothing on the
+device can be pointed at it. `common/audio_out.c:481` defines the path as a compile-time macro
+(`DSP_DEVICE`), opened at `:506`; there is no config lookup and no `getenv` anywhere in the file, and
+`audio_out_open_oss()`/`OSS_DEV` take no path argument. So the vtable is the right scaffolding and the
+seam is simply absent. ⚠️ **`oss_open()` also calls `enable_amp()` unconditionally at `:500`** (GPIO12
+HIGH) — card 0's speaker amp, meaningless for a DAC, so that must become conditional on the path. ⚠️
+**Both live in `audio_out.c`, which is on ScummVM's `OBJS` list, so this forces an all-three-component
+redeploy** — price that in before starting.
+
+**The dongle is identified: `0d8c:0014` C-Media Audio Adapter (Unitek Y-247A), reported by the operator
+2026-09-06.** It is plain UAC1 to this driver — no descriptor, format, clock or endpoint quirk applies.
+The only quirk that touches it is cosmetic: `sound/usb/mixer_quirks.c:1882` sets `min_mute` on any
+"Playback" control for `0d8c:0014`, a mixer-scale detail. Four `.ko` are needed, not two —
+`snd-usb-audio` and `snd-usbmidi-lib` from `M=sound/usb`, plus `snd-hwdep` and `snd-rawmidi` from a
+**second** `M=sound/core` pass, because `SND_USB_AUDIO` selects them and the built-in kernel has
+neither.
 
 ⚠️ **The unknown that could sink it is PIO cost, and it has never been measured.** MUSB DMA is
 noop-stubbed and falls back to PIO; a 48 kHz stereo stream is ~190 KB/s, which F17 records as where
@@ -828,11 +840,6 @@ the `lib/`+`commissioning/`+`device-files/` layout.
 the provision fold, because `commissioning/card-prep.sh`'s `sudo` on the `/etc/shadow` write cannot be
 driven non-interactively from this harness (`sudo: a password is required`) — a run stalls waiting for a
 password it cannot be given. **Run the root suite under an interactive sudo before trusting the offline
-⚠️ **A blocker this entry inherited, and it is a test-coverage gap rather than a code one:** neither
-`tests/commission_offline_test.sh` nor any non-dry `commission-offline.sh` run has been executed since
-the provision fold, because `commissioning/card-prep.sh`'s `sudo` on the `/etc/shadow` write cannot be
-driven non-interactively from this harness (`sudo: a password is required`) — a run stalls waiting for a
-password it cannot be given. **Run the root suite under an interactive sudo before trusting the offline
 installer again.** The block is not the mount; `--base` needs no root.
 
 **A second half-measure in the same vocabulary:** `provision.sh --dry-run` exits before the provision
@@ -896,15 +903,18 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.
-3. **B27** — report the `sfdisk` absence as a skip. Host-only, one guard plus a `MIN_CASES` adjustment.
-4. **D9** — delete the vendor **software** watchdog instead of bypassing it. ⚠️ **Measured 2026-09-06: on a
-   properly-provisioned unit it is already gone** — `clean-rules.conf` deletes all of `/opt/sbin` by
-   default — so the real gap is that `--keep-vendorscripts` can opt out of that deletion, and `.188` is
-   the outlier where the scripts survive with only the crontab rewrite holding them off. Put
-   `/opt/sbin/watchdog` in group `base` so nothing can preserve it. ⚠️ **`/usr/sbin/watchdog` +
-   `S50watchdog` is the hardware watchdog and stays** — and `/etc/init.d/watchdog` calls *itself* a
-   "software watchdog daemon", which is Debian's generic wording, not Steelcase's. ⚠️ `lib/rw-identify.sh`
-   uses `opt/sbin/watchdog/watchdog.sh` as a rootfs-identity marker, so that moves in the same change.
+3. **B27** — ~~report the `sfdisk` absence as a skip~~ **done 2026-09-06.** Both card-image cases now
+   skip on the tool as well as the file, and `MIN_CASES` drops 32→28 when `sfdisk` is absent — without
+   that half the fix only trades a red FAIL for a red HARNESS ERROR. Seen failing first, with `PATH`
+   stripped of `/usr/sbin`: 31 passed / **2 failed** / 1 skipped → 31 / **0** / 3.
+4. **D9** — ~~delete the vendor **software** watchdog instead of bypassing it~~ **done 2026-09-06.**
+   `/opt/sbin/watchdog` is its own `delete base` record, so `--keep-vendorscripts` can keep the reference
+   bytes and not a rebooter; `lib/rw-identify.sh` dropped `watchdog.sh` as a rootfs marker in the same
+   change, leaving `/opt/pv02` and `/etc/issue` to carry the OR. Sabotage case 10 is the control and
+   fails exactly the one assertion. ⚠️ **D9 itself stays open on its own question** — why a unit in
+   service lacks `/var/watchdog_test` — which this does not answer. What it *does* change is the stake:
+   the bypass file now guards code that a correct provision has already deleted, so it matters only on a
+   unit cleaned with `--keep-vendorscripts` before 2026-09-06, of which `.188` is one.
 5. **F23** — tier 2 of the p1 gate, so a unit on any other Steelcase release can take the 500 mA patch.
 6. **F11** — one home for the host build prerequisites.
 
@@ -928,9 +938,9 @@ a rebuild should be checked against that list first. ⚠️ **F17's dongle reads
 by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
 read `lsusb`'s VID:PID before building anything.
 
-⚠️ **F4 is two items in one and should be split**: `in_temp1_input` is a die-temperature readout costing
-about ten minutes, while the analogue-input half needs a test point physically wired to a channel and is
-a soldering job. ⚠️ **C5 is also two items**, and only one is cosmetic: `text_truncate()` takes no
+⚠️ **F4 has been split and halved**, 2026-09-06: the analogue-paddle half is closed on
+[`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) and what is left is two
+`cat`-able channels. ⚠️ **C5 is also two items**, and only one is cosmetic: `text_truncate()` takes no
 destination size and one caller hands it a 48-byte buffer for a 128-byte device name, which is a stack
 overwrite waiting on a geometry change. The 8px/6px centring is the cosmetic half.
 
