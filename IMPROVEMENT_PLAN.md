@@ -259,57 +259,12 @@ same as being the right number.
 
 **One residual, and it is not audible:** the pre-continuous tone path does not die when the games leave
 it. `device_tools`, `hardware_config` and `hardware_test` still call `audio_tone()` without a bus, and
-they are also the last callers of the interrupt-then-tone pair that `common/audio.h` warns against
-(`native_apps/CLAUDE.md` → *Audio* owns that rule). Porting the three to the mix bus is the close-out;
+two of them — `device_tools` and `hardware_test_gui`, NOT `hardware_config` — are the last callers
+of the interrupt-then-tone pair `common/audio.h:316` warns against (`native_apps/CLAUDE.md` → *Audio*).
+Porting the three to the mix bus is the close-out;
 nothing a player can hear depends on it, and `audio_tone()`'s own path is measured working.
 
 ---
-
-### F19. The music beds — the files, their provenance and their delivery ⏳ nearly closed
-
-⚠️ **This entry no longer owns the PLAYBACK path** (the streaming sample voice ships, F1 phase 8) nor the
-*licence text* (`LICENSE.md` carries the one row for all 24 beds, its terms and the two limits on them).
-It is the anchor the audio sources cite for "the bed", so it stays as one; what is left in it is small.
-
-✅ **DONE and verified: format, git, deploy.** The beds are `native_apps/music/<stem><n>-mono.wav`, one set
-per game — what `./check-bed-files.sh` counts, and it fails the build when one a game names is missing —
-44100 / mono / 16-bit, byte-for-byte the mixer's internal format, so nothing resamples or downmixes at
-runtime (`-ac 1` averages rather than sums, so it cannot clip on the way down). **Store mono, play stereo:**
-the speaker sums L + R ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), so a mono file duplicated at playback is
-audibly identical to a stereo original at half the size and half the SD read. They are committed under
-Git LFS (`native_apps/music/**`, verified to leave `sounds/fx_*.wav` at `filter: unspecified`), and
-`native_apps/build-and-deploy.sh` installs them to `/opt/sound` on the online path (md5-gated: 8.8 MB is
-not re-sent on every deploy) and the `--bundle` path (unconditional).
-⚠️ **A clone without `git-lfs` leaves ~130-byte POINTER TEXT files in their place**, and a pointer deployed
-to the device is refused in silence — so both deploy paths refuse one by its first line rather than let it
-travel. `git lfs install && git lfs pull` is the fix. ⚠️ Run `git` from **Git Bash**; `git-lfs` is absent
-from this WSL (`CLAUDE.md` → *Working from this host*).
-
-✅ **The loop seam is MEASURED and there is no seam, so no crossfade is needed.** `officerunner1-mono.wav` ran as
-a looping bed through three full wraps on `.188` at `LVL` 5/6, louder than the settled level, and the
-operator heard *"nothing. Wonderful continuation"* across two deliberate attempts to catch it. ⚠️ That is a
-property of **these two files**, not of a third one someone adds. The bed's own counter is `AudioWav.loops`.
-
-✅ **The level is settled and the headroom is not.** Office Runner with the bed under it *"played well"*
-with the effects audible over it, so the clean level is right for sustained music. ⚠️ **That session's
-counters carry `clip=126`** — bed + effect past full scale on 126 samples of ~18.7 M, the first non-zero
-`clip` measured here. Any future *"make it louder"* is therefore a CONTENT change, not a level one.
-
-⚠️ **`starve` counts the FIRST service of a fresh stream**, where `in_flight` is legitimately 0, so one per
-bed start is expected and is not an underrun. Chase it only when it climbs *during* playback.
-
-✅ **The keep rule now states what it keeps.** `device-files/clean-rules.conf:189` keeps `/opt/sound`
-wholesale and its reason is measured rather than guessed: **118 MB on `.188` 2026-09-01** — 24 beds, 14
-effect WAVs and three vendor UI clips — against **222 MB free on a 931 MB rootfs (75 % used)**. It is the
-largest single thing on the device, and wiping it only forces a re-send, since the beds install md5-gated.
-
-⚠️ **That free-space figure is the one number here worth re-measuring before adding music.** A bed set
-this size is ~13× what this entry claimed while nobody checked, and the headroom is finite.
-
-⏳ **All that is left is bookkeeping:** this entry has no open work, but five places cite `F19` as the
-anchor for "the bed" — `.gitignore:507`, `native_apps/build-and-deploy.sh:444` and `:565`,
-`native_apps/CLAUDE.md:749`, `native_apps/common/audio_wav.h:17`. Each of those sentences must be rewritten
-to carry its own reason before the entry is deleted, per the rule that an ID is not a durable reference.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 

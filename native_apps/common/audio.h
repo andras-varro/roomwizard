@@ -552,7 +552,9 @@ long audio_cont_service_interval_us(const Audio *audio);
  * and land inside the passband (`fx_fail` sweeps 1800→420 Hz), so the fix is one
  * of CONTENT: no pitch is guessed, no level is raised — and there is no headroom
  * to raise it into anyway, the first non-zero `clip` count (126 samples) came
- * from that same session.
+ * from that same session — 126 of ~18.7 M samples, a music bed and an effect
+ * summing past full scale, so the LEVEL is settled and any future "make it
+ * louder" is a content change, not a level one.
  *
  * The note table is the FALLBACK, not the legacy: a device with no sound files,
  * or a bus that is off, still makes every one of these sounds.

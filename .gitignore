@@ -503,8 +503,8 @@ partitions/*
 partitions.zip
 native_games/build/*
 # Rendered audio_dump / audio_path_dump WAVs: regenerable from one gcc command, so they
-# are never committed.  A named directory rather than *.wav, which would pre-empt
-# IMPROVEMENT_PLAN.md F19's open decision about the music assets.
+# are never committed.  A named directory rather than *.wav, which would now collide
+# with the music beds: native_apps/music/** is TRACKED, under LFS (see .gitattributes).
 dumpwav/
 # Scratch framebuffer captures (`cat /dev/fb0 > fb.raw`) and their PNGs are
 # throwaway; blanket-ignoring them keeps the repo clean.  Anything meant to be

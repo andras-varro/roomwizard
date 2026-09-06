@@ -53,4 +53,8 @@ device-files/** text eol=lf
 HardwarePhotos/** filter=lfs diff=lfs merge=lfs -text
 # Documentation screenshots, same reasoning as above.
 Screenshots/** filter=lfs diff=lfs merge=lfs -text
+# The music beds are large binaries, so they are LFS objects.  ⚠️ The effect WAVs
+# under native_apps/sounds/ are DELIBERATELY not here: they were checked and left at
+# `filter: unspecified` because each is a few KB and regenerable, and adding them
+# would make every clone need git-lfs to get a playable tree.  Do not "fix" this.
 native_apps/music/** filter=lfs diff=lfs merge=lfs -text

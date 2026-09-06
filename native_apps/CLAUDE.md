@@ -746,7 +746,7 @@ These rules, each of which is a way to get this wrong:
   snake's two-note motifs collapse into dyads. The tail is ONE voice's, by (slot, generation) — the bus's
   (`audio_mix_pending()`) made the same queue. The ~23 interrupt-then-tone sites are unaffected: tail 0.
 - **A full bus refuses and counts (`audio_pump_dropped()`); it never steals a voice.** The longest voice
-  is the one a dropped blip must not cut — `../IMPROVEMENT_PLAN.md` F19's soundtrack.
+  is the one a dropped blip must not cut — a streaming music bed, tens of seconds long.
 - ⚠️ **A voice is a tone OR a SAMPLE, and the sample PULLS rather than reads.** `audio_mix_add_sample()`
   takes an `AudioVoiceFill` plus a caller-owned buffer, so `audio_gen.c` keeps its no-fd property and
   `audio_wav.c` owns the file — never put a `read()` in the mixer. Pass the **real** `data`-chunk length:

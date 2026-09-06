@@ -551,8 +551,8 @@ static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
                  line, (lead_ms > 0 && v->max_gap > (uint32_t)lead_ms)
                        ? RGB(255, 180, 60) : RGB(130, 140, 160), 1);
 
-    /* ⚠️ `bed` carries the WRAP COUNT, not just on/off.  The cheapest open
-     * question is whether the loop seams, and "I heard the join" is only
+    /* ⚠️ `bed` carries the WRAP COUNT, not just on/off.  The loop is measured
+     * SEAMLESS (../common/audio_wav.h), and "I heard the join" is only
      * actionable next to which wrap it was — the bed loops every ~44 s, so a
      * session produces several and they are otherwise indistinguishable. */
     snprintf(line, sizeof(line),

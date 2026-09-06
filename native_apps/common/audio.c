@@ -452,7 +452,8 @@ void audio_close(Audio *audio)
      * a device with no microphone: `starve` is one audible gap each, and one per
      * bed start is expected (a fresh stream's first service legitimately finds
      * `in_flight` 0).  ⚠️ `services` comes from `audio_out` and is 0 off the
-     * continuous path, where nothing counts them. */
+     * continuous path, where nothing counts them.  Chase `starve` only when it climbs
+     * DURING playback; the one at each bed start is not an underrun. */
     if (audio->cont || audio->pumping) {
         fprintf(stderr, "audio: bus closed — cont=%d services=%u starve=%u "
                         "lost=%u drop=%u lim=%u clip=%u lead=%ldms period=%ldms\n",

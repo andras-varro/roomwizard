@@ -396,6 +396,12 @@ TP39	HARDWARE.md	SYSTEM_ANALYSIS.md
 Top-Overwiev	HARDWARE.md	SYSTEM_ANALYSIS.md
 bezel_with_touch_screen.jpg	HARDWARE.md	SYSTEM_ANALYSIS.md
 does not reach the SoC	HARDWARE.md	IMPROVEMENT_PLAN.md
+three full wraps	native_apps/common/audio_wav.h	IMPROVEMENT_PLAN.md
+filter: unspecified	.gitattributes	IMPROVEMENT_PLAN.md
+averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
+18.7 M	native_apps/common/audio.h	IMPROVEMENT_PLAN.md
+931 MB	device-files/clean-rules.conf	IMPROVEMENT_PLAN.md
+DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
 EOF
 }
 

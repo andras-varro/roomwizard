@@ -14,7 +14,7 @@
  * single conversion point (../CLAUDE.md → Audio). A multi-channel file is
  * averaged, not left-channel-picked: `(L+R)/2` is what makes a stored mono file
  * audibly identical to its stereo original on this speaker, which sums L and R
- * (../IMPROVEMENT_PLAN.md F19).
+ * (../../SYSTEM_ANALYSIS.md#34-audio).
  *
  * It STREAMS. Nothing here loads a whole file: `audio_wav_read()` is the pull
  * that a mix-bus sample voice's `AudioVoiceFill` sits on top of, so a 44 s bed
@@ -22,6 +22,13 @@
  *
  * No mixer, no device, no framebuffer — plain stdio, so it host-tests with no
  * shim at all.
+ *
+ * **A bed loops with no crossfade, and that is measured rather than assumed.**
+ * `officerunner1-mono.wav` ran through three full wraps at a level louder than the
+ * one that ships, and no join was audible — so wrapping straight back to the first
+ * frame is enough and no fade is needed. ⚠️ That is a property of THOSE FILES, not
+ * of this reader: a bed whose first and last frames differ will seam, and the
+ * receipt to read it against is `AudioWav.loops`.
  */
 
 #ifndef ROOMWIZARD_AUDIO_WAV_H

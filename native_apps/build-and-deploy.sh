@@ -441,7 +441,7 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     # `platformer` without them installs a game whose configured bed is missing.
     #
     # ⚠️ These are Git LFS objects, and a clone made WITHOUT git-lfs leaves ~130-byte
-    # POINTER TEXT files in their place (../IMPROVEMENT_PLAN.md F19).  Staging one of
+    # POINTER TEXT files in their place.  Staging one of
     # those produces a bundle that installs cleanly and then plays no music at all —
     # `clip_load()`/the stream reader reject it, log one line and the game carries on.
     # So refuse it here, where the operator is still at a keyboard, rather than let it
@@ -562,7 +562,7 @@ fi
 # ⚠️ Unlike the effects these are LARGE — 24 beds, 116.9 MB — so an unconditional
 # scp adds all of that to every deploy of a component that is otherwise a few hundred
 # KB of binaries.  They also never change: they are sourced files under LFS
-# (../IMPROVEMENT_PLAN.md F19), not build output.  So compare md5 first and send
+# (tracked under LFS — see ../.gitattributes), not build output.  So compare md5 first and send
 # nothing when the device already matches.  The md5 is the whole check — a size
 # comparison would pass a truncated-then-padded file, and a timestamp comparison
 # cannot be made to mean anything across the device's clock offset (../CLAUDE.md).
