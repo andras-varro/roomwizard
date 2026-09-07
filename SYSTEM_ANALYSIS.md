@@ -1833,8 +1833,7 @@ parent sets a display title: `killall`/`pidof` match a process whose `cmdline` r
 Everything cross-compiles on the host and deploys over SSH. **There is no CI, no test runner and no
 lint** — the "tests" are interactive on-device diagnostic tools.
 
-Toolchain: `arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM
-additionally needs WSL Ubuntu 20.04+ and `g++-arm-linux-gnueabihf`.
+Host toolchain and build prerequisites: `CLAUDE.md`, and `COMMISSIONING.md` → *The dev host*.
 
 ### 6.1 Cortex-A8 has no hardware integer divide
 

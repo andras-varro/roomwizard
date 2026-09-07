@@ -30,10 +30,10 @@ jobs:
 | `IMPROVEMENT_PLAN.md` | *What should we do about it?* — open bug + feature backlog with `file:line` | **Before starting work**, so you don't rediscover a known bug |
 | `CLAUDE.md` (this file) | *What must I know before my first edit?* | Loaded every session |
 
-`IMPROVEMENT_PLAN.md` holds **open work only**. Closed items are deleted, so ⚠️ **an ID is not a
-durable reference** — 20 IDs cited from shipped source resolve to nothing and `git log --grep` does not
-rescue all of them. A code comment must therefore carry its own reason; an ID beside it is a bonus, not
-the payload.
+`IMPROVEMENT_PLAN.md` holds **open work only**. Closed items are deleted, so an entry ID has a
+scheduled expiry built in: ⚠️ **nothing outside that file may cite one.** A comment or a document
+carries its own reason in full, and no ID sits beside it; `tests/doc_check.sh` group B counts any
+citation, resolving or not.
 
 `README.md` is the annotated walkthrough of every script; `COMMISSIONING.md` the operator-facing
 bring-up guide and the argument for its phase split; `LICENSE.md` the per-file licence record.
@@ -185,7 +185,7 @@ tool-level traps rather than device facts, and each has cost real time.
   `command -v` sweep run in the wrong shell reports a host with no toolchain at all. That happened
   (2026-08-06): it was recorded as fact and made a plan entry read as a hard blocker on all building.
   **State which shell a prerequisite claim was measured in**, and measure with `wsl.exe -e bash -lc`.
-  The measured inventory lives in `IMPROVEMENT_PLAN.md`.
+  The measured inventory lives in `COMMISSIONING.md` → *The dev host*.
 - ⚠️ **`strings` is one of those absences, and it fails *silently* into a wrong answer about the
   device.** `strings <device-binary> 2>/dev/null | grep -q <option>` in Git Bash prints nothing —
   because `strings` does not exist, not because the option is missing — so it reads as "the vendor's

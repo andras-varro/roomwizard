@@ -183,11 +183,11 @@ Two candidate causes, neither measured: the boot-time run is not happening (that
 `disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
 every 4 h) sweeps it.
 
-⚠️ **[F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) now
-`touch`es it offline anyway**, and says out loud that it is belt and braces only. That is defensible
-because the same pass truncates the vendor crontab — which is what would have scheduled `watchdog.sh` in
-the first place — but it does mean the offline tool places a file that something on the device may
-delete. Settling which of the two causes it is would let that line be either removed or relied on.
+⚠️ **`commissioning/commission-offline.sh` now `touch`es it offline anyway**, and says out loud that it
+is belt and braces only. That is defensible because the same pass truncates the vendor crontab — which
+is what would have scheduled `watchdog.sh` in the first place — but it does mean the offline tool
+places a file that something on the device may delete. Settling which of the two causes it is would
+let that line be either removed or relied on.
 
 ### B35. `gamepad_rescan()` logs a line per poll, so one session fills the log — open, measured 2026-08-21
 
@@ -284,7 +284,7 @@ consumer) and `--bundle <dir>` on all four components are built and exercised. �
 end to end**: tag `v1.0.0` on `andras-varro/roomwizard`, with its `targetCommitish` verified equal to the
 `HEAD` the binaries were built from and its published asset digest verified against a local `sha256sum`.
 `usb_host` is in a release like any other component — only its p1 power step is not, which is
-[F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09).
+[F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02).
 
 ✅ **And the fetch half is done and confirmed on a unit.** `lib/rw-release.sh` resolves, downloads and
 sha256-verifies a published asset; `deploy-all.sh --from-release <tag|latest> <ip>`,
@@ -306,28 +306,9 @@ consumers. Confirmed 2026-09-01 against `v1.0.0` on `192.168.50.188`: 105 files 
 **The host pulls the tarball; the device is untouched.** Nothing new runs on the device and there is no
 CA-certificate problem to solve on a 2022 vendor image.
 
-**[F10](#f10-single-pass-offline-commissioning--done-2026-08-05-confirmed-on-a-unit-2026-08-06) depends on
-this one** — an offline commissioner has no toolchain to fall back on, so the release *is* its only source
-of binaries. The obligations that only bite once artifacts are published are enumerated per artifact in
-[`LICENSE.md`](LICENSE.md).
-
----
-
-### F10. Single-pass offline commissioning — **done 2026-08-05**, confirmed on a unit 2026-08-06
-
-`commissioning/commission-offline.sh` does the whole job — card into a reader, two questions, card back,
-unit boots working — and it was confirmed that way on a real card: one pass on a Kubuntu host, one boot,
-launcher grid, SSH reachable by name, games, sound, and a reboot survived. What is built, its safety model
-and every verification it performs are in `COMMISSIONING.md` and `commissioning/CLAUDE.md`. What is left:
-
-- **Touch calibration still needs the device**, and always will — it is per-unit and per-panel. The wizard
-  exists (Device Tools → Display → `CALIBRATE TOUCH`); one boot is all it costs.
-- **The confirmed run carried `native_apps` only**, so ScummVM and `vnc_client` reached that unit over SSH
-  afterwards. A three-component bundle has not been staged and commissioned in one pass. ⚠️ `usb_host`
-  stays out of every bundle by design — it patches `uImage-system` on p1.
-- ⚠️ **Anything more aggressive goes one increment per boot.** A failed boot yields no diagnostics — no
-  serial console ([§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)) — and the only post-mortem is mounting p3
-  offline and reading `messages`, which helps only if it got as far as syslog.
+**`commissioning/commission-offline.sh` depends on this one** — an offline commissioner has no
+toolchain to fall back on, so the release *is* its only source of binaries. The obligations that only
+bite once artifacts are published are enumerated per artifact in [`LICENSE.md`](LICENSE.md).
 
 ---
 
@@ -356,27 +337,6 @@ Option 2 is the smaller change and cannot regress the boot; option 1 restores ex
 Neither is urgent — recorded so the deletion stays a decision with a known cost rather than a surprise.
 
 ---
-
-### F15. USB host mode through commissioning — DONE 2026-08-08, confirmed on a unit 2026-08-09
-
-USB host mode, the `xpad`/`joydev`/`ff-memless` modules and the 500 mA p1 power patch all ship, ON by
-default, through both commissioning entry points. **Confirmed on a unit 2026-08-09 — the effect, not just
-the write:** an Xbox controller straight into the micro-USB port through a passive adapter, no powered
-hub. Mechanism, files and the *Failed Approaches* record live in `usb_host/README.md`; the p1 writer's
-rules are in `lib/CLAUDE.md`.
-
-**Still unmeasured, and now optional** — one SSH session each, no case-open, because
-`rw_usbpower_apply_ssh` mounts `/dev/mmcblk0p1` on the running device: the `000000fa` hexdump of
-`/proc/device-tree/ocp*/usb_otg_hs*/power` (the working pad *is* the same fact read at the other end), and
-**a p1 rollback through `uImage-system.vendor`** — the remedy has never been exercised on hardware, so it
-is worth one deliberate run *before* anyone needs it in anger.
-
-**One scoped experiment would retire the p1 write entirely, and is worth trying first.** Patch the
-**in-RAM** copy of the `usb_otg_hs` `power` property through `/dev/mem`: verify it reads `0x00000032`,
-write `0x000000fa`, rebind, confirm 500 mA. That would make the whole fix an ordinary boot script and let
-`--no-usb-power` go. ⚠️ **This is not the sysfs override already recorded as failed** — `usb_host/README.md`
-keeps both, and says which is which. Open risk is address stability: the unflattened DT is early-boot
-allocated, unlike the static symbol the existing patch aims at.
 
 ### F23. The p1 gate knows one firmware release, and refuses every other — open, measured 2026-09-02
 
@@ -417,6 +377,18 @@ property at all is a read of `musb_host.c:2797` in the vanilla 4.14.52 tree — 
 `if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then` inside the backup step; editing that line rots the
 sabotage into a false negative rather than failing loudly. And the three constants must not simply become
 a longer table — a table still has to be fed a new release before it helps, which is the defect.
+
+**The alternative that retires the gate instead of generalising it, and that is why it lives here.** This
+entry's md5 table exists for one reason: to protect the p1 write. An experiment that removes the write
+removes the need for any gate at all, tier 2 included. Patch the **in-RAM** copy of the `usb_otg_hs`
+`power` property through `/dev/mem`: verify it reads the vendor `0x32`, write `0xfa`, rebind, confirm
+500 mA. That makes the whole fix an ordinary boot script and lets `--no-usb-power` go, with no p1 write
+left to gate. One SSH session, no case-open. **It needs no new code** — `devmem_write` is a general
+physical peek/poke and is already on the device at `/usr/local/bin/devmem_write`. ⚠️ **The whole
+difficulty is finding the address**: the unflattened tree is early-boot allocated rather than a static
+symbol, so nothing names where its `power` property lands, and that one unknown *is* the experiment.
+⚠️ **This is not the sysfs override already recorded as failed** — `usb_host/README.md` keeps both, and
+says which is which.
 
 **Ruled out: shipping a prebuilt patched kernel as a release artifact.** It would not scale (obtaining
 every release is the same table plus 5 MB of payload each) and it is not ours to publish — see
@@ -478,8 +450,8 @@ unrecorded and decides which module is needed: `btusb` covers most, but the `lsu
 the first thing to read, before any module is built.
 
 **The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
-as `CONFIG_INPUT_JOYDEV` was before [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
-three modules — and that precedent worked. Every hard dependency is satisfiable, measured from
+as `CONFIG_INPUT_JOYDEV` was before the USB-host path (`usb_host/README.md`) shipped its three
+modules — and that precedent worked. Every hard dependency is satisfiable, measured from
 `usb_host/device_config`:
 
 | Need | State | Consequence |
@@ -510,7 +482,7 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 `CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
 `CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
-family as [F15](#f15-usb-host-mode-through-commissioning--done-2026-08-08-confirmed-on-a-unit-2026-08-09)'s
+family as [F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
 controller scribbles into RAM.** A kernel rebuild would be the clean way and is not impossible, only
 ruled out on value ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
@@ -523,8 +495,8 @@ high CPU. USB audio: high bandwidth, low CPU.** If the goal is "sound that does 
 cheaper experiment; if it is "no cables", it is Bluetooth.
 
 **Two cross-cutting constraints on any dongle:** it draws ~50–100 mA, which is marginal against the
-current 100 mA budget — an *independent* argument for F15's 500 mA patch — plus the 802.3af power budget
-and the case's total lack of ventilation slots
+current 100 mA budget — an *independent* argument for the 500 mA p1 power patch — plus the 802.3af
+power budget and the case's total lack of ventilation slots
 ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)).
 
 ---
@@ -533,8 +505,9 @@ and the case's total lack of ventilation slots
 
 **Two delivery modes, and only one of them has a toolchain.** *Delivery*: someone clones the repo,
 puts a card in a reader, answers a few questions, puts the card back, and the device works — they may
-never build anything. *Development*: we build and deploy onto an already-clean device. F10 serves the
-first, `deploy-all.sh` the second. This item is about making the second reachable on a fresh machine.
+never build anything. *Development*: we build and deploy onto an already-clean device. The offline
+path serves the first, `deploy-all.sh` the second. This item is about making the second reachable on
+a fresh machine.
 
 **What exists today: six checks, no installer, and they disagree.**
 [`native_apps/build-and-deploy.sh:127`](native_apps/build-and-deploy.sh#L127),
@@ -553,14 +526,9 @@ check-and-tell.
 
 **Intent: one `setup-build-env.sh` at the repo root, one `roomwizard.sh` entry, one package set.**
 
-⚠️ **What this dev host actually has, measured 2026-08-06** — because the opposite was on record here
-and it changed how the whole backlog was ranked. Inside **WSL** (Ubuntu 20.04): `gcc`, `g++`,
-`arm-linux-gnueabihf-gcc`, `arm-linux-gnueabihf-objdump`, `sfdisk` (at `/usr/sbin/sfdisk`, on the
-non-root `PATH` in both login and non-login shells), `python3`, `dash`, `gh`. Absent: `shellcheck` only
-([C7](#c7-run-shellcheck--open)). In **Git Bash**: none of them, and `python3` resolves to the Windows
-App Execution Alias that prints *"Python was not found"*. **A prerequisite check run from the wrong
-shell reports the wrong answer**, which is what happened — so an installer for this must state which
-shell it is measuring, and `wsl.exe -e bash -lc` is the one that counts.
+⚠️ **The measured host inventory, and the shell each claim was measured in, live in `COMMISSIONING.md`
+→ *The dev host*.** An installer for this must state which shell it is measuring — a prerequisite check
+run from the wrong one reports the wrong answer — and `wsl.exe -e bash -lc` is the one that counts.
 
 ```text
 gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
@@ -972,6 +940,7 @@ button, verified on a panel. **Read B32's measured/inferred split before proposi
 require of it the one thing all three failed to explain: how a port that probed with an EMPTY socket ever
 obtains a session.**
 
-Two device checks remain and both are optional rather than blocking, one SSH session each and no
-case-open: they are F15's two remainders. Bundles hold built artifacts only — settled, because the one
-consumer that installs device scripts runs from a clone and has `device-files/` beside it either way.
+One device experiment remains optional rather than blocking, one SSH session and no case-open: F23's
+in-RAM alternative to the p1 write, which would retire that gate rather than generalise it. Bundles hold
+built artifacts only — settled, because the one consumer that installs device scripts runs from a clone
+and has `device-files/` beside it either way.

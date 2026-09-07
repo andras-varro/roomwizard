@@ -418,6 +418,43 @@ backlight schedule that turns the screen off at 19:00 on weekdays.
 `commissioning/provision.sh` disables all of these non-essential mechanisms. See
 [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode) for the complete rationale.
 
+## The dev host: what must be installed, and in which shell
+
+Everything that compiles or decodes lives in **WSL**. The dev host is Windows, the repo lives on
+`c:\work\roomwizard`, and WSL reaches the same tree at `/mnt/c/work/roomwizard` — so every build and
+every framebuffer decode is invoked through WSL:
+
+```bash
+wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/<component> && ./build-and-deploy.sh <ip>"
+```
+
+**Present in this WSL, all verified 2026-09-06:** `shellcheck` 0.7.0, `gh`, `sfdisk`, `cmake`, `bc`,
+`bison`, `flex`, `git-lfs`, and `python3` with `PIL` 10.4.0. The cross-compiler is
+`arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM additionally needs
+WSL Ubuntu 20.04+ and `g++-arm-linux-gnueabihf`; `usb_host` needs the kernel-module build deps
+(`bc libssl-dev bison flex`) plus `python3`.
+
+⚠️ **None of it is in Git Bash** — not `gcc`, not the `arm-linux-gnueabihf-*` tools, and not
+`sfdisk`, `gh`, `shellcheck` or `strings` either. A `command -v` sweep run in that shell therefore
+reports a host with no toolchain at all, and that reading has been mistaken for a hard blocker on all
+building. **State which shell a prerequisite claim was measured in**, and measure with
+`wsl.exe -e bash -lc`.
+
+⚠️ **`command -v python3` succeeds in Git Bash and the interpreter does not exist.** It resolves to
+the Windows App Execution Alias — a real file that prints *"Python was not found"* and fails. Test a
+prerequisite by running it (`python3 --version`), not by looking it up.
+
+### What the host cannot do for you
+
+**Touch calibration is per-unit and always needs a boot.** The curve is a property of the panel in
+front of you: it cannot be derived on the host, and it cannot be copied from another unit.
+
+**One increment per boot.** Make one change, boot, look at the panel, and only then make the next
+one. A failed boot yields no diagnostics at all — so if two changes went out together, nothing on the
+unit can tell you which of them is responsible.
+There is no serial console ([§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)), so the only post-mortem is
+mounting p3 offline and reading `messages` — which helps only if the boot got as far as syslog.
+
 ## Phase 3: Deploy Apps
 
 After both commissioning phases, deploy apps to the device.
