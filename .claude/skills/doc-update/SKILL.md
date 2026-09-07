@@ -157,5 +157,3 @@ why**, and carries any verification that could not become a receipt row as an ex
 ```
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ```
-
-⚠️ Run `git` from Git Bash, never WSL — `git-lfs` is absent there and `HardwarePhotos/**` is LFS-tracked.

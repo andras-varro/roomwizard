@@ -228,19 +228,52 @@ sha256-verifies a published asset; `deploy-all.sh --from-release <tag|latest> <i
 consumers. Confirmed 2026-09-01 against `v1.0.0` on `192.168.50.188`: 105 files installed, md5- and
 `+x`-verified, launcher grid back on the panel. The measurements that shaped it are in `lib/CLAUDE.md`.
 
-**What is still open here, and it is small:**
+✅ **The publish preconditions now run before the build, 2026-09-07.** `gh`'s presence, origin's
+owner/repo, a clean tree and a pushed `HEAD` are all readable from local state, so they sit above the
+component loop; a refusal costs a second instead of a four-component rebuild, and it no longer wipes
+`build/release` on the way (the `rm -rf "$OUT"` is below the preflight). Measured: `--tag` on this
+unpushed `HEAD` refused in 12 s having built nothing and left the staged bundle's mtime untouched, and
+`--stage-only` still skips the preflight entirely (8 s, exit 0). The dirty check is **re-measured after
+the build** as well, because the hoisted one reads the pre-build tree. ⚠️ **`gh auth status` and "does
+this tag already exist" are deliberately NOT hoisted** — both need the network, and an early refusal for
+a reason unrelated to the release is worse than a late one.
 
-- ⚠️ **`release.sh` checks its publish preconditions only after the build and staging are done**, so a
-  refusal costs a full rebuild before it prints. Correct, but wasteful — moving them ahead of the
-  component loop needs `GIT_REV`/`GIT_DIRTY` computed earlier than the bundle metadata that consumes
-  them.
+✅ **A unit can now say what it is running, 2026-09-07.** `manifest.d/bundle.info` is staged as an
+ordinary artifact at `/opt/roomwizard/bundle.info` under a reserved manifest component, so
+`rw_bundle_entries` carries it and **both** installers write and md5-verify it with no installer change.
+Same bytes as the bundle's own copy, so the two cannot disagree. `rw_bundle_components` excludes the
+reserved name — every caller of it is telling an operator what the bundle contains, and it also fills
+`bundle.info`'s own `components=` line. `/opt/roomwizard` is kept whole by `clean-rules.conf`, so the
+stamp survives a re-clean.
+
+**What is still open here:**
+
+- **`deploy-all.sh <ip>` clears the stamp; one component's `build-and-deploy.sh` does not.** A source
+  deploy must not leave a stamp naming a release whose bytes are gone, so the whole-tree path removes it
+  — absence is the honest answer there. Running a single component directly bypasses that, so a stamp is
+  only as trustworthy as the last whole-tree deploy. Fixing it properly means one writer shared by four
+  scripts, not four copies of an `ssh rm -f`.
+- ⚠️ **`release.sh` has no test suite at all, and it holds an `rm -rf` of a caller-supplied path.**
+  Measured 2026-09-07 while fixing that guard (below): nothing in `tests/` invokes `release.sh` except
+  as a fixture builder. `tests/rw_clean_test.sh` section A is the model to mirror.
 - **Whether the `NOTICE` written offer is actually discharged has not been checked by anyone qualified to
   say so.** `release.sh` generates the per-release half and `LICENSE.md` says the two must agree; that is
   a bookkeeping guarantee, not a legal opinion. ⚠️ **Measure a dependency's licence *version* rather than
   carrying it forward**: this entry once said ScummVM was GPLv2+ and the tree is **GPL-3.0-or-later**.
 
-**The host pulls the tarball; the device is untouched.** Nothing new runs on the device and there is no
-CA-certificate problem to solve on a 2022 vendor image.
+⚠️ **A `case` pattern in quotes is a literal, and it silently disarmed the `rm -rf` guard — fixed
+2026-09-07.** `--out`'s guard read `""|"/"|"/*"`, and a **quoted** `"/*"` matches only the
+two-character string `/*`, never an absolute path. So `--out /usr` was accepted straight into
+`rm -rf "$OUT"`, and `--out //` and `--out /.` were too. The comment claimed `rw_clean_del`'s reasoning
+while porting only its two cheap string refusals: it had dropped the slash/dot **normalisation** and the
+**containment** check, which are what actually make `del()` safe. `--out` has no base to contain
+against, so ownership substitutes for containment — an existing `$OUT` must be a previous bundle
+(`root/` + `manifest.d/`) or empty. Verified both ways: a decoy directory holding one file is refused and
+the file survives; `/`, `//` and `/.` are all refused; an empty directory and a re-stage over a real
+bundle both still succeed.
+
+**The host pulls the tarball; the only thing new on the device is the stamp.** Nothing new *runs* there,
+and there is no CA-certificate problem to solve on a 2022 vendor image.
 
 **`commissioning/commission-offline.sh` depends on this one** — an offline commissioner has no
 toolchain to fall back on, so the release *is* its only source of binaries. The obligations that only
@@ -798,12 +831,13 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
 
 ### Stability first
 
-1. **F9** — the release path. ⚠️ Its second remainder is **blocked on non-engineering expertise**: whether
-   the `NOTICE` written offer is discharged has never been checked by anyone qualified to say so, and
-   `release.sh` guarantees bookkeeping rather than legality. ⚠️ **Measure a dependency's licence
-   *version*** — this entry once said GPLv2+ and the ScummVM tree is GPL-3.0-or-later. Adjacent and cheap:
-   nothing on a unit records which bundle tag or commit it runs, so no device can answer "what is this
-   running?" — dropping `manifest.d/bundle.info` during install fixes that.
+1. **F9** — the release path. ⚠️ **What is left of it is now mostly NOT engineering.** The precondition
+   ordering and the device provenance stamp both landed 2026-09-07; the remaining named item is **blocked
+   on non-engineering expertise** — whether the `NOTICE` written offer is discharged has never been
+   checked by anyone qualified to say so, and `release.sh` guarantees bookkeeping rather than legality.
+   ⚠️ **Measure a dependency's licence *version*** — this entry once said GPLv2+ and the ScummVM tree is
+   GPL-3.0-or-later. What IS still engineering is small and feeds the tier below: `release.sh` has no test
+   suite, and a single component's `build-and-deploy.sh` does not clear the stamp.
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.

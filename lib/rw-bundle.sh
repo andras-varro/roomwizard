@@ -45,6 +45,20 @@
 # than asserted against a known-good set.  Keeping it out of .list means the
 # declared modes — which ARE stable — can be diffed between releases without the
 # checksums making every line differ.
+#
+# ── The reserved "meta" component ────────────────────────────────────────────
+#
+# manifest.d/bundle.info records the tag, commit and build date.  release.sh also
+# stages it AS AN ARTIFACT, at /opt/roomwizard/bundle.info, so that a unit can
+# answer "what am I running?" — before that, nothing on any device recorded it.
+#
+# An artifact needs a manifest, manifests are per-component, and this file belongs
+# to no component.  Hence a reserved name.  rw_bundle_components EXCLUDES it, for
+# two reasons: every caller of that function is telling an operator what the bundle
+# contains, and a fifth entry there is a component that does not exist; and
+# release.sh calls it to fill bundle.info's own `components=` line, which would
+# otherwise depend on whether the stamp had been staged yet.
+RW_BUNDLE_META_COMPONENT=meta
 
 # ---------------------------------------------------------------------------
 # rw_bundle_init DIR COMPONENT
@@ -121,13 +135,19 @@ rw_bundle_finish() {
 # ---------------------------------------------------------------------------
 # rw_bundle_components DIR
 #
-# Echo the component names present in DIR, one per line.
+# Echo the BUILD component names present in DIR, one per line.  The reserved
+# $RW_BUNDLE_META_COMPONENT manifest is skipped — it carries the provenance stamp
+# rather than any component's artifacts, and every caller of this function is
+# reporting the bundle's contents to an operator.  rw_bundle_entries deliberately
+# does NOT skip it: the installers must still write and verify that file.
 # ---------------------------------------------------------------------------
 rw_bundle_components() {
-    local dir="$1" f
+    local dir="$1" f name
     for f in "$dir"/manifest.d/*.list; do
         [ -f "$f" ] || continue
-        basename "$f" .list
+        name=$(basename "$f" .list)
+        [ "$name" = "${RW_BUNDLE_META_COMPONENT:-meta}" ] && continue
+        echo "$name"
     done
 }
 

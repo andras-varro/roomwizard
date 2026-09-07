@@ -346,6 +346,25 @@ done
 # Only set-default if native_apps was deployed (or we're deploying everything)
 DEVICE="root@${DEVICE_IP}"
 
+# ── a source deploy must not leave a provenance stamp standing ──────────────
+# /opt/roomwizard/bundle.info names the release a unit was installed from.  It is a
+# bundle artifact, so a SOURCE deploy overwrites the binaries it describes and would
+# otherwise leave it behind naming a tag whose bytes are no longer on the device.
+# An absent stamp is the honest answer here — "this unit is not running a published
+# release" — and a stale one is a lie of exactly the kind that gets believed.
+#
+# ⚠️ This covers `deploy-all.sh <ip>` only.  Running ONE component's
+# build-and-deploy.sh directly does not clear the stamp, so a stamp is only as
+# trustworthy as the last whole-tree deploy; that remainder is open work rather than
+# a fix spread over four scripts.
+if [[ ${#SUCCEEDED[@]} -gt 0 ]]; then
+    if ssh "$DEVICE" 'rm -f /opt/roomwizard/bundle.info' 2>/dev/null; then
+        info "Provenance stamp cleared — these are locally built binaries"
+    else
+        warn "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
+    fi
+fi
+
 set_default=false
 for c in "${SUCCEEDED[@]}"; do
     [[ "$c" == "native_apps" ]] && set_default=true

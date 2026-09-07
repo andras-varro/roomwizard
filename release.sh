@@ -156,20 +156,109 @@ info "Components: ${COMPONENTS[*]}"
 info "Staging to: $OUT"
 [[ -n "$TAG" ]] && info "Tag:        $TAG"
 
+# ── git provenance ──────────────────────────────────────────────────────────
+# Measured here rather than beside the bundle metadata that consumes it, because
+# the publish preflight below needs it and the whole point of the preflight is to
+# run before the component loop.  These read the working tree's git state only —
+# no build artifact, no $OUT_ABS.
+GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The full SHA as well, for gh --target only.  GitHub's API takes a branch name or
+# a 40-character SHA for target_commitish and rejects an abbreviated one outright:
+# a short rev there fails the whole publish with "HTTP 422 Validation Failed:
+# Release.target_commitish is invalid", after the build and the staging are done.
+GIT_REV_FULL="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_DIRTY=""
+git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || GIT_DIRTY=" (dirty)"
+
+# ── publish preflight ───────────────────────────────────────────────────────
+# Every refusal `--tag` can raise from LOCAL state is raised here, before the first
+# component builds.  These checks used to sit after the tarball, so `--tag` on a
+# host without gh, or on an unpushed commit, spent a full four-component rebuild to
+# print a message it could have printed in a second.
+#
+# ⚠️ Deliberately network-free, and that is the boundary for what belongs here: gh's
+# presence, origin's URL and the local remote-tracking refs are all readable
+# offline.  `gh auth status` and "does this tag already exist" are NOT hoisted —
+# they would let a flaky network refuse a release that is otherwise fine — and both
+# still refuse at `gh release create` below, after the build.
+if [[ $STAGE_ONLY -eq 0 ]]; then
+    command -v gh >/dev/null 2>&1 \
+        || err "gh is not installed — install it, or use --stage-only. Nothing was built."
+
+    # gh resolves owner/repo from the remote URL and CANNOT resolve this one:
+    # `origin` is an SSH host alias (git@github.com-personal:owner/repo.git), and
+    # gh rejects the whole repository with "none of the git remotes configured for
+    # this repository point to a known GitHub host".  Measured, not anticipated —
+    # every gh call here therefore needs an explicit --repo.
+    #
+    # ⚠️ The derivation itself lives in lib/rw-release.sh and there is ONE of it,
+    # because the fetch side needs exactly the same answer: a fork must fetch from
+    # the fork it published to.  Do not write a second copy here.
+    GH_REPO="$(rw_release_repo "$SCRIPT_DIR" 2>/dev/null || true)"
+    case "$GH_REPO" in
+        */*) ;;
+        *)   err "could not derive owner/repo from origin
+     ('$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)').
+     gh cannot resolve it either, so pass a tarball to 'gh release create --repo
+     <owner>/<repo>' by hand. Nothing was built." ;;
+    esac
+
+    # A tag whose commit is not on the remote makes the bundle's NOTICE false.
+    # NOTICE carries a GPL written offer — "the complete corresponding source ...
+    # available from the repository this release was published from" — for ScummVM
+    # (GPLv3+), LibVNCClient (GPLv2+) and three kernel modules (GPL-2.0-only).  An
+    # unpushed or dirty tree does not satisfy that offer, and the failure is silent:
+    # gh would tag the remote default branch's HEAD instead, so the release would
+    # name a commit that builds different binaries.
+    [[ -z "$GIT_DIRTY" ]] || err "the working tree is dirty, so the source for these
+     binaries is not in any commit — and NOTICE offers exactly that source. Commit
+     first. Nothing was built."
+    if [[ -z "$(git -C "$SCRIPT_DIR" branch -r --contains HEAD 2>/dev/null)" ]]; then
+        err "HEAD ($GIT_REV) is on no remote branch, so the corresponding source
+     NOTICE offers is unpublished. Push first. Nothing was built."
+    fi
+    ok "Preflight: gh present, $GH_REPO, $GIT_REV pushed and clean"
+fi
+
 # ── stage ───────────────────────────────────────────────────────────────────
 # A whole-directory wipe, because a bundle assembled on top of a previous one can
 # carry a file no manifest names — which rw_bundle_check then reports, but only
 # after the operator has already been told the release is ready.
 #
 # Guarded rather than trusted: $OUT comes from the command line and this is an
-# `rm -rf`.  The same reasoning as lib/rw-clean.sh's del() guard, and the same
-# refusal.
-case "$OUT" in
-    ""|"/"|"/*") err "refusing to stage into '$OUT'" ;;
+# `rm -rf`.  It follows lib/rw-clean.sh's del() guard, which refuses in three
+# stages; this one needs the first two verbatim and substitutes for the third.
+#
+# Normalise before comparing, so that "//" and "/." cannot spell root past a
+# string test — rw_clean_check_base does exactly this, for exactly this reason,
+# and both spellings pass an un-normalised comparison.
+OUT_NORM="$(printf '%s' "$OUT" | sed -e 's:/\{2,\}:/:g' -e 's:/\.$:/:' -e 's:\(.\)/$:\1:')"
+case "$OUT_NORM" in
+    ""|"/") err "refusing to stage into '$OUT' — that resolves to this host's root" ;;
 esac
 [[ "$OUT" == *".."* ]] && err "refusing to stage into a path containing '..': $OUT"
 if [[ -e "$OUT" && ! -d "$OUT" ]]; then
     err "$OUT exists and is not a directory"
+fi
+
+# ⚠️ This is the check that makes the `rm -rf` below safe, and it is the one that
+# was missing.  del()'s third stage refuses a target that does not resolve under
+# its $BASE; release.sh has no base to contain against, because --out is
+# legitimately anywhere the operator wants to stage.  So the substitute for
+# containment is OWNERSHIP: an existing $OUT must be something this script made —
+# a previous bundle, or an empty directory — and `--out /usr` is refused rather
+# than destroyed.
+#
+# What was here before listed ""|"/"|"/*", and a QUOTED "/*" in a case pattern is
+# the literal two-character string, not a glob.  So of those three patterns only
+# "/" could ever fire: "" is already refused when --out is parsed, and a bare /*
+# is expanded by the caller's shell long before this sees it.
+if [[ -d "$OUT" && -n "$(ls -A "$OUT" 2>/dev/null)" ]]; then
+    if [[ ! -d "$OUT/root" || ! -d "$OUT/manifest.d" ]]; then
+        err "refusing to 'rm -rf' '$OUT' — it is not empty and is not a staged bundle
+     (no root/ and no manifest.d/). Stage into a new or empty directory, or remove
+     that one yourself if you did mean it."
+    fi
 fi
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -195,21 +284,33 @@ echo "────────────────────────�
 echo " Bundle"
 echo "────────────────────────────────────────"
 
-GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-# The full SHA as well, for gh --target only.  GitHub's API takes a branch name or
-# a 40-character SHA for target_commitish and rejects an abbreviated one outright:
-# a short rev there fails the whole publish with "HTTP 422 Validation Failed:
-# Release.target_commitish is invalid", after the build and the staging are done.
-GIT_REV_FULL="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
-GIT_DIRTY=""
-git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || GIT_DIRTY=" (dirty)"
-
 {
     echo "tag=${TAG:-untagged}"
     echo "built=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     echo "commit=${GIT_REV}${GIT_DIRTY}"
     echo "components=$(rw_bundle_components "$OUT_ABS" | tr '\n' ' ')"
 } > "$OUT_ABS/manifest.d/bundle.info"
+
+# ── the same bytes, installed on the device ─────────────────────────────────
+# Until this existed, no unit could answer "what am I running?": bundle.info lived
+# in manifest.d/, which the installers read and never write, so the tag and commit
+# reached the operator's terminal and nothing else.  Staging it as an ordinary
+# bundle artifact is what puts it on the device — rw_bundle_entries drives BOTH
+# installers (rw_bundle_install_ssh for --from-bundle/--from-release, and
+# commission-offline.sh's put() loop), so one manifest line covers every bundle
+# path and gets the file md5-verified on each of them for free.
+#
+# ⚠️ Same file, not a second rendering of the same facts: a stamp that disagreed
+# with the bundle it shipped in would be worse than no stamp at all.
+#
+# ⚠️ $RW_BUNDLE_META_COMPONENT, not one of the four real components. Manifests are
+# per-component and this file belongs to none of them; the reserved name is what
+# keeps it out of every "Components:" line — see lib/rw-bundle.sh.
+rw_bundle_init "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT"
+rw_bundle_add  "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT" 0644 \
+    "$OUT_ABS/manifest.d/bundle.info" /opt/roomwizard/bundle.info \
+    || err "could not stage the provenance stamp"
+rw_bundle_finish "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT" >/dev/null
 
 # ── NOTICE: the two licence obligations a published bundle carries ──────────
 cat > "$OUT_ABS/NOTICE" <<'NOTICE'
@@ -380,42 +481,19 @@ else
     echo "────────────────────────────────────────"
     echo " Publishing"
     echo "────────────────────────────────────────"
-    command -v gh >/dev/null 2>&1 || err "gh is not installed — install it, or use --stage-only.
-     The tarball is already built: $TARBALL"
-
-    # gh resolves owner/repo from the remote URL and CANNOT resolve this one:
-    # `origin` is an SSH host alias (git@github.com-personal:owner/repo.git), and
-    # gh rejects the whole repository with "none of the git remotes configured for
-    # this repository point to a known GitHub host".  Measured, not anticipated —
-    # every gh call here therefore needs an explicit --repo.
-    #
-    # ⚠️ The derivation itself lives in lib/rw-release.sh and there is ONE of it,
-    # because the fetch side needs exactly the same answer: a fork must fetch from
-    # the fork it published to.  Do not write a second copy here.
-    GH_REPO="$(rw_release_repo "$SCRIPT_DIR" 2>/dev/null || true)"
-    case "$GH_REPO" in
-        */*) ;;
-        *)   err "could not derive owner/repo from origin
-     ('$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)').
-     gh cannot resolve it either, so pass a tarball to 'gh release create --repo
-     <owner>/<repo>' by hand. The tarball is already built: $TARBALL" ;;
-    esac
     info "Publishing to $GH_REPO"
 
-    # A tag whose commit is not on the remote makes the bundle's NOTICE false.
-    # NOTICE carries a GPL written offer — "the complete corresponding source ...
-    # available from the repository this release was published from" — for ScummVM
-    # (GPLv3+), LibVNCClient (GPLv2+) and three kernel modules (GPL-2.0-only).  An
-    # unpushed or dirty tree does not satisfy that offer, and the failure is silent:
-    # gh would tag the remote default branch's HEAD instead, so the release would
-    # name a commit that builds different binaries.
-    [[ -z "$GIT_DIRTY" ]] || err "the working tree is dirty, so the source for these
-     binaries is not in any commit — and NOTICE offers exactly that source. Commit
-     first. The tarball is already built: $TARBALL"
-    if [[ -z "$(git -C "$SCRIPT_DIR" branch -r --contains HEAD 2>/dev/null)" ]]; then
-        err "HEAD ($GIT_REV) is on no remote branch, so the corresponding source
-     NOTICE offers is unpublished. Push first. The tarball is already built: $TARBALL"
-    fi
+    # Re-measured, because the preflight above ran on the PRE-build tree.  A
+    # component build that modified a TRACKED file would otherwise publish a tag
+    # whose commit does not contain the source these binaries were built from —
+    # exactly the falsehood the preflight's dirty check exists to prevent.
+    #
+    # ⚠️ No build step in this repo is known to do that; every build output is
+    # gitignored.  So this is a guard against a future one, not a recorded failure,
+    # and it is here rather than hoisted because it can only be measured now.
+    git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || err "a component build modified a
+     tracked file, so HEAD no longer matches the source for these binaries. The
+     tarball is already built: $TARBALL"
 
     if [[ -z "$NOTES_FILE" ]]; then
         NOTES_FILE="$(mktemp)"
