@@ -1366,24 +1366,21 @@ failure in grace period" before it gives up.
 
 **In game mode those services are all absent, so this reboots the device every ~70 minutes.**
 
-The bypass is built in — `watchdog_test.sh` skips every check when the state file is missing:
+**The clean DELETES it, and that is the only layer that removes the code.** `/opt/sbin/watchdog` is a
+*directory* of three scripts (`watchdog.sh`, `watchdog_repair.sh`, `watchdog_test.sh`), and
+`device-files/clean-rules.conf` removes the whole directory in group `base` — which no flag can keep —
+so no bring-up path leaves a rebooter on disk. Two weaker layers sit behind it: `disable-steelcase.sh`
+**replaces the whole crontab** with the two cleanup jobs worth keeping (`rotatelogfiles.sh`,
+`cleanupfiles.sh`), which is what would otherwise have scheduled `watchdog.sh`, and it `touch`es
+`/var/watchdog_test` as its first command — belt and braces, since `watchdog_test.sh` skips every check
+unless that file (or `_checkmem`) exists, and the script it guards is already gone. The factory crontab
+is not backed up; its content is recoverable from the images under `partitions/`.
 
-```bash
-if [ ! -f /var/watchdog_test ] && [ ! -f /var/watchdog_test_checkmem ]; then
-    # only perform application level checks when the state file is there
-```
-
-**`disable-steelcase.sh` handles this**, not `commissioning/provision.sh` directly: it creates
-`/var/watchdog_test` and **replaces the whole crontab** with the two cleanup jobs worth keeping
-(`rotatelogfiles.sh`, `cleanupfiles.sh`). It does *not* comment the line out and does *not* back the
-original up; the factory crontab's content is recoverable from the partition images under `partitions/`
-if it is ever wanted.
-
-⚠️ **A device can be running a copy of that script older than the repo's.** `commissioning/provision.sh
-<ip>` is what deploys it (to `/opt/roomwizard/`) and runs it once; `/etc/init.d/roomwizard-app` re-runs
-the *deployed* copy on every boot. So check `--status` before drawing a conclusion about behaviour — the
-bypass is now the script's first command and it reports the bypass state on its last line, but a device
-that has not been re-provisioned is running whatever it was given.
+⚠️ **A device can be running a copy of that script older than the repo's, and a unit cleaned before the
+delete rule existed still has the rebooter on disk** — bypassed by the two weaker layers, not removed.
+`commissioning/provision.sh <ip>` deploys it (to `/opt/roomwizard/`) and runs it once;
+`/etc/init.d/roomwizard-app` re-runs the *deployed* copy on every boot. **Check `--status` before drawing
+any conclusion from a unit**: one that has not been re-provisioned is running whatever it was given.
 
 ### 3.14 What is not present
 
@@ -1971,6 +1968,15 @@ gains are thin. The *config* defects (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
 would fix them, yet none limits anything measured; the OSS shim's bugs sit in `snd-pcm-oss`, which both
 consumers already work around and which native ALSA would bypass — neither needing a rebuild
 ([Audio](#34-audio)); there is no WiFi hardware. **DSS overlays, the clear win, are pure sysfs.**
+
+⚠️ **What a rebuild would buy for USB, and what it would not — because "recompile the kernel and the USB
+problems go away" is not true and has been proposed.** It buys the two config defects above, and it buys
+the *ability* to patch the driver. It does **not** buy enumeration reliability: a cold port stays dark
+because VBUS here is driven solely by the DEVCTL `SESSION` bit and nothing sets that bit on a port that
+probed with an empty socket ([USB](#36-usb)) — no `.config` option changes which code writes that
+register, so this needs a **driver change**, which a rebuild enables rather than performs. The userspace
+remedies are therefore not interim: the one-tap RESCAN is the answer either way, and the refuted
+mechanisms and the one never-attempted candidate are tabulated in `usb_host/README.md`.
 
 ---
 

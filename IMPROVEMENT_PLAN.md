@@ -5,8 +5,9 @@
 **How to read this**
 
 - **B**n = bug, **F**n = feature, **D**n = doc/infra, **C**n = cleanup. IDs are never reused or
-  renumbered, because they are cited from commit messages and from the component docs. To find a
-  closed one: `git log --grep=B13i`.
+  renumbered, because commit messages cite them. ⚠️ **Nothing outside this file may cite one** — an entry
+  is deleted the moment it closes, so any citation elsewhere has a scheduled expiry built in
+  (`tests/doc_check.sh` group B counts them, resolving or not). To find a closed one: `git log --grep=B13i`.
 - **Status is one word after the heading:**
 
   | Status | Means |
@@ -94,39 +95,6 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B32. USB is enumerated only at driver probe — cause established 2026-08-13, no automatic fix
-
-> ✅ **CLOSED 2026-08-14 — not as fixed, and not as a bug.** "Nothing enumerates unless it was plugged
-> in at boot" is a **standing property of this hardware with a working one-tap remedy** — Device Tools →
-> USB → RESCAN, which brought a dark pad up on the first tap on `.188` (`/etc/init.d/usb-host recover`
-> is the same code path from a shell). It stays in this file, which holds open work only, as a deliberate
-> exception: [`SYSTEM_ANALYSIS.md` §3.6](SYSTEM_ANALYSIS.md#36-usb) links to its anchor, and the record of
-> *what was refuted* is what stops a fourth session rediscovering the same dead ends. ⚠️ **The heading is
-> imprecise and is kept only for that anchor** — retitle it when there is a reason to touch the link.
-
-⚠️ **Do not reopen it from source reading alone.** Three mechanisms read out of the driver were each
-applied and refuted **on hardware**: the DTB `mode = <3>` → `<1>` patch (live in the booted tree, pad
-still dark), a permanently attached hub — ID-ground alone does not revive a dead port — and debugfs
-`softconnect`, which sets `SESSION` only in `a_wait_bcon` while a cold port sits in `a_idle`. A fourth,
-`echo host > .../mode`, is a **silent no-op**: `omap2430_ops` has no `.set_mode`. Trace, register
-readings and the ones that are *not* diagnostic: [`SYSTEM_ANALYSIS.md#36-usb`](SYSTEM_ANALYSIS.md#36-usb).
-
-⚠️ **Whatever the next candidate is, it must first explain how a port that probed with an EMPTY socket
-ever obtains a session** — that is the state every failed measurement started from, and each refuted
-mechanism assumed a session it did not have. The one candidate never attempted is the DEVCTL
-`SESSION`-bit poke through `devmem_write`; its address, and the clock-gating external-abort hazard that
-comes with it, are in `usb_host/README.md` beside the untried in-RAM device-tree experiment.
-
-The `mode`-patch tooling is sound and stays, so a unit that was patched can be reverted — but the patch
-itself is **out of every deploy path** (`lib/CLAUDE.md` → the p1 writer).
-
-**One small open measurement, moved here from `SYSTEM_ANALYSIS.md` §3.6 in phase 4 because it needs a test
-rather than a hedge in prose.** `usb-host recover` succeeded on attempt **1** on the mode-patched kernel,
-where both earlier manual runs on the power-only firmware needed **two consecutive** invocations. **[n=1]**,
-a different boot, and `recover`'s own 3-try loop makes a single invocation a weak instrument for counting
-rebinds — so this is not evidence that the two firmwares differ. Settling it needs repeated boot-empty →
-plug → `recover` cycles on **both** firmwares, one reboot each. Low value: the remedy works either way.
-
 ### B33. A USB babble error leaves a `printk` loop that hard-resets the device — open, **measured 2026-08-17**
 
 ⚠️ **One babble error puts the kernel into an unbounded message loop that outlives the device's removal and
@@ -142,23 +110,7 @@ was judged on a starved device, and a frozen app is a *symptom*, not the bug —
 to hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before trusting an on-device
 measurement.** The loop is not yet read out of the driver: start at `musb_bus_suspend()` in
 `usb_host/linux-4.14.52/drivers/usb/musb/` and at whether the `Babble` path leaves the port marked active.
-Distinct from B32, which is about enumeration.
-
-### B27. `sfdisk` absence is reported as a test failure, not a skip — open, latent
-
-`tests/rw_identify_test.sh:363-369` guards the real-card-image cases on **file presence** but not on
-the **tool**, so on a host without `sfdisk` both report `expected yes, got no` — a red failure for
-something the harness could not measure. The synthetic block at `:169` gets this right and skips. This
-is the "which part of the count is the harness" trap from `CLAUDE.md` → *Working style*.
-
-⚠️ **Latent, not reproducible from this host, and the earlier claim that it fires here was a
-mismeasurement.** `sfdisk` is present in this WSL at `/usr/sbin/sfdisk` and on the non-root `PATH`;
-both card images are also present, so the two cases run and pass — measured 2026-08-06, 37 passed, 0
-failed, 0 skipped. The absence was observed in **Git Bash**, which has neither the toolchain nor
-`sfdisk` and is not where these tests run. The defect is real by inspection of the guard; the
-reproduction is not. To see it fire, run the suite with `PATH` stripped of `/usr/sbin`.
-
-Fix: skip with the reason, and account for it in `MIN_CASES` so a skip cannot silently shrink coverage.
+Distinct from enumeration-at-probe, which is about a cold port never obtaining a session.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
@@ -172,22 +124,6 @@ Windows. Two pieces of residue:
 2. **The reboot path is unproven.** `S30avahi-daemon` is in place but the link was written directly
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
-
-### D9. `/var/watchdog_test` is absent on a running unit — open, **benign today, confirmed 2026-08-05**
-
-`disable-steelcase.sh` touches it as its *first* command and runs on every boot from
-`device-files/roomwizard-app`, yet the unit in service (4 days uptime) does not have the file. It is benign
-**only** because the same script also installs a crontab with no `watchdog.sh` job, so the vendor
-software watchdog is never scheduled — the bypass file is the second line of defence, not the first.
-Two candidate causes, neither measured: the boot-time run is not happening (that unit's deployed
-`disable-steelcase.sh` is dated Mar 16, so `--status` would report drift), or `cleanupfiles.sh` (cron,
-every 4 h) sweeps it.
-
-⚠️ **`commissioning/commission-offline.sh` now `touch`es it offline anyway**, and says out loud that it
-is belt and braces only. That is defensible because the same pass truncates the vendor crontab — which
-is what would have scheduled `watchdog.sh` in the first place — but it does mean the offline tool
-places a file that something on the device may delete. Settling which of the two causes it is would
-let that line be either removed or relied on.
 
 ### B35. `gamepad_rescan()` logs a line per poll, so one session fills the log — open, measured 2026-08-21
 
@@ -871,20 +807,8 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.
-3. **B27** — ~~report the `sfdisk` absence as a skip~~ **done 2026-09-06.** Both card-image cases now
-   skip on the tool as well as the file, and `MIN_CASES` drops 32→28 when `sfdisk` is absent — without
-   that half the fix only trades a red FAIL for a red HARNESS ERROR. Seen failing first, with `PATH`
-   stripped of `/usr/sbin`: 31 passed / **2 failed** / 1 skipped → 31 / **0** / 3.
-4. **D9** — ~~delete the vendor **software** watchdog instead of bypassing it~~ **done 2026-09-06.**
-   `/opt/sbin/watchdog` is its own `delete base` record, so `--keep-vendorscripts` can keep the reference
-   bytes and not a rebooter; `lib/rw-identify.sh` dropped `watchdog.sh` as a rootfs marker in the same
-   change, leaving `/opt/pv02` and `/etc/issue` to carry the OR. Sabotage case 10 is the control and
-   fails exactly the one assertion. ⚠️ **D9 itself stays open on its own question** — why a unit in
-   service lacks `/var/watchdog_test` — which this does not answer. What it *does* change is the stake:
-   the bypass file now guards code that a correct provision has already deleted, so it matters only on a
-   unit cleaned with `--keep-vendorscripts` before 2026-09-06, of which `.188` is one.
-5. **F23** — tier 2 of the p1 gate, so a unit on any other Steelcase release can take the 500 mA patch.
-6. **F11** — one home for the host build prerequisites.
+3. **F23** — tier 2 of the p1 gate, so a unit on any other Steelcase release can take the 500 mA patch.
+4. **F11** — one home for the host build prerequisites.
 
 ### Usability, features, maintainability
 
@@ -901,7 +825,8 @@ longer blocked.
 and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
 F17 and F100 are module builds, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
 cheaper option draws its splash in `app_launcher`, which already owns the framebuffer. **What genuinely
-needs kernel work is short: B32's enumeration reliability, and MUSB DMA.** Anything else claiming to need
+needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
+RESCAN tap — and MUSB DMA.** Anything else claiming to need
 a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek
 by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
 read `lsusb`'s VID:PID before building anything.
@@ -934,11 +859,11 @@ tree. Only a whole-card reflash loses them. NAND would buy the card-swap case al
 store that a reflash cannot clear. ⚠️ **The one caveat worth keeping: that whitelist matches `*.hig`, so a
 future game storing anything else under `/home/root/data` is swept by the clean.**
 
-⚠️ **B32 is not the place to start, and that is a result rather than a gap.** Three mechanisms read out of
-the MUSB driver have each been applied and **refuted on hardware**; the answer is the shipped RESCAN
-button, verified on a panel. **Read B32's measured/inferred split before proposing a fourth theory, and
-require of it the one thing all three failed to explain: how a port that probed with an EMPTY socket ever
-obtains a session.**
+⚠️ **Operator ruling, 2026-09-06: no further USB work beyond USB audio.** Enumeration-at-probe is closed
+and that is a result rather than a gap — three mechanisms read out of the MUSB driver were each applied
+and **refuted on hardware**, and the answer that ships is the one-tap RESCAN, verified on a panel. Before
+anyone proposes a fourth theory, read the refuted table in `usb_host/README.md`, which names the one
+never-attempted candidate and the question any candidate must answer first.
 
 One device experiment remains optional rather than blocking, one SSH session and no case-open: F23's
 in-RAM alternative to the p1 write, which would retire that gate rather than generalise it. Bundles hold

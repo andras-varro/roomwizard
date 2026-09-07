@@ -111,13 +111,15 @@ same pass that sets the name, which removes that window instead of patching it. 
 validator **rejects hyphens**, so prefer `rwtest` to `rw-test` on anything still carrying the vendor
 stack.
 
-## The software watchdog bypass
+## Rooting out the software watchdog
 
 The Steelcase software watchdog reboots the device ~every 70 min in game mode. It is a cron job
-(`/opt/sbin/watchdog/watchdog.sh`), and `device-files/disable-steelcase.sh` is what disables it —
-`touch /var/watchdog_test` as its *first* command, deliberately ahead of every fallible line, plus a
-freshly written crontab. `provision.sh <ip>` deploys and runs it; `/etc/init.d/roomwizard-app` re-runs
-it on **every boot**.
+(`/opt/sbin/watchdog/watchdog.sh`), and **the clean deletes the whole directory** — a `delete base`
+record, and `base` is not an optional group, so no flag and no mode leaves a rebooter on disk.
+`device-files/disable-steelcase.sh` supplies the two weaker layers: a freshly written crontab, plus
+`touch /var/watchdog_test` as its *first* command, deliberately ahead of every fallible line.
+`provision.sh <ip>` deploys and runs it; `/etc/init.d/roomwizard-app` re-runs it on **every boot**. What
+each layer is worth: [`SYSTEM_ANALYSIS.md` §3.13](../SYSTEM_ANALYSIS.md#313-watchdogs).
 
 ⚠️ **A device can be running an older copy than the repo's until `provision.sh` is re-run.**
 `./commissioning/provision.sh <ip> --status` md5s both deployed scripts against the repo's and says

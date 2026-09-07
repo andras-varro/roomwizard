@@ -535,6 +535,13 @@ this repo is published, so the patch is *derived* from the device's own copy by
 | debugfs `softconnect` | Sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`; a cold port sits in `a_idle` |
 | A hub left permanently attached (ID-ground) | Measured 2026-08-13: `Vbus off` at 1, 2 and 3 min, and a device plugged into the hub enumerated nothing. An ID event replays the *cached* DEVCTL, and a cold port has no `SESSION` bit to resume |
 
+⚠️ **Require this of a fourth candidate before spending a session on it: how does a port that probed
+with an EMPTY socket ever obtain a session?** That is the state every measurement above started from,
+and each refuted mechanism silently assumed a session it did not have — which is the single reason all
+three failed. A candidate that cannot answer it is the same theory again in new clothes. The answer that
+ships is the RESCAN button, verified on a panel; enumeration-at-probe is a standing property of this
+hardware with a one-tap remedy, not an open bug.
+
 ⚠️ **The `/dev/mem` patch forces IRQ-driven PIO — it does not fix DMA.** Anything above or below reading
 as "the patch repairs a broken DMA configuration" has it backwards: the noop `dma_init`/`dma_exit` stubs
 make MUSB **give up** on DMA and fall back to interrupt-driven programmed I/O, which is what makes host
