@@ -12,10 +12,11 @@
 # separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 # --bundle stages this component's artifacts under <dir>/root/<device-path> with
-# a declared-mode manifest (../IMPROVEMENT_PLAN.md F9, F10).  It stages the
+# a declared-mode manifest — the layout ../release.sh publishes and
+# ../commissioning/commission-offline.sh installs from.  It stages the
 # binary, the icon and the .app manifest and DELIBERATELY NOT vnc_client.conf:
 # that file holds a plaintext VNC password, and a release must publish binaries
-# only, never device config (F9's caveat).
+# only, never device config.
 
 set -e
 _START_SECONDS=$(date +%s)
@@ -136,8 +137,8 @@ echo ""
 # ── 3c. the .app manifest, written once ─────────────────────────────────────
 # One heredoc, into a file, used by BOTH the deploy path and --bundle.  It used
 # to live inside `ssh "$DEVICE" bash <<REMOTE`, so it existed only when a device
-# was reachable; the offline installer needs the same bytes with no device
-# (../IMPROVEMENT_PLAN.md F10).
+# was reachable; ../commissioning/commission-offline.sh needs the same bytes with
+# no device.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT INT TERM
 cat > "$STAGE/vnc_client.app" <<'APP'
@@ -172,7 +173,7 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     fi
 
     # vnc_client.conf is NOT staged.  It carries a plaintext VNC password, and a
-    # release publishes binaries only (../IMPROVEMENT_PLAN.md F9).  The installer
+    # release publishes binaries only.  The installer
     # tells the operator to create it; the app's own defaults do not connect
     # anywhere without one.
     warn "vnc_client.conf deliberately NOT bundled (plaintext password)"

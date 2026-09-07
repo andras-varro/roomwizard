@@ -14,7 +14,7 @@ What it changes and why it cannot be a boot script: the `power` property of the
 value from the device tree at driver PROBE, before any init script exists, and the
 tree is appended to the kernel inside uImage-system — so there is no file on the
 normal filesystem to edit.  That one number is the sole reason p1 enters the
-picture (../IMPROVEMENT_PLAN.md F15).
+picture.
 
 ⚠️ This writes <out>; it never touches <in>.  Putting the result on p1 is
 lib/rw-usbpower.sh's job, gated on md5 and backed up first.

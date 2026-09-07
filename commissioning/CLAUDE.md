@@ -64,7 +64,7 @@ counts the ELF candidates itself and says loudly what it did not check (`--arm-c
 deliberate override); and a **stripped** binary cannot be gated at all, so the checker returns 2
 ("could not judge") and the installer proceeds with a loud block naming the count. `scummvm` and
 `vnc_client` ship stripped, so **every full bundle** takes that path — the sound verdict is the
-build-time one, on the unstripped artifact. Detail: `tests/CLAUDE.md`, `IMPROVEMENT_PLAN.md` C9.
+build-time one, on the unstripped artifact. Detail: `tests/CLAUDE.md`, and `IMPROVEMENT_PLAN.md`.
 
 ⚠️ **Whichever path mounts p1 must be able to unmount it from its failure path.** This script carries a
 `BOOT_MOUNTED` variable read by `cleanup_and_exit`, ordered before `rw_umount_card` because

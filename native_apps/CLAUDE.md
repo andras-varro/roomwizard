@@ -383,7 +383,7 @@ per-unit and per-calibration.** What belongs here is what an app must do about t
   from `game_lives * 16` while drawing `min(game_lives, 5)` agrees at 3 lives and diverges the moment
   something grants more, which stranded five icons mid-HUD when Office Runner's training mode gave 10.
   Cap first, lay out from the capped number, and **say what the cap hid** — one icon plus `x10`, never
-  five icons meaning ten. `brick_breaker` still truncates silently at nine (`../IMPROVEMENT_PLAN.md` B30).
+  five icons meaning ten. `brick_breaker` still truncates silently at nine — an open bug, not the model.
 - **Put a status row in the band above the button row, not below it.** HUD text is only *seen*, so it
   belongs in `SCREEN_VISIBLE_TOP` — the band the two-rectangle split exists to keep usable. Stacking it
   under `SCREEN_SAFE_TOP` put tetris' `LVL` and frogger's lives icons **behind** the buttons, which are
@@ -520,7 +520,7 @@ welcome screen with `screen_draw_welcome_warn()` rather than shipping controls t
 
 **What you can and cannot test from a script.** `CONFIG_INPUT_UINPUT` is unset in this kernel, so
 `tests/touch_inject.c` reports success and delivers nothing — root `../CLAUDE.md` for the mechanism and
-what that leaves possible (`../IMPROVEMENT_PLAN.md` C6). But that is a limit on *the device*, not on the
+what that leaves possible. But that is a limit on *the device*, not on the
 code: `gamepad.c`'s own state machine is fully testable on the host, and `tests/gamepad_latch_test.c` does
 it. `gamepad_poll()` takes the touch coordinate as a plain argument and its evdev sources are `read(2)` on
 an fd — so a temp file of `struct input_event` assigned to `gm.gamepad_fd` drives the real

@@ -16,7 +16,7 @@
 # ── ⚠️ THREE mechanisms, THREE homes. Only one of them is p1 ────────────────
 #
 # This component used to look like one indivisible thing that "needs p1", which is
-# how ../IMPROVEMENT_PLAN.md F15 came to record all of USB as unshippable. It is
+# how the whole of USB came to be written off as unshippable. It is
 # three:
 #
 #   1. the /dev/mem patch of omap2430_ops.dma_init/.dma_exit + a MUSB rebind
@@ -148,7 +148,7 @@ if [[ -n "$DEVICE_IP" && "$NO_USB_POWER" -eq 0 ]]; then
 fi
 
 if [[ -n "$DEVICE_IP" ]]; then
-    # The shared gate (../lib/rw-ssh.sh, F16): it tells "down" from "up and
+    # The shared gate (../lib/rw-ssh.sh): it tells "down" from "up and
     # refusing us" and, on a terminal, offers to install a key.
     rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
     ok "SSH to $DEVICE"
@@ -210,7 +210,7 @@ echo ""
 # `$CC -static` with no strip, and the module build does not strip either — so a 2
 # means the build changed, not that this component ships stripped binaries the way
 # scummvm and vnc_client do. Keeping it fatal is what makes "usb_host contributes
-# zero TAKEN ON TRUST entries to a bundle" a checked property (F15, C9).
+# zero TAKEN ON TRUST entries to a bundle" a checked property.
 #
 # ⚠️ The status is read directly, NEVER through xargs: xargs collapses any exit of
 # 1–125 onto its own 123 and erases the difference between "a real hit" and "could
@@ -227,7 +227,7 @@ if [[ -x "$REPO_ROOT/native_apps/check-arm-safe.sh" || -f "$REPO_ROOT/native_app
      Every usb_host artifact is unstripped by construction, so this means the
      build changed. objdump reads Thumb-2 as ARM without a symbol table and
      invents sdiv/udiv, so there is no sound verdict to be had on a stripped
-     file (../IMPROVEMENT_PLAN.md C9). Do not deploy or bundle these." ;;
+     file. Do not deploy or bundle these." ;;
         *) err "an artifact would SIGILL on this device — refusing to deploy or bundle" ;;
     esac
 else
@@ -266,7 +266,7 @@ fi
 # ⚠️ The decisions are NOT here. The three device scripts, their modes and the two
 # rc5.d links are records in device-files/provision-rules.conf, read by this
 # script, by commissioning/provision.sh and by commission-offline.sh — so the three
-# paths cannot drift (../IMPROVEMENT_PLAN.md C12). The executor is the SAME
+# paths cannot drift. The executor is the SAME
 # generated interpreter provision.sh pipes to the device.
 #
 # What used to be here: three scp calls, three chmod +x, two `ln -sf` and an
@@ -342,7 +342,7 @@ else
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
     # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and no deploy path may reach
-    # it (../IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14). The
+    # it — measured failed on the panel 2026-08-14. The
     # library still knows the state so a unit that HAS it can be classified and
     # re-derived back down, but this is a deploy path: unset it rather than trust an
     # inherited environment. tests/rw_usbpower_test.sh group N asserts all three
@@ -371,7 +371,7 @@ echo ""
 #
 # ⚠️ If no device is plugged in RIGHT NOW, the port will be dead when you come
 # back to it — MUSB only powers the port when a device is present as the driver
-# probes (IMPROVEMENT_PLAN.md B32). Plug the device in, then run
+# probes. Plug the device in, then run
 # `/etc/init.d/usb-host recover`.
 ts "[7/8] Enabling host mode and loading the modules now"
 ssh "$DEVICE" "/etc/init.d/xpad-modules start" || warn "module load reported a failure"
@@ -395,7 +395,7 @@ VB=/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/vbus
 if [ -r "$VB" ]; then
     echo "  $(cat "$VB" 2>/dev/null)"
     echo "  'Vbus off' means nothing plugged in later will be seen — plug the"
-    echo "  device in and run /etc/init.d/usb-host recover.  B32."
+    echo "  device in and run /etc/init.d/usb-host recover."
 else
     echo "  unknown — MUSB not bound"
 fi

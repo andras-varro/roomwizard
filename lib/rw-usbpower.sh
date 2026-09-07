@@ -7,8 +7,6 @@
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-usbpower.sh"
 #                          (needs lib/rw-identify.sh for the offline mount half)
 #
-# IMPROVEMENT_PLAN.md F15.
-#
 # ── What this is for, and what it is NOT ────────────────────────────────────
 #
 # usb_host is three independent mechanisms and only ONE of them is here:
@@ -30,7 +28,8 @@
 #
 # ⚠️ Which has a consequence worth naming: this is the one step
 # tests/rw_provision_test.sh group E — "both executors' dry runs print the same
-# resolved set" — cannot compare. That comparison is what catches C12-style drift,
+# resolved set" — cannot compare. That comparison is what catches drift between
+# the two executors,
 # so the protection here is that BOTH callers run this ONE function and only the
 # transport differs. Never write a second copy of the sequence into a caller.
 #
@@ -53,7 +52,7 @@
 # ── Two patches, THREE reachable states, and why the names changed ──────────
 #
 # patch_dtb.py can set two properties of one node: `power` (100 -> 500 mA) and,
-# under --mode, `mode` (3 DUAL_ROLE -> 1 HOST, IMPROVEMENT_PLAN.md B32). So an
+# under --mode, `mode` (3 DUAL_ROLE -> 1 HOST). So an
 # image on p1 is one of:
 #
 #   vendor  edc637ac…   power 0x32, mode 0x03   as Steelcase shipped it
@@ -145,8 +144,8 @@ rw_usbpower_classify() {
 #
 # Echo which image the caller wants on p1: "power" (the default) or "both".
 #
-# ⚠️ The mode patch was applied to a unit and MEASURED NOT TO WORK — B32 checklist
-# item 10, closed failed on `.188` 2026-08-14: the patch was live in the booted
+# ⚠️ The mode patch was applied to a unit and MEASURED NOT TO WORK — tested on
+# `.188` 2026-08-14: the patch was live in the booted
 # kernel's own tree and a pad plugged in after an empty-socket boot still stayed
 # dark. So NO CALLER REACHES IT — there is no --usb-mode flag anywhere, and all
 # three callers `unset RW_USBPOWER_WITH_MODE` before driving the writer.

@@ -40,9 +40,9 @@
 # ── usb_host IS published, and only its p1 step is not ──────────────────────
 #
 # It was excluded outright until 2026-08-08, on the grounds that it "patches
-# uImage-system, which lives on p1".  That conflated three mechanisms
-# (IMPROVEMENT_PLAN.md F15): the /dev/mem MUSB patch and the xpad/joydev modules
-# are entirely on p6, and it is only the 500 mA power budget that touches p1.  So
+# uImage-system, which lives on p1".  That conflated three mechanisms: the
+# /dev/mem MUSB patch and the xpad/joydev modules are entirely on p6, and it is
+# only the 500 mA power budget that touches p1.  So
 # the four build artifacts are bundled like any others; the three device scripts
 # are device-files/provision-rules.conf's `usb` group; and the p1 patch is a
 # separate, opt-out-able step of the installer that no bundle carries.
@@ -90,7 +90,7 @@ err()  { echo -e "${RED}  ✗ $*${NC}" >&2; exit 1; }
 # Order matters only in that native_apps writes /opt/roomwizard/default-app and
 # the app_launcher every other component's tile is reached through.
 #
-# usb_host is here as of 2026-08-08 (IMPROVEMENT_PLAN.md F15). Its --bundle needs
+# usb_host is here as of 2026-08-08. Its --bundle needs
 # usb_host/device_config and usb_host/modules/*.ko, both gitignored build
 # artifacts; on a fresh clone it refuses with the one command that fetches the
 # config from any unit.
@@ -211,7 +211,7 @@ git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || GIT_DIRTY=" (dirty)"
     echo "components=$(rw_bundle_components "$OUT_ABS" | tr '\n' ' ')"
 } > "$OUT_ABS/manifest.d/bundle.info"
 
-# ── NOTICE: the two licence obligations F9 records ──────────────────────────
+# ── NOTICE: the two licence obligations a published bundle carries ──────────
 cat > "$OUT_ABS/NOTICE" <<'NOTICE'
 RoomWizard app bundle
 =====================
@@ -328,7 +328,7 @@ ok "No config files staged"
 # reason a bundle stays 5.2 MB smaller.  usb_host/.gitignore already calls
 # uImage-system* "Copyrighted device-specific files"; this repo is meant to be
 # published, so a component that decided to stage one anyway must not get past
-# here (IMPROVEMENT_PLAN.md F15).
+# here.
 #
 # Matched on the BASENAME, not on a path: p1 is not a bundle path at all, so a
 # staged copy would arrive at some invented location like /opt/roomwizard/ — the
@@ -340,7 +340,7 @@ if [[ -n "$FIRMWARE_HITS" ]]; then
     echo "$FIRMWARE_HITS" | sed 's/^/    /'
     err "a release must never publish the vendor kernel or boot chain — it is a third
      party's copyright, and the usb_host power patch is DERIVED from the device's
-     own copy for exactly this reason (IMPROVEMENT_PLAN.md F15)"
+     own copy for exactly this reason"
 fi
 ok "No vendor firmware staged"
 

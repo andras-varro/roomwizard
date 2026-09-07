@@ -3,7 +3,10 @@
 # commissioning/commission-offline.sh — put a RoomWizard card in a reader, answer two
 #                         questions, put it back, and the device BOOTS WORKING.
 #
-# IMPROVEMENT_PLAN.md F10, step 4.
+# This is the single-pass DELIVERY path: the whole commissioning job — card prep,
+# clean, provision, bundle install, p1 power budget, verification — done offline from
+# a card in a reader, with no reachable device, no network and no ARM toolchain. Why
+# the phases are not merged into one script for the online path: COMMISSIONING.md.
 #
 # Usage:
 #   sudo ./commissioning/commission-offline.sh --bundle <file.tar.gz|dir> [options]
@@ -47,7 +50,7 @@
 # no lease list and PHASE 2 CAN NEVER REACH IT (SYSTEM_ANALYSIS.md#35-network-and-power). Stock
 # cards ship that way. Editing the card is the only bootstrap for such a unit.
 #
-# And it REMOVES D7b instead of patching it: the boot-time network regenerator's
+# And it REMOVES the boot-time network regenerator instead of patching around it: its
 # input (/home/root/data/websign) is deleted in the same pass that sets the name,
 # so no boot happens in between and nothing overwrites /etc/hostname.
 #
@@ -131,7 +134,7 @@ TMPROOT=""
 # ⚠️ Separate from MOUNTED_BASE: p1 is mounted by a different function, at
 # $MOUNTED_BASE/boot, and it must come down before the rmdir below can succeed.
 # An aborted run that leaks a p1 mount is the one failure this variable exists to
-# prevent (IMPROVEMENT_PLAN.md F15).
+# prevent.
 BOOT_MOUNTED=""
 
 cleanup_and_exit() {
@@ -496,7 +499,7 @@ else
     # ⚠️ Exit 2 is NOT a failure and must not be treated as one. It means some of
     # the bundle's binaries are stripped, and the gate refuses to invent a verdict
     # for those — objdump reads Thumb-2 as ARM without a symbol table and reports
-    # divides that are not in the file (IMPROVEMENT_PLAN.md C9). scummvm and
+    # divides that are not in the file. scummvm and
     # vnc_client both ship stripped, so every full bundle takes this path; treating
     # 2 as fatal refused all of them, and --arm-check=skip could not override it
     # because that flag lives in the objdump-absent branch above.
@@ -531,7 +534,7 @@ else
         echo -e "${YELLOW}  ║  sdiv/udiv, it will SIGILL when tapped — blank screen, no log.${NC}"
         echo -e "${YELLOW}  ║  A bundle from this repo's release.sh was gated at BUILD time, on${NC}"
         echo -e "${YELLOW}  ║  the unstripped artifact, which is the only sound moment. A bundle${NC}"
-        echo -e "${YELLOW}  ║  from anywhere else is taken on trust here. (IMPROVEMENT_PLAN C9)${NC}"
+        echo -e "${YELLOW}  ║  from anywhere else is taken on trust here.${NC}"
         echo -e "${YELLOW}  ╚════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         ARM_VERIFIED="${ARM_OK:-?} verified, ${ARM_UNV:-?} stripped and TAKEN ON TRUST"
@@ -652,7 +655,7 @@ put() {
 #
 # ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
 # device-files/provision-rules.conf with a reason per entry, read by BOTH this
-# script and commissioning/provision.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+# script and commissioning/provision.sh, so the two cannot drift.
 # They HAD drifted: the online path removed stale rc*.d links before relinking and
 # this one did not, so a card carrying an old S50roomwizard-app came out of offline
 # commissioning with two links to one init script at two priorities.
@@ -752,7 +755,7 @@ else
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
     # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and NO commissioning path may
-    # reach it (IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14).
+    # reach it.
     # The library still knows the state, so a unit that HAS it classifies correctly
     # and can be re-derived back down — but this is the DELIVERY path and it must be
     # deterministic, so unset it rather than inherit it from an environment nobody
@@ -909,7 +912,7 @@ fi
 # under dash — `[[` is read as a command name — so it passes here and fails at
 # boot with "[[: not found". Measured while writing
 # tests/commission_offline_test.sh case 2e. Catching that needs shellcheck, which
-# is not installed in this WSL (IMPROVEMENT_PLAN.md C7).
+# IS installed in this WSL (0.7.0, re-measured 2026-09-06) but is not run here.
 SHCHECK="dash"
 command -v dash >/dev/null 2>&1 || SHCHECK="sh"
 SHCOUNT=0
@@ -941,7 +944,7 @@ LINK_NAMES="S28, S29, S99"
 # ⚠️ The usb group's two links are asserted too, but only when the group ran.
 # --no-usb leaves them uninstalled on purpose, so an unconditional list would
 # report a failure for a deliberate omission; and leaving them out entirely was a
-# real gap (IMPROVEMENT_PLAN.md F15) — a dangling rc5.d link is skipped in SILENCE
+# real gap — a dangling rc5.d link is skipped in SILENCE
 # at boot, which is the exact class of defect this check exists for, and these two
 # are the only boot links this project installs that were never covered.
 case " $NO_PROV_GROUPS " in
@@ -966,7 +969,7 @@ if [[ "$DO_CLEAN" -eq 1 ]]; then
     elif [[ -e "$BASE/root/etc/rcS.d/S60networkmanager" ]]; then
         vfail "/etc/rcS.d/S60networkmanager survives — the vendor dhclient-script will rewrite /etc/hosts on every lease"
     else
-        ok "D7b closed: websign and S60networkmanager are both gone"
+        ok "regenerator removed: websign and S60networkmanager are both gone"
     fi
     hn=$(head -1 "$BASE/root/etc/hostname" 2>/dev/null | tr -d ' \t\r\n')
     dh=$(sed -n 's/^send host-name "\(.*\)";.*/\1/p' "$BASE/root/etc/dhclient.conf" 2>/dev/null | head -1)
@@ -1044,10 +1047,11 @@ echo "    4. sound: Device Tools -> Audio, or Tap-a-Theremin"
 echo "    5. touch: Device Tools -> Display -> CALIBRATE TOUCH — the one step"
 echo "       that still needs the panel, because it is per-unit."
 echo ""
-# USB host mode is three independent mechanisms and only one of them is p1
-# (IMPROVEMENT_PLAN.md F15). This block used to say a bundle could never deliver
-# any of it; the true statement was only ever about the power budget, and now even
-# that is delivered here.
+# USB host mode is three independent mechanisms and only ONE of them touches p1: the
+# 500 mA device-tree `power` value inside uImage-system. The /dev/mem omap2430_ops
+# patch and the xpad/joydev/ff-memless modules are entirely on p6, so a bundle can
+# deliver those two outright — and since lib/rw-usbpower.sh runs here too, the power
+# budget as well.
 case " $NO_PROV_GROUPS " in
     *" usb "*)
         echo "  USB HOST MODE was skipped (--no-usb): no /etc/init.d/usb-host, no"

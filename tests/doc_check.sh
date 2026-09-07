@@ -39,15 +39,19 @@
 # `--self-test` fixture, and anywhere a *doc* has to describe one of these shapes it
 # writes `<placeholder>` brackets, which no scan here can match.
 #
-# ── Why group B is "resolves to nothing" and not "cites an ID at all" ──────────
-# An ID beside a comment is allowed as a *bonus*; what is forbidden is a comment that
-# DEPENDS on one, because closed items are deleted outright from IMPROVEMENT_PLAN.md and
-# `git log --grep` does not rescue the ID either (B3k and B13c return zero commits). So the
-# rule this gate enforces is the checkable half: every ID still written down must resolve.
-# The unenforceable half — the comment stands on its own without the ID — is a review rule.
+# ── Why group B is "cites an ID at all" and not "resolves to nothing" ──────────
+# IMPROVEMENT_PLAN.md is a work QUEUE: an entry is executed and then DELETED outright, and
+# `git log --grep` does not rescue the ID either (B3k and B13c return zero commits). So a
+# citation is a reference with a scheduled expiry date, and the reason it was carrying dies
+# with the entry. The rule is therefore absolute — no file but IMPROVEMENT_PLAN.md may cite a
+# plan ID, resolving or not. A comment states its own reason; naming the file is still fine.
 #
-# This makes the gate self-maintaining in the direction that matters: deleting a closed item
-# from IMPROVEMENT_PLAN.md fails this check until every citation of it has been rewritten.
+# ⚠️ This inverts the earlier rule, which required every cited ID to RESOLVE. That version was
+# self-defeating: it made deleting a closed entry fail until its citations were rewritten, so
+# the cheapest way to stay green was to keep dead entries alive. The gate was holding the queue
+# open. Counting citations instead means a deletion can never break this group.
+#
+# This file is exempt, and has to be: it documents the shapes it searches for.
 #
 # ⚠️ The bare form is why the qualified scan alone was not enough. Measured 2026-08-15: with
 # every qualified dangling citation fixed and the gate reporting a clean zero, 41 bare ones
@@ -295,15 +299,15 @@ group_b() {
 
     while IFS= read -r hit; do
         local id="${hit##*:}"
-        grep -qx "$id" "$ids_file" && continue
-        dangling=$((dangling + 1))
+        grep -qx "$id" "$ids_file" || dangling=$((dangling + 1))
         [ -n "$quiet" ] || printf '  %s\n' "$hit"
     done < "$hits_file"
 
     rm -f "$ids_file" "$hits_file"
-    [ -n "$quiet" ] || printf 'group B: %d citations, %d resolve to nothing\n' "$total" "$dangling"
-    echo "$dangling" > "$RESULT"
-    [ "$dangling" -eq 0 ]
+    [ -n "$quiet" ] || printf 'group B: %d plan-ID citations outside %s, %d of them already resolving to nothing\n' \
+        "$total" "$PLAN_FILE" "$dangling"
+    echo "$total" > "$RESULT"
+    [ "$total" -eq 0 ]
 }
 
 # ── group C: extraction receipts ──────────────────────────────────────────────
@@ -835,17 +839,18 @@ EOF
     local p="$PLAN_FILE"
     cat > "$t/sub/probe.c" <<EOF
 /* $p B99 — fabricated, must be caught. */
-/* $p C99 — defined, must not be caught. */
+/* $p C99 — defined, must be caught TOO: the rule is now "no citation at all". */
 /* $p#c99-a-defined-item--open — an anchor, not a citation. */
 /* (../$p F1, D98). */
 /* a bare dangling tag (B97), and a bare defined one (C99). */
 /* prose form: see D96.  And a register name, B0, which must NOT be caught. */
 EOF
     seen="$(group_b "$t" quiet; cat "$RESULT")"
-    if [ "$seen" = "4" ]; then
-        echo "self-test: PASS — 4 dangling (B99, D98, B97, D96); C99, F1, the anchor and the bare B0 ignored"
+    if [ "$seen" = "7" ]; then
+        echo "self-test: PASS — group B caught 7 citations (B99, C99, F1, D98 qualified; B97, C99, D96 bare)," \
+             "including the ones that RESOLVE; the anchor and the bare register name B0 ignored"
     else
-        echo "self-test: FAIL — expected 4 dangling, scanner reported $seen"
+        echo "self-test: FAIL — expected 7 citations, scanner reported $seen"
         rc=1
     fi
 
@@ -987,7 +992,7 @@ case "${1:-}" in
         echo "Markdown anchors that resolve to no heading:"
         group_a "$REPO" || fail_total=$((fail_total + 1))
         echo
-        echo "Plan-ID citations outside $PLAN_FILE that resolve to no heading:"
+        echo "Plan-ID citations outside $PLAN_FILE (the plan is a queue; none may exist):"
         group_b "$REPO" || fail_total=$((fail_total + 1))
         echo
         echo "Extraction receipts — each fact must be at its destination and gone from the source:"

@@ -7,7 +7,7 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && ./tests/rw_provision_test.sh"
 #
-# IMPROVEMENT_PLAN.md C12. The delete half's suite is tests/rw_clean_test.sh, and the
+# The delete half's suite is tests/rw_clean_test.sh, and the
 # two share rw_clean_offline_path — path mapping is tested there, not here.
 #
 # ── What each group of cases is for ────────────────────────────────────────
@@ -27,7 +27,7 @@
 #      outside the base is touched.
 #   E  ⚠️ THE case this file exists for — both executors' --dry-run over the same
 #      inputs print the same resolved set. It is the only check that catches the
-#      drift C12 documents, and the online executor is exercised through the same
+#      drift between them, and the online executor is exercised through the same
 #      interpreter the SSH path pipes to the device, not a re-implementation.
 #
 # ── Modes cannot be verified here ──────────────────────────────────────────
@@ -447,7 +447,7 @@ assert_eq "$CANARY_MD5" "$(cd "$CANARY" && find . -type f | LC_ALL=C sort | xarg
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "E. ⚠️ both executors' dry runs print the same resolved set"
-echo "   (the only check that catches the drift C12 documents)"
+echo "   (the only check that catches drift between the two executors)"
 # ═══════════════════════════════════════════════════════════════════════════
 
 build_card
@@ -491,13 +491,13 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "F. the online path's copy step — B28"
+echo "F. the online path's copy step — the one-of-eight install defect"
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # ⚠️ Group E cannot reach this, and the gap is structural rather than an oversight.
 # E compares two --dry-run PLANS; a dry run copies nothing, so the scp step is
 # precisely the part of the online path that has no offline counterpart to be
-# compared against. That is how B28 shipped past 94 passing cases:
+# compared against. That is how the defect shipped past 94 passing cases:
 # commissioning/provision.sh installed 1 of its 8 files, because `ssh` inside
 # `while read … done < "$PLAN"` reads its own stdin and forwarded the whole rest of
 # the plan to the remote `mkdir`.
@@ -513,7 +513,7 @@ echo "F. the online path's copy step — B28"
 
 FW="$TMP/push"; mkdir -p "$FW/bin" "$FW/dev"
 
-# ⚠️ The stub ssh MUST slurp its stdin. That is the behaviour that caused B28, so a
+# ⚠️ The stub ssh MUST slurp its stdin. That is the behaviour that caused the defect, so a
 # stub that skips it cannot fail the way production failed and every case below
 # becomes a vacuous pass. F1 is the check that this one can.
 cat > "$FW/bin/ssh" <<'STUB'
@@ -549,7 +549,7 @@ else
     bad "F0 the shipped plan has $NINST install record(s) — expected >= 8, this group is vacuous below that"
 fi
 
-# ── F1: the harness can reproduce B28 ────────────────────────────────────────
+# ── F1: the harness can reproduce the defect ─────────────────────────────────
 reset_stubs
 (
     PATH="$FW/bin:$PATH"; D=root@fake
@@ -628,7 +628,7 @@ fi
 
 # ── F13-F14: the summary line accounts for every action ──────────────────────
 #
-# B28's header read "35 action(s) — 8 install, 9 link, 10 unlink", which accounts
+# The old summary read "35 action(s) — 8 install, 9 link, 10 unlink", which accounts
 # for 27. backup, touch, the four directives and the two droplines were simply not
 # in the breakdown — the kind of arithmetic that hides a verb nobody is executing.
 SUM=$(rw_provision_plan_summary "$PPLAN")

@@ -44,7 +44,8 @@
 # encoding indistinguishable from compiler output.  And do not silently skip a
 # stripped binary either — that is the same bug from the false-negative side.
 # The sound check is at BUILD time, on the unstripped artifact, which is where all
-# three component build scripts call it from.  Detail: IMPROVEMENT_PLAN.md C9.
+# three component build scripts call it from.  The two ways to get a wrong answer
+# out of this gate: ../SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide
 #
 # Exit 0 = safe to deploy.  Exit 1 = do not deploy.  Exit 2 = something could not
 # be judged; the last line always carries the three counts as ARM-SUMMARY.
@@ -135,7 +136,7 @@ if [ "$unverified" -gt 0 ]; then
     echo    "    reads ordinary Thumb code as ARM words and invents sdiv/udiv that are"
     echo    "    not in the file, so a verdict here would be wrong in both directions"
     echo    "    and none is given. The sound check is at BUILD time, on the unstripped"
-    echo    "    artifact (IMPROVEMENT_PLAN.md C9)."
+    echo    "    artifact, which is where the build scripts call this gate from."
 fi
 
 if [ "$bad" -gt 0 ]; then

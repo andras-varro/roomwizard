@@ -457,8 +457,7 @@ manifest, never from the transfer — see [`CLAUDE.md`](CLAUDE.md) → *Bundles*
 ### USB host mode: two thirds of it travels in the bundle, and the rest is p1
 
 ⚠️ **This section used to say a bundle could never deliver USB host mode. That was wrong**, and it was
-wrong because it conflated three independent mechanisms — only **one** of which touches p1
-([`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) F15):
+wrong because it conflated three independent mechanisms — only **one** of which touches p1:
 
 | Mechanism | Delivers | Lives on | Delivered by |
 |---|---|---|---|

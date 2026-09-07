@@ -6,7 +6,8 @@
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-clean.sh"
 #                          (needs lib/rw-identify.sh sourced first)
 #
-# IMPROVEMENT_PLAN.md F10, step 3.
+# The offline cleanup step of single-pass commissioning —
+# commissioning/commission-offline.sh is the caller that needs it.
 #
 # ── The decisions are not in this file ──────────────────────────────────────
 #

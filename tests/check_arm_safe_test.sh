@@ -1,8 +1,8 @@
 #!/bin/bash
-# Regression for native_apps/check-arm-safe.sh — the SIGILL gate (IMPROVEMENT_PLAN.md C9).
+# Regression for native_apps/check-arm-safe.sh — the SIGILL gate.
 #
 # Host-only: no device, no card, no root. Needs the ARM cross toolchain, which is
-# measured present in this WSL (IMPROVEMENT_PLAN.md F11). A missing toolchain is a
+# measured present in this WSL. A missing toolchain is a
 # REFUSAL, not a pass — a gate test that skips itself reports "0 failed" and is
 # indistinguishable from a suite that cannot detect the breakage.
 #
@@ -128,7 +128,7 @@ expect_match 'would SIGILL' "1e ...naming the SIGILL risk"
 expect_match '(sdiv|udiv)' "1f ...and printing the instruction"
 
 # ── 2. the unsound case: no symbol table ──────────────────────────────────
-# This is C9. objdump reads Thumb-2 as ARM and manufactures a divide out of
+# objdump reads Thumb-2 as ARM and manufactures a divide out of
 # ordinary code, so the verdict is worthless in BOTH directions.
 echo ""
 echo "2. without a symbol table the gate must not pretend to a verdict"

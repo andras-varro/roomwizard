@@ -12,8 +12,8 @@
 #
 # --bundle stages the same artifacts this script would scp, under
 # <dir>/root/<device-path>, with a declared-mode manifest — the layout
-# ../release.sh publishes and ../commissioning/commission-offline.sh installs from
-# (../IMPROVEMENT_PLAN.md F9, F10).  It always builds first: this component's
+# ../release.sh publishes and ../commissioning/commission-offline.sh installs
+# from.  It always builds first: this component's
 # 35 targets take well under a minute, so there is no reason for a
 # stage-what-is-already-there mode and therefore no way to bundle a stale
 # binary.  (ScummVM, whose link is ~2 minutes, does have one.)
@@ -33,8 +33,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # The .app manifests are data in one file, written locally, and copied by BOTH
 # the deploy path and --bundle.  They used to be nine heredocs inside an
 # `ssh … <<REMOTE` block, so they existed only when a device was reachable and
-# the offline installer had no way to produce the same bytes
-# (../IMPROVEMENT_PLAN.md F10).
+# ../commissioning/commission-offline.sh had no way to produce the same bytes.
 # shellcheck source=app-manifests.sh
 . "$SCRIPT_DIR/app-manifests.sh"
 # shellcheck source=sound-sets.sh
@@ -625,8 +624,8 @@ ok "Permissions and markers set"
 # ── verify what landed ──────────────────────────────────────────────────────
 # 19 executables were copied and made runnable with nothing checking that the
 # bytes on the device are the bytes that were built.  A truncated scp, a full
-# filesystem, or a surviving process still holding an old inode (the B20/B25
-# failure mode) all look like a successful deploy otherwise.
+# filesystem, or a surviving process still holding an old inode all look like a
+# successful deploy otherwise.
 info "Verifying deployed binaries (md5)..."
 LOCAL_SUMS="$(
     for remote in "${DEPLOYED_EXECUTABLES[@]}"; do
@@ -649,9 +648,9 @@ fi
 #
 # The manifests were WRITTEN to build/apps/ during the build, from
 # app-manifests.sh's data, and are copied here.  They used to be nine
-# `cat > … << APP` heredocs inside this ssh block, which meant the offline
-# installer could not produce the same bytes without a second copy of them
-# (../IMPROVEMENT_PLAN.md F10).
+# `cat > … << APP` heredocs inside this ssh block, which meant
+# ../commissioning/commission-offline.sh could not produce the same bytes
+# without a second copy of them.
 info "Installing app manifests..."
 ssh "$DEVICE" "mkdir -p /opt/roomwizard/apps"
 scp build/apps/*.app "$DEVICE:/opt/roomwizard/apps/"

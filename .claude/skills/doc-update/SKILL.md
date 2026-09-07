@@ -84,8 +84,11 @@ Forbidden shapes, each of which has cost real time here:
 - **No hedge promoted to a confirmation.** *"I think it works"* is reported as a hedge; *"latent, not
   reproducible from this host"* is the honest form. In `SYSTEM_ANALYSIS.md`, tag it: `[inferred]`,
   `[unverified]`, `[n=1]` — the legend is that file's §1.
-- **No plan ID as the payload.** An ID is not a durable reference; 20 cited from shipped source resolve
-  to nothing. A comment carries its own reason, with an ID beside it at most as a bonus.
+- ⚠️ **Never write a plan entry ID into any file but `IMPROVEMENT_PLAN.md`.** The plan is a queue: an
+  entry is executed and then deleted, so a citation of one has a scheduled expiry built in and the reason
+  it was carrying dies with the entry. Naming the **file** is fine; naming an **ID** is not. A comment
+  therefore states its own reason in full, and no ID sits beside it. `tests/doc_check.sh` group B is the
+  gate, and it counts any citation outside the plan, resolving or not.
 - ⚠️ **Never write a real-looking plan ID or anchor when *describing* these shapes.** Write `<ID>` and
   `#<fragment>`, and bracket the **far** side of any delimiter — group A's path component matches the
   empty string, so a bracketed filename in front of a bare `#` is still a hit. This has fired eleven
@@ -107,10 +110,15 @@ file and the reader cannot tell which is current. The old sentence goes.
 
 **This is the step that actually keeps the size down, and it is the one that gets skipped.**
 
-- **A closed item is deleted outright** from `IMPROVEMENT_PLAN.md` — no closed-work ledger. ⚠️ **Grep
-  the BARE form of its ID as well as the qualified one first**: a bare citation of a live ID resolves, so
-  it is invisible until the heading goes away, and then the gate jumps. Deleting two entries once took
-  group B 41 → 53.
+- **A closed item is deleted outright** from `IMPROVEMENT_PLAN.md` — no closed-work ledger. ⚠️ **Re-home
+  the reason it carried FIRST**, as a self-contained statement in the destination document that needs no
+  ID to be read; then delete the entry. Nothing outside the plan cites an ID, so there is no citation to
+  repair and a deletion can never move group B — a gate demanding that citations resolve would instead
+  make keeping dead entries alive the cheapest way to stay green.
+- ⚠️ **The ID namespace collides with the shell suites' own case labels** — `rw_provision_test.sh`,
+  `rw_ssh_test.sh` and the sabotage harnesses all label cases in exactly the plan's shape. Those are
+  working pointers, not citations: **disambiguate the sentence** ("that suite's cases B6/C3a/C5a") rather
+  than deleting one.
 - **A fact that moves needs a group C receipt row in `tests/doc_check.sh`, written BEFORE the deletion** —
   that is what proves the destination already holds it. Pick the token with `grep -cF` across the repo
   **first**: it must be unique to the block being moved, not merely distinctive. Seven part numbers and
@@ -130,13 +138,13 @@ bash -n tests/doc_check.sh                     # if you touched it
 
 ⚠️ **`grep -c $'\r'` reports every line of every file** — the pattern degrades to empty. Use the `awk`.
 
-Expect all four groups green before committing. What each result means:
+Expect all five groups green before committing. What each result means:
 
 - **A goes UP when you do this right** — a pointer is an anchor, so replacing a duplicated block with a
   pointer *adds* to that count. It can also stay flat while you change things: re-labelling a link moves
   the count as much as adding one.
-- **B should not move** unless you deleted or cited an item. It is at zero **by measurement, not by
-  gate** — three blind shapes, listed in `tests/CLAUDE.md`. Re-run the two scans from
+- **B moves only if you wrote a citation, never because you deleted an entry.** It is at zero **by
+  measurement, not by gate** — three blind shapes, listed in `tests/CLAUDE.md`. Re-run the two scans from
   `~/.claude/plans/peaceful-herding-valiant.md` → Phase 2b on any file you rewrapped.
 - **C moves by exactly the rows you added.**
 - **D over ceiling means the addition was not paid for.** Two answers, and only two: delete as much as

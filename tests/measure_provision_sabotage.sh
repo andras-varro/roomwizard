@@ -31,7 +31,7 @@
 #
 # ── What each sabotage is ───────────────────────────────────────────────────
 #
-#   1  the plan read on stdin, not fd 3      B28 ITSELF. The first ssh consumes the
+#   1  the plan read on stdin, not fd 3      THE DEFECT ITSELF. The first ssh consumes the
 #                                            rest of the plan and one file is copied
 #   2  the missing-source check deleted      an install whose device-files/ source
 #                                            was renamed silently copies nothing and
@@ -39,12 +39,12 @@
 #   3  the mkdir -p dropped                  /etc/sysctl.d, /opt/roomwizard and
 #                                            /usr/local/bin do not exist on a vendor
 #                                            unit, so scp fails on three of eight
-#   4  the summary truncated to three types  B28's own header: "35 action(s) — 8
+#   4  the summary truncated to three types  the defect's own header: "35 action(s) — 8
 #                                            install, 9 link, 10 unlink" accounted
 #                                            for 27, hiding four verbs
 #   5  the suite's stub ssh stops reading     a control on the HARNESS, not the lib:
 #      its stdin                              if the stub is unfaithful, F1 cannot
-#                                             reproduce B28 and all of F is vacuous
+#                                             reproduce the defect and all of F is vacuous
 #
 # ── Measured 2026-08-09, ~2 min for the whole run ────────────────────────────
 #
@@ -54,7 +54,7 @@
 #   baseline                                    109 passed,  0 failed
 #   1 the plan on stdin, not fd 3               102 passed,  7 failed
 #       F2 F3 F4 F5 F7 F8 F12 — 1 of 8 copied, so the function's own got-vs-want
-#                     guard returns 1 (F2) and every downstream count is short
+#                     guard returns 1, as F2 asserts, and every downstream count is short
 #   2 the missing-source refusal deleted        108 passed,  1 failed
 #       F10         — ⚠️ ONE case, and not the obvious one. "It returned non-zero"
 #                     still passes, because scp fails on a missing source anyway;
@@ -159,7 +159,7 @@ measure() {
     fi
 }
 
-# ── 1. the plan back on stdin — B28 itself ──────────────────────────────────
+# ── 1. the plan back on stdin — the defect itself ───────────────────────────
 echo ""
 echo "  1. the plan read on stdin instead of fd 3"
 stage
@@ -191,7 +191,7 @@ measure "3 no mkdir -p" "$STAGED" 'true # mkdir dropped' 3 "$(run_suite)"
 
 # ── 4. the summary truncated to three types ─────────────────────────────────
 echo ""
-echo "  4. the plan summary truncated to install/link/unlink (B28's own header)"
+echo "  4. the plan summary truncated to install/link/unlink (the defect's own header)"
 stage
 sed -i 's|split("unlink install backup link link-opt touch directive dropline", o, " ")|split("unlink install link", o, " ")|' "$STAGED"
 sed -i '/if (!(k in seen)) out = out/d' "$STAGED"
@@ -201,7 +201,7 @@ measure "4 truncated summary" "$STAGED" 'split\("unlink install link"' 1 "$(run_
 echo ""
 echo "  5. control — the suite's stub ssh stops reading its stdin"
 #
-# If the stub is unfaithful, F1 stops reproducing B28 and the whole group becomes a
+# If the stub is unfaithful, F1 stops reproducing the defect and the whole group becomes a
 # vacuous pass. So F1 must FAIL here, and it is the only one that may.
 stage
 SAB_SUITE="$REPO/tests/.sab-provision-suite.sh"

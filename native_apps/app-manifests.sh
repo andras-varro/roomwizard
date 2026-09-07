@@ -9,8 +9,9 @@
 # The nine manifests used to be nine `cat > … << APP` heredocs inside an
 # `ssh "$DEVICE" bash <<'REMOTE'` block in build-and-deploy.sh, i.e. they only
 # existed as a side effect of having a reachable device.  The offline installer
-# (../IMPROVEMENT_PLAN.md F10) has no device and must write byte-identical
-# manifests, so a second copy of that heredoc was the obvious move and the wrong
+# (../commissioning/commission-offline.sh) has no device and must write
+# byte-identical manifests, so a second copy of that heredoc was the obvious
+# move and the wrong
 # one: `exec=` paths and `args=` values would drift between the two, and a
 # manifest whose `exec=` names a binary that is not there renders a launcher tile
 # that does nothing when tapped.

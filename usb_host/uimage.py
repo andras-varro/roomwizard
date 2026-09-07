@@ -43,7 +43,7 @@ DTB_OFFSET_HINT = 0x004EB788
 POWER_VENDOR = 0x32   # 50  -> 100 mA, the value Steelcase shipped
 POWER_WANTED = 0xFA   # 250 -> 500 mA, which is also the kernel's own default
 
-# MUSB's port mode, musb_core.h:82-84.  IMPROVEMENT_PLAN.md B32: the vendor
+# MUSB's port mode, musb_core.h:82-84.  The vendor
 # declares DUAL_ROLE on a kernel with no gadget support compiled in, which buys
 # nothing and costs the SESSION bit.
 MODE_HOST = 1
@@ -280,6 +280,6 @@ def find_mode_offset(data, hint=DTB_OFFSET_HINT):
     3 on a kernel built `# CONFIG_USB_GADGET is not set` with musb_gadget.c not
     compiled, so dual-role buys nothing this kernel can use and costs the
     SESSION bit in musb_start() (musb_core.c:1074-1080) plus the host claim in
-    musb_host_setup() (musb_host.c:2789-2793).  IMPROVEMENT_PLAN.md B32.
+    musb_host_setup() (musb_host.c:2789-2793).
     """
     return find_prop_offset(data, b"mode", hint=hint)

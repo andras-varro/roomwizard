@@ -5,7 +5,7 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && bash tests/measure_usbpower_sabotage.sh"
 #
-# IMPROVEMENT_PLAN.md F15. Host-only: no device, no card, no root. Needs python3,
+# Host-only: no device, no card, no root. Needs python3,
 # so WSL rather than Git Bash.
 #
 # ── Why this file exists ────────────────────────────────────────────────────
@@ -37,7 +37,7 @@
 # exactly that bug, re-emitting the assignment its sabotage removed.
 #
 # There is no pre-fix-tree case here, unlike measure_arm_gate_sabotage.sh and
-# measure_ssh_sabotage.sh: lib/rw-usbpower.sh and the three tools are new in F15,
+# measure_ssh_sabotage.sh: lib/rw-usbpower.sh and the three tools are new files,
 # so there is no earlier revision of them to restore. Every case below is a sed.
 #
 # ── What each sabotage is, and why it is the one worth writing ───────────────
@@ -73,7 +73,7 @@
 # the failure mode a bare count cannot show.
 #
 # Measured 2026-08-08, 13 s for the whole run; re-measured 2026-08-14 after the
-# two-state md5 gate became three (B32), which moved two counts and added two
+# two-state md5 gate became three, which moved two counts and added two
 # sabotages. The 2026-08-14 counts are in the second column:
 #
 #   baseline                                     94 passed,  0 failed   (155/0)
@@ -107,8 +107,8 @@
 #                     produces a unit that does not boot at all.
 #   6 the two-state gate restored                       (2026-08-14)   (9 failed)
 #       M4 M5 M6    — a card already carrying the 500 mA image is reported as done,
-#                     so the mode patch writes NOTHING and exits 0. THE defect B32
-#                     warned about, and group M's reason to exist
+#                     so the mode patch writes NOTHING and exits 0. THE two-state
+#                     defect, and group M's reason to exist
 #       M8 M9 M11   — and the same early return swallows the refusals a power-only
 #                     card with no usable backup must produce
 #       M22 M23 M26 — the dry run stops reporting the transition, and the ssh
@@ -291,7 +291,7 @@ measure "classify: unknown md5 reported as vendor" "lib/rw-usbpower.sh" \
 #
 # ⚠️ The replacement must name the variable the library actually compares against.
 # It used to be $RW_UIMAGE_PATCHED_MD5; when the two-state gate became three
-# (B32) that became $target, and a sabotage assigning an UNSET variable assigns
+# that became $target, and a sabotage assigning an UNSET variable assigns
 # the empty string — step 9 then correctly detects a mismatch and rolls back, so
 # the suite passes and the sabotage reports "not caught" for the wrong reason.
 stage_tree || exit 1
@@ -325,7 +325,7 @@ fi
 #
 # Every line it prints is unchanged; only the exit status lies. That is the shape
 # that matters, because steps 5, 7 and 9 all read the status and none reads the
-# prose — and CLAUDE.md's C9 note records the same class of bug reaching the tree
+# prose — and tests/CLAUDE.md records the same class of bug reaching the tree
 # once already, a status collapsed by xargs.
 stage_tree || exit 1
 sed -i 's|^    sys\.exit(main(sys\.argv))$|    main(sys.argv); sys.exit(0)  # SABOTAGE: always clean|' \
@@ -352,7 +352,7 @@ measure "uimage_fix_crcs: the CRC order swapped" "usb_host/uimage.py" \
 
 # ── 6. the two-state gate restored: any patched image means "nothing to do" ──
 #
-# ⚠️ THE defect B32 warned about, reproduced exactly. The old gate knew two md5s
+# ⚠️ THE two-state defect, reproduced exactly. The old gate knew two md5s
 # and returned 0 at its `patched` arm before anything else ran, so a unit already
 # carrying the 500 mA image — which is every unit commissioned so far, .188
 # included — would be asked for the mode patch, write NOTHING, and report success.

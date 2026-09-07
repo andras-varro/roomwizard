@@ -405,7 +405,7 @@ rw_is_host_root_disk() {
 #
 # Partial failure unwinds. A caller that got three of four mounts and proceeded
 # would clean three trees and silently leave the fourth — which for p2 means
-# leaving websign/ in place, i.e. the exact D7b defect this whole flow exists to
+# leaving websign/ in place, i.e. the exact defect this whole flow exists to
 # remove.
 # ---------------------------------------------------------------------------
 rw_mount_card() {
@@ -505,7 +505,7 @@ rw_check_card_mounts() {
 # uImage-system, 0x32 -> 0xfa, i.e. 100 mA -> 500 mA. omap2430.c:452 reads it at
 # driver probe, before any init script exists, and the device tree is appended to
 # the kernel inside that file — so there is no file on the normal filesystem to
-# edit and no boot script that could do it (IMPROVEMENT_PLAN.md F15).
+# edit and no boot script that could do it.
 #
 # The reach is therefore three deliberately-named functions rather than a table
 # entry, used by exactly ONE caller (lib/rw-usbpower.sh). That is greppable —

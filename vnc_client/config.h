@@ -132,7 +132,8 @@ typedef enum {
  * keyboard that enumerated as /dev/input/event17 worked under the native apps
  * and ScummVM but was invisible here.  It bounds the scan loop only and sizes
  * no array, so raising it costs nothing but 16 more failed open() calls per
- * rescan.  The real fix is one shared scanner — ../IMPROVEMENT_PLAN.md C1. */
+ * rescan.  The real fix is ONE shared evdev scanner instead of the three that
+ * exist (common/gamepad.c, ScummVM's own, this one). */
 #define MAX_INPUT_DEVICES       32
 #define DEVICE_SCAN_INTERVAL_MS 5000
 

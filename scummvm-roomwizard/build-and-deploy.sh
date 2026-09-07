@@ -13,7 +13,8 @@
 # Commands: clean, configure, build, strip, deploy, set-default, all, info
 #
 # --bundle stages this component's artifacts under <dir>/root/<device-path> with
-# a declared-mode manifest (../IMPROVEMENT_PLAN.md F9, F10).  This link takes
+# a declared-mode manifest — the layout ../release.sh publishes and
+# ../commissioning/commission-offline.sh installs from.  This link takes
 # ~1m35s–2m20s, so RW_BUNDLE_NO_BUILD=1 stages the binary already in
 # $SCUMMVM_DIR instead of relinking — it refuses if there is nothing there, so it
 # cannot silently bundle a component that was never built.  It CAN bundle a stale
@@ -672,7 +673,7 @@ fi' || log_warning "stop reported a failure - a surviving process may hold the b
         scp "$SCRIPT_DIR/scummvm.ppm" "$DEVICE:/opt/roomwizard/icons/scummvm.ppm"
     fi
     # Written locally by the one generator, then copied — the same file --bundle
-    # stages (../IMPROVEMENT_PLAN.md F10).
+    # stages, so an offline install writes byte-identical bytes with no device.
     local MANIFEST_DIR
     MANIFEST_DIR=$(mktemp -d)
     write_app_manifest "$MANIFEST_DIR"
@@ -693,7 +694,8 @@ fi' || log_warning "stop reported a failure - a surviving process may hold the b
 # ── the .app manifest, written once ─────────────────────────────────────────
 # One heredoc, into a file, used by BOTH deploy_to_device and stage_bundle.  It
 # used to live inside `ssh "$DEVICE" bash <<REMOTE`, so it existed only when a
-# device was reachable (../IMPROVEMENT_PLAN.md F10).
+# device was reachable and ../commissioning/commission-offline.sh could not
+# produce the same bytes.
 #
 # args=none: ScummVM opens /dev/fb0 and the evdev devices itself — it has its own
 # input and audio layer, not native_apps/common (../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
@@ -708,9 +710,9 @@ APP
 
 # ── stage this component into an offline bundle ─────────────────────────────
 # Everything deploy_to_device scps, plus the .noargs marker it touches on the
-# device.  Nothing here is config, so F9's "binaries only, never configs" caveat
-# is satisfied by construction — ScummVM's own scummvm.ini is created on first run
-# by the device.
+# device.  Nothing here is config, so the release rule — publish binaries only,
+# never device config — is satisfied by construction: ScummVM's own scummvm.ini
+# is created on first run by the device.
 #
 # ⚠️ ScummVM is GPL-3.0-or-later (scummvm/COPYING, and LICENSE.md agrees).  Publishing
 # this binary carries a corresponding-source obligation; release.sh writes the offer

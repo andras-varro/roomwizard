@@ -63,8 +63,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Each library is the parser and the plan compiler. The executors differ — "/" is
 # the correct prefix on a device and a refused one offline, and on this path the
 # work happens on the far side of an ssh pipe — but there is one implementation of
-# each, and rw_provision_online_script is the one this script ships to the device
-# (IMPROVEMENT_PLAN.md C12).
+# each, and rw_provision_online_script is the one this script ships to the device.
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
 # shellcheck source=../lib/rw-clean.sh
@@ -437,8 +436,8 @@ ask_consent() {
 #
 # ⚠️ The decisions are NOT here. Every keep and every delete lives in
 # device-files/clean-rules.conf with a reason per entry, read by this script and
-# by commissioning/commission-offline.sh so the live and offline cleans cannot drift
-# (IMPROVEMENT_PLAN.md F10). lib/rw-clean.sh compiles that file into a plan; what
+# by commissioning/commission-offline.sh so the live and offline cleans cannot drift.
+# lib/rw-clean.sh compiles that file into a plan; what
 # follows is only this script's EXECUTOR, and it is separate from the offline one
 # because "/" is the correct prefix on a device and a refused one offline.
 #
@@ -649,7 +648,7 @@ REMOTE
 # pulls the image over scp, patches it on the host and pushes it back. Never write a
 # second copy of that sequence into a caller: it is the one step
 # tests/rw_provision_test.sh group E cannot compare between the two executors, so a
-# duplicate would drift undetected (IMPROVEMENT_PLAN.md F15, C12).
+# duplicate would drift undetected.
 #
 # Why this cannot be an ordinary provision-rules.conf record, when the rest of USB
 # host mode is: the value lives in the device tree appended INSIDE uImage-system on
@@ -681,7 +680,7 @@ run_usbpower() {
     # shellcheck source=../lib/rw-usbpower.sh
     . "$REPO_ROOT/lib/rw-usbpower.sh"
     # ⚠️ The `mode` 3 -> 1 patch is REFUTED on hardware and NO commissioning path may
-    # reach it (IMPROVEMENT_PLAN.md B32, panel item 10, closed failed 2026-08-14).
+    # reach it.
     # The library still knows the state, so a unit that HAS it classifies correctly
     # and can be re-derived back down — but a delivery path must be deterministic,
     # so unset it rather than inherit it from an environment nobody read.
@@ -726,8 +725,8 @@ echo "════════════════════════�
 info "Testing SSH connection to $DEVICE_IP..."
 # One gate, in lib/rw-ssh.sh: it tells "down" from "up and refusing us" and, on a
 # terminal, offers to generate a key and ssh-copy-id it. This is FIRST contact for
-# anyone who did not prep the card, so the old `check IP and SSH key` — advice about
-# a key nothing offered to make — was the whole of F16.
+# anyone who did not prep the card, so a bare `check IP and SSH key` — advice about
+# a key nothing offered to make — is not enough here.
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
@@ -828,7 +827,7 @@ echo "════════════════════════�
 
 # ⚠️ The decisions are NOT here. Every file, link, mode and config edit lives in
 # device-files/provision-rules.conf with a reason per entry, read by this script AND
-# by commissioning/commission-offline.sh, so the two cannot drift (IMPROVEMENT_PLAN.md C12).
+# by commissioning/commission-offline.sh, so the two cannot drift.
 #
 # What used to be here: five scp calls, an `ssh <<'REMOTE'` block of ln -sf, a second
 # one for avahi, a four-command sed block over sshd_config, and a third for the

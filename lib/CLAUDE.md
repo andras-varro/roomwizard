@@ -99,7 +99,7 @@ stage experimental kernels under a *new* filename.
 
 `uImage-system` has **exactly one** legitimate writer — this file, for the USB 500 mA budget — and it
 is md5-gated on the way in, backed up to `uImage-system.vendor` (whose md5 is verified *before* the
-original is touched), verified by re-reading the card afterwards, and rolled back on failure.
+original is touched) and verified by re-reading the card afterwards. There is no rollback on failure.
 
 - ⚠️ **Never write a second copy of that sequence into a caller.** It is the one step
   `tests/rw_provision_test.sh` group E cannot compare between executors, so a duplicate would drift
@@ -120,10 +120,10 @@ original is touched), verified by re-reading the card afterwards, and rolled bac
   the only run there is. A power-only card with no usable backup is **refused**.
 - ⚠️ **Three callers now drive that one writer, and two of them do it by default**:
   `usb_host/build-and-deploy.sh`, `commissioning/provision.sh` (step 5) and
-  `commissioning/commission-offline.sh` (phase 6). So **a power cycle is no longer a free undo on a
-  default-commissioned unit** — `uImage-system.vendor` on p1 is the in-place remedy and a card pull the
-  fallback. That is a taken decision (`IMPROVEMENT_PLAN.md` F15); do not relitigate it, and do not
-  re-raise card access as a risk.
+  `commissioning/commission-offline.sh` (phase 6). So **a power cycle is no longer a free undo**, and
+  the remedy is a card reflash from the image commissioning takes — which is why it takes one.
+  `uImage-system.vendor` is the writer's pristine source for re-deriving, **not** a rollback path. A
+  taken decision: do not relitigate it, and do not re-raise card access as a risk.
 - ⚠️ **Whichever caller mounts p1 must be able to unmount it from its failure path** —
   `commission-offline.sh` carries a `BOOT_MOUNTED` variable read by `cleanup_and_exit`, ordered before
   `rw_umount_card` because `rmdir "$MOUNTED_BASE"` fails while `boot/` is still there.
@@ -179,8 +179,8 @@ because `/` is the correct prefix on a device and a refused one offline.
 
 ## Bundles: one layout, declared modes, no configs
 
-`release.sh` exists so that putting apps on a device does not require reproducing the toolchain
-(`IMPROVEMENT_PLAN.md` F9). It calls `build-and-deploy.sh --bundle <dir>` on all four components. The
+`release.sh` exists so that putting apps on a device does not require reproducing the toolchain.
+It calls `build-and-deploy.sh --bundle <dir>` on all four components. The
 layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
 `<dir>/manifest.d/<component>.{list,md5}`.
 

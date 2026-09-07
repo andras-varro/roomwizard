@@ -126,7 +126,9 @@ legacy uImage at offset `0x4eb788` (67,004 bytes). We binary-patch it in place:
 The patch is:
 
 - **Persistent** — survives reboots (written to the boot partition)
-- **Reversible** — a backup (`uImage-system.vendor`) is created before patching
+- **Not reversible in place** — `uImage-system.vendor` is kept beside it as the writer's pristine input
+  for re-deriving a patch, not as an undo; recovery from a bad write is re-flashing the card from the
+  image commissioning takes
 - **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
 
 ⚠️ **A second p1 patch — the `mode` 3 → 1 one — was tried and MEASURED NOT TO WORK, and it is no longer
@@ -135,7 +137,7 @@ from 3 (`DUAL_ROLE`) to 1 (`HOST`), the candidate *cause* fix for "nothing enume
 plugged in at boot". Applied to `.188`'s p1, verified live in the booted device tree, unit booted
 normally — and a pad plugged in after a boot with an empty socket still stayed dark, while
 `/etc/init.d/usb-host recover` on the same firmware brought it up on the first attempt.
-`../IMPROVEMENT_PLAN.md` B32 panel item 10, closed **failed**.
+That candidate is therefore closed **failed**.
 
 There is therefore **no `--usb-mode` flag**, and all three callers `unset RW_USBPOWER_WITH_MODE` before
 driving the writer (group N of `../tests/rw_usbpower_test.sh` is the negative control). What was **kept**
@@ -460,7 +462,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | `../device-files/enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
 | `../device-files/usb-host` | Device | SysV init.d wrapper for USB host boot persistence |
 | `../device-files/xpad-modules` | Device | SysV init.d script for loading controller modules at boot |
-| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify, rollback |
+| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify — no rollback |
 
 The three device scripts live in [`device-files/`](../device-files/) rather than here, and are named as
 they are *deployed*, because three paths now install the same bytes — `commissioning/provision.sh`,
@@ -491,8 +493,8 @@ the move.
 ⚠️ **p1 is not a bundle path and `uImage-system` is never shipped.** It is a 5.2 MB Steelcase binary and
 this repo is published, so the patch is *derived* from the device's own copy by
 [`lib/rw-usbpower.sh`](../lib/rw-usbpower.sh) — md5-gated on the way in, backed up beside itself as
-`uImage-system.vendor`, verified by re-reading the card, rolled back on failure. `release.sh` refuses to
-publish any manifest entry whose basename matches `uImage*`.
+`uImage-system.vendor`, verified by re-reading the card. There is no rollback on failure.
+`release.sh` refuses to publish any manifest entry whose basename matches `uImage*`.
 
 ---
 
@@ -510,9 +512,9 @@ publish any manifest entry whose basename matches `uImage*`.
 | Module build fails | Missing build deps | `sudo apt-get install bc libssl-dev bison flex` |
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
 | **Worked at boot, dead after a replug** | On `.188` a 95 s unplug/replug **works** — VBUS stays up and the disconnect is not processed until the device returns. The `.225` 60 s failure has no confirmed counterpart on current hardware | If it does happen: plug the device in, then `/etc/init.d/usb-host recover` (a driver re-probe). ⚠️ **`echo host > .../mode` is a silent no-op on this SoC** — `omap2430_ops` has no `.set_mode`. Detail `../SYSTEM_ANALYSIS.md#36-usb` |
-| **Nothing enumerates unless it was plugged in at boot** | **A standing property of this hardware, not an open bug** (settled 2026-08-14). MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off. Three mechanisms read out of the driver source have each been applied and **refuted on hardware** | **Device Tools → USB → RESCAN** — one tap, ~5 s, dead port → playable pad, verified on a panel. Over SSH it is `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` B32 |
+| **Nothing enumerates unless it was plugged in at boot** | **A standing property of this hardware, not an open bug** (settled 2026-08-14). MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off. Three mechanisms read out of the driver source have each been applied and **refuted on hardware** | **Device Tools → USB → RESCAN** — one tap, ~5 s, dead port → playable pad, verified on a panel. Over SSH it is `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` |
 | "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
-| Device won't boot after DTB patch | Corrupt uImage CRCs | Restore backup: mount p1, `cp uImage-system.vendor uImage-system` |
+| Device won't boot after DTB patch | Corrupt uImage CRCs | Pull the card and re-flash it from the backup image commissioning takes; there is no in-place restore |
 
 ---
 
@@ -555,7 +557,7 @@ OMAP IP left in forced standby has its interface clock gated, and a register acc
 raises an **external abort** rather than reading zero. The IP has to be held resumed first (via the
 driver's `power/control`, or by keeping a session-capable consumer bound) before `devmem_write` touches
 that address. ⚠️ **Reaching a session is also not the same as fixing the cause** — three mechanisms read
-out of this driver have been applied and refuted on hardware; see `../IMPROVEMENT_PLAN.md` B32 for what
+out of this driver have been applied and refuted on hardware; see `../IMPROVEMENT_PLAN.md` for what
 a fourth candidate has to explain first.
 
 ---

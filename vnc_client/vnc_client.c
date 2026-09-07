@@ -416,7 +416,7 @@ static void vnc_client_destroy(rfbClient **client) {
  * keepalive armed the socket eventually errors, WaitForMessage() returns < 0,
  * and the existing "VNC connection lost" branch runs the reconnect UI.
  *
- * Deliberately NOT the other half of what IMPROVEMENT_PLAN suggested — see the
+ * Deliberately NOT the other half of the change originally proposed — see the
  * B11/B12 entry.  "Break after N seconds with no server message" would
  * disconnect *healthy* sessions: steady-state requests are incremental, so a
  * static remote desktop correctly sends nothing for minutes, which is exactly

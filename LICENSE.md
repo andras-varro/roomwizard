@@ -11,8 +11,7 @@ appear below. That is the whole reason for the choice.
 **What is not here, deliberately.** No Steelcase firmware and no device configuration. `uImage-system` is
 a 5.2 MB vendor binary and is never copied, never committed and never published — the USB 500 mA patch is
 *derived* on the spot from the copy already on the device, gated on its md5. `release.sh` refuses to
-publish either class of file rather than trusting each component to remember
-([`IMPROVEMENT_PLAN.md` F15](IMPROVEMENT_PLAN.md)).
+publish either class of file rather than trusting each component to remember.
 
 ---
 
@@ -146,8 +145,8 @@ image cannot ship: not as a release asset, not as a tarball, not as a bundle fil
 enforced rather than merely intended — `usb_host/build-and-deploy.sh` stages the `usb` group *without* it
 and says why, and `.gitignore` keeps whole-card dumps and their extracted partition trees out of the repo.
 The consequence for anyone meeting an unrecognised firmware release is that the patch has to be **derived
-on the operator's own card**, which is what `IMPROVEMENT_PLAN.md` F23 is about; publishing a prebuilt one
-is not an available shortcut.
+on the operator's own card** — the p1 gate knows one firmware release and refuses every other, and
+publishing a prebuilt one is not an available shortcut.
 
 ---
 

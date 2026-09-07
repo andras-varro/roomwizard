@@ -39,13 +39,13 @@ every code path — do not add a shortcut that skips it.
 **Warning baseline: two, both pre-existing** (recorded 2026-08-03) — `oss-mixer.cpp:298`
 unused-result, and a `getaddrinfo` static-link note from timidity. `roomwizard.o` itself is clean, and
 `native_apps/` is at zero, so treat any *third* warning as yours. The `oss-mixer.cpp` one is a real
-defect and is listed under F1 in [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md).
+defect and is open work in [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md).
 
 **The `check-arm-safe.sh` gate runs from inside `strip_binary()`, ahead of the in-place `strip`** —
 that is the only moment an unstripped ScummVM binary exists, and the gate is meaningless on a stripped
 one. Never move it after the strip, and never allowlist offsets: `base/version.o` re-embeds the build
 date on every link, so every address after it moves between builds of identical source. Why a stripped
-binary cannot be gated, with the byte-level measurement: `../IMPROVEMENT_PLAN.md` C9.
+binary cannot be gated, with the byte-level measurement: `../IMPROVEMENT_PLAN.md`.
 
 **`clean` is the only clean path — do not add a second one.** A root-level `clean.sh` used to exist
 and was deleted 2026-08-03: it was this tree's clean script with no
@@ -242,8 +242,8 @@ summarised in [`../CLAUDE.md`](../CLAUDE.md).
 
 Note that O9 ("DSS hardware scaler — not viable") was **wrong**; the OMAP3 DSS exposes three
 overlay planes with an independent-input/output-size hardware scaler at
-`/sys/devices/platform/omapdss/`, usable from sysfs with no kernel work. See
-`../IMPROVEMENT_PLAN.md` F2 — ScummVM is the prime candidate.
+`/sys/devices/platform/omapdss/`, usable from sysfs with no kernel work. It is open work in
+`../IMPROVEMENT_PLAN.md` — ScummVM is the prime candidate.
 
 ## Leaving a game, and why `quit()` keeps its `exit(0)`
 

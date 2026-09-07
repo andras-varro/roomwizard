@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# lib/rw-bundle.sh — the bundle layout that F9 publishes and F10 installs.
+# lib/rw-bundle.sh — the bundle layout that release.sh stages and publishes and
+#                    that commissioning/commission-offline.sh installs.
 #
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-bundle.sh"
 #
@@ -39,7 +40,7 @@
 #
 # ── Why md5 is a separate file from .list ────────────────────────────────────
 #
-# F9's caveat: base/version.o re-embeds the build date on every link, so releases
+# The caveat: base/version.o re-embeds the build date on every link, so releases
 # are not byte-reproducible and the md5 list must be GENERATED per release rather
 # than asserted against a known-good set.  Keeping it out of .list means the
 # declared modes — which ARE stable — can be diffed between releases without the
@@ -190,8 +191,8 @@ EOF
 # rw_bundle_install_ssh TARGET DIR
 #
 # Install a staged bundle onto a running device over SSH.  The SSH twin of
-# commissioning/commission-offline.sh's install loop, and the capability IMPROVEMENT_PLAN.md C12
-# and F9 both record as missing.
+# commissioning/commission-offline.sh's install loop, for a device that is already
+# up and reachable.
 #
 # ── Why this has to exist ───────────────────────────────────────────────────
 #

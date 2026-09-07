@@ -15,7 +15,7 @@
 # genuinely different connection models, and the cleanup in Phase 2 touches paths
 # spread across FOUR partitions that only a booted kernel assembles into one tree,
 # while commissioning locates just p6. commissioning/commission-offline.sh is what does mount
-# all four and map every absolute path onto them (IMPROVEMENT_PLAN.md F10); the
+# all four and map every absolute path onto them; the
 # SSH phases stay as the verified development loop. There are three further
 # reasons in COMMISSIONING.md ("why these are separate").
 #

@@ -34,7 +34,7 @@
 # native_apps/check-arm-safe.sh carries that reasoning and SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide
 # the two ways to get a wrong answer out of the gate. What IS controlled is both
 # ways the gate can lie by omission: a bundle with zero ARM binaries (2g) and a
-# host with no arm objdump (2j, 2k), which is the failure F10 warns about by name.
+# host with no arm objdump (2j, 2k), where the gate must REFUSE rather than pass.
 
 set -u
 
@@ -177,7 +177,7 @@ else
     printf '%s\n' "$OUT" | tail -20 | sed 's/^/        /'
 fi
 for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh' \
-            'boot links resolve' 'D7b closed'; do
+            'boot links resolve' 'regenerator removed'; do
     if printf '%s\n' "$OUT" | grep -qE "$want"; then
         ok "1b every verify check ran: /$want/"
     else
@@ -186,7 +186,7 @@ for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh
 done
 # The usb group is ON by default, so its two links must be among the ones checked.
 # Named explicitly because the generic 'boot links resolve' above still matches when
-# they are silently left out — which is how the gap survived (IMPROVEMENT_PLAN.md F15).
+# they are silently left out — which is how the gap survived.
 if printf '%s\n' "$OUT" | grep -qE 'boot links resolve .*S89.*S90'; then
     ok "1c the default run checks the usb group's boot links too (S89, S90)"
 else
@@ -255,7 +255,7 @@ expect_fires "default-app is '/opt/roomwizard/not_a_launcher'" \
 # dash reads `[[` as a command name — so it passes the check and then fails at
 # boot with "[[: not found". Measured while writing this case, which is why the
 # sabotage below is a real syntax error instead. Catching bashisms needs
-# shellcheck, which is not installed in this WSL (IMPROVEMENT_PLAN.md C7).
+# shellcheck (0.7.0, installed here), which this suite does not invoke.
 R="$TMP/repo-parse"; cp -a "$REPO" "$R"
 printf 'if [ -n "$server" ]; then\n  echo unterminated\n' >> "$R/device-files/time-sync"
 run "$BUNDLE" "$R"
@@ -279,7 +279,7 @@ printf '%s  /opt/roomwizard/apps/x.app\n' \
 run "$B" "$REPO"
 expect_fires 'no ELF binaries' "2g a bundle with no ARM binaries is refused, not silently passed"
 
-# ── the ARM gate when the toolchain is absent. THE case F10 spells out: it must
+# ── the ARM gate when the toolchain is absent. THE case that matters most: it must
 # say so loudly rather than report a pass over zero artifacts. Simulated through
 # the OBJDUMP override, because uninstalling binutils to test this is absurd.
 set +e
@@ -310,7 +310,7 @@ rm -f "$B/root/opt/games/snake"
 run "$B" "$REPO"
 expect_fires 'not self-consistent' "2h a manifest entry with no staged file is refused"
 
-# ── --no-clean must SAY that it leaves D7b open rather than quietly doing so.
+# ── --no-clean must SAY what it leaves behind rather than quietly doing so.
 run "$BUNDLE" "$REPO" --no-clean
 if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'websign in place'; then
     ok "2i --no-clean warns that the host name will be overwritten on boot"

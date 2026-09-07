@@ -3,7 +3,7 @@
 # tests/rw_usbpower_test.sh — regression for lib/rw-usbpower.sh and the three
 #                             device-tree tools it drives.
 #
-# IMPROVEMENT_PLAN.md F15. Host-only: no device, no card, no root. Needs python3.
+# Host-only: no device, no card, no root. Needs python3.
 #
 # ── What is under test, and what a fixture can and cannot be ────────────────
 #
@@ -429,7 +429,7 @@ echo "J. both transports, one sequence — the group-E comparison this file owes
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # tests/rw_provision_test.sh group E compares the offline and online executors over
-# one plan, and it is the check that catches C12-style drift. The p1 step is the one
+# one plan, and it is the check that catches drift between them. The p1 step is the one
 # thing it cannot cover, because it is not a provision rule. So it is covered here:
 # the same sequence over RWUP_XPORT=local and RWUP_XPORT=ssh must reach the same end
 # state, byte for byte.
@@ -517,11 +517,11 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "L. the mode property — locating it, and patching it (B32)"
+echo "L. the mode property — locating it, and patching it"
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # `mode = <3>` is MUSB_PORT_MODE_DUAL_ROLE on a kernel built with no gadget
-# support, which costs the SESSION bit; B32 wants <1> (MUSB_PORT_MODE_HOST).
+# support, which costs the SESSION bit; host mode wants <1> (MUSB_PORT_MODE_HOST).
 #
 # ⚠️ These cases exist because the obvious implementation is wrong in a way that
 # still produces an answer. Measured on `.188`'s live blob 2026-08-14: dtc emits
@@ -610,7 +610,7 @@ set -e
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "M. the mode patch through the SEQUENCE — the four-state gate (B32)"
+echo "M. the mode patch through the SEQUENCE — the four-state gate"
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # Group L drives patch_dtb.py --mode directly. This group drives rw_usbpower_apply,
@@ -668,14 +668,14 @@ says "$m_out" 'already|nothing to do' "M14 ...saying there was nothing to do"
 eq "$(md5of "$W/m2/$RW_UIMAGE_NAME")" "$m_before" "M15 ...and did not rewrite it"
 
 # ── the undo: a both-patched card asked for power re-derives DOWNWARD ──
-# The remedy if panel item 10 fails, and the reason the transition is expressed as
+# The remedy if the mode patch fails, and the reason the transition is expressed as
 # "derive the wanted image from the backup" rather than "apply a patch".
 m_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/m2" "$(fresh_work)" 2>&1); m_rc=$?
 rc_is "$m_rc" 0 "M16 a both-patched card asked for power succeeds"
 eq "$(md5of "$W/m2/$RW_UIMAGE_NAME")" "$RW_UIMAGE_POWER_MD5" "M17 ...and is the power-only image again"
 
 # ── the opt-in guarantee, at the sequence level ──
-# ⚠️ B32 item 10 is unverified on hardware, so a default run must never produce a
+# ⚠️ The mode patch is unverified on hardware, so a default run must never produce a
 # mode-patched card. L11 asserts this of the tool; this asserts it of the writer.
 fresh_boot "$W/m5"
 m_out=$(RWUP_XPORT=local rw_usbpower_apply "$W/m5" "$(fresh_work)" 2>&1); m_rc=$?
@@ -712,7 +712,7 @@ echo "N. no deploy or commissioning path can reach the REFUTED mode patch"
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # The `mode` 3 -> 1 patch was applied to .188 on 2026-08-14 and measured NOT to
-# work (B32 panel item 10, closed failed): the port stayed dead after a boot with an
+# work: the port stayed dead after a boot with an
 # empty socket, while `usb-host recover` on the same firmware and pad brought it up
 # on the first attempt. The LIBRARY keeps the state — a unit that has the patch must
 # classify as `both` rather than be refused as `unknown`, and re-derive back down —

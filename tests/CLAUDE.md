@@ -32,9 +32,9 @@ these anchors are human pointers in comments, not links, and writing `../` into 
 checker is worse than the check), and a fragment of 3 or 6 hex digits is skipped as a CSS colour
 (`browser_games/README.md` documents its palette that way).
 
-**Group B** — no file outside `IMPROVEMENT_PLAN.md` cites a plan ID that resolves to no heading there.
-Closed items are deleted outright from that file, so this is what makes deleting one *fail* until every
-citation has been rewritten.
+**Group B** — no file outside `IMPROVEMENT_PLAN.md` may cite a plan ID **at all**, resolving or not. The
+plan is a queue whose entries are deleted once done, so every citation of one is a dangling reference
+waiting to happen. `doc_check.sh` is exempt: it documents the shapes it searches for.
 
 **Group C — extraction receipts, and it checks a MOVE rather than a copy.** Each row is a distinctive
 token, the file that must now hold it, and the file it must have *left* (`-` for "no source to leave").
@@ -84,37 +84,38 @@ comes from the `--self-test` fixture, a throwaway tree that cannot be mistaken f
 general form of this: a gate that documents the pattern it searches for will match its own
 documentation, so **ask which part of the count is the harness before believing the count**.
 
-⚠️ **Two scan shapes, and the second was found only after the first reached zero.** The qualified form
-(`IMPROVEMENT_PLAN.md <ID>`) went 83 → 0; the bare form (`(<ID>)`, `see <ID>`, and `IMPROVEMENT_PLAN <ID>`
-with no `.md`) was then measured at 41. A clean zero is evidence about what the gate looks at, not
-about the repo — so when you add a scan, ask what shape of the same defect it cannot see.
+⚠️ **Two scans, and a clean zero from either is evidence about what that pass looks at, not about the
+repo.** The qualified form is `IMPROVEMENT_PLAN.md <ID>` with the `.md` optional; the bare form is
+`see <ID>` and the parenthesised one. Both are per-line `awk`. When you add a scan, ask what it cannot see.
 
-⚠️ **Group B has three blind shapes, measured 2026-08-16, and 14 dangling citations were living in
-them** while both scans reported zero. All 14 were fixed by hand, so **the tree is at zero by
-measurement, not by gate** — the gate will not catch the next one:
+⚠️ **Group B has three blind shapes, and citations have lived in all three while both scans reported
+zero.** Those were fixed by hand, so **the tree is at zero by measurement, not by gate:**
 
 | blind shape | why |
 |---|---|
 | an ID **list** inside one marker | the bare scan consumes the delimiter and has no continuation loop; the qualified scan does have one |
-| a qualified citation **wrapped onto the next line** | both scans are per-line `awk`, so a line ending in the filename and an ID starting the next matches neither |
+| a citation **wrapped onto the next line** | both scans are per-line `awk`, so a line ending in the filename and an ID starting the next matches neither |
 | plan vocabulary beside a bare ID — *the `<ID>` fix*, *Closes `<ID>`*, *`<ID>`'s window* | the marker set is `(`, `see`, `is`, `was` and their trailing space, deliberately so |
 
-⚠️ **Do not answer this with a whole-tree ID-token census** — the plan-ID namespace **collides with these
-suites' own case labels**, and `rw_clean_test.sh` alone contributes ~70 of them, so "every ID-shaped token
-with no heading" returns 581 hits that cannot be triaged. Anchor on **vocabulary** instead: the three
-shapes above gave 11 findings and **zero** false positives. Recipe:
-`~/.claude/plans/peaceful-herding-valiant.md` → Phase 2b.
+⚠️ **The other direction is a permanent false POSITIVE: the ID namespace collides with function-key names
+and with these suites' own case labels.** `F1`–`F12` are keys, and the shell suites label cases in exactly
+the plan's shape, so a parenthesised `F5` in a keybinding table is a group B hit with nothing wrong behind
+it. **Disambiguate the sentence** — "that suite's cases B6/C3a/C5a" reads as a case label to a human and to
+the scan alike — never delete a working pointer, and never exclude the file.
+
+⚠️ **Do not answer this with a whole-tree ID-token census** — that collision means "every ID-shaped token
+with no heading" returns 581 hits that cannot be triaged, `rw_clean_test.sh` alone contributing ~70.
+Anchor on **vocabulary** instead: the three shapes above gave 11 findings and **zero** false positives.
+Recipe: `~/.claude/plans/peaceful-herding-valiant.md` → Phase 2b.
 
 ⚠️ **And the throwaway scanner that measured this became the TENTH self-count** — it sat at the repo
 root, its header named a case label in parentheses to explain the collision, and group B counted it:
 **PASS → FAIL (1)** on a tree whose real residue was zero. A one-off scanner belongs outside the scanned
 tree, or its documentation does.
 
-⚠️ **Before deleting an entry from `IMPROVEMENT_PLAN.md`, grep the BARE form of its ID too.** A bare
-citation of a *still-live* ID resolves, so it is invisible until the heading goes away — and then the gate
-jumps. Measured 2026-08-15: cutting two closed entries took group B **41 → 53**, all twelve of them bare
-citations that the qualified pass had no reason to touch. The gate does catch it, which is the point; but it
-catches it *after* the deletion, so grep first or plan on the repair.
+⚠️ **Deleting an entry can never move this group, and that is why it counts citations rather than
+resolution.** A gate demanding every cited ID resolve makes closing an entry fail until its citations are
+rewritten, so the cheapest way to stay green is to keep dead entries alive: the gate holds the queue open.
 
 ⚠️ **Write `<ID>`, not a real-looking one, whenever you describe these shapes in prose.** `doc_check.sh`
 skips its own source, but it does **not** skip this file — so a parenthesised example spelled with a
@@ -264,5 +265,5 @@ incrementally, so an edit shifts the byte offset under the running copy and it d
 `doc_check.sh`, in two concurrent runs, after `bash -n` had already passed and passed again afterwards. The
 group results printed before the corruption are still valid measurements; the exit status is not.
 
-`shellcheck` is not installed in this WSL (`IMPROVEMENT_PLAN.md` C7). `bash -n` is what you have, plus
-`dash -n` on anything carrying a `/bin/sh` shebang.
+`shellcheck` 0.7.0 **is** installed in this WSL — re-measured 2026-09-06 — so it is a third check here,
+alongside `bash -n` and `dash -n` on anything carrying a `/bin/sh` shebang.

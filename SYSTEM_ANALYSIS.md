@@ -248,7 +248,7 @@ Each overlay exposes `input_size`, `output_size`, `position`, `zorder`, `global_
 `alpha_blending_enabled`. **Because input and output sizes are independent, the DSS performs
 arbitrary hardware scaling** — on a GPU-less 600 MHz part this is the only graphics acceleration
 available, and nothing in the project uses it. (`omap_vout: failed to allocate DMA Channel for
-video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md` F2.
+video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md`.
 
 `fb1` is the second framebuffer (`CONFIG_FB_OMAP2_NUM_FBS=2`, see above), and `/dev/video0`
 (`omap_vout`) is the V4L2 *output* path, which accepts **YUV with hardware colour-space conversion**.
@@ -515,12 +515,12 @@ confirmed working on two or more units; no second panel has been *swept* and rec
 on-chip gesture recognition** — the vendor factory-test binary `opt/pv02/pv02_app` reads
 `Num_Touch` plus two coordinate pairs and exercises pinch-zoom, two-finger pan and multi-touch
 click. Reaching it means bypassing the driver on `/dev/i2c-2`. Userspace-only, no kernel work.
-Proposal: `IMPROVEMENT_PLAN.md` F6.
+Proposal: `IMPROVEMENT_PLAN.md`.
 
 **Pressure is declared but untested.** `ABS_PRESSURE` appears in the device's capabilities
 (`capabilities/abs = 1000003` → bits 0, 1, 24) and is discarded by `touch_input.c`. **[unverified]**
 whether the value actually varies — `native_apps/hardware_test/pressure_test.c` is the unfinished probe,
-and `IMPROVEMENT_PLAN.md` F6 carries it as the cheap first step.
+and `IMPROVEMENT_PLAN.md` carries it as the cheap first step.
 
 **As shipped.** The stock stack used `xinput_calibrator` and `/etc/pointercal.xinput`. Both belong
 to the removed X11 stack and are **not** used by anything current.
@@ -930,7 +930,7 @@ boot by `/etc/init.d/usb-host` (S90).
 > Bluetooth dongle (tens of KB/s) and starts to matter for uncompressed USB audio (~190 KB/s).
 > ⚠️ `CONFIG_DMADEVICES=y` and `CONFIG_TI_EDMA=y` *are* set and are a **red herring** — that is the
 > **system** EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses.
-> Whether DMA is reachable at all is [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
+> Whether DMA is reachable at all is open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
 
 **Hack 2 — three cross-compiled kernel modules for Xbox controllers.** `CONFIG_INPUT_JOYSTICK`,
 `CONFIG_INPUT_JOYDEV` and `CONFIG_INPUT_FF_MEMLESS` are all unset, and the Xbox 360 pad
@@ -1016,14 +1016,13 @@ Hack 2 — and its dependencies are satisfiable: `CONFIG_NET`, `CONFIG_CRC16`, `
 controller is far more likely to work than the audio** — A2DP needs software SBC encoding on this single
 core. Also unbuilt
 and worth knowing: `CONFIG_SND=y` and `CONFIG_SND_USB=y` but `# CONFIG_SND_USB_AUDIO is not set`, so a
-wired USB DAC is one module away too. Both are
-[`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08).
+wired USB DAC is one module away too. Both are open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
 ⚠️ **A babble error leaves a `printk` loop that survives unplugging and ends in a hardware reset ~46 min
 later, and it invalidates any measurement taken during it** — mechanism, log evidence and the one-command
-check in [`IMPROVEMENT_PLAN.md` B33](IMPROVEMENT_PLAN.md#b33-a-usb-babble-error-leaves-a-printk-loop-that-hard-resets-the-device--open-measured-2026-08-17).
+check in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
 Touchpad-plus-keyboard combos create two event nodes.
 
 **Verified working:**
@@ -1103,8 +1102,7 @@ and with the socket empty at boot a pad plugged in afterwards still stayed dark 
 control. **The common thread is that none of the three explains how a port that probed with an empty
 socket ever obtains a session** — VBUS and the ID pin are both inert at that point. Require an answer to
 that question of any further candidate before spending a reboot on it. Candidates and what each
-measurement closed:
-[`IMPROVEMENT_PLAN.md` B32](IMPROVEMENT_PLAN.md#b32-usb-is-enumerated-only-at-driver-probe--cause-established-2026-08-13-no-automatic-fix).
+measurement closed: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
 
 **Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the running
 kernel holds it, and `/sys/firmware/fdt` the raw blob, parseable by `usb_host/uimage.py`'s walk.
@@ -1392,7 +1390,7 @@ that has not been re-provisioned is running whatever it was given.
 **Confirmed absent:**
 
 - ❌ **WiFi / Bluetooth** — no radio of any kind fitted. A USB Bluetooth dongle is the only route, and
-  `CONFIG_BT` is unset ([§3.6](#36-usb), [`IMPROVEMENT_PLAN.md` F17](IMPROVEMENT_PLAN.md#f17-bluetooth-peripherals-and-whether-usb-dma-is-reachable--open-measured-2026-08-08)).
+  `CONFIG_BT` is unset ([§3.6](#36-usb), [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md)).
 - ❌ **Ambient light sensor** — and none is possible. The teardown found no sensor part **and no
   aperture, window or light pipe anywhere in the enclosure**: the case is light-tight. The vendor
   factory test does have a light-sensor step (`functionaltest.sh` → `pv02_app 5`, on `/dev/i2c-1`) —
@@ -1629,19 +1627,14 @@ Verified behaviour:
 
 ⚠️ **One deliberate exception, and it costs Layer 1 on that unit: the USB 500 mA patch.** `uImage-system`
 is the only file `bootcmd` will load and U-Boot has no `saveenv`, so a unit that comes up at 500 mA by
-itself requires patching that name in place — `IMPROVEMENT_PLAN.md` F15 has the decision and its accepted
-cost. `lib/rw-usbpower.sh` is the only writer, and the in-place remedy is **`uImage-system.vendor`** on
-p1, which it creates and md5-verifies (`edc637ac14f90e0187b1ed65ffedf6d7`) *before* touching the
-original:
+itself requires patching that name in place. `lib/rw-usbpower.sh` is the only writer. **Recovery for this
+one write is Layer 2, not an in-place restore** — reflash the card from the image commissioning takes,
+which is why it takes one. `uImage-system.vendor` is the writer's pristine input for re-deriving a patch
+(step 6 md5-verifies it, `edc637ac14f90e0187b1ed65ffedf6d7`); it is not a rollback path.
 
 ```sh
-# On the device, or on the card in a reader — same two commands either way.
-mount -t vfat /dev/mmcblk0p1 /tmp/bootpart
-cp /tmp/bootpart/uImage-system.vendor /tmp/bootpart/uImage-system
-sync; umount /tmp/bootpart
-# Confirm before rebooting: this md5 is the vendor kernel, byte-identical on every
-# unit measured (§3.6). a1fd1af8da18c430a34b24762aa16dab is the 500 mA one.
-md5sum /tmp/bootpart/uImage-system
+# Which of the two kernels we produce is on p1? a1fd1af8da18c430a34b24762aa16dab is the 500 mA one.
+mount -t vfat /dev/mmcblk0p1 /tmp/bootpart; md5sum /tmp/bootpart/uImage-system; umount /tmp/bootpart
 ```
 
 **Layer 2 — pull the card.** The whole system is on removable microSD (`mmcblk0`, root

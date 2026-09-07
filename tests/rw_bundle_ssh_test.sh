@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # rw_bundle_ssh_test.sh — regression for rw_bundle_install_ssh, the SSH bundle
-#                         installer (IMPROVEMENT_PLAN.md C12, F9).
+#                         installer.
 #
 # Host-only, no device, no SD card, no root. Run it:
 #

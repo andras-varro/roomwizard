@@ -9,7 +9,7 @@
 #                          rw_clean_offline_path does the p2/p3/p5/p6 mapping and
 #                          rw_clean_check_base is the guard)
 #
-# IMPROVEMENT_PLAN.md C12. The delete half is lib/rw-clean.sh; this is the install half
+# The delete half is lib/rw-clean.sh; this is the install half
 # and it is deliberately the same shape.
 #
 # ── The decisions are not in this file ──────────────────────────────────────
@@ -316,7 +316,7 @@ rw_provision_plan() {
 #
 # What this buys: the component script does not restate its own install records,
 # modes or boot links. Before this it carried its own scp/chmod/ln -sf sequence,
-# which is precisely the drift C12 exists to remove — and it HAD drifted, in that
+# which is precisely the drift one shared plan compiler exists to remove — and it HAD drifted, in that
 # it installed the module loader as /etc/init.d/S89xpad-modules while the rest of
 # the repo names init scripts after what they are.
 # ---------------------------------------------------------------------------
@@ -605,7 +605,7 @@ rw_provision_plan_summary() {
 # forwards it to the remote command, so `while read … done < "$PLAN"` with an ssh
 # in the body loses the entire rest of the plan to the FIRST ssh: one file copied,
 # seven missing, and the executor then correctly refusing on the seven. That was
-# B28, and it is why this function exists. `ssh -n` would fix today's body and not
+# that defect, and it is why this function exists. `ssh -n` would fix today's body and not
 # tomorrow's — fd 3 is a property of the loop, so a second stdin-reading command
 # added here cannot reintroduce it.
 #
@@ -638,12 +638,13 @@ rw_provision_push_installs() {
         got=$((got + 1))
     done 3< "$plan"
 
-    # The count IS the check. B28 was silent at this line and loud six lines later
+    # The count IS the check. The stdin-eating defect above was silent at this line
+    # and loud six lines later
     # in the executor, which is what made it read as an executor bug; a fix that is
     # supposed to reach 8 of 8 has to say so where the copying happens.
     if [ "$got" != "$want" ]; then
         echo "rw_provision_push_installs: copied $got of $want install record(s)" >&2
-        echo "    something in the loop body consumed the plan — see B28" >&2
+        echo "    something in the loop body consumed the plan — an ssh or other stdin reader" >&2
         return 1
     fi
     return 0

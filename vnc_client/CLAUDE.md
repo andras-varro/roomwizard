@@ -117,7 +117,7 @@ That divergence is a live bug source. `MAX_INPUT_DEVICES` was 16 here but 32 in 
 USB keyboard enumerating as `/dev/input/event17` worked everywhere except here — **resynced to 32 on
 2026-08-03, for the second time**, which is the argument for linking one scanner rather than a fix.
 The "clear `errno` before the read loop" hardening still exists only in the ScummVM copy. Prefer
-linking `common/gamepad.c`; see `../IMPROVEMENT_PLAN.md` C1.
+linking `common/gamepad.c`; extracting that shared layer is open work in `../IMPROVEMENT_PLAN.md`.
 
 ## Network robustness
 
@@ -139,7 +139,7 @@ Two that are fixed, both worth not undoing:
   — as a `WaitForMessage() < 0`, which the existing "connection lost" branch already handles.
   ⚠️ **Do not add "break after N seconds with no server message."** Steady-state update requests are
   *incremental*, so a static remote desktop legitimately sends nothing for minutes; a silence timeout
-  would disconnect exactly the healthy wall-dashboard case this component exists for. See B12.
+  would disconnect exactly the healthy wall-dashboard case this component exists for.
 
 ## Rendering
 
@@ -163,7 +163,7 @@ cleanup, expect a reboot within ~60 s.
 
 Touch maps to pointer events; USB keyboard maps through a keysym table; USB mouse gets 3-tier
 acceleration (<3 px 1:1, 3–10 px 2×, >10 px 4×) — the same constants as `common/gamepad.c` and
-the ScummVM backend, which is part of why C1 exists.
+the ScummVM backend — three copies of one table, which is the argument for extracting a shared layer.
 
 Devices are rescanned every 5 seconds for hotplug. Configuration is
 `/etc/input_config.conf`, documented once in

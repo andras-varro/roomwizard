@@ -58,14 +58,14 @@ don't copy.
 | `scummvm-roomwizard/CLAUDE.md`, `vnc_client/CLAUDE.md` | those ports |
 
 ⚠️ **The vanilla kernel tree is the authority for every subsystem the vendor did not patch, and
-reading it beats theorising from sysfs.** B32 cost most of a session to three plausible mechanisms
-inferred from `/sys` — a mode write, an OTG timeout, runtime PM — all three refuted, two of them after
+reading it beats theorising from sysfs.** The USB-enumeration hunt cost most of a session to three
+mechanisms inferred from `/sys` — a mode write, an OTG timeout, runtime PM — all three refuted, two after
 being written into the docs as fact. Ten minutes in `drivers/usb/musb/` said which sysfs writes are
 **silent no-ops on this SoC** (`omap2430_ops` has no `.set_mode`; nothing reads `a_wait_bcon`) and named
 the real mechanism. **If a driver's sysfs surface is behaving inexplicably, read the driver.**
 
-⚠️ **A conclusion read out of the driver is still a hypothesis about the device, and B32 produced two
-false ones in one afternoon.** Both came from correct source reading applied one step too far. A code
+⚠️ **A conclusion read out of the driver is still a hypothesis about the device, and that hunt produced
+two false ones in one afternoon.** Both came from correct source reading applied one step too far. A code
 path that keeps VBUS up *given an established session* was written down as "leave an adapter plugged in
 and the port stays alive" — the operator refuted it in three minutes with a hub. A guard that skips the
 `SESSION` bit *when VBUS still reads valid* was written down as the cause of a failed rebind — the next
@@ -185,7 +185,7 @@ tool-level traps rather than device facts, and each has cost real time.
   `command -v` sweep run in the wrong shell reports a host with no toolchain at all. That happened
   (2026-08-06): it was recorded as fact and made a plan entry read as a hard blocker on all building.
   **State which shell a prerequisite claim was measured in**, and measure with `wsl.exe -e bash -lc`.
-  The measured inventory lives in `IMPROVEMENT_PLAN.md` F11.
+  The measured inventory lives in `IMPROVEMENT_PLAN.md`.
 - ⚠️ **`strings` is one of those absences, and it fails *silently* into a wrong answer about the
   device.** `strings <device-binary> 2>/dev/null | grep -q <option>` in Git Bash prints nothing —
   because `strings` does not exist, not because the option is missing — so it reads as "the vendor's
@@ -203,7 +203,8 @@ tool-level traps rather than device facts, and each has cost real time.
   the gate failed.** Same family again, and it is the *gate* it lies about rather than a measurement.
   Read `${PIPESTATUS[0]}`, or redirect to a file and `Read` it — which is what `./tests/doc_check.sh`
   needs anyway: it takes ~2 min (background it), it emits NUL bytes that make the output unreadable
-  (`| tr -d '\000'`), and its destination must be **outside** the repo or group D counts the receipt.
+  (`| tr -d '\000'`), and its destination — like EVERY scratch file — must be **outside** the repo:
+  group D counts a receipt inside; a scratch copy of a source made `rw_ssh_test` FAIL (measured).
 - ⚠️ **Git Bash `sed` does not expand `\n` in a REPLACEMENT** — it inserts a literal `n`, silently, and
   the corruption lands in the middle of a line you are no longer looking at. Use `Edit` for any
   multi-line splice, and ⚠️ **never splice into the middle of an existing comment block**: the result
@@ -225,8 +226,8 @@ tool-level traps rather than device facts, and each has cost real time.
   reproduces it alone — so the rule is the symptom, not a theory: **`git show <rev>:<file> | grep` is
   the form to trust for a before/after count.** `git grep` against the *working tree* is fine, and
   plain `grep -rn` is fine; it is the `<rev>` form that silently answered "nothing here".
-- ⚠️ **A recursive `grep -r` from the repo root can exceed a 120 s tool timeout** — `scummvm/` and
-  `usb_host/linux-4.14.52/` are enormous. Use the `Grep` tool, or scope the path.
+- ⚠️ **A recursive `grep -r` from the repo root can exceed a 120 s tool timeout** — `scummvm/`,
+  `usb_host/linux-4.14.52/` and `vnc_client/deps/` are enormous. Use `Grep`, or scope the path.
 - **No foreground `sleep`** — it is blocked. Use `run_in_background`, or put the sleep inside the remote
   command: `ssh root@<ip> 'sleep 3; …'` works, because the local command is `ssh`.
 - ⚠️ **`wsl.exe … | tail -N` prints nothing until the command exits, which is indistinguishable from a
@@ -320,7 +321,7 @@ Full detail, measurements and the flags each component uses:
 - **No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main thread
   and you get a black screen.
 - **The DSS *can* scale in hardware** — three overlay planes driven from sysfs, no kernel work. The only
-  graphics acceleration on this GPU-less part; unused so far (`IMPROVEMENT_PLAN.md` F2).
+  graphics acceleration on this GPU-less part; unused so far, and open work in `IMPROVEMENT_PLAN.md`.
 - Before optimising a software renderer, read
   `SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off`.
 

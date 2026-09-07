@@ -65,8 +65,8 @@ RW_SSH_CONNECT_TIMEOUT="${RW_SSH_CONNECT_TIMEOUT:-5}"
 # ssh's actual complaint should be. That was the first version of this file, and it
 # passed every message-shape assertion in tests/rw_ssh_test.sh because they grepped
 # for the surrounding wording rather than for what ssh said. So: the gate calls the
-# probe with stdout redirected and reads these, and cases B6/C3a/C5a assert the real
-# text reaches the operator.
+# probe with stdout redirected and reads these, and that suite's cases B6/C3a/C5a
+# assert the real text reaches the operator.
 RW_SSH_LAST_STDERR=""
 RW_SSH_LAST_STATE=""
 
@@ -197,9 +197,9 @@ rw_ssh_key_owner() {
 #
 # `-N ''` (no passphrase) because this key's job is unattended deploy over a LAN to
 # a device with no secrets on it, and a passphrase would put an agent in the
-# dependency list of every build script. No password is stored anywhere — see F16's
-# reasoning; release.sh's config refusal exists precisely because one shipped file
-# already carries a plaintext password.
+# dependency list of every build script. No password is stored anywhere, and that is
+# the same rule `release.sh` enforces when it refuses to publish a config: one shipped
+# file already carries a plaintext password, and this key must not add a second.
 rw_ssh_keygen() {
     local home ssh_dir key owner
     home="$(rw_ssh_operator_home)"
