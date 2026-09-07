@@ -71,7 +71,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-usbpower.sh lib/rw-ssh.sh \
+         lib/rw-release.sh lib/rw-usbpower.sh lib/rw-ssh.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
@@ -142,6 +142,13 @@ echo "0. the fixture tree covers everything the tool sources"
 #
 # The pattern keys on the "/lib/" path component rather than on $REPO_ROOT, so a
 # caller using $SCRIPT_DIR/../lib is covered too.
+#
+# ⚠️ Third instance, measured 2026-09-06: lib/rw-release.sh. Unlike the two above
+# its `.` is EAGER — near the top of commission-offline.sh, before any argument is
+# looked at — so every case in sections 1-4 died on it and the suite read 7 passed /
+# 30 failed. That shape is worth recognising: when only section 0 survives, the
+# fixture is what is broken, not the tool, and 0b names the file. A near-total red
+# here is a copy-list symptom until 0b says otherwise.
 SRC_LINES=$(grep -hoE '\.[[:space:]]+"[^"]*/lib/[^"]+"' \
                 "$REPO"/commissioning/*.sh "$REPO"/lib/*.sh \
             | sed 's|.*/\(lib/[^"]*\)"|\1|' | sort -u)
@@ -255,7 +262,14 @@ expect_fires "default-app is '/opt/roomwizard/not_a_launcher'" \
 # dash reads `[[` as a command name — so it passes the check and then fails at
 # boot with "[[: not found". Measured while writing this case, which is why the
 # sabotage below is a real syntax error instead. Catching bashisms needs
-# shellcheck (0.7.0, installed here), which this suite does not invoke.
+# the ShellCheck binary (0.7.0, installed here), which this suite does not invoke.
+#
+# ⚠️ And a comment whose FIRST word is `shellcheck` is read as a DIRECTIVE rather
+# than as prose: a malformed one aborts the parse of the WHOLE file (SC1073/SC1072)
+# and the tool exits 1 having checked nothing at all. This very paragraph did that
+# until 2026-09-06 — a wrap had put the word at the start of a line. Keep it off
+# column 2 when you mean the program, or wiring the tool in here reports a red gate
+# with no findings behind it.
 R="$TMP/repo-parse"; cp -a "$REPO" "$R"
 printf 'if [ -n "$server" ]; then\n  echo unterminated\n' >> "$R/device-files/time-sync"
 run "$BUNDLE" "$R"
