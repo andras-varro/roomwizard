@@ -60,6 +60,14 @@
 # otherwise depend on whether the stamp had been staged yet.
 RW_BUNDLE_META_COMPONENT=meta
 
+# The stamp's DEVICE path, in one place because four scripts need it and they do
+# opposite things with it: release.sh stages it as an artifact, both installers
+# write and md5-verify it as an ordinary manifest entry, and every SOURCE deploy
+# removes it.  A literal repeated across those would let the writer and the remover
+# drift onto different paths, which reads on the device as "the stamp survived a
+# source deploy".
+RW_BUNDLE_STAMP=/opt/roomwizard/bundle.info
+
 # ---------------------------------------------------------------------------
 # rw_bundle_init DIR COMPONENT
 #
@@ -330,4 +338,37 @@ rw_bundle_install_ssh() {
     [ "$bad" = 0 ] || return 1
     echo "  $n file(s) installed, md5 verified, +x verified"
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# rw_bundle_clear_stamp TARGET
+#
+# Remove the provenance stamp from TARGET.  The ONE writer for that, shared by
+# every source-deploy path, because four copies of an `ssh rm -f` is four chances
+# for one of them to be forgotten — which is exactly what happened: the whole-tree
+# deploy cleared the stamp and a single component's build-and-deploy.sh did not, so
+# a unit could carry a stamp naming a release whose bytes had been overwritten.
+#
+# Quiet on success, and it does NOT distinguish "removed" from "there was nothing
+# there".  `rm -f` cannot, and the distinction has no consumer: an absent stamp
+# means "this unit is not running a published release" either way.  A nonzero
+# return therefore means the SSH call itself failed, which is the only case a
+# caller has anything to say about.
+#
+# ⚠️ Call it BEFORE writing any files, not after.  Clearing early can only lose
+# information — a stamp removed by a deploy that then fails understates what is on
+# the unit.  Clearing late leaves a window in which fresh binaries sit under a
+# stamp that already names the wrong bytes, and that window is a lie rather than a
+# gap.  It is also why this is not gated on the deploy succeeding.
+#
+# $RW_SSH and $RW_BUNDLE_ROOT are honoured for the same reason
+# rw_bundle_install_ssh honours them: tests/rw_bundle_ssh_test.sh runs the real
+# function against a directory on this host.
+# ---------------------------------------------------------------------------
+rw_bundle_clear_stamp() {
+    local target="$1"
+    local SSHC="${RW_SSH:-ssh}" P="${RW_BUNDLE_ROOT:-}"
+
+    [ -n "$target" ] || { echo "  rw_bundle_clear_stamp: no target"; return 1; }
+    $SSHC "$target" "rm -f '$P$RW_BUNDLE_STAMP'"
 }

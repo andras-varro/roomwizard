@@ -38,10 +38,13 @@ _START_SECONDS=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# The shared SSH gate (../lib/rw-ssh.sh). Both of this script's gates —
-# deploy and set-default — go through it.
+# The two shared libraries every path needs. The SSH gate (../lib/rw-ssh.sh): both of
+# this script's gates — deploy and set-default — go through it. ../lib/rw-bundle.sh:
+# stage_bundle stages through it AND a deploy clears the provenance stamp through it.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_ROOT/lib/rw-bundle.sh"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 # Three shapes.  `--bundle <dir>` needs no device and is checked first, because
@@ -601,7 +604,13 @@ deploy_to_device() {
     # different answers, and only the second has a remedy worth offering.
     rw_ssh_gate "$DEVICE" \
         || { log_error "Cannot continue without SSH to $DEVICE"; exit 1; }
-    
+
+    # Locally built binaries, so any provenance stamp on the unit is about to stop
+    # being true. One shared writer (../lib/rw-bundle.sh), before the first file goes
+    # out. set_default_app does NOT repeat this: it writes no artifacts.
+    rw_bundle_clear_stamp "$DEVICE" \
+        || log_warning "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
+
     # Verify system setup has been done
     if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
         log_warning "System setup not detected on device."
@@ -719,9 +728,6 @@ APP
 # into the bundle's NOTICE file.
 stage_bundle() {
     local dir="$1" n
-
-    # shellcheck source=../lib/rw-bundle.sh
-    . "$REPO_ROOT/lib/rw-bundle.sh"
 
     if [ ! -f "$SCUMMVM_DIR/scummvm" ]; then
         log_error "No binary at $SCUMMVM_DIR/scummvm — nothing to stage."

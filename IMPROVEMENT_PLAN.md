@@ -246,16 +246,32 @@ reserved name — every caller of it is telling an operator what the bundle cont
 `bundle.info`'s own `components=` line. `/opt/roomwizard` is kept whole by `clean-rules.conf`, so the
 stamp survives a re-clean.
 
+✅ **And every source deploy now clears that stamp, through one writer, 2026-09-07.**
+`rw_bundle_clear_stamp` in `lib/rw-bundle.sh` is the only remover, and `RW_BUNDLE_STAMP` the only
+spelling of the device path — `release.sh` stages the artifact at it, both installers write and
+md5-verify it, and the four component scripts remove it. Each calls the writer immediately after its own
+SSH gate, **before** the first file goes out: clearing early can only *lose* information, where clearing
+late leaves a window in which fresh binaries sit under a stamp that already names the wrong bytes.
+`deploy-all.sh`'s own post-loop `ssh rm -f` is gone — it covered `deploy-all.sh <ip>` and nothing else,
+so a unit could be overwritten one component at a time and keep a stamp naming a release whose bytes were
+gone. ⚠️ **`lib/rw-bundle.sh` is therefore sourced unconditionally** by all four, not just on the
+`--bundle` path. `tests/rw_bundle_ssh_test.sh` group E is the gate, and it covers both directions: that
+each component script calls the writer, and that no shipped script rolls its own — measured against the
+pre-change tree at **5 failures**, and the two limits of that control are in the suite's header.
+
 **What is still open here:**
 
-- **`deploy-all.sh <ip>` clears the stamp; one component's `build-and-deploy.sh` does not.** A source
-  deploy must not leave a stamp naming a release whose bytes are gone, so the whole-tree path removes it
-  — absence is the honest answer there. Running a single component directly bypasses that, so a stamp is
-  only as trustworthy as the last whole-tree deploy. Fixing it properly means one writer shared by four
-  scripts, not four copies of an `ssh rm -f`.
 - ⚠️ **`release.sh` has no test suite at all, and it holds an `rm -rf` of a caller-supplied path.**
   Measured 2026-09-07 while fixing that guard (below): nothing in `tests/` invokes `release.sh` except
-  as a fixture builder. `tests/rw_clean_test.sh` section A is the model to mirror.
+  as a fixture builder. `tests/rw_clean_test.sh` section A is the model to mirror. ⚠️ **The refusals are
+  free and the acceptances are not**: every guard refusal is reachable with `--stage-only --out <dir>`
+  before any build, but the two paths that must be *accepted* — an empty directory and a re-stage over a
+  real bundle — fall straight through into the four-component ARM build loop. There is no `--no-build`
+  flag, so a suite that only runs the shipped script can assert the refusals and cannot assert
+  acceptance, which is the "a guard that refuses everything is invisible" hole. The way through is a
+  temp tree holding `release.sh` plus `lib/rw-bundle.sh` and `lib/rw-release.sh` with stub component
+  scripts — ⚠️ `SCRIPT_DIR` comes from `$0`, so a copy of the bare script dies at its first `source`
+  before parsing a single argument.
 - **Whether the `NOTICE` written offer is actually discharged has not been checked by anyone qualified to
   say so.** `release.sh` generates the per-release half and `LICENSE.md` says the two must agree; that is
   a bookkeeping guarantee, not a legal opinion. ⚠️ **Measure a dependency's licence *version* rather than
@@ -836,8 +852,8 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
    on non-engineering expertise** — whether the `NOTICE` written offer is discharged has never been
    checked by anyone qualified to say so, and `release.sh` guarantees bookkeeping rather than legality.
    ⚠️ **Measure a dependency's licence *version*** — this entry once said GPLv2+ and the ScummVM tree is
-   GPL-3.0-or-later. What IS still engineering is small and feeds the tier below: `release.sh` has no test
-   suite, and a single component's `build-and-deploy.sh` does not clear the stamp.
+   GPL-3.0-or-later. What IS still engineering is one item and it feeds the tier below: `release.sh` has
+   no test suite, and it holds an `rm -rf` of a caller-supplied path.
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.

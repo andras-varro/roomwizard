@@ -54,8 +54,12 @@ KERNEL_VERSION="4.14.52"
 MODULES_DIR="$SCRIPT_DIR/modules"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# The two shared libraries every path needs: the SSH gate, and ../lib/rw-bundle.sh —
+# --bundle stages through it AND a deploy clears the provenance stamp through it.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_ROOT/lib/rw-bundle.sh"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 ok()   { echo -e "[$(date '+%H:%M:%S')] ${GREEN}  ✓ $*${NC}"; }
@@ -91,8 +95,6 @@ if [[ "${1:-}" == "--bundle" ]]; then
     BUNDLE_DIR="${2:-}"
     [[ -n "$BUNDLE_DIR" ]] || { echo "--bundle requires a directory"; echo ""; usage; }
     [[ -z "${3:-}" ]] || { echo "Unexpected argument after --bundle <dir>: $3"; exit 1; }
-    # shellcheck source=../lib/rw-bundle.sh
-    . "$REPO_ROOT/lib/rw-bundle.sh"
 else
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -152,6 +154,11 @@ if [[ -n "$DEVICE_IP" ]]; then
     # refusing us" and, on a terminal, offers to install a key.
     rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
     ok "SSH to $DEVICE"
+
+    # Locally built modules, so any provenance stamp on the unit is about to stop
+    # being true. One shared writer (../lib/rw-bundle.sh), before anything goes out.
+    rw_bundle_clear_stamp "$DEVICE" \
+        || warn "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
 fi
 echo ""
 

@@ -39,10 +39,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=sound-sets.sh
 . "$SCRIPT_DIR/sound-sets.sh"
 
-# The shared SSH gate. Sourced unconditionally (unlike ../lib/rw-bundle.sh, which
-# only the --bundle path needs) because every deploy goes through it.
+# The two shared libraries every path needs. The SSH gate because every deploy goes
+# through it; ../lib/rw-bundle.sh because --bundle stages through it AND a deploy
+# clears the provenance stamp through it, so it can no longer be sourced in one branch.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_ROOT/lib/rw-bundle.sh"
 
 # ── argument shapes ─────────────────────────────────────────────────────────
 # Two, and they do not mix: `--bundle <dir>` needs no device, and every deploy
@@ -62,8 +65,6 @@ if [[ "${1:-}" == "--bundle" ]]; then
         echo "Unexpected argument after --bundle <dir>: $3"
         exit 1
     fi
-    # shellcheck source=../lib/rw-bundle.sh
-    . "$REPO_ROOT/lib/rw-bundle.sh"
 else
     DEVICE_IP="${1:-}"
     MODE="${2:-}"
@@ -474,6 +475,12 @@ info "Testing SSH connection..."
 # answers, and only the second one has a remedy worth offering.
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
+
+# These are locally built binaries, so any provenance stamp on the unit is about to
+# stop being true. One shared writer (../lib/rw-bundle.sh), called before the first
+# file goes out rather than after the last one.
+rw_bundle_clear_stamp "$DEVICE" \
+    || warn "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
 
 # Verify system setup has been done
 if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then

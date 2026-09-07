@@ -25,10 +25,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# The shared SSH gate (../lib/rw-ssh.sh). Sourced unconditionally, unlike
-# ../lib/rw-bundle.sh which only the --bundle path needs.
+# The two shared libraries every path needs. The SSH gate (../lib/rw-ssh.sh) because
+# every deploy goes through it; ../lib/rw-bundle.sh because --bundle stages through it
+# AND a deploy clears the provenance stamp through it.
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
+# shellcheck source=../lib/rw-bundle.sh
+. "$REPO_ROOT/lib/rw-bundle.sh"
 
 BUNDLE_DIR=""
 if [[ "${1:-}" == "--bundle" ]]; then
@@ -45,8 +48,6 @@ if [[ "${1:-}" == "--bundle" ]]; then
         echo "Unexpected argument after --bundle <dir>: $3"
         exit 1
     fi
-    # shellcheck source=../lib/rw-bundle.sh
-    . "$REPO_ROOT/lib/rw-bundle.sh"
 else
     DEVICE_IP="${1:-}"
     MODE="${2:-}"
@@ -203,6 +204,11 @@ info "Testing SSH connection..."
 # different answers, and only the second has a remedy worth offering.
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
+
+# Locally built binaries, so any provenance stamp on the unit is about to stop being
+# true. One shared writer (../lib/rw-bundle.sh), before the first file goes out.
+rw_bundle_clear_stamp "$DEVICE" \
+    || warn "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
 
 # Stop whatever is running (avoids "Text file busy").
 #

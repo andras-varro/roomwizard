@@ -49,6 +49,25 @@
 # green because app_launcher was still 0755 and got caught either way. It needed
 # EVERY executable entry at 0700. Both are the same lesson as the first four
 # sabotages, which all reported 22/0 because none of the patterns had matched at all.
+#
+# ── Group E, measured against the pre-change tree ────────────────────────────
+#
+# Group E is about the provenance stamp, and it was measured against the tree that
+# had the defect — a whole-tree deploy cleared the stamp and a single component's
+# build-and-deploy.sh did not:
+#
+#   the four component scripts + deploy-all.sh restored to their
+#   pre-change state, current lib/rw-bundle.sh                   5 fail (32/5/37)
+#   lib/rw-bundle.sh alone restored                              the suite DIES
+#
+# ⚠️ The second row is a result, not a count, and that is the limit of this control.
+# With no $RW_BUNDLE_STAMP defined, `set -u` aborts the run at E1 — so the suite
+# exits nonzero and prints no summary line at all. E7 and E8 are the cases that
+# would have passed vacuously had it kept going: a rw_bundle_clear_stamp that does
+# not exist returns 127, which both of them read as the refusal they are asserting.
+# They are worth keeping (they falsify a function that returns 0 unconditionally,
+# which E3 alone does not), but do not read them as evidence the function exists —
+# E1/E2, which need it to have removed a file, are what do that.
 
 set -u
 
@@ -63,6 +82,8 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); echo -e "  ${GREEN}pass${NC}  $1"; }
 bad() { FAIL=$((FAIL + 1)); echo -e "  ${RED}FAIL${NC}  $1"; }
 assert_eq() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (want '$1', got '$2')"; fi; }
+exists() { if [ -e "$1" ]; then ok "$2"; else bad "$2 — missing: $1"; fi; }
+gone()   { if [ -e "$1" ]; then bad "$2 — still present: $1"; else ok "$2"; fi; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM
@@ -264,10 +285,86 @@ else
 fi
 
 echo ""
+echo "E. rw_bundle_clear_stamp — the one remover, and every deploy path reaching it"
+
+# The writer and the remover must agree on the path, so the install is what places
+# the file rather than a `touch` here: a constant that drifted would be invisible to
+# a test that spelled the path itself.
+build_bundle
+printf 'tag=v0.0.0-test\ncomponents=native_apps \n' > "$TMP/src/bundle.info"
+rw_bundle_init "$BUNDLE" "$RW_BUNDLE_META_COMPONENT"
+rw_bundle_add  "$BUNDLE" "$RW_BUNDLE_META_COMPONENT" 0644 \
+    "$TMP/src/bundle.info" "$RW_BUNDLE_STAMP"
+rw_bundle_finish "$BUNDLE" "$RW_BUNDLE_META_COMPONENT" >/dev/null
+rm -rf "$DEVROOT"; mkdir -p "$DEVROOT"
+OUT=$(rw_bundle_install_ssh fake-target "$BUNDLE" 2>&1); ST=$?
+assert_eq "0" "$ST" "E1 a bundle carrying the stamp installs"
+exists "$DEVROOT$RW_BUNDLE_STAMP" "E2 the installer wrote the stamp at the shared path"
+
+if rw_bundle_clear_stamp fake-target; then
+    gone "$DEVROOT$RW_BUNDLE_STAMP" "E3 clear_stamp removes what the installer wrote"
+else
+    bad "E3 clear_stamp removes what the installer wrote — it returned non-zero"
+fi
+
+# ⚠️ Extent, not just the target: an `rm -f` on a mis-spelled path could take the
+# directory with it and E3 would still pass, because a removed parent makes the stamp
+# gone too.
+exists "$DEVROOT/opt/roomwizard/app_launcher" "E4 a sibling artifact survives"
+exists "$DEVROOT/opt/games/snake"             "E5 and so does the rest of the tree"
+
+# Absent is the normal case — a unit that was never installed from a release. `rm -f`
+# cannot tell that from a removal and there is no consumer for the difference.
+rw_bundle_clear_stamp fake-target \
+    && ok "E6 a second call, with nothing to remove, still succeeds" \
+    || bad "E6 a second call, with nothing to remove, still succeeds — it returned non-zero"
+
+rw_bundle_clear_stamp "" >/dev/null 2>&1 \
+    && bad "E7 no target is refused — it ACCEPTED an empty target" \
+    || ok "E7 no target is refused"
+
+# A nonzero return means the SSH call itself failed, which is the only case a caller
+# has anything to say about. Without this the function could return 0 unconditionally
+# and E3 would not notice.
+DEADSSH="$TMP/fake-ssh-dead"
+printf '#!/bin/sh\nexit 255\n' > "$DEADSSH"; chmod +x "$DEADSSH"
+RW_SSH="$DEADSSH" rw_bundle_clear_stamp fake-target >/dev/null 2>&1 \
+    && bad "E8 an unreachable target returns non-zero — it reported success" \
+    || ok "E8 an unreachable target returns non-zero"
+
+# ── every deploy path, not just the whole-tree one ──────────────────────────
+# This is the defect the shared writer closed: `deploy-all.sh <ip>` cleared the stamp
+# and a single component's build-and-deploy.sh did not, so a unit could end up with a
+# stamp naming a release whose bytes had been overwritten one component at a time.
+# Text checks, because the alternative is four devices.
+for comp in native_apps vnc_client scummvm-roomwizard usb_host; do
+    if grep -q 'rw_bundle_clear_stamp' "$REPO_DIR/$comp/build-and-deploy.sh"; then
+        ok "E9 $comp/build-and-deploy.sh clears the stamp"
+    else
+        bad "E9 $comp/build-and-deploy.sh clears the stamp — no call to rw_bundle_clear_stamp"
+    fi
+done
+
+# And nothing rolls its own. ⚠️ The pattern is checked against a decoy first: a zero
+# here is only evidence if the pattern can match at all, and this one is a regex over
+# text nobody validates.
+HANDROLLED='rm -f[^|;&]*bundle\.info'
+printf "ssh \$DEVICE 'rm -f /opt/roomwizard/bundle.info'\n" > "$TMP/decoy.sh"
+if grep -qE "$HANDROLLED" "$TMP/decoy.sh"; then
+    ok "E10 the hand-rolled-remover pattern matches a decoy"
+else
+    bad "E10 the hand-rolled-remover pattern matches a decoy — every E11 result below is vacuous"
+fi
+HITS=$(grep -lE "$HANDROLLED" \
+         "$REPO_DIR/deploy-all.sh" "$REPO_DIR/release.sh" \
+         "$REPO_DIR"/*/build-and-deploy.sh 2>/dev/null | wc -l)
+assert_eq "0" "$HITS" "E11 no shipped script removes the stamp by hand"
+
+echo ""
 echo "════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
-if [ "$TOTAL" -lt 20 ]; then
+if [ "$TOTAL" -lt 34 ]; then
     echo -e "  ${RED}✗ only $TOTAL cases ran — the harness itself is broken${NC}"
     exit 1
 fi

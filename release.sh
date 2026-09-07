@@ -308,7 +308,7 @@ echo "────────────────────────�
 # keeps it out of every "Components:" line — see lib/rw-bundle.sh.
 rw_bundle_init "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT"
 rw_bundle_add  "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT" 0644 \
-    "$OUT_ABS/manifest.d/bundle.info" /opt/roomwizard/bundle.info \
+    "$OUT_ABS/manifest.d/bundle.info" "$RW_BUNDLE_STAMP" \
     || err "could not stage the provenance stamp"
 rw_bundle_finish "$OUT_ABS" "$RW_BUNDLE_META_COMPONENT" >/dev/null
 
