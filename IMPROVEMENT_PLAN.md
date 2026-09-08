@@ -685,39 +685,14 @@ makes a deep state cheaper for a **human**, not automatable. `brick_breaker` alr
 (`--test` and a pause toggle), so its level-5 problem is still open on the level number, not on the
 mechanism.
 
-### C12. One commissioning entry point — open
+### C12. Offline commissioning has never been run against a real disk — open
 
-⚠️ **What is left is the front door, not a capability.** Both delivery situations are reachable with no
-toolchain, but by two different scripts with two different flag vocabularies, and the SSH one still has a
-reboot in the middle:
-
-| Situation | Today | One command? |
-|---|---|---|
-| Bought a unit, **no network access to it** | `sudo ./commissioning/commission-offline.sh --bundle <tar.gz>` | **yes** |
-| **Already has SSH** to it | `./commissioning/provision.sh <ip>` → reboot → `./deploy-all.sh --from-bundle <b> <ip>` | no — two, with a reboot between |
-
-`commissioning/commission.sh` is the remaining idea: **one** entry with `--card [--disk X]` or
-`--ssh <target>` and `--bundle` on both, composing the scripts that already exist rather than adding
-behaviour. `roomwizard.sh` covers the same ground as a menu today, which is why this is an idea and not a
-defect — and `provision.sh` now cleans by default, so the front door no longer needs a reason beyond
-convenience. Everything else this entry opened for landed 2026-08-06/08 (`git log --grep=C12`): one
-provisioning data file with two executors, the two `dropline` config edits, `--from-bundle` over SSH, and
-the `lib/`+`commissioning/`+`device-files/` layout.
-
-⚠️ **A blocker this entry inherited, now half discharged:** `tests/commission_offline_test.sh` **has**
-been run green under root with a staged bundle (2026-09-07, 37 passed / 0 failed — the suite prints its
-own count, do not trust one written down). `wsl.exe -u root` is what sidesteps the recorded
-`sudo: a password is required` stall on `commissioning/card-prep.sh`'s `/etc/shadow` write. **What has
-still never been run is a pass against a REAL DISK — and nothing else.** That suite contains no
-`--dry-run` at all, so each of its cases is itself a non-dry `--base` pass: the clean, `card-prep.sh`, the
-provision plan, the install and the verify are all exercised for real on a fabricated card tree. `--base`
-cannot locate p1 by construction, so the p1 gate, backup, patch, verify and rollback are the only
-unexercised half, and reaching them needs a card in a reader, `wsl --mount` from an elevated Windows
-shell, and a full `dd` image taken first. Nothing short of that confirms the delivery path.
-
-**A second half-measure in the same vocabulary:** `provision.sh --dry-run` exits before the provision
-step, so it previews the clean and the p1 write but never the install/link plan. The plan is compiled on
-the host, so a full preview is cheap; nobody has asked for one.
+`tests/commission_offline_test.sh` contains no `--dry-run`, so each of its cases already **is** a real
+`--base` pass — the clean, `card-prep.sh`, the provision plan, the install and the verify all run for
+real on a fabricated card tree. `--base` cannot locate p1 by construction, so the p1 gate, backup,
+patch, verify and rollback are the one unexercised half, and reaching them needs a physical card in a
+reader. ⚠️ **Not feasible on this dev host — it has no card reader, and the USB-reader route is closed
+to us.** The entry stays open as a known gap in the delivery path, not as work anybody can pick up here.
 
 ### C15. The bare plan-ID scan collides with function-key names — open, measured 2026-09-03
 

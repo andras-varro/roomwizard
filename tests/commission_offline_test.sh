@@ -8,7 +8,10 @@
 #   wsl.exe -u root -e bash -lc "cd /mnt/c/work/roomwizard && tests/commission_offline_test.sh"
 #
 # Needs root (or passwordless sudo), because commissioning/card-prep.sh writes
-# through sudo. Needs a staged bundle: ./release.sh --stage-only [--component
+# through sudo. ⚠️ Under a plain `wsl.exe -e bash -lc` this suite stalls on
+# `sudo: a password is required` at card-prep.sh's /etc/shadow write and reports no
+# useful verdict — `-u root` above is what sidesteps it, not a convenience.
+# Needs a staged bundle: ./release.sh --stage-only [--component
 # native_apps] leaves one in build/release.
 #
 # ── Why every case here is a SABOTAGE ──────────────────────────────────────

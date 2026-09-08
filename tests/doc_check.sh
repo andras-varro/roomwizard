@@ -406,6 +406,7 @@ averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
 931 MB	device-files/clean-rules.conf	IMPROVEMENT_PLAN.md
 DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
 --no-build	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
+sudo: a password is required	tests/commission_offline_test.sh	IMPROVEMENT_PLAN.md
 EOF
 }
 

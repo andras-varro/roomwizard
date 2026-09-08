@@ -734,6 +734,9 @@ ok "SSH OK"
 #
 # --dry-run no longer needs a clean flag to be meaningful: the clean is the default,
 # so a bare `provision.sh <ip> --dry-run` is the preview of a bare run.
+# ⚠️ It previews the clean and the p1 write ONLY. This branch exits before the
+# provision section below, so the install/link plan is never printed — do not read a
+# clean dry run as a preview of what gets installed.
 if [[ "$DRY_RUN" == "--dry-run" ]]; then
     if [[ "$DO_CLEAN" -eq 1 ]]; then
         run_clean "$CLEAN_MODE"
