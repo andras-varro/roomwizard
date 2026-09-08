@@ -1828,8 +1828,8 @@ parent sets a display title: `killall`/`pidof` match a process whose `cmdline` r
 
 ## 6. Building for this device
 
-Everything cross-compiles on the host and deploys over SSH. **There is no CI, no test runner and no
-lint** — the "tests" are interactive on-device diagnostic tools.
+Everything cross-compiles on the host and deploys over SSH. **There is no CI**; what does run before a
+deploy, and what is an interactive diagnostic rather than a test, is in `tests/CLAUDE.md`.
 
 Host toolchain and build prerequisites: `CLAUDE.md`, and `COMMISSIONING.md` → *The dev host*.
 

@@ -608,13 +608,16 @@ Three pieces of work:
    defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
    instead.
 3. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
-   until you are mis-tapping by 30 px. Six exist — `tests/touch_calib_test.c` (the calibration fit
-   end-to-end), `tests/gradient_test.c`, `tests/framebuffer_bpp_test.c`, `tests/gamepad_latch_test.c`,
-   `tests/button_latch_test.c` (the once-per-process touch button latch — its group A drives the old
+   until you are mis-tapping by 30 px. The existing ones all live in `native_apps/tests/` — `touch_calib_test.c` (the calibration fit
+   end-to-end), `gradient_test.c`, `framebuffer_bpp_test.c`, `gamepad_latch_test.c`,
+   `button_latch_test.c` (the once-per-process touch button latch — its group A drives the old
    `button_is_touched() && button_check_press()` idiom and asserts the second tap is swallowed),
-   `tests/audio_gen_test.c` (the audio generator and the mix bus — arithmetic, the frame-aligned write
+   `audio_gen_test.c` (the audio generator and the mix bus — arithmetic, the frame-aligned write
    loop, the summed voices and the pump pacing).
-   Build lines are in each file header; all are host gcc, so `build-and-deploy.sh` runs none of them.
+   Build lines are in each file header, and **`tests/run-all.sh` phase 2 now builds and runs every one of
+   them** from a data table that has to stay in step with those headers — a `*_test.c` in neither that
+   table nor its explicit not-a-host-regression list is a HARNESS ERROR, so a new one cannot be silently
+   skipped. `tests/run-all.sh --list` is the current inventory.
    **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
    `config.c` / `ppm.c` parsers.**
 
@@ -637,11 +640,29 @@ And for anyone reading a raw value off the wire: **screen→raw conversion must 
 12-bit range, so assuming the hardware limits lands ~30 px out on Y. Use
 `raw = screen*(max-min)/(dim-1) + min`.
 
-### C7. Run shellcheck — open
+### C7. Burn down the shellcheck backlog — open
 
-The shell scripts *are* the deployment system and they run as root over SSH.
-`shellcheck *.sh */*.sh` — one command, no config, no repo changes. **`shellcheck` is not installed in
-this WSL**; `bash -n`, plus `dash -n` on anything with a `/bin/sh` shebang, is the current substitute.
+The shell scripts *are* the deployment system and they run as root over SSH. `tests/run-all.sh` phase 3
+now runs `shellcheck` over every tracked script before any deploy or release, in two tiers, so **nothing
+new can be added** — the tiers, the ratchet and the `SC1124` trap are in `tests/CLAUDE.md`. What is open
+is the backlog that was already there when the gate landed, recorded one row per `(file, code)` in
+`tests/shellcheck-baseline.txt`. `sort -k3 -rn tests/shellcheck-baseline.txt | head` puts the worst files
+first; `native_apps/build-and-deploy.sh` leads it by a wide margin.
+
+Three things to know before starting:
+
+- ⚠️ **A `# shellcheck` comment whose first word is followed by anything but a valid directive makes the
+  tool exit 1 having analysed NOTHING in that file.** It reads exactly like a clean run that found one
+  small problem. A directive in front of a single `case` branch is enough to do it — put it in front of
+  the whole function.
+- **Prefer a fix that changes no behaviour to a `disable=` directive**, which is why no shipped script
+  carries one for this backlog. The two `error:`-severity findings that existed are gone that way: they
+  were `$key[` inside `"…$key[[:space:]]…"` in `lib/rw-provision.sh`, which shellcheck reads as a botched
+  array expansion where the code is in fact correct, and `${key}` braced says so.
+- ⚠️ **`-x` does not help.** Measured: following sourced files leaves the `SC1091` count unchanged.
+
+Do not "fix" a finding by rewriting a line you cannot exercise. Several of the leaders are in build
+scripts that only a real deploy runs.
 
 ### C8. Retire `hardware_diag` — it is a second copy of a `device_tools` tab — open, confirmed 2026-08-02
 

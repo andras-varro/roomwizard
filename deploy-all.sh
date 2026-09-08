@@ -153,6 +153,9 @@ if [[ -z "$DEVICE_IP" ]]; then
     echo "                  downloaded, its sha256 checked against the digest"
     echo "                  GitHub publishes, and cached under build/release-cache"
     echo "                  so a second unit costs no second download."
+    echo "  --skip-tests    Deploy without running the host gate first. The gate"
+    echo "                  (tests/run-all.sh --scope=deploy, ~150 s) otherwise"
+    echo "                  blocks the deploy if any suite fails."
     echo ""
     echo "Examples:"
     echo "  $0 192.168.50.53              # deploy everything"
@@ -165,6 +168,19 @@ fi
 
 FILTER="${2:-}"
 [[ -n "$FROM_BUNDLE" || -n "$FROM_RELEASE" ]] && FILTER=""
+
+# ── --skip-tests ────────────────────────────────────────────────────────────
+# Sniffed out of the positional arguments rather than parsed by a flag loop,
+# because this script has never had one and $2 is the component filter.  Both
+# `deploy-all.sh <ip> --skip-tests` and `deploy-all.sh <ip> <component>
+# --skip-tests` work; the first form must also stop --skip-tests being taken
+# for a component name, which is what the FILTER reassignment below does.
+SKIP_TESTS=0
+if [[ "$FILTER" == "--skip-tests" ]]; then
+    SKIP_TESTS=1
+    FILTER="${3:-}"
+fi
+[[ "${3:-}" == "--skip-tests" ]] && SKIP_TESTS=1
 
 # ── validate the device IP before building anything ─────────────────────────
 # `./deploy-all.sh vnc_client` (forgetting the IP) used to build *everything*,
@@ -287,6 +303,35 @@ fi
 # be reported.
 rw_ssh_gate "root@${DEVICE_IP}" || err "Cannot continue without SSH to root@${DEVICE_IP}"
 ok "SSH OK"
+echo ""
+
+# ── the host gate, before anything is built or uploaded ────────────────────
+#
+# Until this call, no build or deploy path in the repo ran a test.  The twelve
+# suites in tests/ and the ten host-gcc regressions under native_apps/tests/
+# were each an invocation someone had to remember, so a change could reach a
+# device having been graded by nobody.
+#
+# --scope=deploy omits doc_check.sh: it grades documentation and cannot affect
+# a deployed byte.  Measured 2026-09-08 on this host: ~150 s for what remains,
+# less than one ScummVM rebuild.  It runs AFTER the SSH gate above so a wrong
+# IP still fails in a second rather than in three minutes.
+#
+# ⚠️ Exit 2 is not "a test failed" — it means the gate could not judge (an
+# empty subject list, a missing tool, a suite that itself exited 2).  That is a
+# worse reason to deploy than a red test, so it stops here too.
+if [[ $SKIP_TESTS -eq 1 ]]; then
+    warn "host gate SKIPPED (--skip-tests) — nothing has graded this tree"
+else
+    echo "Host gate: tests/run-all.sh --scope=deploy  (~150 s; --skip-tests to bypass)"
+    gate_rc=0
+    bash "$SCRIPT_DIR/tests/run-all.sh" --scope=deploy || gate_rc=$?
+    case "$gate_rc" in
+        0) ok "host gate PASS" ;;
+        2) err "host gate could not judge (exit 2) — fix the harness, then deploy" ;;
+        *) err "host gate FAILED — refusing to deploy. Override with --skip-tests." ;;
+    esac
+fi
 echo ""
 
 # Collect components

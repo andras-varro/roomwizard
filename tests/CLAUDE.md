@@ -2,7 +2,8 @@
 
 The host-side regressions. Loaded when you work in `tests/`.
 
-There is **no CI, no test runner and no lint.** "Tests" are three disjoint things: host-gcc
+There is **no CI** — nothing runs on push — but there is a runner and a lint gate: `run-all.sh`, below.
+"Tests" are three disjoint things: host-gcc
 regressions over pure-logic functions (`native_apps/tests/*_test.c`), shell regressions over host
 tooling (`tests/*_test.sh`, run directly), and interactive on-device diagnostic tools. Nothing here
 needs a device; several need `sudo`, and each says so in its own header.
@@ -12,6 +13,50 @@ doc is a number a later session carries stale — three in-tree records claimed 
 94 cases and disagreed with each other. Run the suite and read the count. (For the record: `163` was the
 one that was right, measured 2026-08-15 — which is the point. You cannot tell which of three prose
 numbers is current without running it, so do not write a fourth.)
+
+## `run-all.sh` — the host gate
+
+**One command runs every test that needs no device, and `deploy-all.sh` and `release.sh` both run it and
+refuse to build if it fails** (`--skip-tests` opts out). Three phases, each driven by a data table in the
+script: the shell suites here, the ten host-gcc regressions under `native_apps/tests/`, and `shellcheck`
+over every tracked `*.sh`. `--list` prints the tables; `--scope=deploy` omits `doc_check.sh`, which grades
+documentation and cannot change a deployed byte; `--self-test` runs the negative controls. Exit 0 pass,
+1 a subject failed, **2 the gate could not judge** — an empty subject list, a required tool absent, a
+`*_test.c` in neither table, or a suite that itself exited 2. Two is deliberately not "a test failed": a
+gate that inspected nothing is a worse reason to deploy than a red one. Its cost, and which suite
+dominates it, are in the script's own header, measured.
+
+⚠️ **A SKIP IS NOT A PASS, and grading on exit status alone makes it one.**
+`commission_offline_test.sh` exits 0 when it cannot get root, so skips are counted and named apart from
+passes.
+
+⚠️ **Match a suite's output on a DECOLOURISED copy.** The suites colour their own words, so that skip
+arrives as `ESC[1;33mskip ESC[0m` — the character before `skip` is `m`, and a pattern anchored on
+`[^a-z]` cannot match it. That is how this gate reported a skipped suite as a pass while a self-test
+control built on a plain-text fixture said the detection worked: **a fixture cleaner than reality proves
+nothing.** The ratchet control sank the same way — `shellcheck` 0.7.0 emits nothing at all for
+`f=x` then `echo $f`, because it can prove the value safe, so a fixture written that way is clean and the
+control passes having exercised no path. Use positional parameters, whose expansion it cannot prove safe.
+
+⚠️ **Where a gate call is INSERTED is load-bearing, and a suite is what catches it wrong.** Put the call
+ahead of a script's cheap local refusals and it preempts them: in `release.sh` it briefly sat before the
+`--out` checks, `rw_release_test.sh` runs that script in a temp tree with no `tests/` directory, `bash`
+returned 127, and the suite fell from all-green to 30 failures with its own A0 control declaring every
+refusal beneath it unfalsifiable. **The call belongs after every local refusal and immediately before the
+first build.** That suite's group D holds it there: it stubs the gate, dials the verdict in per case, and
+witnesses `--skip-tests` with a marker file, because "the gate did not run" cannot be read off an exit
+status that a passing gate produces too.
+
+**`shellcheck` runs in two tiers, because the repo carries a backlog that is not this gate's to fix.**
+Tier 1 is a hard zero: every finding at `error:` severity, plus every `SC11xx` — the family that means
+shellcheck could not do its job. ⚠️ **`SC1124` makes the tool exit 1 having analysed NOTHING in that
+file**, which reads exactly like a clean run that found one small problem, so a voided analysis must
+never pass. Tier 2 is a ratchet over `tests/shellcheck-baseline.txt`, one row per `(file, code)` with its
+count: a count going up, or a new pair, fails; a count going down passes and says the baseline can be
+tightened. That ratchet is why **no shipped script carries a `disable=` directive for the backlog** —
+suppressing it would add `SC1124` risk of its own — and why refreshing the baseline is a separate
+`--only=shellcheck-baseline` mode, since a gate that refreshes its own baseline as a side effect can
+never fail. Regenerate it deliberately, and only after reading what changed.
 
 ## `doc_check.sh` — the documentation invariants
 

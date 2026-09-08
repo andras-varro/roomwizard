@@ -557,8 +557,11 @@ _rwp_dropline() {
 _rwp_set_directive() {
     local file="$1" key="$2" val="$3"
     [ -f "$file" ] || { echo "  directive: no such file: $file" >&2; return 1; }
-    if grep -qE "^[[:space:]]*#?[[:space:]]*$key[[:space:]]" "$file"; then
-        sed -i -E "s|^[[:space:]]*#?[[:space:]]*$key[[:space:]].*|$key $val|" "$file"
+    # ${key} is braced, not bare: shellcheck reads a bare "$key[" as a botched
+    # array expansion (SC1087, error severity) when it is in fact $key followed
+    # by a literal POSIX class.  The braces change no behaviour and say so.
+    if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]" "$file"; then
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*${key}[[:space:]].*|$key $val|" "$file"
     else
         printf '%s %s\n' "$key" "$val" >> "$file"
     fi

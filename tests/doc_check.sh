@@ -409,6 +409,8 @@ DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
 sudo: a password is required	tests/commission_offline_test.sh	IMPROVEMENT_PLAN.md
 binutils-arm-linux-gnueabihf	setup-build-env.sh	IMPROVEMENT_PLAN.md
 python3-pil	setup-build-env.sh	IMPROVEMENT_PLAN.md
+run-all.sh	tests/CLAUDE.md	-
+shellcheck-baseline.txt	tests/CLAUDE.md	-
 EOF
 }
 
@@ -710,6 +712,19 @@ group_c() {
 # the repo back well over both raises in the same commit -- 696 -> 654 non-blank, the whole prerequisites
 # entry deleted once its facts had homes in setup-build-env.sh -- but into its own slack, not into these
 # ceilings. No ceiling was lowered, for the reason the 2026-09-03 note gives.
+# ⚠️ 2026-09-08, three more raises in one commit, argued and operator-approved in advance:
+# tests/CLAUDE.md 249 -> 288, README.md 202 -> 215, CLAUDE.md 337 -> 341, each to the measured
+# post-edit count. The repo gained its first aggregate test runner, tests/run-all.sh, and the three
+# files have standing jobs a new root-level entry point obliges them to do: tests/CLAUDE.md documents
+# how to write and run what lives in tests/ AND what each suite structurally cannot see; README.md is
+# the annotated walkthrough of EVERY script; root CLAUDE.md carried the claim "no CI, no test runner,
+# no lint", of which only "no CI" survived, and a correction that did not name the gate and its
+# --skip-tests override would leave the next session bypassing it unknowingly. The tests/ share is the
+# large one and it is load-bearing rather than descriptive: four of its lines record traps measured
+# while building the gate, two of them cases where a negative control passed VACUOUSLY because the
+# fixture was cleaner than the thing it stood for. Nothing was compressed to fit — the alternative was
+# to drop a measured claim, which is the failure this group exists to prevent. SYSTEM_ANALYSIS.md paid
+# nothing and needed to: its copy of the same stale claim became a pointer at exactly equal length.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -717,13 +732,13 @@ ceilings() {
 1640	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
-202	README.md
-337	CLAUDE.md
+215	README.md
+341	CLAUDE.md
 716	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-249	tests/CLAUDE.md
+288	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md

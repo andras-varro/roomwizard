@@ -82,6 +82,22 @@ dependencies are not its job and install themselves.
 ./setup-build-env.sh --install-deps --scummvm
 ```
 
+### Before anything deploys — `./tests/run-all.sh`
+
+The host gate: every test that needs no device, in one command. It runs the shell suites in `tests/`, the
+host-gcc regressions under `native_apps/tests/` — which nothing used to execute at all, their build lines
+having lived only in comments — and `shellcheck` over every tracked script. `deploy-all.sh` and
+`release.sh` **run it first and refuse to build if it fails**, so a change can no longer reach a device
+graded by nobody; `--skip-tests` on either is the override. `--list` shows what it will run,
+`--self-test` runs its own negative controls, and exit **2** means it could not judge rather than that a
+test failed. One suite needs root and reports itself SKIPPED without it, which the summary names — a skip
+is never counted as a pass. Authoring rules: `tests/CLAUDE.md`.
+
+```bash
+./tests/run-all.sh                  # everything
+./tests/run-all.sh --scope=deploy   # skip the documentation checks
+```
+
 ### Delivering a unit — item 6, offline, one boot
 
 Everything the two-phase path does over SSH, done to the card instead: card commissioning, system

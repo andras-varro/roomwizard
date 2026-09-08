@@ -101,6 +101,9 @@ usage() {
     echo "       $0 --tag <tag>  [--out <dir>] [--component <name>]..."
     echo ""
     echo "  --stage-only      Build, stage and tar. No network, no gh."
+    echo "  --skip-tests      Stage without running the host gate first. The"
+    echo "                    gate (tests/run-all.sh, ~190 s) otherwise blocks"
+    echo "                    the release if any suite fails."
     echo "  --tag <tag>       The above, then publish with 'gh release create <tag>'."
     echo "  --out <dir>       Where to stage (default: build/release)."
     echo "  --component <n>   Only this component; repeatable. Default: all of"
@@ -114,12 +117,14 @@ usage() {
 TAG=""
 OUT="build/release"
 STAGE_ONLY=0
+SKIP_TESTS=0
 NOTES_FILE=""
 COMPONENTS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stage-only) STAGE_ONLY=1; shift ;;
+        --skip-tests) SKIP_TESTS=1; shift ;;
         --tag)        TAG="${2:-}";  [[ -n "$TAG" ]]  || { echo "--tag needs a value"; usage; }; shift 2 ;;
         --out)        OUT="${2:-}";  [[ -n "$OUT" ]]  || { echo "--out needs a value"; usage; }; shift 2 ;;
         --notes)      NOTES_FILE="${2:-}"; [[ -f "$NOTES_FILE" ]] || { echo "no such notes file: ${2:-}"; usage; }; shift 2 ;;
@@ -273,6 +278,38 @@ fi
 rm -rf "$OUT"
 mkdir -p "$OUT"
 OUT_ABS="$(cd "$OUT" && pwd)"
+
+# ── the host gate, immediately before the first component builds ────────────
+#
+# ⚠️ Placement is load-bearing and was wrong once. This must come AFTER every
+# local refusal — --out '/', the non-empty-directory ownership check, the
+# publish preflight — and BEFORE the first build. Put earlier, it preempts
+# those refusals: rw_release_test.sh runs this script in a temp tree with no
+# tests/ directory, so `bash …/run-all.sh` returned 127, the gate "failed",
+# and release.sh exited before reaching any --out case. That suite went 40/0
+# to 10/30, its own A0 control reporting every refusal below it as
+# unfalsifiable. Measured 2026-09-08, by this gate on its first real run.
+#
+# --scope defaults to all, not deploy: a release bundle carries the
+# documentation, so doc_check.sh is in scope here even though deploy-all.sh
+# omits it. Measured 2026-09-08 on this host: ~190 s, against a four-component
+# ARM cross-build that costs several minutes more.
+#
+# ⚠️ Exit 2 means the gate could not judge, not that a test failed. Shipping a
+# bundle nothing could grade is worse than shipping one with a red test, so
+# both stop here.
+if [[ $SKIP_TESTS -eq 1 ]]; then
+    warn "host gate SKIPPED (--skip-tests) — this bundle has been graded by nobody"
+else
+    info "Host gate: tests/run-all.sh  (~190 s; --skip-tests to bypass)"
+    gate_rc=0
+    bash "$SCRIPT_DIR/tests/run-all.sh" || gate_rc=$?
+    case "$gate_rc" in
+        0) : ;;
+        2) err "host gate could not judge (exit 2) — fix the harness. Nothing was built." ;;
+        *) err "host gate FAILED — refusing to stage a release. Override with --skip-tests." ;;
+    esac
+fi
 
 for comp in "${COMPONENTS[@]}"; do
     echo ""

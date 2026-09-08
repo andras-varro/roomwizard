@@ -111,11 +111,15 @@ line endings. Use `Edit`, or `sed -i`.
 
 ## Build & deploy
 
-Everything builds with the ARM cross-compiler and deploys over SSH. There is **no CI, no test runner,
-no lint**. `--help` on any script is current; `README.md` has the annotated walkthrough.
+Everything builds with the ARM cross-compiler and deploys over SSH. There is **no CI**, but
+`./tests/run-all.sh` is the host gate — every test that needs no device, plus `shellcheck` — and
+`deploy-all.sh` and `release.sh` both **run it and refuse to build if it fails**; `--skip-tests` opts
+out. Authoring and running rules: `tests/CLAUDE.md`. `--help` on any script is current; `README.md` has
+the annotated walkthrough.
 
 ```bash
 ./setup-build-env.sh                # host prerequisites; --install-deps, --scummvm
+./tests/run-all.sh                  # the host gate; --list, --scope=deploy, --self-test
 ./roomwizard.sh                     # front door: a menu over everything below
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them

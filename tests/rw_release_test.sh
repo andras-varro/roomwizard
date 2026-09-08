@@ -131,10 +131,23 @@ chmod +x "$SHIM/rm"
 # four-component ARM cross-build.
 build_tree() {
     local t="$1"
-    mkdir -p "$t/lib" "$t/native_apps"
+    mkdir -p "$t/lib" "$t/native_apps" "$t/tests"
     cp "$REPO_DIR/release.sh"        "$t/release.sh"
     cp "$REPO_DIR/lib/rw-bundle.sh"  "$t/lib/rw-bundle.sh"
     cp "$REPO_DIR/lib/rw-release.sh" "$t/lib/rw-release.sh"
+    cat > "$t/tests/run-all.sh" <<'STUBGATE'
+#!/bin/bash
+# Stub for the host gate. release.sh invokes exactly:
+#   bash "$SCRIPT_DIR/tests/run-all.sh"
+# The real gate takes ~190 s and needs gcc, shellcheck and a git checkout, none
+# of which this temp tree has — so a stub, for the same reason the component
+# build script is stubbed. What group D asserts is that release.sh CALLS it and
+# obeys its exit code, and the verdict is dialled in per case with
+# RW_STUB_GATE_RC. The marker is how a case proves --skip-tests did not call it.
+[ -n "${RW_STUB_GATE_MARKER:-}" ] && echo called >> "$RW_STUB_GATE_MARKER"
+echo "stub host gate: exiting ${RW_STUB_GATE_RC:-0}"
+exit "${RW_STUB_GATE_RC:-0}"
+STUBGATE
     cat > "$t/native_apps/build-and-deploy.sh" <<'STUBCOMP'
 #!/bin/bash
 # Stub. release.sh invokes exactly:
@@ -419,6 +432,58 @@ assert_eq "2" "${BOTH:-0}" \
 
 assert_eq "$CANARY_MD5" "$(canary_md5)" \
     "C6 the canary is still intact at the end of the run"
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "D. the host gate — that release.sh runs it, and obeys it"
+echo "   (the gate is stubbed; its verdict is dialled in per case)"
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ This group exists because the gate's own placement in release.sh was wrong
+# once, and this suite is what found it. Inserted before the --out refusals, the
+# call preempted them: in this temp tree the gate is reached before any --out
+# case, so a non-zero verdict aborted release.sh and groups A and B reported 30
+# failures with A0 declaring every refusal below it unfalsifiable. The gate now
+# sits after every local refusal and immediately before the first build, and
+# D1/D2 are what will notice if it ever moves back.
+GATE_MARK="$TMP/gate-called.log"
+
+: > "$GATE_MARK"
+RW_STUB_GATE_MARKER="$GATE_MARK" RW_STUB_GATE_RC=1 \
+    run_full "$TREE" --out "$TMP/d-fail"
+if [ "$ST" -ne 0 ] && printf '%s\n' "$OUT_TXT" | grep -qF "host gate FAILED"; then
+    ok "D1 a gate verdict of 1 refuses the release"
+else
+    bad "D1 a gate verdict of 1 must refuse the release — exit $ST"
+    printf '%s\n' "$OUT_TXT" | tail -4 | sed 's/^/        /'
+fi
+assert_eq "0" "$([ -d "$TMP/d-fail" ] && find "$TMP/d-fail" -type f | wc -l | tr -d ' ' || echo 0)" \
+    "D1b and stages no file"
+
+: > "$GATE_MARK"
+RW_STUB_GATE_MARKER="$GATE_MARK" RW_STUB_GATE_RC=2 \
+    run_full "$TREE" --out "$TMP/d-harness"
+if [ "$ST" -ne 0 ] && printf '%s\n' "$OUT_TXT" | grep -qF "could not judge"; then
+    ok "D2 a gate verdict of 2 refuses as HARNESS ERROR, not as a failed test"
+else
+    bad "D2 a gate verdict of 2 must refuse with 'could not judge' — exit $ST"
+    printf '%s\n' "$OUT_TXT" | tail -4 | sed 's/^/        /'
+fi
+
+: > "$GATE_MARK"
+RW_STUB_GATE_MARKER="$GATE_MARK" RW_STUB_GATE_RC=0 \
+    run_full "$TREE" --out "$TMP/d-pass"
+assert_eq "0" "$ST" "D3 a gate verdict of 0 lets the release proceed"
+assert_eq "1" "$(grep -c called "$GATE_MARK" || true)" \
+    "D3b and the gate was called exactly once"
+
+# ⚠️ The marker is the assertion, not the exit status: --skip-tests would still
+# exit 0 with a gate that ran and passed, so "it did not run" needs a witness.
+: > "$GATE_MARK"
+RW_STUB_GATE_MARKER="$GATE_MARK" RW_STUB_GATE_RC=1 \
+    run_full "$TREE" --out "$TMP/d-skip" --skip-tests
+assert_eq "0" "$ST" "D4 --skip-tests proceeds even with a gate that would fail"
+assert_eq "0" "$(grep -c called "$GATE_MARK" || true)" \
+    "D4b and the gate was never invoked at all"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
