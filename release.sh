@@ -168,7 +168,17 @@ GIT_REV="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unkno
 # Release.target_commitish is invalid", after the build and the staging are done.
 GIT_REV_FULL="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 GIT_DIRTY=""
-git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || GIT_DIRTY=" (dirty)"
+# ⚠️ BOTH forms are needed, and the second was missing.  `git diff --quiet` compares
+# the working tree against the INDEX, so it exits 0 while a modification sits STAGED
+# — measured in a throwaway repo, where `git add -A` then `git diff --quiet` exits 0
+# and `git diff --cached --quiet` exits 1.  Staged-and-uncommitted is the normal
+# shape of a tree mid-commit, so `git add -A && ./release.sh --tag …` would publish a
+# release whose NOTICE offers source that is in no commit.  `--cached` compares the
+# index against HEAD and is what sees it.
+if ! git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null \
+   || ! git -C "$SCRIPT_DIR" diff --cached --quiet 2>/dev/null; then
+    GIT_DIRTY=" (dirty)"
+fi
 
 # ── publish preflight ───────────────────────────────────────────────────────
 # Every refusal `--tag` can raise from LOCAL state is raised here, before the first
@@ -491,9 +501,14 @@ else
     # ⚠️ No build step in this repo is known to do that; every build output is
     # gitignored.  So this is a guard against a future one, not a recorded failure,
     # and it is here rather than hoisted because it can only be measured now.
-    git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || err "a component build modified a
+    # ⚠️ Both forms, for the reason given beside the preflight's own check: the
+    # worktree-vs-index comparison alone cannot see a staged change.
+    if ! git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null \
+       || ! git -C "$SCRIPT_DIR" diff --cached --quiet 2>/dev/null; then
+        err "a component build modified a
      tracked file, so HEAD no longer matches the source for these binaries. The
      tarball is already built: $TARBALL"
+    fi
 
     if [[ -z "$NOTES_FILE" ]]; then
         NOTES_FILE="$(mktemp)"

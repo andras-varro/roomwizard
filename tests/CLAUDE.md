@@ -208,6 +208,15 @@ meant to catch**.
 - **`rw_clean_test.sh`'s fixture is synthetic with real symlinks**, for the reason above.
 - **`commission_offline_test.sh`** needs root and a staged bundle; every check it makes has a sabotage
   case, and its fixture builder is `tests/make-fake-card.sh`.
+- ⚠️ **`rw_release_test.sh` can assert every refusal and only a STUBBED acceptance.** `release.sh` has no
+  `--no-build` flag, so the two `--out` values that must be *accepted* — an empty directory and a re-stage
+  over a real bundle — fall straight through into a four-component ARM cross-build. The suite therefore
+  runs the shipped script in a temp tree against a stub component script, and cannot see whether the real
+  four honour `--bundle <dir>`; what it does see is that `release.sh` calls them with exactly two
+  arguments and consumes the bundle they leave behind. ⚠️ **Its `rm` is a PATH tripwire that records its
+  argv and fails**, which is what makes a root spelling safe to exercise against a pre-fix copy of a guard
+  whose whole defect was letting one through — so the "and the decoy's file is still there" cases witness
+  the tripwire's claim, not the guard's, and the sabotage sweep leaves them green.
 
 ## Sabotage harnesses
 

@@ -405,6 +405,7 @@ averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
 18.7 M	native_apps/common/audio.h	IMPROVEMENT_PLAN.md
 931 MB	device-files/clean-rules.conf	IMPROVEMENT_PLAN.md
 DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
+--no-build	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
 EOF
 }
 
@@ -686,6 +687,14 @@ group_c() {
 # (which proposed the ruled-out half and pointed at a plan ID) and §3.4's stop-click bullet, whose scope
 # limit was folded into the existing text at a cost of 4 lines rather than a new paragraph. IMPROVEMENT_PLAN.md
 # paid for part of it -- one entry halved and another closed outright -- but into its own slack, not into this ceiling.
+# ⚠️ 2026-09-07, raise, deliberate and argued: tests/CLAUDE.md 232 → 241 (measured post-edit
+# count). `release.sh` gained its first test suite, and the one thing that file exists to record
+# about a suite is what it structurally CANNOT see. Here that is unusually load-bearing in both
+# directions: the acceptance half is asserted against a stub component because the script has no
+# way to skip its four-component ARM build, AND the suite's `rm` is a PATH tripwire, which makes
+# four of its own cases witnesses to the tripwire rather than to the guard. A reader who does not
+# know the second would read a green sweep as covering more than it does. Nothing in the file went
+# stale to fund it, and the holes list is the shortest section that could carry it.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -699,7 +708,7 @@ ceilings() {
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-232	tests/CLAUDE.md
+241	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
