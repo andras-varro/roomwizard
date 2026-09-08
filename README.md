@@ -61,11 +61,26 @@ every one of those stays non-interactive when called directly.
   6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
 
   4) Device status               read-only
+  7) Host build prerequisites    this machine; no device, no card
 ```
 
 Which item you want depends on whether you are **delivering** a unit or **developing** on one. Both
 paths are supported and neither is going away; they differ in how many boots and how much toolchain
 they need.
+
+### Before anything builds — `./setup-build-env.sh`
+
+The one home for the **host** package set: the cross toolchain, `build-essential`, `cmake`, `python3`
+with `PIL` for framebuffer decodes, the kernel-module deps `usb_host` needs, and `shellcheck`. It probes
+what is missing, prints the exact `apt` line before running it, and installs only on `--install-deps` or
+a TTY confirmation. `--scummvm` also clones the upstream ScummVM tree, which is gitignored and so is
+absent from a fresh clone. ⚠️ **Run it from WSL** — every tool it looks for is absent from Git Bash, so
+it refuses to run there rather than report a host that cannot build anything. The *cross-compiled*
+dependencies are not its job and install themselves.
+
+```bash
+./setup-build-env.sh --install-deps --scummvm
+```
 
 ### Delivering a unit — item 6, offline, one boot
 

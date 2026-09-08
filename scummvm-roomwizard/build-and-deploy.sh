@@ -22,8 +22,8 @@
 #
 # Requirements:
 #   - WSL Ubuntu 20.04 or later
-#   - ARM cross-compiler: sudo apt install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-#   - wget (for downloading zlib/libpng sources): sudo apt install wget
+#   - Every HOST prerequisite, and the upstream ScummVM tree, come from the one
+#     installer at the repo root:  ./setup-build-env.sh --scummvm
 #   - ARM libpng/zlib are cross-compiled automatically by this script (build_arm_deps)
 #   - SSH access to device
 #
@@ -273,23 +273,17 @@ check_prerequisites() {
     # Check for ARM cross-compiler
     if ! command -v arm-linux-gnueabihf-gcc &> /dev/null; then
         log_error "ARM cross-compiler not found!"
-        echo "Install with: sudo apt install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf"
+        echo "Install every host prerequisite with setup-build-env.sh, at the repo root."
         exit 1
     fi
-    
+
     # Check ScummVM directory
     if [ ! -d "$SCUMMVM_DIR" ]; then
         log_error "ScummVM directory not found: $SCUMMVM_DIR"
         echo ""
-        echo "You need to clone the ScummVM repository first:"
-        echo "  cd $(dirname $SCUMMVM_DIR)"
-        echo "  git clone https://github.com/scummvm/scummvm.git"
-        echo "  cd scummvm"
-        echo "  git checkout branch-2-8"
-        echo ""
-        echo "Then restore the RoomWizard backend files:"
-        echo "  cd ../scummvm-roomwizard"
-        echo "  bash manage-scummvm-changes.sh restore"
+        echo "The upstream tree is gitignored, so a fresh clone has none. One installer"
+        echo "clones it, checks out branch-2-8 and restores our backend:"
+        echo "  ./setup-build-env.sh --scummvm        (from the repo root)"
         exit 1
     fi
     

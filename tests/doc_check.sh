@@ -407,6 +407,8 @@ averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
 DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
 --no-build	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
 sudo: a password is required	tests/commission_offline_test.sh	IMPROVEMENT_PLAN.md
+binutils-arm-linux-gnueabihf	setup-build-env.sh	IMPROVEMENT_PLAN.md
+python3-pil	setup-build-env.sh	IMPROVEMENT_PLAN.md
 EOF
 }
 
@@ -696,6 +698,18 @@ group_c() {
 # four of its own cases witnesses to the tripwire rather than to the guard. A reader who does not
 # know the second would read a green sweep as covering more than it does. Nothing in the file went
 # stale to fund it, and the holes list is the shortest section that could carry it.
+# ⚠️ 2026-09-08, two raises in one commit, deliberate and argued: README.md 190 -> 202 and
+# tests/CLAUDE.md 241 -> 249, both to the measured post-edit count. A single home for the host build
+# prerequisites landed as setup-build-env.sh, and both files have a standing job that a new root-level
+# script obliges them to do: README.md is the annotated walkthrough of EVERY script, and tests/CLAUDE.md
+# records what each suite structurally cannot see. The tests/ half is load-bearing rather than
+# descriptive -- that suite drives fixture tables instead of the real package set, because a green run
+# against the real one proves only that this host is provisioned, and its sudo tripwire is on every case
+# rather than only the two that assert on it. Neither number was compressed to fit: the alternative was
+# to cut a measured claim, which is the failure this group exists to prevent. IMPROVEMENT_PLAN.md paid
+# the repo back well over both raises in the same commit -- 696 -> 654 non-blank, the whole prerequisites
+# entry deleted once its facts had homes in setup-build-env.sh -- but into its own slack, not into these
+# ceilings. No ceiling was lowered, for the reason the 2026-09-03 note gives.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -703,13 +717,13 @@ ceilings() {
 1640	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
-190	README.md
+202	README.md
 337	CLAUDE.md
 716	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-241	tests/CLAUDE.md
+249	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md

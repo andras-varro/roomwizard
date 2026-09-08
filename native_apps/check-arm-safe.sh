@@ -57,7 +57,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 OBJDUMP="${OBJDUMP:-arm-linux-gnueabihf-objdump}"
 command -v "$OBJDUMP" >/dev/null 2>&1 || {
     echo -e "${RED}✗ $OBJDUMP not found${NC}" >&2
-    echo "  Install with: sudo apt-get install gcc-arm-linux-gnueabihf" >&2
+    echo "  Install every host prerequisite with setup-build-env.sh, at the repo root." >&2
     exit 1
 }
 

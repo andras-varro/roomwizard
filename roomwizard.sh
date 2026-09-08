@@ -66,6 +66,7 @@ scripts it calls. To script a step, call that script directly:
   ./commissioning/provision.sh <target> --hostname NAME name only, no reboot
   ./deploy-all.sh <target> [component]                  Phase 3 of 3 (ssh)
   ./commissioning/commission-offline.sh --bundle <b>    THE WHOLE JOB, offline, one boot
+  ./setup-build-env.sh [--install-deps] [--scummvm]     host build prerequisites
 
 Full guide: COMMISSIONING.md
 USAGE
@@ -424,6 +425,18 @@ PRE
     info "The launcher is the default boot app. 'ssh root@$TARGET reboot' to see it."
 }
 
+# ── this host, not a device ─────────────────────────────────────────────────
+# The only menu item that touches no device and no card. It is here because "I cloned
+# the repo and nothing builds" is the first thing a fresh machine hits, and the one
+# package set lives in one script rather than in six hand-written apt lines.
+do_setup_build_env() {
+    hdr "Host build prerequisites"
+    local extra=()
+    confirm "Also set up the upstream ScummVM tree? (a large clone; only scummvm-roomwizard needs it)" \
+        && extra+=(--scummvm)
+    bash "$SCRIPT_DIR/setup-build-env.sh" "${extra[@]+"${extra[@]}"}"
+}
+
 # ── main menu ───────────────────────────────────────────────────────────────
 while true; do
     hdr "RoomWizard"
@@ -437,6 +450,7 @@ while true; do
   6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
 
   4) Device status               read-only
+  7) Host build prerequisites    this machine; no device, no card
   q) Quit
 MENU
     echo ""
@@ -448,6 +462,7 @@ MENU
         4) do_status; pause ;;
         5) do_full; pause ;;
         6) do_commission_offline; pause ;;
+        7) do_setup_build_env; pause ;;
         q|Q|quit|exit) echo ""; ok "Bye."; exit 0 ;;
         "") ;;
         *) err "Not a choice: $CHOICE"; pause ;;

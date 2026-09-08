@@ -431,65 +431,12 @@ power budget and the case's total lack of ventilation slots
 
 ---
 
-### F11. One home for the host build prerequisites — open
-
-**Two delivery modes, and only one of them has a toolchain.** *Delivery*: someone clones the repo,
-puts a card in a reader, answers a few questions, puts the card back, and the device works — they may
-never build anything. *Development*: we build and deploy onto an already-clean device. The offline
-path serves the first, `deploy-all.sh` the second. This item is about making the second reachable on
-a fresh machine.
-
-**What exists today: six checks, no installer, and they disagree.**
-[`native_apps/build-and-deploy.sh:127`](native_apps/build-and-deploy.sh#L127),
-[`vnc_client/build-and-deploy.sh:92`](vnc_client/build-and-deploy.sh#L92),
-[`scummvm-roomwizard/build-and-deploy.sh:266`](scummvm-roomwizard/build-and-deploy.sh#L266),
-[`vnc_client/build-deps.sh:146`](vnc_client/build-deps.sh#L146) and
-[`usb_host/build-and-deploy.sh:66`](usb_host/build-and-deploy.sh#L66) each do their own `command -v`
-and print their own hand-written `apt` line — `gcc` only, versus `gcc g++`, versus `+cmake wget tar`.
-None installs anything.
-
-**One asymmetry that is correct and stays:** the *cross-compiled* dependencies already install
-themselves. `build_arm_deps` fetches and builds zlib 1.3.1 + libpng 1.6.43 into
-`scummvm-roomwizard/arm-deps/`, and `vnc_client/build-deps.sh` does zlib / libjpeg-turbo /
-LibVNCServer into its own prefix. Both idempotent, neither needs `sudo`. Only the *host packages* are
-check-and-tell.
-
-**Intent: one `setup-build-env.sh` at the repo root, one `roomwizard.sh` entry, one package set.**
-
-⚠️ **The measured host inventory, and the shell each claim was measured in, live in `COMMISSIONING.md`
-→ *The dev host*.** An installer for this must state which shell it is measuring — a prerequisite check
-run from the wrong one reports the wrong answer — and `wsl.exe -e bash -lc` is the one that counts.
-
-```text
-gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
-build-essential cmake wget tar dash          # every component, one set
-python3 python3-pil                          # fb565_to_png.py only
-bc libssl-dev bison flex                     # usb_host kernel modules only
-```
-
-- ⚠️ **Name `binutils-arm-linux-gnueabihf` explicitly** even though the `gcc` package pulls it in.
-  `commissioning/commission-offline.sh` needs `arm-linux-gnueabihf-objdump` on a host that has **no compiler at
-  all**, and a missing objdump there is a refusal, not a pass.
-- **The component scripts keep their own checks** — they are meant to run standalone — but stop
-  reciting package lists and point at the one script instead. Flagging stays; only the six copies go.
-- **Prompt only when stdin is a TTY**, plus `--install-deps` for scripted use. A blocking `read` would
-  hang `release.sh` and `deploy-all.sh`, which invoke the component scripts non-interactively.
-- Print the exact `apt` command before running it. `apt`-only, with a clean refusal on a non-Debian
-  host rather than a guess.
-- ⚠️ **The ScummVM half is not `apt`, and it is the actual blocker on a fresh clone.** The upstream tree
-  at the repo root is gitignored, so a clone has no `scummvm/`:
-  `git clone https://github.com/scummvm/scummvm.git`, `git checkout branch-2-8`, then
-  `bash manage-scummvm-changes.sh restore`. This WSL sits at `eaccc461` (2024-08-29). An installer that
-  skips this has not solved the problem it exists to solve. `vkeybd_roomwizard.zip` and `scummvm.ppm`
-  *are* tracked, so those come with the clone.
-
----
-
 ### F13. Commissioning from Windows without WSL, and from macOS — open, unsolved
 
-The delivery mode of [F11](#f11-one-home-for-the-host-build-prerequisites--open) assumes the operator
-can run the card path. Today that means Linux, or Windows with WSL2. This entry exists so the gap is
-recorded rather than discovered by someone holding a card.
+**Delivery** — someone clones the repo, puts a card in a reader, answers a few questions, puts the card
+back, and the device works, never building anything — assumes the operator can run the card path. Today
+that means Linux, or Windows with WSL2. This entry exists so the gap is recorded rather than discovered
+by someone holding a card.
 
 ⚠️ **This is not a shell-portability problem, and rewriting `bash` as POSIX `sh` would not touch it.**
 The blocker is the *kernel's* filesystem support: `commissioning/commission-offline.sh` needs read-write ext4 across
@@ -801,7 +748,9 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
 
 ### Stability first
 
-1. **F11** — one home for the host build prerequisites.
+Clear. The tier's one item — a single home for the host build prerequisites — is done:
+`setup-build-env.sh` at the repo root carries the package set, and the component scripts now report a
+missing tool and point at it instead of each reciting its own `apt` line.
 
 ### Usability, features, maintainability
 

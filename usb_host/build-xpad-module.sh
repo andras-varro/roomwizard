@@ -2,8 +2,8 @@
 # build-xpad-module.sh - Cross-compile Xbox controller kernel modules for RoomWizard
 # Run this script in WSL (Linux), from the usb_host/ directory or its parent.
 #
-# Prerequisites (install in WSL):
-#   sudo apt-get install gcc-arm-linux-gnueabihf bc libssl-dev bison flex
+# Prerequisites: every host package this needs comes from ../setup-build-env.sh, the one
+# home for them (the kernel-module set is its `kmod` group).
 #
 # Produces: usb_host/modules/ff-memless.ko, joydev.ko, xpad.ko
 
@@ -30,12 +30,12 @@ echo "=============================================="
 echo ""
 echo "[0/8] Checking prerequisites..."
 if ! command -v ${CROSS_COMPILE}gcc &>/dev/null; then
-    echo "ERROR: ${CROSS_COMPILE}gcc not found. Install with:"
-    echo "  sudo apt-get install gcc-arm-linux-gnueabihf"
+    echo "ERROR: ${CROSS_COMPILE}gcc not found."
+    echo "  Install every host prerequisite with setup-build-env.sh, at the repo root."
     exit 1
 fi
 if ! command -v bc &>/dev/null; then
-    echo "ERROR: bc not found. Install with: sudo apt-get install bc"
+    echo "ERROR: bc not found. Install every host prerequisite with setup-build-env.sh, at the repo root."
     exit 1
 fi
 if [ ! -f "$DEVICE_CONFIG" ]; then

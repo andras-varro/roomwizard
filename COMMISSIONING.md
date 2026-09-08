@@ -430,11 +430,15 @@ every framebuffer decode is invoked through WSL:
 wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard/<component> && ./build-and-deploy.sh <ip>"
 ```
 
+**`./setup-build-env.sh` is the one place the host package set is written down.** It probes what is
+missing, prints the exact `apt` line before running it, and installs only on `--install-deps` or a TTY
+confirmation; `--scummvm` also clones the upstream ScummVM tree, which is gitignored and therefore absent
+from a fresh clone. The component build scripts still check their own prerequisites — they are meant to
+run standalone — but they report a missing tool and point here rather than each reciting a package list.
+
 **Present in this WSL, all verified 2026-09-06:** `shellcheck` 0.7.0, `gh`, `sfdisk`, `cmake`, `bc`,
-`bison`, `flex`, `git-lfs`, and `python3` with `PIL` 10.4.0. The cross-compiler is
-`arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM additionally needs
-WSL Ubuntu 20.04+ and `g++-arm-linux-gnueabihf`; `usb_host` needs the kernel-module build deps
-(`bc libssl-dev bison flex`) plus `python3`.
+`bison`, `flex`, `git-lfs`, and `python3` with `PIL` 10.4.0, plus the `arm-linux-gnueabihf-*` toolchain.
+ScummVM additionally needs WSL Ubuntu 20.04+.
 
 ⚠️ **None of it is in Git Bash** — not `gcc`, not the `arm-linux-gnueabihf-*` tools, and not
 `sfdisk`, `gh`, `shellcheck` or `strings` either. A `command -v` sweep run in that shell therefore

@@ -115,6 +115,7 @@ Everything builds with the ARM cross-compiler and deploys over SSH. There is **n
 no lint**. `--help` on any script is current; `README.md` has the annotated walkthrough.
 
 ```bash
+./setup-build-env.sh                # host prerequisites; --install-deps, --scummvm
 ./roomwizard.sh                     # front door: a menu over everything below
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
@@ -133,10 +134,10 @@ mode `native_apps/build-and-deploy.sh` accepts. Cleanup, bloatware removal and t
 tools), `scummvm-roomwizard` (ScummVM backend port), `vnc_client`, `usb_host` (USB host-mode
 enablement + Xbox controller modules).
 
-**Toolchain:** `arm-linux-gnueabihf-gcc` (`sudo apt install gcc-arm-linux-gnueabihf`). ScummVM
-additionally needs **WSL Ubuntu 20.04+** and `g++-arm-linux-gnueabihf`. `usb_host` needs
-kernel-module build deps (`bc libssl-dev bison flex`) + `python3`. ⚠️ **`native_apps` cross-builds no
-dependencies at all**; ScummVM builds its own `scummvm-roomwizard/arm-deps/` (zlib + libpng only).
+**Toolchain:** `./setup-build-env.sh` is the one home for the host package set — it probes what is
+missing, prints the exact `apt` line before running it, and `--scummvm` also clones the gitignored
+upstream ScummVM tree. ScummVM additionally needs **WSL Ubuntu 20.04+**. ⚠️ **`native_apps` cross-builds
+no dependencies at all**; ScummVM builds its own `scummvm-roomwizard/arm-deps/` (zlib + libpng only).
 
 **`native_apps/` has no `Makefile`.** `native_apps/build-and-deploy.sh` (cross-compiler, `-static`) is
 the only build path. A **new** binary goes in `GAMES_BINARIES` there and nowhere else — that one array

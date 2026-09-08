@@ -39,6 +39,8 @@
 #   - Device set up with commissioning/provision.sh (one-time)
 #   - ARM cross-compiler installed          — except for --from-bundle/--from-release
 #   - WSL (for ScummVM builds)              — except for --from-bundle/--from-release
+#   ./setup-build-env.sh installs the host half of those; it is the one place the
+#   package set is written down, and the component scripts only report what is missing.
 
 set -e
 _START_SECONDS=$(date +%s)

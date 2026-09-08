@@ -97,7 +97,7 @@ info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
 CC=arm-linux-gnueabihf-gcc
 if ! command -v $CC &>/dev/null; then
-    err "ARM cross-compiler not found. Install with:\n  sudo apt-get install gcc-arm-linux-gnueabihf"
+    err "ARM cross-compiler not found. Install every host prerequisite with\n  setup-build-env.sh, at the repo root — it carries the one package set."
 fi
 info "Compiler: $($CC --version | head -1)"
 echo ""

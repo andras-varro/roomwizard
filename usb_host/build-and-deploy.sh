@@ -7,8 +7,9 @@
 #   ./build-and-deploy.sh <ip> --no-usb-power      # ...but leave p1 alone
 #   ./build-and-deploy.sh --bundle <dir>           # build + stage into an offline bundle
 #
-# Prerequisites:
-#   - arm-linux-gnueabihf-gcc  (sudo apt install gcc-arm-linux-gnueabihf)
+# Prerequisites — all of the host ones come from ../setup-build-env.sh, which carries the
+# one package set for the whole repo. This script only reports what it is missing:
+#   - arm-linux-gnueabihf-gcc
 #   - bc, libssl-dev, bison, flex               (kernel module build, first run only)
 #   - python3                                   (the p1 device-tree patch)
 #   - SSH key auth to root@<ip>                 (deploy only)
@@ -140,7 +141,7 @@ echo ""
 # ── 0. prerequisites ────────────────────────────────────────────────────────
 ts "[0/8] Prerequisites"
 command -v arm-linux-gnueabihf-gcc >/dev/null 2>&1 \
-    || err "arm-linux-gnueabihf-gcc not found. Install: sudo apt install gcc-arm-linux-gnueabihf"
+    || err "arm-linux-gnueabihf-gcc not found. Install every host prerequisite with setup-build-env.sh, at the repo root."
 ok "arm-linux-gnueabihf-gcc"
 
 if [[ -n "$DEVICE_IP" && "$NO_USB_POWER" -eq 0 ]]; then
@@ -177,7 +178,7 @@ ts "[2/8] Xbox controller kernel modules"
 if [[ -f "$MODULES_DIR/ff-memless.ko" && -f "$MODULES_DIR/joydev.ko" && -f "$MODULES_DIR/xpad.ko" ]]; then
     ok "already built in modules/"
 else
-    command -v bc >/dev/null 2>&1 || err "'bc' not found. Install: sudo apt install bc"
+    command -v bc >/dev/null 2>&1 || err "'bc' not found. Install every host prerequisite with setup-build-env.sh, at the repo root."
 
     # The kernel config comes off a device. ⚠️ With --bundle there is no device to
     # ask, so this is a refusal with the one command that fixes it rather than a

@@ -146,8 +146,7 @@ main() {
     for tool in wget tar cmake make ${CROSS_COMPILE}gcc; do
         if ! command -v $tool &> /dev/null; then
             echo -e "${RED}Error: $tool not found${NC}"
-            echo "Please install required tools:"
-            echo "  sudo apt-get install wget tar cmake build-essential gcc-arm-linux-gnueabihf"
+            echo "Install every host prerequisite with setup-build-env.sh, at the repo root."
             exit 1
         fi
     done
