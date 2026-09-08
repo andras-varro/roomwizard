@@ -75,7 +75,9 @@ uint32_t *ppm_load(const char *filename, int *out_width, int *out_height) {
 uint32_t *ppm_scale(const uint32_t *src, int src_w, int src_h,
                     int dst_w, int dst_h)
 {
-    if (!src || dst_w <= 0 || dst_h <= 0) return NULL;
+    /* A non-positive source dimension makes the clamps below compute a
+     * NEGATIVE sy/sx, which reads before the buffer.  Refuse it here. */
+    if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return NULL;
 
     uint32_t *dst = malloc((size_t)dst_w * dst_h * sizeof(uint32_t));
     if (!dst) return NULL;

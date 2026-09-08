@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 #   Until this script, nothing ran more than one suite.  The twelve shell
-#   suites in tests/ each had to be invoked by hand, the ten host-gcc
+#   suites in tests/ each had to be invoked by hand, the host-gcc
 #   regressions in native_apps/tests/ carried their build line in a comment
 #   and nothing anywhere executed them, and no build or deploy path ran any
 #   of them.  A change could reach a device having been graded by nobody.
@@ -106,7 +106,8 @@ SUITE_ROWS=(
 # kept in step with it; the two include conventions (-I common and -I.) and
 # the two files that need -Itests/hostshim are real differences, not drift.
 # All run from native_apps/, all write -o build/<name>, which check-arm-safe.sh
-# already skips and labels "host-compiled tests" (measured: 51 such files).
+# already skips and labels "host-compiled tests" — a count that tracks whatever
+# build/ happens to hold, so it is not written here.
 CTEST_ROWS=(
     "audio_bed_test|-I common -Itests/hostshim|common/audio_bed.c common/config.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "audio_gen_test|-I common|common/audio_gen.c"
@@ -114,10 +115,14 @@ CTEST_ROWS=(
     "audio_sample_test|-I.|common/audio_wav.c common/audio_gen.c"
     "audio_tone_test|-I. -Itests/hostshim|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
     "button_latch_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
+    "config_test|-I common|common/config.c"
     "framebuffer_bpp_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gamepad_latch_test|-I common|common/gamepad.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gradient_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
+    "launcher_args_test|-I. -Itests/hostshim -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/ppm.c common/logger.c"
+    "ppm_test|-I common|common/ppm.c"
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
+    "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
 )
 
 # Files named *_test.c that are NOT host regressions.  Two are ARM apps that

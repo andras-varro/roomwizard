@@ -164,28 +164,6 @@ operationally not: that log is the only instrument a no-microphone audio session
 one line is what a real counter line has to be found among. Print on a CHANGE in what was found, not on a
 poll — and keep the first announcement, which is genuinely useful.
 
-### D8. `rw_provision_test.sh` group F reports a missing fixture as a wrong count — open, measured 2026-09-08
-
-**The host gate is RED on this and it is not a subject defect.** Two faces of one problem, measured on
-the same tree in one session: under `./tests/run-all.sh` the suite is killed as
-`✗ TIMED OUT at 420 s — a hang is a result`, and run alone it prints `101 passed, 7 failed` with every
-failure in group F — `F2`, `F3`, `F4`, `F7`, `F8`, `F12`, `F14`. All seven trace to `$FW/scp.calls`,
-`$FW/ssh.calls` and `$FW/plan` **not existing**, i.e. the group's fixture never materialised; the
-assertions then report `want '8', got ''` and `rw_provision_plan_summary: no such plan`, which reads as
-"the copy step is broken" rather than "the harness never set up".
-
-⚠️ **`tests/rw_provision_test.sh:608` is why that is invisible**:
-`$(( $(grep -c . "$FW/scp.calls" || :) + $(grep -c . "$FW/ssh.calls" || :) ))` collapses to `$(( + ))`
-when either file is absent — a `syntax error: operand expected` that the `|| :` was written to swallow.
-So `F10` cannot distinguish *nothing ran on the device* from *the stub file was never created*, which is
-the vacuous-negative-assertion shape this repo keeps rediscovering.
-
-**Do not start by editing `lib/rw-provision.sh`.** Find out first why the fixture is absent, and whether
-the 420 s timeout and the missing files are the same cause — a run killed part-way leaves exactly this
-evidence, and a concurrent second run of the suite is one way to produce it. Then make a missing fixture
-**fail as a harness error**, not as a count: an absent `scp.calls` is `exit 2` territory, distinct from
-zero recorded calls. Whatever the cause, `608`'s arithmetic wants a guard either way.
-
 ---
 
 ## Features
@@ -617,26 +595,13 @@ evdev's `write()` is the output-event path). The rule and the evidence are in `C
 *Non-obvious constraints*. **This invalidates the touch half of anything built on injection, so read
 it first.**
 
-Two pieces of work:
+One piece remains — the host-gcc regressions over the pure-logic parsers are done and gated:
 
 1. **Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
    `fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
    `assert alive after 2 s`, across all ~15 binaries. That is a real smoke test and it has caught real
    defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
    instead.
-2. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
-   until you are mis-tapping by 30 px. The existing ones all live in `native_apps/tests/` — `touch_calib_test.c` (the calibration fit
-   end-to-end), `gradient_test.c`, `framebuffer_bpp_test.c`, `gamepad_latch_test.c`,
-   `button_latch_test.c` (the once-per-process touch button latch — its group A drives the old
-   `button_is_touched() && button_check_press()` idiom and asserts the second tap is swallowed),
-   `audio_gen_test.c` (the audio generator and the mix bus — arithmetic, the frame-aligned write
-   loop, the summed voices and the pump pacing).
-   Build lines are in each file header, and **`tests/run-all.sh` phase 2 now builds and runs every one of
-   them** from a data table that has to stay in step with those headers — a `*_test.c` in neither that
-   table nor its explicit not-a-host-regression list is a HARNESS ERROR, so a new one cannot be silently
-   skipped. `tests/run-all.sh --list` is the current inventory.
-   **Still uncovered and worth the same treatment: `scale_coordinates()`, `parse_args()` and the
-   `config.c` / `ppm.c` parsers.**
 
 Three rules these established, all load-bearing:
 

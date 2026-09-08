@@ -308,7 +308,7 @@ echo ""
 # ── the host gate, before anything is built or uploaded ────────────────────
 #
 # Until this call, no build or deploy path in the repo ran a test.  The twelve
-# suites in tests/ and the ten host-gcc regressions under native_apps/tests/
+# suites in tests/ and the host-gcc regressions under native_apps/tests/
 # were each an invocation someone had to remember, so a change could reach a
 # device having been graded by nobody.
 #

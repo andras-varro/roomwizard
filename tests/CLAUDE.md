@@ -18,7 +18,7 @@ numbers is current without running it, so do not write a fourth.)
 
 **One command runs every test that needs no device, and `deploy-all.sh` and `release.sh` both run it and
 refuse to build if it fails** (`--skip-tests` opts out). Three phases, each driven by a data table in the
-script: the shell suites here, the ten host-gcc regressions under `native_apps/tests/`, and `shellcheck`
+script: the shell suites here, the host-gcc regressions under `native_apps/tests/`, and `shellcheck`
 over every tracked `*.sh`. `--list` prints the tables; `--scope=deploy` omits `doc_check.sh`, which grades
 documentation and cannot change a deployed byte; `--self-test` runs the negative controls. Exit 0 pass,
 1 a subject failed, **2 the gate could not judge** — an empty subject list, a required tool absent, a
