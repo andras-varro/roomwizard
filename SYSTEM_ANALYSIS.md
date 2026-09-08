@@ -1020,9 +1020,10 @@ wired USB DAC is one module away too. Both are open work in [`IMPROVEMENT_PLAN.m
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
-⚠️ **A babble error leaves a `printk` loop that survives unplugging and ends in a hardware reset ~46 min
-later, and it invalidates any measurement taken during it** — mechanism, log evidence and the one-command
-check in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+⚠️ **A stale `is_active` leaves a `printk` loop that survives unplugging and ends in a hardware reset ~46
+min later, and it invalidates any measurement taken during it — a babble error is one entrance to it, not
+the cause** — mechanism, log evidence and the one-command check in
+[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
 Touchpad-plus-keyboard combos create two event nodes.
 
 **Verified working:**
@@ -1051,7 +1052,7 @@ Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdr
 | device attached as the driver probes (boot, or a rebind) | **works.** `Vbus on`, enumerates ~0.5 s later |
 | driver probes with **nothing** attached | `Vbus on` for a few seconds, then **`Vbus off`** and the port is dead. The OTG adapter alone does not prevent this — measured with the adapter in and no device in it |
 | plug a device into that dead port | **nothing at all.** No log line, no VBUS, the device's own LED stays dark |
-| unplug a working device, wait 95 s, replug | **works.** `Vbus on` throughout; `dmesg` shows `unhandled DISCONNECT transition (a_idle)` and the disconnect is not processed until the device returns |
+| unplug a working device, wait 95 s, replug | **works.** `Vbus on` throughout; `dmesg` shows `unhandled DISCONNECT transition (a_idle)` and the disconnect is not processed until the device returns — ⚠️ **not benign: that unprocessed disconnect is the stale `is_active` above**, and it is what arms the `printk` loop |
 | driver unbind + bind with the device attached | **the only userspace recovery found.** Enumerates ~0.5 s later |
 
 **`$MUSB/vbus` is the diagnostic — `Vbus on` live, `Vbus off` dead.** Its on/off half is a real read of

@@ -95,21 +95,50 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B33. A USB babble error leaves a `printk` loop that hard-resets the device — open, **measured 2026-08-17**
+### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-08**
 
-⚠️ **One babble error puts the kernel into an unbounded message loop that outlives the device's removal and
-ends in a hardware reset 46 min later.** From `.188`'s persistent log — `/home/root/log/messages` on p3,
-which keeps the previous boot's tail across a reset — `musb-hdrc: Babble`, then `usb 1-1: USB disconnect,
-device number 2`, then `musb_bus_suspend 2589: trying to suspend as a_idle while active` repeating: syslog
-collapsed it as `last message buffered 1201140 times` in one 10-minute window (≈2000/s), and it ran **46
-minutes with no pad plugged in**. `FAT-fs (mmcblk0p1): Volume was not properly unmounted` in the next boot
-says hard reset, not clean `reboot`. **The reset itself is the hardware watchdog** — `/usr/sbin/watchdog`
-carries no check directives (`SYSTEM_ANALYSIS.md`), so it decided nothing; it was starved of CPU and missed
-its 60 s feed. ⚠️ **It is also a measurement contaminant**: anything judged by ear or timed during a storm
-was judged on a starved device, and a frozen app is a *symptom*, not the bug — an on-panel tool appearing
-to hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before trusting an on-device
-measurement.** The loop is not yet read out of the driver: start at `musb_bus_suspend()` in
-`usb_host/linux-4.14.52/drivers/usb/musb/` and at whether the `Babble` path leaves the port marked active.
+⚠️ **An unbounded kernel message loop that outlives the device's removal and ends in a hardware reset
+~46 min later, and it is also a measurement contaminant** — anything judged by ear or timed during a storm
+was judged on a starved device, and a frozen app is a *symptom*, not the bug; an on-panel tool appearing to
+hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before trusting any on-device
+measurement** and treat a non-zero count as "discard this measurement".
+
+**The violated invariant: `musb->is_active` must be false in any non-connected OTG state** (`A_IDLE`,
+`A_WAIT_BCON`). The `MUSB_INTR_DISCONNECT` switch's `default:` arm in
+`usb_host/linux-4.14.52/drivers/usb/musb/musb_core.c:897-900` only prints `musb_stage0_irq 898: unhandled
+DISCONNECT transition (a_idle)` and never clears it — the gadget-side twin does, at `musb_gadget.c:2105`.
+`musb_bus_suspend()` (`musb_host.c:2588`) then reads `is_active` as "a device is attached and running" and
+returns `-EBUSY`, and `WARNING()` is a plain `printk` with no ratelimit (`musb_debug.h:38-41`). The caller
+is the **root hub's runtime-PM autosuspend**, which is unbounded in both directions:
+`hcd_bus_suspend()`'s failure path carries no retry counter and no backoff, and `hub.c:1734` sets the hub's
+`autosuspend_delay` to 0. ⚠️ `omap2430_ops` has no `.recover`, so `musb_platform_recover()` is a no-op on
+this SoC — the AM335x software-babble workaround lives in `musb_dsps.c`, which is **not** this glue, so do
+not reach for it.
+
+⚠️ **A storm needs BOTH conditions, which is why it is rare: `is_active` stale AND the child device gone,
+so the root hub actually attempts a suspend.** Each half was measured alone 2026-09-08 and neither stormed.
+A clean unplug produces the `a_idle` warning but **retains** child `1-1` — no `usb 1-1: USB disconnect` is
+logged at all, because the disconnect went unprocessed — so the root hub stays `active` and `bus_suspend`
+is never called. A driver unbind+bind with an empty port removes the child but re-allocates `musb` with
+`is_active` clear, so the root hub **suspends successfully**; that one doubles as a positive control
+proving the instrument can report a healthy suspend. **The remaining untested condition is a device that
+raises `CONNECT` but never enumerates**, which is what the Aug 13 storm below shows
+(`xpad … usb_submit_urb failed with result -19` beforehand) and which needs a marginal connection to stage.
+
+⚠️ **Babble is neither necessary nor sufficient, so do not treat it as the cause.** `.188`'s persistent log
+— `/home/root/log/messages` on p3, which keeps the previous boot's tail across a reset — holds more
+`musb-hdrc: Babble` events than storms, and its Aug 13 storm has no babble within three days of it; check
+with `grep -ci babble` and `grep -c musb_bus_suspend` on that file. The Aug 17 storm is the one that fits
+the old story: `Babble`, then `usb 1-1: USB disconnect, device number 2`, then the warning repeating,
+collapsed by syslog as `last message buffered 1237959 times` in a 10-minute window (≈2060/s), running 46
+min to a reboot. `FAT-fs (mmcblk0p1): Volume was not properly unmounted` next boot says hard reset, not a
+clean `reboot`, and **the reset is the hardware watchdog** starved of CPU past its 60 s feed —
+`/usr/sbin/watchdog` carries no check directives, so it decided nothing. ⚠️ On a unit still holding the
+vendor soft watchdog, a reset cannot be attributed to the hardware one: check which watchdogs are running
+before drawing that conclusion.
+
+**Recovery is not a reboot** — a driver unbind+bind ends a live storm, which is how Aug 13's stopped in
+~20 s. **The fix is a driver patch, folded into F101**, and cannot ship before an image we built boots.
 Distinct from enumeration-at-probe, which is about a cold port never obtaining a session.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
@@ -553,6 +582,7 @@ strength of this entry.
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
+| Disconnect cleanup | clear `is_active` in the `default:` arm of `musb_core.c:897-900` | **the fix for B33**, whose entry holds the invariant and its measurement. A driver change like the row above, so the image is what makes it shippable |
 
 **Verification is the expensive half, and it needs a plan before the first build.** A bad image costs a
 card pull and a reimage by hand, and nothing on the device says why it failed
@@ -766,27 +796,18 @@ appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSI
 
 ## Where to start
 
-**This is the operator's ranking, set 2026-09-06, and it is the authority.** The tiers and their order
+**This is the operator's ranking, re-set 2026-09-08, and it is the authority.** The tiers and their order
 are theirs; the ⚠️ notes under each are what measurement has since added, not a re-ranking.
 
 ### Stability first
 
-1. **F9** — the release path. ⚠️ **What is left of it is two host-side defects and nothing else.** The
-   precondition ordering, the device provenance stamp and the licence question all closed 2026-09-07:
-   the source obligations are discharged by availability, which `LICENSE.md` now states along with the
-   condition it rests on. What remains, and both feed the tier below: `release.sh` has no test suite
-   while holding an `rm -rf` of a caller-supplied path, and its dirty-tree refusal is blind to staged
-   changes, which is the one thing that refusal exists to catch.
-2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
-   during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
-   `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.
-3. **F23** — tier 2 of the p1 gate, so a unit on any other Steelcase release can take the 500 mA patch.
-4. **F11** — one home for the host build prerequisites.
+1. **F11** — one home for the host build prerequisites.
 
 ### Usability, features, maintainability
 
 F2 (the biggest performance win available) · F100 (USB audio) · B35 · C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C8 · F17 · F6 · F14.
+F4 · C5 · C8 · F17 · F6 · F14 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
+waits on F101).
 
 ⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
 `check-audio-pacing.sh`, both blocking. No test suite runs from any build script, from `deploy-all.sh` or
