@@ -368,6 +368,7 @@ clamp_to_hw	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 11.4 MB/s	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 12287	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 clampedAdd	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+stay public for as long as	LICENSE.md	IMPROVEMENT_PLAN.md
 AUDIO_VOL_UNITY	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 0..60000	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 touch_fit_axis_range	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md

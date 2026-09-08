@@ -108,7 +108,7 @@ the [regenerator problem below](#the-vendor-network-regenerator) does not exist 
 removed rather than worked around. Confirmed on hardware: a unit commissioned as `rwtest` booted with
 its name intact and answered on the network.
 
-Regression: [`tests/commission_offline_test.sh`](tests/commission_offline_test.sh) — 36 cases, every
+Regression: [`tests/commission_offline_test.sh`](tests/commission_offline_test.sh) — every
 check with a sabotage case; needs root and a staged bundle.
 
 ## Finding the card

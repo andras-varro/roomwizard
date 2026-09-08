@@ -122,6 +122,13 @@ A release bundle (`./release.sh`) publishes ARM binaries. Its `NOTICE` file — 
 and shipped inside every tarball — is the per-release half of this; **this file is the repo-level half,
 and the two must agree.**
 
+⚠️ **Every source obligation here is discharged by *availability*, not by correspondence.** The
+repository these releases are published from is public, and the kernel the three modules are built
+against is unmodified upstream from kernel.org — so the written offer in `NOTICE` never has to be
+exercised: the source sits at the same address as the binaries. That rests on one condition, which is
+therefore a licence condition and not a preference: **the repository must stay public for as long as any
+release published from it is available**, because the offer is honoured for the lifetime of the release.
+
 | Published artifact | Effective licence of the binary | Obligation |
 |---|---|---|
 | `scummvm` | **GPL-3.0-or-later** | Corresponding source: upstream ScummVM plus `scummvm-roomwizard/backend-files/`. Written offer in `NOTICE`. |

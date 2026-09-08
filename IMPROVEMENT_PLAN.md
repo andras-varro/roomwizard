@@ -280,10 +280,6 @@ pre-change tree at **5 failures**, and the two limits of that control are in the
   published from" while those bytes are in no commit — exactly what the check exists to prevent. Both
   copies have the hole: the hoisted preflight and the post-build re-check. `git diff --quiet && git diff
   --cached --quiet` is the fix, and it is the first case the suite above should hold.
-- **Whether the `NOTICE` written offer is actually discharged has not been checked by anyone qualified to
-  say so.** `release.sh` generates the per-release half and `LICENSE.md` says the two must agree; that is
-  a bookkeeping guarantee, not a legal opinion. ⚠️ **Measure a dependency's licence *version* rather than
-  carrying it forward**: this entry once said ScummVM was GPLv2+ and the tree is **GPL-3.0-or-later**.
 
 ⚠️ **A `case` pattern in quotes is a literal, and it silently disarmed the `rm -rf` guard — fixed
 2026-09-07.** `--out`'s guard read `""|"/"|"/*"`, and a **quoted** `"/*"` matches only the
@@ -796,12 +792,14 @@ convenience. Everything else this entry opened for landed 2026-08-06/08 (`git lo
 provisioning data file with two executors, the two `dropline` config edits, `--from-bundle` over SSH, and
 the `lib/`+`commissioning/`+`device-files/` layout.
 
-⚠️ **A blocker this entry inherited, and it is a test-coverage gap rather than a code one:** neither
-`tests/commission_offline_test.sh` nor any non-dry `commission-offline.sh` run has been executed since
-the provision fold, because `commissioning/card-prep.sh`'s `sudo` on the `/etc/shadow` write cannot be
-driven non-interactively from this harness (`sudo: a password is required`) — a run stalls waiting for a
-password it cannot be given. **Run the root suite under an interactive sudo before trusting the offline
-installer again.** The block is not the mount; `--base` needs no root.
+⚠️ **A blocker this entry inherited, now half discharged:** `tests/commission_offline_test.sh` **has**
+been run green under root with a staged bundle (2026-09-07, 37 passed / 0 failed — the suite prints its
+own count, do not trust one written down). `wsl.exe -u root` is what sidesteps the recorded
+`sudo: a password is required` stall on `commissioning/card-prep.sh`'s `/etc/shadow` write. **What has
+still never been run is a non-dry `commission-offline.sh` pass** — the delivery path itself. `--base`
+reaches phases 1-5 and 7 without a card or root and cannot reach p1 by construction, so the p1 gate,
+backup, patch, verify and rollback are the part that needs a real card and a full `dd` image taken first.
+Until that has been done once, nothing has confirmed the offline installer end to end.
 
 **A second half-measure in the same vocabulary:** `provision.sh --dry-run` exits before the provision
 step, so it previews the clean and the p1 write but never the install/link plan. The plan is compiled on
@@ -855,14 +853,12 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
 
 ### Stability first
 
-1. **F9** — the release path. ⚠️ **What is left of it is now mostly NOT engineering.** The precondition
-   ordering and the device provenance stamp both landed 2026-09-07; the remaining named item is **blocked
-   on non-engineering expertise** — whether the `NOTICE` written offer is discharged has never been
-   checked by anyone qualified to say so, and `release.sh` guarantees bookkeeping rather than legality.
-   ⚠️ **Measure a dependency's licence *version*** — this entry once said GPLv2+ and the ScummVM tree is
-   GPL-3.0-or-later. What IS still engineering is two items and both feed the tier below: `release.sh` has
-   no test suite while holding an `rm -rf` of a caller-supplied path, and its dirty-tree refusal is blind
-   to staged changes, which is the one thing that refusal exists to catch.
+1. **F9** — the release path. ⚠️ **What is left of it is two host-side defects and nothing else.** The
+   precondition ordering, the device provenance stamp and the licence question all closed 2026-09-07:
+   the source obligations are discharged by availability, which `LICENSE.md` now states along with the
+   condition it rests on. What remains, and both feed the tier below: `release.sh` has no test suite
+   while holding an `rm -rf` of a caller-supplied path, and its dirty-tree refusal is blind to staged
+   changes, which is the one thing that refusal exists to catch.
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.
