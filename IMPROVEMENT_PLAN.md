@@ -164,6 +164,28 @@ operationally not: that log is the only instrument a no-microphone audio session
 one line is what a real counter line has to be found among. Print on a CHANGE in what was found, not on a
 poll — and keep the first announcement, which is genuinely useful.
 
+### D8. `rw_provision_test.sh` group F reports a missing fixture as a wrong count — open, measured 2026-09-08
+
+**The host gate is RED on this and it is not a subject defect.** Two faces of one problem, measured on
+the same tree in one session: under `./tests/run-all.sh` the suite is killed as
+`✗ TIMED OUT at 420 s — a hang is a result`, and run alone it prints `101 passed, 7 failed` with every
+failure in group F — `F2`, `F3`, `F4`, `F7`, `F8`, `F12`, `F14`. All seven trace to `$FW/scp.calls`,
+`$FW/ssh.calls` and `$FW/plan` **not existing**, i.e. the group's fixture never materialised; the
+assertions then report `want '8', got ''` and `rw_provision_plan_summary: no such plan`, which reads as
+"the copy step is broken" rather than "the harness never set up".
+
+⚠️ **`tests/rw_provision_test.sh:608` is why that is invisible**:
+`$(( $(grep -c . "$FW/scp.calls" || :) + $(grep -c . "$FW/ssh.calls" || :) ))` collapses to `$(( + ))`
+when either file is absent — a `syntax error: operand expected` that the `|| :` was written to swallow.
+So `F10` cannot distinguish *nothing ran on the device* from *the stub file was never created*, which is
+the vacuous-negative-assertion shape this repo keeps rediscovering.
+
+**Do not start by editing `lib/rw-provision.sh`.** Find out first why the fixture is absent, and whether
+the 420 s timeout and the missing files are the same cause — a run killed part-way leaves exactly this
+evidence, and a concurrent second run of the suite is one way to produce it. Then make a missing fixture
+**fail as a harness error**, not as a count: an absent `scp.calls` is `exit 2` territory, distinct from
+zero recorded calls. Whatever the cause, `608`'s arithmetic wants a guard either way.
+
 ---
 
 ## Features
