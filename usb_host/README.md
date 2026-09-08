@@ -524,7 +524,7 @@ the vendor image, verifies the restore and refuses loudly — p1 has no recovery
 
 | Approach | Why It Failed |
 |----------|---------------|
-| Vanilla kernel *image* build | **No attempt is recorded** — "bricked" was a prediction, not an outcome, and not a possible one: the card is the whole failure surface. It would boot with a dead touchscreen (`panjit_ts` has no vanilla equivalent), while the panel reduces to a stock `panel-dpi` node and the board DTS is authorable — `../SYSTEM_ANALYSIS.md#7-kernel-policy` |
+| Vanilla kernel *image* build | **Not a failed approach — it is the current plan**, and no attempt was ever recorded here: "bricked" was a prediction, not an outcome. The policy, the one blocking driver and the per-symbol costs are `../SYSTEM_ANALYSIS.md#7-kernel-policy` |
 | Binary patching of OEM zImage | Address relocation + inlining made patch point unfindable |
 | `/dev/mem` via `write()` syscall | `CONFIG_STRICT_KERNEL_RWX` blocks write to kernel pages |
 | DTB `dr_mode` modification only | Host mode needs the compiled-in `dma_init`/`dma_exit` stubbed out; the device tree cannot express that |

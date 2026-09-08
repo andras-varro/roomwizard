@@ -661,8 +661,8 @@ group_c() {
 # The addition is a measured capability rather than another paragraph about one: a peripheral whose DT
 # node says `status = "disabled"` has no driver bound, so nothing contends for it and userspace can
 # drive it outright — on UART3 that is one clock-gate bit, with no DTB patch and no reboot. That
-# matters out of proportion to its length because §7 forbids rebuilding this kernel, so "the node is
-# disabled" had been read as "out of scope" for every peripheral, not just this one. The same commit
+# matters out of proportion to its length because "the node is disabled" had been read as
+# "out of scope" for every peripheral, not just this one. The same commit
 # CORRECTED rather than appended to the claim it falsifies ("`disabled` is the whole blocker", now
 # scoped to the tty), and it paid elsewhere: the boot-path decision in the 802.15.4 entry, which the
 # measurement demotes from gating to deferred, shrank 43 -> 34 non-blank. Net across the repo is +1 line.

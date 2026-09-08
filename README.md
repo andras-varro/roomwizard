@@ -216,9 +216,9 @@ For hardware specs, see **[Subsystems](SYSTEM_ANALYSIS.md#3-subsystems)** in the
 See **[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)** for the current backlog. Highlights:
 
 - Known bugs are catalogued there with `file:line` references.
-- **Kernel rebuilds and upgrades are out of scope** — an image can be compiled, but it would boot with
-  a dead touchscreen, and a mainline port would additionally break the runtime bpp switching that
-  ScummVM and the VNC client depend on. See [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
+- **We build our own 4.14.52 image; a mainline port stays out of scope** — built from the vanilla tree
+  as it stands the image boots with a dead touchscreen, and a mainline port would additionally break the
+  runtime bpp switching ScummVM and the VNC client depend on. See [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
 
 ## A note on secrets
 

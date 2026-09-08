@@ -18,7 +18,7 @@
 - **A recorded cause and a prescribed fix are both hypotheses.** `open, confirmed` means the
   *symptom* reproduced and nothing more. Reproduce it, then find the cause yourself; and when an
   entry says "compare with X", read X. See `CLAUDE.md` → *Working style*.
-- Nothing here requires a kernel rebuild. Items that would are in [Out of Scope](#out-of-scope).
+- Kernel work is in scope; the image build is F101. What stays excluded is in [Out of Scope](#out-of-scope).
 
 **Before starting anything, read [`SYSTEM_ANALYSIS.md`](SYSTEM_ANALYSIS.md) §1 — *Read this first*.**
 Device facts live there; this file holds only what we intend to *do* about them.
@@ -139,7 +139,7 @@ poll — and keep the first announcement, which is genuinely useful.
 
 ## Features
 
-All userspace. No kernel work.
+Userspace except F101, which is the image build.
 
 ### F2. Use the DSS overlay planes — open, **biggest performance win available**
 
@@ -385,8 +385,8 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
 family as [F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
-controller scribbles into RAM.** A kernel rebuild would be the clean way and is not impossible, only
-ruled out on value ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+controller scribbles into RAM.** The clean way is the two config symbols in an image we build — fold it
+into F101 rather than extending the runtime patch ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 **Where the two questions do connect.** `CONFIG_SND=y` and `CONFIG_SND_USB=y` but
 `# CONFIG_SND_USB_AUDIO is not set` — so a **wired USB DAC** is also one module build away, with no
@@ -484,7 +484,7 @@ instructions imply that any machine with a card reader will do.
 
 ---
 
-### F100. USB audio output — one out-of-tree module, no kernel rebuild — open, measured 2026-09-06
+### F100. USB audio output — one out-of-tree module, independent of F101 — open, measured 2026-09-06
 
 **The ALSA core is already built in, so a USB DAC costs a module and no app changes.** Measured on
 `.188`: `/proc/asound/card0` is `[rw20]`, `/proc/asound/oss/sndstat` reports `Type 10: ALSA emulation`,
@@ -529,6 +529,37 @@ DMA would start to pay, and the baseline is 45 % of the one core for `samegame` 
 alongside. ⚠️ **Plugging USB is what provokes B33's babble storm**, which both hard-resets the unit and
 invalidates anything measured during it — run `dmesg | grep -c musb_bus_suspend` first and treat a
 non-zero count as "discard this measurement".
+
+### F101. Build our own 4.14.52 image — open
+
+**The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's.** The policy and the
+standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
+`usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
+`build-xpad-module.sh` and already **measured** producing modules that load on the device.
+
+**What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
+with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
+byte-patch route into p1; that in turn dissolves F23's per-firmware pattern gate and gives back the free
+undo both bring-up paths lost. ⚠️ **None of that is delivered until an image we built is booting on a
+unit**, so F23 stays open and the byte patch stays shipped meanwhile — do not delete either on the
+strength of this entry.
+
+**What to fold in, so the image is built once with everything wanted in it:**
+
+| Wanted | Change | Note |
+|---|---|---|
+| Touch | a `panjit_ts` equivalent, written from the published Cypress register map ([`#33-touch`](SYSTEM_ANALYSIS.md#33-touch)) | **the one blocker.** Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07 |
+| MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set, `CONFIG_MUSB_PIO_ONLY` unset | a genuine build defect; retires the runtime patch |
+| Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
+| USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
+| Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
+
+**Verification is the expensive half, and it needs a plan before the first build.** A bad image costs a
+card pull and a reimage by hand, and nothing on the device says why it failed
+([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). ⚠️ **Stage every
+experimental image under a NEW filename and leave `uImage-system` in place**, so the working boot
+survives a bad one. Whether to fit the `P4` console header — the only channel that shows a boot log, and
+a board change the hardware policy currently bars — is an open question for the operator.
 
 ## Structural and cleanup
 
@@ -711,23 +742,21 @@ fire in a file of the same kind, or the scan goes blind where it used to see.
 
 ## Out of Scope
 
-Recorded so the decision is not re-litigated. Most of these need a kernel rebuild, which is ruled out
-on **value, not feasibility** — the full rationale, the single blocking driver (`panjit_ts`) and the
-per-symbol evidence are in [`SYSTEM_ANALYSIS.md#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)
-and [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present). Requesting GPL source
-from Steelcase has been explicitly ruled out.
+Recorded so the decision is not re-litigated. ⚠️ **A kernel rebuild is no longer a reason to be in this
+table** — the image build is F101, and a config symbol on its own no longer blocks anything. What keeps
+these rows here is the *board*: anything needing a connector, a populated device or a wire is out under
+[`#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy). Requesting GPL source from Steelcase stays
+ruled out, and is needed for nothing
+([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 | Item | Blocked by | Detail |
 |------|---|---|
-| Enable the two EHCI USB host ports | `CONFIG_USB_EHCI_HCD` unset — **and doubly dead:** no second USB connector and no unpopulated footprint on the board | [`#36-usb`](SYSTEM_ANALYSIS.md#36-usb) |
-| Fix MUSB DMA properly | `CONFIG_USB_INVENTRA_DMA` + `CONFIG_MUSB_PIO_ONLY` both unset — a genuine build defect. The `/dev/mem` runtime patch stays. | [`#36-usb`](SYSTEM_ANALYSIS.md#36-usb) |
-| `PREEMPT` / `HZ=250` / PREEMPT_RT | Config-only, but still a rebuild | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
-| SPI | Four controllers `okay` in the DT, `CONFIG_SPI` unset | [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present) |
-| USB gadget mode | No `CONFIG_USB_GADGET` | [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present) |
-| Piezo buzzer on TWL4030 PWM | Needs `CONFIG_PWM_TWL` **and** a wire — all 3 dmtimer PWMs are taken | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
-| Mainline 6.x port | Would break runtime bpp switching (ScummVM + VNC), lose the DSS overlay sysfs, cost RAM | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
+| Enable the two EHCI USB host ports | **Nowhere to plug in** — no second USB connector and no unpopulated footprint on the board, so `CONFIG_USB_EHCI_HCD` is not what blocks this and an image we build gains nothing here | [`#36-usb`](SYSTEM_ANALYSIS.md#36-usb) |
+| SPI | Four controllers `okay` in the DT and `CONFIG_SPI` unset, but **nothing is on the bus** — no children are declared, and putting a device there needs a wire | [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present) |
+| Piezo buzzer on TWL4030 PWM | **Needs a wire**, and all 3 dmtimer PWMs are taken; `CONFIG_PWM_TWL` is the cheap half | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
+| Mainline 5.x/6.x port | **Closed on DRM/KMS, not on effort:** `omapdrm` would break the runtime bpp switching ScummVM and the VNC client depend on, lose the DSS overlay sysfs, and cost RAM. Building 4.14.52 ourselves (F101) is the opposite decision and keeps all three intact | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
-| Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
+| Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written — or once we are iterating on our own images (F101), where serial is the only channel that shows *why* one failed to boot, though fitting `P4` is itself a board change. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
 | Native ALSA backend (the "ALSA port") | **Nothing** — it needs no kernel work and the userspace side is complete on a stock unit ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Declined on **value**, and the reason is now settled rather than pending: `/dev/dsp` and the ALSA device are the same PCM, the only measured win is ~2× at the period, and no latency symptom has ever been reported. Both other arguments once recorded beside it are gone — *mixing* shipped in userspace, and the *frame arithmetic* lives in `audio_gen.c`, which a port would leave unchanged. The tinyalsa dependency, its build script and its licence rows were deleted with this decision; nothing in the tree prepares for it. **Revisit only if something we port needs ALSA.** | [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
 
 **Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the

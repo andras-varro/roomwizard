@@ -1409,8 +1409,8 @@ any conclusion from a unit**: one that has not been re-provisioned is running wh
 - ❌ **Hardware RNG** — `/dev/hwrng` exists but `rng_current = none` (not bound on GP silicon). Use
   `/dev/urandom`.
 
-**Present but unusable without a kernel rebuild** (which is out of scope — see
-[Kernel policy](#7-kernel-policy)):
+**Present but unusable without a config change, so gated on the image we build** — see
+[Kernel policy](#7-kernel-policy):
 
 - ⚠️ **SPI** — four controllers (`spi@48098000`, `@4809a000`, `@480b8000`, `@480ba000`) are all
   `status = "okay"` in the DT, but **`CONFIG_SPI` is not set**, so `/sys/bus/spi/` does not exist.
@@ -1926,57 +1926,58 @@ ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reu
 
 ## 7. Kernel policy
 
-**Do not rebuild or upgrade the kernel, and do not attempt a mainline port.** The decision is settled;
-only the reasons are, and they have been stated wrongly once. **A 4.14.52 rebuild and a mainline
-5.x/6.x port are separate questions** — the case against the second does not carry to the first.
+**Build our own 4.14.52 image from `usb_host/linux-4.14.52/`. A mainline 5.x/6.x port stays ruled out.**
+The two are separate questions and the case against the second does not carry to the first. Asking
+Steelcase for their source is also ruled out, and is needed for neither.
 
-**The vanilla tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla
-upstream 4.14.52, not Steelcase source — but `build-xpad-module.sh` configures it from the device's
-own `/proc/config.gz` plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured**
-building from it and loading there (`vermagic=4.14.52`). So "there is no source to build from" is
-**wrong**; whether a full image links is untried, but the tree is not what would stop it. What such
-an image would be missing has shrunk from three gaps to one:
+**The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
+not Steelcase source — but `build-xpad-module.sh` configures it from the device's own `/proc/config.gz`
+plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
+there (`vermagic=4.14.52`). Whether a full image links is untried; the tree is not what would stop it.
+What an image built from it must supply for itself:
 
-| `/proc/config.gz` symbol | Absent from vanilla 4.14.52 | Cost today |
+| `/proc/config.gz` symbol | Absent from vanilla 4.14.52 | Cost |
 |---|---|---|
 | `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **none** — it reduces to a stock `panel-dpi` node now the timings are recorded in [Display](#32-display) |
 | `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low** — every other peripheral is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc, `ti,omap-twl4030` audio), and `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
-| `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **the blocker** — `olddefconfig` drops it silently, so an image built from this repo as it stands would boot with a dead touchscreen; a driver has to be written |
+| `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **the standing cost** — `olddefconfig` drops it **silently**, so an image built from this tree as it stands boots with a dead touchscreen. The controller's I2C register map is published Cypress documentation ([Touch](#33-touch)); the absent vendor source would only have supplied a driver ready-made |
 
-**That last one is an implementation job, not a reverse-engineering one**, because the controller's
-I2C register map is published Cypress documentation ([Touch](#33-touch)). What the absent vendor
-source would actually buy is `panjit_ts` and the panel driver ready-made; requesting it from
-Steelcase is explicitly ruled out.
+**Why build one: the image becomes publishable.** A kernel compiled here ships with its own
+corresponding source and can go in a release; the vendor's `uImage-system` never can (`LICENSE.md`).
+That is what retires the byte-patch route into p1 — the USB power budget is reached today by locating a
+pattern inside a firmware image we may not redistribute and rewriting it in place, which is also why a
+power cycle is no longer a free undo on either bring-up path. **The argument is deployment stability,
+not performance.** The config defects a rebuild also fixes (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
+real, but none of them limits anything measured.
 
-**Verification is the harder blocker.** With no `/dev/uinput` here, a kernel that boots with a dead
-touchscreen cannot be diagnosed or regression-tested from the host — every iteration needs an operator
-at the panel, and every bad one a card swap. That is the cost that scales.
+**Verification is the cost that scales.** A kernel that fails to boot does not trigger recovery: U-Boot
+prints `Failure to load system kernel image` and lands at the `rw20 #` prompt with nothing changed
+([Boot chain and recovery](#4-boot-chain-and-recovery)), so each bad image costs a card pull and a
+reimage by hand. There is no `/dev/uinput`, so a booting image with dead touch cannot be
+regression-tested from the host either — every iteration needs an operator at the panel. ⚠️ **And the
+one channel that would show *why* an image failed is not fitted:** the console comes out at `P4`,
+characterised but unpopulated ([Serial ports](#312-serial-ports)), whose recorded revisit condition was
+written before this ruling.
 
-**A mainline port fails on DRM/KMS — and this argument is about 5.x/6.x only.** `omapfb`/`omapdss`
-were deprecated across 4.x and **removed from mainline during 5.x**; the OMAP3 replacement `omapdrm`
-is a DRM/KMS driver. Under it `/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev
-emulation exposes a **fixed** pixel format, while this project switches bpp at runtime in three
-components ([Display](#32-display)); the DSS overlay sysfs interface, the best free performance win
-available, disappears outright; and a 6.x kernel has a materially larger footprint on a 234 MB box.
-That the emulation would *reject* the switch is **[inferred]**, untestable here for want of any DRM at
-all; what is **measured** is only that the current stack supports it
-(`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running). ⚠️ **None of this argues
-against a 4.14.52 rebuild**, which leaves omapfb, that switch and the overlay sysfs as they are.
+**A mainline 5.x/6.x port stays out, on DRM/KMS.** `omapfb`/`omapdss` were deprecated across 4.x and
+**removed from mainline during 5.x**; the OMAP3 replacement `omapdrm` is a DRM/KMS driver. Under it
+`/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev emulation exposes a **fixed** pixel
+format, while this project switches bpp at runtime in three components ([Display](#32-display)); the DSS
+overlay sysfs interface, the best free performance win available, disappears outright; and a 6.x kernel
+has a materially larger footprint on a 234 MB box. That the emulation would *reject* the switch is
+**[inferred]**, untestable here for want of any DRM at all; what is **measured** is that the current
+stack supports it (`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running).
+⚠️ **None of this bears on a 4.14.52 rebuild**, which leaves omapfb, that switch and the overlay sysfs
+exactly as they are.
 
-**Value settles it.** **Brick risk: LOW** (removable SD; `uImage-system` stays untouched), but the
-gains are thin. The *config* defects (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are real and a rebuild
-would fix them, yet none limits anything measured; the OSS shim's bugs sit in `snd-pcm-oss`, which both
-consumers already work around and which native ALSA would bypass — neither needing a rebuild
-([Audio](#34-audio)); there is no WiFi hardware. **DSS overlays, the clear win, are pure sysfs.**
-
-⚠️ **What a rebuild would buy for USB, and what it would not — because "recompile the kernel and the USB
-problems go away" is not true and has been proposed.** It buys the two config defects above, and it buys
-the *ability* to patch the driver. It does **not** buy enumeration reliability: a cold port stays dark
-because VBUS here is driven solely by the DEVCTL `SESSION` bit and nothing sets that bit on a port that
-probed with an empty socket ([USB](#36-usb)) — no `.config` option changes which code writes that
-register, so this needs a **driver change**, which a rebuild enables rather than performs. The userspace
-remedies are therefore not interim: the one-tap RESCAN is the answer either way, and the refuted
-mechanisms and the one never-attempted candidate are tabulated in `usb_host/README.md`.
+⚠️ **What a rebuild does not buy: enumeration.** "Recompile the kernel and the USB problems go away" is
+not true and has been proposed. It buys the config defects above and the *ability* to patch the driver.
+It does **not** buy enumeration reliability: a cold port stays dark because VBUS here is driven solely
+by the DEVCTL `SESSION` bit and nothing sets that bit on a port that probed with an empty socket
+([USB](#36-usb)) — no `.config` option changes which code writes that register, so this needs a
+**driver change**, which a rebuild enables rather than performs. The userspace one-tap RESCAN is the
+answer until such a change is written and measured; the refuted mechanisms are tabulated in
+`usb_host/README.md`.
 
 ---
 
@@ -1994,8 +1995,8 @@ rules out are entirely doable.
 | XBee wireless | the header is on the board | closed on **value**, not on difficulty — a BGA pin could have been patched up |
 
 ⚠️ **This is why an entry that reads "needs a reachable pad" is out of scope, not merely expensive** —
-and it is a different judgement from [Kernel policy](#7-kernel-policy), which rules out a rebuild on
-value while the tree stays buildable. Here the tree is fine and the *board* is the boundary.
+and it is a different judgement from [Kernel policy](#7-kernel-policy), where the tree is ours to change
+and an image is the deliverable. Here the tree is fine and the *board* is the boundary.
 
 **What it does not exclude**, and these stay good candidates: every reading obtainable through a driver
 already probing. `in_temp1_input` is SoC die temperature in degrees C and `in_voltage9` is the RTC

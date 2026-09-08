@@ -1,0 +1,42 @@
+Thank you. I though we killed F24 already. It is a note in SYSTEM ANALYSIS. There some other points I think we have already tackled:
+- C12 — One commissioning entry point, we have the roomwizard.sh for this purpose. I would simply remove this point. What do you think?
+
+
+My priority:
+Stability:
+F9 — Ship binaries as GitHub releases, stability for releases. Clear this up first. I don't want to get into legal trouble.
+B33 — USB babble error leaves a printk loop that hard-resets the device
+F23 — The p1 gate knows one firmware release, and refuses every other, as far as I remember everything is in place. The script searches for the address not fixed patch *something*. I think this is important for deployment stability
+F11 — One home for the host build prerequisites. Looks straightforward and important for buildability.
+
+Usability/enritch features/maintainability:
+F2 — Use the DSS overlay planes: I'm very curious about this one. 
+F100 - USB audio.
+B35 — gamepad_rescan() logs a line per poll
+C1 — Extract the shared evdev layer
+C4 — Make the common library use the logger
+C6 — Extend the host-buildable test harness and C7 — Run shellcheck - testing in general should be extended. Not sure if we run tests before deployment. I installed shellcheck in WSL.
+C2 — Split device_tools.c
+B30 — brick_breaker hides lives past the ninth
+F4 — Surface the MADC (temperature and analogue inputs). *Not sure what the analogue part is*
+C5 — Fix text_truncate and the 8px/6px font-width confusion
+C8 — Retire hardware_diag
+F17 — Bluetooth peripherals, and whether USB DMA is reachable - as we have no ALSA, we need to revive that thread to have bluez-alsa. This seems to be another topic for Kernel compile. What do you think? The dongle is Asustech computer Inc Bluetooth controller. However, KDED say it is a realtek bluetooth controller. When we are there, we need to dig into this
+F6 — Multi-touch via direct I2C - this is something that we can try, but I strongly believe this is a topic for a Kernel compile. What do you think?
+F14 — Decide whether the boot progress bar comes back. And the aswer is yes. I wonder if want to spool this up with the Kernel compile
+
+Nice-to-have:
+B29 — Two findings left from the 2026-08-09 walkthrough (manual mount for for offline commissioning)
+C9 — A bundle cannot prove its stripped binaries were ever gated. We warn about this tight now. As we build and we strip, I think we are covered.
+C10 — Make a deep game state reachable without playing to it. This touches the test question from above. I'm OK to add a command line switch strictly for testing purposes. The launcher gives no command line to start something.
+C15 — The bare plan-ID scan collides with function-key names. This is for dock-check? Where are we using Function keys at all?
+F8 — Smooth LED effects. Not completely clear use-case.
+D7 — mDNS does not resolve from WSL, which is where the deploy scripts run. I installed sudo apt install libnss-mdns
+F7 — Use NAND mtd4 "scratch" for persistent data. An interesting idea, but then we need to be able to clear this. AFAIK a re-flash with the original image (or any other) would not make this go away. I wonder: if I re-commission a panel with a newer binary, would the existing high score tables go away?
+F13 — Commissioning from Windows without WSL, and from macOS. IT works natively with Linux. There is a solution for Windows (WSL). MacOS is open. I have no MacOS anyways. Very-very nice to have
+
+
+I miss the feature of USB sound that we proposed as BT is difficult. I have a C-Media CMI dongle. I can plug in the device anytime. I added it as F100
+
+Please keep this list, I put lots of effort going through and setting the prio.
+Don;t misunderstand me for not accepting your priority, just I want to cut into the important ones, where we achieve things. I'm fine with truncated letter, but not so much with reboots. BTW.
