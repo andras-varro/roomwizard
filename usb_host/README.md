@@ -462,7 +462,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | `../device-files/enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
 | `../device-files/usb-host` | Device | SysV init.d wrapper for USB host boot persistence |
 | `../device-files/xpad-modules` | Device | SysV init.d script for loading controller modules at boot |
-| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify — no rollback |
+| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify, restore-on-failure |
 
 The three device scripts live in [`device-files/`](../device-files/) rather than here, and are named as
 they are *deployed*, because three paths now install the same bytes — `commissioning/provision.sh`,
@@ -493,7 +493,9 @@ the move.
 ⚠️ **p1 is not a bundle path and `uImage-system` is never shipped.** It is a 5.2 MB Steelcase binary and
 this repo is published, so the patch is *derived* from the device's own copy by
 [`lib/rw-usbpower.sh`](../lib/rw-usbpower.sh) — md5-gated on the way in, backed up beside itself as
-`uImage-system.vendor`, verified by re-reading the card. There is no rollback on failure.
+`uImage-system.vendor`, verified by re-reading the card. On any failure past the backup step it restores
+the vendor image, verifies the restore and refuses loudly — p1 has no recovery over SSH. A write that
+*succeeds* has no in-place undo: that is a card reflash.
 `release.sh` refuses to publish any manifest entry whose basename matches `uImage*`.
 
 ---

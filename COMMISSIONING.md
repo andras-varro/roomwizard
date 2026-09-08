@@ -97,10 +97,11 @@ manifest; `+x` on everything that needs it (a real measurement on ext4, and impo
 that `default-app` names one of them; `dash -n` on every `/bin/sh` script it wrote; and that `websign/`
 and the `rcS.d/S60networkmanager` link are both gone.
 
-⚠️ **It writes p1**, to raise the USB power budget — so a power cycle is not a free undo. The vendor
-kernel is kept beside it as `uImage-system.vendor`, which is the in-place remedy, and md5-verified
-before the original is touched. `--no-usb-power` leaves p1 alone entirely; `--no-clean` deletes
-nothing.
+⚠️ **It writes p1**, to raise the USB power budget — so a power cycle is not a free undo, and **there is
+no in-place rollback**: recovery is reflashing the card from the image commissioning takes. The vendor
+kernel is kept beside it as `uImage-system.vendor`, md5-verified before the original is touched, as the
+writer's pristine input for re-deriving a patch. `--no-usb-power` leaves p1 alone entirely; `--no-clean`
+deletes nothing.
 
 Because this pass deletes `websign/` and the regenerator link in the same run that sets the host name,
 the [regenerator problem below](#the-vendor-network-regenerator) does not exist on this path — it is
@@ -340,8 +341,9 @@ commissioning it can no longer perform. `--keep-factory` opts out, and the 5 MB 
 either way. **p1 is written, once, by exactly one mechanism**: the vendor `uImage-system` is md5-gated on
 the way in, backed up to `uImage-system.vendor` (whose md5 is verified *before* the original is touched),
 verified by re-reading the card afterwards and rolled back on any failure. `mlo`, `u-boot.bin` and
-`ctrlblock.bin` are never touched. The accepted cost is that **a power cycle is no longer a free undo**;
-copying the backup over `uImage-system` is the in-place remedy and a card pull the fallback.
+`ctrlblock.bin` are never touched. The accepted cost is that **a power cycle is no longer a free undo**,
+and there is **no in-place rollback** — the backup is the writer's input for re-deriving a patch, and
+recovery is reflashing the card from the image commissioning takes.
 
 ### What it does
 

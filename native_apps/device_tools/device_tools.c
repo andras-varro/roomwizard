@@ -3510,7 +3510,7 @@ static void handle_usb_input(AppState *state, int tx, int ty,
          * NOTHING enumerates, so finding nothing is exactly when a re-probe is
          * worth its few seconds. If something is already listed the port is live,
          * and a device plugged in later enumerates on its own (measured on .188
-         * across gaps of 70-300 s, B32) — so do not disturb a working bus. */
+         * across gaps of 70-300 s) — so do not disturb a working bus. */
         if (state->usb_dev_cnt == 0)
             usb_recover_port(state);
     }

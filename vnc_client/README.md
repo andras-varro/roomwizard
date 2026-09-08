@@ -401,7 +401,7 @@ Key techniques adopted from the ScummVM RoomWizard backend:
 
 | Library | Version | License |
 |---------|---------|---------|
-| LibVNCClient | 0.9.14 | GPL v2 |
+| LibVNCClient | 0.9.14 | GPL-2.0-or-later |
 | zlib | 1.2.13 | zlib |
 | libjpeg-turbo | 2.1.5.1 | BSD-style |
 

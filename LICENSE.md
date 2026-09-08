@@ -138,9 +138,12 @@ GPL-2.0-**only** binary in the same distribution is what rules Apache-2.0 out.
 
 ⚠️ **The vendor's `uImage-system` may never be published, patched or not, and "it is only one byte
 different" does not change that.** It is Steelcase's build of Linux, so it is **GPL-2.0-only** and
-redistributing the binary obliges the *corresponding source* — which is exactly what this project does
-not have and has ruled out obtaining
-([`SYSTEM_ANALYSIS.md` §7](SYSTEM_ANALYSIS.md#7-kernel-policy)). That obligation cannot be met, so the
+redistributing the binary obliges **Steelcase's** corresponding source, which this project does not have
+and has ruled out requesting
+([`SYSTEM_ANALYSIS.md` §7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **That bar is a licence obligation,
+not this project's build policy, and nothing about building a kernel here lifts it** — an image compiled
+from the vanilla tree would carry its own corresponding source and could ship; the vendor's cannot,
+whatever else is decided about kernels. The obligation cannot be met, so the
 image cannot ship: not as a release asset, not as a tarball, not as a bundle file. This is already
 enforced rather than merely intended — `usb_host/build-and-deploy.sh` stages the `usb` group *without* it
 and says why, and `.gitignore` keeps whole-card dumps and their extracted partition trees out of the repo.
@@ -158,8 +161,9 @@ The MIT text above disclaims warranty, and that disclaimer is meant literally he
   `commissioning/commission-offline.sh` both patch `uImage-system` to raise the USB power budget from
   100 mA to 500 mA. The vendor image is backed up to `uImage-system.vendor` on the same partition first,
   and the backup's md5 is verified before the original is touched — but **a power cycle is no longer a
-  free undo**. In-place remedy: copy the backup back. Fallback: pull the card and restore it.
-  `--no-usb-power` opts out.
+  free undo, and there is no in-place rollback**: that backup is the writer's pristine input for
+  re-deriving a patch, not a way back. Recovery is reflashing the card from the image commissioning
+  takes, which is why it takes one. `--no-usb-power` opts out.
 - **Recovering a unit that will not boot means reaching the SD card, and that means opening the case.**
   It is feasible and it takes experience; an inexperienced attempt can break the enclosure. Nobody
   associated with this project is responsible for a broken case, a broken card or a bricked unit.

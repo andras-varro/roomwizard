@@ -135,8 +135,8 @@ once whether the card is backed up, before the first write. The opt-outs:
 
 Neither the clean nor the p1 write is undoable **on the device**: the 472 MB factory-restore payload goes
 with the rest of the vendor stack, and a power cycle no longer reverts p1. The vendor kernel is backed up
-beside itself as `uImage-system.vendor`, which is the in-place remedy; a card pull is the fallback.
-Details, and why the 500 mA value cannot be a boot-time script: [COMMISSIONING.md](COMMISSIONING.md).
+beside itself as `uImage-system.vendor`, the writer's input for re-deriving a patch — **not** a rollback:
+recovery is a card reflash. Why 500 mA cannot be a boot-time script: [COMMISSIONING.md](COMMISSIONING.md).
 
 ## Architecture
 

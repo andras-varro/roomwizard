@@ -272,6 +272,14 @@ pre-change tree at **5 failures**, and the two limits of that control are in the
   temp tree holding `release.sh` plus `lib/rw-bundle.sh` and `lib/rw-release.sh` with stub component
   scripts — ⚠️ `SCRIPT_DIR` comes from `$0`, so a copy of the bare script dies at its first `source`
   before parsing a single argument.
+- ⚠️ **The dirty-tree refusal cannot see staged changes — measured 2026-09-07.** `release.sh:171` is
+  `git diff --quiet`, which compares the worktree against the **index**: with a modification staged and
+  not committed it exits **0** where `git diff --cached --quiet` exits **1** (measured in a throwaway
+  repo, so the semantics are the tool's, not this tree's). So `git add -A` followed by `--tag` publishes a
+  release whose `NOTICE` offers "the corresponding source … available from the repository this release was
+  published from" while those bytes are in no commit — exactly what the check exists to prevent. Both
+  copies have the hole: the hoisted preflight and the post-build re-check. `git diff --quiet && git diff
+  --cached --quiet` is the fix, and it is the first case the suite above should hold.
 - **Whether the `NOTICE` written offer is actually discharged has not been checked by anyone qualified to
   say so.** `release.sh` generates the per-release half and `LICENSE.md` says the two must agree; that is
   a bookkeeping guarantee, not a legal opinion. ⚠️ **Measure a dependency's licence *version* rather than
@@ -852,8 +860,9 @@ are theirs; the ⚠️ notes under each are what measurement has since added, no
    on non-engineering expertise** — whether the `NOTICE` written offer is discharged has never been
    checked by anyone qualified to say so, and `release.sh` guarantees bookkeeping rather than legality.
    ⚠️ **Measure a dependency's licence *version*** — this entry once said GPLv2+ and the ScummVM tree is
-   GPL-3.0-or-later. What IS still engineering is one item and it feeds the tier below: `release.sh` has
-   no test suite, and it holds an `rm -rf` of a caller-supplied path.
+   GPL-3.0-or-later. What IS still engineering is two items and both feed the tier below: `release.sh` has
+   no test suite while holding an `rm -rf` of a caller-supplied path, and its dirty-tree refusal is blind
+   to staged changes, which is the one thing that refusal exists to catch.
 2. **B33** — the babble `printk` loop. It reboots the unit *and* silently invalidates anything measured
    during a storm, which makes it the one bug that corrupts other work. First step needs no device: read
    `musb_bus_suspend()` in `usb_host/linux-4.14.52/drivers/usb/musb/`.

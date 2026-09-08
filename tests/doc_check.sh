@@ -684,7 +684,7 @@ group_c() {
 # neighbour it must be read against. It CORRECTED rather than appended twice: §3.11's closing sentence
 # (which proposed the ruled-out half and pointed at a plan ID) and §3.4's stop-click bullet, whose scope
 # limit was folded into the existing text at a cost of 4 lines rather than a new paragraph. IMPROVEMENT_PLAN.md
-# paid for part of it -- F4 halved and F24 closed outright -- but into its own slack, not into this ceiling.
+# paid for part of it -- one entry halved and another closed outright -- but into its own slack, not into this ceiling.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
