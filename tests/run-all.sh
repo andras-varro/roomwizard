@@ -397,8 +397,11 @@ phase_ctests() {
 }
 
 # ── PHASE 3: shellcheck ────────────────────────────────────────────────────
-# Two tiers, because the repo carries 319 pre-existing findings that are not
-# this gate's to fix, and a gate that demanded zero would simply be disabled.
+# Two tiers, because the repo carries a backlog of pre-existing findings that are
+# not this gate's to fix, and a gate that demanded zero would simply be disabled.
+# ⚠️ The size of that backlog is NOT written here: tests/shellcheck-baseline.txt is
+# its one home, and a copy in prose goes stale silently.  It read "319" while the
+# baseline summed to 316 — measure with awk '{s+=$3} END{print s, NR}' on the file.
 #
 #   TIER 1, a hard zero:  every finding at error: severity, plus every SC11xx
 #     code.  SC11xx is the family that means shellcheck could not do its job

@@ -595,21 +595,19 @@ evdev's `write()` is the output-event path). The rule and the evidence are in `C
 *Non-obvious constraints*. **This invalidates the touch half of anything built on injection, so read
 it first.**
 
-Two pieces remain — the host-gcc regressions over the pure-logic parsers are done and gated:
+One piece remains — the host-gcc regressions over the pure-logic parsers are done and gated, and so is
+the absent-fixture guard that stopped `tests/rw_provision_test.sh` reporting a missing stub as a subject
+defect:
 
-1. **Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
-   `fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
-   `assert alive after 2 s`, across all ~15 binaries. That is a real smoke test and it has caught real
-   defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
-   instead.
-2. **Make an absent fixture a harness error in `tests/rw_provision_test.sh`.** Line 608 does
-   `$(( $(grep -c . "$FW/scp.calls" || :) + $(grep -c . "$FW/ssh.calls" || :) ))`, which collapses to
-   `$(( + ))` when either file is missing — a `syntax error: operand expected` that the `|| :` swallows.
-   So the suite cannot tell *nothing ran on the device* from *the stub file was never created*, and it
-   reported the second as the first for a whole session. An absent fixture is `exit 2` territory, which
-   `run-all.sh` already reports apart from both pass and fail. Measured 2026-09-08: run alone the suite
-   passes 109/109 in **3 s**, so nothing here is a subject defect — the trigger was a second concurrent
-   copy of the suite half-building the shared fixture, and the same shape wants a guard anyway.
+**Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
+`fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
+`assert alive after 2 s`, across all ~15 binaries. That is a real smoke test and it has caught real
+defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
+instead. ⚠️ **`assert not-all-black` is nearly vacuous on its own** — assert a minimum count of
+distinct pixel values, take the depth from `fbset | grep geometry` on the device rather than assuming
+32bpp, and keep *did not start* / *started and died* / *black screen* / *harness could not tell* as
+separate outcomes, because silence is not success. It needs a device to **run** but not to **write**:
+prove every branch on the host with an `ssh` stub on `PATH`, the way `tests/rw_provision_test.sh` does.
 
 Three rules these established, all load-bearing:
 
@@ -637,19 +635,39 @@ now runs `shellcheck` over every tracked script before any deploy or release, in
 new can be added** — the tiers, the ratchet and the `SC1124` trap are in `tests/CLAUDE.md`. What is open
 is the backlog that was already there when the gate landed, recorded one row per `(file, code)` in
 `tests/shellcheck-baseline.txt`. `sort -k3 -rn tests/shellcheck-baseline.txt | head` puts the worst files
-first; `native_apps/build-and-deploy.sh` leads it by a wide margin.
+first; `scummvm-roomwizard/manage-scummvm-changes.sh` leads it, then
+`probes/xbee_socket_continuity.sh`, then `scummvm-roomwizard/build-and-deploy.sh` and
+`commissioning/card-prep.sh`. ⚠️ **`native_apps/build-and-deploy.sh` is done and is no longer a
+leader** — its `SC1091` and `SC2162` rows reached zero and were deleted, and what is left there is
+deliberate: word-splitting that a rewrite cannot exercise, client-side expansion of local constants
+that `SC2029`'s remedy would break, and deploy-path `ls` sites free at the next real deploy.
 
 Three things to know before starting:
 
 - ⚠️ **A `# shellcheck` comment whose first word is followed by anything but a valid directive makes the
   tool exit 1 having analysed NOTHING in that file.** It reads exactly like a clean run that found one
   small problem. A directive in front of a single `case` branch is enough to do it — put it in front of
-  the whole function.
+  the whole function. ⚠️ **Prose is enough to do it too**, and that is the easy way in: a comment
+  explaining a directive, opening with the checker's own name, is parsed *as* a directive and reports
+  `SC1072`/`SC1073` while suppressing every real finding. Measured: a file's count fell from 69 to 2
+  that way. ⚠️ **So a small post-patch total is not evidence of success — the expected distribution per
+  code is**, and a voided file has almost none of it. Never open an explanatory line with that word.
 - **Prefer a fix that changes no behaviour to a `disable=` directive**, which is why no shipped script
   carries one for this backlog. The two `error:`-severity findings that existed are gone that way: they
   were `$key[` inside `"…$key[[:space:]]…"` in `lib/rw-provision.sh`, which shellcheck reads as a botched
   array expansion where the code is in fact correct, and `${key}` braced says so.
-- ⚠️ **`-x` does not help.** Measured: following sourced files leaves the `SC1091` count unchanged.
+- ⚠️ **`-x` does not help, and `# shellcheck source-path=SCRIPTDIR` does.** Measured: `-x` over the
+  whole tracked set leaves the output byte-identical. What clears `SC1091` is that directive, because
+  the tool resolves a `source=` path against its **own** working directory — the repo root when the
+  gate runs — and `SCRIPTDIR` makes it the script's instead. It is not a `disable=`; it makes the tool
+  analyse *more*. ⚠️ **Placement is the whole trick and it is file-wide only above the first command**:
+  negative controls measured in place gave four findings with the directive removed and four with it
+  moved below `set -e`, zero only above. The worked example, with that mechanism written out, is at the
+  top of `native_apps/build-and-deploy.sh`.
+- ⚠️ **Measure in the gate's shape — every tracked script at once, from the repo root — never one file
+  alone.** The same file checked alone reports four `SC1091` the gate does not, because the gate passes
+  the sourced libraries as inputs too. An "alone" measurement contradicted the rule above and cost real
+  time before the gate-shape run settled it. `shellcheck -f gcc $(git ls-files -- '*.sh')` is the form.
 
 Do not "fix" a finding by rewriting a line you cannot exercise. Several of the leaders are in build
 scripts that only a real deploy runs.

@@ -411,6 +411,7 @@ binutils-arm-linux-gnueabihf	setup-build-env.sh	IMPROVEMENT_PLAN.md
 python3-pil	setup-build-env.sh	IMPROVEMENT_PLAN.md
 run-all.sh	tests/CLAUDE.md	-
 shellcheck-baseline.txt	tests/CLAUDE.md	-
+harness-error channel	tests/rw_provision_test.sh	IMPROVEMENT_PLAN.md
 EOF
 }
 

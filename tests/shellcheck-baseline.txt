@@ -22,11 +22,9 @@ lib/rw-release.sh SC2016 1
 lib/rw-usbpower.sh SC2015 1
 lib/rw-usbpower.sh SC2086 1
 native_apps/app-manifests.sh SC2034 3
-native_apps/build-and-deploy.sh SC1091 4
-native_apps/build-and-deploy.sh SC2012 7
+native_apps/build-and-deploy.sh SC2012 5
 native_apps/build-and-deploy.sh SC2029 4
-native_apps/build-and-deploy.sh SC2086 53
-native_apps/build-and-deploy.sh SC2162 1
+native_apps/build-and-deploy.sh SC2086 1
 native_apps/build-usb-test.sh SC2086 1
 native_apps/check-audio-pacing.sh SC2064 1
 native_apps/check-bed-files.sh SC1091 1

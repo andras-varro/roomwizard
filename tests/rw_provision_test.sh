@@ -39,6 +39,14 @@
 
 set -u
 
+# ⚠️ Diagnostics from the stub-log guard in push() must survive a CALL SITE that
+# redirects push, and F9 does exactly that (`if push … > "$FW/bad.out" 2>&1`). Sent to
+# plain stderr they land in that file, so the guard exits 2 while run-all.sh prints the
+# PREVIOUS case as the last line — the harness error becomes invisible at the one site
+# that can trigger it. Measured. fd 9 is a copy of the real stderr, taken before any
+# redirection, and the guard writes there.
+exec 9>&2
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -538,7 +546,30 @@ STUB
 chmod +x "$FW/bin/ssh" "$FW/bin/scp"
 export STUBLOG="$FW" STUBDEV="$FW/dev"
 reset_stubs() { : > "$FW/ssh.calls"; : > "$FW/scp.calls"; rm -rf "$FW/dev"; mkdir -p "$FW/dev"; }
-push() { RW_SSH="$FW/bin/ssh" RW_SCP="$FW/bin/scp" rw_provision_push_installs "$@"; }
+push() {
+    RW_SSH="$FW/bin/ssh" RW_SCP="$FW/bin/scp" rw_provision_push_installs "$@"
+    local rc=$?
+    # ⚠️ Every assertion in this group counts lines in the two stub call logs, and the
+    # NEGATIVE one — F10, "it refused before running anything on the device" — is
+    # VACUOUS if a log is absent. It does not even fail cleanly: on a missing file
+    # `grep -c .` writes nothing to stdout, so
+    #     $(( $(grep -c . <absent>) + $(grep -c . <absent>) ))
+    # collapses to `$(( + ))`, a bash SYNTAX error whose value is the empty string —
+    # and the assertion then reports `want '0', got ''`, a missing fixture wearing a
+    # subject defect's clothes. That is not hypothetical: a whole plan entry was
+    # opened against this suite on the strength of such a failure, and the suite was
+    # fine. So refuse to judge rather than judge on absent evidence. Exit 2 is the
+    # harness-error channel tests/run-all.sh reports apart from BOTH pass and fail.
+    local f
+    for f in "$FW/ssh.calls" "$FW/scp.calls"; do
+        [ -f "$f" ] && continue
+        echo "HARNESS: a stub call log is absent after a push, so reset_stubs did not run." >&9
+        echo "HARNESS: every call-count assertion here would be vacuous. Not judging." >&9
+        echo "HARNESS: missing stub call log: $f" >&9
+        exit 2
+    done
+    return $rc
+}
 
 PPLAN="$FW/plan"
 rw_provision_plan "$RULES" "base usb" > "$PPLAN" || bad "F0 the plan compiles"
