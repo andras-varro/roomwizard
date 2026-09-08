@@ -38,7 +38,6 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `backlight` | Tool | CLI backlight control (hidden) |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
-| `touch_inject` | Tool | Injects synthetic evdev touch events, `touch_inject <raw_x> <raw_y> [ms]` (hidden) |
 
 Tools marked *hidden* have a `.hidden` marker in `/opt/games/`, so they do not appear in the
 launcher grid but remain runnable over SSH. `usb_test` and `watchdog_feeder` exist as source but
@@ -319,7 +318,7 @@ Two non-executable marker files in `/opt/games/` control how `game_selector` han
 ```
 
 Current state on device:
-- **Hidden:** `touch_inject`, `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`, `hardware_diag`
+- **Hidden:** `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`, `hardware_diag`
 - **No-args:** `scummvm`
 - **Visible:** `snake`, `tetris`, `pong`, `hardware_test`, `usb_test`, `scummvm`
 

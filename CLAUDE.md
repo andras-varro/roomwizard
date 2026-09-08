@@ -252,10 +252,10 @@ tool-level traps rather than device facts, and each has cost real time.
 
 ## Non-obvious constraints (things that will silently break)
 
-- **You cannot script a touch interaction, and the tool that claims to will lie to you.** There is no
-  `/dev/uinput`, and evdev's `write()` path is for *output* events — so
-  `native_apps/tests/touch_inject.c` writes to `/dev/input/event0`, **prints "injected successfully",
-  exits 0, and delivers nothing to any reader.** Automated on-device verification therefore stops at
+- **You cannot script a touch interaction, and a tool that claims to will lie to you.** There is no
+  `/dev/uinput`, and evdev's `write()` path is for *output* events — so a writer to
+  `/dev/input/event0` **prints "injected successfully", exits 0, and delivers nothing to any reader.**
+  One shipped here for months and is deleted, not fixed. Automated on-device verification stops at
   the **first** screen: SSH-launch the binary, `cat /dev/fb0`, decode, assert. Past that, write a
   tap-by-tap checklist for a human. ⚠️ **This is a limit on the *device*, not on the code** — ask
   whether the thing needs the *kernel* or only needs *events*. Detail: `native_apps/CLAUDE.md`.

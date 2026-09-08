@@ -518,9 +518,9 @@ towards wherever you tap in the playfield, which needs no regions, cannot latch,
 playfield one target. Where that does not map (platformer needs simultaneous run + jump), say so on the
 welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
 
-**What you can and cannot test from a script.** `CONFIG_INPUT_UINPUT` is unset in this kernel, so
-`tests/touch_inject.c` reports success and delivers nothing — root `../CLAUDE.md` for the mechanism and
-what that leaves possible. But that is a limit on *the device*, not on the
+**What you can and cannot test from a script.** `CONFIG_INPUT_UINPUT` is unset in this kernel, so an
+injector reports success and delivers nothing — a `tests/touch_inject.c` did exactly that and is
+deleted; root `../CLAUDE.md` has the mechanism. But that is a limit on *the device*, not on the
 code: `gamepad.c`'s own state machine is fully testable on the host, and `tests/gamepad_latch_test.c` does
 it. `gamepad_poll()` takes the touch coordinate as a plain argument and its evdev sources are `read(2)` on
 an fd — so a temp file of `struct input_event` assigned to `gm.gamepad_fd` drives the real

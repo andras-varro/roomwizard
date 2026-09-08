@@ -590,24 +590,19 @@ now, but the noise is still the cause.
 
 ### C6. Extend the host-buildable test harness — open
 
-⚠️ **`touch_inject` does not work and cannot be made to work on this device** (no `/dev/uinput`;
+⚠️ **Touch injection does not work and cannot be made to work on this device** (no `/dev/uinput`;
 evdev's `write()` is the output-event path). The rule and the evidence are in `CLAUDE.md` →
 *Non-obvious constraints*. **This invalidates the touch half of anything built on injection, so read
 it first.**
 
-Three pieces of work:
+Two pieces of work:
 
-1. **Delete the two dead harnesses, or make them say why they cannot work.** `tests/touch_inject.c`
-   reports success and delivers nothing, which is worse than not existing.
-   `tests/test_game_selector_scroll.py` (277 lines) has never worked, for the same reason — delete it
-   or rewrite it against framebuffer capture. It also carries a fifth inlined copy of the
-   framebuffer-decode logic that `fb565_to_png.py` supersedes.
-2. **Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
+1. **Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
    `fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
    `assert alive after 2 s`, across all ~15 binaries. That is a real smoke test and it has caught real
    defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
    instead.
-3. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
+2. **Extend the host-gcc regressions** over the pure-logic functions, where a regression is invisible
    until you are mis-tapping by 30 px. The existing ones all live in `native_apps/tests/` — `touch_calib_test.c` (the calibration fit
    end-to-end), `gradient_test.c`, `framebuffer_bpp_test.c`, `gamepad_latch_test.c`,
    `button_latch_test.c` (the once-per-process touch button latch — its group A drives the old
