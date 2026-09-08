@@ -214,8 +214,8 @@ meant to catch**.
   rather than only the two that assert on it: a sabotage forcing the install path would otherwise reach a
   live `apt` from whichever case forgot the shim (measured while writing the sweep). That is also what
   makes "sudo was never called" a real assertion instead of a vacuous one — an assertion that something
-  did not happen passes for free wherever the path is unreachable, so the sweep has to include a sabotage
-  that *does* reach it. What it cannot see: whether the package **names** resolve on a live archive.
+  did not happen passes for free wherever the path is unreachable, so `measure_setup_build_env_sabotage.sh`
+  includes one that *does*. Blind: whether the package **names** resolve on a live archive.
 - ⚠️ **`rw_release_test.sh` can assert every refusal and only a STUBBED acceptance.** `release.sh` has no
   `--no-build` flag, so the two `--out` values that must be *accepted* — an empty directory and a re-stage
   over a real bundle — fall straight through into a four-component ARM cross-build. The suite therefore
