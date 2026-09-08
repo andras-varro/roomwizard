@@ -76,8 +76,18 @@ uint32_t *ppm_scale(const uint32_t *src, int src_w, int src_h,
                     int dst_w, int dst_h)
 {
     /* A non-positive source dimension makes the clamps below compute a
-     * NEGATIVE sy/sx, which reads before the buffer.  Refuse it here. */
+     * NEGATIVE sy/sx, which reads before the buffer.  Refuse it here.
+     *
+     * The DESTINATION carries ppm_load's own 4096-per-axis limit, and that is a
+     * write-side guard rather than tidiness: size_t is 32 bits on armhf, so
+     * (size_t)dst_w * dst_h * 4 WRAPS — 65536x65536 lands on exactly 0 — and the
+     * malloc then succeeds tiny while the loops below write the full extent.
+     * That is a heap overflow WRITE, strictly worse than the read above, and it
+     * cannot be reproduced on the 64-bit dev host where the product still fits.
+     * No shipped caller can reach it (the launcher scales to icon constants), so
+     * this closes it by construction rather than by luck. */
     if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return NULL;
+    if (src_w > 4096 || src_h > 4096 || dst_w > 4096 || dst_h > 4096) return NULL;
 
     uint32_t *dst = malloc((size_t)dst_w * dst_h * sizeof(uint32_t));
     if (!dst) return NULL;

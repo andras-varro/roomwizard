@@ -383,6 +383,21 @@ int main(void) {
     r = ppm_scale(src, PAY_W, PAY_H, -1, 4);  check(r == NULL, "I: a negative dst_w is refused"); free(r);
     r = ppm_scale(src, PAY_W, PAY_H, 4, -1);  check(r == NULL, "I: a negative dst_h is refused"); free(r);
 
+    /* The destination cap. On armhf size_t is 32 bits, so (size_t)dst_w*dst_h*4 wraps
+     * and 65536x65536 lands on exactly 0: malloc succeeds tiny, then the scale loops
+     * write the full extent — a heap overflow WRITE. This host is 64-bit, so the
+     * overflow itself CANNOT be reproduced here; what is testable is the refusal that
+     * makes it unreachable, so that is what these assert. The 4096 pair is the
+     * negative control: the cap must not refuse the largest legitimate size, or a
+     * green run above would only prove ppm_scale refuses everything. */
+    r = ppm_scale(src, PAY_W, PAY_H, 4097, 4);      check(r == NULL, "I: dst_w over 4096 is refused");   free(r);
+    r = ppm_scale(src, PAY_W, PAY_H, 4, 4097);      check(r == NULL, "I: dst_h over 4096 is refused");   free(r);
+    r = ppm_scale(src, 4097, PAY_H, 4, 4);          check(r == NULL, "I: src_w over 4096 is refused");   free(r);
+    r = ppm_scale(src, PAY_W, 4097, 4, 4);          check(r == NULL, "I: src_h over 4096 is refused");   free(r);
+    r = ppm_scale(src, PAY_W, PAY_H, 65536, 65536); check(r == NULL, "I: the 32-bit wrapping pair is refused"); free(r);
+    r = ppm_scale(src, PAY_W, PAY_H, 4096, 1);      check(r != NULL, "I: dst_w exactly 4096 is ACCEPTED"); free(r);
+    r = ppm_scale(src, PAY_W, PAY_H, 1, 4096);      check(r != NULL, "I: dst_h exactly 4096 is ACCEPTED"); free(r);
+
     free(guard_block);
     guard_block = NULL;
     unlink(FIX_PATH);
