@@ -796,10 +796,12 @@ the `lib/`+`commissioning/`+`device-files/` layout.
 been run green under root with a staged bundle (2026-09-07, 37 passed / 0 failed — the suite prints its
 own count, do not trust one written down). `wsl.exe -u root` is what sidesteps the recorded
 `sudo: a password is required` stall on `commissioning/card-prep.sh`'s `/etc/shadow` write. **What has
-still never been run is a non-dry `commission-offline.sh` pass** — the delivery path itself. `--base`
-reaches phases 1-5 and 7 without a card or root and cannot reach p1 by construction, so the p1 gate,
-backup, patch, verify and rollback are the part that needs a real card and a full `dd` image taken first.
-Until that has been done once, nothing has confirmed the offline installer end to end.
+still never been run is a pass against a REAL DISK — and nothing else.** That suite contains no
+`--dry-run` at all, so each of its cases is itself a non-dry `--base` pass: the clean, `card-prep.sh`, the
+provision plan, the install and the verify are all exercised for real on a fabricated card tree. `--base`
+cannot locate p1 by construction, so the p1 gate, backup, patch, verify and rollback are the only
+unexercised half, and reaching them needs a card in a reader, `wsl --mount` from an elevated Windows
+shell, and a full `dd` image taken first. Nothing short of that confirms the delivery path.
 
 **A second half-measure in the same vocabulary:** `provision.sh --dry-run` exits before the provision
 step, so it previews the clean and the p1 write but never the install/link plan. The plan is compiled on
