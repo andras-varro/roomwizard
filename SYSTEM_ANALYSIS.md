@@ -229,7 +229,7 @@ With these numbers the panel needs no custom driver on any kernel: it reduces to
 blocker to any future kernel work, and it now lives here rather than only inside a binary on a
 2018 SD card.
 
-**DSS overlay planes — present and unused.** Three overlays with an independent hardware scaler:
+**DSS overlay planes — three overlays, and the hardware scaler is proven.** Two of them scale:
 
 ```
 $ ls /sys/devices/platform/omapdss/
@@ -243,19 +243,38 @@ manager1: tv   display=<none>
 /dev/video0 = omap_vout (V4L2 output)
 ```
 
-Each overlay exposes `input_size`, `output_size`, `position`, `zorder`, `global_alpha` and
-`pre_mult_alpha`; the manager exposes `trans_key_enabled` (colour keying) and
-`alpha_blending_enabled`. **Because input and output sizes are independent, the DSS performs
-arbitrary hardware scaling** — on a GPU-less 600 MHz part this is the only graphics acceleration
-available, and nothing in the project uses it. (`omap_vout: failed to allocate DMA Channel for
-video-1` appears at boot and is uninvestigated.) Proposal: `IMPROVEMENT_PLAN.md`.
+Each overlay exposes `output_size`, `position`, `zorder`, `global_alpha` and `pre_mult_alpha`;
+`input_size` and `screen_width` are **read-only** and track the bound framebuffer's mode, so input
+geometry is set with `fbset -fb /dev/fb1` and never by writing sysfs. The manager exposes
+`trans_key_enabled` (colour keying) and `alpha_blending_enabled`. ⚠️ **`gfx` (`overlay0`) has NO
+scaler**, so the input and output sizes are *not* freely independent on the plane the apps use:
+`omap3430_dss_overlay_caps[]` omits `OMAP_DSS_OVL_CAP_SCALE` for it (`dss/dss_features.c:341`) and
+`dss_ovl_simple_check()` returns `-EINVAL` for any `width != out_width` (`dss/overlay.c:116`). Only
+`vid1`/`vid2` scale, and **downscale is capped at 4× per axis with 5-tap filtering (2× vertically with
+3-tap) while no upscale limit is enforced at all** (`dss/dispc.c:2383`, `dss_features.c:431`). On a
+GPU-less 600 MHz part this is the only graphics acceleration available. (`omap_vout: failed to
+allocate DMA Channel for video-1` appears at boot and is uninvestigated.)
 
-`fb1` is the second framebuffer (`CONFIG_FB_OMAP2_NUM_FBS=2`, see above), and `/dev/video0`
-(`omap_vout`) is the V4L2 *output* path, which accepts **YUV with hardware colour-space conversion**.
-Both are untried. **[inferred]** `fb1` is the natural small-surface render target for a scaled overlay
-(draw at 400×240, let the DSS stretch it), `omap_vout` is what would make a video player conceivable on
-a part that could never software-decode one, and the DMA-channel error above may be what blocks the
-`omap_vout` route.
+**Measured on `.188`: `vid1` upscaling 400×240 → 800×480 full-screen, over the app, with no reboot,
+no boot parameter and no kernel work.** `fb1` is the second framebuffer
+(`CONFIG_FB_OMAP2_NUM_FBS=2`, see above) and is *already* bound to `overlay1` — a 1:1 default at probe
+(`omapfb-main.c:1924`), readable as `/sys/class/graphics/fb1/overlays`. The one thing missing is
+memory: **omapfb allocates vram for `fb0` only** (`omapfb-main.c:1551`), so `fb1` starts `size=0`, and
+an overlay whose `paddr` is 0 is refused (`dss/dispc.c:2620`) or disabled again on the next apply
+(`omapfb-main.c:958`). The whole recipe is four writes, in this order because a bad geometry is
+rejected at write time: `echo 384000 > /sys/class/graphics/fb1/size` (allocates from the existing
+`vram=12M` pool — `fb0` holds 1,536,000 of it, so most is free), `fbset -fb /dev/fb1 -g 400 240 400
+240 32`, `output_size`, then `enabled=1`. Undo is `enabled=0` then `size=0`. `zorder` is **not
+writable** on this SoC and does not need to be: the fixed order is GFX < VID1 < VID2, so `vid1`
+composites above the app with `alpha_blending_enabled=0`.
+
+⚠️ **A framebuffer screenshot cannot see an overlay.** `cat /dev/fb0` returns the gfx plane's own
+memory, not the composited panel — so overlay work is the one screen check in this repo that no
+`fb565_to_png.py` decode can perform, and it is verified by looking at the display.
+
+`/dev/video0` (`omap_vout`) is the V4L2 *output* path, which accepts **YUV with hardware colour-space
+conversion**, and is untried. **[inferred]** it is what would make a video player conceivable on a part
+that could never software-decode one, and the DMA-channel error above may be what blocks it.
 
 > ⚠️ This is a **legacy omapdss sysfs** interface. It does not exist under `omapdrm`. Anything
 > built on it is cheap today and would need rewriting as DRM atomic plane programming after a

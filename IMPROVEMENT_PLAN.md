@@ -177,22 +177,31 @@ Userspace except F101, which is the image build.
 Throttle* at **12–13 % CPU / 5.4 % memory**. 45 % is what an overlay composite has to beat. ⚠️ **Not the
 same quantity as the 32 % below** — a game mixing while it redraws, against O1–O12's endpoint.
 
-Three hardware overlay planes with a scaler, z-order, global alpha and colour-key, sitting unused. On
-a GPU-less 600 MHz part this is the only graphics acceleration that exists, and it is pure sysfs — no
-kernel work. Inventory, the live sysfs dump and the legacy-omapdss caveat:
-[`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display).
+Three hardware overlay planes — **two of them with a scaler** — plus z-order, global alpha and
+colour-key, sitting unused. On a GPU-less 600 MHz part this is the only graphics acceleration that
+exists, and it is pure sysfs — no kernel work. Inventory, the live sysfs dump and the legacy-omapdss
+caveat: [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display).
 
-Suggested order:
+Suggested order. ⚠️ **The mechanism is proven and the recipe measured** — `vid1` upscaling
+400×240 → 800×480 full-screen over the running app, four writes, no reboot and no boot parameter. That
+also corrected two things the steps below used to assert: `overlay0` (`gfx`) **cannot scale at all**,
+and `zorder` is **not writable** on this SoC. Recipe, scaling limits and the driver citations are in
+the display section linked above.
 
-1. **Prove the scaler.** Render at 400×240 into `fb1`, set `overlay0` `input_size=400,240`
-   `output_size=800,480`. A quarter of the pixel fill cost for the same visual size. Start with one
-   game, then ScummVM and the VNC client.
-2. **HUD plane.** Enable `overlay1` (`vid1`) above the game plane with `zorder` + `global_alpha` for
-   score bars, pause menus and modal dialogs — composited free, no redraw underneath.
+1. **Take the CPU win.** Render one game at 400×240 into `fb1` on `vid1` rather than 800×480 into
+   `fb0`, and measure against the 45 % above — a quarter of the pixel fill cost for the same visual
+   size. This is the step that pays; the rest are bonuses. It needs a seam in `common/framebuffer.c`
+   that can target `fb1` at a smaller geometry, then one game, then ScummVM and the VNC client.
+2. **HUD plane.** Put the unscaled HUD on `gfx` (`overlay0`) and the scaled game on `vid1` — or use
+   `vid2`, which is interchangeable with `vid1` and also scales. `global_alpha` works; `zorder` does
+   not, so the fixed GFX < VID1 < VID2 order decides what is on top and the layout must suit it.
 3. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
 4. **Video playback**, speculatively — `/dev/video0` accepts YUV with hardware colour-space
    conversion. Furthest from proven of the four, and the boot-time `omap_vout: failed to allocate DMA
    Channel for video-1` may be exactly what blocks it.
+
+⚠️ **Verification is operator-in-the-loop.** `cat /dev/fb0` returns the gfx plane's memory, not the
+composited panel, so no screenshot can see an overlay — say so in any checklist this work produces.
 
 ⚠️ Cheap today, but it would need rewriting as DRM atomic plane code after a **mainline** port — which
 is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.

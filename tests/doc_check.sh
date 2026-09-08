@@ -726,11 +726,24 @@ group_c() {
 # fixture was cleaner than the thing it stood for. Nothing was compressed to fit — the alternative was
 # to drop a measured claim, which is the failure this group exists to prevent. SYSTEM_ANALYSIS.md paid
 # nothing and needed to: its copy of the same stale claim became a pointer at exactly equal length.
+# ⚠️ 2026-09-08, one raise: SYSTEM_ANALYSIS.md 1640 -> 1657, to the measured post-edit count. The DSS
+# overlay scaler went from [inferred] to measured on a device -- vid1 upscaling 400x240 to 800x480
+# full-screen over the running app -- and the block that recorded it as untried was replaced by the
+# working recipe. Three of the added lines are corrections of claims that were WRONG, not additions:
+# the file asserted that input and output sizes are freely independent, when gfx (overlay0), the plane
+# every app uses, has no scaler at all and rejects any width != out_width; input_size is read-only and
+# tracks the framebuffer's mode rather than being written; and downscale is capped at 4x per axis. The
+# rest is the reason the recipe was not obvious -- omapfb allocates vram for fb0 only, so fb1 starts
+# size=0 and an overlay with paddr 0 is refused, which is why the plane looked unusable for months --
+# plus the trap that no framebuffer screenshot can see an overlay, so this is the one screen check in
+# the repo that a human has to make. Nothing was compressed to fit; the alternative was to drop a
+# measured recipe and leave the next session re-deriving it. IMPROVEMENT_PLAN.md paid for its own F2
+# rewrite out of its large standing slack, not into this ceiling.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1640	SYSTEM_ANALYSIS.md
+1657	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 215	README.md
