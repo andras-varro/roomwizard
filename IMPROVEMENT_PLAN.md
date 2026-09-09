@@ -154,18 +154,6 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B35. `gamepad_rescan()` logs a line per poll, so one session fills the log — open, measured 2026-08-21
-
-`/var/log/roomwizard/app_stdout.log` grew 134 KB across one play session on `.188`, and **1720 of those
-lines are the same one**: `gamepad: found gamepad 'Microsoft X-Box 360 pad' at /dev/input/eventN`. Every
-game calls `gamepad_rescan()` on a 5 s timer (`RESCAN_INTERVAL_MS`, `native_apps/CLAUDE.md` → *Input*) and
-the rescan re-`open()`s and re-announces a pad that never left. It is cosmetically harmless and
-operationally not: that log is the only instrument a no-microphone audio session has, and 1720 repeats of
-one line is what a real counter line has to be found among. Print on a CHANGE in what was found, not on a
-poll — and keep the first announcement, which is genuinely useful.
-
----
-
 ## Features
 
 Userspace except F101, which is the image build.

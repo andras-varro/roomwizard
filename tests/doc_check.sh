@@ -739,6 +739,23 @@ group_c() {
 # the repo that a human has to make. Nothing was compressed to fit; the alternative was to drop a
 # measured recipe and leave the next session re-deriving it. IMPROVEMENT_PLAN.md paid for its own F2
 # rewrite out of its large standing slack, not into this ceiling.
+#
+# 2026-09-08: tests/CLAUDE.md 288 -> 314. The file was AT its ceiling with zero slack, and the phase-2
+# work added three blocks that a gate cannot catch for itself. (1) "A skip is not a pass" was true of
+# phase 1 only -- phase 2 graded exit 0 as a pass unconditionally, so a C regression that could not reach
+# its subject reported as having tested it. (2) A phase-2 negative control needs a whole miniature
+# native_apps tree, and three separate things make that fixture lie: the build tree has to follow the
+# subject override, bash printf destroys a C string literal, and one row's -Dmain= renames a stub's entry
+# point. All three were measured, and the control that caught them is the one asserting the unmodified
+# fixture passes. (3) The instruction "run the gate as root to reach it" is WRONG on this host, measured
+# the same day, and shipping it would have sent the next session down a path that grades nothing. Nothing
+# was compressed to fit: the only way to pay 288 exactly was to delete other measured traps from the one
+# file that is their home, which trades one blind spot for another. A fourth block was then needed for the
+# skip CONVENTION itself: the detector is anchored on `skip` as a line's first token, because matching the
+# word anywhere read three PASSING tests as skipped, and phase 1's verdict-line guard cannot be borrowed —
+# these tests print four different verdict shapes and none is the one it greps for. 314 grants one line, not
+# more. native_apps/CLAUDE.md absorbed its own addition inside its existing slack, and
+# IMPROVEMENT_PLAN.md fell further, since the entry this work closed was deleted outright.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -752,7 +769,7 @@ ceilings() {
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-288	tests/CLAUDE.md
+314	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md

@@ -117,6 +117,7 @@ CTEST_ROWS=(
     "button_latch_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "config_test|-I common|common/config.c"
     "framebuffer_bpp_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
+    "gamepad_announce_test|-I common|common/gamepad.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gamepad_latch_test|-I common|common/gamepad.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gradient_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "launcher_args_test|-I. -Itests/hostshim -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/ppm.c common/logger.c"
@@ -239,6 +240,81 @@ if [ "$ONLY" = "selftest" ]; then
         sc_pass=$((sc_pass+1)); ok "5b   …and the summary names it as skipped"
     else
         sc_fail=$((sc_fail+1)); bad "5b   the skip was absorbed into the pass count"
+    fi
+
+    # ── Phase 2 had no skip detection at all until 2026-09-08: exit 0 was an
+    # unconditional pass, so a C regression that could not reach its subject
+    # reported as having tested it.  These two controls are what stop that
+    # coming back.  The fixture is a whole miniature native_apps tree, because
+    # the rows compile relative to the subject directory's parent: one stub .c
+    # per CTEST_ROWS name, and an empty file for every source any row names, so
+    # every row builds and only the stubs decide the verdicts.
+    # ⚠️ The skipping stub COLOURS the word, for the same reason control 5 does.
+    # ⚠️ Quoted heredocs, not printf: bash printf turns the \\n inside a C string
+    # literal into a REAL newline, which does not compile.  Control 10 is what
+    # caught that — without it, control 8 passed on a fixture whose other 14
+    # rows were all failing to build.
+    mkdir -p "$T/ct/tests" "$T/ct/build"
+    cat > "$T/ct_stub.c" <<'CTSTUB'
+#include <stdio.h>
+#undef main   /* launcher_args_test's row passes -Dmain=..., which renames this */
+int main(void) { printf("1 passed, 0 failed\n"); return 0; }
+CTSTUB
+    for row in "${CTEST_ROWS[@]}"; do
+        cname="${row%%|*}"
+        cp "$T/ct_stub.c" "$T/ct/tests/$cname.c"
+        for src in $(printf '%s' "$row" | cut -d'|' -f3); do
+            mkdir -p "$T/ct/$(dirname "$src")"; : > "$T/ct/$src"
+        done
+    done
+    cp -a "$T/ct" "$T/ct_skip"
+    cat > "$T/ct_skip/tests/gamepad_announce_test.c" <<'CTSKIP'
+#include <stdio.h>
+#undef main
+int main(void) { printf("  \033[1;33mskip\033[0m  no /dev/uinput\n"); return 0; }
+CTSKIP
+    control "8 a C regression that skips passes the gate but is NOT counted as passed" 0 \
+        env RW_CTEST_DIR="$T/ct_skip/tests" bash "$ME" --only=ctests
+    if grep -q 'skipped: gamepad_announce_test' "$T/out"; then
+        sc_pass=$((sc_pass+1)); ok "8b   …and the summary names it as skipped"
+    else
+        sc_fail=$((sc_fail+1)); bad "8b   the skip was absorbed into the pass count"
+    fi
+
+    cp -a "$T/ct" "$T/ct_undec"
+    cat > "$T/ct_undec/tests/gamepad_announce_test.c" <<'CTUNDEC'
+#include <stdio.h>
+#undef main
+int main(void) { printf("Refusing to grade\n"); return 2; }
+CTUNDEC
+    control "9 a C regression that exits 2 is a HARNESS ERROR, not a failure" 2 \
+        env RW_CTEST_DIR="$T/ct_undec/tests" bash "$ME" --only=ctests
+
+    # And the control for the control: the same fixture with no stub replaced
+    # must be plain green, or controls 8 and 9 are measuring the fixture.
+    control "10 the unmodified phase-2 fixture passes" 0 \
+        env RW_CTEST_DIR="$T/ct/tests" bash "$ME" --only=ctests
+
+    # ⚠️ The other direction, which fired for real: three of these tests name a
+    # CASE with the word "skipped", so a detector matching the word alone
+    # reported three PASSING tests as skipped.  This stub passes AND says the
+    # word, and must be counted as a pass.
+    cp -a "$T/ct" "$T/ct_wordy"
+    cat > "$T/ct_wordy/tests/config_test.c" <<'CTWORDY'
+#include <stdio.h>
+#undef main
+int main(void) {
+    printf("  ok   comments and blanks are skipped\n");
+    printf("1 passed, 0 failed\n");
+    return 0;
+}
+CTWORDY
+    control "11 a PASSING test that says \"skipped\" in a case name is not a skip" 0 \
+        env RW_CTEST_DIR="$T/ct_wordy/tests" bash "$ME" --only=ctests
+    if grep -q 'skipped: config_test' "$T/out"; then
+        sc_fail=$((sc_fail+1)); bad "11b   its case name was read as a skip"
+    else
+        sc_pass=$((sc_pass+1)); ok "11b   …and it is not named as skipped"
     fi
 
     mkdir -p "$T/scfiles"
@@ -364,7 +440,13 @@ phase_ctests() {
     # list makes every number after it meaningless.
     [ "$harness_n" -eq 0 ] || return
 
-    local na="$REPO_ROOT/native_apps"
+    # The tree the rows compile in is the PARENT of the subject directory, so
+    # that RW_CTEST_DIR redirects the build as well as the scan.  Without this
+    # the self-test can point phase 2 at a fixture and still compile the real
+    # sources, which is how a control for this phase would pass while measuring
+    # the repo instead of the fixture.
+    local na
+    na="$(dirname "$CTEST_DIR")"
     mkdir -p "$na/build"
     local row name cflags srcs rc t0 t1 log
     for row in "${CTEST_ROWS[@]}"; do
@@ -383,10 +465,43 @@ phase_ctests() {
             continue
         fi
         rc=0
-        ( cd "$na" && timeout 180 "./build/$name" ) >>"$log" 2>&1 || rc=$?
+        run="$LOGDIR/$name.run"
+        ( cd "$na" && timeout 180 "./build/$name" ) >"$run" 2>&1 || rc=$?
+        cat "$run" >>"$log"
         t1=$(date +%s)
+        # A SKIP IS NOT A PASS here either.  Phase 1 has had this since a
+        # skipping suite was counted green; phase 2 did not, and exit 0 was an
+        # unconditional pass — so a C regression that cannot reach its subject
+        # (gamepad_announce_test needs /dev/uinput, which is root-only on this
+        # host) would have been reported as having tested it.  Two details that
+        # are easy to get wrong: decolourise first, because the tests colour
+        # their own words and the byte before "skip" is then `m`, which a
+        # pattern anchored on a non-alphanumeric cannot match; and read the RUN
+        # output only, not $log, which also holds the compiler's — a warning
+        # quoting a source comment must not be able to mark a test skipped.
+        # ⚠️ The pattern is ANCHORED, and that is the whole design: a phase-2
+        # test signals a skip by printing `skip` as the FIRST token on a line,
+        # the way its banner does.  Matching the word anywhere reported three
+        # PASSING tests as skipped — they name cases "a middle gap is skipped",
+        # "the RIFF pad byte is skipped", "comments and blanks are skipped" —
+        # which understates coverage exactly as badly as absorbing a real skip
+        # overstates it.  Nor can a verdict line be used as the guard the way
+        # phase 1 does: these tests print four different shapes
+        # (`PASSED (0 failures)`, `PASSED 24 check(s), 0 failure(s)`,
+        # `63 checks, 0 failures`) and none is the `N passed, M failed` phase 1
+        # greps for, so that test is vacuously true here.
+        plain="$LOGDIR/$name.plain"
+        sed 's/\x1b\[[0-9;]*m//g' "$run" | tr -d '\000' > "$plain"
         case "$rc" in
-        0)   pass_n=$((pass_n+1)); ok "$(printf '%-32s %4ss' "$name" "$((t1-t0))")" ;;
+        0)   if grep -qiE '^[[:space:]]*skip([^[:alnum:]]|$)' "$plain"; then
+                 skip_n=$((skip_n+1)); SKIPPED_LIST+=("$name")
+                 skipmsg "$(printf '%-32s %4ss  SKIPPED — %s' "$name" "$((t1-t0))" \
+                     "$(grep -iE '^[[:space:]]*skip([^[:alnum:]]|$)' "$plain" | head -1 | cut -c1-64)")"
+             else
+                 pass_n=$((pass_n+1)); ok "$(printf '%-32s %4ss' "$name" "$((t1-t0))")"
+             fi ;;
+        2)   harness "$name exited 2 — it could not judge; see its own output"
+             grep -aE '(Refusing|refuse|could not|NOTHING)' "$plain" | head -3 | sed 's/^/    /' ;;
         124) fail_n=$((fail_n+1)); FAILED_LIST+=("$name")
              bad "$(printf '%-32s %4ss  TIMED OUT at 180 s — a hang is a result' "$name" "$((t1-t0))")" ;;
         *)   fail_n=$((fail_n+1)); FAILED_LIST+=("$name")
@@ -519,7 +634,12 @@ printf '  %s%d passed%s, %s%d failed%s, %s%d skipped%s, %s%d harness error%s\n' 
 
 if [ "$skip_n" -gt 0 ]; then
     printf '  %sskipped:%s %s\n' "$YEL" "$RST" "${SKIPPED_LIST[*]}"
-    [ "$(id -u)" -ne 0 ] && note "several suites need root; on this host: wsl.exe -u root bash tests/run-all.sh"
+    # ⚠️ NOT "re-run this as root". Measured 2026-09-08: as root, phase 1's
+    # commission_prep_test.sh exits 2, phase 2 then returns without printing a
+    # row, and phase 3 dies because git calls the repo dubiously owned — 11
+    # passed, 2 harness errors, exit 2. Root reaches FEWER subjects, so point at
+    # the one skipped subject instead of at the whole gate.
+    [ "$(id -u)" -ne 0 ] && note "each skipped subject names what it needs; run THAT one as root, not this gate"
 fi
 if [ "$harness_n" -gt 0 ]; then
     printf '  %sHARNESS ERROR%s — the gate could not judge. Nothing here is a verdict.\n' "$YEL" "$RST"

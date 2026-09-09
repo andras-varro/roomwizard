@@ -562,6 +562,15 @@ is `while (read(fd, &ev, sizeof(ev)) == sizeof(ev))` — a pad that leaves the b
 one idling out) leaves a stale fd that fails forever, so input is dead for the life of the process and only
 relaunching fixes it. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
 
+⚠️ **`scan_devices()` announces a CHANGE, never a poll, and a new print in it must keep that shape.**
+Because the rescan closes every device first, the `fd < 0` that guards each announcement is always true by
+the time the scan runs, so an unconditional `printf` there is one line per device per 5 s — measured on
+`.188` as 1720 identical `found gamepad` lines in one session, in the log that a no-microphone audio
+verification has to read. `announce_found()` / `announce_lost()` in `common/gamepad.c` compare against a
+remembered `"<name> at <path>"` per slot, which is why those three fields are the ones `gamepad_close()`
+must **not** clear. `tests/gamepad_announce_test.c` is the regression; it needs a real evdev node, so read
+[`../tests/CLAUDE.md`](../tests/CLAUDE.md) before assuming a green run measured anything.
+
 ⚠️ **The rescan fixes a stale fd, not a dead port — and the two are complementary.** It re-`open()`s
 `/dev/input/event0..31` from scratch, so it finds a *new* node but cannot create one, and a unit booted with
 an empty port has no node for this poll to find for the rest of that boot. A recovery needs **both** halves:

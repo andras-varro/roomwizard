@@ -212,6 +212,37 @@ static int normalize_axis(int value, int min_val, int max_val) {
     return normalized;
 }
 
+/* ── Announce a binding, but only when it is a CHANGE ───────────────────── */
+/* gamepad_rescan() closes every device and re-opens it, on a 5 s timer in all
+ * nine apps, so the `fd < 0` test that guards each of these prints is always
+ * true by the time scan_devices() runs — an unchanged pad used to be announced
+ * once per tick.  Measured on .188: 1720 identical "found gamepad" lines in one
+ * session, in a log whose whole value is that it is the only instrument an
+ * audio verification with no microphone can read.
+ *
+ * The remembered string is "<name> at <path>", so a pad that was swapped for a
+ * different one, or that came back on a different event node, still prints —
+ * those are real changes.  The printed line is byte-identical to the old one,
+ * because it is what a reader greps for. */
+static void announce_found(char *slot, size_t slot_sz, const char *kind,
+                           const char *name, const char *path) {
+    char desc[GAMEPAD_ANNOUNCE_LEN];
+    snprintf(desc, sizeof(desc), "%s at %s", name, path);
+    if (strcmp(slot, desc) == 0) return;
+    snprintf(slot, slot_sz, "%s", desc);
+    printf("gamepad: found %s '%s' at %s\n", kind, name, path);
+}
+
+/* The other half of the same rule: a device going away is a change too, and
+ * without this the log would fall silent at unplug and say nothing at all when
+ * the device came back a different way.  Clearing the slot is what lets the
+ * next successful bind announce itself. */
+static void announce_lost(char *slot, const char *kind, int fd) {
+    if (fd >= 0 || slot[0] == '\0') return;
+    printf("gamepad: %s no longer present (%s)\n", kind, slot);
+    slot[0] = '\0';
+}
+
 /* ── Scan /dev/input/event* for gamepad, keyboard, and mouse ────────────── */
 static void scan_devices(GamepadManager *gm) {
     char path[64];
@@ -238,13 +269,16 @@ static void scan_devices(GamepadManager *gm) {
         if (type == GDEV_GAMEPAD && gm->gamepad_fd < 0) {
             gm->gamepad_fd = fd;
             load_axis_calibration(gm);
-            printf("gamepad: found gamepad '%s' at %s\n", name, path);
+            announce_found(gm->announced_gamepad, sizeof(gm->announced_gamepad),
+                           "gamepad", name, path);
         } else if (type == GDEV_KEYBOARD && gm->keyboard_fd < 0) {
             gm->keyboard_fd = fd;
-            printf("gamepad: found keyboard '%s' at %s\n", name, path);
+            announce_found(gm->announced_keyboard, sizeof(gm->announced_keyboard),
+                           "keyboard", name, path);
         } else if (type == GDEV_MOUSE && gm->mouse_fd < 0) {
             gm->mouse_fd = fd;
-            printf("gamepad: found mouse '%s' at %s\n", name, path);
+            announce_found(gm->announced_mouse, sizeof(gm->announced_mouse),
+                           "mouse", name, path);
         } else {
             close(fd);
         }
@@ -253,6 +287,14 @@ static void scan_devices(GamepadManager *gm) {
         if (gm->gamepad_fd >= 0 && gm->keyboard_fd >= 0 && gm->mouse_fd >= 0)
             break;
     }
+
+    /* Anything still unbound after a full scan, that we had previously
+     * announced, is gone.  This runs after the loop above and not inside it,
+     * because the early break means a slot being unbound mid-loop says nothing
+     * about whether its device exists. */
+    announce_lost(gm->announced_gamepad,  "gamepad",  gm->gamepad_fd);
+    announce_lost(gm->announced_keyboard, "keyboard", gm->keyboard_fd);
+    announce_lost(gm->announced_mouse,    "mouse",    gm->mouse_fd);
 }
 
 /* ── Apply sensible defaults to all configurable fields ─────────────────── */

@@ -26,9 +26,29 @@ documentation and cannot change a deployed byte; `--self-test` runs the negative
 gate that inspected nothing is a worse reason to deploy than a red one. Its cost, and which suite
 dominates it, are in the script's own header, measured.
 
-⚠️ **A SKIP IS NOT A PASS, and grading on exit status alone makes it one.**
+⚠️ **A SKIP IS NOT A PASS, and grading on exit status alone makes it one — in EVERY phase.**
 `commission_offline_test.sh` exits 0 when it cannot get root, so skips are counted and named apart from
-passes.
+passes. Phase 2 carried no such branch until a host C regression needed a facility only root has here:
+`gamepad_announce_test.c` synthesises an evdev node through **this host's** `/dev/uinput`, so on a normal
+run it skips, and exit 0 alone would have reported it as having tested its subject. (That says nothing
+about the device, which has no `/dev/uinput` and where writing to an event node still delivers nothing.)
+The detection reads the RUN output only, never the build log above it, so a compiler warning quoting a
+source comment cannot mark a test skipped; a phase-2 exit of 2 is a harness error on the same footing as
+a suite's. ⚠️ **A phase-2 test signals a skip by printing `skip` as the FIRST token on a line**, and the
+pattern is anchored on that: matching the word anywhere reported three PASSING tests as skipped, because
+they name cases *"a middle gap is skipped"*, *"the RIFF pad byte is skipped"*. Phase 1's guard — no
+`N passed, M failed` line — cannot be borrowed, because these tests print four different verdict shapes
+and none is that one, so the test is vacuously true here. **Understating coverage is the same defect as
+absorbing a skip**, and the control for that direction is a stub that passes while saying the word.
+
+⚠️ **A phase-2 control needs a whole miniature `native_apps/` tree, and three things make that fixture
+lie.** `phase_ctests` takes the tree it compiles in from the parent of `RW_CTEST_DIR`, so the override
+redirects the build and not merely the subject scan — otherwise a control points at a fixture and grades
+the real sources. A stub C source must be written with a quoted heredoc, because `bash` `printf` turns
+the `\n` inside a C string literal into a real newline that will not compile. And every stub needs
+`#undef main`, because one row passes a `-Dmain=` that renames the stub's own entry point. The control
+that catches all three is **the unmodified fixture must pass**: without it, the skip control passed while
+the other fourteen rows were silently failing to build.
 
 ⚠️ **Match a suite's output on a DECOLOURISED copy.** The suites colour their own words, so that skip
 arrives as `ESC[1;33mskip ESC[0m` — the character before `skip` is `m`, and a pattern anchored on
@@ -57,6 +77,13 @@ tightened. That ratchet is why **no shipped script carries a `disable=` directiv
 suppressing it would add `SC1124` risk of its own — and why refreshing the baseline is a separate
 `--only=shellcheck-baseline` mode, since a gate that refreshes its own baseline as a side effect can
 never fail. Regenerate it deliberately, and only after reading what changed.
+
+⚠️ **Running the whole gate as root does NOT reach phase 2 on this host, so a root-only C regression is
+reached by compiling and running that one test as root** — its own header carries the command. Two
+independent reasons, both artefacts of the shell rather than the repo: `commission_prep_test.sh` exits 2
+as root, and phase 2 returns without printing a word while any harness error stands; then `git ls-files`
+fails on dubious ownership, so phase 3 finds no scripts. **A phase that grades nothing prints nothing
+here** — read the summary's harness-error count, never the absence of red rows.
 
 ## `doc_check.sh` — the documentation invariants
 

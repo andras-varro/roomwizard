@@ -28,6 +28,11 @@ extern "C" {
    often assigned event numbers >= 16 when built-in devices occupy lower slots */
 #define GAMEPAD_MAX_DEVICES 32
 
+/* Room for the "<name> at <path>" string remembered per slot, so a rescan can
+   tell an unchanged device from a swapped one: EVIOCGNAME is read into 128
+   bytes and the path into 64, plus " at " and the terminator. */
+#define GAMEPAD_ANNOUNCE_LEN 200
+
 /* Axis dead zone (for analog sticks) — legacy default, now configurable */
 #define GAMEPAD_DEADZONE 200
 
@@ -198,6 +203,16 @@ typedef struct {
     int mouse_x, mouse_y;                  /* Accumulated absolute position */
     int mouse_screen_w, mouse_screen_h;    /* Bounds for clamping */
     MouseAccelConfig mouse_accel;          /* Acceleration parameters */
+
+    /* Last announcement made for each slot, as "<name> at <path>", so that a
+     * rescan finding the same device again stays silent.  Deliberately NOT
+     * cleared by gamepad_close(): gamepad_rescan() calls that first, and a
+     * close/reopen of an unchanged device is not a change worth a log line.
+     * gamepad_init()'s memset is what makes an empty string mean "nothing
+     * announced yet". */
+    char announced_gamepad[GAMEPAD_ANNOUNCE_LEN];
+    char announced_keyboard[GAMEPAD_ANNOUNCE_LEN];
+    char announced_mouse[GAMEPAD_ANNOUNCE_LEN];
 } GamepadManager;
 
 /**
