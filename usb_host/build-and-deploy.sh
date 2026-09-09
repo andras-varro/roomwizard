@@ -1,8 +1,8 @@
 #!/bin/bash
-# build-and-deploy.sh — USB host mode + Xbox controller support for the RoomWizard
+# build-and-deploy.sh — USB host mode, Xbox controller and USB audio support for the RoomWizard
 #
 # Usage:
-#   ./build-and-deploy.sh                          # build the four artifacts only
+#   ./build-and-deploy.sh                          # build the eight artifacts only
 #   ./build-and-deploy.sh <ip>                     # build + deploy + patch p1
 #   ./build-and-deploy.sh <ip> --no-usb-power      # ...but leave p1 alone
 #   ./build-and-deploy.sh --bundle <dir>           # build + stage into an offline bundle
@@ -32,7 +32,7 @@
 #      uImage-system, which is on p1. ../lib/rw-usbpower.sh, and the only reason
 #      p1 is involved at all.
 #
-# So this script no longer restates any of that. It BUILDS the four artifacts,
+# So this script no longer restates any of that. It BUILDS the eight artifacts,
 # runs the ARM gate over them, and then drives the same three implementations
 # every other path drives.
 #
@@ -77,10 +77,10 @@ usage() {
     echo "  --no-usb-power   Do not patch uImage-system on p1. USB host mode and the"
     echo "                   controller modules still go on; the budget stays at"
     echo "                   100 mA, so a pad needs a POWERED hub."
-    echo "  --bundle <dir>   Build, then stage the four artifacts under <dir>/root/"
+    echo "  --bundle <dir>   Build, then stage the eight artifacts under <dir>/root/"
     echo "                   with a declared-mode manifest. No device needed."
     echo ""
-    echo "  The three device scripts and the two rc5.d links are NOT installed from"
+    echo "  The four device scripts and the three rc5.d links are NOT installed from"
     echo "  here in isolation — they are device-files/provision-rules.conf's \`usb\`"
     echo "  group, and this script runs that same plan. ./commissioning/provision.sh"
     echo "  <ip> and commission-offline.sh install it too, from the same records."
@@ -116,22 +116,32 @@ else
 fi
 DEVICE="root@$DEVICE_IP"
 
-# ── the four built artifacts, declared ONCE ─────────────────────────────────
+# ── the eight built artifacts, declared ONCE ─────────────────────────────────
 #
 # "<mode>|<local path>|<device path>". Both the --bundle staging and the scp
 # deploy read this array, so a new artifact is added in one place — the same rule
 # native_apps' GAMES_BINARIES follows. Modes are DECLARED, never read off disk:
 # /mnt/c reports every file 0777 and discards chmod (../CLAUDE.md).
+#
+# USB_MODULES is the list build-kernel-modules.sh produces, and it drives three things:
+# the "already built" short-circuit, the post-build presence check, and the artifact
+# rows below. A module added to the build script is added HERE and nowhere else.
+USB_MODULES=(
+    ff-memless.ko joydev.ko xpad.ko
+    snd-hwdep.ko snd-rawmidi.ko snd-usb-audio.ko snd-usbmidi-lib.ko
+)
+
 USB_ARTIFACTS=(
     "0755|$SCRIPT_DIR/devmem_write|/usr/local/bin/devmem_write"
-    "0644|$MODULES_DIR/ff-memless.ko|/lib/modules/$KERNEL_VERSION/extra/ff-memless.ko"
-    "0644|$MODULES_DIR/joydev.ko|/lib/modules/$KERNEL_VERSION/extra/joydev.ko"
-    "0644|$MODULES_DIR/xpad.ko|/lib/modules/$KERNEL_VERSION/extra/xpad.ko"
 )
+for _mod in "${USB_MODULES[@]}"; do
+    USB_ARTIFACTS+=("0644|$MODULES_DIR/$_mod|/lib/modules/$KERNEL_VERSION/extra/$_mod")
+done
+unset _mod
 
 echo ""
 echo "════════════════════════════════════════"
-echo " RoomWizard USB Host + Controller"
+echo " RoomWizard USB Host + Controller + Audio"
 echo "════════════════════════════════════════"
 ts "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 [[ -n "$BUNDLE_DIR" ]] && info "Staging a bundle: $BUNDLE_DIR"
@@ -173,20 +183,24 @@ else
 fi
 echo ""
 
-# ── 2. the three kernel modules ─────────────────────────────────────────────
-ts "[2/8] Xbox controller kernel modules"
-if [[ -f "$MODULES_DIR/ff-memless.ko" && -f "$MODULES_DIR/joydev.ko" && -f "$MODULES_DIR/xpad.ko" ]]; then
+# ── 2. the seven kernel modules ─────────────────────────────────────────────
+ts "[2/8] kernel modules (Xbox controller + USB audio)"
+_all_built=1
+for _mod in "${USB_MODULES[@]}"; do
+    [[ -f "$MODULES_DIR/$_mod" ]] || _all_built=0
+done
+if [[ $_all_built -eq 1 ]]; then
     ok "already built in modules/"
 else
     command -v bc >/dev/null 2>&1 || err "'bc' not found. Install every host prerequisite with setup-build-env.sh, at the repo root."
 
     # The kernel config comes off a device. ⚠️ With --bundle there is no device to
     # ask, so this is a refusal with the one command that fixes it rather than a
-    # confusing failure inside build-xpad-module.sh.
+    # confusing failure inside build-kernel-modules.sh.
     if [[ ! -f "$SCRIPT_DIR/device_config" ]]; then
         if [[ -z "$DEVICE_IP" ]]; then
             err "the modules are not built and usb_host/device_config is absent, so
-     build-xpad-module.sh has no kernel config to build against — and with no
+     build-kernel-modules.sh has no kernel config to build against — and with no
      <ip> there is no device to read one from. Get it from any unit once:
        ssh root@<ip> cat /proc/config.gz | gunzip > usb_host/device_config
      Then re-run. (device_config and modules/ are gitignored: they are
@@ -198,15 +212,15 @@ else
         ok "saved usb_host/device_config"
     fi
     info "building (several minutes on the first run)..."
-    bash "$SCRIPT_DIR/build-xpad-module.sh"
+    bash "$SCRIPT_DIR/build-kernel-modules.sh"
 fi
-for mod in ff-memless.ko joydev.ko xpad.ko; do
-    [[ -f "$MODULES_DIR/$mod" ]] || err "module $mod not in $MODULES_DIR — run build-xpad-module.sh by hand to debug"
+for mod in "${USB_MODULES[@]}"; do
+    [[ -f "$MODULES_DIR/$mod" ]] || err "module $mod not in $MODULES_DIR — run build-kernel-modules.sh by hand to debug"
 done
-ok "ff-memless.ko, joydev.ko, xpad.ko"
+ok "${USB_MODULES[*]}"
 echo ""
 
-# ── 3. the ARM-safety gate, on all four ─────────────────────────────────────
+# ── 3. the ARM-safety gate, on all eight ─────────────────────────────────────
 #
 # Cortex-A8 has no hardware integer divide: an sdiv/udiv INSTRUCTION is SIGILL
 # (exit 132) with a blank screen and no log. Runs before the deploy AND before
@@ -320,7 +334,7 @@ ssh "$DEVICE" "sh /tmp/rw-usb-provision.sh /tmp/rw-usb-plan; rc=\$?; rm -f /tmp/
 ok "scripts installed, S89xpad-modules and S90usb-host linked"
 echo ""
 
-# ── 5. the four built artifacts ─────────────────────────────────────────────
+# ── 5. the eight built artifacts ─────────────────────────────────────────────
 ts "[5/8] Built artifacts"
 ssh "$DEVICE" "mkdir -p /usr/local/bin /lib/modules/$KERNEL_VERSION/extra"
 for a in "${USB_ARTIFACTS[@]}"; do
@@ -383,6 +397,7 @@ echo ""
 # `/etc/init.d/usb-host recover`.
 ts "[7/8] Enabling host mode and loading the modules now"
 ssh "$DEVICE" "/etc/init.d/xpad-modules start" || warn "module load reported a failure"
+ssh "$DEVICE" "/etc/init.d/usb-audio-modules start" || warn "usb-audio module load reported a failure"
 ssh "$DEVICE" "/etc/init.d/usb-host start" || warn "usb-host start reported a failure"
 echo ""
 

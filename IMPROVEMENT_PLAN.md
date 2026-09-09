@@ -457,58 +457,76 @@ instructions imply that any machine with a card reader will do.
 
 ---
 
-### F100. USB audio output — one out-of-tree module, independent of F101 — open, measured 2026-09-06
+### F100. USB audio — the driver half is DONE; the app cannot reach it yet — open, measured 2026-09-09
 
-**The ALSA core is already built in, so a USB DAC costs a module and no app changes.** Measured on
-`.188`: `/proc/asound/card0` is `[rw20]`, `/proc/asound/oss/sndstat` reports `Type 10: ALSA emulation`,
-and no `snd*.ko` exists anywhere under `/lib/modules` because the whole stack is compiled in.
-`usb_host/device_config` has `CONFIG_SND=y`, `CONFIG_SND_PCM=y`, `CONFIG_SND_SOC_TWL4030=y`,
-`CONFIG_SND_OSSEMUL=y`, `CONFIG_SND_PCM_OSS=y`, `CONFIG_MODULES=y`, `CONFIG_MODVERSIONS=y` — and
-`CONFIG_SND_USB_AUDIO` unset, which is the only gap. So `/dev/dsp` is an OSS shim over a live ALSA
-core, and this entry does **not** reopen the declined native-ALSA-client decision: the driver is
-consumed through the same shim, with no `libasound` linkage and no app rewrite.
+**A USB DAC works on hardware. What is left is entirely app-side.** Measured on `.188` with a C-Media
+`0d8c:0014` on a 4-port hub alongside the Xbox pad (both full-speed, both working at once):
+`/etc/init.d/usb-audio-modules` loads `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib` and `snd-usb-audio`
+with plain `insmod` — no `-f`, no unresolved symbols — `/proc/asound/cards` gains
+`1 [Device]: USB-Audio`, and **`/dev/dsp1` appears at char 14,19**. Operator-confirmed audible in
+headphones plugged into the dongle, and *not* on the panel speaker, so the stream provably went to card 1.
 
-**Build it the way `xpad` is already built** (`usb_host/build-xpad-module.sh`): vanilla tree,
-`device_config` → `.config`, `modules_prepare`, then `M=sound/usb`. Four modules ship —
-`snd-usb-audio`, `snd-usbmidi-lib` (same obj line), plus `snd-hwdep` and `snd-rawmidi`, which
-`SND_USB_AUDIO` selects and the built-in kernel lacks. ⚠️ **After `olddefconfig`, assert
-`CONFIG_SND_HWDEP=m` and `CONFIG_SND_RAWMIDI=m`, not `=y`** — resolved to `y` they drop out of the
-module build while the running kernel has no such symbols, and `insmod` then fails on unresolved
-symbols rather than on anything that names the cause. `depmod -a` on the device afterwards.
+**PIO cost does not sink it — the old "could sink it" warning is retired.** Instrument: `/proc/stat`
+busy ticks over a wall-clock denominator, three interleaved 20 s runs each proving the stream was still
+alive 2 s before the end. Onboard `plughw:0,0` 41/35/34 ticks ≈ **1.8 %** of the one core; USB
+`plughw:1,0` 51/50/41 ≈ **2.4 %**. So ~0.6 pp for the whole PIO path. ⚠️ **Two instrument traps found
+here.** `/proc/stat`'s *total* column is unusable as a denominator on this kernel — `NO_HZ_IDLE` with
+`TICK_CPU_ACCOUNTING` means idle ticks are never sampled, and three nominal-15 s windows reported 1434,
+1450 and 1179 total; busy ticks are honest, `CONFIG_HZ=100`, so use wall seconds × 100. And a
+**first-ever stream after module load measured 135 ticks/15 s (~9 %) and did not reproduce** — do not
+quote that number.
 
-⚠️ **There IS app work, and the earlier "no app work" claim was wrong — measured 2026-09-06.**
-`SND_DYNAMIC_MINORS` is unset, so OSS minors are static and card 1 lands deterministically at
-`/dev/dsp1`, created by devtmpfs+udevd on plug exactly as `js0` was for `xpad` — but nothing on the
-device can be pointed at it. `common/audio_out.c:481` defines the path as a compile-time macro
-(`DSP_DEVICE`), opened at `:506`; there is no config lookup and no `getenv` anywhere in the file, and
-`audio_out_open_oss()`/`OSS_DEV` take no path argument. So the vtable is the right scaffolding and the
-seam is simply absent. ⚠️ **`oss_open()` also calls `enable_amp()` unconditionally at `:500`** (GPIO12
-HIGH) — card 0's speaker amp, meaningless for a DAC, so that must become conditional on the path. ⚠️
-**Both live in `audio_out.c`, which is on ScummVM's `OBJS` list, so this forces an all-three-component
-redeploy** — price that in before starting.
+**What remains, and it is all in userspace.** ⚠️ **The seam is bigger than this entry used to say:
+there are TWO `DSP_DEVICE` macros, not one.** `audio_out.c:481` is the one previously named, but
+`audio.c:26` is the other and it is on the hot path — `audio_init()` → `audio_open()` → `dsp_reopen()`
+opens `/dev/dsp` at `audio.c:290` *first*, it is the fallback when `audio_out_open_oss()` fails
+(`audio.c:733`), and it is the restore path when CONT is switched off (`audio.c:756`). `enable_amp()` is
+duplicated the same way (`audio.c:69-77`, called unconditionally at `audio.c:281`; `audio_out.c:486-493`
+at `:500`) and is card 0's speaker amp, meaningless for a DAC. A seam in `audio_out.c` alone leaves
+every app opening card 0 at startup and falling back to card 0 on error.
 
-**The dongle is identified: `0d8c:0014` C-Media Audio Adapter (Unitek Y-247A), reported by the operator
-2026-09-06.** It is plain UAC1 to this driver — no descriptor, format, clock or endpoint quirk applies.
-The only quirk that touches it is cosmetic: `sound/usb/mixer_quirks.c:1882` sets `min_mute` on any
-"Playback" control for `0d8c:0014`, a mixer-scale detail. Four `.ko` are needed, not two —
-`snd-usb-audio` and `snd-usbmidi-lib` from `M=sound/usb`, plus `snd-hwdep` and `snd-rawmidi` from a
-**second** `M=sound/core` pass, because `SND_USB_AUDIO` selects them and the built-in kernel has
-neither.
+Three further costs the work must budget for:
 
-⚠️ **The unknown that could sink it is PIO cost, and it has never been measured.** MUSB DMA is
-noop-stubbed and falls back to PIO; a 48 kHz stereo stream is ~190 KB/s, which F17 records as where
-DMA would start to pay, and the baseline is 45 % of the one core for `samegame` over a music bed.
-**Measure before writing code:** `lsusb` to identify the dongle, then `aplay -D plughw:1,0` with `top`
-alongside. ⚠️ **Plugging USB is what provokes B33's babble storm**, which both hard-resets the unit and
-invalidates anything measured during it — run `dmesg | grep -c musb_bus_suspend` first and treat a
-non-zero count as "discard this measurement".
+- **`audio_out_open_oss()` is the signature that has to change**, and `dev_ctx` is currently a bare
+  `int *` (`audio_out.c:608`, unpacked at `:498, :564, :580, :594`), so carrying a path means promoting
+  it to a small struct or adding a file-static setter. The vtable itself needs no change —
+  `audio_out_open()` never sees a device name.
+- ⚠️ **`tests/run-all.sh:114` links `audio_out_test` against only `common/audio_out.c
+  common/audio_gen.c`**, so giving `audio_out.c` a `#include "config.h"` breaks that host-test link line.
+- **The redeploy price is TWO components, not three** — see the table in `CLAUDE.md`; `vnc_client`
+  links neither `audio_out.c` nor `audio_gen.c` (measured 2026-09-09). ScummVM is still the slow one.
+
+⚠️ **Card 1 grants neither of the two rates the existing callers ask for.** `/proc/asound/card1/stream0`
+reports playback `S16_LE`, `Channels: 2` exactly, `Rates: 48000, 44100` — while `audio.c:729` requests
+44100/2 (fine) and `scummvm-roomwizard/backend-files/oss-mixer.cpp:114` requests **22050/1** (neither).
+The OSS shim resamples so this is not fatal, but per-device rate preference is a *second* seam from the
+path and ScummVM is the caller that needs it.
+
+**Operator decision, 2026-09-09: an explicit three-way setting, not auto-detection.** Onboard / USB /
+Auto, where Auto means USB when a card is present. The row appears only when one is, but the stored
+value persists so unplugging falls back. ⚠️ **The settings app is `device_tools` tab 0, NOT
+`hardware_config`** — that one is in `RW_APP_MANIFESTS_RETIRED` (`native_apps/app-manifests.sh:61`),
+has no launcher tile, and `device_tools.c:483-486` records it as the copy that was folded in. Two
+obstacles there: **no multi-choice widget exists in the app at all** (only `ToggleSwitch` and a
+`[-]/[+]` stepper), and the Settings rows are hand-placed globals (`device_tools.c:305-315`) on a
+compile-time `#define` ladder (`:575-579`) whose arithmetic is written out **twice** (`:583-586` and
+`:710-713`) — a new row must add the same term to both and keep the layout receipt at `:692-705`
+printing "fits". No settings row anywhere is conditional on hardware today; the pattern to copy is
+`usb_scan_devices()` (`:3016-3036`). Cheapest detection in house style is `access("/dev/dsp1", W_OK)`.
+`device_tools` already links `audio.o`/`audio_gen.o`/`audio_out.o`, so no build change is needed.
+Config budget: `CONFIG_MAX_KEYS` is 32 and 17 are used, but `config_load`/`config_set`/`config_save`
+all drop past the ceiling **in silence**.
+
+**Still unmeasured:** the CPU figures above are `aplay`, not our mix bus, and there is no valid
+process-versus-IRQ split (the per-process column of the measuring script was void — `$14` in POSIX sh
+parses as `${1}4`). Whether a game's own audio path costs the same 0.6 pp is inferred, not measured.
 
 ### F101. Build our own 4.14.52 image — open
 
 **The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's.** The policy and the
 standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
 `usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
-`build-xpad-module.sh` and already **measured** producing modules that load on the device.
+`build-kernel-modules.sh` and already **measured** producing modules that load on the device.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`

@@ -1951,7 +1951,7 @@ The two are separate questions and the case against the second does not carry to
 Steelcase for their source is also ruled out, and is needed for neither.
 
 **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
-not Steelcase source — but `build-xpad-module.sh` configures it from the device's own `/proc/config.gz`
+not Steelcase source — but `build-kernel-modules.sh` configures it from the device's own `/proc/config.gz`
 plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
 there (`vermagic=4.14.52`). Whether a full image links is untried; the tree is not what would stop it.
 What an image built from it must supply for itself:

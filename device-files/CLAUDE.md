@@ -5,8 +5,8 @@ removes and installs. Loaded when you work in `device-files/`.
 
 Anything installed by more than one path lives here, never in a heredoc: `roomwizard-app` (the boot
 init script — it carries the name it is *deployed* as rather than a `.sh` one), `disable-steelcase.sh`,
-`audio-enable`, `time-sync`, `99-security.conf`, the three USB scripts `enable-usb-host.sh` /
-`usb-host` / `xpad-modules`, plus `clean-rules.conf` and `provision-rules.conf`. Both
+`audio-enable`, `time-sync`, `99-security.conf`, the four USB scripts `enable-usb-host.sh` /
+`usb-host` / `xpad-modules` / `usb-audio-modules`, plus `clean-rules.conf` and `provision-rules.conf`. Both
 `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted card)
 install those same bytes, and **neither decides what to install or delete — both read the rules.**
 
@@ -76,7 +76,7 @@ error.
   installed but not whitelisted is deleted by the next `--deep-clean`, so the unit boots right once and
   loses it. That pairing used to be a comment in *both* files asking a human to remember.
 - **`usb` is an optional group**, compiled by `usb_host/build-and-deploy.sh` through
-  `rw_provision_plan_component`. The three USB device scripts and the two `rc5.d` links are ordinary
+  `rw_provision_plan_component`. The four USB device scripts and the three `rc5.d` links are ordinary
   `usb`-group records; **only the 500 mA power budget touches p1**, and that is `lib/rw-usbpower.sh`'s
   job, not a record here.
 
@@ -101,7 +101,7 @@ See `SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`.
 
 Changing a file in this directory does **not** go out with a component deploy. Only
 `./commissioning/provision.sh <ip>` (which ends in a reboot) or `commissioning/commission-offline.sh`
-installs it. The exception is the three **`usb`-group** scripts, which
+installs it. The exception is the four **`usb`-group** scripts, which
 `cd usb_host && ./build-and-deploy.sh <ip>` also installs, and which need no reboot.
 
 ## Regressions

@@ -190,7 +190,7 @@ arm-linux-gnueabihf-gcc -static -O2 -o devmem_write devmem_write.c
 ### Step 3: Build Xbox controller kernel modules
 
 ```bash
-bash build-xpad-module.sh
+bash build-kernel-modules.sh
 ```
 
 This downloads the Linux 4.14.52 kernel source, configures it with the device's config,
@@ -454,7 +454,7 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 | File | Runs On | Purpose |
 |------|---------|---------|
 | `build-and-deploy.sh` | Workstation (WSL/Linux) | End-to-end build and deploy automation |
-| `build-xpad-module.sh` | Workstation (WSL/Linux) | Cross-compile Xbox controller kernel modules |
+| `build-kernel-modules.sh` | Workstation (WSL/Linux) | Cross-compile Xbox controller kernel modules |
 | `patch_dtb.py` | Workstation (Python 3) | Binary-patch MUSB power property in uImage DTB |
 | `find_dtb.py` | Workstation (Python 3) | Extract DTB from uImage for inspection |
 | `devmem_write.c` | Compiled for ARM | `/dev/mem` mmap-based read/write tool |

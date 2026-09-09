@@ -424,7 +424,7 @@ KEEP_RCS="S02banner.sh S03sysfs.sh S04udev S05modutils.sh S06alignment.sh S06dev
           S10checkroot.sh S30procps.sh S30ramdisk S35mountall.sh S37populate-volatile.sh
           S39hostname.sh S40networking S43syslog S45mountnfs.sh S55bootmisc.sh S99finish.sh"
 KEEP_RC5="S02dbus-1 S09sshd S20cron S28time-sync S29audio-enable S30avahi-daemon
-          S40ctrlblk S50watchdog S89xpad-modules S90usb-host S99roomwizard-app"
+          S40ctrlblk S50watchdog S88usb-audio-modules S89xpad-modules S90usb-host S99roomwizard-app"
 KEEP_RC24="S02dbus-1 S09sshd S20hwclock.sh S40ctrlblk S50watchdog S99roomwizard-app S99stop-bootlogd"
 
 # Vendor services that must be SWEPT. The first eight are real names read off a

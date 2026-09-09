@@ -105,7 +105,7 @@ actually pin, because "current upstream" is not a fact anyone can check later.
 | libjpeg-turbo | 2.1.5.1 | IJG · BSD-3-Clause · zlib | `vnc_client/build-deps.sh` |
 | zlib | 1.2.13 (`vnc_client`), 1.3.1 (ScummVM) | zlib licence | both build scripts |
 | libpng | 1.6.43 | PNG Reference Library License v2 | `scummvm-roomwizard/build-and-deploy.sh` |
-| Linux kernel | 4.14.52, unmodified upstream | **GPL-2.0-only** | `usb_host/build-xpad-module.sh`; the tree lives at `usb_host/linux-4.14.52/` (gitignored) |
+| Linux kernel | 4.14.52, unmodified upstream | **GPL-2.0-only** | `usb_host/build-kernel-modules.sh`; the tree lives at `usb_host/linux-4.14.52/` (gitignored) |
 | glibc | whatever `arm-linux-gnueabihf-gcc` provides | LGPL-2.1-or-later | the distribution's cross toolchain |
 
 ⚠️ **These are cross-compiled from source on purpose, not vendored.** This host cannot do armhf
@@ -135,7 +135,7 @@ release published from it is available**, because the offer is honoured for the 
 | `scummremastered.zip`, `gui-icons.dat` | **GPL-3.0-or-later** | ScummVM's own theme and GUI data, staged verbatim from the ScummVM tree. Same offer. |
 | `vkeybd_roomwizard.zip` | **GPL-3.0-or-later** | Derivative of ScummVM's `vkeybd_small.zip` (see above). Same offer. |
 | `vnc_client` | **GPL-2.0-or-later** | Links LibVNCClient. Corresponding source: LibVNCServer 0.9.14, zlib, libjpeg-turbo, plus this repository. |
-| `xpad.ko`, `joydev.ko`, `ff-memless.ko` | **GPL-2.0-only** | Kernel modules. ⚠️ **Written source offer required**, and it is in `NOTICE`: unmodified upstream Linux 4.14.52 from kernel.org, plus `usb_host/build-xpad-module.sh` and the device's own kernel configuration. No kernel source is modified — these are upstream drivers rebuilt for this kernel's config. |
+| `xpad.ko`, `joydev.ko`, `ff-memless.ko` | **GPL-2.0-only** | Kernel modules. ⚠️ **Written source offer required**, and it is in `NOTICE`: unmodified upstream Linux 4.14.52 from kernel.org, plus `usb_host/build-kernel-modules.sh` and the device's own kernel configuration. No kernel source is modified — these are upstream drivers rebuilt for this kernel's config. |
 | `devmem_write`, the `native_apps` games and tools, `app_launcher` | MIT, statically linked against glibc (LGPL-2.1-or-later) | LGPL-2.1 §6 relinking: the objects and this repository are what a relink needs. |
 | `/opt/sound/fx_*.wav` (eleven sound effects) | **Not for commercial use** + **attribution to ElevenLabs (`elevenlabs.io`) required** (free account — see above) | ⚠️ **The one artifact that makes a bundle non-commercial.** A commercial redistribution must remove or replace them; every game falls back to its note tables without them, so removal breaks nothing. Stated in `NOTICE`. |
 | `/opt/sound/<stem><n>-mono.wav` (every music bed) | Royalty-free, commercial use permitted (musely.ai — see above) | None. No attribution required. Not this project's composition; stated in `NOTICE` anyway so a bundle carries its own provenance, along with the fact that removing any bed is safe. |

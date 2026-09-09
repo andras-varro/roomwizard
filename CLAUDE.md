@@ -166,10 +166,11 @@ misparses.
 | an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
 | `common/audio.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM reaches the device half through `audio_out.o` and never the mix-bus client layer |
 | `common/logger.c` | `native_apps` + `vnc_client` |
-| `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c`, `common/audio_out.c`, `common/audio_gen.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain (`audio_out.h`, `audio_gen.h`) counts too |
+| `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain counts too |
+| `common/audio_out.c`, `common/audio_gen.c` (+ `audio_out.h`, `audio_gen.h`) | `native_apps` + **ScummVM** — ⚠️ **two, not three: measured 2026-09-09**, `vnc_client/Makefile`'s `SRCS` names neither, and no `audio_out` symbol appears anywhere in that tree. They are on ScummVM's `OBJS` via `configure.patch`, which is why the row above cannot speak for them |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
-| the three **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
-| `usb_host/devmem_write.c`, `build-xpad-module.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
+| the four **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`, `usb-audio-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
+| `usb_host/devmem_write.c`, `build-kernel-modules.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
 
 When in doubt, over-deploy. The failure mode is silent.
 
