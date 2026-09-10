@@ -262,6 +262,7 @@ typedef struct {
     bool          audio_enabled;
     bool          music_enabled;      /* subordinate to audio_enabled — see create_settings_ui() */
     bool          effects_enabled;
+    int           audio_device_idx;   /* index into audio_device_names[] */
     bool          led_enabled;
     int           led_brightness;
     int           backlight_brightness;
@@ -307,6 +308,7 @@ static Button exit_btn;
 static ToggleSwitch audio_toggle;
 static ToggleSwitch music_toggle, effects_toggle;
 static ToggleSwitch led_toggle;
+static Button audio_dev_btn;
 static Button test_audio_btn, test_led_btn;
 static Button led_minus_btn, led_plus_btn;
 static Button save_btn, reset_btn;
@@ -578,6 +580,53 @@ static void execute_system_action(ConfirmAction action) {
 #define SET_SEC_LED_Y    (CONTENT_Y + 52 + SET_AUDIO_ROW2_H)
 #define SET_LED_BAR_Y    (SET_SEC_LED_Y + 50)
 
+/* ── The audio-output cycling button ────────────────────────────────────────
+ * "onboard" | "usb" | "auto" as ONE button that cycles, because no multi-choice
+ * widget exists in this app and adding a primitive for a single row is not worth
+ * it.  It goes on row 2 to the RIGHT of EFFECTS, so it costs zero vertical pixels
+ * and cannot move anything the vertical receipt below watches.
+ *
+ * ⚠️ The scale is pinned to 1 deliberately.  scale 2 needs 144 px of glyphs,
+ * which fits landscape and NOT the ~150 px this row has left in portrait — and
+ * portrait is reachable, the Display tab's own toggle writes the flag file that
+ * selects it.  Pinning also keeps the button_init macro out of it: that macro
+ * picks scale 3 for any box wider than 150 px, keyed off width alone.
+ *
+ * ⚠️ button_draw() centres the text and neither pads nor clips it, so a label
+ * wider than its box paints outside the button in silence.  The box is therefore
+ * measured from the WIDEST of the three labels, not from the current one. */
+#define SET_OUT_LABEL_WIDEST "OUT: ONBOARD"      /* 12 chars; USB and AUTO are shorter */
+
+static const char *audio_device_names[3]  = { "onboard", "usb", "auto" };
+static const char *audio_device_labels[3] = { "OUT: ONBOARD", "OUT: USB", "OUT: AUTO" };
+
+/* Anything unrecognised maps to onboard — the same thing audio_out_device_for()
+ * does with an unknown value, so the button cannot show a state a game would not
+ * actually resolve to. */
+static int audio_device_index_of(const char *name) {
+    for (int i = 0; i < 3; i++)
+        if (name && strcmp(name, audio_device_names[i]) == 0) return i;
+    return 0;
+}
+
+/* Row 2's OUT button box, as a pure function of the content rect.
+ *
+ * ⚠️ This is the ONLY home for that x arithmetic, on purpose.  create_settings_ui()
+ * places the button from it and the receipt checks the right edge with it, so the
+ * two cannot drift — and horizontal is the direction this row is actually exposed
+ * in, since the widths it stacks are text-derived and the portrait content rect is
+ * barely wider than the stack.  Returns the right edge; writes x and width. */
+static int settings_out_btn_box(int *x, int *w) {
+    int music_w   = 60 + 8 + text_measure_width("MUSIC", 1);
+    int effects_w = 60 + 8 + text_measure_width("EFFECTS", 1);
+    /* 40 px is the gap this row already uses between MUSIC and EFFECTS. */
+    int bx = CONTENT_LEFT + 5 + music_w + 40 + effects_w + 40;
+    int bw = text_measure_width(SET_OUT_LABEL_WIDEST, 1) + 16;   /* 8 px each side */
+    if (x) *x = bx;
+    if (w) *w = bw;
+    return bx + bw;
+}
+
 static void create_settings_ui(AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
@@ -610,6 +659,14 @@ static void create_settings_ui(AppState *state) {
                 60, 28, "MUSIC", state->music_enabled);
     toggle_init(&effects_toggle, CONTENT_LEFT + 5 + music_w + 40, SET_AUDIO_ROW2_Y,
                 60, 28, "EFFECTS", state->effects_enabled);
+
+    {
+        int out_x, out_w;
+        settings_out_btn_box(&out_x, &out_w);
+        button_init_full(&audio_dev_btn, out_x, SET_AUDIO_ROW2_Y, out_w, 28,
+                         audio_device_labels[state->audio_device_idx],
+                         BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
+    }
 
     toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 20,
                 60, 28, "LED EFFECTS", state->led_enabled);
@@ -703,6 +760,25 @@ static void create_settings_ui(AppState *state) {
                bottom, CONTENT_H, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                portrait ? "portrait" : "landscape", SET_AUDIO_ROW2_H);
     }
+
+    /* ⚠️ THE HORIZONTAL RECEIPT, and it is the first one in this file. Everything
+     * above measures downward, because a row pushed past the bottom is the failure
+     * this stack used to have.  Row 2 is different: it stacks three text-derived
+     * widths left to right, and the portrait content rect is only about 150 px
+     * wider than the first two, so the OUT button is the one widget here whose
+     * right edge can leave the touchable rect.  It would look correct in a
+     * screenshot and be dead to a finger, and button_draw() would paint the label
+     * outside the box without complaining.  So the edge is printed, with the same
+     * fits/⚠ wording as the vertical one, and it is computed by the same function
+     * that placed the button. */
+    {
+        int right = settings_out_btn_box(NULL, NULL);
+        printf("device_tools: settings row2 %s — right edge %d of CONTENT_RIGHT %d "
+               "(safe %dx%d, %s)\n",
+               right <= CONTENT_RIGHT ? "fits" : "⚠ PAST CONTENT RIGHT",
+               right, CONTENT_RIGHT, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
+               portrait ? "portrait" : "landscape");
+    }
 }
 
 static void draw_settings(Framebuffer *fb, AppState *state) {
@@ -728,6 +804,26 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     toggle_set_colors(&effects_toggle, on_c, off_c, knob_c, lbl_c);
     toggle_draw(fb, &music_toggle);
     toggle_draw(fb, &effects_toggle);
+
+    /* ⚠️ Dim, do not hide — and dim on the honest condition rather than on "is a
+     * DAC plugged in".  The box always occupies its slot, so the row's geometry is
+     * card-independent and the receipt above means the same thing whatever is
+     * attached; it goes grey when the preference it names cannot currently be met,
+     * which is the master being off, or USB being asked for with no /dev/dsp1 to
+     * open.  ONBOARD is never dimmed for absence, because onboard is always there.
+     *
+     * The press stays LIVE in both cases, for exactly the reason MUSIC and EFFECTS
+     * do: this is a saved preference, and refusing to let someone select "usb"
+     * before they plug the DAC in would just look broken.  That is the settings-tab
+     * idiom, not the USB tab's gated one — the USB tab's buttons START something
+     * against a device that must exist, and this one only records a choice. */
+    bool out_live = state->audio_enabled &&
+                    (state->audio_device_idx == 0 || audio_out_usb_present());
+    audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : USB_COLOR_DIM;
+    audio_dev_btn.text_color   = out_live ? COLOR_WHITE    : RGB(150, 150, 150);
+    audio_dev_btn.border_color = audio_dev_btn.text_color;
+    button_set_text(&audio_dev_btn, audio_device_labels[state->audio_device_idx]);
+    button_draw(fb, &audio_dev_btn);
 
     draw_section_header(fb, sec_led_y, "LEDS");
     toggle_draw(fb, &led_toggle);
@@ -774,6 +870,12 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         state->music_enabled = music_toggle.state;
     if (toggle_check_press(&effects_toggle, tx, ty, touching, now))
         state->effects_enabled = effects_toggle.state;
+
+    /* Cycles onboard -> usb -> auto -> onboard.  The label is not written here;
+     * draw_settings() derives it from the index every frame, which is the idiom the
+     * NEXT/DONE button already uses and the reason the two can never disagree. */
+    if (button_update(&audio_dev_btn, tx, ty, touching, now))
+        state->audio_device_idx = (state->audio_device_idx + 1) % 3;
     if (toggle_check_press(&led_toggle, tx, ty, touching, now))
         state->led_enabled = led_toggle.state;
 
@@ -800,6 +902,13 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
         config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
         config_set_bool(&state->cfg, "effects_enabled", state->effects_enabled);
+        /* ⚠️ Only the SAVED value has any effect on a game: audio_init() re-reads
+         * this file from disk on every open, so nothing in this process pushes the
+         * preference anywhere.  That also makes the TEST button above a real check
+         * of the setting — press SAVE, then TEST, and you hear whichever device a
+         * game would have resolved. */
+        config_set(&state->cfg, "audio_device",
+                   audio_device_names[state->audio_device_idx]);
         config_set_bool(&state->cfg, "led_enabled", state->led_enabled);
         config_set_int(&state->cfg, "led_brightness", state->led_brightness);
         config_save(&state->cfg);
@@ -821,6 +930,11 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         state->audio_enabled = DEFAULT_AUDIO_ENABLED;
         state->music_enabled = config_music_enabled(&state->cfg);
         state->effects_enabled = config_effects_enabled(&state->cfg);
+        /* Read back through the getter on the CLEARED config, for the same reason
+         * MUSIC and EFFECTS do above: the default the screen shows then cannot
+         * disagree with the one a game will resolve. */
+        state->audio_device_idx =
+            audio_device_index_of(config_audio_device(&state->cfg));
         state->led_enabled = DEFAULT_LED_ENABLED;
         state->led_brightness = DEFAULT_LED_BRIGHTNESS;
         state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
@@ -1161,6 +1275,7 @@ static void draw_diag_config(Framebuffer *fb) {
             {"audio_enabled","AUDIO ENABLED:","1 (default)"},
             {"music_enabled","MUSIC:","1 (default)"},
             {"effects_enabled","EFFECTS:","1 (default)"},
+            {"audio_device","AUDIO OUT:","onboard (default)"},
             {"led_enabled","LED ENABLED:","1 (default)"},
             {"led_brightness","LED BRIGHTNESS:","100 (default)"},
             {"backlight_brightness","BACKLIGHT:","100 (default)"},
@@ -3680,6 +3795,7 @@ int main(void) {
     state.audio_enabled = config_get_bool(&state.cfg, "audio_enabled", DEFAULT_AUDIO_ENABLED);
     state.music_enabled = config_music_enabled(&state.cfg);
     state.effects_enabled = config_effects_enabled(&state.cfg);
+    state.audio_device_idx = audio_device_index_of(config_audio_device(&state.cfg));
     state.led_enabled = config_get_bool(&state.cfg, "led_enabled", DEFAULT_LED_ENABLED);
     state.led_brightness = config_get_int(&state.cfg, "led_brightness", DEFAULT_LED_BRIGHTNESS);
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
@@ -3753,6 +3869,7 @@ int main(void) {
         bool          prev_audio     = state.audio_enabled;
         bool          prev_music     = state.music_enabled;
         bool          prev_effects   = state.effects_enabled;
+        int           prev_out_idx   = state.audio_device_idx;
         bool          prev_led       = state.led_enabled;
         int           prev_led_br    = state.led_brightness;
         int           prev_bl_br     = state.backlight_brightness;
@@ -3812,6 +3929,7 @@ int main(void) {
             prev_audio     != state.audio_enabled   ||
             prev_music     != state.music_enabled   ||
             prev_effects   != state.effects_enabled ||
+            prev_out_idx   != state.audio_device_idx ||
             prev_led       != state.led_enabled     ||
             prev_led_br    != state.led_brightness  ||
             prev_bl_br     != state.backlight_brightness ||
