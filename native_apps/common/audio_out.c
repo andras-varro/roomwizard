@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ── The device half, and nothing else ───────────────────────────────────────
  *
@@ -462,6 +463,91 @@ uint32_t audio_out_drain_waits(const AudioOut *out) { return out ? out->drain_wa
  * it at all — the same split `audio_gen.c` already has, one level down.
  */
 
+/* ── Which device, and the amp that belongs to one of them ──────────────────
+ * ONE home for "which /dev/dsp*", and it sits OUTSIDE the OSS guard below on
+ * purpose.  Three callers resolve through here — this file's oss_open(),
+ * audio.c's dsp_reopen(), and ScummVM's mixer — and only the first is inside
+ * that guard, so a host build with no <sys/soundcard.h> must still link the
+ * resolution.  That is also what lets tests/audio_out_test.c drive it with no
+ * sound card present.
+ *
+ * ⚠️ The preference is a file-static, not a field on AudioOut.  audio.c reaches
+ * its opener from audio_cont_enable() as well as from audio_open(), and
+ * audio_open() memsets the struct — a field would be cleared by the very call
+ * that needs to read it.  One audio device per process is a fact about the
+ * hardware, so one static is the honest shape; contrast the fd, which stays per
+ * AudioOut because a process may hold several structs and still one device.
+ */
+
+#define AUDIO_DEV_ONBOARD "/dev/dsp"      /* TWL4030, the panel speaker */
+#define AUDIO_DEV_USB     "/dev/dsp1"     /* ALSA card 1, a USB DAC     */
+
+/** "onboard" | "usb" | "auto".  Defaults to onboard so a unit that has never
+ *  been told otherwise behaves exactly as it did before this seam existed. */
+static char audio_dev_pref[16] = "onboard";
+
+void audio_out_set_device_pref(const char *pref)
+{
+    if (!pref || !*pref) pref = "onboard";
+    snprintf(audio_dev_pref, sizeof(audio_dev_pref), "%s", pref);
+}
+
+const char *audio_out_device_pref(void)
+{
+    return audio_dev_pref;
+}
+
+bool audio_out_usb_present(void)
+{
+    return access(AUDIO_DEV_USB, W_OK) == 0;
+}
+
+const char *audio_out_device_for(const char *pref, bool usb_present)
+{
+    bool want_usb = (pref && strcmp(pref, "usb")  == 0);
+    bool prefer   = (pref && strcmp(pref, "auto") == 0);
+
+    if (!want_usb && !prefer) return AUDIO_DEV_ONBOARD;
+    if (usb_present) return AUDIO_DEV_USB;
+
+    /* ⚠️ Both non-onboard settings fall back rather than opening a path that is
+     * not there: a games panel that has gone mute with no explanation is worse
+     * than one on the wrong speaker.  The two differ only in whether the
+     * fallback is reported — "auto" means unplugging is expected, "usb" was an
+     * explicit request that could not be honoured, so it says so once. */
+    if (want_usb) {
+        static bool said = false;
+        if (!said) {
+            fprintf(stderr, "audio_out: %s requested but absent — using %s\n",
+                    AUDIO_DEV_USB, AUDIO_DEV_ONBOARD);
+            said = true;
+        }
+    }
+    return AUDIO_DEV_ONBOARD;
+}
+
+const char *audio_out_device_path(void)
+{
+    return audio_out_device_for(audio_dev_pref, audio_out_usb_present());
+}
+
+bool audio_out_device_is_onboard(void)
+{
+    return strcmp(audio_out_device_path(), AUDIO_DEV_ONBOARD) == 0;
+}
+
+#define GPIO12_DIRECTION  "/sys/class/gpio/gpio12/direction"
+#define GPIO12_VALUE      "/sys/class/gpio/gpio12/value"
+
+void audio_out_enable_amp(void)
+{
+    FILE *f;
+    f = fopen(GPIO12_DIRECTION, "w");
+    if (f) { fputs("out", f); fclose(f); }
+    f = fopen(GPIO12_VALUE, "w");
+    if (f) { fputs("1",   f); fclose(f); }
+}
+
 #if defined(__has_include)
 #  if __has_include(<sys/soundcard.h>)
 #    define AUDIO_OUT_HAVE_OSS 1
@@ -476,36 +562,25 @@ uint32_t audio_out_drain_waits(const AudioOut *out) { return out ? out->drain_wa
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
 
-#define GPIO12_DIRECTION  "/sys/class/gpio/gpio12/direction"
-#define GPIO12_VALUE      "/sys/class/gpio/gpio12/value"
-#define DSP_DEVICE        "/dev/dsp"
-
-/** Drive GPIO12 HIGH to enable the on-board speaker amplifier (SPKR1).  Done
- *  here rather than by the caller so it works from a dev shell before
- *  `/etc/init.d/audio-enable` has run. */
-static void enable_amp(void)
-{
-    FILE *f;
-    f = fopen(GPIO12_DIRECTION, "w");
-    if (f) { fputs("out", f); fclose(f); }
-    f = fopen(GPIO12_VALUE, "w");
-    if (f) { fputs("1",   f); fclose(f); }
-}
-
 static int oss_open(void *ctx, int rate_req, int channels_req,
                     int *rate_granted, int *bits_granted, int *channels_granted)
 {
     int *fdp = (int *)ctx;
 
-    enable_amp();
+    const char *dev = audio_out_device_path();
+
+    /* ⚠️ GPIO12 is the TWL4030's speaker amp and belongs to /dev/dsp alone.
+     * Poking it while a USB DAC is the sink unmutes a speaker nothing is
+     * feeding, so it is conditional on the resolved device, not unconditional. */
+    if (audio_out_device_is_onboard()) audio_out_enable_amp();
 
     /* ⚠️ O_NONBLOCK is not an optimisation.  A blocking write() on this device
      * stalls for a full hardware period once the queue fills, which turns every
      * subsequent sound into a late one; the write policies above follow the queue
      * at real-time pace instead. */
-    *fdp = open(DSP_DEVICE, O_WRONLY | O_NONBLOCK);
+    *fdp = open(dev, O_WRONLY | O_NONBLOCK);
     if (*fdp < 0) {
-        perror("audio_out: cannot open " DSP_DEVICE);
+        fprintf(stderr, "audio_out: cannot open %s: %s\n", dev, strerror(errno));
         return -1;
     }
 
@@ -551,7 +626,7 @@ static int oss_open(void *ctx, int rate_req, int channels_req,
 
     fprintf(stderr, "audio_out: %s open, granted %d Hz %d-bit %d ch "
                     "(requested %d Hz %d ch)\n",
-            DSP_DEVICE, rate, bits, channels, rate_req, channels_req);
+            dev, rate, bits, channels, rate_req, channels_req);
     return 0;
 }
 

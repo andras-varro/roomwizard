@@ -28,6 +28,10 @@
 // Include C headers directly
 extern "C" {
 #include "audio_out.h"
+/* ⚠️ NOT `#include "config.h"` — ScummVM generates its own config.h in its
+ * build root, so that include resolves to ScummVM's from inside this tree.
+ * One plain prototype, deliberately, and config.h says why. */
+const char *config_audio_device_stored(void);
 }
 
 /**

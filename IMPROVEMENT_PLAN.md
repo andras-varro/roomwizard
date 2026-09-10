@@ -457,10 +457,10 @@ instructions imply that any machine with a card reader will do.
 
 ---
 
-### F100. USB audio — the driver half is DONE; the app cannot reach it yet — open, measured 2026-09-09
+### F100. USB audio — the device seam is DONE; the Settings control is not — open, measured 2026-09-09
 
-**A USB DAC works on hardware. What is left is entirely app-side.** Measured on `.188` with a C-Media
-`0d8c:0014` on a 4-port hub alongside the Xbox pad (both full-speed, both working at once):
+**A USB DAC works on hardware and every app now resolves through one seam.** Measured on `.188` with a
+C-Media `0d8c:0014` on a 4-port hub alongside the Xbox pad (both full-speed, both working at once):
 `/etc/init.d/usb-audio-modules` loads `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib` and `snd-usb-audio`
 with plain `insmod` — no `-f`, no unresolved symbols — `/proc/asound/cards` gains
 `1 [Device]: USB-Audio`, and **`/dev/dsp1` appears at char 14,19**. Operator-confirmed audible in
@@ -476,50 +476,56 @@ here.** `/proc/stat`'s *total* column is unusable as a denominator on this kerne
 **first-ever stream after module load measured 135 ticks/15 s (~9 %) and did not reproduce** — do not
 quote that number.
 
-**What remains, and it is all in userspace.** ⚠️ **The seam is bigger than this entry used to say:
-there are TWO `DSP_DEVICE` macros, not one.** `audio_out.c:481` is the one previously named, but
-`audio.c:26` is the other and it is on the hot path — `audio_init()` → `audio_open()` → `dsp_reopen()`
-opens `/dev/dsp` at `audio.c:290` *first*, it is the fallback when `audio_out_open_oss()` fails
-(`audio.c:733`), and it is the restore path when CONT is switched off (`audio.c:756`). `enable_amp()` is
-duplicated the same way (`audio.c:69-77`, called unconditionally at `audio.c:281`; `audio_out.c:486-493`
-at `:500`) and is card 0's speaker amp, meaningless for a DAC. A seam in `audio_out.c` alone leaves
-every app opening card 0 at startup and falling back to card 0 on error.
+**What is left is the Settings control, and its layout is already measured.** The seam itself is closed:
+`audio_out.c` owns the resolution (`audio_out_device_for()` and the four calls around it), the two
+`DSP_DEVICE` macros and the two copies of `enable_amp()` are gone, `audio.c` resolves fresh on every
+`dsp_reopen()` so an unplug between opens is picked up, and ScummVM reads the key itself because it links
+`audio_out.o` but **not** `audio.o`. The key is `audio_device` = `onboard` | `usb` | `auto`, default
+`onboard`; `config_audio_device()` is the getter. Both non-onboard values fall back to the panel speaker
+when card 1 is absent, `usb` reporting it once. `tests/audio_out_test.c` group K covers both branches —
+**and the card-present half is what makes it non-vacuous**: an "always onboard" sabotage passed all nine
+card-absent checks and is caught only by K10/K11.
 
-Three further costs the work must budget for:
+**Operator decision, 2026-09-09: an explicit three-way setting, not auto-detection**, as a **cycling
+button** — no multi-choice widget exists in the app and a new primitive is not wanted. Where it goes is
+settled too, by measurement: **row 2 of the AUDIO section, right of `EFFECTS`**, which costs **zero**
+vertical pixels and so cannot disturb the layout receipt.
 
-- **`audio_out_open_oss()` is the signature that has to change**, and `dev_ctx` is currently a bare
-  `int *` (`audio_out.c:608`, unpacked at `:498, :564, :580, :594`), so carrying a path means promoting
-  it to a small struct or adding a file-static setter. The vtable itself needs no change —
-  `audio_out_open()` never sees a device name.
-- ⚠️ **`tests/run-all.sh:114` links `audio_out_test` against only `common/audio_out.c
-  common/audio_gen.c`**, so giving `audio_out.c` a `#include "config.h"` breaks that host-test link line.
-- **The redeploy price is TWO components, not three** — see the table in `CLAUDE.md`; `vnc_client`
-  links neither `audio_out.c` nor `audio_gen.c` (measured 2026-09-09). ScummVM is still the slow one.
+- Row 2's free run right of `EFFECTS`'s hit box: **508 px** landscape, **~135 px** portrait. ⚠️
+  **Portrait is REACHABLE** — `fb_is_portrait_mode()` reads `/opt/games/portrait.mode`, which the Display
+  tab's own toggle writes — so it is the binding constraint, not landscape.
+- `"OUT: ONBOARD"` is 12 chars; `text_measure_width()` is `chars × 6 × scale` with no additive term, so
+  **scale 1 needs 72 px of glyphs (~88 px of button) and fits both orientations**; scale 2 needs 144 px
+  and fits landscape only. ⚠️ `button_init_full()` takes an explicit width and `button_draw()` applies no
+  padding and no clipping — over-wide text simply draws outside the button, silently. The
+  `button_init` macro picks scale 3 above 150 px, so pin the scale explicitly.
+- Real geometry, since the number once written here was wrong: landscape `SCREEN_SAFE` is **788×420**
+  and `CONTENT_WIDTH` **768** on RW09's calibration; there is **no** `CONTENT_X`, the left edge is
+  `CONTENT_LEFT`.
+- ⚠️ **There is no horizontal-overflow receipt anywhere in the tree** — `device_tools.c`'s receipt prints
+  `SCREEN_SAFE_WIDTH` but compares only `bottom <= CONTENT_H`. A right-edge assertion for this widget
+  would be new ground, and given the ~135 px portrait budget it is the check that would actually fire.
+- House idiom for a hardware-absent control is **dim, do not hide** (the USB tab's per-type test buttons:
+  fixed geometry, `USB_COLOR_DIM`, and the press gated on the same index). Dimming also keeps the layout
+  card-independent, which matters while no horizontal receipt exists.
+- Adding the row still means the `#define` ladder and the `action_y` arithmetic that **is written out
+  twice**; miss one and the widget hit-tests where one copy put it and paints where the other thinks it
+  is, with nothing to catch it at compile time.
 
-⚠️ **Card 1 grants neither of the two rates the existing callers ask for.** `/proc/asound/card1/stream0`
-reports playback `S16_LE`, `Channels: 2` exactly, `Rates: 48000, 44100` — while `audio.c:729` requests
-44100/2 (fine) and `scummvm-roomwizard/backend-files/oss-mixer.cpp:114` requests **22050/1** (neither).
-The OSS shim resamples so this is not fatal, but per-device rate preference is a *second* seam from the
-path and ScummVM is the caller that needs it.
+⚠️ **Card 1 grants neither of the two rates the existing callers ask for**, and this is a *second* seam
+from the path. `/proc/asound/card1/stream0` reports playback `S16_LE`, `Channels: 2` exactly,
+`Rates: 48000, 44100`, while ScummVM's mixer requests **22050/1**. The **channel** half is now handled —
+`fillFromMixer()` mixes mono then expands in place, because nothing in `audio_out.c` refuses a mismatch
+and the old code would have played at **double speed** on any 2-channel grant. Per-device *rate*
+preference is still unbuilt; the OSS shim resamples, so it is quality, not function.
 
-**Operator decision, 2026-09-09: an explicit three-way setting, not auto-detection.** Onboard / USB /
-Auto, where Auto means USB when a card is present. The row appears only when one is, but the stored
-value persists so unplugging falls back. ⚠️ **The settings app is `device_tools` tab 0, NOT
-`hardware_config`** — that one is in `RW_APP_MANIFESTS_RETIRED` (`native_apps/app-manifests.sh:61`),
-has no launcher tile, and `device_tools.c:483-486` records it as the copy that was folded in. Two
-obstacles there: **no multi-choice widget exists in the app at all** (only `ToggleSwitch` and a
-`[-]/[+]` stepper), and the Settings rows are hand-placed globals (`device_tools.c:305-315`) on a
-compile-time `#define` ladder (`:575-579`) whose arithmetic is written out **twice** (`:583-586` and
-`:710-713`) — a new row must add the same term to both and keep the layout receipt at `:692-705`
-printing "fits". No settings row anywhere is conditional on hardware today; the pattern to copy is
-`usb_scan_devices()` (`:3016-3036`). Cheapest detection in house style is `access("/dev/dsp1", W_OK)`.
-`device_tools` already links `audio.o`/`audio_gen.o`/`audio_out.o`, so no build change is needed.
-Config budget: `CONFIG_MAX_KEYS` is 32 and 17 are used, but `config_load`/`config_set`/`config_save`
-all drop past the ceiling **in silence**.
-
-**Still unmeasured:** the CPU figures above are `aplay`, not our mix bus, and there is no valid
-process-versus-IRQ split (the per-process column of the measuring script was void — `$14` in POSIX sh
-parses as `${1}4`). Whether a game's own audio path costs the same 0.6 pp is inferred, not measured.
+**Still unmeasured.** The CPU figures above are `aplay`, not our mix bus, and there is no valid
+process-versus-IRQ split. ⚠️ **Nothing has been played through a DAC by our own code yet** — the seam is
+gated on the host and compiles for ARM in both components, but no deployed binary has been observed
+holding `/dev/dsp1`. That is the first thing to do, and it needs no ear: launch a game over SSH with
+`audio_device=usb` and read `/proc/<pid>/fd`, or read back the `audio: <dev> opened at …` line, which now
+names the resolved device. ⚠️ **The redeploy price is all THREE components, not two** — `config.c`
+changed, and `CLAUDE.md`'s table puts that file in the all-three row.
 
 ### F101. Build our own 4.14.52 image — open
 

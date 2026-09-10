@@ -95,25 +95,56 @@ OssMixerManager::~OssMixerManager() {
 }
 
 // The fill contract speaks DEVICE FRAMES because of this call site: mixCallback
-// wants a byte count, and audio_out.h hands the interleaved buffer straight
-// through so no repacking is needed at 1 channel or at 2.
+// wants a byte count.
 //
-// The buffer arrives zeroed and a short fill is legal, but mixCallback always
-// fills what it is given, so this returns the whole request.
+// ⚠️ **The mixer is built MONO and the device may grant STEREO, so the buffer
+// cannot be handed straight through.** `MixerImpl` is constructed with
+// `stereo=false` below, so mixCallback emits one sample per frame whatever the
+// device granted. Asking it for `frames * channels` samples and calling that
+// done is what the previous version did, and on a device granting 2 it filled
+// the buffer with 2*frames MONO samples that the DAC then drained as `frames`
+// stereo frames — i.e. playback at double speed, an octave up, not silence and
+// with no diagnostic on either side of the boundary. The onboard TWL4030 grants
+// 2 as well; this went unnoticed only because nothing read the grant back.
+//
+// So: mix mono into the front of the buffer, then expand in place from the BACK,
+// which is safe because `i * channels >= i` for every i. The buffer arrives
+// zeroed and a short fill is legal, but mixCallback always fills what it is
+// given, so this returns the whole request either way.
 long OssMixerManager::fillFromMixer(void *ctx, int16_t *buf, long frames, int channels) {
 	OssMixerManager *self = static_cast<OssMixerManager *>(ctx);
 	if (!self->_mixer)
 		return 0;
-	self->_mixer->mixCallback((byte *)buf, (uint)(frames * channels * 2));
+
+	self->_mixer->mixCallback((byte *)buf, (uint)(frames * 2));
+	if (channels > 1) {
+		for (long i = frames - 1; i >= 0; --i) {
+			int16_t s = buf[i];
+			for (int c = 0; c < channels; ++c)
+				buf[i * channels + c] = s;
+		}
+	}
 	return frames;
 }
 
 void OssMixerManager::init() {
+	// ⚠️ **The device choice must be set before the open, and ScummVM has to do
+	// this itself.** It links audio_out.o but NOT audio.o, so audio_init()'s
+	// config read — the one the games get it from — is not on this path at all.
+	// Without this line a USB DAC selected in Device Settings would work in
+	// every game and silently not in ScummVM. config.o is already linked
+	// (transitively, via hardware.o), so this costs no build change; the reason
+	// it is a bare prototype rather than an include is in oss-mixer.h.
+	audio_out_set_device_pref(config_audio_device_stored());
+
 	// ⚠️ channels_req stays 1.  audio_out.h: forcing stereo doubles this mixer's
 	// work and its byte count on a core already at ~32 % with Full Throttle.
+	// It is a REQUEST — see fillFromMixer() for what happens when it is not
+	// granted, which on both of this device's cards is always.
 	if (audio_out_open_oss(&_out, 22050, 1) != 0) {
 		// No usable device — fall back to a silent mixer so ScummVM still works.
-		warning("OssMixerManager: cannot open /dev/dsp, audio disabled");
+		warning("OssMixerManager: cannot open %s, audio disabled",
+		        audio_out_device_path());
 		_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 		_mixer->setReady(true);
 		return;
@@ -128,8 +159,9 @@ void OssMixerManager::init() {
 	// The old `>>1` speaker attenuation, bit for bit.
 	audio_out_set_shift(&_out, 1);
 
-	debug("OssMixerManager: %u Hz, %d ch, %d bit, %u frames/buf",
-	      _outputRate, audio_out_channels(&_out), audio_out_bits(&_out), _samples);
+	debug("OssMixerManager: %s, %u Hz, %d ch, %d bit, %u frames/buf",
+	      audio_out_device_path(), _outputRate, audio_out_channels(&_out),
+	      audio_out_bits(&_out), _samples);
 
 	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 	_mixer->setReady(true);

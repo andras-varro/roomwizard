@@ -21,9 +21,6 @@
  * count are defined THERE and used here.  Do not re-spell one of them.
  */
 
-#define GPIO12_DIRECTION  "/sys/class/gpio/gpio12/direction"
-#define GPIO12_VALUE      "/sys/class/gpio/gpio12/value"
-#define DSP_DEVICE        "/dev/dsp"
 
 /** Sample rate requested from the OSS driver.
  *  The ALSA OSS shim SRCs internally to the TWL4030's native 48000 Hz. */
@@ -64,16 +61,6 @@
 #define AUDIO_MUSIC_LOOP_PASSES  200
 
 /* ── Internal helpers ───────────────────────────────────────────────────── */
-
-/** Drive GPIO12 HIGH to enable the on-board speaker amplifier (SPKR1). */
-static void enable_amp(void)
-{
-    FILE *f;
-    f = fopen(GPIO12_DIRECTION, "w");
-    if (f) { fputs("out", f); fclose(f); }
-    f = fopen(GPIO12_VALUE, "w");
-    if (f) { fputs("1",   f); fclose(f); }
-}
 
 /** Millisecond wall clock (monotonic).  The arithmetic — including why the
  *  22-bit mask wraps every ~48.5 days rather than overflowing — is
@@ -278,7 +265,16 @@ static void audio_flush(Audio *audio)
  *  (leaking it) and the toggle that asked for the switch. */
 static int dsp_reopen(Audio *audio)
 {
-    enable_amp();
+    /* ⚠️ Resolved fresh on every call, not cached — this function is also the
+     * restore path in audio_cont_enable(), so a DAC unplugged mid-session is
+     * picked up here rather than reopening a node that has gone.  The resolution
+     * and the amp both live in audio_out.c, which is the ONE home for them:
+     * ScummVM links that file and not this one, so a copy here would be a seam
+     * only the games could see. */
+    const char *dev = audio_out_device_path();
+
+    /* GPIO12 is card 0's amp and means nothing to a USB DAC. */
+    if (audio_out_device_is_onboard()) audio_out_enable_amp();
 
     /*
      * O_NONBLOCK is critical: a blocking write() stalls for the full
@@ -287,9 +283,9 @@ static int dsp_reopen(Audio *audio)
      * returns EAGAIN when the ring is full and the write policies above sleep
      * and retry, following the ring at real-time pace.
      */
-    audio->dsp_fd = open(DSP_DEVICE, O_WRONLY | O_NONBLOCK);
+    audio->dsp_fd = open(dev, O_WRONLY | O_NONBLOCK);
     if (audio->dsp_fd < 0) {
-        perror("audio: cannot open " DSP_DEVICE);
+        fprintf(stderr, "audio: cannot open %s: %s\n", dev, strerror(errno));
         return -1;
     }
 
@@ -418,9 +414,15 @@ int audio_init(Audio *audio)
         return 0;   /* success — games continue without sound */
     }
 
+    /* ⚠️ The device choice must be set BEFORE audio_open(), because that is what
+     * opens it — unlike the clip paths and the two toggles below, which are
+     * applied after because audio_open() memsets the struct.  The preference
+     * lives in audio_out.c's file-static for exactly that reason, so this
+     * survives the memset while a field would not. */
+    audio_out_set_device_pref(config_audio_device(&cfg));
+
     if (audio_open(audio) < 0) return -1;
     fx_config_apply(audio, &cfg);
-
     /* The two games-menu toggles, applied AFTER audio_open() for the same reason
      * fx_config_apply() is: that call memsets the struct and raises both.  ⚠️ They
      * are NOT a second `audio_enabled` — the device is open either way, so a game
@@ -433,7 +435,7 @@ int audio_init(Audio *audio)
                audio->effects_on ? "on" : "OFF", CONFIG_FILE_PATH);
 
     printf("audio: %s opened at %d Hz %d ch S16LE (O_NONBLOCK)\n",
-           DSP_DEVICE, audio->sample_rate, audio->channels);
+           audio_out_device_path(), audio->sample_rate, audio->channels);
     return 0;
 }
 

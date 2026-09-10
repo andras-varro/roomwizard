@@ -310,6 +310,19 @@ bool config_effects_enabled(const Config *cfg) {
     return config_get_bool(cfg, "effects_enabled", true);
 }
 
+const char *config_audio_device(const Config *cfg) {
+    return config_get(cfg, "audio_device", "onboard");
+}
+
+const char *config_audio_device_stored(void) {
+    static char buf[CONFIG_VAL_LEN];
+    Config cfg;
+    config_init(&cfg);
+    config_load(&cfg);          /* silent if the file is missing */
+    snprintf(buf, sizeof(buf), "%s", config_audio_device(&cfg));
+    return buf;
+}
+
 bool config_led_enabled(const Config *cfg) {
     return config_get_bool(cfg, "led_enabled", true);
 }

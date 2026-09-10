@@ -233,15 +233,85 @@ int  audio_out_open(AudioOut *out, const AudioOutDev *dev, void *dev_ctx,
                     int rate_req, int channels_req);
 
 /**
- * The same, on `/dev/dsp`: `O_NONBLOCK`, SPEED → FMT → CHANNELS, then all three
- * read back with the read-only ioctls.
+ * The same, on the device `audio_out_device_path()` resolves to: `O_NONBLOCK`,
+ * SPEED → FMT → CHANNELS, then all three read back with the read-only ioctls.
  *
- * ⚠️ **`channels_req` is a per-client argument and must stay 1 for ScummVM.**
- * Forcing stereo doubles its mixer's work and its byte count on a core already
- * at ~32 % with Full Throttle.  The native path asks for 2 and is granted 2; the
- * speaker sums L + R, so that is also the louder of the two (measured).
+ * ⚠️ **`channels_req` is a REQUEST and the grant may differ, so no caller may
+ * assume it was honoured.** The onboard device grants 2 whatever is asked; ALSA
+ * card 1 (a USB DAC) also grants exactly 2, so a client that asks for 1 gets 2
+ * from either — and nothing below refuses the mismatch, because the design is to
+ * conform to the grant. Read `audio_out_channels()` back and honour it in the
+ * fill callback; a mono fill handed a 2-channel grant plays at double speed.
+ * The speaker sums L + R, so 2 is also the louder of the two (measured).
  */
 int  audio_out_open_oss(AudioOut *out, int rate_req, int channels_req);
+
+/* ── Which device ───────────────────────────────────────────────────────────
+ *
+ * ⚠️ **One home for "which `/dev/dsp*`", and every opener in the tree resolves
+ * through it** — this file's OSS backend, `audio.c`'s `dsp_reopen()`, and
+ * ScummVM's mixer. There used to be a `DSP_DEVICE` macro in each of the first
+ * two; a seam in only one of them left every app opening the panel speaker at
+ * startup and falling back to it on error.
+ *
+ * The preference is process-global on purpose: `audio_open()` memsets `Audio`,
+ * so a field on the struct would be cleared by the call that needs to read it.
+ * Set it once, before the first open; it is honoured by every later open,
+ * including the device hand-off in `audio_cont_enable()`.
+ *
+ * These four are OUTSIDE this file's OSS guard, so a host build with no
+ * `<sys/soundcard.h>` still links them and `tests/audio_out_test.c` drives the
+ * resolution with no sound card present.
+ */
+
+/** Set the preference: `"onboard"`, `"usb"` or `"auto"`. NULL or unrecognised
+ *  reads as `"onboard"`, so a unit never told otherwise behaves as it always
+ *  did. Truncated past 15 characters. */
+void        audio_out_set_device_pref(const char *pref);
+
+/** What was last set — the preference, NOT the resolved device. */
+const char *audio_out_device_pref(void);
+
+/** Whether ALSA card 1's OSS node is present and writable right now. */
+bool        audio_out_usb_present(void);
+
+/**
+ * The device the next open will use, resolved fresh on every call so unplugging
+ * a DAC between opens is picked up.
+ *
+ * ⚠️ **Both non-onboard settings fall back to the panel speaker when card 1 is
+ * absent** — a games panel gone mute with no explanation is worse than one on
+ * the wrong speaker. `"auto"` falls back silently (unplugging is expected);
+ * `"usb"` was an explicit request, so it reports the fallback once on stderr.
+ */
+const char *audio_out_device_path(void);
+
+/**
+ * The resolution itself, as a pure function of the two inputs.
+ *
+ * ⚠️ **This exists so the CARD-PRESENT branch is reachable from a host test.**
+ * `audio_out_device_path()` is this function applied to the stored preference
+ * and `audio_out_usb_present()`, and no host has `/dev/dsp1` — so a group that
+ * could only call the wrapper would pass identically against a resolver that
+ * ignored its argument and always answered `/dev/dsp`. Splitting the decision
+ * out is what makes that sabotage fail. It is not a test-only hook: the wrapper
+ * has no logic of its own left to disagree with.
+ */
+const char *audio_out_device_for(const char *pref, bool usb_present);
+
+/** Whether `audio_out_device_path()` currently resolves to the panel speaker.
+ *  ⚠️ GPIO12 belongs to that device alone — see `audio_out_enable_amp()`. */
+bool        audio_out_device_is_onboard(void);
+
+/**
+ * Drive GPIO12 HIGH to unmute the TWL4030 speaker amplifier (SPKR1).
+ *
+ * ⚠️ **Guard every call on `audio_out_device_is_onboard()`.** This is card 0's
+ * amp and means nothing to a USB DAC; poking it while the DAC is the sink
+ * unmutes a speaker nothing is feeding. Exposed rather than kept private
+ * because `audio.c` had a byte-identical copy of it.
+ */
+void        audio_out_enable_amp(void);
 
 /**
  * Drain what is queued — bounded — then close.  Safe on a struct that was never

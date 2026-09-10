@@ -1,18 +1,10 @@
-Thank you. I though we killed F24 already. It is a note in SYSTEM ANALYSIS. There some other points I think we have already tackled:
-- C12 — One commissioning entry point, we have the roomwizard.sh for this purpose. I would simply remove this point. What do you think?
-
-
 My priority:
 Stability:
-F9 — Ship binaries as GitHub releases, stability for releases. Clear this up first. I don't want to get into legal trouble.
-B33 — USB babble error leaves a printk loop that hard-resets the device
-F23 — The p1 gate knows one firmware release, and refuses every other, as far as I remember everything is in place. The script searches for the address not fixed patch *something*. I think this is important for deployment stability
-F11 — One home for the host build prerequisites. Looks straightforward and important for buildability.
+- all closed
 
-Usability/enritch features/maintainability:
+Usability/enrich features/maintainability:
 F2 — Use the DSS overlay planes: I'm very curious about this one. 
 F100 - USB audio.
-B35 — gamepad_rescan() logs a line per poll
 C1 — Extract the shared evdev layer
 C4 — Make the common library use the logger
 C6 — Extend the host-buildable test harness and C7 — Run shellcheck - testing in general should be extended. Not sure if we run tests before deployment. I installed shellcheck in WSL.
@@ -24,6 +16,8 @@ C8 — Retire hardware_diag
 F17 — Bluetooth peripherals, and whether USB DMA is reachable - as we have no ALSA, we need to revive that thread to have bluez-alsa. This seems to be another topic for Kernel compile. What do you think? The dongle is Asustech computer Inc Bluetooth controller. However, KDED say it is a realtek bluetooth controller. When we are there, we need to dig into this
 F6 — Multi-touch via direct I2C - this is something that we can try, but I strongly believe this is a topic for a Kernel compile. What do you think?
 F14 — Decide whether the boot progress bar comes back. And the aswer is yes. I wonder if want to spool this up with the Kernel compile
+F23 — The p1 gate knows one firmware release, and refuses every other, as far as I remember everything is in place. The script searches for the address not fixed patch *something*. I think this is important for deployment stability - scoped for kernel stability
+B33 — USB babble error leaves a printk loop that hard-resets the device, need kernel re-compile
 
 Nice-to-have:
 B29 — Two findings left from the 2026-08-09 walkthrough (manual mount for for offline commissioning)
@@ -34,7 +28,7 @@ F8 — Smooth LED effects. Not completely clear use-case.
 D7 — mDNS does not resolve from WSL, which is where the deploy scripts run. I installed sudo apt install libnss-mdns
 F7 — Use NAND mtd4 "scratch" for persistent data. An interesting idea, but then we need to be able to clear this. AFAIK a re-flash with the original image (or any other) would not make this go away. I wonder: if I re-commission a panel with a newer binary, would the existing high score tables go away?
 F13 — Commissioning from Windows without WSL, and from macOS. IT works natively with Linux. There is a solution for Windows (WSL). MacOS is open. I have no MacOS anyways. Very-very nice to have
-
+C12 — One commissioning entry point, we have the roomwizard.sh for this purpose. We keep this as a reminder, not as a fix. We can try this on another Windows PC at a later time where we can mount SD card to the WSL
 
 I miss the feature of USB sound that we proposed as BT is difficult. I have a C-Media CMI dongle. I can plug in the device anytime. I added it as F100
 

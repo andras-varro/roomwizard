@@ -800,14 +800,20 @@ start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 to `memset` one and set three fields; when the struct gained `channels` that idiom left it at **0**, and a
 0-channel byte count is 0 — **silently mute**, measured (`audio_bytes_for_frames(8820, 0)` = 0 against
 35280 for 2 channels). `audio_init_unchecked()` is the one sanctioned config-gate bypass, for a hardware
-test that must not obey the setting it exists to test. One grep, legitimate hit `audio.c` only:
+test that must not obey the setting it exists to test. One grep, and its expected count in `common/` is
+now a hard **zero** — the device path is no longer spelled at any opener:
 
 ```bash
 grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v arm-deps
 ```
 
-(`tests/ch_test.c`, `tests/oss_diag.c` and `tests/oss_play.c` also hit it — standalone OSS probes with no
-`Audio` at all, not in `build-and-deploy.sh`, build lines in their own headers.)
+⚠️ **`audio_out_device_path()` is the ONE home for which `/dev/dsp*` to open**, and both
+`common/audio.c`'s opener and `common/audio_out.c`'s resolve through it, as does ScummVM's mixer — a
+USB DAC is selectable, so a second spelling would be a seam only some apps could see. `enable_amp()`
+lives there too, for the same reason and because GPIO12 belongs to the panel speaker alone. The
+remaining hits are `tests/ch_test.c`, `tests/oss_diag.c`, `tests/oss_geom.c`, `tests/oss_keepalive.c`
+and `tests/oss_play.c` — standalone OSS probes with no `Audio` at all, not in `build-and-deploy.sh`,
+build lines in their own headers, and each pinned to the onboard device on purpose.
 
 ### Hold the bus for the screen, not for one press
 

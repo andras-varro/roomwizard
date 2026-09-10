@@ -110,6 +110,29 @@ bool config_audio_enabled(const Config *cfg);
 bool config_music_enabled(const Config *cfg);
 bool config_effects_enabled(const Config *cfg);
 
+/* Which sound device. Reads "audio_device" (default: "onboard"); the three
+ * values the resolver understands are "onboard", "usb" and "auto".
+ * ⚠️ This getter only reports the STORED PREFERENCE — it resolves nothing and
+ * checks no hardware. `audio_out_device_path()` is the one place that turns it
+ * into a device, and the one place that knows about the fallback. Every caller
+ * hands this straight to `audio_out_set_device_pref()`. */
+const char *config_audio_device(const Config *cfg);
+
+/**
+ * The same value, loaded from CONFIG_FILE_PATH by this call and returned in a
+ * static buffer — no `Config` in the signature.
+ *
+ * ⚠️ **It exists for ScummVM, and the reason is a header-name collision, not
+ * convenience.** ScummVM generates its own `config.h` in its build root, so
+ * `#include "config.h"` from inside that tree resolves to ScummVM's and not to
+ * this file, whatever `-I` the configure patch adds — and putting
+ * `../native_apps/common` first would break every ScummVM source instead.
+ * Because this takes and returns only plain types, the ScummVM side can
+ * hand-declare the one prototype in its `extern "C"` block without needing the
+ * `Config` type, which is what it does. Do not "simplify" it away.
+ */
+const char *config_audio_device_stored(void);
+
 /* Check if LED effects are disabled. Reads "led_enabled" key (default: true). */
 bool config_led_enabled(const Config *cfg);
 

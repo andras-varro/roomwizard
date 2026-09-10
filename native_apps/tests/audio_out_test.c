@@ -966,6 +966,86 @@ int main(void)
         audio_out_close(&b);
     }
 
+    /* ── K. which device the next open will use ──────────────────────────────
+     *
+     * ⚠️ **What this group can and cannot see.** The resolver's inputs are the
+     * stored preference and `access("/dev/dsp1", W_OK)`, and this host has no
+     * `/dev/dsp1` — so every case below exercises the CARD-ABSENT half. That is
+     * deliberate rather than a gap papered over: K1 asserts the absence first,
+     * so if a host ever did have that node the group would fail loudly instead
+     * of quietly grading a different mechanism. The card-PRESENT half is
+     * verifiable only on a device with a DAC attached, by reading which node the
+     * process holds open — it is not claimed here.
+     *
+     * The negative control is K2 against K5: an unset preference and an
+     * explicitly-onboard one must both resolve onboard, while "usb" must take a
+     * DIFFERENT code path to reach the same answer. Without K6 the whole group
+     * would still pass on a resolver that ignored its argument entirely. */
+    printf("\n=== K. device resolution (card-absent half; see the header) ===\n");
+    {
+        check(!audio_out_usb_present(),
+              "K1 this host has no writable /dev/dsp1 — every case below is "
+              "therefore the card-ABSENT branch, and says so");
+
+        check(strcmp(audio_out_device_pref(), "onboard") == 0,
+              "K2 the default preference is onboard, so a unit never told "
+              "otherwise behaves exactly as it did before the seam existed");
+        check(strcmp(audio_out_device_path(), "/dev/dsp") == 0 &&
+              audio_out_device_is_onboard(),
+              "K3 and it resolves to the panel speaker");
+
+        audio_out_set_device_pref("usb");
+        check(strcmp(audio_out_device_pref(), "usb") == 0,
+              "K4 the preference round-trips — it reports what was SET, not "
+              "what was resolved");
+        check(strcmp(audio_out_device_path(), "/dev/dsp") == 0 &&
+              audio_out_device_is_onboard(),
+              "K5 but with no card it FALLS BACK to the panel speaker: a games "
+              "panel gone mute with no explanation is worse than one on the "
+              "wrong speaker");
+
+        audio_out_set_device_pref("auto");
+        check(strcmp(audio_out_device_path(), "/dev/dsp") == 0,
+              "K6 auto with no card is onboard too");
+
+        audio_out_set_device_pref(NULL);
+        check(strcmp(audio_out_device_pref(), "onboard") == 0,
+              "K7 NULL reads as onboard rather than clearing the string, so a "
+              "caller with no config file still names a device");
+        audio_out_set_device_pref("wharrgarbl");
+        check(strcmp(audio_out_device_path(), "/dev/dsp") == 0,
+              "K8 an unrecognised value resolves onboard — a typo in the config "
+              "file must not silence the panel");
+
+        audio_out_set_device_pref("usbusbusbusbusbusbusbusb");
+        check(strlen(audio_out_device_pref()) == 15,
+              "K9 an over-long preference is TRUNCATED, not written past the "
+              "buffer — and truncation makes it unrecognised, so K8 covers "
+              "where it lands");
+
+        audio_out_set_device_pref("onboard");   /* leave the process as found */
+
+        /* ── The card-PRESENT half ────────────────────────────────────────────
+         * These drive `audio_out_device_for()` directly, which is why it exists:
+         * without them the nine checks above all pass against a resolver that
+         * ignores its argument and always answers /dev/dsp — measured, that
+         * exact sabotage was green before this block was added. */
+        check(strcmp(audio_out_device_for("usb", true), "/dev/dsp1") == 0,
+              "K10 with a card present, usb resolves to it — the case no host "
+              "can reach through the wrapper");
+        check(strcmp(audio_out_device_for("auto", true), "/dev/dsp1") == 0,
+              "K11 and so does auto, which is what auto MEANS");
+        check(strcmp(audio_out_device_for("onboard", true), "/dev/dsp") == 0,
+              "K12 but onboard stays onboard with a card present — an explicit "
+              "choice is not overridden by hardware appearing");
+        check(strcmp(audio_out_device_for("usb", false), "/dev/dsp") == 0 &&
+              strcmp(audio_out_device_for("auto", false), "/dev/dsp") == 0,
+              "K13 and both fall back with it absent — the same answers K5/K6 "
+              "reach through the wrapper, now shown to depend on the argument");
+        check(strcmp(audio_out_device_for(NULL, true), "/dev/dsp") == 0,
+              "K14 a NULL preference is onboard even with a card present");
+    }
+
     printf("\n%s  %d checks, %d failure(s)\n",
            failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;
