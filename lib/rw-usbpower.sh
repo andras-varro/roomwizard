@@ -239,9 +239,25 @@ _rwup_rm() {
     esac
     return 0
 }
+# ⚠️ Called at step 8+9, immediately after the new kernel has moved into place —
+# the one moment in the sequence with no undo. A bare `sync` there iterates EVERY
+# superblock on the host, so it can jam on a filesystem that has nothing to do
+# with p1 (measured on this dev host: five `sync` in uninterruptible D state,
+# wchan super_lock, Dirty: 0 kB, oldest 90 minutes, one wedged 9p mount holding
+# the lock and every later `sync` queued behind it — and SIGTERM does not reach a
+# D-state task, so `timeout` cannot rescue it). `sync -f PATH` is syncfs() on just
+# the filesystem holding PATH, which is the only one this writer has any business
+# flushing. Falls back to the global form, out loud, where -f is missing.
+#
+# The ssh arm stays a bare `sync`: BusyBox has no -f.
 _rwup_sync() {
     case "$RWUP_XPORT" in
-        local) sync ;;
+        local)
+            if ! sync -f "$1" 2>/dev/null; then
+                echo "  note: 'sync -f' unavailable here; flushing all filesystems instead"
+                sync
+            fi
+            ;;
         ssh)   _rwup_ssh "sync" ;;
     esac
     return 0
@@ -443,7 +459,7 @@ rw_usbpower_apply() {
         echo "  could not move $new into place — $RW_UIMAGE_NAME is untouched"
         return 1
     fi
-    _rwup_sync
+    _rwup_sync "$img"
     got=$(_rwup_md5 "$img")
     if [ "$got" = "$target" ]; then
         echo "  $RW_UIMAGE_NAME is now the '$want' image ($got), verified by re-reading it"
@@ -456,7 +472,7 @@ rw_usbpower_apply() {
     echo "  ✗ $RW_UIMAGE_NAME reads back as $got, not $target."
     echo "    Restoring the vendor kernel from $RW_UIMAGE_BACKUP."
     if _rwup_cp "$bak" "$img"; then
-        _rwup_sync
+        _rwup_sync "$img"
         got=$(_rwup_md5 "$img")
         if [ "$got" = "$RW_UIMAGE_VENDOR_MD5" ]; then
             echo "    Restored: $RW_UIMAGE_NAME is the vendor image again ($got)."
