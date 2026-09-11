@@ -405,6 +405,8 @@ averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
 18.7 M	native_apps/common/audio.h	IMPROVEMENT_PLAN.md
 931 MB	device-files/clean-rules.conf	IMPROVEMENT_PLAN.md
 DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
+1179	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+0d8c:0014	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 --no-build	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
 sudo: a password is required	tests/commission_offline_test.sh	IMPROVEMENT_PLAN.md
 binutils-arm-linux-gnueabihf	setup-build-env.sh	IMPROVEMENT_PLAN.md
@@ -756,11 +758,21 @@ group_c() {
 # these tests print four different verdict shapes and none is the one it greps for. 314 grants one line, not
 # more. native_apps/CLAUDE.md absorbed its own addition inside its existing slack, and
 # IMPROVEMENT_PLAN.md fell further, since the entry this work closed was deleted outright.
+#
+# ⚠️ 2026-09-10: SYSTEM_ANALYSIS.md 1657 -> 1681. USB audio moved from "one module away" to a
+# shipping, hardware-proven subsystem, and §3.4 had no account of a second sound card at all: which
+# four modules load it, what card 1 actually advertises, what the OSS shim reports back instead, and
+# what the PIO costs. The file was audited for a deletion first and had none left — the addition is
+# net of two paid for in place: §3.6's stale "a wired USB DAC is one module away" paragraph collapsed
+# to a pointer, and the /dev/dsp1 minor was NOT copied here, because
+# device-files/usb-audio-modules' own header already owns that number and the reason it is
+# deterministic. The plan lost far more than 24 lines to the same change. 1681 is the measured
+# post-edit count and grants NO headroom: the next addition to this file pays by deleting.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1657	SYSTEM_ANALYSIS.md
+1681	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 215	README.md

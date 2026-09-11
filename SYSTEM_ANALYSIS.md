@@ -584,7 +584,7 @@ DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restor
 `/etc/init.d/alsa-state`.
 
 Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
-(halves OPL synthesis cost), native games 44100 Hz.
+(`[inferred]` halves OPL synthesis cost — arithmetic, never measured), native games 44100 Hz.
 
 ⚠️ **A native ALSA client is possible, and NOT PLANNED — a theoretical improvement with a marginal
 win.** The kernel side is already there: `CONFIG_SND`, `SND_PCM`, `SND_SOC`, `SND_OMAP_SOC`,
@@ -754,7 +754,7 @@ and at 22050; vanilla `omap-pcm.c:49-52` (`period_bytes_min = 32`, `periods_min 
 does not ask for a small period gets a big one, and the shim cannot ask because
 `SNDCTL_DSP_SETFRAGMENT` is ignored** — but it settles for 2048 frames, so it is 21 ms against 46 ms.
 
-**Gotcha — the OSS shim is buggy, in four distinct ways.** All of these are in `snd-pcm-oss`
+**Gotcha — the OSS shim is buggy, in six distinct ways.** All of these are in `snd-pcm-oss`
 emulation, not the hardware. ALSA itself works correctly.
 
 1. **A blocking `write()` stalls for hundreds of ms — the ~506 ms figure is that STALL, not a period.**
@@ -814,6 +814,34 @@ emulation, not the hardware. ALSA itself works correctly.
    stream **continuously fed**, **5 ms is audible and 20 ms recognisable** — first via
    `audio_pump_set_keepalive()`, then again 2026-08-18 on the shipped never-reset stream. Any claim about
    a minimum tone length must say which regime it was measured under; nothing in the tree clamps it.
+
+**A USB DAC is a second card, and it is the only route to stereo and to a headphone jack.** Four
+modules — `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib`, `snd-usb-audio` — load with plain `insmod`, no
+`-f` and no unresolved symbols, from `/etc/init.d/usb-audio-modules`, whose header holds the OSS minor
+and why it is deterministic. `/proc/asound/cards` then gains `1 [Device]: USB-Audio` and the shim appears
+at `/dev/dsp1`. Which card an app opens is the `audio_device` key — `onboard` | `usb` | `auto`, default
+`onboard`; [`native_apps/CLAUDE.md`](native_apps/CLAUDE.md) holds the one-home rule for resolving it.
+
+⚠️ **A USB card advertises a different parameter set, so the `hw:0,0` table above cannot speak for it.**
+`[n=1]` on a C-Media `0d8c:0014`: `/proc/asound/card1/stream0` offers `S16_LE`, `Channels: 2` and rates
+**48000 and 44100** only — no 22050 and no mono.
+
+⚠️ **But the OSS shim reports the client's REQUEST back as the grant, on either card, so
+`SOUND_PCM_READ_*` is not a capability probe.** A mixer asking 22050/1 is answered `granted 22050 Hz
+16-bit 1 ch` on `/dev/dsp1` — the card just described, which advertises neither — and identically on
+`/dev/dsp`, an A/B whose only variable was the `audio_device` key. Reading the grant back is still
+correct, because it is what the shim will deliver; it simply cannot reveal what the card underneath
+would have refused. **So a per-device rate preference has nothing to prefer** — the conversion is the
+shim's either way, and moving it into a caller would double that caller's mixing and synthesis cost to
+remove it.
+
+**PIO costs about 0.6 pp of the one core, so bandwidth is not the objection to USB audio.** Busy ticks
+over a wall-clock denominator, three interleaved 20 s runs each proving the stream still alive 2 s before
+the end: onboard 41/35/34 ticks ≈ **1.8 %**, USB 51/50/41 ≈ **2.4 %** `[n=1]`. The figures are `aplay`,
+not our mix bus, and carry no valid process-versus-IRQ split. ⚠️ **`/proc/stat`'s *total* column is not a
+usable denominator on this kernel** — `NO_HZ_IDLE` with `TICK_CPU_ACCOUNTING` never samples idle ticks,
+so it under-counts: three nominal-15 s windows reported totals of 1434, 1450 and 1179. Busy ticks are
+honest and `CONFIG_HZ=100`, so the denominator is wall seconds × 100.
 
 **As shipped.** The vendor's `init_amixer.sh` never unmutes any mic — corroborating that nothing
 was ever wired to the capture path.
@@ -1024,6 +1052,7 @@ image is unreachable by construction (`--mode` patches both properties in one pa
 | HID gamepad (generic) | `usbhid` | ✅ if HID-compliant |
 | Xbox 360 / One controller | `xpad` (module) | ❌ needs the three modules |
 | **Bluetooth dongle** | `btusb` — ⚠️ **not built** | ❌ `# CONFIG_BT is not set`; see below |
+| **USB audio class DAC** | `snd-usb-audio` (module) | ❌ needs four modules, which ship — [§3.4](#34-audio) |
 
 **A Bluetooth dongle is the only route to a wireless peripheral, and the kernel side is unbuilt.** There
 is no radio on the board at all ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)), so BT means a dongle in this
@@ -1033,9 +1062,8 @@ Hack 2 — and its dependencies are satisfiable: `CONFIG_NET`, `CONFIG_CRC16`, `
 `=m` and would have to be **built and shipped**, since `/lib/modules/4.14.52/` ships empty.
 `CONFIG_CRYPTO_ECDH` is unset and is needed only for BT LE Secure Connections. ⚠️ **[inferred] the
 controller is far more likely to work than the audio** — A2DP needs software SBC encoding on this single
-core. Also unbuilt
-and worth knowing: `CONFIG_SND=y` and `CONFIG_SND_USB=y` but `# CONFIG_SND_USB_AUDIO is not set`, so a
-wired USB DAC is one module away too. Both are open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+core. Bluetooth is open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC that
+used to share this paragraph is built and shipping ([§3.4](#34-audio)).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 

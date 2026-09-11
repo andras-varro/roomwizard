@@ -154,6 +154,57 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
+### B36. Nothing recovers an output device unplugged mid-playback — open, confirmed 2026-09-09
+
+Pull a USB DAC while sound is playing and audio goes silent and stays silent: no error surfaces, nothing
+falls back to the panel speaker, and `audio_live()` keeps reporting the vanished device healthy. Operator
+-confirmed at the panel and **acceptable to them**, so this is quality, not function — but the silence is
+permanent for the life of the process.
+
+⚠️ **`dsp_reopen()` (`common/audio.c`) already performs the entire fallback and its own comment says so**
+— it re-resolves the device path, so both `usb` and `auto` fall back to `/dev/dsp` and GPIO12 is
+re-enabled for it. What is missing is a caller from the write path; its only three callers reach it from
+an already-closed state.
+
+**Three signals are dropped, and a fix must score all of them**, because which one fires first on a real
+unplug is **not established**:
+
+- `audio_pump()` returns bare when `SNDCTL_DSP_GETOSPACE` fails, so on the non-continuous path the stale
+  fd never reaches `write()` and every counter downstream **freezes** rather than climbing. A frozen
+  `pump_starved` while sound is expected is the current unrecorded signature.
+- Both sinks compare `errno` to `EAGAIN` and nothing else, so `ENODEV`/`EIO`/`EINTR` collapse into
+  `audio_gen.h`'s deliberately lossy `sink_error` — which the old path discards outright and the
+  continuous path counts into `audio_out_sink_errors()`, **read by nobody in the repo**.
+- ⚠️ **A third counter, missed by the first reading of this:** `audio_out_service()` reads the device's
+  `space()` *before* it writes and answers `-1` with `refused++` when that fails, and `cont_service()`
+  discards that `-1`. So on the continuous path `refused` is the counter most likely to move first, and a
+  detector watching only the write could never fire at all.
+
+No device-lost state exists either: `available` is never lowered by anything on the write path.
+
+**Fix shape** — a consecutive-fault score feeding the existing fallback, on **both** paths, and it must
+`close()` first: `dsp_reopen()` overwrites the fd without closing, and on the continuous path the fd
+belongs to `AudioOut` whose one-per-process interlock refuses a second open. ⚠️ **A threshold of 1 is
+wrong and the reason is measurable:** a spurious fire on the continuous path costs a bounded-but-real
+`audio_out_close()` drain — ring plus period, ~0.79 s at 44100/2ch — **inside a render loop**, plus the
+reopen's prefill. `EAGAIN` cannot reach the score at all (`audio_write_frames()` services a full sink
+before `sink_error` is reachable), so the threshold is buying tolerance of a one-off `EINTR`/`EIO`, not of
+load. ⚠️ **And a failed recovery must be re-armed**, or lowering `available` mutes the app permanently —
+a worse silence than the defect.
+
+⚠️ **Reclassifying `EINTR` as retryable belongs in a SEPARATE commit**: that edit is in `audio_out.c`,
+which ScummVM links and `audio.c` is not, so it reaches a stream that has been ear-verified since
+2026-08-03.
+
+**Gate:** the decision logic is fully host-testable in `audio_tone_test.c` — the only host test linking
+`common/audio.c` — including a fake device that stops answering, and it needs a healthy-device control
+serviced many times and never taken back, or an inverted score would pass every positive case while
+tearing the stream down every frame. ⚠️ **Two things no host test can reach**, and they are the panel's
+job: that a real unplugged DAC *fails* `GETOSPACE`/`write` rather than hanging or succeeding with zero
+bytes, and that the fallback is heard. ⚠️ That file is also built and run **on the device**, where the
+recovery really succeeds — so any assertion about `available` or voice count passes on the host and fails
+on ARM.
+
 ## Features
 
 Userspace except F101, which is the image build.
@@ -414,12 +465,13 @@ existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to P
 controller scribbles into RAM.** The clean way is the two config symbols in an image we build — fold it
 into F101 rather than extending the runtime patch ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
-**Where the two questions do connect.** `CONFIG_SND=y` and `CONFIG_SND_USB=y` but
-`# CONFIG_SND_USB_AUDIO is not set` — so a **wired USB DAC** is also one module build away, with no
-encoding, no pairing and no latency, and it fixes the speaker complaint directly. But uncompressed PCM at
-48 kHz stereo is ~190 KB/s over PIO, which is where DMA would start to pay. **BT audio: low bandwidth,
-high CPU. USB audio: high bandwidth, low CPU.** If the goal is "sound that does not suck", the DAC is the
-cheaper experiment; if it is "no cables", it is Bluetooth.
+**Where the two questions do connect — and the cheaper experiment has already been run.** A wired USB
+DAC needed no encoding, no pairing and no latency budget, and it is now built, shipping and proven on
+hardware, which fixes the speaker complaint directly for anyone willing to run a cable
+([§3.4](SYSTEM_ANALYSIS.md#34-audio) has the measured PIO cost, and it is ~0.6 pp of the core, so DMA is
+not what USB audio was waiting for). **BT audio: low bandwidth, high CPU. USB audio: high bandwidth, low
+CPU.** So what is left of this entry is only the "no cables" half, and its hard problem is the software
+SBC encoding above, not the transport.
 
 **Two cross-cutting constraints on any dongle:** it draws ~50–100 mA, which is marginal against the
 current 100 mA budget — an *independent* argument for the 500 mA p1 power patch — plus the 802.3af
@@ -454,111 +506,6 @@ deliberately not scoped here.
 
 **Interim, and cheap:** state the host requirement plainly in `COMMISSIONING.md` instead of letting the
 instructions imply that any machine with a card reader will do.
-
----
-
-### F100. USB audio — shipping and proven; the rate preference is what is left — open, measured 2026-09-09
-
-**A USB DAC works end to end, from our own code, on hardware.** Measured on `.188` with a C-Media
-`0d8c:0014` on a 4-port hub alongside the Xbox pad (both full-speed, both working at once):
-`/etc/init.d/usb-audio-modules` loads `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib` and `snd-usb-audio`
-with plain `insmod` — no `-f`, no unresolved symbols — `/proc/asound/cards` gains
-`1 [Device]: USB-Audio`, and **`/dev/dsp1` appears at char 14,19**.
-
-**The seam and its proof.** `audio_out.c` owns the resolution (`audio_out_device_for()` and the four
-calls around it); the key is `audio_device` = `onboard` | `usb` | `auto`, default `onboard`;
-`config_audio_device()` is the getter and `audio_out_usb_present()` is `access("/dev/dsp1", W_OK)`.
-`audio.c` resolves fresh on every `dsp_reopen()`, so an unplug between opens is picked up, and ScummVM
-reads the key itself because it links `audio_out.o` but **not** `audio.o`. Proven as an A/B on `.188`
-with one config key as the only variable: the same deployed `snake` binary held fd 4 → `/dev/dsp` and
-printed `audio: /dev/dsp opened at 44100 Hz 2 ch S16LE` with no key, then fd 4 → `/dev/dsp1` and
-`audio: /dev/dsp1 …` with `audio_device=usb`. Operator-confirmed audible **in the headphones on the
-dongle and not on the panel speaker**, for `snake` and independently for **ScummVM**. 44100 is one of
-the two rates card 1 grants, so nothing resampled on that path.
-
-**PIO cost does not sink it.** Instrument: `/proc/stat` busy ticks over a wall-clock denominator, three
-interleaved 20 s runs each proving the stream was still alive 2 s before the end. Onboard `plughw:0,0`
-41/35/34 ticks ≈ **1.8 %** of the one core; USB `plughw:1,0` 51/50/41 ≈ **2.4 %**. So ~0.6 pp for the
-whole PIO path. ⚠️ **Two instrument traps found here.** `/proc/stat`'s *total* column is unusable as a
-denominator on this kernel — `NO_HZ_IDLE` with `TICK_CPU_ACCOUNTING` means idle ticks are never sampled,
-and three nominal-15 s windows reported 1434, 1450 and 1179 total; busy ticks are honest, `CONFIG_HZ=100`,
-so use wall seconds × 100. And a **first-ever stream after module load measured 135 ticks/15 s (~9 %) and
-did not reproduce** — do not quote that number. The figures are `aplay`, not our mix bus, and there is no
-valid process-versus-IRQ split.
-
-**The Settings control is built.** `device_tools.c` tab 0, AUDIO section row 2, right of `EFFECTS`: one
-cycling button `OUT: ONBOARD` → `OUT: USB` → `OUT: AUTO`, scale pinned to 1, dimmed (never hidden, never
-gated) when the preference it names cannot currently be met. Row 2 costs zero vertical pixels, so the
-vertical receipt is unmoved. `settings_out_btn_box()` is the single home for that row's x arithmetic —
-both the placement and the new receipt call it, which is why they cannot drift.
-
-- ⚠️ **The file now has a HORIZONTAL receipt, and it is the first one.** Measured on `.188`: landscape
-  right edge **394** of `CONTENT_RIGHT` 780, portrait **408 of 428** — a **20 px** margin, so portrait is
-  the binding constraint exactly as predicted, and scale 2 (144 px of glyphs against 72) would have
-  overflowed it by ~52 px. Pinning the scale was necessary, not tidy.
-- **The receipt has been seen failing, orientation-sensitively.** A six-character-wider `widest` label
-  made portrait print `⚠ PAST CONTENT RIGHT — right edge 444 of 428` while landscape still said `fits`
-  (430 of 780) — so it is measuring the right quantity and is not always-on.
-- ⚠️ **No host test can reach this geometry**, because `device_tools.c` is a monolith with `main()` and
-  the safe rect is a runtime variable. The receipt is a `printf`, not an assertion: a bad layout still
-  runs. Splitting the file is the prerequisite, and it is C2's job, not this entry's.
-- ⚠️ **`action_y` is still written out twice** (the layout builder and the painter) with nothing catching
-  a mismatch at compile time. The new row does not depend on it — a ≤28 px widget on row 2 shifts
-  nothing — but the next row that changes a height must edit both copies.
-- **The tap-through is verified, and it found two defects — operator, at the panel.** All
-  three labels cycle, SAVE writes `audio_device=`, RESET restores `onboard`, and the six
-  device/setting combinations each played on the device the setting named. What failed:
-  **(a)** the Settings TEST button ignored the setting entirely and always played on the
-  panel speaker, and **(b)** `OUT: AUTO` drew dimmed with no dongle attached.
-  - (a) was `audio_init_unchecked()` being `return audio_open(audio);` and nothing more,
-    so it set no device preference and inherited `audio_out.c`'s file-static — `"onboard"`
-    in a fresh process. ⚠️ **Both production callers had the defect** (`device_tools` and
-    `hardware_config`, both hardware speaker tests), so the fix is in the library, not at
-    the call sites: that call now resolves the SAVED value itself. ⚠️ **And a comment in
-    `device_tools.c` asserted the opposite** — that pressing SAVE then TEST proved the
-    setting — which is why the checklist handed to the operator claimed a check the code
-    could not perform. The Tests-tab audio button was correct throughout, because it calls
-    `audio_init()`, and running it once fixed the button for the rest of the process; that
-    order-dependence is why the fault needed a fresh launch to see.
-  - (b) dimmed on `idx == 0` rather than `idx != usb`. `auto`'s preference is met on every
-    unit — `audio_out_device_for()` falls it back silently — so it must never dim.
-  - ⚠️ **A third defect fell out of the same reading and no human could have found it from
-    the checklist:** `audio_out_usb_present()` was not in `main()`'s redraw
-    change-detection list, so plugging or unplugging changed no watched field and the
-    button kept its stale colour until an unrelated touch forced a repaint. The probe was
-    per-frame; the *paint* was not.
-  - **`audio_tone_test.c` group J is the gate for (a)**, and it has been seen failing:
-    sabotage stanza 9 restores the pre-fix body and group J reports 2 failed. ⚠️ Its
-    fourth check is **not** a live control — stanza 10 measures `0 failed`, because no host
-    test can put an `audio_enabled=false` file at the absolute `CONFIG_FILE_PATH`. (b) and
-    the redraw defect have **no** gate at all and were verified by eye: `device_tools.c` is
-    a monolith with `main()`.
-
-- **Open: nothing recovers a DAC unplugged mid-playback.** Operator-measured — audio goes
-  silent, no error, no exception, and no fallback to onboard; acceptable to them, so this
-  is quality. ⚠️ **The mechanism is fully read and it is NOT a one-liner.** `dsp_reopen()`
-  already performs the entire fallback correctly and its own comment says so; nothing
-  calls it from the write path. Three independent gaps: the pump returns bare on a failed
-  `SNDCTL_DSP_GETOSPACE`, so on the old path the stale fd never even reaches `write()` and
-  no counter moves; both sink writes compare `errno` to `EAGAIN` and nothing else, so
-  ENODEV, EIO and EINTR collapse into `audio_gen.h`'s deliberately lossy `sink_error`,
-  which the old path never reads and the continuous path only counts; and no device-lost
-  state exists — `available` stays true, so `audio_live()` keeps reporting a vanished
-  device healthy. A fix needs a consecutive-failure threshold with a backoff on **both**
-  paths, and must `close()` first: `dsp_reopen()` overwrites the fd without closing, and on
-  the continuous path the fd belongs to `AudioOut` whose open interlock would refuse a
-  second open. Frozen `pump_starved` while sound is expected is the current unrecorded
-  signature.
-
-**What is left is the per-device RATE preference.** `/proc/asound/card1/stream0` reports playback
-`S16_LE`, `Channels: 2` exactly, `Rates: 48000, 44100`, while ScummVM's mixer requests **22050/1**. The
-**channel** half is handled — `fillFromMixer()` mixes mono then expands in place, because nothing in
-`audio_out.c` refuses a mismatch and the old code would have played at **double speed** on any 2-channel
-grant. The rate half is unbuilt; the OSS shim resamples, so it is quality, not function, and the games
-already ask for 44100 and get it.
-
-⚠️ **Redeploy price for anything in this path is all THREE components**, not two — `config.c` is in
-`CLAUDE.md`'s all-three row.
 
 ### F101. Build our own 4.14.52 image — open
 
@@ -837,7 +784,7 @@ missing tool and point at it instead of each reciting its own `apt` line.
 
 ### Usability, features, maintainability
 
-F2 (the biggest performance win available) · F100 (USB audio) · B35 · C1 · C4 · C6 with C7 · C2 · B30 ·
+F2 (the biggest performance win available) · C1 · C4 · C6 with C7 · C2 · B30 · B36 ·
 F4 · C5 · C8 · F17 · F6 · F14 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
 waits on F101).
 
