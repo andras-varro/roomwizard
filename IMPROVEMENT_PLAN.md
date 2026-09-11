@@ -154,6 +154,33 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
+### D8. USB audio ships and works, and nothing an operator reads says so — open, confirmed 2026-09-11
+
+Raised by the operator, who asked for USB sound as a *missing feature* on a unit that already has it. The
+function is proven: the four class modules load with plain `insmod` from `/etc/init.d/usb-audio-modules`,
+linked at `S88` by `commissioning/provision.sh`, the OSS shim is in-kernel, the card appears as a second
+node `/dev/dsp1` while `/dev/dsp` stays the panel speaker, and it was **ear-confirmed at the panel on
+headphones and silent on the speaker** for `snake` and independently for ScummVM, at ~0.6 pp of the core
+over onboard. The facts live in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) and
+`native_apps/CLAUDE.md`, which is correct — but **`README.md` and `COMMISSIONING.md` mention USB audio
+nowhere at all**, measured 2026-09-11 by grep for `usb.?audio`, `dsp1` and `headphone` across both.
+
+So the gap is discoverability, and it has a specific trigger: `audio_device` defaults to `onboard`
+(`common/config.c`, `common/audio_out.c`), so a plugged-in dongle stays silent until Settings →
+`OUT: USB`/`AUTO` → SAVE, and the app is relaunched. An operator with the dongle in hand and no line in
+either operator-facing document reasonably concludes the feature does not exist.
+
+The fix is one short paragraph in `README.md` naming the setting and the relaunch, and one line in
+`COMMISSIONING.md` where `usb_host/build-and-deploy.sh` is already described. ⚠️ Both files are under a
+group D ceiling, so it is paid for by a deletion or an argued raise in the same commit — which is why this
+is an entry rather than an edit already made. ⚠️ **Do not restate the mechanism**: only the setting and
+where it lives belong in an operator document.
+
+⚠️ One caveat to carry into any wording: the measurement is `[n=1]` on the single C-Media card recorded in
+the audio section linked above, whose rate-and-channel table is *that card's* and not a class fact. The
+operator's own dongle is described as a "C-Media CMI" and no CMI-chip part number appears anywhere in the
+repo, so it is untested.
+
 ### B36. Nothing recovers an output device unplugged mid-playback — open, confirmed 2026-09-09
 
 Pull a USB DAC while sound is playing and audio goes silent and stays silent: no error surfaces, nothing
@@ -251,17 +278,60 @@ the display section linked above.
      800×480 reference** — portrait is 480×800 at full resolution and a fixed reference shrinks every
      control there to 60 %. Bit-exact no-op at both shipped geometries, so no device changed behaviour
      and nothing is owed at the panel for this part. Host test `native_apps/tests/ui_scale_test.c`,
-     27 assertions in 8 groups, in the gate. ⚠️ **Group 8 drives the wrappers and is not optional**:
+     30 assertions in 8 groups, in the gate. ⚠️ **Group 8 drives the wrappers and is not optional**:
      measured, a fixed-reference wrapper and a transposed wrapper each fail group 8 and nothing else,
      one assertion apiece, because every other group hands the ratio in as a parameter.
-   - **What is left, and ⚠️ the entry used to misdescribe it.** No game hardcodes 800 or 480 — that part
-     is clean — but three layers of fixed *pixel-size* constants remain, worst first:
-     1. **The shared widgets in `common/common.c`, which break harder than anything per-game.**
-        `gameover_init()`'s stack is `3 * BTN_LARGE_HEIGHT + 2 * btn_gap` with `btn_gap = 15` and a
-        `- 15` bottom margin flat: the button term now halves, taking the stack from 88 % of a 240-row
-        surface to ~53 %, but the gaps do not. `modal_dialog_init()` sets `dialog_width = 420` and
-        `dialog_height` 200/260/310 flat — 420 is **wider than a 400-pixel surface**, putting both side
-        borders off it. `button_draw()`'s icon inset `- 20` eats twice its share at half size.
+   - ⚠️ **The subject is ScummVM, not the seven games — re-scoped 2026-09-11 on the operator's
+     challenge, and the entry had this backwards.** Two measurements decide it. First, **nothing on this
+     device is frame-limited**: the target is `FRAME_DELAY_ACTIVE_US` 33 333 µs, the heaviest 800×480
+     scene above costs 26 075 µs — inside a 30 fps budget with ~7 ms spare — and no shipped app has a
+     recorded performance complaint or a measured fps figure at all, with whole-session audio counters
+     reading `starve=0 lost=0 drop=0 lim=0 clip=0` and one `starve=1` ever. Second, the *direction* of
+     the trade is opposite in the two places. **The seven games are authored at 800×480, so a reduced
+     surface DOWNSAMPLES their art** to buy CPU nobody needs. **ScummVM keeps the engine's own 320×200
+     and upscales it in SOFTWARE today**, so a reduced surface REMOVES work on art that was already that
+     size: `initSize()` stores the engine resolution verbatim, `getWidth()`/`getHeight()` return it
+     rather than the panel, and `blitGameSurfaceToFramebuffer()` resamples it nearest-neighbour with an X
+     lookup table and identical-row dedup. **800/320 is 2.5 and 480/200 is 2.4**, both non-integer, so
+     that resample doubles some columns and triples others — against a scaler with filter taps the
+     comparison is *uneven nearest-neighbour versus filtered*, not sharp versus soft. The backend's own
+     O9 row already names ScummVM the prime candidate. ⚠️ `vnc_client` is **not** a candidate: it
+     *downscales* from a larger remote, so the DSS would need a framebuffer the size of the remote
+     desktop to scale from.
+   - **The instrument that decides it: `native_apps/tests/dss_scale_ab.c`**, built as step 37/37,
+     deployed, hidden from the grid, and linking nothing from `common/` because `fb_init()` would apply a
+     bezel viewport it must not have. Three modes over one synthetic 320×200 card — 1 px and 2 px column
+     and row combs, diagonals, 1 px rings, four ramps, hard-edged blocks, and a 1 px border so a crop is
+     seen rather than deduced. `soft` runs the software resample on `fb0`; `hard` puts a 320×200 `fb1`
+     under `vid1` at 800×480; `split` shows **both arms at once**, the card's top half only at
+     320×100 → 800×240, which is the *same* 2.5×/2.4× pair — shrinking the output without shrinking the
+     input would have compared two different scale factors and answered nothing. `--swap` moves the
+     hardware arm to the bottom and is the **viewing-angle control**: without it "the top looked softer"
+     is not yet a statement about the scaler, and it refuses rather than reporting a swap that
+     `overlay1/position` would not accept. ⚠️ There is deliberately **no `--ppm`**: the only source that
+     would settle the question is a frame out of a running engine, and a grab off `fb0` today is the
+     800×480 *output* of the software arm, i.e. already arm A.
+   - ⚠️ **Measured on `.188` 2026-09-11, before any run: `vid1` is `enabled=0` and `fb1/size` is `0` —
+     the plane is wired but UNFUNDED — while `output_size` still reads a stale `800,120` and `input_size`
+     `400,240` left by the earlier eye run.** So funding `fb1` is a step and not a given. `overlay1` also
+     carries no `trans_key*` attribute of its own, which step 3 below has to reckon with.
+   - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
+     is the subject, and each game would additionally need its own operator eye run. Three layers, worst
+     first:
+     1. **The shared widgets in `common/common.c`. ⚠️ The list that stood here understated this layer by
+        an order of magnitude, measured 2026-09-11.** `common/common.c` contains **zero** calls to
+        `fb_ui_px_*()`, so `gameover_init()` and `modal_dialog_draw()` are *mixed-unit* expressions
+        today — a scaled `BTN_LARGE_HEIGHT` added to a flat `btn_gap = 15` and a flat `- 15` margin. It is
+        ~40 layout literals across 12 functions, not three. `modal_dialog_draw()` alone carries
+        `150,50`, `30`, `25`, `200,44`, `8` and `20`, and `modal_dialog_init()`'s `dialog_width = 420` is
+        compared against the *real* `fb->width`, so the box overflows a 400-pixel surface with both side
+        borders off it. `button_draw()`'s `- 20` icon inset is the highest-leverage single literal, at 51
+        call sites across 7 apps. **Three different font-width constants coexist** — `6` at
+        `common.c:92`, `8` at `:131`, and `8` hand-rolled twice more in `screen_draw_game_over()` — so the
+        33 % over-measure is duplicated rather than localised, and fixing `:131` is a prerequisite for the
+        button-label overrun noted below. And the icon **minimum-size floors cannot scale down**: 3 px
+        bars with 6 px gaps in `icon_draw_hamburger()`, a 3 px stroke in `icon_draw_x()`, which together
+        with that `- 20` exceed the icon box a half-size surface leaves.
      2. **Each game's own literals.** ⚠️ **"`snake.c` has none of them and is the cheapest first
         subject" was wrong** and is corrected here: snake has a fixed 80-pixel top band and 40-pixel
         margins bounding its playfield, fixed HUD rows at y=28 and y=53 against `SCREEN_SAFE`-anchored
@@ -271,7 +341,7 @@ the display section linked above.
      3. **The named per-game constants**: `PADDLE_*`/`BALL_*`/`BRICK_H` in `brick_breaker.c` and
         `pong.c`, `HUD_HEIGHT` in `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which
         makes the visible world a function of resolution. `platformer.c` is the most expensive.
-     Then ScummVM and the VNC client.
+     Then ScummVM, which by the re-scope above comes **first** rather than last.
    - ⚠️ **Text does not scale, and this is a floor rather than an oversight.** The glyph size is an
      integer multiplier with no rung below 1, so a scale-3 label cannot halve. The `button_init` macro's
      `(w) > 150 ? 3 : 2` threshold is deliberately left in raw surface pixels so a scaled width falls
@@ -872,7 +942,7 @@ longer blocked.
 
 ⚠️ **Most of this tier is NOT gated on a kernel rebuild, measured 2026-09-06.** This repo already builds
 and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
-F17 and F100 are module builds, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
+F17 is a module build, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
 cheaper option draws its splash in `app_launcher`, which already owns the framebuffer. **What genuinely
 needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
 RESCAN tap — and MUSB DMA.** Anything else claiming to need
