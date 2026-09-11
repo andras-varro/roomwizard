@@ -89,6 +89,45 @@ extern int screen_panel_height;
 void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
                                int *top, int *bottom, int *left, int *right);
 
+// ---------------------------------------------------------------------------
+// UI pixel scaling: design pixels -> surface pixels
+//
+// A control that must keep its PHYSICAL size — a finger-sized button, a HUD band,
+// a dialog — is a fixed fraction of the panel, and a scaling DSS overlay draws a
+// SMALLER surface upscaled to fill that panel. A constant left in surface pixels
+// therefore GROWS on the panel by the upscale factor: BTN_MENU_WIDTH 70 on a
+// 400x240 surface covers 140 of the panel's 800 columns, twice its design size,
+// and the shared 220x60 game-over stack covers 88% of the rows instead of 44%.
+//
+// The conversion is the surface:panel ratio. ⚠️ NOT a ratio against a fixed
+// 800x480 reference, which would shrink every control in portrait, where the
+// surface is 480x800 at FULL resolution and must not be scaled at all. ⚠️ And NOT
+// against the LOGICAL dims, which the bezel has already shrunk — that is the
+// fixed-divisor trap that made fb_plane_bench draw its own label at scale 1
+// instead of 2, having derived the scale from a height the bezel cut 240 -> 227.
+//
+// fb_scale_ui_px() is the pure half, so a host test can reach it
+// (native_apps/tests/ui_scale_test.c); fb_ui_px_x() / fb_ui_px_y() are the thin
+// wrappers over the published geometry. Bit-exact no-ops whenever the surface
+// equals the panel, which is every shipped unit in both orientations today, so
+// this changes nothing on fb0 and the host test's group 1 asserts exactly that.
+//
+// ⚠️ It scales GEOMETRY only. Text is an integer glyph multiplier with no rung
+// below 1, so a scale-3 label cannot halve; see the note on button_init in
+// common.h for what that costs and why it is not papered over here.
+int fb_scale_ui_px(int panel_dim, int surf_dim, int px);
+int fb_ui_px_x(int px);
+int fb_ui_px_y(int px);
+
+// The panel's OWN resolution in the app's orientation, from the display's mode
+// timings — 800x480 on every unit today, swapped in portrait. Published solely so
+// the UI scale above can be computed, and deliberately a SEPARATE pair from
+// screen_panel_width/height, whose name says panel and whose value is the
+// surface: changing what those two mean would silently move touch. Falls back to
+// the surface when the timings cannot be read, which makes the scale a 1:1 no-op.
+extern int screen_true_panel_width;
+extern int screen_true_panel_height;
+
 // Logical surface origin within the panel (== bezel left/top after rotation)
 extern int screen_view_x;
 extern int screen_view_y;
@@ -132,13 +171,15 @@ extern int screen_touch_inset_bottom;
 extern int screen_touch_inset_left;
 extern int screen_touch_inset_right;
 
-// Largest inset that will be believed. A calibration that puts more than this out
-// of reach is broken, and silently shrinking every UI to match it hides the fault
-// where a loud warning finds it. ~10% of the short axis.
+// Largest inset that will be believed, in DESIGN pixels — ~10% of the short axis.
+// A calibration that puts more than this out of reach is broken, and silently
+// shrinking every UI to match it hides the fault where a loud warning finds it.
+// fb_set_touch_inset() converts it with fb_ui_px_*(), because it is a fraction of
+// the panel: flat, it would be 20% of a 240-row surface instead of 10%.
 #define FB_TOUCH_INSET_MAX 48
 
-// Publish the measured inset. Values are clamped to [0, FB_TOUCH_INSET_MAX] and a
-// clamp is reported on stdout — see the note above.
+// Publish the measured inset. Values are clamped to [0, converted
+// FB_TOUCH_INSET_MAX] and a clamp is reported on stdout — see the note above.
 void fb_set_touch_inset(int top, int bottom, int left, int right);
 
 #define SCREEN_VISIBLE_LEFT   0

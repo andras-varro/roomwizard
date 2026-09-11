@@ -72,7 +72,19 @@ void button_init_full(Button *btn, int x, int y, int width, int height,
 void button_init_simple(Button *btn, int x, int y, int width, int height,
                         const char *text);
 
-// Backward compatibility macro - auto-determines text scale
+// Backward compatibility macro - auto-determines text scale.
+//
+// ⚠️ The 150 is a raw SURFACE-pixel threshold and is deliberately NOT converted
+// with fb_ui_px_x(). Text is an integer glyph multiplier with no rung below 1, so
+// a scale-3 label cannot halve: converting the threshold too would hold the scale
+// at 3 on a half-size surface and draw the label at twice its design size on the
+// panel. Leaving the threshold flat lets a scaled width fall through to 2, which
+// is the closest available rung to the 1.5 that is wanted. It is not exact —
+// measured, a scaled BTN_LARGE_WIDTH of 110 takes scale 2, whose "PLAY AGAIN" is
+// 120 surface px against a 110 px button, so the label OVERRUNS. Sizing text to
+// fit needs text_measure_width(), which over-measures by 33% until the 8px/6px
+// font-width confusion in it is fixed — so this is left honest rather than
+// half-corrected, and no game runs at a reduced surface yet.
 #define button_init(btn, x, y, w, h, text, bg, txt, hl) \
     button_init_full(btn, x, y, w, h, text, bg, txt, hl, ((w) > 150) ? 3 : 2)
 
@@ -242,13 +254,19 @@ uint32_t get_time_ms(void);
 #define BTN_RESUME_COLOR        BTN_COLOR_PRIMARY
 #define BTN_HIGHLIGHT_COLOR     BTN_COLOR_HIGHLIGHT
 
-// Common button sizes
-#define BTN_MENU_WIDTH  70
-#define BTN_MENU_HEIGHT 50
-#define BTN_EXIT_WIDTH  70
-#define BTN_EXIT_HEIGHT 50
-#define BTN_LARGE_WIDTH  220
-#define BTN_LARGE_HEIGHT 60
+// Common button sizes, in DESIGN pixels at the panel's own resolution. They pass
+// through fb_ui_px_*() so a control keeps its PHYSICAL size when a scaling DSS
+// overlay presents a smaller surface — left flat, BTN_MENU_WIDTH 70 on a 400x240
+// surface covers 140 of the panel's 800 columns. Bit-exact at 800x480 and in
+// portrait; the guard in fb_scale_ui_px() short-circuits the divide entirely when
+// surface == panel, so this costs two loads and a compare on every shipped unit.
+// Contract and the two ways to get the ratio wrong: framebuffer.h.
+#define BTN_MENU_WIDTH  fb_ui_px_x(70)
+#define BTN_MENU_HEIGHT fb_ui_px_y(50)
+#define BTN_EXIT_WIDTH  fb_ui_px_x(70)
+#define BTN_EXIT_HEIGHT fb_ui_px_y(50)
+#define BTN_LARGE_WIDTH  fb_ui_px_x(220)
+#define BTN_LARGE_HEIGHT fb_ui_px_y(60)
 
 // Debounce time in milliseconds
 #define BTN_DEBOUNCE_MS 200
@@ -263,13 +281,15 @@ uint32_t get_time_ms(void);
 // Calculate centered Y position within safe area
 #define LAYOUT_CENTER_Y(height) (SCREEN_SAFE_TOP + (SCREEN_SAFE_HEIGHT - (height)) / 2)
 
-// Standard positions for common UI elements
-#define LAYOUT_TITLE_Y          (SCREEN_SAFE_TOP + 20)      // Title text position
-#define LAYOUT_MENU_BTN_X       (SCREEN_SAFE_LEFT + 10)     // Menu button (top-left)
-#define LAYOUT_MENU_BTN_Y       (SCREEN_SAFE_TOP + 10)
-#define LAYOUT_EXIT_BTN_X       (SCREEN_SAFE_RIGHT - BTN_EXIT_WIDTH - 10)  // Exit button (top-right)
-#define LAYOUT_EXIT_BTN_Y       (SCREEN_SAFE_TOP + 10)
-#define LAYOUT_BOTTOM_BTN_Y     (SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 20)  // Bottom buttons
+// Standard positions for common UI elements. The insets are design pixels and
+// convert with the sizes above — a flat 10 px gap doubles its share of the panel
+// on a half-size surface exactly as a flat button width does.
+#define LAYOUT_TITLE_Y          (SCREEN_SAFE_TOP + fb_ui_px_y(20))   // Title text position
+#define LAYOUT_MENU_BTN_X       (SCREEN_SAFE_LEFT + fb_ui_px_x(10))  // Menu button (top-left)
+#define LAYOUT_MENU_BTN_Y       (SCREEN_SAFE_TOP + fb_ui_px_y(10))
+#define LAYOUT_EXIT_BTN_X       (SCREEN_SAFE_RIGHT - BTN_EXIT_WIDTH - fb_ui_px_x(10))  // Exit button (top-right)
+#define LAYOUT_EXIT_BTN_Y       (SCREEN_SAFE_TOP + fb_ui_px_y(10))
+#define LAYOUT_BOTTOM_BTN_Y     (SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - fb_ui_px_y(20))  // Bottom buttons
 
 // Welcome-screen text metrics (screen_draw_welcome*): instruction/warning text
 // scale, the gap between wrapped lines, and the gap between blocks (title,

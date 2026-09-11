@@ -240,12 +240,46 @@ the display section linked above.
    not the node; `fb1` 400×240 with `vid1` disabled; and the same with `vid1` upscaling to 800×480 and
    `gfx` switched off, which moved nothing. Per-Mpixel store cost also *fell* 9 % on the smaller surface,
    so the gain slightly exceeds the area ratio. ⚠️ **The remaining work is per-game re-tuning, not
-   plumbing**, and it is where the effort now goes: no game hardcodes 800 or 480, but fixed *pixel-size*
-   constants keep their size while the surface halves — `BTN_MENU`/`BTN_EXIT`/`BTN_LARGE` in
-   `common/common.h`, `PADDLE_*`/`BALL_*`/`BRICK_H` in `brick_breaker.c` and `pong.c`, `HUD_HEIGHT` in
-   `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which makes the visible world a
-   function of resolution. `snake.c` has none of them and is the cheapest first subject; `platformer.c`
-   the most expensive. Then ScummVM and the VNC client.
+   plumbing**, and it is where the effort now goes.
+   - **The shared conversion exists and is in use, 2026-09-11.** `fb_scale_ui_px()` in
+     `common/framebuffer.c` converts a DESIGN pixel count into surface pixels by the surface:panel
+     ratio, with `fb_ui_px_x()`/`fb_ui_px_y()` over the published geometry; `fb_apply_viewport()` now
+     also publishes `screen_true_panel_width`/`_height`, a pair separate from the surface-valued
+     `screen_panel_*` so touch keeps its meaning. Converted so far: the six `BTN_*_WIDTH`/`_HEIGHT`
+     constants and the six `LAYOUT_*` insets in `common/common.h`, and `FB_TOUCH_INSET_MAX`, whose flat
+     48 was ~10 % of 480 rows but 20 % of 240. ⚠️ **The ratio must be surface:panel and not a fixed
+     800×480 reference** — portrait is 480×800 at full resolution and a fixed reference shrinks every
+     control there to 60 %. Bit-exact no-op at both shipped geometries, so no device changed behaviour
+     and nothing is owed at the panel for this part. Host test `native_apps/tests/ui_scale_test.c`,
+     27 assertions in 8 groups, in the gate. ⚠️ **Group 8 drives the wrappers and is not optional**:
+     measured, a fixed-reference wrapper and a transposed wrapper each fail group 8 and nothing else,
+     one assertion apiece, because every other group hands the ratio in as a parameter.
+   - **What is left, and ⚠️ the entry used to misdescribe it.** No game hardcodes 800 or 480 — that part
+     is clean — but three layers of fixed *pixel-size* constants remain, worst first:
+     1. **The shared widgets in `common/common.c`, which break harder than anything per-game.**
+        `gameover_init()`'s stack is `3 * BTN_LARGE_HEIGHT + 2 * btn_gap` with `btn_gap = 15` and a
+        `- 15` bottom margin flat: the button term now halves, taking the stack from 88 % of a 240-row
+        surface to ~53 %, but the gaps do not. `modal_dialog_init()` sets `dialog_width = 420` and
+        `dialog_height` 200/260/310 flat — 420 is **wider than a 400-pixel surface**, putting both side
+        borders off it. `button_draw()`'s icon inset `- 20` eats twice its share at half size.
+     2. **Each game's own literals.** ⚠️ **"`snake.c` has none of them and is the cheapest first
+        subject" was wrong** and is corrected here: snake has a fixed 80-pixel top band and 40-pixel
+        margins bounding its playfield, fixed HUD rows at y=28 and y=53 against `SCREEN_SAFE`-anchored
+        buttons, and a food radius of `cell_size / 2 - 2` that reaches 1 at a 400×240 surface, 0 at a
+        modest touch inset and **−1 — food never drawn at all** — at the worst legal inset. It is still
+        the cheapest subject; it is not a free one.
+     3. **The named per-game constants**: `PADDLE_*`/`BALL_*`/`BRICK_H` in `brick_breaker.c` and
+        `pong.c`, `HUD_HEIGHT` in `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which
+        makes the visible world a function of resolution. `platformer.c` is the most expensive.
+     Then ScummVM and the VNC client.
+   - ⚠️ **Text does not scale, and this is a floor rather than an oversight.** The glyph size is an
+     integer multiplier with no rung below 1, so a scale-3 label cannot halve. The `button_init` macro's
+     `(w) > 150 ? 3 : 2` threshold is deliberately left in raw surface pixels so a scaled width falls
+     through to 2, the closest rung to the 1.5 wanted — but 2 is not exact: measured, a scaled
+     `BTN_LARGE_WIDTH` of 110 takes scale 2, whose `"PLAY AGAIN"` is 120 surface pixels against a
+     110-pixel button, so **the label overruns**. Sizing text to fit needs `text_measure_width()`, which
+     over-measures by 33 % until the 8px/6px font-width confusion in it is fixed — so this waits on that
+     item rather than being half-corrected here.
    - **The bezel band no longer doubles, and touch turned out to need nothing.** The
      margins name pixels the plastic bezel physically covers, so they are *panel* pixels, and
      `fb_apply_viewport()` subtracted them from the framebuffer's own `xres`/`yres`: `.188`'s measured

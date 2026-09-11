@@ -22,6 +22,11 @@ int screen_panel_height = 480;
 int screen_view_x = 0;
 int screen_view_y = 0;
 
+// The panel's own resolution — see the header. Defaults match the surface
+// defaults above, so the UI scale is a 1:1 no-op before fb_init() has run.
+int screen_true_panel_width  = 800;
+int screen_true_panel_height = 480;
+
 // Logical (visible) screen dimensions
 int screen_base_width  = 800;
 int screen_base_height = 480;
@@ -34,24 +39,33 @@ int screen_touch_inset_bottom = 0;
 int screen_touch_inset_left   = 0;
 int screen_touch_inset_right  = 0;
 
-static int clamp_inset(const char *side, int v) {
+static int clamp_inset(const char *side, int v, int max) {
     if (v < 0) return 0;
-    if (v > FB_TOUCH_INSET_MAX) {
+    if (v > max) {
         // Loud, because the alternative is every UI in the system quietly
         // shrinking to fit a broken calibration.
         printf("Touch inset: %s %d px exceeds the %d px limit — clamped. "
                "The calibration is almost certainly wrong; recalibrate.\n",
-               side, v, FB_TOUCH_INSET_MAX);
-        return FB_TOUCH_INSET_MAX;
+               side, v, max);
+        return max;
     }
     return v;
 }
 
+// The cap is a FRACTION of the panel — "~10% of the short axis" — so it converts
+// with the surface like any other design pixel. Left at a flat 48 it would be
+// ~10% of 480 rows but 20% of a 240-row surface, i.e. twice as permissive exactly
+// where there is half the screen to lose. The insets themselves arrive already in
+// surface pixels, measured by touch_input.c through the live map, so only the cap
+// needed converting.
 void fb_set_touch_inset(int top, int bottom, int left, int right) {
-    screen_touch_inset_top    = clamp_inset("top", top);
-    screen_touch_inset_bottom = clamp_inset("bottom", bottom);
-    screen_touch_inset_left   = clamp_inset("left", left);
-    screen_touch_inset_right  = clamp_inset("right", right);
+    int max_y = fb_ui_px_y(FB_TOUCH_INSET_MAX);
+    int max_x = fb_ui_px_x(FB_TOUCH_INSET_MAX);
+
+    screen_touch_inset_top    = clamp_inset("top", top, max_y);
+    screen_touch_inset_bottom = clamp_inset("bottom", bottom, max_y);
+    screen_touch_inset_left   = clamp_inset("left", left, max_x);
+    screen_touch_inset_right  = clamp_inset("right", right, max_x);
 }
 
 void fb_load_bezel(void) {
@@ -142,6 +156,31 @@ void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
     }
 }
 
+// Convert one DESIGN pixel count into surface pixels — the pure half of the UI
+// scale, contract in the header. Rounds DOWN like the bezel conversion above, and
+// an equal or unreadable panel dimension is an exact 1:1 no-op.
+//
+// It never rounds a positive input away to nothing: a button scaled to zero
+// pixels is invisible AND untappable, which is a worse failure than one pixel
+// short, and the caller cannot tell the two apart afterwards. The floor is at 1
+// rather than at a finger width on purpose — this function does not know whether
+// the pixels it was handed are a tap target or a one-pixel gridline.
+int fb_scale_ui_px(int panel_dim, int surf_dim, int px) {
+    if (panel_dim <= 0 || surf_dim <= 0 || panel_dim == surf_dim) return px;
+
+    int scaled = px * surf_dim / panel_dim;
+    if (px > 0 && scaled < 1) scaled = 1;
+    return scaled;
+}
+
+int fb_ui_px_x(int px) {
+    return fb_scale_ui_px(screen_true_panel_width, screen_panel_width, px);
+}
+
+int fb_ui_px_y(int px) {
+    return fb_scale_ui_px(screen_true_panel_height, screen_panel_height, px);
+}
+
 // Recompute the logical surface from the SURFACE dims + current bezel margins
 // and publish the result to both fb and the globals. surf_w/surf_h are the
 // framebuffer's own xres/yres, which equal the panel's only when nothing is
@@ -186,6 +225,13 @@ static int fb_apply_viewport(Framebuffer *fb, int surf_w, int surf_h) {
     // and touch_map_test.c group J is what would then start failing on a device.
     screen_panel_width  = surf_w;
     screen_panel_height = surf_h;
+
+    // The true panel, from the timings, in its own pair — the UI scale needs the
+    // ratio between the two, and panel_w/panel_h die with this function. Equal to
+    // the surface whenever nothing scales this node, and when the timings could
+    // not be read at all, so fb_ui_px_*() is then an exact no-op.
+    screen_true_panel_width  = panel_w;
+    screen_true_panel_height = panel_h;
     screen_view_x       = fb->view_x;
     screen_view_y       = fb->view_y;
     screen_base_width   = lw;
