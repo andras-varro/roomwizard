@@ -66,13 +66,25 @@
  * colour blocks (edge bleed).  A 1px white border rings the whole card, so a crop
  * is seen rather than deduced.
  *
- * ⚠️ No real game frame is fed in, and there is deliberately NO --ppm option.  The
- * only 320x200 source that would settle the question is a frame out of a running
- * engine, and ScummVM has no path that emits one.  A frame grabbed off fb0 today is
- * the 800x480 OUTPUT of the software scale, i.e. it is already arm A, so it cannot
- * serve as the shared input.  A loader added before that source exists would be an
- * option with nothing to point at.  When such a source appears, this is the file
- * that grows one.
+ * ⚠️ --ppm FEEDS A REAL GAME FRAME IN, and the argument that used to forbid it is
+ * spent.  That argument was: a frame grabbed off fb0 is the 800x480 OUTPUT of the
+ * software scale, i.e. already arm A, so it cannot be the shared input.  True but
+ * incomplete - the software upscale is nearest neighbour at a ratio above 1, which
+ * makes it SURJECTIVE: every source pixel survives in at least one output pixel, so
+ * the map inverts exactly, with no filtering and no guessing.  fb_to_game_ppm.py at
+ * the repo root does that inversion and writes the recovered 320x200 surface as P6,
+ * which is what --ppm reads.  No engine change and no new emit path was needed.
+ *
+ * ⚠️ THE CURSOR IS NOT PART OF THE SURFACE.  drawCursor()
+ * (roomwizard-graphics.cpp:575-642) writes destructively at OUTPUT resolution AFTER
+ * the scale, so those pixels are not recoverable source pixels and the recovery tool
+ * cannot tell them apart from art.  Grab a frame with no cursor over the picture.
+ *
+ * ⚠️ --ppm CHANGES THE ART AND NOTHING ELSE.  The geometry stays the 2.5x by 2.4x
+ * described above, deliberately: rehearsing ScummVM's real isotropic pillarbox is a
+ * separate step, and changing art and geometry in one move would make this a
+ * two-variable A/B.  The PPM must therefore be exactly 320x200, and one that is not
+ * is refused by the dimensions it turned out to have.
  *
  * WHAT IT RESTORES, AND WHY THAT MATTERS.  The fb0 vinfo is saved verbatim before
  * any write and restored on every exit path including SIGINT/SIGTERM/SIGHUP, and a
@@ -191,6 +203,113 @@ static void card_build(void) {
         card[y * CARD_W] = W;
         card[y * CARD_W + CARD_W - 1] = W;
     }
+}
+
+/* -- the card, loaded from a real frame instead ----------------------------
+ *
+ * A LOCAL P6 reader on purpose.  This file links nothing from common/ - fb_init()
+ * would apply a bezel viewport it must not have, and the build line has no
+ * COMMON_OBJ - so common/ppm.h is out of reach and must not be pulled in for this.
+ * Strict by design: the card array above is static, and every "2.5x by 2.4x"
+ * figure this file prints is stated against CARD_W x CARD_H, so a source of any
+ * other size is refused rather than resized.
+ */
+
+static int ppm_uint(FILE *f, int *out) {
+    int c;
+    for (;;) {
+        c = fgetc(f);
+        if (c == EOF) return -1;
+        if (c == '#') {                      /* comment runs to end of line */
+            while (c != '\n' && c != EOF) c = fgetc(f);
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        break;
+    }
+    if (c < '0' || c > '9') return -1;
+    int v = 0;
+    while (c >= '0' && c <= '9') {
+        v = v * 10 + (c - '0');
+        if (v > (1 << 20)) return -1;
+        c = fgetc(f);
+    }
+    /* The byte that ended the number is the single whitespace the format calls
+     * for after maxval, so consuming it here is correct and not a loss. */
+    *out = v;
+    return 0;
+}
+
+static int card_load_ppm(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "dss_scale_ab: cannot open %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+
+    int c1 = fgetc(f), c2 = fgetc(f);
+    if (c1 != 'P' || c2 != '6') {
+        fprintf(stderr, "dss_scale_ab: %s is not a binary PPM - magic must be P6\n",
+                path);
+        fclose(f);
+        return -1;
+    }
+
+    int w = 0, h = 0, maxval = 0;
+    if (ppm_uint(f, &w) || ppm_uint(f, &h) || ppm_uint(f, &maxval)) {
+        fprintf(stderr, "dss_scale_ab: %s has a malformed P6 header\n", path);
+        fclose(f);
+        return -1;
+    }
+    if (w != CARD_W || h != CARD_H) {
+        fprintf(stderr,
+            "dss_scale_ab: %s is %dx%d, and this harness requires exactly %dx%d.\n"
+            "  Every scale figure it prints is stated against %dx%d, so another\n"
+            "  size would make the receipt wrong rather than the run interesting.\n"
+            "  Recover the surface at %dx%d and pass that.\n",
+            path, w, h, CARD_W, CARD_H, CARD_W, CARD_H, CARD_W, CARD_H);
+        fclose(f);
+        return -1;
+    }
+    if (maxval != 255) {
+        fprintf(stderr, "dss_scale_ab: %s has maxval %d; only 8-bit (255) is read\n",
+                path, maxval);
+        fclose(f);
+        return -1;
+    }
+
+    size_t want = (size_t)CARD_W * (size_t)CARD_H * 3u;
+    unsigned char *rgb = malloc(want);
+    if (!rgb) {
+        fprintf(stderr, "dss_scale_ab: out of memory reading %s\n", path);
+        fclose(f);
+        return -1;
+    }
+    size_t got = fread(rgb, 1, want, f);
+    if (got != want) {
+        fprintf(stderr, "dss_scale_ab: %s ended early - %lu of %lu pixel bytes\n",
+                path, (unsigned long)got, (unsigned long)want);
+        free(rgb);
+        fclose(f);
+        return -1;
+    }
+    /* Data past the last pixel means the header does not describe the file. */
+    int extra;
+    while ((extra = fgetc(f)) != EOF) {
+        if (extra != '\n' && extra != '\r' && extra != ' ' && extra != '\t') {
+            fprintf(stderr, "dss_scale_ab: %s carries data past %dx%d pixels\n",
+                    path, CARD_W, CARD_H);
+            free(rgb);
+            fclose(f);
+            return -1;
+        }
+    }
+    fclose(f);
+
+    for (int i = 0; i < CARD_W * CARD_H; i++)
+        card[i] = rgb565(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]);
+    free(rgb);
+    return 0;
 }
 
 /* -- restore state, held globally so a signal handler can reach it --------- */
@@ -695,11 +814,16 @@ static int mode_split(int frames, int swap) {
 static void usage_to(FILE *out) {
     fprintf(out,
         "dss_scale_ab <soft|hard|split> [hold-seconds] [--swap] [--frames N]\n"
+        "                                 [--ppm FILE]\n"
         "\n"
         "  soft    software nearest-neighbour 320x200 -> 800x480 on fb0 (WRITES fb0 MODE)\n"
         "  hard    vid1 hardware upscale of a 320x200 fb1              (fb0 untouched)\n"
         "  split   both at once, top half of the card, same ratios     (WRITES fb0 MODE)\n"
         "  --swap  split only: hardware arm at the BOTTOM, the viewing-angle control\n"
+        "  --ppm   use a real 320x200 game frame as the source instead of the synthetic\n"
+        "          card.  Exactly 320x200 P6 is accepted; recover one from an fb0 grab\n"
+        "          with fb_to_game_ppm.py at the repo root.  The geometry does not\n"
+        "          change, so this swaps the ART and nothing else.\n"
         "\n"
         "  Defaults: hold 20 s, 60 timed frames.\n"
         "\n"
@@ -724,11 +848,14 @@ int main(int argc, char **argv) {
         return 0;
     }
     int hold = 20, frames = 60, swap = 0;
+    const char *ppm_path = NULL;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) {
             swap = 1;
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frames = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--ppm") && i + 1 < argc) {
+            ppm_path = argv[++i];
         } else if (argv[i][0] != '-') {
             hold = atoi(argv[i]);
         } else {
@@ -760,11 +887,22 @@ int main(int argc, char **argv) {
     signal(SIGHUP, on_signal);
     atexit(restore);
 
-    card_build();
+    /* The source is chosen INSTEAD of the card, never on top of it: a card built
+     * first and then half-overwritten by a load that failed part-way through is
+     * exactly the state that would be reported as a run. */
+    if (ppm_path) {
+        if (card_load_ppm(ppm_path) != 0) return 1;
+    } else {
+        card_build();
+    }
     printf("dss_scale_ab: mode=%s hold=%ds frames=%d%s\n",
            mode, hold, frames, swap ? " swap=1" : "");
-    printf("  card %dx%d 16bpp: column combs / row combs + diagonals / rings /\n"
-           "  ramps / hard blocks, 1px white border\n", CARD_W, CARD_H);
+    if (ppm_path)
+        printf("  card %dx%d 16bpp from %s - a real game frame, synthetic bands\n"
+               "  NOT used; the geometry is unchanged\n", CARD_W, CARD_H, ppm_path);
+    else
+        printf("  card %dx%d 16bpp: column combs / row combs + diagonals / rings /\n"
+               "  ramps / hard blocks, 1px white border\n", CARD_W, CARD_H);
 
     int rc;
     if (!strcmp(mode, "soft")) {

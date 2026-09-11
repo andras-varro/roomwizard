@@ -350,24 +350,44 @@ the display section linked above.
      every source pixel, so sampling one representative destination pixel per source pixel inverts an
      `fb0` grab back to the exact game surface — modulo the RGB565 quantisation the framebuffer already
      holds, and excluding the cursor, which `drawCursor()`:585-588 writes destructively at OUTPUT
-     resolution after the scale. That defeats the "a grab off `fb0` is already arm A" argument the tool's
-     own header makes against a `--ppm` loader, and it is the cheap next step.
-   - **A real 320×200 frame is captured, and the destination rect is now half measured rather than
-     predicted — `.188`, 2026-09-11.** `/opt/games/scummvm kq2` started over SSH with the launcher
-     stopped renders without any touch, so the capture needs no hand at the panel: AGI, static screens,
-     no SMUSH decoder. One 16bpp page off `/dev/fb0` while exactly one engine was running is at
-     `C:\work\rw-scratch\kq2_fb.raw`. **The non-black bounding box of that frame is 732×450 at panel
-     (0,30)**, and the 450 rows settle the size: `scaledHeight` 450 forces `scale` 576, which forces
-     `scaledWidth` **720** — so the isotropic 720×450 prediction is now *measured on a real frame*, not
-     just read out of `getScalingInfo()`. ⚠️ **The ORIGIN is not settled and the bbox cannot settle
-     it.** The box is 12 columns wider than the 720 the same box's height implies, and starts at x=0
-     where the prediction says 40, so it contains non-picture pixels — the game's own black edges shrink
-     it in one axis while something outside the picture widens it in the other. Panel row 30 against a
-     predicted logical `offsetY` of 0 is also unreconciled, and the bezel line on this unit is
-     `15 13 0 0`, so `view_y` 15 accounts for half of it and nothing yet accounts for the rest.
-     **So `--auto-rect` is a convenience to sanity-check, never the trustworthy form** — the rect has to
-     be computed from the same integer chain the engine used, and closing the origin is the first thing
-     the real-art run needs.
+     resolution after the scale. That defeats the "a grab off `fb0` is already arm A" argument that used
+     to stand against a `--ppm` loader, and both halves of it are now built.
+   - **A real 320×200 frame is captured, and the destination rect is MEASURED end to end — `.188`,
+     2026-09-11.** `/opt/games/scummvm kq2` started over SSH with the launcher stopped renders without
+     any touch, so the capture needs no hand at the panel: AGI, static screens, no SMUSH decoder. One
+     16bpp page off `/dev/fb0` while exactly one engine was running is at
+     `C:\work\rw-scratch\kq2_fb.raw`. ⚠️ **The non-black bounding box of that frame — 732×450 at panel
+     (0,30) — is real and must not be used as the rect.** Two independent implementations agree on the
+     box, so it is a property of the bytes; a row-by-row profile of the same grab says why it is
+     worthless: an arrow-shaped **mouse cursor** occupies columns 61-69 of rows 30-44, and a 16-pixel
+     **speck** sits at columns 0-7 of rows 478-479 — below the bottom bezel, outside the logical surface,
+     and written by nothing in our code that has been identified. Strip those two and the picture content
+     is columns **60..731**, rows 46..398.
+   - **The chain that produces the rect, every step measured on this unit.** Bezel line `15 13 0 0` gives
+     a logical surface of 800×452 at `view` (0,15). Calibration line 1 `-20 1019 3099 4134
+     -288 881 3221 4381` with line 3 `reach 0 4082 0 4095`, pushed through `publish_safe_area()`, gives
+     touch insets **left 3, right 10, top 14, bottom 17**, none of them clamped. `getScalingInfo()`:163-171
+     over that safe rect then gives `scaleX` 629, `scaleY` 538, `scale` **538** (height-limited),
+     `scaledWidth` **672**, `scaledHeight` **420**, `offsetX` **60**, `offsetY` **14** — panel
+     **(60,29), 672×420**. ⚠️ **The columns confirm it and the rows cannot**: the grab's first non-black
+     column is 60 on *every* content row and its last is 731, which is 672 wide to the pixel, while KQ2
+     paints black at the top and bottom of its own 320×200 surface so no row pins an edge of the rect.
+     ⚠️ **So 720×450 at (40,0) is what a 15/15 bezel with zero insets would give, and no real unit is
+     that** — the rect is a function of the runtime bezel *and* the runtime insets, and a non-black bbox
+     can never stand in for it: this one cleared a 2% aspect-similarity gate while being wrong on both
+     axes.
+   - **Both tools the real-art run needed now exist.** `fb_to_game_ppm.py` at the repo root inverts the
+     software upscale — one forward pass buckets each destination column by its source column and reads
+     the **middle** of each bucket, so a truncation boundary cannot absorb an off-by-one — and refuses a
+     downscale rather than inventing pixels. Its `--self-test` needs no device and no files, and pairs a
+     bit-exact round trip with negative controls for a shifted rect, a downscale and a wrong stride;
+     rewriting the middle-of-bucket choice to the bucket's first index makes the shifted-rect control
+     recover exactly, which is what proves that control is not vacuous. Run against the real grab with
+     the rect above, it recovers a coherent *King's Quest 2* throne-room screen. `--ppm FILE` in
+     `native_apps/tests/dss_scale_ab.c` reads a strictly 320×200 P6 **instead of** building the synthetic
+     card, through a local reader because that file deliberately links nothing from `common/`; the
+     geometry is left alone so the run swaps art and nothing else. ⚠️ **Still owed: the run itself** —
+     deploy the harness, put the recovered PPM on the device, and spend an eye on `split`.
    - **Two eye readings of the SOFTWARE arm on real art, operator at the panel 2026-09-11 — arm A
      alone, not an A/B.** *Full Throttle*: *"yes too sharp :)"*. *King's Quest 2*: *"King's Quest is
      running. Very sharp"*. Both point the same way the ruling already does — sharp is not automatically
