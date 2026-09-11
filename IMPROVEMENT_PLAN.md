@@ -176,6 +176,10 @@ group D ceiling, so it is paid for by a deletion or an argued raise in the same 
 is an entry rather than an edit already made. ⚠️ **Do not restate the mechanism**: only the setting and
 where it lives belong in an operator document.
 
+The setting the paragraph has to name is **operator-confirmed working, 2026-09-11** — the Device Tools
+USB-audio switch was exercised at the panel, not just the playback path — so nothing about the function
+or the control remains to be established before the wording is written.
+
 ⚠️ One caveat to carry into any wording: the measurement is `[n=1]` on the single C-Media card recorded in
 the audio section linked above, whose rate-and-channel table is *that card's* and not a class fact. The
 operator's own dongle is described as a "C-Media CMI" and no CMI-chip part number appears anywhere in the
@@ -183,7 +187,9 @@ repo, so it is untested.
 
 ### B36. Nothing recovers an output device unplugged mid-playback — open, confirmed 2026-09-09
 
-Pull a USB DAC while sound is playing and audio goes silent and stays silent: no error surfaces, nothing
+Surfaced by the USB-audio work rather than by a report: exercising the dongle end to end is what put a
+hand on a cable mid-playback. Pull a USB DAC while sound is playing and audio goes silent and stays
+silent: no error surfaces, nothing
 falls back to the panel speaker, and `audio_live()` keeps reporting the vanished device healthy. Operator
 -confirmed at the panel and **acceptable to them**, so this is quality, not function — but the silence is
 permanent for the life of the process.
@@ -969,9 +975,10 @@ missing tool and point at it instead of each reciting its own `apt` line.
 
 ### Usability, features, maintainability
 
-F2 (the biggest performance win available) · C1 · C4 · C6 with C7 · C2 · B30 · B36 ·
+F2 (the biggest performance win available) · C1 · C4 · C6 with C7 · C2 · B30 ·
 F4 · C5 · C8 · F17 · F6 · F14 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
-waits on F101).
+waits on F101). Then, nice-to-have and last: B36 — **ranked there by the operator 2026-09-11**, who
+raised it, judged the silence acceptable and wants it behind everything above.
 
 ⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
 `check-audio-pacing.sh`, both blocking. No test suite runs from any build script, from `deploy-all.sh` or
