@@ -227,10 +227,39 @@ also corrected two things the steps below used to assert: `overlay0` (`gfx`) **c
 and `zorder` is **not writable** on this SoC. Recipe, scaling limits and the driver citations are in
 the display section linked above.
 
-1. **Take the CPU win.** Render one game at 400×240 into `fb1` on `vid1` rather than 800×480 into
-   `fb0`, and measure against the 45 % above — a quarter of the pixel fill cost for the same visual
-   size. This is the step that pays; the rest are bonuses. It needs a seam in `common/framebuffer.c`
-   that can target `fb1` at a smaller geometry, then one game, then ScummVM and the VNC client.
+1. **Take the CPU win — measured, and it is real.** ⚠️ **The seam the step used to ask for already
+   exists**: `fb_init(fb, device)` takes the node as a parameter, accepts whatever geometry it finds and
+   never sets one, so nothing in `common/framebuffer.c` needs changing — and every game already reads
+   `argv[1]` as its framebuffer. **Rendering the same scene into a 400×240 surface on `vid1` costs
+   5 510 µs of CPU per frame against 26 075 µs at 800×480 on `fb0` (37 → 179 fps), and enabling the
+   overlay costs nothing measurable.** Instrument: `native_apps/tests/fb_plane_bench.c`, device-only and
+   hidden from the grid, whose scene is defined in fractions of the surface so the work scales with area
+   — it prints its own pixel count as the receipt, and two runs whose counts are not in the ratio of
+   their areas are not an A/B. Four points on `.188`, 200 frames each: `fb0` 800×480; **`fb1` funded to
+   the same 800×480 as a device control, which came within 0.4 %** — so the win is the pixel count and
+   not the node; `fb1` 400×240 with `vid1` disabled; and the same with `vid1` upscaling to 800×480 and
+   `gfx` switched off, which moved nothing. Per-Mpixel store cost also *fell* 9 % on the smaller surface,
+   so the gain slightly exceeds the area ratio. ⚠️ **The remaining work is per-game re-tuning, not
+   plumbing**, and it is where the effort now goes: no game hardcodes 800 or 480, but fixed *pixel-size*
+   constants keep their size while the surface halves — `BTN_MENU`/`BTN_EXIT`/`BTN_LARGE` in
+   `common/common.h`, `PADDLE_*`/`BALL_*`/`BRICK_H` in `brick_breaker.c` and `pong.c`, `HUD_HEIGHT` in
+   `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which makes the visible world a
+   function of resolution. `snake.c` has none of them and is the cheapest first subject; `platformer.c`
+   the most expensive. Then ScummVM and the VNC client.
+   - ⚠️ **The bezel band is subtracted in *surface* pixels, so a 2× upscale doubles it on the panel.**
+     `fb_apply_viewport()` takes the four margins straight off `/etc/touch_calibration.conf` and removes
+     them from the framebuffer's own `xres`/`yres`, so `.188`'s measured T=15 B=13 cost 28 of 480 rows at
+     full size and 28 of 240 — twice the panel band — at half. That is why the ladder's area ratio is
+     4.31 rather than 4.00. Either scale the margins by the upscale factor or carry them in panel space;
+     the fit in `common/touch_calib.c` is already panel-space and must not be touched to do it.
+   - ⚠️ **`snake`, `tetris`, `frogger` and `platformer` never call `gamepad_set_mouse_bounds()`**, so
+     they inherit `GAMEPAD_DEFAULT_SCREEN_W/H` of 800×480 (`common/gamepad.h`) and a USB mouse would
+     range over twice the surface. `pong`, `samegame` and `brick_breaker` already pass `fb.width/height`.
+     Latent at full size, which is why no counter has ever seen it.
+   - **Unverified: no eye has been attributed to the composited output of this ladder.** The operator
+     saw the bench's grid animating on the panel while the four runs went past and could not say which
+     was on screen, and `cat /dev/fb0` returns the gfx plane rather than the panel. The attributable
+     check is one run with `gfx` disabled and nothing else changed, watched from the first frame.
 2. **HUD plane.** Put the unscaled HUD on `gfx` (`overlay0`) and the scaled game on `vid1` — or use
    `vid2`, which is interchangeable with `vid1` and also scales. `global_alpha` works; `zorder` does
    not, so the fixed GFX < VID1 < VID2 order decides what is on top and the layout must suit it.
