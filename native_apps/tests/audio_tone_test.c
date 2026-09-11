@@ -41,7 +41,7 @@
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_tone_test
  *
- * ⚠️ **This host passes all 58, and `/dev/dsp` is irrelevant to that.**  It used to
+ * ⚠️ **This host passes all 62, and `/dev/dsp` is irrelevant to that.**  It used to
  * report `FAILED 58 checks, 34 failure(s)`, and this comment used to explain those
  * 34 as the ENVIRONMENT — a host with no sound device.  That was WRONG, measured
  * 2026-08-31: the cause was two missing lines in mk_audio() below.  The EFFECTS and
@@ -57,7 +57,7 @@
  * each other for a whole week, and the agreement was the tell.**  A group that
  * always fails is unfalsifiable in both directions — it can neither catch a
  * regression nor be seen to catch one, and its sabotage harness reports "caught"
- * for the wrong reason (`tests/measure_audio_clip_sabotage.sh` prints a FAIL count,
+ * for the wrong reason (`tests/measure_audio_tone_sabotage.sh` prints a FAIL count,
  * and 34 unrelated failures read the same as a detection).  The old paragraph made
  * that permanent by instructing the reader to expect the 34 and compare against
  * HEAD — and HEAD was silenced identically, so the comparison agreed.  ⚠️ **If a
@@ -84,6 +84,28 @@
  * hardwired HARD inside `bus_reset()` would satisfy the first and destroy the
  * carry-across the panel's `LIM` pad depends on.
  *
+ * ⚠️ **Group J is a THIRD subject, here for the same reason F is.**  It asserts that
+ * `audio_init_unchecked()` bypasses the ENABLE gate and not the output DEVICE — the
+ * two production callers are hardware speaker tests, and while that resolution lived
+ * only in `audio_init()` both of them played on the panel whatever `audio_device`
+ * said.  It is spelled as "the preference equals the SAVED value" and read through
+ * `audio_out_device_pref()`, never `audio_out_device_path()`: the path resolver falls
+ * `usb` back to `/dev/dsp` whenever `/dev/dsp1` is absent, which is every host, so it
+ * would hide the defect and the fix alike.  Its last check is the negative control —
+ * a "fix" that just called `audio_init()` would satisfy the first two and abolish the
+ * bypass.
+ *
+ * ⚠️ **And that control does NOT fire from this host — measured 2026-09-10, sabotage
+ * stanza 10 prints `0 failed`.**  `CONFIG_FILE_PATH` is absolute, so no host test can
+ * put an `audio_enabled=false` file at `/opt/games/rw_config.conf`; with no file at
+ * all `audio_init()` defaults the gate OPEN and the two paths are indistinguishable
+ * here.  The same absence makes "resolved the WRONG value" unreachable, because the
+ * stored value on this host is always the default.  So what group J really holds is
+ * "the preference is not inherited from process state, and it equals the stored one" —
+ * which is precisely the defect that shipped, and stanza 9 proves that half can fail.
+ * Do not read J's fourth check as a live control until the config path is
+ * overridable.
+ *
  * ⚠️ **Group A is group B's negative control, which is why it must not be deleted
  * as redundant.**  A guard that is accidentally always-false passes B and C for the
  * wrong reason — it would look like a fix while having abolished chaining outright.
@@ -102,6 +124,12 @@
 
 #include "common/audio.h"
 #include "common/audio_gen.h"
+/* Group J only: the device-preference seam and the config getter it must agree
+ * with.  audio.h does not pull either in, and neither is a new symbol — both
+ * predate the fix J asserts, which is what keeps this file compilable against the
+ * pre-fix source. */
+#include "common/audio_out.h"
+#include "common/config.h"
 
 static int failures = 0;
 static int checks   = 0;
@@ -615,6 +643,45 @@ int main(void)
         check(tail > 2000, "and its loud TAIL renders loud — the cursor really moved");
         check(tail > head + 1500, "which is a content difference, not a level one");
         close(fd);
+    }
+
+    printf("\nJ. the UNCHECKED init bypasses the ENABLE gate and NOT the output device\n");
+    {
+        /* The defect: audio_init_unchecked() was `return audio_open(audio);` and
+         * nothing more, so it set no device preference and inherited whatever the
+         * process had last resolved — which in a fresh process is the initializer
+         * "onboard".  Both production callers are hardware SPEAKER tests, so both
+         * played on the panel whatever `audio_device` said, and the operator found
+         * it from the panel because no gate could see it.
+         *
+         * ⚠️ Spelled as "the preference equals the SAVED value", not as "it selects
+         * usb".  CONFIG_FILE_PATH is absolute and this host has no /opt/games, so
+         * the stored value here is always the default — an assertion naming a device
+         * would be asserting this host's /dev tree.  And it must NOT go through
+         * audio_out_device_path(): that resolves "usb" to /dev/dsp whenever
+         * /dev/dsp1 is absent, which is every host, so the fallback would hide both
+         * the defect and the fix.  audio_out_device_pref() is the unresolved value.
+         *
+         * Compilable against the pre-fix source: it names no new symbol. */
+        audio_out_set_device_pref("usb");
+        check(strcmp(audio_out_device_pref(), "usb") == 0,
+              "control: the poisoned preference really does land in the static");
+
+        Audio a3;
+        memset(&a3, 0xA5, sizeof(a3));
+        (void)audio_init_unchecked(&a3);   /* no /dev/dsp here; the resolve precedes it */
+        check(strcmp(audio_out_device_pref(), "usb") != 0,
+              "the unchecked init does NOT inherit an earlier caller's device");
+        check(strcmp(audio_out_device_pref(), config_audio_device_stored()) == 0,
+              "it resolved the SAVED value, which is what a game resolves");
+
+        /* The other half of the bypass, and the negative control for the pair: a fix
+         * that made this call obey `audio_enabled` too would pass both checks above
+         * and turn a hardware speaker test into one that refuses to make a sound. */
+        check(a3.music_on && a3.effects_on,
+              "and it still bypasses the ENABLE gate — both toggles up");
+
+        audio_out_set_device_pref("onboard");   /* leave the process as found */
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

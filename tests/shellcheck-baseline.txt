@@ -37,7 +37,7 @@ native_apps/sound-sets.sh SC2034 2
 native_apps/tests/alsa_probe.sh SC2002 1
 native_apps/tests/alsa_probe.sh SC2010 1
 native_apps/tests/alsa_probe.sh SC2086 1
-native_apps/tests/measure_audio_clip_sabotage.sh SC2086 1
+native_apps/tests/measure_audio_tone_sabotage.sh SC2086 1
 native_apps/tests/speaker_band.sh SC2012 1
 native_apps/tests/speaker_band.sh SC2029 1
 native_apps/tests/speaker_band.sh SC2064 1

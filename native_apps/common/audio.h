@@ -289,6 +289,13 @@ int  audio_init(Audio *audio);
  *
  * ⚠️ Any other caller wants audio_init().  A struct filled by hand instead of
  * by one of these two leaves `channels` at 0 and goes SILENTLY mute.
+ *
+ * ⚠️ The bypass is of the `audio_enabled` gate ONLY.  The output DEVICE preference
+ * (`audio_device`) IS honoured, read from the saved config by this call, because a
+ * speaker test that ignores it drives the wrong hardware and then reports a
+ * verdict about the device it never opened.  A caller therefore does NOT set the
+ * preference itself — doing so before this call is overwritten, and both callers
+ * that ever tried simply forgot, which is why it moved in here.
  */
 int  audio_init_unchecked(Audio *audio);
 

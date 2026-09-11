@@ -479,13 +479,17 @@ static void handle_tab_bar_input(AppState *state, int tx, int ty,
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 static void do_audio_test(void) {
-    /* audio_init_unchecked() bypasses the config gate ON PURPOSE: a hardware
+    /* audio_init_unchecked() bypasses the ENABLE gate ON PURPOSE: a hardware
      * test must be able to drive the speaker even when the user has switched
      * audio off, and audio_init() would make it obey the very setting it
-     * exists to test.  What used to be here was a hand-rolled copy of the
-     * open, the three ioctls and the GPIO12 poke — a verbatim duplicate of
-     * hardware_config.c's, which went silently mute the moment `Audio` gained
-     * a field neither copy set. */
+     * exists to test.  ⚠️ It does NOT bypass the output device — that library call
+     * resolves `audio_device` from the saved config itself, so this test plays on
+     * whichever device a game would.  Do not set the preference here; it moved
+     * into the library precisely because this call site had forgotten to.
+     *
+     * What used to be here was a hand-rolled copy of the open, the three ioctls
+     * and the GPIO12 poke — a verbatim duplicate of hardware_config.c's, which
+     * went silently mute the moment `Audio` gained a field neither copy set. */
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
 
@@ -599,6 +603,12 @@ static void execute_system_action(ConfirmAction action) {
 
 static const char *audio_device_names[3]  = { "onboard", "usb", "auto" };
 static const char *audio_device_labels[3] = { "OUT: ONBOARD", "OUT: USB", "OUT: AUTO" };
+
+/* ⚠️ The one index with a name, because it is the one index the DIM rule turns on:
+ * "usb" is the only setting whose preference a unit can fail to meet.  A bare `1`
+ * there read as "the middle one" and invited the mistake it replaced — the first
+ * version of that line tested `== 0` and so dimmed AUTO as well. */
+#define AUDIO_DEV_IDX_USB 1
 
 /* Anything unrecognised maps to onboard — the same thing audio_out_device_for()
  * does with an unknown value, so the button cannot show a state a game would not
@@ -810,7 +820,15 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
      * card-independent and the receipt above means the same thing whatever is
      * attached; it goes grey when the preference it names cannot currently be met,
      * which is the master being off, or USB being asked for with no /dev/dsp1 to
-     * open.  ONBOARD is never dimmed for absence, because onboard is always there.
+     * open.
+     *
+     * ⚠️ USB is the ONLY index that dims for absence, and the two that do not each
+     * have their own reason.  ONBOARD is never dimmed because onboard is always
+     * there.  AUTO is never dimmed because AUTO's preference is "whatever can be
+     * opened" — audio_out_device_for() falls it back to /dev/dsp silently — so it
+     * is met on every unit, with or without a DAC.  Dimming AUTO for a missing
+     * dongle was the first version of this line, and it told the operator that a
+     * setting which works everywhere was unavailable.
      *
      * The press stays LIVE in both cases, for exactly the reason MUSIC and EFFECTS
      * do: this is a saved preference, and refusing to let someone select "usb"
@@ -818,7 +836,8 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
      * idiom, not the USB tab's gated one — the USB tab's buttons START something
      * against a device that must exist, and this one only records a choice. */
     bool out_live = state->audio_enabled &&
-                    (state->audio_device_idx == 0 || audio_out_usb_present());
+                    (state->audio_device_idx != AUDIO_DEV_IDX_USB ||
+                     audio_out_usb_present());
     audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : USB_COLOR_DIM;
     audio_dev_btn.text_color   = out_live ? COLOR_WHITE    : RGB(150, 150, 150);
     audio_dev_btn.border_color = audio_dev_btn.text_color;
@@ -902,11 +921,18 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
         config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
         config_set_bool(&state->cfg, "effects_enabled", state->effects_enabled);
-        /* ⚠️ Only the SAVED value has any effect on a game: audio_init() re-reads
-         * this file from disk on every open, so nothing in this process pushes the
-         * preference anywhere.  That also makes the TEST button above a real check
-         * of the setting — press SAVE, then TEST, and you hear whichever device a
-         * game would have resolved. */
+        /* ⚠️ Only the SAVED value has any effect on a game, and the TEST button
+         * above resolves the same way: audio_init_unchecked() reads this file from
+         * disk on every open, so press SAVE then TEST and you hear whichever device
+         * a game would have resolved.  That is the cheapest end-to-end check of
+         * this setting in the app.
+         *
+         * ⚠️ It was NOT true when this row shipped, and the comment here claimed it
+         * anyway.  audio_init_unchecked() was `return audio_open(audio);` and set no
+         * device preference at all, so TEST always played on the panel speaker
+         * whatever this said — reported from the panel, not caught by any gate.  The
+         * preference now moves inside that library call, which is why nothing in
+         * this function pushes it anywhere. */
         config_set(&state->cfg, "audio_device",
                    audio_device_names[state->audio_device_idx]);
         config_set_bool(&state->cfg, "led_enabled", state->led_enabled);
@@ -3887,6 +3913,13 @@ int main(void) {
          * the button before it could recover the port too — the scan worked and
          * the screen did not admit it. */
         int           prev_usb_cnt   = state.usb_dev_cnt;
+        /* ⚠️ And the DAC's presence, for the same reason one line up: the settings
+         * tab's OUT button is dimmed from a live access("/dev/dsp1") every frame,
+         * but "every frame" means every frame that gets PAINTED.  Without this the
+         * probe is recomputed correctly and the screen never shows it — plug the
+         * dongle in and the button stays grey until some unrelated touch forces a
+         * repaint.  Cheap: one access() on a /dev node, once per loop. */
+        bool          prev_out_usb   = audio_out_usb_present();
 
         touch_poll(&touch);
         TouchState ts = touch_get_state(&touch);
@@ -3942,6 +3975,7 @@ int main(void) {
             prev_confirm   != state.confirm_action  ||
             prev_usb_scr   != state.usb_scr         ||
             prev_usb_cnt   != state.usb_dev_cnt     ||
+            prev_out_usb   != audio_out_usb_present() ||
             state.diag_needs_refresh) {
             needs_redraw = true;
         }

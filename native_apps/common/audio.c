@@ -441,6 +441,20 @@ int audio_init(Audio *audio)
 
 int audio_init_unchecked(Audio *audio)
 {
+    /* ⚠️ The bypass is of the ENABLE gate and of NOTHING else.  The output device
+     * is not part of that gate: a speaker test that plays on the panel while the
+     * saved config says `usb` is driving the wrong hardware, and it reports a
+     * verdict about the device it never touched.  So the preference is resolved
+     * here, from the SAVED value — which is exactly what a game resolves.
+     *
+     * Resolving it HERE rather than at each call site is what makes the rule
+     * unforgettable, and the reason is measured: BOTH production callers
+     * (device_tools' and hardware_config's speaker tests) had omitted it, so the
+     * call-site form of this rule was already 0 for 2.  It also overwrites a
+     * preference some earlier caller left in audio_out.c's process-lifetime
+     * file-static, which is the property audio_tone_test.c asserts — without
+     * that, this open inherits whichever device ran last. */
+    audio_out_set_device_pref(config_audio_device_stored());
     return audio_open(audio);
 }
 

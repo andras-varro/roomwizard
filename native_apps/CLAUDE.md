@@ -755,7 +755,7 @@ These rules, each of which is a way to get this wrong:
   notes; *Sound assets*' envelope rule above applies to a clip unchanged. ⚠️ **`build-and-deploy.sh` must
   upload `sounds/fx_*.wav` to `/opt/sound` or the fix is inert.** ⚠️ **The same clip fired twice in ONE frame
   sums COHERENTLY — 2× amplitude**, where two tones partially cancel. `tests/audio_tone_test.c` group I,
-  controls in `tests/measure_audio_clip_sabotage.sh`.
+  controls in `tests/measure_audio_tone_sabotage.sh`.
 - ⚠️ **A blocking sub-loop IS a render loop and owes the same per-frame services** — the mixer advances by
   frames RENDERED, so a loop that draws its own screen and services nothing DEFERS the queued sound rather
   than dropping it, which is worse to diagnose. `ui_frame_service()` (`common/common.h`) is the call it
@@ -799,8 +799,8 @@ start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 ⚠️ **An `Audio` must be filled by `audio_init()` or `audio_init_unchecked()`, never by hand.** Two tabs used
 to `memset` one and set three fields; when the struct gained `channels` that idiom left it at **0**, and a
 0-channel byte count is 0 — **silently mute**, measured (`audio_bytes_for_frames(8820, 0)` = 0 against
-35280 for 2 channels). `audio_init_unchecked()` is the one sanctioned config-gate bypass, for a hardware
-test that must not obey the setting it exists to test. One grep, and its expected count in `common/` is
+35280 for 2 channels). `audio_init_unchecked()` bypasses the **`audio_enabled` gate and NOTHING else** — it
+resolves `audio_device` itself, both callers having forgotten to and both speaker tests having played on the panel whatever the setting said. One grep, and its expected count in `common/` is
 now a hard **zero** — the device path is no longer spelled at any opener:
 
 ```bash

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Measure that audio_tone_test group I can FAIL.  Copies only; the tree is
+# Measure that audio_tone_test's groups I and J can FAIL.  Copies only; the tree is
 # untouched — ⚠️ never restore a sabotage with git, it would destroy whatever fix
 # is still uncommitted beside it.
 #
@@ -8,6 +8,10 @@
 # in the suite, not a pass.  Case 8 is why there is a content assertion at all:
 # every OTHER check in group I reads a position, and a fill that replays the
 # clip's head advances every position correctly.
+#
+# Group I is the RAM-resident clip; group J is the device preference the unchecked
+# init must resolve.  Both live here because both compile the same binary and the
+# run() below is the only copy of that build line outside tests/run-all.sh.
 cd /mnt/c/work/roomwizard/native_apps || exit 1
 W=$(mktemp -d /tmp/clip.XXXXXX)
 SRC="common/audio.c common/audio.h common/audio_gen.c common/audio_gen.h
@@ -57,5 +61,27 @@ run "5 the clip ceiling is dropped, so a bed can be RAM-loaded" \
     sed -i 's|w.frames > AUDIO_CLIP_MAX_FRAMES|w.frames < 0|' audio.c
 run "6 the rate check is dropped, so a clip is pitch-shifted" \
     sed -i 's|    if (w.rate != audio->sample_rate) {|    if (0) {|' audio.c
+
+# ── group J: the device preference the unchecked init owes ───────────────────
+# 9 restores the PRE-FIX body of audio_init_unchecked() exactly — `return
+# audio_open(audio);` and nothing else.  That is the shape that shipped, and it made
+# both hardware speaker tests play on the panel whatever `audio_device` said.
+#
+# ⚠️ 10 prints "0 failed" and that is EXPECTED, which is the one place in this file
+# where a zero is not a hole.  Measured 2026-09-10.  It swaps the unchecked init for
+# the config-gated audio_init(), which would abolish the bypass — and group J cannot
+# see it, because CONFIG_FILE_PATH is absolute and no host test can put an
+# `audio_enabled=false` file at /opt/games/rw_config.conf.  With no file, audio_init()
+# defaults the gate OPEN and the two paths are indistinguishable from here.  The same
+# absence makes every "resolved the wrong value" variant unreachable: the stored value
+# on this host is always the default.  So group J's host-reachable content is exactly
+# "the preference is not inherited from process state, and it equals the stored one" —
+# which is the defect that shipped, and 9 proves it can fail.  Do not delete 10; it is
+# the record of what the host cannot reach, and it would start failing the day the
+# config path becomes overridable.
+run "9 the unchecked init resolves no device (the pre-fix body)" \
+    sed -i 's|    audio_out_set_device_pref(config_audio_device_stored());||' audio.c
+run "10 the unchecked init obeys the ENABLE gate too — EXPECT 0, see note above" \
+    sed -i 's|^int audio_init_unchecked(Audio \*audio)$|int audio_init_unchecked(Audio *audio) { return audio_init(audio); }\nstatic int unused_unchecked(Audio *audio)|' audio.c
 
 rm -rf "$W"

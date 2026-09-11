@@ -505,9 +505,50 @@ both the placement and the new receipt call it, which is why they cannot drift.
 - ⚠️ **`action_y` is still written out twice** (the layout builder and the painter) with nothing catching
   a mismatch at compile time. The new row does not depend on it — a ≤28 px widget on row 2 shifts
   nothing — but the next row that changes a height must edit both copies.
-- **Not verified: the tap-through.** Nothing scripts touch on this device. What is unverified is that
-  tapping the button cycles all three labels, that SAVE writes `audio_device=` and RESET restores
-  `onboard`, and that the dim state tracks unplugging the dongle. The handover carries the checklist.
+- **The tap-through is verified, and it found two defects — operator, at the panel.** All
+  three labels cycle, SAVE writes `audio_device=`, RESET restores `onboard`, and the six
+  device/setting combinations each played on the device the setting named. What failed:
+  **(a)** the Settings TEST button ignored the setting entirely and always played on the
+  panel speaker, and **(b)** `OUT: AUTO` drew dimmed with no dongle attached.
+  - (a) was `audio_init_unchecked()` being `return audio_open(audio);` and nothing more,
+    so it set no device preference and inherited `audio_out.c`'s file-static — `"onboard"`
+    in a fresh process. ⚠️ **Both production callers had the defect** (`device_tools` and
+    `hardware_config`, both hardware speaker tests), so the fix is in the library, not at
+    the call sites: that call now resolves the SAVED value itself. ⚠️ **And a comment in
+    `device_tools.c` asserted the opposite** — that pressing SAVE then TEST proved the
+    setting — which is why the checklist handed to the operator claimed a check the code
+    could not perform. The Tests-tab audio button was correct throughout, because it calls
+    `audio_init()`, and running it once fixed the button for the rest of the process; that
+    order-dependence is why the fault needed a fresh launch to see.
+  - (b) dimmed on `idx == 0` rather than `idx != usb`. `auto`'s preference is met on every
+    unit — `audio_out_device_for()` falls it back silently — so it must never dim.
+  - ⚠️ **A third defect fell out of the same reading and no human could have found it from
+    the checklist:** `audio_out_usb_present()` was not in `main()`'s redraw
+    change-detection list, so plugging or unplugging changed no watched field and the
+    button kept its stale colour until an unrelated touch forced a repaint. The probe was
+    per-frame; the *paint* was not.
+  - **`audio_tone_test.c` group J is the gate for (a)**, and it has been seen failing:
+    sabotage stanza 9 restores the pre-fix body and group J reports 2 failed. ⚠️ Its
+    fourth check is **not** a live control — stanza 10 measures `0 failed`, because no host
+    test can put an `audio_enabled=false` file at the absolute `CONFIG_FILE_PATH`. (b) and
+    the redraw defect have **no** gate at all and were verified by eye: `device_tools.c` is
+    a monolith with `main()`.
+
+- **Open: nothing recovers a DAC unplugged mid-playback.** Operator-measured — audio goes
+  silent, no error, no exception, and no fallback to onboard; acceptable to them, so this
+  is quality. ⚠️ **The mechanism is fully read and it is NOT a one-liner.** `dsp_reopen()`
+  already performs the entire fallback correctly and its own comment says so; nothing
+  calls it from the write path. Three independent gaps: the pump returns bare on a failed
+  `SNDCTL_DSP_GETOSPACE`, so on the old path the stale fd never even reaches `write()` and
+  no counter moves; both sink writes compare `errno` to `EAGAIN` and nothing else, so
+  ENODEV, EIO and EINTR collapse into `audio_gen.h`'s deliberately lossy `sink_error`,
+  which the old path never reads and the continuous path only counts; and no device-lost
+  state exists — `available` stays true, so `audio_live()` keeps reporting a vanished
+  device healthy. A fix needs a consecutive-failure threshold with a backoff on **both**
+  paths, and must `close()` first: `dsp_reopen()` overwrites the fd without closing, and on
+  the continuous path the fd belongs to `AudioOut` whose open interlock would refuse a
+  second open. Frozen `pump_starved` while sound is expected is the current unrecorded
+  signature.
 
 **What is left is the per-device RATE preference.** `/proc/asound/card1/stream0` reports playback
 `S16_LE`, `Channels: 2` exactly, `Rates: 48000, 44100`, while ScummVM's mixer requests **22050/1**. The
