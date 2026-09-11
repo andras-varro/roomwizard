@@ -45,7 +45,9 @@ extern "C" {
 /* Default input config file path */
 #define GAMEPAD_CONFIG_PATH "/etc/input_config.conf"
 
-/* Default screen dimensions for mouse bounds */
+/* Last-resort mouse bounds, used only if the framebuffer globals are unset.
+ * gamepad_init() takes the bounds from screen_base_width/height, whose own
+ * defaults are these same numbers. */
 #define GAMEPAD_DEFAULT_SCREEN_W 800
 #define GAMEPAD_DEFAULT_SCREEN_H 480
 
@@ -258,7 +260,11 @@ void gamepad_draw_touch_controls(void *fb, InputState *state);
 
 /**
  * Set the screen bounds used for clamping the mouse cursor position.
- * Default is 800×480 (RoomWizard native resolution).
+ *
+ * Rarely needed: gamepad_init() already takes them from the framebuffer's
+ * logical size, so call this only to override that. ⚠️ It does NOT survive a
+ * gamepad_init() — the launcher apps re-init after every child exits, which
+ * resets the bounds to the framebuffer's size and re-centres the cursor.
  */
 void gamepad_set_mouse_bounds(GamepadManager *gp, int width, int height);
 

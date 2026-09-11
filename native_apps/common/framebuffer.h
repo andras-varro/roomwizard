@@ -55,7 +55,14 @@ extern int screen_bezel_bottom;
 extern int screen_bezel_left;
 extern int screen_bezel_right;
 
-// Full panel dimensions in the app's orientation (800x480, swapped in portrait)
+// The SURFACE dimensions in the app's orientation — the space fb->buffer is
+// indexed in, and the space touch_input.c maps raw readings onto. 800x480 on
+// fb0, swapped in portrait, and 400x240 on a 400x240 fb1 that a scaling overlay
+// upscales to fill the panel. ⚠️ Despite the name they are NOT the panel's own
+// resolution on a scaled node: that is read from the display's mode timings
+// inside fb_apply_viewport() and deliberately not published, because every
+// reader of these two needs the surface. Naming them "panel" has already misled
+// one reading of the touch chain into believing it needed a scale divide.
 extern int screen_panel_width;
 extern int screen_panel_height;
 
@@ -70,10 +77,15 @@ extern int screen_panel_height;
 // A panel dimension of 0, or one equal to the surface, is left 1:1 — so this is
 // a no-op at the shipped 800x480 geometry.
 //
-// ⚠️ It fixes DRAWING only. Touch is not converted anywhere: touch_input.c maps
-// raw -> panel -> logical by SUBTRACTING the view origin, which on an upscaled
-// surface also needs dividing by the scale factor. Touch on a scaled node is
-// therefore wrong by that factor, and no app uses one yet.
+// It converts DRAWING margins. Touch needs no conversion of its own and must not
+// be given one: stage 1 maps raw onto screen_panel_width/height, which are the
+// SURFACE dims above, and its knots are dim/4 and 3*dim/4, so the whole curve
+// tracks the surface; stage 2 then subtracts a view origin this function has
+// already converted. The map is proportional by construction. ⚠️ An earlier note
+// here asserted the opposite — that touch on a scaled node is wrong by the scale
+// factor and needs dividing — and that is measured false: applying that divide
+// costs 12 failures in native_apps/tests/touch_map_test.c group J, which drives
+// one full-size calibration over 800x480, 400x240 and 200x120 surfaces.
 void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
                                int *top, int *bottom, int *left, int *right);
 

@@ -148,9 +148,9 @@ void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
 // scaling this node. Margins that would leave less than a sixteenth of an axis
 // usable are rejected as a typo/misconfiguration.
 //
-// The globals keep their panel-space meaning; only the subtraction and the
-// resulting view origin move into surface space, because those two index the
-// framebuffer mmap. Touch is NOT converted — see the header note.
+// The globals keep their published meaning: SURFACE space throughout, which is
+// what indexes the framebuffer mmap and what touch_input.c maps onto. Touch
+// needs no scale conversion — see the header note on fb_scale_bezel_to_surface.
 static int fb_apply_viewport(Framebuffer *fb, int surf_w, int surf_h) {
     int t = screen_bezel_top,  b = screen_bezel_bottom;
     int l = screen_bezel_left, r = screen_bezel_right;
@@ -180,6 +180,10 @@ static int fb_apply_viewport(Framebuffer *fb, int surf_w, int surf_h) {
     // reader of these two treats them as the space fb->buffer is indexed in,
     // and touch_input.c maps into that space. Publishing the true panel here
     // would change their meaning on a scaled node and silently move touch.
+    // ⚠️ No host test can catch that change. Off-device fb_read_panel_size()
+    // fails, so panel == surf and the two candidates are the same number; a
+    // group asserting it would be a vacuous pass. This comment is the guard,
+    // and touch_map_test.c group J is what would then start failing on a device.
     screen_panel_width  = surf_w;
     screen_panel_height = surf_h;
     screen_view_x       = fb->view_x;

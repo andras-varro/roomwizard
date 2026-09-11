@@ -17,7 +17,7 @@
  *       common/framebuffer.c common/hardware.c common/config.c -lm \
  *       && ./build/touch_map_test
  *
- * What it asserts, and why.  Nine groups, each pinning one thing the two stages
+ * What it asserts, and why.  Ten groups, each pinning one thing the two stages
  * are supposed to do.  A and B are the arithmetic itself: the uncalibrated
  * sentinel range (knots 0,0) must behave as one straight line onto panel
  * 0..dim-1, and a real three-segment curve must put its two stored knots on
@@ -47,6 +47,28 @@
  * defensive fallback: a knot set that is not strictly increasing must map
  * coarsely-but-linearly rather than folding the axis back on itself.
  *
+ * J is the scaled-surface question, and it settled one the other way.  A scaling
+ * DSS overlay draws a smaller surface that the hardware upscales to fill the
+ * panel, and it was written down in two places as fact that touch on such a node
+ * is wrong by the scale factor and needs dividing.  It is not.  fb_apply_viewport()
+ * publishes the SURFACE dims as screen_panel_width/height, touch_init() copies
+ * them into panel_width/height, and axis_dims() hands them to
+ * touch_map_axis_panel() as `dim` — whose knots are dim/4 and 3*dim/4, so they
+ * move with the surface.  The view origin subtracted at stage 2 has already been
+ * converted to surface pixels.  The map is therefore proportional by
+ * construction, and adding the divide BREAKS it.  Measured: three surfaces
+ * (800x480, 400x240, 200x120) against one calibration captured at full size,
+ * expectations from an independent integer model of the documented map.
+ *
+ * ⚠️ J1 is the 1:1 case and it is the weak column, in the same way
+ * bezel_scale_test.c's group 1 is: at div 1 every ratio is the identity, so no
+ * ratio error can fail it.  Measured against the divide that was prescribed
+ * (`mx = mx * panel_width / 800`, the shape a fix would have taken): 12 J
+ * failures, all of them J2 and J3, and all six J1 cases PASSED.  A second
+ * sabotage — the curve's low knot pinned at a fixed panel 200 instead of dim/4,
+ * the same fixed-divisor class of bug — gives 15 J failures.  So the ratio is
+ * carried entirely by the two scaled columns; keep both.
+ *
  * Expected values were derived by hand from the model in touch_input.h and
  * cross-checked against an independent integer model, not read off a run of the
  * code under test.
@@ -58,6 +80,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "touch_input.h"
+#include "framebuffer.h"
 
 static int fails = 0;
 
@@ -153,6 +176,42 @@ static TouchInput nonmono_fx(void) {
     TouchInput t = base_fx();
     t.raw_min_x = 100; t.raw_knot_lo_x = 3000; t.raw_knot_hi_x = 1000; t.raw_max_x = 4095;
     t.raw_min_y = 200; t.raw_knot_lo_y = 2000; t.raw_knot_hi_y = 2000; t.raw_max_y = 4000;
+    return t;
+}
+
+/* The geometry fb_apply_viewport() actually publishes for a surface that a
+ * scaling DSS overlay upscales to fill the panel.  The load-bearing fact is that
+ * screen_panel_width/height are the SURFACE dims and not the panel's — the
+ * assignment in common/framebuffer.c carries the argument for that — and
+ * touch_init()/touch_set_screen_size() copy them straight into
+ * panel_width/panel_height.  So `dim` inside touch_map_axis_panel() is a SURFACE
+ * extent whenever a node is scaled, and the knots at dim/4 and 3*dim/4 move with
+ * it.  div 1 is fb0 at 800x480; div 2 is the 400x240 fb1 measured on .188.
+ *
+ * The margins come from the production converter rather than being restated
+ * here, so a change to it cannot leave this fixture describing a geometry that
+ * no device ever has. */
+static TouchInput scaled_fx(int div) {
+    TouchInput t;
+    memset(&t, 0, sizeof t);
+    /* The reference capture's interior fit, with the knots touch_knots_on_line()
+     * derives from it AT FULL SIZE — a calibration is always captured on fb0 and
+     * reused unchanged on a smaller surface, which is the whole question here. */
+    t.raw_min_x = 17;   t.raw_knot_lo_x = 1035; t.raw_knot_hi_x = 3071;
+    t.raw_max_x = 4084;
+    t.raw_min_y = -279; t.raw_knot_lo_y = 888;  t.raw_knot_hi_y = 3224;
+    t.raw_max_y = 4382;
+
+    int surf_w = 800 / div, surf_h = 480 / div;
+    int top = 15, bot = 13, left = 0, right = 0;   /* .188's measured margins */
+    fb_scale_bezel_to_surface(800, 480, surf_w, surf_h, &top, &bot, &left, &right);
+
+    t.panel_width  = surf_w;    /* the SURFACE dims, as framebuffer.c publishes */
+    t.panel_height = surf_h;
+    t.view_x = left;
+    t.view_y = top;
+    t.screen_width  = surf_w - left - right;
+    t.screen_height = surf_h - top - bot;
     return t;
 }
 
@@ -315,6 +374,35 @@ int main(void) {
     expect_map("I1 out-of-order knots",     nonmono_fx(), 2098, 2100, 399, 239);
     expect_map("I2 linear at the low end",  nonmono_fx(),  100,  200,   0,   0);
     expect_map("I3 linear at the high end", nonmono_fx(), 4095, 4000, 799, 479);
+
+    printf("J  a scaled overlay surface maps PROPORTIONALLY — no scale divide\n");
+    {
+        static const int raw[] = { 0, 500, 1024, 2048, 3072, 4095 };
+        /* One raw ladder, three surfaces, expectations from an independent
+         * integer model of the documented two-stage map — not read off a run of
+         * the code under test.  Each column is the one above it halved, which is
+         * the property: the curve's knots are dim/4 and 3*dim/4, so they track
+         * the surface, and the view origin subtracted at stage 2 has already
+         * been converted to surface pixels by fb_scale_bezel_to_surface(). */
+        static const int lx1[] = {  0,  94, 197, 399, 600, 799 };
+        static const int ly1[] = { 13,  65, 118, 224, 329, 434 };
+        static const int lx2[] = {  0,  47,  98, 199, 300, 399 };
+        static const int ly2[] = {  7,  33,  59, 112, 165, 217 };
+        static const int lx4[] = {  0,  23,  49,  99, 150, 199 };
+        static const int ly4[] = {  4,  17,  30,  56,  83, 108 };
+        const int *wx[3] = { lx1, lx2, lx4 };
+        const int *wy[3] = { ly1, ly2, ly4 };
+        const int dv[3]  = { 1, 2, 4 };
+        for (int d = 0; d < 3; d++) {
+            for (int i = 0; i < (int)(sizeof raw / sizeof raw[0]); i++) {
+                char what[48];
+                snprintf(what, sizeof what, "J%d.%d %dx%d surface, raw %d",
+                         d + 1, i + 1, 800 / dv[d], 480 / dv[d], raw[i]);
+                expect_map(what, scaled_fx(dv[d]), raw[i], raw[i],
+                           wx[d][i], wy[d][i]);
+            }
+        }
+    }
 
     printf("\n%s (%d failure%s)\n", fails ? "REGRESSION" : "ALL PASS",
            fails, fails == 1 ? "" : "s");

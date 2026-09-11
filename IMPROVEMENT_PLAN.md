@@ -246,7 +246,7 @@ the display section linked above.
    `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which makes the visible world a
    function of resolution. `snake.c` has none of them and is the cheapest first subject; `platformer.c`
    the most expensive. Then ScummVM and the VNC client.
-   - **The bezel band no longer doubles — for drawing. Touch on a scaled node is still wrong.** The
+   - **The bezel band no longer doubles, and touch turned out to need nothing.** The
      margins name pixels the plastic bezel physically covers, so they are *panel* pixels, and
      `fb_apply_viewport()` subtracted them from the framebuffer's own `xres`/`yres`: `.188`'s measured
      T=15 B=13 took 28 of 480 rows at full size and 28 of **240** at half, twice the panel band, which is
@@ -256,15 +256,15 @@ the display section linked above.
      which is the surface — and converts the margins with `fb_scale_bezel_to_surface()`, a pure function
      so the arithmetic is reachable from a host test (`native_apps/tests/bezel_scale_test.c`). It rounds
      down, so the art runs slightly under the bezel rather than stopping short of it, and it is a
-     bit-exact no-op at 800×480. ⚠️ **Only drawing is converted.** `touch_input.c` maps raw → panel →
-     logical by *subtracting* the view origin, which on an upscaled surface also needs dividing by the
-     scale factor, so touch on a scaled node is wrong by that factor — **this blocks any game, `snake`
-     included, from actually being played at reduced resolution, and is the next thing to fix.** The fit
-     in `common/touch_calib.c` is already panel-space and must not be touched to do it.
-   - ⚠️ **`snake`, `tetris`, `frogger` and `platformer` never call `gamepad_set_mouse_bounds()`**, so
-     they inherit `GAMEPAD_DEFAULT_SCREEN_W/H` of 800×480 (`common/gamepad.h`) and a USB mouse would
-     range over twice the surface. `pong`, `samegame` and `brick_breaker` already pass `fb.width/height`.
-     Latent at full size, which is why no counter has ever seen it.
+     bit-exact no-op at 800×480. ⚠️ **A "touch on a scaled node is wrong by the scale factor and needs
+     dividing" note stood here and in `framebuffer.h`, and it is measured FALSE** — the globals
+     `fb_apply_viewport()` publishes are *surface* dims despite being named for the panel,
+     `touch_init()` copies them into the field the curve takes as its `dim`, and the knots sit at
+     `dim/4` and `3*dim/4`, so stage 1 already tracks the surface and stage 2 subtracts an origin
+     already converted to it. The prescribed divide **breaks** touch: 12 failures in
+     `native_apps/tests/touch_map_test.c` group J, which drives one full-size calibration over
+     800×480, 400×240 and 200×120. It was never broken — the same assignment read the surface before
+     the bezel work too. **Nothing blocks `snake` at reduced resolution.** Do not re-propose the divide.
    - **The composited output has an attributed eye.** One run, `overlay0` (`gfx`) disabled and confirmed
      so by readback, `vid1` upscaling a 400×240 `fb1` to 800×480, watched from the first frame through
      announced phases: launcher, then black when `vid1` covered it, then black with `gfx` off, then an

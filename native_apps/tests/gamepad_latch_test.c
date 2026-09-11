@@ -43,6 +43,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include "gamepad.h"
+#include "framebuffer.h"
 
 static int fails = 0;
 
@@ -314,6 +315,67 @@ static void test_sources_or_together(void) {
     gamepad_close(&gm);
 }
 
+/* ═══ 6. Mouse bounds follow the logical surface ════════════════════════════ */
+/* gamepad_init() used to plant a compile-time 800x480 in mouse_screen_w/h, so a
+ * component running a smaller surface — a game on a 400x240 fb1 that a scaling
+ * DSS overlay upscales to fill the panel — let a USB mouse range over twice the
+ * surface and clamped it at coordinates no pixel occupies. Six of the nine call
+ * sites never called gamepad_set_mouse_bounds() to correct it, and the two that
+ * actually feed mouse_x/y into hit-testing (app_launcher, game_selector) re-init
+ * the manager after every child exits, which re-runs apply_defaults() and would
+ * discard a startup-only call. So the bounds are taken from the framebuffer's
+ * own logical size instead, which no call site can forget.
+ *
+ * ⚠️ The 800x480 case is the NEGATIVE CONTROL and it cannot fail on this defect:
+ * screen_base_width/height default to exactly the constants that were there
+ * before, so at full size the change is byte-identical and every ratio is the
+ * identity. The 400x227 cases carry the whole assertion. Measured against the
+ * pre-fix source: 8 failures, every one of them on the small surface, and the
+ * clearest of them is the symptom itself — a warp to 799,479 landed there
+ * instead of on the surface's last pixel at 399,226. */
+static void test_mouse_bounds_follow_surface(void) {
+    printf("\n6. mouse bounds come from the framebuffer, not a constant\n");
+
+    int save_w = screen_base_width, save_h = screen_base_height;
+    GamepadManager gm;
+
+    /* The control: a full-size surface must behave exactly as before. */
+    screen_base_width = 800; screen_base_height = 480;
+    gamepad_init(&gm); gamepad_close(&gm);
+    expect_int("800x480: bounds width",   gm.mouse_screen_w, 800);
+    expect_int("800x480: bounds height",  gm.mouse_screen_h, 480);
+    expect_int("800x480: cursor centred", gm.mouse_x, 400);
+
+    /* The defect: .188's measured 400x240 fb1 less its scaled bezel. */
+    screen_base_width = 400; screen_base_height = 227;
+    gamepad_init(&gm); gamepad_close(&gm);
+    expect_int("400x227: bounds width",   gm.mouse_screen_w, 400);
+    expect_int("400x227: bounds height",  gm.mouse_screen_h, 227);
+    expect_int("400x227: cursor centred", gm.mouse_x, 200);
+    expect_int("400x227: cursor centred y", gm.mouse_y, 113);
+
+    /* The symptom itself: a warp past the surface must land on its last pixel,
+     * not on a coordinate the smaller surface has no room for. */
+    gamepad_set_mouse_position(&gm, 799, 479);
+    expect_int("400x227: warp clamps x", gm.mouse_x, 399);
+    expect_int("400x227: warp clamps y", gm.mouse_y, 226);
+
+    /* Survives the re-init that the launcher apps perform on every child exit. */
+    gamepad_init(&gm); gamepad_close(&gm);
+    expect_int("re-init keeps the surface width",  gm.mouse_screen_w, 400);
+    expect_int("re-init keeps the surface height", gm.mouse_screen_h, 227);
+
+    /* The fallback: globals that were never published leave the constants. */
+    screen_base_width = 0; screen_base_height = 0;
+    gamepad_init(&gm); gamepad_close(&gm);
+    expect_int("unset globals fall back to 800", gm.mouse_screen_w,
+               GAMEPAD_DEFAULT_SCREEN_W);
+    expect_int("unset globals fall back to 480", gm.mouse_screen_h,
+               GAMEPAD_DEFAULT_SCREEN_H);
+
+    screen_base_width = save_w; screen_base_height = save_h;
+}
+
 int main(void) {
     printf("gamepad held-state regression (latched events vs per-frame positions)\n");
 
@@ -322,6 +384,7 @@ int main(void) {
     test_stick_releases();
     test_unplug_clears();
     test_sources_or_together();
+    test_mouse_bounds_follow_surface();
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");
