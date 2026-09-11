@@ -7,13 +7,22 @@
  *
  * WHY THIS EXISTS.  ScummVM keeps the resolution the engine asks for - 320x200 for
  * most SCUMM titles - and scales it to the panel in SOFTWARE, nearest neighbour, in
- * blitGameSurfaceToFramebuffer().  800/320 is 2.5 and 480/200 is 2.4, both
- * non-integer, so that resample doubles some columns and triples others.  The DSS
- * vid1 overlay can do the same upscale in hardware with real filter taps, for no
+ * blitGameSurfaceToFramebuffer().  That scale is non-integer, so the resample doubles
+ * some columns and triples others.  The DSS vid1 overlay can do the same upscale in
+ * hardware with real filter taps, for no
  * CPU at all.  Whether the result LOOKS better, worse or the same is not derivable
  * from the driver source and cannot be screenshotted: cat /dev/fb0 returns the gfx
  * plane, never the composited panel.  So the comparison has to be put in front of a
  * person, and this is the instrument that does it.
+ *
+ * ⚠️ THIS CARD'S 2.5x/2.4x IS NOT ScummVM'S GEOMETRY - measured 2026-09-11 in
+ * getScalingInfo():163-171, which takes ONE isotropic scale (the smaller of the two
+ * axis ratios) and centres the picture with black bars, so ScummVM's two axes are
+ * always EQUAL.  320x200 into a full 800x480 is 767x479 at (16,0); into the default
+ * safe rect, 720x450 at (40,0), an exact 2.25x.  The pair used here is 4%
+ * anisotropic where ScummVM is not.  Both arms carry it identically so it does not
+ * bias the comparison, but it is not a rehearsal of the shipped geometry, and an
+ * operator run reported the card "felt a bit compressed".
  *
  * ⚠️ NOT an argument for shrinking a native game.  The seven games are authored at
  * 800x480, so a reduced surface DOWNSAMPLES their art; ScummVM is authored at

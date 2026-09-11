@@ -298,9 +298,18 @@ the display section linked above.
      and upscales it in SOFTWARE today**, so a reduced surface REMOVES work on art that was already that
      size: `initSize()` stores the engine resolution verbatim, `getWidth()`/`getHeight()` return it
      rather than the panel, and `blitGameSurfaceToFramebuffer()` resamples it nearest-neighbour with an X
-     lookup table and identical-row dedup. **800/320 is 2.5 and 480/200 is 2.4**, both non-integer, so
-     that resample doubles some columns and triples others — against a scaler with filter taps the
-     comparison is *uneven nearest-neighbour versus filtered*, not sharp versus soft. The backend's own
+     lookup table and identical-row dedup. ⚠️ **"800/320 is 2.5 and 480/200 is 2.4, both non-integer" is
+     MEASURED FALSE as a description of the shipped path, 2026-09-11** — corrected here rather than
+     restated. `getScalingInfo()`:163-171 takes **one isotropic scale**, the smaller of
+     `rectW*256/w` and `rectH*256/h`, and centres the picture inside the content rect; the leftover
+     strips are memset to black at :455-478. So ScummVM's two axes are **always equal** and its output is
+     **pillarboxed**: 320×200 into a full 800×480 is **767×479 at (16,0)** (≈2.397×), and into the
+     *default* content rect — the safe rect, `rwFullContentArea()` defaults to `"safe"` — with the 15/15
+     bezel it is **720×450 at (40,0)**, an exact **2.25×**. The resample is still non-integer, so it still
+     doubles some columns and triples others, and the comparison is still *uneven nearest-neighbour
+     versus filtered* rather than sharp versus soft. What changes is the target a hardware arm has to
+     hit: **a pillarboxed 720×450 at an offset, not a full-screen 800×480 stretch**, and the exact figure
+     is a function of the runtime bezel and touch insets rather than a constant. The backend's own
      O9 row already names ScummVM the prime candidate. ⚠️ `vnc_client` is **not** a candidate: it
      *downscales* from a larger remote, so the DSS would need a framebuffer the size of the remote
      desktop to scale from.
@@ -322,7 +331,8 @@ the display section linked above.
      `400,240` left by the earlier eye run.** So funding `fb1` is a step and not a given. `overlay1` also
      carries no `trans_key*` attribute of its own, which step 3 below has to reckon with.
    - ⚠️ **The instrument was repaired before it was ever trusted, 2026-09-11 — it is now DEPLOYED on
-     `.188` and STILL UNRUN.** Read before the first run: it is not the tool the bullet above describes.
+     `.188` and HAS BEEN RUN; the verdict is the bullet below.** It is not the tool the bullet above
+     describes.
      Five defects could each have produced a confident wrong eye verdict. `set_mode_565()` discarded the
      `FBIOPUT_VSCREENINFO` writeback, so a clamped resolution or a 32bpp grant read as success while
      every RGB565 store and the `line_length / 2` stride stayed 16bpp — garbage on the panel, indistinguishable
@@ -342,6 +352,61 @@ the display section linked above.
      rounded to a page *before* writing, so request and readback were always identical and the
      page-rounding line always described a no-op. The exact byte count is now written, which is what
      makes the documented rounding something the receipt can show.
+   - **THE EYE A/B IS RUN, and the ruling is "make it selectable" rather than "replace" — operator,
+     2026-09-11 on `.188`.** Four runs in the prescribed order with the launcher stopped, each restore
+     printed: `hard`, `soft`, `split`, `split --swap`. Verbatim: `hard` — *"test screen pattern. low
+     res"*; `soft` — *"low res image, but very sharp"*; `split` (hardware top) — *"top is low res,
+     blurry, bottom is low res sharp"*; `split --swap` (hardware bottom) — *"top is low res sharp,
+     bottom is low res blurry"*. **The blur followed the hardware arm when the halves were exchanged, so
+     viewing angle and any fixed panel asymmetry are ruled out** — that is what `--swap` was built for
+     and it earned its place. Cost, from the tool's own receipts: hardware **92–211 µs/frame**, software
+     **6 407–12 912 µs/frame** — the software resample spends ~12.7 ms of a 33 ms frame budget where the
+     hardware spends ~0.2 ms. The position fix was also seen working rather than assumed: `position` was
+     hand-poisoned to `0,240` first, the receipt shows it corrected to `0,0` and restored to `0,240`
+     after, and the page-rounding line finally described something real (`wrote 128000, driver reads
+     131072`). ⚠️ **The operator declined the framing "is the blur a problem":** *"I don't say that the
+     blurryness is a problem. In older games it can be a blessing."* **So the deliverable is no longer a
+     replacement — it is a user-selectable upscale path, software or hardware, and both stay.** The
+     setting belongs in the settings app.
+   - ⚠️ **What that eye run does NOT settle, and why a real-art run is still owed.** A card of 1 px and
+     2 px combs is the **best possible case for nearest neighbour and the worst possible case for a
+     filter**: NN duplicates pixels so a comb stays a comb, while any filter averages it toward grey.
+     Real SCUMM art carries no 1 px combs — painted backgrounds, dithered gradients and diagonal edges
+     are where NN's uneven column doubling reads as *wobble* and a filter's softening reads as
+     *smoothing*, so the two could rank the other way round on game art. ⚠️ **And the card is 4%
+     anisotropic where ScummVM is not** — see the geometry correction above. Both arms carry it
+     identically so the A/B is not biased, but it is the likely source of the operator's unprompted *"the
+     bottom one also felt a bit compressed"* [inferred]. **A path to real art exists that needs no
+     ScummVM change**: when upscaling, the software arm's nearest-neighbour map is *surjective* onto
+     every source pixel, so sampling one representative destination pixel per source pixel inverts an
+     `fb0` grab back to the exact game surface — modulo the RGB565 quantisation the framebuffer already
+     holds, and excluding the cursor, which `drawCursor()`:585-588 writes destructively at OUTPUT
+     resolution after the scale. That defeats the "a grab off `fb0` is already arm A" argument the tool's
+     own header makes against a `--ppm` loader, and it is the cheap next step.
+   - **The shape of the selectable path, if it is built.** `getScalingInfo()`:138-172 is the one
+     chokepoint — every consumer of the geometry reaches it. The software resample a hardware choice
+     bypasses is `blitGameSurfaceToFramebuffer()`:440-573, and the two inverse mappings that must follow
+     the choice are `drawCursor()`:585-588 and `roomwizard-events.cpp`:317-332,454-464. ⚠️ `hasFeature()`
+     returns true for `kFeatureCursorPalette` **only** and `beginGFXTransaction`/`endGFXTransaction` are
+     no-ops, so there is no existing mode-change plumbing a runtime toggle could hang on. A hardware arm
+     must fund `fb1` (a step, not a given), set `output_size` to the pillarboxed target and `position` to
+     the offset, and restore both — not restoring is what left `.188`'s stale `800,120`. ⚠️ ScummVM
+     redeploy is ~1 m 35 s – 2 m 20 s and `rm -f`s `native_apps/common/*.o` twice, so it must never run
+     concurrently with a `native_apps` build.
+   - **The toggle has an existing idiom to copy, measured 2026-09-11 — and one gap.**
+     `rwFullContentArea()` (`roomwizard.cpp`:105-135) reads env `ROOMWIZARD_CONTENT_AREA` first, falls
+     back to the ConfMan key `rw_content_area` in `/opt/games/scummvm.ini`, defaults to `"safe"`, seeds
+     the key on first run (:224-227, flushed at :250 because `quit()` calls `exit(0)` and bypasses the
+     normal flush) and deliberately does **not** persist the env var (:221-223). It is read **once** into
+     a function-local static and never re-read — which suits an upscale choice, since there is no runtime
+     mode-change plumbing to hang one on. So `rw_upscale = software|hardware` needs no new mechanism.
+     ⚠️ **The gap is the settings app.** `device_tools` is the one user-facing settings screen
+     (`native_apps/app-manifests.sh`:52; five older settings binaries are retired from the grid at :58)
+     and it persists to `/opt/games/rw_config.conf` through `config_save()`. **Nothing bridges the two
+     files**: `device_tools` neither reads nor writes `rw_content_area`, and the ScummVM backend never
+     reads `rw_config.conf`. A toggle in the settings app therefore needs a bridge, and which side owns
+     it is a decision rather than a detail. `rwDebugMode()` (:80-91) is env-only with no ConfMan key at
+     all, so it is not the model to copy.
    - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
      is the subject, and each game would additionally need its own operator eye run. Three layers, worst
      first:
