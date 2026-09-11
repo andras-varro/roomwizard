@@ -93,26 +93,95 @@ void fb_load_bezel(void) {
            screen_bezel_left, screen_bezel_right);
 }
 
-// Recompute the logical surface from the panel dims + current bezel margins and
-// publish the result to both fb and the globals. Margins that would leave less
-// than a sixteenth of an axis usable are rejected as a typo/misconfiguration.
-static int fb_apply_viewport(Framebuffer *fb, int panel_w, int panel_h) {
-    int lw = panel_w - screen_bezel_left - screen_bezel_right;
-    int lh = panel_h - screen_bezel_top  - screen_bezel_bottom;
+// The panel's own resolution, from the display's mode timings. Deliberately NOT
+// any framebuffer's geometry: a scaling DSS overlay presents a SMALLER surface
+// upscaled to fill the panel, so the two are different numbers exactly when this
+// matters, and fb0's size is not a stand-in for the panel's. Timings format is
+// "<pixclock>,<xres>/<hfp>/<hbp>/<hsw>,<yres>/<vfp>/<vbp>/<vsw>".
+// Returns 0 and writes *pw/*ph on success; on any failure returns -1 and leaves
+// them untouched, and the caller then treats the surface as the panel (1:1).
+// Absent off-device, which is why the arithmetic below is a separate function.
+static int fb_read_panel_size(int *pw, int *ph) {
+    FILE *f = fopen("/sys/devices/platform/omapdss/display0/timings", "r");
+    if (!f) return -1;
+
+    char line[128];
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    fclose(f);
+
+    long pixclock;
+    int x, y;
+    if (sscanf(line, "%ld,%d/%*d/%*d/%*d,%d/", &pixclock, &x, &y) != 3) return -1;
+    if (x < 16 || y < 16) return -1;
+
+    *pw = x;
+    *ph = y;
+    return 0;
+}
+
+// Convert the bezel margins from PANEL pixels into SURFACE pixels. Pure, and
+// public, because it is the part that can be wrong and the sysfs read above
+// cannot run on a host: see native_apps/tests/bezel_scale_test.c.
+//
+// The margins name pixels the plastic bezel physically covers, so they are panel
+// pixels. Subtracting them from a surface that a scaling overlay will upscale
+// spends them at the upscale factor — measured on a 400x240 surface upscaled 2x,
+// where T=15 ate 30 of the panel's 480 rows and left a band visible below the
+// bezel. Rounds DOWN, so the drawn area runs slightly under the bezel rather
+// than stopping short of it: an overlap is invisible, a gap is not.
+// A panel dimension of 0, or one equal to the surface, is left 1:1.
+void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
+                               int *top, int *bottom, int *left, int *right) {
+    if (panel_w > 0 && surf_w > 0 && panel_w != surf_w) {
+        *left  = *left  * surf_w / panel_w;
+        *right = *right * surf_w / panel_w;
+    }
+    if (panel_h > 0 && surf_h > 0 && panel_h != surf_h) {
+        *top    = *top    * surf_h / panel_h;
+        *bottom = *bottom * surf_h / panel_h;
+    }
+}
+
+// Recompute the logical surface from the SURFACE dims + current bezel margins
+// and publish the result to both fb and the globals. surf_w/surf_h are the
+// framebuffer's own xres/yres, which equal the panel's only when nothing is
+// scaling this node. Margins that would leave less than a sixteenth of an axis
+// usable are rejected as a typo/misconfiguration.
+//
+// The globals keep their panel-space meaning; only the subtraction and the
+// resulting view origin move into surface space, because those two index the
+// framebuffer mmap. Touch is NOT converted — see the header note.
+static int fb_apply_viewport(Framebuffer *fb, int surf_w, int surf_h) {
+    int t = screen_bezel_top,  b = screen_bezel_bottom;
+    int l = screen_bezel_left, r = screen_bezel_right;
+
+    int panel_w = surf_w, panel_h = surf_h;
+    if (fb_read_panel_size(&panel_w, &panel_h) == 0) {
+        // The timings are physical; the app's orientation may be rotated.
+        if (fb->portrait_mode) { int s = panel_w; panel_w = panel_h; panel_h = s; }
+        fb_scale_bezel_to_surface(panel_w, panel_h, surf_w, surf_h, &t, &b, &l, &r);
+    }
+
+    int lw = surf_w - l - r;
+    int lh = surf_h - t - b;
 
     if (screen_bezel_top < 0 || screen_bezel_bottom < 0 ||
         screen_bezel_left < 0 || screen_bezel_right < 0 ||
-        lw < panel_w / 16 || lh < panel_h / 16) {
+        lw < surf_w / 16 || lh < surf_h / 16) {
         return -1;
     }
 
-    fb->view_x = screen_bezel_left;
-    fb->view_y = screen_bezel_top;
+    fb->view_x = l;
+    fb->view_y = t;
     fb->width  = (uint32_t)lw;
     fb->height = (uint32_t)lh;
 
-    screen_panel_width  = panel_w;
-    screen_panel_height = panel_h;
+    // Deliberately the SURFACE dims, not the panel dims read above: every
+    // reader of these two treats them as the space fb->buffer is indexed in,
+    // and touch_input.c maps into that space. Publishing the true panel here
+    // would change their meaning on a scaled node and silently move touch.
+    screen_panel_width  = surf_w;
+    screen_panel_height = surf_h;
     screen_view_x       = fb->view_x;
     screen_view_y       = fb->view_y;
     screen_base_width   = lw;

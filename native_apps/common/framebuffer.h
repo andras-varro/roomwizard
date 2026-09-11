@@ -59,6 +59,24 @@ extern int screen_bezel_right;
 extern int screen_panel_width;
 extern int screen_panel_height;
 
+// Convert bezel margins from PANEL pixels into SURFACE pixels, in place. Pure —
+// no sysfs, no device — so a host test can reach it; fb_init() calls it with the
+// panel size read from the display's mode timings.
+//
+// It exists because the margins name pixels the plastic bezel physically covers,
+// and a scaling DSS overlay draws a smaller surface upscaled to fill the panel:
+// subtracting a panel-space margin from that surface spends it at the upscale
+// factor. Measured at 400x240 upscaled 2x, T=15 took 30 of the panel's 480 rows.
+// A panel dimension of 0, or one equal to the surface, is left 1:1 — so this is
+// a no-op at the shipped 800x480 geometry.
+//
+// ⚠️ It fixes DRAWING only. Touch is not converted anywhere: touch_input.c maps
+// raw -> panel -> logical by SUBTRACTING the view origin, which on an upscaled
+// surface also needs dividing by the scale factor. Touch on a scaled node is
+// therefore wrong by that factor, and no app uses one yet.
+void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
+                               int *top, int *bottom, int *left, int *right);
+
 // Logical surface origin within the panel (== bezel left/top after rotation)
 extern int screen_view_x;
 extern int screen_view_y;
