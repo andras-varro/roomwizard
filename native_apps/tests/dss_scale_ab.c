@@ -66,16 +66,22 @@
  * that grows one.
  *
  * WHAT IT RESTORES, AND WHY THAT MATTERS.  The fb0 vinfo is saved verbatim before
- * any write and restored on every exit path including SIGINT/SIGTERM/SIGHUP;
- * overlay1 goes enabled=0 then fb1/size=0, which is the documented undo.  A unit
- * left in a mode nothing running asked for is the characteristic failure of this
- * class of tool, and one reference unit is in exactly that state today.  The final
- * readback is printed, so the restore is verified rather than assumed.
+ * any write and restored on every exit path including SIGINT/SIGTERM/SIGHUP, and a
+ * vinfo that could not be saved refuses the run rather than reprogramming a mode
+ * it cannot put back; overlay1 goes enabled=0 then fb1/size=0, then output_size
+ * and position back to what they read before.  Those last two matter because they
+ * are inherited: an unrestored position silently places the hardware arm where a
+ * later run does not claim it is.  A unit left in a mode nothing running asked for
+ * is the characteristic failure of this class of tool, and one reference unit is in
+ * exactly that state today.  The final readback prints all four, so the restore is
+ * verified rather than assumed.
  *
  * READ THE RECEIPT, NOT THE PANEL ALONE.  It prints the funded byte count and what
- * the driver read back (fb1/size rounds UP to a page: write 128000, read 131072),
- * the geometry each node actually accepted, every overlay1 attribute after the
- * write, and the per-frame microseconds beside the pixel count they were spent on.
+ * the driver read back (fb1/size rounds UP to a page, so the two differ — the
+ * exact count is written for precisely that reason), the geometry each node
+ * actually accepted AND a refusal if the driver granted anything else, every
+ * overlay1 attribute before and after the write, and the per-frame microseconds
+ * beside the pixel count they were spent on.
  * Two runs whose pixel counts are not in the ratio of their areas are not an A/B.
  */
 
@@ -184,13 +190,30 @@ static struct fb_var_screeninfo fb0_saved;
 static int fb0_saved_ok = 0;
 static int touched_fb0 = 0;
 static int touched_ovl = 0;
+/* output_size and position are ours to put back too.  Leaving them is what left
+ * a stale output_size on a reference unit, and an unrestored position silently
+ * misplaces the hardware arm on the NEXT run — hard and unswapped split used not
+ * to write position at all, so they would have inherited a --swap run's 0,240
+ * while announcing y=0. */
+static char ovl_saved_out[64];
+static char ovl_saved_pos[64];
+static int ovl_saved_ok = 0;
 
 static int write_attr(const char *path, const char *val) {
     int fd = open(path, O_WRONLY);
     if (fd < 0) return -1;
-    ssize_t n = write(fd, val, strlen(val));
+    size_t want = strlen(val);
+    ssize_t n = write(fd, val, want);
+    /* close() can succeed and still reset errno, and all three callers print
+     * strerror(errno) — so the reason has to be carried across it by hand or a
+     * refused write reports "Success". */
+    int err = (n < 0) ? errno : 0;
     close(fd);
-    return (n < 0) ? -1 : 0;
+    if (n < 0 || (size_t)n != want) {
+        errno = (n < 0) ? err : EIO;   /* a short write is a failed write */
+        return -1;
+    }
+    return 0;
 }
 
 static int read_attr(const char *path, char *buf, size_t len) {
@@ -209,6 +232,10 @@ static void restore(void) {
         /* The documented undo, in the documented order. */
         write_attr(OVL "/enabled", "0");
         write_attr("/sys/class/graphics/fb1/size", "0");
+        if (ovl_saved_ok) {
+            write_attr(OVL "/output_size", ovl_saved_out);
+            write_attr(OVL "/position", ovl_saved_pos);
+        }
         touched_ovl = 0;
     }
     if (touched_fb0 && fb0_saved_ok) {
@@ -252,6 +279,23 @@ static int set_mode_565(int fd, int w, int h) {
         perror("FBIOPUT_VSCREENINFO");
         return -1;
     }
+    /* FBIOPUT_VSCREENINFO writes back what the driver ACTUALLY set, and it can
+     * clamp the resolution or hand back a different bpp while still returning 0.
+     * Discarding v would let a 32bpp grant read as success — and then every
+     * RGB565 store below, and the stride_px = line_length / 2 that assumes 16bpp,
+     * is wrong and the panel shows garbage the operator would read as a scaler
+     * artefact.  This is the same defect class as dss_scale_test.c's unset bpp
+     * (see the note above set_mode_565's channel offsets): explicit offsets fix
+     * the layout half, and only a readback fixes the acceptance half. */
+    if (v.xres != (uint32_t)w || v.yres != (uint32_t)h || v.bits_per_pixel != 16) {
+        fprintf(stderr,
+                "  REFUSING: asked for %dx%d @16bpp, driver granted %ux%u @ %u bpp\n"
+                "  Every store below assumes 16bpp and a 2-byte stride, so the card\n"
+                "  would be garbage and the eye run would be judging the garbage\n"
+                "  rather than the scaler.\n",
+                w, h, v.xres, v.yres, v.bits_per_pixel);
+        return -1;
+    }
     return 0;
 }
 
@@ -264,6 +308,33 @@ static void report_mode(const char *what, int fd) {
            what, v.xres, v.yres, v.bits_per_pixel,
            v.red.length, v.red.offset, v.green.length, v.green.offset,
            v.blue.length, v.blue.offset, f.line_length);
+}
+
+/* One home for "map the whole visible plane".  Inline, this was three copies
+ * that each ignored both ioctl return values and fed a possibly uninitialised
+ * line_length straight to mmap as a length.  It also blacks the WHOLE mapping:
+ * each frame writes only CARD_W*2 bytes per row, so a stride wider than that
+ * leaves stale memory in the tail, and on the hardware arm that tail is upscaled
+ * onto the panel where it reads as a scaler artefact rather than as our bug. */
+static uint16_t *map_plane(const char *what, int fd, size_t *len_out,
+                           int *stride_px) {
+    struct fb_fix_screeninfo f;
+    struct fb_var_screeninfo v;
+    if (ioctl(fd, FBIOGET_FSCREENINFO, &f) < 0 ||
+        ioctl(fd, FBIOGET_VSCREENINFO, &v) < 0) {
+        fprintf(stderr, "  cannot read %s geometry: %s\n", what, strerror(errno));
+        return NULL;
+    }
+    size_t len = (size_t)f.line_length * v.yres;
+    uint16_t *p = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        fprintf(stderr, "  mmap %s: %s\n", what, strerror(errno));
+        return NULL;
+    }
+    memset(p, 0, len);
+    *len_out = len;
+    *stride_px = (int)(f.line_length / 2);
+    return p;
 }
 
 /* ⚠️ 32-bit ARM: sizeof(long) == 4, so the seconds term is baselined on the first
@@ -326,18 +397,31 @@ static int overlay_up(int src_w, int src_h, int out_w, int out_h,
                       int pos_y, int want_swap) {
     char buf[64], back[64];
     long bytes = (long)src_w * src_h * 2;
-    long pages = (bytes + 4095) / 4096;
 
-    printf("  funding fb1: %ld bytes (%ld pages) for %dx%d @16bpp\n",
-           pages * 4096, pages, src_w, src_h);
-    snprintf(buf, sizeof(buf), "%ld", pages * 4096);
+    /* Save what we are about to overwrite so restore() can put it back, and
+     * print it: a stale value inherited from an earlier run is exactly the thing
+     * that would invalidate this A/B without showing up anywhere. */
+    if (read_attr(OVL "/output_size", ovl_saved_out, sizeof(ovl_saved_out)) == 0 &&
+        read_attr(OVL "/position", ovl_saved_pos, sizeof(ovl_saved_pos)) == 0)
+        ovl_saved_ok = 1;
+    printf("  overlay1 before: output_size %s  position %s\n",
+           ovl_saved_ok ? ovl_saved_out : "<unreadable>",
+           ovl_saved_ok ? ovl_saved_pos : "<unreadable>");
+
+    /* Write the EXACT byte count.  Rounding up to a page here first made the
+     * request and the readback identical, so the receipt's page-rounding line
+     * always described a no-op and could never show the driver's own rounding —
+     * which is the one thing that line exists to record. */
+    printf("  funding fb1: %ld bytes for %dx%d @16bpp\n", bytes, src_w, src_h);
+    snprintf(buf, sizeof(buf), "%ld", bytes);
     if (write_attr("/sys/class/graphics/fb1/size", buf) < 0) {
         fprintf(stderr, "  cannot write fb1/size: %s\n", strerror(errno));
         return -1;
     }
     touched_ovl = 1;
     if (read_attr("/sys/class/graphics/fb1/size", back, sizeof(back)) == 0)
-        printf("  fb1/size readback: %s   (page rounding, not a short write)\n", back);
+        printf("  fb1/size: wrote %ld, driver reads %s   (page rounding, not a\n"
+               "    short write - the driver rounds up to a whole page)\n", bytes, back);
 
     int fd = open("/dev/fb1", O_RDWR);
     if (fd < 0) {
@@ -351,21 +435,38 @@ static int overlay_up(int src_w, int src_h, int out_w, int out_h,
     report_mode("fb1", fd);
 
     /* Position BEFORE enable, so a swap that cannot happen is found before the
-     * panel shows a comparison the operator would read as the swapped one. */
-    if (pos_y != 0 || want_swap) {
-        snprintf(buf, sizeof(buf), "0,%d", pos_y);
-        if (write_attr(OVL "/position", buf) < 0) {
-            fprintf(stderr, "  overlay1/position is NOT writable (%s)\n",
-                    strerror(errno));
+     * panel shows a comparison the operator would read as the swapped one.
+     * Written UNCONDITIONALLY, including the pos_y == 0 case: guarding it on
+     * "pos_y != 0 || want_swap" meant hard and unswapped split never wrote it,
+     * so either would silently inherit a previous --swap run's 0,240 and place
+     * the hardware arm on the bottom half while announcing y=0. */
+    snprintf(buf, sizeof(buf), "0,%d", pos_y);
+    if (write_attr(OVL "/position", buf) < 0) {
+        fprintf(stderr, "  overlay1/position is NOT writable (%s)\n",
+                strerror(errno));
+        if (want_swap) {
             fprintf(stderr, "  --swap cannot be honoured, and printing the unswapped\n"
                             "  comparison as though it were swapped would be a false\n"
                             "  control - refusing rather than reporting it.\n");
             close(fd);
             return -2;
         }
-        if (read_attr(OVL "/position", back, sizeof(back)) == 0)
-            printf("  overlay1/position: %s\n", back);
+        /* Not swapping: 0,0 may already be the value, in which case the arm is
+         * where we say it is.  Anything else and the arm is misplaced by an
+         * amount we cannot correct, which is not an A/B either. */
+        if (read_attr(OVL "/position", back, sizeof(back)) != 0 ||
+            strcmp(back, "0,0") != 0) {
+            fprintf(stderr, "  position reads %s and cannot be set to 0,0, so the\n"
+                            "  hardware arm is not where this run would claim it is -\n"
+                            "  refusing rather than reporting a misplaced comparison.\n",
+                    back);
+            close(fd);
+            return -2;
+        }
+        fprintf(stderr, "  ...but it already reads 0,0, which is what this mode needs.\n");
     }
+    if (read_attr(OVL "/position", back, sizeof(back)) == 0)
+        printf("  overlay1/position: %s\n", back);
 
     snprintf(buf, sizeof(buf), "%d,%d", out_w, out_h);
     if (write_attr(OVL "/output_size", buf) < 0) {
@@ -404,7 +505,15 @@ static int mode_soft(int frames) {
         return 1;
     }
 
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &fb0_saved) == 0) fb0_saved_ok = 1;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &fb0_saved) < 0) {
+        perror("FBIOGET_VSCREENINFO fb0");
+        fprintf(stderr, "  refusing to reprogram a mode we could not save first -\n"
+                        "  that is exactly how a unit is left in a mode nothing\n"
+                        "  running asked for.\n");
+        close(fd);
+        return 1;
+    }
+    fb0_saved_ok = 1;
     printf("  fb0 was %ux%u @ %u bpp - saved for restore\n",
            fb0_saved.xres, fb0_saved.yres, fb0_saved.bits_per_pixel);
 
@@ -415,19 +524,14 @@ static int mode_soft(int frames) {
     }
     report_mode("fb0", fd);
 
-    struct fb_fix_screeninfo f;
-    struct fb_var_screeninfo v;
-    ioctl(fd, FBIOGET_FSCREENINFO, &f);
-    ioctl(fd, FBIOGET_VSCREENINFO, &v);
-    size_t len = (size_t)f.line_length * v.yres;
-    uint16_t *fb = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (fb == MAP_FAILED) {
-        perror("mmap fb0");
+    size_t len;
+    int stride_px;
+    uint16_t *fb = map_plane("fb0", fd, &len, &stride_px);
+    if (!fb) {
         close(fd);
         return 1;
     }
 
-    int stride_px = (int)(f.line_length / 2);
     long long total = 0;
     for (int i = 0; i < frames; i++) {
         long long us = soft_scale(fb, stride_px, 0, 0, PANEL_W, PANEL_H,
@@ -453,19 +557,14 @@ static int mode_hard(int frames) {
     int fd = overlay_up(CARD_W, CARD_H, PANEL_W, PANEL_H, 0, 0);
     if (fd < 0) return 1;
 
-    struct fb_fix_screeninfo f;
-    struct fb_var_screeninfo v;
-    ioctl(fd, FBIOGET_FSCREENINFO, &f);
-    ioctl(fd, FBIOGET_VSCREENINFO, &v);
-    size_t len = (size_t)f.line_length * v.yres;
-    uint16_t *fb = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (fb == MAP_FAILED) {
-        perror("mmap fb1");
+    size_t len;
+    int stride_px;
+    uint16_t *fb = map_plane("fb1", fd, &len, &stride_px);
+    if (!fb) {
         close(fd);
         return 1;
     }
 
-    int stride_px = (int)(f.line_length / 2);
     long long total = 0;
     for (int i = 0; i < frames; i++) {
         long long t0 = now_us();
@@ -502,7 +601,13 @@ static int mode_split(int frames, int swap) {
         perror("open /dev/fb0");
         return 1;
     }
-    if (ioctl(fd0, FBIOGET_VSCREENINFO, &fb0_saved) == 0) fb0_saved_ok = 1;
+    if (ioctl(fd0, FBIOGET_VSCREENINFO, &fb0_saved) < 0) {
+        perror("FBIOGET_VSCREENINFO fb0");
+        fprintf(stderr, "  refusing to reprogram a mode we could not save first.\n");
+        close(fd0);
+        return 1;
+    }
+    fb0_saved_ok = 1;
     printf("  fb0 was %ux%u @ %u bpp - saved for restore\n",
            fb0_saved.xres, fb0_saved.yres, fb0_saved.bits_per_pixel);
 
@@ -522,30 +627,19 @@ static int mode_split(int frames, int swap) {
     }
     report_mode("fb0", fd0);
 
-    struct fb_fix_screeninfo f0, f1;
-    struct fb_var_screeninfo v0, v1;
-    ioctl(fd0, FBIOGET_FSCREENINFO, &f0);
-    ioctl(fd0, FBIOGET_VSCREENINFO, &v0);
-    ioctl(fd1, FBIOGET_FSCREENINFO, &f1);
-    ioctl(fd1, FBIOGET_VSCREENINFO, &v1);
-
-    size_t len0 = (size_t)f0.line_length * v0.yres;
-    size_t len1 = (size_t)f1.line_length * v1.yres;
-    uint16_t *fb0 = mmap(0, len0, PROT_READ | PROT_WRITE, MAP_SHARED, fd0, 0);
-    uint16_t *fb1 = mmap(0, len1, PROT_READ | PROT_WRITE, MAP_SHARED, fd1, 0);
-    if (fb0 == MAP_FAILED || fb1 == MAP_FAILED) {
-        perror("mmap");
+    size_t len0, len1;
+    int s0, s1;
+    uint16_t *fb0 = map_plane("fb0", fd0, &len0, &s0);
+    uint16_t *fb1 = fb0 ? map_plane("fb1", fd1, &len1, &s1) : NULL;
+    if (!fb0 || !fb1) {
+        if (fb0) munmap(fb0, len0);
         close(fd1);
         close(fd0);
         return 1;
     }
 
-    /* Black the whole gfx plane once, so the half vid1 does not cover is not
-     * whatever the launcher last drew there. */
-    memset(fb0, 0, len0);
-
-    int s0 = (int)(f0.line_length / 2), s1 = (int)(f1.line_length / 2);
     long long soft_total = 0, hard_total = 0;
+    int done = 0;
     for (int i = 0; i < frames; i++) {
         long long us = soft_scale(fb0, s0, 0, sw_y, PANEL_W, out_h,
                                   card, CARD_W, half_h);
@@ -557,14 +651,26 @@ static int mode_split(int frames, int swap) {
             memcpy(fb1 + (size_t)y * s1, card + (size_t)y * CARD_W,
                    (size_t)CARD_W * 2);
         hard_total += now_us() - t0;
+        done++;
+    }
+    /* Divide by what actually ran.  Dividing by the requested count after a
+     * mid-loop break printed a fabricated low us/frame with no warning, which is
+     * worse than printing nothing: mode_soft bails on the same condition. */
+    if (done == 0) {
+        fprintf(stderr, "  no frame completed - nothing to report\n");
+        munmap(fb1, len1);
+        munmap(fb0, len0);
+        close(fd1);
+        close(fd0);
+        return 1;
     }
 
     printf("\n  SPLIT, %d frames, source region %dx%d in BOTH arms\n",
-           frames, CARD_W, half_h);
+           done, CARD_W, half_h);
     printf("    software  %5lld us/frame over %d written pixels\n",
-           soft_total / frames, PANEL_W * out_h);
+           soft_total / done, PANEL_W * out_h);
     printf("    hardware  %5lld us/frame over %d written pixels\n",
-           hard_total / frames, CARD_W * half_h);
+           hard_total / done, CARD_W * half_h);
     printf("    Both arms scale by the same 2.5x by 2.4x.  The pixel counts differ\n"
            "    BECAUSE that is the mechanism, and their ratio is the area ratio.\n");
 
@@ -577,8 +683,8 @@ static int mode_split(int frames, int swap) {
 
 /* -- main ----------------------------------------------------------------- */
 
-static void usage(void) {
-    fprintf(stderr,
+static void usage_to(FILE *out) {
+    fprintf(out,
         "dss_scale_ab <soft|hard|split> [hold-seconds] [--swap] [--frames N]\n"
         "\n"
         "  soft    software nearest-neighbour 320x200 -> 800x480 on fb0 (WRITES fb0 MODE)\n"
@@ -591,9 +697,11 @@ static void usage(void) {
         "  soft and split change the mode of fb0, so stop the app first:\n"
         "      /etc/init.d/roomwizard-app stop\n"
         "  Everything is restored on exit and on Ctrl-C, and the restore is printed.\n"
-        "  ⚠️ No screenshot can see the hardware arm: cat /dev/fb0 returns the gfx\n"
+        "  \xe2\x9a\xa0 No screenshot can see the hardware arm: cat /dev/fb0 returns the gfx\n"
         "  plane, never the composited panel.  This needs an eye at the panel.\n");
 }
+
+static void usage(void) { usage_to(stderr); }
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -602,6 +710,10 @@ int main(int argc, char **argv) {
     }
 
     const char *mode = argv[1];
+    if (!strcmp(mode, "--help") || !strcmp(mode, "-h")) {
+        usage_to(stdout);
+        return 0;
+    }
     int hold = 20, frames = 60, swap = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) {
@@ -617,6 +729,22 @@ int main(int argc, char **argv) {
     }
     if (frames < 1) frames = 1;
     if (hold < 0) hold = 0;
+
+    /* Validate BEFORE the banner: printing "mode=banana" and the card line to
+     * stdout and only then failing reads like a run that started. */
+    if (strcmp(mode, "soft") && strcmp(mode, "hard") && strcmp(mode, "split")) {
+        fprintf(stderr, "dss_scale_ab: unknown mode '%s'\n\n", mode);
+        usage();
+        return 1;
+    }
+    /* --swap means something in split alone.  Accepting it elsewhere put
+     * "swap=1" in the banner for a control that was never applied — the same
+     * false control this tool refuses to print when position is unwritable. */
+    if (swap && strcmp(mode, "split")) {
+        fprintf(stderr, "dss_scale_ab: --swap applies to split only, and %s would\n"
+                        "  announce it in the banner while applying nothing.\n", mode);
+        return 1;
+    }
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
@@ -640,7 +768,6 @@ int main(int argc, char **argv) {
         usage();
         return 1;
     }
-
     if (rc == 0 && hold > 0) {
         printf("\n  holding %d s - LOOK AT THE PANEL.  Ctrl-C restores early.\n", hold);
         fflush(stdout);
@@ -657,6 +784,12 @@ int main(int argc, char **argv) {
         printf("    fb1/size         %s\n", back);
     if (read_attr(OVL "/enabled", back, sizeof(back)) == 0)
         printf("    overlay1 enabled %s\n", back);
+    /* These two are the ones the old undo left behind, so they belong in the
+     * receipt that claims the undo happened. */
+    if (read_attr(OVL "/output_size", back, sizeof(back)) == 0)
+        printf("    output_size      %s\n", back);
+    if (read_attr(OVL "/position", back, sizeof(back)) == 0)
+        printf("    position         %s\n", back);
     int fd = open("/dev/fb0", O_RDONLY);
     if (fd >= 0) {
         report_mode("fb0", fd);

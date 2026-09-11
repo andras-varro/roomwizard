@@ -315,6 +315,27 @@ the display section linked above.
      the plane is wired but UNFUNDED — while `output_size` still reads a stale `800,120` and `input_size`
      `400,240` left by the earlier eye run.** So funding `fb1` is a step and not a given. `overlay1` also
      carries no `trans_key*` attribute of its own, which step 3 below has to reckon with.
+   - ⚠️ **The instrument was repaired before it was ever trusted, 2026-09-11 — it is now DEPLOYED on
+     `.188` and STILL UNRUN.** Read before the first run: it is not the tool the bullet above describes.
+     Five defects could each have produced a confident wrong eye verdict. `set_mode_565()` discarded the
+     `FBIOPUT_VSCREENINFO` writeback, so a clamped resolution or a 32bpp grant read as success while
+     every RGB565 store and the `line_length / 2` stride stayed 16bpp — garbage on the panel, indistinguishable
+     from a scaler artefact; it now compares the grant against the request and refuses. `position` was
+     written only when `pos_y != 0 || want_swap`, so `hard` and unswapped `split` inherited a previous
+     `--swap` run's `0,240` while announcing `y=0`; it is now written unconditionally and refuses if it
+     cannot reach `0,0`. The undo restored only `enabled` and `fb1/size`, never `output_size` or
+     `position` — which is what left the stale `800,120` above, i.e. the tool manufactured the state that
+     corrupts its own next run; both are now saved, restored and printed in the receipt. Three inline
+     copies of the plane mapping ignored both `ioctl` returns and fed a possibly uninitialised
+     `line_length` to `mmap` as a length, and none blacked the stride tail, whose stale contents the
+     hardware arm would upscale onto the panel; one `map_plane()` helper now does all three. And `--swap`
+     was accepted in every mode, printed as `swap=1` in the banner, and applied only by `split`.
+     ⚠️ **The mode-acceptance refusal cannot be seen firing from here** — nothing available makes the
+     driver grant something other than what was asked — so it is the one fix that stays unvalidated.
+     ⚠️ The header's own receipt figure was **false**: it cited `write 128000, read 131072` while the code
+     rounded to a page *before* writing, so request and readback were always identical and the
+     page-rounding line always described a no-op. The exact byte count is now written, which is what
+     makes the documented rounding something the receipt can show.
    - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
      is the subject, and each game would additionally need its own operator eye run. Three layers, worst
      first:
@@ -549,6 +570,24 @@ trap is that a generic match has `driver_info == 0`, so `btusb.c:3142` never tak
 `BTUSB_REALTEK` branch and `btrtl_setup_realtek` does not run at all** — no firmware or config download
 happens, whatever the chip is. This `btrtl` knows five ROM subversions only (8723A, 8723B, 8821A, 8822B,
 8761A); RTL8761**B**/BU, the likely chip, landed around 5.8, and there is no `hci_rev` lookup table yet.
+
+⚠️ **The deciding number is not reachable with what is on the unit — measured on `.188` 2026-09-11:
+`hcitool`, `bluetoothctl` and `bluetoothd` are all ABSENT.** There is no BlueZ userspace at all, so the
+fallback path above has nothing to run, and the module set is not sufficient on its own — a cross-built
+BlueZ is a prerequisite for the one measurement this entry says everything depends on. The entry
+formerly inferred BlueZ's presence from D-Bus being kept, which establishes the dependency and not the
+package. (The `/lib/modules/4.14.52/` "ships empty" note above is a *stock* measurement; a provisioned
+unit has `extra/` and a module index.)
+
+⚠️ **"We have no ALSA" is false, and it changes what `bluez-alsa` would cost — measured on `.188`
+2026-09-11.** `libasound.so.2.0.0`, `aplay`, `amixer`, `alsactl` and `speaker-test` are all present, and
+`/proc/asound/cards` lists the panel card and the USB dongle. OSS `/dev/dsp` is an emulation layer over
+that same card, not the native one ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). What
+is missing is the alsa-lib **dev** side only — `/usr/include/alsa` does not exist. So `bluez-alsa` is
+not blocked by ALSA's absence; it is a cross-compile against alsa-lib headers we would have to source,
+a cost this entry never priced, on top of the audio half it already calls the unlikely half. ⚠️ This is
+also the trigger the declined *Native ALSA backend* item names for revisiting it — two entries now
+disagree and the operator's ruling decides which.
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
