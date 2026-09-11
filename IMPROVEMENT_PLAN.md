@@ -154,37 +154,6 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### D8. USB audio ships and works, and nothing an operator reads says so — open, confirmed 2026-09-11
-
-Raised by the operator, who asked for USB sound as a *missing feature* on a unit that already has it. The
-function is proven: the four class modules load with plain `insmod` from `/etc/init.d/usb-audio-modules`,
-linked at `S88` by `commissioning/provision.sh`, the OSS shim is in-kernel, the card appears as a second
-node `/dev/dsp1` while `/dev/dsp` stays the panel speaker, and it was **ear-confirmed at the panel on
-headphones and silent on the speaker** for `snake` and independently for ScummVM, at ~0.6 pp of the core
-over onboard. The facts live in [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) and
-`native_apps/CLAUDE.md`, which is correct — but **`README.md` and `COMMISSIONING.md` mention USB audio
-nowhere at all**, measured 2026-09-11 by grep for `usb.?audio`, `dsp1` and `headphone` across both.
-
-So the gap is discoverability, and it has a specific trigger: `audio_device` defaults to `onboard`
-(`common/config.c`, `common/audio_out.c`), so a plugged-in dongle stays silent until Settings →
-`OUT: USB`/`AUTO` → SAVE, and the app is relaunched. An operator with the dongle in hand and no line in
-either operator-facing document reasonably concludes the feature does not exist.
-
-The fix is one short paragraph in `README.md` naming the setting and the relaunch, and one line in
-`COMMISSIONING.md` where `usb_host/build-and-deploy.sh` is already described. ⚠️ Both files are under a
-group D ceiling, so it is paid for by a deletion or an argued raise in the same commit — which is why this
-is an entry rather than an edit already made. ⚠️ **Do not restate the mechanism**: only the setting and
-where it lives belong in an operator document.
-
-The setting the paragraph has to name is **operator-confirmed working, 2026-09-11** — the Device Tools
-USB-audio switch was exercised at the panel, not just the playback path — so nothing about the function
-or the control remains to be established before the wording is written.
-
-⚠️ One caveat to carry into any wording: the measurement is `[n=1]` on the single C-Media card recorded in
-the audio section linked above, whose rate-and-channel table is *that card's* and not a class fact. The
-operator's own dongle is described as a "C-Media CMI" and no CMI-chip part number appears anywhere in the
-repo, so it is untested.
-
 ### B36. Nothing recovers an output device unplugged mid-playback — open, confirmed 2026-09-09
 
 Surfaced by the USB-audio work rather than by a report: exercising the dongle end to end is what put a
@@ -383,6 +352,30 @@ the display section linked above.
      holds, and excluding the cursor, which `drawCursor()`:585-588 writes destructively at OUTPUT
      resolution after the scale. That defeats the "a grab off `fb0` is already arm A" argument the tool's
      own header makes against a `--ppm` loader, and it is the cheap next step.
+   - **A real 320×200 frame is captured, and the destination rect is now half measured rather than
+     predicted — `.188`, 2026-09-11.** `/opt/games/scummvm kq2` started over SSH with the launcher
+     stopped renders without any touch, so the capture needs no hand at the panel: AGI, static screens,
+     no SMUSH decoder. One 16bpp page off `/dev/fb0` while exactly one engine was running is at
+     `C:\work\rw-scratch\kq2_fb.raw`. **The non-black bounding box of that frame is 732×450 at panel
+     (0,30)**, and the 450 rows settle the size: `scaledHeight` 450 forces `scale` 576, which forces
+     `scaledWidth` **720** — so the isotropic 720×450 prediction is now *measured on a real frame*, not
+     just read out of `getScalingInfo()`. ⚠️ **The ORIGIN is not settled and the bbox cannot settle
+     it.** The box is 12 columns wider than the 720 the same box's height implies, and starts at x=0
+     where the prediction says 40, so it contains non-picture pixels — the game's own black edges shrink
+     it in one axis while something outside the picture widens it in the other. Panel row 30 against a
+     predicted logical `offsetY` of 0 is also unreconciled, and the bezel line on this unit is
+     `15 13 0 0`, so `view_y` 15 accounts for half of it and nothing yet accounts for the rest.
+     **So `--auto-rect` is a convenience to sanity-check, never the trustworthy form** — the rect has to
+     be computed from the same integer chain the engine used, and closing the origin is the first thing
+     the real-art run needs.
+   - **Two eye readings of the SOFTWARE arm on real art, operator at the panel 2026-09-11 — arm A
+     alone, not an A/B.** *Full Throttle*: *"yes too sharp :)"*. *King's Quest 2*: *"King's Quest is
+     running. Very sharp"*. Both point the same way the ruling already does — sharp is not automatically
+     the win on old art — but neither is a comparison, so neither ranks the arms. ⚠️ The *Full Throttle*
+     capture was **discarded**: two `scummvm` processes were running and fighting over `fb0`, operator-
+     confirmed from the panel (*"flasing like crazy"*, *"two engines fighting over: yes"*), from a single
+     `nohup` launch whose duplication is **unexplained**. Verify exactly one PID before trusting any
+     capture, and re-check it after the grab.
    - **The shape of the selectable path, if it is built.** `getScalingInfo()`:138-172 is the one
      chokepoint — every consumer of the geometry reaches it. The software resample a hardware choice
      bypasses is `blitGameSurfaceToFramebuffer()`:440-573, and the two inverse mappings that must follow
@@ -407,6 +400,20 @@ the display section linked above.
      reads `rw_config.conf`. A toggle in the settings app therefore needs a bridge, and which side owns
      it is a decision rather than a detail. `rwDebugMode()` (:80-91) is env-only with no ConfMan key at
      all, so it is not the model to copy.
+   - **The bridge is decided, and the answer is that it needs no bridge — operator, 2026-09-11.** The
+     upscale choice is a **device-level** setting in `/opt/games/rw_config.conf`, not a ScummVM setting,
+     on the operator's reasoning that the panel's scaler is a property of the device and any later
+     emulator asks the same question: *"I think this is a device setting. If there will be other emulator
+     (libretro, right?) then this should be global settings. The upscaling should be on device level."*
+     ⚠️ **That costs no new mechanism, measured 2026-09-11**: `backend-files/configure.patch`:16 already
+     appends `../native_apps/common/config.o` to ScummVM's `OBJS`, and the backend already reaches one
+     function in it — `oss-mixer.h`:34 hand-declares `config_audio_device_stored(void)` because
+     `config.h` carries no `extern "C"` guard, and `oss-mixer.cpp`:138 calls it. That function
+     (`common/config.c`:317-324) opens `CONFIG_FILE_PATH` itself, takes no `Config` handle from the
+     caller and returns a static string. So the shape is a sibling of it, hand-declared once in the
+     backend: **no ConfMan key, no INI writing from `device_tools`, and a later emulator reads the same
+     one function.** `rw_content_area` stays ScummVM-only and is not the precedent — a content area is
+     engine policy, an upscale path is a device capability.
    - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
      is the subject, and each game would additionally need its own operator eye run. Three layers, worst
      first:
