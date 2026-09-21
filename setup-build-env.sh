@@ -137,6 +137,8 @@ kmod|cmd|bc|bc
 kmod|file|/usr/include/openssl/opensslv.h|libssl-dev
 kmod|cmd|bison|bison
 kmod|cmd|flex|flex
+kmod|cmd|mkimage|u-boot-tools
+kmod|cmd|dtc|device-tree-compiler
 check|cmd|shellcheck|shellcheck
 EOF
 }

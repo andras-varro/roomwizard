@@ -788,11 +788,26 @@ group_c() {
 # IMPROVEMENT_PLAN.md, which cross-references this section instead. The plan absorbed its own share
 # inside its standing slack and FELL on net, because the withdrawn upscale switch took three bullets of
 # design work with it. 1744 is the measured post-edit count and grants NO headroom.
+# 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
+# The file was AT its ceiling with zero slack and the kernel-image question moved from untried to measured,
+# which is four separate facts a gate cannot see for itself. (1) A full image LINKS and packages, and the
+# mkimage recipe is proven by a byte-identical round trip against the vendor image -- the recipe has to be
+# written down or it is re-derived, and `-C none` is the part that is counter-intuitive enough to be got
+# wrong twice. (2) The drop table was WRONG, not merely thin: it rated the dropped Sharp panel driver
+# "cost: none -- reduces to a stock panel-dpi node", and the vendor DTB names a compatible string no
+# vanilla driver claims, so the honest cost is a blank panel. A stale claim is corrected with a
+# measurement, not deleted. (3) Two more dropped symbols had no row at all, one of them the only drop that
+# can stop the image booting. (4) The module-vs-image line existed ONLY in IMPROVEMENT_PLAN.md, which is a
+# queue that gets deleted -- a real one-fact-one-home gap, and the rule (decide from the device's own
+# config; a `=y` driver is still evictable if its bus exposes unbind) is what the next session needs.
+# Nothing was compressed to pay for it: the alternative was deleting measured traps from the file that is
+# their home. IMPROVEMENT_PLAN.md and HARDWARE.md absorbed their share of this work into standing slack.
+#
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1744	SYSTEM_ANALYSIS.md
+1778	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 215	README.md

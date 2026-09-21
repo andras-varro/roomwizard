@@ -1405,11 +1405,13 @@ in `/etc/securetty`). U-Boot prints there too with `bootdelay=1` — a one-secon
 `rw20 #` prompt. Physically it comes out at **`P4`** at RS-232 levels — pinout in
 [Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion).
 
-> **The serial console is deliberately not used by this project.** The recovery loop is: pull the
-> SD card, reimage, DHCP, SSH. Since the rules in §1 keep NAND and U-Boot untouched, the card *is*
-> the entire failure surface — serial would add boot-time *visibility*, not recovery capability.
-> Revisit only if NAND or U-Boot ever get written. The header is fully characterised, so picking
-> it up later is cheap.
+> **The serial console is not on the recovery path, but the header is now fitted.** Recovery is: pull
+> the SD card, restore it from the image commissioning takes, DHCP, SSH. Since the rules in §1 keep NAND
+> and U-Boot untouched, the card *is* the entire failure surface — serial adds boot-time *visibility*,
+> never recovery capability. What it does buy is the only channel that says *why* an image we built
+> failed, and the only way to boot an alternate filename at all ([Kernel policy](#7-kernel-policy)).
+> ⚠️ It is RS-232 behind `U27`, so a 3.3 V USB-TTL cable will not work
+> ([Unpopulated and expansion](HARDWARE.md#4-unpopulated-and-expansion)).
 
 **UART3 is the 802.15.4 / XBee port, and it is dark.** Two independent vendor sources agree:
 
@@ -1719,8 +1721,9 @@ Verified behaviour:
 - **No boot-time MD5 verification of the kernel.** The only integrity gate on `uImage-system` is
   its uImage header CRC + data CRC — which `usb_host/patch_dtb.py` recomputes correctly, which is
   why the DTB patch works at all. Both CRCs, the header's own size field and the `power` value are
-  checkable in pure Python with `usb_host/verify_uimage.py`; **neither `mkimage` nor `dtc` is
-  installed in this WSL and neither is needed.** ⚠️ The data CRC must be recomputed *before* the
+  checkable in pure Python with `usb_host/verify_uimage.py`, **which needs neither `mkimage` nor
+  `dtc`** — both are in fact installed here (measured 2026-09-21), but that path has to run wherever
+  the offline bundle lands. ⚠️ The data CRC must be recomputed *before* the
   header CRC — the header carries the data CRC, so the other order signs a header that is already
   stale, and these two CRCs are the only thing standing between a bad write and a unit that does not
   come up with no serial console to say why.
@@ -1732,6 +1735,22 @@ Verified behaviour:
   `sd_log_part.img.md5`); and a post-write read-back comparison after each `dd`, with up to 3
   retries per partition and exit code 6 on final failure. Modify anything in that tree and every
   `.md5` beside it has to be regenerated.
+
+**Packaging an image we build, verified against the vendor's own.** Concatenate then wrap, reusing the
+vendor DTB verbatim — it is extracted from `uImage-system`, since the board has no separate `.dtb`:
+
+```
+cat arch/arm/boot/zImage vendor.dtb > zImage-with-dtb
+mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n '' \
+        -d zImage-with-dtb uImage-test
+```
+
+⚠️ **`-C none`, never `-C gzip`.** `-C` describes the blob handed to `mkimage`, and a `zImage` already
+self-extracts, so `CONFIG_KERNEL_GZIP` does not enter into it; **measured** from byte 31 of the vendor
+header. The whole recipe is proven by round trip: re-wrapping the vendor's *own* payload under
+`SOURCE_DATE_EPOCH=1529971593` reproduces `edc637ac14f90e0187b1ed65ffedf6d7` with zero differing bytes.
+`mkimage` and `dtc` are declared in `setup-build-env.sh`'s `kmod` group; a clone without them can build
+modules but cannot package an image.
 
 ### 4.7 Recovery
 
@@ -2052,14 +2071,29 @@ Steelcase for their source is also ruled out, and is needed for neither.
 **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
 not Steelcase source — but `build-kernel-modules.sh` configures it from the device's own `/proc/config.gz`
 plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
-there (`vermagic=4.14.52`). Whether a full image links is untried; the tree is not what would stop it.
-What an image built from it must supply for itself:
+there (`vermagic=4.14.52`). **A full image links and packages — measured 2026-09-21**: 5,195,732 bytes,
+load and entry `0x80008000`, by the recipe in [Boot chain and recovery](#4-boot-chain-and-recovery).
+⚠️ **The device is not running vanilla 4.14.52, though.** Its own config carries `CONFIG_CPU_SPECTRE` and
+`CONFIG_HARDEN_BRANCH_PREDICTOR`, neither of which exists for 32-bit ARM in .52 — so the vendor built
+with post-.52 stable backports, and an image from this tree is *close to* the device's kernel rather than
+the same one. What an image must supply for itself, `olddefconfig` having dropped each of these silently:
 
 | `/proc/config.gz` symbol | Absent from vanilla 4.14.52 | Cost |
 |---|---|---|
-| `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **none** — it reduces to a stock `panel-dpi` node now the timings are recorded in [Display](#32-display) |
+| `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **a blank panel, and not fixable by config** — the vendor DTB's `/display` is `compatible = "sharp,lq070y3lg4a"` alone, vanilla's `panel-dpi` matches only `omapdss,panel-dpi` (`displays/panel-dpi.c`, and `omapdss-boot-init.c` prepends the prefix), and a compatible string does not degrade — so nothing in the tree claims that node. `CONFIG_FB_OMAP2_PANEL_DPI=y` is **already set**. The timings are recorded ([Display](#32-display)) and the panel's three control lines are DT properties on that node (`pwrdn-gpios`, `lvds-gpios`, `backlight-gpios`), so the cost is a `panel-dpi` clone that reads them, built out-of-tree; ⚠️ **measured**: the vendor panel driver exposes no `bind`/`unbind`, so unlike touch this cannot be rehearsed on the running kernel |
 | `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low** — every other peripheral is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc, `ti,omap-twl4030` audio), and `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
-| `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **the standing cost** — `olddefconfig` drops it **silently**, so an image built from this tree as it stands boots with a dead touchscreen. The controller's I2C register map is published Cypress documentation ([Touch](#33-touch)); the absent vendor source would only have supplied a driver ready-made |
+| `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **a dead touchscreen**, from a silent drop. The controller's I2C register map is published Cypress documentation ([Touch](#33-touch)); the absent vendor source would only have supplied a driver ready-made. ⚠️ **But it is rehearsable before any image exists — measured**: `/sys/bus/i2c/drivers/panjit_ts/` carries `bind` and `unbind` with device `2-0003`, so a replacement module can evict the vendor driver on the running kernel, with a reboot as the undo and no write to p1. `input_mt_*` is exported there too, so multi-touch needs no image either |
+| `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **the unquantified one, and the only drop that can cost a card pull** — the pin-package setup goes with the board file, so restoring the touch symbol alone does not bring it back. Whether DT pinctrl covers everything it did is **[unverified]**; triage it by reading the decompiled vendor DTB's pinmux nodes *before* the first boot, which costs nothing and is the one thing that could stop the image coming up at all |
+| `CONFIG_LOGO_LINUX_RW20_CLUT224` | a vendor boot logo | **cosmetic** — and the running kernel suppresses it anyway with `initcall_blacklist=fb_logo_late_init` in `bootargs`, so an image we build is free to carry its own |
+
+**Module or image: decide it from the device's own config, not from the subsystem.** A feature whose
+symbols are tristate is reachable as an out-of-tree `.ko` built against this tree with no image at all —
+the `joydev`/`xpad`/`ff-memless` set is the worked precedent — and this kernel takes them readily
+(`CONFIG_MODULE_FORCE_LOAD=y`, `CONFIG_MODVERSIONS=y`, `CONFIG_MODULE_SIG` unset). A feature the vendor
+built **in** cannot be reached that way at all: the DSS and MUSB are both `=y`, so an overlay-plane change
+or `CONFIG_USB_INVENTRA_DMA` needs the image and nothing cheaper will do. ⚠️ **A `=y` driver can still be
+evicted if its bus exposes `unbind`**, which is what decides whether a replacement can be rehearsed on a
+running vendor kernel — measured yes for `panjit_ts`, no for the panel.
 
 **Why build one: the image becomes publishable.** A kernel compiled here ships with its own
 corresponding source and can go in a release; the vendor's `uImage-system` never can (`LICENSE.md`).
@@ -2069,14 +2103,16 @@ power cycle is no longer a free undo on either bring-up path. **The argument is 
 not performance.** The config defects a rebuild also fixes (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
 real, but none of them limits anything measured.
 
-**Verification is the cost that scales.** A kernel that fails to boot does not trigger recovery: U-Boot
-prints `Failure to load system kernel image` and lands at the `rw20 #` prompt with nothing changed
-([Boot chain and recovery](#4-boot-chain-and-recovery)), so each bad image costs a card pull and a
-reimage by hand. There is no `/dev/uinput`, so a booting image with dead touch cannot be
-regression-tested from the host either — every iteration needs an operator at the panel. ⚠️ **And the
-one channel that would show *why* an image failed is not fitted:** the console comes out at `P4`,
-characterised but unpopulated ([Serial ports](#312-serial-ports)), whose recorded revisit condition was
-written before this ruling.
+**Verification is the cost that scales, but the exposure is one step.** A kernel that fails to boot does
+not trigger recovery: U-Boot prints `Failure to load system kernel image` and lands at the `rw20 #`
+prompt with nothing changed ([Boot chain and recovery](#4-boot-chain-and-recovery)). Booting an alternate
+*filename* needs that prompt, so it needs the console; overwriting `uImage-system` does not, and its
+recovery is a card pull plus copying a backup back onto p1, which is plain FAT and mounts on the host —
+not a full reimage. ⚠️ **So spend the risk once, on a config-only image, and assert the result over SSH
+rather than by looking at the panel**: the first image is expected to come up blank and untouchable, and
+a blank panel therefore proves nothing about whether it booted. Once SSH answers, every panel and touch
+iteration after that is a `.ko` copied over SSH with no physical access at all. There is still no
+`/dev/uinput`, so touch itself always ends at an operator ([Touch](#33-touch)).
 
 **A mainline 5.x/6.x port stays out, on DRM/KMS.** `omapfb`/`omapdss` were deprecated across 4.x and
 **removed from mainline during 5.x**; the OMAP3 replacement `omapdrm` is a DRM/KMS driver. Under it
@@ -2102,9 +2138,11 @@ answer until such a change is written and measured; the refuted mechanisms are t
 
 ## 8. Hardware policy
 
-**Use the device as delivered. No modification to the board, and no soldering.** Settled by the
-operator 2026-09-06, and it is a scope rule rather than a feasibility claim — several of the things it
-rules out are entirely doable.
+**Use the device as delivered: no modification to the board.** Settled by the operator 2026-09-06, and it
+is a scope rule rather than a feasibility claim — several of the things it rules out are entirely doable.
+⚠️ **The no-soldering half has been spent once, deliberately:** the operator fitted the `P4` console
+header 2026-09, for the boot visibility an image we build otherwise has no way to get
+([Serial ports](#312-serial-ports)). The rule stands for everything else.
 
 **What it excludes.** Anything whose first step is a wire, a pad or an iron. The two worked examples:
 

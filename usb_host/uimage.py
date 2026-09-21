@@ -7,10 +7,12 @@ one that drifts is the one that reports a patched image as clean.
 
 ── Why this is pure Python ─────────────────────────────────────────────────
 
-Neither `mkimage` nor `dtc` is installed in this WSL, and neither needs to be:
+`mkimage` and `dtc` ARE present in this WSL -- measured 2026-09-21, and an image
+we build is packaged with them -- but nothing on this path may need them:
 a uImage header is 64 bytes with two CRC32s, and an FDT is a documented
 structure.  So the whole gate/patch/verify sequence runs with nothing but
-python3, which the offline installer already requires.  usb_host/verify_patch.sh
+python3, which the offline installer already requires, and it runs wherever the
+bundle lands rather than only on a host that happens to carry u-boot-tools.  usb_host/verify_patch.sh
 used to do this with `mkimage -l` plus `dtc -I dtb`, from a hardcoded
 /mnt/c/work/roomwizard/usb_host — it could not run on this host at all.
 

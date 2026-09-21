@@ -612,6 +612,13 @@ framebuffer. Reported 2026-08-06 as missed but not much missed.
 `/usr/bin`, which nothing sweeps. Only the init script and its `rcS.d` link were removed, so this is a
 *decision*, not a loss.
 
+⚠️ **And there is a third route nobody has costed: the kernel one.** The vendor kernel carries a
+compiled-in boot logo that its own `bootargs` suppress with `initcall_blacklist=fb_logo_late_init`, so an
+image we build could show a logo before userspace exists at all — earlier than `psplash` can, and with no
+contest for `/dev/fb0` ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). It is not a reason to
+build an image, and it does not make this entry kernel-gated: the two userspace routes below stand on
+their own.
+
 Two ways to have it back, if wanted:
 
 1. **Restore the link and hand off cleanly.** `psplash` must release `/dev/fb0` before
@@ -841,7 +848,11 @@ instructions imply that any machine with a card reader will do.
 **The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's.** The policy and the
 standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
 `usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
-`build-kernel-modules.sh` and already **measured** producing modules that load on the device.
+`build-kernel-modules.sh` and already **measured** producing modules that load on the device. ⚠️ **The
+build and the packaging are no longer the question — measured 2026-09-21, a full image links and wraps
+into a `uImage` by a recipe proven byte-identical against the vendor's own**
+([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the drop
+list, the boot channel and the two replacement drivers.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -854,8 +865,9 @@ strength of this entry.
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | a `panjit_ts` equivalent, written from the published Cypress register map ([`#33-touch`](SYSTEM_ANALYSIS.md#33-touch)) | **the one blocker.** Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07 |
-| MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set, `CONFIG_MUSB_PIO_ONLY` unset | a genuine build defect; retires the runtime patch |
+| Touch | a `panjit_ts` equivalent, written from the published Cypress register map ([`#33-touch`](SYSTEM_ANALYSIS.md#33-touch)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). Nobody has estimated the hours, and that estimate is the missing input |
+| Display | a `panel-dpi` clone carrying the recorded timings plus the pwrdn/lvds/backlight GPIO sequence, out-of-tree | **the blocker that has no rehearsal** — the vendor DTB names a panel no vanilla driver claims, and the panel driver exposes no `unbind`, so the first proof is a booted image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). Preferred over editing the DTB, which p1 cannot roll back in place. ⚠️ **[inferred]** that a *module* panel binds under a built-in DSS at all, and **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
+| MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
@@ -863,12 +875,27 @@ strength of this entry.
 | Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 holds the measurement and is what this unblocks |
 | DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. F2 holds the A/B this would overturn and [§3.2](SYSTEM_ANALYSIS.md#32-display) the coefficients |
 
-**Verification is the expensive half, and it needs a plan before the first build.** A bad image costs a
-card pull and a reimage by hand, and nothing on the device says why it failed
-([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). ⚠️ **Stage every
-experimental image under a NEW filename and leave `uImage-system` in place**, so the working boot
-survives a bad one. Whether to fit the `P4` console header — the only channel that shows a boot log, and
-a board change the hardware policy currently bars — is an open question for the operator.
+**The order to do it in, cheapest first.** Each step is worth finishing before the next is started.
+
+1. **~~Triage the board-file drop~~ — done 2026-09-21, and it mostly cleared.** The DTB carries its own
+   pinmux and its own audio binding ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), so the dropped package
+   symbol has little left to have been doing. What is still unread is the vendor's DT machine descriptor
+   itself: find what `ti,omap3-rw20` matched in the vendor tree and what its init hooks ran. That is the
+   last thing that could make step 2 fail outright, and it is still a host-only read.
+2. **Boot one config-only image and assert it over SSH.** ⚠️ **Not by looking at the panel** — a first
+   image is expected blank and untouchable, so the panel cannot distinguish a booted kernel from a dead
+   one. `ssh uname -a` and `dmesg` are the test.
+3. **Then the two drivers, iterated as `.ko` over SSH**, with no further physical access: touch (already
+   rehearsable on the vendor kernel today) and the panel clone (only testable from step 2 onward).
+
+**Which boot channel, and what it costs.** ⚠️ **Booting an alternate filename requires the `rw20 #`
+prompt**, so it requires the console; overwriting `uImage-system` does not, and recovery for that is a
+card pull plus copying a backup back onto p1
+([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). The operator has **fitted
+the `P4` header** — so what is left is not a board change but an adapter: `P4` is RS-232 behind `U27`, and
+a 3.3 V USB-TTL cable will not work on it ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
+⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a way around this: it overwrites two
+protected files and destroys the vendor recovery image. Considered and rejected 2026-09-21.
 
 ## Structural and cleanup
 

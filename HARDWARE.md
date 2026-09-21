@@ -109,7 +109,7 @@ Where to look for each on the board:
 | `J7`, `J8` | 5-pin white **JST** | Side LED status bars in the left/right case edges |
 | `P2` | Long fine-pitch 2-row, **unpopulated** | **Unknown** — the last unidentified footprint |
 | `P3` | 2×7, 0.1", **unpopulated** | **TI-14 JTAG** (high confidence) |
-| `P4` | 2×5, 0.1", **unpopulated** | **RS-232 console** via `U27` — verified |
+| `P4` | 2×5, 0.1", **header fitted by the operator 2026-09** | **RS-232 console** via `U27` — verified |
 | — | 40-pin **FFC** | Display panel harness |
 
 `J1`, `J3`, `J7`/`J8` and the 40-pin display FFC are all visible unobstructed in
