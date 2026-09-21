@@ -244,16 +244,38 @@ manager1: tv   display=<none>
 ```
 
 Each overlay exposes `output_size`, `position`, `zorder`, `global_alpha` and `pre_mult_alpha`;
-`input_size` and `screen_width` are **read-only** and track the bound framebuffer's mode, so input
-geometry is set with `fbset -fb /dev/fb1` and never by writing sysfs. The manager exposes
+`input_size` and `screen_width` are **read-only** — both `OVERLAY_ATTR`s pass `NULL` for the store
+method (`dss/overlay-sysfs.c:375`) and `overlay_attr_store()` answers `-ENOENT` when there is none
+(`:429-430`), so a write *fails* — and they track the bound framebuffer's mode, so input geometry is
+set with `fbset -fb /dev/fb1` and never by writing sysfs. ⚠️ **`screen_width` is the SOURCE row stride
+in pixels, not a destination width**: it is `line_length / (bits_per_pixel >> 3)`
+(`omapfb-main.c:897`, stored into the overlay info at `:909`, shown at `dss/overlay-sysfs.c:126-133`)
+and is consumed only as the DMA row stride (`dss/dispc.c:1917-1918,2012,2135`). So `screen_width 320`
+under a 320×200 RGB565 `fb1` is **correct and is not a blur cause** — do not go hunting there.
+
+⚠️ **Three overlays enumerate but only TWO framebuffers exist, so `vid2` can never be funded from
+userspace.** Measured on `.188` 2026-09-11: `/sys/class/graphics/` holds `fb0` and `fb1` only, against
+three `overlay*` directories under `omapdss`, because the running kernel has
+`CONFIG_FB_OMAP2_NUM_FBS=2` (`/proc/config.gz`). There is no `fb2` node to bind, so an `overlay2`
+plane has no way to get memory and the third plane is out of reach until an image is built with the
+value raised — a **config-only** change with no source patch. `vid1` is the only scaling plane
+userspace can actually use.
+
+The manager exposes
 `trans_key_enabled` (colour keying) and `alpha_blending_enabled`. ⚠️ **`gfx` (`overlay0`) has NO
 scaler**, so the input and output sizes are *not* freely independent on the plane the apps use:
 `omap3430_dss_overlay_caps[]` omits `OMAP_DSS_OVL_CAP_SCALE` for it (`dss/dss_features.c:341`) and
 `dss_ovl_simple_check()` returns `-EINVAL` for any `width != out_width` (`dss/overlay.c:116`). Only
-`vid1`/`vid2` scale, and **downscale is capped at 4× per axis with 5-tap filtering (2× vertically with
-3-tap) while no upscale limit is enforced at all** (`dss/dispc.c:2383`, `dss_features.c:431`). On a
-GPU-less 600 MHz part this is the only graphics acceleration available. (`omap_vout: failed to
-allocate DMA Channel for video-1` appears at boot and is uninvestigated.)
+`vid1`/`vid2` scale, and the limits are **per axis and different in each direction — measured in the
+vanilla tree**: **downscale 4×**, which is `FEAT_PARAM_DOWNSCALE = {1,4}` (`dss/dss_features.c:436`)
+and is downscale-only; **upscale 8×**, refused by `out_width > width * 8` and the matching height test
+(`dss/dispc.c:2515` and `:2518`). Two further gates: **maximum single-line width 1024 px**
+(`FEAT_PARAM_LINEWIDTH`, `dss/dss_features.c:437`, enforced at `dss/dispc.c:2378` and `:2411-2420`),
+and the output must be framed — `pos + out <= res` on each axis or `-EINVAL` (`dss/overlay.c:174-186`).
+**[inferred]** a *pure* upscale is the cheapest case for the core-clock gate, because
+`calc_core_clk_34xx()` raises its factors only when an axis shrinks and so returns plain `pclk`
+(`dss/dispc.c:2259-2272`) — precondition: no downscale on either axis. On a GPU-less 600 MHz part this
+is the only graphics acceleration available.
 
 **Measured on `.188`: `vid1` upscaling 400×240 → 800×480 full-screen, over the app, with no reboot,
 no boot parameter and no kernel work.** `fb1` is the second framebuffer
@@ -267,6 +289,55 @@ rejected at write time: `echo 384000 > /sys/class/graphics/fb1/size` (allocates 
 240 32`, `output_size`, then `enabled=1`. Undo is `enabled=0` then `size=0`. `zorder` is **not
 writable** on this SoC and does not need to be: the fixed order is GFX < VID1 < VID2, so `vid1`
 composites above the app with `alpha_blending_enabled=0`.
+
+⚠️ **`fb1/size` and `overlay1/enabled` both reading `0` is the IDLE state, not a capability limit, and
+the boot-time `omap_vout` error does not change that.** Measured on `.188` 2026-09-11, with
+`omap_vout: failed to allocate DMA Channel for video-1` in that boot's log: funding `fb1` from sysfs
+succeeded (128000 bytes written for a 320×200 RGB565 surface, **131072 read back** — the allocator
+rounds up to a page), `enabled` then read `1`, and the upscale was **visible on the panel**. That error
+is an `omap_vout` (V4L2) failure and bears only on `/dev/video0`; it does not prevent sysfs-driven
+`vid1` use.
+
+**⚠️ A scaled overlay is ALWAYS filtered — there is no nearest-neighbour path and no filter-off bit.**
+Measured in the vanilla tree. `dispc_ovl_setup_common()` calls `dispc_ovl_set_scaling()` for any plane
+carrying `OMAP_DSS_OVL_CAP_SCALE` (`dss/dispc.c:2771-2775`); that function (`dss/dispc.c:1720-1734`)
+unconditionally reaches `dispc_ovl_set_scale_param()` (`dss/dispc.c:1597-1599`), which writes all
+**8 FIR phases** into the coefficient registers (`dss/dispc.c:654-697`). The only hardware bypass is
+the `RESIZEENABLE` attribute bit, and it is set purely on size *inequality*
+(`dss/dispc.c:1603-1605`) — so the moment input ≠ output the FIR is in the path, and nothing can ask
+for point sampling.
+
+**Which coefficients you get is decided by the scale ratio alone.** `fir_hinc = 1024 * orig_width /
+out_width` (`dss/dispc.c:1490-1491`), and `dispc_ovl_get_scale_coef()` buckets on `inc / 128`
+(`dss/dispc_coefs.c:289-325`, bucket select at `:320`). Horizontal is hardcoded to the **5-tap** table
+(`dss/dispc.c:661` passes `true`); vertical is **3-tap** for any upscale, because
+`*five_taps = in_height > out_height` (`dss/dispc.c:2354`) is false whenever the output is taller.
+
+⚠️ **Above 2× upscale the driver DELIBERATELY picks a softer kernel, and says so** — the comment is at
+`dss/dispc_coefs.c:310-314`: above 2× the M8 tables show "blockiness and outlines around the image", so
+M11/M16/M19 are substituted to hide it. A 320 → 800 upscale gives `fir_hinc` 409, bucket 3, hence
+`coef5_M11` phase 0 `{-5,23,92,23,-5}` (`dss/dispc_coefs.c:190-199`) and `coef3_M11` phase 0
+`{0,14,100,14,0}` (`:58-67`). Neither is an identity kernel, so **pixel-art text is smeared at exactly
+the ratio a 320×200 engine wants.**
+
+**Exact 2× is the sharpest ratio reachable, and it rings.** `inc = 512` lands in bucket 4, which is
+`coef5_M8` / `coef3_M8`, and phase 0 of both is the identity `{0,0,128,0,0}`
+(`dss/dispc_coefs.c:26,158`). **[inferred]** at exactly 2× the FIR accumulator alternates phase 0 and
+phase 4, so half the output pixels pass through untouched — that step is register arithmetic beyond
+what the source states, while the coefficient values themselves are measured. But horizontal phase 4 is
+`{0,-14,78,78,-14}` — **negative lobes, i.e. a sharpening kernel that overshoots at a high-contrast
+edge** — where vertical phase 4 is a clean `{0,64,64,0,0}`. So the other half of the columns ring.
+
+**None of it is tunable from userspace at any ratio.** All 24 tables are file-scope `static const`
+(`dss/dispc_coefs.c:25-287`), the sole selector is `dispc_ovl_get_scale_coef()`, and it is called only
+from `dss/dispc.c:661-662`. The overlay's whole sysfs attribute set is listed at
+`dss/overlay-sysfs.c:372-403` — the writable members are the ones named above — and contains nothing
+coefficient-related. ⚠️ **No sysfs attribute and no ioctl in this tree reaches the filter**: the only
+choice a caller has is the ratio. ⚠️ **And a kernel *module* cannot reach the tables either** — measured
+on `.188` from `/proc/config.gz`, `CONFIG_FB_OMAP2_DSS=y` and `CONFIG_FB_OMAP2=y` are **built in**, no
+DSS module is loaded and no `omapfb`/`omapdss` module file exists under `/lib/modules`. Changing a
+coefficient table means a full image, which inherits the standing rebuild blocker in
+[Kernel policy](#7-kernel-policy).
 
 ⚠️ **A framebuffer screenshot cannot see an overlay.** `cat /dev/fb0` returns the gfx plane's own
 memory, not the composited panel — so overlay work is the one screen check in this repo that no

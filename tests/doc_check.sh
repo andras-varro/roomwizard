@@ -768,11 +768,31 @@ group_c() {
 # device-files/usb-audio-modules' own header already owns that number and the reason it is
 # deterministic. The plan lost far more than 24 lines to the same change. 1681 is the measured
 # post-edit count and grants NO headroom: the next addition to this file pays by deleting.
+#
+# ⚠️ 2026-09-11: SYSTEM_ANALYSIS.md 1681 -> 1744. §3.2 had no account of the DSS scaler's FILTER, and
+# the eye A/B that ranked software nearest-neighbour above the hardware plane could not be explained
+# without one -- so the next session would have re-derived it from the driver, which is what the last
+# one spent an afternoon doing. Five facts, all measured in usb_host/linux-4.14.52 and none of them
+# reachable from sysfs: a scaled overlay is always filtered with no filter-off bit, the coefficient
+# table is picked by ratio alone, above 2x the driver deliberately substitutes a SOFTER kernel and says
+# so in a comment, exact 2x reaches an identity phase but rings on its odd phases, and the tables are
+# static const with no sysfs or ioctl path to them. Two more are what reclassified the plan entry as
+# kernel-gated: the DSS is built IN rather than modular, so a coefficient patch is a whole image; and
+# three overlays enumerate against only two framebuffers (NUM_FBS=2), so vid2 can never be funded from
+# userspace at all. The same edit CORRECTED four standing claims in place rather than adding beside
+# them: the upscale limit is 8x per axis and was recorded as "no upscale limit enforced at all";
+# screen_width is a source row stride and was an unexplained blur suspect; input_size's read-only-ness
+# had no citation; and the boot-time omap_vout DMA error was "uninvestigated" where it is now measured
+# not to prevent sysfs-driven vid1 use at all. The file had no deletion left to make -- it was audited
+# at the 1681 raise the day before -- and the coefficient VALUES are deliberately not copied into
+# IMPROVEMENT_PLAN.md, which cross-references this section instead. The plan absorbed its own share
+# inside its standing slack and FELL on net, because the withdrawn upscale switch took three bullets of
+# design work with it. 1744 is the measured post-edit count and grants NO headroom.
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1681	SYSTEM_ANALYSIS.md
+1744	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 215	README.md

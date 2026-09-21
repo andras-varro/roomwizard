@@ -209,9 +209,16 @@ on ARM.
 
 ## Features
 
-Userspace except F101, which is the image build.
+Userspace except F101, which is the image build, and F2, which now waits on it.
 
-### F2. Use the DSS overlay planes — open, **biggest performance win available**
+### F2. Use the DSS overlay planes — open, **gated on a kernel build; waits on F101**
+
+⚠️ **Reclassified 2026-09-11 by the operator: what is left of this entry needs a kernel image, and no
+UI change is wanted.** *"We should keep what we learned, and tools, documented, but move the F2
+together with the other 'needs kernel compile' bucket. No changes are needed on the UI."* The heading
+used to read *biggest performance win available*; the userspace win was measured and then **rejected on
+image quality** — the A/B and the ruling are below. One config-only kernel item and one coefficient
+patch are what remain, and both fold into F101.
 
 **What compositing costs today, measured 2026-08-31 and *accepted* rather than filed as a fault:**
 `samegame` tapping over a music bed runs at **45 % CPU** on the one 600 MHz core, ScummVM playing *Full
@@ -220,8 +227,9 @@ same quantity as the 32 % below** — a game mixing while it redraws, against O1
 
 Three hardware overlay planes — **two of them with a scaler** — plus z-order, global alpha and
 colour-key, sitting unused. On a GPU-less 600 MHz part this is the only graphics acceleration that
-exists, and it is pure sysfs — no kernel work. Inventory, the live sysfs dump and the legacy-omapdss
-caveat: [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display).
+exists. ⚠️ **Reaching it was assumed to be pure sysfs. Measurement refuted that**: the userspace half
+works and lost on image quality, and every remaining step is kernel-side. Inventory, the live sysfs dump
+and the legacy-omapdss caveat: [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display).
 
 Suggested order. ⚠️ **The mechanism is proven and the recipe measured** — `vid1` upscaling
 400×240 → 800×480 full-screen over the running app, four writes, no reboot and no boot parameter. That
@@ -321,8 +329,10 @@ the display section linked above.
      rounded to a page *before* writing, so request and readback were always identical and the
      page-rounding line always described a no-op. The exact byte count is now written, which is what
      makes the documented rounding something the receipt can show.
-   - **THE EYE A/B IS RUN, and the ruling is "make it selectable" rather than "replace" — operator,
-     2026-09-11 on `.188`.** Four runs in the prescribed order with the launcher stopped, each restore
+   - **THE EYE A/B IS RUN. Its ruling was "make it selectable" rather than "replace" — operator,
+     2026-09-11 on `.188`. ⚠️ That switch was then WITHDRAWN by the operator; the real-art A/B below
+     killed the hardware arm at both reachable ratios, so nothing is selectable and no config key
+     exists.** Four runs in the prescribed order with the launcher stopped, each restore
      printed: `hard`, `soft`, `split`, `split --swap`. Verbatim: `hard` — *"test screen pattern. low
      res"*; `soft` — *"low res image, but very sharp"*; `split` (hardware top) — *"top is low res,
      blurry, bottom is low res sharp"*; `split --swap` (hardware bottom) — *"top is low res sharp,
@@ -334,15 +344,17 @@ the display section linked above.
      hand-poisoned to `0,240` first, the receipt shows it corrected to `0,0` and restored to `0,240`
      after, and the page-rounding line finally described something real (`wrote 128000, driver reads
      131072`). ⚠️ **The operator declined the framing "is the blur a problem":** *"I don't say that the
-     blurryness is a problem. In older games it can be a blessing."* **So the deliverable is no longer a
-     replacement — it is a user-selectable upscale path, software or hardware, and both stay.** The
-     setting belongs in the settings app.
-   - ⚠️ **What that eye run does NOT settle, and why a real-art run is still owed.** A card of 1 px and
+     blurryness is a problem. In older games it can be a blessing."* **So the deliverable stopped being a
+     replacement** — and the selectable path it became was itself **withdrawn** once real art was run;
+     see the withdrawal below.
+   - ⚠️ **What that eye run does NOT settle, and the real-art prediction it produced — kept here
+     because it was REFUTED, and the refutation is below.** A card of 1 px and
      2 px combs is the **best possible case for nearest neighbour and the worst possible case for a
      filter**: NN duplicates pixels so a comb stays a comb, while any filter averages it toward grey.
-     Real SCUMM art carries no 1 px combs — painted backgrounds, dithered gradients and diagonal edges
-     are where NN's uneven column doubling reads as *wobble* and a filter's softening reads as
-     *smoothing*, so the two could rank the other way round on game art. ⚠️ **And the card is 4%
+     ⚠️ **The prediction that followed is measured FALSE**: *"real SCUMM art carries no 1 px combs —
+     painted backgrounds, dithered gradients and diagonal edges are where NN's uneven column doubling
+     reads as wobble and a filter's softening reads as smoothing, so the two could rank the other way
+     round on game art."* They rank the same way, harder. ⚠️ **And the card is 4%
      anisotropic where ScummVM is not** — see the geometry correction above. Both arms carry it
      identically so the A/B is not biased, but it is the likely source of the operator's unprompted *"the
      bottom one also felt a bit compressed"* [inferred]. **A path to real art exists that needs no
@@ -386,8 +398,67 @@ the display section linked above.
      the rect above, it recovers a coherent *King's Quest 2* throne-room screen. `--ppm FILE` in
      `native_apps/tests/dss_scale_ab.c` reads a strictly 320×200 P6 **instead of** building the synthetic
      card, through a local reader because that file deliberately links nothing from `common/`; the
-     geometry is left alone so the run swaps art and nothing else. ⚠️ **Still owed: the run itself** —
-     deploy the harness, put the recovered PPM on the device, and spend an eye on `split`.
+     geometry is left alone so the run swaps art and nothing else.
+   - **THE REAL-ART RUN IS DONE, and the prediction above is REFUTED BY MEASUREMENT — `.188`
+     (arwtest2, *not* the `.73` reference unit), 2026-09-11.** `/opt/games/dss_scale_ab` with
+     `--ppm /opt/games/kq2_game.ppm` (md5 `afda0f96fcd597cfc9b660bc7d19cb12`), a real *King's Quest II*
+     frame. **Software arm**: 12 724 µs/frame over 384 000 written pixels; operator's eye *"nice image,
+     sharp"*; screenshottable, and the decoded capture confirms real art at full 800×480 with legible
+     text. **Hardware arm, 2.5×/2.4× full-screen**: 178 µs/frame over 64 000 written pixels; operator's
+     eye across two separate runs *"This is very bad"* and *"The text is barely readable"*. So real art
+     did not reverse the ranking — it **widened** it.
+     ⚠️ **Why the prediction failed, which is the durable lesson**: it took "real art" to mean painted
+     backgrounds and dithered gradients, and overlooked that a SCUMM adventure is **text-heavy**. The
+     dialogue box is a bitmap font with 1-pixel strokes — the worst case for any filter, and exactly
+     where the player's eye is. Real art therefore carries *worse* 1 px combs than the synthetic card,
+     not fewer. ⚠️ Recorded honestly: this verdict came from **two sequential full-screen runs, not a
+     simultaneous `split`**. The viewing-angle confound is excluded by the earlier synthetic
+     `split --swap` run (the blur followed the hardware arm across the swap) and was **not**
+     re-established with real art.
+   - **A THIRD arm was tested and also loses: exact 2×.** Tested on `.188` 2026-09-11 with **zero
+     rebuild** — while `hard` mode held the plane, `output_size` was rewritten to `640,400` and
+     `position` to `80,40` from a second `ssh`; readback confirmed `640,400` / `80,40` / `enabled 1` with
+     `input_size` still `320,200`, i.e. exactly **2.000× on both axes with the ratio as the only changed
+     variable**. The rationale was the identity kernel the driver reaches at that bucket — coefficients
+     and citations in [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display), not restated
+     here. **Operator's eye: NOT an improvement.** Artifacts — *"extra little lines at the top and
+     bottom, like an over sharpened JPG"* — i.e. **ringing**, which is what the phase-4 negative lobes
+     predict. They also noted the 640×400 image is visibly smaller and does not fill the screen.
+     **Geometry cost**: exact 2× forces 640×400, which is *smaller* than the **672×420** ScummVM's own
+     `getScalingInfo()` already produces on this unit, so it pays image size **and** rings.
+   - **RULING: no hardware configuration wins on pixel-art text from USERSPACE**, at either ratio
+     tested, and the driver says none can — the ratio is the only choice a caller has. **Software
+     nearest-neighbour therefore stays, unchanged and unswitched.** Do not re-propose replacing it.
+     ⚠️ **And the user-facing switch is WITHDRAWN — operator, 2026-09-11.** The `rw_upscale` key in
+     `/opt/games/rw_config.conf` that was decided earlier is cancelled: **no config key, no settings-app
+     row, no ScummVM backend code path.** The hardware arm lost on image quality at both
+     userspace-reachable ratios, so its only remaining benefit was CPU that nothing is measurably short
+     of — this entry's own baseline records ScummVM playing *Full Throttle* at 12–13 % CPU. Not
+     re-argued here.
+     ⚠️ **What is still open is a KERNEL path, and it is image-side rather than a module build.**
+     **[inferred]** a coefficient-table patch could give hardware nearest neighbour outright: a table
+     carrying the identity kernel in **all 8 phases** would make every output pixel take the centre tap
+     whatever its sub-pixel phase, which is what an NN upscale does — sharp *and* ~178 µs/frame, which
+     would overturn the software-wins ruling. Tagged inferred: it is reasoning about what the DISPC FIR
+     does with an all-identity table, not something the source states. ⚠️ **The cheap module route does
+     not reach it** — measured on `.188` from `/proc/config.gz`, the DSS is **built in**, with no DSS
+     module loaded and no module file on disk. ⚠️ **And a rebuilt image inherits the standing blocker**:
+     the same running config has `CONFIG_TOUCHSCREEN_PANJIT=y`, which has no vanilla source and which
+     `olddefconfig` drops silently, so an image built from this tree boots with a dead touchscreen. So
+     the coefficient patch is **blocked behind that**, not free, and it is a row in F101's fold-in table.
+     Both the built-in finding and the blocker live in `SYSTEM_ANALYSIS.md` —
+     [§3.2](SYSTEM_ANALYSIS.md#32-display) and [§7](SYSTEM_ANALYSIS.md#7-kernel-policy).
+   - ⚠️ **The cheapest kernel win found, and it unblocks step 2 below: raise
+     `CONFIG_FB_OMAP2_NUM_FBS` from 2 to 3.** Config-only, no source patch. **Three** DSS overlays
+     enumerate on this device while only `fb0` and `fb1` exist, so `vid2` can never be funded from
+     userspace — there is no `fb2` node to bind. Measured on `.188` 2026-09-11 by `zcat /proc/config.gz`,
+     `ls /sys/class/graphics/fb*` and `ls -d /sys/devices/platform/omapdss/overlay*`; the device fact is
+     in [§3.2](SYSTEM_ANALYSIS.md#32-display). A row in F101's fold-in table.
+   - ⚠️ **Still owed in the harness, if the kernel path is ever taken: the isotropic-pillarbox
+     rehearsal.** `dss_scale_ab` has no proper mode for it — the 640×400 exact-2× test above was a live
+     sysfs poke from a second shell, not a harness feature, so nothing repeats it and no receipt records
+     it. **The tools themselves ship nothing and stay as they are**: `dss_scale_ab` with
+     `soft`/`hard`/`split`/`--swap`/`--ppm`, `fb_to_game_ppm.py`, and the recovered KQ2 fixture.
    - **Two eye readings of the SOFTWARE arm on real art, operator at the panel 2026-09-11 — arm A
      alone, not an A/B.** *Full Throttle*: *"yes too sharp :)"*. *King's Quest 2*: *"King's Quest is
      running. Very sharp"*. Both point the same way the ruling already does — sharp is not automatically
@@ -396,44 +467,18 @@ the display section linked above.
      confirmed from the panel (*"flasing like crazy"*, *"two engines fighting over: yes"*), from a single
      `nohup` launch whose duplication is **unexplained**. Verify exactly one PID before trusting any
      capture, and re-check it after the grab.
-   - **The shape of the selectable path, if it is built.** `getScalingInfo()`:138-172 is the one
-     chokepoint — every consumer of the geometry reaches it. The software resample a hardware choice
-     bypasses is `blitGameSurfaceToFramebuffer()`:440-573, and the two inverse mappings that must follow
-     the choice are `drawCursor()`:585-588 and `roomwizard-events.cpp`:317-332,454-464. ⚠️ `hasFeature()`
+   - ⚠️ **The switch's shape was fully mapped and is now dead work — do not build it.**
+     `getScalingInfo()`:138-172 was the one chokepoint, `blitGameSurfaceToFramebuffer()`:440-573 the
+     resample a hardware arm would bypass, and `rwFullContentArea()` (`roomwizard.cpp`:105-135) the
+     env-then-ConfMan idiom a toggle would have copied. All of it is superseded by the withdrawal above.
+     What survives from that reading, because it is true of any future backend work: `hasFeature()`
      returns true for `kFeatureCursorPalette` **only** and `beginGFXTransaction`/`endGFXTransaction` are
-     no-ops, so there is no existing mode-change plumbing a runtime toggle could hang on. A hardware arm
-     must fund `fb1` (a step, not a given), set `output_size` to the pillarboxed target and `position` to
-     the offset, and restore both — not restoring is what left `.188`'s stale `800,120`. ⚠️ ScummVM
-     redeploy is ~1 m 35 s – 2 m 20 s and `rm -f`s `native_apps/common/*.o` twice, so it must never run
-     concurrently with a `native_apps` build.
-   - **The toggle has an existing idiom to copy, measured 2026-09-11 — and one gap.**
-     `rwFullContentArea()` (`roomwizard.cpp`:105-135) reads env `ROOMWIZARD_CONTENT_AREA` first, falls
-     back to the ConfMan key `rw_content_area` in `/opt/games/scummvm.ini`, defaults to `"safe"`, seeds
-     the key on first run (:224-227, flushed at :250 because `quit()` calls `exit(0)` and bypasses the
-     normal flush) and deliberately does **not** persist the env var (:221-223). It is read **once** into
-     a function-local static and never re-read — which suits an upscale choice, since there is no runtime
-     mode-change plumbing to hang one on. So `rw_upscale = software|hardware` needs no new mechanism.
-     ⚠️ **The gap is the settings app.** `device_tools` is the one user-facing settings screen
-     (`native_apps/app-manifests.sh`:52; five older settings binaries are retired from the grid at :58)
-     and it persists to `/opt/games/rw_config.conf` through `config_save()`. **Nothing bridges the two
-     files**: `device_tools` neither reads nor writes `rw_content_area`, and the ScummVM backend never
-     reads `rw_config.conf`. A toggle in the settings app therefore needs a bridge, and which side owns
-     it is a decision rather than a detail. `rwDebugMode()` (:80-91) is env-only with no ConfMan key at
-     all, so it is not the model to copy.
-   - **The bridge is decided, and the answer is that it needs no bridge — operator, 2026-09-11.** The
-     upscale choice is a **device-level** setting in `/opt/games/rw_config.conf`, not a ScummVM setting,
-     on the operator's reasoning that the panel's scaler is a property of the device and any later
-     emulator asks the same question: *"I think this is a device setting. If there will be other emulator
-     (libretro, right?) then this should be global settings. The upscaling should be on device level."*
-     ⚠️ **That costs no new mechanism, measured 2026-09-11**: `backend-files/configure.patch`:16 already
-     appends `../native_apps/common/config.o` to ScummVM's `OBJS`, and the backend already reaches one
-     function in it — `oss-mixer.h`:34 hand-declares `config_audio_device_stored(void)` because
-     `config.h` carries no `extern "C"` guard, and `oss-mixer.cpp`:138 calls it. That function
-     (`common/config.c`:317-324) opens `CONFIG_FILE_PATH` itself, takes no `Config` handle from the
-     caller and returns a static string. So the shape is a sibling of it, hand-declared once in the
-     backend: **no ConfMan key, no INI writing from `device_tools`, and a later emulator reads the same
-     one function.** `rw_content_area` stays ScummVM-only and is not the precedent — a content area is
-     engine policy, an upscale path is a device capability.
+     no-ops, so **there is no runtime mode-change plumbing in this backend to hang anything on**; and
+     **nothing bridges `/opt/games/scummvm.ini` and `/opt/games/rw_config.conf`** — `device_tools` never
+     reads the former, the backend never reads the latter, and the one exception is the hand-declared
+     `config_audio_device_stored()` (`oss-mixer.h`:34, called at `oss-mixer.cpp`:138) that opens
+     `CONFIG_FILE_PATH` itself. ⚠️ ScummVM redeploy is ~1 m 35 s – 2 m 20 s and `rm -f`s
+     `native_apps/common/*.o` twice, so it must never run concurrently with a `native_apps` build.
    - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
      is the subject, and each game would additionally need its own operator eye run. Three layers, worst
      first:
@@ -496,8 +541,9 @@ the display section linked above.
      operator described it unprompted as *low res*, which is the scaler's filter signature. ⚠️ `input_size`
      is **not writable** (`Permission denied`); the driver derives it from the framebuffer's geometry, so
      only `output_size` is set. `fb1/size` also reads back **page-rounded**: 384000 written, 385024 read.
-2. **HUD plane.** Put the unscaled HUD on `gfx` (`overlay0`) and the scaled game on `vid1` — or use
-   `vid2`, which is interchangeable with `vid1` and also scales. `global_alpha` works; `zorder` does
+2. **HUD plane.** Put the unscaled HUD on `gfx` (`overlay0`) and the scaled game on `vid1`. ⚠️ **`vid2`
+   is NOT an alternative from userspace** — it enumerates but has no framebuffer to bind, so it waits on
+   the `NUM_FBS=3` row of F101. `global_alpha` works; `zorder` does
    not, so the fixed GFX < VID1 < VID2 order decides what is on top and the layout must suit it.
 3. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
 4. **Video playback**, speculatively — `/dev/video0` accepts YUV with hardware colour-space
@@ -814,6 +860,8 @@ strength of this entry.
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
 | Disconnect cleanup | clear `is_active` in the `default:` arm of `musb_core.c:897-900` | **the fix for B33**, whose entry holds the invariant and its measurement. A driver change like the row above, so the image is what makes it shippable |
+| Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 holds the measurement and is what this unblocks |
+| DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. F2 holds the A/B this would overturn and [§3.2](SYSTEM_ANALYSIS.md#32-display) the coefficients |
 
 **Verification is the expensive half, and it needs a plan before the first build.** A bad image costs a
 card pull and a reimage by hand, and nothing on the device says why it failed
@@ -1067,9 +1115,12 @@ missing tool and point at it instead of each reciting its own `apt` line.
 
 ### Usability, features, maintainability
 
-F2 (the biggest performance win available) · C1 · C4 · C6 with C7 · C2 · B30 ·
+C1 · C4 · C6 with C7 · C2 · B30 ·
 F4 · C5 · C8 · F17 · F6 · F14 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
-waits on F101). Then, nice-to-have and last: B36 — **ranked there by the operator 2026-09-11**, who
+waits on F101) · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
+userspace overlay win was measured and rejected on image quality, the switch it would have needed is
+withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
+wait on F101. Then, nice-to-have and last: B36 — **ranked there by the operator 2026-09-11**, who
 raised it, judged the silence acceptable and wants it behind everything above.
 
 ⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
@@ -1083,7 +1134,7 @@ and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-me
 F17 is a module build, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
 cheaper option draws its splash in `app_launcher`, which already owns the framebuffer. **What genuinely
 needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
-RESCAN tap — and MUSB DMA.** Anything else claiming to need
+RESCAN tap — MUSB DMA, and, added 2026-09-11, all of F2.** Anything else claiming to need
 a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek
 by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
 read `lsusb`'s VID:PID before building anything.
