@@ -577,9 +577,13 @@ single-touch. Bypass the driver via `/dev/i2c-2` — userspace only, so the kern
 this. Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher gestures.
 
 **Materially easier than it looks:** the controller is a Cypress PSoC part whose I2C register map is
-**published documentation**, so there is no unknown protocol to reverse-engineer from bus captures.
-Part number, node, reg address, IRQ and reset GPIOs:
-[`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch). **Consider promoting this item.**
+**published documentation**, so there is no unknown protocol to reverse-engineer from bus captures — and
+the parse is already written, in a same-family driver sitting in the kernel tree
+([`§7`](SYSTEM_ANALYSIS.md#7-kernel-policy)). Part number, node, reg address, IRQ and reset GPIOs:
+[`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch). **Promote it: it is also the first step of
+the kernel touch driver**, because the nine-byte read from reg 3 that yields the second point is the same
+measurement that proves the register map before a line of module code exists. ⚠️ `i2cget`/`i2cdump` are
+**not on the device** — measured 2026-09-21 — so this is a small cross-compiled binary, not a shell loop.
 
 Cheaper first step: finish `native_apps/hardware_test/pressure_test.c` and determine whether
 `ABS_PRESSURE` actually varies. If it does, that is free analogue input (draw thickness, charge-up
@@ -865,8 +869,8 @@ strength of this entry.
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | a `panjit_ts` equivalent, written from the published Cypress register map ([`#33-touch`](SYSTEM_ANALYSIS.md#33-touch)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). Nobody has estimated the hours, and that estimate is the missing input |
-| Display | a `panel-dpi` clone carrying the recorded timings plus the pwrdn/lvds/backlight GPIO sequence, out-of-tree | **the blocker that has no rehearsal** — the vendor DTB names a panel no vanilla driver claims, and the panel driver exposes no `unbind`, so the first proof is a booted image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). Preferred over editing the DTB, which p1 cannot roll back in place. ⚠️ **[inferred]** that a *module* panel binds under a built-in DSS at all, and **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
+| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Validate the register map from userspace before writing any kernel code** — a nine-byte read from reg 3 on `/dev/i2c-2` settles the 110→120 delta, needs no `unbind` and no p1 write, and is the same binary the multi-touch item wants, so that item is the first step of this one. The hours are still unestimated, and that estimate is the missing input |
+| Display | a DT node of our own that stock `panel-dpi` claims, with the clone out-of-tree as the fallback | **the blocker that has no rehearsal** — the vendor DTB names a panel no vanilla driver claims, and the panel driver exposes no `unbind`, so the first proof is a booted image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Try the DT route first.** That it was "preferred over editing the DTB, which p1 cannot roll back in place" was an argument about the *vendor's* DTB; the one appended to an image of ours is authored by us already, so editing it spends nothing the first image does not spend anyway, and a wrong `panel-timing` still boots and still answers SSH. A *module* panel binding late is no longer inferred-and-unsupported either — [§7](SYSTEM_ANALYSIS.md#7-kernel-policy) carries the deferred-probe mechanism that makes it work on this image. ⚠️ Still **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
