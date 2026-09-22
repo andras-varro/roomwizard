@@ -898,30 +898,52 @@ strength of this entry.
    here can stop step 2: the dropped package symbol drives no code in 4.14.52, the machine descriptor
    resolves to the generic OMAP3 one via the vendor root's own fallback string, and the panel and the
    touchscreen are the only two nodes left unclaimed ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
-2. **Boot one config-only image and assert it over SSH.** ⚠️ **Not by looking at the panel** — a first
-   image is expected blank and untouchable, so the panel cannot distinguish a booted kernel from a dead
-   one. `ssh uname -a` and `dmesg` are the test.
+2. **~~Boot one config-only image and assert it over SSH~~ — ATTEMPTED 2026-09-21 and it did not come
+   back. The image is exonerated; the cause is unreached.** Written to p1 as `uImage-system` on arwtest2
+   (`.188`) after md5-verified backups of both the running 500 mA kernel and the pristine vendor image
+   were placed beside it, then rebooted: **no SSH, no ARP entry, and a `.100`–`.254` sweep found the unit
+   at no other address**, so it is not merely on a new DHCP lease. ⚠️ **Do not re-run this step without a
+   console** — SSH was always the assertion, and a kernel that never reaches userspace cannot be asked
+   anything, which is what makes the next attempt gated on reading the boot log rather than on another
+   build. Two whole classes of cause are **measured out**, and re-deriving them is waste:
+   - **Not packaging.** `64 + zImage + appended DTB` reproduces the uImage's byte length exactly, the FDT
+     magic sits precisely at `64 + |zImage|`, the appended DTB md5s equal to the extracted vendor DTB, and
+     load *and* entry are `0x80008000` with `os/arch/type/comp` byte-identical to the vendor image's.
+   - **Not a dropped config symbol.** Exactly **seven** symbols are `=y` in the device's own config and
+     absent after `olddefconfig`, and every one is already a row in this table or costs nothing: the two
+     Spectre hardening symbols, the panel, the logo, the board-file pair, and touch. The network driver,
+     MMC and ext4 all survive — so "the interface never initialised" cannot be a configure-out, whatever
+     else it may be. The built `.config` was diffed against the saved copy and is identical, so that
+     comparison is about the artifact that actually shipped.
+   ⚠️ **The panel remains the wrong instrument** — a first image is expected blank and untouchable, so a
+   dark screen distinguishes nothing. A warm-reboot speaker click distinguishes nothing either: the codec
+   clicks when it is torn down as readily as when it is brought up.
 3. **Then the two drivers, iterated as `.ko` over SSH**, with no further physical access: touch (already
    rehearsable on the vendor kernel today) and the panel clone (only testable from step 2 onward).
 
-**Which boot channel, and what it costs — step 2 is no longer gated on the console.** ⚠️ **Booting an
-alternate filename requires the `rw20 #` prompt**, so it requires the console; overwriting
+**Which boot channel, and what it costs — writing an image needs no console, but diagnosing one does.**
+⚠️ **Booting an alternate filename requires the `rw20 #` prompt**, so it requires the console; overwriting
 `uImage-system` does not, and recovery for that is a card pull plus copying a backup back onto p1
 ([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). **The operator has ruled
-that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily"** — which retires
-the adapter as a blocker on the first image. It does not retire the standing rule it suspends
+that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily"** — and it was
+exercised the same day, which is how step 2 ran at all. It does not retire the standing rule it suspends
 ([§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3 is correct for anyone without a card writer to hand):
-the price is the free undo, so **take a verified p1 backup before the write**, and prefer the alternate
-filename whenever the console is available anyway.
+the price is the free undo, so **take a verified p1 backup before the write** — back up the *running*
+kernel and not merely the pristine vendor one, because on a unit carrying the USB-power patch those are
+different files and the overwrite removes that patch until it is re-applied. ⚠️ **What step 2 proved is
+that the overwrite is not the bottleneck: the boot log is.** A kernel that never reaches userspace answers
+no SSH, so the next attempt is gated on reading the console, not on another build.
 
-⚠️ **Whether the console is available is unsettled, and the cable is the unknown.** The operator has
-**fitted the `P4` header** and owns flying-lead USB serial cables, but a 3.3 V USB-TTL cable cannot work
-on `P4` — it is RS-232 behind `U27`. Discriminate before wiring: an RS-232 output idles at **−5 to −12 V**
-against its ground and a TTL output idles **high**, so one meter reading on the cable settles which kind
-it is, and the red lead of a four-wire cable is **VCC and must stay disconnected** — `P4` has no power pin
-among the three that are wired ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
-⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a way around any of this: it overwrites two
-protected files and destroys the vendor recovery image. Considered and rejected 2026-09-21.
+⚠️ **The console is therefore now on the critical path, and the cable was the trap.** The operator has
+**fitted the `P4` header** and owns four flying-lead USB-**TTL** cables, which cannot drive `P4` at all —
+it is RS-232 behind `U27` — and **a MAX3232 breakout was ordered 2026-09-21** to bridge them. Two things
+are available before it arrives: an RS-232 output idles at **−5 to −12 V** against its ground while a TTL
+one idles **high**, so one meter reading classifies any cable; and `U27` pin 11 (`T1IN`) is the SoC's TX at
+logic level, which buys a **read-only** boot log on a single sense wire with ground taken from `P4` pin 5
+([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion) has both, and the
+warning against driving pin 12 to type). ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a
+way around any of this: it overwrites two protected files and destroys the vendor recovery image.
+Considered and rejected 2026-09-21.
 
 ## Structural and cleanup
 
