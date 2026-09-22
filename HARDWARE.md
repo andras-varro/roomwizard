@@ -188,7 +188,24 @@ P4 pin 5  ->  U27 pin 15 (GND)     ground
 Pin 1 is the square pad; even pins on the top row, odd on the bottom. Only these three are wired —
 MAX3232 channel 1 only. Three wires, no soldering strictly required (a 0.1" female jumper or pogo pins in
 the plated holes will do). **RS-232 levels: a 3.3 V TTL adapter will not work here** — use a real USB↔DB9
-adapter, or tap `U27`'s logic side instead. What comes out of it, and why this project does not use it:
+adapter, or tap `U27`'s logic side instead. ⚠️ **To a standard DB9 DTE adapter the mapping is pin-for-pin
+— P4 2→DB9 2, 3→3, 5→5, no crossover and no null modem** (`[inferred]` from the DB9 pinout; the `P4` side
+is the continuity measurement above). Console settings are 115200 8N1, no flow control
+([Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports)). **Prove the link with pins 2 and 5 only** — TX and
+ground, two wires — and power-cycle: boot text means cable, pinout and baud are all confirmed, with
+nothing wired that could inject into the device. A silent terminal with all three connected cannot say
+which of the three was wrong. **Discriminate a cable before wiring it**: an RS-232 output idles at
+**−5 to −12 V** against its ground, a TTL one idles **high**, and on a four-wire flying-lead cable the red
+lead is **VCC and must stay disconnected** — nothing on `P4` takes power.
+
+**A TTL cable still buys a read-only console, for one wire and no purchase.** `U27` pin 11 is `T1IN` — the
+SoC's TX at 3.3 V logic, *before* the level shifter — so a TTL adapter's **RX** on pin 11 and its ground
+on **`P4` pin 5** (the same net as `U27` pin 15, and a 0.1" hole rather than fine pitch) reads the boot log
+with a single sense connection and nothing driven. That is the diagnostic a *failed* boot leaves, when
+there is no SSH to ask. ⚠️ **Do not drive `U27` pin 12 (`R1OUT`) to type** — it is the transceiver's own
+output into the SoC, so a TTL transmitter there is fighting it; typing needs the RS-232 side, or a MAX3232
+breakout between the TTL cable and `P4`. Pin 11 is `[inferred]` from the standard MAX3232 SOIC-16 pinout,
+corroborated by this board's own continuity above — pins 14/13/15/16 all land where that pinout says. What comes out of it, and why this project does not use it:
 [Serial ports](SYSTEM_ANALYSIS.md#312-serial-ports).
 
 **`P3` — TI-14 JTAG, high confidence.** Continuity against `U27` produces the TI-14 signature:

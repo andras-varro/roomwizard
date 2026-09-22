@@ -576,14 +576,27 @@ The panel controller is 2-point multi-touch with on-chip gestures, and `panjit_t
 single-touch. Bypass the driver via `/dev/i2c-2` — userspace only, so the kernel policy does not touch
 this. Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher gestures.
 
-**Materially easier than it looks:** the controller is a Cypress PSoC part whose I2C register map is
-**published documentation**, so there is no unknown protocol to reverse-engineer from bus captures — and
-the parse is already written, in a same-family driver sitting in the kernel tree
-([`§7`](SYSTEM_ANALYSIS.md#7-kernel-policy)). Part number, node, reg address, IRQ and reset GPIOs:
-[`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch). **Promote it: it is also the first step of
-the kernel touch driver**, because the nine-byte read from reg 3 that yields the second point is the same
-measurement that proves the register map before a line of module code exists. ⚠️ `i2cget`/`i2cdump` are
-**not on the device** — measured 2026-09-21 — so this is a small cross-compiled binary, not a shell loop.
+**The register map is settled, so the protocol half of this is done.** The controller is a Cypress PSoC
+part whose I2C map is published documentation, the parse was already written in a same-family in-tree
+driver, and a nine-byte read from reg 3 has now **confirmed that map byte-for-byte against a live finger**
+— second point carrying real independent data, finger count observed at 0, 1 and 2. The map, the 12-bit
+range, the `0x0fff` flag mask and the quiescent pattern are
+[`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch); reading needs no `unbind` and no p1 write,
+for the `I2C_RDWR` reason recorded there. ⚠️ `i2cget`/`i2cdump` are **not on the device** — measured
+2026-09-21 — so this is a small cross-compiled binary, not a shell loop, and **one already exists**:
+`i2c_touch_read.c` in the scratch tree, ARM-static and idiv-clean, with a bus scan and an `--evdev` witness
+mode whose three-way verdict (LIVE DATA / MAP IS WRONG / TRACE IS VOID) makes a trace self-validating
+rather than merely silent. ⚠️ **It is not in the repo, and whether it earns a home is undecided** — a
+`native_apps` device tool in `GAMES_BINARIES`, or scratch. Deciding that is the first step here, because
+the answer determines whether the next session can reproduce anything.
+
+**What is left is the consumer, not the protocol:** feed the second point into a real multi-touch path —
+`input_mt_*` slots for the kernel route, or a direct reader for the userspace one — and give one app a
+gesture that needs it.
+⚠️ **Stop whatever owns the screen before running any evdev witness**: `app_launcher` may hold an
+`EVIOCGRAB` on `event0`, and a grabbed device silences the witness while looking exactly like a finger
+that never landed. ⚠️ **And `scp` does not preserve the exec bit** — `chmod +x` on the device or the run
+dies with *Permission denied* into a redirect and reads as an empty result.
 
 Cheaper first step: finish `native_apps/hardware_test/pressure_test.c` and determine whether
 `ABS_PRESSURE` actually varies. If it does, that is free analogue input (draw thickness, charge-up
@@ -869,7 +882,7 @@ strength of this entry.
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Validate the register map from userspace before writing any kernel code** — a nine-byte read from reg 3 on `/dev/i2c-2` settles the 110→120 delta, needs no `unbind` and no p1 write, and is the same binary the multi-touch item wants, so that item is the first step of this one. The hours are still unestimated, and that estimate is the missing input |
+| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
 | Display | a DT node of our own that stock `panel-dpi` claims, with the clone out-of-tree as the fallback | **the blocker that has no rehearsal** — the vendor DTB names a panel no vanilla driver claims, and the panel driver exposes no `unbind`, so the first proof is a booted image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Try the DT route first.** That it was "preferred over editing the DTB, which p1 cannot roll back in place" was an argument about the *vendor's* DTB; the one appended to an image of ours is authored by us already, so editing it spends nothing the first image does not spend anyway, and a wrong `panel-timing` still boots and still answers SSH. A *module* panel binding late is no longer inferred-and-unsupported either — [§7](SYSTEM_ANALYSIS.md#7-kernel-policy) carries the deferred-probe mechanism that makes it work on this image. ⚠️ Still **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
@@ -891,13 +904,23 @@ strength of this entry.
 3. **Then the two drivers, iterated as `.ko` over SSH**, with no further physical access: touch (already
    rehearsable on the vendor kernel today) and the panel clone (only testable from step 2 onward).
 
-**Which boot channel, and what it costs.** ⚠️ **Booting an alternate filename requires the `rw20 #`
-prompt**, so it requires the console; overwriting `uImage-system` does not, and recovery for that is a
-card pull plus copying a backup back onto p1
-([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). The operator has **fitted
-the `P4` header** — so what is left is not a board change but an adapter: `P4` is RS-232 behind `U27`, and
-a 3.3 V USB-TTL cable will not work on it ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
-⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a way around this: it overwrites two
+**Which boot channel, and what it costs — step 2 is no longer gated on the console.** ⚠️ **Booting an
+alternate filename requires the `rw20 #` prompt**, so it requires the console; overwriting
+`uImage-system` does not, and recovery for that is a card pull plus copying a backup back onto p1
+([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). **The operator has ruled
+that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily"** — which retires
+the adapter as a blocker on the first image. It does not retire the standing rule it suspends
+([§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3 is correct for anyone without a card writer to hand):
+the price is the free undo, so **take a verified p1 backup before the write**, and prefer the alternate
+filename whenever the console is available anyway.
+
+⚠️ **Whether the console is available is unsettled, and the cable is the unknown.** The operator has
+**fitted the `P4` header** and owns flying-lead USB serial cables, but a 3.3 V USB-TTL cable cannot work
+on `P4` — it is RS-232 behind `U27`. Discriminate before wiring: an RS-232 output idles at **−5 to −12 V**
+against its ground and a TTL output idles **high**, so one meter reading on the cable settles which kind
+it is, and the red lead of a four-wire cable is **VCC and must stay disconnected** — `P4` has no power pin
+among the three that are wired ([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion)).
+⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a way around any of this: it overwrites two
 protected files and destroys the vendor recovery image. Considered and rejected 2026-09-21.
 
 ## Structural and cleanup

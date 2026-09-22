@@ -800,6 +800,26 @@ group_c() {
 # the audio binding) existed only as a pointer FROM IMPROVEMENT_PLAN.md TO a section 7 that did not
 # contain it -- a broken pointer of exactly the kind the doc-update rules warn about, caught by the
 # operator asking whether the thing had been written up.
+# 2026-09-21 (same session, third raise): SYSTEM_ANALYSIS.md 1788 -> 1800 and HARDWARE.md 216 -> 224, both
+# argued, and the cheaper homes were exhausted FIRST. The touch controller's register map moved from
+# `[unverified]` hypothesis to a settled byte-level measurement against a live finger, which is the input
+# that makes the kernel touch driver writable at all -- so it is a fact with exactly one home, section 3.3.
+# Two of its three halves cost ZERO lines because they went into existing ONE-LINE table rows: the I2C
+# bus-2 row absorbed "only responder on the bus, and a bare read returns register 0", and the section 7
+# drop-table row absorbed both the closed 110->120 delta and the i2c-dev mechanism (`I2C_RDWR` carries the
+# address per-message and never consults the busy list that makes `I2C_SLAVE` return -EBUSY), which is why
+# the reader needs no unbind and no p1 write. Only the map itself, the 12-bit range that refutes the
+# in-tree driver's hardcoded 759x465, the `0x0fff` flag mask and the quiescent pattern went into prose.
+# A duplication sweep over nine candidate tokens found the new facts stated nowhere, and the one real
+# overlap -- `Num_Touch` in both 3.3 and section 7 -- was reduced to one home while landing this.
+# HARDWARE.md pays for a measured NEW CAPABILITY plus the trap that cost this session real time: the P4
+# header is RS-232 and the operator's four cables are all USB-TTL, so the console looked blocked on a
+# purchase. It is not -- `U27` pin 11 (`T1IN`) is the SoC's TX at logic level before the shifter, so a TTL
+# adapter reads the boot log on ONE sense wire with ground taken from P4 pin 5 rather than fine pitch, and
+# that log is the only diagnostic a FAILED boot leaves, there being no SSH to ask. Routing any of this to
+# COMMISSIONING.md -- which carries no ceiling -- would have been free and would have been exactly the
+# "well-written addition to the wrong file" the doc-update rules exist to prevent: a header pinout is
+# HARDWARE.md's by classification. Neither number grants headroom; both are the measured post-edit count.
 ## 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
 # The file was AT its ceiling with zero slack and the kernel-image question moved from untried to measured,
 # which is four separate facts a gate cannot see for itself. (1) A full image LINKS and packages, and the
@@ -819,9 +839,9 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1788	SYSTEM_ANALYSIS.md
+1800	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
-216	HARDWARE.md
+224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
 716	native_apps/CLAUDE.md
