@@ -877,11 +877,10 @@ strength of this entry.
 
 **The order to do it in, cheapest first.** Each step is worth finishing before the next is started.
 
-1. **~~Triage the board-file drop~~ — done 2026-09-21, and it mostly cleared.** The DTB carries its own
-   pinmux and its own audio binding ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), so the dropped package
-   symbol has little left to have been doing. What is still unread is the vendor's DT machine descriptor
-   itself: find what `ti,omap3-rw20` matched in the vendor tree and what its init hooks ran. That is the
-   last thing that could make step 2 fail outright, and it is still a host-only read.
+1. **~~Triage the board-file drop~~ — done, and it cleared completely.** Nothing the vanilla tree lacks
+   here can stop step 2: the dropped package symbol drives no code in 4.14.52, the machine descriptor
+   resolves to the generic OMAP3 one via the vendor root's own fallback string, and the panel and the
+   touchscreen are the only two nodes left unclaimed ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 2. **Boot one config-only image and assert it over SSH.** ⚠️ **Not by looking at the panel** — a first
    image is expected blank and untouchable, so the panel cannot distinguish a booted kernel from a dead
    one. `ssh uname -a` and `dmesg` are the test.
