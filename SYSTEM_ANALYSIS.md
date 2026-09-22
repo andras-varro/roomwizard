@@ -2068,6 +2068,16 @@ ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reu
 The two are separate questions and the case against the second does not carry to the first. Asking
 Steelcase for their source is also ruled out, and is needed for neither.
 
+**The ruling, so this is not re-litigated: an image of ours is feasible, and what is left is work rather
+than unknowns.** Everything below is a *cost*; none of it has been found to be a blocker. In order of how
+well it is established: the image **links and packages** (measured); **installing** it needs no console,
+because `uImage-system` is overwritten in place and recovered by a card pull onto plain FAT (measured);
+the **first boot is expected blank and untouchable**, which is the known consequence of two dropped
+drivers rather than a failure, so it is asserted over SSH and never by looking at the panel; and both of
+those drivers have a decided fix whose inputs are in hand — the panel timings and its three GPIOs are
+recorded, the touch register map is published, and the touch half can be rehearsed on the running vendor
+kernel before any image exists. ⚠️ **One unknown is genuinely open** — what the vendor's DT machine
+descriptor did at init — and it is a host-only read, not a device experiment.
 **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
 not Steelcase source — but `build-kernel-modules.sh` configures it from the device's own `/proc/config.gz`
 plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
@@ -2083,7 +2093,7 @@ the same one. What an image must supply for itself, `olddefconfig` having droppe
 | `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **a blank panel, and not fixable by config** — the vendor DTB's `/display` is `compatible = "sharp,lq070y3lg4a"` alone, vanilla's `panel-dpi` matches only `omapdss,panel-dpi` (`displays/panel-dpi.c`, and `omapdss-boot-init.c` prepends the prefix), and a compatible string does not degrade — so nothing in the tree claims that node. `CONFIG_FB_OMAP2_PANEL_DPI=y` is **already set**. The timings are recorded ([Display](#32-display)) and the panel's three control lines are DT properties on that node (`pwrdn-gpios`, `lvds-gpios`, `backlight-gpios`), so the cost is a `panel-dpi` clone that reads them, built out-of-tree; ⚠️ **measured**: the vendor panel driver exposes no `bind`/`unbind`, so unlike touch this cannot be rehearsed on the running kernel |
 | `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low** — every other peripheral is stock mainline (TWL4030, smsc911x, omap2-nand, musb, leds-pwm, hsmmc, `ti,omap-twl4030` audio), and `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
 | `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **a dead touchscreen**, from a silent drop. The controller's I2C register map is published Cypress documentation ([Touch](#33-touch)); the absent vendor source would only have supplied a driver ready-made. ⚠️ **But it is rehearsable before any image exists — measured**: `/sys/bus/i2c/drivers/panjit_ts/` carries `bind` and `unbind` with device `2-0003`, so a replacement module can evict the vendor driver on the running kernel, with a reboot as the undo and no write to p1. `input_mt_*` is exported there too, so multi-touch needs no image either |
-| `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **the unquantified one, and the only drop that can cost a card pull** — the pin-package setup goes with the board file, so restoring the touch symbol alone does not bring it back. Whether DT pinctrl covers everything it did is **[unverified]**; triage it by reading the decompiled vendor DTB's pinmux nodes *before* the first boot, which costs nothing and is the one thing that could stop the image coming up at all |
+| `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **smaller than it looks — measured 2026-09-21.** The package symbol only drives `omap3_mux_init` for a *legacy* board file, and this device boots from a DTB carrying its own pinmux: 27 `pinmux` nodes, 11 `_pins` blocks, 13 `pinctrl-0`/`pinctrl-names` consumers including `/display`, and the audio binding (`ti,omap-twl4030`) as well. So restoring the touch symbol alone still does not bring the board file back, but little is left for it to have been doing. What remains unread is the vendor's DT machine descriptor itself — **[unverified]**, and the one drop that could still stop the image coming up |
 | `CONFIG_LOGO_LINUX_RW20_CLUT224` | a vendor boot logo | **cosmetic** — and the running kernel suppresses it anyway with `initcall_blacklist=fb_logo_late_init` in `bootargs`, so an image we build is free to carry its own |
 
 **Module or image: decide it from the device's own config, not from the subsystem.** A feature whose

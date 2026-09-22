@@ -788,7 +788,19 @@ group_c() {
 # IMPROVEMENT_PLAN.md, which cross-references this section instead. The plan absorbed its own share
 # inside its standing slack and FELL on net, because the withdrawn upscale switch took three bullets of
 # design work with it. 1744 is the measured post-edit count and grants NO headroom.
-# 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
+# 2026-09-21 (same session, second raise): SYSTEM_ANALYSIS.md 1778 -> 1788, and the reason is a defect the
+# first raise did not fix. The kernel-image question has been re-opened and re-settled repeatedly across
+# sessions -- feasible, then an emergency, then feasible again -- because section 7 recorded only HAZARDS.
+# Each one is individually true and individually warned about, so the next reader derives panic from the
+# list and re-litigates whether an image is possible at all. The operator named this pattern directly. A
+# standing RULING now opens the section: what is measured, what the first boot is expected to look like,
+# and the single unknown that is actually open. That is a fact with no other home -- the plan is a queue
+# and cannot hold a verdict. The same commit also lands a drop-table row whose edit had FAILED its anchor
+# in the first raise: the board-file measurement (27 pinmux nodes, 11 _pins blocks, 13 pinctrl consumers,
+# the audio binding) existed only as a pointer FROM IMPROVEMENT_PLAN.md TO a section 7 that did not
+# contain it -- a broken pointer of exactly the kind the doc-update rules warn about, caught by the
+# operator asking whether the thing had been written up.
+## 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
 # The file was AT its ceiling with zero slack and the kernel-image question moved from untried to measured,
 # which is four separate facts a gate cannot see for itself. (1) A full image LINKS and packages, and the
 # mkimage recipe is proven by a byte-identical round trip against the vendor image -- the recipe has to be
@@ -807,7 +819,7 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1778	SYSTEM_ANALYSIS.md
+1788	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 216	HARDWARE.md
 215	README.md
