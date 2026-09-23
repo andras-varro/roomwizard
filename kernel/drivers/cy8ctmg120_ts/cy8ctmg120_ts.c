@@ -21,12 +21,19 @@
  * Event order per frame is ABS_X, ABS_Y, BTN_TOUCH, SYN_REPORT, the order
  * native_apps/common/touch_input.c relies on. The input device is named
  * "panjit_ts" because userspace matches that name.
+ *
+ * Both fingers also go out as type-B MT slots (slot 0 = X1/Y1, slot 1 =
+ * X2/Y2, valid while byte 8's count covers them), ahead of the legacy
+ * events. The slots are reported by hand: input_mt_sync_frame()'s pointer
+ * emulation emits BTN_TOUCH before ABS_X/ABS_Y, which breaks that order.
+ * No ABS_PRESSURE: the vendor's was a constant 255/0 and nothing reads it.
  */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
+#include <linux/input/mt.h>
 #include <linux/interrupt.h>
 #include <linux/gpio/consumer.h>
 #include <linux/delay.h>
@@ -43,6 +50,7 @@
 #define COORD_MASK	0x0fff
 #define COORD_MAX	4095
 #define POLL_MS		10
+#define MAX_FINGERS	2
 
 static bool debug;
 module_param(debug, bool, 0644);
@@ -85,8 +93,11 @@ static irqreturn_t cy8_irq_thread(int irq, void *dev_id)
 	bool down = false;
 	u8 b[BURST_LEN];
 
+	int i;
+
 	for (;;) {
-		int rx, ry;
+		int x[MAX_FINGERS], y[MAX_FINGERS];
+		bool on[MAX_FINGERS];
 
 		if (cy8_read(ts, REG_X1, b, sizeof(b))) {
 			dev_err_ratelimited(&ts->client->dev, "burst read failed\n");
@@ -96,26 +107,41 @@ static irqreturn_t cy8_irq_thread(int irq, void *dev_id)
 			dev_info_ratelimited(&ts->client->dev, "%*ph\n", BURST_LEN, b);
 		if (!b[8])
 			break;
-
-		rx = (b[0] << 8) | b[1];
-		ry = (b[2] << 8) | b[3];
 		cy8_write(ts, REG_ACK, 0);
-		if (rx != COORD_NONE && ry != COORD_NONE) {
-			input_report_abs(input, ABS_X, rx & COORD_MASK);
-			input_report_abs(input, ABS_Y, ry & COORD_MASK);
+
+		for (i = 0; i < MAX_FINGERS; i++) {
+			x[i] = (b[4 * i] << 8) | b[4 * i + 1];
+			y[i] = (b[4 * i + 2] << 8) | b[4 * i + 3];
+			on[i] = i < b[8] && x[i] != COORD_NONE && y[i] != COORD_NONE;
+			x[i] &= COORD_MASK;
+			y[i] &= COORD_MASK;
+
+			input_mt_slot(input, i);
+			input_mt_report_slot_state(input, MT_TOOL_FINGER, on[i]);
+			if (on[i]) {
+				input_report_abs(input, ABS_MT_POSITION_X, x[i]);
+				input_report_abs(input, ABS_MT_POSITION_Y, y[i]);
+			}
+		}
+		if (on[0]) {
+			input_report_abs(input, ABS_X, x[0]);
+			input_report_abs(input, ABS_Y, y[0]);
 			input_report_key(input, BTN_TOUCH, 1);
-			input_sync(input);
 			down = true;
 		}
+		input_sync(input);
 		msleep(POLL_MS);
 	}
 
 	cy8_write(ts, REG_MODE, MODE_RUN);
 	cy8_write(ts, REG_ACK, 0);
-	if (down) {
-		input_report_key(input, BTN_TOUCH, 0);
-		input_sync(input);
+	for (i = 0; i < MAX_FINGERS; i++) {
+		input_mt_slot(input, i);
+		input_mt_report_slot_state(input, MT_TOOL_FINGER, false);
 	}
+	if (down)
+		input_report_key(input, BTN_TOUCH, 0);
+	input_sync(input);
 	return IRQ_HANDLED;
 }
 
@@ -171,6 +197,11 @@ static int cy8_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	input_set_capability(ts->input, EV_KEY, BTN_TOUCH);
 	input_set_abs_params(ts->input, ABS_X, 0, COORD_MAX, 0, 0);
 	input_set_abs_params(ts->input, ABS_Y, 0, COORD_MAX, 0, 0);
+	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, COORD_MAX, 0, 0);
+	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, COORD_MAX, 0, 0);
+	err = input_mt_init_slots(ts->input, MAX_FINGERS, INPUT_MT_DIRECT);
+	if (err)
+		return err;
 
 	err = input_register_device(ts->input);
 	if (err)

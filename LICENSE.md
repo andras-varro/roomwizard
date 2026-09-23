@@ -43,7 +43,8 @@ and shared library under `native_apps/`, `vnc_client/`'s client and its renderer
 ScummVM backend port under `scummvm-roomwizard/backend-files/`, `usb_host/`'s `devmem_write.c` and Python
 tooling, every shell script (`roomwizard.sh`, `deploy-all.sh`, `release.sh`, `lib/`, `commissioning/`,
 `device-files/`, `tests/`), `kernel/`'s `build-image.sh`, `build-modules.sh`, `dts/*.sh` and `tools/*.c`, the `.ppm`
-launcher icons, and the documentation. `kernel/dts/panel-dpi.sh` carries the vendor panel's timing
+launcher icons, and the documentation. `kernel/dts/panel-dpi.sh` is MIT — the operator confirmed it
+2026-09-23 — because it carries the vendor panel's timing
 *numbers* and none of the vendor device tree's text — that is why it is a script and not a DTS diff.
 
 ⚠️ **The audio assets are NOT MIT and this used to say the opposite.** `native_apps/sounds/fx_*.wav` were

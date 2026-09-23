@@ -590,9 +590,9 @@ rather than merely silent. ⚠️ **It is not in the repo, and whether it earns 
 `native_apps` device tool in `GAMES_BINARIES`, or scratch. Deciding that is the first step here, because
 the answer determines whether the next session can reproduce anything.
 
-**What is left is the consumer, not the protocol:** feed the second point into a real multi-touch path —
-`input_mt_*` slots for the kernel route, or a direct reader for the userspace one — and give one app a
-gesture that needs it.
+**What is left is the consumer, not the protocol:** on our image `cy8ctmg120_ts` already reports both
+points as type-B `input_mt_*` slots ([`kernel/README.md`](kernel/README.md)); on the vendor image a direct
+reader is the route. Either way, give one app a gesture that needs it.
 ⚠️ **Stop whatever owns the screen before running any evdev witness**: `app_launcher` may hold an
 `EVIOCGRAB` on `event0`, and a grabbed device silences the witness while looking exactly like a finger
 that never landed. ⚠️ **And `scp` does not preserve the exec bit** — `chmod +x` on the device or the run
@@ -753,6 +753,16 @@ a cost this entry never priced, on top of the audio half it already calls the un
 also the trigger the declined *Native ALSA backend* item names for revisiting it — two entries now
 disagree and the operator's ruling decides which.
 
+**Owning the kernel changes nothing on the audio side — analysed 2026-09-23.** `usb_host/device_config`
+already has `SND_SOC`, OMAP McBSP and TWL4030 `=y` and `SND_PCM_OSS=y`; `SND_USB_AUDIO` is already an
+out-of-tree module. A native-ALSA client is one raw-ioctl `AudioOutDev` in `native_apps/common/audio_out.c`
+(no alsa-lib; the toolchain's `asound.h` is protocol 2.0.14, matching; est. 150–250 lines **[inferred]**,
+the time64 `sync_ptr` layout a risk). It reaches `native_apps` **and** ScummVM, whose `oss-mixer.cpp` calls
+`audio_out_open_oss`; `vnc_client` has no audio. But `audio.c`'s legacy direct `dsp_fd` path must fold into
+`audio_out` first, and `bluez-alsa` is an alsa-lib *plugin*, so a raw-ioctl client cannot reach it — apps
+would need dynamic `libasound` **[inferred]**. **So keep OSS for the speaker**; revisit ALSA only as this
+entry's audio half, after the BT modules, BlueZ and `lmp_subver`.
+
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
 `usb_host/device_config:1070`) that either just works or needs a `btrtl` backport, and the host cannot
@@ -865,8 +875,7 @@ standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the 
 image boots — measured 2026-09-23 on `.188`**: with `kernel/patches/` applied it reaches
 userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
 unpatched image died of, and the recipe is
-[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is loading
-the touch driver at boot and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
+[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is building the touch driver into the image, the fbcon cursor and boot console, and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -879,7 +888,9 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single-touch works on our image as a hand-`insmod`ed `.ko` from `kernel/build-modules.sh`, handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(i) load it at boot — decide** between building it into the image (`=y`, a patch adding it to the tree) and installing the `.ko` and loading it from init; **(ii) multi-touch:** `input_mt_*` slots for the second point the part reports; **(iii) `ABS_PRESSURE`:** drop it or keep it for parity — the vendor declares it, and `touch_input.c` discards it; **(iv) calibration accuracy on our driver** is unchecked beyond the operator's "taps land on tiles" |
+| Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a hand-`insmod`ed `.ko` from `kernel/build-modules.sh` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open, in order: **(i) build it into the image (`=y`)** — the operator chose built-in over loading the `.ko` from init, 2026-09-23. `build-image.sh` has no symbol-forcing step today and never copies `kernel/drivers/` into the tree, so this needs a copy step or a patch, a Kconfig symbol, and a `scripts/config` step before `olddefconfig`; ⚠️ `dropped-symbols.txt` cannot see an *added* symbol, so check `.config` directly; **(ii) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
+| fbcon cursor | `vt.global_cursor_default=0` via `CONFIG_CMDLINE_EXTEND` | permanently off. U-Boot's bootargs stay untouched — they cannot be persisted |
+| Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. Pick a `loglevel=` (or `quiet`) in the same line and verify it on the panel. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
@@ -898,7 +909,8 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
    and backlight patches), `uImage-system.ours-nopanel` (`3713faf7…`, vendor DTB), `uImage-system.vendor`
    (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
    *without* the patch, kept as the negative control).
-2. **The touch driver** — single-touch works by hand; what remains is the Touch row above. ⚠️ Until the
+2. **The touch driver, the fbcon cursor and the boot console** — the three rows above, which share one
+   image build and one p1 write; the operator has allowed a reboot and a p1 write of `.188` for them. ⚠️ Until the
    module is loaded, `app_launcher` still exits after boot on the missing `/dev/input/touchscreen0` and
    the respawn loop clears fb0 every ~30 s — stop the init script before judging a panel frame.
 3. **Explain the two dmesg lines our image adds.** `musb-hdrc musb-hdrc.0.auto: musb_init_controller

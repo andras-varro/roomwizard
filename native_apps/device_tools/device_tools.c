@@ -38,6 +38,7 @@
 #include <math.h>
 #include <errno.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -137,7 +138,7 @@
    screen_base_width / screen_base_height at runtime in each function. */
 #define TZ_HEADER 36
 
-#define NUM_TESTS 10
+#define NUM_TESTS 11
 #define NUM_MOUNT_POINTS 4
 
 static const char *mount_points[] = {
@@ -239,7 +240,8 @@ static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY"
 
 static const char *test_names[] = {
     "RED LED", "GREEN LED", "BOTH LEDS", "BACKLIGHT", "PULSE",
-    "BLINK", "COLORS", "TOUCH ZONE", "DISPLAY", "AUDIO"
+    "BLINK", "COLORS", "TOUCH ZONE", "DISPLAY", "AUDIO",
+    "MULTI-TOUCH"
 };
 
 static const char *diag_page_titles[] = {
@@ -1648,6 +1650,68 @@ static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
     touch_enable_calibration(touch, false);
 }
 
+/* Multi-touch: one dot per MT slot, read straight off the evdev fd because
+ * TouchInput tracks a single pointer. Slots arrive only from a driver that
+ * reports ABS_MT_SLOT; the legacy BTN_TOUCH still drives the exit tap. */
+#define MT_SLOTS 2
+static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
+    static const uint32_t slot_col[MT_SLOTS] = { RGB(255,200,0), RGB(0,200,255) };
+    int calib_ok = (touch_load_calibration(touch, CALIB_FILE) == 0);
+    if (calib_ok) touch_enable_calibration(touch, true);
+    int rx[MT_SLOTS] = {0}, ry[MT_SLOTS] = {0};
+    bool on[MT_SLOTS] = {false};
+    int slot = 0, lx = 0, ly = 0, max_fingers = 0;
+    bool seen_mt = false, running = true;
+
+    touch_drain_events(touch);
+    while (running) {
+        fb_clear(fb, RGB(20,20,30));
+        char hdr[96]; snprintf(hdr, sizeof(hdr),
+            "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
+            seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
+        fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
+        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
+        int fingers = 0;
+        for (int i = 0; i < MT_SLOTS; i++) {
+            if (!on[i]) continue;
+            int x = rx[i], y = ry[i];
+            touch_map_raw(touch, &x, &y);
+            fb_fill_circle(fb, x, y, 28, slot_col[i]);
+            char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
+                                   i, rx[i], ry[i], x, y);
+            fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
+            fingers++;
+        }
+        if (fingers > max_fingers) max_fingers = fingers;
+        fb_swap(fb);
+
+        struct pollfd pfd = { .fd = touch->fd, .events = POLLIN };
+        if (poll(&pfd, 1, 16) <= 0) continue;
+        struct input_event ev;
+        while (read(touch->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+            if (ev.type == EV_ABS) {
+                switch (ev.code) {
+                case ABS_MT_SLOT: slot = ev.value; seen_mt = true; break;
+                case ABS_MT_TRACKING_ID:
+                    if (slot >= 0 && slot < MT_SLOTS) on[slot] = ev.value >= 0;
+                    break;
+                case ABS_MT_POSITION_X: if (slot >= 0 && slot < MT_SLOTS) rx[slot] = ev.value; break;
+                case ABS_MT_POSITION_Y: if (slot >= 0 && slot < MT_SLOTS) ry[slot] = ev.value; break;
+                case ABS_X: lx = ev.value; break;
+                case ABS_Y: ly = ev.value; break;
+                }
+            } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH && ev.value == 1) {
+                int x = lx, y = ly;
+                touch_map_raw(touch, &x, &y);
+                if (x > (int)fb->width - 100 && y < TZ_HEADER) running = false;
+            }
+            if (poll(&pfd, 1, 0) <= 0) break;
+        }
+    }
+    touch_drain_events(touch);
+    touch_enable_calibration(touch, false);
+}
+
 static void draw_display_page(Framebuffer *fb, const char *title,
                               const char *footer) {
     fb_draw_text(fb, 4, 2, title, COLOR_WHITE, 2);
@@ -1866,6 +1930,7 @@ static void run_test(Framebuffer *fb, TouchInput *touch, int test_id) {
         case 7: test_touch_zone(fb, touch);    break;
         case 8: test_display(fb, touch);       break;
         case 9: test_audio_diag(fb, touch);    break;
+        case 10: test_multitouch(fb, touch);   break;
         default: break;
     }
 }
