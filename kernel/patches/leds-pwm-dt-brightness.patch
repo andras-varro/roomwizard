@@ -1,0 +1,24 @@
+--- a/drivers/leds/leds-pwm.c	2026-09-23 10:38:09.435225894 -0400
++++ b/drivers/leds/leds-pwm.c	2026-09-23 10:38:19.715224358 -0400
+@@ -86,6 +86,7 @@
+ {
+ 	struct led_pwm_data *led_data = &priv->leds[priv->num_leds];
+ 	struct pwm_args pargs;
++	u32 brightness;
+ 	int ret;
+ 
+ 	led_data->active_low = led->active_low;
+@@ -95,6 +96,13 @@
+ 	led_data->cdev.max_brightness = led->max_brightness;
+ 	led_data->cdev.flags = LED_CORE_SUSPENDRESUME;
+ 
++	/* A DT "brightness" is the level at probe; without one the LED starts
++	 * off. The board's backlight is a PWM LED, so this decides whether the
++	 * panel boots lit. */
++	if (child && !of_property_read_u32(child, "brightness", &brightness))
++		led_data->cdev.brightness = min_t(u32, brightness,
++						  led->max_brightness);
++
+ 	if (child)
+ 		led_data->pwm = devm_of_pwm_get(dev, child, NULL);
+ 	else

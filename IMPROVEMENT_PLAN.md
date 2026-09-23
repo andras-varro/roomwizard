@@ -869,8 +869,8 @@ standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the 
 image boots — measured 2026-09-23 on `.188`**: with `kernel/patches/` applied it reaches
 userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
 unpatched image died of, and the recipe is
-[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the two
-touch driver, two small panel patches (Display row below) and two unexplained dmesg lines.
+[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the
+touch driver and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -884,7 +884,6 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 | Wanted | Change | Note |
 |---|---|---|
 | Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It can now be proven on either kernel:** the vendor driver unbinds on the running vendor kernel ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), and our booting image has nothing bound to that node at all, so the module loads there as-is — or is built into the image, if the out-of-tree decision above is revisited now that an image of ours exists. ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
-| Display | `kernel/dts/panel-dpi.sh` — a DT node stock `panel-dpi` claims — plus `kernel/patches/omapdss-honour-syncclk-active.patch` | **works — measured 2026-09-23 on `.188`**: `panel-dpi` binds and a frame written to `/dev/fb0` is seen on the glass ([`kernel/README.md`](kernel/README.md) has the patch and the state). **Two small patches remain, each one rebuild and one boot:** (a) `panel_dpi_probe_of` never sets `data_lines`, so fb0 is sized for one 16bpp frame and a 32bpp app gets `800x240` — read `data-lines` there and put `data-lines = <24>` on `/display`; verify `fbset` 800x480 and fb size 1536000 at boot. (b) the backlight boots at 0 — the vendor `leds-pwm` difference is in [`kernel/README.md`](kernel/README.md#reading-the-vendor-kernel); patch `struct led_pwm` and `led_pwm_add` to apply the DT's `brightness`, which the DTB already carries. ⚠️ `vram=` on the cmdline is inert — only `omapfb.vram=` is parsed |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
@@ -898,11 +897,12 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 1. **~~Triage the board-file drop~~ and ~~boot one image, asserted over SSH~~ — both done.** Nothing the
    vanilla tree lacks blocks a boot except the Ethernet reset pulse, which is a source patch and not a
    config symbol ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) has the mechanism and the function-size diff
-   that found it). **`.188`'s p1 now holds** `uImage-system` = our image (md5 `3713faf7…`, with the
-   **pristine vendor DTB**, so without the 500 mA USB power patch), beside `uImage-system.vendor`
+   that found it). **`.188`'s p1 now holds** `uImage-system` = our image with all four patches and our panel DTB (md5 `776a3dc5…`,
+   without the 500 mA USB power patch), beside `uImage-system.panel-v1` (`8bd1e362…`, before the fb-size
+   and backlight patches), `uImage-system.ours-nopanel` (`3713faf7…`, vendor DTB), `uImage-system.vendor`
    (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
    *without* the patch, kept as the negative control).
-2. **The two drivers.** ~~The panel~~ is done bar the two patches in the Display row; then touch, as a
+2. **The touch driver** — the panel is done — as a
    `.ko` over SSH (testable on either kernel). ⚠️ Until touch exists, `app_launcher` exits on the
    missing `/dev/input/touchscreen0` and the respawn loop clears fb0 every ~30 s — stop the init script
    before judging a panel frame.

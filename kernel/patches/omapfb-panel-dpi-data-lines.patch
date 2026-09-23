@@ -1,0 +1,22 @@
+--- a/drivers/video/fbdev/omap2/omapfb/displays/panel-dpi.c	2026-09-23 10:36:58.791220089 -0400
++++ b/drivers/video/fbdev/omap2/omapfb/displays/panel-dpi.c	2026-09-23 10:37:03.299222727 -0400
+@@ -206,6 +206,7 @@
+ 	struct display_timing timing;
+ 	struct videomode vm;
+ 	struct gpio_desc *gpio;
++	u32 data_lines;
+ 
+ 	gpio = devm_gpiod_get_optional(&pdev->dev, "enable", GPIOD_OUT_LOW);
+ 	if (IS_ERR(gpio))
+@@ -224,6 +225,11 @@
+ 	videomode_from_timing(&timing, &vm);
+ 	videomode_to_omap_video_timings(&vm, &ddata->videomode);
+ 
++	/* Without data-lines the DPI panel is taken as 16-bit, and omapfb then
++	 * allocates fb memory for one 16bpp frame only. */
++	if (!of_property_read_u32(node, "data-lines", &data_lines))
++		ddata->data_lines = data_lines;
++
+ 	in = omapdss_of_find_source_for_first_ep(node);
+ 	if (IS_ERR(in)) {
+ 		dev_err(&pdev->dev, "failed to find video source\n");

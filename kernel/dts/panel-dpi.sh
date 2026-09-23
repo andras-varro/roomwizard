@@ -66,6 +66,9 @@ fdtput -t s "$DTB" "$PANEL" compatible panel-dpi
 fdtput -d "$DTB" "$PANEL" pinctrl-names
 fdtput -d "$DTB" "$PANEL" pinctrl-0
 fdtput -t u "$DTB" "$PANEL" enable-gpios "$GPIO1_PH" "$GPIO_ENABLE" 0
+# 24-bit RGB. Read by kernel/patches/omapfb-panel-dpi-data-lines.patch; without it omapfb
+# sizes fb0 for 16bpp and a 32bpp app gets half the screen.
+fdtput -t u "$DTB" "$PANEL" data-lines 24
 
 T="${PANEL}/panel-timing"
 fdtput -c "$DTB" "$T"

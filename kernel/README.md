@@ -59,6 +59,8 @@ backup back, by SSH if the image answers or with a card reader if it does not.
 | `patches/smsc911x-reset-pulse.patch` | no network: the DT marks the LAN9221 reset line active-high, and vanilla `smsc911x.c` requests it low and never releases it | function-size diff: the vendor probe adds `set(0); msleep(100); set(1)` |
 | `patches/omapdss-honour-syncclk-active.patch` | `videomode_to_omap_video_timings` copies the pixel-data clock edge onto the sync edge, so DT cannot express this panel's sync-on-falling, data-on-rising | reading `dss/display.c`; changes nothing for a DT without `syncclk-active` |
 | `dts/panel-dpi.sh` | no `/dev/fb0`: the vendor `/display` node names `sharp,lq070y3lg4a`, which no vanilla driver claims | disassembling the vendor `sharp_lq_*` driver (below) |
+| `patches/omapfb-panel-dpi-data-lines.patch` | `panel_dpi_probe_of` never reads `data-lines`, so `omapdss_default_get_recommended_bpp` (`dss/display.c:47`) says 16 and fb0 is sized for one 16bpp frame | reading the source; `dts/panel-dpi.sh` sets `data-lines = <24>` |
+| `patches/leds-pwm-dt-brightness.patch` | vanilla `led_pwm_add` starts every PWM LED at `LED_OFF`, so the backlight boots dark; the DTB already carries `brightness` (backlight 100, red/green 50, measured with `fdtget`) | `led_pwm_probe` function-size diff (below) |
 
 **The panel patch, in detail.**
 - `/display` becomes `compatible = "panel-dpi"` with `enable-gpios` = pwrdn and a `panel-timing` node
@@ -85,14 +87,13 @@ signal polarity that sysfs never exposed.
 The tools are scratch-grade and live outside the repo, in `C:\work\rw-scratch`: `fsize.py` for sizes,
 `calls.py <fn> <vendor_size> <our_size>` for the call-sequence diff, `dis.sh`, and `sharp_dis.py`. Their
 data files are `vendor-Image` and `vendor.kallsyms`. `led_pwm_probe` is read: the vendor adds a u32 `brightness`
-DT property to `struct led_pwm` and applies it at probe, which vanilla hard-codes to `LED_OFF` — not yet a
-patch here, so the backlight boots dark. Still unexamined: `fb_find_logo`.
+DT property and applies it at probe, which vanilla hard-codes to `LED_OFF`. Still unexamined: `fb_find_logo`.
 
 ## Drivers still missing from our image
 
 | Function | State | Route |
 |---|---|---|
-| Panel | **works — measured 2026-09-23 on `.188`**: `panel-dpi` binds, full-screen noise written to `/dev/fb0` is seen on the glass. Two defects remain, both open work: fb0 gets memory for one **16bpp** frame (770048 B), so a 32bpp app halves it to `800x240p-110` ([inferred] from source; hand fix measured: `fb0/overlays` detach, `size` 1536000, reattach), and the backlight boots at brightness 0 | `dts/panel-dpi.sh`, above |
+| Panel | **works — measured 2026-09-23 on `.188`**: at boot fb0 is `800x480` 32bpp with 1536000 B, the backlight comes up at 100 with Tux on the glass, and a full 32bpp frame of noise written to `/dev/fb0` fills the whole panel | `dts/panel-dpi.sh` and the two patches above |
 | Touch | no driver: `CONFIG_TOUCHSCREEN_PANJIT` has no vanilla source | adapt `drivers/input/touchscreen/cy8ctmg110_ts.c`; register map in [§3.3](../SYSTEM_ANALYSIS.md#33-touch); `tools/i2c_touch_read.c` is the witness |
 | USB host | `musb_init_controller failed with status -19` | not investigated; read `drivers/usb/musb/` for the `-ENODEV` returns |
 
