@@ -42,7 +42,7 @@ fi
 if [ ! -f "$DEVICE_CONFIG" ]; then
     echo "ERROR: Device config not found at ${DEVICE_CONFIG}"
     echo "  Copy it from the device: scp root@192.168.50.73:/proc/config.gz device_config.gz"
-    echo "  Then: gunzip -k device_config.gz && mv device_config.gz device_config"
+    echo "  Then: gunzip device_config.gz"
     exit 1
 fi
 echo "  Cross compiler: $(${CROSS_COMPILE}gcc --version | head -1)"

@@ -489,6 +489,12 @@ group_c() {
 # new capability wants a mention in it, so the pressure that keeps it correct is that a new mention
 # is paid for by trimming what a component README or CLAUDE.md now owns better. Raising it with an
 # argument is the intended escape, not a defeat.
+# ⚠️ 2026-09-23, two NEW entries: kernel/README.md at 100 and kernel/CLAUDE.md at 40, against
+# measured non-blank counts of 79 and 26 in the commit that created them. Unlike README.md above,
+# these get margin on purpose: kernel/README.md is the WORKING NOTES of an open effort (panel, touch,
+# musb still to land), so it is expected to grow by a row per driver, and a ceiling with no room would
+# only push those rows into SYSTEM_ANALYSIS.md, which is the wrong home. Device facts found there
+# still move out to SYSTEM_ANALYSIS.md; only build, patch and method prose stays.
 # ⚠️ tests/CLAUDE.md is 232 and native_apps/CLAUDE.md 629, both raised deliberately in the
 # 2026-08-20 commit that landed F1 Phase 8's device half: `audio.c` gained a public
 # `audio_music_*`/`audio_sfx_play()` surface and `common/audio_wav.c` became a COMMON_OBJ member,
@@ -852,6 +858,8 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
+100	kernel/README.md
+40	kernel/CLAUDE.md
 EOF
 }
 

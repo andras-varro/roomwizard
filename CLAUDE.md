@@ -13,10 +13,9 @@ DSP — all rendering is software. Display is legacy **omapfb/omapdss**; there i
 to a physical device (reference unit `192.168.50.73`, aka RW09). Verifying a change means deploying it
 and looking at the panel — framebuffer screenshots via `fb565_to_png.py`.
 
-**Kernel policy: we build our own 4.14.52 image; a mainline 5.x/6.x port stays out.** The vanilla
-`usb_host/linux-4.14.52/` tree builds from the device's own config, and asking Steelcase for source is
-ruled out and unnecessary. ⚠️ It boots only with `usb_host/kernel-patches/` applied (no network without), and with a **dead touchscreen** —
-`CONFIG_TOUCHSCREEN_PANJIT` has no vanilla source and `olddefconfig` drops it silently — `SYSTEM_ANALYSIS.md#7-kernel-policy`.
+**Kernel policy: we build our own 4.14.52 image; a mainline 5.x/6.x port stays out.** It builds from the
+device's own config (asking Steelcase for source is ruled out and unnecessary) with `kernel/build-image.sh`,
+which applies `kernel/patches/` and `kernel/dts/`. ⚠️ Still **no touchscreen** — `SYSTEM_ANALYSIS.md#7-kernel-policy`.
 
 ### One fact, one home
 
@@ -56,6 +55,7 @@ don't copy.
 | `device-files/CLAUDE.md` | what is installed verbatim, and how to author the two rules files |
 | `tests/CLAUDE.md` | the host regressions, what each cannot see, sabotage-harness discipline |
 | `scummvm-roomwizard/CLAUDE.md`, `vnc_client/CLAUDE.md` | those ports |
+| `kernel/CLAUDE.md` | our 4.14.52 image: its patches, DT changes, build script and missing drivers — notes in `kernel/README.md` |
 
 ⚠️ **The vanilla kernel tree is the authority for every subsystem the vendor did not patch, and
 reading it beats theorising from sysfs.** The USB-enumeration hunt cost most of a session to three

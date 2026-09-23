@@ -866,11 +866,11 @@ instructions imply that any machine with a card reader will do.
 standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
 `usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
 `build-kernel-modules.sh` and already **measured** producing modules that load on the device. ⚠️ **The
-image boots — measured 2026-09-23 on `.188`**: with `usb_host/kernel-patches/` applied it reaches
+image boots — measured 2026-09-23 on `.188`**: with `kernel/patches/` applied it reaches
 userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
 unpatched image died of, and the recipe is
 [`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the two
-replacement drivers and two unexplained dmesg lines.
+touch driver, two small panel patches (Display row below) and two unexplained dmesg lines.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -884,7 +884,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 | Wanted | Change | Note |
 |---|---|---|
 | Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It can now be proven on either kernel:** the vendor driver unbinds on the running vendor kernel ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), and our booting image has nothing bound to that node at all, so the module loads there as-is — or is built into the image, if the out-of-tree decision above is revisited now that an image of ours exists. ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
-| Display | a DT node of our own that stock `panel-dpi` claims, with the clone out-of-tree as the fallback | **the next step, and the one with no rehearsal** — the vendor DTB names a panel no vanilla driver claims (measured on our image: no `/dev/fb0`, omapfb `failed to setup`), and the panel driver exposes no `unbind`, so it is proven only on our image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Try the DT route first.** That it was "preferred over editing the DTB, which p1 cannot roll back in place" was an argument about the *vendor's* DTB; the one appended to an image of ours is authored by us already, so editing it spends nothing the first image does not spend anyway, and a wrong `panel-timing` still boots and still answers SSH. A *module* panel binding late is no longer inferred-and-unsupported either — [§7](SYSTEM_ANALYSIS.md#7-kernel-policy) carries the deferred-probe mechanism that makes it work on this image. ⚠️ Still **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
+| Display | `kernel/dts/panel-dpi.sh` — a DT node stock `panel-dpi` claims — plus `kernel/patches/omapdss-honour-syncclk-active.patch` | **works — measured 2026-09-23 on `.188`**: `panel-dpi` binds and a frame written to `/dev/fb0` is seen on the glass ([`kernel/README.md`](kernel/README.md) has the patch and the state). **Two small patches remain, each one rebuild and one boot:** (a) `panel_dpi_probe_of` never sets `data_lines`, so fb0 is sized for one 16bpp frame and a 32bpp app gets `800x240` — read `data-lines` there and put `data-lines = <24>` on `/display`; verify `fbset` 800x480 and fb size 1536000 at boot. (b) the backlight boots at 0 — the vendor `leds-pwm` difference is in [`kernel/README.md`](kernel/README.md#reading-the-vendor-kernel); patch `struct led_pwm` and `led_pwm_add` to apply the DT's `brightness`, which the DTB already carries. ⚠️ `vram=` on the cmdline is inert — only `omapfb.vram=` is parsed |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
@@ -902,8 +902,10 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
    **pristine vendor DTB**, so without the 500 mA USB power patch), beside `uImage-system.vendor`
    (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
    *without* the patch, kept as the negative control).
-2. **The two drivers, iterated as `.ko` over SSH**, with no further physical access: the panel first
-   (only testable on our image), then touch (testable on either kernel).
+2. **The two drivers.** ~~The panel~~ is done bar the two patches in the Display row; then touch, as a
+   `.ko` over SSH (testable on either kernel). ⚠️ Until touch exists, `app_launcher` exits on the
+   missing `/dev/input/touchscreen0` and the respawn loop clears fb0 every ~30 s — stop the init script
+   before judging a panel frame.
 3. **Explain the two dmesg lines our image adds.** `musb-hdrc musb-hdrc.0.auto: musb_init_controller
    failed with status -19` — USB host does not come up on our image, cause not investigated; read
    `drivers/usb/musb/` for the `-ENODEV` returns before theorising. And `omap2_set_init_voltage: unable

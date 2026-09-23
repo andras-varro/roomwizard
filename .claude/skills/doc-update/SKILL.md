@@ -1,6 +1,6 @@
 ---
 name: doc-update
-description: Add to, correct, or close out content in this repo's documentation — the four top-level docs and the seven directory-scoped CLAUDE.md files — under the one-fact-one-home rules. Use whenever a session produces a durable fact, a new open item, a closed item, or a correction to a document. Routes the content to the right file, checks it is not already elsewhere, writes it in the repo's shape, runs tests/doc_check.sh, and commits.
+description: Add to, correct, or close out content in this repo's documentation — the four top-level docs and the eight directory-scoped CLAUDE.md files, and kernel/README.md — under the one-fact-one-home rules. Use whenever a session produces a durable fact, a new open item, a closed item, or a correction to a document. Routes the content to the right file, checks it is not already elsewhere, writes it in the repo's shape, runs tests/doc_check.sh, and commits.
 ---
 
 # doc-update
@@ -27,6 +27,7 @@ Ask these in order and stop at the first yes. The routing mistake is the expensi
 | a part, connector, header, or the enclosure — something you could point at on the board | `HARDWARE.md` | is it a *thing* rather than a *behaviour*? |
 | work not done yet — a bug, a feature, a phase table | `IMPROVEMENT_PLAN.md` | is there an action in it? if not, it is not an item |
 | how to write code in one directory — an API rule, a call-order constraint, a shape to copy | that directory's `CLAUDE.md` | would a person editing *only that directory* need it? |
+| how our kernel image is built, what each `kernel/patches`/`kernel/dts` change is for, a driver's state, a reverse-engineering method | `kernel/README.md` | what the *vendor* kernel does is a device fact → `SYSTEM_ANALYSIS.md`; only build, patch and method prose stays here |
 | what a script does, or how an operator runs a bring-up | `README.md` / `COMMISSIONING.md` | is the audience an operator rather than an author? |
 | a licence fact | `LICENSE.md` | — |
 | something I must know before the first edit, in any directory | root `CLAUDE.md` — **budget 16 lines, the tightest in the repo** | is it worth loading in *every* session? |
@@ -51,7 +52,7 @@ for t in "<token1>" "<token2>"; do
   printf '%-24s ' "$t"
   for f in SYSTEM_ANALYSIS.md HARDWARE.md IMPROVEMENT_PLAN.md CLAUDE.md \
            native_apps/CLAUDE.md lib/CLAUDE.md commissioning/CLAUDE.md \
-           device-files/CLAUDE.md tests/CLAUDE.md; do
+           device-files/CLAUDE.md tests/CLAUDE.md kernel/CLAUDE.md kernel/README.md; do
     printf '%s:%s ' "$f" "$(grep -cF -- "$t" "$f")"
   done; echo
 done
