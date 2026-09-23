@@ -13,6 +13,8 @@ directory are in [`CLAUDE.md`](CLAUDE.md).
 | `build-image.sh` | extract → patch → configure → `zImage` → DTB → `uImage`, all inside WSL; `--help` is current |
 | `patches/*.patch` | kernel source patches, `patch -p1` from the tree root, GPL-2.0-only |
 | `dts/*.sh` | scripts that edit the vendor DTB `usb_host/original.dtb` in place with `fdtput`, run as `bash <script> <dtb>` |
+| `drivers/cy8ctmg120_ts/` | out-of-tree touch driver (`.c` + `Kbuild`), GPL-2.0-only, adapted from vanilla `cy8ctmg110_ts.c`; binds the unchanged `panjit_ts` DT node and names its input device `panjit_ts` |
+| `build-modules.sh` | builds every `drivers/*/` with a `Kbuild` via `M=` against the tree `build-image.sh` left in WSL `$HOME`; `--out <dir>` receives the `.ko`, which loads only on our image |
 | `tools/i2c_touch_read.c` | userspace burst reader for the touch controller over `/dev/i2c-N`; it never writes to the part |
 
 ## Building an image
@@ -94,8 +96,9 @@ DT property and applies it at probe, which vanilla hard-codes to `LED_OFF`. Stil
 | Function | State | Route |
 |---|---|---|
 | Panel | **works — measured 2026-09-23 on `.188`**: at boot fb0 is `800x480` 32bpp with 1536000 B, the backlight comes up at 100 with Tux on the glass, and a full 32bpp frame of noise written to `/dev/fb0` fills the whole panel | `dts/panel-dpi.sh` and the two patches above |
-| Touch | no driver: `CONFIG_TOUCHSCREEN_PANJIT` has no vanilla source | adapt `drivers/input/touchscreen/cy8ctmg110_ts.c`; register map in [§3.3](../SYSTEM_ANALYSIS.md#33-touch); `tools/i2c_touch_read.c` is the witness |
+| Touch | **single-touch works — measured 2026-09-23 on `.188`**: launcher paging, tile taps and Brick Breaker respond (operator); `ABS_X`/`ABS_Y` `0..4095`. Out-of-tree `.ko`, `insmod` by hand over SSH; nothing loads it at boot | `drivers/cy8ctmg120_ts/` via `build-modules.sh`; handshake and register map in [§3.3](../SYSTEM_ANALYSIS.md#33-touch); `tools/i2c_touch_read.c` is the witness |
 | USB host | `musb_init_controller failed with status -19` | not investigated; read `drivers/usb/musb/` for the `-ENODEV` returns |
 
 Building `tools/i2c_touch_read.c`: `arm-linux-gnueabihf-gcc -O2 -static -o i2c_touch_read
 i2c_touch_read.c`, then run `native_apps/check-arm-safe.sh` on the result, as for any device binary.
+Building the drivers, after `build-image.sh`: `wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && kernel/build-modules.sh --out /mnt/c/work/rw-scratch/ko"`.

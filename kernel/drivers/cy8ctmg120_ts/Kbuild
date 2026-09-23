@@ -1,0 +1,1 @@
+obj-m := cy8ctmg120_ts.o

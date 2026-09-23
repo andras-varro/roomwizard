@@ -368,9 +368,22 @@ on an orange flex marked `EDT REV.A 40-0016-2` (56-QFN, date code `1043`).
 > documentation, so reaching the controller directly is *implementing a documented protocol*, not
 > reverse-engineering an unknown one.
 
-**How to drive it.** evdev at `/dev/input/touchscreen0` (also `/dev/input/event0`). Driver
-`panjit_ts` is out-of-tree. DT node `tsc_panjit@03`: reg `0x03`, IRQ `gpio1[23]` falling, reset
-`gpio1[16]`.
+**How to drive it.** evdev at `/dev/input/touchscreen0` (also `/dev/input/event0`); the vendor's driver
+is `panjit_ts`, ours is `kernel/drivers/cy8ctmg120_ts/`. DT node `tsc_panjit@03`: reg `0x03`, IRQ
+`gpio1[23]` (the DT cell says falling; the vendor driver requests **level-low**), reset `gpio1[16]`
+active-high. The symlink comes from the device's `/etc/udev/rules.d/local.rules`, keyed on
+`ENV{ID_INPUT_TOUCHSCREEN}=="1"` — udev's classification, not the driver name.
+
+**The controller needs a host handshake, and the vendor driver is the only record of it.** Read from
+the vendor kernel's disassembly (probe `@c05e8e10`, work fn `poscheck` `@c05e8b48`): pulse reset high
+~10–20 ms, release, wait 100 ms; `reg0=0x00`; write `reg1=0x00` until it reads 0 (10 tries); request
+the IRQ `IRQF_TRIGGER_LOW`; `reg0=0x08`. The ISR masks the IRQ and queues work that polls every 10 ms
+while a finger is down, writing `reg1=0x00` after **every** read (`X2`/`Y2` are read at count 2 and
+discarded); on lift `reg0=0x08`, `reg1=0x00`, release, IRQ re-enabled. **Measured on our image**
+(2026-09-23, `.188`): with nothing bound the part NAKs (reset held); released it reads `08 81 00 ff…`;
+without the per-read ack it reports one touch then stalls in ~2.7 s cycles of all-zero bursts with
+`reg1` back at `0x81`; `cy8ctmg110_ts.c`'s `0x10` to `reg0` wedges it until reset. With the handshake,
+level IRQs track touch and I2C errors stay at zero.
 
 **Gotcha — capture coordinates BEFORE the press event.** The event order is:
 
@@ -605,8 +618,9 @@ confirmed working on two or more units; no second panel has been *swept* and rec
 **Multi-touch exists in hardware but not in the driver, and the controller's register map is settled.**
 `panjit_ts` reports only `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller is **2-point
 multi-touch with on-chip gesture recognition**, and the vendor factory-test binary `opt/pv02/pv02_app`
-drives it. Reaching it means bypassing the driver on `/dev/i2c-2` — userspace-only, no kernel work, and
-no `unbind` either ([Kernel policy](#7-kernel-policy)). Proposal: `IMPROVEMENT_PLAN.md`.
+drives it. On the vendor kernel, reaching it means bypassing the driver on `/dev/i2c-2` — userspace-only,
+no `unbind` ([Kernel policy](#7-kernel-policy)); on our image our driver can report both points, not yet
+implemented. Proposal: `IMPROVEMENT_PLAN.md`.
 
 **A nine-byte burst from register 3 at address `0x03` is the entire protocol**, read against a live
 finger on 2026-09-21: `X1` at bytes 3–4, `Y1` at 5–6, `X2` at 7–8, `Y2` at 9–10 and the finger count at
@@ -622,10 +636,9 @@ size; the flag *semantics* are not. **Quiescent, registers 0..12 read
 on both units — so "no finger" is distinguishable from a failed read with no previous sample to compare
 against, which is what lets a reader of this map validate itself.
 
-**Pressure is declared but untested.** `ABS_PRESSURE` appears in the device's capabilities
-(`capabilities/abs = 1000003` → bits 0, 1, 24) and is discarded by `touch_input.c`. **[unverified]**
-whether the value actually varies — `native_apps/hardware_test/pressure_test.c` is the unfinished probe,
-and `IMPROVEMENT_PLAN.md` carries it as the cheap first step.
+**`ABS_PRESSURE` carries no measurement.** The vendor driver declares it `0..255` (`capabilities/abs =
+1000003` → bits 0, 1, 24) and reports a constant 255 while down and 0 on release — read from disassembly.
+`touch_input.c` discards it.
 
 **As shipped.** The stock stack used `xinput_calibrator` and `/etc/pointercal.xinput`. Both belong
 to the removed X11 stack and are **not** used by anything current.

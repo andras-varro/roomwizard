@@ -598,10 +598,6 @@ gesture that needs it.
 that never landed. ⚠️ **And `scp` does not preserve the exec bit** — `chmod +x` on the device or the run
 dies with *Permission denied* into a redirect and reads as an empty result.
 
-Cheaper first step: finish `native_apps/hardware_test/pressure_test.c` and determine whether
-`ABS_PRESSURE` actually varies. If it does, that is free analogue input (draw thickness, charge-up
-shot power, velocity-sensitive keys).
-
 ### F7. Use NAND `mtd4` "scratch" for persistent data — open
 
 `mtd4` is 11 MB of blank, unused NAND that **survives an SD card reflash** — a natural home for high
@@ -869,8 +865,8 @@ standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the 
 image boots — measured 2026-09-23 on `.188`**: with `kernel/patches/` applied it reaches
 userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
 unpatched image died of, and the recipe is
-[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the
-touch driver and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
+[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is loading
+the touch driver at boot and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -883,7 +879,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It can now be proven on either kernel:** the vendor driver unbinds on the running vendor kernel ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), and our booting image has nothing bound to that node at all, so the module loads there as-is — or is built into the image, if the out-of-tree decision above is revisited now that an image of ours exists. ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
+| Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single-touch works on our image as a hand-`insmod`ed `.ko` from `kernel/build-modules.sh`, handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(i) load it at boot — decide** between building it into the image (`=y`, a patch adding it to the tree) and installing the `.ko` and loading it from init; **(ii) multi-touch:** `input_mt_*` slots for the second point the part reports; **(iii) `ABS_PRESSURE`:** drop it or keep it for parity — the vendor declares it, and `touch_input.c` discards it; **(iv) calibration accuracy on our driver** is unchecked beyond the operator's "taps land on tiles" |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
@@ -902,10 +898,9 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
    and backlight patches), `uImage-system.ours-nopanel` (`3713faf7…`, vendor DTB), `uImage-system.vendor`
    (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
    *without* the patch, kept as the negative control).
-2. **The touch driver** — the panel is done — as a
-   `.ko` over SSH (testable on either kernel). ⚠️ Until touch exists, `app_launcher` exits on the
-   missing `/dev/input/touchscreen0` and the respawn loop clears fb0 every ~30 s — stop the init script
-   before judging a panel frame.
+2. **The touch driver** — single-touch works by hand; what remains is the Touch row above. ⚠️ Until the
+   module is loaded, `app_launcher` still exits after boot on the missing `/dev/input/touchscreen0` and
+   the respawn loop clears fb0 every ~30 s — stop the init script before judging a panel frame.
 3. **Explain the two dmesg lines our image adds.** `musb-hdrc musb-hdrc.0.auto: musb_init_controller
    failed with status -19` — USB host does not come up on our image, cause not investigated; read
    `drivers/usb/musb/` for the `-ENODEV` returns before theorising. And `omap2_set_init_voltage: unable
