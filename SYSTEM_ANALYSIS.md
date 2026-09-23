@@ -1749,8 +1749,10 @@ Verified behaviour:
   retries per partition and exit code 6 on final failure. Modify anything in that tree and every
   `.md5` beside it has to be regenerated.
 
-**Packaging an image we build, verified against the vendor's own.** Concatenate then wrap, reusing the
-vendor DTB verbatim — it is extracted from `uImage-system`, since the board has no separate `.dtb`:
+**Packaging an image we build, verified against the vendor's own.** Apply every patch in
+`usb_host/kernel-patches/` (`patch -p1` in the tree — without them the image boots with no network, see
+[Kernel policy](#7-kernel-policy)), build `zImage`, then concatenate and wrap, reusing the vendor DTB
+verbatim — it is extracted from `uImage-system`, since the board has no separate `.dtb`:
 
 ```
 cat arch/arm/boot/zImage vendor.dtb > zImage-with-dtb
@@ -2081,32 +2083,33 @@ ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reu
 The two are separate questions and the case against the second does not carry to the first. Asking
 Steelcase for their source is also ruled out, and is needed for neither.
 
-**The ruling, so this is not re-litigated: an image of ours is feasible, and what is left is work rather
-than unknowns.** Everything below is a *cost*; none of it has been found to be a blocker. In order of how
-well it is established: the image **links and packages** (measured); **installing** it needs no console,
-because `uImage-system` is overwritten in place and recovered by a card pull onto plain FAT (measured);
-the **first boot is expected blank and untouchable**, which is the known consequence of two dropped
-drivers rather than a failure, so it is asserted over SSH and never by looking at the panel; and both of
-those drivers have a decided fix whose inputs are in hand — the panel timings and its three GPIOs are
-recorded, the touch register map is published, and the touch half can be rehearsed on the running vendor
-kernel before any image exists. ⚠️ **No unknown is open any more** — the last one, what the vendor's DT
-machine descriptor ran at init, was read out on 2026-09-21 and cost nothing; the drop table carries it.
-**The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
+**The ruling, so this is not re-litigated: an image of ours boots, and what is left is work rather than
+unknowns — measured 2026-09-23 on `.188`.** Built from this tree plus the one source patch in the table
+below and written over `uImage-system`, it takes DHCP and answers SSH ~50 s after power-on. It comes up
+exactly as the table predicts: no `/dev/fb0` (omapfb `failed to setup` — no panel driver), no touch evdev,
+and the out-of-tree `xpad`/`joydev`/`snd_usb_audio` load. Two dmesg lines are **unexplained**: `musb-hdrc
+… musb_init_controller failed with status -19`, so USB host does not come up (cause not investigated), and
+`omap2_set_init_voltage: unable to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` (not yet compared with
+the vendor kernel's dmesg). **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
 not Steelcase source — but `build-kernel-modules.sh` configures it from the device's own `/proc/config.gz`
 plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
-there (`vermagic=4.14.52`). **A full image links and packages — measured 2026-09-21**: 5,195,732 bytes,
-load and entry `0x80008000`, by the recipe in [Boot chain and recovery](#4-boot-chain-and-recovery).
-⚠️ **The device is not running vanilla 4.14.52, though.** Its own config carries `CONFIG_CPU_SPECTRE` and
-`CONFIG_HARDEN_BRANCH_PREDICTOR`, neither of which exists for 32-bit ARM in .52 — so the vendor built
-with post-.52 stable backports, and an image from this tree is *close to* the device's kernel rather than
-the same one. What an image must supply for itself, `olddefconfig` having dropped each of these silently:
+there (`vermagic=4.14.52`); the image is packaged by the recipe in
+[Boot chain and recovery](#4-boot-chain-and-recovery). ⚠️ **The device is not running vanilla 4.14.52,
+though.** Its config carries `CONFIG_CPU_SPECTRE` and `CONFIG_HARDEN_BRANCH_PREDICTOR`, absent for 32-bit
+ARM in .52, so the vendor built with post-.52 stable backports (gcc 9.3.0 under Yocto — the 2018 build
+date is not the build year). **Find a vendor change by function size, not by config — measured
+2026-09-23:** of 31114 functions common to the vendor's `/proc/kallsyms` and our `System.map`, 55 differ in
+size, and the boot-relevant one was `smsc911x_drv_probe` (2788 vs 2692 B); vendor-only symbols are just
+`panjit_ts_*`, `sharp_*`, the rw20 logo, `__mach_desc_RW20` and the Spectre set (`cpu_ca17_*`). Disassemble
+the decompressed vendor `Image` and resolve its calls through that `kallsyms`. What an image must supply:
 
 | `/proc/config.gz` symbol | Absent from vanilla 4.14.52 | Cost |
 |---|---|---|
+| `CONFIG_SMSC911X=y` (survives `olddefconfig`) | the vendor's reset pulse in `smsc911x_drv_probe` | ⚠️ **no network at all, so an unpatched image answers nothing — measured 2026-09-23.** The vendor DT's `smsc,lan9221` node (GPMC CS5, `0x2c000000`) flags `reset-gpios = <&gpio1 17 0>` active-high; vanilla requests it `GPIOD_OUT_LOW` and never touches it again (`drivers/net/ethernet/smsc/smsc911x.c:453-455`), so the pin sits low, while the vendor probe drives it 0, sleeps 100 ms, drives it 1 (**measured** by disassembly), and the vendor kernel's `/sys/kernel/debug/gpio` shows `gpio-17 (reset) out hi`. That the LAN9221's reset is active-low is **[inferred]**, confirmed by outcome: with `usb_host/kernel-patches/smsc911x-reset-pulse.patch` reproducing the pulse, `eth0` probes and takes DHCP. No config diff and no compatible-string check can see this — the node is claimed and the driver built in |
 | `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **a blank panel, and not fixable by config** — the vendor DTB's `/display` is `compatible = "sharp,lq070y3lg4a"` alone, vanilla's `panel-dpi` matches only `omapdss,panel-dpi` (`displays/panel-dpi.c`, and `omapdss-boot-init.c` prepends the prefix), and a compatible string does not degrade — so nothing in the tree claims that node. `CONFIG_FB_OMAP2_PANEL_DPI=y` is **already set**. The timings are recorded ([Display](#32-display)) and the panel's three control lines are DT properties on that node (`pwrdn-gpios`, `lvds-gpios`, `backlight-gpios`), so the cost is either a `panel-dpi` clone that reads them, built out-of-tree, or — cheaper — a DT node of our own that stock `panel-dpi` claims: it is `tristate`, already `=y`, and its DT path reads only `panel-timing` (mandatory) and `enable-gpios` (optional) at `displays/panel-dpi.c:210-218`, taking no backlight GPIO outside platform data, while the other two control lines need no driver at all because this tree hogs a GPIO straight from DT (`gpio-hog` with `output-high`, `gpiolib-of.c:244-264`) — [Display](#32-display) is where that route is stated. ⚠️ **A *module* panel does get a framebuffer on an image of ours — [inferred] from source, 2026-09-21**: `omapfb_probe` snapshots the registered panels once and never re-scans, but returns `-EPROBE_DEFER` when it finds **zero** of them (`omapfb-main.c:2531-2535`), and deferred probe retriggers when any driver binds (`drivers/base/dd.c:283`) — which is this image's case precisely because the panel is the only display node and nothing claims it. ⚠️ **measured**: the vendor panel driver exposes no `bind`/`unbind`, so unlike touch this cannot be rehearsed on the running kernel |
-| `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low, and measured rather than asserted since 2026-09-21.** Every unique `compatible` string in the vendor DTB was checked against this tree (116 of them): all but twelve are claimed by a driver; nine more appear only in vanilla `.dts` files but are decorative CPU/DSP/bus-identity nodes, or are rescued by a driver-matched second string in the same property exactly as vanilla boards do it (`ti,omap3-l4-core` then `simple-bus`, `smsc,lan9221` then `smsc,lan9115`); one is `status = "disabled"`. **Exactly two enabled nodes have no possible binder — the panel and the touchscreen, both already rows in this table — so there is no third surprise.** `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
+| `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low, and measured rather than asserted since 2026-09-21.** Every unique `compatible` string in the vendor DTB was checked against this tree (116 of them): all but twelve are claimed by a driver; nine more appear only in vanilla `.dts` files but are decorative CPU/DSP/bus-identity nodes, or are rescued by a driver-matched second string in the same property exactly as vanilla boards do it (`ti,omap3-l4-core` then `simple-bus`, `smsc,lan9221` then `smsc,lan9115`); one is `status = "disabled"`. **Exactly two enabled nodes have no possible binder — the panel and the touchscreen, both already rows in this table.** ⚠️ A claimed node can still fail at probe, which this check cannot see — the `smsc911x` row is that case. `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
 | `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **a dead touchscreen**, from a silent drop. ⚠️ **Not written from specs — adapted, measured 2026-09-21**: the tree already holds a same-family driver, `drivers/input/touchscreen/cy8ctmg110_ts.c` — I2C, `tristate`, register map at `:41-50` — and it bursts nine bytes from reg 3, spanning the second coordinate pair and the finger count, then discards the second point exactly as `panjit_ts` does ([Touch](#33-touch)). It is platform-data-only (`:187-190` returns `-ENODEV` without pdata), so the work is an `of_match_table`, gpiod for its legacy integer GPIO calls, a falling IRQ for its `IRQF_TRIGGER_RISING`, the hardcoded `759x465` range, and slot reporting for the pair it already reads. ⚠️ **The 110→120 delta is closed — measured 2026-09-21**: a nine-byte read from reg 3 on `/dev/i2c-2` matches that register map byte-for-byte, so the adaptation is against a known layout rather than a guessed one, and [Touch](#33-touch) carries the map, the 12-bit `0..4095` range that replaces the hardcoded `759x465`, and the `0x0fff` flag mask a port must apply. ⚠️ **And it is rehearsable before any image exists — measured**: `/sys/bus/i2c/drivers/panjit_ts/` carries `bind` and `unbind` with device `2-0003`, so a replacement module can evict the vendor driver on the running kernel, with a reboot as the undo and no write to p1. ⚠️ **Reading the controller needs not even that**: `I2C_RDWR` carries the target address inside each `i2c_msg` and never consults the busy list that makes `I2C_SLAVE` return `-EBUSY` (`drivers/i2c/i2c-dev.c`), so the map above was read with the vendor driver bound and serving touch normally — nothing to evict and nothing to undo. `input_mt_*` is exported there too, so multi-touch needs no image either |
-| `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **nothing at all, and this row is closed — measured 2026-09-21.** Neither symbol can drive a line of code in this tree: `OMAP_PACKAGE_CUS` is a bare unreferenced `bool` (`arch/arm/mach-omap2/Kconfig:180`) and `omap3_mux_init` does not exist anywhere in 4.14.52, the legacy `omap_mux` layer having been deleted upstream before this release — so a vendor board file calling it would not even link. The machine descriptor is moot for the same reason it looked dangerous: DT match scores a descriptor by the **1-based position** of the string it hits in the root `compatible` list (`drivers/of/fdt.c:94-113`), the vendor root is `"ti,omap3-rw20", "ti,omap3"`, and vanilla's `OMAP3_DT` claims the second at score 2 (`board-generic.c:122`) — nothing matches the first, so `OMAP3_DT` wins and the image gets the full generic OMAP3 init (`omap3430_init_early`, then `omap_generic_init`). None of that path touches pinmux, which matches a DTB bringing its own: 27 `pinmux` nodes, 11 `_pins` blocks, 13 `pinctrl-0`/`pinctrl-names` consumers including `/display`, and the audio binding (`ti,omap-twl4030`) |
+| `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **nothing at all, and this row is closed — measured 2026-09-21.** Neither symbol can drive a line of code in this tree: `OMAP_PACKAGE_CUS` is a bare unreferenced `bool` (`arch/arm/mach-omap2/Kconfig:180`) and `omap3_mux_init` does not exist anywhere in 4.14.52, the legacy `omap_mux` layer having been deleted upstream before this release — so a vendor board file calling it would not even link. The machine descriptor is moot for the same reason it looked dangerous: DT match scores a descriptor by the **1-based position** of the string it hits in the root `compatible` list (`drivers/of/fdt.c:94-113`), the vendor root is `"ti,omap3-rw20", "ti,omap3"`, and vanilla's `OMAP3_DT` claims the second at score 2 (`board-generic.c:122`) — nothing matches the first, so `OMAP3_DT` wins and the image gets the full generic OMAP3 init (`omap3430_init_early`, then `omap_generic_init`). ⚠️ **And `MACH_RW20` is inert on the vendor kernel too — measured 2026-09-23:** its `__mach_desc_RW20` is field-for-field vanilla's `Generic OMAP3 (Flattened Device Tree)` (the same seven callbacks, `omap_reserve` through `omap3xxx_restart`), differing only in name and compatible, and `debug_ll_addr` is identical code in both (UART2 `0x4806c000`, `ttyO1`). None of that path touches pinmux, which matches a DTB bringing its own: 27 `pinmux` nodes, 11 `_pins` blocks, 13 `pinctrl-0`/`pinctrl-names` consumers including `/display`, and the audio binding (`ti,omap-twl4030`) |
 | `CONFIG_LOGO_LINUX_RW20_CLUT224` | a vendor boot logo | **cosmetic** — and the running kernel suppresses it anyway with `initcall_blacklist=fb_logo_late_init` in `bootargs`, so an image we build is free to carry its own |
 
 **Module or image: decide it from the device's own config, not from the subsystem.** A feature whose
@@ -2130,12 +2133,9 @@ real, but none of them limits anything measured.
 not trigger recovery: U-Boot prints `Failure to load system kernel image` and lands at the `rw20 #`
 prompt with nothing changed ([Boot chain and recovery](#4-boot-chain-and-recovery)). Booting an alternate
 *filename* needs that prompt, so it needs the console; overwriting `uImage-system` does not, and its
-recovery is a card pull plus copying a backup back onto p1, which is plain FAT and mounts on the host —
-not a full reimage. ⚠️ **So spend the risk once, on a config-only image, and assert the result over SSH
-rather than by looking at the panel**: the first image is expected to come up blank and untouchable, and
-a blank panel therefore proves nothing about whether it booted. Once SSH answers, every panel and touch
-iteration after that is a `.ko` copied over SSH with no physical access at all. There is still no
-`/dev/uinput`, so touch itself always ends at an operator ([Touch](#33-touch)).
+recovery is a card pull plus copying a backup back onto p1 (plain FAT). ⚠️ **Assert an image over SSH,
+never by the panel**, which stays blank until the panel driver exists; from SSH on, every panel and touch
+iteration is a `.ko` copied over, and touch itself still ends at an operator ([Touch](#33-touch)).
 
 **A mainline 5.x/6.x port stays out, on DRM/KMS.** `omapfb`/`omapdss` were deprecated across 4.x and
 **removed from mainline during 5.x**; the OMAP3 replacement `omapdrm` is a DRM/KMS driver. Under it

@@ -138,7 +138,7 @@ vendor soft watchdog, a reset cannot be attributed to the hardware one: check wh
 before drawing that conclusion.
 
 **Recovery is not a reboot** — a driver unbind+bind ends a live storm, which is how Aug 13's stopped in
-~20 s. **The fix is a driver patch, folded into F101**, and cannot ship before an image we built boots.
+~20 s. **The fix is a driver patch, folded into F101**, and cannot ship before an image we built is the deployed one.
 Distinct from enumeration-at-probe, which is about a cold port never obtaining a session.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
@@ -866,24 +866,25 @@ instructions imply that any machine with a card reader will do.
 standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
 `usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
 `build-kernel-modules.sh` and already **measured** producing modules that load on the device. ⚠️ **The
-build and the packaging are no longer the question — measured 2026-09-21, a full image links and wraps
-into a `uImage` by a recipe proven byte-identical against the vendor's own**
-([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the drop
-list, the boot channel and the two replacement drivers.
+image boots — measured 2026-09-23 on `.188`**: with `usb_host/kernel-patches/` applied it reaches
+userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
+unpatched image died of, and the recipe is
+[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is the two
+replacement drivers and two unexplained dmesg lines.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
 byte-patch route into p1; that in turn dissolves F23's per-firmware pattern gate and gives back the free
-undo both bring-up paths lost. ⚠️ **None of that is delivered until an image we built is booting on a
-unit**, so F23 stays open and the byte patch stays shipped meanwhile — do not delete either on the
-strength of this entry.
+undo both bring-up paths lost. ⚠️ **None of that is delivered until an image we built is the one a unit
+is deployed on** — panel and touch working, USB power carried in its own DTB — so F23 stays open and the
+byte patch stays shipped meanwhile; do not delete either on the strength of this entry.
 
 **What to fold in, so the image is built once with everything wanted in it:**
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It does not block the first image and can be written before one exists:** the vendor driver unbinds on the running kernel, so this is developed and proven there first ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
-| Display | a DT node of our own that stock `panel-dpi` claims, with the clone out-of-tree as the fallback | **the blocker that has no rehearsal** — the vendor DTB names a panel no vanilla driver claims, and the panel driver exposes no `unbind`, so the first proof is a booted image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Try the DT route first.** That it was "preferred over editing the DTB, which p1 cannot roll back in place" was an argument about the *vendor's* DTB; the one appended to an image of ours is authored by us already, so editing it spends nothing the first image does not spend anyway, and a wrong `panel-timing` still boots and still answers SSH. A *module* panel binding late is no longer inferred-and-unsupported either — [§7](SYSTEM_ANALYSIS.md#7-kernel-policy) carries the deferred-probe mechanism that makes it work on this image. ⚠️ Still **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
+| Touch | a `panjit_ts` equivalent, **adapted** from the same-family `cy8ctmg110_ts.c` already in the tree ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)) | Build it as an **out-of-tree module** beside `xpad.ko`, not into the image — this kernel force-loads modules, and keeping a vendor-shaped driver out of the image keeps the image cleanly ours to publish. Decided 2026-09-07. ⚠️ **It can now be proven on either kernel:** the vendor driver unbinds on the running vendor kernel ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)), and our booting image has nothing bound to that node at all, so the module loads there as-is — or is built into the image, if the out-of-tree decision above is revisited now that an image of ours exists. ⚠️ **The register map is validated — done 2026-09-21**, so no part of this is against an unknown protocol: [`#33-touch`](SYSTEM_ANALYSIS.md#33-touch) holds the byte layout, the 12-bit range that replaces the driver's hardcoded `759x465`, and the `0x0fff` mask. **Estimate, now that the unknowns are priced rather than guessed: roughly half a day to single-touch parity and about a day to reported multi-touch** — the base driver is a couple of hundred lines, the changes are five bounded edits (`of_match_table`, gpiod for its legacy integer GPIO calls, falling IRQ against its `IRQF_TRIGGER_RISING`, the raw range, `input_mt_*` slots for the pair it already reads), and every iteration is an unbind-rebind over SSH with a reboot as the undo. ⚠️ **That is an estimate and not a measurement** — the one thing that could break it is the flag semantics behind the `0x0fff` mask, which are `[n=2]` and unknown |
+| Display | a DT node of our own that stock `panel-dpi` claims, with the clone out-of-tree as the fallback | **the next step, and the one with no rehearsal** — the vendor DTB names a panel no vanilla driver claims (measured on our image: no `/dev/fb0`, omapfb `failed to setup`), and the panel driver exposes no `unbind`, so it is proven only on our image ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). ⚠️ **Try the DT route first.** That it was "preferred over editing the DTB, which p1 cannot roll back in place" was an argument about the *vendor's* DTB; the one appended to an image of ours is authored by us already, so editing it spends nothing the first image does not spend anyway, and a wrong `panel-timing` still boots and still answers SSH. A *module* panel binding late is no longer inferred-and-unsupported either — [§7](SYSTEM_ANALYSIS.md#7-kernel-policy) carries the deferred-probe mechanism that makes it work on this image. ⚠️ Still **[inferred]** that `lvds-gpios`/`backlight-gpios` need driving for the panel to be lit rather than merely bound |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
@@ -894,56 +895,34 @@ strength of this entry.
 
 **The order to do it in, cheapest first.** Each step is worth finishing before the next is started.
 
-1. **~~Triage the board-file drop~~ — done, and it cleared completely.** Nothing the vanilla tree lacks
-   here can stop step 2: the dropped package symbol drives no code in 4.14.52, the machine descriptor
-   resolves to the generic OMAP3 one via the vendor root's own fallback string, and the panel and the
-   touchscreen are the only two nodes left unclaimed ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
-2. **~~Boot one config-only image and assert it over SSH~~ — ATTEMPTED 2026-09-21 and it did not come
-   back. The image is exonerated; the cause is unreached.** Written to p1 as `uImage-system` on arwtest2
-   (`.188`) after md5-verified backups of both the running 500 mA kernel and the pristine vendor image
-   were placed beside it, then rebooted: **no SSH, no ARP entry, and a `.100`–`.254` sweep found the unit
-   at no other address**, so it is not merely on a new DHCP lease. ⚠️ **Do not re-run this step without a
-   console** — SSH was always the assertion, and a kernel that never reaches userspace cannot be asked
-   anything, which is what makes the next attempt gated on reading the boot log rather than on another
-   build. Two whole classes of cause are **measured out**, and re-deriving them is waste:
-   - **Not packaging.** `64 + zImage + appended DTB` reproduces the uImage's byte length exactly, the FDT
-     magic sits precisely at `64 + |zImage|`, the appended DTB md5s equal to the extracted vendor DTB, and
-     load *and* entry are `0x80008000` with `os/arch/type/comp` byte-identical to the vendor image's.
-   - **Not a dropped config symbol.** Exactly **seven** symbols are `=y` in the device's own config and
-     absent after `olddefconfig`, and every one is already a row in this table or costs nothing: the two
-     Spectre hardening symbols, the panel, the logo, the board-file pair, and touch. The network driver,
-     MMC and ext4 all survive — so "the interface never initialised" cannot be a configure-out, whatever
-     else it may be. The built `.config` was diffed against the saved copy and is identical, so that
-     comparison is about the artifact that actually shipped.
-   ⚠️ **The panel remains the wrong instrument** — a first image is expected blank and untouchable, so a
-   dark screen distinguishes nothing. A warm-reboot speaker click distinguishes nothing either: the codec
-   clicks when it is torn down as readily as when it is brought up.
-3. **Then the two drivers, iterated as `.ko` over SSH**, with no further physical access: touch (already
-   rehearsable on the vendor kernel today) and the panel clone (only testable from step 2 onward).
+1. **~~Triage the board-file drop~~ and ~~boot one image, asserted over SSH~~ — both done.** Nothing the
+   vanilla tree lacks blocks a boot except the Ethernet reset pulse, which is a source patch and not a
+   config symbol ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) has the mechanism and the function-size diff
+   that found it). **`.188`'s p1 now holds** `uImage-system` = our image (md5 `3713faf7…`, with the
+   **pristine vendor DTB**, so without the 500 mA USB power patch), beside `uImage-system.vendor`
+   (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
+   *without* the patch, kept as the negative control).
+2. **The two drivers, iterated as `.ko` over SSH**, with no further physical access: the panel first
+   (only testable on our image), then touch (testable on either kernel).
+3. **Explain the two dmesg lines our image adds.** `musb-hdrc musb-hdrc.0.auto: musb_init_controller
+   failed with status -19` — USB host does not come up on our image, cause not investigated; read
+   `drivers/usb/musb/` for the `-ENODEV` returns before theorising. And `omap2_set_init_voltage: unable
+   to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` — first check whether the vendor kernel's dmesg
+   prints the same line; if it does, this is not ours.
 
-**Which boot channel, and what it costs — writing an image needs no console, but diagnosing one does.**
-⚠️ **Booting an alternate filename requires the `rw20 #` prompt**, so it requires the console; overwriting
-`uImage-system` does not, and recovery for that is a card pull plus copying a backup back onto p1
+**Which boot channel, and what it costs — writing an image needs no console.** Booting an alternate
+filename requires the `rw20 #` prompt, so it requires the console; overwriting `uImage-system` does not,
+and recovery for that is a card pull plus copying a backup back onto p1
 ([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). **The operator has ruled
-that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily"** — and it was
-exercised the same day, which is how step 2 ran at all. It does not retire the standing rule it suspends
-([§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3 is correct for anyone without a card writer to hand):
-the price is the free undo, so **take a verified p1 backup before the write** — back up the *running*
+that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily".** It does not
+retire the standing rule it suspends ([§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3 is correct for
+anyone without a card writer to hand): **take a verified p1 backup before the write** — of the *running*
 kernel and not merely the pristine vendor one, because on a unit carrying the USB-power patch those are
-different files and the overwrite removes that patch until it is re-applied. ⚠️ **What step 2 proved is
-that the overwrite is not the bottleneck: the boot log is.** A kernel that never reaches userspace answers
-no SSH, so the next attempt is gated on reading the console, not on another build.
-
-⚠️ **The console is therefore now on the critical path, and the cable was the trap.** The operator has
-**fitted the `P4` header** and owns four flying-lead USB-**TTL** cables, which cannot drive `P4` at all —
-it is RS-232 behind `U27` — and **a MAX3232 breakout was ordered 2026-09-21** to bridge them. Two things
-are available before it arrives: an RS-232 output idles at **−5 to −12 V** against its ground while a TTL
-one idles **high**, so one meter reading classifies any cable; and `U27` pin 11 (`T1IN`) is the SoC's TX at
-logic level, which buys a **read-only** boot log on a single sense wire with ground taken from `P4` pin 5
-([`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion) has both, and the
-warning against driving pin 12 to type). ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image** as a
-way around any of this: it overwrites two protected files and destroys the vendor recovery image.
-Considered and rejected 2026-09-21.
+different files. The serial console (`P4`, fitted; RS-232 behind `U27`, a MAX3232 breakout ordered for
+the operator's TTL cables — [`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion))
+is **off the critical path** now that SSH answers, and remains the only channel for an image that does
+not. ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and
+destroys the vendor recovery image. Considered and rejected 2026-09-21.
 
 ## Structural and cleanup
 

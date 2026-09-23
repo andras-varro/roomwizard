@@ -1,0 +1,18 @@
+--- a/drivers/net/ethernet/smsc/smsc911x.c
++++ b/drivers/net/ethernet/smsc/smsc911x.c
+@@ -453,6 +453,15 @@
+ 	pdata->reset_gpiod = devm_gpiod_get_optional(&pdev->dev,
+ 						     "reset",
+ 						     GPIOD_OUT_LOW);
++	/* The RW20 DT flags this line active-high while the LAN9221 reset
++	 * pin is active-low: requesting it OUT_LOW holds the chip in reset.
++	 * Reproduce the vendor kernel's pulse, which ends with the line high.
++	 */
++	if (!IS_ERR_OR_NULL(pdata->reset_gpiod)) {
++		gpiod_set_value_cansleep(pdata->reset_gpiod, 0);
++		msleep(100);
++		gpiod_set_value_cansleep(pdata->reset_gpiod, 1);
++	}
+ 
+ 	/* Request clock */
+ 	pdata->clk = clk_get(&pdev->dev, NULL);

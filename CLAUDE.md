@@ -15,7 +15,7 @@ and looking at the panel — framebuffer screenshots via `fb565_to_png.py`.
 
 **Kernel policy: we build our own 4.14.52 image; a mainline 5.x/6.x port stays out.** The vanilla
 `usb_host/linux-4.14.52/` tree builds from the device's own config, and asking Steelcase for source is
-ruled out and unnecessary. ⚠️ Built as it stands the image boots with a **dead touchscreen** —
+ruled out and unnecessary. ⚠️ It boots only with `usb_host/kernel-patches/` applied (no network without), and with a **dead touchscreen** —
 `CONFIG_TOUCHSCREEN_PANJIT` has no vanilla source and `olddefconfig` drops it silently — `SYSTEM_ANALYSIS.md#7-kernel-policy`.
 
 ### One fact, one home
