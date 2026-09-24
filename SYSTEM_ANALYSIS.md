@@ -615,12 +615,12 @@ Two secondary effects, measured at the same time:
 Every touch measurement in this section is **`[n=1]`** — the digits are RW09's. Touch itself is
 confirmed working on two or more units; no second panel has been *swept* and recorded.
 
-**Multi-touch exists in hardware but not in the driver, and the controller's register map is settled.**
-`panjit_ts` reports only `ABS_X`/`ABS_Y`/`BTN_TOUCH` with no MT slots. The controller is **2-point
-multi-touch with on-chip gesture recognition**, and the vendor factory-test binary `opt/pv02/pv02_app`
-drives it. On the vendor kernel, reaching it means bypassing the driver on `/dev/i2c-2` — userspace-only,
-no `unbind` ([Kernel policy](#7-kernel-policy)); on our image our driver can report both points, not yet
-implemented. Proposal: `IMPROVEMENT_PLAN.md`.
+**Two points are a bounding box, not two fingers — measured 2026-09-23 on `.188`, raw bursts in `dmesg`.**
+Point 1 is (min X, min Y), point 2 (max X, max Y): top-right + bottom-left reads identically to top-left +
+bottom-right, so the diagonal is lost on-chip. Registers 19..31 (and on, unmapped) carry per-electrode signal
+levels — **axis-profile sensing** `[inferred]`; reg 31 rose `0x1b`→`0x5d` on a firmer press, a contact-area
+"pressure" candidate `[n=1]`. The vendor `panjit_ts` reports only `ABS_X`/`ABS_Y`/`BTN_TOUCH`; on the vendor
+kernel the chip is reachable only via `/dev/i2c-2`, no `unbind` ([Kernel policy](#7-kernel-policy)).
 
 **A nine-byte burst from register 3 at address `0x03` is the entire protocol**, read against a live
 finger on 2026-09-21: `X1` at bytes 3–4, `Y1` at 5–6, `X2` at 7–8, `Y2` at 9–10 and the finger count at
@@ -629,9 +629,9 @@ finger on 2026-09-21: `X1` at bytes 3–4, `Y1` at 5–6, `X2` at 7–8, `Y2` at
 map. The count reads **0, 1 and 2**, and the second point carries independent data rather than an echo of
 the first (`X1=1024 Y1=1928 X2=3090 Y2=1936`). Two corrections to that driver, both measured here:
 **coordinates are 12-bit `0..4095`, not its hardcoded `759x465`** (observed `X1` 272..3832, `Y1`
-4..4081, `Y2` max 4090); and ⚠️ **the top bits of a coordinate's high byte carry flags, not coordinate**
-— `X2` read `0x408E` twice, `[n=2]` — so **a port must mask `0x0fff`**. The mask is right at any sample
-size; the flag *semantics* are not. **Quiescent, registers 0..12 read
+4..4081, `Y2` max 4090); and ⚠️ **`X2 = 0x408E` exactly is an "unresolved" marker, not a coordinate** —
+masked it becomes 142, a dot on the left. After a two-finger touch ends, **every later one reads it until the
+chip is reset**; single touches do not cause it; near the right edge it can persist a whole touch. **Quiescent, registers 0..12 read
 `08 00 00 ff ff ff ff ff ff ff ff 00 00`**: coordinates park at `0xffff` and the count at 0, identically
 on both units — so "no finger" is distinguishable from a failed read with no previous sample to compare
 against, which is what lets a reader of this map validate itself.

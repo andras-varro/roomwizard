@@ -16,7 +16,8 @@
  *     reg1 = 0x00 after each read. Without that write the part reports one
  *     touch and then stalls (measured);
  *   - on lift, reg0 = 0x08 and reg1 = 0x00 again, then the IRQ re-arms.
- * Coordinates are 12-bit 0..4095 with flag bits above, masked 0x0fff.
+ * Coordinates are 12-bit 0..4095; a value with bits above 0x0fff is an
+ * "unresolved" marker, handled in the IRQ thread.
  *
  * Event order per frame is ABS_X, ABS_Y, BTN_TOUCH, SYN_REPORT, the order
  * native_apps/common/touch_input.c relies on. The input device is named
@@ -26,6 +27,9 @@
  * X2/Y2, valid while byte 8's count covers them), ahead of the legacy
  * events. The slots are reported by hand: input_mt_sync_frame()'s pointer
  * emulation emits BTN_TOUCH before ABS_X/ABS_Y, which breaks that order.
+ * With two fingers the part reports the corners of their bounding box —
+ * (min X, min Y) and (max X, max Y) — not the fingers: top-right plus
+ * bottom-left reads the same as top-left plus bottom-right (measured).
  * No ABS_PRESSURE: the vendor's was a constant 255/0 and nothing reads it.
  */
 
@@ -51,16 +55,67 @@
 #define COORD_MAX	4095
 #define POLL_MS		10
 #define MAX_FINGERS	2
+#define REGDUMP_LEN	32
 
 static bool debug;
 module_param(debug, bool, 0644);
-MODULE_PARM_DESC(debug, "log every burst as raw bytes (rate-limited)");
+MODULE_PARM_DESC(debug, "log every burst that changes, as raw bytes");
+
+static bool regdump;
+module_param(regdump, bool, 0644);
+MODULE_PARM_DESC(regdump, "also log registers 0..31 whenever they change");
+
+static bool reset_after_mt = true;
+module_param(reset_after_mt, bool, 0644);
+MODULE_PARM_DESC(reset_after_mt, "reset the part after each two-finger touch");
 
 struct cy8_ts {
 	struct i2c_client *client;
 	struct input_dev *input;
+	struct gpio_desc *reset;
 	char phys[32];
 };
+
+static int cy8_reset(struct cy8_ts *ts);
+
+static int cy8_dist2(int ax, int ay, int bx, int by)
+{
+	return (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
+}
+
+/*
+ * The part reports two fingers as the corners of their bounding box, so a
+ * finger pair is either (x0,y0)+(x1,y1) or (x0,y1)+(x1,y0), in either slot
+ * order. Pick the one of those four that moves the previously reported
+ * slots least. It cannot choose when both fingers are level in one axis:
+ * the corners then carry no diagonal at all.
+ */
+static void cy8_pair(int *x, int *y, const int *px, const int *py,
+		     const bool *pv)
+{
+	static const int pick[4][4] = {	/* slot0 x,y ; slot1 x,y (indices) */
+		{ 0, 0, 1, 1 }, { 1, 1, 0, 0 }, { 0, 1, 1, 0 }, { 1, 0, 0, 1 },
+	};
+	int bx[2] = { x[0], x[1] }, by[2] = { y[0], y[1] };
+	int k, best = 0, best_cost = INT_MAX;
+
+	for (k = 0; k < 4; k++) {
+		int cost = 0;
+
+		if (pv[0])
+			cost += cy8_dist2(bx[pick[k][0]], by[pick[k][1]], px[0], py[0]);
+		if (pv[1])
+			cost += cy8_dist2(bx[pick[k][2]], by[pick[k][3]], px[1], py[1]);
+		if (cost < best_cost) {
+			best_cost = cost;
+			best = k;
+		}
+	}
+	x[0] = bx[pick[best][0]];
+	y[0] = by[pick[best][1]];
+	x[1] = bx[pick[best][2]];
+	y[1] = by[pick[best][3]];
+}
 
 static int cy8_read(struct cy8_ts *ts, u8 reg, u8 *buf, u8 len)
 {
@@ -90,10 +145,13 @@ static irqreturn_t cy8_irq_thread(int irq, void *dev_id)
 {
 	struct cy8_ts *ts = dev_id;
 	struct input_dev *input = ts->input;
-	bool down = false;
-	u8 b[BURST_LEN];
-
-	int i;
+	bool down = false, two = false;
+	u8 b[BURST_LEN], last[BURST_LEN] = { 0 };
+	u8 regs[REGDUMP_LEN], last_regs[REGDUMP_LEN] = { 0 };
+	int held_x[MAX_FINGERS] = { -1, -1 }, held_y[MAX_FINGERS] = { -1, -1 };
+	int px[MAX_FINGERS] = { 0 }, py[MAX_FINGERS] = { 0 };
+	bool pv[MAX_FINGERS] = { false, false };
+	int i, passing = 0;
 
 	for (;;) {
 		int x[MAX_FINGERS], y[MAX_FINGERS];
@@ -103,25 +161,64 @@ static irqreturn_t cy8_irq_thread(int irq, void *dev_id)
 			dev_err_ratelimited(&ts->client->dev, "burst read failed\n");
 			break;
 		}
-		if (debug)
-			dev_info_ratelimited(&ts->client->dev, "%*ph\n", BURST_LEN, b);
+		/* Every change, unthrottled: a rate limit drops the poses. */
+		if (debug && memcmp(b, last, sizeof(b)))
+			dev_info(&ts->client->dev, "%*ph\n", BURST_LEN, b);
+		memcpy(last, b, sizeof(b));
+		if (regdump && !cy8_read(ts, REG_MODE, regs, sizeof(regs)) &&
+		    memcmp(regs, last_regs, sizeof(regs))) {
+			dev_info(&ts->client->dev, "regs %*ph\n", REGDUMP_LEN, regs);
+			memcpy(last_regs, regs, sizeof(regs));
+		}
+		/*
+		 * Count 0 with a real X1 is not a lift: the part sends one such
+		 * burst whenever a finger joins or leaves a touch (measured). A
+		 * lift reads all 0xff. Skip the former, bounded in case it sticks.
+		 */
+		if (!b[8] && (b[0] != 0xff || b[1] != 0xff) && ++passing <= 10) {
+			cy8_write(ts, REG_ACK, 0);
+			msleep(POLL_MS);
+			continue;
+		}
 		if (!b[8])
 			break;
+		passing = 0;
 		cy8_write(ts, REG_ACK, 0);
+		if (b[8] >= 2)
+			two = true;
 
 		for (i = 0; i < MAX_FINGERS; i++) {
 			x[i] = (b[4 * i] << 8) | b[4 * i + 1];
 			y[i] = (b[4 * i + 2] << 8) | b[4 * i + 3];
 			on[i] = i < b[8] && x[i] != COORD_NONE && y[i] != COORD_NONE;
-			x[i] &= COORD_MASK;
-			y[i] &= COORD_MASK;
+			/*
+			 * A coordinate with bits above 0x0fff set is unresolved, not
+			 * large: X2 reads exactly 0x408e for seconds at a time while
+			 * a second finger is down (measured). Hold the slot's last
+			 * value; a slot with none yet is not reported until it has.
+			 */
+			if (on[i] && (x[i] & ~COORD_MASK))
+				x[i] = held_x[i] >= 0 ? held_x[i] : COORD_MAX;
+			if (on[i] && (y[i] & ~COORD_MASK))
+				y[i] = held_y[i];
+			if (x[i] < 0 || y[i] < 0)
+				on[i] = false;
+			held_x[i] = on[i] ? x[i] : -1;
+			held_y[i] = on[i] ? y[i] : -1;
+		}
+		if (on[0] && on[1])
+			cy8_pair(x, y, px, py, pv);
 
+		for (i = 0; i < MAX_FINGERS; i++) {
 			input_mt_slot(input, i);
 			input_mt_report_slot_state(input, MT_TOOL_FINGER, on[i]);
 			if (on[i]) {
 				input_report_abs(input, ABS_MT_POSITION_X, x[i]);
 				input_report_abs(input, ABS_MT_POSITION_Y, y[i]);
 			}
+			pv[i] = on[i];
+			px[i] = x[i];
+			py[i] = y[i];
 		}
 		if (on[0]) {
 			input_report_abs(input, ABS_X, x[0]);
@@ -142,16 +239,47 @@ static irqreturn_t cy8_irq_thread(int irq, void *dev_id)
 	if (down)
 		input_report_key(input, BTN_TOUCH, 0);
 	input_sync(input);
+	/*
+	 * After a two-finger touch ends, every later one reads X2 as the
+	 * unresolved marker until the part is reset; single touches do not
+	 * cause this (measured, two rounds). Costs ~120 ms blind after lift.
+	 */
+	if (two && reset_after_mt && cy8_reset(ts) >= 0)
+		cy8_write(ts, REG_MODE, MODE_RUN);
 	return IRQ_HANDLED;
+}
+
+/*
+ * Reset pulse, reg0 = 0, then clear reg1 until it reads 0. Returns the
+ * number of reads that took, or a negative errno; reg0 = MODE_RUN is the
+ * caller's.
+ */
+static int cy8_reset(struct cy8_ts *ts)
+{
+	u8 ack = 0xff;
+	int err = 0, i;
+
+	if (ts->reset) {
+		gpiod_set_value_cansleep(ts->reset, 1);
+		msleep(20);
+		gpiod_set_value_cansleep(ts->reset, 0);
+		msleep(100);
+	}
+	cy8_write(ts, REG_MODE, 0);
+	for (i = 0; i < 10; i++) {
+		err = cy8_read(ts, REG_ACK, &ack, 1);
+		if (!err && !ack)
+			break;
+		cy8_write(ts, REG_ACK, 0);
+	}
+	return err ? err : i + 1;
 }
 
 static int cy8_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
-	struct gpio_desc *reset;
 	struct cy8_ts *ts;
-	u8 ack = 0xff;
-	int err, i;
+	int err, reads;
 
 	if (client->irq <= 0) {
 		dev_err(dev, "no IRQ in the DT node\n");
@@ -164,23 +292,12 @@ static int cy8_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	ts->client = client;
 
 	/* reset-gpios is active-high; pulse it so a reload resets the part too. */
-	reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(reset))
-		return PTR_ERR(reset);
-	if (reset) {
-		msleep(20);
-		gpiod_set_value_cansleep(reset, 0);
-		msleep(100);
-	}
+	ts->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(ts->reset))
+		return PTR_ERR(ts->reset);
 
-	cy8_write(ts, REG_MODE, 0);
-	for (i = 0; i < 10; i++) {
-		err = cy8_read(ts, REG_ACK, &ack, 1);
-		if (!err && !ack)
-			break;
-		cy8_write(ts, REG_ACK, 0);
-	}
-	if (err) {
+	reads = err = cy8_reset(ts);
+	if (err < 0) {
 		dev_err(dev, "controller does not answer: %d\n", err);
 		return -ENXIO;
 	}
@@ -218,7 +335,7 @@ static int cy8_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	cy8_write(ts, REG_MODE, MODE_RUN);
 	i2c_set_clientdata(client, ts);
 	dev_info(dev, "irq %d, reset %s, reg1 cleared after %d reads\n",
-		 client->irq, reset ? "gpio" : "none", i + 1);
+		 client->irq, ts->reset ? "gpio" : "none", reads);
 	return 0;
 }
 
