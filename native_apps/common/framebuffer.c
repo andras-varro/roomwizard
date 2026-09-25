@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <linux/fb.h>
+#include <linux/kd.h>
 
 // Runtime bezel margins (pixels hidden by the plastic bezel)
 int screen_bezel_top    = FB_BEZEL_TOP_DEFAULT;
@@ -463,9 +464,25 @@ static inline void *fb_target(Framebuffer *fb) {
     return fb->double_buffering ? (void *)fb->back_buffer : (void *)fb->buffer;
 }
 
+// On our kernel image the panel is also the boot console, and fbcon would draw every
+// later printk over whatever an app has mmapped. KD_GRAPHICS stops fbcon drawing. It is
+// set on every init, so a crashed or kill -9'ed predecessor is repaired, and fb_close()
+// never puts KD_TEXT back: the launcher closes and re-inits around each child, and the
+// console would flash in between. /dev/tty0 explicitly, because apps started from init
+// have no controlling tty. On the vendor kernel, which has no console on the panel, it is
+// a harmless no-op.
+static void fb_console_graphics(void) {
+    int tty = open("/dev/tty0", O_RDWR | O_CLOEXEC);
+    if (tty < 0) return;
+    ioctl(tty, KDSETMODE, KD_GRAPHICS);
+    close(tty);
+}
+
 int fb_init(Framebuffer *fb, const char *device) {
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
+
+    fb_console_graphics();
 
     // Load bezel margins from calibration config
     fb_load_bezel();

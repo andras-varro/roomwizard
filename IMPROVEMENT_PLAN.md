@@ -570,34 +570,6 @@ are six idle general-purpose channels and a potentiometer on one would be a real
 channel, which [`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) rules
 out. That is a scope decision, not a difficulty one.
 
-### F6. Multi-touch via direct I2C — open
-
-The panel controller is 2-point multi-touch with on-chip gestures, and `panjit_ts` flattens it to
-single-touch. Bypass the driver via `/dev/i2c-2` — userspace only, so the kernel policy does not touch
-this. Enables pinch-zoom in ScummVM, two-players-on-one-screen, launcher gestures.
-
-**The register map is settled, so the protocol half of this is done.** The controller is a Cypress PSoC
-part whose I2C map is published documentation, the parse was already written in a same-family in-tree
-driver, and a nine-byte read from reg 3 has now **confirmed that map byte-for-byte against a live finger**
-— second point carrying real independent data, finger count observed at 0, 1 and 2. The map, the 12-bit
-range, the `0x0fff` flag mask and the quiescent pattern are
-[`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch); reading needs no `unbind` and no p1 write,
-for the `I2C_RDWR` reason recorded there. ⚠️ `i2cget`/`i2cdump` are **not on the device** — measured
-2026-09-21 — so this is a small cross-compiled binary, not a shell loop, and **one already exists**:
-`i2c_touch_read.c` in the scratch tree, ARM-static and idiv-clean, with a bus scan and an `--evdev` witness
-mode whose three-way verdict (LIVE DATA / MAP IS WRONG / TRACE IS VOID) makes a trace self-validating
-rather than merely silent. ⚠️ **It is not in the repo, and whether it earns a home is undecided** — a
-`native_apps` device tool in `GAMES_BINARIES`, or scratch. Deciding that is the first step here, because
-the answer determines whether the next session can reproduce anything.
-
-**What is left is the consumer, not the protocol:** on our image `cy8ctmg120_ts` already reports both
-points as type-B `input_mt_*` slots ([`kernel/README.md`](kernel/README.md)); on the vendor image a direct
-reader is the route. Either way, give one app a gesture that needs it.
-⚠️ **Stop whatever owns the screen before running any evdev witness**: `app_launcher` may hold an
-`EVIOCGRAB` on `event0`, and a grabbed device silences the witness while looking exactly like a finger
-that never landed. ⚠️ **And `scp` does not preserve the exec bit** — `chmod +x` on the device or the run
-dies with *Permission denied* into a redirect and reads as an empty result.
-
 ### F7. Use NAND `mtd4` "scratch" for persistent data — open
 
 `mtd4` is 11 MB of blank, unused NAND that **survives an SD card reflash** — a natural home for high
@@ -613,37 +585,6 @@ the room
 Ideas: health/timer bar, heartbeat pulse during ScummVM loading, flash on high score. `hardware.c`
 already reaches both channels and already has the non-blocking `LedPulse` API, so this is presentation
 work only.
-
-### F14. Decide whether the boot progress bar comes back — open
-
-**What was lost, and it is not a mystery:** the vendor's boot splash with a progress bar was `psplash`.
-`device-files/clean-rules.conf` deletes `/etc/init.d/psplash` and `/etc/rcS.d/S01psplash` with the
-reason *"Splash screen; it holds `/dev/fb0`"* — a real conflict, since our launcher needs that
-framebuffer. Reported 2026-08-06 as missed but not much missed.
-
-**What survives:** `/usr/bin/psplash`, `psplash-write` and `psplash.psplash-angstrom` are all in
-`/usr/bin`, which nothing sweeps. Only the init script and its `rcS.d` link were removed, so this is a
-*decision*, not a loss.
-
-⚠️ **And there is a third route nobody has costed: the kernel one.** The vendor kernel carries a
-compiled-in boot logo that its own `bootargs` suppress with `initcall_blacklist=fb_logo_late_init`, so an
-image we build could show a logo before userspace exists at all — earlier than `psplash` can, and with no
-contest for `/dev/fb0` ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). It is not a reason to
-build an image, and it does not make this entry kernel-gated: the two userspace routes below stand on
-their own.
-
-Two ways to have it back, if wanted:
-
-1. **Restore the link and hand off cleanly.** `psplash` must release `/dev/fb0` before
-   `S99roomwizard-app` starts — `psplash-write QUIT` is the mechanism. The keep-list and the boot-link
-   set would both have to name it, since `device-files/clean-rules.conf`'s whitelist
-   makes a link it does not name get swept on the next clean.
-2. **Draw our own.** `app_launcher` already owns the framebuffer and there is no fb0 contention at all
-   — a splash drawn by our stack sidesteps the handoff entirely, and can show something honest about
-   what is loading.
-
-Option 2 is the smaller change and cannot regress the boot; option 1 restores exactly what was there.
-Neither is urgent — recorded so the deletion stays a decision with a known cost rather than a surprise.
 
 ---
 
@@ -888,7 +829,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 
 | Wanted | Change | Note |
 |---|---|---|
-| Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a hand-`insmod`ed `.ko` from `kernel/build-modules.sh` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open, in order: **(i) load the `.ko` at boot, not `=y`** — the operator reversed the built-in choice 2026-09-23 so the driver can be swapped by `insmod` while it is debugged; install it to the rootfs and load it through the path `usb_host` already uses for its modules; `=y` once the MT decoding settles (`build-image.sh` then needs a copy step, a Kconfig symbol and `scripts/config` before `olddefconfig`, and `.config` checked directly — `dropped-symbols.txt` cannot see an *added* symbol); **(ii) the two remaining mirror cases** — crossings now track (profile-based pairing, `kernel/README.md` Touch row); what still swaps is **equal fingers landing in one 60 ms scan** and **a path that reverses at the crossing**. Ideas, none tried: a **per-slot height signature** (each finger's X and Y peak heights, learned while apart and matched after a crossing, instead of one frame's heights); **per-electrode gain** from single-finger maxima, since edge electrodes read low and bias the height comparison; **landing order from the profile**, whose second peak may rise a scan before the count byte says 2; a **delayed decision** that emits the *near* window ~2 scans late and picks the pairing whose next scans are smoother; the **16-bit counts at `0x40..`**, possibly finer than the delta bytes; and whether a register in `0x0c..0x12` sets the 60 ms scan period; **(iii) pressure** — test a profile peak-height sum against a light/firm press, the columns and rows being mapped ([§3.3](SYSTEM_ANALYSIS.md#33-touch)); **(iv) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
+| Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a `.ko` from `kernel/build-modules.sh`, loaded at boot by `device-files/touch-module` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(iii) pressure** — test a profile peak-height sum against a light/firm press, the columns and rows being mapped ([§3.3](SYSTEM_ANALYSIS.md#33-touch)); **(iv) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
 | fbcon cursor | `vt.global_cursor_default=0` via `CONFIG_CMDLINE_EXTEND` | permanently off. U-Boot's bootargs stay untouched — they cannot be persisted |
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed 2026-09-23; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
@@ -1179,7 +1120,7 @@ missing tool and point at it instead of each reciting its own `apt` line.
 ### Usability, features, maintainability
 
 C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C8 · F17 · F6 · F14 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
+F4 · C5 · C8 · F17 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
 waits on F101) · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
 userspace overlay win was measured and rejected on image quality, the switch it would have needed is
 withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
@@ -1194,8 +1135,7 @@ longer blocked.
 
 ⚠️ **Most of this tier is NOT gated on a kernel rebuild, measured 2026-09-06.** This repo already builds
 and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
-F17 is a module build, F6 is userspace `/dev/i2c-2` against a published register map, and F14's
-cheaper option draws its splash in `app_launcher`, which already owns the framebuffer. **What genuinely
+F17 is a module build. **What genuinely
 needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
 RESCAN tap — MUSB DMA, and, added 2026-09-11, all of F2.** Anything else claiming to need
 a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek

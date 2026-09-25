@@ -1,0 +1,35 @@
+#!/bin/sh
+# Load our touchscreen driver, cy8ctmg120_ts.ko, on a unit that boots our own kernel image.
+# On the vendor kernel the built-in panjit_ts already owns the controller at 2-0003, so the
+# gate below is "is that I2C client unbound", not a kernel-version test: the .ko is built
+# against our image's tree and a vendor unit has no reason to load it.
+# Before S99roomwizard-app, whose launcher exits without /dev/input/touchscreen0.
+
+KO=/lib/modules/4.14.52/extra/cy8ctmg120_ts.ko
+CLIENT=/sys/bus/i2c/devices/2-0003
+
+case "$1" in
+  start)
+    if [ -e "$CLIENT/driver" ]; then
+      echo "Touch: 2-0003 already bound to $(basename "$(readlink "$CLIENT/driver")"), not loading"
+    elif [ ! -f "$KO" ]; then
+      echo "Touch: $KO not installed"
+    elif lsmod | grep -q '^cy8ctmg120_ts '; then
+      echo "Touch: cy8ctmg120_ts already loaded"
+    else
+      insmod "$KO" || echo "Touch: insmod $KO failed"
+    fi
+    ;;
+  stop)
+    rmmod cy8ctmg120_ts 2>/dev/null
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+exit 0

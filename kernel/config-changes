@@ -1,0 +1,15 @@
+# Our changes to usb_host/device_config, applied by build-image.sh with scripts/config before
+# olddefconfig and asserted in the final .config after it: an added symbol whose dependency is
+# missing is dropped silently, and dropped-symbols.txt only sees symbols the vendor config had.
+# One per line: `<scripts/config verb> <SYMBOL> [value]`; the verbs are enable, disable, set-str.
+
+# The panel is the boot console, with Tux on top and the messages under it. U-Boot's bootargs
+# cannot be persisted, so these are appended to them; console=tty0 comes last, which makes the
+# panel /dev/console while ttyO1 keeps every printk. The vendor string " debug " is replaced,
+# not extended: appended, it would raise the console loglevel to 10.
+disable CMDLINE_FROM_BOOTLOADER
+enable  CMDLINE_EXTEND
+set-str CMDLINE vt.global_cursor_default=0 console=tty0
+# The vendor config carries only the mono and 16-colour logos; on a 32bpp panel the 224-colour
+# one is the one fb_find_logo() picks.
+enable  LOGO_LINUX_CLUT224

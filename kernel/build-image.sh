@@ -19,6 +19,7 @@ KERNEL_VERSION="4.14.52"
 KERNEL_TARBALL="${REPO_DIR}/usb_host/linux-${KERNEL_VERSION}.tar.xz"
 DEVICE_CONFIG="${REPO_DIR}/usb_host/device_config"
 PATCH_DIR="${SCRIPT_DIR}/patches"
+CONFIG_CHANGES="${SCRIPT_DIR}/config-changes"
 DTS_SCRIPT_DIR="${SCRIPT_DIR}/dts"
 # The DTB appended to the vendor uImage-system, sliced out byte for byte: original.dtb
 # is identical to it (both 67004 B). Gitignored, like device_config: neither is ours to publish.
@@ -38,8 +39,9 @@ usage() {
 Usage: kernel/build-image.sh [--work <dir>] [--out <dir>] [--vendor-dtb | --dtb <file>] [--reuse]
 
 Extract a fresh 4.14.52 tree from usb_host/linux-4.14.52.tar.xz, apply kernel/patches/*.patch
-in sorted order, configure from usb_host/device_config + olddefconfig, build zImage, append
-a DTB and wrap it with mkimage into uImage-test. Stage that under a NEW name on p1.
+in sorted order, configure from usb_host/device_config + kernel/config-changes + olddefconfig,
+build zImage, append a DTB and wrap it with mkimage into uImage-test. Stage that under a NEW
+name on p1.
 
 The DTB, by default: a copy of usb_host/original.dtb (md5-checked) edited in place by every
 kernel/dts/*.sh in sorted order, each run as `bash <script> <dtb>`.
@@ -163,7 +165,29 @@ done
 
 echo; echo "[4/6] Configuring from device_config + olddefconfig..."
 cp "$DEVICE_CONFIG" "${KERNEL_DIR}/.config"
+# kernel/config-changes: `<verb> <SYMBOL> [value]`, the verb being scripts/config's.
+while read -r verb sym val; do
+    case "$verb" in ''|'#'*) continue ;; esac
+    if [ "$verb" = set-str ]; then
+        "${KERNEL_DIR}/scripts/config" --file "${KERNEL_DIR}/.config" --set-str "$sym" "$val"
+    else
+        "${KERNEL_DIR}/scripts/config" --file "${KERNEL_DIR}/.config" "--${verb}" "$sym"
+    fi
+    echo "  config-changes: ${verb} ${sym}${val:+ ${val}}"
+done < "$CONFIG_CHANGES"
 make -C "$KERNEL_DIR" ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+# Asserted after olddefconfig, which drops an added symbol whose dependency is missing.
+while read -r verb sym val; do
+    case "$verb" in
+        ''|'#'*) continue ;;
+        enable)  want="CONFIG_${sym}=y" ;;
+        disable) want="# CONFIG_${sym} is not set" ;;
+        set-str) want="CONFIG_${sym}=\"${val}\"" ;;
+        *)       echo "ERROR: config-changes: unknown verb ${verb}"; exit 1 ;;
+    esac
+    grep -qxF "$want" "${KERNEL_DIR}/.config" \
+        || { echo "ERROR: .config lacks '${want}' after olddefconfig"; exit 1; }
+done < "$CONFIG_CHANGES"
 # Lowercase is legal in a symbol name (CONFIG_VFPv3), so the class is [A-Za-z0-9_].
 sym_re='^CONFIG_[A-Za-z0-9_]+=[ym]$'
 DROPPED="${WORK_DIR}/dropped-symbols.txt"
