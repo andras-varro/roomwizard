@@ -615,19 +615,20 @@ Two secondary effects, measured at the same time:
 Every touch measurement in this section is **`[n=1]`** — the digits are RW09's. Touch itself is
 confirmed working on two or more units; no second panel has been *swept* and recorded.
 
-**Two points are a bounding box, not two fingers — measured 2026-09-23 on `.188`, raw bursts in `dmesg`.**
-Point 1 is (min X, min Y), point 2 (max X, max Y): top-right + bottom-left reads identically to top-left +
-bottom-right, so the diagonal is lost on-chip. Registers 19..31 (and on, unmapped) carry per-electrode signal
-levels — **axis-profile sensing** `[inferred]`; reg 31 rose `0x1b`→`0x5d` on a firmer press, a contact-area
-"pressure" candidate `[n=1]`. The vendor `panjit_ts` reports only `ABS_X`/`ABS_Y`/`BTN_TOUCH`; on the vendor
-kernel the chip is reachable only via `/dev/i2c-2`, no `unbind` ([Kernel policy](#7-kernel-policy)).
+**Two points are a bounding box, not two fingers — measured 2026-09-23/24 on `.188`.** Point 1 is (min X, min
+Y), point 2 (max X, max Y): the diagonal is lost, `X2` is the marker below in every two-finger frame, and `Y2`
+can hold one stale in-range value for 2 s while both fingers move. **The fingers survive in the profiles — one
+delta byte per electrode, 27 columns at `0x13..0x2d` and 15 rows at `0x2e..0x3c`** (self-capacitance; X ≈
+156.5·col, Y ≈ 288.7·row, rms 64/110 raw over 1748 one-finger frames): two peaks per axis. A firm thumb peaks
+~2× a light fingertip on **both** axes, which pairs them; equal fingers carry no pairing. Burst and profiles
+each rewrite every **60 ms, 30 ms out of phase** `[n=1]`. The vendor `panjit_ts` reports only `ABS_X`/`ABS_Y`/
+`BTN_TOUCH`; on the vendor kernel the chip is reachable only via `/dev/i2c-2`, no `unbind` ([Kernel policy](#7-kernel-policy)).
 
 **A nine-byte burst from register 3 at address `0x03` is the entire protocol**, read against a live
 finger on 2026-09-21: `X1` at bytes 3–4, `Y1` at 5–6, `X2` at 7–8, `Y2` at 9–10 and the finger count at
 11, every coordinate **big-endian 16-bit**. That is byte-for-byte the map in
 `drivers/input/touchscreen/cy8ctmg110_ts.c:41-50`, so the 110→120 delta is closed — same family, same
-map. The count reads **0, 1 and 2**, and the second point carries independent data rather than an echo of
-the first (`X1=1024 Y1=1928 X2=3090 Y2=1936`). Two corrections to that driver, both measured here:
+map. The count reads **0, 1 and 2**. Two corrections to that driver, both measured here:
 **coordinates are 12-bit `0..4095`, not its hardcoded `759x465`** (observed `X1` 272..3832, `Y1`
 4..4081, `Y2` max 4090); and ⚠️ **`X2 = 0x408E` exactly is an "unresolved" marker, not a coordinate** —
 masked it becomes 142, a dot on the left. After a two-finger touch ends, **every later one reads it until the

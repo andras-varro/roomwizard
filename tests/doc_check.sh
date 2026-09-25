@@ -826,6 +826,12 @@ group_c() {
 # COMMISSIONING.md -- which carries no ceiling -- would have been free and would have been exactly the
 # "well-written addition to the wrong file" the doc-update rules exist to prevent: a header pinout is
 # HARDWARE.md's by classification. Neither number grants headroom; both are the measured post-edit count.
+# 2026-09-24: SYSTEM_ANALYSIS.md 1800 -> 1801. The touch controller's per-electrode profile map (27 column
+# and 15 row delta bytes, their fitted pitch, the 60 ms / 30 ms-out-of-phase update, and a stale in-range
+# Y2) is what makes two-finger tracking possible at all, and it has one home, section 3.3. It replaced the
+# bounding-box paragraph's `[inferred]` "registers 19..31" guess and paid for itself down to one line: the
+# paragraph was rewritten in place (6 -> 8 lines) and the protocol paragraph lost a clause the bounding-box
+# finding superseded. The measurement-free alternative was dropping the fit numbers, which are the claim.
 ## 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
 # The file was AT its ceiling with zero slack and the kernel-image question moved from untried to measured,
 # which is four separate facts a gate cannot see for itself. (1) A full image LINKS and packages, and the
@@ -845,7 +851,7 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1800	SYSTEM_ANALYSIS.md
+1801	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 224	HARDWARE.md
 215	README.md
