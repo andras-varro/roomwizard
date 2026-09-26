@@ -874,6 +874,39 @@ is **off the critical path** now that SSH answers, and remains the only channel 
 not. ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and
 destroys the vendor recovery image. Considered and rejected 2026-09-21.
 
+### F102. Build our own root filesystem for p6 — open, asked for by the operator 2026-09-25
+
+**The deliverable is a p6 image we built (Buildroot or similar), replacing the vendor's Yocto 3.1.4
+rootfs instead of cleaning it.** F101 replaces only the kernel. Everything the cleanup fights lives on
+p6: the vendor services, the network-file regenerator ([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)),
+the software watchdog, and the vendor's `rc`/`rcS` wrappers, whose leftover switch files the clean has
+to chase. A rootfs we build would also be the first one we are allowed to ship: the vendor's may not be
+redistributed (`LICENSE.md`).
+
+**What makes it small** — every binary we ship is `-static`, measured
+([§6](SYSTEM_ANALYSIS.md#6-building-for-this-device)). So the base needs only what our init scripts and
+services call: `sshd`, `cron`, `dbus` (inferred as needed), an mDNS responder, the hardware watchdog
+feeder, `rdate`, `amixer`, `insmod`, and a `start-stop-daemon`/`ps` that `device-files/roomwizard-app`
+accepts. Inferred, from reading `device-files/` and `device-files/provision-rules.conf`, not from a
+build. `disable-steelcase.sh` and the whole of `device-files/clean-rules.conf` would have nothing left
+to act on.
+
+**Fixed by the boot chain, measured:** the root must stay on p6. U-Boot's `root=/dev/mmcblk0p6` is
+compiled in, with no `saveenv`, and `/etc/fstab` names p2, p3, p5 and p7 by position
+([§4](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). p1's `mlo`/`u-boot.bin`/`ctrlblock.bin` stay
+untouched, so the recovery is still "reimage the card".
+
+**Open before designing it — none measured:**
+
+| Question | Why it matters |
+|---|---|
+| Where does the MAC address come from — the LAN9221's EEPROM, U-Boot, or a vendor script? | If a vendor script sets it, replacing p6 changes every unit's address. |
+| Which per-unit state lives on p6? | `/etc/touch_calibration.conf` and `/var/lib/alsa/asound.state` are on `/`, so a new p6 loses them unless they move to p2 or get carried over. |
+| Does anything in userspace need `/usr/share/alsa`? | `clean-rules.conf` keeps it "for the OSS shim", but OSS here is kernel emulation ([§3.4](SYSTEM_ANALYSIS.md#34-audio)). |
+| Does `S40ctrlblk` do anything we need? | [unverified]. The kept boot link finds no `/opt/sbin/ctrlblk` after the clean. |
+| What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. |
+| What does p5 become? | It frees 1.5 GB of space. |
+
 ## Structural and cleanup
 
 ### C1. Extract the shared evdev layer — open
