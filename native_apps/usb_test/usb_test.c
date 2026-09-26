@@ -649,7 +649,7 @@ static void go_back(AppState *s) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 int main(int argc, char *argv[]) {
     const char *fb_dev = (argc>1) ? argv[1] : "/dev/fb0";
-    const char *touch_dev = (argc>2) ? argv[2] : "/dev/input/event0";
+    const char *touch_dev = (argc>2) ? argv[2] : "/dev/input/touchscreen0";
 
     int lock_fd = acquire_instance_lock("usb_test");
     if (lock_fd < 0) { fprintf(stderr,"usb_test: another instance running\n"); return 1; }

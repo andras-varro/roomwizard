@@ -120,7 +120,7 @@
  * Target geometry now comes from common/touch_calib.h. */
 #define CALIB_FILE        "/etc/touch_calibration.conf"
 #define FB_DEVICE         "/dev/fb0"
-#define TOUCH_DEVICE      "/dev/input/event0"
+#define TOUCH_DEVICE      "/dev/input/touchscreen0"
 /* The uncalibrated diagnostic, launched from the Display tab. Deployed by
  * build-and-deploy.sh and marked .hidden, so the launcher does not show it —
  * this button is the discoverable route to it. */

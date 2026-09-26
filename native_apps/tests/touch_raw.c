@@ -558,7 +558,7 @@ static void print_summary(const Summary *s, int panel_w, int panel_h,
 /* ---- main --------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
     const char *fb_dev    = (argc > 1) ? argv[1] : "/dev/fb0";
-    const char *touch_dev = (argc > 2) ? argv[2] : "/dev/input/event0";
+    const char *touch_dev = (argc > 2) ? argv[2] : "/dev/input/touchscreen0";
 
     signal(SIGINT,  on_sigint);
     signal(SIGTERM, on_sigint);

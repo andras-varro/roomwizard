@@ -128,7 +128,7 @@ void RoomWizardEventSource::initTouch() {
 		return;
 	}
 
-	if (touch_init(_touchInput, "/dev/input/event0") < 0) {
+	if (touch_init(_touchInput, "/dev/input/touchscreen0") < 0) {
 		warning("Failed to initialize touch input - device may not be available");
 		free(_touchInput);
 		_touchInput = nullptr;

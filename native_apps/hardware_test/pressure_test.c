@@ -16,7 +16,7 @@ void signal_handler(int sig) {
 }
 
 int main() {
-    const char *device = "/dev/input/event0";
+    const char *device = "/dev/input/touchscreen0";
     
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);

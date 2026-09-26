@@ -810,7 +810,7 @@ int main(int argc, char *argv[]) {
 
     /* ── Touch init ─────────────────────────────────────────────────── */
     TouchInput touch;
-    if (touch_init(&touch, "/dev/input/event0") != 0) {
+    if (touch_init(&touch, "/dev/input/touchscreen0") != 0) {
         fprintf(stderr, "hardware_diag: failed to init touch input\n");
         fb_close(&fb);
         return 1;
