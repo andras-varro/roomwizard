@@ -422,7 +422,7 @@ CARD="$TMP/card"
 # service and re-read on a second unit, 2026-08-05.
 KEEP_RCS="S02banner.sh S03sysfs.sh S04udev S05modutils.sh S06alignment.sh S06devpts.sh
           S10checkroot.sh S30procps.sh S30ramdisk S35mountall.sh S37populate-volatile.sh
-          S39hostname.sh S40networking S43syslog S45mountnfs.sh S55bootmisc.sh S99finish.sh"
+          S39hostname.sh S40networking S43syslog S45mountnfs.sh S99finish.sh"
 KEEP_RC5="S02dbus-1 S09sshd S20cron S28time-sync S29audio-enable S30avahi-daemon
           S40ctrlblk S50watchdog S88usb-audio-modules S89xpad-modules S90usb-host S99roomwizard-app"
 KEEP_RC24="S02dbus-1 S09sshd S20hwclock.sh S40ctrlblk S50watchdog S99roomwizard-app S99stop-bootlogd"
@@ -434,7 +434,7 @@ KEEP_RC24="S02dbus-1 S09sshd S20hwclock.sh S40ctrlblk S50watchdog S99roomwizard-
 SWEEP_RC5="S15webserver S17jetty S18hsqldb S19browser S21cursor.sh S22x11 S23snmpd S24vsftpd
            S25nullmailer S26startautoupgrade S27webmonitor S75bootscrub S80cleaup_partition
            S99rmnologin.sh S45roomcast S46steelcase-telemetryd S47asl-presenced"
-SWEEP_RCS="S01psplash S58wpa_supplicant S60networkmanager S59rwbootstrap"
+SWEEP_RCS="S01psplash S55bootmisc.sh S58wpa_supplicant S60networkmanager S59rwbootstrap"
 
 build_card() {
     rm -rf "$CARD"

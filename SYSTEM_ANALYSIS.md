@@ -1902,8 +1902,8 @@ vendor service names. `device-files/clean-rules.conf` is that whitelist, transcr
 
 | Directory | Links |
 |---|---|
-| `rcS.d` | `S02banner.sh` `S03sysfs.sh` `S04udev` `S05modutils.sh` `S06alignment.sh` `S06devpts.sh` `S10checkroot.sh` `S30procps.sh` `S30ramdisk` `S35mountall.sh` `S37populate-volatile.sh` `S39hostname.sh` `S40networking` `S43syslog` `S45mountnfs.sh` `S55bootmisc.sh` `S99finish.sh` |
-| `rc5.d` | `S02dbus-1` `S09sshd` `S20cron` `S28time-sync` `S29audio-enable` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` (+ `S89xpad-modules` `S90usb-host` where `usb_host` is installed) |
+| `rcS.d` | `S02banner.sh` `S03sysfs.sh` `S04udev` `S05modutils.sh` `S06alignment.sh` `S06devpts.sh` `S10checkroot.sh` `S30procps.sh` `S30ramdisk` `S35mountall.sh` `S37populate-volatile.sh` `S39hostname.sh` `S40networking` `S43syslog` `S45mountnfs.sh` `S99finish.sh` — not `S55bootmisc.sh`: the stock link, deleted, its two live duties moved (reasons in `device-files/clean-rules.conf`) |
+| `rc5.d` | `S02dbus-1` `S09sshd` `S20cron` `S20hwclock.sh` `S28time-sync` `S29audio-enable` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` (+ `S89xpad-modules` `S90usb-host` where `usb_host` is installed) |
 | `rc2.d`–`rc4.d` | `S02dbus-1` `S09sshd` `S20hwclock.sh` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` `S99stop-bootlogd` |
 | `rc0.d`, `rc6.d` | `K09sshd` `K20dbus-1` `K20hwclock.sh` `K20psplash` `K20wpa_supplicant` `K31alsa-state` `K85watchdog` `S20sendsigs` `S25save-rtc.sh` `S31umountnfs.sh` `S38urandom` `S40umountfs` `S90halt`/`S90reboot` |
 

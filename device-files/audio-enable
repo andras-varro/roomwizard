@@ -1,5 +1,7 @@
 #!/bin/sh
 # Enable RoomWizard speaker amplifier (GPIO12) and configure TWL4030 HiFi path
+# The export is ours: the vendor did it in rcS.d/S55bootmisc.sh, which the clean deletes.
+[ -d /sys/class/gpio/gpio12 ] || echo 12 > /sys/class/gpio/export
 echo out > /sys/class/gpio/gpio12/direction
 echo 1   > /sys/class/gpio/gpio12/value
 amixer -c 0 cset name="HandsfreeL Mux" AudioL1  > /dev/null 2>&1
