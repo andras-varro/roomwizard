@@ -97,6 +97,14 @@ what is drawn.
 
 ### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-08**
 
+**On our PIO image, a hub hides every device behind it — measured 2026-09-25 on `.188`.** With the
+Terminus `1a40:0101` hub enumerated and the C-Media dongle plugged into it, three `usb-host recover`
+passes found only the hub; each rebind set off the `musb_bus_suspend … a_idle while active` burst, and
+afterwards the hub read `suspended`, `usb1` read `suspending` and `mode` read `a_idle`. The dongle
+plugged in directly enumerates at boot and plays. *Inferred:* the idle hub autosuspends, and its
+remote wakeup is then dropped as `bogus host RESUME (a_idle)`. First experiment, no build: `echo -1 >
+/sys/module/usbcore/parameters/autosuspend`, then `usb-host recover` with hub + dongle attached.
+
 ⚠️ **An unbounded kernel message loop that outlives the device's removal and ends in a hardware reset
 ~46 min later, and it is also a measurement contaminant** — anything judged by ear or timed during a storm
 was judged on a starved device, and a frozen app is a *symptom*, not the bug; an on-panel tool appearing to
