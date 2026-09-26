@@ -185,8 +185,10 @@ absent() { if has "$1" "$2"; then bad "$3 — plan HAS '$1'"; else ok "$3"; fi; 
 
 expect "$(printf 'install\t0755\t/etc/init.d/audio-enable\tdevice-files/audio-enable')" \
     "$PLAN_ALL" "B1 the audio-enable install, with its declared mode"
-expect "$(printf 'install\t0644\t/etc/sysctl.d/99-security.conf\tdevice-files/99-security.conf')" \
-    "$PLAN_ALL" "B2 99-security.conf is 0644, not 0755"
+expect "$(printf 'install\t0644\t/etc/sysctl.conf\tdevice-files/sysctl.conf')" \
+    "$PLAN_ALL" "B2 sysctl.conf is 0644, not 0755"
+expect "$(printf 'unlink\t-\t/etc/sysctl.d/99-security.conf\t-')" \
+    "$PLAN_ALL" "B2b the old sysctl.d copy, which nothing reads, is removed"
 expect "$(printf 'install\t0755\t/etc/init.d/roomwizard-app\tdevice-files/roomwizard-app')" \
     "$PLAN_ALL" "B3 the init script is installed under a different name from its source"
 expect "$(printf 'link\t-\t/etc/rc5.d/S99roomwizard-app\t../init.d/roomwizard-app')" \
@@ -348,7 +350,7 @@ rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" > "$TMP/apply.out" 2>
 
 exists "$CARD/root/etc/init.d/audio-enable"          "D4 audio-enable installed"
 exists "$CARD/root/etc/init.d/time-sync"             "D5 time-sync installed"
-exists "$CARD/root/etc/sysctl.d/99-security.conf"    "D6 99-security.conf installed"
+exists "$CARD/root/etc/sysctl.conf"    "D6 sysctl.conf installed"
 exists "$CARD/root/etc/init.d/roomwizard-app"        "D7 the init script installed under its DEPLOYED name"
 exists "$CARD/root/opt/roomwizard/disable-steelcase.sh" "D8 disable-steelcase.sh installed, directory created"
 
@@ -362,7 +364,7 @@ assert_eq "$(md5sum < "$REPO_DIR/device-files/roomwizard-app")" \
 
 # Modes. WSL's /tmp honours them; /mnt/c would not.
 assert_eq "755" "$(stat -c %a "$CARD/root/etc/init.d/audio-enable")" "D11 audio-enable is 0755"
-assert_eq "644" "$(stat -c %a "$CARD/root/etc/sysctl.d/99-security.conf")" "D12 99-security.conf is 0644, as declared"
+assert_eq "644" "$(stat -c %a "$CARD/root/etc/sysctl.conf")" "D12 sysctl.conf is 0644, as declared"
 assert_eq "755" "$(stat -c %a "$CARD/root/opt/roomwizard/disable-steelcase.sh")" "D13 disable-steelcase.sh is 0755"
 
 # Links, and that they RESOLVE — a dangling rc5.d link is skipped in silence.
@@ -617,12 +619,12 @@ assert_eq 0 "$DIFFER" "F6 every installed file is byte-identical to its device-f
 
 assert_eq "$NINST" "$(grep -c '^mkdir -p' "$FW/ssh.calls" || :)" \
     "F7 a mkdir -p preceded every copy"
-# The three that do not exist on a vendor unit — /etc/init.d does, so it proves nothing.
+# The two that do not exist on a vendor unit — /etc/init.d does, so it proves nothing.
 NODIR=0
-for d in /etc/sysctl.d /opt/roomwizard /usr/local/bin; do
+for d in /opt/roomwizard /usr/local/bin; do
     grep -q "mkdir -p '$d'" "$FW/ssh.calls" || NODIR=$((NODIR + 1))
 done
-assert_eq 0 "$NODIR" "F8 the three directories a vendor unit lacks are created first"
+assert_eq 0 "$NODIR" "F8 the two directories a vendor unit lacks are created first"
 
 # ── F9-F11: a missing source is a refusal, before the device is touched ──────
 reset_stubs

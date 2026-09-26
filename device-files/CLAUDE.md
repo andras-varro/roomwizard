@@ -5,7 +5,7 @@ removes and installs. Loaded when you work in `device-files/`.
 
 Anything installed by more than one path lives here, never in a heredoc: `roomwizard-app` (the boot
 init script — it carries the name it is *deployed* as rather than a `.sh` one), `disable-steelcase.sh`,
-`audio-enable`, `time-sync`, `99-security.conf`, the four USB scripts `enable-usb-host.sh` /
+`audio-enable`, `time-sync`, `sysctl.conf`, the four USB scripts `enable-usb-host.sh` /
 `usb-host` / `xpad-modules` / `usb-audio-modules`, plus `clean-rules.conf` and `provision-rules.conf`. Both
 `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted card)
 install those same bytes, and **neither decides what to install or delete — both read the rules.**

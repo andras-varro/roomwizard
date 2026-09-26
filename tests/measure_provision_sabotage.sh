@@ -36,9 +36,9 @@
 #   2  the missing-source check deleted      an install whose device-files/ source
 #                                            was renamed silently copies nothing and
 #                                            the executor blames the device
-#   3  the mkdir -p dropped                  /etc/sysctl.d, /opt/roomwizard and
-#                                            /usr/local/bin do not exist on a vendor
-#                                            unit, so scp fails on three of eight
+#   3  the mkdir -p dropped                  /opt/roomwizard and /usr/local/bin do
+#                                            not exist on a vendor unit, so scp
+#                                            fails on every install under them
 #   4  the summary truncated to three types  the defect's own header: "35 action(s) — 8
 #                                            install, 9 link, 10 unlink" accounted
 #                                            for 27, hiding four verbs

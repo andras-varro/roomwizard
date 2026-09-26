@@ -354,7 +354,7 @@ over [`device-files/clean-rules.conf`](device-files/clean-rules.conf) — the **
 the one step that is neither, because p1 is not expressible as a provision rule; it is
 [`lib/rw-usbpower.sh`](lib/rw-usbpower.sh), the single implementation both paths call.
 
-1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `99-security.conf`,
+1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `sysctl.conf`,
    `roomwizard-app`, `disable-steelcase.sh`, and the three USB scripts `enable-usb-host.sh` /
    `usb-host` / `xpad-modules`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`, `S89xpad-modules`,
    `S90usb-host`, `S99roomwizard-app` in rc2–5.d), the sshd directives, the `/var/watchdog_test`
@@ -603,7 +603,7 @@ hatch, and that operator does still need the next steps.
 /usr/local/bin/enable-usb-host.sh  The /dev/mem patch itself, run by usb-host
 /usr/local/bin/devmem_write        Its tool
 /lib/modules/4.14.52/extra/        ff-memless.ko, joydev.ko, xpad.ko
-/etc/sysctl.d/99-security.conf   Kernel hardening; there is no iptables on this image
+/etc/sysctl.conf                 Kernel hardening, replacing the vendor file; no iptables here
 /var/watchdog_test               The Steelcase software-watchdog bypass
 /opt/games/                      Native games + tools
 /opt/vnc_client/                 VNC client binary + config

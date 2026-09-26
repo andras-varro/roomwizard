@@ -910,17 +910,11 @@ ok "Steelcase bloatware disabled"
 # never compiled. Network security is: no unnecessary services, sshd hardened,
 # sysctl hardening, and a home network the device is not exposed through.
 #
-# The FILE was installed by the plan; applying it to the running kernel is again an
-# action. The fallback exists because a kernel without sysctl.d support would accept
-# the file and apply none of it, silently.
+# The FILE was installed by the plan as /etc/sysctl.conf, which rcS.d/S30procps.sh
+# applies at every boot; applying it to the running kernel now is again an action.
+# No 2>/dev/null: a key this kernel lacks is an error on the boot console too.
 info "Applying kernel security settings..."
-ssh "$DEVICE" sh -s <<'SYSCTL'
-sysctl -p /etc/sysctl.d/99-security.conf 2>/dev/null || {
-    sysctl -w kernel.randomize_va_space=2 2>/dev/null
-    sysctl -w kernel.dmesg_restrict=1 2>/dev/null
-    sysctl -w kernel.sysrq=0 2>/dev/null
-}
-SYSCTL
+ssh "$DEVICE" "sysctl -q -p /etc/sysctl.conf"
 ok "Kernel security settings applied"
 
 # ── 4. Report what vendor software is still on disk ────────────────────────
