@@ -1,0 +1,15 @@
+--- a/drivers/usb/musb/omap2430.c
++++ b/drivers/usb/musb/omap2430.c
+@@ -301,6 +301,12 @@
+ 
+ 	musb_writel(musb->mregs, OTG_INTERFSEL, l);
+ 
++	/* A rebind's exit left MSTANDBY forced and only a runtime resume
++	 * clears it, which a glue still active across the rebind never gets:
++	 * the Inventra DMA engine then cannot reach memory and never completes.
++	 */
++	omap2430_low_level_init(musb);
++
+ 	dev_dbg(dev, "HS USB OTG: revision 0x%x, sysconfig 0x%02x, "
+ 			"sysstatus 0x%x, intrfsel 0x%x, simenable  0x%x\n",
+ 			musb_readl(musb->mregs, OTG_REVISION),

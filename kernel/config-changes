@@ -16,6 +16,7 @@ enable  LOGO_LINUX_CLUT224
 # The vendor config leaves MUSB with neither a DMA backend nor PIO_ONLY, so omap2430_ops has no
 # dma_init and musb_init_controller() fails with -ENODEV: no USB host at all. The vendor kernel
 # hides this behind enable-usb-host.sh's /dev/mem stubs, whose addresses exist only in its image.
-# PIO, not USB_INVENTRA_DMA: with the Inventra backend a USB audio stream never completes a period
-# (hw_ptr stays 0, the MUSB dma IRQ never fires) and the writer blocks; PIO plays (.188, 2026-09-25).
+# PIO, not USB_INVENTRA_DMA: the Inventra backend streams until the first usb-host recover, whose
+# unbind leaves OTG_FORCESTDBY forcing MSTANDBY, and then no DMA transfer completes (.188, 2026-09-25).
+# patches/musb-release-mstandby-on-probe.patch clears it on probe; switch only once that is booted.
 enable  MUSB_PIO_ONLY
