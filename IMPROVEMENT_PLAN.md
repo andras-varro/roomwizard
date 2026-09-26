@@ -753,8 +753,9 @@ than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the au
 than two. A2DP's ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
-**Can we get USB DMA?** Probably, but it is research with a worse failure mode than today's.
-`# CONFIG_USB_INVENTRA_DMA is not set`, so `musbhsdma.c` is not compiled at all. ⚠️ **The
+**Can we get USB DMA?** Not yet: our image can set `CONFIG_USB_INVENTRA_DMA`, and with it a USB audio
+stream never completes a period (`kernel/README.md`), so it ships PIO. On the vendor kernel the
+symbol is unset and `musbhsdma.c` is not compiled at all. ⚠️ **The
 `CONFIG_DMADEVICES=y` / `CONFIG_TI_EDMA=y` that *are* set are a red herring** — that is the **system**
 EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses;
 `CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
@@ -762,8 +763,8 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
 family as [F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
-controller scribbles into RAM.** The clean way is the two config symbols in an image we build — fold it
-into F101 rather than extending the runtime patch ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+controller scribbles into RAM.** The clean way is the config symbol in an image we build, which F101's
+MUSB DMA row now carries ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 **Where the two questions do connect — and the cheaper experiment has already been run.** A wired USB
 DAC needed no encoding, no pairing and no latency budget, and it is now built, shipping and proven on
@@ -832,7 +833,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 | Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a `.ko` from `kernel/build-modules.sh`, loaded at boot by `device-files/touch-module` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(iii) pressure** — test a profile peak-height sum against a light/firm press, the columns and rows being mapped ([§3.3](SYSTEM_ANALYSIS.md#33-touch)); **(iv) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
 | fbcon cursor | `vt.global_cursor_default=0` via `CONFIG_CMDLINE_EXTEND` | permanently off. U-Boot's bootargs stay untouched — they cannot be persisted |
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed 2026-09-23; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
-| MUSB DMA | `CONFIG_USB_INVENTRA_DMA` set | a genuine build defect; retires the runtime patch. ⚠️ Only that one symbol changes — `CONFIG_MUSB_PIO_ONLY` is **already unset** at `usb_host/device_config:3053`, so do not count it as a second edit |
+| MUSB DMA | find why `CONFIG_USB_INVENTRA_DMA` stalls an isochronous OUT stream (`hw_ptr 0`, `dma` IRQ never fires — `kernel/README.md`), or leave it | our image ships `MUSB_PIO_ONLY`, which plays; **only worth doing once PIO's CPU cost is measured to matter** — start at `musbhsdma.c` and `musb_host.c`'s iso DMA path |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
@@ -854,9 +855,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
    image build and one p1 write; the operator has allowed a reboot and a p1 write of `.188` for them. ⚠️ Until the
    module is loaded, `app_launcher` still exits after boot on the missing `/dev/input/touchscreen0` and
    the respawn loop clears fb0 every ~30 s — stop the init script before judging a panel frame.
-3. **Explain the two dmesg lines our image adds.** `musb-hdrc musb-hdrc.0.auto: musb_init_controller
-   failed with status -19` — USB host does not come up on our image, cause not investigated; read
-   `drivers/usb/musb/` for the `-ENODEV` returns before theorising. And `omap2_set_init_voltage: unable
+3. **Explain the dmesg line our image adds**, `omap2_set_init_voltage: unable
    to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` — first check whether the vendor kernel's dmesg
    prints the same line; if it does, this is not ours.
 

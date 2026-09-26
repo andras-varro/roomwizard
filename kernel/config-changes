@@ -13,3 +13,9 @@ set-str CMDLINE vt.global_cursor_default=0 console=tty0
 # The vendor config carries only the mono and 16-colour logos; on a 32bpp panel the 224-colour
 # one is the one fb_find_logo() picks.
 enable  LOGO_LINUX_CLUT224
+# The vendor config leaves MUSB with neither a DMA backend nor PIO_ONLY, so omap2430_ops has no
+# dma_init and musb_init_controller() fails with -ENODEV: no USB host at all. The vendor kernel
+# hides this behind enable-usb-host.sh's /dev/mem stubs, whose addresses exist only in its image.
+# PIO, not USB_INVENTRA_DMA: with the Inventra backend a USB audio stream never completes a period
+# (hw_ptr stays 0, the MUSB dma IRQ never fires) and the writer blocks; PIO plays (.188, 2026-09-25).
+enable  MUSB_PIO_ONLY

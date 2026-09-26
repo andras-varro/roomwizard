@@ -2087,10 +2087,10 @@ Steelcase for their source is also ruled out, and is needed for neither.
 unknowns — measured 2026-09-23 on `.188`.** Built from this tree plus the one source patch in the table
 below and written over `uImage-system`, it takes DHCP and answers SSH ~50 s after power-on. It comes up
 exactly as the table predicts: no `/dev/fb0` (omapfb `failed to setup` — no panel driver), no touch evdev,
-and the out-of-tree `xpad`/`joydev`/`snd_usb_audio` load. Two dmesg lines are **unexplained**: `musb-hdrc
-… musb_init_controller failed with status -19`, so USB host does not come up (cause not investigated), and
-`omap2_set_init_voltage: unable to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` (not yet compared with
-the vendor kernel's dmesg). **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
+and the out-of-tree `xpad`/`joydev`/`snd_usb_audio` load. USB host needs one config symbol the vendor
+config lacks — why, and why PIO rather than DMA: [kernel/README.md](kernel/README.md). One dmesg line is
+**unexplained**: `omap2_set_init_voltage: unable to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` (not
+yet compared with the vendor kernel's dmesg). **The tree in the repo is a working build tree.** `usb_host/linux-4.14.52/` is vanilla upstream 4.14.52,
 not Steelcase source — but `build-kernel-modules.sh` configures it from the device's own `/proc/config.gz`
 plus `olddefconfig`, and the `.ko`s in `usb_host/modules/` are **measured** building from it and loading
 there (`vermagic=4.14.52`); the image is packaged by the recipe in
