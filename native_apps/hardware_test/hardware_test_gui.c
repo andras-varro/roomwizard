@@ -617,11 +617,6 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
     Audio audio;
     int audio_ok = (audio_init(&audio) == 0);
 
-    /* ⚠️ **Guarded on audio_ok** — audio_cont_enable() on a failed init would hand
-     * the stream a device that is not there, and the error screen below is what a
-     * failed init must still be able to draw. */
-    if (audio_ok) audio_cont_enable(&audio, true);
-
     const int freqs[] = { 200, 400, 600, 800, 1000, 1500, 2000, 3000 };
     const int nfreqs = sizeof(freqs) / sizeof(freqs[0]);
     int played = 0;

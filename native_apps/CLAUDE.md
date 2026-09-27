@@ -596,24 +596,25 @@ group A does it that way and labels it.
 ## Audio: the generator is separate from the device
 
 `common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it**
-(`tests/audio_gen_test.c`). `audio.c` keeps the device half — the config gate, `/dev/dsp`, the ioctls,
-the GPIO12 amp poke — and **consumes `audio_gen` for everything else**, so no arithmetic in it is out of
-a host test's reach. ⚠️ **Nor is `audio.c` itself, and it must NOT grow `audio_out.c`'s `__has_include`
-split to get there** — `tests/hostshim/sys/soundcard.h` redirects onto this host's `<linux/soundcard.h>`:
-`-Itests/hostshim` on the host, **off for ARM** (`tests/audio_tone_test.c`). Three rules live there:
+(`tests/audio_gen_test.c`). The device half — `/dev/dsp`, the ioctls, the GPIO12 amp — is
+`common/audio_out.c`, the continuous stream and **the only playback path**: `audio_init()` opens it, and
+if it fails returns -1 and the app is silent, with no fallback. `audio.c` keeps the config gate and the
+client API and **consumes `audio_gen` for everything else**. It includes no OSS header, so it links on
+host gcc as it stands (`tests/audio_tone_test.c`); `tests/hostshim/sys/soundcard.h` matters only to a
+host build of a file that still includes `<sys/soundcard.h>` — `grep -rl sys/soundcard.h` lists them.
+Three rules live there:
 
 - **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums L + R
   (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the generator is
   mono and single-sample and `audio_interleave()` the one conversion point; a `frames * 4` with the 4 spelled
-  out is only accidentally right. `configure_dsp()` reads the count back with `SOUND_PCM_READ_CHANNELS` and
-  warns **once per `Audio`** on a fallback to 2 — it runs on every `audio_flush()`, so per-call would spam.
+  out is only accidentally right. `audio_out.c`'s open reads the count back with `SOUND_PCM_READ_CHANNELS`
+  and warns, falling back to the request, when the read-back fails.
 - ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest of the
   stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
   `audio_write_frames()` is the only code that decides when to stop: on frame boundaries, or it reports
   `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` whatever the caller's policy — an
-  unlimited policy against a full sink hangs the render loop, which is worse than the swap. The four EAGAIN
-  loops `audio.c` hand-rolled became **named policies** over one `write_mono()`; two survive (`WPOL_TONE`,
-  `WPOL_PUMP`) now the theremin and the fade live in `audio_out.c`. Add a policy, never a loop.
+  unlimited policy against a full sink hangs the render loop, which is worse than the swap. Every write
+  goes through it under a **named `AudioWritePolicy`** (`audio_out.c`). Add a policy, never a loop.
 - **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` holds frequency and
   amplitude still, so deleting it while collapsing the duplicated generators deletes the fade.
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —
@@ -657,15 +658,14 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   `/opt/games/rw_config.conf` over `FX_DEFAULT_PATH`: an absent key keeps the stock clip, a **present but
   empty** one selects the note table. A per-GAME variant was declined.
 
-### Mixing: an optional per-frame pump
+### Mixing: the per-frame pump
 
 Two sounds at once needs userspace to hold the audio and hand the device small pieces of it — you cannot mix
 into a buffer the kernel already has. `audio_pump()` does that **from the render loop, never a thread**:
-static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar (`../CLAUDE.md`). Three lines:
+static ARM plus pthread is the `clock_gettime64` SIGSEGV-before-`main()` scar (`../CLAUDE.md`). Two lines:
 
 ```c
-audio_init(&audio);
-audio_cont_enable(&audio, true);              /* once, after init — CONT implies PUMP */
+audio_init(&audio);                           /* opens the stream — the only playback path */
 while (running) {
     /* ... */
     audio_pump(&audio);                       /* once per frame, beside fb_swap() */
@@ -685,8 +685,7 @@ These rules, each of which is a way to get this wrong:
   `AUDIO_PEAK` is derived from `AUDIO_VOICE_VOL`, not a second place to set it. **`vol` is HEADROOM**:
   `n` voices reach the int16 clamp when `n * vol > AUDIO_VOL_UNITY`. **`AUDIO_MASTER_SHIFT` is this
   SPEAKER'S ceiling**, spent once per device in `audio_out` — the same `>>1` ScummVM applies before
-  `write()`, and `audio_attenuate()` is the one implementation, called by the pre-continuous path too so
-  the CONT toggle changes the architecture and not the loudness. ⚠️ **They are not interchangeable
+  `write()`, and `audio_attenuate()` is the one implementation. ⚠️ **They are not interchangeable
   even though they cancel acoustically**: the shift divides after the clamp has decided what survives,
   so at a fixed acoustic level a lower `vol` with a smaller shift has strictly more headroom. Set them
   with `audio_set_volume()` / `audio_set_master_shift()`; a lone sine's clean peak on this speaker is
@@ -704,9 +703,6 @@ These rules, each of which is a way to get this wrong:
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
   (the knee bent it — expected under SOFT, not a fault), `starve` (the ring was dry with audio still owed:
   **one audible gap each, pacing not mixing**), `lost` (refused after render), `drop` (full bus). Read them.
-- ⚠️ **It is opt-in: an app that never enables it takes the pre-continuous path.** `audio_tone()` BRANCHES on
-  `audio->pumping` — it does not "enqueue and also write", which cannot work: a bounded immediate write
-  truncates any tone longer than the lead, an unbounded one hands the whole tone to the kernel unmixably.
 - ⚠️ **`audio_pump_active()` must be in the frame-pacing decision.** A loop dropping to
   `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves the lead and you hear a gap, which reads as a mixing
   defect rather than a pacing one. Ask the library for the ceiling with
@@ -732,13 +728,13 @@ These rules, each of which is a way to get this wrong:
   `tests/audio_sample_test.c`; `tests/audio_mix_test.c` row 5.
 - **`audio_cont_fill_mix()` is exported for tests — drive it, never re-implement it.** `tests/audio_path_dump.c`
   renders the production fill through a file-backed `AudioOutDev` to a WAV — the bytes exonerated with no mic.
-- ⚠️ **The theremin and the pump cannot both own the ring** — `audio_stream_start()` refuses when it is on.
-- ⚠️ **A game wants CONT, not just PUMP, and all seven games now have it**:
-  the never-reset stream is what drops the minimum audible tone from
-  ~60 ms to 5 ms, and `brick_breaker`'s 20–40 ms during-play tones were inaudible for the life of the
-  game until it was turned on. ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
+- ⚠️ **The theremin and the bus cannot both own the stream** — `audio_stream_start()` swaps the fill, so it
+  refuses loudly while the bus still owes frames.
+- ⚠️ **Every app is on the never-reset stream**, which is what drops the minimum audible tone from ~60 ms
+  to 5 ms — `brick_breaker`'s 20–40 ms during-play tones were inaudible under per-sound ring resets.
+  ⚠️ **`audio_pump()` goes OUTSIDE the `if (needs_redraw)` block** — a stream
   serviced only on frames that drew is a stream with gaps in it. ⚠️ **`snake` is the exception to the
-  three-line shape**: its play sleep IS its step interval (`game.speed`, 150 ms falling to 50), so
+  two-line shape**: its play sleep IS its step interval (`game.speed`, 150 ms falling to 50), so
   shortening it to feed the stream would make the snake faster — the wait is split into pieces of **half**
   `audio_cont_service_interval_us()` (a ceiling already carrying half a period of margin), and off the bus
   that returns 0, collapsing to one `usleep()`.
@@ -786,8 +782,9 @@ These rules, each of which is a way to get this wrong:
   fixture control per check, and `starve` catches what the text cannot.
 The clamp is a single one after the whole `int32` sum, so slot order cannot change the mix, and it
 **counts** — `audio_pump_clipped()`. `tests/audio_mix_test.c` is the interactive tool for the panel
-questions: its **CONT, LIM and LVL pads put every rejected shape on the same screen as the one under test**,
-which is the only reason "the click is gone" can be checked rather than believed. ⚠️ Its level ladder starts
+questions: its top row is **LIM | LVL | STOP**, so the rejected limiter (`SOFT`) and every level rung sit on
+the same screen as the shipped shape and "the click is gone" can be A/B'd rather than believed; the stream
+itself has no off switch to compare against any more. ⚠️ Its level ladder starts
 on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation.
 ⚠️ **Two files under `tests/` are SHIPPED launcher tiles, so nothing in there is automatically
 expendable** — `audio_touch_test` is `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
@@ -807,8 +804,8 @@ now a hard **zero** — the device path is no longer spelled at any opener:
 grep -rn 'open(DSP_DEVICE\|open("/dev/dsp"' --include=*.c native_apps/ | grep -v arm-deps
 ```
 
-⚠️ **`audio_out_device_path()` is the ONE home for which `/dev/dsp*` to open**, and both
-`common/audio.c`'s opener and `common/audio_out.c`'s resolve through it, as does ScummVM's mixer — a
+⚠️ **`audio_out_device_path()` is the ONE home for which `/dev/dsp*` to open**, and
+`common/audio_out.c`'s opener — the only one `common/` has — resolves through it, as does ScummVM's mixer — a
 USB DAC is selectable, so a second spelling would be a seam only some apps could see. `enable_amp()`
 lives there too, for the same reason and because GPIO12 belongs to the panel speaker alone. The
 remaining hits are `tests/ch_test.c`, `tests/oss_diag.c`, `tests/oss_geom.c`, `tests/oss_keepalive.c`
@@ -822,8 +819,8 @@ only one is right:
 
 | Shape | Sites | What it costs |
 |---|---|---|
-| `audio_init*` → tones → `audio_close()` all inside one button handler | `device_tools/device_tools.c:479` and `hardware_config/hardware_config.c:70`, both named `do_audio_test()` and near-verbatim copies of each other | a stream open **and** a stream stop per press |
-| `audio_init()` before the loop, `audio_close()` on the exit paths only | `device_tools/device_tools.c:1627` and `hardware_test/hardware_test_gui.c:616`, both `test_audio_diag()` | one of each per screen — **copy this one** |
+| `audio_init*` → tones → `audio_close()` all inside one button handler | `device_tools/device_tools.c:486` and `hardware_config/hardware_config.c:70`, both named `do_audio_test()` and near-verbatim copies of each other | a stream open **and** a stream stop per press |
+| `audio_init()` before the loop, `audio_close()` on the exit paths only | `device_tools/device_tools.c:1828` and `hardware_test/hardware_test_gui.c:616`, both `test_audio_diag()` | one of each per screen — **copy this one** |
 
 **Measured on `.188` 2026-09-05**, from `/var/log/roomwizard/app_stdout.log`: one `device_tools` process
 logged fifteen `bus closed` lines — six at `services=28` and nine at `services=80` — against one line
@@ -832,8 +829,8 @@ per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, 
 transitions and not the mixing.
 
 Both transitions are audible ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), which
-is why a click is heard on the first press after a gap and again ~5 s after the last. ⚠️ **The operator
-accepts the two `do_audio_test()` copies as they are (2026-09-05), so converting them is tidy-up and not
-a defect to chase** — and §3.4 records its stop-click with the power-down held *off*, whereas repeat
+is why a click is heard on the first press after a gap and again ~5 s after the last. ⚠️ **The two
+`do_audio_test()` copies also block the UI for the length of the handler** — open work in
+`../IMPROVEMENT_PLAN.md` — and §3.4 records its stop-click with the power-down held *off*, whereas repeat
 presses at the default `pmdown_time` were reported inaudible. Those two have never been listened to
 together; do that before promising any screen is click-free.

@@ -121,7 +121,7 @@ void audio_bed_service(AudioBed *bed, bool want_play, bool want_hold)
 
     case AUDIO_BED_PLAYING:
         if (want_play) {
-            /* 200 loop passes ran out (~2.4 h), or PUMP: OFF cleared the bus:
+            /* 200 loop passes ran out (~2.4 h), or audio_interrupt() cleared the bus:
              * re-arm from IDLE rather than stay silent for the session. */
             if (!audio_music_active(bed->audio)) bed->state = AUDIO_BED_IDLE;
         } else if (want_hold) {

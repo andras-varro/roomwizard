@@ -1,45 +1,19 @@
 /*
  * audio_mix_test — the mix bus, driven by hand
  *
- * `common/audio.c` does real mixing through an optional per-frame
- * `audio_pump()`.  Everything about it that is arithmetic is host-tested
- * (`tests/audio_gen_test.c`, groups I/J/K).  What no host can answer is whether
- * two sounds at once are AUDIBLE as two sounds on a 20 mm speaker that sums
- * L + R — and whether the ~60 ms minimum-tone rule survives a stream that is
- * never reset.  Both need an ear at the panel, so this is the tool for that trip.
- *
- * ⚠️ **CONT is the outer toggle, and it is the negative control for the CLICK.**
- * With it OFF every button takes the per-sound-reset path — `audio_flush()`,
- * SNDCTL_DSP_RESET before every sound, one sound at a time — which is exactly the
- * reported *"every time there is a sound, there is a click"*.  With it ON the
- * device is `common/audio_out.c`'s one never-reset stream instead.  So the control
- * is on the same panel, in the same session, one tap away: **a click that survives
- * CONT: ON is not the click this change removes.**
- *
- * Two things CONT does to the row beside it, both deliberate and both labelled:
- *
- *   - **PUMP reads LOCK, not ON.**  A continuous stream needs a writer every
- *     service, so CONT implies PUMP and the library REFUSES
- *     `audio_pump_enable(false)` while it is on — loudly, silencing the voices
- *     without giving the stream away.  Tapping PUMP under CONT triggers exactly
- *     that refusal, which is the only place it can be seen.  The pad also remembers
- *     the operator's own PUMP position and restores it when CONT goes off, or the
- *     A/B afterwards would compare PUMP: ON against PUMP: ON.
- *   - **KEEP reads n/a.**  Not refused — *unread*: the continuous stream writes
- *     every service, silence included, so `keepalive` has nothing left to decide.
- *     A dead toggle that still says OFF is worse than one that says why.
- *
- * ⚠️ **PUMP is a toggle too, and it is the control for MIXING** rather than for the
- * click.  With CONT and PUMP both off every button takes the one-sound-at-a-time
- * path: if DRONE + HIGH sounds like two tones with PUMP ON and like one with PUMP
- * OFF, mixing works and nothing else explains it.
+ * `common/audio.c` mixes every sound on one bus and delivers it through
+ * `common/audio_out.c`'s never-reset continuous stream, serviced by a per-frame
+ * `audio_pump()` — the library's only playback mode.  Everything about it that is
+ * arithmetic is host-tested (`tests/audio_gen_test.c`, groups I/J/K).  What no host
+ * can answer is whether two sounds at once are AUDIBLE as two sounds on a 20 mm
+ * speaker that sums L + R, and how short a tone can be and still be heard.  Both
+ * need an ear at the panel, so this is the tool for that trip.
  *
  * What each row is for:
  *
- *   toggles    CONT / PUMP / KEEP / LIM / STOP ALL.  STOP ALL is `audio_interrupt()`,
- *              which on either bus means "silence every voice" — note it cannot
- *              un-write what is already inside the device (≤80 ms on the pump, one
- *              lead, ~139 ms, on the continuous stream).
+ *   controls   LIM / LVL / STOP.  STOP is `audio_interrupt()`, "silence every
+ *              voice" — note it cannot un-write what is already inside the device
+ *              (one lead, ~139 ms).
  *              ⚠️ **LIMIT is the second negative control, added after the first
  *              panel session.** With `clip` at 15402 the operator heard mixed
  *              sounds as *"a distorted square wave from an overdriven
@@ -62,20 +36,16 @@
  *              the mix entirely.  `440 3s` + DRONE is the same question for a
  *              two-voice sum, sustained long enough to compare.
  *   canned     the four sounds every game uses, unchanged signatures.  SUCCESS
- *              and FAIL are three notes each, and on the pump they are three
- *              voices with start offsets — if either sounds like a CHORD rather
- *              than an arpeggio, the offsets are broken.  CHORD deliberately
- *              plays three notes together, so there is something to compare to.
- *   ms row     the ~60 ms rule.  Same 880 Hz tone at 5 / 10 / 20 / 40 / 60 /
- *              100 ms.  Walk up the row and note the shortest one you can hear,
- *              once per configuration: CONT OFF + PUMP OFF, then CONT OFF + PUMP ON,
- *              then CONT ON.  Three numbers, and the rule is whichever of them still
- *              holds.  ⚠️ The rule is attributed to DAC start-up under the
- *              per-sound reset, so **CONT ON is the configuration that should
- *              abolish it** — a continuous feed has no start-up to wait for, and
- *              the floor is expected to drop to ~5 ms.  Each stimulus is chosen by the
- *              operator, so it is self-identifying by construction — no marker
- *              clicks needed.
+ *              and FAIL are three notes each, i.e. three voices with start
+ *              offsets — if either sounds like a CHORD rather than an arpeggio,
+ *              the offsets are broken.  CHORD deliberately plays three notes
+ *              together, so there is something to compare to.
+ *   ms row     the minimum audible tone.  Same 880 Hz tone at 5 / 10 / 20 / 40 /
+ *              60 / 100 ms.  Walk up the row and note the shortest one you can
+ *              hear.  Nothing clamps a tone's length; what the old floor really
+ *              was is ../SYSTEM_ANALYSIS.md#34-audio gotcha 6.  Each stimulus is
+ *              chosen by the operator, so it is self-identifying by construction —
+ *              no marker clicks needed.
  *   sample row `WAV 1` / `WAV 2` / `W STOP` / `SFX` / `INH 622` — the sample voice,
  *              **this row is the experiment it exists for.** Four causes of
  *              the two-voice harshness are refuted and the survivor is this speaker
@@ -85,15 +55,13 @@
  *              bus, same limiter, same delivery, different waveform. If that is
  *              clean while `440 3s` + `880` is not, the answer is "effects should be
  *              samples" and the question closes as a product decision.
- *              ⚠️ **`W STOP` is not the toggle row's `STOP`** — it releases only the
+ *              ⚠️ **`W STOP` is not the top row's `STOP`** — it releases only the
  *              bed, so an effect over it keeps sounding.
  *              ⚠️ **`INH 622` is here because every tone pad above is an OCTAVE of
  *              every other** (220/440/880/1760), so the tool could not make an
  *              inharmonic pair and `CHORD` was the only substitute. 622 against 440
  *              is within 0.03 % of √2 — the tritone, minimum harmonic coincidence.
- *              ⚠️ **The bed needs the bus**: `audio_music_start()` refuses loudly
- *              with PUMP off, because a sample voice only exists on the mix bus.
- *              And the two music files are hand-copied, not in the repo, so
+ *              The two music files are hand-copied, not in the repo, so
  *              "cannot open" is a deployment fact rather than a code fault.
  *
  * ⚠️ **Two of this tool's INSTRUMENTS were lying and both are fixed (2026-08-20).
@@ -104,8 +72,7 @@
  *     one motif and chained each behind the last. A refutation says "HARD vs SOFT was
  *     inaudible, therefore clipping is refuted" — and that A/B was judged with this
  *     pad, which never put two voices on the bus at once. It is now three
- *     `audio_mix_add()` calls at delay 0 when the bus is on, with the queueing
- *     `audio_tone()` path kept for OFF the bus, where the difference is the point.
+ *     `audio_mix_add()` calls at delay 0.
  *   - **The limiter label printed the tool's own variable.** `audio_mix_init()` sets
  *     `AUDIO_MIX_HARD` and the tool's bool started false, so the pad read `LIM:
  *     SOFT` over a HARD bus, the log agreed with it, and the first tap "turned SOFT
@@ -145,12 +112,12 @@
  *   - **Every tap went to `stderr` with no `fopen` anywhere**, so from the
  *     launcher tile the log went nowhere at all and the claim that taps were
  *     recorded was false.  `main()` now `freopen()`s `stderr` onto
- *     `MIX_LOG_PATH` — which captures `audio_pump()`'s own bounded ring trace in
- *     the same file, in order, with no library change.
+ *     `MIX_LOG_PATH` — which captures the library's own stderr lines in the same
+ *     file, in order, with no library change.
  *
- * `worst frame` is also per-PUMP-session: toggling PUMP resets it alongside the
- * library counters, because a 2474 ms first frame at boot contention is not a
- * property of the mix bus and must not sit on the panel looking like one.
+ * `worst frame` restarts on a STOP tap, because a 2474 ms first frame at boot
+ * contention is not a property of the mix bus and must not sit on the panel
+ * looking like one — tap STOP once the panel has settled, then measure.
  *
  * CPU is the other open question (mixing on a 600 MHz core with no FPU-friendly
  * sin()).  Measure it from another shell while sound is playing:
@@ -189,15 +156,15 @@
 static volatile bool running = true;
 static void sig_handler(int s) { (void)s; running = false; }
 
-/** Where the tap log and `audio_pump()`'s ring trace both land.
+/** Where the tap log and the library's own stderr lines both land.
  *
  * ⚠️ **`stderr` was not a log.**  This tool is normally started from the launcher
  * tile, whose child inherits an init script's stderr and therefore throws it away;
  * there was no `fopen` anywhere in the file, so "every tap is logged" was false for
  * every session that mattered.  Redirecting the STREAM rather than opening a
- * private `FILE *` is deliberate: `audio.c`'s bounded per-pump trace also writes
- * `stderr`, and this way the taps and the ring numbers interleave in one file, in
- * order, with no change to the library. */
+ * private `FILE *` is deliberate: `audio.c`'s refusals and its `bus closed`
+ * counter line also write `stderr`, and this way they and the taps interleave in
+ * one file, in order, with no change to the library. */
 #define MIX_LOG_PATH  "/tmp/mix.log"
 
 /** ⚠️ freopen() CLOSES the stream before it opens the target, so a failure leaves
@@ -219,7 +186,7 @@ static void open_log(void)
 /* ── pads ────────────────────────────────────────────────────────────────── */
 
 typedef enum {
-    ACT_CONT, ACT_PUMP, ACT_KEEPALIVE, ACT_LIMIT, ACT_LEVEL, ACT_STOP,
+    ACT_LIMIT, ACT_LEVEL, ACT_STOP,
     ACT_TONE,                       /* uses freq/ms */
     ACT_BEEP, ACT_BLIP, ACT_SUCCESS, ACT_FAIL, ACT_CHORD,
     ACT_MUSIC,                      /* uses `path` — the looping bed          */
@@ -286,8 +253,8 @@ typedef struct {
     const char *path;               /* ACT_MUSIC / ACT_SFX only */
 } Pad;
 
-/** The pad table's size, and it is the EXACT count in use: 6 toggles + 5 tones +
- *  5 canned + 6 ms + 5 sample = 27.
+/** The pad table's size, and it is the EXACT count in use: 3 controls + 5 tones +
+ *  5 canned + 6 ms + 5 sample = 24.
  *
  * ⚠️ **This was 26 with 22 used, and adding a five-pad row silently produced a
  * row that did not exist** — `pad_add()` returned NULL past the cap and said
@@ -295,7 +262,7 @@ typedef struct {
  * wrong. It is exact rather than padded on purpose: a spare slot restores the
  * silence for the next row. If you add pads, raise this AND check the log line
  * below, which is the only thing that can tell you the cap was hit. */
-#define MAX_PADS 27
+#define MAX_PADS 24
 static Pad  pads[MAX_PADS];
 static int  pad_count = 0;
 
@@ -406,14 +373,6 @@ static void rows_layout(void)
 /* ── state ───────────────────────────────────────────────────────────────── */
 
 typedef struct {
-    bool cont;              /* CONT toggle: the one never-reset stream owns /dev/dsp */
-    bool pump_before_cont;  /* ⚠️ CONT forces PUMP ON, so the operator's own PUMP
-                             * position has to be remembered and put back on the way
-                             * out — otherwise turning CONT off strands the panel in
-                             * a state nobody chose, and the A/B compares the wrong
-                             * two things.                                          */
-    bool pump;
-    bool keepalive;
     /* ⚠️ **There is no `hard` field here any more, and that is the fix.** The
      * limiter position was a tool-local bool printed as if it were a
      * measurement: `audio_mix_init()` sets AUDIO_MIX_HARD while a zeroed bool
@@ -436,7 +395,7 @@ typedef struct {
     long lead_frames;       /* what the LIBRARY targeted, 0 = not measured yet */
     long period_frames;     /* the device period it was rounded up to           */
     uint32_t max_gap;       /* longest gap between two loop iterations, ms —
-                             * reset with the library counters on PUMP: ON      */
+                             * restarted by a STOP tap (see the header)          */
     char last[40];
 } View;
 
@@ -447,51 +406,13 @@ typedef struct {
  *  this tool is trying to attribute.  The voice count still redraws instantly. */
 #define READOUT_MS  250
 
-static void set_toggle_labels(Pad *cont_pad, Pad *pump_pad, Pad *keep_pad,
-                              Pad *limit_pad, Pad *level_pad, const Audio *audio,
+static void set_toggle_labels(Pad *limit_pad, Pad *level_pad, const Audio *audio,
                               const View *v)
 {
     char t[32];
 
-    /* CONT is the outer switch and reads first.  It is drawn as INFO rather than
-     * PRIMARY so the row shows at a glance which of the two device halves is open —
-     * a verdict about the click is worthless without that, and the first report from
-     * this tool could not be diagnosed because PUMP's position was recalled rather
-     * than recorded. */
-    snprintf(t, sizeof(t), "CONT: %s", v->cont ? "ON" : "OFF");
-    button_set_text(&cont_pad->btn, t);
-    button_set_colors(&cont_pad->btn,
-                      v->cont ? BTN_COLOR_INFO : BTN_COLOR_SECONDARY,
-                      COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-
-    /* ⚠️ Under CONT the label is LOCK, not ON.  PUMP is not a choice there — the
-     * library refuses audio_pump_enable(false) while the continuous stream is open,
-     * because a stream nobody writes goes idle and an idle stream is the transition
-     * this whole change exists to remove.  A pad reading "ON" invites a tap that
-     * cannot do what it says. */
-    snprintf(t, sizeof(t), "PUMP: %s", v->cont ? "LOCK" : (v->pump ? "ON" : "OFF"));
-    button_set_text(&pump_pad->btn, t);
-    button_set_colors(&pump_pad->btn,
-                      v->cont ? BTN_COLOR_INFO
-                              : (v->pump ? BTN_COLOR_PRIMARY : BTN_COLOR_SECONDARY),
-                      COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-
-    /* ⚠️ And KEEP is MEANINGLESS under CONT, not merely ignored: the continuous
-     * stream is continuous by construction — every service writes, silence
-     * included — so `keepalive` has nothing left to decide and audio_pump() never
-     * reads it.  Say "n/a" rather than leave a dead toggle that looks live. */
-    snprintf(t, sizeof(t), "KEEP: %s",
-             v->cont ? "n/a" : (v->keepalive ? "ON" : "OFF"));
-    button_set_text(&keep_pad->btn, t);
-    button_set_colors(&keep_pad->btn,
-                      v->cont ? BTN_COLOR_SECONDARY
-                              : (v->keepalive ? BTN_COLOR_INFO : BTN_COLOR_SECONDARY),
-                      COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-
     /* HARD is drawn as a WARNING, because it is the state the panel rejected.
-     * Abbreviated because the row is five pads wide now: at the 48 px inset cap a
-     * cell is 132 px, which "LIMIT: SOFT" fills exactly.  Nothing is lost — the log
-     * line carries `limit=soft|hard` as its own field.
+     * The log line carries `limit=soft|hard` as its own field.
      *
      * ⚠️ **Read back from the LIBRARY, never from a tool flag.** This label said
      * SOFT over a HARD bus for a whole session, because `audio_mix_init()` sets
@@ -509,8 +430,7 @@ static void set_toggle_labels(Pad *cont_pad, Pad *pump_pad, Pad *keep_pad,
      * library — `audio_get_volume()`, not `ladder[rung].vol`.  A pad that printed
      * its own intention would have shown a level the library had clamped or
      * refused, and this file has already paid for a label that disagreed with the
-     * device (the PUMP position that could not be diagnosed).  Six pads in the row
-     * now, so the text stays inside a 112 px cell at the 48 px inset cap. */
+     * device (a toggle position that was recalled rather than recorded). */
     snprintf(t, sizeof(t), "LVL %d/%d", v->rung + 1, LADDER_RUNGS);
     button_set_text(&level_pad->btn, t);
     button_set_colors(&level_pad->btn,
@@ -632,22 +552,17 @@ int main(int argc, char *argv[])
     rows_layout();
 
     y = row_y[0];
-    /* Six pads now, and CONT is first because it is the OUTER switch: it decides
-     * which device half is open, and the others describe what is done with it. */
-    row_geom(6, 0, gap, &x, &w);
-    Pad *cont_pad = pad_add(ACT_CONT,      "CONT: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
-    row_geom(6, 1, gap, &x, &w);
-    Pad *pump_pad = pad_add(ACT_PUMP,      "PUMP: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
-    row_geom(6, 2, gap, &x, &w);
-    Pad *keep_pad = pad_add(ACT_KEEPALIVE, "KEEP: OFF",   x, y, w, row_h[0], BTN_COLOR_SECONDARY, 2);
-    row_geom(6, 3, gap, &x, &w);
+    /* Three controls, laid out across the whole row by row_geom() like every
+     * other row — the continuous stream is the library's only mode, so there is
+     * no device-half or pump toggle left to put beside them. */
+    row_geom(3, 0, gap, &x, &w);
     /* ⚠️ "LIM" with no value: set_toggle_labels() runs before the first draw and
      * reads the real position out of the library, so a literal here could only
      * ever be a lie waiting for a code path that skips that call. */
     Pad *limit_pad = pad_add(ACT_LIMIT,    "LIM",         x, y, w, row_h[0], BTN_COLOR_PRIMARY, 2);
-    row_geom(6, 4, gap, &x, &w);
+    row_geom(3, 1, gap, &x, &w);
     Pad *level_pad = pad_add(ACT_LEVEL,    "LVL 1/6",     x, y, w, row_h[0], BTN_COLOR_INFO, 2);
-    row_geom(6, 5, gap, &x, &w);
+    row_geom(3, 2, gap, &x, &w);
     pad_add(ACT_STOP, "STOP", x, y, w, row_h[0], BTN_COLOR_DANGER, 2);
 
     y = row_y[1];
@@ -703,7 +618,7 @@ int main(int argc, char *argv[])
      * (harmonic fusion is already refuted; this pad
      * is what lets that refutation be re-run without borrowing CHORD).
      *
-     * ⚠️ **`W STOP` is not `STOP`.** The toggle row's STOP is `audio_interrupt()`
+     * ⚠️ **`W STOP` is not `STOP`.** The top row's STOP is `audio_interrupt()`
      * — every voice at once. This one releases only the bed, so an effect over it
      * keeps sounding: that difference is the whole point of a bed. */
     y = row_y[4];
@@ -726,12 +641,12 @@ int main(int argc, char *argv[])
     fprintf(stderr, "mix: pads %d of %d\n", pad_count, MAX_PADS);
 
     View v; memset(&v, 0, sizeof(v));
-    snprintf(v.last, sizeof(v.last), "CONT OFF = the per-sound-reset path");
+    snprintf(v.last, sizeof(v.last), "one never-reset stream");
     /* ⚠️ Start on the QUIETEST rung, not on the shipped default: the walk has to
      * run quiet-to-loud, and a tool that begins in the middle cannot enforce it. */
     v.rung = 0;
     audio_set_volume(&audio, ladder[0].vol);
-    set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
+    set_toggle_labels(limit_pad, level_pad, &audio, &v);
 
     bool needs_redraw = true;
     uint32_t last_readout = 0;
@@ -742,8 +657,8 @@ int main(int argc, char *argv[])
         TouchState ts = touch_get_state(&touch);
         uint32_t   now = get_time_ms();
 
-        /* ⚠️ The pump holds only its LEAD — the measured one, ~139 ms here, not the
-         * 80 ms AUDIO_PUMP_LEAD_MS asks for — so ANY iteration longer than that
+        /* ⚠️ The stream holds only its LEAD — the measured one, ~139 ms here, not
+         * the 80 ms AUDIO_PUMP_LEAD_MS asks for — so ANY iteration longer than that
          * starves the device however correct the mix is.  Measuring the worst one is
          * what tells a pacing fault from a mixing fault, and it is the number
          * `starve` cannot give, because starve counts the symptom. */
@@ -757,37 +672,24 @@ int main(int argc, char *argv[])
             Pad *p = &pads[i];
             needs_redraw = true;
 
-            /* ⚠️ Every tap logs the TOGGLE STATE with it.  The first panel
-             * report of this tool ("the drone stops and the 440 plays") could
-             * not be diagnosed, because PUMP's position at the time was recalled
-             * rather than recorded and the two paths predict different things.
-             * A verdict about the mix bus is worthless without knowing which bus
-             * was running, so `/tmp/mix.log` now says so on every line.  Note it
-             * prints the LIBRARY's opinion, not the label's — a label that
-             * disagreed with `audio->pumping` would itself explain the report. */
-            /* ⚠️ The pad's own freq/ms go in the line, not just `act`.  A log that
-             * says "a tone was tapped" cannot answer the ~60 ms question at all —
+            /* ⚠️ Every tap logs the LEVEL STATE with it, read from the LIBRARY and
+             * never from a pad's label: the first panel report of this tool could
+             * not be diagnosed because a toggle position was recalled rather than
+             * recorded.  The pad's own freq/ms go in the line too, not just `act` —
              * the whole point of the ms row is WHICH stimulus was silent, so the
-             * record has to be self-identifying the same way the stimuli are. */
-            /* ⚠️ `cont` is logged from audio_cont_active(), i.e. from the LIBRARY,
-             * for the same reason `pump_active` is: it names which of the two device
-             * halves was actually open when the tap landed, and a click reported
-             * against a recalled toggle position cannot be attributed to either.
-             * `svc_us` rides with it because the service ceiling is the one number
-             * that turns "I heard a gap" into a pacing verdict — compare it with
-             * `gapmax` on the same line. */
-            fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d path=%s cont=%d "
-                            "svc_us=%ld pump_label=%d "
-                            "pump_active=%d keepalive=%d limit=%s vol=%d shift=%d acoustic=%d voices=%d "
+             * record has to be self-identifying the same way the stimuli are.
+             * `svc_us` is the service ceiling, the one number that turns "I heard a
+             * gap" into a pacing verdict — compare it with `gapmax` on the same
+             * line. */
+            fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d path=%s "
+                            "svc_us=%ld "
+                            "limit=%s vol=%d shift=%d acoustic=%d voices=%d "
                             "clip=%lu lim=%lu starve=%lu lost=%lu drop=%lu "
                             "bed=%d wraps=%ld "
                             "gapmax=%lu lead=%ldfr/%ldms period=%ldfr\n",
                     (int)p->act, p->btn.text, p->freq, p->ms,
                     p->path ? p->path : "-",
-                    (int)audio_cont_active(&audio),
                     audio_cont_service_interval_us(&audio),
-                    (int)v.pump, (int)audio_pump_active(&audio),
-                    (int)v.keepalive,
                     (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD) ? "hard" : "soft",
                     audio_get_volume(&audio), audio_get_master_shift(&audio),
                     audio_voice_peak(audio_get_volume(&audio))
@@ -806,80 +708,6 @@ int main(int argc, char *argv[])
                     audio_pump_period(&audio));
 
             switch (p->act) {
-            case ACT_CONT:
-                if (!v.cont) {
-                    /* ⚠️ Remember the operator's own PUMP position BEFORE the
-                     * library forces it on, and put it back on the way out.  CONT
-                     * implies PUMP — a continuous stream needs a writer every
-                     * service — so this pad silently changes a second toggle, and
-                     * without the save the A/B afterwards compares PUMP: ON against
-                     * PUMP: ON and reads as "the click never went away". */
-                    v.pump_before_cont = v.pump;
-                    if (audio_cont_enable(&audio, true) != 0) {
-                        /* The library restored the old path and said why on stderr;
-                         * the labels are still truthful, so only the readout moves. */
-                        snprintf(v.last, sizeof(v.last), "CONT refused - old path kept");
-                        break;
-                    }
-                    v.cont = true;
-                    v.pump = true;              /* the library did this — mirror it */
-                    v.max_gap = 0; prev_now = 0;  /* cont_enable zeroes the counters */
-                    snprintf(v.last, sizeof(v.last), "CONT on: one never-reset stream");
-                } else {
-                    if (audio_cont_enable(&audio, false) != 0) {
-                        v.cont = false;
-                        snprintf(v.last, sizeof(v.last), "CONT off FAILED - no device");
-                        set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
-                        break;
-                    }
-                    v.cont = false;
-                    /* audio_cont_enable(false) leaves the bus off, so restoring the
-                     * saved position is an explicit call rather than a field write. */
-                    v.pump = v.pump_before_cont;
-                    audio_pump_enable(&audio, v.pump);
-                    if (v.pump) { v.max_gap = 0; prev_now = 0; }
-                    /* keepalive is a live choice again, and the library still holds
-                     * whatever it was set to — re-assert it so the label cannot lie. */
-                    audio_pump_set_keepalive(&audio, v.keepalive);
-                    snprintf(v.last, sizeof(v.last), "CONT off: per-sound reset back");
-                }
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
-                break;
-            case ACT_PUMP:
-                if (v.cont) {
-                    /* ⚠️ Tapped through to the library ON PURPOSE, because this is the
-                     * one place its loud refusal can be SEEN: it prints the reason and
-                     * silences the voices without giving the stream away.  The label
-                     * already reads LOCK, so nothing here flips. */
-                    audio_pump_enable(&audio, false);
-                    snprintf(v.last, sizeof(v.last), "PUMP locked by CONT - voices cut");
-                    break;
-                }
-                v.pump = !v.pump;
-                audio_pump_enable(&audio, v.pump);
-                /* ⚠️ audio_pump_enable() zeroes the library's counters on ON, so
-                 * the worst frame has to zero with them or the panel shows a
-                 * start-up stall (2474 ms at boot, measured) beside counters that
-                 * start at 0 — one number describing a different session from all
-                 * the others.  prev_now too, or the gap ACROSS this tap becomes
-                 * the new worst frame. */
-                if (v.pump) { v.max_gap = 0; prev_now = 0; }
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
-                snprintf(v.last, sizeof(v.last), "pump %s", v.pump ? "on" : "off");
-                break;
-            case ACT_KEEPALIVE:
-                if (v.cont) {
-                    /* Not refused by the library — simply unread by it, which is
-                     * worse: a silent no-op reads as a broken toggle.  Say so. */
-                    snprintf(v.last, sizeof(v.last), "KEEP n/a: CONT always writes");
-                    break;
-                }
-                v.keepalive = !v.keepalive;
-                audio_pump_set_keepalive(&audio, v.keepalive);
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
-                snprintf(v.last, sizeof(v.last), "keepalive %s",
-                         v.keepalive ? "on (silence written)" : "off");
-                break;
             case ACT_LIMIT: {
                 /* Switchable while a drone runs: the two curves agree below the
                  * knee, so the change is inaudible on a quiet passage and obvious
@@ -891,7 +719,7 @@ int main(int argc, char *argv[])
                  * HARD, and everything downstream printed the opposite of the truth. */
                 bool now_hard = (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD);
                 audio_pump_set_limit(&audio, now_hard ? AUDIO_MIX_SOFT : AUDIO_MIX_HARD);
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad, &audio, &v);
+                set_toggle_labels(limit_pad, level_pad, &audio, &v);
                 bool is_hard = (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD);
                 snprintf(v.last, sizeof(v.last), "limit %s",
                          is_hard ? "HARD (clamp at int16)" : "soft (knee 18000)");
@@ -904,8 +732,7 @@ int main(int argc, char *argv[])
                  * is the biased one this pad exists to avoid. */
                 v.rung = (v.rung + 1) % LADDER_RUNGS;
                 audio_set_volume(&audio, ladder[v.rung].vol);
-                set_toggle_labels(cont_pad, pump_pad, keep_pad, limit_pad, level_pad,
-                                  &audio, &v);
+                set_toggle_labels(limit_pad, level_pad, &audio, &v);
                 /* The acoustic peak — after the device shift — is the number the ear
                  * is judging, and it is read back from the library. */
                 int vol   = audio_get_volume(&audio);
@@ -917,7 +744,10 @@ int main(int argc, char *argv[])
             }
             case ACT_STOP:
                 audio_interrupt(&audio);
-                snprintf(v.last, sizeof(v.last), "interrupt: all voices stopped");
+                /* ⚠️ Also restarts `worst frame` (see the header) — and prev_now
+                 * with it, or the gap ACROSS this tap becomes the new worst. */
+                v.max_gap = 0; prev_now = 0;
+                snprintf(v.last, sizeof(v.last), "stop: voices cut, worst frame reset");
                 break;
             case ACT_TONE:
                 audio_tone(&audio, p->freq, p->ms);
@@ -940,23 +770,13 @@ int main(int argc, char *argv[])
                  * A refutation says "HARD vs SOFT was inaudible, therefore clipping is
                  * refuted", and that A/B was judged with this pad — which never put
                  * two voices on the bus at once and so could not distinguish two
-                 * limiters. `audio_mix_add()` with delay 0 is what a chord is.
-                 *
-                 * ⚠️ **The `audio_tone()` fallback stays, deliberately, for OFF the
-                 * bus** — there they queue and the flush between throws the previous
-                 * one away, and making that difference audible is what this tool is
-                 * for. `audio_pump_active()` decides, not `v.pump`. */
-                if (audio_pump_active(&audio)) {
+                 * limiters. `audio_mix_add()` with delay 0 is what a chord is. */
+                {
                     int peak = audio_voice_peak(audio_get_volume(&audio));
                     audio_mix_add(&audio.mix, 523, 400, 0, peak);
                     audio_mix_add(&audio.mix, 659, 400, 0, peak);
                     audio_mix_add(&audio.mix, 784, 400, 0, peak);
                     snprintf(v.last, sizeof(v.last), "chord: 3 voices, delay 0");
-                } else {
-                    audio_tone(&audio, 523, 400);
-                    audio_tone(&audio, 659, 400);
-                    audio_tone(&audio, 784, 400);
-                    snprintf(v.last, sizeof(v.last), "chord: off bus, 3 queued");
                 }
                 break;
             case ACT_MUSIC:
@@ -971,7 +791,7 @@ int main(int argc, char *argv[])
                 break;
             case ACT_MUSIC_STOP:
                 /* Releases the bed only — an effect over it keeps sounding, which is
-                 * the difference between this and the toggle row's STOP. */
+                 * the difference between this and the top row's STOP. */
                 audio_music_stop(&audio);
                 snprintf(v.last, sizeof(v.last), "bed: release armed (fades out)");
                 break;
@@ -1034,10 +854,10 @@ int main(int argc, char *argv[])
             needs_redraw = false;
         }
 
-        /* ⚠️ audio_pump_active() must be in this decision.  The pump keeps only
-         * AUDIO_PUMP_LEAD_MS inside the device, so a loop that idles at 100 ms
-         * mid-sound starves it and you hear a gap — and the gap would look like
-         * a mixing defect rather than a pacing one. */
+        /* ⚠️ audio_pump_active() must be in this decision.  The stream keeps only
+         * one lead inside the device, so a loop that idles at 100 ms starves it
+         * and you hear a gap — and the gap would look like a mixing defect
+         * rather than a pacing one. */
         usleep((drew || audio_pump_active(&audio)) ? FRAME_DELAY_ACTIVE_US
                                                    : FRAME_DELAY_IDLE_US);
     }

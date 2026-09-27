@@ -466,15 +466,14 @@ uint32_t audio_out_drain_waits(const AudioOut *out) { return out ? out->drain_wa
 /* ── Which device, and the amp that belongs to one of them ──────────────────
  * ONE home for "which /dev/dsp*", and it sits OUTSIDE the OSS guard below on
  * purpose.  Three callers resolve through here — this file's oss_open(),
- * audio.c's dsp_reopen(), and ScummVM's mixer — and only the first is inside
- * that guard, so a host build with no <sys/soundcard.h> must still link the
- * resolution.  That is also what lets tests/audio_out_test.c drive it with no
- * sound card present.
+ * audio.c (which sets the preference and logs the path), and ScummVM's mixer —
+ * and only the first is inside that guard, so a host build with no
+ * <sys/soundcard.h> must still link the resolution.  That is also what lets
+ * tests/audio_out_test.c drive it with no sound card present.
  *
- * ⚠️ The preference is a file-static, not a field on AudioOut.  audio.c reaches
- * its opener from audio_cont_enable() as well as from audio_open(), and
- * audio_open() memsets the struct — a field would be cleared by the very call
- * that needs to read it.  One audio device per process is a fact about the
+ * ⚠️ The preference is a file-static, not a field on AudioOut.  audio.c sets
+ * it before audio_open(), and audio_open() memsets the struct — a field would
+ * be cleared by the very call that needs to read it.  One audio device per process is a fact about the
  * hardware, so one static is the honest shape; contrast the fd, which stays per
  * AudioOut because a process may hold several structs and still one device.
  */

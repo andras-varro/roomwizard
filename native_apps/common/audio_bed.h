@@ -111,7 +111,7 @@ void audio_bed_set_playlist(AudioBed *bed, Config *cfg);
  *
  * ⚠️ **Every path is gated on `audio_music_active()`** rather than on this
  * struct's own idea of what the bus is doing: a release takes frames to walk
- * down, `audio_music_resume()` is refused until it has, and PUMP: OFF can clear
+ * down, `audio_music_resume()` is refused until it has, and audio_interrupt() can clear
  * the voice out from under us.  The state here tracks INTENT; the mixer is
  * asked about reality.
  *

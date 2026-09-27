@@ -879,7 +879,7 @@ emulation, not the hardware. ALSA itself works correctly.
    22050 Hz music played at half speed; at 48000 Hz it got proportionally worse (~4×), consistent
    with `_outputRate` not matching the real device rate. Working implementations:
    `scummvm-roomwizard/backend-files/oss-mixer.cpp` and
-   `native_apps/common/audio.c`'s `configure_dsp()` — which reads the channel count back too, so no byte
+   `native_apps/common/audio_out.c`'s OSS open — which reads the channel count back too, so no byte
    count in `native_apps` spells a channel count into a constant any more.
 4. **32-bit `time_t` overflow.** `sizeof(long) == 4`. Never compute
    `(now.tv_sec - epoch_0) * 1000000L` — baseline timers to *current* time, not epoch zero.
@@ -909,8 +909,8 @@ emulation, not the hardware. ALSA itself works correctly.
 6. ⚠️ **The minimum audible tone length is a property of RESTARTING the stream, not of
    `SNDCTL_DSP_RESET`** — removing the reset does not change it. Measured on `.188` 2026-08-15: with the
    ring allowed to empty between sounds, 5–40 ms is inaudible, 60 ms partial, 100 ms clean; with the
-   stream **continuously fed**, **5 ms is audible and 20 ms recognisable** — first via
-   `audio_pump_set_keepalive()`, then again 2026-08-18 on the shipped never-reset stream. Any claim about
+   stream **continuously fed** (silence written between sounds; repeated 2026-08-18 on the never-reset
+   stream), **5 ms is audible and 20 ms recognisable**. Any claim about
    a minimum tone length must say which regime it was measured under; nothing in the tree clamps it.
 
 **A USB DAC is a second card, and it is the only route to stereo and to a headphone jack.** Four

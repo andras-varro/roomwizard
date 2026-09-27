@@ -32,8 +32,8 @@
  * `tests/hostshim/sys/soundcard.h` supplies the header this host spells
  * `<linux/soundcard.h>` instead, so `audio.c` compiles unmodified.  Nothing here
  * opens `/dev/dsp`: mk_audio() builds an `Audio` by hand, which is legitimate
- * because `struct Audio` is public in `audio.h` and the mixing branch of
- * `audio_tone()` touches no fd (`audio.c:708-712` says so in as many words).
+ * because `struct Audio` is public in `audio.h` and `audio_tone()` touches no fd —
+ * it adds a voice to the bus and nothing more.
  *
  * Build and run (host gcc, from native_apps/):
  *   gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim \
@@ -50,8 +50,8 @@
  * `audio_fx_play()` (:1265), `audio_music_start()` (:1679), `audio_sfx_play()`
  * (:1708) — so a hand-built `Audio` that had been memset to zero was refused at the
  * door by code doing exactly what it says it does.  Setting both fields took the
- * count to 0.  audio_tone()'s own comment says it must work with `dsp_fd` at -1, and
- * it does.
+ * count to 0.  audio_tone() touches no device — it gates on `available` alone —
+ * which is what lets mk_audio() leave the stream closed.
  *
  * ⚠️ **The lesson is about the INSTRUMENT, not the toggles: 34 checks agreed with
  * each other for a whole week, and the agreement was the tell.**  A group that
@@ -78,11 +78,10 @@
  *
  * ⚠️ **Group F is a SECOND subject in this file, and it is here rather than in a new
  * one because this is the only host test that links `common/audio.c`.**  It asserts
- * which limiter a first bus session runs — `bus_reset()` carries `mix.limit` across a
- * session on purpose, and `AUDIO_MIX_SOFT` being 0 meant a never-armed bus read that
- * zero as an operator's choice.  Its second check is the negative control: a fix that
- * hardwired HARD inside `bus_reset()` would satisfy the first and destroy the
- * carry-across the panel's `LIM` pad depends on.
+ * which limiter a first bus session runs — `bus_reset()` carries `mix.limit` on
+ * purpose, and `AUDIO_MIX_SOFT` being 0 meant a never-armed bus read that zero as an
+ * operator's choice.  Its second check is the negative control: an operator's SOFT,
+ * set through the `LIM` pad's setter, must survive everything that runs mid-session.
  *
  * ⚠️ **Group J is a THIRD subject, here for the same reason F is.**  It asserts that
  * `audio_init_unchecked()` bypasses the ENABLE gate and not the output DEVICE — the
@@ -105,6 +104,9 @@
  * which is precisely the defect that shipped, and stanza 9 proves that half can fail.
  * Do not read J's fourth check as a live control until the config path is
  * overridable.
+ *
+ * **Group K is a FOURTH subject**, the EFFECTS toggle over the canned sounds' note
+ * tables, with its own control (the same beep with the toggle up does land).
  *
  * ⚠️ **Group A is group B's negative control, which is why it must not be deleted
  * as redundant.**  A guard that is accidentally always-false passes B and C for the
@@ -143,25 +145,24 @@ static void check(bool cond, const char *what)
 
 #define TEST_RATE 44100
 
-/* A pumping bus with no device behind it.
+/* A live mix bus with no stream behind it — the shape audio_init() leaves, minus
+ * the device.
  *
- * `cont` stays FALSE and `dsp_fd` is a real descriptor on /dev/null, because
- * audio_live() (`audio.c:71-75`) reads audio_out_is_open() when `cont` is set and
- * there is no open stream here — audio_interrupt() would become a silent no-op and
- * group E would pass for the wrong reason.  Neither path under test writes to the
- * fd; it exists so that if one ever does, it lands in /dev/null rather than on this
- * test's own stdout. */
+ * `available` is the ONE gate every entry point under test reads (audio_tone(),
+ * audio_interrupt(), the clip and bed starters); none of them touches the stream,
+ * so `out` stays zeroed and closed.  That is deliberate rather than a shortcut: a
+ * pump here would ADVANCE the voices and turn every scheduling number below into a
+ * timing one, and `tests/audio_path_dump.c` is the suite that drives the real fill
+ * through an open (file-backed) stream.  ⚠️ If an entry point here ever starts
+ * gating on audio_live() instead, its group fails loudly rather than passing —
+ * group E is the one that would show it first (an interrupt that no-ops leaves
+ * the drone's 3 s tail for the next tone to chain behind). */
 static int mk_audio(Audio *a)
 {
-    int fd = open("/dev/null", O_WRONLY);
-    if (fd < 0) { printf("  FAIL: cannot open /dev/null\n"); failures++; return -1; }
-
     memset(a, 0, sizeof(*a));
-    a->dsp_fd       = fd;
     a->sample_rate  = TEST_RATE;
     a->channels     = 2;
     a->available    = true;
-    a->cont         = false;
     a->vol          = AUDIO_VOICE_VOL;
     a->master_shift = AUDIO_MASTER_SHIFT;
     audio_mix_init(&a->mix, TEST_RATE);
@@ -173,7 +174,6 @@ static int mk_audio(Audio *a)
      * audio_open() sets them from config; a hand-built Audio must say so itself. */
     a->music_on       = true;
     a->effects_on     = true;
-    a->pumping        = true;
     a->last_tone_slot = -1;
     a->last_tone_gen  = 0;
     /* Mirrors what level_defaults() does for the clip voices on the shipped path,
@@ -184,7 +184,7 @@ static int mk_audio(Audio *a)
      * `fx_path` stays empty: a test that inherited /opt/sound would pass or fail
      * according to what happens to be installed on the host. */
     for (int i = 0; i < AUDIO_CLIP_VOICES; i++) a->fxv[i].slot = -1;
-    return fd;
+    return 0;
 }
 
 /* What the LAST tone audio_tone() added still owes, delay included, in ms.
@@ -326,7 +326,6 @@ int main(void)
         check(second >= 110,
               "note 2 issued in the SAME frame queues behind note 1, not on top of it");
         check(second <= 160, "and behind note 1 alone, not behind the whole bus");
-        close(fd);
     }
 
     printf("\nB. THE DEFECT: an independent tap does not inherit a drone's tail\n");
@@ -340,7 +339,6 @@ int main(void)
         check(tap <= 400,
               "a tap 133 ms after a 3 s drone starts NOW, not 3 s out");
         check(tap >= 150, "and it is really scheduled — not silently dropped");
-        close(fd);
     }
 
     printf("\nC. and taps do not ACCUMULATE behind each other (the panel's six taps)\n");
@@ -358,7 +356,6 @@ int main(void)
         check(worst <= 400,
               "four spaced taps over a drone each start now (worst tail stays small)");
         printf("        (worst tap tail: %ld ms)\n", worst);
-        close(fd);
     }
 
     printf("\nD. canned sounds were never part of this — they bypass last_tone_slot\n");
@@ -373,7 +370,6 @@ int main(void)
               "audio_success() leaves last_tone_slot alone (so it overlapped all along)");
         check(audio_mix_active(&a.mix) >= 4,
               "and its notes really did land on the bus beside the drone");
-        close(fd);
     }
 
     /* ⚠️ No shipped app calls audio_interrupt() any more — the two audio sweeps
@@ -392,7 +388,6 @@ int main(void)
         long p = last_tone_pending_ms(&a);
         check(p >= 150 && p <= 260,
               "a tone straight after an interrupt owes only its own 200 ms");
-        close(fd);
     }
 
     printf("\nF. a first bus session runs the DOCUMENTED limiter, not a zeroed field\n");
@@ -404,19 +399,20 @@ int main(void)
          * assertion is about init and not about how this test arrived. */
         memset(&a2, 0xA5, sizeof(a2));
         (void)audio_init_unchecked(&a2);   /* no /dev/dsp here; defaults still land */
-        audio_pump_enable(&a2, true);
         check(audio_mix_get_limit(&a2.mix) == AUDIO_MIX_HARD,
-              "the first pump session runs AUDIO_MIX_HARD");
+              "the first bus session runs AUDIO_MIX_HARD");
 
         /* The negative control, and it is the whole reason this is two checks:
-         * bus_reset() deliberately carries the limiter across a re-arm so a
-         * panel A/B is not undone mid-comparison.  A "fix" that hardwired HARD
-         * in bus_reset() would pass the check above and break this one. */
-        audio_mix_set_limit(&a2.mix, AUDIO_MIX_SOFT);
-        audio_pump_enable(&a2, false);
-        audio_pump_enable(&a2, true);
+         * an operator's LIM pad sets SOFT on a LIVE bus, and nothing that runs
+         * mid-session — the per-frame service, a stop-all — may put HARD back.
+         * A "fix" that re-applied the default from either would pass the check
+         * above and break this one.  (There is no re-arm any more: bus_reset()
+         * runs once, at open, which is why the carry is asserted this way.) */
+        audio_pump_set_limit(&a2, AUDIO_MIX_SOFT);
+        audio_pump(&a2);
+        audio_interrupt(&a2);
         check(audio_mix_get_limit(&a2.mix) == AUDIO_MIX_SOFT,
-              "and an operator's SOFT still survives a re-arm (carry-across intact)");
+              "and an operator's SOFT survives the session (nothing resets it)");
     }
 
     printf("\nG. the BED: a pause RESUMES where it stopped (platformer's music)\n");
@@ -453,27 +449,25 @@ int main(void)
               "declaring the REMAINDER, not the whole file again");
         check(!audio_music_resume(&a),
               "and a second resume is refused — nothing is held any more");
-        close(fd);
     }
 
-    printf("\nH. PUMP: OFF clears the bed, and audio_music_active() must SEE that\n");
+    printf("\nH. a stop-all clears the bed, and audio_music_active() must SEE that\n");
     {
         fd = mk_audio(&a);
         if (fd < 0) return 1;
         write_bed_fixture(BED_FIXTURE, TEST_RATE);
         check(audio_music_start(&a, BED_FIXTURE, true), "a bed is on the bus");
 
-        /* The SILENT one.  bus_reset() clears every voice without telling
-         * audio.c, so a local `playing` flag would read true forever and refuse
-         * every restart — a game whose music never comes back, with nothing in
-         * any counter to say why.  sample_live() asks the mixer by (slot, gen). */
-        audio_pump_enable(&a, false);
+        /* The SILENT one.  audio_interrupt() clears every voice without telling
+         * the bed's own bookkeeping, so a local `playing` flag would read true
+         * forever and refuse every restart — a game whose music never comes back,
+         * with nothing in any counter to say why.  sample_live() asks the mixer by
+         * (slot, gen). */
+        audio_interrupt(&a);
         check(!audio_music_active(&a),
-              "a bed cleared by PUMP: OFF reads false, not stuck live");
-        audio_pump_enable(&a, true);
+              "a bed cleared by audio_interrupt() reads false, not stuck live");
         check(audio_music_start(&a, BED_FIXTURE, true),
               "so a fresh bed is accepted afterwards");
-        close(fd);
     }
 
     printf("\nI. the CLIP behind a canned sound — the cursor, the fallback, the guards\n");
@@ -526,7 +520,6 @@ int main(void)
               "the triggers carry INDEPENDENT positions (the cursor)");
         check(a.fxv[2].pos > 0 && a.fxv[2].pos < CLIP_FRAMES,
               "and the later one started at 0 rather than where the first was");
-        close(fd);
     }
 
     {
@@ -545,7 +538,6 @@ int main(void)
         render_frames(&a, 500);
         check(a.fxv[0].pos > 0 && a.fxv[0].pos <= 2048,
               "a reused voice REWOUND — it did not resume at end-of-clip");
-        close(fd);
     }
 
     {
@@ -559,7 +551,6 @@ int main(void)
         audio_blip(&a);
         check(a.mix.v[AUDIO_CLIP_VOICES].kind == AUDIO_VOICE_TONE,
               "so audio_blip() fell back to its note table rather than going silent");
-        close(fd);
     }
 
     {
@@ -590,7 +581,6 @@ int main(void)
         check(!audio_fx_play(&a, AUDIO_FX_SUCCESS),
               "a file past the clip ceiling is refused — a bed STREAMS");
         remove(CLIP_TOO_BIG);
-        close(fd);
     }
 
     {
@@ -619,12 +609,11 @@ int main(void)
         check(!a.fx[AUDIO_FX_FAIL].reload && a.fx[AUDIO_FX_FAIL].frames == before,
               "re-setting the same path is a no-op, so it is safe every frame");
 
-        /* Off the bus a sample voice cannot exist, which is exactly when the
-         * notes must run — and it must be a quiet no, not a refusal message. */
-        a.pumping = false;
-        check(!audio_fx_play(&a, AUDIO_FX_FAIL), "off the bus, the clip says no");
-        a.pumping = true;
-        close(fd);
+        /* With no stream there is no bus to add a voice to — and it must be a
+         * quiet no, not a refusal message. */
+        a.available = false;
+        check(!audio_fx_play(&a, AUDIO_FX_FAIL), "with no stream, the clip says no");
+        a.available = true;
     }
 
     {
@@ -642,7 +631,6 @@ int main(void)
         check(head < 400, "its silent head renders as silence (peak within rounding)");
         check(tail > 2000, "and its loud TAIL renders loud — the cursor really moved");
         check(tail > head + 1500, "which is a content difference, not a level one");
-        close(fd);
     }
 
     printf("\nJ. the UNCHECKED init bypasses the ENABLE gate and NOT the output device\n");
@@ -682,6 +670,32 @@ int main(void)
               "and it still bypasses the ENABLE gate — both toggles up");
 
         audio_out_set_device_pref("onboard");   /* leave the process as found */
+    }
+
+    printf("\nK. the EFFECTS toggle silences a canned sound's NOTE fallback, not just its clip\n");
+    {
+        /* The defect: play_sequence() adds its notes with audio_mix_add() and never
+         * passes audio_tone()'s gate, so with EFFECTS off audio_fx_play() refused
+         * the clip and the note table played anyway — the toggle swapped every
+         * canned sound for a tone instead of silencing it.  No fx_path is set
+         * here, so every canned sound below IS its note table. */
+        fd = mk_audio(&a);
+        if (fd < 0) return 1;
+        a.effects_on = false;
+        audio_beep(&a);
+        audio_success(&a);
+        audio_gameover(&a);
+        audio_tone(&a, 880, 200);
+        check(audio_mix_active(&a.mix) == 0,
+              "EFFECTS off: no canned sound and no tone reaches the bus");
+
+        /* The control: the same calls with the toggle up really do add voices, so
+         * the zero above is the gate and not a bus that refuses everything. */
+        a.effects_on = true;
+        audio_interrupt(&a);   /* empty either way — a leak above could fill the bus */
+        audio_beep(&a);
+        check(audio_mix_active(&a.mix) == 1,
+              "control: EFFECTS on, the same beep lands as its note table");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

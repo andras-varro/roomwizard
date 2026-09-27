@@ -27,6 +27,13 @@
  * If /dev/dsp cannot be opened audio_init() returns -1 and sets
  * audio.available = false.  All playback functions are silent no-ops
  * in that state, so games work without audio hardware.
+ *
+ * ⚠️ **There is ONE playback mode: the continuous stream.**  audio_init() opens
+ * `common/audio_out.c`'s never-reset stream and puts the mix bus on it, so every
+ * sound is a mixer voice and nothing reaches the device until audio_pump() services
+ * it — once per frame from the render loop (see the mix-bus block below).  The old
+ * per-sound path (this file's own fd, a SNDCTL_DSP_RESET before every canned sound,
+ * one sound at a time) is gone; `audio_out.c` is the only opener of /dev/dsp.
  */
 
 #include <stdint.h>
@@ -41,7 +48,7 @@
  *
  * ⚠️ **A struct rather than five `music_*` fields, because there are TWO of
  * these and the policy must not be written twice.**  A bed and an effect differ
- * only in which instance they name and whether they loop — refusing off the bus,
+ * only in which instance they name and whether they loop — refusing with no stream,
  * refusing a rate mismatch, refusing while the previous one still sounds, and
  * arming the release instead of cutting are one code path in `audio.c`.  The
  * moment that was two code paths, the bed and the effect could drift apart in
@@ -164,22 +171,17 @@ typedef enum {
 #define AUDIO_FX_PATH_MAX        128
 
 typedef struct {
-    int      dsp_fd;          /**< /dev/dsp file descriptor (-1 = not open)      */
     int      sample_rate;     /**< Negotiated sample rate (read back, typ. 44100) */
     int      channels;        /**< Negotiated channel count (READ BACK, not a
                                *   literal).  Every byte count derives from this;
                                *   see audio_gen.h.  Never 0 on an open device.  */
-    bool     available;       /**< false if /dev/dsp could not be opened           */
-    bool     ch_warned;       /**< channel read-back already complained once       */
-    bool     fmt_warned;      /**< format read-back already complained once        */
-    uint32_t sound_end_ms;    /**< Expected wall-clock end of current tone (ms)    */
+    bool     available;       /**< true iff the stream opened: every entry point
+                               *   that adds a voice gates on this alone          */
     /* ── streaming theremin state: ONE oscillator, in audio_gen.h ── */
     AudioOsc osc;             /**< phase + frequency glide + amplitude ramp        */
     bool     streaming;       /**< true while streaming audio chunks               */
-    /* ── the mix bus: OPTIONAL, off unless audio_pump_enable() said so ── */
-    AudioMixer mix;           /**< the voices; silent and unused when !pumping     */
-    bool     pumping;         /**< audio_tone() enqueues instead of writing        */
-    bool     keepalive;       /**< keep writing silence when the bus is idle       */
+    /* ── the mix bus: the only sound source, armed by audio_init() ── */
+    AudioMixer mix;           /**< the voices every sound becomes                  */
     int16_t *pump_buf;        /**< render scratch, allocated once on first pump    */
     long     pump_buf_frames; /**< its size                                       */
     uint32_t pump_starved;    /**< pumps that found the ring DRY with audio still
@@ -187,11 +189,8 @@ typedef struct {
                                *   that separates "the mixer is wrong" from "the
                                *   render loop was too slow to feed it"           */
     uint32_t pump_lost;       /**< frames rendered (so the voices advanced past
-                               *   them) that the device did not take.  Silent
-                               *   data loss under WPOL_PUMP's stop_on_again       */
-    int      pump_diag;       /**< bounded per-pump stderr trace: lines left.  Set
-                               *   by audio_pump_enable(), so it is 40 lines per
-                               *   PUMP: ON session and can never flood a log      */
+                               *   them) that the device did not take — silent
+                               *   data loss, mirrored from audio_out_lost()       */
     long     pump_lead;       /**< the lead audio_pump() LAST TARGETED, in frames,
                                *   0 until a pump has read the device's period.
                                *   ⚠️ Recorded because it is derived from fragsize
@@ -201,26 +200,17 @@ typedef struct {
     long     pump_period;     /**< the device period the lead was rounded to, in
                                *   frames.  Reported beside the lead so the panel
                                *   shows the arithmetic, not just its result        */
-    /* ── the continuous stream: the device half moved out of this file ──────
-     *
-     * ⚠️ `cont` selects WHICH DEVICE HALF is open, and the two are mutually
-     * exclusive: `dsp_fd` is this file's own fd, `out` is `audio_out`'s.  A
-     * second concurrent open of /dev/dsp is EBUSY, so switching closes one
-     * before opening the other — which is why the toggle is an instrument for
-     * one panel and not something to flip inside a game.
-     */
-    AudioOut out;             /**< the one never-reset stream; valid iff cont      */
-    bool     cont;            /**< the continuous stream owns the device           */
+    /* ── the continuous stream: the whole device half lives in audio_out.c ── */
+    AudioOut out;             /**< the one never-reset stream, opened by
+                               *   audio_init(); audio_out_is_open() says so       */
     bool     osc_stream;      /**< the theremin owns the fill callback             */
     /* ── the level, and it is TWO knobs doing different jobs (audio_gen.h) ── */
     int      vol;             /**< per-voice volume, 0..AUDIO_VOL_UNITY.  Every
                                *   tone, voice and theremin amplitude derives from
                                *   it through audio_voice_peak(), so there is one
                                *   place to change how loud this process is        */
-    int      master_shift;    /**< the device stage, applied by audio_out on the
-                               *   continuous path and by write_mono() on the old
-                               *   one — BOTH, so the CONT toggle changes the path
-                               *   and not the loudness                            */
+    int      master_shift;    /**< the device stage, applied by audio_out, which
+                               *   holds its own copy (ScummVM has no `Audio`)     */
     int      last_tone_slot;  /**< the voice audio_tone() added last, and its
                                *   generation.  ⚠️ A later tone queues behind THIS
                                *   voice's tail, never behind the whole bus's:
@@ -271,8 +261,9 @@ typedef struct {
 /**
  * Initialise audio subsystem.
  *  - Honours the `audio_enabled` config setting
- *  - Drives GPIO12 HIGH (enables on-board speaker amplifier)
- *  - Opens /dev/dsp, sets rate/format/channels and READS BACK rate + channels
+ *  - Opens the continuous stream (`audio_out_open_oss()`: GPIO12, the device
+ *    path, the ioctls and their read-back all live there) and puts the mix bus
+ *    on it as the stream's fill, so the struct is ready to pump on return
  * Returns 0 on success, -1 if hardware unavailable (game may continue).
  */
 int  audio_init(Audio *audio);
@@ -300,68 +291,47 @@ int  audio_init(Audio *audio);
 int  audio_init_unchecked(Audio *audio);
 
 /**
- * Close /dev/dsp and release resources.
+ * Drain the stream (bounded), close it and release resources.
  * Safe to call even if audio_init() failed.
  */
 void audio_close(Audio *audio);
 
 /**
- * Flush any audio still queued in the kernel OSS ring buffer and
- * prepare for immediate playback of the next tone.
+ * Stop every voice on the mix bus.
  *
- * Call this before audio_tone() when triggering a new sound that should
- * interrupt whatever is currently playing (e.g. rapid game events).
- * The convenience functions (audio_beep, audio_blip, audio_success,
- * audio_fail) call this internally — only needed for direct audio_tone()
- * callers.
- *
- * ⚠️ **With the pump enabled this becomes "stop all voices", and it no longer
- * resets the ring** — resetting the ring is precisely what makes mixing
- * impossible, so up to AUDIO_PUMP_LEAD_MS of already-written tail still sounds.
- * ⚠️ **Never put it before an effect on the mix bus.** The seven games no longer
- * call it at all — every mention left in them is a comment saying not to — and the
- * only live callers are device_tools and hardware_test_gui, both still on the
- * pre-continuous tone path.  On a bus it stops the OTHER voices, so an
- * `audio_interrupt(); audio_tone();` pair does not mean "replace what is playing":
- * it cuts whatever else was sounding, which for a game effect is a defect and not
- * the intent the pair used to carry.
+ * ⚠️ **It does not reset the device** — that reset is precisely what makes mixing
+ * impossible — so up to one lead (~139 ms) of already-written tail still sounds.
+ * ⚠️ **Never put it before an effect.** The seven games no longer call it at all —
+ * every mention left in them is a comment saying not to.  It stops the OTHER voices,
+ * so an `audio_interrupt(); audio_tone();` pair does not mean "replace what is
+ * playing": it cuts whatever else was sounding, which for a game effect is a defect
+ * and not the intent the pair used to carry.
  */
 void audio_interrupt(Audio *audio);
 
 /**
  * Play a sine-wave tone through SPKR1.
  *
- * Does NOT block for the sound's duration: the fd is O_NONBLOCK, so this
- * returns once the kernel ring has taken the samples and the DAC clocks them
- * out afterwards.  Only audio_interrupt()/the canned sounds ever sleep, and
- * never for more than 200 ms.
- *
- * With the pump enabled it does not write at all — it adds a voice and
- * audio_pump() writes it, summed with whatever else is sounding.
+ * Does NOT write and does NOT block: it adds a voice to the mix bus and
+ * audio_pump() delivers it, summed with whatever else is sounding.
  *
  * @param freq_hz     Frequency 20–8000 Hz
  * @param duration_ms Duration in milliseconds (clamped to AUDIO_MAX_TONE_MS)
  */
 void audio_tone(Audio *audio, int freq_hz, int duration_ms);
 
-/* ── The mix bus: OPTIONAL, per-frame ──────────────────────────────────────
+/* ── The mix bus and its per-frame service ─────────────────────────────────
  *
  * Two sounds at once needs userspace to hold the audio and hand the device
  * small pieces of it, because you cannot mix into a buffer the kernel already
  * has.  This library does that from the render loop — never a thread: static
  * ARM plus pthread is the SIGSEGV-before-main() scar (../CLAUDE.md).
  *
- * ⚠️ **It is opt-in, and that is a safety property rather than a convenience.**
- * An app that never calls audio_pump_enable() takes exactly the code path it
- * takes today, byte for byte: audio_tone() renders the whole tone and writes
- * it.  So an unconverted binary sounds unchanged instead of going SILENT, which
- * is the failure this project describes as "does not error — it misparses", and
- * which nobody would notice until they played that game.
- *
- * Converting an app is three lines:
+ * ⚠️ **It is not optional.**  audio_init() opens the stream with the bus as its
+ * fill, so every sound waits in the mixer until something services it.  An app
+ * owes two lines beside audio_init():
  *
  *     audio_init(&audio);
- *     audio_pump_enable(&audio, true);        // once, after init
  *     while (running) {
  *         ...
  *         audio_pump(&audio);                 // once per frame, next to fb_swap()
@@ -369,42 +339,37 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms);
  *                                                    : FRAME_DELAY_IDLE_US);
  *     }
  *
- * ⚠️ **That last line matters.** The pump keeps only AUDIO_PUMP_LEAD_MS (80 ms)
- * of audio inside the device, so a loop that drops to FRAME_DELAY_IDLE_US
- * (100 ms) mid-sound starves it and you hear a gap.  audio_pump_active() is the
- * same idiom as gameover_needs_redraw(): the component is asked, because it is
- * the only thing that knows it still owes the device frames.
+ * ⚠️ **That last line matters.** The stream keeps only one lead (~139 ms on the
+ * OSS shim) inside the device and must be serviced within
+ * audio_cont_service_interval_us(), so a loop that drops to FRAME_DELAY_IDLE_US
+ * (100 ms) starves it and you hear a gap.  audio_pump_active() is the same idiom
+ * as gameover_needs_redraw(): the component is asked, because it is the only
+ * thing that knows it still owes the device frames.  `check-audio-pacing.sh`
+ * gates both lines in every app that calls audio_init().
  */
 
-/** Turn the mix bus on or off.  Turning it off silences every voice, so it is
- *  safe to toggle at runtime (`tests/audio_mix_test` does exactly that to A/B
- *  the two paths on one panel). */
-void audio_pump_enable(Audio *audio, bool on);
-
-/** Render and write whatever the device will take, up to the lead target.
- *  Call once per frame.  A no-op when the pump is off or the bus is silent. */
+/** Service the continuous stream: render the bus and write whatever the lead is
+ *  short by.  Call once per frame.  A no-op when the stream is not open. */
 void audio_pump(Audio *audio);
 
-/** True while the bus still owes the device audio — see the frame-pacing note
- *  above.  Always false when the pump is off, and always TRUE while keepalive
- *  is on, because a promise of continuous silence is also a promise of frames. */
+/** True while the stream is open — see the frame-pacing note above.  ⚠️ True
+ *  whatever the bus is doing: a silent bus still writes silence, and an idle
+ *  stream is the transition (and the click) the stream exists to remove. */
 bool audio_pump_active(const Audio *audio);
 
 /** Hold for `ms` while SERVICING the bus, for a caller with no render loop.
  *
- * ⚠️ **A tone on the bus lives in the MIXER until something pumps it, and
- * `audio_close()` does not pump.**  `audio_out_close()`'s drain waits on the
- * device's own `in_flight` and never calls the fill (`audio_out.c:289-296`), so
- * it rescues only what is already *inside* the device.  Off the bus that is the
- * whole tone — `audio_tone()` wrote it there — which is why the two Settings
- * speaker tests have always sounded right with a bare `usleep()` and a close.
- * On the bus it is nothing, and the tone is lost.  So this is the frame-pacing
- * clause above, applied to the one shape it does not cover: a hardware test that
- * plays a tone, waits, and closes, with no loop to hang an `audio_pump()` on.
+ * ⚠️ **A tone lives in the MIXER until something pumps it, and `audio_close()`
+ * does not pump.**  `audio_out_close()`'s drain waits on the device's own
+ * `in_flight` and never calls the fill, so it rescues only what is already
+ * *inside* the device — and a tone nobody pumped is not, so it is lost.  This is
+ * the frame-pacing clause above, applied to the one shape it does not cover: a
+ * hardware test that plays a tone, waits, and closes, with no loop to hang an
+ * `audio_pump()` on.
  *
- * Off the bus it is exactly the `usleep()` it replaced, so a caller need not ask
- * which path it is on.  It does NOT poll touch — a loop that must stay responsive
- * keeps its own `audio_pump()` beside its own poll instead.
+ * With no stream open (audio disabled, or the open failed) it is a plain
+ * `usleep()`.  It does NOT poll touch — a loop that must stay responsive keeps
+ * its own `audio_pump()` beside its own poll instead.
  *
  * One implementation for the same reason `audio_init_unchecked()` is one: this
  * was going to be a four-line pump loop copied into `hardware_config.c` and
@@ -431,13 +396,13 @@ uint32_t audio_pump_limited(const Audio *audio);
 
 /** Pumps that found the ring dry while voices still owed audio: one audible gap
  *  each.  ⚠️ **This is the number that tells a mixing defect from a PACING one** —
- *  the pump holds only AUDIO_PUMP_LEAD_MS, so any render-loop iteration longer
- *  than that starves the device however correct the mix is. */
+ *  the stream holds only one lead, so any render-loop iteration longer than that
+ *  starves the device however correct the mix is. */
 uint32_t audio_pump_starved(const Audio *audio);
 
 /** Frames the bus rendered — advancing its voices past them — that the device
- *  refused to take.  WPOL_PUMP never blocks, so a full ring drops them; they are
- *  gone, and a non-zero count is a discontinuity in the waveform. */
+ *  refused to take.  The service never blocks, so a full ring drops them; they
+ *  are gone, and a non-zero count is a discontinuity in the waveform. */
 uint32_t audio_pump_lost(const Audio *audio);
 
 /** The lead the pump LAST TARGETED, in frames, and the device period it was
@@ -483,10 +448,8 @@ int  audio_get_volume(const Audio *audio);
 /**
  * The device attenuation stage, in bits — `1` is ScummVM's `>>1`.
  *
- * Applied on BOTH paths (`audio_out` on the continuous one, `write_mono()` on the
- * pre-continuous one) so the CONT toggle is a comparison of *architectures* at
- * one loudness. ⚠️ An arithmetic shift, never a multiply: `audio_attenuate()`
- * carries the reason.
+ * Applied by `audio_out` to everything the stream writes. ⚠️ An arithmetic shift,
+ * never a multiply: `audio_attenuate()` carries the reason.
  */
 void audio_set_master_shift(Audio *audio, int shift);
 int  audio_get_master_shift(const Audio *audio);
@@ -495,54 +458,28 @@ int  audio_get_master_shift(const Audio *audio);
  *  never steals a playing voice; see audio_gen.h. */
 uint32_t audio_pump_dropped(const Audio *audio);
 
-/** Keep writing silence while the bus is idle, instead of writing nothing.
- *
- * ⚠️ **This exists to be MEASURED, and it is off by default.**  `audio.c`'s
- * ~60 ms minimum-tone rule is attributed to TWL4030 DAC start-up under the
- * SNDCTL_DSP_RESET regime; a stream that is never allowed to go idle would
- * remove it, and the "klack" heard between two playbacks is consistent
- * with that — but consistent-with is not measured.  It costs ~176 KB/s of
- * writes at 44100 Hz stereo, so it is not free either.  `audio_mix_test` has a
- * toggle for it beside a 5/10/20/40/60/100 ms tone row, which is what settles
- * the question by ear. */
-void audio_pump_set_keepalive(Audio *audio, bool on);
-
 /* ── The continuous stream ──────────────────────────────────────────────────
  *
- * The click fix.  `audio_flush()` fires SNDCTL_DSP_RESET before every canned
- * sound, so every game sound is a full stream stop and start and every boundary
- * is a DAI teardown that clicks — the operator's *"every time there is a sound,
- * there is a click"*.  `common/audio_out.c` is the device half that never resets;
- * this switch chooses between it and the old path.
+ * The click fix, and the only mode.  A SNDCTL_DSP_RESET before every sound made
+ * every game sound a full stream stop and start, and every boundary a DAI
+ * teardown that clicks — the operator's *"every time there is a sound, there is
+ * a click"*.  `common/audio_out.c` is the device half that never resets, and
+ * audio_init() opens it.  Three things follow, all measured or derived:
  *
- * ⚠️ **The old path is deliberately reachable, and it is the negative control.**
- * `tests/audio_mix_test` has a CONT toggle beside PUMP/KEEP/LIMIT for exactly
- * that reason: a click that survives CONT: ON is not the one this change removes.
- *
- * Three things follow from turning it on, all measured or derived rather than
- * assumed, and all of them visible on that panel:
- *
- *   - **The mix bus becomes the only sound source**, because a continuous stream
- *     needs something to fill it every service.  So CONT implies PUMP, and
- *     audio_pump_enable(a, false) while CONT is on is refused LOUDLY rather than
- *     leaving a stream nobody writes.
- *   - **audio_pump() becomes the service call** and audio_pump_active() is
- *     always true — the stream must be serviced whatever the bus is doing, and
- *     the ceiling for how often is audio_out_service_interval_us().
- *   - ⚠️ **audio_tone() defaults its delay to the CURRENT TAIL rather than 0.**
- *     Without that, `tetris.c:620-621`, `tetris.c:714-715` and `snake.c:317-318`
- *     — two audio_tone()s back to back with no audio_interrupt() between them —
- *     turn from two-note motifs into dyads, because today it is the ring that
- *     serialises them and a mix bus will not.
- *
- * Returns 0 on success, -1 if the device could not be handed over (in which case
- * the previous path is restored, so a failed toggle is not a silent mute).
+ *   - **The mix bus is the only sound source**, because a continuous stream needs
+ *     something to fill it every service — silence included.
+ *   - **audio_pump() is the service call** and audio_pump_active() is always true
+ *     while the stream is open; the ceiling for how often is
+ *     audio_cont_service_interval_us().
+ *   - ⚠️ **audio_tone() defaults its delay to the preceding tone's TAIL while that
+ *     tone is recent**, or `tetris.c`'s and `snake.c`'s back-to-back two-note
+ *     motifs turn into dyads — a mix bus does not serialise them the way a kernel
+ *     ring did.
  */
-int  audio_cont_enable(Audio *audio, bool on);
 
 /** The mix bus as an `audio_out` fill: render mono, expand to the granted
- *  channel count.  `audio_cont_enable()` installs this itself, so no app calls
- *  it — it is exported for two callers that are not apps:
+ *  channel count.  audio_init() installs this itself, so no app calls it — it is
+ *  exported for two callers that are not apps:
  *
  *   - a host regression that drives the REAL continuous path with a file-backed
  *     `AudioOutDev` instead of `/dev/dsp` (`tests/audio_path_dump.c`).  ⚠️ This
@@ -554,22 +491,15 @@ int  audio_cont_enable(Audio *audio, bool on);
  */
 long audio_cont_fill_mix(void *ctx, int16_t *buf, long frames, int channels);
 
-/** True while the continuous stream owns the device. */
-bool audio_cont_active(const Audio *audio);
-
 /** How often audio_pump() must be called on the continuous stream, in
  *  microseconds, or 0 when nothing has measured the device yet.  Derived from
  *  REAL audio rather than the nominal lead — see audio_out.h. */
 long audio_cont_service_interval_us(const Audio *audio);
 
 /* ── Convenience sounds ────────────────────────────────────────────────────
- * Each first waits (≤200 ms) for whatever is still playing, then queues its
- * own tones and returns.  Layer calls for chord effects.
- *
- * On the pump they instead add one voice per note, each offset by the notes
- * before it — so `audio_success()` is still an ascending arpeggio and not a
- * chord, and it mixes with whatever else is sounding instead of discarding it.
- * All four signatures are unchanged; there are ~45 call sites.
+ * Each adds one voice per note, each offset by the notes before it — so
+ * `audio_success()` is an ascending arpeggio and not a chord, and it mixes with
+ * whatever else is sounding instead of discarding it.  None of them waits.
  *
  * ⚠️ **Each is backed by a recorded CLIP when one is configured and loads, and
  * that is the AUDIBILITY fix**.  Every one of the four note tables is a
@@ -585,8 +515,8 @@ long audio_cont_service_interval_us(const Audio *audio);
  * summing past full scale, so the LEVEL is settled and any future "make it
  * louder" is a content change, not a level one.
  *
- * The note table is the FALLBACK, not the legacy: a device with no sound files,
- * or a bus that is off, still makes every one of these sounds.
+ * The note table is the FALLBACK, not the legacy: a device with no sound files
+ * still makes every one of these sounds.
  */
 
 /** Short 880 Hz blip (~80 ms)  — UI click, tile place, button press */
@@ -652,8 +582,8 @@ void audio_jump(Audio *audio);
  * this is only for a caller that wants to know which one it got — a test, or a
  * pad measuring the clip against the tones.  Loads the file on first use.
  *
- * ⚠️ Refused (false, quietly) off the mix bus: a clip is a sample voice and a
- * sample voice exists only on the bus.  That is exactly when the notes must run.
+ * ⚠️ Refused (false, quietly) when there is no stream (`available` false) — the
+ * caller then falls to its notes, which audio_tone() refuses the same way.
  */
 bool audio_fx_play(Audio *audio, AudioFxId id);
 
@@ -672,15 +602,12 @@ void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path);
 
 /* ── Recorded PCM: a music bed and a sample effect ──────────────────────────
  *
- * ⚠️ **These exist only on the mix bus, and they REFUSE loudly off it rather
- * than degrade.**  A sample voice is an `AudioVoice` — there is no non-bus code
- * path that could play one, because the old path writes a whole rendered tone to
- * the kernel and a 44 s bed written that way is unmixable and uninterruptible by
- * construction.  Silently doing nothing would read on the panel as "the file is
- * broken"; `audio_pump_enable()` (or CONT) first is the fix and the message says so.
+ * A sample voice is an `AudioVoice` on the mix bus like any tone.  Every refusal
+ * below is LOUD: silently doing nothing would read on the panel as "the file is
+ * broken", which is the wrong repair.
  *
- * ⚠️ **They REFUSE a rate mismatch too, for the same reason: there is no
- * resampler here and there is not going to be one.**  Every file we have is
+ * ⚠️ **They REFUSE a rate mismatch: there is no resampler here and there is not
+ * going to be one.**  Every file we have is
  * 44100 / mono / 16-bit — measured on `.188` 2026-08-20 for the three
  * `/opt/sound/asl_*.wav`, and on the committed bytes 2026-08-22 for all 24
  * `native_apps/music/` beds (RIFF `fmt ` chunk: PCM, 1 channel, 44100, 16) —
@@ -696,8 +623,8 @@ void audio_fx_set_path(Audio *audio, AudioFxId id, const char *path);
  * Start the music bed from `path`, looping if asked.
  *
  * Returns true if a voice was added.  Refused — with a reason on `stderr` — when
- * the bus is off, the file will not open, its rate is not the device's, the bus is
- * full, or a previous bed is still sounding.
+ * the file will not open, its rate is not the device's, the bus is full, or a
+ * previous bed is still sounding (and quietly when there is no stream at all).
  *
  * ⚠️ **`loop` does not mean "forever": it means a large finite total**, because
  * `audio_mix_add_sample()` needs a real `total_frames` for `audio_mix_pending()`
@@ -720,8 +647,8 @@ bool audio_music_start(Audio *audio, const char *path, bool loop);
 void audio_music_stop(Audio *audio);
 
 /** True while the bed still owes frames — read from the MIXER by (slot,
- *  generation), not from a flag of this file's own, so a bed that PUMP: OFF
- *  cleared out from under it reads false rather than stuck. */
+ *  generation), not from a flag of this file's own, so a bed that
+ *  audio_interrupt() cleared out from under it reads false rather than stuck. */
 bool audio_music_active(const Audio *audio);
 
 /**
@@ -787,13 +714,9 @@ bool audio_effects_enabled(const Audio *audio);
 /* ── Streaming (theremin) API ──────────────────────────────────────────────
  * For continuous pitch-gliding audio driven by a touch loop.
  *
- * ⚠️ **This path is ALWAYS the continuous stream — it has no old-path branch.**
- * It used to bracket itself with two SNDCTL_DSP_RESETs (start and stop) and own
- * the ring through a chunk loop of its own, which is the same defect the canned
- * sounds have; and its only caller is `tests/audio_touch_test`, so there is no
- * shipped game whose sound would change under it.  audio_stream_start() therefore
- * enters continuous mode itself if it is not already on, and the two write
- * policies that existed only for this path are gone with it.
+ * It runs on the same continuous stream audio_init() opened, by swapping the
+ * stream's fill from the mix bus to one gliding oscillator and back — no reset
+ * and no chunk loop of its own.  Its only caller is `tests/audio_touch_test`.
  */
 
 /**

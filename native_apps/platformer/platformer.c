@@ -1860,16 +1860,6 @@ int main(int argc, char *argv[]) {
     hw_set_backlight(100);
     hw_leds_off();
     audio_init(&audio);
-    /* The continuous stream.  One never-reset /dev/dsp writer, fed
-     * from this render loop, and it implies the mix bus (../common/audio.h).
-     * Two things follow: two sounds overlap instead of one cutting the other,
-     * and a tone shorter than ~60 ms becomes audible at all — that floor is a
-     * property of RESTARTING the stream, and a continuously fed one drops it to
-     * 5 ms (../../SYSTEM_ANALYSIS.md#34-audio gotcha 6).
-     * Deliberately unchecked: a failed handover restores the old write path
-     * rather than muting, so there is nothing for a game to do about it, and
-     * audio_close() reports which path actually ran. */
-    audio_cont_enable(&audio, true);
     audio_bed_init(&bed, &audio, "platformer");
 
     /* Framebuffer init */

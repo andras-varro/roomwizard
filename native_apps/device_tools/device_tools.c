@@ -498,13 +498,6 @@ static void do_audio_test(void) {
     Audio test_audio;
     if (audio_init_unchecked(&test_audio) != 0) return;
 
-    /* ⚠️ **The continuous stream, not the bare pump** — `audio_close()` drains only
-     * when `cont` is set, and this function's whole shape is "tone, wait, close".
-     * It also drops the SNDCTL_DSP_RESET before each tone, so the operator hears
-     * the speaker rather than two teardown clicks around it.  Same three lines as
-     * hardware_config.c's copy of this tab, and for the same reasons. */
-    audio_cont_enable(&test_audio, true);
-
     /* audio_hold_serviced() rather than usleep(): on the bus each tone is a mixer
      * voice until something pumps it, and nothing else here does.  The second hold
      * is not padding — without it the 1320 Hz tone is still in the mixer when
@@ -1835,11 +1828,6 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
 static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
     Audio audio;
     int audio_ok = (audio_init(&audio) == 0);
-
-    /* ⚠️ **Guarded on audio_ok** — audio_cont_enable() on a failed init would hand
-     * the stream a device that is not there.  The sweep's own error screen below is
-     * what a failed init produces, and it must stay reachable. */
-    if (audio_ok) audio_cont_enable(&audio, true);
     const int freqs[] = { 200, 400, 600, 800, 1000, 1500, 2000, 3000 };
     const int nfreqs = sizeof(freqs) / sizeof(freqs[0]);
     int played = 0;

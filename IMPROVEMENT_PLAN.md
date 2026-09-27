@@ -168,32 +168,27 @@ falls back to the panel speaker, and `audio_live()` keeps reporting the vanished
 -confirmed at the panel and **acceptable to them**, so this is quality, not function — but the silence is
 permanent for the life of the process.
 
-⚠️ **`dsp_reopen()` (`common/audio.c`) already performs the entire fallback and its own comment says so**
-— it re-resolves the device path, so both `usb` and `auto` fall back to `/dev/dsp` and GPIO12 is
-re-enabled for it. What is missing is a caller from the write path; its only three callers reach it from
-an already-closed state.
+**The fallback is a reopen, inferred from source and never exercised on an unplug:** `stream_open()`
+(`common/audio.c`) resolves `audio_out_device_path()` afresh on every open, so `usb` and `auto` land on
+the panel's `/dev/dsp` with GPIO12 enabled. What is missing is a caller from the write path.
 
-**Three signals are dropped, and a fix must score all of them**, because which one fires first on a real
-unplug is **not established**:
+**Two signals are dropped, and a fix must score both**, because which fires first on a real unplug is
+**not established** (inferred order: the first):
 
-- `audio_pump()` returns bare when `SNDCTL_DSP_GETOSPACE` fails, so on the non-continuous path the stale
-  fd never reaches `write()` and every counter downstream **freezes** rather than climbing. A frozen
-  `pump_starved` while sound is expected is the current unrecorded signature.
-- Both sinks compare `errno` to `EAGAIN` and nothing else, so `ENODEV`/`EIO`/`EINTR` collapse into
-  `audio_gen.h`'s deliberately lossy `sink_error` — which the old path discards outright and the
-  continuous path counts into `audio_out_sink_errors()`, **read by nobody in the repo**.
-- ⚠️ **A third counter, missed by the first reading of this:** `audio_out_service()` reads the device's
-  `space()` *before* it writes and answers `-1` with `refused++` when that fails, and `cont_service()`
-  discards that `-1`. So on the continuous path `refused` is the counter most likely to move first, and a
-  detector watching only the write could never fire at all.
+- `audio_out_service()` asks the device's `space()` (`SNDCTL_DSP_GETOSPACE`) *before* it writes and
+  answers `-1` with `refused++` when that fails; `cont_service()` discards the `-1`. The write is then
+  never reached, so `starved` **freezes** rather than climbing — a frozen `starve` while sound is expected
+  is the unrecorded signature, and a detector watching only the write could never fire.
+- `oss_write()` compares `errno` to `EAGAIN` and nothing else, so `ENODEV`/`EIO`/`EINTR` collapse into
+  `audio_gen.h`'s deliberately lossy `sink_error`, counted into `audio_out_sink_errors()` and **read by
+  nobody in the repo**; `audio_out_refused()` is read only by tests.
 
 No device-lost state exists either: `available` is never lowered by anything on the write path.
 
-**Fix shape** — a consecutive-fault score feeding the existing fallback, on **both** paths, and it must
-`close()` first: `dsp_reopen()` overwrites the fd without closing, and on the continuous path the fd
-belongs to `AudioOut` whose one-per-process interlock refuses a second open. ⚠️ **A threshold of 1 is
-wrong and the reason is measurable:** a spurious fire on the continuous path costs a bounded-but-real
-`audio_out_close()` drain — ring plus period, ~0.79 s at 44100/2ch — **inside a render loop**, plus the
+**Fix shape** — a consecutive-fault score over both counters in `cont_service()`, then `audio_out_close()`
+and `stream_open()`: the close must come first, because `AudioOut`'s one-per-process interlock refuses a
+second open. ⚠️ **A threshold of 1 is wrong and the reason is measurable:** a spurious fire costs a
+bounded-but-real `audio_out_close()` drain — ring plus period, ~0.79 s at 44100/2ch — **inside a render loop**, plus the
 reopen's prefill. `EAGAIN` cannot reach the score at all (`audio_write_frames()` services a full sink
 before `sink_error` is reachable), so the threshold is buying tolerance of a one-off `EINTR`/`EIO`, not of
 load. ⚠️ **And a failed recovery must be re-armed**, or lowering `available` mutes the app permanently —
@@ -716,20 +711,22 @@ device userspace is soft-float, and `arm-linux-gnueabi` dynamic builds run on it
 ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client played on both cards
 ([`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
 `.188` runs that dynamic ScummVM now (md5 `431a471a`; static kept as `/opt/games/scummvm.static`,
-`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. Steps, in order:
-(1) script the alsa-lib 1.2.1.2 soft-float build (headers + a `libasound.so` to link; the device's copy is
-the runtime — the recipe is `configure --host=arm-linux-gnueabi --disable-python --disable-alisp
---disable-topology --disable-ucm`); (2) `native_apps/build-and-deploy.sh` gains the same `RW_ABI=softfp`
-switch as `scummvm-roomwizard/build-and-deploy.sh`; (3) fold `audio.c`'s legacy direct `dsp_fd` path into
-`audio_out`, no audible change; (4) a libasound `AudioOutDev` in `audio_out.c`, the selector resolving to a
-PCM name (`plughw:<card>,0`, later `bluealsa`), `-ENODEV` from `snd_pcm_writei` as the unplug signal;
-(5) flip both defaults to softfp-dynamic, delete the OSS backend and SYSTEM_ANALYSIS §6's "every binary we
+`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. Both build scripts take
+`RW_ABI=softfp`, and `audio_out` is already the only playback path. Steps left, in order:
+(4) a libasound `AudioOutDev` in `audio_out.c`, headers and link library from `native_apps/build-alsa-lib.sh`
+(into `native_apps/arm-deps-softfp/`; ScummVM links `audio_out.o`, so its build must call that script too),
+the selector resolving to a PCM name (`plughw:<card>,0`, later `bluealsa`), `-ENODEV` from `snd_pcm_writei`
+as the unplug signal; (5) flip both defaults to softfp-dynamic, delete the OSS backend and SYSTEM_ANALYSIS §6's "every binary we
 ship is `-static`" safety argument, and gate that the deep clean and the offline installer keep libc,
 libstdc++ and libasound. An onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB —
 compare loudness game-vs-game, OSS vs ALSA, at equal amplitude **[inferred: amplitude only]**.
 Operator 2026-09-27, the settings tab in `native_apps/device_tools/device_tools.c`: `audio_device` defaults
 to `auto`, not `onboard` (`config_audio_device()` in `common/config.c`); TEST AUDIO plays on the output
-**shown**, not the saved one; and the page shows an "unsaved changes" note while they differ.
+**shown**, not the saved one; and the page shows an "unsaved changes" note while they differ. ⚠️ TEST AUDIO
+also freezes the UI ~0.9 s (operator-noticed): `do_audio_test()` in `device_tools.c` and its copy in
+`hardware_config.c` open the stream, hold each tone with `audio_hold_serviced()` and close (drain) inside
+the button handler (read in code) — fix is to hold the bus for the screen and queue the tones as voices
+(`native_apps/CLAUDE.md` → *Hold the bus for the screen*).
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
@@ -1137,6 +1134,12 @@ documentation.** Narrow the scan rather than excluding a file: a hit on a line t
 key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key table, is not a
 citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
 fire in a file of the same kind, or the scan goes blind where it used to see.
+
+### C16. Restructure `device_tools` and the diagnostic tools — open, asked for by the operator 2026-09-27
+
+*Mix Bus Test* (`tests/audio_mix_test.c`, its own launcher tile in `native_apps/app-manifests.sh`)
+belongs under `device_tools`, beside the MULTI-TOUCH tester. Take it with the rest of the diag spread —
+`hardware_test`, `hardware_config`, `hardware_diag` and the test tiles — in one pass, not tab by tab.
 
 ---
 

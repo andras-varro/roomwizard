@@ -249,15 +249,13 @@ int  audio_out_open_oss(AudioOut *out, int rate_req, int channels_req);
 /* ── Which device ───────────────────────────────────────────────────────────
  *
  * ⚠️ **One home for "which `/dev/dsp*`", and every opener in the tree resolves
- * through it** — this file's OSS backend, `audio.c`'s `dsp_reopen()`, and
- * ScummVM's mixer. There used to be a `DSP_DEVICE` macro in each of the first
+ * through it** — this file's OSS backend, `audio.c`, and ScummVM's mixer. There used to be a `DSP_DEVICE` macro in each of the first
  * two; a seam in only one of them left every app opening the panel speaker at
  * startup and falling back to it on error.
  *
  * The preference is process-global on purpose: `audio_open()` memsets `Audio`,
  * so a field on the struct would be cleared by the call that needs to read it.
- * Set it once, before the first open; it is honoured by every later open,
- * including the device hand-off in `audio_cont_enable()`.
+ * Set it once, before the first open; it is honoured by every later open.
  *
  * These four are OUTSIDE this file's OSS guard, so a host build with no
  * `<sys/soundcard.h>` still links them and `tests/audio_out_test.c` drives the

@@ -235,9 +235,9 @@ typedef struct {
     Audio   a;
 } Rig;
 
-/* An Audio on the continuous stream with no /dev/dsp behind it.  `dsp_fd` is -1
- * because CONT owns the device — audio_live() reads audio_out_is_open() in that
- * state, and our AudioOut really is open. */
+/* An Audio on the continuous stream with no /dev/dsp behind it: the AudioOut
+ * really is open, on the file device, so audio_live() (available && the stream
+ * open) reads true exactly as it does on the panel. */
 static int rig_start(Rig *r, int vol)
 {
     memset(r, 0, sizeof(*r));
@@ -248,16 +248,20 @@ static int rig_start(Rig *r, int vol)
         return -1;
     }
 
-    r->a.dsp_fd       = -1;
     r->a.available    = true;
-    r->a.cont         = true;
-    r->a.pumping      = true;
     r->a.sample_rate  = audio_out_rate(&r->a.out);
     r->a.channels     = audio_out_channels(&r->a.out);
     r->a.vol          = vol;
     r->a.master_shift = AUDIO_MASTER_SHIFT;
     r->a.last_tone_slot = -1;
     r->a.last_tone_gen  = 0;
+    /* ⚠️ BOTH TOGGLES, and they are load-bearing: audio_tone() refuses at the door
+     * with `effects_on` false, and a memset Audio has it false — so without these
+     * two lines every tone below was refused, the WAVs were silence, and group B's
+     * two overlap checks failed while A passed vacuously on a silent file.  Same
+     * defect, same fix as audio_tone_test.c's mk_audio(). */
+    r->a.music_on       = true;
+    r->a.effects_on     = true;
 
     audio_mix_init(&r->a.mix, r->a.sample_rate);
     audio_mix_set_limit(&r->a.mix, AUDIO_MIX_HARD);      /* the shipped default */
