@@ -126,6 +126,7 @@ CTEST_ROWS=(
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "ui_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
+    "usb_bus_test|-I.|device_tools/usb_bus.c"
 )
 
 # Files named *_test.c that are NOT host regressions.  Two are ARM apps that

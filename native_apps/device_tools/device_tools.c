@@ -22,6 +22,7 @@
 #include "../common/config.h"
 #include "../common/ui_layout.h"
 #include "../common/audio.h"
+#include "usb_bus.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -280,8 +281,10 @@ typedef struct {
     ConfirmAction confirm_action;
     /* USB Test tab state */
     USBScreen    usb_scr;
-    USBDev       usb_devs[MAX_USB_DEV];
+    USBDev       usb_devs[MAX_USB_DEV];   /* evdev nodes the testers can open */
     int          usb_dev_cnt;
+    UsbBusDev    usb_bus[USB_BUS_MAX];    /* everything enumerated — what the list shows */
+    int          usb_bus_cnt;
     int          usb_kbd_idx, usb_mou_idx, usb_pad_idx;
     int          usb_fd;
     KbdState     usb_kbd;
@@ -3239,6 +3242,7 @@ static void usb_scan_devices(AppState *s) {
         else if (t==DEV_GAMEPAD && s->usb_pad_idx<0) s->usb_pad_idx=s->usb_dev_cnt;
         s->usb_dev_cnt++;
     }
+    s->usb_bus_cnt = usb_bus_scan(USB_BUS_ROOT, s->usb_bus, USB_BUS_MAX);
 }
 
 static void usb_close(AppState *s);   /* defined below; used by the recovery path */
@@ -3297,10 +3301,11 @@ static bool usb_recover_port(AppState *s) {
         ;   /* a signal must not orphan the child */
 
     usb_scan_devices(s);
+    int found = usb_bus_peripherals(s->usb_bus, s->usb_bus_cnt);
 
-    if (s->usb_dev_cnt > 0)
+    if (found > 0)
         snprintf(s->status_msg, sizeof(s->status_msg),
-                 "PORT RECOVERED - %d DEVICE(S)", s->usb_dev_cnt);
+                 "PORT RECOVERED - %d DEVICE(S)", found);
     else if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
         snprintf(s->status_msg, sizeof(s->status_msg),
                  "COULD NOT RUN USB-HOST");
@@ -3308,7 +3313,7 @@ static bool usb_recover_port(AppState *s) {
         snprintf(s->status_msg, sizeof(s->status_msg),
                  "STILL NOTHING - IS A DEVICE PLUGGED IN?");
     s->status_time_ms = get_time_ms();
-    return s->usb_dev_cnt > 0;
+    return found > 0;
 }
 
 static int usb_open(AppState *s, int idx) {
@@ -3439,11 +3444,6 @@ static void usb_proc_pad(AppState *s) {
     }
 }
 
-static const char *usb_dtype_str(DevType t) {
-    switch(t) { case DEV_KEYBOARD:return "KEYBOARD"; case DEV_MOUSE:return "MOUSE";
-                case DEV_GAMEPAD:return "GAMEPAD"; default:return "UNKNOWN"; }
-}
-
 /* ── USB Draw: Main device list (inside tab content area) ────────────────── */
 static void draw_usb(Framebuffer *fb, AppState *s) {
     int lx=CONTENT_LEFT, ly=CONTENT_Y+5;
@@ -3453,7 +3453,7 @@ static void draw_usb(Framebuffer *fb, AppState *s) {
     fb_draw_rounded_rect(fb, lx, ly, lw, lh, 6, USB_COLOR_PANEL_BD);
     fb_draw_text(fb, lx+12, ly+10, "DETECTED USB DEVICES:", USB_COLOR_HDR, 2);
 
-    if (s->usb_dev_cnt==0) {
+    if (s->usb_bus_cnt==0) {
         text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2-10,
                            "NO USB DEVICES DETECTED", USB_COLOR_DIM, 2);
         /* This tab never drew status_msg, so a recovery attempt that found
@@ -3467,25 +3467,27 @@ static void draw_usb(Framebuffer *fb, AppState *s) {
                                "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
     } else {
         int ry0=ly+36, rh=36;
-        for (int i=0; i<s->usb_dev_cnt && i<6; i++) {
-            USBDev *d=&s->usb_devs[i]; int ry=ry0+i*rh;
+        /* The bus, not the evdev nodes: a sound card, a BT dongle or a hub has
+         * no keyboard/mouse/pad node and used to be invisible while it worked.
+         * The testers below still key off the evdev scan. */
+        for (int i=0; i<s->usb_bus_cnt && i<6; i++) {
+            UsbBusDev *d=&s->usb_bus[i]; int ry=ry0+i*rh;
             if (i%2==0) fb_fill_rect(fb, lx+4, ry, lw-8, rh-2, RGB(25,25,38));
-            fb_fill_circle(fb, lx+20, ry+rh/2, 6,
-                           d->connected?USB_COLOR_CONN:USB_COLOR_DISC);
-            const char *ts=usb_dtype_str(d->type);
-            uint32_t bc;
-            switch(d->type) {
-                case DEV_KEYBOARD: bc=RGB(0,150,200); break;
-                case DEV_MOUSE: bc=RGB(200,150,0); break;
-                case DEV_GAMEPAD: bc=RGB(0,180,80); break;
-                default: bc=USB_COLOR_DIM; break;
-            }
-            int bw=text_measure_width(ts,2)+16;
+            fb_fill_circle(fb, lx+20, ry+rh/2, 6, USB_COLOR_CONN);
+            uint32_t bc=USB_COLOR_DIM;
+            if      (!strcmp(d->kind,"AUDIO"))   bc=RGB(200,150,0);
+            else if (!strcmp(d->kind,"BT"))      bc=RGB(0,120,220);
+            else if (!strcmp(d->kind,"HID"))     bc=RGB(0,150,200);
+            else if (!strcmp(d->kind,"STORAGE")) bc=RGB(0,180,80);
+            int bw=text_measure_width(d->kind,2)+16;
             fb_fill_rounded_rect(fb, lx+36, ry+4, bw, rh-10, 4, bc);
-            fb_draw_text(fb, lx+44, ry+10, ts, COLOR_WHITE, 2);
+            fb_draw_text(fb, lx+44, ry+10, d->kind, COLOR_WHITE, 2);
             char tn[48]; text_truncate(tn, d->name, lw-bw-170, 2);
             fb_draw_text(fb, lx+44+bw+10, ry+10, tn, COLOR_LABEL, 2);
-            fb_draw_text(fb, lx+lw-140, ry+10, d->path, USB_COLOR_DIM, 1);
+            char id[32];
+            if (d->card >= 0) snprintf(id, sizeof(id), "card %d  %04x:%04x", d->card, d->vid, d->pid);
+            else              snprintf(id, sizeof(id), "%04x:%04x", d->vid, d->pid);
+            fb_draw_text(fb, lx+lw-140, ry+14, id, USB_COLOR_DIM, 1);
         }
     }
 
@@ -3716,8 +3718,9 @@ static void handle_usb_input(AppState *state, int tx, int ty,
          * NOTHING enumerates, so finding nothing is exactly when a re-probe is
          * worth its few seconds. If something is already listed the port is live,
          * and a device plugged in later enumerates on its own (measured on .188
-         * across gaps of 70-300 s) — so do not disturb a working bus. */
-        if (state->usb_dev_cnt == 0)
+         * across gaps of 70-300 s) — so do not disturb a working bus. A hub
+         * alone counts as empty: that is how a dead port looks behind one. */
+        if (usb_bus_peripherals(state->usb_bus, state->usb_bus_cnt) == 0)
             usb_recover_port(state);
     }
 
@@ -3978,6 +3981,7 @@ int main(void) {
          * the button before it could recover the port too — the scan worked and
          * the screen did not admit it. */
         int           prev_usb_cnt   = state.usb_dev_cnt;
+        int           prev_bus_cnt   = state.usb_bus_cnt;
         /* ⚠️ And the DAC's presence, for the same reason one line up: the settings
          * tab's OUT button is dimmed from a live access("/dev/dsp1") every frame,
          * but "every frame" means every frame that gets PAINTED.  Without this the
@@ -4040,6 +4044,7 @@ int main(void) {
             prev_confirm   != state.confirm_action  ||
             prev_usb_scr   != state.usb_scr         ||
             prev_usb_cnt   != state.usb_dev_cnt     ||
+            prev_bus_cnt   != state.usb_bus_cnt     ||
             prev_out_usb   != audio_out_usb_present() ||
             state.diag_needs_refresh) {
             needs_redraw = true;

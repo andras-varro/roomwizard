@@ -249,7 +249,7 @@ $CC "${WARN[@]}" -O2 -static -I. backlight/backlight.c build/hardware.o build/co
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "32/37" "device_tools"
-$CC "${WARN[@]}" -O2 -static -I. device_tools/device_tools.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
+$CC "${WARN[@]}" -O2 -static -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
