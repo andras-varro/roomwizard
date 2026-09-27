@@ -130,7 +130,21 @@ echo " RoomWizard Build + Deploy"
 echo "════════════════════════════════════════"
 info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
-CC=arm-linux-gnueabihf-gcc
+# Toolchain and link mode.  Default: hard-float, fully -static.  RW_ABI=softfp builds
+# DYNAMIC against the device's own soft-float userspace — the same switch as
+# scummvm-roomwizard/build-and-deploy.sh, whose comment carries the loader/glibc
+# mechanism and why armv7-a is still divide-free.  The flags ride inside CC so every
+# compile and link line below gets them.
+if [ "${RW_ABI:-hardfloat}" = softfp ]; then
+    TC=arm-linux-gnueabi
+    ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
+    LINK_MODE=""
+else
+    TC=arm-linux-gnueabihf
+    ARMFLAGS=""
+    LINK_MODE="-static"
+fi
+CC="$TC-gcc${ARMFLAGS:+ $ARMFLAGS}"
 
 # Warning flags applied to every compile line.  These are advisory only — the build
 # does not use -Werror, because ~30k lines of C were written with warnings off and a
@@ -138,7 +152,7 @@ CC=arm-linux-gnueabihf-gcc
 #   ./build-and-deploy.sh 2>&1 | grep -E 'warning:' | sort | uniq -c | sort -rn
 WARN=(-Wall -Wextra -Wno-unused-parameter)
 
-if ! command -v $CC &>/dev/null; then
+if ! command -v "$TC-gcc" &>/dev/null; then
     err "ARM cross-compiler not found. Install every host prerequisite with\n  setup-build-env.sh, at the repo root — it carries the one package set."
 fi
 info "Compiler: $($CC --version | head -1)"
@@ -150,23 +164,23 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/37" "framebuffer";  $CC "${WARN[@]}" -O2 -static -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/37" "touch_input";  $CC "${WARN[@]}" -O2 -static -c common/touch_input.c    -o build/touch_input.o
-step " 3/37" "touch_calib";  $CC "${WARN[@]}" -O2 -static -c common/touch_calib.c    -o build/touch_calib.o
-step " 4/37" "hardware";     $CC "${WARN[@]}" -O2 -static -c common/hardware.c        -o build/hardware.o
-step " 5/37" "common";       $CC "${WARN[@]}" -O2 -static -c common/common.c          -o build/common.o
-step " 6/37" "highscore";    $CC "${WARN[@]}" -O2 -static -c common/highscore.c       -o build/highscore.o
-step " 7/37" "keyboard";     $CC "${WARN[@]}" -O2 -static -c common/keyboard.c        -o build/keyboard.o
-step " 8/37" "ui_layout";    $CC "${WARN[@]}" -O2 -static -c common/ui_layout.c       -o build/ui_layout.o
-step " 9/37" "audio";        $CC "${WARN[@]}" -O2 -static -c common/audio.c           -o build/audio.o
-step "10/37" "audio_gen";    $CC "${WARN[@]}" -O2 -static -c common/audio_gen.c       -o build/audio_gen.o
-step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 -static -c common/audio_out.c       -o build/audio_out.o
-step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 -static -c common/audio_wav.c       -o build/audio_wav.o
-step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 -static -c common/audio_bed.c       -o build/audio_bed.o
-step "14/37" "ppm";          $CC "${WARN[@]}" -O2 -static -c common/ppm.c             -o build/ppm.o
-step "15/37" "logger";       $CC "${WARN[@]}" -O2 -static -c common/logger.c          -o build/logger.o
-step "16/37" "config";       $CC "${WARN[@]}" -O2 -static -c common/config.c          -o build/config.o
-step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 -static -c common/gamepad.c         -o build/gamepad.o
+step " 1/37" "framebuffer";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/37" "touch_input";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/touch_input.c    -o build/touch_input.o
+step " 3/37" "touch_calib";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/touch_calib.c    -o build/touch_calib.o
+step " 4/37" "hardware";     $CC "${WARN[@]}" -O2 $LINK_MODE -c common/hardware.c        -o build/hardware.o
+step " 5/37" "common";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/common.c          -o build/common.o
+step " 6/37" "highscore";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/highscore.c       -o build/highscore.o
+step " 7/37" "keyboard";     $CC "${WARN[@]}" -O2 $LINK_MODE -c common/keyboard.c        -o build/keyboard.o
+step " 8/37" "ui_layout";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/ui_layout.c       -o build/ui_layout.o
+step " 9/37" "audio";        $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio.c           -o build/audio.o
+step "10/37" "audio_gen";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_gen.c       -o build/audio_gen.o
+step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_out.c       -o build/audio_out.o
+step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_wav.c       -o build/audio_wav.o
+step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_bed.c       -o build/audio_bed.o
+step "14/37" "ppm";          $CC "${WARN[@]}" -O2 $LINK_MODE -c common/ppm.c             -o build/ppm.o
+step "15/37" "logger";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/logger.c          -o build/logger.o
+step "16/37" "config";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/config.c          -o build/config.o
+step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 $LINK_MODE -c common/gamepad.c         -o build/gamepad.o
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
             build/common.o build/highscore.o build/keyboard.o
@@ -205,51 +219,51 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "18/37" "snake";        $CC "${WARN[@]}" -O2 -static snake/snake.c             "${COMMON_OBJ[@]}" build/gamepad.o -o build/snake         -lm
-step "19/37" "tetris";       $CC "${WARN[@]}" -O2 -static tetris/tetris.c           "${COMMON_OBJ[@]}" build/gamepad.o -o build/tetris        -lm
-step "20/37" "pong";         $CC "${WARN[@]}" -O2 -static pong/pong.c               "${COMMON_OBJ[@]}" build/gamepad.o -o build/pong          -lm
+step "18/37" "snake";        $CC "${WARN[@]}" -O2 $LINK_MODE snake/snake.c             "${COMMON_OBJ[@]}" build/gamepad.o -o build/snake         -lm
+step "19/37" "tetris";       $CC "${WARN[@]}" -O2 $LINK_MODE tetris/tetris.c           "${COMMON_OBJ[@]}" build/gamepad.o -o build/tetris        -lm
+step "20/37" "pong";         $CC "${WARN[@]}" -O2 $LINK_MODE pong/pong.c               "${COMMON_OBJ[@]}" build/gamepad.o -o build/pong          -lm
 
 step "21/37" "brick_breaker"
-$CC "${WARN[@]}" -O2 -static brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/brick_breaker -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/brick_breaker -lm
 
 step "22/37" "samegame"
-$CC "${WARN[@]}" -O2 -static samegame/samegame.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/samegame -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE samegame/samegame.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/samegame -lm
 
 step "23/37" "frogger"
-$CC "${WARN[@]}" -O2 -static frogger/frogger.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/frogger -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE frogger/frogger.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/frogger -lm
 
 step "24/37" "platformer"
-$CC "${WARN[@]}" -O2 -static platformer/platformer.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/platformer -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE platformer/platformer.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/platformer -lm
 
 step "25/37" "game_selector"
-$CC "${WARN[@]}" -O2 -static -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" build/gamepad.o build/ui_layout.o -o build/game_selector -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" build/gamepad.o build/ui_layout.o -o build/game_selector -lm
 
 step "26/37" "app_launcher"
-$CC "${WARN[@]}" -O2 -static -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm
 
 step "27/37" "hardware_test"
-$CC "${WARN[@]}" -O2 -static -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm
 
 step "28/37" "hardware_config"
-$CC "${WARN[@]}" -O2 -static -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_config -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_config -lm
 
 step "29/37" "hardware_diag"
-$CC "${WARN[@]}" -O2 -static -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm
 
 step "30/37" "audio_touch_test"
-$CC "${WARN[@]}" -O2 -static -I. \
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. \
   tests/audio_touch_test.c \
   "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm
 
 step "31/37" "backlight"
-$CC "${WARN[@]}" -O2 -static -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 # Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "32/37" "device_tools"
-$CC "${WARN[@]}" -O2 -static -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
@@ -257,23 +271,23 @@ $CC "${WARN[@]}" -O2 -static -I. device_tools/device_tools.c device_tools/usb_bu
 # path, so it announced success and delivered nothing to any reader. Injection
 # needs /dev/uinput and this kernel has none — ../CLAUDE.md carries the rule.
 step "33/37" "touch_raw"
-$CC "${WARN[@]}" -O2 -static -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm
 
 step "34/37" "touch_trace"
-$CC "${WARN[@]}" -O2 -static -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the panel.
 step "35/37" "audio_mix_test"
-$CC "${WARN[@]}" -O2 -static -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm
 
 # What a smaller drawing surface costs, so the DSS-overlay question is settled by
 # a number rather than by the arithmetic that predicts one.  Device only — the
 # figure is this SoC's store bandwidth and no host run predicts it.  Hidden from
 # the grid: it repaints as fast as it can for a fixed frame count and exits.
 step "36/37" "fb_plane_bench"
-$CC "${WARN[@]}" -O2 -static -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_plane_bench -lm
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_plane_bench -lm
 
 # Whether the DSS scaler LOOKS acceptable, which the per-frame cost above cannot
 # say.  Links nothing from common/ on purpose: it programs fb1 and overlay1
@@ -281,7 +295,7 @@ $CC "${WARN[@]}" -O2 -static -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o bu
 # only and hidden from the grid — it changes framebuffer modes and the eye at the
 # panel is the only reader of its result.
 step "37/37" "dss_scale_ab"
-$CC "${WARN[@]}" -O2 -static -I. tests/dss_scale_ab.c -o build/dss_scale_ab
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 
 # Collect icon files from source dirs → build/icons/
 mkdir -p build/icons
