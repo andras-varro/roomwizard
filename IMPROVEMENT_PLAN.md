@@ -97,13 +97,10 @@ what is drawn.
 
 ### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-08**
 
-**On our PIO image, a hub hides every device behind it — measured 2026-09-25 on `.188`.** With the
-Terminus `1a40:0101` hub enumerated and the C-Media dongle plugged into it, three `usb-host recover`
-passes found only the hub; each rebind set off the `musb_bus_suspend … a_idle while active` burst, and
-afterwards the hub read `suspended`, `usb1` read `suspending` and `mode` read `a_idle`. The dongle
-plugged in directly enumerates at boot and plays. *Inferred:* the idle hub autosuspends, and its
-remote wakeup is then dropped as `bogus host RESUME (a_idle)`. First experiment, no build: `echo -1 >
-/sys/module/usbcore/parameters/autosuspend`, then `usb-host recover` with hub + dongle attached.
+**A hub no longer triggers it on our image, and the invariant is still broken.** An autosuspending hub
+set off the burst at every `recover` and hid the device behind it; `usbcore.autosuspend=-1` on the
+cmdline removed that trigger (measured, `kernel/README.md`), so a hub is now a *non*-reproducer. The
+fix below is still owed: the DISCONNECT handler leaves `is_active` set whatever is plugged in.
 
 ⚠️ **An unbounded kernel message loop that outlives the device's removal and ends in a hardware reset
 ~46 min later, and it is also a measurement contaminant** — anything judged by ear or timed during a storm
@@ -214,6 +211,15 @@ job: that a real unplugged DAC *fails* `GETOSPACE`/`write` rather than hanging o
 bytes, and that the fallback is heard. ⚠️ That file is also built and run **on the device**, where the
 recovery really succeeds — so any assertion about `available` or voice count passes on the host and fails
 on ARM.
+
+### B37. device_tools' input testers open only the first node of each kind — open, reported 2026-09-27
+
+**With a touchpad keyboard and a 2.4 GHz mouse both attached, the MOUSE test ignores the mouse.** The
+operator saw the Compx receiver (`25a7:fa61`) in the USB tab's bus list, but the mouse did nothing in the
+test. On `.188` the touchpad's mouse node is `event3` and the receiver's is `event6`, and
+`usb_scan_devices()` in `native_apps/device_tools/device_tools.c` keeps only the first `DEV_MOUSE` (the
+same goes for keyboards and pads). *Inferred* from that code and the node order; `event6` was not opened.
+Fix: let the tester step through every node of its kind, and verify with both devices attached.
 
 ## Features
 
@@ -700,7 +706,7 @@ is missing is the alsa-lib **dev** side only — `/usr/include/alsa` does not ex
 not blocked by ALSA's absence; it is a cross-compile against alsa-lib headers we would have to source,
 a cost this entry never priced, on top of the audio half it already calls the unlikely half. ⚠️ This is
 also the trigger the declined *Native ALSA backend* item names for revisiting it, and **the operator ruled
-2026-09-23: on board with moving audio to ALSA wholesale** — that row is reopened as open work.
+2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
 
 **Owning the kernel changes nothing on the audio side — analysed 2026-09-23.** `usb_host/device_config`
 already has `SND_SOC`, OMAP McBSP and TWL4030 `=y` and `SND_PCM_OSS=y`; `SND_USB_AUDIO` is already an
@@ -709,8 +715,13 @@ out-of-tree module. A native-ALSA client is one raw-ioctl `AudioOutDev` in `nati
 the time64 `sync_ptr` layout a risk). It reaches `native_apps` **and** ScummVM, whose `oss-mixer.cpp` calls
 `audio_out_open_oss`; `vnc_client` has no audio. But `audio.c`'s legacy direct `dsp_fd` path must fold into
 `audio_out` first, and `bluez-alsa` is an alsa-lib *plugin*, so a raw-ioctl client cannot reach it — apps
-would need dynamic `libasound` **[inferred]**. **So keep OSS for the speaker**; revisit ALSA only as this
-entry's audio half, after the BT modules, BlueZ and `lmp_subver`.
+would need dynamic `libasound` **[inferred]**. **Operator ruling 2026-09-27: the ALSA backend comes first,
+then Bluetooth** — every game and utility moves to ALSA through `audio_out`, and anything ALSA lacks we
+build, the kernel being ours. BT follows for audio and for HID, game controllers included, so the
+`bluez-alsa` point above decides raw-ioctl vs dynamic `libasound` — settle it in the design, before code.
+The value case the backend was once declined on stays true: `/dev/dsp` and the ALSA device are the same
+PCM, and the only measured win is ~2× at the period ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)).
+tinyalsa was deleted with that decision; why it had failed is not recorded.
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
@@ -761,9 +772,8 @@ than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the au
 than two. A2DP's ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
-**Can we get USB DMA?** Nearly: our image can set `CONFIG_USB_INVENTRA_DMA`, and it streams USB audio
-until the first `usb-host recover` leaves the MUSB master port in standby (`kernel/README.md`), so it
-ships PIO until the fix is booted. On the vendor kernel the
+**Can we get USB DMA?** Yes, on our image: it sets `CONFIG_USB_INVENTRA_DMA` and carries the patch that
+keeps the MUSB master port out of standby after a `usb-host recover` (`kernel/README.md`). On the vendor kernel the
 symbol is unset and `musbhsdma.c` is not compiled at all. ⚠️ **The
 `CONFIG_DMADEVICES=y` / `CONFIG_TI_EDMA=y` that *are* set are a red herring** — that is the **system**
 EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses;
@@ -772,8 +782,8 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
 family as [F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02)'s
 existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
-controller scribbles into RAM.** The clean way is the config symbol in an image we build, which F101's
-MUSB DMA row now carries ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+controller scribbles into RAM.** The clean way is the config symbol in an image we build, which is what
+ours does ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 **Where the two questions do connect — and the cheaper experiment has already been run.** A wired USB
 DAC needed no encoding, no pairing and no latency budget, and it is now built, shipping and proven on
@@ -842,7 +852,6 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 | Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a `.ko` from `kernel/build-modules.sh`, loaded at boot by `device-files/touch-module` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(iii) pressure** — test a profile peak-height sum against a light/firm press, the columns and rows being mapped ([§3.3](SYSTEM_ANALYSIS.md#33-touch)); **(iv) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
 | fbcon cursor | `vt.global_cursor_default=0` via `CONFIG_CMDLINE_EXTEND` | permanently off. U-Boot's bootargs stay untouched — they cannot be persisted |
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed 2026-09-23; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
-| MUSB DMA | boot a DMA image carrying `musb-release-mstandby-on-probe.patch` (built 2026-09-25, `uImage-test` md5 `6db42ce9…`; its p1 install was refused, so it has never run), then on `.188`: replug, `usb-host recover`, `aplay` to `plughw:1,0` — pass is `0x480AB414 = 0`, `hw_ptr` advancing, `dma` IRQ rising. If it passes, switch `config-changes` from `MUSB_PIO_ONLY` to `USB_INVENTRA_DMA` as its own image | the negative control is already measured: `uImage-system.musbdma` without the patch freezes after exactly that sequence (`kernel/README.md`); PIO ships meanwhile and plays |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
@@ -1140,7 +1149,6 @@ ruled out, and is needed for nothing
 | Mainline 5.x/6.x port | **Closed on DRM/KMS, not on effort:** `omapdrm` would break the runtime bpp switching ScummVM and the VNC client depend on, lose the DSS overlay sysfs, and cost RAM. Building 4.14.52 ourselves (F101) is the opposite decision and keeps all three intact | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
 | Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written — or once we are iterating on our own images (F101), where serial is the only channel that shows *why* one failed to boot, though fitting `P4` is itself a board change. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
-| Native ALSA backend (the "ALSA port") | **Reopened by the operator 2026-09-23** — on board with a full move to ALSA; the value case below is what a design must beat, not a veto. Needs no kernel work, and the userspace side is complete on a stock unit ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Declined earlier on **value**: `/dev/dsp` and the ALSA device are the same PCM, the only measured win is ~2× at the period, and no latency symptom has ever been reported. Both other arguments once recorded beside it are gone — *mixing* shipped in userspace, and the *frame arithmetic* lives in `audio_gen.c`, which a port would leave unchanged. The tinyalsa dependency, its build script and its licence rows were deleted with this decision; nothing in the tree prepares for it. **Revisit only if something we port needs ALSA.** | [`#34-audio`](SYSTEM_ANALYSIS.md#34-audio) |
 
 **Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the
 appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
@@ -1178,7 +1186,7 @@ longer blocked.
 and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
 F17 is a module build. **What genuinely
 needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
-RESCAN tap — MUSB DMA, and, added 2026-09-11, all of F2.** Anything else claiming to need
+RESCAN tap — and, added 2026-09-11, all of F2.** Anything else claiming to need
 a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek
 by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
 read `lsusb`'s VID:PID before building anything.

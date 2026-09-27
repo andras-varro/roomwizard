@@ -7,16 +7,19 @@
 # cannot be persisted, so these are appended to them; console=tty0 comes last, which makes the
 # panel /dev/console while ttyO1 keeps every printk. The vendor string " debug " is replaced,
 # not extended: appended, it would raise the console loglevel to 10.
+# usbcore.autosuspend=-1: a hub left to autosuspend drops its remote wakeup as a bogus host RESUME
+# in a_idle, and a usb-host recover then finds the hub without the device behind it, amid a
+# musb_bus_suspend burst. Measured on .188, 2026-09-27: 2 of 2 clean with it off, 0 of 2 with 2.
 disable CMDLINE_FROM_BOOTLOADER
 enable  CMDLINE_EXTEND
-set-str CMDLINE vt.global_cursor_default=0 console=tty0
+set-str CMDLINE vt.global_cursor_default=0 usbcore.autosuspend=-1 console=tty0
 # The vendor config carries only the mono and 16-colour logos; on a 32bpp panel the 224-colour
 # one is the one fb_find_logo() picks.
 enable  LOGO_LINUX_CLUT224
 # The vendor config leaves MUSB with neither a DMA backend nor PIO_ONLY, so omap2430_ops has no
 # dma_init and musb_init_controller() fails with -ENODEV: no USB host at all. The vendor kernel
 # hides this behind enable-usb-host.sh's /dev/mem stubs, whose addresses exist only in its image.
-# PIO, not USB_INVENTRA_DMA: the Inventra backend streams until the first usb-host recover, whose
-# unbind leaves OTG_FORCESTDBY forcing MSTANDBY, and then no DMA transfer completes (.188, 2026-09-25).
-# patches/musb-release-mstandby-on-probe.patch clears it on probe; switch only once that is booted.
-enable  MUSB_PIO_ONLY
+# USB_INVENTRA_DMA needs patches/musb-release-mstandby-on-probe.patch: without it the first usb-host
+# recover's unbind leaves OTG_FORCESTDBY forcing MSTANDBY and no DMA transfer completes again.
+# Measured on .188, 2026-09-27: patched, audio streams after replug + recover with FORCESTDBY 0.
+enable  USB_INVENTRA_DMA
