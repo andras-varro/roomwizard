@@ -208,7 +208,7 @@ tool-level traps rather than device facts, and each has cost real time.
 - ⚠️ **A pipeline reports the LAST command's exit status, so `./tests/<gate>.sh | tail` says PASS when
   the gate failed.** Same family again, and it is the *gate* it lies about rather than a measurement.
   Read `${PIPESTATUS[0]}`, or redirect to a file and `Read` it — which is what `./tests/doc_check.sh`
-  needs anyway: it takes ~2 min (background it), it emits NUL bytes that make the output unreadable
+  needs anyway: it takes 9 s in WSL and minutes in Git Bash (measured 2026-09-27), it emits NUL bytes that make the output unreadable
   (`| tr -d '\000'`), and its destination — like EVERY scratch file — must be **outside** the repo:
   group D counts a receipt inside; a scratch copy of a source made `rw_ssh_test` FAIL (measured).
 - ⚠️ **Git Bash `sed` does not expand `\n` in a REPLACEMENT** — it inserts a literal `n`, silently, and

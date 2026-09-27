@@ -50,7 +50,7 @@ APP_DIRS="/opt/games /opt/roomwizard /opt/vnc_client"
 #      - a grandchild whose basename appears nowhere in any config file.  That is
 #      why a vnc_client survived a full deploy plus two `stop` calls on
 #      2026-08-02, kept the panel at 16bpp and repainted over everything that
-#      tried to start after it (B25).
+#      tried to start after it.
 #   2. A parent chooses its child's argv[0].  app_launcher used to pass the
 #      manifest's display name, so /proc/<pid>/cmdline read "VNC Client" while
 #      the binary was /opt/vnc_client/vnc_client; it passes the exec path now, but
@@ -81,7 +81,7 @@ do_start() {
     # Disable Steelcase bloatware (idempotent — safe on every boot)
     if [ -x "$DISABLE_SCRIPT" ]; then
         # `|| touch` is the same safety net as the else branch: the script does
-        # the bypass as its very first command now (B18), but a truncated scp or
+        # the bypass as its very first command now, but a truncated scp or
         # a CRLF shebang can still make it fail before that, and a device with an
         # armed Steelcase watchdog reboots every ~70 minutes.
         "$DISABLE_SCRIPT" || {
@@ -323,7 +323,7 @@ do_stop() {
     # Safety net: kill every app that survived the wrapper, matched on its
     # executable - so an app the launcher started is caught too.  This used to
     # `killall $(basename default-app)`, i.e. app_launcher and nothing else, and
-    # the process still holding the framebuffer was its child (B25/B20).
+    # the process still holding the framebuffer was its child.
     PIDS=$(app_pids)
     if [ -n "$PIDS" ]; then
         echo "  Terminating app processes:" $PIDS
@@ -393,5 +393,5 @@ esac
 
 # Propagate the action's status.  `stop` returning non-zero is the one signal a
 # deploy script has that something is still holding the binaries it is about to
-# overwrite - swallowing it with a bare `exit 0` is how B25 stayed silent.
+# overwrite - swallowing it with a bare `exit 0` is how an app still holding the framebuffer went unreported.
 exit $?

@@ -18,7 +18,7 @@
 #
 # Traced through drivers/usb/musb/ and drivers/phy/ti/ in the vanilla 4.14.52
 # tree, and consistent with every measurement on .188 2026-08-13.
-# IMPROVEMENT_PLAN.md B32, SYSTEM_ANALYSIS.md#36-usb.
+# SYSTEM_ANALYSIS.md#36-usb.
 #
 # THE ROOT CAUSE IS ONE DTB WORD: this board declares `mode = <0x03>` on the
 # musb node (MUSB_PORT_MODE_DUAL_ROLE, musb_core.h:82-84), while the kernel is
@@ -135,10 +135,10 @@ vbus_state() {
 # Count enumerated NON-HUB devices on bus 1.
 #
 # ⚠️ Do NOT test `[ -d /sys/bus/usb/devices/1-1 ]` for this. 1-1 is whatever sits
-# on root-hub port 1 -- and with a hub left permanently attached (the candidate
-# fix in IMPROVEMENT_PLAN.md B32) that is the HUB. The old test therefore
+# on root-hub port 1 -- and with a hub left permanently attached (once a candidate
+# fix for the dead port) that is the HUB. The old test therefore
 # reported "a device is attached" with no peripheral present at all, which would
-# have silently passed B32's own hub test. A hub is bDeviceClass 09; a pad is
+# have silently passed the hub-left-attached test itself. A hub is bDeviceClass 09; a pad is
 # not. Devices behind a hub are 1-1.N and counted here too.
 #
 # The root hub is `usb1`, outside the 1-* glob. `1-0:1.0` and friends are
@@ -178,7 +178,7 @@ case "$1" in
     # nothing plugged into it will ever be seen until a rebind.
     echo "VBUS: $(vbus_state)"
     # Counted separately from lsusb because a hub is not a peripheral: during
-    # B32's hub test the interesting question is "is anything there BESIDES the
+    # the hub-left-attached test the interesting question is "is anything there BESIDES the
     # hub", and lsusb's line count cannot answer it at a glance.
     echo "Non-hub devices: $(usb_peripherals)"
     ;;
@@ -264,7 +264,7 @@ case "$1" in
     lsusb 2>/dev/null
     echo "No non-hub device enumerated after $tries attempt(s)."
     echo "If one IS plugged in, check dmesg. Note that a hub or adapter left"
-    echo "attached does NOT revive a dead port -- measured, see B32 -- so there"
+    echo "attached does NOT revive a dead port -- measured -- so there"
     echo "is nothing to re-seat your way out of; a rebind is the remedy."
     exit 1
     ;;

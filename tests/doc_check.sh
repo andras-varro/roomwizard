@@ -88,6 +88,9 @@ fail_total=0
 # .github templates would otherwise be judged by group E's markdown rules — plus the card
 # captures. Measured 2026-08-19: scummvm-icons holds 5 scannable files and 0 anchors, so
 # pruning it moves group A's count by nothing; it is pruned for E's sake, not A's.
+# An extensionless file is scanned when it starts with a shebang: the device-files init
+# scripts have no .sh, and nine plan-ID citations sat in them unseen (measured 2026-09-27).
+# One batched awk reads the first lines: a fork per file cost ~40 min over ~5900 of them.
 scan_files() {
     local root="$1"
     ( cd "$root" && find . \
@@ -97,13 +100,15 @@ scan_files() {
         -o -name scummvm-icons \
         -o -name partitions \
         -o -name partitions.new \
+        -o -name 'roomwizard.new*' \
         -o -name HardwarePhotos \
         -o -name arm-deps \
         -o -name deps \
         \) -prune -o -type f \
-        \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.sh' \
-        -o -name '*.py' -o -name '*.md' -o -name '*.conf' \) \
-        -print | sed 's|^\./||' | sort )
+        \( \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.sh' \
+        -o -name '*.py' -o -name '*.md' -o -name '*.conf' \) -print \
+        -o ! -name '*.*' -exec awk 'FNR == 1 { if (/^#!/) print FILENAME; nextfile }' {} + \) \
+        | sed 's|^\./||' | sort )
 }
 
 # Plan IDs that have a heading in IMPROVEMENT_PLAN.md, one per line.

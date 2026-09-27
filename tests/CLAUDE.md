@@ -93,7 +93,7 @@ and names what each one caught, so the run itself says how many groups there are
 **Group A — every markdown anchor resolves.** A cross-file `<doc>.md#<fragment>` and a same-file
 `(#<fragment>)` alike must name a slugified heading that exists in the target. This is the check that
 makes moving or retitling a section safe: ~120 of these anchors point into `SYSTEM_ANALYSIS.md` from
-`.sh`, `.c`, `.py` and `.conf` comments, which markdownlint never reads, so a retitled heading dangles
+`.sh`, `.c`, `.py`, `.conf` and extensionless-shebang comments, which markdownlint never reads, so a retitled heading dangles
 them silently. The slug rule was measured against anchors already in the tree, not assumed — every
 character outside `[a-z0-9 _-]` is deleted and then spaces become hyphens, so an em-dash leaves **both**
 its spaces behind and the slug gets a double hyphen. ⚠️ **It is fence-aware, and has to be**: this
