@@ -686,15 +686,13 @@ DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restor
 Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
 (`[inferred]` halves OPL synthesis cost — arithmetic, never measured), native games 44100 Hz.
 
-⚠️ **A native ALSA client is possible, and NOT PLANNED — a theoretical improvement with a marginal
-win.** The kernel side is already there: `CONFIG_SND`, `SND_PCM`, `SND_SOC`, `SND_OMAP_SOC`,
-`SND_OMAP_SOC_MCBSP`, `SND_SOC_TWL4030` all `=y` (`usb_host/device_config:2711`, `:2713`, `:2757`,
-`:2778-2779`, `:2855`); OSS is `SND_PCM_OSS` + `SND_PCM_OSS_PLUGINS` **emulation** (`:2718-2720`) over
-that same `rw20` card, so going native removes a layer. Userspace is complete on a stock unit —
-`libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`, `amixer`, `alsactl`, `speaker-test`, 238 files
-under `/usr/share/alsa` — but the **dev** side is absent (no headers, no `.a`, no symlink), so a client
-would talk to the kernel directly. It would buy ~2× at the period (below) and nothing else: the shim's
-bugs are all worked around, mixing ships in userspace, and the click is not a userspace problem.
+⚠️ **A native ALSA client works through the device's own dynamic `libasound`, on both cards.** Kernel:
+`CONFIG_SND`, `SND_PCM`, `SND_SOC`, `SND_OMAP_SOC`, `SND_OMAP_SOC_MCBSP`, `SND_SOC_TWL4030` all `=y`
+(`usb_host/device_config:2711`, `:2713`, `:2757`, `:2778-2779`, `:2855`); OSS is `SND_PCM_OSS` emulation
+(`:2718-2720`) over the same cards. Userspace ships `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`,
+`amixer`, `alsactl`, 238 files under `/usr/share/alsa`, but no headers — a same-version alsa-lib build
+supplies them (§6.3). Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
+`plughw:1,0`. Dynamic, not raw ioctls, because `bluez-alsa` is an alsa-lib plugin.
 
 - ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: that
   flag is MIDI/sequencer support and cannot produce PCM output here. PCM has to be hand-written,
@@ -2050,6 +2048,14 @@ Plain `-lpthread` is fine. The native C apps escape this only because they never
 Ubuntu Focal under WSL cannot do armhf multiarch — `dpkg --add-architecture armhf` fails and the
 standard mirrors carry no armhf. This is why ScummVM and the VNC client each build their own zlib,
 libpng and libjpeg into a local prefix.
+
+⚠️ **The device's userspace is soft-float ABI, so a dynamic binary needs `arm-linux-gnueabi`.** Vendor
+binaries read `soft-float ABI`, VFPv3, interpreter `/lib/ld-linux.so.3`; a `gnueabihf` binary asks for
+`/lib/ld-linux-armhf.so.3`, which is absent, and could not call a softfp libc anyway. Measured 2026-09-27:
+`arm-linux-gnueabi-gcc`/`g++` 9.4 (glibc 2.31, libstdc++ 6.0.28 — the device's own) with `-march=armv7-a
+-mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp` built snake, ScummVM and an alsa-lib 1.2.1.2 client that run
+on the device's libraries; without `-march` it targets armv5. On the rootfs: libz 1.2.11, libpng16 1.6.37,
+libdbus-1 1.12, glib 2.62, `dbus-daemon`; absent: BlueZ, libsbc. Check with `readelf -hl <bin>`.
 
 **libpng needs `-DPNG_ARM_NEON_OPT=0`.** With `-mfpu=neon`, libpng's build system detects NEON and
 enables NEON code paths in the C source — but the actual NEON assembly files

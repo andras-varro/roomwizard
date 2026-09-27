@@ -86,6 +86,27 @@ SCUMMVM_DIR="$REPO_ROOT/scummvm"
 NATIVE_APPS_DIR="$REPO_ROOT/native_apps"
 ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
 
+# Toolchain and link mode.  Default: hard-float, fully -static (what every shipped binary
+# was up to tag static-only-last).  RW_ABI=softfp builds DYNAMIC against the device's own
+# userspace, which is soft-float ABI (loader /lib/ld-linux.so.3, glibc 2.31) — a hard-float
+# binary can never load its libc, libasound or libstdc++.  Without the explicit flags that
+# toolchain targets armv5; armv7-a still has no hardware divide, so check-arm-safe holds.
+# The flags ride inside CC/CXX so that every compile and link — configure's probes, the
+# engines and native_apps/common alike — gets them.  arm-deps gets its own prefix per ABI:
+# build_arm_deps skips on an existing libpng.a and would otherwise reuse the wrong one.
+if [ "${RW_ABI:-hardfloat}" = softfp ]; then
+    TC=arm-linux-gnueabi
+    ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
+    LINK_MODE=""
+    ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps-softfp"
+else
+    TC=arm-linux-gnueabihf
+    ARMFLAGS=""
+    LINK_MODE="-static"
+fi
+TC_CC="$TC-gcc${ARMFLAGS:+ $ARMFLAGS}"
+TC_CXX="$TC-g++${ARMFLAGS:+ $ARMFLAGS}"
+
 # Engine batch level (0-5). Each level includes all engines from previous levels.
 # 0 = base (8 original engines only)
 # 1 = + small zero-dep engines (lure, drascula, touche, teenagent, tucker, hugo, draci, plumbers, supernova, efh, cge, cge2, dreamweb, bbvs, cine, cruise, lab, parallaction)
@@ -169,7 +190,7 @@ build_arm_deps() {
         }
         cd zlib-1.3.1 || { log_error "Failed to cd into zlib-1.3.1"; rm -rf "$BUILD_DIR"; cd "$ORIG_DIR"; exit 1; }
 
-        CC=arm-linux-gnueabihf-gcc ./configure --prefix="$ARM_DEPS_PREFIX" --static \
+        CC="$TC_CC" ./configure --prefix="$ARM_DEPS_PREFIX" --static \
             > "$ZLIB_LOG" 2>&1 || {
             log_error "zlib configure failed. Log: $ZLIB_LOG"
             tail -20 "$ZLIB_LOG"
@@ -229,7 +250,7 @@ build_arm_deps() {
         log_info "Compiling libpng..."
         PNG_SRCS="png.c pngerror.c pngget.c pngmem.c pngpread.c pngread.c pngrio.c pngrtran.c pngrutil.c pngset.c pngtrans.c pngwio.c pngwrite.c pngwtran.c pngwutil.c"
         for src in $PNG_SRCS; do
-            arm-linux-gnueabihf-gcc -c -O2 -I"$ARM_DEPS_PREFIX/include" "$src" || {
+            $TC_CC -c -O2 -DPNG_ARM_NEON_OPT=0 -I"$ARM_DEPS_PREFIX/include" "$src" || {
                 log_error "Failed to compile $src"
                 rm -rf "$BUILD_DIR"
                 cd "$ORIG_DIR"; exit 1
@@ -237,7 +258,7 @@ build_arm_deps() {
         done
 
         # Create static library
-        arm-linux-gnueabihf-ar rcs libpng.a png.o pngerror.o pngget.o pngmem.o pngpread.o pngread.o pngrio.o pngrtran.o pngrutil.o pngset.o pngtrans.o pngwio.o pngwrite.o pngwtran.o pngwutil.o || {
+        "$TC-ar" rcs libpng.a png.o pngerror.o pngget.o pngmem.o pngpread.o pngread.o pngrio.o pngrtran.o pngrutil.o pngset.o pngtrans.o pngwio.o pngwrite.o pngwtran.o pngwutil.o || {
             log_error "Failed to create libpng.a"
             rm -rf "$BUILD_DIR"
             cd "$ORIG_DIR"; exit 1
@@ -271,7 +292,7 @@ check_prerequisites() {
     fi
     
     # Check for ARM cross-compiler
-    if ! command -v arm-linux-gnueabihf-gcc &> /dev/null; then
+    if ! command -v "$TC-gcc" &> /dev/null; then
         log_error "ARM cross-compiler not found!"
         echo "Install every host prerequisite with setup-build-env.sh, at the repo root."
         exit 1
@@ -410,10 +431,10 @@ configure_build() {
     # cross-compiled ARM libraries (needed for PNG thumbnail support;
     # without it configure silently disables PNG and ScummVM crashes on
     # "No PNG support compiled!").
-    CC=arm-linux-gnueabihf-gcc \
-    CXX=arm-linux-gnueabihf-g++ \
+    CC="$TC_CC" \
+    CXX="$TC_CXX" \
     ./configure \
-        --host=arm-linux-gnueabihf \
+        --host="$TC" \
         --backend=roomwizard \
         --with-zlib-prefix="$ARM_DEPS_PREFIX" \
         --with-png-prefix="$ARM_DEPS_PREFIX" \
@@ -447,15 +468,15 @@ configure_build() {
     if [ -z "$CC_SET" ]; then
         log_warning "CC not set in config.mk - adding it manually"
         # Add CC after CXX line
-        sed -i '/^CXX :=/a CC := arm-linux-gnueabihf-gcc' config.mk
-        log_success "Added CC := arm-linux-gnueabihf-gcc to config.mk"
-    elif echo "$CC_SET" | grep -q "arm-linux-gnueabihf-gcc"; then
+        sed -i "/^CXX :=/a CC := $TC_CC" config.mk
+        log_success "Added CC := $TC_CC to config.mk"
+    elif echo "$CC_SET" | grep -q -- "$TC-gcc"; then
         log_success "Configuration complete - CC set to ARM compiler"
     else
         log_warning "CC is set but may not be correct: $CC_SET"
     fi
     
-    if echo "$CXX_SET" | grep -q "arm-linux-gnueabihf-g++"; then
+    if echo "$CXX_SET" | grep -q -- "$TC-g++"; then
         log_success "CXX set to ARM compiler"
     else
         log_warning "CXX may not be set correctly: $CXX_SET"
@@ -503,7 +524,7 @@ build_scummvm() {
     # Build with static linking
     # Use -j4 for parallel compilation (adjust based on CPU cores)
     # Pass CC explicitly to ensure .c files use the ARM cross-compiler
-    make -j4 CC=arm-linux-gnueabihf-gcc LDFLAGS='-static'
+    make -j4 CC="$TC_CC" LDFLAGS="$LINK_MODE"
     
     # Check if binary was created
     if [ -f "scummvm" ]; then
@@ -557,7 +578,7 @@ strip_binary() {
     # disassemble literal pools as code and report phantom hits, which is exactly
     # how vnc_client_stripped produced a bogus "sdiv r4, sp, pc".
     if [ -x "$NATIVE_APPS_DIR/check-arm-safe.sh" ]; then
-        "$NATIVE_APPS_DIR/check-arm-safe.sh" scummvm || {
+        OBJDUMP="$TC-objdump" "$NATIVE_APPS_DIR/check-arm-safe.sh" scummvm || {
             log_error "ARM-safety check failed — refusing to strip or deploy"
             exit 1
         }
@@ -566,7 +587,7 @@ strip_binary() {
     fi
 
     # Strip debug symbols
-    arm-linux-gnueabihf-strip scummvm
+    "$TC-strip" scummvm
     
     # Get size after stripping
     SIZE_AFTER=$(du -h scummvm | cut -f1)

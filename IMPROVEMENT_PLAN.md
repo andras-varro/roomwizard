@@ -708,20 +708,28 @@ a cost this entry never priced, on top of the audio half it already calls the un
 also the trigger the declined *Native ALSA backend* item names for revisiting it, and **the operator ruled
 2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
 
-**Owning the kernel changes nothing on the audio side — analysed 2026-09-23.** `usb_host/device_config`
-already has `SND_SOC`, OMAP McBSP and TWL4030 `=y` and `SND_PCM_OSS=y`; `SND_USB_AUDIO` is already an
-out-of-tree module. A native-ALSA client is one raw-ioctl `AudioOutDev` in `native_apps/common/audio_out.c`
-(no alsa-lib; the toolchain's `asound.h` is protocol 2.0.14, matching; est. 150–250 lines **[inferred]**,
-the time64 `sync_ptr` layout a risk). It reaches `native_apps` **and** ScummVM, whose `oss-mixer.cpp` calls
-`audio_out_open_oss`; `vnc_client` has no audio. But `audio.c`'s legacy direct `dsp_fd` path must fold into
-`audio_out` first, and `bluez-alsa` is an alsa-lib *plugin*, so a raw-ioctl client cannot reach it — apps
-would need dynamic `libasound` **[inferred]**. **Operator ruling 2026-09-27: the ALSA backend comes first,
-then Bluetooth** — every game and utility moves to ALSA through `audio_out`, and anything ALSA lacks we
-build, the kernel being ours. BT follows for audio and for HID, game controllers included, so the
-`bluez-alsa` point above decides raw-ioctl vs dynamic `libasound` — settle it in the design, before code.
-The value case the backend was once declined on stays true: `/dev/dsp` and the ALSA device are the same
-PCM, and the only measured win is ~2× at the period ([`#34-audio`](SYSTEM_ANALYSIS.md#34-audio)).
-tinyalsa was deleted with that decision; why it had failed is not recorded.
+**ALSA route decided 2026-09-27: dynamic `libasound`, built with the soft-float toolchain.** The kernel
+needs nothing (`SND_SOC`, McBSP, TWL4030, `SND_PCM_OSS` `=y`; `snd-usb-audio` a module). Operator ruling:
+the ALSA backend comes first, then Bluetooth, and every game and utility moves to ALSA through
+`audio_out`; dynamic because `bluez-alsa` is an alsa-lib *plugin*. Measured the same day on `.188`: the
+device userspace is soft-float, and `arm-linux-gnueabi` dynamic builds run on it — snake played in full,
+ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client played on both cards
+([`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
+`.188` runs that dynamic ScummVM now (md5 `431a471a`; static kept as `/opt/games/scummvm.static`,
+`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. Steps, in order:
+(1) script the alsa-lib 1.2.1.2 soft-float build (headers + a `libasound.so` to link; the device's copy is
+the runtime — the recipe is `configure --host=arm-linux-gnueabi --disable-python --disable-alisp
+--disable-topology --disable-ucm`); (2) `native_apps/build-and-deploy.sh` gains the same `RW_ABI=softfp`
+switch as `scummvm-roomwizard/build-and-deploy.sh`; (3) fold `audio.c`'s legacy direct `dsp_fd` path into
+`audio_out`, no audible change; (4) a libasound `AudioOutDev` in `audio_out.c`, the selector resolving to a
+PCM name (`plughw:<card>,0`, later `bluealsa`), `-ENODEV` from `snd_pcm_writei` as the unplug signal;
+(5) flip both defaults to softfp-dynamic, delete the OSS backend and SYSTEM_ANALYSIS §6's "every binary we
+ship is `-static`" safety argument, and gate that the deep clean and the offline installer keep libc,
+libstdc++ and libasound. An onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB —
+compare loudness game-vs-game, OSS vs ALSA, at equal amplitude **[inferred: amplitude only]**.
+Operator 2026-09-27, the settings tab in `native_apps/device_tools/device_tools.c`: `audio_device` defaults
+to `auto`, not `onboard` (`config_audio_device()` in `common/config.c`); TEST AUDIO plays on the output
+**shown**, not the saved one; and the page shows an "unsaved changes" note while they differ.
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at

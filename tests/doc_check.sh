@@ -102,7 +102,7 @@ scan_files() {
         -o -name partitions.new \
         -o -name 'roomwizard.new*' \
         -o -name HardwarePhotos \
-        -o -name arm-deps \
+        -o -name 'arm-deps*' \
         -o -name deps \
         \) -prune -o -type f \
         \( \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.sh' \
@@ -837,6 +837,11 @@ group_c() {
 # bounding-box paragraph's `[inferred]` "registers 19..31" guess and paid for itself down to one line: the
 # paragraph was rewritten in place (6 -> 8 lines) and the protocol paragraph lost a clause the bounding-box
 # finding superseded. The measurement-free alternative was dropping the fit numbers, which are the claim.
+# 2026-09-27: SYSTEM_ANALYSIS.md 1801 -> 1806. The device userspace is soft-float ABI (loader
+# /lib/ld-linux.so.3), which is why a gnueabihf dynamic binary cannot run and what the whole dynamic-
+# libasound route rests on; it has one home, section 6.3, with the measured toolchain recipe and the
+# rootfs library inventory BlueZ will link against. The stale "native ALSA NOT PLANNED" verdict in 3.4 was
+# rewritten in place with the measurement (9 -> 7 lines), paying 2 of the 7. Operator was AFK; flagged.
 ## 2026-09-21: SYSTEM_ANALYSIS.md 1744 -> 1778, authorised by the operator in the session that spent it.
 # The file was AT its ceiling with zero slack and the kernel-image question moved from untried to measured,
 # which is four separate facts a gate cannot see for itself. (1) A full image LINKS and packages, and the
@@ -856,7 +861,7 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1801	SYSTEM_ANALYSIS.md
+1806	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 224	HARDWARE.md
 215	README.md

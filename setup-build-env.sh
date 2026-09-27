@@ -117,6 +117,10 @@ esac
 # in. commissioning/commission-offline.sh needs arm-linux-gnueabihf-objdump on a delivery
 # host that has no compiler at all, and a missing objdump there is a refusal rather than a
 # pass — so the package has to be nameable on its own.
+#
+# The arm-linux-gnueabi (soft-float ABI) pair builds DYNAMIC binaries: the device's own
+# userspace is soft-float (loader /lib/ld-linux.so.3), so a hard-float binary can never load
+# its libc, libasound or libstdc++. The gnueabihf set stays for the -static builds.
 packages() {
     # PACKAGES_FILE exists only so the regression can drive the probe loop over a fixture
     # table. Nothing in the shipped path sets it.
@@ -125,6 +129,8 @@ packages() {
 core|cmd|arm-linux-gnueabihf-gcc|gcc-arm-linux-gnueabihf
 core|cmd|arm-linux-gnueabihf-g++|g++-arm-linux-gnueabihf
 core|cmd|arm-linux-gnueabihf-objdump|binutils-arm-linux-gnueabihf
+core|cmd|arm-linux-gnueabi-gcc|gcc-arm-linux-gnueabi
+core|cmd|arm-linux-gnueabi-g++|g++-arm-linux-gnueabi
 core|cmd|gcc|build-essential
 core|cmd|make|build-essential
 core|cmd|cmake|cmake
