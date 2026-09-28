@@ -602,13 +602,15 @@ if it fails returns -1 and the app is silent, with no fallback. `audio.c` keeps 
 client API and **consumes `audio_gen` for everything else**. It includes no OSS header, so it links on
 host gcc as it stands (`tests/audio_tone_test.c`); `tests/hostshim/sys/soundcard.h` matters only to a
 host build of a file that still includes `<sys/soundcard.h>` — `grep -rl sys/soundcard.h` lists them.
-Three rules live there:
+Four rules live there:
 
 - **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums L + R
   (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the generator is
   mono and single-sample and `audio_interleave()` the one conversion point; a `frames * 4` with the 4 spelled
-  out is only accidentally right. `audio_out.c`'s open reads the count back with `SOUND_PCM_READ_CHANNELS`
-  and warns, falling back to the request, when the read-back fails.
+  out is only accidentally right. Either backend's open reads the GRANTED count back and uses it.
+- **ALSA (`plughw:N,0` for `/dev/dspN`) compiles only under `-DAUDIO_OUT_HAVE_ALSA`, set by the `RW_ABI=softfp`
+  build paths alone — never `__has_include`** (reason and the period request's: comments in `audio_out.c`).
+  `RW_AUDIO_OSS=1` in the environment forces OSS in the same binary: the one-variable on-device A/B.
 - ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest of the
   stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
   `audio_write_frames()` is the only code that decides when to stop: on frame boundaries, or it reports

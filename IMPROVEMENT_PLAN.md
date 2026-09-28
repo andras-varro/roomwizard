@@ -159,53 +159,22 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B36. Nothing recovers an output device unplugged mid-playback — open, confirmed 2026-09-09
+### B36. Recovery from an output device unplugged mid-playback is unverified, and ScummVM has none — open, confirmed 2026-09-09
 
-Surfaced by the USB-audio work rather than by a report: exercising the dongle end to end is what put a
-hand on a cable mid-playback. Pull a USB DAC while sound is playing and audio goes silent and stays
-silent: no error surfaces, nothing
-falls back to the panel speaker, and `audio_live()` keeps reporting the vanished device healthy. Operator
--confirmed at the panel and **acceptable to them**, so this is quality, not function — but the silence is
-permanent for the life of the process.
+The symptom, operator-confirmed 2026-09-09 and **acceptable to them** (quality, not function): pull a USB
+DAC while sound was playing and the process stayed silent for its whole life.
 
-**The fallback is a reopen, inferred from source and never exercised on an unplug:** `stream_open()`
-(`common/audio.c`) resolves `audio_out_device_path()` afresh on every open, so `usb` and `auto` land on
-the panel's `/dev/dsp` with GPIO12 enabled. What is missing is a caller from the write path.
+**Native apps now reopen — host-tested only.** `ENODEV` (or `EBADFD`) from a write or a space query sets
+`audio_out_device_lost()` on either backend (`common/audio_out.c`); `common/audio.c` then closes and
+re-runs `stream_open()` at most once per `AUDIO_REOPEN_MS`, so `usb`/`auto` land on the panel.
+`native_apps/tests/audio_out_test.c` covers the classifier and the flag; the reopen loop in `audio.c` is
+not host-tested. Left open:
 
-**Two signals are dropped, and a fix must score both**, because which fires first on a real unplug is
-**not established** (inferred order: the first):
-
-- `audio_out_service()` asks the device's `space()` (`SNDCTL_DSP_GETOSPACE`) *before* it writes and
-  answers `-1` with `refused++` when that fails; `cont_service()` discards the `-1`. The write is then
-  never reached, so `starved` **freezes** rather than climbing — a frozen `starve` while sound is expected
-  is the unrecorded signature, and a detector watching only the write could never fire.
-- `oss_write()` compares `errno` to `EAGAIN` and nothing else, so `ENODEV`/`EIO`/`EINTR` collapse into
-  `audio_gen.h`'s deliberately lossy `sink_error`, counted into `audio_out_sink_errors()` and **read by
-  nobody in the repo**; `audio_out_refused()` is read only by tests.
-
-No device-lost state exists either: `available` is never lowered by anything on the write path.
-
-**Fix shape** — a consecutive-fault score over both counters in `cont_service()`, then `audio_out_close()`
-and `stream_open()`: the close must come first, because `AudioOut`'s one-per-process interlock refuses a
-second open. ⚠️ **A threshold of 1 is wrong and the reason is measurable:** a spurious fire costs a
-bounded-but-real `audio_out_close()` drain — ring plus period, ~0.79 s at 44100/2ch — **inside a render loop**, plus the
-reopen's prefill. `EAGAIN` cannot reach the score at all (`audio_write_frames()` services a full sink
-before `sink_error` is reachable), so the threshold is buying tolerance of a one-off `EINTR`/`EIO`, not of
-load. ⚠️ **And a failed recovery must be re-armed**, or lowering `available` mutes the app permanently —
-a worse silence than the defect.
-
-⚠️ **Reclassifying `EINTR` as retryable belongs in a SEPARATE commit**: that edit is in `audio_out.c`,
-which ScummVM links and `audio.c` is not, so it reaches a stream that has been ear-verified since
-2026-08-03.
-
-**Gate:** the decision logic is fully host-testable in `audio_tone_test.c` — the only host test linking
-`common/audio.c` — including a fake device that stops answering, and it needs a healthy-device control
-serviced many times and never taken back, or an inverted score would pass every positive case while
-tearing the stream down every frame. ⚠️ **Two things no host test can reach**, and they are the panel's
-job: that a real unplugged DAC *fails* `GETOSPACE`/`write` rather than hanging or succeeding with zero
-bytes, and that the fallback is heard. ⚠️ That file is also built and run **on the device**, where the
-recovery really succeeds — so any assertion about `available` or voice count passes on the host and fails
-on ARM.
+- **An operator unplug on a native game** at `.188` with `audio_device=usb`, on the softfp build and again
+  with `RW_AUDIO_OSS=1`: does a real unplug answer `ENODEV` rather than hang, return zero bytes or `EIO`,
+  and is the panel heard afterwards? Witness: `audio: output device lost — reopening` in the app's log.
+- **ScummVM has no reopen** — `scummvm-roomwizard/backend-files/oss-mixer.cpp` links `audio_out.o` but
+  nothing there polls the lost flag, so an unplug silences it for the session.
 
 ### B37. device_tools' input testers open only the first node of each kind — open, reported 2026-09-27
 
@@ -215,6 +184,17 @@ test. On `.188` the touchpad's mouse node is `event3` and the receiver's is `eve
 `usb_scan_devices()` in `native_apps/device_tools/device_tools.c` keeps only the first `DEV_MOUSE` (the
 same goes for keyboards and pads). *Inferred* from that code and the node order; `event6` was not opened.
 Fix: let the tester step through every node of its kind, and verify with both devices attached.
+
+### B38. Mix Bus Test cracks at 6-7 simultaneous voices — open, confirmed 2026-09-28
+
+**Operator at `.188`, softfp ALSA build: a crack on each press once 6-7 voices sound together.** Its
+`/tmp/mix.log` (the tool `freopen`s stderr there, not into `app_stdout.log`) read `starve=0` and
+`clip=74285` at `limit=hard`, lead 139 ms — so this is mix-bus **clipping**, upstream of the device and of
+either backend, not an ALSA regression **[inferred from the counters]**. Next: the operator retests with
+the soft limiter (`audio_mix_get_limit()` is what the tool prints); if that is clean, weigh per-voice
+headroom against a soft default. Second, **[inferred, code only]**: `native_apps/tests/audio_mix_test.c`
+calls `fb_fade_out()` then `audio_close()` with no pump between, so the stream's tail starves during the
+fade (`:867-868` today) — pump the bus through the fade.
 
 ## Features
 
@@ -699,9 +679,8 @@ unit has `extra/` and a module index.)
 that same card, not the native one ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). What
 is missing is the alsa-lib **dev** side only — `/usr/include/alsa` does not exist. So `bluez-alsa` is
 not blocked by ALSA's absence; it is a cross-compile against alsa-lib headers we would have to source,
-a cost this entry never priced, on top of the audio half it already calls the unlikely half. ⚠️ This is
-also the trigger the declined *Native ALSA backend* item names for revisiting it, and **the operator ruled
-2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
+a cost this entry never priced, on top of the audio half it already calls the unlikely half. **The operator
+ruled 2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
 
 **ALSA route decided 2026-09-27: dynamic `libasound`, built with the soft-float toolchain.** The kernel
 needs nothing (`SND_SOC`, McBSP, TWL4030, `SND_PCM_OSS` `=y`; `snd-usb-audio` a module). Operator ruling:
@@ -711,22 +690,28 @@ device userspace is soft-float, and `arm-linux-gnueabi` dynamic builds run on it
 ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client played on both cards
 ([`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
 `.188` runs that dynamic ScummVM now (md5 `431a471a`; static kept as `/opt/games/scummvm.static`,
-`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. Both build scripts take
-`RW_ABI=softfp`, and `audio_out` is already the only playback path. Steps left, in order:
-(4) a libasound `AudioOutDev` in `audio_out.c`, headers and link library from `native_apps/build-alsa-lib.sh`
-(into `native_apps/arm-deps-softfp/`; ScummVM links `audio_out.o`, so its build must call that script too),
-the selector resolving to a PCM name (`plughw:<card>,0`, later `bluealsa`), `-ENODEV` from `snd_pcm_writei`
-as the unplug signal; (5) flip both defaults to softfp-dynamic, delete the OSS backend and SYSTEM_ANALYSIS §6's "every binary we
-ship is `-static`" safety argument, and gate that the deep clean and the offline installer keep libc,
-libstdc++ and libasound. An onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB —
-compare loudness game-vs-game, OSS vs ALSA, at equal amplitude **[inferred: amplitude only]**.
-Operator 2026-09-27, the settings tab in `native_apps/device_tools/device_tools.c`: `audio_device` defaults
-to `auto`, not `onboard` (`config_audio_device()` in `common/config.c`); TEST AUDIO plays on the output
-**shown**, not the saved one; and the page shows an "unsaved changes" note while they differ. ⚠️ TEST AUDIO
-also freezes the UI ~0.9 s (operator-noticed): `do_audio_test()` in `device_tools.c` and its copy in
-`hardware_config.c` open the stream, hold each tone with `audio_hold_serviced()` and close (drain) inside
-the button handler (read in code) — fix is to hold the bus for the screen and queue the tones as voices
-(`native_apps/CLAUDE.md` → *Hold the bus for the screen*).
+`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. **Step 4 is in:** under
+`RW_ABI=softfp` both build scripts build alsa-lib on demand and `audio_out.c` plays through libasound
+([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Operator by ear on `.188` 2026-09-28:
+Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works. Unplug recovery is B36 and the Mix Bus
+Test crack B38. Still open here:
+
+- **ScummVM's ALSA build has not been listened to** — the clean Full Throttle run of 2026-09-28 was OSS.
+- **The settings tab** (`native_apps/device_tools/device_tools.c`, operator 2026-09-27): `audio_device`
+  defaults to `auto`, not `onboard` (`config_audio_device()` in `common/config.c`); TEST AUDIO plays on the
+  output **shown**, not the saved one; the page shows an "unsaved changes" note while they differ. TEST
+  AUDIO also freezes the UI ~0.9 s (noticed, though "not really sensible" to the operator):
+  `do_audio_test()` there and its copy in `hardware_config.c` open the stream, hold each tone with
+  `audio_hold_serviced()` and close (drain) inside the button handler (read in code) — fix is to hold the
+  bus for the screen and queue the tones as voices (`native_apps/CLAUDE.md` → *Hold the bus for the screen*).
+- **(5)** flip both defaults to softfp-dynamic; delete the OSS backend, `RW_AUDIO_OSS` and SYSTEM_ANALYSIS
+  §6's "every binary we ship is `-static`" safety argument; gate that the deep clean and the offline
+  installer keep libc, libstdc++ and libasound. Stale text goes with OSS: `native_apps/tests/alsa_probe.sh:14`
+  says a native ALSA backend is not planned; `native_apps/tests/audio_gen_test.c:36,277,365`,
+  `audio_out_test.c:14-15` and `audio_tone_test.c:29-35` describe `audio_flush()`/`SNDCTL_DSP_RESET` or an
+  `audio.c` that needs `<sys/soundcard.h>`; `native_apps/tests/hostshim/sys/soundcard.h` becomes deletable.
+- **Loudness:** an onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare
+  loudness game-vs-game, OSS vs ALSA, at equal amplitude **[inferred: amplitude only]**.
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at

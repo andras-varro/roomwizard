@@ -692,16 +692,16 @@ Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummV
 (`:2718-2720`) over the same cards. Userspace ships `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`,
 `amixer`, `alsactl`, 238 files under `/usr/share/alsa`, but no headers — a same-version alsa-lib build
 supplies them (§6.3). Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
-`plughw:1,0`. Dynamic, not raw ioctls, because `bluez-alsa` is an alsa-lib plugin.
+`plughw:1,0`. **Our `RW_ABI=softfp` builds are such a client** — `audio_out.c` opens `plughw:N,0` for
+`/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM held `/dev/snd/pcmC1D0p`, and ScummVM's 22050 Hz
+1 ch request was granted 1 ch, so `plughw` converts. Dynamic, not raw ioctls: `bluez-alsa` is a plugin.
 
-- ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: that
-  flag is MIDI/sequencer support and cannot produce PCM output here. PCM has to be hand-written,
-  which is why `oss-mixer.cpp` exists at all.
+- ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: it is
+  MIDI/sequencer support, not PCM output. PCM is hand-written, which is why `oss-mixer.cpp` exists.
 - **The deep clean is not a hazard here — checked, not assumed.** No `scope` sweep covers `/usr/lib`
   or `/usr/share` (all nine sweeps are `/etc/rc*.d`, `/opt` and the three `/home/root` trees), and no
-  `delete` glob reaches `libasound`. `/usr/share/alsa` survives because nothing names it; the
-  *intent* is recorded on `device-files/clean-rules.conf:356`, whose reason reads "NOT
-  `/usr/share/alsa`, which the OSS shim needs".
+  `delete` glob reaches `libasound`. `/usr/share/alsa` survives because nothing names it; the *intent*
+  is the `/usr/share/sounds` rule's reason in `device-files/clean-rules.conf`: "NOT /usr/share/alsa".
 
 **What `hw:0,0` actually grants — measured on `.188`, 2026-08-14**, with
 `native_apps/tests/alsa_probe.sh`. That probe needs nothing cross-compiled: the vendor's `aplay`
@@ -921,8 +921,8 @@ at `/dev/dsp1`. Which card an app opens is the `audio_device` key — `onboard` 
 `onboard`; [`native_apps/CLAUDE.md`](native_apps/CLAUDE.md) holds the one-home rule for resolving it.
 
 ⚠️ **A USB card advertises a different parameter set, so the `hw:0,0` table above cannot speak for it.**
-`[n=1]` on a C-Media `0d8c:0014`: `/proc/asound/card1/stream0` offers `S16_LE`, `Channels: 2` and rates
-**48000 and 44100** only — no 22050 and no mono.
+`[n=1]` on a C-Media `0d8c:0014`, and the same on `.188`'s dongle 2026-09-28: `/proc/asound/card1/stream0`
+offers `S16_LE`, `Channels: 2` and rates **48000 and 44100** only — no 22050, no mono; 44100 needs no SRC.
 
 ⚠️ **But the OSS shim reports the client's REQUEST back as the grant, on either card, so
 `SOUND_PCM_READ_*` is not a capability probe.** A mixer asking 22050/1 is answered `granted 22050 Hz
