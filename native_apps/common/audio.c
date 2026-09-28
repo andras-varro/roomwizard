@@ -164,13 +164,19 @@ static void bus_reset(Audio *audio);   /* with the rest of the bus, below */
  *
  * ⚠️ GPIO12, the device-path resolution (`audio_device`, so a DAC unplugged since
  * the last open is picked up here), the SPEED → FMT → CHANNELS order and its
- * read-back all live in `audio_out_open_oss()`: ScummVM links audio_out.c and not
- * this file, so a copy here would be a seam only the games could see.  It prints
- * its own reason on failure. */
+ * read-back all live in `audio_out_open_default()`: ScummVM links audio_out.c and
+ * not this file, so a copy here would be a seam only the games could see.  It
+ * prints its own reason on failure.  Also the reopen path after an unplug, which
+ * is why the device is resolved here and not once at init. */
 static int stream_open(Audio *audio)
 {
-    if (audio_out_open_oss(&audio->out, TARGET_RATE, FALLBACK_CHANNELS) != 0)
+    const char *path = audio_out_device_path();
+    if (audio_out_open_default(&audio->out, path, TARGET_RATE, FALLBACK_CHANNELS) != 0)
         return -1;
+    printf("audio: stream on %s via %s\n",
+           strcmp(audio_out_backend_name(), "alsa") == 0
+               ? audio_out_device_pcm(path) : path,
+           audio_out_backend_name());
 
     /* ⚠️ The GRANT, not the request: `audio.sample_rate` is the one field a caller
      * outside common/ reads, and every byte count in this file derives from
@@ -250,9 +256,6 @@ int audio_init(Audio *audio)
         printf("audio: music %s, effects %s (%s)\n",
                audio->music_on ? "on" : "OFF",
                audio->effects_on ? "on" : "OFF", CONFIG_FILE_PATH);
-
-    printf("audio: %s opened at %d Hz %d ch S16LE (O_NONBLOCK)\n",
-           audio_out_device_path(), audio->sample_rate, audio->channels);
     return 0;
 }
 
@@ -513,8 +516,35 @@ static void cont_service(Audio *audio)
     audio->pump_lost    = audio_out_lost(&audio->out);
 }
 
+/** At most one reopen attempt per this many ms while the device is gone: a
+ *  failed open prints its reason, and the pump runs every frame. */
+#define AUDIO_REOPEN_MS 1000
+
+/** A lost device — a USB DAC unplugged under the stream — is closed and reopened
+ *  through stream_open(), which re-resolves the preference, so "auto" and "usb"
+ *  fall back to the panel speaker.  The bus's voices are reset by the reopen and
+ *  the theremin's fill is replaced by the mix bus; both are accepted, because the
+ *  alternative is a panel that stays mute until the app restarts. */
+static void stream_recover(Audio *audio)
+{
+    uint32_t now = time_now_ms();
+    if (!audio->reopening) {
+        printf("audio: output device lost — reopening\n");
+        audio_out_close(&audio->out);
+        audio->reopening = true;
+    } else if ((uint32_t)(now - audio->reopen_last_ms) < AUDIO_REOPEN_MS) {
+        return;
+    }
+    audio->reopen_last_ms = now;
+    if (stream_open(audio) == 0) audio->reopening = false;
+}
+
 void audio_pump(Audio *audio)
 {
+    if (audio && audio->available &&
+        (audio->reopening || audio_out_device_lost(&audio->out))) {
+        stream_recover(audio);
+    }
     if (!audio_live(audio)) return;
     cont_service(audio);
 }

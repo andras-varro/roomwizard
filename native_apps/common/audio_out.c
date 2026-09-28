@@ -1,5 +1,6 @@
 #include "audio_out.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,7 +64,13 @@ static int g_live = 0;
 static ssize_t out_sink_write(void *ctx, const void *buf, size_t nbytes, bool *again)
 {
     AudioOut *out = (AudioOut *)ctx;
-    return out->dev->write(out->dev_ctx, buf, nbytes, again);
+    ssize_t r = out->dev->write(out->dev_ctx, buf, nbytes, again);
+    /* ⚠️ Read errno HERE, immediately after the backend returned: push() only
+     * learns "sink_error" after audio_write_frames() has possibly made more calls
+     * and push() itself has printed, and either can overwrite it.  One check in
+     * the generic layer covers every backend, including the host test's fake. */
+    if (r < 0 && !*again && errno == ENODEV) out->device_lost = true;
+    return r;
 }
 
 static void out_sink_wait(void *ctx, int usec)
@@ -347,6 +354,10 @@ long audio_out_service(AudioOut *out)
     AudioOutSpace sp;
     memset(&sp, 0, sizeof(sp));
     if (out->dev->space(out->dev_ctx, out->frame_bytes, &sp) != 0) {
+        /* A gone device usually fails HERE first — the free-space query precedes
+         * every write — and a service that never reaches a write would otherwise
+         * never learn the device is lost. */
+        if (errno == ENODEV) out->device_lost = true;
         out->refused++;
         return -1;
     }
@@ -455,10 +466,33 @@ uint32_t audio_out_sink_errors(const AudioOut *out) { return out ? out->sink_err
 uint32_t audio_out_refused(const AudioOut *out)     { return out ? out->refused     : 0; }
 uint32_t audio_out_services(const AudioOut *out)    { return out ? out->services    : 0; }
 uint32_t audio_out_drain_waits(const AudioOut *out) { return out ? out->drain_waits : 0; }
+bool audio_out_device_lost(const AudioOut *out)
+{
+    return out && out->is_open && out->device_lost;
+}
+
+/* ── What a failed ALSA call means ───────────────────────────────────────────
+ * Pure, and outside every guard, so the host test reaches the unplug branch
+ * with no libasound.  Accepts either sign; ALSA hands back negative errnos. */
+AudioOutErr audio_out_alsa_classify(int err)
+{
+    if (err < 0) err = -err;
+    switch (err) {
+    case EAGAIN:   return AO_ERR_AGAIN;
+    case EPIPE:    return AO_ERR_XRUN;
+    case ESTRPIPE: return AO_ERR_SUSPEND;
+    /* EBADFD is the state a PCM is left in once its card has gone — every call
+     * after the first ENODEV answers it, so it is the same "reopen" case. */
+    case ENODEV:
+    case EBADFD:   return AO_ERR_LOST;
+    default:       return AO_ERR_OTHER;
+    }
+}
 
 /* ── The OSS backend ─────────────────────────────────────────────────────────
  *
- * The only device code below this header.  It is compiled out where the OSS
+ * One of the two device backends below this header (the ALSA one follows it,
+ * behind its own guard).  It is compiled out where the OSS
  * headers do not exist, so the host regression links this file with no device in
  * it at all — the same split `audio_gen.c` already has, one level down.
  */
@@ -528,6 +562,16 @@ const char *audio_out_device_for(const char *pref, bool usb_present)
 const char *audio_out_device_path(void)
 {
     return audio_out_device_for(audio_dev_pref, audio_out_usb_present());
+}
+
+/* The ALSA name for the same device.  OSS minor N is ALSA card N here, because
+ * the OSS nodes are the kernel's emulation over those very cards.  Only the two
+ * nodes the resolver can return are named; anything else is onboard, the same
+ * fallback it has. */
+const char *audio_out_device_pcm(const char *path)
+{
+    if (path && strcmp(path, AUDIO_DEV_USB) == 0) return "plughw:1,0";
+    return "plughw:0,0";
 }
 
 bool audio_out_device_is_onboard(void)
@@ -649,6 +693,8 @@ static int oss_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
     return 0;
 }
 
+/* A failed write() leaves errno as the kernel set it, so an unplugged card's
+ * ENODEV reaches out_sink_write() and marks the device lost with no code here. */
 static ssize_t oss_write(void *ctx, const void *buf, size_t nbytes, bool *again)
 {
     int *fdp = (int *)ctx;
@@ -695,3 +741,269 @@ int audio_out_open_oss(AudioOut *out, int rate_req, int channels_req)
 }
 
 #endif /* AUDIO_OUT_HAVE_OSS */
+
+/* ── The ALSA backend ────────────────────────────────────────────────────────
+ *
+ * Compiled only with an explicit -DAUDIO_OUT_HAVE_ALSA, which the soft-float
+ * build paths pass together with libasound's include and link flags.  Not
+ * detected with __has_include like OSS is: OSS needs no library, but a host that
+ * merely has libasound's headers installed would start failing to link every
+ * host regression that compiles this file.
+ *
+ * The context is one static, not a field on AudioOut: one stream per process is
+ * already enforced (g_live), and a static keeps <alsa/asoundlib.h> out of the
+ * header every client includes.
+ */
+
+#ifdef AUDIO_OUT_HAVE_ALSA
+
+#include <alsa/asoundlib.h>
+
+/* Requests, not demands: the grant is read back and used.  Forcing tiny periods
+ * is what trades a jitter buffer for latency, and the pacing depends on the
+ * jitter buffer (see the SETFRAGMENT note on oss_space()).  The values are what
+ * the OSS shim grants on its own, 2048 x 16: the lead is three periods, and at
+ * 1024 frames it fell to 92 ms and SameGame's slow frames starved the stream
+ * 71 times in one session where the OSS lead of ~139 ms had covered them. */
+#define ALSA_PERIOD_REQ   2048
+#define ALSA_PERIODS_REQ  16
+
+typedef struct {
+    snd_pcm_t         *pcm;
+    const char        *name;
+    int                frame_bytes;
+    snd_pcm_uframes_t  period;
+    snd_pcm_uframes_t  buffer;
+    bool               lost_said;
+} AlsaCtx;
+
+static AlsaCtx g_alsa;
+
+/** An XRUN or a suspend is recovered in place; a lost device is reported once
+ *  and handed up as ENODEV.  Returns 0 if the caller may retry. */
+static int alsa_recover(AlsaCtx *a, int err)
+{
+    switch (audio_out_alsa_classify(err)) {
+    case AO_ERR_XRUN:
+        return snd_pcm_prepare(a->pcm) < 0 ? -1 : 0;
+    case AO_ERR_SUSPEND:
+        if (snd_pcm_resume(a->pcm) < 0 && snd_pcm_prepare(a->pcm) < 0) return -1;
+        return 0;
+    case AO_ERR_LOST:
+        if (!a->lost_said) {
+            fprintf(stderr, "audio_out: %s is gone (%s)\n", a->name, snd_strerror(err));
+            a->lost_said = true;
+        }
+        errno = ENODEV;
+        return -1;
+    default:
+        errno = (err < 0) ? -err : EIO;
+        return -1;
+    }
+}
+
+static int alsa_open(void *ctx, int rate_req, int channels_req,
+                     int *rate_granted, int *bits_granted, int *channels_granted)
+{
+    AlsaCtx *a = (AlsaCtx *)ctx;
+    int err;
+
+    /* ⚠️ GPIO12 is card 0's speaker amp alone — the same rule as oss_open(),
+     * decided from the PCM actually being opened. */
+    if (strcmp(a->name, audio_out_device_pcm(AUDIO_DEV_ONBOARD)) == 0)
+        audio_out_enable_amp();
+
+    /* Non-blocking for the same reason as the OSS O_NONBLOCK: the write policies
+     * follow the queue at real-time pace, and a blocking write stalls a period. */
+    err = snd_pcm_open(&a->pcm, a->name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (err < 0) {
+        fprintf(stderr, "audio_out: cannot open %s: %s\n", a->name, snd_strerror(err));
+        a->pcm = NULL;
+        return -1;
+    }
+
+    snd_pcm_hw_params_t *hw;
+    snd_pcm_hw_params_alloca(&hw);
+    unsigned int rate = (unsigned int)rate_req, ch = (unsigned int)channels_req;
+    snd_pcm_uframes_t period = ALSA_PERIOD_REQ;
+    snd_pcm_uframes_t buffer = ALSA_PERIOD_REQ * ALSA_PERIODS_REQ;
+    int dir = 0;
+
+    if ((err = snd_pcm_hw_params_any(a->pcm, hw)) < 0 ||
+        (err = snd_pcm_hw_params_set_access(a->pcm, hw,
+                                            SND_PCM_ACCESS_RW_INTERLEAVED)) < 0 ||
+        (err = snd_pcm_hw_params_set_format(a->pcm, hw, SND_PCM_FORMAT_S16_LE)) < 0 ||
+        (err = snd_pcm_hw_params_set_rate_near(a->pcm, hw, &rate, &dir)) < 0 ||
+        (err = snd_pcm_hw_params_set_channels_near(a->pcm, hw, &ch)) < 0)
+        goto fail;
+    /* Geometry is a request: a refusal here leaves the device's own choice,
+     * which the read-back below reports. */
+    dir = 0;
+    snd_pcm_hw_params_set_period_size_near(a->pcm, hw, &period, &dir);
+    snd_pcm_hw_params_set_buffer_size_near(a->pcm, hw, &buffer);
+    if ((err = snd_pcm_hw_params(a->pcm, hw)) < 0) goto fail;
+
+    /* The GRANT, read back from the installed parameters — never the request. */
+    dir = 0;
+    snd_pcm_hw_params_get_rate(hw, &rate, &dir);
+    snd_pcm_hw_params_get_channels(hw, &ch);
+    dir = 0;
+    snd_pcm_hw_params_get_period_size(hw, &period, &dir);
+    snd_pcm_hw_params_get_buffer_size(hw, &buffer);
+
+    /* Start at one period queued, so the prefill's silence is what starts the
+     * stream — and what restarts it after an XRUN's prepare. */
+    snd_pcm_sw_params_t *sw;
+    snd_pcm_sw_params_alloca(&sw);
+    if ((err = snd_pcm_sw_params_current(a->pcm, sw)) < 0 ||
+        (err = snd_pcm_sw_params_set_start_threshold(a->pcm, sw, period)) < 0 ||
+        (err = snd_pcm_sw_params(a->pcm, sw)) < 0)
+        goto fail;
+
+    a->period      = period;
+    a->buffer      = buffer;
+    a->frame_bytes = (int)ch * AUDIO_BYTES_PER_SAMPLE;
+    a->lost_said   = false;
+
+    *rate_granted     = (int)rate;
+    *bits_granted     = snd_pcm_format_width(SND_PCM_FORMAT_S16_LE);
+    *channels_granted = (int)ch;
+
+    fprintf(stderr, "audio_out: %s open (alsa), granted %u Hz %d-bit %u ch, "
+                    "period %lu, buffer %lu frames (requested %d Hz %d ch)\n",
+            a->name, rate, *bits_granted, ch, (unsigned long)period,
+            (unsigned long)buffer, rate_req, channels_req);
+    return 0;
+
+fail:
+    fprintf(stderr, "audio_out: cannot configure %s: %s\n", a->name, snd_strerror(err));
+    snd_pcm_close(a->pcm);
+    a->pcm = NULL;
+    return -1;
+}
+
+static int alsa_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
+{
+    AlsaCtx *a = (AlsaCtx *)ctx;
+    if (!a->pcm || frame_bytes <= 0) return -1;
+
+    snd_pcm_sframes_t avail = snd_pcm_avail_update(a->pcm);
+    if (avail < 0) {
+        if (alsa_recover(a, (int)avail) != 0) return -1;
+        avail = snd_pcm_avail_update(a->pcm);
+        if (avail < 0) {
+            alsa_recover(a, (int)avail);   /* for its errno and its one report */
+            return -1;
+        }
+    }
+
+    long ring = (long)a->buffer;
+    if (avail > ring) avail = ring;   /* an unreported XRUN reads past the ring */
+    sp->period_frames = (long)a->period;
+    sp->ring_frames   = ring;
+    sp->space         = (long)avail;
+    sp->in_flight     = ring - (long)avail;
+    return 0;
+}
+
+static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again)
+{
+    AlsaCtx *a = (AlsaCtx *)ctx;
+    if (!a->pcm || a->frame_bytes <= 0) { errno = EBADF; return -1; }
+
+    /* ALSA moves whole frames only, so no partial frame can ever be left in the
+     * device and audio_write_frames()' realignment is never entered. */
+    snd_pcm_uframes_t frames = (snd_pcm_uframes_t)(nbytes / (size_t)a->frame_bytes);
+    if (frames == 0) return 0;
+
+    /* One retry after a recovered XRUN or suspend: a freshly prepared ring is
+     * empty, so a second failure is not another underrun. */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        snd_pcm_sframes_t r = snd_pcm_writei(a->pcm, buf, frames);
+        if (r >= 0) return (ssize_t)r * a->frame_bytes;
+        if (audio_out_alsa_classify((int)r) == AO_ERR_AGAIN) {
+            *again = true;
+            errno  = EAGAIN;
+            return -1;
+        }
+        if (alsa_recover(a, (int)r) != 0) return -1;
+    }
+    errno = EIO;
+    return -1;
+}
+
+/* usleep, exactly like oss_wait(): the serviced policy's wait of 0 must stay a
+ * no-op, and snd_pcm_wait() can return early, which the blocking policies'
+ * wait-count bound does not expect. */
+static void alsa_wait(void *ctx, int usec)
+{
+    (void)ctx;
+    if (usec > 0) usleep((useconds_t)usec);
+}
+
+/* The generic layer has already drained to the slack; nothing more here. */
+static void alsa_close(void *ctx)
+{
+    AlsaCtx *a = (AlsaCtx *)ctx;
+    if (a->pcm) { snd_pcm_close(a->pcm); a->pcm = NULL; }
+}
+
+static const AudioOutDev ALSA_DEV = {
+    alsa_open, alsa_space, alsa_write, alsa_wait, alsa_close
+};
+
+int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channels_req)
+{
+    if (!out) return -1;
+    if (!pcm || !*pcm) pcm = audio_out_device_pcm(NULL);
+    /* Refuse before touching g_alsa: a second live open must not clobber the
+     * first stream's context, and audio_out_open() would refuse it only after. */
+    if (g_alsa.pcm) {
+        memset(out, 0, sizeof(*out));
+        out->oss_fd = -1;
+        fprintf(stderr, "audio_out: refused — an ALSA stream is already open\n");
+        return -1;
+    }
+    memset(&g_alsa, 0, sizeof(g_alsa));
+    g_alsa.name = pcm;
+    return audio_out_open(out, &ALSA_DEV, &g_alsa, rate_req, channels_req);
+}
+
+#else  /* built without -DAUDIO_OUT_HAVE_ALSA */
+
+int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channels_req)
+{
+    (void)pcm; (void)rate_req; (void)channels_req;
+    if (out) { memset(out, 0, sizeof(*out)); out->oss_fd = -1; }
+    fprintf(stderr, "audio_out: built without ALSA support\n");
+    return -1;
+}
+
+#endif /* AUDIO_OUT_HAVE_ALSA */
+
+/* ── Which backend ──────────────────────────────────────────────────────────
+ * ⚠️ RW_AUDIO_OSS exists so an on-device A/B changes exactly ONE thing — the
+ * backend — inside the same binary.  Comparing a soft-float ALSA build against
+ * the hard-float OSS one would change the ABI, the libc and the link mode too. */
+static const char *g_backend = "oss";
+
+int audio_out_open_default(AudioOut *out, const char *path,
+                           int rate_req, int channels_req)
+{
+#ifdef AUDIO_OUT_HAVE_ALSA
+    const char *force_oss = getenv("RW_AUDIO_OSS");
+    if (!force_oss || !*force_oss) {
+        g_backend = "alsa";
+        return audio_out_open_alsa(out, audio_out_device_pcm(path),
+                                   rate_req, channels_req);
+    }
+#endif
+    (void)path;   /* oss_open() re-resolves the device itself */
+    g_backend = "oss";
+    return audio_out_open_oss(out, rate_req, channels_req);
+}
+
+const char *audio_out_backend_name(void)
+{
+    return g_backend;
+}

@@ -460,7 +460,26 @@ configure_build() {
     # hazard off; it was still the wrong way to get -lpthread onto the line, since the
     # crash returns for anyone who builds this without -static.
     echo "LIBS += -lpthread" >> config.mk
-    
+
+    # softfp also turns on native_apps/common/audio_out.c's ALSA backend, which this
+    # build compiles as one of its own OBJS (configure.patch) — so the define and the
+    # alsa-lib headers go on ScummVM's DEFINES/INCLUDES, and -lasound after the objects
+    # on LIBS.  The same prefix native_apps links against, built by the same script;
+    # never deployed, the device's own libasound.so.2 is the runtime.  Hard-float stays
+    # OSS-only: it cannot load the device's soft-float libasound.
+    if [ "${RW_ABI:-hardfloat}" = softfp ]; then
+        ALSA_PREFIX="$NATIVE_APPS_DIR/arm-deps-softfp"
+        if [ ! -e "$ALSA_PREFIX/usr/lib/libasound.so" ]; then
+            log_info "alsa-lib not built yet — running native_apps/build-alsa-lib.sh"
+            bash "$NATIVE_APPS_DIR/build-alsa-lib.sh"
+        fi
+        {
+            echo "DEFINES += -DAUDIO_OUT_HAVE_ALSA"
+            echo "INCLUDES += -I$ALSA_PREFIX/usr/include"
+            echo "LIBS += -L$ALSA_PREFIX/usr/lib -lasound"
+        } >> config.mk
+    fi
+
     # Verify CC and CXX are set correctly in config.mk
     CC_SET=$(grep "^CC " config.mk | head -1 || echo "")
     CXX_SET=$(grep "^CXX " config.mk | head -1 || echo "")
@@ -510,6 +529,16 @@ build_scummvm() {
         cd "$SCUMMVM_DIR"
     elif ! grep -q "^USE_PNG = 1" config.mk; then
         log_warning "Stale config detected (missing PNG support), reconfiguring..."
+        configure_build
+        cd "$SCUMMVM_DIR"
+    fi
+    # The ALSA appends live inside configure_build, so a config.mk from before them —
+    # or from the other RW_ABI — skips them silently and audio_out.o builds OSS-only.
+    # Measured 2026-09-28: a softfp build shipped on /dev/dsp1 exactly that way.
+    WANT_ALSA=no; [ "${RW_ABI:-hardfloat}" = softfp ] && WANT_ALSA=yes
+    HAVE_ALSA=no; grep -q "AUDIO_OUT_HAVE_ALSA" config.mk && HAVE_ALSA=yes
+    if [ "$WANT_ALSA" != "$HAVE_ALSA" ]; then
+        log_warning "Stale config detected (ALSA backend $HAVE_ALSA, RW_ABI wants $WANT_ALSA), reconfiguring..."
         configure_build
         cd "$SCUMMVM_DIR"
     fi

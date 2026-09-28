@@ -140,11 +140,15 @@ void OssMixerManager::init() {
 	// ⚠️ channels_req stays 1.  audio_out.h: forcing stereo doubles this mixer's
 	// work and its byte count on a core already at ~32 % with Full Throttle.
 	// It is a REQUEST — see fillFromMixer() for what happens when it is not
-	// granted, which on both of this device's cards is always.
-	if (audio_out_open_oss(&_out, 22050, 1) != 0) {
+	// granted, which through OSS on both of this device's cards is always
+	// (ALSA's plughw may grant 1 and convert — either grant is honoured).
+	// audio_out_open_default() picks ALSA in a soft-float build unless
+	// RW_AUDIO_OSS is set, so the backend is an A/B inside one binary.
+	const char *path = audio_out_device_path();
+	if (audio_out_open_default(&_out, path, 22050, 1) != 0) {
 		// No usable device — fall back to a silent mixer so ScummVM still works.
-		warning("OssMixerManager: cannot open %s, audio disabled",
-		        audio_out_device_path());
+		warning("OssMixerManager: cannot open %s (%s), audio disabled",
+		        path, audio_out_backend_name());
 		_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 		_mixer->setReady(true);
 		return;
@@ -159,8 +163,10 @@ void OssMixerManager::init() {
 	// The old `>>1` speaker attenuation, bit for bit.
 	audio_out_set_shift(&_out, 1);
 
-	debug("OssMixerManager: %s, %u Hz, %d ch, %d bit, %u frames/buf",
-	      audio_out_device_path(), _outputRate, audio_out_channels(&_out),
+	debug("OssMixerManager: %s via %s, %u Hz, %d ch, %d bit, %u frames/buf",
+	      strcmp(audio_out_backend_name(), "alsa") == 0
+	          ? audio_out_device_pcm(path) : path,
+	      audio_out_backend_name(), _outputRate, audio_out_channels(&_out),
 	      audio_out_bits(&_out), _samples);
 
 	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);

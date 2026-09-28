@@ -34,7 +34,10 @@
  * on the panel.  Group G is the synchronous mode the two Settings tabs need,
  * which have no render loop at all.  Group H is the bounded drain.  Group I is
  * the published service ceiling, which is derived from REAL audio rather than the
- * nominal lead.  Group J is one stream per process.
+ * nominal lead.  Group J is one stream per process.  Group K is which device.
+ * Group L is what a failed write MEANS: the ALSA backend's error classification,
+ * the device-lost flag an unplug sets, and the OSS-node → ALSA-PCM mapping — all
+ * pure or vtable-driven, so a host with no libasound reaches every branch.
  *
  * ⚠️ **This file is NEW, so "seen failing against the pre-change source" cannot
  * mean compiling it against an older `audio_out.c` — there is none.**  The
@@ -107,6 +110,7 @@
  * the gate would count its own documentation.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -154,6 +158,7 @@ typedef struct {
     int  chunk;             /* max bytes taken per write (0 = whatever is asked) */
     long accept_upto;       /* -1 = unlimited; else total bytes it will ever take */
     bool hard_error;        /* stall as a real error rather than "full"          */
+    int  hard_errno;        /* the errno a hard error leaves (0 = EIO)           */
 
     long startup_frames;    /* frames swallowed after a transition (MODELLED)    */
     long swallow_left;
@@ -193,7 +198,10 @@ static int fake_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
 {
     Fake *f = (Fake *)ctx;
     f->spaces++;
-    if (f->fail_space || frame_bytes <= 0) return -1;
+    if (f->fail_space || frame_bytes <= 0) {
+        errno = f->hard_errno ? f->hard_errno : EIO;
+        return -1;
+    }
 
     if (f->drain_all) f->qbytes = 0;
     else {
@@ -220,7 +228,11 @@ static ssize_t fake_write(void *ctx, const void *buf, size_t n, bool *again)
     f->writes++;
 
     if (f->accept_upto >= 0 && f->len >= f->accept_upto) {
-        if (f->hard_error) { *again = false; return -1; }
+        if (f->hard_error) {
+            *again = false;
+            errno  = f->hard_errno ? f->hard_errno : EIO;
+            return -1;
+        }
         *again = true;
         return -1;
     }
@@ -1044,6 +1056,82 @@ int main(void)
               "reach through the wrapper, now shown to depend on the argument");
         check(strcmp(audio_out_device_for(NULL, true), "/dev/dsp") == 0,
               "K14 a NULL preference is onboard even with a card present");
+    }
+
+    printf("\n=== L. what a failed write means (ALSA classification, device lost) ===\n");
+    {
+        /* The classification is what alsa_write() acts on, and it is pure so the
+         * branch an unplug takes is reachable on a host with no libasound. */
+        check(audio_out_alsa_classify(-EAGAIN) == AO_ERR_AGAIN,
+              "L1 -EAGAIN is 'the ring is full', the policies' retry case");
+        check(audio_out_alsa_classify(-EPIPE) == AO_ERR_XRUN,
+              "L2 -EPIPE is an underrun, recovered by a prepare — not a lost device");
+        check(audio_out_alsa_classify(-ESTRPIPE) == AO_ERR_SUSPEND,
+              "L3 -ESTRPIPE is a suspend, recovered by resume/prepare");
+        check(audio_out_alsa_classify(-ENODEV) == AO_ERR_LOST,
+              "L4 -ENODEV is the device gone — the USB DAC unplugged");
+        check(audio_out_alsa_classify(-EBADFD) == AO_ERR_LOST,
+              "L5 -EBADFD is also gone: the state a PCM is left in after its "
+              "card disappears, so it must reopen rather than retry forever");
+        check(audio_out_alsa_classify(-EIO) == AO_ERR_OTHER,
+              "L6 CONTROL: -EIO is an ordinary error, not a lost device — a "
+              "classifier answering LOST for everything would reopen every glitch");
+
+        /* The flag is set in the generic layer from the backend's errno, so the
+         * fake reaches it with no backend code at all. */
+        fake_reset(&f);
+        check(audio_out_open(&out, &FAKE_DEV, &f, RATE, 2) == 0 &&
+              !audio_out_device_lost(&out),
+              "L7 a freshly opened stream is not lost");
+        f.drain_all   = true;
+        f.accept_upto = f.len;
+        f.hard_error  = true;
+        f.hard_errno  = EIO;
+        audio_out_service(&out);
+        check(audio_out_sink_errors(&out) > 0 && !audio_out_device_lost(&out),
+              "L8 CONTROL: a write failing with EIO is a sink error and NOT a "
+              "lost device — the flag means one thing");
+        f.hard_errno  = ENODEV;
+        audio_out_service(&out);
+        check(audio_out_device_lost(&out),
+              "L9 a write failing with ENODEV marks the device lost, which is "
+              "what audio.c polls to reopen after an unplug");
+        audio_out_close(&out);
+        check(!audio_out_device_lost(&out),
+              "L10 a closed stream is not lost — the flag belongs to one open");
+
+        fake_reset(&f);
+        check(audio_out_open(&out, &FAKE_DEV, &f, RATE, 2) == 0 &&
+              !audio_out_device_lost(&out),
+              "L11 and a reopen starts clean");
+        audio_out_close(&out);
+        check(!audio_out_device_lost(NULL), "L12 NULL is not lost");
+
+        /* A gone device usually fails the free-space query first, and a service
+         * that stops there never reaches a write. */
+        fake_reset(&f);
+        audio_out_open(&out, &FAKE_DEV, &f, RATE, 2);
+        f.fail_space = true;
+        f.hard_errno = EIO;
+        audio_out_service(&out);
+        check(!audio_out_device_lost(&out),
+              "L12b CONTROL: a space query failing EIO is not a lost device");
+        f.hard_errno = ENODEV;
+        audio_out_service(&out);
+        check(audio_out_device_lost(&out),
+              "L12c a space query failing ENODEV marks the device lost, with no "
+              "write attempted");
+        f.fail_space = false;
+        audio_out_close(&out);
+
+        /* OSS minor N is ALSA card N on this device. */
+        check(strcmp(audio_out_device_pcm("/dev/dsp"), "plughw:0,0") == 0,
+              "L13 the onboard OSS node maps to ALSA card 0");
+        check(strcmp(audio_out_device_pcm("/dev/dsp1"), "plughw:1,0") == 0,
+              "L14 the USB OSS node maps to ALSA card 1");
+        check(strcmp(audio_out_device_pcm(NULL), "plughw:0,0") == 0 &&
+              strcmp(audio_out_device_pcm("/dev/null"), "plughw:0,0") == 0,
+              "L15 anything else maps onboard, the same fallback the resolver has");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

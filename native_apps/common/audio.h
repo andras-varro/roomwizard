@@ -204,6 +204,9 @@ typedef struct {
     AudioOut out;             /**< the one never-reset stream, opened by
                                *   audio_init(); audio_out_is_open() says so       */
     bool     osc_stream;      /**< the theremin owns the fill callback             */
+    bool     reopening;       /**< the device was lost; audio_pump() retries the
+                               *   open, at most once per AUDIO_REOPEN_MS          */
+    uint32_t reopen_last_ms;  /**< when the last reopen was attempted             */
     /* ── the level, and it is TWO knobs doing different jobs (audio_gen.h) ── */
     int      vol;             /**< per-voice volume, 0..AUDIO_VOL_UNITY.  Every
                                *   tone, voice and theremin amplitude derives from
@@ -261,8 +264,8 @@ typedef struct {
 /**
  * Initialise audio subsystem.
  *  - Honours the `audio_enabled` config setting
- *  - Opens the continuous stream (`audio_out_open_oss()`: GPIO12, the device
- *    path, the ioctls and their read-back all live there) and puts the mix bus
+ *  - Opens the continuous stream (`audio_out_open_default()`: GPIO12, the
+ *    device, the backend and the read-back all live there) and puts the mix bus
  *    on it as the stream's fill, so the struct is ready to pump on return
  * Returns 0 on success, -1 if hardware unavailable (game may continue).
  */
