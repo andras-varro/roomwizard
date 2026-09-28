@@ -689,7 +689,7 @@ the ALSA backend comes first, then Bluetooth, and every game and utility moves t
 device userspace is soft-float, and `arm-linux-gnueabi` dynamic builds run on it — snake played in full,
 ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client played on both cards
 ([`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
-`.188` runs that dynamic ScummVM now (md5 `431a471a`; static kept as `/opt/games/scummvm.static`,
+`.188` runs that dynamic ScummVM now (md5 `1380e501`, the ALSA build of 2026-09-28; static kept as `/opt/games/scummvm.static`,
 `dfcc0a92`). Tag `static-only-last` marks the last all-static commit. **Step 4 is in:** under
 `RW_ABI=softfp` both build scripts build alsa-lib on demand and `audio_out.c` plays through libasound
 ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Operator by ear on `.188` 2026-09-28:
