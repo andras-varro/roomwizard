@@ -121,6 +121,7 @@ CTEST_ROWS=(
     "gamepad_announce_test|-I common|common/gamepad.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gamepad_latch_test|-I common|common/gamepad.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gradient_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
+    "input_scan_test|-I common|common/input_scan.c"
     "launcher_args_test|-I. -Itests/hostshim -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/ppm.c common/logger.c"
     "ppm_test|-I common|common/ppm.c"
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
@@ -389,7 +390,10 @@ phase_suites() {
         log="$LOGDIR/$name.log"
         t0=$(date +%s)
         rc=0
-        timeout 420 bash "$path" >"$log" 2>&1 || rc=$?
+        # stdin from /dev/null: rw_provision_test's ssh stub runs `cat` on fd 0
+        # on purpose, and under a caller whose stdin never reaches EOF (a tool
+        # or background shell) it blocked until the 420 s cap -- measured.
+        timeout 420 bash "$path" </dev/null >"$log" 2>&1 || rc=$?
         t1=$(date +%s)
         # ⚠️ Match on a DECOLOURISED copy, never on the raw log. The suites
         # colour their own words, so commission_offline_test.sh emits

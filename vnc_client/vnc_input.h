@@ -6,6 +6,11 @@
 #include <sys/time.h>
 #include <rfb/rfbclient.h>
 #include "../native_apps/common/touch_input.h"
+#include "../native_apps/common/input_scan.h"
+
+// Per-kind limit on USB input nodes held open (same as common/gamepad.c).
+#define VNC_MAX_PER_KIND   4
+#define VNC_MAX_USB_NODES  (2 * VNC_MAX_PER_KIND)
 
 // Forward declaration
 typedef struct VNCRenderer VNCRenderer;
@@ -29,11 +34,16 @@ typedef struct {
     bool exit_requested;             // set true when hold completes
     float exit_progress;             // 0.0-1.0 for visual feedback
 
-    // USB keyboard evdev fd (-1 if not connected)
-    int keyboard_fd;
+    // Every USB keyboard and mouse node held open (common/input_scan.c).
+    // All keyboards type into the one session; all mice move the one pointer.
+    InputNode usb_nodes[VNC_MAX_USB_NODES];
+    int usb_node_count;
 
-    // USB mouse evdev fd (-1 if not connected)
-    int mouse_fd;
+    // Button level per usb_nodes[] entry (rfbButton1..3 bits), so the mask
+    // sent is the OR across mice: releasing a button on one mouse must not
+    // release it for another that is still holding it.  Kept index-aligned
+    // with usb_nodes[] when an entry is dropped.
+    int usb_node_buttons[VNC_MAX_USB_NODES];
 
     // Mouse absolute position in remote desktop coordinates
     int mouse_abs_x;

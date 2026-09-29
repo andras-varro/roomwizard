@@ -14,13 +14,6 @@
 #include <linux/input.h>
 #include <linux/input-event-codes.h>
 
-/* ── Bit-test helpers (same pattern as gamepad.c) ───────────────────────── */
-#define BITS_PER_LONG   (sizeof(long) * 8)
-#define NBITS(x)        ((((x)-1)/BITS_PER_LONG)+1)
-#define OFF(x)          ((x) % BITS_PER_LONG)
-#define BIT_LONG(x)     ((x) / BITS_PER_LONG)
-#define test_bit(b, a)  ((a[BIT_LONG(b)] >> OFF(b)) & 1)
-
 /* ── Evdev scancode → X11 keysym lookup table ───────────────────────────── */
 /* Letters are lowercase — VNC server uses Shift press/release for case.    */
 static const uint32_t evdev_to_keysym[256] = {
@@ -125,49 +118,6 @@ static const uint32_t evdev_to_keysym[256] = {
     [126] = 0xFFEC,  /* KEY_RIGHTMETA → XK_Super_R */
 };
 
-/* ── Internal device type for scanning ──────────────────────────────────── */
-typedef enum { VDEV_UNKNOWN, VDEV_KEYBOARD, VDEV_MOUSE } VDevType;
-
-/* ── Classify an evdev device ───────────────────────────────────────────── */
-static VDevType classify_device(int fd) {
-    unsigned long ev[NBITS(EV_MAX)] = {0};
-    unsigned long kb[NBITS(KEY_MAX)] = {0};
-    unsigned long rb[NBITS(REL_MAX)] = {0};
-
-    if (ioctl(fd, EVIOCGBIT(0, sizeof(ev)), ev) < 0)
-        return VDEV_UNKNOWN;
-
-    bool has_key = test_bit(EV_KEY, ev);
-    bool has_rel = test_bit(EV_REL, ev);
-
-    if (has_key)
-        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(kb)), kb);
-    if (has_rel)
-        ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rb)), rb);
-
-    /* Mouse: has REL_X, REL_Y, BTN_LEFT — relative pointing device */
-    if (has_rel && has_key &&
-        test_bit(REL_X, rb) && test_bit(REL_Y, rb) &&
-        test_bit(BTN_LEFT, kb))
-        return VDEV_MOUSE;
-
-    /* Keyboard: has ≥20 letter keys */
-    if (has_key) {
-        static const int letter_keys[] = {
-            KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
-            KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
-            KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
-        };
-        int count = 0;
-        for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
-            if (test_bit(letter_keys[k], kb)) count++;
-        if (count >= 20)
-            return VDEV_KEYBOARD;
-    }
-
-    return VDEV_UNKNOWN;
-}
-
 /* ── Load mouse settings from /etc/input_config.conf ────────────────────── */
 static void load_input_config(VNCInput *input) {
     FILE *f = fopen(INPUT_CONFIG_FILE, "r");
@@ -231,58 +181,65 @@ static uint32_t get_ticks_ms(void) {
  * Public API
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Scan /dev/input/event* for USB keyboard and mouse ──────────────────── */
+/* ── OR of the button levels of every mouse node ────────────────────────── */
+static int usb_mouse_buttons(const VNCInput *input) {
+    int mask = 0;
+    for (int i = 0; i < input->usb_node_count; i++)
+        if (input->usb_nodes[i].kind == INPUT_KIND_MOUSE)
+            mask |= input->usb_node_buttons[i];
+    return mask;
+}
+
+/* Current button level of a freshly opened mouse node: a button held across
+ * a rescan produces no press event, so ask the kernel. */
+static int seed_mouse_buttons(int fd) {
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return 0;
+    return (input_caps_test(keys, BTN_LEFT)   ? rfbButton1Mask : 0) |
+           (input_caps_test(keys, BTN_MIDDLE) ? rfbButton2Mask : 0) |
+           (input_caps_test(keys, BTN_RIGHT)  ? rfbButton3Mask : 0);
+}
+
+/* Close entry i and keep usb_node_buttons[] index-aligned with usb_nodes[]. */
+static void drop_usb_node(VNCInput *input, int i) {
+    int n = input->usb_node_count;
+    memmove(&input->usb_node_buttons[i], &input->usb_node_buttons[i + 1],
+            (size_t)(n - i - 1) * sizeof(input->usb_node_buttons[0]));
+    input->usb_node_count = input_scan_drop(input->usb_nodes, n, i);
+}
+
+/* ── Scan /dev/input/event* for USB keyboards and mice ──────────────────── */
+/* Every keyboard and every mouse is opened, up to VNC_MAX_PER_KIND each;
+ * nodes already held are left alone, so this is also the hotplug rescan. */
 void vnc_input_scan_devices(VNCInput *input) {
-    char path[64];
-    char name[128];
+    static const int cap[INPUT_KIND_COUNT] = {
+        [INPUT_KIND_KEYBOARD] = VNC_MAX_PER_KIND,
+        [INPUT_KIND_MOUSE]    = VNC_MAX_PER_KIND,
+    };
+    int before = input->usb_node_count;
 
-    for (int i = 0; i < MAX_INPUT_DEVICES; i++) {
-        snprintf(path, sizeof(path), "/dev/input/event%d", i);
+    input->usb_node_count = input_scan(input->usb_nodes, before,
+                                       VNC_MAX_USB_NODES, cap);
 
-        int fd = open(path, O_RDONLY | O_NONBLOCK);
-        if (fd < 0) continue;
-
-        /* Read device name */
-        name[0] = '\0';
-        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-
-        /* Filter out Panjit touchscreen */
-        if (strstr(name, "panjit") || strstr(name, "Panjit") ||
-            strstr(name, "PANJIT") || strstr(name, "TouchScreen")) {
-            close(fd);
-            continue;
-        }
-
-        VDevType type = classify_device(fd);
-
-        if (type == VDEV_KEYBOARD && input->keyboard_fd < 0) {
-            input->keyboard_fd = fd;
-            DEBUG_PRINT("USB keyboard found: '%s' at %s", name, path);
-        } else if (type == VDEV_MOUSE && input->mouse_fd < 0) {
-            input->mouse_fd = fd;
-            DEBUG_PRINT("USB mouse found: '%s' at %s", name, path);
-        } else {
-            close(fd);
-        }
-
-        /* Stop early if both found */
-        if (input->keyboard_fd >= 0 && input->mouse_fd >= 0)
-            break;
+    for (int i = before; i < input->usb_node_count; i++) {
+        const InputNode *nd = &input->usb_nodes[i];
+        input->usb_node_buttons[i] =
+            (nd->kind == INPUT_KIND_MOUSE) ? seed_mouse_buttons(nd->fd) : 0;
+        DEBUG_PRINT("USB %s found: '%s' at %s",
+                    nd->kind == INPUT_KIND_MOUSE ? "mouse" : "keyboard",
+                    nd->name, nd->path);
     }
+    input->mouse_button_mask = usb_mouse_buttons(input);
 
     input->last_device_scan = get_ticks_ms();
 }
 
 /* ── Close USB devices ──────────────────────────────────────────────────── */
 void vnc_input_close_usb_devices(VNCInput *input) {
-    if (input->keyboard_fd >= 0) {
-        close(input->keyboard_fd);
-        input->keyboard_fd = -1;
-    }
-    if (input->mouse_fd >= 0) {
-        close(input->mouse_fd);
-        input->mouse_fd = -1;
-    }
+    while (input->usb_node_count > 0)
+        drop_usb_node(input, input->usb_node_count - 1);
+    input->mouse_button_mask = 0;
 }
 
 /* ── Set remote desktop dimensions ──────────────────────────────────────── */
@@ -310,9 +267,8 @@ int vnc_input_init(VNCInput *input, TouchInput *touch, VNCRenderer *renderer, rf
     input->button_mask = 0;
     input->was_pressed = false;
 
-    /* USB device fds: -1 = not connected */
-    input->keyboard_fd = -1;
-    input->mouse_fd = -1;
+    /* USB nodes: none held yet (the memset above) */
+    input->usb_node_count = 0;
 
     /* Mouse state */
     input->mouse_abs_x = 0;
@@ -333,9 +289,8 @@ int vnc_input_init(VNCInput *input, TouchInput *touch, VNCRenderer *renderer, rf
     /* Scan for USB keyboard and mouse */
     vnc_input_scan_devices(input);
     
-    DEBUG_PRINT("Input handler initialized (keyboard=%s, mouse=%s)",
-                input->keyboard_fd >= 0 ? "connected" : "none",
-                input->mouse_fd >= 0 ? "connected" : "none");
+    DEBUG_PRINT("Input handler initialized (%d USB input node(s))",
+                input->usb_node_count);
     return 0;
 }
 
@@ -357,12 +312,14 @@ void vnc_input_send_key(VNCInput *input, uint32_t key, bool down) {
     DEBUG_PRINT("Key event: key=0x%04X down=%d", key, down);
 }
 
-/* ── Poll USB keyboard and forward as VNC key events ────────────────────── */
-static void poll_usb_keyboard(VNCInput *input) {
-    if (input->keyboard_fd < 0) return;
-
+/* ── Poll one USB keyboard node and forward as VNC key events ───────────── */
+/* Returns false if the node has gone away (read fails with ENODEV). */
+static bool poll_usb_keyboard(VNCInput *input, int fd) {
     struct input_event ev;
-    while (read(input->keyboard_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+    ssize_t r;
+
+    errno = 0;
+    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
         if (ev.type == EV_KEY && ev.code < 256) {
             uint32_t keysym = evdev_to_keysym[ev.code];
             if (keysym != 0) {
@@ -373,25 +330,21 @@ static void poll_usb_keyboard(VNCInput *input) {
             }
         }
     }
-
-    /* Check for device disconnect */
-    if (errno == ENODEV) {
-        DEBUG_PRINT("USB keyboard disconnected");
-        close(input->keyboard_fd);
-        input->keyboard_fd = -1;
-    }
+    return !(r < 0 && errno == ENODEV);
 }
 
-/* ── Poll USB mouse and forward as VNC pointer events ───────────────────── */
-static void poll_usb_mouse(VNCInput *input) {
-    if (input->mouse_fd < 0) return;
-    if (input->remote_width <= 0 || input->remote_height <= 0) return;
-
+/* ── Poll one USB mouse node and forward as VNC pointer events ──────────── */
+/* Every mouse moves the one pointer; the button mask sent is the OR across
+ * mice (usb_node_buttons[]).  Returns false if the node has gone away. */
+static bool poll_usb_mouse(VNCInput *input, int idx) {
+    int fd = input->usb_nodes[idx].fd;
     struct input_event ev;
+    ssize_t r;
     int dx = 0, dy = 0;
-    int buttons_changed = 0;
+    int old_mask = input->mouse_button_mask;
 
-    while (read(input->mouse_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+    errno = 0;
+    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
         if (ev.type == EV_REL) {
             if (ev.code == REL_X) {
                 dx += ev.value;
@@ -406,24 +359,19 @@ static void poll_usb_mouse(VNCInput *input) {
                                        input->mouse_button_mask);
             }
         } else if (ev.type == EV_KEY) {
-            int down = (ev.value != 0);
-            int old_mask = input->mouse_button_mask;
+            int bit = 0;
+            if (ev.code == BTN_LEFT)        bit = rfbButton1Mask;
+            else if (ev.code == BTN_MIDDLE) bit = rfbButton2Mask;
+            else if (ev.code == BTN_RIGHT)  bit = rfbButton3Mask;
 
-            if (ev.code == BTN_LEFT) {
-                if (down) input->mouse_button_mask |= 1;   /* rfbButton1Mask */
-                else      input->mouse_button_mask &= ~1;
-            } else if (ev.code == BTN_MIDDLE) {
-                if (down) input->mouse_button_mask |= 2;   /* rfbButton2Mask */
-                else      input->mouse_button_mask &= ~2;
-            } else if (ev.code == BTN_RIGHT) {
-                if (down) input->mouse_button_mask |= 4;   /* rfbButton3Mask */
-                else      input->mouse_button_mask &= ~4;
+            if (bit) {
+                if (ev.value != 0) input->usb_node_buttons[idx] |= bit;
+                else               input->usb_node_buttons[idx] &= ~bit;
+                input->mouse_button_mask = usb_mouse_buttons(input);
             }
-
-            if (old_mask != input->mouse_button_mask)
-                buttons_changed = 1;
         }
     }
+    bool alive = !(r < 0 && errno == ENODEV);
 
     /* Apply acceleration to accumulated movement */
     if (dx != 0 || dy != 0) {
@@ -448,16 +396,41 @@ static void poll_usb_mouse(VNCInput *input) {
     }
 
     /* Send pointer event if anything changed */
-    if (dx != 0 || dy != 0 || buttons_changed) {
+    if (dx != 0 || dy != 0 || old_mask != input->mouse_button_mask) {
         vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
                                input->mouse_button_mask);
     }
+    return alive;
+}
 
-    /* Check for device disconnect */
-    if (errno == ENODEV) {
-        DEBUG_PRINT("USB mouse disconnected");
-        close(input->mouse_fd);
-        input->mouse_fd = -1;
+/* ── Poll every USB keyboard and mouse node ─────────────────────────────── */
+static void poll_usb_devices(VNCInput *input) {
+    bool have_remote = input->remote_width > 0 && input->remote_height > 0;
+
+    for (int i = 0; i < input->usb_node_count; ) {
+        const InputNode *nd = &input->usb_nodes[i];
+        bool alive = true;
+
+        if (nd->kind == INPUT_KIND_KEYBOARD)
+            alive = poll_usb_keyboard(input, nd->fd);
+        else if (nd->kind == INPUT_KIND_MOUSE && have_remote)
+            alive = poll_usb_mouse(input, i);
+
+        if (alive) { i++; continue; }
+
+        DEBUG_PRINT("USB %s disconnected: %s",
+                    nd->kind == INPUT_KIND_MOUSE ? "mouse" : "keyboard", nd->path);
+        bool was_mouse = (nd->kind == INPUT_KIND_MOUSE);
+        drop_usb_node(input, i);
+
+        /* A button held on the unplugged mouse is released by its leaving. */
+        if (was_mouse) {
+            int old_mask = input->mouse_button_mask;
+            input->mouse_button_mask = usb_mouse_buttons(input);
+            if (old_mask != input->mouse_button_mask && have_remote)
+                vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
+                                       input->mouse_button_mask);
+        }
     }
 }
 
@@ -466,18 +439,15 @@ void vnc_input_process(VNCInput *input) {
     if (!input || !input->touch || !input->renderer) return;
 
     /* ── Periodic device rescan (every DEVICE_SCAN_INTERVAL_MS) ──────── */
-    if (input->keyboard_fd < 0 || input->mouse_fd < 0) {
-        uint32_t now_ms = get_ticks_ms();
-        if (now_ms - input->last_device_scan >= DEVICE_SCAN_INTERVAL_MS) {
-            vnc_input_scan_devices(input);
-        }
+    /* Unconditional: a second keyboard or mouse can arrive while one of
+     * each is already held.  Held nodes are skipped, not reopened. */
+    uint32_t now_ms = get_ticks_ms();
+    if (now_ms - input->last_device_scan >= DEVICE_SCAN_INTERVAL_MS) {
+        vnc_input_scan_devices(input);
     }
 
-    /* ── Poll USB keyboard ───────────────────────────────────────────── */
-    poll_usb_keyboard(input);
-
-    /* ── Poll USB mouse ──────────────────────────────────────────────── */
-    poll_usb_mouse(input);
+    /* ── Poll USB keyboards and mice ─────────────────────────────────── */
+    poll_usb_devices(input);
 
     /* ── Poll touch input (existing behavior, unchanged) ─────────────── */
     touch_poll(input->touch);
