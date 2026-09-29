@@ -172,32 +172,9 @@ r0 : ffffffda                     ← -38 = -ENOSYS
 ISA ThumbEE
 ```
 
-**Root cause:** The build used `-Wl,--whole-archive -lpthread -Wl,--no-whole-archive` for static linking. This forces ALL symbols from `libpthread.a` into the binary, including glibc 2.31's pthread initialization code that uses `clock_gettime64` (syscall 403 on ARM).
-
-The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscall was added in **kernel 5.1**. During glibc's `__libc_start_main`, the pthread init path calls `clock_gettime64`, gets `-ENOSYS` (r0=-38), then dereferences a NULL VDSO function pointer at offset 0x40 → **SIGSEGV before `main()` ever executes**.
-
-**Why native C apps weren't affected:** The C apps (brick_breaker, app_launcher, etc.) don't link with `-lpthread` at all, so the problematic pthread initialization code is never included.
-
-**Build environment:**
-
-| Component | Version |
-|-----------|---------|
-| Cross-compiler | `arm-linux-gnueabihf-g++` 9.4.0, the static build this crash was found on (ScummVM now builds with `arm-linux-gnueabi-g++` 9.4.0, same glibc) |
-| Cross glibc | 2.31 (built against kernel 5.4 headers) |
-| Cross linux-libc-dev | 5.4.0 headers |
-| Target kernel | **4.14.52** (pre-time64, pre-`clock_gettime64`) |
-
-**Diagnostic signature:** If you see `PC=0x40, r0=0xffffffda (-ENOSYS)` in dmesg, this is the classic glibc 2.31 `clock_gettime64` + static pthread + old kernel crash.
-
-**Fix:** Changed `LIBS += -Wl,--whole-archive -lpthread -Wl,--no-whole-archive` to `LIBS += -lpthread`. Without `--whole-archive`, the linker only includes pthread symbols actually referenced by ScummVM code, avoiding the problematic `clock_gettime64` initialization path.
-
-**⚠️ CRITICAL RULE:** NEVER use `--whole-archive` with `-lpthread` for static ARM builds targeting kernel < 5.1. The glibc 2.31 pthread library contains `clock_gettime64` syscall code that crashes on pre-5.1 kernels.
-
-**Alternative approaches if `-lpthread` alone causes link errors:**
-1. Use a cross-toolchain with older glibc (2.27 or earlier, pre-time64)
-2. Build a custom sysroot with `linux-libc-dev` headers matching kernel 4.14
-3. Switch to musl-libc for static linking (musl handles old kernels gracefully)
-4. Switch to dynamic linking and use the device's own libc.so
+Static hard-float build (`arm-linux-gnueabihf-g++` 9.4.0, glibc 2.31) on kernel 4.14.52. Cause not
+proven; the status and the hypothesis are in `SYSTEM_ANALYSIS.md#62-never-use---whole-archive-with--lpthread`.
+The recorded fix (plain `-lpthread`) was not applied to the build script until 2026-09-01.
 
 ---
 

@@ -443,15 +443,7 @@ configure_build() {
     
     # oss-mixer.cpp starts the service thread, so the link needs pthread: without any
     # -lpthread it fails with undefined reference to pthread_create/pthread_join, measured
-    # 2026-09-01.  PLAIN -lpthread is the way to supply it.
-    #
-    # ⚠️ Never -Wl,--whole-archive -lpthread here.  Whole-archiving drags in glibc 2.31's
-    # pthread startup, which calls the 64-bit-time clock syscall that native_apps/CLAUDE.md
-    # names — unimplemented on this 4.14.52 kernel, so it gets -ENOSYS and dereferences a
-    # NULL VDSO pointer: SIGSEGV before main(), blank screen, no log.  An append of that
-    # form once lived here and did not crash, because the -static link of that era kept the
-    # hazard off; it was still the wrong way to get -lpthread onto the line, since the
-    # crash returns for any build without -static — which this dynamic build is.
+    # 2026-09-01.  PLAIN -lpthread is the way to supply it, never --whole-archive.
     echo "LIBS += -lpthread" >> config.mk
 
     # The dynamic link also turns on native_apps/common/audio_out.c's ALSA backend, which

@@ -70,31 +70,9 @@ not part of the manual build and the linker will fail without it.
 
 ## Critical: never use `--whole-archive` with `-lpthread`
 
-Static ARM builds targeting a kernel older than 5.1 must link `-lpthread` plainly.
-
-`--whole-archive` pulls in *all* of glibc 2.31's pthread init, which calls `clock_gettime64`
-(ARM syscall 403, added in kernel 5.1). On this device's 4.14.52 kernel that returns `-ENOSYS`,
-after which glibc dereferences a NULL VDSO pointer — **SIGSEGV before `main()`**. Even
-`scummvm --version` dies, and no log is written.
-
-Diagnostic signature in `dmesg`:
-
-```
-PC is at 0x40
-r0 : ffffffda        <- -38 = -ENOSYS
-```
-
-The native C apps escape this only because they never link pthread. If plain `-lpthread` ever
-produces link errors, the options are an older-glibc toolchain, a sysroot with 4.14 headers,
-musl, or dynamic linking — not `--whole-archive`.
-
-⚠️ **What `build-and-deploy.sh` actually needs is plain `-lpthread`, and it appends exactly that**
-(`build-and-deploy.sh:455`). `oss-mixer.cpp` starts the service thread, so the link genuinely needs the
-library: with no `-lpthread` at all it fails with `undefined reference to pthread_create`/`pthread_join`
-from `oss-mixer.cpp`, measured 2026-09-01 by removing the append and rebuilding. A
-`--whole-archive -lpthread` append lived there for months and did **not** crash, because the link was then
-`-static` — that is what kept the hazard off, not any weakness in the rule above. The rule stands as
-written, and the call site no longer contradicts it.
+`build-and-deploy.sh` appends plain `-lpthread` (`oss-mixer.cpp` starts the service thread; with none
+the link fails on `pthread_create`/`pthread_join`, measured 2026-09-01). Never `--whole-archive`; the
+crash record and its status: `SYSTEM_ANALYSIS.md#62-never-use---whole-archive-with--lpthread`.
 
 ## Verifying that a link did what you asked
 

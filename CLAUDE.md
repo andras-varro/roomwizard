@@ -313,10 +313,8 @@ tool-level traps rather than device facts, and each has cost real time.
 Full detail, measurements and the flags each component uses:
 `SYSTEM_ANALYSIS.md#6-building-for-this-device`.
 
-- ⚠️ **Never use `--whole-archive` with `-lpthread` for static ARM builds.** It pulls in glibc 2.31's
-  pthread init, which calls `clock_gettime64` (ARM syscall 403, kernel 5.1+). This kernel is 4.14.52, so
-  it gets `-ENOSYS`, then dereferences a NULL VDSO pointer: **SIGSEGV before `main()`**, no output, no
-  log. The `dmesg` signature is `PC is at 0x40` with `r0 : ffffffda`. Plain `-lpthread` is fine.
+- ⚠️ Static links use plain `-lpthread`, never `--whole-archive`; crash record and its status (cause
+  unproven): `SYSTEM_ANALYSIS.md#62-never-use---whole-archive-with--lpthread`.
 - **Verify build artifacts on disk, not config flags.** Generated `config.mk`/`config.h` go stale. Test
   for the `.a`, not the flag.
 - **Cross-compiled dependencies must be built from source** — this WSL cannot do armhf multiarch. With

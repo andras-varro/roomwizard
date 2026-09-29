@@ -2032,12 +2032,14 @@ shared libraries are the vendor's and run.
 
 ### 6.2 Never use `--whole-archive` with `-lpthread`
 
-It pulls in all of glibc 2.31's pthread init, which calls `clock_gettime64` — ARM syscall 403,
-added in kernel 5.1. This device runs 4.14.52, gets `-ENOSYS`, then dereferences a NULL VDSO
-pointer: **SIGSEGV before `main()`**, with no output and no log. The `dmesg` signature is
-`PC is at 0x40` with `r0 : ffffffda`.
-
-Plain `-lpthread` is fine. The native C apps escape this only because they never link pthread.
+**Measured (March 2026):** a static hard-float ScummVM build died with **SIGSEGV before `main()`**,
+no output and no log; `dmesg` showed `PC is at 0x40` with `r0 : ffffffda` (capture:
+`scummvm-roomwizard/SCUMMVM_DEV.md`). Its link line was not recorded beyond `--whole-archive -lpthread`.
+**Hypothesis, unproven:** glibc 2.31's pthread init calls `clock_gettime64` (syscall 403, kernel 5.1+),
+gets `-ENOSYS` on 4.14.52, then dereferences a NULL VDSO pointer. Against it: glibc falls back to
+syscall 263 on `-ENOSYS` (inferred), and `vnc_client` links `-static` with plain `-lpthread`, calls
+`pthread_create` and ships. The script kept `--whole-archive` until 2026-09-01, so the "fix" was not
+applied then. Nothing links with it now; the rule is to use plain `-lpthread`.
 
 ### 6.3 Cross-compiled dependencies must be built from source
 
