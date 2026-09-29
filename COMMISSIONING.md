@@ -449,10 +449,12 @@ from a fresh clone. The component build scripts still check their own prerequisi
 run standalone — but they report a missing tool and point here rather than each reciting a package list.
 
 **Present in this WSL, all verified 2026-09-06:** `shellcheck` 0.7.0, `gh`, `sfdisk`, `cmake`, `bc`,
-`bison`, `flex`, `git-lfs`, and `python3` with `PIL` 10.4.0, plus the `arm-linux-gnueabihf-*` toolchain.
+`bison`, `flex`, `git-lfs`, and `python3` with `PIL` 10.4.0, plus both cross-compilers — `arm-linux-gnueabi-*`
+(soft-float, dynamic: native apps and ScummVM) and `arm-linux-gnueabihf-*` (`vnc_client`), each 9.4.0
+(re-measured 2026-09-29).
 ScummVM additionally needs WSL Ubuntu 20.04+.
 
-⚠️ **None of it is in Git Bash** — not `gcc`, not the `arm-linux-gnueabihf-*` tools, and not
+⚠️ **None of it is in Git Bash** — not `gcc`, not either `arm-linux-*` toolchain, and not
 `sfdisk`, `gh`, `shellcheck` or `strings` either. A `command -v` sweep run in that shell therefore
 reports a host with no toolchain at all, and that reading has been mistaken for a hard blocker on all
 building. **State which shell a prerequisite claim was measured in**, and measure with
@@ -496,8 +498,8 @@ After deploying, reboot: `ssh root@<ip> reboot`
 ### From a bundle, with no toolchain — the delivery mode
 
 ⚠️ **Everything above BUILDS.** `deploy-all.sh <ip>` and every `build-and-deploy.sh` need
-`arm-linux-gnueabihf-gcc`, and ScummVM needs WSL and a C++ cross-compiler too. Someone who has been
-handed a device has none of that, which is what a release bundle is for:
+a cross-compiler (`arm-linux-gnueabi-gcc`; `-gnueabihf-` for `vnc_client`), and ScummVM needs WSL and
+`arm-linux-gnueabi-g++` too. Someone who has been handed a device has none of that, which is what a release bundle is for:
 
 ```bash
 ./release.sh --stage-only                                  # on a build host, once

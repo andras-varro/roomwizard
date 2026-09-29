@@ -105,7 +105,7 @@ is a false negative dressed as a measurement. What does answer:
 - the build log's own lines — `C ../native_apps/common/<name>.o` per object, then `LINK scummvm`;
 - `md5sum` of the freshly built binary against the deployed one;
 - the build date ScummVM draws on its launcher screen, which dates the *running* binary;
-- what it prints — the shared device half logs its `/dev/dsp` open on the first mixer init.
+- what it prints — the shared device half logs its `plughw:N,0` open on the first mixer init.
 
 ⚠️ **A glibc symbol is not an instrument either**: `grep -ac clock_gettime64` is nonzero in every working
 binary on the device, the native apps included.
@@ -116,7 +116,7 @@ binary on the device, the native apps included.
 ScummVM Core -> OSystem_RoomWizard
   |- RoomWizardGraphicsManager -> /dev/fb0   (RGB565, double-buffered)
   |- RoomWizardEventSource     -> /dev/input/event*  (touch, keyboard, mouse, gamepad)
-  |- OssMixerManager           -> /dev/dsp   (22050 Hz MONO, O_NONBLOCK) -> TWL4030 -> SPKR1
+  |- OssMixerManager           -> audio_out.c -> ALSA plughw:N,0 (22050 Hz mono) -> TWL4030 or USB DAC
   \- Default managers (timer, events, saves, filesystem)
 ```
 

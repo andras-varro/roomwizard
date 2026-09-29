@@ -303,16 +303,15 @@ void audio_write_frames(const AudioSink *sink, const void *buf, long frames,
 
 /* ── The mix bus ────────────────────────────────────────────────────────────
  *
- * You cannot mix into a buffer the kernel already holds.  Today's fire-and-
- * forget `audio_tone()` writes a whole tone at once, so a second sound arrives
- * too late to be summed and `SNDCTL_DSP_RESET` throws the first one away — one
- * sound at a time, by construction.  Real mixing needs userspace to hold the
- * audio and write it incrementally, which means a thread or a per-frame pump.
+ * You cannot mix into a buffer the kernel already holds: a sound written whole
+ * leaves a second one arriving too late to be summed.  So userspace holds the
+ * audio and writes it incrementally — `audio_tone()` only adds a voice here, and
+ * whoever services next renders it.
  *
- * It is a PUMP.  `native_apps` links no pthread at all, and static ARM plus
- * pthread is how you get `clock_gettime64` → `-ENOSYS` → SIGSEGV before
- * `main()` (../CLAUDE.md).  So `audio.c` renders from this bus once per frame,
- * next to `fb_swap()`.
+ * It is a PUMP, not a thread.  `native_apps` links no pthread of its own, and a
+ * pthread link done wrong is how you get `clock_gettime64` → `-ENOSYS` →
+ * SIGSEGV before `main()` (../CLAUDE.md).  So `audio.c` renders from this bus
+ * once per frame, next to `fb_swap()`.
  *
  * Everything here is still pure: no fd, no ioctl, no clock.  Time is counted in
  * FRAMES the caller has asked for, so the whole bus — summing, clipping, voice

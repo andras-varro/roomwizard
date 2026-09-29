@@ -131,6 +131,33 @@ per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, 
 `native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
 the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
 
+### B42. A second hot-unplug of the USB audio dongle is never detected — open, confirmed 2026-09-29
+
+**Measured on `.188`** (native_apps at `0b187fe`, a game with music playing on the USB dongle).
+Unplug #1 logs `audio_out: plughw:1,0 is gone (File descriptor in bad state)` → `audio: output device
+lost — reopening` → `plughw:0,0` open → music carry; the replug logs `plughw:1,0 is back — leaving
+plughw:0,0` → reopen → carry. **Unplug #2 logs nothing**: sound stays silent, the game keeps running, and
+replug #2 brings no handover either — **[inferred]** one defect, since `audio_out_reprobe_due()` only
+fires while `open_path` is onboard, and the stream still believes it is on the card. Never tested before
+(operator), so latent rather than a regression; the OSS removal did not touch `alsa_recover()` or the
+`EBADFD` → `AO_ERR_LOST` classification (`native_apps/common/audio_out.c:483-486`, `:643-662`). Ruled
+out by reading: the `lost_said` print latch, reset in `alsa_open()` (`:727`). **Cause not known.**
+**[inferred]** candidate: on the stream reopened by the handover, a vanished card answers the service's
+first call — `snd_pcm_avail_update()` in `alsa_space()` (`:752`), before `snd_pcm_writei()` — with a
+non-negative or `-EAGAIN` value instead of an error, so nothing reaches `alsa_recover()`. **Next:** log
+the return code of every ALSA call on the reopened stream at unplug #2, on the device. A Bluetooth sink
+(F17) will fail over through this same path, so it gates that work too.
+
+### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
+
+`native_apps/tests/measure_audio_tone_sabotage.sh` case 9 deletes
+`audio_out_set_device_pref(config_audio_device_stored());` from `audio.c`, and prints `NO-OP EDIT —
+pattern rotted`: since `8a62c31` the line reads `audio_out_set_device_pref(pref ? pref :
+config_audio_device_stored());` in `audio_init_unchecked_pref()` (`git show HEAD~1:native_apps/common/audio.c`
+has zero copies of the old form). So group J's only host-reachable sabotage has proved nothing since
+2026-09-28. **Fix:** re-key the `sed` to the current line, then confirm case 9 reports failures again
+(and case 10 still its documented 0).
+
 ## Features
 
 Userspace except F101, which is the image build, and F2, which now waits on it.
@@ -545,29 +572,18 @@ not blocked by ALSA's absence; it is a cross-compile against alsa-lib headers we
 a cost this entry never priced, on top of the audio half it already calls the unlikely half. **The operator
 ruled 2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
 
-**ALSA route decided 2026-09-27: dynamic `libasound`, built with the soft-float toolchain.** The kernel
-needs nothing (`SND_SOC`, McBSP, TWL4030, `SND_PCM_OSS` `=y`; `snd-usb-audio` a module). Operator ruling:
-the ALSA backend comes first, then Bluetooth, and every game and utility moves to ALSA through
-`audio_out`; dynamic because `bluez-alsa` is an alsa-lib *plugin*. Measured the same day on `.188`: the
-device userspace is soft-float, and `arm-linux-gnueabi` dynamic builds run on it — snake played in full,
-ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client played on both cards
-([`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
-`.188` runs that dynamic ScummVM now (md5 `1380e501`, the ALSA build of 2026-09-28; static kept as `/opt/games/scummvm.static`,
-`dfcc0a92`). Tag `static-only-last` marks the last all-static commit. **Step 4 is in:** under
-`RW_ABI=softfp` both build scripts build alsa-lib on demand and `audio_out.c` plays through libasound
-([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Operator by ear on `.188` 2026-09-28:
-Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works, and ScummVM's ALSA build plays Full
-Throttle acceptably with occasional cracks. The Mix Bus Test crack is B38. Still
-open here:
+**ALSA route decided 2026-09-27: dynamic `libasound`, built with the soft-float toolchain — and it is
+in.** Native apps and ScummVM build `arm-linux-gnueabi` softfp-dynamic only, `audio_out.c` has no other
+backend, and both bring-up paths refuse a clean rule that reaches that runtime
+([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio),
+[`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
+Dynamic because `bluez-alsa` is an alsa-lib *plugin*; the operator's order is ALSA first, then Bluetooth.
+Tag `static-only-last` marks the last all-static commit. Operator by ear on `.188` 2026-09-29: a game on
+onboard and on the USB dongle, `device_tools` TEST AUDIO on both, ScummVM. The Mix Bus Test crack is B38;
+the undetected second unplug is B42. Still open here:
 
-- **(5)** flip both defaults to softfp-dynamic; delete the OSS backend, `RW_AUDIO_OSS` and SYSTEM_ANALYSIS
-  §6's "every binary we ship is `-static`" safety argument; gate that the deep clean and the offline
-  installer keep libc, libstdc++ and libasound. Stale text goes with OSS: `native_apps/tests/alsa_probe.sh:14`
-  says a native ALSA backend is not planned; `native_apps/tests/audio_gen_test.c:36,277,365`,
-  `audio_out_test.c:14-15` and `audio_tone_test.c:29-35` describe `audio_flush()`/`SNDCTL_DSP_RESET` or an
-  `audio.c` that needs `<sys/soundcard.h>`; `native_apps/tests/hostshim/sys/soundcard.h` becomes deletable.
 - **Loudness:** an onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare
-  loudness game-vs-game, OSS vs ALSA, at equal amplitude **[inferred: amplitude only]**.
+  loudness game-vs-game and against the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
 
 **So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
 `BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
@@ -748,8 +764,9 @@ the software watchdog, and the vendor's `rc`/`rcS` wrappers, whose leftover swit
 to chase. A rootfs we build would also be the first one we are allowed to ship: the vendor's may not be
 redistributed (`LICENSE.md`).
 
-**What makes it small** — every binary we ship is `-static`, measured
-([§6](SYSTEM_ANALYSIS.md#6-building-for-this-device)). So the base needs only what our init scripts and
+**What makes it small** — our binaries need nothing beyond glibc, `libstdc++` and `libasound` (native apps and
+ScummVM link those dynamically; `vnc_client` is `-static`), measured
+([§6](SYSTEM_ANALYSIS.md#6-building-for-this-device)). So the base needs those, `/usr/share/alsa`, and what our init scripts and
 services call: `sshd`, `cron`, `dbus` (inferred as needed), an mDNS responder, the hardware watchdog
 feeder, `rdate`, `amixer`, `insmod`, and a `start-stop-daemon`/`ps` that `device-files/roomwizard-app`
 accepts. Inferred, from reading `device-files/` and `device-files/provision-rules.conf`, not from a

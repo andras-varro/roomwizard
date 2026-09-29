@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
     hw_init();
     hw_set_backlight(100);      /* 100 = 100% OF THE CONFIGURED MAX, not raw 100 */
 
-    /* 5. Audio (non-fatal if /dev/dsp is unavailable) */
+    /* 5. Audio (non-fatal if no output device opens) */
     Audio audio;  audio_init(&audio);
 
     /* 6. Framebuffer BEFORE touch - touch_init() reads the screen dims fb_init() sets.
@@ -699,8 +699,8 @@ These rules, each of which is a way to get this wrong:
   (`audio_mix_set_knee()`), and a stale knee *below* the amplitude bends a lone tone. ⚠️ **And
   `clip == 0` is NOT evidence of a clean mix** — it proves int16 did not overflow, which a bounded
   limiter guarantees by construction, and a gate read PASS while the sound was destroyed.
-- ⚠️ **The pump targets a LEAD; it never writes into the free space** — an empty OSS ring would accept
-  its whole 743 ms ([§3.4](../SYSTEM_ANALYSIS.md#34-audio) gotcha 5) and put the next sound that late.
+- ⚠️ **The pump targets a LEAD; it never writes into the free space** — an empty ring would accept
+  its whole 743 ms (`ALSA_PERIOD_REQ` × `ALSA_PERIODS_REQ` at 44100) and put the next sound that late.
 - ⚠️ **The counters are the diagnosis, and each means ONE thing.** `clip` (int16 could not hold it), `lim`
   (the knee bent it — expected under SOFT, not a fault), `starve` (the ring was dry with audio still owed:
   **one audible gap each, pacing not mixing**), `lost` (refused after render), `drop` (full bus). Read them.

@@ -9,45 +9,22 @@ This is a custom ScummVM backend for the RoomWizard device, implementing native 
 - **Automatic Scaling**: Games are aspect-fitted and centred in the visible screen area (the
   framebuffer layer excludes the pixels hidden by the device's bezel)
 - **Software Cursor**: Rendered cursor with palette support
-- **Audio via OSS**: OPL/AdLib music and SFX through TWL4030 speaker (`/dev/dsp`)
+- **Audio via ALSA**: OPL/AdLib music and SFX through `../../native_apps/common/audio_out.c` (`plughw:N,0`, panel speaker or USB DAC)
 - **Virtual Keyboard**: On-screen keyboard via triple-tap gesture
 - **POSIX Filesystem**: Standard save/load functionality
 
 ## Hardware Requirements
 
 - **Display**: 800x480 framebuffer (RGB/ARGB)
-- **Input**: Resistive touchscreen (single-touch)
+- **Input**: Projected-capacitive touchscreen (single-touch)
 - **CPU**: ARMv7 with NEON SIMD
 - **RAM**: 128+ MB available
 - **OS**: Linux with framebuffer and input event support
 
 ## Building
 
-Configure ScummVM with the roomwizard backend:
-
-```bash
-./configure \
-  --host=arm-linux-gnueabihf \
-  --backend=roomwizard \
-  --disable-all-engines \
-  --enable-engine=scumm \
-  --enable-engine=scumm-7-8 \
-  --enable-engine=he \
-  --enable-engine=agi \
-  --enable-engine=sci \
-  --enable-engine=agos \
-  --enable-engine=sky \
-  --enable-engine=queen \
-  --disable-mt32emu \
-  --disable-flac \
-  --disable-mad \
-  --disable-vorbis \
-  --enable-release \
-  --enable-optimizations \
-  --enable-vkeybd
-
-make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
-```
+Build with `../build-and-deploy.sh` — the recipe (soft-float `arm-linux-gnueabi`, dynamic, ALSA) is in
+[`../README.md`](../README.md) → *Build*.
 
 ## Supported Pixel Formats
 
@@ -89,7 +66,7 @@ OSystem_RoomWizard (backends/platform/roomwizard/roomwizard.cpp)
     ├── RoomWizardEventSource (roomwizard-events.cpp)
     │   └── touch_input.c (native library)
     ├── OssMixerManager (oss-mixer.cpp)
-    │   └── /dev/dsp (TWL4030 via ALSA OSS shim)
+    │   └── audio_out.c (native library) → ALSA plughw:N,0
     ├── DefaultTimerManager
     ├── DefaultEventManager
     └── DefaultSaveFileManager

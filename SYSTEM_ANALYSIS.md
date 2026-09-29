@@ -683,7 +683,7 @@ amixer -c 0 cset name="HandsfreeR Switch" on
 DAC volumes persist via `alsactl store` → `/var/lib/alsa/asound.state`, restored by
 `/etc/init.d/alsa-state`.
 
-Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummVM runs 22050 Hz
+Native rate is 48000 Hz; `plughw` and the OSS shim both sample-rate-convert automatically. ScummVM runs 22050 Hz
 (`[inferred]` halves OPL synthesis cost — arithmetic, never measured), native games 44100 Hz.
 
 ⚠️ **A native ALSA client works through the device's own dynamic `libasound`, on both cards.** Kernel:
@@ -692,16 +692,13 @@ Native rate is 48000 Hz; the OSS shim sample-rate-converts automatically. ScummV
 (`:2718-2720`) over the same cards. Userspace ships `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`,
 `amixer`, `alsactl`, 238 files under `/usr/share/alsa`, but no headers — a same-version alsa-lib build
 supplies them (§6.3). Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
-`plughw:1,0`. **Our `RW_ABI=softfp` builds are such a client** — `audio_out.c` opens `plughw:N,0` for
-`/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM held `/dev/snd/pcmC1D0p`, and ScummVM's 22050 Hz
+`plughw:1,0`. **Native apps and ScummVM are such clients, and ALSA is their only output** — `audio_out.c`
+opens `plughw:N,0` for `/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM held `/dev/snd/pcmC1D0p`, and ScummVM's 22050 Hz
 1 ch request was granted 1 ch, so `plughw` converts. Dynamic, not raw ioctls: `bluez-alsa` is a plugin.
 
 - ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: it is
   MIDI/sequencer support, not PCM output. PCM is hand-written, which is why `oss-mixer.cpp` exists.
-- **The deep clean is not a hazard here — checked, not assumed.** No `scope` sweep covers `/usr/lib`
-  or `/usr/share` (all nine sweeps are `/etc/rc*.d`, `/opt` and the three `/home/root` trees), and no
-  `delete` glob reaches `libasound`. `/usr/share/alsa` survives because nothing names it; the *intent*
-  is the `/usr/share/sounds` rule's reason in `device-files/clean-rules.conf`: "NOT /usr/share/alsa".
+- **The deep clean cannot reach `libasound` or `/usr/share/alsa`** — a validated rules file may not (§5.2).
 
 **What `hw:0,0` actually grants — measured on `.188`, 2026-08-14**, with
 `native_apps/tests/alsa_probe.sh`. That probe needs nothing cross-compiled: the vendor's `aplay`
@@ -818,7 +815,7 @@ differing content instead of phase.
   (`native_apps/tests/oss_geom.c`, both client configurations) with no `SNDCTL_DSP_SETFRAGMENT`:
   `period_size` **2048** frames, `buffer_size` **32768**, `fragsize` scaling with the frame size alone
   (8192 B stereo, 4096 B mono), against `aplay`'s 5512 / 27560. So at 22050 mono that same 2048 frames is
-  **92 ms** and the ring **1486 ms**. It is what both consumers actually get.
+  **92 ms** and the ring **1486 ms**. It is what any OSS client gets.
 - **The two consumers attenuate differently:** the native synth pins a peak of **18000**
   (`AUDIO_PEAK` in `native_apps/common/audio_gen.h`, a constant rather than a shift); ScummVM does `>>1`
   post-mix. The summing is why ~50 % looked about right, but the ladder above puts 18000 past clean at
@@ -861,26 +858,22 @@ emulation, not the hardware. ALSA itself works correctly.
    for, and the ~22,317-frame "period" it was read as reproduces in **no** configuration `oss_geom.c`
    tested. Measured effect: 185 ms of audio, 321 ms of silence, repeating — the "bru-bru-bru-KLICK"
    artifact, diagnosed with `native_apps/tests/oss_diag.c`. **Always open `/dev/dsp` with `O_NONBLOCK`**
-   and handle `EAGAIN` with a ~5 ms sleep. ⚠️ **Both consumers already work around this.**
+   and handle `EAGAIN` with a ~5 ms sleep.
 2. **Speaker distortion at full scale.** Apply ~50 % software attenuation (`>>1` on int16) before
    writing. ScummVM does this post-mix.
 3. **ioctls reset each other.** `SNDCTL_DSP_STEREO` is **silently ignored** (returns `rc=0,
    stereo=1` while the device stays mono — verified with `native_apps/tests/ch_test.c`);
    ⚠️ note the PCM underneath is **stereo-only** (measured above), so what stays mono is the *shim's*
    view of it, with `SND_PCM_OSS_PLUGINS` converting below — *inference from the two measurements, not
-   itself measured.* It is also why a buffer sized as interleaved stereo has never sounded wrong:
-   `native_apps` writes `frames * channels * 2B` — with the channel count read back —
-   and the shim consumes exactly that.
+   itself measured.*
    `SNDCTL_DSP_SPEED` may reset format and/or channels; `SNDCTL_DSP_SETFMT` may reset speed; and
    set-ioctl output values may not reflect actual device state. **Workaround:** set SPEED → FMT →
    CHANNELS in that order, then read back the truth with `SOUND_PCM_READ_RATE`,
    `SOUND_PCM_READ_BITS`, `SOUND_PCM_READ_CHANNELS`, and use the read-back rate **and the read-back
    channel count**. *Evidence:* at
    22050 Hz music played at half speed; at 48000 Hz it got proportionally worse (~4×), consistent
-   with `_outputRate` not matching the real device rate. Working implementations:
-   `scummvm-roomwizard/backend-files/oss-mixer.cpp` and
-   `native_apps/common/audio_out.c`'s OSS open — which reads the channel count back too, so no byte
-   count in `native_apps` spells a channel count into a constant any more.
+   with `_outputRate` not matching the real device rate. No client in this tree opens the shim —
+   `native_apps/common/audio_out.c` (which ScummVM also links) is ALSA-only.
 4. **32-bit `time_t` overflow.** `sizeof(long) == 4`. Never compute
    `(now.tv_sec - epoch_0) * 1000000L` — baseline timers to *current* time, not epoch zero.
 5. ⚠️ **The shim only hands ALSA WHOLE PERIODS, and an underrun DISCARDS what it was staging.**
@@ -1843,10 +1836,10 @@ are simply *absent* without being disabled properly. `commissioning/provision.sh
 `commissioning/provision.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
 Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
 
-**Why cleanup this aggressive is safe: every binary we ship is `-static`** (see
-[Building for this device](#6-building-for-this-device)). Nothing we run depends on a shared library,
-an interpreter or a runtime that a deletion could take out from under it, so the blast radius of
-removing a package is limited to the vendor software that used it.
+**Why cleanup this aggressive is safe: both bring-up paths refuse a rules file that could reach our
+runtime.** Native apps and ScummVM link the device's loader, glibc, `libasound`, `libstdc++` and
+`libgcc_s` dynamically (§6.3); no rule but a `keep` may touch those or `/usr/share/alsa`
+(`device-files/CLAUDE.md`), so a removal's blast radius is the vendor software that used it.
 
 **Init services disabled:**
 
@@ -1996,9 +1989,12 @@ flags (verified). Keep them for explicitness, but they are not what saves you.
 
 | Component | Flags actually used |
 |---|---|
-| Native apps | none — bare `$CC -O2 -static` ([`native_apps/build-and-deploy.sh`](native_apps/build-and-deploy.sh)) |
-| ScummVM | `-mcpu=cortex-a8 -mfpu=neon` added to `config.mk` after configure |
-| ARM dependency libraries | same flags as ScummVM |
+| Native apps, ScummVM, their ARM dependency libraries | `arm-linux-gnueabi` `-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp`, dynamic (§6.3) |
+| `vnc_client` | `arm-linux-gnueabihf` `-march=armv7-a -mfpu=neon -static` ([`vnc_client/Makefile`](vnc_client/Makefile)) |
+
+**`-march=armv7-a` has no idiv, so it is safe; `armv7ve`, or a `-mcpu` of a core that has idiv
+(Cortex-A7/A15), is what would break it.** The softfp builds need an explicit `-march` because
+`arm-linux-gnueabi` otherwise targets armv5.
 
 **Checking a binary — the expected count is a hard zero.** Use
 [`native_apps/check-arm-safe.sh`](native_apps/check-arm-safe.sh), which all three component build scripts
@@ -2031,8 +2027,8 @@ arm-linux-gnueabihf-objdump -d BIN | awk '/\t(sdiv|udiv)(\.w)?\t/ {print}'
 
 What must hold is: **no `sdiv`/`udiv` instruction anywhere in the binary.**
 
-Dynamic linking is unaffected — the device's own `libgcc` handles division correctly. This is
-**only** a static-linking concern.
+It applies to the code we compile and to static `libgcc.a`, linked static or dynamic; the device's own
+shared libraries are the vendor's and run.
 
 ### 6.2 Never use `--whole-archive` with `-lpthread`
 

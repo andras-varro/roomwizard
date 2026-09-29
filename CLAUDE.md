@@ -261,10 +261,9 @@ tool-level traps rather than device facts, and each has cost real time.
 - ⚠️ **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv` *instruction*
   crashes instantly with SIGILL (exit 132) — blank screen, no output, no log, indistinguishable from
   "the app didn't start". Verify with `native_apps/check-arm-safe.sh`, which runs from all three
-  component build scripts; the expected count is a **hard zero** and it is zero. The
-  softfp builds' `-march=armv7-a` is divide-free; what would break it is a `-march`/`-mcpu` implying the
-  idiv extension. The two ways to get a wrong answer out of the gate:
-  `SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide`.
+  component build scripts; the expected count is a **hard zero** and it is zero. Never pass a
+  `-march`/`-mcpu` that implies idiv. Which flags are safe, and the two ways to get a wrong answer out
+  of the gate: `SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide`.
 - **Framebuffer bpp is per-app — confirm it before decoding a screenshot.** Every native app pins
   **32bpp XRGB8888**; **ScummVM and the VNC remote session run 16bpp RGB565**. Screenshot:
   `ssh root@<ip> cat /dev/fb0 > fb.raw`, then `python3 fb565_to_png.py fb.raw fb.png` (defaults to

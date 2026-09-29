@@ -2,26 +2,19 @@
 
 ## Status: ✅ GUI + touch + keyboard + mouse + gamepad + audio (OPL/AdLib music + SFX) working
 
-**Binary:** ~15 MB statically linked → `/opt/games/scummvm` on device  
+**Binary:** dynamically linked (soft-float; the device's glibc, `libstdc++` and `libasound`) → `/opt/games/scummvm` on device  
 **Version:** ScummVM 2.8.1pre with custom RoomWizard backend  
-**Build env:** WSL Ubuntu-20.04, arm-linux-gnueabihf-g++ 9, `--enable-vkeybd`
+**Build env:** WSL Ubuntu-20.04, `arm-linux-gnueabi-g++` 9.4, `--enable-vkeybd`
 
 ---
 
 ## Quick Build & Deploy
 
 ```bash
-cd scummvm
-./configure --host=arm-linux-gnueabihf --backend=roomwizard \
-  --disable-all-engines --enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he \
-  --enable-engine=agi --enable-engine=sci --enable-engine=agos --enable-engine=sky --enable-engine=queen \
-  --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
-  --enable-release --enable-optimizations --enable-vkeybd
-make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
-arm-linux-gnueabihf-strip scummvm
-scp scummvm root@192.168.50.73:/opt/games/
-ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
+cd scummvm-roomwizard && ./build-and-deploy.sh 192.168.50.73
 ```
+
+The configure flags, the softfp `CC`/`CXX` and the ALSA link it uses: [`README.md`](README.md) → *Build*.
 
 First-time extras:
 ```bash
@@ -44,12 +37,12 @@ bash manage-scummvm-changes.sh restore  # backend-files/ → scummvm/
 ScummVM Core → OSystem_RoomWizard
   ├── RoomWizardGraphicsManager  → /dev/fb0 (800×480 RGB565, double-buffered)
   ├── RoomWizardEventSource      → /dev/input/event* (touch, keyboard, mouse w/ cursor, gamepad)
-  ├── OssMixerManager            → /dev/dsp (22050 Hz MONO, O_NONBLOCK) → TWL4030 → SPKR1
+  ├── OssMixerManager            → audio_out.c → ALSA plughw:N,0 (22050 Hz mono requested) → TWL4030 or USB DAC
   └── Default managers (timer, events, saves, filesystem)
 ```
 
 Backend files: [`backends/platform/roomwizard/`](../scummvm/backends/platform/roomwizard/) — `roomwizard.cpp/h`, `roomwizard-graphics.cpp/h`, `roomwizard-events.cpp/h`  
-OSS mixer: [`backends/mixer/oss/oss-mixer.cpp/h`](../scummvm/backends/mixer/oss/oss-mixer.cpp)
+Mixer adapter: [`backends/mixer/oss/oss-mixer.cpp/h`](../scummvm/backends/mixer/oss/oss-mixer.cpp)
 
 ---
 
@@ -67,42 +60,39 @@ Corner zones are gesture-only — all taps in 80px corners are suppressed from t
 
 ## Audio
 
-**Signal path:** OssMixerManager → `/dev/dsp` (O_NONBLOCK, 22050 Hz mono S16_LE) → ALSA OSS shim → TWL4030 DAC1 → HandsfreeL/R → SPKR1  
+**Signal path:** OssMixerManager → `audio_out.c` → ALSA `plughw:N,0` (22050 Hz mono S16_LE requested; `plughw` converts) → card 0 TWL4030 DAC1 → HandsfreeL/R → SPKR1, or card 1 a USB DAC  
 **Amp enable:** GPIO12 HIGH (set by `/etc/init.d/audio-enable` at boot)  
 **Hardware audio details:** See [`SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)
 
 **Design choices that are still this file's:**
 - **Mono output** — single speaker; eliminates stereo/mono mismatch bugs; halves all audio-thread work
 - **22050 Hz** — halves OPL synthesis load vs 44100
-- **2048-frame buffer** — 93 ms at 22050 Hz; 4096 bytes mono
-- **SCHED_OTHER** — SCHED_RR starved main thread on single-core ARM; ~500 ms ring absorbs jitter
+- **2048-frame period** — 93 ms at 22050 Hz (`ALSA_PERIOD_REQ` in `audio_out.c`)
+- **SCHED_OTHER** — SCHED_RR starved main thread on single-core ARM; the multi-period ring absorbs jitter
 - **50% volume attenuation** — `audio_out_set_shift(&_out, 1)`, the old `>>1`; the speaker distorts at full scale
 
-**The device half is `native_apps/common/audio_out.{c,h}`, not this file.** The `/dev/dsp` open,
-`O_NONBLOCK`, the ioctl order and its read-backs, the absent `SNDCTL_DSP_SETFRAGMENT`, the
-`SNDCTL_DSP_GETOSPACE` ring query, the silence prefill and the `EAGAIN` retry all live there;
-`oss-mixer.cpp` keeps only the mixer, the fill and the service thread. Two of the old choices were
+**The device half is `native_apps/common/audio_out.{c,h}`, not this file.** The `plughw:N,0` open (card
+chosen by the `audio_device` key), the hw/sw params and their read-backs, the ring query, the silence
+prefill, the `EAGAIN` and XRUN handling and the fallback to the panel speaker when a USB DAC is unplugged
+all live there; `oss-mixer.cpp` keeps only the mixer, the fill and the service thread — the class and
+file names are ScummVM's. Two of the old choices were
 **deleted rather than moved** — the fixed wall-clock deadline (the thread paces off
 `audio_out_service_interval_us()` instead) and the emergency anti-underrun second write.
 `oss-mixer.cpp:45-58` records why for both.
 
 **Verified at the panel 2026-09-01, after that move:** Full Throttle plays correctly, audio and all,
 and King's Quest 2's AdLib synthesis *and* its shore-wave sample both play as expected — two engines
-and two synthesis paths, operator unhedged on both.
+and two synthesis paths, operator unhedged on both. ScummVM on ALSA was heard again on `.188` 2026-09-29.
 
-### OSS Stereo Caveat (ALSA OSS shim)
+### Mono mixer and the granted rate
 
-The ALSA OSS shim on this device (Linux 4.14.52, TWL4030) has **known bugs**:
-1. `SNDCTL_DSP_STEREO` is silently ignored (returns success but stays mono)
-2. `SNDCTL_DSP_SPEED` may reset format and/or channels
-3. `SNDCTL_DSP_SETFMT` may reset speed
-4. Set-ioctl output values may NOT reflect the actual device state
-
-When stereo interleaved L/R samples hit a mono device, each sample is consumed as a separate frame → **half-speed playback**. When `_outputRate` doesn't match the actual device rate, OPL generates music at the wrong tempo (half-speed if `_outputRate` is 2× real rate).
-
-**Fix:** (1) Mono mixer — `MixerImpl(_outputRate, false, _samples)` + `SNDCTL_DSP_CHANNELS(1)`. (2) Set SPEED first, then FMT, then CHANNELS (so FMT/CH survive any reset from SPEED). (3) Read back actual device params with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and use the read-back rate for `_outputRate`. ScummVM's mixer handles stereo→mono downmix for DualOPL2/OPL3/iMUSE sources automatically.
-
-**Diagnostic:** [`native_apps/tests/ch_test.c`](../native_apps/tests/ch_test.c) — verifies channel ioctl behavior. On-device log shows read-back values: `OssMixerManager: read-back: rate=N bits=N channels=N`.
+`MixerImpl(_outputRate, false, _samples)` — a mono mixer, requesting 1 channel (a stereo grant is
+widened in `fillFromMixer()`), at the rate `audio_out` reports **granted** on the first open. A
+`MixerImpl`'s rate is fixed at construction, so a reopen granted a different rate warns instead: a
+mismatch plays OPL at the wrong tempo (half speed if `_outputRate` is 2× the real rate). ScummVM's mixer
+downmixes DualOPL2/OPL3/iMUSE sources to mono itself. The OSS shim's ioctl bugs that first forced this
+design are in [`SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio), gotcha 3
+(`native_apps/tests/ch_test.c` is its evidence).
 
 ---
 
@@ -192,7 +182,7 @@ The device kernel **4.14.52 does NOT support `clock_gettime64`** — this syscal
 
 | Component | Version |
 |-----------|---------|
-| Cross-compiler | `arm-linux-gnueabihf-g++` 9.4.0 |
+| Cross-compiler | `arm-linux-gnueabihf-g++` 9.4.0, the static build this crash was found on (ScummVM now builds with `arm-linux-gnueabi-g++` 9.4.0, same glibc) |
 | Cross glibc | 2.31 (built against kernel 5.4 headers) |
 | Cross linux-libc-dev | 5.4.0 headers |
 | Target kernel | **4.14.52** (pre-time64, pre-`clock_gettime64`) |

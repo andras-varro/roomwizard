@@ -6,17 +6,14 @@ Custom ScummVM backend for the Steelcase RoomWizard embedded device. Runs classi
 
 ### Build
 ```bash
-cd ../scummvm
-./configure --host=arm-linux-gnueabihf --backend=roomwizard \
-  --disable-all-engines \
-  --enable-engine=scumm --enable-engine=scumm-7-8 --enable-engine=he \
-  --enable-engine=agi --enable-engine=sci --enable-engine=agos \
-  --enable-engine=sky --enable-engine=queen \
-  --disable-mt32emu --disable-flac --disable-mad --disable-vorbis \
-  --enable-release --enable-optimizations --enable-vkeybd
-make -j4 LDFLAGS='-static' LIBS='-lpthread -lm'
-arm-linux-gnueabihf-strip scummvm
+./build-and-deploy.sh               # build only;  <ip> to deploy too;  --help lists the commands
 ```
+
+`build-and-deploy.sh` is the only maintained recipe. It configures with `--host=arm-linux-gnueabi`,
+`CC`/`CXX` carrying `-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp`, zlib/libpng from
+its own `arm-deps-softfp/`, and links **dynamically** against the device's glibc, `libstdc++` and
+`libasound` — the alsa-lib headers come from `../native_apps/build-alsa-lib.sh`, and
+`-DAUDIO_OUT_HAVE_ALSA` goes on `DEFINES` (an ARM build without it stops at `#error`).
 
 > **Note:** `build-and-deploy.sh` auto-restores backend files from `backend-files/` into the ScummVM build tree before each build, so manual `manage-scummvm-changes.sh restore` is no longer needed.
 
@@ -139,7 +136,7 @@ Version-controlled in [`backend-files/`](backend-files/), synced to/from `../scu
 | `roomwizard.cpp/h` | Main backend, VKB, feature flags |
 | `roomwizard-graphics.cpp/h` | 800×480 framebuffer, bezel-aware scaling, overlay compositing |
 | `roomwizard-events.cpp/h` | Touch + keyboard + mouse + gamepad input, state machine, corner gestures |
-| `oss-mixer.cpp/h` | OSS audio mixer (TWL4030 via `/dev/dsp`, O_NONBLOCK) |
+| `oss-mixer.cpp/h` | Audio adapter: mixes ScummVM into `../native_apps/common/audio_out.c`, which plays through ALSA (`plughw:N,0`) |
 | `module.mk` | Build configuration |
 | `configure.patch` | ScummVM configure modifications |
 
