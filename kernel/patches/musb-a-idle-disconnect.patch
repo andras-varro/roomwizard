@@ -1,0 +1,19 @@
+--- a/drivers/usb/musb/musb_core.c
++++ b/drivers/usb/musb/musb_core.c
+@@ -894,6 +894,16 @@
+ 		case OTG_STATE_B_IDLE:
+ 			musb_g_disconnect(musb);
+ 			break;
++		case OTG_STATE_A_IDLE:
++		case OTG_STATE_A_WAIT_BCON:
++			/* CONNECT sets is_active but enters A_HOST only if VBUS
++			 * reads valid, so a device can attach in these states.
++			 * Unhandled, the child is never disconnected and
++			 * musb_bus_suspend() fails with -EBUSY on every try.
++			 */
++			musb_host_resume_root_hub(musb);
++			musb_root_disconnect(musb);
++			break;
+ 		default:
+ 			WARNING("unhandled DISCONNECT transition (%s)\n",
+ 				usb_otg_state_string(musb->xceiv->otg->state));

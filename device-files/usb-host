@@ -210,6 +210,13 @@ case "$1" in
     # either way and no connect interrupt can arrive in either. An operator who
     # has just plugged something in holds the one bit no poll can obtain, which
     # is why this is a command and not a daemon.
+    #
+    # Measured on .188 2026-09-29, our 4.14.52 image with the DISCONNECT patch:
+    # an empty-socket rebind logs 7 kernel lines and leaves "Vbus off"; a hub
+    # plugged ~1.5 min later raised nothing at all (0 lines, still off), and
+    # `recover` then needed attempt 2 to enumerate it. A full-tree rebind logs
+    # ~37 lines. So a timed rebind catches only what is present AT a rebind, and
+    # each catch costs two ~6 s rebinds -- a poll was rejected on those numbers.
     # ⚠️ THE UNBIND AND THE BIND ARE SEPARATED BY A DELAY, but do NOT record that
     # as the fix for the double-run -- see the header. It addresses ONE real
     # mechanism, which is not the only one. musb_start(), musb_core.c:1074-1080:

@@ -95,12 +95,27 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-08**
+### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-28**
 
 **A hub no longer triggers it on our image, and the invariant is still broken.** An autosuspending hub
 set off the burst at every `recover` and hid the device behind it; `usbcore.autosuspend=-1` on the
 cmdline removed that trigger (measured, `kernel/README.md`), so a hub is now a *non*-reproducer. The
-fix below is still owed: the DISCONNECT handler leaves `is_active` set whatever is plugged in.
+DISCONNECT handler still leaves `is_active` set whatever is plugged in on the booted image.
+
+**A patch is booted on `.188` and the unplug half is measured clean.**
+`kernel/patches/musb-a-idle-disconnect.patch` adds `OTG_STATE_A_IDLE`/`A_WAIT_BCON` arms to the
+`MUSB_INTR_DISCONNECT` switch that call `musb_host_resume_root_hub()` + `musb_root_disconnect()`. Measured
+2026-09-28 (uImage md5 `926896a55a850f6203f91b329f916349`, `usbcore.autosuspend=-1` still on): hub pulled
+from the root port → `Babble`, then `USB disconnect` for every child, `1-1` gone from sysfs, root hub
+`runtime_status` `active`, and `dmesg | grep -c -E "unhandled DISCONNECT|musb_bus_suspend"` reads 0. A
+dongle hot-plugged behind the hub disconnects and re-enumerates on its own. **Left open: the hub
+replugged into the root port raised no `CONNECT` at all** (mode `a_idle`); `/etc/init.d/usb-host recover`
+re-enumerated everything on attempt 1, still 0 warnings. Whether the patch or the babble caused the miss
+is undecided — the recorded history says a root-port replug works once a session existed. **Next: the
+same pull/replug on the old image** (`uImage-system.autosusp` on p1, md5
+`6f1f9fd43003232f16e7faf107d9fc90`), then a run with `usbcore.autosuspend` at its default, which is the
+trigger the cmdline currently removes. RESCAN covers the miss whatever its cause; a timed rebind cannot
+(measured, `device-files/usb-host` at `recover`).
 
 ⚠️ **An unbounded kernel message loop that outlives the device's removal and ends in a hardware reset
 ~46 min later, and it is also a measurement contaminant** — anything judged by ear or timed during a storm
@@ -143,7 +158,7 @@ vendor soft watchdog, a reset cannot be attributed to the hardware one: check wh
 before drawing that conclusion.
 
 **Recovery is not a reboot** — a driver unbind+bind ends a live storm, which is how Aug 13's stopped in
-~20 s. **The fix is a driver patch, folded into F101**, and cannot ship before an image we built is the deployed one.
+~20 s. **The fix is the driver patch above, folded into F101**, and cannot ship before an image we built is the deployed one.
 Distinct from enumeration-at-probe, which is about a cold port never obtaining a session.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
@@ -159,45 +174,32 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B36. A replugged output device is never picked up again, and ScummVM does not recover at all — open, confirmed 2026-09-09
+### B36. Output-device hot plug: a move restarts the music on another track — open, measured 2026-09-28
 
-The symptom, operator-confirmed 2026-09-09 and **acceptable to them** (quality, not function): pull a USB
-DAC while sound was playing and the process stayed silent for its whole life.
+**Unplug and replug both work on `.188` (softfp build, measured 2026-09-28).** Native: `EBADFD`/`ENODEV`
+sets `audio_out_device_lost()` and `common/audio.c` reopens on the panel; while there with `audio_device`
+`usb`/`auto`, `audio_out_usb_returned()` (`common/audio_out.c`) re-probes `/dev/dsp1` once per
+`AUDIO_OUT_REPROBE_MS` and moves back after two consecutive sightings, and a card present but failing to
+open is refused until seen unplugged. With `auto` the log reads `audio_out: plughw:1,0 is back — leaving
+plughw:0,0`. ScummVM's audio thread in `scummvm-roomwizard/backend-files/oss-mixer.cpp` reopens on loss
+and on replug (operator: works). Left open:
 
-**Native apps fall back to the panel — operator-measured 2026-09-28 at `.188`, softfp build.** Unplug
-during music: a brief stall, then the onboard speaker; the log reads `audio_out: plughw:1,0 is gone (File
-descriptor in bad state)` then `plughw:0,0 open (alsa)`. Mechanism: `EBADFD`/`ENODEV` sets
-`audio_out_device_lost()` (`common/audio_out.c`) and `common/audio.c` re-runs `stream_open()` at most once
-per `AUDIO_REOPEN_MS`. Left open:
+- **A move restarts the music on the next track** (operator, `auto`, saved: track A on USB → track B on
+  the speaker). Mechanism, read in code: `stream_open()`'s `bus_reset()` (`common/audio.c`) wipes every
+  mixer voice, so `audio_music_active()` goes false and `audio_bed_service()` (`common/audio_bed.c`)
+  drops to IDLE and starts `track[next]` from frame 0. Fix: re-arm the surviving music voice from its
+  WAV position after the reset, as `audio_music_resume()` does.
 
-- **Replug is never picked up**: the game stays on the panel until restarted. Fix: while on the fallback
-  with `audio_device` `usb`/`auto`, re-probe the USB card periodically and move back to it.
-- **ScummVM has no reopen** — `scummvm-roomwizard/backend-files/oss-mixer.cpp` links `audio_out.o` but
-  nothing there polls the lost flag, so an unplug silences it for the session.
+### B38. Mix Bus Test cracks from ~6 voices under a full redraw — open, confirmed 2026-09-28, parked
 
-### B37. device_tools' input testers open only the first node of each kind — open, reported 2026-09-27
-
-**With a touchpad keyboard and a 2.4 GHz mouse both attached, the MOUSE test ignores the mouse.** The
-operator saw the Compx receiver (`25a7:fa61`) in the USB tab's bus list, but the mouse did nothing in the
-test. On `.188` the touchpad's mouse node is `event3` and the receiver's is `event6`, and
-`usb_scan_devices()` in `native_apps/device_tools/device_tools.c` keeps only the first `DEV_MOUSE` (the
-same goes for keyboards and pads). *Inferred* from that code and the node order; `event6` was not opened.
-Fix: let the tester step through every node of its kind, and verify with both devices attached.
-
-### B38. Mix Bus Test cracks on each press at 6-7 simultaneous voices — open, confirmed 2026-09-28
-
-**Operator at `.188`, softfp ALSA build: a crack on each press once 6-7 voices sound together — and it is
-not clipping.** Measured 2026-09-28 in `/tmp/mix.log` (the tool `freopen`s stderr there): that session ran
-`vol=24`, `limit=hard`, `clip=0 lim=0 starve=0`, up to 8 voices with `drop=4`, and still cracked. (An
-earlier `clip=74285` was at a higher volume rung: real, but a separate matter.) **[inferred, code
-trace]** No press puts a step into the samples: each voice starts at 0 with a linear `AUDIO_ATTACK_MS`
-attack and `AUDIO_RELEASE_MS` release (`common/audio_gen.h`), a full pool refuses rather than steals, and nothing
-scales gain by voice count; the one hard cut is STOP (`audio_mix_stop_all()`). Left suspects: the
-full-screen redraw each press does in the same loop pass as `audio_pump()`, the SFX pad's `fopen`/SD read
-inside the tap (both in `native_apps/tests/audio_mix_test.c`), or analog. Next: suppress the per-press
-redraw and have the operator repeat; optional, a raised-cosine attack and a ramped STOP. Second, **[inferred, code only]**: `native_apps/tests/audio_mix_test.c`
-calls `fb_fade_out()` then `audio_close()` with no pump between, so the stream's tail starves during the
-fade (`:867-868` today) — pump the bus through the fade.
+**Parked by the operator 2026-09-28 ("we can live with this").** **Cause measured** at `.188` with the
+honest PAD arm (readout band only, via `present_rect`): the full redraw is the trigger — 440 Hz voices
+crack from the 7th under PAD, from the 6th and on every meter redraw under FULL; not clipping
+(`clip=0 lim=0`). Mechanism **[inferred]**: an ALSA underrun at `snd_pcm_writei` that `alsa_recover()`
+hides; `audio_out.c` logs `underran at the write`. Remedies if unparked: a cheaper oscillator than the
+per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, code only]**:
+`native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
+the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
 
 ## Features
 
@@ -580,78 +582,6 @@ work only.
 
 ---
 
-### F23. The p1 gate knows one firmware release, and refuses every other — open, measured 2026-09-02
-
-**The symptom, hit for real:** offline commissioning of a newly-acquired unit refused at step 6 with
-`uImage-system md5 is 5642fd05969e366c58e930e51de48ccb, which is none of` the three it knows, and wrote
-nothing. That refusal was **correct**, and the unit is not damaged or half-patched: `verify_uimage.py`
-reports both CRCs valid and `power=0x32 (50) 100mA`, and there is no `uImage-system.vendor` beside it —
-the writer creates that backup *before* it writes, so p1 was never touched. The cause is that the unit
-ships a different Steelcase release (`SYSTEM_ANALYSIS.md#51-as-shipped`), so its kernel is a different
-binary with a different md5.
-
-**Why this does not scale, and what actually pins it.** `lib/rw-usbpower.sh` gates on **identity** —
-`RW_UIMAGE_VENDOR_MD5` / `_POWER_MD5` / `_BOTH_MD5`, three hardcoded strings, plus the backup assertion in
-`commissioning/commission-offline.sh`. Those strings are the *only* thing tied to one release. Two
-measurements say so: `usb_host/patch_dtb.py` verifies the input's own header and data CRCs before
-anything, **finds** the appended tree by `uimage.py`'s three-condition walk rather than trusting
-`DTB_OFFSET_HINT`, and refuses unless the source byte reads exactly `POWER_VENDOR` — and it patched the
-unknown release first try, at a different offset, with `verify_uimage.py --expect-power 0xfa` passing
-afterwards. Meanwhile `tests/rw_usbpower_test.sh` already drives the whole apply/verify/revert sequence
-with all three constants **overridden by md5s of its own fixtures**, so the sequence is proven
-release-independent; only the production constants are not.
-
-**Proposed fix — two tiers, with the second opt-in and never silent.** Tier 1 is today's md5 lookup,
-unchanged. Tier 2 applies when that returns `unknown`: proceed only if the structural gate passes (both
-CRCs valid ∧ the walk finds `power` inside a `usb_otg_hs` node ∧ that byte reads the vendor value), and
-replace each md5 comparison with a measurement that is strictly stronger than the constant it retires —
-read the actual `power`/`mode` property values for the current state instead of looking up an identity;
-compare the card byte-for-byte against the patched file just produced locally instead of against
-`_POWER_MD5`; and assert the backup matches what was read off the card *before* the write instead of
-against `RW_UIMAGE_VENDOR_MD5`.
-
-⚠️ **What tier 2 cannot buy, and the reason it must stay opt-in:** an md5 in that table also records that
-somebody booted *that exact image* and the unit came back up. No structural check can establish that, and
-a unit that does not come up has no serial console to say why. Whether a given kernel's MUSB honours the
-property at all is a read of `musb_host.c:2797` in the vanilla 4.14.52 tree — the only tree available.
-
-⚠️ **Two traps for the implementer.** `tests/measure_usbpower_sabotage.sh` `sed`-matches the *exact* line
-`if [ "$got" != "$RW_UIMAGE_VENDOR_MD5" ]; then` inside the backup step; editing that line rots the
-sabotage into a false negative rather than failing loudly. And the three constants must not simply become
-a longer table — a table still has to be fed a new release before it helps, which is the defect.
-
-**The alternative that retires the gate instead of generalising it, and that is why it lives here.** This
-entry's md5 table exists for one reason: to protect the p1 write. An experiment that removes the write
-removes the need for any gate at all, tier 2 included. Patch the **in-RAM** copy of the `usb_otg_hs`
-`power` property through `/dev/mem`: verify it reads the vendor `0x32`, write `0xfa`, rebind, confirm
-500 mA. That makes the whole fix an ordinary boot script and lets `--no-usb-power` go, with no p1 write
-left to gate. One SSH session, no case-open. **It needs no new code** — `devmem_write` is a general
-physical peek/poke and is already on the device at `/usr/local/bin/devmem_write`. ⚠️ **The whole
-difficulty is finding the address**: the unflattened tree is early-boot allocated rather than a static
-symbol, so nothing names where its `power` property lands, and that one unknown *is* the experiment.
-⚠️ **This is not the sysfs override already recorded as failed** — `usb_host/README.md` keeps both, and
-says which is which.
-
-**Ruled out: shipping a prebuilt patched kernel as a release artifact.** It would not scale (obtaining
-every release is the same table plus 5 MB of payload each) and it is not ours to publish — see
-`LICENSE.md`.
-
-**Not a blocker for anything today.** `--no-usb-power` commissions such a unit fully; the cost is that it
-keeps the vendor's 100 mA budget, so USB peripherals on *that* unit stay limited.
-
-**A same-release card restore is the other way out, and it worked** — the refusing unit was re-imaged by
-`dd` from a whole-card capture of the reference unit and then patched, after which its p1 carries
-`uImage-system` = `RW_UIMAGE_POWER_MD5` and `uImage-system.vendor` = `RW_UIMAGE_VENDOR_MD5` exactly, so
-tier 1 accepts it with no code change. ⚠️ **That also pins what the three constants are: they are the
-reference unit's release**, not the other release in the fleet
-([`SYSTEM_ANALYSIS.md#51-as-shipped`](SYSTEM_ANALYSIS.md#51-as-shipped)). It is a workaround and not the
-fix — it needs a card capture of a matching release on hand, and it replaces the whole card, so the
-restored unit inherits the donor's `/etc/touch_calibration.conf` and needs recalibrating
-([`SYSTEM_ANALYSIS.md#33-touch`](SYSTEM_ANALYSIS.md#33-touch)). ⚠️ **Only
-p1 may be restored file-by-file** (FAT32, all regular files); any ext partition must go back with `dd`,
-because a per-partition file copy of a live rootfs carries no symlinks and leaves the unit with no
-`/bin/sh` and no boot sequence, on hardware with no serial console.
-
 ### F17. Bluetooth peripherals, and whether USB DMA is reachable — open, measured 2026-08-08
 
 **The want:** a wireless game controller and a headset or speaker for ScummVM. The unit is PoE-wired, the
@@ -700,11 +630,6 @@ Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works, and ScummVM's
 Throttle acceptably with occasional cracks. Unplug recovery is B36 and the Mix Bus Test crack B38. Still
 open here:
 
-- **Settings tab, awaiting the operator's taps** (built; measured on `.188` 2026-09-28 only that
-  `device_tools` holds `pcmC1D0p` from its first frame and shows no note while shown == saved): TEST AUDIO
-  does not freeze; changing OUT changes what TEST plays; "OUT NOT SAVED - PRESS SAVE" appears. Delete once
-  heard. Separately, `do_led_test()` in `device_tools.c` and `hardware_config.c` still `usleep`s 500 ms
-  without `audio_pump()`, so a chime in flight gets a gap **[read in code]**.
 - **(5)** flip both defaults to softfp-dynamic; delete the OSS backend, `RW_AUDIO_OSS` and SYSTEM_ANALYSIS
   §6's "every binary we ship is `-static`" safety argument; gate that the deep clean and the offline
   installer keep libc, libstdc++ and libasound. Stale text goes with OSS: `native_apps/tests/alsa_probe.sh:14`
@@ -760,7 +685,9 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
 — but that path is now `common/audio_out` for every component, so the reroute has one home rather
-than two. A2DP's ~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
+than two. ⚠️ The output-device hot-plug probe in `common/audio_out.c` (`audio_out_usb_returned()`) knows
+only USB card 1; a Bluetooth sink must extend it or it is never moved back to after a drop. A2DP's
+~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
 **Can we get USB DMA?** Yes, on our image: it sets `CONFIG_USB_INVENTRA_DMA` and carries the patch that
@@ -771,8 +698,8 @@ EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 use
 `CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
 `CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
 could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
-family as [F23](#f23-the-p1-gate-knows-one-firmware-release-and-refuses-every-other--open-measured-2026-09-02)'s
-existing patch. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
+family as the shipped byte patch of the vendor kernel (`lib/rw-usbpower.sh`), a patch in place rather
+than a rebuild. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
 controller scribbles into RAM.** The clean way is the config symbol in an image we build, which is what
 ours does ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
@@ -831,10 +758,10 @@ unpatched image died of, and the recipe is
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
-byte-patch route into p1; that in turn dissolves F23's per-firmware pattern gate and gives back the free
+byte-patch route into p1; that in turn retires the per-release md5 gate in `lib/rw-usbpower.sh` (it refuses every Steelcase release but the reference unit's — `COMMISSIONING.md`) and gives back the free
 undo both bring-up paths lost. ⚠️ **None of that is delivered until an image we built is the one a unit
-is deployed on** — panel and touch working, USB power carried in its own DTB — so F23 stays open and the
-byte patch stays shipped meanwhile; do not delete either on the strength of this entry.
+is deployed on** — panel and touch working, USB power carried in its own DTB — so the md5 gate and the
+byte patch stay shipped meanwhile; do not delete either on the strength of this entry.
 
 **What to fold in, so the image is built once with everything wanted in it:**
 
@@ -846,7 +773,7 @@ byte patch stays shipped meanwhile; do not delete either on the strength of this
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
-| Disconnect cleanup | clear `is_active` in the `default:` arm of `musb_core.c:897-900` | **the fix for B33**, whose entry holds the invariant and its measurement. A driver change like the row above, so the image is what makes it shippable |
+| Disconnect cleanup | `kernel/patches/musb-a-idle-disconnect.patch`: `A_IDLE`/`A_WAIT_BCON` arms in the `MUSB_INTR_DISCONNECT` switch of `musb_core.c` — **booted 2026-09-28 on `.188`: unplug clean, root-port replug missed** | **the fix for B33**, whose entry holds the invariant, its measurement and the post-boot check. A driver change like the row above, so the image is what makes it shippable |
 | Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 holds the measurement and is what this unblocks |
 | DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. F2 holds the A/B this would overturn and [§3.2](SYSTEM_ANALYSIS.md#32-display) the coefficients |
 
@@ -934,11 +861,12 @@ client and 32 in the other two, so a keyboard on `event17` worked everywhere exc
 been resynced **twice by hand** — which is the argument for this item, not a substitute for it. The
 "clear errno before the read loop" hardening still exists only in the ScummVM copy.
 
-The ScummVM copy is defensible (C++, different event model, links only 4 common objects). **The VNC
-copy is not** — `vnc_client/Makefile:21-29` already compiles five objects from
-`../native_apps/common/`; it could link `gamepad.o` too.
-
-**Fix:** extract classifier + scan + config parser into `common/evdev_scan.c` (~150 lines).
+**Classifier + scan are extracted as `common/input_scan.c`/`.h` (2026-09-28), and only `vnc_client`
+links it** — the table's `vnc_input.c` classifier and scan columns are gone. **Next: migrate the other
+two** — `common/gamepad.c` (`classify_device`, `gamepad_bind_kind`, `scan_devices`) and
+`roomwizard-events.cpp` (`classifyDevice`, its name filter, `scanInputDevices`; add `input_scan.o` to
+`OBJS` in `scummvm-roomwizard/backend-files/configure.patch`) — then delete the now-unused
+`MAX_INPUT_DEVICES` from `vnc_client/config.h`. The config parser and rescan timer rows are not yet in it.
 
 ### C2. Split `device_tools.c` — open
 
@@ -1166,7 +1094,7 @@ missing tool and point at it instead of each reciting its own `apt` line.
 ### Usability, features, maintainability
 
 C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C8 · F17 · F23 (scoped for kernel stability) · B33 (its fix is a driver patch, so it
+F4 · C5 · C8 · F17 · B33 (its fix is a driver patch, so it
 waits on F101) · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
 userspace overlay win was measured and rejected on image quality, the switch it would have needed is
 withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
@@ -1222,7 +1150,5 @@ and **refuted on hardware**, and the answer that ships is the one-tap RESCAN, ve
 anyone proposes a fourth theory, read the refuted table in `usb_host/README.md`, which names the one
 never-attempted candidate and the question any candidate must answer first.
 
-One device experiment remains optional rather than blocking, one SSH session and no case-open: F23's
-in-RAM alternative to the p1 write, which would retire that gate rather than generalise it. Bundles hold
-built artifacts only — settled, because the one consumer that installs device scripts runs from a clone
+Bundles hold built artifacts only — settled, because the one consumer that installs device scripts runs from a clone
 and has `device-files/` beside it either way.

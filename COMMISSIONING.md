@@ -367,6 +367,18 @@ the one step that is neither, because p1 is not expressible as a provision rule;
    degrades to a named skip rather than an abort.
 7. **Reboot** — which is what makes the new budget live, so nothing further is needed.
 
+⚠️ **A unit on another Steelcase release is refused at step 6, correctly, and nothing is written.**
+`lib/rw-usbpower.sh` gates p1 on three md5s (`RW_UIMAGE_VENDOR_MD5` / `_POWER_MD5` / `_BOTH_MD5`), and
+they are the **reference unit's release** ([`SYSTEM_ANALYSIS.md#51-as-shipped`](SYSTEM_ANALYSIS.md#51-as-shipped)):
+measured 2026-09-02, a newly acquired unit's kernel md5 was none of them and p1 was untouched (no
+`uImage-system.vendor` beside it; the writer makes that backup *before* it writes). Two ways on:
+`--no-usb-power`, which commissions it fully at 100 mA, or a same-release card restore by `dd` from a
+whole-card capture — measured working, after which p1 matches the md5s exactly; the restored unit inherits
+the donor's touch calibration and needs recalibrating. ⚠️ **Only p1 may be restored file-by-file**
+(FAT32, regular files); an ext partition must go back with `dd` — a file copy of a live rootfs carries no
+symlinks and leaves no `/bin/sh`, on hardware with no serial console. Generalising the gate is not
+planned: the delivered kernel is to be our own image, which carries the 500 mA budget in its DTB.
+
 ⚠️ **A plan record is state; running a script is an action.** `disable-steelcase.sh` is *installed* by
 the plan and therefore also lands on an offline-commissioned card, but *running* it stops live processes
 and writes a crontab, so it has no offline equivalent by nature. `/etc/init.d/roomwizard-app` re-runs it

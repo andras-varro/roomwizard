@@ -46,6 +46,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `touch_input.c` | touch events, the raw→panel→logical map, publishing the touch inset | reading evdev directly |
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
+| `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`vnc_client` links it) | a fourth copy of the classifier or scan loop |
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |

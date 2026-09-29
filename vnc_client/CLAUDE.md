@@ -108,16 +108,13 @@ Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-
 
 ## Shared code
 
-Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o` and `logger.o` from
-`../native_apps/common/`. It does **not** link `gamepad.o` — it has its own evdev scanner in
-`vnc_input.c`, which is a duplicate of the one in `common/gamepad.c` and of a third copy in the
-ScummVM backend.
-
-That divergence is a live bug source. `MAX_INPUT_DEVICES` was 16 here but 32 in the other two, so a
-USB keyboard enumerating as `/dev/input/event17` worked everywhere except here — **resynced to 32 on
-2026-08-03, for the second time**, which is the argument for linking one scanner rather than a fix.
-The "clear `errno` before the read loop" hardening still exists only in the ScummVM copy. Prefer
-linking `common/gamepad.c`; extracting that shared layer is open work in `../IMPROVEMENT_PLAN.md`.
+Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o`, `logger.o` and `input_scan.o` from
+`../native_apps/common/`. It has **no evdev scanner of its own**: `vnc_input.c` calls `input_scan()`
+(`common/input_scan.h`), which classifies by `gamepad.c`'s rules, opens every node of a kind up to a cap
+and skips held nodes — a rescan is another call. It does not link `gamepad.o`. `gamepad.c` and the
+ScummVM backend still carry their own copies of the classifier and scan loop, and moving them onto
+`input_scan.c` is open work in `../IMPROVEMENT_PLAN.md`; until then, a change to the classification rules
+lands in all three. `MAX_INPUT_DEVICES` in `config.h` is unused.
 
 ## Network robustness
 
