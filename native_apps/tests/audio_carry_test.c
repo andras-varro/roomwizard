@@ -40,7 +40,7 @@
  * (audio_music_active()), not its transition.
  *
  * Build and run (host gcc, from native_apps/):
- *   gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim \
+ *   gcc -Wall -Wextra -Wno-unused-parameter -I. \
  *       -Wl,--wrap=audio_out_open_resolved \
  *       -o build/audio_carry_test tests/audio_carry_test.c \
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \

@@ -25,8 +25,8 @@
  *       common/audio_wav.c common/audio_gen.c -lm && \
  *   ./build/audio_sample_test
  *
- * ⚠️ No `-Itests/hostshim` here, and no `common/audio.c`: this suite links only
- * the two files that have no device half, so it needs no OSS shim at all.  The
+ * ⚠️ No `common/audio.c` here: this suite links only the two files that have no
+ * device half, so it needs no device backend at all.  The
  * ARM build is the same line with the cross compiler plus `-O2 -static`.
  *
  * Cross-check on the device:

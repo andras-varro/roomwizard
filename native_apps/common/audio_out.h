@@ -127,8 +127,8 @@
  * Injectable for exactly one reason: it is what lets `tests/audio_out_test.c`
  * drive this file on the host with **no fd in the test at all** — a simulated
  * ring that can be told to over-report, to stall, to accept half a frame, or to
- * grant a channel count nobody asked for.  The two real implementations live in
- * `audio_out.c` behind `audio_out_open_oss()` and `audio_out_open_alsa()` and are
+ * grant a channel count nobody asked for.  The one real implementation lives in
+ * `audio_out.c` behind `audio_out_open_alsa()` and is
  * the only device code in the repo below this header.
  *
  * A backend's `space` or `write` that fails because the device is gone returns
@@ -137,7 +137,7 @@
  */
 
 typedef struct {
-    long period_frames;  /**< one device period (OSS `fragsize`)              */
+    long period_frames;  /**< one device period (the ALSA period size)       */
     long ring_frames;    /**< total capacity                                  */
     long in_flight;      /**< frames the device still holds — see the slack
                           *   constant above before believing this number     */
@@ -185,11 +185,10 @@ typedef long (*AudioOutFill)(void *ctx, int16_t *buf, long frames, int channels)
 typedef struct {
     const AudioOutDev *dev;
     void       *dev_ctx;
-    int         oss_fd;        /**< the OSS backend's own ctx; -1 otherwise    */
     bool        is_open;
     bool        device_lost;   /**< a write failed ENODEV — see the accessor   */
 
-    /* Which OSS node `audio_out_open_default()` opened (one of the resolver's
+    /* Which /dev/dsp* node `audio_out_open_default()` opened (one of the resolver's
      * static strings, NULL behind any other opener), and the replug probe's
      * state — see audio_out_usb_returned().  All three reset on every open. */
     const char *open_path;
@@ -245,49 +244,39 @@ int  audio_out_open(AudioOut *out, const AudioOutDev *dev, void *dev_ctx,
                     int rate_req, int channels_req);
 
 /**
- * The same, on the device `audio_out_device_path()` resolves to: `O_NONBLOCK`,
- * SPEED → FMT → CHANNELS, then all three read back with the read-only ioctls.
- *
- * ⚠️ **`channels_req` is a REQUEST and the grant may differ, so no caller may
- * assume it was honoured.** The onboard device grants 2 whatever is asked; ALSA
- * card 1 (a USB DAC) also grants exactly 2, so a client that asks for 1 gets 2
- * from either — and nothing below refuses the mismatch, because the design is to
- * conform to the grant. Read `audio_out_channels()` back and honour it in the
- * fill callback; a mono fill handed a 2-channel grant plays at double speed.
- * The speaker sums L + R, so 2 is also the louder of the two (measured).
- */
-int  audio_out_open_oss(AudioOut *out, int rate_req, int channels_req);
-
-/**
  * The same through libasound, on the ALSA PCM `pcm` (e.g. `"plughw:0,0"`):
  * non-blocking, interleaved S16_LE, rate and channels negotiated with the
- * `_near` calls and read back, a period near 1024 frames and a buffer near eight
- * of them — requested, never forced — and a start threshold of one period so the
- * silent prefill is what starts the stream.
+ * `_near` calls and read back, a period near 2048 frames and a buffer near
+ * sixteen of them — requested, never forced — and a start threshold of one
+ * period so the silent prefill is what starts the stream.
  *
- * Compiled only with `-DAUDIO_OUT_HAVE_ALSA`, which the soft-float build paths
- * set explicitly; everywhere else this is a stub that returns -1.  Deliberately
- * not detected with `__has_include`: a host that happens to have libasound's
- * headers must not start needing `-lasound` at link time.
+ * ⚠️ **`channels_req` is a REQUEST and the grant may differ, so no caller may
+ * assume it was honoured.** `hw:0,0` is stereo-only; `plughw` may grant the
+ * request and convert, but nothing guarantees it — and nothing below refuses the
+ * mismatch, because the design is to conform to the grant. Read
+ * `audio_out_channels()` back and honour it in the fill callback; a mono fill
+ * handed a 2-channel grant plays at double speed. The speaker sums L + R, so 2
+ * is also the louder of the two (measured).
+ *
+ * Compiled only with `-DAUDIO_OUT_HAVE_ALSA`, which both device build paths set
+ * explicitly; on the host this is a stub that returns -1 (an ARM build without
+ * the define refuses to compile).  Deliberately not detected with
+ * `__has_include`: a host that happens to have libasound's headers must not
+ * start needing `-lasound` at link time.
  */
 int  audio_out_open_alsa(AudioOut *out, const char *pcm,
                          int rate_req, int channels_req);
 
 /**
  * The opener every client calls: the device `path` (from
- * `audio_out_device_path()`) through ALSA when this build has it, through OSS
- * otherwise.
- *
- * ⚠️ `RW_AUDIO_OSS` set non-empty in the environment forces OSS in an ALSA build.
- * It exists so an on-device A/B changes exactly ONE thing — the backend — within
- * the same binary, rather than comparing two builds that differ in ABI, libc and
- * link mode as well.
+ * `audio_out_device_path()`) through ALSA, on the PCM `audio_out_device_pcm()`
+ * names for it.
  */
 int  audio_out_open_default(AudioOut *out, const char *path,
                             int rate_req, int channels_req);
 
-/** Which backend the last `audio_out_open_default()` chose — `"alsa"` or
- *  `"oss"` — for the one log line each client writes per open. */
+/** The backend `audio_out_open_default()` opens through — always `"alsa"` — for
+ *  the one log line each client writes per open. */
 const char *audio_out_backend_name(void);
 
 /** What a failed ALSA call means, as a pure function of its negative errno.
@@ -305,7 +294,7 @@ AudioOutErr audio_out_alsa_classify(int err);
 /**
  * Whether a space query or write on this open stream failed because the device
  * is GONE (`ENODEV`) — a USB DAC unplugged under a running stream.  Set in the generic
- * layer from whatever errno the backend left, so OSS and ALSA both reach it;
+ * layer from whatever errno the backend left, so any backend reaches it;
  * cleared by the next open.  Nothing here reopens: the stream's owner polls this
  * and closes and reopens through its own path, which re-resolves the device.
  */
@@ -360,7 +349,7 @@ bool audio_out_usb_returned(AudioOut *out);
 /* ── Which device ───────────────────────────────────────────────────────────
  *
  * ⚠️ **One home for "which `/dev/dsp*`", and every opener in the tree resolves
- * through it** — this file's OSS backend, `audio.c`, and ScummVM's mixer. There used to be a `DSP_DEVICE` macro in each of the first
+ * through it** — this file's ALSA opener, `audio.c`, and ScummVM's mixer. There used to be a `DSP_DEVICE` macro in each of the first
  * two; a seam in only one of them left every app opening the panel speaker at
  * startup and falling back to it on error.
  *
@@ -368,8 +357,8 @@ bool audio_out_usb_returned(AudioOut *out);
  * so a field on the struct would be cleared by the call that needs to read it.
  * Set it once, before the first open; it is honoured by every later open.
  *
- * These four are OUTSIDE this file's OSS guard, so a host build with no
- * `<sys/soundcard.h>` still links them and `tests/audio_out_test.c` drives the
+ * These four are OUTSIDE this file's ALSA guard, so a host build with no
+ * libasound still links them and `tests/audio_out_test.c` drives the
  * resolution with no sound card present.
  */
 

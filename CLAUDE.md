@@ -141,9 +141,9 @@ enablement + Xbox controller modules).
 **Toolchain:** `./setup-build-env.sh` is the one home for the host package set — it probes what is
 missing, prints the exact `apt` line before running it, and `--scummvm` also clones the gitignored
 upstream ScummVM tree. ScummVM additionally needs **WSL Ubuntu 20.04+**. ⚠️ **`native_apps` cross-builds
-no dependencies at all**; ScummVM builds its own `scummvm-roomwizard/arm-deps/` (zlib + libpng only).
+one dependency, alsa-lib** (`build-alsa-lib.sh`, never deployed); ScummVM builds `arm-deps-softfp/` (zlib + libpng).
 
-**`native_apps/` has no `Makefile`.** `native_apps/build-and-deploy.sh` (cross-compiler, `-static`) is
+**`native_apps/` has no `Makefile`.** `native_apps/build-and-deploy.sh` (soft-float cross-compiler, dynamic) is
 the only build path. A **new** binary goes in `GAMES_BINARIES` there and nowhere else — that one array
 drives the upload, the remote `chmod +x` and the md5 verification. Details: `native_apps/CLAUDE.md`.
 
@@ -261,8 +261,8 @@ tool-level traps rather than device facts, and each has cost real time.
 - ⚠️ **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv` *instruction*
   crashes instantly with SIGILL (exit 132) — blank screen, no output, no log, indistinguishable from
   "the app didn't start". Verify with `native_apps/check-arm-safe.sh`, which runs from all three
-  component build scripts; the expected count is a **hard zero** and it is zero. The bare
-  `$CC -O2 -static` path is already safe; what would break it is an explicit `-march` implying the
+  component build scripts; the expected count is a **hard zero** and it is zero. The
+  softfp builds' `-march=armv7-a` is divide-free; what would break it is a `-march`/`-mcpu` implying the
   idiv extension. The two ways to get a wrong answer out of the gate:
   `SYSTEM_ANALYSIS.md#61-cortex-a8-has-no-hardware-integer-divide`.
 - **Framebuffer bpp is per-app — confirm it before decoding a screenshot.** Every native app pins

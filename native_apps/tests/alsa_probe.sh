@@ -11,11 +11,10 @@
 # stdout-only, no touch, no framebuffer -> fully automatable.  Only step 7 needs an ear.
 # Everything before it is silent; step 7 is the one thing a human has to confirm.
 #
-# WHY THIS IS KEPT.  A native ALSA backend is NOT planned — see
-# ../../SYSTEM_ANALYSIS.md#34-audio, which records it as a theoretical improvement
-# with a marginal win.  This probe stays because that section cites it three times
-# as the provenance for what hw:0,0 actually grants; it is a measurement record of
-# the hardware, not preparation for a port.
+# WHY THIS IS KEPT.  It is the measurement record of what hw:0,0 grants, cited as
+# provenance by ../../SYSTEM_ANALYSIS.md#34-audio, and the ranges it prints are what
+# common/audio_out.c's ALSA backend negotiates against through plughw:0,0 — a record
+# of the hardware, independent of any one client.
 
 set -u
 PCM=hw:0,0

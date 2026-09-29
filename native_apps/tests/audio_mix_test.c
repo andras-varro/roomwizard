@@ -130,13 +130,15 @@
  * Build (from native_apps/).  ⚠️ `common/audio_out.c` is not optional: `audio.h`
  * includes `audio_out.h` and every `Audio` embeds an `AudioOut`, so the link fails
  * without it — which is the right failure.  `build-and-deploy.sh` gets it from
- * `$COMMON_OBJ`; this line is for building the tool by hand.
- *   arm-linux-gnueabihf-gcc -O2 -static -I. tests/audio_mix_test.c \
+ * `$COMMON_OBJ`; this line is for building the tool by hand, with that script's
+ * soft-float compiler and ALSA flags.
+ *   arm-linux-gnueabi-gcc -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp \
+ *     -O2 -I. -DAUDIO_OUT_HAVE_ALSA -Iarm-deps-softfp/usr/include tests/audio_mix_test.c \
  *     common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \
  *     common/touch_input.c \
  *     common/framebuffer.c common/hardware.c common/common.c \
  *     common/config.c common/highscore.c common/keyboard.c \
- *     -o build/audio_mix_test -lm
+ *     -o build/audio_mix_test -lm -Larm-deps-softfp/usr/lib -lasound
  */
 
 #include <stdio.h>

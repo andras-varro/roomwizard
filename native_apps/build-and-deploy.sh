@@ -130,36 +130,26 @@ echo " RoomWizard Build + Deploy"
 echo "════════════════════════════════════════"
 info "Started — $(date '+%Y-%m-%d %H:%M:%S')"
 
-# Toolchain and link mode.  Default: hard-float, fully -static.  RW_ABI=softfp builds
-# DYNAMIC against the device's own soft-float userspace — the same switch as
-# scummvm-roomwizard/build-and-deploy.sh, whose comment carries the loader/glibc
-# mechanism and why armv7-a is still divide-free.  The flags ride inside CC so every
-# compile and link line below gets them.
+# Toolchain and link mode: soft-float ABI, DYNAMIC against the device's own soft-float
+# glibc userspace — the same settings as scummvm-roomwizard/build-and-deploy.sh, whose
+# comment carries the loader/glibc mechanism and why armv7-a is still divide-free.  The
+# flags ride inside CC so every compile and link line below gets them.
 #
-# softfp also turns on common/audio_out.c's ALSA backend: an explicit define, the
-# alsa-lib headers and -lasound on every link that carries audio_out.o.  The
-# libasound linked against is built by build-alsa-lib.sh and never deployed — the
-# device's own libasound.so.2 is the runtime.  Hard-float stays OSS-only: a
-# hard-float binary cannot load the device's soft-float libasound at all.
-AUDIO_CFLAGS=()
-AUDIO_LIBS=()
-if [ "${RW_ABI:-hardfloat}" = softfp ]; then
-    TC=arm-linux-gnueabi
-    ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
-    LINK_MODE=""
-    ALSA_PREFIX="$SCRIPT_DIR/arm-deps-softfp"
-    if [ ! -e "$ALSA_PREFIX/usr/lib/libasound.so" ]; then
-        info "alsa-lib not built yet — running build-alsa-lib.sh"
-        bash "$SCRIPT_DIR/build-alsa-lib.sh"
-    fi
-    AUDIO_CFLAGS=(-DAUDIO_OUT_HAVE_ALSA "-I$ALSA_PREFIX/usr/include")
-    AUDIO_LIBS=("-L$ALSA_PREFIX/usr/lib" -lasound)
-else
-    TC=arm-linux-gnueabihf
-    ARMFLAGS=""
-    LINK_MODE="-static"
+# The dynamic link is what lets common/audio_out.c play through ALSA: an explicit
+# define, the alsa-lib headers and -lasound on every link that carries audio_out.o.
+# The libasound linked against is built by build-alsa-lib.sh into its own per-ABI
+# prefix (arm-deps-softfp) and never deployed — the device's own libasound.so.2 is
+# the runtime.  A hard-float binary could not load that soft-float library at all.
+TC=arm-linux-gnueabi
+ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
+ALSA_PREFIX="$SCRIPT_DIR/arm-deps-softfp"
+if [ ! -e "$ALSA_PREFIX/usr/lib/libasound.so" ]; then
+    info "alsa-lib not built yet — running build-alsa-lib.sh"
+    bash "$SCRIPT_DIR/build-alsa-lib.sh"
 fi
-CC="$TC-gcc${ARMFLAGS:+ $ARMFLAGS}"
+AUDIO_CFLAGS=(-DAUDIO_OUT_HAVE_ALSA "-I$ALSA_PREFIX/usr/include")
+AUDIO_LIBS=("-L$ALSA_PREFIX/usr/lib" -lasound)
+CC="$TC-gcc $ARMFLAGS"
 
 # Warning flags applied to every compile line.  These are advisory only — the build
 # does not use -Werror, because ~30k lines of C were written with warnings off and a
@@ -179,24 +169,24 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/37" "framebuffer";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/37" "touch_input";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/touch_input.c    -o build/touch_input.o
-step " 3/37" "touch_calib";  $CC "${WARN[@]}" -O2 $LINK_MODE -c common/touch_calib.c    -o build/touch_calib.o
-step " 4/37" "hardware";     $CC "${WARN[@]}" -O2 $LINK_MODE -c common/hardware.c        -o build/hardware.o
-step " 5/37" "common";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/common.c          -o build/common.o
-step " 6/37" "highscore";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/highscore.c       -o build/highscore.o
-step " 7/37" "keyboard";     $CC "${WARN[@]}" -O2 $LINK_MODE -c common/keyboard.c        -o build/keyboard.o
-step " 8/37" "ui_layout";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/ui_layout.c       -o build/ui_layout.o
-step " 9/37" "audio";        $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio.c           -o build/audio.o
-step "10/37" "audio_gen";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_gen.c       -o build/audio_gen.o
-step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 $LINK_MODE "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
-step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_wav.c       -o build/audio_wav.o
-step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 $LINK_MODE -c common/audio_bed.c       -o build/audio_bed.o
-step "14/37" "ppm";          $CC "${WARN[@]}" -O2 $LINK_MODE -c common/ppm.c             -o build/ppm.o
-step "15/37" "logger";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/logger.c          -o build/logger.o
-step "16/37" "config";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/config.c          -o build/config.o
-step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 $LINK_MODE -c common/gamepad.c         -o build/gamepad.o
-                              $CC "${WARN[@]}" -O2 $LINK_MODE -c common/input_scan.c      -o build/input_scan.o
+step " 1/37" "framebuffer";  $CC "${WARN[@]}" -O2 -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/37" "touch_input";  $CC "${WARN[@]}" -O2 -c common/touch_input.c    -o build/touch_input.o
+step " 3/37" "touch_calib";  $CC "${WARN[@]}" -O2 -c common/touch_calib.c    -o build/touch_calib.o
+step " 4/37" "hardware";     $CC "${WARN[@]}" -O2 -c common/hardware.c        -o build/hardware.o
+step " 5/37" "common";       $CC "${WARN[@]}" -O2 -c common/common.c          -o build/common.o
+step " 6/37" "highscore";    $CC "${WARN[@]}" -O2 -c common/highscore.c       -o build/highscore.o
+step " 7/37" "keyboard";     $CC "${WARN[@]}" -O2 -c common/keyboard.c        -o build/keyboard.o
+step " 8/37" "ui_layout";    $CC "${WARN[@]}" -O2 -c common/ui_layout.c       -o build/ui_layout.o
+step " 9/37" "audio";        $CC "${WARN[@]}" -O2 -c common/audio.c           -o build/audio.o
+step "10/37" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
+step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
+step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
+step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
+step "14/37" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
+step "15/37" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
+step "16/37" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
+step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
+                              $CC "${WARN[@]}" -O2 -c common/input_scan.c      -o build/input_scan.o
 
 # gamepad.c finds its devices through input_scan.c (classifier + event* walk),
 # so every binary that links gamepad.o links both — name GAMEPAD_OBJ, never
@@ -215,10 +205,10 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 #
 # audio_out.o joined them in Phase 2 and is not optional either: `audio.h`
 # includes `audio_out.h` and every `Audio` embeds an `AudioOut`, so the link
-# fails without it rather than degrading — which is the right failure.  ⚠️ It is
-# ALSO what makes `native_apps` the only component to redeploy for a change to
-# `common/audio*.c`: neither vnc_client (its Makefile's SRCS) nor ScummVM links
-# any of the three today; ScummVM has its own OSS mixer.
+# fails without it rather than degrading — which is the right failure.  ⚠️ The
+# redeploy price differs per object: vnc_client (its Makefile's SRCS) links none of
+# them, but ScummVM links audio_out.o and audio_gen.o through configure.patch, so
+# a change to either of those goes out with ScummVM too (../CLAUDE.md, the table).
 #
 # audio_wav.o joined in Phase 8 and is not optional either, for a DIFFERENT and
 # less obvious reason than audio_out.o's: `audio.h` includes `audio_wav.h` and
@@ -240,51 +230,51 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "18/37" "snake";        $CC "${WARN[@]}" -O2 $LINK_MODE snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
-step "19/37" "tetris";       $CC "${WARN[@]}" -O2 $LINK_MODE tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
-step "20/37" "pong";         $CC "${WARN[@]}" -O2 $LINK_MODE pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
+step "18/37" "snake";        $CC "${WARN[@]}" -O2 snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
+step "19/37" "tetris";       $CC "${WARN[@]}" -O2 tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
+step "20/37" "pong";         $CC "${WARN[@]}" -O2 pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
 
 step "21/37" "brick_breaker"
-$CC "${WARN[@]}" -O2 $LINK_MODE brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
 
 step "22/37" "samegame"
-$CC "${WARN[@]}" -O2 $LINK_MODE samegame/samegame.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/samegame -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 samegame/samegame.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/samegame -lm "${AUDIO_LIBS[@]}"
 
 step "23/37" "frogger"
-$CC "${WARN[@]}" -O2 $LINK_MODE frogger/frogger.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/frogger -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 frogger/frogger.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/frogger -lm "${AUDIO_LIBS[@]}"
 
 step "24/37" "platformer"
-$CC "${WARN[@]}" -O2 $LINK_MODE platformer/platformer.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/platformer -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 platformer/platformer.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/platformer -lm "${AUDIO_LIBS[@]}"
 
 step "25/37" "game_selector"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
 
 step "26/37" "app_launcher"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
 
 step "27/37" "hardware_test"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm "${AUDIO_LIBS[@]}"
 
 step "28/37" "hardware_config"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_config -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_config -lm "${AUDIO_LIBS[@]}"
 
 step "29/37" "hardware_diag"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm "${AUDIO_LIBS[@]}"
 
 step "30/37" "audio_touch_test"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. \
+$CC "${WARN[@]}" -O2 -I. \
   tests/audio_touch_test.c \
   "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
   -o build/audio_touch_test -lm "${AUDIO_LIBS[@]}"
 
 step "31/37" "backlight"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
+$CC "${WARN[@]}" -O2 -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 # Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "32/37" "device_tools"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
@@ -292,23 +282,23 @@ $CC "${WARN[@]}" -O2 $LINK_MODE -I. device_tools/device_tools.c device_tools/usb
 # path, so it announced success and delivered nothing to any reader. Injection
 # needs /dev/uinput and this kernel has none — ../CLAUDE.md carries the rule.
 step "33/37" "touch_raw"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
 
 step "34/37" "touch_trace"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm "${AUDIO_LIBS[@]}"
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the panel.
 step "35/37" "audio_mix_test"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
 
 # What a smaller drawing surface costs, so the DSS-overlay question is settled by
 # a number rather than by the arithmetic that predicts one.  Device only — the
 # figure is this SoC's store bandwidth and no host run predicts it.  Hidden from
 # the grid: it repaints as fast as it can for a fixed frame count and exits.
 step "36/37" "fb_plane_bench"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_plane_bench -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_plane_bench -lm "${AUDIO_LIBS[@]}"
 
 # Whether the DSS scaler LOOKS acceptable, which the per-frame cost above cannot
 # say.  Links nothing from common/ on purpose: it programs fb1 and overlay1
@@ -316,7 +306,7 @@ $CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o
 # only and hidden from the grid — it changes framebuffer modes and the eye at the
 # panel is the only reader of its result.
 step "37/37" "dss_scale_ab"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. tests/dss_scale_ab.c -o build/dss_scale_ab
+$CC "${WARN[@]}" -O2 -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 
 # Collect icon files from source dirs → build/icons/
 mkdir -p build/icons

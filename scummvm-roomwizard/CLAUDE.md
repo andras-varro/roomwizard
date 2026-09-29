@@ -33,7 +33,7 @@ Consequences you must respect:
 ./build-and-deploy.sh <ip>            # the supported path (all|clean|configure|build|strip|deploy|set-default|info)
 ```
 
-`build_arm_deps()` cross-compiles zlib and libpng into `arm-deps/` and is idempotent. It runs on
+`build_arm_deps()` cross-compiles zlib and libpng into `arm-deps-softfp/` and is idempotent. It runs on
 every code path — do not add a shortcut that skips it.
 
 **Warning baseline: two, both pre-existing** (recorded 2026-08-03) — `oss-mixer.cpp:298`
@@ -58,7 +58,7 @@ recognized").
 
 **Never trust `config.mk`; check the artifact.** A stale `USE_PNG = 1` from an earlier configure
 once made `make` compile `image/png.cpp` with no `libpng.a` on disk, failing on `png.h`. Test for
-`arm-deps/lib/libpng.a`, not for the flag.
+`arm-deps-softfp/lib/libpng.a`, not for the flag.
 
 Ubuntu Focal WSL cannot do armhf multiarch (`dpkg --add-architecture armhf` fails — the standard
 mirrors carry no armhf), which is why dependencies are built from source rather than installed.
@@ -89,10 +89,10 @@ produces link errors, the options are an older-glibc toolchain, a sysroot with 4
 musl, or dynamic linking — not `--whole-archive`.
 
 ⚠️ **What `build-and-deploy.sh` actually needs is plain `-lpthread`, and it appends exactly that**
-(`build-and-deploy.sh:442`). `oss-mixer.cpp` starts the service thread, so the link genuinely needs the
+(`build-and-deploy.sh:455`). `oss-mixer.cpp` starts the service thread, so the link genuinely needs the
 library: with no `-lpthread` at all it fails with `undefined reference to pthread_create`/`pthread_join`
 from `oss-mixer.cpp`, measured 2026-09-01 by removing the append and rebuilding. A
-`--whole-archive -lpthread` append lived there for months and did **not** crash, because the link is
+`--whole-archive -lpthread` append lived there for months and did **not** crash, because the link was then
 `-static` — that is what kept the hazard off, not any weakness in the rule above. The rule stands as
 written, and the call site no longer contradicts it.
 
@@ -197,20 +197,19 @@ Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-
 
 ## Audio
 
-The OSS shim's bugs are device facts and documented in
+The device facts are documented in
 [`../SYSTEM_ANALYSIS.md`](../SYSTEM_ANALYSIS.md#34-audio). The backend-specific consequences:
 
-- **Mono, 22050 Hz.** Stereo is not merely unsupported — the shim silently ignores
-  `SNDCTL_DSP_STEREO`, so interleaved L/R gets consumed as separate frames and everything plays
-  at half speed. Mono also halves OPL synthesis load. ScummVM's mixer downmixes automatically.
-- **Set SPEED -> FMT -> CHANNELS**, then read back with `SOUND_PCM_READ_RATE/BITS/CHANNELS` and
-  use the *read-back* rate for `_outputRate`. Set-ioctl return values do not reflect device state,
-  and a wrong `_outputRate` makes OPL run at the wrong tempo.
-- **The device half is not this file's.** `O_NONBLOCK`, the ioctl order and read-backs, the ring
+- **Mono request, 22050 Hz.** Mono halves OPL synthesis load, but it is a REQUEST: `hw:0,0` is
+  stereo-only, and `fillFromMixer()` honours whatever count is granted — a fill that ignored the
+  grant would play at the wrong speed. ScummVM's mixer downmixes automatically.
+- **Use the GRANTED rate for `_outputRate`** — `audio_out_rate()` after the open, never the request;
+  a wrong `_outputRate` makes OPL run at the wrong tempo.
+- **The device half is not this file's.** The ALSA open, the negotiation and read-backs, the ring
   query, the silence prefill and the `EAGAIN` retry all live in `common/audio_out.{c,h}`; this is an
   adapter. ⚠️ **The wall-clock deadline and the emergency second write were DELETED, not moved** —
   the thread paces off `audio_out_service_interval_us()`, and `oss-mixer.cpp:45-58` says why.
-- **No `SNDCTL_DSP_SETFRAGMENT`** — the default ~500 ms ring is the jitter buffer.
+- **No forced small period** — `audio_out.c` requests 2048 x 16 frames; the ring is the jitter buffer.
 - **`SCHED_OTHER`, never `SCHED_RR`.** An RT audio thread starves the main thread on this single
   core and you get a black screen.
 

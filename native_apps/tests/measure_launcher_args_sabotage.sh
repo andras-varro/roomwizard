@@ -68,7 +68,7 @@ run() {
 
     # "$W/c" ahead of "." is the whole mechanism: the test includes
     # "app_launcher/app_launcher.c" and this is what makes that the broken copy.
-    if ! gcc "${CFLAGS[@]}" -I "$W/c" -I. -Itests/hostshim \
+    if ! gcc "${CFLAGS[@]}" -I "$W/c" -I. \
              -Dmain=app_launcher_main_unused -o "$W/t" \
              "$HERE/launcher_args_test.c" "${SRCS[@]}" -lm 2>"$W/cc.log"; then
         printf '%-3s %-46s %s\n' "$g" "$name" \

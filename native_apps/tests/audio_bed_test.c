@@ -37,7 +37,7 @@
  *
  * Build and run (host gcc — build-and-deploy.sh does not run this):
  *
- *   gcc -Wall -Wextra -Wno-unused-parameter -I common -Itests/hostshim \
+ *   gcc -Wall -Wextra -Wno-unused-parameter -I common \
  *       -o build/audio_bed_test tests/audio_bed_test.c \
  *       common/audio_bed.c common/config.c \
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \

@@ -225,7 +225,8 @@ EOF
 # ── Why this has to exist ───────────────────────────────────────────────────
 #
 # `deploy-all.sh <ip>` BUILDS: it runs each component's build-and-deploy.sh, which
-# needs arm-linux-gnueabihf-gcc.  The person being delivered to has no toolchain by
+# needs the ARM cross-compilers (arm-linux-gnueabi-gcc; arm-linux-gnueabihf-gcc for
+# vnc_client).  The person being delivered to has no toolchain by
 # definition — that is what a release bundle is for — so until this existed the
 # offline card path was the ONLY way to put binaries on a unit, even for someone
 # who already had SSH to it.

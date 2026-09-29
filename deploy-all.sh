@@ -19,7 +19,8 @@
 #
 # ── --from-bundle: the delivery mode, and why it is here ────────────────────
 #
-# Every other mode BUILDS, so every other mode needs arm-linux-gnueabihf-gcc.
+# Every other mode BUILDS, so every other mode needs the ARM cross-compilers
+# (arm-linux-gnueabi-gcc, and arm-linux-gnueabihf-gcc for vnc_client).
 # Someone being handed a device has no toolchain — that is what a release bundle is
 # for — so before this existed, the offline card pass was the only way to put
 # binaries on a unit even for someone who already had SSH to it.

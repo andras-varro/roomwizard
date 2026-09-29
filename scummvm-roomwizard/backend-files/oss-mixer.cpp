@@ -40,7 +40,7 @@
 // deadline and its own emergency second write.  All of that is the DEVICE half,
 // all of it is now audio_out.{c,h}, and there is one implementation of it because
 // more emulator ports are coming: the next one adapts here rather than writing a
-// third OSS backend.
+// third device backend.
 //
 // ⚠️ Two things about the old code are deliberately NOT carried over:
 //
@@ -140,10 +140,8 @@ void OssMixerManager::init() {
 	// ⚠️ channels_req stays 1.  audio_out.h: forcing stereo doubles this mixer's
 	// work and its byte count on a core already at ~32 % with Full Throttle.
 	// It is a REQUEST — see fillFromMixer() for what happens when it is not
-	// granted, which through OSS on both of this device's cards is always
-	// (ALSA's plughw may grant 1 and convert — either grant is honoured).
-	// audio_out_open_default() picks ALSA in a soft-float build unless
-	// RW_AUDIO_OSS is set, so the backend is an A/B inside one binary.
+	// granted (hw:0,0 is stereo-only; plughw may grant 1 and convert — either
+	// grant is honoured).
 	if (!openDevice()) {
 		// No usable device — fall back to a silent mixer so ScummVM still works.
 		warning("OssMixerManager: cannot open an output device (%s), audio disabled",

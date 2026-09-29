@@ -14,7 +14,7 @@
  * compiled, so every object app_launcher normally links has to be present even
  * though only parse_args() is ever called.
  *
- *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim -Dmain=app_launcher_main_unused \
+ *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I. -Dmain=app_launcher_main_unused \
  *       -o build/launcher_args_test tests/launcher_args_test.c \
  *       common/framebuffer.c common/touch_input.c common/hardware.c common/common.c \
  *       common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c \

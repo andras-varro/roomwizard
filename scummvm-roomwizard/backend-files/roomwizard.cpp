@@ -185,7 +185,7 @@ void OSystem_RoomWizard::initBackend() {
 	// Create save file manager
 	_savefileManager = new DefaultSaveFileManager();
 	
-	// OSS mixer — drives /dev/dsp (ALSA OSS compat, TWL4030 codec)
+	// Mixer over native_apps' audio_out — ALSA plughw:N,0 through libasound (TWL4030 or a USB DAC)
 	_mixerManager = new OssMixerManager();
 	_mixerManager->init();
 	

@@ -11,8 +11,8 @@
  * GROUP A IS THE NEGATIVE CONTROL and it drives the OLD idiom, transcribed from
  * the shipped file (`audio.c` as of 2026-08-18, 710 lines):
  *
- *   A1  a ring reset before EVERY sound.  `audio_flush()` (audio.c:206-215) fires
- *       it and re-runs `configure_dsp()`, and `play_sequence()` (:679) calls it
+ *   A1  a ring reset before EVERY sound.  `audio_flush()` (audio.c:206-215) fired
+ *       it and re-ran `configure_dsp()`, and `play_sequence()` (:679) called it
  *       before each canned sound — so a game with N sounds performs N stream
  *       transitions, which is what the operator hears as "every time there is a
  *       sound, there is a click".
@@ -270,7 +270,7 @@ static void fake_wait(void *ctx, int usec)
     f->waits++;
     /* ⚠️ Counting a wait and counting a SLEEP are different measurements, and only
      * the second one can test "service() never sleeps".  Every real backend's wait
-     * (`oss_wait()`, `dsp_wait`) is a no-op at `usec <= 0`, and the serviced policy
+     * (`alsa_wait()`, `dsp_wait`) is a no-op at `usec <= 0`, and the serviced policy
      * passes 0 — so the call still arrives here and must not be counted as sleep.
      * Without this split the non-zero-wait sabotage passed the whole suite. */
     if (usec > 0) f->waits_slept++;

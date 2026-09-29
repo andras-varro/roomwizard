@@ -84,28 +84,21 @@ DEVICE_PATH="/opt/games"
 # worked only because deploy-all.sh wraps it in a subshell cd.
 SCUMMVM_DIR="$REPO_ROOT/scummvm"
 NATIVE_APPS_DIR="$REPO_ROOT/native_apps"
-ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps"
+# arm-deps gets its own prefix per ABI: build_arm_deps skips on an existing libpng.a, so a
+# prefix shared with the earlier hard-float -static builds would silently reuse the wrong one.
+ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps-softfp"
 
-# Toolchain and link mode.  Default: hard-float, fully -static (what every shipped binary
-# was up to tag static-only-last).  RW_ABI=softfp builds DYNAMIC against the device's own
-# userspace, which is soft-float ABI (loader /lib/ld-linux.so.3, glibc 2.31) — a hard-float
-# binary can never load its libc, libasound or libstdc++.  Without the explicit flags that
-# toolchain targets armv5; armv7-a still has no hardware divide, so check-arm-safe holds.
-# The flags ride inside CC/CXX so that every compile and link — configure's probes, the
-# engines and native_apps/common alike — gets them.  arm-deps gets its own prefix per ABI:
-# build_arm_deps skips on an existing libpng.a and would otherwise reuse the wrong one.
-if [ "${RW_ABI:-hardfloat}" = softfp ]; then
-    TC=arm-linux-gnueabi
-    ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
-    LINK_MODE=""
-    ARM_DEPS_PREFIX="$SCRIPT_DIR/arm-deps-softfp"
-else
-    TC=arm-linux-gnueabihf
-    ARMFLAGS=""
-    LINK_MODE="-static"
-fi
-TC_CC="$TC-gcc${ARMFLAGS:+ $ARMFLAGS}"
-TC_CXX="$TC-g++${ARMFLAGS:+ $ARMFLAGS}"
+# Toolchain and link mode: soft-float ABI, DYNAMIC against the device's own userspace,
+# which is soft-float ABI (loader /lib/ld-linux.so.3, glibc 2.31) — a hard-float binary
+# can never load its libc, libasound or libstdc++.  (Every binary up to tag
+# static-only-last was hard-float and fully -static instead.)  Without the explicit flags
+# that toolchain targets armv5; armv7-a still has no hardware divide, so check-arm-safe
+# holds.  The flags ride inside CC/CXX so that every compile and link — configure's
+# probes, the engines and native_apps/common alike — gets them.
+TC=arm-linux-gnueabi
+ARMFLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
+TC_CC="$TC-gcc $ARMFLAGS"
+TC_CXX="$TC-g++ $ARMFLAGS"
 
 # Engine batch level (0-5). Each level includes all engines from previous levels.
 # 0 = base (8 original engines only)
@@ -456,29 +449,26 @@ configure_build() {
     # pthread startup, which calls the 64-bit-time clock syscall that native_apps/CLAUDE.md
     # names — unimplemented on this 4.14.52 kernel, so it gets -ENOSYS and dereferences a
     # NULL VDSO pointer: SIGSEGV before main(), blank screen, no log.  An append of that
-    # form lived here and did not crash, because -static (the make line below) kept the
+    # form once lived here and did not crash, because the -static link of that era kept the
     # hazard off; it was still the wrong way to get -lpthread onto the line, since the
-    # crash returns for anyone who builds this without -static.
+    # crash returns for any build without -static — which this dynamic build is.
     echo "LIBS += -lpthread" >> config.mk
 
-    # softfp also turns on native_apps/common/audio_out.c's ALSA backend, which this
-    # build compiles as one of its own OBJS (configure.patch) — so the define and the
+    # The dynamic link also turns on native_apps/common/audio_out.c's ALSA backend, which
+    # this build compiles as one of its own OBJS (configure.patch) — so the define and the
     # alsa-lib headers go on ScummVM's DEFINES/INCLUDES, and -lasound after the objects
     # on LIBS.  The same prefix native_apps links against, built by the same script;
-    # never deployed, the device's own libasound.so.2 is the runtime.  Hard-float stays
-    # OSS-only: it cannot load the device's soft-float libasound.
-    if [ "${RW_ABI:-hardfloat}" = softfp ]; then
-        ALSA_PREFIX="$NATIVE_APPS_DIR/arm-deps-softfp"
-        if [ ! -e "$ALSA_PREFIX/usr/lib/libasound.so" ]; then
-            log_info "alsa-lib not built yet — running native_apps/build-alsa-lib.sh"
-            bash "$NATIVE_APPS_DIR/build-alsa-lib.sh"
-        fi
-        {
-            echo "DEFINES += -DAUDIO_OUT_HAVE_ALSA"
-            echo "INCLUDES += -I$ALSA_PREFIX/usr/include"
-            echo "LIBS += -L$ALSA_PREFIX/usr/lib -lasound"
-        } >> config.mk
+    # never deployed, the device's own libasound.so.2 is the runtime.
+    ALSA_PREFIX="$NATIVE_APPS_DIR/arm-deps-softfp"
+    if [ ! -e "$ALSA_PREFIX/usr/lib/libasound.so" ]; then
+        log_info "alsa-lib not built yet — running native_apps/build-alsa-lib.sh"
+        bash "$NATIVE_APPS_DIR/build-alsa-lib.sh"
     fi
+    {
+        echo "DEFINES += -DAUDIO_OUT_HAVE_ALSA"
+        echo "INCLUDES += -I$ALSA_PREFIX/usr/include"
+        echo "LIBS += -L$ALSA_PREFIX/usr/lib -lasound"
+    } >> config.mk
 
     # Verify CC and CXX are set correctly in config.mk
     CC_SET=$(grep "^CC " config.mk | head -1 || echo "")
@@ -533,12 +523,11 @@ build_scummvm() {
         cd "$SCUMMVM_DIR"
     fi
     # The ALSA appends live inside configure_build, so a config.mk from before them —
-    # or from the other RW_ABI — skips them silently and audio_out.o builds OSS-only.
-    # Measured 2026-09-28: a softfp build shipped on /dev/dsp1 exactly that way.
-    WANT_ALSA=no; [ "${RW_ABI:-hardfloat}" = softfp ] && WANT_ALSA=yes
-    HAVE_ALSA=no; grep -q "AUDIO_OUT_HAVE_ALSA" config.mk && HAVE_ALSA=yes
-    if [ "$WANT_ALSA" != "$HAVE_ALSA" ]; then
-        log_warning "Stale config detected (ALSA backend $HAVE_ALSA, RW_ABI wants $WANT_ALSA), reconfiguring..."
+    # or one left by an earlier hard-float -static build — skips them silently, and
+    # audio_out.o then stops at its #error (ALSA is its only device backend).
+    # Measured 2026-09-28: a softfp build once shipped on OSS exactly that way.
+    if ! grep -q "AUDIO_OUT_HAVE_ALSA" config.mk; then
+        log_warning "Stale config detected (no ALSA backend), reconfiguring..."
         configure_build
         cd "$SCUMMVM_DIR"
     fi
@@ -550,10 +539,12 @@ build_scummvm() {
     log_info "Cleaning native_apps/common/*.o (avoid stale cross-compile artifacts)..."
     rm -f "$NATIVE_APPS_DIR/common/"*.o
     
-    # Build with static linking
+    # Build, linked dynamically against the device's soft-float userspace (see TC above)
     # Use -j4 for parallel compilation (adjust based on CPU cores)
     # Pass CC explicitly to ensure .c files use the ARM cross-compiler
-    make -j4 CC="$TC_CC" LDFLAGS="$LINK_MODE"
+    # LDFLAGS stays overridden to empty: it was the -static slot, and the dynamic link was
+    # verified on the device built exactly this way.
+    make -j4 CC="$TC_CC" LDFLAGS=""
     
     # Check if binary was created
     if [ -f "scummvm" ]; then
@@ -877,7 +868,7 @@ show_info() {
     echo "  - Framebuffer rendering (800x480)"
     echo "  - Bezel-aware viewport scaling"
     echo "  - Virtual keyboard (vkeybd_roomwizard.zip)"
-    echo "  - Audio via TWL4030 speaker (/dev/dsp OSS, O_NONBLOCK, 22050 Hz, 50% attenuation)"
+    echo "  - Audio via ALSA (plughw, non-blocking, 22050 Hz, 50% attenuation)"
     echo ""
 }
 

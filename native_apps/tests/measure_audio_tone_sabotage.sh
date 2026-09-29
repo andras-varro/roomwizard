@@ -25,7 +25,7 @@ run() {
   if diff -q "$W/c/common/audio.c" common/audio.c >/dev/null && \
      diff -q "$W/c/common/audio.h" common/audio.h >/dev/null; then
      echo "$name: NO-OP EDIT — pattern rotted"; return; fi
-  gcc -Wall -Wextra -Wno-unused-parameter -I "$W/c" -Itests/hostshim -o "$W/t" \
+  gcc -Wall -Wextra -Wno-unused-parameter -I "$W/c" -o "$W/t" \
       tests/audio_tone_test.c "$W/c/common/audio.c" "$W/c/common/audio_gen.c" \
       "$W/c/common/audio_out.c" "$W/c/common/audio_wav.c" "$W/c/common/config.c" \
       -lm 2>"$W/cc.log" || {

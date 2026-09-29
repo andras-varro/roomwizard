@@ -27,16 +27,15 @@
  * not evidence.  Keep it compilable against both sides.
  *
  * ⚠️ **`common/audio.c` is the device half, and this is the first host test to link
- * it.**  It has no `__has_include` split the way `common/audio_out.c` does
- * (`audio_out.c:465-478`) and it must not grow one — it has nothing to degrade TO.
- * `tests/hostshim/sys/soundcard.h` supplies the header this host spells
- * `<linux/soundcard.h>` instead, so `audio.c` compiles unmodified.  Nothing here
- * opens `/dev/dsp`: mk_audio() builds an `Audio` by hand, which is legitimate
+ * it.**  It compiles unmodified on host gcc: the device code is all in
+ * `common/audio_out.c`, whose ALSA backend is compiled only under
+ * `-DAUDIO_OUT_HAVE_ALSA`, so the host links its refusing stub.  Nothing here
+ * opens a device: mk_audio() builds an `Audio` by hand, which is legitimate
  * because `struct Audio` is public in `audio.h` and `audio_tone()` touches no fd —
  * it adds a voice to the bus and nothing more.
  *
  * Build and run (host gcc, from native_apps/):
- *   gcc -Wall -Wextra -Wno-unused-parameter -I. -Itests/hostshim \
+ *   gcc -Wall -Wextra -Wno-unused-parameter -I. \
  *       -o build/audio_tone_test tests/audio_tone_test.c \
  *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm && \
  *   ./build/audio_tone_test
@@ -63,17 +62,19 @@
  * HEAD — and HEAD was silenced identically, so the comparison agreed.  ⚠️ **If a
  * failure count here is not ZERO, read the failing lines; never restore a paragraph
  * that explains a number away.**
- * It also runs ON THE DEVICE, and there the shim is not wanted — the cross
- * toolchain has the real `<sys/soundcard.h>`, so leaving `-Itests/hostshim` off is
- * what makes the ARM binary compile the same header the shipped build does.  It
- * needs no framebuffer and no touch, only /dev/null, so it is one of the few
- * on-device checks that needs no human at the panel:
- *   arm-linux-gnueabihf-gcc -Wall -Wextra -Wno-unused-parameter -O2 -static -I. \
- *       -o build/audio_tone_test_arm tests/audio_tone_test.c \
- *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c -lm
+ * It also runs ON THE DEVICE, built the way the shipped build is — soft-float,
+ * dynamic, ALSA backend on (native_apps/build-and-deploy.sh builds the alsa-lib
+ * prefix).  It needs no framebuffer and no touch, only /dev/null, so it is one of
+ * the few on-device checks that needs no human at the panel:
+ *   arm-linux-gnueabi-gcc -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp \
+ *       -Wall -Wextra -Wno-unused-parameter -O2 -I. -DAUDIO_OUT_HAVE_ALSA \
+ *       -Iarm-deps-softfp/usr/include -o build/audio_tone_test_arm tests/audio_tone_test.c \
+ *       common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c \
+ *       -Larm-deps-softfp/usr/lib -lasound -lm
  *   scp build/audio_tone_test_arm root@<ip>:/tmp/ && \
  *   ssh root@<ip> "chmod +x /tmp/audio_tone_test_arm && /tmp/audio_tone_test_arm"
- * Measured 2026-08-19 on RW .188: byte-for-byte the same ok lines as the host,
+ * Measured 2026-08-19 on RW .188 (the hard-float -static build of that date):
+ * byte-for-byte the same ok lines as the host,
  * worst tap tail 200 ms on both.
  *
  * ⚠️ **Group F is a SECOND subject in this file, and it is here rather than in a new

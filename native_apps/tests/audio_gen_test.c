@@ -32,10 +32,10 @@
  *       fade-out (:410-419) is a different generator.  Group C pins the new
  *       oscillator against all three, because collapsing them must keep the
  *       fade REACHABLE, not delete it.
- *   A5  the shipped path CANNOT HOLD TWO SOUNDS.  `audio_beep()` is
- *       `audio_flush(); audio_tone();` and the flush issues SNDCTL_DSP_RESET, so
- *       a beep during a drone leaves the beep alone — zero frames of the drone
- *       survive.  Not a bug; the shape of the code, and what the mix bus
+ *   A5  the pre-pump path COULD NOT HOLD TWO SOUNDS.  `audio_beep()` was
+ *       `audio_flush(); audio_tone();` and the flush issued SNDCTL_DSP_RESET, so
+ *       a beep during a drone left the beep alone — zero frames of the drone
+ *       survived.  Not a bug; the shape of that code, and what the mix bus
  *       has to beat.
  *   A6  three notes queued with no start offset are a CHORD, not an arpeggio.
  *       `audio_success()` is three notes at 45 call sites, so the voice `delay`
@@ -274,9 +274,9 @@ static void old_tone_gen(int rate, int freq_hz, int16_t *mono, long frames)
 
 /* audio.c pre-pump, as a whole: ONE SOUND AT A TIME, by construction.
  *
- * `audio_beep()` is `audio_flush(); audio_tone();` and `audio_flush()` issues
- * SNDCTL_DSP_RESET, which DISCARDS whatever is still queued.  A tone is written
- * whole in one call, so there is no state in which two sounds coexist — not as a
+ * `audio_beep()` was `audio_flush(); audio_tone();` and `audio_flush()` issued
+ * SNDCTL_DSP_RESET, which DISCARDS whatever is still queued.  A tone was written
+ * whole in one call, so there was no state in which two sounds coexist — not as a
  * bug, as the shape of the code.  That is what the mix bus exists to change, and
  * this is the model it has to beat.
  */
@@ -361,7 +361,7 @@ int main(void)
         check(memcmp(a, b, 512 * sizeof(int16_t)) != 0,
               "the fade generator is a DIFFERENT one — collapsing must keep it");
 
-        /* A5: the shipped path cannot hold two sounds AT ALL.  A 200 ms drone is
+        /* A5: the pre-pump path could not hold two sounds AT ALL.  A 200 ms drone is
          * queued, then a beep arrives — audio_flush()'s RESET throws the drone
          * away, and what the DAC gets is the beep alone. */
         memset(&ring, 0, sizeof(ring));

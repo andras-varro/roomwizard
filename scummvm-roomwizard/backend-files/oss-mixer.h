@@ -40,11 +40,11 @@ const char *config_audio_device_stored(void);
  *
  * This class owns exactly three things: the ScummVM mixer, the fill callback
  * that hands its bytes to `AudioOut`, and the thread that services the stream.
- * Everything a device needs — the open, the SPEED → FMT → CHANNELS order and the
+ * Everything a device needs — the open, the format/rate/channel negotiation and the
  * read-back, the ring geometry, the lead, the prefill, the write policy and the
  * underrun accounting — belongs to `audio_out` and must not be reimplemented
  * here.  The next emulator port adapts the same way rather than writing a second
- * OSS backend.  Device facts: ../SYSTEM_ANALYSIS.md#34-audio.
+ * device backend.  Device facts: ../SYSTEM_ANALYSIS.md#34-audio.
  */
 class OssMixerManager : public MixerManager {
 public:

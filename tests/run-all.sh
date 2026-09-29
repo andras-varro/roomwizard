@@ -103,18 +103,18 @@ SUITE_ROWS=(
 
 # ── PHASE 2 table: the host C regressions ──────────────────────────────────
 # name|cflags|sources.  Copied from each file's own header build line and
-# kept in step with it; the two include conventions (-I common and -I.) and
-# the two files that need -Itests/hostshim are real differences, not drift.
+# kept in step with it; the two include conventions (-I common and -I.) are
+# real differences, not drift.
 # All run from native_apps/, all write -o build/<name>, which check-arm-safe.sh
 # already skips and labels "host-compiled tests" — a count that tracks whatever
 # build/ happens to hold, so it is not written here.
 CTEST_ROWS=(
-    "audio_bed_test|-I common -Itests/hostshim|common/audio_bed.c common/config.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
-    "audio_carry_test|-I. -Itests/hostshim -Wl,--wrap=audio_out_open_resolved|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
+    "audio_bed_test|-I common|common/audio_bed.c common/config.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
+    "audio_carry_test|-I. -Wl,--wrap=audio_out_open_resolved|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
     "audio_gen_test|-I common|common/audio_gen.c"
     "audio_out_test|-I common|common/audio_out.c common/audio_gen.c"
     "audio_sample_test|-I.|common/audio_wav.c common/audio_gen.c"
-    "audio_tone_test|-I. -Itests/hostshim|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
+    "audio_tone_test|-I.|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
     "button_latch_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "bezel_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "config_test|-I common|common/config.c"
@@ -123,7 +123,7 @@ CTEST_ROWS=(
     "gamepad_latch_test|-I common|common/gamepad.c common/input_scan.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gradient_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "input_scan_test|-I common|common/input_scan.c"
-    "launcher_args_test|-I. -Itests/hostshim -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/input_scan.c common/ppm.c common/logger.c"
+    "launcher_args_test|-I. -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/input_scan.c common/ppm.c common/logger.c"
     "ppm_test|-I common|common/ppm.c"
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"

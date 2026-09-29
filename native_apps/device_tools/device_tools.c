@@ -33,7 +33,6 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <sys/soundcard.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <linux/fb.h>

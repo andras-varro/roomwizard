@@ -17,13 +17,15 @@
  * Run on device:
  *   /opt/games/audio_touch_test /dev/fb0 /dev/input/touchscreen0
  *
- * Build (from native_apps/):
- *   arm-linux-gnueabihf-gcc -O2 -static -I. \
+ * Build (from native_apps/) — build-and-deploy.sh does; by hand it is that script's
+ * soft-float compiler and ALSA flags:
+ *   arm-linux-gnueabi-gcc -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp \
+ *     -O2 -I. -DAUDIO_OUT_HAVE_ALSA -Iarm-deps-softfp/usr/include \
  *     tests/audio_touch_test.c \
  *     common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \
  *     common/config.c common/touch_input.c common/framebuffer.c \
  *     common/hardware.c common/common.c \
- *     -o build/audio_touch_test -lm
+ *     -o build/audio_touch_test -lm -Larm-deps-softfp/usr/lib -lasound
  */
 
 #include <stdio.h>

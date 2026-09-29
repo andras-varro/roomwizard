@@ -20,7 +20,6 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <sys/soundcard.h>
 
 /* ── Screen constants ───────────────────────────────────────────────────── */
 

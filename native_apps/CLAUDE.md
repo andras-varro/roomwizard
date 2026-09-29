@@ -596,22 +596,20 @@ group A does it that way and labels it.
 
 ## Audio: the generator is separate from the device
 
-`common/audio_gen.c` is the audio logic with **no fd, no ioctl and no clock in it**
-(`tests/audio_gen_test.c`). The device half — `/dev/dsp`, the ioctls, the GPIO12 amp — is
+(`tests/audio_gen_test.c`). The device half — ALSA via libasound, the device resolver, the GPIO12 amp — is
 `common/audio_out.c`, the continuous stream and **the only playback path**: `audio_init()` opens it, and
 if it fails returns -1 and the app is silent, with no fallback. `audio.c` keeps the config gate and the
-client API and **consumes `audio_gen` for everything else**. It includes no OSS header, so it links on
-host gcc as it stands (`tests/audio_tone_test.c`); `tests/hostshim/sys/soundcard.h` matters only to a
-host build of a file that still includes `<sys/soundcard.h>` — `grep -rl sys/soundcard.h` lists them.
+client API and **consumes `audio_gen` for everything else**. It includes no device header, so it links on
+host gcc as it stands (`tests/audio_tone_test.c`), where `audio_out.c` builds its refusing ALSA stub.
 Four rules live there:
 
 - **The channel count is an argument, never a literal.** `hw:0,0` is stereo-only and the speaker sums L + R
   (both measured, [`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), so the generator is
   mono and single-sample and `audio_interleave()` the one conversion point; a `frames * 4` with the 4 spelled
-  out is only accidentally right. Either backend's open reads the GRANTED count back and uses it.
-- **ALSA (`plughw:N,0` for `/dev/dspN`) compiles only under `-DAUDIO_OUT_HAVE_ALSA`, set by the `RW_ABI=softfp`
-  build paths alone — never `__has_include`** (reason and the period request's: comments in `audio_out.c`).
-  `RW_AUDIO_OSS=1` in the environment forces OSS in the same binary: the one-variable on-device A/B.
+  out is only accidentally right. The open reads the GRANTED count back and uses it.
+- **ALSA (`plughw:N,0` for `/dev/dspN`) is the only backend, compiled only under `-DAUDIO_OUT_HAVE_ALSA`, which
+  both device build paths set — never `__has_include`** (reason and the period request's: comments in
+  `audio_out.c`). An ARM build without the define stops at an `#error` rather than shipping silent.
 - ⚠️ **A write must never stop mid-frame.** Half a frame handed to the kernel swaps L and R for the rest of the
   stream, permanently, and a stereo-only interface has no mono path underneath to absorb it.
   `audio_write_frames()` is the only code that decides when to stop: on frame boundaries, or it reports

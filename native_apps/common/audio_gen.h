@@ -130,8 +130,8 @@
 /**
  * The lead the pump should actually target, in frames.
  *
- * PURE: the caller measures `period_frames` off the device (`SNDCTL_DSP_GETOSPACE`'s
- * `fragsize`, or an ALSA period) and passes it in.  `period_frames <= 0` means
+ * PURE: the caller measures `period_frames` off the device (the granted ALSA period)
+ * and passes it in.  `period_frames <= 0` means
  * nothing was measured, and then the ms figure is all there is to go on.
  *
  * Rounds UP to a whole period, because a target between two periods is what

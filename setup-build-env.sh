@@ -10,9 +10,10 @@
 #
 # ⚠️ It installs HOST packages only. The CROSS-COMPILED dependencies already install
 # themselves and are deliberately not listed here: scummvm-roomwizard/build-and-deploy.sh's
-# build_arm_deps fetches and builds zlib + libpng into scummvm-roomwizard/arm-deps/, and
+# build_arm_deps fetches and builds zlib + libpng into scummvm-roomwizard/arm-deps-softfp/,
+# native_apps/build-alsa-lib.sh builds alsa-lib into native_apps/arm-deps-softfp/, and
 # vnc_client/build-deps.sh does zlib / libjpeg-turbo / LibVNCServer into vnc_client/deps/.
-# Both are idempotent and neither needs sudo, so neither belongs in an apt line.
+# All three are idempotent and none needs sudo, so none belongs in an apt line.
 #
 # ⚠️ THE SHELL YOU RUN THIS IN IS PART OF THE MEASUREMENT. Every tool probed below is
 # absent from Git Bash and present in WSL, so a sweep run in the wrong shell reports a host
@@ -120,7 +121,9 @@ esac
 #
 # The arm-linux-gnueabi (soft-float ABI) pair builds DYNAMIC binaries: the device's own
 # userspace is soft-float (loader /lib/ld-linux.so.3), so a hard-float binary can never load
-# its libc, libasound or libstdc++. The gnueabihf set stays for the -static builds.
+# its libc, libasound or libstdc++ — so native_apps and ScummVM build with it. The gnueabihf
+# set stays for vnc_client's hard-float -static build, usb_host's kernel modules and
+# devmem_write, and the objdump check-arm-safe.sh and commission-offline.sh run.
 packages() {
     # PACKAGES_FILE exists only so the regression can drive the probe loop over a fixture
     # table. Nothing in the shipped path sets it.

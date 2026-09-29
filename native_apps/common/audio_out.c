@@ -196,7 +196,6 @@ int audio_out_open(AudioOut *out, const AudioOutDev *dev, void *dev_ctx,
     /* Zero first, so a caller that ignores the return value still holds a struct
      * every entry point reads as closed. */
     memset(out, 0, sizeof(*out));
-    out->oss_fd = -1;
 
     if (g_live > 0) {
         fprintf(stderr, "audio_out: refused — one AudioOut is already open in "
@@ -318,7 +317,6 @@ void audio_out_close(AudioOut *out)
     out->fill_owner = NULL;
     out->dev        = NULL;
     out->dev_ctx    = NULL;
-    out->oss_fd     = -1;
 }
 
 /* ── The one fill callback ──────────────────────────────────────────────── */
@@ -490,27 +488,20 @@ AudioOutErr audio_out_alsa_classify(int err)
     }
 }
 
-/* ── The OSS backend ─────────────────────────────────────────────────────────
- *
- * One of the two device backends below this header (the ALSA one follows it,
- * behind its own guard).  It is compiled out where the OSS
- * headers do not exist, so the host regression links this file with no device in
- * it at all — the same split `audio_gen.c` already has, one level down.
- */
-
 /* ── Which device, and the amp that belongs to one of them ──────────────────
- * ONE home for "which /dev/dsp*", and it sits OUTSIDE the OSS guard below on
- * purpose.  Three callers resolve through here — this file's oss_open(),
+ * ONE home for "which /dev/dsp*", and it sits OUTSIDE the ALSA guard below on
+ * purpose.  Three callers resolve through here — this file's opener,
  * audio.c (which sets the preference and logs the path), and ScummVM's mixer —
- * and only the first is inside that guard, so a host build with no
- * <sys/soundcard.h> must still link the resolution.  That is also what lets
- * tests/audio_out_test.c drive it with no sound card present.
+ * and the ALSA backend is the only part inside that guard, so a host build with
+ * no libasound must still link the resolution.  That is also what lets
+ * tests/audio_out_test.c drive it with no sound card present.  The OSS nodes
+ * are still what is resolved: /dev/dspN existing is how a card is seen, and
+ * audio_out_device_pcm() maps the node to its ALSA PCM.
  *
  * ⚠️ The preference is a file-static, not a field on AudioOut.  audio.c sets
  * it before audio_open(), and audio_open() memsets the struct — a field would
- * be cleared by the very call that needs to read it.  One audio device per process is a fact about the
- * hardware, so one static is the honest shape; contrast the fd, which stays per
- * AudioOut because a process may hold several structs and still one device.
+ * be cleared by the very call that needs to read it.  One audio device per
+ * process is a fact about the hardware, so one static is the honest shape.
  */
 
 #define AUDIO_DEV_ONBOARD "/dev/dsp"      /* TWL4030, the panel speaker */
@@ -605,164 +596,15 @@ void audio_out_enable_amp(void)
     if (f) { fputs("1",   f); fclose(f); }
 }
 
-#if defined(__has_include)
-#  if __has_include(<sys/soundcard.h>)
-#    define AUDIO_OUT_HAVE_OSS 1
-#  endif
-#endif
-
-#ifdef AUDIO_OUT_HAVE_OSS
-
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <sys/soundcard.h>
-
-static int oss_open(void *ctx, int rate_req, int channels_req,
-                    int *rate_granted, int *bits_granted, int *channels_granted)
-{
-    int *fdp = (int *)ctx;
-
-    const char *dev = audio_out_device_path();
-
-    /* ⚠️ GPIO12 is the TWL4030's speaker amp and belongs to /dev/dsp alone.
-     * Poking it while a USB DAC is the sink unmutes a speaker nothing is
-     * feeding, so it is conditional on the resolved device, not unconditional. */
-    if (audio_out_device_is_onboard()) audio_out_enable_amp();
-
-    /* ⚠️ O_NONBLOCK is not an optimisation.  A blocking write() on this device
-     * stalls for a full hardware period once the queue fills, which turns every
-     * subsequent sound into a late one; the write policies above follow the queue
-     * at real-time pace instead. */
-    *fdp = open(dev, O_WRONLY | O_NONBLOCK);
-    if (*fdp < 0) {
-        fprintf(stderr, "audio_out: cannot open %s: %s\n", dev, strerror(errno));
-        return -1;
-    }
-
-    /* ⚠️ SPEED → FMT → CHANNELS, then read all three back.  On this shim SPEED can
-     * reset FMT and CHANNELS, FMT can reset SPEED, and the values the set-ioctls
-     * write back do not necessarily describe the device — only the read-only
-     * ioctls do (../SYSTEM_ANALYSIS.md#34-audio).
-     *
-     * ⚠️ SNDCTL_DSP_CHANNELS, never the deprecated STEREO ioctl: both grant
-     * identically here (measured), and STEREO cannot express a request that is
-     * not 1 or 2 channels. */
-    int val = rate_req;
-    ioctl(*fdp, SNDCTL_DSP_SPEED, &val);
-
-    val = AFMT_S16_LE;
-    ioctl(*fdp, SNDCTL_DSP_SETFMT, &val);
-
-    val = channels_req;
-    ioctl(*fdp, SNDCTL_DSP_CHANNELS, &val);
-
-    int rate = 0, bits = 0, channels = 0;
-    ioctl(*fdp, SOUND_PCM_READ_RATE,     &rate);
-    ioctl(*fdp, SOUND_PCM_READ_BITS,     &bits);
-    ioctl(*fdp, SOUND_PCM_READ_CHANNELS, &channels);
-
-    /* A failed read-back leaves 0, and a 0-channel byte count is 0 — silently
-     * mute.  Fall back to the request and say so; `hw:0,0` is stereo-only, so a
-     * request is at least a number somebody chose. */
-    if (rate <= 0) {
-        fprintf(stderr, "audio_out: SOUND_PCM_READ_RATE gave %d (errno=%d) — "
-                        "using the requested %d\n", rate, errno, rate_req);
-        rate = rate_req;
-    }
-    if (channels <= 0) {
-        fprintf(stderr, "audio_out: SOUND_PCM_READ_CHANNELS gave %d (errno=%d) — "
-                        "using the requested %d\n", channels, errno, channels_req);
-        channels = channels_req;
-    }
-
-    *rate_granted     = rate;
-    *bits_granted     = bits;
-    *channels_granted = channels;
-
-    fprintf(stderr, "audio_out: %s open, granted %d Hz %d-bit %d ch "
-                    "(requested %d Hz %d ch)\n",
-            dev, rate, bits, channels, rate_req, channels_req);
-    return 0;
-}
-
-/* ⚠️ No SETFRAGMENT.  Constraining the ring is what removed the jitter buffer the
- * pacing depends on; the shim grants 2048 frames per period and 16 periods for
- * every rate and channel count measured, i.e. 743 ms at 44100 — NOT the
- * ~506 ms this repo believed for months. */
-static int oss_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
-{
-    int *fdp = (int *)ctx;
-    audio_buf_info info;
-
-    if (frame_bytes <= 0) return -1;
-    if (ioctl(*fdp, SNDCTL_DSP_GETOSPACE, &info) < 0) return -1;
-
-    long total = (long)info.fragstotal * (long)info.fragsize;
-    sp->period_frames = (long)info.fragsize / frame_bytes;
-    sp->ring_frames   = total / frame_bytes;
-    sp->space         = (long)info.bytes / frame_bytes;
-    sp->in_flight     = (total - (long)info.bytes) / frame_bytes;
-    return 0;
-}
-
-/* A failed write() leaves errno as the kernel set it, so an unplugged card's
- * ENODEV reaches out_sink_write() and marks the device lost with no code here. */
-static ssize_t oss_write(void *ctx, const void *buf, size_t nbytes, bool *again)
-{
-    int *fdp = (int *)ctx;
-    ssize_t r = write(*fdp, buf, nbytes);
-    if (r < 0 && errno == EAGAIN) *again = true;
-    return r;
-}
-
-static void oss_wait(void *ctx, int usec)
-{
-    (void)ctx;
-    if (usec > 0) usleep((useconds_t)usec);
-}
-
-static void oss_close(void *ctx)
-{
-    int *fdp = (int *)ctx;
-    if (*fdp >= 0) { close(*fdp); *fdp = -1; }
-}
-
-static const AudioOutDev OSS_DEV = {
-    oss_open, oss_space, oss_write, oss_wait, oss_close
-};
-
-int audio_out_open_oss(AudioOut *out, int rate_req, int channels_req)
-{
-    if (!out) return -1;
-    /* The fd lives in the AudioOut so the vtable needs no allocation and no
-     * static state — one per process is a rule about the DEVICE, not a reason to
-     * keep the fd in a global. */
-    int rc = audio_out_open(out, &OSS_DEV, &out->oss_fd, rate_req, channels_req);
-    if (rc != 0) out->oss_fd = -1;   /* the memset left it 0, which reads as an fd */
-    return rc;
-}
-
-#else  /* no OSS headers: the host */
-
-int audio_out_open_oss(AudioOut *out, int rate_req, int channels_req)
-{
-    (void)rate_req; (void)channels_req;
-    if (out) { memset(out, 0, sizeof(*out)); out->oss_fd = -1; }
-    fprintf(stderr, "audio_out: built without OSS support\n");
-    return -1;
-}
-
-#endif /* AUDIO_OUT_HAVE_OSS */
-
 /* ── The ALSA backend ────────────────────────────────────────────────────────
  *
- * Compiled only with an explicit -DAUDIO_OUT_HAVE_ALSA, which the soft-float
- * build paths pass together with libasound's include and link flags.  Not
- * detected with __has_include like OSS is: OSS needs no library, but a host that
- * merely has libasound's headers installed would start failing to link every
- * host regression that compiles this file.
+ * The one device backend.  Compiled only with an explicit -DAUDIO_OUT_HAVE_ALSA,
+ * which both device build paths pass together with libasound's include and link
+ * flags.  Not detected with __has_include: a host that merely has libasound's
+ * headers installed would start failing to link every host regression that
+ * compiles this file.  Without the define the host gets a stub that refuses to
+ * open, which is all the host regressions need — they drive audio_out_open()
+ * through their own AudioOutDev.
  *
  * The context is one static, not a field on AudioOut: one stream per process is
  * already enforced (g_live), and a static keeps <alsa/asoundlib.h> out of the
@@ -775,8 +617,10 @@ int audio_out_open_oss(AudioOut *out, int rate_req, int channels_req)
 
 /* Requests, not demands: the grant is read back and used.  Forcing tiny periods
  * is what trades a jitter buffer for latency, and the pacing depends on the
- * jitter buffer (see the SETFRAGMENT note on oss_space()).  The values are what
- * the OSS shim grants on its own, 2048 x 16: the lead is three periods, and at
+ * jitter buffer: constraining the ring is what removed it when the kernel's OSS
+ * emulation was the backend.  The values are what that OSS shim granted on its
+ * own for every rate and channel count measured, 2048 x 16 (743 ms at 44100 —
+ * NOT the ~506 ms this repo believed for months): the lead is three periods, and at
  * 1024 frames it fell to 92 ms and SameGame's slow frames starved the stream
  * 71 times in one session where the OSS lead of ~139 ms had covered them. */
 #define ALSA_PERIOD_REQ   2048
@@ -823,13 +667,15 @@ static int alsa_open(void *ctx, int rate_req, int channels_req,
     AlsaCtx *a = (AlsaCtx *)ctx;
     int err;
 
-    /* ⚠️ GPIO12 is card 0's speaker amp alone — the same rule as oss_open(),
-     * decided from the PCM actually being opened. */
+    /* ⚠️ GPIO12 is the TWL4030's speaker amp and belongs to card 0 alone.  Poking
+     * it while a USB DAC is the sink unmutes a speaker nothing is feeding, so it
+     * is decided from the PCM actually being opened, not done unconditionally. */
     if (strcmp(a->name, audio_out_device_pcm(AUDIO_DEV_ONBOARD)) == 0)
         audio_out_enable_amp();
 
-    /* Non-blocking for the same reason as the OSS O_NONBLOCK: the write policies
-     * follow the queue at real-time pace, and a blocking write stalls a period. */
+    /* ⚠️ Non-blocking is not an optimisation.  A blocking write stalls for a full
+     * hardware period once the queue fills, which turns every subsequent sound
+     * into a late one; the write policies follow the queue at real-time pace. */
     err = snd_pcm_open(&a->pcm, a->name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (err < 0) {
         fprintf(stderr, "audio_out: cannot open %s: %s\n", a->name, snd_strerror(err));
@@ -954,7 +800,7 @@ static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again
     return -1;
 }
 
-/* usleep, exactly like oss_wait(): the serviced policy's wait of 0 must stay a
+/* usleep, not snd_pcm_wait(): the serviced policy's wait of 0 must stay a
  * no-op, and snd_pcm_wait() can return early, which the blocking policies'
  * wait-count bound does not expect. */
 static void alsa_wait(void *ctx, int usec)
@@ -982,7 +828,6 @@ int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channe
      * first stream's context, and audio_out_open() would refuse it only after. */
     if (g_alsa.pcm) {
         memset(out, 0, sizeof(*out));
-        out->oss_fd = -1;
         fprintf(stderr, "audio_out: refused — an ALSA stream is already open\n");
         return -1;
     }
@@ -991,54 +836,48 @@ int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channe
     return audio_out_open(out, &ALSA_DEV, &g_alsa, rate_req, channels_req);
 }
 
-#else  /* built without -DAUDIO_OUT_HAVE_ALSA */
+#else  /* built without -DAUDIO_OUT_HAVE_ALSA: the host */
+
+/* ⚠️ ALSA is the only device backend, so an ARM object without it is a build that
+ * would ship silent — a ScummVM config.mk left over from before the ALSA appends
+ * is exactly that.  Refuse it here rather than on the panel. */
+#if defined(__arm__)
+#error "audio_out.c needs -DAUDIO_OUT_HAVE_ALSA (and alsa-lib) on the device build"
+#endif
 
 int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channels_req)
 {
     (void)pcm; (void)rate_req; (void)channels_req;
-    if (out) { memset(out, 0, sizeof(*out)); out->oss_fd = -1; }
+    if (out) memset(out, 0, sizeof(*out));
     fprintf(stderr, "audio_out: built without ALSA support\n");
     return -1;
 }
 
 #endif /* AUDIO_OUT_HAVE_ALSA */
 
-/* ── Which backend ──────────────────────────────────────────────────────────
- * ⚠️ RW_AUDIO_OSS exists so an on-device A/B changes exactly ONE thing — the
- * backend — inside the same binary.  Comparing a soft-float ALSA build against
- * the hard-float OSS one would change the ABI, the libc and the link mode too. */
-static const char *g_backend = "oss";
+/* ── The opener ─────────────────────────────────────────────────────────── */
 
 int audio_out_open_default(AudioOut *out, const char *path,
                            int rate_req, int channels_req)
 {
-#ifdef AUDIO_OUT_HAVE_ALSA
-    const char *force_oss = getenv("RW_AUDIO_OSS");
-    if (!force_oss || !*force_oss) {
-        g_backend = "alsa";
-        return audio_out_open_alsa(out, audio_out_device_pcm(path),
-                                   rate_req, channels_req);
-    }
-#endif
-    (void)path;   /* oss_open() re-resolves the device itself */
-    g_backend = "oss";
-    return audio_out_open_oss(out, rate_req, channels_req);
+    return audio_out_open_alsa(out, audio_out_device_pcm(path),
+                               rate_req, channels_req);
 }
 
 const char *audio_out_backend_name(void)
 {
-    return g_backend;
+    return "alsa";
 }
 
 /* ── Reopen, fallback and replug ────────────────────────────────────────────
  * Both stream owners (audio.c and ScummVM's mixer) open through here and poll
  * audio_out_usb_returned(), so a DAC that comes and goes is handled one way. */
 
-/** The name the log lines use: the ALSA PCM under ALSA, the OSS node otherwise
- *  — the same ternary both owners print at open. */
+/** The name the log lines use: the ALSA PCM the node maps to — the same name
+ *  both owners print at open. */
 static const char *device_label(const char *path)
 {
-    return strcmp(g_backend, "alsa") == 0 ? audio_out_device_pcm(path) : path;
+    return audio_out_device_pcm(path);
 }
 
 /** Millisecond clock for the probe's rate limit; audio.c's time_now_ms() is the
@@ -1067,7 +906,7 @@ int audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
     if (open_on(out, path, rate_req, channels_req) != 0) {
         if (strcmp(path, AUDIO_DEV_USB) != 0) return -1;
         /* ⚠️ Refuse it, then resolve again: the second resolution is the panel,
-         * and oss_open() — which re-resolves on its own — agrees with it. */
+         * and the reopen below goes to the PCM that resolution names. */
         usb_refused = true;
         fprintf(stderr, "audio_out: %s will not open — using %s until it is "
                 "replugged\n", device_label(AUDIO_DEV_USB),

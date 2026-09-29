@@ -6,7 +6,7 @@
  *
  * Hardware path:
  *   TWL4030 HiFi DAC  →  HandsfreeL/R class-D amp  →  SPKR1
- *   Kernel interface:  /dev/dsp  (ALSA OSS compatibility layer)
+ *   Kernel interface:  ALSA through libasound, `plughw:N,0` (card N is /dev/dspN)
  *   Amp enable:        GPIO12 sysfs (active HIGH)
  *
  * Prerequisites:
@@ -33,7 +33,7 @@
  * sound is a mixer voice and nothing reaches the device until audio_pump() services
  * it — once per frame from the render loop (see the mix-bus block below).  The old
  * per-sound path (this file's own fd, a SNDCTL_DSP_RESET before every canned sound,
- * one sound at a time) is gone; `audio_out.c` is the only opener of /dev/dsp.
+ * one sound at a time) is gone; `audio_out.c` is the only opener of the device.
  */
 
 #include <stdint.h>

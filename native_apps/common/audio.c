@@ -23,8 +23,9 @@
  */
 
 
-/** Sample rate requested from the OSS driver.
- *  The ALSA OSS shim SRCs internally to the TWL4030's native 48000 Hz. */
+/** Sample rate requested at open; the grant is read back and used.
+ *  The kernel's OSS shim resampled to the TWL4030's native 48000 Hz; through
+ *  `plughw` any conversion is alsa-lib's. */
 #define TARGET_RATE       44100
 
 /** How recently the preceding tone must have been ISSUED for the next one to
@@ -166,7 +167,7 @@ static bool sample_arm(Audio *audio, AudioSampleVoice *sv, const char *what,
 /** Open the continuous stream and put the mix bus on it — the one device half.
  *
  * ⚠️ GPIO12, the device-path resolution (`audio_device`, so a DAC unplugged since
- * the last open is picked up here), the SPEED → FMT → CHANNELS order and its
+ * the last open is picked up here), the format/rate/channel negotiation and its
  * read-back all live in `audio_out_open_default()`: ScummVM links audio_out.c and
  * not this file, so a copy here would be a seam only the games could see.  It
  * prints its own reason on failure.  Also the reopen path after an unplug and

@@ -16,8 +16,9 @@
 # deletes native_apps/common/*.o twice on the way.  All of that is pure overhead
 # whenever the source has not changed, and it is a hard barrier for anyone who
 # wants to put apps on a device without first reproducing the toolchain.  The
-# artifacts suit distribution unusually well: everything ships -static, so there
-# is no ABI surface to match against the device's glibc.
+# artifacts suit distribution unusually well: vnc_client ships -static, and the
+# dynamic binaries link only the device's own soft-float userspace (glibc 2.31, libstdc++,
+# libasound.so.2), which its stock rootfs provides — so there is nothing to ship beside them.
 #
 # commissioning/commission-offline.sh is the first non-developer consumer — an offline
 # commissioner has no toolchain to fall back on, so a bundle IS its only source

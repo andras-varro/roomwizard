@@ -115,7 +115,7 @@ Make a bundle with `./release.sh --stage-only`, or publish one with `./release.s
 
 ### Installing from a published release — no cross-compiler
 
-Every other mode builds, so every other mode needs `arm-linux-gnueabihf-gcc`. Someone handed a device
+Every other mode builds, so every other mode needs the ARM cross-compilers. Someone handed a device
 has no toolchain, so a published release is installable directly — over SSH, or onto a card:
 
 ```bash
