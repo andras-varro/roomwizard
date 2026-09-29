@@ -419,6 +419,8 @@ python3-pil	setup-build-env.sh	IMPROVEMENT_PLAN.md
 run-all.sh	tests/CLAUDE.md	-
 shellcheck-baseline.txt	tests/CLAUDE.md	-
 harness-error channel	tests/rw_provision_test.sh	IMPROVEMENT_PLAN.md
+musb_debug.h:38-41	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+omap2430.c:171-181	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 EOF
 }
 

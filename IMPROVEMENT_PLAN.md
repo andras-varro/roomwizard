@@ -95,69 +95,17 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, patch booted on `.188`
+### B41. An adapter replug can print `configured as A device timeout` on our image — open, seen once 2026-09-29
 
-**Status (measured 2026-09-28, uImage md5 `926896a55a850f6203f91b329f916349`):**
-`kernel/patches/musb-a-idle-disconnect.patch` adds `OTG_STATE_A_IDLE`/`A_WAIT_BCON` arms to the
-`MUSB_INTR_DISCONNECT` switch (`musb_host_resume_root_hub()` + `musb_root_disconnect()`). Hub pulled from
-the root port: every child disconnects, `1-1` leaves sysfs, the root hub stays `active`, and
-`dmesg | grep -c -E "unhandled DISCONNECT|musb_bus_suspend"` reads 0. `usbcore.autosuspend=-1` is on
-the cmdline (`kernel/README.md`), which removes the hub-autosuspend trigger. Undo image on p1:
-`uImage-system.autosusp`, md5 `6f1f9fd43003232f16e7faf107d9fc90`.
-
-**Left:** (1) the hub replugged into the root port raised no `CONNECT` (mode `a_idle`) — B40 is the
-likely mechanism, so re-test after it; the A/B on the undo image is only needed if B40 does not cover it.
-(2) A run with `usbcore.autosuspend` at its default, the trigger the cmdline removes. The patch ships
-with F101. RESCAN covers the replug miss meanwhile; a timed rebind cannot (`device-files/usb-host`, `recover`).
-
-**The violated invariant: `musb->is_active` must be false in any non-connected OTG state** (`A_IDLE`,
-`A_WAIT_BCON`). Upstream's `default:` arm (`drivers/usb/musb/musb_core.c:897-900`) only prints
-`unhandled DISCONNECT transition (a_idle)`; the gadget-side twin clears it (`musb_gadget.c:2105`).
-`musb_bus_suspend()` (`musb_host.c:2588`) then returns `-EBUSY` forever, and `WARNING()` is an
-unratelimited `printk` (`musb_debug.h:38-41`). The caller, root-hub runtime-PM autosuspend, has no retry
-limit or backoff (`hcd_bus_suspend()`; `hub.c:1734` sets `autosuspend_delay` 0).
-
-⚠️ **A storm is also a measurement contaminant: run `dmesg | grep -c musb_bus_suspend` before trusting
-any on-device measurement, and discard it if non-zero.** It runs ≈2000 lines/s, starves the CPU and ends
-in a hardware-watchdog reset (~46 min; `FAT-fs … not properly unmounted` next boot). A frozen app during
-one is a symptom. ⚠️ On a unit still running the vendor soft watchdog, a reset cannot be attributed to the
-hardware one.
-
-⚠️ **A storm needs BOTH a stale `is_active` AND the child gone**, so the root hub attempts a suspend.
-Measured apart, neither storms: a clean unplug leaves the warning but keeps child `1-1` (the disconnect
-went unprocessed); an unbind+bind on an empty port clears `is_active` and the root hub suspends cleanly —
-the positive control for the instrument. Untested: a device that raises `CONNECT` but never enumerates
-(needs a marginal connection).
-
-⚠️ **Babble is neither necessary nor sufficient** — `.188`'s persistent log (`/home/root/log/messages`,
-p3) holds more `musb-hdrc: Babble` than storms, and storms without babble. ⚠️ `omap2430_ops` has no
-`.recover`, and the AM335x babble workaround lives in `musb_dsps.c`, which is not this glue.
-
-**Recovery is a driver unbind+bind, not a reboot** (ends a live storm in ~20 s). Distinct from
-enumeration-at-probe, which is a cold port never obtaining a session (B40).
-
-### B40. A plug raises ID-ground and the glue drops it on a host-only kernel — open, measured 2026-09-29
-
-**Measured on `.188` (our image):** plugging the OTG adapter delivers `MUSB_ID_GROUND` (`status=1`) to
-`omap2430_musb_mailbox`; pulling it delivers `MUSB_VBUS_OFF` (`4`). The ID pin is wired; an unpowered hub
-rules out back-fed VBUS. VBUS stays off and nothing enumerates. Kernel config: `CONFIG_USB_MUSB_HOST=y`,
-`CONFIG_USB_MUSB_HDRC=y`, no `/sys/class/udc`.
-
-**Cause, read in source:** `omap_musb_set_mailbox()` (`drivers/usb/musb/omap2430.c:171-181`) calls
-`omap2430_musb_set_vbus(musb, 1)` — the SESSION write — only `if (musb->gadget_driver)`, which is always
-NULL on a host-only kernel. `omap2430_musb_enable()` skips SESSION on ID-ground for non-UTMI (`:330-333`),
-and this board is ULPI.
-
-**Next:** a patch dropping the `gadget_driver` guard on the ID-ground arm (and the VBUS-off arm's
-`set_vbus(0)`), into a new uImage — MUSB is built in, not a module. That it makes a plug enumerate is
-**[inferred]** until booted; B33's root-port replug miss is re-tested with it.
-
-⚠️ **Only an adapter plug raises an ID edge.** A hub or device swapped behind a seated adapter changes
-no ID state, so this cannot help that case — which already works on a live port.
-
-> **Note — the instrument:** debugfs `tracing/kprobe_events` works on our image (no `dynamic_debug`):
-> `p:rwmb omap2430_musb_mailbox status=%r0:u32`, enable `events/kprobes/rwmb/enable`, read `trace`.
-> `twl4030_usb` in `/proc/interrupts` ticks once per ID/VBUS edge.
+**Measured on `.188`** (uImage md5 `f3b446c6b2d731e0d118583cada62c36`, the ID-ground patch booted):
+`musb-hdrc musb-hdrc.0.auto: configured as A device timeout` was printed once, at one adapter replug —
+the one following a spell in which the root hub had been runtime-suspended; the earlier replug did not
+print it. Enumeration succeeded anyway. The line comes from `omap2430_musb_set_vbus()`, which waits for
+DEVCTL `BDEVICE` to clear (100 × `mdelay(5)`, 1 s timeout) — now reached on every ID-ground, since the
+patch calls it there. Console error lines are defects even when harmless. **[inferred]** that the prior
+root-hub suspend is the difference; n=1. **Next:** reproduce (suspend the empty root hub, replug the
+adapter) with the `rwsv` kprobe on `omap2430_musb_set_vbus` and a DEVCTL read, then decide whether the
+wait needs the PHY/glue resumed first or the loop is simply too short.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
@@ -754,8 +702,7 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed 2026-09-23; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
-| Enumeration | a **driver** change in `drivers/usb/musb/` | ⚠️ not a config option ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)). The image makes it *possible*; it is separate work, and B33 is the other half of that driver's story |
-| Disconnect cleanup | `kernel/patches/musb-a-idle-disconnect.patch`: `A_IDLE`/`A_WAIT_BCON` arms in the `MUSB_INTR_DISCONNECT` switch of `musb_core.c` — **booted 2026-09-28 on `.188`: unplug clean, root-port replug missed** | **the fix for B33**, whose entry holds the invariant, its measurement and the post-boot check. A driver change like the row above, so the image is what makes it shippable |
+| USB hot plug and disconnect | `kernel/patches/musb-omap2430-session-on-id-ground.patch` (an adapter plug starts a session) and `kernel/patches/musb-a-idle-disconnect.patch` (an unplug clears `is_active`, ending the `printk` storm) — **both booted 2026-09-29 on `.188`: adapter replug enumerates with no RESCAN, unplug clean** | driver changes, not config ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)); [`kernel/README.md`](kernel/README.md) holds each one's measurement. Nothing is left but shipping them in the image; B41 is the one console line they added |
 | Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 holds the measurement and is what this unblocks |
 | DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. F2 holds the A/B this would overturn and [§3.2](SYSTEM_ANALYSIS.md#32-display) the coefficients |
 
@@ -764,7 +711,8 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 1. **~~Triage the board-file drop~~ and ~~boot one image, asserted over SSH~~ — both done.** Nothing the
    vanilla tree lacks blocks a boot except the Ethernet reset pulse, which is a source patch and not a
    config symbol ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) has the mechanism and the function-size diff
-   that found it). **`.188`'s p1 now holds** `uImage-system` = our image with all four patches and our panel DTB (md5 `776a3dc5…`,
+   that found it). **`.188`'s p1 now holds** `uImage-system` = our image with every `kernel/patches/` patch and our panel DTB (md5 `f3b446c6…`, staged
+   copy `uImage-system.b40`; the image before the ID-ground patch is `uImage-system.disconnect`, `926896a5…`;
    without the 500 mA USB power patch), beside `uImage-system.panel-v1` (`8bd1e362…`, before the fb-size
    and backlight patches), `uImage-system.ours-nopanel` (`3713faf7…`, vendor DTB), `uImage-system.vendor`
    (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
@@ -1066,8 +1014,7 @@ missing tool and point at it instead of each reciting its own `apt` line.
 ### Usability, features, maintainability
 
 C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C8 · F17 · B33 (its fix is a driver patch, so it
-waits on F101) · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
+F4 · C5 · C8 · F17 · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
 userspace overlay win was measured and rejected on image quality, the switch it would have needed is
 withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
 wait on F101.

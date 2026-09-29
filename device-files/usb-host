@@ -37,11 +37,12 @@
 # the PHY and resumes MUSB, and the resume replays the CACHED DEVCTL SESSION bit
 # (musb_core.c:2609-2610).
 #
-# ⚠️ "REPLAYS THE CACHED BIT" IS THE WHOLE CATCH, and an earlier version of this
-# comment got it wrong. An ID event can only resume a session that was already
-# established -- it cannot start one on a cold port, because what gets replayed
-# is a DEVCTL with SESSION *clear*. Measured on .188 2026-08-13, refuting the
-# earlier claim that an adapter left plugged in holds the port open:
+# ⚠️ ON THE VENDOR KERNEL AN ID EVENT CANNOT START A SESSION ON A COLD PORT.
+# The plug does reach the glue as MUSB_ID_GROUND, but omap_musb_set_mailbox()
+# (omap2430.c:171-181) sets SESSION only if musb->gadget_driver is set, and with
+# CONFIG_USB_GADGET off it never is. Our own kernel image patches that guard out,
+# and there an adapter plug starts the session. Measured on .188 2026-08-13,
+# refuting the earlier claim that an adapter left plugged in holds the port open:
 #
 #   passive hub connected to a dead port, nothing else   VBUS off at 1, 2 and
 #                                                        3 min, and still off

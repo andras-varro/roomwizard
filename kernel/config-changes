@@ -7,9 +7,9 @@
 # cannot be persisted, so these are appended to them; console=tty0 comes last, which makes the
 # panel /dev/console while ttyO1 keeps every printk. The vendor string " debug " is replaced,
 # not extended: appended, it would raise the console loglevel to 10.
-# usbcore.autosuspend=-1: a hub left to autosuspend drops its remote wakeup as a bogus host RESUME
-# in a_idle, and a usb-host recover then finds the hub without the device behind it, amid a
-# musb_bus_suspend burst. Measured on .188, 2026-09-27: 2 of 2 clean with it off, 0 of 2 with 2.
+# usbcore.autosuspend=-1, kept as a defence: in a_idle a usb-host recover at the default found the
+# hub without the device behind it, amid a musb_bus_suspend burst (.188, 2026-09-27: 2 of 2 clean
+# with it off, 0 of 2 with 2). With the ID-ground patch one runtime run at 2 was clean (n=1).
 disable CMDLINE_FROM_BOOTLOADER
 enable  CMDLINE_EXTEND
 set-str CMDLINE vt.global_cursor_default=0 usbcore.autosuspend=-1 console=tty0

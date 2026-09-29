@@ -1,0 +1,30 @@
+--- a/drivers/usb/musb/omap2430.c
++++ b/drivers/usb/musb/omap2430.c
+@@ -174,11 +174,12 @@
+ 		otg->default_a = true;
+ 		musb->xceiv->otg->state = OTG_STATE_A_IDLE;
+ 		musb->xceiv->last_event = USB_EVENT_ID;
+-		if (musb->gadget_driver) {
+-			omap_control_usb_set_mode(glue->control_otghs,
+-				USB_MODE_HOST);
+-			omap2430_musb_set_vbus(musb, 1);
+-		}
++		/* Upstream starts the session only when a gadget driver is
++		 * bound, which never happens on a host-only kernel: the plug
++		 * is then seen and dropped, and VBUS stays off.
++		 */
++		omap_control_usb_set_mode(glue->control_otghs, USB_MODE_HOST);
++		omap2430_musb_set_vbus(musb, 1);
+ 		break;
+ 
+ 	case MUSB_VBUS_VALID:
+@@ -195,8 +196,7 @@
+ 		dev_dbg(musb->controller, "VBUS Disconnect\n");
+ 
+ 		musb->xceiv->last_event = USB_EVENT_NONE;
+-		if (musb->gadget_driver)
+-			omap2430_musb_set_vbus(musb, 0);
++		omap2430_musb_set_vbus(musb, 0);
+ 
+ 		if (data->interface_type == MUSB_INTERFACE_UTMI)
+ 			otg_set_vbus(musb->xceiv->otg, 0);

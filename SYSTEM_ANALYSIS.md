@@ -1165,10 +1165,17 @@ used to share this paragraph is built and shipping ([§3.4](#34-audio)).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
-⚠️ **A stale `is_active` leaves a `printk` loop that survives unplugging and ends in a hardware reset ~46
-min later, and it invalidates any measurement taken during it — a babble error is one entrance to it, not
-the cause** — mechanism, log evidence and the one-command check in
-[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+⚠️ **On the vendor kernel a stale `is_active` arms a `printk` loop that survives unplugging and ends in
+a hardware-watchdog reset ~46 min later — run `dmesg | grep -c musb_bus_suspend` before trusting any
+on-device measurement, and discard it if non-zero.** A clean unplug hits the `default:` arm of the
+`MUSB_INTR_DISCONNECT` switch (`musb_core.c:897-900`, `unhandled DISCONNECT transition (a_idle)`), which
+leaves `musb->is_active` set; once the child is gone, root-hub autosuspend calls `musb_bus_suspend()`
+(`musb_host.c:2588`), which fails `-EBUSY` through an unratelimited `WARNING()` (`musb_debug.h:38-41`),
+and `hcd_bus_suspend()` retries with no backoff: ≈2000 lines/s, the CPU starved, `FAT-fs … not properly
+unmounted` next boot. It needs **both** the stale flag and the child gone — measured apart, neither
+storms. Babble is neither necessary nor sufficient (`.188`'s `/home/root/log/messages` holds storms
+without it; `omap2430_ops` has no `.recover`). A driver unbind+bind ends a live storm in ~20 s. Our
+image patches the switch ([`kernel/README.md`](kernel/README.md#what-we-patch-and-why)).
 Touchpad-plus-keyboard combos create two event nodes.
 
 **Verified working:**
@@ -1181,15 +1188,13 @@ input: HID 04d9:a088 as .../input4   (mouse)
 input: Microsoft X-Box 360 pad as .../input5
 ```
 
-⚠️ **A device is enumerated only if it is attached when the MUSB driver probes.** Boot a unit with
-nothing plugged in and the port is dead for the rest of that boot — anything inserted afterwards is
-never even powered. Measured on `.188` 2026-08-13, reproducible on demand with a driver unbind/bind, and
-the operator reports it has always been so on every unit: *"USB only worked if it was connected at
-boot."* ✅ **Treat this as a standing property of the hardware with a working one-tap remedy, not as an
-open bug** (agreed 2026-08-14): three mechanisms inferred from the driver source have each been applied
-and refuted on hardware, and Device Tools → USB → **RESCAN** revives a dead port in one tap, ~5 s,
-verified on a panel. Once a port is live, replug works normally at any gap — so it is **one tap per
-boot**, and none at all if the device was plugged in at boot.
+⚠️ **On the vendor kernel — and on ours without the ID-ground patch — a device is enumerated only if it
+is attached when the MUSB driver probes.** Boot with nothing plugged in and the port is dead for the rest
+of that boot — anything inserted afterwards is never even powered. Measured on `.188` 2026-08-13,
+reproducible with a driver unbind/bind, and the operator reports it on every unit: *"USB only worked if
+it was connected at boot."* Device Tools → USB → **RESCAN** revives a dead port in one tap, ~5 s, and
+once a port is live, replug works at any gap. **On our image an adapter plug starts the session itself**
+(the mailbox guard below; measurement in [`kernel/README.md`](kernel/README.md#what-we-patch-and-why)).
 Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`:
 
 | Action | Result |
@@ -1210,21 +1215,20 @@ upstream, and authoritative for this code because none of it is vendor-patched:
   `otg_set_vbus()` returns `-ENOTSUPP` and `omap2430_musb_set_vbus()` does nothing.
 - **The OTG ID pin is watched by the TWL4030 PMIC, not by MUSB** — its own interrupt line
   (`phy-twl4030-usb.c:747`) reading an always-powered `PM_MASTER` register, so it fires with the PHY
-  asleep and VBUS off. ⚠️ But what an ID event produces is a **resume**, and a resume replays the
-  *cached* DEVCTL (`musb_core.c:2609-2610`): on a cold port the cached `SESSION` bit is clear, so there
-  is nothing to resume. **[inferred]** as the reason ID-ground alone cannot revive a dead port; the
-  failure itself is measured.
-- **Once a session exists it is never torn down.** `omap2430_ops` has no `.try_idle`, so
-  `musb_platform_try_idle()` is a no-op and `SESSION` is never cleared — which is why a live port stays
-  live indefinitely, including across an unplug. With nothing connected,
+  asleep and VBUS off, and an adapter plug reaches the glue as `MUSB_ID_GROUND` (a pull as
+  `MUSB_VBUS_OFF`; measured by kprobe on `omap2430_musb_mailbox`). ⚠️ **`omap_musb_set_mailbox()`
+  (`omap2430.c:171-181`) then writes `SESSION` only `if (musb->gadget_driver)` — always NULL with
+  `# CONFIG_USB_GADGET is not set` — so the plug is dropped and a cold port stays cold.** Nor does
+  `omap2430_musb_enable()` set it (`:330-333`, UTMI only; this board is ULPI). Our image drops the guard.
+- **Without that patch a session is never torn down.** `omap2430_ops` has no `.try_idle`, so
+  `musb_platform_try_idle()` is a no-op — which is why a live port stays live across an unplug. With the
+  patch an adapter pull clears `SESSION` (`set_vbus(0)`, state `B_IDLE`). With nothing connected,
   `musb_pm_runtime_check_session()` matches `MUSB_QUIRK_A_DISCONNECT_19` and after 3×1000 ms polls drops
   its pm_runtime reference.
 
-⚠️ **A hub or adapter left permanently attached does NOT fix this.** The driver's teardown path says it
-should, and the claim was written here on that reading — but it assumes a session **already exists**. A
-passive hub on a dead port reads `Vbus off` at 1, 2 and 3 min and for minutes after, and a device plugged
-into that hub enumerates nothing. Re-seating an adapter on a port that *had* already had a session revives
-it immediately, which is the distinction: it holds a port **open**, not a port **alive**.
+⚠️ **A hub or adapter left permanently attached does NOT fix a dead port** — the teardown path's reading
+assumes a session already exists. A passive hub on a dead port reads `Vbus off` for minutes and a device
+plugged into it enumerates nothing; re-seating an adapter revives only a port that has had a session.
 
 ⚠️ **Five readings that look diagnostic and are not** — three were believed and written down before being
 refuted, one of them in this document.
@@ -1234,21 +1238,17 @@ refuted, one of them in this document.
 | `echo host > $MUSB/mode` | **silent no-op** — `omap2430_ops` has no `.set_mode`, so the store reports success having done nothing |
 | `$MUSB/vbus`'s `timeout 1100 msec` | **inert** — nothing on omap2430 reads `musb->a_wait_bcon`; writing it changes the printed number and nothing else |
 | `power/control = on` (forbidding runtime PM) | **does not prevent the drop** — measured with `runtime_status` reading `active` throughout |
-| `$MUSB/mode` as a state reading | **not diagnostic** — reads `a_idle` with a pad enumerated, `js0` present and the game responding |
+| `$MUSB/mode` as a state reading | **not diagnostic** — reads `a_idle` with a pad enumerated, `js0` present and the game responding (unpatched; our patched image reads `a_host`) |
 | `twl4030-usb/vbus` | **not a port-state reading at all** — 0444, reports `vbus_supplied` (somebody feeding *us*), so it reads `off` in the working state **and** the dead one |
 | `lsmod` → `xpad … 0` | a refcount of module *users*, not bound devices — reads `0` with a pad bound and `event1`/`js0` present |
 
 **The one real userspace trigger besides a rebind is debugfs `softconnect`** (`musb_debugfs.c:301-343`) —
 and it sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`, so it cannot revive a port sitting in `a_idle`.
 
-⚠️ **Three source-derived mechanisms have each been applied and refuted on hardware**, the last being the
-DTB `mode` 3 → 1 patch: `.188` was patched to `mode = <1>`, the **booted kernel's own tree** read it back,
-and with the socket empty at boot a pad plugged in afterwards still stayed dark — while
-`/etc/init.d/usb-host recover` brought it up on attempt 1 with the same pad and cable as the negative
-control. **The common thread is that none of the three explains how a port that probed with an empty
-socket ever obtains a session** — VBUS and the ID pin are both inert at that point. Require an answer to
-that question of any further candidate before spending a reboot on it. Candidates and what each
-measurement closed: [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+⚠️ **Three source-derived mechanisms were applied and refuted on hardware before the mailbox guard was
+found**, the last the DTB `mode` 3 → 1 patch: the **booted tree** read back `mode = <1>`, and a pad plugged
+in after an empty-socket boot stayed dark while `usb-host recover` brought it up on attempt 1. None of the
+three explained how a cold port obtains a session; the guard does.
 
 **Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the running
 kernel holds it, and `/sys/firmware/fdt` the raw blob, parseable by `usb_host/uimage.py`'s walk.
@@ -1262,7 +1262,7 @@ decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping 
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
 as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing; measured on `.188`
 2026-08-14 at ~5 s from one tap, leaving `Vbus on`, `1-1`, `event1` + `js0` and the pad playable. ⚠️ It is
-deliberately not on a timer, and the reason is not merely wasted rebinds: **nothing in software can
+deliberately not on a timer, and the reason is not merely wasted rebinds: **unpatched, nothing in software can
 distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either
 way and no connect interrupt can arrive in either — so an operator who has just plugged something in
 holds the one bit no poll can obtain.
