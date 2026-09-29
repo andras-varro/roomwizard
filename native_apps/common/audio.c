@@ -166,12 +166,13 @@ static void bus_reset(Audio *audio);   /* with the rest of the bus, below */
  * the last open is picked up here), the SPEED → FMT → CHANNELS order and its
  * read-back all live in `audio_out_open_default()`: ScummVM links audio_out.c and
  * not this file, so a copy here would be a seam only the games could see.  It
- * prints its own reason on failure.  Also the reopen path after an unplug, which
- * is why the device is resolved here and not once at init. */
+ * prints its own reason on failure.  Also the reopen path after an unplug and
+ * after a replug, which is why the device is resolved here and not once at init;
+ * audio_out_open_resolved() falls back to the panel if the USB card will not open. */
 static int stream_open(Audio *audio)
 {
-    const char *path = audio_out_device_path();
-    if (audio_out_open_default(&audio->out, path, TARGET_RATE, FALLBACK_CHANNELS) != 0)
+    const char *path = NULL;
+    if (audio_out_open_resolved(&audio->out, TARGET_RATE, FALLBACK_CHANNELS, &path) != 0)
         return -1;
     printf("audio: stream on %s via %s\n",
            strcmp(audio_out_backend_name(), "alsa") == 0
@@ -548,11 +549,25 @@ static void stream_recover(Audio *audio)
     if (stream_open(audio) == 0) audio->reopening = false;
 }
 
+/** A USB card came back while the stream sat on the panel speaker — the fallback
+ *  above, or an "auto" start with no DAC plugged in.  audio_out_usb_returned()
+ *  decides and logs; this closes and reopens through stream_open(), which now
+ *  resolves to the card.  Same cost as the fallback — the bus's voices are reset
+ *  — and a failed open hands over to stream_recover()'s once-a-second retry. */
+static void stream_move(Audio *audio)
+{
+    audio_out_close(&audio->out);
+    audio->reopen_last_ms = time_now_ms();
+    if (stream_open(audio) != 0) audio->reopening = true;
+}
+
 void audio_pump(Audio *audio)
 {
     if (audio && audio->available &&
         (audio->reopening || audio_out_device_lost(&audio->out))) {
         stream_recover(audio);
+    } else if (audio_live(audio) && audio_out_usb_returned(&audio->out)) {
+        stream_move(audio);
     }
     if (!audio_live(audio)) return;
     cont_service(audio);

@@ -62,6 +62,10 @@ private:
 	/** `AudioOutFill`: hands the interleaved device buffer to the mixer. */
 	static long fillFromMixer(void *ctx, int16_t *buf, long frames, int channels);
 
+	/** Open `_out` through `audio_out_open_resolved()` — at init and on every
+	 *  reopen after an unplug or a replug.  Installs the fill once `_mixer` exists. */
+	bool openDevice();
+
 	AudioOut _out;          ///< The shared stream. The ONLY writer of /dev/dsp.
 	uint32   _outputRate;   ///< What the device GRANTED — OPL tempo depends on it
 	uint32   _samples;      ///< Frames per mixCallback call

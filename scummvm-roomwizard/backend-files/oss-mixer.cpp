@@ -144,30 +144,14 @@ void OssMixerManager::init() {
 	// (ALSA's plughw may grant 1 and convert — either grant is honoured).
 	// audio_out_open_default() picks ALSA in a soft-float build unless
 	// RW_AUDIO_OSS is set, so the backend is an A/B inside one binary.
-	const char *path = audio_out_device_path();
-	if (audio_out_open_default(&_out, path, 22050, 1) != 0) {
+	if (!openDevice()) {
 		// No usable device — fall back to a silent mixer so ScummVM still works.
-		warning("OssMixerManager: cannot open %s (%s), audio disabled",
-		        path, audio_out_backend_name());
+		warning("OssMixerManager: cannot open an output device (%s), audio disabled",
+		        audio_out_backend_name());
 		_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 		_mixer->setReady(true);
 		return;
 	}
-
-	// ⚠️ Use the GRANTED rate, never the requested one.  If _outputRate does not
-	// match real playback, OPL sample-counting produces music at the wrong tempo.
-	int granted = audio_out_rate(&_out);
-	if (granted > 0)
-		_outputRate = (uint32)granted;
-
-	// The old `>>1` speaker attenuation, bit for bit.
-	audio_out_set_shift(&_out, 1);
-
-	debug("OssMixerManager: %s via %s, %u Hz, %d ch, %d bit, %u frames/buf",
-	      strcmp(audio_out_backend_name(), "alsa") == 0
-	          ? audio_out_device_pcm(path) : path,
-	      audio_out_backend_name(), _outputRate, audio_out_channels(&_out),
-	      audio_out_bits(&_out), _samples);
 
 	_mixer = new Audio::MixerImpl(_outputRate, false, _samples);
 	_mixer->setReady(true);
@@ -183,10 +167,66 @@ void OssMixerManager::init() {
 	// (../CLAUDE.md → Cross-component build rules).
 }
 
+bool OssMixerManager::openDevice() {
+	// Request what the mixer runs at: 22050 before init has built it, the granted
+	// rate on every reopen, so a reopen asks for exactly what OPL is counting in.
+	const char *path = nullptr;
+	if (audio_out_open_resolved(&_out, (int)_outputRate, 1, &path) != 0)
+		return false;
+
+	// ⚠️ Use the GRANTED rate, never the requested one.  If _outputRate does not
+	// match real playback, OPL sample-counting produces music at the wrong tempo.
+	// A MixerImpl's rate is fixed at construction, so a REOPEN cannot adopt a
+	// different grant — it says so rather than playing at the wrong pitch silently.
+	int granted = audio_out_rate(&_out);
+	if (!_mixer) {
+		if (granted > 0)
+			_outputRate = (uint32)granted;
+	} else if (granted != (int)_outputRate) {
+		warning("OssMixerManager: reopen granted %d Hz, mixer runs %u Hz — "
+		        "pitch and tempo are off until ScummVM restarts",
+		        granted, _outputRate);
+	}
+
+	// The old `>>1` speaker attenuation, bit for bit.  Every open resets it.
+	audio_out_set_shift(&_out, 1);
+
+	debug("OssMixerManager: %s via %s, %d Hz, %d ch, %d bit, %u frames/buf",
+	      strcmp(audio_out_backend_name(), "alsa") == 0
+	          ? audio_out_device_pcm(path) : path,
+	      audio_out_backend_name(), granted, audio_out_channels(&_out),
+	      audio_out_bits(&_out), _samples);
+
+	// On a reopen the mixer already exists; at init, init() installs the fill
+	// after it builds the mixer, because the fill is what calls it.
+	if (_mixer)
+		audio_out_set_fill(&_out, fillFromMixer, this, "ScummVM");
+	return true;
+}
+
 void OssMixerManager::audioThread() {
 	while (_threadRunning) {
 		if (_audioSuspended) {
 			usleep(50000);
+			continue;
+		}
+
+		// ⚠️ An unplugged USB DAC must not silence the session, and a replugged
+		// one must be taken back — the same two rules the games follow, decided
+		// in audio_out (the lost flag, audio_out_usb_returned()) so there is one
+		// implementation.  Only this thread touches _out after init, so the close
+		// and reopen need no lock.  The fill is not called by the close.
+		if (audio_out_device_lost(&_out)) {
+			warning("OssMixerManager: output device lost — reopening");
+			audio_out_close(&_out);
+		} else if (audio_out_usb_returned(&_out)) {
+			audio_out_close(&_out);
+		}
+		if (!audio_out_is_open(&_out) && !openDevice()) {
+			// One attempt per second while nothing opens (the open prints its
+			// reason each time), sliced so the destructor's join is not held.
+			for (int i = 0; i < 20 && _threadRunning; ++i)
+				usleep(50000);
 			continue;
 		}
 

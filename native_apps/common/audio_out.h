@@ -189,6 +189,13 @@ typedef struct {
     bool        is_open;
     bool        device_lost;   /**< a write failed ENODEV — see the accessor   */
 
+    /* Which OSS node `audio_out_open_default()` opened (one of the resolver's
+     * static strings, NULL behind any other opener), and the replug probe's
+     * state — see audio_out_usb_returned().  All three reset on every open. */
+    const char *open_path;
+    uint32_t    reprobe_last_ms;
+    bool        usb_seen;      /**< card 1 was present at the previous probe   */
+
     /* What the device GRANTED.  Never what was requested. */
     int         rate;
     int         bits;
@@ -303,6 +310,52 @@ AudioOutErr audio_out_alsa_classify(int err);
  * and closes and reopens through its own path, which re-resolves the device.
  */
 bool audio_out_device_lost(const AudioOut *out);
+
+/**
+ * Resolve the device and open it through `audio_out_open_default()` — the opener
+ * `audio.c` and ScummVM's mixer both call, at start-up and on every reopen.
+ *
+ * ⚠️ **A USB card that is present but will not open is REFUSED until it is
+ * unplugged**, and this falls back to the panel speaker in the same call.  Without
+ * that, a move back to a replugged card that fails would leave the stream closed
+ * and every retry would resolve to the same card again: silence for the session,
+ * the very thing the fallback exists to prevent.  The refusal is cleared the first
+ * time card 1 is seen absent, so the next plug is tried afresh.
+ *
+ * `*path_out` (may be NULL) receives the node that opened.  Returns 0 or -1.
+ */
+int  audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
+                             const char **path_out);
+
+/** How often, at most, a stream on the panel speaker looks for card 1 again. */
+#define AUDIO_OUT_REPROBE_MS 1000
+
+/**
+ * The gate in front of the replug probe, as a pure function: TRUE when a stream
+ * open on `open_path` should look for the USB card now.  Only a stream on the
+ * panel speaker, only under preference `"usb"` or `"auto"` (never `"onboard"`,
+ * never an unrecognised value — those resolve onboard by design), and only once
+ * `AUDIO_OUT_REPROBE_MS` has passed since `last_ms`.  Unsigned subtraction, so
+ * the millisecond clock wrapping does not stop the probe.
+ *
+ * Split out so the host test reaches every branch: the wrapper below also needs
+ * a card-1 node, which no host has.
+ */
+bool audio_out_reprobe_due(const char *pref, const char *open_path,
+                           uint32_t now_ms, uint32_t last_ms);
+
+/**
+ * Whether a replugged USB card should take this stream back from the panel
+ * speaker.  Call it on every service; it costs a clock read unless the gate
+ * above opens, and then one `access()` on card 1's node — never a PCM open.
+ *
+ * TRUE only when the card was present at TWO consecutive probes (~1 s apart),
+ * because the node can appear before the card is ready to open, and only when it
+ * is not refused (see audio_out_open_resolved()).  It logs the move; the owner
+ * then closes the stream and reopens through its own path — this reopens nothing,
+ * exactly as with audio_out_device_lost().
+ */
+bool audio_out_usb_returned(AudioOut *out);
 
 /* ── Which device ───────────────────────────────────────────────────────────
  *

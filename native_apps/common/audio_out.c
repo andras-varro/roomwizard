@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 /* ── The device half, and nothing else ───────────────────────────────────────
  *
@@ -559,9 +560,22 @@ const char *audio_out_device_for(const char *pref, bool usb_present)
     return AUDIO_DEV_ONBOARD;
 }
 
+/** Card 1 was present and would not open — see audio_out_open_resolved().
+ *  Process-global for the preference's reason: one audio device per process. */
+static bool usb_refused = false;
+
+/** Is card 1 there AND usable?  Seeing it absent clears a refusal, so the next
+ *  plug is a fresh card. */
+static bool usb_usable(void)
+{
+    bool present = audio_out_usb_present();
+    if (!present) usb_refused = false;
+    return present && !usb_refused;
+}
+
 const char *audio_out_device_path(void)
 {
-    return audio_out_device_for(audio_dev_pref, audio_out_usb_present());
+    return audio_out_device_for(audio_dev_pref, usb_usable());
 }
 
 /* The ALSA name for the same device.  OSS minor N is ALSA card N here, because
@@ -775,6 +789,7 @@ typedef struct {
     snd_pcm_uframes_t  period;
     snd_pcm_uframes_t  buffer;
     bool               lost_said;
+    unsigned           write_xruns;   /* underruns met by writei — counted nowhere else */
 } AlsaCtx;
 
 static AlsaCtx g_alsa;
@@ -864,6 +879,7 @@ static int alsa_open(void *ctx, int rate_req, int channels_req,
     a->buffer      = buffer;
     a->frame_bytes = (int)ch * AUDIO_BYTES_PER_SAMPLE;
     a->lost_said   = false;
+    a->write_xruns = 0;
 
     *rate_granted     = (int)rate;
     *bits_granted     = snd_pcm_format_width(SND_PCM_FORMAT_S16_LE);
@@ -926,6 +942,12 @@ static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again
             errno  = EAGAIN;
             return -1;
         }
+        /* ⚠️ The service's dry-queue count only sees a ring found empty at the
+         * space query; one that runs dry between that query and this write is
+         * recovered here and retried, and is audible all the same — so say it. */
+        if (audio_out_alsa_classify((int)r) == AO_ERR_XRUN && ++a->write_xruns <= 200)
+            fprintf(stderr, "audio_out: %s underran at the write (%u this stream)\n",
+                    a->name, a->write_xruns);
         if (alsa_recover(a, (int)r) != 0) return -1;
     }
     errno = EIO;
@@ -1006,4 +1028,85 @@ int audio_out_open_default(AudioOut *out, const char *path,
 const char *audio_out_backend_name(void)
 {
     return g_backend;
+}
+
+/* ── Reopen, fallback and replug ────────────────────────────────────────────
+ * Both stream owners (audio.c and ScummVM's mixer) open through here and poll
+ * audio_out_usb_returned(), so a DAC that comes and goes is handled one way. */
+
+/** The name the log lines use: the ALSA PCM under ALSA, the OSS node otherwise
+ *  — the same ternary both owners print at open. */
+static const char *device_label(const char *path)
+{
+    return strcmp(g_backend, "alsa") == 0 ? audio_out_device_pcm(path) : path;
+}
+
+/** Millisecond clock for the probe's rate limit; audio.c's time_now_ms() is the
+ *  same arithmetic, audio_ms_from_timeval(). */
+static uint32_t probe_now_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return audio_ms_from_timeval((long)tv.tv_sec, (long)tv.tv_usec);
+}
+
+static int open_on(AudioOut *out, const char *path, int rate_req, int channels_req)
+{
+    if (audio_out_open_default(out, path, rate_req, channels_req) != 0) return -1;
+    out->open_path       = strcmp(path, AUDIO_DEV_USB) == 0 ? AUDIO_DEV_USB
+                                                             : AUDIO_DEV_ONBOARD;
+    out->reprobe_last_ms = probe_now_ms();
+    out->usb_seen        = false;
+    return 0;
+}
+
+int audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
+                            const char **path_out)
+{
+    const char *path = audio_out_device_path();
+    if (open_on(out, path, rate_req, channels_req) != 0) {
+        if (strcmp(path, AUDIO_DEV_USB) != 0) return -1;
+        /* ⚠️ Refuse it, then resolve again: the second resolution is the panel,
+         * and oss_open() — which re-resolves on its own — agrees with it. */
+        usb_refused = true;
+        fprintf(stderr, "audio_out: %s will not open — using %s until it is "
+                "replugged\n", device_label(AUDIO_DEV_USB),
+                device_label(AUDIO_DEV_ONBOARD));
+        path = audio_out_device_path();
+        if (open_on(out, path, rate_req, channels_req) != 0) return -1;
+    }
+    if (path_out) *path_out = out->open_path;
+    return 0;
+}
+
+bool audio_out_reprobe_due(const char *pref, const char *open_path,
+                           uint32_t now_ms, uint32_t last_ms)
+{
+    if (!pref || !open_path) return false;
+    if (strcmp(open_path, AUDIO_DEV_ONBOARD) != 0) return false;
+    if (strcmp(pref, "usb") != 0 && strcmp(pref, "auto") != 0) return false;
+    return (uint32_t)(now_ms - last_ms) >= AUDIO_OUT_REPROBE_MS;
+}
+
+bool audio_out_usb_returned(AudioOut *out)
+{
+    if (!out || !out->is_open || out->device_lost) return false;
+
+    uint32_t now = probe_now_ms();
+    if (!audio_out_reprobe_due(audio_dev_pref, out->open_path, now,
+                               out->reprobe_last_ms))
+        return false;
+    out->reprobe_last_ms = now;
+
+    /* Two consecutive sightings: the node can exist before the card will open,
+     * and a move that fails there costs the card a refusal until it is
+     * unplugged again. */
+    bool usable = usb_usable();
+    bool before = out->usb_seen;
+    out->usb_seen = usable;
+    if (!usable || !before) return false;
+
+    fprintf(stderr, "audio_out: %s is back — leaving %s\n",
+            device_label(AUDIO_DEV_USB), device_label(out->open_path));
+    return true;
 }

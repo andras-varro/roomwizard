@@ -38,6 +38,8 @@
  * Group L is what a failed write MEANS: the ALSA backend's error classification,
  * the device-lost flag an unplug sets, and the OSS-node → ALSA-PCM mapping — all
  * pure or vtable-driven, so a host with no libasound reaches every branch.
+ * Group M is the gate in front of the replug probe: when a stream on the panel
+ * speaker looks for a USB card that has come back.
  *
  * ⚠️ **This file is NEW, so "seen failing against the pre-change source" cannot
  * mean compiling it against an older `audio_out.c` — there is none.**  The
@@ -1132,6 +1134,45 @@ int main(void)
         check(strcmp(audio_out_device_pcm(NULL), "plughw:0,0") == 0 &&
               strcmp(audio_out_device_pcm("/dev/null"), "plughw:0,0") == 0,
               "L15 anything else maps onboard, the same fallback the resolver has");
+    }
+
+    printf("\n=== M. the replug probe's gate (pure) ===\n");
+    {
+        /* audio_out_usb_returned() also needs card 1's node, which no host has,
+         * so the decision in front of it is driven directly.  M1 is the case the
+         * whole group exists for: a stream on the panel under "auto" must look
+         * again, or a replugged DAC is never picked up. */
+        check(audio_out_reprobe_due("auto", "/dev/dsp", 5000, 4000),
+              "M1 on the panel under \"auto\", 1000 ms after the last probe: due");
+        check(audio_out_reprobe_due("usb", "/dev/dsp", 5000, 4000),
+              "M2 the same under \"usb\"");
+        check(!audio_out_reprobe_due("auto", "/dev/dsp", 4999, 4000),
+              "M3 999 ms after the last probe: not yet — the probe is rate-limited");
+        check(!audio_out_reprobe_due("onboard", "/dev/dsp", 9000, 0),
+              "M4 CONTROL: \"onboard\" never probes — the panel is what was asked for");
+        check(!audio_out_reprobe_due("bogus", "/dev/dsp", 9000, 0),
+              "M5 an unrecognised preference resolves onboard, so it never probes");
+        check(!audio_out_reprobe_due("auto", "/dev/dsp1", 9000, 0),
+              "M6 CONTROL: a stream already on the USB card never probes");
+        check(!audio_out_reprobe_due("auto", NULL, 9000, 0) &&
+              !audio_out_reprobe_due(NULL, "/dev/dsp", 9000, 0),
+              "M7 no open path (a stream from another opener) or no preference: never");
+        /* 0x100 ms before the wrap plus 800 after it is 1056 ms elapsed. */
+        check(audio_out_reprobe_due("auto", "/dev/dsp", 800u, 0xFFFFFF00u) &&
+              !audio_out_reprobe_due("auto", "/dev/dsp", 700u, 0xFFFFFF00u),
+              "M8 the millisecond clock wrapping between probes neither stops the "
+              "probe nor fires it early");
+
+        /* A stream opened behind the fake vtable has no open path, so the wrapper
+         * must answer FALSE without touching the filesystem's answer at all. */
+        fake_reset(&f);
+        audio_out_set_device_pref("auto");
+        check(audio_out_open(&out, &FAKE_DEV, &f, RATE, 2) == 0 &&
+              !audio_out_usb_returned(&out),
+              "M9 a stream with no open path is never moved");
+        audio_out_close(&out);
+        check(!audio_out_usb_returned(&out) && !audio_out_usb_returned(NULL),
+              "M10 a closed stream, or NULL, is never moved");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",
