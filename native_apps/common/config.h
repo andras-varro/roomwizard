@@ -110,7 +110,7 @@ bool config_audio_enabled(const Config *cfg);
 bool config_music_enabled(const Config *cfg);
 bool config_effects_enabled(const Config *cfg);
 
-/* Which sound device. Reads "audio_device" (default: "onboard"); the three
+/* Which sound device. Reads "audio_device" (default: "auto"); the three
  * values the resolver understands are "onboard", "usb" and "auto".
  * ⚠️ This getter only reports the STORED PREFERENCE — it resolves nothing and
  * checks no hardware. `audio_out_device_path()` is the one place that turns it

@@ -266,6 +266,12 @@ typedef struct {
     bool          music_enabled;      /* subordinate to audio_enabled — see create_settings_ui() */
     bool          effects_enabled;
     int           audio_device_idx;   /* index into audio_device_names[] */
+    int           saved_audio_device_idx;  /* what config holds — drives UNSAVED */
+    /* The Settings tab's own bus: open while the tab is up, so TEST is a queue
+     * and a pump rather than an open, a blocking hold and a close per press. */
+    Audio         settings_audio;
+    bool          settings_audio_open;
+    int           settings_audio_idx; /* the audio_device_idx it was opened on */
     bool          led_enabled;
     int           led_brightness;
     int           backlight_brightness;
@@ -462,6 +468,8 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
 
 /* Forward declaration — usb_close() defined in USB Tab section below */
 static void usb_close(AppState *s);
+static void settings_audio_open(AppState *s);
+static void settings_audio_close(AppState *s);
 
 static void handle_tab_bar_input(AppState *state, int tx, int ty,
                                  bool touching, uint32_t now) {
@@ -473,6 +481,10 @@ static void handle_tab_bar_input(AppState *state, int tx, int ty,
                 state->diag_needs_refresh = true;
             if (prev_tab == TAB_USB && state->active_tab != TAB_USB)
                 usb_close(state);
+            if (prev_tab == TAB_SETTINGS && state->active_tab != TAB_SETTINGS)
+                settings_audio_close(state);
+            if (prev_tab != TAB_SETTINGS && state->active_tab == TAB_SETTINGS)
+                settings_audio_open(state);
         }
     }
     if (button_update(&exit_btn, tx, ty, touching, now))
@@ -482,32 +494,6 @@ static void handle_tab_bar_input(AppState *state, int tx, int ty,
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * Settings Tab  (from hardware_config.c)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-
-static void do_audio_test(void) {
-    /* audio_init_unchecked() bypasses the ENABLE gate ON PURPOSE: a hardware
-     * test must be able to drive the speaker even when the user has switched
-     * audio off, and audio_init() would make it obey the very setting it
-     * exists to test.  ⚠️ It does NOT bypass the output device — that library call
-     * resolves `audio_device` from the saved config itself, so this test plays on
-     * whichever device a game would.  Do not set the preference here; it moved
-     * into the library precisely because this call site had forgotten to.
-     *
-     * What used to be here was a hand-rolled copy of the open, the three ioctls
-     * and the GPIO12 poke — a verbatim duplicate of hardware_config.c's, which
-     * went silently mute the moment `Audio` gained a field neither copy set. */
-    Audio test_audio;
-    if (audio_init_unchecked(&test_audio) != 0) return;
-
-    /* audio_hold_serviced() rather than usleep(): on the bus each tone is a mixer
-     * voice until something pumps it, and nothing else here does.  The second hold
-     * is not padding — without it the 1320 Hz tone is still in the mixer when
-     * audio_close() runs and is never heard at all. */
-    audio_tone(&test_audio, 880, 200);
-    audio_hold_serviced(&test_audio, 250);
-    audio_tone(&test_audio, 1320, 200);
-    audio_hold_serviced(&test_audio, 250);
-    audio_close(&test_audio);
-}
 
 static void do_led_test(int brightness_pct) {
     char buf[8];
@@ -615,6 +601,29 @@ static int audio_device_index_of(const char *name) {
     for (int i = 0; i < 3; i++)
         if (name && strcmp(name, audio_device_names[i]) == 0) return i;
     return 0;
+}
+
+static void settings_audio_close(AppState *s) {
+    if (!s->settings_audio_open) return;
+    audio_close(&s->settings_audio);
+    s->settings_audio_open = false;
+}
+
+/* The unchecked open bypasses the ENABLE gate ON PURPOSE: a hardware test must
+ * drive the speaker even with audio switched off, and audio_init() would make it
+ * obey the very setting it exists to test.  The _pref form opens on the device
+ * the OUT button SHOWS, saved or not — TEST reporting on the saved device while
+ * the button names another is a verdict about hardware nobody asked about.
+ *
+ * Held for the whole tab, not per press: open → two blocking holds → close froze
+ * the UI ~0.9 s per TEST and paid a stream start and stop each time.  Also why
+ * this is no longer the library's serviced hold: the main loop pumps instead
+ * (and naming that call here would exempt this file from check-audio-pacing.sh). */
+static void settings_audio_open(AppState *s) {
+    settings_audio_close(s);
+    s->settings_audio_idx  = s->audio_device_idx;
+    s->settings_audio_open = (audio_init_unchecked_pref(&s->settings_audio,
+                                  audio_device_names[s->audio_device_idx]) == 0);
 }
 
 /* Row 2's OUT button box, as a pure function of the content rect.
@@ -870,6 +879,16 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
         int status_y = portrait ? action_y + 100 : action_y + 50;
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
                            status_y, state->status_msg, sc, 2);
+    } else if (state->audio_device_idx != state->saved_audio_device_idx) {
+        /* TEST plays the SHOWN output, games the SAVED one — so say when they
+         * differ.  The status slot, because it is inside the measured stack and
+         * a transient message outranks this for its 2 s.  Scale drops to 1 where
+         * scale 2 would overrun the content rect (portrait). */
+        static const char note[] = "OUT NOT SAVED - PRESS SAVE";
+        int status_y = portrait ? action_y + 100 : action_y + 50;
+        int sc = (text_measure_width(note, 2) <= CONTENT_WIDTH) ? 2 : 1;
+        text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
+                           status_y, note, COLOR_ORANGE, sc);
     }
 
     /* SYSTEM section */
@@ -906,8 +925,15 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         if (state->led_brightness > 100) state->led_brightness = 100;
         do_led_test(state->led_brightness);
     }
-    if (button_update(&test_audio_btn, tx, ty, touching, now))
-        do_audio_test();
+    /* Queued, not played: the main loop's audio_pump() delivers it, so the press
+     * returns at once.  Lazy open covers a bus whose tab-entry open failed. */
+    if (button_update(&test_audio_btn, tx, ty, touching, now)) {
+        if (!state->settings_audio_open ||
+            state->settings_audio_idx != state->audio_device_idx)
+            settings_audio_open(state);
+        if (state->settings_audio_open)
+            audio_test_chime(&state->settings_audio);
+    }
     if (button_update(&test_led_btn, tx, ty, touching, now))
         do_led_test(state->led_brightness);
 
@@ -919,20 +945,17 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
         config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
         config_set_bool(&state->cfg, "effects_enabled", state->effects_enabled);
-        /* ⚠️ Only the SAVED value has any effect on a game, and the TEST button
-         * above resolves the same way: audio_init_unchecked() reads this file from
-         * disk on every open, so press SAVE then TEST and you hear whichever device
-         * a game would have resolved.  That is the cheapest end-to-end check of
-         * this setting in the app.
+        /* ⚠️ Only the SAVED value has any effect on a game.  TEST does NOT resolve
+         * the same way: it plays the device the OUT button SHOWS (the _pref open in
+         * settings_audio_open()), so an unsaved choice can be heard before it is
+         * kept — and draw_settings() says "OUT NOT SAVED" until it is.
          *
-         * ⚠️ It was NOT true when this row shipped, and the comment here claimed it
-         * anyway.  audio_init_unchecked() was `return audio_open(audio);` and set no
-         * device preference at all, so TEST always played on the panel speaker
-         * whatever this said — reported from the panel, not caught by any gate.  The
-         * preference now moves inside that library call, which is why nothing in
-         * this function pushes it anywhere. */
+         * ⚠️ An earlier TEST ignored the preference entirely — the unchecked open
+         * set none, so it always played the panel speaker while this comment
+         * claimed otherwise; reported from the panel, not caught by any gate. */
         config_set(&state->cfg, "audio_device",
                    audio_device_names[state->audio_device_idx]);
+        state->saved_audio_device_idx = state->audio_device_idx;
         config_set_bool(&state->cfg, "led_enabled", state->led_enabled);
         config_set_int(&state->cfg, "led_brightness", state->led_brightness);
         config_save(&state->cfg);
@@ -959,6 +982,8 @@ static void handle_settings_input(AppState *state, int tx, int ty,
          * disagree with the one a game will resolve. */
         state->audio_device_idx =
             audio_device_index_of(config_audio_device(&state->cfg));
+        /* saved_audio_device_idx is NOT touched: RESET writes nothing to disk, so
+         * a default that differs from the file is exactly an unsaved change. */
         state->led_enabled = DEFAULT_LED_ENABLED;
         state->led_brightness = DEFAULT_LED_BRIGHTNESS;
         state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
@@ -970,6 +995,12 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
         state->status_time_ms = now;
     }
+
+    /* OUT or RESET changed the shown device: move the open bus onto it, so the
+     * next TEST is heard where the button points. */
+    if (state->settings_audio_open &&
+        state->settings_audio_idx != state->audio_device_idx)
+        settings_audio_open(state);
 
     /* System action buttons */
     if (button_update(&shutdown_btn, tx, ty, touching, now)) {
@@ -1299,7 +1330,7 @@ static void draw_diag_config(Framebuffer *fb) {
             {"audio_enabled","AUDIO ENABLED:","1 (default)"},
             {"music_enabled","MUSIC:","1 (default)"},
             {"effects_enabled","EFFECTS:","1 (default)"},
-            {"audio_device","AUDIO OUT:","onboard (default)"},
+            {"audio_device","AUDIO OUT:","auto (default)"},
             {"led_enabled","LED ENABLED:","1 (default)"},
             {"led_brightness","LED BRIGHTNESS:","100 (default)"},
             {"backlight_brightness","BACKLIGHT:","100 (default)"},
@@ -2231,6 +2262,10 @@ static void handle_display_input(AppState *state, int tx, int ty,
     if (button_update(&disp_save_btn, tx, ty, touching, now)) {
         config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
         config_save(&state->cfg);
+        /* The whole in-memory Config is written, so after a Settings RESET this
+         * also saves the cleared audio_device — keep the UNSAVED note honest. */
+        state->saved_audio_device_idx =
+            audio_device_index_of(config_audio_device(&state->cfg));
         if (state->portrait_mode) {
             FILE *pf = fopen(PORTRAIT_FLAG_FILE, "w");
             if (pf) { fprintf(pf, "1\n"); fclose(pf); }
@@ -2251,6 +2286,8 @@ static void handle_display_input(AppState *state, int tx, int ty,
         portrait_toggle.state = false;
         config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
         config_save(&state->cfg);
+        state->saved_audio_device_idx =   /* see DISPLAY SAVE above */
+            audio_device_index_of(config_audio_device(&state->cfg));
         unlink(PORTRAIT_FLAG_FILE);
         apply_backlight(state->backlight_brightness);
         snprintf(state->status_msg, sizeof(state->status_msg), "DISPLAY DEFAULTS RESTORED");
@@ -3878,6 +3915,7 @@ int main(void) {
     state.music_enabled = config_music_enabled(&state.cfg);
     state.effects_enabled = config_effects_enabled(&state.cfg);
     state.audio_device_idx = audio_device_index_of(config_audio_device(&state.cfg));
+    state.saved_audio_device_idx = state.audio_device_idx;
     state.led_enabled = config_get_bool(&state.cfg, "led_enabled", DEFAULT_LED_ENABLED);
     state.led_brightness = config_get_int(&state.cfg, "led_brightness", DEFAULT_LED_BRIGHTNESS);
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
@@ -3897,6 +3935,7 @@ int main(void) {
 
     rebuild_ui(&state);
     usb_scan_devices(&state);
+    settings_audio_open(&state);   /* Settings is the startup tab: no tab press opens it */
 
     bool needs_redraw = true;  /* first frame always draws */
 
@@ -3952,7 +3991,8 @@ int main(void) {
         bool          prev_music     = state.music_enabled;
         bool          prev_effects   = state.effects_enabled;
         int           prev_out_idx   = state.audio_device_idx;
-        bool          prev_led       = state.led_enabled;
+        int           prev_out_saved = state.saved_audio_device_idx;  /* UNSAVED note */
+        bool          prev_led      = state.led_enabled;
         int           prev_led_br    = state.led_brightness;
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
@@ -4020,7 +4060,8 @@ int main(void) {
             prev_music     != state.music_enabled   ||
             prev_effects   != state.effects_enabled ||
             prev_out_idx   != state.audio_device_idx ||
-            prev_led       != state.led_enabled     ||
+            prev_out_saved != state.saved_audio_device_idx ||
+            prev_led      != state.led_enabled     ||
             prev_led_br    != state.led_brightness  ||
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
@@ -4038,10 +4079,17 @@ int main(void) {
             needs_redraw = true;
         }
 
-        /* Adaptive sleep: faster polling when a redraw is pending */
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        /* Every iteration, not only on drawn frames: the Settings bus must be
+         * serviced whatever the screen is doing, and a closed one is a no-op. */
+        audio_pump(&state.settings_audio);
+
+        /* Adaptive sleep: faster polling when a redraw is pending, or while the
+         * Settings bus is open — FRAME_DELAY_IDLE_US would starve it. */
+        usleep((needs_redraw || audio_pump_active(&state.settings_audio))
+               ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
+    settings_audio_close(&state);
     hw_leds_off();
     hw_reload_config();
     hw_set_backlight(100);

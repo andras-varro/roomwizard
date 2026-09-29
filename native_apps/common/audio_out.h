@@ -320,9 +320,9 @@ bool audio_out_device_lost(const AudioOut *out);
  * resolution with no sound card present.
  */
 
-/** Set the preference: `"onboard"`, `"usb"` or `"auto"`. NULL or unrecognised
- *  reads as `"onboard"`, so a unit never told otherwise behaves as it always
- *  did. Truncated past 15 characters. */
+/** Set the preference: `"onboard"`, `"usb"` or `"auto"`. NULL or empty reads as `"auto"`;
+ *  an unrecognised value resolves as `"onboard"` (see audio_out_device_for). Truncated
+ *  past 15 characters. */
 void        audio_out_set_device_pref(const char *pref);
 
 /** What was last set — the preference, NOT the resolved device. */

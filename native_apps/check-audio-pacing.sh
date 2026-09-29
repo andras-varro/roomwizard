@@ -15,7 +15,7 @@
 # sound has gaps in it (or, with no pump at all, no sound).  This is a rule
 # nobody should have to remember, so it is arithmetic instead.
 #
-# ⚠️ "Opens the stream" is spelled `audio_init(&` / `audio_init_unchecked(&` —
+# ⚠️ "Opens the stream" is spelled `audio_init(&`, `audio_init_unchecked(&` or `audio_init_unchecked_pref(&` —
 # with the `&` — so a comment that names audio_init() in prose (app_launcher.c
 # has one) does not make a file a subject.  Fixture 4 is that control.
 #
@@ -96,7 +96,7 @@ scan_dir() {
     local f enable service active idle hold converted=0 ok=0 fail=0 unchecked=0
 
     while IFS= read -r f; do
-        enable=$(grep -c 'audio_init(&\|audio_init_unchecked(&' "$f")
+        enable=$(grep -c 'audio_init(&\|audio_init_unchecked(&\|audio_init_unchecked_pref(&' "$f")
         service=$(grep -c 'audio_pump(' "$f")
         active=$(grep -c 'audio_pump_active(' "$f")
         idle=$(grep -c 'FRAME_DELAY_IDLE_US' "$f")
@@ -113,10 +113,9 @@ scan_dir() {
         # ⚠️ audio_hold_serviced() counts as servicing, and it is not a courtesy:
         # it pumps in 20 ms slices for its whole duration and again on the way out
         # (common/audio.c), which is the obligation, discharged by the library
-        # instead of by the caller's loop.  The two Settings speaker tests have no
-        # loop to put an audio_pump() in — they are a tone, a wait and a close —
-        # and inlining one in each was the copy that comment in
-        # hardware_config.c:do_audio_test() exists to warn about.
+        # instead of by the caller's loop.  It is for a helper with no loop to put
+        # an audio_pump() in — a tone, a wait and a close.  A screen with a loop
+        # holds the bus for its lifetime and pumps instead (both Settings tabs).
         if [ "$service" -eq 0 ] && [ "$hold" -eq 0 ]; then
             echo "FAIL ${f#$root/}: opens the audio stream and never services it (no audio_pump(), no audio_hold_serviced())"
             bad=1
@@ -173,7 +172,7 @@ self_test() {
 
     mkdir -p "$tmp/good" "$tmp/nopump" "$tmp/nopace" "$tmp/plain" \
              "$tmp/bedlate" "$tmp/nogover" "$tmp/wrapper" "$tmp/wraplate" "$tmp/noland" \
-             "$tmp/hold"
+             "$tmp/hold" "$tmp/prefopen"
 
     # 1. correct conversion — must PASS
     cat > "$tmp/good/good.c" <<'EOC'
@@ -258,7 +257,7 @@ int main(void){ audio_init(&a);
 EOC
 
     # 11. serviced ONLY through audio_hold_serviced() — must PASS.  This is the
-    #     shape of both Settings speaker tests: no loop to hang an audio_pump() on,
+    #     shape of a loop-less helper: no loop to hang an audio_pump() on,
     #     and FRAME_DELAY_IDLE_US present in a DIFFERENT loop that the bus is
     #     already closed before reaching.  ⚠️ Its negative control is fixture 3
     #     (nopace), which is the same defect WITHOUT the hold and must still FAIL —
@@ -269,8 +268,16 @@ static void do_audio_test(void){ audio_init(&a);
 int main(void){ while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US); } }
 EOC
 
+    # 12. fixture 2's defect behind the THIRD spelling of an open — must FAIL.
+    #     device_tools' Settings screen opens only this way, and a subject pattern
+    #     that knew two spellings would not count the file at all.
+    cat > "$tmp/prefopen/prefopen.c" <<'EOC'
+int main(void){ audio_init_unchecked_pref(&a, "usb");
+  while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US); } }
+EOC
+
     out=$(scan_dir "$tmp")
-    local expect_fail="nopump/nopump.c nopace/nopace.c bedlate/bedlate.c nogover/nogover.c wraplate/wraplate.c"
+    local expect_fail="nopump/nopump.c nopace/nopace.c bedlate/bedlate.c nogover/nogover.c wraplate/wraplate.c prefopen/prefopen.c"
     local expect_pass="good/good.c plain/plain.c wrapper/wrapper.c hold/hold.c"
 
     echo "── self-test ────────────────────────────────────────────────────"
@@ -296,7 +303,7 @@ EOC
         echo "  NOT REPORTED: noland/noland.c   <-- a skipped check is reading as a pass"; rc=1
     fi
     echo "  fixture counts: $counts"
-    [ "$counts" = "COUNTS 9 4 5 1" ] || { echo "  counts wrong <-- expected 'COUNTS 9 4 5 1'"; rc=1; }
+    [ "$counts" = "COUNTS 10 4 6 1" ] || { echo "  counts wrong <-- expected 'COUNTS 10 4 6 1'"; rc=1; }
     echo "── self-test $([ $rc -eq 0 ] && echo PASSED || echo FAILED) ─────────────────────────────────"
     return $rc
 }

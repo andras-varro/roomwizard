@@ -67,33 +67,6 @@ static void signal_handler(int sig) {
 
 /* ── Test functions (bypass config-gated APIs) ──────────────────────────── */
 
-static void do_audio_test(void) {
-    /* Bypass config-gated audio_init — a hardware test must drive the speaker
-     * even when the user has switched audio off, so it must not obey the very
-     * setting it exists to test.  audio_init_unchecked() is that bypass, in ONE
-     * place: this was a verbatim copy of device_tools.c's open + three ioctls +
-     * GPIO12 poke, and a copy like that goes silently mute as soon as `Audio`
-     * gains a field it does not set.
-     *
-     * ⚠️ The bypass is of the ENABLE gate only — the library call resolves the
-     * saved `audio_device` itself, so this beep follows the configured output.  It
-     * did not always: while that resolution lived in audio_init(), this test and
-     * device_tools' played on the panel speaker whatever the setting said. */
-    Audio test_audio;
-    if (audio_init_unchecked(&test_audio) != 0) return;
-
-    /* Play test beep.  audio_hold_serviced() rather than usleep(): on the bus each
-     * tone is a mixer voice until something pumps it, and nothing else here does.
-     * The second hold is not padding — without it the 1320 Hz tone is still in the
-     * mixer when audio_close() runs and is never heard at all. */
-    audio_tone(&test_audio, 880, 200);
-    audio_hold_serviced(&test_audio, 250);
-    audio_tone(&test_audio, 1320, 200);
-    audio_hold_serviced(&test_audio, 250);
-
-    audio_close(&test_audio);
-}
-
 static void do_led_test(int brightness_pct) {
     /* Write directly to sysfs, bypassing config-gated hw_set_led */
     char buf[8];
@@ -195,6 +168,15 @@ int main(void) {
     /* Initialize hardware */
     hw_init();
     hw_set_backlight(100);
+
+    /* Speaker-test bus, open for the whole screen so TEST AUDIO queues a chime
+     * and the loop's audio_pump() plays it — no press freezes the UI.
+     * audio_init_unchecked() bypasses the ENABLE gate only (a hardware test must
+     * sound even with audio switched off); it still resolves the saved
+     * `audio_device`, so the chime follows the configured output.  A failed open
+     * leaves test_audio unavailable and every call below a silent no-op. */
+    Audio test_audio;
+    audio_init_unchecked(&test_audio);
 
     /* ── Load config ────────────────────────────────────────────── */
     Config cfg;
@@ -405,7 +387,7 @@ int main(void) {
 
         /* Test buttons */
         if (button_update(&test_audio_btn, tx, ty, touching, now)) {
-            do_audio_test();
+            audio_test_chime(&test_audio);
         }
         if (button_update(&test_led_btn, tx, ty, touching, now)) {
             do_led_test(led_brightness);
@@ -450,11 +432,15 @@ int main(void) {
             led_brightness != old_led_br || backlight_brightness != old_bl_br)
             needs_redraw = true;
 
-        /* Adaptive sleep: ~30 fps when active, ~10 fps when idle */
-        usleep(needs_redraw ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
+        /* Adaptive sleep: ~30 fps when active, ~10 fps when idle — but an open
+         * stream must be serviced at the active rate or it starves. */
+        audio_pump(&test_audio);
+        usleep((needs_redraw || audio_pump_active(&test_audio))
+               ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
     /* ── Cleanup ────────────────────────────────────────────────── */
+    audio_close(&test_audio);
     hw_leds_off();
     hw_reload_config();      /* Re-read config so exit applies saved values, not stale startup cache */
     hw_set_backlight(100);

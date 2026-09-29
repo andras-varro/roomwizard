@@ -825,10 +825,10 @@ int main(void)
         audio_out_close(&out);
     }
 
-    printf("\n=== G. mode 2: synchronous, for the two tabs with NO render loop ===\n");
+    printf("\n=== G. mode 2: synchronous, for a caller with NO render loop ===\n");
     {
-        /* hardware_config.c:77-85 and device_tools.c:484-489: init, tone, usleep,
-         * tone, close.  Nothing would ever service them. */
+        /* A loop-less helper: init, tone, usleep,
+         * tone, close.  Nothing would ever service it. */
         fake_reset(&f);
         f.drain_all = false; f.drain_per_space = 2048;
         audio_out_open(&out, &FAKE_DEV, &f, RATE, 2);
@@ -974,7 +974,7 @@ int main(void)
         audio_out_close(&a);
         check(audio_out_open(&b, &FAKE_DEV, &g, RATE, 2) == 0,
               "J3 but SEQUENTIAL open/close pairs are fine, which is what "
-              "device_tools' two short-lived Audio objects rely on");
+              "two sequential short-lived Audio objects rely on");
         audio_out_close(&b);
     }
 
@@ -999,9 +999,9 @@ int main(void)
               "K1 this host has no writable /dev/dsp1 — every case below is "
               "therefore the card-ABSENT branch, and says so");
 
-        check(strcmp(audio_out_device_pref(), "onboard") == 0,
-              "K2 the default preference is onboard, so a unit never told "
-              "otherwise behaves exactly as it did before the seam existed");
+        check(strcmp(audio_out_device_pref(), "auto") == 0,
+              "K2 the default preference is auto, which with no card "
+              "present must still resolve to the panel speaker (K3)");
         check(strcmp(audio_out_device_path(), "/dev/dsp") == 0 &&
               audio_out_device_is_onboard(),
               "K3 and it resolves to the panel speaker");
@@ -1021,8 +1021,8 @@ int main(void)
               "K6 auto with no card is onboard too");
 
         audio_out_set_device_pref(NULL);
-        check(strcmp(audio_out_device_pref(), "onboard") == 0,
-              "K7 NULL reads as onboard rather than clearing the string, so a "
+        check(strcmp(audio_out_device_pref(), "auto") == 0,
+              "K7 NULL reads as the auto default rather than clearing the string, so a "
               "caller with no config file still names a device");
         audio_out_set_device_pref("wharrgarbl");
         check(strcmp(audio_out_device_path(), "/dev/dsp") == 0,

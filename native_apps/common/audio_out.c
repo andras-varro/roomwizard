@@ -515,13 +515,13 @@ AudioOutErr audio_out_alsa_classify(int err)
 #define AUDIO_DEV_ONBOARD "/dev/dsp"      /* TWL4030, the panel speaker */
 #define AUDIO_DEV_USB     "/dev/dsp1"     /* ALSA card 1, a USB DAC     */
 
-/** "onboard" | "usb" | "auto".  Defaults to onboard so a unit that has never
- *  been told otherwise behaves exactly as it did before this seam existed. */
-static char audio_dev_pref[16] = "onboard";
+/** "onboard" | "usb" | "auto".  Defaults to auto: a USB DAC when one is plugged in,
+ *  the panel speaker otherwise. */
+static char audio_dev_pref[16] = "auto";
 
 void audio_out_set_device_pref(const char *pref)
 {
-    if (!pref || !*pref) pref = "onboard";
+    if (!pref || !*pref) pref = "auto";
     snprintf(audio_dev_pref, sizeof(audio_dev_pref), "%s", pref);
 }
 

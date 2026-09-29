@@ -816,23 +816,21 @@ build lines in their own headers, and each pinned to the onboard device on purpo
 
 ### Hold the bus for the screen, not for one press
 
-**A screen that makes sound owns the bus for as long as it is up.** Two shapes exist in the tree and
-only one is right:
+**A screen that makes sound owns the bus for as long as it is up.** Open it before the loop (or on
+entering the tab), queue sounds as voices — `audio_test_chime()` returns at once and `audio_pump()`
+delivers it — and `audio_close()` on the exit paths only: `test_audio_diag()` in
+`device_tools/device_tools.c` and `hardware_test/hardware_test_gui.c`, and both Settings screens. The
+wrong shape — `audio_init*` → tones → `audio_close()` inside one button handler — costs a stream open
+**and** a stream stop per press, and freezes the UI while the handler holds the tones.
 
-| Shape | Sites | What it costs |
-|---|---|---|
-| `audio_init*` → tones → `audio_close()` all inside one button handler | `device_tools/device_tools.c:486` and `hardware_config/hardware_config.c:70`, both named `do_audio_test()` and near-verbatim copies of each other | a stream open **and** a stream stop per press |
-| `audio_init()` before the loop, `audio_close()` on the exit paths only | `device_tools/device_tools.c:1828` and `hardware_test/hardware_test_gui.c:616`, both `test_audio_diag()` | one of each per screen — **copy this one** |
-
-**Measured on `.188` 2026-09-05**, from `/var/log/roomwizard/app_stdout.log`: one `device_tools` process
-logged fifteen `bus closed` lines — six at `services=28` and nine at `services=80` — against one line
-per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, the latter the only
+**Measured on `.188` 2026-09-05**, on that wrong shape, from `/var/log/roomwizard/app_stdout.log`: one
+`device_tools` process logged fifteen `bus closed` lines — six at `services=28` and nine at
+`services=80` — against one line per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, the latter the only
 `starve=1` seen). Every diagnostic line read `starve=0 lost=0 drop=0 lim=0 clip=0`, so the cost is the
 transitions and not the mixing.
 
 Both transitions are audible ([`../SYSTEM_ANALYSIS.md#34-audio`](../SYSTEM_ANALYSIS.md#34-audio)), which
-is why a click is heard on the first press after a gap and again ~5 s after the last. ⚠️ **The two
-`do_audio_test()` copies also block the UI for the length of the handler** — open work in
-`../IMPROVEMENT_PLAN.md` — and §3.4 records its stop-click with the power-down held *off*, whereas repeat
-presses at the default `pmdown_time` were reported inaudible. Those two have never been listened to
+is why a click is heard on the first press after a gap and again ~5 s after the last. §3.4 records the
+stop-click with the power-down held *off*, whereas repeat presses at the default `pmdown_time` were
+reported inaudible. Those two have never been listened to
 together; do that before promising any screen is click-free.

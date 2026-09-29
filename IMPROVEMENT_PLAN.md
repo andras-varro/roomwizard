@@ -159,20 +159,19 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B36. Recovery from an output device unplugged mid-playback is unverified, and ScummVM has none — open, confirmed 2026-09-09
+### B36. A replugged output device is never picked up again, and ScummVM does not recover at all — open, confirmed 2026-09-09
 
 The symptom, operator-confirmed 2026-09-09 and **acceptable to them** (quality, not function): pull a USB
 DAC while sound was playing and the process stayed silent for its whole life.
 
-**Native apps now reopen — host-tested only.** `ENODEV` (or `EBADFD`) from a write or a space query sets
-`audio_out_device_lost()` on either backend (`common/audio_out.c`); `common/audio.c` then closes and
-re-runs `stream_open()` at most once per `AUDIO_REOPEN_MS`, so `usb`/`auto` land on the panel.
-`native_apps/tests/audio_out_test.c` covers the classifier and the flag; the reopen loop in `audio.c` is
-not host-tested. Left open:
+**Native apps fall back to the panel — operator-measured 2026-09-28 at `.188`, softfp build.** Unplug
+during music: a brief stall, then the onboard speaker; the log reads `audio_out: plughw:1,0 is gone (File
+descriptor in bad state)` then `plughw:0,0 open (alsa)`. Mechanism: `EBADFD`/`ENODEV` sets
+`audio_out_device_lost()` (`common/audio_out.c`) and `common/audio.c` re-runs `stream_open()` at most once
+per `AUDIO_REOPEN_MS`. Left open:
 
-- **An operator unplug on a native game** at `.188` with `audio_device=usb`, on the softfp build and again
-  with `RW_AUDIO_OSS=1`: does a real unplug answer `ENODEV` rather than hang, return zero bytes or `EIO`,
-  and is the panel heard afterwards? Witness: `audio: output device lost — reopening` in the app's log.
+- **Replug is never picked up**: the game stays on the panel until restarted. Fix: while on the fallback
+  with `audio_device` `usb`/`auto`, re-probe the USB card periodically and move back to it.
 - **ScummVM has no reopen** — `scummvm-roomwizard/backend-files/oss-mixer.cpp` links `audio_out.o` but
   nothing there polls the lost flag, so an unplug silences it for the session.
 
@@ -185,14 +184,18 @@ test. On `.188` the touchpad's mouse node is `event3` and the receiver's is `eve
 same goes for keyboards and pads). *Inferred* from that code and the node order; `event6` was not opened.
 Fix: let the tester step through every node of its kind, and verify with both devices attached.
 
-### B38. Mix Bus Test cracks at 6-7 simultaneous voices — open, confirmed 2026-09-28
+### B38. Mix Bus Test cracks on each press at 6-7 simultaneous voices — open, confirmed 2026-09-28
 
-**Operator at `.188`, softfp ALSA build: a crack on each press once 6-7 voices sound together.** Its
-`/tmp/mix.log` (the tool `freopen`s stderr there, not into `app_stdout.log`) read `starve=0` and
-`clip=74285` at `limit=hard`, lead 139 ms — so this is mix-bus **clipping**, upstream of the device and of
-either backend, not an ALSA regression **[inferred from the counters]**. Next: the operator retests with
-the soft limiter (`audio_mix_get_limit()` is what the tool prints); if that is clean, weigh per-voice
-headroom against a soft default. Second, **[inferred, code only]**: `native_apps/tests/audio_mix_test.c`
+**Operator at `.188`, softfp ALSA build: a crack on each press once 6-7 voices sound together — and it is
+not clipping.** Measured 2026-09-28 in `/tmp/mix.log` (the tool `freopen`s stderr there): that session ran
+`vol=24`, `limit=hard`, `clip=0 lim=0 starve=0`, up to 8 voices with `drop=4`, and still cracked. (An
+earlier `clip=74285` was at a higher volume rung: real, but a separate matter.) **[inferred, code
+trace]** No press puts a step into the samples: each voice starts at 0 with a linear `AUDIO_ATTACK_MS`
+attack and `AUDIO_RELEASE_MS` release (`common/audio_gen.h`), a full pool refuses rather than steals, and nothing
+scales gain by voice count; the one hard cut is STOP (`audio_mix_stop_all()`). Left suspects: the
+full-screen redraw each press does in the same loop pass as `audio_pump()`, the SFX pad's `fopen`/SD read
+inside the tap (both in `native_apps/tests/audio_mix_test.c`), or analog. Next: suppress the per-press
+redraw and have the operator repeat; optional, a raised-cosine attack and a ramped STOP. Second, **[inferred, code only]**: `native_apps/tests/audio_mix_test.c`
 calls `fb_fade_out()` then `audio_close()` with no pump between, so the stream's tail starves during the
 fade (`:867-868` today) — pump the bus through the fade.
 
@@ -693,17 +696,15 @@ ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client pl
 `dfcc0a92`). Tag `static-only-last` marks the last all-static commit. **Step 4 is in:** under
 `RW_ABI=softfp` both build scripts build alsa-lib on demand and `audio_out.c` plays through libasound
 ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Operator by ear on `.188` 2026-09-28:
-Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works. Unplug recovery is B36 and the Mix Bus
-Test crack B38. Still open here:
+Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works, and ScummVM's ALSA build plays Full
+Throttle acceptably with occasional cracks. Unplug recovery is B36 and the Mix Bus Test crack B38. Still
+open here:
 
-- **ScummVM's ALSA build has not been listened to** — the clean Full Throttle run of 2026-09-28 was OSS.
-- **The settings tab** (`native_apps/device_tools/device_tools.c`, operator 2026-09-27): `audio_device`
-  defaults to `auto`, not `onboard` (`config_audio_device()` in `common/config.c`); TEST AUDIO plays on the
-  output **shown**, not the saved one; the page shows an "unsaved changes" note while they differ. TEST
-  AUDIO also freezes the UI ~0.9 s (noticed, though "not really sensible" to the operator):
-  `do_audio_test()` there and its copy in `hardware_config.c` open the stream, hold each tone with
-  `audio_hold_serviced()` and close (drain) inside the button handler (read in code) — fix is to hold the
-  bus for the screen and queue the tones as voices (`native_apps/CLAUDE.md` → *Hold the bus for the screen*).
+- **Settings tab, awaiting the operator's taps** (built; measured on `.188` 2026-09-28 only that
+  `device_tools` holds `pcmC1D0p` from its first frame and shows no note while shown == saved): TEST AUDIO
+  does not freeze; changing OUT changes what TEST plays; "OUT NOT SAVED - PRESS SAVE" appears. Delete once
+  heard. Separately, `do_led_test()` in `device_tools.c` and `hardware_config.c` still `usleep`s 500 ms
+  without `audio_pump()`, so a chime in flight gets a gap **[read in code]**.
 - **(5)** flip both defaults to softfp-dynamic; delete the OSS backend, `RW_AUDIO_OSS` and SYSTEM_ANALYSIS
   §6's "every binary we ship is `-static`" safety argument; gate that the deep clean and the offline
   installer keep libc, libstdc++ and libasound. Stale text goes with OSS: `native_apps/tests/alsa_probe.sh:14`

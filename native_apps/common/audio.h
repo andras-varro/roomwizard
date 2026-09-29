@@ -294,6 +294,16 @@ int  audio_init(Audio *audio);
 int  audio_init_unchecked(Audio *audio);
 
 /**
+ * audio_init_unchecked(), opening on `pref` instead of the SAVED `audio_device`.
+ *
+ * For a settings screen whose device choice is not saved yet: its speaker test
+ * must drive the device the screen shows, not the one on disk.  `pref == NULL`
+ * means the saved one — audio_init_unchecked() is exactly that call, so the two
+ * share one body.  Same gate bypass, same overwrite of any earlier preference.
+ */
+int  audio_init_unchecked_pref(Audio *audio, const char *pref);
+
+/**
  * Drain the stream (bounded), close it and release resources.
  * Safe to call even if audio_init() failed.
  */
@@ -521,6 +531,12 @@ long audio_cont_service_interval_us(const Audio *audio);
  * The note table is the FALLBACK, not the legacy: a device with no sound files
  * still makes every one of these sounds.
  */
+
+/** The speaker-test chime: 880 Hz 200 ms, then 1320 Hz 200 ms starting 250 ms
+ *  in.  Both voices are queued at once with start delays, so it returns at once
+ *  and the caller's audio_pump() plays it — for a screen that holds the bus
+ *  open, not one that opens and closes it around each press.  No clip. */
+void audio_test_chime(Audio *audio);
 
 /** Short 880 Hz blip (~80 ms)  — UI click, tile place, button press */
 void audio_beep(Audio *audio);

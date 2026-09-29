@@ -311,7 +311,7 @@ bool config_effects_enabled(const Config *cfg) {
 }
 
 const char *config_audio_device(const Config *cfg) {
-    return config_get(cfg, "audio_device", "onboard");
+    return config_get(cfg, "audio_device", "auto");
 }
 
 const char *config_audio_device_stored(void) {

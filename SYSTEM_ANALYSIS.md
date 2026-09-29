@@ -918,7 +918,7 @@ modules — `snd-hwdep`, `snd-rawmidi`, `snd-usbmidi-lib`, `snd-usb-audio` — l
 `-f` and no unresolved symbols, from `/etc/init.d/usb-audio-modules`, whose header holds the OSS minor
 and why it is deterministic. `/proc/asound/cards` then gains `1 [Device]: USB-Audio` and the shim appears
 at `/dev/dsp1`. Which card an app opens is the `audio_device` key — `onboard` | `usb` | `auto`, default
-`onboard`; [`native_apps/CLAUDE.md`](native_apps/CLAUDE.md) holds the one-home rule for resolving it.
+`auto`; [`native_apps/CLAUDE.md`](native_apps/CLAUDE.md) holds the one-home rule for resolving it.
 
 ⚠️ **A USB card advertises a different parameter set, so the `hw:0,0` table above cannot speak for it.**
 `[n=1]` on a C-Media `0d8c:0014`, and the same on `.188`'s dongle 2026-09-28: `/proc/asound/card1/stream0`

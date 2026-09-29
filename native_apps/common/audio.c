@@ -261,6 +261,11 @@ int audio_init(Audio *audio)
 
 int audio_init_unchecked(Audio *audio)
 {
+    return audio_init_unchecked_pref(audio, NULL);
+}
+
+int audio_init_unchecked_pref(Audio *audio, const char *pref)
+{
     /* ⚠️ The bypass is of the ENABLE gate and of NOTHING else.  The output device
      * is not part of that gate: a speaker test that plays on the panel while the
      * saved config says `usb` is driving the wrong hardware, and it reports a
@@ -273,8 +278,12 @@ int audio_init_unchecked(Audio *audio)
      * call-site form of this rule was already 0 for 2.  It also overwrites a
      * preference some earlier caller left in audio_out.c's process-lifetime
      * file-static, which is the property audio_tone_test.c asserts — without
-     * that, this open inherits whichever device ran last. */
-    audio_out_set_device_pref(config_audio_device_stored());
+     * that, this open inherits whichever device ran last.
+     *
+     * A non-NULL `pref` replaces the SAVED value and nothing else: a settings
+     * screen previewing an unsaved device choice must test the device it shows,
+     * and it still overwrites the file-static for the same reason. */
+    audio_out_set_device_pref(pref ? pref : config_audio_device_stored());
     return audio_open(audio);
 }
 
@@ -1029,6 +1038,19 @@ static void play_sequence(Audio *audio, const AudioNote *notes, int count)
         audio_mix_add(&audio->mix, notes[i].freq, notes[i].ms, delay, audio_voice_peak(audio->vol));
         delay += notes[i].ms;
     }
+}
+
+/** The TEST AUDIO chime: 880 Hz 200 ms, then 1320 Hz 200 ms starting 250 ms
+ *  after the first.  Not play_sequence(), whose offsets are the preceding notes'
+ *  LENGTHS — this chime has a 50 ms gap, so both voices are added now with
+ *  explicit start delays and the bus renders the gap as silence.  Same two gates
+ *  as play_sequence(); a struct from audio_init_unchecked*() reads both TRUE. */
+void audio_test_chime(Audio *audio)
+{
+    if (!audio || !audio->available || !audio->effects_on) return;
+    int peak = audio_voice_peak(audio->vol);
+    audio_mix_add(&audio->mix,  880, 200,   0, peak);
+    audio_mix_add(&audio->mix, 1320, 200, 250, peak);
 }
 
 /** 880 Hz, 80 ms — UI click / tile place.  Clip: fx_click, 900→1500 Hz. */
