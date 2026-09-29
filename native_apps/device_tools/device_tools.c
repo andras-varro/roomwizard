@@ -22,6 +22,7 @@
 #include "../common/config.h"
 #include "../common/ui_layout.h"
 #include "../common/audio.h"
+#include "../common/input_scan.h"
 #include "usb_bus.h"
 
 #include <stdio.h>
@@ -153,7 +154,6 @@ static const char *mount_points[] = {
  * USB Constants & Types
  * ====================================================================== */
 
-#define MAX_EV_DEV      16
 #define MAX_USB_DEV     8
 #define DEV_NAME_LEN    128
 #define LOG_LINES       8
@@ -3232,49 +3232,28 @@ static const LKey usb_kblayout[] = {
 };
 
 /* ── USB device helpers ─────────────────────────────────────────────────── */
-static DevType usb_classify(int fd) {
-    unsigned long ev[NBITS(EV_MAX)]={0}, kb[NBITS(KEY_MAX)]={0},
-                  rl[NBITS(REL_MAX)]={0}, ab[NBITS(ABS_MAX)]={0};
-    if (ioctl(fd, EVIOCGBIT(0, sizeof(ev)), ev)<0) return DEV_UNKNOWN;
-    bool hk=test_bit(EV_KEY,ev), hr=test_bit(EV_REL,ev), ha=test_bit(EV_ABS,ev);
-    if (hk) ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(kb)), kb);
-    if (hr) ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rl)), rl);
-    if (ha) ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(ab)), ab);
-    if (ha && hk && test_bit(ABS_X,ab) && test_bit(ABS_Y,ab) &&
-        (test_bit(BTN_GAMEPAD,kb)||test_bit(BTN_SOUTH,kb)||
-         test_bit(BTN_A,kb)||test_bit(BTN_JOYSTICK,kb)))
-        return DEV_GAMEPAD;
-    if (hr && hk && test_bit(REL_X,rl) && test_bit(REL_Y,rl) && test_bit(BTN_LEFT,kb))
-        return DEV_MOUSE;
-    if (hk) {
-        static const int letter_keys[] = {
-            KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
-            KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
-            KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
-        };
-        int n=0;
-        for(int k=0;k<(int)(sizeof(letter_keys)/sizeof(letter_keys[0]));k++)
-            if(test_bit(letter_keys[k],kb)) n++;
-        if(n>=20) return DEV_KEYBOARD;
-    }
-    return DEV_UNKNOWN;
-}
-
+/* Classification, the touchscreen exclusion and the /dev/input/event* walk are
+ * common/input_scan.c's.  This list only says what is there — the testers
+ * reopen by path — so every node input_scan() opened is closed again here. */
 static void usb_scan_devices(AppState *s) {
+    static const int cap[INPUT_KIND_COUNT] = {
+        [INPUT_KIND_KEYBOARD] = MAX_USB_DEV,
+        [INPUT_KIND_MOUSE]    = MAX_USB_DEV,
+        [INPUT_KIND_PAD]      = MAX_USB_DEV,
+    };
+    InputNode nodes[MAX_USB_DEV];
+    int n = input_scan(nodes, 0, MAX_USB_DEV, cap);
     s->usb_dev_cnt=0; s->usb_kbd_idx=s->usb_mou_idx=s->usb_pad_idx=-1;
-    for (int i=0; i<MAX_EV_DEV && s->usb_dev_cnt<MAX_USB_DEV; i++) {
-        char p[64]; snprintf(p,sizeof(p),"/dev/input/event%d",i);
-        int fd=open(p, O_RDONLY|O_NONBLOCK); if(fd<0) continue;
-        char nm[DEV_NAME_LEN]="Unknown";
-        ioctl(fd, EVIOCGNAME(sizeof(nm)), nm);
-        if (strstr(nm,"panjit")||strstr(nm,"Panjit")||strstr(nm,"PANJIT"))
-            { close(fd); continue; }
-        DevType t=usb_classify(fd); close(fd);
-        if (t==DEV_UNKNOWN) continue;
+    for (int i=0; i<n; i++) {
+        const InputNode *nd=&nodes[i];
+        close(nd->fd);
+        DevType t = nd->kind==INPUT_KIND_KEYBOARD ? DEV_KEYBOARD
+                  : nd->kind==INPUT_KIND_MOUSE    ? DEV_MOUSE : DEV_GAMEPAD;
         USBDev *d=&s->usb_devs[s->usb_dev_cnt];
-        snprintf(d->name,sizeof(d->name),"%s",nm);
-        snprintf(d->path,sizeof(d->path),"%s",p);
-        d->type=t; d->ev_num=i; d->connected=true;
+        snprintf(d->name,sizeof(d->name),"%s",nd->name[0] ? nd->name : "Unknown");
+        snprintf(d->path,sizeof(d->path),"%.*s",(int)sizeof(nd->path),nd->path);
+        d->ev_num=-1; sscanf(nd->path,"/dev/input/event%d",&d->ev_num);
+        d->type=t; d->connected=true;
         /* Only "is there one" — the testers open every node of the kind. */
         if (t==DEV_KEYBOARD && s->usb_kbd_idx<0) s->usb_kbd_idx=s->usb_dev_cnt;
         else if (t==DEV_MOUSE && s->usb_mou_idx<0) s->usb_mou_idx=s->usb_dev_cnt;

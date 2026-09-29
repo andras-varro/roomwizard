@@ -24,13 +24,9 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Maximum devices to scan — bumped to 32 because USB keyboards/mice are
-   often assigned event numbers >= 16 when built-in devices occupy lower slots */
-#define GAMEPAD_MAX_DEVICES 32
-
 /* Room for the "<name> at <path>" string remembered per slot, so a rescan can
-   tell an unchanged device from a swapped one: EVIOCGNAME is read into 128
-   bytes and the path into 64, plus " at " and the terminator. */
+   tell an unchanged device from a swapped one: input_scan.h reads EVIOCGNAME
+   into 128 bytes and the path into 32, plus " at " and the terminator. */
 #define GAMEPAD_ANNOUNCE_LEN 200
 
 /* Most keyboard nodes, and most mouse nodes, held open at once.  Every node of
@@ -165,14 +161,6 @@ typedef struct {
     ButtonId button;
 } TouchRegion;
 
-/* What an evdev node was classified as by its capability bits. */
-typedef enum {
-    GAMEPAD_DEV_UNKNOWN,
-    GAMEPAD_DEV_KEYBOARD,
-    GAMEPAD_DEV_GAMEPAD,
-    GAMEPAD_DEV_MOUSE
-} GamepadDevKind;
-
 /* Gamepad manager (holds evdev fds and internal state) */
 typedef struct {
     /* ONE pad only: two pads merged into one InputState would overwrite each
@@ -246,17 +234,13 @@ typedef struct {
 } GamepadManager;
 
 /**
- * Decide what a scanned node is bound as, given what is already bound.
- * Returns `kind` if the node should be kept open as that kind, or
- * GAMEPAD_DEV_UNKNOWN if it should be closed.  Pure: no I/O.
- *  - the touchscreen (a name containing "panjit", any case form the vendor
- *    uses) is never bound, whatever its capability bits say — it is read by
- *    touch_input.c, not here;
- *  - the first gamepad only (see GamepadManager.gamepad_fd);
- *  - every keyboard and every mouse, up to GAMEPAD_MAX_PER_KIND each.
+ * The per-kind limits the scan hands to input_scan(), indexed by InputKind
+ * (common/input_scan.h), for a test to drive input_select() with: the first
+ * gamepad only (see GamepadManager.gamepad_fd), and every keyboard and every
+ * mouse up to GAMEPAD_MAX_PER_KIND each.  Classification, the touchscreen
+ * exclusion and the /dev/input/event* walk are input_scan's, not this file's.
  */
-GamepadDevKind gamepad_bind_kind(GamepadDevKind kind, const char *name,
-                                 int n_gamepad, int n_keyboard, int n_mouse);
+const int *gamepad_scan_caps(void);
 
 /**
  * Initialize the gamepad manager — scans /dev/input/event* for gamepad,

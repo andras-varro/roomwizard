@@ -196,6 +196,12 @@ step "14/37" "ppm";          $CC "${WARN[@]}" -O2 $LINK_MODE -c common/ppm.c    
 step "15/37" "logger";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/logger.c          -o build/logger.o
 step "16/37" "config";       $CC "${WARN[@]}" -O2 $LINK_MODE -c common/config.c          -o build/config.o
 step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 $LINK_MODE -c common/gamepad.c         -o build/gamepad.o
+                              $CC "${WARN[@]}" -O2 $LINK_MODE -c common/input_scan.c      -o build/input_scan.o
+
+# gamepad.c finds its devices through input_scan.c (classifier + event* walk),
+# so every binary that links gamepad.o links both — name GAMEPAD_OBJ, never
+# build/gamepad.o alone.  device_tools links input_scan.o for its USB tab.
+GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
             build/common.o build/highscore.o build/keyboard.o
@@ -234,27 +240,27 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "18/37" "snake";        $CC "${WARN[@]}" -O2 $LINK_MODE snake/snake.c             "${COMMON_OBJ[@]}" build/gamepad.o -o build/snake         -lm "${AUDIO_LIBS[@]}"
-step "19/37" "tetris";       $CC "${WARN[@]}" -O2 $LINK_MODE tetris/tetris.c           "${COMMON_OBJ[@]}" build/gamepad.o -o build/tetris        -lm "${AUDIO_LIBS[@]}"
-step "20/37" "pong";         $CC "${WARN[@]}" -O2 $LINK_MODE pong/pong.c               "${COMMON_OBJ[@]}" build/gamepad.o -o build/pong          -lm "${AUDIO_LIBS[@]}"
+step "18/37" "snake";        $CC "${WARN[@]}" -O2 $LINK_MODE snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
+step "19/37" "tetris";       $CC "${WARN[@]}" -O2 $LINK_MODE tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
+step "20/37" "pong";         $CC "${WARN[@]}" -O2 $LINK_MODE pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
 
 step "21/37" "brick_breaker"
-$CC "${WARN[@]}" -O2 $LINK_MODE brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
 
 step "22/37" "samegame"
-$CC "${WARN[@]}" -O2 $LINK_MODE samegame/samegame.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/samegame -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE samegame/samegame.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/samegame -lm "${AUDIO_LIBS[@]}"
 
 step "23/37" "frogger"
-$CC "${WARN[@]}" -O2 $LINK_MODE frogger/frogger.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/frogger -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE frogger/frogger.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/frogger -lm "${AUDIO_LIBS[@]}"
 
 step "24/37" "platformer"
-$CC "${WARN[@]}" -O2 $LINK_MODE platformer/platformer.c "${COMMON_OBJ[@]}" build/gamepad.o -o build/platformer -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE platformer/platformer.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/platformer -lm "${AUDIO_LIBS[@]}"
 
 step "25/37" "game_selector"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" build/gamepad.o build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
 
 step "26/37" "app_launcher"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" build/gamepad.o build/ppm.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
 
 step "27/37" "hardware_test"
 $CC "${WARN[@]}" -O2 $LINK_MODE -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm "${AUDIO_LIBS[@]}"
@@ -278,7 +284,7 @@ $CC "${WARN[@]}" -O2 $LINK_MODE -I. backlight/backlight.c build/hardware.o build
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "32/37" "device_tools"
-$CC "${WARN[@]}" -O2 $LINK_MODE -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 $LINK_MODE -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone

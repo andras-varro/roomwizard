@@ -28,7 +28,9 @@ typedef struct VNCConfig {
 
 // Device Paths
 #define FB_DEVICE "/dev/fb0"
-#define TOUCH_DEVICE "/dev/input/event0"
+/* The udev link, as every other touch user opens: on our kernel the touch module
+ * loads after USB HID, so the touchscreen is not event0 (measured event6 on .188). */
+#define TOUCH_DEVICE "/dev/input/touchscreen0"
 #define WATCHDOG_DEVICE "/dev/watchdog"
 
 // Watchdog Configuration
@@ -127,14 +129,6 @@ typedef enum {
 
 /* Input device scanning */
 #define INPUT_CONFIG_FILE       "/etc/input_config.conf"
-/* Must stay in step with common/gamepad.h GAMEPAD_MAX_DEVICES and
- * roomwizard-events.h MAX_EVDEV_DEVICES, both 32.  This was 16, so a USB
- * keyboard that enumerated as /dev/input/event17 worked under the native apps
- * and ScummVM but was invisible here.  It bounds the scan loop only and sizes
- * no array, so raising it costs nothing but 16 more failed open() calls per
- * rescan.  The real fix is ONE shared evdev scanner instead of the three that
- * exist (common/gamepad.c, ScummVM's own, this one). */
-#define MAX_INPUT_DEVICES       32
 #define DEVICE_SCAN_INTERVAL_MS 5000
 
 #endif // VNC_CONFIG_H

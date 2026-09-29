@@ -43,14 +43,10 @@
 #include <errno.h>
 #include <stdio.h>
 
-// =========================================================================
-// Bit-test helpers for evdev capability queries (same pattern as gamepad.c)
-// =========================================================================
-#define BITS_PER_LONG   (sizeof(long) * 8)
-#define NBITS(x)        ((((x)-1)/BITS_PER_LONG)+1)
-#define OFF(x)          ((x) % BITS_PER_LONG)
-#define BIT_LONG(x)     ((x) / BITS_PER_LONG)
-#define test_bit(b, a)  ((a[BIT_LONG(b)] >> OFF(b)) & 1)
+// Device classification and the /dev/input/event* walk are common/input_scan.c's.
+extern "C" {
+#include "input_scan.h"
+}
 
 // =========================================================================
 // Constructor / Destructor
@@ -165,103 +161,68 @@ void RoomWizardEventSource::closeTouch() {
 // USB Input Device Scanning and Management
 // =========================================================================
 
-RoomWizardEventSource::DeviceType RoomWizardEventSource::classifyDevice(int fd) {
-	unsigned long ev[NBITS(EV_MAX)] = {0};
-	unsigned long kb[NBITS(KEY_MAX)] = {0};
-	unsigned long ab[NBITS(ABS_MAX)] = {0};
-	unsigned long rb[NBITS(REL_MAX)] = {0};
+// input_scan() already refuses the Panjit names; this copy has always also
+// refused any node that calls itself a touchscreen — the touchscreen is
+// touch_input.c's, opened by initTouch() — and keeps doing so.
+static const char *const kTouchscreenNames[] = { "TouchScreen", "touchscreen", nullptr };
 
-	if (ioctl(fd, EVIOCGBIT(0, sizeof(ev)), ev) < 0)
-		return DEV_UNKNOWN;
-
-	bool has_key = test_bit(EV_KEY, ev);
-	bool has_abs = test_bit(EV_ABS, ev);
-	bool has_rel = test_bit(EV_REL, ev);
-
-	if (has_key)
-		ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(kb)), kb);
-	if (has_abs)
-		ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(ab)), ab);
-	if (has_rel)
-		ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rb)), rb);
-
-	// Gamepad: has ABS_X, ABS_Y + gamepad buttons
-	if (has_abs && has_key && test_bit(ABS_X, ab) && test_bit(ABS_Y, ab) &&
-	    (test_bit(BTN_GAMEPAD, kb) || test_bit(BTN_SOUTH, kb) ||
-	     test_bit(BTN_A, kb) || test_bit(BTN_JOYSTICK, kb)))
-		return DEV_GAMEPAD;
-
-	// Mouse: has REL_X, REL_Y, BTN_LEFT
-	if (has_rel && has_key &&
-	    test_bit(REL_X, rb) && test_bit(REL_Y, rb) &&
-	    test_bit(BTN_LEFT, kb))
-		return DEV_MOUSE;
-
-	// Keyboard: has >= 20 letter keys (A-Z)
-	if (has_key) {
-		static const int letter_keys[] = {
-			KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
-			KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
-			KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
-		};
-		int count = 0;
-		for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
-			if (test_bit(letter_keys[k], kb)) count++;
-		if (count >= 20)
-			return DEV_KEYBOARD;
-	}
-
-	return DEV_UNKNOWN;
+// BUG-INPUT-004 FIX: Log permission errors so we can diagnose
+// "no input" issues caused by /dev/input/event* permissions.
+static void warnOpenFailed(const char *path, int err, void *) {
+	if (err == EACCES || err == EPERM)
+		warning("RoomWizard: cannot open %s — permission denied (run as root or add to 'input' group)", path);
 }
 
 void RoomWizardEventSource::scanInputDevices() {
-	char path[64];
-	char name[128];
+	static const char kEventPrefix[] = "/dev/input/event";
 	int totalBefore = countOpen(_keyboardFds, MAX_KEYBOARDS) + countOpen(_mouseFds, MAX_MICE) +
 	                  (_gamepadFd >= 0 ? 1 : 0);
 
-	for (int i = 0; i < MAX_EVDEV_DEVICES; i++) {
-		// A node already held as a keyboard or a mouse stays as it is.
-		if (holdsNode(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, i) ||
-		    holdsNode(_mouseFds, _mouseNodes, MAX_MICE, i))
-			continue;
+	// Held keyboards and mice are listed first: input_scan() skips them without
+	// opening them and counts them against the caps.  A held pad is not listed;
+	// its cap drops to 0 instead, so its node is opened, classified and closed.
+	InputNode nodes[MAX_KEYBOARDS + MAX_MICE + 1];
+	int n = 0;
+	for (int i = 0; i < MAX_KEYBOARDS; i++) {
+		if (_keyboardFds[i] < 0) continue;
+		snprintf(nodes[n].path, sizeof(nodes[n].path), "%s%d", kEventPrefix, _keyboardNodes[i]);
+		nodes[n].fd = _keyboardFds[i];
+		nodes[n].kind = INPUT_KIND_KEYBOARD;
+		nodes[n].name[0] = '\0';
+		n++;
+	}
+	for (int i = 0; i < MAX_MICE; i++) {
+		if (_mouseFds[i] < 0) continue;
+		snprintf(nodes[n].path, sizeof(nodes[n].path), "%s%d", kEventPrefix, _mouseNodes[i]);
+		nodes[n].fd = _mouseFds[i];
+		nodes[n].kind = INPUT_KIND_MOUSE;
+		nodes[n].name[0] = '\0';
+		n++;
+	}
+	const int held = n;
 
-		snprintf(path, sizeof(path), "/dev/input/event%d", i);
+	int cap[INPUT_KIND_COUNT] = {0};
+	cap[INPUT_KIND_KEYBOARD] = MAX_KEYBOARDS;
+	cap[INPUT_KIND_MOUSE]    = MAX_MICE;
+	cap[INPUT_KIND_PAD]      = (_gamepadFd < 0) ? 1 : 0;
+	InputScanOpts opts = { kTouchscreenNames, warnOpenFailed, nullptr };
+	n = input_scan_with(nodes, n, (int)(sizeof(nodes) / sizeof(nodes[0])), cap, &opts);
 
-		int fd = open(path, O_RDONLY | O_NONBLOCK);
-		if (fd < 0) {
-			// BUG-INPUT-004 FIX: Log permission errors so we can diagnose
-			// "no input" issues caused by /dev/input/event* permissions.
-			if (errno == EACCES || errno == EPERM) {
-				warning("RoomWizard: cannot open %s — permission denied (run as root or add to 'input' group)", path);
-			}
-			continue;
-		}
-
-		name[0] = '\0';
-		ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-
-		// Filter out Panjit touchscreen (already handled by touch code)
-		if (strstr(name, "panjit") || strstr(name, "Panjit") || strstr(name, "PANJIT") ||
-		    strstr(name, "TouchScreen") || strstr(name, "touchscreen")) {
-			close(fd);
-			continue;
-		}
-
-		DeviceType type = classifyDevice(fd);
-
-		if (type == DEV_GAMEPAD && _gamepadFd < 0) {
-			_gamepadFd = fd;
+	for (int i = held; i < n; i++) {
+		const InputNode &nd = nodes[i];
+		int node = atoi(nd.path + sizeof(kEventPrefix) - 1);
+		if (nd.kind == INPUT_KIND_PAD) {
+			_gamepadFd = nd.fd;
 			loadGamepadAxisCalibration();
-			warning("RoomWizard: Detected gamepad '%s' at %s", name, path);
-		} else if (type == DEV_KEYBOARD &&
-		           addToSlot(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, fd, i)) {
-			warning("RoomWizard: Detected keyboard '%s' at %s", name, path);
-		} else if (type == DEV_MOUSE &&
-		           addToSlot(_mouseFds, _mouseNodes, MAX_MICE, fd, i)) {
-			warning("RoomWizard: Detected mouse '%s' at %s", name, path);
+			warning("RoomWizard: Detected gamepad '%s' at %s", nd.name, nd.path);
+		} else if (nd.kind == INPUT_KIND_KEYBOARD &&
+		           addToSlot(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, nd.fd, node)) {
+			warning("RoomWizard: Detected keyboard '%s' at %s", nd.name, nd.path);
+		} else if (nd.kind == INPUT_KIND_MOUSE &&
+		           addToSlot(_mouseFds, _mouseNodes, MAX_MICE, nd.fd, node)) {
+			warning("RoomWizard: Detected mouse '%s' at %s", nd.name, nd.path);
 		} else {
-			close(fd);
+			close(nd.fd);  // unreachable: the caps match the slot counts
 		}
 	}
 
@@ -284,12 +245,6 @@ int RoomWizardEventSource::countOpen(const int *fds, int n) {
 	for (int i = 0; i < n; i++)
 		if (fds[i] >= 0) c++;
 	return c;
-}
-
-bool RoomWizardEventSource::holdsNode(const int *fds, const int *nodes, int n, int node) {
-	for (int i = 0; i < n; i++)
-		if (fds[i] >= 0 && nodes[i] == node) return true;
-	return false;
 }
 
 bool RoomWizardEventSource::addToSlot(int *fds, int *nodes, int n, int fd, int node) {

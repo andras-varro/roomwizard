@@ -130,13 +130,6 @@ private:
 	// -------------------------------------------------------
 	// USB input device scanning and management
 	// -------------------------------------------------------
-	enum DeviceType {
-		DEV_UNKNOWN = 0,
-		DEV_KEYBOARD,
-		DEV_MOUSE,
-		DEV_GAMEPAD
-	};
-
 	// Every keyboard node and every mouse node is held at once: a touchpad
 	// keyboard exposes its own pointer node, and a second USB receiver brings
 	// another, and both must drive the one cursor.  Unused slots are -1.
@@ -151,19 +144,14 @@ private:
 	int _mouseNext;  // round-robin start, so one busy mouse cannot starve another
 	int _gamepadFd;
 
-	void scanInputDevices();         // Scan /dev/input/event* for USB devices
-	DeviceType classifyDevice(int fd); // Classify as keyboard/mouse/gamepad
+	void scanInputDevices();         // common/input_scan.c walks /dev/input/event0..31
 	void closeInputDevices();        // Close all USB device fds
 	static int countOpen(const int *fds, int n);
-	static bool holdsNode(const int *fds, const int *nodes, int n, int node);
 	static bool addToSlot(int *fds, int *nodes, int n, int fd, int node);
 
 	// Periodic rescan timer
 	uint32 _lastDeviceScan;
 	static const uint32 DEVICE_SCAN_INTERVAL = 5000; // 5 seconds
-	// BUG-INPUT-004 FIX: Increased from 16 to 32 — USB keyboards/mice are often
-	// assigned event numbers >= 16 when built-in devices occupy the lower slots.
-	static const int MAX_EVDEV_DEVICES = 32;
 
 	// -------------------------------------------------------
 	// USB Keyboard support

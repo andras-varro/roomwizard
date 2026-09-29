@@ -4,6 +4,7 @@
  */
 #include "input_scan.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
@@ -92,9 +93,21 @@ int input_read_caps(int fd, InputCaps *caps) {
     return 0;
 }
 
+bool input_name_excluded(const char *name, const char *const *list) {
+    if (!name || !list) return false;
+    for (; *list; list++)
+        if (strstr(name, *list)) return true;
+    return false;
+}
+
+int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]) {
+    return input_scan_with(nodes, n, max, cap, NULL);
+}
+
 /* No early exit: every node is visited, because every node of a wanted kind
  * is kept up to its cap. */
-int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]) {
+int input_scan_with(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT],
+                    const InputScanOpts *opts) {
     int held[INPUT_KIND_COUNT] = {0};
     for (int i = 0; i < n; i++)
         if (nodes[i].kind > INPUT_KIND_NONE && nodes[i].kind < INPUT_KIND_COUNT)
@@ -107,12 +120,21 @@ int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]
             continue;
 
         int fd = open(path, O_RDONLY | O_NONBLOCK);
-        if (fd < 0) continue;
+        if (fd < 0) {
+            if (errno != ENOENT && opts && opts->open_failed)
+                opts->open_failed(path, errno, opts->ctx);
+            continue;
+        }
 
         char name[INPUT_SCAN_NAME_LEN];
         name[0] = '\0';
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
         name[sizeof(name) - 1] = '\0';
+
+        if (opts && input_name_excluded(name, opts->exclude_names)) {
+            close(fd);
+            continue;
+        }
 
         InputCaps caps;
         InputKind kind = INPUT_KIND_NONE;

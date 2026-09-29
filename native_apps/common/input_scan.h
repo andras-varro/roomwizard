@@ -86,6 +86,26 @@ int input_read_caps(int fd, InputCaps *caps);
  */
 int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]);
 
+/*
+ * What input_scan_with() adds to input_scan(). Every field may be NULL, and a
+ * NULL opts is exactly input_scan(). ScummVM is the caller that uses them.
+ */
+typedef struct {
+    /* NULL-terminated substrings: a node whose name contains any of them is
+     * closed unclassified, as the touchscreen is. */
+    const char *const *exclude_names;
+    /* Called with open()'s errno for a node that exists but cannot be opened. */
+    void (*open_failed)(const char *path, int err, void *ctx);
+    void *ctx;
+} InputScanOpts;
+
+/* PURE. True if `name` contains any substring in the NULL-terminated `list`. */
+bool input_name_excluded(const char *name, const char *const *list);
+
+/* I/O. input_scan() with the extras in `opts`. */
+int input_scan_with(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT],
+                    const InputScanOpts *opts);
+
 /* Close nodes[i].fd and remove entry i, preserving order. Returns the new count. */
 int input_scan_drop(InputNode *nodes, int n, int i);
 

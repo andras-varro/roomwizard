@@ -9,7 +9,7 @@
  *
  *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I common \
  *       -o build/gamepad_latch_test tests/gamepad_latch_test.c \
- *       common/gamepad.c common/framebuffer.c common/hardware.c \
+ *       common/gamepad.c common/input_scan.c common/framebuffer.c common/hardware.c \
  *       common/config.c common/touch_input.c -lm && ./build/gamepad_latch_test
  *
  * The bug: `.held` used to be *stored* in the caller's InputState, written
@@ -44,6 +44,7 @@
 #include <linux/input.h>
 #include "gamepad.h"
 #include "framebuffer.h"
+#include "input_scan.h"
 
 static int fails = 0;
 
@@ -380,50 +381,48 @@ static void test_mouse_bounds_follow_surface(void) {
  * Reported on .188: a touchpad keyboard (its mouse node event3) and a 2.4 GHz
  * mouse receiver (event6) attached together, and only one of them moved the
  * cursor in games — the scan bound the FIRST node of each kind and closed the
- * rest.  This walks that attach order through the real selection rule with
- * running counts, exactly as scan_devices() does. */
+ * rest.  This walks that attach order through input_select() with gamepad's
+ * own caps and running counts, exactly as input_scan() does for scan_devices().
+ * The touchscreen's exclusion is input_classify()'s, covered in
+ * tests/input_scan_test.c. */
 static void test_bind_every_mouse_and_keyboard(void) {
-    printf("\n7. scan binds every mouse and keyboard, one pad, never the touchscreen\n");
+    printf("\n7. scan binds every mouse and keyboard, one pad\n");
 
-    struct { GamepadDevKind kind; const char *name; GamepadDevKind want; } nodes[] = {
-        { GAMEPAD_DEV_UNKNOWN,  "twl4030_pwrbutton",          GAMEPAD_DEV_UNKNOWN  },
-        { GAMEPAD_DEV_KEYBOARD, "touchpad keyboard",          GAMEPAD_DEV_KEYBOARD },
-        { GAMEPAD_DEV_MOUSE,    "touchpad keyboard Mouse",    GAMEPAD_DEV_MOUSE    },
-        { GAMEPAD_DEV_GAMEPAD,  "Microsoft X-Box 360 pad",    GAMEPAD_DEV_GAMEPAD  },
-        { GAMEPAD_DEV_KEYBOARD, "Compx 2.4G Receiver",        GAMEPAD_DEV_KEYBOARD },
-        { GAMEPAD_DEV_MOUSE,    "Compx 2.4G Receiver Mouse",  GAMEPAD_DEV_MOUSE    },
-        { GAMEPAD_DEV_GAMEPAD,  "second pad",                 GAMEPAD_DEV_UNKNOWN  },
+    const int *cap = gamepad_scan_caps();
+    struct { InputKind kind; const char *name; InputKind want; } nodes[] = {
+        { INPUT_KIND_NONE,     "twl4030_pwrbutton",          INPUT_KIND_NONE     },
+        { INPUT_KIND_KEYBOARD, "touchpad keyboard",          INPUT_KIND_KEYBOARD },
+        { INPUT_KIND_MOUSE,    "touchpad keyboard Mouse",    INPUT_KIND_MOUSE    },
+        { INPUT_KIND_PAD,      "Microsoft X-Box 360 pad",    INPUT_KIND_PAD      },
+        { INPUT_KIND_KEYBOARD, "Compx 2.4G Receiver",        INPUT_KIND_KEYBOARD },
+        { INPUT_KIND_MOUSE,    "Compx 2.4G Receiver Mouse",  INPUT_KIND_MOUSE    },
+        { INPUT_KIND_PAD,      "second pad",                 INPUT_KIND_NONE     },
     };
-    int n_pad = 0, n_kbd = 0, n_mouse = 0;
+    int held[INPUT_KIND_COUNT] = {0};
     for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
-        GamepadDevKind got = gamepad_bind_kind(nodes[i].kind, nodes[i].name,
-                                               n_pad, n_kbd, n_mouse);
+        InputKind got = input_select(nodes[i].kind, held, cap);
         char what[80];
         snprintf(what, sizeof(what), "node %zu '%s'", i, nodes[i].name);
         expect_int(what, (int)got, (int)nodes[i].want);
-        if (got == GAMEPAD_DEV_GAMEPAD)  n_pad++;
-        if (got == GAMEPAD_DEV_KEYBOARD) n_kbd++;
-        if (got == GAMEPAD_DEV_MOUSE)    n_mouse++;
+        if (got != INPUT_KIND_NONE) held[got]++;
     }
-    expect_int("mice bound", n_mouse, 2);
-    expect_int("keyboards bound", n_kbd, 2);
-    expect_int("pads bound", n_pad, 1);
-
-    /* The touchscreen is excluded by name whatever its bits classify as. */
-    static const GamepadDevKind kinds[] = { GAMEPAD_DEV_KEYBOARD,
-                                            GAMEPAD_DEV_GAMEPAD, GAMEPAD_DEV_MOUSE };
-    for (int k = 0; k < 3; k++)
-        expect_int("panjit touchscreen never bound",
-                   (int)gamepad_bind_kind(kinds[k], "Panjit touchscreen", 0, 0, 0),
-                   (int)GAMEPAD_DEV_UNKNOWN);
+    expect_int("mice bound", held[INPUT_KIND_MOUSE], 2);
+    expect_int("keyboards bound", held[INPUT_KIND_KEYBOARD], 2);
+    expect_int("pads bound", held[INPUT_KIND_PAD], 1);
 
     /* The cap refuses rather than overruns the fd arrays. */
+    int full[INPUT_KIND_COUNT] = {0};
+    full[INPUT_KIND_MOUSE] = full[INPUT_KIND_KEYBOARD] = GAMEPAD_MAX_PER_KIND;
     expect_int("mouse past the cap refused",
-               (int)gamepad_bind_kind(GAMEPAD_DEV_MOUSE, "m", 0, 0, GAMEPAD_MAX_PER_KIND),
-               (int)GAMEPAD_DEV_UNKNOWN);
+               (int)input_select(INPUT_KIND_MOUSE, full, cap), (int)INPUT_KIND_NONE);
     expect_int("keyboard past the cap refused",
-               (int)gamepad_bind_kind(GAMEPAD_DEV_KEYBOARD, "k", 0, GAMEPAD_MAX_PER_KIND, 0),
-               (int)GAMEPAD_DEV_UNKNOWN);
+               (int)input_select(INPUT_KIND_KEYBOARD, full, cap), (int)INPUT_KIND_NONE);
+    /* ...and exactly at it: the cap is GAMEPAD_MAX_PER_KIND, not one less. */
+    full[INPUT_KIND_MOUSE] = full[INPUT_KIND_KEYBOARD] = GAMEPAD_MAX_PER_KIND - 1;
+    expect_int("last mouse under the cap kept",
+               (int)input_select(INPUT_KIND_MOUSE, full, cap), (int)INPUT_KIND_MOUSE);
+    expect_int("last keyboard under the cap kept",
+               (int)input_select(INPUT_KIND_KEYBOARD, full, cap), (int)INPUT_KIND_KEYBOARD);
 }
 
 /* ═══ 8. Two mice drive one cursor; two keyboards latch the same buttons ════

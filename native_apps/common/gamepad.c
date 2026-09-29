@@ -17,6 +17,7 @@
 
 #include "gamepad.h"
 #include "framebuffer.h"
+#include "input_scan.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,13 +29,6 @@
 #include <linux/input.h>
 #include <linux/input-event-codes.h>
 #include <errno.h>
-
-/* ── Bit-test helpers (same pattern as usb_test.c) ──────────────────────── */
-#define BITS_PER_LONG   (sizeof(long) * 8)
-#define NBITS(x)        ((((x)-1)/BITS_PER_LONG)+1)
-#define OFF(x)          ((x) % BITS_PER_LONG)
-#define BIT_LONG(x)     ((x) / BITS_PER_LONG)
-#define test_bit(b, a)  ((a[BIT_LONG(b)] >> OFF(b)) & 1)
 
 /* ── Forward declarations ───────────────────────────────────────────────── */
 static void apply_defaults(GamepadManager *gm);
@@ -54,56 +48,6 @@ GamepadButtonMap gamepad_get_default_button_map(void) {
     map.stick_rx_axis = ABS_RX;    /* 3   */
     map.stick_ry_axis = ABS_RY;    /* 4   */
     return map;
-}
-
-/* ── Classify an evdev device ───────────────────────────────────────────── */
-static GamepadDevKind classify_device(int fd) {
-    unsigned long ev[NBITS(EV_MAX)] = {0};
-    unsigned long kb[NBITS(KEY_MAX)] = {0};
-    unsigned long ab[NBITS(ABS_MAX)] = {0};
-    unsigned long rb[NBITS(REL_MAX)] = {0};
-
-    if (ioctl(fd, EVIOCGBIT(0, sizeof(ev)), ev) < 0)
-        return GAMEPAD_DEV_UNKNOWN;
-
-    bool has_key = test_bit(EV_KEY, ev);
-    bool has_abs = test_bit(EV_ABS, ev);
-    bool has_rel = test_bit(EV_REL, ev);
-
-    if (has_key)
-        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(kb)), kb);
-    if (has_abs)
-        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(ab)), ab);
-    if (has_rel)
-        ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rb)), rb);
-
-    /* Gamepad: has ABS_X, ABS_Y + gamepad buttons */
-    if (has_abs && has_key && test_bit(ABS_X, ab) && test_bit(ABS_Y, ab) &&
-        (test_bit(BTN_GAMEPAD, kb) || test_bit(BTN_SOUTH, kb) ||
-         test_bit(BTN_A, kb) || test_bit(BTN_JOYSTICK, kb)))
-        return GAMEPAD_DEV_GAMEPAD;
-
-    /* Mouse: has REL_X, REL_Y, BTN_LEFT — relative pointing device */
-    if (has_rel && has_key &&
-        test_bit(REL_X, rb) && test_bit(REL_Y, rb) &&
-        test_bit(BTN_LEFT, kb))
-        return GAMEPAD_DEV_MOUSE;
-
-    /* Keyboard: has enough letter keys */
-    if (has_key) {
-        static const int letter_keys[] = {
-            KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
-            KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
-            KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
-        };
-        int count = 0;
-        for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
-            if (test_bit(letter_keys[k], kb)) count++;
-        if (count >= 20)
-            return GAMEPAD_DEV_KEYBOARD;
-    }
-
-    return GAMEPAD_DEV_UNKNOWN;
 }
 
 /* ── Axis index mapping ─────────────────────────────────────────────────── */
@@ -240,79 +184,59 @@ static void announce_lost(char *slot, const char *kind, int fd) {
     slot[0] = '\0';
 }
 
-/* ── Which scanned nodes to keep (pure; see gamepad.h) ──────────────────── */
-GamepadDevKind gamepad_bind_kind(GamepadDevKind kind, const char *name,
-                                 int n_gamepad, int n_keyboard, int n_mouse) {
-    /* The Panjit touchscreen belongs to touch_input.c (same filter as usb_test.c). */
-    if (name && (strstr(name, "panjit") || strstr(name, "Panjit") ||
-                 strstr(name, "PANJIT")))
-        return GAMEPAD_DEV_UNKNOWN;
+/* ── Which scanned nodes to keep (see gamepad.h) ────────────────────────── */
+/* ONE pad (see GamepadManager.gamepad_fd); every keyboard and every mouse node
+ * up to GAMEPAD_MAX_PER_KIND each.  The touchscreen is never kept: input_scan
+ * classifies it as nothing. */
+static const int g_scan_cap[INPUT_KIND_COUNT] = {
+    [INPUT_KIND_PAD]      = 1,
+    [INPUT_KIND_KEYBOARD] = GAMEPAD_MAX_PER_KIND,
+    [INPUT_KIND_MOUSE]    = GAMEPAD_MAX_PER_KIND,
+};
+#define GAMEPAD_SCAN_SLOTS (1 + 2 * GAMEPAD_MAX_PER_KIND)
 
-    switch (kind) {
-    case GAMEPAD_DEV_GAMEPAD:
-        return (n_gamepad < 1) ? kind : GAMEPAD_DEV_UNKNOWN;
-    case GAMEPAD_DEV_KEYBOARD:
-        return (n_keyboard < GAMEPAD_MAX_PER_KIND) ? kind : GAMEPAD_DEV_UNKNOWN;
-    case GAMEPAD_DEV_MOUSE:
-        return (n_mouse < GAMEPAD_MAX_PER_KIND) ? kind : GAMEPAD_DEV_UNKNOWN;
-    default:
-        return GAMEPAD_DEV_UNKNOWN;
-    }
-}
+const int *gamepad_scan_caps(void) { return g_scan_cap; }
 
 /* A button already held when the node is opened (typically: held across a
  * rescan) produces no press event, so ask the kernel for the current level. */
 static void seed_mouse_buttons(int fd, bool *btn) {
-    unsigned long keys[NBITS(KEY_MAX)];
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
     memset(keys, 0, sizeof(keys));
     btn[0] = btn[1] = btn[2] = false;
     if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return;
-    btn[0] = test_bit(BTN_LEFT, keys);
-    btn[1] = test_bit(BTN_RIGHT, keys);
-    btn[2] = test_bit(BTN_MIDDLE, keys);
+    btn[0] = input_caps_test(keys, BTN_LEFT);
+    btn[1] = input_caps_test(keys, BTN_RIGHT);
+    btn[2] = input_caps_test(keys, BTN_MIDDLE);
 }
 
 /* ── Scan /dev/input/event* for gamepad, keyboards, and mice ────────────── */
-/* No early exit: every node is visited, because every keyboard and every
- * mouse is bound — a touchpad keyboard's mouse node and a separate receiver's
- * mouse node must both move the cursor. */
+/* Always called with nothing held (gamepad_init() and gamepad_rescan() both
+ * start from closed), so input_scan() starts from an empty list and returns
+ * the kept nodes in event-number order — the order the slots are filled in. */
 static void scan_devices(GamepadManager *gm) {
-    char path[64];
-    char name[128];
+    InputNode nodes[GAMEPAD_SCAN_SLOTS];
+    int n = input_scan(nodes, 0, GAMEPAD_SCAN_SLOTS, g_scan_cap);
 
-    for (int i = 0; i < GAMEPAD_MAX_DEVICES; i++) {
-        snprintf(path, sizeof(path), "/dev/input/event%d", i);
-
-        int fd = open(path, O_RDONLY | O_NONBLOCK);
-        if (fd < 0) continue;
-
-        /* Read device name */
-        name[0] = '\0';
-        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-
-        GamepadDevKind type = gamepad_bind_kind(classify_device(fd), name,
-                                                gm->gamepad_fd >= 0 ? 1 : 0,
-                                                gm->keyboard_count,
-                                                gm->mouse_count);
-
-        if (type == GAMEPAD_DEV_GAMEPAD) {
-            gm->gamepad_fd = fd;
+    for (int i = 0; i < n; i++) {
+        const InputNode *nd = &nodes[i];
+        if (nd->kind == INPUT_KIND_PAD) {
+            gm->gamepad_fd = nd->fd;
             load_axis_calibration(gm);
             announce_found(gm->announced_gamepad, sizeof(gm->announced_gamepad),
-                           "gamepad", name, path);
-        } else if (type == GAMEPAD_DEV_KEYBOARD) {
+                           "gamepad", nd->name, nd->path);
+        } else if (nd->kind == INPUT_KIND_KEYBOARD) {
             int k = gm->keyboard_count++;
-            gm->keyboard_fds[k] = fd;
+            gm->keyboard_fds[k] = nd->fd;
             announce_found(gm->announced_keyboard[k], sizeof(gm->announced_keyboard[k]),
-                           "keyboard", name, path);
-        } else if (type == GAMEPAD_DEV_MOUSE) {
+                           "keyboard", nd->name, nd->path);
+        } else if (nd->kind == INPUT_KIND_MOUSE) {
             int k = gm->mouse_count++;
-            gm->mouse_fds[k] = fd;
-            seed_mouse_buttons(fd, gm->mouse_btn[k]);
+            gm->mouse_fds[k] = nd->fd;
+            seed_mouse_buttons(nd->fd, gm->mouse_btn[k]);
             announce_found(gm->announced_mouse[k], sizeof(gm->announced_mouse[k]),
-                           "mouse", name, path);
+                           "mouse", nd->name, nd->path);
         } else {
-            close(fd);
+            close(nd->fd);   /* unreachable: input_scan keeps only capped kinds */
         }
     }
 
