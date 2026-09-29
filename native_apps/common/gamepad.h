@@ -33,6 +33,12 @@ extern "C" {
    bytes and the path into 64, plus " at " and the terminator. */
 #define GAMEPAD_ANNOUNCE_LEN 200
 
+/* Most keyboard nodes, and most mouse nodes, held open at once.  Every node of
+   those two kinds is read, because one physical device commonly exposes more
+   than one (a keyboard with a built-in touchpad has a keyboard node AND a mouse
+   node) and a 2.4 GHz receiver plugged in beside it adds more. */
+#define GAMEPAD_MAX_PER_KIND 4
+
 /* Axis dead zone (for analog sticks) — legacy default, now configurable */
 #define GAMEPAD_DEADZONE 200
 
@@ -159,11 +165,33 @@ typedef struct {
     ButtonId button;
 } TouchRegion;
 
+/* What an evdev node was classified as by its capability bits. */
+typedef enum {
+    GAMEPAD_DEV_UNKNOWN,
+    GAMEPAD_DEV_KEYBOARD,
+    GAMEPAD_DEV_GAMEPAD,
+    GAMEPAD_DEV_MOUSE
+} GamepadDevKind;
+
 /* Gamepad manager (holds evdev fds and internal state) */
 typedef struct {
+    /* ONE pad only: two pads merged into one InputState would overwrite each
+     * other's axes and hat latches, so a second pad needs player-assignment
+     * semantics this manager does not have.  Keyboards and mice have no such
+     * problem — keys latch the same abstract buttons from any node, and
+     * relative motion from any mouse moves the one cursor — so every node of
+     * those kinds is opened. */
     int gamepad_fd;
-    int keyboard_fd;
-    int mouse_fd;
+    int keyboard_fds[GAMEPAD_MAX_PER_KIND];
+    int keyboard_count;
+    int mouse_fds[GAMEPAD_MAX_PER_KIND];
+    int mouse_count;
+
+    /* Button level per mouse node (left, right, middle), so the output is the
+     * OR across mice: releasing a button on one mouse must not release it for
+     * another that is still holding it.  Seeded from EVIOCGKEY at open, so a
+     * button held across the 5 s rescan is still held after it. */
+    bool mouse_btn[GAMEPAD_MAX_PER_KIND][3];
 
     /* Internal previous-frame state for edge detection (abstract buttons) */
     bool prev_held[BTN_ID_COUNT];
@@ -213,9 +241,22 @@ typedef struct {
      * gamepad_init()'s memset is what makes an empty string mean "nothing
      * announced yet". */
     char announced_gamepad[GAMEPAD_ANNOUNCE_LEN];
-    char announced_keyboard[GAMEPAD_ANNOUNCE_LEN];
-    char announced_mouse[GAMEPAD_ANNOUNCE_LEN];
+    char announced_keyboard[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
+    char announced_mouse[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
 } GamepadManager;
+
+/**
+ * Decide what a scanned node is bound as, given what is already bound.
+ * Returns `kind` if the node should be kept open as that kind, or
+ * GAMEPAD_DEV_UNKNOWN if it should be closed.  Pure: no I/O.
+ *  - the touchscreen (a name containing "panjit", any case form the vendor
+ *    uses) is never bound, whatever its capability bits say — it is read by
+ *    touch_input.c, not here;
+ *  - the first gamepad only (see GamepadManager.gamepad_fd);
+ *  - every keyboard and every mouse, up to GAMEPAD_MAX_PER_KIND each.
+ */
+GamepadDevKind gamepad_bind_kind(GamepadDevKind kind, const char *name,
+                                 int n_gamepad, int n_keyboard, int n_mouse);
 
 /**
  * Initialize the gamepad manager — scans /dev/input/event* for gamepad,

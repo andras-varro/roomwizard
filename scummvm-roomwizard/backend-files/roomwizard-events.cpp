@@ -72,8 +72,7 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _pendingHead(0),
 	  _pendingCount(0),
 	  // USB devices
-	  _keyboardFd(-1),
-	  _mouseFd(-1),
+	  _mouseNext(0),
 	  _gamepadFd(-1),
 	  _lastDeviceScan(0),
 	  // Keyboard
@@ -99,6 +98,8 @@ RoomWizardEventSource::RoomWizardEventSource()
 
 	memset(_cornerTaps, 0, sizeof(_cornerTaps));
 	memset(_pending,    0, sizeof(_pending));
+	for (int i = 0; i < MAX_KEYBOARDS; i++) { _keyboardFds[i] = -1; _keyboardNodes[i] = -1; }
+	for (int i = 0; i < MAX_MICE; i++)      { _mouseFds[i] = -1;    _mouseNodes[i] = -1; }
 
 	_screenW = screen_base_width;
 	_screenH = screen_base_height;
@@ -216,8 +217,15 @@ RoomWizardEventSource::DeviceType RoomWizardEventSource::classifyDevice(int fd) 
 void RoomWizardEventSource::scanInputDevices() {
 	char path[64];
 	char name[128];
+	int totalBefore = countOpen(_keyboardFds, MAX_KEYBOARDS) + countOpen(_mouseFds, MAX_MICE) +
+	                  (_gamepadFd >= 0 ? 1 : 0);
 
 	for (int i = 0; i < MAX_EVDEV_DEVICES; i++) {
+		// A node already held as a keyboard or a mouse stays as it is.
+		if (holdsNode(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, i) ||
+		    holdsNode(_mouseFds, _mouseNodes, MAX_MICE, i))
+			continue;
+
 		snprintf(path, sizeof(path), "/dev/input/event%d", i);
 
 		int fd = open(path, O_RDONLY | O_NONBLOCK);
@@ -246,31 +254,60 @@ void RoomWizardEventSource::scanInputDevices() {
 			_gamepadFd = fd;
 			loadGamepadAxisCalibration();
 			warning("RoomWizard: Detected gamepad '%s' at %s", name, path);
-		} else if (type == DEV_KEYBOARD && _keyboardFd < 0) {
-			_keyboardFd = fd;
+		} else if (type == DEV_KEYBOARD &&
+		           addToSlot(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, fd, i)) {
 			warning("RoomWizard: Detected keyboard '%s' at %s", name, path);
-		} else if (type == DEV_MOUSE && _mouseFd < 0) {
-			_mouseFd = fd;
+		} else if (type == DEV_MOUSE &&
+		           addToSlot(_mouseFds, _mouseNodes, MAX_MICE, fd, i)) {
 			warning("RoomWizard: Detected mouse '%s' at %s", name, path);
 		} else {
 			close(fd);
 		}
-
-		if (_gamepadFd >= 0 && _keyboardFd >= 0 && _mouseFd >= 0)
-			break;
 	}
 
 	// BUG-INPUT-004 FIX: Log a summary after scanning so we know what was
 	// found (or not found).  This is essential for diagnosing "no input" issues.
-	warning("RoomWizard: device scan complete — keyboard=%s mouse=%s gamepad=%s",
-	      (_keyboardFd >= 0 ? "YES" : "no"),
-	      (_mouseFd >= 0    ? "YES" : "no"),
+	// The periodic rescan runs almost always now (a slot is nearly always
+	// free), so after the first scan it logs only when the set changed.
+	int total = countOpen(_keyboardFds, MAX_KEYBOARDS) + countOpen(_mouseFds, MAX_MICE) +
+	            (_gamepadFd >= 0 ? 1 : 0);
+	if (_lastDeviceScan != 0 && total == totalBefore)
+		return;
+	warning("RoomWizard: device scan complete — keyboards=%d mice=%d gamepad=%s",
+	      countOpen(_keyboardFds, MAX_KEYBOARDS),
+	      countOpen(_mouseFds, MAX_MICE),
 	      (_gamepadFd >= 0  ? "YES" : "no"));
 }
 
+int RoomWizardEventSource::countOpen(const int *fds, int n) {
+	int c = 0;
+	for (int i = 0; i < n; i++)
+		if (fds[i] >= 0) c++;
+	return c;
+}
+
+bool RoomWizardEventSource::holdsNode(const int *fds, const int *nodes, int n, int node) {
+	for (int i = 0; i < n; i++)
+		if (fds[i] >= 0 && nodes[i] == node) return true;
+	return false;
+}
+
+bool RoomWizardEventSource::addToSlot(int *fds, int *nodes, int n, int fd, int node) {
+	for (int i = 0; i < n; i++) {
+		if (fds[i] < 0) {
+			fds[i] = fd;
+			nodes[i] = node;
+			return true;
+		}
+	}
+	return false;  // every slot taken; the caller closes fd
+}
+
 void RoomWizardEventSource::closeInputDevices() {
-	if (_keyboardFd >= 0) { close(_keyboardFd); _keyboardFd = -1; }
-	if (_mouseFd >= 0)    { close(_mouseFd);    _mouseFd = -1; }
+	for (int i = 0; i < MAX_KEYBOARDS; i++)
+		if (_keyboardFds[i] >= 0) { close(_keyboardFds[i]); _keyboardFds[i] = -1; _keyboardNodes[i] = -1; }
+	for (int i = 0; i < MAX_MICE; i++)
+		if (_mouseFds[i] >= 0)    { close(_mouseFds[i]);    _mouseFds[i] = -1;    _mouseNodes[i] = -1; }
 	if (_gamepadFd >= 0)  { close(_gamepadFd);  _gamepadFd = -1; }
 }
 
@@ -680,14 +717,22 @@ RoomWizardEventSource::KeyMapping RoomWizardEventSource::mapLinuxKey(int linuxKe
 // =========================================================================
 
 bool RoomWizardEventSource::pollKeyboard(Common::Event &event) {
-	if (_keyboardFd < 0) return false;
+	// Every held keyboard feeds the same key stream and modifier state.
+	for (int i = 0; i < MAX_KEYBOARDS; i++)
+		if (pollKeyboardFd(i, event)) return true;
+	return false;
+}
+
+bool RoomWizardEventSource::pollKeyboardFd(int slot, Common::Event &event) {
+	int &fd = _keyboardFds[slot];
+	if (fd < 0) return false;
 
 	// BUG-INPUT-004 FIX: Clear errno before the read loop so stale values
 	// (e.g. EAGAIN from a previous poll) don't trigger false disconnect detection.
 	errno = 0;
 
 	struct input_event ev;
-	while (read(_keyboardFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+	while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
 		if (ev.type != EV_KEY) continue;
 
 		// value: 0=release, 1=press, 2=auto-repeat (ignored — ScummVM repeats internally)
@@ -724,9 +769,10 @@ bool RoomWizardEventSource::pollKeyboard(Common::Event &event) {
 
 	// Check for disconnect
 	if (errno == ENODEV || errno == EBADF) {
-		debug("RoomWizard: keyboard disconnected");
-		close(_keyboardFd);
-		_keyboardFd = -1;
+		debug("RoomWizard: keyboard disconnected (event%d)", _keyboardNodes[slot]);
+		close(fd);
+		fd = -1;
+		_keyboardNodes[slot] = -1;
 		_modifierFlags = 0;
 	}
 	return false;
@@ -737,7 +783,22 @@ bool RoomWizardEventSource::pollKeyboard(Common::Event &event) {
 // =========================================================================
 
 bool RoomWizardEventSource::pollMouse(Common::Event &event) {
-	if (_mouseFd < 0) return false;
+	// Every held mouse moves the same cursor and shares one button state.
+	// The start slot rotates so a mouse that always has motion queued cannot
+	// starve the others.
+	for (int k = 0; k < MAX_MICE; k++) {
+		int slot = (_mouseNext + k) % MAX_MICE;
+		if (pollMouseFd(slot, event)) {
+			_mouseNext = (slot + 1) % MAX_MICE;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool RoomWizardEventSource::pollMouseFd(int slot, Common::Event &event) {
+	int &fd = _mouseFds[slot];
+	if (fd < 0) return false;
 
 	// BUG-INPUT-004 FIX: Clear errno before read loop — stale errno from
 	// prior system calls could cause false disconnect detection below.
@@ -748,7 +809,7 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 	int buttonChanges = 0;
 	int buttonState = _prevMouseButtons;
 
-	while (read(_mouseFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+	while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
 		if (ev.type == EV_REL) {
 			if (ev.code == REL_X) accumDx += ev.value;
 			else if (ev.code == REL_Y) accumDy += ev.value;
@@ -766,9 +827,10 @@ bool RoomWizardEventSource::pollMouse(Common::Event &event) {
 	}
 
 	if (errno == ENODEV || errno == EBADF) {
-		debug("RoomWizard: mouse disconnected");
-		close(_mouseFd);
-		_mouseFd = -1;
+		debug("RoomWizard: mouse disconnected (event%d)", _mouseNodes[slot]);
+		close(fd);
+		fd = -1;
+		_mouseNodes[slot] = -1;
 		return false;
 	}
 
@@ -1332,8 +1394,10 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 		uint32 now = g_system->getMillis();
 		if (now - _lastDeviceScan > DEVICE_SCAN_INTERVAL) {
 			_lastDeviceScan = now;
-			// Only rescan for devices that aren't currently open
-			if (_keyboardFd < 0 || _mouseFd < 0 || _gamepadFd < 0)
+			// Rescan while any slot is free: a second keyboard or mouse can
+			// arrive while the first is held.  Held nodes are skipped.
+			if (countOpen(_keyboardFds, MAX_KEYBOARDS) < MAX_KEYBOARDS ||
+			    countOpen(_mouseFds, MAX_MICE) < MAX_MICE || _gamepadFd < 0)
 				scanInputDevices();
 		}
 	}

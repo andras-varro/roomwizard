@@ -36,9 +36,6 @@
 #define BIT_LONG(x)     ((x) / BITS_PER_LONG)
 #define test_bit(b, a)  ((a[BIT_LONG(b)] >> OFF(b)) & 1)
 
-/* ── Internal device type for scanning ──────────────────────────────────── */
-typedef enum { GDEV_UNKNOWN, GDEV_KEYBOARD, GDEV_GAMEPAD, GDEV_MOUSE } GDevType;
-
 /* ── Forward declarations ───────────────────────────────────────────────── */
 static void apply_defaults(GamepadManager *gm);
 
@@ -60,14 +57,14 @@ GamepadButtonMap gamepad_get_default_button_map(void) {
 }
 
 /* ── Classify an evdev device ───────────────────────────────────────────── */
-static GDevType classify_device(int fd) {
+static GamepadDevKind classify_device(int fd) {
     unsigned long ev[NBITS(EV_MAX)] = {0};
     unsigned long kb[NBITS(KEY_MAX)] = {0};
     unsigned long ab[NBITS(ABS_MAX)] = {0};
     unsigned long rb[NBITS(REL_MAX)] = {0};
 
     if (ioctl(fd, EVIOCGBIT(0, sizeof(ev)), ev) < 0)
-        return GDEV_UNKNOWN;
+        return GAMEPAD_DEV_UNKNOWN;
 
     bool has_key = test_bit(EV_KEY, ev);
     bool has_abs = test_bit(EV_ABS, ev);
@@ -84,13 +81,13 @@ static GDevType classify_device(int fd) {
     if (has_abs && has_key && test_bit(ABS_X, ab) && test_bit(ABS_Y, ab) &&
         (test_bit(BTN_GAMEPAD, kb) || test_bit(BTN_SOUTH, kb) ||
          test_bit(BTN_A, kb) || test_bit(BTN_JOYSTICK, kb)))
-        return GDEV_GAMEPAD;
+        return GAMEPAD_DEV_GAMEPAD;
 
     /* Mouse: has REL_X, REL_Y, BTN_LEFT — relative pointing device */
     if (has_rel && has_key &&
         test_bit(REL_X, rb) && test_bit(REL_Y, rb) &&
         test_bit(BTN_LEFT, kb))
-        return GDEV_MOUSE;
+        return GAMEPAD_DEV_MOUSE;
 
     /* Keyboard: has enough letter keys */
     if (has_key) {
@@ -103,10 +100,10 @@ static GDevType classify_device(int fd) {
         for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
             if (test_bit(letter_keys[k], kb)) count++;
         if (count >= 20)
-            return GDEV_KEYBOARD;
+            return GAMEPAD_DEV_KEYBOARD;
     }
 
-    return GDEV_UNKNOWN;
+    return GAMEPAD_DEV_UNKNOWN;
 }
 
 /* ── Axis index mapping ─────────────────────────────────────────────────── */
@@ -243,7 +240,42 @@ static void announce_lost(char *slot, const char *kind, int fd) {
     slot[0] = '\0';
 }
 
-/* ── Scan /dev/input/event* for gamepad, keyboard, and mouse ────────────── */
+/* ── Which scanned nodes to keep (pure; see gamepad.h) ──────────────────── */
+GamepadDevKind gamepad_bind_kind(GamepadDevKind kind, const char *name,
+                                 int n_gamepad, int n_keyboard, int n_mouse) {
+    /* The Panjit touchscreen belongs to touch_input.c (same filter as usb_test.c). */
+    if (name && (strstr(name, "panjit") || strstr(name, "Panjit") ||
+                 strstr(name, "PANJIT")))
+        return GAMEPAD_DEV_UNKNOWN;
+
+    switch (kind) {
+    case GAMEPAD_DEV_GAMEPAD:
+        return (n_gamepad < 1) ? kind : GAMEPAD_DEV_UNKNOWN;
+    case GAMEPAD_DEV_KEYBOARD:
+        return (n_keyboard < GAMEPAD_MAX_PER_KIND) ? kind : GAMEPAD_DEV_UNKNOWN;
+    case GAMEPAD_DEV_MOUSE:
+        return (n_mouse < GAMEPAD_MAX_PER_KIND) ? kind : GAMEPAD_DEV_UNKNOWN;
+    default:
+        return GAMEPAD_DEV_UNKNOWN;
+    }
+}
+
+/* A button already held when the node is opened (typically: held across a
+ * rescan) produces no press event, so ask the kernel for the current level. */
+static void seed_mouse_buttons(int fd, bool *btn) {
+    unsigned long keys[NBITS(KEY_MAX)];
+    memset(keys, 0, sizeof(keys));
+    btn[0] = btn[1] = btn[2] = false;
+    if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return;
+    btn[0] = test_bit(BTN_LEFT, keys);
+    btn[1] = test_bit(BTN_RIGHT, keys);
+    btn[2] = test_bit(BTN_MIDDLE, keys);
+}
+
+/* ── Scan /dev/input/event* for gamepad, keyboards, and mice ────────────── */
+/* No early exit: every node is visited, because every keyboard and every
+ * mouse is bound — a touchpad keyboard's mouse node and a separate receiver's
+ * mouse node must both move the cursor. */
 static void scan_devices(GamepadManager *gm) {
     char path[64];
     char name[128];
@@ -258,43 +290,42 @@ static void scan_devices(GamepadManager *gm) {
         name[0] = '\0';
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
 
-        /* Filter out Panjit touchscreen (same as usb_test.c) */
-        if (strstr(name, "panjit") || strstr(name, "Panjit") || strstr(name, "PANJIT")) {
-            close(fd);
-            continue;
-        }
+        GamepadDevKind type = gamepad_bind_kind(classify_device(fd), name,
+                                                gm->gamepad_fd >= 0 ? 1 : 0,
+                                                gm->keyboard_count,
+                                                gm->mouse_count);
 
-        GDevType type = classify_device(fd);
-
-        if (type == GDEV_GAMEPAD && gm->gamepad_fd < 0) {
+        if (type == GAMEPAD_DEV_GAMEPAD) {
             gm->gamepad_fd = fd;
             load_axis_calibration(gm);
             announce_found(gm->announced_gamepad, sizeof(gm->announced_gamepad),
                            "gamepad", name, path);
-        } else if (type == GDEV_KEYBOARD && gm->keyboard_fd < 0) {
-            gm->keyboard_fd = fd;
-            announce_found(gm->announced_keyboard, sizeof(gm->announced_keyboard),
+        } else if (type == GAMEPAD_DEV_KEYBOARD) {
+            int k = gm->keyboard_count++;
+            gm->keyboard_fds[k] = fd;
+            announce_found(gm->announced_keyboard[k], sizeof(gm->announced_keyboard[k]),
                            "keyboard", name, path);
-        } else if (type == GDEV_MOUSE && gm->mouse_fd < 0) {
-            gm->mouse_fd = fd;
-            announce_found(gm->announced_mouse, sizeof(gm->announced_mouse),
+        } else if (type == GAMEPAD_DEV_MOUSE) {
+            int k = gm->mouse_count++;
+            gm->mouse_fds[k] = fd;
+            seed_mouse_buttons(fd, gm->mouse_btn[k]);
+            announce_found(gm->announced_mouse[k], sizeof(gm->announced_mouse[k]),
                            "mouse", name, path);
         } else {
             close(fd);
         }
-
-        /* Stop early if all three found */
-        if (gm->gamepad_fd >= 0 && gm->keyboard_fd >= 0 && gm->mouse_fd >= 0)
-            break;
     }
 
     /* Anything still unbound after a full scan, that we had previously
-     * announced, is gone.  This runs after the loop above and not inside it,
-     * because the early break means a slot being unbound mid-loop says nothing
-     * about whether its device exists. */
+     * announced, is gone.  Slots are filled in node order, so a slot past the
+     * count is one whose device has left. */
     announce_lost(gm->announced_gamepad,  "gamepad",  gm->gamepad_fd);
-    announce_lost(gm->announced_keyboard, "keyboard", gm->keyboard_fd);
-    announce_lost(gm->announced_mouse,    "mouse",    gm->mouse_fd);
+    for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
+        announce_lost(gm->announced_keyboard[k], "keyboard",
+                      k < gm->keyboard_count ? gm->keyboard_fds[k] : -1);
+        announce_lost(gm->announced_mouse[k], "mouse",
+                      k < gm->mouse_count ? gm->mouse_fds[k] : -1);
+    }
 }
 
 /* ── Apply sensible defaults to all configurable fields ─────────────────── */
@@ -509,8 +540,8 @@ int gamepad_save_config(const GamepadManager *gp, const char *path) {
 int gamepad_init(GamepadManager *gm) {
     memset(gm, 0, sizeof(*gm));
     gm->gamepad_fd  = -1;
-    gm->keyboard_fd = -1;
-    gm->mouse_fd    = -1;
+    for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++)
+        gm->keyboard_fds[k] = gm->mouse_fds[k] = -1;
     gm->touch_region_count = 0;
 
     /* Apply sensible defaults before loading config */
@@ -523,8 +554,8 @@ int gamepad_init(GamepadManager *gm) {
 
     printf("gamepad: init complete (gamepad=%s, keyboard=%s, mouse=%s)\n",
            gm->gamepad_fd >= 0 ? "connected" : "none",
-           gm->keyboard_fd >= 0 ? "connected" : "none",
-           gm->mouse_fd >= 0 ? "connected" : "none");
+           gm->keyboard_count > 0 ? "connected" : "none",
+           gm->mouse_count > 0 ? "connected" : "none");
     return 0;
 }
 
@@ -533,14 +564,13 @@ void gamepad_close(GamepadManager *gm) {
         close(gm->gamepad_fd);
         gm->gamepad_fd = -1;
     }
-    if (gm->keyboard_fd >= 0) {
-        close(gm->keyboard_fd);
-        gm->keyboard_fd = -1;
+    for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
+        if (gm->keyboard_fds[k] >= 0) close(gm->keyboard_fds[k]);
+        if (gm->mouse_fds[k] >= 0)    close(gm->mouse_fds[k]);
+        gm->keyboard_fds[k] = gm->mouse_fds[k] = -1;
     }
-    if (gm->mouse_fd >= 0) {
-        close(gm->mouse_fd);
-        gm->mouse_fd = -1;
-    }
+    gm->keyboard_count = gm->mouse_count = 0;
+    memset(gm->mouse_btn, 0, sizeof(gm->mouse_btn));
 }
 
 void gamepad_rescan(GamepadManager *gm) {
@@ -550,9 +580,9 @@ void gamepad_rescan(GamepadManager *gm) {
     /* Drop the latched levels too: the key-up for anything held at unplug time
      * will never arrive, so keeping it would freeze that button on. */
     memset(gm->held_latched, 0, sizeof(gm->held_latched));
-    gm->prev_mouse_left = false;
-    gm->prev_mouse_right = false;
-    gm->prev_mouse_middle = false;
+    /* prev_mouse_* are deliberately kept: the reopened mice are re-seeded from
+     * EVIOCGKEY, so a button held across the rescan produces no edge, and one
+     * released (or whose mouse left) during it produces a release edge. */
     scan_devices(gm);
 }
 
@@ -726,12 +756,10 @@ static void merge_stick_dpad(const InputState *state, bool *derived) {
         derived[BTN_ID_DOWN] = true;
 }
 
-/* ── Read keyboard events ───────────────────────────────────────────────── */
-static void poll_keyboard(GamepadManager *gm) {
-    if (gm->keyboard_fd < 0) return;
-
+/* ── Read keyboard events (every keyboard node, into the same latches) ──── */
+static void poll_keyboard_fd(GamepadManager *gm, int fd) {
     struct input_event ev;
-    while (read(gm->keyboard_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+    while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
         if (ev.type != EV_KEY) continue;
 
         bool down = (ev.value != 0); /* value 1 = press, 2 = repeat, 0 = release */
@@ -775,34 +803,52 @@ static void poll_keyboard(GamepadManager *gm) {
     }
 }
 
+static void poll_keyboard(GamepadManager *gm) {
+    for (int k = 0; k < gm->keyboard_count; k++)
+        if (gm->keyboard_fds[k] >= 0)
+            poll_keyboard_fd(gm, gm->keyboard_fds[k]);
+}
+
 /* ── Read mouse events with acceleration ────────────────────────────────── */
+/* Every mouse node feeds one cursor: relative motion is summed across nodes
+ * before acceleration, and each button is the OR of its level on every node. */
 static void poll_mouse(GamepadManager *gm, InputState *state) {
-    if (gm->mouse_fd < 0) return;
+    if (gm->mouse_count <= 0) {
+        /* No mouse (or it left): nothing can be holding a mouse button. */
+        state->mouse_left_held = state->mouse_right_held = 0;
+        state->mouse_middle_held = 0;
+        return;
+    }
 
     struct input_event ev;
     int accum_dx = 0, accum_dy = 0;
-    bool left_held = state->mouse_left_held ? true : false;
-    bool right_held = state->mouse_right_held ? true : false;
-    bool middle_held = state->mouse_middle_held ? true : false;
+    bool left_held = false, right_held = false, middle_held = false;
 
-    while (read(gm->mouse_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+    for (int k = 0; k < gm->mouse_count; k++) {
+        bool *btn = gm->mouse_btn[k];
+        int fd = gm->mouse_fds[k];
 
-        if (ev.type == EV_REL) {
-            if (ev.code == REL_X)
-                accum_dx += ev.value;
-            else if (ev.code == REL_Y)
-                accum_dy += ev.value;
-        } else if (ev.type == EV_KEY) {
-            bool down = (ev.value != 0);
+        while (fd >= 0 && read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+            if (ev.type == EV_REL) {
+                if (ev.code == REL_X)
+                    accum_dx += ev.value;
+                else if (ev.code == REL_Y)
+                    accum_dy += ev.value;
+            } else if (ev.type == EV_KEY) {
+                bool down = (ev.value != 0);
 
-            if (ev.code == BTN_LEFT)
-                left_held = down;
-            else if (ev.code == BTN_RIGHT)
-                right_held = down;
-            else if (ev.code == BTN_MIDDLE)
-                middle_held = down;
+                if (ev.code == BTN_LEFT)
+                    btn[0] = down;
+                else if (ev.code == BTN_RIGHT)
+                    btn[1] = down;
+                else if (ev.code == BTN_MIDDLE)
+                    btn[2] = down;
+            }
+            /* EV_SYN ignored — we batch all events in the read loop */
         }
-        /* EV_SYN ignored — we batch all events in the read loop */
+        left_held   = left_held   || btn[0];
+        right_held  = right_held  || btn[1];
+        middle_held = middle_held || btn[2];
     }
 
     /* Apply mouse acceleration to accumulated delta */
@@ -901,8 +947,8 @@ static void compute_mouse_edges(GamepadManager *gm, InputState *state) {
 void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active) {
     state->gamepad_connected  = (gm->gamepad_fd >= 0);
-    state->keyboard_connected = (gm->keyboard_fd >= 0);
-    state->mouse_connected    = (gm->mouse_fd >= 0) ? 1 : 0;
+    state->keyboard_connected = (gm->keyboard_count > 0);
+    state->mouse_connected    = (gm->mouse_count > 0) ? 1 : 0;
 
     /* Level state from the sources that report an absolute position rather
      * than press/release events — touch regions and the analog stick.  Zeroed

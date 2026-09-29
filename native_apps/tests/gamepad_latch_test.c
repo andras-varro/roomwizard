@@ -376,6 +376,105 @@ static void test_mouse_bounds_follow_surface(void) {
     screen_base_width = save_w; screen_base_height = save_h;
 }
 
+/* ═══ 7. Every mouse and every keyboard node is bound ═══════════════════════
+ * Reported on .188: a touchpad keyboard (its mouse node event3) and a 2.4 GHz
+ * mouse receiver (event6) attached together, and only one of them moved the
+ * cursor in games — the scan bound the FIRST node of each kind and closed the
+ * rest.  This walks that attach order through the real selection rule with
+ * running counts, exactly as scan_devices() does. */
+static void test_bind_every_mouse_and_keyboard(void) {
+    printf("\n7. scan binds every mouse and keyboard, one pad, never the touchscreen\n");
+
+    struct { GamepadDevKind kind; const char *name; GamepadDevKind want; } nodes[] = {
+        { GAMEPAD_DEV_UNKNOWN,  "twl4030_pwrbutton",          GAMEPAD_DEV_UNKNOWN  },
+        { GAMEPAD_DEV_KEYBOARD, "touchpad keyboard",          GAMEPAD_DEV_KEYBOARD },
+        { GAMEPAD_DEV_MOUSE,    "touchpad keyboard Mouse",    GAMEPAD_DEV_MOUSE    },
+        { GAMEPAD_DEV_GAMEPAD,  "Microsoft X-Box 360 pad",    GAMEPAD_DEV_GAMEPAD  },
+        { GAMEPAD_DEV_KEYBOARD, "Compx 2.4G Receiver",        GAMEPAD_DEV_KEYBOARD },
+        { GAMEPAD_DEV_MOUSE,    "Compx 2.4G Receiver Mouse",  GAMEPAD_DEV_MOUSE    },
+        { GAMEPAD_DEV_GAMEPAD,  "second pad",                 GAMEPAD_DEV_UNKNOWN  },
+    };
+    int n_pad = 0, n_kbd = 0, n_mouse = 0;
+    for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
+        GamepadDevKind got = gamepad_bind_kind(nodes[i].kind, nodes[i].name,
+                                               n_pad, n_kbd, n_mouse);
+        char what[80];
+        snprintf(what, sizeof(what), "node %zu '%s'", i, nodes[i].name);
+        expect_int(what, (int)got, (int)nodes[i].want);
+        if (got == GAMEPAD_DEV_GAMEPAD)  n_pad++;
+        if (got == GAMEPAD_DEV_KEYBOARD) n_kbd++;
+        if (got == GAMEPAD_DEV_MOUSE)    n_mouse++;
+    }
+    expect_int("mice bound", n_mouse, 2);
+    expect_int("keyboards bound", n_kbd, 2);
+    expect_int("pads bound", n_pad, 1);
+
+    /* The touchscreen is excluded by name whatever its bits classify as. */
+    static const GamepadDevKind kinds[] = { GAMEPAD_DEV_KEYBOARD,
+                                            GAMEPAD_DEV_GAMEPAD, GAMEPAD_DEV_MOUSE };
+    for (int k = 0; k < 3; k++)
+        expect_int("panjit touchscreen never bound",
+                   (int)gamepad_bind_kind(kinds[k], "Panjit touchscreen", 0, 0, 0),
+                   (int)GAMEPAD_DEV_UNKNOWN);
+
+    /* The cap refuses rather than overruns the fd arrays. */
+    expect_int("mouse past the cap refused",
+               (int)gamepad_bind_kind(GAMEPAD_DEV_MOUSE, "m", 0, 0, GAMEPAD_MAX_PER_KIND),
+               (int)GAMEPAD_DEV_UNKNOWN);
+    expect_int("keyboard past the cap refused",
+               (int)gamepad_bind_kind(GAMEPAD_DEV_KEYBOARD, "k", 0, GAMEPAD_MAX_PER_KIND, 0),
+               (int)GAMEPAD_DEV_UNKNOWN);
+}
+
+/* ═══ 8. Two mice drive one cursor; two keyboards latch the same buttons ════
+ * The poll half of the same defect: binding a second node is useless if the
+ * poll reads only the first. */
+static void test_two_mice_two_keyboards(void) {
+    printf("\n8. two mice move one cursor, buttons OR, both keyboards latch\n");
+
+    GamepadManager gm;
+    InputState st;
+    manager_init(&gm);
+    memset(&st, 0, sizeof(st));
+    gm.mouse_accel.low_threshold = 1000;     /* 1:1, so deltas add exactly */
+    gamepad_set_mouse_position(&gm, 100, 100);
+
+    int m0 = fake_fd(), m1 = fake_fd(), k0 = fake_fd(), k1 = fake_fd();
+    gm.mouse_fds[0] = m0; gm.mouse_fds[1] = m1; gm.mouse_count = 2;
+    gm.keyboard_fds[0] = k0; gm.keyboard_fds[1] = k1; gm.keyboard_count = 2;
+
+    feed(m0, EV_REL, REL_X, 5);  feed(m0, EV_SYN, SYN_REPORT, 0);
+    feed(m1, EV_REL, REL_X, 7);  feed(m1, EV_REL, REL_Y, 3);
+    feed(m1, EV_KEY, BTN_LEFT, 1); feed(m1, EV_SYN, SYN_REPORT, 0);
+    feed(k1, EV_KEY, KEY_SPACE, 1);
+    rewind_fd(m0); rewind_fd(m1); rewind_fd(k1);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_int("cursor x moved by both mice", st.mouse_x, 112);
+    expect_int("cursor y moved by the second mouse", st.mouse_y, 103);
+    expect_bool("second mouse's left button held", st.mouse_left_held != 0, true);
+    expect_bool("second mouse's left button press edge", st.mouse_left_pressed != 0, true);
+    expect_bool("second keyboard's SPACE latches JUMP", st.buttons[BTN_ID_JUMP].held, true);
+
+    /* Left pressed on the first mouse too, then released on the second: still
+     * held, because the first is holding it. */
+    int m0b = fake_fd(), m1b = fake_fd();
+    close(m0); close(m1);
+    gm.mouse_fds[0] = m0b; gm.mouse_fds[1] = m1b;
+    feed(m0b, EV_KEY, BTN_LEFT, 1);
+    feed(m1b, EV_KEY, BTN_LEFT, 0);
+    rewind_fd(m0b); rewind_fd(m1b);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("released on one mouse, held on the other: held",
+                st.mouse_left_held != 0, true);
+
+    gamepad_close(&gm);
+    expect_int("close drops every mouse", gm.mouse_count, 0);
+    expect_int("close drops every keyboard", gm.keyboard_count, 0);
+    expect_int("close resets the fd slots", gm.mouse_fds[1], -1);
+    /* gamepad_close() closed k0/k1/m0b/m1b; a second close must fail EBADF. */
+    expect_bool("close actually closed the fds", close(m1b) < 0 && close(k0) < 0, true);
+}
+
 int main(void) {
     printf("gamepad held-state regression (latched events vs per-frame positions)\n");
 
@@ -385,6 +484,8 @@ int main(void) {
     test_unplug_clears();
     test_sources_or_together();
     test_mouse_bounds_follow_surface();
+    test_bind_every_mouse_and_keyboard();
+    test_two_mice_two_keyboards();
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");

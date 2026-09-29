@@ -137,13 +137,26 @@ private:
 		DEV_GAMEPAD
 	};
 
-	int _keyboardFd;
-	int _mouseFd;
+	// Every keyboard node and every mouse node is held at once: a touchpad
+	// keyboard exposes its own pointer node, and a second USB receiver brings
+	// another, and both must drive the one cursor.  Unused slots are -1.
+	// *Nodes[] records the N of /dev/input/eventN behind each fd so that a
+	// rescan never opens a node that is already held.
+	static const int MAX_KEYBOARDS = 8;
+	static const int MAX_MICE = 8;
+	int _keyboardFds[MAX_KEYBOARDS];
+	int _keyboardNodes[MAX_KEYBOARDS];
+	int _mouseFds[MAX_MICE];
+	int _mouseNodes[MAX_MICE];
+	int _mouseNext;  // round-robin start, so one busy mouse cannot starve another
 	int _gamepadFd;
 
 	void scanInputDevices();         // Scan /dev/input/event* for USB devices
 	DeviceType classifyDevice(int fd); // Classify as keyboard/mouse/gamepad
 	void closeInputDevices();        // Close all USB device fds
+	static int countOpen(const int *fds, int n);
+	static bool holdsNode(const int *fds, const int *nodes, int n, int node);
+	static bool addToSlot(int *fds, int *nodes, int n, int fd, int node);
 
 	// Periodic rescan timer
 	uint32 _lastDeviceScan;
@@ -156,6 +169,7 @@ private:
 	// USB Keyboard support
 	// -------------------------------------------------------
 	bool pollKeyboard(Common::Event &event);
+	bool pollKeyboardFd(int slot, Common::Event &event);
 
 	// Keyboard modifier state tracking
 	byte _modifierFlags;  // Current modifier state (KBD_SHIFT, KBD_CTRL, KBD_ALT)
@@ -172,6 +186,7 @@ private:
 	// USB Mouse support
 	// -------------------------------------------------------
 	bool pollMouse(Common::Event &event);
+	bool pollMouseFd(int slot, Common::Event &event);
 
 	// Mouse state
 	int _mouseX, _mouseY;           // Current cursor position in screen coords (0..799, 0..479)

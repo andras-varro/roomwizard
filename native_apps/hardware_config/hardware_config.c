@@ -67,7 +67,7 @@ static void signal_handler(int sig) {
 
 /* ── Test functions (bypass config-gated APIs) ──────────────────────────── */
 
-static void do_led_test(int brightness_pct) {
+static void do_led_test(Audio *bus, int brightness_pct) {
     /* Write directly to sysfs, bypassing config-gated hw_set_led */
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", brightness_pct);
@@ -80,7 +80,14 @@ static void do_led_test(int brightness_pct) {
     f = fopen("/sys/class/leds/green_led/brightness", "w");
     if (f) { fputs(buf, f); fclose(f); }
 
-    usleep(500000);  /* 500ms */
+    /* Hold ~500 ms, still pumping the speaker-test bus the main loop services:
+     * a blocking sleep left a just-queued TEST AUDIO chime unserviced. A bus that
+     * failed to open makes audio_pump() a no-op. */
+    uint32_t t0 = get_time_ms();
+    while (get_time_ms() - t0 < 500) {
+        audio_pump(bus);
+        usleep(10000);
+    }
 
     /* Off */
     f = fopen("/sys/class/leds/red_led/brightness", "w");
@@ -365,12 +372,12 @@ int main(void) {
         if (button_update(&led_minus_btn, tx, ty, touching, now)) {
             led_brightness -= 10;
             if (led_brightness < 0) led_brightness = 0;
-            do_led_test(led_brightness);  /* Brief flash at new brightness */
+            do_led_test(&test_audio, led_brightness);  /* Brief flash at new brightness */
         }
         if (button_update(&led_plus_btn, tx, ty, touching, now)) {
             led_brightness += 10;
             if (led_brightness > 100) led_brightness = 100;
-            do_led_test(led_brightness);  /* Brief flash at new brightness */
+            do_led_test(&test_audio, led_brightness);  /* Brief flash at new brightness */
         }
 
         /* Backlight brightness -/+ */
@@ -390,7 +397,7 @@ int main(void) {
             audio_test_chime(&test_audio);
         }
         if (button_update(&test_led_btn, tx, ty, touching, now)) {
-            do_led_test(led_brightness);
+            do_led_test(&test_audio, led_brightness);
         }
 
         /* Save button */
