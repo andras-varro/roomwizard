@@ -145,6 +145,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include "../common/audio.h"
 #include "../common/audio_gen.h"
@@ -413,12 +414,48 @@ typedef struct {
  * start it causes, repaint ONLY the pressed pad (inverted for REDRAW_LIT_MS, then
  * normal), copied into the front buffer as one small rectangle by
  * present_rect() — no clear, no fb_swap().  Everything audio-side is untouched:
- * the same pump call in the same place, the same sleep decision.  The READOUT_MS
- * timer still does full redraws in both modes (it now also carries the voice
- * count in DRAW PAD), so those are the one redraw source the A/B keeps; they
- * are not coincident with a press.  Tapping the DRAW pad itself redraws in full,
- * so its own label is always the truth.  Every tap logs `redraw=full|pad`. */
+ * the same pump call in the same place, the same sleep decision.
+ *
+ * ⚠️ **The readout must not smuggle the full redraw back in.**  The READOUT_MS
+ * timer used to call draw_screen() + fb_swap() in BOTH modes whenever the voice
+ * count moved — so every voice start still produced a full redraw within 250 ms
+ * in DRAW PAD, and an A/B that heard the crack "in both modes" never tested a
+ * loop without full redraws.  In DRAW PAD the timer now repaints only the
+ * readout band (title, two counter lines, the `last` line, the voice meter —
+ * present_readout()) by the same present_rect() path.  DRAW FULL is unchanged:
+ * a full redraw on the press AND on the count change.  In DRAW PAD the only full
+ * redraws left are the first frame and a tap on the DRAW pad itself, so its own
+ * label is always the truth.  Every tap logs `redraw=full|pad`, and the timer
+ * logs how many of each kind happened and how long the worst took (the `mix: t=`
+ * line) — a crack that coincides with `full_draws` not moving is not this. */
 #define REDRAW_LIT_MS  150
+
+/* Microsecond monotonic clock for the draw/pump timings.  get_time_ms() is
+ * whole milliseconds off gettimeofday(), too coarse for a present_rect() and
+ * steppable by the time sync.  uint32_t wraps every ~71 min; only differences
+ * are ever taken, and unsigned subtraction survives the wrap (no `long` math —
+ * it is 32 bits here). */
+static uint32_t mono_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_sec * 1000000u + (uint32_t)(ts.tv_nsec / 1000);
+}
+
+/* Per-READOUT_MS-period draw statistics: counts are session totals (so a log
+ * line shows whether any draw happened since the last one), maxima restart at
+ * every tick. */
+static struct {
+    uint32_t full_draws, pad_draws;       /* session totals                       */
+    uint32_t full_us_max, pad_us_max;     /* worst this period                    */
+} dstat;
+
+static void note_pad_us(uint32_t t0)
+{
+    uint32_t d = mono_us() - t0;
+    dstat.pad_draws++;
+    if (d > dstat.pad_us_max) dstat.pad_us_max = d;
+}
 
 /* Copy one logical rectangle of the back buffer onto the panel.  Landscape only:
  * in portrait fb_swap()'s rotation would be needed and there is no feedback. */
@@ -442,8 +479,10 @@ static void present_rect(Framebuffer *fb, int x, int y, int w, int h)
 
 static void repaint_pad(Framebuffer *fb, Pad *p)
 {
+    uint32_t t0 = mono_us();
     button_draw(fb, &p->btn);
     present_rect(fb, p->btn.x, p->btn.y, p->btn.width, p->btn.height);
+    note_pad_us(t0);
 }
 
 static void set_draw_label(Pad *draw_pad, const View *v)
@@ -459,7 +498,8 @@ static void set_draw_label(Pad *draw_pad, const View *v)
  *  that redraws on every change redraws EVERY FRAME — and a full 800x450x4
  *  repaint plus fb_swap on this part is a plausible cause of the very starvation
  *  this tool is trying to attribute.  The voice count still redraws instantly
- *  under DRAW FULL; under DRAW PAD it rides on this timer (see REDRAW_LIT_MS). */
+ *  under DRAW FULL; under DRAW PAD it rides on this timer and is repainted in
+ *  place (see REDRAW_LIT_MS). */
 #define READOUT_MS  250
 
 static void set_toggle_labels(Pad *limit_pad, Pad *level_pad, const Audio *audio,
@@ -495,11 +535,18 @@ static void set_toggle_labels(Pad *limit_pad, Pad *level_pad, const Audio *audio
                       COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 }
 
-static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
-                        int rate)
-{
-    fb_clear(fb, RGB(10, 12, 20));
+#define MIX_BG  RGB(10, 12, 20)
 
+/* The readout band: everything above the pad rows that changes during play.
+ * Its bottom is the voice meter's (SCREEN_SAFE_TOP+56, h 8) plus a margin that
+ * stays short of ROWS_TOP, so an in-place repaint can never touch a pad. */
+#define READOUT_BAND_BOTTOM  (SCREEN_SAFE_TOP + 66)
+
+/* Draw the readout band's contents into the back buffer — no clear, no present.
+ * draw_screen() and present_readout() both call it, so the two paths cannot
+ * show different text. */
+static void draw_readout(Framebuffer *fb, const View *v, int rate)
+{
     /* Title and the two readout lines live in the visible band above the pads:
      * they are read, never pressed.  INFO_X clears "MIX BUS" at scale 3 —
      * 7 chars x 6 px x 3 plus the left margin — measured rather than guessed,
@@ -553,9 +600,33 @@ static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
         uint32_t c = (i < v->voices) ? RGB(80, 230, 120) : RGB(35, 40, 50);
         fb_fill_rect(fb, cx, meter_y, cw, 8, c);
     }
+}
 
+static void draw_screen(Framebuffer *fb, Button *exit_btn, const View *v,
+                        int rate)
+{
+    fb_clear(fb, MIX_BG);
+    draw_readout(fb, v, rate);
     for (int i = 0; i < pad_count; i++) button_draw(fb, &pads[i].btn);
     draw_exit_button(fb, exit_btn);
+}
+
+/* DRAW PAD's readout refresh: clear and redraw only the readout band in the back
+ * buffer and copy that band to the panel — no fb_clear(), no fb_swap().  The EXIT
+ * button sits top-right inside the band, so it is redrawn whole after the fill
+ * (the part of it below the band is untouched in both buffers). */
+static void present_readout(Framebuffer *fb, Button *exit_btn, const View *v,
+                            int rate)
+{
+    uint32_t t0 = mono_us();
+    int h = READOUT_BAND_BOTTOM - SCREEN_VISIBLE_TOP;
+    fb_fill_rect(fb, SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
+                 SCREEN_VISIBLE_WIDTH, h, MIX_BG);
+    draw_readout(fb, v, rate);
+    draw_exit_button(fb, exit_btn);
+    present_rect(fb, SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
+                 SCREEN_VISIBLE_WIDTH, h);
+    note_pad_us(t0);
 }
 
 /* ── main ────────────────────────────────────────────────────────────────── */
@@ -713,6 +784,22 @@ int main(int argc, char *argv[])
     uint32_t lit_until = 0;
     uint32_t last_readout = 0;
     uint32_t prev_now     = 0;
+    /* DRAW PAD: something in the readout band is stale — `last` after a press,
+     * the lead once measured — and waits for the READOUT_MS tick to be
+     * repainted in place, so no readout paint lands in a press's iteration. */
+    bool     readout_dirty = false;
+    uint32_t shown_gap     = 0;         /* v.max_gap as last painted             */
+
+    /* The timing receipt (the `mix: t=` line).  pump_gap is wall time between
+     * the starts of two consecutive audio_pump() calls — the us-resolution
+     * version of `worst frame`, restarted every tick rather than by STOP. */
+    const uint32_t t_start   = get_time_ms();
+    uint32_t last_pump_us    = 0;
+    uint32_t pump_gap_max    = 0;       /* this period, us                       */
+    uint32_t pump_gap_record = 0;       /* whole session, us                     */
+    uint32_t draw_record     = 0;       /* whole session, us, either kind        */
+    uint32_t logged_full = 0, logged_pad = 0;
+    int      logged_voices = -1;
 
     while (running) {
         touch_poll(&touch);
@@ -887,6 +974,7 @@ int main(int argc, char *argv[])
                 repaint_pad(&fb, p);
                 lit = p;
                 lit_until = now + REDRAW_LIT_MS;
+                readout_dirty = true;   /* `last` changed; shown on the next tick */
             }
         }
 
@@ -900,6 +988,10 @@ int main(int argc, char *argv[])
         }
 
         /* The pump, once per frame, exactly where a game would put it. */
+        uint32_t pump_t = mono_us();
+        if (last_pump_us != 0 && pump_t - last_pump_us > pump_gap_max)
+            pump_gap_max = pump_t - last_pump_us;
+        last_pump_us = pump_t;
         audio_pump(&audio);
 
         int      nv = audio_pump_voices(&audio);
@@ -911,17 +1003,23 @@ int main(int argc, char *argv[])
         }
 
         /* The effective lead only exists once a pump has read the device period,
-         * so it appears mid-session rather than at startup — redraw when it does. */
+         * so it appears mid-session rather than at startup — redraw when it does
+         * (in DRAW PAD: in place, on the next tick). */
         long nlead = audio_pump_lead(&audio);
         if (nlead != v.lead_frames) {
             v.lead_frames   = nlead;
             v.period_frames = audio_pump_period(&audio);
-            needs_redraw    = true;
+            if (v.quiet_redraw) readout_dirty = true;
+            else                needs_redraw  = true;
         }
 
         /* The counters move on almost every sample, so they are refreshed on a
-         * timer rather than on change — see READOUT_MS. */
-        if ((uint32_t)(now - last_readout) >= READOUT_MS) {
+         * timer rather than on change — see READOUT_MS.  In DRAW PAD every
+         * readout change (count, counters, bed, `worst frame`, `last`) is
+         * repainted in place; only DRAW FULL turns it into a full redraw. */
+        bool tick = (uint32_t)(now - last_readout) >= READOUT_MS;
+        bool paint_readout = false;
+        if (tick) {
             uint32_t nc = audio_pump_clipped(&audio);
             uint32_t nl = audio_pump_limited(&audio);
             uint32_t ns = audio_pump_starved(&audio);
@@ -939,16 +1037,66 @@ int main(int argc, char *argv[])
                 v.clipped = nc; v.limited = nl; v.starved = ns;
                 v.lost    = nf; v.dropped = nd;
                 v.music_on = nm; v.music_loops = nw;
-                needs_redraw = true;
+                if (v.quiet_redraw) readout_dirty = true;
+                else                needs_redraw  = true;
             }
+            if (v.quiet_redraw && v.max_gap != shown_gap) readout_dirty = true;
+            paint_readout = v.quiet_redraw && readout_dirty && !needs_redraw;
             last_readout = now;
         }
 
-        bool drew = needs_redraw;
+        bool drew = needs_redraw || paint_readout;
         if (needs_redraw) {
+            uint32_t t0 = mono_us();
             draw_screen(&fb, &exit_btn, &v, audio.sample_rate);
             fb_swap(&fb);
-            needs_redraw = false;
+            uint32_t d = mono_us() - t0;
+            dstat.full_draws++;
+            if (d > dstat.full_us_max) dstat.full_us_max = d;
+            needs_redraw  = false;
+            readout_dirty = false;          /* the full frame carried it */
+            shown_gap     = v.max_gap;
+        } else if (paint_readout) {
+            present_readout(&fb, &exit_btn, &v, audio.sample_rate);
+            readout_dirty = false;
+            shown_gap     = v.max_gap;
+        }
+
+        /* The timing receipt, at most one line per tick and only when it says
+         * something: a draw of either kind since the last line, a new voice
+         * count, or a pump gap / draw time worse than any before it this
+         * session.  Times are measured in us and printed as ms to one decimal.
+         * The *_max fields are this period's worst; the counts are totals.
+         * ⚠️ Counters (clip/lim/starve/lost/drop) are on the tap line, not here —
+         * `lim` moves on most samples and would make this a per-tick line. */
+        if (tick) {
+            uint32_t dmax = dstat.full_us_max > dstat.pad_us_max ? dstat.full_us_max
+                                                                 : dstat.pad_us_max;
+            bool new_gap  = pump_gap_max > pump_gap_record;
+            bool new_draw = dmax > draw_record;
+            if (dstat.full_draws != logged_full || dstat.pad_draws != logged_pad ||
+                v.voices != logged_voices || new_gap || new_draw) {
+                fprintf(stderr, "mix: t=%lu redraw=%s voices=%d full_draws=%lu "
+                                "pad_draws=%lu full_ms_max=%lu.%lu pad_ms_max=%lu.%lu "
+                                "pump_gap_ms_max=%lu.%lu%s%s\n",
+                        (unsigned long)(now - t_start),
+                        v.quiet_redraw ? "pad" : "full", v.voices,
+                        (unsigned long)dstat.full_draws, (unsigned long)dstat.pad_draws,
+                        (unsigned long)(dstat.full_us_max / 1000),
+                        (unsigned long)(dstat.full_us_max % 1000 / 100),
+                        (unsigned long)(dstat.pad_us_max / 1000),
+                        (unsigned long)(dstat.pad_us_max % 1000 / 100),
+                        (unsigned long)(pump_gap_max / 1000),
+                        (unsigned long)(pump_gap_max % 1000 / 100),
+                        new_gap ? " new_gap_max" : "", new_draw ? " new_draw_max" : "");
+                logged_full   = dstat.full_draws;
+                logged_pad    = dstat.pad_draws;
+                logged_voices = v.voices;
+            }
+            if (new_gap)  pump_gap_record = pump_gap_max;
+            if (new_draw) draw_record     = dmax;
+            pump_gap_max = 0;
+            dstat.full_us_max = dstat.pad_us_max = 0;
         }
 
         /* ⚠️ audio_pump_active() must be in this decision.  The stream keeps only
