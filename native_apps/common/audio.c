@@ -159,6 +159,9 @@ static void audio_frame_service(void *ctx)
 }
 
 static void bus_reset(Audio *audio);   /* with the rest of the bus, below */
+static bool sample_live(const Audio *audio, const AudioSampleVoice *sv);
+static bool sample_arm(Audio *audio, AudioSampleVoice *sv, const char *what,
+                       const char *how, const char *path);
 
 /** Open the continuous stream and put the mix bus on it — the one device half.
  *
@@ -187,7 +190,24 @@ static int stream_open(Audio *audio)
     audio->available   = true;
     audio->osc_stream  = false;
 
+    /* ⚠️ The bed survives a device move by being RE-ARMED, not restarted.
+     * bus_reset() wipes every voice, so a bed state machine sees "music ended" and
+     * starts the NEXT track from frame 0 — SameGame went A → B on an unplug.  The
+     * voice's AudioWav is untouched by the reset, so it goes back on the new bus
+     * at its own read position, the way audio_music_resume() does.  Asked before
+     * the reset, while the old mixer can still answer; on the first open the slot
+     * is -1 and nothing is carried. */
+    bool carry_music = sample_live(audio, &audio->music) && audio->music.wav.f;
+
     bus_reset(audio);
+    if (carry_music) {
+        if (audio->music.wav.rate == audio->sample_rate)
+            sample_arm(audio, &audio->music, "music", "carry", NULL);
+        else
+            fprintf(stderr, "audio: music not carried — the file is %d Hz, the new "
+                            "device granted %d\n", audio->music.wav.rate,
+                    audio->sample_rate);
+    }
     audio_out_set_shift(&audio->out, audio->master_shift);
     audio_out_set_fill(&audio->out, audio_cont_fill_mix, audio, "mix bus");
     return 0;

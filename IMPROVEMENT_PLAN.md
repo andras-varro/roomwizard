@@ -174,22 +174,6 @@ Windows. Two pieces of residue:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B36. Output-device hot plug: a move restarts the music on another track — open, measured 2026-09-28
-
-**Unplug and replug both work on `.188` (softfp build, measured 2026-09-28).** Native: `EBADFD`/`ENODEV`
-sets `audio_out_device_lost()` and `common/audio.c` reopens on the panel; while there with `audio_device`
-`usb`/`auto`, `audio_out_usb_returned()` (`common/audio_out.c`) re-probes `/dev/dsp1` once per
-`AUDIO_OUT_REPROBE_MS` and moves back after two consecutive sightings, and a card present but failing to
-open is refused until seen unplugged. With `auto` the log reads `audio_out: plughw:1,0 is back — leaving
-plughw:0,0`. ScummVM's audio thread in `scummvm-roomwizard/backend-files/oss-mixer.cpp` reopens on loss
-and on replug (operator: works). Left open:
-
-- **A move restarts the music on the next track** (operator, `auto`, saved: track A on USB → track B on
-  the speaker). Mechanism, read in code: `stream_open()`'s `bus_reset()` (`common/audio.c`) wipes every
-  mixer voice, so `audio_music_active()` goes false and `audio_bed_service()` (`common/audio_bed.c`)
-  drops to IDLE and starts `track[next]` from frame 0. Fix: re-arm the surviving music voice from its
-  WAV position after the reset, as `audio_music_resume()` does.
-
 ### B38. Mix Bus Test cracks from ~6 voices under a full redraw — open, confirmed 2026-09-28, parked
 
 **Parked by the operator 2026-09-28 ("we can live with this").** **Cause measured** at `.188` with the
@@ -627,7 +611,7 @@ ScummVM ran Full Throttle ("all worked well"), and an alsa-lib 1.2.1.2 client pl
 `RW_ABI=softfp` both build scripts build alsa-lib on demand and `audio_out.c` plays through libasound
 ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). Operator by ear on `.188` 2026-09-28:
 Brick Breaker and SameGame clean, `device_tools` TEST AUDIO works, and ScummVM's ALSA build plays Full
-Throttle acceptably with occasional cracks. Unplug recovery is B36 and the Mix Bus Test crack B38. Still
+Throttle acceptably with occasional cracks. The Mix Bus Test crack is B38. Still
 open here:
 
 - **(5)** flip both defaults to softfp-dynamic; delete the OSS backend, `RW_AUDIO_OSS` and SYSTEM_ANALYSIS
@@ -1098,8 +1082,7 @@ F4 · C5 · C8 · F17 · B33 (its fix is a driver patch, so it
 waits on F101) · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
 userspace overlay win was measured and rejected on image quality, the switch it would have needed is
 withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
-wait on F101. Then, nice-to-have and last: B36 — **ranked there by the operator 2026-09-11**, who
-raised it, judged the silence acceptable and wants it behind everything above.
+wait on F101.
 
 ⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
 `check-audio-pacing.sh`, both blocking. No test suite runs from any build script, from `deploy-all.sh` or
