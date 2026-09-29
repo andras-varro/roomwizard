@@ -112,9 +112,7 @@ Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o`, `logger.o` and
 `../native_apps/common/`. It has **no evdev scanner of its own**: `vnc_input.c` calls `input_scan()`
 (`common/input_scan.h`), which classifies by `gamepad.c`'s rules, opens every node of a kind up to a cap
 and skips held nodes — a rescan is another call. It does not link `gamepad.o`. `gamepad.c` and the
-ScummVM backend still carry their own copies of the classifier and scan loop, and moving them onto
-`input_scan.c` is open work in `../IMPROVEMENT_PLAN.md`; until then, a change to the classification rules
-lands in all three. `MAX_INPUT_DEVICES` in `config.h` is unused.
+ScummVM backend call the same scanner, so a change to the classification rules lands in all three.
 
 ## Network robustness
 

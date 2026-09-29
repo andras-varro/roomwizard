@@ -95,71 +95,69 @@ cap hid — Office Runner draws one icon plus `x10` rather than five icons meani
 a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
 what is drawn.
 
-### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, **measured 2026-09-28**
+### B33. A stale `is_active` leaves a `printk` loop that hard-resets the device — open, patch booted on `.188`
 
-**A hub no longer triggers it on our image, and the invariant is still broken.** An autosuspending hub
-set off the burst at every `recover` and hid the device behind it; `usbcore.autosuspend=-1` on the
-cmdline removed that trigger (measured, `kernel/README.md`), so a hub is now a *non*-reproducer. The
-DISCONNECT handler still leaves `is_active` set whatever is plugged in on the booted image.
-
-**A patch is booted on `.188` and the unplug half is measured clean.**
+**Status (measured 2026-09-28, uImage md5 `926896a55a850f6203f91b329f916349`):**
 `kernel/patches/musb-a-idle-disconnect.patch` adds `OTG_STATE_A_IDLE`/`A_WAIT_BCON` arms to the
-`MUSB_INTR_DISCONNECT` switch that call `musb_host_resume_root_hub()` + `musb_root_disconnect()`. Measured
-2026-09-28 (uImage md5 `926896a55a850f6203f91b329f916349`, `usbcore.autosuspend=-1` still on): hub pulled
-from the root port → `Babble`, then `USB disconnect` for every child, `1-1` gone from sysfs, root hub
-`runtime_status` `active`, and `dmesg | grep -c -E "unhandled DISCONNECT|musb_bus_suspend"` reads 0. A
-dongle hot-plugged behind the hub disconnects and re-enumerates on its own. **Left open: the hub
-replugged into the root port raised no `CONNECT` at all** (mode `a_idle`); `/etc/init.d/usb-host recover`
-re-enumerated everything on attempt 1, still 0 warnings. Whether the patch or the babble caused the miss
-is undecided — the recorded history says a root-port replug works once a session existed. **Next: the
-same pull/replug on the old image** (`uImage-system.autosusp` on p1, md5
-`6f1f9fd43003232f16e7faf107d9fc90`), then a run with `usbcore.autosuspend` at its default, which is the
-trigger the cmdline currently removes. RESCAN covers the miss whatever its cause; a timed rebind cannot
-(measured, `device-files/usb-host` at `recover`).
+`MUSB_INTR_DISCONNECT` switch (`musb_host_resume_root_hub()` + `musb_root_disconnect()`). Hub pulled from
+the root port: every child disconnects, `1-1` leaves sysfs, the root hub stays `active`, and
+`dmesg | grep -c -E "unhandled DISCONNECT|musb_bus_suspend"` reads 0. `usbcore.autosuspend=-1` is on
+the cmdline (`kernel/README.md`), which removes the hub-autosuspend trigger. Undo image on p1:
+`uImage-system.autosusp`, md5 `6f1f9fd43003232f16e7faf107d9fc90`.
 
-⚠️ **An unbounded kernel message loop that outlives the device's removal and ends in a hardware reset
-~46 min later, and it is also a measurement contaminant** — anything judged by ear or timed during a storm
-was judged on a starved device, and a frozen app is a *symptom*, not the bug; an on-panel tool appearing to
-hang is what surfaced this. **Run `dmesg | grep -c musb_bus_suspend` before trusting any on-device
-measurement** and treat a non-zero count as "discard this measurement".
+**Left:** (1) the hub replugged into the root port raised no `CONNECT` (mode `a_idle`) — B40 is the
+likely mechanism, so re-test after it; the A/B on the undo image is only needed if B40 does not cover it.
+(2) A run with `usbcore.autosuspend` at its default, the trigger the cmdline removes. The patch ships
+with F101. RESCAN covers the replug miss meanwhile; a timed rebind cannot (`device-files/usb-host`, `recover`).
 
 **The violated invariant: `musb->is_active` must be false in any non-connected OTG state** (`A_IDLE`,
-`A_WAIT_BCON`). The `MUSB_INTR_DISCONNECT` switch's `default:` arm in
-`usb_host/linux-4.14.52/drivers/usb/musb/musb_core.c:897-900` only prints `musb_stage0_irq 898: unhandled
-DISCONNECT transition (a_idle)` and never clears it — the gadget-side twin does, at `musb_gadget.c:2105`.
-`musb_bus_suspend()` (`musb_host.c:2588`) then reads `is_active` as "a device is attached and running" and
-returns `-EBUSY`, and `WARNING()` is a plain `printk` with no ratelimit (`musb_debug.h:38-41`). The caller
-is the **root hub's runtime-PM autosuspend**, which is unbounded in both directions:
-`hcd_bus_suspend()`'s failure path carries no retry counter and no backoff, and `hub.c:1734` sets the hub's
-`autosuspend_delay` to 0. ⚠️ `omap2430_ops` has no `.recover`, so `musb_platform_recover()` is a no-op on
-this SoC — the AM335x software-babble workaround lives in `musb_dsps.c`, which is **not** this glue, so do
-not reach for it.
+`A_WAIT_BCON`). Upstream's `default:` arm (`drivers/usb/musb/musb_core.c:897-900`) only prints
+`unhandled DISCONNECT transition (a_idle)`; the gadget-side twin clears it (`musb_gadget.c:2105`).
+`musb_bus_suspend()` (`musb_host.c:2588`) then returns `-EBUSY` forever, and `WARNING()` is an
+unratelimited `printk` (`musb_debug.h:38-41`). The caller, root-hub runtime-PM autosuspend, has no retry
+limit or backoff (`hcd_bus_suspend()`; `hub.c:1734` sets `autosuspend_delay` 0).
 
-⚠️ **A storm needs BOTH conditions, which is why it is rare: `is_active` stale AND the child device gone,
-so the root hub actually attempts a suspend.** Each half was measured alone 2026-09-08 and neither stormed.
-A clean unplug produces the `a_idle` warning but **retains** child `1-1` — no `usb 1-1: USB disconnect` is
-logged at all, because the disconnect went unprocessed — so the root hub stays `active` and `bus_suspend`
-is never called. A driver unbind+bind with an empty port removes the child but re-allocates `musb` with
-`is_active` clear, so the root hub **suspends successfully**; that one doubles as a positive control
-proving the instrument can report a healthy suspend. **The remaining untested condition is a device that
-raises `CONNECT` but never enumerates**, which is what the Aug 13 storm below shows
-(`xpad … usb_submit_urb failed with result -19` beforehand) and which needs a marginal connection to stage.
+⚠️ **A storm is also a measurement contaminant: run `dmesg | grep -c musb_bus_suspend` before trusting
+any on-device measurement, and discard it if non-zero.** It runs ≈2000 lines/s, starves the CPU and ends
+in a hardware-watchdog reset (~46 min; `FAT-fs … not properly unmounted` next boot). A frozen app during
+one is a symptom. ⚠️ On a unit still running the vendor soft watchdog, a reset cannot be attributed to the
+hardware one.
 
-⚠️ **Babble is neither necessary nor sufficient, so do not treat it as the cause.** `.188`'s persistent log
-— `/home/root/log/messages` on p3, which keeps the previous boot's tail across a reset — holds more
-`musb-hdrc: Babble` events than storms, and its Aug 13 storm has no babble within three days of it; check
-with `grep -ci babble` and `grep -c musb_bus_suspend` on that file. The Aug 17 storm is the one that fits
-the old story: `Babble`, then `usb 1-1: USB disconnect, device number 2`, then the warning repeating,
-collapsed by syslog as `last message buffered 1237959 times` in a 10-minute window (≈2060/s), running 46
-min to a reboot. `FAT-fs (mmcblk0p1): Volume was not properly unmounted` next boot says hard reset, not a
-clean `reboot`, and **the reset is the hardware watchdog** starved of CPU past its 60 s feed —
-`/usr/sbin/watchdog` carries no check directives, so it decided nothing. ⚠️ On a unit still holding the
-vendor soft watchdog, a reset cannot be attributed to the hardware one: check which watchdogs are running
-before drawing that conclusion.
+⚠️ **A storm needs BOTH a stale `is_active` AND the child gone**, so the root hub attempts a suspend.
+Measured apart, neither storms: a clean unplug leaves the warning but keeps child `1-1` (the disconnect
+went unprocessed); an unbind+bind on an empty port clears `is_active` and the root hub suspends cleanly —
+the positive control for the instrument. Untested: a device that raises `CONNECT` but never enumerates
+(needs a marginal connection).
 
-**Recovery is not a reboot** — a driver unbind+bind ends a live storm, which is how Aug 13's stopped in
-~20 s. **The fix is the driver patch above, folded into F101**, and cannot ship before an image we built is the deployed one.
-Distinct from enumeration-at-probe, which is about a cold port never obtaining a session.
+⚠️ **Babble is neither necessary nor sufficient** — `.188`'s persistent log (`/home/root/log/messages`,
+p3) holds more `musb-hdrc: Babble` than storms, and storms without babble. ⚠️ `omap2430_ops` has no
+`.recover`, and the AM335x babble workaround lives in `musb_dsps.c`, which is not this glue.
+
+**Recovery is a driver unbind+bind, not a reboot** (ends a live storm in ~20 s). Distinct from
+enumeration-at-probe, which is a cold port never obtaining a session (B40).
+
+### B40. A plug raises ID-ground and the glue drops it on a host-only kernel — open, measured 2026-09-29
+
+**Measured on `.188` (our image):** plugging the OTG adapter delivers `MUSB_ID_GROUND` (`status=1`) to
+`omap2430_musb_mailbox`; pulling it delivers `MUSB_VBUS_OFF` (`4`). The ID pin is wired; an unpowered hub
+rules out back-fed VBUS. VBUS stays off and nothing enumerates. Kernel config: `CONFIG_USB_MUSB_HOST=y`,
+`CONFIG_USB_MUSB_HDRC=y`, no `/sys/class/udc`.
+
+**Cause, read in source:** `omap_musb_set_mailbox()` (`drivers/usb/musb/omap2430.c:171-181`) calls
+`omap2430_musb_set_vbus(musb, 1)` — the SESSION write — only `if (musb->gadget_driver)`, which is always
+NULL on a host-only kernel. `omap2430_musb_enable()` skips SESSION on ID-ground for non-UTMI (`:330-333`),
+and this board is ULPI.
+
+**Next:** a patch dropping the `gadget_driver` guard on the ID-ground arm (and the VBUS-off arm's
+`set_vbus(0)`), into a new uImage — MUSB is built in, not a module. That it makes a plug enumerate is
+**[inferred]** until booted; B33's root-port replug miss is re-tested with it.
+
+⚠️ **Only an adapter plug raises an ID edge.** A hub or device swapped behind a seated adapter changes
+no ID state, so this cannot help that case — which already works on a live port.
+
+> **Note — the instrument:** debugfs `tracing/kprobe_events` works on our image (no `dynamic_debug`):
+> `p:rwmb omap2430_musb_mailbox status=%r0:u32`, enable `events/kprobes/rwmb/enable`, read `trace`.
+> `twl4030_usb` in `/proc/interrupts` ticks once per ID/VBUS edge.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
@@ -828,35 +826,25 @@ untouched, so the recovery is still "reimage the card".
 
 ## Structural and cleanup
 
-### C1. Extract the shared evdev layer — open
+### C1. Extract the shared evdev layer — open, classifier and scan done
 
-Three parallel implementations of device classification, the `/dev/input/event*` scan, the
-`/etc/input_config.conf` parser and the hotplug rescan timer:
+**Classifier + scan are one implementation, `common/input_scan.c`/`.h`**, called by `common/gamepad.c`
+(so every game), `device_tools`' USB testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
+(`input_scan_with()` carries ScummVM's touchscreen name filter). Measured by host tests only
+(`input_scan_test`, `gamepad_latch_test`, 19 ctests passed 2026-09-29); on-device check pending.
 
-| Primitive | `common/gamepad.c` | `vnc_client/vnc_input.c` | `roomwizard-events.cpp` |
-|---|---|---|---|
-| Classifier | `:63` | `:132` | `:174` |
-| Scan loop | `:216` | `:235` | `:214` |
-| Config parser | `:294` | `:172` | `:429` |
-| Rescan timer | `:492` | `:468` | `:1263` |
-
-**They have already drifted, and the cheap fix is spent.** `MAX_INPUT_DEVICES` was 16 in the VNC
-client and 32 in the other two, so a keyboard on `event17` worked everywhere except VNC. It has now
-been resynced **twice by hand** — which is the argument for this item, not a substitute for it. The
-"clear errno before the read loop" hardening still exists only in the ScummVM copy.
-
-**Classifier + scan are extracted as `common/input_scan.c`/`.h` (2026-09-28), and only `vnc_client`
-links it** — the table's `vnc_input.c` classifier and scan columns are gone. **Next: migrate the other
-two** — `common/gamepad.c` (`classify_device`, `gamepad_bind_kind`, `scan_devices`) and
-`roomwizard-events.cpp` (`classifyDevice`, its name filter, `scanInputDevices`; add `input_scan.o` to
-`OBJS` in `scummvm-roomwizard/backend-files/configure.patch`) — then delete the now-unused
-`MAX_INPUT_DEVICES` from `vnc_client/config.h`. The config parser and rescan timer rows are not yet in it.
+**Left: the `/etc/input_config.conf` parser and the hotplug rescan timer**, still one copy each in
+`gamepad.c`, `vnc_client/vnc_input.c` (`load_input_config`) and `roomwizard-events.cpp`. They have
+drifted before — `MAX_INPUT_DEVICES` was resynced twice by hand — and the "clear errno before the read
+loop" hardening still exists only in the ScummVM copy. `usb_test/usb_test.c` keeps its own scan but is
+not built by any script.
 
 ### C2. Split `device_tools.c` — open
 
 Five previously-separate GUIs behind a tab enum, sharing nothing but the tab bar. Splitting into
 `tab_settings.c` / `tab_diag.c` / `tab_tests.c` / `tab_calib.c` behind a small vtable is mechanical
-and costs one line each in `build-and-deploy.sh`.
+and costs one line each in `build-and-deploy.sh`. `do_led_test` still blocks the UI
+~500 ms (audio pumps through it) — acceptable to the operator for now.
 
 ### C4. Make the common library use the logger — open
 

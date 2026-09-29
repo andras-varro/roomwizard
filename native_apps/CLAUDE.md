@@ -24,7 +24,7 @@ deploy; that is your job. Every build then runs `./check-arm-safe.sh` (root `../
 it also takes one binary: `./check-arm-safe.sh <path>`.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
-keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o`; some add `ui_layout.o ppm.o
+keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o input_scan.o` (`GAMEPAD_OBJ`); some add `ui_layout.o ppm.o
 logger.o`; the two tools that measure the touch mapping (`device_tools`, `touch_raw`) add
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
@@ -46,7 +46,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `touch_input.c` | touch events, the raw→panel→logical map, publishing the touch inset | reading evdev directly |
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
-| `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`vnc_client` links it) | a fourth copy of the classifier or scan loop |
+| `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`gamepad.c`, `device_tools`, `vnc_client` and ScummVM all call it) | a fourth copy of the classifier or scan loop |
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
