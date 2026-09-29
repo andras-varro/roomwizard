@@ -595,13 +595,12 @@ the image's and all 762 imported CRCs match. On `.188` all load via `insmod` exc
 (`host not compliant with requirements: 2`, harmless — `drbg` loads without it). Patches for module-only
 sources live in `kernel/patches-modules/`, which `build-image.sh` never reads:
 `btusb-asus-1bf6-realtek.patch` and `btrtl-rtl8761cu.patch` (the 8761CU firmware is epatch v1, which 4.14
-parses; project id 51; an unknown 8761 `hci_rev` is refused). With `rtl_bt/rtl8761cu_fw.bin` (10296 B, md5
-`02fe0df6…`) and `rtl8761cu_config.bin` (11 B, md5 `65bbb0c0…`) from linux-firmware (licence
-`LICENCE.rtlwifi_firmware.txt`) in `/lib/firmware/rtl_bt/`, the 263-byte download succeeded: `hci_revision`
-changes `0x000e` → `0x7bf1`, manufacturer 93.
+parses; project id 51; an unknown 8761 `hci_rev` is refused). With the firmware from
+`kernel/3rdparty/realtek/bluetooth/` (provenance and md5s in its `README.md`) in `/lib/firmware/rtl_bt/`,
+the 263-byte download succeeded: `hci_revision` changes `0x000e` → `0x7bf1`, manufacturer 93.
 
-**Open:** the firmware is not in the repo — where to keep it and its provenance are the operator's
-decision. Nothing loads the modules at boot yet; they sit in `/lib/modules/4.14.52/bt/` on `.188` only.
+**Open:** nothing loads the modules at boot yet, and no script deploys them or the firmware; both sit on
+`.188` only (`/lib/modules/4.14.52/bt/`, `/lib/firmware/rtl_bt/`).
 
 **Next, in order:**
 

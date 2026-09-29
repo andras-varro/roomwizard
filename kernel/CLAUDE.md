@@ -28,3 +28,5 @@ Open work goes in `IMPROVEMENT_PLAN.md`. Neither is restated here.
 - `tools/` holds **userspace** probes built for the device (`-static`, no idiv). They are not kernel
   code, so `native_apps/check-arm-safe.sh` applies to them too. `drivers/<name>/` holds out-of-tree
   modules, built by `build-modules.sh` against our image's tree and loadable only on our image.
+- `3rdparty/<vendor>/<subsystem>/` holds **unmodified** vendor blobs (firmware), each beside its licence
+  text and a `README.md` with measured provenance. Never edit or compress one; replace it from upstream.
