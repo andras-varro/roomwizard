@@ -59,6 +59,9 @@ decided.
 - **A glob is allowed only in the last path component.** `rw_clean_del` quotes the directory part so a
   base containing a space still resolves, which means a mid-path glob would be taken literally and the
   rule would silently match nothing. Validation refuses it.
+- ⚠️ **No rule but a `keep` may reach the dynamic binaries' runtime** (`RW_CLEAN_RUNTIME` in
+  `lib/rw-clean.sh`: the loader, glibc, libasound, libstdc++, libgcc_s, `/usr/share/alsa`) — by naming
+  it, an ancestor or a path inside it, or by a glob matching it. Both bring-up paths validate first.
 
 ### `provision-rules.conf` — `<type> <group> <mode> <target> <source> <reason>`
 

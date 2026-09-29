@@ -46,6 +46,20 @@
 
 RW_CLEAN_TYPES="scope keep delete truncate"
 
+# What the dynamically linked binaries need at runtime, measured on .188
+# (glibc 2.31 firmware) with `/lib/ld-linux.so.3 --list` over every binary in
+# /opt/games: the loader and five glibc libraries for all of them, libasound for
+# the audio route, libstdc++ and libgcc_s for ScummVM — each soname AND the file
+# it points at — plus /usr/share/alsa, which libasound reads its config from.
+# No rule but a keep may reach one of these: not by naming it, an ancestor of it
+# or a path inside it, nor by a glob matching it or an ancestor.  Deleting one is
+# silent on the card and fatal at the next exec.
+RW_CLEAN_RUNTIME="/lib/ld-linux.so.3 /lib/ld-2.31.so /lib/libc.so.6 /lib/libc-2.31.so
+/lib/libm.so.6 /lib/libm-2.31.so /lib/libdl.so.2 /lib/libdl-2.31.so
+/lib/librt.so.1 /lib/librt-2.31.so /lib/libpthread.so.0 /lib/libpthread-2.31.so
+/lib/libgcc_s.so.1 /usr/lib/libasound.so.2 /usr/lib/libasound.so.2.0.0
+/usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6.0.28 /usr/share/alsa"
+
 # Every group name the file may use.  `base` is mandatory and always enabled.
 RW_CLEAN_GROUPS_ALL="base browser java snmp mail extras vendorscripts factory sweeps"
 
@@ -131,10 +145,27 @@ rw_clean_validate() {
     [ -f "$file" ] || { echo "  no such file: $file"; return 1; }
 
     out=$(awk -F'\t' \
-        -v types="$RW_CLEAN_TYPES" -v groups="$RW_CLEAN_GROUPS_ALL" '
+        -v types="$RW_CLEAN_TYPES" -v groups="$RW_CLEAN_GROUPS_ALL" \
+        -v runtime="$RW_CLEAN_RUNTIME" '
+        # The last component of a rule path as an anchored regex: * and ? stay
+        # inside one component, a [...] class is copied, the rest is literal.
+        function glob_re(p,    re, i, c, j) {
+            re = ""
+            for (i = 1; i <= length(p); i++) {
+                c = substr(p, i, 1)
+                if (c == "*") re = re "[^/]*"
+                else if (c == "?") re = re "[^/]"
+                else if (c == "[" && (j = index(substr(p, i + 1), "]")) > 0) {
+                    re = re "[" substr(p, i + 1, j - 1) "]"; i += j
+                } else if (index(".+()|^${}\\", c)) re = re "\\" c
+                else re = re c
+            }
+            return "^" re "$"
+        }
         BEGIN {
             n = split(types, t, " ");  for (i = 1; i <= n; i++) TYPE[t[i]] = 1
             n = split(groups, g, " "); for (i = 1; i <= n; i++) GROUP[g[i]] = 1
+            nrt = split(runtime, RUNTIME, /[ \n]+/)
         }
         /^[ \t]*#/ { next }
         /^[ \t]*$/ { next }
@@ -175,6 +206,22 @@ rw_clean_validate() {
                 printf "  line %d: rc0.d and rc6.d are shutdown, not startup — no rule may name them: %s\n", NR, $3
                 bad++
             }
+
+            if ($1 != "keep") {
+                re = glob_re($3)
+                for (i = 1; i <= nrt; i++) {
+                    x = RUNTIME[i]
+                    if (x == "") continue
+                    hit = (index(x "/", $3 "/") == 1 || index($3, x "/") == 1)
+                    # Every ancestor of x, and x itself, against the glob.
+                    for (a = x; !hit && a != ""; sub(/\/[^\/]*$/, "", a))
+                        if (a ~ re) hit = 1
+                    if (hit) {
+                        printf "  line %d: reaches %s, which the dynamic binaries need at runtime: %s\n", NR, x, $3
+                        bad++; break
+                    }
+                }
+            }
         }
         END {
             if (records == 0) print "  no records at all — every line is a comment or blank"
@@ -182,9 +229,12 @@ rw_clean_validate() {
             exit(bad > 0 ? 1 : 0)
         }
     ' "$file")
+    local st=$?
 
-    if [ -n "$out" ]; then
-        printf '%s\n' "$out"
+    # An awk that died printed nothing, and "nothing" is also the valid answer.
+    if [ -n "$out" ] || [ "$st" -ne 0 ]; then
+        [ -n "$out" ] && printf '%s\n' "$out"
+        [ -n "$out" ] || echo "  the validator itself failed (awk exit $st)"
         return 1
     fi
     return 0

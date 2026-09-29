@@ -249,6 +249,34 @@ reject "$(printf 'delete\tbase\t/etc/rc6.d/S90reboot\tshutdown')" "B12 no rule m
 reject "$(printf 'scope\tbase\t/etc/rc0.d\tshutdown')"        "B13 nor rc0.d"
 reject "$(printf 'delete\tbase\t/usr/*/libX11.so\tmid-glob')"  "B14 a glob outside the last component is rejected (it would silently match nothing)"
 
+# The dynamic binaries' runtime (RW_CLEAN_RUNTIME) is reachable by no rule but a keep.
+reject "$(printf 'delete\tbase\t/lib/libc.so.6\truntime')"      "B15 a delete naming a runtime library is rejected"
+reject "$(printf 'delete\tbase\t/usr/lib/libasound.so*\truntime')" "B16 a glob matching libasound is rejected"
+reject "$(printf 'delete\tbase\t/lib/ld-*\truntime')"           "B17 a glob matching the dynamic loader's real file is rejected"
+reject "$(printf 'truncate\tbase\t/usr/lib/libstdc++.so.6.0.28\truntime')" "B18 a truncate is refused like a delete"
+reject "$(printf 'scope\tsweeps\t/usr/lib\truntime')"          "B19 a scope over a runtime directory is rejected"
+reject "$(printf 'delete\tbase\t/usr/share\truntime')"          "B20 an ancestor of a runtime path is rejected"
+reject "$(printf 'delete\tbase\t/usr/s*\truntime')"             "B21 a glob matching an ancestor is rejected"
+reject "$(printf 'delete\tbase\t/usr/share/alsa/ucm2\truntime')" "B22 a path inside a runtime directory is rejected"
+KEEPRT="$TMP/keep-runtime.conf"
+printf '%s\n' "$(printf 'keep\tbase\t/usr/lib/libasound.so.2\ta keep is a protection')" \
+              "$(printf 'delete\tbase\t/usr/lib/libasoundx.so\tnot a runtime name')" > "$KEEPRT"
+if rw_clean_validate "$KEEPRT" >/dev/null 2>&1; then
+    ok "B23 a keep of a runtime library, and a near-miss name, still validate"
+else
+    bad "B23 a keep of a runtime library, and a near-miss name, still validate"
+    rw_clean_validate "$KEEPRT" | sed 's/^/        /'
+fi
+
+# A validator that crashes prints nothing, and nothing used to read as "valid".
+mkdir -p "$TMP/crashbin"
+printf '#!/bin/sh\nexit 2\n' > "$TMP/crashbin/awk"; chmod +x "$TMP/crashbin/awk"
+if PATH="$TMP/crashbin:$PATH" rw_clean_validate "$RULES" >/dev/null 2>&1; then
+    bad "B24 a crashing validator refuses — it ACCEPTED the file"
+else
+    ok "B24 a crashing validator refuses"
+fi
+
 # Comments and blanks are not records.
 CMT="$TMP/comments.conf"
 printf '# a comment\n\n   \n%s\n' "$(printf 'delete\tbase\t/opt/thing\ta reason')" > "$CMT"
