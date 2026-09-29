@@ -3,13 +3,9 @@ Route the operator's ASUS dongle 0b05:1bf6 through btrtl_setup_realtek.
 Applied by kernel/build-bt-modules.sh to its own copy of the tree, never by build-image.sh:
 btusb is a module, so this changes no byte of the image. Without the entry the dongle binds as
 a generic btusb device and the Realtek setup hook never runs, so nothing prints the chip's
-identity. With it btrtl logs `rtl: examining hci_ver=.. hci_rev=.. lmp_ver=.. lmp_subver=..`.
-
-CAUTION: 4.14's btrtl chooses the firmware by lmp_subver alone. RTL8761B reports lmp_subver
-0x8761, the same as RTL8761A, and differs only in hci_rev (0x000b against 0x000a). If this chip
-is an 8761B, btrtl requests rtl_bt/rtl8761a_fw.bin: the wrong image. The unit has no
-/lib/firmware, so the request fails and setup aborts before any download. That is intended for
-this identification step; shipping the 8761A firmware alongside this entry would not be.
+identity and no firmware is loaded. Measured on .188 (2026-09-29): hci_ver=0d hci_rev=000e
+lmp_subver=8761, an RTL8761CU. Mainline lists no 0b05:1bf6 in any tag (nearest: 0b05:1bef).
+Which firmware that chip gets is btrtl-rtl8761cu.patch's job.
 
 --- a/drivers/bluetooth/btusb.c
 +++ b/drivers/bluetooth/btusb.c
@@ -17,7 +13,7 @@ this identification step; shipping the 8761A firmware alongside this entry would
  	/* Additional Realtek 8822BE Bluetooth devices */
  	{ USB_DEVICE(0x0b05, 0x185c), .driver_info = BTUSB_REALTEK },
  
-+	/* ASUS 0b05:1bf6, Realtek RTL8761 family (identification only) */
++	/* ASUS 0b05:1bf6, Realtek RTL8761CU */
 +	{ USB_DEVICE(0x0b05, 0x1bf6), .driver_info = BTUSB_REALTEK },
 +
  	/* Silicon Wave based devices */

@@ -1,0 +1,92 @@
+Teach 4.14's btrtl the RTL8761CU (ASUS 0b05:1bf6), which it mistakes for an RTL8761A.
+
+Applied by kernel/build-bt-modules.sh to its own copy of the tree, never by build-image.sh:
+btrtl is a module, so this changes no byte of the image.
+
+Why: 4.14 picks the firmware by lmp_subver alone. Measured on unit .188 (our 4.14.52 image, with
+btusb-asus-1bf6-realtek.patch): `rtl: examining hci_ver=0d hci_rev=000e lmp_ver=0d
+lmp_subver=8761`, then a request for rtl_bt/rtl8761a_fw.bin, which is the wrong chip's firmware.
+RTL8761A (hci_rev 000a), 8761B/BU (000b) and 8761CU (000e) all report lmp_subver 0x8761.
+
+Source: mainline drivers/bluetooth/btrtl.c (entry first in v6.19), ic_id_table
+  IC_INFO(RTL_ROM_LMP_8761A, 0x0e, 0, HCI_USB), .config_needed = false,
+  .has_rom_version = true, .fw_name = "rtl_bt/rtl8761cu_fw", .cfg_name = "rtl_bt/rtl8761cu_config"
+and project_id_to_lmp_subver { RTL_ROM_LMP_8761A, 51 } /* 8761C */. The linux-firmware
+rtl8761cu_fw.bin is an epatch v1 ("Realtech") file, project id 51, so 4.14's
+rtl8723b_parse_firmware handles it once id 51 is in its table. Mainline's v1 path (patch chosen
+where chip_id == rom_version + 1, extension section read backwards from the end, config appended
+after the patch) is the same code as 4.14's.
+
+Changes: project id 51 -> 0x8761; lmp_subver 0x8761 with hci_rev 000e loads rtl8761cu_fw.bin and
+the optional rtl8761cu_config.bin (a missing config leaves cfg_sz 0, as for 8761A); hci_rev 000a
+keeps the 8761A path; any other hci_rev is refused with a log line instead of being sent 8761A
+firmware.
+
+--- a/drivers/bluetooth/btrtl.c
++++ b/drivers/bluetooth/btrtl.c
+@@ -35,6 +35,12 @@
+ #define RTL_ROM_LMP_8761A	0x8761
+ #define RTL_ROM_LMP_8822B	0x8822
+ 
++/* RTL8761A and RTL8761CU share lmp_subver 0x8761; hci_rev tells them apart. */
++#define RTL_HCI_REV_8761A	0x000a
++#define RTL_HCI_REV_8761CU	0x000e
++#define RTL_8761CU_FW		"rtl_bt/rtl8761cu_fw.bin"
++#define RTL_8761CU_CONFIG	"rtl_bt/rtl8761cu_config.bin"
++
+ static int rtl_read_rom_version(struct hci_dev *hdev, u8 *version)
+ {
+ 	struct rtl_rom_version_evt *rom_version;
+@@ -88,6 +94,7 @@
+ 		{ RTL_ROM_LMP_8821A, 2 },
+ 		{ RTL_ROM_LMP_8761A, 3 },
+ 		{ RTL_ROM_LMP_8822B, 8 },
++		{ RTL_ROM_LMP_8761A, 51 },	/* 8761C */
+ 	};
+ 
+ 	ret = rtl_read_rom_version(hdev, &rom_version);
+@@ -340,7 +347,11 @@
+ 		cfg_name = "rtl_bt/rtl8821a_config.bin";
+ 		break;
+ 	case RTL_ROM_LMP_8761A:
+-		cfg_name = "rtl_bt/rtl8761a_config.bin";
++		/* Optional for 8761CU too: a missing file leaves cfg_sz 0. */
++		if (!strcmp(fw_name, RTL_8761CU_FW))
++			cfg_name = RTL_8761CU_CONFIG;
++		else
++			cfg_name = "rtl_bt/rtl8761a_config.bin";
+ 		break;
+ 	case RTL_ROM_LMP_8822B:
+ 		cfg_name = "rtl_bt/rtl8822b_config.bin";
+@@ -429,7 +440,7 @@
+ {
+ 	struct sk_buff *skb;
+ 	struct hci_rp_read_local_version *resp;
+-	u16 lmp_subver;
++	u16 lmp_subver, hci_rev;
+ 
+ 	skb = btrtl_read_local_version(hdev);
+ 	if (IS_ERR(skb))
+@@ -441,6 +452,7 @@
+ 		resp->lmp_ver, resp->lmp_subver);
+ 
+ 	lmp_subver = le16_to_cpu(resp->lmp_subver);
++	hci_rev = le16_to_cpu(resp->hci_rev);
+ 	kfree_skb(skb);
+ 
+ 	/* Match a set of subver values that correspond to stock firmware,
+@@ -460,6 +472,14 @@
+ 		return btrtl_setup_rtl8723b(hdev, lmp_subver,
+ 					    "rtl_bt/rtl8821a_fw.bin");
+ 	case RTL_ROM_LMP_8761A:
++		if (hci_rev == RTL_HCI_REV_8761CU)
++			return btrtl_setup_rtl8723b(hdev, lmp_subver,
++						    RTL_8761CU_FW);
++		if (hci_rev != RTL_HCI_REV_8761A) {
++			BT_ERR("%s: rtl: RTL8761 variant hci_rev=%04x unsupported, not loading 8761A firmware",
++			       hdev->name, hci_rev);
++			return -ENODEV;
++		}
+ 		return btrtl_setup_rtl8723b(hdev, lmp_subver,
+ 					    "rtl_bt/rtl8761a_fw.bin");
+ 	case RTL_ROM_LMP_8822B:
