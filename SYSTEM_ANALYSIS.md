@@ -1142,19 +1142,19 @@ image is unreachable by construction (`--mode` patches both properties in one pa
 | Keyboard, mouse, touchpad, hub | `usbhid` / `hub` (built in) | ✅ |
 | HID gamepad (generic) | `usbhid` | ✅ if HID-compliant |
 | Xbox 360 / One controller | `xpad` (module) | ❌ needs the three modules |
-| **Bluetooth dongle** | `btusb` — ⚠️ **not built** | ❌ `# CONFIG_BT is not set`; see below |
+| **Bluetooth dongle** | `btusb` — ⚠️ **module, loaded by hand** | ❌ `# CONFIG_BT is not set` in the image; see below |
 | **USB audio class DAC** | `snd-usb-audio` (module) | ❌ needs four modules, which ship — [§3.4](#34-audio) |
 
-**A Bluetooth dongle is the only route to a wireless peripheral, and the kernel side is unbuilt.** There
-is no radio on the board at all ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)), so BT means a dongle in this
-single connector. `# CONFIG_BT is not set` — exactly the situation `CONFIG_INPUT_JOYDEV` was in before
-Hack 2 — and its dependencies are satisfiable: `CONFIG_NET`, `CONFIG_CRC16`, `CONFIG_HID` and
-`CRYPTO_AES` are all `=y`, while `CRYPTO_SHA256`, `CRYPTO_BLKCIPHER`, `CRYPTO_ECB` and `CRYPTO_CMAC` are
-`=m` and would have to be **built and shipped**, since `/lib/modules/4.14.52/` ships empty.
-`CONFIG_CRYPTO_ECDH` is unset and is needed only for BT LE Secure Connections. ⚠️ **[inferred] the
-controller is far more likely to work than the audio** — A2DP needs software SBC encoding on this single
-core. Bluetooth is open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC that
-used to share this paragraph is built and shipping ([§3.4](#34-audio)).
+**A Bluetooth dongle is the only route to a wireless peripheral.** There is no radio on the board at all
+([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)), so BT means a dongle in this single
+connector. `# CONFIG_BT is not set` in the image, but Bluetooth builds as loadable modules against it with
+no p1 write (`kernel/build-bt-modules.sh`; measured: the relinked `vmlinux` is byte-identical and every
+imported CRC matches). ⚠️ **`lmp_subver` `0x8761` does not identify an RTL8761 variant** — A, B and CU all
+report it and differ by `hci_rev`, which 4.14's `btrtl` does not look at. ⚠️ **[inferred] the controller is
+far more likely to work than the audio** — A2DP needs software SBC encoding on this single core.
+Dongle identity, module and firmware state and next steps are open work in
+[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC is built and shipping
+([§3.4](#34-audio)).
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 

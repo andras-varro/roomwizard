@@ -15,6 +15,7 @@ directory are in [`CLAUDE.md`](CLAUDE.md).
 | `dts/*.sh` | scripts that edit the vendor DTB `usb_host/original.dtb` in place with `fdtput`, run as `bash <script> <dtb>` |
 | `drivers/cy8ctmg120_ts/` | out-of-tree touch driver (`.c` + `Kbuild`), GPL-2.0-only, adapted from vanilla `cy8ctmg110_ts.c`; binds the unchanged `panjit_ts` DT node and names its input device `panjit_ts` |
 | `build-modules.sh` | builds every `drivers/*/` with a `Kbuild` via `M=` against the tree `build-image.sh` left in WSL `$HOME`; `--out <dir>` receives the `.ko`, which loads only on our image |
+| `build-bt-modules.sh` | builds the 18 Bluetooth modules (`BT=m` and dependencies) from a copy of the image's tree, so no p1 write; `kernel/patches-modules/*.patch` are applied here only and `build-image.sh` never reads them |
 | `tools/i2c_touch_read.c` | userspace burst reader for the touch controller over `/dev/i2c-N`; it never writes to the part |
 
 ## Building an image

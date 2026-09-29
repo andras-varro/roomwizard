@@ -142,11 +142,21 @@ fires while `open_path` is onboard, and the stream still believes it is on the c
 (operator), so latent rather than a regression; the OSS removal did not touch `alsa_recover()` or the
 `EBADFD` → `AO_ERR_LOST` classification (`native_apps/common/audio_out.c:483-486`, `:643-662`). Ruled
 out by reading: the `lost_said` print latch, reset in `alsa_open()` (`:727`). **Cause not known.**
-**[inferred]** candidate: on the stream reopened by the handover, a vanished card answers the service's
-first call — `snd_pcm_avail_update()` in `alsa_space()` (`:752`), before `snd_pcm_writei()` — with a
-non-negative or `-EAGAIN` value instead of an error, so nothing reaches `alsa_recover()`. **Next:** log
-the return code of every ALSA call on the reopened stream at unplug #2, on the device. A Bluetooth sink
-(F17) will fail over through this same path, so it gates that work too.
+Two candidates from reading alsa-lib 1.2.1.2 and kernel `sound/core` **[inferred, not measured]**:
+
+1. On ARM the kernel maps no PCM status/control pages (`pcm_native.c`), so alsa-lib uses `SYNC_PTR`.
+   After card removal every ioctl returns `-ENODEV`, but `snd_pcm_hw_avail_update()` ignores the failed
+   sync (`pcm_hw.c` ~`:1117`) and returns the stale avail: `audio_pump_frames` wants 0 frames forever,
+   `snd_pcm_writei()` is never called and no error surfaces. Unplug #1 was caught only because a
+   `writei` landed after teardown (`bad_pcm_state` → `-EBADFD`, the logged "File descriptor in bad
+   state"). Fix: `snd_pcm_avail()` (it calls `hwsync`, which fails `-ENODEV`) in `alsa_space()`
+   (`audio_out.c` ~`:752`, `:755`).
+2. musb never saw unplug #2. Fix: a stall watchdog.
+
+**Next:** the discriminating run is two unplug cycles on the device while watching `/proc/asound/cards`
+and `dmesg` (pending the operator), then a host test in `tests/audio_out_test.c` with a fake device whose
+space is frozen and whose write returns `-ENODEV`. A Bluetooth sink (F17) will fail over through this
+same path, so it gates that work too.
 
 ### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
 
@@ -546,22 +556,16 @@ Xbox pad is wired, and the integrated speaker is poor
 ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable, and the one that carries sound
 is the worst-sounding one.
 
-⚠️ **The dongle is identified and the verdict is "one number decides it" — measured 2026-09-06.** The
-operator's dongle is `0b05:1bf6` (ASUSTek; no model or chipset is published for that PID). `0x1bf6`
-appears **nowhere** in `drivers/bluetooth/` in the 4.14.52 tree, but the dongle's USB class is
-`e0-01-01`, which `btusb.c:75,81` match generically — so `btusb` binds it and `hci0` appears. ⚠️ **The
-trap is that a generic match has `driver_info == 0`, so `btusb.c:3142` never takes the
-`BTUSB_REALTEK` branch and `btrtl_setup_realtek` does not run at all** — no firmware or config download
-happens, whatever the chip is. This `btrtl` knows five ROM subversions only (8723A, 8723B, 8821A, 8822B,
-8761A); RTL8761**B**/BU, the likely chip, landed around 5.8, and there is no `hci_rev` lookup table yet.
+⚠️ **The operator's dongle `0b05:1bf6` is a Realtek RTL8761CU — measured on `.188` 2026-09-29:** `btrtl`
+logs `hci_ver=0d hci_rev=000e lmp_ver=0d lmp_subver=8761`, rom_version 1. Mainline first knows the 8761CU
+in v6.19 (`ic_id_table` entry lmp `0x8761`, hci_rev `0x0e`), and mainline `btusb` has no `0b05:1bf6` in any
+tag (nearest `0b05:1bef`). ⚠️ **`lmp_subver` alone does not name the chip:** 8761A, 8761B and 8761CU all
+report `0x8761` and differ by `hci_rev` (`0xa`/`0xb`/`0xe`), while 4.14's `btrtl` keys on `lmp_subver`
+alone. The dongle's USB class `e0-01-01` binds `btusb` generically with `driver_info == 0`, so
+`BTUSB_REALTEK` is never taken without our module patch (below).
 
-⚠️ **The deciding number is not reachable with what is on the unit — measured on `.188` 2026-09-11:
-`hcitool`, `bluetoothctl` and `bluetoothd` are all ABSENT.** There is no BlueZ userspace at all, so the
-fallback path above has nothing to run, and the module set is not sufficient on its own — a cross-built
-BlueZ is a prerequisite for the one measurement this entry says everything depends on. The entry
-formerly inferred BlueZ's presence from D-Bus being kept, which establishes the dependency and not the
-package. (The `/lib/modules/4.14.52/` "ships empty" note above is a *stock* measurement; a provisioned
-unit has `extra/` and a module index.)
+⚠️ **No BlueZ userspace is on the unit — measured on `.188` 2026-09-11:** `hcitool`, `bluetoothctl` and
+`bluetoothd` are all ABSENT, so pairing needs a cross-built BlueZ (next steps below).
 
 ⚠️ **"We have no ALSA" is false, and it changes what `bluez-alsa` would cost — measured on `.188`
 2026-09-11.** `libasound.so.2.0.0`, `aplay`, `amixer`, `alsactl` and `speaker-test` are all present, and
@@ -585,14 +589,31 @@ the undetected second unplug is B42. Still open here:
 - **Loudness:** an onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare
   loudness game-vs-game and against the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
 
-**So it is a module build (`CONFIG_BT`, `BT_BREDR`, `BT_RFCOMM`, `BT_HIDP`, `BT_HCIBTUSB`,
-`BT_HCIBTUSB_RTL`, `RFKILL` — all tristate, no image rebuild; `CONFIG_BT` is currently `n` at
-`usb_host/device_config:1070`) that either just works or needs a `btrtl` backport, and the host cannot
-tell which.** ⚠️ **Do not fetch a firmware file or source a second dongle before the number exists.**
-Build and load the modules, then read `lmp_subver` — from `btrtl`'s own line if it runs, otherwise
-`hcitool -i hci0 cmd 0x04 0x0001` bytes 7-8. `0x8723`/`0x8821`/`0x8761`/`0x8822` ⇒ proceed;
-anything else ⇒ this dongle needs newer source than we have, and the safe substitutes are a CSR8510
-(`0a12:0001`) or an ASUS USB-BT400 (`0b05:17cb`, Broadcom BCM20702).
+**The kernel half ships as modules with no p1 write — measured.** `kernel/build-bt-modules.sh` builds 18
+modules from a copy of the image's tree with `BT=m` and friends: the relinked `vmlinux` is byte-identical to
+the image's and all 762 imported CRCs match. On `.188` all load via `insmod` except `jitterentropy_rng`
+(`host not compliant with requirements: 2`, harmless — `drbg` loads without it). Patches for module-only
+sources live in `kernel/patches-modules/`, which `build-image.sh` never reads:
+`btusb-asus-1bf6-realtek.patch` and `btrtl-rtl8761cu.patch` (the 8761CU firmware is epatch v1, which 4.14
+parses; project id 51; an unknown 8761 `hci_rev` is refused). With `rtl_bt/rtl8761cu_fw.bin` (10296 B, md5
+`02fe0df6…`) and `rtl8761cu_config.bin` (11 B, md5 `65bbb0c0…`) from linux-firmware (licence
+`LICENCE.rtlwifi_firmware.txt`) in `/lib/firmware/rtl_bt/`, the 263-byte download succeeded: `hci_revision`
+changes `0x000e` → `0x7bf1`, manufacturer 93.
+
+**Open:** the firmware is not in the repo — where to keep it and its provenance are the operator's
+decision. Nothing loads the modules at boot yet; they sit in `/lib/modules/4.14.52/bt/` on `.188` only.
+
+**Next, in order:**
+
+1. Cross-build BlueZ ≥ 5.66 (`--enable-library`, `--disable-udev/systemd/cups/obex/mesh/manpages/monitor`).
+   It needs glib 2.62.6 and dbus 1.12 built for their headers; the device has `libglib`/`libgio`/`libgobject`
+   2.62.6 and `libdbus` 1.12 (measured).
+2. Pair a controller with `bluetoothctl` (HIDP/hog). `/var/lib` is on the persistent rootfs (measured), so
+   link keys survive.
+3. `sbc` + `bluez-alsa` v4.3.1 into **our** alsa-lib's plugin dir.
+4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
+   `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
+   USB card 1. A2DP adds ~150-250 ms latency **[inferred]**.
 
 ⚠️ **DMA and Bluetooth are independent, and DMA is not what unblocks Bluetooth.** BT is
 bandwidth-trivial: A2DP is tens of KB/s and a controller is a few hundred bytes/s, which PIO handles
@@ -604,26 +625,12 @@ easily. Do not treat "get DMA working" as a prerequisite.
 — XBee is Zigbee and cannot host Bluetooth. And there is no second USB port and no footprint for one
 ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
 
-**A dongle is on hand as of 2026-08-13**, so this is no longer gated on a purchase. Its chipset is
-unrecorded and decides which module is needed: `btusb` covers most, but the `lsusb` vendor:product is
-the first thing to read, before any module is built.
+**A dongle is on hand as of 2026-08-13**, so this is no longer gated on a purchase.
 
-**The kernel side is the `joydev` precedent again, and looks feasible.** `# CONFIG_BT is not set`, exactly
-as `CONFIG_INPUT_JOYDEV` was before the USB-host path (`usb_host/README.md`) shipped its three
-modules — and that precedent worked. Every hard dependency is satisfiable, measured from
-`usb_host/device_config`:
-
-| Need | State | Consequence |
-|---|---|---|
-| `CONFIG_NET`, `CONFIG_CRC16`, `CONFIG_HID` | `=y` | built in, nothing to do |
-| `CONFIG_CRYPTO_AES` | `=y` | built in |
-| `CRYPTO_SHA256`, `CRYPTO_BLKCIPHER`, `CRYPTO_ECB`, `CRYPTO_CMAC` | `=m` | ⚠️ the `.ko`s must be **built and shipped** — the device's `/lib/modules/4.14.52/` ships empty |
-| `CONFIG_CRYPTO_ECDH` | not set | needed only for BT LE Secure Connections; buildable as a module |
-| `CONFIG_RFKILL` | not set | optional for `bluetooth`/`btusb`, not a blocker |
-
-Module set: `bluetooth.ko`, `btusb.ko`, a dongle-specific firmware loader (`btrtl`/`btintel`/`btbcm`),
-`hidp.ko` for the controller. Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y` and
-`CONFIG_MODULE_SIG` unset.
+The module set shipped by the build script: the crypto modules `cmac`, `ecb`, `sha256_generic`, `hmac`,
+`drbg`, and new ones `ecdh_generic`, `af_alg`, `algif_hash`, `algif_skcipher`, `uhid`, `uinput`, `hidp`,
+alongside `bluetooth`, `btusb`, `btrtl`. Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`
+and `CONFIG_MODULE_SIG` unset.
 
 ⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
 on one 600 MHz core that ScummVM already holds at ~32 %
@@ -631,9 +638,7 @@ on one 600 MHz core that ScummVM already holds at ~32 %
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
 than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
 — but that path is now `common/audio_out` for every component, so the reroute has one home rather
-than two. ⚠️ The output-device hot-plug probe in `common/audio_out.c` (`audio_out_usb_returned()`) knows
-only USB card 1; a Bluetooth sink must extend it or it is never moved back to after a drop. A2DP's
-~100–200 ms latency is fine for point-and-click and wrong for anything twitchy. **The
+than two. A2DP's latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
 
 **Can we get USB DMA?** Yes, on our image: it sets `CONFIG_USB_INVENTRA_DMA` and carries the patch that
@@ -786,7 +791,7 @@ untouched, so the recovery is still "reimage the card".
 | Which per-unit state lives on p6? | `/etc/touch_calibration.conf` and `/var/lib/alsa/asound.state` are on `/`, so a new p6 loses them unless they move to p2 or get carried over. |
 | Does anything in userspace need `/usr/share/alsa`? | `clean-rules.conf` keeps it "for the OSS shim", but OSS here is kernel emulation ([§3.4](SYSTEM_ANALYSIS.md#34-audio)). |
 | Does `S40ctrlblk` do anything we need? | [unverified]. The kept boot link finds no `/opt/sbin/ctrlblk` after the clean. |
-| What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. |
+| What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
 ## Structural and cleanup
