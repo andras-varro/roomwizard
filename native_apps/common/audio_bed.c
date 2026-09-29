@@ -96,7 +96,11 @@ void audio_bed_service(AudioBed *bed, bool want_play, bool want_hold)
             break;
         }
         int t = bed->next;
-        if (audio_music_start(bed->audio, bed->track[t], true)) {
+        /* ⚠️ Loops only when it is the WHOLE playlist.  With two or more tracks each
+         * plays once and ends, and the PLAYING arm below sends the bed back here for
+         * the next — a looping track never ended, so a single-level game like
+         * SameGame played track 1 for the whole session (operator, 2026-09-29). */
+        if (audio_music_start(bed->audio, bed->track[t], bed->count == 1)) {
             bed->state = AUDIO_BED_PLAYING;
             bed->next  = (t + 1) % bed->count;      /* the NEXT fresh start */
             break;
@@ -121,7 +125,8 @@ void audio_bed_service(AudioBed *bed, bool want_play, bool want_hold)
 
     case AUDIO_BED_PLAYING:
         if (want_play) {
-            /* 200 loop passes ran out (~2.4 h), or audio_interrupt() cleared the bus:
+            /* The track ended (the next one starts), a lone looping track ran out its
+             * 200 passes (~2.4 h), or audio_interrupt() cleared the bus:
              * re-arm from IDLE rather than stay silent for the session. */
             if (!audio_music_active(bed->audio)) bed->state = AUDIO_BED_IDLE;
         } else if (want_hold) {
