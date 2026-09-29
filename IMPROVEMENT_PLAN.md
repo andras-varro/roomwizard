@@ -812,7 +812,7 @@ not built by any script.
 
 Five previously-separate GUIs behind a tab enum, sharing nothing but the tab bar. Splitting into
 `tab_settings.c` / `tab_diag.c` / `tab_tests.c` / `tab_calib.c` behind a small vtable is mechanical
-and costs one line each in `build-and-deploy.sh`. `do_led_test` still blocks the UI
+and costs one line each in `build-and-deploy.sh`. The page modules in C16 are its target shape. `do_led_test` still blocks the UI
 ~500 ms (audio pumps through it) — acceptable to the operator for now.
 
 ### C4. Make the common library use the logger — open
@@ -918,23 +918,6 @@ Three things to know before starting:
 Do not "fix" a finding by rewriting a line you cannot exercise. Several of the leaders are in build
 scripts that only a real deploy runs.
 
-### C8. Retire `hardware_diag` — it is a second copy of a `device_tools` tab — open, confirmed 2026-08-02
-
-Raised on the panel: *"it is working well, but why do we keep this, this is integrated in device
-tools"*. The redundancy is already half-acknowledged —
-[`native_apps/README.md:37`](native_apps/README.md) calls it "superseded by `device_tools` (hidden)",
-and `build-and-deploy.sh:349` deliberately deletes its `.app` manifest so it never appears in the
-launcher. So it ships, is built on every deploy, is unreachable without SSH, and duplicates read-only
-info pages that `device_tools` renders from the same sysfs/procfs sources. The cost is already being
-paid: a layout batch had to fix `hardware_diag`'s EXIT corner and header band **separately** from the
-equivalent code in `device_tools`.
-
-Before deleting, confirm page-by-page that `device_tools` covers all six (System, Memory, Storage,
-Hardware, Config, Network) — the diag pages are terse and one may have a field the tabs lack. Then drop
-the source, the two build steps (`build-and-deploy.sh:102-103`), the four deploy/marker references and
-the README rows. If a page turns out to be unique, move that page into `device_tools` rather than
-keeping the binary. `do_led_test()` is also duplicated between the two tools and goes with it.
-
 ### C9. A bundle cannot prove its stripped binaries were ever gated — open, measured 2026-08-08
 
 `native_apps/check-arm-safe.sh` is sound only on a binary that still has its symbol table, and both
@@ -990,11 +973,57 @@ key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key t
 citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
 fire in a file of the same kind, or the scan goes blind where it used to see.
 
-### C16. Restructure `device_tools` and the diagnostic tools — open, asked for by the operator 2026-09-27
+### C16. `device_tools` becomes the one control panel; retire the diagnostic binaries — open, design agreed with the operator 2026-09-29
 
-*Mix Bus Test* (`tests/audio_mix_test.c`, its own launcher tile in `native_apps/app-manifests.sh`)
-belongs under `device_tools`, beside the MULTI-TOUCH tester. Take it with the rest of the diag spread —
-`hardware_test`, `hardware_config`, `hardware_diag` and the test tiles — in one pass, not tab by tab.
+**Design.** One program whose first screen is a **paged icon grid** (paging, not scrolling; 3x2
+landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_launcher` also uses. Config
+"apps" exist only inside it, never as launcher tiles. Each icon opens an in-process page module with BACK
+to the grid (the target shape of C2); heavy tools (Mix Bus Test, Tap-a-Theremin, `touch_raw`) stay child
+processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
+disappears. Reboot/shutdown and reset-to-defaults are reachable from the home screen.
+
+| Icon | Holds |
+|---|---|
+| Audio | enable, music/effects, output device, chime test, tone sweep, Mix Bus Test, Theremin |
+| Display | backlight slider and ramp test, portrait toggle, screen geometry, display pattern pages |
+| Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic |
+| LED | enable, brightness, ramp/pulse/blink/cycle tests |
+| USB | bus list, port recovery, keyboard/mouse/pad testers |
+| Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
+| Network | hostname, IP, MAC, gateway, DNS, link |
+| Monitor | live memory, CPU, storage, load/uptime, SoC temperature (F4) |
+| Information | static versions, kernel, config, calibrated? |
+
+**Duplicates deleted as each function lands in its one home** (inventory measured 2026-09-29): LED
+ramp/pulse/blink/cycle, backlight ramp, touch zone grid, display patterns and tone sweep
+(`device_tools` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
+chime+enable and save/reset (vs `hardware_config/hardware_config.c`); the system/memory/storage/hardware/
+config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`format_bytes` copies (vs
+`hardware_diag/hardware_diag.c`, five pages, `:51-55`); the USB input testers (vs `usb_test/usb_test.c`,
+which only `build-usb-test.sh` builds). Then delete the binaries `hardware_test` (with the never-compiled
+`hardware_test.c` and `pressure_test.c`), `hardware_config`, `hardware_diag`, `usb_test` and the backlight
+CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
+steps, deploy/marker references and README rows. `hardware_diag` is already hidden (its `.app` manifest
+is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
+fix its EXIT corner separately from `device_tools`'. Check page by page that no diag page holds a field
+the tabs lack; move a unique one rather than keep the binary. Mix Bus Test and Tap-a-Theremin are **not**
+redundant: they move under Audio and lose their launcher tiles. `fb_plane_bench` and `dss_scale_ab` go
+under Display as developer entries or stay hidden — operator's call.
+
+**Stages, each verified on the panel.** (1) `common/icon_grid.c` extracted from `app_launcher.c`, the
+launcher pixel-identical (in progress, uncommitted), plus a `device_tools` home grid whose icons open
+today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on
+the BlueZ backend.
+
+**Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
+550 px button row overflows a ~400 px portrait content width (`device_tools.c` ~3549-3553); the Mix Bus
+Test's in-place readout repaint is a no-op in portrait (`present_rect` early return,
+`tests/audio_mix_test.c` ~463-466). The tab bar fits at most five tabs in portrait (60 px floor against
+the X button), which is what motivated the grid.
+
+**Open operator decisions:** hand-drawn or generated icons (recommendation: one generator script, 96x96
+PPM, like the existing `gen_icon.py` files); Mix Bus Test in portrait — refuse like calibration, or
+degraded.
 
 ---
 
@@ -1035,7 +1064,7 @@ missing tool and point at it instead of each reciting its own `apt` line.
 ### Usability, features, maintainability
 
 C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C8 · F17 · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
+F4 · C5 · C16 · F17 · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
 userspace overlay win was measured and rejected on image quality, the switch it would have needed is
 withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
 wait on F101.
