@@ -23,7 +23,7 @@
 #include "common/framebuffer.h"
 #include "common/touch_input.h"
 #include "common/common.h"
-#include "common/ppm.h"
+#include "common/icon_grid.h"
 #include "common/logger.h"
 #include "common/gamepad.h"
 #include "common/hardware.h"
@@ -52,15 +52,10 @@
  * held key to stop generating repeats, but short enough to feel instant. */
 #define LAUNCH_COOLDOWN_MS 500
 
-/* ── Grid geometry ──────────────────────────────────────────────────────── */
-
-#define TILE_GAP_X      20
-#define TILE_GAP_Y      20
-#define ICON_SIZE       96
-#define LABEL_SCALE     2
+/* ── Grid geometry: common/icon_grid.c, shared with device_tools' home screen ── */
 
 #define TITLE_H         50
-#define DOTS_H          30
+static IconGrid grid;
 
 /* ── The MUSIC / EFFECTS toggles are NOT here ────────────────────────────────
  * They were, as a band between the last tile row and the page dots, and they
@@ -78,75 +73,15 @@
  * stop/resume in the middle of a run, and seven writers of one key.
  */
 
-#define MAX_TILE_W      200
-#define MAX_TILE_H      150
-
-/* Dynamic grid variables — set by compute_grid_layout() */
-static int grid_cols, grid_rows, apps_per_page;
-static int tile_w, tile_h;
-static int grid_content_w, grid_content_h;
-static int grid_left, grid_top;
-
+/* Prints the layout receipt ("launcher: safe …") — see icon_grid_layout(). */
 static void compute_grid_layout(Framebuffer *fb) {
-    if (fb->portrait_mode) {
-        grid_cols = 2;
-        grid_rows = 3;
-    } else {
-        grid_cols = 3;
-        grid_rows = 2;
-    }
-    apps_per_page = grid_cols * grid_rows;
-
-    /* Calculate tile sizes to fit available space, capped at max */
-    int max_w = (SCREEN_SAFE_WIDTH  - (grid_cols - 1) * TILE_GAP_X) / grid_cols;
-    int avail_h = SCREEN_SAFE_HEIGHT - TITLE_H - DOTS_H;
-    int max_h = (avail_h - (grid_rows - 1) * TILE_GAP_Y) / grid_rows;
-
-    tile_w = (max_w < MAX_TILE_W) ? max_w : MAX_TILE_W;
-    tile_h = (max_h < MAX_TILE_H) ? max_h : MAX_TILE_H;
-
-    /* Derived: centre the grid within the safe area */
-    grid_content_w = grid_cols * tile_w + (grid_cols - 1) * TILE_GAP_X;
-    grid_content_h = grid_rows * tile_h + (grid_rows - 1) * TILE_GAP_Y;
-
-    grid_left = SCREEN_SAFE_LEFT + (SCREEN_SAFE_WIDTH - grid_content_w) / 2;
-    grid_top  = SCREEN_SAFE_TOP  + TITLE_H +
-                (avail_h - grid_content_h) / 2;
-
-    /* ⚠️ The RECEIPT. A layout that puts a row past the bottom of the touchable
-     * rect looks perfect in a framebuffer screenshot and is simply dead to a
-     * finger, so the derivation prints itself and says whether it fits. */
-    bool fits = (grid_top + grid_content_h) <= SCREEN_SAFE_BOTTOM;
-    printf("launcher: safe %dx%d at (%d,%d)  tiles %dx%d %dx%d  grid_top %d "
-           "grid_h %d %s\n",
-           SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
-           grid_cols, grid_rows, tile_w, tile_h, grid_top,
-           grid_content_h, fits ? "fits" : "⚠ PAST SAFE BOTTOM");
+    icon_grid_layout(&grid, fb, TITLE_H, "launcher");
 }
 
 /* ── Colours ────────────────────────────────────────────────────────────── */
 
 #define BG_COLOR        RGB(25, 25, 35)
-#define TILE_BG         RGB(45, 45, 60)
-#define TILE_BORDER     RGB(70, 70, 90)
-#define TILE_HL_BG      RGB(65, 65, 85)
-#define TILE_SEL_BORDER RGB(0, 220, 255)
 #define TITLE_COLOR     RGB(200, 200, 220)
-#define LABEL_COLOR     RGB(220, 220, 220)
-#define DOT_ACTIVE      RGB(200, 200, 220)
-#define DOT_INACTIVE    RGB(80, 80, 100)
-
-static const uint32_t ICON_COLORS[] = {
-    0xFF2980B9,  /* Blue        */
-    0xFF27AE60,  /* Green       */
-    0xFFC0392B,  /* Red         */
-    0xFF8E44AD,  /* Purple      */
-    0xFFF39C12,  /* Orange      */
-    0xFF16A085,  /* Teal        */
-    0xFFD35400,  /* Dark Orange */
-    0xFF34495E,  /* Dark Slate  */
-};
-#define NUM_ICON_COLORS (sizeof(ICON_COLORS) / sizeof(ICON_COLORS[0]))
 
 /* ── Argument-passing modes ─────────────────────────────────────────────── */
 
@@ -164,7 +99,7 @@ typedef struct {
     char      exec_path[256];
     char      icon_path[256];
     ArgMode   args;
-    uint32_t *icon_pixels;      /* Loaded & scaled to ICON_SIZE², or NULL */
+    uint32_t *icon_pixels;      /* Loaded & scaled to ICON_GRID_ICON_SIZE², or NULL */
     uint32_t  icon_color;       /* Auto-assigned colour for letter tile   */
 } AppEntry;
 
@@ -206,13 +141,6 @@ static ArgMode parse_args(const char *s) {
     return m ? m : ARG_FB_TOUCH;
 }
 
-static uint32_t name_to_color(const char *name) {
-    unsigned h = 0;
-    for (const char *p = name; *p; p++)
-        h = h * 31 + (unsigned char)*p;
-    return ICON_COLORS[h % NUM_ICON_COLORS];
-}
-
 static int load_manifest(const char *path, AppEntry *app) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -249,23 +177,12 @@ static int load_manifest(const char *path, AppEntry *app) {
     struct stat st;
     if (stat(app->exec_path, &st) != 0 || !(st.st_mode & S_IXUSR)) return -1;
 
-    app->icon_color = name_to_color(app->name);
+    app->icon_color = icon_grid_letter_color(app->name);
     return 0;
 }
 
 static void load_icon(AppEntry *app) {
-    if (!app->icon_path[0]) return;
-
-    int w, h;
-    uint32_t *raw = ppm_load(app->icon_path, &w, &h);
-    if (!raw) return;
-
-    if (w == ICON_SIZE && h == ICON_SIZE) {
-        app->icon_pixels = raw;
-    } else {
-        app->icon_pixels = ppm_scale(raw, w, h, ICON_SIZE, ICON_SIZE);
-        free(raw);
-    }
+    app->icon_pixels = icon_grid_load_icon(app->icon_path);
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -319,8 +236,7 @@ static int scan_apps(Launcher *l) {
                 l->apps[j]  = tmp;
             }
 
-    l->total_pages = (l->app_count + apps_per_page - 1) / apps_per_page;
-    if (l->total_pages < 1) l->total_pages = 1;
+    l->total_pages = icon_grid_pages(&grid, l->app_count);
     if (l->current_page >= l->total_pages) l->current_page = l->total_pages - 1;
 
     return l->app_count;
@@ -330,104 +246,10 @@ static int scan_apps(Launcher *l) {
 /*  Drawing                                                                */
 /* ════════════════════════════════════════════════════════════════════════ */
 
-static void tile_xy(int idx_on_page, int *x, int *y) {
-    int col = idx_on_page % grid_cols;
-    int row = idx_on_page / grid_cols;
-    *x = grid_left + col * (tile_w + TILE_GAP_X);
-    *y = grid_top  + row * (tile_h + TILE_GAP_Y);
-}
-
-static void draw_letter_icon(Framebuffer *fb, int x, int y,
-                             char letter, uint32_t color) {
-    fb_fill_rect(fb, x, y, ICON_SIZE, ICON_SIZE, color);
-    fb_draw_rect(fb, x, y, ICON_SIZE, ICON_SIZE, COLOR_WHITE);
-
-    /* Centre a single character (bitmap font: 8px base) */
-    int scale   = 7;
-    int char_w  = 8 * scale;
-    int char_h  = 8 * scale;
-    int lx = x + (ICON_SIZE - char_w) / 2;
-    int ly = y + (ICON_SIZE - char_h) / 2;
-    char s[2] = { letter, '\0' };
-    fb_draw_text(fb, lx, ly, s, COLOR_WHITE, scale);
-}
-
-static void draw_ppm_icon(Framebuffer *fb, int x, int y,
-                          const uint32_t *pixels) {
-    for (int py = 0; py < ICON_SIZE; py++)
-        for (int px = 0; px < ICON_SIZE; px++)
-            fb_draw_pixel(fb, x + px, y + py,
-                          pixels[py * ICON_SIZE + px]);
-}
-
-#define TILE_RADIUS 12
-
-static void draw_tile(Framebuffer *fb, AppEntry *app,
-                      int tx, int ty, int highlight) {
-    /* Tile background (rounded) */
-    fb_fill_rounded_rect(fb, tx, ty, tile_w, tile_h, TILE_RADIUS,
-                         highlight ? TILE_HL_BG : TILE_BG);
-    fb_draw_rounded_rect(fb, tx, ty, tile_w, tile_h, TILE_RADIUS, TILE_BORDER);
-
-    /* Icon — centred horizontally, 8 px from top of tile */
-    int icon_x = tx + (tile_w - ICON_SIZE) / 2;
-    int icon_y = ty + 8;
-
-    if (app->icon_pixels) {
-        draw_ppm_icon(fb, icon_x, icon_y, app->icon_pixels);
-    } else {
-        char letter = app->name[0];
-        if (letter >= 'a' && letter <= 'z') letter -= 32;
-        draw_letter_icon(fb, icon_x, icon_y, letter, app->icon_color);
-    }
-
-    /* Label — centred below icon */
-    int label_y = icon_y + ICON_SIZE + 10;
-    text_draw_centered(fb, tx + tile_w / 2, label_y,
-                       app->name, LABEL_COLOR, LABEL_SCALE);
-}
-
-static void draw_page_dots(Framebuffer *fb, int current, int total) {
-    if (total <= 1) return;
-
-    int dot_r   = 5;
-    int dot_gap = 20;
-    int total_w = total * dot_r * 2 + (total - 1) * (dot_gap - dot_r * 2);
-    int sx = fb->width / 2 - total_w / 2;
-    int y  = SCREEN_VISIBLE_BOTTOM - 15;
-
-    for (int i = 0; i < total; i++) {
-        int cx = sx + i * dot_gap;
-        fb_fill_circle(fb, cx, y, dot_r,
-                       (i == current) ? DOT_ACTIVE : DOT_INACTIVE);
-    }
-}
-
-static void draw_page_arrows(Framebuffer *fb, Launcher *l) {
-    /* Chevrons only — the page-flip touch zones themselves are hit-tested in
-     * handle_touch() against SCREEN_SAFE_*, so these are pure decoration. */
-    /* Left arrow: ◀ */
-    if (l->current_page > 0) {
-        int ax = SCREEN_VISIBLE_LEFT + 10;
-        int ay = grid_top + grid_content_h / 2 - 10;
-        fb_draw_text(fb, ax, ay, "<", RGB(150, 150, 170), 3);
-    }
-    /* Right arrow: ▶ */
-    if (l->current_page < l->total_pages - 1) {
-        int ax = SCREEN_VISIBLE_RIGHT - 20;
-        int ay = grid_top + grid_content_h / 2 - 10;
-        fb_draw_text(fb, ax, ay, ">", RGB(150, 150, 170), 3);
-    }
-}
-
-static void draw_selection_border(Framebuffer *fb, int tx, int ty) {
-    int bw = 3;
-    for (int b = 0; b < bw; b++) {
-        fb_draw_rounded_rect(fb,
-                             tx - bw + b, ty - bw + b,
-                             tile_w + 2 * (bw - b), tile_h + 2 * (bw - b),
-                             TILE_RADIUS + bw - b, TILE_SEL_BORDER);
-    }
+static void draw_tile(Framebuffer *fb, const AppEntry *app,
+                      int tx, int ty, bool highlight) {
+    icon_grid_draw_tile(fb, &grid, tx, ty, app->name, app->icon_pixels,
+                        app->icon_color, highlight);
 }
 
 static void draw_launcher(Launcher *l) {
@@ -438,18 +260,18 @@ static void draw_launcher(Launcher *l) {
                        "ROOMWIZARD", TITLE_COLOR, 4);
 
     /* Tiles for current page */
-    int start = l->current_page * apps_per_page;
+    int start = l->current_page * grid.per_page;
     int count = l->app_count - start;
-    if (count > apps_per_page) count = apps_per_page;
+    if (count > grid.per_page) count = grid.per_page;
 
     for (int i = 0; i < count; i++) {
         int tx, ty;
-        tile_xy(i, &tx, &ty);
+        icon_grid_tile_xy(&grid, i, &tx, &ty);
         int abs_idx = start + i;
-        int hl = (abs_idx == l->selected_app) ? 1 : 0;
+        bool hl = (abs_idx == l->selected_app);
         draw_tile(&l->fb, &l->apps[abs_idx], tx, ty, hl);
-        if (abs_idx == l->selected_app)
-            draw_selection_border(&l->fb, tx, ty);
+        if (hl)
+            icon_grid_draw_selection(&l->fb, &grid, tx, ty);
     }
 
     /* Empty-state message */
@@ -462,8 +284,7 @@ static void draw_launcher(Launcher *l) {
     }
 
     /* Page arrows and dots */
-    draw_page_arrows(&l->fb, l);
-    draw_page_dots(&l->fb, l->current_page, l->total_pages);
+    icon_grid_draw_paging(&l->fb, &grid, l->current_page, l->total_pages);
 
     /* Input hint */
     if (l->input.gamepad_connected || l->input.keyboard_connected)
@@ -481,34 +302,23 @@ static void draw_launcher(Launcher *l) {
  *            -1     nothing / page change (redraw)
  */
 static int handle_touch(Launcher *l, int x, int y) {
-    int start = l->current_page * apps_per_page;
+    int start = l->current_page * grid.per_page;
     int count = l->app_count - start;
-    if (count > apps_per_page) count = apps_per_page;
+    if (count > grid.per_page) count = grid.per_page;
 
-    /* Check each visible tile */
-    for (int i = 0; i < count; i++) {
+    int i = icon_grid_hit(&grid, count, x, y);
+    if (i >= 0) {
+        /* Visual feedback: highlight tile briefly */
         int tx, ty;
-        tile_xy(i, &tx, &ty);
-        if (x >= tx && x < tx + tile_w && y >= ty && y < ty + tile_h) {
-            /* Visual feedback: highlight tile briefly */
-            draw_tile(&l->fb, &l->apps[start + i], tx, ty, 1);
-            fb_swap(&l->fb);
-            usleep(120000);
-            return start + i;
-        }
+        icon_grid_tile_xy(&grid, i, &tx, &ty);
+        draw_tile(&l->fb, &l->apps[start + i], tx, ty, true);
+        fb_swap(&l->fb);
+        usleep(120000);
+        return start + i;
     }
 
-    /* Pagination: left edge = previous, right edge = next */
-    if (x < SCREEN_SAFE_LEFT + 50 && l->current_page > 0) {
-        l->current_page--;
-        return -1;
-    }
-    if (x > SCREEN_SAFE_RIGHT - 50 &&
-        l->current_page < l->total_pages - 1) {
-        l->current_page++;
-        return -1;
-    }
-
+    /* Pagination: left edge band = previous, right edge band = next */
+    l->current_page += icon_grid_page_hit(x, l->current_page, l->total_pages);
     return -1;
 }
 
@@ -519,7 +329,7 @@ static int handle_touch(Launcher *l, int x, int y) {
 /* Ensure selected_app is on the currently visible page; adjust page if not. */
 static void ensure_selection_visible(Launcher *l) {
     if (l->selected_app < 0) return;
-    int page = l->selected_app / apps_per_page;
+    int page = l->selected_app / grid.per_page;
     if (page != l->current_page)
         l->current_page = page;
 }
@@ -534,7 +344,7 @@ static int handle_gamepad_input(Launcher *l) {
     if (l->selected_app < 0) {
         if (inp->buttons[BTN_ID_UP].pressed   || inp->buttons[BTN_ID_DOWN].pressed ||
             inp->buttons[BTN_ID_LEFT].pressed  || inp->buttons[BTN_ID_RIGHT].pressed) {
-            l->selected_app = l->current_page * apps_per_page;
+            l->selected_app = l->current_page * grid.per_page;
             return -1;
         }
     }
@@ -558,7 +368,7 @@ static int handle_gamepad_input(Launcher *l) {
     }
     /* Navigate down */
     if (inp->buttons[BTN_ID_DOWN].pressed) {
-        int target = l->selected_app + grid_cols;
+        int target = l->selected_app + grid.cols;
         if (target < l->app_count) {
             l->selected_app = target;
             ensure_selection_visible(l);
@@ -566,7 +376,7 @@ static int handle_gamepad_input(Launcher *l) {
     }
     /* Navigate up */
     if (inp->buttons[BTN_ID_UP].pressed) {
-        int target = l->selected_app - grid_cols;
+        int target = l->selected_app - grid.cols;
         if (target >= 0) {
             l->selected_app = target;
             ensure_selection_visible(l);

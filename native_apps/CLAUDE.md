@@ -50,6 +50,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
+| `icon_grid.c` | the paged icon-tile grid (layout + receipt, tile, paging, hit-test, 96 px icon load) — the launcher's, and the home screen of any tile menu | a second tile grid; the launcher's frame was md5-identical before and after the extraction |
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
 | `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
 | `audio_wav.c` | the one streaming RIFF reader: chunk walk, `(L+R)/2` downmix, the `AudioVoiceFill` adapter | assuming a 44-byte header, or loading a whole file to play it |

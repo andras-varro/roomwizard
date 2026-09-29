@@ -183,6 +183,7 @@ step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common
 step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
 step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
 step "14/37" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
+                              $CC "${WARN[@]}" -O2 -c common/icon_grid.c       -o build/icon_grid.o
 step "15/37" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
 step "16/37" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
 step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
@@ -250,7 +251,7 @@ step "25/37" "game_selector"
 $CC "${WARN[@]}" -O2 -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
 
 step "26/37" "app_launcher"
-$CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/icon_grid.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
 
 step "27/37" "hardware_test"
 $CC "${WARN[@]}" -O2 -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm "${AUDIO_LIBS[@]}"
