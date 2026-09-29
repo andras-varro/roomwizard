@@ -187,6 +187,7 @@ static void open_log(void)
 
 typedef enum {
     ACT_LIMIT, ACT_LEVEL, ACT_STOP,
+    ACT_DRAW,                       /* the redraw A/B — see REDRAW_LIT_MS     */
     ACT_TONE,                       /* uses freq/ms */
     ACT_BEEP, ACT_BLIP, ACT_SUCCESS, ACT_FAIL, ACT_CHORD,
     ACT_MUSIC,                      /* uses `path` — the looping bed          */
@@ -253,8 +254,8 @@ typedef struct {
     const char *path;               /* ACT_MUSIC / ACT_SFX only */
 } Pad;
 
-/** The pad table's size, and it is the EXACT count in use: 3 controls + 5 tones +
- *  5 canned + 6 ms + 5 sample = 24.
+/** The pad table's size, and it is the EXACT count in use: 4 controls + 5 tones +
+ *  5 canned + 6 ms + 5 sample = 25.
  *
  * ⚠️ **This was 26 with 22 used, and adding a five-pad row silently produced a
  * row that did not exist** — `pad_add()` returned NULL past the cap and said
@@ -262,7 +263,7 @@ typedef struct {
  * wrong. It is exact rather than padded on purpose: a spare slot restores the
  * silence for the next row. If you add pads, raise this AND check the log line
  * below, which is the only thing that can tell you the cap was hit. */
-#define MAX_PADS 24
+#define MAX_PADS 25
 static Pad  pads[MAX_PADS];
 static int  pad_count = 0;
 
@@ -396,14 +397,69 @@ typedef struct {
     long period_frames;     /* the device period it was rounded up to           */
     uint32_t max_gap;       /* longest gap between two loop iterations, ms —
                              * restarted by a STOP tap (see the header)          */
+    bool quiet_redraw;      /* DRAW PAD: a press repaints only its own pad       */
     char last[40];
 } View;
+
+/* ── the redraw A/B ──────────────────────────────────────────────────────────
+ *
+ * A crack is heard on every press at 5-8 voices while clip=0 starve=0, and a
+ * trace of the mix found no sample discontinuity on a press.  What a press DOES
+ * change is the loop: it forces draw_screen() + fb_swap() — a full clear, every
+ * label and a whole-surface copy into the mapped framebuffer — in the same
+ * iteration as the audio_pump() that starts the new voice.
+ *
+ * `DRAW PAD` removes exactly that and nothing else.  A press, and the voice
+ * start it causes, repaint ONLY the pressed pad (inverted for REDRAW_LIT_MS, then
+ * normal), copied into the front buffer as one small rectangle by
+ * present_rect() — no clear, no fb_swap().  Everything audio-side is untouched:
+ * the same pump call in the same place, the same sleep decision.  The READOUT_MS
+ * timer still does full redraws in both modes (it now also carries the voice
+ * count in DRAW PAD), so those are the one redraw source the A/B keeps; they
+ * are not coincident with a press.  Tapping the DRAW pad itself redraws in full,
+ * so its own label is always the truth.  Every tap logs `redraw=full|pad`. */
+#define REDRAW_LIT_MS  150
+
+/* Copy one logical rectangle of the back buffer onto the panel.  Landscape only:
+ * in portrait fb_swap()'s rotation would be needed and there is no feedback. */
+static void present_rect(Framebuffer *fb, int x, int y, int w, int h)
+{
+    if (fb->portrait_mode || !fb->double_buffering || fb->back_buffer == NULL) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)fb->width)  w = (int)fb->width  - x;
+    if (y + h > (int)fb->height) h = (int)fb->height - y;
+    if (w <= 0 || h <= 0) return;
+    const size_t bpp = fb->bytes_per_pixel;
+    const uint8_t *src = (const uint8_t *)fb->back_buffer;
+    uint8_t *dst = (uint8_t *)fb->buffer;
+    for (int r = 0; r < h; r++)
+        memcpy(dst + (size_t)(y + r + fb->view_y) * fb->line_length
+                   + (size_t)(x + fb->view_x) * bpp,
+               src + ((size_t)(y + r) * fb->width + (size_t)x) * bpp,
+               (size_t)w * bpp);
+}
+
+static void repaint_pad(Framebuffer *fb, Pad *p)
+{
+    button_draw(fb, &p->btn);
+    present_rect(fb, p->btn.x, p->btn.y, p->btn.width, p->btn.height);
+}
+
+static void set_draw_label(Pad *draw_pad, const View *v)
+{
+    button_set_text(&draw_pad->btn, v->quiet_redraw ? "DRAW PAD" : "DRAW FULL");
+    button_set_colors(&draw_pad->btn,
+                      v->quiet_redraw ? RGB(150, 120, 30) : RGB(70, 80, 100),
+                      COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+}
 
 /** How often the counter line may force a full redraw.  ⚠️ Not cosmetic: with
  *  the soft limiter engaged `limited` increments on most samples, so a readout
  *  that redraws on every change redraws EVERY FRAME — and a full 800x450x4
  *  repaint plus fb_swap on this part is a plausible cause of the very starvation
- *  this tool is trying to attribute.  The voice count still redraws instantly. */
+ *  this tool is trying to attribute.  The voice count still redraws instantly
+ *  under DRAW FULL; under DRAW PAD it rides on this timer (see REDRAW_LIT_MS). */
 #define READOUT_MS  250
 
 static void set_toggle_labels(Pad *limit_pad, Pad *level_pad, const Audio *audio,
@@ -552,18 +608,21 @@ int main(int argc, char *argv[])
     rows_layout();
 
     y = row_y[0];
-    /* Three controls, laid out across the whole row by row_geom() like every
+    /* Four controls, laid out across the whole row by row_geom() like every
      * other row — the continuous stream is the library's only mode, so there is
-     * no device-half or pump toggle left to put beside them. */
-    row_geom(3, 0, gap, &x, &w);
+     * no device-half or pump toggle left to put beside them.  The fourth is the
+     * redraw A/B (see REDRAW_LIT_MS), which changes the loop, not the audio. */
+    row_geom(4, 0, gap, &x, &w);
     /* ⚠️ "LIM" with no value: set_toggle_labels() runs before the first draw and
      * reads the real position out of the library, so a literal here could only
      * ever be a lie waiting for a code path that skips that call. */
     Pad *limit_pad = pad_add(ACT_LIMIT,    "LIM",         x, y, w, row_h[0], BTN_COLOR_PRIMARY, 2);
-    row_geom(3, 1, gap, &x, &w);
+    row_geom(4, 1, gap, &x, &w);
     Pad *level_pad = pad_add(ACT_LEVEL,    "LVL 1/6",     x, y, w, row_h[0], BTN_COLOR_INFO, 2);
-    row_geom(3, 2, gap, &x, &w);
+    row_geom(4, 2, gap, &x, &w);
     pad_add(ACT_STOP, "STOP", x, y, w, row_h[0], BTN_COLOR_DANGER, 2);
+    row_geom(4, 3, gap, &x, &w);
+    Pad *draw_pad  = pad_add(ACT_DRAW,     "DRAW",        x, y, w, row_h[0], RGB(70, 80, 100), 2);
 
     y = row_y[1];
     /* ⚠️ Two SUSTAINED tones, because defect 3's decisive question is about
@@ -647,8 +706,11 @@ int main(int argc, char *argv[])
     v.rung = 0;
     audio_set_volume(&audio, ladder[0].vol);
     set_toggle_labels(limit_pad, level_pad, &audio, &v);
+    if (draw_pad) set_draw_label(draw_pad, &v);
 
     bool needs_redraw = true;
+    Pad     *lit       = NULL;      /* DRAW PAD: the pad shown inverted, and until */
+    uint32_t lit_until = 0;
     uint32_t last_readout = 0;
     uint32_t prev_now     = 0;
 
@@ -670,7 +732,10 @@ int main(int argc, char *argv[])
         for (int i = 0; i < pad_count && running; i++) {
             if (!button_check_tap(&pads[i].btn, &ts, now)) continue;
             Pad *p = &pads[i];
-            needs_redraw = true;
+            /* The A/B: in DRAW PAD a press does NOT redraw the screen — the pad
+             * is repainted alone after the switch below.  The DRAW pad's own tap
+             * always redraws in full, so the label it flips is on the panel. */
+            if (!v.quiet_redraw || p->act == ACT_DRAW) needs_redraw = true;
 
             /* ⚠️ Every tap logs the LEVEL STATE with it, read from the LIBRARY and
              * never from a pad's label: the first panel report of this tool could
@@ -683,7 +748,7 @@ int main(int argc, char *argv[])
              * line. */
             fprintf(stderr, "mix: tap act=%d pad=%s freq=%d ms=%d path=%s "
                             "svc_us=%ld "
-                            "limit=%s vol=%d shift=%d acoustic=%d voices=%d "
+                            "limit=%s redraw=%s vol=%d shift=%d acoustic=%d voices=%d "
                             "clip=%lu lim=%lu starve=%lu lost=%lu drop=%lu "
                             "bed=%d wraps=%ld "
                             "gapmax=%lu lead=%ldfr/%ldms period=%ldfr\n",
@@ -691,6 +756,7 @@ int main(int argc, char *argv[])
                     p->path ? p->path : "-",
                     audio_cont_service_interval_us(&audio),
                     (audio_mix_get_limit(&audio.mix) == AUDIO_MIX_HARD) ? "hard" : "soft",
+                    v.quiet_redraw ? "pad" : "full",
                     audio_get_volume(&audio), audio_get_master_shift(&audio),
                     audio_voice_peak(audio_get_volume(&audio))
                         >> audio_get_master_shift(&audio),
@@ -749,6 +815,14 @@ int main(int argc, char *argv[])
                 v.max_gap = 0; prev_now = 0;
                 snprintf(v.last, sizeof(v.last), "stop: voices cut, worst frame reset");
                 break;
+            case ACT_DRAW:
+                /* Touches no audio state — that is the whole point of the A/B. */
+                v.quiet_redraw = !v.quiet_redraw;
+                set_draw_label(p, &v);
+                lit = NULL;
+                snprintf(v.last, sizeof(v.last), "redraw %s",
+                         v.quiet_redraw ? "PAD only on a press" : "FULL on a press");
+                break;
             case ACT_TONE:
                 audio_tone(&audio, p->freq, p->ms);
                 snprintf(v.last, sizeof(v.last), "tone %d Hz %d ms", p->freq, p->ms);
@@ -803,13 +877,35 @@ int main(int argc, char *argv[])
                     snprintf(v.last, sizeof(v.last), "sfx REFUSED - see /tmp/mix.log");
                 break;
             }
+
+            /* DRAW PAD's only visible feedback: this pad, inverted, alone.  A
+             * previously lit pad is restored first, so at most two small
+             * rectangles move on a press and the screen is never cleared. */
+            if (v.quiet_redraw && p->act != ACT_DRAW) {
+                if (lit && lit != p) repaint_pad(&fb, lit);
+                p->btn.visual_state = BTN_STATE_PRESSED;
+                repaint_pad(&fb, p);
+                lit = p;
+                lit_until = now + REDRAW_LIT_MS;
+            }
+        }
+
+        /* Restore the lit pad once its moment is over.  button_check_tap() has
+         * already put its state back to NORMAL, so this repaints it plain. */
+        if (lit && (int32_t)(now - lit_until) >= 0) {
+            if (lit->btn.visual_state == BTN_STATE_PRESSED)
+                lit->btn.visual_state = BTN_STATE_NORMAL;
+            repaint_pad(&fb, lit);
+            lit = NULL;
         }
 
         /* The pump, once per frame, exactly where a game would put it. */
         audio_pump(&audio);
 
         int      nv = audio_pump_voices(&audio);
-        if (nv != v.voices) {           /* a voice starting or ending: draw now */
+        /* A voice starting or ending: draw now — except in DRAW PAD, where a
+         * voice start IS the press, so the count waits for the READOUT_MS timer. */
+        if (nv != v.voices && !v.quiet_redraw) {
             v.voices = nv;
             needs_redraw = true;
         }
@@ -838,7 +934,8 @@ int main(int argc, char *argv[])
             long nw = audio.music.wav.loops;
             if (nc != v.clipped || nl != v.limited || ns != v.starved ||
                 nf != v.lost    || nd != v.dropped ||
-                nm != v.music_on || nw != v.music_loops) {
+                nm != v.music_on || nw != v.music_loops || nv != v.voices) {
+                v.voices  = nv;
                 v.clipped = nc; v.limited = nl; v.starved = ns;
                 v.lost    = nf; v.dropped = nd;
                 v.music_on = nm; v.music_loops = nw;
