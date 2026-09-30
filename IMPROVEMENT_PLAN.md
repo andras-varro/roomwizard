@@ -818,7 +818,7 @@ and `gpio_poweroff_driver` are in `/proc/kallsyms`, and `CONFIG_TWL4030_POWER=y`
 `original.dtb` and in `kernel/dts` alike. `drivers/mfd/twl4030-power.c` sets `pm_power_off` only when
 that property is present, and with `pm_power_off` NULL `kernel/reboot.c` turns POWER_OFF into HALT. The
 rootfs halt script already runs `halt -d -f -p -h`, so userspace is not the missing piece. Measured on
-.188 2026-09-29 (n=1): `shutdown -h now` halts with the panel bright white and the backlight on, down
+.188 2026-09-29 (n=1) and again 2026-09-30 via the launcher's SHUT DOWN (n=2, both halts panel WHITE): `shutdown -h now` halts with the panel bright white and the backlight on, down
 over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi
 drops its enable GPIO, while `kernel/dts/panel-dpi.sh` holds the LVDS and backlight-enable GPIOs high as
 hogs and the TWL PWM backlight stays powered.
@@ -1026,8 +1026,8 @@ disappears. Reset-to-defaults stays in the control panel.
 
 `icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
 exits; `app_launcher`'s X (or Back/Escape) opens Shutdown / Reboot / Cancel, now the only home of both —
-live on .188 2026-09-30 but **not yet tapped** (operator checklist pending). Its shutdown screen says to
-unplug once the screen turns white; that wording rests on one halt and is provisional until F103.
+tapped on .188 2026-09-30, all passing: the X dialog opens, slide-off does nothing, CANCEL and Escape open/close it, REBOOT returns to the launcher, SHUT DOWN shows its message and halts, and the control panel's Settings no longer hold them (SAVE and RESET DEFAULTS work). Its shutdown screen says to
+unplug once the screen turns white; that wording rests on two halts, both measured, and stays provisional until F103.
 
 | Icon | Holds |
 |---|---|
@@ -1050,7 +1050,7 @@ config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`forma
 which only `build-usb-test.sh` builds). Then delete the binaries `hardware_test` (with the never-compiled
 `hardware_test.c` and `pressure_test.c`), `hardware_config`, `hardware_diag`, `usb_test` and the backlight
 CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
-steps, deploy/marker references and README rows. `hardware_diag` is already hidden (its `.app` manifest
+steps, deploy references and README rows. `hardware_diag` is already hidden (its `.app` manifest
 is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
 fix its EXIT corner separately from `control_panel`. Check page by page that no diag page holds a field
 the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
@@ -1069,7 +1069,7 @@ launcher frame md5-identical). Audio and LED open Settings; Display and Touch op
 Network, Monitor and Information open the Diagnostics pages Network, Memory and System. Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
-and quit. The tap behaviour has not been exercised by a finger (operator checklist pending).
+and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their tabs, BACK, slide-off does nothing, the red X exits.
 
 **Operator decision 2026-09-30:** the app is named `control_panel`, and each tool that becomes a page
 **moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
