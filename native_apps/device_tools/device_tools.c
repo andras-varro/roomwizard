@@ -23,6 +23,7 @@
 #include "../common/ui_layout.h"
 #include "../common/audio.h"
 #include "../common/input_scan.h"
+#include "../common/icon_grid.h"
 #include "usb_bus.h"
 
 #include <stdio.h>
@@ -105,7 +106,7 @@
 #define TAB_BTN_W         150
 #define TAB_BTN_H         40
 #define TAB_BTN_SPACING   4
-#define EXIT_BTN_W        55
+#define BACK_BTN_W        55
 
 #define BAR_WIDTH  300
 #define BAR_HEIGHT 20
@@ -201,7 +202,8 @@ typedef enum {
     TAB_TESTS,
     TAB_DISPLAY,
     TAB_USB,
-    TAB_COUNT
+    TAB_COUNT,
+    TAB_HOME     /* the icon grid — after TAB_COUNT because it is not a tab */
 } ActiveTab;
 
 typedef enum {
@@ -238,6 +240,31 @@ typedef enum {
 } ConfirmAction;
 
 static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY", "USB" };
+
+/* The home grid. Each icon opens the tab (and Diagnostics page) that holds its
+ * settings today; regrouping a page's contents under its icon happens one icon at
+ * a time, deleting the duplicate as it lands. Bluetooth has no page yet, so no
+ * tile. icon NULL = the grid's letter tile. */
+typedef struct {
+    const char *label;
+    const char *icon;          /* basename under /opt/roomwizard/icons/, no .ppm */
+    ActiveTab   tab;
+    DiagPage    diag_page;     /* only read when tab == TAB_DIAGNOSTICS */
+} HomeItem;
+
+static const HomeItem home_items[] = {
+    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_SYSTEM  },
+    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_SYSTEM  },
+    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_SYSTEM  },
+    { "LED",         "cp_led",     TAB_SETTINGS,    DIAG_SYSTEM  },
+    { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM  },
+    { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK },
+    { "Monitor",     "cp_monitor", TAB_DIAGNOSTICS, DIAG_MEMORY  },
+    { "Information", "cp_info",    TAB_DIAGNOSTICS, DIAG_SYSTEM  },
+    { "Tests",       NULL,         TAB_TESTS,       DIAG_SYSTEM  },
+};
+#define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
+#define HOME_TITLE_H    50
 
 static const char *test_names[] = {
     "RED LED", "GREEN LED", "BOTH LEDS", "BACKLIGHT", "PULSE",
@@ -278,6 +305,7 @@ typedef struct {
     bool          portrait_mode;
     char          status_msg[64];
     uint32_t      status_time_ms;
+    int           home_page;          /* page of the home grid */
     DiagPage      diag_page;
     bool          diag_needs_refresh;
     TestSubState  test_sub;
@@ -317,7 +345,7 @@ static void signal_handler(int sig) {
 /* â”€â”€ UI Elements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static Button tab_buttons[TAB_COUNT];
-static Button exit_btn;
+static Button back_btn;          /* the tab bar's BACK to the home grid */
 
 /* Settings — sound, indicators, system. Screen-related settings live on the
  * Display tab, next to the calibration they interact with. */
@@ -426,8 +454,8 @@ static void create_tab_bar(void) {
     int tab_y = SCREEN_SAFE_TOP + 2;
 
     /* Dynamic tab width: fit all tabs + exit button within safe area */
-    int exit_total = EXIT_BTN_W + 20;           /* exit button + margins */
-    int tab_area_w = SCREEN_SAFE_WIDTH - exit_total - 20; /* 10px left + 10px gap */
+    int back_total = BACK_BTN_W + 20;           /* back button + margins */
+    int tab_area_w = SCREEN_SAFE_WIDTH - back_total - 20; /* 10px left + 10px gap */
     int num_tabs = TAB_COUNT;
     int tab_w = (tab_area_w - (num_tabs - 1) * TAB_BTN_SPACING) / num_tabs;
     if (tab_w > TAB_BTN_W) tab_w = TAB_BTN_W;  /* cap at original max */
@@ -438,17 +466,20 @@ static void create_tab_bar(void) {
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
-        int tab_x = SCREEN_SAFE_LEFT + 10 + i * (tab_w + TAB_BTN_SPACING);
+        int tab_x = SCREEN_SAFE_LEFT + back_total + i * (tab_w + TAB_BTN_SPACING);
         button_init_full(&tab_buttons[i], tab_x, tab_y,
                          tab_w, TAB_BTN_H, labels[i],
                          COLOR_TAB_INACTIVE, COLOR_WHITE,
                          BTN_COLOR_HIGHLIGHT, 2);
     }
-    button_init_full(&exit_btn,
-                     SCREEN_SAFE_RIGHT - EXIT_BTN_W - 10, tab_y,
-                     EXIT_BTN_W, TAB_BTN_H, "X",
-                     BTN_EXIT_COLOR, COLOR_WHITE,
-                     BTN_HIGHLIGHT_COLOR, 2);
+    /* BACK on the left, where the full-screen testers keep theirs: the top-right
+     * corner is the home grid's exit X, and a double tap there must not both
+     * leave the page and quit. */
+    button_init_full(&back_btn,
+                     SCREEN_SAFE_LEFT + 10, tab_y,
+                     BACK_BTN_W, TAB_BTN_H, "<",
+                     COLOR_TAB_INACTIVE, COLOR_WHITE,
+                     BTN_HIGHLIGHT_COLOR, 3);
 }
 
 static void draw_tab_bar(Framebuffer *fb, AppState *state) {
@@ -465,7 +496,7 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
             fb_fill_rect(fb, bx, by - 3, bw, 3, COLOR_CYAN);
         }
     }
-    button_draw_exit(fb, &exit_btn);
+    button_draw(fb, &back_btn);
     fb_draw_line(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP + TAB_BAR_H,
                  SCREEN_SAFE_RIGHT, SCREEN_SAFE_TOP + TAB_BAR_H,
                  COLOR_SECTION_LINE);
@@ -476,24 +507,100 @@ static void usb_close(AppState *s);
 static void settings_audio_open(AppState *s);
 static void settings_audio_close(AppState *s);
 
+/* The one place a view changes, so entering and leaving keep their side
+ * effects whether the tab bar, the home grid or BACK asked. */
+static void set_tab(AppState *state, ActiveTab tab) {
+    ActiveTab prev_tab = state->active_tab;
+    state->active_tab = tab;
+    if (tab == TAB_DIAGNOSTICS)
+        state->diag_needs_refresh = true;
+    if (prev_tab == TAB_USB && tab != TAB_USB)
+        usb_close(state);
+    if (prev_tab == TAB_SETTINGS && tab != TAB_SETTINGS)
+        settings_audio_close(state);
+    if (prev_tab != TAB_SETTINGS && tab == TAB_SETTINGS)
+        settings_audio_open(state);
+}
+
 static void handle_tab_bar_input(AppState *state, int tx, int ty,
                                  bool touching, uint32_t now) {
-    for (int i = 0; i < TAB_COUNT; i++) {
-        if (button_update(&tab_buttons[i], tx, ty, touching, now)) {
-            ActiveTab prev_tab = state->active_tab;
-            state->active_tab = (ActiveTab)i;
-            if (i == TAB_DIAGNOSTICS)
-                state->diag_needs_refresh = true;
-            if (prev_tab == TAB_USB && state->active_tab != TAB_USB)
-                usb_close(state);
-            if (prev_tab == TAB_SETTINGS && state->active_tab != TAB_SETTINGS)
-                settings_audio_close(state);
-            if (prev_tab != TAB_SETTINGS && state->active_tab == TAB_SETTINGS)
-                settings_audio_open(state);
-        }
+    for (int i = 0; i < TAB_COUNT; i++)
+        if (button_update(&tab_buttons[i], tx, ty, touching, now))
+            set_tab(state, (ActiveTab)i);
+    if (button_update(&back_btn, tx, ty, touching, now))
+        set_tab(state, TAB_HOME);
+}
+
+/* ── Home grid ─────────────────────────────────────────────────────────────── */
+
+static IconGrid  home_grid;
+static uint32_t *home_icons[HOME_ITEM_COUNT];
+static int       home_press = -2;   /* tile index pressed, -1 = exit X, -2 = none */
+
+static void home_load_icons(void) {
+    for (int i = 0; i < HOME_ITEM_COUNT; i++) {
+        if (!home_items[i].icon) continue;
+        char path[128];
+        snprintf(path, sizeof(path), "/opt/roomwizard/icons/%s.ppm", home_items[i].icon);
+        home_icons[i] = icon_grid_load_icon(path);
     }
-    if (button_update(&exit_btn, tx, ty, touching, now))
-        running = false;
+}
+
+static int home_count_on_page(int page) {
+    int n = HOME_ITEM_COUNT - page * home_grid.per_page;
+    return n > home_grid.per_page ? home_grid.per_page : n;
+}
+
+static void draw_home(Framebuffer *fb, AppState *state) {
+    int pages = icon_grid_pages(&home_grid, HOME_ITEM_COUNT);
+    if (state->home_page >= pages) state->home_page = pages - 1;
+
+    text_draw_centered(fb, fb->width / 2, SCREEN_SAFE_TOP + 14, "CONTROL PANEL",
+                       COLOR_WHITE, 3);
+    icon_grid_draw_exit(fb, &home_grid);
+
+    int start = state->home_page * home_grid.per_page;
+    int n = home_count_on_page(state->home_page);
+    for (int i = 0; i < n; i++) {
+        const HomeItem *it = &home_items[start + i];
+        int x, y;
+        icon_grid_tile_xy(&home_grid, i, &x, &y);
+        icon_grid_draw_tile(fb, &home_grid, x, y, it->label, home_icons[start + i],
+                            icon_grid_letter_color(it->label), false);
+    }
+    icon_grid_draw_paging(fb, &home_grid, state->home_page, pages);
+}
+
+/* A tap acts on RELEASE, and only on the target it was pressed on (the page-flip
+ * bands act on the press, as in the launcher) — acting on
+ * the press would leave the release to the page just opened, which sees a
+ * finger lifting over whatever widget sits where the tile was. */
+static void handle_home_input(AppState *state, const TouchState *ts) {
+    int start = state->home_page * home_grid.per_page;
+    if (ts->pressed) {
+        int tile = icon_grid_hit(&home_grid, home_count_on_page(state->home_page),
+                                 ts->x, ts->y);
+        home_press = icon_grid_exit_hit(&home_grid, ts->x, ts->y) ? -1
+                   : tile >= 0 ? tile : -2;
+        if (home_press == -2)
+            state->home_page += icon_grid_page_hit(ts->x, state->home_page,
+                                                   icon_grid_pages(&home_grid, HOME_ITEM_COUNT));
+    }
+    /* No else: a quick tap delivers press and release in the same poll. */
+    if (!ts->released || home_press == -2) return;
+
+    int pressed = home_press;
+    home_press = -2;
+    if (pressed == -1) {
+        if (icon_grid_exit_hit(&home_grid, ts->x, ts->y)) running = false;
+        return;
+    }
+    if (icon_grid_hit(&home_grid, home_count_on_page(state->home_page),
+                      ts->x, ts->y) != pressed)
+        return;
+    const HomeItem *it = &home_items[start + pressed];
+    if (it->tab == TAB_DIAGNOSTICS) state->diag_page = it->diag_page;
+    set_tab(state, it->tab);
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3889,6 +3996,8 @@ static void rebuild_ui(AppState *state) {
     create_tests_ui();
     create_display_ui(state);
     create_usb_ui();
+    /* Prints the "device_tools home: safe …" receipt — see icon_grid_layout(). */
+    icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "device_tools home");
 }
 
 static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
@@ -3963,7 +4072,7 @@ int main(void) {
     config_init(&state.cfg);
     config_load(&state.cfg);
 
-    state.active_tab = TAB_SETTINGS;
+    state.active_tab = TAB_HOME;
     state.audio_enabled = config_get_bool(&state.cfg, "audio_enabled", DEFAULT_AUDIO_ENABLED);
     state.music_enabled = config_music_enabled(&state.cfg);
     state.effects_enabled = config_effects_enabled(&state.cfg);
@@ -3989,7 +4098,7 @@ int main(void) {
 
     rebuild_ui(&state);
     usb_scan_devices(&state);
-    settings_audio_open(&state);   /* Settings is the startup tab: no tab press opens it */
+    home_load_icons();   /* the home grid is the startup view; set_tab() opens Settings' bus */
 
     bool needs_redraw = true;  /* first frame always draws */
 
@@ -4015,9 +4124,11 @@ int main(void) {
         /* --- Render only when visual state changed --- */
         if (needs_redraw) {
             fb_clear(&fb, COLOR_BG);
-            draw_tab_bar(&fb, &state);
+            if (state.active_tab != TAB_HOME)
+                draw_tab_bar(&fb, &state);
 
             switch (state.active_tab) {
+                case TAB_HOME:        draw_home(&fb, &state);        break;
                 case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
                 case TAB_DIAGNOSTICS: draw_diagnostics(&fb, &state); break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
@@ -4051,6 +4162,7 @@ int main(void) {
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
+        int           prev_home_page = state.home_page;
         DiagPage      prev_diag_page = state.diag_page;
         TestSubState  prev_test_sub  = state.test_sub;
         int           prev_test_sel  = state.test_selected;
@@ -4095,6 +4207,8 @@ int main(void) {
             } else if (action == MODAL_ACTION_BTN1) {
                 state.confirm_action = CONFIRM_NONE;
             }
+        } else if (state.active_tab == TAB_HOME) {
+            handle_home_input(&state, &ts);
         } else {
             handle_tab_bar_input(&state, tx, ty, touching, now);
 
@@ -4120,6 +4234,7 @@ int main(void) {
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
+            prev_home_page != state.home_page       ||
             prev_diag_page != state.diag_page       ||
             prev_test_sub  != state.test_sub        ||
             prev_test_sel  != state.test_selected   ||

@@ -272,7 +272,7 @@ $CC "${WARN[@]}" -O2 -I. backlight/backlight.c build/hardware.o build/config.o -
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "31/36" "device_tools"
-$CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o build/ppm.o build/icon_grid.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
@@ -306,10 +306,12 @@ $CC "${WARN[@]}" -O2 -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_p
 step "36/36" "dss_scale_ab"
 $CC "${WARN[@]}" -O2 -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 
-# Collect icon files from source dirs → build/icons/
+# Collect icon files from source dirs → build/icons/.  device_tools/icons/ holds
+# the control panel's home-grid icons (gen_cp_icons.py); device_tools reads them
+# from /opt/roomwizard/icons/ like the launcher reads a manifest's icon=.
 mkdir -p build/icons
 ICON_COUNT=0
-for ppm in *//*.ppm; do
+for ppm in *//*.ppm device_tools/icons/*.ppm; do
     [ -f "$ppm" ] || continue
     cp "$ppm" build/icons/
     ICON_COUNT=$((ICON_COUNT + 1))

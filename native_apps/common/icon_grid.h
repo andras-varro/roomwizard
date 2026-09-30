@@ -27,6 +27,7 @@ typedef struct {
     int tile_w, tile_h;
     int content_w, content_h;       /* the tile block, gaps included */
     int left, top;                  /* its top-left corner */
+    int exit_x, exit_y, exit_w, exit_h;   /* the exit button, top-right of the title band */
 } IconGrid;
 
 /* Derive the grid from the screen's current orientation and safe rectangle.
@@ -60,6 +61,14 @@ int  icon_grid_hit(const IconGrid *g, int count_on_page, int x, int y);
 
 /* -1 = flip to the previous page, +1 = next, 0 = not a page-flip tap. */
 int  icon_grid_page_hit(int x, int page, int pages);
+
+/* The standard red-X exit button in the title band. The grid only draws it and
+ * reports the tap; what exiting means is the caller's (the control panel just
+ * exits). Needs `top_reserve` >= ICON_GRID_EXIT_H + 2. */
+#define ICON_GRID_EXIT_W 55
+#define ICON_GRID_EXIT_H 40
+void icon_grid_draw_exit(Framebuffer *fb, const IconGrid *g);
+bool icon_grid_exit_hit(const IconGrid *g, int x, int y);
 
 /* Load a PPM icon, scaled to ICON_GRID_ICON_SIZE. NULL if it is missing or
  * unreadable (the tile then falls back to the letter). Free with free(). */
