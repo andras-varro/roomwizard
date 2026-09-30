@@ -5,13 +5,14 @@
  *   Settings     — audio: enable, music/effects, output device
  *   Tests       — backlight, touch zone, display, audio and multi-touch tests
  *   Display      — backlight, orientation, touch calibration, bezel margins
- *   USB          — the bus list and the keyboard/mouse/pad testers
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
  *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
  *                  grid-only too
  *   Information  — what this unit is (info_page.c); grid-only
  *   Network      — gateway, DNS and every interface (network_page.c); grid-only
+ *   USB          — the bus list, RESCAN and the keyboard/mouse/pad testers
+ *                  (usb_page.c); grid-only
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -26,9 +27,7 @@
 #include "../common/config.h"
 #include "../common/ui_layout.h"
 #include "../common/audio.h"
-#include "../common/input_scan.h"
 #include "../common/icon_grid.h"
-#include "usb_bus.h"
 #include "cp_ui.h"
 #include "cp_page.h"
 
@@ -54,7 +53,6 @@
  * Color Palette
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-#define COLOR_BG             RGB(20, 20, 30)
 #define COLOR_TAB_BG         RGB(30, 30, 45)
 #define COLOR_TAB_ACTIVE     RGB(50, 50, 70)
 #define COLOR_TAB_INACTIVE   RGB(35, 35, 50)
@@ -65,30 +63,6 @@
 #define COLOR_BAR_FILL       RGB(0, 180, 60)
 #define COLOR_BAR_WARN       COLOR_YELLOW
 #define COLOR_BAR_CRIT       COLOR_RED
-
-/* USB tab colors (avoid clashing with existing COLOR_xxx names) */
-#define USB_COLOR_PANEL        RGB(30, 30, 45)
-#define USB_COLOR_PANEL_BD     RGB(50, 50, 70)
-#define USB_COLOR_DIM          RGB(80, 80, 80)
-#define USB_COLOR_HDR          COLOR_CYAN
-#define USB_COLOR_CONN         RGB(0, 200, 80)
-#define USB_COLOR_DISC         RGB(100, 100, 100)
-#define USB_COLOR_KEY_UP       RGB(50, 50, 60)
-#define USB_COLOR_KEY_DN       RGB(0, 180, 255)
-#define USB_COLOR_KEY_BD       RGB(80, 80, 100)
-#define USB_COLOR_KEY_TXT      RGB(200, 200, 200)
-#define USB_COLOR_STICK_BG     RGB(40, 40, 50)
-#define USB_COLOR_STICK_DOT    RGB(0, 200, 255)
-#define USB_COLOR_PAD_ON       RGB(0, 220, 100)
-#define USB_COLOR_PAD_OFF      RGB(60, 60, 70)
-#define USB_COLOR_TRIG_BG      RGB(40, 40, 40)
-#define USB_COLOR_TRIG_FILL    RGB(255, 165, 0)
-#define USB_COLOR_CURSOR_C     RGB(255, 255, 0)
-#define USB_COLOR_MBTN_ON      RGB(0, 200, 80)
-#define USB_COLOR_MBTN_OFF     RGB(60, 60, 70)
-#define USB_COLOR_SCROLL       RGB(0, 180, 255)
-#define USB_COLOR_LOG_BG       RGB(15, 15, 25)
-#define USB_COLOR_LOG_TXT      RGB(150, 200, 150)
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * Layout Constants
@@ -116,11 +90,6 @@
  * build-and-deploy.sh with no manifest, so the launcher does not show it —
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
-/* The init script that owns USB host mode, including the MUSB driver re-probe
- * that revives a port which came up dead. The RESCAN button forks this rather
- * than writing MUSB sysfs from here — one copy of the mechanism, and it is the
- * copy that carries the warnings. */
-#define USB_HOST_INIT     "/etc/init.d/usb-host"
 #define PORTRAIT_FLAG_FILE  "/opt/games/portrait.mode"
 
 #define TZ_COLS   8
@@ -128,48 +97,6 @@
 /* TZ_CELL_W / TZ_CELL_H removed — computed as local variables from
    screen_base_width / screen_base_height at runtime in each function. */
 #define TZ_HEADER 36
-
-/* ======================================================================
- * USB Constants & Types
- * ====================================================================== */
-
-#define MAX_USB_DEV     8
-#define DEV_NAME_LEN    128
-#define LOG_LINES       8
-#define LOG_LINE_LEN    64
-
-#define BITS_PER_LONG   (sizeof(long) * 8)
-#define NBITS(x)        ((((x)-1)/BITS_PER_LONG)+1)
-#define OFF(x)          ((x) % BITS_PER_LONG)
-#define BIT_LONG(x)     ((x) / BITS_PER_LONG)
-#define test_bit(b, a)  ((a[BIT_LONG(b)] >> OFF(b)) & 1)
-
-typedef enum { DEV_UNKNOWN, DEV_KEYBOARD, DEV_MOUSE, DEV_GAMEPAD } DevType;
-
-typedef struct {
-    char name[DEV_NAME_LEN]; char path[64];
-    DevType type; int ev_num; bool connected;
-} USBDev;
-
-typedef struct {
-    bool held[KEY_MAX+1]; int last_code; char last_name[32];
-    char log[LOG_LINES][LOG_LINE_LEN]; int log_cnt;
-} KbdState;
-
-typedef struct {
-    int cx, cy; bool bl, bm, br;
-    int scroll; uint32_t scroll_t;
-} MouseSt;
-
-typedef struct {
-    int lx, ly, rx, ry;
-    /* Per open slot (see usb_fds[]): two pads can report different ranges. */
-    int amin[MAX_USB_DEV][ABS_MAX+1], amax[MAX_USB_DEV][ABS_MAX+1];
-    int dx, dy; bool btns[16]; int btn_cnt;
-    int tl, tr;
-} PadSt;
-
-typedef enum { USB_SCR_MAIN, USB_SCR_KEYBOARD, USB_SCR_MOUSE, USB_SCR_GAMEPAD } USBScreen;
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * State Machine
@@ -179,7 +106,6 @@ typedef enum {
     TAB_SETTINGS,
     TAB_TESTS,
     TAB_DISPLAY,
-    TAB_USB,
     TAB_COUNT,
     /* Views with no tab button go after TAB_COUNT: every loop over the tab bar
      * stops there, so none of these can index tab_names[] or tab_buttons[]. */
@@ -211,7 +137,7 @@ typedef enum {
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "SETTINGS", "TESTS", "DISPLAY", "USB" };
+static const char *tab_names[TAB_COUNT] = { "SETTINGS", "TESTS", "DISPLAY" };
 
 /* The home grid, and the page registry: a row with a page opens that CpPage,
  * and takes its label and icon from it (one name, one home); every page named
@@ -231,7 +157,7 @@ static const HomeItem home_items[] = {
     { "Display",     "cp_display", TAB_DISPLAY,  NULL },
     { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
-    { "USB",         "cp_usb",     TAB_USB,      NULL },
+    { .tab = TAB_PAGE, .page = &cp_usb_page },
     { .tab = TAB_PAGE, .page = &cp_network_page },
     { .tab = TAB_PAGE, .page = &cp_monitor_page },
     { .tab = TAB_PAGE, .page = &cp_info_page },
@@ -286,22 +212,6 @@ typedef struct {
     CalibSubState calib_sub;
     Config        cfg;
     ConfirmAction confirm_action;
-    /* USB Test tab state */
-    USBScreen    usb_scr;
-    USBDev       usb_devs[MAX_USB_DEV];   /* evdev nodes the testers can open */
-    int          usb_dev_cnt;
-    UsbBusDev    usb_bus[USB_BUS_MAX];    /* everything enumerated — what the list shows */
-    int          usb_bus_cnt;
-    int          usb_kbd_idx, usb_mou_idx, usb_pad_idx;   /* first of each kind, -1 none */
-    /* A tester opens EVERY node of its kind at once: a touchpad keyboard exposes
-     * its own mouse node, so "the first mouse" is often not the one in the hand. */
-    int          usb_fds[MAX_USB_DEV];
-    int          usb_fd_dev[MAX_USB_DEV];  /* usb_devs[] index behind each fd */
-    int          usb_fd_cnt;
-    int          usb_last_dev;             /* usb_devs[] index of the last event, -1 none */
-    KbdState     usb_kbd;
-    MouseSt      usb_mou;
-    PadSt        usb_pad;
 } AppState;
 
 /* â”€â”€ Globals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -314,6 +224,8 @@ static void signal_handler(int sig) {
     (void)sig;
     running = false;
 }
+
+bool cp_running(void) { return running; }
 
 /* â”€â”€ UI Elements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
@@ -344,10 +256,6 @@ static Button calib_bezel_btn;      /* margins only  */
 static Button calib_factory_btn;    /* escape hatch: back to hardware defaults */
 static Button calib_diag_btn;       /* hands off to /opt/games/touch_raw */
 static ModalDialog calib_factory_dialog;
-
-/* USB */
-static Button usb_btn_rescan, usb_btn_ktest, usb_btn_mtest, usb_btn_gtest;
-static Button usb_btn_kback, usb_btn_mback, usb_btn_gback;
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * Shared Drawing Helpers
@@ -442,7 +350,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "SET", "TEST", "DISP", "USB" };
+    static const char *short_labels[] = { "SET", "TEST", "DISP" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -502,8 +410,6 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
                  COLOR_SECTION_LINE);
 }
 
-/* Forward declaration — usb_close() defined in USB Tab section below */
-static void usb_close(AppState *s);
 static void settings_audio_open(AppState *s);
 static void settings_audio_close(AppState *s);
 
@@ -521,8 +427,6 @@ static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
         if (page->enter) page->enter();
         state->page_dirty = true;
     }
-    if (prev_tab == TAB_USB && tab != TAB_USB)
-        usb_close(state);
     if (prev_tab == TAB_SETTINGS && tab != TAB_SETTINGS)
         settings_audio_close(state);
     if (prev_tab != TAB_SETTINGS && tab == TAB_SETTINGS)
@@ -862,12 +766,12 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
      * The press stays LIVE in both cases, for exactly the reason MUSIC and EFFECTS
      * do: this is a saved preference, and refusing to let someone select "usb"
      * before they plug the DAC in would just look broken.  That is the settings-tab
-     * idiom, not the USB tab's gated one — the USB tab's buttons START something
+     * idiom, not the USB page's gated one — the USB page's buttons START something
      * against a device that must exist, and this one only records a choice. */
     bool out_live = state->audio_enabled &&
                     (state->audio_device_idx != AUDIO_DEV_IDX_USB ||
                      audio_out_usb_present());
-    audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : USB_COLOR_DIM;
+    audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : RGB(80, 80, 80);
     audio_dev_btn.text_color   = out_live ? COLOR_WHITE    : RGB(150, 150, 150);
     audio_dev_btn.border_color = audio_dev_btn.text_color;
     button_set_text(&audio_dev_btn, audio_device_labels[state->audio_device_idx]);
@@ -2589,721 +2493,6 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
     state->calib_sub = CALIB_IDLE;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * USB Tab  (ported from usb_test.c)
- * ══════════════════════════════════════════════════════════════════════════ */
-
-/* ── Key table ──────────────────────────────────────────────────────────── */
-typedef struct { int code; const char *name, *sname; } KeyInfo;
-static const KeyInfo usb_ktab[] = {
-    {KEY_ESC,"ESC","ESC"},{KEY_1,"1","1"},{KEY_2,"2","2"},{KEY_3,"3","3"},
-    {KEY_4,"4","4"},{KEY_5,"5","5"},{KEY_6,"6","6"},{KEY_7,"7","7"},
-    {KEY_8,"8","8"},{KEY_9,"9","9"},{KEY_0,"0","0"},{KEY_MINUS,"MINUS","-"},
-    {KEY_EQUAL,"EQUAL","="},{KEY_BACKSPACE,"BKSP","BS"},
-    {KEY_TAB,"TAB","TAB"},{KEY_Q,"Q","Q"},{KEY_W,"W","W"},{KEY_E,"E","E"},
-    {KEY_R,"R","R"},{KEY_T,"T","T"},{KEY_Y,"Y","Y"},{KEY_U,"U","U"},
-    {KEY_I,"I","I"},{KEY_O,"O","O"},{KEY_P,"P","P"},
-    {KEY_LEFTBRACE,"LBRACE","["},{KEY_RIGHTBRACE,"RBRACE","]"},
-    {KEY_ENTER,"ENTER","RET"},
-    {KEY_CAPSLOCK,"CAPS","CAP"},{KEY_A,"A","A"},{KEY_S,"S","S"},
-    {KEY_D,"D","D"},{KEY_F,"F","F"},{KEY_G,"G","G"},{KEY_H,"H","H"},
-    {KEY_J,"J","J"},{KEY_K,"K","K"},{KEY_L,"L","L"},
-    {KEY_SEMICOLON,"SEMI",";"},{KEY_APOSTROPHE,"APOS","'"},
-    {KEY_BACKSLASH,"BSLASH","\\"},
-    {KEY_LEFTSHIFT,"LSHIFT","SHF"},{KEY_Z,"Z","Z"},{KEY_X,"X","X"},
-    {KEY_C,"C","C"},{KEY_V,"V","V"},{KEY_B,"B","B"},{KEY_N,"N","N"},
-    {KEY_M,"M","M"},{KEY_COMMA,"COMMA",","},{KEY_DOT,"DOT","."},
-    {KEY_SLASH,"SLASH","/"},{KEY_RIGHTSHIFT,"RSHIFT","SHF"},
-    {KEY_LEFTCTRL,"LCTRL","CTL"},{KEY_LEFTALT,"LALT","ALT"},
-    {KEY_SPACE,"SPACE","SPC"},{KEY_RIGHTALT,"RALT","ALT"},
-    {KEY_RIGHTCTRL,"RCTRL","CTL"},
-    {KEY_UP,"UP","UP"},{KEY_DOWN,"DOWN","DN"},{KEY_LEFT,"LEFT","LT"},
-    {KEY_RIGHT,"RIGHT","RT"},
-    {KEY_F1,"F1","F1"},{KEY_F2,"F2","F2"},{KEY_F3,"F3","F3"},
-    {KEY_F4,"F4","F4"},{KEY_F5,"F5","F5"},{KEY_F6,"F6","F6"},
-    {KEY_F7,"F7","F7"},{KEY_F8,"F8","F8"},{KEY_F9,"F9","F9"},
-    {KEY_F10,"F10","F10"},{KEY_F11,"F11","F11"},{KEY_F12,"F12","F12"},
-    {KEY_GRAVE,"GRAVE","`"},{KEY_DELETE,"DEL","DEL"},{KEY_HOME,"HOME","HOM"},
-    {KEY_END,"END","END"},{KEY_PAGEUP,"PGUP","PGU"},
-    {KEY_PAGEDOWN,"PGDN","PGD"},{KEY_INSERT,"INS","INS"},
-    {0,NULL,NULL}
-};
-
-static const char *usb_key_name(int c) {
-    for (int i=0; usb_ktab[i].name; i++) if (usb_ktab[i].code==c) return usb_ktab[i].name;
-    return NULL;
-}
-static const char *usb_key_sname(int c) {
-    for (int i=0; usb_ktab[i].name; i++) if (usb_ktab[i].code==c) return usb_ktab[i].sname;
-    return NULL;
-}
-
-/* ── Keyboard layout ────────────────────────────────────────────────────── */
-typedef struct { int col, row, w, code; } LKey;
-static const LKey usb_kblayout[] = {
-    {0,0,2,KEY_ESC},{2,0,2,KEY_1},{4,0,2,KEY_2},{6,0,2,KEY_3},{8,0,2,KEY_4},
-    {10,0,2,KEY_5},{12,0,2,KEY_6},{14,0,2,KEY_7},{16,0,2,KEY_8},{18,0,2,KEY_9},
-    {20,0,2,KEY_0},{22,0,2,KEY_MINUS},{24,0,2,KEY_EQUAL},{26,0,2,KEY_BACKSPACE},
-    {0,1,2,KEY_TAB},{2,1,2,KEY_Q},{4,1,2,KEY_W},{6,1,2,KEY_E},{8,1,2,KEY_R},
-    {10,1,2,KEY_T},{12,1,2,KEY_Y},{14,1,2,KEY_U},{16,1,2,KEY_I},{18,1,2,KEY_O},
-    {20,1,2,KEY_P},{22,1,2,KEY_LEFTBRACE},{24,1,2,KEY_RIGHTBRACE},{26,1,2,KEY_ENTER},
-    {0,2,3,KEY_CAPSLOCK},{3,2,2,KEY_A},{5,2,2,KEY_S},{7,2,2,KEY_D},{9,2,2,KEY_F},
-    {11,2,2,KEY_G},{13,2,2,KEY_H},{15,2,2,KEY_J},{17,2,2,KEY_K},{19,2,2,KEY_L},
-    {21,2,2,KEY_SEMICOLON},{23,2,2,KEY_APOSTROPHE},{25,2,3,KEY_BACKSLASH},
-    {0,3,3,KEY_LEFTSHIFT},{3,3,2,KEY_Z},{5,3,2,KEY_X},{7,3,2,KEY_C},{9,3,2,KEY_V},
-    {11,3,2,KEY_B},{13,3,2,KEY_N},{15,3,2,KEY_M},{17,3,2,KEY_COMMA},{19,3,2,KEY_DOT},
-    {21,3,2,KEY_SLASH},{23,3,5,KEY_RIGHTSHIFT},
-    {0,4,3,KEY_LEFTCTRL},{3,4,3,KEY_LEFTALT},{6,4,16,KEY_SPACE},
-    {22,4,3,KEY_RIGHTALT},{25,4,3,KEY_RIGHTCTRL},
-    {-1,-1,-1,-1}
-};
-
-/* ── USB device helpers ─────────────────────────────────────────────────── */
-/* Classification, the touchscreen exclusion and the /dev/input/event* walk are
- * common/input_scan.c's.  This list only says what is there — the testers
- * reopen by path — so every node input_scan() opened is closed again here. */
-static void usb_scan_devices(AppState *s) {
-    static const int cap[INPUT_KIND_COUNT] = {
-        [INPUT_KIND_KEYBOARD] = MAX_USB_DEV,
-        [INPUT_KIND_MOUSE]    = MAX_USB_DEV,
-        [INPUT_KIND_PAD]      = MAX_USB_DEV,
-    };
-    InputNode nodes[MAX_USB_DEV];
-    int n = input_scan(nodes, 0, MAX_USB_DEV, cap);
-    s->usb_dev_cnt=0; s->usb_kbd_idx=s->usb_mou_idx=s->usb_pad_idx=-1;
-    for (int i=0; i<n; i++) {
-        const InputNode *nd=&nodes[i];
-        close(nd->fd);
-        DevType t = nd->kind==INPUT_KIND_KEYBOARD ? DEV_KEYBOARD
-                  : nd->kind==INPUT_KIND_MOUSE    ? DEV_MOUSE : DEV_GAMEPAD;
-        USBDev *d=&s->usb_devs[s->usb_dev_cnt];
-        snprintf(d->name,sizeof(d->name),"%s",nd->name[0] ? nd->name : "Unknown");
-        snprintf(d->path,sizeof(d->path),"%.*s",(int)sizeof(nd->path),nd->path);
-        d->ev_num=-1; sscanf(nd->path,"/dev/input/event%d",&d->ev_num);
-        d->type=t; d->connected=true;
-        /* Only "is there one" — the testers open every node of the kind. */
-        if (t==DEV_KEYBOARD && s->usb_kbd_idx<0) s->usb_kbd_idx=s->usb_dev_cnt;
-        else if (t==DEV_MOUSE && s->usb_mou_idx<0) s->usb_mou_idx=s->usb_dev_cnt;
-        else if (t==DEV_GAMEPAD && s->usb_pad_idx<0) s->usb_pad_idx=s->usb_dev_cnt;
-        s->usb_dev_cnt++;
-    }
-    s->usb_bus_cnt = usb_bus_scan(USB_BUS_ROOT, s->usb_bus, USB_BUS_MAX);
-}
-
-static void usb_close(AppState *s);   /* defined below; used by the recovery path */
-
-/* Bring a dead USB port back, then re-enumerate.
- *
- * ⚠️ Recovery is TWO halves and this app only ever had the second.
- * usb_scan_devices() re-open()s /dev/input/event*, so it finds a node the kernel
- * has already created and cannot create one. On a port that came up dead no
- * node exists, so tapping RESCAN could never satisfy the hint this very tab
- * prints — "CONNECT A DEVICE AND TAP RESCAN".
- * The missing half is a MUSB driver re-probe.
- *
- * ⚠️ The rebind is NOT reimplemented here. /etc/init.d/usb-host owns it, along
- * with the retry and every warning about which sysfs writes are silent no-ops on
- * this SoC; a second copy of those paths in C is how the two drift apart. This
- * forks that script and reads its exit status — 0 means it enumerated something.
- *
- * ⚠️ It blocks for several seconds, and a rebind invalidates every open USB fd.
- * So paint a waiting screen first (the app is single-threaded and will not
- * repaint until this returns) and close our own fd on the way in. */
-static bool usb_recover_port(AppState *s) {
-    if (access(USB_HOST_INIT, X_OK) != 0) {
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "USB-HOST SCRIPT NOT INSTALLED");
-        s->status_time_ms = get_time_ms();
-        return false;
-    }
-
-    usb_close(s);   /* the rebind would invalidate it anyway */
-
-    if (g_fb) {
-        fb_clear(g_fb, COLOR_BLACK);
-        text_draw_centered(g_fb, (int)g_fb->width / 2,
-                           (int)g_fb->height / 2 - 20,
-                           "RE-PROBING USB CONTROLLER", COLOR_WHITE, 3);
-        text_draw_centered(g_fb, (int)g_fb->width / 2,
-                           (int)g_fb->height / 2 + 20,
-                           "THIS TAKES A FEW SECONDS", USB_COLOR_DIM, 2);
-        fb_swap(g_fb);
-    }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        snprintf(s->status_msg, sizeof(s->status_msg), "FORK FAILED");
-        s->status_time_ms = get_time_ms();
-        return false;
-    }
-    if (pid == 0) {
-        execl(USB_HOST_INIT, "usb-host", "recover", (char *)NULL);
-        _exit(127);
-    }
-
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-        ;   /* a signal must not orphan the child */
-
-    usb_scan_devices(s);
-    int found = usb_bus_peripherals(s->usb_bus, s->usb_bus_cnt);
-
-    if (found > 0)
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "PORT RECOVERED - %d DEVICE(S)", found);
-    else if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "COULD NOT RUN USB-HOST");
-    else
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "STILL NOTHING - IS A DEVICE PLUGGED IN?");
-    s->status_time_ms = get_time_ms();
-    return found > 0;
-}
-
-/* Open every scanned node of kind t, all non-blocking; the tester drains each
- * one every frame, so any of two mice (or keyboards, or pads) drives it without
- * the operator having to pick one. Returns how many opened. */
-static int usb_open_kind(AppState *s, DevType t) {
-    usb_close(s);
-    for (int i=0; i<s->usb_dev_cnt && s->usb_fd_cnt<MAX_USB_DEV; i++) {
-        if (s->usb_devs[i].type!=t) continue;
-        int fd=open(s->usb_devs[i].path, O_RDONLY|O_NONBLOCK);
-        if (fd<0) continue;
-        s->usb_fds[s->usb_fd_cnt]=fd;
-        s->usb_fd_dev[s->usb_fd_cnt]=i;
-        s->usb_fd_cnt++;
-    }
-    return s->usb_fd_cnt;
-}
-
-static void usb_close(AppState *s) {
-    for (int k=0; k<s->usb_fd_cnt; k++)
-        if (s->usb_fds[k]>=0) close(s->usb_fds[k]);
-    s->usb_fd_cnt=0;
-    s->usb_last_dev=-1;
-}
-
-static void usb_load_axes(AppState *s, int slot, int fd) {
-    memset(s->usb_pad.amin[slot],0,sizeof(s->usb_pad.amin[slot]));
-    memset(s->usb_pad.amax[slot],0,sizeof(s->usb_pad.amax[slot]));
-    unsigned long ab[NBITS(ABS_MAX)]={0};
-    if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(ab)), ab)<0) return;
-    for (int a=0; a<=ABS_MAX; a++) {
-        if (test_bit(a,ab)) {
-            struct input_absinfo inf;
-            if (ioctl(fd, EVIOCGABS(a), &inf)==0)
-                { s->usb_pad.amin[slot][a]=inf.minimum; s->usb_pad.amax[slot][a]=inf.maximum; }
-        }
-    }
-}
-
-/* One line naming the node behind the last event, node first so a truncated
- * product name still says which /dev/input/event* it was. out must hold 256
- * bytes (text_truncate copies up to that much). */
-static void usb_src_line(const AppState *s, char *out, int max_w, int scale) {
-    char raw[DEV_NAME_LEN+32];
-    if (s->usb_last_dev>=0 && s->usb_last_dev<s->usb_dev_cnt) {
-        const USBDev *d=&s->usb_devs[s->usb_last_dev];
-        snprintf(raw,sizeof(raw),"FROM EVENT%d: %s",d->ev_num,d->name);
-    } else {
-        snprintf(raw,sizeof(raw),"LISTENING ON %d NODE%s - USE ANY",
-                 s->usb_fd_cnt, s->usb_fd_cnt==1?"":"S");
-    }
-    text_truncate(out, raw, max_w, scale);
-}
-
-static int usb_norm_axis(int v, int mn, int mx) {
-    if (mx==mn) return 0;
-    int mid=(mn+mx)/2, hr=(mx-mn)/2;
-    if (!hr) return 0;
-    int n=((v-mid)*1000)/hr;
-    return n<-1000?-1000:n>1000?1000:n;
-}
-
-static int usb_norm_trig(int v, int mn, int mx) {
-    if (mx==mn) return 0;
-    int n=((v-mn)*1000)/(mx-mn);
-    return n<0?0:n>1000?1000:n;
-}
-
-static void usb_add_log(KbdState *k, const char *m) {
-    if (k->log_cnt>=LOG_LINES) {
-        for(int i=0;i<LOG_LINES-1;i++) memcpy(k->log[i],k->log[i+1],LOG_LINE_LEN);
-        k->log_cnt=LOG_LINES-1;
-    }
-    strncpy(k->log[k->log_cnt],m,LOG_LINE_LEN-1);
-    k->log[k->log_cnt][LOG_LINE_LEN-1]=0;
-    k->log_cnt++;
-}
-
-/* ── USB event processing ───────────────────────────────────────────────── */
-static void usb_proc_kbd(AppState *s) {
-  for (int k=0; k<s->usb_fd_cnt; k++) {
-    int ev=s->usb_devs[s->usb_fd_dev[k]].ev_num;
-    struct input_event e;
-    while (read(s->usb_fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
-        if (e.type!=EV_KEY || e.code>=KEY_MAX) continue;
-        s->usb_last_dev=s->usb_fd_dev[k];
-        const char *nm=usb_key_name(e.code);
-        char nb[32]; if(!nm){snprintf(nb,32,"KEY_%d",e.code);nm=nb;}
-        char lm[LOG_LINE_LEN];
-        if (e.value==1) {
-            s->usb_kbd.held[e.code]=true; s->usb_kbd.last_code=e.code;
-            strncpy(s->usb_kbd.last_name,nm,31); s->usb_kbd.last_name[31]=0;
-            snprintf(lm,sizeof(lm),"PRESS   %s (%d) EV%d",nm,e.code,ev);
-            usb_add_log(&s->usb_kbd,lm);
-        } else if (e.value==0) {
-            s->usb_kbd.held[e.code]=false;
-            snprintf(lm,sizeof(lm),"RELEASE %s (%d) EV%d",nm,e.code,ev);
-            usb_add_log(&s->usb_kbd,lm);
-        } else if (e.value==2) {
-            snprintf(lm,sizeof(lm),"REPEAT  %s (%d) EV%d",nm,e.code,ev);
-            usb_add_log(&s->usb_kbd,lm);
-        }
-    }
-  }
-}
-
-static void usb_proc_mouse(AppState *s) {
-  for (int k=0; k<s->usb_fd_cnt; k++) {
-    struct input_event e;
-    while (read(s->usb_fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
-        if (e.type==EV_REL || e.type==EV_KEY) s->usb_last_dev=s->usb_fd_dev[k];
-        if (e.type==EV_REL) {
-            if (e.code==REL_X) {
-                s->usb_mou.cx+=e.value;
-                if(s->usb_mou.cx<0) s->usb_mou.cx=0;
-                if(s->usb_mou.cx>=(int)g_fb->width) s->usb_mou.cx=(int)g_fb->width-1;
-            } else if (e.code==REL_Y) {
-                s->usb_mou.cy+=e.value;
-                if(s->usb_mou.cy<0) s->usb_mou.cy=0;
-                if(s->usb_mou.cy>=(int)g_fb->height) s->usb_mou.cy=(int)g_fb->height-1;
-            } else if (e.code==REL_WHEEL) {
-                s->usb_mou.scroll+=e.value; s->usb_mou.scroll_t=get_time_ms();
-            }
-        } else if (e.type==EV_KEY) {
-            bool p=(e.value!=0);
-            if (e.code==BTN_LEFT) s->usb_mou.bl=p;
-            else if (e.code==BTN_MIDDLE) s->usb_mou.bm=p;
-            else if (e.code==BTN_RIGHT) s->usb_mou.br=p;
-        }
-    }
-  }
-}
-
-static void usb_proc_pad(AppState *s) {
-  for (int k=0; k<s->usb_fd_cnt; k++) {
-    const int *mn=s->usb_pad.amin[k], *mx=s->usb_pad.amax[k];
-    struct input_event e;
-    while (read(s->usb_fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
-        if (e.type==EV_ABS || e.type==EV_KEY) s->usb_last_dev=s->usb_fd_dev[k];
-        if (e.type==EV_ABS) {
-            int c=e.code;
-            if (c>ABS_MAX) continue;
-            if (c==ABS_X) s->usb_pad.lx=usb_norm_axis(e.value,mn[c],mx[c]);
-            else if (c==ABS_Y) s->usb_pad.ly=usb_norm_axis(e.value,mn[c],mx[c]);
-            else if (c==ABS_RX||c==ABS_Z) s->usb_pad.rx=usb_norm_axis(e.value,mn[c],mx[c]);
-            else if (c==ABS_RY||c==ABS_RZ) s->usb_pad.ry=usb_norm_axis(e.value,mn[c],mx[c]);
-            else if (c==ABS_HAT0X) s->usb_pad.dx=e.value>0?1:e.value<0?-1:0;
-            else if (c==ABS_HAT0Y) s->usb_pad.dy=e.value>0?1:e.value<0?-1:0;
-            else if (c==ABS_BRAKE) s->usb_pad.tl=usb_norm_trig(e.value,mn[c],mx[c]);
-            else if (c==ABS_GAS) s->usb_pad.tr=usb_norm_trig(e.value,mn[c],mx[c]);
-        } else if (e.type==EV_KEY) {
-            int bi=-1;
-            if (e.code>=BTN_GAMEPAD && e.code<BTN_GAMEPAD+16) bi=e.code-BTN_GAMEPAD;
-            else if (e.code>=BTN_SOUTH && e.code<=BTN_THUMBR) bi=e.code-BTN_SOUTH;
-            else if (e.code>=BTN_TRIGGER && e.code<BTN_TRIGGER+16) bi=e.code-BTN_TRIGGER;
-            if (bi>=0 && bi<16) {
-                s->usb_pad.btns[bi]=(e.value!=0);
-                if (bi>=s->usb_pad.btn_cnt) s->usb_pad.btn_cnt=bi+1;
-            }
-            if (e.code==BTN_TL) s->usb_pad.tl=e.value?1000:0;
-            if (e.code==BTN_TR) s->usb_pad.tr=e.value?1000:0;
-        }
-    }
-  }
-}
-
-/* ── USB Draw: Main device list (inside tab content area) ────────────────── */
-static void draw_usb(Framebuffer *fb, AppState *s) {
-    int lx=CONTENT_LEFT, ly=CONTENT_Y+5;
-    int lw=CONTENT_WIDTH, lh=CONTENT_H-70;
-
-    fb_fill_rounded_rect(fb, lx, ly, lw, lh, 6, USB_COLOR_PANEL);
-    fb_draw_rounded_rect(fb, lx, ly, lw, lh, 6, USB_COLOR_PANEL_BD);
-    fb_draw_text(fb, lx+12, ly+10, "DETECTED USB DEVICES:", USB_COLOR_HDR, 2);
-
-    if (s->usb_bus_cnt==0) {
-        text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2-10,
-                           "NO USB DEVICES DETECTED", USB_COLOR_DIM, 2);
-        /* This tab never drew status_msg, so a recovery attempt that found
-         * nothing looked identical to one that never ran. Show the result where
-         * the hint goes — the hint has served its purpose by then. */
-        if (s->status_msg[0])
-            text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
-                               s->status_msg, COLOR_YELLOW, 2);
-        else
-            text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
-                               "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
-    } else {
-        int ry0=ly+36, rh=36;
-        /* The bus, not the evdev nodes: a sound card, a BT dongle or a hub has
-         * no keyboard/mouse/pad node and used to be invisible while it worked.
-         * The testers below still key off the evdev scan. */
-        for (int i=0; i<s->usb_bus_cnt && i<6; i++) {
-            UsbBusDev *d=&s->usb_bus[i]; int ry=ry0+i*rh;
-            if (i%2==0) fb_fill_rect(fb, lx+4, ry, lw-8, rh-2, RGB(25,25,38));
-            fb_fill_circle(fb, lx+20, ry+rh/2, 6, USB_COLOR_CONN);
-            uint32_t bc=USB_COLOR_DIM;
-            if      (!strcmp(d->kind,"AUDIO"))   bc=RGB(200,150,0);
-            else if (!strcmp(d->kind,"BT"))      bc=RGB(0,120,220);
-            else if (!strcmp(d->kind,"HID"))     bc=RGB(0,150,200);
-            else if (!strcmp(d->kind,"STORAGE")) bc=RGB(0,180,80);
-            int bw=text_measure_width(d->kind,2)+16;
-            fb_fill_rounded_rect(fb, lx+36, ry+4, bw, rh-10, 4, bc);
-            fb_draw_text(fb, lx+44, ry+10, d->kind, COLOR_WHITE, 2);
-            char tn[48]; text_truncate(tn, d->name, lw-bw-170, 2);
-            fb_draw_text(fb, lx+44+bw+10, ry+10, tn, COLOR_LABEL, 2);
-            char id[32];
-            if (d->card >= 0) snprintf(id, sizeof(id), "card %d  %04x:%04x", d->card, d->vid, d->pid);
-            else              snprintf(id, sizeof(id), "%04x:%04x", d->vid, d->pid);
-            fb_draw_text(fb, lx+lw-140, ry+14, id, USB_COLOR_DIM, 1);
-        }
-    }
-
-    int btn_y = CONTENT_Y + CONTENT_H - 55;
-    int bw_btn=130, bh_btn=40, gap=10;
-    (void)bh_btn;
-    int total_w = 4*bw_btn + 3*gap;
-    int sx = CONTENT_LEFT + (CONTENT_WIDTH - total_w)/2;
-
-    usb_btn_rescan.x = sx;               usb_btn_rescan.y = btn_y;
-    usb_btn_ktest.x = sx+bw_btn+gap;     usb_btn_ktest.y = btn_y;
-    usb_btn_mtest.x = sx+2*(bw_btn+gap); usb_btn_mtest.y = btn_y;
-    usb_btn_gtest.x = sx+3*(bw_btn+gap); usb_btn_gtest.y = btn_y;
-
-    usb_btn_ktest.bg_color = s->usb_kbd_idx>=0 ? BTN_COLOR_PRIMARY : USB_COLOR_DIM;
-    usb_btn_mtest.bg_color = s->usb_mou_idx>=0 ? BTN_COLOR_PRIMARY : USB_COLOR_DIM;
-    usb_btn_gtest.bg_color = s->usb_pad_idx>=0 ? BTN_COLOR_PRIMARY : USB_COLOR_DIM;
-
-    button_draw(fb, &usb_btn_rescan);
-    button_draw(fb, &usb_btn_ktest);
-    button_draw(fb, &usb_btn_mtest);
-    button_draw(fb, &usb_btn_gtest);
-}
-
-/* ── USB Draw: Keyboard fullscreen ──────────────────────────────────────── */
-static void draw_usb_kbd(Framebuffer *fb, AppState *s) {
-    fb_clear(fb, COLOR_BG);
-    button_draw(fb, &usb_btn_kback);
-    text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
-                       "KEYBOARD TEST", COLOR_WHITE, 3);
-    char inf[96];
-    if (s->usb_kbd.last_code>0 && s->usb_last_dev>=0)
-        snprintf(inf,sizeof(inf),"LAST KEY: %s (CODE %d) - EVENT%d", s->usb_kbd.last_name,
-                 s->usb_kbd.last_code, s->usb_devs[s->usb_last_dev].ev_num);
-    else if (s->usb_kbd.last_code>0)
-        snprintf(inf,sizeof(inf),"LAST KEY: %s (CODE %d)", s->usb_kbd.last_name, s->usb_kbd.last_code);
-    else snprintf(inf,sizeof(inf),"PRESS ANY KEY ON ANY USB KEYBOARD");
-    text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+52, inf, COLOR_CYAN, 2);
-
-    int kx=SCREEN_SAFE_LEFT+20, ky=SCREEN_SAFE_TOP+72, hu=26, kh=32, g=2;
-    for (int i=0; usb_kblayout[i].code>=0; i++) {
-        const LKey *k=&usb_kblayout[i];
-        int x=kx+k->col*hu, y=ky+k->row*(kh+g), w=k->w*hu-g;
-        bool h=(k->code<KEY_MAX)?s->usb_kbd.held[k->code]:false;
-        fb_fill_rounded_rect(fb,x,y,w,kh,3,h?USB_COLOR_KEY_DN:USB_COLOR_KEY_UP);
-        fb_draw_rounded_rect(fb,x,y,w,kh,3,USB_COLOR_KEY_BD);
-        const char *l=usb_key_sname(k->code);
-        if (l) {
-            int tw=text_measure_width(l,1);
-            fb_draw_text(fb,x+(w-tw)/2,y+(kh-8)/2,l,h?COLOR_WHITE:USB_COLOR_KEY_TXT,1);
-        }
-    }
-    int lx2=SCREEN_SAFE_LEFT+20, ly2=ky+5*(kh+g)+8;
-    int lw2=SCREEN_SAFE_WIDTH-40, lh2=SCREEN_SAFE_BOTTOM-ly2-10;
-    if (lh2<30) lh2=30;
-    fb_fill_rounded_rect(fb,lx2,ly2,lw2,lh2,4,USB_COLOR_LOG_BG);
-    fb_draw_rounded_rect(fb,lx2,ly2,lw2,lh2,4,USB_COLOR_PANEL_BD);
-    fb_draw_text(fb,lx2+8,ly2+4,"EVENT LOG:",USB_COLOR_DIM,1);
-    {
-        int sx=lx2+8+text_measure_width("EVENT LOG:",1)+16;
-        char src[256]; usb_src_line(s, src, lx2+lw2-8-sx, 1);
-        fb_draw_text(fb,sx,ly2+4,src,COLOR_CYAN,1);
-    }
-    int lny=ly2+16, llh=13, ml=(lh2-20)/llh;
-    if(ml>LOG_LINES) ml=LOG_LINES;
-    if(ml<0) ml=0;
-    int st=s->usb_kbd.log_cnt-ml; if(st<0) st=0;
-    for (int i=st; i<s->usb_kbd.log_cnt; i++)
-        fb_draw_text(fb,lx2+8,lny+(i-st)*llh,s->usb_kbd.log[i],USB_COLOR_LOG_TXT,1);
-}
-
-/* ── USB Draw: Mouse fullscreen ─────────────────────────────────────────── */
-static void draw_usb_mou(Framebuffer *fb, AppState *s) {
-    fb_clear(fb, COLOR_BG);
-    button_draw(fb, &usb_btn_mback);
-    text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
-                       "MOUSE TEST", COLOR_WHITE, 3);
-    int sw=screen_base_width, sh=screen_base_height;
-    int ax=SCREEN_SAFE_LEFT+20, ay=SCREEN_SAFE_TOP+55, aw=sw-240, ah=sh-ay-20;
-    fb_fill_rounded_rect(fb,ax,ay,aw,ah,6,RGB(15,15,25));
-    fb_draw_rounded_rect(fb,ax,ay,aw,ah,6,USB_COLOR_PANEL_BD);
-    for(int gx=ax+50;gx<ax+aw;gx+=50) fb_draw_line(fb,gx,ay+1,gx,ay+ah-2,RGB(25,25,35));
-    for(int gy=ay+50;gy<ay+ah;gy+=50) fb_draw_line(fb,ax+1,gy,ax+aw-2,gy,RGB(25,25,35));
-
-    int cx=s->usb_mou.cx, cy=s->usb_mou.cy;
-    int dx=cx<ax+2?ax+2:cx>=ax+aw-2?ax+aw-3:cx;
-    int dy=cy<ay+2?ay+2:cy>=ay+ah-2?ay+ah-3:cy;
-    fb_draw_line(fb,dx-15,dy,dx+15,dy,USB_COLOR_CURSOR_C);
-    fb_draw_line(fb,dx,dy-15,dx,dy+15,USB_COLOR_CURSOR_C);
-    fb_fill_circle(fb,dx,dy,3,USB_COLOR_CURSOR_C);
-
-    int px=ax+aw+15, pw=sw-px-15, py=ay;
-    fb_draw_text(fb,px,py,"POSITION",USB_COLOR_HDR,2);
-    char ps[32];
-    snprintf(ps,32,"X: %d",cx); fb_draw_text(fb,px,py+22,ps,COLOR_WHITE,2);
-    snprintf(ps,32,"Y: %d",cy); fb_draw_text(fb,px,py+42,ps,COLOR_WHITE,2);
-
-    int bsy=py+80;
-    fb_draw_text(fb,px,bsy,"BUTTONS",USB_COLOR_HDR,2);
-    struct { bool h; const char *l; int o; } mb[3]={{s->usb_mou.bl,"L",0},{s->usb_mou.bm,"M",45},{s->usb_mou.br,"R",90}};
-    for(int b=0;b<3;b++) {
-        uint32_t c=mb[b].h?USB_COLOR_MBTN_ON:USB_COLOR_MBTN_OFF;
-        int bx=px+20+mb[b].o, by2=bsy+40;
-        fb_fill_circle(fb,bx,by2,14,c); fb_draw_circle(fb,bx,by2,14,USB_COLOR_PANEL_BD);
-        fb_draw_text(fb,bx-4,by2+18,mb[b].l,COLOR_LABEL,2);
-    }
-
-    int ssy=bsy+95;
-    fb_draw_text(fb,px,ssy,"SCROLL",USB_COLOR_HDR,2);
-    snprintf(ps,32,"WHEEL: %d",s->usb_mou.scroll);
-    fb_draw_text(fb,px,ssy+22,ps,COLOR_WHITE,2);
-    uint32_t now=get_time_ms();
-    if (now-s->usb_mou.scroll_t<300) fb_fill_circle(fb,px+pw-20,ssy+10,8,USB_COLOR_SCROLL);
-    int brx=px, bry=ssy+45, brw=pw-10<20?20:pw-10, brh=20;
-    fb_fill_rect(fb,brx,bry,brw,brh,RGB(40,40,40));
-    int sv=s->usb_mou.scroll; if(sv>50) sv=50; if(sv<-50) sv=-50;
-    int ix=brx+brw/2+(sv*brw/100);
-    fb_fill_rect(fb,ix-3,bry,6,brh,USB_COLOR_SCROLL);
-    fb_draw_line(fb,brx+brw/2,bry,brx+brw/2,bry+brh,USB_COLOR_DIM);
-
-    /* Which node moved the crosshair: every mouse node is open at once. */
-    int sry=bry+brh+20;
-    fb_draw_text(fb,px,sry,"SOURCE",USB_COLOR_HDR,2);
-    if (s->usb_last_dev>=0 && s->usb_last_dev<s->usb_dev_cnt) {
-        const USBDev *d=&s->usb_devs[s->usb_last_dev];
-        snprintf(ps,32,"EVENT%d",d->ev_num);
-        fb_draw_text(fb,px,sry+22,ps,COLOR_WHITE,2);
-        char nm[256]; text_truncate(nm, d->name, pw-5, 1);
-        fb_draw_text(fb,px,sry+44,nm,COLOR_LABEL,1);
-    } else {
-        fb_draw_text(fb,px,sry+22,"NONE YET",USB_COLOR_DIM,2);
-    }
-    snprintf(ps,32,"%d MOUSE NODE%s OPEN",s->usb_fd_cnt,s->usb_fd_cnt==1?"":"S");
-    fb_draw_text(fb,px,sry+58,ps,USB_COLOR_DIM,1);
-    text_draw_centered(fb,sw/2,sh-15,"MOVE ANY MOUSE TO CONTROL CROSSHAIR",USB_COLOR_DIM,1);
-}
-
-/* ── USB Draw: Gamepad helpers ──────────────────────────────────────────── */
-static void usb_draw_stick(Framebuffer *fb, int cx, int cy, int r,
-                           int vx, int vy, const char *label) {
-    fb_fill_circle(fb,cx,cy,r,USB_COLOR_STICK_BG);
-    fb_draw_circle(fb,cx,cy,r,USB_COLOR_PANEL_BD);
-    fb_draw_line(fb,cx-r,cy,cx+r,cy,RGB(40,40,55));
-    fb_draw_line(fb,cx,cy-r,cx,cy+r,RGB(40,40,55));
-    int dpx=cx+(vx*(r-6))/1000, dpy=cy+(vy*(r-6))/1000;
-    fb_fill_circle(fb,dpx,dpy,6,USB_COLOR_STICK_DOT);
-    fb_draw_circle(fb,dpx,dpy,6,COLOR_WHITE);
-    text_draw_centered(fb,cx,cy+r+14,label,COLOR_LABEL,2);
-}
-
-static void usb_draw_dpad(Framebuffer *fb, int cx, int cy, int sz, int dx, int dy) {
-    int arm=sz/3, hf=arm/2;
-    fb_fill_rect(fb,cx-sz/2,cy-hf,sz,arm,RGB(50,50,60));
-    fb_fill_rect(fb,cx-hf,cy-sz/2,arm,sz,RGB(50,50,60));
-    if(dx<0) fb_fill_rect(fb,cx-sz/2,cy-hf,arm,arm,USB_COLOR_PAD_ON);
-    if(dx>0) fb_fill_rect(fb,cx+sz/2-arm,cy-hf,arm,arm,USB_COLOR_PAD_ON);
-    if(dy<0) fb_fill_rect(fb,cx-hf,cy-sz/2,arm,arm,USB_COLOR_PAD_ON);
-    if(dy>0) fb_fill_rect(fb,cx-hf,cy+sz/2-arm,arm,arm,USB_COLOR_PAD_ON);
-    fb_draw_rect(fb,cx-sz/2,cy-hf,sz,arm,USB_COLOR_PANEL_BD);
-    fb_draw_rect(fb,cx-hf,cy-sz/2,arm,sz,USB_COLOR_PANEL_BD);
-    text_draw_centered(fb,cx,cy+sz/2+14,"D-PAD",COLOR_LABEL,2);
-}
-
-/* ── USB Draw: Gamepad fullscreen ───────────────────────────────────────── */
-static void draw_usb_pad(Framebuffer *fb, AppState *s) {
-    fb_clear(fb, COLOR_BG);
-    button_draw(fb, &usb_btn_gback);
-    text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
-                       "GAMEPAD TEST", COLOR_WHITE, 3);
-    int sw=screen_base_width, sr=55;
-    int lcx=SCREEN_SAFE_LEFT+30+sr, lcy=SCREEN_SAFE_TOP+80+sr;
-    usb_draw_stick(fb,lcx,lcy,sr,s->usb_pad.lx,s->usb_pad.ly,"LEFT STICK");
-    usb_draw_dpad(fb,lcx,lcy+sr+70,70,s->usb_pad.dx,s->usb_pad.dy);
-    int rcx=sw-SCREEN_SAFE_LEFT-30-sr;
-    usb_draw_stick(fb,rcx,lcy,sr,s->usb_pad.rx,s->usb_pad.ry,"RIGHT STICK");
-
-    int bcnt=s->usb_pad.btn_cnt<1?8:s->usb_pad.btn_cnt;
-    if(bcnt>16) bcnt=16;
-    int cols=4, bsz=28, bgap=6;
-    int bax=lcx+sr+40, bay=SCREEN_SAFE_TOP+75;
-    for(int i=0;i<bcnt;i++) {
-        int col=i%cols, row=i/cols;
-        int bx=bax+col*(bsz+bgap)+bsz/2;
-        int by=bay+row*(bsz+bgap)+bsz/2;
-        uint32_t c=s->usb_pad.btns[i]?USB_COLOR_PAD_ON:USB_COLOR_PAD_OFF;
-        fb_fill_circle(fb,bx,by,bsz/2,c);
-        fb_draw_circle(fb,bx,by,bsz/2,USB_COLOR_PANEL_BD);
-        char bn[4]; snprintf(bn,4,"%d",i);
-        int tw=text_measure_width(bn,1);
-        fb_draw_text(fb,bx-tw/2,by-4,bn,COLOR_WHITE,1);
-    }
-    fb_draw_text(fb,bax,bay-16,"BUTTONS",USB_COLOR_HDR,2);
-
-    int trw=150, trh=18, try2=SCREEN_SAFE_BOTTOM-80;
-    int trlx=(sw/2)-trw-20, trrx=(sw/2)+20;
-    fb_draw_text(fb,trlx,try2-16,"LT",COLOR_LABEL,1);
-    fb_fill_rect(fb,trlx,try2,trw,trh,USB_COLOR_TRIG_BG);
-    if(s->usb_pad.tl>0) fb_fill_rect(fb,trlx,try2,(s->usb_pad.tl*trw)/1000,trh,USB_COLOR_TRIG_FILL);
-    fb_draw_rect(fb,trlx,try2,trw,trh,USB_COLOR_PANEL_BD);
-    char tv[16]; snprintf(tv,16,"%d%%",s->usb_pad.tl/10);
-    fb_draw_text(fb,trlx+trw+8,try2+4,tv,COLOR_WHITE,1);
-
-    fb_draw_text(fb,trrx,try2-16,"RT",COLOR_LABEL,1);
-    fb_fill_rect(fb,trrx,try2,trw,trh,USB_COLOR_TRIG_BG);
-    if(s->usb_pad.tr>0) fb_fill_rect(fb,trrx,try2,(s->usb_pad.tr*trw)/1000,trh,USB_COLOR_TRIG_FILL);
-    fb_draw_rect(fb,trrx,try2,trw,trh,USB_COLOR_PANEL_BD);
-    snprintf(tv,16,"%d%%",s->usb_pad.tr/10);
-    fb_draw_text(fb,trrx+trw+8,try2+4,tv,COLOR_WHITE,1);
-
-    int rvx=bax, rvy=bay+(bcnt/cols+1)*(bsz+bgap)+20;
-    fb_draw_text(fb,rvx,rvy,"RAW AXES",USB_COLOR_HDR,2);
-    char rv[48];
-    snprintf(rv,48,"LX:%+5d LY:%+5d",s->usb_pad.lx,s->usb_pad.ly);
-    fb_draw_text(fb,rvx,rvy+20,rv,COLOR_LABEL,1);
-    snprintf(rv,48,"RX:%+5d RY:%+5d",s->usb_pad.rx,s->usb_pad.ry);
-    fb_draw_text(fb,rvx,rvy+34,rv,COLOR_LABEL,1);
-    snprintf(rv,48,"DX:%+2d DY:%+2d",s->usb_pad.dx,s->usb_pad.dy);
-    fb_draw_text(fb,rvx,rvy+48,rv,COLOR_LABEL,1);
-
-    /* Every pad node is open at once; name the one that sent the last event. */
-    char src[256]; usb_src_line(s, src, SCREEN_SAFE_WIDTH-20, 2);
-    text_draw_centered(fb,sw/2,SCREEN_SAFE_BOTTOM-30,src,COLOR_CYAN,2);
-}
-
-/* ── USB Tab: UI creation ───────────────────────────────────────────────── */
-static void create_usb_ui(void) {
-    int bw=130, bh=40;
-    button_init_full(&usb_btn_rescan, 0, 0, bw, bh, "RESCAN",
-                     BTN_COLOR_INFO, COLOR_WHITE, RGB(0,200,255), 2);
-    button_init_full(&usb_btn_ktest, 0, 0, bw, bh, "KBD TEST",
-                     BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), 2);
-    button_init_full(&usb_btn_mtest, 0, 0, bw, bh, "MOUSE TEST",
-                     BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), 2);
-    button_init_full(&usb_btn_gtest, 0, 0, bw, bh, "PAD TEST",
-                     BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), 2);
-    button_init_full(&usb_btn_kback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
-                     90, 40, "< BACK", BTN_COLOR_WARNING, COLOR_WHITE, RGB(255,200,0), 2);
-    button_init_full(&usb_btn_mback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
-                     90, 40, "< BACK", BTN_COLOR_WARNING, COLOR_WHITE, RGB(255,200,0), 2);
-    button_init_full(&usb_btn_gback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
-                     90, 40, "< BACK", BTN_COLOR_WARNING, COLOR_WHITE, RGB(255,200,0), 2);
-}
-
-/* ── USB Tab: input handling (tab content area, main screen only) ────────── */
-static void handle_usb_input(AppState *state, int tx, int ty,
-                             bool touching, uint32_t now) {
-    if (state->usb_scr != USB_SCR_MAIN) return;
-
-    if (button_update(&usb_btn_rescan, tx, ty, touching, now)) {
-        usb_scan_devices(state);
-        /* An empty scan is the dead-port signature: when the port is unpowered
-         * NOTHING enumerates, so finding nothing is exactly when a re-probe is
-         * worth its few seconds. If something is already listed the port is live,
-         * and a device plugged in later enumerates on its own (measured on .188
-         * across gaps of 70-300 s) — so do not disturb a working bus. A hub
-         * alone counts as empty: that is how a dead port looks behind one. */
-        if (usb_bus_peripherals(state->usb_bus, state->usb_bus_cnt) == 0)
-            usb_recover_port(state);
-    }
-
-    if (state->usb_kbd_idx >= 0 &&
-        button_update(&usb_btn_ktest, tx, ty, touching, now)) {
-        memset(&state->usb_kbd, 0, sizeof(state->usb_kbd));
-        if (usb_open_kind(state, DEV_KEYBOARD) > 0)
-            state->usb_scr = USB_SCR_KEYBOARD;
-    }
-    if (state->usb_mou_idx >= 0 &&
-        button_update(&usb_btn_mtest, tx, ty, touching, now)) {
-        memset(&state->usb_mou, 0, sizeof(state->usb_mou));
-        state->usb_mou.cx = (int)g_fb->width / 2;
-        state->usb_mou.cy = (int)g_fb->height / 2;
-        if (usb_open_kind(state, DEV_MOUSE) > 0)
-            state->usb_scr = USB_SCR_MOUSE;
-    }
-    if (state->usb_pad_idx >= 0 &&
-        button_update(&usb_btn_gtest, tx, ty, touching, now)) {
-        memset(&state->usb_pad, 0, sizeof(state->usb_pad));
-        state->usb_pad.btn_cnt = 8;
-        if (usb_open_kind(state, DEV_GAMEPAD) > 0) {
-            for (int k = 0; k < state->usb_fd_cnt; k++)
-                usb_load_axes(state, k, state->usb_fds[k]);
-            state->usb_scr = USB_SCR_GAMEPAD;
-        }
-    }
-}
-
-/* ── USB Tab: fullscreen runner (keyboard/mouse/gamepad test screens) ────── */
-static void run_usb_fullscreen(Framebuffer *fb, TouchInput *touch, AppState *state) {
-    while (running && state->usb_scr != USB_SCR_MAIN) {
-        uint32_t now = get_time_ms();
-
-        switch (state->usb_scr) {
-            case USB_SCR_KEYBOARD: usb_proc_kbd(state); break;
-            case USB_SCR_MOUSE:    usb_proc_mouse(state); break;
-            case USB_SCR_GAMEPAD:  usb_proc_pad(state); break;
-            default: break;
-        }
-
-        switch (state->usb_scr) {
-            case USB_SCR_KEYBOARD: draw_usb_kbd(fb, state); break;
-            case USB_SCR_MOUSE:    draw_usb_mou(fb, state); break;
-            case USB_SCR_GAMEPAD:  draw_usb_pad(fb, state); break;
-            default: break;
-        }
-        fb_swap(fb);
-
-        touch_poll(touch);
-        TouchState ts = touch_get_state(touch);
-        int tx = ts.x, ty = ts.y;
-        bool touching = ts.pressed || ts.held;
-
-        switch (state->usb_scr) {
-        case USB_SCR_KEYBOARD:
-            if (button_update(&usb_btn_kback, tx, ty, touching, now)) {
-                usb_close(state); state->usb_scr = USB_SCR_MAIN;
-            }
-            break;
-        case USB_SCR_MOUSE:
-            if (button_update(&usb_btn_mback, tx, ty, touching, now)) {
-                usb_close(state); state->usb_scr = USB_SCR_MAIN;
-            }
-            break;
-        case USB_SCR_GAMEPAD:
-            if (button_update(&usb_btn_gback, tx, ty, touching, now)) {
-                usb_close(state); state->usb_scr = USB_SCR_MAIN;
-            }
-            break;
-        default: break;
-        }
-
-        usleep(16000);
-    }
-}
-
-
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * Full-Screen Mode Handler
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
@@ -3315,7 +2504,6 @@ static void rebuild_ui(AppState *state) {
     create_settings_ui(state);
     create_tests_ui();
     create_display_ui(state);
-    create_usb_ui();
     /* Each prints its "control_panel: <page> stack …" receipt. */
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page) home_items[i].page->layout();
@@ -3344,8 +2532,6 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
              * and every tab's widgets are laid out from SCREEN_SAFE_*. */
             rebuild_ui(state);
         }
-    } else if (state->active_tab == TAB_USB) {
-        run_usb_fullscreen(fb, touch, state);
     }
     /* Drain any lingering touch events (press/release) left in the input
      * buffer by the full-screen mode.  Without this, the stale release
@@ -3414,13 +2600,8 @@ int main(void) {
     state.test_sub = TEST_MENU_VIEW;
     state.test_selected = -1;
     state.calib_sub = CALIB_IDLE;
-    state.usb_scr = USB_SCR_MAIN;
-    state.usb_fd_cnt = 0;
-    state.usb_last_dev = -1;
-    state.usb_kbd_idx = state.usb_mou_idx = state.usb_pad_idx = -1;
 
     rebuild_ui(&state);
-    usb_scan_devices(&state);
     home_load_icons();   /* the home grid is the startup view; set_tab() opens Settings' bus */
 
     bool needs_redraw = true;  /* first frame always draws */
@@ -3436,7 +2617,6 @@ int main(void) {
 
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
                        || (state.active_tab == TAB_DISPLAY && state.calib_sub != CALIB_IDLE)
-                       || (state.active_tab == TAB_USB && state.usb_scr != USB_SCR_MAIN)
                        || (state.active_tab == TAB_PAGE && state.page_fullscreen);
 
         if (fullscreen) {
@@ -3456,7 +2636,6 @@ int main(void) {
                 case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
                 case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
-                case TAB_USB:         draw_usb(&fb, &state);         break;
                 case TAB_PAGE:        state.page->draw(&fb);         break;
                 default: break;
             }
@@ -3488,15 +2667,7 @@ int main(void) {
         int           prev_test_sel  = state.test_selected;
         CalibSubState prev_calib_sub = state.calib_sub;
         ConfirmAction prev_confirm   = state.confirm_action;
-        USBScreen     prev_usb_scr   = state.usb_scr;
-        /* ⚠️ The device count must be watched, or a RESCAN that discovers (or
-         * loses) a device changes no field in the check below, needs_redraw stays
-         * false, and the list keeps showing the pre-scan state. That was true of
-         * the button before it could recover the port too — the scan worked and
-         * the screen did not admit it. */
-        int           prev_usb_cnt   = state.usb_dev_cnt;
-        int           prev_bus_cnt   = state.usb_bus_cnt;
-        /* ⚠️ And the DAC's presence, for the same reason one line up: the settings
+        /* ⚠️ The DAC's presence must be watched too: the settings
          * tab's OUT button is dimmed from a live access("/dev/dsp1") every frame,
          * but "every frame" means every frame that gets PAINTED.  Without this the
          * probe is recomputed correctly and the screen never shows it — plug the
@@ -3529,7 +2700,6 @@ int main(void) {
                 case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
                 case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
-                case TAB_USB:         handle_usb_input(&state, tx, ty, touching, now);      break;
                 case TAB_PAGE: {
                     /* A page's visual state is its own, so it says when it
                      * changed; a queued full-screen run repaints too, exactly
@@ -3574,9 +2744,6 @@ int main(void) {
             prev_test_sel  != state.test_selected   ||
             prev_calib_sub != state.calib_sub       ||
             prev_confirm   != state.confirm_action  ||
-            prev_usb_scr   != state.usb_scr         ||
-            prev_usb_cnt   != state.usb_dev_cnt     ||
-            prev_bus_cnt   != state.usb_bus_cnt     ||
             prev_out_usb   != audio_out_usb_present() ||
             state.page_dirty) {
             needs_redraw = true;
@@ -3593,7 +2760,6 @@ int main(void) {
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
-    usb_close(&state);   /* a signal can end the loop inside a tester */
     settings_audio_close(&state);
     hw_leds_off();
     hw_reload_config();

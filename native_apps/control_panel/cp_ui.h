@@ -1,8 +1,9 @@
 /* cp_ui.h — what control_panel's page modules share with control_panel.c.
  *
  * control_panel.c owns the tab bar, the home grid and every page that has not
- * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c, network_page.c) lays itself out
- * in the same content rectangle and draws with the same helpers.  This header is the one
+ * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c,
+ * network_page.c, usb_page.c) lays itself out in the same content rectangle and
+ * draws with the same helpers.  This header is the one
  * home for that rectangle and those helpers, so a moved page cannot carry a
  * second copy of either.  The helper bodies stay in control_panel.c.
  *
@@ -33,6 +34,7 @@
 #define BAR_HEIGHT 20
 
 #define COLOR_LABEL       RGB(180, 180, 180)
+#define COLOR_BG          RGB(20, 20, 30)      /* the panel's background */
 #define COLOR_DISABLED    RGB(120, 120, 120)   /* a control switched off */
 
 /* A section title at y, with a rule running to CONTENT_RIGHT. */
@@ -62,5 +64,9 @@ void draw_test_screen(Framebuffer *fb, const char *title,
 
 /* One poll; true on a press, with its position. */
 bool check_touch(TouchInput *touch, int *x, int *y);
+
+/* False once SIGINT/SIGTERM asked the panel to quit: a full-screen loop that
+ * runs until the operator leaves it checks this, so a stop is not held up. */
+bool cp_running(void);
 
 #endif

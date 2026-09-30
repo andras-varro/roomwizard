@@ -60,5 +60,6 @@ extern const CpPage cp_led_page;       /* led_page.c */
 extern const CpPage cp_monitor_page;   /* monitor_page.c */
 extern const CpPage cp_info_page;      /* info_page.c */
 extern const CpPage cp_network_page;   /* network_page.c */
+extern const CpPage cp_usb_page;       /* usb_page.c */
 
 #endif
