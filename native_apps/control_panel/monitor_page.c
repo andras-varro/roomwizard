@@ -1,7 +1,7 @@
 /* monitor_page.c — control_panel's Monitor page: uptime, load, memory, storage.
  *
  * Opened from the home grid's Monitor tile, and the one home for the live
- * system figures; the Diagnostics tab carries none of them.  Exposed only as
+ * system figures.  Exposed only as
  * cp_monitor_page (cp_page.h); its state lives in this file.
  *
  * Display only: nothing is saved, so there is no reset_defaults.  The figures

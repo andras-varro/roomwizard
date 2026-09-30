@@ -152,20 +152,6 @@ static int  label_y[ROW_COUNT], value_y[ROW_COUNT], value_x;
 static int  sec_sys_y, sec_hw_y, sec_cfg_y;
 static int  keys_y, key_lines;    /* scale-1 config lines: first y, how many fit */
 
-/* A row's value, cut with ".." so it ends by CONTENT_RIGHT; returns true if cut. */
-static bool fit_value(const char *src, int x, int scale, char *out, size_t len) {
-    snprintf(out, len, "%s", src);
-    int room = CONTENT_RIGHT - x;
-    if (text_measure_width(out, scale) <= room) return false;
-    size_t n = strlen(out);
-    while (n > 2 && text_measure_width(out, scale) > room) {
-        out[--n] = '\0';
-        out[n - 1] = '.';
-        out[n - 2] = '.';
-    }
-    return true;
-}
-
 static const char *row_value(int row, const Framebuffer *fb, char *buf, size_t len) {
     switch (row) {
     case ROW_KERNEL:      return info.kernel;

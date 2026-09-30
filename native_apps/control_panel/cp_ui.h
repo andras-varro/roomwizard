@@ -1,7 +1,7 @@
 /* cp_ui.h — what control_panel's page modules share with control_panel.c.
  *
  * control_panel.c owns the tab bar, the home grid and every page that has not
- * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c) lays itself out
+ * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c, network_page.c) lays itself out
  * in the same content rectangle and draws with the same helpers.  This header is the one
  * home for that rectangle and those helpers, so a moved page cannot carry a
  * second copy of either.  The helper bodies stay in control_panel.c.
@@ -47,6 +47,10 @@ void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
  * inside; label (if non-empty) is drawn 18 px above it. */
 void draw_usage_bar(Framebuffer *fb, int x, int y, int width, int height,
                     unsigned long used, unsigned long total, const char *label);
+
+/* src drawn from x at scale, cut with ".." so it ends by CONTENT_RIGHT, into
+ * out; true if it had to be cut (what a page's receipt counts). */
+bool fit_value(const char *src, int x, int scale, char *out, size_t len);
 
 /* The first line of a file, newline stripped; 0, or -1 with buf empty. */
 int read_file_line(const char *path, char *buf, size_t len);

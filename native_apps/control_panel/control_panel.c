@@ -3,14 +3,15 @@
  *
  * Opens on an icon grid (the home view); each tile opens a page:
  *   Settings     — audio: enable, music/effects, output device
- *   Diagnostics  — system/hardware/config/network info
- *   Tests        — backlight, touch zone, display, audio and multi-touch tests
+ *   Tests       — backlight, touch zone, display, audio and multi-touch tests
  *   Display      — backlight, orientation, touch calibration, bezel margins
  *   USB          — the bus list and the keyboard/mouse/pad testers
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
  *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
  *                  grid-only too
+ *   Information  — what this unit is (info_page.c); grid-only
+ *   Network      — gateway, DNS and every interface (network_page.c); grid-only
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -45,10 +46,6 @@
 #include <errno.h>
 #include <linux/input.h>
 #include <poll.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 /* SCREEN_W / SCREEN_H removed — use screen_base_width / screen_base_height
    runtime globals (from framebuffer.h) or fb->width / fb->height instead. */
@@ -68,7 +65,6 @@
 #define COLOR_BAR_FILL       RGB(0, 180, 60)
 #define COLOR_BAR_WARN       COLOR_YELLOW
 #define COLOR_BAR_CRIT       COLOR_RED
-#define COLOR_PAGE_IND       RGB(120, 120, 120)
 
 /* USB tab colors (avoid clashing with existing COLOR_xxx names) */
 #define USB_COLOR_PANEL        RGB(30, 30, 45)
@@ -181,7 +177,6 @@ typedef enum { USB_SCR_MAIN, USB_SCR_KEYBOARD, USB_SCR_MOUSE, USB_SCR_GAMEPAD } 
 
 typedef enum {
     TAB_SETTINGS,
-    TAB_DIAGNOSTICS,
     TAB_TESTS,
     TAB_DISPLAY,
     TAB_USB,
@@ -193,11 +188,6 @@ typedef enum {
                     reached from its home tile only; the tab bar shows BACK
                     and the page's name */
 } ActiveTab;
-
-typedef enum {
-    DIAG_NETWORK,
-    DIAG_PAGE_COUNT
-} DiagPage;
 
 typedef enum {
     TEST_MENU_VIEW,
@@ -221,32 +211,31 @@ typedef enum {
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY", "USB" };
+static const char *tab_names[TAB_COUNT] = { "SETTINGS", "TESTS", "DISPLAY", "USB" };
 
 /* The home grid, and the page registry: a row with a page opens that CpPage,
  * and takes its label and icon from it (one name, one home); every page named
  * here is loaded, laid out and reset through it.  The other rows still open the
- * tab (and Diagnostics page) that carries their settings, and move to a page
- * of their own one icon at a time, deleting the duplicate as each lands.
+ * tab that carries their settings, and move to a page of their own one icon at
+ * a time, deleting the duplicate as each lands.
  * Bluetooth has no page yet, so no tile. icon NULL = the grid's letter tile. */
 typedef struct {
     const char   *label;       /* NULL when page is set */
     const char   *icon;        /* basename under /opt/roomwizard/icons/, no .ppm */
     ActiveTab     tab;         /* TAB_PAGE when page is set */
-    DiagPage      diag_page;   /* only read when tab == TAB_DIAGNOSTICS */
     const CpPage *page;
 } HomeItem;
 
 static const HomeItem home_items[] = {
-    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_NETWORK, NULL },
-    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_NETWORK, NULL },
-    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_NETWORK, NULL },
+    { "Audio",       "cp_audio",   TAB_SETTINGS, NULL },
+    { "Display",     "cp_display", TAB_DISPLAY,  NULL },
+    { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
-    { "USB",         "cp_usb",     TAB_USB,         DIAG_NETWORK, NULL },
-    { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK, NULL },
+    { "USB",         "cp_usb",     TAB_USB,      NULL },
+    { .tab = TAB_PAGE, .page = &cp_network_page },
     { .tab = TAB_PAGE, .page = &cp_monitor_page },
     { .tab = TAB_PAGE, .page = &cp_info_page },
-    { "Tests",       NULL,         TAB_TESTS,       DIAG_NETWORK, NULL },
+    { "Tests",       NULL,         TAB_TESTS,    NULL },
 };
 #define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define HOME_TITLE_H    50
@@ -272,12 +261,6 @@ static const struct {
 };
 #define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
 
-/* Indexed by DiagPage and sized by it, so the table can never be shorter than
- * the enum; each title names its page rather than relying on position. */
-static const char *diag_page_titles[DIAG_PAGE_COUNT] = {
-    [DIAG_NETWORK]  = "NETWORK",
-};
-
 typedef struct {
     ActiveTab     active_tab;
     bool          audio_enabled;
@@ -298,8 +281,6 @@ typedef struct {
     char          status_msg[64];
     uint32_t      status_time_ms;
     int           home_page;          /* page of the home grid */
-    DiagPage      diag_page;
-    bool          diag_needs_refresh;
     TestSubState  test_sub;
     int           test_selected;
     CalibSubState calib_sub;
@@ -346,9 +327,6 @@ static ToggleSwitch music_toggle, effects_toggle;
 static Button audio_dev_btn;
 static Button test_audio_btn;
 static Button save_btn, reset_btn;
-
-/* Diagnostics */
-static Button diag_prev_btn, diag_next_btn;
 
 /* Tests */
 static UILayout test_layout;
@@ -402,6 +380,19 @@ void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
                  active ? COLOR_WHITE : COLOR_DISABLED, 2);
 }
 
+bool fit_value(const char *src, int x, int scale, char *out, size_t len) {
+    snprintf(out, len, "%s", src);
+    int room = CONTENT_RIGHT - x;
+    if (text_measure_width(out, scale) <= room) return false;
+    size_t n = strlen(out);
+    while (n > 2 && text_measure_width(out, scale) > room) {
+        out[--n] = '\0';
+        out[n - 1] = '.';
+        out[n - 2] = '.';
+    }
+    return true;
+}
+
 static int draw_info_row(Framebuffer *fb, int y, const char *label,
                          const char *value, uint32_t value_color) {
     int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
@@ -451,7 +442,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "SET", "DIAG", "TEST", "DISP", "USB" };
+    static const char *short_labels[] = { "SET", "TEST", "DISP", "USB" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -530,8 +521,6 @@ static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
         if (page->enter) page->enter();
         state->page_dirty = true;
     }
-    if (tab == TAB_DIAGNOSTICS)
-        state->diag_needs_refresh = true;
     if (prev_tab == TAB_USB && tab != TAB_USB)
         usb_close(state);
     if (prev_tab == TAB_SETTINGS && tab != TAB_SETTINGS)
@@ -625,7 +614,6 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
         return;
     const HomeItem *it = &home_items[start + pressed];
     if (it->page) { set_page(state, it->page); return; }
-    if (it->tab == TAB_DIAGNOSTICS) state->diag_page = it->diag_page;
     set_tab(state, it->tab);
 }
 
@@ -1002,7 +990,7 @@ static void handle_settings_input(AppState *state, int tx, int ty,
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
- * Diagnostics Tab  (from hardware_diag.c)
+ * File helper (read_file_line, shared through cp_ui.h)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 int read_file_line(const char *path, char *buf, size_t len) {
@@ -1013,187 +1001,6 @@ int read_file_line(const char *path, char *buf, size_t len) {
     size_t n = strlen(buf);
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = '\0';
     return 0;
-}
-
-// Read IP address for a given interface
-static void read_interface_ip(const char *ifname, char *ip_buf, size_t buf_size) {
-    struct ifaddrs *ifaddr, *ifa;
-    snprintf(ip_buf, buf_size, "N/A");
-
-    if (getifaddrs(&ifaddr) == -1) return;
-
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL) continue;
-        if (strcmp(ifa->ifa_name, ifname) != 0) continue;
-        if (ifa->ifa_addr->sa_family == AF_INET) {
-            struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
-            inet_ntop(AF_INET, &addr->sin_addr, ip_buf, buf_size);
-            break;
-        }
-    }
-    freeifaddrs(ifaddr);
-}
-
-// Read MAC address for a given interface
-static void read_interface_mac(const char *ifname, char *mac_buf, size_t buf_size) {
-    char path[128];
-    snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifname);
-    snprintf(mac_buf, buf_size, "N/A");
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-    if (fgets(mac_buf, buf_size, f)) {
-        // Remove trailing newline
-        char *nl = strchr(mac_buf, '\n');
-        if (nl) *nl = '\0';
-    }
-    fclose(f);
-}
-
-// Read default gateway from /proc/net/route
-static void read_default_gateway(char *gw_buf, size_t buf_size) {
-    snprintf(gw_buf, buf_size, "N/A");
-
-    FILE *f = fopen("/proc/net/route", "r");
-    if (!f) return;
-
-    char line[256];
-    if (!fgets(line, sizeof(line), f)) { fclose(f); return; }  // empty file: no header
-    while (fgets(line, sizeof(line), f)) {
-        char iface[32];
-        unsigned long dest, gateway;
-        if (sscanf(line, "%31s %lx %lx", iface, &dest, &gateway) == 3) {
-            if (dest == 0) { // default route
-                struct in_addr addr;
-                addr.s_addr = (in_addr_t)gateway;
-                snprintf(gw_buf, buf_size, "%s (%s)", inet_ntoa(addr), iface);
-                break;
-            }
-        }
-    }
-    fclose(f);
-}
-
-// Read DNS server from /etc/resolv.conf
-static void read_dns_server(char *dns_buf, size_t buf_size) {
-    snprintf(dns_buf, buf_size, "N/A");
-
-    FILE *f = fopen("/etc/resolv.conf", "r");
-    if (!f) return;
-
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        char ns[64];
-        if (sscanf(line, "nameserver %63s", ns) == 1) {
-            snprintf(dns_buf, buf_size, "%s", ns);
-            break;
-        }
-    }
-    fclose(f);
-}
-
-// Check if a network interface is up
-static bool is_interface_up(const char *ifname) {
-    char path[128];
-    snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", ifname);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return false;
-
-    char state[32] = {0};
-    if (fgets(state, sizeof(state), f)) {
-        char *nl = strchr(state, '\n');
-        if (nl) *nl = '\0';
-    }
-    fclose(f);
-    return (strcmp(state, "up") == 0);
-}
-
-static void create_diagnostics_ui(void) {
-    int nav_y = CONTENT_Y + CONTENT_H - 55;
-    button_init_full(&diag_prev_btn, CONTENT_LEFT, nav_y,
-                     120, 45, "< PREV", RGB(60, 60, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&diag_next_btn, CONTENT_RIGHT - 120, nav_y,
-                     120, 45, "NEXT >", RGB(60, 60, 80), COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-}
-
-static void draw_diag_network(Framebuffer *fb) {
-    int y = CONTENT_Y + 30;
-    char buf[128];
-    char ip[64], mac[64];
-
-    // Check common interfaces: eth0, usb0, wlan0
-    const char *interfaces[] = { "eth0", "usb0", "wlan0", NULL };
-
-    for (int i = 0; interfaces[i] != NULL; i++) {
-        const char *ifname = interfaces[i];
-
-        // Check if interface exists
-        char path[128];
-        snprintf(path, sizeof(path), "/sys/class/net/%s", ifname);
-        if (access(path, F_OK) != 0) continue;
-
-        // Interface header with status
-        bool up = is_interface_up(ifname);
-        snprintf(buf, sizeof(buf), "%s [%s]", ifname, up ? "UP" : "DOWN");
-        y = draw_info_row(fb, y, "INTERFACE:", buf,
-                          up ? COLOR_GREEN : COLOR_RED);
-
-        // IP address
-        read_interface_ip(ifname, ip, sizeof(ip));
-        snprintf(buf, sizeof(buf), "%s", ip);
-        y = draw_info_row(fb, y, "  IP ADDR:", buf, COLOR_DATA);
-
-        // MAC address
-        read_interface_mac(ifname, mac, sizeof(mac));
-        y = draw_info_row(fb, y, "  MAC:", mac, COLOR_DATA);
-
-        y += 4;
-    }
-
-    // Default gateway
-    char gw[128];
-    read_default_gateway(gw, sizeof(gw));
-    y = draw_info_row(fb, y, "GATEWAY:", gw, COLOR_DATA);
-
-    // DNS server
-    char dns[64];
-    read_dns_server(dns, sizeof(dns));
-    y = draw_info_row(fb, y, "DNS:", dns, COLOR_DATA);
-}
-
-static void draw_diagnostics(Framebuffer *fb, AppState *state) {
-    fb_draw_text(fb, CONTENT_LEFT+10, CONTENT_Y+5,
-                 diag_page_titles[state->diag_page], COLOR_HEADER_TEXT, 2);
-    char pi[16]; snprintf(pi, sizeof(pi), "PAGE %d/%d", state->diag_page+1, DIAG_PAGE_COUNT);
-    fb_draw_text(fb, CONTENT_RIGHT-120, CONTENT_Y+5, pi, COLOR_PAGE_IND, 2);
-
-    switch (state->diag_page) {
-        case DIAG_NETWORK: draw_diag_network(fb);  break;
-        default: break;
-    }
-    if (state->diag_page > 0) button_draw(fb, &diag_prev_btn);
-    if (state->diag_page < DIAG_PAGE_COUNT - 1)
-        button_set_text(&diag_next_btn, "NEXT >");
-    else
-        button_set_text(&diag_next_btn, "DONE");
-    button_draw(fb, &diag_next_btn);
-}
-
-static void handle_diag_input(AppState *state, int tx, int ty,
-                              bool touching, uint32_t now) {
-    if (state->diag_page > 0 && button_update(&diag_prev_btn, tx, ty, touching, now)) {
-        state->diag_page = (DiagPage)((int)state->diag_page - 1);
-        state->diag_needs_refresh = true;
-    }
-    if (button_update(&diag_next_btn, tx, ty, touching, now)) {
-        int next = (int)state->diag_page + 1;
-        if (next >= DIAG_PAGE_COUNT) next = 0;
-        state->diag_page = (DiagPage)next;
-        state->diag_needs_refresh = true;
-    }
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3506,7 +3313,6 @@ static void run_usb_fullscreen(Framebuffer *fb, TouchInput *touch, AppState *sta
 static void rebuild_ui(AppState *state) {
     create_tab_bar();
     create_settings_ui(state);
-    create_diagnostics_ui();
     create_tests_ui();
     create_display_ui(state);
     create_usb_ui();
@@ -3605,8 +3411,6 @@ int main(void) {
     if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
     if (state.backlight_brightness > 100) state.backlight_brightness = 100;
     state.portrait_mode = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
-    state.diag_page = DIAG_NETWORK;
-    state.diag_needs_refresh = true;
     state.test_sub = TEST_MENU_VIEW;
     state.test_selected = -1;
     state.calib_sub = CALIB_IDLE;
@@ -3650,7 +3454,6 @@ int main(void) {
             switch (state.active_tab) {
                 case TAB_HOME:        draw_home(&fb, &state);        break;
                 case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
-                case TAB_DIAGNOSTICS: draw_diagnostics(&fb, &state); break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
                 case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
                 case TAB_USB:         draw_usb(&fb, &state);         break;
@@ -3677,8 +3480,10 @@ int main(void) {
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
+        /* A new message replacing one still shown keeps status_msg[0] non-zero,
+         * so the time it was set is what says the text changed. */
+        uint32_t      prev_status_t  = state.status_time_ms;
         int           prev_home_page = state.home_page;
-        DiagPage      prev_diag_page = state.diag_page;
         TestSubState  prev_test_sub  = state.test_sub;
         int           prev_test_sel  = state.test_selected;
         CalibSubState prev_calib_sub = state.calib_sub;
@@ -3722,7 +3527,6 @@ int main(void) {
 
             switch (state.active_tab) {
                 case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
-                case TAB_DIAGNOSTICS: handle_diag_input(&state, tx, ty, touching, now);     break;
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
                 case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
                 case TAB_USB:         handle_usb_input(&state, tx, ty, touching, now);      break;
@@ -3740,8 +3544,17 @@ int main(void) {
             }
         }
 
-        /* --- Detect visual state changes after input --- */
-        if (prev_tab       != state.active_tab     ||
+        /* --- Detect visual state changes after input ---
+         * ⚠️ Only a change repaints: a static screen must cost nothing (the
+         * dirty-flag rule, ../CLAUDE.md → Rendering).  A live view asks for its
+         * own repaint on a timer — a CpPage by returning CP_PAGE_REDRAW — and
+         * never by adding an always-true term here: one such term (set at
+         * startup, never cleared) once repainted every iteration, ~40 % CPU
+         * sitting on the static home grid.  The touch edges are the widgets'
+         * pressed/released feedback, which lives in each Button, not in
+         * AppState. */
+        if (ts.pressed || ts.released                ||
+            prev_tab       != state.active_tab     ||
             prev_audio     != state.audio_enabled   ||
             prev_music     != state.music_enabled   ||
             prev_effects   != state.effects_enabled ||
@@ -3750,8 +3563,8 @@ int main(void) {
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
+            prev_status_t  != state.status_time_ms  ||
             prev_home_page != state.home_page       ||
-            prev_diag_page != state.diag_page       ||
             prev_test_sub  != state.test_sub        ||
             prev_test_sel  != state.test_selected   ||
             prev_calib_sub != state.calib_sub       ||
@@ -3760,8 +3573,7 @@ int main(void) {
             prev_usb_cnt   != state.usb_dev_cnt     ||
             prev_bus_cnt   != state.usb_bus_cnt     ||
             prev_out_usb   != audio_out_usb_present() ||
-            state.page_dirty                        ||
-            state.diag_needs_refresh) {
+            state.page_dirty) {
             needs_redraw = true;
         }
         state.page_dirty = false;
