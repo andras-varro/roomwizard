@@ -179,17 +179,6 @@ it runs degraded in portrait rather than being refused; C16 moves it under the A
 portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
-### B45. `control_panel` repaints every loop iteration on every page — open, confirmed 2026-09-30
-
-`AppState.diag_needs_refresh` (`control_panel/control_panel.c:308`) is set true at startup (`:3764`) and in
-`set_view` and the PREV/NEXT handlers (`:540`, `:1344`, `:1350`), and **nothing ever clears it**; it is ORed
-into the main loop's redraw test (`:3919`), so the panel redraws on every iteration. Measured by the operator
-2026-09-30: `control_panel` at about 35 % CPU in `top` while showing the Monitor page. **Constraint on the
-fix:** the remaining Diagnostics pages only look live *because* of this flag, so clearing it makes them
-static. Each page must decide its own refresh (Monitor re-reads once a second), which largely falls away as
-those pages become `CpPage`s (C16). **Done when** `top` on .188 shows `control_panel` near idle on a static
-page and the pages that should tick still do.
-
 ## Features
 
 Userspace except F101, which is the image build, and F2, which now waits on it.
@@ -1059,7 +1048,7 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 | Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
 | Network | hostname, IP, MAC, gateway, DNS, link |
 | Monitor | uptime, load, RAM, swap, storage (done); SoC temperature (F4) and CPU graph (F104) planned |
-| Information | static versions, kernel, config, calibrated? |
+| Information | SYSTEM (kernel, hostname, default app), HARDWARE (CPU, framebuffer), CONFIG (keys no page owns); "calibrated?" dropped pending an operator decision (below) |
 
 **Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
 function has a home** (operator, 2026-09-30); duplicates inside `control_panel` itself are still deleted
@@ -1088,7 +1077,9 @@ diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
 launcher frame md5-identical). Audio opens Settings; Display and Touch open Display; USB opens USB;
-Network and Information open the Diagnostics pages Network and System; Monitor opens its own `CpPage` (below). Tests is a letter
+Network, Information and Monitor open their own `CpPage`s (below); the Diagnostics tab no longer exists, so the tab bar is
+SETTINGS/TESTS/DISPLAY/USB. Audio (Settings tab), Display and Touch (Display tab) and USB (USB tab) still open the old
+tabs. Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
 and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their tabs, BACK, slide-off does nothing, the red X exits.
@@ -1109,10 +1100,22 @@ per-page code.
 the four mounts, re-read once a second from `input()` (the main loop calls `page->input` every iteration
 with `now`, so no extra hook). Display-only, no `reset_defaults`. Receipt measured on .188: `control_panel:
 monitor stack fits — bottom +342 of CONTENT_H 375, right 770 of CONTENT_RIGHT 780 (safe 787x421,
-landscape)`; portrait fit is inferred by hand, not measured. The Diagnostics MEMORY and STORAGE pages and
-SYSTEM INFO's uptime/load rows were deleted as it landed (Diagnostics is SYSTEM, HARDWARE, CONFIG, NETWORK);
+landscape)`; portrait (via `/opt/games/portrait.mode`, created and removed) bottom +342 of 741, measured.
 `draw_usage_bar` and `read_file_line` are shared through `cp_ui.h`. SoC temperature (F4) stays planned for
 this page. After the control-panel refactor, work returns to Bluetooth (F17), whose page is a `CpPage`.
+
+**Information and Network are `CpPage`s too** (`control_panel/info_page.c` exports `cp_info_page`,
+`network_page.c` exports `cp_network_page`; the Diagnostics tab is deleted outright and `fit_value()` is
+shared through `cp_ui.h`). Information: SYSTEM (kernel release and build string, hostname, default app),
+HARDWARE (CPU, BogoMIPS, framebuffer format and memory), CONFIG (file path; keys no page owns, "+N MORE" on
+overflow), read on enter with no refresh; fields shown elsewhere were dropped (LEDs to LED, backlight,
+resolution and calibrated to the Display tab, audio keys to Settings). Network: routing (gateway, up to 3
+DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
+when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
++346/375, information +372/375, monitor +342/375, led +245/375; portrait network +610/741, information
++732/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information and Network are
+pending** (Monitor's passed). **Open operator decision:** Information's `calibrated?` row was dropped as a
+duplicate of the Display tab's TOUCH: CALIBRATED row; re-add one row to Information, or keep it dropped.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in

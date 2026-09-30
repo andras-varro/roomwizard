@@ -29,7 +29,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `control_panel` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
+| `control_panel` | Tool | **Unified hardware app** — the one you want. Home icon grid; tabs: Settings, Tests, Display, USB; pages: LED, Monitor, Network, Information |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
 | `hardware_config` | Tool | Settings GUI — superseded by `control_panel` (hidden) |
@@ -55,7 +55,7 @@ separate GUI utilities behind a tab bar:
 | Tab | Replaces | What it does |
 |---|---|---|
 | **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset. Test buttons deliberately bypass config to exercise raw hardware. |
-| **Diagnostics** | `hardware_diag` | Read-only system info across 6 pages (System, Memory, Storage, Hardware, Config, Network). |
+| *(none)* | `hardware_diag` | The Diagnostics tab is gone: Monitor, Network and Information are icon pages (`control_panel/*_page.c`). |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
 | **Display** | a retired standalone calibration tool | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
 | **USB** | `usb_test` | Keyboard, mouse and gamepad visualisation for attached USB devices. |
