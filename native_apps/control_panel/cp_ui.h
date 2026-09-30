@@ -32,13 +32,15 @@
 #define BAR_HEIGHT 20
 
 #define COLOR_LABEL       RGB(180, 180, 180)
+#define COLOR_DISABLED    RGB(120, 120, 120)   /* a control switched off */
 
 /* A section title at y, with a rule running to CONTENT_RIGHT. */
 void draw_section_header(Framebuffer *fb, int y, const char *title);
 
-/* A value/min..max fill bar with its percentage printed to the right. */
+/* A value/min..max fill bar with its percentage printed to the right; drawn
+ * grey when !active (a setting that is currently switched off). */
 void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
-                         int min_val, int max_val, int bar_width);
+                         int min_val, int max_val, int bar_width, bool active);
 
 /* A full-screen tester's frame: title, status, optional progress (-1 = none),
  * "TOUCH TO RETURN".  Swaps the framebuffer itself. */

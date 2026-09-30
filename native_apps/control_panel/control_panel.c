@@ -27,7 +27,7 @@
 #include "../common/icon_grid.h"
 #include "usb_bus.h"
 #include "cp_ui.h"
-#include "led_page.h"
+#include "cp_page.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,8 +197,9 @@ typedef enum {
     /* Views with no tab button go after TAB_COUNT: every loop over the tab bar
      * stops there, so none of these can index tab_names[] or tab_buttons[]. */
     TAB_HOME,    /* the icon grid */
-    TAB_LED      /* led_page.c — reached from its home tile only; the tab bar
-                    shows BACK and highlights nothing */
+    TAB_PAGE     /* a CpPage module (cp_page.h), AppState.page says which —
+                    reached from its home tile only; the tab bar shows BACK
+                    and the page's name */
 } ActiveTab;
 
 typedef enum {
@@ -232,31 +233,33 @@ typedef enum {
     CONFIRM_RESET_GEOMETRY   /* Display tab: touch range + edges to defaults */
 } ConfirmAction;
 
-/* Indexed only below TAB_COUNT — TAB_HOME and TAB_LED have no tab button. */
+/* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
 static const char *tab_names[TAB_COUNT] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY", "USB" };
 
-/* The home grid. Each icon opens the page that holds its settings: LED has its
- * own (TAB_LED); the others still open the tab (and Diagnostics page) that
- * carries them, and move to a page of their own one icon at a time, deleting the
- * duplicate as each lands. Bluetooth has no page yet, so no tile. icon NULL =
- * the grid's letter tile. */
+/* The home grid, and the page registry: a row with a page opens that CpPage,
+ * and takes its label and icon from it (one name, one home); every page named
+ * here is loaded, laid out and reset through it.  The other rows still open the
+ * tab (and Diagnostics page) that carries their settings, and move to a page
+ * of their own one icon at a time, deleting the duplicate as each lands.
+ * Bluetooth has no page yet, so no tile. icon NULL = the grid's letter tile. */
 typedef struct {
-    const char *label;
-    const char *icon;          /* basename under /opt/roomwizard/icons/, no .ppm */
-    ActiveTab   tab;
-    DiagPage    diag_page;     /* only read when tab == TAB_DIAGNOSTICS */
+    const char   *label;       /* NULL when page is set */
+    const char   *icon;        /* basename under /opt/roomwizard/icons/, no .ppm */
+    ActiveTab     tab;         /* TAB_PAGE when page is set */
+    DiagPage      diag_page;   /* only read when tab == TAB_DIAGNOSTICS */
+    const CpPage *page;
 } HomeItem;
 
 static const HomeItem home_items[] = {
-    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_SYSTEM  },
-    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_SYSTEM  },
-    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_SYSTEM  },
-    { "LED",         "cp_led",     TAB_LED,         DIAG_SYSTEM  },
-    { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM  },
-    { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK },
-    { "Monitor",     "cp_monitor", TAB_DIAGNOSTICS, DIAG_MEMORY  },
-    { "Information", "cp_info",    TAB_DIAGNOSTICS, DIAG_SYSTEM  },
-    { "Tests",       NULL,         TAB_TESTS,       DIAG_SYSTEM  },
+    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_SYSTEM,  NULL },
+    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_SYSTEM,  NULL },
+    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_SYSTEM,  NULL },
+    { .tab = TAB_PAGE, .page = &cp_led_page },
+    { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM,  NULL },
+    { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK, NULL },
+    { "Monitor",     "cp_monitor", TAB_DIAGNOSTICS, DIAG_MEMORY,  NULL },
+    { "Information", "cp_info",    TAB_DIAGNOSTICS, DIAG_SYSTEM,  NULL },
+    { "Tests",       NULL,         TAB_TESTS,       DIAG_SYSTEM,  NULL },
 };
 #define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define HOME_TITLE_H    50
@@ -309,8 +312,9 @@ typedef struct {
     Audio         settings_audio;
     bool          settings_audio_open;
     int           settings_audio_idx; /* the audio_device_idx it was opened on */
-    LedPageState  led;                /* the LED page's values, as saved */
-    int           led_test;           /* LED test to run full-screen, -1 none */
+    const CpPage *page;               /* the open page when active_tab == TAB_PAGE */
+    bool          page_dirty;         /* the page asked to be repainted */
+    bool          page_fullscreen;    /* its input() queued a full-screen run */
     int           backlight_brightness;
     bool          portrait_mode;
     char          status_msg[64];
@@ -405,17 +409,19 @@ void draw_section_header(Framebuffer *fb, int y, const char *title) {
 }
 
 void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
-                         int min_val, int max_val, int bar_width) {
+                         int min_val, int max_val, int bar_width, bool active) {
     fb_fill_rect(fb, x, y, bar_width, BAR_HEIGHT, COLOR_BAR_BG);
     int range = max_val - min_val;
     int fill_w = (range > 0) ? ((value - min_val) * bar_width) / range : 0;
     if (fill_w > bar_width) fill_w = bar_width;
     if (fill_w < 0) fill_w = 0;
     if (fill_w > 0)
-        fb_fill_rect(fb, x, y, fill_w, BAR_HEIGHT, COLOR_BAR_FILL);
+        fb_fill_rect(fb, x, y, fill_w, BAR_HEIGHT,
+                     active ? COLOR_BAR_FILL : COLOR_DISABLED);
     char pct[8];
     snprintf(pct, sizeof(pct), "%d%%", value);
-    fb_draw_text(fb, x + bar_width + 10, y + 2, pct, COLOR_WHITE, 2);
+    fb_draw_text(fb, x + bar_width + 10, y + 2, pct,
+                 active ? COLOR_WHITE : COLOR_DISABLED, 2);
 }
 
 static int draw_info_row(Framebuffer *fb, int y, const char *label,
@@ -491,11 +497,17 @@ static void create_tab_bar(void) {
  * own: its bar carries BACK and the page's title, never the old tabs. */
 static bool is_page(ActiveTab t) { return t > TAB_HOME; }
 
-/* The title is the label of the tile that opens the page — one name, one home. */
-static const char *page_title(ActiveTab t) {
-    for (int i = 0; i < HOME_ITEM_COUNT; i++)
-        if (home_items[i].tab == t) return home_items[i].label;
-    return "";
+/* The title is the page's name, which is also its tile's label. */
+static const char *page_title(const AppState *state) {
+    return state->page ? state->page->name : "";
+}
+
+/* A tile's label and icon: the page's own when the row names one. */
+static const char *home_label(const HomeItem *it) {
+    return it->page ? it->page->name : it->label;
+}
+static const char *home_icon(const HomeItem *it) {
+    return it->page ? it->page->icon : it->icon;
 }
 
 static void draw_tab_bar(Framebuffer *fb, AppState *state) {
@@ -503,7 +515,7 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
                  SCREEN_SAFE_WIDTH, TAB_BAR_H, COLOR_TAB_BG);
     if (is_page(state->active_tab)) {
         text_draw_centered(fb, fb->width / 2, back_btn.y + back_btn.height / 2,
-                           page_title(state->active_tab), COLOR_WHITE, 3);
+                           page_title(state), COLOR_WHITE, 3);
     } else for (int i = 0; i < TAB_COUNT; i++) {
         tab_buttons[i].bg_color = (i == (int)state->active_tab)
                                   ? COLOR_TAB_ACTIVE : COLOR_TAB_INACTIVE;
@@ -528,9 +540,18 @@ static void settings_audio_close(AppState *s);
 
 /* The one place a view changes, so entering and leaving keep their side
  * effects whether the tab bar, the home grid or BACK asked. */
-static void set_tab(AppState *state, ActiveTab tab) {
+static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
     ActiveTab prev_tab = state->active_tab;
+    const CpPage *prev_page = state->page;
+    if (prev_page && prev_page != page && prev_page->leave)
+        prev_page->leave();
     state->active_tab = tab;
+    state->page = page;
+    state->page_fullscreen = false;
+    if (page && page != prev_page) {
+        if (page->enter) page->enter();
+        state->page_dirty = true;
+    }
     if (tab == TAB_DIAGNOSTICS)
         state->diag_needs_refresh = true;
     if (prev_tab == TAB_USB && tab != TAB_USB)
@@ -539,6 +560,11 @@ static void set_tab(AppState *state, ActiveTab tab) {
         settings_audio_close(state);
     if (prev_tab != TAB_SETTINGS && tab == TAB_SETTINGS)
         settings_audio_open(state);
+}
+
+static void set_tab(AppState *state, ActiveTab tab) { set_view(state, tab, NULL); }
+static void set_page(AppState *state, const CpPage *page) {
+    set_view(state, TAB_PAGE, page);
 }
 
 static void handle_tab_bar_input(AppState *state, int tx, int ty,
@@ -559,9 +585,10 @@ static int       home_press = -2;   /* tile index pressed, -1 = exit X, -2 = non
 
 static void home_load_icons(void) {
     for (int i = 0; i < HOME_ITEM_COUNT; i++) {
-        if (!home_items[i].icon) continue;
+        const char *icon = home_icon(&home_items[i]);
+        if (!icon) continue;
         char path[128];
-        snprintf(path, sizeof(path), "/opt/roomwizard/icons/%s.ppm", home_items[i].icon);
+        snprintf(path, sizeof(path), "/opt/roomwizard/icons/%s.ppm", icon);
         home_icons[i] = icon_grid_load_icon(path);
     }
 }
@@ -585,8 +612,8 @@ static void draw_home(Framebuffer *fb, AppState *state) {
         const HomeItem *it = &home_items[start + i];
         int x, y;
         icon_grid_tile_xy(&home_grid, i, &x, &y);
-        icon_grid_draw_tile(fb, &home_grid, x, y, it->label, home_icons[start + i],
-                            icon_grid_letter_color(it->label), false);
+        icon_grid_draw_tile(fb, &home_grid, x, y, home_label(it), home_icons[start + i],
+                            icon_grid_letter_color(home_label(it)), false);
     }
     icon_grid_draw_paging(fb, &home_grid, state->home_page, pages);
 }
@@ -619,6 +646,7 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
                       ts->x, ts->y) != pressed)
         return;
     const HomeItem *it = &home_items[start + pressed];
+    if (it->page) { set_page(state, it->page); return; }
     if (it->tab == TAB_DIAGNOSTICS) state->diag_page = it->diag_page;
     set_tab(state, it->tab);
 }
@@ -971,12 +999,14 @@ static void handle_settings_input(AppState *state, int tx, int ty,
             audio_device_index_of(config_audio_device(&state->cfg));
         /* saved_audio_device_idx is NOT touched: RESET writes nothing to disk, so
          * a default that differs from the file is exactly an unsaved change. */
-        /* ⚠️ The LEDs are the exception to "RESET writes nothing": the LED page
-         * has no SAVE, so what it shows must be what the file holds and what
-         * hardware.c drives.  Their keys are removed from the file (and only
-         * theirs) and the cache reloaded, so page, file and LEDs all land on
-         * config.c's default together. */
-        led_page_reset_defaults(&state->led, &state->cfg);
+        /* ⚠️ Pages are the exception to "RESET writes nothing": a page with no
+         * SAVE (the LED page) must show what the file holds and what hardware.c
+         * drives, so its reset_defaults() removes its own keys from the file (and
+         * only those) and reloads the cache, so page, file and hardware all land
+         * on config.c's default together. */
+        for (int i = 0; i < HOME_ITEM_COUNT; i++)
+            if (home_items[i].page && home_items[i].page->reset_defaults)
+                home_items[i].page->reset_defaults(&state->cfg);
         state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
         audio_toggle.state = state->audio_enabled;
         music_toggle.state = state->music_enabled;
@@ -2018,10 +2048,10 @@ static void draw_display_tab(Framebuffer *fb, AppState *state) {
         int bar_w = CONTENT_WIDTH - 170;
         if (bar_w < 80) bar_w = 80;
         draw_brightness_bar(fb, CONTENT_LEFT + 55, bl_bar_y + 25,
-                            state->backlight_brightness, 20, 100, bar_w);
+                            state->backlight_brightness, 20, 100, bar_w, true);
     } else {
         draw_brightness_bar(fb, CONTENT_LEFT + 190, bl_bar_y,
-                            state->backlight_brightness, 20, 100, BAR_WIDTH);
+                            state->backlight_brightness, 20, 100, BAR_WIDTH, true);
     }
     button_draw(fb, &bl_plus_btn);
 
@@ -3751,7 +3781,9 @@ static void rebuild_ui(AppState *state) {
     create_tests_ui();
     create_display_ui(state);
     create_usb_ui();
-    led_page_create();   /* prints the "control_panel: led stack …" receipt */
+    /* Each prints its "control_panel: <page> stack …" receipt. */
+    for (int i = 0; i < HOME_ITEM_COUNT; i++)
+        if (home_items[i].page) home_items[i].page->layout();
     /* Prints the "control_panel home: safe …" receipt — see icon_grid_layout(). */
     icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "control_panel home");
 }
@@ -3762,10 +3794,10 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
         run_test(fb, touch, state->test_selected);
         state->test_sub = TEST_MENU_VIEW;
         hw_leds_off();
-    } else if (state->active_tab == TAB_LED) {
-        led_page_run_test(state->led_test, fb, touch);
-        state->led_test = -1;
-        hw_leds_off();
+    } else if (state->active_tab == TAB_PAGE) {
+        state->page_fullscreen = false;
+        if (state->page->run_fullscreen)
+            state->page->run_fullscreen(fb, touch);
     } else if (state->active_tab == TAB_DISPLAY) {
         if (state->calib_sub == CALIB_RUN_DIAG) {
             run_touch_diagnostic(fb, touch, state);
@@ -3838,8 +3870,8 @@ int main(void) {
     state.effects_enabled = config_effects_enabled(&state.cfg);
     state.audio_device_idx = audio_device_index_of(config_audio_device(&state.cfg));
     state.saved_audio_device_idx = state.audio_device_idx;
-    led_page_load(&state.led, &state.cfg);
-    state.led_test = -1;
+    for (int i = 0; i < HOME_ITEM_COUNT; i++)
+        if (home_items[i].page) home_items[i].page->load(&state.cfg);
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
     if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
     if (state.backlight_brightness > 100) state.backlight_brightness = 100;
@@ -3872,7 +3904,7 @@ int main(void) {
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
                        || (state.active_tab == TAB_DISPLAY && state.calib_sub != CALIB_IDLE)
                        || (state.active_tab == TAB_USB && state.usb_scr != USB_SCR_MAIN)
-                       || (state.active_tab == TAB_LED && state.led_test >= 0);
+                       || (state.active_tab == TAB_PAGE && state.page_fullscreen);
 
         if (fullscreen) {
             run_current_fullscreen_mode(&fb, &touch, &state);
@@ -3893,7 +3925,7 @@ int main(void) {
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
                 case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
                 case TAB_USB:         draw_usb(&fb, &state);         break;
-                case TAB_LED:         led_page_draw(&fb, &state.led); break;
+                case TAB_PAGE:        state.page->draw(&fb);         break;
                 default: break;
             }
 
@@ -3913,9 +3945,6 @@ int main(void) {
         bool          prev_effects   = state.effects_enabled;
         int           prev_out_idx   = state.audio_device_idx;
         int           prev_out_saved = state.saved_audio_device_idx;  /* UNSAVED note */
-        bool          prev_led       = state.led.enabled;
-        int           prev_led_br    = state.led.brightness;
-        int           prev_led_test  = state.led_test;
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
@@ -3968,11 +3997,14 @@ int main(void) {
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
                 case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
                 case TAB_USB:         handle_usb_input(&state, tx, ty, touching, now);      break;
-                case TAB_LED: {
-                    int t;
-                    if (led_page_input(&state.led, &state.cfg, tx, ty, touching, now, &t)
-                            == LED_PAGE_RUN_TEST)
-                        state.led_test = t;
+                case TAB_PAGE: {
+                    /* A page's visual state is its own, so it says when it
+                     * changed; a queued full-screen run repaints too, exactly
+                     * as a changed tab field would. */
+                    CpPageResult r = state.page->input(&state.cfg, tx, ty,
+                                                       touching, now);
+                    if (r == CP_PAGE_FULLSCREEN) state.page_fullscreen = true;
+                    if (r != CP_PAGE_IDLE)       state.page_dirty = true;
                     break;
                 }
                 default: break;
@@ -3986,9 +4018,6 @@ int main(void) {
             prev_effects   != state.effects_enabled ||
             prev_out_idx   != state.audio_device_idx ||
             prev_out_saved != state.saved_audio_device_idx ||
-            prev_led       != state.led.enabled     ||
-            prev_led_br    != state.led.brightness  ||
-            prev_led_test  != state.led_test        ||
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
@@ -4002,9 +4031,11 @@ int main(void) {
             prev_usb_cnt   != state.usb_dev_cnt     ||
             prev_bus_cnt   != state.usb_bus_cnt     ||
             prev_out_usb   != audio_out_usb_present() ||
+            state.page_dirty                        ||
             state.diag_needs_refresh) {
             needs_redraw = true;
         }
+        state.page_dirty = false;
 
         /* Every iteration, not only on drawn frames: the Settings bus must be
          * serviced whatever the screen is doing, and a closed one is a no-op. */

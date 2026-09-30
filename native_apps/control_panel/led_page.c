@@ -1,5 +1,16 @@
-/* led_page.c — see led_page.h. */
-#include "led_page.h"
+/* led_page.c — control_panel's LED page: enable, brightness, and the LED tests.
+ *
+ * Opened from the home grid's LED tile, and the one home for everything about
+ * the two indicator LEDs; Settings and the Tests tab carry none of it.  Exposed
+ * only as cp_led_page (cp_page.h); its state lives in this file.
+ *
+ * ⚠️ There is no SAVE button, on purpose.  The toggle and -/+ write the config
+ * file the moment they change and reload common/hardware.c's cache, because the
+ * tests on the same screen drive the LEDs through hw_set_led(), which is gated
+ * and scaled by the SAVED values — a page whose tests ignored its own switches
+ * until a SAVE would contradict itself on screen.
+ */
+#include "cp_page.h"
 #include "cp_ui.h"
 #include "../common/common.h"
 #include "../common/hardware.h"
@@ -122,18 +133,33 @@ static const struct {
 };
 #define LED_TEST_COUNT ((int)(sizeof(led_tests) / sizeof(led_tests[0])))
 
-void led_page_run_test(int test, Framebuffer *fb, TouchInput *touch) {
+/* ── State and persistence ─────────────────────────────────────────────── */
+
+typedef struct {
+    bool enabled;       /* config key led_enabled */
+    int  brightness;    /* config key led_brightness, 0..100 */
+} LedPageState;
+
+static LedPageState led_state;          /* the values, as saved */
+static int          queued_test = -1;   /* test to run full-screen, -1 none */
+
+/* After input() returned CP_PAGE_FULLSCREEN.  Whatever a test left lit, the
+ * page turns the LEDs off itself: its hardware is its own to clean up. */
+static void led_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
+    int test = queued_test;
+    queued_test = -1;
     if (test >= 0 && test < LED_TEST_COUNT)
         led_tests[test].run(fb, touch);
+    hw_leds_off();
 }
-
-/* ── State and persistence ─────────────────────────────────────────────── */
 
 static int clamp_pct(int v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
 
-void led_page_load(LedPageState *s, const Config *cfg) {
-    s->enabled    = config_led_enabled(cfg);
-    s->brightness = clamp_pct(config_led_brightness(cfg));
+/* Both values read through config.c's helpers, so the default shown here is
+ * the one hardware.c resolves on a file without the keys. */
+static void led_page_load(const Config *cfg) {
+    led_state.enabled    = config_led_enabled(cfg);
+    led_state.brightness = clamp_pct(config_led_brightness(cfg));
 }
 
 /* Writes the two keys into the FILE by re-reading it, not by saving the
@@ -156,7 +182,11 @@ static void led_persist(const LedPageState *s, Config *mem) {
     hw_reload_config();                 /* the tests read the saved values */
 }
 
-void led_page_reset_defaults(LedPageState *s, const Config *cfg) {
+/* For the control panel's RESET DEFAULTS, called AFTER config_clear(cfg):
+ * removes the two keys from the file as well, reloads hardware.c's cache, and
+ * reads the state back from the cleared cfg — so this page, the file and the
+ * LEDs agree on the default. */
+static void led_page_reset_defaults(Config *cfg) {
     Config disk;
     config_init(&disk);
     if (config_load(&disk) == 0) {
@@ -168,7 +198,7 @@ void led_page_reset_defaults(LedPageState *s, const Config *cfg) {
     /* With the keys gone, hardware.c resolves config.c's defaults — the same
      * ones led_page_load() reads off the cleared cfg below. */
     hw_reload_config();
-    led_page_load(s, cfg);
+    led_page_load(cfg);
 }
 
 /* The -/+ preview: a ~500 ms flash of both LEDs at the chosen value.  Raw
@@ -198,14 +228,16 @@ static int  sec_led_y, bright_label_y, bar_x, bar_y, bar_w;
 static int  sec_tests_y;
 static bool stacked;      /* brightness controls on their own row under the label */
 
-#define LED_TOGGLE_LABEL "LEDS ENABLED"
+#define LED_TOGGLE_LABEL     "LEDS ENABLED"
+#define LED_TOGGLE_LABEL_OFF "LEDS DISABLED"   /* the wider one: the receipt measures it */
 #define LED_BRIGHT_LABEL "BRIGHTNESS"
 #define LED_STEP_BTN_W   45
 #define LED_STEP_BTN_H   30
 #define LED_TEST_BTN_H   50
 #define LED_TEST_GAP     10
 
-void led_page_create(void) {
+/* Re-run whenever the logical screen changes (rebuild_ui()). */
+static void led_page_layout(void) {
     int pct_w   = text_measure_width("100%", 2);   /* draw_brightness_bar()'s widest */
     int label_w = text_measure_width(LED_BRIGHT_LABEL, 2);
 
@@ -263,7 +295,7 @@ void led_page_create(void) {
         const Button *last = &test_btns[LED_TEST_COUNT - 1];
         int bottom = (last->y + last->height) - CONTENT_Y;
         int right  = led_toggle.x - 5 + led_toggle.track_w
-                   + text_measure_width(LED_TOGGLE_LABEL, 1) + 20;
+                   + text_measure_width(LED_TOGGLE_LABEL_OFF, 1) + 20;
         if (led_plus_btn.x + led_plus_btn.width > right)
             right = led_plus_btn.x + led_plus_btn.width;
         for (int i = 0; i < LED_TEST_COUNT; i++)
@@ -283,51 +315,77 @@ void led_page_create(void) {
 
 /* ── Draw and input ─────────────────────────────────────────────────────── */
 
-void led_page_draw(Framebuffer *fb, const LedPageState *s) {
+static void led_page_draw(Framebuffer *fb) {
+    const LedPageState *s = &led_state;
     draw_section_header(fb, sec_led_y, "LEDS");
     led_toggle.state = s->enabled;      /* derived every frame, never cached */
+    snprintf(led_toggle.label, sizeof(led_toggle.label), "%s",
+             s->enabled ? LED_TOGGLE_LABEL : LED_TOGGLE_LABEL_OFF);
     toggle_draw(fb, &led_toggle);
 
+    /* Disabled, brightness is kept but not adjustable: -/+ would flash the
+     * LEDs through led_preview(), which bypasses the enable setting. */
+    uint32_t fg = s->enabled ? COLOR_WHITE : COLOR_DISABLED;
     fb_draw_text(fb, CONTENT_LEFT + 5, bright_label_y + 2, LED_BRIGHT_LABEL,
-                 COLOR_LABEL, 2);
+                 s->enabled ? COLOR_LABEL : COLOR_DISABLED, 2);
+    led_minus_btn.text_color = fg;
+    led_plus_btn.text_color  = fg;
     button_draw(fb, &led_minus_btn);
-    draw_brightness_bar(fb, bar_x, bar_y, s->brightness, 0, 100, bar_w);
+    draw_brightness_bar(fb, bar_x, bar_y, s->brightness, 0, 100, bar_w,
+                        s->enabled);
     button_draw(fb, &led_plus_btn);
 
-    /* With the LEDs disabled every test runs and lights nothing — that is the
-     * setting working — so say so in the header rather than refuse the press. */
+    /* With the LEDs disabled a test would light nothing, so the buttons are grey
+     * and take no press (led_page_input), and the header says why. */
     draw_section_header(fb, sec_tests_y,
                         s->enabled ? "TESTS" : "TESTS (LEDS DISABLED)");
     for (int i = 0; i < LED_TEST_COUNT; i++) {
-        test_btns[i].text_color = s->enabled ? COLOR_WHITE : RGB(120, 120, 120);
+        test_btns[i].text_color = fg;
         button_draw(fb, &test_btns[i]);
     }
 }
 
-LedPageAction led_page_input(LedPageState *s, Config *cfg, int tx, int ty,
-                             bool touching, uint32_t now, int *test) {
-    LedPageAction act = LED_PAGE_NONE;
+static CpPageResult led_page_input(Config *cfg, int tx, int ty,
+                                   bool touching, uint32_t now) {
+    LedPageState *s = &led_state;
+    CpPageResult act = CP_PAGE_IDLE;
 
     led_toggle.state = s->enabled;      /* flip from the truth, not a stale widget */
     if (toggle_check_press(&led_toggle, tx, ty, touching, now)) {
         s->enabled = led_toggle.state;
         led_persist(s, cfg);
-        act = LED_PAGE_CHANGED;
+        act = CP_PAGE_REDRAW;
     }
+    /* Disabled, the grey controls take no press at all — not even the pressed
+     * highlight: a test would run and light nothing, and -/+ would flash the
+     * LEDs through led_preview(), which bypasses the enable setting. */
+    if (!s->enabled) return act;
     int step = 0;
     if (button_update(&led_minus_btn, tx, ty, touching, now)) step = -10;
     if (button_update(&led_plus_btn, tx, ty, touching, now))  step = +10;
     if (step) {
+        int before = s->brightness;
         s->brightness = clamp_pct(s->brightness + step);
         led_persist(s, cfg);
         led_preview(s->brightness);
-        act = LED_PAGE_CHANGED;
+        if (s->brightness != before) act = CP_PAGE_REDRAW;
     }
     for (int i = 0; i < LED_TEST_COUNT; i++) {
         if (button_update(&test_btns[i], tx, ty, touching, now)) {
-            if (test) *test = i;
-            act = LED_PAGE_RUN_TEST;
+            queued_test = i;
+            act = CP_PAGE_FULLSCREEN;
         }
     }
     return act;
 }
+
+const CpPage cp_led_page = {
+    .name           = "LED",
+    .icon           = "cp_led",
+    .load           = led_page_load,
+    .layout         = led_page_layout,
+    .draw           = led_page_draw,
+    .input          = led_page_input,
+    .run_fullscreen = led_page_run_fullscreen,
+    .reset_defaults = led_page_reset_defaults,
+};
