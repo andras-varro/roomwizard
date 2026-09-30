@@ -18,6 +18,7 @@
 #include "../common/config.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 typedef enum {
     CP_PAGE_IDLE,        /* nothing visible changed */
@@ -51,7 +52,7 @@ typedef struct CpPage {
      * up its own hardware.  The caller only drains touch and repaints after. */
     void (*run_fullscreen)(Framebuffer *fb, TouchInput *touch);
 
-    /* Optional.  The control panel's RESET DEFAULTS calls it on every page,
+    /* Optional.  cp_reset_all_defaults() (below) calls it on every page,
      * AFTER config_clear(cfg). */
     void (*reset_defaults)(Config *cfg);
 } CpPage;
@@ -61,5 +62,22 @@ extern const CpPage cp_monitor_page;   /* monitor_page.c */
 extern const CpPage cp_info_page;      /* info_page.c */
 extern const CpPage cp_network_page;   /* network_page.c */
 extern const CpPage cp_usb_page;       /* usb_page.c */
+
+/* Implemented in control_panel.c, for pages. */
+
+/* Posts msg on the page's status line — it takes the title bar's place for a
+ * few seconds, green when ok, orange when not.  The panel repaints for it and
+ * once more when it expires; the page need not return CP_PAGE_REDRAW for it. */
+void cp_status(const char *msg, bool ok);
+
+/* The global RESET DEFAULTS, pressed on the Information page.  First copies
+ * the config file to a timestamped "<path>.bak-YYYYmmdd-HHMMSS" beside it; if
+ * that copy fails nothing is reset and -1 comes back.  Otherwise it clears
+ * cfg, restores the audio and backlight values the control panel owns, calls
+ * every page's reset_defaults, and returns 0.  Either way msg (len bytes) gets
+ * the line to show: "BACKUP: <path>", a note when there was no file to copy
+ * (nothing to lose, so it resets), or "RESET FAILED: BACKUP <reason>".
+ * /etc/touch_calibration.conf is not touched. */
+int cp_reset_all_defaults(Config *cfg, char *msg, size_t len);
 
 #endif

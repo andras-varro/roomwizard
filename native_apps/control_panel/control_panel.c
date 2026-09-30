@@ -43,6 +43,7 @@
 #include <linux/fb.h>
 #include <math.h>
 #include <errno.h>
+#include <time.h>
 #include <linux/input.h>
 #include <poll.h>
 
@@ -78,6 +79,12 @@
 
 #define DEFAULT_AUDIO_ENABLED        true
 #define DEFAULT_BACKLIGHT_BRIGHTNESS 100
+
+/* How long a status message stays up.  A page's message is held longer: the
+ * one that exists names a file path, which a 2 s flash does not let anyone
+ * read. */
+#define STATUS_HOLD_MS       2000
+#define STATUS_PAGE_HOLD_MS  6000
 
 /* The old 40 px calibration-target inset lived here. It is gone on purpose:
  * targets that close to the edge sit inside the band where raw compresses, and
@@ -206,7 +213,9 @@ typedef struct {
     bool          portrait_mode;
     char          status_msg[64];
     uint32_t      status_time_ms;
-    int           home_page;          /* page of the home grid */
+    uint32_t      status_hold_ms;     /* how long it shows; 0 = STATUS_HOLD_MS */
+    bool          status_ok;          /* a page's message: success or failure colour */
+    int           home_page;         /* page of the home grid */
     TestSubState  test_sub;
     int           test_selected;
     CalibSubState calib_sub;
@@ -219,6 +228,7 @@ typedef struct {
 static volatile bool running = true;
 static Framebuffer  *g_fb    = NULL;
 static TouchInput   *g_touch = NULL;
+static AppState     *g_state = NULL;   /* for cp_status() / cp_reset_all_defaults() */
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -238,7 +248,7 @@ static ToggleSwitch audio_toggle;
 static ToggleSwitch music_toggle, effects_toggle;
 static Button audio_dev_btn;
 static Button test_audio_btn;
-static Button save_btn, reset_btn;
+static Button save_btn;   /* RESET DEFAULTS is the Information page's */
 
 /* Tests */
 static UILayout test_layout;
@@ -390,7 +400,19 @@ static const char *home_icon(const HomeItem *it) {
 static void draw_tab_bar(Framebuffer *fb, AppState *state) {
     fb_fill_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
                  SCREEN_SAFE_WIDTH, TAB_BAR_H, COLOR_TAB_BG);
-    if (is_page(state->active_tab)) {
+    if (is_page(state->active_tab) && state->status_msg[0]) {
+        /* A page's status line takes the title's place while it shows: the
+         * page owns the whole content rect, so the bar is the one spot that is
+         * free in both orientations.  Scale 2 where it fits between BACK and
+         * the right edge, else scale 1, cut with ".." if even that is too wide. */
+        int left = back_btn.x + back_btn.width + 10;
+        int scale = (text_measure_width(state->status_msg, 2) <= CONTENT_RIGHT - left) ? 2 : 1;
+        char cut[sizeof(state->status_msg)];
+        fit_value(state->status_msg, left, scale, cut, sizeof(cut));
+        text_draw_centered(fb, (left + CONTENT_RIGHT) / 2,
+                           back_btn.y + back_btn.height / 2, cut,
+                           state->status_ok ? COLOR_GREEN : COLOR_ORANGE, scale);
+    } else if (is_page(state->active_tab)) {
         text_draw_centered(fb, fb->width / 2, back_btn.y + back_btn.height / 2,
                            page_title(state), COLOR_WHITE, 3);
     } else for (int i = 0; i < TAB_COUNT; i++) {
@@ -420,6 +442,13 @@ static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
     const CpPage *prev_page = state->page;
     if (prev_page && prev_page != page && prev_page->leave)
         prev_page->leave();
+    /* A message belongs to the view that posted it: the tabs and the page bar
+     * draw the one status_msg, so a page's BACKUP line must not follow BACK
+     * onto a tab.  The view change repaints anyway. */
+    if (tab != prev_tab || page != prev_page) {
+        state->status_msg[0]  = '\0';
+        state->status_hold_ms = 0;
+    }
     state->active_tab = tab;
     state->page = page;
     state->page_fullscreen = false;
@@ -541,7 +570,7 @@ static void apply_backlight(int brightness_pct) {
  *
  * ⚠️ **The action row hangs off row 2**, the one carrying MUSIC / EFFECTS / OUT:
  * SET_ACTION_Y is row 2's top plus SET_AUDIO_ROW2_H (its 28 px track and a 16 px
- * lead), one macro that create_settings_ui() places SAVE / RESET DEFAULTS from
+ * lead), one macro that create_settings_ui() places SAVE from
  * and draw_settings() hangs the status line off, so the two cannot disagree —
  * and create_settings_ui() prints the resulting bottom against CONTENT_H,
  * because the inset is per unit and nothing on screen would show that the last
@@ -670,35 +699,23 @@ static void create_settings_ui(AppState *state) {
                      90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 
+    /* SAVE alone, centred, in both orientations.  The global RESET DEFAULTS is
+     * on the Information page, beside the config file it backs up first. */
     int center_x = CONTENT_LEFT + CONTENT_WIDTH / 2;
-    if (portrait) {
-        /* Portrait: stack buttons vertically, centered */
-        button_init_full(&save_btn, center_x - 70, action_y,
-                         140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&reset_btn, center_x - 90, action_y + 50,
-                         180, 40, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    } else {
-        button_init_full(&save_btn, center_x - 200, action_y,
-                         140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&reset_btn, center_x + 10, action_y,
-                         180, 40, "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    }
+    button_init_full(&save_btn, center_x - 70, action_y,
+                     140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 3);
 
     /* Shut down and reboot are NOT here: they are behind app_launcher's exit X. */
 
     /* ⚠️ THE RECEIPT. This stack is hand-placed from CONTENT_Y and CONTENT_Y is
      * derived from a per-unit touch inset, so a row pushed past the bottom of the
      * touchable rect looks perfect in a framebuffer screenshot and is simply dead
-     * to a finger.  RESET DEFAULTS is the lowest button on the tab (stacked under
-     * SAVE in portrait), so its bottom is the number that matters.  Printed once
-     * per tab build, and it says whether it fits rather than leaving that to be
-     * inferred. */
+     * to a finger.  SAVE is the lowest button on the tab, so its bottom is the
+     * number that matters.  Printed once per tab build, and it says whether it
+     * fits rather than leaving that to be inferred. */
     {
-        int bottom = (reset_btn.y + reset_btn.height) - CONTENT_Y;
+        int bottom = (save_btn.y + save_btn.height) - CONTENT_Y;
         printf("control_panel: settings stack %s — bottom +%d of CONTENT_H %d "
                "(safe %dx%d, %s, row2 +%d)\n",
                bottom <= CONTENT_H ? "fits" : "⚠ PAST CONTENT BOTTOM",
@@ -727,7 +744,6 @@ static void create_settings_ui(AppState *state) {
 }
 
 static void draw_settings(Framebuffer *fb, AppState *state) {
-    int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
     int action_y    = SET_ACTION_Y;
 
@@ -778,21 +794,17 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     button_draw(fb, &audio_dev_btn);
 
     button_draw(fb, &save_btn);
-    button_draw(fb, &reset_btn);
 
     if (state->status_msg[0]) {
-        uint32_t sc = COLOR_GREEN;
-        if (strstr(state->status_msg, "DEFAULTS")) sc = COLOR_CYAN;
-        int status_y = portrait ? action_y + 100 : action_y + 50;
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           status_y, state->status_msg, sc, 2);
+                           action_y + 50, state->status_msg, COLOR_GREEN, 2);
     } else if (state->audio_device_idx != state->saved_audio_device_idx) {
         /* TEST plays the SHOWN output, games the SAVED one — so say when they
          * differ.  The status slot, because it is inside the measured stack and
          * a transient message outranks this for its 2 s.  Scale drops to 1 where
          * scale 2 would overrun the content rect (portrait). */
         static const char note[] = "OUT NOT SAVED - PRESS SAVE";
-        int status_y = portrait ? action_y + 100 : action_y + 50;
+        int status_y = action_y + 50;
         int sc = (text_measure_width(note, 2) <= CONTENT_WIDTH) ? 2 : 1;
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
                            status_y, note, COLOR_ORANGE, sc);
@@ -848,49 +860,135 @@ static void handle_settings_input(AppState *state, int tx, int ty,
                  "SETTINGS SAVED AND APPLIED");
         state->status_time_ms = now;
     }
-    if (button_update(&reset_btn, tx, ty, touching, now)) {
-        /* config_clear() drops the Display keys too, so restore their defaults
-         * and re-apply, otherwise the backlight keeps a value no longer in the
-         * file and the Display tab shows a stale number.
-         *
-         * ⚠️ MUSIC / EFFECTS have no DEFAULT_* macro here on purpose: their
-         * default lives in common/config.c's helpers, which is what
-         * common/audio.c reads, so the switch on screen cannot disagree with
-         * what a game will do.  On a cleared Config those helpers return
-         * exactly that default. */
-        config_clear(&state->cfg);
-        state->audio_enabled = DEFAULT_AUDIO_ENABLED;
-        state->music_enabled = config_music_enabled(&state->cfg);
-        state->effects_enabled = config_effects_enabled(&state->cfg);
-        /* Read back through the getter on the CLEARED config, for the same reason
-         * MUSIC and EFFECTS do above: the default the screen shows then cannot
-         * disagree with the one a game will resolve. */
-        state->audio_device_idx =
-            audio_device_index_of(config_audio_device(&state->cfg));
-        /* saved_audio_device_idx is NOT touched: RESET writes nothing to disk, so
-         * a default that differs from the file is exactly an unsaved change. */
-        /* ⚠️ Pages are the exception to "RESET writes nothing": a page with no
-         * SAVE (the LED page) must show what the file holds and what hardware.c
-         * drives, so its reset_defaults() removes its own keys from the file (and
-         * only those) and reloads the cache, so page, file and hardware all land
-         * on config.c's default together. */
-        for (int i = 0; i < HOME_ITEM_COUNT; i++)
-            if (home_items[i].page && home_items[i].page->reset_defaults)
-                home_items[i].page->reset_defaults(&state->cfg);
-        state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
-        audio_toggle.state = state->audio_enabled;
-        music_toggle.state = state->music_enabled;
-        effects_toggle.state = state->effects_enabled;
-        apply_backlight(state->backlight_brightness);
-        snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
-        state->status_time_ms = now;
-    }
 
-    /* OUT or RESET changed the shown device: move the open bus onto it, so the
-     * next TEST is heard where the button points. */
+    /* OUT changed the shown device: move the open bus onto it, so the next
+     * TEST is heard where the button points. */
     if (state->settings_audio_open &&
         state->settings_audio_idx != state->audio_device_idx)
         settings_audio_open(state);
+}
+
+/* ── RESET DEFAULTS: the one implementation (cp_page.h), pressed on the
+ * Information page ─────────────────────────────────────────────────────── */
+
+/* Copies the config file to "<path>.bak-YYYYmmdd-HHMMSS" before anything is
+ * reset.  Timestamped so a second reset cannot overwrite the real backup with
+ * the defaults the first one produced, and opened O_EXCL — two resets inside
+ * one second take the next "-N" suffix rather than truncating the first.
+ * Returns 1 with the backup's path in out, 0 when there is no file to back up
+ * (nothing can be lost), -1 on failure with the reason in out. */
+static int config_backup(const Config *cfg, char *out, size_t len) {
+    int in = open(cfg->filepath, O_RDONLY);
+    if (in < 0) {
+        if (errno == ENOENT) { out[0] = '\0'; return 0; }
+        snprintf(out, len, "READ %s", strerror(errno));
+        return -1;
+    }
+    char stamp[32];
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
+
+    char path[sizeof(cfg->filepath) + 40];
+    int fd = -1;
+    for (int n = 0; n < 10 && fd < 0; n++) {
+        if (n == 0) snprintf(path, sizeof(path), "%s.bak-%s", cfg->filepath, stamp);
+        else        snprintf(path, sizeof(path), "%s.bak-%s-%d", cfg->filepath, stamp, n);
+        fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd < 0 && errno != EEXIST) break;
+    }
+    if (fd < 0) {
+        snprintf(out, len, "CREATE %s", strerror(errno));
+        close(in);
+        return -1;
+    }
+
+    /* Every byte, and fsync before success is claimed: a backup that exists
+     * only in the page cache is not one if the unit loses power next. */
+    char buf[1024];
+    ssize_t r;
+    int err = 0;
+    while ((r = read(in, buf, sizeof(buf))) > 0) {
+        for (ssize_t off = 0; off < r; ) {
+            ssize_t w = write(fd, buf + off, (size_t)(r - off));
+            if (w < 0) { if (errno == EINTR) continue; err = errno; break; }
+            off += w;
+        }
+        if (err) break;
+    }
+    if (r < 0 && !err) err = errno;
+    if (!err && fsync(fd) < 0) err = errno;
+    if (close(fd) < 0 && !err) err = errno;
+    close(in);
+    if (err) {
+        unlink(path);   /* a partial copy must not pass for the backup */
+        snprintf(out, len, "WRITE %s", strerror(err));
+        return -1;
+    }
+    snprintf(out, len, "%s", path);
+    return 1;
+}
+
+void cp_status(const char *msg, bool ok) {
+    if (!g_state) return;
+    snprintf(g_state->status_msg, sizeof(g_state->status_msg), "%s", msg);
+    g_state->status_time_ms = get_time_ms();
+    g_state->status_hold_ms = STATUS_PAGE_HOLD_MS;
+    g_state->status_ok      = ok;
+}
+
+int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
+    AppState *state = g_state;
+    char where[200];   /* config_backup() writes a path of up to 168 bytes */
+    int b = config_backup(cfg, where, sizeof(where));
+    if (b < 0) {
+        /* Nothing is reset: the operator is told, and the settings stay. */
+        fprintf(stderr, "control_panel: RESET DEFAULTS refused, backup failed: %s\n", where);
+        snprintf(msg, len, "RESET FAILED: BACKUP %s", where);
+        return -1;
+    }
+    if (b > 0) printf("control_panel: RESET DEFAULTS, config backed up to %s\n", where);
+    else       printf("control_panel: RESET DEFAULTS, no config file to back up\n");
+
+    /* config_clear() drops the Display keys too, so restore their defaults
+     * and re-apply, otherwise the backlight keeps a value no longer in the
+     * file and the Display tab shows a stale number.
+     *
+     * ⚠️ MUSIC / EFFECTS have no DEFAULT_* macro here on purpose: their
+     * default lives in common/config.c's helpers, which is what
+     * common/audio.c reads, so the switch on screen cannot disagree with
+     * what a game will do.  On a cleared Config those helpers return
+     * exactly that default. */
+    config_clear(cfg);
+    state->audio_enabled = DEFAULT_AUDIO_ENABLED;
+    state->music_enabled = config_music_enabled(cfg);
+    state->effects_enabled = config_effects_enabled(cfg);
+    /* Read back through the getter on the CLEARED config, for the same reason
+     * MUSIC and EFFECTS do above: the default the screen shows then cannot
+     * disagree with the one a game will resolve. */
+    state->audio_device_idx =
+        audio_device_index_of(config_audio_device(cfg));
+    /* A page with no SAVE (the LED page) must show what the file holds and
+     * what hardware.c drives, so its reset_defaults() removes its own keys
+     * from the file and reloads the cache, so page, file and hardware all
+     * land on config.c's default together. */
+    for (int i = 0; i < HOME_ITEM_COUNT; i++)
+        if (home_items[i].page && home_items[i].page->reset_defaults)
+            home_items[i].page->reset_defaults(cfg);
+    /* RESET writes the cleared file: the button is nowhere near a SAVE, and
+     * the backup above is what makes the write safe.  Games then resolve every
+     * key through config.c's defaults, the same values shown here. */
+    config_save(cfg);
+    state->saved_audio_device_idx = state->audio_device_idx;
+    state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
+    audio_toggle.state = state->audio_enabled;
+    music_toggle.state = state->music_enabled;
+    effects_toggle.state = state->effects_enabled;
+    apply_backlight(state->backlight_brightness);
+    if (b > 0) snprintf(msg, len, "BACKUP: %s", where);
+    else       snprintf(msg, len, "DEFAULTS RESTORED - NO FILE TO BACK UP");
+    return 0;
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2582,6 +2680,7 @@ int main(void) {
 
     AppState state;
     memset(&state, 0, sizeof(state));
+    g_state = &state;
     config_init(&state.cfg);
     config_load(&state.cfg);
 
@@ -2609,9 +2708,12 @@ int main(void) {
     while (running) {
         uint32_t now = get_time_ms();
 
-        /* Status message timeout — visual change */
-        if (state.status_msg[0] && now - state.status_time_ms > 2000) {
+        /* Status message timeout — visual change, and exactly one repaint: the
+         * clear is what makes the test false on every later iteration. */
+        uint32_t hold = state.status_hold_ms ? state.status_hold_ms : STATUS_HOLD_MS;
+        if (state.status_msg[0] && now - state.status_time_ms > hold) {
             state.status_msg[0] = '\0';
+            state.status_hold_ms = 0;
             needs_redraw = true;
         }
 

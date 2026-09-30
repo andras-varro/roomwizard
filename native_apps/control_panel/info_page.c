@@ -10,8 +10,11 @@
  * whether touch is calibrated are the Display tab's; the audio keys are the
  * Settings tab's.  So a key those pages own is left out of the config list.
  *
- * Display only: read on load and on every enter(), never per second; input()
- * has no widgets and always returns CP_PAGE_IDLE.
+ * Read on load and on every enter(), never per second.  The one widget is the
+ * global RESET DEFAULTS, beside the config file's row because the file is what
+ * it backs up before resetting; the reset itself is control_panel.c's
+ * (cp_reset_all_defaults()), and where the backup went is posted with
+ * cp_status().  It has no confirm step, as it had none on the Settings tab.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
@@ -129,6 +132,12 @@ static void fmt_fb_memory(unsigned stride, unsigned long size, char *buf, size_t
 #define INFO_LINE_H    12   /* a scale-1 text line and its gap to the next */
 #define INFO_GAP        6   /* between sections */
 #define INFO_WIDE_LABEL "DEFAULT APP:"   /* the widest label: values align after it */
+#define RESET_W       180   /* RESET DEFAULTS: 168 px of scale-2 label + padding */
+#define RESET_H        40
+#define RESET_GAP       4   /* under the button, before the key list */
+#define RESET_TEXT_DY  13   /* scale-2 text (14 px) centred on the button's 40 */
+
+static Button reset_btn;
 
 enum {
     ROW_KERNEL, ROW_BUILT, ROW_HOSTNAME, ROW_DEFAULT_APP,
@@ -173,6 +182,17 @@ static const char *row_value(int row, const Framebuffer *fb, char *buf, size_t l
     }
 }
 
+/* The x a row's value is cut from.  fit_value() cuts at CONTENT_RIGHT, so the
+ * FILE value beside the button in landscape is passed an x shifted right by
+ * the button's width plus a 10 px gap: the room it gets then ends at the
+ * button.  draw() and the receipt both use this, so what is measured is what
+ * is drawn and the value cannot run under the button. */
+static int fit_x(int row) {
+    if (row == ROW_CONFIG_FILE && !stacked)
+        return value_x + (CONTENT_RIGHT - (reset_btn.x - 10));
+    return value_x;
+}
+
 static int place_row(int row, int y) {
     label_y[row] = y;
     if (stacked) { value_y[row] = y + INFO_ROW_H; return y + 2 * INFO_ROW_H; }
@@ -198,8 +218,19 @@ static void info_page_layout(void) {
     for (int r = ROW_CPU; r <= ROW_FB_MEMORY; r++) y = place_row(r, y);
     y += INFO_GAP;
 
+    /* RESET DEFAULTS goes beside the FILE row in landscape, which grows to the
+     * button's height with its text centred on it.  Portrait's stacked value
+     * reaches under where the button would be, so there it takes its own line
+     * under the value, right-aligned the same. */
     sec_cfg_y = y;  y += INFO_HEADER_H;
-    y = place_row(ROW_CONFIG_FILE, y);
+    if (stacked)
+        y = place_row(ROW_CONFIG_FILE, y);
+    else
+        label_y[ROW_CONFIG_FILE] = value_y[ROW_CONFIG_FILE] = y + RESET_TEXT_DY;
+    button_init_full(&reset_btn, CONTENT_RIGHT - RESET_W, y, RESET_W, RESET_H,
+                     "RESET DEFAULTS", BTN_COLOR_DANGER, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 2);
+    y += RESET_H + RESET_GAP;
 
     keys_y = y;
     key_lines = (CONTENT_Y + CONTENT_H - y) / INFO_LINE_H;
@@ -213,7 +244,10 @@ static void info_page_layout(void) {
      * is the last config-key line the space allows.  Values are cut at
      * CONTENT_RIGHT by fit_value(), so the right edge cannot pass it; what the
      * receipt reports instead is how many of THIS unit's values were cut, the
-     * framebuffer rows measured at their widest (32 BPP, 99999 B/LINE, 10 MB). */
+     * framebuffer rows measured at their widest (32 BPP, 99999 B/LINE, 10 MB).
+     * The FILE value is cut at the button instead (fit_x()), and the button's
+     * own top and bottom are printed, since it is the one thing here a finger
+     * has to reach. */
     {
         char s[160], cut[160];
         int bottom = y - CONTENT_Y;
@@ -224,7 +258,7 @@ static void info_page_layout(void) {
             if (r == ROW_FB_FORMAT)      { fmt_fb_format(32, false, s, sizeof(s)); v = s; }
             else if (r == ROW_FB_MEMORY) { fmt_fb_memory(99999, 9999999, s, sizeof(s)); v = s; }
             else                         v = row_value(r, NULL, s, sizeof(s));
-            if (fit_value(v, value_x, 2, cut, sizeof(cut))) clipped++;
+            if (fit_value(v, fit_x(r), 2, cut, sizeof(cut))) clipped++;
             int w = value_x + text_measure_width(cut, 2);
             if (w > right) right = w;
         }
@@ -238,9 +272,11 @@ static void info_page_layout(void) {
                             : "fits";
         printf("control_panel: information stack %s — bottom +%d of CONTENT_H %d, "
                "right %d of CONTENT_RIGHT %d, %d value(s) cut, %d key line(s) "
-               "for %d key(s) (safe %dx%d, %s)\n",
+               "for %d key(s), reset button +%d..+%d (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT, clipped,
-               key_lines, info.key_count, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
+               key_lines, info.key_count, reset_btn.y - CONTENT_Y,
+               reset_btn.y + reset_btn.height - CONTENT_Y,
+               SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                stacked ? "portrait" : "landscape");
     }
 }
@@ -255,9 +291,10 @@ static void info_page_draw(Framebuffer *fb) {
     draw_section_header(fb, sec_cfg_y, "CONFIG");
     for (int r = 0; r < ROW_COUNT; r++) {
         fb_draw_text(fb, CONTENT_LEFT + 10, label_y[r], row_labels[r], COLOR_LABEL, 2);
-        fit_value(row_value(r, fb, s, sizeof(s)), value_x, 2, cut, sizeof(cut));
+        fit_value(row_value(r, fb, s, sizeof(s)), fit_x(r), 2, cut, sizeof(cut));
         fb_draw_text(fb, value_x, value_y[r], cut, COLOR_WHITE, 2);
     }
+    button_draw(fb, &reset_btn);
 
     int x = CONTENT_LEFT + 10;
     if (!info.config_found) {
@@ -280,11 +317,17 @@ static void info_page_draw(Framebuffer *fb) {
     }
 }
 
-/* No widgets, and nothing changes while the page is open. */
+/* RESET DEFAULTS is the only thing here that changes anything.  The config
+ * list is re-read after it, because a page's reset_defaults() rewrites the
+ * file this page lists; the button's own look is button_take_dirty()'s. */
 static CpPageResult info_page_input(Config *cfg, int tx, int ty,
                                     bool touching, uint32_t now) {
-    (void)cfg; (void)tx; (void)ty; (void)touching; (void)now;
-    return CP_PAGE_IDLE;
+    if (!button_update(&reset_btn, tx, ty, touching, now)) return CP_PAGE_IDLE;
+    char msg[160];
+    int rc = cp_reset_all_defaults(cfg, msg, sizeof(msg));
+    cp_status(msg, rc == 0);
+    info_read();
+    return CP_PAGE_REDRAW;
 }
 
 const CpPage cp_info_page = {
