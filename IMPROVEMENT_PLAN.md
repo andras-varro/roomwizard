@@ -978,13 +978,13 @@ fire in a file of the same kind, or the scan goes blind where it used to see.
 **Design.** One program whose first screen is a **paged icon grid** (paging, not scrolling; 3x2
 landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_launcher` also uses. Config
 "apps" exist only inside it, never as launcher tiles. Each icon opens an in-process page module with BACK
-to the grid (the target shape of C2); heavy tools (Mix Bus Test, Tap-a-Theremin, `touch_raw`) stay child
+to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
 processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
 disappears. Reboot/shutdown and reset-to-defaults are reachable from the home screen.
 
 | Icon | Holds |
 |---|---|
-| Audio | enable, music/effects, output device, chime test, tone sweep, Mix Bus Test, Theremin |
+| Audio | enable, music/effects, output device, chime test, tone sweep, Mix Bus Test |
 | Display | backlight slider and ramp test, portrait toggle, screen geometry, display pattern pages |
 | Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic |
 | LED | enable, brightness, ramp/pulse/blink/cycle tests |
@@ -1006,13 +1006,13 @@ CLI (no script calls it, measured by grep; its one unique trait is an ssh get/se
 steps, deploy/marker references and README rows. `hardware_diag` is already hidden (its `.app` manifest
 is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
 fix its EXIT corner separately from `device_tools`'. Check page by page that no diag page holds a field
-the tabs lack; move a unique one rather than keep the binary. Mix Bus Test and Tap-a-Theremin are **not**
-redundant: they move under Audio and lose their launcher tiles. `fb_plane_bench` and `dss_scale_ab` go
+the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
+redundant: it moves under Audio and loses its launcher tile. **Tap-a-Theremin is an app, not a test tool,
+and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` go
 under Display as developer entries or stay hidden — operator's call.
 
-**Stages, each verified on the panel.** (1) `common/icon_grid.c` extracted from `app_launcher.c`, the
-launcher pixel-identical (in progress, uncommitted), plus a `device_tools` home grid whose icons open
-today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on
+**Stages, each verified on the panel.** (1) a `device_tools` home grid on `common/icon_grid.c` (already
+extracted; the launcher frame measured md5-identical) whose icons open today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on
 the BlueZ backend.
 
 **Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
