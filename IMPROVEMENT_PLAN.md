@@ -804,6 +804,27 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
+### F103. Software power-off: make `poweroff` more than a halt — open, asked by the operator 2026-09-29
+
+**Today `poweroff` is `halt`.** Measured on .188 (our 4.14.52 image): `twl4030_power_off`, `pm_power_off`
+and `gpio_poweroff_driver` are in `/proc/kallsyms`, and `CONFIG_TWL4030_POWER=y`,
+`CONFIG_POWER_RESET_GPIO=y`, but no device is bound to `twl4030_power` or `poweroff-gpio`. The DT's
+`twl@48` node has no `ti,twl4030-power*` child and no `ti,system-power-controller`, in the vendor
+`original.dtb` and in `kernel/dts` alike. `drivers/mfd/twl4030-power.c` sets `pm_power_off` only when
+that property is present, and with `pm_power_off` NULL `kernel/reboot.c` turns POWER_OFF into HALT. The
+rootfs halt script already runs `halt -d -f -p -h`, so userspace is not the missing piece.
+
+**Inferred, not measured:** power is 802.3af PoE only (TPS23750 front end and buck upstream of the PMIC),
+so a TWL4030 OFF drops the SoC and RAM rails but probably not the PoE front end. The backlight supply is
+unknown, so the panel may stay lit. Waking needs a start-on event; there is no power button and the PWRON
+wiring is unknown, so pulling PoE is the expected only way back.
+
+**Action.** A DT-only change in `kernel/dts`: a `ti,twl4030-power` child under `twl@48` with
+`ti,system-power-controller` (the generic compatible loads no sequencing scripts, the lowest risk). Stage
+it as a test image under a new filename, then run ONE `poweroff` with the operator watching the panel and
+the PoE port draw. **Done when** we know whether `poweroff` darkens the panel and reduces PoE draw, and
+the launcher's Shutdown either uses it or keeps halt plus backlight-off (C16).
+
 ## Structural and cleanup
 
 ### C1. Extract the shared evdev layer — open, classifier and scan done
@@ -991,7 +1012,18 @@ landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_laun
 "apps" exist only inside it, never as launcher tiles. Each icon opens an in-process page module with BACK
 to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
 processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
-disappears. Reboot/shutdown and reset-to-defaults are reachable from the home screen.
+disappears. Reset-to-defaults stays in the control panel.
+
+`icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
+exits; `app_launcher`, which the boot init script respawns so a plain exit does nothing, opens a
+Shutdown / Reboot / Cancel dialog. Reboot/shutdown therefore **move** out of `device_tools` (dialogs and
+the `shutdown -h now` / `reboot` calls, `device_tools.c` ~544-561, on the shared ModalDialog). The launcher
+draws a shutdown screen ("It is now safe to unplug the RoomWizard") before halting, because a halt leaves a
+bright white panel: measured on .188 2026-09-29 (n=1), `shutdown -h now` halts, backlight on, unit down
+over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi drops
+its enable GPIO, while `kernel/dts/panel-dpi.sh` holds the LVDS and backlight-enable GPIOs high as hogs
+and the TWL PWM backlight stays powered. Either turn the backlight off last (dark, no message) or keep it
+on if the message survives the halt; one measurement decides, and F103 may replace the halt.
 
 | Icon | Holds |
 |---|---|
