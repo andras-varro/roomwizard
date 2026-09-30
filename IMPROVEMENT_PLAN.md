@@ -1083,11 +1083,10 @@ it against the other touch tools in that row (edges, multi-touch test, touch zon
 diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
-launcher frame md5-identical). Display and Touch open Display; USB opens USB;
-Network, Information, Monitor, USB and Audio open their own `CpPage`s (below); the Diagnostics, USB and Settings tabs no longer exist, so the tab bar is
-TESTS/DISPLAY. Display and Touch (Display tab) still open the old
-tab. Tests is a letter
-tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
+launcher frame md5-identical). Touch opens the leftover Touch tab;
+Network, Information, Monitor, USB, Audio and Display open their own `CpPage`s (below); the Diagnostics, USB and Settings tabs no longer exist, so the tab bar is
+TESTS/TOUCH.
+Tests is a letter tile until J4, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
 and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their tabs, BACK, slide-off does nothing, the red X exits.
 
@@ -1105,10 +1104,24 @@ deleted by operator decision: Mix Bus Test replaces it, and `check-audio-pacing.
 that opens a stream to set `.busy`. Receipts measured on .188, bottom margin of CONTENT_H: landscape +140/375,
 portrait +140/741. **Pending operator taps** (the operator will test the remaining jobs in one session).
 
+**The Display page is done on the registry** (`control_panel/display_page.c`, exports `cp_display_page`,
+"Display"): the backlight bar (20..100, step 10) and the portrait toggle (writes or unlinks
+`/opt/games/portrait.mode`) both save at once, no SAVE; a note under the toggle reads "ON NEXT LAUNCH -
+CALIBRATE IN LANDSCAPE"; a VISIBLE row; BACKLIGHT RAMP and TEST PATTERNS moved from the Tests tab as full-screen
+runs. The backlight half of RESET DEFAULTS is the page's `reset_defaults`, and the Display-only reset is
+deleted. **Implementer's decision, open for the operator:** the global RESET DEFAULTS does not reset portrait
+(a flag file; a reset silently flipping the next launch seemed worse; one line to change). The leftover
+`TAB_DISPLAY` is now the **Touch tab** (label TOUCH, home tile "Touch", icon `cp_touch`): SCREEN GEOMETRY rows
+(TOUCH, EDGES, TOUCHABLE), CALIBRATE TOUCH, SCREEN EDGES, TOUCH DIAGNOSTIC and RESET GEOMETRY (behind "RESET
+SCREEN GEOMETRY?"); it prints a `touch stack` receipt. The Tests tab holds TOUCH ZONE and MULTI-TOUCH only.
+Receipts measured on .188, bottom margin of CONTENT_H: display landscape +245/375, portrait +275/741; touch tab
+landscape +172/375, portrait +346/741; the home grid fits both. **Pending operator taps:** the Audio page, Mix
+Bus Test and the Display page, tested in one session later.
+
 **Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
 `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
-LED tests run full-screen. Settings lost its LED block and the Tests tab is down to four: backlight, touch
-zone, display, multi-touch. LED is **done on the registry below** (verified by finger on .188,
+LED tests run full-screen. Settings lost its LED block and the Tests tab is down to two:
+touch zone, multi-touch. LED is **done on the registry below** (verified by finger on .188,
 2026-09-30): `led_page.c` exports only `cp_led_page`, `led_page.h` is deleted and `control_panel.c` holds no
 per-page code.
 
@@ -1126,18 +1139,18 @@ this page. After the control-panel refactor, work returns to Bluetooth (F17), wh
 shared through `cp_ui.h`). Information: SYSTEM (kernel release and build string, hostname, default app),
 HARDWARE (CPU, BogoMIPS, framebuffer format and memory), CONFIG (file path; keys no page owns, "+N MORE" on
 overflow), read on enter with no refresh; fields shown elsewhere were dropped (LEDs to LED, backlight,
-resolution and calibrated to the Display tab, audio keys to the Audio page). Network: routing (gateway, up to 3
+resolution to the Display page, calibrated to the Touch tab, audio keys to the Audio page). Network: routing (gateway, up to 3
 DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
 when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
 +346/375, information +368/375, monitor +342/375, led +245/375; portrait network +610/741, information
 +740/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information, Network and
 Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, within ~2 s) and replug (UP, green).
-Information has no `calibrated?` row by the operator's decision: the Display tab's TOUCH: CALIBRATED row is
+Information has no `calibrated?` row by the operator's decision: the Touch tab's TOUCH: CALIBRATED row is
 its home.
 
 **RESET DEFAULTS lives on the Information page** beside CONFIG → FILE. It
 asks first through the panel's one shared confirm dialog (`cp_confirm()` in `cp_page.h`, also used by the
-Display tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "(TOUCH CALIBRATION IS
+Touch tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "(TOUCH CALIBRATION IS
 KEPT)". The brackets are the operator's, so the second line does not read as part of the reset; the wording
 stays although `config_clear` wipes every key (e.g. `fx_*` overrides). On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
 nothing is reset and an orange RESET FAILED shows), then runs `config_clear`, every page's `reset_defaults`,
@@ -1145,7 +1158,7 @@ and saves the cleared file at once. `/etc/touch_calibration.conf` is untouched (
 messages with `cp_status()`, drawn in the title bar in place of the page name and held 6 s, one repaint on
 expiry. Operator taps on .188 passed: button placement, backup written and path shown, a second reset makes a
 second backup, settings back to default, BACK; on 2026-09-30 also the confirm dialog (CANCEL, BACK blocked
-under it, OK) and the Display reset's two-line message.
+under it, OK).
 
 **USB is a `CpPage` too** (`control_panel/usb_page.c` exports `cp_usb_page`; the USB tab is deleted): device
 list read through `usb_bus.c`, RESCAN plus the port re-probe as a full-screen run, and the keyboard, mouse and
@@ -1163,15 +1176,10 @@ SCANNING paints first and an empty port is re-probed on open (a keyboard shows w
 "+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
 
 **Remaining work, ordered single-commit jobs** (`control_panel.c` line refs are approximate as of `ce86df7`:
-re-grep). The Display tab still has a Display-only reset (backlight + portrait): **proposal, not decided** — it
-goes, since the global one covers it and the Display page saves on change.
+re-grep).
 
-- **J2.** `display_page.c`: backlight bar, portrait toggle (+ "ON NEXT LAUNCH" note), VISIBLE row,
-  `apply_backlight`, Tests' backlight ramp (`test_backlight_run` ~958) and display patterns (`test_display`
-  ~1104-1212). Save on change. The Touch half stays on a leftover `TAB_DISPLAY` until J3a; the `disp_*` layout
-  helpers are shared, so split carefully.
 - **J3a.** `touch_page.c`: CALIBRATE, SCREEN EDGES, TOUCH DIAGNOSTIC, RESET GEOMETRY (+ confirm modal), rows
-  TOUCH: CALIBRATED, EDGES, TOUCHABLE, `run_touch_diagnostic`, Tests' touch zone and multi-touch (`TZ_*`).
+  TOUCH: CALIBRATED, EDGES, TOUCHABLE, `run_touch_diagnostic`, Tests' touch zone and multi-touch (`TZ_*`); the `disp_*` helpers belong only to the Touch tab now.
   Deletes `TAB_DISPLAY`. Risks: `main()` draws and handles the confirm modal before page input (needs a `CpPage`
   path, or confirm inside `run_fullscreen`); after the wizard the panel must `rebuild_ui` (logical screen can
   change) — rebuild after any full-screen run, or add a hook; the page reads `fb->portrait_mode` itself (the
@@ -1179,7 +1187,7 @@ goes, since the global one covers it and the Display page saves on change.
 - **J3b.** `run_calib_wizard` and helpers (~1650-2440) moved verbatim into `touch_wizard.c` behind
   `(fb, touch, edges_only)` → status string, removing its `AppState` use. Folding `touch_trace`/`touch_raw`
   stays an operator question; do not widen J3.
-- **J4.** With the backlight ramp and display patterns on the Display page (J2) and touch zone and multi-touch
+- **J4.** With the backlight ramp and display patterns on the Display page and touch zone and multi-touch
   on the Touch page (J3a), delete the Tests tile and `TAB_TESTS` machinery (keep `draw_test_screen` and `check_touch`, which
   `led_page` and the moved tests use); collapse `tab`/`set_view`/`ActiveTab` to HOME vs PAGE.
 
