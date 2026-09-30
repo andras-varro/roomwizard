@@ -854,8 +854,8 @@ not built by any script.
 
 Five previously-separate GUIs behind a tab enum, sharing nothing but the tab bar. Splitting into
 `tab_settings.c` / `tab_diag.c` / `tab_tests.c` / `tab_calib.c` behind a small vtable is mechanical
-and costs one line each in `build-and-deploy.sh`. The page modules in C16 are its target shape. `do_led_test` still blocks the UI
-~500 ms (audio pumps through it) — acceptable to the operator for now.
+and costs one line each in `build-and-deploy.sh`. The page modules in C16 are its target shape. `led_preview()` in `control_panel/led_page.c` still blocks the UI
+~500 ms on each -/+ press — acceptable to the operator for now.
 
 ### C4. Make the common library use the logger — open
 
@@ -1041,13 +1041,15 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 | Monitor | live memory, CPU, storage, load/uptime, SoC temperature (F4) |
 | Information | static versions, kernel, config, calibrated? |
 
-**Duplicates deleted as each function lands in its one home** (inventory measured 2026-09-29): LED
-ramp/pulse/blink/cycle, backlight ramp, touch zone grid, display patterns and tone sweep
+**Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
+function has a home** (operator, 2026-09-30); duplicates inside `control_panel` itself are still deleted
+as each page lands. The inventory below (measured 2026-09-29) is the checklist for that final deletion:
+LED ramp/pulse/blink/cycle, backlight ramp, touch zone grid, display patterns and tone sweep
 (`control_panel` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
 chime+enable and save/reset (vs `hardware_config/hardware_config.c`); the system/memory/storage/hardware/
 config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`format_bytes` copies (vs
 `hardware_diag/hardware_diag.c`, five pages, `:51-55`); the USB input testers (vs `usb_test/usb_test.c`,
-which only `build-usb-test.sh` builds). Then delete the binaries `hardware_test` (with the never-compiled
+which only `build-usb-test.sh` builds). The binaries to delete then are `hardware_test` (with the never-compiled
 `hardware_test.c` and `pressure_test.c`), `hardware_config`, `hardware_diag`, `usb_test` and the backlight
 CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
 steps, deploy references and README rows. `hardware_diag` is already hidden (its `.app` manifest
@@ -1065,7 +1067,7 @@ it against the other touch tools in that row (edges, multi-touch test, touch zon
 diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
-launcher frame md5-identical). Audio and LED open Settings; Display and Touch open Display; USB opens USB;
+launcher frame md5-identical). Audio opens Settings; Display and Touch open Display; USB opens USB;
 Network, Monitor and Information open the Diagnostics pages Network, Memory and System. Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
@@ -1075,8 +1077,17 @@ and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons ope
 **moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
 one by one as stage 2 progresses, never in bulk.
 
-**Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting the duplicate
-as it lands; (3) Bluetooth page on the BlueZ backend.
+**Stage 2 has begun: LED is done** (verified on .188 by finger, 2026-09-30). The LED icon opens its own
+in-process page, `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no
+SAVE), and the six LED tests (red, green, both, pulse, blink, colors) run full-screen. Settings lost its LED
+block (its global RESET DEFAULTS still resets the LED keys) and the Tests tab is down to five: backlight,
+touch zone, display, audio, multi-touch. **The pattern the next pages reuse:** a page is an `ActiveTab`
+value past `TAB_HOME` with no tab button; its bar shows BACK plus the title taken from its home tile's
+label (`is_page()` / `page_title()` in `control_panel.c`); shared drawing helpers live in
+`control_panel/cp_ui.h`; the page prints its own `control_panel: <page> stack fits` receipt.
+
+**Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting duplicates
+inside `control_panel` as they land; (3) Bluetooth page on the BlueZ backend.
 
 **Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
 550 px button row overflows a ~400 px portrait content width (`control_panel.c` ~3549-3553); the Mix Bus
