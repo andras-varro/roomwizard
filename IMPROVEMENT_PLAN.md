@@ -1080,7 +1080,11 @@ one by one as stage 2 progresses, never in bulk.
 **Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
 `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
 LED tests run full-screen. Settings lost its LED block and the Tests tab is down to five: backlight, touch
-zone, display, audio, multi-touch. LED is **being converted** to the registry below, the first page to be.
+zone, display, audio, multi-touch. LED is **done on the registry below** (verified by finger on .188,
+2026-09-30): `led_page.c` exports only `cp_led_page`, `led_page.h` is deleted and `control_panel.c` holds no
+per-page code. **Next: the Monitor icon** (memory, CPU, storage, load from the Diagnostics Memory page,
+display-only), built as a `CpPage` from the start. After the control-panel refactor, work returns to Bluetooth
+(F17), whose page is a `CpPage`.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
@@ -1097,7 +1101,7 @@ launcher, not the folder, so the return path breaks; and every tap re-inits fb, 
 UI already lives in the control panel, VNC and ScummVM keep their settings in-app).
 
 **Deferred, operator-rated nice-to-have:** `dlopen` `CpPage` modules from a directory, taken up once the
-registry is proven (LED converted plus at least one more page working on the panel), or earlier if a page
+registry is proven (LED is converted; it now waits only on a second page working on the panel), or earlier if a page
 must be built outside `native_apps`. It must meet: an ABI version field in `CpPage`, refused on mismatch (a stale
 plugin must not load against a newer panel: the silent-misparse class of the touch config); a plugin crash
 takes the control panel down (init respawns the launcher) — accepted; shared helpers exported

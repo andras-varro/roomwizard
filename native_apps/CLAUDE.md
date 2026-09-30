@@ -48,7 +48,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
 | `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`gamepad.c`, `control_panel`, `vnc_client` and ScummVM all call it) | a fourth copy of the classifier or scan loop |
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
-| `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
+| `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()`; `Button`/`ToggleSwitch` carry `disabled` and a disabled one refuses all input itself (touch, tap, press, keyboard hit-test) and draws grey, so set `.disabled` from state | hand-rolled widgets; per-use guards, hand-rolled greying or early returns in a page |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
 | `icon_grid.c` | the paged icon-tile grid (layout + receipt, tile, paging, hit-test, 96 px icon load) — the launcher's, and the home screen of any tile menu | a second tile grid; the launcher's frame was md5-identical before and after the extraction |
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
