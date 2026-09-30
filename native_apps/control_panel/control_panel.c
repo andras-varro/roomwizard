@@ -1,13 +1,14 @@
 /**
- * Control Panel â€” Unified Hardware App for RoomWizard
+ * Control Panel — Unified Hardware App for RoomWizard
  *
- * Consolidates four standalone hardware utilities into a single tab-based GUI:
- *   Tab 1: Settings     â€” Audio, LED, backlight configuration
- *   Tab 2: Diagnostics  â€” System/memory/storage/hardware/config info
- *   Tab 3: Tests        â€” Interactive LED, display, audio, and touch tests
- *   Tab 4: Calibration  â€” Touch calibration + bezel margin adjustment
- *
- * See DESIGN.md for full architecture specification.
+ * Opens on an icon grid (the home view); each tile opens a page:
+ *   Settings     — audio: enable, music/effects, output device
+ *   Diagnostics  — system/memory/storage/hardware/config/network info
+ *   Tests        — backlight, touch zone, display, audio and multi-touch tests
+ *   Display      — backlight, orientation, touch calibration, bezel margins
+ *   USB          — the bus list and the keyboard/mouse/pad testers
+ *   LED          — enable, brightness and the LED tests (led_page.c); a
+ *                  grid-only page with no tab of its own
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -25,6 +26,8 @@
 #include "../common/input_scan.h"
 #include "../common/icon_grid.h"
 #include "usb_bus.h"
+#include "cp_ui.h"
+#include "led_page.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,7 +61,6 @@
 #define COLOR_TAB_ACTIVE     RGB(50, 50, 70)
 #define COLOR_TAB_INACTIVE   RGB(35, 35, 50)
 #define COLOR_SECTION_LINE   RGB(60, 60, 80)
-#define COLOR_LABEL          RGB(180, 180, 180)
 #define COLOR_HEADER_TEXT    COLOR_CYAN
 #define COLOR_DATA           COLOR_WHITE
 #define COLOR_BAR_BG         RGB(40, 40, 40)
@@ -95,25 +97,15 @@
  * Layout Constants
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-#define TAB_BAR_H         44
-#define TAB_DIVIDER_H     2
-#define CONTENT_Y         (SCREEN_SAFE_TOP + TAB_BAR_H + TAB_DIVIDER_H)
-#define CONTENT_H         (SCREEN_SAFE_HEIGHT - TAB_BAR_H - TAB_DIVIDER_H)
-#define CONTENT_LEFT      (SCREEN_SAFE_LEFT + 10)
-#define CONTENT_RIGHT     (SCREEN_SAFE_RIGHT - 10)
-#define CONTENT_WIDTH     (CONTENT_RIGHT - CONTENT_LEFT)
+/* TAB_BAR_H, CONTENT_*, BAR_WIDTH/BAR_HEIGHT and COLOR_LABEL live in cp_ui.h,
+ * which the page modules share. */
 
 #define TAB_BTN_W         150
 #define TAB_BTN_H         40
 #define TAB_BTN_SPACING   4
 #define BACK_BTN_W        55
 
-#define BAR_WIDTH  300
-#define BAR_HEIGHT 20
-
 #define DEFAULT_AUDIO_ENABLED        true
-#define DEFAULT_LED_ENABLED          true
-#define DEFAULT_LED_BRIGHTNESS       100
 #define DEFAULT_BACKLIGHT_BRIGHTNESS 100
 
 /* The old 40 px calibration-target inset lived here. It is gone on purpose:
@@ -140,7 +132,6 @@
    screen_base_width / screen_base_height at runtime in each function. */
 #define TZ_HEADER 36
 
-#define NUM_TESTS 11
 #define NUM_MOUNT_POINTS 4
 
 static const char *mount_points[] = {
@@ -203,7 +194,11 @@ typedef enum {
     TAB_DISPLAY,
     TAB_USB,
     TAB_COUNT,
-    TAB_HOME     /* the icon grid — after TAB_COUNT because it is not a tab */
+    /* Views with no tab button go after TAB_COUNT: every loop over the tab bar
+     * stops there, so none of these can index tab_names[] or tab_buttons[]. */
+    TAB_HOME,    /* the icon grid */
+    TAB_LED      /* led_page.c — reached from its home tile only; the tab bar
+                    shows BACK and highlights nothing */
 } ActiveTab;
 
 typedef enum {
@@ -237,12 +232,14 @@ typedef enum {
     CONFIRM_RESET_GEOMETRY   /* Display tab: touch range + edges to defaults */
 } ConfirmAction;
 
-static const char *tab_names[] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY", "USB" };
+/* Indexed only below TAB_COUNT — TAB_HOME and TAB_LED have no tab button. */
+static const char *tab_names[TAB_COUNT] = { "SETTINGS", "DIAGNOSTICS", "TESTS", "DISPLAY", "USB" };
 
-/* The home grid. Each icon opens the tab (and Diagnostics page) that holds its
- * settings today; regrouping a page's contents under its icon happens one icon at
- * a time, deleting the duplicate as it lands. Bluetooth has no page yet, so no
- * tile. icon NULL = the grid's letter tile. */
+/* The home grid. Each icon opens the page that holds its settings: LED has its
+ * own (TAB_LED); the others still open the tab (and Diagnostics page) that
+ * carries them, and move to a page of their own one icon at a time, deleting the
+ * duplicate as each lands. Bluetooth has no page yet, so no tile. icon NULL =
+ * the grid's letter tile. */
 typedef struct {
     const char *label;
     const char *icon;          /* basename under /opt/roomwizard/icons/, no .ppm */
@@ -254,7 +251,7 @@ static const HomeItem home_items[] = {
     { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_SYSTEM  },
     { "Display",     "cp_display", TAB_DISPLAY,     DIAG_SYSTEM  },
     { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_SYSTEM  },
-    { "LED",         "cp_led",     TAB_SETTINGS,    DIAG_SYSTEM  },
+    { "LED",         "cp_led",     TAB_LED,         DIAG_SYSTEM  },
     { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM  },
     { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK },
     { "Monitor",     "cp_monitor", TAB_DIAGNOSTICS, DIAG_MEMORY  },
@@ -264,11 +261,26 @@ static const HomeItem home_items[] = {
 #define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define HOME_TITLE_H    50
 
-static const char *test_names[] = {
-    "RED LED", "GREEN LED", "BOTH LEDS", "BACKLIGHT", "PULSE",
-    "BLINK", "COLORS", "TOUCH ZONE", "DISPLAY", "AUDIO",
-    "MULTI-TOUCH"
+/* The Tests tab: name and routine in one row, and the count derived from the
+ * table, so the button pressed and the routine run cannot drift the way a name
+ * list beside a bare-index switch could.  The routines are in the Tests Tab
+ * section below; the LED tests are on the LED page (led_page.c). */
+static void test_backlight_run(Framebuffer *fb, TouchInput *touch);
+static void test_touch_zone(Framebuffer *fb, TouchInput *touch);
+static void test_display(Framebuffer *fb, TouchInput *touch);
+static void test_audio_diag(Framebuffer *fb, TouchInput *touch);
+static void test_multitouch(Framebuffer *fb, TouchInput *touch);
+static const struct {
+    const char *name;
+    void      (*run)(Framebuffer *, TouchInput *);
+} tests[] = {
+    { "BACKLIGHT",   test_backlight_run },
+    { "TOUCH ZONE",  test_touch_zone    },
+    { "DISPLAY",     test_display       },
+    { "AUDIO",       test_audio_diag    },
+    { "MULTI-TOUCH", test_multitouch    },
 };
+#define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
 
 static const char *diag_page_titles[] = {
     "SYSTEM INFO", "MEMORY", "STORAGE", "HARDWARE", "CONFIGURATION", "NETWORK"
@@ -297,8 +309,8 @@ typedef struct {
     Audio         settings_audio;
     bool          settings_audio_open;
     int           settings_audio_idx; /* the audio_device_idx it was opened on */
-    bool          led_enabled;
-    int           led_brightness;
+    LedPageState  led;                /* the LED page's values, as saved */
+    int           led_test;           /* LED test to run full-screen, -1 none */
     int           backlight_brightness;
     bool          portrait_mode;
     char          status_msg[64];
@@ -345,14 +357,12 @@ static void signal_handler(int sig) {
 static Button tab_buttons[TAB_COUNT];
 static Button back_btn;          /* the tab bar's BACK to the home grid */
 
-/* Settings — sound and indicators. Screen-related settings live on the
- * Display tab, next to the calibration they interact with. */
+/* Settings — sound. Screen-related settings live on the Display tab, next to
+ * the calibration they interact with; the LEDs have their own page. */
 static ToggleSwitch audio_toggle;
 static ToggleSwitch music_toggle, effects_toggle;
-static ToggleSwitch led_toggle;
 static Button audio_dev_btn;
-static Button test_audio_btn, test_led_btn;
-static Button led_minus_btn, led_plus_btn;
+static Button test_audio_btn;
 static Button save_btn, reset_btn;
 
 /* Diagnostics */
@@ -383,7 +393,7 @@ static Button usb_btn_kback, usb_btn_mback, usb_btn_gback;
  * Shared Drawing Helpers
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-static void draw_section_header(Framebuffer *fb, int y, const char *title) {
+void draw_section_header(Framebuffer *fb, int y, const char *title) {
     int left = CONTENT_LEFT;
     int right = CONTENT_RIGHT;
     fb_draw_text(fb, left, y, title, COLOR_HEADER_TEXT, 2);
@@ -394,8 +404,8 @@ static void draw_section_header(Framebuffer *fb, int y, const char *title) {
     }
 }
 
-static void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
-                                 int min_val, int max_val, int bar_width) {
+void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
+                         int min_val, int max_val, int bar_width) {
     fb_fill_rect(fb, x, y, bar_width, BAR_HEIGHT, COLOR_BAR_BG);
     int range = max_val - min_val;
     int fill_w = (range > 0) ? ((value - min_val) * bar_width) / range : 0;
@@ -477,10 +487,24 @@ static void create_tab_bar(void) {
                      BTN_HIGHLIGHT_COLOR, 3);
 }
 
+/* A page reached from its home tile only (past TAB_HOME) is a module of its
+ * own: its bar carries BACK and the page's title, never the old tabs. */
+static bool is_page(ActiveTab t) { return t > TAB_HOME; }
+
+/* The title is the label of the tile that opens the page — one name, one home. */
+static const char *page_title(ActiveTab t) {
+    for (int i = 0; i < HOME_ITEM_COUNT; i++)
+        if (home_items[i].tab == t) return home_items[i].label;
+    return "";
+}
+
 static void draw_tab_bar(Framebuffer *fb, AppState *state) {
     fb_fill_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
                  SCREEN_SAFE_WIDTH, TAB_BAR_H, COLOR_TAB_BG);
-    for (int i = 0; i < TAB_COUNT; i++) {
+    if (is_page(state->active_tab)) {
+        text_draw_centered(fb, fb->width / 2, back_btn.y + back_btn.height / 2,
+                           page_title(state->active_tab), COLOR_WHITE, 3);
+    } else for (int i = 0; i < TAB_COUNT; i++) {
         tab_buttons[i].bg_color = (i == (int)state->active_tab)
                                   ? COLOR_TAB_ACTIVE : COLOR_TAB_INACTIVE;
         button_draw(fb, &tab_buttons[i]);
@@ -519,9 +543,10 @@ static void set_tab(AppState *state, ActiveTab tab) {
 
 static void handle_tab_bar_input(AppState *state, int tx, int ty,
                                  bool touching, uint32_t now) {
-    for (int i = 0; i < TAB_COUNT; i++)
-        if (button_update(&tab_buttons[i], tx, ty, touching, now))
-            set_tab(state, (ActiveTab)i);
+    if (!is_page(state->active_tab))
+        for (int i = 0; i < TAB_COUNT; i++)
+            if (button_update(&tab_buttons[i], tx, ty, touching, now))
+                set_tab(state, (ActiveTab)i);
     if (button_update(&back_btn, tx, ty, touching, now))
         set_tab(state, TAB_HOME);
 }
@@ -602,28 +627,6 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
  * Settings Tab  (from hardware_config.c)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-static void do_led_test(Audio *bus, int brightness_pct) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", brightness_pct);
-    FILE *f;
-    f = fopen("/sys/class/leds/red_led/brightness", "w");
-    if (f) { fputs(buf, f); fclose(f); }
-    f = fopen("/sys/class/leds/green_led/brightness", "w");
-    if (f) { fputs(buf, f); fclose(f); }
-    /* Hold the flash ~500 ms, but keep servicing the Settings bus the main loop
-     * pumps every iteration: a blocking sleep here left a chime TEST AUDIO
-     * had just queued unserviced for the whole flash. A closed bus is a no-op. */
-    uint32_t t0 = get_time_ms();
-    while (get_time_ms() - t0 < 500) {
-        audio_pump(bus);
-        usleep(10000);
-    }
-    f = fopen("/sys/class/leds/red_led/brightness", "w");
-    if (f) { fputs("0", f); fclose(f); }
-    f = fopen("/sys/class/leds/green_led/brightness", "w");
-    if (f) { fputs("0", f); fclose(f); }
-}
-
 static void apply_backlight(int brightness_pct) {
     /* Live preview of the slider value — unscaled on purpose: the slider IS the
      * scale factor, so hw_set_backlight() would apply the outgoing one.  The raw
@@ -635,21 +638,20 @@ static void apply_backlight(int brightness_pct) {
         fprintf(stderr, "control_panel: backlight preview write failed\n");
 }
 
-/* Settings layout. Backlight and portrait used to live here; they moved to the
- * Display tab, which is why the action row sits so much higher than it did.
+/* Settings layout. Backlight and portrait moved to the Display tab and the LEDs
+ * to their own page, which is why the action row sits right under AUDIO.
  *
- * ⚠️ **Everything below AUDIO is offset by SET_AUDIO_ROW2_H**, the row that
- * carries MUSIC / EFFECTS.  The row was added after the rest of this stack was
- * hand-placed, so the offset is a named constant applied to the two `action_y`
- * expressions rather than 44 baked into a dozen literals — and
- * create_settings_ui() prints the resulting bottom against CONTENT_H, because the
- * inset is per unit and nothing on screen would show that the last row had
- * stopped clearing it. */
+ * ⚠️ **The action row hangs off row 2**, the one carrying MUSIC / EFFECTS / OUT:
+ * SET_ACTION_Y is row 2's top plus SET_AUDIO_ROW2_H (its 28 px track and a 16 px
+ * lead), one macro that create_settings_ui() places SAVE / RESET DEFAULTS from
+ * and draw_settings() hangs the status line off, so the two cannot disagree —
+ * and create_settings_ui() prints the resulting bottom against CONTENT_H,
+ * because the inset is per unit and nothing on screen would show that the last
+ * row had stopped clearing it. */
 #define SET_AUDIO_ROW2_H 44                          /* 28 px track + 16 px lead */
 #define SET_SEC_AUDIO_Y  (CONTENT_Y + 2)
 #define SET_AUDIO_ROW2_Y (SET_SEC_AUDIO_Y + 54)
-#define SET_SEC_LED_Y    (CONTENT_Y + 52 + SET_AUDIO_ROW2_H)
-#define SET_LED_BAR_Y    (SET_SEC_LED_Y + 50)
+#define SET_ACTION_Y     (SET_AUDIO_ROW2_Y + SET_AUDIO_ROW2_H)
 
 /* ── The audio-output cycling button ────────────────────────────────────────
  * "onboard" | "usb" | "auto" as ONE button that cycles, because no multi-choice
@@ -730,9 +732,7 @@ static int settings_out_btn_box(int *x, int *w) {
 static void create_settings_ui(AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
-    int sec_led_y   = SET_SEC_LED_Y;
-    int action_y    = CONTENT_Y + (portrait ? 175 : 145) + SET_AUDIO_ROW2_H;
-    int led_bar_y   = SET_LED_BAR_Y;
+    int action_y    = SET_ACTION_Y;
 
     toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 20,
                 60, 28, "AUDIO ENABLED", state->audio_enabled);
@@ -768,36 +768,7 @@ static void create_settings_ui(AppState *state) {
                          BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
     }
 
-    toggle_init(&led_toggle, CONTENT_LEFT + 5, sec_led_y + 20,
-                60, 28, "LED EFFECTS", state->led_enabled);
-
-    if (portrait) {
-        /* Portrait stacked layout: [-] [bar] [+] value on row below label */
-        int bar_w = CONTENT_WIDTH - 170;
-        if (bar_w < 80) bar_w = 80;
-        int led_ctrl_y = led_bar_y + 25;
-
-        button_init_full(&led_minus_btn, CONTENT_LEFT, led_ctrl_y - 5,
-                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&led_plus_btn, CONTENT_LEFT + 55 + bar_w + 10, led_ctrl_y - 5,
-                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    } else {
-        /* Landscape layout: label + [-] [bar] [+] on same row */
-        int led_bar_x = CONTENT_LEFT + 190;
-        button_init_full(&led_minus_btn, led_bar_x - 55, led_bar_y - 5,
-                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&led_plus_btn, led_bar_x + BAR_WIDTH + 70, led_bar_y - 5,
-                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    }
-
     button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 18,
-                     90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&test_led_btn, CONTENT_RIGHT - 100, sec_led_y + 18,
                      90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 
@@ -860,9 +831,7 @@ static void create_settings_ui(AppState *state) {
 static void draw_settings(Framebuffer *fb, AppState *state) {
     int portrait = (CONTENT_WIDTH < 600);
     int sec_audio_y = SET_SEC_AUDIO_Y;
-    int sec_led_y   = SET_SEC_LED_Y;
-    int action_y    = CONTENT_Y + (portrait ? 175 : 145) + SET_AUDIO_ROW2_H;
-    int led_bar_y   = SET_LED_BAR_Y;
+    int action_y    = SET_ACTION_Y;
 
     draw_section_header(fb, sec_audio_y, "AUDIO");
     toggle_draw(fb, &audio_toggle);
@@ -910,25 +879,6 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
     button_set_text(&audio_dev_btn, audio_device_labels[state->audio_device_idx]);
     button_draw(fb, &audio_dev_btn);
 
-    draw_section_header(fb, sec_led_y, "LEDS");
-    toggle_draw(fb, &led_toggle);
-    button_draw(fb, &test_led_btn);
-
-    fb_draw_text(fb, CONTENT_LEFT + 5, led_bar_y + 2,
-                 "LED BRIGHTNESS", COLOR_LABEL, 2);
-    button_draw(fb, &led_minus_btn);
-    if (portrait) {
-        int bar_w = CONTENT_WIDTH - 170;
-        if (bar_w < 80) bar_w = 80;
-        int led_ctrl_y = led_bar_y + 25;
-        draw_brightness_bar(fb, CONTENT_LEFT + 55, led_ctrl_y,
-                            state->led_brightness, 0, 100, bar_w);
-    } else {
-        draw_brightness_bar(fb, CONTENT_LEFT + 190, led_bar_y,
-                            state->led_brightness, 0, 100, BAR_WIDTH);
-    }
-    button_draw(fb, &led_plus_btn);
-
     button_draw(fb, &save_btn);
     button_draw(fb, &reset_btn);
 
@@ -965,19 +915,7 @@ static void handle_settings_input(AppState *state, int tx, int ty,
      * NEXT/DONE button already uses and the reason the two can never disagree. */
     if (button_update(&audio_dev_btn, tx, ty, touching, now))
         state->audio_device_idx = (state->audio_device_idx + 1) % 3;
-    if (toggle_check_press(&led_toggle, tx, ty, touching, now))
-        state->led_enabled = led_toggle.state;
 
-    if (button_update(&led_minus_btn, tx, ty, touching, now)) {
-        state->led_brightness -= 10;
-        if (state->led_brightness < 0) state->led_brightness = 0;
-        do_led_test(&state->settings_audio, state->led_brightness);
-    }
-    if (button_update(&led_plus_btn, tx, ty, touching, now)) {
-        state->led_brightness += 10;
-        if (state->led_brightness > 100) state->led_brightness = 100;
-        do_led_test(&state->settings_audio, state->led_brightness);
-    }
     /* Queued, not played: the main loop's audio_pump() delivers it, so the press
      * returns at once.  Lazy open covers a bus whose tab-entry open failed. */
     if (button_update(&test_audio_btn, tx, ty, touching, now)) {
@@ -987,13 +925,11 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         if (state->settings_audio_open)
             audio_test_chime(&state->settings_audio);
     }
-    if (button_update(&test_led_btn, tx, ty, touching, now))
-        do_led_test(&state->settings_audio, state->led_brightness);
 
     /* Saves this tab's keys only. Backlight and portrait belong to the Display
-     * tab and are saved by its own SAVE — config_save() rewrites the whole file
-     * from the in-memory Config either way, so the two never clobber each
-     * other. */
+     * tab and are saved by its own SAVE, and the LED page saves as it goes —
+     * config_save() rewrites the whole file from the in-memory Config, which the
+     * LED page keeps in step, so none of them clobbers another. */
     if (button_update(&save_btn, tx, ty, touching, now)) {
         config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
         config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
@@ -1009,8 +945,6 @@ static void handle_settings_input(AppState *state, int tx, int ty,
         config_set(&state->cfg, "audio_device",
                    audio_device_names[state->audio_device_idx]);
         state->saved_audio_device_idx = state->audio_device_idx;
-        config_set_bool(&state->cfg, "led_enabled", state->led_enabled);
-        config_set_int(&state->cfg, "led_brightness", state->led_brightness);
         config_save(&state->cfg);
         snprintf(state->status_msg, sizeof(state->status_msg),
                  "SETTINGS SAVED AND APPLIED");
@@ -1037,13 +971,16 @@ static void handle_settings_input(AppState *state, int tx, int ty,
             audio_device_index_of(config_audio_device(&state->cfg));
         /* saved_audio_device_idx is NOT touched: RESET writes nothing to disk, so
          * a default that differs from the file is exactly an unsaved change. */
-        state->led_enabled = DEFAULT_LED_ENABLED;
-        state->led_brightness = DEFAULT_LED_BRIGHTNESS;
+        /* ⚠️ The LEDs are the exception to "RESET writes nothing": the LED page
+         * has no SAVE, so what it shows must be what the file holds and what
+         * hardware.c drives.  Their keys are removed from the file (and only
+         * theirs) and the cache reloaded, so page, file and LEDs all land on
+         * config.c's default together. */
+        led_page_reset_defaults(&state->led, &state->cfg);
         state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
         audio_toggle.state = state->audio_enabled;
         music_toggle.state = state->music_enabled;
         effects_toggle.state = state->effects_enabled;
-        led_toggle.state = state->led_enabled;
         apply_backlight(state->backlight_brightness);
         snprintf(state->status_msg, sizeof(state->status_msg), "DEFAULTS RESTORED");
         state->status_time_ms = now;
@@ -1519,12 +1456,12 @@ static void create_tests_ui(void) {
                         test_cols, test_item_w, 70, 8, 16, 10, 60, 10, 20);
     ui_layout_update(&test_layout, NUM_TESTS);
     for (int i = 0; i < NUM_TESTS; i++)
-        button_init_full(&test_buttons[i], 0, 0, test_item_w, 70, test_names[i],
+        button_init_full(&test_buttons[i], 0, 0, test_item_w, 70, tests[i].name,
                          RGB(34,34,34), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
 }
 
-static void draw_test_screen(Framebuffer *fb, const char *title,
-                             const char *status, int progress) {
+void draw_test_screen(Framebuffer *fb, const char *title,
+                      const char *status, int progress) {
     fb_clear(fb, COLOR_BLACK);
     text_draw_centered(fb, fb->width / 2, 50, title, COLOR_WHITE, 3);
     if (status) text_draw_centered(fb, fb->width / 2, 150, status, COLOR_CYAN, 2);
@@ -1540,74 +1477,12 @@ static void draw_test_screen(Framebuffer *fb, const char *title,
     fb_swap(fb);
 }
 
-static bool check_touch(TouchInput *touch, int *x, int *y) {
+bool check_touch(TouchInput *touch, int *x, int *y) {
     if (touch_poll(touch) > 0) {
         TouchState ts = touch_get_state(touch);
         if (ts.pressed) { *x = ts.x; *y = ts.y; return true; }
     }
     return false;
-}
-
-static void test_red_led(Framebuffer *fb, TouchInput *touch) {
-    int x, y;
-    for (int i = 0; i <= 100; i += 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "RED LED TEST", s, i);
-        hw_set_red_led(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_red_led(0); return; }
-    }
-    for (int i = 0; i < 20; i++) { usleep(50000); if (check_touch(touch, &x, &y)) { hw_set_red_led(0); return; } }
-    for (int i = 100; i >= 0; i -= 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "RED LED TEST", s, 100 - i);
-        hw_set_red_led(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_red_led(0); return; }
-    }
-    hw_set_red_led(0);
-    draw_test_screen(fb, "RED LED TEST", "COMPLETE!", 100);
-    while (!check_touch(touch, &x, &y)) usleep(10000);
-}
-
-static void test_green_led(Framebuffer *fb, TouchInput *touch) {
-    int x, y;
-    for (int i = 0; i <= 100; i += 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "GREEN LED TEST", s, i);
-        hw_set_green_led(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_green_led(0); return; }
-    }
-    for (int i = 0; i < 20; i++) { usleep(50000); if (check_touch(touch, &x, &y)) { hw_set_green_led(0); return; } }
-    for (int i = 100; i >= 0; i -= 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "GREEN LED TEST", s, 100 - i);
-        hw_set_green_led(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_green_led(0); return; }
-    }
-    hw_set_green_led(0);
-    draw_test_screen(fb, "GREEN LED TEST", "COMPLETE!", 100);
-    while (!check_touch(touch, &x, &y)) usleep(10000);
-}
-
-static void test_both_leds(Framebuffer *fb, TouchInput *touch) {
-    int x, y;
-    for (int i = 0; i <= 100; i += 5) {
-        char s[64]; snprintf(s, sizeof(s), "BOTH LEDS: %d%%", i);
-        draw_test_screen(fb, "BOTH LEDS TEST", s, i);
-        hw_set_leds(i, i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_leds_off(); return; }
-    }
-    for (int i = 0; i < 20; i++) { usleep(50000); if (check_touch(touch, &x, &y)) { hw_leds_off(); return; } }
-    for (int c = 0; c < 5; c++) {
-        draw_test_screen(fb, "BOTH LEDS TEST", "RED ONLY", 50);
-        hw_set_leds(100, 0);
-        for (int i = 0; i < 10; i++) { usleep(50000); if (check_touch(touch, &x, &y)) { hw_leds_off(); return; } }
-        draw_test_screen(fb, "BOTH LEDS TEST", "GREEN ONLY", 50);
-        hw_set_leds(0, 100);
-        for (int i = 0; i < 10; i++) { usleep(50000); if (check_touch(touch, &x, &y)) { hw_leds_off(); return; } }
-    }
-    hw_leds_off();
-    draw_test_screen(fb, "BOTH LEDS TEST", "COMPLETE!", 100);
-    while (!check_touch(touch, &x, &y)) usleep(10000);
 }
 
 static void test_backlight_run(Framebuffer *fb, TouchInput *touch) {
@@ -1627,38 +1502,6 @@ static void test_backlight_run(Framebuffer *fb, TouchInput *touch) {
     }
     hw_set_backlight(original);
     draw_test_screen(fb, "BACKLIGHT TEST", "COMPLETE!", 100);
-    while (!check_touch(touch, &x, &y)) usleep(10000);
-}
-
-static void test_pulse(Framebuffer *fb, TouchInput *touch) {
-    draw_test_screen(fb, "PULSE EFFECT", "PULSING GREEN LED...", 50);
-    hw_pulse_led(LED_GREEN, 3000, 100);
-    draw_test_screen(fb, "PULSE EFFECT", "COMPLETE!", 100);
-    int x, y; while (!check_touch(touch, &x, &y)) usleep(10000);
-}
-
-static void test_blink(Framebuffer *fb, TouchInput *touch) {
-    draw_test_screen(fb, "BLINK EFFECT", "BLINKING RED LED...", 50);
-    hw_blink_led(LED_RED, 10, 200, 200, 100);
-    draw_test_screen(fb, "BLINK EFFECT", "COMPLETE!", 100);
-    int x, y; while (!check_touch(touch, &x, &y)) usleep(10000);
-}
-
-static void test_colors(Framebuffer *fb, TouchInput *touch) {
-    const char *cnames[] = {"RED", "ORANGE", "YELLOW", "GREEN", "OFF"};
-    const struct { uint8_t r; uint8_t g; } cols[] = {
-        {100,0},{100,50},{100,100},{0,100},{0,0}
-    };
-    int x, y;
-    for (int i = 0; i < 5; i++) {
-        draw_test_screen(fb, "COLOR CYCLE", cnames[i], (i * 100) / 4);
-        hw_set_leds(cols[i].r, cols[i].g);
-        for (int j = 0; j < 20; j++) {
-            usleep(50000);
-            if (check_touch(touch, &x, &y)) { hw_leds_off(); return; }
-        }
-    }
-    draw_test_screen(fb, "COLOR CYCLE", "COMPLETE!", 100);
     while (!check_touch(touch, &x, &y)) usleep(10000);
 }
 
@@ -1984,20 +1827,8 @@ static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
 /* â”€â”€ Test dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static void run_test(Framebuffer *fb, TouchInput *touch, int test_id) {
-    switch (test_id) {
-        case 0: test_red_led(fb, touch);       break;
-        case 1: test_green_led(fb, touch);     break;
-        case 2: test_both_leds(fb, touch);     break;
-        case 3: test_backlight_run(fb, touch);  break;
-        case 4: test_pulse(fb, touch);         break;
-        case 5: test_blink(fb, touch);         break;
-        case 6: test_colors(fb, touch);        break;
-        case 7: test_touch_zone(fb, touch);    break;
-        case 8: test_display(fb, touch);       break;
-        case 9: test_audio_diag(fb, touch);    break;
-        case 10: test_multitouch(fb, touch);   break;
-        default: break;
-    }
+    if (test_id >= 0 && test_id < NUM_TESTS)
+        tests[test_id].run(fb, touch);
 }
 
 static void draw_test_menu(Framebuffer *fb, AppState *state) {
@@ -3920,6 +3751,7 @@ static void rebuild_ui(AppState *state) {
     create_tests_ui();
     create_display_ui(state);
     create_usb_ui();
+    led_page_create();   /* prints the "control_panel: led stack …" receipt */
     /* Prints the "control_panel home: safe …" receipt — see icon_grid_layout(). */
     icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "control_panel home");
 }
@@ -3929,6 +3761,10 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
     if (state->active_tab == TAB_TESTS) {
         run_test(fb, touch, state->test_selected);
         state->test_sub = TEST_MENU_VIEW;
+        hw_leds_off();
+    } else if (state->active_tab == TAB_LED) {
+        led_page_run_test(state->led_test, fb, touch);
+        state->led_test = -1;
         hw_leds_off();
     } else if (state->active_tab == TAB_DISPLAY) {
         if (state->calib_sub == CALIB_RUN_DIAG) {
@@ -4002,11 +3838,9 @@ int main(void) {
     state.effects_enabled = config_effects_enabled(&state.cfg);
     state.audio_device_idx = audio_device_index_of(config_audio_device(&state.cfg));
     state.saved_audio_device_idx = state.audio_device_idx;
-    state.led_enabled = config_get_bool(&state.cfg, "led_enabled", DEFAULT_LED_ENABLED);
-    state.led_brightness = config_get_int(&state.cfg, "led_brightness", DEFAULT_LED_BRIGHTNESS);
+    led_page_load(&state.led, &state.cfg);
+    state.led_test = -1;
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
-    if (state.led_brightness < 0)   state.led_brightness = 0;
-    if (state.led_brightness > 100) state.led_brightness = 100;
     if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
     if (state.backlight_brightness > 100) state.backlight_brightness = 100;
     state.portrait_mode = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
@@ -4037,7 +3871,8 @@ int main(void) {
 
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
                        || (state.active_tab == TAB_DISPLAY && state.calib_sub != CALIB_IDLE)
-                       || (state.active_tab == TAB_USB && state.usb_scr != USB_SCR_MAIN);
+                       || (state.active_tab == TAB_USB && state.usb_scr != USB_SCR_MAIN)
+                       || (state.active_tab == TAB_LED && state.led_test >= 0);
 
         if (fullscreen) {
             run_current_fullscreen_mode(&fb, &touch, &state);
@@ -4058,6 +3893,7 @@ int main(void) {
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
                 case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
                 case TAB_USB:         draw_usb(&fb, &state);         break;
+                case TAB_LED:         led_page_draw(&fb, &state.led); break;
                 default: break;
             }
 
@@ -4077,8 +3913,9 @@ int main(void) {
         bool          prev_effects   = state.effects_enabled;
         int           prev_out_idx   = state.audio_device_idx;
         int           prev_out_saved = state.saved_audio_device_idx;  /* UNSAVED note */
-        bool          prev_led      = state.led_enabled;
-        int           prev_led_br    = state.led_brightness;
+        bool          prev_led       = state.led.enabled;
+        int           prev_led_br    = state.led.brightness;
+        int           prev_led_test  = state.led_test;
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
@@ -4131,6 +3968,13 @@ int main(void) {
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
                 case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
                 case TAB_USB:         handle_usb_input(&state, tx, ty, touching, now);      break;
+                case TAB_LED: {
+                    int t;
+                    if (led_page_input(&state.led, &state.cfg, tx, ty, touching, now, &t)
+                            == LED_PAGE_RUN_TEST)
+                        state.led_test = t;
+                    break;
+                }
                 default: break;
             }
         }
@@ -4142,8 +3986,9 @@ int main(void) {
             prev_effects   != state.effects_enabled ||
             prev_out_idx   != state.audio_device_idx ||
             prev_out_saved != state.saved_audio_device_idx ||
-            prev_led      != state.led_enabled     ||
-            prev_led_br    != state.led_brightness  ||
+            prev_led       != state.led.enabled     ||
+            prev_led_br    != state.led.brightness  ||
+            prev_led_test  != state.led_test        ||
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
