@@ -1,8 +1,8 @@
 /* cp_ui.h — what control_panel's page modules share with control_panel.c.
  *
  * control_panel.c owns the tab bar, the home grid and every page that has not
- * moved out yet; a page that has (led_page.c) lays itself out in the same
- * content rectangle and draws with the same helpers.  This header is the one
+ * moved out yet; a page that has (led_page.c, monitor_page.c) lays itself out
+ * in the same content rectangle and draws with the same helpers.  This header is the one
  * home for that rectangle and those helpers, so a moved page cannot carry a
  * second copy of either.  The helper bodies stay in control_panel.c.
  *
@@ -16,6 +16,7 @@
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
 #include <stdbool.h>
+#include <stddef.h>
 
 /* The content rectangle: the safe area below the tab bar. */
 #define TAB_BAR_H         44
@@ -41,6 +42,14 @@ void draw_section_header(Framebuffer *fb, int y, const char *title);
  * grey when !active (a setting that is currently switched off). */
 void draw_brightness_bar(Framebuffer *fb, int x, int y, int value,
                          int min_val, int max_val, int bar_width, bool active);
+
+/* A used/total bar, green -> warn -> critical by fill, its percentage centred
+ * inside; label (if non-empty) is drawn 18 px above it. */
+void draw_usage_bar(Framebuffer *fb, int x, int y, int width, int height,
+                    unsigned long used, unsigned long total, const char *label);
+
+/* The first line of a file, newline stripped; 0, or -1 with buf empty. */
+int read_file_line(const char *path, char *buf, size_t len);
 
 /* A full-screen tester's frame: title, status, optional progress (-1 = none),
  * "TOUCH TO RETURN".  Swaps the framebuffer itself. */

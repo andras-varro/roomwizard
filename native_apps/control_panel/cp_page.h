@@ -56,6 +56,7 @@ typedef struct CpPage {
     void (*reset_defaults)(Config *cfg);
 } CpPage;
 
-extern const CpPage cp_led_page;   /* led_page.c */
+extern const CpPage cp_led_page;       /* led_page.c */
+extern const CpPage cp_monitor_page;   /* monitor_page.c */
 
 #endif

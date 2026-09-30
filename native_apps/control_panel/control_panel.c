@@ -3,12 +3,14 @@
  *
  * Opens on an icon grid (the home view); each tile opens a page:
  *   Settings     — audio: enable, music/effects, output device
- *   Diagnostics  — system/memory/storage/hardware/config/network info
+ *   Diagnostics  — system/hardware/config/network info
  *   Tests        — backlight, touch zone, display, audio and multi-touch tests
  *   Display      — backlight, orientation, touch calibration, bezel margins
  *   USB          — the bus list and the keyboard/mouse/pad testers
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
+ *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
+ *                  grid-only too
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -37,7 +39,6 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <linux/fb.h>
 #include <math.h>
@@ -132,15 +133,6 @@
    screen_base_width / screen_base_height at runtime in each function. */
 #define TZ_HEADER 36
 
-#define NUM_MOUNT_POINTS 4
-
-static const char *mount_points[] = {
-    "/",
-    "/home/root/data",
-    "/home/root/log",
-    "/home/root/backup"
-};
-
 /* ======================================================================
  * USB Constants & Types
  * ====================================================================== */
@@ -204,8 +196,6 @@ typedef enum {
 
 typedef enum {
     DIAG_SYSTEM,
-    DIAG_MEMORY,
-    DIAG_STORAGE,
     DIAG_HARDWARE,
     DIAG_CONFIG,
     DIAG_NETWORK,
@@ -257,7 +247,7 @@ static const HomeItem home_items[] = {
     { .tab = TAB_PAGE, .page = &cp_led_page },
     { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM,  NULL },
     { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK, NULL },
-    { "Monitor",     "cp_monitor", TAB_DIAGNOSTICS, DIAG_MEMORY,  NULL },
+    { .tab = TAB_PAGE, .page = &cp_monitor_page },
     { "Information", "cp_info",    TAB_DIAGNOSTICS, DIAG_SYSTEM,  NULL },
     { "Tests",       NULL,         TAB_TESTS,       DIAG_SYSTEM,  NULL },
 };
@@ -285,20 +275,14 @@ static const struct {
 };
 #define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
 
-static const char *diag_page_titles[] = {
-    "SYSTEM INFO", "MEMORY", "STORAGE", "HARDWARE", "CONFIGURATION", "NETWORK"
+/* Indexed by DiagPage and sized by it, so the table can never be shorter than
+ * the enum; each title names its page rather than relying on position. */
+static const char *diag_page_titles[DIAG_PAGE_COUNT] = {
+    [DIAG_SYSTEM]   = "SYSTEM INFO",
+    [DIAG_HARDWARE] = "HARDWARE",
+    [DIAG_CONFIG]   = "CONFIGURATION",
+    [DIAG_NETWORK]  = "NETWORK",
 };
-
-typedef struct {
-    unsigned long total_kb, free_kb, available_kb;
-    unsigned long buffers_kb, cached_kb;
-    unsigned long swap_total_kb, swap_free_kb;
-} MemInfo;
-
-typedef struct {
-    unsigned long total_kb, free_kb, used_kb;
-    int valid;
-} DiskInfo;
 
 typedef struct {
     ActiveTab     active_tab;
@@ -432,9 +416,9 @@ static int draw_info_row(Framebuffer *fb, int y, const char *label,
     return y + 28;
 }
 
-static void draw_usage_bar(Framebuffer *fb, int x, int y, int width,
-                           int height, unsigned long used,
-                           unsigned long total, const char *label) {
+void draw_usage_bar(Framebuffer *fb, int x, int y, int width,
+                    int height, unsigned long used,
+                    unsigned long total, const char *label) {
     if (label && label[0])
         fb_draw_text(fb, x, y - 18, label, COLOR_LABEL, 2);
     fb_fill_rect(fb, x, y, width, height, COLOR_BAR_BG);
@@ -1027,7 +1011,7 @@ static void handle_settings_input(AppState *state, int tx, int ty,
  * Diagnostics Tab  (from hardware_diag.c)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-static int read_file_line(const char *path, char *buf, size_t len) {
+int read_file_line(const char *path, char *buf, size_t len) {
     FILE *fp = fopen(path, "r");
     if (!fp) { buf[0] = '\0'; return -1; }
     if (!fgets(buf, (int)len, fp)) { buf[0] = '\0'; fclose(fp); return -1; }
@@ -1041,35 +1025,6 @@ static int read_sysfs_int(const char *path) {
     char buf[64];
     if (read_file_line(path, buf, sizeof(buf)) < 0) return -1;
     return atoi(buf);
-}
-
-static void read_meminfo(MemInfo *info) {
-    memset(info, 0, sizeof(*info));
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (!fp) return;
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
-        unsigned long val = 0;
-        if (sscanf(line, "MemTotal: %lu kB", &val) == 1) info->total_kb = val;
-        else if (sscanf(line, "MemFree: %lu kB", &val) == 1) info->free_kb = val;
-        else if (sscanf(line, "MemAvailable: %lu kB", &val) == 1) info->available_kb = val;
-        else if (sscanf(line, "Buffers: %lu kB", &val) == 1) info->buffers_kb = val;
-        else if (sscanf(line, "Cached: %lu kB", &val) == 1) info->cached_kb = val;
-        else if (sscanf(line, "SwapTotal: %lu kB", &val) == 1) info->swap_total_kb = val;
-        else if (sscanf(line, "SwapFree: %lu kB", &val) == 1) info->swap_free_kb = val;
-    }
-    fclose(fp);
-}
-
-static int read_disk_usage(const char *mp, DiskInfo *info) {
-    memset(info, 0, sizeof(*info));
-    struct statvfs st;
-    if (statvfs(mp, &st) != 0) { info->valid = 0; return -1; }
-    info->total_kb = (unsigned long)((unsigned long long)st.f_blocks * st.f_frsize / 1024);
-    info->free_kb  = (unsigned long)((unsigned long long)st.f_bfree  * st.f_frsize / 1024);
-    info->used_kb  = info->total_kb - info->free_kb;
-    info->valid    = 1;
-    return 0;
 }
 
 static void read_cpuinfo(char *model, size_t mlen, char *clk, size_t clen) {
@@ -1096,17 +1051,6 @@ static void read_cpuinfo(char *model, size_t mlen, char *clk, size_t clen) {
     fclose(fp);
     if (model[0] == '\0') snprintf(model, mlen, "Unknown");
     if (clk[0] == '\0') snprintf(clk, clen, "Unknown");
-}
-
-static void read_loadavg(char *buf, size_t len) {
-    if (read_file_line("/proc/loadavg", buf, len) < 0)
-        snprintf(buf, len, "N/A");
-}
-
-static void format_bytes(unsigned long kb, char *buf, size_t len) {
-    if (kb >= 1048576) snprintf(buf, len, "%.1f GB", (double)kb / 1048576.0);
-    else if (kb >= 1024) snprintf(buf, len, "%.1f MB", (double)kb / 1024.0);
-    else snprintf(buf, len, "%lu KB", kb);
 }
 
 // Read IP address for a given interface
@@ -1225,21 +1169,9 @@ static void draw_diag_system(Framebuffer *fb) {
       } sv[i] = '\0';
       y = draw_info_row(fb, y, "KERNEL:", sv, COLOR_DATA); }
     y += 4;
-    { char raw[64];
-      if (read_file_line("/proc/uptime", raw, sizeof(raw)) == 0) {
-          double secs = 0; sscanf(raw, "%lf", &secs);
-          int t = (int)secs; char fmt[64];
-          snprintf(fmt, sizeof(fmt), "%dd %dh %dm %ds",
-                   t/86400, (t%86400)/3600, (t%3600)/60, t%60);
-          y = draw_info_row(fb, y, "UPTIME:", fmt, COLOR_DATA);
-      } else { y = draw_info_row(fb, y, "UPTIME:", "N/A", COLOR_DATA); } }
-    y += 4;
     { char m[128], c[128]; read_cpuinfo(m, sizeof(m), c, sizeof(c));
       y = draw_info_row(fb, y, "CPU:", m, COLOR_DATA); y += 4;
       y = draw_info_row(fb, y, "CLOCK:", c, COLOR_DATA); }
-    y += 4;
-    { char la[128]; read_loadavg(la, sizeof(la));
-      y = draw_info_row(fb, y, "LOAD AVG:", la, COLOR_DATA); }
     y += 12;
     fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE);
     y += 12;
@@ -1247,52 +1179,6 @@ static void draw_diag_system(Framebuffer *fb) {
       if (read_file_line("/etc/hostname", hn, sizeof(hn)) < 0)
           snprintf(hn, sizeof(hn), "N/A");
       draw_info_row(fb, y, "HOSTNAME:", hn, COLOR_DATA); }
-}
-
-static void draw_diag_memory(Framebuffer *fb) {
-    MemInfo mi; read_meminfo(&mi);
-    unsigned long used = mi.total_kb - mi.free_kb - mi.buffers_kb - mi.cached_kb;
-    if (used > mi.total_kb) used = 0;
-    int y = CONTENT_Y + 30;
-    { char b[64];
-      format_bytes(mi.total_kb, b, sizeof(b)); y = draw_info_row(fb, y, "RAM TOTAL:", b, COLOR_DATA);
-      format_bytes(used, b, sizeof(b)); y = draw_info_row(fb, y, "RAM USED:", b, COLOR_YELLOW);
-      format_bytes(mi.free_kb, b, sizeof(b)); y = draw_info_row(fb, y, "RAM FREE:", b, COLOR_GREEN);
-      format_bytes(mi.available_kb, b, sizeof(b)); y = draw_info_row(fb, y, "AVAILABLE:", b, COLOR_GREEN);
-      format_bytes(mi.buffers_kb + mi.cached_kb, b, sizeof(b)); y = draw_info_row(fb, y, "BUF/CACHE:", b, COLOR_LABEL); }
-    y += 8;
-    draw_usage_bar(fb, CONTENT_LEFT+30, y+18, CONTENT_WIDTH-60, 22, used, mi.total_kb, "RAM USAGE:");
-    y += 58;
-    fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 12;
-    { char b[64]; unsigned long su = mi.swap_total_kb - mi.swap_free_kb;
-      format_bytes(mi.swap_total_kb, b, sizeof(b)); y = draw_info_row(fb, y, "SWAP TOTAL:", b, COLOR_DATA);
-      format_bytes(su, b, sizeof(b)); y = draw_info_row(fb, y, "SWAP USED:", b, COLOR_YELLOW);
-      format_bytes(mi.swap_free_kb, b, sizeof(b)); y = draw_info_row(fb, y, "SWAP FREE:", b, COLOR_GREEN);
-      y += 8;
-      draw_usage_bar(fb, CONTENT_LEFT+30, y+18, CONTENT_WIDTH-60, 22, su, mi.swap_total_kb, "SWAP USAGE:"); }
-}
-
-static void draw_diag_storage(Framebuffer *fb) {
-    int y = CONTENT_Y + 30;
-    for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
-        DiskInfo di; read_disk_usage(mount_points[i], &di);
-        fb_draw_text(fb, CONTENT_LEFT+10, y, mount_points[i], COLOR_HEADER_TEXT, 2); y += 22;
-        if (di.valid) {
-            char ts[32], us[32], fs[32];
-            format_bytes(di.total_kb, ts, sizeof(ts));
-            format_bytes(di.used_kb, us, sizeof(us));
-            format_bytes(di.free_kb, fs, sizeof(fs));
-            char det[128]; snprintf(det, sizeof(det), "%s USED / %s TOTAL  (%s FREE)", us, ts, fs);
-            fb_draw_text(fb, CONTENT_LEFT+30, y, det, COLOR_LABEL, 1); y += 14;
-            draw_usage_bar(fb, CONTENT_LEFT+30, y+4, CONTENT_WIDTH-60, 18, di.used_kb, di.total_kb, "");
-            y += 30;
-        } else {
-            fb_draw_text(fb, CONTENT_LEFT+30, y, "N/A (NOT MOUNTED)", RGB(200,80,80), 2); y += 28;
-        }
-        if (i < NUM_MOUNT_POINTS - 1) {
-            y += 4; fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 8;
-        }
-    }
 }
 
 static void draw_diag_hardware(Framebuffer *fb) {
@@ -1438,8 +1324,6 @@ static void draw_diagnostics(Framebuffer *fb, AppState *state) {
 
     switch (state->diag_page) {
         case DIAG_SYSTEM:  draw_diag_system(fb);  break;
-        case DIAG_MEMORY:  draw_diag_memory(fb);  break;
-        case DIAG_STORAGE: draw_diag_storage(fb);  break;
         case DIAG_HARDWARE:draw_diag_hardware(fb); break;
         case DIAG_CONFIG:  draw_diag_config(fb);   break;
         case DIAG_NETWORK: draw_diag_network(fb);  break;
