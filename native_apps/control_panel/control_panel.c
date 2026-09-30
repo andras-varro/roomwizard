@@ -2,7 +2,8 @@
  * Control Panel — Unified Hardware App for RoomWizard
  *
  * Opens on an icon grid (the home view); each tile opens a page:
- *   Settings     — audio: enable, music/effects, output device
+ *   Audio        — enable, music/effects, output device and the TEST chime
+ *                  (audio_page.c); grid-only
  *   Tests       — backlight, touch zone, display, audio and multi-touch tests
  *   Display      — backlight, orientation, touch calibration, bezel margins
  *   LED          — enable, brightness and the LED tests (led_page.c); a
@@ -77,7 +78,6 @@
 #define TAB_BTN_SPACING   4
 #define BACK_BTN_W        55
 
-#define DEFAULT_AUDIO_ENABLED        true
 #define DEFAULT_BACKLIGHT_BRIGHTNESS 100
 
 /* How long a status message stays up.  A page's message is held longer: the
@@ -110,7 +110,6 @@
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 typedef enum {
-    TAB_SETTINGS,
     TAB_TESTS,
     TAB_DISPLAY,
     TAB_COUNT,
@@ -145,7 +144,7 @@ typedef enum {
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "SETTINGS", "TESTS", "DISPLAY" };
+static const char *tab_names[TAB_COUNT] = { "TESTS", "DISPLAY" };
 
 /* The home grid, and the page registry: a row with a page opens that CpPage,
  * and takes its label and icon from it (one name, one home); every page named
@@ -161,7 +160,7 @@ typedef struct {
 } HomeItem;
 
 static const HomeItem home_items[] = {
-    { "Audio",       "cp_audio",   TAB_SETTINGS, NULL },
+    { .tab = TAB_PAGE, .page = &cp_audio_page },
     { "Display",     "cp_display", TAB_DISPLAY,  NULL },
     { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
@@ -197,16 +196,6 @@ static const struct {
 
 typedef struct {
     ActiveTab     active_tab;
-    bool          audio_enabled;
-    bool          music_enabled;      /* subordinate to audio_enabled — see create_settings_ui() */
-    bool          effects_enabled;
-    int           audio_device_idx;   /* index into audio_device_names[] */
-    int           saved_audio_device_idx;  /* what config holds — drives UNSAVED */
-    /* The Settings tab's own bus: open while the tab is up, so TEST is a queue
-     * and a pump rather than an open, a blocking hold and a close per press. */
-    Audio         settings_audio;
-    bool          settings_audio_open;
-    int           settings_audio_idx; /* the audio_device_idx it was opened on */
     const CpPage *page;               /* the open page when active_tab == TAB_PAGE */
     bool          page_dirty;         /* the page asked to be repainted */
     bool          page_fullscreen;    /* its input() queued a full-screen run */
@@ -243,20 +232,12 @@ bool cp_running(void) { return running; }
 static Button tab_buttons[TAB_COUNT];
 static Button back_btn;          /* the tab bar's BACK to the home grid */
 
-/* Settings — sound. Screen-related settings live on the Display tab, next to
- * the calibration they interact with; the LEDs have their own page. */
-static ToggleSwitch audio_toggle;
-static ToggleSwitch music_toggle, effects_toggle;
-static Button audio_dev_btn;
-static Button test_audio_btn;
-static Button save_btn;   /* RESET DEFAULTS is the Information page's */
-
 /* Tests */
 static UILayout test_layout;
 static Button test_buttons[NUM_TESTS];
 
 /* Display — backlight, orientation, and the screen geometry those depend on.
- * Portrait sits here rather than under Settings on purpose: calibration and
+ * Portrait sits here rather than on a page of its own on purpose: calibration and
  * edge measurement are landscape-only, and the toggle that makes them refuse
  * should be visible from the same screen. */
 static Button bl_minus_btn, bl_plus_btn;
@@ -378,7 +359,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "SET", "TEST", "DISP" };
+    static const char *short_labels[] = { "TEST", "DISP" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -450,9 +431,6 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
                  COLOR_SECTION_LINE);
 }
 
-static void settings_audio_open(AppState *s);
-static void settings_audio_close(AppState *s);
-
 /* The one place a view changes, so entering and leaving keep their side
  * effects whether the tab bar, the home grid or BACK asked. */
 static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
@@ -474,10 +452,6 @@ static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
         if (page->enter) page->enter();
         state->page_dirty = true;
     }
-    if (prev_tab == TAB_SETTINGS && tab != TAB_SETTINGS)
-        settings_audio_close(state);
-    if (prev_tab != TAB_SETTINGS && tab == TAB_SETTINGS)
-        settings_audio_open(state);
 }
 
 static void set_tab(AppState *state, ActiveTab tab) { set_view(state, tab, NULL); }
@@ -569,7 +543,7 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
- * Settings Tab  (from hardware_config.c)
+ * Backlight preview  (the Display tab's; RESET DEFAULTS re-applies it)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 static void apply_backlight(int brightness_pct) {
@@ -581,309 +555,6 @@ static void apply_backlight(int brightness_pct) {
     if (brightness_pct > 100) brightness_pct = 100;
     if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)
         fprintf(stderr, "control_panel: backlight preview write failed\n");
-}
-
-/* Settings layout. Backlight and portrait moved to the Display tab and the LEDs
- * to their own page, which is why the action row sits right under AUDIO.
- *
- * ⚠️ **The action row hangs off row 2**, the one carrying MUSIC / EFFECTS / OUT:
- * SET_ACTION_Y is row 2's top plus SET_AUDIO_ROW2_H (its 28 px track and a 16 px
- * lead), one macro that create_settings_ui() places SAVE from
- * and draw_settings() hangs the status line off, so the two cannot disagree —
- * and create_settings_ui() prints the resulting bottom against CONTENT_H,
- * because the inset is per unit and nothing on screen would show that the last
- * row had stopped clearing it. */
-#define SET_AUDIO_ROW2_H 44                          /* 28 px track + 16 px lead */
-#define SET_SEC_AUDIO_Y  (CONTENT_Y + 2)
-#define SET_AUDIO_ROW2_Y (SET_SEC_AUDIO_Y + 54)
-#define SET_ACTION_Y     (SET_AUDIO_ROW2_Y + SET_AUDIO_ROW2_H)
-
-/* ── The audio-output cycling button ────────────────────────────────────────
- * "onboard" | "usb" | "auto" as ONE button that cycles, because no multi-choice
- * widget exists in this app and adding a primitive for a single row is not worth
- * it.  It goes on row 2 to the RIGHT of EFFECTS, so it costs zero vertical pixels
- * and cannot move anything the vertical receipt below watches.
- *
- * ⚠️ The scale is pinned to 1 deliberately.  scale 2 needs 144 px of glyphs,
- * which fits landscape and NOT the ~150 px this row has left in portrait — and
- * portrait is reachable, the Display tab's own toggle writes the flag file that
- * selects it.  Pinning also keeps the button_init macro out of it: that macro
- * picks scale 3 for any box wider than 150 px, keyed off width alone.
- *
- * ⚠️ button_draw() centres the text and neither pads nor clips it, so a label
- * wider than its box paints outside the button in silence.  The box is therefore
- * measured from the WIDEST of the three labels, not from the current one. */
-#define SET_OUT_LABEL_WIDEST "OUT: ONBOARD"      /* 12 chars; USB and AUTO are shorter */
-
-static const char *audio_device_names[3]  = { "onboard", "usb", "auto" };
-static const char *audio_device_labels[3] = { "OUT: ONBOARD", "OUT: USB", "OUT: AUTO" };
-
-/* ⚠️ The one index with a name, because it is the one index the DIM rule turns on:
- * "usb" is the only setting whose preference a unit can fail to meet.  A bare `1`
- * there read as "the middle one" and invited the mistake it replaced — the first
- * version of that line tested `== 0` and so dimmed AUTO as well. */
-#define AUDIO_DEV_IDX_USB 1
-
-/* Anything unrecognised maps to onboard — the same thing audio_out_device_for()
- * does with an unknown value, so the button cannot show a state a game would not
- * actually resolve to. */
-static int audio_device_index_of(const char *name) {
-    for (int i = 0; i < 3; i++)
-        if (name && strcmp(name, audio_device_names[i]) == 0) return i;
-    return 0;
-}
-
-static void settings_audio_close(AppState *s) {
-    if (!s->settings_audio_open) return;
-    audio_close(&s->settings_audio);
-    s->settings_audio_open = false;
-}
-
-/* The unchecked open bypasses the ENABLE gate ON PURPOSE: a hardware test must
- * drive the speaker even with audio switched off, and audio_init() would make it
- * obey the very setting it exists to test.  The _pref form opens on the device
- * the OUT button SHOWS, saved or not — TEST reporting on the saved device while
- * the button names another is a verdict about hardware nobody asked about.
- *
- * Held for the whole tab, not per press: open → two blocking holds → close froze
- * the UI ~0.9 s per TEST and paid a stream start and stop each time.  Also why
- * this is no longer the library's serviced hold: the main loop pumps instead
- * (and naming that call here would exempt this file from check-audio-pacing.sh). */
-static void settings_audio_open(AppState *s) {
-    settings_audio_close(s);
-    s->settings_audio_idx  = s->audio_device_idx;
-    s->settings_audio_open = (audio_init_unchecked_pref(&s->settings_audio,
-                                  audio_device_names[s->audio_device_idx]) == 0);
-}
-
-/* Row 2's OUT button box, as a pure function of the content rect.
- *
- * ⚠️ This is the ONLY home for that x arithmetic, on purpose.  create_settings_ui()
- * places the button from it and the receipt checks the right edge with it, so the
- * two cannot drift — and horizontal is the direction this row is actually exposed
- * in, since the widths it stacks are text-derived and the portrait content rect is
- * barely wider than the stack.  Returns the right edge; writes x and width. */
-static int settings_out_btn_box(int *x, int *w) {
-    int music_w   = 60 + 8 + text_measure_width("MUSIC", 1);
-    int effects_w = 60 + 8 + text_measure_width("EFFECTS", 1);
-    /* 40 px is the gap this row already uses between MUSIC and EFFECTS. */
-    int bx = CONTENT_LEFT + 5 + music_w + 40 + effects_w + 40;
-    int bw = text_measure_width(SET_OUT_LABEL_WIDEST, 1) + 16;   /* 8 px each side */
-    if (x) *x = bx;
-    if (w) *w = bw;
-    return bx + bw;
-}
-
-static void create_settings_ui(AppState *state) {
-    int portrait = (CONTENT_WIDTH < 600);
-    int sec_audio_y = SET_SEC_AUDIO_Y;
-    int action_y    = SET_ACTION_Y;
-
-    toggle_init(&audio_toggle, CONTENT_LEFT + 5, sec_audio_y + 20,
-                60, 28, "AUDIO ENABLED", state->audio_enabled);
-
-    /* ── MUSIC / EFFECTS ────────────────────────────────────────────────────
-     * The two keys every game reads through common/audio.c's audio_init().  They
-     * are SUBORDINATE to AUDIO ENABLED: the master off means the process opens
-     * no device at all, so these two decide nothing (common/config.h documents
-     * the same hierarchy, and draw_settings() dims them when the master is off).
-     *
-     * They used to be a band on the launcher's games menu.  Moved here because
-     * that made a games menu carry settings widgets, and because a per-game copy
-     * — the other candidate — needs a live setter for `Audio.music_on`, a mid-run
-     * bed stop, and seven writers of one config key.  This is one writer and no
-     * new audio API; the price is that changing them means leaving the game.
-     *
-     * ⚠️ Widths are MEASURED, not guessed: toggle_draw() puts the label at
-     * scale 1 eight pixels right of the track, and that whole box is what
-     * toggle_check_press() hit-tests.  Both tracks are FLUSH with the master's
-     * at CONTENT_LEFT + 5 — an indent read as a stray row rather than as a
-     * child, so the subordination is carried by the dimming instead. */
-    int music_w = 60 + 8 + text_measure_width("MUSIC", 1);
-    toggle_init(&music_toggle, CONTENT_LEFT + 5, SET_AUDIO_ROW2_Y,
-                60, 28, "MUSIC", state->music_enabled);
-    toggle_init(&effects_toggle, CONTENT_LEFT + 5 + music_w + 40, SET_AUDIO_ROW2_Y,
-                60, 28, "EFFECTS", state->effects_enabled);
-
-    {
-        int out_x, out_w;
-        settings_out_btn_box(&out_x, &out_w);
-        button_init_full(&audio_dev_btn, out_x, SET_AUDIO_ROW2_Y, out_w, 28,
-                         audio_device_labels[state->audio_device_idx],
-                         BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
-    }
-
-    button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, sec_audio_y + 18,
-                     90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-
-    /* SAVE alone, centred, in both orientations.  The global RESET DEFAULTS is
-     * on the Information page, beside the config file it backs up first. */
-    int center_x = CONTENT_LEFT + CONTENT_WIDTH / 2;
-    button_init_full(&save_btn, center_x - 70, action_y,
-                     140, 40, "SAVE", BTN_COLOR_PRIMARY, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 3);
-
-    /* Shut down and reboot are NOT here: they are behind app_launcher's exit X. */
-
-    /* ⚠️ THE RECEIPT. This stack is hand-placed from CONTENT_Y and CONTENT_Y is
-     * derived from a per-unit touch inset, so a row pushed past the bottom of the
-     * touchable rect looks perfect in a framebuffer screenshot and is simply dead
-     * to a finger.  SAVE is the lowest button on the tab, so its bottom is the
-     * number that matters.  Printed once per tab build, and it says whether it
-     * fits rather than leaving that to be inferred. */
-    {
-        int bottom = (save_btn.y + save_btn.height) - CONTENT_Y;
-        printf("control_panel: settings stack %s — bottom +%d of CONTENT_H %d "
-               "(safe %dx%d, %s, row2 +%d)\n",
-               bottom <= CONTENT_H ? "fits" : "⚠ PAST CONTENT BOTTOM",
-               bottom, CONTENT_H, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
-               portrait ? "portrait" : "landscape", SET_AUDIO_ROW2_H);
-    }
-
-    /* ⚠️ THE HORIZONTAL RECEIPT, and it is the first one in this file. Everything
-     * above measures downward, because a row pushed past the bottom is the failure
-     * this stack used to have.  Row 2 is different: it stacks three text-derived
-     * widths left to right, and the portrait content rect is only about 150 px
-     * wider than the first two, so the OUT button is the one widget here whose
-     * right edge can leave the touchable rect.  It would look correct in a
-     * screenshot and be dead to a finger, and button_draw() would paint the label
-     * outside the box without complaining.  So the edge is printed, with the same
-     * fits/⚠ wording as the vertical one, and it is computed by the same function
-     * that placed the button. */
-    {
-        int right = settings_out_btn_box(NULL, NULL);
-        printf("control_panel: settings row2 %s — right edge %d of CONTENT_RIGHT %d "
-               "(safe %dx%d, %s)\n",
-               right <= CONTENT_RIGHT ? "fits" : "⚠ PAST CONTENT RIGHT",
-               right, CONTENT_RIGHT, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
-               portrait ? "portrait" : "landscape");
-    }
-}
-
-static void draw_settings(Framebuffer *fb, AppState *state) {
-    int sec_audio_y = SET_SEC_AUDIO_Y;
-    int action_y    = SET_ACTION_Y;
-
-    draw_section_header(fb, sec_audio_y, "AUDIO");
-    toggle_draw(fb, &audio_toggle);
-    button_draw(fb, &test_audio_btn);
-
-    /* MUSIC / EFFECTS are still LIVE with the master off — they are saved
-     * preferences, and refusing the press would just look broken — but they are
-     * drawn dimmed, because with no device opened neither of them decides
-     * anything and a bright green switch that changes nothing is a lie. */
-    uint32_t on_c   = state->audio_enabled ? RGB(0, 180, 60)    : RGB(0,  70, 25);
-    uint32_t off_c  = state->audio_enabled ? RGB(100, 100, 100) : RGB(55, 55, 55);
-    uint32_t knob_c = state->audio_enabled ? COLOR_WHITE        : RGB(150, 150, 150);
-    uint32_t lbl_c  = state->audio_enabled ? RGB(200, 200, 200) : RGB(120, 120, 120);
-    toggle_set_colors(&music_toggle,   on_c, off_c, knob_c, lbl_c);
-    toggle_set_colors(&effects_toggle, on_c, off_c, knob_c, lbl_c);
-    toggle_draw(fb, &music_toggle);
-    toggle_draw(fb, &effects_toggle);
-
-    /* ⚠️ Dim, do not hide — and dim on the honest condition rather than on "is a
-     * DAC plugged in".  The box always occupies its slot, so the row's geometry is
-     * card-independent and the receipt above means the same thing whatever is
-     * attached; it goes grey when the preference it names cannot currently be met,
-     * which is the master being off, or USB being asked for with no /dev/dsp1 to
-     * open.
-     *
-     * ⚠️ USB is the ONLY index that dims for absence, and the two that do not each
-     * have their own reason.  ONBOARD is never dimmed because onboard is always
-     * there.  AUTO is never dimmed because AUTO's preference is "whatever can be
-     * opened" — audio_out_device_for() falls it back to /dev/dsp silently — so it
-     * is met on every unit, with or without a DAC.  Dimming AUTO for a missing
-     * dongle was the first version of this line, and it told the operator that a
-     * setting which works everywhere was unavailable.
-     *
-     * The press stays LIVE in both cases, for exactly the reason MUSIC and EFFECTS
-     * do: this is a saved preference, and refusing to let someone select "usb"
-     * before they plug the DAC in would just look broken.  That is the settings-tab
-     * idiom, not the USB page's gated one — the USB page's buttons START something
-     * against a device that must exist, and this one only records a choice. */
-    bool out_live = state->audio_enabled &&
-                    (state->audio_device_idx != AUDIO_DEV_IDX_USB ||
-                     audio_out_usb_present());
-    audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : RGB(80, 80, 80);
-    audio_dev_btn.text_color   = out_live ? COLOR_WHITE    : RGB(150, 150, 150);
-    audio_dev_btn.border_color = audio_dev_btn.text_color;
-    button_set_text(&audio_dev_btn, audio_device_labels[state->audio_device_idx]);
-    button_draw(fb, &audio_dev_btn);
-
-    button_draw(fb, &save_btn);
-
-    if (state->status_msg[0]) {
-        text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           action_y + 50, state->status_msg, COLOR_GREEN, 2);
-    } else if (state->audio_device_idx != state->saved_audio_device_idx) {
-        /* TEST plays the SHOWN output, games the SAVED one — so say when they
-         * differ.  The status slot, because it is inside the measured stack and
-         * a transient message outranks this for its 2 s.  Scale drops to 1 where
-         * scale 2 would overrun the content rect (portrait). */
-        static const char note[] = "OUT NOT SAVED - PRESS SAVE";
-        int status_y = action_y + 50;
-        int sc = (text_measure_width(note, 2) <= CONTENT_WIDTH) ? 2 : 1;
-        text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           status_y, note, COLOR_ORANGE, sc);
-    }
-}
-
-static void handle_settings_input(AppState *state, int tx, int ty,
-                                  bool touching, uint32_t now) {
-    if (toggle_check_press(&audio_toggle, tx, ty, touching, now))
-        state->audio_enabled = audio_toggle.state;
-    if (toggle_check_press(&music_toggle, tx, ty, touching, now))
-        state->music_enabled = music_toggle.state;
-    if (toggle_check_press(&effects_toggle, tx, ty, touching, now))
-        state->effects_enabled = effects_toggle.state;
-
-    /* Cycles onboard -> usb -> auto -> onboard.  The label is not written here;
-     * draw_settings() derives it from the index every frame, which is the idiom the
-     * NEXT/DONE button already uses and the reason the two can never disagree. */
-    if (button_update(&audio_dev_btn, tx, ty, touching, now))
-        state->audio_device_idx = (state->audio_device_idx + 1) % 3;
-
-    /* Queued, not played: the main loop's audio_pump() delivers it, so the press
-     * returns at once.  Lazy open covers a bus whose tab-entry open failed. */
-    if (button_update(&test_audio_btn, tx, ty, touching, now)) {
-        if (!state->settings_audio_open ||
-            state->settings_audio_idx != state->audio_device_idx)
-            settings_audio_open(state);
-        if (state->settings_audio_open)
-            audio_test_chime(&state->settings_audio);
-    }
-
-    /* Saves this tab's keys only. Backlight and portrait belong to the Display
-     * tab and are saved by its own SAVE, and the LED page saves as it goes —
-     * config_save() rewrites the whole file from the in-memory Config, which the
-     * LED page keeps in step, so none of them clobbers another. */
-    if (button_update(&save_btn, tx, ty, touching, now)) {
-        config_set_bool(&state->cfg, "audio_enabled", state->audio_enabled);
-        config_set_bool(&state->cfg, "music_enabled", state->music_enabled);
-        config_set_bool(&state->cfg, "effects_enabled", state->effects_enabled);
-        /* ⚠️ Only the SAVED value has any effect on a game.  TEST does NOT resolve
-         * the same way: it plays the device the OUT button SHOWS (the _pref open in
-         * settings_audio_open()), so an unsaved choice can be heard before it is
-         * kept — and draw_settings() says "OUT NOT SAVED" until it is.
-         *
-         * ⚠️ An earlier TEST ignored the preference entirely — the unchecked open
-         * set none, so it always played the panel speaker while this comment
-         * claimed otherwise; reported from the panel, not caught by any gate. */
-        config_set(&state->cfg, "audio_device",
-                   audio_device_names[state->audio_device_idx]);
-        state->saved_audio_device_idx = state->audio_device_idx;
-        config_save(&state->cfg);
-        snprintf(state->status_msg, sizeof(state->status_msg),
-                 "SETTINGS SAVED AND APPLIED");
-        state->status_time_ms = now;
-    }
-
-    /* OUT changed the shown device: move the open bus onto it, so the next
-     * TEST is heard where the button points. */
-    if (state->settings_audio_open &&
-        state->settings_audio_idx != state->audio_device_idx)
-        settings_audio_open(state);
 }
 
 /* ── RESET DEFAULTS: the one implementation (cp_page.h), pressed on the
@@ -975,28 +646,13 @@ int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
     if (b > 0) printf("control_panel: RESET DEFAULTS, config backed up to %s\n", where);
     else       printf("control_panel: RESET DEFAULTS, no config file to back up\n");
 
-    /* config_clear() drops the Display keys too, so restore their defaults
-     * and re-apply, otherwise the backlight keeps a value no longer in the
-     * file and the Display tab shows a stale number.
-     *
-     * ⚠️ MUSIC / EFFECTS have no DEFAULT_* macro here on purpose: their
-     * default lives in common/config.c's helpers, which is what
-     * common/audio.c reads, so the switch on screen cannot disagree with
-     * what a game will do.  On a cleared Config those helpers return
-     * exactly that default. */
+    /* Every page reads its defaults back off the cleared Config (the Audio
+     * page through config.c's helpers, which is what common/audio.c reads).
+     * A page with no SAVE (the LED page) must also show what hardware.c
+     * drives, so its reset_defaults() removes its own keys from the file and
+     * reloads the cache, so page, file and hardware all land on config.c's
+     * default together. */
     config_clear(cfg);
-    state->audio_enabled = DEFAULT_AUDIO_ENABLED;
-    state->music_enabled = config_music_enabled(cfg);
-    state->effects_enabled = config_effects_enabled(cfg);
-    /* Read back through the getter on the CLEARED config, for the same reason
-     * MUSIC and EFFECTS do above: the default the screen shows then cannot
-     * disagree with the one a game will resolve. */
-    state->audio_device_idx =
-        audio_device_index_of(config_audio_device(cfg));
-    /* A page with no SAVE (the LED page) must show what the file holds and
-     * what hardware.c drives, so its reset_defaults() removes its own keys
-     * from the file and reloads the cache, so page, file and hardware all
-     * land on config.c's default together. */
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page && home_items[i].page->reset_defaults)
             home_items[i].page->reset_defaults(cfg);
@@ -1004,11 +660,10 @@ int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
      * the backup above is what makes the write safe.  Games then resolve every
      * key through config.c's defaults, the same values shown here. */
     config_save(cfg);
-    state->saved_audio_device_idx = state->audio_device_idx;
+    /* config_clear() drops the Display tab's key too, so restore its default
+     * and re-apply, otherwise the backlight keeps a value no longer in the
+     * file and the Display tab shows a stale number. */
     state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
-    audio_toggle.state = state->audio_enabled;
-    music_toggle.state = state->music_enabled;
-    effects_toggle.state = state->effects_enabled;
     apply_backlight(state->backlight_brightness);
     if (b > 0) snprintf(msg, len, "BACKUP: %s", where);
     else       snprintf(msg, len, "DEFAULTS RESTORED - NO FILE TO BACK UP");
@@ -1723,10 +1378,6 @@ static void handle_display_input(AppState *state, int tx, int ty,
     if (button_update(&disp_save_btn, tx, ty, touching, now)) {
         config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
         config_save(&state->cfg);
-        /* The whole in-memory Config is written, so after a Settings RESET this
-         * also saves the cleared audio_device — keep the UNSAVED note honest. */
-        state->saved_audio_device_idx =
-            audio_device_index_of(config_audio_device(&state->cfg));
         if (state->portrait_mode) {
             FILE *pf = fopen(PORTRAIT_FLAG_FILE, "w");
             if (pf) { fprintf(pf, "1\n"); fclose(pf); }
@@ -1747,8 +1398,6 @@ static void handle_display_input(AppState *state, int tx, int ty,
         portrait_toggle.state = false;
         config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
         config_save(&state->cfg);
-        state->saved_audio_device_idx =   /* see DISPLAY SAVE above */
-            audio_device_index_of(config_audio_device(&state->cfg));
         unlink(PORTRAIT_FLAG_FILE);
         apply_backlight(state->backlight_brightness);
         snprintf(state->status_msg, sizeof(state->status_msg), "DISPLAY DEFAULTS RESTORED");
@@ -2618,7 +2267,6 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
  * since all of them derive their geometry from SCREEN_SAFE_*. */
 static void rebuild_ui(AppState *state) {
     create_tab_bar();
-    create_settings_ui(state);
     create_tests_ui();
     create_display_ui(state);
     /* Each prints its "control_panel: <page> stack …" receipt. */
@@ -2665,7 +2313,7 @@ int main(void) {
     /* ⚠️ FIRST, before any printf. Launched from the launcher, stdout is
      * /var/log/roomwizard/app_stdout.log — a FILE, so glibc block-buffers 4 KB
      * and a receipt printed by a process that is then killed never arrives at
-     * all.  create_settings_ui()'s layout receipt is exactly that shape.
+     * all.  Every page's layout receipt is exactly that shape.
      * ../CLAUDE.md → App lifecycle carries the measurement. */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
@@ -2704,11 +2352,6 @@ int main(void) {
     config_load(&state.cfg);
 
     state.active_tab = TAB_HOME;
-    state.audio_enabled = config_get_bool(&state.cfg, "audio_enabled", DEFAULT_AUDIO_ENABLED);
-    state.music_enabled = config_music_enabled(&state.cfg);
-    state.effects_enabled = config_effects_enabled(&state.cfg);
-    state.audio_device_idx = audio_device_index_of(config_audio_device(&state.cfg));
-    state.saved_audio_device_idx = state.audio_device_idx;
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page) home_items[i].page->load(&state.cfg);
     state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
@@ -2720,7 +2363,7 @@ int main(void) {
     state.calib_sub = CALIB_IDLE;
 
     rebuild_ui(&state);
-    home_load_icons();   /* the home grid is the startup view; set_tab() opens Settings' bus */
+    home_load_icons();   /* the home grid is the startup view */
 
     bool needs_redraw = true;  /* first frame always draws */
 
@@ -2754,7 +2397,6 @@ int main(void) {
 
             switch (state.active_tab) {
                 case TAB_HOME:        draw_home(&fb, &state);        break;
-                case TAB_SETTINGS:    draw_settings(&fb, &state);    break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
                 case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
                 case TAB_PAGE:        state.page->draw(&fb);         break;
@@ -2772,11 +2414,6 @@ int main(void) {
 
         /* --- Save visual state before input handling --- */
         ActiveTab     prev_tab       = state.active_tab;
-        bool          prev_audio     = state.audio_enabled;
-        bool          prev_music     = state.music_enabled;
-        bool          prev_effects   = state.effects_enabled;
-        int           prev_out_idx   = state.audio_device_idx;
-        int           prev_out_saved = state.saved_audio_device_idx;  /* UNSAVED note */
         int           prev_bl_br     = state.backlight_brightness;
         bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
@@ -2788,13 +2425,6 @@ int main(void) {
         int           prev_test_sel  = state.test_selected;
         CalibSubState prev_calib_sub = state.calib_sub;
         ConfirmAction prev_confirm   = state.confirm_action;
-        /* ⚠️ The DAC's presence must be watched too: the settings
-         * tab's OUT button is dimmed from a live access("/dev/dsp1") every frame,
-         * but "every frame" means every frame that gets PAINTED.  Without this the
-         * probe is recomputed correctly and the screen never shows it — plug the
-         * dongle in and the button stays grey until some unrelated touch forces a
-         * repaint.  Cheap: one access() on a /dev node, once per loop. */
-        bool          prev_out_usb   = audio_out_usb_present();
 
         touch_poll(&touch);
         TouchState ts = touch_get_state(&touch);
@@ -2827,7 +2457,6 @@ int main(void) {
             handle_tab_bar_input(&state, tx, ty, touching, now);
 
             switch (state.active_tab) {
-                case TAB_SETTINGS:    handle_settings_input(&state, tx, ty, touching, now); break;
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
                 case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
                 case TAB_PAGE: {
@@ -2860,11 +2489,6 @@ int main(void) {
         bool btn_look = button_take_dirty();
         if (ts.pressed || ts.released || btn_look    ||
             prev_tab       != state.active_tab     ||
-            prev_audio     != state.audio_enabled   ||
-            prev_music     != state.music_enabled   ||
-            prev_effects   != state.effects_enabled ||
-            prev_out_idx   != state.audio_device_idx ||
-            prev_out_saved != state.saved_audio_device_idx ||
             prev_bl_br     != state.backlight_brightness ||
             prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
@@ -2874,23 +2498,25 @@ int main(void) {
             prev_test_sel  != state.test_selected   ||
             prev_calib_sub != state.calib_sub       ||
             prev_confirm   != state.confirm_action  ||
-            prev_out_usb   != audio_out_usb_present() ||
             state.page_dirty) {
             needs_redraw = true;
         }
         state.page_dirty = false;
 
-        /* Every iteration, not only on drawn frames: the Settings bus must be
-         * serviced whatever the screen is doing, and a closed one is a no-op. */
-        audio_pump(&state.settings_audio);
-
         /* Adaptive sleep: faster polling when a redraw is pending, or while the
-         * Settings bus is open — FRAME_DELAY_IDLE_US would starve it. */
-        usleep((needs_redraw || audio_pump_active(&state.settings_audio))
+         * open page says it has something to service every frame — the Audio
+         * page's bus, pumped from its input(), which FRAME_DELAY_IDLE_US would
+         * starve.  busy() reports live state (cp_page.h), so a static page
+         * still idles at the cheap rate. */
+        bool page_busy = state.active_tab == TAB_PAGE && state.page &&
+                         state.page->busy && state.page->busy();
+        usleep((needs_redraw || page_busy)
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 
-    settings_audio_close(&state);
+    /* A page open at exit cleans up its own hardware (the Audio page's bus). */
+    if (state.page && state.page->leave)
+        state.page->leave();
     hw_leds_off();
     hw_reload_config();
     hw_set_backlight(100);

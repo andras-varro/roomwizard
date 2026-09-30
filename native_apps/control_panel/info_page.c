@@ -8,7 +8,7 @@
  * Nothing here is live or duplicated.  Uptime, load, memory and storage are
  * the Monitor page's; LED state is the LED page's; backlight, resolution and
  * whether touch is calibrated are the Display tab's; the audio keys are the
- * Settings tab's.  So a key those pages own is left out of the config list.
+ * Audio page's.  So a key those pages own is left out of the config list.
  *
  * Read on load and on every enter(), never per second.  The one widget is the
  * global RESET DEFAULTS, beside the config file's row because the file is what

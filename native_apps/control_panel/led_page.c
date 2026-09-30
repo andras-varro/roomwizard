@@ -1,7 +1,7 @@
 /* led_page.c — control_panel's LED page: enable, brightness, and the LED tests.
  *
  * Opened from the home grid's LED tile, and the one home for everything about
- * the two indicator LEDs; Settings and the Tests tab carry none of it.  Exposed
+ * the two indicator LEDs; the Tests tab carries none of it.  Exposed
  * only as cp_led_page (cp_page.h); its state lives in this file.
  *
  * ⚠️ There is no SAVE button, on purpose.  The toggle and -/+ write the config

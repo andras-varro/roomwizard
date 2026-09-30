@@ -63,7 +63,7 @@ static IconGrid grid;
 
 /* ── The MUSIC / EFFECTS toggles are NOT here ────────────────────────────────
  * They were, as a band between the last tile row and the page dots, and they
- * moved to control_panel's SETTINGS tab under the `AUDIO ENABLED` master they are
+ * moved to control_panel's Audio page under the `AUDIO ENABLED` master they are
  * subordinate to.  Two reasons, in order: a games menu carrying settings widgets
  * is a games menu doing a settings tab's job, and this screen was then the only
  * games-side WRITER of two keys every game reads — so the launcher had to

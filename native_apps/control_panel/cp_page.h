@@ -55,6 +55,13 @@ typedef struct CpPage {
     /* Optional.  cp_reset_all_defaults() (below) calls it on every page,
      * AFTER config_clear(cfg). */
     void (*reset_defaults)(Config *cfg);
+
+    /* Optional.  Asked once per main-loop iteration while the page is open:
+     * true while it holds something input() must service at the active frame
+     * rate (an open audio stream, which FRAME_DELAY_IDLE_US would starve), and
+     * the loop then sleeps FRAME_DELAY_ACTIVE_US.  It reports live state —
+     * never a constant true, which would spin a static page at full rate. */
+    bool (*busy)(void);
 } CpPage;
 
 extern const CpPage cp_led_page;       /* led_page.c */
@@ -62,6 +69,7 @@ extern const CpPage cp_monitor_page;   /* monitor_page.c */
 extern const CpPage cp_info_page;      /* info_page.c */
 extern const CpPage cp_network_page;   /* network_page.c */
 extern const CpPage cp_usb_page;       /* usb_page.c */
+extern const CpPage cp_audio_page;     /* audio_page.c */
 
 /* Implemented in control_panel.c, for pages. */
 
@@ -86,8 +94,8 @@ void cp_confirm(const char *title, const char *message, const char *ok_text,
 /* The global RESET DEFAULTS, pressed on the Information page.  First copies
  * the config file to a timestamped "<path>.bak-YYYYmmdd-HHMMSS" beside it; if
  * that copy fails nothing is reset and -1 comes back.  Otherwise it clears
- * cfg, restores the audio and backlight values the control panel owns, calls
- * every page's reset_defaults, and returns 0.  Either way msg (len bytes) gets
+ * cfg, calls every page's reset_defaults, restores the Display tab's
+ * backlight, saves the cleared file and returns 0.  Either way msg (len bytes) gets
  * the line to show: "BACKUP: <path>", a note when there was no file to copy
  * (nothing to lose, so it resets), or "RESET FAILED: BACKUP <reason>".
  * /etc/touch_calibration.conf is not touched. */
