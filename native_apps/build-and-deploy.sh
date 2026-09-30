@@ -309,7 +309,13 @@ $CC "${WARN[@]}" -O2 -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 # Collect icon files from source dirs → build/icons/.  control_panel/icons/ holds
 # the control panel's home-grid icons (gen_cp_icons.py); control_panel reads them
 # from /opt/roomwizard/icons/ like the launcher reads a manifest's icon=.
+#
+# ⚠️ Emptied first, as build/apps/ is below: build/ is never cleaned, and both
+# directories are copied by GLOB — to the device and into --bundle — so an icon
+# or a manifest this tree no longer has would otherwise ship from a leftover.
+# The deploy's retired-name sweep runs after its copy; a bundle has no sweep.
 mkdir -p build/icons
+rm -f build/icons/*.ppm
 ICON_COUNT=0
 for ppm in *//*.ppm control_panel/icons/*.ppm; do
     [ -f "$ppm" ] || continue
@@ -321,6 +327,7 @@ done
 # Write the .app manifests locally, from app-manifests.sh's data.  Both the
 # deploy path and --bundle copy these exact files, which is the point of having
 # them on disk rather than in an ssh heredoc.
+rm -f build/apps/*.app
 rw_write_app_manifests build/apps
 echo "  Wrote $(find build/apps -maxdepth 1 -type f -name '*.app' 2>/dev/null | wc -l) app manifest(s) → build/apps/"
 
@@ -640,8 +647,10 @@ shift "$nexe"
 # the theremin's old test-shaped name (its manifest goes with
 # RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles), the retired
 # launcher prototype, two icons no manifest names, and the control panel's old
-# name device_tools (manifest via RW_APP_MANIFESTS_RETIRED).  The .hidden and
-# .noargs marker files go by glob: nothing reads them, so nothing writes them.
+# name device_tools (manifest via RW_APP_MANIFESTS_RETIRED), and the icon of
+# audio_mix_test's retired tile (the binary stays: the Audio page runs it).
+# The .hidden and .noargs marker files go by glob: nothing reads them, so
+# nothing writes them.
 # touch_inject is the leftover binary of a deleted evdev-write injector, which
 # cannot inject on this device (no /dev/uinput).
 rm -f /opt/games/*.hidden /opt/games/*.noargs \
@@ -653,7 +662,8 @@ rm -f /opt/games/*.hidden /opt/games/*.noargs \
       /opt/games/audio_touch_test \
       /opt/roomwizard/icons/audio_touch_test.ppm \
       /opt/games/device_tools \
-      /opt/roomwizard/icons/device_tools.ppm
+      /opt/roomwizard/icons/device_tools.ppm \
+      /opt/roomwizard/icons/audio_mix_test.ppm
 REMOTE
 ok "Permissions set"
 

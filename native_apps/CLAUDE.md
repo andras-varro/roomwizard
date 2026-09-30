@@ -793,8 +793,8 @@ itself has no off switch to compare against any more. ⚠️ Its level ladder st
 on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation.
 ⚠️ **An app lives in its own directory, never under `tests/`** — a file there gets read as a test
 tool. `theremin/` (`Tap-a-Theremin`) is an **app**, not a diagnostic (it also measured the speaker's usable band, [§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
-`tests/audio_mix_test.c` (`Mix Bus Test`) is still a shipped launcher tile, so nothing under `tests/`
-is automatically expendable: read `app-manifests.sh` before calling a file there a tool.
+`tests/audio_mix_test.c` (`Mix Bus Test`) still ships — no tile, launched from `control_panel`'s Audio
+page — so nothing under `tests/` is automatically expendable: read `GAMES_BINARIES` before calling a file there a tool.
 ⚠️ **Never write prose saying 60 ms is a minimum tone length** — nothing clamps it; the floor was the
 start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
@@ -822,7 +822,7 @@ build lines in their own headers, and each pinned to the onboard device on purpo
 **A screen that makes sound owns the bus for as long as it is up.** Open it before the loop (or on
 entering the tab), queue sounds as voices — `audio_test_chime()` returns at once and `audio_pump()`
 delivers it — and `audio_close()` on the exit paths only: `test_audio_diag()` in
-`control_panel/control_panel.c` and `hardware_test/hardware_test_gui.c`, and both Settings screens. The
+`hardware_test/hardware_test_gui.c`, and `control_panel`'s Audio page. The
 wrong shape — `audio_init*` → tones → `audio_close()` inside one button handler — costs a stream open
 **and** a stream stop per press, and freezes the UI while the handler holds the tones.
 

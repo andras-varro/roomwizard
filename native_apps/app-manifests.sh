@@ -43,7 +43,6 @@ brick_breaker|Brick Breaker|/opt/games/brick_breaker|/opt/roomwizard/icons/brick
 samegame|SameGame|/opt/games/samegame|/opt/roomwizard/icons/samegame.ppm|fb,touch
 frogger|Frogger|/opt/games/frogger|/opt/roomwizard/icons/frogger.ppm|fb,touch
 platformer|Office Runner|/opt/games/platformer|/opt/roomwizard/icons/platformer.ppm|fb,touch
-audio_mix_test|Mix Bus Test|/opt/games/audio_mix_test|/opt/roomwizard/icons/audio_mix_test.ppm|fb,touch
 theremin|Tap-a-Theremin|/opt/games/theremin|/opt/roomwizard/icons/theremin.ppm|fb,touch
 control_panel|Control Panel|/opt/games/control_panel|/opt/roomwizard/icons/control_panel.ppm|
 '
@@ -53,7 +52,9 @@ control_panel|Control Panel|/opt/games/control_panel|/opt/roomwizard/icons/contr
 # folded into control_panel's tabs, or for an app that was renamed — the launcher
 # would render it and the tap would exec a binary that is gone.
 # device_tools is the old name of control_panel (binary, manifest, icon).
-RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag audio_touch_test device_tools'
+# audio_mix_test lost its tile, not its binary: MIX BUS TEST on control_panel's
+# Audio page launches it.
+RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag audio_touch_test device_tools audio_mix_test'
 
 # ---------------------------------------------------------------------------
 # rw_write_app_manifests DIR

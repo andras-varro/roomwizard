@@ -19,6 +19,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* The devices the panel opens, and the two it hands a child tool on its
+ * command line — the same pair app_launcher passes for a manifest's fb,touch. */
+#define FB_DEVICE         "/dev/fb0"
+#define TOUCH_DEVICE      "/dev/input/touchscreen0"
+
 /* The content rectangle: the safe area below the tab bar. */
 #define TAB_BAR_H         44
 #define TAB_DIVIDER_H     2

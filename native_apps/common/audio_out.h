@@ -31,9 +31,9 @@
  * (measured, ../SYSTEM_ANALYSIS.md#34-audio), so `audio_out_open*()` refuses a
  * second LIVE instance itself rather than letting the driver produce a confusing
  * EBUSY halfway through an init.  Sequential open/close pairs are fine, which is
- * what `control_panel` relies on: it holds two `Audio` objects (`control_panel.c`
- * `do_audio_test()` and `test_audio_diag()`), neither long-lived and neither
- * reachable from inside the other's loop.
+ * what `control_panel` relies on: its one `Audio` is the Audio page's
+ * (`control_panel/audio_page.c`), and the page closes it before it launches
+ * `audio_mix_test`, which opens its own.
  *
  * ── THE THREADING CONTRACT ───────────────────────────────────────────────────
  *

@@ -163,10 +163,11 @@ static void led_page_load(const Config *cfg) {
 }
 
 /* Writes the two keys into the FILE by re-reading it, not by saving the
- * caller's Config: that one may have been config_clear()ed by Settings' RESET
- * DEFAULTS without being saved, and a whole-file save of it from here would
- * silently persist that reset — backlight, audio, every fx_* override — as a
- * side effect of touching an LED switch.  The in-memory copy is updated too, so
+ * caller's Config: every page shares that one, and a whole-file save of it from
+ * here would silently persist whatever another page holds in it unsaved, as a
+ * side effect of touching an LED switch.  (RESET DEFAULTS, on the Information
+ * page, saves the cleared file itself, so a reset is not such a case.)  The
+ * in-memory copy is updated too, so
  * a later SAVE elsewhere writes these values rather than the old ones. */
 static void led_persist(const LedPageState *s, Config *mem) {
     config_set_bool(mem, "led_enabled", s->enabled);

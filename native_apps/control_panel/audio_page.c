@@ -1,10 +1,10 @@
 /* audio_page.c — control_panel's Audio page: enable, music/effects, output
- * device, and the TEST chime.
+ * device, the TEST chime, and the MIX BUS TEST launch.
  *
  * Opened from the home grid's Audio tile, and the one home for the four audio
- * keys control_panel writes; the Tests tab's tone sweep is a hardware test and
- * carries no setting.  Exposed only as cp_audio_page (cp_page.h); its state and
- * its audio bus live in this file.
+ * keys control_panel writes.  MIX BUS TEST is audio_mix_test, run as a child
+ * process from here and nowhere else — it has no launcher tile.  Exposed only
+ * as cp_audio_page (cp_page.h); its state and its audio bus live in this file.
  *
  * ⚠️ There is no SAVE button, on purpose — the LED page's rule.  Every toggle
  * and every OUT press writes its key the moment it changes, so TEST (which plays
@@ -16,8 +16,15 @@
 #include "../common/common.h"
 #include "../common/audio.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* Deployed by build-and-deploy.sh with no manifest: MIX BUS TEST below is the
+ * only route to it. */
+#define MIX_TEST_PATH "/opt/games/audio_mix_test"
 
 /* ── State and persistence ─────────────────────────────────────────────── */
 
@@ -143,10 +150,13 @@ static ToggleSwitch audio_toggle;
 static ToggleSwitch music_toggle, effects_toggle;
 static Button       audio_dev_btn;
 static Button       test_audio_btn;
+static Button       mix_test_btn;
 
-/* Row 2 carries MUSIC / EFFECTS / OUT under the master switch. */
+/* Row 2 carries MUSIC / EFFECTS / OUT under the master switch; row 3 the
+ * MIX BUS TEST launch, alone, so a finger aimed at it lands on nothing else. */
 #define AUD_SEC_Y      (CONTENT_Y + 2)
 #define AUD_ROW2_Y     (AUD_SEC_Y + 54)
+#define AUD_ROW3_Y     (AUD_ROW2_Y + 54)
 #define AUD_TRACK_W    60
 #define AUD_TRACK_H    28
 
@@ -207,21 +217,31 @@ static void audio_page_layout(void) {
                      90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
                      BTN_COLOR_HIGHLIGHT, 2);
 
+    /* Flush with the toggles, and sized from its own label at scale 2 plus
+     * 8 px a side — button_draw() neither pads nor clips (the OUT note above). */
+    button_init_full(&mix_test_btn, CONTENT_LEFT + 5, AUD_ROW3_Y,
+                     text_measure_width("MIX BUS TEST", 2) + 16, 30,
+                     "MIX BUS TEST", BTN_COLOR_INFO, COLOR_WHITE,
+                     BTN_COLOR_HIGHLIGHT, 2);
+
     /* ⚠️ THE RECEIPT.  Everything here hangs off CONTENT_Y, which comes from a
      * per-unit touch inset, so a row pushed past the touchable rect looks
-     * perfect in a screenshot and is dead to a finger.  Row 2 is the lowest
-     * row; and row 2 is also the one exposed sideways — it stacks three
-     * text-derived widths left to right, and the portrait content rect is only
-     * about 150 px wider than the first two, so the OUT button is the widget
-     * whose right edge can leave it.  Both read off the widgets as placed. */
+     * perfect in a screenshot and is dead to a finger.  Row 3 is the lowest
+     * row, so MIX BUS TEST sets the bottom.  Row 2 is the one exposed
+     * sideways — it stacks three text-derived widths left to right, and the
+     * portrait content rect is only about 150 px wider than the first two, so
+     * the OUT button is the widget whose right edge can leave it.  All read off
+     * the widgets as placed. */
     {
-        int bottom = (audio_dev_btn.y + audio_dev_btn.height) - CONTENT_Y;
+        int bottom = (mix_test_btn.y + mix_test_btn.height) - CONTENT_Y;
         int right  = audio_dev_btn.x + audio_dev_btn.width;
         const ToggleSwitch *tg[3] = { &audio_toggle, &music_toggle, &effects_toggle };
         for (int i = 0; i < 3; i++)
             if (toggle_right(tg[i]) > right) right = toggle_right(tg[i]);
         if (test_audio_btn.x + test_audio_btn.width > right)
             right = test_audio_btn.x + test_audio_btn.width;
+        if (mix_test_btn.x + mix_test_btn.width > right)
+            right = mix_test_btn.x + mix_test_btn.width;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : "fits";
@@ -244,6 +264,7 @@ static void audio_page_draw(Framebuffer *fb) {
     effects_toggle.state = s->effects;
     toggle_draw(fb, &audio_toggle);
     button_draw(fb, &test_audio_btn);
+    button_draw(fb, &mix_test_btn);
 
     /* MUSIC / EFFECTS are still LIVE with the master off — they are saved
      * preferences, and refusing the press would just look broken — but they are
@@ -336,7 +357,65 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
 
     if (audio_out_usb_present() != shown_usb)
         act = CP_PAGE_REDRAW;           /* a DAC came or went: re-dim OUT */
+
+    /* Last, so neither REDRAW above can overwrite the queued run. */
+    if (button_update(&mix_test_btn, tx, ty, touching, now))
+        act = CP_PAGE_FULLSCREEN;
     return act;
+}
+
+/* After input() returned CP_PAGE_FULLSCREEN: MIX BUS TEST.
+ *
+ * Launched rather than linked, by the mechanism control_panel.c's
+ * run_touch_diagnostic() uses for touch_raw, with the argv app_launcher gives
+ * a manifest's fb,touch: argv[0] the exec path, then the framebuffer and touch
+ * devices.  The child owns the panel while it runs; this process is blocked in
+ * waitpid() and draws nothing.
+ *
+ * ⚠️ The page's bus is closed FIRST.  audio_mix_test opens its own stream on
+ * the same device, and a second concurrent open is refused EBUSY (measured —
+ * common/audio_out.h) — the tool would run silent, which is the one failure a
+ * mix-bus test cannot report.  enter()'s reopen restores the bus on return, so
+ * TEST works again without leaving the page. */
+static void audio_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
+    if (access(MIX_TEST_PATH, X_OK) != 0) {
+        cp_status("AUDIO_MIX_TEST NOT INSTALLED", false);
+        return;
+    }
+
+    page_audio_close();
+
+    fb_clear(fb, COLOR_BLACK);
+    text_draw_centered(fb, (int)fb->width / 2, (int)fb->height / 2,
+                       "STARTING MIX BUS TEST", COLOR_WHITE, 3);
+    fb_swap(fb);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        cp_status("FORK FAILED", false);
+        page_audio_reopen();
+        return;
+    }
+    if (pid == 0) {
+        execl(MIX_TEST_PATH, MIX_TEST_PATH, FB_DEVICE, TOUCH_DEVICE, (char *)NULL);
+        perror("execl audio_mix_test");
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;   /* a signal must not orphan the child */
+
+    /* The child pinned its own depth and left the panel black; the geometry
+     * files it reads it does not write, so the depth and a drain are all this
+     * process has to put back (touch_raw's return also reloads calibration,
+     * because its APPLY rewrites it). */
+    fb_set_bpp(FB_DEVICE, 32);
+    touch_drain_events(touch);
+    page_audio_reopen();
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        cp_status("MIX BUS TEST EXITED WITH AN ERROR", false);
 }
 
 const CpPage cp_audio_page = {
@@ -349,5 +428,6 @@ const CpPage cp_audio_page = {
     .draw           = audio_page_draw,
     .input          = audio_page_input,
     .reset_defaults = audio_page_reset_defaults,
+    .run_fullscreen = audio_page_run_fullscreen,
     .busy           = audio_page_busy,
 };

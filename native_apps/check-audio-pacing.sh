@@ -43,9 +43,10 @@
 #     hold does pace itself (20 ms slices, `common/audio.c`), so a bus session
 #     that lives entirely inside one is correctly paced — but a file could hold
 #     once and then run a FRAME_DELAY_IDLE_US loop with the bus still open, and
-#     this gate would pass it.  Nothing does today: both callers close the bus
-#     before their idle loop is reachable, which is a SCOPE fact and the one thing
-#     a text reader cannot check.  `starve` at exit is what would catch it.
+#     this gate would pass it.  Nothing does today — no scanned file calls the
+#     hold at all — but whether a caller closes the bus before its idle loop is a
+#     SCOPE fact and the one thing a text reader cannot check.  `starve` at exit
+#     is what would catch it.
 #   - `ui_frame_service()` does NOT count as servicing, even though it resolves to
 #     audio_pump() once audio_open() has registered it.  Deliberate: the
 #     registration is a weak symbol resolved at link time, so "this file services
@@ -78,13 +79,24 @@
 #      lives exist): "has lives" is not a text property.  Today the invariant
 #      holds — brick_breaker, frogger and platformer are the three with lives and
 #      the only three still calling audio_fail() — but it is ear-and-review only.
+#
+# ── And one for a control_panel page ─────────────────────────────────────────
+#
+#   6. **A CpPage that opens the stream must answer .busy from audio_pump_active().**
+#      A page does not own its loop: control_panel.c's main loop sleeps
+#      FRAME_DELAY_IDLE_US unless the open page's busy() says otherwise, so the
+#      pacing check above sees no idle sleep in the page's file and has nothing
+#      to fail.  Without the hook the loop starves an open bus exactly as check 3
+#      describes.  ⚠️ It reads text: it sees that .busy is SET and that the file
+#      names audio_pump_active(, not that the one is computed from the other, and
+#      not that the main loop still consults busy().
 
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    sed -n '2,80p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,92p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # Scan one tree.  Prints a FAIL line per defect on stdout and echoes the three
@@ -115,7 +127,7 @@ scan_dir() {
         # (common/audio.c), which is the obligation, discharged by the library
         # instead of by the caller's loop.  It is for a helper with no loop to put
         # an audio_pump() in — a tone, a wait and a close.  A screen with a loop
-        # holds the bus for its lifetime and pumps instead (both Settings tabs).
+        # holds the bus for its lifetime and pumps instead (control_panel's Audio page).
         if [ "$service" -eq 0 ] && [ "$hold" -eq 0 ]; then
             echo "FAIL ${f#$root/}: opens the audio stream and never services it (no audio_pump(), no audio_hold_serviced())"
             bad=1
@@ -154,6 +166,13 @@ scan_dir() {
             bad=1
         fi
 
+        # ── 6. a control_panel page owes a busy() built on audio_pump_active() ─
+        if grep -q '^const CpPage ' "$f" &&
+           { ! grep -q '\.busy *=' "$f" || [ "$active" -eq 0 ]; }; then
+            echo "FAIL ${f#$root/}: a CpPage opens the audio stream with no .busy answered from audio_pump_active() — control_panel's loop sleeps FRAME_DELAY_IDLE_US over the open bus"
+            bad=1
+        fi
+
         if [ "$bad" -eq 0 ]; then ok=$((ok + 1)); else fail=$((fail + 1)); fi
     done <<EOF
 $(find "$root" -name '*.c' \
@@ -172,7 +191,7 @@ self_test() {
 
     mkdir -p "$tmp/good" "$tmp/nopump" "$tmp/nopace" "$tmp/plain" \
              "$tmp/bedlate" "$tmp/nogover" "$tmp/wrapper" "$tmp/wraplate" "$tmp/noland" \
-             "$tmp/hold" "$tmp/prefopen"
+             "$tmp/hold" "$tmp/prefopen" "$tmp/pagenobusy" "$tmp/pagebusy"
 
     # 1. correct conversion — must PASS
     cat > "$tmp/good/good.c" <<'EOC'
@@ -269,16 +288,36 @@ int main(void){ while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE
 EOC
 
     # 12. fixture 2's defect behind the THIRD spelling of an open — must FAIL.
-    #     control_panel's Settings screen opens only this way, and a subject pattern
+    #     control_panel's Audio page opens only this way, and a subject pattern
     #     that knew two spellings would not count the file at all.
     cat > "$tmp/prefopen/prefopen.c" <<'EOC'
 int main(void){ audio_init_unchecked_pref(&a, "usb");
   while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US); } }
 EOC
 
+    # 13. a control_panel page shaped like audio_page.c — must PASS: opens,
+    #     pumps from input(), and answers .busy from audio_pump_active().
+    cat > "$tmp/pagebusy/pagebusy.c" <<'EOC'
+static void enter(void){ audio_init_unchecked_pref(&a, "usb"); }
+static int input(void){ audio_pump(&a); return 0; }
+static bool busy(void){ return audio_pump_active(&a); }
+const CpPage p = { .enter = enter, .input = input,
+    .busy           = busy,
+};
+EOC
+    # 14. fixture 13 with its .busy line deleted and nothing else — must FAIL.
+    #     No other check sees it: the file pumps, and has no idle sleep of its own.
+    cat > "$tmp/pagenobusy/pagenobusy.c" <<'EOC'
+static void enter(void){ audio_init_unchecked_pref(&a, "usb"); }
+static int input(void){ audio_pump(&a); return 0; }
+static bool busy(void){ return audio_pump_active(&a); }
+const CpPage p = { .enter = enter, .input = input,
+};
+EOC
+
     out=$(scan_dir "$tmp")
-    local expect_fail="nopump/nopump.c nopace/nopace.c bedlate/bedlate.c nogover/nogover.c wraplate/wraplate.c prefopen/prefopen.c"
-    local expect_pass="good/good.c plain/plain.c wrapper/wrapper.c hold/hold.c"
+    local expect_fail="nopump/nopump.c nopace/nopace.c bedlate/bedlate.c nogover/nogover.c wraplate/wraplate.c prefopen/prefopen.c pagenobusy/pagenobusy.c"
+    local expect_pass="good/good.c plain/plain.c wrapper/wrapper.c hold/hold.c pagebusy/pagebusy.c"
 
     echo "── self-test ────────────────────────────────────────────────────"
     for c in $expect_fail; do
@@ -303,7 +342,7 @@ EOC
         echo "  NOT REPORTED: noland/noland.c   <-- a skipped check is reading as a pass"; rc=1
     fi
     echo "  fixture counts: $counts"
-    [ "$counts" = "COUNTS 10 4 6 1" ] || { echo "  counts wrong <-- expected 'COUNTS 10 4 6 1'"; rc=1; }
+    [ "$counts" = "COUNTS 12 5 7 1" ] || { echo "  counts wrong <-- expected 'COUNTS 12 5 7 1'"; rc=1; }
     echo "── self-test $([ $rc -eq 0 ] && echo PASSED || echo FAILED) ─────────────────────────────────"
     return $rc
 }

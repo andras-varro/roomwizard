@@ -2,9 +2,9 @@
  * Control Panel — Unified Hardware App for RoomWizard
  *
  * Opens on an icon grid (the home view); each tile opens a page:
- *   Audio        — enable, music/effects, output device and the TEST chime
- *                  (audio_page.c); grid-only
- *   Tests       — backlight, touch zone, display, audio and multi-touch tests
+ *   Audio        — enable, music/effects, output device, the TEST chime and
+ *                  the MIX BUS TEST launch (audio_page.c); grid-only
+ *   Tests       — backlight, touch zone, display and multi-touch tests
  *   Display      — backlight, orientation, touch calibration, bezel margins
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
@@ -27,7 +27,6 @@
 #include "../common/common.h"
 #include "../common/config.h"
 #include "../common/ui_layout.h"
-#include "../common/audio.h"
 #include "../common/icon_grid.h"
 #include "cp_ui.h"
 #include "cp_page.h"
@@ -91,8 +90,6 @@
  * fitting through them is what produced a phantom horizontal inset for months.
  * Target geometry now comes from common/touch_calib.h. */
 #define CALIB_FILE        "/etc/touch_calibration.conf"
-#define FB_DEVICE         "/dev/fb0"
-#define TOUCH_DEVICE      "/dev/input/touchscreen0"
 /* The uncalibrated diagnostic, launched from the Display tab. Deployed by
  * build-and-deploy.sh with no manifest, so the launcher does not show it —
  * this button is the discoverable route to it. */
@@ -180,7 +177,6 @@ static const HomeItem home_items[] = {
 static void test_backlight_run(Framebuffer *fb, TouchInput *touch);
 static void test_touch_zone(Framebuffer *fb, TouchInput *touch);
 static void test_display(Framebuffer *fb, TouchInput *touch);
-static void test_audio_diag(Framebuffer *fb, TouchInput *touch);
 static void test_multitouch(Framebuffer *fb, TouchInput *touch);
 static const struct {
     const char *name;
@@ -189,7 +185,6 @@ static const struct {
     { "BACKLIGHT",   test_backlight_run },
     { "TOUCH ZONE",  test_touch_zone    },
     { "DISPLAY",     test_display       },
-    { "AUDIO",       test_audio_diag    },
     { "MULTI-TOUCH", test_multitouch    },
 };
 #define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
@@ -987,88 +982,6 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
             usleep(16000);
         }
     }
-}
-
-static void test_audio_diag(Framebuffer *fb, TouchInput *touch) {
-    Audio audio;
-    int audio_ok = (audio_init(&audio) == 0);
-    const int freqs[] = { 200, 400, 600, 800, 1000, 1500, 2000, 3000 };
-    const int nfreqs = sizeof(freqs) / sizeof(freqs[0]);
-    int played = 0;
-    bool aud_running = true;
-    int x, y;
-
-    while (aud_running && played <= nfreqs) {
-        fb_clear(fb, RGB(20,20,30));
-        fb_draw_text(fb, 4, 2, "AUDIO DIAGNOSTIC", COLOR_WHITE, 3);
-        fb_draw_text(fb, fb->width - 160, 4, "[EXIT]", RGB(180,80,80), 2);
-        if (!audio_ok) {
-            fb_draw_text(fb, 100, 120, "ERROR: /dev/dsp not available", COLOR_RED, 2);
-            fb_draw_text(fb, 100, 160, "Audio subsystem failed to init.", COLOR_YELLOW, 2);
-            fb_swap(fb);
-            while (!check_touch(touch, &x, &y)) usleep(10000);
-            break;
-        }
-        for (int i = 0; i < nfreqs; i++) {
-            char buf[48]; int row_y = 70 + i * 42; uint32_t col;
-            if (i < played) {
-                snprintf(buf, sizeof(buf), "%5d Hz   DONE", freqs[i]); col = COLOR_GREEN;
-            } else if (i == played && played < nfreqs) {
-                snprintf(buf, sizeof(buf), "%5d Hz   PLAYING ...", freqs[i]); col = COLOR_YELLOW;
-            } else {
-                snprintf(buf, sizeof(buf), "%5d Hz   ---", freqs[i]); col = RGB(100,100,100);
-            }
-            fb_draw_text(fb, 100, row_y, buf, col, 2);
-        }
-        if (played >= nfreqs)
-            fb_draw_text(fb, 200, 420, "ALL DONE - tap to exit", COLOR_CYAN, 2);
-        else
-            fb_draw_text(fb, 200, 420, "tap to skip/next", RGB(120,120,120), 2);
-        fb_swap(fb);
-
-        if (played < nfreqs) {
-            /* ⚠️ **No audio_interrupt() here, and it is DROPPED rather than
-             * translated.**  On a bus that call means "stop every voice", and this
-             * sweep does not want that: one tone plays, 300 ms of tap-polling
-             * follows, the next tone starts.  What used to serialise them was the
-             * device ring; what serialises them now is that ~300 ms gap being an
-             * order of magnitude past AUDIO_TONE_CHAIN_MS (16 ms), so audio_tone()
-             * finds no recent tone to chain behind and starts immediately anyway.
-             * The exit tap only ENDS the sweep, so it cannot narrow that gap. */
-            audio_tone(&audio, freqs[played], 300);
-            played++;
-            for (int w = 0; w < 10; w++) {
-                /* The service call.  ⚠️ Above the touch check, not below it: a tap
-                 * `break`s out of this loop, and a pump placed after the check would
-                 * be skipped on exactly the iteration that ends the sweep.  The
-                 * off-bus arm keeps the original 30 ms rather than
-                 * FRAME_DELAY_IDLE_US: ten of those would stretch a 300 ms tone's
-                 * wait to a second and the sweep would crawl. */
-                audio_pump(&audio);
-                usleep(audio_pump_active(&audio) ? FRAME_DELAY_ACTIVE_US : 30000);
-                if (check_touch(touch, &x, &y)) {
-                    if (x > (int)fb->width - 100 && y < 40) { aud_running = false; break; }
-                }
-            }
-        } else {
-            /* ⚠️ **The stream is closed BEFORE this wait, not after it.**
-             * touch_wait_for_press() blocks in 200 ms poll slices and is unbounded —
-             * it returns when somebody taps — which is far past the continuous
-             * stream's service ceiling, so a stream left open here would run dry for
-             * however long the operator spends reading the results.  The sweep is
-             * over and there is nothing left to play, so the honest fix is to stop
-             * owning the device rather than to service it from a loop that cannot.
-             * Clearing audio_ok is what stops the close at the end running twice. */
-            if (audio_ok) { audio_close(&audio); audio_ok = 0; }
-            while (1) {
-                if (touch_wait_for_press(touch, &x, &y) == 0) {
-                    aud_running = false; break;
-                }
-                usleep(16000);
-            }
-        }
-    }
-    if (audio_ok) audio_close(&audio);
 }
 
 /* â”€â”€ Test dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
