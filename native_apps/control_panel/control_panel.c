@@ -195,9 +195,6 @@ typedef enum {
 } ActiveTab;
 
 typedef enum {
-    DIAG_SYSTEM,
-    DIAG_HARDWARE,
-    DIAG_CONFIG,
     DIAG_NETWORK,
     DIAG_PAGE_COUNT
 } DiagPage;
@@ -241,15 +238,15 @@ typedef struct {
 } HomeItem;
 
 static const HomeItem home_items[] = {
-    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_SYSTEM,  NULL },
-    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_SYSTEM,  NULL },
-    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_SYSTEM,  NULL },
+    { "Audio",       "cp_audio",   TAB_SETTINGS,    DIAG_NETWORK, NULL },
+    { "Display",     "cp_display", TAB_DISPLAY,     DIAG_NETWORK, NULL },
+    { "Touch",       "cp_touch",   TAB_DISPLAY,     DIAG_NETWORK, NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
-    { "USB",         "cp_usb",     TAB_USB,         DIAG_SYSTEM,  NULL },
+    { "USB",         "cp_usb",     TAB_USB,         DIAG_NETWORK, NULL },
     { "Network",     "cp_network", TAB_DIAGNOSTICS, DIAG_NETWORK, NULL },
     { .tab = TAB_PAGE, .page = &cp_monitor_page },
-    { "Information", "cp_info",    TAB_DIAGNOSTICS, DIAG_SYSTEM,  NULL },
-    { "Tests",       NULL,         TAB_TESTS,       DIAG_SYSTEM,  NULL },
+    { .tab = TAB_PAGE, .page = &cp_info_page },
+    { "Tests",       NULL,         TAB_TESTS,       DIAG_NETWORK, NULL },
 };
 #define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define HOME_TITLE_H    50
@@ -278,9 +275,6 @@ static const struct {
 /* Indexed by DiagPage and sized by it, so the table can never be shorter than
  * the enum; each title names its page rather than relying on position. */
 static const char *diag_page_titles[DIAG_PAGE_COUNT] = {
-    [DIAG_SYSTEM]   = "SYSTEM INFO",
-    [DIAG_HARDWARE] = "HARDWARE",
-    [DIAG_CONFIG]   = "CONFIGURATION",
     [DIAG_NETWORK]  = "NETWORK",
 };
 
@@ -1021,38 +1015,6 @@ int read_file_line(const char *path, char *buf, size_t len) {
     return 0;
 }
 
-static int read_sysfs_int(const char *path) {
-    char buf[64];
-    if (read_file_line(path, buf, sizeof(buf)) < 0) return -1;
-    return atoi(buf);
-}
-
-static void read_cpuinfo(char *model, size_t mlen, char *clk, size_t clen) {
-    model[0] = clk[0] = '\0';
-    FILE *fp = fopen("/proc/cpuinfo", "r");
-    if (!fp) { snprintf(model, mlen, "N/A"); snprintf(clk, clen, "N/A"); return; }
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
-        if (model[0] == '\0') {
-            if (strncmp(line, "Hardware", 8) == 0 || strncmp(line, "model name", 10) == 0) {
-                char *c = strchr(line, ':');
-                if (c) { c++; while (*c == ' ' || *c == '\t') c++;
-                    char *nl = strchr(c, '\n'); if (nl) *nl = '\0';
-                    snprintf(model, mlen, "%s", c); }
-            }
-        }
-        if (clk[0] == '\0' && strncmp(line, "BogoMIPS", 8) == 0) {
-            char *c = strchr(line, ':');
-            if (c) { c++; while (*c == ' ' || *c == '\t') c++;
-                char *nl = strchr(c, '\n'); if (nl) *nl = '\0';
-                snprintf(clk, clen, "%s BogoMIPS", c); }
-        }
-    }
-    fclose(fp);
-    if (model[0] == '\0') snprintf(model, mlen, "Unknown");
-    if (clk[0] == '\0') snprintf(clk, clen, "Unknown");
-}
-
 // Read IP address for a given interface
 static void read_interface_ip(const char *ifname, char *ip_buf, size_t buf_size) {
     struct ifaddrs *ifaddr, *ifa;
@@ -1157,120 +1119,6 @@ static void create_diagnostics_ui(void) {
                      BTN_COLOR_HIGHLIGHT, 2);
 }
 
-static void draw_diag_system(Framebuffer *fb) {
-    int y = CONTENT_Y + 30;
-    char kernel[256];
-    if (read_file_line("/proc/version", kernel, sizeof(kernel)) < 0)
-        snprintf(kernel, sizeof(kernel), "N/A");
-    { char sv[128]; int sp = 0; size_t i;
-      for (i = 0; i < sizeof(sv)-1 && kernel[i]; i++) {
-          sv[i] = kernel[i];
-          if (kernel[i] == ' ') { sp++; if (sp >= 3) { sv[i] = '\0'; break; } }
-      } sv[i] = '\0';
-      y = draw_info_row(fb, y, "KERNEL:", sv, COLOR_DATA); }
-    y += 4;
-    { char m[128], c[128]; read_cpuinfo(m, sizeof(m), c, sizeof(c));
-      y = draw_info_row(fb, y, "CPU:", m, COLOR_DATA); y += 4;
-      y = draw_info_row(fb, y, "CLOCK:", c, COLOR_DATA); }
-    y += 12;
-    fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE);
-    y += 12;
-    { char hn[128];
-      if (read_file_line("/etc/hostname", hn, sizeof(hn)) < 0)
-          snprintf(hn, sizeof(hn), "N/A");
-      draw_info_row(fb, y, "HOSTNAME:", hn, COLOR_DATA); }
-}
-
-static void draw_diag_hardware(Framebuffer *fb) {
-    int y = CONTENT_Y + 30;
-    fb_draw_text(fb, CONTENT_LEFT+10, y, "LED BRIGHTNESS", COLOR_HEADER_TEXT, 2); y += 24;
-    fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 8;
-    { char b[32]; int rv = read_sysfs_int("/sys/class/leds/red_led/brightness");
-      snprintf(b, sizeof(b), rv >= 0 ? "%d" : "N/A", rv);
-      y = draw_info_row(fb, y, "RED LED:", b, (rv > 0) ? COLOR_RED : COLOR_LABEL);
-      int gv = read_sysfs_int("/sys/class/leds/green_led/brightness");
-      snprintf(b, sizeof(b), gv >= 0 ? "%d" : "N/A", gv);
-      y = draw_info_row(fb, y, "GREEN LED:", b, (gv > 0) ? COLOR_GREEN : COLOR_LABEL); }
-    y += 4;
-    { char b[32]; int bl = read_sysfs_int("/sys/class/leds/backlight/brightness");
-      snprintf(b, sizeof(b), bl >= 0 ? "%d" : "N/A", bl);
-      y = draw_info_row(fb, y, "BACKLIGHT:", b, COLOR_DATA); }
-    y += 8;
-    fb_draw_text(fb, CONTENT_LEFT+10, y, "FRAMEBUFFER", COLOR_HEADER_TEXT, 2); y += 24;
-    fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 8;
-    { char b[64];
-      snprintf(b, sizeof(b), "%ux%u", g_fb->width, g_fb->height);
-      y = draw_info_row(fb, y, "RESOLUTION:", b, COLOR_DATA);
-      snprintf(b, sizeof(b), "%u", g_fb->bytes_per_pixel * 8);
-      y = draw_info_row(fb, y, "BPP:", b, COLOR_DATA);
-      snprintf(b, sizeof(b), "%u bytes", g_fb->line_length);
-      y = draw_info_row(fb, y, "STRIDE:", b, COLOR_DATA);
-      snprintf(b, sizeof(b), "%zu bytes", g_fb->screen_size);
-      y = draw_info_row(fb, y, "FB SIZE:", b, COLOR_DATA);
-      snprintf(b, sizeof(b), "%s", g_fb->double_buffering ? "YES" : "NO");
-      y = draw_info_row(fb, y, "DOUBLE BUF:", b, g_fb->double_buffering ? COLOR_GREEN : COLOR_YELLOW); }
-}
-
-static void draw_diag_config(Framebuffer *fb) {
-    int y = CONTENT_Y + 30;
-    fb_draw_text(fb, CONTENT_LEFT+10, y, "CONFIG FILE", COLOR_HEADER_TEXT, 2); y += 22;
-    fb_draw_text(fb, CONTENT_LEFT+10, y, CONFIG_FILE_PATH, COLOR_LABEL, 1); y += 16;
-    fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 10;
-
-    Config cfg; config_init(&cfg);
-    if (config_load(&cfg) < 0) {
-        fb_draw_text(fb, CONTENT_LEFT+30, y, "CONFIG FILE NOT FOUND", RGB(200,80,80), 2); y += 24;
-        fb_draw_text(fb, CONTENT_LEFT+30, y, "(USING DEFAULTS)", COLOR_LABEL, 2); y += 28;
-    } else {
-        static const struct { const char *key; const char *lbl; const char *def; } kk[] = {
-            {"audio_enabled","AUDIO ENABLED:","1 (default)"},
-            {"music_enabled","MUSIC:","1 (default)"},
-            {"effects_enabled","EFFECTS:","1 (default)"},
-            {"audio_device","AUDIO OUT:","auto (default)"},
-            {"led_enabled","LED ENABLED:","1 (default)"},
-            {"led_brightness","LED BRIGHTNESS:","100 (default)"},
-            {"backlight_brightness","BACKLIGHT:","100 (default)"},
-        };
-        int nk = sizeof(kk)/sizeof(kk[0]);
-        for (int i = 0; i < nk; i++) {
-            const char *v = config_get(&cfg, kk[i].key, NULL);
-            y = draw_info_row(fb, y, kk[i].lbl, v ? v : kk[i].def, v ? COLOR_DATA : COLOR_LABEL);
-        }
-        bool has_extra = false;
-        for (int i = 0; i < cfg.count; i++) {
-            bool known = false;
-            for (int k = 0; k < nk; k++)
-                if (strcmp(cfg.entries[i].key, kk[k].key) == 0) { known = true; break; }
-            if (!known) {
-                if (!has_extra) { y += 4; fb_draw_text(fb, CONTENT_LEFT+10, y, "OTHER SETTINGS:", COLOR_HEADER_TEXT, 1); y += 14; has_extra = true; }
-                if (y < (int)(CONTENT_Y + CONTENT_H - 80)) {
-                    char lb[196]; snprintf(lb, sizeof(lb), "%s = %s", cfg.entries[i].key, cfg.entries[i].value);
-                    fb_draw_text(fb, CONTENT_LEFT+20, y, lb, COLOR_LABEL, 1); y += 14;
-                }
-            }
-        }
-    }
-    y += 8; fb_draw_line(fb, CONTENT_LEFT, y, CONTENT_RIGHT, y, COLOR_SECTION_LINE); y += 10;
-    fb_draw_text(fb, CONTENT_LEFT+10, y, "SYSTEM", COLOR_HEADER_TEXT, 2); y += 28;
-    { char da[256];
-      if (read_file_line("/opt/roomwizard/default-app", da, sizeof(da)) == 0) {
-          /* Truncate if value won't fit in portrait mode */
-          int val_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
-          int max_px = CONTENT_RIGHT - val_x - 10;
-          int scale = 2;
-          int max_chars = max_px / (6 * scale);
-          if (max_chars < 3) max_chars = 3;
-          if ((int)strlen(da) > max_chars) {
-              da[max_chars - 2] = '.';
-              da[max_chars - 1] = '.';
-              da[max_chars] = '\0';
-          }
-          y = draw_info_row(fb, y, "DEFAULT APP:", da, COLOR_DATA);
-      } else y = draw_info_row(fb, y, "DEFAULT APP:", "(NOT SET)", COLOR_LABEL); }
-    { if (access(CALIB_FILE, 0) == 0) y = draw_info_row(fb, y, "CALIBRATED:", "YES", COLOR_GREEN);
-      else y = draw_info_row(fb, y, "CALIBRATED:", "NO", COLOR_YELLOW); }
-}
-
 static void draw_diag_network(Framebuffer *fb) {
     int y = CONTENT_Y + 30;
     char buf[128];
@@ -1323,9 +1171,6 @@ static void draw_diagnostics(Framebuffer *fb, AppState *state) {
     fb_draw_text(fb, CONTENT_RIGHT-120, CONTENT_Y+5, pi, COLOR_PAGE_IND, 2);
 
     switch (state->diag_page) {
-        case DIAG_SYSTEM:  draw_diag_system(fb);  break;
-        case DIAG_HARDWARE:draw_diag_hardware(fb); break;
-        case DIAG_CONFIG:  draw_diag_config(fb);   break;
         case DIAG_NETWORK: draw_diag_network(fb);  break;
         default: break;
     }
@@ -3760,7 +3605,7 @@ int main(void) {
     if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
     if (state.backlight_brightness > 100) state.backlight_brightness = 100;
     state.portrait_mode = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
-    state.diag_page = DIAG_SYSTEM;
+    state.diag_page = DIAG_NETWORK;
     state.diag_needs_refresh = true;
     state.test_sub = TEST_MENU_VIEW;
     state.test_selected = -1;
