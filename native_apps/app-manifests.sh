@@ -44,15 +44,15 @@ samegame|SameGame|/opt/games/samegame|/opt/roomwizard/icons/samegame.ppm|fb,touc
 frogger|Frogger|/opt/games/frogger|/opt/roomwizard/icons/frogger.ppm|fb,touch
 platformer|Office Runner|/opt/games/platformer|/opt/roomwizard/icons/platformer.ppm|fb,touch
 audio_mix_test|Mix Bus Test|/opt/games/audio_mix_test|/opt/roomwizard/icons/audio_mix_test.ppm|fb,touch
-audio_touch_test|Tap-a-Theremin|/opt/games/audio_touch_test|/opt/roomwizard/icons/audio_touch_test.ppm|fb,touch
+theremin|Tap-a-Theremin|/opt/games/theremin|/opt/roomwizard/icons/theremin.ppm|fb,touch
 device_tools|Device Tools|/opt/games/device_tools|/opt/roomwizard/icons/device_tools.ppm|
 '
 
 # Manifests this component used to install and no longer does.  Swept on deploy
 # so a device that saw an older build does not keep a tile for a tool that was
-# folded into device_tools' tabs — the launcher would render it and the tap would
-# exec a binary that is gone.
-RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag'
+# folded into device_tools' tabs, or for an app that was renamed — the launcher
+# would render it and the tap would exec a binary that is gone.
+RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag audio_touch_test'
 
 # ---------------------------------------------------------------------------
 # rw_write_app_manifests DIR

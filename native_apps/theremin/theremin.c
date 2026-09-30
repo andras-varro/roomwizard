@@ -1,7 +1,8 @@
 /*
- * audio_touch_test — Continuous Theremin
+ * theremin — Tap-a-Theremin, a continuous-pitch touch instrument.
  *
- * Purpose: verify streaming audio with a continuous-pitch theremin.
+ * An app with its own launcher tile, not a test tool.  It also happens to be
+ * the one caller of the streaming-audio path (audio_stream_start()).
  *
  * Screen layout:
  *   The play area is a colour-coded pad — touch and slide to play.
@@ -15,17 +16,17 @@
  *   Twinkling stars in the margins.  Exit button top-right.
  *
  * Run on device:
- *   /opt/games/audio_touch_test /dev/fb0 /dev/input/touchscreen0
+ *   /opt/games/theremin /dev/fb0 /dev/input/touchscreen0
  *
  * Build (from native_apps/) — build-and-deploy.sh does; by hand it is that script's
  * soft-float compiler and ALSA flags:
  *   arm-linux-gnueabi-gcc -march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp \
  *     -O2 -I. -DAUDIO_OUT_HAVE_ALSA -Iarm-deps-softfp/usr/include \
- *     tests/audio_touch_test.c \
+ *     theremin/theremin.c \
  *     common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c \
  *     common/config.c common/touch_input.c common/framebuffer.c \
  *     common/hardware.c common/common.c \
- *     -o build/audio_touch_test -lm -Larm-deps-softfp/usr/lib -lasound
+ *     -o build/theremin -lm -Larm-deps-softfp/usr/lib -lasound
  */
 
 #include <stdio.h>
@@ -241,7 +242,7 @@ int main(int argc, char *argv[])
     const char *fb_dev    = (argc > 1) ? argv[1] : "/dev/fb0";
     const char *touch_dev = (argc > 2) ? argv[2] : "/dev/input/touchscreen0";
 
-    logger_init(&logger, "audio_touch_test", LOG_LEVEL_DEBUG, true);
+    logger_init(&logger, "theremin", LOG_LEVEL_DEBUG, true);
 
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);

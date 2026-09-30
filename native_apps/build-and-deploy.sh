@@ -262,11 +262,11 @@ $CC "${WARN[@]}" -O2 -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" bu
 step "29/37" "hardware_diag"
 $CC "${WARN[@]}" -O2 -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm "${AUDIO_LIBS[@]}"
 
-step "30/37" "audio_touch_test"
+step "30/37" "theremin"
 $CC "${WARN[@]}" -O2 -I. \
-  tests/audio_touch_test.c \
+  theremin/theremin.c \
   "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
-  -o build/audio_touch_test -lm "${AUDIO_LIBS[@]}"
+  -o build/theremin -lm "${AUDIO_LIBS[@]}"
 
 step "31/37" "backlight"
 $CC "${WARN[@]}" -O2 -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
@@ -336,13 +336,13 @@ echo "  Wrote $(find build/soundsets -maxdepth 1 -type f -name '*.sound' 2>/dev/
 # ── deployed artifacts ──────────────────────────────────────────────────────
 # ONE list, used for the build-size listing, the upload, the chmod, the md5
 # verification and --bundle.  There used to be two (scp and chmod) and
-# audio_touch_test was missing from the chmod one — it worked only because scp
+# one binary was missing from the chmod one — it worked only because scp
 # happens to carry the source file's mode.  A third copy for the md5 check would
 # have recreated exactly that bug, and a fourth for
 # --bundle would recreate it again.
 GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
                 game_selector hardware_test hardware_config hardware_diag
-                audio_touch_test audio_mix_test backlight device_tools
+                theremin audio_mix_test backlight device_tools
                 touch_raw touch_trace fb_plane_bench dss_scale_ab)
 
 # .hidden markers: hidden from game_selector's grid but still reachable over SSH.
@@ -670,14 +670,17 @@ for name in "$@"; do
     chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
 
-# Retired tools: sweep the orphan markers, and the one binary that was really
-# deployed before being folded into device_tools' Display tab.
+# Retired names: sweep the orphan markers, the binary that was folded into
+# device_tools' Display tab, and the theremin's old test-shaped name (its
+# manifest goes with RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles).
 rm -f /opt/games/touch_test.hidden \
       /opt/games/touch_debug.hidden \
       /opt/games/touch_calibrate.hidden \
       /opt/games/pressure_test.hidden \
       /opt/games/unified_calibrate.hidden \
-      /opt/games/unified_calibrate
+      /opt/games/unified_calibrate \
+      /opt/games/audio_touch_test \
+      /opt/roomwizard/icons/audio_touch_test.ppm
 REMOTE
 ok "Permissions and markers set"
 

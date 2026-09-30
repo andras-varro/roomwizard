@@ -31,7 +31,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
 | `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
 | `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
-| `audio_touch_test` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
+| `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
 | `hardware_config` | Tool | Settings GUI — superseded by `device_tools` (hidden) |
 | `hardware_diag` | Tool | System diagnostics GUI — superseded by `device_tools` (hidden) |

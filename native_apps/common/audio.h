@@ -253,9 +253,9 @@ typedef struct {
      * audio_fx_play() and audio_sfx_play() for effects, audio_music_start() for the
      * bed — so a game needs no code of its own to honour them.
      * ⚠️ **audio_stream_start() is deliberately NOT gated.** Its only caller is
-     * `tests/audio_touch_test` (Tap-a-Theremin), an instrument whose entire purpose
-     * is to make a noise on demand; silencing it from a games-menu toggle would take
-     * away a diagnostic for the same reason audio_init_unchecked() exists.
+     * `theremin/theremin.c` (Tap-a-Theremin), an instrument whose entire purpose
+     * is to make a noise on demand; a games-menu toggle that silenced it would leave
+     * an app that does nothing.
      */
     bool     music_on;        /**< `music_enabled`   config key, default true      */
     bool     effects_on;      /**< `effects_enabled` config key, default true      */
@@ -735,7 +735,7 @@ bool audio_effects_enabled(const Audio *audio);
  *
  * It runs on the same continuous stream audio_init() opened, by swapping the
  * stream's fill from the mix bus to one gliding oscillator and back — no reset
- * and no chunk loop of its own.  Its only caller is `tests/audio_touch_test`.
+ * and no chunk loop of its own.  Its only caller is `theremin/theremin.c`.
  */
 
 /**

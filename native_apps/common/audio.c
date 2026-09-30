@@ -684,7 +684,7 @@ void audio_tone(Audio *audio, int freq_hz, int duration_ms)
 /* ── Streaming (theremin) API ─────────────────────────────────────────────────
  * The same continuous stream audio_init() opened, with its fill swapped from the
  * mix bus to one gliding oscillator and back — no reset and no chunk loop, so no
- * click per gesture.  Its only caller is `tests/audio_touch_test`.
+ * click per gesture.  Its only caller is `theremin/theremin.c`.
  */
 
 void audio_stream_start(Audio *audio, int freq_hz)

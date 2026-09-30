@@ -131,15 +131,14 @@ CTEST_ROWS=(
     "usb_bus_test|-I.|device_tools/usb_bus.c"
 )
 
-# Files named *_test.c that are NOT host regressions.  Two are ARM apps that
-# native_apps/build-and-deploy.sh cross-compiles and deploys; three are
-# device-only diagnostics built by hand from their own headers.  Listing them
-# is what lets an unclassified newcomer raise a HARNESS ERROR instead of
-# being quietly ignored.
+# Files named *_test.c that are NOT host regressions: ARM tools that
+# native_apps/build-and-deploy.sh cross-compiles and deploys, and device-only
+# diagnostics built by hand from their own headers.  Listing them is what lets
+# an unclassified newcomer raise a HARNESS ERROR instead of being quietly
+# ignored.
 CTEST_NOT_HOST=(
     "audio_mix_test"    # ARM, build-and-deploy.sh step 35/37
-    "audio_touch_test"  # ARM, build-and-deploy.sh step 30/37
-    "audio_test"        # device only, opens /dev/dsp
+    "audio_test"      # device only, opens /dev/dsp
     "ch_test"           # device only
     "dss_scale_test"    # device only, drives the DSS overlay by omapfb ioctl
     "dss_scale_ab"      # ARM, build-and-deploy.sh step 37/37 — eye A/B, device only

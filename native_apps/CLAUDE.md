@@ -788,10 +788,10 @@ questions: its top row is **LIM | LVL | STOP | DRAW** (DRAW turns the per-press 
 the same screen as the shipped shape and "the click is gone" can be A/B'd rather than believed; the stream
 itself has no off switch to compare against any more. ⚠️ Its level ladder starts
 on the QUIETEST rung and wraps — a loud-to-quiet walk biases adaptation.
-⚠️ **Two files under `tests/` are SHIPPED launcher tiles, so nothing in there is automatically
-expendable** — `audio_touch_test` is `Tap-a-Theremin` and `audio_mix_test` is `Mix Bus Test`
-(`app-manifests.sh`, each with a PPM icon), and the theremin measured the speaker's usable band
-([§3.4](../SYSTEM_ANALYSIS.md#34-audio)). Read that manifest before calling anything under `tests/` a tool.
+⚠️ **An app lives in its own directory, never under `tests/`** — a file there gets read as a test
+tool. `theremin/` (`Tap-a-Theremin`) is an **app**, not a diagnostic (it also measured the speaker's usable band, [§3.4](../SYSTEM_ANALYSIS.md#34-audio)).
+`tests/audio_mix_test.c` (`Mix Bus Test`) is still a shipped launcher tile, so nothing under `tests/`
+is automatically expendable: read `app-manifests.sh` before calling a file there a tool.
 ⚠️ **Never write prose saying 60 ms is a minimum tone length** — nothing clamps it; the floor was the
 start-of-stream pop ([gotcha 6](../SYSTEM_ANALYSIS.md#34-audio)).
 
