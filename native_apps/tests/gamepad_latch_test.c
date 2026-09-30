@@ -321,8 +321,8 @@ static void test_sources_or_together(void) {
  * component running a smaller surface — a game on a 400x240 fb1 that a scaling
  * DSS overlay upscales to fill the panel — let a USB mouse range over twice the
  * surface and clamped it at coordinates no pixel occupies. Six of the nine call
- * sites never called gamepad_set_mouse_bounds() to correct it, and the two that
- * actually feed mouse_x/y into hit-testing (app_launcher, game_selector) re-init
+ * sites never called gamepad_set_mouse_bounds() to correct it, and the one that
+ * actually feeds mouse_x/y into hit-testing (app_launcher), re-inits
  * the manager after every child exits, which re-runs apply_defaults() and would
  * discard a startup-only call. So the bounds are taken from the framebuffer's
  * own logical size instead, which no call site can forget.

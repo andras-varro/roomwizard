@@ -123,7 +123,7 @@
 #define FB_DEVICE         "/dev/fb0"
 #define TOUCH_DEVICE      "/dev/input/touchscreen0"
 /* The uncalibrated diagnostic, launched from the Display tab. Deployed by
- * build-and-deploy.sh and marked .hidden, so the launcher does not show it —
+ * build-and-deploy.sh with no manifest, so the launcher does not show it —
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
 /* The init script that owns USB host mode, including the MUSB driver re-probe

@@ -262,7 +262,7 @@ the display section linked above.
      O9 row already names ScummVM the prime candidate. ⚠️ `vnc_client` is **not** a candidate: it
      *downscales* from a larger remote, so the DSS would need a framebuffer the size of the remote
      desktop to scale from.
-   - **The instrument that decides it: `native_apps/tests/dss_scale_ab.c`**, built as step 37/37,
+   - **The instrument that decides it: `native_apps/tests/dss_scale_ab.c`**, built as the last build step,
      deployed, hidden from the grid, and linking nothing from `common/` because `fb_init()` would apply a
      bezel viewport it must not have. Three modes over one synthetic 320×200 card — 1 px and 2 px column
      and row combs, diagonals, 1 px rings, four ramps, hard-edged blocks, and a 1 px border so a crop is
@@ -527,6 +527,11 @@ composited panel, so no screenshot can see an overlay — say so in any checklis
 
 ⚠️ Cheap today, but it would need rewriting as DRM atomic plane code after a **mainline** port — which
 is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.
+
+**Cleanup when this concludes:** delete `tests/fb_plane_bench.c` and `tests/dss_scale_ab.c` (both
+DSS-scaling instruments, deployed hidden) together with their build steps, their `GAMES_BINARIES` and
+`HIDDEN_MARKERS` entries in `native_apps/build-and-deploy.sh`, and their `CTEST_NOT_HOST` rows in
+`tests/run-all.sh`.
 
 ### F4. Surface the two MADC channels that need no wire — open
 
@@ -1029,7 +1034,7 @@ on if the message survives the halt; one measurement decides, and F103 may repla
 |---|---|
 | Audio | enable, music/effects, output device, chime test, tone sweep, Mix Bus Test |
 | Display | backlight slider and ramp test, portrait toggle, screen geometry, display pattern pages |
-| Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic |
+| Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic; `touch_trace` candidate (see below) |
 | LED | enable, brightness, ramp/pulse/blink/cycle tests |
 | USB | bus list, port recovery, keyboard/mouse/pad testers |
 | Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
@@ -1051,8 +1056,14 @@ is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and
 fix its EXIT corner separately from `device_tools`'. Check page by page that no diag page holds a field
 the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
 redundant: it moves under Audio and loses its launcher tile. **Tap-a-Theremin is an app, not a test tool,
-and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` go
-under Display as developer entries or stay hidden — operator's call.
+and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` stay hidden and are **not**
+control-panel entries (operator); their cleanup belongs to the DSS-overlay entry.
+
+**`touch_trace` is a candidate for the Touch page** (operator: *"bring it to the calibration, but we
+have many similar tools, let's see if it makes sense"*): a calibrated finger trail against the raw one,
+logging raw and calibrated samples; deployed hidden, SSH-only today. When the Touch page is built, weigh
+it against the other touch tools in that row (edges, multi-touch test, touch zone grid, touch
+diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
 **Stages, each verified on the panel.** (1) a `device_tools` home grid on `common/icon_grid.c` (already
 extracted; the launcher frame measured md5-identical) whose icons open today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on

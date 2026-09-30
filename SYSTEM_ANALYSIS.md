@@ -172,7 +172,7 @@ whatever the running app last selected via `FBIOPUT_VSCREENINFO`.
 
 | App | bpp |
 |---|---|
-| every native app — games, launcher, tools, diagnostics | **32bpp XRGB8888**, pinned via `fb_set_bpp(dev, 32)` before `fb_init()`. `app_launcher` and `game_selector` also re-assert it after every child exits |
+| every native app — games, launcher, tools, diagnostics | **32bpp XRGB8888**, pinned via `fb_set_bpp(dev, 32)` before `fb_init()`. `app_launcher` also re-asserts it after every child exits |
 | ScummVM, VNC remote session | **16bpp RGB565**, to halve write bandwidth |
 
 `native_apps/common/framebuffer.c` is **bpp-aware**: its primitives dispatch on `bytes_per_pixel`

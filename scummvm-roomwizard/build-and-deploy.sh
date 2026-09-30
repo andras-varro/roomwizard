@@ -767,7 +767,7 @@ stage_bundle() {
     rw_bundle_add "$dir" scummvm 0755 "$SCUMMVM_DIR/scummvm" "$DEVICE_PATH/scummvm" \
         || { log_error "staging failed: scummvm"; exit 1; }
 
-    # .noargs tells app_launcher to exec this with no framebuffer/touch argument.
+    # .noargs is a record only (the manifest's args=none is what app_launcher reads).
     # deploy_to_device `touch`es it on the device; a bundle needs a real file.
     local NOARGS
     NOARGS=$(mktemp)

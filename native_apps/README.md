@@ -29,7 +29,6 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `game_selector` | Launcher | D-pad grid nav + Enter/A select, mouse click, legacy text menu |
 | `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
@@ -39,10 +38,10 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
 
-Tools marked *hidden* have a `.hidden` marker in `/opt/games/`, so they do not appear in the
-launcher grid but remain runnable over SSH. `usb_test` and `watchdog_feeder` exist as source but
-are **not built or deployed** — USB testing lives in the `device_tools` USB tab, and the system
-`/usr/sbin/watchdog` daemon handles the hardware watchdog.
+Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH
+(see *Markers in /opt/games*). `usb_test` exists as source but is **not built or deployed** — USB
+testing lives in the `device_tools` USB tab. The system `/usr/sbin/watchdog` daemon handles the
+hardware watchdog.
 
 The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
 does not — run `fbset -depth 32` first if ScummVM or `vnc_client` left it at 16. Stop the launcher
@@ -58,7 +57,7 @@ separate GUI utilities behind a tab bar:
 | **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset, and the SYSTEM shutdown/reboot pair. Test buttons deliberately bypass config to exercise raw hardware. |
 | **Diagnostics** | `hardware_diag` | Read-only system info across 6 pages (System, Memory, Storage, Hardware, Config, Network). |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
-| **Display** | `unified_calibrate` | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
+| **Display** | a retired standalone calibration tool | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
 | **USB** | `usb_test` | Keyboard, mouse and gamepad visualisation for attached USB devices. |
 
 #### The Display tab and the calibration wizard
@@ -149,7 +148,6 @@ Gamepad button mapping is configurable to support clone/third-party controllers 
 | SameGame | ✅ | ✅ | ✅ | ✅ | Mouse cursor + hover highlight |
 | Platformer | ✅ | ✅ | — | ✅ | Reference implementation |
 | App Launcher | ✅ | ✅ | ✅ | ✅ | Grid nav + Enter/A select, 500ms post-launch cooldown |
-| Game Selector | ✅ | ✅ | ✅ | ✅ | D-pad grid nav + Enter/A select + mouse click, 500ms cooldown |
 | USB Test | ✅ | ✅ | ✅ | ✅ | Device diagnostic visualizer |
 
 ### USB Hotplug
@@ -302,25 +300,21 @@ Installing the service itself is done once by `../commissioning/provision.sh`.
 
 Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-app start|stop|status'`
 
-## Game Selector Markers
+## Markers in /opt/games
 
-Two non-executable marker files in `/opt/games/` control how `game_selector` handles each binary. Because they lack execute permission (`chmod 644`) they are never listed themselves.
+`build-and-deploy.sh` writes two kinds of empty, non-executable (`chmod 644`) marker file beside the
+binaries. **No program reads either of them** — `app_launcher` builds its grid from the `.app`
+manifests in `/opt/roomwizard/apps/` (`args=` there decides what a tile is launched with), so a
+binary with no manifest has no tile whatever markers it has. They are a record for whoever runs
+`ls /opt/games`:
 
-| Marker | Effect |
+| Marker | Meaning |
 |---|---|
-| `<name>.noargs` | Launch without device-path args (for apps that open devices themselves, e.g. ScummVM) |
-| `<name>.hidden` | Hide from the games list entirely |
+| `<name>.hidden` | dev tool, deliberately without a tile; run it over SSH. The set is `HIDDEN_MARKERS` in `build-and-deploy.sh` |
+| `<name>.noargs` | apps that open the devices themselves (ScummVM) |
 
-```bash
-# Hide:    touch /opt/games/<name>.hidden  && chmod 644 /opt/games/<name>.hidden
-# Un-hide: rm /opt/games/<name>.hidden
-# No-args: touch /opt/games/<name>.noargs  && chmod 644 /opt/games/<name>.noargs
-```
-
-Current state on device:
-- **Hidden:** `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`, `hardware_diag`
-- **No-args:** `scummvm`
-- **Visible:** `snake`, `tetris`, `pong`, `hardware_test`, `usb_test`, `scummvm`
+Hidden on the device: `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`,
+`hardware_diag`, `fb_plane_bench`, `dss_scale_ab`. `usb_test` is not built by `build-and-deploy.sh`.
 
 ## Resources
 

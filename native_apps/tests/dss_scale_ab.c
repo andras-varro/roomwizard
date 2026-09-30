@@ -387,8 +387,8 @@ static void on_signal(int sig) {
 
 /* Set one node to w by h at 16bpp RGB565.  The channel offsets are written
  * explicitly: asking for 16 alone lets the driver pick a layout, and
- * dss_scale_test.c writes RGB565 shorts into whatever fb0 happens to be, which on
- * a 32bpp fb0 is garbage rather than the red screen it announces. */
+ * a probe that writes RGB565 shorts into whatever fb0 happens to be gets, on a
+ * 32bpp fb0, garbage rather than the red screen it announces. */
 static int set_mode_565(int fd, int w, int h) {
     struct fb_var_screeninfo v;
     if (ioctl(fd, FBIOGET_VSCREENINFO, &v) < 0) {
@@ -412,7 +412,7 @@ static int set_mode_565(int fd, int w, int h) {
      * Discarding v would let a 32bpp grant read as success — and then every
      * RGB565 store below, and the stride_px = line_length / 2 that assumes 16bpp,
      * is wrong and the panel shows garbage the operator would read as a scaler
-     * artefact.  This is the same defect class as dss_scale_test.c's unset bpp
+     * artefact.  This is the same defect class as a probe that never sets bpp
      * (see the note above set_mode_565's channel offsets): explicit offsets fix
      * the layout half, and only a readback fixes the acceptance half. */
     if (v.xres != (uint32_t)w || v.yres != (uint32_t)h || v.bits_per_pixel != 16) {

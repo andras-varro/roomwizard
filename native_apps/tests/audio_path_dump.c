@@ -16,7 +16,7 @@
  * something in the DELIVERY, which no test has ever looked at.
  *
  * ⚠️ **Why "the mixer is exonerated" does not cover this.**  That result came from
- * `tests/audio_dump.c`, which does NOT link `common/audio.c` — it hand-transcribes the
+ * an earlier host tool that did NOT link `common/audio.c` — it hand-transcribed the
  * chain out of `audio_gen.c` primitives.  What it proved byte-identical ARM-vs-host was
  * the ARITHMETIC.  It never covered the per-service CHUNKING, the bus state carried
  * across chunk boundaries, or the interleave — and a per-voice phase error that
@@ -26,7 +26,7 @@
  *
  * This file therefore links the shipped `common/audio.c` and drives
  * `audio_cont_fill_mix()` — the PRODUCTION fill, exported rather than copied, because a
- * re-implemented fill would reproduce `audio_dump.c`'s hole exactly.  The only thing
+ * re-implemented fill would reproduce that hole exactly.  The only thing
  * swapped out is the device: a file-backed `AudioOutDev` in place of `/dev/dsp`, so the
  * bytes captured are the bytes `write()` would have been handed.
  *

@@ -137,12 +137,10 @@ CTEST_ROWS=(
 # an unclassified newcomer raise a HARNESS ERROR instead of being quietly
 # ignored.
 CTEST_NOT_HOST=(
-    "audio_mix_test"    # ARM, build-and-deploy.sh step 35/37
-    "audio_test"      # device only, opens /dev/dsp
+    "audio_mix_test"    # ARM, build-and-deploy.sh step 34/36
     "ch_test"           # device only
-    "dss_scale_test"    # device only, drives the DSS overlay by omapfb ioctl
-    "dss_scale_ab"      # ARM, build-and-deploy.sh step 37/37 — eye A/B, device only
-    "fb_plane_bench"    # ARM, build-and-deploy.sh step 36/37 — measures store bandwidth
+    "dss_scale_ab"      # ARM, build-and-deploy.sh step 36/36 — eye A/B, device only
+    "fb_plane_bench"    # ARM, build-and-deploy.sh step 35/36 — measures store bandwidth
 )
 
 SCOPE="all"

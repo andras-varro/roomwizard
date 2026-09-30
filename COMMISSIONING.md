@@ -553,8 +553,8 @@ To switch which app starts on boot, just set a different default:
 # Switch to VNC client
 ssh root@<ip> 'echo /opt/vnc_client/vnc_client > /opt/roomwizard/default-app'
 
-# Switch to native games
-ssh root@<ip> 'echo /opt/games/game_selector > /opt/roomwizard/default-app'
+# Switch to the native launcher
+ssh root@<ip> 'echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app'
 
 # Check current default
 ssh root@<ip> 'cat /opt/roomwizard/default-app'
@@ -605,7 +605,7 @@ hatch, and that operator does still need the next steps.
 ├── disable-steelcase.sh         Bloatware cleanup (run on every boot)
 ├── apps/*.app                   Launcher manifests (INI: name=, exec=, icon=, args=)
 ├── icons/*.ppm                  Tile icons, PPM P6
-└── default-app                  One line: path to executable (e.g. /opt/games/game_selector)
+└── default-app                  One line: path to executable (e.g. /opt/roomwizard/app_launcher)
 
 /etc/init.d/
 ├── roomwizard-app               Generic app launcher (S99 in rc2-5.d)
@@ -666,7 +666,7 @@ ssh root@<ip> /opt/roomwizard/disable-steelcase.sh
 ### No app starts after reboot
 No default app configured. Set one:
 ```bash
-ssh root@<ip> 'echo /opt/games/game_selector > /opt/roomwizard/default-app'
+ssh root@<ip> 'echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app'
 ssh root@<ip> reboot
 ```
 

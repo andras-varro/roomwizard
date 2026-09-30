@@ -10,11 +10,11 @@
 ### END INIT INFO
 
 # Generic init script for RoomWizard.  Reads /opt/roomwizard/default-app to
-# determine which executable to launch (e.g. /opt/games/game_selector,
+# determine which executable to launch (e.g. /opt/roomwizard/app_launcher,
 # /opt/vnc_client/vnc_client).
 #
 # Set the default app with:
-#   echo /opt/games/game_selector > /opt/roomwizard/default-app
+#   echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app
 #
 # The system /usr/sbin/watchdog daemon (started by /etc/init.d/watchdog
 # via /etc/default/watchdog) feeds /dev/watchdog.  No separate feeder needed.

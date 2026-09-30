@@ -14,7 +14,7 @@
 # <dir>/root/<device-path>, with a declared-mode manifest — the layout
 # ../release.sh publishes and ../commissioning/commission-offline.sh installs
 # from.  It always builds first: this component's
-# 37 targets take well under a minute, so there is no reason for a
+# targets take well under a minute, so there is no reason for a
 # stage-what-is-already-there mode and therefore no way to bundle a stale
 # binary.  (ScummVM, whose link is ~2 minutes, does have one.)
 
@@ -91,7 +91,7 @@ err()  { echo -e "[$(date '+%H:%M:%S')] ${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── argument validation ─────────────────────────────────────────────────────
 # Validate BEFORE building.  A bad first argument used to surface only at the
-# first ssh, i.e. after all 37 targets had already been compiled.
+# first ssh, i.e. after every target had already been compiled.
 usage() {
     echo "Usage: $0 [<ip>] [set-default]"
     echo "       $0 --bundle <dir>"
@@ -169,24 +169,24 @@ mkdir -p build
 
 step() { echo "[$1] $2..."; }
 
-step " 1/37" "framebuffer";  $CC "${WARN[@]}" -O2 -c common/framebuffer.c    -o build/framebuffer.o
-step " 2/37" "touch_input";  $CC "${WARN[@]}" -O2 -c common/touch_input.c    -o build/touch_input.o
-step " 3/37" "touch_calib";  $CC "${WARN[@]}" -O2 -c common/touch_calib.c    -o build/touch_calib.o
-step " 4/37" "hardware";     $CC "${WARN[@]}" -O2 -c common/hardware.c        -o build/hardware.o
-step " 5/37" "common";       $CC "${WARN[@]}" -O2 -c common/common.c          -o build/common.o
-step " 6/37" "highscore";    $CC "${WARN[@]}" -O2 -c common/highscore.c       -o build/highscore.o
-step " 7/37" "keyboard";     $CC "${WARN[@]}" -O2 -c common/keyboard.c        -o build/keyboard.o
-step " 8/37" "ui_layout";    $CC "${WARN[@]}" -O2 -c common/ui_layout.c       -o build/ui_layout.o
-step " 9/37" "audio";        $CC "${WARN[@]}" -O2 -c common/audio.c           -o build/audio.o
-step "10/37" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
-step "11/37" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
-step "12/37" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
-step "13/37" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
-step "14/37" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
+step " 1/36" "framebuffer";  $CC "${WARN[@]}" -O2 -c common/framebuffer.c    -o build/framebuffer.o
+step " 2/36" "touch_input";  $CC "${WARN[@]}" -O2 -c common/touch_input.c    -o build/touch_input.o
+step " 3/36" "touch_calib";  $CC "${WARN[@]}" -O2 -c common/touch_calib.c    -o build/touch_calib.o
+step " 4/36" "hardware";     $CC "${WARN[@]}" -O2 -c common/hardware.c        -o build/hardware.o
+step " 5/36" "common";       $CC "${WARN[@]}" -O2 -c common/common.c          -o build/common.o
+step " 6/36" "highscore";    $CC "${WARN[@]}" -O2 -c common/highscore.c       -o build/highscore.o
+step " 7/36" "keyboard";     $CC "${WARN[@]}" -O2 -c common/keyboard.c        -o build/keyboard.o
+step " 8/36" "ui_layout";    $CC "${WARN[@]}" -O2 -c common/ui_layout.c       -o build/ui_layout.o
+step " 9/36" "audio";        $CC "${WARN[@]}" -O2 -c common/audio.c           -o build/audio.o
+step "10/36" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
+step "11/36" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
+step "12/36" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
+step "13/36" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
+step "14/36" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
                               $CC "${WARN[@]}" -O2 -c common/icon_grid.c       -o build/icon_grid.o
-step "15/37" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
-step "16/37" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
-step "17/37" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
+step "15/36" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
+step "16/36" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
+step "17/36" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
                               $CC "${WARN[@]}" -O2 -c common/input_scan.c      -o build/input_scan.o
 
 # gamepad.c finds its devices through input_scan.c (classifier + event* walk),
@@ -201,7 +201,7 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 
 # audio_gen.o rides with audio.o and is not optional: audio.c calls into it for
 # every frame count, every byte count, the envelope and the write loop.  Both are
-# in COMMON_OBJ, so all 17 binaries that link the library get them; `backlight`
+# in COMMON_OBJ, so every binary that links the library gets them; `backlight`
 # links neither.
 #
 # audio_out.o joined them in Phase 2 and is not optional either: `audio.h`
@@ -231,50 +231,47 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "18/37" "snake";        $CC "${WARN[@]}" -O2 snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
-step "19/37" "tetris";       $CC "${WARN[@]}" -O2 tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
-step "20/37" "pong";         $CC "${WARN[@]}" -O2 pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
+step "18/36" "snake";        $CC "${WARN[@]}" -O2 snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
+step "19/36" "tetris";       $CC "${WARN[@]}" -O2 tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
+step "20/36" "pong";         $CC "${WARN[@]}" -O2 pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
 
-step "21/37" "brick_breaker"
+step "21/36" "brick_breaker"
 $CC "${WARN[@]}" -O2 brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
 
-step "22/37" "samegame"
+step "22/36" "samegame"
 $CC "${WARN[@]}" -O2 samegame/samegame.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/samegame -lm "${AUDIO_LIBS[@]}"
 
-step "23/37" "frogger"
+step "23/36" "frogger"
 $CC "${WARN[@]}" -O2 frogger/frogger.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/frogger -lm "${AUDIO_LIBS[@]}"
 
-step "24/37" "platformer"
+step "24/36" "platformer"
 $CC "${WARN[@]}" -O2 platformer/platformer.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/platformer -lm "${AUDIO_LIBS[@]}"
 
-step "25/37" "game_selector"
-$CC "${WARN[@]}" -O2 -I. game_selector/game_selector.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ui_layout.o -o build/game_selector -lm "${AUDIO_LIBS[@]}"
-
-step "26/37" "app_launcher"
+step "25/36" "app_launcher"
 $CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/icon_grid.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
 
-step "27/37" "hardware_test"
+step "26/36" "hardware_test"
 $CC "${WARN[@]}" -O2 -I. hardware_test/hardware_test_gui.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_test -lm "${AUDIO_LIBS[@]}"
 
-step "28/37" "hardware_config"
+step "27/36" "hardware_config"
 $CC "${WARN[@]}" -O2 -I. hardware_config/hardware_config.c "${COMMON_OBJ[@]}" build/ui_layout.o -o build/hardware_config -lm "${AUDIO_LIBS[@]}"
 
-step "29/37" "hardware_diag"
+step "28/36" "hardware_diag"
 $CC "${WARN[@]}" -O2 -I. hardware_diag/hardware_diag.c "${COMMON_OBJ[@]}" -o build/hardware_diag -lm "${AUDIO_LIBS[@]}"
 
-step "30/37" "theremin"
+step "29/36" "theremin"
 $CC "${WARN[@]}" -O2 -I. \
   theremin/theremin.c \
   "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
   -o build/theremin -lm "${AUDIO_LIBS[@]}"
 
-step "31/37" "backlight"
+step "30/36" "backlight"
 $CC "${WARN[@]}" -O2 -I. backlight/backlight.c build/hardware.o build/config.o -o build/backlight
 
 # Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
-step "32/37" "device_tools"
+step "31/36" "device_tools"
 $CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
@@ -282,23 +279,23 @@ $CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${C
 # entirely: it wrote synthetic events to /dev/input/event0, which is the OUTPUT
 # path, so it announced success and delivered nothing to any reader. Injection
 # needs /dev/uinput and this kernel has none — ../CLAUDE.md carries the rule.
-step "33/37" "touch_raw"
+step "32/36" "touch_raw"
 $CC "${WARN[@]}" -O2 -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
 
-step "34/37" "touch_trace"
+step "33/36" "touch_trace"
 $CC "${WARN[@]}" -O2 -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm "${AUDIO_LIBS[@]}"
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the panel.
-step "35/37" "audio_mix_test"
+step "34/36" "audio_mix_test"
 $CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
 
 # What a smaller drawing surface costs, so the DSS-overlay question is settled by
 # a number rather than by the arithmetic that predicts one.  Device only — the
 # figure is this SoC's store bandwidth and no host run predicts it.  Hidden from
 # the grid: it repaints as fast as it can for a fixed frame count and exits.
-step "36/37" "fb_plane_bench"
+step "35/36" "fb_plane_bench"
 $CC "${WARN[@]}" -O2 -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_plane_bench -lm "${AUDIO_LIBS[@]}"
 
 # Whether the DSS scaler LOOKS acceptable, which the per-frame cost above cannot
@@ -306,7 +303,7 @@ $CC "${WARN[@]}" -O2 -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_p
 # directly, and fb_init() would apply a bezel viewport this must not have.  Device
 # only and hidden from the grid — it changes framebuffer modes and the eye at the
 # panel is the only reader of its result.
-step "37/37" "dss_scale_ab"
+step "36/36" "dss_scale_ab"
 $CC "${WARN[@]}" -O2 -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 
 # Collect icon files from source dirs → build/icons/
@@ -341,12 +338,13 @@ echo "  Wrote $(find build/soundsets -maxdepth 1 -type f -name '*.sound' 2>/dev/
 # have recreated exactly that bug, and a fourth for
 # --bundle would recreate it again.
 GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
-                game_selector hardware_test hardware_config hardware_diag
+                hardware_test hardware_config hardware_diag
                 theremin audio_mix_test backlight device_tools
                 touch_raw touch_trace fb_plane_bench dss_scale_ab)
 
-# .hidden markers: hidden from game_selector's grid but still reachable over SSH.
-# Data rather than a loop body in the remote heredoc, so --bundle ships the same
+# .hidden markers: a record on the device of which binaries are dev tools with no
+# launcher tile — no program reads them (app_launcher lists manifests, not
+# /opt/games).  Data rather than a loop body in the remote heredoc, so --bundle ships the same
 # set.  It must contain only binaries this script actually builds: it used to
 # name touch_test, touch_debug, touch_calibrate, pressure_test and
 # unified_calibrate, none of which were ever built, so the device accumulated
@@ -439,8 +437,8 @@ if [[ -n "$BUNDLE_DIR" ]]; then
         || err "staging failed: app_launcher"
 
     for m in "${HIDDEN_MARKERS[@]}"; do
-        # The marker's CONTENT is irrelevant — app_launcher and game_selector test
-        # for existence — but a bundle entry needs a real file to copy and an md5
+        # The marker's CONTENT is irrelevant — it is a record, not a switch — but
+        # a bundle entry needs a real file to copy and an md5
         # to verify, so stage an empty one rather than special-casing "touch" in
         # the installer.
         : > "build/$m.hidden"
@@ -663,17 +661,20 @@ shift "$nexe"
 # .noargs marker for scummvm (if present)
 [ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
 
-# .hidden markers for dev tools (hidden from game_selector but still reachable
-# over SSH).
+# .hidden markers for dev tools (no launcher tile; reachable over SSH).
 for name in "$@"; do
     touch  /opt/games/$name.hidden 2>/dev/null || true
     chmod 644 /opt/games/$name.hidden 2>/dev/null || true
 done
 
 # Retired names: sweep the orphan markers, the binary that was folded into
-# device_tools' Display tab, and the theremin's old test-shaped name (its
-# manifest goes with RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles).
-rm -f /opt/games/touch_test.hidden \
+# device_tools' Display tab, the theremin's old test-shaped name (its
+# manifest goes with RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles),
+# the retired launcher prototype, and two icons no manifest names.
+rm -f /opt/games/game_selector \
+      /opt/roomwizard/icons/hardware_test.ppm \
+      /opt/roomwizard/icons/usb_test.ppm \
+      /opt/games/touch_test.hidden \
       /opt/games/touch_debug.hidden \
       /opt/games/touch_calibrate.hidden \
       /opt/games/pressure_test.hidden \

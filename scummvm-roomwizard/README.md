@@ -23,7 +23,7 @@ scp scummvm root@192.168.50.73:/opt/games/
 ssh root@192.168.50.73 'chmod +x /opt/games/scummvm'
 ```
 
-ScummVM appears in the native game selector automatically. The `scummvm.noargs` marker (already on device) ensures it launches without device-path arguments.
+ScummVM appears in the launcher through its `.app` manifest (`args=none`: it opens the framebuffer and input devices itself).
 
 ### Touch Calibration
 

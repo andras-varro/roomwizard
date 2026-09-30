@@ -259,10 +259,10 @@ static void apply_defaults(GamepadManager *gm) {
     /* The mouse ranges over the LOGICAL surface, so take it from the same
      * framebuffer globals touch_init() reads rather than from a compile-time
      * 800x480. Six of the nine call sites never call gamepad_set_mouse_bounds(),
-     * and app_launcher and game_selector — the two that actually feed mouse_x/y
-     * into hit-testing — re-init the manager after every child exits, which
+     * and app_launcher, the one that actually feeds mouse_x/y
+     * into hit-testing, re-inits the manager after every child exits, which
      * re-runs this function and would undo a startup-only call. Making the
-     * default right is the only form of the fix those two cannot lose.
+     * default right is the only form of the fix it cannot lose.
      * screen_base_width/height default to 800x480, so this is byte-identical
      * before fb_init() and on any full-size surface; it differs only where the
      * surface really is smaller, which is the case that was broken. */

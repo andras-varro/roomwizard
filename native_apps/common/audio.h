@@ -496,8 +496,8 @@ uint32_t audio_pump_dropped(const Audio *audio);
  *
  *   - a host regression that drives the REAL continuous path with a file-backed
  *     `AudioOutDev` instead of `/dev/dsp` (`tests/audio_path_dump.c`).  ⚠️ This
- *     is the point: `tests/audio_dump.c` hand-transcribes the chain out of
- *     `audio_gen.c` primitives, so its byte-equality result never covered the
+ *     is the point: a test that hand-transcribes the chain out of
+ *     `audio_gen.c` primitives never covers the
  *     DELIVERY — the per-service chunking and the bus state carried across
  *     chunks.  A test that re-implements the fill would have the same hole.
  *   - a ScummVM adapter, which becomes another fill beside this one.
