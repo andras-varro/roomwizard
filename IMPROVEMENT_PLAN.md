@@ -179,6 +179,17 @@ it runs degraded in portrait rather than being refused; C16 moves it under the A
 portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
+### B45. `control_panel` repaints every loop iteration on every page — open, confirmed 2026-09-30
+
+`AppState.diag_needs_refresh` (`control_panel/control_panel.c:308`) is set true at startup (`:3764`) and in
+`set_view` and the PREV/NEXT handlers (`:540`, `:1344`, `:1350`), and **nothing ever clears it**; it is ORed
+into the main loop's redraw test (`:3919`), so the panel redraws on every iteration. Measured by the operator
+2026-09-30: `control_panel` at about 35 % CPU in `top` while showing the Monitor page. **Constraint on the
+fix:** the remaining Diagnostics pages only look live *because* of this flag, so clearing it makes them
+static. Each page must decide its own refresh (Monitor re-reads once a second), which largely falls away as
+those pages become `CpPage`s (C16). **Done when** `top` on .188 shows `control_panel` near idle on a static
+page and the pages that should tick still do.
+
 ## Features
 
 Userspace except F101, which is the image build, and F2, which now waits on it.
@@ -835,6 +846,15 @@ the PoE port draw. **Done when** we know whether `poweroff` darkens the panel an
 the launcher's Shutdown either uses it or keeps the halt, its screen's unplug-when-white wording
 following whichever end state ships (C16).
 
+### F104. CPU-usage graph on the Monitor page — open, operator request 2026-09-30, later
+
+A history graph of CPU utilisation on the Monitor page (C16), beside the planned SoC temperature (F4).
+⚠️ **Trap: `/proc/stat`'s total column is not a valid denominator on this kernel** — `NO_HZ_IDLE` makes it
+unreliable; the fact and its measurement live in
+[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) (the PIO-cost paragraph). Use busy ticks over
+wall-clock seconds × `CONFIG_HZ`. **Done when** the graph on .188 reads near zero on an idle panel and
+rises under a known load (a `yes > /dev/null` over SSH), which also checks the denominator.
+
 ## Structural and cleanup
 
 ### C1. Extract the shared evdev layer — open, classifier and scan done
@@ -1038,7 +1058,7 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 | USB | bus list, port recovery, keyboard/mouse/pad testers |
 | Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
 | Network | hostname, IP, MAC, gateway, DNS, link |
-| Monitor | live memory, CPU, storage, load/uptime, SoC temperature (F4) |
+| Monitor | uptime, load, RAM, swap, storage (done); SoC temperature (F4) and CPU graph (F104) planned |
 | Information | static versions, kernel, config, calibrated? |
 
 **Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
@@ -1068,7 +1088,7 @@ diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
 launcher frame md5-identical). Audio opens Settings; Display and Touch open Display; USB opens USB;
-Network, Monitor and Information open the Diagnostics pages Network, Memory and System. Tests is a letter
+Network and Information open the Diagnostics pages Network and System; Monitor opens its own `CpPage` (below). Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
 and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their tabs, BACK, slide-off does nothing, the red X exits.
@@ -1082,9 +1102,17 @@ one by one as stage 2 progresses, never in bulk.
 LED tests run full-screen. Settings lost its LED block and the Tests tab is down to five: backlight, touch
 zone, display, audio, multi-touch. LED is **done on the registry below** (verified by finger on .188,
 2026-09-30): `led_page.c` exports only `cp_led_page`, `led_page.h` is deleted and `control_panel.c` holds no
-per-page code. **Next: the Monitor icon** (memory, CPU, storage, load from the Diagnostics Memory page,
-display-only), built as a `CpPage` from the start. After the control-panel refactor, work returns to Bluetooth
-(F17), whose page is a `CpPage`.
+per-page code.
+
+**The Monitor page is done on the registry too** (`native_apps/control_panel/monitor_page.c`, exports only
+`cp_monitor_page`; operator taps passed 2026-09-30): uptime, load average, RAM, swap (NONE when absent) and
+the four mounts, re-read once a second from `input()` (the main loop calls `page->input` every iteration
+with `now`, so no extra hook). Display-only, no `reset_defaults`. Receipt measured on .188: `control_panel:
+monitor stack fits — bottom +342 of CONTENT_H 375, right 770 of CONTENT_RIGHT 780 (safe 787x421,
+landscape)`; portrait fit is inferred by hand, not measured. The Diagnostics MEMORY and STORAGE pages and
+SYSTEM INFO's uptime/load rows were deleted as it landed (Diagnostics is SYSTEM, HARDWARE, CONFIG, NETWORK);
+`draw_usage_bar` and `read_file_line` are shared through `cp_ui.h`. SoC temperature (F4) stays planned for
+this page. After the control-panel refactor, work returns to Bluetooth (F17), whose page is a `CpPage`.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
@@ -1101,7 +1129,7 @@ launcher, not the folder, so the return path breaks; and every tap re-inits fb, 
 UI already lives in the control panel, VNC and ScummVM keep their settings in-app).
 
 **Deferred, operator-rated nice-to-have:** `dlopen` `CpPage` modules from a directory, taken up once the
-registry is proven (LED is converted; it now waits only on a second page working on the panel), or earlier if a page
+registry is proven (LED and Monitor are converted and tapped on the panel, so that precondition is met and the decision is the operator's), or earlier if a page
 must be built outside `native_apps`. It must meet: an ABI version field in `CpPage`, refused on mismatch (a stale
 plugin must not load against a newer panel: the silent-misparse class of the touch config); a plugin crash
 takes the control panel down (init respawns the launcher) — accepted; shared helpers exported
