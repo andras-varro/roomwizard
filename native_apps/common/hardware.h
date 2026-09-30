@@ -112,7 +112,7 @@ int hw_set_backlight(uint8_t brightness);
  * hw_set_backlight().
  *
  * This exists so a preview does not need its own copy of the sysfs path:
- * device_tools and hardware_config each had one, both naming
+ * control_panel and hardware_config each had one, both naming
  * /sys/class/backlight/pwm-backlight/brightness, which does not exist on this
  * device — /sys/class/backlight is empty and the panel is a LED class device.
  * So both previews silently did nothing.

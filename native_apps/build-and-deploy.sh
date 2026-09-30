@@ -191,7 +191,7 @@ step "17/36" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o
 
 # gamepad.c finds its devices through input_scan.c (classifier + event* walk),
 # so every binary that links gamepad.o links both — name GAMEPAD_OBJ, never
-# build/gamepad.o alone.  device_tools links input_scan.o for its USB tab.
+# build/gamepad.o alone.  control_panel links input_scan.o for its USB tab.
 GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
@@ -271,8 +271,8 @@ $CC "${WARN[@]}" -O2 -I. backlight/backlight.c build/hardware.o build/config.o -
 # Owns the calibration wizard (Display tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
-step "31/36" "device_tools"
-$CC "${WARN[@]}" -O2 -I. device_tools/device_tools.c device_tools/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o build/ppm.o build/icon_grid.o -o build/device_tools -lm "${AUDIO_LIBS[@]}"
+step "31/36" "control_panel"
+$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/usb_bus.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o build/ppm.o build/icon_grid.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
@@ -306,12 +306,12 @@ $CC "${WARN[@]}" -O2 -I. tests/fb_plane_bench.c "${COMMON_OBJ[@]}" -o build/fb_p
 step "36/36" "dss_scale_ab"
 $CC "${WARN[@]}" -O2 -I. tests/dss_scale_ab.c -o build/dss_scale_ab
 
-# Collect icon files from source dirs → build/icons/.  device_tools/icons/ holds
-# the control panel's home-grid icons (gen_cp_icons.py); device_tools reads them
+# Collect icon files from source dirs → build/icons/.  control_panel/icons/ holds
+# the control panel's home-grid icons (gen_cp_icons.py); control_panel reads them
 # from /opt/roomwizard/icons/ like the launcher reads a manifest's icon=.
 mkdir -p build/icons
 ICON_COUNT=0
-for ppm in *//*.ppm device_tools/icons/*.ppm; do
+for ppm in *//*.ppm control_panel/icons/*.ppm; do
     [ -f "$ppm" ] || continue
     cp "$ppm" build/icons/
     ICON_COUNT=$((ICON_COUNT + 1))
@@ -341,7 +341,7 @@ echo "  Wrote $(find build/soundsets -maxdepth 1 -type f -name '*.sound' 2>/dev/
 # --bundle would recreate it again.
 GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
                 hardware_test hardware_config hardware_diag
-                theremin audio_mix_test backlight device_tools
+                theremin audio_mix_test backlight control_panel
                 touch_raw touch_trace fb_plane_bench dss_scale_ab)
 
 # .hidden markers: a record on the device of which binaries are dev tools with no
@@ -670,9 +670,10 @@ for name in "$@"; do
 done
 
 # Retired names: sweep the orphan markers, the binary that was folded into
-# device_tools' Display tab, the theremin's old test-shaped name (its
+# control_panel's Display tab, the theremin's old test-shaped name (its
 # manifest goes with RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles),
-# the retired launcher prototype, and two icons no manifest names.
+# the retired launcher prototype, two icons no manifest names, and the
+# control panel's old name device_tools (manifest via RW_APP_MANIFESTS_RETIRED).
 rm -f /opt/games/game_selector \
       /opt/roomwizard/icons/hardware_test.ppm \
       /opt/roomwizard/icons/usb_test.ppm \
@@ -683,7 +684,9 @@ rm -f /opt/games/game_selector \
       /opt/games/unified_calibrate.hidden \
       /opt/games/unified_calibrate \
       /opt/games/audio_touch_test \
-      /opt/roomwizard/icons/audio_touch_test.ppm
+      /opt/roomwizard/icons/audio_touch_test.ppm \
+      /opt/games/device_tools \
+      /opt/roomwizard/icons/device_tools.ppm
 REMOTE
 ok "Permissions and markers set"
 
@@ -724,7 +727,7 @@ ssh "$DEVICE" bash -s -- $RW_APP_MANIFESTS_RETIRED <<'REMOTE'
 chmod 644 /opt/roomwizard/apps/*.app
 
 # Manifests this component used to install: their tools were folded into
-# device_tools' tabs, and a stale manifest renders a tile whose exec= is gone.
+# control_panel's tabs, and a stale manifest renders a tile whose exec= is gone.
 for name in "$@"; do
     rm -f "/opt/roomwizard/apps/$name.app"
 done

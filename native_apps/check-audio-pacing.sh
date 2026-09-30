@@ -269,7 +269,7 @@ int main(void){ while(1){ usleep(drew ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE
 EOC
 
     # 12. fixture 2's defect behind the THIRD spelling of an open — must FAIL.
-    #     device_tools' Settings screen opens only this way, and a subject pattern
+    #     control_panel's Settings screen opens only this way, and a subject pattern
     #     that knew two spellings would not count the file at all.
     cat > "$tmp/prefopen/prefopen.c" <<'EOC'
 int main(void){ audio_init_unchecked_pref(&a, "usb");

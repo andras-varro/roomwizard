@@ -6,7 +6,7 @@
  * Why it decides a design question. `audio_pump_active()` returns true whenever
  * keepalive is on, and `native_apps/CLAUDE.md` → *Rendering* puts that in the frame-pacing
  * decision — so a permanently fed stream pins EVERY audio-holding app to
- * FRAME_DELAY_ACTIVE_US (33 ms), including the static UIs (`device_tools`,
+ * FRAME_DELAY_ACTIVE_US (33 ms), including the static UIs (`control_panel`,
  * `hardware_config`, `hardware_test`) whose whole premise is that an idle screen costs
  * nothing.  If a 100 ms service interval is dry-free the static UIs keep
  * FRAME_DELAY_IDLE_US; if it is not, `audio_pump_active()` is load-bearing and the

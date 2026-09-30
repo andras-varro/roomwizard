@@ -52,7 +52,7 @@ quality_level = 5
 # screen, the reconnect buttons and the exit gesture corner — always stays
 # inside the touch-safe rectangle.
 #
-# Has no effect until the panel's edge reach has been measured (Device Tools ->
+# Has no effect until the panel's edge reach has been measured (Control Panel ->
 # Display -> CALIBRATE TOUCH, the REACH step); before that the two are the same.
 #
 # Editable on the device: settings GUI -> CONTENT row -> TOGGLE, then

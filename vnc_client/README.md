@@ -114,7 +114,7 @@ Set `content_area = visible` to use the whole screen instead — bigger and easi
 price of a band top and bottom that you cannot tap. Either way this app's own touch UI (settings
 screen, reconnect buttons, exit-gesture corner) stays reachable.
 
-The setting does nothing until the panel's touch reach has been measured — Device Tools →
+The setting does nothing until the panel's touch reach has been measured — Control Panel →
 Display → `CALIBRATE TOUCH`, the `REACH` step. Before that, `safe` and `visible` are the same
 rectangle.
 

@@ -25,7 +25,7 @@ it also takes one binary: `./check-arm-safe.sh <path>`.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
 keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o input_scan.o` (`GAMEPAD_OBJ`); some add `ui_layout.o ppm.o
-logger.o`; the two tools that measure the touch mapping (`device_tools`, `touch_raw`) add
+logger.o`; the two tools that measure the touch mapping (`control_panel`, `touch_raw`) add
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
 
@@ -46,7 +46,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `touch_input.c` | touch events, the raw→panel→logical map, publishing the touch inset | reading evdev directly |
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
-| `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`gamepad.c`, `device_tools`, `vnc_client` and ScummVM all call it) | a fourth copy of the classifier or scan loop |
+| `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`gamepad.c`, `control_panel`, `vnc_client` and ScummVM all call it) | a fourth copy of the classifier or scan loop |
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
 | `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()` | hand-rolled widgets |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
@@ -132,7 +132,7 @@ Three rules in there are load-bearing, and every one has been violated in shippe
   `/var/log/roomwizard/app_stdout.log`, so glibc block-buffers 4 KB: `compute_grid_layout()`'s layout
   receipt was absent from that log while `grep -ac 'launcher: safe'` on the deployed binary returned 1.
   `common/logger.c` line-buffers its OWN file, which is why this reads as a missing printf rather than a
-  buffering one. The seven games, `app_launcher` and `device_tools` have it; ⚠️ the OTHER tools do not.
+  buffering one. The seven games, `app_launcher` and `control_panel` have it; ⚠️ the OTHER tools do not.
 - **`fb_init()` before `touch_init()`** — `touch_init()` reads `screen_base_width/height`, which
   `fb_init()` sets. Reversed, portrait mode silently gets 800×480 instead of 480×800.
 - **`gamepad_init()` before registering `TouchRegion`s** — it `memset`s the manager and zeroes
@@ -334,7 +334,7 @@ leaving the hidden bands black. Never subtract a bezel margin yourself; that dou
 the margin defaults and where they are set:
 [`../SYSTEM_ANALYSIS.md#32-display`](../SYSTEM_ANALYSIS.md#32-display). `fb_set_bezel()` changes them on a
 live framebuffer and **resizes the back buffer**, so re-run any layout computed from `SCREEN_SAFE_*`
-afterwards — see `rebuild_ui()` in `device_tools.c`.
+afterwards — see `rebuild_ui()` in `control_panel.c`.
 
 **Visible is not the same as touchable.** The digitizer's reading saturates *before* the physical
 panel edge — badly on Y, mildly and calibration-dependently on X — so a band at each end is drawable
@@ -447,7 +447,7 @@ gate form. It requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which
 
 **`common/touch_calib.c` is the only implementation of the fit.** It holds the target set, the interior
 masks, the per-axis verdict, the reach calculation, the edge-sweep accumulator (`TouchCalibSweep`,
-`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `device_tools`' Display wizard and the
+`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `control_panel`' Display wizard and the
 `touch_raw` diagnostic both link it — which is what lets the diagnostic validate the code the wizard
 actually calibrates with. Do not write a second copy; there were three of the fit and two of the sweep, and
 they drifted.
@@ -648,7 +648,7 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   it is not quiet, it is absent. ⚠️ **Broadband is not the requirement**: chasing flatness instead cost a
   whole set that measured correct and sounded like noise.
 - ⚠️ **The MUSIC / EFFECTS toggles are enforced in the LIBRARY, so never re-check them in a game.**
-  `music_enabled` / `effects_enabled` (one writer: `device_tools`' SETTINGS tab, under `audio_enabled`) are
+  `music_enabled` / `effects_enabled` (one writer: `control_panel`' SETTINGS tab, under `audio_enabled`) are
   read once by `audio_init()` and gate `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and
   `audio_music_start()` — a second check in a call site is a second place the rule drifts.
   `audio_music_enabled()` / `audio_effects_enabled()` exist to explain a silence in a log line, not to
@@ -819,12 +819,12 @@ build lines in their own headers, and each pinned to the onboard device on purpo
 **A screen that makes sound owns the bus for as long as it is up.** Open it before the loop (or on
 entering the tab), queue sounds as voices — `audio_test_chime()` returns at once and `audio_pump()`
 delivers it — and `audio_close()` on the exit paths only: `test_audio_diag()` in
-`device_tools/device_tools.c` and `hardware_test/hardware_test_gui.c`, and both Settings screens. The
+`control_panel/control_panel.c` and `hardware_test/hardware_test_gui.c`, and both Settings screens. The
 wrong shape — `audio_init*` → tones → `audio_close()` inside one button handler — costs a stream open
 **and** a stream stop per press, and freezes the UI while the handler holds the tones.
 
 **Measured on `.188` 2026-09-05**, on that wrong shape, from `/var/log/roomwizard/app_stdout.log`: one
-`device_tools` process logged fifteen `bus closed` lines — six at `services=28` and nine at
+`control_panel` process logged fifteen `bus closed` lines — six at `services=28` and nine at
 `services=80` — against one line per whole game session (`services=123` Tap-a-Theremin, `services=142` SameGame, the latter the only
 `starve=1` seen). Every diagnostic line read `starve=0 lost=0 drop=0 lim=0 clip=0`, so the cost is the
 transitions and not the mixing.

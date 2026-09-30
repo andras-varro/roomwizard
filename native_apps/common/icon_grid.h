@@ -1,5 +1,5 @@
 /*
- * icon_grid — the paged grid of icon tiles, shared by app_launcher and device_tools.
+ * icon_grid — the paged grid of icon tiles, shared by app_launcher and control_panel.
  *
  * One implementation of the layout, the tile, the page dots/chevrons and the hit-test,
  * so the launcher and any settings home screen cannot drift apart. The caller owns

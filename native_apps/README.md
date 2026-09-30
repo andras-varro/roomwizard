@@ -29,27 +29,27 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `device_tools` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
+| `control_panel` | Tool | **Unified hardware app** — the one you want. Tabs: Settings, Diagnostics, Tests, Display, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
-| `hardware_config` | Tool | Settings GUI — superseded by `device_tools` (hidden) |
-| `hardware_diag` | Tool | System diagnostics GUI — superseded by `device_tools` (hidden) |
+| `hardware_config` | Tool | Settings GUI — superseded by `control_panel` (hidden) |
+| `hardware_diag` | Tool | System diagnostics GUI — superseded by `control_panel` (hidden) |
 | `backlight` | Tool | CLI backlight control (hidden) |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
 
 Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH
 (see *Markers in /opt/games*). `usb_test` exists as source but is **not built or deployed** — USB
-testing lives in the `device_tools` USB tab. The system `/usr/sbin/watchdog` daemon handles the
+testing lives in the `control_panel` USB tab. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
 The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
 does not — run `fbset -depth 32` first if ScummVM or `vnc_client` left it at 16. Stop the launcher
 before running either (`/etc/init.d/roomwizard-app stop`), and start it again afterwards.
 
-### Device Tools
+### Control Panel
 
-[`device_tools/device_tools.c`](device_tools/device_tools.c) consolidates five previously
+[`control_panel/control_panel.c`](control_panel/control_panel.c) consolidates five previously
 separate GUI utilities behind a tab bar:
 
 | Tab | Replaces | What it does |

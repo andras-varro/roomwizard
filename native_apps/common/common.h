@@ -333,7 +333,7 @@ int acquire_instance_lock(const char *app_name);
  * ui_frame_service() beside its fb_swap().  `hw_pulse_led()` and
  * `hw_blink_led()` block too and do NOT call it: their waits are single long
  * usleeps rather than a loop, and (measured 2026-08-22) their only callers are
- * device_tools and hardware_test, neither of which runs a bed.
+ * control_panel and hardware_test, neither of which runs a bed.
  */
 
 // Install the per-frame service.  ctx is passed back verbatim.  fn == NULL

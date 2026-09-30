@@ -1,6 +1,6 @@
 /* usb_bus.h — every enumerated USB device, read from sysfs.
  *
- * device_tools' USB tab used to list only what evdev could classify as a
+ * control_panel's USB tab used to list only what evdev could classify as a
  * keyboard, mouse or pad, so a sound card, a Bluetooth dongle, a hub or a stick
  * was invisible while it worked.  This lists the bus itself.  The root is a
  * parameter so a host test can point it at a fixture tree.

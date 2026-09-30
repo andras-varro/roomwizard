@@ -179,7 +179,7 @@ int main(void) {
      * honest migration: a legacy file carries no edge measurement, so there is no
      * basis for moving its endpoints, and the revision that clamped them into
      * 0..4095 is what tilted the outer segments. A user with this config should
-     * recalibrate, and the TOUCHABLE: row in Device Tools now tells them so. */
+     * recalibrate, and the TOUCHABLE: row in Control Panel now tells them so. */
     printf("legacy migration of 6 4181 -268 4394 (the broken config)\n");
     int kxl, kxh, kyl, kyh;
     touch_knots_on_line(6, 4181, W, &kxl, &kxh);

@@ -74,7 +74,7 @@ the state it starts in, and say "measured" or "inferred" in the sentence you wri
 
 ## Working style
 
-**Delegate the reading.** The docs are long and the sources are large (`device_tools.c` is ~3700 lines
+**Delegate the reading.** The docs are long and the sources are large (`control_panel.c` is ~3700 lines
 — do not trust a line count you are carrying from an earlier session, measure it). Answering "where is
 X / which call sites do Y / does this pattern hold across all seven games" by reading files into the
 main context burns the budget the actual edit and its verification need. Spin up subagents for that —

@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Read-back mode: the only caller of hw_get_backlight() that PRINTS the
-    // value — device_tools and the two hardware tests read it only to restore
+    // value — control_panel and the two hardware tests read it only to restore
     // it afterwards — so this is how the get/set round trip gets checked from a
     // shell. hw_get_backlight() answers in setter space, so
     // `backlight "$(backlight get)"` must leave the panel where it was.

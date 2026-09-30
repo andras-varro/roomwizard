@@ -50,7 +50,7 @@
  *          panel edges.
  *
  * The targets, the fit and the verdicts live in common/touch_calib.c, shared
- * with the Device Tools calibration wizard — this tool validates the very code
+ * with the Control Panel calibration wizard — this tool validates the very code
  * that wizard calibrates with, which it could not do with a private copy.
  *
  * Log: /tmp/touch_raw.tsv  (.tsv, not .log — .gitignore drops *.log)
@@ -125,7 +125,7 @@ typedef enum {
 
 /* The sweep accumulator itself — TouchCalibSweep, its bucket count, the edge
  * numbering convention and the reset/add/reached logic — lives in
- * common/touch_calib.c, shared with the Device Tools wizard's REACH step. This
+ * common/touch_calib.c, shared with the Control Panel wizard's REACH step. This
  * tool used to carry a private copy; that is exactly the drift that put three
  * copies of the fit in the tree. */
 
@@ -138,7 +138,7 @@ typedef enum {
 static const int INSET_OFFSET[INSET_ROWS] = { 0, 10, 20, 35, 55 };
 
 /* The targets, the interior masks, the fit and the verdicts all live in
- * common/touch_calib.c — shared with the Device Tools calibration wizard, so
+ * common/touch_calib.c — shared with the Control Panel calibration wizard, so
  * there is exactly one implementation of the thing this tool exists to
  * validate. */
 #define TARGETS   TOUCH_CALIB_TARGETS

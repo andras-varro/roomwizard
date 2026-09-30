@@ -31,7 +31,7 @@
  * (measured, ../SYSTEM_ANALYSIS.md#34-audio), so `audio_out_open*()` refuses a
  * second LIVE instance itself rather than letting the driver produce a confusing
  * EBUSY halfway through an init.  Sequential open/close pairs are fine, which is
- * what `device_tools` relies on: it holds two `Audio` objects (`device_tools.c`
+ * what `control_panel` relies on: it holds two `Audio` objects (`control_panel.c`
  * `do_audio_test()` and `test_audio_diag()`), neither long-lived and neither
  * reachable from inside the other's loop.
  *
@@ -59,7 +59,7 @@
  * ── THE TWO WRITE MODES, AND WHY BOTH ────────────────────────────────────────
  *
  * ⚠️ A service-driven library alone would SILENTLY MUTE two shipped Settings
- * tabs.  `hardware_config.c` and `device_tools.c` play their speaker test tones
+ * tabs.  `hardware_config.c` and `control_panel.c` play their speaker test tones
  * with **no render loop at all** — init, tone, `usleep`, tone, close — so nothing
  * would ever call `audio_out_service()` and the tones would sit in a callback
  * that is never invoked.  Measured objectively, not inferred.

@@ -1,5 +1,5 @@
 /**
- * Device Tools â€” Unified Hardware App for RoomWizard
+ * Control Panel â€” Unified Hardware App for RoomWizard
  *
  * Consolidates four standalone hardware utilities into a single tab-based GUI:
  *   Tab 1: Settings     â€” Audio, LED, backlight configuration
@@ -637,7 +637,7 @@ static void apply_backlight(int brightness_pct) {
     if (brightness_pct < 0)   brightness_pct = 0;
     if (brightness_pct > 100) brightness_pct = 100;
     if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)
-        fprintf(stderr, "device_tools: backlight preview write failed\n");
+        fprintf(stderr, "control_panel: backlight preview write failed\n");
 }
 
 /* ── System Action Functions ──────────────────────────────────────────── */
@@ -890,7 +890,7 @@ static void create_settings_ui(AppState *state) {
      * whether it fits rather than leaving that to be inferred. */
     {
         int bottom = (system_y + 20 + sys_btn_h) - CONTENT_Y;
-        printf("device_tools: settings stack %s — bottom +%d of CONTENT_H %d "
+        printf("control_panel: settings stack %s — bottom +%d of CONTENT_H %d "
                "(safe %dx%d, %s, row2 +%d)\n",
                bottom <= CONTENT_H ? "fits" : "⚠ PAST CONTENT BOTTOM",
                bottom, CONTENT_H, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
@@ -909,7 +909,7 @@ static void create_settings_ui(AppState *state) {
      * that placed the button. */
     {
         int right = settings_out_btn_box(NULL, NULL);
-        printf("device_tools: settings row2 %s — right edge %d of CONTENT_RIGHT %d "
+        printf("control_panel: settings row2 %s — right edge %d of CONTENT_RIGHT %d "
                "(safe %dx%d, %s)\n",
                right <= CONTENT_RIGHT ? "fits" : "⚠ PAST CONTENT RIGHT",
                right, CONTENT_RIGHT, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
@@ -3208,7 +3208,7 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
  * cross-check on the wizard: its SWEEP and INSET modes measure the digitiser's
  * reach by a completely different method from the interior fit, and on RW09 the
  * two agreed to the pixel (panel 30 / 450). It is not folded in here because
- * folding it in would mean device_tools carrying its own uncalibrated mode — and
+ * folding it in would mean control_panel carrying its own uncalibrated mode — and
  * because a separate binary cannot be broken by a bug in this one.
  *
  * Launched rather than linked, following app_launcher's pattern. The child owns
@@ -3996,8 +3996,8 @@ static void rebuild_ui(AppState *state) {
     create_tests_ui();
     create_display_ui(state);
     create_usb_ui();
-    /* Prints the "device_tools home: safe …" receipt — see icon_grid_layout(). */
-    icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "device_tools home");
+    /* Prints the "control_panel home: safe …" receipt — see icon_grid_layout(). */
+    icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "control_panel home");
 }
 
 static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
@@ -4039,7 +4039,7 @@ int main(void) {
      * ../CLAUDE.md → App lifecycle carries the measurement. */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    int lock_fd = acquire_instance_lock("device_tools");
+    int lock_fd = acquire_instance_lock("control_panel");
     if (lock_fd < 0) return 1;
 
     signal(SIGINT, signal_handler);
@@ -4054,14 +4054,14 @@ int main(void) {
 
     Framebuffer fb;
     if (fb_init(&fb, FB_DEVICE) < 0) {
-        fprintf(stderr, "device_tools: failed to init framebuffer\n");
+        fprintf(stderr, "control_panel: failed to init framebuffer\n");
         return 1;
     }
     g_fb = &fb;
 
     TouchInput touch;
     if (touch_init(&touch, TOUCH_DEVICE) < 0) {
-        fprintf(stderr, "device_tools: failed to init touch input\n");
+        fprintf(stderr, "control_panel: failed to init touch input\n");
         fb_close(&fb);
         return 1;
     }

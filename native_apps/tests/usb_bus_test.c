@@ -1,4 +1,4 @@
-/* Host-side regression for device_tools' USB bus list (device_tools/usb_bus.c).
+/* Host-side regression for control_panel's USB bus list (control_panel/usb_bus.c).
  *
  * Runs on the DEV MACHINE with native gcc.  usb_bus_scan() takes its sysfs root
  * as a parameter, so this builds a fixture tree shaped like /sys/bus/usb/devices
@@ -6,7 +6,7 @@
  * 2026-09-27) and asserts what the tab would draw.
  *
  *   cd native_apps && gcc -Wall -Wextra -I. -o build/usb_bus_test \
- *       tests/usb_bus_test.c device_tools/usb_bus.c && ./build/usb_bus_test
+ *       tests/usb_bus_test.c control_panel/usb_bus.c && ./build/usb_bus_test
  *
  * What it asserts, and why:
  *   A  the root hub (usb1) and every interface ("1-1:1.0") are skipped, so the
@@ -21,7 +21,7 @@
  *   E  a missing product string falls back to manufacturer, then "USB DEVICE";
  *   F  max truncates, and an unreadable root is 0 devices, not a crash.
  */
-#include "device_tools/usb_bus.h"
+#include "control_panel/usb_bus.h"
 
 #include <stdio.h>
 #include <stdlib.h>

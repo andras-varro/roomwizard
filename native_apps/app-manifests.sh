@@ -28,7 +28,7 @@
 #     icon=/opt/roomwizard/icons/snake.ppm
 #     args=fb,touch
 #
-# `args` is one of fb,touch / fb / touch / none — or empty, which device_tools
+# `args` is one of fb,touch / fb / touch / none — or empty, which control_panel
 # uses to say "take no argument at all".
 #
 # One record per line below: basename|name|exec|icon|args
@@ -45,14 +45,15 @@ frogger|Frogger|/opt/games/frogger|/opt/roomwizard/icons/frogger.ppm|fb,touch
 platformer|Office Runner|/opt/games/platformer|/opt/roomwizard/icons/platformer.ppm|fb,touch
 audio_mix_test|Mix Bus Test|/opt/games/audio_mix_test|/opt/roomwizard/icons/audio_mix_test.ppm|fb,touch
 theremin|Tap-a-Theremin|/opt/games/theremin|/opt/roomwizard/icons/theremin.ppm|fb,touch
-device_tools|Device Tools|/opt/games/device_tools|/opt/roomwizard/icons/device_tools.ppm|
+control_panel|Control Panel|/opt/games/control_panel|/opt/roomwizard/icons/control_panel.ppm|
 '
 
 # Manifests this component used to install and no longer does.  Swept on deploy
 # so a device that saw an older build does not keep a tile for a tool that was
-# folded into device_tools' tabs, or for an app that was renamed — the launcher
+# folded into control_panel's tabs, or for an app that was renamed — the launcher
 # would render it and the tap would exec a binary that is gone.
-RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag audio_touch_test'
+# device_tools is the old name of control_panel (binary, manifest, icon).
+RW_APP_MANIFESTS_RETIRED='hardware_test hardware_config calibrate usb_test hardware_diag audio_touch_test device_tools'
 
 # ---------------------------------------------------------------------------
 # rw_write_app_manifests DIR

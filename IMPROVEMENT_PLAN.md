@@ -446,7 +446,7 @@ the display section linked above.
      What survives from that reading, because it is true of any future backend work: `hasFeature()`
      returns true for `kFeatureCursorPalette` **only** and `beginGFXTransaction`/`endGFXTransaction` are
      no-ops, so **there is no runtime mode-change plumbing in this backend to hang anything on**; and
-     **nothing bridges `/opt/games/scummvm.ini` and `/opt/games/rw_config.conf`** — `device_tools` never
+     **nothing bridges `/opt/games/scummvm.ini` and `/opt/games/rw_config.conf`** — `control_panel` never
      reads the former, the backend never reads the latter, and the one exception is the hand-declared
      `config_audio_device_stored()` (`oss-mixer.h`:34, called at `oss-mixer.cpp`:138) that opens
      `CONFIG_FILE_PATH` itself. ⚠️ ScummVM redeploy is ~1 m 35 s – 2 m 20 s and `rm -f`s
@@ -538,7 +538,7 @@ DSS-scaling instruments, deployed hidden) together with their build steps, their
 Both are readable with `cat` today and have zero references in the codebase
 ([`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)):
 
-- `in_temp1_input` — SoC die temperature. Add a readout to Device Tools (~10 minutes).
+- `in_temp1_input` — SoC die temperature. Add a readout to Control Panel (~10 minutes).
 - `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
 
 ⚠️ **The analogue-paddle half is closed, 2026-09-06, and must not be re-proposed.** `in_voltage2..7`
@@ -599,7 +599,7 @@ backend, and both bring-up paths refuse a clean rule that reaches that runtime
 [`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
 Dynamic because `bluez-alsa` is an alsa-lib *plugin*; the operator's order is ALSA first, then Bluetooth.
 Tag `static-only-last` marks the last all-static commit. Operator by ear on `.188` 2026-09-29: a game on
-onboard and on the USB dongle, `device_tools` TEST AUDIO on both, ScummVM. The Mix Bus Test crack is B38;
+onboard and on the USB dongle, `control_panel` TEST AUDIO on both, ScummVM. The Mix Bus Test crack is B38;
 the undetected second unplug is B42. Still open here:
 
 - **Loudness:** an onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare
@@ -835,7 +835,7 @@ the launcher's Shutdown either uses it or keeps halt plus backlight-off (C16).
 ### C1. Extract the shared evdev layer — open, classifier and scan done
 
 **Classifier + scan are one implementation, `common/input_scan.c`/`.h`**, called by `common/gamepad.c`
-(so every game), `device_tools`' USB testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
+(so every game), `control_panel`' USB testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
 (`input_scan_with()` carries ScummVM's touchscreen name filter). Measured by host tests only
 (`input_scan_test`, `gamepad_latch_test`, 19 ctests passed 2026-09-29); on-device check pending.
 
@@ -845,7 +845,7 @@ drifted before — `MAX_INPUT_DEVICES` was resynced twice by hand — and the "c
 loop" hardening still exists only in the ScummVM copy. `usb_test/usb_test.c` keeps its own scan but is
 not built by any script.
 
-### C2. Split `device_tools.c` — open
+### C2. Split `control_panel.c` — open
 
 Five previously-separate GUIs behind a tab enum, sharing nothing but the tab bar. Splitting into
 `tab_settings.c` / `tab_diag.c` / `tab_tests.c` / `tab_calib.c` behind a small vtable is mechanical
@@ -854,7 +854,7 @@ and costs one line each in `build-and-deploy.sh`. The page modules in C16 are it
 
 ### C4. Make the common library use the logger — open
 
-`common/logger.c` exists and apps use it (`app_launcher` 18 calls, `device_tools` 17), but the library
+`common/logger.c` exists and apps use it (`app_launcher` 18 calls, `control_panel` 17), but the library
 they all link writes to stdout unconditionally: `touch_input.c` 15 `printf` / 0 `LOG_`; `gamepad.c`
 7/0; `framebuffer.c` 5/0. `touch_init()` alone emits ~5 lines, and `app_launcher` calls it after
 **every** child exit, so launcher stdout grows the same banner forever. Log rotation bounds the file
@@ -863,7 +863,7 @@ now, but the noise is still the cause.
 ### C5. Fix `text_truncate` and the 8px/6px font-width confusion — open
 
 - `common.c:83` `text_truncate()` takes **no destination size** and does `strcpy(dest, upper)` (up to
-  256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `device_tools.c:2141`
+  256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `control_panel.c:2141`
   passes a 48-byte buffer for a 128-byte `EVIOCGNAME` string. One geometry change from a stack smash.
   Add a `size_t dest_size` parameter.
 - Text width must come from `text_measure_width()`, because `fb_draw_text` advances **6 px/char**
@@ -1010,7 +1010,7 @@ key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key t
 citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
 fire in a file of the same kind, or the scan goes blind where it used to see.
 
-### C16. `device_tools` becomes the one control panel; retire the diagnostic binaries — open, design agreed with the operator 2026-09-29
+### C16. `control_panel` becomes the one control panel; retire the diagnostic binaries — open, design agreed with the operator 2026-09-29
 
 **Design.** One program whose first screen is a **paged icon grid** (paging, not scrolling; 3x2
 landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_launcher` also uses. Config
@@ -1021,8 +1021,8 @@ disappears. Reset-to-defaults stays in the control panel.
 
 `icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
 exits; `app_launcher`, which the boot init script respawns so a plain exit does nothing, opens a
-Shutdown / Reboot / Cancel dialog. Reboot/shutdown therefore **move** out of `device_tools` (dialogs and
-the `shutdown -h now` / `reboot` calls, `device_tools.c` ~544-561, on the shared ModalDialog). The launcher
+Shutdown / Reboot / Cancel dialog. Reboot/shutdown therefore **move** out of `control_panel` (dialogs and
+the `shutdown -h now` / `reboot` calls, `control_panel.c` ~544-561, on the shared ModalDialog). The launcher
 draws a shutdown screen ("It is now safe to unplug the RoomWizard") before halting, because a halt leaves a
 bright white panel: measured on .188 2026-09-29 (n=1), `shutdown -h now` halts, backlight on, unit down
 over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi drops
@@ -1044,7 +1044,7 @@ on if the message survives the halt; one measurement decides, and F103 may repla
 
 **Duplicates deleted as each function lands in its one home** (inventory measured 2026-09-29): LED
 ramp/pulse/blink/cycle, backlight ramp, touch zone grid, display patterns and tone sweep
-(`device_tools` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
+(`control_panel` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
 chime+enable and save/reset (vs `hardware_config/hardware_config.c`); the system/memory/storage/hardware/
 config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`format_bytes` copies (vs
 `hardware_diag/hardware_diag.c`, five pages, `:51-55`); the USB input testers (vs `usb_test/usb_test.c`,
@@ -1053,7 +1053,7 @@ which only `build-usb-test.sh` builds). Then delete the binaries `hardware_test`
 CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
 steps, deploy/marker references and README rows. `hardware_diag` is already hidden (its `.app` manifest
 is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
-fix its EXIT corner separately from `device_tools`'. Check page by page that no diag page holds a field
+fix its EXIT corner separately from `control_panel`'. Check page by page that no diag page holds a field
 the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
 redundant: it moves under Audio and loses its launcher tile. **Tap-a-Theremin is an app, not a test tool,
 and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` stay hidden and are **not**
@@ -1065,12 +1065,12 @@ logging raw and calibrated samples; deployed hidden, SSH-only today. When the To
 it against the other touch tools in that row (edges, multi-touch test, touch zone grid, touch
 diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
-**Stages, each verified on the panel.** (1) a `device_tools` home grid on `common/icon_grid.c` (already
+**Stages, each verified on the panel.** (1) a `control_panel` home grid on `common/icon_grid.c` (already
 extracted; the launcher frame measured md5-identical) whose icons open today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on
 the BlueZ backend.
 
 **Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
-550 px button row overflows a ~400 px portrait content width (`device_tools.c` ~3549-3553); the Mix Bus
+550 px button row overflows a ~400 px portrait content width (`control_panel.c` ~3549-3553); the Mix Bus
 Test's portrait layout is B44. The tab bar fits at most five tabs in portrait (60 px floor against
 the X button), which is what motivated the grid.
 

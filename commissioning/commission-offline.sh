@@ -82,7 +82,7 @@
 # ── Still needs the device ─────────────────────────────────────────────────
 #
 # Touch calibration only — it is per-unit and per-panel, and the wizard lives in
-# Device Tools -> Display -> CALIBRATE TOUCH. One boot remains; this removes two
+# Control Panel -> Display -> CALIBRATE TOUCH. One boot remains; this removes two
 # of the three, plus the IP hunt.
 
 set -e
@@ -1043,8 +1043,8 @@ echo "  Then verify, in this order — each one is cheap and rules out the next:
 echo "    1. it comes up as a launcher grid, not a black screen"
 echo "    2. ssh root@$(head -1 "$BASE/root/etc/hostname" 2>/dev/null | tr -d ' \t\r\n').local   (or find it in the DHCP leases)"
 echo "    3. tap a game; it plays and exiting returns to the grid"
-echo "    4. sound: Device Tools -> Audio, or Tap-a-Theremin"
-echo "    5. touch: Device Tools -> Display -> CALIBRATE TOUCH — the one step"
+echo "    4. sound: Control Panel -> Audio, or Tap-a-Theremin"
+echo "    5. touch: Control Panel -> Display -> CALIBRATE TOUCH — the one step"
 echo "       that still needs the panel, because it is per-unit."
 echo ""
 # USB host mode is three independent mechanisms and only ONE of them touches p1: the

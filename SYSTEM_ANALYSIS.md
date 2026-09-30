@@ -199,7 +199,7 @@ Apps never deal with this. `fb_init()` shrinks the drawing surface to the visibl
 the shipped 15/15/0/0 margins. (`SCREEN_SAFE_*` is a *different* rectangle — visible ∩ touchable;
 see [§3.3](#33-touch).) Margins come from `/etc/touch_calibration.conf` line 2, default
 `FB_BEZEL_*_DEFAULT` = 15/15/0/0 (`native_apps/common/framebuffer.h`), and are set on-device from
-**Device Tools → Display → SCREEN EDGES**.
+**Control Panel → Display → SCREEN EDGES**.
 
 > **The constraint that actually binds interactive layout is digitizer reach, not the bezel** —
 > and on this panel the two do not coincide. Touch is not reported in a band at the top and bottom
@@ -460,8 +460,8 @@ logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a
   which yields a zero inset. Tagged and trailing on purpose: an old parser reads lines 1–2
   positionally and ignores what it does not recognise, so the file stayed back-compatible.
 
-**Device Tools → Display** owns both lines, through **one wizard** — `run_calib_wizard()` in
-`native_apps/device_tools/device_tools.c`. Everything it does runs with the bezel zeroed
+**Control Panel → Display** owns both lines, through **one wizard** — `run_calib_wizard()` in
+`native_apps/control_panel/control_panel.c`. Everything it does runs with the bezel zeroed
 (`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and both
 lines are measured against the same premise:
 
@@ -496,7 +496,7 @@ the finger by up to +19 px across the bottom quarter**. The library rules, the d
 clamp and the sanity gate's actual criterion are `native_apps/CLAUDE.md` → *Touch model*.
 
 **`touch_raw`** (`native_apps/tests/touch_raw.c`, deployed to `/opt/games/`, hidden from the
-launcher; reachable from Device Tools → Display → `TOUCH DIAGNOSTIC`) is the diagnostic that settled
+launcher; reachable from Control Panel → Display → `TOUCH DIAGNOSTIC`) is the diagnostic that settled
 reach, and the only tool that shows the panel with **no calibration and no bezel**: it resets the raw
 range to the `EVIOCGABS` values and calls `fb_set_bezel(fb,0,0,0,0)`, so the dot is
 `raw × 799 / 4095`. It logs to `/tmp/touch_raw.tsv` with a monotonic millisecond column and can write
@@ -561,7 +561,7 @@ per-unit and per-calibration.
 
 The inset is **measured at runtime, never hardcoded** — the four raw edge extremes are pushed through the
 production mapping, so it is correct in portrait and under any bezel and is `0` until an edge sweep has
-been recorded. Read it from Device Tools → Display → `TOUCHABLE:`, the wizard's `REPORT` screen, or the
+been recorded. Read it from Control Panel → Display → `TOUCHABLE:`, the wizard's `REPORT` screen, or the
 display test's `SAFE AREA` page (red rect = visible, green = touchable). Which rectangle a call site
 wants, the cap on the inset and the drawing policy are `native_apps/CLAUDE.md` → *Screen edges*.
 
@@ -1185,7 +1185,7 @@ input: Microsoft X-Box 360 pad as .../input5
 is attached when the MUSB driver probes.** Boot with nothing plugged in and the port is dead for the rest
 of that boot — anything inserted afterwards is never even powered. Measured on `.188` 2026-08-13,
 reproducible with a driver unbind/bind, and the operator reports it on every unit: *"USB only worked if
-it was connected at boot."* Device Tools → USB → **RESCAN** revives a dead port in one tap, ~5 s, and
+it was connected at boot."* Control Panel → USB → **RESCAN** revives a dead port in one tap, ~5 s, and
 once a port is live, replug works at any gap. **On our image an adapter plug starts the session itself**
 (the mailbox guard below; measurement in [`kernel/README.md`](kernel/README.md#what-we-patch-and-why)).
 Where `$MUSB` = `/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto`:
@@ -1253,7 +1253,7 @@ booted `mode` value was confirmed against the running kernel rather than against
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
-as Device Tools → USB → **RESCAN**, which forks it when a scan finds nothing; measured on `.188`
+as Control Panel → USB → **RESCAN**, which forks it when a scan finds nothing; measured on `.188`
 2026-08-14 at ~5 s from one tap, leaving `Vbus on`, `1-1`, `event1` + `js0` and the pad playable. ⚠️ It is
 deliberately not on a timer, and the reason is not merely wasted rebinds: **unpatched, nothing in software can
 distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either
@@ -2185,5 +2185,5 @@ and an image is the deliverable. Here the tree is fine and the *board* is the bo
 **What it does not exclude**, and these stay good candidates: every reading obtainable through a driver
 already probing. `in_temp1_input` is SoC die temperature in degrees C and `in_voltage9` is the RTC
 supercap, both `cat`-able today with no wire and no reference in the codebase — a die-temperature
-readout and a "backup cell low" warning are Device Tools work of about ten minutes each. The rule bars
+readout and a "backup cell low" warning are Control Panel work of about ten minutes each. The rule bars
 adding a *sensor*, not surfacing one.

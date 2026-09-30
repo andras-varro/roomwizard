@@ -9,7 +9,7 @@
  * judges it.
  *
  * This module exists because the fit used to exist twice, independently
- * (device_tools' Calibration tab and tests/unified_calibrate.c), and both
+ * (control_panel's Calibration tab and tests/unified_calibrate.c), and both
  * copies carried the same defect: crosshairs inset only 40 px, i.e. inside the
  * band where raw compresses. The fit slope came out shallow, extrapolated
  * outside 0..4095, and invented a horizontal inset that does not exist. It took
@@ -179,7 +179,7 @@ void touch_calib_inset_from_reach(int reach_lo, int reach_hi,
  * raw_y and run along x; LEFT/RIGHT measure raw_x and run along y. TOP and LEFT
  * look for the raw minimum, BOTTOM and RIGHT the maximum.
  *
- * Shared by the Device Tools wizard's REACH step and the touch_raw diagnostic,
+ * Shared by the Control Panel wizard's REACH step and the touch_raw diagnostic,
  * so the tool that validates the mapping and the wizard that measures it cannot
  * disagree. */
 

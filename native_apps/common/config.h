@@ -23,7 +23,7 @@
  * ⚠️ Why a game's MUSIC is here and not in CONFIG_FILE_PATH: the seven games'
  * playlists are 24 keys between them, and with the 6 system keys that is 30 of
  * CONFIG_MAX_KEYS' 32 before a single effect — while config_load(), config_set()
- * AND config_save() all drop past the ceiling in SILENCE, so device_tools' SAVE
+ * AND config_save() all drop past the ceiling in SILENCE, so control_panel's SAVE
  * would rewrite the file with the overflow deleted.  A per-game file removes the
  * risk by construction: a set holds at most AUDIO_BED_MAX_TRACKS music keys.
  *

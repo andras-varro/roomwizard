@@ -52,18 +52,18 @@
  * held key to stop generating repeats, but short enough to feel instant. */
 #define LAUNCH_COOLDOWN_MS 500
 
-/* ── Grid geometry: common/icon_grid.c, shared with device_tools' home screen ── */
+/* ── Grid geometry: common/icon_grid.c, shared with control_panel's home screen ── */
 
 #define TITLE_H         50
 static IconGrid grid;
 
 /* ── The MUSIC / EFFECTS toggles are NOT here ────────────────────────────────
  * They were, as a band between the last tile row and the page dots, and they
- * moved to device_tools' SETTINGS tab under the `AUDIO ENABLED` master they are
+ * moved to control_panel's SETTINGS tab under the `AUDIO ENABLED` master they are
  * subordinate to.  Two reasons, in order: a games menu carrying settings widgets
  * is a games menu doing a settings tab's job, and this screen was then the only
  * games-side WRITER of two keys every game reads — so the launcher had to
- * re-read the file before each write to avoid reverting whatever device_tools
+ * re-read the file before each write to avoid reverting whatever control_panel
  * had set in the meantime.  One writer removes both problems.
  *
  * ⚠️ **Do not put them back here, and do not put them in a game's pause modal
