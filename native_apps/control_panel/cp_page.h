@@ -70,6 +70,7 @@ extern const CpPage cp_info_page;      /* info_page.c */
 extern const CpPage cp_network_page;   /* network_page.c */
 extern const CpPage cp_usb_page;       /* usb_page.c */
 extern const CpPage cp_audio_page;     /* audio_page.c */
+extern const CpPage cp_display_page;   /* display_page.c */
 
 /* Implemented in control_panel.c, for pages. */
 
@@ -78,8 +79,8 @@ extern const CpPage cp_audio_page;     /* audio_page.c */
  * once more when it expires; the page need not return CP_PAGE_REDRAW for it. */
 void cp_status(const char *msg, bool ok);
 
-/* Asks before doing something: the panel's one confirmation dialog (the
- * Display tab's reset uses it too), ok_text and CANCEL side by side, drawn
+/* Asks before doing something: the panel's one confirmation dialog (the Touch
+ * tab's RESET GEOMETRY uses it too), ok_text and CANCEL side by side, drawn
  * over the whole screen.  While it is up it takes all input — the title bar's
  * BACK and the page's input() included.  OK calls on_ok with the panel's
  * Config and repaints the page; CANCEL does nothing.  Returns at once: call it
@@ -94,8 +95,8 @@ void cp_confirm(const char *title, const char *message, const char *ok_text,
 /* The global RESET DEFAULTS, pressed on the Information page.  First copies
  * the config file to a timestamped "<path>.bak-YYYYmmdd-HHMMSS" beside it; if
  * that copy fails nothing is reset and -1 comes back.  Otherwise it clears
- * cfg, calls every page's reset_defaults, restores the Display tab's
- * backlight, saves the cleared file and returns 0.  Either way msg (len bytes) gets
+ * cfg, calls every page's reset_defaults (the Display page's re-applies the
+ * backlight), saves the cleared file and returns 0.  Either way msg (len bytes) gets
  * the line to show: "BACKUP: <path>", a note when there was no file to copy
  * (nothing to lose, so it resets), or "RESET FAILED: BACKUP <reason>".
  * /etc/touch_calibration.conf is not touched. */

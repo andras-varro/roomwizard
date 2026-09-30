@@ -203,7 +203,7 @@ static void led_page_reset_defaults(Config *cfg) {
 }
 
 /* The -/+ preview: a ~500 ms flash of both LEDs at the chosen value.  Raw
- * sysfs on purpose, like the Display tab's backlight preview: it shows the
+ * sysfs on purpose, like the Display page's backlight preview: it shows the
  * brightness being CHOSEN, whether or not the LEDs are enabled, and the scaled
  * setters would gate it on the very switch next to it.  hw_leds_off() is
  * config-independent, so it is the right way back to dark. */

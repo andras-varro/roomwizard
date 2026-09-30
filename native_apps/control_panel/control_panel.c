@@ -4,8 +4,11 @@
  * Opens on an icon grid (the home view); each tile opens a page:
  *   Audio        — enable, music/effects, output device, the TEST chime and
  *                  the MIX BUS TEST launch (audio_page.c); grid-only
- *   Tests       — backlight, touch zone, display and multi-touch tests
- *   Display      — backlight, orientation, touch calibration, bezel margins
+ *   Tests       — touch zone and multi-touch tests
+ *   Display      — backlight, orientation, what is visible and the display
+ *                  tests (display_page.c); grid-only
+ *   Touch        — touch calibration, screen edges, the touch diagnostic
+ *                  (the TOUCH tab)
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
  *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
@@ -77,8 +80,6 @@
 #define TAB_BTN_SPACING   4
 #define BACK_BTN_W        55
 
-#define DEFAULT_BACKLIGHT_BRIGHTNESS 100
-
 /* How long a status message stays up.  A page's message is held longer: the
  * one that exists names a file path, which a 2 s flash does not let anyone
  * read. */
@@ -90,11 +91,10 @@
  * fitting through them is what produced a phantom horizontal inset for months.
  * Target geometry now comes from common/touch_calib.h. */
 #define CALIB_FILE        "/etc/touch_calibration.conf"
-/* The uncalibrated diagnostic, launched from the Display tab. Deployed by
+/* The uncalibrated diagnostic, launched from the Touch tab. Deployed by
  * build-and-deploy.sh with no manifest, so the launcher does not show it —
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
-#define PORTRAIT_FLAG_FILE  "/opt/games/portrait.mode"
 
 #define TZ_COLS   8
 #define TZ_ROWS   6
@@ -136,12 +136,12 @@ typedef enum {
 
 typedef enum {
     CONFIRM_NONE,
-    CONFIRM_RESET_GEOMETRY,  /* Display tab: touch range + edges to defaults */
+    CONFIRM_RESET_GEOMETRY,  /* Touch tab: touch range + edges to defaults */
     CONFIRM_PAGE             /* a page's cp_confirm(): its on_ok runs on OK */
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "TESTS", "DISPLAY" };
+static const char *tab_names[TAB_COUNT] = { "TESTS", "TOUCH" };
 
 /* The home grid, and the page registry: a row with a page opens that CpPage,
  * and takes its label and icon from it (one name, one home); every page named
@@ -158,7 +158,7 @@ typedef struct {
 
 static const HomeItem home_items[] = {
     { .tab = TAB_PAGE, .page = &cp_audio_page },
-    { "Display",     "cp_display", TAB_DISPLAY,  NULL },
+    { .tab = TAB_PAGE, .page = &cp_display_page },
     { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
     { .tab = TAB_PAGE, .page = &cp_usb_page },
@@ -173,18 +173,15 @@ static const HomeItem home_items[] = {
 /* The Tests tab: name and routine in one row, and the count derived from the
  * table, so the button pressed and the routine run cannot drift the way a name
  * list beside a bare-index switch could.  The routines are in the Tests Tab
- * section below; the LED tests are on the LED page (led_page.c). */
-static void test_backlight_run(Framebuffer *fb, TouchInput *touch);
+ * section below; the LED tests are on the LED page (led_page.c), the
+ * backlight ramp and the test patterns on the Display page (display_page.c). */
 static void test_touch_zone(Framebuffer *fb, TouchInput *touch);
-static void test_display(Framebuffer *fb, TouchInput *touch);
 static void test_multitouch(Framebuffer *fb, TouchInput *touch);
 static const struct {
     const char *name;
     void      (*run)(Framebuffer *, TouchInput *);
 } tests[] = {
-    { "BACKLIGHT",   test_backlight_run },
     { "TOUCH ZONE",  test_touch_zone    },
-    { "DISPLAY",     test_display       },
     { "MULTI-TOUCH", test_multitouch    },
 };
 #define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
@@ -194,8 +191,6 @@ typedef struct {
     const CpPage *page;               /* the open page when active_tab == TAB_PAGE */
     bool          page_dirty;         /* the page asked to be repainted */
     bool          page_fullscreen;    /* its input() queued a full-screen run */
-    int           backlight_brightness;
-    bool          portrait_mode;
     char          status_msg[64];
     uint32_t      status_time_ms;
     uint32_t      status_hold_ms;     /* how long it shows; 0 = STATUS_HOLD_MS */
@@ -231,19 +226,14 @@ static Button back_btn;          /* the tab bar's BACK to the home grid */
 static UILayout test_layout;
 static Button test_buttons[NUM_TESTS];
 
-/* Display — backlight, orientation, and the screen geometry those depend on.
- * Portrait sits here rather than on a page of its own on purpose: calibration and
- * edge measurement are landscape-only, and the toggle that makes them refuse
- * should be visible from the same screen. */
-static Button bl_minus_btn, bl_plus_btn;
-static ToggleSwitch portrait_toggle;
-static Button disp_save_btn, disp_reset_btn;
+/* Touch — calibration, screen edges and the touch diagnostic.  Backlight and
+ * orientation are the Display page's (display_page.c). */
 static Button calib_start_btn;      /* full wizard   */
 static Button calib_bezel_btn;      /* margins only  */
 static Button calib_factory_btn;    /* escape hatch: back to hardware defaults */
 static Button calib_diag_btn;       /* hands off to /opt/games/touch_raw */
 
-/* The panel's one confirmation dialog: the Display tab's RESET SCREEN GEOMETRY
+/* The panel's one confirmation dialog: the Touch tab's RESET SCREEN GEOMETRY
  * and any page's cp_confirm() (cp_page.h) open this same instance.  While
  * confirm_action is not CONFIRM_NONE main() draws it over everything and routes
  * all input to it — the tab bar and the page included, so BACK under the
@@ -305,8 +295,8 @@ bool fit_value(const char *src, int x, int scale, char *out, size_t len) {
     return true;
 }
 
-static int draw_info_row(Framebuffer *fb, int y, const char *label,
-                         const char *value, uint32_t value_color) {
+int draw_info_row(Framebuffer *fb, int y, const char *label,
+                  const char *value, uint32_t value_color) {
     int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
     fb_draw_text(fb, CONTENT_LEFT + 10, y, label, COLOR_LABEL, 2);
     fb_draw_text(fb, value_x, y, value, value_color, 2);
@@ -354,7 +344,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "TEST", "DISP" };
+    static const char *short_labels[] = { "TEST", "TOUCH" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -537,21 +527,6 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
     set_tab(state, it->tab);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
- * Backlight preview  (the Display tab's; RESET DEFAULTS re-applies it)
- * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-
-static void apply_backlight(int brightness_pct) {
-    /* Live preview of the slider value — unscaled on purpose: the slider IS the
-     * scale factor, so hw_set_backlight() would apply the outgoing one.  The raw
-     * setter also owns the sysfs path; a private copy here named a node that
-     * does not exist on this device and the preview silently did nothing. */
-    if (brightness_pct < 0)   brightness_pct = 0;
-    if (brightness_pct > 100) brightness_pct = 100;
-    if (hw_set_backlight_raw((uint8_t)brightness_pct) < 0)
-        fprintf(stderr, "control_panel: backlight preview write failed\n");
-}
-
 /* ── RESET DEFAULTS: the one implementation (cp_page.h), pressed on the
  * Information page ─────────────────────────────────────────────────────── */
 
@@ -629,7 +604,6 @@ void cp_confirm(const char *title, const char *message, const char *ok_text,
 }
 
 int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
-    AppState *state = g_state;
     char where[200];   /* config_backup() writes a path of up to 168 bytes */
     int b = config_backup(cfg, where, sizeof(where));
     if (b < 0) {
@@ -643,7 +617,7 @@ int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
 
     /* Every page reads its defaults back off the cleared Config (the Audio
      * page through config.c's helpers, which is what common/audio.c reads).
-     * A page with no SAVE (the LED page) must also show what hardware.c
+     * A page with no SAVE (LED, Display) must also show what hardware.c
      * drives, so its reset_defaults() removes its own keys from the file and
      * reloads the cache, so page, file and hardware all land on config.c's
      * default together. */
@@ -655,11 +629,6 @@ int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
      * the backup above is what makes the write safe.  Games then resolve every
      * key through config.c's defaults, the same values shown here. */
     config_save(cfg);
-    /* config_clear() drops the Display tab's key too, so restore its default
-     * and re-apply, otherwise the backlight keeps a value no longer in the
-     * file and the Display tab shows a stale number. */
-    state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
-    apply_backlight(state->backlight_brightness);
     if (b > 0) snprintf(msg, len, "BACKUP: %s", where);
     else       snprintf(msg, len, "DEFAULTS RESTORED - NO FILE TO BACK UP");
     return 0;
@@ -725,26 +694,6 @@ bool check_touch(TouchInput *touch, int *x, int *y) {
         if (ts.pressed) { *x = ts.x; *y = ts.y; return true; }
     }
     return false;
-}
-
-static void test_backlight_run(Framebuffer *fb, TouchInput *touch) {
-    int original = hw_get_backlight();
-    int x, y;
-    for (int i = 100; i >= 20; i -= 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "BACKLIGHT TEST", s, 100 - i);
-        hw_set_backlight(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_backlight(original); return; }
-    }
-    for (int i = 20; i <= 100; i += 5) {
-        char s[64]; snprintf(s, sizeof(s), "BRIGHTNESS: %d%%", i);
-        draw_test_screen(fb, "BACKLIGHT TEST", s, i);
-        hw_set_backlight(i); usleep(50000);
-        if (check_touch(touch, &x, &y)) { hw_set_backlight(original); return; }
-    }
-    hw_set_backlight(original);
-    draw_test_screen(fb, "BACKLIGHT TEST", "COMPLETE!", 100);
-    while (!check_touch(touch, &x, &y)) usleep(10000);
 }
 
 static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
@@ -867,123 +816,6 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
     touch_enable_calibration(touch, false);
 }
 
-static void draw_display_page(Framebuffer *fb, const char *title,
-                              const char *footer) {
-    fb_draw_text(fb, 4, 2, title, COLOR_WHITE, 2);
-    fb_draw_text(fb, fb->width / 3, fb->height - 20, footer, RGB(140,140,140), 1);
-}
-
-static void test_display(Framebuffer *fb, TouchInput *touch) {
-    int page = 0;
-    const int pages = 6;
-    bool disp_running = true;
-    int x, y;
-    struct fb_var_screeninfo vinfo;
-    ioctl(fb->fd, FBIOGET_VSCREENINFO, &vinfo);
-
-    while (disp_running) {
-        fb_clear(fb, COLOR_BLACK);
-        switch (page) {
-        case 0: {
-            draw_display_page(fb, "DISPLAY INFO", "tap -> next | top-right -> exit");
-            char buf[96]; int row = 60;
-            #define INFO_LINE(fmt, ...) \
-                snprintf(buf, sizeof(buf), fmt, __VA_ARGS__); \
-                fb_draw_text(fb, 40, row, buf, COLOR_CYAN, 2); row += 30;
-            INFO_LINE("Resolution:  %dx%d", fb->width, fb->height);
-            INFO_LINE("BPP:         %d", vinfo.bits_per_pixel);
-            INFO_LINE("Line length: %d bytes", fb->line_length);
-            INFO_LINE("Screen size: %d bytes", (int)fb->screen_size);
-            INFO_LINE("Bytes/pixel: %d", fb->bytes_per_pixel);
-            INFO_LINE("Visible:     (%d,%d)-(%d,%d)",
-                       SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
-                       SCREEN_VISIBLE_RIGHT, SCREEN_VISIBLE_BOTTOM);
-            INFO_LINE("Touch-safe:  (%d,%d)-(%d,%d)",
-                       SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
-                       SCREEN_SAFE_RIGHT, SCREEN_SAFE_BOTTOM);
-            INFO_LINE("Double buf:  %s", fb->double_buffering ? "yes" : "no");
-            #undef INFO_LINE
-            break;
-        }
-        case 1: {
-            draw_display_page(fb, "COLOR BARS", "tap -> next");
-            int bw = fb->width / 4;
-            fb_fill_rect(fb, 0*bw, 40, bw, fb->height - 80, RGB(255,0,0));
-            fb_fill_rect(fb, 1*bw, 40, bw, fb->height - 80, RGB(0,255,0));
-            fb_fill_rect(fb, 2*bw, 40, bw, fb->height - 80, RGB(0,0,255));
-            fb_fill_rect(fb, 3*bw, 40, bw, fb->height - 80, RGB(255,255,255));
-            break;
-        }
-        case 2: {
-            draw_display_page(fb, "GRADIENT", "tap -> next");
-            for (int col = 0; col < (int)fb->width; col++) {
-                uint8_t v = (col * 255) / (fb->width - 1);
-                fb_fill_rect(fb, col, 50, 1, fb->height - 100, RGB(v,v,v));
-            }
-            break;
-        }
-        case 3: {
-            draw_display_page(fb, "PIXEL GRID", "tap -> next");
-            for (int gx = 0; gx < (int)fb->width; gx += 2)
-                fb_fill_rect(fb, gx, 40, 1, fb->height - 80, RGB(200,200,200));
-            for (int gy = 40; gy < (int)fb->height - 40; gy += 2)
-                fb_fill_rect(fb, 0, gy, fb->width, 1, RGB(200,200,200));
-            break;
-        }
-        case 4: {
-            /* The two rectangles: red = SCREEN_VISIBLE_* (everything drawable),
-             * green = SCREEN_SAFE_* (visible AND touchable). The gap between
-             * them is the digitizer's dead band — good screen area, just not
-             * somewhere to put a button. */
-            draw_display_page(fb, "SAFE AREA", "tap -> next");
-            fb_draw_rect(fb, SCREEN_VISIBLE_LEFT, SCREEN_VISIBLE_TOP,
-                         SCREEN_VISIBLE_WIDTH, SCREEN_VISIBLE_HEIGHT, COLOR_RED);
-            fb_draw_rect(fb, SCREEN_VISIBLE_LEFT+1, SCREEN_VISIBLE_TOP+1,
-                         SCREEN_VISIBLE_WIDTH-2, SCREEN_VISIBLE_HEIGHT-2, COLOR_RED);
-            fb_draw_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
-                         SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT, COLOR_GREEN);
-            fb_draw_rect(fb, SCREEN_SAFE_LEFT+1, SCREEN_SAFE_TOP+1,
-                         SCREEN_SAFE_WIDTH-2, SCREEN_SAFE_HEIGHT-2, COLOR_GREEN);
-            { char buf[64];
-            snprintf(buf, sizeof(buf), "L=%d", SCREEN_SAFE_LEFT);
-            fb_draw_text(fb, SCREEN_SAFE_LEFT+4, 240, buf, COLOR_GREEN, 1);
-            snprintf(buf, sizeof(buf), "R=%d", SCREEN_SAFE_RIGHT);
-            fb_draw_text(fb, SCREEN_SAFE_RIGHT-40, 240, buf, COLOR_GREEN, 1);
-            snprintf(buf, sizeof(buf), "T=%d", SCREEN_SAFE_TOP);
-            fb_draw_text(fb, 370, SCREEN_SAFE_TOP+4, buf, COLOR_GREEN, 1);
-            snprintf(buf, sizeof(buf), "B=%d", SCREEN_SAFE_BOTTOM);
-            fb_draw_text(fb, 370, SCREEN_SAFE_BOTTOM-16, buf, COLOR_GREEN, 1);
-            snprintf(buf, sizeof(buf), "RED %dx%d VISIBLE  GREEN %dx%d TOUCHABLE",
-                     SCREEN_VISIBLE_WIDTH, SCREEN_VISIBLE_HEIGHT,
-                     SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT);
-            text_draw_centered(fb, fb->width/2, 200, buf, COLOR_WHITE, 1);
-            text_draw_centered(fb, fb->width/2, 280,
-                               "THE GAP IS DRAWABLE BUT NOT PRESSABLE",
-                               COLOR_YELLOW, 1); }
-            break;
-        }
-        case 5: {
-            draw_display_page(fb, "ALPHA BLEND", "tap -> exit");
-            fb_fill_rect(fb, 100, 80, 300, 300, COLOR_RED);
-            fb_fill_rect(fb, 400, 80, 300, 300, COLOR_BLUE);
-            fb_fill_rect_alpha(fb, 200, 150, 400, 200, RGB(0,255,0), 128);
-            fb_draw_text(fb, 300, 250, "alpha=128", COLOR_WHITE, 2);
-            break;
-        }
-        }
-        fb_swap(fb);
-        while (1) {
-            if (touch_wait_for_press(touch, &x, &y) == 0) {
-                if (x > (int)fb->width - 100 && y < 40) { disp_running = false; break; }
-                page++;
-                if (page >= pages) disp_running = false;
-                break;
-            }
-            usleep(16000);
-        }
-    }
-}
-
 /* â”€â”€ Test dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static void run_test(Framebuffer *fb, TouchInput *touch, int test_id) {
@@ -1022,12 +854,11 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * Display Tab — backlight, orientation, and screen geometry
+ * Touch Tab (TAB_DISPLAY) — calibration and screen geometry
  * ══════════════════════════════════════════════════════════════════════════ */
 
-/* Everything about the screen lives here, because these settings interact.
- * Portrait mode in particular used to sit under Settings while the flows it
- * disables sat here, so the constraint was invisible at the point of decision.
+/* Calibration and edge measurement are landscape-only; the portrait toggle that
+ * makes them refuse is on the Display page (display_page.c).
  *
  * Geometry is measured by ONE wizard (run_calib_wizard) that writes both lines
  * of /etc/touch_calibration.conf. It replaced two separate flows that could be
@@ -1043,55 +874,29 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
  * the bezel zeroed so a drawn pixel is a panel pixel. The fit itself lives in
  * common/touch_calib.c, shared with the touch_raw diagnostic. */
 
-/* -- Display tab layout --------------------------------------------------- */
-
-#define DISP_SEC_LIGHT_Y  (CONTENT_Y + 2)
-#define DISP_BL_BAR_Y     (DISP_SEC_LIGHT_Y + 26)
+/* -- Touch tab layout ----------------------------------------------------- */
 
 /* Above this many logical pixels, a touch inset stops looking like the panel's
  * saturation band and starts looking like a bad calibration. RW09 measures ~17;
  * 24 leaves headroom for panel variation without hiding a real fault. */
 #define DISP_INSET_SUSPECT 24
 
+#define DISP_GEOM_ROWS 3   /* TOUCH, EDGES, TOUCHABLE — draw_info_row() advances 28 */
+
 static int disp_portrait_layout(void) { return CONTENT_WIDTH < 600; }
-static int disp_sec_geom_y(void) { return CONTENT_Y + (disp_portrait_layout() ? 150 : 108); }
-static int disp_btn_row_y(void)  { return CONTENT_Y + (disp_portrait_layout() ? 240 : 236); }
-/* Portrait stacks four geometry buttons (4*46 + 3*12 = 220 px from disp_btn_row_y),
- * so the action row has to clear 460; landscape fits them on one line. */
-static int disp_action_y(void)   { return CONTENT_Y + (disp_portrait_layout() ? 474 : 300); }
+static int disp_sec_geom_y(void) { return CONTENT_Y + 2; }
+static int disp_btn_row_y(void)  { return disp_sec_geom_y() + 26 + DISP_GEOM_ROWS * 28 + 14; }
+/* Portrait stacks four geometry buttons (4*46 + 3*12 = 220 px from disp_btn_row_y);
+ * landscape fits them on one line.  The status line sits under them. */
+static int disp_action_y(void)   { return disp_btn_row_y() + (disp_portrait_layout() ? 220 : 46) + 14; }
 
-static void create_display_ui(AppState *state) {
+static void create_display_ui(void) {
     const int portrait = disp_portrait_layout();
-    const int bl_bar_y = DISP_BL_BAR_Y;
 
-    if (portrait) {
-        int bar_w = CONTENT_WIDTH - 170;
-        if (bar_w < 80) bar_w = 80;
-        int bl_ctrl_y = bl_bar_y + 25;
-        button_init_full(&bl_minus_btn, CONTENT_LEFT, bl_ctrl_y - 5,
-                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&bl_plus_btn, CONTENT_LEFT + 55 + bar_w + 10, bl_ctrl_y - 5,
-                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    } else {
-        int bl_bar_x = CONTENT_LEFT + 190;
-        button_init_full(&bl_minus_btn, bl_bar_x - 55, bl_bar_y - 5,
-                         45, 30, "-", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&bl_plus_btn, bl_bar_x + BAR_WIDTH + 70, bl_bar_y - 5,
-                         45, 30, "+", RGB(80, 80, 80), COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    }
-
-    toggle_init(&portrait_toggle, CONTENT_LEFT + 5,
-                bl_bar_y + (portrait ? 62 : 38),
-                60, 28, "PORTRAIT MODE", state->portrait_mode);
-
-    /* Four geometry actions. RESET is the escape hatch B3 asks for: a bad
-     * calibration used to leave no way back except SSH. TOUCH DIAGNOSTIC hands
-     * off to touch_raw, the only thing here that shows the panel with every layer
-     * of interpretation removed. Widths are sized to the labels (6 px per
+    /* Four geometry actions. RESET is the escape hatch: a bad calibration used
+     * to leave no way back except SSH. TOUCH DIAGNOSTIC hands off to touch_raw,
+     * the only thing here that shows the panel with every layer of
+     * interpretation removed. Widths are sized to the labels (6 px per
      * character per scale step) rather than shared equally — "RESET" does not
      * need the room "TOUCH DIAGNOSTIC" does. */
     const int bh = 46, gap = 12;
@@ -1127,19 +932,27 @@ static void create_display_ui(AppState *state) {
                          BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
     }
 
-    const int ay = disp_action_y();
-    int center_x = CONTENT_LEFT + CONTENT_WIDTH / 2;
-    if (portrait) {
-        button_init_full(&disp_save_btn, center_x - 70, ay, 140, 40, "SAVE",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&disp_reset_btn, center_x - 90, ay + 50, 180, 40,
-                         "RESET DEFAULTS",
-                         BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-    } else {
-        button_init_full(&disp_save_btn, center_x - 200, ay, 140, 40, "SAVE",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 3);
-        button_init_full(&disp_reset_btn, center_x + 10, ay, 180, 40, "RESET DEFAULTS",
-                         BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
+    /* ⚠️ THE RECEIPT: the lowest widget is RESET (portrait) or the row
+     * (landscape), the status line under it is text only.  Read off the
+     * buttons as placed, not re-derived. */
+    {
+        const Button *b[] = { &calib_start_btn, &calib_bezel_btn,
+                              &calib_diag_btn, &calib_factory_btn };
+        int bottom = 0, right = 0;
+        for (int i = 0; i < 4; i++) {
+            if (b[i]->y + b[i]->height - CONTENT_Y > bottom)
+                bottom = b[i]->y + b[i]->height - CONTENT_Y;
+            if (b[i]->x + b[i]->width > right)
+                right = b[i]->x + b[i]->width;
+        }
+        const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
+                            : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
+                            : "fits";
+        printf("control_panel: touch stack %s — bottom +%d of CONTENT_H %d, "
+               "right %d of CONTENT_RIGHT %d (safe %dx%d, %s)\n",
+               verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
+               SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
+               portrait ? "portrait" : "landscape");
     }
 }
 
@@ -1162,30 +975,6 @@ static void display_touchable_rect(int *lx0, int *lx1, int *ly0, int *ly1) {
 }
 
 static void draw_display_tab(Framebuffer *fb, AppState *state) {
-    const int portrait = disp_portrait_layout();
-    const int bl_bar_y = DISP_BL_BAR_Y;
-
-    draw_section_header(fb, DISP_SEC_LIGHT_Y, "DISPLAY");
-
-    fb_draw_text(fb, CONTENT_LEFT + 5, bl_bar_y + 2, "BACKLIGHT", COLOR_LABEL, 2);
-    button_draw(fb, &bl_minus_btn);
-    if (portrait) {
-        int bar_w = CONTENT_WIDTH - 170;
-        if (bar_w < 80) bar_w = 80;
-        draw_brightness_bar(fb, CONTENT_LEFT + 55, bl_bar_y + 25,
-                            state->backlight_brightness, 20, 100, bar_w, true);
-    } else {
-        draw_brightness_bar(fb, CONTENT_LEFT + 190, bl_bar_y,
-                            state->backlight_brightness, 20, 100, BAR_WIDTH, true);
-    }
-    button_draw(fb, &bl_plus_btn);
-
-    toggle_draw(fb, &portrait_toggle);
-    if (portrait_toggle.state)
-        fb_draw_text(fb, CONTENT_LEFT + 250, bl_bar_y + (portrait ? 70 : 46),
-                     "ON NEXT LAUNCH - CALIBRATE IN LANDSCAPE", RGB(255, 200, 80), 1);
-
-    /* -- geometry -- */
     int y = disp_sec_geom_y();
     draw_section_header(fb, y, "SCREEN GEOMETRY");
     y += 26;
@@ -1200,11 +989,6 @@ static void draw_display_tab(Framebuffer *fb, AppState *state) {
              screen_bezel_top, screen_bezel_bottom,
              screen_bezel_left, screen_bezel_right);
     y = draw_info_row(fb, y, "EDGES:", buf, COLOR_DATA);
-
-    snprintf(buf, sizeof(buf), "%dx%d OF %dx%d",
-             (int)fb->width, (int)fb->height,
-             screen_panel_width, screen_panel_height);
-    y = draw_info_row(fb, y, "VISIBLE:", buf, COLOR_DATA);
 
     /* Visible is not the same as touchable, and this row is the only place a
      * reader finds that out without rediscovering it the hard way. A non-zero
@@ -1225,12 +1009,10 @@ static void draw_display_tab(Framebuffer *fb, AppState *state) {
     button_draw(fb, &calib_bezel_btn);
     button_draw(fb, &calib_diag_btn);
     button_draw(fb, &calib_factory_btn);
-    button_draw(fb, &disp_save_btn);
-    button_draw(fb, &disp_reset_btn);
 
     if (state->status_msg[0])
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           disp_action_y() + 54, state->status_msg, COLOR_GREEN, 2);
+                           disp_action_y(), state->status_msg, COLOR_GREEN, 2);
 }
 
 /* Put both config lines back to the compiled-in defaults. The raw range comes
@@ -1263,20 +1045,6 @@ static void display_reset_geometry(AppState *state, TouchInput *touch, uint32_t 
 
 static void handle_display_input(AppState *state, int tx, int ty,
                                  bool touching, uint32_t now) {
-    if (toggle_check_press(&portrait_toggle, tx, ty, touching, now))
-        state->portrait_mode = portrait_toggle.state;
-
-    if (button_update(&bl_minus_btn, tx, ty, touching, now)) {
-        state->backlight_brightness -= 10;
-        if (state->backlight_brightness < 20) state->backlight_brightness = 20;
-        apply_backlight(state->backlight_brightness);
-    }
-    if (button_update(&bl_plus_btn, tx, ty, touching, now)) {
-        state->backlight_brightness += 10;
-        if (state->backlight_brightness > 100) state->backlight_brightness = 100;
-        apply_backlight(state->backlight_brightness);
-    }
-
     if (button_update(&calib_start_btn, tx, ty, touching, now))
         state->calib_sub = CALIB_RUN_FULL;
     else if (button_update(&calib_bezel_btn, tx, ty, touching, now))
@@ -1286,35 +1054,6 @@ static void handle_display_input(AppState *state, int tx, int ty,
     else if (button_update(&calib_factory_btn, tx, ty, touching, now)) {
         confirm_open(state, CONFIRM_RESET_GEOMETRY, "RESET SCREEN GEOMETRY?",
                      "TOUCH RANGE AND EDGES\nGO BACK TO DEFAULTS.", "RESET", NULL);
-    }
-
-    if (button_update(&disp_save_btn, tx, ty, touching, now)) {
-        config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
-        config_save(&state->cfg);
-        if (state->portrait_mode) {
-            FILE *pf = fopen(PORTRAIT_FLAG_FILE, "w");
-            if (pf) { fprintf(pf, "1\n"); fclose(pf); }
-        } else {
-            unlink(PORTRAIT_FLAG_FILE);
-        }
-        apply_backlight(state->backlight_brightness);
-        snprintf(state->status_msg, sizeof(state->status_msg),
-                 state->portrait_mode ? "SAVED! PORTRAIT ON NEXT LAUNCH"
-                                      : "DISPLAY SETTINGS SAVED");
-        state->status_time_ms = now;
-    }
-    if (button_update(&disp_reset_btn, tx, ty, touching, now)) {
-        /* Backlight and orientation only — screen geometry has its own RESET,
-         * because wiping a calibration by accident is a much worse surprise. */
-        state->backlight_brightness = DEFAULT_BACKLIGHT_BRIGHTNESS;
-        state->portrait_mode = false;
-        portrait_toggle.state = false;
-        config_set_int(&state->cfg, "backlight_brightness", state->backlight_brightness);
-        config_save(&state->cfg);
-        unlink(PORTRAIT_FLAG_FILE);
-        apply_backlight(state->backlight_brightness);
-        snprintf(state->status_msg, sizeof(state->status_msg), "DISPLAY DEFAULTS RESTORED");
-        state->status_time_ms = now;
     }
 }
 
@@ -2181,7 +1920,7 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
 static void rebuild_ui(AppState *state) {
     create_tab_bar();
     create_tests_ui();
-    create_display_ui(state);
+    create_display_ui();
     /* Each prints its "control_panel: <page> stack …" receipt. */
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page) home_items[i].page->layout();
@@ -2267,10 +2006,6 @@ int main(void) {
     state.active_tab = TAB_HOME;
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page) home_items[i].page->load(&state.cfg);
-    state.backlight_brightness = config_get_int(&state.cfg, "backlight_brightness", DEFAULT_BACKLIGHT_BRIGHTNESS);
-    if (state.backlight_brightness < 20)  state.backlight_brightness = 20;
-    if (state.backlight_brightness > 100) state.backlight_brightness = 100;
-    state.portrait_mode = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
     state.test_sub = TEST_MENU_VIEW;
     state.test_selected = -1;
     state.calib_sub = CALIB_IDLE;
@@ -2327,8 +2062,6 @@ int main(void) {
 
         /* --- Save visual state before input handling --- */
         ActiveTab     prev_tab       = state.active_tab;
-        int           prev_bl_br     = state.backlight_brightness;
-        bool          prev_portrait  = state.portrait_mode;
         char          prev_status0   = state.status_msg[0];
         /* A new message replacing one still shown keeps status_msg[0] non-zero,
          * so the time it was set is what says the text changed. */
@@ -2402,8 +2135,6 @@ int main(void) {
         bool btn_look = button_take_dirty();
         if (ts.pressed || ts.released || btn_look    ||
             prev_tab       != state.active_tab     ||
-            prev_bl_br     != state.backlight_brightness ||
-            prev_portrait  != state.portrait_mode   ||
             prev_status0   != state.status_msg[0]   ||
             prev_status_t  != state.status_time_ms  ||
             prev_home_page != state.home_page       ||

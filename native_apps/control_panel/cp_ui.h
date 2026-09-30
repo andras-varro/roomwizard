@@ -2,10 +2,10 @@
  *
  * control_panel.c owns the tab bar, the home grid and every page that has not
  * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c,
- * network_page.c, usb_page.c) lays itself out in the same content rectangle and
- * draws with the same helpers.  This header is the one
- * home for that rectangle and those helpers, so a moved page cannot carry a
- * second copy of either.  The helper bodies stay in control_panel.c.
+ * network_page.c, usb_page.c, audio_page.c, display_page.c) lays itself out in
+ * the same content rectangle and draws with the same helpers.  This header is
+ * the one home for that rectangle and those helpers, so a moved page cannot
+ * carry a second copy of either.  The helper bodies stay in control_panel.c.
  *
  * Everything here is derived from SCREEN_SAFE_*, so it is only correct after
  * fb_init() and touch_init(), and a layout computed from it must be re-run
@@ -58,6 +58,11 @@ void draw_usage_bar(Framebuffer *fb, int x, int y, int width, int height,
 /* src drawn from x at scale, cut with ".." so it ends by CONTENT_RIGHT, into
  * out; true if it had to be cut (what a page's receipt counts). */
 bool fit_value(const char *src, int x, int scale, char *out, size_t len);
+
+/* A label at the left of the content and its value in a column at x 270
+ * (150 in portrait); returns the next row's y (28 lower). */
+int draw_info_row(Framebuffer *fb, int y, const char *label,
+                  const char *value, uint32_t value_color);
 
 /* The first line of a file, newline stripped; 0, or -1 with buf empty. */
 int read_file_line(const char *path, char *buf, size_t len);
