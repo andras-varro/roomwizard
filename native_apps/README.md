@@ -54,7 +54,7 @@ separate GUI utilities behind a tab bar:
 
 | Tab | Replaces | What it does |
 |---|---|---|
-| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset, and the SYSTEM shutdown/reboot pair. Test buttons deliberately bypass config to exercise raw hardware. |
+| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset. Test buttons deliberately bypass config to exercise raw hardware. |
 | **Diagnostics** | `hardware_diag` | Read-only system info across 6 pages (System, Memory, Storage, Hardware, Config, Network). |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
 | **Display** | a retired standalone calibration tool | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
@@ -240,6 +240,7 @@ The `app_launcher` provides a visual grid interface for launching apps:
 - Displays apps as coloured icon tiles in a 3×2 grid
 - Supports PPM icons or auto-generated letter tiles
 - Touch tile to launch, edge touch for pagination
+- The red X top right (or Back / Escape) opens Shut down / Reboot / Cancel — the only shutdown and reboot control on the device
 - Re-scans manifests after each app exits (picks up new deployments)
 - Respawns automatically via the init script if it crashes
 

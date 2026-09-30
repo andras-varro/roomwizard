@@ -817,7 +817,11 @@ and `gpio_poweroff_driver` are in `/proc/kallsyms`, and `CONFIG_TWL4030_POWER=y`
 `twl@48` node has no `ti,twl4030-power*` child and no `ti,system-power-controller`, in the vendor
 `original.dtb` and in `kernel/dts` alike. `drivers/mfd/twl4030-power.c` sets `pm_power_off` only when
 that property is present, and with `pm_power_off` NULL `kernel/reboot.c` turns POWER_OFF into HALT. The
-rootfs halt script already runs `halt -d -f -p -h`, so userspace is not the missing piece.
+rootfs halt script already runs `halt -d -f -p -h`, so userspace is not the missing piece. Measured on
+.188 2026-09-29 (n=1): `shutdown -h now` halts with the panel bright white and the backlight on, down
+over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi
+drops its enable GPIO, while `kernel/dts/panel-dpi.sh` holds the LVDS and backlight-enable GPIOs high as
+hogs and the TWL PWM backlight stays powered.
 
 **Inferred, not measured:** power is 802.3af PoE only (TPS23750 front end and buck upstream of the PMIC),
 so a TWL4030 OFF drops the SoC and RAM rails but probably not the PoE front end. The backlight supply is
@@ -828,7 +832,8 @@ wiring is unknown, so pulling PoE is the expected only way back.
 `ti,system-power-controller` (the generic compatible loads no sequencing scripts, the lowest risk). Stage
 it as a test image under a new filename, then run ONE `poweroff` with the operator watching the panel and
 the PoE port draw. **Done when** we know whether `poweroff` darkens the panel and reduces PoE draw, and
-the launcher's Shutdown either uses it or keeps halt plus backlight-off (C16).
+the launcher's Shutdown either uses it or keeps the halt, its screen's unplug-when-white wording
+following whichever end state ships (C16).
 
 ## Structural and cleanup
 
@@ -1020,15 +1025,9 @@ processes launched from their page. Each change saves immediately — no global 
 disappears. Reset-to-defaults stays in the control panel.
 
 `icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
-exits; `app_launcher`, which the boot init script respawns so a plain exit does nothing, opens a
-Shutdown / Reboot / Cancel dialog. Reboot/shutdown therefore **move** out of `control_panel` (dialogs and
-the `shutdown -h now` / `reboot` calls, `control_panel.c` ~544-561, on the shared ModalDialog). The launcher
-draws a shutdown screen ("It is now safe to unplug the RoomWizard") before halting, because a halt leaves a
-bright white panel: measured on .188 2026-09-29 (n=1), `shutdown -h now` halts, backlight on, unit down
-over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi drops
-its enable GPIO, while `kernel/dts/panel-dpi.sh` holds the LVDS and backlight-enable GPIOs high as hogs
-and the TWL PWM backlight stays powered. Either turn the backlight off last (dark, no message) or keep it
-on if the message survives the halt; one measurement decides, and F103 may replace the halt.
+exits; `app_launcher`'s X (or Back/Escape) opens Shutdown / Reboot / Cancel, now the only home of both —
+live on .188 2026-09-30 but **not yet tapped** (operator checklist pending). Its shutdown screen says to
+unplug once the screen turns white; that wording rests on one halt and is provisional until F103.
 
 | Icon | Holds |
 |---|---|

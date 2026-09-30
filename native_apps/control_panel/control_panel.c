@@ -234,8 +234,6 @@ typedef enum {
 
 typedef enum {
     CONFIRM_NONE,
-    CONFIRM_SHUTDOWN,
-    CONFIRM_REBOOT,
     CONFIRM_RESET_GEOMETRY   /* Display tab: touch range + edges to defaults */
 } ConfirmAction;
 
@@ -347,7 +345,7 @@ static void signal_handler(int sig) {
 static Button tab_buttons[TAB_COUNT];
 static Button back_btn;          /* the tab bar's BACK to the home grid */
 
-/* Settings — sound, indicators, system. Screen-related settings live on the
+/* Settings — sound and indicators. Screen-related settings live on the
  * Display tab, next to the calibration they interact with. */
 static ToggleSwitch audio_toggle;
 static ToggleSwitch music_toggle, effects_toggle;
@@ -356,9 +354,6 @@ static Button audio_dev_btn;
 static Button test_audio_btn, test_led_btn;
 static Button led_minus_btn, led_plus_btn;
 static Button save_btn, reset_btn;
-static Button shutdown_btn, reboot_btn;
-static ModalDialog shutdown_dialog;
-static ModalDialog reboot_dialog;
 
 /* Diagnostics */
 static Button diag_prev_btn, diag_next_btn;
@@ -640,36 +635,6 @@ static void apply_backlight(int brightness_pct) {
         fprintf(stderr, "control_panel: backlight preview write failed\n");
 }
 
-/* ── System Action Functions ──────────────────────────────────────────── */
-
-static void execute_system_action(ConfirmAction action) {
-    /* Clean up hardware */
-    hw_leds_off();
-
-    /* Show status message on screen */
-    fb_clear(g_fb, COLOR_BLACK);
-    const char *msg = (action == CONFIRM_SHUTDOWN)
-                      ? "SHUTTING DOWN..." : "REBOOTING...";
-    text_draw_centered(g_fb, g_fb->width / 2, g_fb->height / 2, msg, COLOR_YELLOW, 3);
-    fb_swap(g_fb);
-
-    /* Flush filesystem and execute */
-    sync();
-    int rc = (action == CONFIRM_SHUTDOWN) ? system("shutdown -h now")
-                                          : system("reboot");
-    if (rc != 0) {
-        /* Nothing to fall back to, but say so rather than sit on a lying
-           "SHUTTING DOWN..." for 30 seconds and then silently return. */
-        text_draw_centered(g_fb, g_fb->width / 2, g_fb->height / 2 + 40,
-                           "COMMAND FAILED", COLOR_RED, 2);
-        fb_swap(g_fb);
-    }
-
-    /* Wait for system to act (in case system() returns immediately) */
-    sleep(30);
-    exit(0);
-}
-
 /* Settings layout. Backlight and portrait used to live here; they moved to the
  * Display tab, which is why the action row sits so much higher than it did.
  *
@@ -677,10 +642,9 @@ static void execute_system_action(ConfirmAction action) {
  * carries MUSIC / EFFECTS.  The row was added after the rest of this stack was
  * hand-placed, so the offset is a named constant applied to the two `action_y`
  * expressions rather than 44 baked into a dozen literals — and
- * create_settings_ui() prints the resulting bottom against CONTENT_H, because at
- * the maximum believed touch inset (FB_TOUCH_INSET_MAX both sides, landscape) the
- * SYSTEM buttons clear it by ~21 px and nothing on screen would show that they
- * had stopped clearing it. */
+ * create_settings_ui() prints the resulting bottom against CONTENT_H, because the
+ * inset is per unit and nothing on screen would show that the last row had
+ * stopped clearing it. */
 #define SET_AUDIO_ROW2_H 44                          /* 28 px track + 16 px lead */
 #define SET_SEC_AUDIO_Y  (CONTENT_Y + 2)
 #define SET_AUDIO_ROW2_Y (SET_SEC_AUDIO_Y + 54)
@@ -855,41 +819,17 @@ static void create_settings_ui(AppState *state) {
                          BTN_COLOR_HIGHLIGHT, 2);
     }
 
-    /* SYSTEM section — Shut Down and Reboot buttons below status message */
-    int system_y = action_y + (portrait ? 130 : 70);
-    int sys_btn_w = 140, sys_btn_h = 38;
-    int sys_gap = 20;
-    int sys_total_w = sys_btn_w * 2 + sys_gap;
-    int sys_x_start = center_x - sys_total_w / 2;
-
-    button_init_full(&shutdown_btn, sys_x_start, system_y + 20,
-                     sys_btn_w, sys_btn_h, "SHUT DOWN",
-                     BTN_COLOR_DANGER, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-    button_init_full(&reboot_btn, sys_x_start + sys_btn_w + sys_gap, system_y + 20,
-                     sys_btn_w, sys_btn_h, "REBOOT",
-                     BTN_COLOR_WARNING, COLOR_WHITE,
-                     BTN_COLOR_HIGHLIGHT, 2);
-
-    /* Confirmation dialogs */
-    modal_dialog_init_confirm(&shutdown_dialog, "SHUT DOWN DEVICE?",
-                              "THE DEVICE WILL POWER OFF.",
-                              "SHUT DOWN", BTN_COLOR_DANGER,
-                              "CANCEL", RGB(100, 100, 100));
-
-    modal_dialog_init_confirm(&reboot_dialog, "REBOOT DEVICE?",
-                              "THE DEVICE WILL RESTART.",
-                              "REBOOT", BTN_COLOR_WARNING,
-                              "CANCEL", RGB(100, 100, 100));
+    /* Shut down and reboot are NOT here: they are behind app_launcher's exit X. */
 
     /* ⚠️ THE RECEIPT. This stack is hand-placed from CONTENT_Y and CONTENT_Y is
      * derived from a per-unit touch inset, so a row pushed past the bottom of the
      * touchable rect looks perfect in a framebuffer screenshot and is simply dead
-     * to a finger.  The SYSTEM buttons are the last thing on the tab, so their
-     * bottom is the number that matters.  Printed once per tab build, and it says
-     * whether it fits rather than leaving that to be inferred. */
+     * to a finger.  RESET DEFAULTS is the lowest button on the tab (stacked under
+     * SAVE in portrait), so its bottom is the number that matters.  Printed once
+     * per tab build, and it says whether it fits rather than leaving that to be
+     * inferred. */
     {
-        int bottom = (system_y + 20 + sys_btn_h) - CONTENT_Y;
+        int bottom = (reset_btn.y + reset_btn.height) - CONTENT_Y;
         printf("control_panel: settings stack %s — bottom +%d of CONTENT_H %d "
                "(safe %dx%d, %s, row2 +%d)\n",
                bottom <= CONTENT_H ? "fits" : "⚠ PAST CONTENT BOTTOM",
@@ -1009,12 +949,6 @@ static void draw_settings(Framebuffer *fb, AppState *state) {
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
                            status_y, note, COLOR_ORANGE, sc);
     }
-
-    /* SYSTEM section */
-    int system_y = action_y + (portrait ? 130 : 70);
-    draw_section_header(fb, system_y, "SYSTEM");
-    button_draw(fb, &shutdown_btn);
-    button_draw(fb, &reboot_btn);
 }
 
 static void handle_settings_input(AppState *state, int tx, int ty,
@@ -1120,16 +1054,6 @@ static void handle_settings_input(AppState *state, int tx, int ty,
     if (state->settings_audio_open &&
         state->settings_audio_idx != state->audio_device_idx)
         settings_audio_open(state);
-
-    /* System action buttons */
-    if (button_update(&shutdown_btn, tx, ty, touching, now)) {
-        state->confirm_action = CONFIRM_SHUTDOWN;
-        modal_dialog_show(&shutdown_dialog);
-    }
-    if (button_update(&reboot_btn, tx, ty, touching, now)) {
-        state->confirm_action = CONFIRM_REBOOT;
-        modal_dialog_show(&reboot_dialog);
-    }
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -4138,11 +4062,7 @@ int main(void) {
             }
 
             /* Draw confirmation dialog overlay on top of everything */
-            if (state.confirm_action == CONFIRM_SHUTDOWN) {
-                modal_dialog_draw(&shutdown_dialog, &fb);
-            } else if (state.confirm_action == CONFIRM_REBOOT) {
-                modal_dialog_draw(&reboot_dialog, &fb);
-            } else if (state.confirm_action == CONFIRM_RESET_GEOMETRY) {
+            if (state.confirm_action == CONFIRM_RESET_GEOMETRY) {
                 modal_dialog_draw(&calib_factory_dialog, &fb);
             }
 
@@ -4191,19 +4111,12 @@ int main(void) {
 
         /* When confirmation dialog is active, only handle dialog input */
         if (state.confirm_action != CONFIRM_NONE) {
-            ModalDialog *active_dlg =
-                (state.confirm_action == CONFIRM_SHUTDOWN)       ? &shutdown_dialog :
-                (state.confirm_action == CONFIRM_RESET_GEOMETRY) ? &calib_factory_dialog :
-                                                                   &reboot_dialog;
-            ModalDialogAction action = modal_dialog_update(active_dlg, tx, ty, touching, now);
+            ModalDialogAction action =
+                modal_dialog_update(&calib_factory_dialog, tx, ty, touching, now);
             if (action == MODAL_ACTION_BTN0) {
-                if (state.confirm_action == CONFIRM_RESET_GEOMETRY) {
-                    display_reset_geometry(&state, &touch, now);
-                    state.confirm_action = CONFIRM_NONE;
-                    rebuild_ui(&state);   /* the bezel just changed the logical size */
-                } else {
-                    execute_system_action(state.confirm_action);
-                }
+                display_reset_geometry(&state, &touch, now);
+                state.confirm_action = CONFIRM_NONE;
+                rebuild_ui(&state);   /* the bezel just changed the logical size */
             } else if (action == MODAL_ACTION_BTN1) {
                 state.confirm_action = CONFIRM_NONE;
             }

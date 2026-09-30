@@ -18,6 +18,10 @@
  *   none      — launch with no arguments
  *
  * Grid: dynamic layout — 3×2 in landscape, 2×3 in portrait, with pagination.
+ *
+ * The grid's exit X (top right) does not exit: the init script would only
+ * respawn us.  It opens the Shutdown / Reboot / Cancel dialog, which is the
+ * device's one home for powering down or restarting.
  */
 
 #include "common/framebuffer.h"
@@ -72,6 +76,15 @@ static IconGrid grid;
  * a live setter for `Audio.music_on` (read once by `audio_init()`), a bed
  * stop/resume in the middle of a run, and seven writers of one key.
  */
+
+/* ── The power dialog behind the exit X ──────────────────────────────────────
+ * Three stacked ModalDialog buttons.  No message line: with three buttons the
+ * stack starts at the height ModalDialog draws a message, so one would collide. */
+enum { PWR_SHUTDOWN = 0, PWR_REBOOT = 1, PWR_CANCEL = 2 };
+static ModalDialog power_dialog;
+static bool exit_pressed;        /* the current touch went down on the X */
+static int  power_press = -1;    /* dialog button the current touch went down on */
+static int  power_focus = PWR_CANCEL;   /* keyboard/gamepad focus; safe default */
 
 /* Prints the layout receipt ("launcher: safe …") — see icon_grid_layout(). */
 static void compute_grid_layout(Framebuffer *fb) {
@@ -289,7 +302,19 @@ static void draw_launcher(Launcher *l) {
     /* Input hint */
     if (l->input.gamepad_connected || l->input.keyboard_connected)
         fb_draw_text(&l->fb, SCREEN_VISIBLE_LEFT + 10, l->fb.height - 18,
-                     "D-PAD: NAVIGATE  A/ENTER: LAUNCH", RGB(100, 100, 100), 1);
+                     "D-PAD: NAVIGATE  A/ENTER: LAUNCH  ESC/BACK: POWER",
+                     RGB(100, 100, 100), 1);
+
+    icon_grid_draw_exit(&l->fb, &grid);
+
+    if (modal_dialog_is_active(&power_dialog)) {
+        /* The focus ring only when a key can move it, as with the tile ring. */
+        bool keys = l->input.gamepad_connected || l->input.keyboard_connected;
+        for (int i = 0; i < power_dialog.button_count; i++)
+            power_dialog.buttons[i].visual_state =
+                (keys && i == power_focus) ? BTN_STATE_HIGHLIGHTED : BTN_STATE_NORMAL;
+        modal_dialog_draw(&power_dialog, &l->fb);
+    }
 
     fb_swap(&l->fb);
 }
@@ -300,8 +325,11 @@ static void draw_launcher(Launcher *l) {
 
 /*  Returns:  >= 0   app index to launch
  *            -1     nothing / page change (redraw)
+ *            -2     the exit X (checked first: it sits inside the right page band)
  */
 static int handle_touch(Launcher *l, int x, int y) {
+    if (icon_grid_exit_hit(&grid, x, y)) return -2;
+
     int start = l->current_page * grid.per_page;
     int count = l->app_count - start;
     if (count > grid.per_page) count = grid.per_page;
@@ -337,8 +365,21 @@ static void ensure_selection_visible(Launcher *l) {
 /*  Returns:  >= 0  app index to launch
  *            -1    nothing (navigation only, or no input)
  */
+static void open_power_dialog(void) {
+    power_focus = PWR_CANCEL;
+    power_press = -1;
+    modal_dialog_show(&power_dialog);
+}
+
 static int handle_gamepad_input(Launcher *l) {
     InputState *inp = &l->input;
+
+    /* BACK (Select / Backspace) and PAUSE (Start / Escape) mean "leave" in every
+     * app; here leaving is the power dialog, as the X is. */
+    if (inp->buttons[BTN_ID_BACK].pressed || inp->buttons[BTN_ID_PAUSE].pressed) {
+        open_power_dialog();
+        return -1;
+    }
 
     /* If nothing is selected yet but a nav key is pressed, select first on page */
     if (l->selected_app < 0) {
@@ -512,6 +553,100 @@ static void launch_app(Launcher *l, int index,
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
+/*  Shutdown / reboot                                                      */
+/* ════════════════════════════════════════════════════════════════════════ */
+
+/* The one home of the shutdown screen's words.
+ *
+ * ⚠️ Nothing this process draws can say "safe now": it is killed before the
+ * disks are. Measured on our 4.14.52 image: `shutdown -h now` HALTS (the kernel
+ * has no power-off hook bound), and the halted panel is bright WHITE with the
+ * backlight on. So the halt's own white screen is the signal, and these lines
+ * point at it. Rewrite them if the kernel ever gains a real power-off. */
+static const char *const shutdown_hint[] = {
+    "WHEN THE SCREEN TURNS WHITE,",
+    "IT IS SAFE TO UNPLUG.",
+};
+
+static void draw_power_screen(Framebuffer *fb, int action, bool failed) {
+    int cx = SCREEN_VISIBLE_LEFT + SCREEN_VISIBLE_WIDTH / 2;
+    int cy = SCREEN_VISIBLE_TOP + SCREEN_VISIBLE_HEIGHT / 2;
+    fb_clear(fb, COLOR_BLACK);
+    text_draw_centered(fb, cx, cy - 50,
+                       action == PWR_SHUTDOWN ? "SHUTTING DOWN..." : "REBOOTING...",
+                       COLOR_YELLOW, 4);
+    if (action == PWR_SHUTDOWN)
+        for (int i = 0; i < (int)(sizeof(shutdown_hint) / sizeof(shutdown_hint[0])); i++)
+            text_draw_centered(fb, cx, cy + 10 + i * 28, shutdown_hint[i], COLOR_WHITE, 2);
+    if (failed)
+        text_draw_centered(fb, cx, cy + 90, "COMMAND FAILED", COLOR_RED, 2);
+    fb_swap(fb);
+}
+
+static void execute_power_action(Launcher *l, int action) {
+    LOG_INFO(&l->logger, "%s requested", action == PWR_SHUTDOWN ? "Shutdown" : "Reboot");
+    hw_leds_off();
+    draw_power_screen(&l->fb, action, false);
+
+    sync();
+    int rc = (action == PWR_SHUTDOWN) ? system("shutdown -h now") : system("reboot");
+    if (rc == 0) {
+        /* Wait to be killed, never exit: the respawn wrapper would start a fresh
+         * launcher whose grid replaces this screen for the rest of the shutdown.
+         * A SIGTERM only sets quit_flag, which nothing reads from here. */
+        for (;;) pause();
+    }
+
+    /* Say so rather than sit on a lying "SHUTTING DOWN..." — then back to the grid. */
+    LOG_ERROR(&l->logger, "power command failed (rc=%d)", rc);
+    draw_power_screen(&l->fb, action, true);
+    sleep(5);
+    touch_drain_events(&l->touch);
+    l->last_launch_return_ms = get_time_ms();   /* the post-launch input cooldown */
+}
+
+static void choose_power(Launcher *l, int idx) {
+    modal_dialog_hide(&power_dialog);
+    power_press = -1;
+    if (idx == PWR_SHUTDOWN || idx == PWR_REBOOT)
+        execute_power_action(l, idx);
+}
+
+static int power_button_at(int x, int y) {
+    for (int i = 0; i < power_dialog.button_count; i++)
+        if (button_is_touched(&power_dialog.buttons[i], x, y)) return i;
+    return -1;
+}
+
+/* While the dialog is up it takes ALL input. A touch acts on RELEASE, and only
+ * on the button it went down on, so a finger can slide off SHUT DOWN to abort.
+ * A mouse click is deliberate and acts at once. */
+static void handle_power_dialog(Launcher *l, const TouchState *ts) {
+    InputState *inp = &l->input;
+
+    if (ts->pressed) power_press = power_button_at(ts->x, ts->y);
+    /* No else: a quick tap delivers press and release in the same poll. */
+    if (ts->released && power_press >= 0) {
+        int p = power_press;
+        power_press = -1;
+        if (power_button_at(ts->x, ts->y) == p) { choose_power(l, p); return; }
+    }
+
+    if (inp->mouse_left_pressed) {
+        int p = power_button_at(inp->mouse_x, inp->mouse_y);
+        if (p >= 0) { choose_power(l, p); return; }
+    }
+
+    int last = power_dialog.button_count - 1;
+    if (inp->buttons[BTN_ID_UP].pressed)   power_focus = power_focus > 0 ? power_focus - 1 : last;
+    if (inp->buttons[BTN_ID_DOWN].pressed) power_focus = power_focus < last ? power_focus + 1 : 0;
+    if (inp->buttons[BTN_ID_BACK].pressed || inp->buttons[BTN_ID_PAUSE].pressed)
+        choose_power(l, PWR_CANCEL);
+    else if (inp->buttons[BTN_ID_JUMP].pressed || inp->buttons[BTN_ID_ACTION].pressed)
+        choose_power(l, power_focus);
+}
+
+/* ════════════════════════════════════════════════════════════════════════ */
 /*  Main                                                                   */
 /* ════════════════════════════════════════════════════════════════════════ */
 
@@ -590,6 +725,11 @@ int main(int argc, char *argv[]) {
     /* Compute grid layout based on screen dimensions */
     compute_grid_layout(&launcher.fb);
 
+    modal_dialog_init(&power_dialog, "SHUT DOWN OR REBOOT?", NULL, 3);
+    modal_dialog_set_button(&power_dialog, PWR_SHUTDOWN, "SHUT DOWN", BTN_COLOR_DANGER, COLOR_WHITE);
+    modal_dialog_set_button(&power_dialog, PWR_REBOOT,   "REBOOT",    BTN_COLOR_WARNING, COLOR_WHITE);
+    modal_dialog_set_button(&power_dialog, PWR_CANCEL,   "CANCEL",    RGB(100, 100, 100), COLOR_WHITE);
+
     /* Scan for installed apps */
     int count = scan_apps(&launcher);
     LOG_INFO(&launcher.logger, "Found %d app(s), %d page(s)", count, launcher.total_pages);
@@ -602,6 +742,8 @@ int main(int argc, char *argv[]) {
         int old_count    = launcher.app_count;
         bool old_gp_conn = launcher.input.gamepad_connected;
         bool old_kb_conn = launcher.input.keyboard_connected;
+        bool old_dialog  = modal_dialog_is_active(&power_dialog);
+        int  old_focus   = power_focus;
 
         /* Poll touch (non-blocking) */
         touch_poll(&launcher.touch);
@@ -637,38 +779,55 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        if (ts.pressed) {
-            /* Handle touch press */
-            LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
-            int result = handle_touch(&launcher, ts.x, ts.y);
-            if (result >= 0) {
-                launch_app(&launcher, result, fb_dev, touch_dev);
+        if (modal_dialog_is_active(&power_dialog)) {
+            /* Closing it (or a failed command's screen) repaints via old_dialog. */
+            handle_power_dialog(&launcher, &ts);
+        } else {
+            if (ts.pressed) {
+                /* Handle touch press */
+                LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
+                int result = handle_touch(&launcher, ts.x, ts.y);
+                exit_pressed = (result == -2);
+                if (result >= 0) {
+                    launch_app(&launcher, result, fb_dev, touch_dev);
+                    launcher.needs_redraw = true;  /* State changed after launch return */
+                }
+            }
+            /* The X acts on RELEASE, and only if the touch went down on it too — so
+             * the dialog opens with no finger on the panel.  No else: a quick tap
+             * delivers press and release in the same poll. */
+            if (ts.released && exit_pressed) {
+                exit_pressed = false;
+                if (icon_grid_exit_hit(&grid, ts.x, ts.y)) open_power_dialog();
+            }
+
+            /* Handle mouse click */
+            if (launcher.input.mouse_left_pressed) {
+                LOG_DEBUG(&launcher.logger, "Mouse click: (%d, %d)",
+                          launcher.input.mouse_x, launcher.input.mouse_y);
+                int result = handle_touch(&launcher,
+                                          launcher.input.mouse_x,
+                                          launcher.input.mouse_y);
+                if (result == -2) {
+                    open_power_dialog();
+                } else if (result >= 0) {
+                    launch_app(&launcher, result, fb_dev, touch_dev);
+                    launcher.needs_redraw = true;  /* State changed after launch return */
+                }
+            }
+
+            /* Handle gamepad / keyboard navigation */
+            int gp_result = handle_gamepad_input(&launcher);
+            if (gp_result >= 0) {
+                launch_app(&launcher, gp_result, fb_dev, touch_dev);
                 launcher.needs_redraw = true;  /* State changed after launch return */
             }
-        }
-
-        /* Handle mouse click */
-        if (launcher.input.mouse_left_pressed) {
-            LOG_DEBUG(&launcher.logger, "Mouse click: (%d, %d)",
-                      launcher.input.mouse_x, launcher.input.mouse_y);
-            int result = handle_touch(&launcher,
-                                      launcher.input.mouse_x,
-                                      launcher.input.mouse_y);
-            if (result >= 0) {
-                launch_app(&launcher, result, fb_dev, touch_dev);
-                launcher.needs_redraw = true;  /* State changed after launch return */
-            }
-        }
-
-        /* Handle gamepad / keyboard navigation */
-        int gp_result = handle_gamepad_input(&launcher);
-        if (gp_result >= 0) {
-            launch_app(&launcher, gp_result, fb_dev, touch_dev);
-            launcher.needs_redraw = true;  /* State changed after launch return */
         }
 
         /* Detect any visual state changes from input handling */
-        if (launcher.selected_app != old_selected ||
+        if (modal_dialog_is_active(&power_dialog) != old_dialog ||
+            power_focus != old_focus ||
+            launcher.selected_app != old_selected ||
             launcher.current_page != old_page     ||
             launcher.app_count    != old_count    ||
             launcher.input.gamepad_connected  != old_gp_conn ||
