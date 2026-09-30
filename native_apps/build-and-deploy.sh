@@ -344,17 +344,6 @@ GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
                 theremin audio_mix_test backlight control_panel
                 touch_raw touch_trace fb_plane_bench dss_scale_ab)
 
-# .hidden markers: a record on the device of which binaries are dev tools with no
-# launcher tile — no program reads them (app_launcher lists manifests, not
-# /opt/games).  Data rather than a loop body in the remote heredoc, so --bundle ships the same
-# set.  It must contain only binaries this script actually builds: it used to
-# name touch_test, touch_debug, touch_calibrate, pressure_test and
-# unified_calibrate, none of which were ever built, so the device accumulated
-# markers for binaries that did not exist and `ls /opt/games` lied about what
-# was installed.
-HIDDEN_MARKERS=(touch_raw touch_trace backlight fb_plane_bench dss_scale_ab
-                hardware_test hardware_config hardware_diag)
-
 echo ""
 echo "Build sizes:"
 ls -lh "${GAMES_BINARIES[@]/#/build/}" build/app_launcher \
@@ -437,16 +426,6 @@ if [[ -n "$BUNDLE_DIR" ]]; then
     done
     rw_bundle_add "$BUNDLE_DIR" native_apps 0755 build/app_launcher /opt/roomwizard/app_launcher \
         || err "staging failed: app_launcher"
-
-    for m in "${HIDDEN_MARKERS[@]}"; do
-        # The marker's CONTENT is irrelevant — it is a record, not a switch — but
-        # a bundle entry needs a real file to copy and an md5
-        # to verify, so stage an empty one rather than special-casing "touch" in
-        # the installer.
-        : > "build/$m.hidden"
-        rw_bundle_add "$BUNDLE_DIR" native_apps 0644 "build/$m.hidden" "$GAMES_DIR/$m.hidden" \
-            || err "staging failed: $m.hidden"
-    done
 
     for f in build/apps/*.app; do
         [ -f "$f" ] || continue
@@ -565,7 +544,7 @@ ssh "$DEVICE" "mkdir -p $GAMES_DIR /var/log/roomwizard"
 ok "Target directories ready"
 
 # ── deployed artifacts ──────────────────────────────────────────────────────
-# GAMES_BINARIES and HIDDEN_MARKERS are declared once, up with the build, so
+# GAMES_BINARIES is declared once, up with the build, so
 # --bundle and this deploy path cannot ship different sets.
 
 # Upload game binaries
@@ -649,46 +628,34 @@ fi
 # Every executable this script put on the device, as the device sees it.
 DEPLOYED_EXECUTABLES=("${GAMES_BINARIES[@]/#/$GAMES_DIR/}" /opt/roomwizard/app_launcher)
 
-# Set permissions + markers
-# The chmod list is passed in as "$@" rather than written out again, so it
-# cannot drift from what was uploaded.  The .hidden marker names come in as a
-# second, NUL-free argument list for the same reason — HIDDEN_MARKERS is declared
-# with the build, and --bundle stages exactly these names.
-info "Setting permissions and markers..."
-ssh "$DEVICE" bash -s -- "${#DEPLOYED_EXECUTABLES[@]}" "${DEPLOYED_EXECUTABLES[@]}" "${HIDDEN_MARKERS[@]}" <<'REMOTE'
+# Set permissions.  The chmod list is passed in as "$@" rather than written out
+# again, so it cannot drift from what was uploaded.
+info "Setting permissions..."
+ssh "$DEVICE" bash -s -- "${#DEPLOYED_EXECUTABLES[@]}" "${DEPLOYED_EXECUTABLES[@]}" <<'REMOTE'
 nexe="$1"; shift
 chmod +x "${@:1:$nexe}"
 shift "$nexe"
 
-# .noargs marker for scummvm (if present)
-[ -f /opt/games/scummvm ] && touch /opt/games/scummvm.noargs && chmod 644 /opt/games/scummvm.noargs
-
-# .hidden markers for dev tools (no launcher tile; reachable over SSH).
-for name in "$@"; do
-    touch  /opt/games/$name.hidden 2>/dev/null || true
-    chmod 644 /opt/games/$name.hidden 2>/dev/null || true
-done
-
-# Retired names: sweep the orphan markers, the binary that was folded into
-# control_panel's Display tab, the theremin's old test-shaped name (its
-# manifest goes with RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles),
-# the retired launcher prototype, two icons no manifest names, and the
-# control panel's old name device_tools (manifest via RW_APP_MANIFESTS_RETIRED).
-rm -f /opt/games/game_selector \
+# Retired names: the binary that was folded into control_panel's Display tab,
+# the theremin's old test-shaped name (its manifest goes with
+# RW_APP_MANIFESTS_RETIRED, or the launcher shows two tiles), the retired
+# launcher prototype, two icons no manifest names, and the control panel's old
+# name device_tools (manifest via RW_APP_MANIFESTS_RETIRED).  The .hidden and
+# .noargs marker files go by glob: nothing reads them, so nothing writes them.
+# touch_inject is the leftover binary of a deleted evdev-write injector, which
+# cannot inject on this device (no /dev/uinput).
+rm -f /opt/games/*.hidden /opt/games/*.noargs \
+      /opt/games/touch_inject \
+      /opt/games/game_selector \
       /opt/roomwizard/icons/hardware_test.ppm \
       /opt/roomwizard/icons/usb_test.ppm \
-      /opt/games/touch_test.hidden \
-      /opt/games/touch_debug.hidden \
-      /opt/games/touch_calibrate.hidden \
-      /opt/games/pressure_test.hidden \
-      /opt/games/unified_calibrate.hidden \
       /opt/games/unified_calibrate \
       /opt/games/audio_touch_test \
       /opt/roomwizard/icons/audio_touch_test.ppm \
       /opt/games/device_tools \
       /opt/roomwizard/icons/device_tools.ppm
 REMOTE
-ok "Permissions and markers set"
+ok "Permissions set"
 
 # ── verify what landed ──────────────────────────────────────────────────────
 # 19 executables were copied and made runnable with nothing checking that the

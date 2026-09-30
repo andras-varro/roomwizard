@@ -529,8 +529,8 @@ composited panel, so no screenshot can see an overlay — say so in any checklis
 is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.
 
 **Cleanup when this concludes:** delete `tests/fb_plane_bench.c` and `tests/dss_scale_ab.c` (both
-DSS-scaling instruments, deployed hidden) together with their build steps, their `GAMES_BINARIES` and
-`HIDDEN_MARKERS` entries in `native_apps/build-and-deploy.sh`, and their `CTEST_NOT_HOST` rows in
+DSS-scaling instruments, deployed hidden) together with their build steps, their `GAMES_BINARIES`
+entries in `native_apps/build-and-deploy.sh`, and their `CTEST_NOT_HOST` rows in
 `tests/run-all.sh`.
 
 ### F4. Surface the two MADC channels that need no wire — open

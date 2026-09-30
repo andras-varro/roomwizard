@@ -38,8 +38,8 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
 
-Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH
-(see *Markers in /opt/games*). `usb_test` exists as source but is **not built or deployed** — USB
+Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH.
+`usb_test` exists as source but is **not built or deployed** — USB
 testing lives in the `control_panel` USB tab. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
@@ -261,7 +261,7 @@ Fields:
 - `icon` — Path to PPM P6 icon file (optional, auto letter-tile if absent)
 - `args` — Argument mode: `fb,touch` (default), `fb`, `touch`, or `none`
 
-The script cross-compiles all binaries, uploads them to `/opt/games/`, sets permissions, and creates `.noargs`/`.hidden` marker files.
+The script cross-compiles all binaries, uploads them to `/opt/games/`, and sets permissions.
 
 To rebuild a single app, run `./build-and-deploy.sh` — it is fast and always links the
 correct object set. Hand-rolled single-file compile lines go stale as `common/` grows
@@ -300,22 +300,6 @@ This writes `/opt/roomwizard/default-app`; the init service respawns whatever it
 Installing the service itself is done once by `../commissioning/provision.sh`.
 
 Or manually: `ssh root@<ip> '/etc/init.d/roomwizard-app start|stop|status'`
-
-## Markers in /opt/games
-
-`build-and-deploy.sh` writes two kinds of empty, non-executable (`chmod 644`) marker file beside the
-binaries. **No program reads either of them** — `app_launcher` builds its grid from the `.app`
-manifests in `/opt/roomwizard/apps/` (`args=` there decides what a tile is launched with), so a
-binary with no manifest has no tile whatever markers it has. They are a record for whoever runs
-`ls /opt/games`:
-
-| Marker | Meaning |
-|---|---|
-| `<name>.hidden` | dev tool, deliberately without a tile; run it over SSH. The set is `HIDDEN_MARKERS` in `build-and-deploy.sh` |
-| `<name>.noargs` | apps that open the devices themselves (ScummVM) |
-
-Hidden on the device: `touch_raw`, `touch_trace`, `backlight`, `hardware_test`, `hardware_config`,
-`hardware_diag`, `fb_plane_bench`, `dss_scale_ab`. `usb_test` is not built by `build-and-deploy.sh`.
 
 ## Resources
 

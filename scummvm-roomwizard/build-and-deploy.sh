@@ -691,9 +691,9 @@ fi' || log_warning "stop reported a failure - a surviving process may hold the b
         log_warning "vkeybd_roomwizard.zip not found at $VKEYBD_ZIP — virtual keyboard will be disabled"
     fi
     
-    # Make executable + set markers
-    log_info "Setting permissions and markers..."
-    ssh "$DEVICE" "chmod +x $DEVICE_PATH/scummvm; touch $DEVICE_PATH/scummvm.noargs; chmod 644 $DEVICE_PATH/scummvm.noargs"
+    # Make executable
+    log_info "Setting permissions..."
+    ssh "$DEVICE" "chmod +x $DEVICE_PATH/scummvm"
     
     # Verify deployment
     log_info "Verifying deployment..."
@@ -745,8 +745,7 @@ APP
 }
 
 # ── stage this component into an offline bundle ─────────────────────────────
-# Everything deploy_to_device scps, plus the .noargs marker it touches on the
-# device.  Nothing here is config, so the release rule — publish binaries only,
+# Everything deploy_to_device scps.  Nothing here is config, so the release rule — publish binaries only,
 # never device config — is satisfied by construction: ScummVM's own scummvm.ini
 # is created on first run by the device.
 #
@@ -765,16 +764,7 @@ stage_bundle() {
     rw_bundle_init "$dir" scummvm || { log_error "could not prepare $dir"; exit 1; }
 
     rw_bundle_add "$dir" scummvm 0755 "$SCUMMVM_DIR/scummvm" "$DEVICE_PATH/scummvm" \
-        || { log_error "staging failed: scummvm"; exit 1; }
 
-    # .noargs is a record only (the manifest's args=none is what app_launcher reads).
-    # deploy_to_device `touch`es it on the device; a bundle needs a real file.
-    local NOARGS
-    NOARGS=$(mktemp)
-    : > "$NOARGS"
-    rw_bundle_add "$dir" scummvm 0644 "$NOARGS" "$DEVICE_PATH/scummvm.noargs" \
-        || { log_error "staging failed: scummvm.noargs"; exit 1; }
-    rm -f "$NOARGS"
 
     # Theme and GUI data.  Without scummremastered.zip ScummVM falls back to the
     # green wireframe UI, which looks like a broken install rather than a missing
