@@ -1019,8 +1019,8 @@ fire in a file of the same kind, or the scan goes blind where it used to see.
 
 **Design.** One program whose first screen is a **paged icon grid** (paging, not scrolling; 3x2
 landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_launcher` also uses. Config
-"apps" exist only inside it, never as launcher tiles. Each icon opens an in-process page module with BACK
-to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
+"apps" exist only inside it, never as launcher tiles. Each icon opens a page from the static registry below,
+with BACK to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
 processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
 disappears. Reset-to-defaults stays in the control panel.
 
@@ -1077,14 +1077,32 @@ and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons ope
 **moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
 one by one as stage 2 progresses, never in bulk.
 
-**Stage 2 has begun: LED is done** (verified on .188 by finger, 2026-09-30). The LED icon opens its own
-in-process page, `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no
-SAVE), and the six LED tests (red, green, both, pulse, blink, colors) run full-screen. Settings lost its LED
-block (its global RESET DEFAULTS still resets the LED keys) and the Tests tab is down to five: backlight,
-touch zone, display, audio, multi-touch. **The pattern the next pages reuse:** a page is an `ActiveTab`
-value past `TAB_HOME` with no tab button; its bar shows BACK plus the title taken from its home tile's
-label (`is_page()` / `page_title()` in `control_panel.c`); shared drawing helpers live in
-`control_panel/cp_ui.h`; the page prints its own `control_panel: <page> stack fits` receipt.
+**Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
+`native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
+LED tests run full-screen. Settings lost its LED block and the Tests tab is down to five: backlight, touch
+zone, display, audio, multi-touch. LED is **being converted** to the registry below, the first page to be.
+
+**Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
+Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
+`native_apps/control_panel/cp_page.h`: a `name` (tile label and page title, one name), an icon, and the
+functions `load`, `layout` (rects plus the page's `control_panel: <page> stack fits` receipt), `enter`,
+`leave`, `draw`, `input` (returns idle, redraw or fullscreen), `run_fullscreen` and `reset_defaults` (the
+global RESET DEFAULTS calls it on every page). Each page module exports one `const CpPage`; the home grid's
+table holds pointers to them and `control_panel.c` holds no per-page code. Adding a page = one file + one
+table row. Shared drawing helpers stay in `control_panel/cp_ui.h`.
+
+**Considered and rejected for now:** separate executables in a launcher "folder" (init respawns the
+launcher, not the folder, so the return path breaks; and every tap re-inits fb, touch and config), and
+`dlopen`'d `.so` plugins (no out-of-tree consumer exists: Bluetooth is built in `native_apps`, `usb_host`'s
+UI already lives in the control panel, VNC and ScummVM keep their settings in-app).
+
+**Deferred, operator-rated nice-to-have:** `dlopen` `CpPage` modules from a directory, taken up once the
+registry is proven (LED converted plus at least one more page working on the panel), or earlier if a page
+must be built outside `native_apps`. It must meet: an ABI version field in `CpPage`, refused on mismatch (a stale
+plugin must not load against a newer panel: the silent-misparse class of the touch config); a plugin crash
+takes the control panel down (init respawns the launcher) — accepted; shared helpers exported
+(`-rdynamic` or a shared common lib); `check-arm-safe.sh` scanning the `.so` files; deploy and the offline
+bundle carrying them.
 
 **Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting duplicates
 inside `control_panel` as they land; (3) Bluetooth page on the BlueZ backend.
