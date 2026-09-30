@@ -140,7 +140,8 @@ typedef enum {
 
 typedef enum {
     CONFIRM_NONE,
-    CONFIRM_RESET_GEOMETRY   /* Display tab: touch range + edges to defaults */
+    CONFIRM_RESET_GEOMETRY,  /* Display tab: touch range + edges to defaults */
+    CONFIRM_PAGE             /* a page's cp_confirm(): its on_ok runs on OK */
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
@@ -265,7 +266,24 @@ static Button calib_start_btn;      /* full wizard   */
 static Button calib_bezel_btn;      /* margins only  */
 static Button calib_factory_btn;    /* escape hatch: back to hardware defaults */
 static Button calib_diag_btn;       /* hands off to /opt/games/touch_raw */
-static ModalDialog calib_factory_dialog;
+
+/* The panel's one confirmation dialog: the Display tab's RESET SCREEN GEOMETRY
+ * and any page's cp_confirm() (cp_page.h) open this same instance.  While
+ * confirm_action is not CONFIRM_NONE main() draws it over everything and routes
+ * all input to it — the tab bar and the page included, so BACK under the
+ * overlay cannot leave the page with the question still open. */
+static ModalDialog  confirm_dialog;
+static CpConfirmFn  confirm_on_ok;   /* CONFIRM_PAGE: run on OK, then NULL */
+
+static void confirm_open(AppState *state, ConfirmAction action, const char *title,
+                         const char *message, const char *ok_text, CpConfirmFn on_ok) {
+    modal_dialog_init_confirm(&confirm_dialog, title, message,
+                              ok_text, BTN_COLOR_DANGER,
+                              "CANCEL", RGB(100, 100, 100));
+    modal_dialog_show(&confirm_dialog);
+    confirm_on_ok = on_ok;
+    state->confirm_action = action;
+}
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * Shared Drawing Helpers
@@ -938,6 +956,12 @@ void cp_status(const char *msg, bool ok) {
     g_state->status_ok      = ok;
 }
 
+void cp_confirm(const char *title, const char *message, const char *ok_text,
+                CpConfirmFn on_ok) {
+    if (!g_state) return;
+    confirm_open(g_state, CONFIRM_PAGE, title, message, ok_text, on_ok);
+}
+
 int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
     AppState *state = g_state;
     char where[200];   /* config_backup() writes a path of up to 168 bytes */
@@ -1549,11 +1573,6 @@ static void create_display_ui(AppState *state) {
         button_init_full(&disp_reset_btn, center_x + 10, ay, 180, 40, "RESET DEFAULTS",
                          BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
     }
-
-    modal_dialog_init_confirm(&calib_factory_dialog, "RESET SCREEN GEOMETRY?",
-                              "TOUCH RANGE AND EDGES GO BACK TO DEFAULTS.",
-                              "RESET", BTN_COLOR_DANGER,
-                              "CANCEL", RGB(100, 100, 100));
 }
 
 /* The screen area the digitiser can actually reach, in LOGICAL pixels — what an
@@ -1697,8 +1716,8 @@ static void handle_display_input(AppState *state, int tx, int ty,
     else if (button_update(&calib_diag_btn, tx, ty, touching, now))
         state->calib_sub = CALIB_RUN_DIAG;
     else if (button_update(&calib_factory_btn, tx, ty, touching, now)) {
-        state->confirm_action = CONFIRM_RESET_GEOMETRY;
-        modal_dialog_show(&calib_factory_dialog);
+        confirm_open(state, CONFIRM_RESET_GEOMETRY, "RESET SCREEN GEOMETRY?",
+                     "TOUCH RANGE AND EDGES\nGO BACK TO DEFAULTS.", "RESET", NULL);
     }
 
     if (button_update(&disp_save_btn, tx, ty, touching, now)) {
@@ -2743,8 +2762,8 @@ int main(void) {
             }
 
             /* Draw confirmation dialog overlay on top of everything */
-            if (state.confirm_action == CONFIRM_RESET_GEOMETRY) {
-                modal_dialog_draw(&calib_factory_dialog, &fb);
+            if (state.confirm_action != CONFIRM_NONE) {
+                modal_dialog_draw(&confirm_dialog, &fb);
             }
 
             fb_swap(&fb);
@@ -2785,12 +2804,21 @@ int main(void) {
         /* When confirmation dialog is active, only handle dialog input */
         if (state.confirm_action != CONFIRM_NONE) {
             ModalDialogAction action =
-                modal_dialog_update(&calib_factory_dialog, tx, ty, touching, now);
-            if (action == MODAL_ACTION_BTN0) {
+                modal_dialog_update(&confirm_dialog, tx, ty, touching, now);
+            if (action == MODAL_ACTION_BTN0 &&
+                state.confirm_action == CONFIRM_RESET_GEOMETRY) {
                 display_reset_geometry(&state, &touch, now);
                 state.confirm_action = CONFIRM_NONE;
                 rebuild_ui(&state);   /* the bezel just changed the logical size */
+            } else if (action == MODAL_ACTION_BTN0) {
+                /* Cleared first: on_ok may itself open another question. */
+                CpConfirmFn on_ok = confirm_on_ok;
+                confirm_on_ok = NULL;
+                state.confirm_action = CONFIRM_NONE;
+                if (on_ok) on_ok(&state.cfg);
+                state.page_dirty = true;
             } else if (action == MODAL_ACTION_BTN1) {
+                confirm_on_ok = NULL;
                 state.confirm_action = CONFIRM_NONE;
             }
         } else if (state.active_tab == TAB_HOME) {

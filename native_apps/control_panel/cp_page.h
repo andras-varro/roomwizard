@@ -70,6 +70,19 @@ extern const CpPage cp_usb_page;       /* usb_page.c */
  * once more when it expires; the page need not return CP_PAGE_REDRAW for it. */
 void cp_status(const char *msg, bool ok);
 
+/* Asks before doing something: the panel's one confirmation dialog (the
+ * Display tab's reset uses it too), ok_text and CANCEL side by side, drawn
+ * over the whole screen.  While it is up it takes all input — the title bar's
+ * BACK and the page's input() included.  OK calls on_ok with the panel's
+ * Config and repaints the page; CANCEL does nothing.  Returns at once: call it
+ * from input() and return CP_PAGE_IDLE, the dialog appearing repaints.
+ * Common's ModalDialog fixes the box at 420x200 px, which fits the 421 px
+ * portrait width; title is scale 3 (at most 22 characters to fit), message
+ * scale 2 (at most 33 a line), and a '\n' in message starts a second line. */
+typedef void (*CpConfirmFn)(Config *cfg);
+void cp_confirm(const char *title, const char *message, const char *ok_text,
+                CpConfirmFn on_ok);
+
 /* The global RESET DEFAULTS, pressed on the Information page.  First copies
  * the config file to a timestamped "<path>.bak-YYYYmmdd-HHMMSS" beside it; if
  * that copy fails nothing is reset and -1 comes back.  Otherwise it clears

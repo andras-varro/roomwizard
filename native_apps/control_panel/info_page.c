@@ -14,7 +14,8 @@
  * global RESET DEFAULTS, beside the config file's row because the file is what
  * it backs up before resetting; the reset itself is control_panel.c's
  * (cp_reset_all_defaults()), and where the backup went is posted with
- * cp_status().  It has no confirm step, as it had none on the Settings tab.
+ * cp_status().  It asks first, through the panel's one confirmation dialog
+ * (cp_confirm()); nothing is backed up or reset until OK.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
@@ -317,17 +318,27 @@ static void info_page_draw(Framebuffer *fb) {
     }
 }
 
-/* RESET DEFAULTS is the only thing here that changes anything.  The config
- * list is re-read after it, because a page's reset_defaults() rewrites the
- * file this page lists; the button's own look is button_take_dirty()'s. */
-static CpPageResult info_page_input(Config *cfg, int tx, int ty,
-                                    bool touching, uint32_t now) {
-    if (!button_update(&reset_btn, tx, ty, touching, now)) return CP_PAGE_IDLE;
+/* OK on the confirmation.  The config list is re-read after the reset, because
+ * a page's reset_defaults() rewrites the file this page lists; the panel
+ * repaints the page after an OK. */
+static void info_reset_confirmed(Config *cfg) {
     char msg[160];
     int rc = cp_reset_all_defaults(cfg, msg, sizeof(msg));
     cp_status(msg, rc == 0);
     info_read();
-    return CP_PAGE_REDRAW;
+}
+
+/* RESET DEFAULTS is the only thing here that changes anything, and it asks
+ * first.  The dialog appearing is the repaint; the button's own look is
+ * button_take_dirty()'s. */
+static CpPageResult info_page_input(Config *cfg, int tx, int ty,
+                                    bool touching, uint32_t now) {
+    (void)cfg;
+    if (button_update(&reset_btn, tx, ty, touching, now))
+        cp_confirm("RESET DEFAULTS?",
+                   "BACKLIGHT, LED AND AUDIO SETTINGS\nTOUCH CALIBRATION IS KEPT",
+                   "OK", info_reset_confirmed);
+    return CP_PAGE_IDLE;
 }
 
 const CpPage cp_info_page = {

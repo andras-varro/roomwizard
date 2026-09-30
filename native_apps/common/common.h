@@ -500,7 +500,7 @@ typedef enum {
 typedef struct {
     bool active;
     char title[64];
-    char message[128];        /* Optional description line */
+    char message[128];        /* Optional description; "\n" starts a new line */
     uint8_t overlay_alpha;    /* 0=no overlay, 160-180=typical */
     int dialog_width;
     int dialog_height;

@@ -689,10 +689,24 @@ void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb) {
                            dlg->title_color, 3);
     }
 
-    /* Message text — centered, scale 2 */
+    /* Message text — centered, scale 2.  fb_draw_text() does not break on
+     * '\n', so each line is drawn here, the block centred on dy + 90 (a
+     * one-line message lands exactly where it always did), 22 px apart. */
     if (dlg->message[0]) {
-        text_draw_centered(fb, fb->width / 2, dy + 90, dlg->message,
-                           dlg->message_color, 2);
+        int lines = 1;
+        for (const char *p = dlg->message; *p; p++) if (*p == '\n') lines++;
+        int y = dy + 90 - (lines - 1) * 11;
+        const char *line = dlg->message;
+        while (line) {
+            const char *nl = strchr(line, '\n');
+            char buf[sizeof(dlg->message)];
+            size_t n = nl ? (size_t)(nl - line) : strlen(line);
+            memcpy(buf, line, n);
+            buf[n] = '\0';
+            text_draw_centered(fb, fb->width / 2, y, buf, dlg->message_color, 2);
+            y += 22;
+            line = nl ? nl + 1 : NULL;
+        }
     }
 
     /* Position and draw buttons */
