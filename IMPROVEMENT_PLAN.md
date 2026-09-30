@@ -1039,7 +1039,8 @@ landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_laun
 "apps" exist only inside it, never as launcher tiles. Each icon opens a page from the static registry below,
 with BACK to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
 processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
-disappears. Reset-to-defaults stays in the control panel.
+disappears. **Reset-to-defaults (operator decision 2026-09-30)** moves to the Information page beside CONFIG →
+FILE, and writes a backup copy of the config file first; the page shows where the backup went.
 
 `icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
 exits; `app_launcher`'s X (or Back/Escape) opens Shutdown / Reboot / Cancel, now the only home of both —
@@ -1135,6 +1136,41 @@ add/remove one by one, all three testers return to the USB page, BACK. The opera
 list stale on opening (the startup reading was kept until RESCAN); `enter()` now rescans, read only, and the
 re-probe stays on an explicit empty RESCAN. **Pending:** the operator's re-tap of that fix. **Not seen:** the
 "+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
+
+**Remaining work, ordered single-commit jobs** (`control_panel.c` line refs are approximate as of `ce86df7`:
+re-grep). Today's global RESET DEFAULTS (Settings tab, ~:878-903) runs `config_clear`, resets the audio values,
+calls every page's `reset_defaults` and resets and applies the backlight; it leaves `/etc/touch_calibration.conf`
+alone. The Display tab has a second, Display-only reset (backlight + portrait): **proposal, not decided** — it
+goes, since the global one covers it and the Display page saves on change.
+
+- **J0.** RESET DEFAULTS onto Information (+ backup, above), and a status line `CpPage`s can use (`status_msg`/
+  `status_time_ms` live in `AppState`, drawn only by the Settings/Display tabs and the wizard). Before J1, which
+  deletes the Settings tab holding the button.
+- **J1.** `audio_page.c`: Settings tab (~522-898 minus `apply_backlight`) plus the Tests tab's tone sweep
+  (`test_audio_diag` ~1215, whose comments `check-audio-pacing.sh` greps). Save on change. Risks: `audio_pump`
+  runs every main-loop iteration and the loop's sleep depends on `audio_pump_active` (needs a per-iteration page
+  hook; `input()` is already called every iteration); the `prev_out_usb` DAC watch becomes a page REDRAW;
+  `set_view`'s audio-bus open/close hack moves to enter/leave; the Display tab writes `saved_audio_device_idx`
+  (~1604, 1633) — drop. Mix Bus Test under Audio is a later separate job.
+- **J2.** `display_page.c`: backlight bar, portrait toggle (+ "ON NEXT LAUNCH" note), VISIBLE row,
+  `apply_backlight`, Tests' backlight ramp (`test_backlight_run` ~958) and display patterns (`test_display`
+  ~1104-1212). Save on change. The Touch half stays on a leftover `TAB_DISPLAY` until J3a; the `disp_*` layout
+  helpers are shared, so split carefully.
+- **J3a.** `touch_page.c`: CALIBRATE, SCREEN EDGES, TOUCH DIAGNOSTIC, RESET GEOMETRY (+ confirm modal), rows
+  TOUCH: CALIBRATED, EDGES, TOUCHABLE, `run_touch_diagnostic`, Tests' touch zone and multi-touch (`TZ_*`).
+  Deletes `TAB_DISPLAY`. Risks: `main()` draws and handles the confirm modal before page input (needs a `CpPage`
+  path, or confirm inside `run_fullscreen`); after the wizard the panel must `rebuild_ui` (logical screen can
+  change) — rebuild after any full-screen run, or add a hook; the page reads `fb->portrait_mode` itself (the
+  wizard refuses in portrait).
+- **J3b.** `run_calib_wizard` and helpers (~1650-2440) moved verbatim into `touch_wizard.c` behind
+  `(fb, touch, edges_only)` → status string, removing its `AppState` use. Folding `touch_trace`/`touch_raw`
+  stays an operator question; do not widen J3.
+- **J4.** Delete the Tests tile and `TAB_TESTS` machinery (keep `draw_test_screen` and `check_touch`, which
+  `led_page` and the moved tests use); collapse `tab`/`set_view`/`ActiveTab` to HOME vs PAGE.
+
+Every job that deletes a tab also deletes its `home_items` row target, `main()`'s dispatch cases, `rebuild_ui`
+calls and `prev_*` terms. Sizing: a page move that also deletes a large tab has run 154-155k against 120-130k
+worker caps, so J1 and J3a may need splitting.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
