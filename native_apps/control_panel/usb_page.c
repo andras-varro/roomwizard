@@ -806,7 +806,6 @@ static void draw_usb_pad(Framebuffer *fb, UsbState *s) {
 
 /* ── Input ──────────────────────────────────────────────────────────────── */
 
-/* Startup's reading of the bus, which the list shows until RESCAN. */
 static void usb_page_load(const Config *cfg) {
     (void)cfg;
     UsbState *s = &usb_state;
@@ -814,6 +813,14 @@ static void usb_page_load(const Config *cfg) {
     s->fd_cnt = 0;
     s->last_dev = -1;
     usb_scan_devices(s);
+}
+
+/* Every opening reads the bus afresh: a reading kept from startup listed
+ * devices unplugged since, until RESCAN.  Only a read — the port re-probe
+ * stays on an explicit RESCAN that finds nothing. */
+static void usb_page_enter(void) {
+    usb_state.status_msg[0] = '\0';
+    usb_scan_devices(&usb_state);
 }
 
 /* Main screen only: a tester or a port re-probe is queued here and run by
@@ -950,6 +957,7 @@ const CpPage cp_usb_page = {
     .icon           = "cp_usb",
     .load           = usb_page_load,
     .layout         = usb_page_layout,
+    .enter          = usb_page_enter,
     .draw           = usb_page_draw,
     .input          = usb_page_input,
     .run_fullscreen = usb_page_run_fullscreen,
