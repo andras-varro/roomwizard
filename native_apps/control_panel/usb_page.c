@@ -6,9 +6,10 @@
  * keyboard, mouse and gamepad testers.  Exposed only as cp_usb_page
  * (cp_page.h); its state lives in this file.  It owns no config keys.
  *
- * A static bus costs nothing: the list is read at startup and on RESCAN, and
- * input() returns CP_PAGE_REDRAW only when that reading, or the status line
- * under it, changed.
+ * A static bus costs nothing: the list is read at startup, once per opening
+ * (after the page has painted, re-probing the port if it finds it empty, as
+ * RESCAN does) and on RESCAN, and input() returns CP_PAGE_REDRAW only when
+ * that reading, or the status line under it, changed.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
@@ -20,6 +21,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -110,7 +112,9 @@ typedef struct {
     KbdState     kbd;
     MouseSt      mou;
     PadSt        pad;
-    bool         recover_queued;       /* RESCAN found nothing: re-probe full-screen */
+    bool         scan_pending;         /* enter() painted first: input() scans */
+    bool         recover_queued;       /* a scan found nothing: re-probe full-screen */
+    bool         recover_once;         /* ...one attempt, not the script's default */
     char         status_msg[64];       /* a RESCAN result; "" = none */
     uint32_t     status_time_ms;
 } UsbState;
@@ -235,8 +239,13 @@ static void usb_close(UsbState *s);   /* defined below; used by the recovery pat
  *
  * ⚠️ It blocks for several seconds, and a rebind invalidates every open USB fd.
  * So paint a waiting screen first (the app is single-threaded and will not
- * repaint until this returns) and close our own fd on the way in. */
-static bool usb_recover_port(Framebuffer *fb, UsbState *s) {
+ * repaint until this returns) and close our own fd on the way in.
+ *
+ * once = a single rebind attempt (RECOVER_TRIES=1, the script's own knob)
+ * instead of its default retries.  Opening the page asks for one, because it
+ * runs on every opening that finds the socket empty and an empty socket
+ * exhausts every attempt; RESCAN is an explicit ask and keeps the retries. */
+static bool usb_recover_port(Framebuffer *fb, UsbState *s, bool once) {
     if (access(USB_HOST_INIT, X_OK) != 0) {
         snprintf(s->status_msg, sizeof(s->status_msg),
                  "USB-HOST SCRIPT NOT INSTALLED");
@@ -262,6 +271,7 @@ static bool usb_recover_port(Framebuffer *fb, UsbState *s) {
         return false;
     }
     if (pid == 0) {
+        if (once) setenv("RECOVER_TRIES", "1", 1);
         execl(USB_HOST_INIT, "usb-host", "recover", (char *)NULL);
         _exit(127);
     }
@@ -549,7 +559,11 @@ static void usb_page_draw(Framebuffer *fb) {
     fb_draw_rounded_rect(fb, lx, ly, lw, lh, 6, USB_COLOR_PANEL_BD);
     fb_draw_text(fb, lx+12, ly+10, "DETECTED USB DEVICES:", USB_COLOR_HDR, 2);
 
-    if (s->bus_cnt==0) {
+    if (s->scan_pending) {
+        /* enter() painted first; the next input() scans (usb_page_enter()). */
+        text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2,
+                           "SCANNING...", USB_COLOR_DIM, 2);
+    } else if (s->bus_cnt==0) {
         text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2-10,
                            "NO USB DEVICES DETECTED", USB_COLOR_DIM, 2);
         /* A recovery attempt that found nothing must not look identical to one
@@ -815,12 +829,24 @@ static void usb_page_load(const Config *cfg) {
     usb_scan_devices(s);
 }
 
+/* An empty scan is the dead-port signature: when the port is unpowered NOTHING
+ * enumerates, so finding nothing is exactly when a re-probe is worth its few
+ * seconds.  If something is already listed the port is live, and a device
+ * plugged in later enumerates on its own (measured on .188 across gaps of
+ * 70-300 s) — so do not disturb a working bus.  A hub alone counts as empty:
+ * that is how a dead port looks behind one.  RESCAN and opening the page both
+ * decide by this, so the page does on opening what RESCAN would do. */
+static bool usb_port_looks_dead(const UsbState *s) {
+    return usb_bus_peripherals(s->bus, s->bus_cnt) == 0;
+}
+
 /* Every opening reads the bus afresh: a reading kept from startup listed
- * devices unplugged since, until RESCAN.  Only a read — the port re-probe
- * stays on an explicit RESCAN that finds nothing. */
+ * devices unplugged since, until RESCAN.  Not here, though — the scan takes a
+ * second or two and the page would not paint until it returned.  enter() only
+ * marks it pending; draw() shows SCANNING and the next input() scans. */
 static void usb_page_enter(void) {
     usb_state.status_msg[0] = '\0';
-    usb_scan_devices(&usb_state);
+    usb_state.scan_pending = true;
 }
 
 /* Main screen only: a tester or a port re-probe is queued here and run by
@@ -831,6 +857,21 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
     (void)cfg;
     UsbState *state = &usb_state;
     CpPageResult act = CP_PAGE_IDLE;
+
+    /* The opening scan, one call after enter(): the page has painted SCANNING
+     * by now.  An empty reading queues the same re-probe RESCAN would, once
+     * per opening — enter() is the only thing that sets scan_pending — and
+     * with one attempt, not three (usb_recover_port()). */
+    if (state->scan_pending) {
+        state->scan_pending = false;
+        usb_scan_devices(state);
+        if (usb_port_looks_dead(state)) {
+            state->recover_queued = true;
+            state->recover_once = true;
+            return CP_PAGE_FULLSCREEN;
+        }
+        return CP_PAGE_REDRAW;
+    }
 
     if (state->status_msg[0] && now - state->status_time_ms > STATUS_MS) {
         state->status_msg[0] = '\0';
@@ -843,15 +884,9 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
         int prev_bus_cnt = state->bus_cnt, prev_dev_cnt = state->dev_cnt;
         memcpy(prev_bus, state->bus, sizeof(prev_bus));
         usb_scan_devices(state);
-        /* An empty scan is the dead-port signature: when the port is unpowered
-         * NOTHING enumerates, so finding nothing is exactly when a re-probe is
-         * worth its few seconds. If something is already listed the port is live,
-         * and a device plugged in later enumerates on its own (measured on .188
-         * across gaps of 70-300 s) — so do not disturb a working bus. A hub
-         * alone counts as empty: that is how a dead port looks behind one.
-         * The re-probe blocks, so it runs full-screen. */
-        if (usb_bus_peripherals(state->bus, state->bus_cnt) == 0) {
+        if (usb_port_looks_dead(state)) {
             state->recover_queued = true;
+            state->recover_once = false;
             return CP_PAGE_FULLSCREEN;
         }
         if (state->bus_cnt != prev_bus_cnt || state->dev_cnt != prev_dev_cnt ||
@@ -897,7 +932,7 @@ static void usb_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     UsbState *state = &usb_state;
     if (state->recover_queued) {
         state->recover_queued = false;
-        usb_recover_port(fb, state);
+        usb_recover_port(fb, state, state->recover_once);
         return;
     }
     if (state->scr == USB_SCR_MOUSE) {
