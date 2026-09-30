@@ -29,7 +29,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `control_panel` | Tool | **Unified hardware app** — the one you want. Home icon grid; tabs: Settings, Tests, Display, USB; pages: LED, Monitor, Network, Information |
+| `control_panel` | Tool | **Unified hardware app** — the one you want. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
 | `hardware_config` | Tool | Settings GUI — superseded by `control_panel` (hidden) |
@@ -40,7 +40,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 
 Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH.
 `usb_test` exists as source but is **not built or deployed** — USB
-testing lives in the `control_panel` USB tab. The system `/usr/sbin/watchdog` daemon handles the
+testing lives in the `control_panel` USB page. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
 The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
@@ -58,7 +58,7 @@ separate GUI utilities behind a tab bar:
 | *(none)* | `hardware_diag` | The Diagnostics tab is gone: Monitor, Network and Information are icon pages (`control_panel/*_page.c`). |
 | **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
 | **Display** | a retired standalone calibration tool | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
-| **USB** | `usb_test` | Keyboard, mouse and gamepad visualisation for attached USB devices. |
+| *(none)* | `usb_test` | The USB tab is gone: USB is an icon page (`control_panel/usb_page.c`) with the device list, RESCAN, and keyboard, mouse and gamepad testers. |
 
 #### The Display tab and the calibration wizard
 

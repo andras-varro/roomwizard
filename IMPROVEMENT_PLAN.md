@@ -844,6 +844,14 @@ unreliable; the fact and its measurement live in
 wall-clock seconds × `CONFIG_HZ`. **Done when** the graph on .188 reads near zero on an idle panel and
 rises under a known load (a `yes > /dev/null` over SSH), which also checks the denominator.
 
+### F105. Auto-rescan on the USB page while it is open — open, operator idea 2026-09-30, later
+
+The USB page (C16) re-reads the bus only on opening and on RESCAN. Add a periodic re-read while it is open,
+repainting only when the list changes, as Network's 2 s change detection does. ⚠️ **Constraint: the
+automatic path must only READ.** The MUSB port re-probe blocks for a few seconds and stays on an explicit
+RESCAN. **Done when** a device plugged in or pulled on .188 appears or disappears on the open page within
+the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted.
+
 ## Structural and cleanup
 
 ### C1. Extract the shared evdev layer — open, classifier and scan done
@@ -1077,8 +1085,8 @@ diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
 launcher frame md5-identical). Audio opens Settings; Display and Touch open Display; USB opens USB;
-Network, Information and Monitor open their own `CpPage`s (below); the Diagnostics tab no longer exists, so the tab bar is
-SETTINGS/TESTS/DISPLAY/USB. Audio (Settings tab), Display and Touch (Display tab) and USB (USB tab) still open the old
+Network, Information, Monitor and USB open their own `CpPage`s (below); the Diagnostics and USB tabs no longer exist, so the tab bar is
+SETTINGS/TESTS/DISPLAY. Audio (Settings tab) and Display and Touch (Display tab) still open the old
 tabs. Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
@@ -1118,6 +1126,16 @@ Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, with
 Information has no `calibrated?` row by the operator's decision: the Display tab's TOUCH: CALIBRATED row is
 its home.
 
+**USB is a `CpPage` too** (`control_panel/usb_page.c` exports `cp_usb_page`; the USB tab is deleted): device
+list read through `usb_bus.c`, RESCAN plus the port re-probe as a full-screen run, and the keyboard, mouse and
+pad testers. The list shows as many rows as fit, then "+N MORE" (the old tab silently stopped at 6 while .188
+has 7); buttons sit 2x2 in portrait. Receipts measured on .188, bottom margin of CONTENT_H: landscape
++360/375, portrait +726/741 (3 names cut). Operator taps passed: tab bar, list, idle with no flicker, rescan
+add/remove one by one, all three testers return to the USB page, BACK. The operator's negative test found the
+list stale on opening (the startup reading was kept until RESCAN); `enter()` now rescans, read only, and the
+re-probe stays on an explicit empty RESCAN. **Pending:** the operator's re-tap of that fix. **Not seen:** the
+"+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
+
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
 `native_apps/control_panel/cp_page.h`: a `name` (tile label and page title, one name), an icon, and the
@@ -1143,8 +1161,7 @@ bundle carrying them.
 **Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting duplicates
 inside `control_panel` as they land; (3) Bluetooth page on the BlueZ backend.
 
-**Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
-550 px button row overflows a ~400 px portrait content width (`control_panel.c` ~3549-3553); the Mix Bus
+**Portrait defects to fix on the way:** the Mix Bus
 Test's portrait layout is B44. The tab bar fits at most five tabs in portrait (60 px floor against
 the X button), which is what motivated the grid.
 
