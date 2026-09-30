@@ -130,6 +130,15 @@ bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_ti
 // tests/button_latch_test.c).
 bool button_check_tap(Button *btn, const TouchState *ts, uint32_t current_time_ms);
 
+// Has ANY button's visual_state been changed by button_update() or
+// button_check_press() since the last call?  Clears the flag.  One process-wide
+// question, so a caller that repaints only on change asks it once per loop
+// iteration without enumerating the buttons its pages own.  It goes quiet once
+// the buttons settle (quiet frames change nothing), so it is never an
+// always-true repaint term.  A caller that writes visual_state directly (focus
+// rings) owns that change and repaints for it itself.
+bool button_take_dirty(void);
+
 // ============================================================================
 // RENDERING
 // ============================================================================

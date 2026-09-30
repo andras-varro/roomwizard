@@ -277,10 +277,30 @@ bool button_is_touched(Button *btn, int touch_x, int touch_y) {
             touch_y >= btn->y && touch_y < btn->y + btn->height);
 }
 
+/* Set when button_update()/button_check_press() move any button's visual_state;
+ * read-and-cleared by button_take_dirty().  A caller that repaints only on
+ * change cannot otherwise see these moves: a release frame the caller did not
+ * receive (a full-screen run consumed it), or a slide-off while held, changes
+ * the look with no touch edge to trigger a repaint. */
+static bool button_look_changed = false;
+
+static void button_set_look(Button *btn, ButtonVisualState s) {
+    if (btn->visual_state != s) {
+        btn->visual_state = s;
+        button_look_changed = true;
+    }
+}
+
+bool button_take_dirty(void) {
+    bool changed = button_look_changed;
+    button_look_changed = false;
+    return changed;
+}
+
 bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint32_t current_time_ms) {
     if (btn->disabled) {                // no press, no highlight, latch cleared
         btn->was_pressed = false;
-        btn->visual_state = BTN_STATE_NORMAL;
+        button_set_look(btn, BTN_STATE_NORMAL);
         return false;
     }
     bool is_touched = button_is_touched(btn, touch_x, touch_y);
@@ -293,23 +313,23 @@ bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint
             if (current_time_ms - btn->last_press_time_ms > btn->debounce_ms) {
                 btn->was_pressed = true;
                 btn->last_press_time_ms = current_time_ms;
-                btn->visual_state = BTN_STATE_PRESSED;
+                button_set_look(btn, BTN_STATE_PRESSED);
                 pressed = true;
             }
         } else {
-            btn->visual_state = BTN_STATE_PRESSED;
+            button_set_look(btn, BTN_STATE_PRESSED);
         }
     } else if (is_touching && !is_touched) {
         // Touch is elsewhere
-        btn->visual_state = BTN_STATE_NORMAL;
+        button_set_look(btn, BTN_STATE_NORMAL);
     } else {
-        // No touch
+        // No touch.  NORMAL even when the retained x/y are on the button: a
+        // touchscreen has no hover, and touch_input leaves x/y at the last
+        // point after release, so a "hover" look here only ever meant "tapped
+        // last" and stuck yellow until a tap elsewhere.  Keyboard focus rings
+        // write visual_state themselves at draw time, never through here.
         btn->was_pressed = false;
-        if (is_touched) {
-            btn->visual_state = BTN_STATE_HIGHLIGHTED;
-        } else {
-            btn->visual_state = BTN_STATE_NORMAL;
-        }
+        button_set_look(btn, BTN_STATE_NORMAL);
     }
     
     return pressed;
@@ -319,7 +339,7 @@ bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_ti
     // Legacy API for compatibility with existing games
     if (btn->disabled) {
         btn->was_pressed = false;
-        btn->visual_state = BTN_STATE_NORMAL;
+        button_set_look(btn, BTN_STATE_NORMAL);
         return false;
     }
     if (currently_pressed) {
@@ -329,20 +349,20 @@ bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_ti
                 // Leading edge — fire and highlight briefly this frame
                 btn->was_pressed = true;
                 btn->last_press_time_ms = current_time_ms;
-                btn->visual_state = BTN_STATE_HIGHLIGHTED;
+                button_set_look(btn, BTN_STATE_HIGHLIGHTED);
                 return true;
             }
             // Still within debounce window from a previous bounce — look normal
-            btn->visual_state = BTN_STATE_NORMAL;
+            button_set_look(btn, BTN_STATE_NORMAL);
         } else {
             // Already fired; finger still down — show normal so button never
             // appears stuck/yellow. Resets to was_pressed=false on release.
-            btn->visual_state = BTN_STATE_NORMAL;
+            button_set_look(btn, BTN_STATE_NORMAL);
         }
     } else {
         // Finger lifted — ready for next press
         btn->was_pressed = false;
-        btn->visual_state = BTN_STATE_NORMAL;
+        button_set_look(btn, BTN_STATE_NORMAL);
     }
 
     return false;

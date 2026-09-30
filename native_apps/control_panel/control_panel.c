@@ -3552,8 +3552,13 @@ int main(void) {
          * startup, never cleared) once repainted every iteration, ~40 % CPU
          * sitting on the static home grid.  The touch edges are the widgets'
          * pressed/released feedback, which lives in each Button, not in
-         * AppState. */
-        if (ts.pressed || ts.released                ||
+         * AppState; button_take_dirty() is the rest of it — a button whose look
+         * moved with no edge here (a slide-off while held, a release consumed
+         * by a full-screen run).  It is not always-true: it reports a change
+         * of visual_state, and settled buttons change nothing.  Read into a
+         * local first so the || chain cannot short-circuit past the clear. */
+        bool btn_look = button_take_dirty();
+        if (ts.pressed || ts.released || btn_look    ||
             prev_tab       != state.active_tab     ||
             prev_audio     != state.audio_enabled   ||
             prev_music     != state.music_enabled   ||

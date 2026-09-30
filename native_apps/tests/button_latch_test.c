@@ -172,6 +172,67 @@ int main(void) {
         check(b.was_pressed == false, "and does not set the latch");
     }
 
+    /* F: a caller that repaints only on change must learn when a button's
+     * look changed.  Reported from the panel 2026-09-30 once control_panel
+     * stopped repainting every iteration: a button tapped last stayed yellow
+     * (the no-finger branch kept it HIGHLIGHTED from the retained x/y), and a
+     * button whose press launched a full-screen run came back PRESSED.  Both
+     * are button_update() moving visual_state with nobody told. */
+    printf("\n=== F. button_update: stale look after release (must be NORMAL + reported) ===\n");
+    {
+        Button b; make_button(&b);
+        now = 600000;
+        (void)button_take_dirty();                  /* start from a clean flag */
+
+        check(button_update(&b, IN_X, IN_Y, true, now), "press fires");
+        check(b.visual_state == BTN_STATE_PRESSED, "held: PRESSED");
+        check(button_take_dirty(), "press is reported as a look change");
+
+        /* Finger lifts; x/y stay on the button, as touch_input leaves them. */
+        (void)button_update(&b, IN_X, IN_Y, false, now + 10);
+        check(b.visual_state == BTN_STATE_NORMAL,
+              "released with retained x/y on the button: NORMAL, not hover-yellow");
+        check(button_take_dirty(), "release is reported as a look change");
+
+        /* The negative control on the flag: quiet frames change nothing, so a
+         * repaint test built on it must not become always-true. */
+        for (int i = 0; i < 5; i++)
+            (void)button_update(&b, IN_X, IN_Y, false, now + 20 + i);
+        check(!button_take_dirty(), "quiet frames report nothing (not always-true)");
+    }
+    {
+        /* The LED-test shape: press, the frame is consumed by a full-screen
+         * run (no release frame reaches this button), then quiet frames. */
+        Button b; make_button(&b);
+        now = 700000;
+        (void)button_update(&b, IN_X, IN_Y, true, now);
+        (void)button_take_dirty();                  /* the press frame was painted */
+        (void)button_update(&b, IN_X, IN_Y, false, now + 3000);
+        check(b.visual_state == BTN_STATE_NORMAL, "after a consumed release: NORMAL");
+        check(button_take_dirty(), "and reported, so the page repaints it hollow");
+    }
+    {
+        /* Slide off while held: PRESSED -> NORMAL with no press/release edge. */
+        Button b; make_button(&b);
+        now = 800000;
+        (void)button_update(&b, IN_X, IN_Y, true, now);
+        (void)button_take_dirty();
+        (void)button_update(&b, OUT_X, OUT_Y, true, now + 10);
+        check(b.visual_state == BTN_STATE_NORMAL, "slid off while held: NORMAL");
+        check(button_take_dirty(), "slide-off is reported");
+    }
+    {
+        /* button_check_press's one-frame HIGHLIGHTED flash is a change too. */
+        Button b; make_button(&b);
+        now = 900000;
+        (void)button_take_dirty();
+        check(button_check_press(&b, true, now), "check_press fires");
+        check(button_take_dirty(), "check_press leading-edge flash is reported");
+        (void)button_check_press(&b, true, now + 10);
+        check(b.visual_state == BTN_STATE_NORMAL && button_take_dirty(),
+              "and its return to NORMAL is reported");
+    }
+
     printf("\n%s  %d checks, %d failure(s)\n",
            failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;
