@@ -835,7 +835,7 @@ the launcher's Shutdown either uses it or keeps halt plus backlight-off (C16).
 ### C1. Extract the shared evdev layer — open, classifier and scan done
 
 **Classifier + scan are one implementation, `common/input_scan.c`/`.h`**, called by `common/gamepad.c`
-(so every game), `control_panel`' USB testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
+(so every game), `control_panel` USB testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
 (`input_scan_with()` carries ScummVM's touchscreen name filter). Measured by host tests only
 (`input_scan_test`, `gamepad_latch_test`, 19 ctests passed 2026-09-29); on-device check pending.
 
@@ -1053,7 +1053,7 @@ which only `build-usb-test.sh` builds). Then delete the binaries `hardware_test`
 CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
 steps, deploy/marker references and README rows. `hardware_diag` is already hidden (its `.app` manifest
 is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
-fix its EXIT corner separately from `control_panel`'. Check page by page that no diag page holds a field
+fix its EXIT corner separately from `control_panel`. Check page by page that no diag page holds a field
 the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
 redundant: it moves under Audio and loses its launcher tile. **Tap-a-Theremin is an app, not a test tool,
 and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` stay hidden and are **not**
@@ -1065,9 +1065,19 @@ logging raw and calibrated samples; deployed hidden, SSH-only today. When the To
 it against the other touch tools in that row (edges, multi-touch test, touch zone grid, touch
 diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
-**Stages, each verified on the panel.** (1) a `control_panel` home grid on `common/icon_grid.c` (already
-extracted; the launcher frame measured md5-identical) whose icons open today's pages; (2) regroup one icon per commit, deleting the duplicate as it lands; (3) Bluetooth page on
-the BlueZ backend.
+**Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
+launcher frame md5-identical). Audio and LED open Settings; Display and Touch open Display; USB opens USB;
+Network, Monitor and Information open the Diagnostics pages Network, Memory and System. Tests is a letter
+tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
+BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
+and quit. The tap behaviour has not been exercised by a finger (operator checklist pending).
+
+**Operator decision 2026-09-30:** the app is named `control_panel`, and each tool that becomes a page
+**moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
+one by one as stage 2 progresses, never in bulk.
+
+**Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting the duplicate
+as it lands; (3) Bluetooth page on the BlueZ backend.
 
 **Portrait defects to fix on the way** [inferred from code, not screenshotted]: the USB tab's fixed
 550 px button row overflows a ~400 px portrait content width (`control_panel.c` ~3549-3553); the Mix Bus

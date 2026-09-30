@@ -447,7 +447,7 @@ gate form. It requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which
 
 **`common/touch_calib.c` is the only implementation of the fit.** It holds the target set, the interior
 masks, the per-axis verdict, the reach calculation, the edge-sweep accumulator (`TouchCalibSweep`,
-`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `control_panel`' Display wizard and the
+`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `control_panel`'s Display wizard and the
 `touch_raw` diagnostic both link it — which is what lets the diagnostic validate the code the wizard
 actually calibrates with. Do not write a second copy; there were three of the fit and two of the sweep, and
 they drifted.
@@ -648,7 +648,7 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   it is not quiet, it is absent. ⚠️ **Broadband is not the requirement**: chasing flatness instead cost a
   whole set that measured correct and sounded like noise.
 - ⚠️ **The MUSIC / EFFECTS toggles are enforced in the LIBRARY, so never re-check them in a game.**
-  `music_enabled` / `effects_enabled` (one writer: `control_panel`' SETTINGS tab, under `audio_enabled`) are
+  `music_enabled` / `effects_enabled` (one writer: `control_panel`'s SETTINGS tab, under `audio_enabled`) are
   read once by `audio_init()` and gate `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and
   `audio_music_start()` — a second check in a call site is a second place the rule drifts.
   `audio_music_enabled()` / `audio_effects_enabled()` exist to explain a silence in a log line, not to
