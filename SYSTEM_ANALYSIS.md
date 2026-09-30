@@ -1253,7 +1253,8 @@ booted `mode` value was confirmed against the running kernel rather than against
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
-as Control Panel → USB → **RESCAN**, which forks it when a scan finds nothing; measured on `.188`
+as Control Panel → USB → **RESCAN**, which forks it when a scan finds nothing, and by opening that page with an
+empty port (one attempt, measured 6.0 s on `.188`); measured on `.188`
 2026-08-14 at ~5 s from one tap, leaving `Vbus on`, `1-1`, `event1` + `js0` and the pad playable. ⚠️ It is
 deliberately not on a timer, and the reason is not merely wasted rebinds: **unpatched, nothing in software can
 distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either

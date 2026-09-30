@@ -849,7 +849,7 @@ rises under a known load (a `yes > /dev/null` over SSH), which also checks the d
 The USB page (C16) re-reads the bus only on opening and on RESCAN. Add a periodic re-read while it is open,
 repainting only when the list changes, as Network's 2 s change detection does. ⚠️ **Constraint: the
 automatic path must only READ.** The MUSB port re-probe blocks for a few seconds and stays on an explicit
-RESCAN. **Done when** a device plugged in or pulled on .188 appears or disappears on the open page within
+RESCAN (and the one opening scan of an empty port). **Done when** a device plugged in or pulled on .188 appears or disappears on the open page within
 the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted.
 
 ## Structural and cleanup
@@ -1039,8 +1039,7 @@ landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_laun
 "apps" exist only inside it, never as launcher tiles. Each icon opens a page from the static registry below,
 with BACK to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
 processes launched from their page. Each change saves immediately — no global SAVE — and the Tests tab
-disappears. **Reset-to-defaults (operator decision 2026-09-30)** moves to the Information page beside CONFIG →
-FILE, and writes a backup copy of the config file first; the page shows where the backup went.
+disappears. **Reset-to-defaults (operator decision 2026-09-30)** lives on the Information page (state below).
 
 `icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
 exits; `app_launcher`'s X (or Back/Escape) opens Shutdown / Reboot / Cancel, now the only home of both —
@@ -1121,11 +1120,24 @@ overflow), read on enter with no refresh; fields shown elsewhere were dropped (L
 resolution and calibrated to the Display tab, audio keys to Settings). Network: routing (gateway, up to 3
 DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
 when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
-+346/375, information +372/375, monitor +342/375, led +245/375; portrait network +610/741, information
-+732/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information, Network and
++346/375, information +368/375, monitor +342/375, led +245/375; portrait network +610/741, information
++740/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information, Network and
 Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, within ~2 s) and replug (UP, green).
 Information has no `calibrated?` row by the operator's decision: the Display tab's TOUCH: CALIBRATED row is
 its home.
+
+**RESET DEFAULTS lives on the Information page** beside CONFIG → FILE; the Settings tab no longer has it. It
+asks first through the panel's one shared confirm dialog (`cp_confirm()` in `cp_page.h`, also used by the
+Display tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "TOUCH CALIBRATION IS
+KEPT". On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
+nothing is reset and an orange RESET FAILED shows), then runs `config_clear`, every page's `reset_defaults`,
+and saves the cleared file at once. `/etc/touch_calibration.conf` is untouched (operator confirmed). Pages post
+messages with `cp_status()`, drawn in the title bar in place of the page name and held 6 s, one repaint on
+expiry. Operator taps on .188 passed: button placement, backup written and path shown, a second reset makes a
+second backup, settings back to default, BACK. **Pending operator taps:** the confirm dialog (landscape and
+portrait) and the Display reset's message, now on two lines. **Open:** the dialog names backlight, LED and
+audio, but `config_clear` wipes every key in `rw_config.conf` (e.g. `fx_*` overrides); the operator may want
+the wording widened.
 
 **USB is a `CpPage` too** (`control_panel/usb_page.c` exports `cp_usb_page`; the USB tab is deleted): device
 list read through `usb_bus.c`, RESCAN plus the port re-probe as a full-screen run, and the keyboard, mouse and
@@ -1133,19 +1145,20 @@ pad testers. The list shows as many rows as fit, then "+N MORE" (the old tab sil
 has 7); buttons sit 2x2 in portrait. Receipts measured on .188, bottom margin of CONTENT_H: landscape
 +360/375, portrait +726/741 (3 names cut). Operator taps passed: tab bar, list, idle with no flicker, rescan
 add/remove one by one, all three testers return to the USB page, BACK. The operator's negative test found the
-list stale on opening (the startup reading was kept until RESCAN); `enter()` now rescans, read only, and the
-re-probe stays on an explicit empty RESCAN. **Pending:** the operator's re-tap of that fix. **Not seen:** the
+list stale on opening. `enter()` only marks a scan pending, so the page paints at once with SCANNING… and the
+scan runs on the next `input()`. If that opening scan finds the port empty (a hub alone counts as empty:
+`usb_port_looks_dead()`, the same test RESCAN uses) it queues the port re-probe with one attempt
+(`RECOVER_TRIES=1`, measured 6.0 s on .188), so a device plugged in after an empty-socket boot shows without a
+RESCAN tap; RESCAN keeps three attempts (~18 s on an empty socket, inferred). Cost: ~6 s on every page open
+while the socket is empty (a once-per-process limit was considered, not built). The operator's re-tap passed
+for the rescan-on-open; they then saw a 1-2 s freeze and a keyboard not showing until RESCAN, both addressed
+by the paint-first scan and the opening re-probe, **pending the operator's taps**. **Not seen:** the
 "+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
 
 **Remaining work, ordered single-commit jobs** (`control_panel.c` line refs are approximate as of `ce86df7`:
-re-grep). Today's global RESET DEFAULTS (Settings tab, ~:878-903) runs `config_clear`, resets the audio values,
-calls every page's `reset_defaults` and resets and applies the backlight; it leaves `/etc/touch_calibration.conf`
-alone. The Display tab has a second, Display-only reset (backlight + portrait): **proposal, not decided** — it
+re-grep). The Display tab still has a Display-only reset (backlight + portrait): **proposal, not decided** — it
 goes, since the global one covers it and the Display page saves on change.
 
-- **J0.** RESET DEFAULTS onto Information (+ backup, above), and a status line `CpPage`s can use (`status_msg`/
-  `status_time_ms` live in `AppState`, drawn only by the Settings/Display tabs and the wizard). Before J1, which
-  deletes the Settings tab holding the button.
 - **J1.** `audio_page.c`: Settings tab (~522-898 minus `apply_backlight`) plus the Tests tab's tone sweep
   (`test_audio_diag` ~1215, whose comments `check-audio-pacing.sh` greps). Save on change. Risks: `audio_pump`
   runs every main-loop iteration and the loop's sleep depends on `audio_pump_active` (needs a per-iteration page
