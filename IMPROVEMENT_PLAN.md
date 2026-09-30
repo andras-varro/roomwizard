@@ -1048,7 +1048,7 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 | Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
 | Network | hostname, IP, MAC, gateway, DNS, link |
 | Monitor | uptime, load, RAM, swap, storage (done); SoC temperature (F4) and CPU graph (F104) planned |
-| Information | SYSTEM (kernel, hostname, default app), HARDWARE (CPU, framebuffer), CONFIG (keys no page owns); "calibrated?" dropped pending an operator decision (below) |
+| Information | SYSTEM (kernel, hostname, default app), HARDWARE (CPU, framebuffer), CONFIG (keys no page owns) |
 
 **Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
 function has a home** (operator, 2026-09-30); duplicates inside `control_panel` itself are still deleted
@@ -1113,9 +1113,10 @@ resolution and calibrated to the Display tab, audio keys to Settings). Network: 
 DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
 when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
 +346/375, information +372/375, monitor +342/375, led +245/375; portrait network +610/741, information
-+732/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information and Network are
-pending** (Monitor's passed). **Open operator decision:** Information's `calibrated?` row was dropped as a
-duplicate of the Display tab's TOUCH: CALIBRATED row; re-add one row to Information, or keep it dropped.
++732/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information, Network and
+Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, within ~2 s) and replug (UP, green).
+Information has no `calibrated?` row by the operator's decision: the Display tab's TOUCH: CALIBRATED row is
+its home.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in

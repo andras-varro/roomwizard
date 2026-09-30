@@ -221,6 +221,9 @@ while (running) {
 The `bool drew` matters: testing `needs_redraw` in the `usleep` *after* clearing it inside the `if` always
 yields the idle delay, pinning the app to 10 fps — a shipped bug. Capture it first, or clear the flag last.
 
+**An app that repaints only on change must OR `button_take_dirty()` into its redraw test** — a `Button`'s look
+change is the widget's to report (semantics: the `common.h` comment); without it a button stays yellow.
+
 **A component whose `update()` both draws and reads input has to tell the caller when it still needs
 frames** — the loop's dirty flag sees only what the loop can see. `gameover_update()` is a `CHECK` →
 (`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY` draws**, so the game-over overlay and the
