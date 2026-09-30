@@ -216,6 +216,7 @@ void button_init_full(Button *btn, int x, int y, int width, int height,
     btn->border_width = 2;
     
     btn->visual_state = BTN_STATE_NORMAL;
+    btn->disabled = false;
     btn->was_pressed = false;
     btn->last_press_time_ms = 0;
     btn->debounce_ms = BTN_DEBOUNCE_MS;
@@ -271,11 +272,17 @@ void button_set_icon(Button *btn, void (*draw_icon)(Framebuffer*, int, int, int,
 // ============================================================================
 
 bool button_is_touched(Button *btn, int touch_x, int touch_y) {
+    if (btn->disabled) return false;    // a disabled button is never hit
     return (touch_x >= btn->x && touch_x < btn->x + btn->width &&
             touch_y >= btn->y && touch_y < btn->y + btn->height);
 }
 
 bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint32_t current_time_ms) {
+    if (btn->disabled) {                // no press, no highlight, latch cleared
+        btn->was_pressed = false;
+        btn->visual_state = BTN_STATE_NORMAL;
+        return false;
+    }
     bool is_touched = button_is_touched(btn, touch_x, touch_y);
     bool pressed = false;
     
@@ -310,6 +317,11 @@ bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint
 
 bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_time_ms) {
     // Legacy API for compatibility with existing games
+    if (btn->disabled) {
+        btn->was_pressed = false;
+        btn->visual_state = BTN_STATE_NORMAL;
+        return false;
+    }
     if (currently_pressed) {
         if (!btn->was_pressed) {
             uint32_t time_since_last = current_time_ms - btn->last_press_time_ms;
@@ -370,8 +382,12 @@ void button_draw(Framebuffer *fb, Button *btn) {
     uint32_t bg = btn->bg_color;
     uint32_t text = btn->text_color;
     uint32_t border = btn->border_color;
+    const uint32_t disabled_grey = RGB(120, 120, 120);
     
-    if (btn->visual_state == BTN_STATE_HIGHLIGHTED) {
+    if (btn->disabled) {
+        text = disabled_grey;           // regardless of text_color; never a pressed look
+        border = disabled_grey;
+    } else if (btn->visual_state == BTN_STATE_HIGHLIGHTED) {
         border = btn->highlight_color;
         text = btn->highlight_color;
     } else if (btn->visual_state == BTN_STATE_PRESSED) {
@@ -731,6 +747,7 @@ void toggle_init(ToggleSwitch *sw, int x, int y, int track_w, int track_h,
     sw->knob_color = COLOR_WHITE;
     sw->label_color = RGB(200, 200, 200);
 
+    sw->disabled = false;
     sw->was_pressed = false;
     sw->last_press_time_ms = 0;
     sw->debounce_ms = 300;
@@ -746,6 +763,7 @@ void toggle_set_colors(ToggleSwitch *sw, uint32_t on_color, uint32_t off_color,
 
 bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
                         bool is_pressed, uint32_t current_time_ms) {
+    if (sw->disabled) { sw->was_pressed = false; return false; }
     // Generous hit area: track + label area + some padding
     int hit_w = sw->track_w + text_measure_width(sw->label, 1) + 20;
     int hit_h = sw->track_h + 10;
@@ -771,7 +789,9 @@ bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
 }
 
 void toggle_draw(Framebuffer *fb, ToggleSwitch *sw) {
-    uint32_t track_color = sw->state ? sw->on_color : sw->off_color;
+    const uint32_t disabled_grey = RGB(120, 120, 120);
+    uint32_t track_color = sw->disabled ? RGB(60, 60, 60)
+                         : sw->state    ? sw->on_color : sw->off_color;
     int r = sw->track_h / 2;  // Corner radius = half height for pill shape
 
     // Draw track (pill shape)
@@ -791,7 +811,8 @@ void toggle_draw(Framebuffer *fb, ToggleSwitch *sw) {
     // Draw label to the right of the track
     int label_x = sw->x + sw->track_w + 8;
     int label_y = sw->y + (sw->track_h - 7) / 2;  // Vertically center (7px font height)
-    fb_draw_text(fb, label_x, label_y, sw->label, sw->label_color, 1);
+    fb_draw_text(fb, label_x, label_y, sw->label,
+                 sw->disabled ? disabled_grey : sw->label_color, 1);
 }
 
 // ============================================================================

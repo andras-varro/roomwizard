@@ -315,6 +315,17 @@ static void led_page_layout(void) {
 
 /* ── Draw and input ─────────────────────────────────────────────────────── */
 
+/* Derived from the state every time, never cached: the -/+ and test buttons are
+ * disabled exactly when the LEDs are.  Button.disabled makes them grey and
+ * deaf to every input. */
+static void led_sync_disabled(void) {
+    bool off = !led_state.enabled;
+    led_minus_btn.disabled = off;
+    led_plus_btn.disabled  = off;
+    for (int i = 0; i < LED_TEST_COUNT; i++)
+        test_btns[i].disabled = off;
+}
+
 static void led_page_draw(Framebuffer *fb) {
     const LedPageState *s = &led_state;
     draw_section_header(fb, sec_led_y, "LEDS");
@@ -323,24 +334,24 @@ static void led_page_draw(Framebuffer *fb) {
              s->enabled ? LED_TOGGLE_LABEL : LED_TOGGLE_LABEL_OFF);
     toggle_draw(fb, &led_toggle);
 
+    led_sync_disabled();
+
     /* Disabled, brightness is kept but not adjustable: -/+ would flash the
-     * LEDs through led_preview(), which bypasses the enable setting. */
-    uint32_t fg = s->enabled ? COLOR_WHITE : COLOR_DISABLED;
+     * LEDs through led_preview(), which bypasses the enable setting.  The
+     * buttons grey themselves (Button.disabled); only the label is ours. */
     fb_draw_text(fb, CONTENT_LEFT + 5, bright_label_y + 2, LED_BRIGHT_LABEL,
                  s->enabled ? COLOR_LABEL : COLOR_DISABLED, 2);
-    led_minus_btn.text_color = fg;
-    led_plus_btn.text_color  = fg;
     button_draw(fb, &led_minus_btn);
     draw_brightness_bar(fb, bar_x, bar_y, s->brightness, 0, 100, bar_w,
                         s->enabled);
     button_draw(fb, &led_plus_btn);
 
-    /* With the LEDs disabled a test would light nothing, so the buttons are grey
-     * and take no press (led_page_input), and the header says why. */
+    /* With the LEDs disabled a test would light nothing, so the buttons are
+     * disabled (grey, no press — button_update ignores them) and the header
+     * says why. */
     draw_section_header(fb, sec_tests_y,
                         s->enabled ? "TESTS" : "TESTS (LEDS DISABLED)");
     for (int i = 0; i < LED_TEST_COUNT; i++) {
-        test_btns[i].text_color = fg;
         button_draw(fb, &test_btns[i]);
     }
 }
@@ -356,10 +367,12 @@ static CpPageResult led_page_input(Config *cfg, int tx, int ty,
         led_persist(s, cfg);
         act = CP_PAGE_REDRAW;
     }
-    /* Disabled, the grey controls take no press at all — not even the pressed
-     * highlight: a test would run and light nothing, and -/+ would flash the
-     * LEDs through led_preview(), which bypasses the enable setting. */
-    if (!s->enabled) return act;
+    /* Disabled, the -/+ and test buttons take no press at all — not even the
+     * pressed highlight: a test would run and light nothing, and -/+ would
+     * flash the LEDs through led_preview(), which bypasses the enable setting.
+     * That is Button.disabled's doing, set from the state just above (after the
+     * toggle may have flipped it), so no guard is needed around the calls. */
+    led_sync_disabled();
     int step = 0;
     if (button_update(&led_minus_btn, tx, ty, touching, now)) step = -10;
     if (button_update(&led_plus_btn, tx, ty, touching, now))  step = +10;

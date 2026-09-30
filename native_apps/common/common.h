@@ -52,6 +52,9 @@ typedef struct {
     // State management
     ButtonVisualState visual_state;
     bool was_pressed;
+    // A disabled button acts on no input (touch, tap, press) and draws grey;
+    // callers set it from their state and need no guard at each use.
+    bool disabled;
     uint32_t last_press_time_ms;
     uint32_t debounce_ms;
     
@@ -377,6 +380,9 @@ typedef struct {
 
     // State management
     bool was_pressed;
+    // A disabled button acts on no input (touch, tap, press) and draws grey;
+    // callers set it from their state and need no guard at each use.
+    bool disabled;
     uint32_t last_press_time_ms;
     uint32_t debounce_ms;
 } ToggleSwitch;
