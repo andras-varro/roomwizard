@@ -651,7 +651,7 @@ and the retired generated set would have PASSED it. That half stays ear-only, on
   it is not quiet, it is absent. ⚠️ **Broadband is not the requirement**: chasing flatness instead cost a
   whole set that measured correct and sounded like noise.
 - ⚠️ **The MUSIC / EFFECTS toggles are enforced in the LIBRARY, so never re-check them in a game.**
-  `music_enabled` / `effects_enabled` (one writer: `control_panel`'s SETTINGS tab, under `audio_enabled`) are
+  `music_enabled` / `effects_enabled` (one writer: `control_panel`'s Audio page, under `audio_enabled`) are
   read once by `audio_init()` and gate `audio_tone()`, `audio_fx_play()`, `audio_sfx_play()` and
   `audio_music_start()` — a second check in a call site is a second place the rule drifts.
   `audio_music_enabled()` / `audio_effects_enabled()` exist to explain a silence in a log line, not to

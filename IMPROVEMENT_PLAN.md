@@ -1048,7 +1048,7 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 
 | Icon | Holds |
 |---|---|
-| Audio | enable, music/effects, output device, chime test, tone sweep, Mix Bus Test |
+| Audio | enable, music/effects, output device, chime test, Mix Bus Test (done) |
 | Display | backlight slider and ramp test, portrait toggle, screen geometry, display pattern pages |
 | Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic; `touch_trace` candidate (see below) |
 | LED | enable, brightness, ramp/pulse/blink/cycle tests |
@@ -1061,7 +1061,7 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 **Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
 function has a home** (operator, 2026-09-30); duplicates inside `control_panel` itself are still deleted
 as each page lands. The inventory below (measured 2026-09-29) is the checklist for that final deletion:
-LED ramp/pulse/blink/cycle, backlight ramp, touch zone grid, display patterns and tone sweep
+LED ramp/pulse/blink/cycle, backlight ramp, touch zone grid and display patterns
 (`control_panel` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
 chime+enable and save/reset (vs `hardware_config/hardware_config.c`); the system/memory/storage/hardware/
 config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`format_bytes` copies (vs
@@ -1072,8 +1072,7 @@ CLI (no script calls it, measured by grep; its one unique trait is an ssh get/se
 steps, deploy references and README rows. `hardware_diag` is already hidden (its `.app` manifest
 is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
 fix its EXIT corner separately from `control_panel`. Check page by page that no diag page holds a field
-the tabs lack; move a unique one rather than keep the binary. Mix Bus Test is **not**
-redundant: it moves under Audio and loses its launcher tile. **Tap-a-Theremin is an app, not a test tool,
+the tabs lack; move a unique one rather than keep the binary. **Tap-a-Theremin is an app, not a test tool,
 and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` stay hidden and are **not**
 control-panel entries (operator); their cleanup belongs to the DSS-overlay entry.
 
@@ -1084,10 +1083,10 @@ it against the other touch tools in that row (edges, multi-touch test, touch zon
 diagnostic / `touch_raw`) and fold duplicates into one rather than adding a tile per tool.
 
 **Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
-launcher frame md5-identical). Audio opens Settings; Display and Touch open Display; USB opens USB;
-Network, Information, Monitor and USB open their own `CpPage`s (below); the Diagnostics and USB tabs no longer exist, so the tab bar is
-SETTINGS/TESTS/DISPLAY. Audio (Settings tab) and Display and Touch (Display tab) still open the old
-tabs. Tests is a letter
+launcher frame md5-identical). Display and Touch open Display; USB opens USB;
+Network, Information, Monitor, USB and Audio open their own `CpPage`s (below); the Diagnostics, USB and Settings tabs no longer exist, so the tab bar is
+TESTS/DISPLAY. Display and Touch (Display tab) still open the old
+tab. Tests is a letter
 tile until its tests are regrouped, and there is no Bluetooth tile until its page exists. The tab bar's
 BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap must not leave
 and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their tabs, BACK, slide-off does nothing, the red X exits.
@@ -1096,10 +1095,20 @@ and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons ope
 **moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
 one by one as stage 2 progresses, never in bulk.
 
+**The Audio page is done on the registry** (`control_panel/audio_page.c`, exports `cp_audio_page`; the Settings
+tab is deleted): AUDIO ENABLED, MUSIC, EFFECTS, OUT and a TEST chime, saved on each change (no SAVE). `enter`/
+`leave` open and close the page's bus; an optional `CpPage` `busy()` hook keeps the main loop at the active
+frame rate only while the chime plays; the USB DAC watch is a page REDRAW; the audio part of RESET DEFAULTS is
+the page's `reset_defaults`. MIX BUS TEST on the page runs `/opt/games/audio_mix_test` as a child process and
+returns to the page; its launcher tile is retired (`RW_APP_MANIFESTS_RETIRED`). The Tests tab's tone sweep is
+deleted by operator decision: Mix Bus Test replaces it, and `check-audio-pacing.sh` now requires a `CpPage`
+that opens a stream to set `.busy`. Receipts measured on .188, bottom margin of CONTENT_H: landscape +140/375,
+portrait +140/741. **Pending operator taps** (the operator will test the remaining jobs in one session).
+
 **Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
 `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
-LED tests run full-screen. Settings lost its LED block and the Tests tab is down to five: backlight, touch
-zone, display, audio, multi-touch. LED is **done on the registry below** (verified by finger on .188,
+LED tests run full-screen. Settings lost its LED block and the Tests tab is down to four: backlight, touch
+zone, display, multi-touch. LED is **done on the registry below** (verified by finger on .188,
 2026-09-30): `led_page.c` exports only `cp_led_page`, `led_page.h` is deleted and `control_panel.c` holds no
 per-page code.
 
@@ -1117,7 +1126,7 @@ this page. After the control-panel refactor, work returns to Bluetooth (F17), wh
 shared through `cp_ui.h`). Information: SYSTEM (kernel release and build string, hostname, default app),
 HARDWARE (CPU, BogoMIPS, framebuffer format and memory), CONFIG (file path; keys no page owns, "+N MORE" on
 overflow), read on enter with no refresh; fields shown elsewhere were dropped (LEDs to LED, backlight,
-resolution and calibrated to the Display tab, audio keys to Settings). Network: routing (gateway, up to 3
+resolution and calibrated to the Display tab, audio keys to the Audio page). Network: routing (gateway, up to 3
 DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
 when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
 +346/375, information +368/375, monitor +342/375, led +245/375; portrait network +610/741, information
@@ -1126,18 +1135,17 @@ Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, with
 Information has no `calibrated?` row by the operator's decision: the Display tab's TOUCH: CALIBRATED row is
 its home.
 
-**RESET DEFAULTS lives on the Information page** beside CONFIG → FILE; the Settings tab no longer has it. It
+**RESET DEFAULTS lives on the Information page** beside CONFIG → FILE. It
 asks first through the panel's one shared confirm dialog (`cp_confirm()` in `cp_page.h`, also used by the
-Display tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "TOUCH CALIBRATION IS
-KEPT". On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
+Display tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "(TOUCH CALIBRATION IS
+KEPT)". The brackets are the operator's, so the second line does not read as part of the reset; the wording
+stays although `config_clear` wipes every key (e.g. `fx_*` overrides). On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
 nothing is reset and an orange RESET FAILED shows), then runs `config_clear`, every page's `reset_defaults`,
 and saves the cleared file at once. `/etc/touch_calibration.conf` is untouched (operator confirmed). Pages post
 messages with `cp_status()`, drawn in the title bar in place of the page name and held 6 s, one repaint on
 expiry. Operator taps on .188 passed: button placement, backup written and path shown, a second reset makes a
-second backup, settings back to default, BACK. **Pending operator taps:** the confirm dialog (landscape and
-portrait) and the Display reset's message, now on two lines. **Open:** the dialog names backlight, LED and
-audio, but `config_clear` wipes every key in `rw_config.conf` (e.g. `fx_*` overrides); the operator may want
-the wording widened.
+second backup, settings back to default, BACK; on 2026-09-30 also the confirm dialog (CANCEL, BACK blocked
+under it, OK) and the Display reset's two-line message.
 
 **USB is a `CpPage` too** (`control_panel/usb_page.c` exports `cp_usb_page`; the USB tab is deleted): device
 list read through `usb_bus.c`, RESCAN plus the port re-probe as a full-screen run, and the keyboard, mouse and
@@ -1150,21 +1158,14 @@ scan runs on the next `input()`. If that opening scan finds the port empty (a hu
 `usb_port_looks_dead()`, the same test RESCAN uses) it queues the port re-probe with one attempt
 (`RECOVER_TRIES=1`, measured 6.0 s on .188), so a device plugged in after an empty-socket boot shows without a
 RESCAN tap; RESCAN keeps three attempts (~18 s on an empty socket, inferred). Cost: ~6 s on every page open
-while the socket is empty (a once-per-process limit was considered, not built). The operator's re-tap passed
-for the rescan-on-open; they then saw a 1-2 s freeze and a keyboard not showing until RESCAN, both addressed
-by the paint-first scan and the opening re-probe, **pending the operator's taps**. **Not seen:** the
+while the socket is empty, kept by operator decision 2026-09-30. Operator taps on .188 passed 2026-09-30:
+SCANNING paints first and an empty port is re-probed on open (a keyboard shows without RESCAN). **Not seen:** the
 "+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
 
 **Remaining work, ordered single-commit jobs** (`control_panel.c` line refs are approximate as of `ce86df7`:
 re-grep). The Display tab still has a Display-only reset (backlight + portrait): **proposal, not decided** — it
 goes, since the global one covers it and the Display page saves on change.
 
-- **J1.** `audio_page.c`: Settings tab (~522-898 minus `apply_backlight`) plus the Tests tab's tone sweep
-  (`test_audio_diag` ~1215, whose comments `check-audio-pacing.sh` greps). Save on change. Risks: `audio_pump`
-  runs every main-loop iteration and the loop's sleep depends on `audio_pump_active` (needs a per-iteration page
-  hook; `input()` is already called every iteration); the `prev_out_usb` DAC watch becomes a page REDRAW;
-  `set_view`'s audio-bus open/close hack moves to enter/leave; the Display tab writes `saved_audio_device_idx`
-  (~1604, 1633) — drop. Mix Bus Test under Audio is a later separate job.
 - **J2.** `display_page.c`: backlight bar, portrait toggle (+ "ON NEXT LAUNCH" note), VISIBLE row,
   `apply_backlight`, Tests' backlight ramp (`test_backlight_run` ~958) and display patterns (`test_display`
   ~1104-1212). Save on change. The Touch half stays on a leftover `TAB_DISPLAY` until J3a; the `disp_*` layout
@@ -1178,12 +1179,13 @@ goes, since the global one covers it and the Display page saves on change.
 - **J3b.** `run_calib_wizard` and helpers (~1650-2440) moved verbatim into `touch_wizard.c` behind
   `(fb, touch, edges_only)` → status string, removing its `AppState` use. Folding `touch_trace`/`touch_raw`
   stays an operator question; do not widen J3.
-- **J4.** Delete the Tests tile and `TAB_TESTS` machinery (keep `draw_test_screen` and `check_touch`, which
+- **J4.** With the backlight ramp and display patterns on the Display page (J2) and touch zone and multi-touch
+  on the Touch page (J3a), delete the Tests tile and `TAB_TESTS` machinery (keep `draw_test_screen` and `check_touch`, which
   `led_page` and the moved tests use); collapse `tab`/`set_view`/`ActiveTab` to HOME vs PAGE.
 
 Every job that deletes a tab also deletes its `home_items` row target, `main()`'s dispatch cases, `rebuild_ui`
 calls and `prev_*` terms. Sizing: a page move that also deletes a large tab has run 154-155k against 120-130k
-worker caps, so J1 and J3a may need splitting.
+worker caps, so J3a may need splitting.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
