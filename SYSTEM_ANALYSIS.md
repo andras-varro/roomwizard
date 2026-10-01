@@ -1185,6 +1185,24 @@ Dongle identity, module and firmware state and next steps are open work in
 [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC is built and shipping
 ([§3.4](#34-audio)).
 
+⚠️ **The 8BitDo Pro 2 has two radio identities, and only the classic one is a gamepad** (measured
+2026-10-01, `.188`, RTL8761CU, BlueZ 5.66). **Switch to A mode and hold pair ~3 s.** In A mode it answers
+classic inquiry as "Wireless Controller" (`E4:17:D8:13:49:41`, class `0x002508`, UUIDs HID `0x1124` + PnP
+`0x1200`, modalias `usb:v054Cp05C4d0100`, i.e. it emulates a Sony DualShock 4); Just Works pairing with a
+`NoInputNoOutput` agent succeeds (first attempt `AuthenticationCanceled`, cause not investigated, the second
+straight after re-entering pairing succeeded), `hid-generic` binds it (`hid-sony` is not needed), and it
+makes one input node with `BTN_SOUTH`..`BTN_THUMBR`, `ABS` 0-5 and `HAT0X/Y` — buttons, both sticks and the
+hat captured, and the Control Panel pad tester and Office Runner worked on the panel. In S and X modes the pad
+sent no classic-inquiry response (20 s dual-transport discovery, one ~10 s inquiry, zero results), so X mode
+over Bluetooth is unusable here. The second identity, `8ap` (`E4:17:D8:42:BD:FF`, LE public), is
+connectable `ADV_IND` with AD flags `0x02` (no "BR/EDR not supported" bit) in S and X modes; its GATT has GAP,
+GATT, Tx Power, Device Information, Battery and vendor `0xFF10` and **no HID service (`0x1812`)**, so
+connecting yields no input node **[inferred: 8BitDo's companion-app channel]**. Because flag `0x04` is
+absent, BlueZ `pair` pages it over BR/EDR, gets HCI Page Timeout (`0x04`) and returns
+`org.bluez.Error.ConnectionAttemptFailed` — no gamepad exists at that address. `btmon -T` abbreviates event
+titles, so a grep for `Inquiry Result` misses an Extended Inquiry Result; `bluetoothctl`'s `NEW` line is the
+reliable witness.
+
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
 ⚠️ **On the vendor kernel a stale `is_active` arms a `printk` loop that survives unplugging and ends in

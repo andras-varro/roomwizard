@@ -241,16 +241,9 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
   `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
   0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
   carrying both keys and touchpad, which `app_launcher` hot-plugged.
-- **8BitDo Pro 2 is not paired yet.** In S (Switch) mode it is useless on 4.14 regardless: it emulates a
-  Switch Pro controller and `hid-nintendo` arrived in 5.16 **[inferred from upstream history]**. In S mode only a
-  BLE advertisement was seen (name `8ap`, public address `E4:17:D8:42:BD:FF`); BlueZ tried BR/EDR and got HCI Page
-  Timeout (0x04) three times (measured with `btmon`). An LE connect failed in `bluetoothd` with
-  `att_connect_cb ... Function not implemented (38)`: from `net/bluetooth/lib.c`, errno 38 is `bt_to_errno()`'s
-  default for an unmapped HCI status, not a missing `CONFIG` **[read from source; the real LE status is
-  unmeasured]**. In D mode two 10.24 s classic inquiries found nothing; the pairing window and the inquiry may not
-  have overlapped **[not ruled out]**. **Next:** D mode with the pad freshly in pairing mode (hold pair ~3 s) and
-  an inquiry only, no pair, for 15 s; if still absent, X mode; capture the LE status with `btmon` if it
-  advertises LE only.
+- **Pads: the 8BitDo Pro 2 works in A mode** (DualShock 4 emulation, `hid-generic`; identities and the failed
+  modes in [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps or the unit
+  reboots, which needs packaging (step 2) first.
 
 **Next, in order:**
 
