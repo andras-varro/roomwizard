@@ -69,6 +69,7 @@ extern const CpPage cp_monitor_page;   /* monitor_page.c */
 extern const CpPage cp_info_page;      /* info_page.c */
 extern const CpPage cp_network_page;   /* network_page.c */
 extern const CpPage cp_usb_page;       /* usb_page.c */
+extern const CpPage cp_input_page;     /* input_page.c */
 extern const CpPage cp_audio_page;     /* audio_page.c */
 extern const CpPage cp_display_page;   /* display_page.c */
 

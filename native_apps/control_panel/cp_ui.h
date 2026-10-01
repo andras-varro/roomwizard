@@ -2,10 +2,10 @@
  *
  * control_panel.c owns the tab bar, the home grid and every page that has not
  * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c,
- * network_page.c, usb_page.c, audio_page.c, display_page.c) lays itself out in
- * the same content rectangle and draws with the same helpers.  This header is
- * the one home for that rectangle and those helpers, so a moved page cannot
- * carry a second copy of either.  The helper bodies stay in control_panel.c.
+ * network_page.c, usb_page.c, input_page.c, audio_page.c, display_page.c) lays
+ * itself out in the same content rectangle and draws with the same helpers.
+ * This header is the one home for that rectangle and those helpers, so a moved
+ * page cannot carry a second copy of either.  The helper bodies stay in control_panel.c.
  *
  * Everything here is derived from SCREEN_SAFE_*, so it is only correct after
  * fb_init() and touch_init(), and a layout computed from it must be re-run

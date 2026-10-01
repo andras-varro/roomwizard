@@ -15,8 +15,9 @@
  *                  grid-only too
  *   Information  — what this unit is (info_page.c); grid-only
  *   Network      — gateway, DNS and every interface (network_page.c); grid-only
- *   USB          — the bus list, RESCAN and the keyboard/mouse/pad testers
- *                  (usb_page.c); grid-only
+ *   USB          — the bus list and RESCAN (usb_page.c); grid-only
+ *   Input        — the keyboard/mouse/pad testers, on any bus (input_page.c);
+ *                  grid-only
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -162,6 +163,7 @@ static const HomeItem home_items[] = {
     { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
     { .tab = TAB_PAGE, .page = &cp_usb_page },
+    { .tab = TAB_PAGE, .page = &cp_input_page },
     { .tab = TAB_PAGE, .page = &cp_network_page },
     { .tab = TAB_PAGE, .page = &cp_monitor_page },
     { .tab = TAB_PAGE, .page = &cp_info_page },
