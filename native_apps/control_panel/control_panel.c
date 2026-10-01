@@ -4,11 +4,9 @@
  * Opens on an icon grid (the home view); each tile opens a page:
  *   Audio        — enable, music/effects, output device, the TEST chime and
  *                  the MIX BUS TEST launch (audio_page.c); grid-only
- *   Tests       — touch zone and multi-touch tests
- *   Display      — backlight, orientation, what is visible and the display
- *                  tests (display_page.c); grid-only
- *   Touch        — touch calibration, screen edges, the touch diagnostic
- *                  (the TOUCH tab)
+ *   Display      — backlight, orientation, what is visible and touchable,
+ *                  SCREEN EDGES and the display tests (display_page.c);
+ *                  grid-only
  *   LED          — enable, brightness and the LED tests (led_page.c); a
  *                  grid-only page with no tab of its own
  *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
@@ -102,7 +100,6 @@
 
 typedef enum {
     TAB_TESTS,
-    TAB_DISPLAY,
     TAB_COUNT,
     /* Views with no tab button go after TAB_COUNT: every loop over the tab bar
      * stops there, so none of these can index tab_names[] or tab_buttons[]. */
@@ -117,22 +114,13 @@ typedef enum {
     TEST_RUNNING
 } TestSubState;
 
-/* Whether the Touch tab's SCREEN EDGES queued the full-screen wizard.  The
- * wizard itself is one blocking routine with its own internal steps (see
- * WizStep); the Input page reaches it, and the touch diagnostic, through
- * cp_run_touch_tool(). */
-typedef enum {
-    CALIB_IDLE,
-    CALIB_RUN_EDGES     /* edges -> report -> confirm  (margins only) */
-} CalibSubState;
-
 typedef enum {
     CONFIRM_NONE,
     CONFIRM_PAGE             /* a page's cp_confirm(): its on_ok runs on OK */
 } ConfirmAction;
 
 /* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "TESTS", "TOUCH" };
+static const char *tab_names[TAB_COUNT] = { "TESTS" };
 
 /* The home grid, and the page registry: a row with a page opens that CpPage,
  * and takes its label and icon from it (one name, one home); every page named
@@ -150,7 +138,6 @@ typedef struct {
 static const HomeItem home_items[] = {
     { .tab = TAB_PAGE, .page = &cp_audio_page },
     { .tab = TAB_PAGE, .page = &cp_display_page },
-    { "Touch",       "cp_touch",   TAB_DISPLAY,  NULL },
     { .tab = TAB_PAGE, .page = &cp_led_page },
     { .tab = TAB_PAGE, .page = &cp_usb_page },
     { .tab = TAB_PAGE, .page = &cp_input_page },
@@ -186,7 +173,6 @@ typedef struct {
     int           home_page;         /* page of the home grid */
     TestSubState  test_sub;
     int           test_selected;
-    CalibSubState calib_sub;
     Config        cfg;
     ConfirmAction confirm_action;
 } AppState;
@@ -213,11 +199,6 @@ static Button back_btn;          /* the tab bar's BACK to the home grid */
 /* Tests */
 static UILayout test_layout;
 static Button test_buttons[NUM_TESTS];
-
-/* Touch — screen edges.  Calibration, the touch diagnostic and RESET GEOMETRY
- * are the Input page's (input_page.c); backlight and orientation the Display
- * page's (display_page.c). */
-static Button calib_bezel_btn;      /* margins only  */
 
 /* The panel's one confirmation dialog: every page's cp_confirm() (cp_page.h)
  * opens this same instance.  While
@@ -330,7 +311,7 @@ static void create_tab_bar(void) {
     if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
 
     /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "TEST", "TOUCH" };
+    static const char *short_labels[] = { "TEST" };
     const char **labels = (tab_w < 120) ? short_labels : tab_names;
 
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -720,7 +701,7 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * Touch Tab (TAB_DISPLAY) — calibration and screen geometry
+ * Screen geometry — why one wizard measures it
  * ══════════════════════════════════════════════════════════════════════════ */
 
 /* Calibration and edge measurement are landscape-only; the portrait toggle that
@@ -739,105 +720,6 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
  * The wizard fixes both: it fits from interior targets only, and it runs with
  * the bezel zeroed so a drawn pixel is a panel pixel. The fit itself lives in
  * common/touch_calib.c, shared with the touch_raw diagnostic. */
-
-/* -- Touch tab layout ----------------------------------------------------- */
-
-/* Above this many logical pixels, a touch inset stops looking like the panel's
- * saturation band and starts looking like a bad calibration. RW09 measures ~17;
- * 24 leaves headroom for panel variation without hiding a real fault. */
-#define DISP_INSET_SUSPECT 24
-
-#define DISP_GEOM_ROWS 3   /* TOUCH, EDGES, TOUCHABLE — draw_info_row() advances 28 */
-
-static int disp_portrait_layout(void) { return CONTENT_WIDTH < 600; }
-static int disp_sec_geom_y(void) { return CONTENT_Y + 2; }
-static int disp_btn_row_y(void)  { return disp_sec_geom_y() + 26 + DISP_GEOM_ROWS * 28 + 14; }
-/* One button, centred; the status line sits under it. */
-static int disp_action_y(void)   { return disp_btn_row_y() + 46 + 14; }
-
-static void create_display_ui(void) {
-    const int portrait = disp_portrait_layout();
-
-    /* Sized to its label (6 px per character per scale step), and to the
-     * content width in portrait. */
-    const int bh = 46;
-    const int by = disp_btn_row_y();
-    int bw = portrait ? CONTENT_WIDTH - 20 : 170;
-    int bx = CONTENT_LEFT + (CONTENT_WIDTH - bw) / 2;
-    button_init_full(&calib_bezel_btn, bx, by, bw, bh, "SCREEN EDGES",
-                     BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-
-    /* ⚠️ THE RECEIPT: the lowest widget is the button, the status line under
-     * it is text only.  Read off the button as placed, not re-derived. */
-    {
-        int bottom = calib_bezel_btn.y + calib_bezel_btn.height - CONTENT_Y;
-        int right  = calib_bezel_btn.x + calib_bezel_btn.width;
-        const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
-                            : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
-                            : "fits";
-        printf("control_panel: touch stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d (safe %dx%d, %s)\n",
-               verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
-               SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
-               portrait ? "portrait" : "landscape");
-    }
-}
-
-/* The screen area the digitiser can actually reach, in LOGICAL pixels — what an
- * app author lays out in.
- *
- * This is NOT expected to be the whole logical screen. The digitiser saturates
- * before the physical panel edge, so a band at each end of Y is visible but not
- * pressable; on RW09 that is ~17 rows at the top and ~16 at the bottom. It is
- * measured per panel, never assumed.
- *
- * Read straight off the published inset rather than re-derived from the curve:
- * that is the same number every app's SCREEN_SAFE_* resolves to, so this row
- * cannot disagree with what layouts actually get. */
-static void display_touchable_rect(int *lx0, int *lx1, int *ly0, int *ly1) {
-    *lx0 = screen_touch_inset_left;
-    *ly0 = screen_touch_inset_top;
-    *lx1 = screen_base_width  - 1 - screen_touch_inset_right;
-    *ly1 = screen_base_height - 1 - screen_touch_inset_bottom;
-}
-
-static void draw_display_tab(Framebuffer *fb, AppState *state) {
-    int y = disp_sec_geom_y();
-    draw_section_header(fb, y, "SCREEN GEOMETRY");
-    y += 26;
-
-    if (access(CALIB_FILE, 0) == 0)
-        y = draw_info_row(fb, y, "TOUCH:", "CALIBRATED", COLOR_GREEN);
-    else
-        y = draw_info_row(fb, y, "TOUCH:", "NOT CALIBRATED", COLOR_YELLOW);
-
-    char buf[80];
-    snprintf(buf, sizeof(buf), "T:%d  B:%d  L:%d  R:%d",
-             screen_bezel_top, screen_bezel_bottom,
-             screen_bezel_left, screen_bezel_right);
-    y = draw_info_row(fb, y, "EDGES:", buf, COLOR_DATA);
-
-    /* Visible is not the same as touchable, and this row is the only place a
-     * reader finds that out without rediscovering it the hard way. A non-zero
-     * inset is the CORRECT answer on this hardware — the digitiser saturates
-     * before the panel edge — so it is only amber once it is large enough to be
-     * suspicious. The band stays drawable either way. */
-    int tx0, tx1, ty0, ty1;
-    display_touchable_rect(&tx0, &tx1, &ty0, &ty1);
-    snprintf(buf, sizeof(buf), "X %d..%d  Y %d..%d", tx0, tx1, ty0, ty1);
-    int worst_inset = screen_touch_inset_top;
-    if (screen_touch_inset_bottom > worst_inset) worst_inset = screen_touch_inset_bottom;
-    if (screen_touch_inset_left   > worst_inset) worst_inset = screen_touch_inset_left;
-    if (screen_touch_inset_right  > worst_inset) worst_inset = screen_touch_inset_right;
-    y = draw_info_row(fb, y, "TOUCHABLE:", buf,
-                      worst_inset > DISP_INSET_SUSPECT ? COLOR_ORANGE : COLOR_GREEN);
-
-    button_draw(fb, &calib_bezel_btn);
-
-    if (state->status_msg[0])
-        text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                           disp_action_y(), state->status_msg, COLOR_GREEN, 2);
-}
 
 static void rebuild_ui(AppState *state);
 
@@ -868,12 +750,6 @@ void cp_reset_touch_geometry(void) {
     }
     cp_status(ok ? "SCREEN GEOMETRY RESET" : "RESET FAILED - RUN AS ROOT", ok);
     rebuild_ui(g_state);   /* the bezel just changed the logical size */
-}
-
-static void handle_display_input(AppState *state, int tx, int ty,
-                                 bool touching, uint32_t now) {
-    if (button_update(&calib_bezel_btn, tx, ty, touching, now))
-        state->calib_sub = CALIB_RUN_EDGES;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1726,7 +1602,6 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch) {
 static void rebuild_ui(AppState *state) {
     create_tab_bar();
     create_tests_ui();
-    create_display_ui();
     /* Each prints its "control_panel: <page> stack …" receipt. */
     for (int i = 0; i < HOME_ITEM_COUNT; i++)
         if (home_items[i].page) home_items[i].page->layout();
@@ -1755,10 +1630,6 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
         state->page_fullscreen = false;
         if (state->page->run_fullscreen)
             state->page->run_fullscreen(fb, touch);
-    } else if (state->active_tab == TAB_DISPLAY) {
-        if (state->calib_sub == CALIB_RUN_EDGES)
-            cp_run_touch_tool(fb, touch, CP_TOUCH_EDGES);
-        state->calib_sub = CALIB_IDLE;
     }
     /* Drain any lingering touch events (press/release) left in the input
      * buffer by the full-screen mode.  Without this, the stale release
@@ -1818,7 +1689,6 @@ int main(void) {
         if (home_items[i].page) home_items[i].page->load(&state.cfg);
     state.test_sub = TEST_MENU_VIEW;
     state.test_selected = -1;
-    state.calib_sub = CALIB_IDLE;
 
     rebuild_ui(&state);
     home_load_icons();   /* the home grid is the startup view */
@@ -1838,7 +1708,6 @@ int main(void) {
         }
 
         bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
-                       || (state.active_tab == TAB_DISPLAY && state.calib_sub != CALIB_IDLE)
                        || (state.active_tab == TAB_PAGE && state.page_fullscreen);
 
         if (fullscreen) {
@@ -1856,7 +1725,6 @@ int main(void) {
             switch (state.active_tab) {
                 case TAB_HOME:        draw_home(&fb, &state);        break;
                 case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
-                case TAB_DISPLAY:     draw_display_tab(&fb, &state); break;
                 case TAB_PAGE:        state.page->draw(&fb);         break;
                 default: break;
             }
@@ -1879,7 +1747,6 @@ int main(void) {
         int           prev_home_page = state.home_page;
         TestSubState  prev_test_sub  = state.test_sub;
         int           prev_test_sel  = state.test_selected;
-        CalibSubState prev_calib_sub = state.calib_sub;
         ConfirmAction prev_confirm   = state.confirm_action;
 
         touch_poll(&touch);
@@ -1909,7 +1776,6 @@ int main(void) {
 
             switch (state.active_tab) {
                 case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
-                case TAB_DISPLAY:     handle_display_input(&state, tx, ty, touching, now);  break;
                 case TAB_PAGE: {
                     /* A page's visual state is its own, so it says when it
                      * changed; a queued full-screen run repaints too, exactly
@@ -1945,7 +1811,6 @@ int main(void) {
             prev_home_page != state.home_page       ||
             prev_test_sub  != state.test_sub        ||
             prev_test_sel  != state.test_selected   ||
-            prev_calib_sub != state.calib_sub       ||
             prev_confirm   != state.confirm_action  ||
             state.page_dirty) {
             needs_redraw = true;

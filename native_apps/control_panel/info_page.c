@@ -7,7 +7,7 @@
  *
  * Nothing here is live or duplicated.  Uptime, load, memory and storage are
  * the Monitor page's; LED state is the LED page's; backlight and resolution
- * are the Display page's, whether touch is calibrated the Touch tab's; the
+ * are the Display page's, whether touch is calibrated the Input page's; the
  * audio keys are the Audio page's.  So a key those pages own is left out of the
  * config list.
  *

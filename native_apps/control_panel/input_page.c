@@ -8,8 +8,8 @@
  * Exposed only as cp_input_page (cp_page.h); its state lives in this file.
  * It owns no config keys.
  *
- * The touch tools (CALIBRATE, DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY) head
- * the page; the testers sit under their own section header.  Each tester's
+ * The touch tools (the CALIBRATED row; CALIBRATE, DIAGNOSTIC, MULTI-TOUCH,
+ * RESET GEOMETRY) head the page; the testers sit under their own section header.  Each tester's
  * button is disabled while no node of its kind is present.  Calibration, the
  * diagnostic and the geometry reset are control_panel.c's (cp_run_touch_tool(),
  * cp_reset_touch_geometry()); this page only holds their buttons.  A static
@@ -409,9 +409,21 @@ static void input_proc_pad(InputState *s) {
 #define INPUT_BTN_H       40
 #define INPUT_BTN_GAP     10
 #define INPUT_BTN_MAX_W   200
-/* The top band, for the touch tools: a section header and one row of
- * buttons (26 + 44), then the gap a section leaves before the next (20). */
-#define INPUT_TOUCH_H     90
+/* The top band, for the touch tools: a section header, the CALIBRATED row and
+ * one row of buttons (26 + 28 + 44), then the gap a section leaves before the
+ * next (20). */
+#define INPUT_CALIB_ROW_H 28   /* draw_info_row()'s advance */
+#define INPUT_CALIB_NO    "NOT CALIBRATED"   /* the row's longer value */
+#define INPUT_TOUCH_H     (90 + INPUT_CALIB_ROW_H)
+
+/* Whether /etc/touch_calibration.conf exists: the row's value, and its colour.
+ * Asked on every draw, which is only on a change, so a calibration just saved
+ * shows on the repaint that follows the wizard. */
+static const char *calib_row_value(uint32_t *color) {
+    bool ok = (access(CALIB_FILE, 0) == 0);
+    *color = ok ? COLOR_GREEN : COLOR_YELLOW;
+    return ok ? "CALIBRATED" : INPUT_CALIB_NO;
+}
 
 static Button *const test_btns[3] = { &input_btn_ktest, &input_btn_mtest, &input_btn_gtest };
 static const char *const test_labels[3] = { "KBD TEST", "MOUSE TEST", "PAD TEST" };
@@ -435,7 +447,7 @@ static const char *const touch_labels[TOUCH_SLOTS] = {
 };
 /* RESET is the escape hatch from a bad calibration, so it reads as danger;
  * the diagnostic, the one tool with every layer of interpretation removed,
- * keeps the colour it had on the Touch tab. */
+ * keeps its own colour. */
 static const uint32_t touch_colors[TOUCH_SLOTS] = {
     [TOUCH_SLOT_CALIB] = BTN_COLOR_PRIMARY,
     [TOUCH_SLOT_DIAG]  = RGB(100, 60, 120),
@@ -455,7 +467,7 @@ static int test_scale;        /* the row's text scale, see layout */
 static void input_page_layout(void) {
     sec_touch_y = CONTENT_Y + 2;
     {
-        int by = sec_touch_y + 26;
+        int by = sec_touch_y + 26 + INPUT_CALIB_ROW_H;
         int bw = (CONTENT_WIDTH - (TOUCH_SLOTS - 1) * INPUT_BTN_GAP) / TOUCH_SLOTS;
         if (bw > INPUT_BTN_MAX_W) bw = INPUT_BTN_MAX_W;
         int sx = CONTENT_LEFT + (CONTENT_WIDTH - (TOUCH_SLOTS * bw
@@ -498,11 +510,17 @@ static void input_page_layout(void) {
      * past the touchable rect looks perfect in a screenshot and is dead to a
      * finger.  The bottom is the count line under the buttons; the right edge
      * the last button as placed in either row.  A label wider than its button
-     * is cut, and both rows' labels are counted. */
+     * is cut, and both rows' labels are counted, and so is the CALIBRATED row's
+     * longer value if it runs past the content edge. */
     {
         int bottom = count_y + 8 - CONTENT_Y;
         int right  = input_btn_gtest.x + input_btn_gtest.width;
         int clipped = 0;
+        char cut[24];
+        if (fit_value(INPUT_CALIB_NO,
+                      CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270),   /* draw_info_row()'s */
+                      2, cut, sizeof(cut)))
+            clipped++;
         for (int i = 0; i < 3; i++)
             if (text_measure_width(test_labels[i], test_scale) > test_btns[i]->width - 8)
                 clipped++;
@@ -542,6 +560,9 @@ static void input_page_draw(Framebuffer *fb) {
     const InputState *s = &input_state;
     input_sync_disabled();
     draw_section_header(fb, sec_touch_y, "TOUCH");
+    uint32_t calib_color;
+    const char *calib = calib_row_value(&calib_color);
+    draw_info_row(fb, sec_touch_y + 26, "TOUCH:", calib, calib_color);
     for (int i = 0; i < TOUCH_SLOTS; i++)
         if (touch_btns[i]) button_draw(fb, touch_btns[i]);
     draw_section_header(fb, sec_test_y, "KEYBOARD / MOUSE / PAD");

@@ -40,6 +40,12 @@
 #define BAR_WIDTH  300
 #define BAR_HEIGHT 20
 
+/* Above this many logical pixels, a touch inset stops looking like the panel's
+ * saturation band and starts looking like a bad calibration. RW09 measures ~17;
+ * 24 leaves headroom for panel variation without hiding a real fault.  Read by
+ * the calibration wizard's report and the Display page's TOUCHABLE row. */
+#define DISP_INSET_SUSPECT 24
+
 #define COLOR_LABEL       RGB(180, 180, 180)
 #define COLOR_BG          RGB(20, 20, 30)      /* the panel's background */
 #define COLOR_DISABLED    RGB(120, 120, 120)   /* a control switched off */

@@ -1,10 +1,10 @@
 /* display_page.c — control_panel's Display page: backlight, orientation, what
- * is visible, and the display tests.
+ * is visible and what is touchable, SCREEN EDGES, and the display tests.
  *
  * Opened from the home grid's Display tile, and the one home for the panel's
- * own look; touch calibration and screen edges are the Touch tab's, the Tests
- * tab carries none of this.  Exposed only as cp_display_page (cp_page.h); its
- * state lives in this file.
+ * own look and its two rectangles; touch calibration and whether it has been
+ * done are the Input page's (input_page.c).  Exposed only as cp_display_page
+ * (cp_page.h); its state lives in this file.
  *
  * ⚠️ There is no SAVE button, on purpose.  -/+ writes backlight_brightness to
  * the config file the moment it changes and reloads common/hardware.c's cache,
@@ -170,6 +170,13 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
     }
 }
 
+/* The calibration wizard, edges only: it measures what is drawable, so it sits
+ * with the rows it changes.  cp_run_touch_tool() posts the outcome and lays
+ * every page out again, this one included. */
+static void run_screen_edges(Framebuffer *fb, TouchInput *touch) {
+    cp_run_touch_tool(fb, touch, CP_TOUCH_EDGES);
+}
+
 /* Name and routine in one row, so the button a finger presses and the routine
  * that runs cannot drift apart the way two parallel lists can. */
 static const struct {
@@ -178,6 +185,7 @@ static const struct {
 } disp_tests[] = {
     { "BACKLIGHT RAMP", test_backlight_run },
     { "TEST PATTERNS",  test_display       },
+    { "SCREEN EDGES",   run_screen_edges   },
 };
 #define DISP_TEST_COUNT ((int)(sizeof(disp_tests) / sizeof(disp_tests[0])))
 
@@ -271,6 +279,48 @@ static void display_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         disp_tests[test].run(fb, touch);
 }
 
+/* ── The two rectangles: EDGES and TOUCHABLE ───────────────────────────── */
+
+/* The screen area the digitiser can actually reach, in LOGICAL pixels — what an
+ * app author lays out in.
+ *
+ * This is NOT expected to be the whole logical screen. The digitiser saturates
+ * before the physical panel edge, so a band at each end of Y is visible but not
+ * pressable; on RW09 that is ~17 rows at the top and ~16 at the bottom. It is
+ * measured per panel, never assumed.
+ *
+ * Read straight off the published inset rather than re-derived from the curve:
+ * that is the same number every app's SCREEN_SAFE_* resolves to, so this row
+ * cannot disagree with what layouts actually get. */
+static void display_touchable_rect(int *lx0, int *lx1, int *ly0, int *ly1) {
+    *lx0 = screen_touch_inset_left;
+    *ly0 = screen_touch_inset_top;
+    *lx1 = screen_base_width  - 1 - screen_touch_inset_right;
+    *ly1 = screen_base_height - 1 - screen_touch_inset_bottom;
+}
+
+/* Both rows' values, and the TOUCHABLE colour: one formatter, read by the draw
+ * and by the layout receipt, so the width the receipt checks is the text drawn.
+ *
+ * Visible is not the same as touchable, and the TOUCHABLE row is the only place
+ * a reader finds that out without rediscovering it the hard way. A non-zero
+ * inset is the CORRECT answer on this hardware — the digitiser saturates before
+ * the panel edge — so it is only amber once it is large enough to be
+ * suspicious. The band stays drawable either way. */
+static uint32_t geom_rows_format(char *edges, size_t elen, char *reach, size_t rlen) {
+    snprintf(edges, elen, "T:%d  B:%d  L:%d  R:%d",
+             screen_bezel_top, screen_bezel_bottom,
+             screen_bezel_left, screen_bezel_right);
+    int tx0, tx1, ty0, ty1;
+    display_touchable_rect(&tx0, &tx1, &ty0, &ty1);
+    snprintf(reach, rlen, "X %d..%d  Y %d..%d", tx0, tx1, ty0, ty1);
+    int worst_inset = screen_touch_inset_top;
+    if (screen_touch_inset_bottom > worst_inset) worst_inset = screen_touch_inset_bottom;
+    if (screen_touch_inset_left   > worst_inset) worst_inset = screen_touch_inset_left;
+    if (screen_touch_inset_right  > worst_inset) worst_inset = screen_touch_inset_right;
+    return worst_inset > DISP_INSET_SUSPECT ? COLOR_ORANGE : COLOR_GREEN;
+}
+
 /* ── Layout ─────────────────────────────────────────────────────────────── */
 
 static ToggleSwitch portrait_toggle;
@@ -278,7 +328,7 @@ static Button       bl_minus_btn, bl_plus_btn;
 static Button       test_btns[DISP_TEST_COUNT];
 
 static int  sec_disp_y, bl_label_y, bar_x, bar_y, bar_w;
-static int  note_y, visible_y, sec_tests_y;
+static int  note_y, visible_y, edges_y, reach_y, sec_tests_y;
 static bool stacked;      /* backlight controls on their own row under the label */
 
 #define DISP_BL_LABEL        "BACKLIGHT"
@@ -329,13 +379,20 @@ static void display_page_layout(void) {
                 60, 28, DISP_PORTRAIT_LABEL, portrait);
     note_y    = portrait_toggle.y + 36;
     visible_y = note_y + 20;
+    edges_y   = visible_y + DISP_INFO_ROW_H;
+    reach_y   = edges_y + DISP_INFO_ROW_H;
 
-    /* The tests: two columns, each as wide as half the content. */
-    sec_tests_y = visible_y + DISP_INFO_ROW_H + 12;
-    int btn_w   = (CONTENT_WIDTH - DISP_TEST_GAP) / 2;
+    /* The tests: one row of three where every label fits a third at scale 2
+     * (landscape), otherwise two columns, each as wide as half the content. */
+    sec_tests_y = reach_y + DISP_INFO_ROW_H + 12;
+    int cols    = 3;
+    int btn_w   = (CONTENT_WIDTH - (cols - 1) * DISP_TEST_GAP) / cols;
+    for (int i = 0; i < DISP_TEST_COUNT; i++)
+        if (text_measure_width(disp_tests[i].name, 2) > btn_w - 8) cols = 2;
+    btn_w       = (CONTENT_WIDTH - (cols - 1) * DISP_TEST_GAP) / cols;
     int grid_y  = sec_tests_y + 26;
     for (int i = 0; i < DISP_TEST_COUNT; i++) {
-        int c = i % 2, r = i / 2;
+        int c = i % cols, r = i / cols;
         button_init_full(&test_btns[i],
                          CONTENT_LEFT + c * (btn_w + DISP_TEST_GAP),
                          grid_y + r * (DISP_TEST_BTN_H + DISP_TEST_GAP),
@@ -348,8 +405,18 @@ static void display_page_layout(void) {
      * the touchable rect looks perfect in a screenshot and is dead to a finger.
      * The last test button is the lowest widget; the right edge is the widest of
      * the toggle's hit box, the note, [+] and the test grid, each read off the
-     * widget as placed, not re-derived. */
+     * widget as placed, not re-derived.  A test label wider than its button, or
+     * an EDGES / TOUCHABLE value past the content edge, is cut, and counted. */
     {
+        int clipped = 0;
+        for (int i = 0; i < DISP_TEST_COUNT; i++)
+            if (text_measure_width(disp_tests[i].name, 2) > test_btns[i].width - 8)
+                clipped++;
+        char edges[48], reach[48], cut[48];
+        int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);   /* draw_info_row()'s */
+        geom_rows_format(edges, sizeof(edges), reach, sizeof(reach));
+        if (fit_value(edges, value_x, 2, cut, sizeof(cut))) clipped++;
+        if (fit_value(reach, value_x, 2, cut, sizeof(cut))) clipped++;
         const Button *last = &test_btns[DISP_TEST_COUNT - 1];
         int bottom = (last->y + last->height) - CONTENT_Y;
         int right  = portrait_toggle.x - 5 + portrait_toggle.track_w
@@ -365,8 +432,9 @@ static void display_page_layout(void) {
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : "fits";
         printf("control_panel: display stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d (safe %dx%d, %s)\n",
-               verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
+               "right %d of CONTENT_RIGHT %d, %d label(s) cut, tests in %d "
+               "column(s) (safe %dx%d, %s)\n",
+               verdict, bottom, CONTENT_H, right, CONTENT_RIGHT, clipped, cols,
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -393,6 +461,11 @@ static void display_page_draw(Framebuffer *fb) {
              (int)fb->width, (int)fb->height,
              screen_panel_width, screen_panel_height);
     draw_info_row(fb, visible_y, "VISIBLE:", buf, COLOR_WHITE);
+
+    char edges[48], reach[48];
+    uint32_t reach_color = geom_rows_format(edges, sizeof(edges), reach, sizeof(reach));
+    draw_info_row(fb, edges_y, "EDGES:", edges, COLOR_WHITE);
+    draw_info_row(fb, reach_y, "TOUCHABLE:", reach, reach_color);
 
     draw_section_header(fb, sec_tests_y, "TESTS");
     for (int i = 0; i < DISP_TEST_COUNT; i++)

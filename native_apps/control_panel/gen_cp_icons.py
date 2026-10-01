@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the ten 96x96 PPM (P6) control-panel icons for control_panel.
+"""Generate the nine 96x96 PPM (P6) control-panel icons for control_panel.
 
 Outputs (written to icons/ next to this script, regardless of cwd):
-  cp_audio cp_display cp_touch cp_led cp_usb cp_input cp_bluetooth
+  cp_audio cp_display cp_led cp_usb cp_input cp_bluetooth
   cp_network cp_monitor cp_info  (.ppm)
 
 Run (WSL, needs PIL):  python3 gen_cp_icons.py
@@ -84,22 +84,6 @@ def display():
         line(d, [(48 + 11 * math.cos(a), 43 + 11 * math.sin(a)),
                  (48 + 15 * math.cos(a), 43 + 15 * math.sin(a))], 3,
              (255, 220, 60))
-    return im
-
-
-def touch():
-    im, d = base((130, 60, 170))
-    for r in (30, 20):
-        arc(d, 38, 30, r, 0, 360, 3, (225, 190, 240))
-    # pointing hand: index finger, palm, curled fingers
-    rrect(d, 32, 26, 44, 62, 6, fill=WHITE)            # index finger
-    rrect(d, 22, 52, 70, 84, 12, fill=WHITE)           # palm
-    rrect(d, 44, 46, 54, 62, 5, fill=WHITE)
-    rrect(d, 54, 49, 64, 65, 5, fill=WHITE)
-    rrect(d, 62, 54, 72, 70, 5, fill=WHITE)
-    for x in (44, 54, 62):                              # finger gaps
-        line(d, [(x, 54), (x, 62)], 1.5, (130, 60, 170))
-    circ(d, 38, 26, 3, fill=(255, 230, 120))
     return im
 
 
@@ -193,7 +177,7 @@ def info():
     return im
 
 
-ICONS = [("cp_audio", audio), ("cp_display", display), ("cp_touch", touch),
+ICONS = [("cp_audio", audio), ("cp_display", display),
          ("cp_led", led), ("cp_usb", usb), ("cp_input", input_),
          ("cp_bluetooth", bluetooth),
          ("cp_network", network), ("cp_monitor", monitor), ("cp_info", info)]
