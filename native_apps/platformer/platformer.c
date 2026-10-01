@@ -1636,7 +1636,7 @@ static void draw_all(void) {
             "STOMP ENEMIES FROM ABOVE\n"
             "COLLECT COINS   REACH THE FLAG",
             no_controller ? "NO CONTROLLER DETECTED\n"
-                            "CONNECT A USB KEYBOARD OR GAMEPAD"
+                            "CONNECT A KEYBOARD OR GAMEPAD"
                           : NULL,
             &start_button);
         return;

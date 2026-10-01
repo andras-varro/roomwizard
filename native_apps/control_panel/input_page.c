@@ -590,7 +590,7 @@ static void draw_kbd_test(Framebuffer *fb, InputState *s) {
                  s->kbd.last_code, s->devs[s->last_dev].ev_num);
     else if (s->kbd.last_code>0)
         snprintf(inf,sizeof(inf),"LAST KEY: %s (CODE %d)", s->kbd.last_name, s->kbd.last_code);
-    else snprintf(inf,sizeof(inf),"PRESS ANY KEY ON ANY USB KEYBOARD");
+    else snprintf(inf,sizeof(inf),"PRESS ANY KEY ON ANY KEYBOARD");
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+52, inf, COLOR_CYAN, 2);
 
     int kx=SCREEN_SAFE_LEFT+20, ky=SCREEN_SAFE_TOP+72, hu=26, kh=32, g=2;
