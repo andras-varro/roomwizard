@@ -17,7 +17,7 @@
 # ── What goes where ─────────────────────────────────────────────────────────
 #
 #   built artifacts (this script, and the bundle):
-#     BlueZ 5.66 bluetoothd, bluetoothctl, libbluetooth   ← build-bluez.sh, staging/
+#     BlueZ 5.66 bluetoothd, bluetoothctl, btmon, libbluetooth ← build-bluez.sh, staging/
 #     BlueALSA 4.3.1 bluealsa, bluealsa-aplay, 2 plugins  ← build-bluealsa.sh, staging-bluealsa/
 #     the Bluetooth module closure + load-order.txt       ← ../kernel/build-bt-modules.sh,
 #                                                           modules/, to /lib/modules/4.14.52/bt
@@ -187,9 +187,10 @@ LIB_REAL="$(readlink -f "$STAGING/usr/lib/libbluetooth.so.3")"
 BT_ARTIFACTS=(
     "0755|$STAGING/usr/libexec/bluetooth/bluetoothd|/usr/libexec/bluetooth/bluetoothd"
     "0755|$STAGING/usr/bin/bluetoothctl|/usr/bin/bluetoothctl"
+    "0755|$STAGING/usr/bin/btmon|/usr/bin/btmon"
     "0755|$LIB_REAL|/usr/lib/libbluetooth.so.3"
 )
-ARM_TARGETS=("$STAGING/usr/libexec/bluetooth/bluetoothd" "$STAGING/usr/bin/bluetoothctl" "$LIB_REAL")
+ARM_TARGETS=("$STAGING/usr/libexec/bluetooth/bluetoothd" "$STAGING/usr/bin/bluetoothctl" "$STAGING/usr/bin/btmon" "$LIB_REAL")
 for ko in "${BT_MODULES[@]}"; do
     BT_ARTIFACTS+=("0644|$MODULES_DIR/$ko|/lib/modules/$KERNEL_VERSION/bt/$ko")
     ARM_TARGETS+=("$MODULES_DIR/$ko")

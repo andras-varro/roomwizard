@@ -11,6 +11,7 @@
 # path inside it is the device path:
 #   staging/usr/libexec/bluetooth/bluetoothd
 #   staging/usr/bin/bluetoothctl
+#   staging/usr/bin/btmon
 #   staging/usr/lib/libbluetooth.so.3*
 #   staging/etc/dbus-1/system.d/bluetooth.conf   (the policy that lets it own org.bluez)
 # The binaries are left UNSTRIPPED: check-arm-safe.sh cannot judge a stripped one.
@@ -35,7 +36,8 @@
 #   obex                     needs libical, absent on the device
 #   mesh                     needs json-c and ell, absent on the device
 #   midi                     needs libasound at build time; off by default, said explicitly
-#   monitor, manpages        btmon and the man pages are not wanted on the panel
+#   manpages                 not wanted on the panel. btmon (the monitor) IS built: it is the
+#                            one HCI-level instrument, and a hand copy in /tmp dies at reboot
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -74,7 +76,7 @@ esac
 
 # The artifacts, not a stamp: a half-finished install leaves one of them missing.
 if [ -f "$STAGING/usr/libexec/bluetooth/bluetoothd" ] && [ -f "$STAGING/usr/bin/bluetoothctl" ] \
-   && [ -f "$STAGING/usr/lib/libbluetooth.so.3" ]; then
+   && [ -f "$STAGING/usr/lib/libbluetooth.so.3" ] && [ -f "$STAGING/usr/bin/btmon" ]; then
     echo "BlueZ $BLUEZ_VER already built ($STAGING)"
     exit 0
 fi
@@ -144,7 +146,7 @@ if ! { CC="$TC-gcc" \
        LDFLAGS="-L$SYSROOT/lib/$TC -L$MULTIARCH -Wl,--allow-shlib-undefined" \
        ./configure --host="$TC" --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
             --enable-library --disable-udev --disable-systemd --disable-cups \
-            --disable-obex --disable-mesh --disable-midi --disable-manpages --disable-monitor \
+            --disable-obex --disable-mesh --disable-midi --disable-manpages \
        && make -j"$(nproc)" \
        && make install DESTDIR="$STAGING"; } >"$LOG" 2>&1; then
     tail -30 "$LOG"
@@ -162,7 +164,7 @@ if grep -q 'Not available before' "$LOG"; then
     exit 1
 fi
 
-BINS=("$STAGING/usr/libexec/bluetooth/bluetoothd" "$STAGING/usr/bin/bluetoothctl")
+BINS=("$STAGING/usr/libexec/bluetooth/bluetoothd" "$STAGING/usr/bin/bluetoothctl" "$STAGING/usr/bin/btmon")
 # `file` says "ARM, EABI5" for hard-float too; the ABI tag is what tells them apart.
 for f in "${BINS[@]}" "$STAGING/usr/lib/libbluetooth.so.3"; do
     if "$TC-readelf" -A "$f" | grep -q 'Tag_ABI_VFP_args'; then
