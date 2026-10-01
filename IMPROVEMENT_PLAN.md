@@ -223,8 +223,7 @@ prerequisite: A2DP is tens of KB/s and a controller a few hundred bytes/s, which
 **Bluetooth needs a USB dongle — there is no radio on the board**
 ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion); the `J5`/`J6` XBee socket is 802.15.4 and cannot
 host Bluetooth), and there is no second USB port ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies
-the single connector. No BlueZ userspace is on the unit — measured on `.188` 2026-09-11: `hcitool`,
-`bluetoothctl` and `bluetoothd` are all absent.
+the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 below).
 
 **Open now:**
 
@@ -233,21 +232,41 @@ the single connector. No BlueZ userspace is on the unit — measured on `.188` 2
   both, ScummVM. The Mix Bus Test crack is B38. **Loudness:** an onboard
   probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
   the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
-- Nothing loads the Bluetooth modules at boot, and no script deploys them or the firmware.
+- **Nothing is persistent on `.188` yet** (measured 2026-10-01). The 18 modules from
+  `kernel/build-bt-modules.sh` (`BT_LE=y`, `BT_BREDR=y`, measured from its `.config`) are `insmod`'d by hand from
+  `/lib/modules/4.14.52/bt/`; `bluetoothd` runs by hand from `/tmp/s1002/` and is lost on reboot. Only
+  `/etc/dbus-1/system.d/bluetooth.conf` is installed. `hci0` is up on an RTL8761CU (`rtl_bt/rtl8761cu_fw.bin` +
+  config), controller `A0:AD:9F:70:DD:CA`.
+- **Pairing recipe (measured):** a `NoInputNoOutput` agent; scripted `bluetoothctl` needs a ~2 s delay before
+  `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
+  0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
+  carrying both keys and touchpad, which `app_launcher` hot-plugged.
+- **8BitDo Pro 2 is not paired yet.** In S (Switch) mode it is useless on 4.14 regardless: it emulates a
+  Switch Pro controller and `hid-nintendo` arrived in 5.16 **[inferred from upstream history]**. In S mode only a
+  BLE advertisement was seen (name `8ap`, public address `E4:17:D8:42:BD:FF`); BlueZ tried BR/EDR and got HCI Page
+  Timeout (0x04) three times (measured with `btmon`). An LE connect failed in `bluetoothd` with
+  `att_connect_cb ... Function not implemented (38)`: from `net/bluetooth/lib.c`, errno 38 is `bt_to_errno()`'s
+  default for an unmapped HCI status, not a missing `CONFIG` **[read from source; the real LE status is
+  unmeasured]**. In D mode two 10.24 s classic inquiries found nothing; the pairing window and the inquiry may not
+  have overlapped **[not ruled out]**. **Next:** D mode with the pad freshly in pairing mode (hold pair ~3 s) and
+  an inquiry only, no pair, for 15 s; if still absent, X mode; capture the LE status with `btmon` if it
+  advertises LE only.
 
 **Next, in order:**
 
-1. Cross-build BlueZ ≥ 5.66 (`--enable-library`, `--disable-udev/systemd/cups/obex/mesh/manpages/monitor`).
-   It needs glib 2.62.6 and dbus 1.12 built for their headers; the device has `libglib`/`libgio`/`libgobject`
-   2.62.6 and `libdbus` 1.12 (measured).
-2. Pair a controller with `bluetoothctl` (HIDP/hog). `/var/lib` is on the persistent rootfs (measured), so
-   link keys survive.
-   Once a Bluetooth keyboard can attach, the Input page's keyboard tester prompt ("PRESS ANY KEY ON ANY USB
-   KEYBOARD", `input_page.c`) must stop saying USB. The control panel's Bluetooth page (adapter power, scan,
-   pair/connect/forget) is a `CpPage` with its own tile, added when this lands; the grid has no Bluetooth tile
-   until then, and the paired HID devices appear in the Input page's testers with no extra code there.
+1. **Done (measured 2026-10-01):** `bluetooth/build-bluez.sh` builds BlueZ 5.66 against Debian bullseye armel
+   `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
+   Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
+   a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
+2. Packaging: a deploy path for the modules, `rtl_bt` firmware, `bluetoothd`/`bluetoothctl`/`libbluetooth` and the
+   dbus conf, plus boot-time module load and daemon start. Undecided whether that is a `bluetooth/` component in
+   `deploy-all.sh` and the release bundle, or part of `usb_host`; device files go through
+   `commissioning/provision.sh`.
 3. `sbc` + `bluez-alsa` v4.3.1 into **our** alsa-lib's plugin dir.
-4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
+4. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
+   the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
+   own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).
+5. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
    `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
    USB card 1. A2DP adds ~150-250 ms latency **[inferred]**.
 
@@ -435,6 +454,20 @@ RESCAN (and the one opening scan of an empty port). **Done when** a device plugg
 the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted. Not yet seen on
 the panel: the page's "+N MORE" row (shown when the list outgrows the rows that fit; .188 has 7 devices and
 all fit), so plug in enough devices to see it.
+
+### F107. Control Panel menu has no keyboard navigation — open, measured by the operator on .188 2026-10-01
+
+A keyboard works in the Input page's keyboard tester but cannot move around the menu. `control_panel.c`'s main
+loop polls only `touch_poll(&touch)` (~`:768`) and never calls `gamepad_poll()`, whereas `app_launcher.c` does
+(`:753`) and routes it through `handle_gamepad_input()` (`:374`) **[read from source; not tried on the panel]**.
+**Done when** arrow keys + Enter/Esc move through the tile grid and a page on .188.
+
+### F108. No mouse pointer in the launcher or the Control Panel — open, measured by the operator on .188 2026-10-01
+
+A mouse works only in the Input page's mouse tester. `app_launcher.c` consumes `mouse_left_pressed` (`:805`) but
+a grep finds no cursor drawn there, and `control_panel.c` never polls `gamepad_poll()` at all **[read from
+source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
+and a click activates a tile in both; the draw belongs in one shared helper, not per app.
 
 ## Structural and cleanup
 
