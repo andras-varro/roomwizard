@@ -1,9 +1,9 @@
 /* cp_ui.h — what control_panel's page modules share with control_panel.c.
  *
- * control_panel.c owns the tab bar, the home grid and every page that has not
- * moved out yet; a page that has (led_page.c, monitor_page.c, info_page.c,
- * network_page.c, usb_page.c, input_page.c, audio_page.c, display_page.c) lays
- * itself out in the same content rectangle and draws with the same helpers.
+ * control_panel.c owns the page bar and the home grid; every page (led_page.c,
+ * monitor_page.c, info_page.c, network_page.c, usb_page.c, input_page.c,
+ * audio_page.c, display_page.c) lays itself out in the same content rectangle
+ * and draws with the same helpers.
  * This header is the one home for that rectangle and those helpers, so a moved
  * page cannot carry a second copy of either.  The helper bodies stay in control_panel.c.
  *
@@ -26,7 +26,7 @@
 /* The touch curve and bezel the wizard writes and the touch tests load. */
 #define CALIB_FILE        "/etc/touch_calibration.conf"
 
-/* The content rectangle: the safe area below the tab bar. */
+/* The content rectangle: the safe area below the page bar. */
 #define TAB_BAR_H         44
 #define TAB_DIVIDER_H     2
 #define CONTENT_Y         (SCREEN_SAFE_TOP + TAB_BAR_H + TAB_DIVIDER_H)

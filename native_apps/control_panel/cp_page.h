@@ -8,7 +8,7 @@
  * in the content rectangle cp_ui.h defines, drawn with cp_ui.h's helpers.
  *
  * Adding a page: a new .c exposing a const CpPage, its extern below, a row in
- * home_items[], and the file on control_panel's line in build-and-deploy.sh.
+ * home_pages[], and the file on control_panel's line in build-and-deploy.sh.
  */
 #ifndef CP_PAGE_H
 #define CP_PAGE_H

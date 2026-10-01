@@ -1,21 +1,18 @@
 /**
  * Control Panel — Unified Hardware App for RoomWizard
  *
- * Opens on an icon grid (the home view); each tile opens a page:
+ * Two views: the home icon grid, and one open page (a CpPage module, cp_page.h)
+ * under a bar carrying BACK and the page's name.  Each tile opens a page:
  *   Audio        — enable, music/effects, output device, the TEST chime and
- *                  the MIX BUS TEST launch (audio_page.c); grid-only
+ *                  the MIX BUS TEST launch (audio_page.c)
  *   Display      — backlight, orientation, what is visible and touchable,
- *                  SCREEN EDGES and the display tests (display_page.c);
- *                  grid-only
- *   LED          — enable, brightness and the LED tests (led_page.c); a
- *                  grid-only page with no tab of its own
- *   Monitor      — live uptime, load, memory and storage (monitor_page.c);
- *                  grid-only too
- *   Information  — what this unit is (info_page.c); grid-only
- *   Network      — gateway, DNS and every interface (network_page.c); grid-only
- *   USB          — the bus list and RESCAN (usb_page.c); grid-only
- *   Input        — the keyboard/mouse/pad testers, on any bus (input_page.c);
- *                  grid-only
+ *                  SCREEN EDGES and the display tests (display_page.c)
+ *   LED          — enable, brightness and the LED tests (led_page.c)
+ *   USB          — the bus list and RESCAN (usb_page.c)
+ *   Input        — the keyboard/mouse/pad testers, on any bus (input_page.c)
+ *   Network      — gateway, DNS and every interface (network_page.c)
+ *   Monitor      — live uptime, load, memory and storage (monitor_page.c)
+ *   Information  — what this unit is (info_page.c)
  */
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -28,7 +25,6 @@
 #include "../common/hardware.h"
 #include "../common/common.h"
 #include "../common/config.h"
-#include "../common/ui_layout.h"
 #include "../common/icon_grid.h"
 #include "cp_ui.h"
 #include "cp_page.h"
@@ -56,9 +52,8 @@
  * Color Palette
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-#define COLOR_TAB_BG         RGB(30, 30, 45)
-#define COLOR_TAB_ACTIVE     RGB(50, 50, 70)
-#define COLOR_TAB_INACTIVE   RGB(35, 35, 50)
+#define COLOR_PAGE_BAR_BG    RGB(30, 30, 45)
+#define COLOR_BACK_BTN       RGB(35, 35, 50)
 #define COLOR_SECTION_LINE   RGB(60, 60, 80)
 #define COLOR_HEADER_TEXT    COLOR_CYAN
 #define COLOR_DATA           COLOR_WHITE
@@ -74,10 +69,8 @@
 /* TAB_BAR_H, CONTENT_*, BAR_WIDTH/BAR_HEIGHT and COLOR_LABEL live in cp_ui.h,
  * which the page modules share. */
 
-#define TAB_BTN_W         150
-#define TAB_BTN_H         40
-#define TAB_BTN_SPACING   4
 #define BACK_BTN_W        55
+#define BACK_BTN_H        40
 
 /* How long a status message stays up.  A page's message is held longer: the
  * one that exists names a file path, which a 2 s flash does not let anyone
@@ -99,71 +92,29 @@
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 typedef enum {
-    TAB_TESTS,
-    TAB_COUNT,
-    /* Views with no tab button go after TAB_COUNT: every loop over the tab bar
-     * stops there, so none of these can index tab_names[] or tab_buttons[]. */
-    TAB_HOME,    /* the icon grid */
-    TAB_PAGE     /* a CpPage module (cp_page.h), AppState.page says which —
-                    reached from its home tile only; the tab bar shows BACK
-                    and the page's name */
-} ActiveTab;
-
-typedef enum {
-    TEST_MENU_VIEW,
-    TEST_RUNNING
-} TestSubState;
-
-typedef enum {
     CONFIRM_NONE,
     CONFIRM_PAGE             /* a page's cp_confirm(): its on_ok runs on OK */
 } ConfirmAction;
 
-/* Indexed only below TAB_COUNT — TAB_HOME and TAB_PAGE have no tab button. */
-static const char *tab_names[TAB_COUNT] = { "TESTS" };
-
-/* The home grid, and the page registry: a row with a page opens that CpPage,
- * and takes its label and icon from it (one name, one home); every page named
- * here is loaded, laid out and reset through it.  The other rows still open the
- * tab that carries their settings, and move to a page of their own one icon at
- * a time, deleting the duplicate as each lands.
- * Bluetooth has no page yet, so no tile. icon NULL = the grid's letter tile. */
-typedef struct {
-    const char   *label;       /* NULL when page is set */
-    const char   *icon;        /* basename under /opt/roomwizard/icons/, no .ppm */
-    ActiveTab     tab;         /* TAB_PAGE when page is set */
-    const CpPage *page;
-} HomeItem;
-
-static const HomeItem home_items[] = {
-    { .tab = TAB_PAGE, .page = &cp_audio_page },
-    { .tab = TAB_PAGE, .page = &cp_display_page },
-    { .tab = TAB_PAGE, .page = &cp_led_page },
-    { .tab = TAB_PAGE, .page = &cp_usb_page },
-    { .tab = TAB_PAGE, .page = &cp_input_page },
-    { .tab = TAB_PAGE, .page = &cp_network_page },
-    { .tab = TAB_PAGE, .page = &cp_monitor_page },
-    { .tab = TAB_PAGE, .page = &cp_info_page },
+/* The home grid, and the page registry: one tile per CpPage, in this order,
+ * taking its label and icon from the page (one name, one home); every page
+ * named here is loaded, laid out and reset through it.  Bluetooth has no page
+ * yet, so no tile.  A page's icon NULL = the grid's letter tile. */
+static const CpPage *const home_pages[] = {
+    &cp_audio_page,
+    &cp_display_page,
+    &cp_led_page,
+    &cp_usb_page,
+    &cp_input_page,
+    &cp_network_page,
+    &cp_monitor_page,
+    &cp_info_page,
 };
-#define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
+#define HOME_PAGE_COUNT ((int)(sizeof(home_pages) / sizeof(home_pages[0])))
 #define HOME_TITLE_H    50
 
-/* The Tests tab: name and routine in one row, and the count derived from the
- * table, so the button pressed and the routine run cannot drift the way a name
- * list beside a bare-index switch could.  It is empty, and no home tile opens
- * the tab: the LED tests are on the LED page (led_page.c), the backlight ramp
- * and the test patterns on the Display page (display_page.c), the multi-touch
- * test on the Input page (input_page.c). */
-static const struct {
-    const char *name;
-    void      (*run)(Framebuffer *, TouchInput *);
-} tests[] = {
-};
-#define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
-
 typedef struct {
-    ActiveTab     active_tab;
-    const CpPage *page;               /* the open page when active_tab == TAB_PAGE */
+    const CpPage *page;               /* the open page; NULL = the home grid */
     bool          page_dirty;         /* the page asked to be repainted */
     bool          page_fullscreen;    /* its input() queued a full-screen run */
     char          status_msg[64];
@@ -171,8 +122,6 @@ typedef struct {
     uint32_t      status_hold_ms;     /* how long it shows; 0 = STATUS_HOLD_MS */
     bool          status_ok;          /* a page's message: success or failure colour */
     int           home_page;         /* page of the home grid */
-    TestSubState  test_sub;
-    int           test_selected;
     Config        cfg;
     ConfirmAction confirm_action;
 } AppState;
@@ -193,17 +142,12 @@ bool cp_running(void) { return running; }
 
 /* â”€â”€ UI Elements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-static Button tab_buttons[TAB_COUNT];
-static Button back_btn;          /* the tab bar's BACK to the home grid */
-
-/* Tests */
-static UILayout test_layout;
-static Button test_buttons[NUM_TESTS];
+static Button back_btn;          /* the page bar's BACK to the home grid */
 
 /* The panel's one confirmation dialog: every page's cp_confirm() (cp_page.h)
  * opens this same instance.  While
  * confirm_action is not CONFIRM_NONE main() draws it over everything and routes
- * all input to it — the tab bar and the page included, so BACK under the
+ * all input to it — the page bar and the page included, so BACK under the
  * overlay cannot leave the page with the question still open. */
 static ModalDialog  confirm_dialog;
 static CpConfirmFn  confirm_on_ok;   /* CONFIRM_PAGE: run on OK, then NULL */
@@ -296,62 +240,26 @@ void draw_usage_bar(Framebuffer *fb, int x, int y, int width,
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
- * Tab Bar
+ * Page Bar
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-static void create_tab_bar(void) {
-    int tab_y = SCREEN_SAFE_TOP + 2;
-
-    /* Dynamic tab width: fit all tabs + exit button within safe area */
-    int back_total = BACK_BTN_W + 20;           /* back button + margins */
-    int tab_area_w = SCREEN_SAFE_WIDTH - back_total - 20; /* 10px left + 10px gap */
-    int num_tabs = TAB_COUNT;
-    int tab_w = (tab_area_w - (num_tabs - 1) * TAB_BTN_SPACING) / num_tabs;
-    if (tab_w > TAB_BTN_W) tab_w = TAB_BTN_W;  /* cap at original max */
-    if (tab_w < 60) tab_w = 60;                 /* minimum usable width */
-
-    /* Use abbreviated labels when tabs are narrow */
-    static const char *short_labels[] = { "TEST" };
-    const char **labels = (tab_w < 120) ? short_labels : tab_names;
-
-    for (int i = 0; i < TAB_COUNT; i++) {
-        int tab_x = SCREEN_SAFE_LEFT + back_total + i * (tab_w + TAB_BTN_SPACING);
-        button_init_full(&tab_buttons[i], tab_x, tab_y,
-                         tab_w, TAB_BTN_H, labels[i],
-                         COLOR_TAB_INACTIVE, COLOR_WHITE,
-                         BTN_COLOR_HIGHLIGHT, 2);
-    }
+static void create_page_bar(void) {
     /* BACK on the left, where the full-screen testers keep theirs: the top-right
      * corner is the home grid's exit X, and a double tap there must not both
      * leave the page and quit. */
     button_init_full(&back_btn,
-                     SCREEN_SAFE_LEFT + 10, tab_y,
-                     BACK_BTN_W, TAB_BTN_H, "<",
-                     COLOR_TAB_INACTIVE, COLOR_WHITE,
+                     SCREEN_SAFE_LEFT + 10, SCREEN_SAFE_TOP + 2,
+                     BACK_BTN_W, BACK_BTN_H, "<",
+                     COLOR_BACK_BTN, COLOR_WHITE,
                      BTN_HIGHLIGHT_COLOR, 3);
 }
 
-/* A page reached from its home tile only (past TAB_HOME) is a module of its
- * own: its bar carries BACK and the page's title, never the old tabs. */
-static bool is_page(ActiveTab t) { return t > TAB_HOME; }
-
-/* The title is the page's name, which is also its tile's label. */
-static const char *page_title(const AppState *state) {
-    return state->page ? state->page->name : "";
-}
-
-/* A tile's label and icon: the page's own when the row names one. */
-static const char *home_label(const HomeItem *it) {
-    return it->page ? it->page->name : it->label;
-}
-static const char *home_icon(const HomeItem *it) {
-    return it->page ? it->page->icon : it->icon;
-}
-
-static void draw_tab_bar(Framebuffer *fb, AppState *state) {
+/* Drawn over an open page only: BACK, and the page's name — which is also its
+ * tile's label — or the page's status line while one shows. */
+static void draw_page_bar(Framebuffer *fb, AppState *state) {
     fb_fill_rect(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP,
-                 SCREEN_SAFE_WIDTH, TAB_BAR_H, COLOR_TAB_BG);
-    if (is_page(state->active_tab) && state->status_msg[0]) {
+                 SCREEN_SAFE_WIDTH, TAB_BAR_H, COLOR_PAGE_BAR_BG);
+    if (state->status_msg[0]) {
         /* A page's status line takes the title's place while it shows: the
          * page owns the whole content rect, so the bar is the one spot that is
          * free in both orientations.  Scale 2 where it fits between BACK and
@@ -363,19 +271,9 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
         text_draw_centered(fb, (left + CONTENT_RIGHT) / 2,
                            back_btn.y + back_btn.height / 2, cut,
                            state->status_ok ? COLOR_GREEN : COLOR_ORANGE, scale);
-    } else if (is_page(state->active_tab)) {
+    } else {
         text_draw_centered(fb, fb->width / 2, back_btn.y + back_btn.height / 2,
-                           page_title(state), COLOR_WHITE, 3);
-    } else for (int i = 0; i < TAB_COUNT; i++) {
-        tab_buttons[i].bg_color = (i == (int)state->active_tab)
-                                  ? COLOR_TAB_ACTIVE : COLOR_TAB_INACTIVE;
-        button_draw(fb, &tab_buttons[i]);
-        if (i == (int)state->active_tab) {
-            int bx = tab_buttons[i].x;
-            int bw = tab_buttons[i].width;
-            int by = tab_buttons[i].y + tab_buttons[i].height;
-            fb_fill_rect(fb, bx, by - 3, bw, 3, COLOR_CYAN);
-        }
+                           state->page->name, COLOR_WHITE, 3);
     }
     button_draw(fb, &back_btn);
     fb_draw_line(fb, SCREEN_SAFE_LEFT, SCREEN_SAFE_TOP + TAB_BAR_H,
@@ -383,21 +281,19 @@ static void draw_tab_bar(Framebuffer *fb, AppState *state) {
                  COLOR_SECTION_LINE);
 }
 
-/* The one place a view changes, so entering and leaving keep their side
- * effects whether the tab bar, the home grid or BACK asked. */
-static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
-    ActiveTab prev_tab = state->active_tab;
+/* The one place a view changes — page NULL is the home grid — so entering and
+ * leaving keep their side effects whether a home tile or BACK asked. */
+static void set_view(AppState *state, const CpPage *page) {
     const CpPage *prev_page = state->page;
     if (prev_page && prev_page != page && prev_page->leave)
         prev_page->leave();
-    /* A message belongs to the view that posted it: the tabs and the page bar
-     * draw the one status_msg, so a page's BACKUP line must not follow BACK
-     * onto a tab.  The view change repaints anyway. */
-    if (tab != prev_tab || page != prev_page) {
+    /* A message belongs to the page that posted it: the page bar draws the one
+     * status_msg, so a page's BACKUP line must not follow BACK out of it.  The
+     * view change repaints anyway. */
+    if (page != prev_page) {
         state->status_msg[0]  = '\0';
         state->status_hold_ms = 0;
     }
-    state->active_tab = tab;
     state->page = page;
     state->page_fullscreen = false;
     if (page && page != prev_page) {
@@ -406,30 +302,21 @@ static void set_view(AppState *state, ActiveTab tab, const CpPage *page) {
     }
 }
 
-static void set_tab(AppState *state, ActiveTab tab) { set_view(state, tab, NULL); }
-static void set_page(AppState *state, const CpPage *page) {
-    set_view(state, TAB_PAGE, page);
-}
-
-static void handle_tab_bar_input(AppState *state, int tx, int ty,
-                                 bool touching, uint32_t now) {
-    if (!is_page(state->active_tab))
-        for (int i = 0; i < TAB_COUNT; i++)
-            if (button_update(&tab_buttons[i], tx, ty, touching, now))
-                set_tab(state, (ActiveTab)i);
+static void handle_page_bar_input(AppState *state, int tx, int ty,
+                                  bool touching, uint32_t now) {
     if (button_update(&back_btn, tx, ty, touching, now))
-        set_tab(state, TAB_HOME);
+        set_view(state, NULL);
 }
 
 /* ── Home grid ─────────────────────────────────────────────────────────────── */
 
 static IconGrid  home_grid;
-static uint32_t *home_icons[HOME_ITEM_COUNT];
+static uint32_t *home_icons[HOME_PAGE_COUNT];
 static int       home_press = -2;   /* tile index pressed, -1 = exit X, -2 = none */
 
 static void home_load_icons(void) {
-    for (int i = 0; i < HOME_ITEM_COUNT; i++) {
-        const char *icon = home_icon(&home_items[i]);
+    for (int i = 0; i < HOME_PAGE_COUNT; i++) {
+        const char *icon = home_pages[i]->icon;
         if (!icon) continue;
         char path[128];
         snprintf(path, sizeof(path), "/opt/roomwizard/icons/%s.ppm", icon);
@@ -438,12 +325,12 @@ static void home_load_icons(void) {
 }
 
 static int home_count_on_page(int page) {
-    int n = HOME_ITEM_COUNT - page * home_grid.per_page;
+    int n = HOME_PAGE_COUNT - page * home_grid.per_page;
     return n > home_grid.per_page ? home_grid.per_page : n;
 }
 
 static void draw_home(Framebuffer *fb, AppState *state) {
-    int pages = icon_grid_pages(&home_grid, HOME_ITEM_COUNT);
+    int pages = icon_grid_pages(&home_grid, HOME_PAGE_COUNT);
     if (state->home_page >= pages) state->home_page = pages - 1;
 
     text_draw_centered(fb, fb->width / 2, SCREEN_SAFE_TOP + 14, "CONTROL PANEL",
@@ -453,11 +340,11 @@ static void draw_home(Framebuffer *fb, AppState *state) {
     int start = state->home_page * home_grid.per_page;
     int n = home_count_on_page(state->home_page);
     for (int i = 0; i < n; i++) {
-        const HomeItem *it = &home_items[start + i];
+        const char *label = home_pages[start + i]->name;
         int x, y;
         icon_grid_tile_xy(&home_grid, i, &x, &y);
-        icon_grid_draw_tile(fb, &home_grid, x, y, home_label(it), home_icons[start + i],
-                            icon_grid_letter_color(home_label(it)), false);
+        icon_grid_draw_tile(fb, &home_grid, x, y, label, home_icons[start + i],
+                            icon_grid_letter_color(label), false);
     }
     icon_grid_draw_paging(fb, &home_grid, state->home_page, pages);
 }
@@ -475,7 +362,7 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
                    : tile >= 0 ? tile : -2;
         if (home_press == -2)
             state->home_page += icon_grid_page_hit(ts->x, state->home_page,
-                                                   icon_grid_pages(&home_grid, HOME_ITEM_COUNT));
+                                                   icon_grid_pages(&home_grid, HOME_PAGE_COUNT));
     }
     /* No else: a quick tap delivers press and release in the same poll. */
     if (!ts->released || home_press == -2) return;
@@ -489,9 +376,7 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
     if (icon_grid_hit(&home_grid, home_count_on_page(state->home_page),
                       ts->x, ts->y) != pressed)
         return;
-    const HomeItem *it = &home_items[start + pressed];
-    if (it->page) { set_page(state, it->page); return; }
-    set_tab(state, it->tab);
+    set_view(state, home_pages[start + pressed]);
 }
 
 /* ── RESET DEFAULTS: the one implementation (cp_page.h), pressed on the
@@ -589,9 +474,9 @@ int cp_reset_all_defaults(Config *cfg, char *msg, size_t len) {
      * reloads the cache, so page, file and hardware all land on config.c's
      * default together. */
     config_clear(cfg);
-    for (int i = 0; i < HOME_ITEM_COUNT; i++)
-        if (home_items[i].page && home_items[i].page->reset_defaults)
-            home_items[i].page->reset_defaults(cfg);
+    for (int i = 0; i < HOME_PAGE_COUNT; i++)
+        if (home_pages[i]->reset_defaults)
+            home_pages[i]->reset_defaults(cfg);
     /* RESET writes the cleared file: the button is nowhere near a SAVE, and
      * the backup above is what makes the write safe.  Games then resolve every
      * key through config.c's defaults, the same values shown here. */
@@ -616,27 +501,9 @@ int read_file_line(const char *path, char *buf, size_t len) {
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
- * Tests Tab  (from hardware_test_gui.c)
+ * Full-screen test helpers (draw_test_screen, check_touch, shared through
+ * cp_ui.h for the pages' test routines)
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-
-static void create_tests_ui(void) {
-    int test_cols, test_item_w;
-    if (CONTENT_WIDTH < 600) {
-        /* Portrait mode: 2 columns with items sized to fit */
-        test_cols = 2;
-        test_item_w = (CONTENT_WIDTH - 40 - 8) / 2;
-    } else {
-        /* Landscape mode: 5 columns */
-        test_cols = 5;
-        test_item_w = 140;
-    }
-    ui_layout_init_grid(&test_layout, CONTENT_WIDTH, CONTENT_H,
-                        test_cols, test_item_w, 70, 8, 16, 10, 60, 10, 20);
-    ui_layout_update(&test_layout, NUM_TESTS);
-    for (int i = 0; i < NUM_TESTS; i++)
-        button_init_full(&test_buttons[i], 0, 0, test_item_w, 70, tests[i].name,
-                         RGB(34,34,34), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-}
 
 void draw_test_screen(Framebuffer *fb, const char *title,
                       const char *status, int progress) {
@@ -661,43 +528,6 @@ bool check_touch(TouchInput *touch, int *x, int *y) {
         if (ts.pressed) { *x = ts.x; *y = ts.y; return true; }
     }
     return false;
-}
-
-/* â”€â”€ Test dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-static void run_test(Framebuffer *fb, TouchInput *touch, int test_id) {
-    if (test_id >= 0 && test_id < NUM_TESTS)
-        tests[test_id].run(fb, touch);
-}
-
-static void draw_test_menu(Framebuffer *fb, AppState *state) {
-    text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
-                       CONTENT_Y + 20, "HARDWARE TESTS", COLOR_WHITE, 3);
-    for (int i = 0; i < NUM_TESTS; i++) {
-        int x, y, w, h;
-        if (ui_layout_get_item_position(&test_layout, i, &x, &y, &w, &h)) {
-            test_buttons[i].x = CONTENT_LEFT + x;
-            test_buttons[i].y = CONTENT_Y + y;
-            test_buttons[i].width = w;
-            test_buttons[i].height = h;
-            test_buttons[i].visual_state = (i == state->test_selected)
-                ? BTN_STATE_HIGHLIGHTED : BTN_STATE_NORMAL;
-            button_draw(fb, &test_buttons[i]);
-        }
-    }
-}
-
-static void handle_test_menu_input(AppState *state, int tx, int ty,
-                                   bool touching, uint32_t now) {
-    (void)now;
-    if (!touching) return;
-    int lx = tx - CONTENT_LEFT;
-    int ly = ty - CONTENT_Y;
-    int item = ui_layout_get_item_at_position(&test_layout, lx, ly);
-    if (item >= 0 && item < NUM_TESTS) {
-        state->test_selected = item;
-        state->test_sub = TEST_RUNNING;
-    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1597,14 +1427,14 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch) {
  * Full-Screen Mode Handler
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-/* Lay out every tab's widgets. Re-run whenever the logical screen size changes,
- * since all of them derive their geometry from SCREEN_SAFE_*. */
+/* Lay out the page bar, every page and the home grid. Re-run whenever the
+ * logical screen size changes, since all of them derive their geometry from
+ * SCREEN_SAFE_*. */
 static void rebuild_ui(AppState *state) {
-    create_tab_bar();
-    create_tests_ui();
+    create_page_bar();
     /* Each prints its "control_panel: <page> stack …" receipt. */
-    for (int i = 0; i < HOME_ITEM_COUNT; i++)
-        if (home_items[i].page) home_items[i].page->layout();
+    for (int i = 0; i < HOME_PAGE_COUNT; i++)
+        home_pages[i]->layout();
     /* Prints the "control_panel home: safe …" receipt — see icon_grid_layout(). */
     icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "control_panel home");
 }
@@ -1614,7 +1444,7 @@ void cp_run_touch_tool(Framebuffer *fb, TouchInput *touch, int mode) {
         run_touch_diagnostic(fb, touch);
     else
         run_calib_wizard(fb, touch, mode == CP_TOUCH_EDGES);
-    /* The logical screen may have resized under the UI - the tab bar, every
+    /* The logical screen may have resized under the UI - the page bar, every
      * page and the home grid are laid out from SCREEN_SAFE_*.  A page's
      * run_fullscreen() is followed by no rebuild of main()'s, so it is here. */
     rebuild_ui(g_state);
@@ -1622,15 +1452,9 @@ void cp_run_touch_tool(Framebuffer *fb, TouchInput *touch, int mode) {
 
 static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
                                         AppState *state) {
-    if (state->active_tab == TAB_TESTS) {
-        run_test(fb, touch, state->test_selected);
-        state->test_sub = TEST_MENU_VIEW;
-        hw_leds_off();
-    } else if (state->active_tab == TAB_PAGE) {
-        state->page_fullscreen = false;
-        if (state->page->run_fullscreen)
-            state->page->run_fullscreen(fb, touch);
-    }
+    state->page_fullscreen = false;
+    if (state->page->run_fullscreen)
+        state->page->run_fullscreen(fb, touch);
     /* Drain any lingering touch events (press/release) left in the input
      * buffer by the full-screen mode.  Without this, the stale release
      * (or held) event is picked up by the main-loop's touch_poll() and
@@ -1684,11 +1508,9 @@ int main(void) {
     config_init(&state.cfg);
     config_load(&state.cfg);
 
-    state.active_tab = TAB_HOME;
-    for (int i = 0; i < HOME_ITEM_COUNT; i++)
-        if (home_items[i].page) home_items[i].page->load(&state.cfg);
-    state.test_sub = TEST_MENU_VIEW;
-    state.test_selected = -1;
+    /* state.page is NULL: the home grid is the startup view. */
+    for (int i = 0; i < HOME_PAGE_COUNT; i++)
+        home_pages[i]->load(&state.cfg);
 
     rebuild_ui(&state);
     home_load_icons();   /* the home grid is the startup view */
@@ -1707,10 +1529,7 @@ int main(void) {
             needs_redraw = true;
         }
 
-        bool fullscreen = (state.active_tab == TAB_TESTS && state.test_sub == TEST_RUNNING)
-                       || (state.active_tab == TAB_PAGE && state.page_fullscreen);
-
-        if (fullscreen) {
+        if (state.page && state.page_fullscreen) {
             run_current_fullscreen_mode(&fb, &touch, &state);
             needs_redraw = true;  /* redraw after returning from fullscreen */
             continue;
@@ -1719,14 +1538,11 @@ int main(void) {
         /* --- Render only when visual state changed --- */
         if (needs_redraw) {
             fb_clear(&fb, COLOR_BG);
-            if (state.active_tab != TAB_HOME)
-                draw_tab_bar(&fb, &state);
-
-            switch (state.active_tab) {
-                case TAB_HOME:        draw_home(&fb, &state);        break;
-                case TAB_TESTS:       draw_test_menu(&fb, &state);   break;
-                case TAB_PAGE:        state.page->draw(&fb);         break;
-                default: break;
+            if (state.page) {
+                draw_page_bar(&fb, &state);
+                state.page->draw(&fb);
+            } else {
+                draw_home(&fb, &state);
             }
 
             /* Draw confirmation dialog overlay on top of everything */
@@ -1739,14 +1555,12 @@ int main(void) {
         }
 
         /* --- Save visual state before input handling --- */
-        ActiveTab     prev_tab       = state.active_tab;
+        const CpPage *prev_page      = state.page;
         char          prev_status0   = state.status_msg[0];
         /* A new message replacing one still shown keeps status_msg[0] non-zero,
          * so the time it was set is what says the text changed. */
         uint32_t      prev_status_t  = state.status_time_ms;
         int           prev_home_page = state.home_page;
-        TestSubState  prev_test_sub  = state.test_sub;
-        int           prev_test_sel  = state.test_selected;
         ConfirmAction prev_confirm   = state.confirm_action;
 
         touch_poll(&touch);
@@ -1769,24 +1583,18 @@ int main(void) {
                 confirm_on_ok = NULL;
                 state.confirm_action = CONFIRM_NONE;
             }
-        } else if (state.active_tab == TAB_HOME) {
+        } else if (!state.page) {
             handle_home_input(&state, &ts);
         } else {
-            handle_tab_bar_input(&state, tx, ty, touching, now);
-
-            switch (state.active_tab) {
-                case TAB_TESTS:       handle_test_menu_input(&state, tx, ty, touching, now); break;
-                case TAB_PAGE: {
-                    /* A page's visual state is its own, so it says when it
-                     * changed; a queued full-screen run repaints too, exactly
-                     * as a changed tab field would. */
-                    CpPageResult r = state.page->input(&state.cfg, tx, ty,
-                                                       touching, now);
-                    if (r == CP_PAGE_FULLSCREEN) state.page_fullscreen = true;
-                    if (r != CP_PAGE_IDLE)       state.page_dirty = true;
-                    break;
-                }
-                default: break;
+            handle_page_bar_input(&state, tx, ty, touching, now);
+            /* BACK may just have closed the page; otherwise it has the input.
+             * A page's visual state is its own, so it says when it changed; a
+             * queued full-screen run repaints too. */
+            if (state.page) {
+                CpPageResult r = state.page->input(&state.cfg, tx, ty,
+                                                   touching, now);
+                if (r == CP_PAGE_FULLSCREEN) state.page_fullscreen = true;
+                if (r != CP_PAGE_IDLE)       state.page_dirty = true;
             }
         }
 
@@ -1805,12 +1613,10 @@ int main(void) {
          * local first so the || chain cannot short-circuit past the clear. */
         bool btn_look = button_take_dirty();
         if (ts.pressed || ts.released || btn_look    ||
-            prev_tab       != state.active_tab     ||
+            prev_page      != state.page            ||
             prev_status0   != state.status_msg[0]   ||
             prev_status_t  != state.status_time_ms  ||
             prev_home_page != state.home_page       ||
-            prev_test_sub  != state.test_sub        ||
-            prev_test_sel  != state.test_selected   ||
             prev_confirm   != state.confirm_action  ||
             state.page_dirty) {
             needs_redraw = true;
@@ -1822,8 +1628,7 @@ int main(void) {
          * page's bus, pumped from its input(), which FRAME_DELAY_IDLE_US would
          * starve.  busy() reports live state (cp_page.h), so a static page
          * still idles at the cheap rate. */
-        bool page_busy = state.active_tab == TAB_PAGE && state.page &&
-                         state.page->busy && state.page->busy();
+        bool page_busy = state.page && state.page->busy && state.page->busy();
         usleep((needs_redraw || page_busy)
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }

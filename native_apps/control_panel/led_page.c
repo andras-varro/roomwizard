@@ -1,8 +1,7 @@
 /* led_page.c — control_panel's LED page: enable, brightness, and the LED tests.
  *
  * Opened from the home grid's LED tile, and the one home for everything about
- * the two indicator LEDs; the Tests tab carries none of it.  Exposed
- * only as cp_led_page (cp_page.h); its state lives in this file.
+ * the two indicator LEDs.  Exposed only as cp_led_page (cp_page.h); its state lives in this file.
  *
  * ⚠️ There is no SAVE button, on purpose.  The toggle and -/+ write the config
  * file the moment they change and reload common/hardware.c's cache, because the
@@ -19,8 +18,8 @@
 #include <unistd.h>
 
 /* ── The tests ──────────────────────────────────────────────────────────────
- * Blocking full-screen routines, run by control_panel's full-screen path the
- * same way the Tests tab runs its own.  They drive the LEDs through the gated,
+ * Blocking full-screen routines, run by control_panel's full-screen path, the
+ * one every page's run_fullscreen() goes through.  They drive the LEDs through the gated,
  * scaled setters, so they show what a game would show with the values on this
  * page — which is why the page saves as it goes. */
 
