@@ -178,8 +178,8 @@ screenshotted]**: its in-place readout repaint is a no-op in portrait, because `
 early on `fb->portrait_mode` (`tests/audio_mix_test.c:466`; the comment at 462-463 says landscape only,
 since `fb_swap()`'s rotation would be needed). **Fix:** make the layout follow the orientation, and either
 give portrait a repaint path or fall back to a full `fb_swap()` there. The operator ruled 2026-09-29 that
-it runs degraded in portrait rather than being refused; C16 moves it under the Audio page and this is the
-portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
+it runs degraded in portrait rather than being refused; it launches from the control panel's Audio page and
+this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
 ## Features
@@ -550,19 +550,6 @@ are six idle general-purpose channels and a potentiometer on one would be a real
 channel, which [`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) rules
 out. That is a scope decision, not a difficulty one.
 
-### F7. Use NAND `mtd4` "scratch" for persistent data — open
-
-**Dropped, measured 2026-09-06.** High scores live at `/home/root/data/*.hig` on **p2** and survive both
-re-commissioning paths by an explicit `keep base` rule; `build-and-deploy.sh` never touches that tree. Only a
-whole-card reflash loses them. NAND would buy the card-swap case alone, and buy it with a store that a reflash
-cannot clear. ⚠️ **The one caveat worth keeping: that whitelist matches `*.hig`, so a future game storing
-anything else under `/home/root/data` is swept by the clean.**
-
-`mtd4` is 11 MB of blank, unused NAND that **survives an SD card reflash** — a natural home for high
-scores and save games, and safe to write. (`mtd0` must never be written; see
-[`SYSTEM_ANALYSIS.md#43-nand-is-effectively-unused`](SYSTEM_ANALYSIS.md#43-nand-is-effectively-unused)
-for the partition map and why.)
-
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -640,7 +627,9 @@ the 263-byte download succeeded: `hci_revision` changes `0x000e` → `0x7bf1`, m
 2. Pair a controller with `bluetoothctl` (HIDP/hog). `/var/lib` is on the persistent rootfs (measured), so
    link keys survive.
    Once a Bluetooth keyboard can attach, the Input page's keyboard tester prompt ("PRESS ANY KEY ON ANY USB
-   KEYBOARD", `input_page.c`) must stop saying USB.
+   KEYBOARD", `input_page.c`) must stop saying USB. The control panel's Bluetooth page (adapter power, scan,
+   pair/connect/forget) is a `CpPage` with its own tile, added when this lands; the grid has no Bluetooth tile
+   until then, and the paired HID devices appear in the Input page's testers with no extra code there.
 3. `sbc` + `bluez-alsa` v4.3.1 into **our** alsa-lib's plugin dir.
 4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
    `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
@@ -828,6 +817,20 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
+### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
+
+The operator inherited many BeagleBone Black boards (photos in `beaglebone/image/`). **Measured from the
+photos:** TI AM3358 (Cortex-A8, 1 GHz — also no hardware integer divide), TPS65217C PMIC, 512 MB DDR3,
+eMMC, SMSC LAN8710A PHY, an NXP HDMI framer to micro-HDMI, USB-A host, mini-USB, microSD, P8/P9 headers.
+
+**Inferred, not built:** our apps need only `/dev/fb0`, evdev and ALSA, so the differences are board-specific —
+no touch panel, other LED/backlight/watchdog paths, no speaker GPIO or bezel, 5 V power. That points to a
+**board-profile layer** under `common/hardware.c`, `common/touch_input.c` and `commissioning/` rather than
+`#ifdef`s. Our binaries are soft-float against the RoomWizard rootfs while stock BBB Debian is hard-float, so
+this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel with DRM fbdev emulation; the
+RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
+paths a launcher plus one game actually touch, listed from a BBB boot.
+
 ### F103. Software power-off: make `poweroff` more than a halt — open, asked by the operator 2026-09-29
 
 **Today `poweroff` is `halt`.** Measured on .188 (our 4.14.52 image): `twl4030_power_off`, `pm_power_off`
@@ -852,11 +855,11 @@ wiring is unknown, so pulling PoE is the expected only way back.
 it as a test image under a new filename, then run ONE `poweroff` with the operator watching the panel and
 the PoE port draw. **Done when** we know whether `poweroff` darkens the panel and reduces PoE draw, and
 the launcher's Shutdown either uses it or keeps the halt, its screen's unplug-when-white wording
-following whichever end state ships (C16).
+following whichever end state ships.
 
 ### F104. CPU-usage graph on the Monitor page — open, operator request 2026-09-30, later
 
-A history graph of CPU utilisation on the Monitor page (C16), beside the planned SoC temperature (F4).
+A history graph of CPU utilisation on the control panel's Monitor page, beside the planned SoC temperature (F4).
 ⚠️ **Trap: `/proc/stat`'s total column is not a valid denominator on this kernel** — `NO_HZ_IDLE` makes it
 unreliable; the fact and its measurement live in
 [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) (the PIO-cost paragraph). Use busy ticks over
@@ -865,12 +868,14 @@ rises under a known load (a `yes > /dev/null` over SSH), which also checks the d
 
 ### F105. Auto-rescan on the USB page while it is open — open, operator idea 2026-09-30, later
 
-The USB page (C16) re-reads the bus only on opening and on RESCAN (the Input page already polls `/dev/input`
+The control panel's USB page re-reads the bus only on opening and on RESCAN (the Input page already polls `/dev/input`
 once a second, but that is the evdev node list, not the USB bus). Add a periodic re-read while it is open,
 repainting only when the list changes, as Network's 2 s change detection does. ⚠️ **Constraint: the
 automatic path must only READ.** The MUSB port re-probe blocks for a few seconds and stays on an explicit
 RESCAN (and the one opening scan of an empty port). **Done when** a device plugged in or pulled on .188 appears or disappears on the open page within
-the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted.
+the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted. Not yet seen on
+the panel: the page's "+N MORE" row (shown when the list outgrows the rows that fit; .188 has 7 devices and
+all fit), so plug in enough devices to see it.
 
 ## Structural and cleanup
 
@@ -884,15 +889,7 @@ the interval with no tap, an idle page does not repaint, and no re-probe runs un
 **Left: the `/etc/input_config.conf` parser and the hotplug rescan timer**, still one copy each in
 `gamepad.c`, `vnc_client/vnc_input.c` (`load_input_config`) and `roomwizard-events.cpp`. They have
 drifted before — `MAX_INPUT_DEVICES` was resynced twice by hand — and the "clear errno before the read
-loop" hardening still exists only in the ScummVM copy. `usb_test/usb_test.c` keeps its own scan but is
-not built by any script.
-
-### C2. Split `control_panel.c` — open
-
-`control_panel.c` now holds only the shell, the home grid and the confirm dialog; the per-page code
-lives in `control_panel/*_page.c` behind `CpPage` and the calibration wizard in `control_panel/touch_wizard.c`
-(C16). What is left is whatever of the shell is worth a module. `led_preview()` in `control_panel/led_page.c` still blocks the UI
-~500 ms on each -/+ press — acceptable to the operator for now.
+loop" hardening still exists only in the ScummVM copy.
 
 ### C4. Make the common library use the logger — open
 
@@ -904,9 +901,11 @@ now, but the noise is still the cause.
 
 ### C5. Fix `text_truncate` and the 8px/6px font-width confusion — open
 
-- `common.c:83` `text_truncate()` takes **no destination size** and does `strcpy(dest, upper)` (up to
-  256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `control_panel.c:2141`
-  passes a 48-byte buffer for a 128-byte `EVIOCGNAME` string. One geometry change from a stack smash.
+- `common.c:108` `text_truncate()` takes **no destination size** and does `strcpy(dest, upper)` (up to
+  256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `control_panel/usb_page.c:243`
+  passes a 48-byte buffer for a 48-byte product name (safe only because the source is itself 48), while the
+  Input page's two callers use 256-byte buffers (measured by grep; the old 48-byte-for-128 caller lived in the
+  deleted control-panel tab code and is gone). One longer source from a stack smash.
   Add a `size_t dest_size` parameter.
 - Text width must come from `text_measure_width()`, because `fb_draw_text` advances **6 px/char**
   while several sites compute **8**. Titles render ~17 % left of centre and long strings clip off the
@@ -1060,199 +1059,27 @@ key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key t
 citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
 fire in a file of the same kind, or the scan goes blind where it used to see.
 
-### C16. `control_panel` becomes the one control panel; retire the diagnostic binaries — open, design agreed with the operator 2026-09-29
+### C17. A layout rule for `control_panel` pages and future apps — open, operator request 2026-10-01, later
 
-**Design.** One program whose first screen is a **paged icon grid** (paging, not scrolling; 3x2
-landscape, 2x3 portrait) built on the shared `common/icon_grid.c` that `app_launcher` also uses. Config
-"apps" exist only inside it, never as launcher tiles. Each icon opens a page from the static registry below,
-with BACK to the grid (the target shape of C2); heavy tools (Mix Bus Test, `touch_raw`) stay child
-processes launched from their page. Each change saves immediately — no global SAVE — and there is no Tests
-tab. **Reset-to-defaults (operator decision 2026-09-30)** lives on the Information page (state below).
+**Measured from the code.** Every page computes its own geometry and chooses its own font scale; the button
+widget draws at the scale it is given (`button_init_full`, `common/common.c`) with no automatic fit.
+`control_panel/input_page.c`'s TOUCH row is always one row of four and drops the whole row to scale 1 if any
+label exceeds `width-8`; its KBD/MOUSE/PAD row is one row of three by the same rule. `display_page.c`'s test
+buttons are the only flow layout (3 columns, falling back to 2, font kept) and it is private to that page. No
+shared flow or wrap helper exists in `common/`; `ui_layout.c` has grid and list helpers that no control-panel
+page uses.
 
-`icon_grid.c` also draws the standard exit button and only reports the tap. The control panel just
-exits; `app_launcher`'s X (or Back/Escape) opens Shutdown / Reboot / Cancel, now the only home of both —
-tapped on .188 2026-09-30, all passing: the X dialog opens, slide-off does nothing, CANCEL and Escape open/close it, REBOOT returns to the launcher, SHUT DOWN shows its message and halts, and the control panel's Settings no longer hold them (SAVE and RESET DEFAULTS work). Its shutdown screen says to
-unplug once the screen turns white; that wording rests on two halts, both measured, and stays provisional until F103.
+**Operator preference:** keep the font size and the button width and wrap buttons into rows, like a WPF flow
+container. **Question to settle with the operator:** one shared flow helper in `common/` for every app, or
+per-page code. ⚠️ **The Input page's portrait receipt reports "1 label(s) cut" and over-reports:** RESET GEOMETRY
+at scale 1 is 84 px against a limit of `bw-8` = 83 (`bw` 91), yet the operator saw it render correctly, so the
+`-8` allowance in that receipt is stricter than the drawing. Settle the allowance with the helper.
 
-| Icon | Holds |
-|---|---|
-| Audio | enable, music/effects, output device, chime test, Mix Bus Test (done) |
-| Display | backlight slider and ramp test, portrait toggle, screen geometry, SCREEN EDGES, display pattern pages |
-| Input | keyboard/mouse/pad testers (moved from USB; Bluetooth HID devices appear in the same testers), CALIBRATE, TOUCH DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY; `touch_trace` candidate (see below). TOUCH ZONE is deleted; SCREEN EDGES lives on Display |
-| LED | enable, brightness, ramp/pulse/blink/cycle tests |
-| USB | bus list, rescan, port recovery |
-| Bluetooth | adapter power, scan, pair/connect/forget; its HID devices show in the Input page's testers (F17) |
-| Network | hostname, IP, MAC, gateway, DNS, link |
-| Monitor | uptime, load, RAM, swap, storage (done); SoC temperature (F4) and CPU graph (F104) planned |
-| Information | SYSTEM (kernel, hostname, default app), HARDWARE (CPU, framebuffer), CONFIG (keys no page owns) |
-
-**Duplicates: the retired binaries are not trimmed as pages land — each is deleted whole once its last
-function has a home** (operator, 2026-09-30); duplicates inside `control_panel` itself are still deleted
-as each page lands. The inventory below (measured 2026-09-29) is the checklist for that final deletion:
-LED ramp/pulse/blink/cycle, backlight ramp, touch zone grid and display patterns
-(`control_panel` vs `hardware_test/hardware_test_gui.c`); LED test/brightness, backlight slider, audio
-chime+enable and save/reset (vs `hardware_config/hardware_config.c`); the system/memory/storage/hardware/
-config pages with private `read_meminfo`/`read_cpuinfo`/`read_disk_usage`/`format_bytes` copies (vs
-`hardware_diag/hardware_diag.c`, five pages, `:51-55`); the USB input testers (vs `usb_test/usb_test.c`,
-which only `build-usb-test.sh` builds). The binaries to delete then are `hardware_test` (with the never-compiled
-`hardware_test.c` and `pressure_test.c`), `hardware_config`, `hardware_diag`, `usb_test` and the backlight
-CLI (no script calls it, measured by grep; its one unique trait is an ssh get/set), with their build
-steps, deploy references and README rows. `hardware_diag` is already hidden (its `.app` manifest
-is deliberately deleted in `build-and-deploy.sh`) yet built on every deploy, and a layout batch had to
-fix its EXIT corner separately from `control_panel`. Check page by page that no diag page holds a field
-the tabs lack; move a unique one rather than keep the binary. **Tap-a-Theremin is an app, not a test tool,
-and keeps its launcher tile** (operator, 2026-09-29) — it does not enter the control panel. `fb_plane_bench` and `dss_scale_ab` stay hidden and are **not**
-control-panel entries (operator); their cleanup belongs to the DSS-overlay entry.
-
-**`touch_trace` is a candidate for the Input page** (operator: *"bring it to the calibration, but we
-have many similar tools, let's see if it makes sense"*): a calibrated finger trail against the raw one,
-logging raw and calibrated samples; deployed hidden, SSH-only today. Weigh it against the other touch tools
-on that page (multi-touch test, touch diagnostic / `touch_raw`) and fold duplicates into one rather than
-adding a button per tool.
-
-**Stage 1 is done and live on .188.** The control panel starts on the icon grid (`common/icon_grid.c`,
-launcher frame md5-identical). Every tile opens its own `CpPage` (below); there is no Bluetooth tile until its
-page exists. The page BACK `<` sits on the **left** because the grid's red-X exit is top-right and a double tap
-must not leave and quit. Measured by finger on .188 2026-09-30, all passing: the grid icons open their pages, BACK, slide-off does nothing, the red X exits.
-
-**Operator decision 2026-09-30:** the app is named `control_panel`, and each tool that becomes a page
-**moves its source into `native_apps/control_panel/` in the same commit that makes it that icon's page** —
-one by one as stage 2 progresses, never in bulk.
-
-**The Audio page is done on the registry** (`control_panel/audio_page.c`, exports `cp_audio_page`; the Settings
-tab is deleted): AUDIO ENABLED, MUSIC, EFFECTS, OUT and a TEST chime, saved on each change (no SAVE). `enter`/
-`leave` open and close the page's bus; an optional `CpPage` `busy()` hook keeps the main loop at the active
-frame rate only while the chime plays; the USB DAC watch is a page REDRAW; the audio part of RESET DEFAULTS is
-the page's `reset_defaults`. MIX BUS TEST on the page runs `/opt/games/audio_mix_test` as a child process and
-returns to the page; its launcher tile is retired (`RW_APP_MANIFESTS_RETIRED`). The old tone sweep is
-deleted by operator decision: Mix Bus Test replaces it, and `check-audio-pacing.sh` now requires a `CpPage`
-that opens a stream to set `.busy`. Receipts measured on .188, bottom margin of CONTENT_H: landscape +140/375,
-portrait +140/741.
-
-**The Display page is done on the registry** (`control_panel/display_page.c`, exports `cp_display_page`,
-"Display"): the backlight bar (20..100, step 10) and the portrait toggle (writes or unlinks
-`/opt/games/portrait.mode`) both save at once, no SAVE; a note under the toggle reads "ON NEXT LAUNCH -
-CALIBRATE IN LANDSCAPE"; VISIBLE, EDGES and TOUCHABLE rows (the screen-geometry readout); BACKLIGHT RAMP, TEST
-PATTERNS and SCREEN EDGES as full-screen runs (SCREEN EDGES through `cp_run_touch_tool()`). The backlight half
-of RESET DEFAULTS is the page's `reset_defaults`, which also removes `portrait.mode`. Receipts measured on
-.188, bottom margin of CONTENT_H: audio landscape +140/375, portrait +140/741; the home grid fits both.
-Operator taps 2026-09-30 passed for the Audio page, Mix Bus Test from Audio and the Display page; two Audio
-findings were fixed afterwards: with AUDIO ENABLED off, TEST/MUSIC/EFFECTS/OUT/MIX BUS TEST were dimmed but
-live and are now `Widget.disabled` (enforced in the widget); OUT could cycle to USB with no DAC and now lists
-only attached outputs (a pure choice table in `common/audio_out.c`, with room for a Bluetooth row), a saved
-"usb" showing as AUTO without rewriting the saved value.
-
-**Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
-`native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
-LED tests run full-screen. Settings lost its LED block. LED is **done on the registry below** (verified by finger on .188,
-2026-09-30): `led_page.c` exports only `cp_led_page`, `led_page.h` is deleted and `control_panel.c` holds no
-per-page code.
-
-**The Monitor page is done on the registry too** (`native_apps/control_panel/monitor_page.c`, exports only
-`cp_monitor_page`; operator taps passed 2026-09-30): uptime, load average, RAM, swap (NONE when absent) and
-the four mounts, re-read once a second from `input()` (the main loop calls `page->input` every iteration
-with `now`, so no extra hook). Display-only, no `reset_defaults`. Receipt measured on .188: `control_panel:
-monitor stack fits — bottom +342 of CONTENT_H 375, right 770 of CONTENT_RIGHT 780 (safe 787x421,
-landscape)`; portrait (via `/opt/games/portrait.mode`, created and removed) bottom +342 of 741, measured.
-`draw_usage_bar` and `read_file_line` are shared through `cp_ui.h`. SoC temperature (F4) stays planned for
-this page. After the control-panel refactor, work returns to Bluetooth (F17), whose page is a `CpPage`.
-
-**Information and Network are `CpPage`s too** (`control_panel/info_page.c` exports `cp_info_page`,
-`network_page.c` exports `cp_network_page`; the Diagnostics tab is deleted outright and `fit_value()` is
-shared through `cp_ui.h`). Information: SYSTEM (kernel release and build string, hostname, default app),
-HARDWARE (CPU, BogoMIPS, framebuffer format and memory), CONFIG (file path; keys no page owns, "+N MORE" on
-overflow), read on enter with no refresh; fields shown elsewhere were dropped (LEDs to LED, backlight,
-resolution to the Display page, calibrated to the Input page, audio keys to the Audio page). Network: routing (gateway, up to 3
-DNS) and every `/sys/class/net` interface but `lo` (state, IP, MAC), re-read every 2 s and repainted only
-when the reading differs. Receipts measured on .188, bottom margin of CONTENT_H: landscape network
-+346/375, information +368/375, monitor +342/375, led +245/375; portrait network +610/741, information
-+740/741 (one value cut), monitor +342/741, led +335/741. **Operator taps for Information, Network and
-Monitor passed on .188**, including Network's cable unplug (eth0 DOWN, red, within ~2 s) and replug (UP, green).
-Information has no `calibrated?` row by the operator's decision: the Input page's TOUCH: CALIBRATED row is
-its home.
-
-**RESET DEFAULTS lives on the Information page** beside CONFIG → FILE. It
-asks first through the panel's one shared confirm dialog (`cp_confirm()` in `cp_page.h`, also used by the
-Input page's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED, AUDIO, ORIENTATION" / "(TOUCH CALIBRATION IS
-KEPT)". The brackets are the operator's, so the second line does not read as part of the reset; the wording
-stays although `config_clear` wipes every key (e.g. `fx_*` overrides). On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
-nothing is reset and an orange RESET FAILED shows), then runs `config_clear`, every page's `reset_defaults`,
-and saves the cleared file at once. `/etc/touch_calibration.conf` is untouched (operator confirmed). Pages post
-messages with `cp_status()`, drawn in the title bar in place of the page name and held 6 s, one repaint on
-expiry. Operator taps on .188 passed: button placement, backup written and path shown, a second reset makes a
-second backup, settings back to default, BACK; on 2026-09-30 also the confirm dialog (CANCEL, BACK blocked
-under it, OK).
-
-**USB is a `CpPage` too** (`control_panel/usb_page.c` exports `cp_usb_page`; the USB tab is deleted): device
-list read through `usb_bus.c`, RESCAN plus the port re-probe as a full-screen run; the keyboard, mouse and
-pad testers live on the Input page. The list shows as many rows as fit, then "+N MORE" (the old tab silently stopped at 6 while .188
-has 7); buttons sit 2x2 in portrait. Receipts measured on .188, bottom margin of CONTENT_H: landscape
-+360/375, portrait +726/741 (3 names cut). Operator taps passed: list, idle with no flicker, rescan
-add/remove one by one, BACK. The operator's negative test found the
-list stale on opening. `enter()` only marks a scan pending, so the page paints at once with SCANNING… and the
-scan runs on the next `input()`. If that opening scan finds the port empty (a hub alone counts as empty:
-`usb_port_looks_dead()`, the same test RESCAN uses) it queues the port re-probe with one attempt
-(`RECOVER_TRIES=1`, measured 6.0 s on .188), so a device plugged in after an empty-socket boot shows without a
-RESCAN tap; RESCAN keeps three attempts (~18 s on an empty socket, inferred). Cost: ~6 s on every page open
-while the socket is empty, kept by operator decision 2026-09-30. Operator taps on .188 passed 2026-09-30:
-SCANNING paints first and an empty port is re-probed on open (a keyboard shows without RESCAN). **Not seen:** the
-"+N MORE" row. The tester full-screen runs (now on the Input page) still have no fit receipt of their own.
-
-**Input is a `CpPage` and the tab view is gone** (`control_panel/input_page.c`, exports `cp_input_page`;
-`control_panel.c` holds no tab code: navigation is HOME vs PAGE, `AppState.page` NULL = home, `set_view()`,
-registry `home_pages[]`; home grid 8 tiles, page one Audio, Display, LED, USB, Input, Network). Rows in order:
-TOUCH: CALIBRATED, then CALIBRATE, DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY (behind `cp_confirm`, failure in
-orange), then KBD/MOUSE/PAD TEST with an N FOUND count. The test buttons are `Widget.disabled` with no device
-of that kind; the page re-classifies `/dev/input` once a second only when the node listing changed and repaints
-only when a count changed. Pages reach the wizard and `touch_raw` through `cp_run_touch_tool()` (`cp_page.h`),
-which reloads geometry, calls `rebuild_ui` itself (`main()` does not rebuild after a page's `run_fullscreen`)
-and posts `cp_status`. USB keeps only the bus list, RESCAN and port recovery; Display holds SCREEN EDGES as
-its third test button beside the EDGES/TOUCHABLE rows. Measured on .188 with all stack receipts "fits", no label
-cut, home-grid idle CPU 0.0-0.7%, in both orientations; `./tests/run-all.sh` green, ARM build clean.
-
-**The calibration wizard is out of `control_panel.c`** and lives in `control_panel/touch_wizard.c`
-(`touch_wizard_run(fb, touch, edges_only, &running, &result)`; `TouchWizardResult {msg[64], saved}` is posted by
-`cp_run_touch_tool()` through `cp_status`). Every page above was tapped through on .188 2026-10-01 and passed, before and after
-the move (CALIBRATE to green SAVED and corner hits, quit partway without SAVED, SCREEN EDGES return and its
-"Timed out, nothing changed", portrait CALIBRATE refusing ~3 s). Folding `touch_trace`/`touch_raw` stays an
-operator question; do not widen this job.
-
-**Remaining work: delete the retired binaries whole**, per the inventory above. `native_apps/hardware_test`,
-`hardware_config`, `hardware_diag` and `usb_test` still exist and `native_apps/build-and-deploy.sh` still builds
-them (measured by listing the directories and grepping that script). Delete the directories with their
-build steps, deploy references and README rows; the backlight CLI goes with them.
-
-**Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
-Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
-`native_apps/control_panel/cp_page.h`: a `name` (tile label and page title, one name), an icon, and the
-functions `load`, `layout` (rects plus the page's `control_panel: <page> stack fits` receipt), `enter`,
-`leave`, `draw`, `input` (returns idle, redraw or fullscreen), `run_fullscreen` and `reset_defaults` (the
-global RESET DEFAULTS calls it on every page). Each page module exports one `const CpPage`; the home grid's
-table holds pointers to them and `control_panel.c` holds no per-page code. Adding a page = one file + one
-table row. Shared drawing helpers stay in `control_panel/cp_ui.h`.
-
-**Considered and rejected for now:** separate executables in a launcher "folder" (init respawns the
-launcher, not the folder, so the return path breaks; and every tap re-inits fb, touch and config), and
-`dlopen`'d `.so` plugins (no out-of-tree consumer exists: Bluetooth is built in `native_apps`, `usb_host`'s
-UI already lives in the control panel, VNC and ScummVM keep their settings in-app).
-
-**Deferred, operator-rated nice-to-have:** `dlopen` `CpPage` modules from a directory, taken up once the
-registry is proven (LED and Monitor are converted and tapped on the panel, so that precondition is met and the decision is the operator's), or earlier if a page
-must be built outside `native_apps`. It must meet: an ABI version field in `CpPage`, refused on mismatch (a stale
-plugin must not load against a newer panel: the silent-misparse class of the touch config); a plugin crash
-takes the control panel down (init respawns the launcher) — accepted; shared helpers exported
-(`-rdynamic` or a shared common lib); `check-arm-safe.sh` scanning the `.so` files; deploy and the offline
-bundle carrying them.
-
-**Remaining stages, each verified on the panel.** (2) regroup one icon per commit, deleting duplicates
-inside `control_panel` as they land; (3) Bluetooth page on the BlueZ backend.
-
-**Portrait defects to fix on the way:** the Mix Bus
-Test's portrait layout is B44.
-
-**Operator decisions (2026-09-29):** the grid icons are generated by one generator script (96x96 PPM,
-like the existing `gen_icon.py` files), not hand-drawn. Mix Bus Test runs degraded in portrait rather
-than being refused like calibration; B44 makes its layout follow the orientation.
+**Two related questions, both the operator's.** Whether `touch_trace` (a calibrated finger trail against the
+raw one, logging both; deployed hidden, SSH-only) belongs on the Input page beside the multi-touch test and
+the touch diagnostic: fold duplicates into one rather than adding a button per tool. And whether to take up
+the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (design requirements in
+`native_apps/CLAUDE.md` → *control_panel*).
 
 ---
 

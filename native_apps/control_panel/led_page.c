@@ -205,7 +205,9 @@ static void led_page_reset_defaults(Config *cfg) {
  * sysfs on purpose, like the Display page's backlight preview: it shows the
  * brightness being CHOSEN, whether or not the LEDs are enabled, and the scaled
  * setters would gate it on the very switch next to it.  hw_leds_off() is
- * config-independent, so it is the right way back to dark. */
+ * config-independent, so it is the right way back to dark.
+ * Known trait, accepted by the operator: the usleep() blocks the UI for ~500 ms
+ * on every -/+ press. */
 static void led_preview(int brightness_pct) {
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", brightness_pct);

@@ -859,6 +859,12 @@ group_c() {
 # Nothing was compressed to pay for it: the alternative was deleting measured traps from the file that is
 # their home. IMPROVEMENT_PLAN.md and HARDWARE.md absorbed their share of this work into standing slack.
 #
+## 2026-10-01: native_apps/CLAUDE.md 716 -> 740, raised in the commit that closed the control-panel plan entry.
+# The entry carried the durable design rules of `control_panel` (the CpPage registry, save-at-once and the
+# reset flow, the exit and navigation split, enter-marks-pending, the rejected one-binary-per-page shape) and
+# the directory guide had no section for any of it. They moved here as one section; IMPROVEMENT_PLAN.md paid
+# with the rest of that deleted entry, into its own slack rather than this ceiling.
+#
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -868,7 +874,7 @@ ceilings() {
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-716	native_apps/CLAUDE.md
+740	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

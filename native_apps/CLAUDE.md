@@ -378,7 +378,7 @@ per-unit and per-calibration.** What belongs here is what an app must do about t
   with it** (`frogger.c`'s `hud_height = SCREEN_SAFE_TOP + HUD_HEIGHT`). Count the **frame** too: a
   `fb_draw_rect()` outline sits *outside* the content rect on every side, so its thickness belongs in the
   vertical budget, from the same named constant the drawing uses. Where a drawn rect and a hit-test
-  describe the same target, compute both from **one** helper (`hardware_diag.c`'s `diag_exit_rect()`).
+  describe the same target, compute both from **one** helper (`icon_grid.c`'s exit button, which draws it and reports the tap).
   `grep -n 'button_init(&[a-z_]*, *[0-9]'` is the check. **When you replace a literal, choose the
   expression that is byte-identical to it at inset 0** — then an uncalibrated panel is provably unaffected
   and the diff can only move pixels on a panel that has been swept, which is what makes this class of
@@ -450,7 +450,7 @@ gate form. It requires `2 × overlap(fit, hw) ≥ max(fit_span, hw_span)`, which
 
 **`common/touch_calib.c` is the only implementation of the fit.** It holds the target set, the interior
 masks, the per-axis verdict, the reach calculation, the edge-sweep accumulator (`TouchCalibSweep`,
-`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `control_panel`'s Touch-tab wizard and the
+`touch_calib_sweep_*`), the sanity gate and the `.bakN` backup. `control_panel`'s calibration wizard (`control_panel/touch_wizard.c`) and the
 `touch_raw` diagnostic both link it — which is what lets the diagnostic validate the code the wizard
 actually calibrates with. Do not write a second copy; there were three of the fit and two of the sweep, and
 they drifted.
@@ -488,6 +488,32 @@ turned off. **ScummVM and vnc_client each link their own copy of `touch_input.o`
 after changing touch code and especially after changing the calibration file format; the silent-misparse
 mechanism is in root `../CLAUDE.md` and the forensics, with the `(piecewise)` discriminator that identifies
 a stale binary, in [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-touch).
+
+## control_panel — a static page registry
+
+**`control_panel` is the one place for settings and tests; a page is a module, not a binary.** Home is a paged
+icon grid (`common/icon_grid.c`; 3x2 landscape, 2x3 portrait); each tile opens a `CpPage`
+(`control_panel/cp_page.h`): `load`, `layout` (rects plus the `control_panel: <page> stack fits` receipt),
+`enter`, `leave`, `draw`, `input` (idle, redraw or fullscreen), `run_fullscreen`, `reset_defaults`, and an
+optional `busy()` that holds the active frame rate (the Audio page, only while a chime plays). A page file exports one `const CpPage`; adding a page is
+one file plus one row of `home_pages[]`, and `control_panel.c` holds no per-page code. Shared drawing is `cp_ui.h`;
+icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; heavy tools (Mix Bus Test,
+`touch_raw`) stay child processes launched from their page, and Tap-a-Theremin stays an app with its own tile.
+
+- **Every change saves at once; there is no SAVE.** RESET DEFAULTS (Information page) asks through `cp_confirm()`
+  first, backs the config up to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`; on failure nothing is reset), then runs
+  `config_clear` and every page's `reset_defaults`; touch calibration is untouched. The dialog's wording
+  ("(TOUCH CALIBRATION IS KEPT)" in brackets) is the operator's and stays although `config_clear` wipes every key.
+- **Exit and navigation:** the grid's red X only exits (Shutdown / Reboot live in `app_launcher`'s X dialog);
+  the page BACK `<` sits on the left so a double tap cannot leave and quit. Pages post a title-bar message with
+  `cp_status()` (6 s) and reach the wizard or `touch_raw` through `cp_run_touch_tool()`, which reloads geometry
+  and calls `rebuild_ui` itself — `main()` does not rebuild after a page's `run_fullscreen`.
+- **`enter()` only marks work pending**, so the page paints first. The USB page's opening scan of an empty port
+  queues one port re-probe (`RECOVER_TRIES=1`, measured 6.0 s on .188): ~6 s on every open while the socket
+  is empty, kept by operator decision; RESCAN keeps three attempts. Disabled controls refuse input in the widget (`Widget.disabled`).
+- **Rejected:** one executable per page (init respawns the launcher, so the return path breaks, and every tap
+  re-inits fb, touch and config). `dlopen`'d pages are deferred — an ABI version field refused on mismatch,
+  exported helpers and `check-arm-safe.sh` over the `.so` would all be required.
 
 ## Input
 
@@ -821,8 +847,7 @@ build lines in their own headers, and each pinned to the onboard device on purpo
 
 **A screen that makes sound owns the bus for as long as it is up.** Open it before the loop (or on
 entering the tab), queue sounds as voices — `audio_test_chime()` returns at once and `audio_pump()`
-delivers it — and `audio_close()` on the exit paths only: `test_audio_diag()` in
-`hardware_test/hardware_test_gui.c`, and `control_panel`'s Audio page. The
+delivers it — and `audio_close()` on the exit paths only: `control_panel`'s Audio page is the example. The
 wrong shape — `audio_init*` → tones → `audio_close()` inside one button handler — costs a stream open
 **and** a stream stop per press, and freezes the UI while the handler holds the tones.
 

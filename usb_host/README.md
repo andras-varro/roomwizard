@@ -85,7 +85,7 @@ We cross-compile three kernel modules from the matching kernel source (4.14.52):
 | `xpad.ko` | `CONFIG_JOYSTICK_XPAD=m` | Xbox gamepad driver (Xbox, Xbox 360, Xbox One) |
 
 After loading these modules, the controller appears as:
-- `/dev/input/eventX` — evdev interface (used by `usb_test` and games)
+- `/dev/input/eventX` — evdev interface (used by `control_panel`'s Input page testers and games)
 - `/dev/input/jsX` — joystick interface
 - Name: `Microsoft X-Box 360 pad`
 - Capabilities: `EV_KEY` (buttons), `EV_ABS` (sticks/triggers), `EV_FF` (force feedback)
