@@ -1049,11 +1049,11 @@ unplug once the screen turns white; that wording rests on two halts, both measur
 | Icon | Holds |
 |---|---|
 | Audio | enable, music/effects, output device, chime test, Mix Bus Test (done) |
-| Display | backlight slider and ramp test, portrait toggle, screen geometry, display pattern pages |
-| Touch | calibration wizard, edges, factory reset, multi-touch test, touch zone grid, touch diagnostic; `touch_trace` candidate (see below) |
+| Display | backlight slider and ramp test, portrait toggle, screen geometry, SCREEN EDGES, display pattern pages |
+| Input | keyboard/mouse/pad testers (moved from USB; Bluetooth HID devices appear in the same testers), CALIBRATE, TOUCH DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY; `touch_trace` candidate (see below). TOUCH ZONE is deleted; SCREEN EDGES lives on Display |
 | LED | enable, brightness, ramp/pulse/blink/cycle tests |
-| USB | bus list, port recovery, keyboard/mouse/pad testers |
-| Bluetooth | adapter power, scan, pair/connect/forget; reuses the USB pad tester (F17) |
+| USB | bus list, rescan, port recovery |
+| Bluetooth | adapter power, scan, pair/connect/forget; its HID devices show in the Input page's testers (F17) |
 | Network | hostname, IP, MAC, gateway, DNS, link |
 | Monitor | uptime, load, RAM, swap, storage (done); SoC temperature (F4) and CPU graph (F104) planned |
 | Information | SYSTEM (kernel, hostname, default app), HARDWARE (CPU, framebuffer), CONFIG (keys no page owns) |
@@ -1102,21 +1102,27 @@ the page's `reset_defaults`. MIX BUS TEST on the page runs `/opt/games/audio_mix
 returns to the page; its launcher tile is retired (`RW_APP_MANIFESTS_RETIRED`). The Tests tab's tone sweep is
 deleted by operator decision: Mix Bus Test replaces it, and `check-audio-pacing.sh` now requires a `CpPage`
 that opens a stream to set `.busy`. Receipts measured on .188, bottom margin of CONTENT_H: landscape +140/375,
-portrait +140/741. **Pending operator taps** (the operator will test the remaining jobs in one session).
+portrait +140/741.
 
 **The Display page is done on the registry** (`control_panel/display_page.c`, exports `cp_display_page`,
 "Display"): the backlight bar (20..100, step 10) and the portrait toggle (writes or unlinks
 `/opt/games/portrait.mode`) both save at once, no SAVE; a note under the toggle reads "ON NEXT LAUNCH -
 CALIBRATE IN LANDSCAPE"; a VISIBLE row; BACKLIGHT RAMP and TEST PATTERNS moved from the Tests tab as full-screen
 runs. The backlight half of RESET DEFAULTS is the page's `reset_defaults`, and the Display-only reset is
-deleted. **Implementer's decision, open for the operator:** the global RESET DEFAULTS does not reset portrait
-(a flag file; a reset silently flipping the next launch seemed worse; one line to change). The leftover
+deleted; the page's `reset_defaults` also removes `portrait.mode`. The leftover
 `TAB_DISPLAY` is now the **Touch tab** (label TOUCH, home tile "Touch", icon `cp_touch`): SCREEN GEOMETRY rows
 (TOUCH, EDGES, TOUCHABLE), CALIBRATE TOUCH, SCREEN EDGES, TOUCH DIAGNOSTIC and RESET GEOMETRY (behind "RESET
 SCREEN GEOMETRY?"); it prints a `touch stack` receipt. The Tests tab holds TOUCH ZONE and MULTI-TOUCH only.
 Receipts measured on .188, bottom margin of CONTENT_H: display landscape +245/375, portrait +275/741; touch tab
-landscape +172/375, portrait +346/741; the home grid fits both. **Pending operator taps:** the Audio page, Mix
-Bus Test and the Display page, tested in one session later.
+landscape +172/375, portrait +346/741; the home grid fits both. Operator taps 2026-09-30 passed for the Audio
+page, Mix Bus Test from Audio, and the Display page and Touch tab, except two Audio findings, fixed since
+and deployed on .188 (home-grid idle CPU 0.0%, audio layout receipt fits): with AUDIO ENABLED off,
+TEST/MUSIC/EFFECTS/OUT/MIX BUS TEST were dimmed but live, and are now `Widget.disabled` (disabled is enforced
+in the widget); OUT could cycle to USB with no DAC, and now lists only attached outputs (a pure choice table in
+`common/audio_out.c`, with room for a Bluetooth row), a saved "usb" showing as AUTO without rewriting the saved
+value. **Operator taps pending for those fixes:** audio off greys and disables the five controls; no DAC makes
+OUT cycle ONBOARD to AUTO; saved USB with the DAC pulled shows AUTO, the config still says "usb", and it
+returns to USB on replug.
 
 **Stage 2 has begun: the LED page works** (verified on .188 by finger, 2026-09-30) in
 `native_apps/control_panel/led_page.c`: enable and brightness save on each change (no SAVE), and the six
@@ -1150,8 +1156,9 @@ its home.
 
 **RESET DEFAULTS lives on the Information page** beside CONFIG → FILE. It
 asks first through the panel's one shared confirm dialog (`cp_confirm()` in `cp_page.h`, also used by the
-Touch tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED AND AUDIO SETTINGS" / "(TOUCH CALIBRATION IS
-KEPT)". The brackets are the operator's, so the second line does not read as part of the reset; the wording
+Touch tab's geometry reset): "RESET DEFAULTS?" / "BACKLIGHT, LED, AUDIO, ORIENTATION" / "(TOUCH CALIBRATION IS
+KEPT)"; the Display page's `reset_defaults` also removes `portrait.mode`. **Operator taps pending:** that
+dialog text and portrait gone after a reset. The brackets are the operator's, so the second line does not read as part of the reset; the wording
 stays although `config_clear` wipes every key (e.g. `fx_*` overrides). On OK it copies the config to `<path>.bak-YYYYmmdd-HHMMSS` (`O_EXCL`, fsynced; if the backup fails
 nothing is reset and an orange RESET FAILED shows), then runs `config_clear`, every page's `reset_defaults`,
 and saves the cleared file at once. `/etc/touch_calibration.conf` is untouched (operator confirmed). Pages post
@@ -1175,25 +1182,29 @@ while the socket is empty, kept by operator decision 2026-09-30. Operator taps o
 SCANNING paints first and an empty port is re-probed on open (a keyboard shows without RESCAN). **Not seen:** the
 "+N MORE" row, and the tester screens have no fit receipt (portrait likely weak).
 
-**Remaining work, ordered single-commit jobs** (`control_panel.c` line refs are approximate as of `ce86df7`:
-re-grep).
+**Remaining work, ordered single-commit jobs** (operator rulings 2026-09-30; `control_panel.c` line refs are
+approximate: re-grep). One commit each, deployed to .188, `./tests/run-all.sh` green, fit receipts in both
+orientations, operator taps before the wizard move if possible.
 
-- **J3a.** `touch_page.c`: CALIBRATE, SCREEN EDGES, TOUCH DIAGNOSTIC, RESET GEOMETRY (+ confirm modal), rows
-  TOUCH: CALIBRATED, EDGES, TOUCHABLE, `run_touch_diagnostic`, Tests' touch zone and multi-touch (`TZ_*`); the `disp_*` helpers belong only to the Touch tab now.
-  Deletes `TAB_DISPLAY`. Risks: `main()` draws and handles the confirm modal before page input (needs a `CpPage`
-  path, or confirm inside `run_fullscreen`); after the wizard the panel must `rebuild_ui` (logical screen can
-  change) — rebuild after any full-screen run, or add a hook; the page reads `fb->portrait_mode` itself (the
-  wizard refuses in portrait).
-- **J3b.** `run_calib_wizard` and helpers (~1650-2440) moved verbatim into `touch_wizard.c` behind
-  `(fb, touch, edges_only)` → status string, removing its `AppState` use. Folding `touch_trace`/`touch_raw`
-  stays an operator question; do not widen J3.
-- **J4.** With the backlight ramp and display patterns on the Display page and touch zone and multi-touch
-  on the Touch page (J3a), delete the Tests tile and `TAB_TESTS` machinery (keep `draw_test_screen` and `check_touch`, which
-  `led_page` and the moved tests use); collapse `tab`/`set_view`/`ActiveTab` to HOME vs PAGE.
+- **(a) Input page** (one home tile) with the keyboard, mouse and pad testers moved from the USB page (USB keeps
+  the bus list, RESCAN and port recovery). Bluetooth HID devices will appear in these same testers, so there
+  are no duplicate buttons. In progress.
+- **(b)** The touch tools CALIBRATE, TOUCH DIAGNOSTIC, MULTI-TOUCH and RESET GEOMETRY (+ confirm modal) move
+  onto Input, SCREEN EDGES onto the Display page, and the rows TOUCH: CALIBRATED, EDGES, TOUCHABLE go with them
+  as the page needs. TOUCH ZONE (the tap-every-cell grid, `TZ_*`) is **deleted, not moved**. Deletes
+  `TAB_DISPLAY` and the home Touch tile. Risks: `main()` draws and handles the confirm modal before page input
+  (needs a `CpPage` path, or confirm inside `run_fullscreen`); the `disp_*` helpers belong only to the Touch
+  tab now; the page reads `fb->portrait_mode` itself (the wizard refuses in portrait).
+- **(c)** `run_calib_wizard` and helpers (~1650-2440) moved verbatim into `touch_wizard.c` behind
+  `(fb, touch, edges_only)` → status string, removing its `AppState` use. After the wizard the panel must
+  `rebuild_ui` (logical screen can change) — rebuild after any full-screen run, or add a hook. Folding
+  `touch_trace`/`touch_raw` stays an operator question; do not widen this job.
+- **(d)** Delete the Tests tab machinery (no Tests entry on the home grid; keep `draw_test_screen` and
+  `check_touch`, which `led_page` and the moved tests use); collapse `tab`/`set_view`/`ActiveTab` to HOME vs PAGE.
 
 Every job that deletes a tab also deletes its `home_items` row target, `main()`'s dispatch cases, `rebuild_ui`
 calls and `prev_*` terms. Sizing: a page move that also deletes a large tab has run 154-155k against 120-130k
-worker caps, so J3a may need splitting.
+worker caps, so (b) may need splitting.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
