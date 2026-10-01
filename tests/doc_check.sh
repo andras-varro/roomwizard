@@ -378,6 +378,11 @@ AUDIO_VOL_UNITY	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 0..60000	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 touch_fit_axis_range	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 FB_TOUCH_INSET_MAX	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
+screen_true_panel_width	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+fb_scale_bezel_to_surface	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
+fb_to_game_ppm	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+kFeatureCursorPalette	scummvm-roomwizard/CLAUDE.md	IMPROVEMENT_PLAN.md
+drawCursor()	scummvm-roomwizard/CLAUDE.md	IMPROVEMENT_PLAN.md
 publish_safe_area	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 X 10..4076	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
 1,536,000	SYSTEM_ANALYSIS.md	native_apps/CLAUDE.md
@@ -860,6 +865,13 @@ group_c() {
 # their home. IMPROVEMENT_PLAN.md and HARDWARE.md absorbed their share of this work into standing slack.
 #
 ## 2026-10-01: native_apps/CLAUDE.md 716 -> 740, raised in the commit that closed the control-panel plan entry.
+## 2026-10-01: SYSTEM_ANALYSIS.md 1806 -> 1826 and native_apps/CLAUDE.md 740 -> 759, raised in the commit that
+# emptied the closed half of the DSS-overlay plan entry. SYSTEM_ANALYSIS.md gains the measured userspace-upscale
+# result (CPU per frame, the eye A/B and its ruling, the instruments), which existed only in the plan; native_apps
+# gains the reduced-surface conversion rules (surface:panel ratio, bezel scaling, touch needing no divide, the
+# unconverted literals). The narrative, instrument-repair history and operator transcripts were deleted, not moved;
+# the plan entry fell by over 300 lines but a ceiling is a budget, so it was not lowered.
+#
 # The entry carried the durable design rules of `control_panel` (the CpPage registry, save-at-once and the
 # reset flow, the exit and navigation split, enter-marks-pending, the rejected one-binary-per-page shape) and
 # the directory guide had no section for any of it. They moved here as one section; IMPROVEMENT_PLAN.md paid
@@ -869,12 +881,12 @@ ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1806	SYSTEM_ANALYSIS.md
+1826	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-740	native_apps/CLAUDE.md
+759	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

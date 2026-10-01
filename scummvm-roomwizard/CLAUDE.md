@@ -217,10 +217,26 @@ Software only. The optimisation log (O1–O12, CPU 80 % -> 32 %) is in
 precomputed source-column tables, row deduplication, skipping `fb_swap` on unchanged frames — are
 summarised in [`../CLAUDE.md`](../CLAUDE.md).
 
-Note that O9 ("DSS hardware scaler — not viable") was **wrong**; the OMAP3 DSS exposes three
-overlay planes with an independent-input/output-size hardware scaler at
-`/sys/devices/platform/omapdss/`, usable from sysfs with no kernel work. It is open work in
-`../IMPROVEMENT_PLAN.md` — ScummVM is the prime candidate.
+**The DSS hardware scaler is reachable from sysfs and was measured and rejected on image quality** —
+software nearest-neighbour is the shipped path, with no config key, no settings row and no backend branch
+for a hardware arm. Numbers and the eye verdicts: [`SYSTEM_ANALYSIS.md#32-display`](../SYSTEM_ANALYSIS.md#32-display).
+What a backend change would meet: `hasFeature()` returns true for `kFeatureCursorPalette` only and
+`beginGFXTransaction`/`endGFXTransaction` are no-ops, so there is **no runtime mode-change plumbing**; and
+nothing bridges `/opt/games/scummvm.ini` and `rw_config.conf` (the one exception is the hand-declared
+`config_audio_device_stored()`, `oss-mixer.h`:34).
+
+**The output rectangle is one isotropic scale, pillarboxed, and a function of runtime numbers.**
+`getScalingInfo()`:163-171 takes the smaller of `rectW*256/w` and `rectH*256/h` and centres the picture in
+the content rect (strips memset black at :455-478), so the axes are always equal — 320×200 is *not*
+stretched 2.5×/2.4×. **Measured** on `.188` (bezel `15 13 0 0`, touch insets L3 R10 T14 B17): scale 538,
+**672×420 at panel (60,29)**. A 15/15 bezel with zero insets would give 720×450 at (40,0) and no real unit
+is that. ⚠️ **A non-black bounding box of an `fb0` grab is not the rect**: the mouse cursor (written at
+output resolution after the scale, `drawCursor()`:585-588) and a stray 16-px speck on rows 478-479 widen
+it, and KQ2 paints black at the top and bottom of its own surface. The columns pin the rect, the rows
+cannot. To capture a real frame with no touch: stop the launcher, `/opt/games/scummvm kq2` over SSH, one
+16bpp page off `/dev/fb0`, then `fb_to_game_ppm.py` at the repo root (`--self-test` needs no device).
+⚠️ **Verify exactly one `scummvm` PID before and after the grab** — a capture with two engines fighting
+over `fb0` was discarded, from one `nohup` launch, cause unexplained.
 
 ## Leaving a game, and why `quit()` keeps its `exit(0)`
 

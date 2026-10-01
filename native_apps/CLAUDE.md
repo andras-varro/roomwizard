@@ -329,6 +329,29 @@ Portrait mode (flag file `/opt/games/portrait.mode`):
   otherwise let the runtime dimensions do the work.
 - **Calibrate in landscape.** Calibration in portrait is not supported.
 
+Surface smaller than the panel (`fb_init(fb, device)` takes any node and accepts whatever geometry it finds):
+
+- **Design pixels convert by the surface:panel ratio.** `fb_scale_ui_px()` / `fb_ui_px_x()` / `fb_ui_px_y()`
+  in `common/framebuffer.c`; `fb_apply_viewport()` also publishes `screen_true_panel_width`/`_height`,
+  separate from the surface-valued `screen_panel_*`. ⚠️ **The ratio is surface:panel, never a fixed
+  800×480 reference** — portrait is 480×800 at full resolution and a fixed reference shrinks every control
+  there to 60 %. Converted: the `BTN_*_WIDTH`/`_HEIGHT` and `LAYOUT_*` constants in `common/common.h` and
+  `FB_TOUCH_INSET_MAX`; bit-exact no-op at both shipped geometries. `tests/ui_scale_test.c` **group 8
+  drives the wrappers and is not optional**: measured, a fixed-reference wrapper and a transposed one each
+  fail group 8 and nothing else.
+- **Bezel margins are panel pixels**: `fb_init()` reads the panel's true size from the display mode
+  timings and converts them with the pure `fb_scale_bezel_to_surface()` (rounds down; `tests/bezel_scale_test.c`).
+- **Touch on a scaled node needs no divide** — measured: the published dims are surface dims, so stage 1
+  already tracks the surface. Dividing breaks 12 assertions in `tests/touch_map_test.c` group J (one
+  calibration over 800×480, 400×240, 200×120).
+- **Not converted, measured:** `common/common.c` has zero `fb_ui_px_*()` calls, so `gameover_init()` and
+  `modal_dialog_draw()` mix scaled and flat units (about 40 layout literals; `button_draw()`'s `- 20`
+  icon inset is at 51 call sites); the icon stroke floors (3 px bars) cannot scale down; text is an
+  integer multiplier with no rung below 1, so a scaled label can overrun its button (`"PLAY AGAIN"` is
+  120 px against a scaled 110) and `text_measure_width()` over-measures by 33 % (8 px/6 px font-width
+  confusion at `common.c:92` and `:131`). Per-game fixed bands and `TILE_SIZE`/`PADDLE_*` constants are
+  unconverted too; `platformer.c` is the most expensive.
+
 ## Screen edges — two rectangles, both handled by the library
 
 The plastic bezel hides a band of panel pixels at top and bottom, and **apps never compensate for it** —

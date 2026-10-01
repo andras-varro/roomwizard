@@ -188,342 +188,34 @@ Userspace except F101, which is the image build, and F2, which now waits on it.
 
 ### F2. Use the DSS overlay planes — open, **gated on a kernel build; waits on F101**
 
-⚠️ **Reclassified 2026-09-11 by the operator: what is left of this entry needs a kernel image, and no
-UI change is wanted.** *"We should keep what we learned, and tools, documented, but move the F2
-together with the other 'needs kernel compile' bucket. No changes are needed on the UI."* The heading
-used to read *biggest performance win available*; the userspace win was measured and then **rejected on
-image quality** — the A/B and the ruling are below. One config-only kernel item and one coefficient
-patch are what remain, and both fold into F101.
+What is left needs a kernel image; no UI change is wanted. The userspace half (`vid1` upscale of a reduced
+surface) was built, measured and rejected on image quality — software nearest-neighbour stays. Facts, the
+overlay recipe and scaling limits, the A/B outcome and its instruments:
+[`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display); the reduced-surface UI conversion:
+`native_apps/CLAUDE.md` → *Coordinates, dimensions, portrait*; ScummVM's output rect:
+`scummvm-roomwizard/CLAUDE.md`.
 
-**What compositing costs today, measured 2026-08-31 and *accepted* rather than filed as a fault:**
-`samegame` tapping over a music bed runs at **45 % CPU** on the one 600 MHz core, ScummVM playing *Full
-Throttle* at **12–13 % CPU / 5.4 % memory**. 45 % is what an overlay composite has to beat. ⚠️ **Not the
-same quantity as the 32 % below** — a game mixing while it redraws, against O1–O12's endpoint.
+**Kernel-side, both rows of F101's fold-in table.** Done-when: an image built from F101 carries each, and
+the panel confirms it.
 
-Three hardware overlay planes — **two of them with a scaler** — plus z-order, global alpha and
-colour-key, sitting unused. On a GPU-less 600 MHz part this is the only graphics acceleration that
-exists. ⚠️ **Reaching it was assumed to be pure sysfs. Measurement refuted that**: the userspace half
-works and lost on image quality, and every remaining step is kernel-side. Inventory, the live sysfs dump
-and the legacy-omapdss caveat: [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display).
+- **`CONFIG_FB_OMAP2_NUM_FBS` 2 → 3.** Config-only, no source patch. Three overlays enumerate but only `fb0`
+  and `fb1` exist, so `vid2` has no node to bind and step 2 below is unreachable until this lands.
+- **All-identity 8-phase scaler table in `dss/dispc_coefs.c`** (or a selector that reaches one).
+  **[inferred]** it would give hardware nearest-neighbour — sharp *and* ~178 µs/frame against ~12.7 ms for
+  the software resample — and overturn the software-wins ruling; it is reasoning about the DISPC FIR, not
+  something the source states. The DSS is built in, so no module reaches it, and a rebuilt image inherits
+  the dead-touchscreen blocker ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). The rehearsal this needs is a
+  pillarbox mode in `dss_scale_ab` (the 640×400 test was a live sysfs poke, not a harness feature) — and
+  the target is ScummVM's isotropic pillarboxed rect, not a full-screen stretch.
 
-Suggested order. ⚠️ **The mechanism is proven and the recipe measured** — `vid1` upscaling
-400×240 → 800×480 full-screen over the running app, four writes, no reboot and no boot parameter. That
-also corrected two things the steps below used to assert: `overlay0` (`gfx`) **cannot scale at all**,
-and `zorder` is **not writable** on this SoC. Recipe, scaling limits and the driver citations are in
-the display section linked above.
+Further steps, in order, all behind the above:
 
-1. **Take the CPU win — measured, and it is real.** ⚠️ **The seam the step used to ask for already
-   exists**: `fb_init(fb, device)` takes the node as a parameter, accepts whatever geometry it finds and
-   never sets one, so nothing in `common/framebuffer.c` needs changing — and every game already reads
-   `argv[1]` as its framebuffer. **Rendering the same scene into a 400×240 surface on `vid1` costs
-   5 510 µs of CPU per frame against 26 075 µs at 800×480 on `fb0` (37 → 179 fps), and enabling the
-   overlay costs nothing measurable.** Instrument: `native_apps/tests/fb_plane_bench.c`, device-only and
-   hidden from the grid, whose scene is defined in fractions of the surface so the work scales with area
-   — it prints its own pixel count as the receipt, and two runs whose counts are not in the ratio of
-   their areas are not an A/B. Four points on `.188`, 200 frames each: `fb0` 800×480; **`fb1` funded to
-   the same 800×480 as a device control, which came within 0.4 %** — so the win is the pixel count and
-   not the node; `fb1` 400×240 with `vid1` disabled; and the same with `vid1` upscaling to 800×480 and
-   `gfx` switched off, which moved nothing. Per-Mpixel store cost also *fell* 9 % on the smaller surface,
-   so the gain slightly exceeds the area ratio. ⚠️ **The remaining work is per-game re-tuning, not
-   plumbing**, and it is where the effort now goes.
-   - **The shared conversion exists and is in use, 2026-09-11.** `fb_scale_ui_px()` in
-     `common/framebuffer.c` converts a DESIGN pixel count into surface pixels by the surface:panel
-     ratio, with `fb_ui_px_x()`/`fb_ui_px_y()` over the published geometry; `fb_apply_viewport()` now
-     also publishes `screen_true_panel_width`/`_height`, a pair separate from the surface-valued
-     `screen_panel_*` so touch keeps its meaning. Converted so far: the six `BTN_*_WIDTH`/`_HEIGHT`
-     constants and the six `LAYOUT_*` insets in `common/common.h`, and `FB_TOUCH_INSET_MAX`, whose flat
-     48 was ~10 % of 480 rows but 20 % of 240. ⚠️ **The ratio must be surface:panel and not a fixed
-     800×480 reference** — portrait is 480×800 at full resolution and a fixed reference shrinks every
-     control there to 60 %. Bit-exact no-op at both shipped geometries, so no device changed behaviour
-     and nothing is owed at the panel for this part. Host test `native_apps/tests/ui_scale_test.c`,
-     30 assertions in 8 groups, in the gate. ⚠️ **Group 8 drives the wrappers and is not optional**:
-     measured, a fixed-reference wrapper and a transposed wrapper each fail group 8 and nothing else,
-     one assertion apiece, because every other group hands the ratio in as a parameter.
-   - ⚠️ **The subject is ScummVM, not the seven games — re-scoped 2026-09-11 on the operator's
-     challenge, and the entry had this backwards.** Two measurements decide it. First, **nothing on this
-     device is frame-limited**: the target is `FRAME_DELAY_ACTIVE_US` 33 333 µs, the heaviest 800×480
-     scene above costs 26 075 µs — inside a 30 fps budget with ~7 ms spare — and no shipped app has a
-     recorded performance complaint or a measured fps figure at all, with whole-session audio counters
-     reading `starve=0 lost=0 drop=0 lim=0 clip=0` and one `starve=1` ever. Second, the *direction* of
-     the trade is opposite in the two places. **The seven games are authored at 800×480, so a reduced
-     surface DOWNSAMPLES their art** to buy CPU nobody needs. **ScummVM keeps the engine's own 320×200
-     and upscales it in SOFTWARE today**, so a reduced surface REMOVES work on art that was already that
-     size: `initSize()` stores the engine resolution verbatim, `getWidth()`/`getHeight()` return it
-     rather than the panel, and `blitGameSurfaceToFramebuffer()` resamples it nearest-neighbour with an X
-     lookup table and identical-row dedup. ⚠️ **"800/320 is 2.5 and 480/200 is 2.4, both non-integer" is
-     MEASURED FALSE as a description of the shipped path, 2026-09-11** — corrected here rather than
-     restated. `getScalingInfo()`:163-171 takes **one isotropic scale**, the smaller of
-     `rectW*256/w` and `rectH*256/h`, and centres the picture inside the content rect; the leftover
-     strips are memset to black at :455-478. So ScummVM's two axes are **always equal** and its output is
-     **pillarboxed**: 320×200 into a full 800×480 is **767×479 at (16,0)** (≈2.397×), and into the
-     *default* content rect — the safe rect, `rwFullContentArea()` defaults to `"safe"` — with the 15/15
-     bezel it is **720×450 at (40,0)**, an exact **2.25×**. The resample is still non-integer, so it still
-     doubles some columns and triples others, and the comparison is still *uneven nearest-neighbour
-     versus filtered* rather than sharp versus soft. What changes is the target a hardware arm has to
-     hit: **a pillarboxed 720×450 at an offset, not a full-screen 800×480 stretch**, and the exact figure
-     is a function of the runtime bezel and touch insets rather than a constant. The backend's own
-     O9 row already names ScummVM the prime candidate. ⚠️ `vnc_client` is **not** a candidate: it
-     *downscales* from a larger remote, so the DSS would need a framebuffer the size of the remote
-     desktop to scale from.
-   - **The instrument that decides it: `native_apps/tests/dss_scale_ab.c`**, built as the last build step,
-     deployed, hidden from the grid, and linking nothing from `common/` because `fb_init()` would apply a
-     bezel viewport it must not have. Three modes over one synthetic 320×200 card — 1 px and 2 px column
-     and row combs, diagonals, 1 px rings, four ramps, hard-edged blocks, and a 1 px border so a crop is
-     seen rather than deduced. `soft` runs the software resample on `fb0`; `hard` puts a 320×200 `fb1`
-     under `vid1` at 800×480; `split` shows **both arms at once**, the card's top half only at
-     320×100 → 800×240, which is the *same* 2.5×/2.4× pair — shrinking the output without shrinking the
-     input would have compared two different scale factors and answered nothing. `--swap` moves the
-     hardware arm to the bottom and is the **viewing-angle control**: without it "the top looked softer"
-     is not yet a statement about the scaler, and it refuses rather than reporting a swap that
-     `overlay1/position` would not accept. ⚠️ There is deliberately **no `--ppm`**: the only source that
-     would settle the question is a frame out of a running engine, and a grab off `fb0` today is the
-     800×480 *output* of the software arm, i.e. already arm A.
-   - ⚠️ **Measured on `.188` 2026-09-11, before any run: `vid1` is `enabled=0` and `fb1/size` is `0` —
-     the plane is wired but UNFUNDED — while `output_size` still reads a stale `800,120` and `input_size`
-     `400,240` left by the earlier eye run.** So funding `fb1` is a step and not a given. `overlay1` also
-     carries no `trans_key*` attribute of its own, which step 3 below has to reckon with.
-   - ⚠️ **The instrument was repaired before it was ever trusted, 2026-09-11 — it is now DEPLOYED on
-     `.188` and HAS BEEN RUN; the verdict is the bullet below.** It is not the tool the bullet above
-     describes.
-     Five defects could each have produced a confident wrong eye verdict. `set_mode_565()` discarded the
-     `FBIOPUT_VSCREENINFO` writeback, so a clamped resolution or a 32bpp grant read as success while
-     every RGB565 store and the `line_length / 2` stride stayed 16bpp — garbage on the panel, indistinguishable
-     from a scaler artefact; it now compares the grant against the request and refuses. `position` was
-     written only when `pos_y != 0 || want_swap`, so `hard` and unswapped `split` inherited a previous
-     `--swap` run's `0,240` while announcing `y=0`; it is now written unconditionally and refuses if it
-     cannot reach `0,0`. The undo restored only `enabled` and `fb1/size`, never `output_size` or
-     `position` — which is what left the stale `800,120` above, i.e. the tool manufactured the state that
-     corrupts its own next run; both are now saved, restored and printed in the receipt. Three inline
-     copies of the plane mapping ignored both `ioctl` returns and fed a possibly uninitialised
-     `line_length` to `mmap` as a length, and none blacked the stride tail, whose stale contents the
-     hardware arm would upscale onto the panel; one `map_plane()` helper now does all three. And `--swap`
-     was accepted in every mode, printed as `swap=1` in the banner, and applied only by `split`.
-     ⚠️ **The mode-acceptance refusal cannot be seen firing from here** — nothing available makes the
-     driver grant something other than what was asked — so it is the one fix that stays unvalidated.
-     ⚠️ The header's own receipt figure was **false**: it cited `write 128000, read 131072` while the code
-     rounded to a page *before* writing, so request and readback were always identical and the
-     page-rounding line always described a no-op. The exact byte count is now written, which is what
-     makes the documented rounding something the receipt can show.
-   - **THE EYE A/B IS RUN. Its ruling was "make it selectable" rather than "replace" — operator,
-     2026-09-11 on `.188`. ⚠️ That switch was then WITHDRAWN by the operator; the real-art A/B below
-     killed the hardware arm at both reachable ratios, so nothing is selectable and no config key
-     exists.** Four runs in the prescribed order with the launcher stopped, each restore
-     printed: `hard`, `soft`, `split`, `split --swap`. Verbatim: `hard` — *"test screen pattern. low
-     res"*; `soft` — *"low res image, but very sharp"*; `split` (hardware top) — *"top is low res,
-     blurry, bottom is low res sharp"*; `split --swap` (hardware bottom) — *"top is low res sharp,
-     bottom is low res blurry"*. **The blur followed the hardware arm when the halves were exchanged, so
-     viewing angle and any fixed panel asymmetry are ruled out** — that is what `--swap` was built for
-     and it earned its place. Cost, from the tool's own receipts: hardware **92–211 µs/frame**, software
-     **6 407–12 912 µs/frame** — the software resample spends ~12.7 ms of a 33 ms frame budget where the
-     hardware spends ~0.2 ms. The position fix was also seen working rather than assumed: `position` was
-     hand-poisoned to `0,240` first, the receipt shows it corrected to `0,0` and restored to `0,240`
-     after, and the page-rounding line finally described something real (`wrote 128000, driver reads
-     131072`). ⚠️ **The operator declined the framing "is the blur a problem":** *"I don't say that the
-     blurryness is a problem. In older games it can be a blessing."* **So the deliverable stopped being a
-     replacement** — and the selectable path it became was itself **withdrawn** once real art was run;
-     see the withdrawal below.
-   - ⚠️ **What that eye run does NOT settle, and the real-art prediction it produced — kept here
-     because it was REFUTED, and the refutation is below.** A card of 1 px and
-     2 px combs is the **best possible case for nearest neighbour and the worst possible case for a
-     filter**: NN duplicates pixels so a comb stays a comb, while any filter averages it toward grey.
-     ⚠️ **The prediction that followed is measured FALSE**: *"real SCUMM art carries no 1 px combs —
-     painted backgrounds, dithered gradients and diagonal edges are where NN's uneven column doubling
-     reads as wobble and a filter's softening reads as smoothing, so the two could rank the other way
-     round on game art."* They rank the same way, harder. ⚠️ **And the card is 4%
-     anisotropic where ScummVM is not** — see the geometry correction above. Both arms carry it
-     identically so the A/B is not biased, but it is the likely source of the operator's unprompted *"the
-     bottom one also felt a bit compressed"* [inferred]. **A path to real art exists that needs no
-     ScummVM change**: when upscaling, the software arm's nearest-neighbour map is *surjective* onto
-     every source pixel, so sampling one representative destination pixel per source pixel inverts an
-     `fb0` grab back to the exact game surface — modulo the RGB565 quantisation the framebuffer already
-     holds, and excluding the cursor, which `drawCursor()`:585-588 writes destructively at OUTPUT
-     resolution after the scale. That defeats the "a grab off `fb0` is already arm A" argument that used
-     to stand against a `--ppm` loader, and both halves of it are now built.
-   - **A real 320×200 frame is captured, and the destination rect is MEASURED end to end — `.188`,
-     2026-09-11.** `/opt/games/scummvm kq2` started over SSH with the launcher stopped renders without
-     any touch, so the capture needs no hand at the panel: AGI, static screens, no SMUSH decoder. One
-     16bpp page off `/dev/fb0` while exactly one engine was running is at
-     `C:\work\rw-scratch\kq2_fb.raw`. ⚠️ **The non-black bounding box of that frame — 732×450 at panel
-     (0,30) — is real and must not be used as the rect.** Two independent implementations agree on the
-     box, so it is a property of the bytes; a row-by-row profile of the same grab says why it is
-     worthless: an arrow-shaped **mouse cursor** occupies columns 61-69 of rows 30-44, and a 16-pixel
-     **speck** sits at columns 0-7 of rows 478-479 — below the bottom bezel, outside the logical surface,
-     and written by nothing in our code that has been identified. Strip those two and the picture content
-     is columns **60..731**, rows 46..398.
-   - **The chain that produces the rect, every step measured on this unit.** Bezel line `15 13 0 0` gives
-     a logical surface of 800×452 at `view` (0,15). Calibration line 1 `-20 1019 3099 4134
-     -288 881 3221 4381` with line 3 `reach 0 4082 0 4095`, pushed through `publish_safe_area()`, gives
-     touch insets **left 3, right 10, top 14, bottom 17**, none of them clamped. `getScalingInfo()`:163-171
-     over that safe rect then gives `scaleX` 629, `scaleY` 538, `scale` **538** (height-limited),
-     `scaledWidth` **672**, `scaledHeight` **420**, `offsetX` **60**, `offsetY` **14** — panel
-     **(60,29), 672×420**. ⚠️ **The columns confirm it and the rows cannot**: the grab's first non-black
-     column is 60 on *every* content row and its last is 731, which is 672 wide to the pixel, while KQ2
-     paints black at the top and bottom of its own 320×200 surface so no row pins an edge of the rect.
-     ⚠️ **So 720×450 at (40,0) is what a 15/15 bezel with zero insets would give, and no real unit is
-     that** — the rect is a function of the runtime bezel *and* the runtime insets, and a non-black bbox
-     can never stand in for it: this one cleared a 2% aspect-similarity gate while being wrong on both
-     axes.
-   - **Both tools the real-art run needed now exist.** `fb_to_game_ppm.py` at the repo root inverts the
-     software upscale — one forward pass buckets each destination column by its source column and reads
-     the **middle** of each bucket, so a truncation boundary cannot absorb an off-by-one — and refuses a
-     downscale rather than inventing pixels. Its `--self-test` needs no device and no files, and pairs a
-     bit-exact round trip with negative controls for a shifted rect, a downscale and a wrong stride;
-     rewriting the middle-of-bucket choice to the bucket's first index makes the shifted-rect control
-     recover exactly, which is what proves that control is not vacuous. Run against the real grab with
-     the rect above, it recovers a coherent *King's Quest 2* throne-room screen. `--ppm FILE` in
-     `native_apps/tests/dss_scale_ab.c` reads a strictly 320×200 P6 **instead of** building the synthetic
-     card, through a local reader because that file deliberately links nothing from `common/`; the
-     geometry is left alone so the run swaps art and nothing else.
-   - **THE REAL-ART RUN IS DONE, and the prediction above is REFUTED BY MEASUREMENT — `.188`
-     (arwtest2, *not* the `.73` reference unit), 2026-09-11.** `/opt/games/dss_scale_ab` with
-     `--ppm /opt/games/kq2_game.ppm` (md5 `afda0f96fcd597cfc9b660bc7d19cb12`), a real *King's Quest II*
-     frame. **Software arm**: 12 724 µs/frame over 384 000 written pixels; operator's eye *"nice image,
-     sharp"*; screenshottable, and the decoded capture confirms real art at full 800×480 with legible
-     text. **Hardware arm, 2.5×/2.4× full-screen**: 178 µs/frame over 64 000 written pixels; operator's
-     eye across two separate runs *"This is very bad"* and *"The text is barely readable"*. So real art
-     did not reverse the ranking — it **widened** it.
-     ⚠️ **Why the prediction failed, which is the durable lesson**: it took "real art" to mean painted
-     backgrounds and dithered gradients, and overlooked that a SCUMM adventure is **text-heavy**. The
-     dialogue box is a bitmap font with 1-pixel strokes — the worst case for any filter, and exactly
-     where the player's eye is. Real art therefore carries *worse* 1 px combs than the synthetic card,
-     not fewer. ⚠️ Recorded honestly: this verdict came from **two sequential full-screen runs, not a
-     simultaneous `split`**. The viewing-angle confound is excluded by the earlier synthetic
-     `split --swap` run (the blur followed the hardware arm across the swap) and was **not**
-     re-established with real art.
-   - **A THIRD arm was tested and also loses: exact 2×.** Tested on `.188` 2026-09-11 with **zero
-     rebuild** — while `hard` mode held the plane, `output_size` was rewritten to `640,400` and
-     `position` to `80,40` from a second `ssh`; readback confirmed `640,400` / `80,40` / `enabled 1` with
-     `input_size` still `320,200`, i.e. exactly **2.000× on both axes with the ratio as the only changed
-     variable**. The rationale was the identity kernel the driver reaches at that bucket — coefficients
-     and citations in [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display), not restated
-     here. **Operator's eye: NOT an improvement.** Artifacts — *"extra little lines at the top and
-     bottom, like an over sharpened JPG"* — i.e. **ringing**, which is what the phase-4 negative lobes
-     predict. They also noted the 640×400 image is visibly smaller and does not fill the screen.
-     **Geometry cost**: exact 2× forces 640×400, which is *smaller* than the **672×420** ScummVM's own
-     `getScalingInfo()` already produces on this unit, so it pays image size **and** rings.
-   - **RULING: no hardware configuration wins on pixel-art text from USERSPACE**, at either ratio
-     tested, and the driver says none can — the ratio is the only choice a caller has. **Software
-     nearest-neighbour therefore stays, unchanged and unswitched.** Do not re-propose replacing it.
-     ⚠️ **And the user-facing switch is WITHDRAWN — operator, 2026-09-11.** The `rw_upscale` key in
-     `/opt/games/rw_config.conf` that was decided earlier is cancelled: **no config key, no settings-app
-     row, no ScummVM backend code path.** The hardware arm lost on image quality at both
-     userspace-reachable ratios, so its only remaining benefit was CPU that nothing is measurably short
-     of — this entry's own baseline records ScummVM playing *Full Throttle* at 12–13 % CPU. Not
-     re-argued here.
-     ⚠️ **What is still open is a KERNEL path, and it is image-side rather than a module build.**
-     **[inferred]** a coefficient-table patch could give hardware nearest neighbour outright: a table
-     carrying the identity kernel in **all 8 phases** would make every output pixel take the centre tap
-     whatever its sub-pixel phase, which is what an NN upscale does — sharp *and* ~178 µs/frame, which
-     would overturn the software-wins ruling. Tagged inferred: it is reasoning about what the DISPC FIR
-     does with an all-identity table, not something the source states. ⚠️ **The cheap module route does
-     not reach it** — measured on `.188` from `/proc/config.gz`, the DSS is **built in**, with no DSS
-     module loaded and no module file on disk. ⚠️ **And a rebuilt image inherits the standing blocker**:
-     the same running config has `CONFIG_TOUCHSCREEN_PANJIT=y`, which has no vanilla source and which
-     `olddefconfig` drops silently, so an image built from this tree boots with a dead touchscreen. So
-     the coefficient patch is **blocked behind that**, not free, and it is a row in F101's fold-in table.
-     Both the built-in finding and the blocker live in `SYSTEM_ANALYSIS.md` —
-     [§3.2](SYSTEM_ANALYSIS.md#32-display) and [§7](SYSTEM_ANALYSIS.md#7-kernel-policy).
-   - ⚠️ **The cheapest kernel win found, and it unblocks step 2 below: raise
-     `CONFIG_FB_OMAP2_NUM_FBS` from 2 to 3.** Config-only, no source patch. **Three** DSS overlays
-     enumerate on this device while only `fb0` and `fb1` exist, so `vid2` can never be funded from
-     userspace — there is no `fb2` node to bind. Measured on `.188` 2026-09-11 by `zcat /proc/config.gz`,
-     `ls /sys/class/graphics/fb*` and `ls -d /sys/devices/platform/omapdss/overlay*`; the device fact is
-     in [§3.2](SYSTEM_ANALYSIS.md#32-display). A row in F101's fold-in table.
-   - ⚠️ **Still owed in the harness, if the kernel path is ever taken: the isotropic-pillarbox
-     rehearsal.** `dss_scale_ab` has no proper mode for it — the 640×400 exact-2× test above was a live
-     sysfs poke from a second shell, not a harness feature, so nothing repeats it and no receipt records
-     it. **The tools themselves ship nothing and stay as they are**: `dss_scale_ab` with
-     `soft`/`hard`/`split`/`--swap`/`--ppm`, `fb_to_game_ppm.py`, and the recovered KQ2 fixture.
-   - **Two eye readings of the SOFTWARE arm on real art, operator at the panel 2026-09-11 — arm A
-     alone, not an A/B.** *Full Throttle*: *"yes too sharp :)"*. *King's Quest 2*: *"King's Quest is
-     running. Very sharp"*. Both point the same way the ruling already does — sharp is not automatically
-     the win on old art — but neither is a comparison, so neither ranks the arms. ⚠️ The *Full Throttle*
-     capture was **discarded**: two `scummvm` processes were running and fighting over `fb0`, operator-
-     confirmed from the panel (*"flasing like crazy"*, *"two engines fighting over: yes"*), from a single
-     `nohup` launch whose duplication is **unexplained**. Verify exactly one PID before trusting any
-     capture, and re-check it after the grab.
-   - ⚠️ **The switch's shape was fully mapped and is now dead work — do not build it.**
-     `getScalingInfo()`:138-172 was the one chokepoint, `blitGameSurfaceToFramebuffer()`:440-573 the
-     resample a hardware arm would bypass, and `rwFullContentArea()` (`roomwizard.cpp`:105-135) the
-     env-then-ConfMan idiom a toggle would have copied. All of it is superseded by the withdrawal above.
-     What survives from that reading, because it is true of any future backend work: `hasFeature()`
-     returns true for `kFeatureCursorPalette` **only** and `beginGFXTransaction`/`endGFXTransaction` are
-     no-ops, so **there is no runtime mode-change plumbing in this backend to hang anything on**; and
-     **nothing bridges `/opt/games/scummvm.ini` and `/opt/games/rw_config.conf`** — `control_panel` never
-     reads the former, the backend never reads the latter, and the one exception is the hand-declared
-     `config_audio_device_stored()` (`oss-mixer.h`:34, called at `oss-mixer.cpp`:138) that opens
-     `CONFIG_FILE_PATH` itself. ⚠️ ScummVM redeploy is ~1 m 35 s – 2 m 20 s and `rm -f`s
-     `native_apps/common/*.o` twice, so it must never run concurrently with a `native_apps` build.
-   - **What the per-game conversion would cost, if it is ever wanted.** None of it is owed while ScummVM
-     is the subject, and each game would additionally need its own operator eye run. Three layers, worst
-     first:
-     1. **The shared widgets in `common/common.c`. ⚠️ The list that stood here understated this layer by
-        an order of magnitude, measured 2026-09-11.** `common/common.c` contains **zero** calls to
-        `fb_ui_px_*()`, so `gameover_init()` and `modal_dialog_draw()` are *mixed-unit* expressions
-        today — a scaled `BTN_LARGE_HEIGHT` added to a flat `btn_gap = 15` and a flat `- 15` margin. It is
-        ~40 layout literals across 12 functions, not three. `modal_dialog_draw()` alone carries
-        `150,50`, `30`, `25`, `200,44`, `8` and `20`, and `modal_dialog_init()`'s `dialog_width = 420` is
-        compared against the *real* `fb->width`, so the box overflows a 400-pixel surface with both side
-        borders off it. `button_draw()`'s `- 20` icon inset is the highest-leverage single literal, at 51
-        call sites across 7 apps. **Three different font-width constants coexist** — `6` at
-        `common.c:92`, `8` at `:131`, and `8` hand-rolled twice more in `screen_draw_game_over()` — so the
-        33 % over-measure is duplicated rather than localised, and fixing `:131` is a prerequisite for the
-        button-label overrun noted below. And the icon **minimum-size floors cannot scale down**: 3 px
-        bars with 6 px gaps in `icon_draw_hamburger()`, a 3 px stroke in `icon_draw_x()`, which together
-        with that `- 20` exceed the icon box a half-size surface leaves.
-     2. **Each game's own literals.** ⚠️ **"`snake.c` has none of them and is the cheapest first
-        subject" was wrong** and is corrected here: snake has a fixed 80-pixel top band and 40-pixel
-        margins bounding its playfield, fixed HUD rows at y=28 and y=53 against `SCREEN_SAFE`-anchored
-        buttons, and a food radius of `cell_size / 2 - 2` that reaches 1 at a 400×240 surface, 0 at a
-        modest touch inset and **−1 — food never drawn at all** — at the worst legal inset. It is still
-        the cheapest subject; it is not a free one.
-     3. **The named per-game constants**: `PADDLE_*`/`BALL_*`/`BRICK_H` in `brick_breaker.c` and
-        `pong.c`, `HUD_HEIGHT` in `samegame.c` and `frogger.c`, and `TILE_SIZE` in `platformer.c`, which
-        makes the visible world a function of resolution. `platformer.c` is the most expensive.
-     Then ScummVM, which by the re-scope above comes **first** rather than last.
-   - ⚠️ **Text does not scale, and this is a floor rather than an oversight.** The glyph size is an
-     integer multiplier with no rung below 1, so a scale-3 label cannot halve. The `button_init` macro's
-     `(w) > 150 ? 3 : 2` threshold is deliberately left in raw surface pixels so a scaled width falls
-     through to 2, the closest rung to the 1.5 wanted — but 2 is not exact: measured, a scaled
-     `BTN_LARGE_WIDTH` of 110 takes scale 2, whose `"PLAY AGAIN"` is 120 surface pixels against a
-     110-pixel button, so **the label overruns**. Sizing text to fit needs `text_measure_width()`, which
-     over-measures by 33 % until the 8px/6px font-width confusion in it is fixed — so this waits on that
-     item rather than being half-corrected here.
-   - **The bezel band no longer doubles, and touch turned out to need nothing.** The
-     margins name pixels the plastic bezel physically covers, so they are *panel* pixels, and
-     `fb_apply_viewport()` subtracted them from the framebuffer's own `xres`/`yres`: `.188`'s measured
-     T=15 B=13 took 28 of 480 rows at full size and 28 of **240** at half, twice the panel band, which is
-     why the ladder's area ratio is 4.31 rather than 4.00. The operator saw that band at top and bottom
-     during the eye run above, ~1–2 mm each, against ~15 and ~13 panel rows predicted. `fb_init()` now
-     reads the panel's true size from the display's mode timings — not from any framebuffer's geometry,
-     which is the surface — and converts the margins with `fb_scale_bezel_to_surface()`, a pure function
-     so the arithmetic is reachable from a host test (`native_apps/tests/bezel_scale_test.c`). It rounds
-     down, so the art runs slightly under the bezel rather than stopping short of it, and it is a
-     bit-exact no-op at 800×480. ⚠️ **A "touch on a scaled node is wrong by the scale factor and needs
-     dividing" note stood here and in `framebuffer.h`, and it is measured FALSE** — the globals
-     `fb_apply_viewport()` publishes are *surface* dims despite being named for the panel,
-     `touch_init()` copies them into the field the curve takes as its `dim`, and the knots sit at
-     `dim/4` and `3*dim/4`, so stage 1 already tracks the surface and stage 2 subtracts an origin
-     already converted to it. The prescribed divide **breaks** touch: 12 failures in
-     `native_apps/tests/touch_map_test.c` group J, which drives one full-size calibration over
-     800×480, 400×240 and 200×120. It was never broken — the same assignment read the surface before
-     the bezel work too. **Nothing blocks `snake` at reduced resolution.** Do not re-propose the divide.
-   - **The composited output has an attributed eye.** One run, `overlay0` (`gfx`) disabled and confirmed
-     so by readback, `vid1` upscaling a 400×240 `fb1` to 800×480, watched from the first frame through
-     announced phases: launcher, then black when `vid1` covered it, then black with `gfx` off, then an
-     animating grid, then black, then the launcher back. The grid **filled the panel's full width** — 400
-     surface pixels across 800 panel pixels is the 2× upscale, seen rather than inferred — and the
-     operator described it unprompted as *low res*, which is the scaler's filter signature. ⚠️ `input_size`
-     is **not writable** (`Permission denied`); the driver derives it from the framebuffer's geometry, so
-     only `output_size` is set. `fb1/size` also reads back **page-rounded**: 384000 written, 385024 read.
-2. **HUD plane.** Put the unscaled HUD on `gfx` (`overlay0`) and the scaled game on `vid1`. ⚠️ **`vid2`
-   is NOT an alternative from userspace** — it enumerates but has no framebuffer to bind, so it waits on
-   the `NUM_FBS=3` row of F101. `global_alpha` works; `zorder` does
-   not, so the fixed GFX < VID1 < VID2 order decides what is on top and the layout must suit it.
-3. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
-4. **Video playback**, speculatively — `/dev/video0` accepts YUV with hardware colour-space
-   conversion. Furthest from proven of the four, and the boot-time `omap_vout: failed to allocate DMA
-   Channel for video-1` may be exactly what blocks it.
+1. **HUD plane.** Unscaled HUD on `gfx` (`overlay0`), scaled game on `vid1`; `vid2` waits on `NUM_FBS=3`.
+   `global_alpha` works and `zorder` does not, so the fixed GFX < VID1 < VID2 order decides what is on top.
+2. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
+3. **Video playback**, speculatively — `/dev/video0` accepts YUV with hardware colour-space conversion.
+   Furthest from proven; the boot-time `omap_vout: failed to allocate DMA Channel for video-1` may be what
+   blocks it.
 
 ⚠️ **Verification is operator-in-the-loop.** `cat /dev/fb0` returns the gfx plane's memory, not the
 composited panel, so no screenshot can see an overlay — say so in any checklist this work produces.
@@ -747,8 +439,8 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
 | USB hot plug and disconnect | `kernel/patches/musb-omap2430-session-on-id-ground.patch` (an adapter plug starts a session) and `kernel/patches/musb-a-idle-disconnect.patch` (an unplug clears `is_active`, ending the `printk` storm) — **both booted 2026-09-29 on `.188`: adapter replug enumerates with no RESCAN, unplug clean** | driver changes, not config ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)); [`kernel/README.md`](kernel/README.md) holds each one's measurement. Nothing is left but shipping them in the image; B41 is the one console line they added |
-| Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 holds the measurement and is what this unblocks |
-| DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. F2 holds the A/B this would overturn and [§3.2](SYSTEM_ANALYSIS.md#32-display) the coefficients |
+| Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 is what this unblocks; the measurement is in [§3.2](SYSTEM_ANALYSIS.md#32-display) |
+| DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. [§3.2](SYSTEM_ANALYSIS.md#32-display) holds the A/B this would overturn and the coefficients |
 
 **The order to do it in, cheapest first.** Each step is worth finishing before the next is started.
 
