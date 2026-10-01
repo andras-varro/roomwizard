@@ -96,6 +96,32 @@ run did not print it. Console warnings are defects even when harmless; n=1. Capt
 `usb_host/linux-4.14.52/drivers/usb/musb/musb_host.c` and check later mainline for a change to that `WARN`,
 before reproducing.
 
+### B46. The musb host port can silently die after `VBUS_ERROR` — open, seen once 2026-10-01
+
+**Measured on `.188`:** ~1 m 46 s after the Bluetooth pad connected, the kernel logged `musb-hdrc
+musb-hdrc.0.auto: VBUS_ERROR in a_idle (90, <VBusValid), retry #0, port1 00000503`. Afterwards the musb `mode`
+file read `b_idle`; every USB device (hub, xpad, C-Media audio, keyboards, BT dongle) stopped working, yet no
+disconnect was logged and `/sys/bus/usb/devices` still listed them all; BT commands failed with `hci0 sending
+frame failed (-19)` while `bluetoothctl` still said `Connected: yes`. `/etc/init.d/usb-host recover` restored
+everything on attempt 1. It did not recur in a further 4 m 39 s session; n=1. **Cause of the VBUS sag not
+measured** — **[inferred]** candidate: total draw (xpad, USB audio, dongle, two keyboards behind hub `1a40:0101`)
+against the 500 mA budget. **Next:** (1) measure the cause — current draw with that device set, and whether the
+hub is bus-powered; (2) decide whether something should detect `VBUS_ERROR` / `b_idle` and run recover
+automatically instead of waiting for a user to press RESCAN. The RESCAN half is shipped: it now recovers on
+`b_*` even with devices listed (`usb_port_dead()`), not verified on a real `b_idle` port because one cannot be
+induced.
+
+### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
+
+**Measured on `.188`:** at the 8BitDo pad's first incoming connection after boot the kernel printed `WARNING:
+possible recursive locking detected` — `sk_lock-AF_BLUETOOTH-BTPROTO_L2CAP` taken twice, `l2cap_sock_new_connection_cb`
+→ `bt_accept_enqueue` → `lock_sock_nested`, from `l2cap_connect` / `hci_rx_work`. It did not reappear on the later
+reconnect. Console warnings are defects even when harmless. Our image evidently has lockdep enabled
+(`CONFIG_PROVE_LOCKING` or similar) **[inferred; the config was not read]**. Cause not investigated;
+**[inferred]** candidate: the 4.14 parent/child L2CAP socket false positive that upstream later annotated with a
+nesting subclass. **Next:** read `.config` for the lockdep symbols and the upstream change to
+`l2cap_sock_new_connection_cb`; decide between backporting the annotation and dropping lockdep from the image.
+
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -223,7 +249,7 @@ prerequisite: A2DP is tens of KB/s and a controller a few hundred bytes/s, which
 **Bluetooth needs a USB dongle — there is no radio on the board**
 ([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion); the `J5`/`J6` XBee socket is 802.15.4 and cannot
 host Bluetooth), and there is no second USB port ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies
-the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 below).
+the single connector. BlueZ userspace is cross-built (step 1 below) and boots from `bluetooth/`.
 
 **Open now:**
 
@@ -232,19 +258,14 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
   both, ScummVM. The Mix Bus Test crack is B38. **Loudness:** an onboard
   probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
   the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
-- **Packaged, not yet booted.** The `bluetooth/` component (modules, firmware, BlueZ, `/etc/init.d/bluetooth`
-  at S91, dbus policy, `main.conf` with `AutoEnable=true`) builds and bundles on the dev host; it has not been
-  deployed. `.188` still runs the hand install (controller `A0:AD:9F:70:DD:CA`). Unverified: a boot that brings
-  `hci0` up powered with no hand step, that a bond in `/var/lib/bluetooth` survives a reboot (inferred: `/var`
-  is not tmpfs on this image), and AutoEnable re-powering `hci0` after a USB re-enumeration.
 - **Pairing recipe (measured):** a `NoInputNoOutput` agent; scripted `bluetoothctl` needs a ~2 s delay before
   `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
   0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
   carrying both keys and touchpad, which `app_launcher` hot-plugged.
 - **Pads: the 8BitDo Pro 2 works over BT in X mode (recommended: Xbox One S identity, the USB Xbox-clone
   layout) and in A mode** (`hid-generic`; identities and the tool trap in
-  [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps or the unit reboots, which
-  needs the packaging above booted first.
+  [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps (a reconnect after a unit
+  reboot is measured, §3.6).
 
 **Next, in order:**
 
@@ -252,15 +273,14 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
    `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
    Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
    a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
-2. Deploy `bluetooth/` to `.188`, reboot, and check the three unverified points above.
-3. **BT audio: the first steps are lookups, not code.** Are glib, dbus and `sbc` already in
+2. **BT audio: the first steps are lookups, not code.** Are glib, dbus and `sbc` already in
    `bluetooth/arm-deps-softfp`; was alsa-lib (`native_apps/build-alsa-lib.sh`) built with plugin `dlopen`
    support. Then a hand-run `bluealsa` + `aplay -D bluealsa` test before any app code; then `sbc` + `bluez-alsa`
    v4.3.1 into **our** alsa-lib's plugin dir. A2DP latency (~150-250 ms typical) is a property, not a bug.
-4. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
+3. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
    the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
    own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).
-5. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
+4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
    `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
    USB card 1. A2DP adds ~150-250 ms latency **[inferred]**.
 

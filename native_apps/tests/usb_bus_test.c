@@ -100,6 +100,21 @@ int main(void) {
     CHECK(usb_bus_scan(R, d, 1) == 1, "F: max 1 not honoured");
     CHECK(usb_bus_scan("build/no_such_usb_root", d, USB_BUS_MAX) == 0, "F: missing root");
 
+    /* G: a port that dropped out of host mode keeps every device in sysfs —
+     * musb's mode file is the only thing that says b_idle.  d[] still holds the
+     * four-device reading from E, three of them peripherals. */
+    char mode[300];
+    snprintf(mode, sizeof(mode), "%s_mode", R);
+    FILE *mf = fopen(mode, "w");
+    if (mf) { fputs("b_idle\n", mf); fclose(mf); }
+    CHECK(usb_port_dead(d, 4, mode), "G: b_idle with devices listed reads as live");
+    mf = fopen(mode, "w");
+    if (mf) { fputs("a_idle\n", mf); fclose(mf); }
+    CHECK(!usb_port_dead(d, 4, mode), "G: a_idle with devices listed reads as dead");
+    CHECK(usb_port_dead(d, 1, mode), "G: hub alone under a_idle reads as live");
+    CHECK(!usb_port_dead(d, 4, "build/no_such_mode"), "G: unreadable mode overrides the count");
+    remove(mode);
+
     char cmd[300];
     snprintf(cmd, sizeof(cmd), "rm -rf %s", R);
     if (system(cmd) != 0) printf("warning: could not remove %s\n", R);

@@ -532,7 +532,7 @@ icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; 
   `cp_status()` (6 s) and reach the wizard or `touch_raw` through `cp_run_touch_tool()`, which reloads geometry
   and calls `rebuild_ui` itself — `main()` does not rebuild after a page's `run_fullscreen`.
 - **`enter()` only marks work pending**, so the page paints first. The USB page's opening scan of an empty port
-  queues one port re-probe (`RECOVER_TRIES=1`, measured 6.0 s on .188): ~6 s on every open while the socket
+  (or one whose musb `mode` reads `b_*`, `usb_port_dead()`) queues one port re-probe (`RECOVER_TRIES=1`, measured 6.0 s on .188): ~6 s on every open while the socket
   is empty, kept by operator decision; RESCAN keeps three attempts. Disabled controls refuse input in the widget (`Widget.disabled`).
 - **Rejected:** one executable per page (init respawns the launcher, so the return path breaks, and every tap
   re-inits fb, touch and config). `dlopen`'d pages are deferred — an ABI version field refused on mismatch,

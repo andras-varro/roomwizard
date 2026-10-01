@@ -29,4 +29,12 @@ int usb_bus_scan(const char *root, UsbBusDev *out, int max);
 /* Devices that are not hubs — what "a device is attached" means. */
 int usb_bus_peripherals(const UsbBusDev *d, int n);
 
+/* musb's OTG state: "a_*" while it is the host, "b_*" once it has left host mode. */
+#define USB_MUSB_MODE \
+    "/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode"
+
+/* Whether the host port needs a re-probe: nothing but hubs enumerated, or musb
+ * reading b_* from mode_path.  An unreadable mode file leaves the count to decide. */
+bool usb_port_dead(const UsbBusDev *d, int n, const char *mode_path);
+
 #endif

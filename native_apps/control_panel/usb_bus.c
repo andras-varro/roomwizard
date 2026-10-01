@@ -114,3 +114,16 @@ int usb_bus_peripherals(const UsbBusDev *d, int n) {
         if (!d[i].hub) c++;
     return c;
 }
+
+/* After a VBUS_ERROR musb drops to b_idle and no disconnect is ever reported:
+ * sysfs goes on listing every device while none of them answers (measured on
+ * .188), so the count alone calls that port live. */
+bool usb_port_dead(const UsbBusDev *d, int n, const char *mode_path) {
+    if (usb_bus_peripherals(d, n) == 0) return true;
+    char m[16] = "";
+    FILE *f = fopen(mode_path, "r");
+    if (!f) return false;
+    bool ok = fgets(m, sizeof(m), f) != NULL;
+    fclose(f);
+    return ok && m[0] == 'b' && m[1] == '_';
+}

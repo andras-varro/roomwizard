@@ -166,8 +166,9 @@ The only recovery reachable from userspace is a driver re-probe:
 
 ⚠️ **Do not use `echo host > …/musb-hdrc.0.auto/mode`.** Earlier versions of this file recommended it. It
 is a **silent no-op** on this SoC — `omap2430_ops` has no `.set_mode`, so the store returns success having
-done nothing. `mode` is not a diagnostic here either; it reads `a_idle` with a pad enumerated and working.
-The reading that distinguishes a live port from a dead one is `$MUSB/vbus`.
+done nothing. `mode` does not show a live port (it reads `a_idle` with a pad enumerated and working), but a
+`b_*` reading means the port died after `VBUS_ERROR` even while devices are still listed; the control panel's
+RESCAN recovers on it. Otherwise the reading that distinguishes live from dead is `$MUSB/vbus`.
 
 Detail: [`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb); it is tracked as open work in
 [`../IMPROVEMENT_PLAN.md`](../IMPROVEMENT_PLAN.md). Until there is an automatic fix, plug

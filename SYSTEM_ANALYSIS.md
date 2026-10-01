@@ -1269,7 +1269,7 @@ plugged into it enumerates nothing; re-seating an adapter revives only a port th
 ⚠️ **Plugging a USB pad re-enumerates the whole tree, so the Bluetooth dongle's `hci0` is recreated and every BT
 link drops** (measured 2026-10-01, `.188`: hub `1-1` re-found, dongle `1-1.3`). Bonds in `/var/lib/bluetooth`
 survived and the pad reconnected on its Home button once `hci0` was powered; without `/etc/bluetooth/main.conf`
-BlueZ 5.66 leaves the new adapter `Powered: no`. We ship `AutoEnable=true` ([`device-files/bluetooth-main.conf`](device-files/bluetooth-main.conf)); that it re-powers after a replug is **[unverified]**.
+BlueZ 5.66 leaves the new adapter `Powered: no`. We ship `AutoEnable=true` ([`device-files/bluetooth-main.conf`](device-files/bluetooth-main.conf)); **measured 2026-10-01, `.188`:** after `/etc/init.d/usb-host recover`, `btusb` reloaded the `rtl8761cu` firmware and `bluetoothctl show` read `Powered: yes` with no manual step. **Boot start also works** (measured, same unit): after a reboot `/etc/init.d/bluetooth` (S91) started `bluetoothd`, the modules loaded, `hci0` was `Powered: yes`, the bonds survived, and the 8BitDo Pro 2 (X mode) reconnected on a Home press, drove `app_launcher` (which holds its event node by hot-plug) and stayed connected 4 m 39 s.
 
 ⚠️ **Five readings that look diagnostic and are not** — three were believed and written down before being
 refuted, one of them in this document.
@@ -1279,7 +1279,7 @@ refuted, one of them in this document.
 | `echo host > $MUSB/mode` | **silent no-op** — `omap2430_ops` has no `.set_mode`, so the store reports success having done nothing |
 | `$MUSB/vbus`'s `timeout 1100 msec` | **inert** — nothing on omap2430 reads `musb->a_wait_bcon`; writing it changes the printed number and nothing else |
 | `power/control = on` (forbidding runtime PM) | **does not prevent the drop** — measured with `runtime_status` reading `active` throughout |
-| `$MUSB/mode` as a state reading | **not diagnostic** — reads `a_idle` with a pad enumerated, `js0` present and the game responding (unpatched; our patched image reads `a_host`) |
+| `$MUSB/mode` as a *live-port* reading | **not diagnostic of a live port** — reads `a_idle` with a pad enumerated, `js0` present and the game responding (unpatched; our patched image reads `a_host`). ⚠️ **It IS the one observable of a dead port after `VBUS_ERROR`** (measured 2026-10-01, `.188`, our image): the kernel logged `VBUS_ERROR in a_idle`, `mode` then read `b_idle`, every device stopped working, yet no disconnect was logged and `/sys/bus/usb/devices` still listed them all (stale); `usb-host recover` fixed it on attempt 1. A `b_*` reading means dead whatever the device list says (`usb_port_dead()`, `native_apps/control_panel/usb_bus.c`) |
 | `twl4030-usb/vbus` | **not a port-state reading at all** — 0444, reports `vbus_supplied` (somebody feeding *us*), so it reads `off` in the working state **and** the dead one |
 | `lsmod` → `xpad … 0` | a refcount of module *users*, not bound devices — reads `0` with a pad bound and `event1`/`js0` present |
 
@@ -1301,8 +1301,8 @@ booted `mode` value was confirmed against the running kernel rather than against
 **`/etc/init.d/usb-host recover`** does the rebind — unbind, settle `RECOVER_SETTLE` (2 s) so VBUS can
 decay below VBusValid, bind — and retries up to `RECOVER_TRIES` (3), stopping the moment a **non-hub**
 device appears and exiting non-zero on exhaustion. Plug the device in **first**. Reachable from the panel
-as Control Panel → USB → **RESCAN**, which forks it when a scan finds nothing, and by opening that page with an
-empty port (one attempt, measured 6.0 s on `.188`); measured on `.188`
+as Control Panel → USB → **RESCAN**, which forks it when a scan finds nothing **or `mode` reads `b_*`**, and by opening that page with an
+empty or `b_*` port (one attempt, measured 6.0 s on `.188`); measured on `.188`
 2026-08-14 at ~5 s from one tap, leaving `Vbus on`, `1-1`, `event1` + `js0` and the pad playable. ⚠️ It is
 deliberately not on a timer, and the reason is not merely wasted rebinds: **unpatched, nothing in software can
 distinguish "nothing is plugged in" from "a pad is plugged into an unpowered port"** — VBUS is off either

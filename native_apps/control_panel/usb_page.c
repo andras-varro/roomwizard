@@ -264,15 +264,15 @@ static void usb_page_load(const Config *cfg) {
     usb_scan_bus(&usb_state);
 }
 
-/* An empty scan is the dead-port signature: when the port is unpowered NOTHING
- * enumerates, so finding nothing is exactly when a re-probe is worth its few
- * seconds.  If something is already listed the port is live, and a device
- * plugged in later enumerates on its own (measured on .188 across gaps of
- * 70-300 s) — so do not disturb a working bus.  A hub alone counts as empty:
- * that is how a dead port looks behind one.  RESCAN and opening the page both
- * decide by this, so the page does on opening what RESCAN would do. */
+/* Two dead-port signatures.  An empty scan: when the port is unpowered NOTHING
+ * enumerates (a hub alone counts as empty — that is how a dead port looks
+ * behind one).  And musb out of host mode, which leaves every device listed —
+ * usb_port_dead().  Otherwise the port is live, and a device plugged in later
+ * enumerates on its own (measured on .188 across gaps of 70-300 s) — so do not
+ * disturb a working bus.  RESCAN and opening the page both decide by this, so
+ * the page does on opening what RESCAN would do. */
 static bool usb_port_looks_dead(const UsbState *s) {
-    return usb_bus_peripherals(s->bus, s->bus_cnt) == 0;
+    return usb_port_dead(s->bus, s->bus_cnt, USB_MUSB_MODE);
 }
 
 /* Every opening reads the bus afresh: a reading kept from startup listed
