@@ -207,6 +207,57 @@ static void seed_mouse_buttons(int fd, bool *btn) {
     btn[2] = input_caps_test(keys, BTN_MIDDLE);
 }
 
+static void latch_key(GamepadManager *gm, int code, bool down);
+
+/* The same, for the latched buttons, after a rescan has reopened every node.
+ * Only ever ORs a level in: called with held_latched[] already zeroed.  Not
+ * called at gamepad_init(), so the key that launched an app is not seen as a
+ * fresh press by it. */
+static void seed_latched_levels(GamepadManager *gm) {
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    const GamepadButtonMap *m = &gm->button_map;
+
+    /* Keyboards, and the keys of a keyboard+touchpad combo's mouse node
+     * (latch_key ignores the mouse buttons themselves). */
+    for (int k = 0; k < gm->keyboard_count + gm->mouse_count; k++) {
+        int fd = (k < gm->keyboard_count) ? gm->keyboard_fds[k]
+                                          : gm->mouse_fds[k - gm->keyboard_count];
+        memset(keys, 0, sizeof(keys));
+        if (fd < 0 || ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) continue;
+        for (int code = 0; code <= KEY_MAX; code++)
+            if (input_caps_test(keys, code)) latch_key(gm, code, true);
+    }
+
+    if (gm->gamepad_fd < 0) return;
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(gm->gamepad_fd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
+        /* The same mapping poll_gamepad() applies to EV_KEY. */
+        const struct { int btn_id; int code; } pad_btns[] = {
+            { BTN_ID_JUMP,   m->btn_jump   },
+            { BTN_ID_RUN,    m->btn_run    },
+            { BTN_ID_ACTION, m->btn_action },
+            { BTN_ID_PAUSE,  m->btn_pause  },
+            { BTN_ID_BACK,   m->btn_back   },
+        };
+        for (size_t i = 0; i < sizeof(pad_btns) / sizeof(pad_btns[0]); i++) {
+            int code = pad_btns[i].code;
+            if (code >= 0 && code <= KEY_MAX && input_caps_test(keys, code))
+                gm->held_latched[pad_btns[i].btn_id] = true;
+        }
+    }
+    struct input_absinfo ai;
+    if (m->hat_x_axis >= 0 && m->hat_x_axis <= ABS_MAX &&
+        ioctl(gm->gamepad_fd, EVIOCGABS(m->hat_x_axis), &ai) == 0) {
+        if (ai.value < 0) gm->held_latched[BTN_ID_LEFT]  = true;
+        if (ai.value > 0) gm->held_latched[BTN_ID_RIGHT] = true;
+    }
+    if (m->hat_y_axis >= 0 && m->hat_y_axis <= ABS_MAX &&
+        ioctl(gm->gamepad_fd, EVIOCGABS(m->hat_y_axis), &ai) == 0) {
+        if (ai.value < 0) gm->held_latched[BTN_ID_UP]   = true;
+        if (ai.value > 0) gm->held_latched[BTN_ID_DOWN] = true;
+    }
+}
+
 /* ── Scan /dev/input/event* for gamepad, keyboards, and mice ────────────── */
 /* Always called with nothing held (gamepad_init() and gamepad_rescan() both
  * start from closed), so input_scan() starts from an empty list and returns
@@ -498,14 +549,19 @@ void gamepad_close(GamepadManager *gm) {
 void gamepad_rescan(GamepadManager *gm) {
     /* Close existing devices and re-scan */
     gamepad_close(gm);
-    memset(gm->prev_held, 0, sizeof(gm->prev_held));
-    /* Drop the latched levels too: the key-up for anything held at unplug time
+    /* Drop the latched levels: the key-up for anything held at unplug time
      * will never arrive, so keeping it would freeze that button on. */
     memset(gm->held_latched, 0, sizeof(gm->held_latched));
-    /* prev_mouse_* are deliberately kept: the reopened mice are re-seeded from
-     * EVIOCGKEY, so a button held across the rescan produces no edge, and one
-     * released (or whose mouse left) during it produces a release edge. */
     scan_devices(gm);
+    /* ...then read them back from the devices that are still there.  A
+     * reopened node sends no press for a key already down, and the hat's
+     * EV_ABS value is filtered when it repeats, so without this every app's
+     * 5 s rescan released a held pad button or direction until it was pressed
+     * again (and a held key until its autorepeat, as a fresh press edge).
+     * prev_held and prev_mouse_* are deliberately kept: a level held across
+     * the rescan produces no edge, and one released (or whose device left)
+     * during it produces a release edge. */
+    seed_latched_levels(gm);
 }
 
 void gamepad_set_touch_regions(GamepadManager *gm, TouchRegion *regions, int count) {
