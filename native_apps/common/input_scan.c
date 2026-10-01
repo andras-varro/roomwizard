@@ -47,21 +47,24 @@ InputKind input_classify(const InputCaps *caps, const char *name) {
         input_caps_test(caps->key, BTN_LEFT))
         return INPUT_KIND_MOUSE;
 
-    /* Keyboard: at least 20 of the 26 letter keys. */
-    if (has_key) {
-        static const int letter_keys[] = {
-            KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
-            KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
-            KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
-        };
-        int count = 0;
-        for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
-            if (input_caps_test(caps->key, letter_keys[k])) count++;
-        if (count >= 20)
-            return INPUT_KIND_KEYBOARD;
-    }
+    if (input_caps_is_keyboard(caps))
+        return INPUT_KIND_KEYBOARD;
 
     return INPUT_KIND_NONE;
+}
+
+bool input_caps_is_keyboard(const InputCaps *caps) {
+    if (!caps || !input_caps_test(caps->ev, EV_KEY))
+        return false;
+    static const int letter_keys[] = {
+        KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
+        KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
+        KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M
+    };
+    int count = 0;
+    for (int k = 0; k < (int)(sizeof(letter_keys) / sizeof(letter_keys[0])); k++)
+        if (input_caps_test(caps->key, letter_keys[k])) count++;
+    return count >= 20;
 }
 
 InputKind input_select(InputKind kind, const int held[INPUT_KIND_COUNT],
@@ -151,6 +154,7 @@ int input_scan_with(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_C
         snprintf(nd->name, sizeof(nd->name), "%s", name);
         nd->fd = fd;
         nd->kind = kind;
+        nd->keys = input_caps_is_keyboard(&caps);
         held[kind]++;
     }
     return n;

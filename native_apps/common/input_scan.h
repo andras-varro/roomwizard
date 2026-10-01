@@ -52,11 +52,16 @@ typedef struct {
     char      path[INPUT_SCAN_PATH_LEN];
     int       fd;
     InputKind kind;
+    bool      keys;   /* also carries a keyboard: a keyboard+touchpad combo is one
+                         node, classified MOUSE, whose reader must forward its keys */
     char      name[INPUT_SCAN_NAME_LEN];
 } InputNode;
 
 /* PURE. True for the built-in touchscreen's name. NULL is not a touchscreen. */
 bool input_name_is_touchscreen(const char *name);
+
+/* PURE. The keyboard rule alone: at least 20 of the 26 letter keys. */
+bool input_caps_is_keyboard(const InputCaps *caps);
 
 /* PURE. What a node is, from its capability bits and its name. */
 InputKind input_classify(const InputCaps *caps, const char *name);

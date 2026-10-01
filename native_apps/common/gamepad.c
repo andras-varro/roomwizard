@@ -679,50 +679,51 @@ static void merge_stick_dpad(const InputState *state, bool *derived) {
 }
 
 /* ── Read keyboard events (every keyboard node, into the same latches) ──── */
+/* down: value 1 = press, 2 = repeat, 0 = release */
+static void latch_key(GamepadManager *gm, int code, bool down) {
+    switch (code) {
+        case KEY_UP:
+        case KEY_W:
+            gm->held_latched[BTN_ID_UP] = down;
+            break;
+        case KEY_DOWN:
+        case KEY_S:
+            gm->held_latched[BTN_ID_DOWN] = down;
+            break;
+        case KEY_LEFT:
+        case KEY_A:
+            gm->held_latched[BTN_ID_LEFT] = down;
+            break;
+        case KEY_RIGHT:
+        case KEY_D:
+            gm->held_latched[BTN_ID_RIGHT] = down;
+            break;
+        case KEY_SPACE:
+            gm->held_latched[BTN_ID_JUMP] = down;
+            break;
+        case KEY_LEFTSHIFT:
+        case KEY_RIGHTSHIFT:
+            gm->held_latched[BTN_ID_RUN] = down;
+            break;
+        case KEY_ENTER:
+            gm->held_latched[BTN_ID_ACTION] = down;
+            break;
+        case KEY_ESC:
+            gm->held_latched[BTN_ID_PAUSE] = down;
+            break;
+        case KEY_BACKSPACE:
+            gm->held_latched[BTN_ID_BACK] = down;
+            break;
+        default:
+            break;
+    }
+}
+
 static void poll_keyboard_fd(GamepadManager *gm, int fd) {
     struct input_event ev;
-    while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
-        if (ev.type != EV_KEY) continue;
-
-        bool down = (ev.value != 0); /* value 1 = press, 2 = repeat, 0 = release */
-
-        switch (ev.code) {
-            case KEY_UP:
-            case KEY_W:
-                gm->held_latched[BTN_ID_UP] = down;
-                break;
-            case KEY_DOWN:
-            case KEY_S:
-                gm->held_latched[BTN_ID_DOWN] = down;
-                break;
-            case KEY_LEFT:
-            case KEY_A:
-                gm->held_latched[BTN_ID_LEFT] = down;
-                break;
-            case KEY_RIGHT:
-            case KEY_D:
-                gm->held_latched[BTN_ID_RIGHT] = down;
-                break;
-            case KEY_SPACE:
-                gm->held_latched[BTN_ID_JUMP] = down;
-                break;
-            case KEY_LEFTSHIFT:
-            case KEY_RIGHTSHIFT:
-                gm->held_latched[BTN_ID_RUN] = down;
-                break;
-            case KEY_ENTER:
-                gm->held_latched[BTN_ID_ACTION] = down;
-                break;
-            case KEY_ESC:
-                gm->held_latched[BTN_ID_PAUSE] = down;
-                break;
-            case KEY_BACKSPACE:
-                gm->held_latched[BTN_ID_BACK] = down;
-                break;
-            default:
-                break;
-        }
-    }
+    while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev))
+        if (ev.type == EV_KEY)
+            latch_key(gm, ev.code, ev.value != 0);
 }
 
 static void poll_keyboard(GamepadManager *gm) {
@@ -765,6 +766,8 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
                     btn[1] = down;
                 else if (ev.code == BTN_MIDDLE)
                     btn[2] = down;
+                else
+                    latch_key(gm, ev.code, down);   /* a keyboard+touchpad combo node */
             }
             /* EV_SYN ignored — we batch all events in the read loop */
         }

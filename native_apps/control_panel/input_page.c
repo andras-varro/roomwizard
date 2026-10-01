@@ -73,6 +73,7 @@ typedef enum { DEV_UNKNOWN, DEV_KEYBOARD, DEV_MOUSE, DEV_GAMEPAD } DevType;
 typedef struct {
     char name[DEV_NAME_LEN]; char path[64];
     DevType type; int ev_num; bool connected;
+    bool keys;   /* a MOUSE node that also carries a keyboard (BT keyboard+touchpad) */
 } InputDev;
 
 typedef struct {
@@ -211,11 +212,14 @@ static void input_scan_devices(InputState *s) {
         snprintf(d->path,sizeof(d->path),"%.*s",(int)sizeof(nd->path),nd->path);
         d->ev_num=-1; sscanf(nd->path,"/dev/input/event%d",&d->ev_num);
         d->type=t; d->connected=true;
+        d->keys = (t==DEV_MOUSE && nd->keys);
         /* Only "is there one" — the testers open every node of the kind. */
         if (t==DEV_KEYBOARD && s->kbd_idx<0) s->kbd_idx=s->dev_cnt;
         else if (t==DEV_MOUSE && s->mou_idx<0) s->mou_idx=s->dev_cnt;
         else if (t==DEV_GAMEPAD && s->pad_idx<0) s->pad_idx=s->dev_cnt;
+        if (d->keys && s->kbd_idx<0) s->kbd_idx=s->dev_cnt;
         s->kind_cnt[t-DEV_KEYBOARD]++;
+        if (d->keys) s->kind_cnt[DEV_KEYBOARD-DEV_KEYBOARD]++;
         s->dev_cnt++;
     }
 }
@@ -246,7 +250,7 @@ static void input_close(InputState *s);   /* defined below */
 static int input_open_kind(InputState *s, DevType t) {
     input_close(s);
     for (int i=0; i<s->dev_cnt && s->fd_cnt<MAX_INPUT_DEV; i++) {
-        if (s->devs[i].type!=t) continue;
+        if (s->devs[i].type!=t && !(t==DEV_KEYBOARD && s->devs[i].keys)) continue;
         int fd=open(s->devs[i].path, O_RDONLY|O_NONBLOCK);
         if (fd<0) continue;
         s->fds[s->fd_cnt]=fd;

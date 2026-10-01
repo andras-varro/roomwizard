@@ -125,6 +125,21 @@ int main(void) {
     input_caps_set(both.key, BTN_LEFT);
     check(input_classify(&both, "combo") == INPUT_KIND_PAD, "pad rule is tested before mouse rule");
 
+    /* A Bluetooth keyboard with a touchpad is ONE node with both sets of bits:
+     * it stays a MOUSE (one kind per node), and carries a keyboard besides. */
+    InputCaps kbms = caps_keyboard(26);
+    input_caps_set(kbms.ev, EV_REL);
+    input_caps_set(kbms.rel, REL_X);
+    input_caps_set(kbms.rel, REL_Y);
+    input_caps_set(kbms.key, BTN_LEFT);
+    check(input_classify(&kbms, "BT Keyboard 5.1") == INPUT_KIND_MOUSE, "keyboard+touchpad node is a mouse");
+    check(input_caps_is_keyboard(&kbms), "keyboard+touchpad node also carries a keyboard");
+    check(input_caps_is_keyboard(&kb), "a plain keyboard carries a keyboard");
+    check(!input_caps_is_keyboard(&ms), "a plain mouse carries no keyboard");
+    check(!input_caps_is_keyboard(&kb19), "19 letter keys carry no keyboard");
+    check(!input_caps_is_keyboard(&pad), "a pad carries no keyboard");
+    check(!input_caps_is_keyboard(NULL), "NULL caps carry no keyboard");
+
     /* Touchscreen by name, whatever its bits say. */
     check(input_classify(&kb, "Panjit TouchScreen") == INPUT_KIND_NONE, "\"Panjit\" name is excluded");
     check(input_classify(&ms, "panjit ts") == INPUT_KIND_NONE, "\"panjit\" name is excluded");

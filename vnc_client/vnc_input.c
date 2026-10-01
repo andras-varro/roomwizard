@@ -312,6 +312,18 @@ void vnc_input_send_key(VNCInput *input, uint32_t key, bool down) {
     DEBUG_PRINT("Key event: key=0x%04X down=%d", key, down);
 }
 
+/* Forward one EV_KEY as a VNC key event, if it is a key with a keysym. */
+static void forward_usb_key(VNCInput *input, const struct input_event *ev) {
+    if (ev->code < 256) {
+        uint32_t keysym = evdev_to_keysym[ev->code];
+        if (keysym != 0) {
+            /* ev.value: 1=press, 2=repeat, 0=release
+             * Forward repeats as key-down for VNC text entry */
+            vnc_input_send_key(input, keysym, ev->value != 0);
+        }
+    }
+}
+
 /* ── Poll one USB keyboard node and forward as VNC key events ───────────── */
 /* Returns false if the node has gone away (read fails with ENODEV). */
 static bool poll_usb_keyboard(VNCInput *input, int fd) {
@@ -319,17 +331,9 @@ static bool poll_usb_keyboard(VNCInput *input, int fd) {
     ssize_t r;
 
     errno = 0;
-    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
-        if (ev.type == EV_KEY && ev.code < 256) {
-            uint32_t keysym = evdev_to_keysym[ev.code];
-            if (keysym != 0) {
-                /* ev.value: 1=press, 2=repeat, 0=release
-                 * Forward repeats as key-down for VNC text entry */
-                int down = (ev.value != 0);
-                vnc_input_send_key(input, keysym, down);
-            }
-        }
-    }
+    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev))
+        if (ev.type == EV_KEY)
+            forward_usb_key(input, &ev);
     return !(r < 0 && errno == ENODEV);
 }
 
@@ -368,6 +372,8 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
                 if (ev.value != 0) input->usb_node_buttons[idx] |= bit;
                 else               input->usb_node_buttons[idx] &= ~bit;
                 input->mouse_button_mask = usb_mouse_buttons(input);
+            } else {
+                forward_usb_key(input, &ev);   /* a keyboard+touchpad combo node */
             }
         }
     }
