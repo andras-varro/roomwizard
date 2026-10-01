@@ -397,6 +397,42 @@ const char *audio_out_device_path(void);
  */
 const char *audio_out_device_for(const char *pref, bool usb_present);
 
+/* ── The choices a settings page offers ─────────────────────────────────────
+ *
+ * One table, in the order a press cycles them, so a new output (Bluetooth) is
+ * one row here plus its presence input rather than an edit in every page.  All
+ * pure: the CALLER passes what is attached (`audio_out_usb_present()`), so a
+ * host test reaches the card-present branch with no card.
+ *
+ * ⚠️ **"Shown" is display only, and the saved choice is never rewritten by it.**
+ * A saved "usb" with no DAC already plays onboard and moves to the DAC when it
+ * returns (`audio_out_usb_returned()`); the page shows AUTO meanwhile because
+ * that is what is happening, but persisting AUTO would silently lose the
+ * operator's explicit choice.  Keep the saved and shown indices apart.
+ */
+typedef enum {
+    AUDIO_OUT_CHOICE_ONBOARD = 0,
+    AUDIO_OUT_CHOICE_USB,
+    AUDIO_OUT_CHOICE_AUTO,
+    AUDIO_OUT_CHOICE_COUNT
+} AudioOutChoice;
+
+/** The persisted config value ("onboard" | "usb" | "auto").  Out of range reads
+ *  as onboard. */
+const char *audio_out_choice_name(int choice);
+/** Upper-case button text ("ONBOARD" | "USB" | "AUTO").  Out of range: onboard. */
+const char *audio_out_choice_label(int choice);
+/** The entry a config value names; NULL or unrecognised is ONBOARD — the same
+ *  answer audio_out_device_for() gives it, so a page cannot show what no opener
+ *  would do. */
+int  audio_out_choice_of(const char *name);
+/** Whether the entry is in the list with this hardware attached. */
+bool audio_out_choice_available(int choice, bool usb_present);
+/** What a saved choice shows as: itself if available, else AUTO. */
+int  audio_out_choice_shown(int saved, bool usb_present);
+/** The next AVAILABLE entry after `shown`, in table order, wrapping. */
+int  audio_out_choice_next(int shown, bool usb_present);
+
 /** The ALSA PCM for an OSS node `audio_out_device_path()` returned: `/dev/dsp`
  *  → `plughw:0,0`, `/dev/dsp1` → `plughw:1,0` (OSS minor N is ALSA card N on
  *  this device).  Anything else maps onboard, the resolver's own fallback.

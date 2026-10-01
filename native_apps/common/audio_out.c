@@ -551,6 +551,64 @@ const char *audio_out_device_for(const char *pref, bool usb_present)
     return AUDIO_DEV_ONBOARD;
 }
 
+/* The settings page's list (audio_out.h).  `needs_usb` is the whole
+ * availability rule today; a Bluetooth row brings its own flag and input. */
+static const struct {
+    const char *name;
+    const char *label;
+    bool        needs_usb;
+} audio_out_choices[AUDIO_OUT_CHOICE_COUNT] = {
+    [AUDIO_OUT_CHOICE_ONBOARD] = { "onboard", "ONBOARD", false },
+    [AUDIO_OUT_CHOICE_USB]     = { "usb",     "USB",     true  },
+    [AUDIO_OUT_CHOICE_AUTO]    = { "auto",    "AUTO",    false },
+};
+
+static int choice_valid(int c)
+{
+    return (c >= 0 && c < AUDIO_OUT_CHOICE_COUNT) ? c : AUDIO_OUT_CHOICE_ONBOARD;
+}
+
+const char *audio_out_choice_name(int choice)
+{
+    return audio_out_choices[choice_valid(choice)].name;
+}
+
+const char *audio_out_choice_label(int choice)
+{
+    return audio_out_choices[choice_valid(choice)].label;
+}
+
+int audio_out_choice_of(const char *name)
+{
+    for (int c = 0; name && c < AUDIO_OUT_CHOICE_COUNT; c++)
+        if (strcmp(name, audio_out_choices[c].name) == 0) return c;
+    return AUDIO_OUT_CHOICE_ONBOARD;
+}
+
+bool audio_out_choice_available(int choice, bool usb_present)
+{
+    if (choice < 0 || choice >= AUDIO_OUT_CHOICE_COUNT) return false;
+    return !audio_out_choices[choice].needs_usb || usb_present;
+}
+
+int audio_out_choice_shown(int saved, bool usb_present)
+{
+    if (saved < 0 || saved >= AUDIO_OUT_CHOICE_COUNT) return AUDIO_OUT_CHOICE_ONBOARD;
+    return audio_out_choice_available(saved, usb_present) ? saved
+                                                          : AUDIO_OUT_CHOICE_AUTO;
+}
+
+int audio_out_choice_next(int shown, bool usb_present)
+{
+    int c = choice_valid(shown);
+    /* A wrap by comparison, not `%`: this file runs on a core with no divide. */
+    for (int i = 0; i < AUDIO_OUT_CHOICE_COUNT; i++) {
+        if (++c == AUDIO_OUT_CHOICE_COUNT) c = 0;
+        if (audio_out_choice_available(c, usb_present)) return c;
+    }
+    return AUDIO_OUT_CHOICE_AUTO;   /* unreachable while AUTO needs nothing */
+}
+
 /** Card 1 was present and would not open — see audio_out_open_resolved().
  *  Process-global for the preference's reason: one audio device per process. */
 static bool usb_refused = false;

@@ -28,21 +28,15 @@
 
 /* ── State and persistence ─────────────────────────────────────────────── */
 
-/* "onboard" | "usb" | "auto", in the order the OUT button cycles them. */
-static const char *audio_device_names[3]  = { "onboard", "usb", "auto" };
-static const char *audio_device_labels[3] = { "OUT: ONBOARD", "OUT: USB", "OUT: AUTO" };
-
-/* ⚠️ The one index with a name, because it is the one index the DIM rule turns on:
- * "usb" is the only setting whose preference a unit can fail to meet.  A bare `1`
- * there read as "the middle one" and invited the mistake it replaced — the first
- * version of that line tested `== 0` and so dimmed AUTO as well. */
-#define AUDIO_DEV_IDX_USB 1
+/* The OUT values, their labels and their cycle order are common/audio_out.c's
+ * choice table, and which of them are listed depends on what is attached — so a
+ * new output is a row there, not an edit here. */
 
 typedef struct {
     bool enabled;       /* config key audio_enabled */
     bool music;         /* music_enabled — subordinate to enabled, see layout */
     bool effects;       /* effects_enabled — likewise */
-    int  dev_idx;       /* audio_device, as an index into audio_device_names[] */
+    int  dev_idx;       /* audio_device as SAVED, an AudioOutChoice */
 } AudioPageState;
 
 static AudioPageState audio_state;      /* the values, as saved */
@@ -58,15 +52,6 @@ static int   page_audio_idx;            /* the dev_idx it was opened on */
  * without waiting for an unrelated touch. */
 static bool shown_usb;
 
-/* Anything unrecognised maps to onboard — the same thing audio_out_device_for()
- * does with an unknown value, so the button cannot show a state a game would not
- * actually resolve to. */
-static int audio_device_index_of(const char *name) {
-    for (int i = 0; i < 3; i++)
-        if (name && strcmp(name, audio_device_names[i]) == 0) return i;
-    return 0;
-}
-
 /* Every value read through config.c's helpers, which are what common/audio.c
  * reads, so the switch on screen cannot disagree with what a game will do —
  * and on a cleared Config they return exactly that default. */
@@ -74,7 +59,8 @@ static void audio_page_load(const Config *cfg) {
     audio_state.enabled = config_audio_enabled(cfg);
     audio_state.music   = config_music_enabled(cfg);
     audio_state.effects = config_effects_enabled(cfg);
-    audio_state.dev_idx = audio_device_index_of(config_audio_device(cfg));
+    /* Unrecognised maps to onboard, as audio_out_device_for() resolves it. */
+    audio_state.dev_idx = audio_out_choice_of(config_audio_device(cfg));
 }
 
 /* Writes the four keys into the FILE by re-reading it, not by saving the
@@ -93,7 +79,7 @@ static void audio_persist(const AudioPageState *s, Config *mem) {
         config_set_bool(both[i], "audio_enabled",   s->enabled);
         config_set_bool(both[i], "music_enabled",   s->music);
         config_set_bool(both[i], "effects_enabled", s->effects);
-        config_set(both[i], "audio_device", audio_device_names[s->dev_idx]);
+        config_set(both[i], "audio_device", audio_out_choice_name(s->dev_idx));
     }
     if (config_save(&disk) != 0) {
         fprintf(stderr, "control_panel: audio settings save failed\n");
@@ -107,10 +93,11 @@ static void page_audio_close(void) {
     page_audio_open = false;
 }
 
-/* The unchecked open bypasses the ENABLE gate ON PURPOSE: a hardware test must
- * drive the speaker even with audio switched off, and audio_init() would make it
- * obey the very setting it exists to test.  The _pref form opens on the device
- * the OUT button shows — which, saved on change, is also the saved one.
+/* Unchecked because the ENABLE gate is applied at the widget instead: TEST is
+ * disabled while audio is off, so this never opens against a switched-off
+ * setting, and the bus stays ready for the moment it is switched back on.  The
+ * _pref form opens the SAVED choice, which is what a game resolves — a saved
+ * "usb" with no DAC plays onboard, exactly what the AUTO it shows means.
  *
  * Held for the whole page, not per press: open → two blocking holds → close froze
  * the UI ~0.9 s per TEST and paid a stream start and stop each time.  Also why
@@ -121,7 +108,7 @@ static void page_audio_reopen(void) {
     page_audio_close();
     page_audio_idx  = audio_state.dev_idx;
     page_audio_open = (audio_init_unchecked_pref(&page_audio,
-                           audio_device_names[audio_state.dev_idx]) == 0);
+                           audio_out_choice_name(audio_state.dev_idx)) == 0);
 }
 
 static void audio_page_enter(void) { page_audio_reopen(); }
@@ -167,8 +154,24 @@ static Button       mix_test_btn;
  *
  * ⚠️ button_draw() centres the text and neither pads nor clips it, so a label
  * wider than its box paints outside the button in silence.  The box is therefore
- * measured from the WIDEST of the three labels, not from the current one. */
-#define AUD_OUT_LABEL_WIDEST "OUT: ONBOARD"      /* 12 chars; USB and AUTO are shorter */
+ * measured from the WIDEST label in the whole choice table, listed or not, so the
+ * row's geometry does not change when a DAC is plugged in. */
+#define AUD_OUT_PREFIX "OUT: "
+
+static void out_label(char *buf, size_t n, int choice) {
+    snprintf(buf, n, AUD_OUT_PREFIX "%s", audio_out_choice_label(choice));
+}
+
+static int out_label_widest(void) {
+    int widest = 0;
+    char buf[32];
+    for (int c = 0; c < AUDIO_OUT_CHOICE_COUNT; c++) {
+        out_label(buf, sizeof(buf), c);
+        int w = text_measure_width(buf, 1);
+        if (w > widest) widest = w;
+    }
+    return widest;
+}
 
 /* A toggle's hit box right edge, as toggle_check_press() computes it. */
 static int toggle_right(const ToggleSwitch *t) {
@@ -186,7 +189,7 @@ static void audio_page_layout(void) {
      * The two keys every game reads through common/audio.c's audio_init().  They
      * are SUBORDINATE to AUDIO ENABLED: the master off means the process opens
      * no device at all, so these two decide nothing (common/config.h documents
-     * the same hierarchy, and draw() dims them when the master is off).
+     * the same hierarchy, and audio_sync_disabled() disables them when it is off).
      *
      * A per-game copy would need a live setter for `Audio.music_on`, a mid-run
      * bed stop, and seven writers of one config key.  This is one writer and no
@@ -196,7 +199,7 @@ static void audio_page_layout(void) {
      * scale 1 eight pixels right of the track, and that whole box is what
      * toggle_check_press() hit-tests.  Both tracks are FLUSH with the master's
      * at CONTENT_LEFT + 5 — an indent read as a stray row rather than as a
-     * child, so the subordination is carried by the dimming instead. */
+     * child, so the subordination is carried by the disabled state instead. */
     int music_w   = AUD_TRACK_W + 8 + text_measure_width("MUSIC", 1);
     int effects_w = AUD_TRACK_W + 8 + text_measure_width("EFFECTS", 1);
     toggle_init(&music_toggle, CONTENT_LEFT + 5, AUD_ROW2_Y,
@@ -204,14 +207,16 @@ static void audio_page_layout(void) {
     toggle_init(&effects_toggle, CONTENT_LEFT + 5 + music_w + 40, AUD_ROW2_Y,
                 AUD_TRACK_W, AUD_TRACK_H, "EFFECTS", s->effects);
 
-    /* OUT: "onboard" | "usb" | "auto" as ONE button that cycles, because no
+    /* OUT: the listed output choices as ONE button that cycles, because no
      * multi-choice widget exists in this app.  To the RIGHT of EFFECTS, 40 px
      * on — the gap this row already uses between MUSIC and EFFECTS. */
     int out_x = CONTENT_LEFT + 5 + music_w + 40 + effects_w + 40;
-    int out_w = text_measure_width(AUD_OUT_LABEL_WIDEST, 1) + 16;   /* 8 px each side */
+    int out_w = out_label_widest() + 16;                            /* 8 px each side */
+    char out_txt[32];
+    out_label(out_txt, sizeof(out_txt),
+              audio_out_choice_shown(s->dev_idx, audio_out_usb_present()));
     button_init_full(&audio_dev_btn, out_x, AUD_ROW2_Y, out_w, AUD_TRACK_H,
-                     audio_device_labels[s->dev_idx],
-                     BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
+                     out_txt, BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
 
     button_init_full(&test_audio_btn, CONTENT_RIGHT - 100, AUD_SEC_Y + 18,
                      90, 30, "TEST", BTN_COLOR_INFO, COLOR_WHITE,
@@ -255,9 +260,23 @@ static void audio_page_layout(void) {
 
 /* ── Draw and input ─────────────────────────────────────────────────────── */
 
+/* Derived from the state every time, never cached: with AUDIO ENABLED off,
+ * everything on the page except that switch is disabled — MUSIC, EFFECTS, OUT,
+ * TEST and MIX BUS TEST.  Widget.disabled makes them grey and deaf to every
+ * input, so the master is enforced at the control, not only in the paint. */
+static void audio_sync_disabled(void) {
+    bool off = !audio_state.enabled;
+    music_toggle.disabled   = off;
+    effects_toggle.disabled = off;
+    audio_dev_btn.disabled  = off;
+    test_audio_btn.disabled = off;
+    mix_test_btn.disabled   = off;
+}
+
 static void audio_page_draw(Framebuffer *fb) {
     const AudioPageState *s = &audio_state;
 
+    audio_sync_disabled();
     draw_section_header(fb, AUD_SEC_Y, "AUDIO");
     audio_toggle.state   = s->enabled;  /* derived every frame, never cached */
     music_toggle.state   = s->music;
@@ -265,43 +284,18 @@ static void audio_page_draw(Framebuffer *fb) {
     toggle_draw(fb, &audio_toggle);
     button_draw(fb, &test_audio_btn);
     button_draw(fb, &mix_test_btn);
-
-    /* MUSIC / EFFECTS are still LIVE with the master off — they are saved
-     * preferences, and refusing the press would just look broken — but they are
-     * drawn dimmed, because with no device opened neither of them decides
-     * anything and a bright green switch that changes nothing is a lie. */
-    uint32_t on_c   = s->enabled ? RGB(0, 180, 60)    : RGB(0,  70, 25);
-    uint32_t off_c  = s->enabled ? RGB(100, 100, 100) : RGB(55, 55, 55);
-    uint32_t knob_c = s->enabled ? COLOR_WHITE        : RGB(150, 150, 150);
-    uint32_t lbl_c  = s->enabled ? RGB(200, 200, 200) : RGB(120, 120, 120);
-    toggle_set_colors(&music_toggle,   on_c, off_c, knob_c, lbl_c);
-    toggle_set_colors(&effects_toggle, on_c, off_c, knob_c, lbl_c);
     toggle_draw(fb, &music_toggle);
     toggle_draw(fb, &effects_toggle);
 
-    /* ⚠️ Dim, do not hide — and dim on the honest condition rather than on "is a
-     * DAC plugged in".  The box always occupies its slot, so the row's geometry is
-     * card-independent and the receipt means the same thing whatever is attached;
-     * it goes grey when the preference it names cannot currently be met, which is
-     * the master being off, or USB being asked for with no /dev/dsp1 to open.
-     *
-     * ⚠️ USB is the ONLY index that dims for absence.  ONBOARD is always there.
-     * AUTO's preference is "whatever can be opened" — audio_out_device_for()
-     * falls it back to /dev/dsp silently — so it is met on every unit; dimming
-     * AUTO for a missing dongle was the first version of this line, and it told
-     * the operator that a setting which works everywhere was unavailable.
-     *
-     * The press stays LIVE in both cases, for exactly the reason MUSIC and EFFECTS
-     * do: this records a choice, and refusing "usb" before the DAC is plugged in
-     * would just look broken — unlike the USB page's buttons, which START
-     * something against a device that must exist. */
+    /* ⚠️ OUT lists only what is attached: with no /dev/dsp1 the USB entry is not
+     * in the cycle, and a saved "usb" SHOWS as AUTO — which is what it is doing,
+     * since audio_out_device_for() plays it onboard until the DAC returns.  The
+     * SAVED value is not touched (audio_out.h says why); the box keeps its
+     * table-wide width, so the row's geometry is card-independent. */
     shown_usb = audio_out_usb_present();
-    bool out_live = s->enabled &&
-                    (s->dev_idx != AUDIO_DEV_IDX_USB || shown_usb);
-    audio_dev_btn.bg_color     = out_live ? BTN_COLOR_INFO : RGB(80, 80, 80);
-    audio_dev_btn.text_color   = out_live ? COLOR_WHITE    : RGB(150, 150, 150);
-    audio_dev_btn.border_color = audio_dev_btn.text_color;
-    button_set_text(&audio_dev_btn, audio_device_labels[s->dev_idx]);
+    char out_txt[32];
+    out_label(out_txt, sizeof(out_txt), audio_out_choice_shown(s->dev_idx, shown_usb));
+    button_set_text(&audio_dev_btn, out_txt);
     button_draw(fb, &audio_dev_btn);
 }
 
@@ -311,12 +305,15 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
     CpPageResult act = CP_PAGE_IDLE;
     bool changed = false;
 
-    /* Flip from the truth, not a stale widget. */
+    /* Flip from the truth, not a stale widget — and that includes which widgets
+     * are disabled, re-derived the moment the master changes. */
+    audio_sync_disabled();
     audio_toggle.state   = s->enabled;
     music_toggle.state   = s->music;
     effects_toggle.state = s->effects;
     if (toggle_check_press(&audio_toggle, tx, ty, touching, now)) {
         s->enabled = audio_toggle.state;   changed = true;
+        audio_sync_disabled();
     }
     if (toggle_check_press(&music_toggle, tx, ty, touching, now)) {
         s->music = music_toggle.state;     changed = true;
@@ -324,10 +321,13 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
     if (toggle_check_press(&effects_toggle, tx, ty, touching, now)) {
         s->effects = effects_toggle.state; changed = true;
     }
-    /* Cycles onboard -> usb -> auto -> onboard.  The label is not written here;
-     * draw() derives it from the index every frame, so the two cannot disagree. */
+    /* Steps from what the button SHOWS to the next LISTED choice, so with no DAC
+     * it cycles onboard -> auto and never offers usb.  The label is not written
+     * here; draw() derives it from the index every frame, so the two cannot
+     * disagree. */
     if (button_update(&audio_dev_btn, tx, ty, touching, now)) {
-        s->dev_idx = (s->dev_idx + 1) % 3;
+        bool usb = audio_out_usb_present();
+        s->dev_idx = audio_out_choice_next(audio_out_choice_shown(s->dev_idx, usb), usb);
         changed = true;
     }
     if (changed) {
@@ -356,7 +356,7 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
     audio_pump(&page_audio);
 
     if (audio_out_usb_present() != shown_usb)
-        act = CP_PAGE_REDRAW;           /* a DAC came or went: re-dim OUT */
+        act = CP_PAGE_REDRAW;           /* a DAC came or went: relist OUT */
 
     /* Last, so neither REDRAW above can overwrite the queued run. */
     if (button_update(&mix_test_btn, tx, ty, touching, now))

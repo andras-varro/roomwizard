@@ -246,8 +246,9 @@ static void portrait_persist(void) {
  * removes the key from the file as well, reloads hardware.c's cache and
  * re-applies, so page, file and panel agree on the default — otherwise the
  * backlight keeps a value no longer in the file.  Orientation is not a config
- * key and is left as it is: the toggle is one tap away, and a reset that
- * silently flipped the next launch would be the bigger surprise. */
+ * key, but landscape is the factory state, so the flag file goes too; the
+ * amber note then disappears with the toggle, and the next launch is
+ * landscape. */
 static void display_page_reset_defaults(Config *cfg) {
     Config disk;
     config_init(&disk);
@@ -257,6 +258,8 @@ static void display_page_reset_defaults(Config *cfg) {
             fprintf(stderr, "control_panel: backlight default save failed\n");
     }
     hw_reload_config();
+    portrait = false;
+    portrait_persist();
     display_page_load(cfg);
     apply_backlight(backlight);
 }

@@ -337,7 +337,7 @@ static CpPageResult info_page_input(Config *cfg, int tx, int ty,
     (void)cfg;
     if (button_update(&reset_btn, tx, ty, touching, now))
         cp_confirm("RESET DEFAULTS?",
-                   "BACKLIGHT, LED AND AUDIO SETTINGS\n(TOUCH CALIBRATION IS KEPT)",
+                   "BACKLIGHT, LED, AUDIO, ORIENTATION\n(TOUCH CALIBRATION IS KEPT)",
                    "OK", info_reset_confirmed);
     return CP_PAGE_IDLE;
 }

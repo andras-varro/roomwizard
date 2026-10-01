@@ -39,7 +39,9 @@
  * the device-lost flag an unplug sets, and the OSS-node → ALSA-PCM mapping — all
  * pure or vtable-driven, so a host with no libasound reaches every branch.
  * Group M is the gate in front of the replug probe: when a stream on the panel
- * speaker looks for a USB card that has come back.
+ * speaker looks for a USB card that has come back.  Group N is the choice list a
+ * settings page offers: which entries exist with the hardware that is attached,
+ * what a saved choice SHOWS as, and the order a press cycles them in.
  *
  * ⚠️ **This file is NEW, so "seen failing against the pre-change source" cannot
  * mean compiling it against an older `audio_out.c` — there is none.**  The
@@ -1173,6 +1175,54 @@ int main(void)
         audio_out_close(&out);
         check(!audio_out_usb_returned(&out) && !audio_out_usb_returned(NULL),
               "M10 a closed stream, or NULL, is never moved");
+    }
+
+    printf("\n=== N. the output choice list (pure) ===\n");
+    {
+        /* The persisted strings are the config file's contract, so they are
+         * asserted by value: a renamed entry would orphan every saved setting. */
+        check(AUDIO_OUT_CHOICE_COUNT == 3 &&
+              strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_ONBOARD), "onboard") == 0 &&
+              strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_USB),     "usb")     == 0 &&
+              strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_AUTO),    "auto")    == 0,
+              "N1 the table holds the three persisted values, in cycle order");
+        check(audio_out_choice_of("usb")  == AUDIO_OUT_CHOICE_USB &&
+              audio_out_choice_of("auto") == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_of("bogus") == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_of(NULL)   == AUDIO_OUT_CHOICE_ONBOARD,
+              "N2 a name maps back to its entry; anything else is onboard, which "
+              "is what audio_out_device_for() resolves it to");
+
+        bool usb_ever = false;
+        for (int c = 0; c < AUDIO_OUT_CHOICE_COUNT; c++)
+            if (audio_out_choice_next(c, false) == AUDIO_OUT_CHOICE_USB) usb_ever = true;
+        check(!usb_ever,
+              "N3 with no USB DAC, a press never lands on USB — from ANY start, "
+              "including USB itself");
+        check(!audio_out_choice_available(AUDIO_OUT_CHOICE_USB, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_USB, true) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_ONBOARD, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_AUTO, false),
+              "N4 USB is listed only while present; ONBOARD and AUTO always are");
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, false) == AUDIO_OUT_CHOICE_AUTO,
+              "N5 a saved USB with no DAC SHOWS as AUTO");
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, true) == AUDIO_OUT_CHOICE_USB,
+              "N6 CONTROL: a saved USB with the DAC present shows as USB");
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_ONBOARD, false) == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_shown(AUDIO_OUT_CHOICE_AUTO, true) == AUDIO_OUT_CHOICE_AUTO,
+              "N7 an available saved choice shows as itself");
+        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, true) == AUDIO_OUT_CHOICE_USB &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_USB, true)     == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, true)    == AUDIO_OUT_CHOICE_ONBOARD,
+              "N8 with USB present the cycle is onboard -> usb -> auto -> onboard");
+        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, false) == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, false)    == AUDIO_OUT_CHOICE_ONBOARD,
+              "N9 with USB absent the cycle is onboard -> auto -> onboard");
+        check(audio_out_choice_shown(-1, true) == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_shown(AUDIO_OUT_CHOICE_COUNT, true) == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_name(AUDIO_OUT_CHOICE_COUNT) != NULL &&
+              audio_out_choice_label(-1) != NULL,
+              "N10 an out-of-range index reads as onboard rather than indexing past the table");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",
