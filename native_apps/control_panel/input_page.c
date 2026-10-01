@@ -8,9 +8,12 @@
  * Exposed only as cp_input_page (cp_page.h); its state lives in this file.
  * It owns no config keys.
  *
- * The touch tools (MULTI-TOUCH so far) head the page; the testers sit under
- * their own section header.  Each tester's button is disabled while no node of
- * its kind is present.  A static device set costs nothing: /dev/input is
+ * The touch tools (CALIBRATE, DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY) head
+ * the page; the testers sit under their own section header.  Each tester's
+ * button is disabled while no node of its kind is present.  Calibration, the
+ * diagnostic and the geometry reset are control_panel.c's (cp_run_touch_tool(),
+ * cp_reset_touch_geometry()); this page only holds their buttons.  A static
+ * device set costs nothing: /dev/input is
  * listed once a second while the page is open, the nodes are classified again
  * only when that listing changed, and input() returns CP_PAGE_REDRAW only when
  * the count of some kind did.
@@ -91,7 +94,7 @@ typedef struct {
 } PadSt;
 
 typedef enum { INPUT_SCR_MAIN, INPUT_SCR_KEYBOARD, INPUT_SCR_MOUSE, INPUT_SCR_GAMEPAD,
-               INPUT_SCR_MULTITOUCH } InputScreen;
+               INPUT_SCR_MULTITOUCH, INPUT_SCR_CALIBRATE, INPUT_SCR_TOUCH_DIAG } InputScreen;
 
 typedef struct {
     InputScreen  scr;
@@ -117,6 +120,7 @@ static InputState input_state;
 static Button input_btn_ktest, input_btn_mtest, input_btn_gtest;
 static Button input_btn_kback, input_btn_mback, input_btn_gback;
 static Button input_btn_multitouch;
+static Button input_btn_calibrate, input_btn_touch_diag, input_btn_reset_geom;
 
 /* ── Key table ──────────────────────────────────────────────────────────── */
 typedef struct { int code; const char *name, *sname; } KeyInfo;
@@ -416,10 +420,27 @@ static const char *const test_labels[3] = { "KBD TEST", "MOUSE TEST", "PAD TEST"
  * join.  A NULL slot is not placed, drawn or counted. */
 enum { TOUCH_SLOT_CALIB, TOUCH_SLOT_DIAG, TOUCH_SLOT_MULTI, TOUCH_SLOT_RESET, TOUCH_SLOTS };
 static Button *const touch_btns[TOUCH_SLOTS] = {
+    [TOUCH_SLOT_CALIB] = &input_btn_calibrate,
+    [TOUCH_SLOT_DIAG]  = &input_btn_touch_diag,
     [TOUCH_SLOT_MULTI] = &input_btn_multitouch,
+    [TOUCH_SLOT_RESET] = &input_btn_reset_geom,
 };
+/* At most 14 characters: a landscape quarter (184 px) holds that at scale 2,
+ * a portrait quarter (~94 px) at scale 1. */
 static const char *const touch_labels[TOUCH_SLOTS] = {
+    [TOUCH_SLOT_CALIB] = "CALIBRATE",
+    [TOUCH_SLOT_DIAG]  = "DIAGNOSTIC",
     [TOUCH_SLOT_MULTI] = "MULTI-TOUCH",
+    [TOUCH_SLOT_RESET] = "RESET GEOMETRY",
+};
+/* RESET is the escape hatch from a bad calibration, so it reads as danger;
+ * the diagnostic, the one tool with every layer of interpretation removed,
+ * keeps the colour it had on the Touch tab. */
+static const uint32_t touch_colors[TOUCH_SLOTS] = {
+    [TOUCH_SLOT_CALIB] = BTN_COLOR_PRIMARY,
+    [TOUCH_SLOT_DIAG]  = RGB(100, 60, 120),
+    [TOUCH_SLOT_MULTI] = BTN_COLOR_PRIMARY,
+    [TOUCH_SLOT_RESET] = BTN_COLOR_DANGER,
 };
 
 static int sec_touch_y;       /* the touch tools' section header */
@@ -448,7 +469,7 @@ static void input_page_layout(void) {
             if (touch_btns[i])
                 button_init_full(touch_btns[i], sx + i * (bw + INPUT_BTN_GAP), by, bw,
                                  INPUT_BTN_H, touch_labels[i],
-                                 BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), touch_scale);
+                                 touch_colors[i], COLOR_WHITE, RGB(0,200,80), touch_scale);
     }
     sec_test_y = CONTENT_Y + 2 + INPUT_TOUCH_H;
     int by = sec_test_y + 26;
@@ -755,6 +776,13 @@ static void input_page_enter(void) {
     input_state.node_sig = ~0UL;
 }
 
+/* RESET GEOMETRY's OK: the reset, its status line and the re-layout are all
+ * control_panel.c's. */
+static void input_reset_geometry_confirmed(Config *cfg) {
+    (void)cfg;
+    cp_reset_touch_geometry();
+}
+
 /* Main screen only: a tester is queued here and run by
  * input_page_run_fullscreen().  The hot-plug poll repaints only when the count
  * of some kind changed — a node the testers would not open changes nothing. */
@@ -778,6 +806,18 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
     }
 
     input_sync_disabled();
+    if (button_update(&input_btn_calibrate, tx, ty, touching, now)) {
+        state->scr = INPUT_SCR_CALIBRATE;
+        act = CP_PAGE_FULLSCREEN;
+    }
+    if (button_update(&input_btn_touch_diag, tx, ty, touching, now)) {
+        state->scr = INPUT_SCR_TOUCH_DIAG;
+        act = CP_PAGE_FULLSCREEN;
+    }
+    if (button_update(&input_btn_reset_geom, tx, ty, touching, now))
+        cp_confirm("RESET SCREEN GEOMETRY?",
+                   "TOUCH RANGE AND EDGES\nGO BACK TO DEFAULTS.", "RESET",
+                   input_reset_geometry_confirmed);
     if (button_update(&input_btn_multitouch, tx, ty, touching, now)) {
         state->scr = INPUT_SCR_MULTITOUCH;
         act = CP_PAGE_FULLSCREEN;
@@ -886,6 +926,13 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     if (state->scr == INPUT_SCR_MULTITOUCH) {   /* its own loop and exit tap */
         test_multitouch(fb, touch);
         state->scr = INPUT_SCR_MAIN;
+        return;
+    }
+    if (state->scr == INPUT_SCR_CALIBRATE || state->scr == INPUT_SCR_TOUCH_DIAG) {
+        int mode = state->scr == INPUT_SCR_CALIBRATE ? CP_TOUCH_CALIBRATE
+                                                     : CP_TOUCH_DIAGNOSTIC;
+        state->scr = INPUT_SCR_MAIN;
+        cp_run_touch_tool(fb, touch, mode);   /* re-lays this page out too */
         return;
     }
     if (state->scr == INPUT_SCR_MOUSE) {

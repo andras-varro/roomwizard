@@ -91,9 +91,9 @@
  * targets that close to the edge sit inside the band where raw compresses, and
  * fitting through them is what produced a phantom horizontal inset for months.
  * Target geometry now comes from common/touch_calib.h. */
-/* The uncalibrated diagnostic, launched from the Touch tab. Deployed by
+/* The uncalibrated diagnostic, launched from the Input page. Deployed by
  * build-and-deploy.sh with no manifest, so the launcher does not show it —
- * this button is the discoverable route to it. */
+ * its DIAGNOSTIC button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -117,20 +117,17 @@ typedef enum {
     TEST_RUNNING
 } TestSubState;
 
-/* How the full-screen calibration wizard was entered. The wizard itself is one
- * blocking routine with its own internal steps (see WizStep) — this only says
- * which door it came in by. CALIB_RUN_DIAG is not the wizard at all: it hands the
- * screen to the touch_raw diagnostic and waits for it to exit. */
+/* Whether the Touch tab's SCREEN EDGES queued the full-screen wizard.  The
+ * wizard itself is one blocking routine with its own internal steps (see
+ * WizStep); the Input page reaches it, and the touch diagnostic, through
+ * cp_run_touch_tool(). */
 typedef enum {
     CALIB_IDLE,
-    CALIB_RUN_FULL,     /* tap -> check -> reach -> edges -> report -> confirm */
-    CALIB_RUN_EDGES,    /* edges -> report -> confirm  (margins only) */
-    CALIB_RUN_DIAG      /* fork/exec /opt/games/touch_raw */
+    CALIB_RUN_EDGES     /* edges -> report -> confirm  (margins only) */
 } CalibSubState;
 
 typedef enum {
     CONFIRM_NONE,
-    CONFIRM_RESET_GEOMETRY,  /* Touch tab: touch range + edges to defaults */
     CONFIRM_PAGE             /* a page's cp_confirm(): its on_ok runs on OK */
 } ConfirmAction;
 
@@ -217,15 +214,13 @@ static Button back_btn;          /* the tab bar's BACK to the home grid */
 static UILayout test_layout;
 static Button test_buttons[NUM_TESTS];
 
-/* Touch — calibration, screen edges and the touch diagnostic.  Backlight and
- * orientation are the Display page's (display_page.c). */
-static Button calib_start_btn;      /* full wizard   */
+/* Touch — screen edges.  Calibration, the touch diagnostic and RESET GEOMETRY
+ * are the Input page's (input_page.c); backlight and orientation the Display
+ * page's (display_page.c). */
 static Button calib_bezel_btn;      /* margins only  */
-static Button calib_factory_btn;    /* escape hatch: back to hardware defaults */
-static Button calib_diag_btn;       /* hands off to /opt/games/touch_raw */
 
-/* The panel's one confirmation dialog: the Touch tab's RESET SCREEN GEOMETRY
- * and any page's cp_confirm() (cp_page.h) open this same instance.  While
+/* The panel's one confirmation dialog: every page's cp_confirm() (cp_page.h)
+ * opens this same instance.  While
  * confirm_action is not CONFIRM_NONE main() draws it over everything and routes
  * all input to it — the tab bar and the page included, so BACK under the
  * overlay cannot leave the page with the question still open. */
@@ -757,65 +752,26 @@ static void handle_test_menu_input(AppState *state, int tx, int ty,
 static int disp_portrait_layout(void) { return CONTENT_WIDTH < 600; }
 static int disp_sec_geom_y(void) { return CONTENT_Y + 2; }
 static int disp_btn_row_y(void)  { return disp_sec_geom_y() + 26 + DISP_GEOM_ROWS * 28 + 14; }
-/* Portrait stacks four geometry buttons (4*46 + 3*12 = 220 px from disp_btn_row_y);
- * landscape fits them on one line.  The status line sits under them. */
-static int disp_action_y(void)   { return disp_btn_row_y() + (disp_portrait_layout() ? 220 : 46) + 14; }
+/* One button, centred; the status line sits under it. */
+static int disp_action_y(void)   { return disp_btn_row_y() + 46 + 14; }
 
 static void create_display_ui(void) {
     const int portrait = disp_portrait_layout();
 
-    /* Four geometry actions. RESET is the escape hatch: a bad calibration used
-     * to leave no way back except SSH. TOUCH DIAGNOSTIC hands off to touch_raw,
-     * the only thing here that shows the panel with every layer of
-     * interpretation removed. Widths are sized to the labels (6 px per
-     * character per scale step) rather than shared equally — "RESET" does not
-     * need the room "TOUCH DIAGNOSTIC" does. */
-    const int bh = 46, gap = 12;
+    /* Sized to its label (6 px per character per scale step), and to the
+     * content width in portrait. */
+    const int bh = 46;
     const int by = disp_btn_row_y();
-    if (portrait) {
-        int bw = CONTENT_WIDTH - 20;
-        int bx = CONTENT_LEFT + 10;
-        button_init_full(&calib_start_btn, bx, by, bw, bh, "CALIBRATE TOUCH",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&calib_bezel_btn, bx, by + bh + gap, bw, bh, "SCREEN EDGES",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&calib_diag_btn, bx, by + 2 * (bh + gap), bw, bh,
-                         "TOUCH DIAGNOSTIC",
-                         RGB(100, 60, 120), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        button_init_full(&calib_factory_btn, bx, by + 3 * (bh + gap), bw, bh,
-                         "RESET GEOMETRY",
-                         BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-    } else {
-        const int cw = 200, ew = 170, dw = 210, rw = 100;
-        int total = cw + ew + dw + rw + gap * 3;
-        int bx = CONTENT_LEFT + (CONTENT_WIDTH - total) / 2;
-        if (bx < CONTENT_LEFT) bx = CONTENT_LEFT;
-        button_init_full(&calib_start_btn, bx, by, cw, bh, "CALIBRATE TOUCH",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        bx += cw + gap;
-        button_init_full(&calib_bezel_btn, bx, by, ew, bh, "SCREEN EDGES",
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        bx += ew + gap;
-        button_init_full(&calib_diag_btn, bx, by, dw, bh, "TOUCH DIAGNOSTIC",
-                         RGB(100, 60, 120), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-        bx += dw + gap;
-        button_init_full(&calib_factory_btn, bx, by, rw, bh, "RESET",
-                         BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-    }
+    int bw = portrait ? CONTENT_WIDTH - 20 : 170;
+    int bx = CONTENT_LEFT + (CONTENT_WIDTH - bw) / 2;
+    button_init_full(&calib_bezel_btn, bx, by, bw, bh, "SCREEN EDGES",
+                     BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
 
-    /* ⚠️ THE RECEIPT: the lowest widget is RESET (portrait) or the row
-     * (landscape), the status line under it is text only.  Read off the
-     * buttons as placed, not re-derived. */
+    /* ⚠️ THE RECEIPT: the lowest widget is the button, the status line under
+     * it is text only.  Read off the button as placed, not re-derived. */
     {
-        const Button *b[] = { &calib_start_btn, &calib_bezel_btn,
-                              &calib_diag_btn, &calib_factory_btn };
-        int bottom = 0, right = 0;
-        for (int i = 0; i < 4; i++) {
-            if (b[i]->y + b[i]->height - CONTENT_Y > bottom)
-                bottom = b[i]->y + b[i]->height - CONTENT_Y;
-            if (b[i]->x + b[i]->width > right)
-                right = b[i]->x + b[i]->width;
-        }
+        int bottom = calib_bezel_btn.y + calib_bezel_btn.height - CONTENT_Y;
+        int right  = calib_bezel_btn.x + calib_bezel_btn.width;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : "fits";
@@ -876,21 +832,22 @@ static void draw_display_tab(Framebuffer *fb, AppState *state) {
     y = draw_info_row(fb, y, "TOUCHABLE:", buf,
                       worst_inset > DISP_INSET_SUSPECT ? COLOR_ORANGE : COLOR_GREEN);
 
-    button_draw(fb, &calib_start_btn);
     button_draw(fb, &calib_bezel_btn);
-    button_draw(fb, &calib_diag_btn);
-    button_draw(fb, &calib_factory_btn);
 
     if (state->status_msg[0])
         text_draw_centered(fb, CONTENT_LEFT + CONTENT_WIDTH / 2,
                            disp_action_y(), state->status_msg, COLOR_GREEN, 2);
 }
 
+static void rebuild_ui(AppState *state);
+
 /* Put both config lines back to the compiled-in defaults. The raw range comes
  * from the hardware rather than from a fit, so this always yields a usable —
- * if imprecise — screen. Reachable from the tab, so a wedged calibration never
- * requires SSH to undo. */
-static void display_reset_geometry(AppState *state, TouchInput *touch, uint32_t now) {
+ * if imprecise — screen. Reachable from the Input page, so a wedged
+ * calibration never requires SSH to undo. */
+void cp_reset_touch_geometry(void) {
+    TouchInput *touch = g_touch;
+    if (!touch || !g_state) return;
     char bak[256] = "";
     touch_calib_backup(CALIB_FILE, bak, sizeof(bak));
 
@@ -909,23 +866,14 @@ static void display_reset_geometry(AppState *state, TouchInput *touch, uint32_t 
                      FB_BEZEL_LEFT_DEFAULT, FB_BEZEL_RIGHT_DEFAULT);
         touch_set_screen_size(touch, (int)g_fb->width, (int)g_fb->height);
     }
-    snprintf(state->status_msg, sizeof(state->status_msg),
-             ok ? "SCREEN GEOMETRY RESET" : "RESET FAILED - RUN AS ROOT");
-    state->status_time_ms = now;
+    cp_status(ok ? "SCREEN GEOMETRY RESET" : "RESET FAILED - RUN AS ROOT", ok);
+    rebuild_ui(g_state);   /* the bezel just changed the logical size */
 }
 
 static void handle_display_input(AppState *state, int tx, int ty,
                                  bool touching, uint32_t now) {
-    if (button_update(&calib_start_btn, tx, ty, touching, now))
-        state->calib_sub = CALIB_RUN_FULL;
-    else if (button_update(&calib_bezel_btn, tx, ty, touching, now))
+    if (button_update(&calib_bezel_btn, tx, ty, touching, now))
         state->calib_sub = CALIB_RUN_EDGES;
-    else if (button_update(&calib_diag_btn, tx, ty, touching, now))
-        state->calib_sub = CALIB_RUN_DIAG;
-    else if (button_update(&calib_factory_btn, tx, ty, touching, now)) {
-        confirm_open(state, CONFIRM_RESET_GEOMETRY, "RESET SCREEN GEOMETRY?",
-                     "TOUCH RANGE AND EDGES\nGO BACK TO DEFAULTS.", "RESET", NULL);
-    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1082,7 +1030,7 @@ static void wiz_draw_target(Framebuffer *fb, int x, int y, uint32_t c) {
     fb_fill_circle(fb, x, y, 2, c);
 }
 
-static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state,
+static void run_calib_wizard(Framebuffer *fb, TouchInput *touch,
                              bool edges_only) {
     /* fb_init() rotates the margins into virtual space in portrait, so values
      * measured here would be saved rotated and re-rotated on the next start.
@@ -1095,7 +1043,6 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
                            "TURN PORTRAIT OFF AND RELAUNCH", COLOR_YELLOW, 2);
         fb_swap(fb);
         sleep(3);
-        state->calib_sub = CALIB_IDLE;
         return;
     }
 
@@ -1113,7 +1060,6 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
     touch_calib_hw_range(touch, &hw_x0, &hw_x1, &hw_y0, &hw_y1);
 
     if (fb_set_bezel(fb, 0, 0, 0, 0) < 0) {
-        state->calib_sub = CALIB_IDLE;
         return;
     }
     touch_set_screen_size(touch, (int)fb->width, (int)fb->height);
@@ -1706,10 +1652,8 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
     touch_drain_events(touch);
 
     if (msg[0]) {
-        snprintf(state->status_msg, sizeof(state->status_msg), "%s", msg);
-        state->status_time_ms = get_time_ms();
+        cp_status(msg, saved);
     }
-    state->calib_sub = CALIB_IDLE;
 }
 
 
@@ -1732,13 +1676,9 @@ static void run_calib_wizard(Framebuffer *fb, TouchInput *touch, AppState *state
  * touch_raw's APPLY writes /etc/touch_calibration.conf, so on return the
  * in-memory calibration here may be stale. Reload everything rather than assume:
  * a wrong inset silently misplaces every button in the app. */
-static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
-                                 AppState *state) {
+static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch) {
     if (access(TOUCH_DIAG_PATH, X_OK) != 0) {
-        snprintf(state->status_msg, sizeof(state->status_msg),
-                 "TOUCH_RAW NOT INSTALLED");
-        state->status_time_ms = get_time_ms();
-        state->calib_sub = CALIB_IDLE;
+        cp_status("TOUCH_RAW NOT INSTALLED", false);
         return;
     }
 
@@ -1749,9 +1689,7 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
 
     pid_t pid = fork();
     if (pid < 0) {
-        snprintf(state->status_msg, sizeof(state->status_msg), "FORK FAILED");
-        state->status_time_ms = get_time_ms();
-        state->calib_sub = CALIB_IDLE;
+        cp_status("FORK FAILED", false);
         return;
     }
     if (pid == 0) {
@@ -1774,12 +1712,9 @@ static void run_touch_diagnostic(Framebuffer *fb, TouchInput *touch,
     touch_set_screen_size(touch, (int)fb->width, (int)fb->height);
     touch_drain_events(touch);
 
-    snprintf(state->status_msg, sizeof(state->status_msg),
-             WIFEXITED(status) && WEXITSTATUS(status) == 0
-                 ? "DIAGNOSTIC DONE - GEOMETRY RELOADED"
-                 : "DIAGNOSTIC EXITED WITH AN ERROR");
-    state->status_time_ms = get_time_ms();
-    state->calib_sub = CALIB_IDLE;
+    bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    cp_status(ok ? "DIAGNOSTIC DONE - GEOMETRY RELOADED"
+                 : "DIAGNOSTIC EXITED WITH AN ERROR", ok);
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1799,6 +1734,17 @@ static void rebuild_ui(AppState *state) {
     icon_grid_layout(&home_grid, g_fb, HOME_TITLE_H, "control_panel home");
 }
 
+void cp_run_touch_tool(Framebuffer *fb, TouchInput *touch, int mode) {
+    if (mode == CP_TOUCH_DIAGNOSTIC)
+        run_touch_diagnostic(fb, touch);
+    else
+        run_calib_wizard(fb, touch, mode == CP_TOUCH_EDGES);
+    /* The logical screen may have resized under the UI - the tab bar, every
+     * page and the home grid are laid out from SCREEN_SAFE_*.  A page's
+     * run_fullscreen() is followed by no rebuild of main()'s, so it is here. */
+    rebuild_ui(g_state);
+}
+
 static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
                                         AppState *state) {
     if (state->active_tab == TAB_TESTS) {
@@ -1810,16 +1756,9 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
         if (state->page->run_fullscreen)
             state->page->run_fullscreen(fb, touch);
     } else if (state->active_tab == TAB_DISPLAY) {
-        if (state->calib_sub == CALIB_RUN_DIAG) {
-            run_touch_diagnostic(fb, touch, state);
-            rebuild_ui(state);
-        } else if (state->calib_sub != CALIB_IDLE) {
-            run_calib_wizard(fb, touch, state,
-                             state->calib_sub == CALIB_RUN_EDGES);
-            /* The logical screen may have resized under the UI - the tab bar
-             * and every tab's widgets are laid out from SCREEN_SAFE_*. */
-            rebuild_ui(state);
-        }
+        if (state->calib_sub == CALIB_RUN_EDGES)
+            cp_run_touch_tool(fb, touch, CP_TOUCH_EDGES);
+        state->calib_sub = CALIB_IDLE;
     }
     /* Drain any lingering touch events (press/release) left in the input
      * buffer by the full-screen mode.  Without this, the stale release
@@ -1952,12 +1891,7 @@ int main(void) {
         if (state.confirm_action != CONFIRM_NONE) {
             ModalDialogAction action =
                 modal_dialog_update(&confirm_dialog, tx, ty, touching, now);
-            if (action == MODAL_ACTION_BTN0 &&
-                state.confirm_action == CONFIRM_RESET_GEOMETRY) {
-                display_reset_geometry(&state, &touch, now);
-                state.confirm_action = CONFIRM_NONE;
-                rebuild_ui(&state);   /* the bezel just changed the logical size */
-            } else if (action == MODAL_ACTION_BTN0) {
+            if (action == MODAL_ACTION_BTN0) {
                 /* Cleared first: on_ok may itself open another question. */
                 CpConfirmFn on_ok = confirm_on_ok;
                 confirm_on_ok = NULL;

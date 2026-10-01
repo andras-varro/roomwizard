@@ -80,8 +80,8 @@ extern const CpPage cp_display_page;   /* display_page.c */
  * once more when it expires; the page need not return CP_PAGE_REDRAW for it. */
 void cp_status(const char *msg, bool ok);
 
-/* Asks before doing something: the panel's one confirmation dialog (the Touch
- * tab's RESET GEOMETRY uses it too), ok_text and CANCEL side by side, drawn
+/* Asks before doing something: the panel's one confirmation dialog, ok_text
+ * and CANCEL side by side, drawn
  * over the whole screen.  While it is up it takes all input — the title bar's
  * BACK and the page's input() included.  OK calls on_ok with the panel's
  * Config and repaints the page; CANCEL does nothing.  Returns at once: call it
@@ -92,6 +92,23 @@ void cp_status(const char *msg, bool ok);
 typedef void (*CpConfirmFn)(Config *cfg);
 void cp_confirm(const char *title, const char *message, const char *ok_text,
                 CpConfirmFn on_ok);
+
+/* The touch geometry tools, for a page's run_fullscreen().  CALIBRATE is the
+ * full wizard (interior fit, reach, edges), EDGES its screen-edge steps alone,
+ * DIAGNOSTIC hands the screen to /opt/games/touch_raw until it exits.  The
+ * wizard is landscape-only: in portrait it says so for 3 s and changes
+ * nothing.  Blocking.  Afterwards calibration and bezel are whatever the
+ * device now holds, the outcome is posted with cp_status(), and every page is
+ * laid out again (its layout() runs) because the logical screen may have
+ * changed size. */
+enum { CP_TOUCH_CALIBRATE, CP_TOUCH_EDGES, CP_TOUCH_DIAGNOSTIC };
+void cp_run_touch_tool(Framebuffer *fb, TouchInput *touch, int mode);
+
+/* Puts /etc/touch_calibration.conf back to the hardware range and the default
+ * edges (after a backup beside it), applies that, posts the outcome with
+ * cp_status() — saving needs root — and lays every page out again.  For a
+ * cp_confirm() on_ok. */
+void cp_reset_touch_geometry(void);
 
 /* The global RESET DEFAULTS, pressed on the Information page.  First copies
  * the config file to a timestamped "<path>.bak-YYYYmmdd-HHMMSS" beside it; if
