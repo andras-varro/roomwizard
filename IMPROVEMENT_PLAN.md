@@ -184,6 +184,17 @@ it runs degraded in portrait rather than being refused; it launches from the con
 this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
+### B50. Office Runner does not look right in portrait mode — open, operator report 2026-10-01, not reproduced
+
+Reported by the operator; not seen by us. **[inferred from code]** Portrait is one global flag file,
+`/opt/games/portrait.mode` (`fb_is_portrait_mode()`, `common/framebuffer.c:290`), read by every `fb_init()`
+(`:510`), which swaps the app's width and height. `platformer.c` (the Office Runner binary) never mentions
+`portrait` (grep), so its camera, HUD and level layout assume 800 wide (`fb.width` uses from `:755`). **Possible
+fix (operator's idea):** mandate landscape for it. The hook would be a per-app override of the flag in
+`fb_init()` — `platformer.c:1869` is the call — or a landscape-only manifest key in `app-manifests.sh` read by
+the launcher; neither exists today. Prefer a library hook over a per-app edit. Verify on the panel in both
+orientations.
+
 ## Features
 
 Userspace except F101, which is the image build, and F2, which now waits on it.
@@ -287,18 +298,15 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
    `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
    Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
    a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
-2. **BT audio works by hand (measured 2026-10-01, `.188`); remaining is packaging.** `bluetooth/build-bluealsa.sh`
-   cross-builds `sbc` 2.0 (static) and BlueALSA 4.3.1 against the device's own glib/gio/gobject 2.62.6, libdbus
-   and libasound 1.2.1; `speaker-test -D bluealsa:DEV=<mac>,PROFILE=a2dp -c 2 -t sine` was audible in both ears
-   of a Sony WI-C310, stereo channel order correct (`-s 1`, buds checked), bluealsa ~4.8% CPU and ~5 MB RSS while
-   streaming, the headset reporting 180 ms A2DP delay. Hand-installed: the two binaries, the two ALSA plugins into
-   the **vendor** libasound's `/usr/lib/alsa-lib` (our alsa-lib is never deployed), `20-bluealsa.conf`,
-   `bluealsa.conf` for dbus. **Remaining:** deploy those staged files from `bluetooth/build-and-deploy.sh` and the
-   provision group (it only builds them now); an init start for `bluealsa -p a2dp-source` after `bluetoothd` with
-   `DBUS_SYSTEM_BUS_ADDRESS` set ([§3.6](SYSTEM_ANALYSIS.md#36-usb)); route `common/audio_out` to a BT sink
-   (ScummVM follows, it reaches the device through `audio_out`); then the control-panel BT page.
+2. **BlueALSA is built and starts at boot; routing to it is what is open.** Measured by hand on `.188`
+   (2026-10-01): `speaker-test -D bluealsa:DEV=<mac>,PROFILE=a2dp -c 2 -t sine` was audible in both ears of a Sony
+   WI-C310, channel order correct (`-s 1`), bluealsa ~4.8% CPU and ~5 MB RSS while streaming, the headset
+   reporting 180 ms A2DP delay. Not yet verified after a reboot: audio actually playing to the headphones (needs
+   them powered on). **Left:** route `common/audio_out` to a BT sink when one is connected (ScummVM follows, it
+   reaches the device through `audio_out`) — in progress; then the control-panel BT page (step 3).
    **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
-3. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
+3. The control panel's Bluetooth page (adapter power, scan, pair with a passkey agent for keyboards, trust,
+   connect, audio output) is a `CpPage` with its own tile;
    the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
    own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).
 4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
@@ -501,6 +509,8 @@ loop polls only `touch_poll(&touch)` (~`:768`) and never calls `gamepad_poll()`,
 
 A mouse works only in the Input page's mouse tester. `app_launcher.c` consumes `mouse_left_pressed` (`:805`) but
 a grep finds no cursor drawn there, and `control_panel.c` never polls `gamepad_poll()` at all **[read from
+source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
+and a click activates a tile in both; the draw belongs in one shared helper, not per app.
 
 ### F109. Static UI screens cost more CPU than a running game — open, measured on .188 2026-10-01
 
@@ -512,8 +522,20 @@ with no sleep — `common/keyboard.c` is shared by every game's high-score entry
 nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spinning poll shows almost none
 voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
 timeout. **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
-source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
-and a click activates a tile in both; the draw belongs in one shared helper, not per app.
+### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
+
+The launcher tiles look dated next to the Control Panel's page icons. **Where each comes from (read from
+source):** the launcher and the Control Panel draw their tiles through the same `icon_grid_draw_tile()`
+(`common/icon_grid.c:116`, `TILE_RADIUS` 12 at `:17`; called from `app_launcher.c:264` and `control_panel.c:346`),
+so the tile frame is already rounded and shared — the difference is the 96x96 PPM *inside* it
+(`ICON_GRID_ICON_SIZE`, `common/icon_grid.h:23`). The Control Panel's are generated by
+`control_panel/gen_cp_icons.py` (`base()` at `:28` draws a supersampled `rounded_rectangle` radius 16 in an
+accent colour, glyphs drawn white on it). The launcher's are per-app `<app>/<app>.ppm` — generated for only three
+by `frogger/gen_icon.py`, `platformer/gen_icon.py`, `samegame/gen_icon.py` (64x64 square scenes, no rounding), the
+rest committed as bare PPMs with no generator — and collected by the `*//*.ppm` glob in
+`native_apps/build-and-deploy.sh:307`; manifests name them in `app-manifests.sh:39-47`. **Fix:** one generator in
+the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
+**Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
 
 ## Structural and cleanup
 
