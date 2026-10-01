@@ -193,7 +193,7 @@ typedef struct {
      * state — see audio_out_usb_returned().  All three reset on every open. */
     const char *open_path;
     uint32_t    reprobe_last_ms;
-    bool        usb_seen;      /**< card 1 was present at the previous probe   */
+    bool        better_seen;   /**< a better sink was usable at the previous probe */
 
     /* What the device GRANTED.  Never what was requested. */
     int         rate;
@@ -309,42 +309,98 @@ bool audio_out_device_lost(const AudioOut *out);
  * that, a move back to a replugged card that fails would leave the stream closed
  * and every retry would resolve to the same card again: silence for the session,
  * the very thing the fallback exists to prevent.  The refusal is cleared the first
- * time card 1 is seen absent, so the next plug is tried afresh.
+ * time card 1 is seen absent, so the next plug is tried afresh.  A Bluetooth sink
+ * that will not open is refused the same way, until the ACL-link signature
+ * changes (a reconnect); the fallback then resolves USB, then onboard.
  *
- * `*path_out` (may be NULL) receives the node that opened.  Returns 0 or -1.
+ * `*path_out` (may be NULL) receives the path that opened — a `/dev/dsp*` node, or
+ * `"bluealsa"` for the Bluetooth sink.  Returns 0 or -1.
  */
 int  audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
                              const char **path_out);
 
-/** How often, at most, a stream on the panel speaker looks for card 1 again. */
+/** How often, at most, a stream not on its preference's best sink looks again. */
 #define AUDIO_OUT_REPROBE_MS 1000
 
 /**
- * The gate in front of the replug probe, as a pure function: TRUE when a stream
- * open on `open_path` should look for the USB card now.  Only a stream on the
- * panel speaker, only under preference `"usb"` or `"auto"` (never `"onboard"`,
- * never an unrecognised value — those resolve onboard by design), and only once
- * `AUDIO_OUT_REPROBE_MS` has passed since `last_ms`.  Unsigned subtraction, so
- * the millisecond clock wrapping does not stop the probe.
+ * Whether `candidate` outranks `open_path` in the one order every preference is
+ * a subsequence of: Bluetooth > USB > onboard.  Pure.  A move only ever goes UP
+ * it — a sink that merely differs (the current one flickering in a probe) never
+ * pulls a live stream sideways or down; losing the current sink is the
+ * device-lost path's job, not this one's.
+ */
+bool audio_out_sink_better(const char *candidate, const char *open_path);
+
+/**
+ * The gate in front of the "better sink returned" probe, as a pure function: TRUE
+ * when a stream open on `open_path` should look again now.  Only when the
+ * preference allows something that outranks `open_path` (`"usb"`: USB over
+ * onboard; `"auto"` and `"bluetooth"`: Bluetooth over both; never `"onboard"` or
+ * an unrecognised value), and only once `AUDIO_OUT_REPROBE_MS` has passed since
+ * `last_ms`.  Unsigned subtraction, so the millisecond clock wrapping does not
+ * stop the probe.
  *
  * Split out so the host test reaches every branch: the wrapper below also needs
- * a card-1 node, which no host has.
+ * a card-1 node and a Bluetooth sink, which no host has.
  */
 bool audio_out_reprobe_due(const char *pref, const char *open_path,
                            uint32_t now_ms, uint32_t last_ms);
 
 /**
- * Whether a replugged USB card should take this stream back from the panel
- * speaker.  Call it on every service; it costs a clock read unless the gate
- * above opens, and then one `access()` on card 1's node — never a PCM open.
+ * Whether a better sink — a replugged USB card, a newly connected Bluetooth A2DP
+ * sink — should take this stream.  Named for the first of them; ScummVM's mixer
+ * calls it by this name.  Call it on every service; it costs a clock read unless
+ * the gate above opens, and then one `access()` on card 1's node plus
+ * `audio_out_bt_present()`'s cheap gate — a PCM open only inside that gate's
+ * probe window.
  *
- * TRUE only when the card was present at TWO consecutive probes (~1 s apart),
- * because the node can appear before the card is ready to open, and only when it
- * is not refused (see audio_out_open_resolved()).  It logs the move; the owner
- * then closes the stream and reopens through its own path — this reopens nothing,
- * exactly as with audio_out_device_lost().
+ * TRUE only when the better sink was usable at TWO consecutive probes (~1 s
+ * apart), because a node or a transport can appear before it will open, and only
+ * when it is not refused (see audio_out_open_resolved()).  It logs the move; the
+ * owner then closes the stream and reopens through its own path — this reopens
+ * nothing, exactly as with audio_out_device_lost().
  */
 bool audio_out_usb_returned(AudioOut *out);
+
+/* ── Bluetooth presence: a cheap kernel gate, then a windowed PCM probe ──────
+ *
+ * The operator keeps a Bluetooth keyboard and pad connected permanently, so "is
+ * there a link" is not "is there an audio sink", and opening the BlueALSA PCM on
+ * every look is not cheap.  The kernel lists one `hciN:H` entry per ACL link in
+ * /sys/class/bluetooth; a small signature of those names is read on every look,
+ * and only when it CHANGES does a probe window of AUDIO_OUT_BT_WINDOW_MS open,
+ * inside which the real probe (open `plug:bluealsa` non-blocking, close) runs at
+ * most once per AUDIO_OUT_BT_PROBE_MS — an A2DP transport comes up a few seconds
+ * after its ACL link.  The first look in a process probes once if any link
+ * exists.  Outside the window the last probe's answer stands.
+ */
+#define AUDIO_OUT_BT_WINDOW_MS 10000
+#define AUDIO_OUT_BT_PROBE_MS  1000
+
+typedef struct {
+    bool     have_sig;         /**< a signature has been seen at all            */
+    bool     window;           /**< the probe window is open                    */
+    uint32_t sig;              /**< the last signature seen                     */
+    uint32_t window_start_ms;
+    uint32_t last_probe_ms;
+} AudioOutBtGate;
+
+/** The ACL-link signature of a /sys/class/bluetooth-shaped directory: 0 when it
+ *  holds no `hciN:H` entry (or does not exist), otherwise an order-independent
+ *  hash of those names.  A parameter so a host test can hand it a fixture. */
+uint32_t audio_out_bt_acl_signature(const char *sysfs_dir);
+
+/** The decision, pure: given the current signature and the clock, is a PCM probe
+ *  due now?  Updates `g`; `*changed` (may be NULL) reports a signature change —
+ *  the moment a Bluetooth refusal is cleared.  See the block comment for the
+ *  rule; `tests/audio_out_test.c` group P is its specification. */
+bool audio_out_bt_probe_due(AudioOutBtGate *g, uint32_t sig, uint32_t now_ms,
+                            bool *changed);
+
+/** Whether a Bluetooth A2DP sink is connected, by the gate above.  Cheap enough
+ *  for every frame of a settings page: a readdir, and a PCM open only inside a
+ *  probe window.  A probe that finds the sink BUSY counts as present. */
+bool audio_out_bt_present(void);
 
 /* ── Which device ───────────────────────────────────────────────────────────
  *
@@ -362,7 +418,7 @@ bool audio_out_usb_returned(AudioOut *out);
  * resolution with no sound card present.
  */
 
-/** Set the preference: `"onboard"`, `"usb"` or `"auto"`. NULL or empty reads as `"auto"`;
+/** Set the preference: `"onboard"`, `"usb"`, `"bluetooth"` or `"auto"`. NULL or empty reads as `"auto"`;
  *  an unrecognised value resolves as `"onboard"` (see audio_out_device_for). Truncated
  *  past 15 characters. */
 void        audio_out_set_device_pref(const char *pref);
@@ -381,27 +437,31 @@ bool        audio_out_usb_present(void);
  * absent** — a games panel gone mute with no explanation is worse than one on
  * the wrong speaker. `"auto"` falls back silently (unplugging is expected);
  * `"usb"` was an explicit request, so it reports the fallback once on stderr.
+ * `"auto"` puts a connected Bluetooth sink first; `"bluetooth"` with none
+ * resolves as `"auto"`'s remainder (USB, else onboard), reported once.  The
+ * Bluetooth sink is the path `"bluealsa"`, not a node.
  */
 const char *audio_out_device_path(void);
 
 /**
- * The resolution itself, as a pure function of the two inputs.
+ * The resolution itself, as a pure function of the three inputs.
  *
  * ⚠️ **This exists so the CARD-PRESENT branch is reachable from a host test.**
  * `audio_out_device_path()` is this function applied to the stored preference
- * and `audio_out_usb_present()`, and no host has `/dev/dsp1` — so a group that
+ * and the two presence readers, and no host has `/dev/dsp1` or a sink — so a group that
  * could only call the wrapper would pass identically against a resolver that
  * ignored its argument and always answered `/dev/dsp`. Splitting the decision
  * out is what makes that sabotage fail. It is not a test-only hook: the wrapper
  * has no logic of its own left to disagree with.
  */
-const char *audio_out_device_for(const char *pref, bool usb_present);
+const char *audio_out_device_for(const char *pref, bool usb_present, bool bt_present);
 
 /* ── The choices a settings page offers ─────────────────────────────────────
  *
- * One table, in the order a press cycles them, so a new output (Bluetooth) is
+ * One table, in the order a press cycles them, so a new output is
  * one row here plus its presence input rather than an edit in every page.  All
- * pure: the CALLER passes what is attached (`audio_out_usb_present()`), so a
+ * pure: the CALLER passes what is attached (`audio_out_usb_present()`,
+ * `audio_out_bt_present()`), so a
  * host test reaches the card-present branch with no card.
  *
  * ⚠️ **"Shown" is display only, and the saved choice is never rewritten by it.**
@@ -413,29 +473,32 @@ const char *audio_out_device_for(const char *pref, bool usb_present);
 typedef enum {
     AUDIO_OUT_CHOICE_ONBOARD = 0,
     AUDIO_OUT_CHOICE_USB,
+    AUDIO_OUT_CHOICE_BT,
     AUDIO_OUT_CHOICE_AUTO,
     AUDIO_OUT_CHOICE_COUNT
 } AudioOutChoice;
 
-/** The persisted config value ("onboard" | "usb" | "auto").  Out of range reads
+/** The persisted config value ("onboard" | "usb" | "bluetooth" | "auto").  Out of range reads
  *  as onboard. */
 const char *audio_out_choice_name(int choice);
-/** Upper-case button text ("ONBOARD" | "USB" | "AUTO").  Out of range: onboard. */
+/** Upper-case button text ("ONBOARD" | "USB" | "BLUETOOTH" | "AUTO").  Out of range: onboard. */
 const char *audio_out_choice_label(int choice);
 /** The entry a config value names; NULL or unrecognised is ONBOARD — the same
  *  answer audio_out_device_for() gives it, so a page cannot show what no opener
  *  would do. */
 int  audio_out_choice_of(const char *name);
 /** Whether the entry is in the list with this hardware attached. */
-bool audio_out_choice_available(int choice, bool usb_present);
+bool audio_out_choice_available(int choice, bool usb_present, bool bt_present);
 /** What a saved choice shows as: itself if available, else AUTO. */
-int  audio_out_choice_shown(int saved, bool usb_present);
+int  audio_out_choice_shown(int saved, bool usb_present, bool bt_present);
 /** The next AVAILABLE entry after `shown`, in table order, wrapping. */
-int  audio_out_choice_next(int shown, bool usb_present);
+int  audio_out_choice_next(int shown, bool usb_present, bool bt_present);
 
 /** The ALSA PCM for an OSS node `audio_out_device_path()` returned: `/dev/dsp`
  *  → `plughw:0,0`, `/dev/dsp1` → `plughw:1,0` (OSS minor N is ALSA card N on
- *  this device).  Anything else maps onboard, the resolver's own fallback.
+ *  this device), `"bluealsa"` → `plug:bluealsa` (BlueALSA's default device =
+ *  the most recently connected sink, A2DP; `plug` so ScummVM's mono and odd
+ *  rates are converted).  Anything else maps onboard, the resolver's own fallback.
  *  `plughw`, not `hw`, so a rate or channel count the card lacks is converted
  *  rather than refused. */
 const char *audio_out_device_pcm(const char *path);

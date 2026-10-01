@@ -51,6 +51,7 @@ static int   page_audio_idx;            /* the dev_idx it was opened on */
  * live probe against it, so a DAC plugged in or pulled repaints the OUT button
  * without waiting for an unrelated touch. */
 static bool shown_usb;
+static bool shown_bt;
 
 /* Every value read through config.c's helpers, which are what common/audio.c
  * reads, so the switch on screen cannot disagree with what a game will do —
@@ -214,7 +215,8 @@ static void audio_page_layout(void) {
     int out_w = out_label_widest() + 16;                            /* 8 px each side */
     char out_txt[32];
     out_label(out_txt, sizeof(out_txt),
-              audio_out_choice_shown(s->dev_idx, audio_out_usb_present()));
+              audio_out_choice_shown(s->dev_idx, audio_out_usb_present(),
+                                     audio_out_bt_present()));
     button_init_full(&audio_dev_btn, out_x, AUD_ROW2_Y, out_w, AUD_TRACK_H,
                      out_txt, BTN_COLOR_INFO, COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 1);
 
@@ -287,14 +289,17 @@ static void audio_page_draw(Framebuffer *fb) {
     toggle_draw(fb, &music_toggle);
     toggle_draw(fb, &effects_toggle);
 
-    /* ⚠️ OUT lists only what is attached: with no /dev/dsp1 the USB entry is not
+    /* ⚠️ OUT lists only what is attached: with no /dev/dsp1 the USB entry (and
+     * with no Bluetooth sink the BLUETOOTH entry) is not
      * in the cycle, and a saved "usb" SHOWS as AUTO — which is what it is doing,
      * since audio_out_device_for() plays it onboard until the DAC returns.  The
      * SAVED value is not touched (audio_out.h says why); the box keeps its
      * table-wide width, so the row's geometry is card-independent. */
     shown_usb = audio_out_usb_present();
+    shown_bt  = audio_out_bt_present();
     char out_txt[32];
-    out_label(out_txt, sizeof(out_txt), audio_out_choice_shown(s->dev_idx, shown_usb));
+    out_label(out_txt, sizeof(out_txt),
+              audio_out_choice_shown(s->dev_idx, shown_usb, shown_bt));
     button_set_text(&audio_dev_btn, out_txt);
     button_draw(fb, &audio_dev_btn);
 }
@@ -326,8 +331,9 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
      * here; draw() derives it from the index every frame, so the two cannot
      * disagree. */
     if (button_update(&audio_dev_btn, tx, ty, touching, now)) {
-        bool usb = audio_out_usb_present();
-        s->dev_idx = audio_out_choice_next(audio_out_choice_shown(s->dev_idx, usb), usb);
+        bool usb = audio_out_usb_present(), bt = audio_out_bt_present();
+        s->dev_idx = audio_out_choice_next(audio_out_choice_shown(s->dev_idx, usb, bt),
+                                           usb, bt);
         changed = true;
     }
     if (changed) {
@@ -355,8 +361,8 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
      * the bus is open; a closed bus is a no-op here. */
     audio_pump(&page_audio);
 
-    if (audio_out_usb_present() != shown_usb)
-        act = CP_PAGE_REDRAW;           /* a DAC came or went: relist OUT */
+    if (audio_out_usb_present() != shown_usb || audio_out_bt_present() != shown_bt)
+        act = CP_PAGE_REDRAW;           /* a DAC or a BT sink came or went: relist OUT */
 
     /* Last, so neither REDRAW above can overwrite the queued run. */
     if (button_update(&mix_test_btn, tx, ty, touching, now))

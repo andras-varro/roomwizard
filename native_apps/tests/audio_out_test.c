@@ -114,6 +114,9 @@
  * the gate would count its own documentation.
  */
 
+#define _DEFAULT_SOURCE   /* mkdtemp, for group Q */
+#include <sys/stat.h>
+#include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1046,19 +1049,19 @@ int main(void)
          * without them the nine checks above all pass against a resolver that
          * ignores its argument and always answers /dev/dsp — measured, that
          * exact sabotage was green before this block was added. */
-        check(strcmp(audio_out_device_for("usb", true), "/dev/dsp1") == 0,
+        check(strcmp(audio_out_device_for("usb", true, false), "/dev/dsp1") == 0,
               "K10 with a card present, usb resolves to it — the case no host "
               "can reach through the wrapper");
-        check(strcmp(audio_out_device_for("auto", true), "/dev/dsp1") == 0,
+        check(strcmp(audio_out_device_for("auto", true, false), "/dev/dsp1") == 0,
               "K11 and so does auto, which is what auto MEANS");
-        check(strcmp(audio_out_device_for("onboard", true), "/dev/dsp") == 0,
+        check(strcmp(audio_out_device_for("onboard", true, false), "/dev/dsp") == 0,
               "K12 but onboard stays onboard with a card present — an explicit "
               "choice is not overridden by hardware appearing");
-        check(strcmp(audio_out_device_for("usb", false), "/dev/dsp") == 0 &&
-              strcmp(audio_out_device_for("auto", false), "/dev/dsp") == 0,
+        check(strcmp(audio_out_device_for("usb", false, false), "/dev/dsp") == 0 &&
+              strcmp(audio_out_device_for("auto", false, false), "/dev/dsp") == 0,
               "K13 and both fall back with it absent — the same answers K5/K6 "
               "reach through the wrapper, now shown to depend on the argument");
-        check(strcmp(audio_out_device_for(NULL, true), "/dev/dsp") == 0,
+        check(strcmp(audio_out_device_for(NULL, true, false), "/dev/dsp") == 0,
               "K14 a NULL preference is onboard even with a card present");
     }
 
@@ -1074,6 +1077,11 @@ int main(void)
               "L3 -ESTRPIPE is a suspend, recovered by resume/prepare");
         check(audio_out_alsa_classify(-ENODEV) == AO_ERR_LOST,
               "L4 -ENODEV is the device gone — the USB DAC unplugged");
+        check(audio_out_alsa_classify(-ENOTCONN) == AO_ERR_LOST &&
+              audio_out_alsa_classify(-ESHUTDOWN) == AO_ERR_LOST &&
+              audio_out_alsa_classify(-EPIPE) == AO_ERR_XRUN,
+              "L4b a socket-shaped loss (a BlueALSA transport gone) is LOST too; "
+              "CONTROL: -EPIPE is still an XRUN");
         check(audio_out_alsa_classify(-EBADFD) == AO_ERR_LOST,
               "L5 -EBADFD is also gone: the state a PCM is left in after its "
               "card disappears, so it must reopen rather than retry forever");
@@ -1154,8 +1162,16 @@ int main(void)
               "M4 CONTROL: \"onboard\" never probes — the panel is what was asked for");
         check(!audio_out_reprobe_due("bogus", "/dev/dsp", 9000, 0),
               "M5 an unrecognised preference resolves onboard, so it never probes");
-        check(!audio_out_reprobe_due("auto", "/dev/dsp1", 9000, 0),
-              "M6 CONTROL: a stream already on the USB card never probes");
+        check(!audio_out_reprobe_due("usb", "/dev/dsp1", 9000, 0) &&
+              !audio_out_reprobe_due("auto", "bluealsa", 9000, 0) &&
+              !audio_out_reprobe_due("bluetooth", "bluealsa", 9000, 0),
+              "M6 CONTROL: a stream already on the best sink its preference "
+              "allows never probes");
+        check(audio_out_reprobe_due("auto", "/dev/dsp1", 9000, 0) &&
+              audio_out_reprobe_due("bluetooth", "/dev/dsp", 9000, 0) &&
+              audio_out_reprobe_due("bluetooth", "/dev/dsp1", 9000, 0),
+              "M6b but a stream on USB or onboard under auto/bluetooth probes, "
+              "because a Bluetooth sink outranks both");
         check(!audio_out_reprobe_due("auto", NULL, 9000, 0) &&
               !audio_out_reprobe_due(NULL, "/dev/dsp", 9000, 0),
               "M7 no open path (a stream from another opener) or no preference: never");
@@ -1181,11 +1197,12 @@ int main(void)
     {
         /* The persisted strings are the config file's contract, so they are
          * asserted by value: a renamed entry would orphan every saved setting. */
-        check(AUDIO_OUT_CHOICE_COUNT == 3 &&
+        check(AUDIO_OUT_CHOICE_COUNT == 4 &&
               strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_ONBOARD), "onboard") == 0 &&
               strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_USB),     "usb")     == 0 &&
+              strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_BT),  "bluetooth")   == 0 &&
               strcmp(audio_out_choice_name(AUDIO_OUT_CHOICE_AUTO),    "auto")    == 0,
-              "N1 the table holds the three persisted values, in cycle order");
+              "N1 the table holds the four persisted values, in cycle order");
         check(audio_out_choice_of("usb")  == AUDIO_OUT_CHOICE_USB &&
               audio_out_choice_of("auto") == AUDIO_OUT_CHOICE_AUTO &&
               audio_out_choice_of("bogus") == AUDIO_OUT_CHOICE_ONBOARD &&
@@ -1195,34 +1212,172 @@ int main(void)
 
         bool usb_ever = false;
         for (int c = 0; c < AUDIO_OUT_CHOICE_COUNT; c++)
-            if (audio_out_choice_next(c, false) == AUDIO_OUT_CHOICE_USB) usb_ever = true;
+            if (audio_out_choice_next(c, false, false) == AUDIO_OUT_CHOICE_USB) usb_ever = true;
         check(!usb_ever,
               "N3 with no USB DAC, a press never lands on USB — from ANY start, "
               "including USB itself");
-        check(!audio_out_choice_available(AUDIO_OUT_CHOICE_USB, false) &&
-              audio_out_choice_available(AUDIO_OUT_CHOICE_USB, true) &&
-              audio_out_choice_available(AUDIO_OUT_CHOICE_ONBOARD, false) &&
-              audio_out_choice_available(AUDIO_OUT_CHOICE_AUTO, false),
+        check(!audio_out_choice_available(AUDIO_OUT_CHOICE_USB, false, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_USB, true, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_ONBOARD, false, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_AUTO, false, false),
               "N4 USB is listed only while present; ONBOARD and AUTO always are");
-        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, false) == AUDIO_OUT_CHOICE_AUTO,
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, false, false) == AUDIO_OUT_CHOICE_AUTO,
               "N5 a saved USB with no DAC SHOWS as AUTO");
-        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, true) == AUDIO_OUT_CHOICE_USB,
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_USB, true, false) == AUDIO_OUT_CHOICE_USB,
               "N6 CONTROL: a saved USB with the DAC present shows as USB");
-        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_ONBOARD, false) == AUDIO_OUT_CHOICE_ONBOARD &&
-              audio_out_choice_shown(AUDIO_OUT_CHOICE_AUTO, true) == AUDIO_OUT_CHOICE_AUTO,
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_ONBOARD, false, false) == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_shown(AUDIO_OUT_CHOICE_AUTO, true, false) == AUDIO_OUT_CHOICE_AUTO,
               "N7 an available saved choice shows as itself");
-        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, true) == AUDIO_OUT_CHOICE_USB &&
-              audio_out_choice_next(AUDIO_OUT_CHOICE_USB, true)     == AUDIO_OUT_CHOICE_AUTO &&
-              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, true)    == AUDIO_OUT_CHOICE_ONBOARD,
+        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, true, false) == AUDIO_OUT_CHOICE_USB &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_USB, true, false)     == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, true, false)    == AUDIO_OUT_CHOICE_ONBOARD,
               "N8 with USB present the cycle is onboard -> usb -> auto -> onboard");
-        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, false) == AUDIO_OUT_CHOICE_AUTO &&
-              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, false)    == AUDIO_OUT_CHOICE_ONBOARD,
+        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, false, false) == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, false, false)    == AUDIO_OUT_CHOICE_ONBOARD,
               "N9 with USB absent the cycle is onboard -> auto -> onboard");
-        check(audio_out_choice_shown(-1, true) == AUDIO_OUT_CHOICE_ONBOARD &&
-              audio_out_choice_shown(AUDIO_OUT_CHOICE_COUNT, true) == AUDIO_OUT_CHOICE_ONBOARD &&
+        check(audio_out_choice_shown(-1, true, false) == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_shown(AUDIO_OUT_CHOICE_COUNT, true, false) == AUDIO_OUT_CHOICE_ONBOARD &&
               audio_out_choice_name(AUDIO_OUT_CHOICE_COUNT) != NULL &&
               audio_out_choice_label(-1) != NULL,
               "N10 an out-of-range index reads as onboard rather than indexing past the table");
+    }
+
+    printf("\n=== O. Bluetooth in the resolver and the choice list (pure) ===\n");
+    {
+        /* Every preference against every presence combination.  The expected
+         * column is the design: auto = BT > USB > onboard, "bluetooth" with no
+         * sink = auto's remainder, "usb" never picks BT, onboard is onboard. */
+        static const struct { const char *pref; bool usb, bt; const char *want; } T[] = {
+            { "onboard",   false, false, "/dev/dsp"  }, { "onboard",   true,  true,  "/dev/dsp"  },
+            { "onboard",   false, true,  "/dev/dsp"  }, { "onboard",   true,  false, "/dev/dsp"  },
+            { "usb",       false, false, "/dev/dsp"  }, { "usb",       true,  false, "/dev/dsp1" },
+            { "usb",       false, true,  "/dev/dsp"  }, { "usb",       true,  true,  "/dev/dsp1" },
+            { "auto",      false, false, "/dev/dsp"  }, { "auto",      true,  false, "/dev/dsp1" },
+            { "auto",      false, true,  "bluealsa"  }, { "auto",      true,  true,  "bluealsa"  },
+            { "bluetooth", false, false, "/dev/dsp"  }, { "bluetooth", true,  false, "/dev/dsp1" },
+            { "bluetooth", false, true,  "bluealsa"  }, { "bluetooth", true,  true,  "bluealsa"  },
+            { NULL,        true,  true,  "/dev/dsp"  }, { "bogus",     true,  true,  "/dev/dsp"  },
+        };
+        int bad = 0;
+        for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+            const char *got = audio_out_device_for(T[i].pref, T[i].usb, T[i].bt);
+            if (strcmp(got, T[i].want) != 0) {
+                printf("    %s usb=%d bt=%d -> %s, want %s\n", T[i].pref ? T[i].pref : "(null)",
+                       T[i].usb, T[i].bt, got, T[i].want);
+                bad++;
+            }
+        }
+        check(bad == 0, "O1 the resolver's order over all 18 preference x presence rows");
+        check(strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0 &&
+              strcmp(audio_out_device_pcm("/dev/dsp1"), "plughw:1,0") == 0,
+              "O2 the Bluetooth path names plug:bluealsa (plug converts mono and odd rates)");
+        check(audio_out_sink_better("bluealsa", "/dev/dsp1") &&
+              audio_out_sink_better("bluealsa", "/dev/dsp") &&
+              audio_out_sink_better("/dev/dsp1", "/dev/dsp") &&
+              !audio_out_sink_better("/dev/dsp1", "bluealsa") &&
+              !audio_out_sink_better("/dev/dsp", "/dev/dsp") &&
+              !audio_out_sink_better("bluealsa", "bluealsa"),
+              "O3 a move goes only UP the BT > USB > onboard order, never sideways or down");
+
+        bool bt_ever = false;
+        for (int c = 0; c < AUDIO_OUT_CHOICE_COUNT; c++)
+            for (int u = 0; u < 2; u++)
+                if (audio_out_choice_next(c, u, false) == AUDIO_OUT_CHOICE_BT) bt_ever = true;
+        check(!bt_ever, "O4 with no Bluetooth sink a press never lands on BLUETOOTH, from any "
+                        "start and with or without USB");
+        check(!audio_out_choice_available(AUDIO_OUT_CHOICE_BT, true, false) &&
+              audio_out_choice_available(AUDIO_OUT_CHOICE_BT, false, true),
+              "O5 BLUETOOTH is listed only while a sink is present, independent of USB");
+        check(audio_out_choice_shown(AUDIO_OUT_CHOICE_BT, true, false) == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_shown(AUDIO_OUT_CHOICE_BT, false, true) == AUDIO_OUT_CHOICE_BT,
+              "O6 a saved bluetooth with no sink SHOWS as AUTO; CONTROL: present shows itself");
+        check(audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, true, true) == AUDIO_OUT_CHOICE_USB &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_USB, true, true)     == AUDIO_OUT_CHOICE_BT &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_BT, true, true)      == AUDIO_OUT_CHOICE_AUTO &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_AUTO, true, true)    == AUDIO_OUT_CHOICE_ONBOARD &&
+              audio_out_choice_next(AUDIO_OUT_CHOICE_ONBOARD, false, true) == AUDIO_OUT_CHOICE_BT,
+              "O7 with both present: onboard -> usb -> bluetooth -> auto; BT alone: onboard -> bluetooth");
+        check(audio_out_choice_of("bluetooth") == AUDIO_OUT_CHOICE_BT &&
+              strcmp(audio_out_choice_label(AUDIO_OUT_CHOICE_BT), "BLUETOOTH") == 0,
+              "O8 the persisted name and the button label");
+    }
+
+    printf("\n=== P. the Bluetooth probe window (pure) ===\n");
+    {
+        AudioOutBtGate g;
+        bool changed = false;
+
+        memset(&g, 0, sizeof(g));
+        check(!audio_out_bt_probe_due(&g, 0, 0, &changed),
+              "P1 no ACL link at the first look: no PCM probe at all");
+
+        memset(&g, 0, sizeof(g));
+        check(audio_out_bt_probe_due(&g, 0x1234, 0, &changed),
+              "P2 an ACL link at the first look: exactly one probe now");
+        int late = 0;
+        for (uint32_t t = 100; t <= 60000; t += 100)
+            if (audio_out_bt_probe_due(&g, 0x1234, t, &changed)) late++;
+        check(late == 0 && !changed,
+              "P3 an UNCHANGED link set never probes again (a keyboard and pad held "
+              "connected cost no PCM open)");
+
+        /* A change opens the window: probes at most once per second, for
+         * AUDIO_OUT_BT_WINDOW_MS, then nothing. */
+        int in_win = 0, after = 0;
+        uint32_t last = 0, min_gap = 0xFFFFFFFFu;
+        bool first = audio_out_bt_probe_due(&g, 0x5678, 70000, &changed);
+        check(first && changed, "P4 a changed link set probes at once and reports the change");
+        last = 70000;
+        for (uint32_t t = 70050; t <= 100000; t += 50) {
+            if (!audio_out_bt_probe_due(&g, 0x5678, t, &changed)) continue;
+            if (t - 70000 < AUDIO_OUT_BT_WINDOW_MS) in_win++; else after++;
+            if (t - last < min_gap) min_gap = t - last;
+            last = t;
+        }
+        printf("    window: %d probes after the first, %d after it closed, min gap %u ms\n",
+               in_win, after, min_gap);
+        check(in_win == (AUDIO_OUT_BT_WINDOW_MS / AUDIO_OUT_BT_PROBE_MS) - 1 &&
+              min_gap >= AUDIO_OUT_BT_PROBE_MS,
+              "P5 inside the window: one probe per second, never faster");
+        check(after == 0, "P6 the window closes: no probe after it");
+
+        check(!audio_out_bt_probe_due(&g, 0, 200000, &changed) && changed,
+              "P7 every link gone: a change, and no probe (nothing to find)");
+
+        /* The window arithmetic is unsigned, so it survives the ms clock wrap. */
+        memset(&g, 0, sizeof(g));
+        audio_out_bt_probe_due(&g, 1, 0xFFFFF000u, &changed);
+        audio_out_bt_probe_due(&g, 2, 0xFFFFFC00u, &changed);
+        check(audio_out_bt_probe_due(&g, 2, 0xFFFFFC00u + AUDIO_OUT_BT_PROBE_MS, &changed) &&
+              !audio_out_bt_probe_due(&g, 2, 0xFFFFFC00u + AUDIO_OUT_BT_WINDOW_MS + 5000u,
+                                      &changed),
+              "P8 across the 32-bit ms wrap the window still probes, then closes");
+    }
+
+    printf("\n=== Q. the ACL signature reads /sys/class/bluetooth names ===\n");
+    {
+        char dir[] = "/tmp/ao_bt_XXXXXX", p[96];
+        if (!mkdtemp(dir)) { check(false, "Q0 mkdtemp"); }
+        else {
+            snprintf(p, sizeof(p), "%s/hci0", dir);     mkdir(p, 0700);
+            uint32_t none = audio_out_bt_acl_signature(dir);
+            snprintf(p, sizeof(p), "%s/hci0:11", dir);  mkdir(p, 0700);
+            uint32_t one = audio_out_bt_acl_signature(dir);
+            snprintf(p, sizeof(p), "%s/hci0:12", dir);  mkdir(p, 0700);
+            uint32_t two = audio_out_bt_acl_signature(dir);
+            rmdir(p);
+            snprintf(p, sizeof(p), "%s/hci0:13", dir);  mkdir(p, 0700);
+            uint32_t swapped = audio_out_bt_acl_signature(dir);
+            check(none == 0, "Q1 the controller alone (hci0) is no link: signature 0");
+            check(one != 0 && two != 0 && one != two && swapped != two,
+                  "Q2 each link set, including one link replaced by another, signs differently");
+            check(audio_out_bt_acl_signature("/nonexistent/bt") == 0,
+                  "Q3 no Bluetooth class directory at all reads as no link");
+            snprintf(p, sizeof(p), "%s/hci0:11", dir); rmdir(p);
+            snprintf(p, sizeof(p), "%s/hci0:13", dir); rmdir(p);
+            snprintf(p, sizeof(p), "%s/hci0", dir);    rmdir(p);
+            rmdir(dir);
+        }
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",

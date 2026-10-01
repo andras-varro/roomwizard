@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <dirent.h>
 
 /* ── The device half, and nothing else ───────────────────────────────────────
  *
@@ -481,9 +482,14 @@ AudioOutErr audio_out_alsa_classify(int err)
     case EPIPE:    return AO_ERR_XRUN;
     case ESTRPIPE: return AO_ERR_SUSPEND;
     /* EBADFD is the state a PCM is left in once its card has gone — every call
-     * after the first ENODEV answers it, so it is the same "reopen" case. */
+     * after the first ENODEV answers it, so it is the same "reopen" case.
+     * ENOTCONN and ESHUTDOWN are the socket-shaped forms of the same loss: a
+     * BlueALSA PCM is a socket to bluealsad, and which errno a dropped A2DP
+     * transport surfaces as is not measured — so every plausible one reopens. */
     case ENODEV:
-    case EBADFD:   return AO_ERR_LOST;
+    case EBADFD:
+    case ENOTCONN:
+    case ESHUTDOWN: return AO_ERR_LOST;
     default:       return AO_ERR_OTHER;
     }
 }
@@ -506,9 +512,16 @@ AudioOutErr audio_out_alsa_classify(int err)
 
 #define AUDIO_DEV_ONBOARD "/dev/dsp"      /* TWL4030, the panel speaker */
 #define AUDIO_DEV_USB     "/dev/dsp1"     /* ALSA card 1, a USB DAC     */
+/* Not a node: the path-space name of the Bluetooth A2DP sink, which BlueALSA
+ * serves as an ALSA PCM with no OSS node behind it.  audio_out_device_pcm()
+ * maps it; nothing ever open()s it. */
+#define AUDIO_DEV_BT      "bluealsa"
+#define AUDIO_BT_PCM      "plug:bluealsa"
+#define AUDIO_BT_SYSFS    "/sys/class/bluetooth"
 
-/** "onboard" | "usb" | "auto".  Defaults to auto: a USB DAC when one is plugged in,
- *  the panel speaker otherwise. */
+/** "onboard" | "usb" | "bluetooth" | "auto".  Defaults to auto: a Bluetooth sink
+ *  when one is connected, else a USB DAC when one is plugged in, else the panel
+ *  speaker. */
 static char audio_dev_pref[16] = "auto";
 
 void audio_out_set_device_pref(const char *pref)
@@ -527,40 +540,63 @@ bool audio_out_usb_present(void)
     return access(AUDIO_DEV_USB, W_OK) == 0;
 }
 
-const char *audio_out_device_for(const char *pref, bool usb_present)
+/** Say a fallback from an explicit request once per process, not per resolve. */
+static void say_fallback_once(bool *said, const char *wanted, const char *used)
 {
-    bool want_usb = (pref && strcmp(pref, "usb")  == 0);
-    bool prefer   = (pref && strcmp(pref, "auto") == 0);
-
-    if (!want_usb && !prefer) return AUDIO_DEV_ONBOARD;
-    if (usb_present) return AUDIO_DEV_USB;
-
-    /* ⚠️ Both non-onboard settings fall back rather than opening a path that is
-     * not there: a games panel that has gone mute with no explanation is worse
-     * than one on the wrong speaker.  The two differ only in whether the
-     * fallback is reported — "auto" means unplugging is expected, "usb" was an
-     * explicit request that could not be honoured, so it says so once. */
-    if (want_usb) {
-        static bool said = false;
-        if (!said) {
-            fprintf(stderr, "audio_out: %s requested but absent — using %s\n",
-                    AUDIO_DEV_USB, AUDIO_DEV_ONBOARD);
-            said = true;
-        }
-    }
-    return AUDIO_DEV_ONBOARD;
+    if (*said) return;
+    fprintf(stderr, "audio_out: %s requested but absent — using %s\n", wanted, used);
+    *said = true;
 }
 
-/* The settings page's list (audio_out.h).  `needs_usb` is the whole
- * availability rule today; a Bluetooth row brings its own flag and input. */
+const char *audio_out_device_for(const char *pref, bool usb_present, bool bt_present)
+{
+    bool want_usb = (pref && strcmp(pref, "usb")       == 0);
+    bool want_bt  = (pref && strcmp(pref, "bluetooth") == 0);
+    bool prefer   = (pref && strcmp(pref, "auto")      == 0);
+
+    if (!want_usb && !want_bt && !prefer) return AUDIO_DEV_ONBOARD;
+    if ((want_bt || prefer) && bt_present) return AUDIO_DEV_BT;
+    const char *rest = usb_present ? AUDIO_DEV_USB : AUDIO_DEV_ONBOARD;
+
+    /* ⚠️ Every non-onboard setting falls back rather than opening a sink that is
+     * not there: a games panel that has gone mute with no explanation is worse
+     * than one on the wrong speaker.  "auto" means unplugging is expected and
+     * falls back silently; "usb" and "bluetooth" were explicit requests that
+     * could not be honoured, so each says so once.  "bluetooth" falls back the
+     * way "auto" does once Bluetooth is out of the running: USB, else onboard. */
+    static bool said_usb = false, said_bt = false;
+    if (want_usb && !usb_present) say_fallback_once(&said_usb, AUDIO_DEV_USB, rest);
+    if (want_bt)                  say_fallback_once(&said_bt, AUDIO_BT_PCM, rest);
+    return rest;
+}
+
+/** Position in the one order every preference is a subsequence of. */
+static int sink_rank(const char *path)
+{
+    if (!path) return -1;
+    if (strcmp(path, AUDIO_DEV_BT)  == 0) return 2;
+    if (strcmp(path, AUDIO_DEV_USB) == 0) return 1;
+    return 0;
+}
+
+bool audio_out_sink_better(const char *candidate, const char *open_path)
+{
+    if (!candidate || !open_path) return false;
+    return sink_rank(candidate) > sink_rank(open_path);
+}
+
+/* The settings page's list (audio_out.h).  An entry is listed only while the
+ * hardware it needs is attached: `needs_usb` / `needs_bt`. */
 static const struct {
     const char *name;
     const char *label;
     bool        needs_usb;
+    bool        needs_bt;
 } audio_out_choices[AUDIO_OUT_CHOICE_COUNT] = {
-    [AUDIO_OUT_CHOICE_ONBOARD] = { "onboard", "ONBOARD", false },
-    [AUDIO_OUT_CHOICE_USB]     = { "usb",     "USB",     true  },
-    [AUDIO_OUT_CHOICE_AUTO]    = { "auto",    "AUTO",    false },
+    [AUDIO_OUT_CHOICE_ONBOARD] = { "onboard",   "ONBOARD",   false, false },
+    [AUDIO_OUT_CHOICE_USB]     = { "usb",       "USB",       true,  false },
+    [AUDIO_OUT_CHOICE_BT]      = { "bluetooth", "BLUETOOTH", false, true  },
+    [AUDIO_OUT_CHOICE_AUTO]    = { "auto",      "AUTO",      false, false },
 };
 
 static int choice_valid(int c)
@@ -585,26 +621,27 @@ int audio_out_choice_of(const char *name)
     return AUDIO_OUT_CHOICE_ONBOARD;
 }
 
-bool audio_out_choice_available(int choice, bool usb_present)
+bool audio_out_choice_available(int choice, bool usb_present, bool bt_present)
 {
     if (choice < 0 || choice >= AUDIO_OUT_CHOICE_COUNT) return false;
-    return !audio_out_choices[choice].needs_usb || usb_present;
+    return (!audio_out_choices[choice].needs_usb || usb_present) &&
+           (!audio_out_choices[choice].needs_bt  || bt_present);
 }
 
-int audio_out_choice_shown(int saved, bool usb_present)
+int audio_out_choice_shown(int saved, bool usb_present, bool bt_present)
 {
     if (saved < 0 || saved >= AUDIO_OUT_CHOICE_COUNT) return AUDIO_OUT_CHOICE_ONBOARD;
-    return audio_out_choice_available(saved, usb_present) ? saved
-                                                          : AUDIO_OUT_CHOICE_AUTO;
+    return audio_out_choice_available(saved, usb_present, bt_present)
+               ? saved : AUDIO_OUT_CHOICE_AUTO;
 }
 
-int audio_out_choice_next(int shown, bool usb_present)
+int audio_out_choice_next(int shown, bool usb_present, bool bt_present)
 {
     int c = choice_valid(shown);
     /* A wrap by comparison, not `%`: this file runs on a core with no divide. */
     for (int i = 0; i < AUDIO_OUT_CHOICE_COUNT; i++) {
         if (++c == AUDIO_OUT_CHOICE_COUNT) c = 0;
-        if (audio_out_choice_available(c, usb_present)) return c;
+        if (audio_out_choice_available(c, usb_present, bt_present)) return c;
     }
     return AUDIO_OUT_CHOICE_AUTO;   /* unreachable while AUTO needs nothing */
 }
@@ -622,18 +659,105 @@ static bool usb_usable(void)
     return present && !usb_refused;
 }
 
+/* ── Bluetooth presence (audio_out.h has the rule) ───────────────────────── */
+
+uint32_t audio_out_bt_acl_signature(const char *sysfs_dir)
+{
+    DIR *d = sysfs_dir ? opendir(sysfs_dir) : NULL;
+    if (!d) return 0;
+    uint32_t sum = 0, mix = 0, n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        /* One `hciN:H` entry per ACL link on 4.14; `hciN` alone is the controller. */
+        if (strncmp(e->d_name, "hci", 3) != 0 || !strchr(e->d_name, ':')) continue;
+        uint32_t h = 2166136261u;                       /* FNV-1a */
+        for (const char *p = e->d_name; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+        sum += h;                                       /* readdir order is not ours: */
+        mix ^= h * 2654435761u;                         /* combine commutatively      */
+        n++;
+    }
+    closedir(d);
+    if (n == 0) return 0;
+    uint32_t sig = (sum ^ (mix << 7) ^ (mix >> 25)) + n;
+    return sig ? sig : 1;                               /* 0 is reserved for "none" */
+}
+
+bool audio_out_bt_probe_due(AudioOutBtGate *g, uint32_t sig, uint32_t now_ms,
+                            bool *changed)
+{
+    if (changed) *changed = false;
+    if (!g) return false;
+
+    if (!g->have_sig || sig != g->sig) {
+        bool first = !g->have_sig;
+        g->have_sig = true;
+        g->sig      = sig;
+        g->window   = false;
+        if (changed) *changed = true;
+        if (sig == 0) return false;          /* no link: nothing a probe could find */
+        /* The first look probes once and opens no window: a link that predates
+         * the process is the keyboard nobody is connecting right now. */
+        if (!first) {
+            g->window          = true;
+            g->window_start_ms = now_ms;
+        }
+        g->last_probe_ms = now_ms;
+        return true;
+    }
+    if (!g->window) return false;
+    if ((uint32_t)(now_ms - g->window_start_ms) >= AUDIO_OUT_BT_WINDOW_MS) {
+        g->window = false;
+        return false;
+    }
+    if ((uint32_t)(now_ms - g->last_probe_ms) < AUDIO_OUT_BT_PROBE_MS) return false;
+    g->last_probe_ms = now_ms;
+    return true;
+}
+
+static uint32_t probe_now_ms(void);
+/** The real probe: defined by the backend below (the host stub answers false). */
+static bool bt_probe_pcm(void);
+
+static AudioOutBtGate bt_gate;
+static bool bt_seen_present = false;  /* the last probe's answer                  */
+static bool bt_refused      = false;  /* a sink that would not open: until a change */
+
+bool audio_out_bt_present(void)
+{
+    bool changed = false;
+    uint32_t sig = audio_out_bt_acl_signature(AUDIO_BT_SYSFS);
+    bool due = audio_out_bt_probe_due(&bt_gate, sig, probe_now_ms(), &changed);
+    if (changed) {
+        bt_refused = false;
+        if (sig == 0) bt_seen_present = false;
+    }
+    if (due) bt_seen_present = bt_probe_pcm();
+    return bt_seen_present;
+}
+
+static bool bt_usable(void)
+{
+    return audio_out_bt_present() && !bt_refused;
+}
+
 const char *audio_out_device_path(void)
 {
-    return audio_out_device_for(audio_dev_pref, usb_usable());
+    /* Bluetooth is asked only under a preference that can pick it: the probe
+     * can open a PCM, and "onboard" / "usb" would throw the answer away. */
+    bool can_bt = strcmp(audio_dev_pref, "auto") == 0 ||
+                  strcmp(audio_dev_pref, "bluetooth") == 0;
+    bool usb = usb_usable();
+    return audio_out_device_for(audio_dev_pref, usb, can_bt && bt_usable());
 }
 
 /* The ALSA name for the same device.  OSS minor N is ALSA card N here, because
- * the OSS nodes are the kernel's emulation over those very cards.  Only the two
- * nodes the resolver can return are named; anything else is onboard, the same
+ * the OSS nodes are the kernel's emulation over those very cards.  Only the
+ * paths the resolver can return are named; anything else is onboard, the same
  * fallback it has. */
 const char *audio_out_device_pcm(const char *path)
 {
     if (path && strcmp(path, AUDIO_DEV_USB) == 0) return "plughw:1,0";
+    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return AUDIO_BT_PCM;
     return "plughw:0,0";
 }
 
@@ -692,31 +816,60 @@ typedef struct {
     snd_pcm_uframes_t  buffer;
     bool               lost_said;
     unsigned           write_xruns;   /* underruns met by writei — counted nowhere else */
+    unsigned           hard_fails;    /* consecutive failed space/write calls          */
 } AlsaCtx;
 
 static AlsaCtx g_alsa;
 
+/** Hand a dead stream up as ENODEV — the one errno the generic layer turns into
+ *  audio_out_device_lost(), which is what makes the owner reopen. */
+static int alsa_gone(AlsaCtx *a, int err)
+{
+    if (!a->lost_said) {
+        fprintf(stderr, "audio_out: %s is gone (%s)\n", a->name, snd_strerror(err));
+        a->lost_said = true;
+    }
+    errno = ENODEV;
+    return -1;
+}
+
 /** An XRUN or a suspend is recovered in place; a lost device is reported once
- *  and handed up as ENODEV.  Returns 0 if the caller may retry. */
+ *  and handed up as ENODEV.  Returns 0 if the caller may retry.
+ *
+ *  ⚠️ A recovery that itself FAILS is a lost device too, not an error to count.
+ *  On a card the stub and the measurements agree that prepare fails only once
+ *  the card is gone (-ENODEV, already LOST); on a BlueALSA PCM whose transport
+ *  dropped, what prepare answers is unmeasured, and handing anything but ENODEV
+ *  up would leave the stream erroring every service with no reopen — silence. */
 static int alsa_recover(AlsaCtx *a, int err)
 {
+    int rc;
     switch (audio_out_alsa_classify(err)) {
     case AO_ERR_XRUN:
-        return snd_pcm_prepare(a->pcm) < 0 ? -1 : 0;
+        if ((rc = snd_pcm_prepare(a->pcm)) >= 0) return 0;
+        return alsa_gone(a, rc);
     case AO_ERR_SUSPEND:
-        if (snd_pcm_resume(a->pcm) < 0 && snd_pcm_prepare(a->pcm) < 0) return -1;
-        return 0;
+        if (snd_pcm_resume(a->pcm) >= 0) return 0;
+        if ((rc = snd_pcm_prepare(a->pcm)) >= 0) return 0;
+        return alsa_gone(a, rc);
     case AO_ERR_LOST:
-        if (!a->lost_said) {
-            fprintf(stderr, "audio_out: %s is gone (%s)\n", a->name, snd_strerror(err));
-            a->lost_said = true;
-        }
-        errno = ENODEV;
-        return -1;
+        return alsa_gone(a, err);
     default:
         errno = (err < 0) ? -err : EIO;
         return -1;
     }
+}
+
+/** A failure the generic layer would only count.  Consecutive ones past
+ *  ALSA_HARD_FAILS_LOST are escalated to a lost device: an EIO/EPIPE that
+ *  recurs on every service is a stall, and a reopen is the only way out of it.
+ *  Any success resets the run. */
+#define ALSA_HARD_FAILS_LOST 8
+static int alsa_hard_fail(AlsaCtx *a)
+{
+    if (errno == ENODEV) return -1;
+    if (++a->hard_fails >= ALSA_HARD_FAILS_LOST) return alsa_gone(a, -errno);
+    return -1;
 }
 
 static int alsa_open(void *ctx, int rate_req, int channels_req,
@@ -770,6 +923,18 @@ static int alsa_open(void *ctx, int rate_req, int channels_req,
     snd_pcm_hw_params_get_period_size(hw, &period, &dir);
     snd_pcm_hw_params_get_buffer_size(hw, &buffer);
 
+    /* ⚠️ Refuse a ring longer than two seconds rather than play into it.  The
+     * geometry above is a request whose refusal is tolerated, and plug:bluealsa
+     * offers buffers up to ~2e8 frames: measured on .188, speaker-test left to
+     * the PCM's own choice took the maximum and played nothing audible.  A
+     * refused open falls back like any other (audio_out_open_resolved()). */
+    if ((unsigned long)buffer > 2UL * (unsigned long)rate) {
+        fprintf(stderr, "audio_out: %s granted a %lu-frame ring at %u Hz — refused\n",
+                a->name, (unsigned long)buffer, rate);
+        err = -EINVAL;
+        goto fail;
+    }
+
     /* Start at one period queued, so the prefill's silence is what starts the
      * stream — and what restarts it after an XRUN's prepare. */
     snd_pcm_sw_params_t *sw;
@@ -784,6 +949,7 @@ static int alsa_open(void *ctx, int rate_req, int channels_req,
     a->frame_bytes = (int)ch * AUDIO_BYTES_PER_SAMPLE;
     a->lost_said   = false;
     a->write_xruns = 0;
+    a->hard_fails  = 0;
 
     *rate_granted     = (int)rate;
     *bits_granted     = snd_pcm_format_width(SND_PCM_FORMAT_S16_LE);
@@ -818,11 +984,11 @@ static int alsa_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
      * (measured up to ~1.8k frames, under one period, on a healthy stream). */
     snd_pcm_sframes_t avail = snd_pcm_avail(a->pcm);
     if (avail < 0) {
-        if (alsa_recover(a, (int)avail) != 0) return -1;
+        if (alsa_recover(a, (int)avail) != 0) return alsa_hard_fail(a);
         avail = snd_pcm_avail(a->pcm);
         if (avail < 0) {
-            alsa_recover(a, (int)avail);   /* for its errno and its one report */
-            return -1;
+            if (alsa_recover(a, (int)avail) == 0) errno = EIO;  /* errno + one report */
+            return alsa_hard_fail(a);
         }
     }
 
@@ -849,7 +1015,7 @@ static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again
      * empty, so a second failure is not another underrun. */
     for (int attempt = 0; attempt < 2; attempt++) {
         snd_pcm_sframes_t r = snd_pcm_writei(a->pcm, buf, frames);
-        if (r >= 0) return (ssize_t)r * a->frame_bytes;
+        if (r >= 0) { a->hard_fails = 0; return (ssize_t)r * a->frame_bytes; }
         if (audio_out_alsa_classify((int)r) == AO_ERR_AGAIN) {
             *again = true;
             errno  = EAGAIN;
@@ -861,10 +1027,10 @@ static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again
         if (audio_out_alsa_classify((int)r) == AO_ERR_XRUN && ++a->write_xruns <= 200)
             fprintf(stderr, "audio_out: %s underran at the write (%u this stream)\n",
                     a->name, a->write_xruns);
-        if (alsa_recover(a, (int)r) != 0) return -1;
+        if (alsa_recover(a, (int)r) != 0) return alsa_hard_fail(a);
     }
     errno = EIO;
-    return -1;
+    return alsa_hard_fail(a);
 }
 
 /* usleep, not snd_pcm_wait(): the serviced policy's wait of 0 must stay a
@@ -881,6 +1047,19 @@ static void alsa_close(void *ctx)
 {
     AlsaCtx *a = (AlsaCtx *)ctx;
     if (a->pcm) { snd_pcm_close(a->pcm); a->pcm = NULL; }
+}
+
+/* The Bluetooth presence probe: open the sink's PCM and close it again.  Run
+ * only inside audio_out_bt_present()'s window.  Our own live stream on it is
+ * an answer without a second open, and EBUSY means a sink is there but held —
+ * present either way, so a settings page never hides the sink being played. */
+static bool bt_probe_pcm(void)
+{
+    if (g_alsa.pcm && g_alsa.name && strcmp(g_alsa.name, AUDIO_BT_PCM) == 0) return true;
+    snd_pcm_t *p = NULL;
+    int err = snd_pcm_open(&p, AUDIO_BT_PCM, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (err == 0) { snd_pcm_close(p); return true; }
+    return err == -EBUSY;
 }
 
 static const AudioOutDev ALSA_DEV = {
@@ -920,6 +1099,12 @@ int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channe
     return -1;
 }
 
+/* No libasound, so no BlueALSA sink can be opened: never present. */
+static bool bt_probe_pcm(void)
+{
+    return false;
+}
+
 #endif /* AUDIO_OUT_HAVE_ALSA */
 
 /* ── The opener ─────────────────────────────────────────────────────────── */
@@ -938,7 +1123,8 @@ const char *audio_out_backend_name(void)
 
 /* ── Reopen, fallback and replug ────────────────────────────────────────────
  * Both stream owners (audio.c and ScummVM's mixer) open through here and poll
- * audio_out_usb_returned(), so a DAC that comes and goes is handled one way. */
+ * audio_out_usb_returned(), so a DAC or a Bluetooth sink that comes and goes
+ * is handled one way. */
 
 /** The name the log lines use: the ALSA PCM the node maps to — the same name
  *  both owners print at open. */
@@ -956,41 +1142,60 @@ static uint32_t probe_now_ms(void)
     return audio_ms_from_timeval((long)tv.tv_sec, (long)tv.tv_usec);
 }
 
+/** The resolver's static string for `path`, so open_path compares by value. */
+static const char *canonical_path(const char *path)
+{
+    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return AUDIO_DEV_BT;
+    if (path && strcmp(path, AUDIO_DEV_USB) == 0) return AUDIO_DEV_USB;
+    return AUDIO_DEV_ONBOARD;
+}
+
 static int open_on(AudioOut *out, const char *path, int rate_req, int channels_req)
 {
     if (audio_out_open_default(out, path, rate_req, channels_req) != 0) return -1;
-    out->open_path       = strcmp(path, AUDIO_DEV_USB) == 0 ? AUDIO_DEV_USB
-                                                             : AUDIO_DEV_ONBOARD;
+    out->open_path       = canonical_path(path);
     out->reprobe_last_ms = probe_now_ms();
-    out->usb_seen        = false;
+    out->better_seen     = false;
     return 0;
 }
 
 int audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
                             const char **path_out)
 {
-    const char *path = audio_out_device_path();
-    if (open_on(out, path, rate_req, channels_req) != 0) {
-        if (strcmp(path, AUDIO_DEV_USB) != 0) return -1;
-        /* ⚠️ Refuse it, then resolve again: the second resolution is the panel,
-         * and the reopen below goes to the PCM that resolution names. */
-        usb_refused = true;
-        fprintf(stderr, "audio_out: %s will not open — using %s until it is "
-                "replugged\n", device_label(AUDIO_DEV_USB),
-                device_label(AUDIO_DEV_ONBOARD));
-        path = audio_out_device_path();
-        if (open_on(out, path, rate_req, channels_req) != 0) return -1;
+    /* ⚠️ A sink that will not open is refused, then the device is resolved
+     * again and the next sink down tried — Bluetooth, then USB, then onboard,
+     * so at most three opens.  Onboard failing is the end: nothing is below it. */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        const char *path = audio_out_device_path();
+        if (open_on(out, path, rate_req, channels_req) == 0) {
+            if (path_out) *path_out = out->open_path;
+            return 0;
+        }
+        if (strcmp(path, AUDIO_DEV_BT) == 0) {
+            bt_refused = true;
+            fprintf(stderr, "audio_out: %s will not open — not using it until a "
+                    "Bluetooth link changes\n", device_label(AUDIO_DEV_BT));
+        } else if (strcmp(path, AUDIO_DEV_USB) == 0) {
+            usb_refused = true;
+            fprintf(stderr, "audio_out: %s will not open — not using it until it "
+                    "is replugged\n", device_label(AUDIO_DEV_USB));
+        } else {
+            return -1;
+        }
     }
-    if (path_out) *path_out = out->open_path;
-    return 0;
+    return -1;
 }
 
 bool audio_out_reprobe_due(const char *pref, const char *open_path,
                            uint32_t now_ms, uint32_t last_ms)
 {
     if (!pref || !open_path) return false;
-    if (strcmp(open_path, AUDIO_DEV_ONBOARD) != 0) return false;
-    if (strcmp(pref, "usb") != 0 && strcmp(pref, "auto") != 0) return false;
+    /* The best sink this preference can ever resolve to. */
+    const char *best;
+    if (strcmp(pref, "usb") == 0)                                   best = AUDIO_DEV_USB;
+    else if (strcmp(pref, "auto") == 0 || strcmp(pref, "bluetooth") == 0) best = AUDIO_DEV_BT;
+    else return false;
+    if (!audio_out_sink_better(best, open_path)) return false;
     return (uint32_t)(now_ms - last_ms) >= AUDIO_OUT_REPROBE_MS;
 }
 
@@ -1004,15 +1209,17 @@ bool audio_out_usb_returned(AudioOut *out)
         return false;
     out->reprobe_last_ms = now;
 
-    /* Two consecutive sightings: the node can exist before the card will open,
-     * and a move that fails there costs the card a refusal until it is
-     * unplugged again. */
-    bool usable = usb_usable();
-    bool before = out->usb_seen;
-    out->usb_seen = usable;
-    if (!usable || !before) return false;
+    /* Two consecutive sightings: a node or a transport can exist before it will
+     * open, and a move that fails there costs the sink a refusal until it is
+     * unplugged or reconnected.  Only a move UP counts: the current sink
+     * flickering out of a probe is not a reason to leave it. */
+    const char *target = audio_out_device_path();
+    bool better = audio_out_sink_better(target, out->open_path);
+    bool before = out->better_seen;
+    out->better_seen = better;
+    if (!better || !before) return false;
 
-    fprintf(stderr, "audio_out: %s is back — leaving %s\n",
-            device_label(AUDIO_DEV_USB), device_label(out->open_path));
+    fprintf(stderr, "audio_out: %s is available — leaving %s\n",
+            device_label(target), device_label(out->open_path));
     return true;
 }
