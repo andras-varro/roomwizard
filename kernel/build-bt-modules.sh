@@ -23,15 +23,15 @@ ARCH="arm"
 OUT_DIR=""
 REUSE=0
 
-# scripts/config verb + symbol. RFKILL and BT_RFCOMM stay off on purpose.
+# scripts/config verb + symbol. RFKILL stays off on purpose. BT_RFCOMM is built for BlueALSA's hfp-ag.
 CONFIG_WANT=(
     "module BT" "enable BT_BREDR" "enable BT_LE" "module BT_HIDP"
     "module BT_HCIBTUSB" "enable BT_HCIBTUSB_BCM" "enable BT_HCIBTUSB_RTL"
     "module UHID" "module CRYPTO_USER_API_HASH" "module CRYPTO_USER_API_SKCIPHER"
-    "module INPUT_UINPUT" "disable RFKILL" "disable BT_RFCOMM"
+    "module INPUT_UINPUT" "disable RFKILL" "module BT_RFCOMM"
 )
 # Modules wanted by name. Their symbol dependencies are added from each .modinfo depends= field.
-ROOTS=(bluetooth btusb hidp uhid uinput algif_hash algif_skcipher)
+ROOTS=(bluetooth btusb hidp rfcomm uhid uinput algif_hash algif_skcipher)
 # Reached only through crypto_alloc_*() / request_module(), so no `depends=` line names them:
 # SMP's cmac(aes) and ecdh, bluetoothd's AF_ALG ecb(aes) and cmac(aes), cryptomgr to instantiate
 # any template, and the default RNG that ecdh_generic's key generation can ask for. They are

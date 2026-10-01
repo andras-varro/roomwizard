@@ -289,9 +289,12 @@ for a in "${BT_ARTIFACTS[@]}"; do dev="${a##*|}"; DIRS+=("${dev%/*}"); done
 ssh "$DEVICE" "mkdir -p $(printf '%s\n' "${DIRS[@]}" | sort -u | tr '\n' ' ')"
 for a in "${BT_ARTIFACTS[@]}"; do
     mode="${a%%|*}"; rest="${a#*|}"; src="${rest%%|*}"; dev="${rest#*|}"
-    scp -q "$src" "$DEVICE:$dev" || err "could not copy $src to $dev"
+    # Beside the target, then a rename: a running btmon (which stop does not end) makes a
+    # write over /usr/bin/btmon fail with "Text file busy"; replacing the entry does not.
+    scp -q "$src" "$DEVICE:$dev.rw-new" || err "could not copy $src to $dev"
     # shellcheck disable=SC2029
-    ssh "$DEVICE" "chmod $mode '$dev'"
+    ssh "$DEVICE" "chmod $mode '$dev.rw-new' && mv -f '$dev.rw-new' '$dev'" \
+        || err "could not install $dev"
 done
 ok "${#BT_ARTIFACTS[@]} file(s) copied"
 echo ""

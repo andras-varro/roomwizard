@@ -19,7 +19,10 @@
 # backgrounded, logging to syslog with -S. It is GIO: the vendor libgio's compiled-in system
 # bus is /var/run/dbus/system_bus_socket, which does not exist here, so the address is
 # exported. It registers its endpoints whenever org.bluez appears, so it need not wait for
-# bluetoothd.
+# bluetoothd. hfp-ag is there for reconnection, not for calls: measured on .188 with a Sony
+# WI-C310, a bonded headset powered on again pages back only a host that offers the
+# Handsfree Audio Gateway -- A2DP alone, the btmon capture shows no Connect Request at all;
+# with hfp-ag it connects within seconds. It needs rfcomm.ko (kernel/build-bt-modules.sh).
 #
 # start exits 0 whatever happens: a unit with no dongle and no modules must still boot.
 
@@ -67,7 +70,7 @@ start_bluealsa() {
     return 0
   fi
   DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket \
-    "$BLUEALSA" -S -p a2dp-source </dev/null >/dev/null 2>&1 &
+    "$BLUEALSA" -S -p a2dp-source -p hfp-ag </dev/null >/dev/null 2>&1 &
   echo "  bluealsa started (pid $!)"
 }
 
