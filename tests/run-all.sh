@@ -116,6 +116,7 @@ CTEST_ROWS=(
     "audio_out_test|-I common|common/audio_out.c common/audio_gen.c"
     "audio_sample_test|-I.|common/audio_wav.c common/audio_gen.c"
     "audio_tone_test|-I.|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
+    "bt_ctl_test|-I.|control_panel/bt_ctl.c"
     "button_latch_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "bezel_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "config_test|-I common|common/config.c"

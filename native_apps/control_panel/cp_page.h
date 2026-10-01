@@ -72,6 +72,15 @@ extern const CpPage cp_usb_page;       /* usb_page.c */
 extern const CpPage cp_input_page;     /* input_page.c */
 extern const CpPage cp_audio_page;     /* audio_page.c */
 extern const CpPage cp_display_page;   /* display_page.c */
+extern const CpPage cp_bluetooth_page; /* bluetooth_page.c */
+
+/* The Audio page's OUT setting, for another page that offers a shortcut to it
+ * (the Bluetooth page's USE FOR AUDIO).  One writer: cp_audio_set_output()
+ * goes through audio_page.c's own persist, so the Audio page's on-screen
+ * choice, the in-memory Config and the file stay one value.  choice is an
+ * AudioOutChoice (common/audio_out.h); cp_audio_output() is the SAVED one. */
+int  cp_audio_output(void);
+void cp_audio_set_output(Config *cfg, int choice);
 
 /* Implemented in control_panel.c, for pages. */
 

@@ -88,6 +88,17 @@ static void audio_persist(const AudioPageState *s, Config *mem) {
     }
 }
 
+/* cp_page.h: OUT for another page's shortcut, through the same state and the
+ * same persist as the OUT button, so there is one writer of audio_device.  An
+ * open bus follows it on the Audio page's next input(). */
+int cp_audio_output(void) { return audio_state.dev_idx; }
+
+void cp_audio_set_output(Config *cfg, int choice) {
+    if (choice < 0 || choice >= AUDIO_OUT_CHOICE_COUNT) return;
+    audio_state.dev_idx = choice;
+    audio_persist(&audio_state, cfg);
+}
+
 static void page_audio_close(void) {
     if (!page_audio_open) return;
     audio_close(&page_audio);

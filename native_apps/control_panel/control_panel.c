@@ -9,6 +9,8 @@
  *                  SCREEN EDGES and the display tests (display_page.c)
  *   LED          — enable, brightness and the LED tests (led_page.c)
  *   USB          — the bus list and RESCAN (usb_page.c)
+ *   Bluetooth    — power, scan, pair/trust/connect/remove, agent prompts,
+ *                  USE FOR AUDIO (bluetooth_page.c, over bt_ctl.c)
  *   Input        — the keyboard/mouse/pad testers, on any bus (input_page.c)
  *   Network      — gateway, DNS and every interface (network_page.c)
  *   Monitor      — live uptime, load, memory and storage (monitor_page.c)
@@ -98,13 +100,14 @@ typedef enum {
 
 /* The home grid, and the page registry: one tile per CpPage, in this order,
  * taking its label and icon from the page (one name, one home); every page
- * named here is loaded, laid out and reset through it.  Bluetooth has no page
- * yet, so no tile.  A page's icon NULL = the grid's letter tile. */
+ * named here is loaded, laid out and reset through it.  A page's icon NULL =
+ * the grid's letter tile. */
 static const CpPage *const home_pages[] = {
     &cp_audio_page,
     &cp_display_page,
     &cp_led_page,
     &cp_usb_page,
+    &cp_bluetooth_page,
     &cp_input_page,
     &cp_network_page,
     &cp_monitor_page,
