@@ -22,7 +22,7 @@
 #      → generate → offer to install → install → RE-PROBE → usable. Only the
 #      credential step is faked; the server is real, so "the key was copied and the
 #      server still refuses it" is a state this can actually reach.
-#   E  the eight call sites are wired to the shared gate, and no raw probe or
+#   E  every call site is wired to the shared gate, and no raw probe or
 #      drifted message survives. ⚠️ THE group that fails against the pre-fix tree —
 #      see the count in the header below.
 #   F  key generation and, separately, the ownership decision behind it.
@@ -515,7 +515,7 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "E. the eight call sites are wired to the shared gate"
+echo "E. every call site is wired to the shared gate"
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # ⚠️ THE group that must fail against the pre-fix tree. Eight raw probes, already
@@ -529,6 +529,7 @@ roomwizard.sh
 native_apps/build-and-deploy.sh
 vnc_client/build-and-deploy.sh
 usb_host/build-and-deploy.sh
+bluetooth/build-and-deploy.sh
 scummvm-roomwizard/build-and-deploy.sh
 "
 

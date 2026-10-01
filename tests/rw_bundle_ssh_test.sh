@@ -337,7 +337,7 @@ RW_SSH="$DEADSSH" rw_bundle_clear_stamp fake-target >/dev/null 2>&1 \
 # and a single component's build-and-deploy.sh did not, so a unit could end up with a
 # stamp naming a release whose bytes had been overwritten one component at a time.
 # Text checks, because the alternative is four devices.
-for comp in native_apps vnc_client scummvm-roomwizard usb_host; do
+for comp in native_apps vnc_client scummvm-roomwizard usb_host bluetooth; do
     if grep -q 'rw_bundle_clear_stamp' "$REPO_DIR/$comp/build-and-deploy.sh"; then
         ok "E9 $comp/build-and-deploy.sh clears the stamp"
     else

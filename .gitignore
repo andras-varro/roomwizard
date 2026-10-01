@@ -13,6 +13,7 @@ scummvm-roomwizard/arm-deps*/
 native_apps/arm-deps*/
 bluetooth/arm-deps*/
 bluetooth/staging/
+bluetooth/modules/
 
 # Upstream ScummVM source tree, configured in place for the cross-build. Not
 # owned by this repo - scummvm-roomwizard/ holds our backend port.

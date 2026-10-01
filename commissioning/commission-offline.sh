@@ -953,6 +953,11 @@ case " $NO_PROV_GROUPS " in
                     "$BASE/root/etc/rc5.d/S90usb-host")
        LINK_NAMES="$LINK_NAMES, S89, S90" ;;
 esac
+case " $NO_PROV_GROUPS " in
+    *" bluetooth "*) ;;
+    *) BOOT_LINKS+=("$BASE/root/etc/rc5.d/S91bluetooth")
+       LINK_NAMES="$LINK_NAMES, S91" ;;
+esac
 for l in "${BOOT_LINKS[@]}"; do
     [[ -L "$l" ]] || { vfail "missing boot link: ${l#$BASE/root}"; LINKBAD=1; continue; }
     # A relative link resolves against its own directory, so test it from there —

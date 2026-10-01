@@ -15,7 +15,7 @@ directory are in [`CLAUDE.md`](CLAUDE.md).
 | `dts/*.sh` | scripts that edit the vendor DTB `usb_host/original.dtb` in place with `fdtput`, run as `bash <script> <dtb>` |
 | `drivers/cy8ctmg120_ts/` | out-of-tree touch driver (`.c` + `Kbuild`), GPL-2.0-only, adapted from vanilla `cy8ctmg110_ts.c`; binds the unchanged `panjit_ts` DT node and names its input device `panjit_ts` |
 | `build-modules.sh` | builds every `drivers/*/` with a `Kbuild` via `M=` against the tree `build-image.sh` left in WSL `$HOME`; `--out <dir>` receives the `.ko`, which loads only on our image |
-| `build-bt-modules.sh` | builds the 18 Bluetooth modules (`BT=m` and dependencies) from a copy of the image's tree, so no p1 write; `kernel/patches-modules/*.patch` are applied here only and `build-image.sh` never reads them |
+| `build-bt-modules.sh` | builds the 17 Bluetooth modules (`BT=m` and dependencies) from a copy of the image's tree, so no p1 write; `kernel/patches-modules/*.patch` are applied here only and `build-image.sh` never reads them |
 | `tools/i2c_touch_read.c` | userspace burst reader for the touch controller over `/dev/i2c-N`; it never writes to the part |
 
 ## Building an image
@@ -64,13 +64,14 @@ power patch).
 
 ## Bluetooth modules
 
-`build-bt-modules.sh` makes 18 modules with `BT=m`: `bluetooth`, `btusb`, `btrtl`, `hidp`, `uhid`, `uinput`,
+`build-bt-modules.sh` makes 17 modules with `BT=m`: `bluetooth`, `btusb`, `btrtl`, `hidp`, `uhid`, `uinput`,
 `ecdh_generic`, `af_alg`, `algif_hash`, `algif_skcipher` and the crypto set `cmac`, `ecb`, `sha256_generic`,
 `hmac`, `drbg`. **Measured:** the relinked `vmlinux` is byte-identical to the image's and all 762 imported
-CRCs match; on `.188` all load by `insmod` except `jitterentropy_rng` (`host not compliant with requirements:
-2`, harmless — `drbg` loads without it). Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`
-and `CONFIG_MODULE_SIG` is unset. Nothing loads them at boot, and no script deploys them or the firmware:
-both sit on `.188` only (`/lib/modules/4.14.52/bt/`, `/lib/firmware/rtl_bt/`).
+CRCs match; on `.188` all load by `insmod`. `jitterentropy_rng` is not collected: `insmod` refuses it there
+(`host not compliant with requirements: 2`) and `drbg` loads without it. Loadable because `CONFIG_MODULES=y`,
+`CONFIG_MODULE_FORCE_LOAD=y` and `CONFIG_MODULE_SIG` is unset. `load-order.txt` puts the crypto modules first,
+ahead of `btusb`, whose adapter probe allocates `cmac(aes)` and `ecdh`. The `bluetooth/` component deploys them
+to `/lib/modules/4.14.52/bt/` with the firmware, and its init script loads them in that order.
 
 The operator's dongle `0b05:1bf6` is a Realtek **RTL8761CU**: `btrtl` logs `hci_ver=0d hci_rev=000e
 lmp_ver=0d lmp_subver=8761`, rom_version 1. Mainline knows the 8761CU from v6.19 (`ic_id_table`, lmp `0x8761`,

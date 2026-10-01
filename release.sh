@@ -95,7 +95,7 @@ err()  { echo -e "${RED}  ✗ $*${NC}" >&2; exit 1; }
 # usb_host/device_config and usb_host/modules/*.ko, both gitignored build
 # artifacts; on a fresh clone it refuses with the one command that fetches the
 # config from any unit.
-RELEASE_COMPONENTS=(native_apps vnc_client scummvm-roomwizard usb_host)
+RELEASE_COMPONENTS=(native_apps vnc_client scummvm-roomwizard usb_host bluetooth)
 
 usage() {
     echo "Usage: $0 --stage-only [--out <dir>] [--component <name>]..."
@@ -442,13 +442,40 @@ the three modules are upstream drivers compiled for this device's kernel
 configuration, which is read off the device itself.  This offer is honoured for
 the lifetime of the release.
 
+bluetooth
+---------
+`bluetoothd`, `bluetoothctl` and `libbluetooth.so.3` are BlueZ 5.66, licensed
+under the GNU General Public License, version 2 or later (GPL-2.0-or-later, per
+the SPDX lines of the sources they are built from; the tree's COPYING is GPLv2).
+WRITTEN OFFER FOR SOURCE: the complete corresponding source is the unmodified
+upstream release
+
+    https://www.kernel.org/pub/linux/bluetooth/bluez-5.66.tar.xz
+
+together with the build script in this project's repository at
+`bluetooth/build-bluez.sh`.
+
+⚠️ The modules under /lib/modules/4.14.52/bt are LINUX KERNEL MODULES, GPL-2.0-only.
+Their source is the same upstream Linux 4.14.52 tree as above, with this project's
+patches in `kernel/patches/` and `kernel/patches-modules/` (two of them change
+btusb.c and btrtl.c) and the build script `kernel/build-bt-modules.sh`.  This
+offer is honoured for the lifetime of the release.
+
+`rtl8761cu_fw.bin` and `rtl8761cu_config.bin` in /lib/firmware/rtl_bt are Realtek
+firmware from linux-firmware, redistributed unmodified under the Realtek licence
+installed beside them as `LICENCE.rtlwifi_firmware.txt`:
+
+    Copyright (c) 2010, Realtek Semiconductor Corporation. All rights reserved.
+    Redistribution in binary form, without modification, is permitted; the full
+    conditions and disclaimer are in that file.
+
 Not included
 ------------
 No device configuration is published, deliberately: /etc/hosts carries a
 host-name mapping that exists in order to be removed, and vnc_client.conf carries
 a plaintext VNC password.  Create the latter on the device after installing.
 
-No vendor firmware is published either.  In particular this bundle does NOT
+No Steelcase firmware is published either.  In particular this bundle does NOT
 contain `uImage-system`: the USB 500 mA power patch is derived on the spot from
 the copy already on the device, gated on its md5 and backed up first.
 NOTICE

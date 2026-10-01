@@ -136,7 +136,7 @@ mode `native_apps/build-and-deploy.sh` accepts. Cleanup, bloatware removal and t
 
 **Components** (each a subdir with a `build-and-deploy.sh`): `native_apps` (C games + launcher +
 tools), `scummvm-roomwizard` (ScummVM backend port), `vnc_client`, `usb_host` (USB host-mode
-enablement + Xbox controller modules).
+enablement + Xbox controller modules), `bluetooth` (BlueZ, BT modules, dongle firmware, boot start).
 
 **Toolchain:** `./setup-build-env.sh` is the one home for the host package set — it probes what is
 missing, prints the exact `apt` line before running it, and `--scummvm` also clones the gitignored
@@ -169,7 +169,7 @@ misparses. When in doubt, over-deploy — the failure mode is silent.
 | `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c`, `common/input_scan.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain counts too |
 | `common/audio_out.c`, `common/audio_gen.c` (+ `audio_out.h`, `audio_gen.h`) | `native_apps` + **ScummVM** — ⚠️ **two, not three: measured 2026-09-09**, `vnc_client/Makefile`'s `SRCS` names neither, and no `audio_out` symbol appears anywhere in that tree. They are on ScummVM's `OBJS` via `configure.patch`, which is why the row above cannot speak for them |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
-| the four **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`, `usb-audio-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot |
+| the four **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`, `usb-audio-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot. Same for the **`bluetooth`** group (`bluetooth`, `bluetooth.conf`, `bluetooth-main.conf`) with `cd bluetooth && ./build-and-deploy.sh <ip>` |
 | `usb_host/devmem_write.c`, `build-kernel-modules.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
 
 ## Working from this host — Windows, WSL and the tools

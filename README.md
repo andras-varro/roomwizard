@@ -193,8 +193,7 @@ roomwizard/
 ├── device-files/                # Installed onto the device verbatim
 │   ├── roomwizard-app           # Generic init script (app respawn loop)
 │   ├── disable-steelcase.sh     # Bloatware cleanup (run at every boot)
-│   ├── enable-usb-host.sh       # The /dev/mem MUSB host-mode patch
-│   ├── usb-host                 # Runs it at every boot (S90)
+│   ├── enable-usb-host.sh       # The /dev/mem MUSB host-mode patch; usb-host runs it (S90)
 │   ├── xpad-modules             # insmod -f the three controller modules (S89)
 │   ├── clean-rules.conf         # What a clean removes, one reason per line
 │   └── provision-rules.conf     # What the device ends up with
@@ -205,6 +204,7 @@ roomwizard/
 ├── browser_games/               # HTML5 games + LED control
 ├── scummvm-roomwizard/          # ScummVM backend
 ├── usb_host/                    # USB host mode + Xbox controller modules
+├── bluetooth/                   # BlueZ, BT modules, RTL8761CU firmware, boot start
 └── vnc_client/                  # VNC remote desktop viewer
 ```
 

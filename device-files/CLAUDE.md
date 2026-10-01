@@ -6,7 +6,8 @@ removes and installs. Loaded when you work in `device-files/`.
 Anything installed by more than one path lives here, never in a heredoc: `roomwizard-app` (the boot
 init script — it carries the name it is *deployed* as rather than a `.sh` one), `disable-steelcase.sh`,
 `audio-enable`, `time-sync`, `sysctl.conf`, the four USB scripts `enable-usb-host.sh` /
-`usb-host` / `xpad-modules` / `usb-audio-modules`, plus `clean-rules.conf` and `provision-rules.conf`. Both
+`usb-host` / `xpad-modules` / `usb-audio-modules`, the three Bluetooth files `bluetooth` / `bluetooth.conf` /
+`bluetooth-main.conf`, plus `clean-rules.conf` and `provision-rules.conf`. Both
 `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted card)
 install those same bytes, and **neither decides what to install or delete — both read the rules.**
 
@@ -81,7 +82,7 @@ error.
 - **`usb` is an optional group**, compiled by `usb_host/build-and-deploy.sh` through
   `rw_provision_plan_component`. The four USB device scripts and the three `rc5.d` links are ordinary
   `usb`-group records; **only the 500 mA power budget touches p1**, and that is `lib/rw-usbpower.sh`'s
-  job, not a record here.
+  job, not a record here. **`bluetooth` is the same shape**, compiled by `bluetooth/build-and-deploy.sh`.
 
 Modes are **declared** in these files, never read off disk — `/mnt/c` reports every file 0777 and
 discards `chmod`, so `stat -c %a` here is a constant, not a measurement.
@@ -104,8 +105,8 @@ See `SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`.
 
 Changing a file in this directory does **not** go out with a component deploy. Only
 `./commissioning/provision.sh <ip>` (which ends in a reboot) or `commissioning/commission-offline.sh`
-installs it. The exception is the four **`usb`-group** scripts, which
-`cd usb_host && ./build-and-deploy.sh <ip>` also installs, and which need no reboot.
+installs it. The exceptions are the four **`usb`-group** scripts and the three **`bluetooth`-group** files, which
+`cd usb_host` / `cd bluetooth` `&& ./build-and-deploy.sh <ip>` also installs, and which need no reboot.
 
 ## Regressions
 

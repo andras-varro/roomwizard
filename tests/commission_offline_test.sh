@@ -202,6 +202,12 @@ if printf '%s\n' "$OUT" | grep -qE 'boot links resolve .*S89.*S90'; then
 else
     bad "1c the default run checks the usb group's boot links too (S89, S90)"
 fi
+# Same for the bluetooth group, also on by default.
+if printf '%s\n' "$OUT" | grep -qE 'boot links resolve .*S91'; then
+    ok "1d the default run checks the bluetooth group's boot link too (S91)"
+else
+    bad "1d the default run checks the bluetooth group's boot link too (S91)"
+fi
 
 # Kept for section 4: a default --base run is exactly the p1 '--base' skip case, so
 # it is asserted against THIS run rather than paying for a second identical one.

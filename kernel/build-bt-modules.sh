@@ -34,8 +34,12 @@ CONFIG_WANT=(
 ROOTS=(bluetooth btusb hidp uhid uinput algif_hash algif_skcipher)
 # Reached only through crypto_alloc_*() / request_module(), so no `depends=` line names them:
 # SMP's cmac(aes) and ecdh, bluetoothd's AF_ALG ecb(aes) and cmac(aes), cryptomgr to instantiate
-# any template, and the default RNG that ecdh_generic's key generation can ask for.
-RUNTIME_ROOTS=(cryptomgr cmac ecb sha256_generic ecdh_generic hmac drbg jitterentropy_rng)
+# any template, and the default RNG that ecdh_generic's key generation can ask for. They are
+# resolved BEFORE the ROOTS, so load-order.txt puts them ahead of btusb: btusb probes an adapter
+# already on the bus the moment it loads, and the SMP setup that follows allocates cmac(aes)
+# and ecdh straight away. jitterentropy_rng is not here although drbg can use it: measured on
+# .188, insmod refuses it ("host not compliant with requirements: 2") and drbg loads without it.
+RUNTIME_ROOTS=(cryptomgr cmac ecb sha256_generic ecdh_generic hmac drbg)
 
 usage() {
     cat <<'EOF'
@@ -201,7 +205,6 @@ visit() {
     done
     ORDER+=("$m")
 }
-for m in "${ROOTS[@]}"; do visit "$m"; done
 for m in "${RUNTIME_ROOTS[@]}"; do
     if [ -n "${KO_PATH[$m]:-}" ]; then
         visit "$m"
@@ -211,6 +214,7 @@ for m in "${RUNTIME_ROOTS[@]}"; do
         echo "  WARNING: ${m} is neither a module nor built in"
     fi
 done
+for m in "${ROOTS[@]}"; do visit "$m"; done
 echo "  ${#ORDER[@]} modules."
 
 echo; echo "[6/7] Checking vermagic and imported symbol CRCs against the image..."

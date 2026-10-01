@@ -1,0 +1,119 @@
+#!/bin/sh
+# Bluetooth at boot: the bluetooth component's kernel modules, then bluetoothd.
+#
+# The modules come from kernel/build-bt-modules.sh, built against OUR kernel image's symbol
+# CRCs, so they load only on a unit that boots that image. It is built with
+# KBUILD_BUILD_USER=roomwizard and KBUILD_BUILD_HOST=build, which /proc/version carries as
+# "(roomwizard@build)"; on any other kernel this prints one line and loads nothing.
+#
+# load-order.txt is written by that same build -- dependencies first, and the crypto the
+# SMP code allocates when btusb probes an adapter ahead of btusb -- so this script reads the
+# order rather than restating it. Its absence means the component was never deployed.
+#
+# bluetoothd has no daemon() call (BlueZ 5's -n only moves its log from syslog to stderr),
+# so it is backgrounded here and logs to syslog. An adapter that enumerates later is claimed
+# by btusb and announced to bluetoothd over mgmt, so neither has to wait for the dongle.
+# stop matches bluetoothd on its executable through /proc/*/exe, never on a process name.
+#
+# start exits 0 whatever happens: a unit with no dongle and no modules must still boot.
+
+MODDIR=/lib/modules/4.14.52/bt
+ORDER="$MODDIR/load-order.txt"
+DAEMON=/usr/libexec/bluetooth/bluetoothd
+# Pairing records. bluetoothd creates what it needs below this, but not this itself.
+STORAGE=/var/lib/bluetooth
+
+our_kernel() { grep -q '(roomwizard@build)' /proc/version 2>/dev/null; }
+
+# PIDs of every running bluetoothd, whichever path it was started from.
+daemon_pids() {
+  for e in /proc/[0-9]*/exe; do
+    t=$(readlink "$e" 2>/dev/null) || continue
+    case "$t" in
+      */bluetoothd) p=${e#/proc/}; echo "${p%/exe}" ;;
+    esac
+  done
+}
+
+is_loaded() { lsmod | cut -d' ' -f1 | grep -qx "$(echo "${1%.ko}" | tr - _)"; }
+
+load_modules() {
+  n=0
+  while read -r ko; do
+    [ -n "$ko" ] || continue
+    if is_loaded "$ko"; then
+      :
+    elif insmod "$MODDIR/$ko" 2>/tmp/bt-insmod.err; then
+      n=$((n + 1))
+    else
+      echo "  $ko: FAILED -- $(cat /tmp/bt-insmod.err)"
+    fi
+  done < "$ORDER"
+  rm -f /tmp/bt-insmod.err
+  echo "  $n module(s) loaded"
+}
+
+case "$1" in
+  start)
+    echo "Starting Bluetooth..."
+    if ! our_kernel; then
+      echo "  not our kernel image (/proc/version): modules not loaded"
+      exit 0
+    fi
+    if [ ! -f "$ORDER" ]; then
+      echo "  $ORDER absent (bluetooth component not deployed to this unit)"
+      exit 0
+    fi
+    load_modules
+    if [ ! -x "$DAEMON" ]; then
+      echo "  $DAEMON absent (bluetooth component not deployed to this unit)"
+      exit 0
+    fi
+    pids=$(daemon_pids)
+    if [ -n "$pids" ]; then
+      echo "  bluetoothd already running (pid $pids)"
+      exit 0
+    fi
+    mkdir -p "$STORAGE" && chmod 700 "$STORAGE"
+    "$DAEMON" </dev/null >/dev/null 2>&1 &
+    echo "  bluetoothd started (pid $!)"
+    ;;
+  stop)
+    echo "Stopping Bluetooth..."
+    pids=$(daemon_pids)
+    if [ -n "$pids" ]; then
+      # shellcheck disable=SC2086 # one word per PID
+      kill $pids 2>/dev/null
+      i=0
+      while [ -n "$(daemon_pids)" ] && [ "$i" -lt 5 ]; do
+        sleep 1
+        i=$((i + 1))
+      done
+      [ -z "$(daemon_pids)" ] || echo "  bluetoothd did not exit (pid $(daemon_pids))"
+    fi
+    # Reverse load order, so a redeploy's restart loads the new .ko files. A module in use
+    # stays; rmmod's refusal is not an error here.
+    if [ -f "$ORDER" ]; then
+      sed '1!G;h;$!d' "$ORDER" | while read -r ko; do
+        rmmod "$(echo "${ko%.ko}" | tr - _)" 2>/dev/null
+      done
+    fi
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  status)
+    if our_kernel; then echo "kernel: our image"; else echo "kernel: NOT our image -- nothing loads"; fi
+    pids=$(daemon_pids)
+    echo "bluetoothd: ${pids:-not running}"
+    for a in /sys/class/bluetooth/hci*; do
+      [ -e "$a" ] && echo "adapter: ${a##*/}"
+    done
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
+exit 0

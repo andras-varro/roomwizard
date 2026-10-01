@@ -57,9 +57,9 @@
 # p2/p3/p5/p6 is the offline executor's job.
 
 RW_PROVISION_TYPES="install link link-opt unlink touch backup directive dropline"
-RW_PROVISION_GROUPS_ALL="base mdns sshd usb"
-RW_PROVISION_GROUPS_DEFAULT="base mdns sshd usb"
-RW_PROVISION_GROUPS_OPTIONAL="mdns sshd usb"
+RW_PROVISION_GROUPS_ALL="base mdns sshd usb bluetooth"
+RW_PROVISION_GROUPS_DEFAULT="base mdns sshd usb bluetooth"
+RW_PROVISION_GROUPS_OPTIONAL="mdns sshd usb bluetooth"
 
 rw_provision_default_groups()  { echo "$RW_PROVISION_GROUPS_DEFAULT"; }
 rw_provision_optional_groups() { echo "$RW_PROVISION_GROUPS_OPTIONAL"; }
@@ -307,7 +307,7 @@ rw_provision_plan() {
 #
 # Compile ONLY GROUP's records — for a COMPONENT deploy script that installs its
 # own group's verbatim files standalone, without provisioning a whole device.
-# usb_host/build-and-deploy.sh is the only caller.
+# usb_host/build-and-deploy.sh (usb) and bluetooth/build-and-deploy.sh (bluetooth) call it.
 #
 # ⚠️ A separate entry point with a separate name rather than a flag on
 # rw_provision_plan, so that a commissioning path cannot reach a base-less plan by

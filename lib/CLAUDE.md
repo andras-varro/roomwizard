@@ -20,9 +20,9 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 
 ## One SSH gate, and BatchMode stays on it
 
-**`rw-ssh.sh` is the only implementation of "can I reach this device".** Eight scripts source it —
+**`rw-ssh.sh` is the only implementation of "can I reach this device".** Nine scripts source it —
 `commissioning/provision.sh`, `commissioning/card-prep.sh`, `deploy-all.sh`, `roomwizard.sh` and all
-four `*/build-and-deploy.sh` — and nine call sites go through `rw_ssh_gate`. They each keep their own
+five `*/build-and-deploy.sh` — and ten call sites go through `rw_ssh_gate`. They each keep their own
 gate *call*, because a component script must run standalone; what they must not keep is their own
 probe. There used to be eight, already drifted into three wordings of one message.
 
@@ -173,14 +173,14 @@ because `/` is the correct prefix on a device and a refused one offline.
   four directives and the two droplines simply missing from the breakdown.
 - ⚠️ **`usb` is a provision group, and a component script compiles it through
   `rw_provision_plan_component`, not through its own `scp`/`ln -sf`.** `rw_provision_plan_component
-  FILE GROUP` compiles one optional group's records for `usb_host/build-and-deploy.sh` — a separate
+  FILE GROUP` compiles one optional group's records for `usb_host/build-and-deploy.sh` (`usb`) and `bluetooth/build-and-deploy.sh` (`bluetooth`) — a separate
   entry point rather than a flag on `rw_provision_plan`, and it refuses `base`, so a commissioning
   path cannot reach a base-less plan by mistyping a group list.
 
 ## Bundles: one layout, declared modes, no configs
 
 `release.sh` exists so that putting apps on a device does not require reproducing the toolchain.
-It calls `build-and-deploy.sh --bundle <dir>` on all four components. The
+It calls `build-and-deploy.sh --bundle <dir>` on all five components. The
 layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` plus
 `<dir>/manifest.d/<component>.{list,md5}`.
 
@@ -204,7 +204,7 @@ layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` 
 - ⚠️ **A new staged file is a licence decision, and `LICENSE.md` is where it is recorded.** Ask whether
   the file is *ours*: `scummremastered.zip`, `gui-icons.dat` and `vkeybd_roomwizard.zip` are all
   GPL-3.0+ ScummVM data and were being published with no licence line until someone looked, and
-  `vkeybd_roomwizard.zip` is the **only** non-MIT file committed in this repo. `LICENSE.md` is the
+  `vkeybd_roomwizard.zip`, the Realtek firmware and `device-files/bluetooth.conf` are the non-MIT files committed here. `LICENSE.md` is the
   repo-level half of `release.sh`'s per-release `NOTICE`; **the two must agree**, and MIT governs our
   *source* — it does not decide the licence of a binary it links into (`scummvm` is GPL-3.0+ as a
   whole, `vnc_client` GPL-2.0+). Measure a dependency's licence *version* rather than carrying it

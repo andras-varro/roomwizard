@@ -232,11 +232,11 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
   both, ScummVM. The Mix Bus Test crack is B38. **Loudness:** an onboard
   probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
   the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
-- **Nothing is persistent on `.188` yet** (measured 2026-10-01). The 18 modules from
-  `kernel/build-bt-modules.sh` (`BT_LE=y`, `BT_BREDR=y`, measured from its `.config`) are `insmod`'d by hand from
-  `/lib/modules/4.14.52/bt/`; `bluetoothd` runs by hand from `/tmp/s1002/` and is lost on reboot. Only
-  `/etc/dbus-1/system.d/bluetooth.conf` is installed. `hci0` is up on an RTL8761CU (`rtl_bt/rtl8761cu_fw.bin` +
-  config), controller `A0:AD:9F:70:DD:CA`.
+- **Packaged, not yet booted.** The `bluetooth/` component (modules, firmware, BlueZ, `/etc/init.d/bluetooth`
+  at S91, dbus policy, `main.conf` with `AutoEnable=true`) builds and bundles on the dev host; it has not been
+  deployed. `.188` still runs the hand install (controller `A0:AD:9F:70:DD:CA`). Unverified: a boot that brings
+  `hci0` up powered with no hand step, that a bond in `/var/lib/bluetooth` survives a reboot (inferred: `/var`
+  is not tmpfs on this image), and AutoEnable re-powering `hci0` after a USB re-enumeration.
 - **Pairing recipe (measured):** a `NoInputNoOutput` agent; scripted `bluetoothctl` needs a ~2 s delay before
   `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
   0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
@@ -251,10 +251,7 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
    `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
    Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
    a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
-2. Packaging: a deploy path for the modules, `rtl_bt` firmware, `bluetoothd`/`bluetoothctl`/`libbluetooth` and the
-   dbus conf, plus boot-time module load and daemon start. Undecided whether that is a `bluetooth/` component in
-   `deploy-all.sh` and the release bundle, or part of `usb_host`; device files go through
-   `commissioning/provision.sh`.
+2. Deploy `bluetooth/` to `.188`, reboot, and check the three unverified points above.
 3. `sbc` + `bluez-alsa` v4.3.1 into **our** alsa-lib's plugin dir.
 4. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
    the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
