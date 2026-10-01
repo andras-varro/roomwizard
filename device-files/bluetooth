@@ -15,24 +15,60 @@
 # by btusb and announced to bluetoothd over mgmt, so neither has to wait for the dongle.
 # stop matches bluetoothd on its executable through /proc/*/exe, never on a process name.
 #
+# bluealsa (the A2DP source that ALSA clients reach as the "bluealsa" PCM) follows it, also
+# backgrounded, logging to syslog with -S. It is GIO: the vendor libgio's compiled-in system
+# bus is /var/run/dbus/system_bus_socket, which does not exist here, so the address is
+# exported. It registers its endpoints whenever org.bluez appears, so it need not wait for
+# bluetoothd.
+#
 # start exits 0 whatever happens: a unit with no dongle and no modules must still boot.
 
 MODDIR=/lib/modules/4.14.52/bt
 ORDER="$MODDIR/load-order.txt"
 DAEMON=/usr/libexec/bluetooth/bluetoothd
+BLUEALSA=/usr/bin/bluealsa
 # Pairing records. bluetoothd creates what it needs below this, but not this itself.
 STORAGE=/var/lib/bluetooth
 
 our_kernel() { grep -q '(roomwizard@build)' /proc/version 2>/dev/null; }
 
-# PIDs of every running bluetoothd, whichever path it was started from.
-daemon_pids() {
+# PIDs of every running process whose executable is named $1, whichever path it was started from.
+exe_pids() {
   for e in /proc/[0-9]*/exe; do
     t=$(readlink "$e" 2>/dev/null) || continue
-    case "$t" in
-      */bluetoothd) p=${e#/proc/}; echo "${p%/exe}" ;;
-    esac
+    [ "${t##*/}" = "$1" ] || continue
+    p=${e#/proc/}; echo "${p%/exe}"
   done
+}
+daemon_pids() { exe_pids bluetoothd; }
+
+# kill, then wait up to 5 s for every process named $1 to exit.
+stop_exe() {
+  pids=$(exe_pids "$1")
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086 # one word per PID
+  kill $pids 2>/dev/null
+  i=0
+  while [ -n "$(exe_pids "$1")" ] && [ "$i" -lt 5 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  [ -z "$(exe_pids "$1")" ] || echo "  $1 did not exit (pid $(exe_pids "$1"))"
+}
+
+start_bluealsa() {
+  if [ ! -x "$BLUEALSA" ]; then
+    echo "  $BLUEALSA absent (BlueALSA not deployed to this unit)"
+    return 0
+  fi
+  pids=$(exe_pids bluealsa)
+  if [ -n "$pids" ]; then
+    echo "  bluealsa already running (pid $pids)"
+    return 0
+  fi
+  DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket \
+    "$BLUEALSA" -S -p a2dp-source </dev/null >/dev/null 2>&1 &
+  echo "  bluealsa started (pid $!)"
 }
 
 is_loaded() { lsmod | cut -d' ' -f1 | grep -qx "$(echo "${1%.ko}" | tr - _)"; }
@@ -72,25 +108,17 @@ case "$1" in
     pids=$(daemon_pids)
     if [ -n "$pids" ]; then
       echo "  bluetoothd already running (pid $pids)"
-      exit 0
+    else
+      mkdir -p "$STORAGE" && chmod 700 "$STORAGE"
+      "$DAEMON" </dev/null >/dev/null 2>&1 &
+      echo "  bluetoothd started (pid $!)"
     fi
-    mkdir -p "$STORAGE" && chmod 700 "$STORAGE"
-    "$DAEMON" </dev/null >/dev/null 2>&1 &
-    echo "  bluetoothd started (pid $!)"
+    start_bluealsa
     ;;
   stop)
     echo "Stopping Bluetooth..."
-    pids=$(daemon_pids)
-    if [ -n "$pids" ]; then
-      # shellcheck disable=SC2086 # one word per PID
-      kill $pids 2>/dev/null
-      i=0
-      while [ -n "$(daemon_pids)" ] && [ "$i" -lt 5 ]; do
-        sleep 1
-        i=$((i + 1))
-      done
-      [ -z "$(daemon_pids)" ] || echo "  bluetoothd did not exit (pid $(daemon_pids))"
-    fi
+    stop_exe bluealsa
+    stop_exe bluetoothd
     # Reverse load order, so a redeploy's restart loads the new .ko files. A module in use
     # stays; rmmod's refusal is not an error here.
     if [ -f "$ORDER" ]; then
@@ -107,6 +135,8 @@ case "$1" in
     if our_kernel; then echo "kernel: our image"; else echo "kernel: NOT our image -- nothing loads"; fi
     pids=$(daemon_pids)
     echo "bluetoothd: ${pids:-not running}"
+    pids=$(exe_pids bluealsa)
+    echo "bluealsa: ${pids:-not running}"
     for a in /sys/class/bluetooth/hci*; do
       [ -e "$a" ] && echo "adapter: ${a##*/}"
     done

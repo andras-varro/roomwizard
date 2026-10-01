@@ -455,6 +455,20 @@ upstream release
 together with the build script in this project's repository at
 `bluetooth/build-bluez.sh`.
 
+`bluealsa`, `bluealsa-aplay` and the ALSA plugins libasound_module_pcm_bluealsa.so
+and libasound_module_ctl_bluealsa.so are BlueALSA 4.3.1, licensed under the MIT
+license: Copyright (c) 2016-2023 Arkadiusz Bokowy.  The same licence covers its
+dbus policy and ALSA configuration file installed under /etc.  `bluealsa` also
+contains the SBC codec library, sbc 2.0 (LGPL-2.1-or-later), linked statically.
+WRITTEN OFFER FOR SOURCE (and relinking, LGPL-2.1 section 6): the complete
+corresponding source is the unmodified upstream releases
+
+    https://github.com/arkq/bluez-alsa/archive/refs/tags/v4.3.1.tar.gz
+    https://www.kernel.org/pub/linux/bluetooth/sbc-2.0.tar.xz
+
+together with the build script in this project's repository at
+`bluetooth/build-bluealsa.sh`, which rebuilds both.
+
 ⚠️ The modules under /lib/modules/4.14.52/bt are LINUX KERNEL MODULES, GPL-2.0-only.
 Their source is the same upstream Linux 4.14.52 tree as above, with this project's
 patches in `kernel/patches/` and `kernel/patches-modules/` (two of them change

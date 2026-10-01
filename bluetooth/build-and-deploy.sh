@@ -18,16 +18,18 @@
 #
 #   built artifacts (this script, and the bundle):
 #     BlueZ 5.66 bluetoothd, bluetoothctl, libbluetooth   ← build-bluez.sh, staging/
+#     BlueALSA 4.3.1 bluealsa, bluealsa-aplay, 2 plugins  ← build-bluealsa.sh, staging-bluealsa/
 #     the Bluetooth module closure + load-order.txt       ← ../kernel/build-bt-modules.sh,
 #                                                           modules/, to /lib/modules/4.14.52/bt
 #     rtl8761cu_{fw,config}.bin + their licence           ← ../kernel/3rdparty/realtek/bluetooth
 #   verbatim device files (device-files/provision-rules.conf, group `bluetooth`):
-#     /etc/init.d/bluetooth, its S91 rc5.d link, the dbus policy bluetooth.conf, and
+#     /etc/init.d/bluetooth (bluetoothd, then bluealsa), its S91 rc5.d link, the dbus
+#     policies bluetooth.conf and bluealsa.conf, 20-bluealsa.conf, and
 #     /etc/bluetooth/main.conf (AutoEnable: the dongle re-enumerates with the USB tree)
 #
 # The device files are installed by this script AND by commissioning/provision.sh /
 # commission-offline.sh, from the same records — the way usb_host handles the `usb`
-# group. The two .conf files cannot travel in the bundle: release.sh refuses any *.conf.
+# group. The .conf files cannot travel in the bundle: release.sh refuses any *.conf.
 #
 # Pairing is manual (bluetoothctl); records live in /var/lib/bluetooth.
 
@@ -125,8 +127,8 @@ else
     bash "$SCRIPT_DIR/build-bluez.sh"
 fi
 ok "staging/"
-# BlueALSA is BUILT here and not yet deployed or bundled: nothing below reads
-# staging-bluealsa/ until the A2DP path has been hand-tested on a unit.
+# BlueALSA: staging-bluealsa/ supplies the daemon and the plugins; its two .conf files
+# are device-files/ copies in the `bluetooth` provision group (no *.conf in a bundle).
 BA_STAGING="$SCRIPT_DIR/staging-bluealsa"
 if [[ -f "$BA_STAGING/usr/bin/bluealsa" \
       && "$SCRIPT_DIR/build-bluealsa.sh" -nt "$BA_STAGING/usr/bin/bluealsa" ]]; then
@@ -135,7 +137,12 @@ if [[ -f "$BA_STAGING/usr/bin/bluealsa" \
 else
     bash "$SCRIPT_DIR/build-bluealsa.sh"
 fi
-ok "staging-bluealsa/ (built only)"
+for pair in "etc/dbus-1/system.d/bluealsa.conf|bluealsa.conf" \
+            "etc/alsa/conf.d/20-bluealsa.conf|20-bluealsa.conf"; do
+    cmp -s "$BA_STAGING/${pair%%|*}" "$REPO_ROOT/device-files/${pair#*|}" \
+        || err "device-files/${pair#*|} differs from the build's ${pair%%|*} — copy it over"
+done
+ok "staging-bluealsa/ (its .conf files match device-files/)"
 echo ""
 
 # ── 2. kernel modules ───────────────────────────────────────────────────────
@@ -188,6 +195,17 @@ for ko in "${BT_MODULES[@]}"; do
     ARM_TARGETS+=("$MODULES_DIR/$ko")
 done
 BT_ARTIFACTS+=("0644|$ORDER|/lib/modules/$KERNEL_VERSION/bt/load-order.txt")
+# BlueALSA: the daemon, bluealsa-aplay, and the two plugins in the vendor libasound's
+# compiled-in plugin directory (our alsa-lib build is never deployed).
+BA_PLUGINS="$BA_STAGING/usr/lib/alsa-lib"
+for f in "$BA_STAGING/usr/bin/bluealsa" "$BA_STAGING/usr/bin/bluealsa-aplay"; do
+    BT_ARTIFACTS+=("0755|$f|/usr/bin/${f##*/}")
+    ARM_TARGETS+=("$f")
+done
+for f in "$BA_PLUGINS/libasound_module_pcm_bluealsa.so" "$BA_PLUGINS/libasound_module_ctl_bluealsa.so"; do
+    BT_ARTIFACTS+=("0644|$f|/usr/lib/alsa-lib/${f##*/}")
+    ARM_TARGETS+=("$f")
+done
 # The firmware licence allows binary redistribution only with its licence beside it.
 for f in rtl8761cu_fw.bin rtl8761cu_config.bin LICENCE.rtlwifi_firmware.txt; do
     BT_ARTIFACTS+=("0644|$FW_DIR/$f|/lib/firmware/rtl_bt/$f")

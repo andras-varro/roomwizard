@@ -662,15 +662,15 @@ fi
 # ── F12b: the bluetooth component's group ─────────────────────────────────────
 # bluetooth/build-and-deploy.sh compiles its own group the same way. Its boot link
 # must come out of the plan (S91, after S90usb-host: the dongle is on that port) and
-# both of its verbatim files must be copied.
+# every one of its verbatim files must be copied.
 BPLAN="$FW/btplan"
 if rw_provision_plan_component "$RULES" bluetooth > "$BPLAN" 2>/dev/null; then
     ok "F12b the bluetooth component plan compiles"
 else
     bad "F12b the bluetooth component plan compiles"
 fi
-assert_eq "3" "$(awk -F'\t' '$1 == "install"' "$BPLAN" | wc -l | tr -d ' ')" \
-    "F12b the bluetooth group installs the init script, the dbus policy and main.conf"
+assert_eq "5" "$(awk -F'\t' '$1 == "install"' "$BPLAN" | wc -l | tr -d ' ')" \
+    "F12b the bluetooth group installs the init script, two dbus policies, main.conf and 20-bluealsa.conf"
 assert_eq "../init.d/bluetooth" "$(awk -F'\t' '$1 == "link" && $3 == "/etc/rc5.d/S91bluetooth" {print $4}' "$BPLAN")" \
     "F12b the bluetooth group links S91bluetooth after S90usb-host"
 
