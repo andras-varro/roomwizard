@@ -109,6 +109,7 @@ SUITE_ROWS=(
 # already skips and labels "host-compiled tests" — a count that tracks whatever
 # build/ happens to hold, so it is not written here.
 CTEST_ROWS=(
+    "audio_alsa_lost_test|-I common -DAUDIO_OUT_HAVE_ALSA -I tests/alsa_stub|common/audio_out.c common/audio_gen.c"
     "audio_bed_test|-I common|common/audio_bed.c common/config.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "audio_carry_test|-I. -Wl,--wrap=audio_out_open_resolved|common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c"
     "audio_gen_test|-I common|common/audio_gen.c"

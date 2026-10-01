@@ -807,10 +807,19 @@ static int alsa_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
     AlsaCtx *a = (AlsaCtx *)ctx;
     if (!a->pcm || frame_bytes <= 0) return -1;
 
-    snd_pcm_sframes_t avail = snd_pcm_avail_update(a->pcm);
+    /* ⚠️ snd_pcm_avail(), never snd_pcm_avail_update().  Measured on this
+     * device's alsa-lib with a USB card unplugged under a live plughw stream:
+     * avail_update does not sync with the hardware, and from the disconnect on it
+     * returned a frozen positive count with no error for 25 s, while avail
+     * returned -ENODEV from the first call.  That frozen count reads as a full
+     * ring, so the pump asks for nothing, writei — whose EBADFD was the only
+     * other report of the loss — is never reached, and the stream goes silent
+     * with no reopen.  avail syncs first, which also removes avail_update's lag
+     * (measured up to ~1.8k frames, under one period, on a healthy stream). */
+    snd_pcm_sframes_t avail = snd_pcm_avail(a->pcm);
     if (avail < 0) {
         if (alsa_recover(a, (int)avail) != 0) return -1;
-        avail = snd_pcm_avail_update(a->pcm);
+        avail = snd_pcm_avail(a->pcm);
         if (avail < 0) {
             alsa_recover(a, (int)avail);   /* for its errno and its one report */
             return -1;
