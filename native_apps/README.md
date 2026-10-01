@@ -40,7 +40,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 
 Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH.
 `usb_test` exists as source but is **not built or deployed** — USB
-testing lives in the `control_panel` USB page. The system `/usr/sbin/watchdog` daemon handles the
+testing lives in the `control_panel` Input page. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
 The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
@@ -50,23 +50,23 @@ before running either (`/etc/init.d/roomwizard-app stop`), and start it again af
 ### Control Panel
 
 [`control_panel/control_panel.c`](control_panel/control_panel.c) consolidates five previously
-separate GUI utilities behind a tab bar:
+separate GUI utilities behind an icon grid, one page per icon (`control_panel/*_page.c`):
 
-| Tab | Replaces | What it does |
+| Page | Replaces | What it does |
 |---|---|---|
-| **Settings** | `hardware_config` | Audio on/off, LED on/off + brightness, save/reset. Test buttons deliberately bypass config to exercise raw hardware. |
-| *(none)* | `hardware_diag` | The Diagnostics tab is gone: Monitor, Network and Information are icon pages (`control_panel/*_page.c`). |
-| **Tests** | `hardware_test_gui` | 10 interactive hardware tests (LED ramp, backlight, pulse, blink, colour cycle, touch-zone grid, display diagnostics, audio sweep). Each takes over the full screen. |
-| **Display** | a retired standalone calibration tool | Everything about the screen: backlight, portrait toggle, and the calibration wizard that writes both lines of `/etc/touch_calibration.conf`. See below. |
-| *(none)* | `usb_test` | The USB tab is gone: USB is an icon page (`control_panel/usb_page.c`) with the device list, RESCAN, and keyboard, mouse and gamepad testers. |
+| **Audio** | `hardware_config` (audio) | Audio on/off, music/effects, output device, chime test, Mix Bus Test; saved on each change. |
+| **Display** | a retired standalone calibration tool | Backlight, portrait toggle, the VISIBLE/EDGES/TOUCHABLE readout, BACKLIGHT RAMP, TEST PATTERNS and SCREEN EDGES. |
+| **LED** | `hardware_test_gui` (LED) | Enable, brightness and the six LED tests, each full-screen. |
+| **USB** | `usb_test` (bus list) | The device list, RESCAN and port recovery. |
+| **Input** | `usb_test` (testers) | Touch CALIBRATE (the wizard that writes both lines of `/etc/touch_calibration.conf`, see below), DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY, and keyboard, mouse and gamepad testers that enable only when such a device is present. |
+| **Network**, **Monitor**, **Information** | `hardware_diag` | Read-only system pages; Information also holds RESET DEFAULTS. |
 
-#### The Display tab and the calibration wizard
+#### The calibration wizard
 
-Backlight and portrait mode live here rather than under Settings because they are screen
-properties, and because calibration refuses to run in portrait — the toggle that disables it
-should be visible from the same screen.
+CALIBRATE (Input page) refuses to run in portrait; the Display page's portrait toggle carries a
+"CALIBRATE IN LANDSCAPE" note.
 
-`CALIBRATE TOUCH` runs a five-step wizard that writes **both** lines of
+CALIBRATE runs a five-step wizard that writes **both** lines of
 `/etc/touch_calibration.conf`. Every step runs with the bezel zeroed on the full 800×480 panel,
 so a drawn pixel is a panel pixel:
 
@@ -78,7 +78,7 @@ so a drawn pixel is a panel pixel:
 | `REPORT` | Visible rectangle vs touchable rectangle, with the per-edge gap spelled out. |
 | `CONFIRM` | The new mapping goes live for 20 s. Press `KEEP THESE` or it reverts on its own. |
 
-`SCREEN EDGES` jumps straight to `EDGES` for a margins-only tweak. `RESET` puts both lines back to
+SCREEN EDGES (Display page) jumps straight to `EDGES` for a margins-only tweak. `RESET` puts both lines back to
 the hardware `EVIOCGABS` range and the default margins — the escape hatch if a calibration ever
 leaves the screen hard to press.
 

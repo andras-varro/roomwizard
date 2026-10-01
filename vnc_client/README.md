@@ -115,7 +115,7 @@ price of a band top and bottom that you cannot tap. Either way this app's own to
 screen, reconnect buttons, exit-gesture corner) stays reachable.
 
 The setting does nothing until the panel's touch reach has been measured — Control Panel →
-Display → `CALIBRATE TOUCH`, the `REACH` step. Before that, `safe` and `visible` are the same
+Input → `CALIBRATE`, the `REACH` step. Before that, `safe` and `visible` are the same
 rectangle.
 
 On the settings GUI it is the **CONTENT** row: `TOGGLE` flips between `SAFE (ALL TAPPABLE)` and

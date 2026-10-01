@@ -27,7 +27,7 @@ ScummVM appears in the launcher through its `.app` manifest (`args=none`: it ope
 
 ### Touch Calibration
 
-Run once, on the device screen: **Control Panel → Display → `CALIBRATE TOUCH`**.
+Run once, on the device screen: **Control Panel → Input → `CALIBRATE`**.
 (The standalone `/opt/games/unified_calibrate` binary was folded into that wizard and removed.)
 
 - Tap 11 targets, 3 times each; a per-axis least-squares fit over the **interior** targets maps

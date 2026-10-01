@@ -460,7 +460,7 @@ logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a
   which yields a zero inset. Tagged and trailing on purpose: an old parser reads lines 1–2
   positionally and ignores what it does not recognise, so the file stayed back-compatible.
 
-**Control Panel → Display** owns both lines, through **one wizard** — `run_calib_wizard()` in
+**Control Panel → Input → CALIBRATE** (and Display → SCREEN EDGES) owns both lines, through **one wizard** — `run_calib_wizard()` in
 `native_apps/control_panel/control_panel.c`. Everything it does runs with the bezel zeroed
 (`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and both
 lines are measured against the same premise:
@@ -474,7 +474,7 @@ lines are measured against the same premise:
 | `REPORT` | — | visible rectangle vs touch-safe rectangle and the per-side inset in px, with the reminder that the band is still drawable. Amber on **magnitude** (`DISP_INSET_SUSPECT`, 24 px), not on "non-zero" |
 | `CONFIRM` | — | goes live on the new mapping with a 20 s countdown; reverts unless you press KEEP |
 
-`CALIBRATE TOUCH` runs the whole thing, `SCREEN EDGES` jumps to the `EDGES` step for a margins-only
+`CALIBRATE` runs the whole thing, Display's `SCREEN EDGES` jumps to the `EDGES` step for a margins-only
 tweak, and `RESET` restores the hardware `EVIOCGABS` range and the default margins. ⚠️ **Nothing is
 written until CONFIRM, and the wizard hit-tests its own buttons through the *entry* calibration until
 then** — so a bad fit can never leave you unable to press the button that rejects it.
@@ -496,7 +496,7 @@ the finger by up to +19 px across the bottom quarter**. The library rules, the d
 clamp and the sanity gate's actual criterion are `native_apps/CLAUDE.md` → *Touch model*.
 
 **`touch_raw`** (`native_apps/tests/touch_raw.c`, deployed to `/opt/games/`, hidden from the
-launcher; reachable from Control Panel → Display → `TOUCH DIAGNOSTIC`) is the diagnostic that settled
+launcher; reachable from Control Panel → Input → `DIAGNOSTIC`) is the diagnostic that settled
 reach, and the only tool that shows the panel with **no calibration and no bezel**: it resets the raw
 range to the `EVIOCGABS` values and calls `fb_set_bezel(fb,0,0,0,0)`, so the dot is
 `raw × 799 / 4095`. It logs to `/tmp/touch_raw.tsv` with a monotonic millisecond column and can write
