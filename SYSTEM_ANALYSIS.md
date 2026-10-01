@@ -721,6 +721,13 @@ opens `plughw:N,0` for `/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM
 - ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: it is
   MIDI/sequencer support, not PCM output. PCM is hand-written, which is why `oss-mixer.cpp` exists.
 - **The deep clean cannot reach `libasound` or `/usr/share/alsa`** — a validated rules file may not (§5.2).
+- ⚠️ **After a USB audio card is removed, `snd_pcm_avail_update()` lies and `snd_pcm_avail()` tells the
+  truth.** Measured 2026-10-01 on `.188` (alsa-lib 1.2.x, ARM, no mmap'd status page, so every query is
+  `SYNC_PTR`): `avail_update` returned a frozen positive count with no error for the 25 s watched, while
+  `avail` returned `-ENODEV` at once and `snd_pcm_writei` `-EBADFD`. On a healthy stream `avail_update`
+  also lags `avail` by up to ~1.8k frames (under one period). `native_apps/common/audio_out.c`
+  `alsa_space()` therefore asks `snd_pcm_avail`; a stream that only polls `avail_update` never notices a
+  second unplug. Host regression: `native_apps/tests/audio_alsa_lost_test.c` over a stub ALSA header.
 
 **What `hw:0,0` actually grants — measured on `.188`, 2026-08-14**, with
 `native_apps/tests/alsa_probe.sh`. That probe needs nothing cross-compiled: the vendor's `aplay`

@@ -893,11 +893,15 @@ group_c() {
 # a file, `source-path=SCRIPTDIR` placement, gate-shape measurement) moved in from a plan entry as nine lines;
 # the plan paid with the rest of that entry and its ceiling was not lowered, for the reason above.
 #
+# 2026-10-01: SYSTEM_ANALYSIS.md 1826 -> 1834. The file sat at its ceiling; the avail/avail_update behaviour after a
+# USB audio card is removed moved in from a closed plan entry as eight lines. The plan paid with that entry and its
+# ceiling was not lowered, for the reason above.
+#
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1826	SYSTEM_ANALYSIS.md
+1834	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 224	HARDWARE.md
 215	README.md

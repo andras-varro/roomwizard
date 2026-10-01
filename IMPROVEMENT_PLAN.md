@@ -84,6 +84,18 @@ root-hub suspend is the difference; n=1. **Next:** reproduce (suspend the empty 
 adapter) with the `rwsv` kprobe on `omap2430_musb_set_vbus` and a DEVCTL read, then decide whether the
 wait needs the PHY/glue resumed first or the loop is simply too short.
 
+### B45. Unplugging a hub that carries a streaming USB audio card prints a kernel WARNING — open, seen once 2026-10-01
+
+**Measured on `.188`** (our 4.14.52 image): `WARNING: CPU: 0 PID: 1858 at drivers/usb/musb/musb_host.c:138
+musb_h_tx_flush_fifo+0x134/0x138` with `musb-hdrc musb-hdrc.0.auto: Could not flush host TX10 fifo: csr:
+2003`; chain `hub_event` → `usb_disconnect` → `usb_audio_disconnect` → `release_urbs` → `deactivate_urbs` →
+`usb_hcd_unlink_urb` → `musb_urb_dequeue` → `musb_cleanup_urb` → `musb_h_tx_flush_fifo`. The system
+continued: the hub re-enumerated and audio returned to the dongle. Nine plain dongle unplugs in the same
+run did not print it. Console warnings are defects even when harmless; n=1. Capture on the device:
+`/home/root/log/s1001-b42-hub-warn.log`. **Next:** read `musb_h_tx_flush_fifo` in
+`usb_host/linux-4.14.52/drivers/usb/musb/musb_host.c` and check later mainline for a change to that `WARN`,
+before reproducing.
+
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -110,33 +122,6 @@ hides; `audio_out.c` logs `underran at the write`. Remedies if unparked: a cheap
 per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, code only]**:
 `native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
 the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
-
-### B42. A second hot-unplug of the USB audio dongle is never detected — open, confirmed 2026-09-29
-
-**Measured on `.188`** (native_apps at `0b187fe`, a game with music playing on the USB dongle).
-Unplug #1 logs `audio_out: plughw:1,0 is gone (File descriptor in bad state)` → `audio: output device
-lost — reopening` → `plughw:0,0` open → music carry; the replug logs `plughw:1,0 is back — leaving
-plughw:0,0` → reopen → carry. **Unplug #2 logs nothing**: sound stays silent, the game keeps running, and
-replug #2 brings no handover either — **[inferred]** one defect, since `audio_out_reprobe_due()` only
-fires while `open_path` is onboard, and the stream still believes it is on the card. Never tested before
-(operator), so latent rather than a regression; the OSS removal did not touch `alsa_recover()` or the
-`EBADFD` → `AO_ERR_LOST` classification (`native_apps/common/audio_out.c:483-486`, `:643-662`). Ruled
-out by reading: the `lost_said` print latch, reset in `alsa_open()` (`:727`). **Cause not known.**
-Two candidates from reading alsa-lib 1.2.1.2 and kernel `sound/core` **[inferred, not measured]**:
-
-1. On ARM the kernel maps no PCM status/control pages (`pcm_native.c`), so alsa-lib uses `SYNC_PTR`.
-   After card removal every ioctl returns `-ENODEV`, but `snd_pcm_hw_avail_update()` ignores the failed
-   sync (`pcm_hw.c` ~`:1117`) and returns the stale avail: `audio_pump_frames` wants 0 frames forever,
-   `snd_pcm_writei()` is never called and no error surfaces. Unplug #1 was caught only because a
-   `writei` landed after teardown (`bad_pcm_state` → `-EBADFD`, the logged "File descriptor in bad
-   state"). Fix: `snd_pcm_avail()` (it calls `hwsync`, which fails `-ENODEV`) in `alsa_space()`
-   (`audio_out.c` ~`:752`, `:755`).
-2. musb never saw unplug #2. Fix: a stall watchdog.
-
-**Next:** the discriminating run is two unplug cycles on the device while watching `/proc/asound/cards`
-and `dmesg` (pending the operator), then a host test in `tests/audio_out_test.c` with a fake device whose
-space is frozen and whose write returns `-ENODEV`. A Bluetooth sink (F17) will fail over through this
-same path, so it gates that work too.
 
 ### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
 
@@ -245,7 +230,7 @@ the single connector. No BlueZ userspace is on the unit — measured on `.188` 2
 
 - **ALSA is the audio route** ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), because `bluez-alsa` is an alsa-lib
   *plugin*. Operator by ear on `.188`: a game on onboard and on the USB dongle, `control_panel` TEST AUDIO on
-  both, ScummVM. The Mix Bus Test crack is B38; the undetected second unplug is B42. **Loudness:** an onboard
+  both, ScummVM. The Mix Bus Test crack is B38. **Loudness:** an onboard
   probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
   the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
 - Nothing loads the Bluetooth modules at boot, and no script deploys them or the firmware.
