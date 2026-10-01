@@ -36,13 +36,18 @@
 /* Play area.
  *
  * The playfield is drawn and collided against, never pressed (the paddle
- * follows touch X only), so it spans the whole VISIBLE screen horizontally and
- * down to its bottom edge. AREA_Y stays anchored to SCREEN_SAFE_TOP because it
- * has to clear the menu/exit button row, which does have to be pressable. */
+ * follows touch X only), so it is the whole VISIBLE rectangle: the ball's
+ * ceiling is the top edge of the screen. The menu/exit button row is pressable
+ * and therefore sits at SCREEN_SAFE_TOP, overlaid on the field together with
+ * the score; the bricks start just below that row (HEADER_BOTTOM), and the
+ * header band above them is the space the ball can get "behind" the bricks in.
+ * Nothing here adds the touch inset to a drawn edge. */
 #define AREA_X      SCREEN_VISIBLE_LEFT
-#define AREA_Y      (SCREEN_SAFE_TOP + 65)      /* leave room for buttons (50px) + small gap */
+#define AREA_Y      SCREEN_VISIBLE_TOP
 #define AREA_W      SCREEN_VISIBLE_WIDTH
 #define AREA_H      (SCREEN_VISIBLE_BOTTOM - AREA_Y)
+#define HEADER_BOTTOM (LAYOUT_MENU_BTN_Y + BTN_MENU_HEIGHT)
+#define BRICK_TOP   (HEADER_BOTTOM + 5)         /* first brick row's top edge, less BRICK_PAD */
 
 /* Paddle */
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)
@@ -450,9 +455,6 @@ static void create_bricks(void) {
     if (scaled_rows > brick_rows) scaled_rows = brick_rows;
     if (scaled_rows < lv->rows) scaled_rows = lv->rows;  /* never fewer than base */
 
-    /* Add larger vertical offset - creates space above bricks for ball bouncing */
-    int vertical_offset = 40;  /* pixels from top of play area - allows ball to go behind/above bricks */
-
     for (int r = 0; r < scaled_rows && r < brick_rows; r++) {
         for (int c = 0; c < brick_cols; c++) {
             if (!pattern_has_brick(lv->pattern, r, c, scaled_rows, brick_cols))
@@ -465,7 +467,7 @@ static void create_bricks(void) {
 
             Brick *b = &game.bricks[game.brick_count];
             b->x = AREA_X + BRICK_PAD + c * (brick_w + BRICK_PAD);
-            b->y = AREA_Y + BRICK_PAD + vertical_offset + r * (BRICK_H + BRICK_PAD);
+            b->y = BRICK_TOP + BRICK_PAD + r * (BRICK_H + BRICK_PAD);
             b->w = brick_w;
             b->h = BRICK_H;
             b->health = lv->health[base_r];
@@ -1218,12 +1220,16 @@ static void update_game(void) {
 
 static void draw_hud(void) {
     char buf[64];
+    /* Everything here sits in the header band, between the two pressable
+     * buttons, and is anchored to their edges rather than to the screen's. */
+    int hud_left  = LAYOUT_MENU_BTN_X + BTN_MENU_WIDTH + 10;
+    int hud_right = LAYOUT_EXIT_BTN_X - 10;
 
-    /* Level - positioned next to menu button */
+    /* Level - next to the menu button */
     snprintf(buf, sizeof(buf), "LV %d", game.level);
-    fb_draw_text(&fb, AREA_X + 90, SCREEN_SAFE_TOP + 22, buf, HUD_COLOR, 1);
+    fb_draw_text(&fb, hud_left, SCREEN_SAFE_TOP + 22, buf, HUD_COLOR, 1);
     if (test_mode) {
-        fb_draw_text(&fb, AREA_X + 90, SCREEN_SAFE_TOP + 12, "TEST", RGB(255, 255, 0), 1);
+        fb_draw_text(&fb, hud_left, SCREEN_SAFE_TOP + 12, "TEST", RGB(255, 255, 0), 1);
     }
 
     /* Score (centred between buttons) */
@@ -1231,9 +1237,10 @@ static void draw_hud(void) {
     int sw = (int)strlen(buf) * 12;
     fb_draw_text(&fb, AREA_X + AREA_W / 2 - sw / 2, SCREEN_SAFE_TOP + 20, buf, HUD_COLOR, 2);
 
-    /* Hearts for lives - positioned before exit button, compact */
+    /* Hearts for lives - right-aligned against the exit button. A heart spans
+     * hx-4 .. hx+9, so the rightmost one's hx is hud_right - 9. */
     for (int i = 0; i < game.lives && i < 9; i++) {
-        int hx = AREA_X + AREA_W - 90 - i * 14;  /* smaller spacing */
+        int hx = hud_right - 9 - i * 14;
         int hy = SCREEN_SAFE_TOP + 22;
         /* Smaller hearts */
         fb_fill_circle(&fb, hx, hy + 2, 4, HEART_COLOR);
@@ -1241,22 +1248,24 @@ static void draw_hud(void) {
         fb_fill_rect(&fb, hx - 3, hy + 2, 11, 5, HEART_COLOR);
     }
 
-    /* Active effect indicators — compact status at top of play area */
-    int ey = AREA_Y + 5;
+    /* Active effect indicators — one row under the level, still in the header
+     * band, so they cannot collide with the bricks below HEADER_BOTTOM. */
+    int ex = hud_left;
+    int ey = SCREEN_SAFE_TOP + 36;
     if (game.fx.paddle_level != 0) {
         snprintf(buf, sizeof(buf), "PAD%+d", game.fx.paddle_level);
         uint32_t color = game.fx.paddle_level > 0 ? RGB(80, 220, 80) : RGB(255, 60, 60);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, color, 1);
-        ey += 12;
+        fb_draw_text(&fb, ex, ey, buf, color, 1);
+        ex += text_measure_width(buf, 1) + 8;
     }
     if (game.fx.speed_level != 0) {
         snprintf(buf, sizeof(buf), "SPD%+d", game.fx.speed_level);
         uint32_t color = game.fx.speed_level < 0 ? RGB(255, 255, 80) : RGB(0, 200, 255);
-        fb_draw_text(&fb, AREA_X + 4, ey, buf, color, 1);
-        ey += 12;
+        fb_draw_text(&fb, ex, ey, buf, color, 1);
+        ex += text_measure_width(buf, 1) + 8;
     }
     if (game.fx.fireball) {
-        fb_draw_text(&fb, AREA_X + 4, ey, "FIRE", RGB(255, 140, 0), 1);
+        fb_draw_text(&fb, ex, ey, "FIRE", RGB(255, 140, 0), 1);
     }
 }
 
@@ -1438,16 +1447,8 @@ static void draw_game_screen(void) {
 
     button_draw_menu(&fb, &btn_menu);
     button_draw_exit(&fb, &btn_exit);
-
-    /* Launch hint */
-    if (!game.ball_launched) {
-        if (!gp_input.gamepad_connected && !gp_input.keyboard_connected)
-            text_draw_centered(&fb, AREA_X + AREA_W / 2, PADDLE_Y + 30,
-                               "TAP TO LAUNCH", RGB(120, 120, 160), 2);
-        else
-            text_draw_centered(&fb, AREA_X + AREA_W / 2, PADDLE_Y + 30,
-                               "A/SPACE: LAUNCH  L/R: MOVE", RGB(120, 120, 160), 2);
-    }
+    /* No in-game launch hint: the title screen already says how to launch
+     * and move, and the operator found the line redundant. */
 }
 
 /* ── Overlay screens ─────────────────────────────────────────────────── */
@@ -1820,8 +1821,7 @@ int main(int argc, char *argv[]) {
      * In portrait (~400px+ gap) we need a faster base so the ball
      * reaches the bricks in ~2.5 seconds at 60fps (150 frames). */
     {
-        int vertical_offset = 40;  /* must match create_bricks() */
-        int lowest_brick_y = AREA_Y + BRICK_PAD + vertical_offset
+        int lowest_brick_y = BRICK_TOP + BRICK_PAD  /* as create_bricks() */
                            + brick_rows * (BRICK_H + BRICK_PAD);
         int paddle_y = PADDLE_Y;
         int distance = paddle_y - lowest_brick_y;
