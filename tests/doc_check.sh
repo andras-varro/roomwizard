@@ -353,6 +353,7 @@ receipts() {
     # shellcheck disable=SC2016
     cat <<'EOF'
 0x3e4	usb_host/README.md	IMPROVEMENT_PLAN.md
+source-path=SCRIPTDIR	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
 9021923205825a2ec36edeaa1fe3ccc3	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 0x480AB060	usb_host/README.md	IMPROVEMENT_PLAN.md
 oss_keepalive.c	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
@@ -888,6 +889,10 @@ group_c() {
 # the directory guide had no section for any of it. They moved here as one section; IMPROVEMENT_PLAN.md paid
 # with the rest of that deleted entry, into its own slack rather than this ceiling.
 #
+# 2026-10-01: tests/CLAUDE.md 314 -> 324. The file sat at 313 and the shellcheck-directive traps (prose that voids
+# a file, `source-path=SCRIPTDIR` placement, gate-shape measurement) moved in from a plan entry as nine lines;
+# the plan paid with the rest of that entry and its ceiling was not lowered, for the reason above.
+#
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
@@ -901,7 +906,7 @@ ceilings() {
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
-314	tests/CLAUDE.md
+324	tests/CLAUDE.md
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md

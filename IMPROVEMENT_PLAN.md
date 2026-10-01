@@ -27,73 +27,50 @@ Device facts live there; this file holds only what we intend to *do* about them.
 
 ## Needs a human at the panel
 
-There is no `/dev/uinput`, so nothing past an app's first screen is script-verifiable
-(`CLAUDE.md` → *Non-obvious constraints*). Panel time is the project's scarce resource, so these are
-grouped to be handed over as **one checklist** rather than asked for one at a time.
-
-**Nothing is outstanding.** The last item — the crack when a finger lifts off `Tap-a-Theremin`'s pad — was
-answered at the panel 2026-09-01 on `.188`: *"working perfectly"*, unhedged. ⚠️ **That is a verdict where a
-description was asked for**, so the ~139 ms tail the fade leaves behind the finger went unmentioned and is
-neither confirmed nor denied. The pass stands anyway, because the guard was against a *tail* being reported
-as the defect and no defect was reported at all — but a verdict is the weaker answer, and the next item
-should say which one it needs.
-
-The high-score chime and the game-over descent were confirmed distinct to the ear 2026-09-01, so the
-question of whether two simultaneous sounds separate does not need asking again for that pair.
-
-Rules for asking: price the check before requesting it, split an item when only part of it is gated,
-and record the answer with the confidence it was given — "I think it works" is a hedge, not a pass.
+**Nothing is outstanding.** There is no `/dev/uinput`, so nothing past an app's first screen is
+script-verifiable (`CLAUDE.md` → *Non-obvious constraints*), and panel time is the project's scarce
+resource: price the check before requesting it, group requests into **one checklist**, split an item when
+only part of it is gated, and record the answer with the confidence it was given — "I think it works" is a
+hedge, and a verdict is a weaker answer than a description, so say which one the next item needs.
 
 ---
 
 ## Correctness and verification
 
-### B29. Two findings left from the 2026-08-09 walkthrough — open
+### B29. Two findings from the 2026-08-09 walkthrough — open
 
 1. ⚠️ **`card-prep.sh` still asks the operator to mount the rootfs; `commission-offline.sh` does not, and
    the asymmetry has no reason left.** The operator is holding the card either way, and
    `rw_mount_card`/`rw_check_card_mounts` already exist and are what the offline pass uses. Phase 1
    should find the card disk (`rw_find_card_disks`), mount what it needs, and unmount on every exit path
    — with `$ROOTFS` still honoured as the "I mounted it myself" hatch, and the desktop-automounted case
-   detected rather than double-mounted. ⚠️ **It now needs p2 as well as p6** (the sibling change in
-   `ce30399` mounts p2 read-only to read `websign/net.mode`), so this is one mount decision covering
-   both, not a bolt-on. Whatever mounts must also be reachable from a failure trap, the same rule
-   `rw_umount_boot` follows.
+   detected rather than double-mounted. ⚠️ **It needs p2 as well as p6** (`websign/net.mode` is read from
+   p2, mounted read-only), so this is one mount decision covering both. Whatever mounts must also be
+   reachable from a failure trap, the same rule `rw_umount_boot` follows.
 2. **The panel keeps displaying the vendor's old IP after phase 1, while SSH answers on the new one** —
    observed 2026-08-09 on the unit commissioned with the regenerator disabled. Consistent with the
    display reading `websign/net.ipaddress`/`net.status` on **p2**, which phase 1 does not touch: the
    vendor UI is showing its own stale config, not the live interface. Benign, and it disappears with the
    clean that deletes `websign/`. **Worth confirming that is the source** before writing it down as
    fact anywhere else — it is currently an inference from where the value could have come from.
-3. **~~The `--deep-clean` menu item announces the USB power change~~ — done 2026-08-09.** The p1 500 mA
-   write is step 5 of *every* `provision.sh` mode; the gate was right and the labelling was not. The
-   menu-2 block now says so under the items, naming (a) — which writes p1 while deleting nothing — and
-   `--keep-sweeps` — which still writes it — as the two cases that separate the steps, and
-   `provision.sh --help` carries the same paragraph. The consent prompt is unchanged: it already named
-   the two writes separately.
 
 ### B30. `brick_breaker` hides lives past the ninth — open, latent, cosmetic
 
-Found 2026-08-10 while giving Office Runner a training mode. Three games draw a capped HUD lives row
-and each caps it differently:
+Three games draw a capped HUD lives row and each caps it differently:
 
 | Game | Shape | Verdict |
 |---|---|---|
 | `frogger.c:1269` | `lives_shown = min(lives, 5)`, then lays out from `lives_shown * LIFE_ICON_PITCH` | correct |
-| `platformer.c:1541` | positioned from `game_lives * 16`, drew `min(game_lives, 5)` | **was wrong** — fixed 2026-08-10, see below |
+| `platformer.c:1541` | lays out from the capped number and draws one icon plus `x10` past the cap | correct |
 | `brick_breaker.c:1224` | `for (i < game.lives && i < 9)`, each heart at a fixed anchor minus `i * 14` | **silently truncates** |
 
-Brick Breaker's arithmetic cannot produce Office Runner's gap — it grows leftward from a fixed
-anchor, so the row is always where it belongs — but the extra-life power-up at
-`brick_breaker.c:718` does `game.lives++` with no cap, so a tenth life and every one after it is
-**invisible**: the HUD reads nine whether you hold nine or fourteen, and losing one appears to change
-nothing. Cosmetic, never a crash, and it needs a power-up-heavy run to reach, which is why it has not
-been seen.
+The extra-life power-up at `brick_breaker.c:718` does `game.lives++` with no cap, so a tenth life and
+every one after it is **invisible**: the HUD reads nine whether you hold nine or fourteen, and losing one
+appears to change nothing. Cosmetic, never a crash, and it needs a power-up-heavy run to reach, which is
+why it has not been seen.
 
-Fix is the rule the other two now follow: cap first, lay out from the capped number, and say what the
-cap hid — Office Runner draws one icon plus `x10` rather than five icons meaning ten. Do the same with
-a heart plus `x10`, or raise the cap; either way the number has to appear somewhere once it exceeds
-what is drawn.
+Fix is the rule the other two follow: cap first, lay out from the capped number, and make the number
+appear somewhere once it exceeds what is drawn — a heart plus `x10`, or a raised cap.
 
 ### B41. An adapter replug can print `configured as A device timeout` on our image — open, seen once 2026-09-29
 
@@ -109,8 +86,8 @@ wait needs the PHY/glue resumed first or the loop is simply too short.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
-`commissioning/set-hostname.sh` and the avahi link have shipped, so a named unit answers to `<name>.local` from
-Windows. Two pieces of residue:
+A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
+residues:
 
 1. **WSL cannot resolve `.local`.** Its `/etc/nsswitch.conf` is `hosts: files dns` — no mDNS module —
    so `./commissioning/provision.sh rw09.local` passes validation, reaches the SSH step and then fails to
@@ -501,102 +478,47 @@ now, but the noise is still the cause.
 - `common.c:108` `text_truncate()` takes **no destination size** and does `strcpy(dest, upper)` (up to
   256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `control_panel/usb_page.c:243`
   passes a 48-byte buffer for a 48-byte product name (safe only because the source is itself 48), while the
-  Input page's two callers use 256-byte buffers (measured by grep; the old 48-byte-for-128 caller lived in the
-  deleted control-panel tab code and is gone). One longer source from a stack smash.
+  Input page's two callers use 256-byte buffers. One longer source from a stack smash.
   Add a `size_t dest_size` parameter.
 - Text width must come from `text_measure_width()`, because `fb_draw_text` advances **6 px/char**
   while several sites compute **8**. Titles render ~17 % left of centre and long strings clip off the
-  left edge. `screen_draw_welcome*()` is fixed; **still wrong: `screen_draw_game_over()`** (message and
+  left edge. **Wrong: `screen_draw_game_over()`** (message and
   score widths) **and `ui_layout.c:326`**.
 
 ### C6. Extend the host-buildable test harness — open
 
-⚠️ **Touch injection does not work and cannot be made to work on this device** (no `/dev/uinput`;
-evdev's `write()` is the output-event path). The rule and the evidence are in `CLAUDE.md` →
-*Non-obvious constraints*. **This invalidates the touch half of anything built on injection, so read
-it first.**
-
-One piece remains — the host-gcc regressions over the pure-logic parsers are done and gated, and so is
-the absent-fixture guard that stopped `tests/rw_provision_test.sh` reporting a missing stub as a subject
-defect:
+The host-gcc regressions over the pure-logic parsers are done and gated. One piece remains.
 
 **Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
 `fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
-`assert alive after 2 s`, across all ~15 binaries. That is a real smoke test and it has caught real
-defects when done by hand. Anything past the first screen needs a tap-by-tap checklist for a human
-instead. ⚠️ **`assert not-all-black` is nearly vacuous on its own** — assert a minimum count of
-distinct pixel values, take the depth from `fbset | grep geometry` on the device rather than assuming
-32bpp, and keep *did not start* / *started and died* / *black screen* / *harness could not tell* as
-separate outcomes, because silence is not success. It needs a device to **run** but not to **write**:
-prove every branch on the host with an `ssh` stub on `PATH`, the way `tests/rw_provision_test.sh` does.
+`assert alive after 2 s`, across all ~15 binaries. That has caught real defects when done by hand.
+Anything past the first screen needs a tap-by-tap checklist for a human. ⚠️ **`assert not-all-black` is
+nearly vacuous on its own** — assert a minimum count of distinct pixel values, take the depth from
+`fbset | grep geometry` on the device rather than assuming 32bpp, and keep *did not start* / *started and
+died* / *black screen* / *harness could not tell* as separate outcomes, because silence is not success. It
+needs a device to **run** but not to **write**: prove every branch on the host with an `ssh` stub on
+`PATH`, the way `tests/rw_provision_test.sh` does.
 
-**Gap, measured 2026-09-30: `./tests/run-all.sh` does not compile `control_panel`.** A worker's
-`control_panel.c` with a compile error passed the host gate (32 passed, 0 failed, 2 skipped); only the ARM
-build in `native_apps/build-and-deploy.sh` caught it. **Done when** a gate step compiles the control panel's
-sources (syntax-only is enough), and it is seen failing against a deliberately broken copy kept outside the repo.
-
-Three rules these established, all load-bearing:
-
-- **Write the failing version first.** Each existing regression was compiled against the pre-fix
-  source and confirmed to fail before the fix was trusted. On a codebase with no CI, a test that has
-  only ever been seen passing is not evidence that it can fail.
-- **Guard bytes turn a heap overflow into an assertion** instead of a mystery. That is the only way to
-  see an out-of-bounds framebuffer write at all: on the device it corrupts whatever `malloc` handed out
-  next rather than drawing anything wrong.
-- **A device limit is not a code limit.** "Input cannot be tested without `/dev/uinput`" was believed
-  for months and is false: `gamepad_poll()` takes the touch coordinate as a plain argument and its
-  evdev sources are `read(2)` on an fd, so a temp file of `struct input_event` assigned to
-  `gm.gamepad_fd` drives the real code path. Before writing a "needs a human" checklist, ask whether
-  the thing needs the *kernel* or only needs *events*.
-
-And for anyone reading a raw value off the wire: **screen→raw conversion must read
-`/etc/touch_calibration.conf`, not assume `0..4095`** — the fit legitimately extrapolates past the
-12-bit range, so assuming the hardware limits lands ~30 px out on Y. Use
-`raw = screen*(max-min)/(dim-1) + min`.
+**Gap, measured 2026-09-30: `./tests/run-all.sh` does not compile `control_panel`.** A `control_panel.c`
+with a compile error passed the host gate (32 passed, 0 failed, 2 skipped); only the ARM build in
+`native_apps/build-and-deploy.sh` caught it. **Done when** a gate step compiles the control panel's
+sources (syntax-only is enough), and it is seen failing against a deliberately broken copy kept outside
+the repo.
 
 ### C7. Burn down the shellcheck backlog — open
 
-The shell scripts *are* the deployment system and they run as root over SSH. `tests/run-all.sh` phase 3
-now runs `shellcheck` over every tracked script before any deploy or release, in two tiers, so **nothing
-new can be added** — the tiers, the ratchet and the `SC1124` trap are in `tests/CLAUDE.md`. What is open
-is the backlog that was already there when the gate landed, recorded one row per `(file, code)` in
+The shell scripts *are* the deployment system and they run as root over SSH. The gate's two tiers, the
+ratchet and the `SC1124` trap are in `tests/CLAUDE.md`, as are the directive traps and the gate-shape
+measurement rule. What is open is the backlog recorded one row per `(file, code)` in
 `tests/shellcheck-baseline.txt`. `sort -k3 -rn tests/shellcheck-baseline.txt | head` puts the worst files
-first; `scummvm-roomwizard/manage-scummvm-changes.sh` leads it, then
-`probes/xbee_socket_continuity.sh`, then `scummvm-roomwizard/build-and-deploy.sh` and
-`commissioning/card-prep.sh`. ⚠️ **`native_apps/build-and-deploy.sh` is done and is no longer a
-leader** — its `SC1091` and `SC2162` rows reached zero and were deleted, and what is left there is
-deliberate: word-splitting that a rewrite cannot exercise, client-side expansion of local constants
-that `SC2029`'s remedy would break, and deploy-path `ls` sites free at the next real deploy.
+first: `scummvm-roomwizard/manage-scummvm-changes.sh`, then `probes/xbee_socket_continuity.sh`, then
+`scummvm-roomwizard/build-and-deploy.sh` and `commissioning/card-prep.sh`. What remains in
+`native_apps/build-and-deploy.sh` is deliberate: word-splitting that a rewrite cannot exercise,
+client-side expansion of local constants that `SC2029`'s remedy would break, and deploy-path `ls` sites
+free at the next real deploy.
 
-Three things to know before starting:
-
-- ⚠️ **A `# shellcheck` comment whose first word is followed by anything but a valid directive makes the
-  tool exit 1 having analysed NOTHING in that file.** It reads exactly like a clean run that found one
-  small problem. A directive in front of a single `case` branch is enough to do it — put it in front of
-  the whole function. ⚠️ **Prose is enough to do it too**, and that is the easy way in: a comment
-  explaining a directive, opening with the checker's own name, is parsed *as* a directive and reports
-  `SC1072`/`SC1073` while suppressing every real finding. Measured: a file's count fell from 69 to 2
-  that way. ⚠️ **So a small post-patch total is not evidence of success — the expected distribution per
-  code is**, and a voided file has almost none of it. Never open an explanatory line with that word.
-- **Prefer a fix that changes no behaviour to a `disable=` directive**, which is why no shipped script
-  carries one for this backlog. The two `error:`-severity findings that existed are gone that way: they
-  were `$key[` inside `"…$key[[:space:]]…"` in `lib/rw-provision.sh`, which shellcheck reads as a botched
-  array expansion where the code is in fact correct, and `${key}` braced says so.
-- ⚠️ **`-x` does not help, and `# shellcheck source-path=SCRIPTDIR` does.** Measured: `-x` over the
-  whole tracked set leaves the output byte-identical. What clears `SC1091` is that directive, because
-  the tool resolves a `source=` path against its **own** working directory — the repo root when the
-  gate runs — and `SCRIPTDIR` makes it the script's instead. It is not a `disable=`; it makes the tool
-  analyse *more*. ⚠️ **Placement is the whole trick and it is file-wide only above the first command**:
-  negative controls measured in place gave four findings with the directive removed and four with it
-  moved below `set -e`, zero only above. The worked example, with that mechanism written out, is at the
-  top of `native_apps/build-and-deploy.sh`.
-- ⚠️ **Measure in the gate's shape — every tracked script at once, from the repo root — never one file
-  alone.** The same file checked alone reports four `SC1091` the gate does not, because the gate passes
-  the sourced libraries as inputs too. An "alone" measurement contradicted the rule above and cost real
-  time before the gate-shape run settled it. `shellcheck -f gcc $(git ls-files -- '*.sh')` is the form.
-
-Do not "fix" a finding by rewriting a line you cannot exercise. Several of the leaders are in build
-scripts that only a real deploy runs.
+**Prefer a fix that changes no behaviour to a `disable=` directive.** Do not "fix" a finding by rewriting
+a line you cannot exercise — several of the leaders are in build scripts that only a real deploy runs.
 
 ### C9. A bundle cannot prove its stripped binaries were ever gated — open, measured 2026-08-08
 
@@ -617,22 +539,15 @@ the installer's summary must keep saying `TAKEN ON TRUST` in those words.
 ### C10. Make a deep game state reachable without playing to it — open
 
 `brick_breaker`'s indestructible bricks only exist from **level 5 up**, so verifying them costs a full
-play session of somebody's time — which is why that check keeps being postponed, reasonably. A
-`--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
-future level-dependent bug. Generalise to the other games where a state is expensive to reach.
-
-**Operator ruling 2026-09-06: a test-only command-line switch is acceptable** — the launcher passes no
-arguments, so such a flag is reachable over SSH and deliberately not from the panel, which is what a test
-entry point wants. It supersedes the 2026-08-10 decision below that only a pause-dialog entry would do.
-**The 2026-08-10 decision: a pause-dialog entry, not a CLI argument.** Office Runner's
-TRAINING toggle is the first worked example — `platformer.c`'s pause dialog, 10 lives and one more per
-50 coins, which makes its level 3 reachable by hand without a flawless run. A `--training` flag was
-offered and declined, so the shape to copy is menu-only. Note what that costs, because it is the whole
-of C10's original argument: a menu toggle is **not** script-reachable — there is no `/dev/uinput`, so
-nothing can tap it — and a mode with no CLI entry therefore has no first-screen SSH check either. It
-makes a deep state cheaper for a **human**, not automatable. `brick_breaker` already has both halves
-(`--test` and a pause toggle), so its level-5 problem is still open on the level number, not on the
-mechanism.
+play session of somebody's time. A `--level N` argument or a debug entry in the pause dialog turns it into
+one launch, and would serve any future level-dependent bug; generalise to the other games where a state is
+expensive to reach. **Operator ruling: a test-only command-line switch is acceptable** — the launcher
+passes no arguments, so such a flag is reachable over SSH and deliberately not from the panel, which is
+what a test entry point wants. `brick_breaker` already has both halves (`--test` and a pause toggle), so
+its level-5 problem is open on the level number, not on the mechanism. A pause-dialog toggle (the shape
+Office Runner's TRAINING toggle in `platformer.c` uses) is not script-reachable — there is no
+`/dev/uinput` — so a mode with no CLI entry has no first-screen SSH check either; it makes a deep state
+cheaper for a human, not automatable.
 
 ### C12. Offline commissioning has never been run against a real disk — open
 
@@ -646,15 +561,13 @@ to us.** The entry stays open as a known gap in the delivery path, not as work a
 ### C15. The bare plan-ID scan collides with function-key names — open, measured 2026-09-03
 
 `bare_sites()` in `tests/doc_check.sh` matches an `F`-numbered ID in parentheses or after `see`/`is`/
-`was`, and F1-F12 are key names as well as plan IDs here — so the ScummVM key-table row
-`Save/load dialog (F5)` counted as a citation. It resolved silently for as long as that heading
-existed, then became a dangling citation the moment the entry was deleted; the tree was made green by
-rewording the key row in `scummvm-roomwizard/README.md`. **So the reported citation count carries
-false positives, and the next F-numbered entry to close will fail the gate on unrelated
-documentation.** Narrow the scan rather than excluding a file: a hit on a line that also carries a
-key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column key table, is not a
-citation. ⚠️ Needs a control in both directions — a real bare citation must still fire, and it must
-fire in a file of the same kind, or the scan goes blind where it used to see.
+`was`, and F1-F12 are key names as well as plan IDs here — a ScummVM key-table row such as
+`Save/load dialog (F5)` counts as a citation, and it turns into a dangling one the moment an entry of that
+number closes. **So the reported citation count carries false positives, and the next F-numbered entry to
+close can fail the gate on unrelated documentation.** Narrow the scan rather than excluding a file: a hit
+on a line that also carries a key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column
+key table, is not a citation. ⚠️ Needs a control in both directions — a real bare citation must still fire,
+and it must fire in a file of the same kind, or the scan goes blind where it used to see.
 
 ### C17. A layout rule for `control_panel` pages and future apps — open, operator request 2026-10-01, later
 
@@ -682,12 +595,10 @@ the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (
 
 ## Out of Scope
 
-Recorded so the decision is not re-litigated. ⚠️ **A kernel rebuild is no longer a reason to be in this
-table** — the image build is F101, and a config symbol on its own no longer blocks anything. What keeps
-these rows here is the *board*: anything needing a connector, a populated device or a wire is out under
-[`#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy). Requesting GPL source from Steelcase stays
-ruled out, and is needed for nothing
-([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)).
+Recorded so the decision is not re-litigated. Anything needing a connector, a populated device or a wire
+is out under [`#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy); a kernel config symbol on its own
+blocks nothing, since we build the image (F101). Requesting GPL source from Steelcase stays ruled out and
+is needed for nothing ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)).
 
 | Item | Blocked by | Detail |
 |------|---|---|

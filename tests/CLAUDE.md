@@ -77,6 +77,15 @@ tightened. That ratchet is why **no shipped script carries a `disable=` directiv
 suppressing it would add `SC1124` risk of its own — and why refreshing the baseline is a separate
 `--only=shellcheck-baseline` mode, since a gate that refreshes its own baseline as a side effect can
 never fail. Regenerate it deliberately, and only after reading what changed.
+⚠️ **A `# shellcheck` comment whose first word is not followed by a valid directive voids the whole
+file's analysis** (exit 1, `SC1072`/`SC1073`) — and *prose* is enough: a comment explaining a directive
+and opening with the checker's name is parsed as one (measured: a file's count fell 69 → 2). A small
+post-patch total is therefore not evidence; the expected per-code distribution is. A directive in front
+of one `case` branch does it too — put it before the function. **`-x` changes nothing** (measured
+byte-identical); `# shellcheck source-path=SCRIPTDIR` clears `SC1091` and is valid only above the first
+command (four findings with it removed or moved below `set -e`, zero above; worked example at the top of
+`native_apps/build-and-deploy.sh`). **Measure in the gate's shape** — `shellcheck -f gcc $(git ls-files --
+'*.sh')` from the repo root — never one file alone: alone, it reports four `SC1091` the gate does not.
 
 ⚠️ **Running the whole gate as root does NOT reach phase 2 on this host, so a root-only C regression is
 reached by compiling and running that one test as root** — its own header carries the command. Two
