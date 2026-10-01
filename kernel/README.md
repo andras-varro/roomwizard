@@ -55,6 +55,33 @@ Installing the image on a unit follows the p1 rules in `lib/CLAUDE.md`. Take a b
 `uImage-system`, copy the new one over it, and have the operator reboot. The undo is copying the
 backup back, by SSH if the image answers or with a card reader if it does not.
 
+`.188`'s p1 keeps the images it has run beside `uImage-system`, as rollbacks and negative controls:
+`.vendor` (`edc637ac…`), `.500ma` (`a1fd1af8…`, vendor plus the USB power patch), `.mod` (`17243454…`, the
+same patched image without it), `.ours-nopanel` (`3713faf7…`, vendor DTB), `.panel-v1` (`8bd1e362…`, before the
+fb-size and backlight patches) and `.disconnect` (`926896a5…`, before the ID-ground patch). The running
+`uImage-system` is our image with every `kernel/patches/` patch and our panel DTB (`f3b446c6…`, no 500 mA
+power patch).
+
+## Bluetooth modules
+
+`build-bt-modules.sh` makes 18 modules with `BT=m`: `bluetooth`, `btusb`, `btrtl`, `hidp`, `uhid`, `uinput`,
+`ecdh_generic`, `af_alg`, `algif_hash`, `algif_skcipher` and the crypto set `cmac`, `ecb`, `sha256_generic`,
+`hmac`, `drbg`. **Measured:** the relinked `vmlinux` is byte-identical to the image's and all 762 imported
+CRCs match; on `.188` all load by `insmod` except `jitterentropy_rng` (`host not compliant with requirements:
+2`, harmless — `drbg` loads without it). Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`
+and `CONFIG_MODULE_SIG` is unset. Nothing loads them at boot, and no script deploys them or the firmware:
+both sit on `.188` only (`/lib/modules/4.14.52/bt/`, `/lib/firmware/rtl_bt/`).
+
+The operator's dongle `0b05:1bf6` is a Realtek **RTL8761CU**: `btrtl` logs `hci_ver=0d hci_rev=000e
+lmp_ver=0d lmp_subver=8761`, rom_version 1. Mainline knows the 8761CU from v6.19 (`ic_id_table`, lmp `0x8761`,
+hci_rev `0x0e`) and has no `0b05:1bf6` in any tag (nearest `0b05:1bef`); 4.14's `btrtl` keys on `lmp_subver`
+alone, which 8761A, 8761B and 8761CU share. Its class `e0-01-01` binds `btusb` generically with `driver_info
+== 0`, so `BTUSB_REALTEK` is never taken without our patch. `patches-modules/btusb-asus-1bf6-realtek.patch`
+adds the ID and `btrtl-rtl8761cu.patch` the chip (8761CU firmware is epatch v1, which 4.14 parses; project id
+51; an unknown 8761 `hci_rev` is refused). With the firmware from `3rdparty/realtek/bluetooth/` (provenance and
+md5s in its `README.md`) the 263-byte download succeeds: `hci_revision` goes `0x000e` to `0x7bf1`,
+manufacturer 93. No MUSB DMA question stands in the way: A2DP is tens of KB/s, which PIO carries.
+
 ## What we patch, and why
 
 | Patch | Without it | Found by |

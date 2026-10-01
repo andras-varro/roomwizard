@@ -236,12 +236,6 @@ Both are readable with `cat` today and have zero references in the codebase
 - `in_temp1_input` — SoC die temperature. Add a readout to Control Panel (~10 minutes).
 - `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
 
-⚠️ **The analogue-paddle half is closed, 2026-09-06, and must not be re-proposed.** `in_voltage2..7`
-are six idle general-purpose channels and a potentiometer on one would be a real analogue paddle, but
-`ADCIN2..ADCIN7` have no populated test point — an input device needs one physically wired to a
-channel, which [`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) rules
-out. That is a scope decision, not a difficulty one.
-
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -253,63 +247,31 @@ work only.
 
 ---
 
-### F17. Bluetooth peripherals, and whether USB DMA is reachable — open, measured 2026-08-08
+### F17. Bluetooth peripherals — open, measured 2026-08-08
 
 **The want:** a wireless game controller and a headset or speaker for ScummVM. The unit is PoE-wired, the
 Xbox pad is wired, and the integrated speaker is poor
-([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable, and the one that carries sound
-is the worst-sounding one.
+([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable. A wired USB DAC already fixes the
+speaker for anyone willing to run one ([§3.4](SYSTEM_ANALYSIS.md#34-audio) has its measured PIO cost), so what
+this entry adds is the "no cables" half.
 
-⚠️ **F17 is a module build, not a kernel rebuild, measured 2026-09-06:** this repo already builds and ships
-modules against the vanilla tree (`xpad.ko`, `joydev.ko`, `ff-memless.ko`). What genuinely needs kernel work is
-enumeration reliability — a cold port obtaining a session without the RESCAN tap — and F2. Check anything
-else claiming to need a rebuild against that list first.
+**This is a module build, not a kernel rebuild.** The kernel half ships as modules with no p1 write, and the
+dongle's identity, patches and firmware are in [`kernel/README.md`](kernel/README.md). DMA is not a
+prerequisite: A2DP is tens of KB/s and a controller a few hundred bytes/s, which PIO carries.
+**Bluetooth needs a USB dongle — there is no radio on the board**
+([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion); the `J5`/`J6` XBee socket is 802.15.4 and cannot
+host Bluetooth), and there is no second USB port ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies
+the single connector. No BlueZ userspace is on the unit — measured on `.188` 2026-09-11: `hcitool`,
+`bluetoothctl` and `bluetoothd` are all absent.
 
-⚠️ **The operator's dongle `0b05:1bf6` is a Realtek RTL8761CU — measured on `.188` 2026-09-29:** `btrtl`
-logs `hci_ver=0d hci_rev=000e lmp_ver=0d lmp_subver=8761`, rom_version 1. Mainline first knows the 8761CU
-in v6.19 (`ic_id_table` entry lmp `0x8761`, hci_rev `0x0e`), and mainline `btusb` has no `0b05:1bf6` in any
-tag (nearest `0b05:1bef`). ⚠️ **`lmp_subver` alone does not name the chip:** 8761A, 8761B and 8761CU all
-report `0x8761` and differ by `hci_rev` (`0xa`/`0xb`/`0xe`), while 4.14's `btrtl` keys on `lmp_subver`
-alone. The dongle's USB class `e0-01-01` binds `btusb` generically with `driver_info == 0`, so
-`BTUSB_REALTEK` is never taken without our module patch (below).
+**Open now:**
 
-⚠️ **No BlueZ userspace is on the unit — measured on `.188` 2026-09-11:** `hcitool`, `bluetoothctl` and
-`bluetoothd` are all ABSENT, so pairing needs a cross-built BlueZ (next steps below).
-
-⚠️ **"We have no ALSA" is false, and it changes what `bluez-alsa` would cost — measured on `.188`
-2026-09-11.** `libasound.so.2.0.0`, `aplay`, `amixer`, `alsactl` and `speaker-test` are all present, and
-`/proc/asound/cards` lists the panel card and the USB dongle. OSS `/dev/dsp` is an emulation layer over
-that same card, not the native one ([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio)). What
-is missing is the alsa-lib **dev** side only — `/usr/include/alsa` does not exist. So `bluez-alsa` is
-not blocked by ALSA's absence; it is a cross-compile against alsa-lib headers we would have to source,
-a cost this entry never priced, on top of the audio half it already calls the unlikely half. **The operator
-ruled 2026-09-23: on board with moving audio to ALSA wholesale** — scheduled below.
-
-**ALSA route decided 2026-09-27: dynamic `libasound`, built with the soft-float toolchain — and it is
-in.** Native apps and ScummVM build `arm-linux-gnueabi` softfp-dynamic only, `audio_out.c` has no other
-backend, and both bring-up paths refuse a clean rule that reaches that runtime
-([`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio),
-[`#63-cross-compiled-dependencies-must-be-built-from-source`](SYSTEM_ANALYSIS.md#63-cross-compiled-dependencies-must-be-built-from-source)).
-Dynamic because `bluez-alsa` is an alsa-lib *plugin*; the operator's order is ALSA first, then Bluetooth.
-Tag `static-only-last` marks the last all-static commit. Operator by ear on `.188` 2026-09-29: a game on
-onboard and on the USB dongle, `control_panel` TEST AUDIO on both, ScummVM. The Mix Bus Test crack is B38;
-the undetected second unplug is B42. Still open here:
-
-- **Loudness:** an onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare
-  loudness game-vs-game and against the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
-
-**The kernel half ships as modules with no p1 write — measured.** `kernel/build-bt-modules.sh` builds 18
-modules from a copy of the image's tree with `BT=m` and friends: the relinked `vmlinux` is byte-identical to
-the image's and all 762 imported CRCs match. On `.188` all load via `insmod` except `jitterentropy_rng`
-(`host not compliant with requirements: 2`, harmless — `drbg` loads without it). Patches for module-only
-sources live in `kernel/patches-modules/`, which `build-image.sh` never reads:
-`btusb-asus-1bf6-realtek.patch` and `btrtl-rtl8761cu.patch` (the 8761CU firmware is epatch v1, which 4.14
-parses; project id 51; an unknown 8761 `hci_rev` is refused). With the firmware from
-`kernel/3rdparty/realtek/bluetooth/` (provenance and md5s in its `README.md`) in `/lib/firmware/rtl_bt/`,
-the 263-byte download succeeded: `hci_revision` changes `0x000e` → `0x7bf1`, manufacturer 93.
-
-**Open:** nothing loads the modules at boot yet, and no script deploys them or the firmware; both sit on
-`.188` only (`/lib/modules/4.14.52/bt/`, `/lib/firmware/rtl_bt/`).
+- **ALSA is the audio route** ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), because `bluez-alsa` is an alsa-lib
+  *plugin*. Operator by ear on `.188`: a game on onboard and on the USB dongle, `control_panel` TEST AUDIO on
+  both, ScummVM. The Mix Bus Test crack is B38; the undetected second unplug is B42. **Loudness:** an onboard
+  probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
+  the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
+- Nothing loads the Bluetooth modules at boot, and no script deploys them or the firmware.
 
 **Next, in order:**
 
@@ -327,52 +289,12 @@ the 263-byte download succeeded: `hci_revision` changes `0x000e` → `0x7bf1`, m
    `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
    USB card 1. A2DP adds ~150-250 ms latency **[inferred]**.
 
-⚠️ **DMA and Bluetooth are independent, and DMA is not what unblocks Bluetooth.** BT is
-bandwidth-trivial: A2DP is tens of KB/s and a controller is a few hundred bytes/s, which PIO handles
-easily. Do not treat "get DMA working" as a prerequisite.
-
-**Bluetooth needs a USB dongle — there is no radio on the board.** No WiFi and no Bluetooth is fitted
-([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)). The only radio site is `J5`/`J6`, an **XBee
-802.15.4** socket, empty in all three units as received, on UART3 which is `disabled` in the device tree
-— XBee is Zigbee and cannot host Bluetooth. And there is no second USB port and no footprint for one
-([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies the single connector.
-
-**A dongle is on hand as of 2026-08-13**, so this is no longer gated on a purchase.
-
-The module set shipped by the build script: the crypto modules `cmac`, `ecb`, `sha256_generic`, `hmac`,
-`drbg`, and new ones `ecdh_generic`, `af_alg`, `algif_hash`, `algif_skcipher`, `uhid`, `uinput`, `hidp`,
-alongside `bluetooth`, `btusb`, `btrtl`. Loadable because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`
-and `CONFIG_MODULE_SIG` unset.
-
 ⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
 on one 600 MHz core that ScummVM already holds at ~32 %
 ([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
 already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
-than PulseAudio on 234 MB. But ScummVM writes OSS `/dev/dsp` **mono**, so the audio path needs rerouting
-— but that path is now `common/audio_out` for every component, so the reroute has one home rather
-than two. A2DP's latency is fine for point-and-click and wrong for anything twitchy. **The
+than PulseAudio on 234 MB. A2DP's latency is fine for point-and-click and wrong for anything twitchy. **The
 controller half is much more likely to land than the audio half; do not sell them as one feature.**
-
-**Can we get USB DMA?** Yes, on our image: it sets `CONFIG_USB_INVENTRA_DMA` and carries the patch that
-keeps the MUSB master port out of standby after a `usb-host recover` (`kernel/README.md`). On the vendor kernel the
-symbol is unset and `musbhsdma.c` is not compiled at all. ⚠️ **The
-`CONFIG_DMADEVICES=y` / `CONFIG_TI_EDMA=y` that *are* set are a red herring** — that is the **system**
-EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses;
-`CONFIG_USB_TI_CPPI41_DMA` (the dmaengine-based path) is unset and is for AM335x anyway. The lever is
-`CONFIG_KALLSYMS_ALL=y`: every built-in symbol's address is readable at runtime, so a force-loaded module
-could supply `musbhs_dma_controller_create` and `omap2430_ops.dma_init` could be pointed at it — the same
-family as the shipped byte patch of the vendor kernel (`lib/rw-usbpower.sh`), a patch in place rather
-than a rebuild. ⚠️ **But today's noop stubs fail *safely*, falling back to PIO, whereas a misbehaving DMA
-controller scribbles into RAM.** The clean way is the config symbol in an image we build, which is what
-ours does ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)).
-
-**Where the two questions do connect — and the cheaper experiment has already been run.** A wired USB
-DAC needed no encoding, no pairing and no latency budget, and it is now built, shipping and proven on
-hardware, which fixes the speaker complaint directly for anyone willing to run a cable
-([§3.4](SYSTEM_ANALYSIS.md#34-audio) has the measured PIO cost, and it is ~0.6 pp of the core, so DMA is
-not what USB audio was waiting for). **BT audio: low bandwidth, high CPU. USB audio: high bandwidth, low
-CPU.** So what is left of this entry is only the "no cables" half, and its hard problem is the software
-SBC encoding above, not the transport.
 
 **Two cross-cutting constraints on any dongle:** it draws ~50–100 mA, which is marginal against the
 current 100 mA budget — an *independent* argument for the 500 mA p1 power patch — plus the 802.3af
@@ -408,19 +330,13 @@ Linux that boots, finds the card and runs the existing script unchanged. That ke
 and moves the portability problem to a boot medium instead of into the script. Substantial new work,
 deliberately not scoped here.
 
-**Interim, and cheap:** state the host requirement plainly in `COMMISSIONING.md` instead of letting the
-instructions imply that any machine with a card reader will do.
-
 ### F101. Build our own 4.14.52 image — open
 
 **The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's.** The policy and the
-standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The tree is
-`usb_host/linux-4.14.52/`, already configured from the device's own `/proc/config.gz` by
-`build-kernel-modules.sh` and already **measured** producing modules that load on the device. ⚠️ **The
-image boots — measured 2026-09-23 on `.188`**: with `kernel/patches/` applied it reaches
-userspace, takes DHCP and answers SSH ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) holds the cause the
-unpatched image died of, and the recipe is
-[`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). What is left is building the touch driver into the image, the fbcon cursor and boot console, and two unexplained dmesg lines; the panel works ([`kernel/README.md`](kernel/README.md)).
+standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The image boots, takes
+DHCP and answers SSH, and the panel works ([`kernel/README.md`](kernel/README.md) holds the build, the patches
+and the p1 files). What is left is building the touch driver into the image, the fbcon cursor and boot
+console, and one unexplained dmesg line.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
 with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
@@ -435,45 +351,34 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 |---|---|---|
 | Touch | finish `kernel/drivers/cy8ctmg120_ts/` — single- and multi-touch work on our image as a `.ko` from `kernel/build-modules.sh`, loaded at boot by `device-files/touch-module` ([`kernel/README.md`](kernel/README.md) has its state), handshake in [§3.3](SYSTEM_ANALYSIS.md#33-touch) | Open: **(iii) pressure** — test a profile peak-height sum against a light/firm press, the columns and rows being mapped ([§3.3](SYSTEM_ANALYSIS.md#33-touch)); **(iv) calibration accuracy on our driver** — an operator check of the corners; it is unchecked beyond "taps land on tiles" |
 | fbcon cursor | `vt.global_cursor_default=0` via `CONFIG_CMDLINE_EXTEND` | permanently off. U-Boot's bootargs stay untouched — they cannot be persisted |
-| Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice, 2026-09-23) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed 2026-09-23; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
+| Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
-| USB hot plug and disconnect | `kernel/patches/musb-omap2430-session-on-id-ground.patch` (an adapter plug starts a session) and `kernel/patches/musb-a-idle-disconnect.patch` (an unplug clears `is_active`, ending the `printk` storm) — **both booted 2026-09-29 on `.188`: adapter replug enumerates with no RESCAN, unplug clean** | driver changes, not config ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy)); [`kernel/README.md`](kernel/README.md) holds each one's measurement. Nothing is left but shipping them in the image; B41 is the one console line they added |
 | Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 is what this unblocks; the measurement is in [§3.2](SYSTEM_ANALYSIS.md#32-display) |
 | DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. [§3.2](SYSTEM_ANALYSIS.md#32-display) holds the A/B this would overturn and the coefficients |
 
-**The order to do it in, cheapest first.** Each step is worth finishing before the next is started.
+**The order to do it in, cheapest first.**
 
-1. **~~Triage the board-file drop~~ and ~~boot one image, asserted over SSH~~ — both done.** Nothing the
-   vanilla tree lacks blocks a boot except the Ethernet reset pulse, which is a source patch and not a
-   config symbol ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy) has the mechanism and the function-size diff
-   that found it). **`.188`'s p1 now holds** `uImage-system` = our image with every `kernel/patches/` patch and our panel DTB (md5 `f3b446c6…`, staged
-   copy `uImage-system.b40`; the image before the ID-ground patch is `uImage-system.disconnect`, `926896a5…`;
-   without the 500 mA USB power patch), beside `uImage-system.panel-v1` (`8bd1e362…`, before the fb-size
-   and backlight patches), `uImage-system.ours-nopanel` (`3713faf7…`, vendor DTB), `uImage-system.vendor`
-   (`edc637ac…`), `uImage-system.500ma` (`a1fd1af8…`) and `uImage-system.mod` (`17243454…`, the same image
-   *without* the patch, kept as the negative control).
-2. **The touch driver, the fbcon cursor and the boot console** — the three rows above, which share one
+1. **The touch driver, the fbcon cursor and the boot console** — the three rows above, which share one
    image build and one p1 write; the operator has allowed a reboot and a p1 write of `.188` for them. ⚠️ Until the
    module is loaded, `app_launcher` still exits after boot on the missing `/dev/input/touchscreen0` and
    the respawn loop clears fb0 every ~30 s — stop the init script before judging a panel frame.
-3. **Explain the dmesg line our image adds**, `omap2_set_init_voltage: unable
+2. **Explain the dmesg line our image adds**, `omap2_set_init_voltage: unable
    to find boot up OPP` for `vdd_mpu_iva`/`vdd_core` — first check whether the vendor kernel's dmesg
    prints the same line; if it does, this is not ours.
 
-**Which boot channel, and what it costs — writing an image needs no console.** Booting an alternate
-filename requires the `rw20 #` prompt, so it requires the console; overwriting `uImage-system` does not,
-and recovery for that is a card pull plus copying a backup back onto p1
-([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). **The operator has ruled
-that overwrite acceptable — 2026-09-21, "feel free to overwrite, I can re-flash easily".** It does not
-retire the standing rule it suspends ([§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3 is correct for
-anyone without a card writer to hand): **take a verified p1 backup before the write** — of the *running*
-kernel and not merely the pristine vendor one, because on a unit carrying the USB-power patch those are
-different files. The serial console (`P4`, fitted; RS-232 behind `U27`, a MAX3232 breakout ordered for
+**Which boot channel — writing an image needs no console.** Booting an alternate filename requires the
+`rw20 #` prompt, so it requires the console; overwriting `uImage-system` does not, and recovery for that is a
+card pull plus copying a backup back onto p1
+([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). The operator accepts the
+overwrite ("I can re-flash easily"), which does not retire
+[§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3: **take a verified p1 backup before the write**, of the
+*running* kernel and not merely the pristine vendor one, because on a unit carrying the USB-power patch those
+are different files. The serial console (`P4`, fitted; RS-232 behind `U27`, a MAX3232 breakout ordered for
 the operator's TTL cables — [`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion))
-is **off the critical path** now that SSH answers, and remains the only channel for an image that does
-not. ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and
-destroys the vendor recovery image. Considered and rejected 2026-09-21.
+is off the critical path now that SSH answers, and remains the only channel for an image that does not.
+⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and destroys
+the vendor recovery image.
 
 ### F102. Build our own root filesystem for p6 — open, asked for by the operator 2026-09-25
 

@@ -1090,7 +1090,7 @@ boot by `/etc/init.d/usb-host` (S90).
 > Bluetooth dongle (tens of KB/s) and starts to matter for uncompressed USB audio (~190 KB/s).
 > ⚠️ `CONFIG_DMADEVICES=y` and `CONFIG_TI_EDMA=y` *are* set and are a **red herring** — that is the
 > **system** EDMA via dmaengine, not the Inventra engine inside the MUSB block that OMAP3 uses.
-> Whether DMA is reachable at all is open work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+> Our own image sets `CONFIG_USB_INVENTRA_DMA` and DMA works there; the config symbol is the safe route [inferred] — a force-loaded module could not safely supply the controller, since a misbehaving DMA engine scribbles into RAM where today's stubs fall back to PIO ([kernel/README.md](kernel/README.md)).
 
 **Hack 2 — three cross-compiled kernel modules for Xbox controllers.** `CONFIG_INPUT_JOYSTICK`,
 `CONFIG_INPUT_JOYDEV` and `CONFIG_INPUT_FF_MEMLESS` are all unset, and the Xbox 360 pad
@@ -1862,7 +1862,7 @@ Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
 **Why cleanup this aggressive is safe: both bring-up paths refuse a rules file that could reach our
 runtime.** Native apps and ScummVM link the device's loader, glibc, `libasound`, `libstdc++` and
 `libgcc_s` dynamically (§6.3); no rule but a `keep` may touch those or `/usr/share/alsa`
-(`device-files/CLAUDE.md`), so a removal's blast radius is the vendor software that used it.
+(`device-files/CLAUDE.md`), so a removal's blast radius is the vendor software that used it. Git tag `static-only-last` marks the last commit before the dynamic `libasound` build.
 
 **Init services disabled:**
 

@@ -378,6 +378,13 @@ AUDIO_VOL_UNITY	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 0..60000	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 touch_fit_axis_range	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 FB_TOUCH_INSET_MAX	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
+0x7bf1	kernel/README.md	IMPROVEMENT_PLAN.md
+jitterentropy_rng	kernel/README.md	IMPROVEMENT_PLAN.md
+ic_id_table	kernel/README.md	IMPROVEMENT_PLAN.md
+algif_skcipher	kernel/README.md	IMPROVEMENT_PLAN.md
+926896a5	kernel/README.md	IMPROVEMENT_PLAN.md
+17243454	kernel/README.md	IMPROVEMENT_PLAN.md
+static-only-last	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 screen_true_panel_width	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 fb_scale_bezel_to_surface	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 fb_to_game_ppm	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
@@ -871,6 +878,10 @@ group_c() {
 # gains the reduced-surface conversion rules (surface:panel ratio, bezel scaling, touch needing no divide, the
 # unconverted literals). The narrative, instrument-repair history and operator transcripts were deleted, not moved;
 # the plan entry fell by over 300 lines but a ceiling is a budget, so it was not lowered.
+## 2026-10-01: kernel/README.md 100 -> 120, raised in the commit that moved the closed Bluetooth-module and
+# image-boot facts out of the F17 and F101 plan entries: the 18-module set, the RTL8761CU dongle identity and
+# firmware result, and the p1 rollback-image list now live there. The plan entries lost their history narrative
+# and the done steps; the plan ceiling was not lowered, for the reason above.
 #
 # The entry carried the durable design rules of `control_panel` (the CpPage registry, save-at-once and the
 # reset flow, the exit and navigation split, enter-marks-pending, the rejected one-binary-per-page shape) and
@@ -894,7 +905,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-100	kernel/README.md
+120	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }
