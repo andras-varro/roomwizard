@@ -552,3 +552,6 @@ tests/.sab-*
 .b36_build*.txt
 .claude/settings.json.aesml
 .claude/settings.json.sdc
+
+# The operator's own priority list; personal, never tracked
+prio.lst
