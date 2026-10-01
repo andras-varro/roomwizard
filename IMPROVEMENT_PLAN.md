@@ -292,12 +292,9 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
   [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps (a reconnect after a unit
   reboot is measured, §3.6).
 
-**Next, in order:**
+**Next:**
 
-1. **ScummVM redeploy and verify BT audio.** `audio_out` routes to BT (rules: `native_apps/CLAUDE.md`) and the
-   operator verified it in Brick Breaker, but ScummVM was not redeployed, so its BT path is unverified. A2DP adds
-   ~150-250 ms latency **[inferred]**; the headset reported 180 ms (measured, `.188`).
-2. **Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
+**Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
    - **Adapter name.** A phone sees the unit as "BlueZ 5.66", `bluetoothd`'s default alias (measured,
      `bluetoothctl show`). Rename it to the unit's hostname — `Name=` in `main.conf`, or `system-alias` from the page.
    - **Scan results share the known-device list** (`bt_ctl.c:155-194` keeps one `dev[]` array). A newly scanned
