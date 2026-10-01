@@ -1,4 +1,5 @@
-/* input_page.c — control_panel's Input page: the keyboard, mouse and pad testers.
+/* input_page.c — control_panel's Input page: the touch tools and the
+ * keyboard, mouse and pad testers.
  *
  * Opened from the home grid's Input tile, and the one home for testing an
  * input device, whatever bus it arrives on: the testers open evdev nodes by
@@ -7,7 +8,7 @@
  * Exposed only as cp_input_page (cp_page.h); its state lives in this file.
  * It owns no config keys.
  *
- * The top of the page is left free for the touch tools; the testers sit under
+ * The touch tools (MULTI-TOUCH so far) head the page; the testers sit under
  * their own section header.  Each tester's button is disabled while no node of
  * its kind is present.  A static device set costs nothing: /dev/input is
  * listed once a second while the page is open, the nodes are classified again
@@ -22,6 +23,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -88,7 +90,8 @@ typedef struct {
     int tl, tr;
 } PadSt;
 
-typedef enum { INPUT_SCR_MAIN, INPUT_SCR_KEYBOARD, INPUT_SCR_MOUSE, INPUT_SCR_GAMEPAD } InputScreen;
+typedef enum { INPUT_SCR_MAIN, INPUT_SCR_KEYBOARD, INPUT_SCR_MOUSE, INPUT_SCR_GAMEPAD,
+               INPUT_SCR_MULTITOUCH } InputScreen;
 
 typedef struct {
     InputScreen  scr;
@@ -113,6 +116,7 @@ static InputState input_state;
 
 static Button input_btn_ktest, input_btn_mtest, input_btn_gtest;
 static Button input_btn_kback, input_btn_mback, input_btn_gback;
+static Button input_btn_multitouch;
 
 /* ── Key table ──────────────────────────────────────────────────────────── */
 typedef struct { int code; const char *name, *sname; } KeyInfo;
@@ -401,21 +405,51 @@ static void input_proc_pad(InputState *s) {
 #define INPUT_BTN_H       40
 #define INPUT_BTN_GAP     10
 #define INPUT_BTN_MAX_W   200
-/* Kept free at the top for the touch tools: a section header and one row of
+/* The top band, for the touch tools: a section header and one row of
  * buttons (26 + 44), then the gap a section leaves before the next (20). */
 #define INPUT_TOUCH_H     90
 
 static Button *const test_btns[3] = { &input_btn_ktest, &input_btn_mtest, &input_btn_gtest };
 static const char *const test_labels[3] = { "KBD TEST", "MOUSE TEST", "PAD TEST" };
 
+/* The touch tools' row: four slots, so each button keeps its place as the rest
+ * join.  A NULL slot is not placed, drawn or counted. */
+enum { TOUCH_SLOT_CALIB, TOUCH_SLOT_DIAG, TOUCH_SLOT_MULTI, TOUCH_SLOT_RESET, TOUCH_SLOTS };
+static Button *const touch_btns[TOUCH_SLOTS] = {
+    [TOUCH_SLOT_MULTI] = &input_btn_multitouch,
+};
+static const char *const touch_labels[TOUCH_SLOTS] = {
+    [TOUCH_SLOT_MULTI] = "MULTI-TOUCH",
+};
+
+static int sec_touch_y;       /* the touch tools' section header */
+static int touch_scale;       /* their row's text scale, see layout */
 static int sec_test_y;        /* the testers' section header */
 static int count_y;           /* the "N FOUND" line under each button */
 static int test_scale;        /* the row's text scale, see layout */
 
-/* Re-run whenever the logical screen changes (rebuild_ui()).  The three
- * buttons share one row under their header, as wide as a third of the content
- * allows up to INPUT_BTN_MAX_W, centred. */
+/* Re-run whenever the logical screen changes (rebuild_ui()).  Each row shares
+ * its width out among its slots — a quarter of the content for the touch tools,
+ * a third for the testers — up to INPUT_BTN_MAX_W, centred under its header. */
 static void input_page_layout(void) {
+    sec_touch_y = CONTENT_Y + 2;
+    {
+        int by = sec_touch_y + 26;
+        int bw = (CONTENT_WIDTH - (TOUCH_SLOTS - 1) * INPUT_BTN_GAP) / TOUCH_SLOTS;
+        if (bw > INPUT_BTN_MAX_W) bw = INPUT_BTN_MAX_W;
+        int sx = CONTENT_LEFT + (CONTENT_WIDTH - (TOUCH_SLOTS * bw
+                                 + (TOUCH_SLOTS - 1) * INPUT_BTN_GAP)) / 2;
+        /* As the testers' row: one scale for the whole row. */
+        touch_scale = 2;
+        for (int i = 0; i < TOUCH_SLOTS; i++)
+            if (touch_labels[i] && text_measure_width(touch_labels[i], 2) > bw - 8)
+                touch_scale = 1;
+        for (int i = 0; i < TOUCH_SLOTS; i++)
+            if (touch_btns[i])
+                button_init_full(touch_btns[i], sx + i * (bw + INPUT_BTN_GAP), by, bw,
+                                 INPUT_BTN_H, touch_labels[i],
+                                 BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), touch_scale);
+    }
     sec_test_y = CONTENT_Y + 2 + INPUT_TOUCH_H;
     int by = sec_test_y + 26;
     int bw = (CONTENT_WIDTH - 2 * INPUT_BTN_GAP) / 3;
@@ -442,7 +476,8 @@ static void input_page_layout(void) {
      * CONTENT_Y, which comes from a per-unit touch inset, so a button pushed
      * past the touchable rect looks perfect in a screenshot and is dead to a
      * finger.  The bottom is the count line under the buttons; the right edge
-     * the last button as placed.  A label wider than its button is cut. */
+     * the last button as placed in either row.  A label wider than its button
+     * is cut, and both rows' labels are counted. */
     {
         int bottom = count_y + 8 - CONTENT_Y;
         int right  = input_btn_gtest.x + input_btn_gtest.width;
@@ -450,14 +485,22 @@ static void input_page_layout(void) {
         for (int i = 0; i < 3; i++)
             if (text_measure_width(test_labels[i], test_scale) > test_btns[i]->width - 8)
                 clipped++;
+        for (int i = 0; i < TOUCH_SLOTS; i++) {
+            if (!touch_btns[i]) continue;
+            if (touch_btns[i]->x + touch_btns[i]->width > right)
+                right = touch_btns[i]->x + touch_btns[i]->width;
+            if (text_measure_width(touch_labels[i], touch_scale) > touch_btns[i]->width - 8)
+                clipped++;
+        }
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : "fits";
         printf("control_panel: input stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, %d label(s) cut, %d px kept for touch "
-               "(safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, %d label(s) cut, touch band %d px "
+               "at scale %d, testers at scale %d (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT, clipped,
-               INPUT_TOUCH_H, SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
+               INPUT_TOUCH_H, touch_scale, test_scale,
+               SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
 }
@@ -477,6 +520,9 @@ static void input_sync_disabled(void) {
 static void input_page_draw(Framebuffer *fb) {
     const InputState *s = &input_state;
     input_sync_disabled();
+    draw_section_header(fb, sec_touch_y, "TOUCH");
+    for (int i = 0; i < TOUCH_SLOTS; i++)
+        if (touch_btns[i]) button_draw(fb, touch_btns[i]);
     draw_section_header(fb, sec_test_y, "KEYBOARD / MOUSE / PAD");
     for (int i = 0; i < 3; i++) {
         const Button *b = test_btns[i];
@@ -732,6 +778,10 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
     }
 
     input_sync_disabled();
+    if (button_update(&input_btn_multitouch, tx, ty, touching, now)) {
+        state->scr = INPUT_SCR_MULTITOUCH;
+        act = CP_PAGE_FULLSCREEN;
+    }
     if (button_update(&input_btn_ktest, tx, ty, touching, now)) {
         memset(&state->kbd, 0, sizeof(state->kbd));
         if (input_open_kind(state, DEV_KEYBOARD) > 0) {
@@ -759,6 +809,73 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
     return act;
 }
 
+/* ── Full-screen: the multi-touch test ──────────────────────────────────── */
+
+/* The band along the top edge whose right-hand 100 px is the exit tap. */
+#define MT_EXIT_H 36
+
+/* Multi-touch: one dot per MT slot, read straight off the evdev fd because
+ * TouchInput tracks a single pointer. Slots arrive only from a driver that
+ * reports ABS_MT_SLOT; the legacy BTN_TOUCH still drives the exit tap. */
+#define MT_SLOTS 2
+static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
+    static const uint32_t slot_col[MT_SLOTS] = { RGB(255,200,0), RGB(0,200,255) };
+    int calib_ok = (touch_load_calibration(touch, CALIB_FILE) == 0);
+    if (calib_ok) touch_enable_calibration(touch, true);
+    int rx[MT_SLOTS] = {0}, ry[MT_SLOTS] = {0};
+    bool on[MT_SLOTS] = {false};
+    int slot = 0, lx = 0, ly = 0, max_fingers = 0;
+    bool seen_mt = false, running = true;
+
+    touch_drain_events(touch);
+    while (running) {
+        fb_clear(fb, RGB(20,20,30));
+        char hdr[96]; snprintf(hdr, sizeof(hdr),
+            "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
+            seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
+        fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
+        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
+        int fingers = 0;
+        for (int i = 0; i < MT_SLOTS; i++) {
+            if (!on[i]) continue;
+            int x = rx[i], y = ry[i];
+            touch_map_raw(touch, &x, &y);
+            fb_fill_circle(fb, x, y, 28, slot_col[i]);
+            char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
+                                   i, rx[i], ry[i], x, y);
+            fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
+            fingers++;
+        }
+        if (fingers > max_fingers) max_fingers = fingers;
+        fb_swap(fb);
+
+        struct pollfd pfd = { .fd = touch->fd, .events = POLLIN };
+        if (poll(&pfd, 1, 16) <= 0) continue;
+        struct input_event ev;
+        while (read(touch->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+            if (ev.type == EV_ABS) {
+                switch (ev.code) {
+                case ABS_MT_SLOT: slot = ev.value; seen_mt = true; break;
+                case ABS_MT_TRACKING_ID:
+                    if (slot >= 0 && slot < MT_SLOTS) on[slot] = ev.value >= 0;
+                    break;
+                case ABS_MT_POSITION_X: if (slot >= 0 && slot < MT_SLOTS) rx[slot] = ev.value; break;
+                case ABS_MT_POSITION_Y: if (slot >= 0 && slot < MT_SLOTS) ry[slot] = ev.value; break;
+                case ABS_X: lx = ev.value; break;
+                case ABS_Y: ly = ev.value; break;
+                }
+            } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH && ev.value == 1) {
+                int x = lx, y = ly;
+                touch_map_raw(touch, &x, &y);
+                if (x > (int)fb->width - 100 && y < MT_EXIT_H) running = false;
+            }
+            if (poll(&pfd, 1, 0) <= 0) break;
+        }
+    }
+    touch_drain_events(touch);
+    touch_enable_calibration(touch, false);
+}
+
 /* ── Full-screen: the testers ───────────────────────────────────────────── */
 
 /* After input() returned CP_PAGE_FULLSCREEN.  Runs until the tester's BACK (or
@@ -766,6 +883,11 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
  * hardware is its own to clean up. */
 static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     InputState *state = &input_state;
+    if (state->scr == INPUT_SCR_MULTITOUCH) {   /* its own loop and exit tap */
+        test_multitouch(fb, touch);
+        state->scr = INPUT_SCR_MAIN;
+        return;
+    }
     if (state->scr == INPUT_SCR_MOUSE) {
         state->mou.cx = (int)fb->width / 2;
         state->mou.cy = (int)fb->height / 2;

@@ -23,6 +23,8 @@
  * command line — the same pair app_launcher passes for a manifest's fb,touch. */
 #define FB_DEVICE         "/dev/fb0"
 #define TOUCH_DEVICE      "/dev/input/touchscreen0"
+/* The touch curve and bezel the wizard writes and the touch tests load. */
+#define CALIB_FILE        "/etc/touch_calibration.conf"
 
 /* The content rectangle: the safe area below the tab bar. */
 #define TAB_BAR_H         44

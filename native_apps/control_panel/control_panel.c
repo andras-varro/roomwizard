@@ -91,17 +91,10 @@
  * targets that close to the edge sit inside the band where raw compresses, and
  * fitting through them is what produced a phantom horizontal inset for months.
  * Target geometry now comes from common/touch_calib.h. */
-#define CALIB_FILE        "/etc/touch_calibration.conf"
 /* The uncalibrated diagnostic, launched from the Touch tab. Deployed by
  * build-and-deploy.sh with no manifest, so the launcher does not show it —
  * this button is the discoverable route to it. */
 #define TOUCH_DIAG_PATH   "/opt/games/touch_raw"
-
-#define TZ_COLS   8
-#define TZ_ROWS   6
-/* TZ_CELL_W / TZ_CELL_H removed — computed as local variables from
-   screen_base_width / screen_base_height at runtime in each function. */
-#define TZ_HEADER 36
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * State Machine
@@ -167,24 +160,20 @@ static const HomeItem home_items[] = {
     { .tab = TAB_PAGE, .page = &cp_network_page },
     { .tab = TAB_PAGE, .page = &cp_monitor_page },
     { .tab = TAB_PAGE, .page = &cp_info_page },
-    { "Tests",       NULL,         TAB_TESTS,    NULL },
 };
 #define HOME_ITEM_COUNT ((int)(sizeof(home_items) / sizeof(home_items[0])))
 #define HOME_TITLE_H    50
 
 /* The Tests tab: name and routine in one row, and the count derived from the
  * table, so the button pressed and the routine run cannot drift the way a name
- * list beside a bare-index switch could.  The routines are in the Tests Tab
- * section below; the LED tests are on the LED page (led_page.c), the
- * backlight ramp and the test patterns on the Display page (display_page.c). */
-static void test_touch_zone(Framebuffer *fb, TouchInput *touch);
-static void test_multitouch(Framebuffer *fb, TouchInput *touch);
+ * list beside a bare-index switch could.  It is empty, and no home tile opens
+ * the tab: the LED tests are on the LED page (led_page.c), the backlight ramp
+ * and the test patterns on the Display page (display_page.c), the multi-touch
+ * test on the Input page (input_page.c). */
 static const struct {
     const char *name;
     void      (*run)(Framebuffer *, TouchInput *);
 } tests[] = {
-    { "TOUCH ZONE",  test_touch_zone    },
-    { "MULTI-TOUCH", test_multitouch    },
 };
 #define NUM_TESTS ((int)(sizeof(tests) / sizeof(tests[0])))
 
@@ -696,126 +685,6 @@ bool check_touch(TouchInput *touch, int *x, int *y) {
         if (ts.pressed) { *x = ts.x; *y = ts.y; return true; }
     }
     return false;
-}
-
-static void test_touch_zone(Framebuffer *fb, TouchInput *touch) {
-    int tz_cell_w = fb->width / TZ_COLS;
-    int tz_cell_h = fb->height / TZ_ROWS;
-    bool hit[TZ_ROWS][TZ_COLS];
-    memset(hit, 0, sizeof(hit));
-    int hit_count = 0, total_cells = TZ_ROWS * TZ_COLS;
-    int calib_ok = (touch_load_calibration(touch, CALIB_FILE) == 0);
-    if (calib_ok) touch_enable_calibration(touch, true);
-    int last_raw_x = 0, last_raw_y = 0, last_cal_x = 0, last_cal_y = 0;
-    bool test_running = true;
-
-    while (test_running) {
-        fb_clear(fb, RGB(20,20,30));
-        char hdr[128]; snprintf(hdr, sizeof(hdr),
-            "Touch Zone  %d/%d  |  HW X[%d..%d] Y[%d..%d]  |  Calib: %s",
-            hit_count, total_cells, touch->raw_min_x, touch->raw_max_x,
-            touch->raw_min_y, touch->raw_max_y, calib_ok ? "ON" : "OFF");
-        fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
-        char val[80]; snprintf(val, sizeof(val), "Last: raw(%d,%d) -> screen(%d,%d)",
-            last_raw_x, last_raw_y, last_cal_x, last_cal_y);
-        fb_draw_text(fb, 4, 14, val, COLOR_CYAN, 1);
-        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
-
-        for (int r = 0; r < TZ_ROWS; r++) {
-            for (int c = 0; c < TZ_COLS; c++) {
-                int cx = c * tz_cell_w, cy = TZ_HEADER + r * tz_cell_h;
-                int cw = tz_cell_w - 2, ch = tz_cell_h - 2;
-                uint32_t bg = hit[r][c] ? RGB(20,120,40) : RGB(80,30,30);
-                fb_fill_rect(fb, cx+1, cy+1, cw, ch, bg);
-                fb_draw_rect(fb, cx+1, cy+1, cw, ch, RGB(70,70,90));
-                char lbl[8]; snprintf(lbl, sizeof(lbl), "%d,%d", c, r);
-                fb_draw_text(fb, cx+4, cy+4, lbl, RGB(150,150,150), 1);
-            }
-        }
-        if (last_cal_x > 0 || last_cal_y > 0) {
-            fb_draw_line(fb, last_cal_x-12, last_cal_y, last_cal_x+12, last_cal_y, COLOR_YELLOW);
-            fb_draw_line(fb, last_cal_x, last_cal_y-12, last_cal_x, last_cal_y+12, COLOR_YELLOW);
-        }
-        int bar_w = ((fb->width - 20) * hit_count) / total_cells;
-        fb_fill_rect(fb, 10, fb->height - 10, bar_w, 6,
-                     (hit_count == total_cells) ? COLOR_GREEN : COLOR_CYAN);
-        fb_swap(fb);
-
-        int x, y;
-        if (touch_wait_for_press(touch, &x, &y) == 0) {
-            last_cal_x = x; last_cal_y = y;
-            last_raw_x = touch->state.x; last_raw_y = touch->state.y;
-            if (x > (int)fb->width - 100 && y < TZ_HEADER) { test_running = false; break; }
-            int gc = x / tz_cell_w, gr = (y - TZ_HEADER) / tz_cell_h;
-            if (gc >= 0 && gc < TZ_COLS && gr >= 0 && gr < TZ_ROWS) {
-                if (!hit[gr][gc]) { hit[gr][gc] = true; hit_count++; }
-            }
-        }
-        usleep(16000);
-    }
-    touch_enable_calibration(touch, false);
-}
-
-/* Multi-touch: one dot per MT slot, read straight off the evdev fd because
- * TouchInput tracks a single pointer. Slots arrive only from a driver that
- * reports ABS_MT_SLOT; the legacy BTN_TOUCH still drives the exit tap. */
-#define MT_SLOTS 2
-static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
-    static const uint32_t slot_col[MT_SLOTS] = { RGB(255,200,0), RGB(0,200,255) };
-    int calib_ok = (touch_load_calibration(touch, CALIB_FILE) == 0);
-    if (calib_ok) touch_enable_calibration(touch, true);
-    int rx[MT_SLOTS] = {0}, ry[MT_SLOTS] = {0};
-    bool on[MT_SLOTS] = {false};
-    int slot = 0, lx = 0, ly = 0, max_fingers = 0;
-    bool seen_mt = false, running = true;
-
-    touch_drain_events(touch);
-    while (running) {
-        fb_clear(fb, RGB(20,20,30));
-        char hdr[96]; snprintf(hdr, sizeof(hdr),
-            "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
-            seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
-        fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
-        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
-        int fingers = 0;
-        for (int i = 0; i < MT_SLOTS; i++) {
-            if (!on[i]) continue;
-            int x = rx[i], y = ry[i];
-            touch_map_raw(touch, &x, &y);
-            fb_fill_circle(fb, x, y, 28, slot_col[i]);
-            char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
-                                   i, rx[i], ry[i], x, y);
-            fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
-            fingers++;
-        }
-        if (fingers > max_fingers) max_fingers = fingers;
-        fb_swap(fb);
-
-        struct pollfd pfd = { .fd = touch->fd, .events = POLLIN };
-        if (poll(&pfd, 1, 16) <= 0) continue;
-        struct input_event ev;
-        while (read(touch->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
-            if (ev.type == EV_ABS) {
-                switch (ev.code) {
-                case ABS_MT_SLOT: slot = ev.value; seen_mt = true; break;
-                case ABS_MT_TRACKING_ID:
-                    if (slot >= 0 && slot < MT_SLOTS) on[slot] = ev.value >= 0;
-                    break;
-                case ABS_MT_POSITION_X: if (slot >= 0 && slot < MT_SLOTS) rx[slot] = ev.value; break;
-                case ABS_MT_POSITION_Y: if (slot >= 0 && slot < MT_SLOTS) ry[slot] = ev.value; break;
-                case ABS_X: lx = ev.value; break;
-                case ABS_Y: ly = ev.value; break;
-                }
-            } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH && ev.value == 1) {
-                int x = lx, y = ly;
-                touch_map_raw(touch, &x, &y);
-                if (x > (int)fb->width - 100 && y < TZ_HEADER) running = false;
-            }
-            if (poll(&pfd, 1, 0) <= 0) break;
-        }
-    }
-    touch_drain_events(touch);
-    touch_enable_calibration(touch, false);
 }
 
 /* â”€â”€ Test dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
