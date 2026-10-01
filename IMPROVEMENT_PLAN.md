@@ -294,25 +294,16 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
 
 **Next, in order:**
 
-1. **Done (measured 2026-10-01):** `bluetooth/build-bluez.sh` builds BlueZ 5.66 against Debian bullseye armel
-   `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
-   Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
-   a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
-2. **BlueALSA is built and starts at boot; routing to it is what is open.** Measured by hand on `.188`
-   (2026-10-01): `speaker-test -D bluealsa:DEV=<mac>,PROFILE=a2dp -c 2 -t sine` was audible in both ears of a Sony
-   WI-C310, channel order correct (`-s 1`), bluealsa ~4.8% CPU and ~5 MB RSS while streaming, the headset
-   reporting 180 ms A2DP delay. After a reboot the boot-started daemon plays through `plug:bluealsa` with no
-   `DEV` (L/R correct, operator-heard); its buffer range is 960..206158430 frames, so a client that leaves the
-   buffer at max gets a 5 s first period and silence — set period and buffer explicitly. **Left:** route `common/audio_out` to a BT sink when one is connected (ScummVM follows, it
-   reaches the device through `audio_out`) — in progress; then the control-panel BT page (step 3).
+1. **ScummVM redeploy and verify BT audio.** `audio_out` routes to BT (rules: `native_apps/CLAUDE.md`) and the
+   operator verified it in Brick Breaker, but ScummVM was not redeployed, so its BT path is unverified. A2DP adds
+   ~150-250 ms latency **[inferred]**; the headset reported 180 ms (measured, `.188`).
+2. **The control panel's Bluetooth page (next):** adapter power, scan, pair with a passkey agent for keyboards,
+   trust, connect, disconnect, remove, audio output select — a `CpPage` with its own tile; the grid has none until
+   then. `bluetoothd` is reachable only over D-Bus and `native_apps` links no glib, so the page needs either
+   libdbus (the vendor libdbus is on the device) or shelling out to `bluetoothctl`; both are open, neither measured.
+   Paired devices appear in the Input page's testers — **a pad or keyboard on its own node needs no extra code; a
+   keyboard+touchpad combo node needed the reader fix** (shipped).
    **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
-3. The control panel's Bluetooth page (adapter power, scan, pair with a passkey agent for keyboards, trust,
-   connect, audio output) is a `CpPage` with its own tile;
-   the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
-   own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).
-4. `audio_out`: the `bluez-alsa` plugin returns `-ENODEV` from `writei` on sink loss, which
-   `audio_out.c` (~`:485`) already classifies as `AO_ERR_LOST`, but `audio_out_usb_returned()` knows only
-   USB card 1. A2DP adds ~150-250 ms latency **[inferred]**.
 
 ⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
 on one 600 MHz core that ScummVM already holds at ~32 %

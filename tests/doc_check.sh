@@ -901,18 +901,21 @@ group_c() {
 # 2026-10-01: SYSTEM_ANALYSIS.md 1834 -> 1850. The 8BitDo Pro 2 radio identities and the DualShock-4 emulation measured
 # on .188 are device facts and moved in from a plan entry as sixteen lines; the plan shed its superseded S/D-mode
 # speculation, and its ceiling was not lowered, for the reason above.
+# 2026-10-01: SYSTEM_ANALYSIS.md 1852 -> 1854 and native_apps/CLAUDE.md 759 -> 766. Measured Bluetooth audio facts (bluealsa
+# open/buffer behaviour, bondable flag, HFP-AG reconnect) and the audio_out BT routing rules are new content with no stale
+# text to cut; the plan shed its done steps, and its ceiling was not lowered, for the reason above.
 #
 #
 ceilings() {
     # `CEILINGS_FILE` exists only so --self-test can drive this group over a fixture table.
     if [ -n "${CEILINGS_FILE:-}" ]; then cat "$CEILINGS_FILE"; return; fi
     cat <<'EOF'
-1852	SYSTEM_ANALYSIS.md
+1854	SYSTEM_ANALYSIS.md
 1362	IMPROVEMENT_PLAN.md
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-759	native_apps/CLAUDE.md
+766	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
