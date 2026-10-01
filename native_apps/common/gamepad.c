@@ -11,8 +11,6 @@
  * Gamepad button mapping: remappable evdev codes for clone controllers.
  *
  * Config persistence: key=value file at /etc/input_config.conf.
- *
- * Reference patterns extracted from native_apps/usb_test/usb_test.c.
  */
 
 #include "gamepad.h"

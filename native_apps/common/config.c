@@ -187,7 +187,7 @@ int config_save(const Config *cfg) {
     if (!f) return -1;
 
     if (fprintf(f, "# RoomWizard Configuration\n") < 0 ||
-        fprintf(f, "# Auto-generated — edit with hardware_config tool\n\n") < 0) {
+        fprintf(f, "# Auto-generated — edit with control_panel\n\n") < 0) {
         file_write_atomic_abort(f, tmp_path);
         return -1;
     }

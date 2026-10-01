@@ -344,8 +344,8 @@ int acquire_instance_lock(const char *app_name);
  * ⚠️ Any NEW loop that draws while the main loop is stopped owes a call to
  * ui_frame_service() beside its fb_swap().  `hw_pulse_led()` and
  * `hw_blink_led()` block too and do NOT call it: their waits are single long
- * usleeps rather than a loop, and (measured 2026-08-22) their only callers are
- * control_panel and hardware_test, neither of which runs a bed.
+ * usleeps rather than a loop, and (measured 2026-10-01) their only caller is
+ * control_panel, which runs no bed.
  */
 
 // Install the per-frame service.  ctx is passed back verbatim.  fn == NULL

@@ -59,7 +59,7 @@
  * ── THE TWO WRITE MODES, AND WHY BOTH ────────────────────────────────────────
  *
  * ⚠️ A service-driven library alone would SILENTLY MUTE two shipped Settings
- * tabs.  `hardware_config.c` and `control_panel.c` play their speaker test tones
+ * tabs.  `control_panel.c` plays its speaker test tones
  * with **no render loop at all** — init, tone, `usleep`, tone, close — so nothing
  * would ever call `audio_out_service()` and the tones would sit in a callback
  * that is never invoked.  Measured objectively, not inferred.

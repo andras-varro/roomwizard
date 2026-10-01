@@ -275,8 +275,8 @@ int  audio_init(Audio *audio);
  * The same, WITHOUT the config gate.
  *
  * For a hardware *test* that must be able to drive the speaker even when the
- * user has switched audio off in config — `control_panel` and `hardware_config`
- * both have such a tab, and both used to hand-roll the open, the three ioctls
+ * user has switched audio off in config — `control_panel` has
+ * such a page, and it and a since-deleted settings tool both used to hand-roll the open, the three ioctls
  * and the GPIO12 poke themselves.  That duplication is what this exists to
  * remove; the bypass itself is deliberate, because audio_init() would make the
  * test obey the very setting it exists to test.
@@ -385,8 +385,8 @@ bool audio_pump_active(const Audio *audio);
  * its own `audio_pump()` beside its own poll instead.
  *
  * One implementation for the same reason `audio_init_unchecked()` is one: this
- * was going to be a four-line pump loop copied into `hardware_config.c` and
- * `control_panel.c`, and a copy like that goes silently wrong the moment the
+ * was going to be a four-line pump loop copied into two settings tools,
+ * `control_panel.c` among them, and a copy like that goes silently wrong the moment the
  * service ceiling moves. */
 void audio_hold_serviced(Audio *audio, int ms);
 

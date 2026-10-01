@@ -296,7 +296,7 @@ int audio_init_unchecked_pref(Audio *audio, const char *pref)
      *
      * Resolving it HERE rather than at each call site is what makes the rule
      * unforgettable, and the reason is measured: BOTH production callers
-     * (control_panel's and hardware_config's speaker tests) had omitted it, so the
+     * (control_panel's speaker test and a since-deleted settings tool's) had omitted it, so the
      * call-site form of this rule was already 0 for 2.  It also overwrites a
      * preference some earlier caller left in audio_out.c's process-lifetime
      * file-static, which is the property audio_tone_test.c asserts — without

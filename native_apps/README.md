@@ -31,16 +31,11 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
 | `control_panel` | Tool | **Unified hardware app** — the one you want. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
-| `hardware_test` | Tool | GUI diagnostics (hidden from the launcher; run over SSH) |
-| `hardware_config` | Tool | Settings GUI — superseded by `control_panel` (hidden) |
-| `hardware_diag` | Tool | System diagnostics GUI — superseded by `control_panel` (hidden) |
-| `backlight` | Tool | CLI backlight control (hidden) |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
 
 Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH.
-`usb_test` exists as source but is **not built or deployed** — USB
-testing lives in the `control_panel` Input page. The system `/usr/sbin/watchdog` daemon handles the
+USB testing lives in the `control_panel` Input page. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
 The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
@@ -49,17 +44,17 @@ before running either (`/etc/init.d/roomwizard-app stop`), and start it again af
 
 ### Control Panel
 
-[`control_panel/control_panel.c`](control_panel/control_panel.c) consolidates five previously
-separate GUI utilities behind an icon grid, one page per icon (`control_panel/*_page.c`):
+[`control_panel/control_panel.c`](control_panel/control_panel.c) holds every hardware setting
+and test behind an icon grid, one page per icon (`control_panel/*_page.c`):
 
-| Page | Replaces | What it does |
-|---|---|---|
-| **Audio** | `hardware_config` (audio) | Audio on/off, music/effects, output device, chime test, Mix Bus Test; saved on each change. |
-| **Display** | a retired standalone calibration tool | Backlight, portrait toggle, the VISIBLE/EDGES/TOUCHABLE readout, BACKLIGHT RAMP, TEST PATTERNS and SCREEN EDGES. |
-| **LED** | `hardware_test_gui` (LED) | Enable, brightness and the six LED tests, each full-screen. |
-| **USB** | `usb_test` (bus list) | The device list, RESCAN and port recovery. |
-| **Input** | `usb_test` (testers) | Touch CALIBRATE (the wizard that writes both lines of `/etc/touch_calibration.conf`, see below), DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY, and keyboard, mouse and gamepad testers that enable only when such a device is present. |
-| **Network**, **Monitor**, **Information** | `hardware_diag` | Read-only system pages; Information also holds RESET DEFAULTS. |
+| Page | What it does |
+|---|---|
+| **Audio** | Audio on/off, music/effects, output device, chime test, Mix Bus Test; saved on each change. |
+| **Display** | Backlight, portrait toggle, the VISIBLE/EDGES/TOUCHABLE readout, BACKLIGHT RAMP, TEST PATTERNS and SCREEN EDGES. |
+| **LED** | Enable, brightness and the six LED tests, each full-screen. |
+| **USB** | The device list, RESCAN and port recovery. |
+| **Input** | Touch CALIBRATE (the wizard that writes both lines of `/etc/touch_calibration.conf`, see below), DIAGNOSTIC, MULTI-TOUCH, RESET GEOMETRY, and keyboard, mouse and gamepad testers that enable only when such a device is present. |
+| **Network**, **Monitor**, **Information** | Read-only system pages; Information also holds RESET DEFAULTS. |
 
 #### The calibration wizard
 
