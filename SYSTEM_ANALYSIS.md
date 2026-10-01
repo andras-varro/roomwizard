@@ -460,8 +460,8 @@ logical coordinates bakes the bezel into line 1, and stage 2 then subtracts it a
   which yields a zero inset. Tagged and trailing on purpose: an old parser reads lines 1–2
   positionally and ignores what it does not recognise, so the file stayed back-compatible.
 
-**Control Panel → Input → CALIBRATE** (and Display → SCREEN EDGES) owns both lines, through **one wizard** — `run_calib_wizard()` in
-`native_apps/control_panel/control_panel.c`. Everything it does runs with the bezel zeroed
+**Control Panel → Input → CALIBRATE** (and Display → SCREEN EDGES) owns both lines, through **one wizard** — `touch_wizard_run()` in
+`native_apps/control_panel/touch_wizard.c`. Everything it does runs with the bezel zeroed
 (`fb_set_bezel(fb,0,0,0,0)`) on the full 800×480 panel, so a drawn pixel *is* a panel pixel and both
 lines are measured against the same premise:
 

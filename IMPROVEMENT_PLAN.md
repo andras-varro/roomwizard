@@ -114,7 +114,10 @@ Windows. Two pieces of residue:
 
 1. **WSL cannot resolve `.local`.** Its `/etc/nsswitch.conf` is `hosts: files dns` — no mDNS module —
    so `./commissioning/provision.sh rw09.local` passes validation, reaches the SSH step and then fails to
-   resolve. The fix is host-side and one package: `sudo apt install libnss-mdns` in WSL. **Until
+   resolve. ⚠️ **`libnss-mdns` alone is insufficient, measured 2026-09-06:** it is installed and in
+   `nsswitch.conf`, avahi runs on the device, and `.local` still does not resolve — WSL2 is NAT'd onto its own
+   subnet and mDNS is link-local multicast, so it cannot cross. The fix is `networkingMode=mirrored` in
+   `.wslconfig`, which changes networking for every distro on the host and is the operator's call. **Until
    then the mDNS payoff applies to Windows-side `ssh` only, not to the build/deploy path.**
 2. **The reboot path is unproven.** `S30avahi-daemon` is in place but the link was written directly
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
@@ -549,6 +552,12 @@ out. That is a scope decision, not a difficulty one.
 
 ### F7. Use NAND `mtd4` "scratch" for persistent data — open
 
+**Dropped, measured 2026-09-06.** High scores live at `/home/root/data/*.hig` on **p2** and survive both
+re-commissioning paths by an explicit `keep base` rule; `build-and-deploy.sh` never touches that tree. Only a
+whole-card reflash loses them. NAND would buy the card-swap case alone, and buy it with a store that a reflash
+cannot clear. ⚠️ **The one caveat worth keeping: that whitelist matches `*.hig`, so a future game storing
+anything else under `/home/root/data` is swept by the clean.**
+
 `mtd4` is 11 MB of blank, unused NAND that **survives an SD card reflash** — a natural home for high
 scores and save games, and safe to write. (`mtd0` must never be written; see
 [`SYSTEM_ANALYSIS.md#43-nand-is-effectively-unused`](SYSTEM_ANALYSIS.md#43-nand-is-effectively-unused)
@@ -571,6 +580,11 @@ work only.
 Xbox pad is wired, and the integrated speaker is poor
 ([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable, and the one that carries sound
 is the worst-sounding one.
+
+⚠️ **F17 is a module build, not a kernel rebuild, measured 2026-09-06:** this repo already builds and ships
+modules against the vanilla tree (`xpad.ko`, `joydev.ko`, `ff-memless.ko`). What genuinely needs kernel work is
+enumeration reliability — a cold port obtaining a session without the RESCAN tap — and F2. Check anything
+else claiming to need a rebuild against that list first.
 
 ⚠️ **The operator's dongle `0b05:1bf6` is a Realtek RTL8761CU — measured on `.188` 2026-09-29:** `btrtl`
 logs `hci_ver=0d hci_rev=000e lmp_ver=0d lmp_subver=8761`, rom_version 1. Mainline first knows the 8761CU
@@ -692,6 +706,9 @@ power budget and the case's total lack of ventilation slots
 back, and the device works, never building anything — assumes the operator can run the card path. Today
 that means Linux, or Windows with WSL2. This entry exists so the gap is recorded rather than discovered
 by someone holding a card.
+
+⚠️ **The interim is one honest line in `COMMISSIONING.md`** stating the host requirement; the real answer is a
+bootable image, and macOS cannot be tested from here at all.
 
 ⚠️ **This is not a shell-portability problem, and rewriting `bash` as POSIX `sh` would not touch it.**
 The blocker is the *kernel's* filesystem support: `commissioning/commission-offline.sh` needs read-write ext4 across
@@ -872,9 +889,9 @@ not built by any script.
 
 ### C2. Split `control_panel.c` — open
 
-`control_panel.c` still holds the calibration wizard, the shell, the home grid and the
-confirm dialog; the per-page code already lives in `control_panel/*_page.c` behind `CpPage` (C16). What is left
-is moving the wizard out (C16) and whatever of the shell is worth a module afterwards. `led_preview()` in `control_panel/led_page.c` still blocks the UI
+`control_panel.c` now holds only the shell, the home grid and the confirm dialog; the per-page code
+lives in `control_panel/*_page.c` behind `CpPage` and the calibration wizard in `control_panel/touch_wizard.c`
+(C16). What is left is whatever of the shell is worth a module. `led_preview()` in `control_panel/led_page.c` still blocks the UI
 ~500 ms on each -/+ press — acceptable to the operator for now.
 
 ### C4. Make the common library use the logger — open
@@ -1008,7 +1025,10 @@ play session of somebody's time — which is why that check keeps being postpone
 `--level N` argument or a debug entry in the pause dialog turns it into one launch, and would serve any
 future level-dependent bug. Generalise to the other games where a state is expensive to reach.
 
-**The fork above is decided: a pause-dialog entry, not a CLI argument** (2026-08-10). Office Runner's
+**Operator ruling 2026-09-06: a test-only command-line switch is acceptable** — the launcher passes no
+arguments, so such a flag is reachable over SSH and deliberately not from the panel, which is what a test
+entry point wants. It supersedes the 2026-08-10 decision below that only a pause-dialog entry would do.
+**The 2026-08-10 decision: a pause-dialog entry, not a CLI argument.** Office Runner's
 TRAINING toggle is the first worked example — `platformer.c`'s pause dialog, 10 lives and one more per
 50 coins, which makes its level 3 reachable by hand without a flawless run. A `--training` flag was
 offered and declined, so the shape to copy is menu-only. Note what that costs, because it is the whole
@@ -1190,25 +1210,17 @@ and posts `cp_status`. USB keeps only the bus list, RESCAN and port recovery; Di
 its third test button beside the EDGES/TOUCHABLE rows. Measured on .188 with all stack receipts "fits", no label
 cut, home-grid idle CPU 0.0-0.7%, in both orientations; `./tests/run-all.sh` green, ARM build clean.
 
-**Remaining work: calibration wizard.** `run_calib_wizard` and helpers, still in `control_panel.c` and reached
-through `cp_run_touch_tool()`, move verbatim into `touch_wizard.c` behind `(fb, touch, edges_only)` → status
-string, removing its `AppState` use. Gated on the operator taps below. Folding `touch_trace`/`touch_raw`
-stays an operator question; do not widen this job.
+**The calibration wizard is out of `control_panel.c`** and lives in `control_panel/touch_wizard.c`
+(`touch_wizard_run(fb, touch, edges_only, &running, &result)`; `TouchWizardResult {msg[64], saved}` is posted by
+`cp_run_touch_tool()` through `cp_status`). Every page above was tapped through on .188 2026-10-01 and passed, before and after
+the move (CALIBRATE to green SAVED and corner hits, quit partway without SAVED, SCREEN EDGES return and its
+"Timed out, nothing changed", portrait CALIBRATE refusing ~3 s). Folding `touch_trace`/`touch_raw` stays an
+operator question; do not widen this job.
 
-**Operator taps pending (one list, on .188):**
-
-1. Audio off: MUSIC/EFFECTS/OUT/TEST/MIX BUS TEST grey and inert; no DAC: OUT cycles ONBOARD and AUTO; saved USB
-   with the DAC pulled shows AUTO, config still "usb", USB again on replug. RESET DEFAULTS removes
-   `portrait.mode`; confirm text "BACKLIGHT, LED, AUDIO, ORIENTATION".
-2. Home: 8 tiles, no Touch or Tests; every tile opens, `<` returns, no idle repaint.
-3. USB: bus list and one RESCAN, no test buttons; recovery still works.
-4. Input: rows as above; test buttons grey with nothing plugged; plugging a keyboard enables KBD TEST within
-   ~1 s; each tester and MULTI-TOUCH return to Input.
-5. CALIBRATE in landscape: green SAVED status, then a corner button still hits; DIAGNOSTIC: "DIAGNOSTIC DONE -
-   GEOMETRY RELOADED"; RESET GEOMETRY asks "RESET SCREEN GEOMETRY?", CANCEL changes nothing; in portrait
-   CALIBRATE refuses for 3 s.
-6. Display: VISIBLE/EDGES/TOUCHABLE rows, BACKLIGHT RAMP / TEST PATTERNS / SCREEN EDGES; SCREEN EDGES runs and
-   the rows update.
+**Remaining work: delete the retired binaries whole**, per the inventory above. `native_apps/hardware_test`,
+`hardware_config`, `hardware_diag` and `usb_test` still exist and `native_apps/build-and-deploy.sh` still builds
+them (measured by listing the directories and grepping that script). Delete the directories with their
+build steps, deploy references and README rows; the backlight CLI goes with them.
 
 **Page mechanism (operator decision 2026-09-30): a static page registry**, modelled on Windows 3.1 Control
 Panel applets (`.cpl`) but compiled in. One interface struct, `CpPage` in
@@ -1265,75 +1277,11 @@ ruled out, and is needed for nothing
 **Note:** enabling **UART3** as a `ttyO2` is *not* in this table — it may be reachable by patching the
 appended DTB, which needs no kernel source ([`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports)).
 
----
-
-## Where to start
-
-**This is the operator's ranking, re-set 2026-09-08, and it is the authority.** The tiers and their order
-are theirs; the ⚠️ notes under each are what measurement has since added, not a re-ranking.
-
-### Stability first
-
-Clear. The tier's one item — a single home for the host build prerequisites — is done:
-`setup-build-env.sh` at the repo root carries the package set, and the component scripts now report a
-missing tool and point at it instead of each reciting its own `apt` line.
-
-### Usability, features, maintainability
-
-C1 · C4 · C6 with C7 · C2 · B30 ·
-F4 · C5 · C16 · F17 · **F2 — moved here 2026-09-11 by the operator**, out of the head of this tier: the
-userspace overlay win was measured and rejected on image quality, the switch it would have needed is
-withdrawn, and what is left of the entry is one config-only item and one coefficient patch that both
-wait on F101.
-
-⚠️ **Measured 2026-09-06 — only two gates run before a deploy**, `check-arm-safe.sh` and
-`check-audio-pacing.sh`, both blocking. No test suite runs from any build script, from `deploy-all.sh` or
-from `release.sh`, so C6 and C7 are one task: a pre-deploy gate that runs the host regressions and
-shellcheck beside the two that already block. **shellcheck is installed as of 2026-09-06**, so C7 is no
-longer blocked.
-
-⚠️ **Most of this tier is NOT gated on a kernel rebuild, measured 2026-09-06.** This repo already builds
-and ships modules against the vanilla tree — `xpad.ko`, `joydev.ko` and `ff-memless.ko` are deployed — so
-F17 is a module build. **What genuinely
-needs kernel work is short: enumeration reliability — making a cold port obtain a session without the
-RESCAN tap — and, added 2026-09-11, all of F2.** Anything else claiming to need
-a rebuild should be checked against that list first. ⚠️ **F17's dongle reads as ASUS by vendor and Realtek
-by chip, and 4.14.52's `btrtl` knows RTL8761A only** — RTL8761B/BU support landed around kernel 5.8 — so
-read `lsusb`'s VID:PID before building anything.
-
-⚠️ **F4 has been split and halved**, 2026-09-06: the analogue-paddle half is closed on
-[`SYSTEM_ANALYSIS.md#8-hardware-policy`](SYSTEM_ANALYSIS.md#8-hardware-policy) and what is left is two
-`cat`-able channels. ⚠️ **C5 is also two items**, and only one is cosmetic: `text_truncate()` takes no
-destination size and one caller hands it a 48-byte buffer for a 128-byte device name, which is a stack
-overwrite waiting on a geometry change. The 8px/6px centring is the cosmetic half.
-
-### Nice to have
-
-B29 · C9 · C10 · C15 · F8 · D7 · F13.
-
-⚠️ **C9 is accepted rather than open for our own bundles**: we gate before stripping and the installer
-says `TAKEN ON TRUST` in those words. The gap is third-party bundles, which do not exist yet.
-⚠️ **C10's shape decision is REVERSED, 2026-09-06, by the operator**: a test-only command-line switch is
-acceptable after all, superseding the 2026-08-10 ruling that only a pause-dialog entry would do. The
-launcher passes no arguments, so such a flag is reachable over SSH and deliberately not from the panel —
-which is what a test entry point wants. ⚠️ **D7's prescribed fix is insufficient, measured 2026-09-06**:
-`libnss-mdns` is installed and in `nsswitch.conf`, avahi runs on the device, and `.local` still does not
-resolve — WSL2 is NAT'd onto its own subnet and mDNS is link-local multicast, so it cannot cross. The fix
-is `networkingMode=mirrored` in `.wslconfig`, which changes networking for every distro on the host and is
-the operator's call. ⚠️ **F13's interim is one honest line in `COMMISSIONING.md`** stating the host
-requirement; the real answer is a bootable image, and macOS cannot be tested from here at all.
-
-**F7 is dropped, measured 2026-09-06.** High scores live at `/home/root/data/*.hig` on **p2** and survive
-both re-commissioning paths by an explicit `keep base` rule; `build-and-deploy.sh` never touches that
-tree. Only a whole-card reflash loses them. NAND would buy the card-swap case alone, and buy it with a
-store that a reflash cannot clear. ⚠️ **The one caveat worth keeping: that whitelist matches `*.hig`, so a
-future game storing anything else under `/home/root/data` is swept by the clean.**
-
 ⚠️ **Operator ruling, 2026-09-06: no further USB work beyond USB audio.** Enumeration-at-probe is closed
 and that is a result rather than a gap — three mechanisms read out of the MUSB driver were each applied
 and **refuted on hardware**, and the answer that ships is the one-tap RESCAN, verified on a panel. Before
 anyone proposes a fourth theory, read the refuted table in `usb_host/README.md`, which names the one
 never-attempted candidate and the question any candidate must answer first.
 
-Bundles hold built artifacts only — settled, because the one consumer that installs device scripts runs from a clone
-and has `device-files/` beside it either way.
+**Bundles hold built artifacts only — settled**, because the one consumer that installs device scripts runs
+from a clone and has `device-files/` beside it either way.
