@@ -241,9 +241,10 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
   `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
   0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
   carrying both keys and touchpad, which `app_launcher` hot-plugged.
-- **Pads: the 8BitDo Pro 2 works in A mode** (DualShock 4 emulation, `hid-generic`; identities and the failed
-  modes in [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps or the unit
-  reboots, which needs packaging (step 2) first.
+- **Pads: the 8BitDo Pro 2 works over BT in X mode (recommended: Xbox One S identity, the USB Xbox-clone
+  layout) and in A mode** (`hid-generic`; identities and the tool trap in
+  [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps or the unit reboots, which
+  needs the packaging above booted first.
 
 **Next, in order:**
 
@@ -252,7 +253,10 @@ the single connector. BlueZ userspace is cross-built, not yet deployed (step 1 b
    Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
    a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
 2. Deploy `bluetooth/` to `.188`, reboot, and check the three unverified points above.
-3. `sbc` + `bluez-alsa` v4.3.1 into **our** alsa-lib's plugin dir.
+3. **BT audio: the first steps are lookups, not code.** Are glib, dbus and `sbc` already in
+   `bluetooth/arm-deps-softfp`; was alsa-lib (`native_apps/build-alsa-lib.sh`) built with plugin `dlopen`
+   support. Then a hand-run `bluealsa` + `aplay -D bluealsa` test before any app code; then `sbc` + `bluez-alsa`
+   v4.3.1 into **our** alsa-lib's plugin dir. A2DP latency (~150-250 ms typical) is a property, not a bug.
 4. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
    the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
    own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).
@@ -456,6 +460,17 @@ loop polls only `touch_poll(&touch)` (~`:768`) and never calls `gamepad_poll()`,
 
 A mouse works only in the Input page's mouse tester. `app_launcher.c` consumes `mouse_left_pressed` (`:805`) but
 a grep finds no cursor drawn there, and `control_panel.c` never polls `gamepad_poll()` at all **[read from
+
+### F109. Static UI screens cost more CPU than a running game — open, measured on .188 2026-10-01
+
+By `top` and operator reading: Snake in play with a BT pad ~10 %; the Control Panel pad tester idle ~45 %
+(44.6 / 45.0 / 44.5 with the pad connected / disconnected / reconnected, so pad-independent); Office Runner
+~46 %; high-score entry and the on-screen keyboard ~54 % (operator readings). **Not Bluetooth.** **Hypothesis
+[inferred, unmeasured]:** a redraw or flip every frame that is not gated on change, or a non-blocking input poll
+with no sleep — `common/keyboard.c` is shared by every game's high-score entry. **Discriminators:** voluntary vs
+nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spinning poll shows almost none
+voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
+timeout. **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
 source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
 and a click activates a tile in both; the draw belongs in one shared helper, not per app.
 

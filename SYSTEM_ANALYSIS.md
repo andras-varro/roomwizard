@@ -1179,29 +1179,25 @@ image is unreachable by construction (`--mode` patches both properties in one pa
 connector. `# CONFIG_BT is not set` in the image, but Bluetooth builds as loadable modules against it with
 no p1 write (`kernel/build-bt-modules.sh`; measured: the relinked `vmlinux` is byte-identical and every
 imported CRC matches). ⚠️ **`lmp_subver` `0x8761` does not identify an RTL8761 variant** — A, B and CU all
-report it and differ by `hci_rev`, which 4.14's `btrtl` does not look at. ⚠️ **[inferred] the controller is
-far more likely to work than the audio** — A2DP needs software SBC encoding on this single core.
-Dongle identity, module and firmware state and next steps are open work in
-[`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC is built and shipping
-([§3.4](#34-audio)).
+report it and differ by `hci_rev`, which 4.14's `btrtl` does not look at. Dongle state and next steps are open
+work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC ships ([§3.4](#34-audio)).
 
-⚠️ **The 8BitDo Pro 2 has two radio identities, and only the classic one is a gamepad** (measured
-2026-10-01, `.188`, RTL8761CU, BlueZ 5.66). **Switch to A mode and hold pair ~3 s.** In A mode it answers
-classic inquiry as "Wireless Controller" (`E4:17:D8:13:49:41`, class `0x002508`, UUIDs HID `0x1124` + PnP
-`0x1200`, modalias `usb:v054Cp05C4d0100`, i.e. it emulates a Sony DualShock 4); Just Works pairing with a
-`NoInputNoOutput` agent succeeds (first attempt `AuthenticationCanceled`, cause not investigated, the second
-straight after re-entering pairing succeeded), `hid-generic` binds it (`hid-sony` is not needed), and it
-makes one input node with `BTN_SOUTH`..`BTN_THUMBR`, `ABS` 0-5 and `HAT0X/Y` — buttons, both sticks and the
-hat captured, and the Control Panel pad tester and Office Runner worked on the panel. In S and X modes the pad
-sent no classic-inquiry response (20 s dual-transport discovery, one ~10 s inquiry, zero results), so X mode
-over Bluetooth is unusable here. The second identity, `8ap` (`E4:17:D8:42:BD:FF`, LE public), is
-connectable `ADV_IND` with AD flags `0x02` (no "BR/EDR not supported" bit) in S and X modes; its GATT has GAP,
-GATT, Tx Power, Device Information, Battery and vendor `0xFF10` and **no HID service (`0x1812`)**, so
-connecting yields no input node **[inferred: 8BitDo's companion-app channel]**. Because flag `0x04` is
-absent, BlueZ `pair` pages it over BR/EDR, gets HCI Page Timeout (`0x04`) and returns
-`org.bluez.Error.ConnectionAttemptFailed` — no gamepad exists at that address. `btmon -T` abbreviates event
-titles, so a grep for `Inquiry Result` misses an Extended Inquiry Result; `bluetoothctl`'s `NEW` line is the
-reliable witness.
+⚠️ **The 8BitDo Pro 2 works over Bluetooth in X mode (recommended) and in A mode; its radio shows three classic
+identities and one LE** (measured 2026-10-01, `.188`, RTL8761CU, BlueZ 5.66). **X mode, hold pair ~3 s:** it
+answers classic inquiry as "8BitDo Pro 2" (`E4:17:D8:40:EB:AE`), Just Works pairing with a `NoInputNoOutput`
+agent succeeded first try, and it presents as an Xbox One S controller (`045e:02e0`, version `0903`) bound by
+`hid-generic` — `event0` + `js0` + a kbd handler, ten buttons `BTN_SOUTH`..`BTN_TR2` plus `KEY_MENU`, `ABS` 0-5
+and `HAT0X/Y`, the same layout as the USB Xbox-clone pad. The operator verified it in the Control Panel pad tester
+and Office Runner, and with a USB `xpad` pad live at the same time (the tester attributes events per source). **A
+mode** answers as "Wireless Controller" (`E4:17:D8:13:49:41`, class `0x002508`, modalias `usb:v054Cp05C4d0100`, a
+DualShock 4); its first pairing attempt gave `AuthenticationCanceled` (cause not investigated), the second
+succeeded, and `hid-generic` makes one node with `BTN_SOUTH`..`BTN_THUMBR`. In S mode only the LE identity was
+seen. That one, `8ap` (`E4:17:D8:42:BD:FF`, LE public), is connectable `ADV_IND` with AD flags `0x02` (no "BR/EDR
+not supported" bit); its GATT has **no HID service (`0x1812`)**, so connecting yields no input node **[inferred:
+8BitDo's companion-app channel]**; `pair` pages it over BR/EDR and fails with Page Timeout. ⚠️ **Witness an
+advertisement by btmon's event matched on the address — not by `bluetoothctl`'s `NEW` line nor by btmon's
+abbreviated title** (`btmon -T` prints `Inquiry Result` for an Extended one): X mode was first recorded as silent
+from a busybox `grep` of `bluetoothctl` output, while btmon had logged 96 EIRs.
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
@@ -1269,6 +1265,11 @@ upstream, and authoritative for this code because none of it is vendor-patched:
 ⚠️ **A hub or adapter left permanently attached does NOT fix a dead port** — the teardown path's reading
 assumes a session already exists. A passive hub on a dead port reads `Vbus off` for minutes and a device
 plugged into it enumerates nothing; re-seating an adapter revives only a port that has had a session.
+
+⚠️ **Plugging a USB pad re-enumerates the whole tree, so the Bluetooth dongle's `hci0` is recreated and every BT
+link drops** (measured 2026-10-01, `.188`: hub `1-1` re-found, dongle `1-1.3`). Bonds in `/var/lib/bluetooth`
+survived and the pad reconnected on its Home button once `hci0` was powered; without `/etc/bluetooth/main.conf`
+BlueZ 5.66 leaves the new adapter `Powered: no`. We ship `AutoEnable=true` ([`device-files/bluetooth-main.conf`](device-files/bluetooth-main.conf)); that it re-powers after a replug is **[unverified]**.
 
 ⚠️ **Five readings that look diagnostic and are not** — three were believed and written down before being
 refuted, one of them in this document.

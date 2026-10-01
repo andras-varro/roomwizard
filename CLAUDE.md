@@ -377,8 +377,8 @@ reading evdev directly), `touch_input.c`, `touch_calib.c`, `hardware.c`, `common
 `audio.c`, `audio_gen.c`, `config.c`, `keyboard.c`, `highscore.c`, `ppm.c`, `logger.c`. The
 per-function table and what never to do instead: `native_apps/CLAUDE.md`.
 
-ScummVM has its **own independent** evdev input + OSS audio implementation (not the native_apps common
-lib) but applies the same Cortex-A8 / OSS fixes.
+ScummVM has its own evdev reader (`roomwizard-events.cpp`, on the shared `input_scan.c`) but **not its own audio**: `oss-mixer.cpp` opens no `/dev/dsp` and drives the device through `common/audio_out.o` (`configure.patch`; measured by grep of `backend-files/`); it never links `audio.o`.
+It shares the Cortex-A8 / OSS fixes through that library.
 
 ## Device paths worth knowing
 
