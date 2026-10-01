@@ -9,6 +9,7 @@
 #
 # Prerequisites — the host ones come from ../setup-build-env.sh:
 #   - arm-linux-gnueabi-gcc, dpkg-deb, wget, pkg-config   (BlueZ, build-bluez.sh)
+#   - autoreconf, libtoolize, gdbus-codegen               (BlueALSA, build-bluealsa.sh)
 #   - arm-linux-gnueabihf-gcc and ~/rw-kbuild-image from ../kernel/build-image.sh
 #                                                         (modules, build-bt-modules.sh)
 #   - SSH key auth to root@<ip>                           (deploy only)
@@ -124,6 +125,17 @@ else
     bash "$SCRIPT_DIR/build-bluez.sh"
 fi
 ok "staging/"
+# BlueALSA is BUILT here and not yet deployed or bundled: nothing below reads
+# staging-bluealsa/ until the A2DP path has been hand-tested on a unit.
+BA_STAGING="$SCRIPT_DIR/staging-bluealsa"
+if [[ -f "$BA_STAGING/usr/bin/bluealsa" \
+      && "$SCRIPT_DIR/build-bluealsa.sh" -nt "$BA_STAGING/usr/bin/bluealsa" ]]; then
+    info "build-bluealsa.sh is newer than the staged build — rebuilding"
+    bash "$SCRIPT_DIR/build-bluealsa.sh" --force
+else
+    bash "$SCRIPT_DIR/build-bluealsa.sh"
+fi
+ok "staging-bluealsa/ (built only)"
 echo ""
 
 # ── 2. kernel modules ───────────────────────────────────────────────────────

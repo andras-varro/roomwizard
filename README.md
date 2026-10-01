@@ -204,7 +204,7 @@ roomwizard/
 ├── browser_games/               # HTML5 games + LED control
 ├── scummvm-roomwizard/          # ScummVM backend
 ├── usb_host/                    # USB host mode + Xbox controller modules
-├── bluetooth/                   # BlueZ, BT modules, RTL8761CU firmware, boot start
+├── bluetooth/                   # BlueZ, BT modules, RTL8761CU firmware, boot start; BlueALSA cross-build
 └── vnc_client/                  # VNC remote desktop viewer
 ```
 

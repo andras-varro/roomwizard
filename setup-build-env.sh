@@ -141,6 +141,10 @@ core|cmd|wget|wget
 core|cmd|tar|tar
 core|cmd|bzip2|bzip2
 core|cmd|dash|dash
+core|cmd|autoreconf|autoconf
+core|cmd|aclocal|automake
+core|cmd|libtoolize|libtool
+core|cmd|gdbus-codegen|libglib2.0-dev-bin
 decode|run|python3 --version|python3
 decode|py|PIL|python3-pil
 kmod|cmd|bc|bc

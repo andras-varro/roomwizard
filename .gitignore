@@ -13,6 +13,7 @@ scummvm-roomwizard/arm-deps*/
 native_apps/arm-deps*/
 bluetooth/arm-deps*/
 bluetooth/staging/
+bluetooth/staging-bluealsa/
 bluetooth/modules/
 
 # Upstream ScummVM source tree, configured in place for the cross-build. Not

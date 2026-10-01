@@ -105,11 +105,17 @@ disconnect was logged and `/sys/bus/usb/devices` still listed them all; BT comma
 frame failed (-19)` while `bluetoothctl` still said `Connected: yes`. `/etc/init.d/usb-host recover` restored
 everything on attempt 1. It did not recur in a further 4 m 39 s session; n=1. **Cause of the VBUS sag not
 measured** — **[inferred]** candidate: total draw (xpad, USB audio, dongle, two keyboards behind hub `1a40:0101`)
-against the 500 mA budget. **Next:** (1) measure the cause — current draw with that device set, and whether the
-hub is bus-powered; (2) decide whether something should detect `VBUS_ERROR` / `b_idle` and run recover
-automatically instead of waiting for a user to press RESCAN. The RESCAN half is shipped: it now recovers on
-`b_*` even with devices listed (`usb_port_dead()`), not verified on a real `b_idle` port because one cannot be
-induced.
+against the 500 mA budget.
+
+**Rate (measured, `.188`):** `VBUS_ERROR` in syslog at 14:30:31 (previous boot), 15:08:12, 15:44:49 and 15:48:32 — about one per 35 min under the load below. The two `in a_idle (90, <VBusValid), retry #0` killed the port (`mode` → `b_idle`); the two `in a_host (91, ...) retry #1` did not (stayed `a_host`) — **[inferred]** from two samples each. **Load:** declared `bMaxPower` hub `1a40:0101` 100 mA, C-Media USB audio 100, wired Xbox pad `045e:028e` 500, BT dongle `0b05:1bf6` 100, second hub `1a40:0101` 100, 2.4G receiver `25a7:fa61` 100, keyboard `04d9:a088` 100 — about 1100 mA against the 500 mA port budget. Both hubs report `bmAttributes` 0xe0 (self-powered) but the operator confirms neither has a supply, so the bit lies. Overload is the leading cause, still **[inferred]**. **Next:** (1) the A/B — the operator moves to BT keyboard, audio and pad, leaving only hub and dongle on USB; no `VBUS_ERROR` in `/var/log/messages` over hours is the verdict; (2) automatic recovery — detect `b_idle` and run `usb-host recover` without a tap, justified by the rate. The RESCAN half is shipped and verified on device: at 15:44:49 the port died, RESCAN ran the recover (musb remove, re-register, mode `a_host`, `hci0` re-powered) via `usb_port_dead()`; the negative control, RESCAN on a healthy `a_idle` port, ran no recover (dmesg unchanged, BT pad stayed connected).
+
+### B48. Brick Breaker: second controller unsupported and playfield inset — open, operator reports 2026-10-01, unconfirmed
+
+(1) "Does not support the second controller" — details pending, and which pad works is not yet known. (2) The playfield appears inset about 10 mm at the top and the bottom — not measured; whether it is squeezed or shifted is not known. Source: `native_apps/brick_breaker`. **Next:** reproduce both before reading code.
+
+### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
+
+The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel.
 
 ### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
 
@@ -273,10 +279,17 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
    `-dev` `.deb`s used as the sysroot — no glib or dbus source build, so it is pinned to the glib 2.62 API.
    Output goes to `bluetooth/staging/` (gitignored). It configures `--disable-monitor`, so `btmon` is not staged;
    a one-off build with `--enable-monitor` was the instrument that diagnosed pairing.
-2. **BT audio: the first steps are lookups, not code.** Are glib, dbus and `sbc` already in
-   `bluetooth/arm-deps-softfp`; was alsa-lib (`native_apps/build-alsa-lib.sh`) built with plugin `dlopen`
-   support. Then a hand-run `bluealsa` + `aplay -D bluealsa` test before any app code; then `sbc` + `bluez-alsa`
-   v4.3.1 into **our** alsa-lib's plugin dir. A2DP latency (~150-250 ms typical) is a property, not a bug.
+2. **BT audio works by hand (measured 2026-10-01, `.188`); remaining is packaging.** `bluetooth/build-bluealsa.sh`
+   cross-builds `sbc` 2.0 (static) and BlueALSA 4.3.1 against the device's own glib/gio/gobject 2.62.6, libdbus
+   and libasound 1.2.1; `speaker-test -D bluealsa:DEV=<mac>,PROFILE=a2dp -c 2 -t sine` was audible in both ears
+   of a Sony WI-C310, stereo channel order correct (`-s 1`, buds checked), bluealsa ~4.8% CPU and ~5 MB RSS while
+   streaming, the headset reporting 180 ms A2DP delay. Hand-installed: the two binaries, the two ALSA plugins into
+   the **vendor** libasound's `/usr/lib/alsa-lib` (our alsa-lib is never deployed), `20-bluealsa.conf`,
+   `bluealsa.conf` for dbus. **Remaining:** deploy those staged files from `bluetooth/build-and-deploy.sh` and the
+   provision group (it only builds them now); an init start for `bluealsa -p a2dp-source` after `bluetoothd` with
+   `DBUS_SYSTEM_BUS_ADDRESS` set ([§3.6](SYSTEM_ANALYSIS.md#36-usb)); route `common/audio_out` to a BT sink
+   (ScummVM follows, it reaches the device through `audio_out`); then the control-panel BT page.
+   **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
 3. The control panel's Bluetooth page (adapter power, scan, pair/connect/forget) is a `CpPage` with its own tile;
    the grid has none until then. Paired devices appear in the Input page's testers — **a pad or keyboard on its
    own node needs no extra code; a keyboard+touchpad combo node needed the reader fix** (shipped).

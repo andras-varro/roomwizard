@@ -1271,6 +1271,10 @@ link drops** (measured 2026-10-01, `.188`: hub `1-1` re-found, dongle `1-1.3`). 
 survived and the pad reconnected on its Home button once `hci0` was powered; without `/etc/bluetooth/main.conf`
 BlueZ 5.66 leaves the new adapter `Powered: no`. We ship `AutoEnable=true` ([`device-files/bluetooth-main.conf`](device-files/bluetooth-main.conf)); **measured 2026-10-01, `.188`:** after `/etc/init.d/usb-host recover`, `btusb` reloaded the `rtl8761cu` firmware and `bluetoothctl show` read `Powered: yes` with no manual step. **Boot start also works** (measured, same unit): after a reboot `/etc/init.d/bluetooth` (S91) started `bluetoothd`, the modules loaded, `hci0` was `Powered: yes`, the bonds survived, and the 8BitDo Pro 2 (X mode) reconnected on a Home press, drove `app_launcher` (which holds its event node by hot-plug) and stayed connected 4 m 39 s.
 
+⚠️ **BlueALSA (and any GIO/GDBus program) fails on this device unless `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket` is set.** `/var/run` is not a symlink to `/run` here; the vendor libdbus compiles in `/run/dbus/system_bus_socket` (the real socket) but the vendor libgio 2.62.6 compiles in `unix:path=/var/run/dbus/system_bus_socket`, which does not exist, so the daemon dies with `Couldn't obtain D-Bus connection: No such file or directory` (measured 2026-10-01, `.188`: `grep -a` on both libraries plus `ls`). The vendor libasound's external-plugin directory is `/usr/lib/alsa-lib` (compiled in, absent on stock), and its `alsa.conf` load hook reads `/etc/alsa/conf.d`, not `/usr/share/alsa/alsa.conf.d` (same measurement).
+
+**After pairing an audio device, if `bluetoothctl info` lists only the PnP UUID, `disconnect` then `connect`.** The first pairing of a Sony WI-C310 left SDP incomplete, so `connect` failed `br-connection-profile-unavailable`; the reconnect re-ran SDP (Audio Sink, Headset, Handsfree, AVRCP) and A2DP connected (measured 2026-10-01, `.188`, n=1 device).
+
 ⚠️ **Five readings that look diagnostic and are not** — three were believed and written down before being
 refuted, one of them in this document.
 
