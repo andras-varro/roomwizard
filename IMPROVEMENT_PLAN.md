@@ -297,12 +297,22 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
 1. **ScummVM redeploy and verify BT audio.** `audio_out` routes to BT (rules: `native_apps/CLAUDE.md`) and the
    operator verified it in Brick Breaker, but ScummVM was not redeployed, so its BT path is unverified. A2DP adds
    ~150-250 ms latency **[inferred]**; the headset reported 180 ms (measured, `.188`).
-2. **The control panel's Bluetooth page (next):** adapter power, scan, pair with a passkey agent for keyboards,
-   trust, connect, disconnect, remove, audio output select — a `CpPage` with its own tile; the grid has none until
-   then. `bluetoothd` is reachable only over D-Bus and `native_apps` links no glib, so the page needs either
-   libdbus (the vendor libdbus is on the device) or shelling out to `bluetoothctl`; both are open, neither measured.
-   Paired devices appear in the Input page's testers — **a pad or keyboard on its own node needs no extra code; a
-   keyboard+touchpad combo node needed the reader fix** (shipped).
+2. **Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
+   - **Adapter name.** A phone sees the unit as "BlueZ 5.66", `bluetoothd`'s default alias (measured,
+     `bluetoothctl show`). Rename it to the unit's hostname — `Name=` in `main.conf`, or `system-alias` from the page.
+   - **Scan results share the known-device list** (`bt_ctl.c:155-194` keeps one `dev[]` array). A newly scanned
+     device stays at its discovery position and a connected one does not move up. Operator wants scan results in a
+     separate list from known/paired devices.
+   - **USE FOR AUDIO names no device** (`bluetooth_page.c:658`, `AUDIO_BT_PCM` = `plug:bluealsa` at
+     `common/audio_out.c:519`). With two A2DP sinks the stream goes to whichever BlueALSA picks; observed 2026-10-01
+     with Jabra Evolve 75 + Sony WI-C310: turning the Sony off dropped the audio briefly and it returned on the
+     Jabra **[inferred: BlueALSA defaults to the most recently connected sink; not measured]**. Direction: pin the PCM
+     to the selected address (`plug:bluealsa:DEV=<addr>`) when the button is tapped. The Jabra is multipoint (also
+     linked to another source), which may cause gaps of its own **[unmeasured]**.
+   - **A headset needed a manual CONNECT after POWER off/on** from the page (pad and keyboard reconnected by
+     themselves). Direction: on power-on, connect trusted audio devices **[unmeasured: whether the headset accepts]**.
+   - **The passkey-entry overlay is untested on a device** (`BT_PROMPT_DISPLAY_PASSKEY`, `bluetooth_page.c:247`): no
+     keyboard at hand requested a passkey. Numeric comparison was tested OK.
    **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
 
 ⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
