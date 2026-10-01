@@ -301,8 +301,9 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
 2. **BlueALSA is built and starts at boot; routing to it is what is open.** Measured by hand on `.188`
    (2026-10-01): `speaker-test -D bluealsa:DEV=<mac>,PROFILE=a2dp -c 2 -t sine` was audible in both ears of a Sony
    WI-C310, channel order correct (`-s 1`), bluealsa ~4.8% CPU and ~5 MB RSS while streaming, the headset
-   reporting 180 ms A2DP delay. Not yet verified after a reboot: audio actually playing to the headphones (needs
-   them powered on). **Left:** route `common/audio_out` to a BT sink when one is connected (ScummVM follows, it
+   reporting 180 ms A2DP delay. After a reboot the boot-started daemon plays through `plug:bluealsa` with no
+   `DEV` (L/R correct, operator-heard); its buffer range is 960..206158430 frames, so a client that leaves the
+   buffer at max gets a 5 s first period and silence — set period and buffer explicitly. **Left:** route `common/audio_out` to a BT sink when one is connected (ScummVM follows, it
    reaches the device through `audio_out`) — in progress; then the control-panel BT page (step 3).
    **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
 3. The control panel's Bluetooth page (adapter power, scan, pair with a passkey agent for keyboards, trust,
