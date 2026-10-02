@@ -1186,8 +1186,8 @@ work in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md); the *wired* USB DAC ships 
 identities and one LE** (measured 2026-10-01, `.188`, RTL8761CU, BlueZ 5.66). **X mode, hold pair ~3 s:** it
 answers classic inquiry as "8BitDo Pro 2" (`E4:17:D8:40:EB:AE`), Just Works pairing with a `NoInputNoOutput`
 agent succeeded first try, and it presents as an Xbox One S controller (`045e:02e0`, version `0903`) bound by
-`hid-generic` — `event0` + `js0` + a kbd handler, ten buttons `BTN_SOUTH`..`BTN_TR2` plus `KEY_MENU`, `ABS` 0-5
-and `HAT0X/Y`, the same layout as the USB Xbox-clone pad. The operator verified it in the Control Panel pad tester
+`hid-generic` — `event0` + `js0` + a kbd handler, ten keys `0x130`..`0x139` (`BTN_SOUTH`..`BTN_TR2`) plus `KEY_MENU` and **no `BTN_SELECT`/`BTN_START`**, `ABS` 0-5
+and `HAT0X/Y`. ⚠️ **Same hardware, different codes: View/Menu arrive as `0x136`/`0x137`, where `xpad` sends `BTN_SELECT`/`BTN_START`** (pad-tester numbers, code minus `0x130`, measured by the operator: 8BitDo bottom 0, right 1, left 2, top 3, Select 6, Start 7; Xbox 360 `xpad` bottom 0, right 1, left 3, top 4, Back 10, Start 11), and the order is positional (A,B,X,Y,LB,RB,View,Menu,LS,RS), not the 8BitDo's Nintendo labels. The operator verified it in the Control Panel pad tester
 and Office Runner, and with a USB `xpad` pad live at the same time (the tester attributes events per source). **A
 mode** answers as "Wireless Controller" (`E4:17:D8:13:49:41`, class `0x002508`, modalias `usb:v054Cp05C4d0100`, a
 DualShock 4); its first pairing attempt gave `AuthenticationCanceled` (cause not investigated), the second

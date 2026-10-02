@@ -904,6 +904,9 @@ group_c() {
 # 2026-10-01: SYSTEM_ANALYSIS.md 1852 -> 1854 and native_apps/CLAUDE.md 759 -> 766. Measured Bluetooth audio facts (bluealsa
 # open/buffer behaviour, bondable flag, HFP-AG reconnect) and the audio_out BT routing rules are new content with no stale
 # text to cut; the plan shed its done steps, and its ceiling was not lowered, for the reason above.
+# 2026-10-02: native_apps/CLAUDE.md 766 -> 771. The canonical pad-code rule (xpad codes, per-pad layout, translate at read time) is new
+# content with no stale text to cut; its device-side facts went into the existing 8BitDo paragraph of SYSTEM_ANALYSIS.md.
+#
 #
 #
 ceilings() {
@@ -915,7 +918,7 @@ ceilings() {
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-766	native_apps/CLAUDE.md
+771	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md

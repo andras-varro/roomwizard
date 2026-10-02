@@ -542,7 +542,12 @@ icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; 
 
 Use `gamepad.c` for everything; don't scan evdev per-app. Abstract buttons are `BTN_ID_UP..BTN_ID_BACK`,
 configurable via `/etc/input_config.conf`. `.pressed` is a rising edge, `.held` is level. Prefer `.pressed`
-for menu navigation and discrete actions, `.held` for continuous movement.
+for menu navigation and discrete actions, `.held` for continuous movement. **Canonical pad codes are `xpad`'s:**
+`input_scan.c` decides a layout per pad at open (SEQUENTIAL = has `BTN_TL` and `BTN_TR2` but neither `BTN_SELECT` nor
+`BTN_START`, i.e. the 8BitDo in BT X mode) and every pad reader (`gamepad.c`, ScummVM `pollGamepad`, the pad tester)
+translates with `input_pad_key()` at read time; `EVIOCGKEY` levels are looked up by raw code, then translated;
+defaults and `/etc/input_config.conf` stay in `xpad` codes. `KEY_MENU`→`BTN_MODE` is deliberately untranslated (no
+consumer). The default `btn_action` is `BTN_WEST` (`0x134`), commented "X" but physical Y under `xpad`.
 
 **All three fields are pure outputs of `gamepad_poll()`** — it recomputes them from scratch every call, so
 writing them from an app has no effect past the next poll. `held` is the OR of two kinds of source, and

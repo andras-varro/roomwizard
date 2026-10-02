@@ -109,10 +109,6 @@ against the 500 mA budget.
 
 **Rate (measured, `.188`):** `VBUS_ERROR` in syslog at 14:30:31 (previous boot), 15:08:12, 15:44:49 and 15:48:32 — about one per 35 min under the load below. The two `in a_idle (90, <VBusValid), retry #0` killed the port (`mode` → `b_idle`); the two `in a_host (91, ...) retry #1` did not (stayed `a_host`) — **[inferred]** from two samples each. **Load:** declared `bMaxPower` hub `1a40:0101` 100 mA, C-Media USB audio 100, wired Xbox pad `045e:028e` 500, BT dongle `0b05:1bf6` 100, second hub `1a40:0101` 100, 2.4G receiver `25a7:fa61` 100, keyboard `04d9:a088` 100 — about 1100 mA against the 500 mA port budget. Both hubs report `bmAttributes` 0xe0 (self-powered) but the operator confirms neither has a supply, so the bit lies. Overload is the leading cause, still **[inferred]**. **Next:** (1) the A/B — the operator moves to BT keyboard, audio and pad, leaving only hub and dongle on USB; no `VBUS_ERROR` in `/var/log/messages` over hours is the verdict; (2) automatic recovery — detect `b_idle` and run `usb-host recover` without a tap, justified by the rate. The RESCAN half is shipped and verified on device: at 15:44:49 the port died, RESCAN ran the recover (musb remove, re-register, mode `a_host`, `hci0` re-powered) via `usb_port_dead()`; the negative control, RESCAN on a healthy `a_idle` port, ran no recover (dmesg unchanged, BT pad stayed connected).
 
-### B51. Can the operator exit ScummVM back to the launcher? — open question, unmeasured, confirm with the operator
-
-The operator asked 2026-10-01 "can you exit from the scummvm?" and it is unanswered. Code reading only: `OSystem_RoomWizard::quit()` (`scummvm-roomwizard/backend-files/roomwizard.cpp`) restores 32bpp and calls `exit(0)`, and the init script respawns the default app, so the launcher should return. Not tested on a device; ask which screen they were on and whether a Quit button was reachable by touch.
-
 ### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
 
 The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel.
@@ -513,6 +509,11 @@ with no sleep — `common/keyboard.c` is shared by every game's high-score entry
 nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spinning poll shows almost none
 voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
 timeout. **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
+
+### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
+
+The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
+
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
 The launcher tiles look dated next to the Control Panel's page icons. **Where each comes from (read from
