@@ -402,9 +402,17 @@ static void spawn_lane_objects(Lane *lane, const LaneConfig *cfg) {
     }
 }
 
+/* Lane speeds are authored in px/frame at this cell size, which is what
+ * compute_grid() gives on the 800x453 landscape screen with a calibrated touch
+ * inset: (453 - (inset 1..19 + HUD_HEIGHT)) / NUM_ROWS = 28 (RW09: inset 19).
+ * Scaling by cell_size / LANE_SPEED_REF_CELL keeps the speed in cells per frame
+ * the same in every orientation.  Scaling by fb.width instead made portrait
+ * (453 wide, cells ~55 px) about 3.4x slower in cells: the width shrank while
+ * the cells, sized from the height, grew. */
+#define LANE_SPEED_REF_CELL 28.0f
+
 static void init_lanes(void) {
-    float speed_scale = (float)fb.width / 800.0f;
-    if (speed_scale < 0.5f) speed_scale = 0.5f;
+    float speed_scale = (float)cell_size / LANE_SPEED_REF_CELL;
 
     for (int i = 0; i < NUM_LANE_CONFIGS; i++) {
         const LaneConfig *cfg = &lane_configs[i];
