@@ -136,6 +136,7 @@ void OssMixerManager::init() {
 	// (transitively, via hardware.o), so this costs no build change; the reason
 	// it is a bare prototype rather than an include is in oss-mixer.h.
 	audio_out_set_device_pref(config_audio_device_stored());
+	audio_out_set_bt_addr(config_audio_bt_addr_stored());   // the headset USE FOR AUDIO pinned
 
 	// ⚠️ channels_req stays 1.  audio_out.h: forcing stereo doubles this mixer's
 	// work and its byte count on a core already at ~32 % with Full Throttle.

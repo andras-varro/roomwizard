@@ -37,6 +37,7 @@ typedef struct {
     bool music;         /* music_enabled — subordinate to enabled, see layout */
     bool effects;       /* effects_enabled — likewise */
     int  dev_idx;       /* audio_device as SAVED, an AudioOutChoice */
+    char bt_addr[18];   /* audio_bt_addr: the headset BLUETOOTH is pinned to, or "" */
 } AudioPageState;
 
 static AudioPageState audio_state;      /* the values, as saved */
@@ -62,6 +63,9 @@ static void audio_page_load(const Config *cfg) {
     audio_state.effects = config_effects_enabled(cfg);
     /* Unrecognised maps to onboard, as audio_out_device_for() resolves it. */
     audio_state.dev_idx = audio_out_choice_of(config_audio_device(cfg));
+    const char *a = config_audio_bt_addr(cfg);
+    snprintf(audio_state.bt_addr, sizeof(audio_state.bt_addr), "%s",
+             audio_out_bt_addr_valid(a) ? a : "");
 }
 
 /* Writes the four keys into the FILE by re-reading it, not by saving the
@@ -81,6 +85,7 @@ static void audio_persist(const AudioPageState *s, Config *mem) {
         config_set_bool(both[i], "music_enabled",   s->music);
         config_set_bool(both[i], "effects_enabled", s->effects);
         config_set(both[i], "audio_device", audio_out_choice_name(s->dev_idx));
+        config_set(both[i], "audio_bt_addr", s->bt_addr);
     }
     if (config_save(&disk) != 0) {
         fprintf(stderr, "control_panel: audio settings save failed\n");
@@ -92,10 +97,14 @@ static void audio_persist(const AudioPageState *s, Config *mem) {
  * same persist as the OUT button, so there is one writer of audio_device.  An
  * open bus follows it on the Audio page's next input(). */
 int cp_audio_output(void) { return audio_state.dev_idx; }
+const char *cp_audio_bt_addr(void) { return audio_state.bt_addr; }
 
-void cp_audio_set_output(Config *cfg, int choice) {
+void cp_audio_set_output(Config *cfg, int choice, const char *bt_addr) {
     if (choice < 0 || choice >= AUDIO_OUT_CHOICE_COUNT) return;
     audio_state.dev_idx = choice;
+    snprintf(audio_state.bt_addr, sizeof(audio_state.bt_addr), "%s",
+             (choice == AUDIO_OUT_CHOICE_BT && audio_out_bt_addr_valid(bt_addr))
+                 ? bt_addr : "");
     audio_persist(&audio_state, cfg);
 }
 
@@ -345,6 +354,10 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
         bool usb = audio_out_usb_present(), bt = audio_out_bt_present();
         s->dev_idx = audio_out_choice_next(audio_out_choice_shown(s->dev_idx, usb, bt),
                                            usb, bt);
+        /* A choice made HERE names no headset, so it unpins: BLUETOOTH reached
+         * by cycling is "any connected sink", and only the Bluetooth page's USE
+         * FOR AUDIO names one.  The toggles above persist too and keep the pin. */
+        s->bt_addr[0] = '\0';
         changed = true;
     }
     if (changed) {

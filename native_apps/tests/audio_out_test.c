@@ -1380,6 +1380,70 @@ int main(void)
         }
     }
 
+    printf("\n=== R. USE FOR AUDIO pins the Bluetooth sink to one headset ===\n");
+    {
+        const char *A = "AA:BB:CC:DD:EE:FF", *B = "11:22:33:44:55:66";
+        const char *PIN_A = "bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp";
+        char buf[64];
+
+        check(audio_out_bt_addr_valid(A) && audio_out_bt_addr_valid("aa:bb:cc:dd:ee:ff") &&
+              audio_out_bt_addr_valid("0a:Bc:9F:00:e1:7D"),
+              "R1 a BD address in either case is valid");
+        const char *bad_addr[] = {
+            NULL, "", "AA:BB:CC:DD:EE:F", "AA:BB:CC:DD:EE:FF0", "AA-BB-CC-DD-EE-FF",
+            "GG:BB:CC:DD:EE:FF", "AA:BB:CC:DD:EE:FF,PROFILE=sco", "AABB:CC:DD:EE:FF:",
+        };
+        int accepted = 0;
+        for (size_t i = 0; i < sizeof(bad_addr) / sizeof(bad_addr[0]); i++)
+            if (audio_out_bt_addr_valid(bad_addr[i])) {
+                printf("    accepted: %s\n", bad_addr[i] ? bad_addr[i] : "(null)");
+                accepted++;
+            }
+        check(accepted == 0, "R2 a malformed address, including one carrying ALSA ',' / '=' "
+                             "syntax, is refused");
+
+        check(strcmp(audio_out_bt_pcm_for("bluetooth", A, buf, sizeof(buf)), PIN_A) == 0,
+              "R3 \"bluetooth\" + a valid address names that headset's PCM");
+        check(strcmp(audio_out_bt_pcm_for("auto", A, buf, sizeof(buf)), "plug:bluealsa") == 0 &&
+              strcmp(audio_out_bt_pcm_for(NULL, A, buf, sizeof(buf)), "plug:bluealsa") == 0,
+              "R4 \"auto\" stays any sink: a stored address does not narrow it");
+        check(strcmp(audio_out_bt_pcm_for("bluetooth", "", buf, sizeof(buf)), "plug:bluealsa") == 0 &&
+              strcmp(audio_out_bt_pcm_for("bluetooth", "AA:BB", buf, sizeof(buf)), "plug:bluealsa") == 0 &&
+              strcmp(audio_out_bt_pcm_for("bluetooth", A, buf, 20), "plug:bluealsa") == 0,
+              "R5 unpinned, malformed, or a buffer too small: the unpinned PCM, never a torn name");
+        const char *pin = audio_out_bt_pcm_for("bluetooth", A, buf, sizeof(buf));
+        check(strncmp(pin, "plug:", 5) != 0 && strchr(pin, ',') == strrchr(pin, ','),
+              "R6 the pinned name is not wrapped in plug: (pcm.bluealsa is already a plug, "
+              "and plug's own argument parser would split it at ',' and '=')");
+
+        check(audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_BT, A, A) &&
+              audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_BT, A, "aa:bb:cc:dd:ee:ff"),
+              "R7 BLUETOOTH pinned to this address is this headset's audio, either case");
+        check(!audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_BT, A, B) &&
+              !audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_BT, "", A),
+              "R8 BLUETOOTH pinned elsewhere, or unpinned, still offers USE FOR AUDIO "
+              "on this headset");
+        check(!audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_USB, A, A) &&
+              !audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_AUTO, A, A),
+              "R9 a non-Bluetooth OUT is nobody's pin, whatever address is stored");
+
+        audio_out_set_device_pref("bluetooth");
+        audio_out_set_bt_addr(A);
+        bool w1 = strcmp(audio_out_device_pcm("bluealsa"), PIN_A) == 0 &&
+                  strcmp(audio_out_bt_addr(), A) == 0;
+        audio_out_set_device_pref("auto");
+        bool w2 = strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0;
+        audio_out_set_device_pref("bluetooth");
+        bool w3 = strcmp(audio_out_device_pcm("bluealsa"), PIN_A) == 0;
+        audio_out_set_bt_addr("AA:BB:CC:DD:EE:FF,PROFILE=sco");
+        bool w4 = strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0 &&
+                  audio_out_bt_addr()[0] == '\0';
+        check(w1 && w2 && w3 && w4, "R10 the opener's PCM follows both setters, in either order, "
+                                    "and a malformed address unpins");
+        audio_out_set_bt_addr(NULL);                /* leave the process as found */
+        audio_out_set_device_pref("onboard");
+    }
+
     printf("\n%s  %d checks, %d failure(s)\n",
            failures ? "FAILED" : "PASSED", checks, failures);
     return failures ? 1 : 0;

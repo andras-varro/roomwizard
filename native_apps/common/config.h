@@ -133,6 +133,13 @@ const char *config_audio_device(const Config *cfg);
  */
 const char *config_audio_device_stored(void);
 
+/* The headset "bluetooth" is pinned to: "audio_bt_addr" (default "", unpinned).
+ * Written beside audio_device by the control panel's one writer of it; read
+ * only to hand to `audio_out_set_bt_addr()`, which validates it.  The _stored
+ * form exists for ScummVM, for config_audio_device_stored()'s reason above. */
+const char *config_audio_bt_addr(const Config *cfg);
+const char *config_audio_bt_addr_stored(void);
+
 /* Check if LED effects are disabled. Reads "led_enabled" key (default: true). */
 bool config_led_enabled(const Config *cfg);
 

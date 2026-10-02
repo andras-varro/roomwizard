@@ -265,6 +265,7 @@ int audio_init(Audio *audio)
      * lives in audio_out.c's file-static for exactly that reason, so this
      * survives the memset while a field would not. */
     audio_out_set_device_pref(config_audio_device(&cfg));
+    audio_out_set_bt_addr(config_audio_bt_addr(&cfg));
 
     if (audio_open(audio) < 0) return -1;
     fx_config_apply(audio, &cfg);
@@ -306,6 +307,7 @@ int audio_init_unchecked_pref(Audio *audio, const char *pref)
      * screen previewing an unsaved device choice must test the device it shows,
      * and it still overwrites the file-static for the same reason. */
     audio_out_set_device_pref(pref ? pref : config_audio_device_stored());
+    audio_out_set_bt_addr(config_audio_bt_addr_stored());   /* the same rule */
     return audio_open(audio);
 }
 

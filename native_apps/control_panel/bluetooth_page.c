@@ -7,8 +7,8 @@
  * polled from input() — which the panel calls once per main-loop iteration
  * whether or not anything was touched, so it is the page's tick.  No thread.
  * Exposed only as cp_bluetooth_page (cp_page.h).  It owns no config keys:
- * USE FOR AUDIO writes the Audio page's OUT through cp_audio_set_output(), the
- * one writer of that key.
+ * USE FOR AUDIO writes the Audio page's OUT, pinned to the selected headset's
+ * address, through cp_audio_set_output(), the one writer of both keys.
  *
  * Only a change repaints: input() returns CP_PAGE_REDRAW when bt_ctl_poll()
  * reports one or a widget moved, never on a timer.
@@ -423,15 +423,21 @@ static void bt_page_draw(Framebuffer *fb) {
 
     if (audio_offered(d)) {
         int saved = cp_audio_output();
+        bool mine = audio_out_bt_is_pinned(saved, cp_audio_bt_addr(), d->addr);
         int tx = CONTENT_LEFT + 5;
-        if (saved != AUDIO_OUT_CHOICE_BT) {
+        if (!mine) {
             button_draw(fb, &audio_btn);
             tx = audio_btn.x + audio_btn.width + 12;
         }
+        /* BLUETOOTH pinned to another headset is not this one's audio: say so,
+         * rather than a green "BLUETOOTH" beside a device that plays nothing. */
         char out[40];
-        snprintf(out, sizeof(out), "OUT: %s", audio_out_choice_label(saved));
+        if (saved == AUDIO_OUT_CHOICE_BT && !mine && cp_audio_bt_addr()[0])
+            snprintf(out, sizeof(out), "OUT: OTHER BT");
+        else
+            snprintf(out, sizeof(out), "OUT: %s", audio_out_choice_label(saved));
         fb_draw_text(fb, tx, BT_ACT_B_Y + (BT_BTN_H - 14) / 2, out,
-                     saved == AUDIO_OUT_CHOICE_BT ? BT_COLOR_CONN : COLOR_LABEL, 2);
+                     mine ? BT_COLOR_CONN : COLOR_LABEL, 2);
     }
 }
 
@@ -655,10 +661,14 @@ static CpPageResult bt_page_input(Config *cfg, int tx, int ty,
         break;
     }
 
-    if (audio_offered(d) && cp_audio_output() != AUDIO_OUT_CHOICE_BT &&
+    /* Pins the output to THIS headset's address, not to "whichever sink
+     * BlueALSA picks" — with two A2DP sinks connected that was the most
+     * recently connected one, whatever was selected here. */
+    if (audio_offered(d) &&
+        !audio_out_bt_is_pinned(cp_audio_output(), cp_audio_bt_addr(), d->addr) &&
         button_update(&audio_btn, tx, ty, touching, now)) {
-        cp_audio_set_output(cfg, AUDIO_OUT_CHOICE_BT);
-        cp_status("AUDIO OUT: BLUETOOTH", true);
+        cp_audio_set_output(cfg, AUDIO_OUT_CHOICE_BT, d->addr);
+        cp_status("AUDIO OUT: THIS HEADSET", true);
         redraw = true;
     }
 

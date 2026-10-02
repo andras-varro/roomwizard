@@ -32,6 +32,7 @@ extern "C" {
  * build root, so that include resolves to ScummVM's from inside this tree.
  * One plain prototype, deliberately, and config.h says why. */
 const char *config_audio_device_stored(void);
+const char *config_audio_bt_addr_stored(void);
 }
 
 /**

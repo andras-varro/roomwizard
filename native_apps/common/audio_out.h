@@ -426,6 +426,35 @@ void        audio_out_set_device_pref(const char *pref);
 /** What was last set — the preference, NOT the resolved device. */
 const char *audio_out_device_pref(void);
 
+/**
+ * Pin the Bluetooth sink to one headset: `"AA:BB:CC:DD:EE:FF"` (config key
+ * `audio_bt_addr`, written by the control panel's USE FOR AUDIO).  NULL, empty
+ * or malformed unpins.  Set beside the preference, before the first open; every
+ * opener that sets the preference sets this too.
+ *
+ * ⚠️ **It narrows `"bluetooth"` only.**  Pinned, the sink's PCM is
+ * `bluealsa:DEV=<addr>,PROFILE=a2dp`, and the presence probe opens THAT name —
+ * so the pinned headset absent reads as no sink and the resolver falls back
+ * (USB, else onboard) even while another headset is connected.  Unpinned, or
+ * under `"auto"`, it stays `plug:bluealsa`: BlueALSA's most recently connected
+ * sink.
+ */
+void        audio_out_set_bt_addr(const char *addr);
+/** What was last set and accepted: the address, or "" when unpinned. */
+const char *audio_out_bt_addr(void);
+/** Exactly `XX:XX:XX:XX:XX:XX`, hex digits either case, nothing after. */
+bool        audio_out_bt_addr_valid(const char *addr);
+/** The BlueALSA PCM name as a pure function of preference and address: the
+ *  pinned form into `buf` when `pref` is `"bluetooth"` and `addr` is valid, else
+ *  (or if `buf` is too small) the literal `"plug:bluealsa"`. */
+const char *audio_out_bt_pcm_for(const char *pref, const char *addr,
+                                 char *buf, size_t n);
+/** Whether a SAVED choice + address routes audio to the device `dev_addr`:
+ *  BLUETOOTH and the same valid address, compared case-insensitively.  A settings
+ *  page offers USE FOR AUDIO while this is false. */
+bool        audio_out_bt_is_pinned(int saved_choice, const char *saved_addr,
+                                   const char *dev_addr);
+
 /** Whether ALSA card 1's OSS node is present and writable right now. */
 bool        audio_out_usb_present(void);
 
@@ -498,7 +527,8 @@ int  audio_out_choice_next(int shown, bool usb_present, bool bt_present);
  *  → `plughw:0,0`, `/dev/dsp1` → `plughw:1,0` (OSS minor N is ALSA card N on
  *  this device), `"bluealsa"` → `plug:bluealsa` (BlueALSA's default device =
  *  the most recently connected sink, A2DP; `plug` so ScummVM's mono and odd
- *  rates are converted).  Anything else maps onboard, the resolver's own fallback.
+ *  rates are converted) or, pinned, `audio_out_bt_pcm_for()`'s form.  Anything
+ *  else maps onboard, the resolver's own fallback.
  *  `plughw`, not `hw`, so a rate or channel count the card lacks is converted
  *  rather than refused. */
 const char *audio_out_device_pcm(const char *path);

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <dirent.h>
@@ -524,10 +525,51 @@ AudioOutErr audio_out_alsa_classify(int err)
  *  speaker. */
 static char audio_dev_pref[16] = "auto";
 
+/* The pinned headset (audio_out.h, audio_out_set_bt_addr) and the PCM name it
+ * makes.  bt_pcm is rebuilt by the two setters ONLY: g_alsa.name keeps a pointer
+ * to it for the life of a stream, so a lazy rebuild per call would rename a
+ * stream out from under its own "is this our stream" check. */
+static char audio_bt_addr[18] = "";
+static char bt_pcm[64]        = AUDIO_BT_PCM;
+static void bt_pcm_rebuild(void);
+
 void audio_out_set_device_pref(const char *pref)
 {
     if (!pref || !*pref) pref = "auto";
     snprintf(audio_dev_pref, sizeof(audio_dev_pref), "%s", pref);
+    bt_pcm_rebuild();
+}
+
+bool audio_out_bt_addr_valid(const char *addr)
+{
+    if (!addr) return false;
+    /* `pos` counts 0,1,2 per octet: no `%` on a core with no divide. */
+    for (int i = 0, pos = 0; i < 17; i++, pos = (pos == 2) ? 0 : pos + 1) {
+        char c = addr[i];
+        if (pos == 2) { if (c != ':') return false; continue; }
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') ||
+              (c >= 'a' && c <= 'f'))) return false;
+    }
+    return addr[17] == '\0';
+}
+
+const char *audio_out_bt_pcm_for(const char *pref, const char *addr,
+                                 char *buf, size_t n)
+{
+    /* Pinned only under an explicit "bluetooth": "auto" means whichever sink is
+     * there, and a stale address left beside it must not narrow that.  The
+     * address is validated, not just non-empty, because it is spliced into an
+     * ALSA device string whose ',' and '=' are syntax.
+     *
+     * ⚠️ `bluealsa:DEV=…`, NOT `plug:bluealsa:DEV=…`: pcm.bluealsa is already
+     * `type plug` (device-files/20-bluealsa.conf), and the outer form would hand
+     * "bluealsa:DEV=…,PROFILE=a2dp" to pcm.plug's argument parser, which splits
+     * at '=' and ',' (alsa-lib conf.c parse_args) and rejects the result. */
+    bool pin = pref && strcmp(pref, "bluetooth") == 0 &&
+               audio_out_bt_addr_valid(addr);
+    if (!pin || !buf || n == 0) return AUDIO_BT_PCM;
+    int w = snprintf(buf, n, "bluealsa:DEV=%s,PROFILE=a2dp", addr);
+    return (w > 0 && (size_t)w < n) ? buf : AUDIO_BT_PCM;
 }
 
 const char *audio_out_device_pref(void)
@@ -740,6 +782,42 @@ static bool bt_usable(void)
     return audio_out_bt_present() && !bt_refused;
 }
 
+void audio_out_set_bt_addr(const char *addr)
+{
+    snprintf(audio_bt_addr, sizeof(audio_bt_addr), "%s",
+             audio_out_bt_addr_valid(addr) ? addr : "");
+    bt_pcm_rebuild();
+}
+
+const char *audio_out_bt_addr(void)
+{
+    return audio_bt_addr;
+}
+
+/* A new name is a different sink: the cached presence answer and any refusal
+ * were about the old one.  Forgetting the signature makes the next
+ * audio_out_bt_present() a first look, which probes the new name once. */
+static void bt_pcm_rebuild(void)
+{
+    char next[sizeof(bt_pcm)];
+    const char *name = audio_out_bt_pcm_for(audio_dev_pref, audio_bt_addr,
+                                            next, sizeof(next));
+    if (strcmp(name, bt_pcm) == 0) return;
+    snprintf(bt_pcm, sizeof(bt_pcm), "%s", name);
+    bt_gate.have_sig = false;
+    bt_seen_present  = false;
+    bt_refused       = false;
+}
+
+bool audio_out_bt_is_pinned(int saved_choice, const char *saved_addr,
+                            const char *dev_addr)
+{
+    return saved_choice == AUDIO_OUT_CHOICE_BT &&
+           audio_out_bt_addr_valid(saved_addr) &&
+           audio_out_bt_addr_valid(dev_addr) &&
+           strcasecmp(saved_addr, dev_addr) == 0;
+}
+
 const char *audio_out_device_path(void)
 {
     /* Bluetooth is asked only under a preference that can pick it: the probe
@@ -757,7 +835,7 @@ const char *audio_out_device_path(void)
 const char *audio_out_device_pcm(const char *path)
 {
     if (path && strcmp(path, AUDIO_DEV_USB) == 0) return "plughw:1,0";
-    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return AUDIO_BT_PCM;
+    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return bt_pcm;
     return "plughw:0,0";
 }
 
@@ -1055,9 +1133,12 @@ static void alsa_close(void *ctx)
  * present either way, so a settings page never hides the sink being played. */
 static bool bt_probe_pcm(void)
 {
-    if (g_alsa.pcm && g_alsa.name && strcmp(g_alsa.name, AUDIO_BT_PCM) == 0) return true;
+    if (g_alsa.pcm && g_alsa.name && strcmp(g_alsa.name, bt_pcm) == 0) return true;
     snd_pcm_t *p = NULL;
-    int err = snd_pcm_open(&p, AUDIO_BT_PCM, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    /* The pinned name when one is set: a pinned headset that is not connected
+     * fails this open, so it reads absent and the resolver falls back — even
+     * while another sink is connected, which is what pinning means. */
+    int err = snd_pcm_open(&p, bt_pcm, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (err == 0) { snd_pcm_close(p); return true; }
     return err == -EBUSY;
 }
