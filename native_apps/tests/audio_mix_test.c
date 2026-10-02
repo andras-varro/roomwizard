@@ -179,7 +179,12 @@ static void open_log(void)
     if (freopen(MIX_LOG_PATH, "a", stderr)) {
         setvbuf(stderr, NULL, _IONBF, 0);   /* a session that ends in SIGKILL must
                                              * still have its lines on disk */
-        fprintf(stderr, "\n=== audio_mix_test session start ===\n");
+        /* Local wall-clock time, so this log lines up with /var/log/messages. */
+        char hms[9] = "??:??:??";
+        time_t t = time(NULL);
+        struct tm tm;
+        if (localtime_r(&t, &tm)) strftime(hms, sizeof(hms), "%H:%M:%S", &tm);
+        fprintf(stderr, "\n=== audio_mix_test session start === %s\n", hms);
     } else {
         printf("audio_mix_test: cannot open %s — taps will not be logged\n",
                MIX_LOG_PATH);

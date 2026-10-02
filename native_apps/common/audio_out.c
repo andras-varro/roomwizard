@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <time.h>
 #include <dirent.h>
 
 /* ── The device half, and nothing else ───────────────────────────────────────
@@ -905,6 +906,17 @@ void audio_out_enable_amp(void)
  * header every client includes.
  */
 
+/** HH:MM:SS local wall-clock time, for the lines that must be matched against
+ *  /var/log/messages (syslog stamps local time); every other line is unstamped. */
+static const char *wall_hms(char buf[9])
+{
+    time_t t = time(NULL);
+    struct tm tm;
+    if (!localtime_r(&t, &tm) || strftime(buf, 9, "%H:%M:%S", &tm) == 0)
+        snprintf(buf, 9, "??:??:??");
+    return buf;
+}
+
 #ifdef AUDIO_OUT_HAVE_ALSA
 
 #include <alsa/asoundlib.h>
@@ -929,6 +941,11 @@ typedef struct {
     bool               lost_said;
     unsigned           write_xruns;   /* underruns met by writei — counted nowhere else */
     unsigned           hard_fails;    /* consecutive failed space/write calls          */
+    unsigned long      written;       /* frames writei accepted, this stream (wraps)   */
+    unsigned long      consumed_last; /* written - in_flight at the last progress      */
+    uint32_t           progress_ms;   /* monotonic ms of that progress                 */
+    bool               progress_set;  /* consumed_last/progress_ms hold a baseline     */
+    bool               stalled;       /* reported once; every later query is lost too  */
 } AlsaCtx;
 
 static AlsaCtx g_alsa;
@@ -938,7 +955,9 @@ static AlsaCtx g_alsa;
 static int alsa_gone(AlsaCtx *a, int err)
 {
     if (!a->lost_said) {
-        fprintf(stderr, "audio_out: %s is gone (%s)\n", a->name, snd_strerror(err));
+        char hms[9];
+        fprintf(stderr, "audio_out: %s is gone (%s) at %s\n", a->name, snd_strerror(err),
+                wall_hms(hms));
         a->lost_said = true;
     }
     errno = ENODEV;
@@ -1062,6 +1081,9 @@ static int alsa_open(void *ctx, int rate_req, int channels_req,
     a->lost_said   = false;
     a->write_xruns = 0;
     a->hard_fails  = 0;
+    a->written     = 0;
+    a->progress_set = false;
+    a->stalled     = false;
 
     *rate_granted     = (int)rate;
     *bits_granted     = snd_pcm_format_width(SND_PCM_FORMAT_S16_LE);
@@ -1080,10 +1102,63 @@ fail:
     return -1;
 }
 
+/* ⚠️ A PCM can freeze with every call succeeding.  Log-measured on a BlueALSA
+ * A2DP PCM: avail kept answering, the ring held the lead, nothing was consumed,
+ * so the pump asked for nothing every service, no error ever reached
+ * device_lost, and the stream sat silent on the pinned headset with no reopen.
+ * Progress is consumption, `written - in_flight`, which a write cannot move.
+ *
+ * 2000 ms: a running ring with a period queued is consumed every period (46 ms
+ * at the 2048-frame grant, 44100 Hz), and the granted ring is 743 ms, so this is
+ * ~43 periods and ~2.7 ring lengths of nothing played.  It is also no shorter
+ * than the longest ring alsa_open() accepts (2 s), so a ring of any accepted
+ * size would have drained fully in it.  Not measured: the burst size of
+ * BlueALSA's own reads, assumed far below a second. */
+#define ALSA_STALL_MS 2000
+
+static uint32_t stall_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return audio_ms_from_timeval((long)ts.tv_sec, (long)(ts.tv_nsec / 1000));
+}
+
+/** True once a ring that is OWED playback has not been consumed for
+ *  ALSA_STALL_MS.  Owed: at least the start threshold (one period) queued, and
+ *  not paused — so a ring below the threshold, which ALSA does not start, is
+ *  never a stall, and a service gap the device played through is progress. */
+static bool alsa_stalled(AlsaCtx *a, long in_flight)
+{
+    uint32_t now = stall_now_ms();
+    unsigned long consumed = a->written - (unsigned long)in_flight;
+    bool owed = in_flight >= (long)a->period &&
+                snd_pcm_state(a->pcm) != SND_PCM_STATE_PAUSED;
+    if (!owed || !a->progress_set || consumed != a->consumed_last) {
+        a->consumed_last = consumed;
+        a->progress_ms   = now;
+        a->progress_set  = true;
+        return false;
+    }
+    return (uint32_t)(now - a->progress_ms) >= ALSA_STALL_MS;
+}
+
+/** A stalled PCM is refused like one that would not open — the same flags,
+ *  cleared by the same return (a Bluetooth link change, a USB replug), so the
+ *  reopen takes the next tier instead of the stalled sink, and the pinned
+ *  headset still wins the stream back when it reconnects.  Onboard has no
+ *  tier below it and is simply reopened. */
+static void alsa_refuse_stalled(const char *pcm)
+{
+    if (bt_pin_pcm[0] && strcmp(pcm, bt_pin_pcm) == 0)            bt_pin_refused = true;
+    else if (strcmp(pcm, AUDIO_BT_PCM) == 0)                      bt_any_refused = true;
+    else if (strcmp(pcm, audio_out_device_pcm(AUDIO_DEV_USB)) == 0) usb_refused   = true;
+}
+
 static int alsa_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
 {
     AlsaCtx *a = (AlsaCtx *)ctx;
     if (!a->pcm || frame_bytes <= 0) return -1;
+    if (a->stalled) return alsa_gone(a, -ETIMEDOUT);
 
     /* ⚠️ snd_pcm_avail(), never snd_pcm_avail_update().  Measured on this
      * device's alsa-lib with a USB card unplugged under a live plughw stream:
@@ -1106,6 +1181,14 @@ static int alsa_space(void *ctx, int frame_bytes, AudioOutSpace *sp)
 
     long ring = (long)a->buffer;
     if (avail > ring) avail = ring;   /* an unreported XRUN reads past the ring */
+    if (alsa_stalled(a, ring - (long)avail)) {
+        fprintf(stderr, "audio_out: %s stalled — no progress for %u ms (avail=%ld state=%s)\n",
+                a->name, (unsigned)(stall_now_ms() - a->progress_ms), (long)avail,
+                snd_pcm_state_name(snd_pcm_state(a->pcm)));
+        a->stalled = true;
+        alsa_refuse_stalled(a->name);
+        return alsa_gone(a, -ETIMEDOUT);
+    }
     sp->period_frames = (long)a->period;
     sp->ring_frames   = ring;
     sp->space         = (long)avail;
@@ -1127,7 +1210,11 @@ static ssize_t alsa_write(void *ctx, const void *buf, size_t nbytes, bool *again
      * empty, so a second failure is not another underrun. */
     for (int attempt = 0; attempt < 2; attempt++) {
         snd_pcm_sframes_t r = snd_pcm_writei(a->pcm, buf, frames);
-        if (r >= 0) { a->hard_fails = 0; return (ssize_t)r * a->frame_bytes; }
+        if (r >= 0) {
+            a->hard_fails = 0;
+            a->written   += (unsigned long)r;
+            return (ssize_t)r * a->frame_bytes;
+        }
         if (audio_out_alsa_classify((int)r) == AO_ERR_AGAIN) {
             *again = true;
             errno  = EAGAIN;
@@ -1349,7 +1436,8 @@ bool audio_out_usb_returned(AudioOut *out)
     out->better_seen = better;
     if (!better || !before) return false;
 
-    fprintf(stderr, "audio_out: %s is available — leaving %s\n",
-            device_label(target), device_label(out->open_path));
+    char hms[9];
+    fprintf(stderr, "audio_out: %s is available — leaving %s at %s\n",
+            device_label(target), device_label(out->open_path), wall_hms(hms));
     return true;
 }

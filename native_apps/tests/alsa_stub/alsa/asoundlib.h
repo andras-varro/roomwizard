@@ -28,6 +28,12 @@ typedef enum { SND_PCM_STREAM_PLAYBACK = 0 } snd_pcm_stream_t;
 typedef enum { SND_PCM_ACCESS_RW_INTERLEAVED = 3 } snd_pcm_access_t;
 typedef enum { SND_PCM_FORMAT_S16_LE = 2 } snd_pcm_format_t;
 #define SND_PCM_NONBLOCK 0x1
+/* The real header's values, so a state name read in a log matches the device's. */
+typedef enum {
+    SND_PCM_STATE_OPEN = 0, SND_PCM_STATE_SETUP, SND_PCM_STATE_PREPARED,
+    SND_PCM_STATE_RUNNING, SND_PCM_STATE_XRUN, SND_PCM_STATE_DRAINING,
+    SND_PCM_STATE_PAUSED, SND_PCM_STATE_SUSPENDED, SND_PCM_STATE_DISCONNECTED
+} snd_pcm_state_t;
 
 /* Stack storage in the real header; a static block is enough for one caller. */
 #define snd_pcm_hw_params_alloca(p) \
@@ -42,6 +48,8 @@ int  snd_pcm_resume(snd_pcm_t *pcm);
 snd_pcm_sframes_t snd_pcm_avail(snd_pcm_t *pcm);
 snd_pcm_sframes_t snd_pcm_avail_update(snd_pcm_t *pcm);
 snd_pcm_sframes_t snd_pcm_writei(snd_pcm_t *pcm, const void *buf, snd_pcm_uframes_t size);
+snd_pcm_state_t snd_pcm_state(snd_pcm_t *pcm);
+const char *snd_pcm_state_name(snd_pcm_state_t state);
 const char *snd_strerror(int errnum);
 int  snd_pcm_format_width(snd_pcm_format_t format);
 
