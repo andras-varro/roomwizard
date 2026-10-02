@@ -79,9 +79,9 @@ extern const CpPage cp_bluetooth_page; /* bluetooth_page.c */
  * goes through audio_page.c's own persist, so the Audio page's on-screen
  * choice, the in-memory Config and the file stay one value.  choice is an
  * AudioOutChoice (common/audio_out.h); cp_audio_output() is the SAVED one.
- * bt_addr pins BLUETOOTH to one headset (config audio_bt_addr); it is kept only
- * with choice BLUETOOTH and a valid address, else saved as "" (unpinned).
- * cp_audio_bt_addr() is the SAVED pin. */
+ * bt_addr is the preferred headset (config audio_bt_addr), in force under
+ * BLUETOOTH and AUTO and kept across OUT changes; a malformed or empty address
+ * is saved as "" (unpinned).  cp_audio_bt_addr() is the SAVED pin. */
 int         cp_audio_output(void);
 const char *cp_audio_bt_addr(void);
 void        cp_audio_set_output(Config *cfg, int choice, const char *bt_addr);

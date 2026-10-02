@@ -517,6 +517,9 @@ AudioOutErr audio_out_alsa_classify(int err)
  * serves as an ALSA PCM with no OSS node behind it.  audio_out_device_pcm()
  * maps it; nothing ever open()s it. */
 #define AUDIO_DEV_BT      "bluealsa"
+/* The pinned headset, when one is set: ranked above AUDIO_DEV_BT, which is then
+ * "any other connected sink".  Also a name, not a node. */
+#define AUDIO_DEV_BT_PIN  "bluealsa-pin"
 #define AUDIO_BT_PCM      "plug:bluealsa"
 #define AUDIO_BT_SYSFS    "/sys/class/bluetooth"
 
@@ -526,11 +529,12 @@ AudioOutErr audio_out_alsa_classify(int err)
 static char audio_dev_pref[16] = "auto";
 
 /* The pinned headset (audio_out.h, audio_out_set_bt_addr) and the PCM name it
- * makes.  bt_pcm is rebuilt by the two setters ONLY: g_alsa.name keeps a pointer
- * to it for the life of a stream, so a lazy rebuild per call would rename a
- * stream out from under its own "is this our stream" check. */
+ * makes, "" while no pin is in force.  bt_pin_pcm is rebuilt by the two setters
+ * ONLY: g_alsa.name keeps a pointer to it for the life of a stream, so a lazy
+ * rebuild per call would rename a stream out from under its own "is this our
+ * stream" check. */
 static char audio_bt_addr[18] = "";
-static char bt_pcm[64]        = AUDIO_BT_PCM;
+static char bt_pin_pcm[64]    = "";
 static void bt_pcm_rebuild(void);
 
 void audio_out_set_device_pref(const char *pref)
@@ -556,16 +560,17 @@ bool audio_out_bt_addr_valid(const char *addr)
 const char *audio_out_bt_pcm_for(const char *pref, const char *addr,
                                  char *buf, size_t n)
 {
-    /* Pinned only under an explicit "bluetooth": "auto" means whichever sink is
-     * there, and a stale address left beside it must not narrow that.  The
-     * address is validated, not just non-empty, because it is spliced into an
-     * ALSA device string whose ',' and '=' are syntax.
+    /* The pin is a PREFERENCE inside the Bluetooth tier, in force under both
+     * preferences that can pick Bluetooth ("bluetooth" and "auto"); it narrows
+     * nothing, because AUDIO_DEV_BT (any connected sink) still ranks below it.
+     * The address is validated, not just non-empty, because it is spliced into
+     * an ALSA device string whose ',' and '=' are syntax.
      *
      * ⚠️ `bluealsa:DEV=…`, NOT `plug:bluealsa:DEV=…`: pcm.bluealsa is already
      * `type plug` (device-files/20-bluealsa.conf), and the outer form would hand
      * "bluealsa:DEV=…,PROFILE=a2dp" to pcm.plug's argument parser, which splits
      * at '=' and ',' (alsa-lib conf.c parse_args) and rejects the result. */
-    bool pin = pref && strcmp(pref, "bluetooth") == 0 &&
+    bool pin = pref && (strcmp(pref, "bluetooth") == 0 || strcmp(pref, "auto") == 0) &&
                audio_out_bt_addr_valid(addr);
     if (!pin || !buf || n == 0) return AUDIO_BT_PCM;
     int w = snprintf(buf, n, "bluealsa:DEV=%s,PROFILE=a2dp", addr);
@@ -592,12 +597,21 @@ static void say_fallback_once(bool *said, const char *wanted, const char *used)
 
 const char *audio_out_device_for(const char *pref, bool usb_present, bool bt_present)
 {
+    return audio_out_device_for_bt(pref, usb_present, false, bt_present);
+}
+
+const char *audio_out_device_for_bt(const char *pref, bool usb_present,
+                                    bool bt_pin_present, bool bt_any_present)
+{
     bool want_usb = (pref && strcmp(pref, "usb")       == 0);
     bool want_bt  = (pref && strcmp(pref, "bluetooth") == 0);
     bool prefer   = (pref && strcmp(pref, "auto")      == 0);
 
     if (!want_usb && !want_bt && !prefer) return AUDIO_DEV_ONBOARD;
-    if ((want_bt || prefer) && bt_present) return AUDIO_DEV_BT;
+    /* The Bluetooth tier, in its own order: the pinned headset, then any other
+     * connected sink. */
+    if ((want_bt || prefer) && bt_pin_present) return AUDIO_DEV_BT_PIN;
+    if ((want_bt || prefer) && bt_any_present) return AUDIO_DEV_BT;
     const char *rest = usb_present ? AUDIO_DEV_USB : AUDIO_DEV_ONBOARD;
 
     /* ⚠️ Every non-onboard setting falls back rather than opening a sink that is
@@ -616,6 +630,7 @@ const char *audio_out_device_for(const char *pref, bool usb_present, bool bt_pre
 static int sink_rank(const char *path)
 {
     if (!path) return -1;
+    if (strcmp(path, AUDIO_DEV_BT_PIN) == 0) return 3;
     if (strcmp(path, AUDIO_DEV_BT)  == 0) return 2;
     if (strcmp(path, AUDIO_DEV_USB) == 0) return 1;
     return 0;
@@ -758,28 +773,40 @@ bool audio_out_bt_probe_due(AudioOutBtGate *g, uint32_t sig, uint32_t now_ms,
 
 static uint32_t probe_now_ms(void);
 /** The real probe: defined by the backend below (the host stub answers false). */
-static bool bt_probe_pcm(void);
+static bool bt_probe_pcm(const char *pcm);
 
+/* Two answers per probe, one per Bluetooth tier, and a refusal for each: the
+ * pinned headset (bt_pin_pcm) and any connected sink (plug:bluealsa). */
 static AudioOutBtGate bt_gate;
-static bool bt_seen_present = false;  /* the last probe's answer                  */
-static bool bt_refused      = false;  /* a sink that would not open: until a change */
+static bool bt_pin_seen    = false;   /* the last probe's answers                   */
+static bool bt_any_seen    = false;
+static bool bt_pin_refused = false;   /* a sink that would not open: until a change */
+static bool bt_any_refused = false;
 
-bool audio_out_bt_present(void)
+/* The gate, then on a due probe the pinned name first.  "Any" is asked only
+ * while the pin is absent, because only then is it consulted — and that keeps
+ * the probe off plug:bluealsa while the pinned stream is live on what may be
+ * the same transport.  Absent, the pinned DEV= name fails fast (ENODEV, 60 ms
+ * measured on .188), so it costs one short open per probe inside the window. */
+static void bt_refresh(void)
 {
     bool changed = false;
     uint32_t sig = audio_out_bt_acl_signature(AUDIO_BT_SYSFS);
     bool due = audio_out_bt_probe_due(&bt_gate, sig, probe_now_ms(), &changed);
     if (changed) {
-        bt_refused = false;
-        if (sig == 0) bt_seen_present = false;
+        bt_pin_refused = bt_any_refused = false;
+        if (sig == 0) bt_pin_seen = bt_any_seen = false;
     }
-    if (due) bt_seen_present = bt_probe_pcm();
-    return bt_seen_present;
+    if (due) {
+        bt_pin_seen = bt_pin_pcm[0] && bt_probe_pcm(bt_pin_pcm);
+        bt_any_seen = bt_pin_seen || bt_probe_pcm(AUDIO_BT_PCM);
+    }
 }
 
-static bool bt_usable(void)
+bool audio_out_bt_present(void)
 {
-    return audio_out_bt_present() && !bt_refused;
+    bt_refresh();
+    return bt_pin_seen || bt_any_seen;
 }
 
 void audio_out_set_bt_addr(const char *addr)
@@ -799,20 +826,22 @@ const char *audio_out_bt_addr(void)
  * audio_out_bt_present() a first look, which probes the new name once. */
 static void bt_pcm_rebuild(void)
 {
-    char next[sizeof(bt_pcm)];
+    char next[sizeof(bt_pin_pcm)];
     const char *name = audio_out_bt_pcm_for(audio_dev_pref, audio_bt_addr,
                                             next, sizeof(next));
-    if (strcmp(name, bt_pcm) == 0) return;
-    snprintf(bt_pcm, sizeof(bt_pcm), "%s", name);
+    if (strcmp(name, AUDIO_BT_PCM) == 0) name = "";     /* no pin in force */
+    if (strcmp(name, bt_pin_pcm) == 0) return;
+    snprintf(bt_pin_pcm, sizeof(bt_pin_pcm), "%s", name);
     bt_gate.have_sig = false;
-    bt_seen_present  = false;
-    bt_refused       = false;
+    bt_pin_seen    = bt_any_seen    = false;
+    bt_pin_refused = bt_any_refused = false;
 }
 
 bool audio_out_bt_is_pinned(int saved_choice, const char *saved_addr,
                             const char *dev_addr)
 {
-    return saved_choice == AUDIO_OUT_CHOICE_BT &&
+    return (saved_choice == AUDIO_OUT_CHOICE_BT ||
+            saved_choice == AUDIO_OUT_CHOICE_AUTO) &&
            audio_out_bt_addr_valid(saved_addr) &&
            audio_out_bt_addr_valid(dev_addr) &&
            strcasecmp(saved_addr, dev_addr) == 0;
@@ -825,7 +854,10 @@ const char *audio_out_device_path(void)
     bool can_bt = strcmp(audio_dev_pref, "auto") == 0 ||
                   strcmp(audio_dev_pref, "bluetooth") == 0;
     bool usb = usb_usable();
-    return audio_out_device_for(audio_dev_pref, usb, can_bt && bt_usable());
+    if (can_bt) bt_refresh();
+    return audio_out_device_for_bt(audio_dev_pref, usb,
+                                   can_bt && bt_pin_seen && !bt_pin_refused,
+                                   can_bt && bt_any_seen && !bt_any_refused);
 }
 
 /* The ALSA name for the same device.  OSS minor N is ALSA card N here, because
@@ -835,7 +867,9 @@ const char *audio_out_device_path(void)
 const char *audio_out_device_pcm(const char *path)
 {
     if (path && strcmp(path, AUDIO_DEV_USB) == 0) return "plughw:1,0";
-    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return bt_pcm;
+    if (path && strcmp(path, AUDIO_DEV_BT_PIN) == 0)
+        return bt_pin_pcm[0] ? bt_pin_pcm : AUDIO_BT_PCM;
+    if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return AUDIO_BT_PCM;
     return "plughw:0,0";
 }
 
@@ -1131,14 +1165,13 @@ static void alsa_close(void *ctx)
  * only inside audio_out_bt_present()'s window.  Our own live stream on it is
  * an answer without a second open, and EBUSY means a sink is there but held —
  * present either way, so a settings page never hides the sink being played. */
-static bool bt_probe_pcm(void)
+static bool bt_probe_pcm(const char *pcm)
 {
-    if (g_alsa.pcm && g_alsa.name && strcmp(g_alsa.name, bt_pcm) == 0) return true;
+    if (g_alsa.pcm && g_alsa.name && strcmp(g_alsa.name, pcm) == 0) return true;
     snd_pcm_t *p = NULL;
-    /* The pinned name when one is set: a pinned headset that is not connected
-     * fails this open, so it reads absent and the resolver falls back — even
-     * while another sink is connected, which is what pinning means. */
-    int err = snd_pcm_open(&p, bt_pcm, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    /* A pinned headset that is not connected fails this open (ENODEV), so it
+     * reads absent and the resolver tries the next tier: any connected sink. */
+    int err = snd_pcm_open(&p, pcm, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (err == 0) { snd_pcm_close(p); return true; }
     return err == -EBUSY;
 }
@@ -1181,8 +1214,9 @@ int audio_out_open_alsa(AudioOut *out, const char *pcm, int rate_req, int channe
 }
 
 /* No libasound, so no BlueALSA sink can be opened: never present. */
-static bool bt_probe_pcm(void)
+static bool bt_probe_pcm(const char *pcm)
 {
+    (void)pcm;
     return false;
 }
 
@@ -1226,6 +1260,7 @@ static uint32_t probe_now_ms(void)
 /** The resolver's static string for `path`, so open_path compares by value. */
 static const char *canonical_path(const char *path)
 {
+    if (path && strcmp(path, AUDIO_DEV_BT_PIN) == 0) return AUDIO_DEV_BT_PIN;
     if (path && strcmp(path, AUDIO_DEV_BT)  == 0) return AUDIO_DEV_BT;
     if (path && strcmp(path, AUDIO_DEV_USB) == 0) return AUDIO_DEV_USB;
     return AUDIO_DEV_ONBOARD;
@@ -1244,16 +1279,21 @@ int audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
                             const char **path_out)
 {
     /* ⚠️ A sink that will not open is refused, then the device is resolved
-     * again and the next sink down tried — Bluetooth, then USB, then onboard,
-     * so at most three opens.  Onboard failing is the end: nothing is below it. */
-    for (int attempt = 0; attempt < 3; attempt++) {
+     * again and the next sink down tried — the pinned headset, any Bluetooth
+     * sink, USB, then onboard, so at most four opens.  Onboard failing is the
+     * end: nothing is below it. */
+    for (int attempt = 0; attempt < 4; attempt++) {
         const char *path = audio_out_device_path();
         if (open_on(out, path, rate_req, channels_req) == 0) {
             if (path_out) *path_out = out->open_path;
             return 0;
         }
-        if (strcmp(path, AUDIO_DEV_BT) == 0) {
-            bt_refused = true;
+        if (strcmp(path, AUDIO_DEV_BT_PIN) == 0) {
+            bt_pin_refused = true;
+            fprintf(stderr, "audio_out: %s will not open — not using it until a "
+                    "Bluetooth link changes\n", device_label(AUDIO_DEV_BT_PIN));
+        } else if (strcmp(path, AUDIO_DEV_BT) == 0) {
+            bt_any_refused = true;
             fprintf(stderr, "audio_out: %s will not open — not using it until a "
                     "Bluetooth link changes\n", device_label(AUDIO_DEV_BT));
         } else if (strcmp(path, AUDIO_DEV_USB) == 0) {
@@ -1270,11 +1310,20 @@ int audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
 bool audio_out_reprobe_due(const char *pref, const char *open_path,
                            uint32_t now_ms, uint32_t last_ms)
 {
+    return audio_out_reprobe_due_pin(pref, false, open_path, now_ms, last_ms);
+}
+
+bool audio_out_reprobe_due_pin(const char *pref, bool pinned, const char *open_path,
+                               uint32_t now_ms, uint32_t last_ms)
+{
     if (!pref || !open_path) return false;
-    /* The best sink this preference can ever resolve to. */
+    /* The best sink this preference can ever resolve to.  With a pin in force
+     * that is the pinned headset, so a stream on any other sink — another
+     * headset included — keeps looking for it. */
     const char *best;
     if (strcmp(pref, "usb") == 0)                                   best = AUDIO_DEV_USB;
-    else if (strcmp(pref, "auto") == 0 || strcmp(pref, "bluetooth") == 0) best = AUDIO_DEV_BT;
+    else if (strcmp(pref, "auto") == 0 || strcmp(pref, "bluetooth") == 0)
+        best = pinned ? AUDIO_DEV_BT_PIN : AUDIO_DEV_BT;
     else return false;
     if (!audio_out_sink_better(best, open_path)) return false;
     return (uint32_t)(now_ms - last_ms) >= AUDIO_OUT_REPROBE_MS;
@@ -1285,8 +1334,8 @@ bool audio_out_usb_returned(AudioOut *out)
     if (!out || !out->is_open || out->device_lost) return false;
 
     uint32_t now = probe_now_ms();
-    if (!audio_out_reprobe_due(audio_dev_pref, out->open_path, now,
-                               out->reprobe_last_ms))
+    if (!audio_out_reprobe_due_pin(audio_dev_pref, bt_pin_pcm[0] != '\0',
+                                   out->open_path, now, out->reprobe_last_ms))
         return false;
     out->reprobe_last_ms = now;
 

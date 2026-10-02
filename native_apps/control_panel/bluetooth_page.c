@@ -8,7 +8,8 @@
  * whether or not anything was touched, so it is the page's tick.  No thread.
  * Exposed only as cp_bluetooth_page (cp_page.h).  It owns no config keys:
  * USE FOR AUDIO writes the Audio page's OUT, pinned to the selected headset's
- * address, through cp_audio_set_output(), the one writer of both keys.
+ * address, through cp_audio_set_output(), the one writer of both keys; REMOVE
+ * on the pinned headset unpins it the same way.
  *
  * Only a change repaints: input() returns CP_PAGE_REDRAW when bt_ctl_poll()
  * reports one or a widget moved, never on a timer.
@@ -22,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #define BT_COLOR_ROW      RGB(30, 30, 45)
@@ -446,6 +448,10 @@ static void bt_page_draw(Framebuffer *fb) {
 static void on_remove_ok(Config *cfg) {
     if (!remove_addr[0]) return;
     bt_ctl_send(&bt, "remove %s", remove_addr);
+    /* A forgotten headset is no longer anybody's preference: unpin it, and
+     * leave OUT as it is. */
+    if (strcasecmp(remove_addr, cp_audio_bt_addr()) == 0)
+        cp_audio_set_output(cfg, cp_audio_output(), "");
     if (!strcmp(sel_addr, remove_addr)) sel_addr[0] = '\0';
     remove_addr[0] = '\0';
 }

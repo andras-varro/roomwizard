@@ -314,7 +314,8 @@ bool audio_out_device_lost(const AudioOut *out);
  * changes (a reconnect); the fallback then resolves USB, then onboard.
  *
  * `*path_out` (may be NULL) receives the path that opened — a `/dev/dsp*` node, or
- * `"bluealsa"` for the Bluetooth sink.  Returns 0 or -1.
+ * `"bluealsa-pin"` / `"bluealsa"` for the pinned / any Bluetooth sink.  Returns 0
+ * or -1.
  */
 int  audio_out_open_resolved(AudioOut *out, int rate_req, int channels_req,
                              const char **path_out);
@@ -345,6 +346,11 @@ bool audio_out_sink_better(const char *candidate, const char *open_path);
  */
 bool audio_out_reprobe_due(const char *pref, const char *open_path,
                            uint32_t now_ms, uint32_t last_ms);
+/** The same gate with the pin in it: `pinned` (a headset pinned and in force)
+ *  makes the pinned headset the best Bluetooth sink, so a stream on any other
+ *  sink keeps looking for it.  audio_out_reprobe_due() is this with `false`. */
+bool audio_out_reprobe_due_pin(const char *pref, bool pinned, const char *open_path,
+                               uint32_t now_ms, uint32_t last_ms);
 
 /**
  * Whether a better sink — a replugged USB card, a newly connected Bluetooth A2DP
@@ -432,25 +438,25 @@ const char *audio_out_device_pref(void);
  * or malformed unpins.  Set beside the preference, before the first open; every
  * opener that sets the preference sets this too.
  *
- * ⚠️ **It narrows `"bluetooth"` only.**  Pinned, the sink's PCM is
- * `bluealsa:DEV=<addr>,PROFILE=a2dp`, and the presence probe opens THAT name —
- * so the pinned headset absent reads as no sink and the resolver falls back
- * (USB, else onboard) even while another headset is connected.  Unpinned, or
- * under `"auto"`, it stays `plug:bluealsa`: BlueALSA's most recently connected
- * sink.
+ * ⚠️ **A preference, not a filter, in force under `"bluetooth"` and `"auto"`.**
+ * It adds a tier at the top of Bluetooth: the path `"bluealsa-pin"`, PCM
+ * `bluealsa:DEV=<addr>,PROFILE=a2dp`, then `"bluealsa"` (`plug:bluealsa`,
+ * BlueALSA's most recently connected sink) for any other headset, then USB and
+ * onboard.  A stream on a lower tier keeps probing for the pinned headset
+ * (audio_out_reprobe_due_pin()) and moves back when it returns.
  */
 void        audio_out_set_bt_addr(const char *addr);
 /** What was last set and accepted: the address, or "" when unpinned. */
 const char *audio_out_bt_addr(void);
 /** Exactly `XX:XX:XX:XX:XX:XX`, hex digits either case, nothing after. */
 bool        audio_out_bt_addr_valid(const char *addr);
-/** The BlueALSA PCM name as a pure function of preference and address: the
- *  pinned form into `buf` when `pref` is `"bluetooth"` and `addr` is valid, else
- *  (or if `buf` is too small) the literal `"plug:bluealsa"`. */
+/** The pinned BlueALSA PCM name as a pure function of preference and address:
+ *  the pinned form into `buf` when `pref` is `"bluetooth"` or `"auto"` and `addr`
+ *  is valid, else (or if `buf` is too small) the literal `"plug:bluealsa"`. */
 const char *audio_out_bt_pcm_for(const char *pref, const char *addr,
                                  char *buf, size_t n);
-/** Whether a SAVED choice + address routes audio to the device `dev_addr`:
- *  BLUETOOTH and the same valid address, compared case-insensitively.  A settings
+/** Whether a SAVED choice + address prefers the device `dev_addr`: BLUETOOTH or
+ *  AUTO and the same valid address, compared case-insensitively.  A settings
  *  page offers USE FOR AUDIO while this is false. */
 bool        audio_out_bt_is_pinned(int saved_choice, const char *saved_addr,
                                    const char *dev_addr);
@@ -484,6 +490,11 @@ const char *audio_out_device_path(void);
  * has no logic of its own left to disagree with.
  */
 const char *audio_out_device_for(const char *pref, bool usb_present, bool bt_present);
+/** The same with the Bluetooth tier split: the pinned headset present
+ *  (`"bluealsa-pin"`), else any sink present (`"bluealsa"`), under `"bluetooth"`
+ *  and `"auto"`.  audio_out_device_for() is this with no pinned headset. */
+const char *audio_out_device_for_bt(const char *pref, bool usb_present,
+                                    bool bt_pin_present, bool bt_any_present);
 
 /* ── The choices a settings page offers ─────────────────────────────────────
  *

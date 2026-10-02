@@ -37,7 +37,7 @@ typedef struct {
     bool music;         /* music_enabled — subordinate to enabled, see layout */
     bool effects;       /* effects_enabled — likewise */
     int  dev_idx;       /* audio_device as SAVED, an AudioOutChoice */
-    char bt_addr[18];   /* audio_bt_addr: the headset BLUETOOTH is pinned to, or "" */
+    char bt_addr[18];   /* audio_bt_addr: the preferred headset (BLUETOOTH, AUTO), or "" */
 } AudioPageState;
 
 static AudioPageState audio_state;      /* the values, as saved */
@@ -103,8 +103,7 @@ void cp_audio_set_output(Config *cfg, int choice, const char *bt_addr) {
     if (choice < 0 || choice >= AUDIO_OUT_CHOICE_COUNT) return;
     audio_state.dev_idx = choice;
     snprintf(audio_state.bt_addr, sizeof(audio_state.bt_addr), "%s",
-             (choice == AUDIO_OUT_CHOICE_BT && audio_out_bt_addr_valid(bt_addr))
-                 ? bt_addr : "");
+             audio_out_bt_addr_valid(bt_addr) ? bt_addr : "");
     audio_persist(&audio_state, cfg);
 }
 
@@ -354,10 +353,9 @@ static CpPageResult audio_page_input(Config *cfg, int tx, int ty,
         bool usb = audio_out_usb_present(), bt = audio_out_bt_present();
         s->dev_idx = audio_out_choice_next(audio_out_choice_shown(s->dev_idx, usb, bt),
                                            usb, bt);
-        /* A choice made HERE names no headset, so it unpins: BLUETOOTH reached
-         * by cycling is "any connected sink", and only the Bluetooth page's USE
-         * FOR AUDIO names one.  The toggles above persist too and keep the pin. */
-        s->bt_addr[0] = '\0';
+        /* The pin is KEPT: it is a preference inside the Bluetooth tier, in
+         * force under BLUETOOTH and AUTO.  Only the Bluetooth page changes it —
+         * USE FOR AUDIO on another headset, or REMOVE on the pinned one. */
         changed = true;
     }
     if (changed) {

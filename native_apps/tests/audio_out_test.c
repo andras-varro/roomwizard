@@ -1404,9 +1404,10 @@ int main(void)
 
         check(strcmp(audio_out_bt_pcm_for("bluetooth", A, buf, sizeof(buf)), PIN_A) == 0,
               "R3 \"bluetooth\" + a valid address names that headset's PCM");
-        check(strcmp(audio_out_bt_pcm_for("auto", A, buf, sizeof(buf)), "plug:bluealsa") == 0 &&
+        check(strcmp(audio_out_bt_pcm_for("auto", A, buf, sizeof(buf)), PIN_A) == 0 &&
+              strcmp(audio_out_bt_pcm_for("usb", A, buf, sizeof(buf)), "plug:bluealsa") == 0 &&
               strcmp(audio_out_bt_pcm_for(NULL, A, buf, sizeof(buf)), "plug:bluealsa") == 0,
-              "R4 \"auto\" stays any sink: a stored address does not narrow it");
+              "R4 \"auto\" keeps the pin too (a preference, not a filter); \"usb\" never pins");
         check(strcmp(audio_out_bt_pcm_for("bluetooth", "", buf, sizeof(buf)), "plug:bluealsa") == 0 &&
               strcmp(audio_out_bt_pcm_for("bluetooth", "AA:BB", buf, sizeof(buf)), "plug:bluealsa") == 0 &&
               strcmp(audio_out_bt_pcm_for("bluetooth", A, buf, 20), "plug:bluealsa") == 0,
@@ -1424,24 +1425,86 @@ int main(void)
               "R8 BLUETOOTH pinned elsewhere, or unpinned, still offers USE FOR AUDIO "
               "on this headset");
         check(!audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_USB, A, A) &&
-              !audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_AUTO, A, A),
-              "R9 a non-Bluetooth OUT is nobody's pin, whatever address is stored");
+              !audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_ONBOARD, A, A) &&
+              audio_out_bt_is_pinned(AUDIO_OUT_CHOICE_AUTO, A, A),
+              "R9 AUTO keeps the pin; USB and ONBOARD are nobody's pin, whatever is stored");
 
         audio_out_set_device_pref("bluetooth");
         audio_out_set_bt_addr(A);
-        bool w1 = strcmp(audio_out_device_pcm("bluealsa"), PIN_A) == 0 &&
+        bool w1 = strcmp(audio_out_device_pcm("bluealsa-pin"), PIN_A) == 0 &&
+                  strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0 &&
                   strcmp(audio_out_bt_addr(), A) == 0;
+        audio_out_set_device_pref("usb");
+        bool w2 = strcmp(audio_out_device_pcm("bluealsa-pin"), "plug:bluealsa") == 0;
         audio_out_set_device_pref("auto");
-        bool w2 = strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0;
-        audio_out_set_device_pref("bluetooth");
-        bool w3 = strcmp(audio_out_device_pcm("bluealsa"), PIN_A) == 0;
+        bool w3 = strcmp(audio_out_device_pcm("bluealsa-pin"), PIN_A) == 0;
         audio_out_set_bt_addr("AA:BB:CC:DD:EE:FF,PROFILE=sco");
-        bool w4 = strcmp(audio_out_device_pcm("bluealsa"), "plug:bluealsa") == 0 &&
+        bool w4 = strcmp(audio_out_device_pcm("bluealsa-pin"), "plug:bluealsa") == 0 &&
                   audio_out_bt_addr()[0] == '\0';
-        check(w1 && w2 && w3 && w4, "R10 the opener's PCM follows both setters, in either order, "
-                                    "and a malformed address unpins");
+        check(w1 && w2 && w3 && w4, "R10 the pinned tier's PCM follows both setters, in either "
+                                    "order, \"bluealsa\" stays any sink, and a malformed "
+                                    "address unpins");
         audio_out_set_bt_addr(NULL);                /* leave the process as found */
         audio_out_set_device_pref("onboard");
+    }
+
+    printf("\n=== S. the pin is a preference: pinned > any BT > USB > onboard (pure) ===\n");
+    {
+        /* The operator's two panel runs (2026-10-02, pinned WI-C310 plus a VT360
+         * speaker) are rows here.  Under d949753 a pinned "bluetooth" with the
+         * pinned headset off fell to the speaker although the VT360 was there,
+         * and "auto" on the VT360 never went back to the returning WI-C310. */
+        static const struct {
+            const char *pref; bool usb, pin, any; const char *want;
+        } T[] = {
+            /* the BT tier's own order, under both preferences that reach it */
+            { "bluetooth", false, true,  true,  "bluealsa-pin" },
+            { "bluetooth", false, false, true,  "bluealsa"     },  /* run 1: VT360, not speaker */
+            { "bluetooth", true,  false, false, "/dev/dsp1"    },
+            { "bluetooth", false, false, false, "/dev/dsp"     },
+            { "auto",      true,  true,  true,  "bluealsa-pin" },
+            { "auto",      true,  false, true,  "bluealsa"     },
+            { "auto",      true,  false, false, "/dev/dsp1"    },
+            { "auto",      false, false, false, "/dev/dsp"     },
+            { "auto",      false, true,  false, "bluealsa-pin" },
+            /* CONTROL: preferences that never pick Bluetooth ignore both tiers */
+            { "usb",       true,  true,  true,  "/dev/dsp1"    },
+            { "usb",       false, true,  true,  "/dev/dsp"     },
+            { "onboard",   true,  true,  true,  "/dev/dsp"     },
+        };
+        int bad = 0;
+        for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+            const char *got = audio_out_device_for_bt(T[i].pref, T[i].usb, T[i].pin, T[i].any);
+            if (strcmp(got, T[i].want) != 0) {
+                printf("    %s usb=%d pin=%d any=%d -> %s, want %s\n", T[i].pref,
+                       T[i].usb, T[i].pin, T[i].any, got, T[i].want);
+                bad++;
+            }
+        }
+        check(bad == 0, "S1 the resolver: pinned headset, then any BT sink, then USB, then onboard");
+        check(strcmp(audio_out_device_for_bt("auto", true, false, true),
+                     audio_out_device_for("auto", true, true)) == 0 &&
+              strcmp(audio_out_device_for_bt("bluetooth", false, false, false),
+                     audio_out_device_for("bluetooth", false, false)) == 0,
+              "S2 CONTROL: with no pinned headset present the split resolver is the old one");
+
+        check(audio_out_sink_better("bluealsa-pin", "bluealsa") &&
+              audio_out_sink_better("bluealsa-pin", "/dev/dsp") &&
+              !audio_out_sink_better("bluealsa", "bluealsa-pin") &&
+              !audio_out_sink_better("bluealsa-pin", "bluealsa-pin"),
+              "S3 a move to the pinned headset is UP from any other sink, and never away from it");
+
+        check(audio_out_reprobe_due_pin("auto", true, "bluealsa", 9000, 0) &&
+              audio_out_reprobe_due_pin("bluetooth", true, "bluealsa", 9000, 0) &&
+              audio_out_reprobe_due_pin("bluetooth", true, "/dev/dsp", 9000, 0),
+              "S4 on another sink with a pin in force the probe keeps looking (run 2: back "
+              "from the VT360 to the WI-C310)");
+        check(!audio_out_reprobe_due_pin("auto", false, "bluealsa", 9000, 0) &&
+              !audio_out_reprobe_due_pin("auto", true, "bluealsa-pin", 9000, 0) &&
+              !audio_out_reprobe_due_pin("onboard", true, "/dev/dsp", 9000, 0) &&
+              !audio_out_reprobe_due_pin("auto", true, "bluealsa", 999, 0),
+              "S5 CONTROL: unpinned any-sink, already pinned, onboard, and inside the rate "
+              "limit all stay quiet");
     }
 
     printf("\n%s  %d checks, %d failure(s)\n",
