@@ -32,6 +32,13 @@ DAEMON=/usr/libexec/bluetooth/bluetoothd
 BLUEALSA=/usr/bin/bluealsa
 # Pairing records. bluetoothd creates what it needs below this, but not this itself.
 STORAGE=/var/lib/bluetooth
+# The adapter is named after the unit's hostname, so two units are told apart in a scan.
+# 5.66 does not expand %h in main.conf (measured on .188: the adapter advertised "%h"), so
+# start writes a copy of the installed main.conf with Name= added to tmpfs and starts
+# bluetoothd on it with -f. The installed file stays verbatim; a renamed host is picked up
+# at the next start.
+CONF=/etc/bluetooth/main.conf
+RUNCONF=/var/run/bluetooth-main.conf
 
 our_kernel() { grep -q '(roomwizard@build)' /proc/version 2>/dev/null; }
 
@@ -113,7 +120,12 @@ case "$1" in
       echo "  bluetoothd already running (pid $pids)"
     else
       mkdir -p "$STORAGE" && chmod 700 "$STORAGE"
-      "$DAEMON" </dev/null >/dev/null 2>&1 &
+      if sed "/^\[General\]/a Name=$(hostname)" "$CONF" > "$RUNCONF" 2>/dev/null &&
+         grep -q '^Name=' "$RUNCONF"; then
+        "$DAEMON" -f "$RUNCONF" </dev/null >/dev/null 2>&1 &
+      else
+        "$DAEMON" </dev/null >/dev/null 2>&1 &
+      fi
       echo "  bluetoothd started (pid $!)"
     fi
     start_bluealsa
