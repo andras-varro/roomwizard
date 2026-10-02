@@ -222,6 +222,11 @@ static void usb_page_draw(Framebuffer *fb) {
             text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
                                "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
     } else {
+        /* A RESCAN result, right-aligned on the title row (the empty list
+         * shows it centred, above). */
+        if (s->status_msg[0])
+            fb_draw_text(fb, lx + lw - 12 - text_measure_width(s->status_msg, 2),
+                         ly+10, s->status_msg, COLOR_YELLOW, 2);
         int ry0=ly+USB_ROW_Y0, rh=USB_ROW_H;
         /* The bus, not the evdev nodes: a sound card, a BT dongle or a hub has
          * no keyboard/mouse/pad node and used to be invisible while it worked.
@@ -324,9 +329,18 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
             state->recover_once = false;
             return CP_PAGE_FULLSCREEN;
         }
-        if (state->bus_cnt != prev_bus_cnt ||
-            memcmp(prev_bus, state->bus, sizeof(prev_bus)) != 0)
-            act = CP_PAGE_REDRAW;
+        /* Always say something: an unchanged reading used to repaint nothing,
+         * so the tap looked ignored. */
+        bool changed = state->bus_cnt != prev_bus_cnt ||
+                       memcmp(prev_bus, state->bus, sizeof(prev_bus)) != 0;
+        if (changed)
+            snprintf(state->status_msg, sizeof(state->status_msg),
+                     "RESCANNED - %d DEVICE(S)", state->bus_cnt);
+        else
+            snprintf(state->status_msg, sizeof(state->status_msg),
+                     "RESCANNED - NO CHANGE");
+        state->status_time_ms = now;
+        act = CP_PAGE_REDRAW;
     }
     return act;
 }
