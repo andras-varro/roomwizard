@@ -12,6 +12,12 @@
  * rescan's skip-what-is-held path through real device nodes (only
  * input_scan_holds() is exercised).
  *
+ * Also the pad button layout: input_pad_layout() must call the measured 8BitDo
+ * X-mode bitmap SEQUENTIAL, and input_pad_key() must move its Select/Start
+ * (0x136/0x137) to BTN_SELECT/BTN_START — while an xpad bitmap stays NATIVE
+ * and NATIVE stays the identity over every code (the negative controls).  The
+ * read-time call sites are gamepad_rescan_hold_test.c's case 7.
+ *
  * Build (this line is the CTEST_ROWS row in tests/run-all.sh):
  *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I common \
  *       -o build/input_scan_test tests/input_scan_test.c common/input_scan.c -lm
@@ -213,6 +219,73 @@ int main(void) {
     check(n == 2 && strcmp(held_nodes[0].path, paths[0]) == 0 &&
           strcmp(held_nodes[1].path, paths[2]) == 0, "drop removes one entry, keeps order");
     check(input_scan_drop(held_nodes, n, 5) == n, "drop out of range is a no-op");
+
+    /* ── Pad button layout ──────────────────────────────────────────── */
+    /* The 8BitDo Pro 2 in Bluetooth X mode, as measured: hid-generic, keys
+     * 0x130..0x139 plus KEY_MENU. */
+    InputCaps bitdo = caps_pad();
+    for (int c = BTN_SOUTH; c <= BTN_TR2; c++) input_caps_set(bitdo.key, c);
+    input_caps_set(bitdo.key, KEY_MENU);
+    /* An Xbox 360 pad under xpad. */
+    InputCaps x360 = caps_pad();
+    static const int x360_keys[] = { BTN_A, BTN_B, BTN_X, BTN_Y, BTN_TL, BTN_TR,
+        BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR };
+    for (size_t i = 0; i < sizeof(x360_keys) / sizeof(x360_keys[0]); i++)
+        input_caps_set(x360.key, x360_keys[i]);
+    /* xpad with triggers mapped to buttons: has BTN_TL2/BTN_TR2 AND Select/Start. */
+    InputCaps x360trig = x360;
+    input_caps_set(x360trig.key, BTN_TL2);
+    input_caps_set(x360trig.key, BTN_TR2);
+    /* A four-button clone with neither BTN_TR2 nor Select/Start. */
+    InputCaps four = caps_pad();
+    for (int c = BTN_SOUTH; c <= BTN_NORTH; c++) input_caps_set(four.key, c);
+
+    check(input_pad_layout(&bitdo) == INPUT_PAD_SEQUENTIAL, "8BitDo X-mode bitmap is SEQUENTIAL");
+    check(input_pad_layout(&x360) == INPUT_PAD_NATIVE, "Xbox 360 bitmap is NATIVE");
+    check(input_pad_layout(&x360trig) == INPUT_PAD_NATIVE,
+          "BTN_TR2 with Select/Start (xpad triggers-as-buttons) is NATIVE");
+    check(input_pad_layout(&four) == INPUT_PAD_NATIVE, "pad with neither is NATIVE");
+    check(input_pad_layout(&pad) == INPUT_PAD_NATIVE, "one-button pad is NATIVE");
+    check(input_pad_layout(NULL) == INPUT_PAD_NATIVE, "NULL caps are NATIVE");
+    {   /* Only Start present: one of the two is enough to say NATIVE. */
+        InputCaps half = bitdo;
+        input_caps_set(half.key, BTN_START);
+        check(input_pad_layout(&half) == INPUT_PAD_NATIVE, "SEQUENTIAL bits plus BTN_START is NATIVE");
+    }
+
+    /* raw hid-generic code -> the native code a consumer expects */
+    static const struct { int raw, native; const char *what; } seq[] = {
+        { 0x130, BTN_A,      "A 0x130 stays BTN_A"           },
+        { 0x131, BTN_B,      "B 0x131 stays BTN_B"           },
+        { 0x132, BTN_X,      "X 0x132 -> BTN_X"              },
+        { 0x133, BTN_Y,      "Y 0x133 -> BTN_Y"              },
+        { 0x134, BTN_TL,     "LB 0x134 -> BTN_TL"            },
+        { 0x135, BTN_TR,     "RB 0x135 -> BTN_TR"            },
+        { 0x136, BTN_SELECT, "View 0x136 -> BTN_SELECT"      },
+        { 0x137, BTN_START,  "Menu 0x137 -> BTN_START"       },
+        { 0x138, BTN_THUMBL, "LS 0x138 -> BTN_THUMBL"        },
+        { 0x139, BTN_THUMBR, "RS 0x139 -> BTN_THUMBR"        },
+        { KEY_MENU, KEY_MENU, "KEY_MENU is left alone"       },
+        { BTN_LEFT, BTN_LEFT, "a code outside the block is left alone" },
+    };
+    for (size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        char what[96];
+        snprintf(what, sizeof(what), "SEQUENTIAL: %s", seq[i].what);
+        check(input_pad_key(INPUT_PAD_SEQUENTIAL, seq[i].raw) == seq[i].native, what);
+    }
+    /* Negative control: NATIVE is the identity over the whole button block,
+     * so an xpad pad's Select/Start/LB/RB are untouched. */
+    {
+        int moved = 0;
+        for (int c = 0; c <= KEY_MAX; c++)
+            if (input_pad_key(INPUT_PAD_NATIVE, c) != c) moved++;
+        check(moved == 0, "NATIVE: identity for every code 0..KEY_MAX");
+    }
+    /* A translated code is never translated again into something else: the
+     * native Select/Start a SEQUENTIAL pad cannot report map to themselves. */
+    check(input_pad_key(INPUT_PAD_SEQUENTIAL, BTN_SELECT) == BTN_SELECT &&
+          input_pad_key(INPUT_PAD_SEQUENTIAL, BTN_START) == BTN_START,
+          "SEQUENTIAL: 0x13a/0x13b are left alone");
 
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

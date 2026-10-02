@@ -70,6 +70,7 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  // USB devices
 	  _mouseNext(0),
 	  _gamepadFd(-1),
+	  _gamepadLayout(0),
 	  _lastDeviceScan(0),
 	  // Keyboard
 	  _modifierFlags(0),
@@ -213,6 +214,7 @@ void RoomWizardEventSource::scanInputDevices() {
 		int node = atoi(nd.path + sizeof(kEventPrefix) - 1);
 		if (nd.kind == INPUT_KIND_PAD) {
 			_gamepadFd = nd.fd;
+			_gamepadLayout = nd.pad_layout;
 			loadGamepadAxisCalibration();
 			warning("RoomWizard: Detected gamepad '%s' at %s", nd.name, nd.path);
 		} else if (nd.kind == INPUT_KIND_KEYBOARD &&
@@ -264,6 +266,7 @@ void RoomWizardEventSource::closeInputDevices() {
 	for (int i = 0; i < MAX_MICE; i++)
 		if (_mouseFds[i] >= 0)    { close(_mouseFds[i]);    _mouseFds[i] = -1;    _mouseNodes[i] = -1; }
 	if (_gamepadFd >= 0)  { close(_gamepadFd);  _gamepadFd = -1; }
+	_gamepadLayout = INPUT_PAD_NATIVE;
 }
 
 void RoomWizardEventSource::loadGamepadAxisCalibration() {
@@ -945,15 +948,17 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 			else if (ev.code == _gamepadMap.hatXAxis)    _gamepadHatX  = ev.value;
 			else if (ev.code == _gamepadMap.hatYAxis)    _gamepadHatY  = ev.value;
 		} else if (ev.type == EV_KEY) {
+			// The map holds native (xpad) codes; a hid-generic pad's are not.
+			int code = input_pad_key((InputPadLayout)_gamepadLayout, ev.code);
 			int bit = -1;
-			if ((int)ev.code == _gamepadMap.btnSouth)  bit = 0;
-			if ((int)ev.code == _gamepadMap.btnEast)   bit = 1;
-			if ((int)ev.code == _gamepadMap.btnWest)   bit = 2;
-			if ((int)ev.code == _gamepadMap.btnNorth)  bit = 3;
-			if ((int)ev.code == _gamepadMap.btnStart)  bit = 4;
-			if ((int)ev.code == _gamepadMap.btnSelect) bit = 5;
-			if ((int)ev.code == _gamepadMap.btnTL)     bit = 6;
-			if ((int)ev.code == _gamepadMap.btnTR)     bit = 7;
+			if (code == _gamepadMap.btnSouth)  bit = 0;
+			if (code == _gamepadMap.btnEast)   bit = 1;
+			if (code == _gamepadMap.btnWest)   bit = 2;
+			if (code == _gamepadMap.btnNorth)  bit = 3;
+			if (code == _gamepadMap.btnStart)  bit = 4;
+			if (code == _gamepadMap.btnSelect) bit = 5;
+			if (code == _gamepadMap.btnTL)     bit = 6;
+			if (code == _gamepadMap.btnTR)     bit = 7;
 
 			if (bit >= 0) {
 				if (ev.value) buttonState |=  (1 << bit);
@@ -967,6 +972,7 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		debug("RoomWizard: gamepad disconnected");
 		close(_gamepadFd);
 		_gamepadFd = -1;
+		_gamepadLayout = INPUT_PAD_NATIVE;
 		return false;
 	}
 

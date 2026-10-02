@@ -74,6 +74,7 @@ typedef struct {
     char name[DEV_NAME_LEN]; char path[64];
     DevType type; int ev_num; bool connected;
     bool keys;   /* a MOUSE node that also carries a keyboard (BT keyboard+touchpad) */
+    InputPadLayout pad_layout;   /* a pad's raw EV_KEY codes go through input_pad_key() */
 } InputDev;
 
 typedef struct {
@@ -213,6 +214,7 @@ static void input_scan_devices(InputState *s) {
         d->ev_num=-1; sscanf(nd->path,"/dev/input/event%d",&d->ev_num);
         d->type=t; d->connected=true;
         d->keys = (t==DEV_MOUSE && nd->keys);
+        d->pad_layout = nd->pad_layout;
         /* Only "is there one" — the testers open every node of the kind. */
         if (t==DEV_KEYBOARD && s->kbd_idx<0) s->kbd_idx=s->dev_cnt;
         else if (t==DEV_MOUSE && s->mou_idx<0) s->mou_idx=s->dev_cnt;
@@ -393,16 +395,20 @@ static void input_proc_pad(InputState *s) {
             else if (c==ABS_BRAKE) s->pad.tl=input_norm_trig(e.value,mn[c],mx[c]);
             else if (c==ABS_GAS) s->pad.tr=input_norm_trig(e.value,mn[c],mx[c]);
         } else if (e.type==EV_KEY) {
+            /* Native codes, as every app sees them: a hid-generic pad's
+             * Select/Start would otherwise show as buttons 6/7 and fill the
+             * LB/RB bars. */
+            int c=input_pad_key(s->devs[s->fd_dev[k]].pad_layout, e.code);
             int bi=-1;
-            if (e.code>=BTN_GAMEPAD && e.code<BTN_GAMEPAD+16) bi=e.code-BTN_GAMEPAD;
-            else if (e.code>=BTN_SOUTH && e.code<=BTN_THUMBR) bi=e.code-BTN_SOUTH;
-            else if (e.code>=BTN_TRIGGER && e.code<BTN_TRIGGER+16) bi=e.code-BTN_TRIGGER;
+            if (c>=BTN_GAMEPAD && c<BTN_GAMEPAD+16) bi=c-BTN_GAMEPAD;
+            else if (c>=BTN_SOUTH && c<=BTN_THUMBR) bi=c-BTN_SOUTH;
+            else if (c>=BTN_TRIGGER && c<BTN_TRIGGER+16) bi=c-BTN_TRIGGER;
             if (bi>=0 && bi<16) {
                 s->pad.btns[bi]=(e.value!=0);
                 if (bi>=s->pad.btn_cnt) s->pad.btn_cnt=bi+1;
             }
-            if (e.code==BTN_TL) s->pad.tl=e.value?1000:0;
-            if (e.code==BTN_TR) s->pad.tr=e.value?1000:0;
+            if (c==BTN_TL) s->pad.tl=e.value?1000:0;
+            if (c==BTN_TR) s->pad.tr=e.value?1000:0;
         }
     }
   }

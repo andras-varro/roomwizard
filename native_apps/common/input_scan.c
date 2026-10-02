@@ -74,6 +74,27 @@ InputKind input_select(InputKind kind, const int held[INPUT_KIND_COUNT],
     return (held[kind] < cap[kind]) ? kind : INPUT_KIND_NONE;
 }
 
+InputPadLayout input_pad_layout(const InputCaps *caps) {
+    if (!caps)
+        return INPUT_PAD_NATIVE;
+    if (input_caps_test(caps->key, BTN_TL) && input_caps_test(caps->key, BTN_TR2) &&
+        !input_caps_test(caps->key, BTN_SELECT) && !input_caps_test(caps->key, BTN_START))
+        return INPUT_PAD_SEQUENTIAL;
+    return INPUT_PAD_NATIVE;
+}
+
+int input_pad_key(InputPadLayout layout, int code) {
+    /* HID Buttons 3..10 in the Xbox One S descriptor's order (see the header).
+     * Buttons 1 and 2 already land on BTN_A and BTN_B. */
+    static const int seq_native[] = {
+        BTN_X, BTN_Y, BTN_TL, BTN_TR, BTN_SELECT, BTN_START, BTN_THUMBL, BTN_THUMBR
+    };
+    if (layout == INPUT_PAD_SEQUENTIAL &&
+        code >= BTN_GAMEPAD + 2 && code <= BTN_GAMEPAD + 9)
+        return seq_native[code - (BTN_GAMEPAD + 2)];
+    return code;
+}
+
 bool input_scan_holds(const InputNode *nodes, int n, const char *path) {
     for (int i = 0; i < n; i++)
         if (strcmp(nodes[i].path, path) == 0)
@@ -155,6 +176,8 @@ int input_scan_with(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_C
         nd->fd = fd;
         nd->kind = kind;
         nd->keys = input_caps_is_keyboard(&caps);
+        nd->pad_layout = (kind == INPUT_KIND_PAD) ? input_pad_layout(&caps)
+                                                  : INPUT_PAD_NATIVE;
         held[kind]++;
     }
     return n;

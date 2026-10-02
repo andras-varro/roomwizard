@@ -231,7 +231,9 @@ static void seed_latched_levels(GamepadManager *gm) {
     if (gm->gamepad_fd < 0) return;
     memset(keys, 0, sizeof(keys));
     if (ioctl(gm->gamepad_fd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
-        /* The same mapping poll_gamepad() applies to EV_KEY. */
+        /* The same mapping poll_gamepad() applies to EV_KEY.  The bitmap is
+         * indexed by RAW code and the map holds native codes, so walk the held
+         * raw codes and translate each, as poll_gamepad() does an event. */
         const struct { int btn_id; int code; } pad_btns[] = {
             { BTN_ID_JUMP,   m->btn_jump   },
             { BTN_ID_RUN,    m->btn_run    },
@@ -239,10 +241,12 @@ static void seed_latched_levels(GamepadManager *gm) {
             { BTN_ID_PAUSE,  m->btn_pause  },
             { BTN_ID_BACK,   m->btn_back   },
         };
-        for (size_t i = 0; i < sizeof(pad_btns) / sizeof(pad_btns[0]); i++) {
-            int code = pad_btns[i].code;
-            if (code >= 0 && code <= KEY_MAX && input_caps_test(keys, code))
-                gm->held_latched[pad_btns[i].btn_id] = true;
+        for (int raw = 0; raw <= KEY_MAX; raw++) {
+            if (!input_caps_test(keys, raw)) continue;
+            int code = input_pad_key((InputPadLayout)gm->gamepad_layout, raw);
+            for (size_t i = 0; i < sizeof(pad_btns) / sizeof(pad_btns[0]); i++)
+                if (code == pad_btns[i].code)
+                    gm->held_latched[pad_btns[i].btn_id] = true;
         }
     }
     struct input_absinfo ai;
@@ -270,6 +274,7 @@ static void scan_devices(GamepadManager *gm) {
         const InputNode *nd = &nodes[i];
         if (nd->kind == INPUT_KIND_PAD) {
             gm->gamepad_fd = nd->fd;
+            gm->gamepad_layout = nd->pad_layout;
             load_axis_calibration(gm);
             announce_found(gm->announced_gamepad, sizeof(gm->announced_gamepad),
                            "gamepad", nd->name, nd->path);
@@ -537,6 +542,7 @@ void gamepad_close(GamepadManager *gm) {
         close(gm->gamepad_fd);
         gm->gamepad_fd = -1;
     }
+    gm->gamepad_layout = INPUT_PAD_NATIVE;
     for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
         if (gm->keyboard_fds[k] >= 0) close(gm->keyboard_fds[k]);
         if (gm->mouse_fds[k] >= 0)    close(gm->mouse_fds[k]);
@@ -687,16 +693,17 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
             }
         } else if (ev.type == EV_KEY) {
             bool down = (ev.value != 0);
+            int code = input_pad_key((InputPadLayout)gm->gamepad_layout, ev.code);
 
-            if ((int)ev.code == m->btn_jump)
+            if (code == m->btn_jump)
                 gm->held_latched[BTN_ID_JUMP] = down;
-            else if ((int)ev.code == m->btn_run)
+            else if (code == m->btn_run)
                 gm->held_latched[BTN_ID_RUN] = down;
-            else if ((int)ev.code == m->btn_action)
+            else if (code == m->btn_action)
                 gm->held_latched[BTN_ID_ACTION] = down;
-            else if ((int)ev.code == m->btn_pause)
+            else if (code == m->btn_pause)
                 gm->held_latched[BTN_ID_PAUSE] = down;
-            else if ((int)ev.code == m->btn_back)
+            else if (code == m->btn_back)
                 gm->held_latched[BTN_ID_BACK] = down;
         }
     }

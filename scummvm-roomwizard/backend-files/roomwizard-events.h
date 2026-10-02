@@ -143,6 +143,7 @@ private:
 	int _mouseNodes[MAX_MICE];
 	int _mouseNext;  // round-robin start, so one busy mouse cannot starve another
 	int _gamepadFd;
+	int _gamepadLayout;  // InputPadLayout (input_scan.h) of _gamepadFd; 0 is native
 
 	void scanInputDevices();         // common/input_scan.c walks /dev/input/event0..31
 	void closeInputDevices();        // Close all USB device fds

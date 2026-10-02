@@ -18,10 +18,12 @@
  *
  * HOW A RESCAN IS REACHED ON A HOST WITH NO SUCH DEVICES.  Two link-time seams,
  * and no change to shipped code:
- *   - input_scan.c is deliberately NOT linked.  This file defines input_scan()
- *     (and the one helper gamepad.c also takes from there, input_caps_test), so
- *     a "scan" returns whatever fake devices the test says are plugged in, each
- *     on a fresh fd, exactly as a real reopen hands back a new fd.
+ *   - input_scan.c is deliberately NOT linked.  It is compiled INTO this file
+ *     with its input_scan() renamed out of the way, so the pure helpers
+ *     gamepad.c takes from there (input_caps_test, input_pad_key) are the real
+ *     ones, and this file's input_scan() returns whatever fake devices the test
+ *     says are plugged in, each on a fresh fd, exactly as a real reopen hands
+ *     back a new fd.
  *   - ioctl() is defined here too, which pre-empts glibc's for every call in
  *     this executable.  On a fake fd it answers EVIOCGKEY from the device's
  *     "kernel" key bitmap and EVIOCGABS from its hat position; any other fd is
@@ -50,6 +52,10 @@
 #include "gamepad.h"
 #include "input_scan.h"
 
+#define input_scan input_scan_real_unused
+#include "input_scan.c"
+#undef input_scan
+
 static int fails = 0;
 
 static void expect_bool(const char *what, bool got, bool want) {
@@ -70,6 +76,7 @@ typedef struct {
     unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];  /* what EVIOCGKEY reports */
     int           hat_x, hat_y;                           /* what EVIOCGABS reports */
     int           fd;                                      /* current open fd, or -1 */
+    InputPadLayout layout;                                 /* what the scan reports */
 } FakeDev;
 
 enum { DEV_PAD, DEV_KBD, DEV_MOUSE, DEV_COUNT };
@@ -97,13 +104,9 @@ static int fake_fd(void) {
     return fd;
 }
 
-/* ── Seam 1: input_scan() and the helper gamepad.c shares with it ───────── */
-bool input_caps_test(const unsigned long *bits, int bit) {
-    return (bits[bit / INPUT_SCAN_LONG_BITS] >> (bit % INPUT_SCAN_LONG_BITS)) & 1UL;
-}
-
+/* ── Seam 1: input_scan() ─────────────────────────────────────────────── */
 static void caps_set(unsigned long *bits, int bit) {
-    bits[bit / INPUT_SCAN_LONG_BITS] |= 1UL << (bit % INPUT_SCAN_LONG_BITS);
+    input_caps_set(bits, bit);
 }
 static void caps_clear(unsigned long *bits, int bit) {
     bits[bit / INPUT_SCAN_LONG_BITS] &= ~(1UL << (bit % INPUT_SCAN_LONG_BITS));
@@ -120,6 +123,7 @@ int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]
         snprintf(nodes[n].name, sizeof(nodes[n].name), "%s", d->name);
         nodes[n].fd = d->fd;
         nodes[n].kind = d->kind;
+        nodes[n].pad_layout = d->layout;
         n++;
     }
     return n;
@@ -298,6 +302,38 @@ static void test_mouse_control(void) {
     gamepad_close(&gm);
 }
 
+/* A hid-generic pad (the 8BitDo Pro 2 in Bluetooth X mode) reports Start as
+ * raw 0x137 and LB as raw 0x134 — the codes the native map reads as RB and as
+ * btn_action.  Both the event path and the EVIOCGKEY re-seed must translate
+ * before mapping: Start must latch PAUSE, and LB must latch nothing.  Each row
+ * fails in its own direction if either path compares raw codes. */
+static void test_sequential_layout(void) {
+    printf("\n7. hid-generic SEQUENTIAL pad: Start and LB, by event and across a rescan\n");
+    GamepadManager gm; InputState st;
+    devs_reset();
+    g_dev[DEV_PAD].layout = INPUT_PAD_SEQUENTIAL;
+    gamepad_init(&gm);
+    memset(&st, 0, sizeof(st));
+    gamepad_poll(&gm, &st, 0, 0, false);
+    FakeDev *pad = &g_dev[DEV_PAD];
+
+    caps_set(pad->keys, BTN_GAMEPAD + 7);          /* Menu/Start */
+    deliver(pad, EV_KEY, BTN_GAMEPAD + 7, 1);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    caps_set(pad->keys, BTN_GAMEPAD + 4);          /* LB */
+    deliver(pad, EV_KEY, BTN_GAMEPAD + 4, 1);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("event: raw 0x137 latches PAUSE", st.buttons[BTN_ID_PAUSE].held, true);
+    expect_bool("event: raw 0x134 does not latch ACTION", st.buttons[BTN_ID_ACTION].held, false);
+
+    gamepad_rescan(&gm);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("after rescan: PAUSE still held", st.buttons[BTN_ID_PAUSE].held, true);
+    expect_bool("after rescan: ACTION not invented from raw 0x134",
+                st.buttons[BTN_ID_ACTION].held, false);
+    gamepad_close(&gm);
+}
+
 int main(void) {
     printf("gamepad rescan: held input survives the 5 s hot-plug rescan\n");
     test_pad_button();
@@ -306,6 +342,7 @@ int main(void) {
     test_released_during_rescan();
     test_unplugged_while_held();
     test_mouse_control();
+    test_sequential_layout();
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;

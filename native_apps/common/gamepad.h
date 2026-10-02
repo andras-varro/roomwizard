@@ -170,6 +170,10 @@ typedef struct {
      * relative motion from any mouse moves the one cursor — so every node of
      * those kinds is opened. */
     int gamepad_fd;
+    /* The pad's InputPadLayout (input_scan.h), taken with the fd: every EV_KEY
+     * code read from it goes through input_pad_key() before button_map sees it.
+     * 0 is the native layout. */
+    int gamepad_layout;
     int keyboard_fds[GAMEPAD_MAX_PER_KIND];
     int keyboard_count;
     int mouse_fds[GAMEPAD_MAX_PER_KIND];

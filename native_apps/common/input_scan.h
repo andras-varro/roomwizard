@@ -47,6 +47,28 @@ typedef struct {
 void input_caps_set(unsigned long *bits, int bit);
 bool input_caps_test(const unsigned long *bits, int bit);
 
+/*
+ * Which button codes a pad's EV_KEY events carry.  Every consumer, and every
+ * default and /etc/input_config.conf entry, speaks NATIVE: the codes xpad
+ * reports for an Xbox 360 pad (A 0x130, B 0x131, X 0x133, Y 0x134, LB 0x136,
+ * RB 0x137, Select 0x13a, Start 0x13b, LS 0x13d, RS 0x13e).
+ *
+ * SEQUENTIAL is a pad driven by hid-generic, which maps HID Button n to
+ * BTN_GAMEPAD + (n-1) — so the codes follow the HID descriptor's button order
+ * and not the button's meaning.  The 8BitDo Pro 2 in its Bluetooth X mode
+ * (it enumerates as an Xbox One S, 045e:02e0, which kernel 4.14 has no
+ * dedicated driver for) orders them A,B,X,Y,LB,RB,View,Menu,LS,RS: its key
+ * bitmap is 0x130..0x139 plus KEY_MENU, and Select/Start arrive as 0x136/0x137,
+ * the codes every consumer reads as LB/RB.
+ *
+ * Zero is NATIVE, so a zeroed InputNode (and a caller that never asks) is the
+ * identity.
+ */
+typedef enum {
+    INPUT_PAD_NATIVE = 0,
+    INPUT_PAD_SEQUENTIAL,
+} InputPadLayout;
+
 /* One node found by input_scan(). fd is open O_RDONLY|O_NONBLOCK. */
 typedef struct {
     char      path[INPUT_SCAN_PATH_LEN];
@@ -54,6 +76,7 @@ typedef struct {
     InputKind kind;
     bool      keys;   /* also carries a keyboard: a keyboard+touchpad combo is one
                          node, classified MOUSE, whose reader must forward its keys */
+    InputPadLayout pad_layout;   /* input_pad_layout() of a PAD node; NATIVE otherwise */
     char      name[INPUT_SCAN_NAME_LEN];
 } InputNode;
 
@@ -74,6 +97,22 @@ InputKind input_classify(const InputCaps *caps, const char *name);
  */
 InputKind input_select(InputKind kind, const int held[INPUT_KIND_COUNT],
                        const int cap[INPUT_KIND_COUNT]);
+
+/*
+ * PURE. A pad's layout from its key capability bits: SEQUENTIAL when it has
+ * BTN_TL and BTN_TR2 (HID Buttons 7 and 10) but neither BTN_SELECT nor
+ * BTN_START, which a pad with that many buttons under the native layout always
+ * has.  NATIVE for anything else, NULL included.
+ */
+InputPadLayout input_pad_layout(const InputCaps *caps);
+
+/*
+ * PURE. The NATIVE code for a raw EV_KEY `code` read from a pad of `layout`.
+ * Translate at read time — and look a level read with EVIOCGKEY up by its raw
+ * code, then translate — so every mapping stays in native codes.  Identity for
+ * NATIVE, and for every code the layout does not move.
+ */
+int input_pad_key(InputPadLayout layout, int code);
 
 /* PURE. True if `path` is already one of nodes[0..n-1] (a rescan skips it). */
 bool input_scan_holds(const InputNode *nodes, int n, const char *path);
