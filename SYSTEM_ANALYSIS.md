@@ -1197,7 +1197,7 @@ not supported" bit); its GATT has **no HID service (`0x1812`)**, so connecting y
 8BitDo's companion-app channel]**; `pair` pages it over BR/EDR and fails with Page Timeout. ⚠️ **Witness an
 advertisement by btmon's event matched on the address — not by `bluetoothctl`'s `NEW` line nor by btmon's
 abbreviated title** (`btmon -T` prints `Inquiry Result` for an Extended one): X mode was first recorded as silent
-from a busybox `grep` of `bluetoothctl` output, while btmon had logged 96 EIRs.
+from a busybox `grep` of `bluetoothctl` output, while btmon had logged 96 EIRs. ⚠️ **A scripted `bluetoothctl` needs ~2 s between starting and `agent` or the registration fails** (measured 2026-08-08), and a classic HID keyboard ("BT Keyboard 5.1", class `0x002540`) paired Just Works with no PIN, `hidp` → `hid-generic` making one node for keys and touchpad that `app_launcher` hot-plugged.
 
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
@@ -2130,8 +2130,8 @@ ScummVM went from 80 % to 32 % CPU using these; the VNC client independently reu
 
 - precomputed palette LUTs
 - a precomputed source-column table plus row-pointer lifting, to remove per-pixel division
-- border-only clearing
-- skipping `fb_swap` entirely on unchanged frames
+- border-only clearing, and skipping `fb_swap` entirely on unchanged frames
+- a rotated (portrait) copy writes the **uncached framebuffer sequentially** and reads **strided from the cached back buffer**: the earlier order cost 63 % CPU against 54 % for Frogger in portrait on `.188` (landscape 51 %; `/proc/<pid>/stat` over 10 s, 2026-10-02; the old order's exact access pattern was not re-read, so the mechanism is **[inferred]**) (`framebuffer.c` `fb_swap`, byte-identical by `fb_rotate_test`)
 - 16bpp RGB565 to halve write bandwidth
 - NEON `vst1q_u16` 8-pixel blits
 - row deduplication via an L1-resident temp row (~57 % of scaled rows are duplicates)

@@ -516,6 +516,8 @@ dumpwav/
 # ...except the teardown photos cited throughout HARDWARE.md.
 !HardwarePhotos/*.jpg
 !HardwarePhotos/*.png
+# ...and the operator's own BeagleBone Black photos.
+!beaglebone/image/*.jpg
 # ...and screenshots referenced from documentation.  Without this, committing a
 # doc screenshot needs `git add -f`, so in practice nobody ever does.
 !Screenshots/*.png

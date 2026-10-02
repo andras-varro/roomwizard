@@ -165,6 +165,31 @@ fix (operator's idea):** mandate landscape for it. The hook would be a per-app o
 the launcher; neither exists today. Prefer a library hook over a per-app edit. Verify on the panel in both
 orientations.
 
+### B51. BT failover miss: a BlueALSA A2DP stream froze without error — open, sporadic, seen once 2026-10-02
+
+**Measured, `.188`, 11:15 CDT:** `WI-C310` (`90:7A:58:B9:C6:F5`) pinned, `VT360` (`08:EB:ED:FE:C1:3D`) connected. In
+the Mix Bus Test the music voice stopped consuming after 11.2 s while `snd_pcm_avail` kept succeeding with the ring
+full; there was no "is gone", underrun or reopen line (`services=2801` over 94.7 s, `starve=0`), so no failover ran.
+The music release never completed, so the next WAV tap was refused ("bed REFUSED - see /tmp/mix.log"). **Not
+distinguished [inferred]:** a frozen BlueALSA hardware pointer versus a blocked `bluealsad`. The operator tried many
+times and could not reproduce it.
+
+**Detector deployed, never fired:** `alsa_space` in `common/audio_out.c` treats a ring that owes playback and makes no
+progress for `ALSA_STALL_MS` (2000) as a lost device, logs `audio_out: <pcm> stalled — no progress for N ms (avail=…
+state=…)` and refuses that PCM until a link change. "is gone" / "is available" and the `audio_mix_test` session start
+carry wall-clock stamps. **Known consequence:** with one headset a pin stall can fall to the same frozen transport and
+stall again, up to ~4 s of silence. **Open work, on the next occurrence:** read `/tmp/mix.log` and `app_stdout.log` for
+the "stalled" line and its time, correlate with `/var/log/messages`, and optionally run `bluealsa` verbose. **Done when**
+a recurrence is attributed to one of the two mechanisms, or none recurs over a long session.
+
+### B52. Portrait rotated swap cost: fixed and deployed, not verified by ear — open until the operator confirms
+
+**Measured, Frogger on BT audio, `.188` 2026-10-02, CPU from `/proc/<pid>/stat` over 10 s:** landscape 51 % (~34 ms of
+work per frame beside the 33 ms `usleep`, 0 underruns); portrait 63 % (~56 ms, 2 BT underruns per 10 s, audible
+hiccups); after the row-by-row rotated `fb_swap`, portrait 54 % (~39 ms, 0 underruns in 10 s). The rotated output is
+byte-identical to the old one (`fb_rotate_test`). **Not yet measured:** a longer listening session in portrait on BT.
+**Done when** the operator hears no hiccups over a longer portrait BT session.
+
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -243,65 +268,6 @@ the room
 Ideas: health/timer bar, heartbeat pulse during ScummVM loading, flash on high score. `hardware.c`
 already reaches both channels and already has the non-blocking `LedPulse` API, so this is presentation
 work only.
-
----
-
-### F17. Bluetooth peripherals — open, measured 2026-08-08
-
-**The want:** a wireless game controller and a headset or speaker for ScummVM. The unit is PoE-wired, the
-Xbox pad is wired, and the integrated speaker is poor
-([§3.4](SYSTEM_ANALYSIS.md#34-audio)) — so every current option is a cable. A wired USB DAC already fixes the
-speaker for anyone willing to run one ([§3.4](SYSTEM_ANALYSIS.md#34-audio) has its measured PIO cost), so what
-this entry adds is the "no cables" half.
-
-**This is a module build, not a kernel rebuild.** The kernel half ships as modules with no p1 write, and the
-dongle's identity, patches and firmware are in [`kernel/README.md`](kernel/README.md). DMA is not a
-prerequisite: A2DP is tens of KB/s and a controller a few hundred bytes/s, which PIO carries.
-**Bluetooth needs a USB dongle — there is no radio on the board**
-([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion); the `J5`/`J6` XBee socket is 802.15.4 and cannot
-host Bluetooth), and there is no second USB port ([§3.6](SYSTEM_ANALYSIS.md#36-usb)), so the dongle occupies
-the single connector. BlueZ userspace is cross-built (step 1 below) and boots from `bluetooth/`.
-
-**Open now:**
-
-- **ALSA is the audio route** ([§3.4](SYSTEM_ANALYSIS.md#34-audio)), because `bluez-alsa` is an alsa-lib
-  *plugin*. Operator by ear on `.188`: a game on onboard and on the USB dongle, `control_panel` TEST AUDIO on
-  both, ScummVM. The Mix Bus Test crack is B38. **Loudness:** an onboard
-  probe tone at amplitude 6000 was faint while the mixer read 0 dB — compare loudness game-vs-game and against
-  the vendor's `aplay`, at equal amplitude **[inferred: amplitude only]**.
-- **Pairing recipe (measured):** a `NoInputNoOutput` agent; scripted `bluetoothctl` needs a ~2 s delay before
-  `agent` or registration fails. Classic HID works end to end: a "BT Keyboard 5.1" (`E6:7A:00:00:20:9F`, class
-  0x002540) was found by inquiry and paired Just Works with no PIN; `hidp` → `hid-generic` made one input node
-  carrying both keys and touchpad, which `app_launcher` hot-plugged.
-- **Pads: the 8BitDo Pro 2 works over BT in X mode (recommended: Xbox One S identity, the USB Xbox-clone
-  layout) and in A mode** (`hid-generic`; identities and the tool trap in
-  [§3.6](SYSTEM_ANALYSIS.md#36-usb)). Unmeasured: a reconnect after the pad sleeps (a reconnect after a unit
-  reboot is measured, §3.6).
-
-**Next:**
-
-**Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
-   - **Scan results share the known-device list** (`bt_ctl.c:155-194` keeps one `dev[]` array). A newly scanned
-     device stays at its discovery position and a connected one does not move up. Operator wants scan results in a
-   - **Fail over between BT sinks around a pinned headset — implemented, deployed to .188 2026-10-02, panel check
-     pending (open until the operator confirms).** Absent pin plays on another connected BT sink and returns to the
-     pinned one on reconnect, under OUT=BLUETOOTH and AUTO; the rule is in `native_apps/CLAUDE.md`.
-     device selection is under evaluation **[unmeasured]**.
-   - **The passkey-entry overlay is untested on a device** (`BT_PROMPT_DISPLAY_PASSKEY`, `bluetooth_page.c:247`): no
-     keyboard at hand requested a passkey. Numeric comparison was tested OK.
-   **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
-
-⚠️ **The hard problem is audio CPU, not USB — measure before promising.** A2DP means software SBC encoding
-on one 600 MHz core that ScummVM already holds at ~32 %
-([§6.5](SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off)). NEON is available and D-Bus
-already runs (`S02dbus-1` is a `keep`), so BlueZ has its bus, and `bluez-alsa` is the lean bridge rather
-than PulseAudio on 234 MB. A2DP's latency is fine for point-and-click and wrong for anything twitchy. **The
-controller half is much more likely to land than the audio half; do not sell them as one feature.**
-
-**Two cross-cutting constraints on any dongle:** it draws ~50–100 mA, which is marginal against the
-current 100 mA budget — an *independent* argument for the 500 mA p1 power patch — plus the 802.3af
-power budget and the case's total lack of ventilation slots
-([`HARDWARE.md` §4](HARDWARE.md#4-unpopulated-and-expansion)).
 
 ---
 
@@ -464,7 +430,7 @@ all fit), so plug in enough devices to see it.
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
-The operator inherited many BeagleBone Black boards (photos in `beaglebone/image/`). **Measured from the
+The operator inherited many BeagleBone Black boards (photos: `beaglebone/image/beaglebone-black-board-{1,2}.jpg`). **Measured from the
 photos:** TI AM3358 (Cortex-A8, 1 GHz — also no hardware integer divide), TPS65217C PMIC, 512 MB DDR3,
 eMMC, SMSC LAN8710A PHY, an NXP HDMI framer to micro-HDMI, USB-A host, mini-USB, microSD, P8/P9 headers.
 
@@ -499,11 +465,11 @@ By `top` and operator reading: Snake in play with a BT pad ~10 %; the Control Pa
 with no sleep — `common/keyboard.c` is shared by every game's high-score entry. **Discriminators:** voluntary vs
 nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spinning poll shows almost none
 voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
-timeout. **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
-
-### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
-
-The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel. Fixed and deployed 2026-10-02; panel check pending, including portrait overlap: the right-aligned status (~252 px) beside a ~252 px title may overlap below ~540 px width **[inferred]**.
+timeout. **Measured later, `.188` 2026-10-02:** the Frogger high-score screen used ~70 % CPU, more than Frogger
+gameplay at 51 % in landscape (`/proc/<pid>/stat` over 10 s). **Cause direction [inferred, unmeasured]:** every frame
+repaints the full 1.5 MB 32bpp back buffer and copies it to the uncached framebuffer, which is bound by memory
+bandwidth. **Options [estimates, none costed]:** dirty rectangles (skip `fb_swap` on unchanged frames), 16bpp, or DSS
+scaling (F2). **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
@@ -523,6 +489,42 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 ### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
 
 The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
+
+### F113. Bluetooth page: scan results in their own list — open, operator request
+
+Scan results share the known-device list (`bt_ctl.c:155-194` keeps one `dev[]` array), so a newly scanned device
+stays at its discovery position and a connected one does not move up. The operator wants scan results in a separate
+list; how device selection then works is under evaluation **[unmeasured]**. Code: `native_apps/control_panel/bluetooth_page.c`,
+`bt_ctl.c`. **Done when** the page shows paired/connected devices apart from scan results and a connected device
+leads its list.
+
+### F114. Loudness: is a game quieter than the vendor's `aplay` at equal amplitude? — open question
+
+An onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB. Compare loudness game-vs-game and
+against the vendor's `aplay` at equal amplitude, by ear on `.188` (onboard, USB dongle, `control_panel` TEST AUDIO,
+ScummVM) **[inferred: amplitude only; nothing measured beyond that one tone]**. **Done when** the question is
+answered, or closed as the known ~50 % OSS attenuation.
+
+### F115. Move the per-frame games to elapsed-time motion — open
+
+Frogger, brick_breaker, pong and platformer move per frame; only Tetris is time-based. The rule is in
+`native_apps/CLAUDE.md` (game logic in its own units, speeds per second). Frogger's lane speed is now scaled by
+`cell_size/28`, but still applied per frame: its `dt` conversion was skipped for lack of a measured landscape frame
+rate. **Done when** each of the four advances by elapsed `get_time_ms()` time and a slower frame (portrait rotation,
+a heavy redraw) no longer slows play.
+
+### F116. Choose which controller drives a game — open, operator request 2026-10-02
+
+On the Control Panel's Input page, pick the controller a game uses. A second controller works in the Input page's
+test mode, but in games (except `samegame` and `theremin`) only one works; that is acceptable for now, and
+two-player modes may come later. **Done when** the Input page offers the choice and games honour it.
+
+### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
+
+"RoomWizard" is likely a Steelcase trademark **[unchecked]**. The operator's idea is "Lizard" (Linux + Wizard): not
+tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fits a Steelcase-free distro/rootfs
+(F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
+device paths and `LICENSE.md` follow it.
 
 ## Structural and cleanup
 

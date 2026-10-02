@@ -52,6 +52,8 @@ device-files/** text eol=lf
 # Requires `git lfs install` before cloning, or the working copy gets pointer
 # text files instead of JPEGs.
 HardwarePhotos/** filter=lfs diff=lfs merge=lfs -text
+# The operator's BeagleBone Black photos, same reasoning.
+beaglebone/image/** filter=lfs diff=lfs merge=lfs -text
 # Documentation screenshots, same reasoning as above.
 Screenshots/** filter=lfs diff=lfs merge=lfs -text
 # The music beds are large binaries, so they are LFS objects.  ⚠️ The effect WAVs

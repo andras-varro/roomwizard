@@ -281,14 +281,12 @@ Three things about that, learned from doing it:
   `reset_game()` / `init_level()` call `hw_led_pulse_stop()`, or a game-over flourish flashes into the next
   round. If a code path writes the LED directly, stop the pulse first or the next update re-lights it.
 
-**A per-frame motion constant is a speed only in combination with the frame delay, so sanity-check it in
-px/s** — multiply by 30 before committing the number. Pong served every ball at `5.0` px/frame: 150 px/s,
-~3.5 px/frame along the long axis at a 45° serve, so **~7 s to cross the playfield**, and it read as an
-ordinary constant in source (`BALL_START_SPEED` carries the arithmetic in its comment now). And **never count
-*frames* where you mean *time***: a dirty-flagged loop's rate varies with what the app is doing, so a
-per-iteration counter runs at whatever pace the screen needs — that was tetris' gravity, ~3× too slow while
-idle. Motion tied to a fixed physics step (a ball's `vx`) may live in px/frame; anything experienced as a
-duration wants a `get_time_ms()` delta.
+**Game logic works in its own units — cells or fractions of the playfield — and speeds are those units per
+SECOND of elapsed time (`get_time_ms()` delta), never pixels per frame; only drawing converts to pixels.** Frogger
+scaled speed by `width/800` but laid out from the height, so portrait ran ~3.4× slow in cells; Pong served every
+ball at `5.0` px/frame, ~7 s to cross the playfield; tetris' per-iteration gravity counter ran ~3× slow while idle,
+and any per-frame motion slows whenever a frame costs more (portrait rotation). Only tetris is time-based today;
+frogger, brick_breaker, pong and platformer still move per frame, so multiply by 30 to sanity-check them in px/s.
 
 **Derive state; don't accumulate it, and don't let a marker mean two things.** One shape produced three game
 bugs: a multiplier re-applied to a figure that already contained it (so **SLOW DOWN made the ball faster**), a
