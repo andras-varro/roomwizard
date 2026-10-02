@@ -614,7 +614,7 @@ is the tree-wide check.
 game; nothing inside the library calls it, so an app that omits it never re-detects a device. The read loop
 is `while (read(fd, &ev, sizeof(ev)) == sizeof(ev))` — a pad that leaves the bus (unplugged, or a wireless
 one idling out) leaves a stale fd that fails forever, so input is dead for the life of the process and only
-relaunching fixes it. It also clears `held_latched[]`, so a direction held at unplug time is not stuck on.
+relaunching fixes it. It clears `held_latched[]` (a direction held at unplug is not stuck on) then `seed_latched_levels()` re-reads the held levels, so a key held across the rescan keeps its level.
 
 ⚠️ **`scan_devices()` announces a CHANGE, never a poll, and a new print in it must keep that shape.**
 Because the rescan closes every device first, the `fd < 0` that guards each announcement is always true by
