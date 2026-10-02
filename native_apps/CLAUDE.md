@@ -674,17 +674,17 @@ Four rules live there:
   `misaligned`. Its mid-frame retry is bounded by `AUDIO_ALIGN_TRIES` whatever the caller's policy — an
   unlimited policy against a full sink hangs the render loop, which is worse than the swap. Every write
   goes through it under a **named `AudioWritePolicy`** (`audio_out.c`). Add a policy, never a loop.
-- **`audio_out` routes to a Bluetooth A2DP sink (choice `bluetooth`; auto order BT > USB > onboard).** Presence is
-  gated on the `/sys/class/bluetooth` `hciN:H` link set, with the `plug:bluealsa` probe at most once a second for 10 s
-  after that set changes (ENODEV and the buffer trap: [`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb)).
-  A newly connected sink takes the stream after two sightings (ScummVM inherits via `audio_out_usb_returned`), a lost
-  link reopens down the order, a grant ring over 2 s is refused, and the control panel Audio page lists BLUETOOTH only
-  while a sink is present. Verified on the panel in Brick Breaker (BT, headset off to USB, USB unplug to onboard, back
-  to BT); **ScummVM's BT path is not verified** (not redeployed).
-  **A pin:** config key `audio_bt_addr`, written only by `cp_audio_set_output`, opens `bluealsa:DEV=<addr>,PROFILE=a2dp` (not
-  `plug:bluealsa:DEV=` — `20-bluealsa.conf` already defines `pcm.bluealsa` as type plug and alsa-lib's parser rejects the
-  nesting, inferred from source). A pinned headset that is absent falls back to USB DAC, else onboard, even with another BT
-  sink connected; the open fails fast so it never stalls (measured on the panel 2026-10-02). The OUT button clears the pin.
+- **`audio_out` routes to a Bluetooth A2DP sink (choice `bluetooth`).** Presence is gated on the `/sys/class/bluetooth`
+  `hciN:H` link set, with the `plug:bluealsa` probe at most once a second for 10 s after that set changes (ENODEV and the
+  buffer trap: [`../SYSTEM_ANALYSIS.md#36-usb`](../SYSTEM_ANALYSIS.md#36-usb)). A newly connected sink takes the stream
+  after two sightings, a lost link reopens down the order, a grant ring
+  over 2 s is refused. **ScummVM's BT path is not verified**. **A pin:** config key `audio_bt_addr`,
+  written only by `cp_audio_set_output`, opens `bluealsa:DEV=<addr>,PROFILE=a2dp` (not `plug:bluealsa:DEV=` — `20-bluealsa.conf` already
+  defines `pcm.bluealsa` as type plug and alsa-lib's parser rejects the nesting, inferred from source). Tier order under
+  BLUETOOTH and AUTO: pinned headset (`bluealsa-pin`) > any BT sink (`plug:bluealsa`) > USB DAC > onboard, from the pure
+  `audio_out_device_for_bt()` (`audio_out_device_for` wraps it); the open fails fast. The probe
+  opens `plug:bluealsa` only while the pin is absent; with the stream on another sink, `audio_out_reprobe_due_pin()`
+  keeps re-probing and the two-sighting move returns it. OUT cycling keeps the pin; only USE FOR AUDIO on another headset or REMOVE of the pinned one changes it.
 - **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` holds frequency and
   amplitude still, so deleting it while collapsing the duplicated generators deletes the fade.
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —

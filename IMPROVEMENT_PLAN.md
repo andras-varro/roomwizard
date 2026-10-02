@@ -283,12 +283,9 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
 **Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
    - **Scan results share the known-device list** (`bt_ctl.c:155-194` keeps one `dev[]` array). A newly scanned
      device stays at its discovery position and a connected one does not move up. Operator wants scan results in a
-     separate list from known/paired devices.
-   - **Nice to have (operator 2026-10-02): fail over between BT sinks around a pinned headset.** With a pinned
-     headset absent, play on another connected BT sink instead of the speaker, and return to the pinned one when it
-     reconnects, under both OUT=BLUETOOTH and AUTO. Today an absent pin falls back to USB DAC, else onboard
-     (the pin itself is in `native_apps/CLAUDE.md`). Observed under AUTO: after failing over to the VT360, the
-     WI-C310 reconnecting did not take the audio back. Whether this is a small change in `common/audio_out.c`'s
+   - **Fail over between BT sinks around a pinned headset — implemented, deployed to .188 2026-10-02, panel check
+     pending (open until the operator confirms).** Absent pin plays on another connected BT sink and returns to the
+     pinned one on reconnect, under OUT=BLUETOOTH and AUTO; the rule is in `native_apps/CLAUDE.md`.
      device selection is under evaluation **[unmeasured]**.
    - **The passkey-entry overlay is untested on a device** (`BT_PROMPT_DISPLAY_PASSKEY`, `bluetooth_page.c:247`): no
      keyboard at hand requested a passkey. Numeric comparison was tested OK.
@@ -506,7 +503,7 @@ timeout. **Done when** an idle static screen is within a few percent of the lowe
 
 ### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
 
-The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel.
+The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel. Fixed and deployed 2026-10-02; panel check pending, including portrait overlap: the right-aligned status (~252 px) beside a ~252 px title may overlap below ~540 px width **[inferred]**.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
