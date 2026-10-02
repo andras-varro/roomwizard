@@ -18,6 +18,7 @@
 #include "../common/common.h"
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +39,7 @@
 
 /* ── Types and state ────────────────────────────────────────────────────── */
 
-#define STATUS_MS       2000   /* how long a RESCAN result stays up */
+#define STATUS_MS       2000   /* how long an empty-list result stays up */
 
 typedef struct {
     UsbBusDev    bus[USB_BUS_MAX];    /* everything enumerated — what the list shows */
@@ -46,7 +47,7 @@ typedef struct {
     bool         scan_pending;         /* enter() painted first: input() scans */
     bool         recover_queued;       /* a scan found nothing: re-probe full-screen */
     bool         recover_once;         /* ...one attempt, not the script's default */
-    char         status_msg[64];       /* a RESCAN result; "" = none */
+    char         status_msg[64];       /* an empty-list result; "" = none */
     uint32_t     status_time_ms;
 } UsbState;
 
@@ -82,11 +83,27 @@ static void usb_scan_bus(UsbState *s) {
  * instead of its default retries.  Opening the page asks for one, because it
  * runs on every opening that finds the socket empty and an empty socket
  * exhausts every attempt; RESCAN is an explicit ask and keeps the retries. */
+/* A result line.  The empty list shows it centred, where the hint goes; with
+ * devices listed it goes to the page bar (cp_status), because right-aligned on
+ * the list's title row it overran "DETECTED USB DEVICES:" in portrait. */
+static void usb_status(UsbState *s, bool ok, const char *fmt, ...) {
+    char m[sizeof(s->status_msg)];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(m, sizeof(m), fmt, ap);
+    va_end(ap);
+    if (s->bus_cnt > 0) {
+        s->status_msg[0] = '\0';
+        cp_status(m, ok);
+    } else {
+        snprintf(s->status_msg, sizeof(s->status_msg), "%s", m);
+        s->status_time_ms = get_time_ms();
+    }
+}
+
 static bool usb_recover_port(Framebuffer *fb, UsbState *s, bool once) {
     if (access(USB_HOST_INIT, X_OK) != 0) {
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "USB-HOST SCRIPT NOT INSTALLED");
-        s->status_time_ms = get_time_ms();
+        usb_status(s, false, "USB-HOST SCRIPT NOT INSTALLED");
         return false;
     }
 
@@ -101,8 +118,7 @@ static bool usb_recover_port(Framebuffer *fb, UsbState *s, bool once) {
 
     pid_t pid = fork();
     if (pid < 0) {
-        snprintf(s->status_msg, sizeof(s->status_msg), "FORK FAILED");
-        s->status_time_ms = get_time_ms();
+        usb_status(s, false, "FORK FAILED");
         return false;
     }
     if (pid == 0) {
@@ -119,15 +135,11 @@ static bool usb_recover_port(Framebuffer *fb, UsbState *s, bool once) {
     int found = usb_bus_peripherals(s->bus, s->bus_cnt);
 
     if (found > 0)
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "PORT RECOVERED - %d DEVICE(S)", found);
+        usb_status(s, true, "PORT RECOVERED - %d DEVICE(S)", found);
     else if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "COULD NOT RUN USB-HOST");
+        usb_status(s, false, "COULD NOT RUN USB-HOST");
     else
-        snprintf(s->status_msg, sizeof(s->status_msg),
-                 "STILL NOTHING - IS A DEVICE PLUGGED IN?");
-    s->status_time_ms = get_time_ms();
+        usb_status(s, false, "STILL NOTHING - IS A DEVICE PLUGGED IN?");
     return found > 0;
 }
 
@@ -222,11 +234,6 @@ static void usb_page_draw(Framebuffer *fb) {
             text_draw_centered(fb, CONTENT_LEFT+CONTENT_WIDTH/2, ly+lh/2+15,
                                "CONNECT A DEVICE AND TAP RESCAN", USB_COLOR_DIM, 2);
     } else {
-        /* A RESCAN result, right-aligned on the title row (the empty list
-         * shows it centred, above). */
-        if (s->status_msg[0])
-            fb_draw_text(fb, lx + lw - 12 - text_measure_width(s->status_msg, 2),
-                         ly+10, s->status_msg, COLOR_YELLOW, 2);
         int ry0=ly+USB_ROW_Y0, rh=USB_ROW_H;
         /* The bus, not the evdev nodes: a sound card, a BT dongle or a hub has
          * no keyboard/mouse/pad node and used to be invisible while it worked.
@@ -334,12 +341,9 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
         bool changed = state->bus_cnt != prev_bus_cnt ||
                        memcmp(prev_bus, state->bus, sizeof(prev_bus)) != 0;
         if (changed)
-            snprintf(state->status_msg, sizeof(state->status_msg),
-                     "RESCANNED - %d DEVICE(S)", state->bus_cnt);
+            usb_status(state, true, "RESCANNED - %d DEVICE(S)", state->bus_cnt);
         else
-            snprintf(state->status_msg, sizeof(state->status_msg),
-                     "RESCANNED - NO CHANGE");
-        state->status_time_ms = now;
+            usb_status(state, true, "RESCANNED - NO CHANGE");
         act = CP_PAGE_REDRAW;
     }
     return act;
