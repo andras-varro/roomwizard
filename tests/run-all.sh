@@ -120,6 +120,7 @@ CTEST_ROWS=(
     "button_latch_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "bezel_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "config_test|-I common|common/config.c"
+    "fb_rotate_test|-O2 -I common|common/framebuffer.c common/hardware.c common/config.c"
     "framebuffer_bpp_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gamepad_announce_test|-I common|common/gamepad.c common/input_scan.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "gamepad_latch_test|-I common|common/gamepad.c common/input_scan.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"

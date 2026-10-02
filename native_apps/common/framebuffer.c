@@ -629,24 +629,49 @@ void fb_swap(Framebuffer *fb) {
         // 90 CCW rotation from the logical surface into the panel, offset by the
         // viewport: logical (lx, ly) -> virtual (lx+view_x, ly+view_y)
         //                            -> physical (vy, phys_height-1-vx)
-        // Byte-addressed, so it is correct at either bpp and under a line_length
-        // that is wider than the visible row (both hold on this panel).
+        // So physical row py = phys_height-1-view_x-lx holds logical COLUMN lx,
+        // laid out contiguously from physical x = view_y.
+        //
+        // The loop is ordered for the write side: /dev/fb0 is an uncached
+        // write-combined mapping, so every store goes to the panel in ascending
+        // address runs, and the strided walk is done on the malloc'd (cached)
+        // back buffer instead. Writing down a physical column — 4-byte stores
+        // at a line_length stride — is the inferred cause of Frogger costing
+        // ~22 ms more CPU per frame in portrait than in landscape (measured on
+        // RW09 from /proc/<pid>/stat). The logical rows are taken in bands of
+        // FB_ROT_BAND so the band's source cache lines (one per logical row)
+        // stay resident in L1 while the column index walks across them.
+        // Pointer steps only: no multiply or divide in the inner loop.
+        enum { FB_ROT_BAND = 64 };
         const uint32_t bpp = fb->bytes_per_pixel;
         const bool is16 = FB_IS_16BPP(fb);
-        uint32_t lw = fb->width;
-        uint32_t lh = fb->height;
-        uint32_t ph_minus_1 = fb->phys_height - 1;
-        const uint8_t *src = (const uint8_t *)fb->back_buffer;
-        uint8_t *dst = (uint8_t *)fb->buffer;
+        const uint32_t lw = fb->width;
+        const uint32_t lh = fb->height;
+        const size_t ll = fb->line_length;
+        // Physical row of the LAST logical column; rows ascend as lx descends.
+        const uint32_t py_first = fb->phys_height - 1 - (fb->view_x + lw - 1);
+        uint8_t *dst_base = (uint8_t *)fb->buffer + (size_t)py_first * ll
+                          + (size_t)fb->view_y * bpp;
 
-        for (uint32_t ly = 0; ly < lh; ly++) {
-            const uint8_t *src_row = src + (size_t)ly * lw * bpp;
-            uint32_t px = ly + fb->view_y;   // Physical X = virtual Y
-            for (uint32_t lx = 0; lx < lw; lx++) {
-                uint32_t py = ph_minus_1 - (lx + fb->view_x);
-                uint8_t *d = dst + (size_t)py * fb->line_length + (size_t)px * bpp;
-                if (is16) *(uint16_t *)d = ((const uint16_t *)src_row)[lx];
-                else      *(uint32_t *)d = ((const uint32_t *)src_row)[lx];
+        for (uint32_t ly0 = 0; ly0 < lh; ly0 += FB_ROT_BAND) {
+            const uint32_t n = (lh - ly0 < FB_ROT_BAND) ? lh - ly0 : FB_ROT_BAND;
+            uint8_t *drow = dst_base + (size_t)ly0 * bpp;
+            if (is16) {
+                const uint16_t *scol = (const uint16_t *)fb->back_buffer
+                                     + (size_t)ly0 * lw + (lw - 1);
+                for (uint32_t c = 0; c < lw; c++, scol--, drow += ll) {
+                    uint16_t *d = (uint16_t *)drow;
+                    const uint16_t *s = scol;
+                    for (uint32_t i = 0; i < n; i++, s += lw) d[i] = *s;
+                }
+            } else {
+                const uint32_t *scol = (const uint32_t *)fb->back_buffer
+                                     + (size_t)ly0 * lw + (lw - 1);
+                for (uint32_t c = 0; c < lw; c++, scol--, drow += ll) {
+                    uint32_t *d = (uint32_t *)drow;
+                    const uint32_t *s = scol;
+                    for (uint32_t i = 0; i < n; i++, s += lw) d[i] = *s;
+                }
             }
         }
         return;
