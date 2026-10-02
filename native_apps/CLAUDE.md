@@ -681,6 +681,10 @@ Four rules live there:
   link reopens down the order, a grant ring over 2 s is refused, and the control panel Audio page lists BLUETOOTH only
   while a sink is present. Verified on the panel in Brick Breaker (BT, headset off to USB, USB unplug to onboard, back
   to BT); **ScummVM's BT path is not verified** (not redeployed).
+  **A pin:** config key `audio_bt_addr`, written only by `cp_audio_set_output`, opens `bluealsa:DEV=<addr>,PROFILE=a2dp` (not
+  `plug:bluealsa:DEV=` — `20-bluealsa.conf` already defines `pcm.bluealsa` as type plug and alsa-lib's parser rejects the
+  nesting, inferred from source). A pinned headset that is absent falls back to USB DAC, else onboard, even with another BT
+  sink connected; the open fails fast so it never stalls (measured on the panel 2026-10-02). The OUT button clears the pin.
 - **The fade-out is a MODE of the one oscillator, not a second copy.** `AUDIO_OSC_FADE_OUT` holds frequency and
   amplitude still, so deleting it while collapsing the duplicated generators deletes the fade.
   `AUDIO_OSC_GLIDE` reproduces the old stream generator byte for byte, and split calls equal one long call —

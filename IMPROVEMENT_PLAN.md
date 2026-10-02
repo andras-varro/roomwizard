@@ -72,6 +72,17 @@ why it has not been seen.
 Fix is the rule the other two follow: cap first, lay out from the capped number, and make the number
 appear somewhere once it exceeds what is drawn — a heart plus `x10`, or a raised cap.
 
+### B38. Mix Bus Test cracks from ~6 voices under a full redraw — open, confirmed 2026-09-28, parked
+
+**Parked by the operator 2026-09-28 ("we can live with this").** **Cause measured** at `.188` with the
+honest PAD arm (readout band only, via `present_rect`): the full redraw is the trigger — 440 Hz voices
+crack from the 7th under PAD, from the 6th and on every meter redraw under FULL; not clipping
+(`clip=0 lim=0`). Mechanism **[inferred]**: an ALSA underrun at `snd_pcm_writei` that `alsa_recover()`
+hides; `audio_out.c` logs `underran at the write`. Remedies if unparked: a cheaper oscillator than the
+per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, code only]**:
+`native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
+the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
+
 ### B41. An adapter replug can print `configured as A device timeout` on our image — open, seen once 2026-09-29
 
 **Measured on `.188`** (uImage md5 `f3b446c6b2d731e0d118583cada62c36`, the ID-ground patch booted):
@@ -83,6 +94,27 @@ patch calls it there. Console error lines are defects even when harmless. **[inf
 root-hub suspend is the difference; n=1. **Next:** reproduce (suspend the empty root hub, replug the
 adapter) with the `rwsv` kprobe on `omap2430_musb_set_vbus` and a DEVCTL read, then decide whether the
 wait needs the PHY/glue resumed first or the loop is simply too short.
+
+### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
+
+`native_apps/tests/measure_audio_tone_sabotage.sh` case 9 deletes
+`audio_out_set_device_pref(config_audio_device_stored());` from `audio.c`, and prints `NO-OP EDIT —
+pattern rotted`: since `8a62c31` the line reads `audio_out_set_device_pref(pref ? pref :
+config_audio_device_stored());` in `audio_init_unchecked_pref()` (`git show HEAD~1:native_apps/common/audio.c`
+has zero copies of the old form). So group J's only host-reachable sabotage has proved nothing since
+2026-09-28. **Fix:** re-key the `sed` to the current line, then confirm case 9 reports failures again
+(and case 10 still its documented 0).
+
+### B44. Mix Bus Test is not layout-sensitive, so it runs degraded in portrait — open, operator request 2026-09-29
+
+`native_apps/tests/audio_mix_test.c` lays out for landscape only. Known defect **[inferred from code, not
+screenshotted]**: its in-place readout repaint is a no-op in portrait, because `present_rect()` returns
+early on `fb->portrait_mode` (`tests/audio_mix_test.c:466`; the comment at 462-463 says landscape only,
+since `fb_swap()`'s rotation would be needed). **Fix:** make the layout follow the orientation, and either
+give portrait a repaint path or fall back to a full `fb_swap()` there. The operator ruled 2026-09-29 that
+it runs degraded in portrait rather than being refused; it launches from the control panel's Audio page and
+this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
+redraw), which constrains how costly a portrait redraw may be.
 
 ### B45. Unplugging a hub that carries a streaming USB audio card prints a kernel WARNING — open, seen once 2026-10-01
 
@@ -107,11 +139,7 @@ everything on attempt 1. It did not recur in a further 4 m 39 s session; n=1. **
 measured** — **[inferred]** candidate: total draw (xpad, USB audio, dongle, two keyboards behind hub `1a40:0101`)
 against the 500 mA budget.
 
-**Rate (measured, `.188`):** `VBUS_ERROR` in syslog at 14:30:31 (previous boot), 15:08:12, 15:44:49 and 15:48:32 — about one per 35 min under the load below. The two `in a_idle (90, <VBusValid), retry #0` killed the port (`mode` → `b_idle`); the two `in a_host (91, ...) retry #1` did not (stayed `a_host`) — **[inferred]** from two samples each. **Load:** declared `bMaxPower` hub `1a40:0101` 100 mA, C-Media USB audio 100, wired Xbox pad `045e:028e` 500, BT dongle `0b05:1bf6` 100, second hub `1a40:0101` 100, 2.4G receiver `25a7:fa61` 100, keyboard `04d9:a088` 100 — about 1100 mA against the 500 mA port budget. Both hubs report `bmAttributes` 0xe0 (self-powered) but the operator confirms neither has a supply, so the bit lies. Overload is the leading cause, still **[inferred]**. **Next:** (1) the A/B — the operator moves to BT keyboard, audio and pad, leaving only hub and dongle on USB; no `VBUS_ERROR` in `/var/log/messages` over hours is the verdict; (2) automatic recovery — detect `b_idle` and run `usb-host recover` without a tap, justified by the rate. The RESCAN half is shipped and verified on device: at 15:44:49 the port died, RESCAN ran the recover (musb remove, re-register, mode `a_host`, `hci0` re-powered) via `usb_port_dead()`; the negative control, RESCAN on a healthy `a_idle` port, ran no recover (dmesg unchanged, BT pad stayed connected).
-
-### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
-
-The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel.
+**Rate (measured, `.188`):** `VBUS_ERROR` in syslog at 14:30:31 (previous boot), 15:08:12, 15:44:49 and 15:48:32 — about one per 35 min under the load below. The two `in a_idle (90, <VBusValid), retry #0` killed the port (`mode` → `b_idle`); the two `in a_host (91, ...) retry #1` did not (stayed `a_host`) — **[inferred]** from two samples each. **Load:** declared `bMaxPower` hub `1a40:0101` 100 mA, C-Media USB audio 100, wired Xbox pad `045e:028e` 500, BT dongle `0b05:1bf6` 100, second hub `1a40:0101` 100, 2.4G receiver `25a7:fa61` 100, keyboard `04d9:a088` 100 — about 1100 mA against the 500 mA port budget. Both hubs report `bmAttributes` 0xe0 (self-powered) but the operator confirms neither has a supply, so the bit lies. Overload is the leading cause, still **[inferred]**. **Next:** (1) the A/B — the operator moves to BT keyboard, audio and pad, leaving only hub and dongle on USB; no `VBUS_ERROR` in `/var/log/messages` over hours is the verdict. Running on `.188` since 2026-10-02 09:44 device time (USB Xbox pad unplugged); no new `VBUS_ERROR` after the first hour (measured); (2) automatic recovery — detect `b_idle` and run `usb-host recover` without a tap, justified by the rate. The RESCAN half is shipped and verified on device: at 15:44:49 the port died, RESCAN ran the recover (musb remove, re-register, mode `a_host`, `hci0` re-powered) via `usb_port_dead()`; the negative control, RESCAN on a healthy `a_idle` port, ran no recover (dmesg unchanged, BT pad stayed connected).
 
 ### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
 
@@ -123,6 +151,19 @@ reconnect. Console warnings are defects even when harmless. Our image evidently 
 **[inferred]** candidate: the 4.14 parent/child L2CAP socket false positive that upstream later annotated with a
 nesting subclass. **Next:** read `.config` for the lockdep symbols and the upstream change to
 `l2cap_sock_new_connection_cb`; decide between backporting the annotation and dropping lockdep from the image.
+
+### B50. Office Runner in portrait: the floor sits mid-screen, so the runner floats — open, operator report 2026-10-02
+
+Operator's description: in portrait the platform/floor is in the middle of the screen rather than at the bottom,
+so the runner seems to float ("running in the clouds"). Not broken, just not as nice as landscape; not seen by us.
+**[inferred from code]** Portrait is one global flag file,
+`/opt/games/portrait.mode` (`fb_is_portrait_mode()`, `common/framebuffer.c:290`), read by every `fb_init()`
+(`:510`), which swaps the app's width and height. `platformer.c` (the Office Runner binary) never mentions
+`portrait` (grep), so its camera, HUD and level layout assume 800 wide (`fb.width` uses from `:755`). **Possible
+fix (operator's idea):** mandate landscape for it. The hook would be a per-app override of the flag in
+`fb_init()` — `platformer.c:1869` is the call — or a landscape-only manifest key in `app-manifests.sh` read by
+the launcher; neither exists today. Prefer a library hook over a per-app edit. Verify on the panel in both
+orientations.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
@@ -139,49 +180,6 @@ residues:
 2. **The reboot path is unproven.** `S30avahi-daemon` is in place but the link was written directly
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
-
-### B38. Mix Bus Test cracks from ~6 voices under a full redraw — open, confirmed 2026-09-28, parked
-
-**Parked by the operator 2026-09-28 ("we can live with this").** **Cause measured** at `.188` with the
-honest PAD arm (readout band only, via `present_rect`): the full redraw is the trigger — 440 Hz voices
-crack from the 7th under PAD, from the 6th and on every meter redraw under FULL; not clipping
-(`clip=0 lim=0`). Mechanism **[inferred]**: an ALSA underrun at `snd_pcm_writei` that `alsa_recover()`
-hides; `audio_out.c` logs `underran at the write`. Remedies if unparked: a cheaper oscillator than the
-per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, code only]**:
-`native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
-the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
-
-### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
-
-`native_apps/tests/measure_audio_tone_sabotage.sh` case 9 deletes
-`audio_out_set_device_pref(config_audio_device_stored());` from `audio.c`, and prints `NO-OP EDIT —
-pattern rotted`: since `8a62c31` the line reads `audio_out_set_device_pref(pref ? pref :
-config_audio_device_stored());` in `audio_init_unchecked_pref()` (`git show HEAD~1:native_apps/common/audio.c`
-has zero copies of the old form). So group J's only host-reachable sabotage has proved nothing since
-2026-09-28. **Fix:** re-key the `sed` to the current line, then confirm case 9 reports failures again
-(and case 10 still its documented 0).
-
-### B44. Mix Bus Test is not layout-sensitive, so it runs degraded in portrait — open, operator request 2026-09-29
-
-`native_apps/tests/audio_mix_test.c` lays out for landscape only. Known defect **[inferred from code, not
-screenshotted]**: its in-place readout repaint is a no-op in portrait, because `present_rect()` returns
-early on `fb->portrait_mode` (`tests/audio_mix_test.c:466`; the comment at 462-463 says landscape only,
-since `fb_swap()`'s rotation would be needed). **Fix:** make the layout follow the orientation, and either
-give portrait a repaint path or fall back to a full `fb_swap()` there. The operator ruled 2026-09-29 that
-it runs degraded in portrait rather than being refused; it launches from the control panel's Audio page and
-this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
-redraw), which constrains how costly a portrait redraw may be.
-
-### B50. Office Runner does not look right in portrait mode — open, operator report 2026-10-01, not reproduced
-
-Reported by the operator; not seen by us. **[inferred from code]** Portrait is one global flag file,
-`/opt/games/portrait.mode` (`fb_is_portrait_mode()`, `common/framebuffer.c:290`), read by every `fb_init()`
-(`:510`), which swaps the app's width and height. `platformer.c` (the Office Runner binary) never mentions
-`portrait` (grep), so its camera, HUD and level layout assume 800 wide (`fb.width` uses from `:755`). **Possible
-fix (operator's idea):** mandate landscape for it. The hook would be a per-app override of the flag in
-`fb_init()` — `platformer.c:1869` is the call — or a landscape-only manifest key in `app-manifests.sh` read by
-the launcher; neither exists today. Prefer a library hook over a per-app edit. Verify on the panel in both
-orientations.
 
 ## Features
 
@@ -283,19 +281,15 @@ the single connector. BlueZ userspace is cross-built (step 1 below) and boots fr
 **Next:**
 
 **Bluetooth page follow-ups** (`native_apps/control_panel/bluetooth_page.c`, `bt_ctl.c`):
-   - **Adapter name.** A phone sees the unit as "BlueZ 5.66", `bluetoothd`'s default alias (measured,
-     `bluetoothctl show`). Rename it to the unit's hostname — `Name=` in `main.conf`, or `system-alias` from the page.
    - **Scan results share the known-device list** (`bt_ctl.c:155-194` keeps one `dev[]` array). A newly scanned
      device stays at its discovery position and a connected one does not move up. Operator wants scan results in a
      separate list from known/paired devices.
-   - **USE FOR AUDIO names no device** (`bluetooth_page.c:658`, `AUDIO_BT_PCM` = `plug:bluealsa` at
-     `common/audio_out.c:519`). With two A2DP sinks the stream goes to whichever BlueALSA picks; observed 2026-10-01
-     with Jabra Evolve 75 + Sony WI-C310: turning the Sony off dropped the audio briefly and it returned on the
-     Jabra **[inferred: BlueALSA defaults to the most recently connected sink; not measured]**. Direction: pin the PCM
-     to the selected address (`plug:bluealsa:DEV=<addr>`) when the button is tapped. The Jabra is multipoint (also
-     linked to another source), which may cause gaps of its own **[unmeasured]**.
-   - **A headset needed a manual CONNECT after POWER off/on** from the page (pad and keyboard reconnected by
-     themselves). Direction: on power-on, connect trusted audio devices **[unmeasured: whether the headset accepts]**.
+   - **Nice to have (operator 2026-10-02): fail over between BT sinks around a pinned headset.** With a pinned
+     headset absent, play on another connected BT sink instead of the speaker, and return to the pinned one when it
+     reconnects, under both OUT=BLUETOOTH and AUTO. Today an absent pin falls back to USB DAC, else onboard
+     (the pin itself is in `native_apps/CLAUDE.md`). Observed under AUTO: after failing over to the VT360, the
+     WI-C310 reconnecting did not take the audio back. Whether this is a small change in `common/audio_out.c`'s
+     device selection is under evaluation **[unmeasured]**.
    - **The passkey-entry overlay is untested on a device** (`BT_PROMPT_DISPLAY_PASSKEY`, `bluetooth_page.c:247`): no
      keyboard at hand requested a passkey. Numeric comparison was tested OK.
    **Goal (operator's decision):** BT keyboard, BT audio and BT pad, leaving only the dongle on USB.
@@ -425,20 +419,6 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
-
-The operator inherited many BeagleBone Black boards (photos in `beaglebone/image/`). **Measured from the
-photos:** TI AM3358 (Cortex-A8, 1 GHz — also no hardware integer divide), TPS65217C PMIC, 512 MB DDR3,
-eMMC, SMSC LAN8710A PHY, an NXP HDMI framer to micro-HDMI, USB-A host, mini-USB, microSD, P8/P9 headers.
-
-**Inferred, not built:** our apps need only `/dev/fb0`, evdev and ALSA, so the differences are board-specific —
-no touch panel, other LED/backlight/watchdog paths, no speaker GPIO or bezel, 5 V power. That points to a
-**board-profile layer** under `common/hardware.c`, `common/touch_input.c` and `commissioning/` rather than
-`#ifdef`s. Our binaries are soft-float against the RoomWizard rootfs while stock BBB Debian is hard-float, so
-this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel with DRM fbdev emulation; the
-RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
-paths a launcher plus one game actually touch, listed from a BBB boot.
-
 ### F103. Software power-off: make `poweroff` more than a halt — open, asked by the operator 2026-09-29
 
 **Today `poweroff` is `halt`.** Measured on .188 (our 4.14.52 image): `twl4030_power_off`, `pm_power_off`
@@ -485,6 +465,20 @@ the interval with no tap, an idle page does not repaint, and no re-probe runs un
 the panel: the page's "+N MORE" row (shown when the list outgrows the rows that fit; .188 has 7 devices and
 all fit), so plug in enough devices to see it.
 
+### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
+
+The operator inherited many BeagleBone Black boards (photos in `beaglebone/image/`). **Measured from the
+photos:** TI AM3358 (Cortex-A8, 1 GHz — also no hardware integer divide), TPS65217C PMIC, 512 MB DDR3,
+eMMC, SMSC LAN8710A PHY, an NXP HDMI framer to micro-HDMI, USB-A host, mini-USB, microSD, P8/P9 headers.
+
+**Inferred, not built:** our apps need only `/dev/fb0`, evdev and ALSA, so the differences are board-specific —
+no touch panel, other LED/backlight/watchdog paths, no speaker GPIO or bezel, 5 V power. That points to a
+**board-profile layer** under `common/hardware.c`, `common/touch_input.c` and `commissioning/` rather than
+`#ifdef`s. Our binaries are soft-float against the RoomWizard rootfs while stock BBB Debian is hard-float, so
+this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel with DRM fbdev emulation; the
+RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
+paths a launcher plus one game actually touch, listed from a BBB boot.
+
 ### F107. Control Panel menu has no keyboard navigation — open, measured by the operator on .188 2026-10-01
 
 A keyboard works in the Input page's keyboard tester but cannot move around the menu. `control_panel.c`'s main
@@ -510,9 +504,9 @@ nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spin
 voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
 timeout. **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
 
-### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
+### F110. USB page RESCAN gives no feedback when nothing changed — open, operator report 2026-10-01
 
-The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
+The control panel's USB page repaints only on change, so a RESCAN that reads the same list flickers the button and shows nothing; the operator could not tell it did anything. Add a "no change" line through the page's existing `status_msg` mechanism. **Done when** a RESCAN on an unchanged bus shows a status line on the panel.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
@@ -528,6 +522,10 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 `native_apps/build-and-deploy.sh:307`; manifests name them in `app-manifests.sh:39-47`. **Fix:** one generator in
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
+
+### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
+
+The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
 
 ## Structural and cleanup
 

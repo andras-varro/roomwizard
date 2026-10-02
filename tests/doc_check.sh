@@ -906,6 +906,8 @@ group_c() {
 # text to cut; the plan shed its done steps, and its ceiling was not lowered, for the reason above.
 # 2026-10-02: native_apps/CLAUDE.md 766 -> 771. The canonical pad-code rule (xpad codes, per-pad layout, translate at read time) is new
 # content with no stale text to cut; its device-side facts went into the existing 8BitDo paragraph of SYSTEM_ANALYSIS.md.
+# 2026-10-02: native_apps/CLAUDE.md 771 -> 775. The audio_bt_addr pin (PCM string, absent-pin fallback, why not plug:...DEV=) is new
+# content with no stale text to cut; the plan shed the follow-up that asked for it.
 #
 #
 #
@@ -918,7 +920,7 @@ ceilings() {
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-771	native_apps/CLAUDE.md
+775	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
