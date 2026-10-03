@@ -19,6 +19,9 @@
  *
  * Groups 8-9 are the testers' hold-to-exit timing (ui_hold_*).  They cannot
  * see whether a tester feeds it the right key codes, nor the bar it draws.
+ * Groups 10-11 are the mouse tester's LEFT+RIGHT chord (ui_chord_button) and
+ * the one timer it shares with the exit keys (ui_hold_either) — the same
+ * blindness: which evdev codes reach them is input_page.c's, on the panel.
  */
 #include "ui_focus.h"
 #include <stdio.h>
@@ -228,6 +231,61 @@ int main(void) {
         ui_hold_key(&h, 0, 2200);
         ui_hold_progress(h.down, 4000, h.start_ms, UI_HOLD_EXIT_MS, &ex);
         expect("short press after release: no exit", ex, 0);
+    }
+
+    printf("group 10 mouse chord: LEFT+RIGHT together, either release resets\n");
+    {
+        UiChord c = { false, false, { false, 0 } };
+        ui_chord_button(&c, false, 1, 100);
+        expect("left alone: shown",             c.left, 1);
+        expect("left alone: no hold",           c.hold.down, 0);
+        ui_chord_button(&c, false, 2, 150);
+        expect("left repeat: still no hold",    c.hold.down, 0);
+        bool ex = true;
+        ui_hold_progress(c.hold.down, 9000, c.hold.start_ms, UI_HOLD_EXIT_MS, &ex);
+        expect("left held long: no exit",       ex, 0);
+        ui_chord_button(&c, true, 1, 1000);
+        expect("right joins: hold starts",      c.hold.down, 1);
+        expect("starts when BOTH are down",     (int)c.hold.start_ms, 1000);
+        ui_chord_button(&c, true, 2, 1200);
+        ui_chord_button(&c, false, 1, 1300);
+        expect("repeat / second press: same start", (int)c.hold.start_ms, 1000);
+        ui_chord_button(&c, false, 0, 1400);
+        expect("left released: hold ends",      c.hold.down, 0);
+        expect("right still shown",             c.right, 1);
+        ui_chord_button(&c, false, 2, 1450);
+        expect("a stray 2 is no press",         c.left, 0);
+        expect("a stray 2 starts nothing",      c.hold.down, 0);
+        ui_chord_button(&c, false, 1, 2000);
+        expect("left back: hold restarts",      (int)c.hold.start_ms, 2000);
+        ui_hold_progress(c.hold.down, 3500, c.hold.start_ms, UI_HOLD_EXIT_MS, &ex);
+        expect("both held 1.5 s: exit",         ex, 1);
+        ui_chord_button(&c, true, 0, 3000);
+        expect("right released: hold ends",     c.hold.down, 0);
+        UiChord r = { false, false, { false, 0 } };
+        ui_chord_button(&r, true, 1, 50);
+        expect("right alone: shown",            r.right, 1);
+        expect("right alone: no hold",          r.hold.down, 0);
+    }
+
+    printf("group 11 two triggers, one timer\n");
+    {
+        UiHold off = { false, 0 }, k = { true, 1000 }, m = { true, 1600 };
+        UiHold e = ui_hold_either(&off, &off);
+        expect("neither: up",                   e.down, 0);
+        e = ui_hold_either(&k, &off);
+        expect("key only: down",                e.down, 1);
+        expect("key only: its start",           (int)e.start_ms, 1000);
+        e = ui_hold_either(&off, &m);
+        expect("chord only: down",              e.down, 1);
+        expect("chord only: its start",         (int)e.start_ms, 1600);
+        e = ui_hold_either(&k, &m);
+        expect("both: the earlier start",       (int)e.start_ms, 1000);
+        e = ui_hold_either(&m, &k);
+        expect("both, swapped: the earlier",    (int)e.start_ms, 1000);
+        UiHold w1 = { true, 0xFFFFFF00u }, w2 = { true, 0x40u };
+        e = ui_hold_either(&w2, &w1);
+        expect("across the wrap: the earlier",  e.start_ms == 0xFFFFFF00u, 1);
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "REGRESSION" : "ALL PASS",

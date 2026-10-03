@@ -175,3 +175,23 @@ int ui_hold_progress(bool down, uint32_t now, uint32_t start, uint32_t hold_ms,
     if (hold_ms > UINT32_MAX / 1000u) return 0;
     return (int)(held * 1000u / hold_ms);
 }
+
+void ui_chord_button(UiChord *c, bool right, int value, uint32_t now) {
+    bool *b = right ? &c->right : &c->left;
+    if (value == 1)      *b = true;
+    else if (value == 0) *b = false;
+    else return;                          /* 2 and anything else: no change */
+    if (c->left && c->right) {
+        if (!c->hold.down) { c->hold.down = true; c->hold.start_ms = now; }
+    } else {
+        c->hold.down = false;
+    }
+}
+
+UiHold ui_hold_either(const UiHold *a, const UiHold *b) {
+    if (!a->down) return *b;
+    if (!b->down) return *a;
+    /* Both down: the earlier start, compared as a signed difference so a
+     * pair straddling the clock's wrap still orders correctly. */
+    return (int32_t)(a->start_ms - b->start_ms) <= 0 ? *a : *b;
+}

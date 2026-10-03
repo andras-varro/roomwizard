@@ -115,6 +115,12 @@ typedef struct {
     unsigned long node_sig;            /* /dev/input's listing when last scanned */
     uint32_t     poll_ms;              /* when it was last listed; 0 = list now */
     UiHold       hold;                 /* the tester's exit key: Esc, or a pad's Select/Start */
+    UiChord      chord;                /* the mouse tester's LEFT+RIGHT exit */
+    /* The mouse tester's exit keys: every keyboard and pad node, read only for
+     * Esc and Select/Start (keys are not under test there, so not shown). */
+    int          xfds[MAX_INPUT_DEV];
+    int          xfd_dev[MAX_INPUT_DEV];
+    int          xfd_cnt;
 } InputState;
 
 static InputState input_state;
@@ -244,10 +250,27 @@ static int input_open_kind(InputState *s, DevType t) {
     return s->fd_cnt;
 }
 
+/* The mouse tester's exit keys: every keyboard and pad node, alongside the
+ * mice input_open_kind() opened.  A keyboard+touchpad combo is skipped — it is
+ * a mouse node, already open, and input_proc_mouse() reads its Esc. */
+static void input_open_exit_keys(InputState *s) {
+    for (int i=0; i<s->dev_cnt && s->xfd_cnt<MAX_INPUT_DEV; i++) {
+        if (s->devs[i].type!=DEV_KEYBOARD && s->devs[i].type!=DEV_GAMEPAD) continue;
+        int fd=open(s->devs[i].path, O_RDONLY|O_NONBLOCK);
+        if (fd<0) continue;
+        s->xfds[s->xfd_cnt]=fd;
+        s->xfd_dev[s->xfd_cnt]=i;
+        s->xfd_cnt++;
+    }
+}
+
 static void input_close(InputState *s) {
     for (int k=0; k<s->fd_cnt; k++)
         if (s->fds[k]>=0) close(s->fds[k]);
+    for (int k=0; k<s->xfd_cnt; k++)
+        if (s->xfds[k]>=0) close(s->xfds[k]);
     s->fd_cnt=0;
+    s->xfd_cnt=0;
     s->last_dev=-1;
 }
 
@@ -349,6 +372,11 @@ static int input_proc_mouse(const Framebuffer *fb, InputState *s) {
   for (int k=0; k<s->fd_cnt; k++) {
     struct input_event e;
     while (read(s->fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
+        if (e.type==EV_KEY && e.code==KEY_ESC) {
+            /* A keyboard+touchpad combo's Esc: the exit key, not shown. */
+            ui_hold_key(&s->hold, e.value, get_time_ms());
+            continue;
+        }
         if (e.type==EV_REL || e.type==EV_KEY) { s->last_dev=s->fd_dev[k]; n++; }
         if (e.type==EV_REL) {
             if (e.code==REL_X) {
@@ -367,10 +395,29 @@ static int input_proc_mouse(const Framebuffer *fb, InputState *s) {
             if (e.code==BTN_LEFT) s->mou.bl=p;
             else if (e.code==BTN_MIDDLE) s->mou.bm=p;
             else if (e.code==BTN_RIGHT) s->mou.br=p;
+            /* Each button is still shown alone; held TOGETHER they exit. */
+            if (e.code==BTN_LEFT || e.code==BTN_RIGHT)
+                ui_chord_button(&s->chord, e.code==BTN_RIGHT, e.value, get_time_ms());
         }
     }
   }
   return n;
+}
+
+/* The mouse tester's exit keys (input_open_exit_keys()): Esc, and a pad's
+ * Select/Start in native codes, feed the hold; nothing else is looked at and
+ * nothing is shown, so this never asks for a repaint. */
+static void input_proc_exit_keys(InputState *s) {
+  for (int k=0; k<s->xfd_cnt; k++) {
+    const InputDev *d=&s->devs[s->xfd_dev[k]];
+    struct input_event e;
+    while (read(s->xfds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
+        if (e.type!=EV_KEY) continue;
+        int c = d->type==DEV_GAMEPAD ? input_pad_key(d->pad_layout, e.code) : e.code;
+        if (d->type==DEV_KEYBOARD ? c==KEY_ESC : (c==BTN_SELECT || c==BTN_START))
+            ui_hold_key(&s->hold, e.value, get_time_ms());
+    }
+  }
 }
 
 static int input_proc_pad(InputState *s) {
@@ -593,7 +640,9 @@ static void input_page_draw(Framebuffer *fb) {
 
 /* ── Draw: hold to exit ─────────────────────────────────────────────── */
 /* The keyboard and pad testers show every key, so a key leaves them only when
- * HELD (ui_hold_*, UI_HOLD_EXIT_MS).  The static screen carries a one-line
+ * HELD (ui_hold_*, UI_HOLD_EXIT_MS); the mouse tester, which shows every
+ * button, also takes LEFT+RIGHT held together (ui_chord_button()) on the same
+ * timer and bar.  The static screen carries a one-line
  * hint under the title; while the key is held, this band — right of the BACK
  * button, down to just above the tester's info line, inside SCREEN_SAFE_* —
  * shows the hint and a bar filling over the hold, and is the ONLY part of the
@@ -634,6 +683,19 @@ static int hold_fill_px(const Button *back, int permille) {
 
 #define KBD_HOLD_HINT "HOLD ESC TO EXIT"
 #define PAD_HOLD_HINT "HOLD SELECT OR START TO EXIT"
+#define MOU_HOLD_HINT "HOLD ESC OR LEFT+RIGHT TO EXIT"
+#define MOU_HOLD_HINT_SHORT "HOLD ESC OR L+R TO EXIT"
+
+/* The mouse hint, the long form wherever it fits both the band right of BACK
+ * and the line under the title: 180 px at scale 1, against a band of
+ * SCREEN_SAFE_WIDTH - 120 (under 360 only in portrait), so the short form is
+ * for a unit with an unusually wide inset. */
+static const char *mou_hold_hint(void) {
+    UiRect r = hold_band(&input_btn_mback);
+    int w = text_measure_width(MOU_HOLD_HINT, 1);
+    return (w <= r.w - 8 && w <= SCREEN_SAFE_WIDTH - 8) ? MOU_HOLD_HINT
+                                                        : MOU_HOLD_HINT_SHORT;
+}
 
 /* ── Draw: Keyboard fullscreen ──────────────────────────────────────── */
 static void draw_kbd_test(Framebuffer *fb, InputState *s) {
@@ -689,6 +751,7 @@ static void draw_mou_test(Framebuffer *fb, InputState *s) {
     button_draw(fb, &input_btn_mback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
                        "MOUSE TEST", COLOR_WHITE, 3);
+    draw_hold_hint(fb, mou_hold_hint());
     int sw=screen_base_width, sh=screen_base_height;
     int ax=SCREEN_SAFE_LEFT+20, ay=SCREEN_SAFE_TOP+55, aw=sw-240, ah=sh-ay-20;
     fb_fill_rounded_rect(fb,ax,ay,aw,ah,6,RGB(15,15,25));
@@ -912,6 +975,7 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
     if (button_update(&input_btn_mtest, tx, ty, touching, now)) {
         memset(&state->mou, 0, sizeof(state->mou));
         if (input_open_kind(state, DEV_MOUSE) > 0) {
+            input_open_exit_keys(state);
             state->scr = INPUT_SCR_MOUSE;
             act = CP_PAGE_FULLSCREEN;
         }
@@ -1012,7 +1076,8 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
 /* ── Full-screen: the testers ───────────────────────────────────────────── */
 
 /* After input() returned CP_PAGE_FULLSCREEN.  Runs until the tester's BACK, a
- * held exit key (Esc; a pad's Select or Start) for UI_HOLD_EXIT_MS (or
+ * held exit key (Esc; a pad's Select or Start) or, in the mouse tester, LEFT
+ * and RIGHT held together, for UI_HOLD_EXIT_MS (or
  * a signal asking the panel to quit), then closes every node it opened: its
  * hardware is its own to clean up. */
 static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
@@ -1048,6 +1113,7 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     bool scroll_lit = false;               /* as last painted */
     int hold_px = -1;                      /* exit bar's fill as last painted, -1 none */
     memset(&state->hold, 0, sizeof(state->hold));
+    memset(&state->chord, 0, sizeof(state->chord));
     while (cp_running() && state->scr != INPUT_SCR_MAIN) {
         uint32_t now = get_time_ms();
 
@@ -1062,17 +1128,23 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         if (scroll_lit && now - state->mou.scroll_t >= SCROLL_LIT_MS)
             dirty = true;                  /* the dot has to go out */
 
-        /* Hold to exit: the keyboard and pad testers.  The held key's press
-         * edge is never seen as BACK after this — run_current_fullscreen_mode()
-         * drains the pad layer, which then holds it as already down. */
+        /* Hold to exit: every tester.  The held key's press edge is never
+         * seen as BACK after this — run_current_fullscreen_mode() drains the
+         * pad layer, which then holds it as already down.  The mouse tester
+         * has two triggers on one timer: an exit key, or LEFT+RIGHT. */
+        if (state->scr == INPUT_SCR_MOUSE) input_proc_exit_keys(state);
         const Button *hold_back = state->scr == INPUT_SCR_KEYBOARD ? &input_btn_kback
                                 : state->scr == INPUT_SCR_GAMEPAD  ? &input_btn_gback
+                                : state->scr == INPUT_SCR_MOUSE    ? &input_btn_mback
                                 : NULL;
+        UiHold hold = state->scr == INPUT_SCR_MOUSE
+                    ? ui_hold_either(&state->hold, &state->chord.hold)
+                    : state->hold;
         int hold_pm = 0;
         if (hold_back) {
             bool hold_exit = false;
-            hold_pm = ui_hold_progress(state->hold.down, get_time_ms(),
-                                       state->hold.start_ms, UI_HOLD_EXIT_MS,
+            hold_pm = ui_hold_progress(hold.down, get_time_ms(),
+                                       hold.start_ms, UI_HOLD_EXIT_MS,
                                        &hold_exit);
             if (hold_exit) {
                 input_close(state); state->scr = INPUT_SCR_MAIN;
@@ -1080,9 +1152,15 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
             }
         }
         const char *hold_hint = state->scr == INPUT_SCR_KEYBOARD ? KBD_HOLD_HINT
+                              : state->scr == INPUT_SCR_MOUSE    ? mou_hold_hint()
                                                                  : PAD_HOLD_HINT;
 
-        if (!dirty && hold_back && state->hold.down &&
+        /* A hold that ended with no event this tester shows — the mouse
+         * tester's exit keys are read unshown — still has to take its bar
+         * down. */
+        if (hold_back && !hold.down && hold_px >= 0) dirty = true;
+
+        if (!dirty && hold_back && hold.down &&
             hold_fill_px(hold_back, hold_pm) != hold_px) {
             /* The bar alone moved: repaint and present only its band. */
             draw_hold_band(fb, hold_back, hold_hint, hold_pm);
@@ -1102,7 +1180,7 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
                 default: break;
             }
             hold_px = -1;
-            if (hold_back && state->hold.down) {   /* a full frame mid-hold keeps the bar */
+            if (hold_back && hold.down) {   /* a full frame mid-hold keeps the bar */
                 draw_hold_band(fb, hold_back, hold_hint, hold_pm);
                 hold_px = hold_fill_px(hold_back, hold_pm);
             }

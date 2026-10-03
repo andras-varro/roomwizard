@@ -90,4 +90,23 @@ void ui_hold_key(UiHold *h, int value, uint32_t now);
 int ui_hold_progress(bool down, uint32_t now, uint32_t start, uint32_t hold_ms,
                      bool *exit);
 
+/* The mouse tester shows every button, so its button exit is a CHORD: LEFT
+ * and RIGHT held together.  The hold starts on the event that makes both
+ * down and ends on the first release of either; one button alone never
+ * starts it. */
+typedef struct {
+    bool   left, right;  /* each button's level, as its events last said */
+    UiHold hold;         /* both down, and since when */
+} UiChord;
+
+/* Feed one EV_KEY value of BTN_LEFT (right false) or BTN_RIGHT (right true),
+ * read at now.  1 is down, 0 is up, and 2 changes nothing — buttons do not
+ * autorepeat, but a stray 2 is never taken as a press. */
+void ui_chord_button(UiChord *c, bool right, int value, uint32_t now);
+
+/* Two triggers, one timer: down while either is, timed from the EARLIER start
+ * of those down (wrap-safe), so releasing one trigger while the other is
+ * still held keeps the hold going from the other's own start. */
+UiHold ui_hold_either(const UiHold *a, const UiHold *b);
+
 #endif /* UI_FOCUS_H */
