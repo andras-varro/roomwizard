@@ -1,11 +1,14 @@
-musb_cleanup_urb(): do not spend ~1 s with IRQs off flushing the TX FIFO of
-a device that is gone.
+musb_host: do not spend ~1 s with IRQs off flushing the TX FIFO of a device
+that is gone.
 
 Behind an unplugged hub the TX FIFO never drains, and musb_h_tx_flush_fifo()
 retries 1000 x mdelay(1) under musb->lock with IRQs off. dev_WARN_ONCE only
-silences the second and later prints, not the stall. When the URB's device
-is NOTATTACHED, try 10 times and report at dev_dbg; every other caller keeps
-upstream's 1000 and its warning.
+silences the second and later prints, not the stall. The hub_event dequeue
+pays it twice per URB: once in musb_cleanup_urb(), and again in
+musb_ep_program() when musb_advance_schedule() starts the dead device's next
+queued URB on the same endpoint. Every TX flush that has a URB in hand now
+tries 10 times and reports at dev_dbg when that URB's device is NOTATTACHED;
+a live device keeps upstream's 1000 and its warning.
 
 SPDX-License-Identifier: GPL-2.0-only
 
@@ -26,7 +29,7 @@ SPDX-License-Identifier: GPL-2.0-only
  
  	csr = musb_readw(epio, MUSB_TXCSR);
  	while (csr & MUSB_TXCSR_FIFONOTEMPTY) {
-@@ -135,14 +135,32 @@
+@@ -135,14 +135,45 @@
  		 * Better to turn on musb_dbg() in musb_cleanup_urb() with
  		 * CPPI enabled to see the issue when aborting the tx channel.
  		 */
@@ -51,30 +54,54 @@ SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * A FIFO whose device is gone (behind an unplugged hub, say) never drains,
 + * and each try is 1 ms with IRQs off on a single core: 1000 tries made every
-+ * recurrence a ~1 s stall that dev_WARN_ONCE only hid after the first. Live
-+ * devices keep upstream's budget; musb_cleanup_urb() gives a gone one 10.
++ * recurrence a ~1 s stall that dev_WARN_ONCE only hid after the first.
++ * usb_disconnect() marks the device and all its children NOTATTACHED before
++ * usb_disable_device() flushes their endpoints, so every flush on that path
++ * sees the URB's device as gone: musb_cleanup_urb()'s own, and the one in
++ * musb_ep_program() when musb_advance_schedule() starts the dead device's
++ * next queued URB on the same endpoint. Those get 10 tries; a live device
++ * keeps upstream's 1000 and its warning.
 + */
 +static void musb_h_tx_flush_fifo(struct musb_hw_ep *ep)
 +{
 +	musb_h_tx_flush_fifo_budget(ep, 1000, false);
 +}
 +
++static void musb_h_tx_flush_fifo_urb(struct musb_hw_ep *ep, struct urb *urb)
++{
++	if (urb && urb->dev && urb->dev->state == USB_STATE_NOTATTACHED)
++		musb_h_tx_flush_fifo_budget(ep, 10, true);
++	else
++		musb_h_tx_flush_fifo(ep);
++}
++
  static void musb_h_ep0_flush_fifo(struct musb_hw_ep *ep)
  {
  	void __iomem	*epio = ep->regs;
-@@ -2401,7 +2419,14 @@
+@@ -784,7 +815,7 @@
+ 			 * case
+ 			 */
+ 			if (!hw_ep->tx_double_buffered)
+-				musb_h_tx_flush_fifo(hw_ep);
++				musb_h_tx_flush_fifo_urb(hw_ep, urb);
+ 
+ 			/*
+ 			 * We must not clear the DMAMODE bit before or in
+@@ -1328,7 +1359,7 @@
+ 		/* do the proper sequence to abort the transfer in the
+ 		 * usb core; the dma engine should already be stopped.
+ 		 */
+-		musb_h_tx_flush_fifo(hw_ep);
++		musb_h_tx_flush_fifo_urb(hw_ep, urb);
+ 		tx_csr &= ~(MUSB_TXCSR_AUTOSET
+ 				| MUSB_TXCSR_DMAENAB
+ 				| MUSB_TXCSR_H_ERROR
+@@ -2401,7 +2432,7 @@
  		if (is_dma_capable() && dma)
  			musb_platform_clear_ep_rxintr(musb, ep->epnum);
  	} else if (ep->epnum) {
 -		musb_h_tx_flush_fifo(ep);
-+		/* usb_disconnect() marks the device and all its children
-+		 * NOTATTACHED before usb_disable_device() flushes their
-+		 * endpoints, so this dequeue sees the device as gone.
-+		 */
-+		if (urb->dev && urb->dev->state == USB_STATE_NOTATTACHED)
-+			musb_h_tx_flush_fifo_budget(ep, 10, true);
-+		else
-+			musb_h_tx_flush_fifo(ep);
++		musb_h_tx_flush_fifo_urb(ep, urb);
  		csr = musb_readw(epio, MUSB_TXCSR);
  		csr &= ~(MUSB_TXCSR_AUTOSET
  			| MUSB_TXCSR_DMAENAB
