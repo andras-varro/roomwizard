@@ -182,14 +182,6 @@ stall again, up to ~4 s of silence. **Open work, on the next occurrence:** read 
 the "stalled" line and its time, correlate with `/var/log/messages`, and optionally run `bluealsa` verbose. **Done when**
 a recurrence is attributed to one of the two mechanisms, or none recurs over a long session.
 
-### B52. Portrait rotated swap cost: fixed and deployed, not verified by ear — open until the operator confirms
-
-**Measured, Frogger on BT audio, `.188` 2026-10-02, CPU from `/proc/<pid>/stat` over 10 s:** landscape 51 % (~34 ms of
-work per frame beside the 33 ms `usleep`, 0 underruns); portrait 63 % (~56 ms, 2 BT underruns per 10 s, audible
-hiccups); after the row-by-row rotated `fb_swap`, portrait 54 % (~39 ms, 0 underruns in 10 s). The rotated output is
-byte-identical to the old one (`fb_rotate_test`). **Not yet measured:** a longer listening session in portrait on BT.
-**Done when** the operator hears no hiccups over a longer portrait BT session.
-
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -497,13 +489,6 @@ stays at its discovery position and a connected one does not move up. The operat
 list; how device selection then works is under evaluation **[unmeasured]**. Code: `native_apps/control_panel/bluetooth_page.c`,
 `bt_ctl.c`. **Done when** the page shows paired/connected devices apart from scan results and a connected device
 leads its list.
-
-### F114. Loudness: is a game quieter than the vendor's `aplay` at equal amplitude? — open question
-
-An onboard probe tone at amplitude 6000 was faint while the mixer read 0 dB. Compare loudness game-vs-game and
-against the vendor's `aplay` at equal amplitude, by ear on `.188` (onboard, USB dongle, `control_panel` TEST AUDIO,
-ScummVM) **[inferred: amplitude only; nothing measured beyond that one tone]**. **Done when** the question is
-answered, or closed as the known ~50 % OSS attenuation.
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 
