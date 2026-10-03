@@ -125,7 +125,7 @@ Mouse sensitivity and gamepad button mapping are configurable via `/etc/input_co
 
 ### Auto-Detection
 
-Devices are auto-detected by scanning `/dev/input/event*` every 5 seconds. USB hotplug is fully supported — plug in a controller mid-game and it works immediately.
+Devices are auto-detected by watching the `/dev/input` fingerprint every 1 s and rescanning on a change. USB hotplug is fully supported — plug in a controller mid-game and it works immediately.
 
 ## Backend Files
 

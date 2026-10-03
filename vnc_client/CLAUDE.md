@@ -160,7 +160,7 @@ Touch maps to pointer events; USB keyboard maps through a keysym table; USB mous
 acceleration (<3 px 1:1, 3–10 px 2×, >10 px 4×) — the same constants as `common/gamepad.c` and
 the ScummVM backend — three copies of one table, which is the argument for extracting a shared layer.
 
-Devices are rescanned every 5 seconds for hotplug. Configuration is
+Hotplug: the `/dev/input` fingerprint is checked every 1 s and devices are rescanned only on a change. Configuration is
 `/etc/input_config.conf`, documented once in
 [`../native_apps/README.md`](../native_apps/README.md#input-configuration).
 

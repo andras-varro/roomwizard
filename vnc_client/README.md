@@ -350,7 +350,7 @@ Button support:
 
 ### Auto-Detection
 
-USB devices are auto-detected by scanning `/dev/input/event*` **every 5 seconds**. USB hotplug is fully supported — plug in a keyboard or mouse while the VNC client is running and it starts working immediately.
+USB devices are auto-detected by watching the `/dev/input` fingerprint **every 1 s** and rescanning on a change. USB hotplug is fully supported — plug in a keyboard or mouse while the VNC client is running and it starts working immediately.
 
 ### Touch Preserved
 
@@ -363,7 +363,7 @@ Mouse sensitivity is configurable via `/etc/input_config.conf` (shared with nati
 ```ini
 # /etc/input_config.conf
 mouse_sensitivity=1.0
-mouse_acceleration=1
+mouse_acceleration=2.0
 ```
 
 See [native_apps/README.md](../native_apps/README.md#input-configuration) for the full configuration reference.

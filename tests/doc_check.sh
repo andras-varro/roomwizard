@@ -365,7 +365,6 @@ RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 1486	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 22,317	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 button_check_tap	native_apps/CLAUDE.md	-
-RESCAN_INTERVAL_MS	native_apps/CLAUDE.md	-
 rw_provision_push_installs	lib/CLAUDE.md	-
 rw_provision_check_keeps	device-files/CLAUDE.md	-
 rw_clean_validate	device-files/CLAUDE.md	SYSTEM_ANALYSIS.md

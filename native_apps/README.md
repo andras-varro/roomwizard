@@ -147,7 +147,7 @@ Gamepad button mapping is configurable to support clone/third-party controllers 
 
 ### USB Hotplug
 
-All apps scan `/dev/input/event*` for newly connected USB devices **every 5 seconds**, so an app never
+All apps scan `/dev/input/event*` for newly connected USB devices (a `/dev/input` fingerprint check **every 1 s**, rescanning only on a change), so an app never
 holds a stale device handle: whenever a node appears, the app picks it up within seconds and no restart
 is needed.
 
@@ -176,40 +176,18 @@ peripherals in **before** you power the unit, or run the `recover` command above
 
 ### Input Configuration
 
-All input settings are stored in `/etc/input_config.conf`, shared across all native apps and the ScummVM backend.
+`/etc/input_config.conf` is read by one parser (`input_config_parse_line()` in `common/input_scan.c`) for every native app, `vnc_client` and the ScummVM backend. One `key=value` per line; `#` lines, blank lines, empty values, unknown keys and out-of-range numbers are skipped, so every key is optional.
 
-```ini
-# /etc/input_config.conf — Unified input configuration
-# All values are optional; defaults are used if omitted.
+| Key | Accepted | Default |
+|---|---|---|
+| `mouse_sensitivity` | float, 0.1 < v < 20 | 1.5 |
+| `mouse_acceleration` | float multiplier, 0.1 < v < 20 | 2.0 |
+| `mouse_low_threshold` / `mouse_high_threshold` | int, 0–99 / 1–499 (pixels per event) | 3 / 15 |
+| `gamepad_deadzone` | int percent of half-range, 0–100 | 25 |
+| `gamepad_btn_jump` `_run` `_action` `_pause` `_back` `_north` `_tl` `_tr` | any int, evdev button code (xpad layout) | 304 305 308 315 314 307 310 311 |
+| `gamepad_hat_x` / `_hat_y`, `gamepad_stick_lx` `_ly` `_rx` `_ry` | any int, evdev axis code | 16 17, 0 1 3 4 |
 
-# Mouse sensitivity multiplier (float, default: 1.0)
-# Higher = faster cursor movement
-mouse_sensitivity=1.0
-
-# Mouse acceleration enable (0 = off, 1 = on, default: 1)
-mouse_acceleration=1
-
-# Gamepad analog stick dead zone (0–32767, default: 8000)
-# Movements below this threshold are ignored
-gamepad_deadzone=8000
-
-# Gamepad button remapping for clone controllers
-# Format: gamepad_btn_<abstract>=<linux_evdev_code>
-# Use evtest on device to find button codes for your controller
-gamepad_btn_a=304
-gamepad_btn_b=305
-gamepad_btn_x=307
-gamepad_btn_y=308
-gamepad_btn_start=315
-gamepad_btn_select=314
-gamepad_btn_l1=310
-gamepad_btn_r1=311
-
-# Analog stick axis mapping
-# Default: ABS_X=0, ABS_Y=1 (left stick)
-gamepad_axis_x=0
-gamepad_axis_y=1
-```
+`_north`, `_tl`, `_tr` are used by ScummVM only and the right stick by native apps only.
 
 ---
 

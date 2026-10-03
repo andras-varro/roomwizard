@@ -614,15 +614,15 @@ make this class hard to see, and all three are why it needs a helper rather than
 mean the harness is blind. `grep -rn 'button_is_touched(&[a-z_]*, *[a-z.]*x, *[a-z.]*y) *&&' --include=*.c`
 is the tree-wide check.
 
-**Every app with a game loop calls `gamepad_rescan()` on a timer.** `RESCAN_INTERVAL_MS` = 5000 in each
-game; nothing inside the library calls it, so an app that omits it never re-detects a device. The read loop
+**Every app with a game loop calls `gamepad_tick(&mgr, now_ms)` once per frame, after `gamepad_poll()`.** Every `INPUT_SIG_CHECK_MS` (1 s) it compares the `/dev/input` fingerprint (`input_node_sig()`, opens nothing) and calls
+`gamepad_rescan()` only on a change, or at once after a read returned ENODEV/EBADF; an app that omits it never re-detects a device. The read loop
 is `while (read(fd, &ev, sizeof(ev)) == sizeof(ev))` — a pad that leaves the bus (unplugged, or a wireless
-one idling out) leaves a stale fd that fails forever, so input is dead for the life of the process and only
-relaunching fixes it. It clears `held_latched[]` (a direction held at unplug is not stuck on) then `seed_latched_levels()` re-reads the held levels, so a key held across the rescan keeps its level.
+one idling out) leaves a stale fd that fails forever, which is why that error arms the rescan. The rescan
+clears `held_latched[]` (a direction held at unplug is not stuck on) then `seed_latched_levels()` re-reads the held levels, so a key held across the rescan keeps its level.
 
 ⚠️ **`scan_devices()` announces a CHANGE, never a poll, and a new print in it must keep that shape.**
 Because the rescan closes every device first, the `fd < 0` that guards each announcement is always true by
-the time the scan runs, so an unconditional `printf` there is one line per device per 5 s — measured on
+the time the scan runs, so an unconditional `printf` there is one line per device per rescan — measured on
 `.188` as 1720 identical `found gamepad` lines in one session, in the log that a no-microphone audio
 verification has to read. `announce_found()` / `announce_lost()` in `common/gamepad.c` compare against a
 remembered `"<name> at <path>"` per slot, which is why those three fields are the ones `gamepad_close()`
