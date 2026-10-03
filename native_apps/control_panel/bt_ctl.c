@@ -156,6 +156,38 @@ BtDevice *bt_find(BtState *s, const char *addr)
     return NULL;
 }
 
+void bt_split_lists(const BtState *s, int *mine, int *nmine, int *found, int *nfound)
+{
+    int i, m = 0, f = 0;
+    for (i = 0; i < s->ndev; i++)
+        if (s->dev[i].paired && s->dev[i].connected) mine[m++] = i;
+    for (i = 0; i < s->ndev; i++) {
+        const BtDevice *d = &s->dev[i];
+        if (d->paired && !d->connected) mine[m++] = i;
+        else if (!d->paired && d->seen)  found[f++] = i;
+    }
+    *nmine = m;
+    *nfound = f;
+}
+
+int bt_list_rows(const int *mine, int nmine, const int *found, int nfound,
+                 int rows_fit, int *rows)
+{
+    int i, n = 0;
+    int pos = 0;            /* row within its page, counted: no runtime divide */
+    if (rows_fit < 1) rows_fit = 1;
+    for (i = 0; i < nmine; i++) {
+        rows[n++] = mine[i];
+        if (++pos == rows_fit) pos = 0;
+    }
+    if (nmine > 0 && nfound > 0 && pos != 0) {
+        /* A header with no room for a row under it would be orphaned. */
+        rows[n++] = pos + 1 < rows_fit ? BT_ROW_FOUND_HDR : BT_ROW_BLANK;
+    }
+    for (i = 0; i < nfound; i++) rows[n++] = found[i];
+    return n;
+}
+
 static void remove_device(BtState *s, const char *addr);
 
 /* Find or add; *added says which.  A full table gives up its oldest entry

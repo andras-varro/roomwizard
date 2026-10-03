@@ -125,6 +125,30 @@ bool bt_queue(BtState *s, const char *cmd);
 /* The device with this address, or NULL. */
 BtDevice *bt_find(BtState *s, const char *addr);
 
+/* ---- the page's two lists (pure, host-tested) ---- */
+
+#define BT_ROW_FOUND_HDR (-1)      /* a row holding the FOUND list's header */
+#define BT_ROW_BLANK     (-2)      /* an empty row: FOUND starts on the next page */
+#define BT_MAX_ROWS      (BT_MAX_DEVICES + 1)
+
+/* Partition s->dev[] into the page's two lists, as indices into it.  mine:
+ * the paired devices, the connected ones first, each group in first-seen
+ * order — so a device moves up when it connects and back when it drops, and
+ * nothing else reorders.  found: unpaired devices seen in range since the page
+ * opened.  An unpaired device not in range is in neither — absent, not greyed.
+ * Both arrays need BT_MAX_DEVICES slots. */
+void bt_split_lists(const BtState *s, int *mine, int *nmine, int *found, int *nfound);
+
+/* The rows the page shows, paged rows_fit at a time: mine, then found.  Each
+ * row is a dev[] index or BT_ROW_*.  Where found starts mid-page a
+ * BT_ROW_FOUND_HDR row precedes it; where it would start a page — or a header
+ * would be a page's last row — it starts the next page instead (padded with
+ * BT_ROW_BLANK), whose own header names it.  So no page begins with a header
+ * row, and the list a page starts in is the list of its first row.  rows needs
+ * BT_MAX_ROWS slots; returns how many it filled. */
+int bt_list_rows(const int *mine, int nmine, const int *found, int nfound,
+                 int rows_fit, int *rows);
+
 /* ---- the child process (device only) ---- */
 
 /* Start bluetoothctl and queue the opening commands (`show`, `devices`).

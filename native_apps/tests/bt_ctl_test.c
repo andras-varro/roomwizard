@@ -41,6 +41,11 @@
  *      passkey/PIN for that device, or for an unknown one, never another's;
  *   N  a full device table evicts its oldest entry that is neither paired nor
  *      seen, and refuses when every entry is listed;
+ *   O  the page's two lists: bt_split_lists() puts paired devices in MY
+ *      DEVICES, connected first, each group in first-seen order, and unpaired
+ *      in-range ones in FOUND; bt_list_rows() never starts a page with a
+ *      marker, never leaves a FOUND header as a page's last row, and lists
+ *      every device exactly once, MY DEVICES before FOUND;
  *   J  every two-chunk split of a noisy stream, and a one-byte-at-a-time feed,
  *      give the same state as one feed — splitting lines and escapes.
  */
@@ -396,6 +401,73 @@ int main(void)
         for (i = 0; i < s.ndev; i++) s.dev[i].seen = true;
         feed(&s, "Device 00:00:00:00:00:F1 Late\n" P);
         CHECK(s.ndev == BT_MAX_DEVICES && !bt_find(&s, "00:00:00:00:00:F1"), "N: a listed device was evicted");
+    }
+
+    /* O */
+    {
+        static const struct { bool paired, connected, seen; } F[] = {
+            { true,  false, false },   /* 0  paired, idle        -> mine, after the connected */
+            { false, false, true  },   /* 1  scanned             -> found */
+            { true,  true,  true  },   /* 2  paired, connected   -> mine, first */
+            { false, false, false },   /* 3  cache, not in range -> neither */
+            { true,  true,  false },   /* 4  paired, connected   -> mine, second */
+            { false, false, true  },   /* 5  scanned             -> found */
+        };
+        int mine[BT_MAX_DEVICES], found[BT_MAX_DEVICES], rows[BT_MAX_ROWS];
+        int nm, nf, nr;
+        fresh(&s);
+        for (i = 0; i < 6; i++) {
+            snprintf(s.dev[i].addr, sizeof(s.dev[i].addr), "00:00:00:00:00:%02X", i);
+            s.dev[i].paired = F[i].paired;
+            s.dev[i].connected = F[i].connected;
+            s.dev[i].seen = F[i].seen;
+        }
+        s.ndev = 6;
+        bt_split_lists(&s, mine, &nm, found, &nf);
+        CHECK(nm == 3 && mine[0] == 2 && mine[1] == 4 && mine[2] == 0,
+              "O: mine n=%d [%d %d %d], want 3 [2 4 0]", nm, mine[0], mine[1], mine[2]);
+        CHECK(nf == 2 && found[0] == 1 && found[1] == 5,
+              "O: found n=%d [%d %d], want 2 [1 5]", nf, found[0], found[1]);
+        s.dev[2].connected = false;    /* drops: back to its first-seen place */
+        bt_split_lists(&s, mine, &nm, found, &nf);
+        CHECK(nm == 3 && mine[0] == 4 && mine[1] == 0 && mine[2] == 2,
+              "O: after a disconnect mine [%d %d %d], want [4 0 2]", mine[0], mine[1], mine[2]);
+        s.dev[1].paired = true;        /* a found device pairs: it moves to mine */
+        bt_split_lists(&s, mine, &nm, found, &nf);
+        CHECK(nm == 4 && mine[3] == 2 && mine[1] == 0 && mine[2] == 1 && nf == 1 && found[0] == 5,
+              "O: after pairing mine n=%d found n=%d", nm, nf);
+
+        static const int M[3] = { 2, 4, 0 }, Fd[2] = { 1, 5 };
+        nr = bt_list_rows(M, 3, Fd, 2, 5, rows);
+        CHECK(nr == 6 && rows[3] == BT_ROW_FOUND_HDR && rows[4] == 1 && rows[5] == 5,
+              "O: rows_fit 5 gave n=%d rows[3]=%d, want a header at 3", nr, nr > 3 ? rows[3] : 99);
+        nr = bt_list_rows(M, 3, Fd, 2, 4, rows);
+        CHECK(nr == 6 && rows[3] == BT_ROW_BLANK && rows[4] == 1,
+              "O: rows_fit 4 gave rows[3]=%d, want a blank (no orphan header)", nr > 3 ? rows[3] : 99);
+        nr = bt_list_rows(M, 3, Fd, 2, 3, rows);
+        CHECK(nr == 5 && rows[3] == 1, "O: rows_fit 3 gave n=%d, want FOUND starting page 2 unmarked", nr);
+
+        /* Every shape: the invariants the page's header and hit-test rely on. */
+        int bad = 0, idx[16];
+        for (i = 0; i < 16; i++) idx[i] = i;
+        for (int rf = 1; rf <= 8; rf++)
+            for (nm = 0; nm <= 7; nm++)
+                for (nf = 0; nf <= 7; nf++) {
+                    int seen_dev[16] = { 0 }, last = -1, k;
+                    nr = bt_list_rows(idx, nm, idx + nm, nf, rf, rows);
+                    bool ok = nr <= nm + nf + 1;
+                    for (k = 0, i = 0; ok && i < nr; i++, k = k + 1 == rf ? 0 : k + 1) {
+                        if (rows[i] < 0) {
+                            if (k == 0 || (rows[i] == BT_ROW_FOUND_HDR && k == rf - 1)) ok = false;
+                            continue;
+                        }
+                        if (rows[i] <= last || seen_dev[rows[i]]++) ok = false;
+                        last = rows[i];
+                    }
+                    for (i = 0; ok && i < nm + nf; i++) if (seen_dev[i] != 1) ok = false;
+                    if (!ok && !bad++) printf("FAIL: O: first bad shape rows_fit=%d mine=%d found=%d\n", rf, nm, nf);
+                }
+        CHECK(bad == 0, "O: %d list shapes broke a row invariant", bad);
     }
 
     /* J */

@@ -1,5 +1,5 @@
-/* bluetooth_page.c — control_panel's Bluetooth page: power, scan, the device
- * list, pair / trust / connect / disconnect / remove, the agent's prompts, and
+/* bluetooth_page.c — control_panel's Bluetooth page: power, scan, the two
+ * device lists (MY DEVICES, FOUND), pair / trust / connect / disconnect / remove, the agent's prompts, and
  * USE FOR AUDIO.
  *
  * Opened from the home grid's Bluetooth tile.  Everything goes through
@@ -197,19 +197,29 @@ static void bt_page_layout(void) {
 
 /* ── Derived state ──────────────────────────────────────────────────────── */
 
-/* Paired, or seen in range since the page opened.  An unpaired cache entry
- * that is not in range is not offered — absent, not greyed. */
-static int build_vis(int *vis) {
-    int n = 0;
-    for (int i = 0; i < bt.ndev; i++)
-        if (bt.dev[i].paired || bt.dev[i].seen) vis[n++] = i;
-    return n;
+/* Two lists in one paged column: MY DEVICES (paired, connected first) then
+ * FOUND (unpaired, in range now).  The order and the page breaks are
+ * bt_split_lists() + bt_list_rows(), which the host test drives.  A row is a
+ * dev[] index or a BT_ROW_* marker; a tap on any device row of either list
+ * selects it, and action row A offers what applies to it. */
+static int build_rows(int *rows) {
+    int mine[BT_MAX_DEVICES], found[BT_MAX_DEVICES], nmine, nfound;
+    bt_split_lists(&bt, mine, &nmine, found, &nfound);
+    return bt_list_rows(mine, nmine, found, nfound, rows_fit, rows);
 }
 
-static int page_count(int nvis) {
+static int page_count(int nrows) {
     int pages = 1;
-    for (int n = nvis; n > rows_fit; n -= rows_fit) pages++;   /* no divide */
+    for (int n = nrows; n > rows_fit; n -= rows_fit) pages++;   /* no divide */
     return pages;
+}
+
+/* The list a page starts in names the page: bt_list_rows() never begins a
+ * page with a marker, so its first row is a device. */
+static const char *page_title(const int *rows, int nrows, int page) {
+    int first = page * rows_fit;
+    if (first >= nrows || rows[first] < 0) return "MY DEVICES";
+    return bt.dev[rows[first]].paired ? "MY DEVICES" : "FOUND";
 }
 
 /* The selected device if it is still listed; a vanished one is deselected. */
@@ -394,9 +404,9 @@ static void bt_page_draw(Framebuffer *fb) {
     toggle_draw(fb, &power_tg);
     button_draw(fb, &scan_btn);
 
-    int vis[BT_MAX_DEVICES];
-    int nvis = build_vis(vis);
-    int pages = page_count(nvis);
+    int rows[BT_MAX_ROWS];
+    int nrows = build_rows(rows);
+    int pages = page_count(nrows);
     if (list_page >= pages) list_page = pages - 1;
     if (pages > 1) {
         button_draw(fb, &prev_btn);
@@ -404,16 +414,21 @@ static void bt_page_draw(Framebuffer *fb) {
     }
 
     char hdr[32];
-    if (pages > 1) snprintf(hdr, sizeof(hdr), "DEVICES %d/%d", list_page + 1, pages);
-    else           snprintf(hdr, sizeof(hdr), "DEVICES");
+    const char *title = page_title(rows, nrows, list_page);
+    if (pages > 1) snprintf(hdr, sizeof(hdr), "%s %d/%d", title, list_page + 1, pages);
+    else           snprintf(hdr, sizeof(hdr), "%s", title);
     draw_section_header(fb, BT_HDR_Y, hdr);
 
     int first = list_page * rows_fit;
-    for (int r = 0; r < rows_fit && first + r < nvis; r++) {
-        const BtDevice *rd = &bt.dev[vis[first + r]];
-        draw_row(fb, BT_LIST_Y + r * BT_ROW_H, rd, rd == d);
+    for (int r = 0; r < rows_fit && first + r < nrows; r++) {
+        int y = BT_LIST_Y + r * BT_ROW_H;
+        int ix = rows[first + r];
+        if (ix == BT_ROW_FOUND_HDR)    /* sits on the next row as the page's header does */
+            draw_section_header(fb, y + BT_ROW_H - (BT_LIST_Y - BT_HDR_Y), "FOUND");
+        if (ix < 0) continue;
+        draw_row(fb, y, &bt.dev[ix], &bt.dev[ix] == d);
     }
-    if (nvis == 0)
+    if (nrows == 0)
         fb_draw_text(fb, CONTENT_LEFT + 10, BT_LIST_Y + 10,
                      bt.powered ? "NO DEVICES - TAP SCAN" : "POWER IS OFF",
                      COLOR_LABEL, 2);
@@ -609,9 +624,9 @@ static CpPageResult bt_page_input(Config *cfg, int tx, int ty,
         redraw = true;
     }
 
-    int vis[BT_MAX_DEVICES];
-    int nvis = build_vis(vis);
-    int pages = page_count(nvis);
+    int rows[BT_MAX_ROWS];
+    int nrows = build_rows(rows);
+    int pages = page_count(nrows);
     if (list_page >= pages) { list_page = pages - 1; redraw = true; }
     if (pages > 1) {
         if (button_update(&prev_btn, tx, ty, touching, now)) {
@@ -626,10 +641,11 @@ static CpPageResult bt_page_input(Config *cfg, int tx, int ty,
 
     if (press && tx >= CONTENT_LEFT && tx < CONTENT_RIGHT) {
         int first = list_page * rows_fit;
-        for (int r = 0; r < rows_fit && first + r < nvis; r++) {
+        for (int r = 0; r < rows_fit && first + r < nrows; r++) {
             int y = BT_LIST_Y + r * BT_ROW_H;
             if (ty >= y && ty < y + BT_ROW_H - 4) {
-                const BtDevice *rd = &bt.dev[vis[first + r]];
+                if (rows[first + r] < 0) break;     /* a header or blank row selects nothing */
+                const BtDevice *rd = &bt.dev[rows[first + r]];
                 if (strcmp(sel_addr, rd->addr)) {
                     snprintf(sel_addr, sizeof(sel_addr), "%s", rd->addr);
                     redraw = true;
