@@ -146,6 +146,26 @@ stall again, up to ~4 s of silence. **Open work, on the next occurrence:** read 
 the "stalled" line and its time, correlate with `/var/log/messages`, and optionally run `bluealsa` verbose. **Done when**
 a recurrence is attributed to one of the two mechanisms, or none recurs over a long session.
 
+### B52. The 8BitDo Pro 2 does not reconnect by itself after a bluetoothd restart — open, confirmed 2026-10-03
+
+**Measured, `.188`, `btmon`.** (1) `/etc/init.d/bluetooth restart` (`device-files/bluetooth`: stop kills `bluetoothd`,
+then `rmmod`s every BT module; start reloads them) disconnects the pad with reason 0x15 "Remote Device Terminated due
+to Power Off"; page scan is off for 8.2 s, then Page Scan on and every paired device is re-added "allow incoming". The
+pad blinked its reconnect LED yet sent **zero** Connect Requests in ~45 s, then powered off; 2 of 2 runs. (2) A
+`bluetoothd`-only restart with the modules kept: page-scan-off window 0.73 s, still zero Connect Requests in 65 s — so
+the dead window is **refuted** as the cause. (3) After either, turning the pad off and on (Home) connects within 1 s:
+Connect Request accepted, stored link key, E0 encryption, HID L2CAP channels; it is paired, bonded and trusted with the
+key loaded. (4) A host-initiated `bluetoothctl connect` while the pad blinked failed with
+`org.bluez.Error.Failed br-connection-create-socket`; the HCI reason was not captured (that `btmon` capture came back
+empty). **Inferred, not measured:** the pad backs off after the 0x15 reason, and the same mechanism sits behind the
+reconnect-on-Home-press behaviour after a reboot recorded in `SYSTEM_ANALYSIS.md`. Only a `bluetooth` component deploy
+or a reboot triggers it; the operator workaround is to power-cycle the pad.
+
+**Next steps.** Capture the host-initiated page with `btmon` (Create Connection status, page timeout) while the pad
+blinks; if host paging works, have the init script or a `bluetoothd` policy connect trusted HID devices after start;
+check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
+leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
+
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -402,10 +422,10 @@ paths a launcher plus one game actually touch, listed from a BBB boot.
 
 ### F108. No mouse pointer in the launcher or the Control Panel — open, measured by the operator on .188 2026-10-01
 
-A mouse works only in the Input page's mouse tester. `app_launcher.c` consumes `mouse_left_pressed` (`:805`) but
-a grep finds no cursor drawn there, and `control_panel.c` never polls `gamepad_poll()` at all **[read from
-source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
-and a click activates a tile in both; the draw belongs in one shared helper, not per app.
+A mouse works only in the Input page's mouse tester. Neither home reads the mouse on purpose (`app_launcher.c:731`
+comments it: no pointer is drawn to aim with), and `control_panel.c` never polls `gamepad_poll()` for it either
+**[read from source; not exercised with a mouse on the panel]**. **Done when** a pointer is drawn and a click
+activates a tile in both, acting on release like a touch; the draw belongs in one shared helper, not per app.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
@@ -425,23 +445,6 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 ### F112. vnc_client has no gamepad navigation — open, operator report 2026-10-02
 
 `vnc_client` cannot be driven by a pad as the launcher and the Control Panel now can: measured on the panel, the Xbox pad's d-pad, bottom-right button and Back work in the Control Panel through the same gamepad map. **Done when** a pad can operate a `vnc_client` session (`gamepad.c` is the input abstraction; `common/ui_focus.c` is pure and linkable).
-
-### F118. Unify the behaviour of `app_launcher` and the Control Panel home — open, operator request 2026-10-03
-
-The two screens share `icon_grid_nav`/`icon_grid_nav_exit` (`common/icon_grid.c`) and the focus-ring look, but the
-state around them still lives in each app (`focus_shown`, `focus_idx` in `control_panel.c:401`; `selected_app`,
-`power_focus` in `app_launcher.c:125,86`), so they drift. **First known instance, observed on the panel
-2026-10-03:** in the Control Panel a touch press hides the ring (`control_panel.c:951`, `if (ts.pressed)
-focus_shown = false`); the launcher has no equivalent, since `selected_app` stays set across a touch
-(`app_launcher.c:777-782`). **Rule wanted:** the ring appears on the first navigation key and disappears on a touch,
-in ONE shared place (`common/ui_focus.c`), with a pure host test. **Other differences to check [inferred, not
-yet audited]:** Esc/Back on the home grid (the Control Panel does nothing, by operator choice; the launcher opens
-the power dialog, `app_launcher.c:381`); default dialog focus (the Control Panel confirm dialog opens on CANCEL; the
-launcher's has its own code, `power_focus`, `app_launcher.c:86,371,633`); mouse clicks (the launcher handles them,
-`app_launcher.c:627`; the Control Panel does not); where the first key lands (`app_launcher.c:387-390`,
-`control_panel.c:439`). **Plan:** (1) a read-only audit lists every behaviour difference with `file:line`; (2) the
-operator decides each by a one-answer question; (3) the agreed behaviour moves into `common/ui_focus.c` /
-`icon_grid.c`, used by both apps. **Done when** a grep finds no per-app copy of the ring-visibility rule.
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 
