@@ -18,9 +18,9 @@
  * notably the Left/Right wrap at both ends.  Group 3 is the
  * Control Panel home's exit X.
  *
- * ⚠️ What it cannot see: the launcher's ensure_selection_visible() and the
- * order in which several keys in one frame are applied — those stayed in
- * app_launcher.c — nor anything drawn.
+ * ⚠️ What it cannot see: the page following the selection, the ring and
+ * the one-direction-per-frame pick — those are icon_grid_focus_frame()'s,
+ * tested by icon_grid_focus_test.c — nor anything drawn.
  */
 #include "icon_grid.h"
 #include <stdio.h>

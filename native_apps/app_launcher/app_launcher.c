@@ -83,7 +83,7 @@ enum { PWR_SHUTDOWN = 0, PWR_REBOOT = 1, PWR_CANCEL = 2 };
 static ModalDialog power_dialog;
 static bool exit_pressed;        /* the current touch went down on the X */
 static int  power_press = -1;    /* dialog button the current touch went down on */
-static int  power_focus = PWR_CANCEL;   /* keyboard/gamepad focus; safe default */
+static int  home_press = -1;     /* item the current touch went down on, -1 none */
 
 /* Prints the layout receipt ("launcher: safe …") — see icon_grid_layout(). */
 static void compute_grid_layout(Framebuffer *fb) {
@@ -122,9 +122,8 @@ typedef struct {
     int         app_count;
     int         current_page;
     int         total_pages;
-    int         selected_app;       /* Absolute app index, -1 for none, or
-                                       ICON_GRID_NAV_EXIT for the exit X */
-    int         exit_from;          /* the tile Up left for the X */
+    IconGridFocus focus;            /* the keyboard/pad selection and its ring,
+                                       the model shared with control_panel */
     Framebuffer fb;
     TouchInput  touch;
     GamepadManager gamepad;
@@ -259,10 +258,11 @@ static int scan_apps(Launcher *l) {
 /*  Drawing                                                                */
 /* ════════════════════════════════════════════════════════════════════════ */
 
-static void draw_tile(Framebuffer *fb, const AppEntry *app,
-                      int tx, int ty, bool highlight) {
+/* Never the highlighted tile look: focus is the ring alone, as on the
+ * Control Panel home. */
+static void draw_tile(Framebuffer *fb, const AppEntry *app, int tx, int ty) {
     icon_grid_draw_tile(fb, &grid, tx, ty, app->name, app->icon_pixels,
-                        app->icon_color, highlight);
+                        app->icon_color, false);
 }
 
 static void draw_launcher(Launcher *l) {
@@ -281,9 +281,8 @@ static void draw_launcher(Launcher *l) {
         int tx, ty;
         icon_grid_tile_xy(&grid, i, &tx, &ty);
         int abs_idx = start + i;
-        bool hl = (abs_idx == l->selected_app);
-        draw_tile(&l->fb, &l->apps[abs_idx], tx, ty, hl);
-        if (hl)
+        draw_tile(&l->fb, &l->apps[abs_idx], tx, ty);
+        if (l->focus.shown && abs_idx == l->focus.sel)
             icon_grid_draw_selection(&l->fb, &grid, tx, ty);
     }
 
@@ -299,24 +298,12 @@ static void draw_launcher(Launcher *l) {
     /* Page arrows and dots */
     icon_grid_draw_paging(&l->fb, &grid, l->current_page, l->total_pages);
 
-    /* Input hint */
-    if (l->input.gamepad_connected || l->input.keyboard_connected)
-        fb_draw_text(&l->fb, SCREEN_VISIBLE_LEFT + 10, l->fb.height - 18,
-                     "D-PAD: NAVIGATE  A/ENTER: LAUNCH  ESC/BACK: POWER",
-                     RGB(100, 100, 100), 1);
-
     icon_grid_draw_exit(&l->fb, &grid);
-    if (l->selected_app == ICON_GRID_NAV_EXIT)       /* keyboard focus on the X */
+    if (l->focus.shown && l->focus.sel == ICON_GRID_NAV_EXIT)   /* focus on the X */
         icon_grid_draw_ring(&l->fb, grid.exit_x, grid.exit_y, grid.exit_w, grid.exit_h);
 
-    if (modal_dialog_is_active(&power_dialog)) {
-        /* The focus ring only when a key can move it, as with the tile ring. */
-        bool keys = l->input.gamepad_connected || l->input.keyboard_connected;
-        for (int i = 0; i < power_dialog.button_count; i++)
-            power_dialog.buttons[i].visual_state =
-                (keys && i == power_focus) ? BTN_STATE_HIGHLIGHTED : BTN_STATE_NORMAL;
-        modal_dialog_draw(&power_dialog, &l->fb);
-    }
+    /* The dialog highlights its focused button itself, always. */
+    modal_dialog_draw(&power_dialog, &l->fb);
 
     fb_swap(&l->fb);
 }
@@ -325,55 +312,57 @@ static void draw_launcher(Launcher *l) {
 /*  Touch handling                                                         */
 /* ════════════════════════════════════════════════════════════════════════ */
 
-/*  Returns:  >= 0   app index to launch
- *            -1     nothing / page change (redraw)
- *            -2     the exit X (checked first: it sits inside the right page band)
- */
-static int handle_touch(Launcher *l, int x, int y) {
-    if (icon_grid_exit_hit(&grid, x, y)) return -2;
-
+/* The tile under (x,y) on the shown page, as an absolute index, or -1. */
+static int tile_at(Launcher *l, int x, int y) {
     int start = l->current_page * grid.per_page;
     int count = l->app_count - start;
     if (count > grid.per_page) count = grid.per_page;
-
     int i = icon_grid_hit(&grid, count, x, y);
-    if (i >= 0) {
-        /* Visual feedback: highlight tile briefly */
-        int tx, ty;
-        icon_grid_tile_xy(&grid, i, &tx, &ty);
-        draw_tile(&l->fb, &l->apps[start + i], tx, ty, true);
-        fb_swap(&l->fb);
-        usleep(120000);
-        return start + i;
-    }
+    return i >= 0 ? start + i : -1;
+}
 
-    /* Pagination: left edge band = previous, right edge band = next */
-    l->current_page += icon_grid_page_hit(x, l->current_page, l->total_pages);
-    return -1;
+/* A tile acts on RELEASE, and only over the tile it went down on, as on the
+ * Control Panel home — so a finger can slide off to abort, and the child app
+ * starts with no finger on the panel.  The X is checked first (it sits inside
+ * the right page band); the page-flip bands act on the press.
+ *  Returns:  >= 0   app index to launch
+ *            -1     nothing (a page flip included)
+ *            -2     the exit X, released over it */
+static int handle_touch(Launcher *l, const TouchState *ts) {
+    if (ts->pressed) {
+        exit_pressed = icon_grid_exit_hit(&grid, ts->x, ts->y);
+        home_press   = exit_pressed ? -1 : tile_at(l, ts->x, ts->y);
+        if (!exit_pressed && home_press < 0)
+            l->current_page += icon_grid_page_hit(ts->x, l->current_page,
+                                                  l->total_pages);
+    }
+    /* No else: a quick tap delivers press and release in the same poll. */
+    if (!ts->released) return -1;
+    if (exit_pressed) {
+        exit_pressed = false;
+        return icon_grid_exit_hit(&grid, ts->x, ts->y) ? -2 : -1;
+    }
+    int p = home_press;
+    home_press = -1;
+    return (p >= 0 && tile_at(l, ts->x, ts->y) == p) ? p : -1;
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
 /*  Gamepad / keyboard navigation                                          */
 /* ════════════════════════════════════════════════════════════════════════ */
 
-/* Ensure selected_app is on the currently visible page; adjust page if not. */
-static void ensure_selection_visible(Launcher *l) {
-    if (l->selected_app < 0) return;
-    int page = l->selected_app / grid.per_page;
-    if (page != l->current_page)
-        l->current_page = page;
-}
-
-/*  Returns:  >= 0  app index to launch
- *            -1    nothing (navigation only, or no input)
- */
 static void open_power_dialog(void) {
-    power_focus = PWR_CANCEL;
+    modal_dialog_set_focus(&power_dialog, PWR_CANCEL);   /* the safe default */
     power_press = -1;
     modal_dialog_show(&power_dialog);
 }
 
-static int handle_gamepad_input(Launcher *l) {
+/* The ring and the selection are icon_grid_focus_frame()'s, the model the
+ * Control Panel home uses too; touch_press is this frame's real press.
+ *  Returns:  >= 0  app index to launch
+ *            -1    nothing (navigation only, or no input)
+ */
+static int handle_gamepad_input(Launcher *l, bool touch_press) {
     InputState *inp = &l->input;
 
     /* BACK (Select / Backspace) and PAUSE (Start / Escape) mean "leave" in every
@@ -383,46 +372,17 @@ static int handle_gamepad_input(Launcher *l) {
         return -1;
     }
 
-    /* If nothing is selected yet but a nav key is pressed, select first on page */
-    if (l->selected_app == -1) {
-        if (inp->buttons[BTN_ID_UP].pressed   || inp->buttons[BTN_ID_DOWN].pressed ||
-            inp->buttons[BTN_ID_LEFT].pressed  || inp->buttons[BTN_ID_RIGHT].pressed) {
-            l->selected_app = l->current_page * grid.per_page;
-            return -1;
-        }
+    const ButtonState *b = inp->buttons;
+    int dir = icon_grid_focus_dir(b[BTN_ID_UP].pressed, b[BTN_ID_DOWN].pressed,
+                                  b[BTN_ID_LEFT].pressed, b[BTN_ID_RIGHT].pressed);
+    bool enter = b[BTN_ID_JUMP].pressed || b[BTN_ID_ACTION].pressed;
+    int act = icon_grid_focus_frame(&grid, l->app_count, &l->current_page,
+                                    &l->focus, touch_press, dir, enter);
+    if (act == ICON_GRID_NAV_EXIT) {             /* the X: as a tap on it */
+        open_power_dialog();
+        return -1;
     }
-
-    /* Navigation is over absolute indices; ensure_selection_visible() flips the
-       page when the selection leaves it, so there is no per-page bookkeeping. */
-
-    /* In this order, one step per key pressed this frame (icon_grid_nav_exit); the
-       page follows only a selection that actually moved. */
-    static const struct { ButtonId key; UiDir dir; } nav[] = {
-        { BTN_ID_RIGHT, UI_DIR_RIGHT }, { BTN_ID_LEFT, UI_DIR_LEFT },
-        { BTN_ID_DOWN,  UI_DIR_DOWN  }, { BTN_ID_UP,   UI_DIR_UP   },
-    };
-    for (int i = 0; i < (int)(sizeof(nav) / sizeof(nav[0])); i++) {
-        if (!inp->buttons[nav[i].key].pressed) continue;
-        /* Up from the top row reaches the exit X, Down from it returns. */
-        int target = icon_grid_nav_exit(&grid, l->app_count, l->current_page,
-                                        l->selected_app, &l->exit_from, nav[i].dir);
-        if (target != l->selected_app) {
-            l->selected_app = target;
-            ensure_selection_visible(l);
-        }
-    }
-
-    /* Select / launch */
-    if (inp->buttons[BTN_ID_JUMP].pressed || inp->buttons[BTN_ID_ACTION].pressed) {
-        if (l->selected_app == ICON_GRID_NAV_EXIT) {   /* the X: as a tap on it */
-            open_power_dialog();
-            return -1;
-        }
-        if (l->selected_app >= 0 && l->selected_app < l->app_count)
-            return l->selected_app;
-    }
-
-    return -1;
+    return act >= 0 && act < l->app_count ? act : -1;
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -612,7 +572,8 @@ static int power_button_at(int x, int y) {
 
 /* While the dialog is up it takes ALL input. A touch acts on RELEASE, and only
  * on the button it went down on, so a finger can slide off SHUT DOWN to abort.
- * A mouse click is deliberate and acts at once. */
+ * No mouse: there is no pointer drawn to aim it with.  The focused button is
+ * the dialog's own (modal_dialog_focus_step), drawn highlighted always. */
 static void handle_power_dialog(Launcher *l, const TouchState *ts) {
     InputState *inp = &l->input;
 
@@ -624,18 +585,14 @@ static void handle_power_dialog(Launcher *l, const TouchState *ts) {
         if (power_button_at(ts->x, ts->y) == p) { choose_power(l, p); return; }
     }
 
-    if (inp->mouse_left_pressed) {
-        int p = power_button_at(inp->mouse_x, inp->mouse_y);
-        if (p >= 0) { choose_power(l, p); return; }
-    }
-
-    int last = power_dialog.button_count - 1;
-    if (inp->buttons[BTN_ID_UP].pressed)   power_focus = power_focus > 0 ? power_focus - 1 : last;
-    if (inp->buttons[BTN_ID_DOWN].pressed) power_focus = power_focus < last ? power_focus + 1 : 0;
-    if (inp->buttons[BTN_ID_BACK].pressed || inp->buttons[BTN_ID_PAUSE].pressed)
+    const ButtonState *b = inp->buttons;
+    int dir = icon_grid_focus_dir(b[BTN_ID_UP].pressed, b[BTN_ID_DOWN].pressed,
+                                  b[BTN_ID_LEFT].pressed, b[BTN_ID_RIGHT].pressed);
+    if (dir >= 0) modal_dialog_focus_step(&power_dialog, (UiDir)dir);
+    if (b[BTN_ID_BACK].pressed || b[BTN_ID_PAUSE].pressed)
         choose_power(l, PWR_CANCEL);
-    else if (inp->buttons[BTN_ID_JUMP].pressed || inp->buttons[BTN_ID_ACTION].pressed)
-        choose_power(l, power_focus);
+    else if (b[BTN_ID_JUMP].pressed || b[BTN_ID_ACTION].pressed)
+        choose_power(l, power_dialog.focus);
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -710,8 +667,7 @@ int main(int argc, char *argv[]) {
     gamepad_init(&launcher.gamepad);
     memset(&launcher.input, 0, sizeof(launcher.input));
     launcher.last_launch_return_ms = 0;
-    launcher.selected_app = -1;  /* No keyboard selection until user navigates */
-    launcher.exit_from    = -1;
+    icon_grid_focus_init(&launcher.focus);  /* no ring until a key is pressed */
     launcher.needs_redraw = true;  /* Force initial frame draw */
 
     /* Compute grid layout based on screen dimensions */
@@ -729,13 +685,11 @@ int main(int argc, char *argv[]) {
     /* ── Main loop — polling-based, with dirty-flag rendering ───── */
     while (!quit_flag) {
         /* Save visual state for dirty detection */
-        int old_selected = launcher.selected_app;
+        IconGridFocus old_sel = launcher.focus;
         int old_page     = launcher.current_page;
         int old_count    = launcher.app_count;
-        bool old_gp_conn = launcher.input.gamepad_connected;
-        bool old_kb_conn = launcher.input.keyboard_connected;
         bool old_dialog  = modal_dialog_is_active(&power_dialog);
-        int  old_focus   = power_focus;
+        int  old_focus   = power_dialog.focus;
 
         /* Poll touch (non-blocking) */
         touch_poll(&launcher.touch);
@@ -773,41 +727,24 @@ int main(int argc, char *argv[]) {
             /* Closing it (or a failed command's screen) repaints via old_dialog. */
             handle_power_dialog(&launcher, &ts);
         } else {
-            if (ts.pressed) {
-                /* Handle touch press */
+            /* Touch first: a page it flips this frame is the page the focus
+             * model then re-anchors the selection onto.  No mouse on this
+             * screen — there is no pointer drawn to aim it with. */
+            if (ts.pressed)
                 LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
-                int result = handle_touch(&launcher, ts.x, ts.y);
-                exit_pressed = (result == -2);
-                if (result >= 0) {
-                    launch_app(&launcher, result, fb_dev, touch_dev);
-                    launcher.needs_redraw = true;  /* State changed after launch return */
-                }
-            }
-            /* The X acts on RELEASE, and only if the touch went down on it too — so
-             * the dialog opens with no finger on the panel.  No else: a quick tap
-             * delivers press and release in the same poll. */
-            if (ts.released && exit_pressed) {
-                exit_pressed = false;
-                if (icon_grid_exit_hit(&grid, ts.x, ts.y)) open_power_dialog();
-            }
-
-            /* Handle mouse click */
-            if (launcher.input.mouse_left_pressed) {
-                LOG_DEBUG(&launcher.logger, "Mouse click: (%d, %d)",
-                          launcher.input.mouse_x, launcher.input.mouse_y);
-                int result = handle_touch(&launcher,
-                                          launcher.input.mouse_x,
-                                          launcher.input.mouse_y);
-                if (result == -2) {
-                    open_power_dialog();
-                } else if (result >= 0) {
-                    launch_app(&launcher, result, fb_dev, touch_dev);
-                    launcher.needs_redraw = true;  /* State changed after launch return */
-                }
+            int result = handle_touch(&launcher, &ts);
+            if (result == -2) {
+                open_power_dialog();             /* with no finger on the panel */
+            } else if (result >= 0) {
+                /* Back from the child, the selection is the tile that was used. */
+                icon_grid_focus_land(&grid, &launcher.focus,
+                                     &launcher.current_page, result);
+                launch_app(&launcher, result, fb_dev, touch_dev);
+                launcher.needs_redraw = true;  /* State changed after launch return */
             }
 
             /* Handle gamepad / keyboard navigation */
-            int gp_result = handle_gamepad_input(&launcher);
+            int gp_result = handle_gamepad_input(&launcher, ts.pressed);
             if (gp_result >= 0) {
                 launch_app(&launcher, gp_result, fb_dev, touch_dev);
                 launcher.needs_redraw = true;  /* State changed after launch return */
@@ -816,12 +753,11 @@ int main(int argc, char *argv[]) {
 
         /* Detect any visual state changes from input handling */
         if (modal_dialog_is_active(&power_dialog) != old_dialog ||
-            power_focus != old_focus ||
-            launcher.selected_app != old_selected ||
+            power_dialog.focus != old_focus ||
+            launcher.focus.sel   != old_sel.sel   ||
+            launcher.focus.shown != old_sel.shown ||
             launcher.current_page != old_page     ||
-            launcher.app_count    != old_count    ||
-            launcher.input.gamepad_connected  != old_gp_conn ||
-            launcher.input.keyboard_connected != old_kb_conn) {
+            launcher.app_count    != old_count) {
             launcher.needs_redraw = true;
         }
 

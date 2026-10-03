@@ -162,6 +162,7 @@ static void confirm_open(AppState *state, ConfirmAction action, const char *titl
     modal_dialog_init_confirm(&confirm_dialog, title, message,
                               ok_text, BTN_COLOR_DANGER,
                               "CANCEL", RGB(100, 100, 100));
+    modal_dialog_set_focus(&confirm_dialog, 1);   /* CANCEL: the safe answer */
     modal_dialog_show(&confirm_dialog);
     confirm_on_ok = on_ok;
     state->confirm_action = action;
@@ -318,6 +319,9 @@ static void handle_page_bar_input(AppState *state, int tx, int ty,
 static IconGrid  home_grid;
 static uint32_t *home_icons[HOME_PAGE_COUNT];
 static int       home_press = -2;   /* tile index pressed, -1 = exit X, -2 = none */
+/* Home's selection and ring: the launcher's model (icon_grid_focus_frame).
+ * Its `shown` mirrors focus_shown while home is the view. */
+static IconGridFocus home_focus = { -1, false, -1 };
 
 static void home_load_icons(void) {
     for (int i = 0; i < HOME_PAGE_COUNT; i++) {
@@ -381,6 +385,9 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
     if (icon_grid_hit(&home_grid, home_count_on_page(state->home_page),
                       ts->x, ts->y) != pressed)
         return;
+    /* Back from the page, home's selection is the tile that was used. */
+    icon_grid_focus_land(&home_grid, &home_focus, &state->home_page,
+                         start + pressed);
     set_view(state, home_pages[start + pressed]);
 }
 
@@ -392,7 +399,10 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
  * touch hides it again.  Enter/Space activate by a synthetic tap at the
  * focused rect's centre, through the same dispatch as a finger, so neither a
  * page nor the home grid nor the dialog carries keyboard code of its own.
- * Esc/Backspace: CANCEL on the dialog, BACK on a page, nothing on home. */
+ * Home's ring and selection are the launcher's model (icon_grid_focus_frame);
+ * the dialog's focus is the ModalDialog's own, highlighted from the moment it
+ * opens.  Esc/Backspace: CANCEL on the dialog, BACK on a page, and on home
+ * leave — the exit X's meaning, as the launcher's Esc is its X's. */
 
 #define FOCUS_MAX 48
 
@@ -404,7 +414,6 @@ static UiRect         focus_rect;        /* where it was: re-pick, and the ring 
 static const void    *focus_ctx;         /* the view focus_idx belongs to */
 static int            focus_n;           /* how many focusables it had */
 static UiTap          focus_tap;
-static int            home_exit_from = -1;   /* the tile Up left for the X */
 
 /* The rects that take a tap in the current view, and the view's identity.
  * Home: the tiles of the shown page (n_tiles of them), then the exit X. */
@@ -436,72 +445,71 @@ static int focus_collect(AppState *state, UiRect *out, const void **ctx,
     return n;
 }
 
-/* Where focus lands in a view: home starts on the shown page's first tile, as
- * the launcher does (the exit X sits higher and would win a top-left pick);
- * the dialog on CANCEL, its last button; a page on its top-left widget. */
-static int view_first(const void *ctx, const UiRect *r, int n) {
-    if (n <= 0) return -1;
-    if (ctx == &home_grid)      return 0;
-    if (ctx == &confirm_dialog) return n - 1;
-    return ui_focus_first(r, n);
-}
-
 static bool rect_eq(const UiRect *a, const UiRect *b) {
     return a->x == b->x && a->y == b->y && a->w == b->w && a->h == b->h;
 }
 
 /* After this frame's input: keep focus_idx valid for the current view, then
- * apply one arrow and/or one activation.  dir < 0 = no arrow. */
-static void focus_update(AppState *state, int dir, bool activate) {
+ * apply one arrow and/or one activation.  dir < 0 = no arrow.  real_press is
+ * a real finger's press edge this frame, never the synthetic tap's. */
+static void focus_update(AppState *state, int dir, bool activate,
+                         bool real_press) {
     UiRect r[FOCUS_MAX];
     const void *ctx;
     int n_tiles;
     int n = focus_collect(state, r, &ctx, &n_tiles);
+    bool fire = false;
+    bool new_view = ctx != focus_ctx;
+    focus_ctx = ctx;
 
-    if (ctx != focus_ctx) {                 /* a new view: start it fresh */
-        focus_ctx = ctx;
-        focus_idx = -1;
-        if (focus_shown)
-            focus_idx = view_first(ctx, r, n);
-    } else if (focus_idx >= 0 &&
-               (focus_idx >= n || n != focus_n)) {
-        /* The list grew or shrank (a device row came or went, a button was
-         * disabled): the widget nearest where focus was.  Same count, moved
-         * rects (a relayout, the dialog placing its buttons at first draw)
-         * keep the index — the same widget, somewhere else. */
-        focus_idx = ui_focus_nearest(r, n, &focus_rect);
-    }
-
-    if (dir >= 0 && n > 0) {
-        if (!focus_shown || focus_idx < 0) {
-            focus_shown = true;
-            if (focus_idx < 0) focus_idx = view_first(ctx, r, n);
-        } else if (ctx == &home_grid) {
-            /* Home is the launcher's grid, so it moves as the launcher does:
-             * reading order over absolute tile indices, the page following
-             * the selection (icon_grid_nav) — plus the exit X above the top
-             * row (icon_grid_nav_exit). */
-            int pp   = home_grid.per_page;
-            int cur  = focus_idx < n_tiles ? state->home_page * pp + focus_idx
-                                           : ICON_GRID_NAV_EXIT;
-            int next = icon_grid_nav_exit(&home_grid, HOME_PAGE_COUNT,
-                                          state->home_page, cur,
-                                          &home_exit_from, (UiDir)dir);
-            if (next == ICON_GRID_NAV_EXIT) {
-                focus_idx = n_tiles;                 /* the X is listed last */
-            } else {
-                state->home_page = next / pp;        /* library divide, not idiv */
-                n = focus_collect(state, r, &ctx, &n_tiles);
-                focus_idx = next - state->home_page * pp;
-            }
-        } else {
-            focus_idx = ui_focus_move(r, n, focus_idx, (UiDir)dir);
+    if (ctx == &home_grid) {
+        /* The launcher's model: it keeps the selection across a visit to a
+         * page (handle_home_input lands it on the tile used), re-anchors it
+         * to a page flipped by touch, and says what Enter activates. */
+        home_focus.shown = focus_shown;
+        int act = icon_grid_focus_frame(&home_grid, HOME_PAGE_COUNT,
+                                        &state->home_page, &home_focus,
+                                        real_press, dir, activate);
+        focus_shown = home_focus.shown;
+        n = focus_collect(state, r, &ctx, &n_tiles);   /* the page may move */
+        int sel = home_focus.sel;
+        focus_idx = sel == ICON_GRID_NAV_EXIT ? n_tiles       /* the X is last */
+                  : sel >= 0 ? sel - state->home_page * home_grid.per_page : -1;
+        fire = act != -1;
+    } else if (ctx == &confirm_dialog) {
+        /* The dialog's own focus, set to CANCEL by confirm_open() and drawn
+         * by the dialog whether or not a key was pressed yet — so Enter acts
+         * on it even with the ring hidden. */
+        if (dir >= 0) modal_dialog_focus_step(&confirm_dialog, (UiDir)dir);
+        focus_idx = confirm_dialog.focus;
+        fire = activate;
+    } else {
+        if (new_view) {                     /* a new page: start it fresh */
+            focus_idx = -1;
+            if (focus_shown)
+                focus_idx = ui_focus_first(r, n);
+        } else if (focus_idx >= 0 &&
+                   (focus_idx >= n || n != focus_n)) {
+            /* The list grew or shrank (a device row came or went, a button
+             * was disabled): the widget nearest where focus was.  Same count,
+             * moved rects (a relayout) keep the index — the same widget,
+             * somewhere else. */
+            focus_idx = ui_focus_nearest(r, n, &focus_rect);
         }
+        if (dir >= 0 && n > 0) {
+            if (!focus_shown || focus_idx < 0) {
+                focus_shown = true;
+                if (focus_idx < 0) focus_idx = ui_focus_first(r, n);
+            } else {
+                focus_idx = ui_focus_move(r, n, focus_idx, (UiDir)dir);
+            }
+        }
+        fire = activate && focus_shown;
     }
     focus_n = n;
     if (focus_idx >= 0 && focus_idx < n) {
         focus_rect = r[focus_idx];
-        if (activate && focus_shown)
+        if (fire)
             ui_tap_begin(&focus_tap, &focus_rect);
     } else {
         focus_idx = -1;
@@ -908,17 +916,12 @@ int main(void) {
             if (state.confirm_action != CONFIRM_NONE) {
                 modal_dialog_draw(&confirm_dialog, &fb);
             }
-            /* The focus ring, last: focus_rect belongs to the view on top (the
-             * dialog's button while it is up, else the page's or home's). */
-            if (focus_shown && focus_idx >= 0) {
-                /* The dialog places its buttons inside modal_dialog_draw(),
-                 * so on the frame it opens only the button itself is current. */
-                UiRect ring = focus_rect;
-                if (state.confirm_action != CONFIRM_NONE &&
-                    focus_idx < confirm_dialog.button_count)
-                    ring = button_rect(&confirm_dialog.buttons[focus_idx]);
-                icon_grid_draw_ring(&fb, ring.x, ring.y, ring.w, ring.h);
-            }
+            /* The focus ring, last: focus_rect is the page's or home's.  Not
+             * over the dialog, which highlights its focused button itself. */
+            if (focus_shown && focus_idx >= 0 &&
+                state.confirm_action == CONFIRM_NONE)
+                icon_grid_draw_ring(&fb, focus_rect.x, focus_rect.y,
+                                    focus_rect.w, focus_rect.h);
 
             fb_swap(&fb);
             needs_redraw = false;
@@ -941,16 +944,17 @@ int main(void) {
         gamepad_poll(&g_pad, &g_pad_in, 0, 0, false);
         gamepad_tick(&g_pad, now);
         const ButtonState *kb = g_pad_in.buttons;
-        int  key_dir = kb[BTN_ID_UP].pressed    ? UI_DIR_UP
-                     : kb[BTN_ID_DOWN].pressed  ? UI_DIR_DOWN
-                     : kb[BTN_ID_LEFT].pressed  ? UI_DIR_LEFT
-                     : kb[BTN_ID_RIGHT].pressed ? UI_DIR_RIGHT : -1;
+        int  key_dir = icon_grid_focus_dir(kb[BTN_ID_UP].pressed,
+                                           kb[BTN_ID_DOWN].pressed,
+                                           kb[BTN_ID_LEFT].pressed,
+                                           kb[BTN_ID_RIGHT].pressed);
         bool key_act  = kb[BTN_ID_ACTION].pressed || kb[BTN_ID_JUMP].pressed;
         bool key_back = kb[BTN_ID_BACK].pressed   || kb[BTN_ID_PAUSE].pressed;
 
         /* A real finger hides the ring (touch-only use never shows one); a
          * queued Enter/Space tap otherwise stands in for the finger. */
-        if (ts.pressed) focus_shown = false;
+        bool real_press = ts.pressed;
+        if (real_press) focus_shown = false;
         {
             bool syn_touch = false;
             if (ui_tap_frame(&focus_tap, ts.pressed || ts.held, &ts.x, &ts.y,
@@ -960,13 +964,17 @@ int main(void) {
         int tx = ts.x, ty = ts.y;
         bool touching = ts.pressed || ts.held;
 
-        /* Esc/Backspace: CANCEL on the dialog, BACK on a page, nothing home. */
+        /* Esc/Backspace: CANCEL on the dialog, BACK on a page, and on home
+         * leave, as the exit X does. */
         if (key_back && state.confirm_action != CONFIRM_NONE) {
             modal_dialog_hide(&confirm_dialog);
             confirm_on_ok = NULL;
             state.confirm_action = CONFIRM_NONE;
         } else if (key_back && state.page) {
             set_view(&state, NULL);
+        } else if (key_back) {
+            running = false;
+            continue;
         }
 
         /* When confirmation dialog is active, only handle dialog input */
@@ -1001,7 +1009,7 @@ int main(void) {
 
         /* Focus follows the state input() just left: a new view, a list that
          * moved, then this frame's arrow and Enter/Space. */
-        focus_update(&state, key_dir, key_act);
+        focus_update(&state, key_dir, key_act, real_press);
 
         /* --- Detect visual state changes after input ---
          * ⚠️ Only a change repaints: a static screen must cost nothing (the

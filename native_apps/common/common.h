@@ -528,6 +528,7 @@ typedef struct {
     uint32_t message_color;   /* Message text color */
     int button_count;         /* 1–4 */
     Button buttons[MODAL_MAX_BUTTONS];
+    int focus;                /* keyboard focus, -1 none: modal_dialog_set_focus() */
 } ModalDialog;
 
 // Initialize modal dialog with title, message, and button count (1–4).
@@ -549,6 +550,15 @@ void modal_dialog_init_confirm(ModalDialog *dlg, const char *title,
 void modal_dialog_show(ModalDialog *dlg);
 void modal_dialog_hide(ModalDialog *dlg);
 bool modal_dialog_is_active(ModalDialog *dlg);
+
+// Keyboard/pad focus: the button Enter presses.  -1 (the default from init)
+// is none, and the dialog then draws as it always has.  With a focus set it is
+// ALWAYS drawn highlighted — it proposes the default answer, so it shows
+// before any key is pressed.  Out-of-range indices are refused.
+void modal_dialog_set_focus(ModalDialog *dlg, int index);
+// Move the focus: Up/Left = previous button, Down/Right = next, wrapping.
+// Does nothing while no focus is set.
+void modal_dialog_focus_step(ModalDialog *dlg, UiDir d);
 
 // Draw the dialog overlay and contents
 void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb);

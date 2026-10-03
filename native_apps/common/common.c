@@ -626,6 +626,7 @@ void modal_dialog_init(ModalDialog *dlg, const char *title, const char *message,
     if (button_count < 1) button_count = 1;
     if (button_count > MODAL_MAX_BUTTONS) button_count = MODAL_MAX_BUTTONS;
     dlg->button_count = button_count;
+    dlg->focus = -1;               /* no focus: opt-in, modal_dialog_set_focus() */
 
     /* Default visual settings */
     dlg->overlay_alpha = 180;
@@ -673,6 +674,21 @@ void modal_dialog_hide(ModalDialog *dlg) {
 
 bool modal_dialog_is_active(ModalDialog *dlg) {
     return dlg->active;
+}
+
+void modal_dialog_set_focus(ModalDialog *dlg, int index) {
+    if (index >= -1 && index < dlg->button_count) dlg->focus = index;
+}
+
+/* Buttons are in reading order whichever layout draw picks (side by side for
+ * two, stacked otherwise), so previous/next is right for both. */
+void modal_dialog_focus_step(ModalDialog *dlg, UiDir d) {
+    int n = dlg->button_count;
+    if (dlg->focus < 0 || n <= 0) return;
+    if (d == UI_DIR_UP || d == UI_DIR_LEFT)
+        dlg->focus = dlg->focus > 0 ? dlg->focus - 1 : n - 1;
+    else
+        dlg->focus = dlg->focus + 1 < n ? dlg->focus + 1 : 0;
 }
 
 void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb) {
@@ -755,8 +771,15 @@ void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb) {
         }
     }
 
+    /* The focused button — the one Enter presses — is drawn highlighted on a
+     * copy: writing visual_state here would fight button_update(), which sets
+     * it back to NORMAL each quiet frame and reports that as a change, and the
+     * dialog would repaint forever.  A pressed look wins over the focus look. */
     for (int i = 0; i < n; i++) {
-        button_draw(fb, &dlg->buttons[i]);
+        Button b = dlg->buttons[i];
+        if (i == dlg->focus && b.visual_state == BTN_STATE_NORMAL)
+            b.visual_state = BTN_STATE_HIGHLIGHTED;
+        button_draw(fb, &b);
     }
 }
 

@@ -82,6 +82,47 @@ int  icon_grid_nav(const IconGrid *g, int count, int cur, UiDir d);
 int  icon_grid_nav_exit(const IconGrid *g, int count, int page, int cur,
                         int *from, UiDir d);
 
+/* ── The home-grid focus model ───────────────────────────────────────────────
+ * The keyboard/pad selection on a paged grid, ONE model for the launcher and
+ * the Control Panel home.  Pure: the caller polls, draws and dispatches; this
+ * only decides.  Rules, once per frame, in icon_grid_focus_frame():
+ *   - a real touch press hides the ring and keeps the selection;
+ *   - the selection is always on the shown page: a page flipped by touch (or
+ *     a list that shrank) re-anchors it there, same slot clamped, so Enter can
+ *     never act on a tile that is not on screen;
+ *   - with the ring hidden, the first arrow (or Enter) reveals it and does
+ *     nothing else; later arrows move it with icon_grid_nav_exit(), the page
+ *     following the selection;
+ *   - one direction per frame — pick it with icon_grid_focus_dir().
+ * Returning to home after a tile was used: icon_grid_focus_land(). */
+typedef struct {
+    int  sel;        /* absolute item index, ICON_GRID_NAV_EXIT, or -1 = none yet */
+    bool shown;      /* the ring is drawn */
+    int  exit_from;  /* the tile Up left for the X (icon_grid_nav_exit) */
+} IconGridFocus;
+
+void icon_grid_focus_init(IconGridFocus *f);
+
+/* The one direction this frame from four press edges, Up > Down > Left >
+ * Right; -1 when none.  An int, not a UiDir, so "none" is representable. */
+int  icon_grid_focus_dir(bool up, bool down, bool left, bool right);
+
+/* One frame.  *page is the page shown (already flipped by this frame's touch,
+ * if any) and is moved when the selection leaves it or the list shrank under
+ * it.  touch_press is a REAL finger's press edge — never a synthetic tap.
+ * dir is icon_grid_focus_dir()'s.  Returns what Enter activates — an absolute
+ * index or ICON_GRID_NAV_EXIT — and -1 for nothing; Enter acts only on a ring
+ * that was already showing at the start of the frame. */
+int  icon_grid_focus_frame(const IconGrid *g, int count, int *page,
+                           IconGridFocus *f, bool touch_press, int dir,
+                           bool enter);
+
+/* Item idx was used (tapped or Entered): select it and show its page.  The
+ * ring keeps its state — hidden after a tap, shown after Enter — so coming
+ * back to home puts the ring, when it is up, on the tile that was used. */
+void icon_grid_focus_land(const IconGrid *g, IconGridFocus *f, int *page,
+                          int idx);
+
 /* The standard red-X exit button in the title band. The grid only draws it and
  * reports the tap; what exiting means is the caller's (the control panel just
  * exits). Needs `top_reserve` >= ICON_GRID_EXIT_H + 2. */

@@ -244,3 +244,66 @@ int icon_grid_nav_exit(const IconGrid *g, int count, int page, int cur,
     }
     return icon_grid_nav(g, count, cur, d);
 }
+
+/* ── Home-grid focus model (icon_grid.h) ──────────────────────────────────── */
+
+void icon_grid_focus_init(IconGridFocus *f) {
+    f->sel = -1;
+    f->shown = false;
+    f->exit_from = -1;
+}
+
+int icon_grid_focus_dir(bool up, bool down, bool left, bool right) {
+    return up ? UI_DIR_UP : down ? UI_DIR_DOWN : left ? UI_DIR_LEFT
+         : right ? UI_DIR_RIGHT : -1;
+}
+
+/* The shown page's tile in the selection's slot, clamped to what the page
+ * holds; the X when there are no tiles. */
+static int focus_anchor(const IconGrid *g, int count, int page, int slot) {
+    if (count <= 0) return ICON_GRID_NAV_EXIT;
+    int base = page * g->per_page;
+    int idx = base + (slot > 0 ? slot : 0);
+    return idx < count ? idx : count - 1;
+}
+
+int icon_grid_focus_frame(const IconGrid *g, int count, int *page,
+                          IconGridFocus *f, bool touch_press, int dir,
+                          bool enter) {
+    int pages = icon_grid_pages(g, count);
+    if (*page >= pages) *page = pages - 1;
+    if (*page < 0) *page = 0;
+
+    if (touch_press) f->shown = false;
+
+    /* The page invariant: a list that shrank, then a page flipped under the
+     * selection. */
+    if (f->sel >= count) f->sel = count > 0 ? count - 1 : -1;
+    if (f->sel >= 0 && f->sel / g->per_page != *page)
+        f->sel = focus_anchor(g, count, *page, f->sel % g->per_page);
+
+    bool seen = f->shown;
+    if (dir >= 0 || enter) {
+        if (!f->shown) {
+            f->shown = true;
+            if (f->sel == -1) f->sel = focus_anchor(g, count, *page, 0);
+        } else if (dir >= 0) {
+            if (f->sel == -1) f->sel = focus_anchor(g, count, *page, 0);
+            int next = icon_grid_nav_exit(g, count, *page, f->sel,
+                                          &f->exit_from, (UiDir)dir);
+            if (next < count) {           /* Down from the X with no tiles stays */
+                f->sel = next;
+                if (next >= 0) *page = next / g->per_page;
+            }
+        }
+    }
+
+    if (enter && seen && dir < 0 && f->sel != -1) return f->sel;
+    return -1;
+}
+
+void icon_grid_focus_land(const IconGrid *g, IconGridFocus *f, int *page,
+                          int idx) {
+    f->sel = idx;
+    if (idx >= 0) *page = idx / g->per_page;
+}
