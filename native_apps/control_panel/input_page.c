@@ -323,12 +323,18 @@ static void input_add_log(KbdState *k, const char *m) {
 }
 
 /* ── Event processing ───────────────────────────────────────────────────── */
-static void input_proc_kbd(InputState *s) {
+/* Each returns how many events it applied to the tester's state — the ones
+ * that can change what the screen shows (EV_SYN, EV_MSC and the like are read
+ * and dropped uncounted).  Zero means the frame would repaint identically, so
+ * input_page_run_fullscreen() skips it. */
+static int input_proc_kbd(InputState *s) {
+  int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     int ev=s->devs[s->fd_dev[k]].ev_num;
     struct input_event e;
     while (read(s->fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
         if (e.type!=EV_KEY || e.code>=KEY_MAX) continue;
+        n++;
         s->last_dev=s->fd_dev[k];
         const char *nm=input_key_name(e.code);
         char nb[32]; if(!nm){snprintf(nb,32,"KEY_%d",e.code);nm=nb;}
@@ -348,13 +354,15 @@ static void input_proc_kbd(InputState *s) {
         }
     }
   }
+  return n;
 }
 
-static void input_proc_mouse(const Framebuffer *fb, InputState *s) {
+static int input_proc_mouse(const Framebuffer *fb, InputState *s) {
+  int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     struct input_event e;
     while (read(s->fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
-        if (e.type==EV_REL || e.type==EV_KEY) s->last_dev=s->fd_dev[k];
+        if (e.type==EV_REL || e.type==EV_KEY) { s->last_dev=s->fd_dev[k]; n++; }
         if (e.type==EV_REL) {
             if (e.code==REL_X) {
                 s->mou.cx+=e.value;
@@ -375,14 +383,16 @@ static void input_proc_mouse(const Framebuffer *fb, InputState *s) {
         }
     }
   }
+  return n;
 }
 
-static void input_proc_pad(InputState *s) {
+static int input_proc_pad(InputState *s) {
+  int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     const int *mn=s->pad.amin[k], *mx=s->pad.amax[k];
     struct input_event e;
     while (read(s->fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
-        if (e.type==EV_ABS || e.type==EV_KEY) s->last_dev=s->fd_dev[k];
+        if (e.type==EV_ABS || e.type==EV_KEY) { s->last_dev=s->fd_dev[k]; n++; }
         if (e.type==EV_ABS) {
             int c=e.code;
             if (c>ABS_MAX) continue;
@@ -412,6 +422,7 @@ static void input_proc_pad(InputState *s) {
         }
     }
   }
+  return n;
 }
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
@@ -898,32 +909,45 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
     int slot = 0, lx = 0, ly = 0, max_fingers = 0;
     bool seen_mt = false, running = true;
 
+    /* Paints only after the touch fd delivered something: every line of this
+     * screen is a function of what was read, so a quiet panel repaints
+     * nothing (it used to clear + swap every 16 ms regardless).  The poll()
+     * below is the loop's wait, so an idle screen sleeps in the kernel. */
+    bool dirty = true;
     touch_drain_events(touch);
     while (running) {
-        fb_clear(fb, RGB(20,20,30));
-        char hdr[96]; snprintf(hdr, sizeof(hdr),
-            "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
-            seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
-        fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
-        fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
-        int fingers = 0;
-        for (int i = 0; i < MT_SLOTS; i++) {
-            if (!on[i]) continue;
-            int x = rx[i], y = ry[i];
-            touch_map_raw(touch, &x, &y);
-            fb_fill_circle(fb, x, y, 28, slot_col[i]);
-            char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
-                                   i, rx[i], ry[i], x, y);
-            fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
-            fingers++;
+        if (dirty) {
+            dirty = false;
+            /* Counted before the header, which prints the maximum — counted in
+             * the dot loop it lagged a frame, and with no next frame it stayed
+             * stale. */
+            int fingers = 0;
+            for (int i = 0; i < MT_SLOTS; i++) if (on[i]) fingers++;
+            if (fingers > max_fingers) max_fingers = fingers;
+
+            fb_clear(fb, RGB(20,20,30));
+            char hdr[96]; snprintf(hdr, sizeof(hdr),
+                "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
+                seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
+            fb_draw_text(fb, 4, 2, hdr, COLOR_WHITE, 1);
+            fb_draw_text(fb, fb->width - 160, 2, "[EXIT: top-right]", RGB(180,80,80), 1);
+            for (int i = 0; i < MT_SLOTS; i++) {
+                if (!on[i]) continue;
+                int x = rx[i], y = ry[i];
+                touch_map_raw(touch, &x, &y);
+                fb_fill_circle(fb, x, y, 28, slot_col[i]);
+                char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
+                                       i, rx[i], ry[i], x, y);
+                fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
+            }
+            fb_swap(fb);
         }
-        if (fingers > max_fingers) max_fingers = fingers;
-        fb_swap(fb);
 
         struct pollfd pfd = { .fd = touch->fd, .events = POLLIN };
         if (poll(&pfd, 1, 16) <= 0) continue;
         struct input_event ev;
         while (read(touch->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+            dirty = true;
             if (ev.type == EV_ABS) {
                 switch (ev.code) {
                 case ABS_MT_SLOT: slot = ev.value; seen_mt = true; break;
@@ -970,23 +994,47 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         state->mou.cx = (int)fb->width / 2;
         state->mou.cy = (int)fb->height / 2;
     }
+    /* ⚠️ Paint only on change — the dirty-flag rule (../CLAUDE.md →
+     * Rendering).  A full clear + fb_swap every frame, with nothing new to
+     * show, held this tester at ~45 % CPU sitting idle.  The terms: the first
+     * frame; any event the tester applied (input_proc_*'s count); a touch
+     * edge; a button look change (button_take_dirty(), as control_panel.c's
+     * main loop); and the one timed element, the mouse tester's scroll dot,
+     * which goes out SCROLL_LIT_MS after the last wheel event with no event to
+     * say so.  Nothing else on these screens moves on a clock: an unplugged
+     * device just stops sending, and the screen it leaves is already right. */
+    enum { SCROLL_LIT_MS = 300 };          /* draw_mou_test()'s window */
+    bool dirty = true;
+    bool scroll_lit = false;               /* as last painted */
     while (cp_running() && state->scr != INPUT_SCR_MAIN) {
         uint32_t now = get_time_ms();
 
+        int applied = 0;
         switch (state->scr) {
-            case INPUT_SCR_KEYBOARD: input_proc_kbd(state); break;
-            case INPUT_SCR_MOUSE:    input_proc_mouse(fb, state); break;
-            case INPUT_SCR_GAMEPAD:  input_proc_pad(state); break;
+            case INPUT_SCR_KEYBOARD: applied = input_proc_kbd(state); break;
+            case INPUT_SCR_MOUSE:    applied = input_proc_mouse(fb, state); break;
+            case INPUT_SCR_GAMEPAD:  applied = input_proc_pad(state); break;
             default: break;
         }
+        if (applied > 0) dirty = true;
+        if (scroll_lit && now - state->mou.scroll_t >= SCROLL_LIT_MS)
+            dirty = true;                  /* the dot has to go out */
 
-        switch (state->scr) {
-            case INPUT_SCR_KEYBOARD: draw_kbd_test(fb, state); break;
-            case INPUT_SCR_MOUSE:    draw_mou_test(fb, state); break;
-            case INPUT_SCR_GAMEPAD:  draw_pad_test(fb, state); break;
-            default: break;
+        if (dirty) {
+            /* Sampled before the draw, which reads the clock again later: a
+             * dot the draw lit is then always one this records as lit. */
+            uint32_t t_draw = get_time_ms();
+            switch (state->scr) {
+                case INPUT_SCR_KEYBOARD: draw_kbd_test(fb, state); break;
+                case INPUT_SCR_MOUSE:    draw_mou_test(fb, state); break;
+                case INPUT_SCR_GAMEPAD:  draw_pad_test(fb, state); break;
+                default: break;
+            }
+            fb_swap(fb);
+            dirty = false;
+            scroll_lit = state->scr == INPUT_SCR_MOUSE &&
+                         t_draw - state->mou.scroll_t < SCROLL_LIT_MS;
         }
-        fb_swap(fb);
 
         touch_poll(touch);
         TouchState ts = touch_get_state(touch);
@@ -1012,7 +1060,11 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         default: break;
         }
 
-        usleep(16000);
+        /* Read into a local so the || cannot short-circuit past the clear. */
+        bool btn_look = button_take_dirty();
+        if (ts.pressed || ts.released || btn_look) dirty = true;
+
+        usleep(FRAME_DELAY_ACTIVE_US);
     }
     input_close(state);   /* a signal can end the loop inside a tester */
     state->scr = INPUT_SCR_MAIN;

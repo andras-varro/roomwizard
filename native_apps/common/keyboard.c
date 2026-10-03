@@ -203,66 +203,80 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
     /* ── Main loop ───────────────────────────────────────────────────── */
     uint32_t last_press = 0;
 
+    /* Repaint only when the screen would change.  The whole frame is a
+     * function of (work, cursor, shifted): no Button here is driven through
+     * button_update()/button_check_press() — hits are tested with
+     * button_is_touched(), which changes no visual_state — so there is no
+     * pressed look, no timer and no animation to keep painting.  A full
+     * clear + fb_swap every frame copies the 1.5 MB back buffer to the
+     * uncached framebuffer and cost more CPU than a game in play. */
+    bool dirty = true;                     /* the first frame always draws */
+
     for (;;) {
-        /* ── Draw ────────────────────────────────────────────────────── */
-        fb_clear(fb, COLOR_BLACK);
-
-        /* Title */
-        int tw = text_measure_width(title, 2);
-        fb_draw_text(fb, fb->width / 2 - tw / 2, 10, title, COLOR_YELLOW, 2);
-
-        /* Input field box */
-        int box_x = safe_l + 20;
-        int box_w = safe_w - 40;
-        fb_fill_rect(fb, box_x, 50, box_w, 52, RGB(20, 20, 20));
-        fb_draw_rect(fb, box_x, 50, box_w, 52, COLOR_CYAN);
-
-        /* Current text with underscore cursor */
-        char display[max_len + 2];
-        strncpy(display, work, max_len);
-        display[cursor] = '\0';           /* safety — cursor tracks length */
-        int dlen = (int)strlen(display);
-        if (dlen < max_len) {
-            display[dlen]     = '_';
-            display[dlen + 1] = '\0';
-        }
-        int nw = text_measure_width(display, 3);
-        fb_draw_text(fb, box_x + (box_w - nw) / 2, 60, display, COLOR_CYAN, 3);
-
-        /* Hint for ALPHA layout */
-        if (is_alpha) {
-            fb_draw_text(fb, safe_l, kb_y - 18, "TAP _ FOR SPACE",
-                         RGB(80, 80, 80), 1);
-        }
-
-        /* Key grid */
+        /* Which glyph set the keys show — needed by input as well as drawing,
+         * so it is computed whether or not this frame paints. */
         const char **cur_keys = keys;
         if (has_shift && !shifted)
             cur_keys = alt_keys;
 
-        for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < cols; c++) {
-                char ch = cur_keys[r][c];
-                if (layout == KB_LAYOUT_NUMERIC && ch == ' ')
-                    continue;   /* empty slot */
+        /* ── Draw ────────────────────────────────────────────────────── */
+        if (dirty) {
+            fb_clear(fb, COLOR_BLACK);
 
-                /* Update label to reflect current shift state */
-                char label[2] = { ch, '\0' };
-                strncpy(letter_btns[r][c].text, label, sizeof(letter_btns[r][c].text) - 1);
+            /* Title */
+            int tw = text_measure_width(title, 2);
+            fb_draw_text(fb, fb->width / 2 - tw / 2, 10, title, COLOR_YELLOW, 2);
 
-                button_draw(fb, &letter_btns[r][c]);
+            /* Input field box */
+            int box_x = safe_l + 20;
+            int box_w = safe_w - 40;
+            fb_fill_rect(fb, box_x, 50, box_w, 52, RGB(20, 20, 20));
+            fb_draw_rect(fb, box_x, 50, box_w, 52, COLOR_CYAN);
+
+            /* Current text with underscore cursor */
+            char display[max_len + 2];
+            strncpy(display, work, max_len);
+            display[cursor] = '\0';           /* safety — cursor tracks length */
+            int dlen = (int)strlen(display);
+            if (dlen < max_len) {
+                display[dlen]     = '_';
+                display[dlen + 1] = '\0';
             }
+            int nw = text_measure_width(display, 3);
+            fb_draw_text(fb, box_x + (box_w - nw) / 2, 60, display, COLOR_CYAN, 3);
+
+            /* Hint for ALPHA layout */
+            if (is_alpha) {
+                fb_draw_text(fb, safe_l, kb_y - 18, "TAP _ FOR SPACE",
+                             RGB(80, 80, 80), 1);
+            }
+
+            /* Key grid */
+            for (int r = 0; r < rows; r++) {
+                for (int c = 0; c < cols; c++) {
+                    char ch = cur_keys[r][c];
+                    if (layout == KB_LAYOUT_NUMERIC && ch == ' ')
+                        continue;   /* empty slot */
+
+                    /* Update label to reflect current shift state */
+                    char label[2] = { ch, '\0' };
+                    strncpy(letter_btns[r][c].text, label, sizeof(letter_btns[r][c].text) - 1);
+
+                    button_draw(fb, &letter_btns[r][c]);
+                }
+            }
+
+            /* Action buttons */
+            button_draw(fb, &btn_del);
+            button_draw(fb, &btn_clear);
+            if (has_shift)
+                button_draw(fb, &btn_shift);
+            button_draw(fb, &btn_cancel);
+            button_draw(fb, &btn_ok);
+
+            fb_swap(fb);
+            dirty = false;
         }
-
-        /* Action buttons */
-        button_draw(fb, &btn_del);
-        button_draw(fb, &btn_clear);
-        if (has_shift)
-            button_draw(fb, &btn_shift);
-        button_draw(fb, &btn_cancel);
-        button_draw(fb, &btn_ok);
-
-        fb_swap(fb);
 
         /* ⚠️ A blocking sub-loop IS a render loop, and this one owns the screen
          * for as long as a player takes to type a name.  Without this the mix bus
@@ -296,6 +310,7 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
                                 store = ' ';
                             work[cursor++] = store;
                             work[cursor]   = '\0';
+                            dirty = true;
                         }
                         last_press = now;
                         handled = true;
@@ -306,15 +321,20 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
             /* Action buttons */
             if (!handled) {
                 if (button_is_touched(&btn_del, state.x, state.y)) {
-                    if (cursor > 0) work[--cursor] = '\0';
+                    if (cursor > 0) {
+                        work[--cursor] = '\0';
+                        dirty = true;
+                    }
                     last_press = now;
                 } else if (button_is_touched(&btn_clear, state.x, state.y)) {
+                    if (cursor > 0) dirty = true;
                     cursor = 0;
                     memset(work, 0, max_len + 1);
                     last_press = now;
                 } else if (has_shift &&
                            button_is_touched(&btn_shift, state.x, state.y)) {
                     shifted = !shifted;
+                    dirty = true;
                     /* Swap key pointer for next frame redraw */
                     keys = shifted ? full_upper_keys : full_lower_keys;
                     last_press = now;
@@ -332,6 +352,8 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
             }
         }
 
-        usleep(16000);   /* ~60 fps */
+        /* Still a full-rate tick when nothing paints: ui_frame_service() above
+         * must keep the mix bus advancing, and a tap must be seen promptly. */
+        usleep(FRAME_DELAY_ACTIVE_US);
     }
 }
