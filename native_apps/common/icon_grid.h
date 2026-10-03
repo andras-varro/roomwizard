@@ -68,8 +68,8 @@ int  icon_grid_page_hit(int x, int page, int pages);
 
 /* Keyboard/pad movement over ABSOLUTE item indices, the launcher's model:
  * Left/Right step -1/+1 in reading order (off the end of a row onto the next,
- * off the end of a page onto the next page), Up/Down step -/+cols; a move that
- * would leave 0..count-1 does nothing (no wrap).  The page is the caller's to
+ * off the end of a page onto the next page, wrapping last <-> first); Up/Down
+ * step -/+cols and do nothing past an edge.  The page is the caller's to
  * follow (idx / per_page).  cur < 0 = nothing selected: returned unchanged —
  * where the first key lands is the caller's choice. */
 int  icon_grid_nav(const IconGrid *g, int count, int cur, UiDir d);

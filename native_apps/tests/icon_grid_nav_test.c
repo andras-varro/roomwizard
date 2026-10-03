@@ -10,12 +10,12 @@
  *       common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c \
  *       common/audio_out.c common/audio_wav.c -lm && ./build/icon_grid_nav_test
  *
- * Group 1 pins the launcher's semantics as they were before the function was
- * shared: launcher_ref() below is the launcher's former inline navigation,
- * kept verbatim in shape (each branch guarded the same way), and the shared
+ * Group 1 pins the launcher's semantics: launcher_ref() below is the former
+ * inline navigation with Left/Right made to wrap (last tile -> first, first ->
+ * last), each branch otherwise guarded as it was, and the shared
  * function must agree with it for every count, cur, direction and column
  * count.  Group 2 spells the important cases out so a failure names them —
- * notably that Right on the very last tile does nothing.  Group 3 is the
+ * notably the Left/Right wrap at both ends.  Group 3 is the
  * Control Panel home's exit X.
  *
  * ⚠️ What it cannot see: the launcher's ensure_selection_visible() and the
@@ -34,10 +34,10 @@ static void expect(const char *what, int got, int want) {
     }
 }
 
-/* The launcher's navigation before it moved into icon_grid.c, one key. */
+/* The launcher's navigation as it moved into icon_grid.c, plus the wrap. */
 static int launcher_ref(int cols, int count, int sel, UiDir d) {
-    if (d == UI_DIR_RIGHT) { if (sel + 1 < count) sel++; }
-    if (d == UI_DIR_LEFT)  { if (sel > 0) sel--; }
+    if (d == UI_DIR_RIGHT) { sel = (sel + 1 < count) ? sel + 1 : 0; }
+    if (d == UI_DIR_LEFT)  { sel = (sel > 0) ? sel - 1 : count - 1; }
     if (d == UI_DIR_DOWN)  { int t = sel + cols; if (t < count) sel = t; }
     if (d == UI_DIR_UP)    { int t = sel - cols; if (t >= 0) sel = t; }
     return sel;
@@ -78,8 +78,8 @@ int main(void) {
         expect("Right along the top row: 0 -> 1",          icon_grid_nav(&g, 9, 0, UI_DIR_RIGHT), 1);
         expect("Right off the top row: 2 -> 3 (bottom)",   icon_grid_nav(&g, 9, 2, UI_DIR_RIGHT), 3);
         expect("Right off page 1: 5 -> 6 (page 2)",        icon_grid_nav(&g, 9, 5, UI_DIR_RIGHT), 6);
-        expect("Right on the very last tile stays: 8",     icon_grid_nav(&g, 9, 8, UI_DIR_RIGHT), 8);
-        expect("Left on the first tile stays: 0",          icon_grid_nav(&g, 9, 0, UI_DIR_LEFT), 0);
+        expect("Right on the last tile wraps: 8 -> 0",     icon_grid_nav(&g, 9, 8, UI_DIR_RIGHT), 0);
+        expect("Left on the first tile wraps: 0 -> 8",     icon_grid_nav(&g, 9, 0, UI_DIR_LEFT), 8);
         expect("Left back onto page 1: 6 -> 5",            icon_grid_nav(&g, 9, 6, UI_DIR_LEFT), 5);
         expect("Down: 1 -> 4",                             icon_grid_nav(&g, 9, 1, UI_DIR_DOWN), 4);
         expect("Down off page 1's bottom row: 4 -> 7",     icon_grid_nav(&g, 9, 4, UI_DIR_DOWN), 7);

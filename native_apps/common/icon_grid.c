@@ -223,8 +223,8 @@ uint32_t icon_grid_letter_color(const char *label) {
 int icon_grid_nav(const IconGrid *g, int count, int cur, UiDir d) {
     if (cur < 0) return cur;
     switch (d) {
-    case UI_DIR_RIGHT: return cur + 1 < count       ? cur + 1       : cur;
-    case UI_DIR_LEFT:  return cur > 0               ? cur - 1       : cur;
+    case UI_DIR_RIGHT: return cur + 1 < count       ? cur + 1       : 0;
+    case UI_DIR_LEFT:  return cur > 0               ? cur - 1       : count - 1;
     case UI_DIR_DOWN:  return cur + g->cols < count ? cur + g->cols : cur;
     default:           return cur - g->cols >= 0    ? cur - g->cols : cur;
     }
