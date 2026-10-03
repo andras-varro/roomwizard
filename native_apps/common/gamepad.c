@@ -811,6 +811,8 @@ static void poll_keyboard(GamepadManager *gm) {
 /* Every mouse node feeds one cursor: relative motion is summed across nodes
  * before acceleration, and each button is the OR of its level on every node. */
 static void poll_mouse(GamepadManager *gm, InputState *state) {
+    state->mouse_dx = state->mouse_dy = 0;
+    gm->mouse_left_down_ev = false;
     if (gm->mouse_count <= 0) {
         /* No mouse (or it left): nothing can be holding a mouse button. */
         state->mouse_left_held = state->mouse_right_held = 0;
@@ -836,8 +838,10 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
             } else if (ev.type == EV_KEY) {
                 bool down = (ev.value != 0);
 
-                if (ev.code == BTN_LEFT)
+                if (ev.code == BTN_LEFT) {
                     btn[0] = down;
+                    if (down) gm->mouse_left_down_ev = true;
+                }
                 else if (ev.code == BTN_RIGHT)
                     btn[1] = down;
                 else if (ev.code == BTN_MIDDLE)
@@ -877,6 +881,8 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
 
         gm->mouse_x += final_dx;
         gm->mouse_y += final_dy;
+        state->mouse_dx = final_dx;
+        state->mouse_dy = final_dy;
 
         /* Clamp to screen bounds */
         if (gm->mouse_x < 0) gm->mouse_x = 0;
@@ -937,8 +943,11 @@ static void compute_mouse_edges(GamepadManager *gm, InputState *state) {
     bool right_now  = state->mouse_right_held ? true : false;
     bool middle_now = state->mouse_middle_held ? true : false;
 
-    state->mouse_left_pressed    = (left_now && !gm->prev_mouse_left) ? 1 : 0;
-    state->mouse_left_released   = (!left_now && gm->prev_mouse_left) ? 1 : 0;
+    /* A down event that ends released within the poll was a whole click:
+     * report both edges, as touch does for a tap inside one poll. */
+    bool left_click = gm->mouse_left_down_ev && !left_now;
+    state->mouse_left_pressed    = ((left_now && !gm->prev_mouse_left) || left_click) ? 1 : 0;
+    state->mouse_left_released   = ((!left_now && gm->prev_mouse_left) || left_click) ? 1 : 0;
     state->mouse_right_pressed   = (right_now && !gm->prev_mouse_right) ? 1 : 0;
     state->mouse_right_released  = (!right_now && gm->prev_mouse_right) ? 1 : 0;
     state->mouse_middle_pressed  = (middle_now && !gm->prev_mouse_middle) ? 1 : 0;

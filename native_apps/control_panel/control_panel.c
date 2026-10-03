@@ -29,6 +29,7 @@
 #include "../common/config.h"
 #include "../common/icon_grid.h"
 #include "../common/gamepad.h"
+#include "../common/pointer.h"
 #include "../common/ui_focus.h"
 #include "cp_ui.h"
 #include "cp_page.h"
@@ -414,6 +415,7 @@ static UiRect         focus_rect;        /* where it was: re-pick, and the ring 
 static const void    *focus_ctx;         /* the view focus_idx belongs to */
 static int            focus_n;           /* how many focusables it had */
 static UiTap          focus_tap;
+static Pointer        g_pointer;         /* the mouse arrow; a click is a touch */
 
 /* The rects that take a tap in the current view, and the view's identity.
  * Home: the tiles of the shown page (n_tiles of them), then the exit X. */
@@ -881,6 +883,7 @@ int main(void) {
 
     rebuild_ui(&state);
     home_load_icons();   /* the home grid is the startup view */
+    pointer_init(&g_pointer);   /* after touch_init: SCREEN_SAFE_* */
 
     bool needs_redraw = true;  /* first frame always draws */
 
@@ -925,6 +928,8 @@ int main(void) {
 
             fb_swap(&fb);
             needs_redraw = false;
+            pointer_invalidate(&g_pointer);   /* the frame lacks it */
+            pointer_paint(&g_pointer, &fb);
         }
 
         /* --- Save visual state before input handling --- */
@@ -951,8 +956,16 @@ int main(void) {
         bool key_act  = kb[BTN_ID_ACTION].pressed || kb[BTN_ID_JUMP].pressed;
         bool key_back = kb[BTN_ID_BACK].pressed   || kb[BTN_ID_PAUSE].pressed;
 
-        /* A real finger hides the ring (touch-only use never shows one); a
-         * queued Enter/Space tap otherwise stands in for the finger. */
+        /* The mouse: motion moves the arrow, a left click becomes this
+         * frame's touch at it, so the home grid, the pages and the dialog all
+         * take it as a tap.  Only the real finger and the keys hide the arrow;
+         * the click then counts as a real press below, hiding the ring. */
+        pointer_update(&g_pointer, &g_pad_in, ts.pressed,
+                       key_dir >= 0 || key_act || key_back, &ts);
+
+        /* A real finger (or a mouse click) hides the ring (touch-only use
+         * never shows one); a queued Enter/Space tap otherwise stands in for
+         * the finger. */
         bool real_press = ts.pressed;
         if (real_press) focus_shown = false;
         {
@@ -1045,7 +1058,11 @@ int main(void) {
          * starve.  busy() reports live state (cp_page.h), so a static page
          * still idles at the cheap rate. */
         bool page_busy = state.page && state.page->busy && state.page->busy();
-        usleep((needs_redraw || page_busy || focus_tap.phase)
+        /* The arrow alone, with fb_swap_rect(), unless a repaint is due (it
+         * paints the arrow itself): a still mouse draws nothing, a moving one
+         * keeps the loop at the active rate. */
+        bool ptr_moved = !needs_redraw && pointer_paint(&g_pointer, &fb);
+        usleep((needs_redraw || page_busy || focus_tap.phase || ptr_moved)
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }
 

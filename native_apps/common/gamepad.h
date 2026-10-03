@@ -145,6 +145,10 @@ typedef struct {
     int mouse_left_held,   mouse_left_pressed,   mouse_left_released;
     int mouse_right_held,  mouse_right_pressed,  mouse_right_released;
     int mouse_middle_held, mouse_middle_pressed,  mouse_middle_released;
+    /* This poll's motion after acceleration — what moved mouse_x/y, before
+     * its clamp — for a pointer that keeps its own position (pointer.c,
+     * clamped to SCREEN_SAFE_*).  0 on a quiet poll. */
+    int mouse_dx, mouse_dy;
 } InputState;
 
 /* Touch button region — maps a screen area to an abstract button */
@@ -193,6 +197,10 @@ typedef struct {
     bool prev_mouse_left;
     bool prev_mouse_right;
     bool prev_mouse_middle;
+    /* A BTN_LEFT down event arrived during this poll.  A click shorter than
+     * the poll interval (at FRAME_DELAY_IDLE_US, 100 ms) ends released with no
+     * level change to see, so this is what gives it its press and release. */
+    bool mouse_left_down_ev;
 
     /* Axis calibration data (up to GAMEPAD_MAX_AXES axes) */
     int axis_min[GAMEPAD_MAX_AXES];

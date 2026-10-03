@@ -30,6 +30,7 @@
 #include "common/icon_grid.h"
 #include "common/logger.h"
 #include "common/gamepad.h"
+#include "common/pointer.h"
 #include "common/hardware.h"
 #include "common/config.h"
 #include <stdio.h>
@@ -128,6 +129,7 @@ typedef struct {
     TouchInput  touch;
     GamepadManager gamepad;
     InputState  input;
+    Pointer     pointer;            /* the mouse arrow; a click is a touch */
     uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
     bool        needs_redraw;       /* Dirty flag — skip rendering when false */
@@ -572,8 +574,8 @@ static int power_button_at(int x, int y) {
 
 /* While the dialog is up it takes ALL input. A touch acts on RELEASE, and only
  * on the button it went down on, so a finger can slide off SHUT DOWN to abort.
- * No mouse: there is no pointer drawn to aim it with.  The focused button is
- * the dialog's own (modal_dialog_focus_step), drawn highlighted always. */
+ * A mouse click arrives here as a touch (pointer_update).  The focused button
+ * is the dialog's own (modal_dialog_focus_step), drawn highlighted always. */
 static void handle_power_dialog(Launcher *l, const TouchState *ts) {
     InputState *inp = &l->input;
 
@@ -672,6 +674,7 @@ int main(int argc, char *argv[]) {
 
     /* Compute grid layout based on screen dimensions */
     compute_grid_layout(&launcher.fb);
+    pointer_init(&launcher.pointer);   /* after touch_init: SCREEN_SAFE_* */
 
     modal_dialog_init(&power_dialog, "SHUT DOWN OR REBOOT?", NULL, 3);
     modal_dialog_set_button(&power_dialog, PWR_SHUTDOWN, "SHUT DOWN", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -718,9 +721,25 @@ int main(int argc, char *argv[]) {
             if (launcher.needs_redraw) {
                 draw_launcher(&launcher);
                 launcher.needs_redraw = false;
+                pointer_invalidate(&launcher.pointer);
+                pointer_paint(&launcher.pointer, &launcher.fb);
             }
             usleep(FRAME_DELAY_ACTIVE_US);
             continue;
+        }
+
+        /* The mouse: motion moves the arrow, a left click becomes this
+         * frame's touch at it — so everything below, the dialog included,
+         * takes it as a tap and a click hides the ring as a finger does.
+         * Only the real finger and the nav keys hide the arrow. */
+        {
+            const ButtonState *kb = launcher.input.buttons;
+            bool nav = kb[BTN_ID_UP].pressed   || kb[BTN_ID_DOWN].pressed  ||
+                       kb[BTN_ID_LEFT].pressed || kb[BTN_ID_RIGHT].pressed ||
+                       kb[BTN_ID_JUMP].pressed || kb[BTN_ID_ACTION].pressed ||
+                       kb[BTN_ID_BACK].pressed || kb[BTN_ID_PAUSE].pressed;
+            pointer_update(&launcher.pointer, &launcher.input, ts.pressed,
+                           nav, &ts);
         }
 
         if (modal_dialog_is_active(&power_dialog)) {
@@ -728,8 +747,8 @@ int main(int argc, char *argv[]) {
             handle_power_dialog(&launcher, &ts);
         } else {
             /* Touch first: a page it flips this frame is the page the focus
-             * model then re-anchors the selection onto.  No mouse on this
-             * screen — there is no pointer drawn to aim it with. */
+             * model then re-anchors the selection onto.  A mouse click is in
+             * ts already (pointer_update above). */
             if (ts.pressed)
                 LOG_DEBUG(&launcher.logger, "Touch: (%d, %d)", ts.x, ts.y);
             int result = handle_touch(&launcher, &ts);
@@ -767,7 +786,12 @@ int main(int argc, char *argv[]) {
             draw_launcher(&launcher);
             launcher.needs_redraw = false;
             drew_frame = true;
+            pointer_invalidate(&launcher.pointer);   /* the frame lacks it */
         }
+        /* The arrow alone, with fb_swap_rect(): a still mouse draws nothing,
+         * a moving one keeps the loop at the active rate. */
+        if (pointer_paint(&launcher.pointer, &launcher.fb))
+            drew_frame = true;
 
         /* Adaptive sleep — longer idle sleep reduces CPU usage significantly.
          * ~30 fps when actively redrawing; ~10 fps polling when idle. */
