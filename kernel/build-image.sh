@@ -7,8 +7,8 @@
 # home for them (the cross-compiler is its `core` group; mkimage and fdtput its `kmod` group,
 # fdtput by way of the device-tree-compiler package).
 #
-# Produces: <out>/zImage-with-dtb and <out>/uImage-test. It never writes uImage-system:
-# that file has exactly one writer, lib/rw-usbpower.sh.
+# Produces: <out>/zImage-with-dtb and <out>/uImage-test. It never writes p1: installing the image
+# as uImage-system is a manual operator step (kernel/README.md); lib/rw-usbpower.sh is the only scripted writer.
 
 set -euo pipefail
 
@@ -212,4 +212,4 @@ mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n '' \
 echo; echo "  Image built. DTB source: ${DTB_SOURCE}"
 echo "  md5sums:"
 md5sum "$ZIMAGE" "$DTB" "${OUT_DIR}/uImage-test" | sed 's/^/    /'
-echo "  Stage it on p1 under a NEW filename; never as uImage-system."
+echo "  Install by hand: back up the running uImage-system on p1, then copy this over it (kernel/README.md)."
