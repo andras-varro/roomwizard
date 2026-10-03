@@ -152,19 +152,6 @@ reconnect. Console warnings are defects even when harmless. Our image evidently 
 nesting subclass. **Next:** read `.config` for the lockdep symbols and the upstream change to
 `l2cap_sock_new_connection_cb`; decide between backporting the annotation and dropping lockdep from the image.
 
-### B50. Office Runner in portrait: the floor sits mid-screen, so the runner floats — open, operator report 2026-10-02
-
-Operator's description: in portrait the platform/floor is in the middle of the screen rather than at the bottom,
-so the runner seems to float ("running in the clouds"). Not broken, just not as nice as landscape; not seen by us.
-**[inferred from code]** Portrait is one global flag file,
-`/opt/games/portrait.mode` (`fb_is_portrait_mode()`, `common/framebuffer.c:290`), read by every `fb_init()`
-(`:510`), which swaps the app's width and height. `platformer.c` (the Office Runner binary) never mentions
-`portrait` (grep), so its camera, HUD and level layout assume 800 wide (`fb.width` uses from `:755`). **Possible
-fix (operator's idea):** mandate landscape for it. The hook would be a per-app override of the flag in
-`fb_init()` — `platformer.c:1869` is the call — or a landscape-only manifest key in `app-manifests.sh` read by
-the launcher; neither exists today. Prefer a library hook over a per-app edit. Verify on the panel in both
-orientations.
-
 ### B51. BT failover miss: a BlueALSA A2DP stream froze without error — open, sporadic, seen once 2026-10-02
 
 **Measured, `.188`, 11:15 CDT:** `WI-C310` (`90:7A:58:B9:C6:F5`) pinned, `VT360` (`08:EB:ED:FE:C1:3D`) connected. In
@@ -177,7 +164,7 @@ times and could not reproduce it.
 **Detector deployed, never fired:** `alsa_space` in `common/audio_out.c` treats a ring that owes playback and makes no
 progress for `ALSA_STALL_MS` (2000) as a lost device, logs `audio_out: <pcm> stalled — no progress for N ms (avail=…
 state=…)` and refuses that PCM until a link change. "is gone" / "is available" and the `audio_mix_test` session start
-carry wall-clock stamps. **Known consequence:** with one headset a pin stall can fall to the same frozen transport and
+carry wall-clock stamps. **Seen on a real link loss, measured `.188` 13:55 device time:** the operator switched off the `WI-C310`, then unplugged the BT dongle; both times it logged "stalled — no progress for ~2030 ms (avail=26624 state=DISCONNECTED)", then "is gone" and a working failover. The detector works on a real loss; the original freeze (no error, no disconnect) has not recurred. **Known consequence:** with one headset a pin stall can fall to the same frozen transport and
 stall again, up to ~4 s of silence. **Open work, on the next occurrence:** read `/tmp/mix.log` and `app_stdout.log` for
 the "stalled" line and its time, correlate with `/var/log/messages`, and optionally run `bluealsa` verbose. **Done when**
 a recurrence is attributed to one of the two mechanisms, or none recurs over a long session.
@@ -448,21 +435,6 @@ a grep finds no cursor drawn there, and `control_panel.c` never polls `gamepad_p
 source; the launcher's click path not exercised with a mouse on the panel]**. **Done when** a pointer is drawn
 and a click activates a tile in both; the draw belongs in one shared helper, not per app.
 
-### F109. Static UI screens cost more CPU than a running game — open, measured on .188 2026-10-01
-
-By `top` and operator reading: Snake in play with a BT pad ~10 %; the Control Panel pad tester idle ~45 %
-(44.6 / 45.0 / 44.5 with the pad connected / disconnected / reconnected, so pad-independent); Office Runner
-~46 %; high-score entry and the on-screen keyboard ~54 % (operator readings). **Not Bluetooth.** **Hypothesis
-[inferred, unmeasured]:** a redraw or flip every frame that is not gated on change, or a non-blocking input poll
-with no sleep — `common/keyboard.c` is shared by every game's high-score entry. **Discriminators:** voluntary vs
-nonvoluntary context switches in `/proc/<pid>/status` over a few seconds (a spinning poll shows almost none
-voluntary); then read the tester's and the keyboard's loop for what gates a redraw and whether the poll has a
-timeout. **Measured later, `.188` 2026-10-02:** the Frogger high-score screen used ~70 % CPU, more than Frogger
-gameplay at 51 % in landscape (`/proc/<pid>/stat` over 10 s). **Cause direction [inferred, unmeasured]:** every frame
-repaints the full 1.5 MB 32bpp back buffer and copies it to the uncached framebuffer, which is bound by memory
-bandwidth. **Options [estimates, none costed]:** dirty rectangles (skip `fb_swap` on unchanged frames), 16bpp, or DSS
-scaling (F2). **Done when** an idle static screen is within a few percent of the lowest-cost game screen.
-
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
 The launcher tiles look dated next to the Control Panel's page icons. **Where each comes from (read from
@@ -481,14 +453,6 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 ### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
 
 The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
-
-### F113. Bluetooth page: scan results in their own list — open, operator request
-
-Scan results share the known-device list (`bt_ctl.c:155-194` keeps one `dev[]` array), so a newly scanned device
-stays at its discovery position and a connected one does not move up. The operator wants scan results in a separate
-list; how device selection then works is under evaluation **[unmeasured]**. Code: `native_apps/control_panel/bluetooth_page.c`,
-`bt_ctl.c`. **Done when** the page shows paired/connected devices apart from scan results and a connected device
-leads its list.
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 

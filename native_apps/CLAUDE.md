@@ -223,6 +223,7 @@ yields the idle delay, pinning the app to 10 fps — a shipped bug. Capture it f
 
 **An app that repaints only on change must OR `button_take_dirty()` into its redraw test** — a `Button`'s look
 change is the widget's to report (semantics: the `common.h` comment); without it a button stays yellow.
+**A static screen repaints only when something changed**: a full 800x480 clear+redraw+swap costs ~15-17 ms CPU, so frame rate alone sets cost (measured: Snake ~10 % at ~7 fps, Frogger 51 % at 30 fps; idle `keyboard_enter`/input testers fell from 45-70 % to <= 2 % once gated, paced at `FRAME_DELAY_ACTIVE_US`).
 
 **A component whose `update()` both draws and reads input has to tell the caller when it still needs
 frames** — the loop's dirty flag sees only what the loop can see. `gameover_update()` is a `CHECK` →
