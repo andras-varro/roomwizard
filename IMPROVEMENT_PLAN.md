@@ -398,12 +398,7 @@ this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel wi
 RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
 paths a launcher plus one game actually touch, listed from a BBB boot.
 
-### F107. Control Panel menu has no keyboard navigation — open, measured by the operator on .188 2026-10-01
-
-A keyboard works in the Input page's keyboard tester but cannot move around the menu. `control_panel.c`'s main
-loop polls only `touch_poll(&touch)` (~`:768`) and never calls `gamepad_poll()`, whereas `app_launcher.c` does
-(`:753`) and routes it through `handle_gamepad_input()` (`:374`) **[read from source; not tried on the panel]**.
-**Done when** arrow keys + Enter/Esc move through the tile grid and a page on .188.
+**Future scope, operator-agreed, not scheduled:** mouse-only operation of the launcher, Control Panel and games, for a unit with no touch and no keyboard or pad. The operator has a RoomWizard whose touch is broken, and a BeagleBone has no touch. It depends on F108 (no mouse pointer).
 
 ### F108. No mouse pointer in the launcher or the Control Panel — open, measured by the operator on .188 2026-10-01
 
@@ -427,9 +422,9 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
 
-### F112. Control Panel and vnc_client have no gamepad navigation — open, operator report 2026-10-02
+### F112. vnc_client has no gamepad navigation — open, operator report 2026-10-02
 
-The Control Panel (including its Settings pages) and `vnc_client` cannot be driven by a pad; every other app can. "Always like that", not a regression. **Done when** the pad can navigate them (`gamepad.c` is the input abstraction); the Control Panel's keyboard half is a separate entry above.
+`vnc_client` cannot be driven by a pad as the launcher and the Control Panel now can: measured on the panel, the Xbox pad's d-pad, bottom-right button and Back work in the Control Panel through the same gamepad map. **Done when** a pad can operate a `vnc_client` session (`gamepad.c` is the input abstraction; `common/ui_focus.c` is pure and linkable).
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 

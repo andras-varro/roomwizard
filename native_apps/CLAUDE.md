@@ -25,7 +25,7 @@ it also takes one binary: `./check-arm-safe.sh <path>`.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
 keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o input_scan.o` (`GAMEPAD_OBJ`); some add `ui_layout.o ppm.o
-logger.o`; the two tools that measure the touch mapping (`control_panel`, `touch_raw`) add
+logger.o`; `control_panel` also links `GAMEPAD_OBJ` and `ui_focus.o`; the two tools that measure the touch mapping (`control_panel`, `touch_raw`) add
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
 
@@ -42,15 +42,16 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 
 | Module | Use it for | Never do this instead |
 |---|---|---|
-| `framebuffer.c` | double-buffered draw, sprite blit, the `SCREEN_VISIBLE_*` / `SCREEN_SAFE_*` macros | writing `/dev/fb0` yourself |
+| `framebuffer.c` | double-buffered draw, `fb_swap_rect()` (band-only present, byte-identical to `fb_swap()` inside the rect; `tests/fb_rotate_test.c`), sprite blit, the `SCREEN_VISIBLE_*` / `SCREEN_SAFE_*` macros | writing `/dev/fb0` yourself |
 | `touch_input.c` | touch events, the raw→panel→logical map, publishing the touch inset | reading evdev directly |
 | `touch_calib.c` | measuring that map: targets, fit, verdict, edge sweep, reach→inset, sanity gate, backup | a second copy of the fit or the sweep |
 | `gamepad.c` | **all** input: touch + USB keyboard/mouse + Xbox pad → abstract buttons | per-app evdev scanning |
 | `input_scan.c` | the evdev scan: classify, open every node of a kind, skip held nodes, rescan by calling again (`gamepad.c`, `control_panel`, `vnc_client` and ScummVM all call it) | a fourth copy of the classifier or scan loop |
 | `hardware.c` | LEDs, backlight, non-blocking `LedPulse` | writing `/sys/class/leds/*`, or a `usleep()` LED loop |
-| `common.c` | buttons, `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()`; `Button`/`ToggleSwitch` carry `disabled` and a disabled one refuses all input itself (touch, tap, press, keyboard hit-test) and draws grey, so set `.disabled` from state | hand-rolled widgets; per-use guards, hand-rolled greying or early returns in a page |
+| `common.c` | buttons (`button_rect()` / `toggle_hit_rect()` are the one hit-box arithmetic: draw, hit-test and focus all derive from them), `ModalDialog`, `GameOverScreen`, safe-area screens, `acquire_instance_lock()`; `Button`/`ToggleSwitch` carry `disabled` and a disabled one refuses all input itself (touch, tap, press, keyboard hit-test) and draws grey, so set `.disabled` from state | hand-rolled widgets; per-use guards, hand-rolled greying or early returns in a page |
 | `ui_layout.c` | grid/list layout, `ScrollableList` | manual pixel arithmetic |
-| `icon_grid.c` | the paged icon-tile grid (layout + receipt, tile, paging, hit-test, 96 px icon load) — the launcher's, and the home screen of any tile menu | a second tile grid; the launcher's frame was md5-identical before and after the extraction |
+| `icon_grid.c` | the paged icon-tile grid (layout + receipt, tile, paging, hit-test, 96 px icon load) — the launcher's, and the home screen of any tile menu; `icon_grid_nav()` / `icon_grid_nav_exit()` are the one keyboard/pad navigation for both (reading order across pages, Left/Right wrap last<->first, Up from a top row reaches the exit X) | a second tile grid; the launcher's frame was md5-identical before and after the extraction |
+| `ui_focus.c` | pure (no framebuffer, no widget type): spatial focus `ui_focus_move()` (nearest centre in the pressed direction, wraps at the edges), the synthetic tap `UiTap` (press frame then release frame at the focused rect's centre) and `ui_hold_progress()` hold timing; tests `ui_focus_test.c`, `icon_grid_nav_test.c` | a per-page focus walk, or a page that reads keys to activate its own widgets |
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
 | `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
 | `audio_wav.c` | the one streaming RIFF reader: chunk walk, `(L+R)/2` downmix, the `AudioVoiceFill` adapter | assuming a 44-byte header, or loading a whole file to play it |
@@ -529,7 +530,7 @@ icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; 
 - **Exit and navigation:** the grid's red X only exits (Shutdown / Reboot live in `app_launcher`'s X dialog);
   the page BACK `<` sits on the left so a double tap cannot leave and quit. Pages post a title-bar message with
   `cp_status()` (6 s) and reach the wizard or `touch_raw` through `cp_run_touch_tool()`, which reloads geometry
-  and calls `rebuild_ui` itself — `main()` does not rebuild after a page's `run_fullscreen`.
+  and calls `rebuild_ui` itself — `main()` does not rebuild after a page's `run_fullscreen`. **Keyboard and pad:** a page lists its widgets in the optional `CpPage.focusables`, from the same `button_rect()` / `toggle_hit_rect()` its hit-test uses; arrows move a focus ring, Enter/Space activate it as a synthetic tap, so **no page's `input()` changes**; Esc/Backspace cancel a dialog or go back, and do nothing on home. `focus_drain_keys()` runs after every full-screen run so an Esc typed there is not BACK here; the Input testers repaint only their hold-to-exit band with `fb_swap_rect()`.
 - **`enter()` only marks work pending**, so the page paints first. The USB page's opening scan of an empty port
   (or one whose musb `mode` reads `b_*`, `usb_port_dead()`) queues one port re-probe (`RECOVER_TRIES=1`, measured 6.0 s on .188): ~6 s on every open while the socket
   is empty, kept by operator decision; RESCAN keeps three attempts. Disabled controls refuse input in the widget (`Widget.disabled`).
