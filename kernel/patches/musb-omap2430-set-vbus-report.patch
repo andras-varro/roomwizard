@@ -1,0 +1,73 @@
+omap2430_musb_set_vbus(): wait for BDEVICE to clear on a real deadline, and
+say what was seen when it does not.
+
+Upstream polls 100 x mdelay(5), so its 1 s jiffies deadline is never what
+ends the wait, and on timeout it prints a bare "configured as A device
+timeout" and carries on. musb-omap2430-session-on-id-ground.patch makes this
+path run on every ID-ground, so the next occurrence should measure itself:
+DEVCTL and elapsed ms. Carry-on behaviour is kept.
+
+SPDX-License-Identifier: GPL-2.0-only
+
+--- a/drivers/usb/musb/omap2430.c
++++ b/drivers/usb/musb/omap2430.c
+@@ -58,7 +58,6 @@
+ {
+ 	struct usb_otg	*otg = musb->xceiv->otg;
+ 	u8		devctl;
+-	unsigned long timeout = jiffies + msecs_to_jiffies(1000);
+ 	/* HDRC controls CPEN, but beware current surges during device
+ 	 * connect.  They can trigger transient overcurrent conditions
+ 	 * that must be ignored.
+@@ -68,7 +67,21 @@
+ 
+ 	if (is_on) {
+ 		if (musb->xceiv->otg->state == OTG_STATE_A_IDLE) {
+-			int loops = 100;
++			/* Upstream's wait ended on 100 x mdelay(5), not on its
++			 * 1 s jiffies deadline, and its timeout message said
++			 * nothing about the state it gave up in. Wait on a
++			 * ktime deadline instead: 1 s from the mailbox work,
++			 * which may sleep (mainline's musb_set_host() budget),
++			 * 500 ms busy-waiting from the SESSREQ hard IRQ. On
++			 * timeout report DEVCTL and the time spent, and carry
++			 * on as before.
++			 */
++			bool atomic = in_interrupt();
++			ktime_t start = ktime_get();
++			s64 limit_ms = atomic ? 500 : 1000;
++			s64 elapsed_ms = 0;
++			u8 val;
++
+ 			/* start the session */
+ 			devctl |= MUSB_DEVCTL_SESSION;
+ 			musb_writeb(musb->mregs, MUSB_DEVCTL, devctl);
+@@ -76,18 +89,20 @@
+ 			 * Wait for the musb to set as A device to enable the
+ 			 * VBUS
+ 			 */
+-			while (musb_readb(musb->mregs, MUSB_DEVCTL) &
++			while ((val = musb_readb(musb->mregs, MUSB_DEVCTL)) &
+ 			       MUSB_DEVCTL_BDEVICE) {
+-
+-				mdelay(5);
+-				cpu_relax();
+-
+-				if (time_after(jiffies, timeout)
+-				    || loops-- <= 0) {
++				elapsed_ms = ktime_ms_delta(ktime_get(), start);
++				if (elapsed_ms >= limit_ms) {
+ 					dev_err(musb->controller,
+-					"configured as A device timeout");
++						"configured as A device timeout: devctl %02x after %lld ms%s\n",
++						val, elapsed_ms,
++						atomic ? " (irq)" : "");
+ 					break;
+ 				}
++				if (atomic)
++					mdelay(5);
++				else
++					usleep_range(5000, 6000);
+ 			}
+ 
+ 			otg_set_vbus(otg, 1);
