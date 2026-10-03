@@ -454,18 +454,6 @@ device paths and `LICENSE.md` follow it.
 
 ## Structural and cleanup
 
-### C1. Extract the shared evdev layer — open, classifier and scan done
-
-**Classifier + scan are one implementation, `common/input_scan.c`/`.h`**, called by `common/gamepad.c`
-(so every game), `control_panel`'s Input page testers, `vnc_client` and ScummVM's `roomwizard-events.cpp`
-(`input_scan_with()` carries ScummVM's touchscreen name filter). Measured by host tests only
-(`input_scan_test`, `gamepad_latch_test`, 19 ctests passed 2026-09-29); on-device check pending.
-
-**Left: the `/etc/input_config.conf` parser and the hotplug rescan timer**, still one copy each in
-`gamepad.c`, `vnc_client/vnc_input.c` (`load_input_config`) and `roomwizard-events.cpp`. They have
-drifted before — `MAX_INPUT_DEVICES` was resynced twice by hand — and the "clear errno before the read
-loop" hardening still exists only in the ScummVM copy.
-
 ### C4. Make the common library use the logger — open
 
 `common/logger.c` exists and apps use it (`app_launcher` 18 calls, `control_panel` 17), but the library
