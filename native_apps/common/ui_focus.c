@@ -1,6 +1,6 @@
 /*
  * ui_focus — see ui_focus.h.  All arithmetic is on DOUBLED centres (2x + w),
- * so no division appears anywhere: this runs on a Cortex-A8 with no hardware
+ * so no division appears in the focus code: this runs on a Cortex-A8 with no hardware
  * divide, and halving would also lose the odd pixel.
  */
 #include "ui_focus.h"
@@ -146,4 +146,32 @@ bool ui_tap_frame(UiTap *t, bool real_touching, int *x, int *y,
         t->phase = 0;
     }
     return true;
+}
+
+/* ── Hold to exit ───────────────────────────────────────────────────────── */
+
+void ui_hold_key(UiHold *h, int value, uint32_t now) {
+    if (value == 1) {
+        if (!h->down) { h->down = true; h->start_ms = now; }
+    } else if (value == 0) {
+        h->down = false;
+    }
+    /* 2 (autorepeat) and anything else: no change. */
+}
+
+int ui_hold_progress(bool down, uint32_t now, uint32_t start, uint32_t hold_ms,
+                     bool *exit) {
+    if (exit) *exit = false;
+    if (!down) return 0;
+    uint32_t held = now - start;          /* unsigned: wraps correctly */
+    if (held >= hold_ms) {
+        if (exit) *exit = true;
+        return 1000;
+    }
+    /* The one division in this file, by a variable: GCC emits a call to the
+     * EABI helper (__aeabi_uidiv), never a udiv instruction, at the flags this
+     * repo builds with.  held < hold_ms <= UINT32_MAX / 1000 keeps the product
+     * in range for any hold under ~71 minutes. */
+    if (hold_ms > UINT32_MAX / 1000u) return 0;
+    return (int)(held * 1000u / hold_ms);
 }

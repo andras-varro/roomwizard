@@ -114,6 +114,7 @@ typedef struct {
     PadSt        pad;
     unsigned long node_sig;            /* /dev/input's listing when last scanned */
     uint32_t     poll_ms;              /* when it was last listed; 0 = list now */
+    UiHold       hold;                 /* the tester's exit key: Esc, or a pad's Select/Start */
 } InputState;
 
 static InputState input_state;
@@ -315,7 +316,12 @@ static int input_proc_kbd(InputState *s) {
     struct input_event e;
     while (read(s->fds[k],&e,sizeof(e))==(ssize_t)sizeof(e)) {
         if (e.type!=EV_KEY || e.code>=KEY_MAX) continue;
-        n++;
+        /* Esc is still shown like every key; held, it also fills the exit
+         * bar.  Its autorepeat during a hold is logged but not counted, so
+         * the frame stays a bar-only repaint — the log shows on release. */
+        bool hold_repeat = (e.code==KEY_ESC && e.value==2 && s->hold.down);
+        if (e.code==KEY_ESC) ui_hold_key(&s->hold, e.value, get_time_ms());
+        if (!hold_repeat) n++;
         s->last_dev=s->fd_dev[k];
         const char *nm=input_key_name(e.code);
         char nb[32]; if(!nm){snprintf(nb,32,"KEY_%d",e.code);nm=nb;}
@@ -398,6 +404,11 @@ static int input_proc_pad(InputState *s) {
                 s->pad.btns[bi]=(e.value!=0);
                 if (bi>=s->pad.btn_cnt) s->pad.btn_cnt=bi+1;
             }
+            /* Select and Start, held: cp_key_back()'s BACK and PAUSE under the
+             * default input_config.conf map (a remapped pad still exits by
+             * these, and by touch). */
+            if (c==BTN_SELECT || c==BTN_START)
+                ui_hold_key(&s->hold, e.value, get_time_ms());
             if (c==BTN_TL) s->pad.tl=e.value?1000:0;
             if (c==BTN_TR) s->pad.tr=e.value?1000:0;
         }
@@ -580,12 +591,57 @@ static void input_page_draw(Framebuffer *fb) {
 }
 
 
+/* ── Draw: hold to exit ─────────────────────────────────────────────── */
+/* The keyboard and pad testers show every key, so a key leaves them only when
+ * HELD (ui_hold_*, UI_HOLD_EXIT_MS).  The static screen carries a one-line
+ * hint under the title; while the key is held, this band — right of the BACK
+ * button, down to just above the tester's info line, inside SCREEN_SAFE_* —
+ * shows the hint and a bar filling over the hold, and is the ONLY part of the
+ * screen repainted while it fills (fb_swap_rect()). */
+#define HOLD_BAR_H 10
+static UiRect hold_band(const Button *back) {
+    UiRect r;
+    r.x = back->x + back->width + 10;
+    r.y = SCREEN_SAFE_TOP + 8;
+    r.w = SCREEN_SAFE_RIGHT - 10 - r.x;
+    r.h = 36;            /* ends at SAFE_TOP+43; the info line starts at +44 */
+    return r;
+}
+
+static void draw_hold_hint(Framebuffer *fb, const char *hint) {
+    text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+40, hint,
+                       INPUT_COLOR_DIM, 1);
+}
+
+static void draw_hold_band(Framebuffer *fb, const Button *back, const char *hint,
+                           int permille) {
+    UiRect r = hold_band(back);
+    if (r.w < 40) return;
+    fb_fill_rect(fb, r.x, r.y, r.w, r.h, COLOR_BG);
+    text_draw_centered(fb, r.x + r.w/2, r.y + 10, hint, COLOR_WHITE, 1);
+    int bw = r.w - 40, bx = r.x + 20, by = r.y + r.h - HOLD_BAR_H - 6;
+    fb_fill_rect(fb, bx, by, bw, HOLD_BAR_H, INPUT_COLOR_TRIG_BG);
+    int fw = permille * bw / 1000;     /* library divide, not idiv */
+    if (fw > 0) fb_fill_rect(fb, bx, by, fw, HOLD_BAR_H, INPUT_COLOR_TRIG_FILL);
+    fb_draw_rect(fb, bx, by, bw, HOLD_BAR_H, INPUT_COLOR_PANEL_BD);
+}
+
+/* The filled width draw_hold_band() would paint: what decides a repaint. */
+static int hold_fill_px(const Button *back, int permille) {
+    UiRect r = hold_band(back);
+    return r.w < 40 ? 0 : permille * (r.w - 40) / 1000;
+}
+
+#define KBD_HOLD_HINT "HOLD ESC TO EXIT"
+#define PAD_HOLD_HINT "HOLD SELECT OR START TO EXIT"
+
 /* ── Draw: Keyboard fullscreen ──────────────────────────────────────── */
 static void draw_kbd_test(Framebuffer *fb, InputState *s) {
     fb_clear(fb, COLOR_BG);
     button_draw(fb, &input_btn_kback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
                        "KEYBOARD TEST", COLOR_WHITE, 3);
+    draw_hold_hint(fb, KBD_HOLD_HINT);
     char inf[96];
     if (s->kbd.last_code>0 && s->last_dev>=0)
         snprintf(inf,sizeof(inf),"LAST KEY: %s (CODE %d) - EVENT%d", s->kbd.last_name,
@@ -725,6 +781,7 @@ static void draw_pad_test(Framebuffer *fb, InputState *s) {
     button_draw(fb, &input_btn_gback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
                        "GAMEPAD TEST", COLOR_WHITE, 3);
+    draw_hold_hint(fb, PAD_HOLD_HINT);
     int sw=screen_base_width, sr=55;
     int lcx=SCREEN_SAFE_LEFT+30+sr, lcy=SCREEN_SAFE_TOP+80+sr;
     input_draw_stick(fb,lcx,lcy,sr,s->pad.lx,s->pad.ly,"LEFT STICK");
@@ -954,7 +1011,8 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
 
 /* ── Full-screen: the testers ───────────────────────────────────────────── */
 
-/* After input() returned CP_PAGE_FULLSCREEN.  Runs until the tester's BACK (or
+/* After input() returned CP_PAGE_FULLSCREEN.  Runs until the tester's BACK, a
+ * held exit key (Esc; a pad's Select or Start) for UI_HOLD_EXIT_MS (or
  * a signal asking the panel to quit), then closes every node it opened: its
  * hardware is its own to clean up. */
 static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
@@ -980,13 +1038,16 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
      * show, held this tester at ~45 % CPU sitting idle.  The terms: the first
      * frame; any event the tester applied (input_proc_*'s count); a touch
      * edge; a button look change (button_take_dirty(), as control_panel.c's
-     * main loop); and the one timed element, the mouse tester's scroll dot,
+     * main loop); and the timed element, the mouse tester's scroll dot,
      * which goes out SCROLL_LIT_MS after the last wheel event with no event to
-     * say so.  Nothing else on these screens moves on a clock: an unplugged
+     * say so.  The hold-to-exit bar also fills on the clock, but repaints only
+     * its own band, never this frame.  Nothing else moves on a clock: an unplugged
      * device just stops sending, and the screen it leaves is already right. */
     enum { SCROLL_LIT_MS = 300 };          /* draw_mou_test()'s window */
     bool dirty = true;
     bool scroll_lit = false;               /* as last painted */
+    int hold_px = -1;                      /* exit bar's fill as last painted, -1 none */
+    memset(&state->hold, 0, sizeof(state->hold));
     while (cp_running() && state->scr != INPUT_SCR_MAIN) {
         uint32_t now = get_time_ms();
 
@@ -1001,6 +1062,35 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         if (scroll_lit && now - state->mou.scroll_t >= SCROLL_LIT_MS)
             dirty = true;                  /* the dot has to go out */
 
+        /* Hold to exit: the keyboard and pad testers.  The held key's press
+         * edge is never seen as BACK after this — run_current_fullscreen_mode()
+         * drains the pad layer, which then holds it as already down. */
+        const Button *hold_back = state->scr == INPUT_SCR_KEYBOARD ? &input_btn_kback
+                                : state->scr == INPUT_SCR_GAMEPAD  ? &input_btn_gback
+                                : NULL;
+        int hold_pm = 0;
+        if (hold_back) {
+            bool hold_exit = false;
+            hold_pm = ui_hold_progress(state->hold.down, get_time_ms(),
+                                       state->hold.start_ms, UI_HOLD_EXIT_MS,
+                                       &hold_exit);
+            if (hold_exit) {
+                input_close(state); state->scr = INPUT_SCR_MAIN;
+                break;
+            }
+        }
+        const char *hold_hint = state->scr == INPUT_SCR_KEYBOARD ? KBD_HOLD_HINT
+                                                                 : PAD_HOLD_HINT;
+
+        if (!dirty && hold_back && state->hold.down &&
+            hold_fill_px(hold_back, hold_pm) != hold_px) {
+            /* The bar alone moved: repaint and present only its band. */
+            draw_hold_band(fb, hold_back, hold_hint, hold_pm);
+            UiRect b = hold_band(hold_back);
+            fb_swap_rect(fb, b.x, b.y, b.w, b.h);
+            hold_px = hold_fill_px(hold_back, hold_pm);
+        }
+
         if (dirty) {
             /* Sampled before the draw, which reads the clock again later: a
              * dot the draw lit is then always one this records as lit. */
@@ -1010,6 +1100,11 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
                 case INPUT_SCR_MOUSE:    draw_mou_test(fb, state); break;
                 case INPUT_SCR_GAMEPAD:  draw_pad_test(fb, state); break;
                 default: break;
+            }
+            hold_px = -1;
+            if (hold_back && state->hold.down) {   /* a full frame mid-hold keeps the bar */
+                draw_hold_band(fb, hold_back, hold_hint, hold_pm);
+                hold_px = hold_fill_px(hold_back, hold_pm);
             }
             fb_swap(fb);
             dirty = false;

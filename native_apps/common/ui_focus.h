@@ -20,6 +20,7 @@
 #define UI_FOCUS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef struct { int x, y, w, h; } UiRect;
 
@@ -63,5 +64,30 @@ void ui_tap_begin(UiTap *t, const UiRect *r);
  * overwrote the outputs this frame. */
 bool ui_tap_frame(UiTap *t, bool real_touching, int *x, int *y,
                   bool *touching, bool *pressed, bool *released);
+
+/* ── Hold to exit ───────────────────────────────────────────────────────── */
+/* A screen that shows every key — the Input page's testers — cannot give Esc
+ * (or a pad's Select/Start) a meaning on a short press, so leaving it by key
+ * takes a HOLD of UI_HOLD_EXIT_MS.  The clock is the caller's (get_time_ms()
+ * when it read the event), not the evdev timestamp, which is CLOCK_REALTIME. */
+
+#define UI_HOLD_EXIT_MS 1500
+
+typedef struct {
+    bool     down;       /* the exit key is held */
+    uint32_t start_ms;   /* when its press (value 1) was read */
+} UiHold;
+
+/* Feed one EV_KEY value of an exit key, read at now.  1 starts a hold (a
+ * second 1 while already down keeps the first start), 0 ends it, and 2 —
+ * autorepeat — changes nothing: a repeat is never a new press, not even when
+ * the press itself was lost to an evdev buffer overrun. */
+void ui_hold_key(UiHold *h, int value, uint32_t now);
+
+/* Progress of a hold in permille, 0..1000; *exit (may be NULL) says the hold
+ * has lasted hold_ms.  Not down: 0 and no exit.  Wrap-safe in the uint32_t
+ * millisecond clock.  hold_ms 0 exits at once on any hold. */
+int ui_hold_progress(bool down, uint32_t now, uint32_t start, uint32_t hold_ms,
+                     bool *exit);
 
 #endif /* UI_FOCUS_H */

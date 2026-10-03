@@ -16,6 +16,9 @@
  * ⚠️ What it cannot see: whether those rectangles are the ones the pages
  * really hit-test (that is each page's focusables(), checked on the panel),
  * and whether the ring is drawn.  It only proves the choice of index.
+ *
+ * Groups 8-9 are the testers' hold-to-exit timing (ui_hold_*).  They cannot
+ * see whether a tester feeds it the right key codes, nor the bar it draws.
  */
 #include "ui_focus.h"
 #include <stdio.h>
@@ -170,6 +173,61 @@ int main(void) {
                ui_tap_frame(&t, true, &x, &y, &touching, &pr, &rl), 0);
         expect("and it stays cancelled",
                ui_tap_frame(&t, false, &x, &y, &touching, &pr, &rl), 0);
+    }
+
+    printf("group 8  hold to exit: progress and the exit flag\n");
+    {
+        bool ex = true;
+        expect("not down: 0",            ui_hold_progress(false, 5000, 1000, 1500, &ex), 0);
+        expect("not down: no exit",      ex, 0);
+        expect("just pressed: 0",        ui_hold_progress(true, 1000, 1000, 1500, &ex), 0);
+        expect("just pressed: no exit",  ex, 0);
+        expect("half way: 500",          ui_hold_progress(true, 1750, 1000, 1500, &ex), 500);
+        expect("half way: no exit",      ex, 0);
+        expect("1 ms short: 999",        ui_hold_progress(true, 2499, 1000, 1500, &ex), 999);
+        expect("1 ms short: no exit",    ex, 0);
+        expect("at 1500: 1000",          ui_hold_progress(true, 2500, 1000, 1500, &ex), 1000);
+        expect("at 1500: exit",          ex, 1);
+        expect("long past: 1000",        ui_hold_progress(true, 90000, 1000, 1500, &ex), 1000);
+        expect("long past: exit",        ex, 1);
+        /* The millisecond clock wraps every ~49 days; a hold across it. */
+        expect("across the wrap: 500",   ui_hold_progress(true, 350u, 0xFFFFFE70u, 1500, &ex), 500);  /* 400 + 350 */
+        expect("across the wrap: no exit", ex, 0);
+        expect("NULL exit pointer ok",   ui_hold_progress(true, 1750, 1000, 1500, NULL), 500);
+        expect("hold_ms 0 exits at once", ui_hold_progress(true, 7, 7, 0, &ex), 1000);
+        expect("hold_ms 0: exit",        ex, 1);
+        expect("the constant is 1.5 s",  UI_HOLD_EXIT_MS, 1500);
+    }
+
+    printf("group 9  hold to exit: evdev values 1 / 2 / 0\n");
+    {
+        UiHold h = { false, 0 };
+        ui_hold_key(&h, 2, 100);
+        expect("a lone repeat starts nothing", h.down, 0);
+        ui_hold_key(&h, 1, 1000);
+        expect("press starts the hold",        h.down, 1);
+        expect("press records its time",       (int)h.start_ms, 1000);
+        ui_hold_key(&h, 2, 1300);
+        ui_hold_key(&h, 2, 1333);
+        expect("repeats keep it down",         h.down, 1);
+        expect("repeats do not restart it",    (int)h.start_ms, 1000);
+        ui_hold_key(&h, 1, 1400);
+        expect("a second press keeps the first start", (int)h.start_ms, 1000);
+        ui_hold_key(&h, 0, 1450);
+        expect("release ends the hold",        h.down, 0);
+        expect("released: progress 0",
+               ui_hold_progress(h.down, 9000, h.start_ms, UI_HOLD_EXIT_MS, NULL), 0);
+        ui_hold_key(&h, 2, 1500);
+        expect("a repeat after release is no press", h.down, 0);
+        ui_hold_key(&h, 1, 2000);
+        expect("a new press starts afresh",    (int)h.start_ms, 2000);
+        /* A short press: down then up well inside 1.5 s never exits. */
+        bool ex = true;
+        ui_hold_progress(h.down, 2200, h.start_ms, UI_HOLD_EXIT_MS, &ex);
+        expect("short press mid-hold: no exit", ex, 0);
+        ui_hold_key(&h, 0, 2200);
+        ui_hold_progress(h.down, 4000, h.start_ms, UI_HOLD_EXIT_MS, &ex);
+        expect("short press after release: no exit", ex, 0);
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "REGRESSION" : "ALL PASS",

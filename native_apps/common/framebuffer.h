@@ -212,6 +212,13 @@ void fb_close(Framebuffer *fb);
 // Swap buffers (present back buffer to screen)
 void fb_swap(Framebuffer *fb);
 
+// Present only the logical rectangle (x, y, w, h) of the back buffer, clipped
+// to the surface — fb_swap()'s placement and rotation, for a screen whose only
+// change is one small widget (the Input testers' hold-to-exit bar), so it need
+// not pay for a full-frame copy.  Byte-identical to fb_swap() inside the
+// rectangle, no store outside it (tests/fb_rotate_test.c).
+void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h);
+
 // Clear screen with color
 void fb_clear(Framebuffer *fb, uint32_t color);
 

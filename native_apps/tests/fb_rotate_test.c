@@ -25,6 +25,10 @@
  * line_length; a non-zero view_y; heights that are below, equal to, and not a
  * multiple of the 64-row band; and the degenerate 1x1.
  *
+ * It also holds fb_swap_rect() to fb_swap(): every byte inside the clipped
+ * rectangle as fb_swap() would write it, every byte outside left alone, in
+ * both orientations, at both bpp, for clipped and empty rectangles.
+ *
  * The timing lines it prints are a HOST micro-benchmark: a cached heap buffer
  * on an x86 core, nothing like the write-combined mapping on a Cortex-A8.  They
  * show the new loop is not slower in itself; they say nothing about the device.
@@ -144,6 +148,110 @@ int main(void) {
             fails += bad;
             free(want); free(got); free(back);
         }
+    }
+
+    /* fb_swap_rect(): byte-identical to fb_swap() inside the clipped rectangle,
+     * and not one byte written outside it.  Where each logical pixel lands is
+     * learned from fb_swap() itself: a 32bpp back buffer holding each pixel's
+     * own index+1, swapped into a zeroed panel, is the map — and the map is per
+     * physical PIXEL, so it serves the 16bpp run at the same geometry too. */
+    {
+        typedef struct { const char *name; bool portrait; uint32_t pw, ph, lw, lh;
+                         int vx, vy; uint32_t pad; } RGeo;
+        static const RGeo RG[] = {
+            { "portrait RW09 453x800 at (13,0)", true,  800, 480, 453, 800, 13, 0, 0 },
+            { "portrait padded, view_y=7",       true,  800, 480, 453, 786, 13, 7, 64 },
+            { "landscape 800x453 at (0,13)",     false, 800, 480, 800, 453, 0, 13, 0 },
+            { "landscape no bezel 800x480",      false, 800, 480, 800, 480, 0,  0, 0 },
+            { "landscape padded, odd view",      false, 130,  77, 101,  60, 7,  5, 12 },
+        };
+        static const struct { int x, y, w, h; } RR[] = {
+            { 110, 8, 300, 36 },   /* the testers' hold bar, roughly */
+            { 0, 0, 1, 1 },
+            { -5, -7, 40, 30 },    /* clipped at the top-left */
+            { 60, 40, 5000, 5000 },/* clipped at the bottom-right */
+            { 3, 4, 0, 9 },        /* empty: writes nothing */
+            { 9000, 2, 10, 10 },   /* wholly outside: writes nothing */
+        };
+        int rbad = 0;
+        for (size_t gi = 0; gi < sizeof RG / sizeof RG[0]; gi++) {
+            const RGeo *g = &RG[gi];
+            Geo geo = { g->name, g->pw, g->ph, g->lw, g->lh, g->vx, g->vy, g->pad };
+            uint32_t npx = g->pw * g->ph;
+            uint32_t *map = calloc(npx, 4);
+            size_t mpanel = (size_t)(g->pw * 4 + g->pad) * g->ph;
+            uint8_t *mp = calloc(1, mpanel);
+            uint32_t *mback = malloc((size_t)g->lw * g->lh * 4);
+            if (!map || !mp || !mback) { printf("  HARNESS ERROR malloc\n"); return 2; }
+            for (uint32_t i = 0; i < g->lw * g->lh; i++) mback[i] = i + 1;
+            Framebuffer fb;
+            setup(&fb, &geo, 4, mp, mback);
+            fb.portrait_mode = g->portrait;
+            fb_swap(&fb);
+            for (uint32_t py = 0; py < g->ph; py++)
+                for (uint32_t px = 0; px < g->pw; px++)
+                    map[py * g->pw + px] = *(uint32_t *)(mp + py * fb.line_length + px * 4);
+            uint32_t mapped = 0;
+            for (uint32_t i = 0; i < npx; i++) if (map[i]) mapped++;
+            if (mapped != g->lw * g->lh) {
+                printf("  HARNESS ERROR %s: map covers %u of %u pixels\n",
+                       g->name, mapped, g->lw * g->lh);
+                return 2;
+            }
+            for (uint32_t bpp = 2; bpp <= 4; bpp += 2) {
+                size_t panel_bytes = (size_t)(g->pw * bpp + g->pad) * g->ph;
+                size_t back_bytes = (size_t)g->lw * g->lh * bpp;
+                uint8_t *full = malloc(panel_bytes), *got = malloc(panel_bytes);
+                uint8_t *orig = malloc(panel_bytes), *back = malloc(back_bytes);
+                if (!full || !got || !orig || !back) { printf("  HARNESS ERROR malloc\n"); return 2; }
+                for (size_t i = 0; i < back_bytes; i++) back[i] = (uint8_t)rnd();
+                for (size_t i = 0; i < panel_bytes; i++) orig[i] = (uint8_t)(0x5A ^ (i * 11));
+                memcpy(full, orig, panel_bytes);
+                setup(&fb, &geo, bpp, full, back);
+                fb.portrait_mode = g->portrait;
+                fb_swap(&fb);
+                for (size_t ri = 0; ri < sizeof RR / sizeof RR[0]; ri++) {
+                    int x0 = RR[ri].x, y0 = RR[ri].y;
+                    int x1 = x0 + RR[ri].w, y1 = y0 + RR[ri].h;
+                    if (x0 < 0) x0 = 0;
+                    if (y0 < 0) y0 = 0;
+                    if (x1 > (int)g->lw) x1 = (int)g->lw;
+                    if (y1 > (int)g->lh) y1 = (int)g->lh;
+                    memcpy(got, orig, panel_bytes);
+                    setup(&fb, &geo, bpp, got, back);
+                    fb.portrait_mode = g->portrait;
+                    fb_swap_rect(&fb, RR[ri].x, RR[ri].y, RR[ri].w, RR[ri].h);
+                    int bad = 0;
+                    size_t ll = fb.line_length;
+                    for (uint32_t py = 0; py < g->ph && !bad; py++) {
+                        for (size_t b = 0; b < ll && !bad; b++) {
+                            size_t off = py * ll + b;
+                            uint32_t px = (uint32_t)(b / bpp);
+                            uint32_t idx = px < g->pw ? map[py * g->pw + px] : 0;
+                            bool inside = false;
+                            if (idx) {
+                                int lx = (int)((idx - 1) % g->lw), ly = (int)((idx - 1) / g->lw);
+                                inside = lx >= x0 && lx < x1 && ly >= y0 && ly < y1;
+                            }
+                            uint8_t want = inside ? full[off] : orig[off];
+                            if (got[off] != want) {
+                                printf("  FAIL fb_swap_rect %-31s %ubpp rect %zu: byte %zu"
+                                       " (row %u) %s\n", g->name, bpp * 8, ri, off, py,
+                                       inside ? "not presented" : "written outside");
+                                bad = 1;
+                            }
+                        }
+                    }
+                    rbad += bad;
+                }
+                free(full); free(got); free(orig); free(back);
+            }
+            free(map); free(mp); free(mback);
+        }
+        if (!rbad) printf("  ok   fb_swap_rect: %zu geometries x 2 bpp x %zu rects, "
+                          "exact inside, untouched outside\n",
+                          sizeof RG / sizeof RG[0], sizeof RR / sizeof RR[0]);
+        fails += rbad;
     }
 
     /* Indicative host timing at the device geometry (see the header). */

@@ -701,6 +701,58 @@ void fb_swap(Framebuffer *fb) {
     }
 }
 
+void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h) {
+    if (!fb->double_buffering || fb->back_buffer == NULL)
+        return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)fb->width)  w = (int)fb->width - x;
+    if (y + h > (int)fb->height) h = (int)fb->height - y;
+    if (w <= 0 || h <= 0)
+        return;
+
+    const uint32_t bpp = fb->bytes_per_pixel;
+    const uint32_t lw = fb->width;
+    const size_t ll = fb->line_length;
+
+    if (fb->portrait_mode) {
+        // fb_swap()'s mapping: logical column lx lands on physical row
+        // phys_height-1-view_x-lx, logical row ly at physical x view_y+ly.
+        // Taken column by column so each store run ascends in address.
+        const bool is16 = FB_IS_16BPP(fb);
+        for (int c = 0; c < w; c++) {
+            const uint32_t lx = (uint32_t)(x + c);
+            uint8_t *drow = (uint8_t *)fb->buffer
+                          + (size_t)(fb->phys_height - 1 - fb->view_x - lx) * ll
+                          + (size_t)(fb->view_y + (uint32_t)y) * bpp;
+            if (is16) {
+                const uint16_t *s = (const uint16_t *)fb->back_buffer
+                                  + (size_t)y * lw + lx;
+                uint16_t *d = (uint16_t *)drow;
+                for (int i = 0; i < h; i++, s += lw) d[i] = *s;
+            } else {
+                const uint32_t *s = (const uint32_t *)fb->back_buffer
+                                  + (size_t)y * lw + lx;
+                uint32_t *d = (uint32_t *)drow;
+                for (int i = 0; i < h; i++, s += lw) d[i] = *s;
+            }
+        }
+        return;
+    }
+
+    const size_t run = (size_t)w * bpp;
+    const uint8_t *src = (const uint8_t *)fb->back_buffer
+                       + ((size_t)y * lw + (size_t)x) * bpp;
+    uint8_t *dst = (uint8_t *)fb->buffer
+                 + (size_t)(fb->view_y + (uint32_t)y) * ll
+                 + (size_t)(fb->view_x + (uint32_t)x) * bpp;
+    for (int r = 0; r < h; r++) {
+        memcpy(dst, src, run);
+        src += (size_t)lw * bpp;
+        dst += ll;
+    }
+}
+
 void fb_clear(Framebuffer *fb, uint32_t color) {
     /* Clear the back buffer if double buffering is enabled */
     void *target = fb_target(fb);
