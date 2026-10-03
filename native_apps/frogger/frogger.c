@@ -185,8 +185,6 @@ HighScoreTable hs_table;
 static GameOverScreen gos;
 bool running = true;
 GameScreen current_screen = SCREEN_WELCOME;
-static uint32_t last_rescan_ms = 0;
-#define RESCAN_INTERVAL_MS 5000
 
 static Lane lanes[NUM_LANE_CONFIGS];
 static Frog frog;
@@ -775,11 +773,8 @@ static void handle_input(void) {
     // Poll gamepad/keyboard/touch through unified API
     gamepad_poll(&gamepad, &input, ts.x, ts.y, ts.pressed);
 
-    // Periodic device rescan for hotplug support
-    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
-        last_rescan_ms = now;
-        gamepad_rescan(&gamepad);
-    }
+    /* Hot-plug check: rescans only when /dev/input changed or a device went away */
+    gamepad_tick(&gamepad, now);
 
     // BTN_BACK always exits to launcher
     if (input.buttons[BTN_ID_BACK].pressed) {

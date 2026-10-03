@@ -240,8 +240,6 @@ static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for 
 static GameOverScreen gos;  /* unified game over screen */
 /* Power-up / lost-ball LED flashes, advanced once per frame by the main loop. */
 static LedPulse     fx_pulse;
-static uint32_t last_rescan_ms = 0;
-#define RESCAN_INTERVAL_MS 5000
 
 /* UI buttons */
 static Button btn_menu, btn_exit;
@@ -1517,11 +1515,8 @@ static void handle_input(void) {
     /* Poll gamepad/keyboard/mouse through unified API */
     gamepad_poll(&gamepad_mgr, &gp_input, st.x, st.y, st.pressed);
 
-    /* Periodic device rescan for hotplug support */
-    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
-        last_rescan_ms = now;
-        gamepad_rescan(&gamepad_mgr);
-    }
+    /* Hot-plug check: rescans only when /dev/input changed or a device went away */
+    gamepad_tick(&gamepad_mgr, now);
 
     /* BTN_BACK always exits to launcher */
     if (gp_input.buttons[BTN_ID_BACK].pressed) {

@@ -28,6 +28,7 @@
 extern "C" {
 #include "touch_input.h"
 #include "framebuffer.h"   // screen_base_width/height (the visible screen size)
+#include "input_scan.h"    // InputSigGate (hot-plug check), InputConfig
 }
 
 class RoomWizardEventSource : public Common::EventSource {
@@ -150,9 +151,8 @@ private:
 	static int countOpen(const int *fds, int n);
 	static bool addToSlot(int *fds, int *nodes, int n, int fd, int node);
 
-	// Periodic rescan timer
-	uint32 _lastDeviceScan;
-	static const uint32 DEVICE_SCAN_INTERVAL = 5000; // 5 seconds
+	// Hot-plug check
+	InputSigGate _nodeGate;          // input_scan.h: /dev/input fingerprint, checked every INPUT_SIG_CHECK_MS
 
 	// -------------------------------------------------------
 	// USB Keyboard support
@@ -182,10 +182,10 @@ private:
 	int _prevMouseButtons;           // Previous button state for edge detection
 
 	// Mouse acceleration config (loaded from /etc/input_config.conf)
-	float _mouseSensitivity;         // default 1.5
-	float _mouseAcceleration;        // default 2.0
-	int   _mouseLowThreshold;        // default 3
-	int   _mouseHighThreshold;       // default 15
+	float _mouseSensitivity;         // default: input_config_defaults()
+	float _mouseAcceleration;        // default: input_config_defaults()
+	int   _mouseLowThreshold;        // default: input_config_defaults()
+	int   _mouseHighThreshold;       // default: input_config_defaults()
 
 	// -------------------------------------------------------
 	// USB Gamepad support
@@ -199,10 +199,10 @@ private:
 	int _gamepadAxisCenter;                  // Center calibration
 	int _prevGamepadButtons;                 // Previous button state for edge detection
 	uint32 _lastCursorMove;                  // For cursor movement rate limiting
+	int _gamepadDeadzonePct;                 // gamepad_deadzone (input_config.conf), percent of half-range
 
 	// Gamepad cursor movement constants
 	static const int GAMEPAD_CURSOR_SPEED = 5;    // Max pixels per poll at full deflection
-	static const int GAMEPAD_DEADZONE_PCT = 20;    // Percentage of axis range
 	static const uint32 GAMEPAD_CURSOR_INTERVAL = 16; // ~60 Hz cursor movement
 
 	// Gamepad button mapping (configurable for clone controllers)
@@ -222,7 +222,6 @@ private:
 	};
 	GamepadBtnMap _gamepadMap;
 
-	void initDefaultGamepadMap();
 	void loadGamepadAxisCalibration();
 
 	// -------------------------------------------------------

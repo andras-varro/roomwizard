@@ -62,8 +62,8 @@ typedef struct {
     int mouse_low_threshold;    // Default 3
     int mouse_high_threshold;   // Default 15
 
-    // Device rescan timer
-    uint32_t last_device_scan;
+    // Hot-plug check (common/input_scan.h): rescan when /dev/input changes
+    InputSigGate node_gate;
 } VNCInput;
 
 // Initialize input handler

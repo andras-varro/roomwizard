@@ -33,18 +33,20 @@ static void apply_defaults(GamepadManager *gm);
 
 /* ── Return Xbox 360 default button map ─────────────────────────────────── */
 GamepadButtonMap gamepad_get_default_button_map(void) {
+    InputConfig def;
+    input_config_defaults(&def);   /* the one set of defaults, shared */
     GamepadButtonMap map;
-    map.btn_jump     = BTN_SOUTH;   /* 304 — A */
-    map.btn_run      = BTN_EAST;    /* 305 — B */
-    map.btn_action   = BTN_WEST;    /* 308 — X */
-    map.btn_pause    = BTN_START;   /* 315 */
-    map.btn_back     = BTN_SELECT;  /* 314 */
-    map.hat_x_axis   = ABS_HAT0X;  /* 16  */
-    map.hat_y_axis   = ABS_HAT0Y;  /* 17  */
-    map.stick_x_axis = ABS_X;      /* 0   */
-    map.stick_y_axis = ABS_Y;      /* 1   */
-    map.stick_rx_axis = ABS_RX;    /* 3   */
-    map.stick_ry_axis = ABS_RY;    /* 4   */
+    map.btn_jump      = def.gamepad_btn_jump;
+    map.btn_run       = def.gamepad_btn_run;
+    map.btn_action    = def.gamepad_btn_action;
+    map.btn_pause     = def.gamepad_btn_pause;
+    map.btn_back      = def.gamepad_btn_back;
+    map.hat_x_axis    = def.gamepad_hat_x;
+    map.hat_y_axis    = def.gamepad_hat_y;
+    map.stick_x_axis  = def.gamepad_stick_lx;
+    map.stick_y_axis  = def.gamepad_stick_ly;
+    map.stick_rx_axis = def.gamepad_stick_rx;
+    map.stick_ry_axis = def.gamepad_stick_ry;
     return map;
 }
 
@@ -152,8 +154,8 @@ static int normalize_axis(int value, int min_val, int max_val) {
 }
 
 /* ── Announce a binding, but only when it is a CHANGE ───────────────────── */
-/* gamepad_rescan() closes every device and re-opens it, on a 5 s timer in all
- * nine apps, so the `fd < 0` test that guards each of these prints is always
+/* gamepad_rescan() closes every device and re-opens it (it once ran on a 5 s
+ * timer in all nine apps), so the `fd < 0` test that guards each of these prints is always
  * true by the time scan_devices() runs — an unchanged pad used to be announced
  * once per tick.  Measured on .188: 1720 identical "found gamepad" lines in one
  * session, in a log whose whole value is that it is the only instrument an
@@ -267,6 +269,10 @@ static void seed_latched_levels(GamepadManager *gm) {
  * start from closed), so input_scan() starts from an empty list and returns
  * the kept nodes in event-number order — the order the slots are filled in. */
 static void scan_devices(GamepadManager *gm) {
+    /* Fingerprint first: a node that appears while the walk below is past
+     * its number then differs from this baseline, and the next tick catches it. */
+    input_sig_gate_baseline(&gm->node_gate, input_node_sig());
+    gm->rescan_pending = false;
     InputNode nodes[GAMEPAD_SCAN_SLOTS];
     int n = input_scan(nodes, 0, GAMEPAD_SCAN_SLOTS, g_scan_cap);
 
@@ -327,12 +333,14 @@ static void apply_defaults(GamepadManager *gm) {
     gm->mouse_x = gm->mouse_screen_w / 2;
     gm->mouse_y = gm->mouse_screen_h / 2;
 
-    gm->mouse_accel.sensitivity   = GAMEPAD_MOUSE_SENSITIVITY_DEFAULT;
-    gm->mouse_accel.acceleration  = GAMEPAD_MOUSE_ACCEL_DEFAULT;
-    gm->mouse_accel.low_threshold = GAMEPAD_MOUSE_LOW_THRESHOLD_DEFAULT;
-    gm->mouse_accel.high_threshold = GAMEPAD_MOUSE_HIGH_THRESHOLD_DEFAULT;
+    InputConfig def;
+    input_config_defaults(&def);   /* the one set of defaults, shared */
+    gm->mouse_accel.sensitivity   = def.mouse_sensitivity;
+    gm->mouse_accel.acceleration  = def.mouse_acceleration;
+    gm->mouse_accel.low_threshold = def.mouse_low_threshold;
+    gm->mouse_accel.high_threshold = def.mouse_high_threshold;
 
-    gm->deadzone_pct = GAMEPAD_DEADZONE_PCT_DEFAULT;
+    gm->deadzone_pct = def.gamepad_deadzone;
 
     for (int i = 0; i < GAMEPAD_MAX_AXES; i++) {
         gm->axis_calib[i].center = 0;
@@ -344,85 +352,59 @@ static void apply_defaults(GamepadManager *gm) {
  * Configuration File I/O
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Trim leading and trailing whitespace in-place. Returns pointer. */
-static char *cfg_trim(char *s) {
-    while (*s == ' ' || *s == '\t') s++;
-    if (*s == '\0') return s;
-    char *end = s + strlen(s) - 1;
-    while (end > s && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r'))
-        *end-- = '\0';
-    return s;
-}
-
+/* The file is parsed by input_config_load() (common/input_scan.c), the one
+ * parser vnc_client and ScummVM call too; this copies its fields in and out. */
 int gamepad_load_config(GamepadManager *gp, const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) {
+    InputConfig cfg;
+    cfg.mouse_sensitivity    = gp->mouse_accel.sensitivity;
+    cfg.mouse_acceleration   = gp->mouse_accel.acceleration;
+    cfg.mouse_low_threshold  = gp->mouse_accel.low_threshold;
+    cfg.mouse_high_threshold = gp->mouse_accel.high_threshold;
+    cfg.gamepad_deadzone     = gp->deadzone_pct;
+    cfg.gamepad_btn_jump     = gp->button_map.btn_jump;
+    cfg.gamepad_btn_run      = gp->button_map.btn_run;
+    cfg.gamepad_btn_action   = gp->button_map.btn_action;
+    cfg.gamepad_btn_pause    = gp->button_map.btn_pause;
+    cfg.gamepad_btn_back     = gp->button_map.btn_back;
+    cfg.gamepad_hat_x        = gp->button_map.hat_x_axis;
+    cfg.gamepad_hat_y        = gp->button_map.hat_y_axis;
+    cfg.gamepad_stick_lx     = gp->button_map.stick_x_axis;
+    cfg.gamepad_stick_ly     = gp->button_map.stick_y_axis;
+    cfg.gamepad_stick_rx     = gp->button_map.stick_rx_axis;
+    cfg.gamepad_stick_ry     = gp->button_map.stick_ry_axis;
+    /* ScummVM-only keys: parsed, unused here. */
+    cfg.gamepad_btn_north = cfg.gamepad_btn_tl = cfg.gamepad_btn_tr = 0;
+
+    int applied = input_config_load(&cfg, path);
+    if (applied < 0) {
         printf("gamepad: no config file at %s (using defaults)\n", path);
         return -1;
     }
 
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        /* Strip newline */
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = '\0';
-
-        char *trimmed = cfg_trim(line);
-
-        /* Skip blank lines and comments */
-        if (*trimmed == '\0' || *trimmed == '#')
-            continue;
-
-        /* Find '=' separator */
-        char *eq = strchr(trimmed, '=');
-        if (!eq) continue;
-
-        *eq = '\0';
-        char *key = cfg_trim(trimmed);
-        char *val = cfg_trim(eq + 1);
-
-        if (*key == '\0' || *val == '\0') continue;
-
-        /* Mouse settings */
-        if (strcmp(key, "mouse_sensitivity") == 0) {
-            float v = (float)atof(val);
-            if (v > 0.1f && v < 20.0f) gp->mouse_accel.sensitivity = v;
-        } else if (strcmp(key, "mouse_acceleration") == 0) {
-            float v = (float)atof(val);
-            if (v > 0.1f && v < 20.0f) gp->mouse_accel.acceleration = v;
-        } else if (strcmp(key, "mouse_low_threshold") == 0) {
-            int v = atoi(val);
-            if (v >= 0 && v < 100) gp->mouse_accel.low_threshold = v;
-        } else if (strcmp(key, "mouse_high_threshold") == 0) {
-            int v = atoi(val);
-            if (v >= 1 && v < 500) gp->mouse_accel.high_threshold = v;
-        }
-        /* Gamepad dead zone */
-        else if (strcmp(key, "gamepad_deadzone") == 0) {
-            int v = atoi(val);
-            if (v >= 0 && v <= 100) {
-                gp->deadzone_pct = v;
-                for (int i = 0; i < GAMEPAD_MAX_AXES; i++)
-                    gp->axis_calib[i].deadzone_pct = v;
-            }
-        }
-        /* Gamepad button mapping */
-        else if (strcmp(key, "gamepad_btn_jump") == 0)   { gp->button_map.btn_jump   = atoi(val); }
-        else if (strcmp(key, "gamepad_btn_run") == 0)    { gp->button_map.btn_run    = atoi(val); }
-        else if (strcmp(key, "gamepad_btn_action") == 0) { gp->button_map.btn_action = atoi(val); }
-        else if (strcmp(key, "gamepad_btn_pause") == 0)  { gp->button_map.btn_pause  = atoi(val); }
-        else if (strcmp(key, "gamepad_btn_back") == 0)   { gp->button_map.btn_back   = atoi(val); }
-        else if (strcmp(key, "gamepad_hat_x") == 0)      { gp->button_map.hat_x_axis = atoi(val); }
-        else if (strcmp(key, "gamepad_hat_y") == 0)      { gp->button_map.hat_y_axis = atoi(val); }
-        else if (strcmp(key, "gamepad_stick_lx") == 0)   { gp->button_map.stick_x_axis = atoi(val); }
-        else if (strcmp(key, "gamepad_stick_ly") == 0)   { gp->button_map.stick_y_axis = atoi(val); }
-        else if (strcmp(key, "gamepad_stick_rx") == 0)   { gp->button_map.stick_rx_axis = atoi(val); }
-        else if (strcmp(key, "gamepad_stick_ry") == 0)   { gp->button_map.stick_ry_axis = atoi(val); }
-        /* Unknown keys are silently ignored */
+    gp->mouse_accel.sensitivity    = cfg.mouse_sensitivity;
+    gp->mouse_accel.acceleration   = cfg.mouse_acceleration;
+    gp->mouse_accel.low_threshold  = cfg.mouse_low_threshold;
+    gp->mouse_accel.high_threshold = cfg.mouse_high_threshold;
+    /* The uniform dead zone overwrites the per-axis ones only when the file
+     * changed it, as the key being present always did. */
+    if (cfg.gamepad_deadzone != gp->deadzone_pct) {
+        gp->deadzone_pct = cfg.gamepad_deadzone;
+        for (int i = 0; i < GAMEPAD_MAX_AXES; i++)
+            gp->axis_calib[i].deadzone_pct = cfg.gamepad_deadzone;
     }
+    gp->button_map.btn_jump      = cfg.gamepad_btn_jump;
+    gp->button_map.btn_run       = cfg.gamepad_btn_run;
+    gp->button_map.btn_action    = cfg.gamepad_btn_action;
+    gp->button_map.btn_pause     = cfg.gamepad_btn_pause;
+    gp->button_map.btn_back      = cfg.gamepad_btn_back;
+    gp->button_map.hat_x_axis    = cfg.gamepad_hat_x;
+    gp->button_map.hat_y_axis    = cfg.gamepad_hat_y;
+    gp->button_map.stick_x_axis  = cfg.gamepad_stick_lx;
+    gp->button_map.stick_y_axis  = cfg.gamepad_stick_ly;
+    gp->button_map.stick_rx_axis = cfg.gamepad_stick_rx;
+    gp->button_map.stick_ry_axis = cfg.gamepad_stick_ry;
 
-    fclose(f);
-    printf("gamepad: loaded config from %s\n", path);
+    printf("gamepad: loaded config from %s (%d settings)\n", path, applied);
     return 0;
 }
 
@@ -526,7 +508,7 @@ int gamepad_init(GamepadManager *gm) {
     apply_defaults(gm);
 
     /* Attempt to load persistent config (overrides defaults for any keys present) */
-    gamepad_load_config(gm, GAMEPAD_CONFIG_PATH);
+    gamepad_load_config(gm, INPUT_CONFIG_PATH);
 
     scan_devices(gm);
 
@@ -562,12 +544,36 @@ void gamepad_rescan(GamepadManager *gm) {
     /* ...then read them back from the devices that are still there.  A
      * reopened node sends no press for a key already down, and the hat's
      * EV_ABS value is filtered when it repeats, so without this every app's
-     * 5 s rescan released a held pad button or direction until it was pressed
+     * rescan released a held pad button or direction until it was pressed
      * again (and a held key until its autorepeat, as a fresh press edge).
      * prev_held and prev_mouse_* are deliberately kept: a level held across
      * the rescan produces no edge, and one released (or whose device left)
      * during it produces a release edge. */
     seed_latched_levels(gm);
+}
+
+void gamepad_tick(GamepadManager *gm, uint32_t now_ms) {
+    /* input_sig_gate_poll() is evaluated first so a forced rescan still
+     * consumes the check and refreshes the baseline's clock. */
+    bool changed = input_sig_gate_poll(&gm->node_gate, now_ms);
+    if (changed || gm->rescan_pending)
+        gamepad_rescan(gm);
+}
+
+/* A read() that returned r failed because its device is gone: ENODEV once the
+ * node is unplugged, EBADF if the fd was closed under us.  EAGAIN (drained) and
+ * a short read are not. */
+static bool read_gone(ssize_t r) {
+    return r < 0 && (errno == ENODEV || errno == EBADF);
+}
+
+/* Close a gone fd, and have the next gamepad_tick() rescan.  The fingerprint
+ * alone would also catch an unplug, but this also recovers an fd that went
+ * stale with /dev/input unchanged. */
+static void drop_gone_fd(GamepadManager *gm, int *fd) {
+    close(*fd);
+    *fd = -1;
+    gm->rescan_pending = true;
 }
 
 void gamepad_set_touch_regions(GamepadManager *gm, TouchRegion *regions, int count) {
@@ -627,7 +633,8 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
     struct input_event ev;
     GamepadButtonMap *m = &gm->button_map;
 
-    while (read(gm->gamepad_fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+    ssize_t r;
+    while ((r = read(gm->gamepad_fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
 
         if (ev.type == EV_ABS) {
             int code = ev.code;
@@ -707,6 +714,8 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
                 gm->held_latched[BTN_ID_BACK] = down;
         }
     }
+    if (read_gone(r))
+        drop_gone_fd(gm, &gm->gamepad_fd);   /* axes zero on the next poll */
 }
 
 /* ── Merge the left analog stick into the D-pad directions ──────────────── */
@@ -782,17 +791,20 @@ static void latch_key(GamepadManager *gm, int code, bool down) {
     }
 }
 
-static void poll_keyboard_fd(GamepadManager *gm, int fd) {
+static void poll_keyboard_fd(GamepadManager *gm, int *fd) {
     struct input_event ev;
-    while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev))
+    ssize_t r;
+    while ((r = read(*fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev))
         if (ev.type == EV_KEY)
             latch_key(gm, ev.code, ev.value != 0);
+    if (read_gone(r))
+        drop_gone_fd(gm, fd);
 }
 
 static void poll_keyboard(GamepadManager *gm) {
     for (int k = 0; k < gm->keyboard_count; k++)
         if (gm->keyboard_fds[k] >= 0)
-            poll_keyboard_fd(gm, gm->keyboard_fds[k]);
+            poll_keyboard_fd(gm, &gm->keyboard_fds[k]);
 }
 
 /* ── Read mouse events with acceleration ────────────────────────────────── */
@@ -814,7 +826,8 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
         bool *btn = gm->mouse_btn[k];
         int fd = gm->mouse_fds[k];
 
-        while (fd >= 0 && read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+        ssize_t r = 0;
+        while (fd >= 0 && (r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
             if (ev.type == EV_REL) {
                 if (ev.code == REL_X)
                     accum_dx += ev.value;
@@ -833,6 +846,10 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
                     latch_key(gm, ev.code, down);   /* a keyboard+touchpad combo node */
             }
             /* EV_SYN ignored — we batch all events in the read loop */
+        }
+        if (fd >= 0 && read_gone(r)) {
+            drop_gone_fd(gm, &gm->mouse_fds[k]);
+            btn[0] = btn[1] = btn[2] = false;   /* no release will arrive */
         }
         left_held   = left_held   || btn[0];
         right_held  = right_held  || btn[1];

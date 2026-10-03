@@ -23,7 +23,6 @@
 #include "../common/common.h"
 #include "../common/input_scan.h"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
@@ -60,7 +59,7 @@
 #define DEV_NAME_LEN    128
 #define LOG_LINES       8
 #define LOG_LINE_LEN    64
-#define POLL_MS         1000   /* how often /dev/input is listed for a hot plug */
+#define POLL_MS         INPUT_SIG_CHECK_MS   /* how often /dev/input is listed for a hot plug */
 
 #define BITS_PER_LONG   (sizeof(long) * 8)
 #define NBITS(x)        ((((x)-1)/BITS_PER_LONG)+1)
@@ -224,24 +223,6 @@ static void input_scan_devices(InputState *s) {
         if (d->keys) s->kind_cnt[DEV_KEYBOARD-DEV_KEYBOARD]++;
         s->dev_cnt++;
     }
-}
-
-/* A cheap fingerprint of /dev/input's event nodes — each name and inode, so a
- * node removed and recreated under the same number still changes it.  Listing
- * a directory opens no device; classifying (input_scan) opens every node, so
- * it runs only when this changed. */
-static unsigned long input_node_sig(void) {
-    DIR *dir = opendir("/dev/input");
-    if (!dir) return 0;
-    unsigned long sig = 0;
-    struct dirent *de;
-    while ((de = readdir(dir)) != NULL) {
-        int num;
-        if (sscanf(de->d_name, "event%d", &num) != 1) continue;
-        sig += ((unsigned long)(num + 1) * 2654435761UL) ^ (unsigned long)de->d_ino;
-    }
-    closedir(dir);
-    return sig;
 }
 
 static void input_close(InputState *s);   /* defined below */

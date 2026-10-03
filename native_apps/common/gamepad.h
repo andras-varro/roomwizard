@@ -24,6 +24,10 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+/* InputConfig (the one /etc/input_config.conf parser, and its defaults) and
+ * InputSigGate (the hot-plug check) live there. */
+#include "input_scan.h"
+
 /* Room for the "<name> at <path>" string remembered per slot, so a rescan can
    tell an unchanged device from a swapped one: input_scan.h reads EVIOCGNAME
    into 128 bytes and the path into 32, plus " at " and the terminator. */
@@ -44,23 +48,11 @@ extern "C" {
 /* Maximum touch regions */
 #define GAMEPAD_MAX_TOUCH_REGIONS 10
 
-/* Default input config file path */
-#define GAMEPAD_CONFIG_PATH "/etc/input_config.conf"
-
 /* Last-resort mouse bounds, used only if the framebuffer globals are unset.
  * gamepad_init() takes the bounds from screen_base_width/height, whose own
  * defaults are these same numbers. */
 #define GAMEPAD_DEFAULT_SCREEN_W 800
 #define GAMEPAD_DEFAULT_SCREEN_H 480
-
-/* Default mouse acceleration parameters */
-#define GAMEPAD_MOUSE_SENSITIVITY_DEFAULT   1.5f
-#define GAMEPAD_MOUSE_ACCEL_DEFAULT         2.0f
-#define GAMEPAD_MOUSE_LOW_THRESHOLD_DEFAULT  3
-#define GAMEPAD_MOUSE_HIGH_THRESHOLD_DEFAULT 15
-
-/* Default dead zone as percentage of axis range (0-100) */
-#define GAMEPAD_DEADZONE_PCT_DEFAULT 25
 
 /* Maximum axes tracked for calibration */
 #define GAMEPAD_MAX_AXES 8
@@ -182,7 +174,7 @@ typedef struct {
     /* Button level per mouse node (left, right, middle), so the output is the
      * OR across mice: releasing a button on one mouse must not release it for
      * another that is still holding it.  Seeded from EVIOCGKEY at open, so a
-     * button held across the 5 s rescan is still held after it. */
+     * button held across a rescan is still held after it. */
     bool mouse_btn[GAMEPAD_MAX_PER_KIND][3];
 
     /* Internal previous-frame state for edge detection (abstract buttons) */
@@ -235,6 +227,14 @@ typedef struct {
     char announced_gamepad[GAMEPAD_ANNOUNCE_LEN];
     char announced_keyboard[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
     char announced_mouse[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
+
+    /* gamepad_tick()'s hot-plug check.  Every full scan makes its own
+     * input_node_sig() the baseline, so a re-init (app_launcher, after each
+     * child exits) starts from the nodes it just opened. */
+    InputSigGate node_gate;
+    /* A read on a held fd failed with ENODEV/EBADF: that fd is already closed,
+     * and the next gamepad_tick() rescans whatever the fingerprint says. */
+    bool rescan_pending;
 } GamepadManager;
 
 /**
@@ -248,7 +248,7 @@ const int *gamepad_scan_caps(void);
 
 /**
  * Initialize the gamepad manager — scans /dev/input/event* for gamepad,
- * keyboard, and mouse.  Automatically loads config from GAMEPAD_CONFIG_PATH
+ * keyboard, and mouse.  Automatically loads config from INPUT_CONFIG_PATH
  * if the file exists.
  * Returns 0 on success (even if no devices found — they can be hot-plugged).
  */
@@ -268,9 +268,19 @@ void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active);
 
 /**
- * Re-scan for devices (call periodically or on hotplug).
+ * Close every device and scan again.  Apps call gamepad_tick() instead, which
+ * calls this only when something under /dev/input changed.
  */
 void gamepad_rescan(GamepadManager *gm);
+
+/**
+ * The hot-plug check: call once per frame, after gamepad_poll(), with the
+ * app's millisecond clock.  Every INPUT_SIG_CHECK_MS it lists /dev/input
+ * (input_node_sig(), which opens no device) and calls gamepad_rescan() only if
+ * that listing changed — or at once, if a read found a device gone.  An
+ * unchanged set of nodes is never closed and reopened.
+ */
+void gamepad_tick(GamepadManager *gm, uint32_t now_ms);
 
 /**
  * Configure touch button regions for virtual controls.

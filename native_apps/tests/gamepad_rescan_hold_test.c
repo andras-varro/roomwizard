@@ -1,7 +1,7 @@
 /* Host-side regression: a key, pad button or D-pad direction that is physically
  * held must stay held across gamepad_rescan().
  *
- * Every app calls gamepad_rescan() on a 5 s timer for USB hot plug.  It closes
+ * gamepad_tick() calls gamepad_rescan() whenever /dev/input changes.  It closes
  * every evdev node and reopens it, and it used to zero held_latched[] and
  * re-seed only the mouse buttons from EVIOCGKEY.  A reopened node delivers no
  * press event for a key that is already down (the kernel sends events on
@@ -112,7 +112,10 @@ static void caps_clear(unsigned long *bits, int bit) {
     bits[bit / INPUT_SCAN_LONG_BITS] &= ~(1UL << (bit % INPUT_SCAN_LONG_BITS));
 }
 
+static int g_scan_calls;   /* every full scan, for the gamepad_tick() case */
+
 int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]) {
+    g_scan_calls++;
     for (int i = 0; i < DEV_COUNT && n < max; i++) {
         FakeDev *d = &g_dev[i];
         d->fd = -1;          /* the old fd was closed by gamepad_close() */
@@ -334,8 +337,42 @@ static void test_sequential_layout(void) {
     gamepad_close(&gm);
 }
 
+/* gamepad_tick(): the rescan is gated, not periodic.  An unchanged /dev/input
+ * fingerprint must never close and reopen anything; a changed one, or a read
+ * that finds its fd gone, must.  The host's /dev/input does not change during
+ * the run, so "changed" is staged by making the baseline stale, and "gone" by
+ * closing the pad's fd behind the manager's back (read() then fails EBADF,
+ * the same branch an unplug's ENODEV takes). */
+static void test_tick_gate(void) {
+    printf("\n8. gamepad_tick rescans only on a change or a gone fd\n");
+    GamepadManager gm; InputState st;
+    start(&gm, &st);
+    int base = g_scan_calls;
+
+    gamepad_tick(&gm, 10000);
+    gamepad_tick(&gm, 11000);
+    gamepad_tick(&gm, 15000);
+    expect_bool("unchanged fingerprint: no rescan in 3 checks", g_scan_calls == base, true);
+
+    input_sig_gate_baseline(&gm.node_gate, gm.node_gate.sig + 1);
+    gamepad_tick(&gm, 15500);
+    expect_bool("changed, check not yet due: no rescan", g_scan_calls == base, true);
+    gamepad_tick(&gm, 16000);
+    expect_bool("changed fingerprint: one rescan", g_scan_calls == base + 1, true);
+    gamepad_tick(&gm, 17000);
+    expect_bool("after the rescan: baseline current, no rescan", g_scan_calls == base + 1, true);
+
+    close(gm.gamepad_fd);                     /* the fd goes stale */
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("gone fd: dropped by the poll", gm.gamepad_fd < 0, true);
+    gamepad_tick(&gm, 17001);                 /* not due: forced anyway */
+    expect_bool("gone fd: next tick rescans", g_scan_calls == base + 2, true);
+    expect_bool("gone fd: pad reopened", gm.gamepad_fd >= 0, true);
+    gamepad_close(&gm);
+}
+
 int main(void) {
-    printf("gamepad rescan: held input survives the 5 s hot-plug rescan\n");
+    printf("gamepad rescan: held input survives the hot-plug rescan\n");
     test_pad_button();
     test_pad_hat();
     test_keyboard();
@@ -343,6 +380,7 @@ int main(void) {
     test_unplugged_while_held();
     test_mouse_control();
     test_sequential_layout();
+    test_tick_gate();
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;

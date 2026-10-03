@@ -71,17 +71,12 @@ RoomWizardEventSource::RoomWizardEventSource()
 	  _mouseNext(0),
 	  _gamepadFd(-1),
 	  _gamepadLayout(0),
-	  _lastDeviceScan(0),
 	  // Keyboard
 	  _modifierFlags(0),
 	  // Mouse
 	  _mouseX(400),
 	  _mouseY(240),
 	  _prevMouseButtons(0),
-	  _mouseSensitivity(1.5f),
-	  _mouseAcceleration(2.0f),
-	  _mouseLowThreshold(3),
-	  _mouseHighThreshold(15),
 	  // Gamepad
 	  _gamepadAxisX(0),
 	  _gamepadAxisY(0),
@@ -101,7 +96,7 @@ RoomWizardEventSource::RoomWizardEventSource()
 	_screenW = screen_base_width;
 	_screenH = screen_base_height;
 
-	initDefaultGamepadMap();
+	memset(&_nodeGate, 0, sizeof(_nodeGate));   // no check yet: the first scan sets the baseline
 	loadInputConfig();
 	initTouch();
 	scanInputDevices();
@@ -178,6 +173,11 @@ void RoomWizardEventSource::scanInputDevices() {
 	static const char kEventPrefix[] = "/dev/input/event";
 	int totalBefore = countOpen(_keyboardFds, MAX_KEYBOARDS) + countOpen(_mouseFds, MAX_MICE) +
 	                  (_gamepadFd >= 0 ? 1 : 0);
+	// Fingerprint first, so a node that appears during the walk differs from
+	// this baseline and the next check catches it.  No baseline yet means this
+	// is the constructor's scan, which always logs its summary.
+	bool firstScan = !_nodeGate.have_sig;
+	input_sig_gate_baseline(&_nodeGate, input_node_sig());
 
 	// Held keyboards and mice are listed first: input_scan() skips them without
 	// opening them and counts them against the caps.  A held pad is not listed;
@@ -230,11 +230,11 @@ void RoomWizardEventSource::scanInputDevices() {
 
 	// BUG-INPUT-004 FIX: Log a summary after scanning so we know what was
 	// found (or not found).  This is essential for diagnosing "no input" issues.
-	// The periodic rescan runs almost always now (a slot is nearly always
-	// free), so after the first scan it logs only when the set changed.
+	// A rescan follows any /dev/input change, including nodes this never opens
+	// (the touchscreen), so after the first scan it logs only when the set changed.
 	int total = countOpen(_keyboardFds, MAX_KEYBOARDS) + countOpen(_mouseFds, MAX_MICE) +
 	            (_gamepadFd >= 0 ? 1 : 0);
-	if (_lastDeviceScan != 0 && total == totalBefore)
+	if (!firstScan && total == totalBefore)
 		return;
 	warning("RoomWizard: device scan complete — keyboards=%d mice=%d gamepad=%s",
 	      countOpen(_keyboardFds, MAX_KEYBOARDS),
@@ -472,81 +472,40 @@ void RoomWizardEventSource::transformCoordinates(int touchX, int touchY, int &ga
 // Config file loading
 // =========================================================================
 
+// The file is parsed by input_config_load() (common/input_scan.c), the one
+// parser every component calls.  The shared defaults are applied first, so
+// this is also where every input default comes from — the dead zone included,
+// which used to be a ScummVM-only constant.
 void RoomWizardEventSource::loadInputConfig() {
-	FILE *f = fopen("/etc/input_config.conf", "r");
-	if (!f) {
-		debug("RoomWizard: no input config at /etc/input_config.conf (using defaults)");
-		return;
-	}
+	InputConfig cfg;
+	input_config_defaults(&cfg);
+	int applied = input_config_load(&cfg, INPUT_CONFIG_PATH);
 
-	char line[256];
-	while (fgets(line, sizeof(line), f)) {
-		char *nl = strchr(line, '\n');
-		if (nl) *nl = '\0';
+	_mouseSensitivity   = cfg.mouse_sensitivity;
+	_mouseAcceleration  = cfg.mouse_acceleration;
+	_mouseLowThreshold  = cfg.mouse_low_threshold;
+	_mouseHighThreshold = cfg.mouse_high_threshold;
+	_gamepadDeadzonePct = cfg.gamepad_deadzone;
 
-		char *p = line;
-		while (*p == ' ' || *p == '\t') p++;
-		if (*p == '\0' || *p == '#') continue;
+	_gamepadMap.btnSouth   = cfg.gamepad_btn_jump;
+	_gamepadMap.btnEast    = cfg.gamepad_btn_run;
+	_gamepadMap.btnWest    = cfg.gamepad_btn_action;
+	_gamepadMap.btnNorth   = cfg.gamepad_btn_north;
+	_gamepadMap.btnStart   = cfg.gamepad_btn_pause;
+	_gamepadMap.btnSelect  = cfg.gamepad_btn_back;
+	_gamepadMap.btnTL      = cfg.gamepad_btn_tl;
+	_gamepadMap.btnTR      = cfg.gamepad_btn_tr;
+	_gamepadMap.hatXAxis   = cfg.gamepad_hat_x;
+	_gamepadMap.hatYAxis   = cfg.gamepad_hat_y;
+	_gamepadMap.stickXAxis = cfg.gamepad_stick_lx;
+	_gamepadMap.stickYAxis = cfg.gamepad_stick_ly;
 
-		char *eq = strchr(p, '=');
-		if (!eq) continue;
-		*eq = '\0';
-		char *key = p;
-		char *val = eq + 1;
-
-		// Trim trailing whitespace from key
-		char *end = eq - 1;
-		while (end > key && (*end == ' ' || *end == '\t'))
-			*end-- = '\0';
-
-		// Mouse settings
-		if (strcmp(key, "mouse_sensitivity") == 0) {
-			float v = (float)atof(val);
-			if (v > 0.1f && v < 20.0f) _mouseSensitivity = v;
-		} else if (strcmp(key, "mouse_acceleration") == 0) {
-			float v = (float)atof(val);
-			if (v > 0.1f && v < 20.0f) _mouseAcceleration = v;
-		} else if (strcmp(key, "mouse_low_threshold") == 0) {
-			int v = atoi(val);
-			if (v >= 0 && v < 100) _mouseLowThreshold = v;
-		} else if (strcmp(key, "mouse_high_threshold") == 0) {
-			int v = atoi(val);
-			if (v >= 1 && v < 500) _mouseHighThreshold = v;
-		}
-		// Gamepad button mapping (same keys as gamepad.c)
-		else if (strcmp(key, "gamepad_btn_jump") == 0)   { _gamepadMap.btnSouth  = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_run") == 0)    { _gamepadMap.btnEast   = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_action") == 0) { _gamepadMap.btnWest   = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_pause") == 0)  { _gamepadMap.btnStart  = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_back") == 0)   { _gamepadMap.btnSelect = atoi(val); }
-		else if (strcmp(key, "gamepad_hat_x") == 0)      { _gamepadMap.hatXAxis  = atoi(val); }
-		else if (strcmp(key, "gamepad_hat_y") == 0)      { _gamepadMap.hatYAxis  = atoi(val); }
-		else if (strcmp(key, "gamepad_stick_lx") == 0)   { _gamepadMap.stickXAxis = atoi(val); }
-		else if (strcmp(key, "gamepad_stick_ly") == 0)   { _gamepadMap.stickYAxis = atoi(val); }
-		// ScummVM-specific additional gamepad mappings
-		else if (strcmp(key, "gamepad_btn_north") == 0)  { _gamepadMap.btnNorth  = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_tl") == 0)     { _gamepadMap.btnTL     = atoi(val); }
-		else if (strcmp(key, "gamepad_btn_tr") == 0)     { _gamepadMap.btnTR     = atoi(val); }
-	}
-
-	fclose(f);
-	debug("RoomWizard: loaded input config (mouse sens=%.1f accel=%.1f thresh=%d/%d)",
-	      _mouseSensitivity, _mouseAcceleration, _mouseLowThreshold, _mouseHighThreshold);
-}
-
-void RoomWizardEventSource::initDefaultGamepadMap() {
-	_gamepadMap.btnSouth  = BTN_SOUTH;
-	_gamepadMap.btnEast   = BTN_EAST;
-	_gamepadMap.btnWest   = BTN_WEST;
-	_gamepadMap.btnNorth  = BTN_NORTH;
-	_gamepadMap.btnStart  = BTN_START;
-	_gamepadMap.btnSelect = BTN_SELECT;
-	_gamepadMap.btnTL     = BTN_TL;
-	_gamepadMap.btnTR     = BTN_TR;
-	_gamepadMap.hatXAxis  = ABS_HAT0X;
-	_gamepadMap.hatYAxis  = ABS_HAT0Y;
-	_gamepadMap.stickXAxis = ABS_X;
-	_gamepadMap.stickYAxis = ABS_Y;
+	if (applied < 0)
+		debug("RoomWizard: no input config at %s (using defaults)", INPUT_CONFIG_PATH);
+	else
+		debug("RoomWizard: loaded input config, %d settings (mouse sens=%.1f accel=%.1f "
+		      "thresh=%d/%d, deadzone=%d%%)", applied, _mouseSensitivity, _mouseAcceleration,
+		      _mouseLowThreshold, _mouseHighThreshold, _gamepadDeadzonePct);
 }
 
 // =========================================================================
@@ -1081,7 +1040,7 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		if (halfRange > 0) {
 			int offX = _gamepadAxisX - _gamepadAxisCenter;
 			int offY = _gamepadAxisY - _gamepadAxisCenter;
-			int dz = (halfRange * GAMEPAD_DEADZONE_PCT) / 100;
+			int dz = (halfRange * _gamepadDeadzonePct) / 100;
 
 			if (offX > -dz && offX < dz) offX = 0;
 			if (offY > -dz && offY < dz) offY = 0;
@@ -1350,18 +1309,18 @@ bool RoomWizardEventSource::pollEvent(Common::Event &event) {
 		return true;
 	}
 
-	// Periodic device rescan (every 5 seconds) to detect hotplug
-	if (g_system) {
-		uint32 now = g_system->getMillis();
-		if (now - _lastDeviceScan > DEVICE_SCAN_INTERVAL) {
-			_lastDeviceScan = now;
-			// Rescan while any slot is free: a second keyboard or mouse can
-			// arrive while the first is held.  Held nodes are skipped.
-			if (countOpen(_keyboardFds, MAX_KEYBOARDS) < MAX_KEYBOARDS ||
-			    countOpen(_mouseFds, MAX_MICE) < MAX_MICE || _gamepadFd < 0)
-				scanInputDevices();
-		}
-	}
+	// Hot-plug rescan, gated on the /dev/input fingerprint (input_scan.h):
+	// every INPUT_SIG_CHECK_MS the directory is listed, opening no device, and
+	// the incremental scan runs only if it changed.  Only while a slot is free —
+	// a second keyboard or mouse can arrive while the first is held; held
+	// nodes are skipped.  The slot test comes FIRST so a full house does not
+	// consume a change: once a slot frees, the next check still compares
+	// against the last scan's baseline and picks up a node plugged meanwhile.
+	if (g_system &&
+	    (countOpen(_keyboardFds, MAX_KEYBOARDS) < MAX_KEYBOARDS ||
+	     countOpen(_mouseFds, MAX_MICE) < MAX_MICE || _gamepadFd < 0) &&
+	    input_sig_gate_poll(&_nodeGate, g_system->getMillis()))
+		scanInputDevices();
 
 	// Poll all input sources — return first event found
 	if (pollKeyboard(event)) return true;

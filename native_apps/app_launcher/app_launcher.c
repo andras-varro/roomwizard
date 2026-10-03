@@ -47,7 +47,6 @@
 
 #define MAX_APPS        24
 #define APPS_DIR        "/opt/roomwizard/apps"
-#define RESCAN_INTERVAL_MS 5000
 
 /* Post-launch cooldown: ignore ALL input (gamepad, touch, mouse) for this
  * many milliseconds after returning from a child process.  This prevents
@@ -128,7 +127,6 @@ typedef struct {
     TouchInput  touch;
     GamepadManager gamepad;
     InputState  input;
-    uint32_t    last_rescan_ms;
     uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
     bool        needs_redraw;       /* Dirty flag — skip rendering when false */
@@ -717,7 +715,6 @@ int main(int argc, char *argv[]) {
     /* Gamepad / keyboard / mouse */
     gamepad_init(&launcher.gamepad);
     memset(&launcher.input, 0, sizeof(launcher.input));
-    launcher.last_rescan_ms = 0;
     launcher.last_launch_return_ms = 0;
     launcher.selected_app = -1;  /* No keyboard selection until user navigates */
     launcher.needs_redraw = true;  /* Force initial frame draw */
@@ -753,12 +750,10 @@ int main(int argc, char *argv[]) {
         gamepad_poll(&launcher.gamepad, &launcher.input,
                      ts.x, ts.y, ts.pressed);
 
-        /* Periodic device rescan for hotplug */
+        /* Hot-plug check: rescans only when /dev/input changed or a device
+         * went away.  The re-init after a child exits resets its baseline. */
         uint32_t now = get_time_ms();
-        if (now - launcher.last_rescan_ms > RESCAN_INTERVAL_MS) {
-            launcher.last_rescan_ms = now;
-            gamepad_rescan(&launcher.gamepad);
-        }
+        gamepad_tick(&launcher.gamepad, now);
 
         /* ── Post-launch cooldown ──────────────────────────────────────
          * After returning from a child process, ignore ALL input for

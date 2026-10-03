@@ -119,55 +119,21 @@ static const uint32_t evdev_to_keysym[256] = {
 };
 
 /* ── Load mouse settings from /etc/input_config.conf ────────────────────── */
+/* The file is parsed by input_config_load() (common/input_scan.c), the one
+ * parser every component calls; only the mouse fields are used here. */
 static void load_input_config(VNCInput *input) {
-    FILE *f = fopen(INPUT_CONFIG_FILE, "r");
-    if (!f) {
-        DEBUG_PRINT("Input config not found: %s (using defaults)", INPUT_CONFIG_FILE);
-        return;
+    InputConfig cfg;
+    input_config_defaults(&cfg);
+    int applied = input_config_load(&cfg, INPUT_CONFIG_PATH);
+    if (applied < 0) {
+        DEBUG_PRINT("Input config not found: %s (using defaults)", INPUT_CONFIG_PATH);
+    } else {
+        DEBUG_PRINT("Loaded input config from %s (%d settings)", INPUT_CONFIG_PATH, applied);
     }
-
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = '\0';
-
-        /* Skip blank lines and comments */
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '\0' || *p == '#')
-            continue;
-
-        char *eq = strchr(p, '=');
-        if (!eq) continue;
-
-        *eq = '\0';
-        /* Trim key */
-        char *key = p;
-        char *key_end = eq - 1;
-        while (key_end > key && (*key_end == ' ' || *key_end == '\t'))
-            *key_end-- = '\0';
-        /* Trim value */
-        char *val = eq + 1;
-        while (*val == ' ' || *val == '\t') val++;
-
-        if (strcmp(key, "mouse_sensitivity") == 0) {
-            float v = (float)atof(val);
-            if (v > 0.1f && v < 20.0f) input->mouse_sensitivity = v;
-        } else if (strcmp(key, "mouse_acceleration") == 0) {
-            float v = (float)atof(val);
-            if (v > 0.1f && v < 20.0f) input->mouse_acceleration = v;
-        } else if (strcmp(key, "mouse_low_threshold") == 0) {
-            int v = atoi(val);
-            if (v >= 0 && v < 100) input->mouse_low_threshold = v;
-        } else if (strcmp(key, "mouse_high_threshold") == 0) {
-            int v = atoi(val);
-            if (v >= 1 && v < 500) input->mouse_high_threshold = v;
-        }
-        /* Other keys silently ignored (gamepad settings, etc.) */
-    }
-
-    fclose(f);
-    DEBUG_PRINT("Loaded input config from %s", INPUT_CONFIG_FILE);
+    input->mouse_sensitivity    = cfg.mouse_sensitivity;
+    input->mouse_acceleration   = cfg.mouse_acceleration;
+    input->mouse_low_threshold  = cfg.mouse_low_threshold;
+    input->mouse_high_threshold = cfg.mouse_high_threshold;
 }
 
 /* ── Get current time in milliseconds ───────────────────────────────────── */
@@ -219,6 +185,10 @@ void vnc_input_scan_devices(VNCInput *input) {
     };
     int before = input->usb_node_count;
 
+    /* Fingerprint first, so a node that appears during the walk differs
+     * from this baseline and the next check catches it. */
+    input_sig_gate_baseline(&input->node_gate, input_node_sig());
+
     input->usb_node_count = input_scan(input->usb_nodes, before,
                                        VNC_MAX_USB_NODES, cap);
 
@@ -231,8 +201,6 @@ void vnc_input_scan_devices(VNCInput *input) {
                     nd->name, nd->path);
     }
     input->mouse_button_mask = usb_mouse_buttons(input);
-
-    input->last_device_scan = get_ticks_ms();
 }
 
 /* ── Close USB devices ──────────────────────────────────────────────────── */
@@ -277,13 +245,7 @@ int vnc_input_init(VNCInput *input, TouchInput *touch, VNCRenderer *renderer, rf
     input->remote_width = 0;
     input->remote_height = 0;
 
-    /* Mouse acceleration defaults */
-    input->mouse_sensitivity = DEFAULT_MOUSE_SENSITIVITY;
-    input->mouse_acceleration = DEFAULT_MOUSE_ACCELERATION;
-    input->mouse_low_threshold = DEFAULT_MOUSE_LOW_THRESHOLD;
-    input->mouse_high_threshold = DEFAULT_MOUSE_HIGH_THRESHOLD;
-
-    /* Load mouse config from /etc/input_config.conf */
+    /* Mouse acceleration: the shared defaults, then /etc/input_config.conf */
     load_input_config(input);
 
     /* Scan for USB keyboard and mouse */
@@ -444,13 +406,14 @@ static void poll_usb_devices(VNCInput *input) {
 void vnc_input_process(VNCInput *input) {
     if (!input || !input->touch || !input->renderer) return;
 
-    /* ── Periodic device rescan (every DEVICE_SCAN_INTERVAL_MS) ──────── */
-    /* Unconditional: a second keyboard or mouse can arrive while one of
-     * each is already held.  Held nodes are skipped, not reopened. */
-    uint32_t now_ms = get_ticks_ms();
-    if (now_ms - input->last_device_scan >= DEVICE_SCAN_INTERVAL_MS) {
+    /* ── Hot-plug rescan, gated on the /dev/input fingerprint ────────── */
+    /* Every INPUT_SIG_CHECK_MS the directory is listed (no device opened);
+     * the incremental scan runs only if it changed.  Not gated on a free
+     * slot: a second keyboard or mouse can arrive while one of each is
+     * already held.  Held nodes are skipped, not reopened, and a node that
+     * left is dropped by its read's ENODEV in poll_usb_devices(). */
+    if (input_sig_gate_poll(&input->node_gate, get_ticks_ms()))
         vnc_input_scan_devices(input);
-    }
 
     /* ── Poll USB keyboards and mice ─────────────────────────────────── */
     poll_usb_devices(input);

@@ -18,6 +18,11 @@
 
 #include <stdbool.h>
 #include <linux/input.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Nodes /dev/input/event0 .. event(INPUT_SCAN_MAX_NODES-1) are visited. */
 #define INPUT_SCAN_MAX_NODES 32
@@ -152,5 +157,95 @@ int input_scan_with(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_C
 
 /* Close nodes[i].fd and remove entry i, preserving order. Returns the new count. */
 int input_scan_drop(InputNode *nodes, int n, int i);
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * /etc/input_config.conf — the one parser.  common/gamepad.c (every native
+ * app), vnc_client and ScummVM each copy the fields they use out of an
+ * InputConfig; none of them parses the file itself.
+ *
+ * Format: one `key=value` per line; blank lines and lines starting with '#'
+ * are skipped, whitespace around key and value is trimmed (CR included, so a
+ * file saved with CRLF endings parses), and a line with no '=', an empty key,
+ * an empty value, an unknown key or an out-of-range number changes nothing.
+ * Every field is named after its key.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#define INPUT_CONFIG_PATH "/etc/input_config.conf"
+
+typedef struct {
+    float mouse_sensitivity;     /* accepted 0.1 < v < 20 */
+    float mouse_acceleration;    /* accepted 0.1 < v < 20 */
+    int   mouse_low_threshold;   /* accepted 0 <= v < 100 */
+    int   mouse_high_threshold;  /* accepted 1 <= v < 500 */
+    int   gamepad_deadzone;      /* percent of half-range, accepted 0..100 */
+    /* Native button codes (see InputPadLayout) and evdev axis codes; any
+     * integer is accepted, as every earlier copy of this parser did. */
+    int   gamepad_btn_jump, gamepad_btn_run, gamepad_btn_action;
+    int   gamepad_btn_pause, gamepad_btn_back;
+    int   gamepad_btn_north, gamepad_btn_tl, gamepad_btn_tr;  /* ScummVM only */
+    int   gamepad_hat_x, gamepad_hat_y;
+    int   gamepad_stick_lx, gamepad_stick_ly;
+    int   gamepad_stick_rx, gamepad_stick_ry;                 /* native only */
+} InputConfig;
+
+/* PURE. The defaults every component starts from, before the file. */
+void input_config_defaults(InputConfig *cfg);
+
+/* PURE. Apply one line of the file to `cfg`. True only if a field was set. */
+bool input_config_parse_line(InputConfig *cfg, const char *line);
+
+/*
+ * I/O. Apply every line of `path` on top of what `cfg` already holds — so seed
+ * it with input_config_defaults() (or the caller's current values) first.
+ * Logs nothing.  Returns the number of lines applied, or -1 if `path` could
+ * not be opened (the caller logs "using defaults").
+ */
+int input_config_load(InputConfig *cfg, const char *path);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Hot-plug detection — the one gate every reader's rescan sits behind.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * I/O. A fingerprint of /dev/input's event nodes: each eventN name and its
+ * inode number.  Listing a directory opens no device, which is why it can run
+ * every second where classifying (input_scan) cannot.  The inode is what makes
+ * it enough on its own: devtmpfs gives every node it creates a fresh inode
+ * number, so a device unplugged and replugged between two checks — same
+ * eventN, same count — still changes the fingerprint.  0 if /dev/input cannot
+ * be listed.
+ */
+unsigned long input_node_sig(void);
+
+/* How often a reader compares input_node_sig() with its last value. */
+#define INPUT_SIG_CHECK_MS 1000
+
+/* One reader's view of the fingerprint.  Zero-initialised means "no check
+ * yet": the first check is due at once, and only records a baseline. */
+typedef struct {
+    uint32_t      last_check_ms;
+    unsigned long sig;
+    bool          have_sig;    /* sig holds a baseline */
+    bool          have_time;   /* last_check_ms holds a real time */
+} InputSigGate;
+
+/* PURE. True if the next check is due at `now_ms` (wrap-safe). */
+bool input_sig_gate_due(const InputSigGate *g, uint32_t now_ms);
+
+/*
+ * PURE. Record the fingerprint `sig` observed at `now_ms`. True if it differs
+ * from the baseline — the caller rescans; false for the first one ever fed.
+ */
+bool input_sig_gate_feed(InputSigGate *g, uint32_t now_ms, unsigned long sig);
+
+/* PURE. Make `sig` the baseline without consuming a check (after a full scan). */
+void input_sig_gate_baseline(InputSigGate *g, unsigned long sig);
+
+/* I/O. If a check is due, take input_node_sig() and feed it. True: rescan. */
+bool input_sig_gate_poll(InputSigGate *g, uint32_t now_ms);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* INPUT_SCAN_H */

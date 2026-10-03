@@ -78,7 +78,6 @@
 #define HUD_HEIGHT       40
 #define DEATH_ANIM_FRAMES 20
 #define INVINCIBLE_TIME  60
-#define RESCAN_INTERVAL_MS 5000   /* USB hotplug re-detect, as in the other games */
 #define COIN_SCORE       100
 #define STOMP_SCORE      200
 #define LEVEL_BONUS      1000
@@ -1730,19 +1729,15 @@ static void handle_input(void) {
     gamepad_poll(&gamepad, &input, ts.x, ts.y, ts.pressed);
     uint32_t now = get_time_ms();
 
-    /* Periodic device rescan for hotplug.  This game is controller-only, and it
-     * was the one app of ten with no rescan: gamepad.c's read loop is
-     * `while (read(fd, …) == sizeof(ev))`, so a pad that leaves the bus just
-     * makes read() fail forever on a stale fd and nothing reopens it.  Input
-     * then stays dead for the life of the process — which is what was seen on
-     * the panel 2026-08-10, and why relaunching the game fixed it.
-     * gamepad_rescan() also clears held_latched[], so a direction held at
-     * unplug time does not stay asserted. */
-    static uint32_t last_rescan_ms = 0;
-    if (now - last_rescan_ms > RESCAN_INTERVAL_MS) {
-        last_rescan_ms = now;
-        gamepad_rescan(&gamepad);
-    }
+    /* Hot-plug check.  This game is controller-only, and it was once the one
+     * app with no rescan at all: a pad that left the bus made read() fail
+     * forever on a stale fd and nothing reopened it, so input stayed dead for
+     * the life of the process — seen on the panel 2026-08-10, and why
+     * relaunching the game fixed it.  gamepad_tick() rescans when /dev/input
+     * changes or a read reports the device gone, and the rescan also clears
+     * held_latched[], so a direction held at unplug time does not stay
+     * asserted. */
+    gamepad_tick(&gamepad, now);
 
     /* BTN_BACK always exits to the launcher. Platformer was the only game without
      * this, which left its game-over screen with no way out. */

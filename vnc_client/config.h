@@ -121,14 +121,8 @@ typedef enum {
 #define RECONNECT_BTN_SETTINGS_X 320
 #define RECONNECT_BTN_CONNECT_X  580
 
-/* Mouse acceleration defaults (overridden by /etc/input_config.conf) */
-#define DEFAULT_MOUSE_SENSITIVITY   1.5f
-#define DEFAULT_MOUSE_ACCELERATION  2.0f
-#define DEFAULT_MOUSE_LOW_THRESHOLD 3
-#define DEFAULT_MOUSE_HIGH_THRESHOLD 15
-
-/* Input device scanning */
-#define INPUT_CONFIG_FILE       "/etc/input_config.conf"
-#define DEVICE_SCAN_INTERVAL_MS 5000
+/* Mouse defaults, the /etc/input_config.conf path and the hot-plug check
+ * interval are common/input_scan.h's: input_config_defaults(),
+ * INPUT_CONFIG_PATH and INPUT_SIG_CHECK_MS. */
 
 #endif // VNC_CONFIG_H
