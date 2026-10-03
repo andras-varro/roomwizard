@@ -118,18 +118,6 @@ it runs degraded in portrait rather than being refused; it launches from the con
 this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
-### B45. A hub pull under streaming USB audio printed a kernel WARNING — patched, one clean pull, seen once 2026-10-01
-
-**Measured on `.188`** before the patch: `WARNING … musb_h_tx_flush_fifo+0x134/0x138`, `Could not flush host
-TX10 fifo: csr: 2003`, from `musb_cleanup_urb` under `usb_audio_disconnect`; nine plain dongle unplugs did not
-print it; n=1. `kernel/patches/musb-host-flush-gone-device.patch` shortens the flush for a gone device
-(mechanism: `kernel/README.md`). **Measured 2026-10-02 with the patched image (md5 `1fd83479…`):** one hub plus
-adapter pull under Mix Bus Test music, no WARNING; a bare-dongle unplug in that session also clean — **n=1**,
-and the warning itself was n=1, so one clean pull cannot tell "fixed" from "did not recur". **Remaining:** n≥5
-hub pulls under streaming audio with zero `Could not flush`; the `dev_dbg` on the short path is compiled out (no
-`DYNAMIC_DEBUG`), so a kprobe pair on `musb_cleanup_urb` is the witness that the short path ran. Then delete
-this entry.
-
 ### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
 
 **Measured on `.188`:** at the 8BitDo pad's first incoming connection after boot the kernel printed `WARNING:
