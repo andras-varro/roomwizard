@@ -1238,6 +1238,18 @@ static void update_camera(void) {
     if (camera.y > max_cy) camera.y = max_cy;
 }
 
+/* Screen-space drop applied to the whole world (tiles, player, enemies) so
+ * the floor sits on the bottom of the visible area.  Every level is
+ * 30 tiles = 480 px tall: in landscape that fills the screen and this is 0,
+ * so the layout is unchanged; in portrait (480x800) the camera clamps to
+ * y = 0 and the level used to end at row 480, leaving the runner on a floor
+ * in mid-air.  The rows above the level show the sky gradient.  Only applies
+ * when the level is shorter than the screen — a taller one scrolls instead. */
+static int world_offset_y(void) {
+    int off = (int)SCREEN_VISIBLE_BOTTOM - camera.level_height_px;
+    return off > 0 ? off : 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Game Update
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1466,7 +1478,7 @@ static void draw_player_dying(int sx, int sy, int timer) {
 
 static void draw_player_sprite(void) {
     int sx = (int)player.x - (int)camera.x;
-    int sy = (int)player.y - (int)camera.y;
+    int sy = (int)player.y - (int)camera.y + world_offset_y();
 
     /* Off-screen cull */
     if (sx + player.width < -16 || sx > (int)fb.width + 16) return;
@@ -1536,7 +1548,7 @@ static void draw_enemies_all(void) {
         if (!e->alive) continue;
 
         int sx = (int)e->x - (int)camera.x;
-        int sy = (int)e->y - (int)camera.y;
+        int sy = (int)e->y - (int)camera.y + world_offset_y();
 
         if (sx + e->width < -16 || sx > (int)fb.width + 16) continue;
         if (sy + e->height < -16 || sy > (int)fb.height + 16) continue;
@@ -1554,6 +1566,7 @@ static void draw_tiles(void) {
     int sy_start = (int)camera.y / TILE_SIZE;
     int sx_end = sx_start + (int)fb.width / TILE_SIZE + 2;
     int sy_end = sy_start + (int)fb.height / TILE_SIZE + 2;
+    int y_off = world_offset_y();
 
     if (sx_start < 0) sx_start = 0;
     if (sy_start < 0) sy_start = 0;
@@ -1564,7 +1577,7 @@ static void draw_tiles(void) {
         for (int tx = sx_start; tx < sx_end; tx++) {
             if (level_tiles[ty][tx] != TILE_EMPTY) {
                 int scrx = tx * TILE_SIZE - (int)camera.x;
-                int scry = ty * TILE_SIZE - (int)camera.y;
+                int scry = ty * TILE_SIZE - (int)camera.y + y_off;
                 draw_single_tile(tx, ty, scrx, scry);
             }
         }
