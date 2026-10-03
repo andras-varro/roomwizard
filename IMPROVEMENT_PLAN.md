@@ -130,19 +130,6 @@ hub pulls under streaming audio with zero `Could not flush`; the `dev_dbg` on th
 `DYNAMIC_DEBUG`), so a kprobe pair on `musb_cleanup_urb` is the witness that the short path ran. Then delete
 this entry.
 
-### B46. The musb host port can silently die after `VBUS_ERROR` — open, seen once 2026-10-01
-
-**Measured on `.188`:** ~1 m 46 s after the Bluetooth pad connected, the kernel logged `musb-hdrc
-musb-hdrc.0.auto: VBUS_ERROR in a_idle (90, <VBusValid), retry #0, port1 00000503`. Afterwards the musb `mode`
-file read `b_idle`; every USB device (hub, xpad, C-Media audio, keyboards, BT dongle) stopped working, yet no
-disconnect was logged and `/sys/bus/usb/devices` still listed them all; BT commands failed with `hci0 sending
-frame failed (-19)` while `bluetoothctl` still said `Connected: yes`. `/etc/init.d/usb-host recover` restored
-everything on attempt 1. It did not recur in a further 4 m 39 s session; n=1. **Cause of the VBUS sag not
-measured** — **[inferred]** candidate: total draw (xpad, USB audio, dongle, two keyboards behind hub `1a40:0101`)
-against the 500 mA budget.
-
-**Rate (measured, `.188`):** `VBUS_ERROR` in syslog at 14:30:31 (previous boot), 15:08:12, 15:44:49 and 15:48:32 — about one per 35 min under the load below. The two `in a_idle (90, <VBusValid), retry #0` killed the port (`mode` → `b_idle`); the two `in a_host (91, ...) retry #1` did not (stayed `a_host`) — **[inferred]** from two samples each. **Load:** declared `bMaxPower` hub `1a40:0101` 100 mA, C-Media USB audio 100, wired Xbox pad `045e:028e` 500, BT dongle `0b05:1bf6` 100, second hub `1a40:0101` 100, 2.4G receiver `25a7:fa61` 100, keyboard `04d9:a088` 100 — about 1100 mA against the 500 mA port budget. Both hubs report `bmAttributes` 0xe0 (self-powered) but the operator confirms neither has a supply, so the bit lies. Overload is the leading cause, still **[inferred]**. **Next:** (1) the A/B — the operator moves to BT keyboard, audio and pad, leaving only hub and dongle on USB; no `VBUS_ERROR` in `/var/log/messages` over hours is the verdict. Running on `.188` since 2026-10-02 09:44 device time (USB Xbox pad unplugged); no new `VBUS_ERROR` after the first hour (measured); (2) automatic recovery — detect `b_idle` and run `usb-host recover` without a tap, justified by the rate. The RESCAN half is shipped and verified on device: at 15:44:49 the port died, RESCAN ran the recover (musb remove, re-register, mode `a_host`, `hci0` re-powered) via `usb_port_dead()`; the negative control, RESCAN on a healthy `a_idle` port, ran no recover (dmesg unchanged, BT pad stayed connected).
-
 ### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
 
 **Measured on `.188`:** at the 8BitDo pad's first incoming connection after boot the kernel printed `WARNING:
