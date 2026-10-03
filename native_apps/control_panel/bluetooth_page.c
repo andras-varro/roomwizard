@@ -106,7 +106,8 @@ static void btn(Button *b, int x, int y, int w, int h, const char *t,
 
 /* A toggle's hit box right edge, as toggle_check_press() computes it. */
 static int toggle_right(const ToggleSwitch *t) {
-    return t->x - 5 + t->track_w + text_measure_width(t->label, 1) + 20;
+    UiRect r = toggle_hit_rect(t);
+    return r.x + r.w;
 }
 
 /* Action row A's buttons that apply, left to right.  The same placement for
@@ -697,6 +698,48 @@ static CpPageResult bt_page_input(Config *cfg, int tx, int ty,
     return redraw ? CP_PAGE_REDRAW : CP_PAGE_IDLE;
 }
 
+/* Keyboard focus: exactly what bt_page_input() would hit-test this frame —
+ * RETRY alone while bluetoothctl is down, only the overlay's buttons while
+ * it is up, otherwise the top row, the pager when there is more than one
+ * page, the visible device rows (the box the row hit-test uses) and the
+ * action buttons that apply to the selection.  input() has just run
+ * sync_widgets(), so the disabled flags are current. */
+static int bt_page_focusables(UiRect *out, int max) {
+    if (!bt_ctl_running(&bt))
+        return focus_add_button(out, 0, max, &retry_btn);
+    int ov = overlay_kind();
+    if (ov == OV_CODE)
+        return focus_add_button(out, 0, max, &ov_cancel_btn);
+    if (ov != OV_NONE) {
+        int n = focus_add_button(out, 0, max, &ov_yes_btn);
+        return focus_add_button(out, n, max, &ov_no_btn);
+    }
+    int n = focus_add_toggle(out, 0, max, &power_tg);
+    n = focus_add_button(out, n, max, &scan_btn);
+    int rows[BT_MAX_ROWS];
+    int nrows = build_rows(rows);
+    if (page_count(nrows) > 1) {
+        n = focus_add_button(out, n, max, &prev_btn);
+        n = focus_add_button(out, n, max, &next_btn);
+    }
+    int first = list_page * rows_fit;
+    for (int r = 0; r < rows_fit && first + r < nrows && n < max; r++) {
+        if (rows[first + r] < 0) continue;      /* a header or blank row */
+        out[n++] = (UiRect){ CONTENT_LEFT, BT_LIST_Y + r * BT_ROW_H,
+                             CONTENT_RIGHT - CONTENT_LEFT, BT_ROW_H - 4 };
+    }
+    BtDevice *d = selected();
+    Button *acts[4];
+    int na;
+    place_actions(acts, &na, d);
+    for (int i = 0; d && i < na; i++)
+        n = focus_add_button(out, n, max, acts[i]);
+    if (audio_offered(d) &&
+        !audio_out_bt_is_pinned(cp_audio_output(), cp_audio_bt_addr(), d->addr))
+        n = focus_add_button(out, n, max, &audio_btn);
+    return n;
+}
+
 const CpPage cp_bluetooth_page = {
     .name   = "Bluetooth",
     .icon   = "cp_bluetooth",
@@ -707,4 +750,5 @@ const CpPage cp_bluetooth_page = {
     .draw   = bt_page_draw,
     .input  = bt_page_input,
     .busy   = bt_page_busy,
+    .focusables = bt_page_focusables,
 };

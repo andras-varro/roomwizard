@@ -1051,6 +1051,17 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     state->scr = INPUT_SCR_MAIN;
 }
 
+/* Keyboard focus: the touch-tool row and the tester row, as input() hit-tests
+ * them; a tester with no device of its kind is disabled and skipped. */
+static int input_page_focusables(UiRect *out, int max) {
+    int n = 0;
+    for (int i = 0; i < TOUCH_SLOTS; i++)
+        if (touch_btns[i]) n = focus_add_button(out, n, max, touch_btns[i]);
+    for (int i = 0; i < 3; i++)
+        n = focus_add_button(out, n, max, test_btns[i]);
+    return n;
+}
+
 const CpPage cp_input_page = {
     .name           = "Input",
     .icon           = "cp_input",
@@ -1059,5 +1070,6 @@ const CpPage cp_input_page = {
     .enter          = input_page_enter,
     .draw           = input_page_draw,
     .input          = input_page_input,
+    .focusables     = input_page_focusables,
     .run_fullscreen = input_page_run_fullscreen,
 };

@@ -137,12 +137,18 @@ void icon_grid_draw_tile(Framebuffer *fb, const IconGrid *g, int tx, int ty,
     text_draw_centered(fb, tx + g->tile_w / 2, label_y, label, LABEL_COLOR, LABEL_SCALE);
 }
 
-void icon_grid_draw_selection(Framebuffer *fb, const IconGrid *g, int tx, int ty) {
+void icon_grid_draw_ring(Framebuffer *fb, int x, int y, int w, int h) {
     int bw = 3;
+    int radius = TILE_RADIUS;
+    if (radius > (h >> 1)) radius = h >> 1;     /* a short widget: no corner overlap */
     for (int b = 0; b < bw; b++)
-        fb_draw_rounded_rect(fb, tx - bw + b, ty - bw + b,
-                             g->tile_w + 2 * (bw - b), g->tile_h + 2 * (bw - b),
-                             TILE_RADIUS + bw - b, TILE_SEL_BORDER);
+        fb_draw_rounded_rect(fb, x - bw + b, y - bw + b,
+                             w + 2 * (bw - b), h + 2 * (bw - b),
+                             radius + bw - b, TILE_SEL_BORDER);
+}
+
+void icon_grid_draw_selection(Framebuffer *fb, const IconGrid *g, int tx, int ty) {
+    icon_grid_draw_ring(fb, tx, ty, g->tile_w, g->tile_h);
 }
 
 void icon_grid_draw_paging(Framebuffer *fb, const IconGrid *g, int page, int pages) {
@@ -212,4 +218,29 @@ uint32_t icon_grid_letter_color(const char *label) {
     for (const char *p = label; *p; p++)
         h = h * 31 + (unsigned char)*p;
     return LETTER_COLORS[h % NUM_LETTER_COLORS];
+}
+
+int icon_grid_nav(const IconGrid *g, int count, int cur, UiDir d) {
+    if (cur < 0) return cur;
+    switch (d) {
+    case UI_DIR_RIGHT: return cur + 1 < count       ? cur + 1       : cur;
+    case UI_DIR_LEFT:  return cur > 0               ? cur - 1       : cur;
+    case UI_DIR_DOWN:  return cur + g->cols < count ? cur + g->cols : cur;
+    default:           return cur - g->cols >= 0    ? cur - g->cols : cur;
+    }
+}
+
+int icon_grid_nav_exit(const IconGrid *g, int count, int page, int cur,
+                       int *from, UiDir d) {
+    int base = page * g->per_page;
+    if (cur == ICON_GRID_NAV_EXIT) {
+        if (d != UI_DIR_DOWN) return cur;
+        int t = *from;
+        return (t >= base && t < base + g->per_page && t < count) ? t : base;
+    }
+    if (d == UI_DIR_UP && cur >= base && cur < base + g->cols) {
+        *from = cur;
+        return ICON_GRID_NAV_EXIT;
+    }
+    return icon_grid_nav(g, count, cur, d);
 }

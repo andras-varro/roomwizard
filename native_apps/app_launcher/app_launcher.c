@@ -122,7 +122,9 @@ typedef struct {
     int         app_count;
     int         current_page;
     int         total_pages;
-    int         selected_app;       /* Absolute app index, or -1 for none */
+    int         selected_app;       /* Absolute app index, -1 for none, or
+                                       ICON_GRID_NAV_EXIT for the exit X */
+    int         exit_from;          /* the tile Up left for the X */
     Framebuffer fb;
     TouchInput  touch;
     GamepadManager gamepad;
@@ -304,6 +306,8 @@ static void draw_launcher(Launcher *l) {
                      RGB(100, 100, 100), 1);
 
     icon_grid_draw_exit(&l->fb, &grid);
+    if (l->selected_app == ICON_GRID_NAV_EXIT)       /* keyboard focus on the X */
+        icon_grid_draw_ring(&l->fb, grid.exit_x, grid.exit_y, grid.exit_w, grid.exit_h);
 
     if (modal_dialog_is_active(&power_dialog)) {
         /* The focus ring only when a key can move it, as with the tile ring. */
@@ -380,7 +384,7 @@ static int handle_gamepad_input(Launcher *l) {
     }
 
     /* If nothing is selected yet but a nav key is pressed, select first on page */
-    if (l->selected_app < 0) {
+    if (l->selected_app == -1) {
         if (inp->buttons[BTN_ID_UP].pressed   || inp->buttons[BTN_ID_DOWN].pressed ||
             inp->buttons[BTN_ID_LEFT].pressed  || inp->buttons[BTN_ID_RIGHT].pressed) {
             l->selected_app = l->current_page * grid.per_page;
@@ -391,32 +395,18 @@ static int handle_gamepad_input(Launcher *l) {
     /* Navigation is over absolute indices; ensure_selection_visible() flips the
        page when the selection leaves it, so there is no per-page bookkeeping. */
 
-    /* Navigate right */
-    if (inp->buttons[BTN_ID_RIGHT].pressed) {
-        if (l->selected_app + 1 < l->app_count) {
-            l->selected_app++;
-            ensure_selection_visible(l);
-        }
-    }
-    /* Navigate left */
-    if (inp->buttons[BTN_ID_LEFT].pressed) {
-        if (l->selected_app > 0) {
-            l->selected_app--;
-            ensure_selection_visible(l);
-        }
-    }
-    /* Navigate down */
-    if (inp->buttons[BTN_ID_DOWN].pressed) {
-        int target = l->selected_app + grid.cols;
-        if (target < l->app_count) {
-            l->selected_app = target;
-            ensure_selection_visible(l);
-        }
-    }
-    /* Navigate up */
-    if (inp->buttons[BTN_ID_UP].pressed) {
-        int target = l->selected_app - grid.cols;
-        if (target >= 0) {
+    /* In this order, one step per key pressed this frame (icon_grid_nav_exit); the
+       page follows only a selection that actually moved. */
+    static const struct { ButtonId key; UiDir dir; } nav[] = {
+        { BTN_ID_RIGHT, UI_DIR_RIGHT }, { BTN_ID_LEFT, UI_DIR_LEFT },
+        { BTN_ID_DOWN,  UI_DIR_DOWN  }, { BTN_ID_UP,   UI_DIR_UP   },
+    };
+    for (int i = 0; i < (int)(sizeof(nav) / sizeof(nav[0])); i++) {
+        if (!inp->buttons[nav[i].key].pressed) continue;
+        /* Up from the top row reaches the exit X, Down from it returns. */
+        int target = icon_grid_nav_exit(&grid, l->app_count, l->current_page,
+                                        l->selected_app, &l->exit_from, nav[i].dir);
+        if (target != l->selected_app) {
             l->selected_app = target;
             ensure_selection_visible(l);
         }
@@ -424,6 +414,10 @@ static int handle_gamepad_input(Launcher *l) {
 
     /* Select / launch */
     if (inp->buttons[BTN_ID_JUMP].pressed || inp->buttons[BTN_ID_ACTION].pressed) {
+        if (l->selected_app == ICON_GRID_NAV_EXIT) {   /* the X: as a tap on it */
+            open_power_dialog();
+            return -1;
+        }
         if (l->selected_app >= 0 && l->selected_app < l->app_count)
             return l->selected_app;
     }
@@ -717,6 +711,7 @@ int main(int argc, char *argv[]) {
     memset(&launcher.input, 0, sizeof(launcher.input));
     launcher.last_launch_return_ms = 0;
     launcher.selected_app = -1;  /* No keyboard selection until user navigates */
+    launcher.exit_from    = -1;
     launcher.needs_redraw = true;  /* Force initial frame draw */
 
     /* Compute grid layout based on screen dimensions */

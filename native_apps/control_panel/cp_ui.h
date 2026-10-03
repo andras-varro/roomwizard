@@ -80,8 +80,14 @@ int read_file_line(const char *path, char *buf, size_t len);
 void draw_test_screen(Framebuffer *fb, const char *title,
                       const char *status, int progress);
 
-/* One poll; true on a press, with its position. */
+/* One poll; true on a press, with its position — or on Esc/Backspace (or a
+ * pad's Start/Select), with x = y = -1, so every full-screen test that waits
+ * on it also leaves by keyboard. */
 bool check_touch(TouchInput *touch, int *x, int *y);
+
+/* One pad-layer poll: true when Esc/Backspace or Start/Select was just pressed.
+ * For full-screen loops that wait on something other than check_touch(). */
+bool cp_key_back(void);
 
 /* False once SIGINT/SIGTERM asked the panel to quit: a full-screen loop that
  * runs until the operator leaves it checks this, so a stop is not held up. */

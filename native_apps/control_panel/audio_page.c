@@ -446,6 +446,18 @@ static void audio_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
         cp_status("MIX BUS TEST EXITED WITH AN ERROR", false);
 }
 
+/* Keyboard focus: what input() hit-tests, minus whatever the master switch
+ * has disabled. */
+static int audio_page_focusables(UiRect *out, int max) {
+    int n = focus_add_toggle(out, 0, max, &audio_toggle);
+    n = focus_add_toggle(out, n, max, &music_toggle);
+    n = focus_add_toggle(out, n, max, &effects_toggle);
+    n = focus_add_button(out, n, max, &audio_dev_btn);
+    n = focus_add_button(out, n, max, &test_audio_btn);
+    n = focus_add_button(out, n, max, &mix_test_btn);
+    return n;
+}
+
 const CpPage cp_audio_page = {
     .name           = "Audio",
     .icon           = "cp_audio",
@@ -455,6 +467,7 @@ const CpPage cp_audio_page = {
     .leave          = audio_page_leave,
     .draw           = audio_page_draw,
     .input          = audio_page_input,
+    .focusables     = audio_page_focusables,
     .reset_defaults = audio_page_reset_defaults,
     .run_fullscreen = audio_page_run_fullscreen,
     .busy           = audio_page_busy,

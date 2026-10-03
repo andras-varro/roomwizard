@@ -342,6 +342,11 @@ static CpPageResult info_page_input(Config *cfg, int tx, int ty,
     return CP_PAGE_IDLE;
 }
 
+/* Keyboard focus: the one button. */
+static int info_page_focusables(UiRect *out, int max) {
+    return focus_add_button(out, 0, max, &reset_btn);
+}
+
 const CpPage cp_info_page = {
     .name   = "Information",
     .icon   = "cp_info",
@@ -350,4 +355,5 @@ const CpPage cp_info_page = {
     .enter  = info_page_enter,
     .draw   = info_page_draw,
     .input  = info_page_input,
+    .focusables     = info_page_focusables,
 };

@@ -16,6 +16,7 @@
 #include "../common/framebuffer.h"
 #include "../common/touch_input.h"
 #include "../common/config.h"
+#include "../common/ui_focus.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -62,6 +63,15 @@ typedef struct CpPage {
      * the loop then sleeps FRAME_DELAY_ACTIVE_US.  It reports live state —
      * never a constant true, which would spin a static page at full rate. */
     bool (*busy)(void);
+
+    /* Optional.  Keyboard/pad focus: writes the rects of the widgets that take
+     * a tap RIGHT NOW (enabled and drawn — an overlay's buttons only while it
+     * is up) into out, at most max, and returns the count.  Asked fresh each
+     * frame after input(), computed from the same values the page's hit-test
+     * uses (button_rect / toggle_hit_rect), never from a cached copy.
+     * Activation is a synthetic tap at the rect's centre through input(), so a
+     * page needs no other keyboard code.  NULL = nothing to focus. */
+    int (*focusables)(UiRect *out, int max);
 } CpPage;
 
 extern const CpPage cp_led_page;       /* led_page.c */

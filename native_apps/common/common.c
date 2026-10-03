@@ -271,10 +271,22 @@ void button_set_icon(Button *btn, void (*draw_icon)(Framebuffer*, int, int, int,
 // TOUCH HANDLING
 // ============================================================================
 
+UiRect button_rect(const Button *btn) {
+    UiRect r = { btn->x, btn->y, btn->width, btn->height };
+    return r;
+}
+
+int focus_add_button(UiRect *out, int n, int max, const Button *btn) {
+    if (btn->disabled || n >= max) return n;
+    out[n] = button_rect(btn);
+    return n + 1;
+}
+
 bool button_is_touched(Button *btn, int touch_x, int touch_y) {
     if (btn->disabled) return false;    // a disabled button is never hit
-    return (touch_x >= btn->x && touch_x < btn->x + btn->width &&
-            touch_y >= btn->y && touch_y < btn->y + btn->height);
+    UiRect r = button_rect(btn);
+    return (touch_x >= r.x && touch_x < r.x + r.w &&
+            touch_y >= r.y && touch_y < r.y + r.h);
 }
 
 /* Set when button_update()/button_check_press() move any button's visual_state;
@@ -795,17 +807,26 @@ void toggle_set_colors(ToggleSwitch *sw, uint32_t on_color, uint32_t off_color,
     sw->label_color = label_color;
 }
 
+// Generous hit area: track + label area + some padding
+UiRect toggle_hit_rect(const ToggleSwitch *sw) {
+    UiRect r = { sw->x - 5, sw->y - 5,
+                 sw->track_w + text_measure_width(sw->label, 1) + 20,
+                 sw->track_h + 10 };
+    return r;
+}
+
+int focus_add_toggle(UiRect *out, int n, int max, const ToggleSwitch *sw) {
+    if (sw->disabled || n >= max) return n;
+    out[n] = toggle_hit_rect(sw);
+    return n + 1;
+}
+
 bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
                         bool is_pressed, uint32_t current_time_ms) {
     if (sw->disabled) { sw->was_pressed = false; return false; }
-    // Generous hit area: track + label area + some padding
-    int hit_w = sw->track_w + text_measure_width(sw->label, 1) + 20;
-    int hit_h = sw->track_h + 10;
-    int hit_x = sw->x - 5;
-    int hit_y = sw->y - 5;
-
-    bool in_bounds = (touch_x >= hit_x && touch_x < hit_x + hit_w &&
-                      touch_y >= hit_y && touch_y < hit_y + hit_h);
+    UiRect hit = toggle_hit_rect(sw);
+    bool in_bounds = (touch_x >= hit.x && touch_x < hit.x + hit.w &&
+                      touch_y >= hit.y && touch_y < hit.y + hit.h);
 
     if (is_pressed && in_bounds) {
         if (!sw->was_pressed &&

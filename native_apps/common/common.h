@@ -11,6 +11,7 @@
 #include "framebuffer.h"
 #include "touch_input.h"
 #include "highscore.h"
+#include "ui_focus.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/time.h>
@@ -118,6 +119,15 @@ bool button_is_touched(Button *btn, int touch_x, int touch_y);
 
 // Update button state with touch (returns true if pressed)
 bool button_update(Button *btn, int touch_x, int touch_y, bool is_touching, uint32_t current_time_ms);
+
+// The box button_is_touched() hit-tests — the one home of that arithmetic, so
+// a keyboard focus ring (ui_focus.h) is drawn and tapped where touch lands.
+UiRect button_rect(const Button *btn);
+
+// Append btn's rect to a focusables list (out[n], at most max) unless it is
+// disabled — a disabled button takes no tap, so focus must skip it.  Returns
+// the new count.
+int focus_add_button(UiRect *out, int n, int max, const Button *btn);
 
 // Legacy API for compatibility (used by games)
 bool button_check_press(Button *btn, bool currently_pressed, uint32_t current_time_ms);
@@ -407,6 +417,14 @@ void toggle_set_colors(ToggleSwitch *sw, uint32_t on_color, uint32_t off_color,
 // Check touch and toggle state. Returns true if state CHANGED this frame.
 bool toggle_check_press(ToggleSwitch *sw, int touch_x, int touch_y,
                         bool is_pressed, uint32_t current_time_ms);
+
+// The generous box toggle_check_press() hit-tests (track + label + padding):
+// the one home of that arithmetic, for focus rings and for layouts that place
+// widgets beside a toggle.
+UiRect toggle_hit_rect(const ToggleSwitch *sw);
+
+// As focus_add_button(), for a toggle.
+int focus_add_toggle(UiRect *out, int n, int max, const ToggleSwitch *sw);
 
 // Draw the toggle switch
 void toggle_draw(Framebuffer *fb, ToggleSwitch *sw);

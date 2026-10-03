@@ -394,6 +394,16 @@ static CpPageResult led_page_input(Config *cfg, int tx, int ty,
     return act;
 }
 
+/* Keyboard focus: what input() hit-tests, minus whatever is disabled. */
+static int led_page_focusables(UiRect *out, int max) {
+    int n = focus_add_toggle(out, 0, max, &led_toggle);
+    n = focus_add_button(out, n, max, &led_minus_btn);
+    n = focus_add_button(out, n, max, &led_plus_btn);
+    for (int i = 0; i < LED_TEST_COUNT; i++)
+        n = focus_add_button(out, n, max, &test_btns[i]);
+    return n;
+}
+
 const CpPage cp_led_page = {
     .name           = "LED",
     .icon           = "cp_led",
@@ -401,6 +411,7 @@ const CpPage cp_led_page = {
     .layout         = led_page_layout,
     .draw           = led_page_draw,
     .input          = led_page_input,
+    .focusables     = led_page_focusables,
     .run_fullscreen = led_page_run_fullscreen,
     .reset_defaults = led_page_reset_defaults,
 };

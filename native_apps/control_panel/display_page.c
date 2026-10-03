@@ -165,6 +165,7 @@ static void test_display(Framebuffer *fb, TouchInput *touch) {
                 if (page >= pages) disp_running = false;
                 break;
             }
+            if (cp_key_back()) { disp_running = false; break; }   /* Esc leaves */
             usleep(16000);
         }
     }
@@ -505,6 +506,16 @@ static CpPageResult display_page_input(Config *cfg, int tx, int ty,
     return act;
 }
 
+/* Keyboard focus: what input() hit-tests. */
+static int display_page_focusables(UiRect *out, int max) {
+    int n = focus_add_toggle(out, 0, max, &portrait_toggle);
+    n = focus_add_button(out, n, max, &bl_minus_btn);
+    n = focus_add_button(out, n, max, &bl_plus_btn);
+    for (int i = 0; i < DISP_TEST_COUNT; i++)
+        n = focus_add_button(out, n, max, &test_btns[i]);
+    return n;
+}
+
 const CpPage cp_display_page = {
     .name           = "Display",
     .icon           = "cp_display",
@@ -512,6 +523,7 @@ const CpPage cp_display_page = {
     .layout         = display_page_layout,
     .draw           = display_page_draw,
     .input          = display_page_input,
+    .focusables     = display_page_focusables,
     .run_fullscreen = display_page_run_fullscreen,
     .reset_defaults = display_page_reset_defaults,
 };

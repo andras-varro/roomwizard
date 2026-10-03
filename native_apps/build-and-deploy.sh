@@ -184,6 +184,7 @@ step "12/32" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o
 step "13/32" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
 step "14/32" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
                               $CC "${WARN[@]}" -O2 -c common/icon_grid.c       -o build/icon_grid.o
+                              $CC "${WARN[@]}" -O2 -c common/ui_focus.c        -o build/ui_focus.o
 step "15/32" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
 step "16/32" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
 step "17/32" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
@@ -191,7 +192,7 @@ step "17/32" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o
 
 # gamepad.c finds its devices through input_scan.c (classifier + event* walk),
 # so every binary that links gamepad.o links both — name GAMEPAD_OBJ, never
-# build/gamepad.o alone.  control_panel links input_scan.o for its Input page.
+# build/gamepad.o alone.  control_panel links it too: keyboard/pad focus.
 GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
@@ -259,7 +260,7 @@ $CC "${WARN[@]}" -O2 -I. \
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "27/32" "control_panel"
-$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/input_scan.o build/ppm.o build/icon_grid.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/ui_focus.o build/ppm.o build/icon_grid.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone

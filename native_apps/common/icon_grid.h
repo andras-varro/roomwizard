@@ -17,6 +17,7 @@
 #define ICON_GRID_H
 
 #include "framebuffer.h"
+#include "ui_focus.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -51,6 +52,9 @@ void icon_grid_draw_tile(Framebuffer *fb, const IconGrid *g, int tx, int ty,
 
 /* The keyboard/gamepad selection ring around a tile. */
 void icon_grid_draw_selection(Framebuffer *fb, const IconGrid *g, int tx, int ty);
+/* The same ring around any rect — the one selection look, for keyboard focus
+ * on widgets that are not tiles (control_panel's pages). */
+void icon_grid_draw_ring(Framebuffer *fb, int x, int y, int w, int h);
 
 /* Page dots (nothing when there is one page) and the edge chevrons. */
 void icon_grid_draw_paging(Framebuffer *fb, const IconGrid *g, int page, int pages);
@@ -61,6 +65,22 @@ int  icon_grid_hit(const IconGrid *g, int count_on_page, int x, int y);
 
 /* -1 = flip to the previous page, +1 = next, 0 = not a page-flip tap. */
 int  icon_grid_page_hit(int x, int page, int pages);
+
+/* Keyboard/pad movement over ABSOLUTE item indices, the launcher's model:
+ * Left/Right step -1/+1 in reading order (off the end of a row onto the next,
+ * off the end of a page onto the next page), Up/Down step -/+cols; a move that
+ * would leave 0..count-1 does nothing (no wrap).  The page is the caller's to
+ * follow (idx / per_page).  cur < 0 = nothing selected: returned unchanged —
+ * where the first key lands is the caller's choice. */
+int  icon_grid_nav(const IconGrid *g, int count, int cur, UiDir d);
+
+/* As icon_grid_nav, plus the exit X (icon_grid_draw_exit) as a stop above the
+ * grid: Up from the top row of `page` goes to ICON_GRID_NAV_EXIT and records
+ * the tile in *from; Down from the X returns to *from when it is on `page`,
+ * else to the page's first tile; any other key on the X stays there. */
+#define ICON_GRID_NAV_EXIT (-2)
+int  icon_grid_nav_exit(const IconGrid *g, int count, int page, int cur,
+                        int *from, UiDir d);
 
 /* The standard red-X exit button in the title band. The grid only draws it and
  * reports the tap; what exiting means is the caller's (the control panel just

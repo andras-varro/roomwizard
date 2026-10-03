@@ -362,6 +362,11 @@ static void usb_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     }
 }
 
+/* Keyboard focus: the one button. */
+static int usb_page_focusables(UiRect *out, int max) {
+    return focus_add_button(out, 0, max, &usb_btn_rescan);
+}
+
 const CpPage cp_usb_page = {
     .name           = "USB",
     .icon           = "cp_usb",
@@ -370,5 +375,6 @@ const CpPage cp_usb_page = {
     .enter          = usb_page_enter,
     .draw           = usb_page_draw,
     .input          = usb_page_input,
+    .focusables     = usb_page_focusables,
     .run_fullscreen = usb_page_run_fullscreen,
 };
