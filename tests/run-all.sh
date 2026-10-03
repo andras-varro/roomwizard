@@ -138,6 +138,7 @@ CTEST_ROWS=(
     "ui_focus_test|-I common|common/ui_focus.c"
     "ui_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "usb_bus_test|-I.|control_panel/usb_bus.c"
+    "vnc_pad_test|-I common -I ../vnc_client|../vnc_client/vnc_pad.c common/ui_focus.c common/input_scan.c"
 )
 
 # Files named *_test.c that are NOT host regressions: ARM tools that

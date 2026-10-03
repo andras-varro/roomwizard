@@ -7,10 +7,12 @@
 #include <rfb/rfbclient.h>
 #include "../native_apps/common/touch_input.h"
 #include "../native_apps/common/input_scan.h"
+#include "vnc_pad.h"
 
 // Per-kind limit on USB input nodes held open (same as common/gamepad.c).
+// Three kinds: keyboards, mice and game pads.
 #define VNC_MAX_PER_KIND   4
-#define VNC_MAX_USB_NODES  (2 * VNC_MAX_PER_KIND)
+#define VNC_MAX_USB_NODES  (3 * VNC_MAX_PER_KIND)
 
 // Forward declaration
 typedef struct VNCRenderer VNCRenderer;
@@ -34,8 +36,9 @@ typedef struct {
     bool exit_requested;             // set true when hold completes
     float exit_progress;             // 0.0-1.0 for visual feedback
 
-    // Every USB keyboard and mouse node held open (common/input_scan.c).
-    // All keyboards type into the one session; all mice move the one pointer.
+    // Every USB keyboard, mouse and game pad node held open
+    // (common/input_scan.c).  All keyboards type into the one session; all
+    // mice and pads move the one pointer.
     InputNode usb_nodes[VNC_MAX_USB_NODES];
     int usb_node_count;
 
@@ -44,6 +47,13 @@ typedef struct {
     // release it for another that is still holding it.  Kept index-aligned
     // with usb_nodes[] when an entry is dropped.
     int usb_node_buttons[VNC_MAX_USB_NODES];
+
+    // Pad state per usb_nodes[] entry (meaningful for PAD nodes only), kept
+    // index-aligned like usb_node_buttons[].  A pad's held A/B are OR-ed into
+    // mouse_button_mask with the mice's buttons.
+    VncPad usb_node_pad[VNC_MAX_USB_NODES];
+    VncPadMap pad_map;          // native codes, from /etc/input_config.conf
+    float pad_exit_progress;    // 0.0-1.0: the longest Select hold of any pad
 
     // Mouse absolute position in remote desktop coordinates
     int mouse_abs_x;
@@ -78,16 +88,16 @@ void vnc_input_send_pointer(VNCInput *input, int x, int y, int button_mask);
 // Send key event to VNC server
 void vnc_input_send_key(VNCInput *input, uint32_t key, bool down);
 
-// Scan /dev/input/event* for USB keyboard and mouse
+// Scan /dev/input/event* for USB keyboards, mice and game pads
 void vnc_input_scan_devices(VNCInput *input);
 
-// Close USB keyboard and mouse fds
+// Close every USB input node
 void vnc_input_close_usb_devices(VNCInput *input);
 
 // Set remote desktop dimensions (for mouse coordinate clamping)
 void vnc_input_set_remote_size(VNCInput *input, int width, int height);
 
-// Check if exit was requested (long-press in corner)
+// Check if exit was requested (corner long-press, or a pad's Select held)
 bool vnc_input_exit_requested(VNCInput *input);
 
 // Get exit gesture progress (0.0 to 1.0) for visual feedback

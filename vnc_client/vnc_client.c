@@ -1040,7 +1040,8 @@ int main(int argc, char *argv[]) {
     printf("Compress:  %d  Quality: %d\n", g_config.compress_level, g_config.quality_level);
     /* The logical size is not known until fb_init(); run_vnc_client() logs it. */
     printf("Display:   %s\n", USE_16BPP ? "16bpp RGB565" : "32bpp ARGB");
-    printf("Exit:      hold top-left corner %d ms\n\n", EXIT_HOLD_MS);
+    printf("Exit:      hold top-left corner %d ms, or a pad's Select %d ms\n\n",
+           EXIT_HOLD_MS, UI_HOLD_EXIT_MS);
 
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);

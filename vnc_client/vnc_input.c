@@ -118,9 +118,17 @@ static const uint32_t evdev_to_keysym[256] = {
     [126] = 0xFFEC,  /* KEY_RIGHTMETA → XK_Super_R */
 };
 
-/* ── Load mouse settings from /etc/input_config.conf ────────────────────── */
+/* vnc_pad.c spells the RFB button bits out so it needs no libvncclient
+ * header; these keep the two spellings from drifting apart. */
+_Static_assert(VNC_PAD_BTN_LEFT   == rfbButton1Mask, "pad left button bit");
+_Static_assert(VNC_PAD_BTN_RIGHT  == rfbButton3Mask, "pad right button bit");
+_Static_assert(VNC_PAD_WHEEL_UP   == rfbButton4Mask, "pad wheel-up bit");
+_Static_assert(VNC_PAD_WHEEL_DOWN == rfbButton5Mask, "pad wheel-down bit");
+
+/* ── Load mouse and pad settings from /etc/input_config.conf ────────────── */
 /* The file is parsed by input_config_load() (common/input_scan.c), the one
- * parser every component calls; only the mouse fields are used here. */
+ * parser every component calls; the mouse fields and the pad's button and
+ * axis codes are used here. */
 static void load_input_config(VNCInput *input) {
     InputConfig cfg;
     input_config_defaults(&cfg);
@@ -134,6 +142,7 @@ static void load_input_config(VNCInput *input) {
     input->mouse_acceleration   = cfg.mouse_acceleration;
     input->mouse_low_threshold  = cfg.mouse_low_threshold;
     input->mouse_high_threshold = cfg.mouse_high_threshold;
+    vnc_pad_map_from_config(&input->pad_map, &cfg);
 }
 
 /* ── Get current time in milliseconds ───────────────────────────────────── */
@@ -147,13 +156,60 @@ static uint32_t get_ticks_ms(void) {
  * Public API
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── OR of the button levels of every mouse node ────────────────────────── */
+/* ── OR of the button levels of every mouse and pad node ────────────────── */
 static int usb_mouse_buttons(const VNCInput *input) {
     int mask = 0;
-    for (int i = 0; i < input->usb_node_count; i++)
+    for (int i = 0; i < input->usb_node_count; i++) {
         if (input->usb_nodes[i].kind == INPUT_KIND_MOUSE)
             mask |= input->usb_node_buttons[i];
+        else if (input->usb_nodes[i].kind == INPUT_KIND_PAD)
+            mask |= input->usb_node_pad[i].buttons;
+    }
     return mask;
+}
+
+/* Read one axis's range and current value; an axis the pad lacks reads as
+ * an empty range, which vnc_pad_axis() treats as centred. */
+static VncPadRange pad_axis_info(int fd, int axis, int *value) {
+    struct input_absinfo ai;
+    VncPadRange r = { 0, 0 };
+    *value = 0;
+    if (axis >= 0 && axis <= ABS_MAX && ioctl(fd, EVIOCGABS(axis), &ai) == 0) {
+        r.min = ai.minimum;
+        r.max = ai.maximum;
+        *value = ai.value;
+    }
+    return r;
+}
+
+/* A freshly opened pad node: its stick ranges, where the stick and d-pad are
+ * now, and which pointer buttons are already held (a button held across a
+ * rescan produces no press event).  Select is deliberately NOT seeded: a
+ * session reconnecting while it is still held from the hold that opened
+ * Settings would otherwise open Settings again. */
+static void seed_pad(VNCInput *input, int i, uint32_t now) {
+    const InputNode *nd = &input->usb_nodes[i];
+    const VncPadMap *m = &input->pad_map;
+    VncPad *p = &input->usb_node_pad[i];
+    int x, y, hx, hy;
+    VncPadRange rx = pad_axis_info(nd->fd, m->stick_x, &x);
+    VncPadRange ry = pad_axis_info(nd->fd, m->stick_y, &y);
+    vnc_pad_reset(p, rx, ry, x, y);
+    pad_axis_info(nd->fd, m->hat_x, &hx);
+    pad_axis_info(nd->fd, m->hat_y, &hy);
+    vnc_pad_event(p, m, EV_ABS, m->hat_x, hx, now);
+    vnc_pad_event(p, m, EV_ABS, m->hat_y, hy, now);
+
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(nd->fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return;
+    /* Look each level up by its RAW code, then translate (input_scan.h). */
+    for (int raw = BTN_MISC; raw <= BTN_GEAR_UP; raw++) {
+        if (!input_caps_test(keys, raw)) continue;
+        int code = input_pad_key(nd->pad_layout, raw);
+        if (code == m->left || code == m->right)
+            vnc_pad_event(p, m, EV_KEY, code, 1, now);
+    }
 }
 
 /* Current button level of a freshly opened mouse node: a button held across
@@ -167,22 +223,33 @@ static int seed_mouse_buttons(int fd) {
            (input_caps_test(keys, BTN_RIGHT)  ? rfbButton3Mask : 0);
 }
 
-/* Close entry i and keep usb_node_buttons[] index-aligned with usb_nodes[]. */
+/* Close entry i and keep usb_node_buttons[] and usb_node_pad[] index-aligned
+ * with usb_nodes[]. */
 static void drop_usb_node(VNCInput *input, int i) {
     int n = input->usb_node_count;
     memmove(&input->usb_node_buttons[i], &input->usb_node_buttons[i + 1],
             (size_t)(n - i - 1) * sizeof(input->usb_node_buttons[0]));
+    memmove(&input->usb_node_pad[i], &input->usb_node_pad[i + 1],
+            (size_t)(n - i - 1) * sizeof(input->usb_node_pad[0]));
     input->usb_node_count = input_scan_drop(input->usb_nodes, n, i);
 }
 
-/* ── Scan /dev/input/event* for USB keyboards and mice ──────────────────── */
-/* Every keyboard and every mouse is opened, up to VNC_MAX_PER_KIND each;
- * nodes already held are left alone, so this is also the hotplug rescan. */
+/* ── Scan /dev/input/event* for USB keyboards, mice and game pads ───────── */
+/* Every keyboard, mouse and pad is opened, up to VNC_MAX_PER_KIND each;
+ * nodes already held are left alone, so this is also the hotplug rescan.
+ * input_classify() gives each node exactly one kind, so a pad is never also
+ * read as a keyboard or a mouse. */
 void vnc_input_scan_devices(VNCInput *input) {
     static const int cap[INPUT_KIND_COUNT] = {
         [INPUT_KIND_KEYBOARD] = VNC_MAX_PER_KIND,
         [INPUT_KIND_MOUSE]    = VNC_MAX_PER_KIND,
+        [INPUT_KIND_PAD]      = VNC_MAX_PER_KIND,
     };
+    static const char *const kind_name[INPUT_KIND_COUNT] = {
+        [INPUT_KIND_NONE] = "?", [INPUT_KIND_KEYBOARD] = "keyboard",
+        [INPUT_KIND_MOUSE] = "mouse", [INPUT_KIND_PAD] = "game pad",
+    };
+    uint32_t now = get_ticks_ms();
     int before = input->usb_node_count;
 
     /* Fingerprint first, so a node that appears during the walk differs
@@ -196,10 +263,13 @@ void vnc_input_scan_devices(VNCInput *input) {
         const InputNode *nd = &input->usb_nodes[i];
         input->usb_node_buttons[i] =
             (nd->kind == INPUT_KIND_MOUSE) ? seed_mouse_buttons(nd->fd) : 0;
+        memset(&input->usb_node_pad[i], 0, sizeof(input->usb_node_pad[i]));
+        if (nd->kind == INPUT_KIND_PAD)
+            seed_pad(input, i, now);
         DEBUG_PRINT("USB %s found: '%s' at %s",
-                    nd->kind == INPUT_KIND_MOUSE ? "mouse" : "keyboard",
-                    nd->name, nd->path);
+                    kind_name[nd->kind], nd->name, nd->path);
     }
+    (void)kind_name;    /* DEBUG_PRINT may compile to nothing */
     input->mouse_button_mask = usb_mouse_buttons(input);
 }
 
@@ -299,6 +369,99 @@ static bool poll_usb_keyboard(VNCInput *input, int fd) {
     return !(r < 0 && errno == ENODEV);
 }
 
+/* Move the one pointer (mice and pads share it), clamped to the desktop. */
+static void move_pointer(VNCInput *input, int dx, int dy) {
+    input->mouse_abs_x += dx;
+    input->mouse_abs_y += dy;
+    if (input->mouse_abs_x < 0) input->mouse_abs_x = 0;
+    if (input->mouse_abs_y < 0) input->mouse_abs_y = 0;
+    if (input->mouse_abs_x >= input->remote_width)
+        input->mouse_abs_x = input->remote_width - 1;
+    if (input->mouse_abs_y >= input->remote_height)
+        input->mouse_abs_y = input->remote_height - 1;
+}
+
+/* ── Release every pointer button the server holds down ─────────────────── */
+/* Before leaving the session for Settings, and when a touch drag enters the
+ * exit zone: a press with no matching release leaves the remote button stuck
+ * down, mid-drag, for whatever the server's next client is. */
+static void release_remote_buttons(VNCInput *input) {
+    if (input->button_mask) {
+        input->button_mask = 0;
+        vnc_input_send_pointer(input, input->last_x, input->last_y, 0);
+    }
+    if (input->mouse_button_mask) {
+        input->mouse_button_mask = 0;
+        vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y, 0);
+    }
+}
+
+/* ── Poll one game pad node ─────────────────────────────────────────────── */
+/* Events update the node's VncPad; motion and the button mask are sent once
+ * per loop by pad_step(), because a held stick produces no events.  Key codes
+ * are translated to native before vnc_pad_event() sees them, so the map read
+ * from /etc/input_config.conf applies to a SEQUENTIAL pad too.  Returns false
+ * if the node has gone away. */
+static bool poll_usb_pad(VNCInput *input, int idx, uint32_t now) {
+    const InputNode *nd = &input->usb_nodes[idx];
+    VncPad *p = &input->usb_node_pad[idx];
+    struct input_event ev;
+    ssize_t r;
+
+    errno = 0;
+    while ((r = read(nd->fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        int code = ev.code;
+        if (ev.type == EV_KEY)
+            code = input_pad_key(nd->pad_layout, code);
+        else if (ev.type != EV_ABS)
+            continue;
+        int wheel = vnc_pad_event(p, &input->pad_map, ev.type, code, ev.value, now);
+        if (wheel) {
+            /* One wheel click: press+release, as the mouse wheel does */
+            vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
+                                   input->mouse_button_mask | wheel);
+            vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
+                                   input->mouse_button_mask);
+        }
+    }
+    return !(r < 0 && errno == ENODEV);
+}
+
+/* ── Once per loop: pad motion, pad buttons, Select's hold ──────────────── */
+static void pad_step(VNCInput *input, uint32_t now) {
+    int sum_dx = 0, sum_dy = 0, best = 0;
+    bool any_pad = false, exit = false;
+    int speed = vnc_pad_speed_for_width(input->remote_width);
+
+    for (int i = 0; i < input->usb_node_count; i++) {
+        if (input->usb_nodes[i].kind != INPUT_KIND_PAD) continue;
+        VncPad *p = &input->usb_node_pad[i];
+        int dx, dy, pm;
+        any_pad = true;
+        vnc_pad_motion(p, &input->pad_map, now, speed, &dx, &dy);
+        sum_dx += dx;
+        sum_dy += dy;
+        if (vnc_pad_back_exit(p, now, &pm)) exit = true;
+        if (pm > best) best = pm;
+    }
+    input->pad_exit_progress = (float)best / 1000.0f;
+    if (!any_pad) return;
+
+    int old_mask = input->mouse_button_mask;
+    input->mouse_button_mask = usb_mouse_buttons(input);
+    if (sum_dx != 0 || sum_dy != 0)
+        move_pointer(input, sum_dx, sum_dy);
+    if (sum_dx != 0 || sum_dy != 0 || old_mask != input->mouse_button_mask)
+        vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
+                               input->mouse_button_mask);
+
+    if (exit && !input->exit_requested) {
+        release_remote_buttons(input);
+        input->exit_requested = true;
+        DEBUG_PRINT("Exit: pad Select held %d ms", UI_HOLD_EXIT_MS);
+    }
+}
+
 /* ── Poll one USB mouse node and forward as VNC pointer events ──────────── */
 /* Every mouse moves the one pointer; the button mask sent is the OR across
  * mice (usb_node_buttons[]).  Returns false if the node has gone away. */
@@ -351,16 +514,7 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
         else if (speed >= (float)input->mouse_low_threshold)
             multiplier = input->mouse_sensitivity;
 
-        input->mouse_abs_x += (int)(dx * multiplier);
-        input->mouse_abs_y += (int)(dy * multiplier);
-
-        /* Clamp to remote desktop bounds */
-        if (input->mouse_abs_x < 0) input->mouse_abs_x = 0;
-        if (input->mouse_abs_y < 0) input->mouse_abs_y = 0;
-        if (input->mouse_abs_x >= input->remote_width)
-            input->mouse_abs_x = input->remote_width - 1;
-        if (input->mouse_abs_y >= input->remote_height)
-            input->mouse_abs_y = input->remote_height - 1;
+        move_pointer(input, (int)(dx * multiplier), (int)(dy * multiplier));
     }
 
     /* Send pointer event if anything changed */
@@ -371,9 +525,10 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
     return alive;
 }
 
-/* ── Poll every USB keyboard and mouse node ─────────────────────────────── */
+/* ── Poll every USB keyboard, mouse and pad node ────────────────────────── */
 static void poll_usb_devices(VNCInput *input) {
     bool have_remote = input->remote_width > 0 && input->remote_height > 0;
+    uint32_t now = get_ticks_ms();
 
     for (int i = 0; i < input->usb_node_count; ) {
         const InputNode *nd = &input->usb_nodes[i];
@@ -383,15 +538,20 @@ static void poll_usb_devices(VNCInput *input) {
             alive = poll_usb_keyboard(input, nd->fd);
         else if (nd->kind == INPUT_KIND_MOUSE && have_remote)
             alive = poll_usb_mouse(input, i);
+        else if (nd->kind == INPUT_KIND_PAD && have_remote)
+            alive = poll_usb_pad(input, i, now);
 
         if (alive) { i++; continue; }
 
         DEBUG_PRINT("USB %s disconnected: %s",
-                    nd->kind == INPUT_KIND_MOUSE ? "mouse" : "keyboard", nd->path);
-        bool was_mouse = (nd->kind == INPUT_KIND_MOUSE);
+                    nd->kind == INPUT_KIND_MOUSE ? "mouse" :
+                    nd->kind == INPUT_KIND_PAD   ? "game pad" : "keyboard", nd->path);
+        bool was_mouse = (nd->kind == INPUT_KIND_MOUSE ||
+                          nd->kind == INPUT_KIND_PAD);
         drop_usb_node(input, i);
 
-        /* A button held on the unplugged mouse is released by its leaving. */
+        /* A button held on the unplugged mouse or pad is released by its
+         * leaving. */
         if (was_mouse) {
             int old_mask = input->mouse_button_mask;
             input->mouse_button_mask = usb_mouse_buttons(input);
@@ -415,8 +575,11 @@ void vnc_input_process(VNCInput *input) {
     if (input_sig_gate_poll(&input->node_gate, get_ticks_ms()))
         vnc_input_scan_devices(input);
 
-    /* ── Poll USB keyboards and mice ─────────────────────────────────── */
+    /* ── Poll USB keyboards, mice and pads ───────────────────────────── */
     poll_usb_devices(input);
+    if (input->remote_width > 0 && input->remote_height > 0)
+        pad_step(input, get_ticks_ms());
+    if (input->exit_requested) return;   /* a pad's Select hold completed */
 
     /* ── Poll touch input (existing behavior, unchanged) ─────────────── */
     touch_poll(input->touch);
@@ -442,6 +605,8 @@ void vnc_input_process(VNCInput *input) {
                 input->exit_touching = true;
                 gettimeofday(&input->exit_touch_start, NULL);
                 DEBUG_PRINT("Exit zone: touch started");
+                /* A drag that slid in here still holds the remote button. */
+                release_remote_buttons(input);
             } else {
                 /* Already in exit zone — check elapsed time */
                 struct timeval now;
@@ -452,6 +617,7 @@ void vnc_input_process(VNCInput *input) {
                 if (input->exit_progress > 1.0f) input->exit_progress = 1.0f;
 
                 if (elapsed_ms >= EXIT_HOLD_MS) {
+                    release_remote_buttons(input);
                     input->exit_requested = true;
                     DEBUG_PRINT("Exit gesture completed (%ld ms)", elapsed_ms);
                 }
@@ -510,8 +676,11 @@ bool vnc_input_exit_requested(VNCInput *input) {
     return input ? input->exit_requested : false;
 }
 
+/* Whichever exit hold is further along: the corner's or a pad's Select. */
 float vnc_input_exit_progress(VNCInput *input) {
-    return input ? input->exit_progress : 0.0f;
+    if (!input) return 0.0f;
+    return input->pad_exit_progress > input->exit_progress
+         ? input->pad_exit_progress : input->exit_progress;
 }
 
 void vnc_input_cleanup(VNCInput *input) {
