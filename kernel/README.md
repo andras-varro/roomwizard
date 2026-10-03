@@ -51,16 +51,19 @@ mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n '' -d z
 - ⚠️ **None of our DTBs carries the 500 mA USB power patch**, which `lib/rw-usbpower.sh` applies to
   the vendor image in place. An image of ours therefore boots with the stock USB current limit.
 
-Installing the image on a unit follows the p1 rules in `lib/CLAUDE.md`. Take a backup of the running
-`uImage-system`, copy the new one over it, and have the operator reboot. The undo is copying the
-backup back, by SSH if the image answers or with a card reader if it does not.
+Installing the image on a unit is a **manual operator step**, not scripted: `lib/rw-usbpower.sh` is the
+only *scripted* writer of `uImage-system` and it derives the vendor image ([`lib/CLAUDE.md`](../lib/CLAUDE.md)).
+The permission classifier refuses an agent's write there, so the operator takes a backup of the running
+`uImage-system`, copies the new one over it and reboots (`.188` runs our image this way). The undo is
+copying the backup back, by SSH if the image answers or with a card reader if it does not. `build-image.sh`
+itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay untouched.
 
 `.188`'s p1 keeps the images it has run beside `uImage-system`, as rollbacks and negative controls:
 `.vendor` (`edc637ac…`), `.500ma` (`a1fd1af8…`, vendor plus the USB power patch), `.mod` (`17243454…`, the
 same patched image without it), `.ours-nopanel` (`3713faf7…`, vendor DTB), `.panel-v1` (`8bd1e362…`, before the
 fb-size and backlight patches) and `.disconnect` (`926896a5…`, before the ID-ground patch). The running
-`uImage-system` is our image with every `kernel/patches/` patch and our panel DTB (`f3b446c6…`, no 500 mA
-power patch).
+`uImage-system` is our image with every `kernel/patches/` patch and our panel DTB (`1fd83479…`, no 500 mA
+power patch); `.b40` (`f3b446c6…`) is the image before the two flush/set_vbus patches.
 
 ## Bluetooth modules
 
@@ -95,6 +98,8 @@ manufacturer 93. No MUSB DMA question stands in the way: A2DP is tens of KB/s, w
 | `patches/musb-release-mstandby-on-probe.patch` | with `USB_INVENTRA_DMA`, DMA dies at the first `usb-host recover`: the unbind's `omap2430_low_level_exit` sets `OTG_FORCESTDBY.ENABLEFORCE`, only `omap2430_runtime_resume` clears it, and the glue stays runtime-active across the rebind — the channel stays enabled with its count unmoved, the `dma` IRQ never fires, the audio writer blocks. **Booted — measured 2026-09-27 on `.188`**: after replug + `recover`, `0x480AB414 = 0`, `hw_ptr` advances ~49.5k frames/s, the `dma` IRQ keeps rising, and the operator heard it play | unpatched, after a recover: `0x480AB414 = 1`, DMA ch0 `CNTL 0x6a9 COUNT 4`; writing `0` there by hand completed the transfer within 1 s |
 | `patches/musb-a-idle-disconnect.patch` | a clean unplug hits the `default:` arm of the `MUSB_INTR_DISCONNECT` switch (`unhandled DISCONNECT transition (a_idle)`), so `is_active` stays set and the child is never disconnected — no `USB disconnect` logged, and once the child goes the root hub's autosuspend loops on `musb_bus_suspend` `-EBUSY`. The patch adds `A_IDLE`/`A_WAIT_BCON` arms calling `musb_host_resume_root_hub()` + `musb_root_disconnect()`. **Booted 2026-09-28 on `.188`** (uImage md5 `926896a5…`): a hub pulled from the root port logs `USB disconnect` for every child, `1-1` leaves sysfs, and `unhandled DISCONNECT`/`musb_bus_suspend` count 0. Its replug miss (no `CONNECT`, mode `a_idle`) is gone with the patch below | reading `musb_core.c` against the gadget-side twin, which clears `is_active` |
 | `patches/musb-omap2430-session-on-id-ground.patch` | `omap_musb_set_mailbox()` acts on `MUSB_ID_GROUND` and `MUSB_VBUS_OFF` only `if (musb->gadget_driver)`, always NULL here (`# CONFIG_USB_GADGET is not set`), so an adapter plug never sets `SESSION` and a cold port stays dead until a rebind ([§3.6](../SYSTEM_ANALYSIS.md#36-usb)). The patch drops the guard on both arms: ID-ground → `omap_control_usb_set_mode(HOST)` + `set_vbus(1)`, VBUS-off → `set_vbus(0)`. **Booted 2026-09-29 on `.188`** (uImage md5 `f3b446c6…`, every patch here; undo `uImage-system.disconnect`): adapter pulled with a hub and 6 devices → `status=4`, `set_vbus(0)`, all disconnect; replugged → `status=1`, `set_vbus(1)`, the hub enumerates 0.5 s later and all 7 are back within 3 s with no RESCAN, mode `a_host`. A hub swapped behind a seated adapter (no ID edge) re-enumerates too, mode staying `a_host`, which the previous image missed — why, **[inferred]**: the port now reaches a proper `a_host` | debugfs kprobes `p:rwmb omap2430_musb_mailbox status=%r0:u32` and `p:rwsv omap2430_musb_set_vbus on=%r1:u32` (no `dynamic_debug` on our image); `twl4030_usb` in `/proc/interrupts` ticks once per ID/VBUS edge |
+| `patches/musb-host-flush-gone-device.patch` | `musb_h_tx_flush_fifo()` (upstream `FIXME`, `musb_host.c`) retries 1000 × `mdelay(1)` under `musb->lock` with IRQs off while `FIFONOTEMPTY`; behind an unplugged hub the FIFO never drains, so each pull of a hub carrying a streaming USB card stalls ~1 s with IRQs off. `dev_WARN_ONCE` hides the second and later prints, not the stall. The patch tries 10 times and reports at `dev_dbg` when the URB's device is `NOTATTACHED` from `musb_cleanup_urb()`; every other caller keeps 1000 and the warning. **Booted 2026-10-02 on `.188`** (uImage md5 `1fd83479…`; undo `uImage-system.b40`, `f3b446c6…`): Mix Bus Test playing to the C-Media card behind `1a40:0101`, hub plus adapter pulled → disconnects at 402.580 s (hub) and 402.672 s (`1-1.4`), no `Could not flush host TX10 fifo` WARNING, internal speaker took over in ~1 s (**measured, n=1**). That the short path is the one taken is **[inferred]**: its `dev_dbg` is compiled out (no `DYNAMIC_DEBUG`) | reading `musb_h_tx_flush_fifo` and `musb_cleanup_urb`; the warning was seen once pre-patch |
+| `patches/musb-omap2430-set-vbus-report.patch` | `omap2430_musb_set_vbus()` polls DEVCTL `BDEVICE` 100 × `mdelay(5)`, so upstream's 1 s jiffies deadline never ends the wait: it gives up after ~505 ms **[inferred from source, not timed on the device]** and prints a bare `configured as A device timeout`, then carries on as on success. The patch waits on a `ktime` deadline (1 s from the mailbox work, 500 ms from the SESSREQ hard IRQ) and prints `configured as A device timeout: devctl %02x after %lld ms[ (irq)]`; carry-on is kept. Booted on `.188` with the patch above | reading `omap2430.c`; the message makes the next occurrence measure itself |
 
 **The panel patch, in detail.**
 - `/display` becomes `compatible = "panel-dpi"` with `enable-gpios` = pwrdn and a `panel-timing` node

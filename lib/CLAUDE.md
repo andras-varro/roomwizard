@@ -16,7 +16,7 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 | `rw-bundle.sh` | the release-bundle layout |
 | `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
-| `rw-usbpower.sh` | the only legitimate writer of `uImage-system` on p1 |
+| `rw-usbpower.sh` | the only scripted writer of `uImage-system` on p1 |
 
 ## One SSH gate, and BatchMode stays on it
 
@@ -97,7 +97,7 @@ installed here). U-Boot has no `saveenv`, so the environment cannot be persisted
 **Rules:** never write `/dev/mtd*`; **never** overwrite `mlo`, `u-boot.bin` or `ctrlblock.bin` on p1;
 stage experimental kernels under a *new* filename.
 
-`uImage-system` has **exactly one** legitimate writer — this file, for the USB 500 mA budget — and it
+`uImage-system` has **exactly one** *scripted* writer (our own image is installed by hand, `kernel/README.md`) — this file, for the USB 500 mA budget — and it
 is md5-gated on the way in, backed up to `uImage-system.vendor` (whose md5 is verified *before* the
 original is touched) and verified by re-reading the card afterwards. There is no rollback on failure.
 

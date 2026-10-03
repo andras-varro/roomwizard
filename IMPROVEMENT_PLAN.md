@@ -89,11 +89,13 @@ the stream's tail starves during the fade (`:1112-1113` today) — pump the bus 
 `musb-hdrc musb-hdrc.0.auto: configured as A device timeout` was printed once, at one adapter replug —
 the one following a spell in which the root hub had been runtime-suspended; the earlier replug did not
 print it. Enumeration succeeded anyway. The line comes from `omap2430_musb_set_vbus()`, which waits for
-DEVCTL `BDEVICE` to clear (100 × `mdelay(5)`, 1 s timeout) — now reached on every ID-ground, since the
-patch calls it there. Console error lines are defects even when harmless. **[inferred]** that the prior
-root-hub suspend is the difference; n=1. **Next:** reproduce (suspend the empty root hub, replug the
-adapter) with the `rwsv` kprobe on `omap2430_musb_set_vbus` and a DEVCTL read, then decide whether the
-wait needs the PHY/glue resumed first or the loop is simply too short.
+DEVCTL `BDEVICE` to clear — now reached on every ID-ground, since the patch calls it there. **Read from
+source, not timed on the device:** upstream's loop is 100 × `mdelay(5)`, so it gave up after ~505 ms, before
+the 1 s jiffies deadline it appeared to have, then carried on as on success. Console error lines are defects
+even when harmless. **[inferred]** that the prior root-hub suspend is the difference; n=1. **Watch:** the
+message now reads `configured as A device timeout: devctl %02x after %lld ms[ (irq)]` (`kernel/patches/musb-omap2430-set-vbus-report.patch`),
+so the next occurrence measures itself; read the devctl value and elapsed ms there before reproducing, then
+decide whether the wait needs the PHY/glue resumed first or the loop is simply too short.
 
 ### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
 
@@ -116,17 +118,17 @@ it runs degraded in portrait rather than being refused; it launches from the con
 this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
 redraw), which constrains how costly a portrait redraw may be.
 
-### B45. Unplugging a hub that carries a streaming USB audio card prints a kernel WARNING — open, seen once 2026-10-01
+### B45. A hub pull under streaming USB audio printed a kernel WARNING — patched, one clean pull, seen once 2026-10-01
 
-**Measured on `.188`** (our 4.14.52 image): `WARNING: CPU: 0 PID: 1858 at drivers/usb/musb/musb_host.c:138
-musb_h_tx_flush_fifo+0x134/0x138` with `musb-hdrc musb-hdrc.0.auto: Could not flush host TX10 fifo: csr:
-2003`; chain `hub_event` → `usb_disconnect` → `usb_audio_disconnect` → `release_urbs` → `deactivate_urbs` →
-`usb_hcd_unlink_urb` → `musb_urb_dequeue` → `musb_cleanup_urb` → `musb_h_tx_flush_fifo`. The system
-continued: the hub re-enumerated and audio returned to the dongle. Nine plain dongle unplugs in the same
-run did not print it. Console warnings are defects even when harmless; n=1. Capture on the device:
-`/home/root/log/s1001-b42-hub-warn.log`. **Next:** read `musb_h_tx_flush_fifo` in
-`usb_host/linux-4.14.52/drivers/usb/musb/musb_host.c` and check later mainline for a change to that `WARN`,
-before reproducing.
+**Measured on `.188`** before the patch: `WARNING … musb_h_tx_flush_fifo+0x134/0x138`, `Could not flush host
+TX10 fifo: csr: 2003`, from `musb_cleanup_urb` under `usb_audio_disconnect`; nine plain dongle unplugs did not
+print it; n=1. `kernel/patches/musb-host-flush-gone-device.patch` shortens the flush for a gone device
+(mechanism: `kernel/README.md`). **Measured 2026-10-02 with the patched image (md5 `1fd83479…`):** one hub plus
+adapter pull under Mix Bus Test music, no WARNING; a bare-dongle unplug in that session also clean — **n=1**,
+and the warning itself was n=1, so one clean pull cannot tell "fixed" from "did not recur". **Remaining:** n≥5
+hub pulls under streaming audio with zero `Could not flush`; the `dev_dbg` on the short path is compiled out (no
+`DYNAMIC_DEBUG`), so a kprobe pair on `musb_cleanup_urb` is the witness that the short path ran. Then delete
+this entry.
 
 ### B46. The musb host port can silently die after `VBUS_ERROR` — open, seen once 2026-10-01
 

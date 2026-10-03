@@ -305,7 +305,7 @@ tool-level traps rather than device facts, and each has cost real time.
   timers to current time, not epoch 0.
 - **Firmware / boot edits.** Never write `/dev/mtd*`; **never** overwrite `mlo`, `u-boot.bin` or
   `ctrlblock.bin` on p1; stage experimental kernels under a *new* filename. `uImage-system` has
-  **exactly one** legitimate writer, `lib/rw-usbpower.sh` — the full rule set, the three md5s and the
+  **exactly one** *scripted* writer, `lib/rw-usbpower.sh` (our own image: manual, `kernel/README.md`) — the full rule set, the three md5s and the
   no-free-undo consequence are in `lib/CLAUDE.md`. Recovery: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component build rules

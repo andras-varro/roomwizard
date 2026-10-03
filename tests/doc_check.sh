@@ -881,6 +881,9 @@ group_c() {
 # gains the reduced-surface conversion rules (surface:panel ratio, bezel scaling, touch needing no divide, the
 # unconverted literals). The narrative, instrument-repair history and operator transcripts were deleted, not moved;
 # the plan entry fell by over 300 lines but a ceiling is a budget, so it was not lowered.
+## 2026-10-02: kernel/README.md 120 -> 124, raised in the commit that gave the two musb patches (bounded TX flush for a
+# gone device; set_vbus timeout report) their patch-table rows with mechanism and measurement, and rewrote the
+# manual image-install paragraph. The plan entries kept only what remains open; the plan ceiling was not lowered.
 ## 2026-10-01: kernel/README.md 100 -> 120, raised in the commit that moved the closed Bluetooth-module and
 # image-boot facts out of the F17 and F101 plan entries: the 18-module set, the RTL8761CU dongle identity and
 # firmware result, and the p1 rollback-image list now live there. The plan entries lost their history narrative
@@ -928,7 +931,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-120	kernel/README.md
+124	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }
