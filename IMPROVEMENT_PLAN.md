@@ -426,6 +426,23 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 
 `vnc_client` cannot be driven by a pad as the launcher and the Control Panel now can: measured on the panel, the Xbox pad's d-pad, bottom-right button and Back work in the Control Panel through the same gamepad map. **Done when** a pad can operate a `vnc_client` session (`gamepad.c` is the input abstraction; `common/ui_focus.c` is pure and linkable).
 
+### F118. Unify the behaviour of `app_launcher` and the Control Panel home — open, operator request 2026-10-03
+
+The two screens share `icon_grid_nav`/`icon_grid_nav_exit` (`common/icon_grid.c`) and the focus-ring look, but the
+state around them still lives in each app (`focus_shown`, `focus_idx` in `control_panel.c:401`; `selected_app`,
+`power_focus` in `app_launcher.c:125,86`), so they drift. **First known instance, observed on the panel
+2026-10-03:** in the Control Panel a touch press hides the ring (`control_panel.c:951`, `if (ts.pressed)
+focus_shown = false`); the launcher has no equivalent, since `selected_app` stays set across a touch
+(`app_launcher.c:777-782`). **Rule wanted:** the ring appears on the first navigation key and disappears on a touch,
+in ONE shared place (`common/ui_focus.c`), with a pure host test. **Other differences to check [inferred, not
+yet audited]:** Esc/Back on the home grid (the Control Panel does nothing, by operator choice; the launcher opens
+the power dialog, `app_launcher.c:381`); default dialog focus (the Control Panel confirm dialog opens on CANCEL; the
+launcher's has its own code, `power_focus`, `app_launcher.c:86,371,633`); mouse clicks (the launcher handles them,
+`app_launcher.c:627`; the Control Panel does not); where the first key lands (`app_launcher.c:387-390`,
+`control_panel.c:439`). **Plan:** (1) a read-only audit lists every behaviour difference with `file:line`; (2) the
+operator decides each by a one-answer question; (3) the agreed behaviour moves into `common/ui_focus.c` /
+`icon_grid.c`, used by both apps. **Done when** a grep finds no per-app copy of the ring-visibility rule.
+
 ### F115. Move the per-frame games to elapsed-time motion — open
 
 Frogger, brick_breaker, pong and platformer move per frame; only Tetris is time-based. The rule is in

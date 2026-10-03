@@ -235,7 +235,7 @@ System setup is done once by `commissioning/provision.sh` — no duplication acr
 
 The **App Launcher** is a visual grid shell deployed by `native_apps/build-and-deploy.sh`.
 It scans manifest files from all projects and displays them as touch-friendly icon tiles.
-The init script respawns it automatically when an app exits. Keyboard and Xbox pad drive the launcher and the Control Panel (arrows, Enter/Space, Esc/Backspace back); Up from a top row reaches the exit X. The Input page's keyboard and pad testers exit by holding Esc / pad Select or Start for 1.5 s.
+The init script respawns it automatically when an app exits. Keyboard and Xbox pad drive the launcher and the Control Panel (arrows, Enter/Space, Esc/Backspace back); Up from a top row reaches the exit X. The Input page's keyboard, pad and mouse testers exit by holding Esc / pad Select or Start / both mouse buttons for 1.5 s.
 
 For hardware specs, see **[Subsystems](SYSTEM_ANALYSIS.md#3-subsystems)** in the device reference.
 
