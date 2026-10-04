@@ -85,13 +85,14 @@ dependencies are not its job and install themselves.
 ### Before anything deploys — `./tests/run-all.sh`
 
 The host gate: every test that needs no device, in one command. It runs the shell suites in `tests/`, the
-host-gcc regressions under `native_apps/tests/` — which nothing used to execute at all, their build lines
-having lived only in comments — and `shellcheck` over every tracked script. `deploy-all.sh` and
-`release.sh` **run it first and refuse to build if it fails**, so a change can no longer reach a device
-graded by nobody; `--skip-tests` on either is the override. `--list` shows what it will run,
-`--self-test` runs its own negative controls, and exit **2** means it could not judge rather than that a
-test failed. One suite needs root and reports itself SKIPPED without it, which the summary names — a skip
+host-gcc regressions under `native_apps/tests/`, and `shellcheck` over every tracked script. `deploy-all.sh` and
+`release.sh` **run it first and refuse to build if it fails**; `--skip-tests` on either is the override. `--list`
+shows what it will run, `--self-test` runs its own negative controls, and exit **2** means it could not judge rather
+than that a test failed. One suite needs root and reports itself SKIPPED without it, which the summary names — a skip
 is never counted as a pass. Authoring rules: `tests/CLAUDE.md`.
+
+The device half: `native_apps/smoke-first-screen.sh <ip> [binary ...]` (`--list`, `--out DIR`) stops the app loop, launches each
+native app, and gives its first frame one verdict (pass / did-not-start / started-died / black-screen / could-not-tell).
 
 ```bash
 ./tests/run-all.sh                  # everything

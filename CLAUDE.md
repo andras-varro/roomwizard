@@ -255,7 +255,7 @@ tool-level traps rather than device facts, and each has cost real time.
   `/dev/uinput`, and evdev's `write()` path is for *output* events — so a writer to
   `/dev/input/event0` **prints "injected successfully", exits 0, and delivers nothing to any reader.**
   One shipped here for months and is deleted, not fixed. Automated on-device verification stops at
-  the **first** screen: SSH-launch the binary, `cat /dev/fb0`, decode, assert. Past that, write a
+  the **first** screen (`native_apps/smoke-first-screen.sh <ip>`). Past that, write a
   tap-by-tap checklist for a human. ⚠️ **This is a limit on the *device*, not on the code** — ask
   whether the thing needs the *kernel* or only needs *events*. Detail: `native_apps/CLAUDE.md`.
 - ⚠️ **Cortex-A8 has no hardware integer divide.** A binary containing an `sdiv`/`udiv` *instruction*

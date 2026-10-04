@@ -195,7 +195,9 @@ Userspace except F101, which is the image build, and F2, which now waits on it.
 
 ### F2. Use the DSS overlay planes — open, **gated on a kernel build; waits on F101**
 
-What is left needs a kernel image; no UI change is wanted. The userspace half (`vid1` upscale of a reduced
+What is left needs a kernel image; no UI change is wanted. **Operator ruling 2026-10-04: scaling is opt-in per app,
+aimed at emulator-style low-resolution sources (ScummVM's 320x240 games); native games keep drawing full-resolution
+to `fb0` and do not use it.** The userspace half (`vid1` upscale of a reduced
 surface) was built, measured and rejected on image quality — software nearest-neighbour stays. Facts, the
 overlay recipe and scaling limits, the A/B outcome and its instruments:
 [`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display); the reduced-surface UI conversion:
@@ -458,13 +460,25 @@ blinks, then repeat; the pings run on the game clock. Entries are per game, and 
 touch. It is the intended home for per-play choices: a 1 player / 2 player choice (reads the Input page's player slots) and a
 pace choice (F119). **Also owns "games honour the player slots"** : no game has a multiplayer mode
 yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
-from it and a 2-player choice reads P1 and P2 from the slots.
+from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
+layout and style; the rework unifies them (operator, 2026-10-04).
 
 ### F119. Platformer pace: Slow / Normal / Fast — open, needs F118, operator request 2026-10-04
 
 Three entries on the start menu from F118. Normal is today's `TICK_S` of 1/20 s (`native_apps/platformer/platformer.c`,
 `#define TICK_S`). The physics constants are per tick, so pace is that one constant and the jump arc keeps its shape.
 Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
+
+### F120. `touch_trace` becomes a page of the control panel's touch diagnostic — open, operator ruling 2026-10-04
+
+`touch_trace` (`native_apps/tests/touch_trace.c`, deployed `/opt/games/touch_trace`, no manifest, listed hidden in
+`native_apps/README.md`) shows RAW / CAL / LIN readings, a labelled 80-px grid and a finger trail, logs to
+`/tmp/touch_trace.log`, and exits through a centre EXIT button. Port it as a page inside `control_panel`'s touch
+diagnostic: one implementation, Back instead of the centre EXIT, and `control_panel`'s focus and portrait handling.
+Keep the `/tmp/touch_trace.log` output for SSH use. **Then delete the standalone binary — deletion is pre-approved:**
+remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-deploy.sh`, its `native_apps/README.md`
+rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
+readings and the log is still written, and no `touch_trace` remains in the tree.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -475,31 +489,17 @@ device paths and `LICENSE.md` follow it.
 
 ## Structural and cleanup
 
-### C6. Extend the host-buildable test harness — open
-
-The host-gcc regressions over the pure-logic parsers are done and gated. One piece remains.
-
-**Write the first-screen smoke harness.** SSH-launch a binary, `cat /dev/fb0`, decode with
-`fb565_to_png.py`, and inspect the screen drawn before any input: `assert not-all-black`,
-`assert alive after 2 s`, across all ~15 binaries. That has caught real defects when done by hand.
-Anything past the first screen needs a tap-by-tap checklist for a human. ⚠️ **`assert not-all-black` is
-nearly vacuous on its own** — assert a minimum count of distinct pixel values, take the depth from
-`fbset | grep geometry` on the device rather than assuming 32bpp, and keep *did not start* / *started and
-died* / *black screen* / *harness could not tell* as separate outcomes, because silence is not success. It
-needs a device to **run** but not to **write**: prove every branch on the host with an `ssh` stub on
-`PATH`, the way `tests/rw_provision_test.sh` does.
-
 ### C7. Burn down the shellcheck backlog — open
 
 The shell scripts *are* the deployment system and they run as root over SSH. The gate's two tiers, the
 ratchet and the `SC1124` trap are in `tests/CLAUDE.md`, as are the directive traps and the gate-shape
 measurement rule. What is open is the backlog recorded one row per `(file, code)` in
-`tests/shellcheck-baseline.txt`. `sort -k3 -rn tests/shellcheck-baseline.txt | head` puts the worst files
-first: `scummvm-roomwizard/manage-scummvm-changes.sh`, then `probes/xbee_socket_continuity.sh`, then
-`scummvm-roomwizard/build-and-deploy.sh` and `commissioning/card-prep.sh`. What remains in
-`native_apps/build-and-deploy.sh` is deliberate: word-splitting that a rewrite cannot exercise,
-client-side expansion of local constants that `SC2029`'s remedy would break, and deploy-path `ls` sites
-free at the next real deploy.
+`tests/shellcheck-baseline.txt`. Worst files, by per-file total (`awk '{s[$1]+=$3} END{for(f in s)print s[f],f}' tests/shellcheck-baseline.txt | sort -rn | head`)
+lead with `tests/measure_usbpower_sabotage.sh` and `native_apps/build-and-deploy.sh`, then `vnc_client/build-and-deploy.sh`,
+`tests/commission_offline_test.sh` and `scummvm-roomwizard/build-and-deploy.sh`. What remains is largely deliberate:
+intended word-splitting lists, `SC2029` client-side expansion of local constants that its remedy would break, `SC2016` in
+sabotage patterns, read-loop filler variables, probe register constants kept as documentation (operator ruling), and
+deploy-path `ls` sites free at the next real deploy.
 
 **Prefer a fix that changes no behaviour to a `disable=` directive.** Do not "fix" a finding by rewriting
 a line you cannot exercise — several of the leaders are in build scripts that only a real deploy runs.

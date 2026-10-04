@@ -291,12 +291,14 @@ meant to catch**.
   case, and its fixture builder is `tests/make-fake-card.sh`.
 - ⚠️ **`setup_build_env_test.sh` drives the probe loop over FIXTURE tables, never the real package set.**
   A run against the real table on a provisioned host reports "0 missing" and proves only that this host is
-  provisioned — a silenced instrument. Its `sudo` is a PATH tripwire recording argv, on **every** case
-  rather than only the two that assert on it: a sabotage forcing the install path would otherwise reach a
-  live `apt` from whichever case forgot the shim (measured while writing the sweep). That is also what
-  makes "sudo was never called" a real assertion instead of a vacuous one — an assertion that something
-  did not happen passes for free wherever the path is unreachable, so `measure_setup_build_env_sabotage.sh`
-  includes one that *does*. Blind: whether the package **names** resolve on a live archive.
+  provisioned — a silenced instrument. Its `sudo` is a PATH tripwire recording argv on **every** case, so a
+  sabotage forcing the install path cannot reach a live `apt` from a case that forgot the shim (measured), and
+  "sudo was never called" is a real assertion — `measure_setup_build_env_sabotage.sh` includes a case that
+  *does* reach it. Blind: whether the package **names** resolve on a live archive.
+- ⚠️ **`smoke_first_screen_test.sh` cannot see busybox's detach/SIGHUP behaviour, the composited panel
+  (`cat /dev/fb0` is the gfx plane only), or a wrong-but-colourful screen.** Its `ssh` stub models fb contents and
+  must slurp stdin, or the check that the runner passes `ssh -n` is vacuous. The runner itself needs a
+  device to run.
 - ⚠️ **`rw_release_test.sh` can assert every refusal and only a STUBBED acceptance.** `release.sh` has no
   `--no-build` flag, so the two `--out` values that must be *accepted* — an empty directory and a re-stage
   over a real bundle — fall straight through into a four-component ARM cross-build. The suite therefore
