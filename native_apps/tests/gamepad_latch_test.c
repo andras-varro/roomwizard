@@ -9,7 +9,7 @@
  *
  *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I common \
  *       -o build/gamepad_latch_test tests/gamepad_latch_test.c \
- *       common/gamepad.c common/input_scan.c common/framebuffer.c common/hardware.c \
+ *       common/gamepad.c common/input_slots.c common/input_scan.c common/framebuffer.c common/hardware.c \
  *       common/config.c common/touch_input.c -lm && ./build/gamepad_latch_test
  *
  * The bug: `.held` used to be *stored* in the caller's InputState, written
@@ -105,9 +105,9 @@ static void manager_init(GamepadManager *gm) {
  * without it normalize_axis_calibrated() sees min == max and returns 0. */
 static void fake_stick_calibration(GamepadManager *gm) {
     for (int i = 0; i < GAMEPAD_MAX_AXES; i++) {
-        gm->axis_min[i] = -32768;
-        gm->axis_max[i] =  32767;
-        gm->axis_calib[i].center = 0;
+        gm->axis_min[0][i] = -32768;
+        gm->axis_max[0][i] =  32767;
+        gm->axis_calib[0][i].center = 0;
     }
 }
 
@@ -396,7 +396,7 @@ static void test_bind_every_mouse_and_keyboard(void) {
         { INPUT_KIND_PAD,      "Microsoft X-Box 360 pad",    INPUT_KIND_PAD      },
         { INPUT_KIND_KEYBOARD, "Compx 2.4G Receiver",        INPUT_KIND_KEYBOARD },
         { INPUT_KIND_MOUSE,    "Compx 2.4G Receiver Mouse",  INPUT_KIND_MOUSE    },
-        { INPUT_KIND_PAD,      "second pad",                 INPUT_KIND_NONE     },
+        { INPUT_KIND_PAD,      "second pad",                 INPUT_KIND_PAD      },
     };
     int held[INPUT_KIND_COUNT] = {0};
     for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
@@ -408,7 +408,7 @@ static void test_bind_every_mouse_and_keyboard(void) {
     }
     expect_int("mice bound", held[INPUT_KIND_MOUSE], 2);
     expect_int("keyboards bound", held[INPUT_KIND_KEYBOARD], 2);
-    expect_int("pads bound", held[INPUT_KIND_PAD], 1);
+    expect_int("pads bound", held[INPUT_KIND_PAD], 2);
 
     /* The cap refuses rather than overruns the fd arrays. */
     int full[INPUT_KIND_COUNT] = {0};

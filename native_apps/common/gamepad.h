@@ -27,6 +27,15 @@ extern "C" {
 /* InputConfig (the one /etc/input_config.conf parser, and its defaults) and
  * InputSigGate (the hot-plug check) live there. */
 #include "input_scan.h"
+/* InputSlotTable: which player (P1..P4) each pad or keyboard is. */
+#include "input_slots.h"
+
+/* Most pads held open at once: one per player slot. */
+#define GAMEPAD_MAX_PADS INPUT_SLOTS
+/* The latch bucket of a device the slot table had no room for (or of a pad fd
+ * planted by hand): it counts for gamepad_poll()'s any-device state only. */
+#define GAMEPAD_NO_SLOT  INPUT_SLOTS
+#define GAMEPAD_BUCKETS  (INPUT_SLOTS + 1)
 
 /* Room for the "<name> at <path>" string remembered per slot, so a rescan can
    tell an unchanged device from a swapped one: input_scan.h reads EVIOCGNAME
@@ -159,20 +168,28 @@ typedef struct {
 
 /* Gamepad manager (holds evdev fds and internal state) */
 typedef struct {
-    /* ONE pad only: two pads merged into one InputState would overwrite each
-     * other's axes and hat latches, so a second pad needs player-assignment
-     * semantics this manager does not have.  Keyboards and mice have no such
-     * problem — keys latch the same abstract buttons from any node, and
-     * relative motion from any mouse moves the one cursor — so every node of
-     * those kinds is opened. */
-    int gamepad_fd;
-    /* The pad's InputPadLayout (input_scan.h), taken with the fd: every EV_KEY
+    /* Up to GAMEPAD_MAX_PADS pads, in event-node order.  Each pad, and each
+     * keyboard (all of its nodes), is a player: input_slots.h gives it a slot
+     * P1..P4 by its identity, and its latched levels, axes and edges are kept
+     * per slot (gamepad_player()).  A device the table has no room for still
+     * counts for the any-device state, through the GAMEPAD_NO_SLOT bucket.
+     * Mice and touch belong to nobody: one cursor, no slot. */
+    union {
+        int gamepad_fd;                  /* the first pad's fd (pad_fds[0]) */
+        int pad_fds[GAMEPAD_MAX_PADS];   /* -1 = none; not packed, any may be open */
+    };
+    /* Each pad's InputPadLayout (input_scan.h), taken with the fd: every EV_KEY
      * code read from it goes through input_pad_key() before button_map sees it.
      * 0 is the native layout. */
-    int gamepad_layout;
+    int pad_layout[GAMEPAD_MAX_PADS];
+    int pad_slot[GAMEPAD_MAX_PADS];      /* player slot, or -1 (no slot) */
     int keyboard_fds[GAMEPAD_MAX_PER_KIND];
+    int keyboard_slot[GAMEPAD_MAX_PER_KIND];
     int keyboard_count;
     int mouse_fds[GAMEPAD_MAX_PER_KIND];
+    /* The slot of the keyboard a mouse node belongs to (a keyboard+touchpad
+     * combo), for the keys it carries; -1 when it is a plain mouse. */
+    int mouse_slot[GAMEPAD_MAX_PER_KIND];
     int mouse_count;
 
     /* Button level per mouse node (left, right, middle), so the output is the
@@ -181,17 +198,26 @@ typedef struct {
      * button held across a rescan is still held after it. */
     bool mouse_btn[GAMEPAD_MAX_PER_KIND][3];
 
-    /* Internal previous-frame state for edge detection (abstract buttons) */
+    /* Internal previous-frame state for edge detection (abstract buttons) of
+     * the any-device state, and of each player */
     bool prev_held[BTN_ID_COUNT];
+    bool player_prev[INPUT_SLOTS][BTN_ID_COUNT];
 
     /* Level state for the event-driven sources (gamepad keys, D-pad hat,
-     * keyboard).  Those arrive as discrete press/release events, so their
-     * level has to persist between polls — and it persists *here* rather than
-     * in the caller's InputState, so a caller that zeroes or swaps its
-     * InputState can never desync it.  Sources that report an absolute
-     * position instead (touch regions, analog stick) are deliberately NOT in
-     * here: they are rebuilt per frame, which is what stops them latching. */
-    bool held_latched[BTN_ID_COUNT];
+     * keyboard), per slot plus GAMEPAD_NO_SLOT.  Those arrive as discrete
+     * press/release events, so their level has to persist between polls — and
+     * it persists *here* rather than in the caller's InputState, so a caller
+     * that zeroes or swaps its InputState can never desync it.  Sources that
+     * report an absolute position instead (touch regions, analog stick) are
+     * deliberately NOT in here: they are rebuilt per frame, which is what
+     * stops them latching. */
+    bool held_latched[GAMEPAD_BUCKETS][BTN_ID_COUNT];
+    /* Each bucket's stick positions (lx, ly, rx, ry), kept across a rescan
+     * (an unmoved stick sends no event on the reopened node) and zeroed while
+     * no pad of that bucket is open. */
+    int bucket_axis[GAMEPAD_BUCKETS][4];
+    /* gamepad_player()'s answers, rebuilt by every gamepad_poll(). */
+    InputState players[INPUT_SLOTS];
 
     /* Internal previous-frame state for mouse button edge detection */
     bool prev_mouse_left;
@@ -202,13 +228,13 @@ typedef struct {
      * level change to see, so this is what gives it its press and release. */
     bool mouse_left_down_ev;
 
-    /* Axis calibration data (up to GAMEPAD_MAX_AXES axes) */
-    int axis_min[GAMEPAD_MAX_AXES];
-    int axis_max[GAMEPAD_MAX_AXES];
-    int axis_flat[GAMEPAD_MAX_AXES];
+    /* Axis calibration data per pad (up to GAMEPAD_MAX_AXES axes) */
+    int axis_min[GAMEPAD_MAX_PADS][GAMEPAD_MAX_AXES];
+    int axis_max[GAMEPAD_MAX_PADS][GAMEPAD_MAX_AXES];
+    int axis_flat[GAMEPAD_MAX_PADS][GAMEPAD_MAX_AXES];
 
     /* Per-axis center calibration and configurable dead zone */
-    AxisCalibration axis_calib[GAMEPAD_MAX_AXES];
+    AxisCalibration axis_calib[GAMEPAD_MAX_PADS][GAMEPAD_MAX_AXES];
 
     /* Configurable dead zone percentage (0-100), applied uniformly unless
      * per-axis overrides are set via axis_calib[].deadzone_pct */
@@ -232,7 +258,7 @@ typedef struct {
      * close/reopen of an unchanged device is not a change worth a log line.
      * gamepad_init()'s memset is what makes an empty string mean "nothing
      * announced yet". */
-    char announced_gamepad[GAMEPAD_ANNOUNCE_LEN];
+    char announced_gamepad[GAMEPAD_MAX_PADS][GAMEPAD_ANNOUNCE_LEN];
     char announced_keyboard[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
     char announced_mouse[GAMEPAD_MAX_PER_KIND][GAMEPAD_ANNOUNCE_LEN];
 
@@ -243,13 +269,18 @@ typedef struct {
     /* A read on a held fd failed with ENODEV/EBADF: that fd is already closed,
      * and the next gamepad_tick() rescans whatever the fingerprint says. */
     bool rescan_pending;
+
+    /* The player slots.  Like announced_*, it survives gamepad_close() and so
+     * every rescan — a pad unplugged and plugged back gets its slot again —
+     * and gamepad_init() clears it: an app exit forgets every reservation. */
+    InputSlotTable slots;
 } GamepadManager;
 
 /**
  * The per-kind limits the scan hands to input_scan(), indexed by InputKind
  * (common/input_scan.h), for a test to drive input_select() with: the first
- * gamepad only (see GamepadManager.gamepad_fd), and every keyboard and every
- * mouse up to GAMEPAD_MAX_PER_KIND each.  Classification, the touchscreen
+ * GAMEPAD_MAX_PADS pads, and every keyboard and every mouse up to
+ * GAMEPAD_MAX_PER_KIND each.  Classification, the touchscreen
  * exclusion and the /dev/input/event* walk are input_scan's, not this file's.
  */
 const int *gamepad_scan_caps(void);
@@ -274,6 +305,20 @@ void gamepad_close(GamepadManager *gm);
  */
 void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active);
+
+/**
+ * One player's input, as of the last gamepad_poll(): the buttons, edges and
+ * stick axes of the pad or keyboard in `slot` (0..INPUT_SLOTS-1 = P1..P4) —
+ * no touch, no mouse.  Its gamepad_connected / keyboard_connected say what
+ * that slot holds now.  gamepad_poll()'s own state stays "any device": the OR
+ * of every slot, plus touch and the mouse.  Out of range: an all-zero state.
+ */
+const InputState *gamepad_player(const GamepadManager *gm, int slot);
+
+/**
+ * Bit s set when slot s holds an open pad or keyboard right now.
+ */
+int gamepad_player_mask(const GamepadManager *gm);
 
 /**
  * Close every device and scan again.  Apps call gamepad_tick() instead, which

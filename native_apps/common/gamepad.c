@@ -74,18 +74,18 @@ static int axis_to_index(int evdev_code) {
 }
 
 /* ── Load axis calibration data from EVIOCGABS ──────────────────────────── */
-static void load_axis_calibration(GamepadManager *gm) {
-    if (gm->gamepad_fd < 0) return;
+static void load_axis_calibration(GamepadManager *gm, int p) {
+    if (gm->pad_fds[p] < 0) return;
 
     /* Axes we care about: ABS_X(0), ABS_Y(1), ABS_Z(2), ABS_RX(3), ABS_RY(4), ABS_RZ(5), ABS_HAT0X(16), ABS_HAT0Y(17) */
     static const int axes[] = { ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y };
 
     for (int i = 0; i < GAMEPAD_MAX_AXES; i++) {
         struct input_absinfo info;
-        if (ioctl(gm->gamepad_fd, EVIOCGABS(axes[i]), &info) == 0) {
-            gm->axis_min[i]  = info.minimum;
-            gm->axis_max[i]  = info.maximum;
-            gm->axis_flat[i] = info.flat;
+        if (ioctl(gm->pad_fds[p], EVIOCGABS(axes[i]), &info) == 0) {
+            gm->axis_min[p][i]  = info.minimum;
+            gm->axis_max[p][i]  = info.maximum;
+            gm->axis_flat[p][i] = info.flat;
 
             /* BUG-INPUT-003 FIX: Compute center as midpoint of the axis range
              * instead of trusting info.value from EVIOCGABS.  The kernel reports
@@ -95,16 +95,16 @@ static void load_axis_calibration(GamepadManager *gm) {
              * "center", causing permanent directional drift in all games.
              * The axis range (minimum/maximum) is always correct, so the
              * geometric midpoint is a far more reliable center reference. */
-            gm->axis_calib[i].center = (info.minimum + info.maximum) / 2;
+            gm->axis_calib[p][i].center = (info.minimum + info.maximum) / 2;
         } else {
-            gm->axis_min[i]  = 0;
-            gm->axis_max[i]  = 0;
-            gm->axis_flat[i] = 0;
-            gm->axis_calib[i].center = 0;
+            gm->axis_min[p][i]  = 0;
+            gm->axis_max[p][i]  = 0;
+            gm->axis_flat[p][i] = 0;
+            gm->axis_calib[p][i].center = 0;
         }
         /* Apply global dead zone default unless already configured */
-        if (gm->axis_calib[i].deadzone_pct <= 0)
-            gm->axis_calib[i].deadzone_pct = gm->deadzone_pct;
+        if (gm->axis_calib[p][i].deadzone_pct <= 0)
+            gm->axis_calib[p][i].deadzone_pct = gm->deadzone_pct;
     }
 }
 
@@ -185,17 +185,40 @@ static void announce_lost(char *slot, const char *kind, int fd) {
 }
 
 /* ── Which scanned nodes to keep (see gamepad.h) ────────────────────────── */
-/* ONE pad (see GamepadManager.gamepad_fd); every keyboard and every mouse node
- * up to GAMEPAD_MAX_PER_KIND each.  The touchscreen is never kept: input_scan
+/* One pad per player slot; every keyboard and every mouse node up to
+ * GAMEPAD_MAX_PER_KIND each.  The touchscreen is never kept: input_scan
  * classifies it as nothing. */
 static const int g_scan_cap[INPUT_KIND_COUNT] = {
-    [INPUT_KIND_PAD]      = 1,
+    [INPUT_KIND_PAD]      = GAMEPAD_MAX_PADS,
     [INPUT_KIND_KEYBOARD] = GAMEPAD_MAX_PER_KIND,
     [INPUT_KIND_MOUSE]    = GAMEPAD_MAX_PER_KIND,
 };
-#define GAMEPAD_SCAN_SLOTS (1 + 2 * GAMEPAD_MAX_PER_KIND)
+#define GAMEPAD_SCAN_SLOTS (GAMEPAD_MAX_PADS + 2 * GAMEPAD_MAX_PER_KIND)
 
 const int *gamepad_scan_caps(void) { return g_scan_cap; }
+
+/* The latch bucket of a device in `slot` (-1: none, see GAMEPAD_NO_SLOT). */
+static int bucket_of(int slot) {
+    return (slot >= 0 && slot < INPUT_SLOTS) ? slot : GAMEPAD_NO_SLOT;
+}
+
+/* What input_slots keys a device by.  Read here, not in input_scan.c, which
+ * vnc_client and ScummVM link too.  A failed ioctl leaves its field empty (no
+ * uniq is the normal case for a wired device); a node that reports no phys is
+ * told apart by its path instead, so two such nodes are never one player. */
+static void read_ident(int fd, const char *path, InputIdent *id) {
+    struct input_id iid;
+    memset(id, 0, sizeof(*id));
+    if (ioctl(fd, EVIOCGID, &iid) == 0) {
+        id->bus = iid.bustype; id->vid = iid.vendor; id->pid = iid.product;
+    }
+    if (ioctl(fd, EVIOCGUNIQ(sizeof(id->uniq) - 1), id->uniq) < 0)
+        memset(id->uniq, 0, sizeof(id->uniq));
+    if (ioctl(fd, EVIOCGPHYS(sizeof(id->phys) - 1), id->phys) < 0)
+        memset(id->phys, 0, sizeof(id->phys));
+    if (id->phys[0] == '\0')
+        snprintf(id->phys, sizeof(id->phys), "%.*s", (int)sizeof(id->phys) - 1, path);
+}
 
 /* A button already held when the node is opened (typically: held across a
  * rescan) produces no press event, so ask the kernel for the current level. */
@@ -209,12 +232,13 @@ static void seed_mouse_buttons(int fd, bool *btn) {
     btn[2] = input_caps_test(keys, BTN_MIDDLE);
 }
 
-static void latch_key(GamepadManager *gm, int code, bool down);
+static void latch_key(bool *latched, int code, bool down);
 
-/* The same, for the latched buttons, after a rescan has reopened every node.
- * Only ever ORs a level in: called with held_latched[] already zeroed.  Not
- * called at gamepad_init(), so the key that launched an app is not seen as a
- * fresh press by it. */
+/* The same, for the latched buttons, after a rescan has reopened every node:
+ * each device's levels go into its own slot's bucket.  Only ever ORs a level
+ * in: called with held_latched[] already zeroed.  Not called at
+ * gamepad_init(), so the key that launched an app is not seen as a fresh
+ * press by it. */
 static void seed_latched_levels(GamepadManager *gm) {
     unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
     const GamepadButtonMap *m = &gm->button_map;
@@ -222,76 +246,95 @@ static void seed_latched_levels(GamepadManager *gm) {
     /* Keyboards, and the keys of a keyboard+touchpad combo's mouse node
      * (latch_key ignores the mouse buttons themselves). */
     for (int k = 0; k < gm->keyboard_count + gm->mouse_count; k++) {
-        int fd = (k < gm->keyboard_count) ? gm->keyboard_fds[k]
-                                          : gm->mouse_fds[k - gm->keyboard_count];
+        bool kbd = k < gm->keyboard_count;
+        int j = kbd ? k : k - gm->keyboard_count;
+        int fd = kbd ? gm->keyboard_fds[j] : gm->mouse_fds[j];
+        bool *latched = gm->held_latched[bucket_of(kbd ? gm->keyboard_slot[j]
+                                                       : gm->mouse_slot[j])];
         memset(keys, 0, sizeof(keys));
         if (fd < 0 || ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) continue;
         for (int code = 0; code <= KEY_MAX; code++)
-            if (input_caps_test(keys, code)) latch_key(gm, code, true);
+            if (input_caps_test(keys, code)) latch_key(latched, code, true);
     }
 
-    if (gm->gamepad_fd < 0) return;
-    memset(keys, 0, sizeof(keys));
-    if (ioctl(gm->gamepad_fd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
-        /* The same mapping poll_gamepad() applies to EV_KEY.  The bitmap is
-         * indexed by RAW code and the map holds native codes, so walk the held
-         * raw codes and translate each, as poll_gamepad() does an event. */
-        const struct { int btn_id; int code; } pad_btns[] = {
-            { BTN_ID_JUMP,   m->btn_jump   },
-            { BTN_ID_RUN,    m->btn_run    },
-            { BTN_ID_ACTION, m->btn_action },
-            { BTN_ID_PAUSE,  m->btn_pause  },
-            { BTN_ID_BACK,   m->btn_back   },
-        };
-        for (int raw = 0; raw <= KEY_MAX; raw++) {
-            if (!input_caps_test(keys, raw)) continue;
-            int code = input_pad_key((InputPadLayout)gm->gamepad_layout, raw);
-            for (size_t i = 0; i < sizeof(pad_btns) / sizeof(pad_btns[0]); i++)
-                if (code == pad_btns[i].code)
-                    gm->held_latched[pad_btns[i].btn_id] = true;
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+        int fd = gm->pad_fds[p];
+        if (fd < 0) continue;
+        bool *latched = gm->held_latched[bucket_of(gm->pad_slot[p])];
+        memset(keys, 0, sizeof(keys));
+        if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
+            /* The same mapping poll_gamepad() applies to EV_KEY.  The bitmap
+             * is indexed by RAW code and the map holds native codes, so walk
+             * the held raw codes and translate each, as poll_gamepad() does
+             * an event. */
+            const struct { int btn_id; int code; } pad_btns[] = {
+                { BTN_ID_JUMP,   m->btn_jump   },
+                { BTN_ID_RUN,    m->btn_run    },
+                { BTN_ID_ACTION, m->btn_action },
+                { BTN_ID_PAUSE,  m->btn_pause  },
+                { BTN_ID_BACK,   m->btn_back   },
+            };
+            for (int raw = 0; raw <= KEY_MAX; raw++) {
+                if (!input_caps_test(keys, raw)) continue;
+                int code = input_pad_key((InputPadLayout)gm->pad_layout[p], raw);
+                for (size_t i = 0; i < sizeof(pad_btns) / sizeof(pad_btns[0]); i++)
+                    if (code == pad_btns[i].code)
+                        latched[pad_btns[i].btn_id] = true;
+            }
         }
-    }
-    struct input_absinfo ai;
-    if (m->hat_x_axis >= 0 && m->hat_x_axis <= ABS_MAX &&
-        ioctl(gm->gamepad_fd, EVIOCGABS(m->hat_x_axis), &ai) == 0) {
-        if (ai.value < 0) gm->held_latched[BTN_ID_LEFT]  = true;
-        if (ai.value > 0) gm->held_latched[BTN_ID_RIGHT] = true;
-    }
-    if (m->hat_y_axis >= 0 && m->hat_y_axis <= ABS_MAX &&
-        ioctl(gm->gamepad_fd, EVIOCGABS(m->hat_y_axis), &ai) == 0) {
-        if (ai.value < 0) gm->held_latched[BTN_ID_UP]   = true;
-        if (ai.value > 0) gm->held_latched[BTN_ID_DOWN] = true;
+        struct input_absinfo ai;
+        if (m->hat_x_axis >= 0 && m->hat_x_axis <= ABS_MAX &&
+            ioctl(fd, EVIOCGABS(m->hat_x_axis), &ai) == 0) {
+            if (ai.value < 0) latched[BTN_ID_LEFT]  = true;
+            if (ai.value > 0) latched[BTN_ID_RIGHT] = true;
+        }
+        if (m->hat_y_axis >= 0 && m->hat_y_axis <= ABS_MAX &&
+            ioctl(fd, EVIOCGABS(m->hat_y_axis), &ai) == 0) {
+            if (ai.value < 0) latched[BTN_ID_UP]   = true;
+            if (ai.value > 0) latched[BTN_ID_DOWN] = true;
+        }
     }
 }
 
-/* ── Scan /dev/input/event* for gamepad, keyboards, and mice ────────────── */
+/* ── Scan /dev/input/event* for gamepads, keyboards, and mice ───────────── */
 /* Always called with nothing held (gamepad_init() and gamepad_rescan() both
  * start from closed), so input_scan() starts from an empty list and returns
- * the kept nodes in event-number order — the order the slots are filled in. */
+ * the kept nodes in event-number order — the order the fd arrays are filled
+ * in.  Player slots do NOT follow that order: input_slots gives each pad and
+ * keyboard the slot its identity already holds. */
 static void scan_devices(GamepadManager *gm) {
     /* Fingerprint first: a node that appears while the walk below is past
      * its number then differs from this baseline, and the next tick catches it. */
     input_sig_gate_baseline(&gm->node_gate, input_node_sig());
     gm->rescan_pending = false;
+    input_slots_begin_scan(&gm->slots);
     InputNode nodes[GAMEPAD_SCAN_SLOTS];
+    InputIdent mouse_id[GAMEPAD_MAX_PER_KIND];
     int n = input_scan(nodes, 0, GAMEPAD_SCAN_SLOTS, g_scan_cap);
+    int pads = 0;
 
     for (int i = 0; i < n; i++) {
         const InputNode *nd = &nodes[i];
+        InputIdent id;
+        read_ident(nd->fd, nd->path, &id);
         if (nd->kind == INPUT_KIND_PAD) {
-            gm->gamepad_fd = nd->fd;
-            gm->gamepad_layout = nd->pad_layout;
-            load_axis_calibration(gm);
-            announce_found(gm->announced_gamepad, sizeof(gm->announced_gamepad),
+            int p = pads++;
+            gm->pad_fds[p] = nd->fd;
+            gm->pad_layout[p] = nd->pad_layout;
+            gm->pad_slot[p] = input_slots_assign(&gm->slots, &id);
+            load_axis_calibration(gm, p);
+            announce_found(gm->announced_gamepad[p], sizeof(gm->announced_gamepad[p]),
                            "gamepad", nd->name, nd->path);
         } else if (nd->kind == INPUT_KIND_KEYBOARD) {
             int k = gm->keyboard_count++;
             gm->keyboard_fds[k] = nd->fd;
+            gm->keyboard_slot[k] = input_slots_assign(&gm->slots, &id);
             announce_found(gm->announced_keyboard[k], sizeof(gm->announced_keyboard[k]),
                            "keyboard", nd->name, nd->path);
         } else if (nd->kind == INPUT_KIND_MOUSE) {
             int k = gm->mouse_count++;
             gm->mouse_fds[k] = nd->fd;
+            mouse_id[k] = id;
             seed_mouse_buttons(nd->fd, gm->mouse_btn[k]);
             announce_found(gm->announced_mouse[k], sizeof(gm->announced_mouse[k]),
                            "mouse", nd->name, nd->path);
@@ -300,10 +343,19 @@ static void scan_devices(GamepadManager *gm) {
         }
     }
 
+    /* A mouse node takes no slot of its own; it borrows the slot of a keyboard
+     * found in this scan with the same identity (a keyboard+touchpad combo),
+     * for the keys it carries.  After the loop, so node order does not matter. */
+    for (int k = 0; k < gm->mouse_count; k++) {
+        int s = input_slots_find(&gm->slots, &mouse_id[k]);
+        gm->mouse_slot[k] = (s >= 0 && gm->slots.slot[s].present) ? s : -1;
+    }
+
     /* Anything still unbound after a full scan, that we had previously
-     * announced, is gone.  Slots are filled in node order, so a slot past the
-     * count is one whose device has left. */
-    announce_lost(gm->announced_gamepad,  "gamepad",  gm->gamepad_fd);
+     * announced, is gone.  The arrays are filled in node order, so an entry
+     * past the count is one whose device has left. */
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+        announce_lost(gm->announced_gamepad[p], "gamepad", gm->pad_fds[p]);
     for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
         announce_lost(gm->announced_keyboard[k], "keyboard",
                       k < gm->keyboard_count ? gm->keyboard_fds[k] : -1);
@@ -343,8 +395,10 @@ static void apply_defaults(GamepadManager *gm) {
     gm->deadzone_pct = def.gamepad_deadzone;
 
     for (int i = 0; i < GAMEPAD_MAX_AXES; i++) {
-        gm->axis_calib[i].center = 0;
-        gm->axis_calib[i].deadzone_pct = gm->deadzone_pct;
+        for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+            gm->axis_calib[p][i].center = 0;
+            gm->axis_calib[p][i].deadzone_pct = gm->deadzone_pct;
+        }
     }
 }
 
@@ -389,8 +443,9 @@ int gamepad_load_config(GamepadManager *gp, const char *path) {
      * changed it, as the key being present always did. */
     if (cfg.gamepad_deadzone != gp->deadzone_pct) {
         gp->deadzone_pct = cfg.gamepad_deadzone;
-        for (int i = 0; i < GAMEPAD_MAX_AXES; i++)
-            gp->axis_calib[i].deadzone_pct = cfg.gamepad_deadzone;
+        for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+            for (int i = 0; i < GAMEPAD_MAX_AXES; i++)
+                gp->axis_calib[p][i].deadzone_pct = cfg.gamepad_deadzone;
     }
     gp->button_map.btn_jump      = cfg.gamepad_btn_jump;
     gp->button_map.btn_run       = cfg.gamepad_btn_run;
@@ -497,11 +552,24 @@ int gamepad_save_config(const GamepadManager *gp, const char *path) {
  * Public API
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Any pad open right now: what gamepad_connected has always meant. */
+static bool any_pad_open(const GamepadManager *gm) {
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+        if (gm->pad_fds[p] >= 0) return true;
+    return false;
+}
+
 int gamepad_init(GamepadManager *gm) {
     memset(gm, 0, sizeof(*gm));
-    gm->gamepad_fd  = -1;
-    for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++)
+    input_slots_clear(&gm->slots);   /* an app exit forgets every reservation */
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+        gm->pad_fds[p] = -1;
+        gm->pad_slot[p] = -1;
+    }
+    for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
         gm->keyboard_fds[k] = gm->mouse_fds[k] = -1;
+        gm->keyboard_slot[k] = gm->mouse_slot[k] = -1;
+    }
     gm->touch_region_count = 0;
 
     /* Apply sensible defaults before loading config */
@@ -513,22 +581,26 @@ int gamepad_init(GamepadManager *gm) {
     scan_devices(gm);
 
     printf("gamepad: init complete (gamepad=%s, keyboard=%s, mouse=%s)\n",
-           gm->gamepad_fd >= 0 ? "connected" : "none",
+           any_pad_open(gm) ? "connected" : "none",
            gm->keyboard_count > 0 ? "connected" : "none",
            gm->mouse_count > 0 ? "connected" : "none");
     return 0;
 }
 
+/* Closes every device.  The slot table (gm->slots) and the announced_*
+ * strings are kept: a rescan comes straight back through scan_devices(). */
 void gamepad_close(GamepadManager *gm) {
-    if (gm->gamepad_fd >= 0) {
-        close(gm->gamepad_fd);
-        gm->gamepad_fd = -1;
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+        if (gm->pad_fds[p] >= 0) close(gm->pad_fds[p]);
+        gm->pad_fds[p] = -1;
+        gm->pad_layout[p] = INPUT_PAD_NATIVE;
+        gm->pad_slot[p] = -1;
     }
-    gm->gamepad_layout = INPUT_PAD_NATIVE;
     for (int k = 0; k < GAMEPAD_MAX_PER_KIND; k++) {
         if (gm->keyboard_fds[k] >= 0) close(gm->keyboard_fds[k]);
         if (gm->mouse_fds[k] >= 0)    close(gm->mouse_fds[k]);
         gm->keyboard_fds[k] = gm->mouse_fds[k] = -1;
+        gm->keyboard_slot[k] = gm->mouse_slot[k] = -1;
     }
     gm->keyboard_count = gm->mouse_count = 0;
     memset(gm->mouse_btn, 0, sizeof(gm->mouse_btn));
@@ -620,102 +692,84 @@ void gamepad_set_button_map(GamepadManager *gp, const GamepadButtonMap *map) {
 }
 
 /* ── Read gamepad events (using configurable button map) ────────────────── */
-static void poll_gamepad(GamepadManager *gm, InputState *state) {
-    if (gm->gamepad_fd < 0) {
-        /* No pad attached.  Zero the axes: a stick that was deflected when the
-         * controller was unplugged must not keep asserting a direction through
-         * merge_stick_dpad() forever. */
-        state->axis_lx = state->axis_ly = 0;
-        state->axis_rx = state->axis_ry = 0;
-        return;
-    }
+/* One stick axis event into the 4-axis array (lx, ly, rx, ry) of the pad's
+ * bucket, through pad p's calibration. */
+static int pad_axis_value(const GamepadManager *gm, int p, int code, int value) {
+    int idx = axis_to_index(code);
+    if (idx < 0)   /* Fallback: unknown index, use basic normalize */
+        return normalize_axis(value, -32768, 32767);
+    return normalize_axis_calibrated(value,
+        gm->axis_min[p][idx], gm->axis_max[p][idx],
+        gm->axis_calib[p][idx].center, gm->axis_calib[p][idx].deadzone_pct);
+}
 
+static void poll_gamepad(GamepadManager *gm, int p) {
     struct input_event ev;
     GamepadButtonMap *m = &gm->button_map;
+    int b = bucket_of(gm->pad_slot[p]);
+    bool *latched = gm->held_latched[b];
+    int *axis = gm->bucket_axis[b];
 
     ssize_t r;
-    while ((r = read(gm->gamepad_fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+    while ((r = read(gm->pad_fds[p], &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
 
         if (ev.type == EV_ABS) {
             int code = ev.code;
 
-            /* Left stick X — use configurable axis code */
-            if (code == m->stick_x_axis) {
-                int idx = axis_to_index(code);
-                if (idx >= 0) {
-                    state->axis_lx = normalize_axis_calibrated(ev.value,
-                        gm->axis_min[idx], gm->axis_max[idx],
-                        gm->axis_calib[idx].center,
-                        gm->axis_calib[idx].deadzone_pct);
-                } else {
-                    /* Fallback: unknown index, use basic normalize */
-                    state->axis_lx = normalize_axis(ev.value, -32768, 32767);
-                }
-            }
-            /* Left stick Y */
-            else if (code == m->stick_y_axis) {
-                int idx = axis_to_index(code);
-                if (idx >= 0) {
-                    state->axis_ly = normalize_axis_calibrated(ev.value,
-                        gm->axis_min[idx], gm->axis_max[idx],
-                        gm->axis_calib[idx].center,
-                        gm->axis_calib[idx].deadzone_pct);
-                } else {
-                    state->axis_ly = normalize_axis(ev.value, -32768, 32767);
-                }
-            }
+            /* Left stick X / Y — configurable axis codes */
+            if (code == m->stick_x_axis)
+                axis[0] = pad_axis_value(gm, p, code, ev.value);
+            else if (code == m->stick_y_axis)
+                axis[1] = pad_axis_value(gm, p, code, ev.value);
             /* Right stick X — accept ABS_Z or the mapped rx axis */
-            else if (code == m->stick_rx_axis || code == ABS_Z) {
-                int idx = axis_to_index(code);
-                if (idx >= 0) {
-                    state->axis_rx = normalize_axis_calibrated(ev.value,
-                        gm->axis_min[idx], gm->axis_max[idx],
-                        gm->axis_calib[idx].center,
-                        gm->axis_calib[idx].deadzone_pct);
-                } else {
-                    state->axis_rx = normalize_axis(ev.value, -32768, 32767);
-                }
-            }
+            else if (code == m->stick_rx_axis || code == ABS_Z)
+                axis[2] = pad_axis_value(gm, p, code, ev.value);
             /* Right stick Y — accept ABS_RZ or the mapped ry axis */
-            else if (code == m->stick_ry_axis || code == ABS_RZ) {
-                int idx = axis_to_index(code);
-                if (idx >= 0) {
-                    state->axis_ry = normalize_axis_calibrated(ev.value,
-                        gm->axis_min[idx], gm->axis_max[idx],
-                        gm->axis_calib[idx].center,
-                        gm->axis_calib[idx].deadzone_pct);
-                } else {
-                    state->axis_ry = normalize_axis(ev.value, -32768, 32767);
-                }
-            }
+            else if (code == m->stick_ry_axis || code == ABS_RZ)
+                axis[3] = pad_axis_value(gm, p, code, ev.value);
             /* D-pad horizontal */
             else if (code == m->hat_x_axis) {
-                gm->held_latched[BTN_ID_LEFT]  = (ev.value < 0);
-                gm->held_latched[BTN_ID_RIGHT] = (ev.value > 0);
+                latched[BTN_ID_LEFT]  = (ev.value < 0);
+                latched[BTN_ID_RIGHT] = (ev.value > 0);
             }
             /* D-pad vertical */
             else if (code == m->hat_y_axis) {
-                gm->held_latched[BTN_ID_UP]   = (ev.value < 0);
-                gm->held_latched[BTN_ID_DOWN] = (ev.value > 0);
+                latched[BTN_ID_UP]   = (ev.value < 0);
+                latched[BTN_ID_DOWN] = (ev.value > 0);
             }
         } else if (ev.type == EV_KEY) {
             bool down = (ev.value != 0);
-            int code = input_pad_key((InputPadLayout)gm->gamepad_layout, ev.code);
+            int code = input_pad_key((InputPadLayout)gm->pad_layout[p], ev.code);
 
             if (code == m->btn_jump)
-                gm->held_latched[BTN_ID_JUMP] = down;
+                latched[BTN_ID_JUMP] = down;
             else if (code == m->btn_run)
-                gm->held_latched[BTN_ID_RUN] = down;
+                latched[BTN_ID_RUN] = down;
             else if (code == m->btn_action)
-                gm->held_latched[BTN_ID_ACTION] = down;
+                latched[BTN_ID_ACTION] = down;
             else if (code == m->btn_pause)
-                gm->held_latched[BTN_ID_PAUSE] = down;
+                latched[BTN_ID_PAUSE] = down;
             else if (code == m->btn_back)
-                gm->held_latched[BTN_ID_BACK] = down;
+                latched[BTN_ID_BACK] = down;
         }
     }
     if (read_gone(r))
-        drop_gone_fd(gm, &gm->gamepad_fd);   /* axes zero on the next poll */
+        drop_gone_fd(gm, &gm->pad_fds[p]);   /* axes zero on the next poll */
+}
+
+static void poll_gamepads(GamepadManager *gm) {
+    bool open[GAMEPAD_BUCKETS] = { false };
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+        if (gm->pad_fds[p] < 0) continue;
+        open[bucket_of(gm->pad_slot[p])] = true;
+        poll_gamepad(gm, p);
+    }
+    /* A bucket with no pad attached zeroes its axes: a stick that was
+     * deflected when the controller was unplugged must not keep asserting a
+     * direction through merge_stick_dpad() forever. */
+    for (int b = 0; b < GAMEPAD_BUCKETS; b++)
+        if (!open[b])
+            memset(gm->bucket_axis[b], 0, sizeof(gm->bucket_axis[b]));
 }
 
 /* ── Merge the left analog stick into the D-pad directions ──────────────── */
@@ -727,8 +781,8 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
  *    recomputed every poll.  It used to write `.held = true` directly and
  *    nothing ever cleared it, so one deflection stuck a direction on for the
  *    rest of the process's life.
- *  - It has to run *after* poll_gamepad() has consumed this frame's EV_ABS
- *    events, and after the fd < 0 branch has zeroed the axes.
+ *  - It has to run *after* poll_gamepads() has consumed this frame's EV_ABS
+ *    events, and after a bucket with no pad has had its axes zeroed.
  *
  * BUG-INPUT-003: the threshold is applied to the already-dead-zoned normalized
  * value from normalize_axis_calibrated(), which returns exactly 0 inside the
@@ -738,65 +792,65 @@ static void poll_gamepad(GamepadManager *gm, InputState *state) {
  */
 #define STICK_DPAD_THRESHOLD 100  /* 10% of normalized ±1000 range */
 
-static void merge_stick_dpad(const InputState *state, bool *derived) {
-    if (state->axis_lx < -STICK_DPAD_THRESHOLD)
+static void merge_stick_dpad(int lx, int ly, bool *derived) {
+    if (lx < -STICK_DPAD_THRESHOLD)
         derived[BTN_ID_LEFT] = true;
-    else if (state->axis_lx > STICK_DPAD_THRESHOLD)
+    else if (lx > STICK_DPAD_THRESHOLD)
         derived[BTN_ID_RIGHT] = true;
 
-    if (state->axis_ly < -STICK_DPAD_THRESHOLD)
+    if (ly < -STICK_DPAD_THRESHOLD)
         derived[BTN_ID_UP] = true;
-    else if (state->axis_ly > STICK_DPAD_THRESHOLD)
+    else if (ly > STICK_DPAD_THRESHOLD)
         derived[BTN_ID_DOWN] = true;
 }
 
-/* ── Read keyboard events (every keyboard node, into the same latches) ──── */
+/* ── Read keyboard events (each keyboard into its own slot's latches) ───── */
 /* down: value 1 = press, 2 = repeat, 0 = release */
-static void latch_key(GamepadManager *gm, int code, bool down) {
+static void latch_key(bool *latched, int code, bool down) {
     switch (code) {
         case KEY_UP:
         case KEY_W:
-            gm->held_latched[BTN_ID_UP] = down;
+            latched[BTN_ID_UP] = down;
             break;
         case KEY_DOWN:
         case KEY_S:
-            gm->held_latched[BTN_ID_DOWN] = down;
+            latched[BTN_ID_DOWN] = down;
             break;
         case KEY_LEFT:
         case KEY_A:
-            gm->held_latched[BTN_ID_LEFT] = down;
+            latched[BTN_ID_LEFT] = down;
             break;
         case KEY_RIGHT:
         case KEY_D:
-            gm->held_latched[BTN_ID_RIGHT] = down;
+            latched[BTN_ID_RIGHT] = down;
             break;
         case KEY_SPACE:
-            gm->held_latched[BTN_ID_JUMP] = down;
+            latched[BTN_ID_JUMP] = down;
             break;
         case KEY_LEFTSHIFT:
         case KEY_RIGHTSHIFT:
-            gm->held_latched[BTN_ID_RUN] = down;
+            latched[BTN_ID_RUN] = down;
             break;
         case KEY_ENTER:
-            gm->held_latched[BTN_ID_ACTION] = down;
+            latched[BTN_ID_ACTION] = down;
             break;
         case KEY_ESC:
-            gm->held_latched[BTN_ID_PAUSE] = down;
+            latched[BTN_ID_PAUSE] = down;
             break;
         case KEY_BACKSPACE:
-            gm->held_latched[BTN_ID_BACK] = down;
+            latched[BTN_ID_BACK] = down;
             break;
         default:
             break;
     }
 }
 
-static void poll_keyboard_fd(GamepadManager *gm, int *fd) {
+static void poll_keyboard_fd(GamepadManager *gm, int *fd, bool *latched) {
     struct input_event ev;
     ssize_t r;
     while ((r = read(*fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev))
         if (ev.type == EV_KEY)
-            latch_key(gm, ev.code, ev.value != 0);
+            latch_key(latched, ev.code, ev.value != 0);
     if (read_gone(r))
         drop_gone_fd(gm, fd);
 }
@@ -804,7 +858,8 @@ static void poll_keyboard_fd(GamepadManager *gm, int *fd) {
 static void poll_keyboard(GamepadManager *gm) {
     for (int k = 0; k < gm->keyboard_count; k++)
         if (gm->keyboard_fds[k] >= 0)
-            poll_keyboard_fd(gm, &gm->keyboard_fds[k]);
+            poll_keyboard_fd(gm, &gm->keyboard_fds[k],
+                             gm->held_latched[bucket_of(gm->keyboard_slot[k])]);
 }
 
 /* ── Read mouse events with acceleration ────────────────────────────────── */
@@ -847,7 +902,8 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
                 else if (ev.code == BTN_MIDDLE)
                     btn[2] = down;
                 else
-                    latch_key(gm, ev.code, down);   /* a keyboard+touchpad combo node */
+                    latch_key(gm->held_latched[bucket_of(gm->mouse_slot[k])],
+                              ev.code, down);   /* a keyboard+touchpad combo node */
             }
             /* EV_SYN ignored — we batch all events in the read loop */
         }
@@ -927,14 +983,20 @@ static void poll_touch(GamepadManager *gm, bool *derived,
 }
 
 /* ── Edge detection (abstract buttons) ──────────────────────────────────── */
-static void compute_edges(GamepadManager *gm, InputState *state) {
+static void compute_edges(bool *prev_held, InputState *state) {
     for (int i = 0; i < BTN_ID_COUNT; i++) {
         bool now  = state->buttons[i].held;
-        bool prev = gm->prev_held[i];
+        bool prev = prev_held[i];
         state->buttons[i].pressed  = (now && !prev);
         state->buttons[i].released = (!now && prev);
-        gm->prev_held[i] = now;
+        prev_held[i] = now;
     }
+}
+
+/* The stick value of larger magnitude: two pads' sticks in one any-device
+ * state, where the deflected one should win over the one at rest. */
+static int stronger(int a, int b) {
+    return (abs(b) > abs(a)) ? b : a;
 }
 
 /* ── Edge detection (mouse buttons) ─────────────────────────────────────── */
@@ -958,11 +1020,40 @@ static void compute_mouse_edges(GamepadManager *gm, InputState *state) {
     gm->prev_mouse_middle = middle_now;
 }
 
+/* Rebuild each player's InputState from its slot's bucket: the latched levels,
+ * the stick (and its D-pad contribution), the edges, and what it holds. */
+static void build_players(GamepadManager *gm) {
+    for (int s = 0; s < INPUT_SLOTS; s++) {
+        InputState *ps = &gm->players[s];
+        const int *axis = gm->bucket_axis[s];
+        memset(ps, 0, sizeof(*ps));
+        bool derived[BTN_ID_COUNT];
+        memset(derived, 0, sizeof(derived));
+        merge_stick_dpad(axis[0], axis[1], derived);
+        for (int i = 0; i < BTN_ID_COUNT; i++)
+            ps->buttons[i].held = gm->held_latched[s][i] || derived[i];
+        ps->axis_lx = axis[0]; ps->axis_ly = axis[1];
+        ps->axis_rx = axis[2]; ps->axis_ry = axis[3];
+        compute_edges(gm->player_prev[s], ps);
+    }
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+        if (gm->pad_fds[p] >= 0 && gm->pad_slot[p] >= 0)
+            gm->players[gm->pad_slot[p]].gamepad_connected = true;
+    for (int k = 0; k < gm->keyboard_count; k++)
+        if (gm->keyboard_fds[k] >= 0 && gm->keyboard_slot[k] >= 0)
+            gm->players[gm->keyboard_slot[k]].keyboard_connected = true;
+}
+
 void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active) {
-    state->gamepad_connected  = (gm->gamepad_fd >= 0);
+    state->gamepad_connected  = any_pad_open(gm);
     state->keyboard_connected = (gm->keyboard_count > 0);
     state->mouse_connected    = (gm->mouse_count > 0) ? 1 : 0;
+
+    /* Read from each input source */
+    poll_gamepads(gm);                /* latches keys/hat, updates the axes */
+    poll_keyboard(gm);                /* latches keys */
+    poll_mouse(gm, state);
 
     /* Level state from the sources that report an absolute position rather
      * than press/release events — touch regions and the analog stick.  Zeroed
@@ -971,22 +1062,50 @@ void gamepad_poll(GamepadManager *gm, InputState *state,
      * gm->held_latched[] because a key-up may be many frames away. */
     bool derived[BTN_ID_COUNT];
     memset(derived, 0, sizeof(derived));
-
-    /* Read from each input source */
-    poll_gamepad(gm, state);          /* latches keys/hat, updates the axes */
-    poll_keyboard(gm);                /* latches keys */
-    poll_mouse(gm, state);
     poll_touch(gm, derived, touch_x, touch_y, touch_active);
-    merge_stick_dpad(state, derived); /* after poll_gamepad: needs this frame's axes */
+
+    /* Any device: every bucket's latches and stick, each stick merged into
+     * the D-pad on its own (after poll_gamepads: needs this frame's axes). */
+    bool latched[BTN_ID_COUNT];
+    memset(latched, 0, sizeof(latched));
+    state->axis_lx = state->axis_ly = state->axis_rx = state->axis_ry = 0;
+    for (int b = 0; b < GAMEPAD_BUCKETS; b++) {
+        const int *axis = gm->bucket_axis[b];
+        for (int i = 0; i < BTN_ID_COUNT; i++)
+            latched[i] = latched[i] || gm->held_latched[b][i];
+        merge_stick_dpad(axis[0], axis[1], derived);
+        state->axis_lx = stronger(state->axis_lx, axis[0]);
+        state->axis_ly = stronger(state->axis_ly, axis[1]);
+        state->axis_rx = stronger(state->axis_rx, axis[2]);
+        state->axis_ry = stronger(state->axis_ry, axis[3]);
+    }
 
     /* `held` is a pure output — never read back as state, so a caller that
      * zeroes its InputState between polls cannot lose a physically held key. */
     for (int i = 0; i < BTN_ID_COUNT; i++)
-        state->buttons[i].held = gm->held_latched[i] || derived[i];
+        state->buttons[i].held = latched[i] || derived[i];
 
     /* Compute pressed/released edges */
-    compute_edges(gm, state);
+    compute_edges(gm->prev_held, state);
     compute_mouse_edges(gm, state);
+    build_players(gm);
+}
+
+const InputState *gamepad_player(const GamepadManager *gm, int slot) {
+    static const InputState none;
+    if (!gm || slot < 0 || slot >= INPUT_SLOTS) return &none;
+    return &gm->players[slot];
+}
+
+int gamepad_player_mask(const GamepadManager *gm) {
+    int mask = 0;
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+        if (gm->pad_fds[p] >= 0 && gm->pad_slot[p] >= 0)
+            mask |= 1 << gm->pad_slot[p];
+    for (int k = 0; k < gm->keyboard_count; k++)
+        if (gm->keyboard_fds[k] >= 0 && gm->keyboard_slot[k] >= 0)
+            mask |= 1 << gm->keyboard_slot[k];
+    return mask;
 }
 
 /* ── Draw virtual touch controls ────────────────────────────────────────── */
