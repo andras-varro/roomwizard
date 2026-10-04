@@ -367,32 +367,6 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F103. Software power-off: make `poweroff` more than a halt — open, asked by the operator 2026-09-29
-
-**Today `poweroff` is `halt`.** Measured on .188 (our 4.14.52 image): `twl4030_power_off`, `pm_power_off`
-and `gpio_poweroff_driver` are in `/proc/kallsyms`, and `CONFIG_TWL4030_POWER=y`,
-`CONFIG_POWER_RESET_GPIO=y`, but no device is bound to `twl4030_power` or `poweroff-gpio`. The DT's
-`twl@48` node has no `ti,twl4030-power*` child and no `ti,system-power-controller`, in the vendor
-`original.dtb` and in `kernel/dts` alike. `drivers/mfd/twl4030-power.c` sets `pm_power_off` only when
-that property is present, and with `pm_power_off` NULL `kernel/reboot.c` turns POWER_OFF into HALT. The
-rootfs halt script already runs `halt -d -f -p -h`, so userspace is not the missing piece. Measured on
-.188 2026-09-29 (n=1) and again 2026-09-30 via the launcher's SHUT DOWN (n=2, both halts panel WHITE): `shutdown -h now` halts with the panel bright white and the backlight on, down
-over 3.5 min with no watchdog reboot. Cause [inferred from source]: omapdss stops DISPC and panel-dpi
-drops its enable GPIO, while `kernel/dts/panel-dpi.sh` holds the LVDS and backlight-enable GPIOs high as
-hogs and the TWL PWM backlight stays powered.
-
-**Inferred, not measured:** power is 802.3af PoE only (TPS23750 front end and buck upstream of the PMIC),
-so a TWL4030 OFF drops the SoC and RAM rails but probably not the PoE front end. The backlight supply is
-unknown, so the panel may stay lit. Waking needs a start-on event; there is no power button and the PWRON
-wiring is unknown, so pulling PoE is the expected only way back.
-
-**State: built, not booted.** `kernel/dts/twl4030-poweroff.sh` adds the `ti,twl4030-power` child with
-`ti,system-power-controller` (measured from `twl4030-power.c`: it installs `pm_power_off` only with that
-property; the plain compatible loads no sequence scripts), and a test image is staged on `.188`. The test
-procedure and its risk are in [`kernel/README.md`](kernel/README.md) (*What we patch*). **Done when** one
-`poweroff` has shown whether it darkens the panel and reduces PoE draw, and the launcher's Shutdown either
-uses it or keeps the halt, its screen's unplug-when-white wording following whichever end state ships.
-
 ### F104. CPU-usage graph on the Monitor page — open, operator request 2026-09-30, later
 
 A history graph of CPU utilisation on the control panel's Monitor page, beside the planned SoC temperature (F4).
