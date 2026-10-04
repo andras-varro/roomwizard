@@ -516,21 +516,6 @@ device paths and `LICENSE.md` follow it.
 
 ## Structural and cleanup
 
-### C7. Burn down the shellcheck backlog — open
-
-The shell scripts *are* the deployment system and they run as root over SSH. The gate's two tiers, the
-ratchet and the `SC1124` trap are in `tests/CLAUDE.md`, as are the directive traps and the gate-shape
-measurement rule. What is open is the backlog recorded one row per `(file, code)` in
-`tests/shellcheck-baseline.txt`. Worst files, by per-file total (`awk '{s[$1]+=$3} END{for(f in s)print s[f],f}' tests/shellcheck-baseline.txt | sort -rn | head`)
-lead with `tests/measure_usbpower_sabotage.sh` and `native_apps/build-and-deploy.sh`, then `vnc_client/build-and-deploy.sh`,
-`tests/commission_offline_test.sh` and `scummvm-roomwizard/build-and-deploy.sh`. What remains is largely deliberate:
-intended word-splitting lists, `SC2029` client-side expansion of local constants that its remedy would break, `SC2016` in
-sabotage patterns, read-loop filler variables, probe register constants kept as documentation (operator ruling), and
-deploy-path `ls` sites free at the next real deploy.
-
-**Prefer a fix that changes no behaviour to a `disable=` directive.** Do not "fix" a finding by rewriting
-a line you cannot exercise — several of the leaders are in build scripts that only a real deploy runs.
-
 ### C9. A bundle cannot prove its stripped binaries were ever gated — open, measured 2026-08-08
 
 `native_apps/check-arm-safe.sh` is sound only on a binary that still has its symbol table, and both

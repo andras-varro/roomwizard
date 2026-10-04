@@ -61,7 +61,7 @@ itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay u
 `.188`'s p1 holds, **measured 2026-10-04**, the boot files, `uImage-bootstrap`, `uImage-system.vendor`, `.b40`
 (`f3b446c6…`, before the two flush/set_vbus patches), `.f103undo` (`24ab7f08…`, the flush-patch image, one step
 before the running one) and `uImage-system`, our image with every `kernel/patches/` patch, our panel DTB and the
-power node below (`fb4f2c94…`). p1 is 54% used; an image is ~2.3 MB, so delete a stale one before the next.
+power node below (`fb4f2c94…`). p1 is 54% used; an image is ~5.2 MB, so delete a stale one before the next.
 
 **Software power-off (`dts/twl4030-poweroff.sh`): booted on `.188`, powers the board down — measured 2026-10-04.**
 `/sys/bus/platform/drivers/twl4030_power/` holds `48070000.i2c:twl@48:power` after boot, and `poweroff` darkened
@@ -69,8 +69,7 @@ the panel and backlight and the RJ45 LEDs, and the operator thought USB power we
 not measured.** Replugging PoE cold-boots normally (SSH within ~1 min, node bound again): there is no power button,
 so pulling PoE is the way back. The vendor kernel and our earlier images only halt: panel white, backlight on,
 down over 3.5 min with no watchdog reboot, because `twl4030-power.c` installs `pm_power_off` only with
-`ti,system-power-controller`. Rollback is copying `.f103undo` back. ⚠️ The launcher's shutdown screen still says
-"safe to unplug" (`app_launcher.c`) and was not changed for this.
+`ti,system-power-controller`. Rollback is copying `.f103undo` back.
 
 ## Bluetooth modules
 

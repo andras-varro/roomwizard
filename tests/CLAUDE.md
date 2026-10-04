@@ -76,7 +76,7 @@ count: a count going up, or a new pair, fails; a count going down passes and say
 tightened. That ratchet is why **no shipped script carries a `disable=` directive for the backlog** —
 suppressing it would add `SC1124` risk of its own — and why refreshing the baseline is a separate
 `--only=shellcheck-baseline` mode, since a gate that refreshes its own baseline as a side effect can
-never fail. Regenerate it deliberately, and only after reading what changed.
+never fail. Regenerate it deliberately, and only after reading what changed. Triaged 2026-10-04 and left as is (operator ruling): the remaining rows are deliberate or style, and none is a defect.
 ⚠️ **A `# shellcheck` comment whose first word is not followed by a valid directive voids the whole
 file's analysis** (exit 1, `SC1072`/`SC1073`) — and *prose* is enough: a comment explaining a directive
 and opening with the checker's name is parsed as one (measured: a file's count fell 69 → 2). A small

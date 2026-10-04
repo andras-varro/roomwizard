@@ -515,12 +515,11 @@ static void launch_app(Launcher *l, int index,
 /* The one home of the shutdown screen's words.
  *
  * ⚠️ Nothing this process draws can say "safe now": it is killed before the
- * disks are. Measured on our 4.14.52 image: `shutdown -h now` HALTS (the kernel
- * has no power-off hook bound), and the halted panel is bright WHITE with the
- * backlight on. So the halt's own white screen is the signal, and these lines
- * point at it. Rewrite them if the kernel ever gains a real power-off. */
+ * disks are. So the kernel's own end state is the signal, and it differs by
+ * kernel (both measured): the vendor kernel HALTS with the panel bright WHITE and
+ * the backlight on; our 4.14.52 image powers the board off, panel DARK. */
 static const char *const shutdown_hint[] = {
-    "WHEN THE SCREEN TURNS WHITE,",
+    "WHEN THE SCREEN TURNS WHITE OR DARK,",
     "IT IS SAFE TO UNPLUG.",
 };
 
