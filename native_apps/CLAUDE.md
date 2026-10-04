@@ -286,8 +286,8 @@ Three things about that, learned from doing it:
 **Game logic works in its own units — cells or fractions of the playfield — and speeds are those units per
 SECOND of elapsed time (`get_time_ms()` delta), never pixels per frame; only drawing converts to pixels.** Frogger
 scaled speed by `width/800` but laid out from the height, so portrait ran ~3.4× slow in cells; tetris' gravity counter ran ~3× slow while idle, and any per-frame motion slows whenever a frame costs more.
-Every game is time-based (px/s = old px/frame × 30), in one of two idioms: variable dt plus substeps against tunnelling (frogger, pong), or a fixed 1/30 s tick
-accumulator with constants per tick, at most 4 ticks per frame (platformer, brick_breaker). Both re-baseline the clock on entering play, so pause/resume never jumps.
+Every game is time-based (px/s = old px/frame × 30), in one of two idioms: variable dt plus substeps against tunnelling (frogger, pong), or a fixed tick
+accumulator with constants per tick, at most 4 ticks per frame (platformer at 1/20 s, brick_breaker at 1/30 s). Both re-baseline the clock on entering play, so pause/resume never jumps.
 
 **Derive state; don't accumulate it, and don't let a marker mean two things.** One shape produced three game
 bugs: a multiplier re-applied to a figure that already contained it (so **SLOW DOWN made the ball faster**), a

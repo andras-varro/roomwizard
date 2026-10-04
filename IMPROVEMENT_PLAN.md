@@ -166,6 +166,13 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
+### B54. Plugging in a USB controller disconnects a connected Bluetooth pad — open, seen twice, cause unknown
+
+Observed by the operator twice (2026-10-04 and once earlier): with a Bluetooth pad connected, plugging a USB
+controller in drops the Bluetooth pad, and it stays disconnected until Connect is tapped again on the Control Panel
+Bluetooth page. Not investigated; B51 and B52 are different triggers (a stream freeze, a bluetoothd restart). **Done
+when** the cause is found: first look at whether the USB hotplug path (`usb-host`, input rescan) touches the BT link.
+
 ### B53. A mouse button release lost to an evdev overflow reads as held — open, inferred mechanism, not reproduced
 
 `common/gamepad.c` handles no `SYN_DROPPED`: the mouse read loop (`:832-853`) takes `EV_REL` and `EV_KEY` and
@@ -452,13 +459,20 @@ typing into the Settings keypads; the pad on the reconnect screen; and **[inferr
 click if A or B is still held when leaving Settings and the session reconnects. **Done when** each of the three
 works or is shown to be unreachable.
 
-### F115. Elapsed-time motion for the four per-frame games — implemented 2026-10-03, awaiting operator play-test
 
-Frogger and pong move on variable dt with substeps; platformer and brick_breaker on a fixed 1/30 s tick accumulator
-(constants per tick, 4 ticks per frame at most), preserving the nominal 30 fps feel. Deployed and alive for 4 s each
-over SSH; **not play-tested by a human.** **Done when** the operator confirms on the panel: lane, ball and paddle
-speeds feel the same in landscape; portrait is no longer slower; nothing tunnels through the paddle or bricks at
-speed; pause/resume does not jump; a platformer start with JUMP does not jump.
+### F118. An arcade-style start menu shared by all the games — open, not started, operator request 2026-10-04
+
+Replaces each game's green START button with one menu widget in `native_apps/common/` (not seven copies). The selected
+item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
+blinks, then repeat; the pings run on the game clock. Entries are per game, and selection works by pad, keyboard and
+touch. It is the intended home for per-play choices: a 1 player / 2 player choice (ties to F116's player slots) and a
+pace choice (F119). **Done when** every game starts from it.
+
+### F119. Platformer pace: Slow / Normal / Fast — open, needs F118, operator request 2026-10-04
+
+Three entries on the start menu from F118. Normal is today's `TICK_S` of 1/20 s (`native_apps/platformer/platformer.c`,
+`#define TICK_S`). The physics constants are per tick, so pace is that one constant and the jump arc keeps its shape.
+Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
 
 ### F116. Choose which controller drives a game — open, operator request 2026-10-02
 
@@ -513,12 +527,6 @@ now, but the noise is still the cause.
   while several sites compute **8**. Titles render ~17 % left of centre and long strings clip off the
   left edge. **Wrong: `screen_draw_game_over()`** (message and
   score widths) **and `ui_layout.c:326`**.
-
-### C18. Clear the one build warning — open, measured 2026-10-03
-
-`control_panel/bluetooth_page.c:419` (`snprintf(hdr, sizeof(hdr), "%s %d/%d", title, …)` into `char hdr[32]`) draws a
-`-Wformat-truncation`, the tree's only warning, against the zero-warnings rule in `native_apps/CLAUDE.md`. **Done
-when** the build prints none: size `hdr` for the longest `page_title()` or bound the `%s`.
 
 ### C6. Extend the host-buildable test harness — open
 
