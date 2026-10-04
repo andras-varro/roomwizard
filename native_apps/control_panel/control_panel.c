@@ -409,6 +409,8 @@ static void handle_home_input(AppState *state, const TouchState *ts) {
 
 static GamepadManager g_pad;
 static InputState     g_pad_in;
+
+GamepadManager *cp_gamepad(void) { return &g_pad; }
 static bool           focus_shown;       /* the ring is up */
 static int            focus_idx = -1;    /* into this frame's focusables */
 static UiRect         focus_rect;        /* where it was: re-pick, and the ring */

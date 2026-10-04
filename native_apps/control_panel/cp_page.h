@@ -17,6 +17,7 @@
 #include "../common/touch_input.h"
 #include "../common/config.h"
 #include "../common/ui_focus.h"
+#include "../common/gamepad.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -108,6 +109,12 @@ const char *cp_audio_bt_addr(void);
 void        cp_audio_set_output(Config *cfg, int choice, const char *bt_addr);
 
 /* Implemented in control_panel.c, for pages. */
+
+/* The panel's one GamepadManager (common/gamepad.h): opened at startup,
+ * polled and rescanned by the main loop.  For a page that reads or changes
+ * the player slots (the Input page's PLAYERS rows); a page never inits,
+ * polls or closes it. */
+GamepadManager *cp_gamepad(void);
 
 /* Posts msg on the page's status line — it takes the title bar's place for a
  * few seconds, green when ok, orange when not.  The panel repaints for it and

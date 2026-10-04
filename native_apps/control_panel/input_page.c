@@ -1,12 +1,15 @@
-/* input_page.c — control_panel's Input page: the touch tools and the
- * keyboard, mouse and pad testers.
+/* input_page.c — control_panel's Input page: the touch tools, the
+ * keyboard, mouse and pad testers, and the player slots.
  *
  * Opened from the home grid's Input tile, and the one home for testing an
  * input device, whatever bus it arrives on: the testers open evdev nodes by
  * path, so a Bluetooth keyboard needs no second copy of them.  The USB bus
  * itself (the device list, RESCAN, port recovery) stays on the USB page.
  * Exposed only as cp_input_page (cp_page.h); its state lives in this file.
- * It owns no config keys.
+ * Its one setting is PLAYERS: which pad or keyboard is P1..P4.  The keys,
+ * slot_p1..slot_p4, are written only through gamepad_slot_pin()/unpin() on
+ * the panel's GamepadManager (cp_gamepad()), which also keeps the panel's
+ * in-memory Config in step; the page never touches them itself.
  *
  * The touch tools (the CALIBRATED row; CALIBRATE, DIAGNOSTIC, MULTI-TOUCH,
  * RESET GEOMETRY) head the page; the testers sit under their own section header.  Each tester's
@@ -121,9 +124,9 @@ typedef struct {
     int          xfds[MAX_INPUT_DEV];
     int          xfd_dev[MAX_INPUT_DEV];
     int          xfd_cnt;
-} InputState;
+} InputPageState;
 
-static InputState input_state;
+static InputPageState input_state;
 
 static Button input_btn_ktest, input_btn_mtest, input_btn_gtest;
 static Button input_btn_kback, input_btn_mback, input_btn_gback;
@@ -199,7 +202,7 @@ static const LKey input_kblayout[] = {
 /* Classification, the touchscreen exclusion and the /dev/input/event* walk are
  * common/input_scan.c's.  This list only says what is there — the testers
  * reopen by path — so every node input_scan() opened is closed again here. */
-static void input_scan_devices(InputState *s) {
+static void input_scan_devices(InputPageState *s) {
     static const int cap[INPUT_KIND_COUNT] = {
         [INPUT_KIND_KEYBOARD] = MAX_INPUT_DEV,
         [INPUT_KIND_MOUSE]    = MAX_INPUT_DEV,
@@ -232,12 +235,12 @@ static void input_scan_devices(InputState *s) {
     }
 }
 
-static void input_close(InputState *s);   /* defined below */
+static void input_close(InputPageState *s);   /* defined below */
 
 /* Open every scanned node of kind t, all non-blocking; the tester drains each
  * one every frame, so any of two mice (or keyboards, or pads) drives it without
  * the operator having to pick one. Returns how many opened. */
-static int input_open_kind(InputState *s, DevType t) {
+static int input_open_kind(InputPageState *s, DevType t) {
     input_close(s);
     for (int i=0; i<s->dev_cnt && s->fd_cnt<MAX_INPUT_DEV; i++) {
         if (s->devs[i].type!=t && !(t==DEV_KEYBOARD && s->devs[i].keys)) continue;
@@ -253,7 +256,7 @@ static int input_open_kind(InputState *s, DevType t) {
 /* The mouse tester's exit keys: every keyboard and pad node, alongside the
  * mice input_open_kind() opened.  A keyboard+touchpad combo is skipped — it is
  * a mouse node, already open, and input_proc_mouse() reads its Esc. */
-static void input_open_exit_keys(InputState *s) {
+static void input_open_exit_keys(InputPageState *s) {
     for (int i=0; i<s->dev_cnt && s->xfd_cnt<MAX_INPUT_DEV; i++) {
         if (s->devs[i].type!=DEV_KEYBOARD && s->devs[i].type!=DEV_GAMEPAD) continue;
         int fd=open(s->devs[i].path, O_RDONLY|O_NONBLOCK);
@@ -264,7 +267,7 @@ static void input_open_exit_keys(InputState *s) {
     }
 }
 
-static void input_close(InputState *s) {
+static void input_close(InputPageState *s) {
     for (int k=0; k<s->fd_cnt; k++)
         if (s->fds[k]>=0) close(s->fds[k]);
     for (int k=0; k<s->xfd_cnt; k++)
@@ -274,7 +277,7 @@ static void input_close(InputState *s) {
     s->last_dev=-1;
 }
 
-static void input_load_axes(InputState *s, int slot, int fd) {
+static void input_load_axes(InputPageState *s, int slot, int fd) {
     memset(s->pad.amin[slot],0,sizeof(s->pad.amin[slot]));
     memset(s->pad.amax[slot],0,sizeof(s->pad.amax[slot]));
     unsigned long ab[NBITS(ABS_MAX)]={0};
@@ -290,7 +293,7 @@ static void input_load_axes(InputState *s, int slot, int fd) {
 
 /* One line naming the node behind the last event, node first so a truncated
  * product name still says which /dev/input/event* it was. */
-static void input_src_line(const InputState *s, char *out, size_t out_size,
+static void input_src_line(const InputPageState *s, char *out, size_t out_size,
                            int max_w, int scale) {
     char raw[DEV_NAME_LEN+32];
     if (s->last_dev>=0 && s->last_dev<s->dev_cnt) {
@@ -332,7 +335,7 @@ static void input_add_log(KbdState *k, const char *m) {
  * that can change what the screen shows (EV_SYN, EV_MSC and the like are read
  * and dropped uncounted).  Zero means the frame would repaint identically, so
  * input_page_run_fullscreen() skips it. */
-static int input_proc_kbd(InputState *s) {
+static int input_proc_kbd(InputPageState *s) {
   int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     int ev=s->devs[s->fd_dev[k]].ev_num;
@@ -367,7 +370,7 @@ static int input_proc_kbd(InputState *s) {
   return n;
 }
 
-static int input_proc_mouse(const Framebuffer *fb, InputState *s) {
+static int input_proc_mouse(const Framebuffer *fb, InputPageState *s) {
   int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     struct input_event e;
@@ -407,7 +410,7 @@ static int input_proc_mouse(const Framebuffer *fb, InputState *s) {
 /* The mouse tester's exit keys (input_open_exit_keys()): Esc, and a pad's
  * Select/Start in native codes, feed the hold; nothing else is looked at and
  * nothing is shown, so this never asks for a repaint. */
-static void input_proc_exit_keys(InputState *s) {
+static void input_proc_exit_keys(InputPageState *s) {
   for (int k=0; k<s->xfd_cnt; k++) {
     const InputDev *d=&s->devs[s->xfd_dev[k]];
     struct input_event e;
@@ -420,7 +423,7 @@ static void input_proc_exit_keys(InputState *s) {
   }
 }
 
-static int input_proc_pad(InputState *s) {
+static int input_proc_pad(InputPageState *s) {
   int n=0;
   for (int k=0; k<s->fd_cnt; k++) {
     const int *mn=s->pad.amin[k], *mx=s->pad.amax[k];
@@ -521,6 +524,113 @@ static int sec_test_y;        /* the testers' section header */
 static int count_y;           /* the "N FOUND" line under each button */
 static int test_scale;        /* the row's text scale, see layout */
 
+/* ── PLAYERS: which pad or keyboard is P1..P4 ───────────────────────────── */
+/* One Cycler per player slot.  Its entries are AUTO (unpinned), then every
+ * connected pad and keyboard in gamepad_devices()' order, then — only while
+ * the slot is pinned to a device that is not in that list — the pin itself,
+ * so stepping off it in either direction is possible and it is never offered
+ * again once left.  Every entry list is rebuilt from cp_gamepad() on each
+ * draw and each input(): the panel's main loop rescans the devices, so an
+ * index kept across frames would point at a different controller. */
+#define PLAYER_ROW_H     40
+#define PLAYER_ROW_GAP   8
+#define PLAYER_LABEL_W   36   /* "P1" at scale 2, and a gap before the cycler */
+#define PLAYER_COL_GAP   20
+#define PLAYER_TEXT_LEN  96
+#define PLAYER_MAX_DEVS  (GAMEPAD_MAX_PADS + GAMEPAD_MAX_PER_KIND)
+#define PLAYER_COLOR_AUTO    COLOR_LABEL    /* unpinned: the slot follows plug order */
+#define PLAYER_COLOR_PINNED  COLOR_WHITE
+#define PLAYER_COLOR_LOST    COLOR_YELLOW   /* pinned, not connected */
+
+static Cycler player_cyc[INPUT_SLOTS];
+static int    sec_players_y;   /* the PLAYERS section header */
+static int    player_cols;     /* 2 in landscape (P1 P2 / P3 P4), 1 in portrait */
+/* What the last draw painted per row, so input() repaints only on a change. */
+static char   player_shown[INPUT_SLOTS][PLAYER_TEXT_LEN];
+static bool   player_shown_dis[INPUT_SLOTS];
+
+typedef struct {
+    int      count;   /* entries */
+    int      cur;     /* the entry the slot is at now */
+    uint32_t color;
+    char     text[PLAYER_TEXT_LEN];
+} PlayerRow;
+
+typedef struct {
+    GamepadDevice dev[PLAYER_MAX_DEVS];
+    int           n;
+} PlayerDevs;
+
+static void player_devs(PlayerDevs *d) {
+    d->n = gamepad_devices(cp_gamepad(), d->dev, PLAYER_MAX_DEVS);
+}
+
+/* No name is stored with a pin, so an absent pinned device is shown by its
+ * identity: a Bluetooth pad by its MAC (uniq), a wired one by its USB port —
+ * the phys stem's last "-" field, "1.2" of "usb-musb-hdrc.1.auto-1.2/input0". */
+static void player_ident_short(const InputIdent *id, char *out, size_t n) {
+    const char *bus = id->bus == BUS_BLUETOOTH ? "BT"
+                    : id->bus == BUS_USB       ? "USB" : "ID";
+    if (id->uniq[0]) {
+        snprintf(out, n, "%s %s", bus, id->uniq);
+        return;
+    }
+    char stem[sizeof(id->phys)];
+    snprintf(stem, sizeof(stem), "%s", id->phys);
+    char *sl = strrchr(stem, '/');
+    if (sl && strncmp(sl, "/input", 6) == 0) *sl = '\0';
+    const char *port = strrchr(stem, '-');
+    port = (port && port[1]) ? port + 1 : stem;
+    snprintf(out, n, "%s PORT %s", bus, port[0] ? port : "?");
+}
+
+static void player_row(const PlayerDevs *d, int slot, PlayerRow *r) {
+    InputIdent id;
+    bool pinned = false, present = false;
+    bool held = gamepad_slot_info(cp_gamepad(), slot, &id, &pinned, &present);
+    int at = -1;
+    for (int i = 0; held && i < d->n; i++)
+        if (input_ident_equal(&d->dev[i].ident, &id)) { at = i; break; }
+    bool extra = held && pinned && at < 0;
+    r->count = 1 + d->n + (extra ? 1 : 0);
+    if (held && pinned && at >= 0) {
+        r->cur = 1 + at;
+        r->color = PLAYER_COLOR_PINNED;
+        if (d->dev[at].name[0]) snprintf(r->text, sizeof(r->text), "%s", d->dev[at].name);
+        else player_ident_short(&id, r->text, sizeof(r->text));
+    } else if (extra) {
+        char who[64];
+        player_ident_short(&id, who, sizeof(who));
+        r->cur = 1 + d->n;
+        r->color = present ? PLAYER_COLOR_PINNED : PLAYER_COLOR_LOST;
+        snprintf(r->text, sizeof(r->text), "%s%s", who, present ? "" : " (UNPLUGGED)");
+    } else {
+        r->cur = 0;
+        r->color = PLAYER_COLOR_AUTO;
+        if (held && present && at >= 0)
+            snprintf(r->text, sizeof(r->text), "AUTO: %s",
+                     d->dev[at].name[0] ? d->dev[at].name : "?");
+        else
+            snprintf(r->text, sizeof(r->text), "AUTO");
+    }
+}
+
+/* Steps slot by dir through its entries and pins or unpins to match, keeping
+ * cfg in step.  A controller pinned elsewhere leaves that slot, which reverts
+ * to AUTO — input_slots does that; the next draw reads it fresh. */
+static bool player_step(Config *cfg, int slot, int dir) {
+    PlayerDevs d;
+    PlayerRow r;
+    player_devs(&d);
+    player_row(&d, slot, &r);
+    int next = cycler_step(r.cur, r.count, dir);
+    if (next == r.cur || next > d.n) return false;
+    int rc = next == 0 ? gamepad_slot_unpin(cp_gamepad(), slot, cfg)
+                       : gamepad_slot_pin(cp_gamepad(), &d.dev[next - 1].ident, slot, cfg);
+    if (rc == -2) cp_status("PLAYER SET, BUT NOT SAVED", false);
+    return true;
+}
+
 /* Re-run whenever the logical screen changes (rebuild_ui()).  Each row shares
  * its width out among its slots — a quarter of the content for the touch tools,
  * a third for the testers — up to INPUT_BTN_MAX_W, centred under its header. */
@@ -565,16 +675,35 @@ static void input_page_layout(void) {
     button_init_full(&input_btn_gback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
                      90, 40, "< BACK", BTN_COLOR_WARNING, COLOR_WHITE, RGB(255,200,0), 2);
 
+    /* PLAYERS under the testers: two columns where the content is landscape
+     * wide (four full-width rows would end ~20 px past a 375 px CONTENT_H),
+     * one column of four in portrait.  Row-major, so P1 P2 / P3 P4. */
+    sec_players_y = count_y + 8 + 10;
+    player_cols = CONTENT_WIDTH >= 600 ? 2 : 1;
+    {
+        int col_w = (CONTENT_WIDTH - (player_cols - 1) * PLAYER_COL_GAP) / player_cols;
+        for (int s = 0; s < INPUT_SLOTS; s++) {
+            int col = s % player_cols, row = s / player_cols;
+            cycler_init(&player_cyc[s],
+                        CONTENT_LEFT + col * (col_w + PLAYER_COL_GAP) + PLAYER_LABEL_W,
+                        sec_players_y + 26 + row * (PLAYER_ROW_H + PLAYER_ROW_GAP),
+                        col_w - PLAYER_LABEL_W, PLAYER_ROW_H);
+        }
+    }
+
     /* ⚠️ THE RECEIPT, in the settings stack's shape.  Everything hangs off
      * CONTENT_Y, which comes from a per-unit touch inset, so a button pushed
      * past the touchable rect looks perfect in a screenshot and is dead to a
-     * finger.  The bottom is the count line under the buttons; the right edge
-     * the last button as placed in either row.  A label wider than its button
+     * finger.  The bottom is the last PLAYERS row; the right edge the last
+     * button or cycler as placed in any row.  A label wider than its button
      * is cut, and both rows' labels are counted, and so is the CALIBRATED row's
-     * longer value if it runs past the content edge. */
+     * longer value if it runs past the content edge.  A cycler cuts its own
+     * entry text, so the PLAYERS rows add nothing to that count. */
     {
-        int bottom = count_y + 8 - CONTENT_Y;
+        const Cycler *last = &player_cyc[INPUT_SLOTS - 1];
+        int bottom = last->y + last->height - CONTENT_Y;
         int right  = input_btn_gtest.x + input_btn_gtest.width;
+        if (last->x + last->width > right) right = last->x + last->width;
         int clipped = 0;
         char cut[24];
         if (fit_value(INPUT_CALIB_NO,
@@ -596,9 +725,11 @@ static void input_page_layout(void) {
                             : "fits";
         printf("control_panel: input stack %s — bottom +%d of CONTENT_H %d, "
                "right %d of CONTENT_RIGHT %d, %d label(s) cut, touch band %d px "
-               "at scale %d, testers at scale %d (safe %dx%d, %s)\n",
+               "at scale %d, testers at scale %d, players in %d column(s) of %d px "
+               "(safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT, clipped,
                INPUT_TOUCH_H, touch_scale, test_scale,
+               player_cols, player_cyc[0].width + PLAYER_LABEL_W,
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -610,14 +741,14 @@ static void input_page_layout(void) {
  * disabled exactly while no node of its kind is present.  Button.disabled
  * makes it grey and button_update() ignores it, so input() needs no guard. */
 static void input_sync_disabled(void) {
-    const InputState *s = &input_state;
+    const InputPageState *s = &input_state;
     input_btn_ktest.disabled = s->kbd_idx < 0;
     input_btn_mtest.disabled = s->mou_idx < 0;
     input_btn_gtest.disabled = s->pad_idx < 0;
 }
 
 static void input_page_draw(Framebuffer *fb) {
-    const InputState *s = &input_state;
+    const InputPageState *s = &input_state;
     input_sync_disabled();
     draw_section_header(fb, sec_touch_y, "TOUCH");
     uint32_t calib_color;
@@ -634,6 +765,28 @@ static void input_page_draw(Framebuffer *fb) {
         else                    snprintf(cnt, sizeof(cnt), "NONE FOUND");
         fb_draw_text(fb, b->x + (b->width - text_measure_width(cnt, 1)) / 2, count_y,
                      cnt, s->kind_cnt[i] > 0 ? COLOR_LABEL : COLOR_DISABLED, 1);
+    }
+
+    draw_section_header(fb, sec_players_y, "PLAYERS");
+    PlayerDevs d;
+    player_devs(&d);
+    for (int sl = 0; sl < INPUT_SLOTS; sl++) {
+        Cycler *c = &player_cyc[sl];
+        PlayerRow r;
+        player_row(&d, sl, &r);
+        c->disabled = r.count <= 1;      /* nothing to choose between */
+        c->text_color = r.color;
+        /* Scale 2 when the entry fits between the arrows (cycler_draw()'s
+         * zone arithmetic), else 1 rather than a cut name. */
+        int zone = c->height < (c->width >> 2) ? c->height : (c->width >> 2);
+        c->text_scale = text_measure_width(r.text, 2) <= c->width - 2 * zone - 8 ? 2 : 1;
+        char label[4];
+        snprintf(label, sizeof(label), "P%d", sl + 1);
+        fb_draw_text(fb, c->x - PLAYER_LABEL_W, c->y + (c->height - text_measure_height(2)) / 2,
+                     label, COLOR_LABEL, 2);
+        cycler_draw(fb, c, r.text);
+        snprintf(player_shown[sl], sizeof(player_shown[sl]), "%s", r.text);
+        player_shown_dis[sl] = c->disabled;
     }
 }
 
@@ -698,7 +851,7 @@ static const char *mou_hold_hint(void) {
 }
 
 /* ── Draw: Keyboard fullscreen ──────────────────────────────────────── */
-static void draw_kbd_test(Framebuffer *fb, InputState *s) {
+static void draw_kbd_test(Framebuffer *fb, InputPageState *s) {
     fb_clear(fb, COLOR_BG);
     button_draw(fb, &input_btn_kback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
@@ -746,7 +899,7 @@ static void draw_kbd_test(Framebuffer *fb, InputState *s) {
 }
 
 /* ── Draw: Mouse fullscreen ─────────────────────────────────────────── */
-static void draw_mou_test(Framebuffer *fb, InputState *s) {
+static void draw_mou_test(Framebuffer *fb, InputPageState *s) {
     fb_clear(fb, COLOR_BG);
     button_draw(fb, &input_btn_mback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
@@ -839,7 +992,7 @@ static void input_draw_dpad(Framebuffer *fb, int cx, int cy, int sz, int dx, int
 }
 
 /* ── Draw: Gamepad fullscreen ───────────────────────────────────────── */
-static void draw_pad_test(Framebuffer *fb, InputState *s) {
+static void draw_pad_test(Framebuffer *fb, InputPageState *s) {
     fb_clear(fb, COLOR_BG);
     button_draw(fb, &input_btn_gback);
     text_draw_centered(fb, screen_base_width/2, SCREEN_SAFE_TOP+22,
@@ -904,7 +1057,7 @@ static void draw_pad_test(Framebuffer *fb, InputState *s) {
 
 static void input_page_load(const Config *cfg) {
     (void)cfg;
-    InputState *s = &input_state;
+    InputPageState *s = &input_state;
     s->scr = INPUT_SCR_MAIN;
     s->fd_cnt = 0;
     s->last_dev = -1;
@@ -931,8 +1084,7 @@ static void input_reset_geometry_confirmed(Config *cfg) {
  * of some kind changed — a node the testers would not open changes nothing. */
 static CpPageResult input_page_input(Config *cfg, int tx, int ty,
                                      bool touching, uint32_t now) {
-    (void)cfg;
-    InputState *state = &input_state;
+    InputPageState *state = &input_state;
     CpPageResult act = CP_PAGE_IDLE;
 
     if (state->poll_ms == 0 || now - state->poll_ms >= POLL_MS) {
@@ -988,6 +1140,26 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
                 input_load_axes(state, k, state->fds[k]);
             state->scr = INPUT_SCR_GAMEPAD;
             act = CP_PAGE_FULLSCREEN;
+        }
+    }
+
+    /* PLAYERS: fresh from the manager every frame — a pad that came or went
+     * in the main loop's rescan repaints the rows that show it. */
+    {
+        PlayerDevs d;
+        player_devs(&d);
+        for (int sl = 0; sl < INPUT_SLOTS; sl++) {
+            PlayerRow r;
+            player_row(&d, sl, &r);
+            player_cyc[sl].disabled = r.count <= 1;
+            if (player_cyc[sl].disabled != player_shown_dis[sl] ||
+                strcmp(r.text, player_shown[sl]) != 0)
+                if (act == CP_PAGE_IDLE) act = CP_PAGE_REDRAW;
+        }
+        for (int sl = 0; sl < INPUT_SLOTS; sl++) {
+            int dir = cycler_check_tap(&player_cyc[sl], tx, ty, touching);
+            if (dir && player_step(cfg, sl, dir) && act == CP_PAGE_IDLE)
+                act = CP_PAGE_REDRAW;
         }
     }
     return act;
@@ -1081,7 +1253,7 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
  * a signal asking the panel to quit), then closes every node it opened: its
  * hardware is its own to clean up. */
 static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
-    InputState *state = &input_state;
+    InputPageState *state = &input_state;
     if (state->scr == INPUT_SCR_MULTITOUCH) {   /* its own loop and exit tap */
         test_multitouch(fb, touch);
         state->scr = INPUT_SCR_MAIN;
@@ -1224,15 +1396,44 @@ static void input_page_run_fullscreen(Framebuffer *fb, TouchInput *touch) {
     state->scr = INPUT_SCR_MAIN;
 }
 
-/* Keyboard focus: the touch-tool row and the tester row, as input() hit-tests
- * them; a tester with no device of its kind is disabled and skipped. */
+/* Keyboard focus: the touch-tool row, the tester row and the PLAYERS rows, as
+ * input() hit-tests them; a tester with no device of its kind, and a player
+ * row with nothing to choose, is disabled and skipped. */
 static int input_page_focusables(UiRect *out, int max) {
     int n = 0;
     for (int i = 0; i < TOUCH_SLOTS; i++)
         if (touch_btns[i]) n = focus_add_button(out, n, max, touch_btns[i]);
     for (int i = 0; i < 3; i++)
         n = focus_add_button(out, n, max, test_btns[i]);
+    for (int sl = 0; sl < INPUT_SLOTS; sl++)
+        n = focus_add_cycler(out, n, max, &player_cyc[sl]);
     return n;
+}
+
+/* LEFT/RIGHT on a PLAYERS row steps it.  idx is resolved against the list
+ * focusables() writes now, so a disabled widget skipped earlier in it cannot
+ * shift which row it names. */
+/* RESET DEFAULTS has already cleared slot_p1..slot_p4 from cfg; the manager's
+ * live pins follow, or the page would keep showing pins the file lost. */
+static void input_page_reset_defaults(Config *cfg) {
+    for (int sl = 0; sl < INPUT_SLOTS; sl++)
+        gamepad_slot_unpin(cp_gamepad(), sl, cfg);
+}
+
+#define INPUT_FOCUS_MAX (TOUCH_SLOTS + 3 + INPUT_SLOTS)
+static bool input_page_focus_nudge(Config *cfg, int idx, int dir) {
+    UiRect r[INPUT_FOCUS_MAX];
+    int n = input_page_focusables(r, INPUT_FOCUS_MAX);
+    if (idx < 0 || idx >= n) return false;
+    for (int sl = 0; sl < INPUT_SLOTS; sl++) {
+        if (player_cyc[sl].disabled) continue;
+        UiRect c = cycler_rect(&player_cyc[sl]);
+        if (c.x == r[idx].x && c.y == r[idx].y && c.w == r[idx].w && c.h == r[idx].h) {
+            player_step(cfg, sl, dir);
+            return true;
+        }
+    }
+    return false;
 }
 
 const CpPage cp_input_page = {
@@ -1244,5 +1445,7 @@ const CpPage cp_input_page = {
     .draw           = input_page_draw,
     .input          = input_page_input,
     .focusables     = input_page_focusables,
+    .focus_nudge    = input_page_focus_nudge,
+    .reset_defaults = input_page_reset_defaults,
     .run_fullscreen = input_page_run_fullscreen,
 };
