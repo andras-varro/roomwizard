@@ -166,7 +166,6 @@ void button_draw_exit(Framebuffer *fb, Button *btn);
 #define draw_exit_button button_draw_exit
 #define draw_welcome_screen screen_draw_welcome
 #define draw_welcome_screen_warn screen_draw_welcome_warn
-#define draw_game_over_screen screen_draw_game_over
 
 // ============================================================================
 // TEXT UTILITIES
@@ -226,9 +225,6 @@ void screen_draw_welcome_warn(Framebuffer *fb, const char *game_title,
                              const char *instructions, const char *warning,
                              Button *start_btn);
 
-// Draw game over screen with score and restart button
-void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
-                          Button *restart_btn);
 
 
 // ============================================================================

@@ -590,30 +590,6 @@ void screen_draw_welcome(Framebuffer *fb, const char *game_title,
     screen_draw_welcome_warn(fb, game_title, instructions, NULL, start_btn);
 }
 
-void screen_draw_game_over(Framebuffer *fb, const char *message, int score,
-                          Button *restart_btn) {
-    fb_clear(fb, COLOR_BLACK);
-    
-    // Draw message (centered in safe area)
-    char upper_msg[256];
-    text_to_uppercase(upper_msg, message, sizeof(upper_msg));
-    int msg_width = text_measure_width(upper_msg, 3);
-    int msg_x = LAYOUT_CENTER_X(msg_width);
-    int msg_y = SCREEN_VISIBLE_TOP + (SCREEN_VISIBLE_HEIGHT / 3);
-    fb_draw_text(fb, msg_x, msg_y, upper_msg, COLOR_RED, 3);
-    
-    // Draw score (centered in safe area)
-    char score_text[64];
-    snprintf(score_text, sizeof(score_text), "SCORE: %d", score);
-    int score_width = text_measure_width(score_text, 2);
-    int score_x = LAYOUT_CENTER_X(score_width);
-    int score_y = LAYOUT_CENTER_Y(16) - 30;
-    fb_draw_text(fb, score_x, score_y, score_text, COLOR_WHITE, 2);
-    
-    // Draw restart button
-    button_draw(fb, restart_btn);
-}
-
 // ============================================================================
 // MODAL DIALOG
 // ============================================================================
