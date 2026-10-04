@@ -16,9 +16,15 @@
 #      differently at 16 and 32bpp, a short capture and an unparsable fbset are
 #      could-not-tell, the visible page follows the pan offset
 #   D  another omapdss overlay enabled is could-not-tell, never black-screen
-#   E  the threshold is a floor on DISTINCT values, at its exact boundary
+#   E  the threshold is a floor on DISTINCT values, at its exact boundary (3, from
+#      the .188 measurement in the runner header)
+#   G  the blank's size comes from fbset and covers every virtual page; a failed or
+#      partial blank is could-not-tell
 #   F  the whole runner through the stub: verdict lines, exit codes, and the init
 #      script's `start` on every path that issued `stop` — including failure and TERM
+#   H  (inside F) the stale-frame hole: the stub models fb CONTENTS across blank →
+#      launch → capture, so an app that draws nothing is black-screen, not a pass on
+#      the previous app's frame
 #
 # The directive below resolves the sourced runner from this script's directory.
 # shellcheck source-path=SCRIPTDIR
@@ -148,12 +154,28 @@ assert_verdict pass "$(smoke_classify "$ALIVE" "$(info 800 480 800 480 32 3200 0
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""; echo "E. the threshold is a floor on distinct values"
-mkfix "$TMP/lo.raw" "$P32" $((SMOKE_MIN_DISTINCT - 2)) 32
-mkfix "$TMP/hi.raw" "$P32" $((SMOKE_MIN_DISTINCT - 1)) 32
-assert_verdict black-screen "$(smoke_classify "$ALIVE" "$I32" "$TMP/lo.raw")" "E1 SMOKE_MIN_DISTINCT-1 values ($((SMOKE_MIN_DISTINCT - 1)))"
-assert_verdict pass         "$(smoke_classify "$ALIVE" "$I32" "$TMP/hi.raw")" "E2 exactly SMOKE_MIN_DISTINCT values ($SMOKE_MIN_DISTINCT)"
-if [ "$SMOKE_MIN_DISTINCT" -ge 3 ]; then ok "E3 the floor is above a one-rectangle-on-a-fill screen (>= 3)"
-else bad "E3 SMOKE_MIN_DISTINCT=$SMOKE_MIN_DISTINCT is vacuous"; fi
+# Literal values, not SMOKE_MIN_DISTINCT arithmetic: the floor is 3 from the .188
+# measurement (runner header), and these say what it must do at its boundary.
+mkfix "$TMP/e2.raw" "$P32" 1 32             # one colour on black: 2 values
+mkfix "$TMP/e3.raw" "$P32" 2 32             # 3 values: exactly the floor
+mkfix "$TMP/e4.raw" "$P32" 3 32             # 4 values: a measured game first screen
+assert_verdict black-screen "$(smoke_classify "$ALIVE" "$I32" "$TMP/e2.raw")" "E1 2 values (one colour on black) is just below the floor"
+assert_verdict pass         "$(smoke_classify "$ALIVE" "$I32" "$TMP/e3.raw")" "E2 3 values is exactly the floor"
+assert_verdict pass         "$(smoke_classify "$ALIVE" "$I32" "$TMP/e4.raw")" "E3 4 values — snake's measured first screen — passes"
+if [ "$SMOKE_MIN_DISTINCT" -ge 3 ] && [ "$SMOKE_MIN_DISTINCT" -le 4 ]; then
+    ok "E4 the floor sits in [3, 4]: above a 2-value screen, at or below the measured minimum"
+else bad "E4 SMOKE_MIN_DISTINCT=$SMOKE_MIN_DISTINCT is outside [3, 4]"; fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""; echo "G. the blank before each launch"
+assert_eq "3200 480" "$(smoke_blank_geom "$I32")" "G1 a one-page 32bpp mode blanks stride x 480"
+assert_eq "3200 960" "$(smoke_blank_geom "$(info 800 480 800 960 32 3200 0,480)")" "G2 a two-page mode blanks BOTH pages, whatever the pan"
+assert_eq "3328 480" "$(smoke_blank_geom "$(info 800 480 800 480 32 3328)")" "G3 the sysfs stride is used when readable"
+assert_eq "1600 480" "$(smoke_blank_geom "$(info 800 480 800 480 16 '')")" "G4 no sysfs stride: xres x bpp/8"
+if smoke_blank_geom "fbset: error" >/dev/null; then bad "G5 unparsable fbset gives no blank size"; else ok "G5 unparsable fbset gives no blank size"; fi
+assert_verdict could-not-tell "$(smoke_classify $'SMOKE_NOBLANK' "$I32" "$TMP/c32.raw")" "G6 a failed blank is could-not-tell"
+assert_verdict could-not-tell "$(smoke_classify "$ALIVE" "$(info 800 480 800 960 32 3200 0,480)" "$TMP/two32.raw" $((3200 * 480)))" "G7 a visible page past the blanked bytes is could-not-tell"
+assert_verdict pass "$(smoke_classify "$ALIVE" "$(info 800 480 800 960 32 3200 0,480)" "$TMP/two32.raw" $((3200 * 960)))" "G8 ...and graded when the blank covered it"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""; echo "F. the runner end to end, through an ssh stub"
@@ -161,6 +183,11 @@ SC="$TMP/sc"; mkdir -p "$TMP/bin"
 # ⚠️ The stub MUST slurp its stdin unless given -n, as a real ssh does with a non-tty
 # stdin. The runner calls ssh inside a `while read` loop; a stub that never reads would
 # let a missing -n through and F31 (all 13 graded) would pass vacuously.
+# It models the framebuffer's CONTENTS across calls in $SC/fbstate: it starts holding
+# a colourful frame (the previous app's), the launch applies the runner's own dd to it
+# and then the app's drawing ($SC/draw.raw, absent = an app that draws nothing), and
+# the capture reads it back. A runner that skips the blank therefore grades the stale
+# frame, exactly as on the device.
 cat > "$TMP/bin/ssh" <<'STUB'
 #!/bin/bash
 n=0
@@ -179,20 +206,30 @@ case "$cmd" in
             for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$SC/mainpid" ] && break; sleep 0.1; done
             kill -TERM "$(cat "$SC/mainpid")"
         fi
+        dd=$(printf '%s\n' "$cmd" | grep -o 'dd if=/dev/zero of=[^ ]* bs=[0-9]* count=[0-9]*' | head -n1)
+        if [ -n "$dd" ]; then
+            [ -f "$SC/blankfail" ] && { echo SMOKE_NOBLANK; exit 0; }
+            bs=$(printf '%s' "$dd" | sed 's/.* bs=\([0-9]*\).*/\1/')
+            ct=$(printf '%s' "$dd" | sed 's/.* count=\([0-9]*\).*/\1/')
+            dd if=/dev/zero of="$SC/fbstate" bs="$bs" count="$ct" conv=notrunc 2>/dev/null
+        fi
+        grep -qx SMOKE_ALIVE "$SC/launch.out" && [ -f "$SC/draw.raw" ] && cp "$SC/draw.raw" "$SC/fbstate"
         cat "$SC/launch.out"; exit 0 ;;
     *"fbset -fb"*) cat "$SC/info.out"; exit 0 ;;
-    "cat /dev/fb"*) [ -f "$SC/fb.raw" ] || exit 255; cat "$SC/fb.raw"; exit 0 ;;
+    "cat /dev/fb"*) [ -f "$SC/capfail" ] && exit 255; cat "$SC/fbstate"; exit 0 ;;
     kill*) exit 0 ;;
 esac
 exit 0
 STUB
 chmod +x "$TMP/bin/ssh"
 export SC SMOKE_NO_PNG=1
-# scenario <launch-out> <info-out> <fb-fixture|-> [touch-files…]
+# scenario <launch-out> <info-out> <drawn-fixture|-|nodraw> [touch-files…]
+#   "-" = the capture ssh fails; "nodraw" = the app is alive but never draws.
 scenario() {
     rm -rf "$SC"; mkdir -p "$SC" "$SC/out"
     printf '%s\n' "$1" > "$SC/launch.out"; printf '%s\n' "$2" > "$SC/info.out"
-    [ "$3" != - ] && cp "$3" "$SC/fb.raw"
+    cp "$TMP/c32.raw" "$SC/fbstate"
+    case "$3" in -) : > "$SC/capfail" ;; nodraw) ;; *) cp "$3" "$SC/draw.raw" ;; esac
     shift 3; for f in "$@"; do : > "$SC/$f"; done
 }
 # run_runner <args…>  → sets OUT, RC
@@ -213,13 +250,32 @@ has "$CALLS" 'b=/opt/games/snake; .* /dev/fb0 /dev/input/touchscreen0 </dev/null
 has "$CALLS" '^kill 123' "F7 the launched PID — and only it — is killed"
 hasnt "$CALLS" 'killall' "F8 no killall, ever"
 has "$CALLS" 'fbset -fb /dev/fb0' "F9 geometry from fbset -fb on the capture device"
+has "$CALLS" 'dd if=/dev/zero of=/dev/fb0 bs=3200 count=480 .* /dev/fb0 /dev/input/touchscreen0 </dev/null' "H1 the launch zeroes the capture device, sized from fbset, BEFORE the exec"
+
+# The stale-frame hole: the stub's fb starts holding a colourful frame (the previous
+# app's). An app that is alive but draws nothing must grade on zeroes, not on that.
+scenario "$ALIVE" "$I32" nodraw
+run_runner 1.2.3.4 snake
+has "$OUT" 'snake *black-screen 1 distinct' "H2 an app that never draws is black-screen, not the previous app's frame"
+assert_eq 1 "$RC" "H3 ...and exits 1"
+
+scenario "$ALIVE" "$I32" "$TMP/c32.raw" blankfail
+run_runner 1.2.3.4 snake
+has "$OUT" 'snake *could-not-tell .*blanked' "H4 a failed blank is could-not-tell"
+hasnt "$CALLS" '^cat /dev/fb' "H5 ...and nothing is captured"
+has "$(printf '%s\n' "$CALLS" | tail -n1)" 'roomwizard-app start' "H6 start still runs"
+
+scenario "$ALIVE" 'fbset: error' "$TMP/c32.raw"
+run_runner 1.2.3.4 snake
+has "$OUT" 'snake *could-not-tell no geometry' "H7 no geometry before launch is could-not-tell"
+hasnt "$CALLS" 'SMOKE_NOEXEC' "H8 ...and the binary is never launched on an unblanked page"
 
 scenario $'SMOKE_PID=9\nSMOKE_EXIT=1' "$I32" -
 run_runner 1.2.3.4 tetris
 assert_eq 1 "$RC" "F10 a death exits 1"
 has "$OUT" 'tetris *started-died' "F11 started-died reported"
 has "$(printf '%s\n' "$CALLS" | tail -n1)" 'roomwizard-app start' "F12 start runs after a failure too"
-hasnt "$CALLS" 'fbset' "F13 a dead app is not captured"
+hasnt "$CALLS" '^cat /dev/fb' "F13 a dead app is not captured"
 
 scenario "$ALIVE" "$I32" -
 run_runner 1.2.3.4 pong
@@ -254,6 +310,7 @@ run_runner 1.2.3.4 snake --capture-dev /dev/fb1
 has "$CALLS" 'fbset -fb /dev/fb1' "F26 --capture-dev moves fbset"
 has "$CALLS" '^cat /dev/fb1' "F27 ...and the capture"
 has "$CALLS" '/sys/class/graphics/fb1/overlays' "F28 ...and the sysfs it reads"
+has "$CALLS" 'dd if=/dev/zero of=/dev/fb1 ' "H9 ...and the blank"
 has "$OUT" 'snake *pass' "F29 fb1 feeding overlay1 is graded when overlay1 is the enabled one"
 assert_eq 0 "$RC" "F30 ...and exits 0"
 
@@ -268,7 +325,7 @@ echo ""
 echo "════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
-if [ "$TOTAL" -lt 75 ]; then
+if [ "$TOTAL" -lt 93 ]; then
     echo -e "  ${RED}✗ only $TOTAL cases ran — the harness itself is broken${NC}"
     exit 1
 fi

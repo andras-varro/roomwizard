@@ -21,8 +21,9 @@
 #                  exactly like "did not start"
 #   black-screen   alive, but the page has fewer than SMOKE_MIN_DISTINCT values
 #   could-not-tell the harness could not measure: ssh failed, fbset unparsable,
-#                  a depth/stride it does not model, a short capture, or another
-#                  omapdss overlay enabled (see smoke_overlays_ok)
+#                  a depth/stride it does not model, a short capture, another
+#                  omapdss overlay enabled (see smoke_overlays_ok), or the page
+#                  could not be zeroed before the launch (see smoke_one)
 #
 # ⚠️ "Not all black" alone is nearly vacuous — a screen cleared to one colour
 # passes it — so the floor is a count of DISTINCT values. And the depth comes
@@ -70,11 +71,17 @@ SMOKE_CAPTURE_DEV="${SMOKE_CAPTURE_DEV:-/dev/fb0}"
 SMOKE_OVL_GLOB=/sys/devices/platform/omapdss/overlay
 
 # ── The thresholds, in one place ───────────────────────────────────────────
-# A black or single-colour screen is 1; a screen with one rectangle on a fill is 2-3.
-# 16 is INFERRED, not measured: it clears both of those with margin, and a first
-# screen with text and a button should be well above it. No device run has been
-# graded yet — read the per-binary counts of the first real run before trusting it.
-SMOKE_MIN_DISTINCT="${SMOKE_MIN_DISTINCT:-16}"
+# MEASURED 2026-10-04 on unit .188 (native_apps at ee49b31, 800x480 32bpp, fb0),
+# distinct values on the first screen of every target: app_launcher 1934,
+# control_panel 2557, theremin 645, audio_mix_test 18, touch_raw 16, brick_breaker 9,
+# touch_trace 9, and snake/tetris/pong/samegame/frogger/platformer 4 each — every one
+# confirmed a correct first screen from its decoded PNG. The games are flat-colour
+# UI (black ground, cyan title, white text, green button = 4), so the earlier
+# inferred floor of 16 failed 8 correct screens. A black screen is 1; a single-colour
+# fill or one colour of text on black is 2. The floor is 3: above both, below the
+# measured minimum of 4. It cannot tell a 4-colour first screen from a 4-colour
+# wrong one — the stale-frame defence is the blank in smoke_one, not this number.
+SMOKE_MIN_DISTINCT="${SMOKE_MIN_DISTINCT:-3}"
 SMOKE_SETTLE_SECS="${SMOKE_SETTLE_SECS:-2}"
 
 SMOKE_SELF="${BASH_SOURCE[0]}"
@@ -123,6 +130,20 @@ smoke_parse_fbset() {
     echo "$g"
 }
 
+# smoke_blank_geom <fbinfo-out>  →  "STRIDE VYRES" to zero before a launch, or return 1.
+# The WHOLE virtual area, not just the visible page: an app that pans to the other
+# page without drawing it would otherwise show that page's stale frame. STRIDE is the
+# sysfs value when readable, else xres*bpp/8.
+smoke_blank_geom() {
+    local geo xres yres vx vy bpp st
+    geo=$(smoke_parse_fbset "$1") || return 1
+    read -r xres yres vx vy bpp <<< "$geo"
+    st=$(smoke_info_tag "$1" STRIDE)
+    printf '%s\n' "$st" | grep -Eq '^[1-9][0-9]*$' || st=$((xres * bpp / 8))
+    [ "$st" -gt 0 ] && [ "$vy" -gt 0 ] || return 1
+    echo "$st $vy"
+}
+
 # smoke_distinct <capture> <bpp> <xres> <yres> <yoffset>  →  count, or return 1
 # when the capture is shorter than the page it must contain. Counts over exactly
 # ONE page, the visible one. At 32bpp the X byte of XRGB8888 is masked off: it
@@ -142,8 +163,11 @@ smoke_distinct() {
     esac
 }
 
-# smoke_classify <launch-out> <fbinfo-out> <capture-file>
+# smoke_classify <launch-out> <fbinfo-out> <capture-file> [blanked-bytes]
 #   →  "<verdict> <detail>"; verdict is one of the five outcomes above.
+# [blanked-bytes] is how much of the capture device smoke_one zeroed before the
+# launch; when given, a visible page reaching past it is could-not-tell, because
+# the part beyond may still hold the previous app's frame.
 # <launch-out> is what the remote launch command printed (SMOKE_* lines);
 # <fbinfo-out> is what smoke_fbinfo_cmd printed: `fbset -fb <dev>`, then tagged
 # lines STRIDE <n>, PAN <x,y>, FBOVL <ids> (fbN/overlays), OVL <id> <enabled>.
@@ -175,11 +199,14 @@ smoke_overlays_ok() {
 }
 
 smoke_classify() {
-    local launch="$1" info="$2" cap="$3"
+    local launch="$1" info="$2" cap="$3" blanked="${4:-}"
     local code geo xres yres vx vy bpp stride pan yoff n why
 
     if printf '%s\n' "$launch" | grep -qx 'SMOKE_NOEXEC'; then
         echo "did-not-start binary missing or not executable"; return
+    fi
+    if printf '%s\n' "$launch" | grep -qx 'SMOKE_NOBLANK'; then
+        echo "could-not-tell the page could not be blanked before launch (not run)"; return
     fi
     code=$(printf '%s\n' "$launch" | sed -n 's/^SMOKE_EXIT=\([0-9][0-9]*\)$/\1/p' | head -n1)
     if [ -n "$code" ]; then
@@ -212,6 +239,9 @@ smoke_classify() {
         yoff=${pan#*,}
     elif [ "$vy" -ne "$yres" ]; then
         echo "could-not-tell virtual height $vy > $yres and pan unreadable"; return
+    fi
+    if [ -n "$blanked" ] && [ $(((yoff + yres) * xres * bpp / 8)) -gt "$blanked" ]; then
+        echo "could-not-tell visible page at y=$yoff reaches past the $blanked bytes blanked before launch"; return
     fi
     if ! n=$(smoke_distinct "$cap" "$bpp" "$xres" "$yres" "$yoff"); then
         echo "could-not-tell capture shorter than one ${xres}x${yres}x${bpp}bpp page at y=$yoff"; return
@@ -263,10 +293,21 @@ smoke_restore() {
 
 # smoke_one <name> <exec> <argv> <outdir>  →  prints the verdict line
 smoke_one() {
-    local name="$1" exe="$2" argv="$3" out="$4" launch info cap="$4/$1.raw" v pid
-    # One remote shell: launch detached (all fds redirected so ssh returns), wait
-    # the settle time, then report alive or the exit status `wait` recovers.
+    local name="$1" exe="$2" argv="$3" out="$4" launch info cap="$4/$1.raw" v pid bg st vy
+    # ⚠️ Blank before launch. Killing an app leaves its last frame in fb memory, so
+    # an app that never draws would otherwise be graded on the PREVIOUS app's screen
+    # (the launcher's ~1900 values) and pass. The geometry is read first so the dd
+    # is sized to the virtual area; no readable geometry means no launch.
+    : > "$cap"
+    if ! bg=$(smoke_blank_geom "$(smoke_ssh "$(smoke_fbinfo_cmd)" 2>/dev/null)"); then
+        printf '  %-16s %s\n' "$name" "could-not-tell no geometry to blank the page by (not run)"
+        return
+    fi
+    read -r st vy <<< "$bg"
+    # One remote shell: blank, launch detached (all fds redirected so ssh returns),
+    # wait the settle time, then report alive or the exit status `wait` recovers.
     launch=$(smoke_ssh "b=$exe; [ -x \"\$b\" ] || { echo SMOKE_NOEXEC; exit 0; }
+dd if=/dev/zero of=$SMOKE_CAPTURE_DEV bs=$st count=$vy 2>/dev/null || { echo SMOKE_NOBLANK; exit 0; }
 \"\$b\" $argv </dev/null >/tmp/smoke-$name.log 2>&1 &
 p=\$!; echo SMOKE_PID=\$p; sleep $SMOKE_SETTLE_SECS
 if kill -0 \$p 2>/dev/null; then echo SMOKE_ALIVE; else wait \$p; echo SMOKE_EXIT=\$?; fi" 2>/dev/null)
@@ -278,7 +319,7 @@ if kill -0 \$p 2>/dev/null; then echo SMOKE_ALIVE; else wait \$p; echo SMOKE_EXI
     else
         info=""; : > "$cap"
     fi
-    v=$(smoke_classify "$launch" "$info" "$cap")
+    v=$(smoke_classify "$launch" "$info" "$cap" $((st * vy)))
     if [ -n "$SMOKE_LIVE_PID" ]; then
         smoke_ssh "kill $SMOKE_LIVE_PID 2>/dev/null; sleep 1; kill -9 $SMOKE_LIVE_PID 2>/dev/null; true" >/dev/null 2>&1
         SMOKE_LIVE_PID=""
@@ -309,7 +350,7 @@ Usage: native_apps/smoke-first-screen.sh <ip> [binary ...]
 Stops the running app (/etc/init.d/roomwizard-app stop), launches each binary
 with its production argv, checks it is alive after SMOKE_SETTLE_SECS (default 2),
 captures /dev/fb0, grades the visible page by its count of distinct pixel values
-(SMOKE_MIN_DISTINCT, default 16), and restarts the app on every exit path.
+(SMOKE_MIN_DISTINCT, default 3), and restarts the app on every exit path.
 
 Verdicts: pass | did-not-start | started-died | black-screen | could-not-tell
 Exit: 0 all passed, 1 any did not, 2 usage error or device unreachable.
