@@ -166,10 +166,20 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
-### B54. Plugging in a USB controller disconnects a connected Bluetooth pad — open, seen twice, cause unknown
+### B55. A keyboard on the same evdev node as a touchpad was not offered as a PLAYERS choice — fix deployed, awaiting operator check
 
-Observed by the operator twice (2026-10-04 and once earlier): with a Bluetooth pad connected, plugging a USB
-controller in drops the Bluetooth pad, and it stays disconnected until Connect is tapped again on the Control Panel
+Measured on `.188`: `BT Keyboard 5.1` (Bus 0005, 04e8:7021, `EV=12001f`, handlers `kbd leds mouse1`) is classified
+`INPUT_KIND_MOUSE` by `input_scan.c`'s mouse-before-keyboard rule. `gamepad.c` listed only pads and keyboards, and its
+keys latched to the no-slot bucket; a USB keyboard (separate node) was offered. Fixed in ed99c2d: `mouse_is_keyboard`
+(`common/gamepad.c:301`) gives such a node its own slot (`:333`), lists and counts it as a keyboard (`:1096`, `:1105`)
+and re-buckets on a pin change; `gamepad_slots_test` sections 10-11 (10 failures pre-fix). Deployed to `.188`
+(`native_apps` at 21a3b31). **Done when** the operator sees the BT keyboard under PLAYERS, can pin it, and its keys
+drive that player.
+
+### B54. Plugging in a USB controller disconnects a connected Bluetooth pad — open, seen three times, cause unknown
+
+Observed by the operator three times (latest reproduced on `.188`, 2026-10-04): with a Bluetooth pad connected, plugging a USB
+controller in drops the Bluetooth pad (**measured:** only the pad; the BT headset WI-C310 stays connected), and it stays disconnected until Connect is tapped again on the Control Panel
 Bluetooth page. Not investigated; B51 and B52 are different triggers (a stream freeze, a bluetoothd restart). **Done
 when** the cause is found: first look at whether the USB hotplug path (`usb-host`, input rescan) touches the BT link.
 
@@ -465,8 +475,8 @@ works or is shown to be unreachable.
 Replaces each game's green START button with one menu widget in `native_apps/common/` (not seven copies). The selected
 item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
 blinks, then repeat; the pings run on the game clock. Entries are per game, and selection works by pad, keyboard and
-touch. It is the intended home for per-play choices: a 1 player / 2 player choice (ties to F116's player slots) and a
-pace choice (F119). **Also owns "games honour the player slots"** (moved from F116): no game has a multiplayer mode
+touch. It is the intended home for per-play choices: a 1 player / 2 player choice (reads the Input page's player slots) and a
+pace choice (F119). **Also owns "games honour the player slots"** : no game has a multiplayer mode
 yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
 from it and a 2-player choice reads P1 and P2 from the slots.
 
@@ -474,49 +484,7 @@ from it and a 2-player choice reads P1 and P2 from the slots.
 
 Three entries on the start menu from F118. Normal is today's `TICK_S` of 1/20 s (`native_apps/platformer/platformer.c`,
 `#define TICK_S`). The physics constants are per tick, so pace is that one constant and the jump arc keeps its shape.
-Normal = 1/20 s is **not yet played by the operator** (the walk animation itself is operator-confirmed after the ground probe and four-pose cycle). Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
-
-### F116. Choose which controller drives a game — open, operator request 2026-10-02
-
-Design decided 2026-10-03. Physical controllers are assigned to virtual player slots P1..P4 on the Control Panel's
-Input page; a game asks for "player N", not a device (a 1-player game reads P1, a 4-player Bomberman style one reads
-P1..P4), and emulators (ScummVM, future ones) map their players to the same slots. The assignment is a setting, so it
-lives in the settings app. Today a second controller works in the Input page's test mode, but in games (except
-`samegame` and `theremin`) only one works.
-
-- **Slots are separate.** In a multiplayer game each device is its own player (pad = P1, keyboard = P2); a slot never
-  merges devices. **Exception:** a game that asks for one player is driven by every device as P1 ("any device"), the
-  single-player PC convention. **Touch is not a player device**; it stays UI/pointer.
-- **Disconnect empties the slot but reserves it** for that device's stable identity (USB vid:pid, BT MAC). The same
-  device returns to its reserved slot, not the first free one; a new device takes the first free unreserved slot. The
-  reservation clears on app exit or on reassignment from the Input page.
-- **No pause in the library.** The Bluetooth stack cannot guarantee a reconnect (the 8BitDo does not reconnect on its
-  own after a `bluetoothd` restart), so a pause only that pad could lift would trap the player, and ScummVM would not
-  honour it. A per-game pause that any input dismisses stays possible later and is not part of this item.
-
-**Slot plumbing, persistence and the Input-page UI are done in code and deployed (`native_apps` at 72af4f6);
-the operator has not yet verified them on the panel.** `common/input_slots.c` (pure table, pin/unpin, one-line text
-form of `InputIdent`), `common/gamepad.c` (up to four pads plus keyboards, each in its own slot; `slot_p1..slot_p4`
-in `/opt/games/rw_config.conf` loaded at `gamepad_init`; `gamepad_devices`, `gamepad_slot_info`, `gamepad_slot_pin`,
-`gamepad_slot_unpin`, re-bucket without a rescan), the Cycler widget plus the `CpPage` `focus_nudge` hook, and the
-Input page's PLAYERS rows P1..P4 (landscape two columns, portrait one; receipt measured landscape only). Host tests
-`gamepad_slots_test`, `input_slots_test`. Rules, operator-approved: a row's entries are AUTO (the clear position,
-unpinned) plus every connected controller; choosing a controller pinned elsewhere **moves** it and the old row
-reverts to AUTO (chosen over "first wins"; open to overrule); **pinned slots are never evicted by automatic
-assignment**; RESET DEFAULTS unpins all four. Unattended defaults still stand, amended by the previous sentence: with
-all four slots reserved a new device evicts the oldest absent reservation (-1 only if all four are present);
-`input_slots_set` evicts the target, no swap; merged any-device axes take the strongest deflection.
-**Measured on device** (`/proc/bus/input/devices`): a BT pad's Uniq is its own MAC (8BitDo Pro 2,
-e4:17:d8:40:eb:ae), so the bus+uniq identity holds; BT Phys is the **adapter's** MAC, shared by every BT device, so a BT
-device with an empty Uniq (the WI-C310 AVRCP node) falls back to vid:pid plus that shared phys; an AVRCP node is not
-a keyboard (`input_caps_is_keyboard` needs 20 or more letter keys), so it takes no slot. USB Phys carries the port
-path (`usb-musb-hdrc.0.auto-1.3/...`), so a wired pad's identity follows its port **[inferred from the format; two
-identical pads not tested]**.
-**Remaining:** the operator's tap check on the panel, six steps: rows show `AUTO: <pad>`; pin to P2 moves it from P1;
-back to AUTO; pin to P3 then unplug shows yellow UNPLUGGED within ~5 s; replug restores; keyboard LEFT/RIGHT steps a
-row and the focus ring stays; pins survive leaving the page. **Done when** that check passes. Games honouring the
-slots is F118's: measured, no game has a multiplayer mode (pong is vs AI) and nothing calls `gamepad_player()`, so
-there is no consumer until the 1P/2P chooser exists.
+Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -535,14 +503,6 @@ they all link writes to stdout unconditionally: `touch_input.c` 15 `printf` / 0 
 **every** child exit, so launcher stdout grows the same banner forever. Log rotation bounds the file
 now, but the noise is still the cause.
 
-### C5. Fix `text_truncate` and the 8px/6px font-width confusion — open
-
-- `text_truncate()` measures with `8*scale` per char while the font advances 6 px, so it truncates early.
-- Text width must come from `text_measure_width()`, because `fb_draw_text` advances **6 px/char**
-  while several sites compute **8**. Titles render ~17 % left of centre and long strings clip off the
-  left edge. **Wrong: `screen_draw_game_over()`** (message and
-  score widths) **and `ui_layout.c:326`**.
-
 ### C6. Extend the host-buildable test harness — open
 
 The host-gcc regressions over the pure-logic parsers are done and gated. One piece remains.
@@ -556,12 +516,6 @@ nearly vacuous on its own** — assert a minimum count of distinct pixel values,
 died* / *black screen* / *harness could not tell* as separate outcomes, because silence is not success. It
 needs a device to **run** but not to **write**: prove every branch on the host with an `ssh` stub on
 `PATH`, the way `tests/rw_provision_test.sh` does.
-
-**Gap, measured 2026-09-30: `./tests/run-all.sh` does not compile `control_panel`.** A `control_panel.c`
-with a compile error passed the host gate (32 passed, 0 failed, 2 skipped); only the ARM build in
-`native_apps/build-and-deploy.sh` caught it. **Done when** a gate step compiles the control panel's
-sources (syntax-only is enough), and it is seen failing against a deliberately broken copy kept outside
-the repo.
 
 ### C7. Burn down the shellcheck backlog — open
 
