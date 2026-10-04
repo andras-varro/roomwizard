@@ -6,7 +6,7 @@
  *   - Keyboard, gamepad, and mouse support via unified gamepad module
  *   - 10 levels with varied brick patterns and increasing difficulty
  *   - 9 power-ups in opposing pairs with permanent stacking behavior
- *   - Gradient bricks, glowing ball, smooth 60 FPS rendering
+ *   - Gradient bricks, glowing ball, ~30 FPS rendering on a fixed 1/30 s game tick
  *   - High-score leaderboard, audio feedback, LED effects
  *
  * Hardware: 800×480 framebuffer, resistive touchscreen, OSS audio, LEDs
@@ -53,8 +53,8 @@
 #define PADDLE_Y        (AREA_Y + AREA_H - 28)
 #define PADDLE_HEIGHT   14
 #define PADDLE_BASE_W   100
-#define PADDLE_KB_SPEED 8       /* pixels per frame for keyboard/d-pad */
-#define PADDLE_MAX_ANALOG 10    /* max pixels per frame from analog stick */
+#define PADDLE_KB_SPEED 8       /* px per tick for keyboard/d-pad (240 px/s) */
+#define PADDLE_MAX_ANALOG 10    /* max px per tick from analog stick (300 px/s) */
 
 /* Stepped paddle widths: index 0=narrow(-2), 1=small(-1), 2=normal(0), 3=large(+1), 4=larger(+2) */
 #define PADDLE_LEVELS 5
@@ -64,8 +64,21 @@ static const int PADDLE_WIDTHS[PADDLE_LEVELS] = { 40, 70, 100, 140, 180 };
 #define SPEED_LEVELS 5
 static const float SPEED_MULTS[SPEED_LEVELS] = { 0.55f, 0.75f, 1.0f, 1.25f, 1.5f };
 
+/* Game clock.  Every speed and frame count in this file is per TICK — one
+ * fixed 1/30 s step of game_tick() — not per drawn frame.  update_game() runs
+ * as many ticks as elapsed get_time_ms() time calls for, so the values below
+ * (authored as px/frame at the nominal 30 fps loop) keep their feel at any
+ * frame rate: multiply by 30 for px/s.  A fixed step rather than a variable dt
+ * keeps every authored constant and tick-counted timer valid unchanged — the
+ * paddle speeds, BALL_*_SPEED, POWERUP_SPEED, particle life and gravity,
+ * shake_frames, pending_exp_timer and clear_cooldown. */
+#define TICK_S           (1.0f / 30.0f)  /* one game_tick(), seconds */
+#define MAX_FRAME_DT     0.1f   /* longest gap one frame may integrate, seconds */
+#define MAX_TICKS_FRAME  4      /* tick cap per frame; the remainder is dropped */
+
 /* Ball */
 #define BALL_RADIUS     6
+#define BALL_SUBSTEP_PX 6.0f    /* longest single ball move, px (= BALL_RADIUS) */
 #define MAX_BALLS       8
 #define BALL_BASE_SPEED 4.0f
 #define BALL_MAX_SPEED  11.0f
@@ -182,7 +195,7 @@ typedef struct {
 typedef struct {
     float x, y;
     float dx, dy;
-    int   life;     /* frames remaining */
+    int   life;     /* ticks remaining */
     uint32_t color;
 } Particle;
 
@@ -210,15 +223,15 @@ typedef struct {
     bool        ball_launched;
     /* Screen shake */
     float       shake_x, shake_y;       /* current offset to apply to rendering */
-    int         shake_frames;           /* frames remaining */
+    int         shake_frames;           /* ticks remaining */
     float       shake_intensity;        /* current max amplitude in pixels */
 
     /* Level clear animation cooldown */
-    int         clear_cooldown;         /* frames remaining before LEVEL_COMPLETE transition */
+    int         clear_cooldown;         /* ticks remaining before LEVEL_COMPLETE transition */
 
     /* Deferred explosion chain */
     int         pending_exp[MAX_BRICKS]; /* brick indices waiting to detonate */
-    int         pending_exp_timer[MAX_BRICKS]; /* frames until each detonation */
+    int         pending_exp_timer[MAX_BRICKS]; /* ticks until each detonation */
     int         pending_exp_count;
 } GameState;
 
@@ -238,6 +251,17 @@ static uint32_t     frame_time_ms;  /* updated each frame */
 static bool test_mode = false;     /* --test: special test levels */
 static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
 static GameOverScreen gos;  /* unified game over screen */
+/* The play clock (update_game).  play_clock_live is false whenever the last
+ * update_game() call was outside SCREEN_PLAYING, so the first playing frame
+ * after the welcome screen, a pause, a level change or a restart re-baselines
+ * instead of integrating the time spent away. */
+static bool     play_clock_live;
+static uint32_t play_last_ms;
+static float    tick_acc;
+/* Analog stick + d-pad paddle velocity, px per tick.  handle_input() samples
+ * it once per frame (zero outside play) and every tick of that frame applies
+ * it, so the paddle moves the same distance per second at any frame rate. */
+static float    paddle_vel;
 /* Power-up / lost-ball LED flashes, advanced once per frame by the main loop. */
 static LedPulse     fx_pulse;
 
@@ -554,9 +578,9 @@ static float get_speed_mult(void) {
  * level, and re-scale its velocity to match.  This is the only writer of
  * b->speed, so the multiplier is applied exactly once no matter how many
  * power-ups have been collected.  BALL_MAX_SPEED clamps the *effective* speed,
- * as it always has — an 11 px/frame cap is what stops the ball tunnelling
- * through a brick, and that is a property of the speed it actually travels at,
- * not of the base. */
+ * as it always has — the 11 px/tick cap bounds the substeps update_balls()
+ * splits a tick into against tunnelling, and that is a property of the speed
+ * the ball actually travels at, not of the base. */
 static void ball_apply_speed(Ball *b) {
     float sp = b->base_speed * get_speed_mult();
     if (sp > BALL_MAX_SPEED) sp = BALL_MAX_SPEED;
@@ -791,14 +815,14 @@ static void reset_game(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 /* Queue a brick for deferred detonation (chain explosion with delay) */
-static void queue_deferred_explosion(int brick_idx, int delay_frames) {
+static void queue_deferred_explosion(int brick_idx, int delay_ticks) {
     if (game.pending_exp_count >= MAX_BRICKS) return;
     /* Don't queue if already pending */
     for (int i = 0; i < game.pending_exp_count; i++) {
         if (game.pending_exp[i] == brick_idx) return;
     }
     game.pending_exp[game.pending_exp_count] = brick_idx;
-    game.pending_exp_timer[game.pending_exp_count] = delay_frames;
+    game.pending_exp_timer[game.pending_exp_count] = delay_ticks;
     game.pending_exp_count++;
 }
 
@@ -864,6 +888,207 @@ static void detonate_brick(int brick_idx) {
 
 }
 
+/* One substep of a free ball: move by `frac` of its per-tick velocity, then
+ * walls, paddle, the lost-ball line and at most one brick.  update_balls() runs
+ * ceil(speed / BALL_SUBSTEP_PX) of these per tick, so no single move is longer
+ * than BALL_SUBSTEP_PX (= BALL_RADIUS) and the ball cannot jump a brick, its
+ * corner or the paddle between two tests.  Every side effect below (score,
+ * particles, power-up drop, audio, shake, chained explosions, speed-up) belongs
+ * to one hit and fires once for it; a step that hits nothing does nothing. */
+static void ball_substep(Ball *b, float frac, int paddle_left, int paddle_right) {
+    b->x += b->dx * frac;
+    b->y += b->dy * frac;
+
+    /* Wall collisions */
+    if (b->x - BALL_RADIUS < AREA_X) {
+        b->x = AREA_X + BALL_RADIUS;
+        b->dx = fabsf(b->dx);
+    }
+    if (b->x + BALL_RADIUS > AREA_X + AREA_W) {
+        b->x = AREA_X + AREA_W - BALL_RADIUS;
+        b->dx = -fabsf(b->dx);
+    }
+    if (b->y - BALL_RADIUS < AREA_Y) {
+        b->y = AREA_Y + BALL_RADIUS;
+        b->dy = fabsf(b->dy);
+    }
+
+    /* Paddle collision */
+    if (b->dy > 0 &&
+        b->y + BALL_RADIUS >= PADDLE_Y &&
+        b->y - BALL_RADIUS <= PADDLE_Y + PADDLE_HEIGHT &&
+        b->x >= paddle_left && b->x <= paddle_right) {
+
+        b->y = PADDLE_Y - BALL_RADIUS;
+        /* Angle depends on where ball hit the paddle */
+        float hit = (b->x - paddle_left) / (float)game.paddle_w;  /* 0..1 */
+        float angle = (hit - 0.5f) * 1.2f;  /* -0.6 .. +0.6 rad */
+        /* Ensure ball always goes upward */
+        float out_angle = -M_PI / 2.0f + angle;
+        b->dx = cosf(out_angle) * b->speed;
+        b->dy = sinf(out_angle) * b->speed;
+
+        /* ⚠️ **No `audio_interrupt()` before an effect on the mix bus** —
+         * these five sites had one, and on the bus it means "stop ALL
+         * voices", so a brick hit threw away the 600 ms `audio_fail()`
+         * fanfare a lost ball had just started.  Measured by ear on `.188`
+         * 2026-08-20: the fanfare was audible when the game ENDED (no
+         * further play to interrupt it) and inaudible when a life was lost
+         * with balls remaining.  The idiom was free when the kernel ring
+         * held exactly one sound; mixing is the whole point of the bus.
+         * The four sites below dropped theirs for the same reason. */
+        audio_knock(&audio);
+    }
+
+    /* Bottom — ball lost */
+    if (b->y - BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT + 20) {
+        b->active = false;
+    }
+
+    /* Brick collisions */
+    for (int j = 0; j < game.brick_count; j++) {
+        Brick *br = &game.bricks[j];
+        if (brick_is_destroyed(br)) continue;
+
+        /* AABB check */
+        if (b->x + BALL_RADIUS <= br->x || b->x - BALL_RADIUS >= br->x + br->w ||
+            b->y + BALL_RADIUS <= br->y || b->y - BALL_RADIUS >= br->y + br->h)
+            continue;
+
+        /* Hit! Handle special brick types */
+        bool brick_destroyed = false;
+        
+        if (br->type == BRICK_INDESTRUCTIBLE) {
+            /* Indestructible bricks can only be destroyed by fireball */
+            if (b->fireball) {
+                br->health = 0;
+                brick_destroyed = true;
+                game.score += 50 * game.level;  /* Bonus for destroying indestructible */
+            }
+            /* Otherwise just bounce off */
+        } else if (br->type == BRICK_BONUS) {
+            /* Bonus brick - double points */
+            br->health = 0;
+            brick_destroyed = true;
+            game.score += 20 * game.level;  /* 2x normal points */
+            audio_sparkle(&audio);         /* bonus brick — fx_sparkle */
+        } else if (br->type == BRICK_EXPLOSIVE) {
+            /* Explosive brick — immediate detonation + deferred chain */
+            br->health = 0;
+            brick_destroyed = true;
+            game.score += 15 * game.level;
+            
+            /* Initial shake */
+            game.shake_frames = 10;
+            game.shake_intensity = 3.0f;
+            
+            /* Destroy adjacent non-explosive bricks immediately,
+             * queue adjacent explosive bricks for deferred chain reaction */
+            for (int k = 0; k < game.brick_count; k++) {
+                if (k == j) continue;
+                Brick *adj = &game.bricks[k];
+                if (brick_is_destroyed(adj)) continue;
+                
+                int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
+                int ady = abs((adj->y + adj->h/2) - (br->y + br->h/2));
+                if (adx < br->w * 1.5f && ady < br->h * 1.5f) {
+                    if (adj->type == BRICK_INDESTRUCTIBLE) continue;
+                    
+                    if (adj->type == BRICK_EXPLOSIVE) {
+                        /* Defer chain reaction — explodes 5 ticks later */
+                        queue_deferred_explosion(k, 5);
+                    } else {
+                        /* Non-explosive neighbor: destroy now */
+                        adj->health = 0;
+                        game.bricks_left--;
+                        game.score += 10 * game.level;
+                        spawn_particles((float)(adj->x + adj->w / 2),
+                                      (float)(adj->y + adj->h / 2),
+                                      adj->color_top, 4);
+                        spawn_powerup((float)(adj->x + adj->w / 2),
+                                     (float)(adj->y + adj->h / 2));
+                    }
+                }
+            }
+            
+            audio_burst(&audio);
+        } else {
+            /* Normal brick */
+            if (b->fireball) {
+                br->health = 0;
+                brick_destroyed = true;
+            } else {
+                br->health--;
+                /* Update colours for new health */
+                int ci = clampi(br->health - 1, 0, 5);
+                br->color_top = brick_colors[ci][0];
+                br->color_bot = brick_colors[ci][1];
+                if (brick_is_destroyed(br)) {
+                    brick_destroyed = true;
+                }
+            }
+            game.score += 10 * game.level;
+        }
+
+        if (brick_destroyed) {
+            if (br->type != BRICK_INDESTRUCTIBLE) {
+                game.bricks_left--;
+            }
+            /* Fireball destruction: fire-colored particles, more of them */
+            if (b->fireball) {
+                /* Fire-colored particles for fireball destruction */
+                uint32_t fc[] = {
+                    RGB(255, 80, 0),
+                    RGB(255, 200, 0),
+                    RGB(255, 140, 0),
+                    RGB(255, 50, 20)
+                };
+                for (int pi = 0; pi < 8; pi++) {
+                    uint32_t pc = fc[rand() % 4];
+                    spawn_particles((float)(br->x + br->w / 2),
+                                    (float)(br->y + br->h / 2),
+                                    pc, 1);
+                }
+            } else {
+                spawn_particles((float)(br->x + br->w / 2),
+                                (float)(br->y + br->h / 2),
+                                br->color_top, 6);
+            }
+            spawn_powerup((float)(br->x + br->w / 2),
+                          (float)(br->y + br->h / 2));
+            audio_tick(&audio);
+        } else if (br->type != BRICK_INDESTRUCTIBLE) {
+            audio_thud(&audio);
+        }
+
+        /* Bounce (skip if fireball or hit indestructible without fireball) */
+        if (!b->fireball || br->type == BRICK_INDESTRUCTIBLE) {
+            float overlap_l = (b->x + BALL_RADIUS) - br->x;
+            float overlap_r = (br->x + br->w) - (b->x - BALL_RADIUS);
+            float overlap_t = (b->y + BALL_RADIUS) - br->y;
+            float overlap_b = (br->y + br->h) - (b->y - BALL_RADIUS);
+            float min_o = overlap_l;
+            if (overlap_r < min_o) min_o = overlap_r;
+            if (overlap_t < min_o) min_o = overlap_t;
+            if (overlap_b < min_o) min_o = overlap_b;
+
+            if (min_o == overlap_l || min_o == overlap_r)
+                b->dx = -b->dx;
+            else
+                b->dy = -b->dy;
+        }
+
+        /* Speed up slightly — on base_speed, so the effect multiplier stays
+         * a multiplier and is not accumulated into the ball's own speed. */
+        if (b->base_speed < BALL_MAX_SPEED) {
+            b->base_speed += BALL_SPEED_INC;
+            ball_apply_speed(b);
+        }
+
+        break;  /* one brick per substep per ball */
+    }
+}
+
 static void update_balls(void) {
     int paddle_left  = (int)game.paddle_x - game.paddle_w / 2;
     int paddle_right = paddle_left + game.paddle_w;
@@ -884,202 +1109,21 @@ static void update_balls(void) {
             continue;
         }
 
-        /* Push current position into trail buffer before moving */
+        /* Push current position into trail buffer before moving — once per
+         * tick, not per substep, so the trail spans the same time at any speed. */
         b->trail_x[b->trail_idx] = b->x;
         b->trail_y[b->trail_idx] = b->y;
         b->trail_idx = (b->trail_idx + 1) % TRAIL_LEN;
 
-        b->x += b->dx;
-        b->y += b->dy;
-
-        /* Wall collisions */
-        if (b->x - BALL_RADIUS < AREA_X) {
-            b->x = AREA_X + BALL_RADIUS;
-            b->dx = fabsf(b->dx);
-        }
-        if (b->x + BALL_RADIUS > AREA_X + AREA_W) {
-            b->x = AREA_X + AREA_W - BALL_RADIUS;
-            b->dx = -fabsf(b->dx);
-        }
-        if (b->y - BALL_RADIUS < AREA_Y) {
-            b->y = AREA_Y + BALL_RADIUS;
-            b->dy = fabsf(b->dy);
-        }
-
-        /* Paddle collision */
-        if (b->dy > 0 &&
-            b->y + BALL_RADIUS >= PADDLE_Y &&
-            b->y - BALL_RADIUS <= PADDLE_Y + PADDLE_HEIGHT &&
-            b->x >= paddle_left && b->x <= paddle_right) {
-
-            b->y = PADDLE_Y - BALL_RADIUS;
-            /* Angle depends on where ball hit the paddle */
-            float hit = (b->x - paddle_left) / (float)game.paddle_w;  /* 0..1 */
-            float angle = (hit - 0.5f) * 1.2f;  /* -0.6 .. +0.6 rad */
-            /* Ensure ball always goes upward */
-            float out_angle = -M_PI / 2.0f + angle;
-            b->dx = cosf(out_angle) * b->speed;
-            b->dy = sinf(out_angle) * b->speed;
-
-            /* ⚠️ **No `audio_interrupt()` before an effect on the mix bus** —
-             * these five sites had one, and on the bus it means "stop ALL
-             * voices", so a brick hit threw away the 600 ms `audio_fail()`
-             * fanfare a lost ball had just started.  Measured by ear on `.188`
-             * 2026-08-20: the fanfare was audible when the game ENDED (no
-             * further play to interrupt it) and inaudible when a life was lost
-             * with balls remaining.  The idiom was free when the kernel ring
-             * held exactly one sound; mixing is the whole point of the bus.
-             * The four sites below dropped theirs for the same reason. */
-            audio_knock(&audio);
-        }
-
-        /* Bottom — ball lost */
-        if (b->y - BALL_RADIUS > PADDLE_Y + PADDLE_HEIGHT + 20) {
-            b->active = false;
-        }
-
-        /* Brick collisions */
-        for (int j = 0; j < game.brick_count; j++) {
-            Brick *br = &game.bricks[j];
-            if (brick_is_destroyed(br)) continue;
-
-            /* AABB check */
-            if (b->x + BALL_RADIUS <= br->x || b->x - BALL_RADIUS >= br->x + br->w ||
-                b->y + BALL_RADIUS <= br->y || b->y - BALL_RADIUS >= br->y + br->h)
-                continue;
-
-            /* Hit! Handle special brick types */
-            bool brick_destroyed = false;
-            
-            if (br->type == BRICK_INDESTRUCTIBLE) {
-                /* Indestructible bricks can only be destroyed by fireball */
-                if (b->fireball) {
-                    br->health = 0;
-                    brick_destroyed = true;
-                    game.score += 50 * game.level;  /* Bonus for destroying indestructible */
-                }
-                /* Otherwise just bounce off */
-            } else if (br->type == BRICK_BONUS) {
-                /* Bonus brick - double points */
-                br->health = 0;
-                brick_destroyed = true;
-                game.score += 20 * game.level;  /* 2x normal points */
-                audio_sparkle(&audio);         /* bonus brick — fx_sparkle */
-            } else if (br->type == BRICK_EXPLOSIVE) {
-                /* Explosive brick — immediate detonation + deferred chain */
-                br->health = 0;
-                brick_destroyed = true;
-                game.score += 15 * game.level;
-                
-                /* Initial shake */
-                game.shake_frames = 10;
-                game.shake_intensity = 3.0f;
-                
-                /* Destroy adjacent non-explosive bricks immediately,
-                 * queue adjacent explosive bricks for deferred chain reaction */
-                for (int k = 0; k < game.brick_count; k++) {
-                    if (k == j) continue;
-                    Brick *adj = &game.bricks[k];
-                    if (brick_is_destroyed(adj)) continue;
-                    
-                    int adx = abs((adj->x + adj->w/2) - (br->x + br->w/2));
-                    int ady = abs((adj->y + adj->h/2) - (br->y + br->h/2));
-                    if (adx < br->w * 1.5f && ady < br->h * 1.5f) {
-                        if (adj->type == BRICK_INDESTRUCTIBLE) continue;
-                        
-                        if (adj->type == BRICK_EXPLOSIVE) {
-                            /* Defer chain reaction — explodes 5 frames later */
-                            queue_deferred_explosion(k, 5);
-                        } else {
-                            /* Non-explosive neighbor: destroy now */
-                            adj->health = 0;
-                            game.bricks_left--;
-                            game.score += 10 * game.level;
-                            spawn_particles((float)(adj->x + adj->w / 2),
-                                          (float)(adj->y + adj->h / 2),
-                                          adj->color_top, 4);
-                            spawn_powerup((float)(adj->x + adj->w / 2),
-                                         (float)(adj->y + adj->h / 2));
-                        }
-                    }
-                }
-                
-                audio_burst(&audio);
-            } else {
-                /* Normal brick */
-                if (b->fireball) {
-                    br->health = 0;
-                    brick_destroyed = true;
-                } else {
-                    br->health--;
-                    /* Update colours for new health */
-                    int ci = clampi(br->health - 1, 0, 5);
-                    br->color_top = brick_colors[ci][0];
-                    br->color_bot = brick_colors[ci][1];
-                    if (brick_is_destroyed(br)) {
-                        brick_destroyed = true;
-                    }
-                }
-                game.score += 10 * game.level;
-            }
-
-            if (brick_destroyed) {
-                if (br->type != BRICK_INDESTRUCTIBLE) {
-                    game.bricks_left--;
-                }
-                /* Fireball destruction: fire-colored particles, more of them */
-                if (b->fireball) {
-                    /* Fire-colored particles for fireball destruction */
-                    uint32_t fc[] = {
-                        RGB(255, 80, 0),
-                        RGB(255, 200, 0),
-                        RGB(255, 140, 0),
-                        RGB(255, 50, 20)
-                    };
-                    for (int pi = 0; pi < 8; pi++) {
-                        uint32_t pc = fc[rand() % 4];
-                        spawn_particles((float)(br->x + br->w / 2),
-                                        (float)(br->y + br->h / 2),
-                                        pc, 1);
-                    }
-                } else {
-                    spawn_particles((float)(br->x + br->w / 2),
-                                    (float)(br->y + br->h / 2),
-                                    br->color_top, 6);
-                }
-                spawn_powerup((float)(br->x + br->w / 2),
-                              (float)(br->y + br->h / 2));
-                audio_tick(&audio);
-            } else if (br->type != BRICK_INDESTRUCTIBLE) {
-                audio_thud(&audio);
-            }
-
-            /* Bounce (skip if fireball or hit indestructible without fireball) */
-            if (!b->fireball || br->type == BRICK_INDESTRUCTIBLE) {
-                float overlap_l = (b->x + BALL_RADIUS) - br->x;
-                float overlap_r = (br->x + br->w) - (b->x - BALL_RADIUS);
-                float overlap_t = (b->y + BALL_RADIUS) - br->y;
-                float overlap_b = (br->y + br->h) - (b->y - BALL_RADIUS);
-                float min_o = overlap_l;
-                if (overlap_r < min_o) min_o = overlap_r;
-                if (overlap_t < min_o) min_o = overlap_t;
-                if (overlap_b < min_o) min_o = overlap_b;
-
-                if (min_o == overlap_l || min_o == overlap_r)
-                    b->dx = -b->dx;
-                else
-                    b->dy = -b->dy;
-            }
-
-            /* Speed up slightly — on base_speed, so the effect multiplier stays
-             * a multiplier and is not accumulated into the ball's own speed. */
-            if (b->base_speed < BALL_MAX_SPEED) {
-                b->base_speed += BALL_SPEED_INC;
-                ball_apply_speed(b);
-            }
-
-            break;  /* one brick per frame per ball */
-        }
+        /* b->speed is |(dx, dy)| (ball_apply_speed), capped at BALL_MAX_SPEED,
+         * so this is 1 or 2 substeps.  The fraction is fixed for the tick: a
+         * brick hit that speeds the ball up mid-tick lengthens the remaining
+         * substep by at most BALL_SPEED_INC / n. */
+        int n = (int)ceilf(b->speed * (1.0f / BALL_SUBSTEP_PX));
+        if (n < 1) n = 1;
+        float frac = 1.0f / (float)n;
+        for (int s = 0; s < n && b->active; s++)
+            ball_substep(b, frac, paddle_left, paddle_right);
     }
 
     /* Remove inactive balls */
@@ -1118,13 +1162,15 @@ static void update_powerups(void) {
     }
 }
 
-static void update_game(void) {
-    if (game.screen != SCREEN_PLAYING) return;
-
-    frame_time_ms = get_time_ms();
-
+/* One fixed TICK_S step of everything that advances the game. */
+static void game_tick(void) {
     /* Continuously apply paddle width from effect level */
     apply_paddle_width();
+
+    if (paddle_vel != 0.0f)
+        game.paddle_x = clampf(game.paddle_x + paddle_vel,
+                               AREA_X + game.paddle_w / 2.0f,
+                               AREA_X + AREA_W - game.paddle_w / 2.0f);
 
     update_balls();
     update_powerups();
@@ -1193,7 +1239,7 @@ static void update_game(void) {
 
     /* Level clear? — Start cooldown to let explosions/particles play out */
     if (game.bricks_left <= 0 && game.clear_cooldown == 0 && game.screen == SCREEN_PLAYING && game.pending_exp_count == 0) {
-        game.clear_cooldown = 90;  /* ~1.5 seconds at 60 FPS */
+        game.clear_cooldown = 90;  /* ticks: 3 s */
         audio_success(&audio);
         hw_set_led(LED_GREEN, 100);
     }
@@ -1210,6 +1256,43 @@ static void update_game(void) {
             hw_leds_off();
         }
     }
+}
+
+/* Fixed-step accumulator: elapsed time (clamped to MAX_FRAME_DT) is banked in
+ * tick_acc and spent in whole ticks, at most MAX_TICKS_FRAME per frame.  Hitting
+ * the cap drops the remainder rather than carrying a debt into later frames.
+ * Drawing stays once per frame, showing the state after the last tick.  Launch
+ * is an edge handled in handle_input() (launch_ball() only sets a velocity), so
+ * no input edge needs holding for a tick here. */
+static void update_game(void) {
+    if (game.screen != SCREEN_PLAYING) {
+        play_clock_live = false;
+        return;
+    }
+
+    uint32_t now = get_time_ms();
+    if (!play_clock_live) {
+        /* Entering play: start the clock here and run no tick this frame. */
+        play_clock_live = true;
+        play_last_ms    = now;
+        tick_acc        = 0.0f;
+        return;
+    }
+
+    float dt = (float)(now - play_last_ms) * 0.001f;
+    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
+    play_last_ms = now;
+    tick_acc += dt;
+
+    int steps = 0;
+    while (tick_acc >= TICK_S && steps < MAX_TICKS_FRAME) {
+        game_tick();
+        tick_acc -= TICK_S;
+        steps++;
+        /* Level complete or game over: the rest of the frame's time is not play. */
+        if (game.screen != SCREEN_PLAYING) break;
+    }
+    if (steps >= MAX_TICKS_FRAME) tick_acc = 0.0f;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1511,6 +1594,7 @@ static void handle_input(void) {
     touch_poll(&touch);
     TouchState st = touch_get_state(&touch);
     uint32_t now = get_time_ms();
+    paddle_vel = 0.0f;   /* re-sampled below, and only while playing */
 
     /* Poll gamepad/keyboard/mouse through unified API */
     gamepad_poll(&gamepad_mgr, &gp_input, st.x, st.y, st.pressed);
@@ -1569,11 +1653,11 @@ static void handle_input(void) {
          *   1. Touch:   absolute positioning — finger position = paddle pos
          *   2. Mouse:   delta-based — mouse movement adds to paddle position
          *   3. Analog:  velocity-based (axis_lx ±1000 → proportional speed)
-         *   4. D-pad:   velocity-based (fixed PADDLE_KB_SPEED per frame)
+         *   4. D-pad:   velocity-based (fixed PADDLE_KB_SPEED per tick)
          *
          * Only touch sets the paddle position absolutely.  All other inputs
-         * (mouse, analog stick, d-pad/keyboard) add velocity/delta each
-         * frame, so they never fight each other or cause the paddle to
+         * add a delta (mouse, each frame) or a velocity (analog stick and
+         * d-pad/keyboard, each tick), so they never fight each other or cause the paddle to
          * snap to an unexpected position when switching input methods.
          * ────────────────────────────────────────────────────────────── */
 
@@ -1610,32 +1694,17 @@ static void handle_input(void) {
             }
         }
 
-        /* Gamepad analog stick: velocity-based movement.
-         * axis_lx is normalized to ±1000 (0 when in dead zone).
-         * Scaled proportionally up to PADDLE_MAX_ANALOG pixels/frame.
-         * When the stick is centered (returns to 0), paddle stays put. */
-        if (gp_input.axis_lx != 0) {
-            float speed = (gp_input.axis_lx / 1000.0f) * PADDLE_MAX_ANALOG;
-            game.paddle_x += speed;
-            game.paddle_x = clampf(game.paddle_x,
-                                   AREA_X + game.paddle_w / 2.0f,
-                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
-        }
-
-        /* D-pad / keyboard: fixed speed velocity-based movement.
-         * Uses 'held' for smooth continuous movement while pressed. */
-        if (gp_input.buttons[BTN_ID_LEFT].held) {
-            game.paddle_x -= PADDLE_KB_SPEED;
-            game.paddle_x = clampf(game.paddle_x,
-                                   AREA_X + game.paddle_w / 2.0f,
-                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
-        }
-        if (gp_input.buttons[BTN_ID_RIGHT].held) {
-            game.paddle_x += PADDLE_KB_SPEED;
-            game.paddle_x = clampf(game.paddle_x,
-                                   AREA_X + game.paddle_w / 2.0f,
-                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
-        }
+        /* Gamepad analog stick and d-pad/keyboard: velocity, not position.
+         * axis_lx is normalized to ±1000 (0 when in dead zone), scaled up to
+         * PADDLE_MAX_ANALOG px/tick; a held LEFT/RIGHT adds PADDLE_KB_SPEED
+         * px/tick.  Only recorded here — game_tick() moves the paddle by it
+         * once per tick, so the speed follows elapsed time, not frame count. */
+        if (gp_input.axis_lx != 0)
+            paddle_vel += (gp_input.axis_lx / 1000.0f) * PADDLE_MAX_ANALOG;
+        if (gp_input.buttons[BTN_ID_LEFT].held)
+            paddle_vel -= PADDLE_KB_SPEED;
+        if (gp_input.buttons[BTN_ID_RIGHT].held)
+            paddle_vel += PADDLE_KB_SPEED;
 
         /* Launch on tap or gamepad button */
         if (st.pressed && !game.ball_launched) {
@@ -1812,9 +1881,11 @@ int main(int argc, char *argv[]) {
     init_brick_layout();
 
     /* Calculate ball base speed based on paddle-to-brick distance.
-     * In landscape (~200px gap) the default 4.0 is fine.
-     * In portrait (~400px+ gap) we need a faster base so the ball
-     * reaches the bricks in ~2.5 seconds at 60fps (150 frames). */
+     * distance / 150 px per tick crosses the gap straight up in 150 ticks
+     * (5 s at 30 ticks/s), clamped to 4..8 px/tick (120..240 px/s).  The
+     * 4.0 floor wins for any gap under 600 px — every landscape layout
+     * (~200 px gap, ~50 ticks = ~1.7 s) — so only a taller portrait gap
+     * raises the base. */
     {
         int lowest_brick_y = BRICK_TOP + BRICK_PAD  /* as create_bricks() */
                            + brick_rows * (BRICK_H + BRICK_PAD);
