@@ -53,9 +53,11 @@
  * Physics Constants
  *
  * Every speed, acceleration and frame count in this file is per TICK — one
- * fixed 1/30 s step of game_tick() — not per drawn frame.  update_game() runs
+ * fixed 1/20 s step of game_tick() — not per drawn frame.  update_game() runs
  * as many ticks as elapsed time calls for, so the values below (authored as
- * px/frame at the nominal 30 fps) keep their feel at any frame rate.  A fixed
+ * px/frame) keep their feel at any frame rate.  TICK_S is the pace: they were
+ * tuned on a loop that drew well under its nominal 30 fps, and at 30 ticks/s
+ * the game played ~1.8x faster than it had (operator, 2026-10-04).  A fixed
  * step rather than a variable dt keeps the jump arc exact: Euler with a
  * varying dt changes jump height with frame time, and tile collision and the
  * one-way platform test (feet_prev = y + h - vy) assume each step moved by
@@ -64,7 +66,7 @@
  * periods, current_frame and the camera's 0.12 smoothing factor.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define TICK_S           (1.0f / 30.0f)  /* one game_tick(), seconds */
+#define TICK_S           (1.0f / 20.0f)  /* one game_tick(), seconds: the pace */
 #define MAX_FRAME_DT     0.1f   /* longest gap one frame may integrate, seconds */
 #define MAX_TICKS_FRAME  4      /* tick cap per frame; the remainder is dropped */
 
@@ -933,6 +935,28 @@ static void resolve_collisions_y(void) {
         }
     }
 
+    /* Ground probe.  Standing on a surface, gravity sinks the feet less than
+     * 1 px per tick, and the truncating bottom_tile above still files that in
+     * the empty row — without this, on_ground flips every other tick and the
+     * runner is in PSTATE_FALLING (drawn idle) half the time. */
+    if (player.vy >= 0) {
+        int   feet_row = (int)(player.y + player.height) / TILE_SIZE;
+        float row_top  = (float)(feet_row * TILE_SIZE);
+        if (player.y + player.height - row_top < 1.0f) {
+            for (int tx = left_tile; tx <= right_tile; tx++) {
+                int t = tile_at(tx, feet_row);
+                if (t == TILE_SOLID ||
+                    (t == TILE_PLATFORM &&
+                     player.y + player.height - player.vy <= row_top + 2.0f)) {
+                    player.y = row_top - player.height;
+                    player.vy = 0;
+                    player.on_ground = true;
+                    return;
+                }
+            }
+        }
+    }
+
     if (was_on_ground && !player.on_ground && player.vy >= 0)
         player.coyote_frames = COYOTE_TIME;
 }
@@ -1211,11 +1235,14 @@ static void update_player(void) {
     check_enemy_collisions();
     if (player.state == PSTATE_DYING) return;
 
-    /* Animation */
+    /* Animation: a four-pose walk cycle — stride, legs together, other stride,
+     * legs together (see draw_player).  Each pose holds a few ticks, quicker
+     * when running.  The together pose must be a pose of its own: picked by
+     * tick parity it aliases against the frame rate and can freeze the legs. */
     player.anim_timer++;
-    if (player.anim_timer >= 8) {
+    if (player.anim_timer >= (fabsf(player.vx) > WALK_SPEED ? 2 : 3)) {
         player.anim_timer = 0;
-        player.anim_frame = (player.anim_frame + 1) % 2;
+        player.anim_frame = (player.anim_frame + 1) % 4;
     }
 
     if (!player.on_ground)
@@ -1574,7 +1601,10 @@ static void draw_player_sprite(void) {
         draw_player_idle(sx, sy, player.facing_right);
         break;
     case PSTATE_RUNNING:
-        draw_player_running(sx, sy, player.facing_right, player.anim_frame);
+        if (player.anim_frame & 1)
+            draw_player_idle(sx, sy, player.facing_right);
+        else
+            draw_player_running(sx, sy, player.facing_right, player.anim_frame >> 1);
         break;
     case PSTATE_JUMPING:
         draw_player_jumping(sx, sy, player.facing_right);
