@@ -163,9 +163,9 @@ misparses. When in doubt, over-deploy — the failure mode is silent.
 
 | Changed | Redeploy |
 |---|---|
-| an app's own source, `common/common.c`, `common/gamepad.c` | `native_apps` |
+| an app's own source, `common/common.c`, `common/gamepad.c`, `common/pointer.c` | `native_apps` |
 | `common/audio.c`, `common/audio_wav.c`, `common/audio_bed.c`, `common/audio.h` | `native_apps` only — **measured**: neither `vnc_client` (`Makefile` `SRCS`) nor ScummVM links `audio.o`; ScummVM reaches the device half through `audio_out.o` and never the mix-bus client layer |
-| `common/logger.c` | `native_apps` + `vnc_client` |
+| `common/logger.c`, `common/ui_focus.c` | `native_apps` + `vnc_client` — **measured** for `ui_focus.c`: `vnc_client/Makefile` `SRCS` links `ui_focus.o`, `configure.patch` does not name it |
 | `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c`, `common/input_scan.c` | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain counts too |
 | `common/audio_out.c`, `common/audio_gen.c` (+ `audio_out.h`, `audio_gen.h`) | `native_apps` + **ScummVM** — ⚠️ **two, not three: measured 2026-09-09**, `vnc_client/Makefile`'s `SRCS` names neither, and no `audio_out` symbol appears anywhere in that tree. They are on ScummVM's `OBJS` via `configure.patch`, which is why the row above cannot speak for them |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
@@ -374,7 +374,7 @@ its own manifests + PPM icons — this is how projects plug into the launcher wi
 `framebuffer.c` (double-buffered 800×480, bpp-aware primitives), `gamepad.c` (**the** unified input
 abstraction across touch + USB keyboard + mouse + Xbox pad — new apps should use this rather than
 reading evdev directly), `touch_input.c`, `touch_calib.c`, `hardware.c`, `common.c`, `ui_layout.c`,
-`audio.c`, `audio_gen.c`, `config.c`, `keyboard.c`, `highscore.c`, `ppm.c`, `logger.c`, `ui_focus.c`. The
+`audio.c`, `audio_gen.c`, `config.c`, `keyboard.c`, `highscore.c`, `ppm.c`, `logger.c`, `ui_focus.c`, `pointer.c`. The
 per-function table and what never to do instead: `native_apps/CLAUDE.md`.
 
 ScummVM has its own evdev reader (`roomwizard-events.cpp`, on the shared `input_scan.c`) but **not its own audio**: `oss-mixer.cpp` opens no `/dev/dsp` and drives the device through `common/audio_out.o` (`configure.patch`; measured by grep of `backend-files/`); it never links `audio.o`.

@@ -108,11 +108,13 @@ Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-
 
 ## Shared code
 
-Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o`, `logger.o` and `input_scan.o` from
+Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o`, `logger.o`, `input_scan.o` and `ui_focus.o` from
 `../native_apps/common/`. It has **no evdev scanner of its own**: `vnc_input.c` calls `input_scan()`
 (`common/input_scan.h`), which classifies by `gamepad.c`'s rules, opens every node of a kind up to a cap
-and skips held nodes — a rescan is another call. It does not link `gamepad.o`. `gamepad.c` and the
-ScummVM backend call the same scanner, so a change to the classification rules lands in all three.
+and skips held nodes — a rescan is another call. It does not link `gamepad.o`: that maps pads to abstract
+buttons for a UI, while the remote pointer needs the analog axes and button levels, so `vnc_input.c` reads the pad
+nodes itself (kind `INPUT_KIND_PAD`, codes from `/etc/input_config.conf`) and `vnc_pad.c` holds the pure mapping.
+`gamepad.c` and the ScummVM backend call the same scanner, so a change to the classification rules lands in all three.
 
 ## Network robustness
 
@@ -164,13 +166,20 @@ Hotplug: the `/dev/input` fingerprint is checked every 1 s and devices are resca
 `/etc/input_config.conf`, documented once in
 [`../native_apps/README.md`](../native_apps/README.md#input-configuration).
 
-Known gap: entering the exit zone mid-drag returns without sending a button-up, leaving the
-remote mouse button stuck down.
+`release_remote_buttons()` runs before both exits (corner hold, pad Select hold), so a drag that enters the exit zone leaves no remote button down.
+
+**Pad** (`vnc_pad.c`, pure; `native_apps/tests/vnc_pad_test.c`): stick and d-pad move the remote pointer by elapsed time
+(full deflection about 1.5 s across the screen, d-pad 40 %); A / B are the left / right button as held levels, so a drag
+works; LB / RB are one wheel notch; holding Select 1.5 s (`UiHold`) opens Settings, like the 3 s corner hold. Not done:
+keyboard typing into the Settings keypads, and the pad on the reconnect screen.
 
 ## Settings GUI
 
-`vnc_settings.c/h` is a touch settings screen with a full alphanumeric keypad; all fields are
-editable. It writes the config with no `fchmod`, so the file lands 0644 with the password in
+`vnc_settings.c/h` is a settings screen with a full alphanumeric keypad; all fields are
+editable. It opens its own keyboard and pad nodes while open (the session closed its nodes). Focus targets come from the
+same geometry as the tap hit-test; the ring shows on the first nav key and a touch hides it; A / Enter / Space tap through
+`ui_tap_begin`, B / Esc is Back / Cancel; buttons held on entry and Select are ignored. The full-keypad action row is one
+shared table. It writes the config with no `fchmod`, so the file lands 0644 with the password in
 cleartext, and it renders the password in plain text on a wall-mounted panel while editing. Fix
 both if you touch this code.
 

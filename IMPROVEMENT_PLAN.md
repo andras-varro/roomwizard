@@ -418,14 +418,13 @@ this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel wi
 RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
 paths a launcher plus one game actually touch, listed from a BBB boot.
 
-**Future scope, operator-agreed, not scheduled:** mouse-only operation of the launcher, Control Panel and games, for a unit with no touch and no keyboard or pad. The operator has a RoomWizard whose touch is broken, and a BeagleBone has no touch. It depends on F108 (no mouse pointer).
+**Future scope, operator-agreed, not scheduled:** mouse-only operation of the launcher, Control Panel and games, for a unit with no touch and no keyboard or pad. The operator has a RoomWizard whose touch is broken, and a BeagleBone has no touch. It depends on F108 (mouse pointer, awaiting operator verification).
 
-### F108. No mouse pointer in the launcher or the Control Panel — open, measured by the operator on .188 2026-10-01
+### F108. Operator verification of the mouse pointer in the launcher and the Control Panel — open, implemented, deployed to .188, not operator-verified
 
-A mouse works only in the Input page's mouse tester. Neither home reads the mouse on purpose (`app_launcher.c:731`
-comments it: no pointer is drawn to aim with), and `control_panel.c` never polls `gamepad_poll()` for it either
-**[read from source; not exercised with a mouse on the panel]**. **Done when** a pointer is drawn and a click
-activates a tile in both, acting on release like a touch; the draw belongs in one shared helper, not per app.
+**Done when** the operator, with a USB mouse on the panel, confirms in both the launcher and the Control Panel that
+the pointer follows the mouse, a click activates on release (home tiles, page edges, X, dialogs, Control Panel
+pages), touch and nav keys hide it, and idle CPU stays flat with the mouse still.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
@@ -442,9 +441,12 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
 
-### F112. vnc_client has no gamepad navigation — open, operator report 2026-10-02
+### F112. Operator verification of the vnc_client pad — open, implemented, deployed to .188, not operator-verified
 
-`vnc_client` cannot be driven by a pad as the launcher and the Control Panel now can: measured on the panel, the Xbox pad's d-pad, bottom-right button and Back work in the Control Panel through the same gamepad map. **Done when** a pad can operate a `vnc_client` session (`gamepad.c` is the input abstraction; `common/ui_focus.c` is pure and linkable).
+**Done when** the operator confirms in a live session, with an Xbox pad and an 8BitDo, the pointer, A/B drags,
+wheel, hold-Select to Settings and pad navigation inside Settings. **Leftovers:** keyboard typing into the Settings
+keypads; the pad on the reconnect screen; and **[inferred, not reproduced]** a stray remote click if A or B is still
+held when leaving Settings and the session reconnects.
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 
@@ -456,9 +458,12 @@ a heavy redraw) no longer slows play.
 
 ### F116. Choose which controller drives a game — open, operator request 2026-10-02
 
-On the Control Panel's Input page, pick the controller a game uses. A second controller works in the Input page's
-test mode, but in games (except `samegame` and `theremin`) only one works; that is acceptable for now, and
-two-player modes may come later. **Done when** the Input page offers the choice and games honour it.
+Operator design direction (2026-10-03): physical controllers are assigned to virtual player slots P1..P4 on the
+Control Panel's Input page. A game asks for "player N", not a device: a 1-player game reads P1, a multi-player game
+(a 4-player Bomberman / Dyna Blaster style one) reads P1..P4. Emulators (ScummVM, future ones) map their players to
+the same slots. The assignment is a setting, so it lives in the settings app. Today a second controller works in the
+Input page's test mode, but in games (except `samegame` and `theremin`) only one works. **Done when** the Input page
+assigns controllers to slots and games honour them.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
