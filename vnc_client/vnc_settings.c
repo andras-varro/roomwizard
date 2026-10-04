@@ -16,6 +16,7 @@
 
 #include "vnc_settings.h"
 #include "vnc_renderer.h"
+#include "vnc_input.h"
 #include "config.h"
 #include "../native_apps/common/framebuffer.h"
 #include "../native_apps/common/touch_input.h"
@@ -249,12 +250,19 @@ typedef struct {
     KeypadMode      keypad_mode;
     bool            shift_active;   /* For FULL mode: uppercase vs lowercase */
     int             save_error;     /* >0 = show error countdown (frames) */
+    /* Pad / keyboard focus (focus_rects() order).  Hidden until the first
+     * navigation key, hidden again by a touch.  Kept in the struct so a move
+     * schedules a repaint through the same memcmp as everything else. */
+    int             focus;          /* index on the current screen */
+    int             focus_main;     /* the main screen's, kept while a keypad is up */
+    bool            focus_on;       /* ring shown */
 } SettingsState;
 
 /* Forward declarations */
 static void draw_main_screen(SettingsState *st);
 static void draw_keypad(SettingsState *st);
 static void draw_keypad_full(SettingsState *st);
+static void draw_focus(SettingsState *st);
 static int  handle_main_touch(SettingsState *st, int tx, int ty);
 static int  handle_keypad_touch(SettingsState *st, int tx, int ty);
 static int  handle_keypad_full_touch(SettingsState *st, int tx, int ty);
@@ -415,6 +423,7 @@ static void draw_main_screen(SettingsState *st) {
     draw_button(fb, ACT_BTN_SAVE_X, act_btn_y, ACT_BTN_W, ACT_BTN_H,
                 "SAVE & RECONNECT", RGB565(0, 100, 0), RGB565_GREEN, 2);
 
+    draw_focus(st);
     fb_swap(fb);
 }
 
@@ -592,6 +601,7 @@ static void draw_keypad(SettingsState *st) {
                     btn->label, bg, fg, 2);
     }
 
+    draw_focus(st);
     fb_swap(fb);
 }
 
@@ -705,6 +715,107 @@ static void fkp_key_pos(int index, int *kx, int *ky) {
     *ky = FKP_KEYS_Y + row * (FKP_KEY_H + FKP_KEY_PAD);
 }
 
+/* ── FULL / ALPHA keypad: the action row ───────────────────────────── */
+/* One table for the draw path, the hit-test path and the focus ring.
+ * FULL:  SHIFT(120) DEL(80)  CLR(80)  CANCEL(120) OK(120), 8 px apart
+ * ALPHA:            DEL(100) CLR(100) CANCEL(130) OK(130), 12 px apart */
+
+typedef enum { FKA_SHIFT, FKA_DEL, FKA_CLR, FKA_CANCEL, FKA_OK } FkpAction;
+
+static const FkpAction fka_full[]  = { FKA_SHIFT, FKA_DEL, FKA_CLR, FKA_CANCEL, FKA_OK };
+static const int       fka_full_w[] = { 120, 80, 80, 120, 120 };
+static const FkpAction fka_alpha[] = { FKA_DEL, FKA_CLR, FKA_CANCEL, FKA_OK };
+static const int       fka_alpha_w[] = { 100, 100, 130, 130 };
+
+static int fkp_action_count(bool is_full) {
+    return is_full ? (int)(sizeof(fka_full) / sizeof(fka_full[0]))
+                   : (int)(sizeof(fka_alpha) / sizeof(fka_alpha[0]));
+}
+
+static FkpAction fkp_action_kind(bool is_full, int i) {
+    return is_full ? fka_full[i] : fka_alpha[i];
+}
+
+/* The action row sits below the key rows: row 4 in FULL (digits are row 3),
+ * row 3 in ALPHA. */
+static UiRect fkp_action_rect(bool is_full, int i) {
+    const int *w = is_full ? fka_full_w : fka_alpha_w;
+    int pad = is_full ? 8 : 12;
+    int row = is_full ? 4 : 3;
+    UiRect r = { FKP_X + 10, FKP_KEYS_Y + row * (FKP_KEY_H + FKP_KEY_PAD), w[i], FKP_KEY_H };
+    for (int k = 0; k < i; k++)
+        r.x += w[k] + pad;
+    return r;
+}
+
+/* ── Pad / keyboard focus ──────────────────────────────────────────── */
+/* Every focusable target of the current screen, from the same geometry the
+ * hit-test reads, so a synthetic tap at a rectangle's centre (ui_tap_*) lands
+ * on the thing the ring is drawn around.  *back gets the index of the target
+ * B / Esc taps: BACK on the main screen, CANCEL on a keypad. */
+
+#define FOCUS_MAX  48   /* 40 keys + 5 actions on the FULL keypad */
+
+static int focus_rects(const SettingsState *st, UiRect *r, int *back) {
+    const Framebuffer *fb = st->fb;
+    int n = 0;
+
+    if (st->screen == SCREEN_MAIN) {
+        const int rh   = settings_row_h(fb);
+        const int pm_h = settings_pm_h(fb);
+        const int ay   = settings_act_btn_y(fb);
+        for (int i = 0; i < 4; i++)         /* HOST, PORT, PASSWORD, ENCODINGS: [>] */
+            r[n++] = (UiRect){ ROW_BTN_X, settings_row_y(fb, i), ROW_BTN_W, rh };
+        for (int i = 4; i < 6; i++) {       /* COMPRESS, QUALITY: - + */
+            int y = settings_row_y(fb, i) + PM_BTN_INSET;
+            r[n++] = (UiRect){ PM_MINUS_X, y, PM_BTN_W, pm_h };
+            r[n++] = (UiRect){ PM_PLUS_X,  y, PM_BTN_W, pm_h };
+        }
+        r[n++] = (UiRect){ TOGGLE_BTN_X, settings_row_y(fb, 6) + PM_BTN_INSET,
+                           TOGGLE_BTN_W, pm_h };
+        *back = n;
+        r[n++] = (UiRect){ ACT_BTN_BACK_X, ay, ACT_BTN_W, ACT_BTN_H };
+        r[n++] = (UiRect){ ACT_BTN_EXIT_X, ay, ACT_BTN_W, ACT_BTN_H };
+        r[n++] = (UiRect){ ACT_BTN_SAVE_X, ay, ACT_BTN_W, ACT_BTN_H };
+    } else if (st->keypad_mode == KEYPAD_NUMERIC) {
+        *back = 0;
+        for (int i = 0; i < (int)KP_NUM_BUTTONS; i++) {
+            const KeypadButton *b = &kp_buttons[i];
+            if (strcmp(b->label, "CANCEL") == 0) *back = n;
+            r[n++] = (UiRect){ b->x, kp_btn_y(fb, b), b->w, b->h };
+        }
+    } else {
+        bool is_full = (st->keypad_mode == KEYPAD_FULL);
+        int keys = is_full ? 40 : 30;       /* FULL adds the digit row */
+        for (int i = 0; i < keys; i++) {
+            int kx, ky;
+            fkp_key_pos(i, &kx, &ky);
+            r[n++] = (UiRect){ kx, ky, FKP_KEY_W, FKP_KEY_H };
+        }
+        *back = n;
+        for (int i = 0; i < fkp_action_count(is_full); i++) {
+            if (fkp_action_kind(is_full, i) == FKA_CANCEL) *back = n;
+            r[n++] = fkp_action_rect(is_full, i);
+        }
+    }
+    return n;
+}
+
+/* The ring: a 3 px outline just inside the focused target, so it never
+ * overlaps a neighbour 4 px away. */
+static void draw_focus(SettingsState *st) {
+    UiRect r[FOCUS_MAX];
+    int back;
+    int n = focus_rects(st, r, &back);
+    if (!st->focus_on || st->focus < 0 || st->focus >= n) return;
+    const UiRect *f = &r[st->focus];
+    const uint16_t c = RGB565(0, 255, 255);
+    vnc_renderer_fill_rect(st->fb, f->x, f->y, f->w, 3, c);
+    vnc_renderer_fill_rect(st->fb, f->x, f->y + f->h - 3, f->w, 3, c);
+    vnc_renderer_fill_rect(st->fb, f->x, f->y, 3, f->h, c);
+    vnc_renderer_fill_rect(st->fb, f->x + f->w - 3, f->y, 3, f->h, c);
+}
+
 /* ── Draw FULL/ALPHA keypad overlay ────────────────────────────────── */
 
 static void draw_keypad_full(SettingsState *st) {
@@ -813,65 +924,25 @@ static void draw_keypad_full(SettingsState *st) {
     }
 
     /* ── Action row ──────────────────────────────────────────── */
-    int action_row_idx = is_full ? 4 : 3;  /* rows start at 0 */
-    int action_y = FKP_KEYS_Y + action_row_idx * (FKP_KEY_H + FKP_KEY_PAD);
-
-    if (is_full) {
-        /* FULL mode action row: SHIFT, DEL, CLR, CANCEL, OK */
-        int ax = FKP_X + 10;
-        int btn_w = 120;
-        int btn_pad = 8;
-
-        /* SHIFT */
-        uint16_t shift_bg = st->shift_active ? RGB565(0, 80, 120) : RGB565(60, 60, 60);
-        uint16_t shift_fg = st->shift_active ? RGB565(100, 200, 255) : RGB565_WHITE;
-        draw_button(fb, ax, action_y, btn_w, FKP_KEY_H, "SHIFT", shift_bg, shift_fg, 2);
-        ax += btn_w + btn_pad;
-
-        /* DEL */
-        draw_button(fb, ax, action_y, 80, FKP_KEY_H, "DEL",
-                    RGB565(80, 60, 0), RGB565_YELLOW, 2);
-        ax += 80 + btn_pad;
-
-        /* CLR */
-        draw_button(fb, ax, action_y, 80, FKP_KEY_H, "CLR",
-                    RGB565(80, 60, 0), RGB565_YELLOW, 2);
-        ax += 80 + btn_pad;
-
-        /* CANCEL */
-        draw_button(fb, ax, action_y, btn_w, FKP_KEY_H, "CANCEL",
-                    RGB565(160, 0, 0), RGB565_RED, 2);
-        ax += btn_w + btn_pad;
-
-        /* OK */
-        draw_button(fb, ax, action_y, btn_w, FKP_KEY_H, "OK",
-                    RGB565(0, 100, 0), RGB565_GREEN, 2);
-    } else {
-        /* ALPHA mode action row: DEL, CLR, CANCEL, OK */
-        int ax = FKP_X + 10;
-        int btn_w = 130;
-        int btn_pad = 12;
-
-        /* DEL */
-        draw_button(fb, ax, action_y, 100, FKP_KEY_H, "DEL",
-                    RGB565(80, 60, 0), RGB565_YELLOW, 2);
-        ax += 100 + btn_pad;
-
-        /* CLR */
-        draw_button(fb, ax, action_y, 100, FKP_KEY_H, "CLR",
-                    RGB565(80, 60, 0), RGB565_YELLOW, 2);
-        ax += 100 + btn_pad;
-
-        /* CANCEL */
-        draw_button(fb, ax, action_y, btn_w, FKP_KEY_H, "CANCEL",
-                    RGB565(160, 0, 0), RGB565_RED, 2);
-        ax += btn_w + btn_pad;
-
-        /* OK */
-        draw_button(fb, ax, action_y, btn_w, FKP_KEY_H, "OK",
-                    RGB565(0, 100, 0), RGB565_GREEN, 2);
+    for (int i = 0; i < fkp_action_count(is_full); i++) {
+        UiRect b = fkp_action_rect(is_full, i);
+        const char *label;
+        uint16_t bg, fg;
+        switch (fkp_action_kind(is_full, i)) {
+        case FKA_SHIFT:
+            label = "SHIFT";
+            bg = st->shift_active ? RGB565(0, 80, 120) : RGB565(60, 60, 60);
+            fg = st->shift_active ? RGB565(100, 200, 255) : RGB565_WHITE;
+            break;
+        case FKA_DEL:    label = "DEL";    bg = RGB565(80, 60, 0);  fg = RGB565_YELLOW; break;
+        case FKA_CLR:    label = "CLR";    bg = RGB565(80, 60, 0);  fg = RGB565_YELLOW; break;
+        case FKA_CANCEL: label = "CANCEL"; bg = RGB565(160, 0, 0);  fg = RGB565_RED;    break;
+        default:         label = "OK";     bg = RGB565(0, 100, 0);  fg = RGB565_GREEN;  break;
+        }
+        draw_button(fb, b.x, b.y, b.w, b.h, label, bg, fg, 2);
     }
 
+    draw_focus(st);
     fb_swap(fb);
 }
 
@@ -930,89 +1001,42 @@ static int handle_keypad_full_touch(SettingsState *st, int tx, int ty) {
     }
 
     /* ── Test action row buttons ─────────────────────────────── */
-    int action_row_idx = is_full ? 4 : 3;
-    int action_y = FKP_KEYS_Y + action_row_idx * (FKP_KEY_H + FKP_KEY_PAD);
+    for (int i = 0; i < fkp_action_count(is_full); i++) {
+        UiRect b = fkp_action_rect(is_full, i);
+        if (!hit_rect(tx, ty, b.x, b.y, b.w, b.h))
+            continue;
 
-    if (is_full) {
-        /* FULL mode action row layout: SHIFT(120), DEL(80), CLR(80), CANCEL(120), OK(120) */
-        int ax = FKP_X + 10;
-        int btn_w = 120;
-        int btn_pad = 8;
-
-        /* SHIFT */
-        if (hit_rect(tx, ty, ax, action_y, btn_w, FKP_KEY_H)) {
+        switch (fkp_action_kind(is_full, i)) {
+        case FKA_SHIFT:
             st->shift_active = !st->shift_active;
             return -1;
-        }
-        ax += btn_w + btn_pad;
 
-        /* DEL */
-        if (hit_rect(tx, ty, ax, action_y, 80, FKP_KEY_H)) {
+        case FKA_DEL:
             if (st->keypad_cursor > 0)
                 st->keypad_buf[--st->keypad_cursor] = '\0';
             return -1;
-        }
-        ax += 80 + btn_pad;
 
-        /* CLR */
-        if (hit_rect(tx, ty, ax, action_y, 80, FKP_KEY_H)) {
+        case FKA_CLR:
             st->keypad_buf[0] = '\0';
             st->keypad_cursor = 0;
             return -1;
-        }
-        ax += 80 + btn_pad;
 
-        /* CANCEL */
-        if (hit_rect(tx, ty, ax, action_y, btn_w, FKP_KEY_H)) {
+        case FKA_CANCEL:
             st->screen = SCREEN_MAIN;
             return 0;
-        }
-        ax += btn_w + btn_pad;
 
-        /* OK */
-        if (hit_rect(tx, ty, ax, action_y, btn_w, FKP_KEY_H)) {
-            /* Commit PASSWORD */
-            strncpy(st->working.password, st->keypad_buf,
-                    sizeof(st->working.password) - 1);
-            st->working.password[sizeof(st->working.password) - 1] = '\0';
-            st->screen = SCREEN_MAIN;
-            return 1;
-        }
-    } else {
-        /* ALPHA mode action row layout: DEL(100), CLR(100), CANCEL(130), OK(130) */
-        int ax = FKP_X + 10;
-        int btn_w = 130;
-        int btn_pad = 12;
-
-        /* DEL */
-        if (hit_rect(tx, ty, ax, action_y, 100, FKP_KEY_H)) {
-            if (st->keypad_cursor > 0)
-                st->keypad_buf[--st->keypad_cursor] = '\0';
-            return -1;
-        }
-        ax += 100 + btn_pad;
-
-        /* CLR */
-        if (hit_rect(tx, ty, ax, action_y, 100, FKP_KEY_H)) {
-            st->keypad_buf[0] = '\0';
-            st->keypad_cursor = 0;
-            return -1;
-        }
-        ax += 100 + btn_pad;
-
-        /* CANCEL */
-        if (hit_rect(tx, ty, ax, action_y, btn_w, FKP_KEY_H)) {
-            st->screen = SCREEN_MAIN;
-            return 0;
-        }
-        ax += btn_w + btn_pad;
-
-        /* OK */
-        if (hit_rect(tx, ty, ax, action_y, btn_w, FKP_KEY_H)) {
-            /* Commit ENCODINGS */
-            strncpy(st->working.encodings, st->keypad_buf,
-                    sizeof(st->working.encodings) - 1);
-            st->working.encodings[sizeof(st->working.encodings) - 1] = '\0';
+        case FKA_OK:
+            if (is_full) {
+                /* Commit PASSWORD */
+                strncpy(st->working.password, st->keypad_buf,
+                        sizeof(st->working.password) - 1);
+                st->working.password[sizeof(st->working.password) - 1] = '\0';
+            } else {
+                /* Commit ENCODINGS */
+                strncpy(st->working.encodings, st->keypad_buf,
+                        sizeof(st->working.encodings) - 1);
+                st->working.encodings[sizeof(st->working.encodings) - 1] = '\0';
+            }
             st->screen = SCREEN_MAIN;
             return 1;
         }
@@ -1061,6 +1085,21 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
     st.keypad_mode = KEYPAD_NUMERIC;
     st.shift_active = false;
 
+    /* Pad / keyboard focus.  The ring starts hidden, on the top-left target. */
+    UiRect rects[FOCUS_MAX];
+    int back_idx = 0;
+    int nrects = focus_rects(&st, rects, &back_idx);
+    st.focus = st.focus_main = ui_focus_first(rects, nrects);
+    st.focus_on = false;
+    int screen_key = -1;            /* -1 main, else the keypad mode */
+    UiTap tap = { 0, 0, 0 };        /* A / B as a tap: outside st, it is not drawn */
+
+    /* The session's USB nodes are already closed (vnc_input_cleanup()), so
+     * this screen opens its own.  Whatever is held now — Select from the hold
+     * that opened Settings, A — is seeded and never acts. */
+    VncNavInput nav;
+    vnc_nav_open(&nav);
+
     /* Drain any pending touch events */
     if (touch)
         touch_drain_events(touch);
@@ -1078,8 +1117,9 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
     SettingsState prev;
     memcpy(&prev, &st, sizeof(prev));
     bool needs_redraw = true;
+    int ret = -1;
 
-    while (1) {
+    while (ret < 0) {
         /* Draw current screen */
         if (needs_redraw) {
             if (st.screen == SCREEN_MAIN) {
@@ -1096,13 +1136,45 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
         }
 
         /* Poll touch input */
-        int tx = -1, ty = -1;
+        TouchState ts;
+        memset(&ts, 0, sizeof(ts));
         if (touch) {
             touch_poll(touch);
-            TouchState ts = touch_get_state(touch);
-            if (ts.released) {
-                tx = ts.x;
-                ty = ts.y;
+            ts = touch_get_state(touch);
+        }
+        bool real_touching = ts.pressed || ts.held;
+        if (real_touching)
+            st.focus_on = false;    /* a finger hides the ring */
+
+        /* Pad and keyboard: moves act at once; A and B queue a tap, and
+         * nothing more is taken until that tap has been delivered. */
+        VncNav acts[16];
+        int nact = vnc_nav_poll(&nav, acts, 16);
+        for (int i = 0; i < nact && tap.phase == 0 && !real_touching; i++) {
+            UiDir d;
+            if (vnc_nav_dir(acts[i], &d)) {
+                if (st.focus_on)
+                    st.focus = ui_focus_move(rects, nrects, st.focus, d);
+                st.focus_on = true;     /* the first press only shows the ring */
+            } else if (acts[i] == VNC_NAV_ACTIVATE) {
+                if (st.focus_on && st.focus >= 0 && st.focus < nrects)
+                    ui_tap_begin(&tap, &rects[st.focus]);
+                st.focus_on = true;
+            } else if (acts[i] == VNC_NAV_BACK && back_idx < nrects) {
+                ui_tap_begin(&tap, &rects[back_idx]);
+            }
+        }
+
+        /* A queued tap stands in for the finger: a press frame, then a
+         * release frame at the same point, through the ordinary path below. */
+        int tx = -1, ty = -1;
+        {
+            int x = ts.x, y = ts.y;
+            bool touching = real_touching, pressed = ts.pressed, released = ts.released;
+            ui_tap_frame(&tap, real_touching, &x, &y, &touching, &pressed, &released);
+            if (released) {
+                tx = x;
+                ty = y;
             }
         }
 
@@ -1112,13 +1184,11 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
 
         if (tx >= 0 && ty >= 0) {
             if (st.screen == SCREEN_MAIN) {
+                st.focus_main = st.focus;
                 int result = handle_main_touch(&st, tx, ty);
 
-                if (result == SETTINGS_BACK)
-                    return SETTINGS_BACK;
-
-                if (result == SETTINGS_EXIT)
-                    return SETTINGS_EXIT;
+                if (result == SETTINGS_BACK || result == SETTINGS_EXIT)
+                    ret = result;
 
                 if (result == SETTINGS_SAVE) {
                     /* Attempt to save config file */
@@ -1128,7 +1198,7 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
                     } else {
                         /* Copy working config back to live */
                         memcpy(config, &st.working, sizeof(VNCConfig));
-                        return SETTINGS_SAVE;
+                        ret = SETTINGS_SAVE;
                     }
                 }
                 /* result == 99 means switched to keypad, will redraw next loop */
@@ -1142,6 +1212,19 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
                 /* Keypad handler manages its own screen transitions */
             }
         }
+        if (ret >= 0)
+            break;
+
+        /* A screen switch changes the targets: a keypad starts on its
+         * top-left key, the main screen gets back the row that opened it. */
+        int key = (st.screen == SCREEN_MAIN) ? -1 : (int)st.keypad_mode;
+        nrects = focus_rects(&st, rects, &back_idx);
+        if (key != screen_key) {
+            st.focus = (key == -1) ? st.focus_main : ui_focus_first(rects, nrects);
+            screen_key = key;
+        }
+        if (st.focus < 0 || st.focus >= nrects)
+            st.focus = ui_focus_first(rects, nrects);
 
         /* Any change to the state that feeds the drawing code — a field edit, a
          * screen switch, the save-error counter ticking down — schedules exactly
@@ -1152,4 +1235,7 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
         /* ~30 Hz input poll; the redraw above is gated on state changes */
         usleep(33000);
     }
+
+    vnc_nav_close(&nav);
+    return ret;
 }

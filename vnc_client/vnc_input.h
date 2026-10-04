@@ -106,4 +106,28 @@ float vnc_input_exit_progress(VNCInput *input);
 // Cleanup
 void vnc_input_cleanup(VNCInput *input);
 
+// ── Settings-screen input ───────────────────────────────────────────────
+// The USB keyboards and game pads as focus actions (vnc_pad.h, VncNav) for
+// the Settings screen.  Settings opens only after vnc_input_cleanup() has
+// closed the session's nodes (or from the reconnect screen, where no session
+// holds any), so this opens its own set for the screen's lifetime rather than
+// sharing — nothing else is reading them meanwhile.  Mice are not opened.
+typedef struct {
+    InputNode nodes[2 * VNC_MAX_PER_KIND];
+    VncNavPad pad[2 * VNC_MAX_PER_KIND];   // index-aligned with nodes[]
+    int count;
+    VncPadMap map;                         // from /etc/input_config.conf
+    InputSigGate gate;                     // hot-plug rescan
+} VncNavInput;
+
+// Open every keyboard and pad, seeding what is already held so it never acts.
+void vnc_nav_open(VncNavInput *nav);
+
+// Read every pending event; up to max actions into out[], in order.  Returns
+// how many.  Also rescans when /dev/input changes.
+int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max);
+
+// Close every node.
+void vnc_nav_close(VncNavInput *nav);
+
 #endif // VNC_INPUT_H

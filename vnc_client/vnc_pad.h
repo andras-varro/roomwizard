@@ -102,4 +102,58 @@ bool vnc_pad_back_exit(const VncPad *p, uint32_t now, int *permille);
  * a full stick crosses it in about 1.5 s. */
 int vnc_pad_speed_for_width(int remote_w);
 
+/* ── Focus navigation (the Settings screen) ─────────────────────────────── */
+/*
+ * Outside a session a pad does not move a pointer: it moves a focus ring
+ * (common/ui_focus.h).  The d-pad and the left stick are one step per push,
+ * A activates, B goes back.  A USB keyboard's arrows, Enter/Space and Esc mean
+ * the same.  Every action fires on a PRESS EDGE seen on this node since it
+ * was opened, so a button already held when the screen opened — Select from
+ * the hold that opened Settings, A from a tap that landed on its way in —
+ * does nothing, not on release and not on a stray repeated press.
+ */
+typedef enum {
+    VNC_NAV_NONE = 0,
+    VNC_NAV_UP, VNC_NAV_DOWN, VNC_NAV_LEFT, VNC_NAV_RIGHT,
+    VNC_NAV_ACTIVATE,
+    VNC_NAV_BACK,
+} VncNav;
+
+/* The stick counts as pushed past this deflection (of 1000) and as back at
+ * rest below the second; the gap keeps a stick resting near the threshold
+ * from stepping twice. */
+#define VNC_NAV_STICK_ON   500
+#define VNC_NAV_STICK_OFF  250
+
+/* One pad node's navigation state.  Zeroed is idle with no stick range. */
+typedef struct {
+    VncPadRange range_x, range_y;
+    int  hat_x, hat_y;          /* -1, 0, +1: the d-pad as last reported */
+    int  stick_x, stick_y;      /* -1, 0, +1: the stick's latched direction */
+    bool a_down, b_down;        /* held, as this node's events last said */
+} VncNavPad;
+
+/* PURE. Idle, with the given stick ranges. */
+void vnc_nav_pad_reset(VncNavPad *s, VncPadRange rx, VncPadRange ry);
+
+/* PURE. Record a level read at open (EVIOCGKEY / EVIOCGABS) as if its event
+ * had arrived, without acting on it.  A key seeded down needs a release
+ * before its next press counts. */
+void vnc_nav_pad_seed(VncNavPad *s, const VncPadMap *m, int type, int code,
+                      int value);
+
+/* PURE. One event (EV_KEY with a NATIVE code, or EV_ABS) as an action.  A key
+ * acts on value 1 from up only; 0 releases it; 2 does nothing.  An axis acts
+ * when it moves into a new non-zero direction. */
+VncNav vnc_nav_pad_event(VncNavPad *s, const VncPadMap *m, int type, int code,
+                         int value);
+
+/* PURE. One USB keyboard EV_KEY as an action.  Arrows act on press and on
+ * autorepeat; Enter, keypad Enter and Space activate and Esc goes back, on
+ * press only — so a key held across the open never fires. */
+VncNav vnc_nav_key(int code, int value);
+
+/* PURE. The focus direction of a move action; false for any other action. */
+bool vnc_nav_dir(VncNav a, UiDir *d);
+
 #endif /* VNC_PAD_H */

@@ -13,7 +13,8 @@
  * Groups: 1 the stick axis and its dead zone; 2 events into button levels,
  * wheel pulses and the d-pad; 3 motion is integrated over elapsed time, not
  * per call, carries its sub-pixel remainder and caps a stall; 4 Select's hold;
- * 5 the map is the shared parser's defaults; 6 the speed for a desktop width.
+ * 5 the map is the shared parser's defaults; 6 the speed for a desktop width;
+ * 7 the Settings screen's focus actions from pad and keyboard events.
  *
  * ⚠️ What it cannot see: which raw codes a real pad sends (input_pad_key()
  * and the scan are input_scan_test's), whether vnc_input.c feeds every event
@@ -208,6 +209,85 @@ static void group6_speed(void) {
     CHECK(vnc_pad_speed_for_width(100000) == VNC_PAD_MAX_SPEED, "huge desktop: the ceiling");
 }
 
+static void group7_nav(void) {
+    VncPadMap m = default_map();
+    VncNavPad s;
+    UiDir d;
+
+    vnc_nav_pad_reset(&s, XPAD, XPAD);
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 1) == VNC_NAV_ACTIVATE, "A press activates");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 2) == VNC_NAV_NONE, "A repeat: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 1) == VNC_NAV_NONE,
+          "a second press with no release between: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 0) == VNC_NAV_NONE, "A release: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 1) == VNC_NAV_ACTIVATE, "press again: activates");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_EAST, 1) == VNC_NAV_BACK, "B press is back");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SELECT, 1) == VNC_NAV_NONE, "Select: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SELECT, 0) == VNC_NAV_NONE, "Select up: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_WEST, 1) == VNC_NAV_NONE, "X: nothing");
+
+    /* Held on the way in: seeded down, so neither its release nor a stray
+     * press before that release acts. */
+    vnc_nav_pad_reset(&s, XPAD, XPAD);
+    vnc_nav_pad_seed(&s, &m, EV_KEY, BTN_SOUTH, 1);
+    vnc_nav_pad_seed(&s, &m, EV_KEY, BTN_EAST, 1);
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 1) == VNC_NAV_NONE, "A seeded held: press ignored");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_EAST, 1) == VNC_NAV_NONE, "B seeded held: press ignored");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 0) == VNC_NAV_NONE, "its release: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_KEY, BTN_SOUTH, 1) == VNC_NAV_ACTIVATE, "then a real press acts");
+
+    /* d-pad: one step per push into a direction. */
+    vnc_nav_pad_reset(&s, XPAD, XPAD);
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0X, -1) == VNC_NAV_LEFT, "hat left");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0X, -1) == VNC_NAV_NONE, "hat left again: no step");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0X, 1) == VNC_NAV_RIGHT, "straight to right: steps");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0X, 0) == VNC_NAV_NONE, "centred: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0Y, -1) == VNC_NAV_UP, "hat up");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0Y, 0) == VNC_NAV_NONE, "up released");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0Y, 1) == VNC_NAV_DOWN, "hat down");
+    vnc_nav_pad_reset(&s, XPAD, XPAD);
+    vnc_nav_pad_seed(&s, &m, EV_ABS, ABS_HAT0X, 1);
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_HAT0X, 1) == VNC_NAV_NONE,
+          "a d-pad held on the way in does not step");
+
+    /* Left stick, with hysteresis. */
+    vnc_nav_pad_reset(&s, XPAD, XPAD);
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 8000) == VNC_NAV_NONE, "a quarter push: nothing");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 30000) == VNC_NAV_RIGHT, "a full push steps right");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 32767) == VNC_NAV_NONE, "held: no second step");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 12000) == VNC_NAV_NONE,
+          "eased back between the thresholds: still latched");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 30000) == VNC_NAV_NONE,
+          "so pushing again from there is no step");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 0) == VNC_NAV_NONE, "at rest: unlatched");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, 30000) == VNC_NAV_RIGHT, "and the next push steps");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_X, -30000) == VNC_NAV_LEFT, "flicked across: steps left");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_Y, -30000) == VNC_NAV_UP, "stick up");
+    CHECK(vnc_nav_pad_event(&s, &m, EV_ABS, ABS_RY, -30000) == VNC_NAV_NONE, "right stick: nothing");
+    VncNavPad z;
+    VncPadRange none = { 0, 0 };
+    vnc_nav_pad_reset(&z, none, none);
+    CHECK(vnc_nav_pad_event(&z, &m, EV_ABS, ABS_X, 30000) == VNC_NAV_NONE,
+          "a pad with no stick range never steps from the stick");
+
+    /* Keyboard. */
+    CHECK(vnc_nav_key(KEY_UP, 1) == VNC_NAV_UP && vnc_nav_key(KEY_DOWN, 1) == VNC_NAV_DOWN &&
+          vnc_nav_key(KEY_LEFT, 1) == VNC_NAV_LEFT && vnc_nav_key(KEY_RIGHT, 1) == VNC_NAV_RIGHT,
+          "arrows move");
+    CHECK(vnc_nav_key(KEY_RIGHT, 2) == VNC_NAV_RIGHT, "an arrow autorepeats");
+    CHECK(vnc_nav_key(KEY_RIGHT, 0) == VNC_NAV_NONE, "an arrow release: nothing");
+    CHECK(vnc_nav_key(KEY_ENTER, 1) == VNC_NAV_ACTIVATE && vnc_nav_key(KEY_KPENTER, 1) == VNC_NAV_ACTIVATE &&
+          vnc_nav_key(KEY_SPACE, 1) == VNC_NAV_ACTIVATE, "Enter / keypad Enter / Space activate");
+    CHECK(vnc_nav_key(KEY_ENTER, 2) == VNC_NAV_NONE, "Enter held across the open (repeats only): nothing");
+    CHECK(vnc_nav_key(KEY_ESC, 1) == VNC_NAV_BACK, "Esc is back");
+    CHECK(vnc_nav_key(KEY_ESC, 2) == VNC_NAV_NONE, "Esc repeat: nothing");
+    CHECK(vnc_nav_key(KEY_A, 1) == VNC_NAV_NONE, "a letter: nothing");
+
+    CHECK(vnc_nav_dir(VNC_NAV_LEFT, &d) && d == UI_DIR_LEFT, "LEFT is UI_DIR_LEFT");
+    CHECK(vnc_nav_dir(VNC_NAV_DOWN, &d) && d == UI_DIR_DOWN, "DOWN is UI_DIR_DOWN");
+    CHECK(!vnc_nav_dir(VNC_NAV_ACTIVATE, &d) && !vnc_nav_dir(VNC_NAV_NONE, &d), "no direction");
+}
+
 int main(void) {
     group1_axis();
     group2_events();
@@ -215,6 +295,7 @@ int main(void) {
     group4_back();
     group5_map();
     group6_speed();
+    group7_nav();
     printf("vnc_pad_test: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

@@ -128,3 +128,101 @@ int vnc_pad_speed_for_width(int remote_w) {
     if (s > VNC_PAD_MAX_SPEED) s = VNC_PAD_MAX_SPEED;
     return s;
 }
+
+/* ── Focus navigation ───────────────────────────────────────────────────── */
+
+void vnc_nav_pad_reset(VncNavPad *s, VncPadRange rx, VncPadRange ry) {
+    memset(s, 0, sizeof(*s));
+    s->range_x = rx;
+    s->range_y = ry;
+}
+
+/* A key acts on its press from up; the level is kept either way. */
+static bool nav_press(bool *down, int value) {
+    if (value == 2) return false;
+    bool edge = (value == 1 && !*down);
+    *down = (value != 0);
+    return edge;
+}
+
+/* An axis acts on entering a new non-zero direction. */
+static bool nav_axis(int *dir, int now) {
+    if (now == *dir) return false;
+    *dir = now;
+    return now != 0;
+}
+
+/* The stick's latched direction after a reading: pushed past ON, back below
+ * OFF, or unchanged in between. */
+static int nav_stick(int latched, int raw, VncPadRange r) {
+    int a = vnc_pad_axis(raw, r, 0);
+    if (a >= VNC_NAV_STICK_ON)  return 1;
+    if (a <= -VNC_NAV_STICK_ON) return -1;
+    if (a < VNC_NAV_STICK_OFF && a > -VNC_NAV_STICK_OFF) return 0;
+    return latched;
+}
+
+static VncNav nav_update(VncNavPad *s, const VncPadMap *m, int type, int code,
+                         int value) {
+    if (type == EV_KEY) {
+        if (code == m->left)
+            return nav_press(&s->a_down, value) ? VNC_NAV_ACTIVATE : VNC_NAV_NONE;
+        if (code == m->right)
+            return nav_press(&s->b_down, value) ? VNC_NAV_BACK : VNC_NAV_NONE;
+    } else if (type == EV_ABS) {
+        if (code == m->hat_x) {
+            if (nav_axis(&s->hat_x, sign3(value)))
+                return s->hat_x < 0 ? VNC_NAV_LEFT : VNC_NAV_RIGHT;
+        } else if (code == m->hat_y) {
+            if (nav_axis(&s->hat_y, sign3(value)))
+                return s->hat_y < 0 ? VNC_NAV_UP : VNC_NAV_DOWN;
+        } else if (code == m->stick_x) {
+            if (nav_axis(&s->stick_x, nav_stick(s->stick_x, value, s->range_x)))
+                return s->stick_x < 0 ? VNC_NAV_LEFT : VNC_NAV_RIGHT;
+        } else if (code == m->stick_y) {
+            if (nav_axis(&s->stick_y, nav_stick(s->stick_y, value, s->range_y)))
+                return s->stick_y < 0 ? VNC_NAV_UP : VNC_NAV_DOWN;
+        }
+    }
+    return VNC_NAV_NONE;
+}
+
+void vnc_nav_pad_seed(VncNavPad *s, const VncPadMap *m, int type, int code,
+                      int value) {
+    (void)nav_update(s, m, type, code, value);
+}
+
+VncNav vnc_nav_pad_event(VncNavPad *s, const VncPadMap *m, int type, int code,
+                         int value) {
+    return nav_update(s, m, type, code, value);
+}
+
+VncNav vnc_nav_key(int code, int value) {
+    if (value == 1 || value == 2) {
+        switch (code) {
+        case KEY_UP:    return VNC_NAV_UP;
+        case KEY_DOWN:  return VNC_NAV_DOWN;
+        case KEY_LEFT:  return VNC_NAV_LEFT;
+        case KEY_RIGHT: return VNC_NAV_RIGHT;
+        default: break;
+        }
+    }
+    if (value == 1) {
+        switch (code) {
+        case KEY_ENTER: case KEY_KPENTER: case KEY_SPACE: return VNC_NAV_ACTIVATE;
+        case KEY_ESC:   return VNC_NAV_BACK;
+        default: break;
+        }
+    }
+    return VNC_NAV_NONE;
+}
+
+bool vnc_nav_dir(VncNav a, UiDir *d) {
+    switch (a) {
+    case VNC_NAV_UP:    *d = UI_DIR_UP;    return true;
+    case VNC_NAV_DOWN:  *d = UI_DIR_DOWN;  return true;
+    case VNC_NAV_LEFT:  *d = UI_DIR_LEFT;  return true;
+    case VNC_NAV_RIGHT: *d = UI_DIR_RIGHT; return true;
+    default:            return false;
+    }
+}

@@ -685,7 +685,111 @@ float vnc_input_exit_progress(VNCInput *input) {
 
 void vnc_input_cleanup(VNCInput *input) {
     if (!input) return;
-    
+
     vnc_input_close_usb_devices(input);
     DEBUG_PRINT("Input handler cleanup");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Settings-screen input: keyboards and pads as focus actions
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define VNC_NAV_MAX_NODES  (2 * VNC_MAX_PER_KIND)
+
+/* A freshly opened pad node: its stick ranges, and every axis and button
+ * level as it is now, seeded so none of it acts — A held from the tap that
+ * opened Settings, Select from the hold, a d-pad already pushed. */
+static void seed_nav_pad(VncNavInput *nav, int i) {
+    const InputNode *nd = &nav->nodes[i];
+    const VncPadMap *m = &nav->map;
+    VncNavPad *s = &nav->pad[i];
+    int x, y, hx, hy;
+    VncPadRange rx = pad_axis_info(nd->fd, m->stick_x, &x);
+    VncPadRange ry = pad_axis_info(nd->fd, m->stick_y, &y);
+    vnc_nav_pad_reset(s, rx, ry);
+    vnc_nav_pad_seed(s, m, EV_ABS, m->stick_x, x);
+    vnc_nav_pad_seed(s, m, EV_ABS, m->stick_y, y);
+    pad_axis_info(nd->fd, m->hat_x, &hx);
+    pad_axis_info(nd->fd, m->hat_y, &hy);
+    vnc_nav_pad_seed(s, m, EV_ABS, m->hat_x, hx);
+    vnc_nav_pad_seed(s, m, EV_ABS, m->hat_y, hy);
+
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(nd->fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return;
+    for (int raw = BTN_MISC; raw <= BTN_GEAR_UP; raw++)
+        if (input_caps_test(keys, raw))
+            vnc_nav_pad_seed(s, m, EV_KEY, input_pad_key(nd->pad_layout, raw), 1);
+}
+
+static void nav_scan(VncNavInput *nav) {
+    static const int cap[INPUT_KIND_COUNT] = {
+        [INPUT_KIND_KEYBOARD] = VNC_MAX_PER_KIND,
+        [INPUT_KIND_PAD]      = VNC_MAX_PER_KIND,
+    };
+    int before = nav->count;
+    input_sig_gate_baseline(&nav->gate, input_node_sig());
+    nav->count = input_scan(nav->nodes, before, VNC_NAV_MAX_NODES, cap);
+    for (int i = before; i < nav->count; i++) {
+        memset(&nav->pad[i], 0, sizeof(nav->pad[i]));
+        if (nav->nodes[i].kind == INPUT_KIND_PAD)
+            seed_nav_pad(nav, i);
+        DEBUG_PRINT("Settings input: %s at %s", nav->nodes[i].name, nav->nodes[i].path);
+    }
+}
+
+static void nav_drop(VncNavInput *nav, int i) {
+    memmove(&nav->pad[i], &nav->pad[i + 1],
+            (size_t)(nav->count - i - 1) * sizeof(nav->pad[0]));
+    nav->count = input_scan_drop(nav->nodes, nav->count, i);
+}
+
+void vnc_nav_open(VncNavInput *nav) {
+    InputConfig cfg;
+    memset(nav, 0, sizeof(*nav));
+    input_config_defaults(&cfg);
+    (void)input_config_load(&cfg, INPUT_CONFIG_PATH);
+    vnc_pad_map_from_config(&nav->map, &cfg);
+    nav_scan(nav);
+}
+
+int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max) {
+    int n = 0;
+    if (input_sig_gate_poll(&nav->gate, get_ticks_ms()))
+        nav_scan(nav);
+
+    for (int i = 0; i < nav->count; ) {
+        const InputNode *nd = &nav->nodes[i];
+        struct input_event ev;
+        ssize_t r;
+
+        errno = 0;
+        while ((r = read(nd->fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+            VncNav a = VNC_NAV_NONE;
+            if (nd->kind == INPUT_KIND_KEYBOARD) {
+                if (ev.type == EV_KEY)
+                    a = vnc_nav_key(ev.code, ev.value);
+            } else if (ev.type == EV_KEY) {
+                a = vnc_nav_pad_event(&nav->pad[i], &nav->map, EV_KEY,
+                                      input_pad_key(nd->pad_layout, ev.code), ev.value);
+            } else if (ev.type == EV_ABS) {
+                a = vnc_nav_pad_event(&nav->pad[i], &nav->map, EV_ABS,
+                                      ev.code, ev.value);
+            }
+            if (a != VNC_NAV_NONE && n < max)
+                out[n++] = a;
+        }
+        if (r < 0 && errno == ENODEV) {
+            DEBUG_PRINT("Settings input gone: %s", nd->path);
+            nav_drop(nav, i);
+            continue;
+        }
+        i++;
+    }
+    return n;
+}
+
+void vnc_nav_close(VncNavInput *nav) {
+    while (nav->count > 0)
+        nav_drop(nav, nav->count - 1);
 }
