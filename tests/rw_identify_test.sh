@@ -43,6 +43,8 @@
 # silently ran zero cases reports success just as loudly as one that ran all of
 # them.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

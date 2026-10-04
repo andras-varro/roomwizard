@@ -42,6 +42,8 @@
 # copyrighted. The patch is DERIVED from the device's own copy, md5-gated in and
 # md5-asserted out; release.sh refuses any bundle entry that names it.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e
 _START_SECONDS=$(date +%s)
 

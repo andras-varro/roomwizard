@@ -49,6 +49,8 @@
 #   cd native_apps && ./build-and-deploy.sh <ip> set-default
 #   cd vnc_client   && ./build-and-deploy.sh <ip> set-default
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

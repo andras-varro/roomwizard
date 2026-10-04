@@ -45,6 +45,8 @@
 # the FDT walk and the value refusal untested, and those are the parts that decide
 # whether p1 boots.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -85,6 +85,8 @@
 # Control Panel -> Display -> CALIBRATE TOUCH. One boot remains; this removes two
 # of the three, plus the IP hunt.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

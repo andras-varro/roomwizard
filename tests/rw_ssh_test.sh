@@ -85,6 +85,8 @@
 # DECISION (rw_ssh_key_owner, which takes the euid as an argument so both branches
 # are reachable) and that the call site passes the real euid to it.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -37,6 +37,8 @@
 # do is prove the DEVICE gets it; that assertion is commissioning/commission-offline.sh's verify
 # phase against real ext4.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 # ⚠️ Diagnostics from the stub-log guard in push() must survive a CALL SITE that

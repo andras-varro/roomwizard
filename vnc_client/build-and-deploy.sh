@@ -18,6 +18,8 @@
 # that file holds a plaintext VNC password, and a release must publish binaries
 # only, never device config.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e
 _START_SECONDS=$(date +%s)
 

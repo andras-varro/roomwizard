@@ -39,6 +39,8 @@
 # is a TEXT match, so a commented-out audio_bed_init() counts as a game — which is
 # how its own negative control is built (a throwaway .c under the tree naming a tag
 # with no table row makes it exit 1, no shipped file touched).
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'

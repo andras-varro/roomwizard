@@ -69,6 +69,8 @@
 # which E3 alone does not), but do not read them as evidence the function exists —
 # E1/E2, which need it to have removed a file, are what do that.
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

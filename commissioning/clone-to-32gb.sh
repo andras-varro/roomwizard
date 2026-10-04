@@ -32,6 +32,8 @@
 #   5. Preserve p5 (backup) at original size to maintain p6 device numbering
 #   6. UUID is preserved because we resize, not reformat
 
+# Source-path directive: resolves the source= hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
