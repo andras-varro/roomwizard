@@ -162,7 +162,6 @@ build_arm_deps() {
     log_info "Using build directory: $BUILD_DIR"
 
     local ZLIB_LOG="$BUILD_DIR/zlib-build.log"
-    local PNG_LOG="$BUILD_DIR/libpng-build.log"
 
     mkdir -p "$ARM_DEPS_PREFIX" || {
         log_error "Failed to create ARM deps prefix: $ARM_DEPS_PREFIX"; cd "$ORIG_DIR"; exit 1

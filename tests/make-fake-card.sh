@@ -55,7 +55,6 @@ for n in banner.sh sysfs.sh udev modutils.sh alignment.sh devpts.sh checkroot.sh
 done
 
 l() { ln -sf "../init.d/$2" "$BASE/root/etc/$1/$3"; }
-for p in S02:banner.sh:S02banner.sh S03:sysfs.sh:S03sysfs.sh; do :; done
 l rcS.d banner.sh S02banner.sh;            l rcS.d sysfs.sh S03sysfs.sh
 l rcS.d udev S04udev;                      l rcS.d modutils.sh S05modutils.sh
 l rcS.d alignment.sh S06alignment.sh;      l rcS.d devpts.sh S06devpts.sh

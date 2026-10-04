@@ -580,10 +580,6 @@ do_repartition() {
         echo "$line" | sed -E 's/.*type=\s*([0-9a-fA-F]+).*/\1/'
     }
 
-    # Extract header lines (label, label-id, device, unit, sector-size)
-    local header
-    header=$(echo "$saved_table" | grep -E '^(label|label-id|device|unit|sector-size):' || true)
-
     # Extract label-id for preservation
     local label_id
     label_id=$(echo "$saved_table" | grep -oP 'label-id:\s*\K.*' || echo "0x00000000")
