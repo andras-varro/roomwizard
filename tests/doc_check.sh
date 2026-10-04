@@ -383,7 +383,6 @@ jitterentropy_rng	kernel/README.md	IMPROVEMENT_PLAN.md
 ic_id_table	kernel/README.md	IMPROVEMENT_PLAN.md
 algif_skcipher	kernel/README.md	IMPROVEMENT_PLAN.md
 926896a5	kernel/README.md	IMPROVEMENT_PLAN.md
-17243454	kernel/README.md	IMPROVEMENT_PLAN.md
 static-only-last	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 screen_true_panel_width	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 fb_scale_bezel_to_surface	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
@@ -880,6 +879,10 @@ group_c() {
 # gains the reduced-surface conversion rules (surface:panel ratio, bezel scaling, touch needing no divide, the
 # unconverted literals). The narrative, instrument-repair history and operator transcripts were deleted, not moved;
 # the plan entry fell by over 300 lines but a ceiling is a budget, so it was not lowered.
+## 2026-10-04: kernel/README.md 124 -> 139, raised in the commit that gave the software power-off test (patch-table row
+# plus the staged-image procedure) and the Spectre finding their homes there, replaced the stale p1 rollback-image list
+# and reflowed the vendor-kernel paragraph (-2). Receipt row `17243454` (the `.mod` rollback image) was deleted with
+# the image list: the file it described does not exist on the unit. The plan keeps only what stays open.
 ## 2026-10-02: kernel/README.md 120 -> 124, raised in the commit that gave the two musb patches (bounded TX flush for a
 # gone device; set_vbus timeout report) their patch-table rows with mechanism and measurement, and rewrote the
 # manual image-install paragraph. The plan entries kept only what remains open; the plan ceiling was not lowered.
@@ -930,7 +933,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-124	kernel/README.md
+139	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }

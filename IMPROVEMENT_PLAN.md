@@ -386,12 +386,12 @@ so a TWL4030 OFF drops the SoC and RAM rails but probably not the PoE front end.
 unknown, so the panel may stay lit. Waking needs a start-on event; there is no power button and the PWRON
 wiring is unknown, so pulling PoE is the expected only way back.
 
-**Action.** A DT-only change in `kernel/dts`: a `ti,twl4030-power` child under `twl@48` with
-`ti,system-power-controller` (the generic compatible loads no sequencing scripts, the lowest risk). Stage
-it as a test image under a new filename, then run ONE `poweroff` with the operator watching the panel and
-the PoE port draw. **Done when** we know whether `poweroff` darkens the panel and reduces PoE draw, and
-the launcher's Shutdown either uses it or keeps the halt, its screen's unplug-when-white wording
-following whichever end state ships.
+**State: built, not booted.** `kernel/dts/twl4030-poweroff.sh` adds the `ti,twl4030-power` child with
+`ti,system-power-controller` (measured from `twl4030-power.c`: it installs `pm_power_off` only with that
+property; the plain compatible loads no sequence scripts), and a test image is staged on `.188`. The test
+procedure and its risk are in [`kernel/README.md`](kernel/README.md) (*What we patch*). **Done when** one
+`poweroff` has shown whether it darkens the panel and reduces PoE draw, and the launcher's Shutdown either
+uses it or keeps the halt, its screen's unplug-when-white wording following whichever end state ships.
 
 ### F104. CPU-usage graph on the Monitor page — open, operator request 2026-09-30, later
 
@@ -479,6 +479,59 @@ Keep the `/tmp/touch_trace.log` output for SSH use. **Then delete the standalone
 remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-deploy.sh`, its `native_apps/README.md`
 rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
 readings and the log is still written, and no `touch_trace` remains in the tree.
+
+### F121. Disable `CONFIG_BT_HS` in the Bluetooth module build — open, hardening, security audit 2026-10-04
+
+**BleedingTooth** (CVE-2020-12351 A2MP type confusion, RCE, adjacent, needs only the BD_ADDR and no pairing;
+CVE-2020-12352 info leak) reaches us through A2MP. Measured: our `.config` has `BT_HS=y` and `l2cap_core.c:6819`
+creates the A2MP channel unconditionally. Fixed upstream in 4.14.202 [inferred, from memory; web search was
+blocked]. A2MP/High Speed is not used by HID pads or A2DP audio [inferred]. **Action:** `BT_HS=n` in
+`build-bt-modules.sh`, rebuild the modules, then **verify the 8BitDo, the BT keyboard and the headset** still pair
+and play. **Done when** `l2cap_core` no longer references A2MP in the built module.
+
+### F122. Backport the open BT L2CAP/HIDP fixes as `patches-modules/` — open, hardening, security audit 2026-10-04
+
+CVE-2018-9363 (`hidp_process_report` takes a signed length — measured still signed; a one-line fix), the KNOB
+CVE-2019-9506 minimum encryption key size (measured absent), CVE-2022-42895 (L2CAP configuration response leak —
+likely present). Fix versions are from memory [inferred]. **Done when** each patch applies to our tree and the
+modules still load (`build-bt-modules.sh` compares the relinked `vmlinux` CRCs).
+
+### F123. BlueZ 5.66 HID injection (CVE-2023-45866) — open, hardening, security audit 2026-10-04
+
+Fixed in BlueZ 5.71 [inferred]. Measured on `.188`: `Pairable yes` and `AlwaysPairable=true`. **Action:**
+`ClassicBondedOnly=true` in `input.conf` and reconsider `AlwaysPairable=true`. ⚠️ **This may change the operator's
+pad pairing flow**; test the 8BitDo and the BT keyboard before shipping.
+
+### F124. sshd hardening — open, hardening, operator decision, security audit 2026-10-04
+
+Measured: `PermitRootLogin yes`, `PasswordAuthentication yes`, OpenSSH 8.3p1 — not affected by regreSSHion, affected
+by Terrapin (CVE-2023-48795). **Action:** drop `chacha20-poly1305` and the `-etm` MACs. Key-only root login would
+change the operator's login workflow, so it is the operator's call.
+
+### F125. TCP: SACK Panic and SegmentSmack — open, hardening, security audit 2026-10-04
+
+`tcp_min_snd_mss` is absent (measured), so CVE-2019-11477/78/79 apply: four near-clean patches, 4.14.127 [inferred].
+SegmentSmack CVE-2018-5390 is 4.14.59 [inferred]; FragmentSmack CVE-2018-5391 is a large rbtree rework. Stop-gaps:
+`net.ipv4.tcp_sack=0` and lower `ipfrag_high_thresh`/`ipfrag_low_thresh`. Reach is the LAN through TCP 22, the only
+TCP listener (measured); IPv6 is off.
+
+### F126. Stop `syslogd` and avahi listening more widely than needed — open, hardening, security audit 2026-10-04
+
+Measured: `/usr/sbin/syslogd` (no arguments) binds UDP 514 on 0.0.0.0. Find whether it accepts remote messages and
+stop it listening. avahi 0.7 is on 5353: restrict `allow-interfaces`, no reflector.
+
+### F127. Measure `ACTLR.IBE` and set it if clear — open, hardening, low priority, security audit 2026-10-04
+
+Makes the BTB flush that is already built in take effect (Spectre v2; [`kernel/README.md`](kernel/README.md),
+*Spectre*): a small module reads `ACTLR`, and sets it through the ROM SMC if clear. Low priority: no untrusted
+local code runs; eBPF (`BPF_SYSCALL`, JIT `=y`) is the only gadget path and everything runs as root.
+
+### F128. Evaluate rebasing onto 4.14.336 — open, evaluation, security audit 2026-10-04
+
+Still 4.14, so inside the kernel policy; it would bring every fix above. Cost: `kernel/patches/` (9 patches, 326
+lines [measured]; 5 touch musb, which stable changed heavily), a vermagic change for every out-of-tree `.ko` and
+the scripts that hard-code `4.14.52`, and re-measuring the `.52` USB, DMA and touch findings. Cherry-picking F121
+and F125 is cheaper now.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 

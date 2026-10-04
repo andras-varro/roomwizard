@@ -58,12 +58,21 @@ The permission classifier refuses an agent's write there, so the operator takes 
 copying the backup back, by SSH if the image answers or with a card reader if it does not. `build-image.sh`
 itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay untouched.
 
-`.188`'s p1 keeps the images it has run beside `uImage-system`, as rollbacks and negative controls:
-`.vendor` (`edc637ac…`), `.500ma` (`a1fd1af8…`, vendor plus the USB power patch), `.mod` (`17243454…`, the
-same patched image without it), `.ours-nopanel` (`3713faf7…`, vendor DTB), `.panel-v1` (`8bd1e362…`, before the
-fb-size and backlight patches) and `.disconnect` (`926896a5…`, before the ID-ground patch). The running
-`uImage-system` is our image with every `kernel/patches/` patch and our panel DTB (`24ab7f08…`, no 500 mA
-power patch); `.b40` (`f3b446c6…`) is the image before the two flush/set_vbus patches.
+`.188`'s p1 holds rollback images beside `uImage-system`, **measured 2026-10-04**: `.autosusp`, `.console`,
+`.isactive`, `.mstandby`, `.musbpio`, `.b40` (`f3b446c6…`, before the two flush/set_vbus patches) and
+`.disconnect` (`926896a5…`, before the ID-ground patch). The running `uImage-system` is our image with every
+`kernel/patches/` patch and our panel DTB (`24ab7f08…`). ⚠️ **p1 is 97% full, about 2.5 MB free**, one
+image (~2.3 MB) at a time: delete a stale one to make room for the next.
+
+**Software power-off test (`dts/twl4030-poweroff.sh`): built, not booted.** `uImage-test` md5 `fb4f2c94…` is
+staged at `.188:/home/root/uImage-system.poweroff`. There is no one-shot boot — U-Boot loads only
+`uImage-system` and ignores `boot.scr` — so the operator backs up `uImage-system` as `.f103undo` on p1
+(freeing space by removing the stale `.musbpio`), installs, reboots, checks
+`/sys/bus/platform/drivers/twl4030_power/`, notes the PoE draw, runs `poweroff` and watches panel and draw for
+~30 s. Success is a dark panel and a draw far below idle; a halt is a white panel with unchanged draw, perhaps
+`TWL4030 Unable to power off`. Rollback is copying `.f103undo` back. ⚠️ **Inferred risk:** `pm_power_off` runs
+with IRQs off and 4.14's `omap-i2c` has no atomic transfer, so a hang would look like today's halt. Every
+image built from now on carries the node.
 
 ## Bluetooth modules
 
@@ -100,6 +109,7 @@ manufacturer 93. No MUSB DMA question stands in the way: A2DP is tens of KB/s, w
 | `patches/musb-omap2430-session-on-id-ground.patch` | `omap_musb_set_mailbox()` acts on `MUSB_ID_GROUND` and `MUSB_VBUS_OFF` only `if (musb->gadget_driver)`, always NULL here (`# CONFIG_USB_GADGET is not set`), so an adapter plug never sets `SESSION` and a cold port stays dead until a rebind ([§3.6](../SYSTEM_ANALYSIS.md#36-usb)). The patch drops the guard on both arms: ID-ground → `omap_control_usb_set_mode(HOST)` + `set_vbus(1)`, VBUS-off → `set_vbus(0)`. **Booted 2026-09-29 on `.188`** (uImage md5 `f3b446c6…`, every patch here; undo `uImage-system.disconnect`): adapter pulled with a hub and 6 devices → `status=4`, `set_vbus(0)`, all disconnect; replugged → `status=1`, `set_vbus(1)`, the hub enumerates 0.5 s later and all 7 are back within 3 s with no RESCAN, mode `a_host`. A hub swapped behind a seated adapter (no ID edge) re-enumerates too, mode staying `a_host`, which the previous image missed — why, **[inferred]**: the port now reaches a proper `a_host` | debugfs kprobes `p:rwmb omap2430_musb_mailbox status=%r0:u32` and `p:rwsv omap2430_musb_set_vbus on=%r1:u32` (no `dynamic_debug` on our image); `twl4030_usb` in `/proc/interrupts` ticks once per ID/VBUS edge |
 | `patches/musb-host-flush-gone-device.patch` | `musb_h_tx_flush_fifo()` (upstream `FIXME`, `musb_host.c`) retries 1000 × `mdelay(1)` under `musb->lock` with IRQs off while `FIFONOTEMPTY`; behind an unplugged hub the FIFO never drains, so each pull of a hub carrying a streaming USB card stalls ~1 s with IRQs off. `dev_WARN_ONCE` hides the second and later prints, not the stall. `musb_h_tx_flush_fifo_urb()` tries 10 times (silently) when `urb->dev->state == USB_STATE_NOTATTACHED`, at three call sites: `musb_ep_program`, the `musb_host_tx` error path and `musb_cleanup_urb`. Cleanup alone was not enough: `musb_cleanup_urb` → `musb_advance_schedule` → `musb_start_urb` → `musb_ep_program` flushes (1000 tries) once per URB the dead device still had queued, and the first version only shortened the last one (**measured**, five pulls with a kprobe pair on `musb_cleanup_urb`: 1-2 calls of ~1003 ms each, plus one WARNING from `musb_start_urb` in `hub_event`). `musb_rx_reinit`'s shared-FIFO flush keeps 1000 (no URB of its own; not seen in the traces). **Booted on `.188`** (uImage md5 `24ab7f08…`; undo `uImage-system.b40`, `f3b446c6…`), streaming USB audio, five hub pulls: 28 `musb_cleanup_urb` calls, longest 20 ms, no `Could not flush host TX10 fifo` WARNING, and the operator saw failover "almost instantaneous" (was ~1 s) (**measured, n=5**) | reading `musb_h_tx_flush_fifo*`, `musb_cleanup_urb`, `musb_start_urb`; kprobe timings on `.188` |
 | `patches/musb-omap2430-set-vbus-report.patch` | `omap2430_musb_set_vbus()` polls DEVCTL `BDEVICE` 100 × `mdelay(5)`, so upstream's 1 s jiffies deadline never ends the wait: it gives up after ~505 ms **[inferred from source, not timed on the device]** and prints a bare `configured as A device timeout`, then carries on as on success. The patch waits on a `ktime` deadline (1 s from the mailbox work, 500 ms from the SESSREQ hard IRQ) and prints `configured as A device timeout: devctl %02x after %lld ms[ (irq)]`; carry-on is kept. Booted on `.188` with the patch above | reading `omap2430.c`; the message makes the next occurrence measure itself |
+| `dts/twl4030-poweroff.sh` | `poweroff` is a halt: the vendor `twl@48` has no power child, so `drivers/mfd/twl4030-power.c` binds nothing and `pm_power_off` stays NULL (measured, `CONFIG_TWL4030_POWER=y`). The script adds `power` (`ti,twl4030-power`, `ti,system-power-controller`): the probe installs `pm_power_off` (writes `PWR_DEVOFF`) and, with the plain compatible, loads no sequence scripts. **Built, not booted** (test procedure above) | reading `twl4030-power.c`; `twl4030_power_off` in `/proc/kallsyms` with nothing bound |
 
 **The panel patch, in detail.**
 - `/display` becomes `compatible = "panel-dpi"` with `enable-gpios` = pwrdn and a `panel-timing` node
@@ -113,15 +123,23 @@ manufacturer 93. No MUSB DMA question stands in the way: A2DP is tens of KB/s, w
   pwrdn. If the panel starts badly, the fallback is a ~250-line clone of `panel-dpi` that drives all
   three lines with the vendor's delays.
 
+## Spectre
+
+The SoC core is a Cortex-A8 r1p7 (measured), affected by Spectre v1 and v2 only (inferred, ARM's table). Vanilla
+4.14.52 already invalidates the BTB on a context switch (`cpu_ca8_switch_mm`, `proc-v7-2level.S:44-47`, in our
+`System.map` — measured). The vendor kernel is at parity: `vendor.kallsyms` has `cpu_v7_btbinv_switch_mm` only,
+no `harden_branch_predictor` or `cpu_v7_ca8_ibe`, and `vendor-Image` has no "spectre" string (measured). ⚠️ **The
+flush does nothing unless `ACTLR.IBE` is set.** The kernel's IBE write (`__ca8_errata`) is compiled out under
+`ARCH_MULTIPLATFORM`; on a GP OMAP3 `ACTLR` is writable through the ROM SMC (`r12=3`, as `sleep34xx.S:471-473`
+does); whether the vendor U-Boot sets it is unmeasured. The ARM32 v1/v2 series reached 4.14.77 upstream (inferred).
+
 ## Reading the vendor kernel
 
-The vendor source is not available, and that has not mattered. The vendor's `/proc/kallsyms` is
-compared with our `System.map`, with each function's size taken as the distance to the next symbol.
-The functions whose size differs, or that exist only in the vendor image, are what it patched. Each is
-then disassembled from the
-decompressed vendor `Image`, and its `bl` targets and literal-pool strings are resolved. It found the
-Ethernet reset pulse. It also recovered the whole panel driver: timings, GPIO order, delays, and the
-signal polarity that sysfs never exposed.
+The vendor source is not available, and that has not mattered. The vendor's `/proc/kallsyms` is compared with
+our `System.map`, each function's size being the distance to the next symbol. Functions whose size differs, or
+that exist only in the vendor image, are what it patched; each is disassembled from the decompressed vendor
+`Image` with its `bl` targets and literal-pool strings resolved. That found the Ethernet reset pulse and the
+whole panel driver: timings, GPIO order, delays, and the signal polarity sysfs never exposed.
 
 The tools are scratch-grade and live outside the repo, in `C:\work\rw-scratch`: `fsize.py` for sizes,
 `calls.py <fn> <vendor_size> <our_size>` for the call-sequence diff, `dis.sh`, and `sharp_dis.py`. Their
