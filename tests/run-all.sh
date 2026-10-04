@@ -128,6 +128,7 @@ CTEST_ROWS=(
     "gradient_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "input_config_test|-I common|common/input_scan.c"
     "input_scan_test|-I common|common/input_scan.c"
+    "input_slots_test|-I common|common/input_slots.c"
     "icon_grid_focus_test|-I common|common/icon_grid.c common/ppm.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "icon_grid_nav_test|-I common|common/icon_grid.c common/ppm.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "launcher_args_test|-I. -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/input_scan.c common/ppm.c common/icon_grid.c common/logger.c common/pointer.c"

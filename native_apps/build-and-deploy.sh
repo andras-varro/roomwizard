@@ -190,11 +190,13 @@ step "15/32" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o
 step "16/32" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
 step "17/32" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
                               $CC "${WARN[@]}" -O2 -c common/input_scan.c      -o build/input_scan.o
+                              $CC "${WARN[@]}" -O2 -c common/input_slots.c     -o build/input_slots.o
 
 # gamepad.c finds its devices through input_scan.c (classifier + event* walk),
-# so every binary that links gamepad.o links both — name GAMEPAD_OBJ, never
+# so every binary that links gamepad.o links it too, and input_slots.o (which
+# player slot each device holds) rides along — name GAMEPAD_OBJ, never
 # build/gamepad.o alone.  control_panel links it too: keyboard/pad focus.
-GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o)
+GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o build/input_slots.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
             build/common.o build/highscore.o build/keyboard.o
