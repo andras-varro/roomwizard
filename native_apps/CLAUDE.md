@@ -285,10 +285,9 @@ Three things about that, learned from doing it:
 
 **Game logic works in its own units — cells or fractions of the playfield — and speeds are those units per
 SECOND of elapsed time (`get_time_ms()` delta), never pixels per frame; only drawing converts to pixels.** Frogger
-scaled speed by `width/800` but laid out from the height, so portrait ran ~3.4× slow in cells; Pong served every
-ball at `5.0` px/frame, ~7 s to cross the playfield; tetris' per-iteration gravity counter ran ~3× slow while idle,
-and any per-frame motion slows whenever a frame costs more (portrait rotation). Only tetris is time-based today;
-frogger, brick_breaker, pong and platformer still move per frame, so multiply by 30 to sanity-check them in px/s.
+scaled speed by `width/800` but laid out from the height, so portrait ran ~3.4× slow in cells; tetris' gravity counter ran ~3× slow while idle, and any per-frame motion slows whenever a frame costs more.
+Every game is time-based (px/s = old px/frame × 30), in one of two idioms: variable dt plus substeps against tunnelling (frogger, pong), or a fixed 1/30 s tick
+accumulator with constants per tick, at most 4 ticks per frame (platformer, brick_breaker). Both re-baseline the clock on entering play, so pause/resume never jumps.
 
 **Derive state; don't accumulate it, and don't let a marker mean two things.** One shape produced three game
 bugs: a multiplier re-applied to a figure that already contained it (so **SLOW DOWN made the ball faster**), a
@@ -300,7 +299,7 @@ reads a separate `base_speed`; `brick_is_destroyed()` is the only test). Two thi
 confirm and safe to fix: **the dead code proves the diagnosis** — brick_breaker had a bounce path and a
 diagonal-stripe renderer for indestructible bricks, neither reachable, and deliberate-looking unreachable code
 tells you which value is being misread — and **when a clamp moves, ask what it was protecting**:
-`BALL_MAX_SPEED` stayed on the *effective* speed because 11 px/frame is what stops the ball tunnelling through
+`BALL_MAX_SPEED` stayed on the *effective* speed because 11 px/tick is what bounds the substeps that stop the ball tunnelling through
 a brick. At effect level 0 the emitted behaviour must come out byte-identical; that is what preserves the
 default feel.
 

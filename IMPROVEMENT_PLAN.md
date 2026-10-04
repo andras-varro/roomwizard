@@ -452,13 +452,13 @@ typing into the Settings keypads; the pad on the reconnect screen; and **[inferr
 click if A or B is still held when leaving Settings and the session reconnects. **Done when** each of the three
 works or is shown to be unreachable.
 
-### F115. Move the per-frame games to elapsed-time motion — open
+### F115. Elapsed-time motion for the four per-frame games — implemented 2026-10-03, awaiting operator play-test
 
-Frogger, brick_breaker, pong and platformer move per frame; only Tetris is time-based. The rule is in
-`native_apps/CLAUDE.md` (game logic in its own units, speeds per second). Frogger's lane speed is now scaled by
-`cell_size/28`, but still applied per frame: its `dt` conversion was skipped for lack of a measured landscape frame
-rate. **Done when** each of the four advances by elapsed `get_time_ms()` time and a slower frame (portrait rotation,
-a heavy redraw) no longer slows play.
+Frogger and pong move on variable dt with substeps; platformer and brick_breaker on a fixed 1/30 s tick accumulator
+(constants per tick, 4 ticks per frame at most), preserving the nominal 30 fps feel. Deployed and alive for 4 s each
+over SSH; **not play-tested by a human.** **Done when** the operator confirms on the panel: lane, ball and paddle
+speeds feel the same in landscape; portrait is no longer slower; nothing tunnels through the paddle or bricks at
+speed; pause/resume does not jump; a platformer start with JUMP does not jump.
 
 ### F116. Choose which controller drives a game — open, operator request 2026-10-02
 
@@ -478,8 +478,16 @@ lives in the settings app. Today a second controller works in the Input page's t
   own after a `bluetoothd` restart), so a pause only that pad could lift would trap the player, and ScummVM would not
   honour it. A per-game pause that any input dismisses stays possible later and is not part of this item.
 
-Order: slot plumbing in `gamepad.c` with a pure host test, then the Input-page UI, then games read P1. **Done when**
-the Input page assigns controllers to slots and games honour them.
+**Step 1 (slot plumbing) is done:** `common/input_slots.c` (pure table) plus `gamepad.c` (up to four pads plus
+keyboards, each in its own slot; `gamepad_poll` stays "any device"; `gamepad_player(gm, slot)`,
+`gamepad_player_mask(gm)`), host tests `gamepad_slots_test` and `input_slots_test`. Defaults chosen unattended, open
+to overrule: with all four slots reserved a new device evicts the oldest absent reservation (-1 only if all four are
+present); `input_slots_set` evicts the target, no swap; merged any-device axes take the strongest deflection.
+**Unverified on device:** a real BT pad's `uniq` (MAC), two identical wired pads giving different `phys`, 2-4 pads
+together. **Remaining:** the Input-page UI (`control_panel/input_page.c` defines its own `InputState` type, which
+collides with `gamepad.h`'s once it needs the slot API); persisting the assignment as a setting (reservations last
+per process, and `app_launcher` re-inits after each child); games reading players. **Done when** the Input page
+assigns controllers to slots and games honour them.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -500,15 +508,17 @@ now, but the noise is still the cause.
 
 ### C5. Fix `text_truncate` and the 8px/6px font-width confusion — open
 
-- `common.c:108` `text_truncate()` takes **no destination size** and does `strcpy(dest, upper)` (up to
-  256 bytes) plus `strcat(dest, "...")`. Callers survive on arithmetic luck — `control_panel/usb_page.c:243`
-  passes a 48-byte buffer for a 48-byte product name (safe only because the source is itself 48), while the
-  Input page's two callers use 256-byte buffers. One longer source from a stack smash.
-  Add a `size_t dest_size` parameter.
+- `text_truncate()` measures with `8*scale` per char while the font advances 6 px, so it truncates early.
 - Text width must come from `text_measure_width()`, because `fb_draw_text` advances **6 px/char**
   while several sites compute **8**. Titles render ~17 % left of centre and long strings clip off the
   left edge. **Wrong: `screen_draw_game_over()`** (message and
   score widths) **and `ui_layout.c:326`**.
+
+### C18. Clear the one build warning — open, measured 2026-10-03
+
+`control_panel/bluetooth_page.c:419` (`snprintf(hdr, sizeof(hdr), "%s %d/%d", title, …)` into `char hdr[32]`) draws a
+`-Wformat-truncation`, the tree's only warning, against the zero-warnings rule in `native_apps/CLAUDE.md`. **Done
+when** the build prints none: size `hdr` for the longest `page_title()` or bound the `%s`.
 
 ### C6. Extend the host-buildable test harness — open
 
