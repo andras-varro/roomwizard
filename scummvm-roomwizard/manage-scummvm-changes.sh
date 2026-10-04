@@ -24,7 +24,7 @@ echo ""
 # Function to check current status
 check_status() {
     echo -e "${GREEN}Checking git status...${NC}"
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     git status
     echo ""
     
@@ -34,7 +34,7 @@ check_status() {
     
     echo -e "${GREEN}Local exclude patterns:${NC}"
     cat .git/info/exclude
-    cd - > /dev/null
+    )
     
     echo ""
     echo -e "${GREEN}Backend files status:${NC}"
@@ -54,11 +54,11 @@ sync_to_vcs() {
     mkdir -p "$ABS_BACKEND_FILES"
     
     # Save configure changes (temporarily disable skip-worktree)
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     git update-index --no-skip-worktree configure
     git diff configure > "$ABS_BACKEND_FILES/configure.patch"
     git update-index --skip-worktree configure
-    cd - > /dev/null
+    )
     
     # Copy backend source files
     if [ -d "$ABS_SCUMMVM_DIR/$BACKEND_SRC_DIR" ]; then
@@ -98,7 +98,7 @@ restore_from_vcs() {
         return 1
     fi
     
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     
     # Apply configure patch
     if [ -f "$ABS_BACKEND_FILES/configure.patch" ]; then
@@ -120,10 +120,12 @@ restore_from_vcs() {
     # OSS mixer goes to its own subdirectory — copy it out first
     OSS_MIXER_DIR="backends/mixer/oss"
     mkdir -p "$OSS_MIXER_DIR"
-    cp "$ABS_BACKEND_FILES/oss-mixer.h"   "$OSS_MIXER_DIR/" 2>/dev/null && \
-        echo -e "${GREEN}✓ Restored oss-mixer.h${NC}" || true
-    cp "$ABS_BACKEND_FILES/oss-mixer.cpp" "$OSS_MIXER_DIR/" 2>/dev/null && \
-        echo -e "${GREEN}✓ Restored oss-mixer.cpp${NC}" || true
+    if cp "$ABS_BACKEND_FILES/oss-mixer.h"   "$OSS_MIXER_DIR/" 2>/dev/null; then
+        echo -e "${GREEN}✓ Restored oss-mixer.h${NC}"
+    fi
+    if cp "$ABS_BACKEND_FILES/oss-mixer.cpp" "$OSS_MIXER_DIR/" 2>/dev/null; then
+        echo -e "${GREEN}✓ Restored oss-mixer.cpp${NC}"
+    fi
 
     # Platform backend files (exclude oss-mixer files which are already placed)
     for f in "$ABS_BACKEND_FILES"/*.cpp "$ABS_BACKEND_FILES"/*.h; do
@@ -148,7 +150,7 @@ restore_from_vcs() {
     echo -e "${GREEN}✓ Removed stale .o files from build tree${NC}"
 
     
-    cd - > /dev/null
+    )
 }
 
 # Function to create backup patch (legacy support)
@@ -157,7 +159,7 @@ create_backup() {
     echo -e "${YELLOW}Consider using 'sync' command for version-controlled files.${NC}"
     echo ""
     echo -e "${GREEN}Creating backup patch...${NC}"
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     
     # Create patches directory if it doesn't exist
     mkdir -p ../scummvm-patches
@@ -174,7 +176,7 @@ create_backup() {
     echo -e "${GREEN}✓ Backup created in ../scummvm-patches/${NC}"
     echo "  - configure.patch"
     echo "  - roomwizard-backend.tar.gz"
-    cd ..
+    )
 }
 
 # Function to restore from backup (legacy support)
@@ -183,7 +185,7 @@ restore_backup() {
     echo -e "${YELLOW}Consider using 'restore' command for version-controlled files.${NC}"
     echo ""
     echo -e "${YELLOW}Restoring from backup...${NC}"
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     
     if [ -f ../scummvm-patches/configure.patch ]; then
         if git apply --check ../scummvm-patches/configure.patch 2>/dev/null; then
@@ -199,7 +201,7 @@ restore_backup() {
         echo -e "${GREEN}✓ Extracted roomwizard-backend.tar.gz${NC}"
     fi
     
-    cd ..
+    )
 }
 
 # Function to update from upstream
@@ -210,7 +212,7 @@ update_upstream() {
     echo "Syncing current state before update..."
     sync_to_vcs
     
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     
     # Temporarily disable skip-worktree
     echo "Temporarily disabling skip-worktree..."
@@ -232,7 +234,7 @@ update_upstream() {
     echo "Re-enabling skip-worktree..."
     git update-index --skip-worktree configure
     
-    cd ..
+    )
     
     # Sync updated state
     echo "Syncing updated state..."
@@ -244,7 +246,7 @@ update_upstream() {
 # Function to setup git ignore configuration
 setup_ignore() {
     echo -e "${GREEN}Setting up git ignore configuration...${NC}"
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     
     # Add to local exclude
     cat >> .git/info/exclude << 'EOF'
@@ -259,16 +261,16 @@ EOF
     git update-index --skip-worktree configure
     
     echo -e "${GREEN}✓ Git ignore configuration complete${NC}"
-    cd ..
+    )
 }
 
 # Function to reset skip-worktree
 reset_skipworktree() {
     echo -e "${YELLOW}Resetting skip-worktree for configure...${NC}"
-    cd "$ABS_SCUMMVM_DIR"
+    ( cd "$ABS_SCUMMVM_DIR" || exit 1
     git update-index --no-skip-worktree configure
     echo -e "${GREEN}✓ Skip-worktree disabled for configure${NC}"
-    cd - > /dev/null
+    )
 }
 
 # Main menu

@@ -134,8 +134,8 @@ case "$1" in
     trap - EXIT INT TERM
     [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
     orig=$(cat $PAD_SAVE)
-    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
-                                        | ($PAD_RX_PULLDOWN << 16) )))
+    w $PADCONF_RX "$(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | (PAD_RX_PULLDOWN << 16) )))"
     got=$(( 0x$(r $PADCONF_RX) >> 16 ))
     if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
       echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
@@ -152,7 +152,7 @@ case "$1" in
     lim=${2:-60}
     echo "baseline clean. Watching ${lim} s -- pull J5 pin 2 to GND now."
     hit=0; n=0
-    while [ $n -lt $lim ]; do
+    while [ "$n" -lt "$lim" ]; do
       rx_flush; r $LSR >/dev/null; sleep 1; l=$(r $LSR)
       if [ $(( 0x$l & 0x10 )) -ne 0 ]; then
         echo "BREAK at ~${n}s (LSR 0x$l) -- J5 pin 2 REACHES the SoC RX pad."
@@ -181,7 +181,7 @@ case "$1" in
       paddown) want=$PAD_RX_PULLDOWN ;;
     esac
     cur=$(r $PADCONF_RX)
-    w $PADCONF_RX $(printf "0x%08x" $(( (0x$cur & 0x0000ffff) | ($want << 16) )))
+    w $PADCONF_RX "$(printf "0x%08x" $(( (0x$cur & 0x0000ffff) | (want << 16) )))"
     got=$(( 0x$(r $PADCONF_RX) >> 16 ))
     if [ $(( got )) -ne $(( want )) ]; then
       echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
@@ -202,7 +202,7 @@ case "$1" in
     trap - EXIT INT TERM
     [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
     orig=$(cat $PAD_SAVE)
-    w $PADCONF_RX 0x$orig
+    w $PADCONF_RX "0x$orig"
     echo "RX pad restored to its boot value 0x$(r $PADCONF_RX) (pullup)."
     rx_flush; r $LSR >/dev/null; sleep 1
     c1=$(r $LSR); rx_flush; r $LSR >/dev/null; sleep 1; c2=$(r $LSR)
@@ -216,8 +216,8 @@ case "$1" in
       echo "phase2up negative cannot be attributed to pin 2."
       ok=0
     fi
-    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
-                                        | ($PAD_RX_PULLDOWN << 16) )))
+    w $PADCONF_RX "$(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | (PAD_RX_PULLDOWN << 16) )))"
     echo "pad returned to PIN_INPUT_PULLDOWN (0x$(r $PADCONF_RX))."
     [ $ok -eq 1 ] || exit 1
     ;;
@@ -238,8 +238,8 @@ case "$1" in
     trap - EXIT INT TERM
     [ -s $PAD_SAVE ] || { echo "no saved padconf -- run init first"; exit 2; }
     orig=$(cat $PAD_SAVE)
-    w $PADCONF_RX $(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
-                                        | ($PAD_RX_PULLDOWN << 16) )))
+    w $PADCONF_RX "$(printf "0x%08x" $(( (0x$orig & 0x0000ffff) \
+                                        | (PAD_RX_PULLDOWN << 16) )))"
     got=$(( 0x$(r $PADCONF_RX) >> 16 ))
     if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
       echo "FAILED: padconf write did not land (reads $(printf 0x%04x $got))."
@@ -257,7 +257,7 @@ case "$1" in
     lim=${2:-90}
     echo "Watching ${lim} s -- bridge J5 pin 2 to pin 1 through the resistor now."
     clear_run=0; n=0; hit=0
-    while [ $n -lt $lim ]; do
+    while [ "$n" -lt "$lim" ]; do
       rx_flush; r $LSR >/dev/null; sleep 1; l=$(r $LSR)
       if [ $(( 0x$l & 0x10 )) -eq 0 ]; then
         clear_run=$((clear_run+1))
@@ -326,8 +326,8 @@ echo "   Both the same means the trace does not reach this pad."
 echo
 
 echo "== PHASE 2 -- DOUT / J5 pin 2, driven by you =="
-w $PADCONF_RX $(printf "0x%08x" $(( (0x$padconf_orig & 0x0000ffff) \
-                                    | ($PAD_RX_PULLDOWN << 16) )))
+w $PADCONF_RX "$(printf "0x%08x" $(( (0x$padconf_orig & 0x0000ffff) \
+                                    | (PAD_RX_PULLDOWN << 16) )))"
 got=$(( 0x$(r $PADCONF_RX) >> 16 ))
 if [ $(( got )) -ne $(( PAD_RX_PULLDOWN )) ]; then
   echo "   FAILED: padconf write did not land (reads $(printf 0x%04x $got))."

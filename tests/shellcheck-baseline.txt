@@ -42,10 +42,7 @@ probes/xbee_pad_gpio_read.sh SC2086 2
 probes/xbee_probe.sh SC2004 1
 probes/xbee_probe.sh SC2046 1
 probes/xbee_probe.sh SC2086 1
-probes/xbee_socket_continuity.sh SC2004 5
 probes/xbee_socket_continuity.sh SC2034 1
-probes/xbee_socket_continuity.sh SC2046 5
-probes/xbee_socket_continuity.sh SC2086 3
 probes/xbee_uart_break_semantics.sh SC2034 1
 probes/xbee_uart_break_semantics.sh SC2086 1
 release.sh SC2001 2
@@ -57,9 +54,6 @@ scummvm-roomwizard/build-and-deploy.sh SC2034 1
 scummvm-roomwizard/build-and-deploy.sh SC2086 1
 scummvm-roomwizard/build-and-deploy.sh SC2155 1
 scummvm-roomwizard/build-and-deploy.sh SC2162 1
-scummvm-roomwizard/manage-scummvm-changes.sh SC2015 2
-scummvm-roomwizard/manage-scummvm-changes.sh SC2103 8
-scummvm-roomwizard/manage-scummvm-changes.sh SC2164 12
 tests/c11_plan_diff.sh SC2016 1
 tests/c11_plan_diff.sh SC2034 1
 tests/c11_plan_diff.sh SC2094 2
