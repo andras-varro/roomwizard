@@ -24,8 +24,10 @@ OUT_DIR=""
 REUSE=0
 
 # scripts/config verb + symbol. RFKILL stays off on purpose. BT_RFCOMM is built for BlueALSA's hfp-ag.
+# BT_HS off removes A2MP, the BleedingTooth entry point (CVE-2020-12351/12352: no pairing needed, only
+# the BD_ADDR); HID pads and A2DP never use High Speed.
 CONFIG_WANT=(
-    "module BT" "enable BT_BREDR" "enable BT_LE" "module BT_HIDP"
+    "module BT" "enable BT_BREDR" "enable BT_LE" "disable BT_HS" "module BT_HIDP"
     "module BT_HCIBTUSB" "enable BT_HCIBTUSB_BCM" "enable BT_HCIBTUSB_RTL"
     "module UHID" "module CRYPTO_USER_API_HASH" "module CRYPTO_USER_API_SKCIPHER"
     "module INPUT_UINPUT" "disable RFKILL" "module BT_RFCOMM"

@@ -1,0 +1,138 @@
+Enforce a 7-byte minimum BR/EDR encryption key size before L2CAP connects (CVE-2019-9506, KNOB).
+
+Applied by kernel/build-bt-modules.sh to its own copy of the tree, never by build-image.sh:
+hci_conn.c and l2cap_core.c are in bluetooth.ko, a module, so this changes no byte of the image.
+
+Why: vanilla 4.14.52 reads the negotiated key size (HCI_Read_Encryption_Key_Size, into
+hcon->enc_key_size) but never checks it on BR/EDR. KNOB lets a man in the middle push the
+negotiation down to a 1-byte key and then brute-force the link, which here carries the HID input
+of a pad or keyboard. LE is already protected: smp.c refuses below SMP_MIN_ENC_KEY_SIZE (7).
+
+Source: the final shape of the mainline series, as 4.14 stable carried it --
+  d5bb334a8e17 "Bluetooth: Align minimum encryption key size for LE and BR/EDR connections"
+               (HCI_MIN_ENC_KEY_SIZE 7, matching SMP; the first fix had demanded 16 bytes),
+  3ca44c16b0dc "Bluetooth: Fix regression with minimum encryption key size alignment"
+               (the check moved out of hci_conn into L2CAP channel setup, because a central
+               check in HCI broke links to pre-2.1 / legacy-pairing devices),
+  eca94432934f "Bluetooth: Fix faulty expression for minimum encryption key size check"
+               (an unencrypted link has no key-size requirement and must pass),
+and the hci_conn_security() stall from the same series, so that a link whose key size read is
+still in flight answers "not yet" instead of being refused with enc_key_size 0. The
+SSP-only gate of 693cd8ce3f88 "Bluetooth: Check key sizes only when Secure Simple Pairing is
+enabled" is subsumed by the move into L2CAP and is not a separate hunk.
+
+Changes:
+  - include/net/bluetooth/hci_core.h: HCI_MIN_ENC_KEY_SIZE 7.
+  - hci_conn_security(): on an encrypted link, return 0 (pending) until enc_key_size is known.
+    It is always set when encryption completes -- the read result, or 16 if the controller lacks
+    the command or the read fails -- and hci_encrypt_cfm() then re-drives the pending channels.
+  - l2cap_check_enc_key_size(): true for an unencrypted link, else enc_key_size >= 7.
+  - Called at the four outgoing/accept decision points: l2cap_do_start() and l2cap_security_cfm()
+    BT_CONNECT (time the channel out), l2cap_conn_start() (close with ECONNREFUSED),
+    l2cap_security_cfm() BT_CONNECT2 (answer L2CAP_CR_SEC_BLOCK).
+Not covered, as in 4.14 stable: an incoming L2CAP_CONN_REQ answered directly by l2cap_connect()
+on an already-encrypted link is not key-size checked.
+
+--- a/include/net/bluetooth/hci_core.h
++++ b/include/net/bluetooth/hci_core.h
+@@ -178,6 +178,9 @@
+ 
+ #define HCI_MAX_SHORT_NAME_LENGTH	10
+ 
++/* Min encryption key size to match with SMP */
++#define HCI_MIN_ENC_KEY_SIZE		7
++
+ /* Default LE RPA expiry time, 15 minutes */
+ #define HCI_DEFAULT_RPA_TIMEOUT		(15 * 60)
+ 
+--- a/net/bluetooth/hci_conn.c
++++ b/net/bluetooth/hci_conn.c
+@@ -1281,8 +1281,16 @@
+ 		return 0;
+ 
+ encrypt:
+-	if (test_bit(HCI_CONN_ENCRYPT, &conn->flags))
++	if (test_bit(HCI_CONN_ENCRYPT, &conn->flags)) {
++		/* Ensure that the encryption key size has been read,
++		 * otherwise stall the upper layer responses.
++		 */
++		if (!conn->enc_key_size)
++			return 0;
++
++		/* Nothing else needed, all requirements are met */
+ 		return 1;
++	}
+ 
+ 	hci_conn_encrypt(conn);
+ 	return 0;
+--- a/net/bluetooth/l2cap_core.c
++++ b/net/bluetooth/l2cap_core.c
+@@ -1340,6 +1340,21 @@
+ 		       sizeof(req), &req);
+ }
+ 
++static bool l2cap_check_enc_key_size(struct hci_conn *hcon)
++{
++	/* The minimum encryption key size needs to be enforced by the
++	 * host stack before establishing any L2CAP connections. The
++	 * specification in theory allows a minimum of 1, but to align
++	 * BR/EDR and LE transports, a minimum of 7 is chosen.
++	 *
++	 * This check might also be called for unencrypted connections
++	 * that have no key size requirements. Ensure that the link is
++	 * actually encrypted before enforcing a key size.
++	 */
++	return (!test_bit(HCI_CONN_ENCRYPT, &hcon->flags) ||
++		hcon->enc_key_size >= HCI_MIN_ENC_KEY_SIZE);
++}
++
+ static void l2cap_do_start(struct l2cap_chan *chan)
+ {
+ 	struct l2cap_conn *conn = chan->conn;
+@@ -1357,9 +1372,14 @@
+ 	if (!(conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE))
+ 		return;
+ 
+-	if (l2cap_chan_check_security(chan, true) &&
+-	    __l2cap_no_conn_pending(chan))
++	if (!l2cap_chan_check_security(chan, true) ||
++	    !__l2cap_no_conn_pending(chan))
++		return;
++
++	if (l2cap_check_enc_key_size(conn->hcon))
+ 		l2cap_start_connection(chan);
++	else
++		__set_chan_timer(chan, L2CAP_DISC_TIMEOUT);
+ }
+ 
+ static inline int l2cap_mode_supported(__u8 mode, __u32 feat_mask)
+@@ -1438,7 +1458,10 @@
+ 				continue;
+ 			}
+ 
+-			l2cap_start_connection(chan);
++			if (l2cap_check_enc_key_size(conn->hcon))
++				l2cap_start_connection(chan);
++			else
++				l2cap_chan_close(chan, ECONNREFUSED);
+ 
+ 		} else if (chan->state == BT_CONNECT2) {
+ 			struct l2cap_conn_rsp rsp;
+@@ -7434,7 +7457,7 @@
+ 		}
+ 
+ 		if (chan->state == BT_CONNECT) {
+-			if (!status)
++			if (!status && l2cap_check_enc_key_size(hcon))
+ 				l2cap_start_connection(chan);
+ 			else
+ 				__set_chan_timer(chan, L2CAP_DISC_TIMEOUT);
+@@ -7443,7 +7466,7 @@
+ 			struct l2cap_conn_rsp rsp;
+ 			__u16 res, stat;
+ 
+-			if (!status) {
++			if (!status && l2cap_check_enc_key_size(hcon)) {
+ 				if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+ 					res = L2CAP_CR_PEND;
+ 					stat = L2CAP_CS_AUTHOR_PEND;

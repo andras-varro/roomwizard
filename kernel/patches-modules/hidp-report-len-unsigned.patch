@@ -1,0 +1,27 @@
+Make hidp_process_report()'s length unsigned (CVE-2018-9363).
+
+Applied by kernel/build-bt-modules.sh to its own copy of the tree, never by build-image.sh:
+hidp is a module, so this changes no byte of the image.
+
+Why: 4.14.52 takes `int len`. Both callers pass skb->len, an unsigned int, so a length above
+INT_MAX would arrive negative, pass the `len > HID_MAX_BUFFER_SIZE` clamp, and reach memcpy() as
+a huge size_t: an overflow of session->input_buf. Whether an L2CAP skb can actually be that long
+is doubtful (inferred, not measured); the fix is upstream's and costs nothing. With the parameter
+unsigned the clamp holds for every value.
+
+Source: mainline commit 7992c18810e5 "Bluetooth: hidp: buffer overflow in hidp_process_report"
+(v4.19), one-line change; the same line in the vanilla 4.14.52 net/bluetooth/hidp/core.c.
+
+Changes: the `len` parameter of hidp_process_report() becomes `unsigned int`. Nothing else.
+
+--- a/net/bluetooth/hidp/core.c
++++ b/net/bluetooth/hidp/core.c
+@@ -432,7 +432,7 @@
+ }
+ 
+ static void hidp_process_report(struct hidp_session *session,
+-				int type, const u8 *data, int len, int intr)
++				int type, const u8 *data, unsigned int len, int intr)
+ {
+ 	if (len > HID_MAX_BUFFER_SIZE)
+ 		len = HID_MAX_BUFFER_SIZE;
