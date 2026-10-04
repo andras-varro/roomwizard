@@ -71,8 +71,9 @@ SMOKE_OVL_GLOB=/sys/devices/platform/omapdss/overlay
 
 # ── The thresholds, in one place ───────────────────────────────────────────
 # A black or single-colour screen is 1; a screen with one rectangle on a fill is 2-3.
-# The real first screens measured far above this (see the device run in the commit
-# that added this file), so the floor sits well clear of both.
+# 16 is INFERRED, not measured: it clears both of those with margin, and a first
+# screen with text and a button should be well above it. No device run has been
+# graded yet — read the per-binary counts of the first real run before trusting it.
 SMOKE_MIN_DISTINCT="${SMOKE_MIN_DISTINCT:-16}"
 SMOKE_SETTLE_SECS="${SMOKE_SETTLE_SECS:-2}"
 
