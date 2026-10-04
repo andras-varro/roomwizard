@@ -462,12 +462,24 @@ a heavy redraw) no longer slows play.
 
 ### F116. Choose which controller drives a game — open, operator request 2026-10-02
 
-Operator design direction (2026-10-03): physical controllers are assigned to virtual player slots P1..P4 on the
-Control Panel's Input page. A game asks for "player N", not a device: a 1-player game reads P1, a multi-player game
-(a 4-player Bomberman / Dyna Blaster style one) reads P1..P4. Emulators (ScummVM, future ones) map their players to
-the same slots. The assignment is a setting, so it lives in the settings app. Today a second controller works in the
-Input page's test mode, but in games (except `samegame` and `theremin`) only one works. **Done when** the Input page
-assigns controllers to slots and games honour them.
+Design decided 2026-10-03. Physical controllers are assigned to virtual player slots P1..P4 on the Control Panel's
+Input page; a game asks for "player N", not a device (a 1-player game reads P1, a 4-player Bomberman style one reads
+P1..P4), and emulators (ScummVM, future ones) map their players to the same slots. The assignment is a setting, so it
+lives in the settings app. Today a second controller works in the Input page's test mode, but in games (except
+`samegame` and `theremin`) only one works.
+
+- **Slots are separate.** In a multiplayer game each device is its own player (pad = P1, keyboard = P2); a slot never
+  merges devices. **Exception:** a game that asks for one player is driven by every device as P1 ("any device"), the
+  single-player PC convention. **Touch is not a player device**; it stays UI/pointer.
+- **Disconnect empties the slot but reserves it** for that device's stable identity (USB vid:pid, BT MAC). The same
+  device returns to its reserved slot, not the first free one; a new device takes the first free unreserved slot. The
+  reservation clears on app exit or on reassignment from the Input page.
+- **No pause in the library.** The Bluetooth stack cannot guarantee a reconnect (the 8BitDo does not reconnect on its
+  own after a `bluetoothd` restart), so a pause only that pad could lift would trap the player, and ScummVM would not
+  honour it. A per-game pause that any input dismisses stays possible later and is not part of this item.
+
+Order: slot plumbing in `gamepad.c` with a pure host test, then the Input-page UI, then games read P1. **Done when**
+the Input page assigns controllers to slots and games honour them.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
