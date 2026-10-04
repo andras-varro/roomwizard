@@ -414,7 +414,7 @@ static void bt_page_draw(Framebuffer *fb) {
         button_draw(fb, &next_btn);
     }
 
-    char hdr[32];
+    char hdr[48];   /* "MY DEVICES" + two %d at gcc's 11-char worst case */
     const char *title = page_title(rows, nrows, list_page);
     if (pages > 1) snprintf(hdr, sizeof(hdr), "%s %d/%d", title, list_page + 1, pages);
     else           snprintf(hdr, sizeof(hdr), "%s", title);
