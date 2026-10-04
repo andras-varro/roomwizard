@@ -72,6 +72,17 @@ typedef struct CpPage {
      * Activation is a synthetic tap at the rect's centre through input(), so a
      * page needs no other keyboard code.  NULL = nothing to focus. */
     int (*focusables)(UiRect *out, int max);
+
+    /* Optional.  Keyboard/pad LEFT/RIGHT on a widget that steps rather than
+     * being stepped past (a Cycler): asked BEFORE the ring moves, only while
+     * the ring is shown on one of the page's focusables.  idx is that
+     * widget's index in the list focusables() wrote THIS frame (the panel's
+     * own BACK is not counted); dir is -1 for LEFT, +1 for RIGHT — a
+     * cycler_step() dir.  Return true when the page consumed it (stepped the
+     * widget, kept cfg in step as input() does): the ring stays and the page
+     * is repainted.  false = the ring moves as usual.  UP/DOWN never come
+     * here.  NULL = arrows only ever move the ring. */
+    bool (*focus_nudge)(Config *cfg, int idx, int dir);
 } CpPage;
 
 extern const CpPage cp_led_page;       /* led_page.c */

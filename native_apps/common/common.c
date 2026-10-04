@@ -898,6 +898,113 @@ void toggle_draw(Framebuffer *fb, ToggleSwitch *sw) {
 }
 
 // ============================================================================
+// CYCLER CONTROL
+// ============================================================================
+
+void cycler_init(Cycler *c, int x, int y, int width, int height) {
+    c->x = x;
+    c->y = y;
+    c->width = width;
+    c->height = height;
+    c->text_scale = 2;
+    c->bg_color = RGB(40, 40, 48);
+    c->text_color = COLOR_WHITE;
+    c->arrow_color = BTN_COLOR_INFO;
+    c->border_color = RGB(100, 100, 100);
+    c->border_width = 2;
+    c->was_pressed = false;
+    c->disabled = false;
+}
+
+void cycler_set_colors(Cycler *c, uint32_t bg, uint32_t text, uint32_t arrow,
+                       uint32_t border) {
+    c->bg_color = bg;
+    c->text_color = text;
+    c->arrow_color = arrow;
+    c->border_color = border;
+}
+
+UiRect cycler_rect(const Cycler *c) {
+    UiRect r = { c->x, c->y, c->width, c->height };
+    return r;
+}
+
+int focus_add_cycler(UiRect *out, int n, int max, const Cycler *c) {
+    if (c->disabled || n >= max) return n;
+    out[n] = cycler_rect(c);
+    return n + 1;
+}
+
+int cycler_hit(const Cycler *c, int x, int y) {
+    if (c->disabled) return 0;
+    UiRect r = cycler_rect(c);
+    if (x < r.x || x >= r.x + r.w || y < r.y || y >= r.y + r.h) return 0;
+    /* The same split ui_tap_begin() centres on, so a keyboard activation
+     * lands on the right half: +1. */
+    return (x - r.x) < (r.w >> 1) ? -1 : +1;
+}
+
+int cycler_check_tap(Cycler *c, int touch_x, int touch_y, bool touching) {
+    if (c->disabled || !touching) { c->was_pressed = false; return 0; }
+    if (c->was_pressed) return 0;           /* held: one step per press */
+    c->was_pressed = true;
+    /* A press that lands outside still latches, so a finger sliding on
+     * from elsewhere does not step it. */
+    return cycler_hit(c, touch_x, touch_y);
+}
+
+int cycler_step(int index, int count, int dir) {
+    if (count <= 0) return 0;
+    if (index < 0 || index >= count) index = 0;
+    index += dir < 0 ? -1 : dir > 0 ? 1 : 0;
+    if (index < 0) index = count - 1;
+    if (index >= count) index = 0;
+    return index;
+}
+
+/* A solid triangle pointing left (dir < 0) or right, tip at (tip_x, cy),
+ * `half` px tall above and below cy and `half` px deep. */
+static void cycler_draw_arrow(Framebuffer *fb, int tip_x, int cy, int half,
+                              int dir, uint32_t color) {
+    for (int i = 0; i <= half; i++) {
+        int col = dir < 0 ? tip_x + i : tip_x - i;
+        fb_fill_rect(fb, col, cy - i, 1, 2 * i + 1, color);
+    }
+}
+
+void cycler_draw(Framebuffer *fb, const Cycler *c, const char *text) {
+    const uint32_t disabled_grey = RGB(120, 120, 120);
+    uint32_t txt    = c->disabled ? disabled_grey : c->text_color;
+    uint32_t arrow  = c->disabled ? disabled_grey : c->arrow_color;
+    uint32_t border = c->disabled ? disabled_grey : c->border_color;
+
+    fb_fill_rect(fb, c->x, c->y, c->width, c->height, c->bg_color);
+    for (int i = 0; i < c->border_width; i++) {
+        fb_draw_rect(fb, c->x + i, c->y + i, c->width - 2*i, 1, border);
+        fb_draw_rect(fb, c->x + i, c->y + c->height - 1 - i, c->width - 2*i, 1, border);
+        fb_draw_rect(fb, c->x + i, c->y + i, 1, c->height - 2*i, border);
+        fb_draw_rect(fb, c->x + c->width - 1 - i, c->y + i, 1, c->height - 2*i, border);
+    }
+
+    /* Each arrow sits in a square zone at its end; the text gets what is
+     * between the zones, less a gap, and is cut to fit it. */
+    int cy     = c->y + (c->height >> 1);
+    int zone   = c->height < (c->width >> 2) ? c->height : (c->width >> 2);
+    int half   = (zone >> 2) > 2 ? (zone >> 2) : 2;
+    int pad    = (zone - half) >> 1;
+    cycler_draw_arrow(fb, c->x + pad, cy, half, -1, arrow);
+    cycler_draw_arrow(fb, c->x + c->width - 1 - pad, cy, half, +1, arrow);
+
+    int text_w = c->width - 2 * zone - 8;
+    if (text && text[0] && text_w > 0) {
+        char shown[128];
+        text_truncate(shown, sizeof(shown), text, text_w, c->text_scale);
+        text_draw_centered(fb, c->x + (c->width >> 1), cy, shown, txt,
+                           c->text_scale);
+    }
+}
+
+// ============================================================================
 // UNIFIED GAME OVER SCREEN
 // ============================================================================
 

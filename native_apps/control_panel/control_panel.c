@@ -414,6 +414,8 @@ static int            focus_idx = -1;    /* into this frame's focusables */
 static UiRect         focus_rect;        /* where it was: re-pick, and the ring */
 static const void    *focus_ctx;         /* the view focus_idx belongs to */
 static int            focus_n;           /* how many focusables it had */
+static int            focus_page_base;   /* index of a page's first focusable
+                                          * (after BACK): focus_nudge's idx 0 */
 static UiTap          focus_tap;
 static Pointer        g_pointer;         /* the mouse arrow; a click is a touch */
 
@@ -441,6 +443,7 @@ static int focus_collect(AppState *state, UiRect *out, const void **ctx,
     } else {
         *ctx = state->page;
         n = focus_add_button(out, 0, FOCUS_MAX, &back_btn);
+        focus_page_base = n;
         if (state->page->focusables)
             n += state->page->focusables(out + n, FOCUS_MAX - n);
     }
@@ -502,6 +505,15 @@ static void focus_update(AppState *state, int dir, bool activate,
             if (!focus_shown || focus_idx < 0) {
                 focus_shown = true;
                 if (focus_idx < 0) focus_idx = ui_focus_first(r, n);
+            } else if ((dir == UI_DIR_LEFT || dir == UI_DIR_RIGHT) &&
+                       state->page->focus_nudge &&
+                       focus_idx >= focus_page_base &&
+                       state->page->focus_nudge(&state->cfg,
+                                                focus_idx - focus_page_base,
+                                                dir == UI_DIR_LEFT ? -1 : +1)) {
+                /* The page stepped the focused widget (cp_page.h): the
+                 * ring stays, the page repaints. */
+                state->page_dirty = true;
             } else {
                 focus_idx = ui_focus_move(r, n, focus_idx, (UiDir)dir);
             }

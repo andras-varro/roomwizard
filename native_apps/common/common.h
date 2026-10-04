@@ -433,6 +433,69 @@ int focus_add_toggle(UiRect *out, int n, int max, const ToggleSwitch *sw);
 void toggle_draw(Framebuffer *fb, ToggleSwitch *sw);
 
 // ============================================================================
+// CYCLER CONTROL
+// ============================================================================
+
+/* One row-wide control that steps through a list:  `<  CURRENT ENTRY  >`.
+ * The caller owns the list and the current index; the widget owns the
+ * drawing, the hit-test and the step semantics.  Touch (and a mouse click,
+ * which arrives as a tap) on the LEFT half steps -1, on the RIGHT half +1;
+ * cycler_step() wraps at both ends.  The midpoint belongs to the right half,
+ * so a keyboard activation — a synthetic tap at the rect's centre
+ * (ui_tap_begin) — steps +1: Enter on a cycler means "next", never anything
+ * destructive.  A disabled cycler takes no input and draws grey, as a
+ * disabled button does. */
+typedef struct {
+    int x, y, width, height;   // the whole row, which is also the hit box
+    int text_scale;            // entry text scale (default 2)
+
+    // Colors
+    uint32_t bg_color;
+    uint32_t text_color;
+    uint32_t arrow_color;
+    uint32_t border_color;
+    int border_width;
+
+    // State management
+    bool was_pressed;          // cycler_check_tap()'s press-edge latch
+    // A disabled cycler acts on no input and draws grey; callers set it from
+    // their state and need no guard at each use.
+    bool disabled;
+} Cycler;
+
+// Initialize with position and size, default colors, scale 2, enabled.
+void cycler_init(Cycler *c, int x, int y, int width, int height);
+
+// Set colors (defaults: dark grey bg, white text, cyan arrows, grey border)
+void cycler_set_colors(Cycler *c, uint32_t bg, uint32_t text, uint32_t arrow,
+                       uint32_t border);
+
+// The box cycler_hit() tests — the one home of that arithmetic, for focus
+// rings and for layouts that place widgets beside it.
+UiRect cycler_rect(const Cycler *c);
+
+// As focus_add_button(), for a cycler.
+int focus_add_cycler(UiRect *out, int n, int max, const Cycler *c);
+
+// Which way a point steps it: -1 on the left half, +1 on the right half
+// (the midpoint included), 0 outside the rect or when disabled.  Stateless.
+int cycler_hit(const Cycler *c, int x, int y);
+
+// cycler_hit() on the press edge only: call EVERY frame with the frame's
+// touch point and whether it is touching; returns -1/+1 on the frame the
+// press lands, 0 otherwise (held, released, outside, disabled).
+int cycler_check_tap(Cycler *c, int touch_x, int touch_y, bool touching);
+
+// The step semantics, for a tap's or an arrow key's dir: (index + dir)
+// wrapped into 0..count-1.  count <= 0 returns 0; dir is -1, 0 or +1.
+int cycler_step(int index, int count, int dir);
+
+// Draw the row with `text` (the caller's current entry; NULL = empty)
+// centred between the arrows, uppercased and cut with "..." so it never
+// overruns them.
+void cycler_draw(Framebuffer *fb, const Cycler *c, const char *text);
+
+// ============================================================================
 // UNIFIED GAME OVER SCREEN
 // ============================================================================
 
