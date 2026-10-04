@@ -466,13 +466,15 @@ Replaces each game's green START button with one menu widget in `native_apps/com
 item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
 blinks, then repeat; the pings run on the game clock. Entries are per game, and selection works by pad, keyboard and
 touch. It is the intended home for per-play choices: a 1 player / 2 player choice (ties to F116's player slots) and a
-pace choice (F119). **Done when** every game starts from it.
+pace choice (F119). **Also owns "games honour the player slots"** (moved from F116): no game has a multiplayer mode
+yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
+from it and a 2-player choice reads P1 and P2 from the slots.
 
 ### F119. Platformer pace: Slow / Normal / Fast — open, needs F118, operator request 2026-10-04
 
 Three entries on the start menu from F118. Normal is today's `TICK_S` of 1/20 s (`native_apps/platformer/platformer.c`,
 `#define TICK_S`). The physics constants are per tick, so pace is that one constant and the jump arc keeps its shape.
-Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
+Normal = 1/20 s is **not yet played by the operator** (the walk animation itself is operator-confirmed after the ground probe and four-pose cycle). Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
 
 ### F116. Choose which controller drives a game — open, operator request 2026-10-02
 
@@ -492,16 +494,29 @@ lives in the settings app. Today a second controller works in the Input page's t
   own after a `bluetoothd` restart), so a pause only that pad could lift would trap the player, and ScummVM would not
   honour it. A per-game pause that any input dismisses stays possible later and is not part of this item.
 
-**Step 1 (slot plumbing) is done:** `common/input_slots.c` (pure table) plus `gamepad.c` (up to four pads plus
-keyboards, each in its own slot; `gamepad_poll` stays "any device"; `gamepad_player(gm, slot)`,
-`gamepad_player_mask(gm)`), host tests `gamepad_slots_test` and `input_slots_test`. Defaults chosen unattended, open
-to overrule: with all four slots reserved a new device evicts the oldest absent reservation (-1 only if all four are
-present); `input_slots_set` evicts the target, no swap; merged any-device axes take the strongest deflection.
-**Unverified on device:** a real BT pad's `uniq` (MAC), two identical wired pads giving different `phys`, 2-4 pads
-together. **Remaining:** the Input-page UI (`control_panel/input_page.c` defines its own `InputState` type, which
-collides with `gamepad.h`'s once it needs the slot API); persisting the assignment as a setting (reservations last
-per process, and `app_launcher` re-inits after each child); games reading players. **Done when** the Input page
-assigns controllers to slots and games honour them.
+**Slot plumbing, persistence and the Input-page UI are done in code and deployed (`native_apps` at 72af4f6);
+the operator has not yet verified them on the panel.** `common/input_slots.c` (pure table, pin/unpin, one-line text
+form of `InputIdent`), `common/gamepad.c` (up to four pads plus keyboards, each in its own slot; `slot_p1..slot_p4`
+in `/opt/games/rw_config.conf` loaded at `gamepad_init`; `gamepad_devices`, `gamepad_slot_info`, `gamepad_slot_pin`,
+`gamepad_slot_unpin`, re-bucket without a rescan), the Cycler widget plus the `CpPage` `focus_nudge` hook, and the
+Input page's PLAYERS rows P1..P4 (landscape two columns, portrait one; receipt measured landscape only). Host tests
+`gamepad_slots_test`, `input_slots_test`. Rules, operator-approved: a row's entries are AUTO (the clear position,
+unpinned) plus every connected controller; choosing a controller pinned elsewhere **moves** it and the old row
+reverts to AUTO (chosen over "first wins"; open to overrule); **pinned slots are never evicted by automatic
+assignment**; RESET DEFAULTS unpins all four. Unattended defaults still stand, amended by the previous sentence: with
+all four slots reserved a new device evicts the oldest absent reservation (-1 only if all four are present);
+`input_slots_set` evicts the target, no swap; merged any-device axes take the strongest deflection.
+**Measured on device** (`/proc/bus/input/devices`): a BT pad's Uniq is its own MAC (8BitDo Pro 2,
+e4:17:d8:40:eb:ae), so the bus+uniq identity holds; BT Phys is the **adapter's** MAC, shared by every BT device, so a BT
+device with an empty Uniq (the WI-C310 AVRCP node) falls back to vid:pid plus that shared phys; an AVRCP node is not
+a keyboard (`input_caps_is_keyboard` needs 20 or more letter keys), so it takes no slot. USB Phys carries the port
+path (`usb-musb-hdrc.0.auto-1.3/...`), so a wired pad's identity follows its port **[inferred from the format; two
+identical pads not tested]**.
+**Remaining:** the operator's tap check on the panel, six steps: rows show `AUTO: <pad>`; pin to P2 moves it from P1;
+back to AUTO; pin to P3 then unplug shows yellow UNPLUGGED within ~5 s; replug restores; keyboard LEFT/RIGHT steps a
+row and the focus ring stays; pins survive leaving the page. **Done when** that check passes. Games honouring the
+slots is F118's: measured, no game has a multiplayer mode (pong is vs AI) and nothing calls `gamepad_player()`, so
+there is no consumer until the 1P/2P chooser exists.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
