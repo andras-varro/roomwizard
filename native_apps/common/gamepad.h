@@ -189,9 +189,12 @@ typedef struct {
     int keyboard_slot[GAMEPAD_MAX_PER_KIND];
     int keyboard_count;
     int mouse_fds[GAMEPAD_MAX_PER_KIND];
-    /* The slot of the keyboard a mouse node belongs to (a keyboard+touchpad
-     * combo), for the keys it carries; -1 when it is a plain mouse. */
+    /* The slot a mouse node's keys latch into; -1 when it has none.  A node
+     * that also carries a keyboard (mouse_keys: a keyboard+touchpad combo on
+     * one node) owns its slot as a keyboard does; a plain mouse borrows the
+     * slot of a keyboard node with its identity, if one is present. */
     int mouse_slot[GAMEPAD_MAX_PER_KIND];
+    bool mouse_keys[GAMEPAD_MAX_PER_KIND];
     int mouse_count;
 
     /* Button level per mouse node (left, right, middle), so the output is the
@@ -287,6 +290,8 @@ typedef struct {
     char keyboard_name[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_NAME_LEN];
     char pad_path[GAMEPAD_MAX_PADS][INPUT_SCAN_PATH_LEN];
     char keyboard_path[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_PATH_LEN];
+    char mouse_name[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_NAME_LEN];
+    char mouse_path[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_PATH_LEN];
 
     /* The file the pins are read from and written to: CONFIG_FILE_PATH from
      * gamepad_init(), or the path last given to gamepad_load_slot_pins(). */
@@ -367,8 +372,9 @@ int gamepad_load_slot_pins(GamepadManager *gm, const char *path);
 
 /**
  * Every connected pad and keyboard, one entry per identity (a keyboard's
- * several nodes are one), into out[max], ordered by event node number so a
- * list does not reshuffle between frames.  Returns the count written.
+ * several nodes are one; a keyboard+touchpad combo's mouse node counts as a
+ * keyboard), into out[max], ordered by event node number so a list does not
+ * reshuffle between frames.  Returns the count written.
  */
 int gamepad_devices(const GamepadManager *gm, GamepadDevice *out, int max);
 

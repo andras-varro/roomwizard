@@ -296,11 +296,18 @@ static void seed_latched_levels(GamepadManager *gm) {
     }
 }
 
-/* A mouse node takes no slot of its own; it borrows the slot of a keyboard
- * present now with the same identity (a keyboard+touchpad combo), for the
- * keys it carries. */
+/* An open mouse node that also carries a keyboard: it takes a slot of its own
+ * and is listed, counted and connected as a keyboard. */
+static bool mouse_is_keyboard(const GamepadManager *gm, int k) {
+    return gm->mouse_fds[k] >= 0 && gm->mouse_keys[k];
+}
+
+/* A plain mouse node takes no slot of its own; it borrows the slot of a
+ * keyboard present now with the same identity (a keyboard+touchpad combo on
+ * two nodes), for the keys it carries. */
 static void assign_mouse_slots(GamepadManager *gm) {
     for (int k = 0; k < gm->mouse_count; k++) {
+        if (gm->mouse_keys[k]) continue;   /* assigned with the keyboards */
         int s = input_slots_find(&gm->slots, &gm->mouse_ident[k]);
         gm->mouse_slot[k] = (s >= 0 && gm->slots.slot[s].present) ? s : -1;
     }
@@ -321,6 +328,10 @@ static void rebucket(GamepadManager *gm) {
     for (int k = 0; k < gm->keyboard_count; k++)
         gm->keyboard_slot[k] = gm->keyboard_fds[k] >= 0
                         ? input_slots_assign(&gm->slots, &gm->keyboard_ident[k]) : -1;
+    for (int k = 0; k < gm->mouse_count; k++)
+        if (gm->mouse_keys[k])
+            gm->mouse_slot[k] = mouse_is_keyboard(gm, k)
+                              ? input_slots_assign(&gm->slots, &gm->mouse_ident[k]) : -1;
     assign_mouse_slots(gm);
     memset(gm->held_latched, 0, sizeof(gm->held_latched));
     seed_latched_levels(gm);
@@ -370,6 +381,10 @@ static void scan_devices(GamepadManager *gm) {
             int k = gm->mouse_count++;
             gm->mouse_fds[k] = nd->fd;
             gm->mouse_ident[k] = id;
+            gm->mouse_keys[k] = nd->keys;
+            if (nd->keys) gm->mouse_slot[k] = input_slots_assign(&gm->slots, &id);
+            memcpy(gm->mouse_name[k], nd->name, sizeof(nd->name));   /* same INPUT_SCAN_*_LEN */
+            memcpy(gm->mouse_path[k], nd->path, sizeof(nd->path));   /* same INPUT_SCAN_*_LEN */
             seed_mouse_buttons(nd->fd, gm->mouse_btn[k]);
             announce_found(gm->announced_mouse[k], sizeof(gm->announced_mouse[k]),
                            "mouse", nd->name, nd->path);
@@ -635,6 +650,7 @@ void gamepad_close(GamepadManager *gm) {
         if (gm->mouse_fds[k] >= 0)    close(gm->mouse_fds[k]);
         gm->keyboard_fds[k] = gm->mouse_fds[k] = -1;
         gm->keyboard_slot[k] = gm->mouse_slot[k] = -1;
+        gm->mouse_keys[k] = false;
     }
     gm->keyboard_count = gm->mouse_count = 0;
     memset(gm->mouse_btn, 0, sizeof(gm->mouse_btn));
@@ -1076,12 +1092,17 @@ static void build_players(GamepadManager *gm) {
     for (int k = 0; k < gm->keyboard_count; k++)
         if (gm->keyboard_fds[k] >= 0 && gm->keyboard_slot[k] >= 0)
             gm->players[gm->keyboard_slot[k]].keyboard_connected = true;
+    for (int k = 0; k < gm->mouse_count; k++)
+        if (mouse_is_keyboard(gm, k) && gm->mouse_slot[k] >= 0)
+            gm->players[gm->mouse_slot[k]].keyboard_connected = true;
 }
 
 void gamepad_poll(GamepadManager *gm, InputState *state,
                   int touch_x, int touch_y, bool touch_active) {
     state->gamepad_connected  = any_pad_open(gm);
     state->keyboard_connected = (gm->keyboard_count > 0);
+    for (int k = 0; k < gm->mouse_count; k++)
+        if (mouse_is_keyboard(gm, k)) state->keyboard_connected = true;
     state->mouse_connected    = (gm->mouse_count > 0) ? 1 : 0;
 
     /* Read from each input source */
@@ -1139,6 +1160,9 @@ int gamepad_player_mask(const GamepadManager *gm) {
     for (int k = 0; k < gm->keyboard_count; k++)
         if (gm->keyboard_fds[k] >= 0 && gm->keyboard_slot[k] >= 0)
             mask |= 1 << gm->keyboard_slot[k];
+    for (int k = 0; k < gm->mouse_count; k++)
+        if (mouse_is_keyboard(gm, k) && gm->mouse_slot[k] >= 0)
+            mask |= 1 << gm->mouse_slot[k];
     return mask;
 }
 
@@ -1207,24 +1231,28 @@ static int node_cmp(const char *a, const char *b) {
 }
 
 int gamepad_devices(const GamepadManager *gm, GamepadDevice *out, int max) {
-    GamepadDevice all[GAMEPAD_MAX_PADS + GAMEPAD_MAX_PER_KIND];
+    GamepadDevice all[GAMEPAD_MAX_PADS + 2 * GAMEPAD_MAX_PER_KIND];
     int n = 0, w = 0;
     if (!gm || !out || max <= 0) return 0;
 
-    for (int i = 0; i < GAMEPAD_MAX_PADS + gm->keyboard_count; i++) {
-        bool kbd = i >= GAMEPAD_MAX_PADS;
-        int j = kbd ? i - GAMEPAD_MAX_PADS : i;
-        int fd = kbd ? gm->keyboard_fds[j] : gm->pad_fds[j];
-        if (fd < 0) continue;
+    /* Pads, then keyboard nodes, then mouse nodes that carry a keyboard. */
+    int kbds = GAMEPAD_MAX_PADS + gm->keyboard_count;
+    for (int i = 0; i < kbds + gm->mouse_count; i++) {
+        bool kbd = i >= GAMEPAD_MAX_PADS, mouse = i >= kbds;
+        int j = mouse ? i - kbds : kbd ? i - GAMEPAD_MAX_PADS : i;
+        if (mouse ? !mouse_is_keyboard(gm, j)
+                  : (kbd ? gm->keyboard_fds[j] : gm->pad_fds[j]) < 0) continue;
         GamepadDevice *d = &all[n];
-        snprintf(d->name, sizeof(d->name), "%s", kbd ? gm->keyboard_name[j] : gm->pad_name[j]);
-        snprintf(d->path, sizeof(d->path), "%s", kbd ? gm->keyboard_path[j] : gm->pad_path[j]);
-        d->ident = kbd ? gm->keyboard_ident[j] : gm->pad_ident[j];
-        d->slot = kbd ? gm->keyboard_slot[j] : gm->pad_slot[j];
+        snprintf(d->name, sizeof(d->name), "%s", mouse ? gm->mouse_name[j]
+                 : kbd ? gm->keyboard_name[j] : gm->pad_name[j]);
+        snprintf(d->path, sizeof(d->path), "%s", mouse ? gm->mouse_path[j]
+                 : kbd ? gm->keyboard_path[j] : gm->pad_path[j]);
+        d->ident = mouse ? gm->mouse_ident[j] : kbd ? gm->keyboard_ident[j] : gm->pad_ident[j];
+        d->slot = mouse ? gm->mouse_slot[j] : kbd ? gm->keyboard_slot[j] : gm->pad_slot[j];
         if (d->slot < 0 || d->slot >= INPUT_SLOTS) d->slot = -1;
         d->pinned = d->slot >= 0 && gm->slots.slot[d->slot].pinned;
         d->keyboard = kbd;
-        /* Insertion sort by node number: at most eight entries. */
+        /* Insertion sort by node number: at most twelve entries. */
         for (int k = n; k > 0 && node_cmp(all[k - 1].path, all[k].path) > 0; k--) {
             GamepadDevice t = all[k]; all[k] = all[k - 1]; all[k - 1] = t;
         }

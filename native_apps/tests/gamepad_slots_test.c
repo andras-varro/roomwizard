@@ -11,7 +11,9 @@
  *   - a keyboard's two event nodes are one player;
  *   - a pad removed and re-added via rescan keeps its slot, even when it comes
  *     back later in the scan order, while another pad stays in its own and a
- *     new pad takes a slot nobody reserved.
+ *     new pad takes a slot nobody reserved;
+ *   - a keyboard+touchpad on ONE node (classified MOUSE) is a keyboard player:
+ *     its own slot, listed, pinnable; a plain mouse is none of those.
  *
  * Build (this line is the CTEST_ROWS row in tests/run-all.sh):
  *   cd native_apps && gcc -Wall -Wextra -Wno-unused-parameter -I common \
@@ -77,26 +79,33 @@ typedef struct {
     bool          present;
     unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];  /* what EVIOCGKEY reports */
     int           fd;
+    bool          has_kbd;   /* InputNode.keys: a MOUSE node that also carries a keyboard */
 } FakeDev;
 
 /* Two identical wired pads on different ports, one Bluetooth pad (its phys is
- * the adapter's), and a keyboard with two event nodes. */
-enum { PAD_A, PAD_B, PAD_C, KBD0, KBD1, DEV_COUNT };
+ * the adapter's), a keyboard with two event nodes, a Bluetooth keyboard whose
+ * keys and touchpad are ONE node (input_scan classifies it MOUSE, keys set),
+ * and a plain mouse.  The last two start unplugged. */
+enum { PAD_A, PAD_B, PAD_C, KBD0, KBD1, COMBO, MOUSE0, DEV_COUNT };
 static FakeDev g_dev[DEV_COUNT];
 static int g_order[DEV_COUNT];   /* scan order: event-node order on a real box */
 
 static void devs_reset(void) {
     memset(g_dev, 0, sizeof(g_dev));
     g_dev[PAD_A] = (FakeDev){ INPUT_KIND_PAD, "pad A", 3, 0x045e, 0x028e, "",
-                              "usb-musb-hdrc.1.auto-1.1/input0", true, {0}, -1 };
+                              "usb-musb-hdrc.1.auto-1.1/input0", true, {0}, -1, false };
     g_dev[PAD_B] = (FakeDev){ INPUT_KIND_PAD, "pad B", 3, 0x045e, 0x028e, "",
-                              "usb-musb-hdrc.1.auto-1.2/input0", true, {0}, -1 };
+                              "usb-musb-hdrc.1.auto-1.2/input0", true, {0}, -1, false };
     g_dev[PAD_C] = (FakeDev){ INPUT_KIND_PAD, "pad C", 5, 0x045e, 0x02e0,
-                              "e4:17:d8:00:00:01", "00:1a:7d:da:71:13", false, {0}, -1 };
+                              "e4:17:d8:00:00:01", "00:1a:7d:da:71:13", false, {0}, -1, false };
     g_dev[KBD0]  = (FakeDev){ INPUT_KIND_KEYBOARD, "kbd", 3, 0x046d, 0xc31c, "",
-                              "usb-musb-hdrc.1.auto-1.3/input0", true, {0}, -1 };
+                              "usb-musb-hdrc.1.auto-1.3/input0", true, {0}, -1, false };
     g_dev[KBD1]  = (FakeDev){ INPUT_KIND_KEYBOARD, "kbd consumer", 3, 0x046d, 0xc31c, "",
-                              "usb-musb-hdrc.1.auto-1.3/input1", true, {0}, -1 };
+                              "usb-musb-hdrc.1.auto-1.3/input1", true, {0}, -1, false };
+    g_dev[COMBO] = (FakeDev){ INPUT_KIND_MOUSE, "BT Keyboard 5.1", 5, 0x04e8, 0x7021,
+                              "e4:17:d8:00:00:02", "00:1a:7d:da:71:13", false, {0}, -1, true };
+    g_dev[MOUSE0] = (FakeDev){ INPUT_KIND_MOUSE, "mouse", 3, 0x093a, 0x2510, "",
+                               "usb-musb-hdrc.1.auto-1.4/input0", false, {0}, -1, false };
     for (int i = 0; i < DEV_COUNT; i++) g_order[i] = i;
 }
 
@@ -129,6 +138,7 @@ int input_scan(InputNode *nodes, int n, int max, const int cap[INPUT_KIND_COUNT]
         snprintf(nodes[n].name, sizeof(nodes[n].name), "%s", d->name);
         nodes[n].fd = d->fd;
         nodes[n].kind = d->kind;
+        nodes[n].keys = d->has_kbd;
         n++;
     }
     return n;
@@ -334,6 +344,69 @@ static void pin_tests(void) {
     unlink(path);
 }
 
+/* ── A keyboard+touchpad on one node is a keyboard player ─────────────────
+ * Its node is MOUSE with keys set.  It must take its own slot, be listed as a
+ * keyboard, follow a pin, and latch its keys into that slot — once.  The plain
+ * mouse beside it stays unlisted and takes no slot (the negative control). */
+static void combo_tests(void) {
+    GamepadManager gm; InputState st;
+    char path[] = "/tmp/rw_slots_combo_XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) { perror("mkstemp"); exit(2); }
+    close(fd);
+
+    printf("\n10. a keyboard+touchpad combo node owns a slot, as a keyboard\n");
+    devs_reset();
+    for (int i = 0; i < DEV_COUNT; i++) g_dev[i].present = false;
+    g_dev[PAD_A].present = g_dev[COMBO].present = g_dev[MOUSE0].present = true;
+    gamepad_init(&gm);
+    gamepad_load_slot_pins(&gm, path);   /* pins below write here, nowhere else */
+    gamepad_poll(&gm, &st, 0, 0, false);
+    InputIdent id_combo = ident_of(&g_dev[COMBO]);
+    expect_int("present mask: P1 (pad A) P2 (combo)", gamepad_player_mask(&gm), 0x3);
+    expect_bool("P2 has a keyboard", gamepad_player(&gm, 1)->keyboard_connected, true);
+    expect_bool("any-device: a keyboard connected", st.keyboard_connected, true);
+    GamepadDevice dv[8];
+    int n = gamepad_devices(&gm, dv, 8);
+    expect_int("devices: pad A + the combo (plain mouse unlisted)", n, 2);
+    if (n == 2) {
+        expect_str("devices[1] is the combo", dv[1].name, "BT Keyboard 5.1");
+        expect_bool("the combo is a keyboard", dv[1].keyboard, true);
+        expect_int("the combo's slot", dv[1].slot, 1);
+        expect_bool("the combo's ident", input_ident_equal(&dv[1].ident, &id_combo), true);
+    }
+    deliver(&g_dev[COMBO], EV_KEY, KEY_ENTER, 1);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("P2: the combo's ENTER is ACTION", p_held(&gm, 1, BTN_ID_ACTION), true);
+    expect_bool("P1: the combo's ENTER not held", p_held(&gm, 0, BTN_ID_ACTION), false);
+    expect_bool("any-device sees the combo's ACTION", st.buttons[BTN_ID_ACTION].held, true);
+    deliver(&g_dev[COMBO], EV_KEY, KEY_ENTER, 0);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("P2: ACTION released (no second latch)", p_held(&gm, 1, BTN_ID_ACTION), false);
+    expect_bool("any-device: ACTION released", st.buttons[BTN_ID_ACTION].held, false);
+
+    printf("\n11. pinning the combo moves it with no rescan\n");
+    expect_int("pin the combo to P4 returns 3", gamepad_slot_pin(&gm, &id_combo, 3, NULL), 3);
+    press(&g_dev[COMBO], KEY_ENTER, true);   /* stays in EVIOCGKEY for the rescan */
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("P4: the combo's ENTER", p_held(&gm, 3, BTN_ID_ACTION), true);
+    expect_bool("P2: the combo's ENTER not held", p_held(&gm, 1, BTN_ID_ACTION), false);
+    expect_int("present mask: P1 P4", gamepad_player_mask(&gm), 0x9);
+    n = gamepad_devices(&gm, dv, 8);
+    expect_int("devices: still two", n, 2);
+    if (n == 2) {
+        expect_int("the combo's slot after the pin", dv[1].slot, 3);
+        expect_bool("the combo pinned", dv[1].pinned, true);
+    }
+    gamepad_rescan(&gm);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("after a rescan P4 still has the combo",
+                gamepad_player(&gm, 3)->keyboard_connected, true);
+    expect_bool("P4: held ENTER seeded into its slot", p_held(&gm, 3, BTN_ID_ACTION), true);
+    gamepad_close(&gm);
+    unlink(path);
+}
+
 int main(void) {
     printf("gamepad slots: one player per device, any-device merge kept\n");
     GamepadManager gm; InputState st;
@@ -399,7 +472,7 @@ int main(void) {
 
     printf("\n4. pad A back, LAST in the scan order: P1 again\n");
     g_dev[PAD_A].present = true;
-    int order[DEV_COUNT] = { PAD_C, KBD1, PAD_B, KBD0, PAD_A };
+    int order[DEV_COUNT] = { PAD_C, KBD1, PAD_B, KBD0, PAD_A, COMBO, MOUSE0 };
     memcpy(g_order, order, sizeof(order));
     gamepad_rescan(&gm);
     gamepad_poll(&gm, &st, 0, 0, false);
@@ -427,6 +500,7 @@ int main(void) {
     gamepad_close(&gm);
 
     pin_tests();
+    combo_tests();
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");
