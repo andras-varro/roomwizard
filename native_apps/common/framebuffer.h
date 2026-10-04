@@ -103,7 +103,7 @@ void fb_scale_bezel_to_surface(int panel_w, int panel_h, int surf_w, int surf_h,
 // 800x480 reference, which would shrink every control in portrait, where the
 // surface is 480x800 at FULL resolution and must not be scaled at all. ⚠️ And NOT
 // against the LOGICAL dims, which the bezel has already shrunk — that is the
-// fixed-divisor trap that made fb_plane_bench draw its own label at scale 1
+// fixed-divisor trap that made a drawing tool put its own label at scale 1
 // instead of 2, having derived the scale from a height the bezel cut 240 -> 227.
 //
 // fb_scale_ui_px() is the pure half, so a host test can reach it

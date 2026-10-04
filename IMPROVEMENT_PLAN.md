@@ -193,14 +193,6 @@ residues:
 
 Userspace except F101, which is the image build.
 
-### F129. Retire the two DSS-scaling instruments — open, needs the operator's go-ahead to delete
-
-The overlay scaler is not used ([`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display)), so
-`native_apps/tests/fb_plane_bench.c` and `native_apps/tests/dss_scale_ab.c` (deployed hidden) are dead.
-Done-when: both files, their build steps and `GAMES_BINARIES` entries in `native_apps/build-and-deploy.sh`, and
-their `CTEST_NOT_HOST` rows in `tests/run-all.sh` are gone, and `./tests/run-all.sh` is green. The measurement
-that cites them stays in that section; reword it to say the instruments were removed.
-
 ### F4. Surface the two MADC channels that need no wire — open
 
 Both are readable with `cat` today and have zero references in the codebase

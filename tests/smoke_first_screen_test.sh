@@ -104,7 +104,6 @@ T=$(smoke_targets)
 has "$T" '^app_launcher|/opt/roomwizard/app_launcher|$'  "A7 app_launcher runs bare, as the init script starts it"
 has "$T" '^control_panel|/opt/games/control_panel|/dev/fb0 /dev/input/touchscreen0$' "A8 control_panel's empty args= becomes fb,touch"
 has "$T" '^snake|/opt/games/snake|/dev/fb0 /dev/input/touchscreen0$' "A9 a game gets <fb> <touch>"
-hasnt "$T" 'fb_plane_bench\|dss_scale_ab' "A10 the two excluded tools are not targets"
 assert_eq 13 "$(printf '%s\n' "$T" | grep -c .)" "A11 13 targets: launcher + 9 manifests + 3 tools"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -299,9 +298,6 @@ assert_eq 2 "$RC" "F21 an unreachable device exits 2"
 hasnt "$CALLS" 'roomwizard-app' "F22 nothing is stopped (or started) on a device never reached"
 
 scenario "$ALIVE" "$I32" "$TMP/c32.raw"
-run_runner 1.2.3.4 dss_scale_ab
-assert_eq 2 "$RC" "F23 an excluded binary is refused"
-assert_eq "" "$CALLS" "F24 ...before any ssh call"
 run_runner 1.2.3.4 no_such_app
 assert_eq 2 "$RC" "F25 an unknown binary is refused"
 

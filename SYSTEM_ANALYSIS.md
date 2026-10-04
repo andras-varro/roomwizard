@@ -350,9 +350,9 @@ nearest-neighbour stays the ScummVM path; no hardware configuration wins on pixe
 userspace at either reachable ratio, and none is selectable.** *Cost, measured on `.188`, 200 frames each:*
 rendering the same scene into a 400×240 surface on `vid1` costs **5,510 µs CPU per frame against 26,075 µs
 at 800×480 on `fb0`**, and enabling the overlay costs nothing measurable; a funded 800×480 `fb1` as device
-control came within 0.4 % of `fb0`, so the win is the pixel count and not the node. Instrument
-`native_apps/tests/fb_plane_bench.c` (device-only, hidden): the scene is fractions of the surface and it
-prints its own pixel count — two runs whose counts are not in the ratio of their areas are not an A/B.
+control came within 0.4 % of `fb0`, so the win is the pixel count and not the node.
+The scene was fractions of the surface and printed its own pixel count; two runs whose counts are not in the
+ratio of their areas are not an A/B.
 Against that, ScummVM's NEON nearest-neighbour resample spends 6.4–12.9 ms of a 33 ms frame where the
 hardware path spends 0.1–0.2 ms, but *Full Throttle* plays at 12–13 % CPU, so nothing is short. *Quality,
 operator at the panel, `.188`:* a 320×200 → 800×480 hardware arm is blurry and the blur **followed the
@@ -362,9 +362,8 @@ a SCUMM dialogue box is a 1-px-stroke bitmap font, the worst case for any filter
 `640,400`, `position` `80,40`, poked live while `vid1` held the plane) was *not* an improvement: ringing
 from the phase-4 negative lobes above, on a picture smaller than the 672×420 ScummVM produces itself. A
 nearest-neighbour hardware path would need an unbuilt, untested kernel patch (the **[inferred]**
-all-identity 8-phase table in `dss/dispc_coefs.c`; it would also need `NUM_FBS=3` for a third plane). Instruments: `native_apps/tests/dss_scale_ab.c` (`soft` / `hard` / `split`, `--swap`
-= viewing-angle control, `--ppm` for a real frame; links nothing from `common/`) and `fb_to_game_ppm.py`,
-which inverts the software upscale off an `fb0` grab. Both ship hidden. The `vid1` state before any
+all-identity 8-phase table in `dss/dispc_coefs.c`; it would also need `NUM_FBS=3` for a third plane). The A/B drew a soft, a hard and a split arm with a `--swap` viewing-angle control and a
+real frame by PPM; `fb_to_game_ppm.py` inverts the software upscale off an `fb0` grab. The `vid1` state before any
 funding is `enabled=0`, `fb1/size` 0, and `overlay1` has no `trans_key*` attribute of its own.
 
 `/dev/video0` (`omap_vout`) is the V4L2 *output* path, which accepts **YUV with hardware colour-space

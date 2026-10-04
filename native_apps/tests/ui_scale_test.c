@@ -38,7 +38,7 @@
  * transposed wrapper is invisible to every other group, because they all hand the
  * ratio in as parameters.  Measured — SAB 3 and SAB 4 below each fail group 8 and
  * NOTHING ELSE, one assertion apiece.  Without group 8 both defects ship green.
- * The fixed-divisor class already shipped once here: fb_plane_bench derived its
+ * The fixed-divisor class already shipped once here: a benchmark tool derived its
  * text scale as h/120 and drew at scale 1 instead of 2, because the bezel had cut
  * the height it divided from 240 to 227.
  *

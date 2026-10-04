@@ -50,18 +50,9 @@
 # The three interactive diagnostics (touch_raw, touch_trace, audio_mix_test) take
 # the same <fb> <touch> pair and draw a UI before any input, so they are in scope.
 #
-# EXCLUDED, and refused if named:
-#   fb_plane_bench — a benchmark: it renders a fixed number of frames, prints a
-#                    timing and exits by design, so "alive after 2 s" is not its
-#                    contract and a pass/fail here would mean nothing.
-#   dss_scale_ab   — needs a mode argument and draws its subject on the DSS vid1
-#                    overlay; `cat /dev/fb0` returns only the gfx plane, never the
-#                    composited panel, so the capture cannot see what it shows.
-#
 # The directive below resolves the two sourced files from this script's directory.
 # shellcheck source-path=SCRIPTDIR
 SMOKE_EXTRA_TOOLS="touch_raw touch_trace audio_mix_test"
-SMOKE_EXCLUDED="fb_plane_bench dss_scale_ab"
 SMOKE_FB_DEV=/dev/fb0                     # what the apps are TOLD to draw on (production argv)
 SMOKE_TOUCH_DEV=/dev/input/touchscreen0
 # What the harness CAPTURES and reads geometry from — one variable, kept apart
@@ -370,7 +361,7 @@ smoke_main() {
         -h|--help) smoke_usage; return 0 ;;
         --list) smoke_targets | while IFS='|' read -r name exe argv; do
                     printf '  %-16s %s %s\n' "$name" "$exe" "$argv"; done
-                echo "  excluded: $SMOKE_EXCLUDED"; return 0 ;;
+                return 0 ;;
         ""|-*) smoke_usage >&2; return 2 ;;
     esac
     SMOKE_TARGET_HOST="$1"; shift
@@ -385,8 +376,6 @@ smoke_main() {
 
     lines=$(smoke_targets)
     for name in "${names[@]}"; do
-        case " $SMOKE_EXCLUDED " in *" $name "*)
-            echo "smoke: $name is excluded from this harness (see the header for why)" >&2; return 2 ;; esac
         printf '%s\n' "$lines" | grep -q "^$name|" \
             || { echo "smoke: unknown binary '$name' — see --list" >&2; return 2; }
     done

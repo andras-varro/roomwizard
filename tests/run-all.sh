@@ -151,10 +151,8 @@ CTEST_ROWS=(
 # an unclassified newcomer raise a HARNESS ERROR instead of being quietly
 # ignored.
 CTEST_NOT_HOST=(
-    "audio_mix_test"    # ARM, build-and-deploy.sh step 34/36
+    "audio_mix_test"    # ARM, built by native_apps/build-and-deploy.sh
     "ch_test"           # device only
-    "dss_scale_ab"      # ARM, build-and-deploy.sh step 36/36 — eye A/B, device only
-    "fb_plane_bench"    # ARM, build-and-deploy.sh step 35/36 — measures store bandwidth
 )
 
 SCOPE="all"
