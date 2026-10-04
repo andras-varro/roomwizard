@@ -86,9 +86,8 @@ void button_init_simple(Button *btn, int x, int y, int width, int height,
 // is the closest available rung to the 1.5 that is wanted. It is not exact —
 // measured, a scaled BTN_LARGE_WIDTH of 110 takes scale 2, whose "PLAY AGAIN" is
 // 120 surface px against a 110 px button, so the label OVERRUNS. Sizing text to
-// fit needs text_measure_width(), which over-measures by 33% until the 8px/6px
-// font-width confusion in it is fixed — so this is left honest rather than
-// half-corrected, and no game runs at a reduced surface yet.
+// fit would pick the scale from text_measure_width(); left as is because no game
+// runs at a reduced surface yet.
 #define button_init(btn, x, y, w, h, text, bg, txt, hl) \
     button_init_full(btn, x, y, w, h, text, bg, txt, hl, ((w) > 150) ? 3 : 2)
 

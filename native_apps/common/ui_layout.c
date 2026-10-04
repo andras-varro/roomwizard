@@ -3,6 +3,7 @@
  */
 
 #include "ui_layout.h"
+#include "common.h"
 #include <string.h>
 
 // Initialize grid layout
@@ -322,10 +323,9 @@ static void default_draw_item(Framebuffer *fb, int x, int y, int width, int heig
     upper_text[i] = '\0';
     
     // Draw text centered
-    int text_len = strlen(upper_text);
-    int text_width = text_len * 8 * text_scale;
+    int text_width = text_measure_width(upper_text, text_scale);
     int text_x = x + (width - text_width) / 2;
-    int text_y = y + (height - 8 * text_scale) / 2;
+    int text_y = y + (height - text_measure_height(text_scale)) / 2;
     
     fb_draw_text(fb, text_x, text_y, upper_text, text_color, text_scale);
 }

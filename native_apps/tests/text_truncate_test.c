@@ -15,9 +15,9 @@
  * Every destination sits in a struct with a sentinel-filled guard behind it,
  * so an overflow is a deterministic failed check without a sanitizer; the one
  * malloc'd case is there for -fsanitize=address, which cannot see an overrun
- * inside a struct.  Widths are asserted as "fits max_width", never as an
- * exact character count, so this file does not pin the per-char advance the
- * function uses internally.
+ * inside a struct.  Widths are asserted as "fits max_width" and "one more
+ * character would not", both measured with text_measure_width(), so this file
+ * pins the cut to the same advance the drawing uses without naming it.
  *
  * Build (host gcc, from native_apps/):
  *   gcc -Wall -Wextra -Wno-unused-parameter -I common -o build/text_truncate_test \
@@ -86,6 +86,8 @@ int main(void) {
     text_truncate(s.dst, 64, "abcdefghijklmnopqrstuvwxyz", 60, 1);
     check(ends_with_ellipsis(s.dst), "B  width cut ends in \"...\"");
     check(text_measure_width(s.dst, 1) <= 60, "B  width cut fits max_width");
+    check(text_measure_width(s.dst, 1) + text_measure_width("M", 1) > 60,
+          "B  width cut uses the room: one more character would not fit");
     check(starts_with(s.dst, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", strlen(s.dst) - 3),
           "B  width cut keeps a prefix of the uppercased source");
 

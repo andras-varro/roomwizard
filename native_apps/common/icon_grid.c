@@ -97,14 +97,9 @@ static void draw_letter_icon(Framebuffer *fb, int x, int y,
     fb_fill_rect(fb, x, y, ICON_GRID_ICON_SIZE, ICON_GRID_ICON_SIZE, color);
     fb_draw_rect(fb, x, y, ICON_GRID_ICON_SIZE, ICON_GRID_ICON_SIZE, COLOR_WHITE);
 
-    /* Centre a single character (bitmap font: 8px base) */
-    int scale  = 7;
-    int char_w = 8 * scale;
-    int char_h = 8 * scale;
-    int lx = x + (ICON_GRID_ICON_SIZE - char_w) / 2;
-    int ly = y + (ICON_GRID_ICON_SIZE - char_h) / 2;
     char s[2] = { letter, '\0' };
-    fb_draw_text(fb, lx, ly, s, COLOR_WHITE, scale);
+    text_draw_centered(fb, x + ICON_GRID_ICON_SIZE / 2, y + ICON_GRID_ICON_SIZE / 2,
+                       s, COLOR_WHITE, 7);
 }
 
 static void draw_ppm_icon(Framebuffer *fb, int x, int y, const uint32_t *pixels) {
