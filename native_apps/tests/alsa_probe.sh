@@ -36,7 +36,7 @@ for p in /proc/*/fd; do
 	pid=${p%/fd}; pid=${pid#/proc/}
 	case "$pid" in *[!0-9]*) continue ;; esac
 	if ls -l "$p" 2>/dev/null | grep -q "dsp\|/dev/snd/"; then
-		echo "PID $pid holds an audio fd: $(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' ')"
+		echo "PID $pid holds an audio fd: $(cat /proc/"$pid"/cmdline 2>/dev/null | tr '\0' ' ')"
 	fi
 done
 echo "(no lines above = PCM is free)"

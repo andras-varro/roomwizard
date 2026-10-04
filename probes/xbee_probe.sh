@@ -294,7 +294,7 @@ else
       driving=0
     fi
   fi
-  w $PADCONF_RX 0x$padconf_orig
+  w "$PADCONF_RX" "0x$padconf_orig"
 fi
 
 echo

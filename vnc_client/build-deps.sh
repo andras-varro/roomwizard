@@ -144,7 +144,7 @@ main() {
     # Check for required tools
     echo "Checking for required tools..."
     for tool in wget tar cmake make ${CROSS_COMPILE}gcc; do
-        if ! command -v $tool &> /dev/null; then
+        if ! command -v "$tool" &> /dev/null; then
             echo -e "${RED}Error: $tool not found${NC}"
             echo "Install every host prerequisite with setup-build-env.sh, at the repo root."
             exit 1

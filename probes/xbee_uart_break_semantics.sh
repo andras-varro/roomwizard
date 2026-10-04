@@ -71,8 +71,8 @@ w $LCR 0x03; w $MCR 0x03; w $FCR 0x07; w $MDR1 0x00
 
 sample() {   # sample <label> <n>
   i=0
-  while [ $i -lt $2 ]; do
-    l=$(r $LSR); f=$(r $RXFIFO_LVL)
+  while [ "$i" -lt "$2" ]; do
+    l=$(r "$LSR"); f=$(r "$RXFIFO_LVL")
     printf "   %-28s LSR 0x%s  BI=%d DR=%d  rxlvl=%d\n" "$1" "$l" \
       $(( (0x$l & 0x10) != 0 )) $(( 0x$l & 0x01 )) $(( 0x$f ))
     i=$((i+1))
