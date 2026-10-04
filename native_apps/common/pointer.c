@@ -114,6 +114,10 @@ void pointer_update(Pointer *p, const InputState *in, bool touch_press,
     pointer_route_touch(&p->m, t, ts);
 }
 
+void pointer_drain(Pointer *p) {
+    p->m.down = false;
+}
+
 void pointer_invalidate(Pointer *p) {
     p->on_screen = false;
 }

@@ -493,8 +493,10 @@ static void launch_app(Launcher *l, int index,
         } while ((drain.buttons[BTN_ID_JUMP].held ||
                   drain.buttons[BTN_ID_ACTION].held) && safety < 120);
     }
-    /* Zero the main input state so no stale held flags carry over */
+    /* Zero the main input state so no stale held flags carry over, and drop
+     * the click that launched the child (pointer.h, pointer_drain). */
     memset(&l->input, 0, sizeof(l->input));
+    pointer_drain(&l->pointer);
 
     /* Record return time — main loop will ignore ALL input for
      * LAUNCH_COOLDOWN_MS after this, as defense-in-depth against
@@ -556,6 +558,7 @@ static void execute_power_action(Launcher *l, int action) {
     draw_power_screen(&l->fb, action, true);
     sleep(5);
     touch_drain_events(&l->touch);
+    pointer_drain(&l->pointer);
     l->last_launch_return_ms = get_time_ms();   /* the post-launch input cooldown */
 }
 

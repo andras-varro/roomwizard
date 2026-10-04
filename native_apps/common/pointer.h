@@ -91,6 +91,15 @@ void pointer_init(Pointer *p);
 void pointer_update(Pointer *p, const InputState *in, bool touch_press,
                     bool nav_key, TouchState *ts);
 
+/* Something else owned the input (a full-screen run, a child app) and the
+ * caller has drained the touch and gamepad events it left: forget the click
+ * in progress too.  Otherwise the press that started the run keeps `down`
+ * set, its release having gone to the drain, and the first frame back with
+ * the left button reading down (still held, or its release lost) is routed
+ * as a held touch over the same button — which a rebuilt button takes as a
+ * new press and starts the run again.  The position is kept. */
+void pointer_drain(Pointer *p);
+
 /* The app has just fb_swap()ed a full frame, which the arrow is not in. */
 void pointer_invalidate(Pointer *p);
 

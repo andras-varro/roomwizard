@@ -13,7 +13,7 @@
  * Group 1 is the start state, group 2 motion and the clamp to the bounds
  * (right/bottom exclusive), group 3 the show/hide rule, group 4 a bounds change
  * with no motion, group 5 the click edges, group 6 the routing into a
- * TouchState.
+ * TouchState, group 7 pointer_drain() after a full-screen run.
  *
  * ⚠️ What it cannot see: anything drawn (the save-under and the two
  * fb_swap_rect() calls), whether each app passes the REAL finger press and its
@@ -21,6 +21,7 @@
  */
 #include "pointer.h"
 #include <stdio.h>
+#include <string.h>
 
 static int fails;
 
@@ -170,6 +171,46 @@ int main(void) {
         expect("no mouse edge: nothing routed",
                pointer_route_touch(&m, nothing, &quiet), 0);
         expect("quiet x kept", quiet.x, 7);
+    }
+
+    printf("[7] a full-screen run in between: the press is not replayed\n");
+    {
+        /* The press starts the run; its release goes to the caller's drain,
+         * never to the model.  Back from the run, the button still reads
+         * down (held, or its release lost) with no edge — that must not
+         * become a held touch over the button that started the run. */
+        Pointer p;
+        memset(&p, 0, sizeof(p));
+        pointer_model_init(&p.m, b);
+        in = none();
+        in.left_pressed = in.left_held = true;
+        t = pointer_model_step(&p.m, &in, b);
+        expect("the press that starts the run is routed", t.pressed, 1);
+        const int px = p.m.x, py = p.m.y;
+
+        pointer_drain(&p);
+        expect("drain keeps x", p.m.x, px);
+        expect("drain keeps y", p.m.y, py);
+
+        in = none();
+        in.left_held = true;
+        t = pointer_model_step(&p.m, &in, b);
+        expect("a level still down after the run is no held touch", t.held, 0);
+        expect("... and no press", t.pressed, 0);
+        TouchState ts = { 0, 0, false, false, false };
+        expect("... so nothing is routed",
+               pointer_route_touch(&p.m, t, &ts), 0);
+
+        in = none();
+        in.left_released = true;
+        t = pointer_model_step(&p.m, &in, b);
+        expect("its late release is no release", t.released, 0);
+
+        in = none();
+        in.left_pressed = in.left_released = true;   /* the next whole click */
+        t = pointer_model_step(&p.m, &in, b);
+        expect("the next click still presses", t.pressed, 1);
+        expect("the next click still releases", t.released, 1);
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "REGRESSION" : "ALL PASS",

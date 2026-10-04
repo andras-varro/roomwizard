@@ -825,6 +825,7 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
      * immediately re-triggers the test/calibration that just exited.    */
     touch_drain_events(touch);
     focus_drain_keys();       /* and the keys: an Esc typed there is not BACK here */
+    pointer_drain(&g_pointer); /* and the click that started the run (pointer.h) */
 }
 
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
