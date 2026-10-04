@@ -111,8 +111,8 @@ Numbers and method: [`../SYSTEM_ANALYSIS.md#33-touch`](../SYSTEM_ANALYSIS.md#33-
 Links `framebuffer.o`, `touch_input.o`, `hardware.o`, `config.o`, `logger.o`, `input_scan.o` and `ui_focus.o` from
 `../native_apps/common/`. It has **no evdev scanner of its own**: `vnc_input.c` calls `input_scan()`
 (`common/input_scan.h`), which classifies by `gamepad.c`'s rules, opens every node of a kind up to a cap
-and skips held nodes — a rescan is another call. It does not link `gamepad.o`: that maps pads to abstract
-buttons for a UI, while the remote pointer needs the analog axes and button levels, so `vnc_input.c` reads the pad
+and skips held nodes — a rescan is another call. It does not link `gamepad.o`: that opens its own nodes, keyboards
+and mice included, which would double-open the ones this node set holds, so `vnc_input.c` reads the pad
 nodes itself (kind `INPUT_KIND_PAD`, codes from `/etc/input_config.conf`) and `vnc_pad.c` holds the pure mapping.
 `gamepad.c` and the ScummVM backend call the same scanner, so a change to the classification rules lands in all three.
 
