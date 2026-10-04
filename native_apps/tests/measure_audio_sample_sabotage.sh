@@ -9,14 +9,15 @@
 # suite reached the odd-size chunk pad until a fixture was added for it.
 cd /mnt/c/work/roomwizard/native_apps || exit 1
 W=$(mktemp -d /tmp/samp.XXXXXX)
+HARNESS_ERR=0
 run() {
   local name="$1"; shift
   rm -rf "$W/c"; mkdir -p "$W/c/common"
   cp common/audio_wav.c common/audio_wav.h common/audio_gen.c common/audio_gen.h "$W/c/common/"
-  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; return; }
+  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; HARNESS_ERR=1; return; }
   if diff -q "$W/c/common/audio_wav.c" common/audio_wav.c >/dev/null && \
      diff -q "$W/c/common/audio_gen.c" common/audio_gen.c >/dev/null; then
-     echo "$name: NO-OP EDIT — pattern rotted"; return; fi
+     echo "$name: NO-OP EDIT — pattern rotted"; HARNESS_ERR=1; return; fi
   gcc -Wall -Wextra -Wno-unused-parameter -I "$W/c" -o "$W/t" \
       tests/audio_sample_test.c "$W/c/common/audio_wav.c" "$W/c/common/audio_gen.c" \
       -lm 2>"$W/cc.log" || {
@@ -69,3 +70,5 @@ run "16 the sample voice skips the envelope, so the bed starts with a step" \
     sed -i 's|acc += (int32_t)((((long)s \* (long)vo->peak) >> 15) \* env);|acc += (int32_t)(((long)s * (long)vo->peak) >> 15);|' audio_gen.c
 
 rm -rf "$W"
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }

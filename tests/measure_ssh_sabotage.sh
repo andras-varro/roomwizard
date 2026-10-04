@@ -22,6 +22,7 @@ cd "$(dirname "$0")/.." || exit 1
 LIB=lib/rw-ssh.sh
 BAK=/tmp/rw-ssh.orig.$$
 cp "$LIB" "$BAK"
+HARNESS_ERR=0
 
 # The seven files whose gate F16 rewired. Restoring them all from HEAD~ is how the
 # pre-fix measurement is taken without unstaging anything.
@@ -58,12 +59,12 @@ printf '  %-44s %s\n' "baseline (nothing broken)" "$(run)"
 # git diff do not).
 PREFIX_OK=1
 for f in $SITES; do
-    git show "HEAD:$f" > "$f" 2>/dev/null || PREFIX_OK=0
+    git show "622c4dc^:$f" > "$f" 2>/dev/null || PREFIX_OK=0
 done
 if [ "$PREFIX_OK" -eq 1 ]; then
-    printf '  %-44s %s\n' "the pre-fix call sites, restored from HEAD" "$(run)"
+    printf '  %-44s %s\n' "the pre-fix call sites, from 622c4dc^" "$(run)"
 else
-    printf '  %-44s %s\n' "the pre-fix call sites" "COULD NOT RESTORE — count would be a lie"
+    printf '  %-44s %s\n' "the pre-fix call sites" "COULD NOT RESTORE — count would be a lie"; HARNESS_ERR=1
 fi
 restore
 
@@ -76,11 +77,11 @@ sab() {
     after=$(md5sum "$LIB" | cut -d' ' -f1)
     if [ "$before" = "$after" ]; then
         printf '  %-44s DID NOT APPLY — the count below would be a lie\n' "$label"
-        return
+        HARNESS_ERR=1; return
     fi
     if ! bash -n "$LIB" 2>/dev/null; then
         printf '  %-44s broke the syntax — not a usable sabotage\n' "$label"
-        return
+        HARNESS_ERR=1; return
     fi
     printf '  %-44s %s\n' "$label" "$(run)"
 }
@@ -131,3 +132,5 @@ restore
 echo ""
 printf '  %-44s %s\n' "restored" "$(run)"
 echo ""
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }

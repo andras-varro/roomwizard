@@ -6,14 +6,15 @@
 # whole reason that guard exists.  Read the output; do not just count it.
 cd /mnt/c/work/roomwizard/native_apps || exit 1
 W=$(mktemp -d /tmp/lim.XXXXXX)
+HARNESS_ERR=0
 run() {
   local name="$1"; shift
   rm -rf "$W/c"; mkdir -p "$W/c"
   cp common/audio_gen.c common/audio_gen.h "$W/c/"
-  ( cd "$W/c" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; return; }
+  ( cd "$W/c" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; HARNESS_ERR=1; return; }
   if ! diff -q "$W/c/audio_gen.c" common/audio_gen.c >/dev/null || \
      ! diff -q "$W/c/audio_gen.h" common/audio_gen.h >/dev/null; then :; else
-     echo "$name: NO-OP EDIT — pattern rotted"; return; fi
+     echo "$name: NO-OP EDIT — pattern rotted"; HARNESS_ERR=1; return; fi
   gcc -Wall -Wextra -Wno-unused-parameter -I "$W/c" -o "$W/t" \
       tests/audio_gen_test.c "$W/c/audio_gen.c" -lm 2>"$W/cc.log" || {
       echo "$name: did not compile ($(head -1 "$W/cc.log"))"; return; }
@@ -48,7 +49,7 @@ run "10 attenuation is a DIVIDE, not a shift (-1/2 == 0)" \
 run "11 the knee setter ignores its argument" \
     sed -i 's/m->knee = (knee > 0) ? knee : AUDIO_MIX_KNEE;/m->knee = AUDIO_MIX_KNEE;/' audio_gen.c
 run "12 every voice gets generation 1 — slot reuse becomes invisible" \
-    sed -i 's/vo->gen        = ++m->gen_seq;/vo->gen        = 1;/' audio_gen.c
+    sed -i 's/vo->gen    = ++m->gen_seq;/vo->gen    = 1;/' audio_gen.c
 run "13 the voice tail ignores the generation it was asked about" \
     sed -i 's/if (!vo->active || vo->gen != gen) return 0;/if (!vo->active) return 0;/' audio_gen.c
 # ⚠️ This one must edit the RETURN, not the `long left = …` line: that expression
@@ -59,3 +60,5 @@ run "13 the voice tail ignores the generation it was asked about" \
 run "14 THE DEFECT RESTORED: a voice's tail is the whole bus's tail" \
     sed -i 's|return (left > 0) ? left : 0;|return audio_mix_pending(m);|' audio_gen.c
 rm -rf "$W"
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }

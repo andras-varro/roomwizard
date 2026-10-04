@@ -30,6 +30,7 @@ mkdir -p "$WORK/pristine" || exit 1
 cp common/touch_input.c common/touch_input.h "$WORK/pristine/" || exit 1
 
 caught=""
+HARNESS_ERR=0
 
 run() {
     name=$1
@@ -40,19 +41,19 @@ run() {
     cp "$WORK/pristine/touch_input.c" "$WORK/pristine/touch_input.h" "$WORK/c/"
     if ! ( cd "$WORK/c" && "$@" ); then
         printf '  %-58s SABOTAGE DID NOT APPLY\n' "$name"
-        return
+        HARNESS_ERR=1; return
     fi
     if diff -q "$WORK/c/touch_input.c" "$WORK/pristine/touch_input.c" >/dev/null &&
        diff -q "$WORK/c/touch_input.h" "$WORK/pristine/touch_input.h" >/dev/null; then
         printf '  %-58s NO-OP EDIT — pattern rotted\n' "$name"
-        return
+        HARNESS_ERR=1; return
     fi
     if ! gcc -Wall -Wextra -Wno-unused-parameter -I "$WORK/c" -I common \
             -o "$WORK/t" "$TEST" "$WORK/c/touch_input.c" \
             common/framebuffer.c common/hardware.c common/config.c -lm \
             2>"$WORK/cc.log"; then
         printf '  %-58s DID NOT COMPILE: %s\n' "$name" "$(head -1 "$WORK/cc.log")"
-        return
+        HARNESS_ERR=1; return
     fi
     # stdbuf, because a sabotage that CRASHES loses whatever libc had buffered
     # into the pipe, and then a caught sabotage reads as an undetected one.
@@ -135,4 +136,6 @@ else
     echo "$missed group(s) never seen failing"
 fi
 rm -rf "$WORK/c" "$WORK/t" "$WORK/cc.log"
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing or did not compile"; exit 1; }
 exit "$missed"

@@ -15,6 +15,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 BAK=/tmp/rw-bundle.orig.$$
+HARNESS_ERR=0
 cp lib/rw-bundle.sh "$BAK"
 trap 'cp "$BAK" lib/rw-bundle.sh; rm -f "$BAK"' EXIT INT TERM
 
@@ -29,11 +30,11 @@ sab() {
     after=$(md5sum lib/rw-bundle.sh | cut -d' ' -f1)
     if [ "$before" = "$after" ]; then
         printf '  %-34s DID NOT APPLY — the count below would be a lie\n' "$label"
-        return
+        HARNESS_ERR=1; return
     fi
     if ! bash -n lib/rw-bundle.sh 2>/dev/null; then
         printf '  %-34s broke the syntax — not a usable sabotage\n' "$label"
-        return
+        HARNESS_ERR=1; return
     fi
     printf '  %-34s %s\n' "$label" "$(run)"
 }
@@ -71,3 +72,5 @@ cp "$BAK" lib/rw-bundle.sh
 echo ""
 printf '  %-34s %s\n' "restored" "$(run)"
 echo ""
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }

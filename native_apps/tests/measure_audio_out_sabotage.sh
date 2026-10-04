@@ -15,15 +15,17 @@
 # sabotaged .c — a mismatch that reads as a pass.
 cd /mnt/c/work/roomwizard/native_apps || exit 1
 W=$(mktemp -d /tmp/aout.XXXXXX)
+HARNESS_ERR=0
 run() {
   local name="$1"; shift
   rm -rf "$W/c"; mkdir -p "$W/c/common" "$W/c/tests"
   cp common/audio_out.c common/audio_out.h common/audio_gen.c common/audio_gen.h "$W/c/common/"
   cp tests/audio_out_test.c "$W/c/tests/"
-  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; return; }
+  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; HARNESS_ERR=1; return; }
   if ! diff -q "$W/c/common/audio_out.c" common/audio_out.c >/dev/null || \
-     ! diff -q "$W/c/common/audio_out.h" common/audio_out.h >/dev/null; then :; else
-     echo "$name: NO-OP EDIT — pattern rotted"; return; fi
+     ! diff -q "$W/c/common/audio_out.h" common/audio_out.h >/dev/null || \
+     ! diff -q "$W/c/common/audio_gen.c" common/audio_gen.c >/dev/null; then :; else
+     echo "$name: NO-OP EDIT — pattern rotted"; HARNESS_ERR=1; return; fi
   gcc -Wall -Wextra -Wno-unused-parameter -o "$W/t" \
       "$W/c/tests/audio_out_test.c" "$W/c/common/audio_out.c" \
       "$W/c/common/audio_gen.c" -lm 2>"$W/cc.log" || {
@@ -73,7 +75,7 @@ run "5 channels from the request, not the grant" \
 # 6  Attenuation as a rounding-free integer DIVIDE rather than an arithmetic
 #    shift: -1/2 == 0 but -1 >> 1 == -1, so ScummVM stops being bit-identical.
 run "6 attenuation as a multiply/divide, not a shift" \
-    sed -i 's|buf\[i\] = (int16_t)(buf\[i\] >> shift);|buf[i] = (int16_t)(buf[i] / (1 << shift));|' audio_out.c
+    sed -i 's|buf\[i\] = (int16_t)(buf\[i\] >> shift);|buf[i] = (int16_t)(buf[i] / (1 << shift));|' audio_gen.c
 
 # 7  Mode 2 no longer refuses against an installed callback: two writers
 #    interleaving frames into a stream with no mono path underneath.
@@ -97,3 +99,5 @@ run "10 CONTROL: audio_out_starved() always returns 0" \
     sed -i 's|return out ? out->starved     : 0;|return 0;|' audio_out.c
 
 rm -rf "$W"
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }
