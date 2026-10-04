@@ -14,6 +14,7 @@
 # run() below is the only copy of that build line outside tests/run-all.sh.
 cd /mnt/c/work/roomwizard/native_apps || exit 1
 W=$(mktemp -d /tmp/clip.XXXXXX)
+HARNESS_ERR=0
 SRC="common/audio.c common/audio.h common/audio_gen.c common/audio_gen.h
      common/audio_out.c common/audio_out.h common/audio_wav.c common/audio_wav.h
      common/config.c common/config.h"
@@ -21,10 +22,10 @@ run() {
   local name="$1"; shift
   rm -rf "$W/c"; mkdir -p "$W/c/common"
   cp $SRC "$W/c/common/"
-  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; return; }
+  ( cd "$W/c/common" && "$@" ) || { echo "$name: SABOTAGE DID NOT APPLY"; HARNESS_ERR=1; return; }
   if diff -q "$W/c/common/audio.c" common/audio.c >/dev/null && \
      diff -q "$W/c/common/audio.h" common/audio.h >/dev/null; then
-     echo "$name: NO-OP EDIT — pattern rotted"; return; fi
+     echo "$name: NO-OP EDIT — pattern rotted"; HARNESS_ERR=1; return; fi
   gcc -Wall -Wextra -Wno-unused-parameter -I "$W/c" -o "$W/t" \
       tests/audio_tone_test.c "$W/c/common/audio.c" "$W/c/common/audio_gen.c" \
       "$W/c/common/audio_out.c" "$W/c/common/audio_wav.c" "$W/c/common/config.c" \
@@ -80,8 +81,10 @@ run "6 the rate check is dropped, so a clip is pitch-shifted" \
 # the record of what the host cannot reach, and it would start failing the day the
 # config path becomes overridable.
 run "9 the unchecked init resolves no device (the pre-fix body)" \
-    sed -i 's|    audio_out_set_device_pref(config_audio_device_stored());||' audio.c
+    sed -i 's|    audio_out_set_device_pref(pref ? pref : config_audio_device_stored());||' audio.c
 run "10 the unchecked init obeys the ENABLE gate too — EXPECT 0, see note above" \
     sed -i 's|^int audio_init_unchecked(Audio \*audio)$|int audio_init_unchecked(Audio *audio) { return audio_init(audio); }\nstatic int unused_unchecked(Audio *audio)|' audio.c
 
 rm -rf "$W"
+# A stanza that edited nothing is a harness error, not a verdict: fail the run.
+[ "$HARNESS_ERR" -eq 0 ] || { echo "HARNESS ERROR: a sabotage matched nothing"; exit 1; }
