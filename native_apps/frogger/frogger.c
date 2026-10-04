@@ -33,9 +33,11 @@
 #define HUD_HEIGHT        70
 #define MAX_OBJECTS_PER_LANE 6
 #define NUM_LANE_CONFIGS  10
-#define HOP_DURATION      8       /* frames for hop animation */
+/* Animation lengths run on elapsed time (update_game's dt), not frames.  They
+ * were authored as 8 and 12 frames at the nominal 30 fps. */
+#define HOP_DURATION_MS   267.0f  /* hop animation */
 #define TIMER_MAX         30.0f   /* seconds per life attempt */
-#define DEATH_ANIM_FRAMES 12
+#define DEATH_ANIM_MS     400.0f  /* death splash before respawn / game over */
 #define INITIAL_LIVES     3
 #define HOP_COOLDOWN_MS   200
 
@@ -132,7 +134,7 @@ typedef struct {
     int row;
     LaneType type;
     int direction;   /* -1 = left, +1 = right */
-    float speed;
+    float cells_per_s;  /* level-1 speed, unsigned; see lane_speed_px_s() */
     LaneObject objects[MAX_OBJECTS_PER_LANE];
     int object_count;
 } Lane;
@@ -160,7 +162,7 @@ typedef struct {
     LaneType type;
     ObjectType obj_type;
     int direction;
-    float base_speed;
+    float cells_per_s;
     int obj_width_cells;
     int spacing_cells;
     uint32_t color;
@@ -191,7 +193,7 @@ static Frog frog;
 static GameStateData state;
 static LEDEffect led_effect;
 
-static int death_anim_frame = 0;
+static float death_anim_ms = 0;   /* elapsed play time since kill_frog() */
 static bool death_anim_active = false;
 static bool game_over_pending = false;
 static uint32_t current_frame = 0;
@@ -221,19 +223,26 @@ ModalDialog pause_dialog;
 
 /* ─── Lane configuration table ──────────────────────────────────────────── */
 
+/* Lane speeds are in cells per second, so they hold in every orientation and at
+ * any frame rate.  They were authored as px/frame at 28 px cells and 30 fps —
+ * the cell compute_grid() gives on the 800x453 landscape screen with a
+ * calibrated touch inset — and LANE_PXF converts that authored figure exactly,
+ * keeping the original feel: cells/s = px/frame * 30 / 28. */
+#define LANE_PXF(px_per_frame) ((px_per_frame) * 30.0f / 28.0f)
+
 static const LaneConfig lane_configs[NUM_LANE_CONFIGS] = {
     /* River lanes (rows 1-5) */
-    { 1,  LANE_RIVER, OBJ_LOG_LONG,   +1, 0.8f, 4, 6, COLOR_LOG_LIGHT    },
-    { 2,  LANE_RIVER, OBJ_TURTLE_3,   -1, 0.6f, 3, 5, COLOR_TURTLE_SHELL },
-    { 3,  LANE_RIVER, OBJ_LOG_MED,    +1, 1.0f, 3, 5, COLOR_LOG_LIGHT    },
-    { 4,  LANE_RIVER, OBJ_TURTLE_2,   -1, 0.7f, 2, 6, COLOR_TURTLE_SHELL },
-    { 5,  LANE_RIVER, OBJ_LOG_SHORT,  +1, 0.9f, 2, 4, COLOR_LOG_LIGHT    },
+    { 1,  LANE_RIVER, OBJ_LOG_LONG,   +1, LANE_PXF(0.8f), 4, 6, COLOR_LOG_LIGHT    },
+    { 2,  LANE_RIVER, OBJ_TURTLE_3,   -1, LANE_PXF(0.6f), 3, 5, COLOR_TURTLE_SHELL },
+    { 3,  LANE_RIVER, OBJ_LOG_MED,    +1, LANE_PXF(1.0f), 3, 5, COLOR_LOG_LIGHT    },
+    { 4,  LANE_RIVER, OBJ_TURTLE_2,   -1, LANE_PXF(0.7f), 2, 6, COLOR_TURTLE_SHELL },
+    { 5,  LANE_RIVER, OBJ_LOG_SHORT,  +1, LANE_PXF(0.9f), 2, 4, COLOR_LOG_LIGHT    },
     /* Road lanes (rows 7-11) */
-    { 7,  LANE_ROAD,  OBJ_RACE_CAR,   -1, 2.0f, 1, 8, COLOR_RACE_CAR_CLR },
-    { 8,  LANE_ROAD,  OBJ_CAR,        +1, 1.2f, 1, 6, COLOR_CAR_BLUE     },
-    { 9,  LANE_ROAD,  OBJ_TRUCK,      -1, 0.8f, 2, 7, COLOR_TRUCK_PURPLE },
-    { 10, LANE_ROAD,  OBJ_CAR,        +1, 1.4f, 1, 5, COLOR_CAR_YELLOW   },
-    { 11, LANE_ROAD,  OBJ_TRUCK,      -1, 0.9f, 2, 6, COLOR_TRUCK_ORANGE },
+    { 7,  LANE_ROAD,  OBJ_RACE_CAR,   -1, LANE_PXF(2.0f), 1, 8, COLOR_RACE_CAR_CLR },
+    { 8,  LANE_ROAD,  OBJ_CAR,        +1, LANE_PXF(1.2f), 1, 6, COLOR_CAR_BLUE     },
+    { 9,  LANE_ROAD,  OBJ_TRUCK,      -1, LANE_PXF(0.8f), 2, 7, COLOR_TRUCK_PURPLE },
+    { 10, LANE_ROAD,  OBJ_CAR,        +1, LANE_PXF(1.4f), 1, 5, COLOR_CAR_YELLOW   },
+    { 11, LANE_ROAD,  OBJ_TRUCK,      -1, LANE_PXF(0.9f), 2, 6, COLOR_TRUCK_ORANGE },
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -250,11 +259,11 @@ static void compute_grid(void);
 static void spawn_lane_objects(Lane *lane, const LaneConfig *cfg);
 static void handle_input(void);
 static void update_game(void);
-static void update_lanes(void);
-static void update_hop(void);
-static void update_frog_ride(void);
+static void update_lanes(float dt);
+static void update_hop(float dt);
+static void update_frog_ride(float dt);
 static void update_timer(float dt);
-static void update_death_animation(void);
+static void update_death_animation(float dt);
 static void check_road_collision(void);
 static void check_river_collision(void);
 static void check_goal_reached(void);
@@ -277,7 +286,7 @@ static void draw_truck(int sx, int sy, uint32_t color);
 static void draw_race_car(int sx, int sy, uint32_t color);
 static void draw_log_sprite(int sx, int sy, int width_cells);
 static void draw_turtle_group(int sx, int sy, int count);
-static void draw_death_splash(int screen_x, int screen_y, int frame);
+static void draw_death_splash(int screen_x, int screen_y, float elapsed_ms);
 static void draw_lane_objects(int lane_idx);
 static void start_led_effect(int type);
 static void update_led_effects(void);
@@ -400,27 +409,26 @@ static void spawn_lane_objects(Lane *lane, const LaneConfig *cfg) {
     }
 }
 
-/* Lane speeds are authored in px/frame at this cell size, which is what
- * compute_grid() gives on the 800x453 landscape screen with a calibrated touch
- * inset: (453 - (inset 1..19 + HUD_HEIGHT)) / NUM_ROWS = 28 (RW09: inset 19).
- * Scaling by cell_size / LANE_SPEED_REF_CELL keeps the speed in cells per frame
- * the same in every orientation.  Scaling by fb.width instead made portrait
- * (453 wide, cells ~55 px) about 3.4x slower in cells: the width shrank while
- * the cells, sized from the height, grew. */
-#define LANE_SPEED_REF_CELL 28.0f
-
 static void init_lanes(void) {
-    float speed_scale = (float)cell_size / LANE_SPEED_REF_CELL;
-
     for (int i = 0; i < NUM_LANE_CONFIGS; i++) {
         const LaneConfig *cfg = &lane_configs[i];
-        Lane *lane      = &lanes[i];
-        lane->row       = cfg->row;
-        lane->type      = cfg->type;
-        lane->direction = cfg->direction;
-        lane->speed     = cfg->base_speed * speed_scale;
+        Lane *lane        = &lanes[i];
+        lane->row         = cfg->row;
+        lane->type        = cfg->type;
+        lane->direction   = cfg->direction;
+        lane->cells_per_s = cfg->cells_per_s;
         spawn_lane_objects(lane, cfg);
     }
+}
+
+/* Signed lane velocity in px/s at the current level.  The one home for the
+ * level multiplier, shared by the objects (update_lanes) and the frog riding
+ * them (update_frog_ride) so the two can never drift apart.  Cells/s times the
+ * live cell_size: a speed in cells is the same in portrait and landscape. */
+static float lane_speed_px_s(const Lane *lane) {
+    float speed_mult = 1.0f + (state.level - 1) * 0.15f;
+    if (speed_mult > 2.5f) speed_mult = 2.5f;
+    return lane->cells_per_s * (float)cell_size * speed_mult * lane->direction;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -474,7 +482,7 @@ static void reset_game(void) {
         state.goals_reached[i] = false;
 
     death_anim_active  = false;
-    death_anim_frame   = 0;
+    death_anim_ms      = 0;
     game_over_pending  = false;
     led_effect.active  = false;
     current_frame      = 0;
@@ -551,9 +559,9 @@ static void hop_frog(int drow, int dcol) {
     last_hop_ms = get_time_ms();
 }
 
-static void update_hop(void) {
+static void update_hop(float dt) {
     if (!frog.hopping) return;
-    frog.hop_progress += 1.0f / HOP_DURATION;
+    frog.hop_progress += dt * 1000.0f / HOP_DURATION_MS;
     if (frog.hop_progress >= 1.0f) {
         frog.row          = frog.target_row;
         frog.col          = frog.target_col;
@@ -566,17 +574,18 @@ static void update_hop(void) {
  * Object Movement
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void update_lanes(void) {
-    float speed_mult = 1.0f + (state.level - 1) * 0.15f;
-    if (speed_mult > 2.5f) speed_mult = 2.5f;
-
+/* No substeps: dt is clamped to 0.1 s, so the fastest lane (2.14 cells/s at the
+ * 2.5x level cap = 5.4 cells/s) moves at most 0.54 cells per update, and the
+ * frog sits still while it is collision-tested.  An overlap can only be skipped
+ * by a step longer than object + frog hitbox (>= 1 + 0.75 cells). */
+static void update_lanes(float dt) {
     for (int i = 0; i < NUM_LANE_CONFIGS; i++) {
-        Lane *lane  = &lanes[i];
-        float speed = lane->speed * speed_mult * lane->direction;
+        Lane *lane = &lanes[i];
+        float step = lane_speed_px_s(lane) * dt;
 
         for (int j = 0; j < lane->object_count; j++) {
             LaneObject *obj = &lane->objects[j];
-            obj->x += speed;
+            obj->x += step;
             int obj_w = obj->width_cells * cell_size;
 
             if (lane->direction > 0 && obj->x > grid_width)
@@ -591,17 +600,14 @@ static void update_lanes(void) {
  * Frog Riding on River Objects
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void update_frog_ride(void) {
+static void update_frog_ride(float dt) {
     if (frog.hopping) return;
     if (frog.row < 1 || frog.row > 5) return;
 
     int idx = lane_index_for_row(frog.row);
     if (idx < 0) return;
 
-    float speed_mult = 1.0f + (state.level - 1) * 0.15f;
-    if (speed_mult > 2.5f) speed_mult = 2.5f;
-    float speed = lanes[idx].speed * speed_mult * lanes[idx].direction;
-    frog.ride_offset += speed;
+    frog.ride_offset += lane_speed_px_s(&lanes[idx]) * dt;
 
     while (frog.ride_offset >= cell_size) {
         frog.col++;
@@ -722,18 +728,18 @@ static void kill_frog(DeathType cause) {
     else
         audio_fail(&audio);
 
-    death_anim_frame  = 0;
+    death_anim_ms     = 0;
     death_anim_active = true;
 
     if (state.lives <= 0)
         game_over_pending = true;
 }
 
-static void update_death_animation(void) {
+static void update_death_animation(float dt) {
     if (!death_anim_active) return;
-    death_anim_frame++;
+    death_anim_ms += dt * 1000.0f;
 
-    if (death_anim_frame >= DEATH_ANIM_FRAMES) {
+    if (death_anim_ms >= DEATH_ANIM_MS) {
         death_anim_active = false;
         hw_leds_off();
 
@@ -932,13 +938,13 @@ static void update_game(void) {
     last_frame_ms = now;
 
     if (death_anim_active) {
-        update_death_animation();
+        update_death_animation(dt);
         return;
     }
 
-    update_lanes();
-    update_frog_ride();
-    update_hop();
+    update_lanes(dt);
+    update_frog_ride(dt);
+    update_hop(dt);
     update_timer(dt);
 
     if (!frog.hopping && frog.alive) {
@@ -1101,10 +1107,12 @@ static void draw_turtle_group(int sx, int sy, int count) {
     }
 }
 
-static void draw_death_splash(int sx, int sy, int frame) {
+/* The splash grows by cs/8 per 33.3 ms (authored as per frame at 30 fps) and
+ * reaches its full cell radius halfway through DEATH_ANIM_MS. */
+static void draw_death_splash(int sx, int sy, float elapsed_ms) {
     int cs = cell_size;
     int cx = sx + cs / 2, cy = sy + cs / 2;
-    int r  = cs / 4 + frame * cs / 8;
+    int r  = cs / 4 + (int)(elapsed_ms * (30.0f / 1000.0f / 8.0f) * (float)cs);
     if (r > cs) r = cs;
     fb_fill_circle(&fb, cx, cy, r, COLOR_RED);
     fb_draw_line(&fb, cx - r / 2, cy - r / 2, cx + r / 2, cy + r / 2, COLOR_WHITE);
@@ -1350,7 +1358,7 @@ static void draw_playing_field(void) {
             fx = grid_offset_x + frog.col * cell_size + (int)frog.ride_offset;
             fy = grid_offset_y + frog.row * cell_size;
         }
-        draw_death_splash(fx, fy, death_anim_frame);
+        draw_death_splash(fx, fy, death_anim_ms);
     } else if (frog.alive) {
         int fx, fy;
         if (frog.hopping) {
