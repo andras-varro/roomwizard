@@ -289,9 +289,9 @@ static void input_load_axes(InputState *s, int slot, int fd) {
 }
 
 /* One line naming the node behind the last event, node first so a truncated
- * product name still says which /dev/input/event* it was. out must hold 256
- * bytes (text_truncate copies up to that much). */
-static void input_src_line(const InputState *s, char *out, int max_w, int scale) {
+ * product name still says which /dev/input/event* it was. */
+static void input_src_line(const InputState *s, char *out, size_t out_size,
+                           int max_w, int scale) {
     char raw[DEV_NAME_LEN+32];
     if (s->last_dev>=0 && s->last_dev<s->dev_cnt) {
         const InputDev *d=&s->devs[s->last_dev];
@@ -300,7 +300,7 @@ static void input_src_line(const InputState *s, char *out, int max_w, int scale)
         snprintf(raw,sizeof(raw),"LISTENING ON %d NODE%s - USE ANY",
                  s->fd_cnt, s->fd_cnt==1?"":"S");
     }
-    text_truncate(out, raw, max_w, scale);
+    text_truncate(out, out_size, raw, max_w, scale);
 }
 
 static int input_norm_axis(int v, int mn, int mx) {
@@ -734,7 +734,7 @@ static void draw_kbd_test(Framebuffer *fb, InputState *s) {
     fb_draw_text(fb,lx2+8,ly2+4,"EVENT LOG:",INPUT_COLOR_DIM,1);
     {
         int sx=lx2+8+text_measure_width("EVENT LOG:",1)+16;
-        char src[256]; input_src_line(s, src, lx2+lw2-8-sx, 1);
+        char src[256]; input_src_line(s, src, sizeof(src), lx2+lw2-8-sx, 1);
         fb_draw_text(fb,sx,ly2+4,src,COLOR_CYAN,1);
     }
     int lny=ly2+16, llh=13, ml=(lh2-20)/llh;
@@ -802,7 +802,7 @@ static void draw_mou_test(Framebuffer *fb, InputState *s) {
         const InputDev *d=&s->devs[s->last_dev];
         snprintf(ps,32,"EVENT%d",d->ev_num);
         fb_draw_text(fb,px,sry+22,ps,COLOR_WHITE,2);
-        char nm[256]; text_truncate(nm, d->name, pw-5, 1);
+        char nm[256]; text_truncate(nm, sizeof(nm), d->name, pw-5, 1);
         fb_draw_text(fb,px,sry+44,nm,COLOR_LABEL,1);
     } else {
         fb_draw_text(fb,px,sry+22,"NONE YET",INPUT_COLOR_DIM,2);
@@ -896,7 +896,7 @@ static void draw_pad_test(Framebuffer *fb, InputState *s) {
     fb_draw_text(fb,rvx,rvy+48,rv,COLOR_LABEL,1);
 
     /* Every pad node is open at once; name the one that sent the last event. */
-    char src[256]; input_src_line(s, src, SCREEN_SAFE_WIDTH-20, 2);
+    char src[256]; input_src_line(s, src, sizeof(src), SCREEN_SAFE_WIDTH-20, 2);
     text_draw_centered(fb,sw/2,SCREEN_SAFE_BOTTOM-30,src,COLOR_CYAN,2);
 }
 

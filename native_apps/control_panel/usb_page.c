@@ -252,7 +252,7 @@ static void usb_page_draw(Framebuffer *fb) {
             int bw=text_measure_width(d->kind,2)+16;
             fb_fill_rounded_rect(fb, lx+36, ry+4, bw, rh-10, 4, bc);
             fb_draw_text(fb, lx+44, ry+10, d->kind, COLOR_WHITE, 2);
-            char tn[48]; text_truncate(tn, d->name, name_width(d), 2);
+            char tn[48]; text_truncate(tn, sizeof(tn), d->name, name_width(d), 2);
             fb_draw_text(fb, lx+44+bw+10, ry+10, tn, COLOR_LABEL, 2);
             char id[32];
             if (d->card >= 0) snprintf(id, sizeof(id), "card %d  %04x:%04x", d->card, d->vid, d->pid);

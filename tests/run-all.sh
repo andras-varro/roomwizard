@@ -134,6 +134,7 @@ CTEST_ROWS=(
     "launcher_args_test|-I. -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/input_scan.c common/ppm.c common/icon_grid.c common/logger.c common/pointer.c"
     "pointer_test|-I common|common/pointer.c common/framebuffer.c common/hardware.c common/config.c"
     "ppm_test|-I common|common/ppm.c"
+    "text_truncate_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c"
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "ui_focus_test|-I common|common/ui_focus.c"

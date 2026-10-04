@@ -183,8 +183,11 @@ int text_measure_height(int scale);
 void text_draw_centered(Framebuffer *fb, int center_x, int center_y,
                        const char *text, uint32_t color, int scale);
 
-// Truncate text to fit width with ellipsis
-void text_truncate(char *dest, const char *src, int max_width, int scale);
+// Uppercase src into dest and cut it with "..." to fit max_width pixels
+// (<= 0: no width limit) and dest_size bytes.  Always NUL-terminated within
+// dest_size; writes nothing when dest_size is 0.
+void text_truncate(char *dest, size_t dest_size, const char *src,
+                   int max_width, int scale);
 
 // Convert text to uppercase (for font compatibility)
 void text_to_uppercase(char *dest, const char *src, size_t max_len);

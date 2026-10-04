@@ -105,41 +105,44 @@ void text_draw_centered(Framebuffer *fb, int center_x, int center_y,
     fb_draw_text(fb, x, y, text, color, scale);
 }
 
-void text_truncate(char *dest, const char *src, int max_width, int scale) {
+void text_truncate(char *dest, size_t dest_size, const char *src,
+                   int max_width, int scale) {
+    if (dest == NULL || dest_size == 0) return;
+
     // Convert to uppercase first
     char upper[256];
     text_to_uppercase(upper, src, sizeof(upper));
-    
-    int full_width = text_measure_width(upper, scale);
-    
-    if (max_width <= 0 || full_width <= max_width) {
-        // No truncation needed
-        strcpy(dest, upper);
-        return;
+    size_t len = strlen(upper);
+
+    /* Decide what the pixel width allows: `keep` characters of `upper`,
+     * followed by "..." when `ellipsis` is set. */
+    size_t keep = len;
+    bool ellipsis = false;
+    if (max_width > 0 && text_measure_width(upper, scale) > max_width) {
+        ellipsis = true;
+        int available_width = max_width - text_measure_width("...", scale);
+        int char_width = 8 * scale;
+        keep = (available_width > 0) ? (size_t)(available_width / char_width) : 0;
+        if (keep > len) keep = len;
     }
-    
-    // Need to truncate with "..."
-    int ellipsis_width = text_measure_width("...", scale);
-    int available_width = max_width - ellipsis_width;
-    
-    if (available_width <= 0) {
-        strcpy(dest, "...");
-        return;
+
+    /* Then what the buffer allows.  A result that does not fit is cut the
+     * same way a too-wide one is, so the reader still sees "..." whenever
+     * there is room for it. */
+    size_t room = dest_size - 1;
+    if (keep + (ellipsis ? 3 : 0) > room) {
+        ellipsis = true;
+        keep = (room > 3) ? room - 3 : 0;
     }
-    
-    // Calculate how many characters fit
-    int char_width = 8 * scale;
-    int max_chars = available_width / char_width;
-    
-    if (max_chars <= 0) {
-        strcpy(dest, "...");
-        return;
+
+    memcpy(dest, upper, keep);
+    size_t n = keep;
+    if (ellipsis) {
+        size_t dots = (room - keep < 3) ? room - keep : 3;
+        memcpy(dest + n, "...", dots);
+        n += dots;
     }
-    
-    // Copy characters and add ellipsis
-    strncpy(dest, upper, max_chars);
-    dest[max_chars] = '\0';
-    strcat(dest, "...");
+    dest[n] = '\0';
 }
 
 // ============================================================================
@@ -232,7 +235,8 @@ void button_init_simple(Button *btn, int x, int y, int width, int height,
 
 void button_set_text(Button *btn, const char *text) {
     if (btn->max_text_width > 0) {
-        text_truncate(btn->text, text, btn->max_text_width, btn->text_scale);
+        text_truncate(btn->text, sizeof(btn->text), text,
+                      btn->max_text_width, btn->text_scale);
     } else {
         text_to_uppercase(btn->text, text, sizeof(btn->text));
     }
