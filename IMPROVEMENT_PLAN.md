@@ -191,51 +191,15 @@ residues:
 
 ## Features
 
-Userspace except F101, which is the image build, and F2, which now waits on it.
+Userspace except F101, which is the image build.
 
-### F2. Use the DSS overlay planes — open, **gated on a kernel build; waits on F101**
+### F129. Retire the two DSS-scaling instruments — open, needs the operator's go-ahead to delete
 
-What is left needs a kernel image; no UI change is wanted. **Operator ruling 2026-10-04: scaling is opt-in per app,
-aimed at emulator-style low-resolution sources (ScummVM's 320x240 games); native games keep drawing full-resolution
-to `fb0` and do not use it.** The userspace half (`vid1` upscale of a reduced
-surface) was built, measured and rejected on image quality — software nearest-neighbour stays. Facts, the
-overlay recipe and scaling limits, the A/B outcome and its instruments:
-[`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display); the reduced-surface UI conversion:
-`native_apps/CLAUDE.md` → *Coordinates, dimensions, portrait*; ScummVM's output rect:
-`scummvm-roomwizard/CLAUDE.md`.
-
-**Kernel-side, both rows of F101's fold-in table.** Done-when: an image built from F101 carries each, and
-the panel confirms it.
-
-- **`CONFIG_FB_OMAP2_NUM_FBS` 2 → 3.** Config-only, no source patch. Three overlays enumerate but only `fb0`
-  and `fb1` exist, so `vid2` has no node to bind and step 2 below is unreachable until this lands.
-- **All-identity 8-phase scaler table in `dss/dispc_coefs.c`** (or a selector that reaches one).
-  **[inferred]** it would give hardware nearest-neighbour — sharp *and* ~178 µs/frame against ~12.7 ms for
-  the software resample — and overturn the software-wins ruling; it is reasoning about the DISPC FIR, not
-  something the source states. The DSS is built in, so no module reaches it, and a rebuilt image inherits
-  the dead-touchscreen blocker ([§7](SYSTEM_ANALYSIS.md#7-kernel-policy)). The rehearsal this needs is a
-  pillarbox mode in `dss_scale_ab` (the 640×400 test was a live sysfs poke, not a harness feature) — and
-  the target is ScummVM's isotropic pillarboxed rect, not a full-screen stretch.
-
-Further steps, in order, all behind the above:
-
-1. **HUD plane.** Unscaled HUD on `gfx` (`overlay0`), scaled game on `vid1`; `vid2` waits on `NUM_FBS=3`.
-   `global_alpha` works and `zorder` does not, so the fixed GFX < VID1 < VID2 order decides what is on top.
-2. **Colour-key transparency** via `trans_key_enabled` for zero-CPU sprite masking.
-3. **Video playback**, speculatively — `/dev/video0` accepts YUV with hardware colour-space conversion.
-   Furthest from proven; the boot-time `omap_vout: failed to allocate DMA Channel for video-1` may be what
-   blocks it.
-
-⚠️ **Verification is operator-in-the-loop.** `cat /dev/fb0` returns the gfx plane's memory, not the
-composited panel, so no screenshot can see an overlay — say so in any checklist this work produces.
-
-⚠️ Cheap today, but it would need rewriting as DRM atomic plane code after a **mainline** port — which
-is out of scope, and which a 4.14.52 rebuild is not: that leaves omapdss and this code intact.
-
-**Cleanup when this concludes:** delete `tests/fb_plane_bench.c` and `tests/dss_scale_ab.c` (both
-DSS-scaling instruments, deployed hidden) together with their build steps, their `GAMES_BINARIES`
-entries in `native_apps/build-and-deploy.sh`, and their `CTEST_NOT_HOST` rows in
-`tests/run-all.sh`.
+The overlay scaler is not used ([`SYSTEM_ANALYSIS.md#32-display`](SYSTEM_ANALYSIS.md#32-display)), so
+`native_apps/tests/fb_plane_bench.c` and `native_apps/tests/dss_scale_ab.c` (deployed hidden) are dead.
+Done-when: both files, their build steps and `GAMES_BINARIES` entries in `native_apps/build-and-deploy.sh`, and
+their `CTEST_NOT_HOST` rows in `tests/run-all.sh` are gone, and `./tests/run-all.sh` is green. The measurement
+that cites them stays in that section; reword it to say the instruments were removed.
 
 ### F4. Surface the two MADC channels that need no wire — open
 
@@ -307,8 +271,6 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
-| Third overlay plane | `CONFIG_FB_OMAP2_NUM_FBS=3` | **config-only, no source patch, and the cheapest win in this table.** Three DSS overlays enumerate against two framebuffers, so `vid2` has no node to bind and cannot be funded from userspace at all — F2 is what this unblocks; the measurement is in [§3.2](SYSTEM_ANALYSIS.md#32-display) |
-| DSS scaler coefficients | an all-identity 8-phase table in `dss/dispc_coefs.c`, or a selector that reaches one | **[inferred]** the only route to hardware nearest-neighbour upscaling; the DSS is built in, so no module can reach it. [§3.2](SYSTEM_ANALYSIS.md#32-display) holds the A/B this would overturn and the coefficients |
 
 **The order to do it in, cheapest first.**
 

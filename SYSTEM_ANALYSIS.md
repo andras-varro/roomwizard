@@ -231,7 +231,11 @@ With these numbers the panel needs no custom driver on any kernel: it reduces to
 blocker to any future kernel work, and it now lives here rather than only inside a binary on a
 2018 SD card.
 
-**DSS overlay planes — three overlays, and the hardware scaler is proven.** Two of them scale:
+**DSS overlay planes — three overlays, and the hardware scaler is proven but not used.** ⚠️ **Operator ruling
+2026-10-04: low return, so nothing ships on it.** Native apps draw 800×480 into `fb0` and need no scaling;
+ScummVM's software nearest-neighbour is sharp and already cheap (below), so the hardware path saves a few
+percent of a CPU that is not the limit; and sharp output needs an unbuilt, untested kernel patch. A HUD
+plane, colour-key sprites and YUV video go with it. The rest of this section is kept as measured fact. Two overlays scale:
 
 ```
 $ ls /sys/devices/platform/omapdss/
@@ -274,10 +278,8 @@ and is downscale-only; **upscale 8×**, refused by `out_width > width * 8` and t
 (`dss/dispc.c:2515` and `:2518`). Two further gates: **maximum single-line width 1024 px**
 (`FEAT_PARAM_LINEWIDTH`, `dss/dss_features.c:437`, enforced at `dss/dispc.c:2378` and `:2411-2420`),
 and the output must be framed — `pos + out <= res` on each axis or `-EINVAL` (`dss/overlay.c:174-186`).
-**[inferred]** a *pure* upscale is the cheapest case for the core-clock gate, because
-`calc_core_clk_34xx()` raises its factors only when an axis shrinks and so returns plain `pclk`
-(`dss/dispc.c:2259-2272`) — precondition: no downscale on either axis. On a GPU-less 600 MHz part this
-is the only graphics acceleration available.
+**[inferred]** a *pure* upscale is the cheapest case for the core-clock gate: `calc_core_clk_34xx()`
+returns plain `pclk` unless an axis shrinks (`dss/dispc.c:2259-2272`).
 
 **Measured on `.188`: `vid1` upscaling 400×240 → 800×480 full-screen, over the app, with no reboot,
 no boot parameter and no kernel work.** `fb1` is the second framebuffer
@@ -292,13 +294,11 @@ rejected at write time: `echo 384000 > /sys/class/graphics/fb1/size` (allocates 
 writable** on this SoC and does not need to be: the fixed order is GFX < VID1 < VID2, so `vid1`
 composites above the app with `alpha_blending_enabled=0`.
 
-⚠️ **`fb1/size` and `overlay1/enabled` both reading `0` is the IDLE state, not a capability limit, and
-the boot-time `omap_vout` error does not change that.** Measured on `.188` 2026-09-11, with
-`omap_vout: failed to allocate DMA Channel for video-1` in that boot's log: funding `fb1` from sysfs
-succeeded (128000 bytes written for a 320×200 RGB565 surface, **131072 read back** — the allocator
-rounds up to a page), `enabled` then read `1`, and the upscale was **visible on the panel**. That error
-is an `omap_vout` (V4L2) failure and bears only on `/dev/video0`; it does not prevent sysfs-driven
-`vid1` use.
+⚠️ **`fb1/size` and `overlay1/enabled` both reading `0` is the IDLE state, not a capability limit.**
+Measured on `.188` 2026-09-11, with `omap_vout: failed to allocate DMA Channel for video-1` in that boot's
+log: funding `fb1` from sysfs worked (128000 written for 320×200 RGB565, **131072 read back** — page
+rounding), `enabled` read `1`, the upscale was **visible on the panel**. That error is a V4L2 failure and
+bears only on `/dev/video0`.
 
 **⚠️ A scaled overlay is ALWAYS filtered — there is no nearest-neighbour path and no filter-off bit.**
 Measured in the vanilla tree. `dispc_ovl_setup_common()` calls `dispc_ovl_set_scaling()` for any plane
@@ -353,16 +353,16 @@ at 800×480 on `fb0`**, and enabling the overlay costs nothing measurable; a fun
 control came within 0.4 % of `fb0`, so the win is the pixel count and not the node. Instrument
 `native_apps/tests/fb_plane_bench.c` (device-only, hidden): the scene is fractions of the surface and it
 prints its own pixel count — two runs whose counts are not in the ratio of their areas are not an A/B.
-Against that, ScummVM's software resample spends 6.4–12.9 ms of a 33 ms frame where the hardware path
-spends 0.1–0.2 ms, but ScummVM plays *Full Throttle* at 12–13 % CPU, so nothing is short of it. *Quality,
+Against that, ScummVM's NEON nearest-neighbour resample spends 6.4–12.9 ms of a 33 ms frame where the
+hardware path spends 0.1–0.2 ms, but *Full Throttle* plays at 12–13 % CPU, so nothing is short. *Quality,
 operator at the panel, `.188`:* a 320×200 → 800×480 hardware arm is blurry and the blur **followed the
 hardware arm when the two halves were exchanged**, so viewing angle is excluded; on a real *King's Quest II*
 frame the hardware arm was *"very bad"*, its text *"barely readable"*, the software arm *"very sharp"* —
 a SCUMM dialogue box is a 1-px-stroke bitmap font, the worst case for any filter. Exact 2× (`output_size`
 `640,400`, `position` `80,40`, poked live while `vid1` held the plane) was *not* an improvement: ringing
 from the phase-4 negative lobes above, on a picture smaller than the 672×420 ScummVM produces itself. A
-nearest-neighbour hardware path would need a kernel patch (the **[inferred]** all-identity 8-phase table in
-`dss/dispc_coefs.c`). Instruments: `native_apps/tests/dss_scale_ab.c` (`soft` / `hard` / `split`, `--swap`
+nearest-neighbour hardware path would need an unbuilt, untested kernel patch (the **[inferred]**
+all-identity 8-phase table in `dss/dispc_coefs.c`; it would also need `NUM_FBS=3` for a third plane). Instruments: `native_apps/tests/dss_scale_ab.c` (`soft` / `hard` / `split`, `--swap`
 = viewing-angle control, `--ppm` for a real frame; links nothing from `common/`) and `fb_to_game_ppm.py`,
 which inverts the software upscale off an `fb0` grab. Both ship hidden. The `vid1` state before any
 funding is `enabled=0`, `fb1/size` 0, and `overlay1` has no `trans_key*` attribute of its own.
@@ -2202,7 +2202,7 @@ iteration is a `.ko` copied over, and touch itself still ends at an operator ([T
 **removed from mainline during 5.x**; the OMAP3 replacement `omapdrm` is a DRM/KMS driver. Under it
 `/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev emulation exposes a **fixed** pixel
 format, while this project switches bpp at runtime in three components ([Display](#32-display)); the DSS
-overlay sysfs interface, the best free performance win available, disappears outright; and a 6.x kernel
+overlay sysfs interface disappears outright; and a 6.x kernel
 has a materially larger footprint on a 234 MB box. That the emulation would *reject* the switch is
 **[inferred]**, untestable here for want of any DRM at all; what is **measured** is that the current
 stack supports it (`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running).

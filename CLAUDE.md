@@ -321,8 +321,8 @@ Full detail, measurements and the flags each component uses:
   `-mfpu=neon`, libpng needs `-DPNG_ARM_NEON_OPT=0`.
 - **No `SCHED_RR` audio thread.** On this single 600 MHz core an RT audio thread starves the main thread
   and you get a black screen.
-- **The DSS *can* scale in hardware** — three overlay planes driven from sysfs, no kernel work. The only
-  graphics acceleration on this GPU-less part; unused so far, and open work in `IMPROVEMENT_PLAN.md`.
+- **The DSS overlay scaler is deliberately unused** (operator, 2026-10-04: low return; it always filters and
+  the result was rejected at the panel) — apps draw to `fb0`. Facts: `SYSTEM_ANALYSIS.md#32-display`.
 - Before optimising a software renderer, read
   `SYSTEM_ANALYSIS.md#65-software-rendering-techniques-that-paid-off`.
 
