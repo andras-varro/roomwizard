@@ -689,6 +689,183 @@ assert_eq "$STOT" "$SADD" "F14 the summary's per-type counts add up to its total
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
+echo "G. --ssh-auth: the two modes, their preconditions, and the undo"
+# ═══════════════════════════════════════════════════════════════════════════
+# shellcheck source=../lib/rw-sshd.sh
+. "$REPO_DIR/lib/rw-sshd.sh"
+GW="$TMP/g"; mkdir -p "$GW/etc/ssh" "$GW/etc/init.d"
+
+PW=$(rw_provision_plan_sshd "$RULES" password)
+KY=$(rw_provision_plan_sshd "$RULES" key)
+has() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3" ;; esac; }
+hasnt() { case "$1" in *"$2"*) bad "$3" ;; *) ok "$3" ;; esac; }
+has   "$PW" "PasswordAuthentication=yes" "G1 password mode keeps PasswordAuthentication yes"
+has   "$PW" "PermitRootLogin=yes"        "G1b and PermitRootLogin yes"
+hasnt "$PW" "PasswordAuthentication=no"  "G1c and never writes PasswordAuthentication no"
+has   "$KY" "PasswordAuthentication=no"  "G2 key mode turns PasswordAuthentication off"
+has   "$KY" "KbdInteractiveAuthentication=no" "G2b and keyboard-interactive"
+has   "$KY" "PermitRootLogin=prohibit-password" "G2c and lets root in by key only"
+hasnt "$KY" "PasswordAuthentication=yes" "G2d and never writes PasswordAuthentication yes"
+for P in "$PW" "$KY"; do
+    hasnt "$P" "hmac-sha1" "G3 no SHA-1 MAC in either mode"
+    hasnt "$P" "umac-64"   "G3b no 64-bit-tag MAC in either mode"
+    hasnt "$P" "ssh-rsa,"  "G3c no ssh-rsa signature in either mode"
+done
+if rw_provision_plan "$RULES" "base sshd sshd-key sshd-password" >/dev/null 2>&1; then
+    bad "G4 both auth groups at once are refused"
+else
+    ok "G4 both auth groups at once are refused"
+fi
+if rw_provision_plan "$RULES" "base sshd sshd-key" >/dev/null 2>&1; then
+    ok "G4b control: one auth group compiles"
+else
+    bad "G4b control: one auth group compiles"
+fi
+if rw_provision_ssh_auth_group nonsense >/dev/null 2>&1; then
+    bad "G4c an unknown --ssh-auth value is refused"
+else
+    ok "G4c an unknown --ssh-auth value is refused"
+fi
+
+# The vendor file's shape, from the card capture: prose comments that START with
+# a keyword ("# Ciphers and keying"), commented-out settings, and one live Ciphers.
+vendor_cfg() {
+    printf '%s\n' '# Ciphers and keying' '#LoginGraceTime 2m' 'PermitRootLogin yes' \
+        '#PubkeyAuthentication yes' '#PasswordAuthentication yes' 'PermitEmptyPasswords yes' \
+        'ChallengeResponseAuthentication no' 'UsePAM yes' '#Match User anoncvs' \
+        '# Ciphers and keying' 'Ciphers aes128-ctr,aes192-ctr,aes256-ctr'
+}
+mkcard_ssh() { rm -rf "$1"; mkdir -p "$1"/root/etc/ssh "$1"/data "$1"/log "$1"/backup
+               vendor_cfg > "$1/root/etc/ssh/sshd_config"; }
+printf '%s\n' "$KY" > "$GW/key.plan"
+mkcard_ssh "$GW/off"
+rw_provision_apply_offline "$GW/off" "$GW/key.plan" "$REPO_DIR" >/dev/null 2>&1 \
+    || bad "G5 the key plan applies offline"
+C="$GW/off/root/etc/ssh/sshd_config"
+assert_eq "2" "$(grep -c '^# Ciphers and keying$' "$C")" \
+    "G5 a prose comment starting with a keyword is left alone (it used to become a 2nd/3rd Ciphers line)"
+for k in Ciphers MACs KexAlgorithms PasswordAuthentication PermitRootLogin PubkeyAuthentication; do
+    assert_eq "1" "$(grep -c "^$k " "$C")" "G5.$k set exactly once"
+done
+
+# Same bytes from both executors, not just the same dry run (group E's limit).
+mkdir -p "$GW/on/etc/ssh"; vendor_cfg > "$GW/on/etc/ssh/sshd_config"
+rw_provision_online_script > "$GW/online.sh"
+RW_PROVISION_ROOT="$GW/on" sh "$GW/online.sh" "$GW/key.plan" >/dev/null 2>&1 \
+    || bad "G6 the key plan applies through the online executor"
+assert_eq "$(md5sum < "$C")" "$(md5sum < "$GW/on/etc/ssh/sshd_config")" \
+    "G6 both executors write byte-identical sshd_config"
+
+# rw_sshd_check_offline against make-fake-card.sh's sshd strings.
+bash "$REPO_DIR/tests/make-fake-card.sh" "$GW/fc" >/dev/null 2>&1
+FSSHD="$GW/fc/root/usr/sbin/sshd"
+if rw_sshd_check_offline "$C" "$FSSHD" "$GW/key.plan" >/dev/null; then
+    ok "G7 control: the written config passes the offline check"
+else
+    bad "G7 control: the written config passes the offline check"
+    rw_sshd_check_offline "$C" "$FSSHD" "$GW/key.plan" | sed 's/^/        /'
+fi
+grep -v 'pubkeyacceptedkeytypes' "$FSSHD" > "$GW/old-sshd"
+if rw_sshd_check_offline "$C" "$GW/old-sshd" "$GW/key.plan" >/dev/null; then
+    bad "G7b a keyword the card's sshd does not know is refused"
+else
+    ok "G7b a keyword the card's sshd does not know is refused"
+fi
+sed 's/hmac-sha2-256-etm@openssh.com,//' "$FSSHD" > "$GW/old-sshd2"
+if rw_sshd_check_offline "$C" "$GW/old-sshd2" "$GW/key.plan" >/dev/null; then
+    bad "G7c an algorithm the card's sshd does not know is refused"
+else
+    ok "G7c an algorithm the card's sshd does not know is refused"
+fi
+cp "$C" "$GW/dup.cfg"; echo 'passwordauthentication yes' >> "$GW/dup.cfg"
+if rw_sshd_check_offline "$GW/dup.cfg" "$FSSHD" "$GW/key.plan" >/dev/null; then
+    bad "G7d a second spelling of a key (case-insensitive) is refused"
+else
+    ok "G7d a second spelling of a key (case-insensitive) is refused"
+fi
+cp "$C" "$GW/match.cfg"; echo 'Match User x' >> "$GW/match.cfg"
+if rw_sshd_check_offline "$GW/match.cfg" "$FSSHD" "$GW/key.plan" >/dev/null; then
+    bad "G7e an active Match block is refused"
+else
+    ok "G7e an active Match block is refused"
+fi
+
+# rw_sshd_key_installed: key-only offline needs a key written by THIS run.
+AK="$GW/ak"; MK="$GW/mark"
+rm -f "$AK"; : > "$MK"
+if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8 no authorized_keys: refused"; else ok "G8 no authorized_keys: refused"; fi
+echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB operator@host' > "$AK"
+touch -d '2000-01-01' "$AK"
+if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8b a key older than this run: refused"; else ok "G8b a key older than this run: refused"; fi
+echo 'ssh-dss AAAAB3NzaC1kc3MAAACB operator@host' > "$AK"; touch -d '2099-01-01' "$AK"
+if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8c a DSA-only key (refused by the hardened config): refused"; else ok "G8c a DSA-only key (refused by the hardened config): refused"; fi
+echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB operator@host' > "$AK"; touch -d '2099-01-01' "$AK"
+if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then ok "G8d control: a fresh ed25519 key is accepted"; else bad "G8d control: a fresh ed25519 key is accepted"; fi
+
+# The device-side guard, run as the device would run it, against a stub sshd.
+rw_sshd_guard_script > "$GW/guard.sh"
+printf '#!/bin/sh\nexit 0\n' > "$GW/sshd-ok"; printf '#!/bin/sh\necho "Bad configuration option: X"\nexit 255\n' > "$GW/sshd-bad"
+printf '#!/bin/sh\necho reload >> "%s/reloads"\n' "$GW" > "$GW/etc/init.d/sshd"
+chmod +x "$GW/sshd-ok" "$GW/sshd-bad" "$GW/etc/init.d/sshd"
+guard() { RW_SSHD_ROOT="$GW" RW_SSHD_BIN="$GW/$1" sh "$GW/guard.sh" "${@:2}"; }
+echo 'OLD' > "$GW/etc/ssh/sshd_config"
+guard sshd-ok snapshot >/dev/null
+echo 'NEW' > "$GW/etc/ssh/sshd_config"
+if guard sshd-bad check >/dev/null 2>&1; then bad "G9 sshd -t failing makes check fail"; else ok "G9 sshd -t failing makes check fail"; fi
+assert_eq "OLD" "$(cat "$GW/etc/ssh/sshd_config")" "G9b and the previous sshd_config is restored"
+echo 'NEW' > "$GW/etc/ssh/sshd_config"
+if guard sshd-ok check >/dev/null 2>&1; then ok "G9c control: sshd -t passing keeps the new file"; else bad "G9c control: sshd -t passing keeps the new file"; fi
+assert_eq "NEW" "$(cat "$GW/etc/ssh/sshd_config")" "G9d (still NEW)"
+guard sshd-ok arm 1 >/dev/null 2>&1
+n=0; while [ "$(cat "$GW/etc/ssh/sshd_config")" != OLD ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+assert_eq "OLD" "$(cat "$GW/etc/ssh/sshd_config")" "G9e an unconfirmed reload is undone by the dead-man timer"
+echo 'NEW' > "$GW/etc/ssh/sshd_config"
+guard sshd-ok arm 1 >/dev/null 2>&1; guard sshd-ok confirm >/dev/null
+sleep 1.5
+assert_eq "NEW" "$(cat "$GW/etc/ssh/sshd_config")" "G9f control: a confirmed reload is kept"
+
+# rw_sshd_commit_ssh's re-proof, against a scripted probe. The reload is SIGHUP and
+# sshd refuses connections while it re-execs (~0.76 s measured), so the first probe
+# can say `down` for a config a key login accepts. SCRIPT is the probe's answers in
+# order, the last one repeating; ssh itself (check/arm/confirm) is stubbed to pass.
+commit_with() {   # SCRIPT -> prints "rc tries", stderr to $GW/commit.err
+    (
+        echo "$1" | tr ' ' '\n' > "$GW/probe.script"; : > "$GW/probe.n"
+        ssh() { return 0; }
+        sleep() { :; }
+        rw_ssh_probe() {
+            local a; for a in "$@"; do
+                if [ "$a" = PubkeyAuthentication=no ]; then
+                    RW_SSH_LAST_STATE=auth; RW_SSH_LAST_STDERR="root@x: Permission denied (publickey)."; return 1
+                fi
+            done
+            echo x >> "$GW/probe.n"
+            RW_SSH_LAST_STATE=$(sed -n "$(wc -l < "$GW/probe.n")p" "$GW/probe.script")
+            [ -n "$RW_SSH_LAST_STATE" ] || RW_SSH_LAST_STATE=$(tail -1 "$GW/probe.script")
+            case "$RW_SSH_LAST_STATE" in
+                ok)   RW_SSH_LAST_STDERR=""; return 0 ;;
+                down) RW_SSH_LAST_STDERR="ssh: connect to host x port 22: Connection refused" ;;
+                *)    RW_SSH_LAST_STDERR="root@x: Permission denied (publickey)." ;;
+            esac
+            return 1
+        }
+        rc=0; rw_sshd_commit_ssh root@x key >/dev/null 2>"$GW/commit.err" || rc=$?
+        echo "$rc $(wc -l < "$GW/probe.n")"
+    )
+}
+RW_SSHD_SETTLE_SECS=30
+assert_eq "0 3" "$(commit_with 'down down ok')" "G10 refused twice during the reload, then a key login: committed"
+assert_eq "1 1" "$(commit_with 'auth')" "G10b control: a refused key is not retried and fails"
+if grep -q 'ssh: root@x: Permission denied (publickey)' "$GW/commit.err" && grep -q "'auth' after 1 attempt" "$GW/commit.err"; then
+    ok "G10c the failure prints the probe state and ssh's own stderr"
+else bad "G10c the failure prints the probe state and ssh's own stderr"; sed 's/^/        /' "$GW/commit.err"; fi
+RW_SSHD_SETTLE_SECS=0
+assert_eq "1 1" "$(commit_with 'down')" "G10d a server that stays down fails once the settle time is spent"
+if grep -q 'Connection refused' "$GW/commit.err"; then ok "G10e and says Connection refused"; else bad "G10e and says Connection refused"; fi
+RW_SSHD_SETTLE_SECS=30
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
 echo "════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"

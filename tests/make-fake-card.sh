@@ -108,6 +108,20 @@ mkdir -p "$BASE"/root/usr/share/{cjkfont,snmp,X11} "$BASE/root/usr/lib/ts"
 : > "$BASE/root/usr/lib/libc.so.6"
 : > "$BASE/root/usr/sbin/snmpd"
 : > "$BASE/root/usr/sbin/avahi-daemon"
+# A stand-in sshd carrying the strings commission-offline.sh's sshd check reads out
+# of the real one: the lowercase keyword table and the compiled-in algorithm lists,
+# copied from the 8.3p1 binary on the card capture (grep -a). Not executable code;
+# nothing here runs it.
+{
+    printf '%s\n' OpenSSH_8.3p1 permitemptypasswords maxauthtries logingracetime maxsessions \
+        pubkeyauthentication ciphers macs kexalgorithms hostkeyalgorithms pubkeyacceptedkeytypes \
+        passwordauthentication challengeresponseauthentication kbdinteractiveauthentication \
+        permitrootlogin prohibit-password
+    printf '%s\n' chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com \
+        umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1 \
+        curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256 \
+        ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,ssh-ed25519-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-rsa-cert-v01@openssh.com,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com,ssh-ed25519,sk-ssh-ed25519@openssh.com,rsa-sha2-512,rsa-sha2-256,ssh-rsa
+} > "$BASE/root/usr/sbin/sshd"
 mkdir -p "$BASE/root/etc/avahi"; : > "$BASE/root/etc/avahi/avahi-daemon.conf"
 : > "$BASE/root/var/log/browser.err"
 

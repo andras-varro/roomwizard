@@ -16,6 +16,7 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 | `rw-bundle.sh` | the release-bundle layout |
 | `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
+| `rw-sshd.sh` | the guard around an `sshd_config` change: key proof, offline check, `sshd -t`, self-undoing reload |
 | `rw-usbpower.sh` | the only scripted writer of `uImage-system` on p1 |
 
 ## One SSH gate, and BatchMode stays on it
@@ -147,10 +148,9 @@ because `/` is the correct prefix on a device and a refused one offline.
 - ⚠️ **`dropline` uses `awk`, not `sed "/$ere/d"`.** These EREs contain slashes —
   `^4:12345:respawn:/sbin/getty 38400 tty4` closes sed's address at `respawn:` and the remainder is
   read as a command. The symptom was a passing install and an unedited `/etc/inittab`.
-- **`directive` sets a key, it does not append beside it.** Substituted if present (commented or not),
-  appended if absent, so it is idempotent — which matters because both bring-up paths can be re-run.
-  The `sed 's/^PermitEmptyPasswords yes/…/'` it replaced matched one exact string, so
-  `#PermitEmptyPasswords yes` passed through untouched and the hardening silently did nothing.
+- **`directive` sets a key, never appends beside it** — substituted if present (`#Key value` counts),
+  appended if absent, so re-runs are idempotent. The `sed` it replaced matched one exact string and skipped
+  `#PermitEmptyPasswords yes`; ⚠️ the `#` must *touch* the key, or the vendor's prose `# Ciphers and keying` becomes two more `Ciphers` lines.
 - ⚠️ **The online executor is generated, not written twice.** `rw_provision_online_script` emits a
   POSIX `sh` interpreter that `commissioning/provision.sh` pipes to the device; `install` is the one
   verb it cannot do alone, because the source bytes are on the host, so the caller `scp`s them first

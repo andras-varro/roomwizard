@@ -30,6 +30,12 @@ than the only way in.
 argument loops: `case` takes the first match, so an arm placed after it is unreachable and the operator
 gets `Unknown provision group: usb-power`.
 
+**`--ssh-auth=password|key` is on both scripts, default `password`**, and `provision.sh --sshd-only`
+re-applies just the sshd records with no clean, p1 write or reboot. ⚠️ **Key-only must never be applied
+without proof of a key** — online `rw_sshd_key_login_ok` runs before the consent question, offline
+`card-prep.sh` gets `RW_SSH_KEY_REQUIRED=1` and its `authorized_keys` must be newer than a marker taken
+before it ran. A conflicting `--no-sshd` is refused, not resolved. Mechanism: `lib/rw-sshd.sh`'s header.
+
 **Cleanup, bloatware removal and the boot service all live in `provision.sh`** — never in a component
 script. `deploy-all.sh` and the four `*/build-and-deploy.sh` must not duplicate any of it.
 

@@ -397,7 +397,16 @@ on every boot, which is what makes the offline path's omission harmless rather t
 ./commissioning/provision.sh <target> --no-usb           # no USB host mode at all; implies the above
 ./commissioning/provision.sh <target> --status           # report only, no changes
 ./commissioning/provision.sh <target> --hostname rw09    # set the host name only. NO reboot.
+./commissioning/provision.sh <target> --sshd-only --ssh-auth=key  # SSH only, key-only. NO reboot.
 ```
+
+**`--ssh-auth=password|key`** is on both bring-up paths. `password` (the default) is the behaviour every
+unit has had; `key` turns off every password method and is **refused** unless a key is proven first —
+a publickey-only BatchMode login online, an `authorized_keys` that `card-prep.sh` wrote in the same run
+offline — because a fresh unit may have no key and there is no serial console. Online, the new file must
+pass `sshd -t`, a reload and a fresh key login, or the device restores the previous one by itself.
+Either mode drops SHA-1 MACs and `ssh-rsa` signatures; the records and their reasons are the `sshd`
+groups of `device-files/provision-rules.conf`.
 
 `<target>` is an IPv4 address **or** a host name. `--status` also md5s the two deployed scripts
 against the repo's and reports `matches repo` or `DRIFTED` per file. `--keep-<group>` switches off part

@@ -188,7 +188,7 @@ roomwizard/
 │   ├── rw-clean.sh              # clean-rules.conf -> a plan
 │   ├── rw-provision.sh          # provision-rules.conf -> a plan
 │   ├── rw-usbpower.sh           # The ONE writer of p1: the 500 mA USB budget
-│   ├── rw-ssh.sh                # The one "can I reach this device" gate
+│   ├── rw-ssh.sh, rw-sshd.sh    # The one "can I reach this device" gate; the --ssh-auth=password|key guard
 │   ├── rw-release.sh            # Resolve + fetch + verify a published release
 │   └── rw-bundle.sh             # The release-bundle layout, both directions
 ├── device-files/                # Installed onto the device verbatim
