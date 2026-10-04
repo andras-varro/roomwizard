@@ -24,10 +24,23 @@
 #define PADDLE_HEIGHT 80
 #define BALL_SIZE 12
 #define WINNING_SCORE 11
-#define PADDLE_SPEED 6       /* pixels per frame for keyboard/d-pad */
-#define PADDLE_MAX_ANALOG 8  /* max pixels per frame from analog stick */
-#define BALL_START_SPEED 8.5f /* px/frame at 30fps; 5.0 took ~7s to cross the playfield */
-#define BALL_SPEEDUP 1.05f    /* per paddle hit, on the primary axis */
+/* Motion runs on elapsed time (frame_dt, seconds), not frames: every speed below
+ * is px per SECOND.  They were authored as px/frame at the nominal 30 fps and
+ * are that figure x 30, so the feel at 30 fps is unchanged. */
+#define PADDLE_SPEED 180.0f      /* keyboard/d-pad; authored 6 px/frame */
+#define PADDLE_MAX_ANALOG 240.0f /* analog stick at full deflection; authored 8 px/frame */
+#define BALL_START_SPEED 255.0f  /* authored 8.5 px/frame; 5.0 took ~7s to cross the playfield */
+#define BALL_SPEEDUP 1.05f       /* per paddle hit, on the primary axis */
+#define BALL_ENGLISH 90.0f       /* cross-axis px/s added per hit at a paddle end; authored 3 px/frame */
+#define AI_SPEED_BASE 90.0f      /* AI paddle px/s = AI_SPEED_BASE + AI_SPEED_PER_LEVEL * difficulty; */
+#define AI_SPEED_PER_LEVEL 30.0f /*   authored 3 + difficulty px/frame */
+#define AI_JITTER_MS 33.3f       /* aim-error re-roll period; it was re-rolled every 30 fps frame */
+#define MAX_DT 0.1f              /* longest step one frame may integrate, seconds */
+/* The paddle test is a position test with no sweep, and the ball (12 px) and
+ * paddle (15 px) are thin: no single integration step may move the ball further
+ * than this, or it passes through a paddle at a low frame rate. */
+#define BALL_MAX_SUBSTEP_PX 6.0f
+#define BALL_MAX_SUBSTEPS 32
 
 typedef enum {
     SCREEN_WELCOME,
@@ -79,12 +92,26 @@ static GameOverScreen gos;
 /* LED flourishes (game start, match won), advanced once per frame by the main loop. */
 static LedPulse led_pulse;
 
+/* The play clock.  handle_input() measures frame_dt once per main-loop
+ * iteration; every transition into play calls play_clock_restart(), so the
+ * first frame of play does not integrate the time spent on a menu, a pause or a
+ * blocking name entry. */
+static uint32_t last_ms;
+static float frame_dt;
+static float ai_jitter;      /* current AI aim error, px */
+static float ai_jitter_ms;   /* time since it was last re-rolled */
+
+static void play_clock_restart(void) {
+    last_ms = get_time_ms();
+    frame_dt = 0.0f;
+}
+
 // Function prototypes
 void init_game();
 void reset_game();
 void reset_ball();
 void update_game();
-void update_ai();
+void update_ai(float dt);
 void draw_game();
 void handle_input();
 void signal_handler(int sig);
@@ -201,8 +228,8 @@ static void enter_game_over(void) {
         audio_gameover(&audio);
 }
 
-void update_ai() {
-    float ai_speed = 3.0 + game.difficulty;
+void update_ai(float dt) {
+    float step = (AI_SPEED_BASE + AI_SPEED_PER_LEVEL * game.difficulty) * dt;
     float target;
     float max_pos;
     
@@ -216,27 +243,37 @@ void update_ai() {
         max_pos = play_area_height - PADDLE_HEIGHT;
     }
     
-    if (game.difficulty < 3) {
-        target += (rand() % 20) - 10;
+    /* The aim error is re-rolled on a timer, not per frame, so how much the AI
+     * wobbles does not depend on the frame rate. */
+    ai_jitter_ms += dt * 1000.0f;
+    if (ai_jitter_ms >= AI_JITTER_MS) {
+        ai_jitter_ms = 0.0f;
+        ai_jitter = (game.difficulty < 3) ? (float)((rand() % 20) - 10) : 0.0f;
     }
-    
+    if (game.difficulty < 3) {
+        target += ai_jitter;
+    }
+
+    /* Never step past the target: at a low frame rate one step can exceed the
+     * +-5 px deadband and the paddle would oscillate around it. */
     if (game.ai.y < target - 5) {
-        game.ai.y += ai_speed;
+        game.ai.y += fminf(step, target - game.ai.y);
     } else if (game.ai.y > target + 5) {
-        game.ai.y -= ai_speed;
+        game.ai.y -= fminf(step, game.ai.y - target);
     }
     
     if (game.ai.y < 0) game.ai.y = 0;
     if (game.ai.y > max_pos) game.ai.y = max_pos;
 }
 
-void update_game() {
-    if (current_screen != SCREEN_PLAYING) return;
-    if (game.game_over || game.paused) return;
-    
-    game.ball.x += game.ball.vx;
-    game.ball.y += game.ball.vy;
-    
+/* One integration substep of sdt seconds.  Returns true when the ball hit a
+ * paddle or a point was scored: the caller stops substepping for this frame, so
+ * the LED and sound of a hit fire once per hit, and nothing integrates a ball
+ * reset_ball() just served.  *wall_sounded caps the wall tone at one per frame. */
+static bool ball_step(float sdt, bool *wall_sounded) {
+    game.ball.x += game.ball.vx * sdt;
+    game.ball.y += game.ball.vy * sdt;
+
     if (portrait_mode) {
         // === PORTRAIT MODE COLLISIONS ===
         
@@ -250,7 +287,10 @@ void update_game() {
              * rule and the measurement that produced it (brick_breaker by ear,
              * `.188` 2026-08-20) are in ../CLAUDE.md → Mixing.  No counter sees
              * this — a voice stopped early is not `lost`, `drop` or `clip`. */
-            audio_tone(&audio, 2000, 60);
+            if (!*wall_sounded) {
+                audio_tone(&audio, 2000, 60);
+                *wall_sounded = true;
+            }
         }
         
         // Ball collision with player paddle (bottom)
@@ -262,11 +302,12 @@ void update_game() {
             game.ball.y = play_area_height - PADDLE_WIDTH - BALL_SIZE;
             
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
-            game.ball.vx += (hit_pos - 0.5) * 3;
+            game.ball.vx += (hit_pos - 0.5f) * BALL_ENGLISH;
             
             hw_set_led(LED_GREEN, 100);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
+            return true;
         }
         
         // Ball collision with AI paddle (top)
@@ -278,11 +319,12 @@ void update_game() {
             game.ball.y = PADDLE_WIDTH;
             
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
-            game.ball.vx += (hit_pos - 0.5) * 3;
+            game.ball.vx += (hit_pos - 0.5f) * BALL_ENGLISH;
             
             hw_set_led(LED_RED, 100);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
+            return true;
         }
         
         // Ball out top = player scores
@@ -300,6 +342,7 @@ void update_game() {
             } else {
                 reset_ball();
             }
+            return true;
         }
         // Ball out bottom = AI scores
         else if (game.ball.y > play_area_height) {
@@ -316,6 +359,7 @@ void update_game() {
             } else {
                 reset_ball();
             }
+            return true;
         }
         
     } else {
@@ -325,7 +369,10 @@ void update_game() {
         if (game.ball.y <= 0 || game.ball.y >= play_area_height - BALL_SIZE) {
             game.ball.vy = -game.ball.vy;
             game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
-            audio_tone(&audio, 2000, 60);
+            if (!*wall_sounded) {
+                audio_tone(&audio, 2000, 60);
+                *wall_sounded = true;
+            }
         }
         
         // Ball collision with player paddle (left)
@@ -337,11 +384,12 @@ void update_game() {
             game.ball.x = PADDLE_WIDTH;
             
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
-            game.ball.vy += (hit_pos - 0.5) * 3;
+            game.ball.vy += (hit_pos - 0.5f) * BALL_ENGLISH;
             
             hw_set_led(LED_GREEN, 100);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
+            return true;
         }
         
         // Ball collision with AI paddle (right)
@@ -353,11 +401,12 @@ void update_game() {
             game.ball.x = play_area_width - PADDLE_WIDTH - BALL_SIZE;
             
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
-            game.ball.vy += (hit_pos - 0.5) * 3;
+            game.ball.vy += (hit_pos - 0.5f) * BALL_ENGLISH;
             
             hw_set_led(LED_RED, 100);
             audio_tone(&audio, 440, 90);
             hw_leds_off();
+            return true;
         }
         
         // Ball out of bounds - score
@@ -375,6 +424,7 @@ void update_game() {
             } else {
                 reset_ball();
             }
+            return true;
         } else if (game.ball.x > play_area_width) {
             game.player.score++;
             hw_set_led(LED_GREEN, 100);
@@ -389,16 +439,44 @@ void update_game() {
             } else {
                 reset_ball();
             }
+            return true;
         }
     }
-    
-    update_ai();
+    return false;
+}
+
+void update_game() {
+    if (current_screen != SCREEN_PLAYING) return;
+    if (game.game_over || game.paused) return;
+
+    float dt = frame_dt;
+
+    /* Substep so no step moves the ball more than BALL_MAX_SUBSTEP_PX.  The
+     * count is capped; at MAX_DT the cap still holds the limit up to
+     * 6 * 32 / 0.1 = 1920 px/s, far past any rally's speed-up. */
+    float travel = fmaxf(fabsf(game.ball.vx), fabsf(game.ball.vy)) * dt;
+    int n = (int)ceilf(travel / BALL_MAX_SUBSTEP_PX);
+    if (n < 1) n = 1;
+    if (n > BALL_MAX_SUBSTEPS) n = BALL_MAX_SUBSTEPS;
+    float sdt = dt / (float)n;
+
+    bool wall_sounded = false;
+    for (int i = 0; i < n; i++) {
+        if (ball_step(sdt, &wall_sounded)) break;
+    }
+
+    update_ai(dt);
 }
 
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
     uint32_t current_time = get_time_ms();
+
+    /* The one dt per frame, shared by the paddle input below and update_game(). */
+    frame_dt = (current_time - last_ms) / 1000.0f;
+    if (frame_dt > MAX_DT) frame_dt = MAX_DT;
+    last_ms = current_time;
 
     // Poll gamepad/keyboard/touch through unified API
     gamepad_poll(&gamepad, &input, state.x, state.y, state.pressed);
@@ -420,6 +498,7 @@ void handle_input() {
             if (button_check_press(&start_button, touched, current_time)) {
                 reset_game();
                 current_screen = SCREEN_PLAYING;
+                play_clock_restart();
                 /* Non-blocking: a usleep() here delayed the first frame of play
                  * by 100 ms from inside handle_input().
                  * After reset_game(), which cancels any pending pulse. */
@@ -432,6 +511,7 @@ void handle_input() {
             input.buttons[BTN_ID_PAUSE].pressed) {
             reset_game();
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
             hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
         }
         return;
@@ -444,6 +524,7 @@ void handle_input() {
             input.buttons[BTN_ID_ACTION].pressed) {
             reset_game();
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
         }
         return;
     }
@@ -453,6 +534,7 @@ void handle_input() {
         // Gamepad: unpause with Pause button
         if (input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
             game.paused = false;
             return;
         }
@@ -460,6 +542,7 @@ void handle_input() {
         if (input.buttons[BTN_ID_JUMP].pressed ||
             input.buttons[BTN_ID_ACTION].pressed) {
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
             game.paused = false;
             return;
         }
@@ -467,6 +550,7 @@ void handle_input() {
             state.x, state.y, state.pressed, current_time);
         if (action == MODAL_ACTION_BTN0) {
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
             game.paused = false;
             return;
         }
@@ -550,17 +634,17 @@ void handle_input() {
         // Analog stick: proportional speed from axis_ly (landscape) or axis_lx (portrait)
         int axis_val = portrait_mode ? input.axis_lx : input.axis_ly;
         if (axis_val != 0) {
-            float speed = (axis_val / 1000.0f) * PADDLE_MAX_ANALOG;
-            game.player.y += speed;
+            float step = (axis_val / 1000.0f) * PADDLE_MAX_ANALOG * frame_dt;
+            game.player.y += step;
         }
 
         // D-pad / keyboard: fixed speed movement (uses held for smooth continuous movement)
         if (portrait_mode) {
-            if (input.buttons[BTN_ID_LEFT].held)  game.player.y -= PADDLE_SPEED;
-            if (input.buttons[BTN_ID_RIGHT].held) game.player.y += PADDLE_SPEED;
+            if (input.buttons[BTN_ID_LEFT].held)  game.player.y -= PADDLE_SPEED * frame_dt;
+            if (input.buttons[BTN_ID_RIGHT].held) game.player.y += PADDLE_SPEED * frame_dt;
         } else {
-            if (input.buttons[BTN_ID_UP].held)    game.player.y -= PADDLE_SPEED;
-            if (input.buttons[BTN_ID_DOWN].held)  game.player.y += PADDLE_SPEED;
+            if (input.buttons[BTN_ID_UP].held)    game.player.y -= PADDLE_SPEED * frame_dt;
+            if (input.buttons[BTN_ID_DOWN].held)  game.player.y += PADDLE_SPEED * frame_dt;
         }
 
         // Clamp paddle position
@@ -684,6 +768,7 @@ void draw_game() {
         case GAMEOVER_ACTION_RESTART:
             reset_game();
             current_screen = SCREEN_PLAYING;
+            play_clock_restart();
             break;
         case GAMEOVER_ACTION_EXIT:
             running = false;
