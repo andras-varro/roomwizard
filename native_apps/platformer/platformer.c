@@ -51,7 +51,22 @@
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Physics Constants
+ *
+ * Every speed, acceleration and frame count in this file is per TICK — one
+ * fixed 1/30 s step of game_tick() — not per drawn frame.  update_game() runs
+ * as many ticks as elapsed time calls for, so the values below (authored as
+ * px/frame at the nominal 30 fps) keep their feel at any frame rate.  A fixed
+ * step rather than a variable dt keeps the jump arc exact: Euler with a
+ * varying dt changes jump height with frame time, and tile collision and the
+ * one-way platform test (feet_prev = y + h - vy) assume each step moved by
+ * exactly vy.  The tick-counted timers are COYOTE_TIME, JUMP_BUFFER_TIME,
+ * INVINCIBLE_TIME, DEATH_ANIM_FRAMES, the player and enemy anim_timer
+ * periods, current_frame and the camera's 0.12 smoothing factor.
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define TICK_S           (1.0f / 30.0f)  /* one game_tick(), seconds */
+#define MAX_FRAME_DT     0.1f   /* longest gap one frame may integrate, seconds */
+#define MAX_TICKS_FRAME  4      /* tick cap per frame; the remainder is dropped */
 
 #define GRAVITY          0.55f
 #define JUMP_VELOCITY   -8.5f
@@ -209,8 +224,21 @@ static int     game_lives;
  * counts only while the mode is on, and is reset whenever it is switched on. */
 static bool    training_mode;
 static int     training_coin_credit;
-static uint32_t current_frame;
+static uint32_t current_frame;   /* game ticks, not drawn frames */
 static uint32_t level_complete_timer;
+
+/* The play clock (update_game).  play_clock_live is false whenever the last
+ * update_game() call was outside SCREEN_PLAYING, so the first playing frame
+ * after the welcome screen, a pause, a level change or a restart re-baselines
+ * instead of integrating the time spent away. */
+static bool     play_clock_live;
+static uint32_t play_last_ms;
+static float    tick_acc;
+/* Jump edges sampled once per frame by gamepad_poll(), held here until exactly
+ * one tick — the first to run — consumes them.  A frame that runs no tick
+ * leaves them pending for the next frame's first tick. */
+static bool     jump_press_pending;
+static bool     jump_release_pending;
 static LEDEffect led_effect;
 
 static Button menu_button;
@@ -1042,12 +1070,12 @@ static void check_enemy_collisions(void) {
      * on a stack killed the player.  A plain
      * `break` after the first stomp is not enough either — it leaves enemy #2
      * alive directly under the player's feet, and the bounce only clears the
-     * overlap after ~3 frames at 6.0 px/frame against a 22 px enemy, so the
-     * player still dies on the next frame with vy already negative.
+     * overlap after ~3 ticks at 6.0 px/tick against a 22 px enemy, so the
+     * player still dies on the next tick with vy already negative.
      *
      * So: judge each enemy against the velocity the player arrived with, kill
      * everything that was genuinely landed on, and only die if nothing was.  A
-     * stomp beats a side-hit in the same frame. */
+     * stomp beats a side-hit in the same tick. */
     const float arrival_vy = player.vy;
     bool stomped = false;
     bool struck  = false;
@@ -1072,8 +1100,8 @@ static void check_enemy_collisions(void) {
     }
 
     if (stomped) {
-        /* Once per frame, however many enemies went under the boots — two
-         * play_stomp_sound() calls in one frame just cut each other off. */
+        /* Once per tick, however many enemies went under the boots — two
+         * play_stomp_sound() calls in one tick just cut each other off. */
         player.vy = STOMP_BOUNCE;
         player.on_ground = false;
         play_stomp_sound();
@@ -1142,7 +1170,7 @@ static void update_player(void) {
     }
 
     /* Jump */
-    if (input.buttons[BTN_ID_JUMP].pressed)
+    if (jump_press_pending)
         player.jump_buffer = JUMP_BUFFER_TIME;
 
     bool can_jump = player.on_ground || player.coyote_frames > 0;
@@ -1155,7 +1183,7 @@ static void update_player(void) {
         play_jump_sound();
     }
 
-    if (player.jump_held && input.buttons[BTN_ID_JUMP].released) {
+    if (player.jump_held && jump_release_pending) {
         player.jump_held = false;
         if (player.vy < 0) player.vy *= JUMP_CUT;
     }
@@ -1253,13 +1281,60 @@ static int world_offset_y(void) {
  * Game Update
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void update_game(void) {
-    if (current_screen != SCREEN_PLAYING) return;
+/* One fixed TICK_S step of everything that advances the game. */
+static void game_tick(void) {
     current_frame++;
     update_player();
     update_enemies();
     update_camera();
-    update_led_effects();
+}
+
+/* Fixed-step accumulator: elapsed time (clamped to MAX_FRAME_DT) is banked in
+ * tick_acc and spent in whole ticks, at most MAX_TICKS_FRAME per frame.  Hitting
+ * the cap drops the remainder rather than carrying a debt into later frames.
+ * Drawing stays once per frame, showing the state after the last tick. */
+static void update_game(void) {
+    if (current_screen != SCREEN_PLAYING) {
+        play_clock_live = false;
+        return;
+    }
+
+    uint32_t now = get_time_ms();
+    if (!play_clock_live) {
+        /* Entering play: start the clock here, run no tick this frame, and drop
+         * this frame's edges — they belong to whatever started or resumed play
+         * (the welcome screen's JUMP, the pause toggle). */
+        play_clock_live      = true;
+        play_last_ms         = now;
+        tick_acc             = 0.0f;
+        jump_press_pending   = false;
+        jump_release_pending = false;
+        update_led_effects();
+        return;
+    }
+
+    float dt = (float)(now - play_last_ms) * 0.001f;
+    if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
+    play_last_ms = now;
+    tick_acc += dt;
+
+    if (input.buttons[BTN_ID_JUMP].pressed)  jump_press_pending   = true;
+    if (input.buttons[BTN_ID_JUMP].released) jump_release_pending = true;
+
+    int steps = 0;
+    while (tick_acc >= TICK_S && steps < MAX_TICKS_FRAME) {
+        game_tick();
+        tick_acc -= TICK_S;
+        steps++;
+        /* Consumed by this frame's first tick and no other. */
+        jump_press_pending   = false;
+        jump_release_pending = false;
+        /* Goal reached or game over: the rest of the frame's time is not play. */
+        if (current_screen != SCREEN_PLAYING) break;
+    }
+    if (steps >= MAX_TICKS_FRAME) tick_acc = 0.0f;
+
+    update_led_effects();   /* runs on get_time_ms() itself, once per frame */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
