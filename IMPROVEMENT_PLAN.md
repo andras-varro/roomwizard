@@ -97,16 +97,6 @@ message now reads `configured as A device timeout: devctl %02x after %lld ms[ (i
 so the next occurrence measures itself; read the devctl value and elapsed ms there before reproducing, then
 decide whether the wait needs the PHY/glue resumed first or the loop is simply too short.
 
-### B43. `measure_audio_tone_sabotage.sh` case 9 edits a line that no longer exists — open, confirmed 2026-09-29
-
-`native_apps/tests/measure_audio_tone_sabotage.sh` case 9 deletes
-`audio_out_set_device_pref(config_audio_device_stored());` from `audio.c`, and prints `NO-OP EDIT —
-pattern rotted`: since `8a62c31` the line reads `audio_out_set_device_pref(pref ? pref :
-config_audio_device_stored());` in `audio_init_unchecked_pref()` (`git show HEAD~1:native_apps/common/audio.c`
-has zero copies of the old form). So group J's only host-reachable sabotage has proved nothing since
-2026-09-28. **Fix:** re-key the `sed` to the current line, then confirm case 9 reports failures again
-(and case 10 still its documented 0).
-
 ### B44. Mix Bus Test is not layout-sensitive, so it runs degraded in portrait — open, operator request 2026-09-29
 
 `native_apps/tests/audio_mix_test.c` lays out for landscape only. Known defect **[inferred from code, not
@@ -165,16 +155,6 @@ or a reboot triggers it; the operator workaround is to power-cycle the pad.
 blinks; if host paging works, have the init script or a `bluetoothd` policy connect trusted HID devices after start;
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
-
-### B55. A keyboard on the same evdev node as a touchpad was not offered as a PLAYERS choice — fix deployed, awaiting operator check
-
-Measured on `.188`: `BT Keyboard 5.1` (Bus 0005, 04e8:7021, `EV=12001f`, handlers `kbd leds mouse1`) is classified
-`INPUT_KIND_MOUSE` by `input_scan.c`'s mouse-before-keyboard rule. `gamepad.c` listed only pads and keyboards, and its
-keys latched to the no-slot bucket; a USB keyboard (separate node) was offered. Fixed in ed99c2d: `mouse_is_keyboard`
-(`common/gamepad.c:301`) gives such a node its own slot (`:333`), lists and counts it as a keyboard (`:1096`, `:1105`)
-and re-buckets on a pin change; `gamepad_slots_test` sections 10-11 (10 failures pre-fix). Deployed to `.188`
-(`native_apps` at 21a3b31). **Done when** the operator sees the BT keyboard under PLAYERS, can pin it, and its keys
-drive that player.
 
 ### B54. Plugging in a USB controller disconnects a connected Bluetooth pad — open, seen three times, cause unknown
 
@@ -494,14 +474,6 @@ tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fi
 device paths and `LICENSE.md` follow it.
 
 ## Structural and cleanup
-
-### C4. Make the common library use the logger — open
-
-`common/logger.c` exists and apps use it (`app_launcher` 18 calls, `control_panel` 17), but the library
-they all link writes to stdout unconditionally: `touch_input.c` 15 `printf` / 0 `LOG_`; `gamepad.c`
-7/0; `framebuffer.c` 5/0. `touch_init()` alone emits ~5 lines, and `app_launcher` calls it after
-**every** child exit, so launcher stdout grows the same banner forever. Log rotation bounds the file
-now, but the noise is still the cause.
 
 ### C6. Extend the host-buildable test harness — open
 

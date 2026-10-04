@@ -314,8 +314,8 @@ print the counts their headers claim. Rules learned the hard way:
 
 - ⚠️ **Never restore a sabotage with `git checkout`** — a measurement loop that does destroys the
   uncommitted fix it is measuring.
-- ⚠️ **A `sed` sabotage that fails to apply reports "0 failed"** — indistinguishable from a suite that
-  cannot detect the breakage. Put the sabotages in a *file*: a pattern containing `\t` does not survive
+- ⚠️ **A sabotage harness must verify each edit changed the copy, and treat no-match as a harness error, not a pass** — a `sed` that applies nothing reports "0 failed", indistinguishable from a suite that
+  cannot detect the breakage (every harness here now exits nonzero on it). Put the sabotages in a *file*: a pattern containing `\t` does not survive
   `wsl.exe -e bash -lc` quoting, and a pattern containing `||` silently matches nothing.
 - ⚠️ **A rotted *pattern* is caught; a rotted *replacement* is not.** If the replacement names a
   variable that no longer exists it assigns the empty string and the harness prints "not caught" for the
@@ -342,7 +342,7 @@ print the counts their headers claim. Rules learned the hard way:
   is also what caught three other holes in the same first draft — an unreached RIFF odd-size pad byte,
   an unchecked 8-bit refusal, and a `sed` pattern spanning two lines that never applied.
 - **A pre-fix tree restored from git beats a `sed` patch** as a harness's first case, where it is
-  available — `measure_ssh_sabotage.sh` does this.
+  available — `measure_ssh_sabotage.sh` does this. ⚠️ **Pin it to the commit before the fix** (`622c4dc^`), never `HEAD`: restored from `HEAD` it becomes vacuous once the fix lands.
 
 ## Running them
 
