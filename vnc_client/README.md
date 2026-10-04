@@ -285,12 +285,14 @@ Double-click the "VNC to RoomWizard" icon on the desktop, or from a terminal:
 ## Settings Screen
 
 **Long-press the top-left corner** of the screen for 3 seconds to open the
-settings screen. From there you can:
+settings screen (or hold **Select** on a game pad for 1.5 s). From there you can:
 
 - **Edit HOST and PORT** — touch the field to open a numeric keypad
 - **Edit PASSWORD** — touch to open a full alphanumeric keypad with shift toggle (max 8 chars, VncAuth limit)
 - **Edit ENCODINGS** — touch to open an alphanumeric keypad
 - **Adjust COMPRESS and QUALITY** — use the +/- buttons (range 1–9)
+
+With a game pad or keyboard, the D-pad, stick or arrow keys move the focus, **A** (or Enter / Space) activates and **B** (or Esc) is Back / Cancel.
 
 ### Action Buttons
 
@@ -347,6 +349,19 @@ Button support:
 - Scroll wheel up/down (VNC button 4/5)
 
 > **Note:** The mouse operates in **remote desktop coordinates** (e.g. 1920×1080), not local 800×480 screen space. Cursor position is tracked internally and scaled to the remote resolution before sending pointer events.
+
+### USB Game Pad
+
+A game pad drives the remote pointer. Buttons follow the pad's configured button map (`/etc/input_config.conf`); the names are an Xbox layout.
+
+| Control | Action |
+|---------|--------|
+| Left stick | Move the pointer; full deflection crosses the screen in about 1.5 s |
+| D-pad | Move the pointer slower (40 % of full deflection) |
+| **A** | Left button, held while pressed, so dragging works |
+| **B** | Right button |
+| **LB** / **RB** | Scroll wheel up / down, one notch per press |
+| Hold **Select** 1.5 s | Open the Settings screen |
 
 ### Auto-Detection
 

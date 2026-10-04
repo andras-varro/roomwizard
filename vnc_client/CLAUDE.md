@@ -168,10 +168,11 @@ Hotplug: the `/dev/input` fingerprint is checked every 1 s and devices are resca
 
 `release_remote_buttons()` runs before both exits (corner hold, pad Select hold), so a drag that enters the exit zone leaves no remote button down.
 
-**Pad** (`vnc_pad.c`, pure; `native_apps/tests/vnc_pad_test.c`): stick and d-pad move the remote pointer by elapsed time
-(full deflection about 1.5 s across the screen, d-pad 40 %); A / B are the left / right button as held levels, so a drag
-works; LB / RB are one wheel notch; holding Select 1.5 s (`UiHold`) opens Settings, like the 3 s corner hold. Not done:
-keyboard typing into the Settings keypads, and the pad on the reconnect screen.
+**Pad** (`vnc_pad.c`, pure; `native_apps/tests/vnc_pad_test.c`); the button mapping is in [`README.md`](README.md#usb-game-pad). Motion is integrated by elapsed time
+(`vnc_pad_motion`: a gap over `VNC_PAD_MAX_STEP_MS` counts as that long, a sub-pixel carry is kept, full-deflection speed is
+two thirds of the remote width per second clamped to `VNC_PAD_MIN_SPEED`..`VNC_PAD_MAX_SPEED`, d-pad is `VNC_PAD_DPAD_NORM`);
+A / B are held levels (so a drag works), a shoulder press is a one-shot wheel pulse, and Select held `UI_HOLD_EXIT_MS` (`UiHold`)
+opens Settings, like the 3 s corner hold. Not done: keyboard typing into the Settings keypads, and the pad on the reconnect screen.
 
 ## Settings GUI
 

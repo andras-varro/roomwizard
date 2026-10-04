@@ -166,6 +166,16 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
+### B53. A mouse button release lost to an evdev overflow reads as held — open, inferred mechanism, not reproduced
+
+`common/gamepad.c` handles no `SYN_DROPPED`: the mouse read loop (`:832-853`) takes `EV_REL` and `EV_KEY` and
+ignores every other event, and no `SYN_DROPPED`/`EVIOCGKEY` re-read exists after the open-time seed
+(`seed_mouse_buttons`, `:295`). **Inferred:** if the kernel's evdev buffer overflows while an app is not reading the
+mouse (the 60 s screen-edges wizard is one), a button release is lost and `mouse_btn[]` stays down until the next
+click, which the pointer then routes as a held touch. **Fix:** on `SYN_DROPPED`, discard events to the next
+`SYN_REPORT` and re-read the level with `EVIOCGKEY`, as the seed does. **Done when** a test that overflows the
+buffer across a release leaves the button up.
+
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
@@ -418,13 +428,7 @@ this ties to F102 (one rootfs for both boards). A BBB wants a mainline kernel wi
 RoomWizard stays on 4.14.52 omapfb. **Done when** the first question is answered: which board-specific
 paths a launcher plus one game actually touch, listed from a BBB boot.
 
-**Future scope, operator-agreed, not scheduled:** mouse-only operation of the launcher, Control Panel and games, for a unit with no touch and no keyboard or pad. The operator has a RoomWizard whose touch is broken, and a BeagleBone has no touch. It depends on F108 (mouse pointer, awaiting operator verification).
-
-### F108. Operator verification of the mouse pointer in the launcher and the Control Panel — open, implemented, deployed to .188, not operator-verified
-
-**Done when** the operator, with a USB mouse on the panel, confirms in both the launcher and the Control Panel that
-the pointer follows the mouse, a click activates on release (home tiles, page edges, X, dialogs, Control Panel
-pages), touch and nav keys hide it, and idle CPU stays flat with the mouse still.
+**Future scope, operator-agreed, not scheduled:** mouse-only operation of the launcher, Control Panel and games, for a unit with no touch and no keyboard or pad. The operator has a RoomWizard whose touch is broken, and a BeagleBone has no touch. The mouse pointer in the launcher and the Control Panel exists and is operator-verified; the games still take no mouse pointer.
 
 ### F111. Redraw the launcher's tile icons in the Control Panel's rounded style — open, operator request 2026-10-01, future
 
@@ -441,12 +445,12 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
 
-### F112. Operator verification of the vnc_client pad — open, implemented, deployed to .188, not operator-verified
+### F112. vnc_client: pad gaps left after the verified pad — open
 
-**Done when** the operator confirms in a live session, with an Xbox pad and an 8BitDo, the pointer, A/B drags,
-wheel, hold-Select to Settings and pad navigation inside Settings. **Leftovers:** keyboard typing into the Settings
-keypads; the pad on the reconnect screen; and **[inferred, not reproduced]** a stray remote click if A or B is still
-held when leaving Settings and the session reconnects.
+The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. **Still open:** keyboard
+typing into the Settings keypads; the pad on the reconnect screen; and **[inferred, not reproduced]** a stray remote
+click if A or B is still held when leaving Settings and the session reconnects. **Done when** each of the three
+works or is shown to be unreachable.
 
 ### F115. Move the per-frame games to elapsed-time motion — open
 

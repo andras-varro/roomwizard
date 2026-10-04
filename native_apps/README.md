@@ -127,6 +127,8 @@ USB mice provide direct cursor control with **3-tier acceleration**:
 
 Mouse sensitivity is configurable via `/etc/input_config.conf`.
 
+On the two home screens (`app_launcher`, `control_panel`) the mouse moves an on-screen arrow and the **left button** is a touch, acting on release; wheel, right and middle buttons do nothing there. A game pad does **not** move that arrow — it moves the focus ring (D-pad / stick), **A** activates, and Select / Start on the home screen leaves (`common/pointer.c`, `pointer_update`, reads only `mouse_*`; called at `app_launcher.c:744`, `control_panel.c:964`).
+
 ### Gamepad Button Mapping
 
 Gamepad button mapping is configurable to support clone/third-party controllers that may report different button codes than standard Xbox/PlayStation layouts. Remap buttons in `/etc/input_config.conf` (see [Configuration](#input-configuration) below).
