@@ -14,6 +14,8 @@
 # - openssl command must be available
 #
 
+# Source-path directive: resolves the `source=` hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e  # Exit on error
 
 # Defined up here rather than at first use: it is needed both by the host-name
@@ -85,7 +87,7 @@ if [ -n "${ROOTFS:-}" ]; then
         warning "Continuing will edit /etc/shadow, /etc/hosts, /etc/hostname,"
         warning "/etc/ssh/sshd_config and /etc/network/interfaces UNDER THIS PATH."
         echo ""
-        read -p "Type 'yes' to continue anyway: " FORCE_ROOTFS
+        read -r -p "Type 'yes' to continue anyway: " FORCE_ROOTFS
         if [ "$FORCE_ROOTFS" != "yes" ]; then
             error "Aborted. Nothing was changed."
             exit 1
@@ -179,9 +181,9 @@ echo "================================================"
 echo ""
 
 while true; do
-    read -s -p "Enter desired root password: " PASSWORD
+    read -r -s -p "Enter desired root password: " PASSWORD
     echo ""
-    read -s -p "Confirm root password: " PASSWORD_CONFIRM
+    read -r -s -p "Confirm root password: " PASSWORD_CONFIRM
     echo ""
     
     if [ "$PASSWORD" = "$PASSWORD_CONFIRM" ]; then
@@ -249,7 +251,7 @@ info "(commissioning/provision.sh enables it), instead of hunting for a DHCP lea
 echo ""
 
 while true; do
-    read -p "Host name [${CURRENT_HOSTNAME:-roomwizard}]: " NEW_HOSTNAME
+    read -r -p "Host name [${CURRENT_HOSTNAME:-roomwizard}]: " NEW_HOSTNAME
     NEW_HOSTNAME="${NEW_HOSTNAME:-${CURRENT_HOSTNAME:-roomwizard}}"
 
     # commissioning/set-hostname.sh is the single implementation and the single validator; it
@@ -309,7 +311,7 @@ echo ""
 
 # Step 5: Verify sshd starts at boot
 info "Verifying sshd is enabled at boot..."
-if ls "$ROOTFS/etc/rc5.d/" 2>/dev/null | grep -q ssh; then
+if compgen -G "$ROOTFS/etc/rc5.d/*ssh*" >/dev/null; then
     success "sshd is already configured to start at boot."
 else
     warning "sshd not found in rc5.d, creating symlink..."
@@ -333,7 +335,7 @@ echo "  SSH Key Setup (Optional)"
 echo "================================================"
 echo ""
 
-read -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
+read -r -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
 
 if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
     # Both key types, and the lookup lives in lib/rw-ssh.sh so that this script and
@@ -343,12 +345,12 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
     SSH_KEY_PATH=""
     if [ -n "$DEFAULT_KEY" ]; then
         info "Found SSH public key: $DEFAULT_KEY"
-        read -p "Use this key? (y/n): " USE_DEFAULT
+        read -r -p "Use this key? (y/n): " USE_DEFAULT
 
         if [[ "$USE_DEFAULT" =~ ^[Yy]$ ]]; then
             SSH_KEY_PATH="$DEFAULT_KEY"
         else
-            read -p "Enter path to your SSH public key: " SSH_KEY_PATH
+            read -r -p "Enter path to your SSH public key: " SSH_KEY_PATH
             SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"
         fi
     else
@@ -375,7 +377,7 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
             fi
         fi
         if [ -z "$SSH_KEY_PATH" ]; then
-            read -p "Enter path to your SSH public key (e.g., ~/.ssh/id_rsa.pub): " SSH_KEY_PATH
+            read -r -p "Enter path to your SSH public key (e.g., ~/.ssh/id_rsa.pub): " SSH_KEY_PATH
             # ~ expands to the OPERATOR's home for the same reason: under sudo, the
             # shell's own ~ would be /root.
             SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$OPERATOR_HOME}"

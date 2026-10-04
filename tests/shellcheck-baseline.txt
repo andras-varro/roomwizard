@@ -1,9 +1,6 @@
 browser_games/compile_servlet.sh SC2034 1
 browser_games/compile_servlet.sh SC2086 1
-commissioning/card-prep.sh SC1091 2
 commissioning/card-prep.sh SC2002 1
-commissioning/card-prep.sh SC2010 1
-commissioning/card-prep.sh SC2162 8
 commissioning/clone-to-32gb.sh SC1091 1
 commissioning/clone-to-32gb.sh SC2034 1
 commissioning/commission-offline.sh SC1091 6
@@ -47,13 +44,10 @@ probes/xbee_uart_break_semantics.sh SC2034 1
 probes/xbee_uart_break_semantics.sh SC2086 1
 release.sh SC2001 2
 roomwizard.sh SC2015 2
-scummvm-roomwizard/build-and-deploy.sh SC1091 2
 scummvm-roomwizard/build-and-deploy.sh SC2012 2
 scummvm-roomwizard/build-and-deploy.sh SC2029 4
 scummvm-roomwizard/build-and-deploy.sh SC2034 1
 scummvm-roomwizard/build-and-deploy.sh SC2086 1
-scummvm-roomwizard/build-and-deploy.sh SC2155 1
-scummvm-roomwizard/build-and-deploy.sh SC2162 1
 tests/c11_plan_diff.sh SC2016 1
 tests/c11_plan_diff.sh SC2034 1
 tests/c11_plan_diff.sh SC2094 2

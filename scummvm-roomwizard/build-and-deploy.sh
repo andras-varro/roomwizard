@@ -31,6 +31,8 @@
 # separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 
+# Source-path directive: resolves the `source=` hints below against this script's directory.
+# shellcheck source-path=SCRIPTDIR
 set -e  # Exit on error
 _START_SECONDS=$(date +%s)
 
@@ -148,7 +150,8 @@ build_arm_deps() {
         return 0
     fi
 
-    local ORIG_DIR="$(pwd)"
+    local ORIG_DIR
+    ORIG_DIR="$(pwd)"
 
     log_info "Cross-compiling zlib and libpng for ARM..."
 
@@ -643,7 +646,7 @@ deploy_to_device() {
         log_warning "System setup not detected on device."
         log_warning "Run commissioning/provision.sh first:  ../commissioning/provision.sh $DEVICE_IP"
         echo ""
-        read -p "Continue deploying anyway? (y/n): " confirm
+        read -r -p "Continue deploying anyway? (y/n): " confirm
         [[ "$confirm" != "y" ]] && exit 1
     fi
     
