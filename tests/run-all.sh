@@ -193,6 +193,8 @@ if [ "$ONLY" = "list" ]; then
     for r in "${SUITE_ROWS[@]}"; do printf '  %-32s %s\n' "${r%%|*}" "${r#*|}"; done
     head2 "host C regressions (${#CTEST_ROWS[@]})"
     for r in "${CTEST_ROWS[@]}"; do printf '  %s\n' "${r%%|*}"; done
+    head2 "syntax-checked ARM apps (1)"
+    printf '  %s\n' control_panel
     head2 "*_test.c that are NOT host regressions (${#CTEST_NOT_HOST[@]})"
     for r in "${CTEST_NOT_HOST[@]}"; do printf '  %s\n' "$r"; done
     exit 0
@@ -531,6 +533,46 @@ phase_ctests() {
     done
 }
 
+# ── PHASE 2b: ARM apps with no host regression, syntax-checked ─────────────
+# The ARM build is the only thing that links control_panel, so a compile error
+# in it passed every phase above.  This compiles each of its sources with
+# -fsyntax-only on the host gcc.  The source list is NOT written here: it is
+# read from the `control_panel` step of native_apps/build-and-deploy.sh, the
+# one place that names them, so a page added there is covered here.  Warnings
+# do not fail it, matching the ARM build (WARN=-Wall -Wextra, no -Werror); the
+# count is printed so a rise is visible.  RW_APPS_DIR redirects the tree, for
+# the negative control.
+phase_apps() {
+    head2 "PHASE 2b  control_panel syntax check  (host gcc, no device)"
+    command -v gcc >/dev/null 2>&1 || { harness "gcc is absent — this must run in WSL, not Git Bash"; return; }
+    local na="${RW_APPS_DIR:-$REPO_ROOT/native_apps}" script srcs s rc=0 t0 t1 log
+    script="$na/build-and-deploy.sh"
+    [ -f "$script" ] || { harness "$script is missing — the source list has no home"; return; }
+    srcs="$(awk '/^step "[0-9]+\/[0-9]+" "control_panel"/ {f=1; next} f && /\$CC/ {print; exit}' "$script" \
+            | tr ' ' '\n' | grep -E '^control_panel/[A-Za-z0-9_]+\.c$')"
+    if [ -z "$srcs" ]; then
+        harness "no control_panel/*.c found on the control_panel step of $script"
+        return
+    fi
+    log="$LOGDIR/control_panel.log"; : > "$log"
+    t0=$(date +%s)
+    for s in $srcs; do
+        [ -f "$na/$s" ] || { harness "$s is named by the build script and absent on disk"; return; }
+        ( cd "$na" && gcc -fsyntax-only -Wall -Wextra -Wno-unused-parameter -I. "$s" ) >>"$log" 2>&1 || rc=1
+    done
+    t1=$(date +%s)
+    local n_src nw
+    n_src="$(printf '%s\n' "$srcs" | wc -l | tr -d ' ')"
+    nw="$(grep -c 'warning:' "$log" || true)"
+    if [ "$rc" -eq 0 ]; then
+        pass_n=$((pass_n+1)); ok "$(printf '%-32s %4ss  %s sources, %s warning(s)' control_panel "$((t1-t0))" "$n_src" "$nw")"
+    else
+        fail_n=$((fail_n+1)); FAILED_LIST+=("control_panel (syntax)")
+        bad "$(printf '%-32s %4ss  COMPILE FAILED' control_panel "$((t1-t0))")"
+        grep -E 'error:|fatal error' "$log" | head -4 | sed 's/^/    /'
+    fi
+}
+
 # ── PHASE 3: shellcheck ────────────────────────────────────────────────────
 # Two tiers, because the repo carries a backlog of pre-existing findings that are
 # not this gate's to fix, and a gate that demanded zero would simply be disabled.
@@ -639,12 +681,13 @@ phase_baseline() {
 printf '%s%sRoomWizard host gate%s  —  scope %s, repo %s\n' "$BLD" "$CYA" "$RST" "$SCOPE" "$REPO_ROOT"
 
 case "$ONLY" in
-    "")                  phase_suites; phase_ctests; phase_shellcheck ;;
+    "")                  phase_suites; phase_ctests; phase_apps; phase_shellcheck ;;
     suites)              phase_suites ;;
     ctests)              phase_ctests ;;
+    apps)                phase_apps ;;
     shellcheck)          phase_shellcheck ;;
     shellcheck-baseline) phase_baseline ;;
-    *) printf 'run-all.sh: --only must be suites, ctests, shellcheck or shellcheck-baseline\n' >&2; exit 2 ;;
+    *) printf 'run-all.sh: --only must be suites, ctests, apps, shellcheck or shellcheck-baseline\n' >&2; exit 2 ;;
 esac
 
 head2 "SUMMARY"
