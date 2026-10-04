@@ -202,6 +202,138 @@ static bool p_held(const GamepadManager *gm, int slot, ButtonId b) {
     return gamepad_player(gm, slot)->buttons[b].held;
 }
 
+/* ── Pins: loaded, applied without a rescan, persisted ────────────────────
+ * Every manager here is pointed at a temp file by gamepad_load_slot_pins()
+ * BEFORE any pin or unpin, so nothing is ever written to CONFIG_FILE_PATH. */
+static InputIdent ident_of(const FakeDev *d) {
+    InputIdent id;
+    memset(&id, 0, sizeof(id));
+    id.bus = d->bus; id.vid = d->vid; id.pid = d->pid;
+    snprintf(id.uniq, sizeof(id.uniq), "%s", d->uniq);
+    snprintf(id.phys, sizeof(id.phys), "%s", d->phys);
+    return id;
+}
+
+/* The value of `key` in the file at `path`, or "(absent)". */
+static const char *file_key(const char *path, const char *key) {
+    static Config c;
+    config_init_path(&c, path);
+    config_load(&c);
+    return config_get(&c, key, "(absent)");
+}
+
+static void expect_str(const char *what, const char *got, const char *want) {
+    bool ok = strcmp(got, want) == 0;
+    printf("  %s %-58s %s%s%s\n", ok ? "ok  " : "FAIL", what, got,
+           ok ? "" : " want ", ok ? "" : want);
+    if (!ok) fails++;
+}
+
+static void pin_tests(void) {
+    GamepadManager gm; InputState st; Config mem;
+    char path[] = "/tmp/rw_slots_cfg_XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) { perror("mkstemp"); exit(2); }
+    close(fd);
+
+    devs_reset();
+    InputIdent id_a = ident_of(&g_dev[PAD_A]), id_c = ident_of(&g_dev[PAD_C]);
+    InputIdent id_k = ident_of(&g_dev[KBD1]);
+    char txt_a[CONFIG_VAL_LEN], txt_c[CONFIG_VAL_LEN];
+    if (!input_ident_format(&id_a, txt_a, sizeof(txt_a)) ||
+        !input_ident_format(&id_c, txt_c, sizeof(txt_c))) { puts("format"); exit(2); }
+    FILE *f = fopen(path, "w");
+    if (!f) { perror(path); exit(2); }
+    fprintf(f, "led_brightness=40\nslot_p2=not an identity\nslot_p3=%s\n", txt_c);
+    fclose(f);
+
+    printf("\n6. pins loaded from the config land a device in its slot when it appears\n");
+    for (int i = 0; i < DEV_COUNT; i++) g_dev[i].present = false;
+    gamepad_init(&gm);
+    expect_int("load: one parseable pin", gamepad_load_slot_pins(&gm, path), 1);
+    bool pinned = false, present = true;
+    InputIdent got;
+    expect_bool("P3 holds an identity", gamepad_slot_info(&gm, 2, &got, &pinned, &present), true);
+    expect_bool("P3 is pinned", pinned, true);
+    expect_bool("P3's pad is not plugged in", present, false);
+    expect_bool("P3 holds pad C", input_ident_equal(&got, &id_c), true);
+    expect_bool("P2 (bad value) holds nothing", gamepad_slot_info(&gm, 1, NULL, NULL, NULL), false);
+    g_dev[PAD_A].present = g_dev[PAD_B].present = true;
+    g_dev[KBD0].present = g_dev[KBD1].present = true;
+    gamepad_rescan(&gm);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_int("present mask: P1 P2 P4 (P3 kept for pad C)", gamepad_player_mask(&gm), 0xb);
+    expect_bool("P4 has the keyboard", gamepad_player(&gm, 3)->keyboard_connected, true);
+    g_dev[PAD_C].present = true;
+    gamepad_rescan(&gm);
+    press(&g_dev[PAD_C], BTN_START, true);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("P3: pad C's PAUSE", p_held(&gm, 2, BTN_ID_PAUSE), true);
+    expect_bool("P1: pad C's PAUSE not held", p_held(&gm, 0, BTN_ID_PAUSE), false);
+
+    printf("\n7. a pin re-buckets the open nodes with no rescan, and persists\n");
+    config_init_path(&mem, "/nonexistent/never-saved");
+    config_set(&mem, "slot_p4", "stale");
+    config_set(&mem, "slot_p3", "stale");
+    expect_int("pin pad A to P4 returns 3", gamepad_slot_pin(&gm, &id_a, 3, &mem), 3);
+    press(&g_dev[PAD_A], BTN_SOUTH, true);
+    deliver(&g_dev[KBD0], EV_KEY, KEY_ENTER, 1);
+    gamepad_poll(&gm, &st, 0, 0, false);
+    expect_bool("P4: pad A's JUMP", p_held(&gm, 3, BTN_ID_JUMP), true);
+    expect_bool("P1: pad A's JUMP not held", p_held(&gm, 0, BTN_ID_JUMP), false);
+    expect_bool("P1: the evicted keyboard's ENTER", p_held(&gm, 0, BTN_ID_ACTION), true);
+    expect_bool("P4 has a pad now", gamepad_player(&gm, 3)->gamepad_connected, true);
+    GamepadDevice dv[8];
+    int n = gamepad_devices(&gm, dv, 8);
+    expect_int("devices: three pads + one keyboard (two nodes)", n, 4);
+    if (n == 4) {
+        expect_str("devices[0] is pad A (event order)", dv[0].name, "pad A");
+        expect_int("pad A's slot", dv[0].slot, 3);
+        expect_bool("pad A pinned", dv[0].pinned, true);
+        expect_bool("pad A is no keyboard", dv[0].keyboard, false);
+        expect_int("pad B's slot", dv[1].slot, 1);
+        expect_bool("pad B not pinned", dv[1].pinned, false);
+        expect_bool("pad C pinned", dv[2].pinned, true);
+        expect_bool("devices[3] is the keyboard", dv[3].keyboard, true);
+        expect_int("keyboard's slot", dv[3].slot, 0);
+        expect_bool("keyboard's ident", input_ident_equal(&dv[3].ident, &id_k), true);
+    }
+    expect_str("file: slot_p4 = pad A", file_key(path, "slot_p4"), txt_a);
+    expect_str("file: slot_p3 = pad C kept", file_key(path, "slot_p3"), txt_c);
+    expect_str("file: bad slot_p2 removed", file_key(path, "slot_p2"), "(absent)");
+    expect_str("file: another app's key kept", file_key(path, "led_brightness"), "40");
+    expect_str("mem: slot_p4 = pad A", config_get(&mem, "slot_p4", "(absent)"), txt_a);
+    expect_str("mem: slot_p3 = pad C", config_get(&mem, "slot_p3", "(absent)"), txt_c);
+    expect_int("pin to slot 4 refused", gamepad_slot_pin(&gm, &id_a, 4, NULL), -1);
+
+    printf("\n8. unpin: back to auto, the holder stays, the key goes\n");
+    expect_int("unpin P4", gamepad_slot_unpin(&gm, 3, &mem), 0);
+    pinned = true; present = false;
+    expect_bool("P4 still holds pad A", gamepad_slot_info(&gm, 3, &got, &pinned, &present), true);
+    expect_bool("P4 not pinned", pinned, false);
+    expect_bool("P4's pad present", present, true);
+    expect_str("file: slot_p4 removed", file_key(path, "slot_p4"), "(absent)");
+    expect_str("mem: slot_p4 removed", config_get(&mem, "slot_p4", "(absent)"), "(absent)");
+    expect_str("file: slot_p3 untouched", file_key(path, "slot_p3"), txt_c);
+
+    printf("\n9. round trip: a pin moved to P1 survives a re-init\n");
+    expect_int("pin pad C to P1", gamepad_slot_pin(&gm, &id_c, 0, &mem), 0);
+    expect_str("file: slot_p1 = pad C", file_key(path, "slot_p1"), txt_c);
+    expect_str("file: slot_p3 (left) removed", file_key(path, "slot_p3"), "(absent)");
+    gamepad_close(&gm);
+    devs_reset();
+    gamepad_init(&gm);
+    expect_int("reload: one pin", gamepad_load_slot_pins(&gm, path), 1);
+    pinned = present = false;
+    expect_bool("P1 holds an identity", gamepad_slot_info(&gm, 0, &got, &pinned, &present), true);
+    expect_bool("P1 holds pad C", input_ident_equal(&got, &id_c), true);
+    expect_bool("P1 pinned", pinned, true);
+    expect_bool("P1 absent (pad C unplugged)", present, false);
+    expect_bool("P1 has no open device", gamepad_player_mask(&gm) & 1, false);
+    gamepad_close(&gm);
+    unlink(path);
+}
+
 int main(void) {
     printf("gamepad slots: one player per device, any-device merge kept\n");
     GamepadManager gm; InputState st;
@@ -293,6 +425,8 @@ int main(void) {
     gamepad_poll(&gm, &st, 0, 0, false);
     expect_bool("after re-init pad B is P1", gamepad_player(&gm, 0)->gamepad_connected, true);
     gamepad_close(&gm);
+
+    pin_tests();
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");

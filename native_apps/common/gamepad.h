@@ -29,6 +29,8 @@ extern "C" {
 #include "input_scan.h"
 /* InputSlotTable: which player (P1..P4) each pad or keyboard is. */
 #include "input_slots.h"
+/* Config: the slot pins persist as slot_p1..slot_p4 in CONFIG_FILE_PATH. */
+#include "config.h"
 
 /* Most pads held open at once: one per player slot. */
 #define GAMEPAD_MAX_PADS INPUT_SLOTS
@@ -274,7 +276,32 @@ typedef struct {
      * every rescan — a pad unplugged and plugged back gets its slot again —
      * and gamepad_init() clears it: an app exit forgets every reservation. */
     InputSlotTable slots;
+
+    /* Each open node's identity, name and path, taken at the scan, so a pin
+     * can re-bucket the open nodes without reopening them and
+     * gamepad_devices() can list them.  Indexed like the fd arrays. */
+    InputIdent pad_ident[GAMEPAD_MAX_PADS];
+    InputIdent keyboard_ident[GAMEPAD_MAX_PER_KIND];
+    InputIdent mouse_ident[GAMEPAD_MAX_PER_KIND];
+    char pad_name[GAMEPAD_MAX_PADS][INPUT_SCAN_NAME_LEN];
+    char keyboard_name[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_NAME_LEN];
+    char pad_path[GAMEPAD_MAX_PADS][INPUT_SCAN_PATH_LEN];
+    char keyboard_path[GAMEPAD_MAX_PER_KIND][INPUT_SCAN_PATH_LEN];
+
+    /* The file the pins are read from and written to: CONFIG_FILE_PATH from
+     * gamepad_init(), or the path last given to gamepad_load_slot_pins(). */
+    char slot_config_path[128];
 } GamepadManager;
+
+/* One connected pad or keyboard, as gamepad_devices() lists it. */
+typedef struct {
+    char       name[INPUT_SCAN_NAME_LEN]; /* EVIOCGNAME of its first node */
+    char       path[INPUT_SCAN_PATH_LEN]; /* that node, /dev/input/eventN */
+    InputIdent ident;
+    int        slot;       /* 0..INPUT_SLOTS-1, or -1: the table had no room */
+    bool       pinned;     /* slot >= 0 and the operator pinned it there */
+    bool       keyboard;   /* false: a pad */
+} GamepadDevice;
 
 /**
  * The per-kind limits the scan hands to input_scan(), indexed by InputKind
@@ -319,6 +346,58 @@ const InputState *gamepad_player(const GamepadManager *gm, int slot);
  * Bit s set when slot s holds an open pad or keyboard right now.
  */
 int gamepad_player_mask(const GamepadManager *gm);
+
+/* ── Pinning a device to a player slot (the Control Panel's Input page) ──
+ *
+ * A pin is input_slots_pin() (input_slots.h, Pinning) plus persistence: the
+ * four keys slot_p1..slot_p4 hold each pinned slot's identity in
+ * input_ident_format()'s text form, and an unpinned slot's key is REMOVED,
+ * not written empty (config_get returns "" for "slot_p1=", which parses as no
+ * pin too, but a removed key keeps the file free of four dead lines).
+ * gamepad_init() loads them, so every app process sees the operator's choice.
+ */
+
+/**
+ * Read slot_p1..slot_p4 from `path` and pin each value that parses; a missing
+ * file or a bad value is no pin, silently.  `path` becomes the file
+ * gamepad_slot_pin()/unpin() write.  Re-buckets the open nodes at once.
+ * gamepad_init() calls it with CONFIG_FILE_PATH.  Returns the pins applied.
+ */
+int gamepad_load_slot_pins(GamepadManager *gm, const char *path);
+
+/**
+ * Every connected pad and keyboard, one entry per identity (a keyboard's
+ * several nodes are one), into out[max], ordered by event node number so a
+ * list does not reshuffle between frames.  Returns the count written.
+ */
+int gamepad_devices(const GamepadManager *gm, GamepadDevice *out, int max);
+
+/**
+ * What `slot` holds: false when it holds no identity (then the outputs are
+ * untouched).  `present`: the device is open now — false for a pinned pad
+ * that is unplugged.  Any output pointer may be NULL.
+ */
+bool gamepad_slot_info(const GamepadManager *gm, int slot, InputIdent *id,
+                       bool *pinned, bool *present);
+
+/**
+ * Pin `id` to `slot` (it leaves any other slot, which reverts to auto),
+ * re-bucket the open nodes so gamepad_player() follows on the next poll, and
+ * persist all four keys: into the file (re-read, set, saved — another app's
+ * keys survive) and, when `mem` is non-NULL, into that in-memory Config too,
+ * so its owner's later whole-file save does not write the old pins back.
+ * Returns slot; -1 for a bad slot or a NULL id (nothing changed); -2 when the
+ * pin took effect but the file could not be written.
+ */
+int gamepad_slot_pin(GamepadManager *gm, const InputIdent *id, int slot,
+                     Config *mem);
+
+/**
+ * `slot` back to auto: its holder stays as an ordinary reservation.  Persists
+ * as gamepad_slot_pin() does.  Returns 0; -1 for a bad slot; -2 when the file
+ * could not be written.
+ */
+int gamepad_slot_unpin(GamepadManager *gm, int slot, Config *mem);
 
 /**
  * Close every device and scan again.  Apps call gamepad_tick() instead, which

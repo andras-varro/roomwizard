@@ -296,6 +296,36 @@ static void seed_latched_levels(GamepadManager *gm) {
     }
 }
 
+/* A mouse node takes no slot of its own; it borrows the slot of a keyboard
+ * present now with the same identity (a keyboard+touchpad combo), for the
+ * keys it carries. */
+static void assign_mouse_slots(GamepadManager *gm) {
+    for (int k = 0; k < gm->mouse_count; k++) {
+        int s = input_slots_find(&gm->slots, &gm->mouse_ident[k]);
+        gm->mouse_slot[k] = (s >= 0 && gm->slots.slot[s].present) ? s : -1;
+    }
+}
+
+/* A pin changed the table: give every open node the slot its identity holds
+ * now, without reopening anything, so gamepad_player() follows on the next
+ * poll rather than at the next rescan.  The same assign a scan does, over the
+ * identities the scan kept — pads first, then keyboards, which matters only
+ * to a device the table holds no reservation for (one a pin evicted): it takes
+ * the first free slot.  The latched levels move with their devices, as after
+ * a rescan. */
+static void rebucket(GamepadManager *gm) {
+    input_slots_begin_scan(&gm->slots);
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++)
+        gm->pad_slot[p] = gm->pad_fds[p] >= 0
+                        ? input_slots_assign(&gm->slots, &gm->pad_ident[p]) : -1;
+    for (int k = 0; k < gm->keyboard_count; k++)
+        gm->keyboard_slot[k] = gm->keyboard_fds[k] >= 0
+                        ? input_slots_assign(&gm->slots, &gm->keyboard_ident[k]) : -1;
+    assign_mouse_slots(gm);
+    memset(gm->held_latched, 0, sizeof(gm->held_latched));
+    seed_latched_levels(gm);
+}
+
 /* ── Scan /dev/input/event* for gamepads, keyboards, and mice ───────────── */
 /* Always called with nothing held (gamepad_init() and gamepad_rescan() both
  * start from closed), so input_scan() starts from an empty list and returns
@@ -309,7 +339,6 @@ static void scan_devices(GamepadManager *gm) {
     gm->rescan_pending = false;
     input_slots_begin_scan(&gm->slots);
     InputNode nodes[GAMEPAD_SCAN_SLOTS];
-    InputIdent mouse_id[GAMEPAD_MAX_PER_KIND];
     int n = input_scan(nodes, 0, GAMEPAD_SCAN_SLOTS, g_scan_cap);
     int pads = 0;
 
@@ -322,6 +351,9 @@ static void scan_devices(GamepadManager *gm) {
             gm->pad_fds[p] = nd->fd;
             gm->pad_layout[p] = nd->pad_layout;
             gm->pad_slot[p] = input_slots_assign(&gm->slots, &id);
+            gm->pad_ident[p] = id;
+            memcpy(gm->pad_name[p], nd->name, sizeof(nd->name));   /* same INPUT_SCAN_*_LEN */
+            memcpy(gm->pad_path[p], nd->path, sizeof(nd->path));   /* same INPUT_SCAN_*_LEN */
             load_axis_calibration(gm, p);
             announce_found(gm->announced_gamepad[p], sizeof(gm->announced_gamepad[p]),
                            "gamepad", nd->name, nd->path);
@@ -329,12 +361,15 @@ static void scan_devices(GamepadManager *gm) {
             int k = gm->keyboard_count++;
             gm->keyboard_fds[k] = nd->fd;
             gm->keyboard_slot[k] = input_slots_assign(&gm->slots, &id);
+            gm->keyboard_ident[k] = id;
+            memcpy(gm->keyboard_name[k], nd->name, sizeof(nd->name));   /* same INPUT_SCAN_*_LEN */
+            memcpy(gm->keyboard_path[k], nd->path, sizeof(nd->path));   /* same INPUT_SCAN_*_LEN */
             announce_found(gm->announced_keyboard[k], sizeof(gm->announced_keyboard[k]),
                            "keyboard", nd->name, nd->path);
         } else if (nd->kind == INPUT_KIND_MOUSE) {
             int k = gm->mouse_count++;
             gm->mouse_fds[k] = nd->fd;
-            mouse_id[k] = id;
+            gm->mouse_ident[k] = id;
             seed_mouse_buttons(nd->fd, gm->mouse_btn[k]);
             announce_found(gm->announced_mouse[k], sizeof(gm->announced_mouse[k]),
                            "mouse", nd->name, nd->path);
@@ -343,13 +378,8 @@ static void scan_devices(GamepadManager *gm) {
         }
     }
 
-    /* A mouse node takes no slot of its own; it borrows the slot of a keyboard
-     * found in this scan with the same identity (a keyboard+touchpad combo),
-     * for the keys it carries.  After the loop, so node order does not matter. */
-    for (int k = 0; k < gm->mouse_count; k++) {
-        int s = input_slots_find(&gm->slots, &mouse_id[k]);
-        gm->mouse_slot[k] = (s >= 0 && gm->slots.slot[s].present) ? s : -1;
-    }
+    /* After the loop, so node order does not matter. */
+    assign_mouse_slots(gm);
 
     /* Anything still unbound after a full scan, that we had previously
      * announced, is gone.  The arrays are filled in node order, so an entry
@@ -571,6 +601,10 @@ int gamepad_init(GamepadManager *gm) {
         gm->keyboard_slot[k] = gm->mouse_slot[k] = -1;
     }
     gm->touch_region_count = 0;
+
+    /* The operator's pins (the Control Panel's Input page), before the scan
+     * so a pinned device lands in its slot as it is found. */
+    gamepad_load_slot_pins(gm, CONFIG_FILE_PATH);
 
     /* Apply sensible defaults before loading config */
     apply_defaults(gm);
@@ -1160,4 +1194,133 @@ void gamepad_draw_touch_controls(void *fb_ptr, InputState *state) {
     fb_draw_text(fb, btn_cx - 43, btn_cy - 4, "X", COLOR_WHITE, 1);
 
     (void)sw; /* suppress unused warning when only dpad drawn */
+}
+
+/* ── Pinning a device to a player slot (see gamepad.h) ──────────────────── */
+
+/* Ordering of /dev/input/eventN paths by N: a shorter path is a smaller
+ * number, so "event2" sorts before "event10". */
+static int node_cmp(const char *a, const char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    if (la != lb) return la < lb ? -1 : 1;
+    return strcmp(a, b);
+}
+
+int gamepad_devices(const GamepadManager *gm, GamepadDevice *out, int max) {
+    GamepadDevice all[GAMEPAD_MAX_PADS + GAMEPAD_MAX_PER_KIND];
+    int n = 0, w = 0;
+    if (!gm || !out || max <= 0) return 0;
+
+    for (int i = 0; i < GAMEPAD_MAX_PADS + gm->keyboard_count; i++) {
+        bool kbd = i >= GAMEPAD_MAX_PADS;
+        int j = kbd ? i - GAMEPAD_MAX_PADS : i;
+        int fd = kbd ? gm->keyboard_fds[j] : gm->pad_fds[j];
+        if (fd < 0) continue;
+        GamepadDevice *d = &all[n];
+        snprintf(d->name, sizeof(d->name), "%s", kbd ? gm->keyboard_name[j] : gm->pad_name[j]);
+        snprintf(d->path, sizeof(d->path), "%s", kbd ? gm->keyboard_path[j] : gm->pad_path[j]);
+        d->ident = kbd ? gm->keyboard_ident[j] : gm->pad_ident[j];
+        d->slot = kbd ? gm->keyboard_slot[j] : gm->pad_slot[j];
+        if (d->slot < 0 || d->slot >= INPUT_SLOTS) d->slot = -1;
+        d->pinned = d->slot >= 0 && gm->slots.slot[d->slot].pinned;
+        d->keyboard = kbd;
+        /* Insertion sort by node number: at most eight entries. */
+        for (int k = n; k > 0 && node_cmp(all[k - 1].path, all[k].path) > 0; k--) {
+            GamepadDevice t = all[k]; all[k] = all[k - 1]; all[k - 1] = t;
+        }
+        n++;
+    }
+    /* One entry per identity — a keyboard's several nodes are one device —
+     * named after its lowest node, which the sort put first. */
+    for (int i = 0; i < n && w < max; i++) {
+        bool dup = false;
+        for (int k = 0; k < w && !dup; k++)
+            dup = input_ident_equal(&out[k].ident, &all[i].ident);
+        if (!dup) out[w++] = all[i];
+    }
+    return w;
+}
+
+bool gamepad_slot_info(const GamepadManager *gm, int slot, InputIdent *id,
+                       bool *pinned, bool *present) {
+    if (!gm || slot < 0 || slot >= INPUT_SLOTS) return false;
+    const InputSlot *s = &gm->slots.slot[slot];
+    if (!s->reserved) return false;
+    if (id)      *id = s->ident;
+    if (pinned)  *pinned = s->pinned;
+    if (present) *present = s->present;
+    return true;
+}
+
+static void slot_key(int slot, char *key, size_t n) {
+    snprintf(key, n, "slot_p%d", slot + 1);
+}
+
+/* The four keys as the table holds them: a pinned slot's identity, and no key
+ * at all for a slot on auto (an identity with no text form included). */
+static void pins_to_config(const GamepadManager *gm, Config *cfg) {
+    for (int s = 0; s < INPUT_SLOTS; s++) {
+        char key[16], val[CONFIG_VAL_LEN];
+        const InputSlot *sl = &gm->slots.slot[s];
+        slot_key(s, key, sizeof(key));
+        if (sl->reserved && sl->pinned &&
+            input_ident_format(&sl->ident, val, sizeof(val)))
+            config_set(cfg, key, val);
+        else
+            config_remove(cfg, key);
+    }
+}
+
+/* Re-read the file, set the four keys, save it — so keys another app wrote
+ * since this one started survive — and keep `mem` in step when given.
+ * 0, or -1 when the file could not be written. */
+static int persist_pins(const GamepadManager *gm, Config *mem) {
+    Config disk;
+    config_init_path(&disk, gm->slot_config_path);
+    config_load(&disk);                 /* a missing file just starts empty */
+    pins_to_config(gm, &disk);
+    if (mem) pins_to_config(gm, mem);
+    if (config_save(&disk) != 0) {
+        fprintf(stderr, "gamepad: saving slot pins to %s failed\n", gm->slot_config_path);
+        return -1;
+    }
+    return 0;
+}
+
+int gamepad_load_slot_pins(GamepadManager *gm, const char *path) {
+    Config cfg;
+    int applied = 0;
+    if (!gm || !path) return 0;
+    snprintf(gm->slot_config_path, sizeof(gm->slot_config_path), "%s", path);
+    config_init_path(&cfg, path);
+    if (config_load(&cfg) == 0) {
+        for (int s = 0; s < INPUT_SLOTS; s++) {
+            char key[16];
+            InputIdent id;
+            slot_key(s, key, sizeof(key));
+            const char *v = config_get(&cfg, key, NULL);
+            if (v && input_ident_parse(v, &id) && input_slots_pin(&gm->slots, &id, s) == s) {
+                printf("gamepad: P%d pinned to %s\n", s + 1, v);
+                applied++;
+            }
+        }
+    }
+    rebucket(gm);
+    return applied;
+}
+
+int gamepad_slot_pin(GamepadManager *gm, const InputIdent *id, int slot,
+                     Config *mem) {
+    if (!gm || !id || slot < 0 || slot >= INPUT_SLOTS) return -1;
+    if (input_slots_pin(&gm->slots, id, slot) != slot) return -1;
+    rebucket(gm);
+    return persist_pins(gm, mem) == 0 ? slot : -2;
+}
+
+int gamepad_slot_unpin(GamepadManager *gm, int slot, Config *mem) {
+    if (!gm || slot < 0 || slot >= INPUT_SLOTS) return -1;
+    /* The holder keeps the slot as an ordinary reservation, so no node moves
+     * and there is nothing to re-bucket. */
+    input_slots_unpin(&gm->slots, slot);
+    return persist_pins(gm, mem) == 0 ? 0 : -2;
 }
