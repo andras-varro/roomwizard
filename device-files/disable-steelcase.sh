@@ -69,7 +69,7 @@ fi
 
 # ── 3. Stop conflicting services ──────────────────────────────────────────
 for svc in browser webserver x11 jetty hsqldb snmpd vsftpd nullmailer ntpd startautoupgrade; do
-    [ -x "/etc/init.d/$svc" ] && /etc/init.d/$svc stop 2>/dev/null || true
+    if [ -x "/etc/init.d/$svc" ]; then /etc/init.d/$svc stop 2>/dev/null || true; fi
 done
 sleep 1
 

@@ -61,9 +61,9 @@ run() {
     OUT="$(env PATH="$WORK/bin:$PATH" "${envs[@]}" "$SETUP" "$@" < /dev/null 2>&1)"; RC=$?
 }
 
-expect_rc()       { [ "$RC" = "$1" ] && ok "$2 (exit $1)" || bad "$2 — expected exit $1, got $RC"; }
-expect_match()    { grep -qE "$1" <<<"$OUT" && ok "$2" || bad "$2 — no line matched /$1/"; }
-expect_no_match() { grep -qE "$1" <<<"$OUT" && bad "$2 — a line matched /$1/ and must not" || ok "$2"; }
+expect_rc()       { if [ "$RC" = "$1" ]; then ok "$2 (exit $1)"; else bad "$2 — expected exit $1, got $RC"; fi; }
+expect_match()    { if grep -qE "$1" <<<"$OUT"; then ok "$2"; else bad "$2 — no line matched /$1/"; fi; }
+expect_no_match() { if grep -qE "$1" <<<"$OUT"; then bad "$2 — a line matched /$1/ and must not"; else ok "$2"; fi; }
 dump_on_fail()    { [ "${VERBOSE:-0}" = 1 ] && printf '%s\n' "$OUT" | sed 's/^/        /'; return 0; }
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -166,16 +166,20 @@ if [ ! -f "$WORK/argv" ]; then
     bad "5b the tripwire did NOT fire — sudo was never reached, so nothing here is measured"
 else
     ARGV="$(cat "$WORK/argv")"
-    [ "$ARGV" = "SUDO-ARGV: apt-get install -y rw-pkg-cmd rw-pkg-run rw-pkg-py rw-pkg-file" ] \
-        && ok "5b sudo received exactly the four packages, in table order" \
-        || bad "5b sudo argv wrong — got: $ARGV"
+    if [ "$ARGV" = "SUDO-ARGV: apt-get install -y rw-pkg-cmd rw-pkg-run rw-pkg-py rw-pkg-file" ]; then
+        ok "5b sudo received exactly the four packages, in table order"
+    else
+        bad "5b sudo argv wrong — got: $ARGV"
+    fi
     # ⚠️ The promise is that the operator SEES what runs. Comparing the printed line to the
     # recorded argv is what makes that a measurement rather than a claim: a script could
     # print one package set and install another, and every other case here would pass.
     printed="$(grep -oE 'sudo apt-get install -y .*' <<<"$OUT" | head -1)"
-    [ "SUDO-ARGV: ${printed#sudo }" = "$ARGV" ] \
-        && ok "5c ...and the printed command is the command that ran" \
-        || bad "5c printed and executed differ — printed '$printed', ran '$ARGV'"
+    if [ "SUDO-ARGV: ${printed#sudo }" = "$ARGV" ]; then
+        ok "5c ...and the printed command is the command that ran"
+    else
+        bad "5c printed and executed differ — printed '$printed', ran '$ARGV'"
+    fi
 fi
 
 echo ""

@@ -313,7 +313,7 @@ rw_usbpower_apply() {
     local img bak new cur src state got want target mode_flag verify_args
 
     [ -n "$bootdir" ] || { echo "  rw_usbpower_apply: no boot directory"; return 1; }
-    [ -n "$work" ] && [ -d "$work" ] || { echo "  rw_usbpower_apply: no work directory"; return 1; }
+    if [ -z "$work" ] || [ ! -d "$work" ]; then echo "  rw_usbpower_apply: no work directory"; return 1; fi
     case "$RWUP_XPORT" in
         local|ssh) ;;
         *) echo "  rw_usbpower_apply: RWUP_XPORT must be 'local' or 'ssh', not '${RWUP_XPORT:-}'"; return 1 ;;

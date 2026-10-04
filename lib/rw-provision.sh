@@ -539,7 +539,7 @@ _rwp_dropline() {
     grep -qE "$ere" "$file" || return 0
     tmp="$file.rwp.$$"
     awk -v re="$ere" '$0 !~ re' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    cat "$tmp" > "$file" && rm -f "$tmp" || { rm -f "$tmp"; return 1; }
+    if cat "$tmp" > "$file"; then rm -f "$tmp" || return 1; else rm -f "$tmp"; return 1; fi
     printf '  dropline        %s (%s)\n' "$file" "$ere"
 }
 

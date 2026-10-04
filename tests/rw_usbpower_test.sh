@@ -302,8 +302,9 @@ RW_UIMAGE_POWER_MD5="$(md5of "$W/expected.img")"
 RW_UIMAGE_BOTH_MD5="$(md5of "$W/expected-both.img")"
 F_DUPES=$(printf '%s\n' "$RW_UIMAGE_VENDOR_MD5" "$RW_UIMAGE_POWER_MD5" "$RW_UIMAGE_BOTH_MD5" \
     | sort | uniq -d | wc -l)
-[ -n "$RW_UIMAGE_VENDOR_MD5" ] && [ -n "$RW_UIMAGE_BOTH_MD5" ] && [ "$F_DUPES" -eq 0 ] \
-    || bad "F0 harness: the three fixture md5s are missing or not all distinct"
+if ! { [ -n "$RW_UIMAGE_VENDOR_MD5" ] && [ -n "$RW_UIMAGE_BOTH_MD5" ] && [ "$F_DUPES" -eq 0 ]; }; then
+    bad "F0 harness: the three fixture md5s are missing or not all distinct"
+fi
 
 # fresh_boot <dir> [<image>] — a directory that looks like a mounted p1.
 # mlo and u-boot.bin are present because rw_is_boot_tree requires all three, and a

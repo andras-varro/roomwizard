@@ -317,22 +317,28 @@ exists "$DEVROOT/opt/games/snake"             "E5 and so does the rest of the tr
 
 # Absent is the normal case — a unit that was never installed from a release. `rm -f`
 # cannot tell that from a removal and there is no consumer for the difference.
-rw_bundle_clear_stamp fake-target \
-    && ok "E6 a second call, with nothing to remove, still succeeds" \
-    || bad "E6 a second call, with nothing to remove, still succeeds — it returned non-zero"
+if rw_bundle_clear_stamp fake-target; then
+    ok "E6 a second call, with nothing to remove, still succeeds"
+else
+    bad "E6 a second call, with nothing to remove, still succeeds — it returned non-zero"
+fi
 
-rw_bundle_clear_stamp "" >/dev/null 2>&1 \
-    && bad "E7 no target is refused — it ACCEPTED an empty target" \
-    || ok "E7 no target is refused"
+if rw_bundle_clear_stamp "" >/dev/null 2>&1; then
+    bad "E7 no target is refused — it ACCEPTED an empty target"
+else
+    ok "E7 no target is refused"
+fi
 
 # A nonzero return means the SSH call itself failed, which is the only case a caller
 # has anything to say about. Without this the function could return 0 unconditionally
 # and E3 would not notice.
 DEADSSH="$TMP/fake-ssh-dead"
 printf '#!/bin/sh\nexit 255\n' > "$DEADSSH"; chmod +x "$DEADSSH"
-RW_SSH="$DEADSSH" rw_bundle_clear_stamp fake-target >/dev/null 2>&1 \
-    && bad "E8 an unreachable target returns non-zero — it reported success" \
-    || ok "E8 an unreachable target returns non-zero"
+if RW_SSH="$DEADSSH" rw_bundle_clear_stamp fake-target >/dev/null 2>&1; then
+    bad "E8 an unreachable target returns non-zero — it reported success"
+else
+    ok "E8 an unreachable target returns non-zero"
+fi
 
 # ── every deploy path, not just the whole-tree one ──────────────────────────
 # This is the defect the shared writer closed: `deploy-all.sh <ip>` cleared the stamp

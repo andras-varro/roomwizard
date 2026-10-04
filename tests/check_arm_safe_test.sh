@@ -51,9 +51,9 @@ bad()  { failed=$((failed + 1)); echo -e "  ${RED}FAIL${NC}  $1"; }
 # re-running the gate with different arguments than it reported on.
 run_gate() { GATE_OUT="$("$GATE" "$@" 2>&1)"; GATE_RC=$?; }
 
-expect_rc()       { [[ "$GATE_RC" == "$1" ]] && ok "$2 (exit $1)" || bad "$2 — expected exit $1, got $GATE_RC"; }
-expect_match()    { grep -qE "$1" <<<"$GATE_OUT" && ok "$2" || bad "$2 — no line matched /$1/"; }
-expect_no_match() { grep -qE "$1" <<<"$GATE_OUT" && bad "$2 — a line matched /$1/ and must not" || ok "$2"; }
+expect_rc()       { if [[ "$GATE_RC" == "$1" ]]; then ok "$2 (exit $1)"; else bad "$2 — expected exit $1, got $GATE_RC"; fi; }
+expect_match()    { if grep -qE "$1" <<<"$GATE_OUT"; then ok "$2"; else bad "$2 — no line matched /$1/"; fi; }
+expect_no_match() { if grep -qE "$1" <<<"$GATE_OUT"; then bad "$2 — a line matched /$1/ and must not"; else ok "$2"; fi; }
 
 dump_on_fail() { [[ "${VERBOSE:-0}" == 1 ]] && printf '%s\n' "$GATE_OUT" | sed 's/^/        /'; return 0; }
 

@@ -268,9 +268,11 @@ MENU
             b) ask_target || { pause; continue; }
                warn "--remove DELETES the Steelcase software, including the 472 MB"
                warn "on-device factory restore. Recovery is your host-side card image."
-               confirm "Proceed with --remove on $TARGET?" \
-                   && { bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --remove || err "Setup failed."; } \
-                   || warn "Skipped."
+               if confirm "Proceed with --remove on $TARGET?"; then
+                   bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --remove || err "Setup failed."
+               else
+                   warn "Skipped."
+               fi
                pause ;;
             c) ask_target || { pause; continue; }
                bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean --dry-run \
@@ -280,9 +282,11 @@ MENU
                warn "Deep clean is PERMANENT: --remove plus every path in /etc/rc*.d,"
                warn "/opt and the data partitions that the keep-list does not name."
                warn "Run option (c) first if you have not."
-               confirm "Really deep-clean $TARGET?" \
-                   && { bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean || err "Deep clean failed."; } \
-                   || warn "Skipped."
+               if confirm "Really deep-clean $TARGET?"; then
+                   bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean || err "Deep clean failed."
+               else
+                   warn "Skipped."
+               fi
                pause ;;
             e) ask_target || { pause; continue; }
                local name
