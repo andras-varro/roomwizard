@@ -16,6 +16,10 @@
 #include <unistd.h>
 #include <errno.h>
 
+/* The Logger LIB_LOG messages from the shared library go to: the first one
+ * logger_init() opened in this process, until logger_close() closes it. */
+static Logger *lib_sink;
+
 /* ── Helpers ────────────────────────────────────────────────────────── */
 
 static const char *level_tag(LogLevel level) {
@@ -94,6 +98,10 @@ int logger_init(Logger *log, const char *app_name,
     log->min_level   = min_level;
     log->echo_stderr = echo_stderr;
     log->fp          = NULL;
+
+    /* Before the early returns: a stderr-only Logger still takes messages. */
+    if (!lib_sink)
+        lib_sink = log;
 
     /* Build path: /var/log/roomwizard/<app_name>.log */
     snprintf(log->path, sizeof(log->path), "%s/%s.log", LOG_DIR, app_name);
@@ -190,10 +198,30 @@ void logger_close(Logger *log) {
     if (!log)
         return;
 
+    if (lib_sink == log)
+        lib_sink = NULL;
+
     if (log->fp) {
         LOG_INFO(log, "=== %s shutting down (pid %d) ===",
                  log->app_name, (int)getpid());
         fclose(log->fp);
         log->fp = NULL;
     }
+}
+
+void logger_lib_write(LogLevel level, const char *file, int line,
+                      const char *fmt, ...) {
+    char msgbuf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
+    va_end(ap);
+
+    if (lib_sink) {
+        logger_write(lib_sink, level, file, line, "%s", msgbuf);
+        return;
+    }
+    /* No Logger open: the stdout fallback LIB_LOG uses without logger.o. */
+    if (level >= LOG_LEVEL_INFO)
+        printf("%s\n", msgbuf);
 }

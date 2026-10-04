@@ -16,6 +16,15 @@
 #include "gamepad.h"
 #include "framebuffer.h"
 #include "input_scan.h"
+#define LOGGER_LIB_CLIENT
+#include "logger.h"
+
+/* Level of gamepad_init()'s routine reports (pins, config, the summary line).
+ * app_launcher re-runs gamepad_init() around every child, so only the process's
+ * first one reports at INFO and every later one at DEBUG.  The found / no longer
+ * present announcements keep INFO: they already print only on a change. */
+static bool     gp_announced;
+static LogLevel gp_note = LOG_LEVEL_INFO;
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,7 +180,7 @@ static void announce_found(char *slot, size_t slot_sz, const char *kind,
     snprintf(desc, sizeof(desc), "%s at %s", name, path);
     if (strcmp(slot, desc) == 0) return;
     snprintf(slot, slot_sz, "%s", desc);
-    printf("gamepad: found %s '%s' at %s\n", kind, name, path);
+    LIB_LOG(LOG_LEVEL_INFO, "gamepad: found %s '%s' at %s", kind, name, path);
 }
 
 /* The other half of the same rule: a device going away is a change too, and
@@ -180,7 +189,7 @@ static void announce_found(char *slot, size_t slot_sz, const char *kind,
  * next successful bind announce itself. */
 static void announce_lost(char *slot, const char *kind, int fd) {
     if (fd >= 0 || slot[0] == '\0') return;
-    printf("gamepad: %s no longer present (%s)\n", kind, slot);
+    LIB_LOG(LOG_LEVEL_INFO, "gamepad: %s no longer present (%s)", kind, slot);
     slot[0] = '\0';
 }
 
@@ -476,7 +485,7 @@ int gamepad_load_config(GamepadManager *gp, const char *path) {
 
     int applied = input_config_load(&cfg, path);
     if (applied < 0) {
-        printf("gamepad: no config file at %s (using defaults)\n", path);
+        LIB_LOG(gp_note, "gamepad: no config file at %s (using defaults)", path);
         return -1;
     }
 
@@ -504,7 +513,7 @@ int gamepad_load_config(GamepadManager *gp, const char *path) {
     gp->button_map.stick_rx_axis = cfg.gamepad_stick_rx;
     gp->button_map.stick_ry_axis = cfg.gamepad_stick_ry;
 
-    printf("gamepad: loaded config from %s (%d settings)\n", path, applied);
+    LIB_LOG(gp_note, "gamepad: loaded config from %s (%d settings)", path, applied);
     return 0;
 }
 
@@ -589,7 +598,7 @@ int gamepad_save_config(const GamepadManager *gp, const char *path) {
         fprintf(f, "#gamepad_stick_ry=%d\n", gp->button_map.stick_ry_axis);
 
     fclose(f);
-    printf("gamepad: saved config to %s\n", path);
+    LIB_LOG(LOG_LEVEL_INFO, "gamepad: saved config to %s", path);
     return 0;
 }
 
@@ -605,6 +614,7 @@ static bool any_pad_open(const GamepadManager *gm) {
 }
 
 int gamepad_init(GamepadManager *gm) {
+    gp_note = gp_announced ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO;
     memset(gm, 0, sizeof(*gm));
     input_slots_clear(&gm->slots);   /* an app exit forgets every reservation */
     for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
@@ -629,10 +639,12 @@ int gamepad_init(GamepadManager *gm) {
 
     scan_devices(gm);
 
-    printf("gamepad: init complete (gamepad=%s, keyboard=%s, mouse=%s)\n",
+    LIB_LOG(gp_note, "gamepad: init complete (gamepad=%s, keyboard=%s, mouse=%s)",
            any_pad_open(gm) ? "connected" : "none",
            gm->keyboard_count > 0 ? "connected" : "none",
            gm->mouse_count > 0 ? "connected" : "none");
+    gp_announced = true;
+    gp_note = LOG_LEVEL_INFO;   /* explicit loads after init still report */
     return 0;
 }
 
@@ -1328,7 +1340,7 @@ int gamepad_load_slot_pins(GamepadManager *gm, const char *path) {
             slot_key(s, key, sizeof(key));
             const char *v = config_get(&cfg, key, NULL);
             if (v && input_ident_parse(v, &id) && input_slots_pin(&gm->slots, &id, s) == s) {
-                printf("gamepad: P%d pinned to %s\n", s + 1, v);
+                LIB_LOG(gp_note, "gamepad: P%d pinned to %s", s + 1, v);
                 applied++;
             }
         }

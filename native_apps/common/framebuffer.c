@@ -10,6 +10,15 @@
 #include <linux/fb.h>
 #include <linux/kd.h>
 
+#define LOGGER_LIB_CLIENT
+#include "logger.h"
+
+// Level of fb_init()'s routine reports. app_launcher closes and re-inits the
+// framebuffer around every child, so only the process's first fb_init() reports
+// at INFO and every later one at DEBUG. Warnings are unaffected.
+static bool     fb_announced;
+static LogLevel fb_note = LOG_LEVEL_INFO;
+
 // Runtime bezel margins (pixels hidden by the plastic bezel)
 int screen_bezel_top    = FB_BEZEL_TOP_DEFAULT;
 int screen_bezel_bottom = FB_BEZEL_BOTTOM_DEFAULT;
@@ -45,8 +54,8 @@ static int clamp_inset(const char *side, int v, int max) {
     if (v > max) {
         // Loud, because the alternative is every UI in the system quietly
         // shrinking to fit a broken calibration.
-        printf("Touch inset: %s %d px exceeds the %d px limit — clamped. "
-               "The calibration is almost certainly wrong; recalibrate.\n",
+        LIB_LOG(LOG_LEVEL_WARN, "Touch inset: %s %d px exceeds the %d px limit — clamped. "
+               "The calibration is almost certainly wrong; recalibrate.",
                side, v, max);
         return max;
     }
@@ -79,7 +88,7 @@ void fb_load_bezel(void) {
 
     FILE *f = fopen("/etc/touch_calibration.conf", "r");
     if (!f) {
-        printf("Bezel: no calibration file — using defaults T=%d B=%d L=%d R=%d\n",
+        LIB_LOG(fb_note, "Bezel: no calibration file — using defaults T=%d B=%d L=%d R=%d",
                screen_bezel_top, screen_bezel_bottom,
                screen_bezel_left, screen_bezel_right);
         return;
@@ -103,7 +112,7 @@ void fb_load_bezel(void) {
     }
     fclose(f);
 
-    printf("Bezel: margins T=%d B=%d L=%d R=%d from /etc/touch_calibration.conf\n",
+    LIB_LOG(fb_note, "Bezel: margins T=%d B=%d L=%d R=%d from /etc/touch_calibration.conf",
            screen_bezel_top, screen_bezel_bottom,
            screen_bezel_left, screen_bezel_right);
 }
@@ -484,6 +493,7 @@ int fb_init(Framebuffer *fb, const char *device) {
 
     fb_console_graphics();
 
+    fb_note = fb_announced ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO;
     // Load bezel margins from calibration config
     fb_load_bezel();
 
@@ -515,7 +525,7 @@ int fb_init(Framebuffer *fb, const char *device) {
         // Apps see swapped dimensions (e.g., 480x800 instead of 800x480)
         panel_w = fb->phys_height;
         panel_h = fb->phys_width;
-        printf("Portrait mode: physical %dx%d -> virtual %dx%d\n",
+        LIB_LOG(fb_note, "Portrait mode: physical %dx%d -> virtual %dx%d",
                fb->phys_width, fb->phys_height, panel_w, panel_h);
 
         // Rotate the bezel margins into the virtual coordinate system (90 CCW):
@@ -527,7 +537,7 @@ int fb_init(Framebuffer *fb, const char *device) {
         screen_bezel_left   = pb;
         screen_bezel_right  = pt;
 
-        printf("Portrait mode: rotated bezel margins T=%d B=%d L=%d R=%d\n",
+        LIB_LOG(fb_note, "Portrait mode: rotated bezel margins T=%d B=%d L=%d R=%d",
                screen_bezel_top, screen_bezel_bottom,
                screen_bezel_left, screen_bezel_right);
     } else {
@@ -603,9 +613,11 @@ int fb_init(Framebuffer *fb, const char *device) {
     // Black the whole panel once: clears the bezel bands and any leftovers.
     fb_black_panel(fb);
 
-    printf("Framebuffer initialized: %dx%d logical at (%d,%d) on a %dx%d panel%s, %d bpp\n",
+    LIB_LOG(fb_note, "Framebuffer initialized: %dx%d logical at (%d,%d) on a %dx%d panel%s, %d bpp",
            fb->width, fb->height, fb->view_x, fb->view_y, panel_w, panel_h,
            fb->portrait_mode ? " [portrait]" : "", vinfo.bits_per_pixel);
+    fb_announced = true;
+    fb_note = LOG_LEVEL_INFO;   // a later explicit fb_load_bezel() still reports
     return 0;
 }
 

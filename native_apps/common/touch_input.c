@@ -9,8 +9,18 @@
 #include <poll.h>
 #include <linux/input.h>
 
+#define LOGGER_LIB_CLIENT
+#include "logger.h"
+
 // Default calibration file path
 #define TOUCH_CALIB_FILE "/etc/touch_calibration.conf"
+
+// Level of the routine "what was set" reports. app_launcher re-runs touch_init()
+// around every child it starts, so only the process's first touch_init() reports
+// at INFO; inside every later one these drop to DEBUG, or the same banner is
+// appended to the launcher's log once per game played. Warnings are unaffected.
+static bool     touch_announced;
+static LogLevel touch_note = LOG_LEVEL_INFO;
 
 // Unrotated panel extents for the two raw axes. Raw X always spans the physical
 // 800 px width and raw Y the 480 px height; in portrait the app-visible axes are
@@ -159,8 +169,8 @@ static void publish_safe_area(TouchInput *touch) {
 
     if (lo_x || lo_y || hi_x != touch->screen_width - 1
                      || hi_y != touch->screen_height - 1)
-        printf("Touch-safe area: logical X %d..%d Y %d..%d of %dx%d "
-               "(the rest is drawable but not pressable)\n",
+        LIB_LOG(touch_note, "Touch-safe area: logical X %d..%d Y %d..%d of %dx%d "
+               "(the rest is drawable but not pressable)",
                lo_x, hi_x, lo_y, hi_y, touch->screen_width, touch->screen_height);
 }
 
@@ -168,11 +178,12 @@ int touch_init(TouchInput *touch, const char *device) {
     touch->fd = open(device, O_RDONLY | O_NONBLOCK);
     if (touch->fd == -1) {
         perror("Error opening touch device");
-        printf("ERROR: Failed to open %s, fd=%d\n", device, touch->fd);
+        LIB_LOG(LOG_LEVEL_ERROR, "ERROR: Failed to open %s, fd=%d", device, touch->fd);
         return -1;
     }
 
-    printf("Touch device opened successfully: %s (fd=%d)\n", device, touch->fd);
+    touch_note = touch_announced ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO;
+    LIB_LOG(touch_note, "Touch device opened successfully: %s (fd=%d)", device, touch->fd);
 
     touch->state.x = 0;
     touch->state.y = 0;
@@ -193,12 +204,12 @@ int touch_init(TouchInput *touch, const char *device) {
         touch->raw_max_x = abs_x.maximum;
         touch->raw_min_y = abs_y.minimum;
         touch->raw_max_y = abs_y.maximum;
-        printf("Touch hardware range: X [%d..%d], Y [%d..%d]\n",
+        LIB_LOG(touch_note, "Touch hardware range: X [%d..%d], Y [%d..%d]",
                abs_x.minimum, abs_x.maximum, abs_y.minimum, abs_y.maximum);
     } else {
         touch->raw_min_x = 0; touch->raw_max_x = 4095;
         touch->raw_min_y = 0; touch->raw_max_y = 4095;
-        printf("Touch EVIOCGABS failed, using default 0-4095 range\n");
+        LIB_LOG(LOG_LEVEL_WARN, "Touch EVIOCGABS failed, using default 0-4095 range");
     }
     // Keep the hardware range: loading a calibration overwrites raw_min/raw_max
     // with the curve's endpoints, which legitimately fall OUTSIDE what the sensor
@@ -247,14 +258,16 @@ int touch_init(TouchInput *touch, const char *device) {
     // Auto-load calibration so all apps get the measured range (if calibrated).
     if (touch_load_calibration(touch, TOUCH_CALIB_FILE) == 0) {
         touch_enable_calibration(touch, true);
-        printf("Touch auto-loaded calibration from %s\n", TOUCH_CALIB_FILE);
+        LIB_LOG(touch_note, "Touch auto-loaded calibration from %s", TOUCH_CALIB_FILE);
     }
 
     // Last, so it sees the final curve and geometry. Apps that resize the logical
     // screen afterwards go through touch_set_screen_size(), which republishes.
     publish_safe_area(touch);
 
-    printf("Touch input initialized: %s\n", device);
+    LIB_LOG(touch_note, "Touch input initialized: %s", device);
+    touch_announced = true;
+    touch_note = LOG_LEVEL_INFO;   // explicit calls after init still report
     return 0;
 }
 
@@ -267,7 +280,7 @@ void touch_set_screen_size(TouchInput *touch, int width, int height) {
     touch->panel_height = screen_panel_height;
     touch->view_x       = screen_view_x;
     touch->view_y       = screen_view_y;
-    printf("Touch screen size set to: %dx%d (panel %dx%d, view %d,%d)\n",
+    LIB_LOG(touch_note, "Touch screen size set to: %dx%d (panel %dx%d, view %d,%d)",
            width, height, touch->panel_width, touch->panel_height,
            touch->view_x, touch->view_y);
     publish_safe_area(touch);
@@ -279,7 +292,7 @@ void touch_set_viewport(TouchInput *touch, int panel_w, int panel_h,
     touch->panel_height = panel_h;
     touch->view_x       = view_x;
     touch->view_y       = view_y;
-    printf("Touch viewport set: panel %dx%d, view %d,%d\n",
+    LIB_LOG(touch_note, "Touch viewport set: panel %dx%d, view %d,%d",
            panel_w, panel_h, view_x, view_y);
     publish_safe_area(touch);
 }
@@ -425,7 +438,7 @@ void touch_set_raw_range(TouchInput *touch,
     touch->raw_knot_lo_y = touch->raw_knot_hi_y = 0;
     touch->calib.enabled = true;
     touch->calibrated = true;
-    printf("Touch raw range set (linear): X [%d..%d] Y [%d..%d]\n",
+    LIB_LOG(touch_note, "Touch raw range set (linear): X [%d..%d] Y [%d..%d]",
            min_x, max_x, min_y, max_y);
     publish_safe_area(touch);
 }
@@ -446,19 +459,19 @@ void touch_set_raw_curve(TouchInput *touch,
     } else {
         touch->raw_knot_lo_x = touch->raw_knot_hi_x = 0;   // linear
         if (xk_lo || xk_hi)
-            printf("Touch calibration: X knots non-monotone, using linear map\n");
+            LIB_LOG(LOG_LEVEL_WARN, "Touch calibration: X knots non-monotone, using linear map");
     }
     if (y0 < yk_lo && yk_lo < yk_hi && yk_hi < y1) {
         touch->raw_knot_lo_y = yk_lo; touch->raw_knot_hi_y = yk_hi;
     } else {
         touch->raw_knot_lo_y = touch->raw_knot_hi_y = 0;   // linear
         if (yk_lo || yk_hi)
-            printf("Touch calibration: Y knots non-monotone, using linear map\n");
+            LIB_LOG(LOG_LEVEL_WARN, "Touch calibration: Y knots non-monotone, using linear map");
     }
 
     touch->calib.enabled = true;
     touch->calibrated = true;
-    printf("Touch raw curve set: X [%d %d %d %d] Y [%d %d %d %d]\n",
+    LIB_LOG(touch_note, "Touch raw curve set: X [%d %d %d %d] Y [%d %d %d %d]",
            touch->raw_min_x, touch->raw_knot_lo_x, touch->raw_knot_hi_x, touch->raw_max_x,
            touch->raw_min_y, touch->raw_knot_lo_y, touch->raw_knot_hi_y, touch->raw_max_y);
     publish_safe_area(touch);
@@ -466,7 +479,7 @@ void touch_set_raw_curve(TouchInput *touch,
 
 void touch_enable_calibration(TouchInput *touch, bool enable) {
     touch->calib.enabled = enable;
-    printf("Touch calibration %s\n", enable ? "enabled" : "disabled");
+    LIB_LOG(touch_note, "Touch calibration %s", enable ? "enabled" : "disabled");
 }
 
 int touch_fit_axis_range(const int *raw, const int *scr, int n, int dim,
@@ -529,7 +542,7 @@ int touch_save_calibration(TouchInput *touch, const char *filename) {
             touch->reach_min_y, touch->reach_max_y);
 
     fclose(f);
-    printf("Calibration saved to: %s  (X[%d %d %d %d] Y[%d %d %d %d] reach X[%d..%d] Y[%d..%d])\n",
+    LIB_LOG(LOG_LEVEL_INFO, "Calibration saved to: %s  (X[%d %d %d %d] Y[%d %d %d %d] reach X[%d..%d] Y[%d..%d])",
            filename,
            touch->raw_min_x, touch->raw_knot_lo_x,
            touch->raw_knot_hi_x, touch->raw_max_x,
@@ -543,7 +556,7 @@ int touch_save_calibration(TouchInput *touch, const char *filename) {
 int touch_load_calibration(TouchInput *touch, const char *filename) {
     FILE *f = fopen(filename, "r");
     if (!f) {
-        printf("No calibration file found: %s (using hardware range)\n", filename);
+        LIB_LOG(touch_note, "No calibration file found: %s (using hardware range)", filename);
         return -1;
     }
 
@@ -568,10 +581,10 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
             if (rv[1] - rv[0] >= 16 && rv[3] - rv[2] >= 16) {
                 touch->reach_min_x = rv[0]; touch->reach_max_x = rv[1];
                 touch->reach_min_y = rv[2]; touch->reach_max_y = rv[3];
-                printf("  Measured edge reach: X [%d..%d] Y [%d..%d]\n",
+                LIB_LOG(touch_note, "  Measured edge reach: X [%d..%d] Y [%d..%d]",
                        rv[0], rv[1], rv[2], rv[3]);
             } else {
-                printf("  Ignoring degenerate 'reach' line (X %d..%d Y %d..%d)\n",
+                LIB_LOG(LOG_LEVEL_WARN, "  Ignoring degenerate 'reach' line (X %d..%d Y %d..%d)",
                        rv[0], rv[1], rv[2], rv[3]);
             }
             continue;
@@ -586,7 +599,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
                 touch_set_raw_curve(touch, v[0], v[1], v[2], v[3],
                                            v[4], v[5], v[6], v[7]);
                 got_range = true;
-                printf("Calibration loaded from: %s (piecewise)\n", filename);
+                LIB_LOG(touch_note, "Calibration loaded from: %s (piecewise)", filename);
             } else if (n == 4) {
                 // Legacy: reproduce exactly the mapping this file described, by
                 // putting the knots on its line. Nothing is clamped — a legacy
@@ -600,8 +613,8 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
                 touch_set_raw_curve(touch, v[0], kx_lo, kx_hi, v[1],
                                            v[2], ky_lo, ky_hi, v[3]);
                 got_range = true;
-                printf("Calibration loaded from: %s (legacy 4-value, migrated "
-                       "onto its own line)\n", filename);
+                LIB_LOG(touch_note, "Calibration loaded from: %s (legacy 4-value, migrated "
+                       "onto its own line)", filename);
             }
         } else if (!got_margins) {
             // Line 2: bezel margins (top bottom left right)
@@ -612,7 +625,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
                 touch->calib.bezel_left   = m[2];
                 touch->calib.bezel_right  = m[3];
                 got_margins = true;
-                printf("  Bezel margins: T=%d B=%d L=%d R=%d\n", m[0], m[1], m[2], m[3]);
+                LIB_LOG(touch_note, "  Bezel margins: T=%d B=%d L=%d R=%d", m[0], m[1], m[2], m[3]);
             }
         }
     }
@@ -624,7 +637,7 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
         return -1;
     }
     if (!got_margins)
-        printf("  No bezel margins in file (framebuffer defaults apply)\n");
+        LIB_LOG(touch_note, "  No bezel margins in file (framebuffer defaults apply)");
 
     touch->calib.enabled = true;
     // The 'reach' line may come after line 1, whose touch_set_raw_curve() already
@@ -637,13 +650,13 @@ int touch_load_calibration(TouchInput *touch, const char *filename) {
 void touch_set_edge_reach(TouchInput *touch,
                           int x_lo, int x_hi, int y_lo, int y_hi) {
     if (x_hi - x_lo < 16 || y_hi - y_lo < 16) {
-        printf("Touch edge reach rejected as degenerate: X %d..%d Y %d..%d\n",
+        LIB_LOG(LOG_LEVEL_WARN, "Touch edge reach rejected as degenerate: X %d..%d Y %d..%d",
                x_lo, x_hi, y_lo, y_hi);
         return;
     }
     touch->reach_min_x = x_lo; touch->reach_max_x = x_hi;
     touch->reach_min_y = y_lo; touch->reach_max_y = y_hi;
-    printf("Touch edge reach set: X [%d..%d] Y [%d..%d]\n", x_lo, x_hi, y_lo, y_hi);
+    LIB_LOG(touch_note, "Touch edge reach set: X [%d..%d] Y [%d..%d]", x_lo, x_hi, y_lo, y_hi);
     publish_safe_area(touch);
 }
 
@@ -666,5 +679,5 @@ void touch_drain_events(TouchInput *touch) {
     touch->state.held     = false;
 
     if (drained > 0)
-        printf("touch_drain_events: discarded %d stale events\n", drained);
+        LIB_LOG(LOG_LEVEL_DEBUG, "touch_drain_events: discarded %d stale events", drained);
 }

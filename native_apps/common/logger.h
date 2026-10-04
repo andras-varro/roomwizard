@@ -100,4 +100,36 @@ void logger_close(Logger *log);
 #define LOG_ERROR(log, fmt, ...) \
     logger_write((log), LOG_LEVEL_ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
+
+/* ── Messages from the shared library ───────────────────────────────── */
+
+/*
+ * touch_input.c, framebuffer.c and gamepad.c own no Logger, and ScummVM links
+ * touch_input.o and framebuffer.o WITHOUT logger.o.  So they report through
+ * LIB_LOG, which reaches logger_lib_write() by a WEAK reference:
+ *
+ *   - binary links logger.o, an app called logger_init()  -> that Logger
+ *     (the first one opened in the process, until it is closed);
+ *   - binary links logger.o, no Logger open                -> stdout;
+ *   - binary does not link logger.o (ScummVM, host tests)  -> the weak
+ *     reference is NULL and LIB_LOG writes stdout itself.
+ *
+ * On stdout, DEBUG is dropped and INFO and above print as the bare message,
+ * exactly as the library's printf()s did.  Define LOGGER_LIB_CLIENT before
+ * including this header to get LIB_LOG; nothing else should define it.
+ */
+void logger_lib_write(LogLevel level, const char *file, int line,
+                      const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+
+#ifdef LOGGER_LIB_CLIENT
+#pragma weak logger_lib_write
+#define LIB_LOG(level, fmt, ...) do {                                         \
+        if (logger_lib_write)                                                  \
+            logger_lib_write((level), __FILE__, __LINE__, fmt, ##__VA_ARGS__); \
+        else if ((level) >= LOG_LEVEL_INFO)                                    \
+            printf(fmt "\n", ##__VA_ARGS__);                                   \
+    } while (0)
+#endif
+
 #endif /* LOGGER_H */
