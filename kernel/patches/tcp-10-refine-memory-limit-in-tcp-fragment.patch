@@ -1,0 +1,41 @@
+From 1bc13903773bc9418a8f898c462eef64b7fa1d52 Mon Sep 17 00:00:00 2001
+From: Eric Dumazet <edumazet@google.com>
+Date: Fri, 21 Jun 2019 06:09:55 -0700
+Subject: tcp: refine memory limit test in tcp_fragment()
+
+commit b6653b3629e5b88202be3c9abc44713973f5c4b4 upstream.
+
+tcp_fragment() might be called for skbs in the write queue.
+
+Memory limits might have been exceeded because tcp_sendmsg() only
+checks limits at full skb (64KB) boundaries.
+
+Therefore, we need to make sure tcp_fragment() wont punish applications
+that might have setup very low SO_SNDBUF values.
+
+Fixes: f070ef2ac667 ("tcp: tcp_fragment() should apply sane memory limits")
+Signed-off-by: Eric Dumazet <edumazet@google.com>
+Reported-by: Christoph Paasch <cpaasch@apple.com>
+Tested-by: Christoph Paasch <cpaasch@apple.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+---
+ net/ipv4/tcp_output.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
+index a8772e11dc1cb..a5960b9b6741c 100644
+--- a/net/ipv4/tcp_output.c
++++ b/net/ipv4/tcp_output.c
+@@ -1274,7 +1274,7 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
+ 	if (nsize < 0)
+ 		nsize = 0;
+ 
+-	if (unlikely((sk->sk_wmem_queued >> 1) > sk->sk_sndbuf)) {
++	if (unlikely((sk->sk_wmem_queued >> 1) > sk->sk_sndbuf + 0x20000)) {
+ 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPWQUEUETOOBIG);
+ 		return -ENOMEM;
+ 	}
+-- 
+cgit 1.3.1-korg
+

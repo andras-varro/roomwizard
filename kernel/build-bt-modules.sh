@@ -14,8 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IMAGE_DIR="${HOME}/rw-kbuild-image/linux-4.14.52"
-REF_KO="${HOME}/rw-kbuild-image/modules/cy8ctmg120_ts/cy8ctmg120_ts.ko"
+IMAGE_WORK="${HOME}/rw-kbuild-image"
 WORK_DIR="${HOME}/rw-kbuild-bt"
 PATCH_DIR="${SCRIPT_DIR}/patches-modules"
 CROSS_COMPILE="arm-linux-gnueabihf-"
@@ -45,7 +44,7 @@ RUNTIME_ROOTS=(cryptomgr cmac ecb sha256_generic ecdh_generic hmac drbg)
 
 usage() {
     cat <<'EOF'
-Usage: build-bt-modules.sh --out <dir> [--work <dir>] [--reuse]
+Usage: build-bt-modules.sh --out <dir> [--image <work>] [--work <dir>] [--reuse]
 
 Copies ~/rw-kbuild-image/linux-4.14.52 (built by build-image.sh) to <work>/linux-4.14.52, applies
 kernel/patches-modules/*.patch there, enables BT/btusb/hidp/uhid/uinput/AF_ALG as modules,
@@ -61,6 +60,8 @@ differs from the image's, which the CRC check then has to clear.
 
   --out <dir>   Where the .ko files (debug info stripped) and load-order.txt go. Existing *.ko
                 there are removed.
+  --image <work> The image's build tree parent: the --work given to build-image.sh, which must
+                be the image the unit boots (default: ~/rw-kbuild-image).
   --work <dir>  Work dir in the WSL filesystem (default: ~/rw-kbuild-bt). Refused under /mnt.
   --reuse       Keep an existing copy (incremental rebuild) instead of re-copying the image tree.
   -h, --help    This text.
@@ -73,6 +74,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out)     shift; OUT_DIR="${1:?--out needs a directory}" ;;
         --work)    shift; WORK_DIR="${1:?--work needs a directory}" ;;
+        --image)   shift; IMAGE_WORK="${1:?--image needs a directory}" ;;
         --reuse)   REUSE=1 ;;
         -h|--help) usage; exit 0 ;;
         *)         echo "ERROR: unknown argument $1"; usage; exit 1 ;;
@@ -80,6 +82,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ -n "$OUT_DIR" ] || { usage; exit 1; }
+IMAGE_DIR="${IMAGE_WORK}/linux-4.14.52"
+REF_KO="${IMAGE_WORK}/modules/cy8ctmg120_ts/cy8ctmg120_ts.ko"
 KDIR="${WORK_DIR}/linux-4.14.52"
 
 for f in .config Module.symvers vmlinux; do

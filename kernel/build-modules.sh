@@ -12,8 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-KERNEL_DIR="${HOME}/rw-kbuild-image/linux-4.14.52"
-STAGE_DIR="${HOME}/rw-kbuild-image/modules"
+IMAGE_WORK="${HOME}/rw-kbuild-image"
 CROSS_COMPILE="arm-linux-gnueabihf-"
 ARCH="arm"
 OUT_DIR=""
@@ -22,11 +21,14 @@ DEVICE_MODDIR="/lib/modules/4.14.52/extra"
 
 usage() {
     cat <<'EOF'
-Usage: build-modules.sh --out <dir> [--deploy <ip>]
+Usage: build-modules.sh --out <dir> [--image <work>] [--deploy <ip>]
 
 Copies each kernel/drivers/<driver>/ into ~/rw-kbuild-image/modules (never builds on /mnt/c)
 and builds it with M= against ~/rw-kbuild-image/linux-4.14.52, which build-image.sh must
 already have built. Copies each resulting .ko to <dir>.
+
+--image <work> the image's build tree parent: the --work given to build-image.sh, whose
+               modules must match the image the unit boots (default: ~/rw-kbuild-image).
 
 --deploy <ip>  also copy each .ko to /lib/modules/4.14.52/extra/ on root@<ip>, check its md5
                there, and restart /etc/init.d/touch-module if that is installed. The loader
@@ -38,12 +40,15 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out)     shift; OUT_DIR="${1:?--out needs a directory}" ;;
         --deploy)  shift; DEVICE_IP="${1:?--deploy needs an IP}" ;;
+        --image)   shift; IMAGE_WORK="${1:?--image needs a directory}" ;;
         -h|--help) usage; exit 0 ;;
         *)         echo "ERROR: unknown argument $1"; usage; exit 1 ;;
     esac
     shift
 done
 [ -n "$OUT_DIR" ] || { usage; exit 1; }
+KERNEL_DIR="${IMAGE_WORK}/linux-4.14.52"
+STAGE_DIR="${IMAGE_WORK}/modules"
 if [ -n "$DEVICE_IP" ]; then
     # shellcheck source=../lib/rw-ssh.sh
     . "${SCRIPT_DIR}/../lib/rw-ssh.sh"
