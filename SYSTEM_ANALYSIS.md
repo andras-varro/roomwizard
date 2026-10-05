@@ -1200,6 +1200,8 @@ advertisement by btmon's event matched on the address — not by `bluetoothctl`'
 abbreviated title** (`btmon -T` prints `Inquiry Result` for an Extended one): X mode was first recorded as silent
 from a busybox `grep` of `bluetoothctl` output, while btmon had logged 96 EIRs. ⚠️ **A scripted `bluetoothctl` needs ~2 s between starting and `agent` or the registration fails** (measured 2026-08-08), and a classic HID keyboard ("BT Keyboard 5.1", class `0x002540`) paired Just Works with no PIN, `hidp` → `hid-generic` making one node for keys and touchpad that `app_launcher` hot-plugged.
 
+⚠️ **BlueZ 5.66 starts no BR/EDR connection on adapter power-up or re-add** (measured from source: `plugins/policy.c` reconnects only after a link loss, and `src/device.c` `device_set_auto_connect` is LE-only), so a bonded headset or pad stays off after a panel reboot or a hub reset until something calls `Device1.Connect`; `device-files/bluetooth` does that from its `watch` subcommand. Non-interactive `bluetoothctl --timeout N connect` exits 0 on failure and always runs to its timeout (measured), so judge a connect by `Device1` `Connected`. The device has udevd 243, no mdev and no `/sys/class/rfkill` (measured).
+
 Hubs work, including combo devices with a built-in hub; multiple simultaneous devices are fine.
 
 ⚠️ **On the vendor kernel a stale `is_active` arms a `printk` loop that survives unplugging and ends in
@@ -1457,7 +1459,7 @@ Present, working, and used by nothing in this project.
 ```
 /sys/bus/iio/devices/iio:device0 -> 48070000.i2c:twl@48:madc
 
-in_temp1_input   = 56          # SoC die temperature, degrees C
+in_temp1_input   = 56          # NOT the SoC: ADCIN1, the battery thermistor, raw 0 -> table top
 in_voltage0..15_{raw,mean_raw,input}
   ch2..ch7  = 7..122 mV        # ADCIN2..ADCIN7 - general-purpose, idle, available
   ch9       = 3184 mV          # VBKP - the RTC supercap
@@ -1467,7 +1469,7 @@ in_voltage0..15_{raw,mean_raw,input}
 `CONFIG_TWL4030_MADC=y` and the driver probes cleanly at boot. `in_voltage*_mean_raw` gives free
 hardware averaging. ⚠️ **The six general-purpose channels are out of scope, not merely awaiting work** —
 reaching one needs a test point physically wired to it, which [Hardware policy](#8-hardware-policy)
-rules out. `in_temp1_input` and `in_voltage9` need no wire and are the half worth surfacing.
+rules out. `in_voltage9` needs no wire. ⚠️ **`in_temp1_input` is not a die temperature, measured `.188`:** `in_temp1_raw` and `in_temp1_mean_raw` are 0 (ADCIN1, the TWL4030 PMIC battery-thermistor input), and raw 0 maps to the top of the -3..55 °C lookup table (59-3 = 56), so it reads 56 at any temperature. The SoC sensor is `thermal_zone0` (`cpu_thermal`), whose `temp` returns `Invalid argument`; `/sys/class/hwmon` is empty; the running config has `CONFIG_TI_SOC_THERMAL=y`, `CONFIG_TI_THERMAL=y` and `# CONFIG_OMAP3_THERMAL is not set`, while the DT carries `bandgap@48002524` (`ti,omap34xx-bandgap`) and the zone. Sensor accuracy unmeasured.
 
 ### 3.12 Serial ports
 
@@ -2239,7 +2241,5 @@ and it is a different judgement from [Kernel policy](#7-kernel-policy), where th
 and an image is the deliverable. Here the tree is fine and the *board* is the boundary.
 
 **What it does not exclude**, and these stay good candidates: every reading obtainable through a driver
-already probing. `in_temp1_input` is SoC die temperature in degrees C and `in_voltage9` is the RTC
-supercap, both `cat`-able today with no wire and no reference in the codebase — a die-temperature
-readout and a "backup cell low" warning are Control Panel work of about ten minutes each. The rule bars
-adding a *sensor*, not surfacing one.
+already probing. `in_voltage9` is the RTC supercap, `cat`-able today with no wire — a "backup cell low" warning is
+Control Panel work. The SoC temperature needs the OMAP3 thermal driver first ([ADC and temperature](#311-adc-and-temperature-twl4030-madc)). The rule bars adding a *sensor*, not surfacing one.

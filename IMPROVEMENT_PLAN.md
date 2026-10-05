@@ -165,7 +165,7 @@ reconnects by itself about 25 s later (AVRCP input re-created); the 8BitDo does 
 low-power Compx 2.4G receiver did not drop the hub. Userspace is ruled out (`hidp_open`/`hidp_close` are empty).
 **Inferred:** a VBUS sag on inrush, which musb logs only at `KERN_DEBUG` (`musb_core.c:674-716`,
 `VBUSERR_RETRY_COUNT=3`); a hub brownout is not ruled out. **Fix:** hardware, a powered hub. Software mitigation:
-reconnect bonded HID devices when `hci0` comes back (F130). **Done when** `dmesg` after the plug shows whether
+reconnect bonded devices when `hci0` comes back (F130; the watcher is deployed, its first reconnect is not yet observed). **Done when** `dmesg` after the plug shows whether
 `VBUS_ERROR` fires, and a repeat with a powered hub keeps the pad. **Operator question:** does the current hub have its
 own supply?
 
@@ -198,14 +198,15 @@ residues:
 
 Userspace except F101, which is the image build.
 
-### F4. Surface the two MADC channels that need no wire — open
+### F4. Surface the SoC temperature and the RTC cell voltage — open, premise corrected
 
-Both are readable with `cat` today and have zero references in the codebase
-([`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)):
-
-- `in_temp1_input` — SoC die temperature. Add a readout to Control Panel (~10 minutes).
-- `in_voltage9` — RTC backup cell voltage. A "battery low" warning is nearly free.
-
+⚠️ **The temperature channel everyone planned on is not the SoC** (measured `.188`, detail in
+[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)):
+`in_temp1_input` reads 56 at any temperature because the raw value is 0. The real sensor is `thermal_zone0`, whose
+`temp` fails because `CONFIG_OMAP3_THERMAL` is off in our image. **Next step:** set `CONFIG_OMAP3_THERMAL=y` in
+`kernel/config-changes`, rebuild, reboot, and confirm `thermal_zone0/temp` reads and moves under load; then add a
+Monitor row, **hidden (not greyed) when the read fails**. Accuracy of the sensor is unmeasured. Separately,
+`in_voltage9` (RTC backup cell) needs no wire; a "battery low" warning is nearly free.
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -326,13 +327,16 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F104. CPU-usage graph on the Monitor page — open, operator request 2026-09-30, later
+### F104. CPU-usage graph on the Monitor page — implemented, awaiting operator check (commit `2f953b1`)
 
-A history graph of CPU utilisation on the control panel's Monitor page, beside the planned SoC temperature (F4).
-⚠️ **Trap: `/proc/stat`'s total column is not a valid denominator on this kernel** — `NO_HZ_IDLE` makes it
-unreliable; the fact and its measurement live in
-[`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio) (the PIO-cost paragraph). Use busy ticks over
-wall-clock seconds × `CONFIG_HZ`. **Done when** the graph on .188 reads near zero on an idle panel and
+`native_apps/control_panel/cpu_load.c` holds the pure math (host test `cpu_load_test`); `monitor_page.c` draws a
+120-sample graph on the 1 s tick, busy share divided by wall time from `/proc/uptime` (`/proc/stat`'s total column is
+not a valid denominator: [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio), the PIO-cost paragraph), with
+the panel's own share excluded and shown in the caption. Not yet seen on the panel (no switch opens the page).
+**Operator check:** Control Panel → Monitor shows the graph beside UPTIME / LOAD AVG with the caption
+"CPU n% LAST 2 MIN (PANEL m%, NOT GRAPHED)"; `ssh root@192.168.50.188 'timeout 15 yes > /dev/null'` drives the columns
+red to the top (~97-100%) and back down after; reopening the page starts the graph empty (by design); in portrait the
+graph is full width below. **Done when** that passes; then delete this entry.
 rises under a known load (a `yes > /dev/null` over SSH), which also checks the denominator.
 
 ### F105. Auto-rescan on the USB page while it is open — open, operator idea 2026-09-30, later
@@ -441,14 +445,16 @@ panel button cannot prove a key exists, so decide what the page may do (show the
 password). Per the operator's settings rule, new settings belong in the settings app. **Done when** the page shows
 the current SSH mode and date/time and a change survives a reboot.
 
-### F130. Reconnect the Bluetooth headset (and optionally pads) after a panel reboot — open, feature, operator observation 2026-10-05
+### F130. Reconnect the Bluetooth headset and pads after a panel reboot — implemented, awaiting operator check (commit `78e1167`)
 
-Measured by the operator on `.188`: a pad reconnects by itself after the pad is power-cycled, but **nothing
-reconnects after a panel reboot**. Judged expected for HID, where the pad initiates the connection [inferred]; for
-the headset (A2DP) the panel must initiate. Unknown whether it worked before the BT module rebuild (commit
-`59111a1`). **Action:** find what the headset does after boot (`bluetoothctl info`, the `bluetooth` init script,
-`/tmp/mix.log`), then have the boot script connect paired audio devices; pads only if a pad also fails to
-reconnect after a boot with the pad already on. **Done when** the headset plays after a panel reboot with no tap.
+The `bluetooth` init script (`device-files/bluetooth`) backgrounds a watcher (`watch` subcommand, pidfile
+`/var/run/bluetooth-watch.pid`) that on each new `hci0` sysfs inode (boot, or a hub reset — see B54) waits for Powered,
+then makes up to 3 rounds (5/15/45 s) of `Device1.Connect` via `dbus-send` for Trusted, unblocked devices holding a
+`[LinkKey]`, logging to syslog tag `bluetooth`. **Measured on `.188`:** it fired at boot and on a `btusb` unbind/bind;
+no successful reconnect was observed (all four bonded devices were off). **Operator check:** reboot the panel with the
+headset and the 8BitDo on; both should connect within 1-2 min without a tap, and
+`grep "bluetooth: reconnect" /home/root/log/messages` shows the rounds. If the headset connects and the pad does not,
+the pad refuses host-initiated connects. **Done when** that check passes; then delete this entry.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
