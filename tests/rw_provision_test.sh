@@ -756,6 +756,33 @@ fi
 assert_eq "../init.d/bluetooth" "$(awk -F'\t' '$1 == "link" && $3 == "/etc/rc5.d/S91bluetooth" {print $4}' "$BPLAN")" \
     "F12b the bluetooth group links S91bluetooth after S90usb-host"
 
+# ── F12c: which bonded devices the init script reconnects ─────────────────────
+# BlueZ 5.66 initiates no BR/EDR connection when an adapter powers up, so the init
+# script's watcher connects the bonded devices itself, at boot and whenever hci0 is
+# re-created. Its list comes from bluetoothd's storage: one adapter's devices that are
+# Trusted, not Blocked, and hold a link key. Anything else must stay off it — an
+# untrusted or unbonded device would be paged every time, and a device bonded to another
+# dongle is not reachable through this one.
+BTS="$FW/btstore"; BTA="A0:AD:9F:70:DD:CA"
+bt_info() { # <adapter> <device> <general lines> [linkkey]
+    mkdir -p "$BTS/$1/$2"
+    { printf '[General]\nName=x\n%b\n' "$3"
+      [ -z "${4:-}" ] || printf '\n[LinkKey]\nKey=00\nType=4\n'
+    } > "$BTS/$1/$2/info"
+}
+bt_info "$BTA" 11:11:11:11:11:01 'Trusted=true\nBlocked=false' key
+bt_info "$BTA" 11:11:11:11:11:02 'Trusted=false\nBlocked=false' key
+bt_info "$BTA" 11:11:11:11:11:03 'Trusted=true\nBlocked=false'
+bt_info "$BTA" 11:11:11:11:11:04 'Trusted=true\nBlocked=true' key
+bt_info "$BTA" 11:11:11:11:11:05 'Trusted=true' key
+bt_info 00:00:00:00:00:99 11:11:11:11:11:06 'Trusted=true\nBlocked=false' key
+mkdir -p "$BTS/$BTA/cache/11:11:11:11:11:07"; : > "$BTS/$BTA/settings"
+BT_CAND=$(BT_STORAGE="$BTS" sh "$REPO_DIR/device-files/bluetooth" candidates "$BTA" 2>/dev/null </dev/null | sort | tr '\n' ' ')
+assert_eq "11:11:11:11:11:01 11:11:11:11:11:05 " "$BT_CAND" \
+    "F12c the reconnect list is the adapter's trusted, unblocked, bonded devices only"
+BT_NONE=$(BT_STORAGE="$BTS" sh "$REPO_DIR/device-files/bluetooth" candidates 22:22:22:22:22:22 2>/dev/null </dev/null)
+assert_eq "" "$BT_NONE" "F12c control: an adapter with no storage reconnects nothing"
+
 # ── F13-F14: the summary line accounts for every action ──────────────────────
 #
 # The old summary read "35 action(s) — 8 install, 9 link, 10 unlink", which accounts

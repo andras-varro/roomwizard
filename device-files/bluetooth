@@ -24,6 +24,20 @@
 # Handsfree Audio Gateway -- A2DP alone, the btmon capture shows no Connect Request at all;
 # with hfp-ag it connects within seconds. It needs rfcomm.ko (kernel/build-bt-modules.sh).
 #
+# Reconnecting bonded devices is this script's job, because BlueZ 5.66 never pages a BR/EDR
+# device on its own initiative except after a link loss within one adapter's lifetime:
+# plugins/policy.c's ReconnectUUIDs fires only on a supervision timeout and keeps its list in
+# memory, profiles/input/device.c's reconnect timer likewise only on an HID disconnect, and
+# src/device.c's device_set_auto_connect returns early for a device that is not LE. So after a
+# panel boot, or after hci0 is re-created (the dongle re-enumerates with the USB tree), nothing
+# reconnects unless the remote end pages us. start therefore backgrounds "watch": it polls
+# hci0's sysfs inode, which kernfs allocates afresh for every new hci0 (measured on .188:
+# 21695 before a restart that reloads btusb, 22727 after), and on each new one waits for
+# bluetoothd's AutoEnable to power the adapter, then calls Device1.Connect on every
+# trusted, bonded device that is not connected, for a few rounds. dbus-send, not
+# bluetoothctl: bluetoothctl's non-interactive connect exits 0 on failure and sits out its
+# whole --timeout, while Device1.Connect returns an error in ~5 s on a page timeout.
+#
 # start exits 0 whatever happens: a unit with no dongle and no modules must still boot.
 
 MODDIR=/lib/modules/4.14.52/bt
@@ -31,7 +45,7 @@ ORDER="$MODDIR/load-order.txt"
 DAEMON=/usr/libexec/bluetooth/bluetoothd
 BLUEALSA=/usr/bin/bluealsa
 # Pairing records. bluetoothd creates what it needs below this, but not this itself.
-STORAGE=/var/lib/bluetooth
+STORAGE=${BT_STORAGE:-/var/lib/bluetooth}
 # The adapter is named after the unit's hostname, so two units are told apart in a scan.
 # 5.66 does not expand %h in main.conf (measured on .188: the adapter advertised "%h"), so
 # start writes a copy of the installed main.conf with Name= added to tmpfs and starts
@@ -79,6 +93,93 @@ start_bluealsa() {
   DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket \
     "$BLUEALSA" -S -p a2dp-source -p hfp-ag </dev/null >/dev/null 2>&1 &
   echo "  bluealsa started (pid $!)"
+}
+
+# ── reconnecting bonded devices (see the header) ──
+HCI=hci0
+BUS=unix:path=/run/dbus/system_bus_socket
+WATCHPID=/var/run/bluetooth-watch.pid
+# Seconds to wait before each connect round. The first gives bluealsa time to register its
+# endpoints once bluetoothd is up; a device found connected is skipped in later rounds.
+ROUNDS="5 15 45"
+
+log() { logger -t bluetooth -p daemon.notice "$*" 2>/dev/null; }
+
+# Addresses of adapter $1's devices that bluetoothd stored as trusted, not blocked, with a
+# link key -- one per line. Reads the storage files, so it needs no running daemon.
+candidates() {
+  [ -n "$1" ] || return 0
+  for info in "$STORAGE/$1"/*/info; do
+    [ -f "$info" ] || continue
+    awk '/^\[/ { s = $0; next }
+         s == "[General]" && $0 == "Trusted=true" { t = 1 }
+         s == "[General]" && $0 == "Blocked=true" { b = 1 }
+         s == "[LinkKey]" { k = 1 }
+         END { exit !(t && k && !b) }' "$info" || continue
+    d=${info%/info}; echo "${d##*/}"
+  done
+}
+
+bus() { DBUS_SYSTEM_BUS_ADDRESS=$BUS dbus-send --system --print-reply --dest=org.bluez "$@" 2>/dev/null; }
+# <object path> <interface> <property>
+prop() { bus "$1" org.freedesktop.DBus.Properties.Get "string:$2" "string:$3"; }
+
+# One pass over the bonded devices: wait for the adapter to be powered, then connect.
+reconnect_all() {
+  i=0
+  until prop "/org/bluez/$HCI" org.bluez.Adapter1 Powered | grep -q 'boolean true'; do
+    i=$((i + 1))
+    [ "$i" -le 30 ] || { log "reconnect: $HCI never powered, giving up"; return; }
+    sleep 1
+  done
+  addr=$(prop "/org/bluez/$HCI" org.bluez.Adapter1 Address | sed -n 's/.*string "\(.*\)".*/\1/p')
+  [ -n "$addr" ] || return
+  for wait in $ROUNDS; do
+    sleep "$wait"
+    left=0
+    for d in $(candidates "$addr"); do
+      p="/org/bluez/$HCI/dev_$(echo "$d" | tr : _)"
+      prop "$p" org.bluez.Device1 Connected | grep -q 'boolean true' && continue
+      if bus --reply-timeout=30000 "$p" org.bluez.Device1.Connect >/dev/null; then
+        log "reconnect: $d connected"
+      else
+        left=$((left + 1))
+      fi
+    done
+    [ "$left" -gt 0 ] || return
+  done
+  log "reconnect: $left bonded device(s) did not answer (off or out of range)"
+}
+
+# Runs until killed: a reconnect pass for every new instance of hci0, the first included.
+watch() {
+  echo $$ > "$WATCHPID"
+  last=
+  while :; do
+    tok=$(stat -L -c %i "/sys/class/bluetooth/$HCI" 2>/dev/null)
+    if [ -n "$tok" ] && [ "$tok" != "$last" ]; then
+      last=$tok
+      log "reconnect: $HCI appeared (inode $tok)"
+      reconnect_all
+    fi
+    sleep 3
+  done
+}
+
+# The watcher's PID, if one is running: the pidfile's process, checked by its command line.
+watch_pid() {
+  p=$(cat "$WATCHPID" 2>/dev/null) || return 0
+  tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q ' watch' && echo "$p"
+}
+
+start_watch() {
+  p=$(watch_pid)
+  if [ -n "$p" ]; then
+    echo "  reconnect watcher already running (pid $p)"
+    return 0
+  fi
+  "$0" watch </dev/null >/dev/null 2>&1 &
+  echo "  reconnect watcher started (pid $!)"
 }
 
 is_loaded() { lsmod | cut -d' ' -f1 | grep -qx "$(echo "${1%.ko}" | tr - _)"; }
@@ -129,9 +230,19 @@ case "$1" in
       echo "  bluetoothd started (pid $!)"
     fi
     start_bluealsa
+    start_watch
+    ;;
+  watch)
+    watch
+    ;;
+  candidates)
+    candidates "$2"
     ;;
   stop)
     echo "Stopping Bluetooth..."
+    p=$(watch_pid)
+    [ -z "$p" ] || kill "$p" 2>/dev/null
+    rm -f "$WATCHPID"
     stop_exe bluealsa
     stop_exe bluetoothd
     # Reverse load order, so a redeploy's restart loads the new .ko files. A module in use
@@ -152,6 +263,8 @@ case "$1" in
     echo "bluetoothd: ${pids:-not running}"
     pids=$(exe_pids bluealsa)
     echo "bluealsa: ${pids:-not running}"
+    p=$(watch_pid)
+    echo "reconnect watcher: ${p:-not running}"
     for a in /sys/class/bluetooth/hci*; do
       [ -e "$a" ] && echo "adapter: ${a##*/}"
     done
