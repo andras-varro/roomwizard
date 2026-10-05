@@ -1,0 +1,11 @@
+# Installed as /etc/default/syslogd. Sourced by /etc/init.d/syslog, which starts
+# /usr/sbin/syslogd -- $SYSLOGD. The image ships no copy of this file.
+#
+# /usr/sbin/syslogd is sysklogd v2.1.1. With no arguments it listens on UDP 514 on
+# every interface (measured: netstat -lnu shows 0.0.0.0:514, owned by syslogd), and
+# its help text says -a is the sender filter, so with none any host on the LAN can
+# write into /home/root/log/messages (inferred, not tested). -s once stops it logging
+# remote messages; twice opens no network socket at all, which also gives up
+# forwarding — /etc/syslog.conf has no @host line, so there is nothing to forward.
+# The /dev/log socket local programs use is unaffected.
+SYSLOGD="-s -s"

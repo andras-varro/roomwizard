@@ -74,7 +74,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-release.sh lib/rw-usbpower.sh lib/rw-ssh.sh \
+         lib/rw-release.sh lib/rw-usbpower.sh lib/rw-ssh.sh lib/rw-sshd.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done

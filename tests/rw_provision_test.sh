@@ -261,6 +261,64 @@ else
     ok "B18 an unknown group name is refused"
 fi
 
+# ── Network listeners: syslogd off the network, avahi narrowed ───────────────
+# Measured on a unit in service: /usr/sbin/syslogd is sysklogd v2.1.1, started with
+# no arguments, and its own help says it listens on UDP 514 on every interface
+# unless started with -s; twice means no network socket at all. The init script
+# passes $SYSLOGD from /etc/default/syslogd, which the image does not ship.
+expect "$(printf 'install\t0644\t/etc/default/syslogd\tdevice-files/default-syslogd')" \
+    "$PLAN_ALL" "B19 /etc/default/syslogd is installed, in base"
+expect "$(printf 'install\t0644\t/etc/default/syslogd\tdevice-files/default-syslogd')" \
+    "$PLAN_NOMDNS" "B19b and stays when mDNS is off — it has nothing to do with avahi"
+expect "$(printf 'install\t0644\t/etc/avahi/avahi-daemon.conf\tdevice-files/avahi-daemon.conf')" \
+    "$PLAN_ALL" "B20 avahi-daemon.conf is installed with the mdns group"
+absent "$(printf 'install\t0644\t/etc/avahi/avahi-daemon.conf\tdevice-files/avahi-daemon.conf')" \
+    "$PLAN_NOMDNS" "B21 --no-mdns leaves the vendor avahi config alone"
+
+# What syslogd is actually started with: the init script's own expansion of $SYSLOGD.
+# shellcheck source=/dev/null
+SYSLOGD_ARGS=$( (SYSLOGD=; . "$REPO_DIR/device-files/default-syslogd" 2>/dev/null; echo "$SYSLOGD") )
+NSFLAG=0
+for w in $SYSLOGD_ARGS; do
+    case "$w" in -ss) NSFLAG=$((NSFLAG + 2)) ;; -s) NSFLAG=$((NSFLAG + 1)) ;; esac
+done
+assert_eq 2 "$NSFLAG" "B22 syslogd gets -s twice: no UDP socket at all (got '$SYSLOGD_ARGS')"
+case " $SYSLOGD_ARGS " in
+    *" -a"*|*" -b"*) bad "B23 no -a/-b, which would re-open a network socket" ;;
+    *)               ok  "B23 no -a/-b, which would re-open a network socket" ;;
+esac
+
+# avahi-daemon.conf is INI; a commented key is NOT set — the vendor file ships
+# "#allow-interfaces=eth0", so a grep for the key alone would pass on it.
+ini() {   # FILE SECTION KEY -> value, empty if unset
+    awk -F= -v s="[$2]" -v k="$3" '
+        /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
+        sec == s && $1 == k { v = $2; sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); val = v }
+        END { print val }' "$1"
+}
+printf '[server]\n#allow-interfaces=eth0\nuse-ipv4=yes\n' > "$TMP/ini-control"
+assert_eq "" "$(ini "$TMP/ini-control" server allow-interfaces)" \
+    "B24 control: the INI reader does not read a commented key as set"
+assert_eq "yes" "$(ini "$TMP/ini-control" server use-ipv4)" \
+    "B24b control: and does read a set one"
+AV="$REPO_DIR/device-files/avahi-daemon.conf"
+if [ -f "$AV" ]; then
+    assert_eq "eth0" "$(ini "$AV" server allow-interfaces)" "B25 avahi answers on eth0 only"
+    assert_eq "no"   "$(ini "$AV" server use-ipv6)"         "B26 and over IPv4 only"
+    assert_eq "no"   "$(ini "$AV" wide-area enable-wide-area)" \
+        "B27 wide-area off — the second, random-port UDP socket avahi opened"
+    assert_eq "no"   "$(ini "$AV" reflector enable-reflector)" "B28 no reflector, explicitly"
+    # mDNS must keep working: provision.sh and the operator reach units as <name>.local.
+    assert_eq "yes"  "$(ini "$AV" server use-ipv4)"         "B29 mDNS over IPv4 stays on"
+    if [ "$(ini "$AV" publish disable-publishing)" != yes ] && [ "$(ini "$AV" publish publish-addresses)" != no ]; then
+        ok  "B30 the host's A record is still published — <name>.local resolves"
+    else
+        bad "B30 the host's A record is still published — <name>.local resolves"
+    fi
+else
+    bad "B25 device-files/avahi-daemon.conf exists — B25-B30 are vacuous without it"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "C. the cross-file invariant: a link the whitelist does not name gets swept"
@@ -390,6 +448,17 @@ gone "$CARD/root/etc/rc5.d/S50roomwizard-app"   "D17 and the wrong-priority copy
 
 exists "$CARD/root/var/watchdog_test"           "D18 the watchdog bypass file exists"
 assert_eq "644" "$(stat -c %a "$CARD/root/var/watchdog_test")" "D19 with its declared mode"
+
+# /etc/default and /etc/avahi are not in build_card: the installer must create them.
+for pair in "etc/default/syslogd:default-syslogd" "etc/avahi/avahi-daemon.conf:avahi-daemon.conf"; do
+    t="${pair%%:*}"; s="${pair#*:}"
+    if [ -f "$CARD/root/$t" ] && cmp -s "$REPO_DIR/device-files/$s" "$CARD/root/$t"; then
+        ok "D19b /$t is byte-for-byte device-files/$s"
+    else
+        bad "D19b /$t is byte-for-byte device-files/$s"
+    fi
+    assert_eq "644" "$(stat -c %a "$CARD/root/$t" 2>/dev/null)" "D19c /$t is 0644"
+done
 
 # sshd: the substitution AND the appends, and the backup taken once.
 if grep -q '^PermitEmptyPasswords no$' "$CARD/root/etc/ssh/sshd_config"; then
