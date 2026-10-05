@@ -1,0 +1,2 @@
+obj-m := ca8_ibe.o
+ca8_ibe-y := ca8_ibe_main.o ca8_ibe_smc.o
