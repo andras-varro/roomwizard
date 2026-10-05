@@ -1,4 +1,5 @@
-/* monitor_page.c — control_panel's Monitor page: uptime, load, memory, storage.
+/* monitor_page.c — control_panel's Monitor page: uptime, load, CPU history,
+ * memory, storage.
  *
  * Opened from the home grid's Monitor tile, and the one home for the live
  * system figures.  Exposed only as
@@ -8,16 +9,23 @@
  * are sampled on entry and then once a second from input(), which the main
  * loop calls every iteration; draw() paints the last sample and reads nothing,
  * so a repaint for any other reason costs no /proc reads.
+ *
+ * The CPU graph rides the same once-a-second sample: one point per sample, so
+ * it adds no repaint of its own.  The math and the ring are cpu_load.c's.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
+#include "cpu_load.h"
 #include "../common/common.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#include <unistd.h>
 
 #define MON_REFRESH_MS 1000
+/* The CPU graph's span in minutes: one bar per refresh, CPU_HIST_N bars. */
+#define MON_GRAPH_SPAN_MIN (CPU_HIST_N * MON_REFRESH_MS / 60000)
 
 /* ── Sampling ──────────────────────────────────────────────────────────── */
 
@@ -130,6 +138,17 @@ static void fmt_disk(const char *mp, unsigned long used, unsigned long total,
     snprintf(buf, len, "%s  %s / %s  (%s FREE)", mp, u, t, f);
 }
 
+/* The graph's caption, permille in; -1 = no sample yet.  The panel's own cost
+ * is shown here and kept out of the bars, so the graph is the rest of the
+ * device (cpu_load.h). */
+static void fmt_cpu(int others_pm, int self_pm, char *buf, size_t len) {
+    if (others_pm < 0 || self_pm < 0)
+        snprintf(buf, len, "CPU --  LAST %d MIN  (PANEL --, NOT GRAPHED)", MON_GRAPH_SPAN_MIN);
+    else
+        snprintf(buf, len, "CPU %d%%  LAST %d MIN  (PANEL %d%%, NOT GRAPHED)",
+                 (others_pm + 5) / 10, MON_GRAPH_SPAN_MIN, (self_pm + 5) / 10);
+}
+
 static struct {
     char     uptime[64];
     char     load[64];
@@ -137,6 +156,42 @@ static struct {
     DiskInfo disk[NUM_MOUNT_POINTS];
 } sample;
 static uint32_t sampled_ms;
+
+/* CPU: the last snap, the history, and the newest shares (-1 = none yet). */
+static CpuSnap    cpu_prev;
+static CpuHistory cpu_hist;
+static int        cpu_others_pm = -1, cpu_self_pm = -1;
+
+static void cpu_snap(CpuSnap *s) {
+    char stat[256], self[512], up[64];
+    s->valid = read_file_line("/proc/stat", stat, sizeof(stat)) == 0
+            && read_file_line("/proc/self/stat", self, sizeof(self)) == 0
+            && read_file_line("/proc/uptime", up, sizeof(up)) == 0
+            && cpu_parse_stat(stat, &s->busy) == 0
+            && cpu_parse_self(self, &s->self) == 0
+            && cpu_parse_uptime(up, &s->wall_cs) == 0;
+}
+
+/* One point per call: the share since the previous call. */
+static void cpu_sample(void) {
+    static long clk_tck;
+    CpuSnap cur;
+    if (clk_tck <= 0) clk_tck = sysconf(_SC_CLK_TCK);
+    cpu_snap(&cur);
+    if (clk_tck > 0
+        && cpu_share(&cpu_prev, &cur, (unsigned)clk_tck,
+                     &cpu_others_pm, &cpu_self_pm) == 0)
+        cpu_hist_push(&cpu_hist, cpu_others_pm);
+    cpu_prev = cur;
+}
+
+/* The page was closed, so nothing sampled the gap: start the graph afresh
+ * rather than draw one point averaged over however long that was. */
+static void cpu_restart(void) {
+    cpu_hist_clear(&cpu_hist);
+    cpu_others_pm = cpu_self_pm = -1;
+    cpu_snap(&cpu_prev);
+}
 
 static void monitor_sample(void) {
     read_uptime(sample.uptime, sizeof(sample.uptime));
@@ -151,11 +206,13 @@ static void monitor_sample(void) {
 static void monitor_page_load(const Config *cfg) {
     (void)cfg;
     monitor_sample();
+    cpu_restart();
     sampled_ms = get_time_ms();
 }
 
 static void monitor_page_enter(void) {
     monitor_sample();
+    cpu_restart();
     sampled_ms = get_time_ms();
 }
 
@@ -167,27 +224,25 @@ static void monitor_page_enter(void) {
 #define MON_BAR_H      16
 #define MON_METER_GAP  10
 #define MON_LOAD_LABEL "LOAD AVG:"   /* the wider label: values align after it */
+#define MON_GRAPH_MIN_H 24  /* below this a CPU graph is a smear */
+#define MON_GRAPH_MAX_H 96  /* past this it only takes room from nothing */
+#define MON_SIDE_MIN_W 240  /* graph beside UPTIME/LOAD only if this wide */
+#define MON_FIT_SLACK   4   /* left under the last bar when growing the graph */
 
 static int  uptime_y, load_y, value_x;
 static int  sec_mem_y, ram_y, swap_y, sec_disk_y;
 static int  disk_y[NUM_MOUNT_POINTS];
 static int  bar_x, bar_w;
+static int  cpu_x, cpu_label_y, graph_y, graph_w, graph_h;
+static bool cpu_beside;
 
 /* A meter is `lines` scale-1 text lines, then its bar; returns the y after it. */
 static int meter_bottom(int y, int lines) {
     return y + lines * MON_LINE_H + MON_BAR_H;
 }
 
-/* Re-run whenever the logical screen changes (rebuild_ui()).  One column in
- * both orientations: every row is one line of text or one bar, so the stack is
- * only as wide as its longest line, and landscape's shorter CONTENT_H is the
- * constraint the receipt below checks. */
-static void monitor_page_layout(void) {
-    int y = CONTENT_Y + 6;
-    value_x  = CONTENT_LEFT + 10 + text_measure_width(MON_LOAD_LABEL, 2) + 12;
-    uptime_y = y;                 y += MON_ROW_H;
-    load_y   = y;                 y += MON_ROW_H + 6;
-
+/* MEMORY and STORAGE from y down; returns the y under the last storage bar. */
+static int place_meters(int y) {
     sec_mem_y = y;                y += MON_HEADER_H;
     ram_y     = y;                y = meter_bottom(y, 2) + MON_METER_GAP;
     swap_y    = y;                y = meter_bottom(y, 1) + MON_METER_GAP;
@@ -198,9 +253,65 @@ static void monitor_page_layout(void) {
         y = meter_bottom(y, 1);
         if (i < NUM_MOUNT_POINTS - 1) y += MON_METER_GAP;
     }
+    return y;
+}
 
+/* UPTIME, LOAD and the CPU graph, with the graph grown by `grow` px past its
+ * minimum; then the meters.  Returns the stack's bottom y.  The graph goes
+ * BESIDE the two scale-2 rows when the room right of their widest value is at
+ * least MON_SIDE_MIN_W (landscape), else UNDER them, full width (portrait). */
+static int place_stack(int grow) {
+    int y = CONTENT_Y + 6;
+    uptime_y = y;
+    load_y   = y + MON_ROW_H;
+    if (cpu_beside) {
+        /* The rows' block is as tall as the graph and its label need. */
+        int block = 2 * MON_ROW_H + grow;
+        cpu_label_y = uptime_y;
+        graph_y = cpu_label_y + MON_LINE_H + 2;
+        graph_h = block - (MON_LINE_H + 2);
+        y += block + 6;
+    } else {
+        y += 2 * MON_ROW_H + 6;
+        cpu_label_y = y;
+        graph_y = y + MON_LINE_H + 2;
+        graph_h = MON_GRAPH_MIN_H + grow;
+        y = graph_y + graph_h + MON_METER_GAP;
+    }
+    return place_meters(y);
+}
+
+/* Re-run whenever the logical screen changes (rebuild_ui()).  One column of
+ * meters in both orientations: every row is one line of text or one bar, so
+ * the stack is only as wide as its longest line, and landscape's shorter
+ * CONTENT_H is the constraint the receipt below checks.  The CPU graph takes
+ * whatever height is left, between MON_GRAPH_MIN_H and MON_GRAPH_MAX_H. */
+static void monitor_page_layout(void) {
+    value_x  = CONTENT_LEFT + 10 + text_measure_width(MON_LOAD_LABEL, 2) + 12;
     bar_x = CONTENT_LEFT + 10;
     bar_w = CONTENT_WIDTH - 20;
+
+    /* Where the scale-2 values end: their worst cases, as the receipt uses. */
+    char wv[64];
+    format_uptime(999 * 86400 + 23 * 3600 + 59 * 60 + 59, wv, sizeof(wv));
+    int values_right = value_x + text_measure_width(wv, 2);
+    int w2 = value_x + text_measure_width("99.99 99.99 99.99", 2);
+    if (w2 > values_right) values_right = w2;
+    int side_x = values_right + 20;
+    cpu_beside = (bar_x + bar_w) - side_x >= MON_SIDE_MIN_W;
+    cpu_x   = cpu_beside ? side_x : bar_x;
+    graph_w = (bar_x + bar_w) - cpu_x;
+
+    /* Two passes: the minimum graph, then grow it into the spare height.  In
+     * the beside case the minimum is what the two rows already give it. */
+    int min_grow = 0;
+    int bottom   = place_stack(min_grow) - CONTENT_Y;
+    int max_grow = cpu_beside ? MON_GRAPH_MAX_H - (2 * MON_ROW_H - MON_LINE_H - 2)
+                              : MON_GRAPH_MAX_H - MON_GRAPH_MIN_H;
+    int grow = CONTENT_H - MON_FIT_SLACK - bottom;
+    if (grow > max_grow) grow = max_grow;
+    if (grow < 0) grow = 0;
+    int y = place_stack(grow);
 
     /* ⚠️ THE RECEIPT, in the settings stack's shape.  Everything here hangs off
      * CONTENT_Y, which comes from a per-unit touch inset, so a row pushed past
@@ -231,12 +342,17 @@ static void monitor_page_layout(void) {
             w = bar_x + text_measure_width(s, 1);
             if (w > right) right = w;
         }
+        fmt_cpu(1000, 1000, s, sizeof(s));
+        w = cpu_x + text_measure_width(s, 1);
+        if (w > right) right = w;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
+                            : graph_h < MON_GRAPH_MIN_H ? "⚠ CPU GRAPH TOO SHORT"
                             : "fits";
         printf("control_panel: monitor stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d (safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, cpu graph %dx%d %s (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
+               graph_w, graph_h, cpu_beside ? "beside" : "under",
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -249,12 +365,43 @@ static void draw_row(Framebuffer *fb, int y, const char *label, const char *valu
     fb_draw_text(fb, value_x, y, value, COLOR_WHITE, 2);
 }
 
+/* The CPU history: one column per held sample, newest at the right edge, so
+ * a fresh page fills from the right.  Coloured by level like a usage bar, with
+ * a dim rule at 50 %.  Reads nothing — the samples are cpu_sample()'s. */
+static void draw_cpu_graph(Framebuffer *fb) {
+    char s[96];
+    fmt_cpu(cpu_others_pm, cpu_self_pm, s, sizeof(s));
+    fb_draw_text(fb, cpu_x, cpu_label_y, s, COLOR_WHITE, 1);
+
+    fb_fill_rect(fb, cpu_x, graph_y, graph_w, graph_h, RGB(8, 8, 14));
+    fb_draw_rect(fb, cpu_x, graph_y, graph_w, graph_h, RGB(70, 70, 90));
+    int ix = cpu_x + 1, iy = graph_y + 1, iw = graph_w - 2, ih = graph_h - 2;
+    if (iw <= 0 || ih <= 0) return;
+    fb_fill_rect(fb, ix, iy + ih / 2, iw, 1, RGB(45, 45, 60));
+
+    int first = CPU_HIST_N - cpu_hist.count;   /* slot of the oldest sample */
+    for (int i = 0; i < cpu_hist.count; i++) {
+        int pm   = cpu_hist_get(&cpu_hist, i);
+        int slot = first + i;
+        int x0 = ix + slot * iw / CPU_HIST_N;
+        int x1 = ix + (slot + 1) * iw / CPU_HIST_N;
+        int h  = pm * ih / 1000;
+        if (pm > 0 && h == 0) h = 1;           /* a non-zero sample stays visible */
+        if (h <= 0 || x1 <= x0) continue;
+        uint32_t c = pm >= 800 ? RGB(210, 70, 60)
+                   : pm >= 500 ? RGB(220, 170, 40)
+                   :             RGB(60, 180, 90);
+        fb_fill_rect(fb, x0, iy + ih - h, x1 - x0, h, c);
+    }
+}
+
 static void monitor_page_draw(Framebuffer *fb) {
     const MemInfo *mi = &sample.mem;
     char s[160];
 
     draw_row(fb, uptime_y, "UPTIME:", sample.uptime);
     draw_row(fb, load_y, MON_LOAD_LABEL, sample.load);
+    draw_cpu_graph(fb);
 
     draw_section_header(fb, sec_mem_y, "MEMORY");
     unsigned long used = mi->total_kb - mi->free_kb - mi->buffers_kb - mi->cached_kb;
@@ -293,12 +440,14 @@ static void monitor_page_draw(Framebuffer *fb) {
     }
 }
 
-/* No widgets: the only thing that changes the screen is the clock. */
+/* No widgets: the only thing that changes the screen is the clock.  The CPU
+ * point is taken on the same tick, so the graph costs no repaint of its own. */
 static CpPageResult monitor_page_input(Config *cfg, int tx, int ty,
                                        bool touching, uint32_t now) {
     (void)cfg; (void)tx; (void)ty; (void)touching;
     if (now - sampled_ms < MON_REFRESH_MS) return CP_PAGE_IDLE;
     monitor_sample();
+    cpu_sample();
     sampled_ms = now;
     return CP_PAGE_REDRAW;
 }
