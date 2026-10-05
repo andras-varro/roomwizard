@@ -15,7 +15,7 @@ and looking at the panel — framebuffer screenshots via `fb565_to_png.py`.
 
 **Kernel policy: we build our own 4.14.52 image; a mainline 5.x/6.x port stays out.** It builds from the
 device's own config (asking Steelcase for source is ruled out and unnecessary) with `kernel/build-image.sh`,
-which applies `kernel/patches/` and `kernel/dts/`. ⚠️ Still **no touchscreen** — `SYSTEM_ANALYSIS.md#7-kernel-policy`.
+which applies `kernel/patches/` and `kernel/dts/`. Touch works as a loadable `.ko` (`kernel/drivers/cy8ctmg120_ts`, measured on `.188`), not built in — `kernel/README.md`, "What we patch" table, Touch row.
 
 ### One fact, one home
 

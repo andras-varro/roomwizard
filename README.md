@@ -249,7 +249,7 @@ See **[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)** for the current backlog. High
 
 - Known bugs are catalogued there with `file:line` references.
 - **We build our own 4.14.52 image; a mainline port stays out of scope** — built from the vanilla tree
-  as it stands the image boots with a dead touchscreen, and a mainline port would additionally break the
+  as it stands the image has no built-in touch driver (it ships as a loadable `.ko`; `kernel/README.md`), and a mainline port would additionally break the
   runtime bpp switching ScummVM and the VNC client depend on. See [Kernel policy](SYSTEM_ANALYSIS.md#7-kernel-policy).
 
 ## A note on secrets

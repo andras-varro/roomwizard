@@ -408,33 +408,11 @@ remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-dep
 rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
 readings and the log is still written, and no `touch_trace` remains in the tree.
 
-### F121. Disable `CONFIG_BT_HS` in the Bluetooth module build — open, hardening, security audit 2026-10-04
-
-**BleedingTooth** (CVE-2020-12351 A2MP type confusion, RCE, adjacent, needs only the BD_ADDR and no pairing;
-CVE-2020-12352 info leak) reaches us through A2MP. Measured: our `.config` has `BT_HS=y` and `l2cap_core.c:6819`
-creates the A2MP channel unconditionally. Fixed upstream in 4.14.202 [inferred, from memory; web search was
-blocked]. A2MP/High Speed is not used by HID pads or A2DP audio [inferred]. **Action:** `BT_HS=n` in
-`build-bt-modules.sh`, rebuild the modules, then **verify the 8BitDo, the BT keyboard and the headset** still pair
-and play. **Done when** `l2cap_core` no longer references A2MP in the built module.
-
-### F122. Backport the open BT L2CAP/HIDP fixes as `patches-modules/` — open, hardening, security audit 2026-10-04
-
-CVE-2018-9363 (`hidp_process_report` takes a signed length — measured still signed; a one-line fix), the KNOB
-CVE-2019-9506 minimum encryption key size (measured absent), CVE-2022-42895 (L2CAP configuration response leak —
-likely present). Fix versions are from memory [inferred]. **Done when** each patch applies to our tree and the
-modules still load (`build-bt-modules.sh` compares the relinked `vmlinux` CRCs).
-
 ### F123. BlueZ 5.66 HID injection (CVE-2023-45866) — open, hardening, security audit 2026-10-04
 
 Fixed in BlueZ 5.71 [inferred]. Measured on `.188`: `Pairable yes` and `AlwaysPairable=true`. **Action:**
 `ClassicBondedOnly=true` in `input.conf` and reconsider `AlwaysPairable=true`. ⚠️ **This may change the operator's
 pad pairing flow**; test the 8BitDo and the BT keyboard before shipping.
-
-### F124. sshd hardening — open, hardening, operator decision, security audit 2026-10-04
-
-Measured: `PermitRootLogin yes`, `PasswordAuthentication yes`, OpenSSH 8.3p1 — not affected by regreSSHion, affected
-by Terrapin (CVE-2023-48795). **Action:** drop `chacha20-poly1305` and the `-etm` MACs. Key-only root login would
-change the operator's login workflow, so it is the operator's call.
 
 ### F125. TCP: SACK Panic and SegmentSmack — open, hardening, security audit 2026-10-04
 
@@ -458,8 +436,27 @@ local code runs; eBPF (`BPF_SYSCALL`, JIT `=y`) is the only gadget path and ever
 
 Still 4.14, so inside the kernel policy; it would bring every fix above. Cost: `kernel/patches/` (9 patches, 326
 lines [measured]; 5 touch musb, which stable changed heavily), a vermagic change for every out-of-tree `.ko` and
-the scripts that hard-code `4.14.52`, and re-measuring the `.52` USB, DMA and touch findings. Cherry-picking F121
-and F125 is cheaper now.
+the scripts that hard-code `4.14.52`, and re-measuring the `.52` USB, DMA and touch findings. Cherry-picking the F125 patches
+is cheaper now.
+
+### F129. Control panel settings page: SSH mode, date/time and similar system settings — open, operator request 2026-10-05
+
+A page in `native_apps/control_panel.c` for system settings that today need SSH or a provisioning run: **SSH mode**
+(password / key-only — what `commissioning/provision.sh --sshd-only --ssh-auth=password|key` applies), date/time, and
+the like. ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login is proven first
+(`commissioning/CLAUDE.md`), and there is no serial console, so a panel toggle must not lock the operator out — a
+panel button cannot prove a key exists, so decide what the page may do (show the mode, or switch only back to
+password). Per the operator's settings rule, new settings belong in the settings app. **Done when** the page shows
+the current SSH mode and date/time and a change survives a reboot.
+
+### F130. Reconnect the Bluetooth headset (and optionally pads) after a panel reboot — open, feature, operator observation 2026-10-05
+
+Measured by the operator on `.188`: a pad reconnects by itself after the pad is power-cycled, but **nothing
+reconnects after a panel reboot**. Judged expected for HID, where the pad initiates the connection [inferred]; for
+the headset (A2DP) the panel must initiate. Unknown whether it worked before the BT module rebuild (commit
+`59111a1`). **Action:** find what the headset does after boot (`bluetoothctl info`, the `bluetooth` init script,
+`/tmp/mix.log`), then have the boot script connect paired audio devices; pads only if a pad also fails to
+reconnect after a boot with the pad already on. **Done when** the headset plays after a panel reboot with no tap.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 

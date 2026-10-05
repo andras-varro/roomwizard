@@ -879,6 +879,9 @@ group_c() {
 # gains the reduced-surface conversion rules (surface:panel ratio, bezel scaling, touch needing no divide, the
 # unconverted literals). The narrative, instrument-repair history and operator transcripts were deleted, not moved;
 # the plan entry fell by over 300 lines but a ceiling is a budget, so it was not lowered.
+## 2026-10-05: kernel/README.md 139 -> 145, raised in the commit that gave the closed Bluetooth hardening (BT_HS off and
+# the three module backports, with the operator's pad-reconnect result) its home in the Bluetooth modules section; the
+# plan entries for it were deleted, so the facts exist only there. The plan ceiling was not lowered, for the reason above.
 ## 2026-10-04: kernel/README.md 124 -> 139, raised in the commit that gave the software power-off test (patch-table row
 # plus the staged-image procedure) and the Spectre finding their homes there, replaced the stale p1 rollback-image list
 # and reflowed the vendor-kernel paragraph (-2). Receipt row `17243454` (the `.mod` rollback image) was deleted with
@@ -933,7 +936,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-139	kernel/README.md
+145	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }
