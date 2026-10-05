@@ -1055,8 +1055,10 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
 never runs. One symlink enables it (`commissioning/provision.sh` now adds `S30avahi-daemon`), after which the
 unit answers to `<name>.local` and neither SSH nor the deploy scripts need a DHCP-lease hunt. Its
 `Required-Start` is `$remote_fs dbus`, and dbus is one of the few dynamic consumers the deep clean
-deliberately keeps, so the dependency holds even on a fully cleaned device. `enable-wide-area=yes`
-and `publish-workstation=no` are the shipped defaults and neither affects `.local` name resolution.
+deliberately keeps, so the dependency holds even on a fully cleaned device. The shipped `enable-wide-area=yes` and
+`publish-workstation=no` do not affect `.local` resolution. **Listeners:** the vendor image had UDP 514 (syslogd, no
+arguments), UDP 5353 plus a random avahi port, TCP 22, UDP 68; `SYSLOGD="-s -s"` in `/etc/default/syslogd` and avahi
+`use-ipv6=no`, `allow-interfaces=eth0`, `enable-wide-area=no`, `enable-reflector=no` leave UDP 68, 5353 and TCP 22 only [measured, `.188`].
 ⚠️ This is only useful **after** each unit gets a unique name: with the stock image every unit is
 `RW09`, and avahi resolves the collision by renaming to `RW09-2.local`, `RW09-3.local` and so on.
 **Cost measured on RW09 2026-08-03 — cheap:** ~3.9 MB RSS total (2424 kB `avahi-daemon` + a 1512 kB
@@ -1274,7 +1276,7 @@ BlueZ 5.66 leaves the new adapter `Powered: no`. We ship `AutoEnable=true` ([`de
 
 ⚠️ **`plug:bluealsa` with no `DEV` opens the most recently connected sink; with none connected the open fails `-19` ENODEV** (measured 2026-10-01, `.188`). Its `hw_params` ranges are period 480..262144 and buffer 960..206158430 frames, so **a client that leaves the buffer at max gets a ~5 s first period and silence** — set both; the A2DP SBC grant was S16_LE stereo 48000 Hz. A2DP adds ~150-250 ms latency [inferred]; the Sony WI-C310 reported 180 ms (measured, same unit). BlueALSA starts at boot from `/etc/init.d/bluetooth` as `bluealsa -S -p a2dp-source -p hfp-ag` after `bluetoothd`, with the D-Bus address above exported. **`DEV=<addr>` of an absent sink fails at once** (`ENODEV` "PCM not found", 60 ms, measured 2026-10-02, `.188`).
 
-⚠️ **BlueZ 5.66 clears the kernel bondable flag while no agent is registered, unless `main.conf` `[General]` has `AlwaysPairable=true`** (`src/adapter.c` `adapter_set_io_capability`; measured 2026-10-01, `.188`): without it `bluetoothctl pair` gave `Paired: yes` / `Bonded: no`, stored no LinkKey, and the headset fell into pairing mode at each power-on. We ship it in `device-files/bluetooth-main.conf`. **BlueZ 5.66 does not expand `%h` in `Name=`** (measured `.188`: the adapter advertised a literal `%h`), so `device-files/bluetooth` starts `bluetoothd -f` on a tmpfs copy of `main.conf` with `Name=$(hostname)`. **A bonded headset (Sony WI-C310) powered on pages back only a host that offers Handsfree Audio Gateway** (measured, same unit, n=1 device): with A2DP alone `btmon` showed no Connect Request; with `-p hfp-ag` it connected within seconds, as it does to a phone. HFP needs `rfcomm.ko` (`BT_RFCOMM`, built by `kernel/build-bt-modules.sh`). ⚠️ **`btmon -w` read with `btmon -r` while still running can lack the newest events** (not yet flushed): a reconnect looked absent and was there a minute later. `btmon` ships at `/usr/bin/btmon`.
+⚠️ **BlueZ 5.66 clears the kernel bondable flag while no agent is registered, unless `main.conf` `[General]` has `AlwaysPairable=true`** (`src/adapter.c` `adapter_set_io_capability`; measured 2026-10-01, `.188`): without it `bluetoothctl pair` gave `Paired: yes` / `Bonded: no`, stored no LinkKey, and the headset fell into pairing mode at each power-on. We ship it in `device-files/bluetooth-main.conf`, and it must stay: `device-files/bluetooth-input.conf` sets `ClassicBondedOnly=true` (BlueZ 5.66 reads it, measured from source; 5.71 only flipped the default), which rejects an unbonded pad. **BlueZ 5.66 does not expand `%h` in `Name=`** (measured `.188`: the adapter advertised a literal `%h`), so `device-files/bluetooth` starts `bluetoothd -f` on a tmpfs copy of `main.conf` with `Name=$(hostname)`. **A bonded headset (Sony WI-C310) powered on pages back only a host that offers Handsfree Audio Gateway** (measured, same unit, n=1 device): with A2DP alone `btmon` showed no Connect Request; with `-p hfp-ag` it connected within seconds, as it does to a phone. HFP needs `rfcomm.ko` (`BT_RFCOMM`, built by `kernel/build-bt-modules.sh`). ⚠️ **`btmon -w` read with `btmon -r` while still running can lack the newest events** (not yet flushed): a reconnect looked absent and was there a minute later. `btmon` ships at `/usr/bin/btmon`.
 
 **After pairing an audio device, if `bluetoothctl info` lists only the PnP UUID, `disconnect` then `connect`.** The first pairing of a Sony WI-C310 left SDP incomplete, so `connect` failed `br-connection-profile-unavailable`; the reconnect re-ran SDP (Audio Sink, Headset, Handsfree, AVRCP) and A2DP connected (measured 2026-10-01, `.188`, n=1 device).
 
@@ -1956,11 +1958,9 @@ vendor service names. `device-files/clean-rules.conf` is that whitelist, transcr
 
 ⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** Why they are unreachable by
 construction rather than merely unvisited: `device-files/CLAUDE.md`.
-
-**`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` (three
-entries) and `/etc/init.d/avahi-daemon` are all present — mDNS is enabled by a link `commissioning/provision.sh`
-adds, and all four paths are `keep` entries in `clean-rules.conf` so that no clean can delete what
-setup enables.
+**`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` and
+`/etc/init.d/avahi-daemon` are present — `commissioning/provision.sh` adds the link, and all four paths are `keep`
+entries in `clean-rules.conf` so that no clean can delete what setup enables.
 
 ⚠️ **`/var/log` is a symlink to `/home/root/log`, i.e. p3, and `syslogd` holds three files there
 open.** Measured from `/proc/<pid>/fd` on a unit in service, 2026-08-05: `messages` (its target per

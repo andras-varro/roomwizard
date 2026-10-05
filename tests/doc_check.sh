@@ -916,6 +916,10 @@ group_c() {
 # content with no stale text to cut; its device-side facts went into the existing 8BitDo paragraph of SYSTEM_ANALYSIS.md.
 # 2026-10-02: native_apps/CLAUDE.md 771 -> 775. The audio_bt_addr pin (PCM string, absent-pin fallback, why not plug:...DEV=) is new
 # content with no stale text to cut; the plan shed the follow-up that asked for it.
+# 2026-10-05: native_apps/CLAUDE.md 775 -> 780 and kernel/README.md 145 -> 160. The rule that every level-tracking evdev reader
+# handles SYN_DROPPED is new content with no stale text to cut; kernel/README.md gained the measured ACTLR value (replacing the
+# "unmeasured" sentence), the module-set rebuild rule after an image patch change (MODVERSIONS), and a refreshed p1 inventory.
+# The plan shed five closed entries and its ceiling was not lowered, for the reason above.
 #
 #
 #
@@ -928,7 +932,7 @@ ceilings() {
 224	HARDWARE.md
 215	README.md
 342	CLAUDE.md
-775	native_apps/CLAUDE.md
+780	native_apps/CLAUDE.md
 232	lib/CLAUDE.md
 120	commissioning/CLAUDE.md
 106	device-files/CLAUDE.md
@@ -936,7 +940,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-145	kernel/README.md
+160	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }

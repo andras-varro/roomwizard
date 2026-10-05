@@ -15,7 +15,7 @@ directory are in [`CLAUDE.md`](CLAUDE.md).
 | `dts/*.sh` | scripts that edit the vendor DTB `usb_host/original.dtb` in place with `fdtput`, run as `bash <script> <dtb>` |
 | `drivers/cy8ctmg120_ts/` | out-of-tree touch driver (`.c` + `Kbuild`), GPL-2.0-only, adapted from vanilla `cy8ctmg110_ts.c`; binds the unchanged `panjit_ts` DT node and names its input device `panjit_ts` |
 | `build-modules.sh` | builds every `drivers/*/` with a `Kbuild` via `M=` against the tree `build-image.sh` left in WSL `$HOME`; `--out <dir>` receives the `.ko`, which loads only on our image |
-| `build-bt-modules.sh` | builds the 17 Bluetooth modules (`BT=m` and dependencies) from a copy of the image's tree, so no p1 write; `kernel/patches-modules/*.patch` are applied here only and `build-image.sh` never reads them |
+| `build-bt-modules.sh` | builds the 18 Bluetooth modules (`BT=m` and dependencies) from a copy of the image's tree, so no p1 write; `kernel/patches-modules/*.patch` are applied here only and `build-image.sh` never reads them |
 | `tools/i2c_touch_read.c` | userspace burst reader for the touch controller over `/dev/i2c-N`; it never writes to the part |
 
 ## Building an image
@@ -58,10 +58,10 @@ The permission classifier refuses an agent's write there, so the operator takes 
 copying the backup back, by SSH if the image answers or with a card reader if it does not. `build-image.sh`
 itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay untouched.
 
-`.188`'s p1 holds, **measured 2026-10-04**, the boot files, `uImage-bootstrap`, `uImage-system.vendor`, `.b40`
-(`f3b446c6…`, before the two flush/set_vbus patches), `.f103undo` (`24ab7f08…`, the flush-patch image, one step
-before the running one) and `uImage-system`, our image with every `kernel/patches/` patch, our panel DTB and the
-power node below (`fb4f2c94…`). p1 is 54% used; an image is ~5.2 MB, so delete a stale one before the next.
+`.188`'s p1 holds, **measured 2026-10-05**, the boot files, `uImage-bootstrap`, `uImage-system.vendor`, `.f103undo`
+(`24ab7f08…`, the flush-patch image), `.f125undo` (`fb4f2c94…`, the image before the TCP patches) and `uImage-system`,
+our image with every `kernel/patches/` patch, our panel DTB and the power node below (`022be99b…`). p1 is 54% used;
+an image is ~5.2 MB, so delete a stale one before the next.
 
 **Software power-off (`dts/twl4030-poweroff.sh`): booted on `.188`, powers the board down — measured 2026-10-04.**
 `/sys/bus/platform/drivers/twl4030_power/` holds `48070000.i2c:twl@48:power` after boot, and `poweroff` darkened
@@ -73,9 +73,9 @@ down over 3.5 min with no watchdog reboot, because `twl4030-power.c` installs `p
 
 ## Bluetooth modules
 
-`build-bt-modules.sh` makes 17 modules with `BT=m`: `bluetooth`, `btusb`, `btrtl`, `hidp`, `uhid`, `uinput`,
+`build-bt-modules.sh` makes 18 modules with `BT=m`: `bluetooth`, `btusb`, `btrtl`, `btbcm`, `btintel`, `rfcomm`, `hidp`, `uhid`, `uinput`,
 `ecdh_generic`, `af_alg`, `algif_hash`, `algif_skcipher` and the crypto set `cmac`, `ecb`, `sha256_generic`,
-`hmac`, `drbg`. **Measured:** the relinked `vmlinux` is byte-identical to the image's and all 762 imported
+`hmac`, `drbg`. **Measured:** the relinked `vmlinux` is byte-identical to the image's and all 836 imported
 CRCs match; on `.188` all load by `insmod`. `jitterentropy_rng` is not collected: `insmod` refuses it there
 (`host not compliant with requirements: 2`) and `drbg` loads without it. Loadable because `CONFIG_MODULES=y`,
 `CONFIG_MODULE_FORCE_LOAD=y` and `CONFIG_MODULE_SIG` is unset. `load-order.txt` puts the crypto modules first,
@@ -138,7 +138,13 @@ The SoC core is a Cortex-A8 r1p7 (measured), affected by Spectre v1 and v2 only 
 no `harden_branch_predictor` or `cpu_v7_ca8_ibe`, and `vendor-Image` has no "spectre" string (measured). ⚠️ **The
 flush does nothing unless `ACTLR.IBE` is set.** The kernel's IBE write (`__ca8_errata`) is compiled out under
 `ARCH_MULTIPLATFORM`; on a GP OMAP3 `ACTLR` is writable through the ROM SMC (`r12=3`, as `sleep34xx.S:471-473`
-does); whether the vendor U-Boot sets it is unmeasured. The ARM32 v1/v2 series reached 4.14.77 upstream (inferred).
+does). **`ACTLR` is `0x000000e2` on `.188` under our image** — IBE, L1NEON, DBSM, L2EN — read with
+`drivers/ca8_ibe` [measured, one boot on one unit], so the flush is effective; the bootloader sets it (reset value is
+`0x2`, `0xE0` is U-Boot's `omap3_setup_aux_cr` [inferred]). It survives idle (C-state 5 +354 entries in 65 s, `ACTLR`
+unchanged) and the OFF states C4/C6/C7 were never entered [measured]. The GP ROM call is `r12=3`, `r0=value`,
+`smc #0`; its write path is untested on hardware, so `ca8_ibe` stays an instrument, loaded by hand and not at boot
+(`build-modules.sh --deploy` copies it to `extra/`, where nothing loads it). The ARM32 v1/v2 series reached 4.14.77
+upstream (inferred).
 
 ## Reading the vendor kernel
 
@@ -168,3 +174,12 @@ bit**: `chmod +x` on the device, or the run dies with *Permission denied* into a
 empty result. ⚠️ **Stop whatever owns the screen before an `--evdev` witness**: `app_launcher` may hold an
 `EVIOCGRAB` on the touch node, and a grabbed device silences the witness exactly like a finger that never landed.
 Building the drivers, after `build-image.sh`: `wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && kernel/build-modules.sh --out /mnt/c/work/rw-scratch/ko [--deploy <ip>]"`.
+
+⚠️ **Any change to an image patch means rebuilding both module sets.** `MODVERSIONS=y`, and the TCP patches change
+`struct netns_ipv4`, so exported CRCs move: the touch `.ko` and the Bluetooth set refused to load (`disagrees about
+version of symbol`) until rebuilt against the same tree [measured, `.188`]. `build-modules.sh` and
+`build-bt-modules.sh` take `--image <build-image --work dir>`; the default `~/rw-kbuild-image` was rebuilt with all
+patches and its `Module.symvers` is identical to the booted image's [measured]. The `usb_host` modules (xpad,
+snd-usb-audio, …) carry no `__versions` at all, so they load regardless and nothing checks their ABI [measured].
+⚠️ `bluetooth/build-and-deploy.sh` rebuilds modules only when a recipe or patch is newer than `load-order.txt`, so a
+new image does not trigger one, and it checks `~/rw-kbuild-image` (~line 168) [inferred from source].

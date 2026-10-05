@@ -156,22 +156,27 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
-### B54. Plugging in a USB controller disconnects a connected Bluetooth pad — open, seen three times, cause unknown
+### B54. Plugging in a wired USB controller drops the whole USB hub, and every Bluetooth link with it — open, cause found, hardware fix
 
-Observed by the operator three times (latest reproduced on `.188`, 2026-10-04): with a Bluetooth pad connected, plugging a USB
-controller in drops the Bluetooth pad (**measured:** only the pad; the BT headset WI-C310 stays connected), and it stays disconnected until Connect is tapped again on the Control Panel
-Bluetooth page. Not investigated; B51 and B52 are different triggers (a stream freeze, a bluetoothd restart). **Done
-when** the cause is found: first look at whether the USB hotplug path (`usb-host`, input rescan) touches the BT link.
+**Measured from `/var/log/messages` on Oct 3 and twice on Oct 4 (`.188`):** plugging the wired Xbox 360 pad makes the
+external hub `1-1` (Terminus FE1.1s `1a40:0101`) drop off the musb root port and re-enumerate. The BT dongle `1-1.1`
+(ASUS `0b05:1bf6`, RTL8761) sits on it, so `hci0` reloads firmware and all BT links drop. The headset also drops but
+reconnects by itself about 25 s later (AVRCP input re-created); the 8BitDo does not. Negative control: plugging a
+low-power Compx 2.4G receiver did not drop the hub. Userspace is ruled out (`hidp_open`/`hidp_close` are empty).
+**Inferred:** a VBUS sag on inrush, which musb logs only at `KERN_DEBUG` (`musb_core.c:674-716`,
+`VBUSERR_RETRY_COUNT=3`); a hub brownout is not ruled out. **Fix:** hardware, a powered hub. Software mitigation:
+reconnect bonded HID devices when `hci0` comes back (F130). **Done when** `dmesg` after the plug shows whether
+`VBUS_ERROR` fires, and a repeat with a powered hub keeps the pad. **Operator question:** does the current hub have its
+own supply?
 
-### B53. A mouse button release lost to an evdev overflow reads as held — open, inferred mechanism, not reproduced
+### B55. Keyboard, pad and multitouch readers still ignore an evdev overflow — open, partial fix shipped
 
-`common/gamepad.c` handles no `SYN_DROPPED`: the mouse read loop (`:832-853`) takes `EV_REL` and `EV_KEY` and
-ignores every other event, and no `SYN_DROPPED`/`EVIOCGKEY` re-read exists after the open-time seed
-(`seed_mouse_buttons`, `:295`). **Inferred:** if the kernel's evdev buffer overflows while an app is not reading the
-mouse (the 60 s screen-edges wizard is one), a button release is lost and `mouse_btn[]` stays down until the next
-click, which the pointer then routes as a held touch. **Fix:** on `SYN_DROPPED`, discard events to the next
-`SYN_REPORT` and re-read the level with `EVIOCGKEY`, as the seed does. **Done when** a test that overflows the
-buffer across a release leaves the button up.
+`SYN_DROPPED` is handled by `common/input_scan.h` `input_syn_drop_skip()` in `gamepad.c`, `touch_input.c`, the
+`vnc_client` mouse and the ScummVM mouse (rule: `native_apps/CLAUDE.md` → *Input*). **Not yet:** the ScummVM keyboard
+(`roomwizard-events.cpp` ~`:652`) and pad (~`:903`) readers; the `vnc_client` keyboard (`vnc_input.c:366`, which needs
+held-key tracking to resync) and pad (`:412`); and `control_panel/input_page.c:1223`, whose multitouch diagnostic can
+show a stale slot (needs `EVIOCGMTSLOTS`). **Done when** each resyncs through `input_syn_drop_skip()` and a lost
+release leaves the key, button or slot up.
 
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
@@ -408,36 +413,23 @@ remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-dep
 rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
 readings and the log is still written, and no `touch_trace` remains in the tree.
 
-### F123. BlueZ 5.66 HID injection (CVE-2023-45866) — open, hardening, security audit 2026-10-04
+### F128. Rebase onto 4.14.336, stepwise — open, evaluated 2026-10-05, security audit 2026-10-04
 
-Fixed in BlueZ 5.71 [inferred]. Measured on `.188`: `Pairable yes` and `AlwaysPairable=true`. **Action:**
-`ClassicBondedOnly=true` in `input.conf` and reconsider `AlwaysPairable=true`. ⚠️ **This may change the operator's
-pad pairing flow**; test the 8BitDo and the BT keyboard before shipping.
-
-### F125. TCP: SACK Panic and SegmentSmack — open, hardening, security audit 2026-10-04
-
-`tcp_min_snd_mss` is absent (measured), so CVE-2019-11477/78/79 apply: four near-clean patches, 4.14.127 [inferred].
-SegmentSmack CVE-2018-5390 is 4.14.59 [inferred]; FragmentSmack CVE-2018-5391 is a large rbtree rework. Stop-gaps:
-`net.ipv4.tcp_sack=0` and lower `ipfrag_high_thresh`/`ipfrag_low_thresh`. Reach is the LAN through TCP 22, the only
-TCP listener (measured); IPv6 is off.
-
-### F126. Stop `syslogd` and avahi listening more widely than needed — open, hardening, security audit 2026-10-04
-
-Measured: `/usr/sbin/syslogd` (no arguments) binds UDP 514 on 0.0.0.0. Find whether it accepts remote messages and
-stop it listening. avahi 0.7 is on 5353: restrict `allow-interfaces`, no reflector.
-
-### F127. Measure `ACTLR.IBE` and set it if clear — open, hardening, low priority, security audit 2026-10-04
-
-Makes the BTB flush that is already built in take effect (Spectre v2; [`kernel/README.md`](kernel/README.md),
-*Spectre*): a small module reads `ACTLR`, and sets it through the ROM SMC if clear. Low priority: no untrusted
-local code runs; eBPF (`BPF_SYSCALL`, JIT `=y`) is the only gadget path and everything runs as root.
-
-### F128. Evaluate rebasing onto 4.14.336 — open, evaluation, security audit 2026-10-04
-
-Still 4.14, so inside the kernel policy; it would bring every fix above. Cost: `kernel/patches/` (9 patches, 326
-lines [measured]; 5 touch musb, which stable changed heavily), a vermagic change for every out-of-tree `.ko` and
-the scripts that hard-code `4.14.52`, and re-measuring the `.52` USB, DMA and touch findings. Cherry-picking the F125 patches
-is cheaper now.
+Still 4.14, so inside the kernel policy; it brings every stable fix, including **FragmentSmack CVE-2018-5391** (a large
+`inet_frag` rework, not patched here; the stop-gap `ipfrag_high_thresh=262144` / `ipfrag_low_thresh=196608` is not
+applied). **Measured:** all 9 of our patches dry-run clean on 4.14.336 (one offset); the 12 `tcp-*` patches are
+redundant there; 3 of the 5 `patches-modules` (KNOB, HIDP length, `remote_efs`) are in .336, the two RTL8761CU ones
+still apply (`btusb` needs fuzz 2, refresh); `CPU_SPECTRE`/`HARDEN_BRANCH_PREDICTOR` exist there and .336 prints the
+IBE state at boot. **Risks (measured diffs):** `omap2430.c` drops `.set_vbus` from `omap2430_ops` (changes the
+SESSREQ/port-power VBUS path and the IRQ branch of our set-vbus-report patch), and `musbhsdma.c` has a TX-completion
+rework (our audio DMA path). `4.14.52` is pinned in `kernel/build-image.sh:18`, `build-modules.sh:15,21`,
+`build-bt-modules.sh:17,83`, `usb_host/build-kernel-modules.sh:16`, `usb_host/build-and-deploy.sh:56`,
+`bluetooth/build-and-deploy.sh:43`, `device-files/bluetooth:29`, `touch-module:8`, `usb-audio-modules:18`,
+`xpad-modules:8-10` (use `uname -r`), `provision-rules.conf:118,128` and the `release.sh` licence text; units on the
+vendor kernel still need `.52` USB modules, so two module sets. **Steps:** generalise the module paths to `uname -r`;
+build .336 with our 9 patches and diff `dropped-symbols.txt`; boot it on `.188`; re-run the USB and audio checks;
+retire the redundant patches. **Effort [inferred]:** about 1 h for the image, 0.5-1 day for the scripts, 1-2 operator
+sessions.
 
 ### F129. Control panel settings page: SSH mode, date/time and similar system settings — open, operator request 2026-10-05
 
@@ -537,6 +529,14 @@ raw one, logging both; deployed hidden, SSH-only) belongs on the Input page besi
 the touch diagnostic: fold duplicates into one rather than adding a button per tool. And whether to take up
 the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (design requirements in
 `native_apps/CLAUDE.md` → *control_panel*).
+
+### F131. The USB deploy prints `p1 power budget: FAILED` on a unit running our own image — open, cosmetic
+
+`lib/rw-usbpower.sh` recognises only the vendor and 500 mA `uImage-system` md5s and correctly refuses anything else,
+so `usb_host/build-and-deploy.sh` (`:480`) and `deploy-all.sh` report FAILED on our image. Our image has no 500 mA
+patch at all (`kernel/README.md`). **Fix:** recognise "our image" by a marker (a header name), not an md5 list, and
+print `skipped: own image`. **Done when** a deploy to a unit on our image prints that and the vendor paths still
+refuse an unknown image.
 
 ---
 

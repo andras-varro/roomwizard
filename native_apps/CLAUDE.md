@@ -548,6 +548,12 @@ translates with `input_pad_key()` at read time; `EVIOCGKEY` levels are looked up
 defaults and `/etc/input_config.conf` stay in `xpad` codes. `KEY_MENU`→`BTN_MODE` is deliberately untranslated (no
 consumer). The default `btn_action` is `BTN_WEST` (`0x134`), commented "X" but physical Y under `xpad`.
 
+⚠️ **Any evdev reader that tracks a level (button, key, axis, touch contact) must handle `SYN_DROPPED`.** When the
+kernel buffer overflows, `evdev.c` `__pass_event` drops the unread events and leaves `SYN_DROPPED` plus the newest one
+[measured from source]; a lost release then reads as held until the next click. On `SYN_DROPPED` skip to the
+end of that packet with `input_syn_drop_skip()` (`common/input_scan.h`) and re-read the level with `EVIOCGKEY`/`EVIOCGABS`.
+`gamepad.c`, `touch_input.c`, the `vnc_client` mouse and the ScummVM mouse do; `tests/evdev_resync_test.c` is the check.
+
 **All three fields are pure outputs of `gamepad_poll()`** — it recomputes them from scratch every call, so
 writing them from an app has no effect past the next poll. `held` is the OR of two kinds of source, and
 that split is what stops a virtual D-pad latching:

@@ -6,7 +6,7 @@
 # built by usb_host/build-kernel-modules.sh instead, from the unpatched tree.
 #
 # Produces: <out>/<driver>.ko, one per kernel/drivers/<driver>/, and with --deploy copies them to
-# /lib/modules/4.14.52/extra/ on the unit, where device-files/touch-module loads them at boot.
+# /lib/modules/4.14.52/extra/ on the unit; touch-module loads only the touch driver there at boot.
 
 # shellcheck disable=SC2029,SC1091  # the device paths are ours and meant to expand here; rw-ssh.sh is sourced by path
 set -euo pipefail
