@@ -24,8 +24,9 @@
 #     rtl8761cu_{fw,config}.bin + their licence           ← ../kernel/3rdparty/realtek/bluetooth
 #   verbatim device files (device-files/provision-rules.conf, group `bluetooth`):
 #     /etc/init.d/bluetooth (bluetoothd, then bluealsa), its S91 rc5.d link, the dbus
-#     policies bluetooth.conf and bluealsa.conf, 20-bluealsa.conf, and
+#     policies bluetooth.conf and bluealsa.conf, 20-bluealsa.conf,
 #     /etc/bluetooth/main.conf (AutoEnable: the dongle re-enumerates with the USB tree)
+#     and /etc/bluetooth/input.conf (ClassicBondedOnly: HID only from bonded devices)
 #
 # The device files are installed by this script AND by commissioning/provision.sh /
 # commission-offline.sh, from the same records — the way usb_host handles the `usb`
@@ -66,7 +67,7 @@ usage() {
     echo "  --bundle <dir>   Build, then stage the artifacts under <dir>/root/ with"
     echo "                   a declared-mode manifest. No device needed."
     echo ""
-    echo "  The init script, its rc5.d link, the dbus policy and main.conf are"
+    echo "  The init script, its rc5.d link, the dbus policies, main.conf and input.conf are"
     echo "  device-files/provision-rules.conf's \`bluetooth\` group: this script runs"
     echo "  that plan, and ./commissioning/provision.sh <ip> and commission-offline.sh"
     echo "  install it too, from the same records."
@@ -247,7 +248,7 @@ fi
 
 # ── 4. the `bluetooth` group of the provision plan ──────────────────────────
 # The same records and the same generated executor commissioning/provision.sh uses.
-ts "[4/6] Init script, boot link, dbus policy, main.conf (provision-rules.conf, group bluetooth)"
+ts "[4/6] Init script, boot link, dbus policies, main.conf, input.conf (provision-rules.conf, group bluetooth)"
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
 # shellcheck source=../lib/rw-clean.sh
@@ -275,7 +276,7 @@ ssh "$DEVICE" "cat > /tmp/rw-bt-plan" < "$BT_PLAN"
 rw_provision_online_script | ssh "$DEVICE" "cat > /tmp/rw-bt-provision.sh"
 ssh "$DEVICE" "sh /tmp/rw-bt-provision.sh /tmp/rw-bt-plan; rc=\$?; rm -f /tmp/rw-bt-provision.sh /tmp/rw-bt-plan; exit \$rc" \
     || err "the bluetooth provision step failed on the device"
-ok "init script, dbus policy and main.conf installed, S91bluetooth linked"
+ok "init script, dbus policies, main.conf and input.conf installed, S91bluetooth linked"
 echo ""
 
 # ── 5. the built artifacts ──────────────────────────────────────────────────

@@ -671,8 +671,19 @@ if rw_provision_plan_component "$RULES" bluetooth > "$BPLAN" 2>/dev/null; then
 else
     bad "F12b the bluetooth component plan compiles"
 fi
-assert_eq "5" "$(awk -F'\t' '$1 == "install"' "$BPLAN" | wc -l | tr -d ' ')" \
-    "F12b the bluetooth group installs the init script, two dbus policies, main.conf and 20-bluealsa.conf"
+assert_eq "6" "$(awk -F'\t' '$1 == "install"' "$BPLAN" | wc -l | tr -d ' ')" \
+    "F12b the bluetooth group installs the init script, two dbus policies, main.conf, input.conf and 20-bluealsa.conf"
+# CVE-2023-45866: BlueZ 5.66 accepts HID input from an unbonded device unless input.conf
+# says otherwise (the default flipped only in 5.71). The record and the uncommented key
+# are both needed — a commented-out key is 5.66's own shipped file, which protects nothing.
+BT_INPUT_SRC="$(awk -F'\t' '$1 == "install" && $3 == "/etc/bluetooth/input.conf" {print $4}' "$BPLAN")"
+assert_eq "device-files/bluetooth-input.conf" "$BT_INPUT_SRC" \
+    "F12b the bluetooth group installs /etc/bluetooth/input.conf from device-files/bluetooth-input.conf"
+if [[ -n "$BT_INPUT_SRC" ]] && awk '/^\[/ {s=$0} s == "[General]" && /^ClassicBondedOnly=true[[:space:]]*$/ {f=1} END {exit !f}' "$REPO_DIR/$BT_INPUT_SRC" 2>/dev/null; then
+    ok "F12b input.conf sets [General] ClassicBondedOnly=true (HID only from bonded devices)"
+else
+    bad "F12b input.conf sets [General] ClassicBondedOnly=true (HID only from bonded devices)"
+fi
 assert_eq "../init.d/bluetooth" "$(awk -F'\t' '$1 == "link" && $3 == "/etc/rc5.d/S91bluetooth" {print $4}' "$BPLAN")" \
     "F12b the bluetooth group links S91bluetooth after S90usb-host"
 

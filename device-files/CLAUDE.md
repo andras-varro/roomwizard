@@ -6,8 +6,8 @@ removes and installs. Loaded when you work in `device-files/`.
 Anything installed by more than one path lives here, never in a heredoc: `roomwizard-app` (the boot
 init script — it carries the name it is *deployed* as rather than a `.sh` one), `disable-steelcase.sh`,
 `audio-enable`, `time-sync`, `sysctl.conf`, the four USB scripts `enable-usb-host.sh` /
-`usb-host` / `xpad-modules` / `usb-audio-modules`, the three Bluetooth files `bluetooth` / `bluetooth.conf` /
-`bluetooth-main.conf`, plus `clean-rules.conf` and `provision-rules.conf`. Both
+`usb-host` / `xpad-modules` / `usb-audio-modules`, the Bluetooth files `bluetooth` / `bluetooth.conf` /
+`bluetooth-main.conf` / `bluetooth-input.conf` / `bluealsa.conf` / `20-bluealsa.conf`, plus `clean-rules.conf` and `provision-rules.conf`. Both
 `commissioning/provision.sh` (over SSH) and `commissioning/commission-offline.sh` (onto a mounted card)
 install those same bytes, and **neither decides what to install or delete — both read the rules.**
 
@@ -105,7 +105,7 @@ See `SYSTEM_ANALYSIS.md#53-app-launcher-and-manifests`.
 
 Changing a file in this directory does **not** go out with a component deploy. Only
 `./commissioning/provision.sh <ip>` (which ends in a reboot) or `commissioning/commission-offline.sh`
-installs it. The exceptions are the four **`usb`-group** scripts and the three **`bluetooth`-group** files, which
+installs it. The exceptions are the four **`usb`-group** scripts and the **`bluetooth`-group** files, which
 `cd usb_host` / `cd bluetooth` `&& ./build-and-deploy.sh <ip>` also installs, and which need no reboot.
 
 ## Regressions
