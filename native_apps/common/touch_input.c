@@ -11,6 +11,7 @@
 
 #define LOGGER_LIB_CLIENT
 #include "logger.h"
+#include "input_scan.h"   // InputSynDrop: header-only, links nothing
 
 // Default calibration file path
 #define TOUCH_CALIB_FILE "/etc/touch_calibration.conf"
@@ -303,6 +304,8 @@ void touch_close(TouchInput *touch) {
     }
 }
 
+static void touch_resync(TouchInput *touch);
+
 int touch_wait_for_press_raw(TouchInput *touch, int *raw_x, int *raw_y) {
     // Wait for a touch press event (blocking), returning RAW hardware coords.
     //
@@ -316,6 +319,7 @@ int touch_wait_for_press_raw(TouchInput *touch, int *raw_x, int *raw_y) {
     int current_x = -1, current_y = -1;
     bool got_press = false;
     int rc = -1;
+    InputSynDrop sd = { false, false };
 
     int flags = fcntl(touch->fd, F_GETFL, 0);
     fcntl(touch->fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -341,6 +345,25 @@ int touch_wait_for_press_raw(TouchInput *touch, int *raw_x, int *raw_y) {
         if (n != (ssize_t)sizeof(ev)) {
             if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
             break;                          // short read or device gone
+        }
+
+        if (input_syn_drop_skip(&sd, &ev)) {
+            // At the end of the torn packet: a lift lost in the drop would
+            // otherwise leave `touching` set and swallow the next press; a
+            // touch-down lost in it is the press being waited for.
+            if (sd.resync && !sd.dropping) {
+                sd.resync = false;
+                got_press = false;
+                touch->state.pressed = false;
+                touch_resync(touch);
+                if (touch->state.pressed) {
+                    *raw_x = touch->last_x;
+                    *raw_y = touch->last_y;
+                    rc = 0;
+                    break;
+                }
+            }
+            continue;
         }
 
         if (ev.type == EV_ABS) {
@@ -377,6 +400,36 @@ int touch_wait_for_press(TouchInput *touch, int *x, int *y) {
     return 0;
 }
 
+// After a SYN_DROPPED (input_scan.h): the finger lift — or touch-down — may
+// have been among the events the kernel discarded, so take the level and the
+// position from the kernel and synthesise whichever edge differs. A failed
+// EVIOCGKEY reads as lifted: a touch stuck down is the worse failure.
+static void touch_resync(TouchInput *touch) {
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    const int lb = (int)(8 * sizeof(unsigned long));
+    struct input_absinfo ai;
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(touch->fd, EVIOCGABS(ABS_X), &ai) == 0) touch->last_x = ai.value;
+    if (ioctl(touch->fd, EVIOCGABS(ABS_Y), &ai) == 0) touch->last_y = ai.value;
+    bool down = ioctl(touch->fd, EVIOCGKEY(sizeof(keys)), keys) >= 0 &&
+                ((keys[BTN_TOUCH / lb] >> (BTN_TOUCH % lb)) & 1UL);
+    if (down && !touch->touching) {
+        touch->touching = true;
+        touch->state.pressed = true;
+        touch->state.held = true;
+    } else if (!down && touch->touching) {
+        touch->touching = false;
+        touch->state.released = true;
+        touch->state.held = false;
+    }
+    if (touch->touching) {
+        int x = touch->last_x, y = touch->last_y;
+        scale_coordinates(touch, &x, &y);
+        touch->state.x = x;
+        touch->state.y = y;
+    }
+}
+
 int touch_poll(TouchInput *touch) {
     // Non-blocking poll. Process events in arrival order:
     //   1. ABS_X, ABS_Y → last_x/last_y (RAW)
@@ -385,12 +438,14 @@ int touch_poll(TouchInput *touch) {
 
     struct input_event ev;
     int events_read = 0;
+    InputSynDrop sd = { false, false };
 
     touch->state.pressed = false;
     touch->state.released = false;
 
     while (read(touch->fd, &ev, sizeof(ev)) == sizeof(ev)) {
         events_read++;
+        if (input_syn_drop_skip(&sd, &ev)) continue;
 
         if (ev.type == EV_ABS) {
             if (ev.code == ABS_X) touch->last_x = ev.value;
@@ -418,6 +473,8 @@ int touch_poll(TouchInput *touch) {
             }
         }
     }
+    if (sd.resync)
+        touch_resync(touch);
 
     return events_read;
 }

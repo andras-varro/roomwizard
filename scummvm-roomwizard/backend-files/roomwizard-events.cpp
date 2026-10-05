@@ -725,8 +725,10 @@ bool RoomWizardEventSource::pollMouseFd(int slot, Common::Event &event) {
 	int accumDx = 0, accumDy = 0;
 	int buttonChanges = 0;
 	int buttonState = _prevMouseButtons;
+	InputSynDrop sd = { false, false };
 
 	while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+		if (input_syn_drop_skip(&sd, &ev)) continue;
 		if (ev.type == EV_REL) {
 			if (ev.code == REL_X) accumDx += ev.value;
 			else if (ev.code == REL_Y) accumDy += ev.value;
@@ -749,6 +751,21 @@ bool RoomWizardEventSource::pollMouseFd(int slot, Common::Event &event) {
 		fd = -1;
 		_mouseNodes[slot] = -1;
 		return false;
+	}
+
+	// SYN_DROPPED (input_scan.h): a release may have been discarded with the
+	// overflow, so take the button levels from the kernel and let the loop
+	// below emit whichever edges differ.
+	unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+	if (sd.resync) {
+		memset(keys, 0, sizeof(keys));
+		int lvl = 0;
+		if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) >= 0)
+			lvl = (input_caps_test(keys, BTN_LEFT)   ? 1 : 0) |
+			      (input_caps_test(keys, BTN_RIGHT)  ? 2 : 0) |
+			      (input_caps_test(keys, BTN_MIDDLE) ? 4 : 0);
+		buttonChanges |= (buttonState ^ lvl) | (_prevMouseButtons ^ lvl);
+		buttonState = lvl;
 	}
 
 	// BUG-INPUT-004 FIX: Helper to flush accumulated mouse movement into the

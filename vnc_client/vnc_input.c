@@ -471,9 +471,11 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
     ssize_t r;
     int dx = 0, dy = 0;
     int old_mask = input->mouse_button_mask;
+    InputSynDrop sd = { false, false };
 
     errno = 0;
     while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        if (input_syn_drop_skip(&sd, &ev)) continue;
         if (ev.type == EV_REL) {
             if (ev.code == REL_X) {
                 dx += ev.value;
@@ -503,6 +505,12 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
         }
     }
     bool alive = !(r < 0 && errno == ENODEV);
+    if (alive && sd.resync) {
+        /* SYN_DROPPED: a release may have been discarded with the overflow
+         * (input_scan.h), so take the level from the kernel. */
+        input->usb_node_buttons[idx] = seed_mouse_buttons(fd);
+        input->mouse_button_mask = usb_mouse_buttons(input);
+    }
 
     /* Apply acceleration to accumulated movement */
     if (dx != 0 || dy != 0) {

@@ -244,6 +244,37 @@ void input_sig_gate_baseline(InputSigGate *g, unsigned long sig);
 /* I/O. If a check is due, take input_node_sig() and feed it. True: rescan. */
 bool input_sig_gate_poll(InputSigGate *g, uint32_t now_ms);
 
+/*
+ * SYN_DROPPED: the kernel overflowed this reader's event ring.  evdev's
+ * __pass_event() (vanilla 4.14.52) then discards EVERY unread event and leaves
+ * SYN_DROPPED plus the newest one, so a release among them is simply gone and
+ * a reader that tracks levels from events keeps reading it as held.  The
+ * kernel's own level survives: EVIOCGKEY / EVIOCGABS return it, and
+ * EVIOCGKEY also flushes the EV_KEY events still queued, so the snapshot and
+ * what is read afterwards agree.
+ *
+ * PURE. Feed every event read; true means skip it.  From SYN_DROPPED to the
+ * next SYN_REPORT is the torn packet the kernel says to discard.  `resync` is
+ * left set for the caller: after the read loop, re-read the levels with
+ * EVIOCGKEY (and EVIOCGABS for a level axis), apply what differs, clear it.
+ */
+typedef struct {
+    bool dropping;   /* inside the torn packet */
+    bool resync;     /* a drop was seen: re-read the levels after the loop */
+} InputSynDrop;
+
+static inline bool input_syn_drop_skip(InputSynDrop *s, const struct input_event *ev) {
+    if (ev->type == EV_SYN && ev->code == SYN_DROPPED) {
+        s->dropping = s->resync = true;
+        return true;
+    }
+    if (s->dropping) {
+        if (ev->type == EV_SYN && ev->code == SYN_REPORT) s->dropping = false;
+        return true;
+    }
+    return false;
+}
+
 #ifdef __cplusplus
 }
 #endif

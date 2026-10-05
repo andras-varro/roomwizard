@@ -765,15 +765,19 @@ static int pad_axis_value(const GamepadManager *gm, int p, int code, int value) 
         gm->axis_calib[p][idx].center, gm->axis_calib[p][idx].deadzone_pct);
 }
 
-static void poll_gamepad(GamepadManager *gm, int p) {
+/* True: the kernel dropped events on this pad (SYN_DROPPED), so its latched
+ * levels and axes may be stale and gamepad_poll() re-reads them. */
+static bool poll_gamepad(GamepadManager *gm, int p) {
     struct input_event ev;
     GamepadButtonMap *m = &gm->button_map;
     int b = bucket_of(gm->pad_slot[p]);
     bool *latched = gm->held_latched[b];
     int *axis = gm->bucket_axis[b];
+    InputSynDrop sd = { false, false };
 
     ssize_t r;
     while ((r = read(gm->pad_fds[p], &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        if (input_syn_drop_skip(&sd, &ev)) continue;
 
         if (ev.type == EV_ABS) {
             int code = ev.code;
@@ -815,16 +819,20 @@ static void poll_gamepad(GamepadManager *gm, int p) {
                 latched[BTN_ID_BACK] = down;
         }
     }
-    if (read_gone(r))
+    if (read_gone(r)) {
         drop_gone_fd(gm, &gm->pad_fds[p]);   /* axes zero on the next poll */
+        return false;
+    }
+    return sd.resync;
 }
 
-static void poll_gamepads(GamepadManager *gm) {
+static bool poll_gamepads(GamepadManager *gm) {
     bool open[GAMEPAD_BUCKETS] = { false };
+    bool lost = false;
     for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
         if (gm->pad_fds[p] < 0) continue;
         open[bucket_of(gm->pad_slot[p])] = true;
-        poll_gamepad(gm, p);
+        lost |= poll_gamepad(gm, p);
     }
     /* A bucket with no pad attached zeroes its axes: a stick that was
      * deflected when the controller was unplugged must not keep asserting a
@@ -832,6 +840,7 @@ static void poll_gamepads(GamepadManager *gm) {
     for (int b = 0; b < GAMEPAD_BUCKETS; b++)
         if (!open[b])
             memset(gm->bucket_axis[b], 0, sizeof(gm->bucket_axis[b]));
+    return lost;
 }
 
 /* ── Merge the left analog stick into the D-pad directions ──────────────── */
@@ -907,46 +916,61 @@ static void latch_key(bool *latched, int code, bool down) {
     }
 }
 
-static void poll_keyboard_fd(GamepadManager *gm, int *fd, bool *latched) {
+/* True: SYN_DROPPED, the latches may be stale (see poll_gamepad). */
+static bool poll_keyboard_fd(GamepadManager *gm, int *fd, bool *latched) {
     struct input_event ev;
+    InputSynDrop sd = { false, false };
     ssize_t r;
-    while ((r = read(*fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev))
+    while ((r = read(*fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        if (input_syn_drop_skip(&sd, &ev)) continue;
         if (ev.type == EV_KEY)
             latch_key(latched, ev.code, ev.value != 0);
-    if (read_gone(r))
+    }
+    if (read_gone(r)) {
         drop_gone_fd(gm, fd);
+        return false;
+    }
+    return sd.resync;
 }
 
-static void poll_keyboard(GamepadManager *gm) {
+static bool poll_keyboard(GamepadManager *gm) {
+    bool lost = false;
     for (int k = 0; k < gm->keyboard_count; k++)
         if (gm->keyboard_fds[k] >= 0)
-            poll_keyboard_fd(gm, &gm->keyboard_fds[k],
-                             gm->held_latched[bucket_of(gm->keyboard_slot[k])]);
+            lost |= poll_keyboard_fd(gm, &gm->keyboard_fds[k],
+                                     gm->held_latched[bucket_of(gm->keyboard_slot[k])]);
+    return lost;
 }
 
 /* ── Read mouse events with acceleration ────────────────────────────────── */
 /* Every mouse node feeds one cursor: relative motion is summed across nodes
  * before acceleration, and each button is the OR of its level on every node. */
-static void poll_mouse(GamepadManager *gm, InputState *state) {
+/* True: SYN_DROPPED on a node, so the latches its keys feed (a
+ * keyboard+touchpad combo) may be stale; its own buttons are re-read here,
+ * before they are ORed into this frame's held state. */
+static bool poll_mouse(GamepadManager *gm, InputState *state) {
     state->mouse_dx = state->mouse_dy = 0;
     gm->mouse_left_down_ev = false;
     if (gm->mouse_count <= 0) {
         /* No mouse (or it left): nothing can be holding a mouse button. */
         state->mouse_left_held = state->mouse_right_held = 0;
         state->mouse_middle_held = 0;
-        return;
+        return false;
     }
 
     struct input_event ev;
     int accum_dx = 0, accum_dy = 0;
     bool left_held = false, right_held = false, middle_held = false;
+    bool lost = false;
 
     for (int k = 0; k < gm->mouse_count; k++) {
         bool *btn = gm->mouse_btn[k];
         int fd = gm->mouse_fds[k];
+        InputSynDrop sd = { false, false };
 
         ssize_t r = 0;
         while (fd >= 0 && (r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+            if (input_syn_drop_skip(&sd, &ev)) continue;
             if (ev.type == EV_REL) {
                 if (ev.code == REL_X)
                     accum_dx += ev.value;
@@ -967,11 +991,17 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
                     latch_key(gm->held_latched[bucket_of(gm->mouse_slot[k])],
                               ev.code, down);   /* a keyboard+touchpad combo node */
             }
-            /* EV_SYN ignored — we batch all events in the read loop */
+            /* SYN_REPORT ignored — we batch all events in the read loop */
         }
         if (fd >= 0 && read_gone(r)) {
             drop_gone_fd(gm, &gm->mouse_fds[k]);
             btn[0] = btn[1] = btn[2] = false;   /* no release will arrive */
+        } else if (sd.resync) {
+            /* A release (or press) may have been among the dropped events:
+             * take the level from the kernel, as the open-time seed does.
+             * The edges follow from prev_mouse_* below. */
+            seed_mouse_buttons(fd, btn);
+            lost = true;
         }
         left_held   = left_held   || btn[0];
         right_held  = right_held  || btn[1];
@@ -1019,6 +1049,33 @@ static void poll_mouse(GamepadManager *gm, InputState *state) {
     /* Update cursor position in state */
     state->mouse_x = gm->mouse_x;
     state->mouse_y = gm->mouse_y;
+    return lost;
+}
+
+/* After a SYN_DROPPED on any node: rebuild every latch from the kernel's
+ * levels, as a rescan does, and re-read each pad's stick position, which is a
+ * level too.  The whole table rather than one device's share, because a
+ * bucket is shared by every device in a slot and holds no record of which of
+ * them set a level.  prev_held is kept, so a level lost in the drop comes out
+ * as a release edge.  Runs after every reader has drained its queue this
+ * poll, so the EV_KEY flush EVIOCGKEY performs discards nothing unread. */
+static void resync_levels(GamepadManager *gm) {
+    const GamepadButtonMap *m = &gm->button_map;
+    memset(gm->held_latched, 0, sizeof(gm->held_latched));
+    seed_latched_levels(gm);
+    for (int p = 0; p < GAMEPAD_MAX_PADS; p++) {
+        int fd = gm->pad_fds[p];
+        if (fd < 0) continue;
+        int *axis = gm->bucket_axis[bucket_of(gm->pad_slot[p])];
+        const int codes[4] = { m->stick_x_axis, m->stick_y_axis,
+                               m->stick_rx_axis, m->stick_ry_axis };
+        for (int i = 0; i < 4; i++) {
+            struct input_absinfo ai;
+            if (codes[i] >= 0 && codes[i] <= ABS_MAX &&
+                ioctl(fd, EVIOCGABS(codes[i]), &ai) == 0)
+                axis[i] = pad_axis_value(gm, p, codes[i], ai.value);
+        }
+    }
 }
 
 /* ── Apply touch regions ────────────────────────────────────────────────── */
@@ -1118,9 +1175,11 @@ void gamepad_poll(GamepadManager *gm, InputState *state,
     state->mouse_connected    = (gm->mouse_count > 0) ? 1 : 0;
 
     /* Read from each input source */
-    poll_gamepads(gm);                /* latches keys/hat, updates the axes */
-    poll_keyboard(gm);                /* latches keys */
-    poll_mouse(gm, state);
+    bool lost = poll_gamepads(gm);    /* latches keys/hat, updates the axes */
+    lost |= poll_keyboard(gm);        /* latches keys */
+    lost |= poll_mouse(gm, state);
+    if (lost)                         /* SYN_DROPPED: events were discarded */
+        resync_levels(gm);
 
     /* Level state from the sources that report an absolute position rather
      * than press/release events — touch regions and the analog stick.  Zeroed
