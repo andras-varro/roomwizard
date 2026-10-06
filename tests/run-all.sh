@@ -146,6 +146,7 @@ CTEST_ROWS=(
     "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "ui_focus_test|-I common|common/ui_focus.c"
     "ui_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
+    "cp_page_name_test|-I.|control_panel/cp_page_name.c"
     "usb_bus_test|-I.|control_panel/usb_bus.c"
     "vnc_pad_test|-I common -I ../vnc_client|../vnc_client/vnc_pad.c common/ui_focus.c common/input_scan.c"
 )

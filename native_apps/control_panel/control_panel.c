@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
@@ -50,6 +51,7 @@
 #include <time.h>
 #include <linux/input.h>
 #include <poll.h>
+#include "cp_page_name.h"
 
 /* SCREEN_W / SCREEN_H removed — use screen_base_width / screen_base_height
    runtime globals (from framebuffer.h) or fb->width / fb->height instead. */
@@ -849,13 +851,42 @@ static void run_current_fullscreen_mode(Framebuffer *fb, TouchInput *touch,
  * Main Loop
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
-int main(void) {
+int main(int argc, char *argv[]) {
     /* ⚠️ FIRST, before any printf. Launched from the launcher, stdout is
      * /var/log/roomwizard/app_stdout.log — a FILE, so glibc block-buffers 4 KB
      * and a receipt printed by a process that is then killed never arrives at
      * all.  Every page's layout receipt is exactly that shape.
      * ../CLAUDE.md → App lifecycle carries the measurement. */
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    /* Test-only switch: `control_panel <page>` opens that page directly (over
+     * SSH).  The launcher passes the two DEVICE PATHS (the manifest args= is empty,
+     * which means fb,touch) and this app ignores them, so any argument starting
+     * with / is skipped; a launch with no page argument is unchanged.  Parsed
+     * before any device is touched, so a bad name costs nothing.  Names are the page table's own, case-insensitive. */
+    const CpPage *start_page = NULL;
+    const char *page_arg = NULL;
+    for (int a = 1; a < argc; a++)
+        if (argv[a][0] != '/') { page_arg = argv[a]; break; }
+    if (page_arg) {
+        const char *names[HOME_PAGE_COUNT];
+        for (int i = 0; i < HOME_PAGE_COUNT; i++) names[i] = home_pages[i]->name;
+        bool list = !strcmp(page_arg, "--help") || !strcmp(page_arg, "--list-pages");
+        int idx = list ? -1 : cp_page_find(names, HOME_PAGE_COUNT, page_arg);
+        if (idx >= 0) {
+            start_page = home_pages[idx];
+        } else {
+            FILE *o = list ? stdout : stderr;
+            if (!list) fprintf(o, "control_panel: unknown page '%s'\n", page_arg);
+            fprintf(o, "usage: control_panel [<page>]   pages:");
+            for (int i = 0; i < HOME_PAGE_COUNT; i++) {
+                fputc(' ', o);
+                for (const char *c = names[i]; *c; c++) fputc(tolower((unsigned char)*c), o);
+            }
+            fputc('\n', o);
+            return list ? 0 : 2;
+        }
+    }
 
     int lock_fd = acquire_instance_lock("control_panel");
     if (lock_fd < 0) return 1;
@@ -901,6 +932,7 @@ int main(void) {
 
     rebuild_ui(&state);
     home_load_icons();   /* the home grid is the startup view */
+    if (start_page) set_view(&state, start_page);   /* BACK then reaches the home grid */
     pointer_init(&g_pointer);   /* after touch_init: SCREEN_SAFE_* */
 
     bool needs_redraw = true;  /* first frame always draws */
