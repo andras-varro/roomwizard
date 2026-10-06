@@ -400,15 +400,20 @@ the standalone binary, build step, `GAMES_BINARIES` entry and smoke subject are 
 (3) two fingers: both dots, trail follows the first only; (4) `head /tmp/touch_trace.log` shows the "# touch_trace"
 header then raw/cal/est rows. **Done when** all four pass; then delete this entry.
 
-### F129. Control panel settings page: SSH mode, date/time and similar system settings — open, operator request 2026-10-05
+### F129. Control panel settings page: SSH toggle still open; clock and SSH display implemented, awaiting the operator's panel check
 
-A page in `native_apps/control_panel.c` for system settings that today need SSH or a provisioning run: **SSH mode**
-(password / key-only — what `commissioning/provision.sh --sshd-only --ssh-auth=password|key` applies), date/time, and
-the like. ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login is proven first
-(`commissioning/CLAUDE.md`), and there is no serial console, so a panel toggle must not lock the operator out — a
-panel button cannot prove a key exists, so decide what the page may do (show the mode, or switch only back to
-password). Per the operator's settings rule, new settings belong in the settings app. **Done when** the page shows
-the current SSH mode and date/time and a change survives a reboot.
+Part 1 is implemented (System page, `native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode
+read-only from `sshd_config`, UTC clock and RTC status, date/time editor whose SET confirms then runs `date -s` and
+`hwclock -w`. Measured on `.188` only: the stack receipt fits and the page shows PASSWORD, matching that unit. **Not
+verified: SET by touch, the page-2 tile, focus, portrait.** Panel check: (1) Control Panel page 2, System; (2) the SSH
+row matches the unit; (3) the UTC clock ticks; (4) MIN + wraps 59 to 00 and the day clamps; (5) SET, dialog, OK shows
+"DATE AND RTC SET" and RTC SYNCED; (6) after an online reboot network time sync overrides it (expected).
+Timezone is out of scope (the device has none).
+
+**Still open: an SSH mode toggle.** ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login
+is proven first (`commissioning/CLAUDE.md`), and there is no serial console, so a panel toggle must not lock the
+operator out — a panel button cannot prove a key exists, so decide what it may do (switch only back to password).
+**Done when** the panel changes the SSH mode and the change survives a reboot; delete the entry after the check above.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
