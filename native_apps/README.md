@@ -29,7 +29,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `control_panel` | Tool | **Unified hardware app** — the one you want. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB |
+| `control_panel` | Tool | **Unified hardware app** — the one you want; `control_panel <page>` opens one page directly. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 | `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |

@@ -171,16 +171,18 @@ Bus Test is `native_apps/tests/audio_mix_test.c`, whose `present_rect()` already
 (`:471`) and so repaints nothing there. **Done when** launching it from the Audio page in portrait shows the message
 and returns, and landscape is unchanged.
 
+### B57. Does MADC ADCIN6 follow what is plugged into the USB port? — open, n=1, needs an operator replug
+
+`in_voltage6` read 26-29 mV on `.188` while an Xbox 360 pad was on the USB port and a steady 344-364 mV after the BT dongle replaced it
+([`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)); the two states
+differ in more than the device, so the link is unproven. **Done when** an operator swaps pad and dongle back and forth on the port
+(reading `in_voltage6_input` after each swap, and once with the port empty) and the table says which condition, if any, moves it.
+
+
 ## Features
 
 Userspace except F101, which is the image build.
 
-### F4. Surface the RTC cell voltage on Monitor — open
-
-`in_voltage9` is the RTC backup cell and needs no wire; show it as a Monitor row (the SoC temperature row already
-exists: `control_panel/soc_temp.{c,h}`, sensor facts in
-[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)).
-A "battery low" warning is nearly free once the row reads.
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -459,11 +461,6 @@ its level-5 problem is open on the level number, not on the mechanism. A pause-d
 Office Runner's TRAINING toggle in `platformer.c` uses) is not script-reachable — there is no
 `/dev/uinput` — so a mode with no CLI entry has no first-screen SSH check either; it makes a deep state
 cheaper for a human, not automatable.
-
-**First deliverable: `control_panel <page>`** (e.g. `control_panel monitor`) opens that page directly, so on-device
-verification can screenshot a page without tapping — there is no way to script a touch. The launcher passes no
-arguments, so the switch is SSH-only. **Done when** `ssh root@<ip> /opt/games/control_panel monitor` shows the Monitor
-page in a framebuffer capture.
 
 ### C12. Offline commissioning has never been run against a real disk — open
 
