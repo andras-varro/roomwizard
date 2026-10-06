@@ -390,16 +390,15 @@ yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first cons
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
 
-### F120. `touch_trace` becomes a page of the control panel's touch diagnostic — open, operator ruling 2026-10-04
+### F120. `touch_trace` folded into the control panel MULTI-TOUCH screen — implemented, awaiting the operator's panel check
 
-`touch_trace` (`native_apps/tests/touch_trace.c`, deployed `/opt/games/touch_trace`, no manifest, listed hidden in
-`native_apps/README.md`) shows RAW / CAL / LIN readings, a labelled 80-px grid and a finger trail, logs to
-`/tmp/touch_trace.log`, and exits through a centre EXIT button. Port it as a page inside `control_panel`'s touch
-diagnostic: one implementation, Back instead of the centre EXIT, and `control_panel`'s focus and portrait handling.
-Keep the `/tmp/touch_trace.log` output for SSH use. **Then delete the standalone binary — deletion is pre-approved:**
-remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-deploy.sh`, its `native_apps/README.md`
-rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
-readings and the log is still written, and no `touch_trace` remains in the tree.
+`test_multitouch` (`native_apps/control_panel/input_page.c`) now draws an 80 px dim grid, the primary contact's
+yellow trail, RAW/CAL/LIN readouts and a red LIN crosshair, and keeps the `/tmp/touch_trace.log` header and columns;
+the standalone binary, build step, `GAMES_BINARIES` entry and smoke subject are deleted. **Not verified on the panel**
+(needs a touch). Checklist: (1) Control Panel -> Input -> MULTI-TOUCH: dim 80 px grid, labels bottom/left, header
+"Calib: ON"; (2) drag one finger: yellow trail, RAW/CAL readouts, red LIN readout + crosshair near the finger;
+(3) two fingers: both dots, trail follows the first only; (4) `head /tmp/touch_trace.log` shows the "# touch_trace"
+header then raw/cal/est rows. **Done when** all four pass; then delete this entry.
 
 ### F129. Control panel settings page: SSH mode, date/time and similar system settings — open, operator request 2026-10-05
 
@@ -498,11 +497,8 @@ per-page code. ⚠️ **The Input page's portrait receipt reports "1 label(s) cu
 at scale 1 is 84 px against a limit of `bw-8` = 83 (`bw` 91), yet the operator saw it render correctly, so the
 `-8` allowance in that receipt is stricter than the drawing. Settle the allowance with the helper.
 
-**Two related questions, both the operator's.** Whether `touch_trace` (a calibrated finger trail against the
-raw one, logging both; deployed hidden, SSH-only) belongs on the Input page beside the multi-touch test and
-the touch diagnostic: fold duplicates into one rather than adding a button per tool. And whether to take up
-the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (design requirements in
-`native_apps/CLAUDE.md` → *control_panel*).
+**One related question, the operator's.** Whether to take up the deferred `dlopen`'d `CpPage` modules, which an
+out-of-tree page would need (design requirements in `native_apps/CLAUDE.md` -> *control_panel*).
 
 ---
 

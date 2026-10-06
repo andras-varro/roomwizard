@@ -32,15 +32,15 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `control_panel` | Tool | **Unified hardware app** — the one you want; `control_panel <page>` opens one page directly. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
-| `touch_trace` | Tool | Live finger trail against the *calibrated* mapping (hidden) |
 
 Tools marked *hidden* have no manifest, so they get no launcher tile but remain runnable over SSH.
 USB testing lives in the `control_panel` Input page. The system `/usr/sbin/watchdog` daemon handles the
 hardware watchdog.
 
-The three touch tools need the framebuffer at 32 bpp; `touch_raw` asserts that itself, `touch_trace`
-does not — run `fbset -depth 32` first if ScummVM or `vnc_client` left it at 16. Stop the launcher
-before running either (`/etc/init.d/roomwizard-app stop`), and start it again afterwards.
+`touch_raw` needs the framebuffer at 32 bpp and asserts that itself — run `fbset -depth 32` first if ScummVM or
+`vnc_client` left it at 16. Stop the launcher before running it (`/etc/init.d/roomwizard-app stop`), and start it
+again afterwards. The calibrated finger trail lives in `control_panel` Input -> MULTI-TOUCH (primary contact:
+80 px grid, trail, RAW/CAL/LIN readouts; also logs to `/tmp/touch_trace.log`).
 
 ### Control Panel
 
