@@ -537,6 +537,8 @@ icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; 
   re-inits fb, touch and config). `dlopen`'d pages are deferred — an ABI version field refused on mismatch,
   exported helpers and `check-arm-safe.sh` over the `.so` would all be required.
 
+**`rwmond` is the Monitor page's history source** (`native_apps/sysmon/rwmond.c`, `/opt/games/rwmond`, in `GAMES_BINARIES`): at nice 19 it samples CPU, memory and SoC temperature once a second and publishes a 120-sample ring at `/var/run/rwmond.ring` (tmpfs; text, atomic rename; format in `sysmon/mon_ring.h`). The page seeds its graph from the ring when it is at most 3 s old. `roomwizard-app stop` kills it with `/opt/games`, and `native_apps/build-and-deploy.sh` restarts it.
+
 ## Input
 
 Use `gamepad.c` for everything; don't scan evdev per-app. Abstract buttons are `BTN_ID_UP..BTN_ID_BACK`,

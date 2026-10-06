@@ -175,15 +175,13 @@ and returns, and landscape is unchanged.
 
 Userspace except F101, which is the image build.
 
-### F4. Surface the SoC temperature and the RTC cell voltage — open, premise corrected
+### F4. Surface the SoC temperature and the RTC cell voltage — temperature implemented, panel check and cell voltage left
 
-⚠️ **The temperature channel everyone planned on is not the SoC** (measured `.188`, detail in
-[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)):
-`in_temp1_input` reads 56 at any temperature because the raw value is 0. The real sensor is `thermal_zone0`, whose
-`temp` fails because `CONFIG_OMAP3_THERMAL` is off in our image. **Next step:** set `CONFIG_OMAP3_THERMAL=y` in
-`kernel/config-changes`, rebuild, reboot, and confirm `thermal_zone0/temp` reads and moves under load; then add a
-Monitor row, **hidden (not greyed) when the read fails**. Accuracy of the sensor is unmeasured. Separately,
-`in_voltage9` (RTC backup cell) needs no wire; a "battery low" warning is nearly free.
+The temperature half is implemented and booted on `.188`: a `SOC TEMP:` row on Monitor (hidden when no zone; pure
+parser `control_panel/soc_temp.{c,h}`, test `native_apps/tests/soc_temp_test.c`; sensor facts in
+[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)).
+**Left:** the operator's panel check of the page, and `in_voltage9` (RTC backup cell, needs no wire; a "battery low"
+warning is nearly free).
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -420,13 +418,13 @@ tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fi
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
 
-### F132. Monitor history daemon: CPU, memory and SoC temperature in a ~2 minute ring — open, operator request 2026-10-05
+### F132. Monitor history daemon: CPU, memory and SoC temperature in a ~2 minute ring — implemented, awaiting two operator steps
 
-A small always-on daemon samples CPU, memory and SoC temperature into a ~2 minute ring buffer, so the Monitor page
-shows the recent past the moment it is opened (today the graph starts empty). ⚠️ **Operator condition: build it only
-if its own CPU load is insignificant — measure it** on `.188` (idle, with and without the daemon, against the
-denominator rule in `SYSTEM_ANALYSIS.md` §3.4) and drop it if not. Depends on F4 for the temperature channel. **Done
-when** the Monitor page opens with the last 2 minutes drawn and the measured daemon load is recorded as acceptable.
+`rwmond` is implemented (commit 2a81e0d) and measured on `.188`: 0.27 % CPU (48 ticks / 180.04 s, `CLK_TCK` 100),
+`VmRSS` 1096 kB, nice 19, against the operator's ~1 % threshold. **Left:** (1) the operator runs
+`bash commissioning/provision.sh 192.168.50.188` (the auto-mode classifier refused it for the worker), then
+`ssh root@192.168.50.188 '/etc/init.d/rwmond status'` to confirm the boot start; (2) panel check: Control Panel,
+Monitor shows a full CPU graph at once.
 
 ### F133. Monitor page re-layout: text left, charts right — open, operator request 2026-10-05, after F4
 
@@ -436,7 +434,8 @@ text column in landscape and a sensible stack in portrait.
 
 ### F134. Over-temperature warning: red LED plus a red square on every present — open, operator request 2026-10-05, after F4 and F132
 
-The history daemon (F132) lights `red_led` and writes a flag file when the SoC passes a threshold;
+The history daemon (F132, `rwmond`) lights `red_led` and sets `MON_FLAG_OVERTEMP` (bit 0 of the flags field,
+reserved in `native_apps/sysmon/mon_ring.h`) when the SoC passes a threshold;
 `native_apps/common/framebuffer.c` draws a red square in a corner on every present while the flag is set, like the
 Raspberry Pi indicator. Native apps, `vnc_client` and ScummVM all link `framebuffer.c`, so **all three components
 redeploy**. Threshold to be chosen from the OMAP3503 datasheet limits, not guessed. **Done when** forcing the flag shows

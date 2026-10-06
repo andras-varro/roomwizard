@@ -189,7 +189,7 @@ roomwizard/
 │   ├── rw-release.sh            # Resolve + fetch + verify a published release
 │   └── rw-bundle.sh             # The release-bundle layout, both directions
 ├── device-files/                # Installed onto the device verbatim
-│   ├── roomwizard-app           # Generic init script (app respawn loop)
+│   ├── roomwizard-app           # App respawn loop; rwmond = init for the history daemon
 │   ├── disable-steelcase.sh     # Bloatware cleanup (run at every boot)
 │   ├── enable-usb-host.sh       # The /dev/mem MUSB host-mode patch; usb-host runs it (S90)
 │   ├── xpad-modules             # insmod -f the three controller modules (S89)
