@@ -47,12 +47,12 @@
 # "none" means no arguments, otherwise "fb" and/or "touch" by substring.
 # app_launcher itself runs bare, as the init script starts it.
 #
-# The three interactive diagnostics (touch_raw, touch_trace, audio_mix_test) take
+# The two interactive diagnostics (touch_raw, audio_mix_test) take
 # the same <fb> <touch> pair and draw a UI before any input, so they are in scope.
 #
 # The directive below resolves the two sourced files from this script's directory.
 # shellcheck source-path=SCRIPTDIR
-SMOKE_EXTRA_TOOLS="touch_raw touch_trace audio_mix_test"
+SMOKE_EXTRA_TOOLS="touch_raw audio_mix_test"
 SMOKE_FB_DEV=/dev/fb0                     # what the apps are TOLD to draw on (production argv)
 SMOKE_TOUCH_DEV=/dev/input/touchscreen0
 # What the harness CAPTURES and reads geometry from — one variable, kept apart
@@ -65,7 +65,7 @@ SMOKE_OVL_GLOB=/sys/devices/platform/omapdss/overlay
 # MEASURED 2026-10-04 on unit .188 (native_apps at ee49b31, 800x480 32bpp, fb0),
 # distinct values on the first screen of every target: app_launcher 1934,
 # control_panel 2557, theremin 645, audio_mix_test 18, touch_raw 16, brick_breaker 9,
-# touch_trace 9, and snake/tetris/pong/samegame/frogger/platformer 4 each — every one
+# and snake/tetris/pong/samegame/frogger/platformer 4 each — every one
 # confirmed a correct first screen from its decoded PNG. The games are flat-colour
 # UI (black ground, cyan title, white text, green button = 4), so the earlier
 # inferred floor of 16 failed 8 correct screens. A black screen is 1; a single-colour

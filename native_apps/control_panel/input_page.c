@@ -1172,8 +1172,21 @@ static CpPageResult input_page_input(Config *cfg, int tx, int ty,
 
 /* Multi-touch: one dot per MT slot, read straight off the evdev fd because
  * TouchInput tracks a single pointer. Slots arrive only from a driver that
- * reports ABS_MT_SLOT; the legacy BTN_TOUCH still drives the exit tap. */
+ * reports ABS_MT_SLOT; the legacy BTN_TOUCH still drives the exit tap.
+ *
+ * The primary contact (slot 0, or the single-touch ABS pair when the driver
+ * sends no slots) also gets the calibration trace: a yellow trail of
+ * calibrated points on a dim 80 px grid, RAW / CAL / LIN readouts, and a red
+ * crosshair at LIN, the pure per-axis linear estimate from the raw range that
+ * ignores calibration, so what the curve changed is visible.  Every new
+ * sample goes to MT_LOG_PATH as "raw_x raw_y cal_x cal_y est_x est_y". */
 #define MT_SLOTS 2
+#define MT_LOG_PATH "/tmp/touch_trace.log"
+#define MT_GRID_STEP 80
+#define MT_TRAIL_MAX 8000
+typedef struct { short x, y; } MtPt;
+static MtPt mt_trail[MT_TRAIL_MAX];
+
 static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
     static const uint32_t slot_col[MT_SLOTS] = { RGB(255,200,0), RGB(0,200,255) };
     int calib_ok = (touch_load_calibration(touch, CALIB_FILE) == 0);
@@ -1181,7 +1194,33 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
     int rx[MT_SLOTS] = {0}, ry[MT_SLOTS] = {0};
     bool on[MT_SLOTS] = {false};
     int slot = 0, lx = 0, ly = 0, max_fingers = 0;
-    bool seen_mt = false, running = true;
+    bool seen_mt = false, running = true, held = false;
+
+    const int W = fb->width, H = fb->height;
+    int rgx = touch->raw_max_x - touch->raw_min_x; if (rgx <= 0) rgx = 4095;
+    int rgy = touch->raw_max_y - touch->raw_min_y; if (rgy <= 0) rgy = 4095;
+    int trail_n = 0, trail_head = 0;
+    int last_raw_x = -1, last_raw_y = -1, last_cal_x = -1, last_cal_y = -1;
+    int last_est_x = -1, last_est_y = -1;
+    bool have_sample = false;
+
+    FILE *log = fopen(MT_LOG_PATH, "w");
+    if (log) {
+        fprintf(log, "# touch_trace  screen=%dx%d  portrait=%d\n",
+                W, H, touch->portrait_mode);
+        fprintf(log, "# raw_range X[%d..%d] Y[%d..%d]\n",
+                touch->raw_min_x, touch->raw_max_x,
+                touch->raw_min_y, touch->raw_max_y);
+        fprintf(log, "# calib_enabled=%d raw_range X[%d..%d] Y[%d..%d]\n",
+                touch->calib.enabled,
+                touch->raw_min_x, touch->raw_max_x,
+                touch->raw_min_y, touch->raw_max_y);
+        fprintf(log, "# bezel(UI) T=%d B=%d L=%d R=%d\n",
+                touch->calib.bezel_top, touch->calib.bezel_bottom,
+                touch->calib.bezel_left, touch->calib.bezel_right);
+        fprintf(log, "# columns: raw_x raw_y cal_x cal_y est_x est_y\n");
+        fflush(log);
+    }
 
     /* Paints only after the touch fd delivered something: every line of this
      * screen is a function of what was read, so a quiet panel repaints
@@ -1199,7 +1238,52 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
             for (int i = 0; i < MT_SLOTS; i++) if (on[i]) fingers++;
             if (fingers > max_fingers) max_fingers = fingers;
 
+            /* The primary contact: record a sample only when it changed. */
+            bool prim = seen_mt ? on[0] : held;
+            if (prim) {
+                int raw_x = seen_mt ? rx[0] : lx, raw_y = seen_mt ? ry[0] : ly;
+                int cal_x = raw_x, cal_y = raw_y;
+                touch_map_raw(touch, &cal_x, &cal_y);
+                int est_x = (raw_x - touch->raw_min_x) * W / rgx;
+                int est_y = (raw_y - touch->raw_min_y) * H / rgy;
+                if (raw_x != last_raw_x || raw_y != last_raw_y ||
+                    cal_x != last_cal_x || cal_y != last_cal_y) {
+                    mt_trail[trail_head].x = (short)cal_x;
+                    mt_trail[trail_head].y = (short)cal_y;
+                    trail_head = (trail_head + 1) % MT_TRAIL_MAX;
+                    if (trail_n < MT_TRAIL_MAX) trail_n++;
+                    if (log) {
+                        fprintf(log, "%d %d %d %d %d %d\n",
+                                raw_x, raw_y, cal_x, cal_y, est_x, est_y);
+                        fflush(log);
+                    }
+                    last_raw_x = raw_x; last_raw_y = raw_y;
+                    last_cal_x = cal_x; last_cal_y = cal_y;
+                }
+                last_est_x = est_x; last_est_y = est_y;
+                have_sample = true;
+            }
+
             fb_clear(fb, RGB(20,20,30));
+            /* Grid and its labels (dim): seen, not pressed, so the whole
+             * visible screen.  The x labels sit on the bottom edge and the
+             * 0 row is unlabelled, clear of the header text. */
+            const uint32_t grid = RGB(45,45,60), glab = RGB(90,90,110);
+            for (int x = 0; x <= W; x += MT_GRID_STEP)
+                fb_draw_line(fb, x, 0, x, H - 1, grid);
+            for (int y = 0; y <= H; y += MT_GRID_STEP)
+                fb_draw_line(fb, 0, y, W - 1, y, grid);
+            for (int x = 0; x <= W; x += MT_GRID_STEP) {
+                char b[12]; snprintf(b, sizeof(b), "%d", x);
+                fb_draw_text(fb, x + 2, H - 10, b, glab, 1);
+            }
+            for (int y = MT_GRID_STEP; y <= H; y += MT_GRID_STEP) {
+                char b[12]; snprintf(b, sizeof(b), "%d", y);
+                fb_draw_text(fb, 2, y + 2, b, glab, 1);
+            }
+            for (int i = 0; i < trail_n; i++)
+                fb_fill_circle(fb, mt_trail[i].x, mt_trail[i].y, 2, COLOR_YELLOW);
+
             char hdr[96]; snprintf(hdr, sizeof(hdr),
                 "Multi-touch  |  MT slots: %s  |  max fingers: %d  |  Calib: %s",
                 seen_mt ? "yes" : "none yet", max_fingers, calib_ok ? "ON" : "OFF");
@@ -1213,6 +1297,24 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
                 char lbl[48]; snprintf(lbl, sizeof(lbl), "slot %d raw(%d,%d) scr(%d,%d)",
                                        i, rx[i], ry[i], x, y);
                 fb_draw_text(fb, 4, 16 + 12 * i, lbl, slot_col[i], 1);
+            }
+            if (prim) {
+                /* the red LIN crosshair beside the calibrated dot */
+                for (int i = -10; i <= 10; i++) {
+                    fb_draw_pixel(fb, last_est_x + i, last_est_y, COLOR_RED);
+                    fb_draw_pixel(fb, last_est_x, last_est_y + i, COLOR_RED);
+                }
+            }
+            if (have_sample) {
+                char rb[64];
+                snprintf(rb, sizeof(rb), "RAW %4d,%4d", last_raw_x, last_raw_y);
+                fb_draw_text(fb, W / 2 - 150, 48, rb, COLOR_WHITE, 2);
+                snprintf(rb, sizeof(rb), "CAL %4d,%4d", last_cal_x, last_cal_y);
+                fb_draw_text(fb, W / 2 - 150, 72, rb, COLOR_CYAN, 2);
+                snprintf(rb, sizeof(rb), "LIN %4d,%4d", last_est_x, last_est_y);
+                fb_draw_text(fb, W / 2 + 20, 72, rb, COLOR_RED, 2);
+                snprintf(rb, sizeof(rb), "samples:%d", trail_n);
+                fb_draw_text(fb, W / 2 - 150, 96, rb, COLOR_GRAY, 1);
             }
             fb_swap(fb);
         }
@@ -1233,14 +1335,18 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
                 case ABS_X: lx = ev.value; break;
                 case ABS_Y: ly = ev.value; break;
                 }
-            } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH && ev.value == 1) {
-                int x = lx, y = ly;
-                touch_map_raw(touch, &x, &y);
-                if (x > (int)fb->width - 100 && y < MT_EXIT_H) running = false;
+            } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
+                held = ev.value != 0;
+                if (ev.value == 1) {
+                    int x = lx, y = ly;
+                    touch_map_raw(touch, &x, &y);
+                    if (x > (int)fb->width - 100 && y < MT_EXIT_H) running = false;
+                }
             }
             if (poll(&pfd, 1, 0) <= 0) break;
         }
     }
+    if (log) fclose(log);
     touch_drain_events(touch);
     touch_enable_calibration(touch, false);
 }
