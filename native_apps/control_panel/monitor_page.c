@@ -378,11 +378,13 @@ static void monitor_page_enter(void) {
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
 
-#define MON_ROW_H      24   /* a scale-2 label/value row */
+#define MON_ROW_H      24   /* a scale-2 label/value row: natural pitch */
+#define MON_ROW_MIN_H  20   /* tightest pitch (the text is 14-16 px tall) */
 #define MON_HEADER_H   26   /* draw_section_header() and the space under it */
 #define MON_LINE_H     12   /* a scale-1 text line and its gap to the next */
 #define MON_BAR_H      16
-#define MON_METER_GAP  10
+#define MON_METER_GAP  10   /* natural gap between meters */
+#define MON_GAP_MIN     6   /* tightest gap */
 #define MON_LOAD_LABEL "LOAD AVG:"
 #define MON_TEMP_LABEL "SOC TEMP:"   /* values align after the wider of these */
 #define MON_RTC_LABEL  "RTC CELL:"
@@ -393,6 +395,7 @@ static void monitor_page_enter(void) {
 #define MON_COL_GAP    20   /* text column to graph column */
 #define MON_SIDE_MIN_W 240  /* graphs beside the text only if this wide */
 #define MON_FIT_SLACK   4   /* left under the lowest thing when sizing graphs */
+#define MON_TEXT_SLACK 12   /* left under the last storage bar when tightening the text */
 
 static int  uptime_y, load_y, temp_y, rtc_y, value_x;
 static int  mon_rows;   /* scale-2 rows at the top: 2, plus SOC TEMP and RTC CELL when present */
@@ -439,24 +442,44 @@ static int meter_bottom(int y, int lines) {
 
 /* The text column from the top: UPTIME, LOAD, SOC TEMP and RTC CELL (if present), then
  * MEMORY and STORAGE.  Returns the y under the last storage bar. */
-static int place_text(void) {
+static int place_text(int row_h, int gap) {
     int y = CONTENT_Y + 6;
     uptime_y = y;
-    load_y   = y + MON_ROW_H;
-    temp_y   = y + 2 * MON_ROW_H;   /* each drawn only when its row is present */
-    rtc_y    = y + (2 + temp_row) * MON_ROW_H;
-    y += mon_rows * MON_ROW_H + 6;
+    load_y   = y + row_h;
+    temp_y   = y + 2 * row_h;   /* each drawn only when its row is present */
+    rtc_y    = y + (2 + temp_row) * row_h;
+    y += mon_rows * row_h + 6;
 
     sec_mem_y = y;                y += MON_HEADER_H;
-    ram_y     = y;                y = meter_bottom(y, 2) + MON_METER_GAP;
-    swap_y    = y;                y = meter_bottom(y, 1) + MON_METER_GAP;
+    ram_y     = y;                y = meter_bottom(y, 2) + gap;
+    swap_y    = y;                y = meter_bottom(y, 1) + gap;
 
     sec_disk_y = y;               y += MON_HEADER_H;
     for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
         disk_y[i] = y;
         y = meter_bottom(y, 1);
-        if (i < NUM_MOUNT_POINTS - 1) y += MON_METER_GAP;
+        if (i < NUM_MOUNT_POINTS - 1) y += gap;
     }
+    return y;
+}
+
+static int mon_gap = MON_METER_GAP;   /* the meter gap place_text_fit() settled on */
+
+/* place_text() at the natural spacing, tightened one pixel at a time only as far
+ * as needed to end MON_TEXT_SLACK above the content bottom: the meter gap down to
+ * MON_GAP_MIN first, then the row pitch down to MON_ROW_MIN_H.  Spacing is the
+ * only thing that gives; nothing is dropped.  Returns the y under the last bar
+ * (past the limit when even the tightest spacing does not fit, which the
+ * receipt then reports). */
+static int place_text_fit(void) {
+    const int limit = CONTENT_Y + CONTENT_H - MON_TEXT_SLACK;
+    int row_h = MON_ROW_H, gap = MON_METER_GAP;
+    int y = place_text(row_h, gap);
+    while (y > limit && (gap > MON_GAP_MIN || row_h > MON_ROW_MIN_H)) {
+        if (gap > MON_GAP_MIN) gap--; else row_h--;
+        y = place_text(row_h, gap);
+    }
+    mon_gap = gap;
     return y;
 }
 
@@ -509,13 +532,13 @@ static void monitor_page_layout(void) {
     if (graphs_beside) {
         bar_w = text_right - bar_x;
         header_right = text_right;
-        text_bottom   = place_text();
+        text_bottom   = place_text_fit();
         graphs_bottom = place_graphs(col_x, (CONTENT_RIGHT - 10) - col_x, CONTENT_Y + 6);
     } else {
         bar_w = CONTENT_WIDTH - 20;
         header_right = CONTENT_RIGHT;
-        text_bottom   = place_text();
-        graphs_bottom = place_graphs(bar_x, bar_w, text_bottom + MON_METER_GAP + 6);
+        text_bottom   = place_text_fit();
+        graphs_bottom = place_graphs(bar_x, bar_w, text_bottom + mon_gap + 6);
     }
 
     /* ⚠️ THE RECEIPT, in the settings stack's shape.  Everything here hangs off
