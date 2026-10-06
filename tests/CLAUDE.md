@@ -250,11 +250,6 @@ meant to catch**.
   DrvFs cannot hold a symlink, which is why `tests/make-fake-card.sh` insists on it.
 - ⚠️ **`dash -n` catches parse errors and CRLF, not bashisms.** `[[ -n "$x" ]]` parses fine under dash
   — `[[` is read as a command name — so it passes and then fails at boot with `[[: not found`.
-- ⚠️ **Fixtures for the kernel writer are SYNTHETIC and must stay that way.** The vendor kernel is
-  gitignored and can never be committed; `tests/make-fake-uimage.py` works only because `uimage.py`
-  *finds* the DTB by magic rather than asserting the vendor offset. The md5-constant groups therefore
-  override the three constants with the fixture's own — the sequence is what is tested, not the
-  identity of one kernel.
 - ⚠️ **A missing `arm-linux-gnueabihf-objdump` is a refusal, not a pass.** `check-arm-safe.sh` skips
   non-ARM files, so a run that inspected nothing must not report a clean bill. ⚠️ **And a stripped
   binary cannot be gated at all**: `objdump` needs the symbol table to tell Thumb-2 from ARM and
@@ -279,10 +274,6 @@ meant to catch**.
   `scp` to be compared against — which is how a one-of-eight install defect shipped past 94 green
   cases. **Group F is that hole**, and it asserts **8 of 8**, never "more than one", because the defect
   produced exactly one.
-- ⚠️ **The one p1-write sequence is what group E structurally cannot compare between executors**, so
-  `rw_usbpower_test.sh` group J is the stand-in: it runs the single sequence over both transports. Its
-  group N is the negative control for the three-md5 gate and for re-derivation, and both halves have
-  been seen failing.
 - **`rw_ssh_test.sh` starts a real `sshd`** on a loopback high port with an empty `AuthorizedKeysFile`
   — which needs no root — because a genuine `Permission denied` cannot be produced by a stub without
   writing the string the code is supposed to recognise.
@@ -323,9 +314,8 @@ print the counts their headers claim. Rules learned the hard way:
   variable that no longer exists it assigns the empty string and the harness prints "not caught" for the
   wrong reason. **Re-run the harness after any rename it mentions**, justify a count that moved, and
   name the surviving cases from that sabotage alone.
-- ⚠️ **Sabotages that anchor on an exact full line are brittle by construction.** Two in
-  `measure_usbpower_sabotage.sh` anchor on specific 4-space-indented lines of `lib/rw-usbpower.sh`, so
-  a second copy of either line breaks them.
+- ⚠️ **Sabotages that anchor on an exact full line are brittle by construction**: a second copy of
+  the anchored line in the subject breaks them.
 - **Include a control on the harness itself.** `measure_provision_sabotage.sh` case 5 makes the stub
   `ssh` stop reading stdin, and **F1 alone** must fail — because a stub that does not slurp its stdin
   cannot reproduce the defect and makes the whole group a vacuous pass. Similarly, a pre-fix-tree

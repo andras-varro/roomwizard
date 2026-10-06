@@ -8,7 +8,7 @@
 # fdtput by way of the device-tree-compiler package).
 #
 # Produces: <out>/zImage-with-dtb and <out>/uImage-test. It never writes p1: installing the image
-# as uImage-system is a manual operator step (kernel/README.md); lib/rw-usbpower.sh is the only scripted writer.
+# as uImage-system is a manual operator step (kernel/README.md), and nothing scripted writes it.
 
 set -euo pipefail
 
@@ -94,7 +94,7 @@ fi
 if [ ! -f "$VENDOR_DTB" ]; then
     echo "ERROR: ${VENDOR_DTB} not found (gitignored; it is the vendor's own DTB)."
     echo "  It is the 67004-byte DTB appended to p1's uImage-system at offset 0x4eb788, sliced out"
-    echo "  byte for byte (usb_host/README.md, 'Binary DTB Patching in uImage'); md5 ${VENDOR_DTB_MD5}."
+    echo "  byte for byte (usb_host/README.md, 'DTB Location in uImage'); md5 ${VENDOR_DTB_MD5}."
     exit 1
 fi
 case "$(realpath -m "$WORK_DIR")" in

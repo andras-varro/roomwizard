@@ -584,7 +584,7 @@ echo "F. the online path's copy step — the one-of-eight install defect"
 # the plan to the remote `mkdir`.
 #
 # So this group runs the REAL rw_provision_push_installs against a local directory
-# through the $RW_SSH/$RW_SCP stubs lib/rw-usbpower.sh already established, and
+# through the $RW_SSH/$RW_SCP stubs lib/rw-bundle.sh also honours, and
 # asserts 8 of 8. **Never "more than one"** — the defect produced exactly one, so
 # any threshold below the full count passes on the broken tree.
 #

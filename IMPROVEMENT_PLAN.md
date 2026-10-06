@@ -248,11 +248,10 @@ and the p1 files). What is left is building the touch driver into the image, the
 console, and one unexplained dmesg line.
 
 **What the image is for — the payoff is deployment stability, not speed.** A kernel compiled here ships
-with its own corresponding source and can go in a release, which is what retires the `/dev/mem`
-byte-patch route into p1; that in turn retires the per-release md5 gate in `lib/rw-usbpower.sh` (it refuses every Steelcase release but the reference unit's — `COMMISSIONING.md`) and gives back the free
-undo both bring-up paths lost. ⚠️ **None of that is delivered until an image we built is the one a unit
-is deployed on** — panel and touch working, USB power carried in its own DTB — so the md5 gate and the
-byte patch stay shipped meanwhile; do not delete either on the strength of this entry.
+with its own corresponding source and can go in a release, which gives back the free undo both bring-up
+paths lost. The vendor-kernel byte-patch path is deleted (tag `last-vendor-kernel`), so the release
+supports only our image. ⚠️ **That is not delivered until an image we built is the one a unit is
+deployed on** — panel and touch working.
 
 **What to fold in, so the image is built once with everything wanted in it:**
 
@@ -263,6 +262,7 @@ byte patch stay shipped meanwhile; do not delete either on the strength of this 
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
+| USB VBUS power budget | decide whether our image's DTB needs a 500 mA `power` property (`0xfa`) in `usb_otg_hs` | our DTBs keep the vendor `0x32` (100 mA), so a controller needs a powered hub — **inferred** from the DTB, not measured on a unit; read `/proc/device-tree/ocp*/usb_otg_hs*/power` on a booted image first. A `kernel/dts` edit, no byte patch |
 
 **The order to do it in, cheapest first.**
 
@@ -280,8 +280,7 @@ card pull plus copying a backup back onto p1
 ([`#4-boot-chain-and-recovery`](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). The operator accepts the
 overwrite ("I can re-flash easily"), which does not retire
 [§1](SYSTEM_ANALYSIS.md#1-read-this-first) rule 3: **take a verified p1 backup before the write**, of the
-*running* kernel and not merely the pristine vendor one, because on a unit carrying the USB-power patch those
-are different files. The serial console (`P4`, fitted; RS-232 behind `U27`, a MAX3232 breakout ordered for
+*running* kernel and not merely the pristine vendor one, because they can be different files. The serial console (`P4`, fitted; RS-232 behind `U27`, a MAX3232 breakout ordered for
 the operator's TTL cables — [`HARDWARE.md#4-unpopulated-and-expansion`](HARDWARE.md#4-unpopulated-and-expansion))
 is off the critical path now that SSH answers, and remains the only channel for an image that does not.
 ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and destroys
@@ -520,16 +519,6 @@ raw one, logging both; deployed hidden, SSH-only) belongs on the Input page besi
 the touch diagnostic: fold duplicates into one rather than adding a button per tool. And whether to take up
 the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (design requirements in
 `native_apps/CLAUDE.md` → *control_panel*).
-
-### C18. Drop vendor-kernel support — open, operator ruling 2026-10-05, deletion pre-approved
-
-The next release supports only our own kernel; the vendor kernel is never patched again. Bluetooth already relies on
-our kernel's features. **Steps:** (a) find the last commit where the vendor-kernel patch path still worked and tag it
-(`last-vendor-kernel`); (b) delete the p1 vendor-kernel patch path — the `uImage-system` writer in `lib/rw-usbpower.sh`,
-`usb_host/patch_dtb.py`, `usb_host/uimage.py`, the p1 power-budget check (its `FAILED` print on our image,
-`usb_host/build-and-deploy.sh:480`, goes with it) and their tests; (c) fix the docs that describe the byte-patch route
-(`CLAUDE.md`, `lib/CLAUDE.md`, `SYSTEM_ANALYSIS.md` USB section, `COMMISSIONING.md`) in the same change. **Done when**
-the tag exists, no vendor-kernel patch code or test remains, and `./tests/run-all.sh` and `./tests/doc_check.sh` pass.
 
 ---
 

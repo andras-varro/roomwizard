@@ -31,22 +31,16 @@
 #     VNC password.  A glob that swept up *.conf would publish exactly what those
 #     two exist to have removed.  Each component's --bundle decides; this script
 #     re-checks below.
-#   * The vendor image or any part of it — a third party's copyright.  In
-#     particular uImage-system, which usb_host patches: the installer DERIVES the
-#     patch from the card's own copy (lib/rw-usbpower.sh, md5-gated in and
-#     md5-asserted out) rather than shipping 5.2 MB of Steelcase kernel.  The
-#     manifest check below is the negative control for that rule, exactly parallel
-#     to the config one.
+#   * The vendor image or any part of it — a third party's copyright, and in
+#     particular the vendor uImage-system and boot chain on p1.  The manifest
+#     check below is the negative control for that rule, exactly parallel to the
+#     config one.
 #
-# ── usb_host IS published, and only its p1 step is not ──────────────────────
+# ── usb_host IS published ───────────────────────────────────────────────────
 #
-# It was excluded outright until 2026-08-08, on the grounds that it "patches
-# uImage-system, which lives on p1".  That conflated three mechanisms: the
-# /dev/mem MUSB patch and the xpad/joydev modules are entirely on p6, and it is
-# only the 500 mA power budget that touches p1.  So
-# the four build artifacts are bundled like any others; the three device scripts
-# are device-files/provision-rules.conf's `usb` group; and the p1 patch is a
-# separate, opt-out-able step of the installer that no bundle carries.
+# Everything it installs is on p6: its build artifacts are bundled like any
+# others, and its device scripts are device-files/provision-rules.conf's `usb`
+# group.  No installer writes p1.
 
 #
 # ── Not byte-reproducible ───────────────────────────────────────────────────
@@ -490,8 +484,7 @@ host-name mapping that exists in order to be removed, and vnc_client.conf carrie
 a plaintext VNC password.  Create the latter on the device after installing.
 
 No Steelcase firmware is published either.  In particular this bundle does NOT
-contain `uImage-system`: the USB 500 mA power patch is derived on the spot from
-the copy already on the device, gated on its md5 and backed up first.
+contain `uImage-system` or any other file from the boot partition.
 NOTICE
 
 # ── structural + policy checks on what was staged ───────────────────────────
@@ -513,8 +506,7 @@ if [[ -n "$CONFIG_HITS" ]]; then
 fi
 ok "No config files staged"
 
-# The never-publish-the-vendor-kernel rule, enforced rather than trusted — the
-# negative control for lib/rw-usbpower.sh's "derive, don't ship" design and the
+# The never-publish-the-vendor-kernel rule, enforced rather than trusted, and the
 # reason a bundle stays 5.2 MB smaller.  usb_host/.gitignore already calls
 # uImage-system* "Copyrighted device-specific files"; this repo is meant to be
 # published, so a component that decided to stage one anyway must not get past
@@ -529,8 +521,7 @@ FIRMWARE_HITS="$(rw_bundle_entries "$OUT_ABS" | awk '{print $2}' \
 if [[ -n "$FIRMWARE_HITS" ]]; then
     echo "$FIRMWARE_HITS" | sed 's/^/    /'
     err "a release must never publish the vendor kernel or boot chain — it is a third
-     party's copyright, and the usb_host power patch is DERIVED from the device's
-     own copy for exactly this reason"
+     party's copyright"
 fi
 ok "No vendor firmware staged"
 

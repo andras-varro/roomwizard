@@ -9,8 +9,7 @@ GPL-2.0-only. MIT is compatible with GPL-2.0, GPL-2.0-or-later and GPL-3.0-or-la
 appear below. That is the whole reason for the choice.
 
 **What is not here, deliberately.** No Steelcase firmware and no device configuration. `uImage-system` is
-a 5.2 MB vendor binary and is never copied, never committed and never published — the USB 500 mA patch is
-*derived* on the spot from the copy already on the device, gated on its md5. `release.sh` refuses to
+a 5.2 MB vendor binary and is never copied, never committed and never published. `release.sh` refuses to
 publish either class of file rather than trusting each component to remember.
 
 ---
@@ -180,13 +179,10 @@ publishing a prebuilt one is not an available shortcut.
 
 The MIT text above disclaims warranty, and that disclaimer is meant literally here. Two specifics:
 
-- **This project writes to the SD card's boot partition by default.** `commissioning/provision.sh` and
-  `commissioning/commission-offline.sh` both patch `uImage-system` to raise the USB power budget from
-  100 mA to 500 mA. The vendor image is backed up to `uImage-system.vendor` on the same partition first,
-  and the backup's md5 is verified before the original is touched — but **a power cycle is no longer a
-  free undo, and there is no in-place rollback**: that backup is the writer's pristine input for
-  re-deriving a patch, not a way back. Recovery is reflashing the card from the image commissioning
-  takes, which is why it takes one. `--no-usb-power` opts out.
+- **The clean is destructive by default.** `commissioning/provision.sh` and
+  `commissioning/commission-offline.sh` delete the vendor stack, and **there is no in-place rollback**.
+  Recovery is reflashing the card from the image commissioning takes, which is why it takes one.
+  `--no-clean` opts out. Neither script writes the boot partition.
 - **Recovering a unit that will not boot means reaching the SD card, and that means opening the case.**
   It is feasible and it takes experience; an inexperienced attempt can break the enclosure. Nobody
   associated with this project is responsible for a broken case, a broken card or a bricked unit.

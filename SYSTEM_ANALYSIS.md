@@ -1082,8 +1082,8 @@ out to a connector on board revision `550-0204-03`. `CONFIG_USB_EHCI_HCD` and
 enabling EHCI would gain nothing — there is nowhere to plug in.** Recorded so the decision is not
 re-litigated.
 
-**Three problems had to be solved to get host mode working. All three fixes are hacks, and all
-three are load-bearing:**
+**Three problems stand between the vendor kernel and host mode. Hacks 1 and 2 still ship; the third
+is not solved:**
 
 **Hack 1 — MUSB forced to IRQ-driven PIO, patched at runtime through `/dev/mem`.** The OEM kernel has
 *both* `CONFIG_USB_INVENTRA_DMA` and `CONFIG_MUSB_PIO_ONLY` unset, so MUSB init always fails with
@@ -1114,14 +1114,10 @@ Three modules built from matching 4.14.52 source and loaded in order by `/etc/in
 Loadable modules work because `CONFIG_MODULES=y`, `CONFIG_MODULE_FORCE_LOAD=y`, and
 `CONFIG_MODULE_SIG` is unset.
 
-**Hack 3 — the DTB power-budget patch (`0x32` → `0xfa`).** The DTB embedded in `uImage-system` set
-the MUSB `power` property to `0x32` (50 → **100 mA**), so anything drawing more — an Xbox pad wants
-500 mA — was rejected with `rejected 1 configuration due to insufficient available bus power` when
-connected directly without a hub. The fix binary-patches the DTB *inside* `uImage-system` to `0xfa`
-(250 → **500 mA**), recomputes the uImage CRCs, and writes the image back to `/dev/mmcblk0p1`.
-
-**Why this one cannot be a boot-time script, when Hack 1 can.** Read out of the 4.14.52 source
-2026-08-08:
+**Problem 3 — the USB power budget is 100 mA, and nothing raises it.** The DTB appended to
+`uImage-system` sets the MUSB `power` property to `0x32` (50 → **100 mA**), so anything drawing more —
+an Xbox pad wants 500 mA — is rejected with `rejected 1 configuration due to insufficient available bus
+power` when connected directly; a powered hub is the remedy. Read out of the 4.14.52 source 2026-08-08:
 
 | Where | What happens |
 |---|---|
@@ -1129,41 +1125,12 @@ connected directly without a hub. The fix binary-patches the DTB *inside* `uImag
 | `drivers/usb/musb/musb_core.c:2369`/`:2381` | passed on as `musb_host_setup(musb, plat->power)` |
 | `drivers/usb/musb/musb_host.c:2797` | `hcd->power_budget = 2 * (power_budget ? : 250);` |
 
-The device tree is appended to the kernel image *inside* `uImage-system`, and the driver reads it before
-any init script exists — so unlike Hack 1, which patches a *static* struct that stays patched until
-reboot, there is no file on the normal filesystem to edit. **That one number is the only reason p1 is
-written at all.**
-
-⚠️ **Note the `? : 250`: an absent or zero property would already give 500 mA.** The vendor deliberately
-set 100 mA, overriding a kernel default that was what we wanted. It is a vendor choice, not a hardware
-limit.
-
-**The vendor kernel is byte-identical across units — measured 2026-08-08, five sources, three units:**
-
-| File | md5 | Size |
-|---|---|---|
-| vendor `uImage-system` (p1 of both card captures, both p5 factory payloads, RW09's copy) | `edc637ac14f90e0187b1ed65ffedf6d7` | 5,225,796 |
-| `power` patched — 500 mA, what a commissioned unit runs | `a1fd1af8da18c430a34b24762aa16dab` | 5,225,796 |
-| `power` **and** `mode` patched (`RW_UIMAGE_BOTH_MD5`) | `9021923205825a2ec36edeaa1fe3ccc3` | 5,225,796 |
-
-Nothing generates it per-unit, unlike the filesystem UUIDs
-([§4.2](#42-partitions)). The power patch differs from the vendor image in **exactly 9 bytes**: the uImage
-header CRC (offsets 4–7), the data CRC (24–27), and one value byte at `0x4FA2CF`; the both-patched image
-differs in **10**. That makes an md5 gate a complete check, which is what `lib/rw-usbpower.sh`'s
-three-state classifier (`vendor` / `power` / `both` / `unknown`) is built on.
-
-⚠️ **The third row is a firmware state no delivery path produces.** The `mode` patch was refuted on
-hardware and is out of every deploy path, so the md5 is recorded for the *classifier* — a unit that was
-patched by hand classifies as `both` and can be re-derived back down to `power`, which is how `.188` was
-reverted. It was measured by running `patch_dtb.py --mode` over `.188`'s own `uImage-system.vendor`
-twice, byte-identical, with the power-only derivation from the same source reproducing `a1fd1af8…` as the
-control — so the source was the pristine vendor image and the toolchain is reproducible. A *mode-only*
-image is unreachable by construction (`--mode` patches both properties in one pass) and classifies as
-`unknown`, which is correct.
-
-> ⚠️ **This patch does not survive re-imaging.** It is a persistent one-time fix *per SD image* —
-> after any reflash it must be re-applied. Tools: `usb_host/find_dtb.py`, `usb_host/patch_dtb.py`
-> (recomputes CRCs correctly), `usb_host/verify_patch.sh`.
+The driver reads it before any init script exists, so the value lives only in the image's DTB; our
+image keeps `0x32` ([kernel/README.md](kernel/README.md)). ⚠️ **Note the `? : 250`: an absent or zero
+property would already give 500 mA** — the vendor set 100 mA over the kernel default, a vendor choice and
+not a hardware limit. The vendor `uImage-system` is byte-identical across units (`edc637ac14f90e0187b1ed65ffedf6d7`,
+5,225,796 bytes; measured 2026-08-08 on five sources from three units). The byte patch of that image which
+raised the budget is deleted with vendor-kernel support; tag `last-vendor-kernel` carries it.
 
 **Supported device types:**
 
@@ -1303,7 +1270,7 @@ in after an empty-socket boot stayed dark while `usb-host recover` brought it up
 three explained how a cold port obtains a session; the guard does.
 
 **Reading the live device tree.** `/sys/firmware/devicetree/base/` is the unflattened tree as the running
-kernel holds it, and `/sys/firmware/fdt` the raw blob, parseable by `usb_host/uimage.py`'s walk.
+kernel holds it, and `/sys/firmware/fdt` the raw blob.
 ⚠️ **`find /proc/device-tree -name X` silently finds nothing**: `/proc/device-tree` is a *symlink* to the
 sysfs path and `find` does not follow it. Use the `/sys/firmware/devicetree/base` path — that is how the
 booted `mode` value was confirmed against the running kernel rather than against the decompiled
@@ -1799,12 +1766,8 @@ Verified behaviour:
 **Nothing is cryptographically signed. There is no secure boot.**
 
 - **No boot-time MD5 verification of the kernel.** The only integrity gate on `uImage-system` is
-  its uImage header CRC + data CRC — which `usb_host/patch_dtb.py` recomputes correctly, which is
-  why the DTB patch works at all. Both CRCs, the header's own size field and the `power` value are
-  checkable in pure Python with `usb_host/verify_uimage.py`, **which needs neither `mkimage` nor
-  `dtc`** — both are in fact installed here (measured 2026-09-21), but that path has to run wherever
-  the offline bundle lands. ⚠️ The data CRC must be recomputed *before* the
-  header CRC — the header carries the data CRC, so the other order signs a header that is already
+  its uImage header CRC + data CRC, which `mkimage` writes. ⚠️ The data CRC must be computed *before*
+  the header CRC — the header carries the data CRC, so the other order signs a header that is already
   stale, and these two CRCs are the only thing standing between a bad write and a unit that does not
   come up with no serial console to say why.
 - **No `.md5` files exist on p1.**
@@ -1826,23 +1789,17 @@ Verified behaviour:
 `fatload ... uImage-system`. Stage experiments under a *different filename* and leave
 `uImage-system` alone; a failed experiment is undone by a power cycle.
 
-⚠️ **One deliberate exception, and it costs Layer 1 on that unit: the USB 500 mA patch.** `uImage-system`
-is the only file `bootcmd` will load and U-Boot has no `saveenv`, so a unit that comes up at 500 mA by
-itself requires patching that name in place. `lib/rw-usbpower.sh` is the only writer. **Recovery for this
-one write is Layer 2, not an in-place restore** — reflash the card from the image commissioning takes,
-which is why it takes one. `uImage-system.vendor` is the writer's pristine input for re-deriving a patch
-(step 6 md5-verifies it, `edc637ac14f90e0187b1ed65ffedf6d7`); it is not a rollback path.
-
-```sh
-# Which of the two kernels we produce is on p1? a1fd1af8da18c430a34b24762aa16dab is the 500 mA one.
-mount -t vfat /dev/mmcblk0p1 /tmp/bootpart; md5sum /tmp/bootpart/uImage-system; umount /tmp/bootpart
-```
+⚠️ **One deliberate exception, and it costs Layer 1 on that unit: our own kernel image.** `uImage-system`
+is the only file `bootcmd` will load and U-Boot has no `saveenv`, so a unit that boots our image by itself
+requires replacing that name in place — a manual operator step with a verified backup of the running
+image first ([kernel/README.md](kernel/README.md)). Copying that backup back is the undo while SSH
+answers; otherwise it is Layer 2.
 
 **Layer 2 — pull the card.** The whole system is on removable microSD (`mmcblk0`, root
 `mmcblk0p6`). `dd` a known-good backup back, roughly 10 minutes. **This is the working recovery
 loop for this project:** pop the card, reimage, set up DHCP, SSH back in. ⚠️ It is also the *only*
-recovery from a bad `uImage-system` if `uImage-system.vendor` is gone too — nothing runs before the
-kernel loads, so there is no SSH and no serial console to fix it from.
+recovery from a `uImage-system` that does not boot (short of copying the backup back in a card reader)
+— nothing runs before the kernel loads, so there is no SSH and no serial console to fix it from.
 
 **Layer 3 — the serial console**, if you ever wire it up. `bootdelay=1` gives a one-second window
 to `rw20 #`; a root shell is already running there. Not used by this project — see
@@ -2169,7 +2126,7 @@ the decompressed vendor `Image` and resolve its calls through that `kallsyms`. W
 |---|---|---|
 | `CONFIG_SMSC911X=y` (survives `olddefconfig`) | the vendor's reset pulse in `smsc911x_drv_probe` | ⚠️ **no network at all, so an unpatched image answers nothing — measured 2026-09-23.** The vendor DT's `smsc,lan9221` node (GPMC CS5, `0x2c000000`) flags `reset-gpios = <&gpio1 17 0>` active-high; vanilla requests it `GPIOD_OUT_LOW` and never touches it again (`drivers/net/ethernet/smsc/smsc911x.c:453-455`), so the pin sits low, while the vendor probe drives it 0, sleeps 100 ms, drives it 1 (**measured** by disassembly), and the vendor kernel's `/sys/kernel/debug/gpio` shows `gpio-17 (reset) out hi`. That the LAN9221's reset is active-low is **[inferred]**, confirmed by outcome: with `kernel/patches/smsc911x-reset-pulse.patch` reproducing the pulse, `eth0` probes and takes DHCP. No config diff and no compatible-string check can see this — the node is claimed and the driver built in |
 | `CONFIG_FB_OMAP2_PANEL_SHARP_LQ070Y3LG4A=y` | no `panel-sharp-lq070y3lg4a.c`, ever | **a blank panel, and not fixable by config** — the vendor DTB's `/display` is `compatible = "sharp,lq070y3lg4a"` alone, vanilla's `panel-dpi` matches only `omapdss,panel-dpi` (`displays/panel-dpi.c`, and `omapdss-boot-init.c` prepends the prefix), and a compatible string does not degrade — so nothing in the tree claims that node. `CONFIG_FB_OMAP2_PANEL_DPI=y` is **already set**. **Solved by DT, no driver — measured 2026-09-23 on `.188`**: `kernel/dts/panel-dpi.sh` rewrites that node for stock `panel-dpi` with the timings from [Display](#32-display) and hogs the other two control lines high from DT (`gpio-hog`, `gpiolib-of.c:244-264`), and the panel lights on our image; state and the remaining defects are in [`kernel/README.md`](kernel/README.md). ⚠️ **measured**: the vendor panel driver exposes no `bind`/`unbind`, so unlike touch this cannot be rehearsed on the running kernel |
-| `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low, and measured rather than asserted since 2026-09-21.** Every unique `compatible` string in the vendor DTB was checked against this tree (116 of them): all but twelve are claimed by a driver; nine more appear only in vanilla `.dts` files but are decorative CPU/DSP/bus-identity nodes, or are rescued by a driver-matched second string in the same property exactly as vanilla boards do it (`ti,omap3-l4-core` then `simple-bus`, `smsc,lan9221` then `smsc,lan9115`); one is `status = "disabled"`. **Exactly two enabled nodes have no possible binder — the panel and the touchscreen, both already rows in this table.** ⚠️ A claimed node can still fail at probe, which this check cannot see — the `smsc911x` row is that case. `usb_host/uimage.py` already walks the appended FDT and rewrites the uImage CRCs, so the packaging half is solved |
+| `arch/arm/boot/dts/omap3-rw20.dts` | absent | **low, and measured rather than asserted since 2026-09-21.** Every unique `compatible` string in the vendor DTB was checked against this tree (116 of them): all but twelve are claimed by a driver; nine more appear only in vanilla `.dts` files but are decorative CPU/DSP/bus-identity nodes, or are rescued by a driver-matched second string in the same property exactly as vanilla boards do it (`ti,omap3-l4-core` then `simple-bus`, `smsc,lan9221` then `smsc,lan9115`); one is `status = "disabled"`. **Exactly two enabled nodes have no possible binder — the panel and the touchscreen, both already rows in this table.** ⚠️ A claimed node can still fail at probe, which this check cannot see — the `smsc911x` row is that case. `kernel/build-image.sh` appends a DTB and packages the image with `mkimage`, so the packaging half is solved |
 | `CONFIG_TOUCHSCREEN_PANJIT=y` | no `panjit*.c`; vanilla's `TOUCHSCREEN_USB_PANJIT` is an unrelated USB driver | **a dead touchscreen**, from a silent drop. ⚠️ **Not written from specs — adapted, measured 2026-09-21**: the tree already holds a same-family driver, `drivers/input/touchscreen/cy8ctmg110_ts.c` — I2C, `tristate`, register map at `:41-50` — and it bursts nine bytes from reg 3, spanning the second coordinate pair and the finger count, then discards the second point exactly as `panjit_ts` does ([Touch](#33-touch)). It is platform-data-only (`:187-190` returns `-ENODEV` without pdata), so the work is an `of_match_table`, gpiod for its legacy integer GPIO calls, a falling IRQ for its `IRQF_TRIGGER_RISING`, the hardcoded `759x465` range, and slot reporting for the pair it already reads. ⚠️ **The 110→120 delta is closed — measured 2026-09-21**: a nine-byte read from reg 3 on `/dev/i2c-2` matches that register map byte-for-byte, so the adaptation is against a known layout rather than a guessed one, and [Touch](#33-touch) carries the map, the 12-bit `0..4095` range that replaces the hardcoded `759x465`, and the `0x0fff` flag mask a port must apply. ⚠️ **And it is rehearsable before any image exists — measured**: `/sys/bus/i2c/drivers/panjit_ts/` carries `bind` and `unbind` with device `2-0003`, so a replacement module can evict the vendor driver on the running kernel, with a reboot as the undo and no write to p1. ⚠️ **Reading the controller needs not even that**: `I2C_RDWR` carries the target address inside each `i2c_msg` and never consults the busy list that makes `I2C_SLAVE` return `-EBUSY` (`drivers/i2c/i2c-dev.c`), so the map above was read with the vendor driver bound and serving touch normally — nothing to evict and nothing to undo. `input_mt_*` is exported there too, so multi-touch needs no image either |
 | `CONFIG_OMAP_PACKAGE_CUS`, `CONFIG_MACH_RW20` | the vendor board file, absent | **nothing at all, and this row is closed — measured 2026-09-21.** Neither symbol can drive a line of code in this tree: `OMAP_PACKAGE_CUS` is a bare unreferenced `bool` (`arch/arm/mach-omap2/Kconfig:180`) and `omap3_mux_init` does not exist anywhere in 4.14.52, the legacy `omap_mux` layer having been deleted upstream before this release — so a vendor board file calling it would not even link. The machine descriptor is moot for the same reason it looked dangerous: DT match scores a descriptor by the **1-based position** of the string it hits in the root `compatible` list (`drivers/of/fdt.c:94-113`), the vendor root is `"ti,omap3-rw20", "ti,omap3"`, and vanilla's `OMAP3_DT` claims the second at score 2 (`board-generic.c:122`) — nothing matches the first, so `OMAP3_DT` wins and the image gets the full generic OMAP3 init (`omap3430_init_early`, then `omap_generic_init`). ⚠️ **And `MACH_RW20` is inert on the vendor kernel too — measured 2026-09-23:** its `__mach_desc_RW20` is field-for-field vanilla's `Generic OMAP3 (Flattened Device Tree)` (the same seven callbacks, `omap_reserve` through `omap3xxx_restart`), differing only in name and compatible, and `debug_ll_addr` is identical code in both (UART2 `0x4806c000`, `ttyO1`). None of that path touches pinmux, which matches a DTB bringing its own: 27 `pinmux` nodes, 11 `_pins` blocks, 13 `pinctrl-0`/`pinctrl-names` consumers including `/display`, and the audio binding (`ti,omap-twl4030`) |
 | `CONFIG_LOGO_LINUX_RW20_CLUT224` | a vendor boot logo | **cosmetic** — and the running kernel suppresses it anyway with `initcall_blacklist=fb_logo_late_init` in `bootargs`, so an image we build is free to carry its own |
@@ -2185,10 +2142,9 @@ running vendor kernel — measured yes for `panjit_ts`, no for the panel.
 
 **Why build one: the image becomes publishable.** A kernel compiled here ships with its own
 corresponding source and can go in a release; the vendor's `uImage-system` never can (`LICENSE.md`).
-That is what retires the byte-patch route into p1 — the USB power budget is reached today by locating a
-pattern inside a firmware image we may not redistribute and rewriting it in place, which is also why a
-power cycle is no longer a free undo on either bring-up path. **The argument is deployment stability,
-not performance.** The config defects a rebuild also fixes (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
+That retired the byte-patch route into p1, which reached the USB power budget by rewriting a firmware
+image we may not redistribute; only our own image is supported now. **The argument is deployment
+stability, not performance.** The config defects a rebuild also fixes (USB host/DMA, `PREEMPT_NONE`/`HZ=100`) are
 real, but none of them limits anything measured.
 
 **Verification is the cost that scales, but the exposure is one step.** A kernel that fails to boot does

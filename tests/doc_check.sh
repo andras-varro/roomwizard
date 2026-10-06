@@ -352,9 +352,7 @@ receipts() {
     if [ -n "${RECEIPTS_FILE:-}" ]; then cat "$RECEIPTS_FILE"; return; fi
     # shellcheck disable=SC2016
     cat <<'EOF'
-0x3e4	usb_host/README.md	IMPROVEMENT_PLAN.md
 source-path=SCRIPTDIR	tests/CLAUDE.md	IMPROVEMENT_PLAN.md
-9021923205825a2ec36edeaa1fe3ccc3	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 0x480AB060	usb_host/README.md	IMPROVEMENT_PLAN.md
 oss_keepalive.c	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 clock_gettime64	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md

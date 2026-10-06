@@ -17,7 +17,6 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 | `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
 | `rw-sshd.sh` | the guard around an `sshd_config` change: key proof, offline check, `sshd -t`, self-undoing reload |
-| `rw-usbpower.sh` | the only scripted writer of `uImage-system` on p1 |
 
 ## One SSH gate, and BatchMode stays on it
 
@@ -73,11 +72,7 @@ equivalent.
 ⚠️ **p1 is deliberately absent from `RW_PART_ROLES`, and a test asserts its absence.** Nothing can
 reach `mlo`, `u-boot.bin` or `ctrlblock.bin` through those functions — a stronger guarantee than every
 caller remembering not to. p4 (extended container) and p7 (swap) are absent for the same reason:
-nothing to mount. The **one** exception is `uImage-system`, reached by three deliberately-named
-functions (`rw_card_boot_partition`, `rw_mount_boot`, `rw_umount_boot`) with exactly one caller,
-`rw-usbpower.sh` — greppable, and a strictly smaller surface than widening the role table, which every
-existing caller iterates blindly. `rw_umount_boot` must be reachable from a caller's failure trap too,
-or an aborted run leaks a p1 mount.
+nothing to mount. No function in this directory mounts p1 at all.
 
 ⚠️ **A rootfs mounted offline shows `/home/root/{data,log,backup}` as three EMPTY directories** — they
 are mount points for p2/p3/p5. An offline tool that mounts only p6 sees no `websign/` (the network
@@ -88,46 +83,23 @@ catches the mistake that makes every later path resolve under the wrong tree.
 
 Measurements: `SYSTEM_ANALYSIS.md#42-partitions`. Reasoning: `COMMISSIONING.md` → *Finding the card*.
 
-## `rw-usbpower.sh` is the only writer of p1
+## p1: nothing scripted writes it
 
 There is **no boot-time MD5 check** of the kernel and no signing — the only gate on `uImage-system` is
-its uImage header + data CRC (which `usb_host/patch_dtb.py` recomputes correctly, and
-`usb_host/verify_uimage.py` checks in pure Python — no `mkimage`, no `dtc`, neither of which is
-installed here). U-Boot has no `saveenv`, so the environment cannot be persisted or corrupted.
+its uImage header + data CRC, which `mkimage` writes when `kernel/build-image.sh` packages our image.
+U-Boot has no `saveenv`, so the environment cannot be persisted or corrupted.
 
 **Rules:** never write `/dev/mtd*`; **never** overwrite `mlo`, `u-boot.bin` or `ctrlblock.bin` on p1;
 stage experimental kernels under a *new* filename.
 
-`uImage-system` has **exactly one** *scripted* writer (our own image is installed by hand, `kernel/README.md`) — this file, for the USB 500 mA budget — and it
-is md5-gated on the way in, backed up to `uImage-system.vendor` (whose md5 is verified *before* the
-original is touched) and verified by re-reading the card afterwards. There is no rollback on failure.
+**Only our own kernel image is supported**, and no library or script here writes `uImage-system`:
+installing it is a manual operator step (`kernel/README.md`), preceded by a verified backup of the
+*running* image. The vendor-kernel byte patch that used to be this file's one writer is deleted; tag
+`last-vendor-kernel` is the last tree that carried it.
 
-- ⚠️ **Never write a second copy of that sequence into a caller.** It is the one step
-  `tests/rw_provision_test.sh` group E cannot compare between executors, so a duplicate would drift
-  undetected; `tests/rw_usbpower_test.sh` group J is the stand-in comparison, running the one sequence
-  over both transports.
-- ⚠️ **The gate knows THREE measured md5s — vendor, 500 mA, and 500 mA + host mode — and the target is
-  chosen by the CALLER**, `rw_usbpower_want`/`rw_usbpower_target_md5` off `RW_USBPOWER_WITH_MODE`.
-  ⚠️ **The mode patch was applied to a unit and MEASURED NOT TO WORK** (2026-08-14), so **no caller
-  can reach it**: there is no `--usb-mode` flag anywhere and all three callers `unset
-  RW_USBPOWER_WITH_MODE` before driving the writer. The *library* still knows the state on purpose,
-  because a unit that already carries the patch must classify as `both` and be **re-derivable back
-  down**; a gate that refused it as `unknown` would leave it with no way back. It used to know two and
-  `rw_usbpower_apply` returned 0 at its `patched` arm before anything ran, so on an already-commissioned
-  unit a second patch wrote nothing and reported success.
-- ⚠️ **Never chain one patch onto another.** `patch_dtb.py` refuses an already-patched input, so a
-  transition re-derives from `uImage-system.vendor` (which step 6 proves is pristine), and that is also
-  what makes the undo an ordinary power-only run — which, with no `--usb-mode` flag anywhere, is now
-  the only run there is. A power-only card with no usable backup is **refused**.
-- ⚠️ **Three callers now drive that one writer, and two of them do it by default**:
-  `usb_host/build-and-deploy.sh`, `commissioning/provision.sh` (step 5) and
-  `commissioning/commission-offline.sh` (phase 6). So **a power cycle is no longer a free undo**, and
-  the remedy is a card reflash from the image commissioning takes — which is why it takes one.
-  `uImage-system.vendor` is the writer's pristine source for re-deriving, **not** a rollback path. A
-  taken decision: do not relitigate it, and do not re-raise card access as a risk.
-- ⚠️ **Whichever caller mounts p1 must be able to unmount it from its failure path** —
-  `commission-offline.sh` carries a `BOOT_MOUNTED` variable read by `cleanup_and_exit`, ordered before
-  `rw_umount_card` because `rmdir "$MOUNTED_BASE"` fails while `boot/` is still there.
+- ⚠️ **The default clean still means a power cycle is not a free undo**, and the remedy is a card
+  reflash from the image commissioning takes — which is why it takes one. A taken decision: do not
+  relitigate it, and do not re-raise card access as a risk.
 
 Observe all of the above and JTAG never comes up. Detail and recovery procedure:
 `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
@@ -198,8 +170,7 @@ layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` 
 - ⚠️ **And it refuses to publish vendor firmware** — any entry whose basename is `uImage*`, `mlo`,
   `u-boot*` or `ctrlblock*`. Matched on the basename, not a path, because p1 is not a bundle path at
   all: a staged copy would arrive at some invented location. `uImage-system` is a 5.2 MB Steelcase
-  binary and this repo is meant to be published, which is why the USB 500 mA patch is **derived** from
-  the device's own copy rather than shipped. `usb_host`'s `--bundle` carries the four *built*
+  binary and this repo is meant to be published. `usb_host`'s `--bundle` carries its *built*
   artifacts only.
 - ⚠️ **A new staged file is a licence decision, and `LICENSE.md` is where it is recorded.** Ask whether
   the file is *ours*: `scummremastered.zip`, `gui-icons.dat` and `vkeybd_roomwizard.zip` are all
@@ -256,6 +227,6 @@ over a path. It installs nothing and never touches a device. `rw-bundle.sh` stay
 ## Regressions
 
 Host-only, no device, no root: `tests/rw_ssh_test.sh`, `tests/rw_provision_test.sh`,
-`tests/rw_clean_test.sh`, `tests/rw_identify_test.sh`, `tests/rw_usbpower_test.sh`, plus the
+`tests/rw_clean_test.sh`, `tests/rw_identify_test.sh`, plus the
 `tests/measure_*_sabotage.sh` harnesses that re-measure them. What each one can and cannot see, and
 the traps in extending them, are in `tests/CLAUDE.md`.

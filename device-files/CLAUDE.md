@@ -81,8 +81,7 @@ error.
   loses it. That pairing used to be a comment in *both* files asking a human to remember.
 - **`usb` is an optional group**, compiled by `usb_host/build-and-deploy.sh` through
   `rw_provision_plan_component`. The four USB device scripts and the three `rc5.d` links are ordinary
-  `usb`-group records; **only the 500 mA power budget touches p1**, and that is `lib/rw-usbpower.sh`'s
-  job, not a record here. **`bluetooth` is the same shape**, compiled by `bluetooth/build-and-deploy.sh`.
+  `usb`-group records, and nothing in the group touches p1. **`bluetooth` is the same shape**, compiled by `bluetooth/build-and-deploy.sh`.
 
 Modes are **declared** in these files, never read off disk — `/mnt/c` reports every file 0777 and
 discards `chmod`, so `stat -c %a` here is a constant, not a measurement.

@@ -50,7 +50,7 @@ don't copy.
 | file | covers |
 |---|---|
 | `native_apps/CLAUDE.md` | the rendering loop, the input model, the touch model, the screen rectangles — the deepest of them |
-| `lib/CLAUDE.md` | the sourced shell libraries: SSH gate, plan compilers, bundle layout, the one p1 writer |
+| `lib/CLAUDE.md` | the sourced shell libraries: SSH gate, plan compilers, bundle layout, the p1 rules |
 | `commissioning/CLAUDE.md` | the bring-up scripts, the consent gate, offline verification, host naming |
 | `device-files/CLAUDE.md` | what is installed verbatim, and how to author the two rules files |
 | `tests/CLAUDE.md` | the host regressions, what each cannot see, sabotage-harness discipline |
@@ -123,13 +123,13 @@ the annotated walkthrough.
 ./roomwizard.sh                     # front door: a menu over everything below
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
-./commissioning/provision.sh <ip>   # system setup; ⚠️ CLEANS and WRITES p1 by default, then reboots
+./commissioning/provision.sh <ip>   # system setup; ⚠️ CLEANS by default, then reboots
 ./release.sh --stage-only           # build all components + stage one offline bundle + tar
 cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 ```
 
-⚠️ **Both bring-up paths clean the vendor stack and patch p1 by default**, and a power cycle is
-therefore no longer a free undo. `--no-clean` / `--no-usb-power` opt out. `set-default` is the only
+⚠️ **Both bring-up paths clean the vendor stack by default**, and a power cycle is therefore no longer
+a free undo. `--no-clean` opts out; neither path writes p1. `set-default` is the only
 mode `native_apps/build-and-deploy.sh` accepts. Cleanup, bloatware removal and the boot service live
 **only** in `commissioning/provision.sh` — never in a component script. All of it:
 `commissioning/CLAUDE.md`.
@@ -170,7 +170,7 @@ misparses. When in doubt, over-deploy — the failure mode is silent.
 | `common/audio_out.c`, `common/audio_gen.c` (+ `audio_out.h`, `audio_gen.h`) | `native_apps` + **ScummVM** — ⚠️ **two, not three: measured 2026-09-09**, `vnc_client/Makefile`'s `SRCS` names neither, and no `audio_out` symbol appears anywhere in that tree. They are on ScummVM's `OBJS` via `configure.patch`, which is why the row above cannot speak for them |
 | anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
 | the four **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`, `usb-audio-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot. Same for the **`bluetooth`** group (`bluetooth`, `bluetooth.conf`, `bluetooth-main.conf`, `bluetooth-input.conf`) with `cd bluetooth && ./build-and-deploy.sh <ip>` |
-| `usb_host/devmem_write.c`, `build-kernel-modules.sh`, `patch_dtb.py`, `uimage.py`, `lib/rw-usbpower.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` — and a **reboot** if p1 was patched |
+| `usb_host/devmem_write.c`, `build-kernel-modules.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` |
 
 ## Working from this host — Windows, WSL and the tools
 
@@ -304,9 +304,11 @@ tool-level traps rather than device facts, and each has cost real time.
 - **32-bit ARM:** `sizeof(long) == 4`. Never do `(now.tv_sec - 0) * 1000000L` — it overflows. Baseline
   timers to current time, not epoch 0.
 - **Firmware / boot edits.** Never write `/dev/mtd*`; **never** overwrite `mlo`, `u-boot.bin` or
-  `ctrlblock.bin` on p1; stage experimental kernels under a *new* filename. `uImage-system` has
-  **exactly one** *scripted* writer, `lib/rw-usbpower.sh` (our own image: manual, `kernel/README.md`) — the full rule set, the three md5s and the
-  no-free-undo consequence are in `lib/CLAUDE.md`. Recovery: `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
+  `ctrlblock.bin` on p1; stage experimental kernels under a *new* filename. **Only our own kernel image
+  is supported**, and nothing scripted writes `uImage-system`: installing it is a manual operator step
+  (`kernel/README.md`), and the p1 rules are in `lib/CLAUDE.md`. The vendor-kernel byte-patch path is
+  deleted; tag `last-vendor-kernel` is the last tree that ran on the vendor kernel. Recovery:
+  `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component build rules
 

@@ -145,7 +145,7 @@ This is the build/deploy loop, and what you want while writing code.
 # login once to add the device to known_hosts:
 # ssh root@<ip>
 
-# Phase 2: SSH — provision, deep clean, the 500 mA USB budget on p1, reboot
+# Phase 2: SSH — provision, deep clean, reboot
 ./commissioning/provision.sh <ip>
 
 # Phase 3: build + deploy everything (native_apps first — it provides the launcher)
@@ -153,22 +153,20 @@ This is the build/deploy loop, and what you want while writing code.
 ./deploy-all.sh <ip> vnc_client      # or one component;  --list  to see them
 ```
 
-⚠️ **Both bring-up paths CLEAN and WRITE p1 by default**, so that they leave the same unit. Each asks
-once whether the card is backed up, before the first write. The opt-outs:
+⚠️ **Only our own kernel image is supported**; installing it is a manual step ([kernel/README.md](kernel/README.md)),
+and no script writes p1. **Both bring-up paths CLEAN by default**, so that they leave the same unit. Each
+asks once whether the card is backed up, before the first write. The opt-outs:
 
 ```bash
-./commissioning/provision.sh <ip> --dry-run        # what would be deleted, what p1 would get
+./commissioning/provision.sh <ip> --dry-run        # what would be deleted
 ./commissioning/provision.sh <ip> --no-clean       # delete nothing
 ./commissioning/provision.sh <ip> --remove         # named vendor stacks only, no sweeps
-./commissioning/provision.sh <ip> --no-usb-power   # leave p1 alone (budget stays at 100 mA)
-./commissioning/provision.sh <ip> --no-usb         # no USB host mode at all; implies the above
+./commissioning/provision.sh <ip> --no-usb         # no USB host mode at all
 ./commissioning/provision.sh <ip> --status         # report current state; changes nothing
 ```
 
-Neither the clean nor the p1 write is undoable **on the device**: the 472 MB factory-restore payload goes
-with the rest of the vendor stack, and a power cycle no longer reverts p1. The vendor kernel is backed up
-beside itself as `uImage-system.vendor`, the writer's input for re-deriving a patch — **not** a rollback:
-recovery is a card reflash. Why 500 mA cannot be a boot-time script: [COMMISSIONING.md](COMMISSIONING.md).
+The clean is not undoable **on the device**: the 472 MB factory-restore payload goes with the rest of the
+vendor stack, and recovery is a card reflash.
 
 ## Architecture
 
@@ -187,7 +185,6 @@ roomwizard/
 │   ├── rw-identify.sh           # Which card, which partition, by content/position
 │   ├── rw-clean.sh              # clean-rules.conf -> a plan
 │   ├── rw-provision.sh          # provision-rules.conf -> a plan
-│   ├── rw-usbpower.sh           # The ONE writer of p1: the 500 mA USB budget
 │   ├── rw-ssh.sh, rw-sshd.sh    # The one "can I reach this device" gate; the --ssh-auth=password|key guard
 │   ├── rw-release.sh            # Resolve + fetch + verify a published release
 │   └── rw-bundle.sh             # The release-bundle layout, both directions
@@ -270,11 +267,10 @@ modules (GPL-2.0-only, written source offer). Everything is enumerated in
 [LICENSE.md](LICENSE.md), which is also where MIT's *scope* is stated: it governs the source and does not
 decide the licence of a binary it is linked into.
 
-⚠️ **No warranty, meant literally.** Commissioning writes to the SD card's boot partition by default (the
-500 mA USB budget), the vendor stack is deleted by default, and recovering a unit that will not boot
-means reaching the card — which means opening the case. That is feasible and it takes experience; an
-inexperienced attempt can break the enclosure. `--no-usb-power` and `--no-clean` opt out of the two
-irreversible steps.
+⚠️ **No warranty, meant literally.** The vendor stack is deleted by default, our kernel replaces the
+vendor's on the boot partition, and recovering a unit that will not boot means reaching the card — which
+means opening the case. That is feasible and it takes experience; an inexperienced attempt can break the
+enclosure. `--no-clean` opts out of the clean.
 
 Steelcase and RoomWizard are trademarks of their respective owner. This project is unaffiliated with,
 and not endorsed by, Steelcase.

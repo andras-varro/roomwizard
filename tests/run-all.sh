@@ -96,7 +96,6 @@ SUITE_ROWS=(
     "rw_provision_test.sh|deploy"
     "rw_release_test.sh|deploy"
     "rw_ssh_test.sh|deploy"
-    "rw_usbpower_test.sh|deploy"
     "setup_build_env_test.sh|deploy"
     "smoke_first_screen_test.sh|deploy"
     "doc_check.sh|docs"
@@ -236,7 +235,7 @@ if [ "$ONLY" = "selftest" ]; then
     mkdir -p "$T/failing"
     printf '#!/bin/bash\necho "3 passed, 1 failed"\nexit 1\n' > "$T/failing/rw_identify_test.sh"
     for n in check_arm_safe commission_offline commission_prep rw_bundle_ssh rw_clean \
-             rw_provision rw_release rw_ssh rw_usbpower setup_build_env; do
+             rw_provision rw_release rw_ssh setup_build_env; do
         printf '#!/bin/bash\necho "1 passed, 0 failed"\n' > "$T/failing/${n}_test.sh"
     done
     printf '#!/bin/bash\necho ok\n' > "$T/failing/doc_check.sh"

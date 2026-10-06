@@ -10,28 +10,28 @@ libraries they drive are documented in `lib/CLAUDE.md`; the rules files they rea
 | script | when |
 |---|---|
 | `card-prep.sh` | bring-up 1: SD-card prep, offline, sets host name |
-| `provision.sh <ip>` | bring-up 2: SSH cleanup + init service + SW-watchdog bypass + p1 power budget |
+| `provision.sh <ip>` | bring-up 2: SSH cleanup + init service + SW-watchdog bypass |
 | `commission-offline.sh --bundle <tar.gz\|dir>` | all of the above, offline, **one** boot, for delivery |
 | `set-hostname.sh` | the one writer of the three name files |
 | `clone-to-32gb.sh` | optional card upgrade (`SD_CARD_UPGRADE.md`) |
 
-## Both bring-up paths CLEAN and WRITE p1 BY DEFAULT
+## Both bring-up paths CLEAN BY DEFAULT, and neither writes p1
 
-`provision.sh <ip>` with no flags deep-cleans the vendor stack and patches `uImage-system` to a 500 mA
-USB budget, exactly as `commission-offline.sh` always has for the clean — the point being that the two
-paths leave the same unit. `--no-clean` and `--no-usb-power` are the opt-outs, `--keep-<group>` and
-`--no-<group>` the partial ones, and `--status` / `--hostname` still change nothing and never ask.
+`provision.sh <ip>` with no flags deep-cleans the vendor stack, exactly as `commission-offline.sh`
+does — the point being that the two paths leave the same unit. `--no-clean` is the opt-out,
+`--keep-<group>` and `--no-<group>` the partial ones, and `--status` / `--hostname` still change
+nothing and never ask. Neither script mounts or writes p1.
 
 **Both `--remove` and `--deep-clean` read their decisions from `device-files/clean-rules.conf`**, and
 differ from each other only by that file's `sweeps` group; `--remove` is the *narrower* selector rather
 than the only way in.
 
-⚠️ **`--no-clean` / `--no-usb-power` must be matched BEFORE the `--no-*` glob** in both scripts'
-argument loops: `case` takes the first match, so an arm placed after it is unreachable and the operator
-gets `Unknown provision group: usb-power`.
+⚠️ **`--no-clean` must be matched BEFORE the `--no-*` glob** in both scripts' argument loops: `case`
+takes the first match, so an arm placed after it is unreachable and the operator gets
+`Unknown provision group: clean`.
 
 **`--ssh-auth=password|key` is on both scripts, default `password`**, and `provision.sh --sshd-only`
-re-applies just the sshd records with no clean, p1 write or reboot. ⚠️ **Key-only must never be applied
+re-applies just the sshd records with no clean or reboot. ⚠️ **Key-only must never be applied
 without proof of a key** — online `rw_sshd_key_login_ok` runs before the consent question, offline
 `card-prep.sh` gets `RW_SSH_KEY_REQUIRED=1` and its `authorized_keys` must be newer than a marker taken
 before it ran. A conflicting `--no-sshd` is refused, not resolved. Mechanism: `lib/rw-sshd.sh`'s header.
@@ -71,10 +71,6 @@ deliberate override); and a **stripped** binary cannot be gated at all, so the c
 ("could not judge") and the installer proceeds with a loud block naming the count. `scummvm` and
 `vnc_client` ship stripped, so **every full bundle** takes that path — the sound verdict is the
 build-time one, on the unstripped artifact. Detail: `tests/CLAUDE.md`, and `IMPROVEMENT_PLAN.md`.
-
-⚠️ **Whichever path mounts p1 must be able to unmount it from its failure path.** This script carries a
-`BOOT_MOUNTED` variable read by `cleanup_and_exit`, ordered before `rw_umount_card` because
-`rmdir "$MOUNTED_BASE"` fails while `boot/` is still there.
 
 ## `card-prep.sh` is a step of the offline pass, not an alternative to it
 

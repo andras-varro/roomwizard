@@ -10,7 +10,7 @@ One command to enable USB host mode with game controller support:
 
 This will:
 1. Cross-compile the `devmem_write` tool and Xbox controller kernel modules
-2. Patch the device tree USB power budget (100mA → 500mA) if needed
+2. Report the USB power budget the booted device tree carries
 3. Deploy everything to the device
 4. Enable USB host mode (runtime kernel patch)
 5. Load game controller modules
@@ -112,40 +112,13 @@ The MUSB driver interprets this value as "units of 2mA", so `power = <0x32>` (50
 means 100mA total bus power. The Xbox 360 controller requests 500mA via its USB
 configuration descriptor (`bMaxPower = 250`, also in 2mA units).
 
-### Solution 3: Binary DTB Patching in uImage
+### Power budget in our own image
 
-The DTB is **not** a standalone `.dtb` file — it's appended to the zImage kernel inside the
-legacy uImage at offset `0x4eb788` (67,004 bytes). We binary-patch it in place:
+Nothing in this repo raises the budget: our DTBs keep `power = <0x32>` (100 mA) **[inferred from the
+DTB, not measured on a unit]**, so a controller connected directly may be rejected and a powered hub
+avoids it. The vendor-image byte patch that raised it is deleted with vendor-kernel support.
+`build-and-deploy.sh` prints the live value at the end: `/proc/device-tree/ocp@68000000/usb_otg_hs@480ab000/power`.
 
-1. **Find the DTB** inside `uImage-system` by scanning for the DTB magic (`0xd00dfeed`)
-2. **Walk the DTB struct block** to locate the `power` property within the `usb_otg_hs` node
-3. **Change the 4-byte value** from `0x00000032` (50 = 100mA) to `0x000000fa` (250 = 500mA)
-4. **Recalculate uImage CRCs** (both data CRC and header CRC)
-5. **Deploy** the patched uImage back to the FAT32 boot partition (`/dev/mmcblk0p1`)
-
-The patch is:
-
-- **Persistent** — survives reboots (written to the boot partition)
-- **Not reversible in place** — `uImage-system.vendor` is kept beside it as the writer's pristine input
-  for re-deriving a patch, not as an undo; recovery from a bad write is re-flashing the card from the
-  image commissioning takes
-- **Idempotent** — `patch_dtb.py` checks the current value and skips if already patched
-
-⚠️ **A second p1 patch — the `mode` 3 → 1 one — was tried and MEASURED NOT TO WORK, and it is no longer
-reachable from any deploy or commissioning path** (2026-08-14). It set the `usb_otg_hs` node's `mode`
-from 3 (`DUAL_ROLE`) to 1 (`HOST`), the candidate *cause* fix for "nothing enumerates unless it was
-plugged in at boot". Applied to `.188`'s p1, verified live in the booted device tree, unit booted
-normally — and a pad plugged in after a boot with an empty socket still stayed dark, while
-`/etc/init.d/usb-host recover` on the same firmware brought it up on the first attempt.
-That candidate is therefore closed **failed**.
-
-There is therefore **no `--usb-mode` flag**, and all three callers `unset RW_USBPOWER_WITH_MODE` before
-driving the writer (group N of `../tests/rw_usbpower_test.sh` is the negative control). What was **kept**
-is `../lib/rw-usbpower.sh`'s knowledge of the state, plus `patch_dtb.py --mode` and
-`verify_uimage.py --expect-mode`: a unit that already carries the patch must classify as `both` rather
-than be refused as `unknown`, so that it can be **re-derived back down** to power-only. Every transition
-derives from `uImage-system.vendor` rather than chaining, which is what makes that revert an ordinary
-run — done for real on `.188` the same day.
 
 #### DTB Location in uImage
 
@@ -164,7 +137,7 @@ uImage-system (5,225,796 bytes)
 | `power` value | Hex | Bus power | Result |
 |:---:|:---:|:---:|---|
 | 50 (original) | `0x32` | 100mA | Xbox 360 controller **rejected** |
-| 250 (patched) | `0xfa` | 500mA | Xbox 360 controller **accepted** |
+| 250 (raised) | `0xfa` | 500mA | Xbox 360 controller **accepted** |
 
 ---
 
@@ -384,68 +357,7 @@ DMA problem. The root cause is in the kernel's compiled-in code path, not the de
 configuration. The `omap2430_ops.dma_init` pointer is NULL at compile time because
 `CONFIG_USB_INVENTRA_DMA` is not set — no device tree change can populate it.
 
-However, the DTB `power` property **does** need to be patched (see Problem 3 above) to
-raise the USB bus power budget from 100mA to 500mA for direct controller connections.
-
-### DTB Patching Details
-
-#### Boot Partition Layout
-
-The RoomWizard boots from a FAT32 partition (`/dev/mmcblk0p1`) containing:
-
-| File | Size | Purpose |
-|------|------|---------|
-| `mlo` | 50 KB | First-stage bootloader (MLO/SPL) |
-| `u-boot.bin` | 468 KB | U-Boot bootloader |
-| `u-boot-sd.bin` | 468 KB | U-Boot for SD boot |
-| `uImage-system` | 5.0 MB | Kernel + appended DTB (legacy uImage) |
-| `uImage-bootstrap` | 5.1 MB | Bootstrap/recovery kernel |
-| `ramfilesys.gz` | 11.3 MB | Initial ramdisk |
-
-U-Boot loads `uImage-system` to `0x80008000`. The kernel self-extracts and finds the
-appended DTB using the `ARM_ATAG_DTB_COMPAT` mechanism (the DTB starts with magic
-`0xd00dfeed` immediately after the kernel image).
-
-#### DTB Binary Structure
-
-The DTB (Flattened Device Tree) is a binary format with three main sections:
-
-1. **Header** (40 bytes) — magic, sizes, offsets
-2. **Structure block** — tree of nodes and properties encoded as tokens
-3. **Strings block** — property name strings (deduplicated)
-
-Property lookup requires walking the structure block token-by-token:
-- `FDT_BEGIN_NODE` (0x01) — start of a node, followed by name
-- `FDT_PROP` (0x03) — property, followed by length + strings-block offset + data
-- `FDT_END_NODE` (0x02) — end of a node
-
-The `patch_dtb.py` script walks this structure to find the `power` property specifically
-within the `usb_otg_hs` node, avoiding false matches in other nodes.
-
-⚠️ **Resolve a property's `nameoff` and compare the exact bytes — never search the strings block for
-the name.** The strings block is deduplicated *by suffix*, and on this DTB that bites: measured on
-`.188` 2026-08-14, `mode`'s nameoff is `0x3e4` and `usb_mode`'s is `0x3e0`, so **`mode` has no
-string-table entry of its own — it is the last four bytes of `usb_mode`.** A locator that scans the
-strings block for `b"mode\0"` is therefore answering a different question and will land on the wrong
-property. `uimage.py`'s walk already did the right thing for `power`; `find_prop_offset(data, want,
-hint)` is the shared implementation, with `find_power_offset`/`find_mode_offset` as one-line wrappers.
-
-Two more measurements from the same live tree, each of which would otherwise be a plausible wrong turn:
-`/ocp@68000000/usb_otg_hs@480ab000/mode` = `00 00 00 03` and it is the **only** property named `mode`
-anywhere in the tree (so `original.dts:3818` is confirmed against the running kernel, not just against
-the decompile); and `mode` and `power` are **siblings of one node**, so the two patches must be
-asserted to land in the *same* `d00dfeed` candidate. `patch_dtb.py --mode` consequently patches **both**
-properties in one pass and never `mode` alone — a p1 write is one shot, and a mode-only image would be
-a fourth firmware state nothing can classify.
-
-#### uImage CRC Recalculation
-
-After patching the DTB bytes, the uImage checksums must be recalculated:
-
-1. **Data CRC** (offset 24–27): CRC32 of all bytes after the 64-byte header
-2. **Header CRC** (offset 4–7): CRC32 of the 64-byte header with CRC field zeroed
-
-Without correct CRCs, U-Boot will refuse to boot the image.
+The DTB `power` property is a separate matter (see Problem 3 above): it sets the USB bus power budget, and a device tree can express that.
 
 ---
 
@@ -455,14 +367,11 @@ Without correct CRCs, U-Boot will refuse to boot the image.
 |------|---------|---------|
 | `build-and-deploy.sh` | Workstation (WSL/Linux) | End-to-end build and deploy automation |
 | `build-kernel-modules.sh` | Workstation (WSL/Linux) | Cross-compile Xbox controller kernel modules |
-| `patch_dtb.py` | Workstation (Python 3) | Binary-patch MUSB power property in uImage DTB |
-| `find_dtb.py` | Workstation (Python 3) | Extract DTB from uImage for inspection |
 | `devmem_write.c` | Compiled for ARM | `/dev/mem` mmap-based read/write tool |
 | [`../probes/*.sh`](../probes/README.md) | Device (need `devmem_write`) | UART3 / pinmux / GPIO measurement probes. Not built, deployed or packaged by anything — a shelf, not a component |
 | `../device-files/enable-usb-host.sh` | Device | Runtime kernel patch + MUSB driver rebind |
 | `../device-files/usb-host` | Device | SysV init.d wrapper for USB host boot persistence |
 | `../device-files/xpad-modules` | Device | SysV init.d script for loading controller modules at boot |
-| `../lib/rw-usbpower.sh` | Workstation | The **only** writer of `uImage-system`: md5 gate, backup, patch, verify, restore-on-failure |
 
 The three device scripts live in [`device-files/`](../device-files/) rather than here, and are named as
 they are *deployed*, because three paths now install the same bytes — `commissioning/provision.sh`,
@@ -483,20 +392,13 @@ four **built** artifacts travel in the release bundle.
 | `/lib/modules/4.14.52/extra/xpad.ko` | `modules/xpad.ko` | Xbox controller driver |
 | `/etc/init.d/xpad-modules` | `../device-files/xpad-modules` | Boot persistence for modules |
 | `/etc/rc5.d/S89xpad-modules` | Symlink → `../init.d/xpad-modules` | Runlevel 5 boot hook |
-| p1 `uImage-system` | patched in place from the device's own copy | Kernel with patched DTB (500 mA power) |
 
 ⚠️ **The module loader's installed name is `/etc/init.d/xpad-modules`; `S89xpad-modules` is the *link*.**
 It used to be installed under the `S89` name in `init.d` as well, and nothing sweeps `/etc/init.d`, so
 `provision-rules.conf:94` carries an `unlink` of the old path to clear it off units commissioned before
 the move.
 
-⚠️ **p1 is not a bundle path and `uImage-system` is never shipped.** It is a 5.2 MB Steelcase binary and
-this repo is published, so the patch is *derived* from the device's own copy by
-[`lib/rw-usbpower.sh`](../lib/rw-usbpower.sh) — md5-gated on the way in, backed up beside itself as
-`uImage-system.vendor`, verified by re-reading the card. On any failure past the backup step it restores
-the vendor image, verifies the restore and refuses loudly — p1 has no recovery over SSH. A write that
-*succeeds* has no in-place undo: that is a card reflash.
-`release.sh` refuses to publish any manifest entry whose basename matches `uImage*`.
+⚠️ **`uImage-system` is never shipped and never written by a script.** `release.sh` refuses to publish any manifest entry whose basename matches `uImage*`.
 
 ---
 
@@ -515,8 +417,7 @@ the vendor image, verifies the restore and refuses loudly — p1 has no recovery
 | No event device after xpad loads | Controller unplugged during load | Replug controller, or unbind/rebind via sysfs |
 | **Worked at boot, dead after a replug** | On `.188` a 95 s unplug/replug **works** — VBUS stays up and the disconnect is not processed until the device returns. The `.225` 60 s failure has no confirmed counterpart on current hardware | If it does happen: plug the device in, then `/etc/init.d/usb-host recover` (a driver re-probe). ⚠️ **`echo host > .../mode` is a silent no-op on this SoC** — `omap2430_ops` has no `.set_mode`. Detail `../SYSTEM_ANALYSIS.md#36-usb` |
 | **Nothing enumerates unless it was plugged in at boot** | **A standing property of this hardware, not an open bug** (settled 2026-08-14). MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off. Three mechanisms read out of the driver source have each been applied and **refuted on hardware** | **Control Panel → USB → RESCAN** — one tap, ~5 s, dead port → playable pad, verified on a panel. Over SSH it is `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` |
-| "rejected configuration due to insufficient bus power" | DTB power budget too low | Run `patch_dtb.py` to set power=250, redeploy uImage |
-| Device won't boot after DTB patch | Corrupt uImage CRCs | Pull the card and re-flash it from the backup image commissioning takes; there is no in-place restore |
+| "rejected configuration due to insufficient bus power" | Our DTB keeps the vendor `power` `0x32` (100 mA, inferred from the DTB, not measured on a unit) | Connect the controller through a powered hub |
 
 ---
 
@@ -531,7 +432,7 @@ the vendor image, verifies the restore and refuses loudly — p1 has no recovery
 | EHCI/OHCI alternative | `CONFIG_USB_EHCI_HCD` and `CONFIG_USB_OHCI_HCD` not compiled |
 | usbhid for Xbox controller | Controller uses vendor-specific class `ff`, not HID class `03` |
 | Runtime DTB power override **via sysfs** | MUSB reads `power` at probe and `hcd->power_budget` is not exposed; there is no sysfs node to write |
-| DTB `mode` 3 → 1 (`MUSB_PORT_MODE_HOST`) to revive a cold port | **Refuted on hardware 2026-08-14.** Written to `.188`'s p1 and verified live in the booted tree (`mode` = `00 00 00 01`); a pad plugged in after an empty-socket boot still stayed dark, while `usb-host recover` on the same firmware brought it up on attempt 1. `patch_dtb.py --mode` and the three-state p1 gate all stay — they are what makes a patched unit re-derivable back down — but **no caller exposes the flag** |
+| DTB `mode` 3 → 1 (`MUSB_PORT_MODE_HOST`) to revive a cold port | **Refuted on hardware 2026-08-14.** Written to `.188`'s p1 and verified live in the booted tree (`mode` = `00 00 00 01`); a pad plugged in after an empty-socket boot still stayed dark, while `usb-host recover` on the same firmware brought it up on attempt 1. The p1 byte-patch writer that applied it is deleted with vendor-kernel support |
 | `echo host > $MUSB/mode` | Silent no-op that returns success: `omap2430_ops` has no `.set_mode` on this SoC |
 | Writing `$MUSB/vbus` | Sets `a_wait_bcon`, which nothing on omap2430 reads |
 | debugfs `softconnect` | Sets `SESSION` **only** in `OTG_STATE_A_WAIT_BCON`; a cold port sits in `a_idle` |
@@ -556,7 +457,7 @@ scoped future item — locate the **in-RAM unflattened device tree** and patch i
 `devmem_write`, the same mechanism as the `omap2430_ops` patch aimed at a different target. That has never
 been attempted; what failed was writing through *sysfs*, which is a different thing entirely. The open
 risk is address stability: `omap2430_ops` is a static symbol at a fixed address, while the unflattened DT
-is early-boot allocated. If it works, the p1 write and `--no-usb-power` can both be retired.
+is early-boot allocated. If it works, a 500 mA budget would need no new kernel image.
 
 ⚠️ **The other untried `/dev/mem` target is DEVCTL `SESSION`, and it carries a hazard worth stating
 before anyone tries it.** MUSB's DEVCTL register is at physical `0x480AB060`, and bit 0 (`SESSION`) is

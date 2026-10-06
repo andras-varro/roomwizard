@@ -676,8 +676,8 @@ rw_provision_plan_summary() {
 # One implementation for both callers — commissioning/provision.sh (the whole
 # plan) and usb_host/build-and-deploy.sh (the usb group). They had a verbatim copy
 # each, so they had the defect twice; and $RW_SSH/$RW_SCP (the convention
-# lib/rw-usbpower.sh already uses) is what lets the regression drive this real code
-# with no device.
+# lib/rw-bundle.sh's rw_bundle_install_ssh uses too) is what lets the regression
+# drive this real code with no device.
 # ---------------------------------------------------------------------------
 rw_provision_push_installs() {
     local plan="$1" repo="$2" target="$3"

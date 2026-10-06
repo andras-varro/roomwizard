@@ -48,12 +48,12 @@ mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n '' -d z
   differing bytes.
 - `mkimage` and `fdtput` (package `device-tree-compiler`, probed as `dtc`) are in `setup-build-env.sh`'s `kmod` group. A clone without them can build
   modules but cannot package an image.
-- ⚠️ **None of our DTBs carries the 500 mA USB power patch**, which `lib/rw-usbpower.sh` applies to
-  the vendor image in place. An image of ours therefore boots with the stock USB current limit.
+- ⚠️ **None of our DTBs raises the USB power budget**: `usb_otg_hs` keeps the vendor's `power` `0x32`
+  (100 mA, [§3.6](../SYSTEM_ANALYSIS.md#36-usb)), so a controller needs a powered hub. The byte patch that
+  raised it on the vendor image is deleted with vendor-kernel support (tag `last-vendor-kernel`).
 
-Installing the image on a unit is a **manual operator step**, not scripted: `lib/rw-usbpower.sh` is the
-only *scripted* writer of `uImage-system` and it derives the vendor image ([`lib/CLAUDE.md`](../lib/CLAUDE.md)).
-The permission classifier refuses an agent's write there, so the operator takes a backup of the running
+Installing the image on a unit is a **manual operator step**, and nothing scripted writes `uImage-system`
+([`lib/CLAUDE.md`](../lib/CLAUDE.md)). The permission classifier refuses an agent's write there, so the operator takes a backup of the running
 `uImage-system`, copies the new one over it and reboots (`.188` runs our image this way). The undo is
 copying the backup back, by SSH if the image answers or with a card reader if it does not. `build-image.sh`
 itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay untouched.

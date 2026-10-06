@@ -21,8 +21,8 @@
 # asserts that (a) the right check fires and (b) the tool exits non-zero. The
 # happy path is case 1 and is the control for all of them.
 #
-# Section 4 is the one exception and is the mirror image: the p1 skip paths must
-# exit ZERO and still say which flag skipped them, so they use expect_says rather
+# Section 4 is the one exception and is the mirror image: the --no-usb skip must
+# exit ZERO and still say which flag skipped it, so it uses expect_says rather
 # than expect_fires. Section 0 is neither — it is the structural check on the
 # fixture tree itself.
 #
@@ -74,7 +74,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-release.sh lib/rw-usbpower.sh lib/rw-ssh.sh lib/rw-sshd.sh \
+         lib/rw-release.sh lib/rw-ssh.sh lib/rw-sshd.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
@@ -127,12 +127,10 @@ echo ""
 echo "0. the fixture tree covers everything the tool sources"
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# The negative control for the copy list above, and the case that would have caught
-# lib/rw-usbpower.sh's omission from it. That omission was invisible for a whole
-# session because the `.` of it is LAZY — it sits inside phase 6's else branch, and
-# every case in this file passes --base, which skips p1 before the source line is
-# reached. So a suite that only ever runs --base cannot discover a missing library
-# by running; it has to look.
+# The negative control for the copy list above. A library sourced LAZILY — its `.`
+# inside a branch that every --base case skips — is invisible to running: one such
+# omission went unnoticed for a whole session. So a suite that only ever runs
+# --base cannot discover a missing library by running; it has to look.
 #
 # Reads the COPIED scripts, not the repo's, so the thing asserted is the tree the
 # cases below actually execute.
@@ -208,10 +206,6 @@ if printf '%s\n' "$OUT" | grep -qE 'boot links resolve .*S91'; then
 else
     bad "1d the default run checks the bluetooth group's boot link too (S91)"
 fi
-
-# Kept for section 4: a default --base run is exactly the p1 '--base' skip case, so
-# it is asserted against THIS run rather than paying for a second identical one.
-HAPPY_OUT="$OUT"; HAPPY_ST="$ST"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
@@ -366,39 +360,21 @@ expect_fires 'do not look right|does not look like' "3b a directory that is not 
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "4. p1: the three ways the power patch is skipped"
+echo "4. --no-usb, and the removed --no-usb-power"
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# ⚠️ What this section does NOT cover: the p1 WRITE. Reaching the
-# gate/backup/patch/verify/rollback sequence needs --disk — a real card or a
-# loopback image with a vfat p1 — and this whole file is built on --base, which
-# hands the tool four mount points and no disk. tests/rw_usbpower_test.sh (94 cases)
-# and tests/measure_usbpower_sabotage.sh (five sabotages, all caught) own that
-# sequence over both transports. What THIS file can own is which mode reaches it,
-# i.e. that every non-writing path says so and still succeeds. Do not read the
-# passes below as evidence that the write is covered here.
-#
-# Each string is asserted in TWO places on purpose: the per-file verify line and the
-# closing summary. A verdict that reaches the detail block but not the summary is a
-# skip the operator scrolls past, and the summary is the only part they are told to
-# read.
+# The tool no longer touches p1 at all, so --no-usb-power is gone with the p1
+# patch it opted out of. A stale invocation must be REFUSED, not swallowed: a
+# flag accepted and ignored reads as a choice honoured.
 
-# ── --no-usb-power: the driver is installed, only the budget is left alone.
 run "$BUNDLE" "$REPO" --no-usb-power
-expect_says 'p1: skipped \(--no-usb-power\)' \
-    "4a --no-usb-power skips p1, succeeds, and the verify block says which flag did it"
-expect_says 'USB power budget: skipped \(--no-usb-power\)' \
-    "4b --no-usb-power is named in the closing summary too"
+expect_fires 'Unknown provision group: usb-power' \
+    "4a the removed --no-usb-power is refused by name, not silently accepted"
 
-# ── --no-usb: the whole group goes, and it must IMPLY --no-usb-power. Patching p1
-# for a unit with no /etc/init.d/usb-host would be a gratuitous least-reversible
-# write. The distinct string is what proves the implication was taken rather than
-# the plain --no-usb-power branch being reached by accident.
+# ── --no-usb: the whole group goes, the run still succeeds, and it says so.
 run "$BUNDLE" "$REPO" --no-usb
-expect_says 'p1: skipped \(--no-usb\)' \
-    "4c --no-usb implies --no-usb-power, and says so by its own name"
-expect_says 'USB power budget: skipped \(--no-usb\)' \
-    "4d --no-usb is named in the closing summary too"
+expect_says 'USB HOST MODE was skipped \(--no-usb\)' \
+    "4b --no-usb succeeds and the closing summary names the flag"
 # And the boot-link check must drop S89/S90 rather than fail over links nobody asked
 # to install. This is the half of that check that could turn an opt-out into a
 # verification failure, so it is asserted from the opt-out side.
@@ -409,21 +385,11 @@ expect_says 'USB power budget: skipped \(--no-usb\)' \
 # default run's own message — it would pass whether or not the exclusion works.
 _bl=$(printf '%s\n' "$OUT" | grep -E 'boot links resolve' | head -1)
 if [ -n "$_bl" ] && ! printf '%s\n' "$_bl" | grep -q 'S89'; then
-    ok "4e --no-usb drops S89/S90 from the boot-link check instead of failing on them"
+    ok "4c --no-usb drops S89/S90 from the boot-link check instead of failing on them"
 else
-    bad "4e --no-usb drops S89/S90 from the boot-link check instead of failing on them"
+    bad "4c --no-usb drops S89/S90 from the boot-link check instead of failing on them"
     printf '%s\n' "$OUT" | grep -E 'boot link' | sed 's/^/        /' | head -5
 fi
-
-# ── --base with no flags at all: the default path every other case in this file
-# takes. ⚠️ This is reached even though the p1 patch is ON by default, because
-# DO_USB_POWER is tested BEFORE -z "$MOUNTED_BASE" — so the flag cases above are
-# genuinely distinct from this one and not all three the same branch.
-OUT="$HAPPY_OUT"; ST="$HAPPY_ST"
-expect_says 'p1: skipped \(--base: no disk given, so p1 cannot be located\)' \
-    "4f --base alone skips p1 and says a card, not a mount point, is what it needs"
-expect_says 'USB power budget: skipped \(--base' \
-    "4g the --base skip is named in the closing summary too"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
