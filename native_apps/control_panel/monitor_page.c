@@ -12,6 +12,8 @@
  *
  * The CPU graph rides the same once-a-second sample: one point per sample, so
  * it adds no repaint of its own.  The math and the ring are cpu_load.c's.
+ * On entry the graph is pre-filled from rwmond's published history when the
+ * daemon is running (cpu_seed_from_daemon); without it the graph starts empty.
  *
  * The SoC TEMP row exists only when a thermal zone reads (soc_temp.h): on a
  * kernel without the bandgap driver it is not drawn at all, and the rows
@@ -21,6 +23,7 @@
 #include "cp_ui.h"
 #include "cpu_load.h"
 #include "soc_temp.h"
+#include "../sysmon/mon_ring.h"
 #include "../common/common.h"
 
 #include <stdio.h>
@@ -190,12 +193,39 @@ static void cpu_sample(void) {
     cpu_prev = cur;
 }
 
+/* rwmond's ring (sysmon/mon_ring.h), if the daemon is running: its CPU
+ * column pre-fills the graph so the page opens on the last two minutes.  A
+ * file older than 3 s means the daemon is gone, and the page then starts empty
+ * and samples for itself exactly as without it.  The daemon's figure excludes
+ * its own ticks where this page excludes the panel's; both are the same
+ * wall-time share (cpu_load.h). */
+static void cpu_seed_from_daemon(unsigned long long now_cs) {
+    static char text[MON_RING_TEXT_MAX];
+    static MonRing ring;
+    unsigned long long file_cs;
+    unsigned flags;
+    FILE *f = fopen(MON_RING_PATH, "r");
+    if (!f) return;
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = '\0';
+    if (mon_ring_parse(text, &ring, &file_cs, &flags) != 0
+        || !mon_ring_fresh(file_cs, now_cs, 300))
+        return;
+    for (int i = 0; i < ring.count; i++) {
+        int pm = mon_ring_get(&ring, i)->cpu_pm;
+        if (pm != MON_ABSENT) cpu_hist_push(&cpu_hist, pm);
+    }
+}
+
 /* The page was closed, so nothing sampled the gap: start the graph afresh
- * rather than draw one point averaged over however long that was. */
+ * rather than draw one point averaged over however long that was — from
+ * rwmond's history when it is fresh, else empty. */
 static void cpu_restart(void) {
     cpu_hist_clear(&cpu_hist);
     cpu_others_pm = cpu_self_pm = -1;
     cpu_snap(&cpu_prev);
+    if (cpu_prev.valid) cpu_seed_from_daemon(cpu_prev.wall_cs);
 }
 
 /* SoC temperature: which thermal zone, and its newest reading. */

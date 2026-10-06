@@ -178,17 +178,17 @@ step " 6/30" "highscore";    $CC "${WARN[@]}" -O2 -c common/highscore.c       -o
 step " 7/30" "keyboard";     $CC "${WARN[@]}" -O2 -c common/keyboard.c        -o build/keyboard.o
 step " 8/30" "ui_layout";    $CC "${WARN[@]}" -O2 -c common/ui_layout.c       -o build/ui_layout.o
 step " 9/30" "audio";        $CC "${WARN[@]}" -O2 -c common/audio.c           -o build/audio.o
-step "10/30" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
-step "11/30" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
-step "12/30" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
-step "13/30" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
-step "14/30" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
+step "10/31" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
+step "11/31" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
+step "12/31" "audio_wav";    $CC "${WARN[@]}" -O2 -c common/audio_wav.c       -o build/audio_wav.o
+step "13/31" "audio_bed";    $CC "${WARN[@]}" -O2 -c common/audio_bed.c       -o build/audio_bed.o
+step "14/31" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o build/ppm.o
                               $CC "${WARN[@]}" -O2 -c common/icon_grid.c       -o build/icon_grid.o
                               $CC "${WARN[@]}" -O2 -c common/ui_focus.c        -o build/ui_focus.o
                               $CC "${WARN[@]}" -O2 -c common/pointer.c         -o build/pointer.o
-step "15/30" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
-step "16/30" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
-step "17/30" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
+step "15/31" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
+step "16/31" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
+step "17/31" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
                               $CC "${WARN[@]}" -O2 -c common/input_scan.c      -o build/input_scan.o
                               $CC "${WARN[@]}" -O2 -c common/input_slots.c     -o build/input_slots.o
 
@@ -234,26 +234,26 @@ COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
 # games.  Both of them must link it, though — it is the one place the fit lives.
 CALIB_OBJ="build/touch_calib.o"
 
-step "18/30" "snake";        $CC "${WARN[@]}" -O2 snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
-step "19/30" "tetris";       $CC "${WARN[@]}" -O2 tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
-step "20/30" "pong";         $CC "${WARN[@]}" -O2 pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
+step "18/31" "snake";        $CC "${WARN[@]}" -O2 snake/snake.c             "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/snake         -lm "${AUDIO_LIBS[@]}"
+step "19/31" "tetris";       $CC "${WARN[@]}" -O2 tetris/tetris.c           "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/tetris        -lm "${AUDIO_LIBS[@]}"
+step "20/31" "pong";         $CC "${WARN[@]}" -O2 pong/pong.c               "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/pong          -lm "${AUDIO_LIBS[@]}"
 
-step "21/30" "brick_breaker"
+step "21/31" "brick_breaker"
 $CC "${WARN[@]}" -O2 brick_breaker/brick_breaker.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/brick_breaker -lm "${AUDIO_LIBS[@]}"
 
-step "22/30" "samegame"
+step "22/31" "samegame"
 $CC "${WARN[@]}" -O2 samegame/samegame.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/samegame -lm "${AUDIO_LIBS[@]}"
 
-step "23/30" "frogger"
+step "23/31" "frogger"
 $CC "${WARN[@]}" -O2 frogger/frogger.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/frogger -lm "${AUDIO_LIBS[@]}"
 
-step "24/30" "platformer"
+step "24/31" "platformer"
 $CC "${WARN[@]}" -O2 platformer/platformer.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/platformer -lm "${AUDIO_LIBS[@]}"
 
-step "25/30" "app_launcher"
+step "25/31" "app_launcher"
 $CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/ppm.o build/icon_grid.o build/pointer.o build/logger.o -o build/app_launcher -lm "${AUDIO_LIBS[@]}"
 
-step "26/30" "theremin"
+step "26/31" "theremin"
 $CC "${WARN[@]}" -O2 -I. \
   theremin/theremin.c \
   "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
@@ -262,25 +262,30 @@ $CC "${WARN[@]}" -O2 -I. \
 # Owns the calibration wizard (Touch tab), which is why it links CALIB_OBJ.
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
-step "27/30" "control_panel"
-$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/cpu_load.c control_panel/soc_temp.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/ui_focus.o build/ppm.o build/icon_grid.o build/pointer.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
+step "27/31" "control_panel"
+$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/cpu_load.c control_panel/soc_temp.c sysmon/mon_ring.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/ui_focus.o build/ppm.o build/icon_grid.o build/pointer.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostics. Both were previously absent from this script, which is why
 # the deployed touch_trace was stale (pre-bezel). A third, touch_inject, is gone
 # entirely: it wrote synthetic events to /dev/input/event0, which is the OUTPUT
 # path, so it announced success and delivered nothing to any reader. Injection
 # needs /dev/uinput and this kernel has none — ../CLAUDE.md carries the rule.
-step "28/30" "touch_raw"
+step "28/31" "touch_raw"
 $CC "${WARN[@]}" -O2 -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
 
-step "29/30" "touch_trace"
+step "29/31" "touch_trace"
 $CC "${WARN[@]}" -O2 -I. tests/touch_trace.c "${COMMON_OBJ[@]}" -o build/touch_trace -lm "${AUDIO_LIBS[@]}"
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the panel.
-step "30/30" "audio_mix_test"
+step "30/31" "audio_mix_test"
 $CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
+
+# The Monitor page's history daemon, started at boot by /etc/init.d/rwmond.
+# Deliberately links nothing from common/: it opens no framebuffer or input.
+step "31/31" "rwmond"
+$CC "${WARN[@]}" -O2 -I. sysmon/rwmond.c sysmon/mon_ring.c control_panel/cpu_load.c control_panel/soc_temp.c -o build/rwmond
 
 # Collect icon files from source dirs → build/icons/.  control_panel/icons/ holds
 # the control panel's home-grid icons (gen_cp_icons.py); control_panel reads them
@@ -323,7 +328,7 @@ echo "  Wrote $(find build/soundsets -maxdepth 1 -type f -name '*.sound' 2>/dev/
 # have recreated exactly that bug, and a fourth for
 # --bundle would recreate it again.
 GAMES_BINARIES=(snake tetris pong brick_breaker samegame frogger platformer
-                theremin audio_mix_test control_panel
+                theremin audio_mix_test control_panel rwmond
                 touch_raw touch_trace)
 
 echo ""
@@ -722,6 +727,9 @@ if ssh "$DEVICE" '[ -f /etc/init.d/roomwizard-app ]' 2>/dev/null; then
     info "Restarting app launcher..."
     ssh "$DEVICE" '/etc/init.d/roomwizard-app start' 2>&1 | grep -v '^$'
     ok "Launcher running"
+    # roomwizard-app stop ends every process running out of $GAMES_DIR, rwmond
+    # included (it has to, or scp could not replace the binary), so restart it.
+    ssh "$DEVICE" 'if [ -x /etc/init.d/rwmond ]; then /etc/init.d/rwmond start; fi' 2>&1 | grep -v '^$' || true
 else
     echo ""
     echo "  To start app launcher:"
