@@ -116,6 +116,7 @@ static const CpPage *const home_pages[] = {
     &cp_input_page,
     &cp_network_page,
     &cp_monitor_page,
+    &cp_system_page,
     &cp_info_page,
 };
 #define HOME_PAGE_COUNT ((int)(sizeof(home_pages) / sizeof(home_pages[0])))
