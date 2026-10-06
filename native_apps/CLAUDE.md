@@ -322,7 +322,7 @@ default feel.
 Portrait mode (flag file `/opt/games/portrait.mode`):
 
 - `fb_init()` swaps width/height and rotates the safe margins. `fb_swap()` does a 90° CCW
-  rotated copy; landscape is a straight `memcpy`.
+  rotated copy; landscape is a straight `memcpy`. `touch /opt/games/portrait.mode` for one run is how a portrait layout receipt is captured without tapping.
 - Touch rotates **after** the raw→panel curve, in `scale_coordinates()`.
 - Use `fb.portrait_mode` to branch only when the layout must differ fundamentally (3×2 vs 2×3);
   otherwise let the runtime dimensions do the work.
@@ -537,7 +537,7 @@ icons come from `gen_cp_icons.py`. Settings "apps" never become launcher tiles; 
   re-inits fb, touch and config). `dlopen`'d pages are deferred — an ABI version field refused on mismatch,
   exported helpers and `check-arm-safe.sh` over the `.so` would all be required.
 
-**`rwmond` is the Monitor page's history source** (`native_apps/sysmon/rwmond.c`, `/opt/games/rwmond`, in `GAMES_BINARIES`): at nice 19 it samples CPU, memory and SoC temperature once a second and publishes a 120-sample ring at `/var/run/rwmond.ring` (tmpfs; text, atomic rename; format in `sysmon/mon_ring.h`). The page seeds its graph from the ring when it is at most 3 s old. `roomwizard-app stop` kills it with `/opt/games`, and `native_apps/build-and-deploy.sh` restarts it.
+**`rwmond` is the Monitor page's history source** (`native_apps/sysmon/rwmond.c`, `/opt/games/rwmond`, in `GAMES_BINARIES`): at nice 19 it samples CPU, memory and SoC temperature once a second and publishes a 120-sample ring at `/var/run/rwmond.ring` (tmpfs; text, atomic rename; format in `sysmon/mon_ring.h`). The page seeds its graph from the ring when it is at most 3 s old. `roomwizard-app stop` kills it with `/opt/games`, and `native_apps/build-and-deploy.sh` restarts it. The Monitor graphs' pure scaling lives in `control_panel/mon_graph.c` (host test `tests/mon_graph_test.c`); the layout receipt reads "N graphs WxH beside|under". `rwmond` also owns the over-temperature flag (latch 85/80 °C, `common/overtemp.h`, `red_led`) and links `common/hardware.c` and `config.c`; `fb_swap()`/`fb_swap_rect()` paint the red square via `fb_overtemp_poll()`, so **a loop that can idle without presenting must call `fb_overtemp_poll()` itself** (launcher and control_panel do). Test: `touch /var/run/rwmond.force_overtemp`.
 
 ## Input
 

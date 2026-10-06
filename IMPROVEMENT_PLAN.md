@@ -426,20 +426,13 @@ device paths and `LICENSE.md` follow it.
 `ssh root@192.168.50.188 '/etc/init.d/rwmond status'` to confirm the boot start; (2) panel check: Control Panel,
 Monitor shows a full CPU graph at once.
 
-### F133. Monitor page re-layout: text left, charts right — open, operator request 2026-10-05, after F4
+### F133. Monitor page re-layout: text left, charts right — implemented 2026-10-06, awaiting panel check
 
-Left side text (memory, storage); right side charts: CPU (exists), memory, SoC temperature. Needs the temperature
-channel from F4, and the history from F132 to be worth opening. **Done when** the page shows the three charts and the
-text column in landscape and a sensible stack in portrait.
+Implemented in `control_panel.c` (one `draw_graph()`, scaling in `control_panel/mon_graph.c`). Receipts measured on `.188`: landscape 3 graphs 372x96 beside, portrait 3 graphs 381x96 under; **unseen on the panel**. **Done when** the operator has looked at Control Panel → Monitor in both orientations. Small open point: the RAM text row is total−free−buffers−cached while the graph is MemTotal−MemAvailable (caption "MEM IN USE"), so the two disagree; pick one definition.
 
-### F134. Over-temperature warning: red LED plus a red square on every present — open, operator request 2026-10-05, after F4 and F132
+### F134. Over-temperature warning: red LED plus a red square on every present — implemented 2026-10-06, awaiting ScummVM and VNC check
 
-The history daemon (F132, `rwmond`) lights `red_led` and sets `MON_FLAG_OVERTEMP` (bit 0 of the flags field,
-reserved in `native_apps/sysmon/mon_ring.h`) when the SoC passes a threshold;
-`native_apps/common/framebuffer.c` draws a red square in a corner on every present while the flag is set, like the
-Raspberry Pi indicator. Native apps, `vnc_client` and ScummVM all link `framebuffer.c`, so **all three components
-redeploy**. Threshold to be chosen from the OMAP3503 datasheet limits, not guessed. **Done when** forcing the flag shows
-the square in a native app, VNC and ScummVM, and clearing it removes the square.
+Implemented: `rwmond` latches `MON_FLAG_OVERTEMP` at 85 °C and clears at 80 °C and lights `red_led`; `fb_swap()` paints the square (`native_apps/common/overtemp.h` holds the decisions). Thresholds 85/80 are operator-accepted defaults for an uncalibrated sensor (about 72 °C idle), not datasheet-derived. Verified on `.188` in the launcher by forcing (`touch /var/run/rwmond.force_overtemp`). **Done when** the same force file shows the square inside ScummVM and a VNC session (16 bpp; `vnc_client` presents only on frame updates, so it can lag on a static screen) and removing it clears it. Unverified: portrait, a real thermal trip.
 
 ## Structural and cleanup
 
