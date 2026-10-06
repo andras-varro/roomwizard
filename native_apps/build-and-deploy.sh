@@ -283,9 +283,10 @@ step "30/31" "audio_mix_test"
 $CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
 
 # The Monitor page's history daemon, started at boot by /etc/init.d/rwmond.
-# Deliberately links nothing from common/: it opens no framebuffer or input.
+# From common/ it links only hardware.c (+ config.c), for the over-temperature
+# red LED; it opens no framebuffer or input.
 step "31/31" "rwmond"
-$CC "${WARN[@]}" -O2 -I. sysmon/rwmond.c sysmon/mon_ring.c control_panel/cpu_load.c control_panel/soc_temp.c -o build/rwmond
+$CC "${WARN[@]}" -O2 -I. sysmon/rwmond.c sysmon/mon_ring.c control_panel/cpu_load.c control_panel/soc_temp.c common/hardware.c common/config.c -o build/rwmond
 
 # Collect icon files from source dirs → build/icons/.  control_panel/icons/ holds
 # the control panel's home-grid icons (gen_cp_icons.py); control_panel reads them

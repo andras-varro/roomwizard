@@ -216,8 +216,17 @@ void fb_swap(Framebuffer *fb);
 // to the surface — fb_swap()'s placement and rotation, for a screen whose only
 // change is one small widget (the Input testers' hold-to-exit bar), so it need
 // not pay for a full-frame copy.  Byte-identical to fb_swap() inside the
-// rectangle, no store outside it (tests/fb_rotate_test.c).
+// rectangle, no store outside it (tests/fb_rotate_test.c) — except the
+// over-temperature square below, which both presents end in.
 void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h);
+
+// The over-temperature square (common/overtemp.h): a 16x16 red square at the
+// visible area's top-right, painted on the front buffer while rwmond's ring
+// carries MON_FLAG_OVERTEMP; the ring is read at most once a second.  fb_swap()
+// and fb_swap_rect() call it; a loop that can idle without presenting (the
+// launcher, control_panel) calls it once per iteration so the square still
+// comes and goes.  No-op without double buffering.
+void fb_overtemp_poll(Framebuffer *fb);
 
 // Clear screen with color
 void fb_clear(Framebuffer *fb, uint32_t color);

@@ -1080,6 +1080,7 @@ int main(void) {
          * paints the arrow itself): a still mouse draws nothing, a moving one
          * keeps the loop at the active rate. */
         bool ptr_moved = !needs_redraw && pointer_paint(&g_pointer, &fb);
+        fb_overtemp_poll(&fb);   /* an idle page presents nothing */
         usleep((needs_redraw || page_busy || focus_tap.phase || ptr_moved)
                ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
     }

@@ -9,6 +9,9 @@
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 #include <linux/kd.h>
+#include <sys/stat.h>
+#include <time.h>
+#include "overtemp.h"
 
 #define LOGGER_LIB_CLIENT
 #include "logger.h"
@@ -633,7 +636,7 @@ void fb_close(Framebuffer *fb) {
     }
 }
 
-void fb_swap(Framebuffer *fb) {
+static void fb_present_full(Framebuffer *fb) {
     if (!fb->double_buffering || fb->back_buffer == NULL)
         return;
 
@@ -713,7 +716,7 @@ void fb_swap(Framebuffer *fb) {
     }
 }
 
-void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h) {
+static void fb_present_rect(Framebuffer *fb, int x, int y, int w, int h) {
     if (!fb->double_buffering || fb->back_buffer == NULL)
         return;
     if (x < 0) { w += x; x = 0; }
@@ -763,6 +766,81 @@ void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h) {
         src += (size_t)lw * bpp;
         dst += ll;
     }
+}
+
+// Over-temperature square (common/overtemp.h): rwmond sets MON_FLAG_OVERTEMP
+// in its ring header, and every present paints a red square into the FRONT
+// buffer at the visible area's top-right corner — never into the back buffer,
+// so no app's content is touched and clearing is a copy back from it. The
+// ring is read at most once per OVERTEMP_CHECK_MS, per process; between reads
+// a present costs one clock_gettime and, while set, FB_OT_SIZE^2 stores.
+#define FB_OT_SIZE 16
+
+static struct { long long last_ms; int on; } fb_ot = { -1, 0 };
+
+static int fb_overtemp_read(void) {
+    int fd = open(MON_RING_PATH, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    char buf[64];
+    struct stat st;
+    ssize_t n = fstat(fd, &st) == 0 ? read(fd, buf, sizeof(buf) - 1) : -1;
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    return overtemp_fresh((long long)st.st_mtime, (long long)time(NULL))
+        && overtemp_ring_flag(buf) == 1;
+}
+
+static void fb_overtemp_paint(Framebuffer *fb) {
+    const bool is16 = FB_IS_16BPP(fb);
+    const uint32_t red = 0xFF0000;
+    const int s = FB_OT_SIZE;
+    if ((int)fb->width < s || (int)fb->height < s) return;
+    const uint32_t x0 = fb->width - (uint32_t)s;
+    for (int r = 0; r < s; r++) {
+        for (int c = 0; c < s; c++) {
+            const uint32_t lx = x0 + (uint32_t)c, ly = (uint32_t)r;
+            uint8_t *row;
+            uint32_t px;
+            if (fb->portrait_mode) {   // fb_swap()'s rotation, one pixel
+                row = (uint8_t *)fb->buffer
+                    + (size_t)(fb->phys_height - 1 - fb->view_x - lx) * fb->line_length;
+                px = fb->view_y + ly;
+            } else {
+                row = (uint8_t *)fb->buffer
+                    + (size_t)(fb->view_y + ly) * fb->line_length;
+                px = fb->view_x + lx;
+            }
+            fb_store(row, px, red, is16);
+        }
+    }
+}
+
+void fb_overtemp_poll(Framebuffer *fb) {
+    if (!fb->double_buffering || fb->back_buffer == NULL || fb->buffer == NULL)
+        return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long long now_ms = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    int was = fb_ot.on;
+    if (overtemp_due(now_ms, &fb_ot.last_ms))
+        fb_ot.on = fb_overtemp_read();
+    if (fb_ot.on)
+        fb_overtemp_paint(fb);
+    else if (was)
+        fb_present_rect(fb, (int)fb->width - FB_OT_SIZE, 0, FB_OT_SIZE, FB_OT_SIZE);
+}
+
+void fb_swap(Framebuffer *fb) {
+    if (!fb->double_buffering || fb->back_buffer == NULL)
+        return;
+    fb_present_full(fb);
+    fb_overtemp_poll(fb);
+}
+
+void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h) {
+    fb_present_rect(fb, x, y, w, h);
+    fb_overtemp_poll(fb);
 }
 
 void fb_clear(Framebuffer *fb, uint32_t color) {

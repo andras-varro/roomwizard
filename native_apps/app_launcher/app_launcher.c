@@ -794,6 +794,7 @@ int main(int argc, char *argv[]) {
          * a moving one keeps the loop at the active rate. */
         if (pointer_paint(&launcher.pointer, &launcher.fb))
             drew_frame = true;
+        fb_overtemp_poll(&launcher.fb);   /* an idle screen presents nothing */
 
         /* Adaptive sleep — longer idle sleep reduces CPU usage significantly.
          * ~30 fps when actively redrawing; ~10 fps polling when idle. */

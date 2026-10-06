@@ -9,7 +9,8 @@
  * What it must never cost or touch:
  *   - CPU: niced to 19, no threads, no SCHED_RR; one wakeup a second on an
  *     absolute monotonic deadline, so it never drifts into a busy loop.
- *   - the framebuffer, input devices, audio, LEDs: none are opened.
+ *   - the framebuffer, input devices, audio: none are opened.  The one LED
+ *     it touches is red_led, and only while over-temperature (below).
  *   - a missing sensor is a "-" field, never an exit: a kernel without the
  *     bandgap driver has no thermal zone, and that is a normal unit.
  * SIGTERM / SIGINT: the ring file is removed and the process exits 0, so a
@@ -18,10 +19,21 @@
  *
  * The CPU figure is cpu_load.c's: busy ticks over WALL time, never over
  * /proc/stat's grand total, with the daemon's own ticks taken out.
+ *
+ * Over-temperature: overtemp_latch() (common/overtemp.h) with hysteresis
+ * sets MON_FLAG_OVERTEMP in the ring header, which framebuffer.c turns into a
+ * red square on every present, and lights red_led — re-asserted each second,
+ * since apps also write that LED, and put back to its earlier value when the
+ * latch clears or the daemon stops.  While FORCE_PATH exists the flag is set
+ * regardless of the reading: the SSH-only way to test the square and the LED
+ * without heating the SoC (touch it to force, rm it to release).
  */
+#define FORCE_PATH "/var/run/rwmond.force_overtemp"
 #include "control_panel/cpu_load.h"
 #include "control_panel/soc_temp.h"
 #include "sysmon/mon_ring.h"
+#include "common/overtemp.h"
+#include "common/hardware.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -82,6 +94,29 @@ static void publish(const char *text, int len) {
     if (!ok || rename(tmp, MON_RING_PATH) != 0) unlink(tmp);
 }
 
+/* red_led while warning: led_saved is the RAW sysfs text to put back, empty
+ * when the warning does not own the LED.  Lit through hw_set_led() so the
+ * configured LED maximum applies; saved and restored raw, because the
+ * helpers' percent scaling does not round-trip (30 came back as 29 at 70 %,
+ * measured on .188). */
+#define RED_LED_SYSFS "/sys/class/leds/red_led/brightness"
+static char led_saved[16];
+
+static void warn_led(int on) {
+    if (on) {
+        if (!led_saved[0] && read_text(RED_LED_SYSFS, led_saved, sizeof(led_saved)) <= 0)
+            strcpy(led_saved, "0");
+        if (hw_get_led(LED_RED) != 100) hw_set_led(LED_RED, 100);
+    } else if (led_saved[0]) {
+        int fd = open(RED_LED_SYSFS, O_WRONLY);
+        if (fd >= 0) {
+            if (write(fd, led_saved, strlen(led_saved)) < 0) { /* best effort */ }
+            close(fd);
+        }
+        led_saved[0] = '\0';
+    }
+}
+
 int main(void) {
     static MonRing ring;
     static char text[MON_RING_TEXT_MAX];
@@ -104,6 +139,7 @@ int main(void) {
     mon_ring_clear(&ring);
     CpuSnap prev, cur;
     snap(&prev);
+    int hot = 0, warned = 0;
 
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
@@ -128,8 +164,15 @@ int main(void) {
         if (zone >= 0 && temp_read(zone, &mc) == 0) s.temp_mc = mc;
 
         mon_ring_push(&ring, &s);
-        /* flags: bit 0 is reserved for an over-temperature latch; none yet. */
-        int len = cur.valid ? mon_ring_format(&ring, cur.wall_cs, 0u, text, sizeof(text)) : -1;
+        hot = overtemp_latch(hot, s.temp_mc);
+        int warn = hot || access(FORCE_PATH, F_OK) == 0;
+        if (warn != warned)
+            printf("rwmond: over-temperature warning %s (%d mC%s)\n", warn ? "on" : "off",
+                   s.temp_mc, hot == warn ? "" : ", forced");
+        warned = warn;
+        warn_led(warn);
+        unsigned flags = warn ? MON_FLAG_OVERTEMP : 0u;
+        int len = cur.valid ? mon_ring_format(&ring, cur.wall_cs, flags, text, sizeof(text)) : -1;
         if (len > 0) publish(text, len);
 
         /* A suspend or a stopped process must not make us replay missed
@@ -139,6 +182,7 @@ int main(void) {
         if (now.tv_sec > next.tv_sec + 1) next = now;
     }
     unlink(MON_RING_PATH);
+    warn_led(0);
     printf("rwmond: stopped\n");
     return 0;
 }
